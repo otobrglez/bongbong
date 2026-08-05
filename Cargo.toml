@@ -3,15 +3,6 @@ version = "0.0.1"
 name = "bongbong"
 edition = "2024"
 
-[[bin]]
-path = "./src/balls.rs"
-name = "balls"
-
-[[bin]]
-path = "./src/main.rs"
-name = "bongbong"
-
-
 [dependencies]
 clap = { version = "4.6.5", features = ["derive"] }
 rand = "0.10.2"
