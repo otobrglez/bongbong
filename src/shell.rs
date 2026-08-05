@@ -50,12 +50,18 @@ pub struct Shell {
     pub timer: f32,
     /// Set once the shell has finished its last state and can be removed.
     pub done: bool,
+    /// True if the player fired this shell (hits enemies); false for enemy fire
+    /// (hits the player). Lets one collision routine serve both sides.
+    pub from_player: bool,
 }
 
 impl Shell {
-    /// Create a shell at the tank's muzzle, travelling in the direction the tank faces.
-    pub fn spawn(tank: &Tank) -> Shell {
-        let rot = tank.rotation.to_radians();
+    /// Create a shell at the tank's muzzle, travelling in the direction the tank
+    /// faces. `from_player` tags which side fired it for collision purposes.
+    /// `aim_offset` (degrees) skews the travel direction off the barrel so a shot
+    /// can miss; pass 0.0 for a clean shot straight ahead.
+    pub fn spawn(tank: &Tank, from_player: bool, aim_offset: f32) -> Shell {
+        let rot = (tank.rotation + aim_offset).to_radians();
         // rotation 0 == facing up (-Y); +90 == right, etc. matches the tank movement.
         let dir = Vector2::new(rot.sin(), -rot.cos());
         // Start a little ahead of the tank center so the shell exits the barrel.
@@ -67,9 +73,10 @@ impl Shell {
                 tank.position.y + dir.y * muzzle,
             ),
             velocity: Vector2::new(dir.x * SHELL_SPEED, dir.y * SHELL_SPEED),
-            rotation: tank.rotation,
+            rotation: tank.rotation + aim_offset,
             timer: 0.0,
             done: false,
+            from_player,
         }
     }
 

@@ -19,6 +19,9 @@ fn main() {
     let damage_texture = rl
         .load_texture(&thread, "static/damage.png")
         .expect("failed loading damage texture");
+    let tracks_texture = rl
+        .load_texture(&thread, "static/tracks.png")
+        .expect("failed loading tracks texture");
 
     let mut game = Game::default();
     game.init(&rl);
@@ -31,6 +34,7 @@ fn main() {
             &tanks_texture,
             &shells_texture,
             &damage_texture,
+            &tracks_texture,
         );
     }
 }
