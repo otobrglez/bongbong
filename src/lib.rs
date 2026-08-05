@@ -24,12 +24,21 @@ pub const DAMAGE_TEXTURE_SIZE: f32 = 32.0;
 // Damage overlay column for the burnt-out dead hulk (no fire/smoke).
 pub const DEAD_FRAME: i32 = 13;
 
-pub const ENEMY_COUNT: usize = 3;
+// Number of enemy tanks is randomized within this range each round.
+pub const ENEMY_COUNT_MIN: usize = 3;
+pub const ENEMY_COUNT_MAX: usize = 10;
 pub const MAX_DAMAGE: f32 = 100.0;
+
+// Enemies spawn in a band that's between 20% and 40% of the shorter screen
+// dimension away from the nearest edge of the battlefield - close enough to
+// feel like they're closing in from the sides, but never right on the edge
+// or dropped in the middle.
+pub const ENEMY_SPAWN_MARGIN_MIN: f32 = 0.2;
+pub const ENEMY_SPAWN_MARGIN_MAX: f32 = 0.4;
 
 // When the round ends (player destroyed, or all enemies destroyed) the result
 // is shown for this long, then the game restarts.
-pub const RESTART_DELAY: f32 = 5.0;
+pub const RESTART_DELAY: f32 = 3.0;
 
 // Tank driving: classic 4-direction, constant-speed movement. Pressing a
 // direction snaps the hull to face it and moves at a fixed speed; releasing
@@ -40,6 +49,15 @@ pub const ENEMY_SPEED: f32 = 150.0; // baseline enemy speed (px/s), slower than 
 // spawn, so some drive faster and some slower instead of all moving in lockstep.
 pub const ENEMY_SPEED_VARIANCE: f32 = 0.25;
 
+// A damaged tank slows down: its speed is scaled by a curve of how hurt it is
+// (0 = pristine, 1 = about to wreck). The curve stays close to full speed
+// through light and moderate damage, then falls off harder as damage climbs
+// toward the max - a limp rather than a straight-line taper - bottoming out at
+// DAMAGE_SPEED_FLOOR instead of zero (a tank stops moving separately, once
+// it's a wreck).
+pub const DAMAGE_SPEED_FLOOR: f32 = 0.35;
+pub const DAMAGE_SPEED_CURVE: f32 = 2.2;
+
 // Shell ammo: the player holds up to MAX_SHELLS and recharges one shell every
 // SHELL_RECHARGE_SECONDS while below the cap.
 pub const MAX_SHELLS: i32 = 7;
@@ -48,6 +66,16 @@ pub const SHELL_RECHARGE_SECONDS: f32 = 2.0;
 // Ramming: after taking collision damage a tank is immune for this long, so
 // continuous touching doesn't drain damage every frame.
 pub const RAM_DAMAGE_COOLDOWN: f32 = 0.5;
+
+// A ram also gives both tanks a brief, small knockback shove apart (see
+// Tank::apply_knockback), scaled by their closing speed and normalized mass
+// (hull area, i.e. scale squared - see Tank::mass) so a lighter tank gets
+// shoved further than a heavier one. Wrecks are treated as infinite mass in
+// both this and the explosion knockback below - already-dead hulks stay put
+// when hit.
+pub const KNOCKBACK_STRENGTH: f32 = 0.2; // fraction of ram closing speed converted to push speed
+pub const KNOCKBACK_MAX_SPEED: f32 = 60.0; // px/s cap on any one push - keeps it small
+pub const KNOCKBACK_DAMPING: f32 = 8.0; // 1/s decay rate; higher = the push dies out faster
 
 // Enemy AI tuning. Distances are in pixels, times in seconds.
 pub const ENEMY_VIEW_RANGE: f32 = 520.0; // start chasing the player within this
@@ -106,10 +134,63 @@ pub const TRACK_LIFETIME: f32 = 1.0; // seconds for a mark to fully fade away
 pub const TRACK_SCALE_FRACTION: f32 = 0.55; // mark size relative to the tank sprite
 pub const TRACK_MAX_OPACITY: f32 = 0.3; // opacity of a fresh mark, before fading
 
+// Shockwave post-processing effect triggered when a tank is destroyed: a ring
+// of radial distortion expands from the hit point over the whole screen and
+// fades out. See `shockwave.rs` and `Game::render`.
+pub const SHOCKWAVE_DURATION: f32 = 1.0; // seconds the effect plays before clearing
+pub const SHOCKWAVE_SPEED: f32 = 0.8; // ring growth speed, UV units/sec
+pub const SHOCKWAVE_WIDTH: f32 = 0.08; // thickness of the distorted band, UV units
+pub const SHOCKWAVE_STRENGTH: f32 = 0.03; // how hard the ring bends the image, UV units
+
+// A tank's death also deals a small splash of damage to any other tank caught
+// nearby, on top of the shockwave visual. Deliberately weak - a chip of
+// damage, not a second kill shot.
+pub const EXPLOSION_RADIUS: f32 = 110.0; // px a wrecked tank's blast reaches
+pub const EXPLOSION_DAMAGE_MIN: f32 = 3.0;
+pub const EXPLOSION_DAMAGE_MAX: f32 = 8.0;
+// It also gives every live tank it reaches a small outward shove, same
+// knockback mechanism as a ram (Tank::apply_knockback / Tank::mass), but
+// driven by distance from the blast instead of closing speed: full push at
+// the center, tapering linearly to nothing at EXPLOSION_RADIUS.
+pub const EXPLOSION_KNOCKBACK_SPEED: f32 = 90.0; // px/s push at ground zero
+
+// Muzzle-flash heat haze: a tiny, split-second effect localized to a small
+// patch of screen at the barrel when a tank fires. Unlike the kill shockwave
+// (a rolling, symmetric ring - shockwave.fs), this uses its own shader
+// (muzzle_flash.fs) that's a single one-sided outward puff with no wobble,
+// so it reads as a hot flash rather than a shrunk-down shockwave. It also
+// hits full `strength` right at the leading edge (no sine attenuation), so
+// this is tuned lower than the old shared-shader value to land at a similar
+// visual intensity.
+pub const MUZZLE_FLASH_DURATION: f32 = 0.12; // seconds the effect plays before clearing
+pub const MUZZLE_FLASH_SPEED: f32 = 0.9; // front growth speed, UV units/sec
+pub const MUZZLE_FLASH_WIDTH: f32 = 0.015; // thickness of the pushed band, UV units
+pub const MUZZLE_FLASH_STRENGTH: f32 = 0.015; // how hard the puff shoves the image, UV units
+// Half-extent (px) of the quad the effect is drawn into. Needs to comfortably
+// contain the ring's full reach (MUZZLE_FLASH_SPEED * _DURATION, converted to
+// screen pixels) plus its band width, or the ring visibly clips at the edge.
+pub const MUZZLE_FLASH_QUAD_RADIUS: f32 = 90.0;
+
+// Shell-impact flash: a tiny, split-second effect at the point a shell lands
+// on a tank (hit or kill), localized to a small patch of screen like the
+// muzzle flash. Uses its own shader (impact.fs): a one-sided outward punch
+// plus a fast-decaying warm spark flash at the center, so a hit reads as a
+// sharp "thwack" distinct from both the muzzle's heat-shimmer puff and the
+// big rolling kill-shockwave ring.
+pub const IMPACT_FLASH_DURATION: f32 = 0.14; // seconds the effect plays before clearing
+pub const IMPACT_FLASH_SPEED: f32 = 1.1; // punch growth speed, UV units/sec
+pub const IMPACT_FLASH_WIDTH: f32 = 0.02; // thickness of the punched band, UV units
+pub const IMPACT_FLASH_STRENGTH: f32 = 0.025; // how hard the punch shoves the image, UV units
+// Half-extent (px) of the quad the effect is drawn into; see
+// MUZZLE_FLASH_QUAD_RADIUS for why this needs to comfortably contain the
+// punch's full reach plus its band width.
+pub const IMPACT_FLASH_QUAD_RADIUS: f32 = 70.0;
+
 pub mod ai;
 pub mod bt;
 pub mod damage_stage;
 pub mod game;
 pub mod shell;
+pub mod shockwave;
 pub mod tank;
 pub mod track;

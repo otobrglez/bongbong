@@ -1,8 +1,8 @@
 use sola_raylib::prelude::*;
 
 use crate::{
-    MAX_DAMAGE, MAX_SHELLS, Position, TANK_HULL_FRACTION, TANK_SPEED, TANK_TEXTURE_SIZE,
-    WRECK_BURN_SECONDS,
+    DAMAGE_SPEED_CURVE, DAMAGE_SPEED_FLOOR, KNOCKBACK_DAMPING, MAX_DAMAGE, MAX_SHELLS, Position,
+    TANK_HULL_FRACTION, TANK_SPEED, TANK_TEXTURE_SIZE, WRECK_BURN_SECONDS,
 };
 
 /// The four movement/facing directions. rotation 0 == up, clockwise positive,
@@ -79,6 +79,10 @@ pub struct Tank {
     /// times speed, or zero when not moving. Set by `control` and read by the AI's
     /// predictive collision avoidance.
     pub velocity: Vector2,
+    /// Residual push (pixels per second) from a recent ram or explosion,
+    /// independent of `control`'s input-driven movement. Decays to zero via
+    /// `apply_knockback`; see that and `Game`'s `ram`/`apply_explosion`.
+    pub knockback: Vector2,
 }
 
 impl Default for Tank {
@@ -97,6 +101,7 @@ impl Default for Tank {
             wreck_timer: 0.0,
             track_accum: 0.0,
             velocity: Vector2::new(0.0, 0.0),
+            knockback: Vector2::new(0.0, 0.0),
         }
     }
 }
@@ -110,6 +115,16 @@ impl Tank {
     /// True once the tank has taken maximum damage (a burning wreck).
     pub fn is_wreck(&self) -> bool {
         self.damage >= MAX_DAMAGE
+    }
+
+    /// This tank's current speed, reduced as it takes damage. Holds close to
+    /// full speed through light and moderate damage, then falls off harder as
+    /// damage nears the max, bottoming out at DAMAGE_SPEED_FLOOR - a limp
+    /// rather than a linear taper.
+    pub fn effective_speed(&self) -> f32 {
+        let hurt = (self.damage / MAX_DAMAGE).clamp(0.0, 1.0);
+        let factor = DAMAGE_SPEED_FLOOR + (1.0 - DAMAGE_SPEED_FLOOR) * (1.0 - hurt.powf(DAMAGE_SPEED_CURVE));
+        self.speed * factor
     }
 
     /// True once a wreck has finished burning and settled into a dead hulk.
@@ -142,6 +157,14 @@ impl Tank {
             && (self.position.y - other.position.y).abs() < half
     }
 
+    /// A tank's mass for collision knockback: proportional to hull area
+    /// (scale squared), so it's a genuine normalization rather than an
+    /// arbitrary number - two tanks of equal scale split an impact evenly,
+    /// and a bigger one (if scale ever varies) resists more and shoves harder.
+    pub fn mass(&self) -> f32 {
+        self.scale * self.scale
+    }
+
     /// Recharge ammo over time toward MAX_SHELLS, one shell per interval.
     pub fn tick_recharge(&mut self, dt: f32) {
         if self.shells_ammo >= MAX_SHELLS {
@@ -165,22 +188,38 @@ impl Tank {
     }
 
     /// Drive the tank for one frame. `move_dir` faces the hull that way and steps
-    /// at `speed` (classic 4-direction, no momentum). `face` turns the hull in
-    /// place without moving (used when an AI stops to aim). `move_dir` takes
-    /// precedence. Shared by the player and the AI so both move identically.
+    /// at its damage-scaled speed (classic 4-direction, no momentum; see
+    /// `effective_speed`). `face` turns the hull in place without moving (used
+    /// when an AI stops to aim). `move_dir` takes precedence. Shared by the
+    /// player and the AI so both move identically.
     pub fn control(&mut self, move_dir: Option<Dir>, face: Option<Dir>, dt: f32) {
         if let Some(dir) = move_dir {
             self.rotation = dir.rotation();
             let step = dir.vec();
-            self.velocity = Vector2::new(step.x * self.speed, step.y * self.speed);
-            self.position.x += step.x * self.speed * dt;
-            self.position.y += step.y * self.speed * dt;
+            let speed = self.effective_speed();
+            self.velocity = Vector2::new(step.x * speed, step.y * speed);
+            self.position.x += step.x * speed * dt;
+            self.position.y += step.y * speed * dt;
         } else {
             self.velocity = Vector2::new(0.0, 0.0);
             if let Some(dir) = face {
                 self.rotation = dir.rotation();
             }
         }
+    }
+
+    /// Integrate any residual knockback push into position, then decay it
+    /// toward zero. Called every frame for every tank, ahead of `control`'s
+    /// input-driven movement, so a ram or nearby explosion (see `Game::ram`
+    /// and `Game::apply_explosion`) plays out as a brief drift rather than an
+    /// instant jump - and, since it runs first, this frame's overlap-blocking
+    /// (which reverts `control`'s move but not this one) never cancels it.
+    pub fn apply_knockback(&mut self, dt: f32) {
+        self.position.x += self.knockback.x * dt;
+        self.position.y += self.knockback.y * dt;
+        let decay = (1.0 - KNOCKBACK_DAMPING * dt).max(0.0);
+        self.knockback.x *= decay;
+        self.knockback.y *= decay;
     }
 
     /// Keep the tank inside the battlefield (the `width` x `height` screen) by

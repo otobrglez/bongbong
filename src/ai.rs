@@ -458,7 +458,7 @@ impl Brain<'_> {
             movers: self.movers,
             my_index: self.my_index,
             radius: half,
-            speed: self.me.speed,
+            speed: self.me.effective_speed(),
         };
         self.ai
             .steer(self.me.position, target, (self.width, self.height), half, ctx)
