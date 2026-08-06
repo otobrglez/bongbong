@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>bongbong</title>
+    <style>
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: #CCC;
+        overflow: hidden;
+      }
+      body {
+        display: grid;
+        place-items: center;
+      }
+      canvas {
+        display: block;
+        max-width: 100vw;
+        max-height: 100vh;
+        image-rendering: pixelated;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas
+      id="canvas"
+      oncontextmenu="event.preventDefault()"
+      tabindex="-1"
+    ></canvas>
+    <script>
+      // Browsers block AudioContext until the user interacts with the page.
+      // Resume on first click so raylib's audio comes through, once the
+      // game gains audio (none yet - see CLAUDE.md).
+      window.addEventListener("click", function () {
+        var Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return;
+        [Ctx, Module && Module.audioContext].forEach(function (ctx) {
+          if (ctx && ctx.state === "suspended") ctx.resume();
+        });
+      }, { once: true });
+      var Module = {
+        canvas: document.getElementById("canvas"),
+        print: function (t) {
+          console.log(t);
+        },
+        printErr: function (t) {
+          console.error(t);
+        },
+      };
+    </script>
+    <script src="__BONGBONG_BIN__.js"></script>
+  </body>
+</html>

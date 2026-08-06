@@ -190,6 +190,7 @@ pub mod ai;
 pub mod bt;
 pub mod damage_stage;
 pub mod game;
+pub mod physics;
 pub mod shell;
 pub mod shockwave;
 pub mod tank;

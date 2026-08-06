@@ -123,7 +123,8 @@ impl Tank {
     /// rather than a linear taper.
     pub fn effective_speed(&self) -> f32 {
         let hurt = (self.damage / MAX_DAMAGE).clamp(0.0, 1.0);
-        let factor = DAMAGE_SPEED_FLOOR + (1.0 - DAMAGE_SPEED_FLOOR) * (1.0 - hurt.powf(DAMAGE_SPEED_CURVE));
+        let factor =
+            DAMAGE_SPEED_FLOOR + (1.0 - DAMAGE_SPEED_FLOOR) * (1.0 - hurt.powf(DAMAGE_SPEED_CURVE));
         self.speed * factor
     }
 
@@ -172,7 +173,8 @@ impl Tank {
             return;
         }
         self.recharge_timer += dt;
-        while self.recharge_timer >= crate::SHELL_RECHARGE_SECONDS && self.shells_ammo < MAX_SHELLS {
+        while self.recharge_timer >= crate::SHELL_RECHARGE_SECONDS && self.shells_ammo < MAX_SHELLS
+        {
             self.recharge_timer -= crate::SHELL_RECHARGE_SECONDS;
             self.shells_ammo += 1;
         }

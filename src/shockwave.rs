@@ -27,24 +27,31 @@ pub struct RippleFx {
     pub time_loc: i32,
 }
 
+/// The tuning knobs for one `RippleFx` instance, set once at load and fixed for
+/// the run. Bundled into one struct (rather than four loose params) since every
+/// effect - kill shockwave, muzzle flash, shell impact - supplies all four
+/// together from its own block of constants in `lib.rs`.
+pub struct RippleTuning {
+    pub speed: f32,
+    pub width: f32,
+    pub strength: f32,
+    pub duration: f32,
+}
+
 impl RippleFx {
     /// Compile `shader_path` and set up the uniforms that never change after
-    /// startup: the screen resolution and this instance's speed / width /
-    /// strength / duration. Every ripple effect (kill shockwave, muzzle
-    /// flash, shell impact, ...) is its own `RippleFx`, and each may point at
-    /// its own fragment shader file as well as its own tuning, so a new
-    /// effect can look genuinely different rather than just differently
-    /// timed.
+    /// startup: the screen resolution and this instance's `tuning`. Every
+    /// ripple effect (kill shockwave, muzzle flash, shell impact, ...) is its
+    /// own `RippleFx`, and each may point at its own fragment shader file as
+    /// well as its own tuning, so a new effect can look genuinely different
+    /// rather than just differently timed.
     pub fn load(
         rl: &mut RaylibHandle,
         thread: &RaylibThread,
         shader_path: &str,
         screen_width: i32,
         screen_height: i32,
-        speed: f32,
-        width: f32,
-        strength: f32,
-        duration: f32,
+        tuning: RippleTuning,
     ) -> Self {
         let mut shader = rl
             .load_shader(thread, None, Some(shader_path))
@@ -62,10 +69,10 @@ impl RippleFx {
             resolution_loc,
             Vector2::new(screen_width as f32, screen_height as f32),
         );
-        shader.set_shader_value(speed_loc, speed);
-        shader.set_shader_value(width_loc, width);
-        shader.set_shader_value(strength_loc, strength);
-        shader.set_shader_value(duration_loc, duration);
+        shader.set_shader_value(speed_loc, tuning.speed);
+        shader.set_shader_value(width_loc, tuning.width);
+        shader.set_shader_value(strength_loc, tuning.strength);
+        shader.set_shader_value(duration_loc, tuning.duration);
 
         RippleFx {
             shader,

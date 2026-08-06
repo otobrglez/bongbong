@@ -1,5 +1,8 @@
 .envrc
 
+# Claude Code worktrees (local, per-session checkouts)
+.claude/worktrees/
+
 # Devenv
 .devenv*
 devenv.local.nix

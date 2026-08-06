@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 clap = { version = "4.6.5", features = ["derive"] }
 rand = "0.10.2"
+rapier2d = "0.34.0"
 serde = { version = "1.0.229", features = ["derive"] }
 sola-raylib = {
   version = "6.2.0" 

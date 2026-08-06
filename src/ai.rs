@@ -137,7 +137,14 @@ impl Ai {
     /// margin, used to deflect the heading along a wall instead of driving into it
     /// (otherwise the tank would pin itself against the edge and get stuck).
     /// `ctx` carries the motion snapshot for predictive collision avoidance.
-    fn steer(&mut self, from: Position, target: Position, bounds: (f32, f32), half: f32, ctx: AvoidCtx) -> Dir {
+    fn steer(
+        &mut self,
+        from: Position,
+        target: Position,
+        bounds: (f32, f32),
+        half: f32,
+        ctx: AvoidCtx,
+    ) -> Dir {
         let fresh = Dir::toward(from, target);
         let dir = match self.committed_dir {
             None => {
@@ -176,7 +183,14 @@ impl Ai {
     /// hit looks likely within AVOID_LOOKAHEAD, latch a perpendicular dodge for
     /// AVOID_DODGE_SECONDS and return it. When the dodge expires, normal steering
     /// resumes and pulls the tank back on course — the "away then back" motion.
-    fn avoid_collisions(&mut self, desired: Dir, from: Position, bounds: (f32, f32), half: f32, ctx: AvoidCtx) -> Dir {
+    fn avoid_collisions(
+        &mut self,
+        desired: Dir,
+        from: Position,
+        bounds: (f32, f32),
+        half: f32,
+        ctx: AvoidCtx,
+    ) -> Dir {
         // A dodge already in progress holds until its timer runs out (ticked in
         // `think`), as long as it isn't driving into a wall.
         if let Some(dodge) = self.dodge_dir {
@@ -243,9 +257,9 @@ impl Ai {
         let secondary = perpendicular(desired, !turn_left);
 
         // Prefer a dodge side that is neither walled nor itself about to collide.
-        let choice = [primary, secondary].into_iter().find(|&d| {
-            !heads_into_wall(d, from, bounds, half) && !self.dir_collides(d, from, ctx)
-        });
+        let choice = [primary, secondary]
+            .into_iter()
+            .find(|&d| !heads_into_wall(d, from, bounds, half) && !self.dir_collides(d, from, ctx));
         // Fall back to any non-walled side; if both are walls, abandon the dodge.
         let choice = choice.or_else(|| {
             [primary, secondary]
@@ -460,8 +474,13 @@ impl Brain<'_> {
             radius: half,
             speed: self.me.effective_speed(),
         };
-        self.ai
-            .steer(self.me.position, target, (self.width, self.height), half, ctx)
+        self.ai.steer(
+            self.me.position,
+            target,
+            (self.width, self.height),
+            half,
+            ctx,
+        )
     }
 
     /// Perpendicular offset of the player from the firing axis toward them, and
@@ -486,6 +505,7 @@ impl Brain<'_> {
 ///   3. Attack when in range (aim, settle, fire; else close in).
 ///   4. Chase when the player is visible.
 ///   5. Patrol otherwise.
+///
 /// The tree is rebuilt each tick (cheap: a handful of enum nodes) for clarity.
 fn build<'a>() -> Node<Brain<'a>> {
     selector(vec![
@@ -603,7 +623,13 @@ impl Brain<'_> {
             return 0.0;
         }
         // Misfire: deflect by a random magnitude to either side.
-        let mag = self.rng.random_range(ENEMY_MISFIRE_ANGLE_MIN..ENEMY_MISFIRE_ANGLE_MAX);
-        if self.rng.random_range(0.0..1.0) < 0.5 { -mag } else { mag }
+        let mag = self
+            .rng
+            .random_range(ENEMY_MISFIRE_ANGLE_MIN..ENEMY_MISFIRE_ANGLE_MAX);
+        if self.rng.random_range(0.0..1.0) < 0.5 {
+            -mag
+        } else {
+            mag
+        }
     }
 }

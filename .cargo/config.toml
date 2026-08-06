@@ -1,0 +1,40 @@
+# Linker flags for the wasm32-unknown-emscripten (web) build. Cargo drops
+# `cargo:rustc-link-arg` from raylib-sys's build script for rlib targets, so
+# these have to live here instead. See CLAUDE.md's web build section and
+# ../sola-raylib/book/src/web.md for the full rationale.
+[target.wasm32-unknown-emscripten]
+rustflags = [
+    # raylib's web backend uses emscripten's bundled GLFW3 port.
+    "-C", "link-arg=-sUSE_GLFW=3",
+    # Let the wasm heap grow on demand instead of aborting on OOM.
+    "-C", "link-arg=-sALLOW_MEMORY_GROWTH=1",
+    # raylib's image loader reaches `fopen` through macros emcc's
+    # tree-shaker sometimes misses. Force the FS layer in.
+    "-C", "link-arg=-sFORCE_FILESYSTEM=1",
+    # Match the wasm-EH ABI rustc 1.93+ emits. Without this, link fails on
+    # `__cxa_find_matching_catch_*`.
+    "-C", "link-arg=-sSUPPORT_LONGJMP=wasm",
+    # Recent emcc tree-shakes these aggressively; without them raylib's GLFW
+    # glue and the shell's heap access hit "Module.X is undefined" at runtime.
+    "-C", "link-arg=-sEXPORTED_RUNTIME_METHODS=['ccall','wasmMemory','HEAPU8','HEAP32','HEAPF32']",
+    # Bundle static/ (sprites + shaders) into the wasm's virtual filesystem
+    # at /static, so `rl.load_texture(&thread, "static/tanks.png")` resolves
+    # unchanged on web.
+    "-C", "link-arg=--preload-file",
+    "-C", "link-arg=static@/static",
+    # No -sASYNCIFY=1: the game loop runs via sola_raylib::core::game_loop::run
+    # (emscripten_set_main_loop_arg), not the blocking `while` pattern, and
+    # there's no audio yet. Add it back the moment either changes (see
+    # CLAUDE.md).
+]
+
+[env]
+# devenv/nix's C toolchain sets a global CC pointing at a host-wrapped clang
+# (which injects Darwin/hardening flags like -fzero-call-used-regs that
+# `emcc` rejects for wasm32-unknown-emscripten). cc-rs prefers a
+# target-specific CC_<target> over the generic CC, so pin these to the real
+# emscripten wrappers - this is what raylib-sys's own rgui build step (which
+# compiles C directly via cc-rs, not through emcmake) actually picks up.
+CC_wasm32_unknown_emscripten = "emcc"
+CXX_wasm32_unknown_emscripten = "em++"
+AR_wasm32_unknown_emscripten = "emar"

@@ -3,6 +3,7 @@ use sola_raylib::prelude::*;
 
 use crate::ai::{Ai, Intent, Mover};
 use crate::damage_stage::draw_damage;
+use crate::physics::Physics;
 use crate::shell::{Owner, Shell, ShellState, draw_shell};
 use crate::shockwave::{RippleFx, Shockwave, screen_to_ripple_uv};
 use crate::tank::{Dir, Tank, draw_tank};
@@ -18,17 +19,29 @@ use crate::{
 };
 
 /// How the current round is going.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Default)]
 pub enum Outcome {
+    #[default]
     Playing,
     Won,  // all enemies destroyed
     Lost, // player destroyed
 }
 
-impl Default for Outcome {
-    fn default() -> Self {
-        Outcome::Playing
-    }
+/// The sprite atlases `Game::render` draws from, bundled into one param instead
+/// of four so the signature doesn't grow with every new texture.
+pub struct Textures<'a> {
+    pub tanks: &'a Texture2D,
+    pub shells: &'a Texture2D,
+    pub damage: &'a Texture2D,
+    pub tracks: &'a Texture2D,
+}
+
+/// The ripple post-effects `Game::render` drives, bundled into one param for the
+/// same reason as `Textures`. See `shockwave.rs` for what each one does.
+pub struct Effects<'a> {
+    pub shock: &'a mut RippleFx,
+    pub muzzle: &'a mut RippleFx,
+    pub impact: &'a mut RippleFx,
 }
 
 #[derive(Default)]
@@ -60,6 +73,9 @@ pub struct Game {
     /// True while the game is paused (toggled by the P key); simulation is
     /// frozen and rendering shows a "PAUSED" overlay.
     paused: bool,
+    /// The rapier physics world (see docs/physics-engine-design.md). Phase 1:
+    /// stepped every frame but empty - no bodies are wired to it yet.
+    physics: Physics,
 }
 
 /// The tank hulls live in row 0 of tanks.png, indexed 0..8 left-to-right by
@@ -125,7 +141,11 @@ impl Game {
             if pos.distance_to(center) < clear {
                 continue;
             }
-            if self.enemies.iter().any(|e| pos.distance_to(e.position) < enemy_clear) {
+            if self
+                .enemies
+                .iter()
+                .any(|e| pos.distance_to(e.position) < enemy_clear)
+            {
                 continue;
             }
             // Walk the alternating spawn order so each enemy looks distinct and the
@@ -156,6 +176,11 @@ impl Game {
         }
 
         let dt = rl.get_frame_time();
+
+        // Phase 1 of the physics migration: step the (still-empty) rapier
+        // world every frame so the pipeline is proven to run before any
+        // gameplay code depends on it. See docs/physics-engine-design.md.
+        self.physics.step();
 
         // Advance any in-flight shockwave regardless of round state, so it
         // finishes fading even if this frame's damage just ended the round.
@@ -233,7 +258,7 @@ impl Game {
         player_intent.fire = rl.is_key_pressed(KeyboardKey::KEY_SPACE);
 
         // Drive the player and resolve movement against every enemy footprint.
-        self.apply_movement_player(player_intent, dt, width, height, &mut rng, &mut kills);
+        self.apply_movement_player(player_intent, dt, (width, height), &mut rng, &mut kills);
         if player_intent.fire && self.tank.shells_ammo >= 1 {
             self.tank.shells_ammo -= 1;
             // The player always fires straight down the barrel.
@@ -252,9 +277,17 @@ impl Game {
         // without borrowing the mutable enemy list mid-loop.
         let movers = self.motion_snapshot();
         for i in 0..self.enemies.len() {
-            let intent =
-                self.ais[i].think(&self.enemies[i], &self.tank, width, height, dt, &movers, i + 1, &mut rng);
-            self.apply_movement_enemy(i, intent, dt, width, height, &mut rng, &mut kills);
+            let intent = self.ais[i].think(
+                &self.enemies[i],
+                &self.tank,
+                width,
+                height,
+                dt,
+                &movers,
+                i + 1,
+                &mut rng,
+            );
+            self.apply_movement_enemy(i, intent, dt, (width, height), &mut rng, &mut kills);
             if intent.fire && self.enemies[i].shells_ammo >= 1 {
                 self.enemies[i].shells_ammo -= 1;
                 // Point-blank shots may be thrown off-aim (see roll_misfire).
@@ -350,7 +383,12 @@ impl Game {
     /// never chips other enemies standing next to it (and vice versa). A chip
     /// of extra damage and a nudge, not another kill shot, so it doesn't
     /// chain into further explosions.
-    fn apply_explosion(&mut self, center: Position, victim_was_enemy: bool, rng: &mut rand::rngs::ThreadRng) {
+    fn apply_explosion(
+        &mut self,
+        center: Position,
+        victim_was_enemy: bool,
+        rng: &mut rand::rngs::ThreadRng,
+    ) {
         if victim_was_enemy {
             explosion_hit(&mut self.tank, center, rng);
         } else {
@@ -387,8 +425,7 @@ impl Game {
         &mut self,
         intent: Intent,
         dt: f32,
-        width: f32,
-        height: f32,
+        bounds: (f32, f32),
         rng: &mut rand::rngs::ThreadRng,
         kills: &mut Vec<(Position, bool)>,
     ) {
@@ -398,7 +435,7 @@ impl Game {
         let before = self.tank.position;
         self.tank.control(intent.move_dir, intent.face, dt);
         // Keep the tank on the battlefield before resolving tank collisions.
-        self.tank.clamp_to_field(width, height);
+        self.tank.clamp_to_field(bounds.0, bounds.1);
         for enemy in &mut self.enemies {
             if self.tank.overlaps(enemy) {
                 self.tank.position = before;
@@ -418,8 +455,7 @@ impl Game {
         i: usize,
         intent: Intent,
         dt: f32,
-        width: f32,
-        height: f32,
+        bounds: (f32, f32),
         rng: &mut rand::rngs::ThreadRng,
         kills: &mut Vec<(Position, bool)>,
     ) {
@@ -429,12 +465,19 @@ impl Game {
         let before = self.enemies[i].position;
         self.enemies[i].control(intent.move_dir, intent.face, dt);
         // Keep the enemy on the battlefield before resolving tank collisions.
-        self.enemies[i].clamp_to_field(width, height);
+        self.enemies[i].clamp_to_field(bounds.0, bounds.1);
 
         // Block against the player.
         if self.enemies[i].overlaps(&self.tank) {
             self.enemies[i].position = before;
-            ram(&mut self.enemies[i], true, &mut self.tank, false, rng, kills);
+            ram(
+                &mut self.enemies[i],
+                true,
+                &mut self.tank,
+                false,
+                rng,
+                kills,
+            );
             return;
         }
         // Block against the other enemies (split_at_mut to borrow two entries).
@@ -458,16 +501,20 @@ impl Game {
         rl: &mut RaylibHandle,
         thread: &RaylibThread,
         scene_target: &mut RenderTexture2D,
-        shock_fx: &mut RippleFx,
-        muzzle_fx: &mut RippleFx,
-        impact_fx: &mut RippleFx,
-        tanks_texture: &Texture2D,
-        shells_texture: &Texture2D,
-        damage_texture: &Texture2D,
-        tracks_texture: &Texture2D,
+        effects: &mut Effects,
+        textures: &Textures,
     ) {
         let screen_width = rl.get_screen_width();
         let screen_height = rl.get_screen_height();
+
+        // Precompute the bottom-right version/build HUD (text width must be
+        // measured on the RaylibHandle, outside the draw closure).
+        let version_hud = format!(
+            "v{} ({})",
+            env!("CARGO_PKG_VERSION"),
+            env!("BONGBONG_GIT_COMMIT")
+        );
+        let version_hud_w = rl.measure_text(&version_hud, 24);
 
         // Precompute the centered end-of-round banner (text width must be
         // measured on the RaylibHandle, outside the draw closure).
@@ -479,7 +526,10 @@ impl Game {
         let banner = banner.map(|(text, color)| {
             let title_size = 72;
             let title_w = rl.measure_text(text, title_size);
-            let sub = format!("Restarting in {}...", self.restart_timer.ceil().max(0.0) as i32);
+            let sub = format!(
+                "Restarting in {}...",
+                self.restart_timer.ceil().max(0.0) as i32
+            );
             let sub_size = 28;
             let sub_w = rl.measure_text(&sub, sub_size);
             (text, color, title_size, title_w, sub, sub_size, sub_w)
@@ -493,19 +543,19 @@ impl Game {
 
             // Tread marks go down first so tanks and everything else draw on top.
             for track in &self.tracks {
-                draw_track(&mut d, tracks_texture, track);
+                draw_track(&mut d, textures.tracks, track);
             }
 
             for enemy in &self.enemies {
-                draw_tank(&mut d, tanks_texture, enemy);
-                draw_damage(&mut d, damage_texture, enemy, self.time);
+                draw_tank(&mut d, textures.tanks, enemy);
+                draw_damage(&mut d, textures.damage, enemy, self.time);
             }
 
-            draw_tank(&mut d, tanks_texture, &self.tank);
-            draw_damage(&mut d, damage_texture, &self.tank, self.time);
+            draw_tank(&mut d, textures.tanks, &self.tank);
+            draw_damage(&mut d, textures.damage, &self.tank, self.time);
 
             for shell in &self.shells {
-                draw_shell(&mut d, shells_texture, shell);
+                draw_shell(&mut d, textures.shells, shell);
             }
         });
 
@@ -513,8 +563,14 @@ impl Game {
         // before the blit below samples through it.
         if let Some(shock) = &self.shock {
             let uv = screen_to_ripple_uv(shock.center, screen_width as f32, screen_height as f32);
-            shock_fx.shader.set_shader_value(shock_fx.center_loc, uv);
-            shock_fx.shader.set_shader_value(shock_fx.time_loc, shock.time);
+            effects
+                .shock
+                .shader
+                .set_shader_value(effects.shock.center_loc, uv);
+            effects
+                .shock
+                .shader
+                .set_shader_value(effects.shock.time_loc, shock.time);
         }
 
         // The render texture is stored upside-down relative to the screen; a
@@ -530,8 +586,13 @@ impl Game {
             d.clear_background(Color::BLACK);
 
             if self.shock.is_some() {
-                d.draw_shader_mode(&mut shock_fx.shader, |mut sd| {
-                    sd.draw_texture_rec(&*scene_target, source, Vector2::new(0.0, 0.0), Color::WHITE);
+                d.draw_shader_mode(&mut effects.shock.shader, |mut sd| {
+                    sd.draw_texture_rec(
+                        &*scene_target,
+                        source,
+                        Vector2::new(0.0, 0.0),
+                        Color::WHITE,
+                    );
                 });
             } else {
                 d.draw_texture_rec(&*scene_target, source, Vector2::new(0.0, 0.0), Color::WHITE);
@@ -543,9 +604,16 @@ impl Game {
             // ripple shader), so this reads as a localized wobble rather than
             // redistorting the whole frame.
             for flash in &self.muzzle_flashes {
-                let uv = screen_to_ripple_uv(flash.center, screen_width as f32, screen_height as f32);
-                muzzle_fx.shader.set_shader_value(muzzle_fx.center_loc, uv);
-                muzzle_fx.shader.set_shader_value(muzzle_fx.time_loc, flash.time);
+                let uv =
+                    screen_to_ripple_uv(flash.center, screen_width as f32, screen_height as f32);
+                effects
+                    .muzzle
+                    .shader
+                    .set_shader_value(effects.muzzle.center_loc, uv);
+                effects
+                    .muzzle
+                    .shader
+                    .set_shader_value(effects.muzzle.time_loc, flash.time);
 
                 let r = MUZZLE_FLASH_QUAD_RADIUS;
                 let flash_source = Rectangle {
@@ -562,7 +630,7 @@ impl Game {
                 };
                 let origin = Vector2::new(r, r);
 
-                d.draw_shader_mode(&mut muzzle_fx.shader, |mut sd| {
+                d.draw_shader_mode(&mut effects.muzzle.shader, |mut sd| {
                     sd.draw_texture_pro(
                         &*scene_target,
                         flash_source,
@@ -576,9 +644,16 @@ impl Game {
 
             // Same treatment for every in-flight shell-impact flash.
             for flash in &self.impact_flashes {
-                let uv = screen_to_ripple_uv(flash.center, screen_width as f32, screen_height as f32);
-                impact_fx.shader.set_shader_value(impact_fx.center_loc, uv);
-                impact_fx.shader.set_shader_value(impact_fx.time_loc, flash.time);
+                let uv =
+                    screen_to_ripple_uv(flash.center, screen_width as f32, screen_height as f32);
+                effects
+                    .impact
+                    .shader
+                    .set_shader_value(effects.impact.center_loc, uv);
+                effects
+                    .impact
+                    .shader
+                    .set_shader_value(effects.impact.time_loc, flash.time);
 
                 let r = IMPACT_FLASH_QUAD_RADIUS;
                 let flash_source = Rectangle {
@@ -595,7 +670,7 @@ impl Game {
                 };
                 let origin = Vector2::new(r, r);
 
-                d.draw_shader_mode(&mut impact_fx.shader, |mut sd| {
+                d.draw_shader_mode(&mut effects.impact.shader, |mut sd| {
                     sd.draw_texture_pro(
                         &*scene_target,
                         flash_source,
@@ -612,32 +687,33 @@ impl Game {
             let hp = (MAX_DAMAGE - self.tank.damage).max(0.0).round() as i32;
             let hud = format!("SHELLS: {}   HP: {}", self.tank.shells_ammo, hp);
             d.draw_text(&hud, 50, screen_height - 50, 24, Color::DARKGRAY);
+            d.draw_text(
+                &version_hud,
+                screen_width - 50 - version_hud_w,
+                screen_height - 50,
+                24,
+                Color::DARKGRAY,
+            );
 
             // End-of-round banner over a dimming overlay.
             if let Some((title, color, title_size, title_w, sub, sub_size, sub_w)) = &banner {
-                d.draw_rectangle(
-                    0,
-                    0,
-                    screen_width,
-                    screen_height,
-                    Color::new(0, 0, 0, 120),
-                );
+                d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(0, 0, 0, 120));
                 let cx = screen_width / 2;
                 let cy = screen_height / 2;
-                d.draw_text(title, cx - title_w / 2, cy - title_size, *title_size, *color);
+                d.draw_text(
+                    title,
+                    cx - title_w / 2,
+                    cy - title_size,
+                    *title_size,
+                    *color,
+                );
                 d.draw_text(sub, cx - sub_w / 2, cy + 20, *sub_size, Color::RAYWHITE);
             }
 
             // Paused overlay draws over everything else, including the
             // end-of-round banner (its countdown is frozen too).
             if self.paused {
-                d.draw_rectangle(
-                    0,
-                    0,
-                    screen_width,
-                    screen_height,
-                    Color::new(0, 0, 0, 120),
-                );
+                d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(0, 0, 0, 120));
                 let title = "PAUSED";
                 let title_size = 72;
                 let title_w = d.measure_text(title, title_size);
@@ -778,7 +854,8 @@ fn explosion_hit(tank: &mut Tank, center: Position, rng: &mut rand::rngs::Thread
     // the shove more.
     let falloff = 1.0 - dist / EXPLOSION_RADIUS;
     let reference_mass = Tank::default().mass();
-    let push = (EXPLOSION_KNOCKBACK_SPEED * falloff * reference_mass / tank.mass()).min(KNOCKBACK_MAX_SPEED);
+    let push = (EXPLOSION_KNOCKBACK_SPEED * falloff * reference_mass / tank.mass())
+        .min(KNOCKBACK_MAX_SPEED);
     let axis = if dist > 0.001 {
         Vector2::new(dx / dist, dy / dist)
     } else {
