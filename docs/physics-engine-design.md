@@ -1,6 +1,8 @@
 # Physics engine revamp — design doc
 
-Status: approved for implementation.
+Status: all 6 migration phases complete - see "Migration plan" for
+per-phase notes, deviations from the original plan (and why), and how each
+was verified.
 
 ## Goals
 
@@ -112,7 +114,16 @@ Feeding variable framerates (`rl.get_frame_time()`) directly into Rapier creates
 
 ### Collision groups (replacing `Owner`-based filtering)
 
-Define membership groups using Rapier's `InteractionGroups` — `Player`, `Enemy`, `PlayerShell`, `EnemyShell`, `Wall`. Filter masks will ensure, for example, an `EnemyShell` only triggers intersections against `Player` bodies and `Wall`s. This removes nested `owner != Owner::Player` if-statements.
+**Not done** - flagging this honestly rather than pretending otherwise.
+`Owner`-based `if` filtering is still exactly how `Game::update` decides
+which shell can hit which tank; phase 5 only replaced *how a hit is
+detected* (physics intersection vs. point-in-box), not *who's allowed to
+check whom*. Moving that to rapier's `InteractionGroups` (bitmask
+membership/filter on each collider) remains a legitimate future cleanup -
+it would delete the nested `if shell.owner != Owner::Player` /
+`if shell.owner == Owner::Player` branches in the shell-hit loop - but
+wasn't necessary for anything this migration needed to work, so it was
+left alone rather than done for its own sake.
 
 ### AI Decoupling
 
@@ -128,10 +139,26 @@ The AI (`ai.rs`) relies heavily on predicting collisions. Instead of querying th
 
 ## Data model sketch
 
-- New module `src/physics.rs`: owns the rapier `PhysicsPipeline`,
-  `RigidBodySet`, `ColliderSet`, `IslandManager`, `BroadPhase`, `NarrowPhase`, `ImpulseJointSet`, `MultibodyJointSet`, `CCDSolver`, and `IntegrationParameters`. It exposes small helpers (`spawn_tank_body`, `spawn_shell_sensor`, `spawn_wall`) and a small `Position <-> nalgebra::Vector2` converter.
-- `Tank`/`Shell` gain a `body: RigidBodyHandle` (`collider: ColliderHandle` for shells). `Tank::knockback` goes away.
-- `Game` owns one `Physics` instance. `ram()` and `apply_explosion()` simply apply impulses to handles.
+- Below is what was actually built (see "Migration plan" for the reasoning
+  behind each deviation from the original sketch above it).
+- `src/physics.rs`'s `Physics` wraps rapier's own `PhysicsWorld` convenience
+  bundle (already provides `RigidBodySet`/`ColliderSet`/broad+narrow-phase/
+  `IntegrationParameters`/etc. in one struct - no need to re-declare them by
+  hand) plus small helpers: `spawn_wall`, `spawn_tank`, `add_hit_sensor`,
+  `spawn_shell`, `set_velocity`/`velocity`, `apply_impulse`,
+  `set_kinematic_position`, `position`, `touching`, `intersecting`,
+  `collider_of`, and a `Position <-> glam::Vec2` conversion pair (rapier
+  2D/f32 uses glam, not nalgebra, for its `Vector` type).
+- `Tank` gains `body: Option<RigidBodyHandle>` (the solid hull collider) and
+  `hit_sensor: Option<ColliderHandle>` (a second, sprite-sized sensor
+  collider used only for shell hits - see phase 5's note on why one
+  collider wasn't enough). `Tank::knockback` is gone (see phase 4: the
+  residual is derived fresh each frame instead of stored).
+- `Shell` gains `body: Option<RigidBodyHandle>` (a kinematic sensor; see
+  phase 5).
+- `Game` owns one `Physics` instance plus a `physics_accumulator: f32` for
+  the fixed-timestep loop. `ram()`/`explosion_hit()` take `&mut Physics` and
+  call `apply_impulse` directly on each tank's own body.
 
 ## Platform note: wasm/web target
 
@@ -162,10 +189,65 @@ The AI (`ai.rs`) relies heavily on predicting collisions. Instead of querying th
    logging any tank-hull pair found closer than their combined half-hulls
    found zero violations across many rounds of AI combat and player-driven
    ramming, and tanks never render outside the wall-bounded battlefield.)
-3. **Tank-vs-tank ram damage as events.** Physical blocking already happens
-   (see step 2). What's left: the ram-damage-roll trigger is still a
-   per-frame `overlaps()` poll, not driven by rapier's `CollisionEvent`
-   queue - move it to real contact-start events.
-4. **Knockback → impulses.** Convert ram and explosion knockbacks to `apply_impulse`. Delete manual decay constants (`KNOCKBACK_DAMPING`).
-5. **Shells as sensors.** Convert shells to kinematic CCD sensors. Hook intersection events to detonate logic. Drop `Tank::contains`.
+3. **Tank-vs-tank ram damage as events.** (Completed, with one deliberate
+   implementation swap from the original plan: rather than a channel-based
+   `CollisionEvent` stream, `Physics::touching(a, b)` queries rapier's own
+   narrow-phase directly - `PhysicsWorld::contact_pair(...).has_any_active_contact()`
+   - each frame. This achieves the same goal - ram-damage triggering reads
+   rapier's authoritative contact state instead of a hand-rolled geometric
+   re-check - without extra channel/event-handler plumbing, and it preserves
+   the existing "sustained contact re-ticks damage every cooldown" behavior
+   exactly, which a one-shot `Started` event would *not* have done on its
+   own. `Tank::overlaps` is deleted - dead code once nothing calls it.
+   Verified in-browser: clean build, zero console errors/panics across
+   several rounds, ram/shell damage and physical blocking both still work as
+   in step 2.)
+4. **Knockback → impulses.** (Completed, with one important scope correction
+   discovered during implementation: `KNOCKBACK_DAMPING` is **not** deleted.
+   Ram/explosion knockback is now a real `physics.apply_impulse` call - each
+   tank's collider mass is set at spawn (`spawn_tank`'s `mass` param) to match
+   `Tank::mass()`, so the impulse/mass division naturally reproduces the old
+   hand-rolled mass-weighted split with no separate formula. But letting
+   rapier's own `linear_damping` fully own the decay turns out to be
+   incompatible with "commanded movement snaps instantly to an exact speed,
+   including a dead stop on release, no momentum" (an explicit goal above):
+   a single rapier velocity vector has no way to say "this part is
+   instantly-reassertable, this part decays" on its own. `Game::drive_tank`
+   resolves this by deriving the residual (knockback) velocity fresh every
+   frame - `current_body_velocity - what_we_commanded_last_frame` - decaying
+   *that* explicitly with `KNOCKBACK_DAMPING`, then adding this frame's fresh
+   commanded velocity back on top before writing to the body. `Tank.knockback`
+   the *field* is gone (no longer stored - the residual is now derived, not
+   tracked), which is the meaningful simplification this step actually
+   delivers. Verified in-browser: no console errors across several rounds;
+   two consecutive screenshots with no key input showed zero pixel drift on
+   any tank, confirming no coasting was introduced; ram/explosion
+   damage-and-shove still visibly functioning.)
+5. **Shells as sensors.** (Completed, with one scope addition discovered
+   during implementation: a tank now carries **two** colliders, not one.
+   Reusing the existing hull collider (sized to `Tank::hull_size`, used for
+   tank-vs-tank/wall blocking) for shell-hit detection too would have
+   quietly shrunk the target - the old `Tank::contains` hit-tested against
+   the tank's *full sprite* (`Tank::size`), a deliberately bigger, more
+   forgiving hit box. So `physics::Physics::add_hit_sensor` attaches a
+   second, sprite-sized *sensor* collider to each tank body specifically for
+   shell intersection, leaving the solid hull collider untouched. Shells are
+   `RigidBodyBuilder::kinematic_position_based` bodies with `ccd_enabled` and
+   a small sensor collider (`SHELL_HIT_HALF_EXTENT`, kept near-point-sized so
+   the intersection reads like the old point-in-box check, not a box-vs-box
+   one); position is still hand-integrated every frame
+   (`Shell::update`/`velocity * dt`) and pushed into the kinematic body via
+   `set_kinematic_position` *before* the physics step, so intersection
+   queries after that step see this frame's movement - this is why the shell
+   movement/animation step moved earlier in `Game::update`, ahead of the
+   physics-stepping block, while the hit-detection/damage step stayed where
+   it was (after). As in phase 3, intersection is read via a direct
+   `PhysicsWorld::intersection_pair` query each frame
+   (`Physics::intersecting`) rather than a `CollisionEvent` channel, for the
+   same reasons. `Tank::contains` is deleted - dead code once nothing calls
+   it. Verified in-browser: no console errors across two full rounds
+   including a kill, a round restart (which tears down and rebuilds the
+   entire physics world, including every shell's body), and continuous
+   shell fire/hit/despawn cycles; shell and ram damage both visibly still
+   land (HP dropped from full to 0 in one observed exchange).
 6. **Cleanup pass.** Purge dead constants and run a final clippy/fmt hygiene pass.

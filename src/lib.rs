@@ -10,10 +10,23 @@ pub const TANK_TEXTURE_SIZE: f32 = 32.0;
 // together instead of stopping a padding-width apart.
 pub const TANK_HULL_FRACTION: f32 = 0.7;
 
-// shells.png is a 160x32 sheet: five 32x32 frames indexed by column.
+// shells.png is a 224x96 sheet: seven 32x32 frames (col, see ShellState)
+// indexed across three row-variants (see SHELL_VARIANTS / Tank::shell_variant)
+// that reskin the fire and hit frames while keeping the flying frame (col 3)
+// pixel-identical across all rows.
 pub const SHELL_TEXTURE_SIZE: f32 = 32.0;
+// Number of row-variants in shells.png. Each tank rolls one at spawn
+// (Tank::shell_variant) and every shell it fires uses that row.
+pub const SHELL_VARIANTS: i32 = 3;
 pub const SHELL_SPEED: f32 = 500.0;
 pub const SHELL_SCALE: f32 = 2.0;
+// Half-extent (px) of a shell's own physics sensor, used only to intersect a
+// tank's hit sensor (see TANK_HULL_FRACTION/Tank::size and
+// physics::Physics::add_hit_sensor). Kept small and near-point-like so the
+// intersection test still reads as "did the shell's exact position land
+// inside the tank", matching the old point-in-box check, rather than "did
+// the shell's box overlap the tank's box".
+pub const SHELL_HIT_HALF_EXTENT: f32 = 3.0;
 
 // damage.png is a 448x32 overlay sheet: a single row of fourteen 32x32 frames
 // indexed by column, drawn on top of a tank to show escalating damage. The
@@ -40,23 +53,62 @@ pub const ENEMY_SPAWN_MARGIN_MAX: f32 = 0.4;
 // is shown for this long, then the game restarts.
 pub const RESTART_DELAY: f32 = 3.0;
 
-// Tank driving: classic 4-direction, constant-speed movement. Pressing a
-// direction snaps the hull to face it and moves at a fixed speed; releasing
-// stops instantly. No momentum.
-pub const TANK_SPEED: f32 = 220.0; // player movement speed (px/s)
-pub const ENEMY_SPEED: f32 = 150.0; // baseline enemy speed (px/s), slower than the player
+// Tank driving: 4-direction movement with real inertia, modeled like a
+// tracked vehicle rather than a car. Pressing a direction snaps the *hull
+// facing* immediately (rotation is still instant/cosmetic) and the tank's
+// velocity along that axis chases the commanded speed via a mass-aware
+// acceleration impulse each frame rather than snapping to it - see
+// Game::drive_tank, TANK_ACCEL_FORCE/TANK_DECEL_FORCE below. Unlike a car,
+// though, a tank's tracks give it almost no lateral grip loss: any velocity
+// component *perpendicular* to the commanded direction is scrubbed off hard
+// by TANK_TURN_GRIP_FORCE, so turning a corner reads as the hull snapping
+// onto the new axis, not sliding through a curve. Momentum only survives
+// along the axis actually being driven.
+pub const TANK_SPEED: f32 = 220.0; // player top speed (px/s)
+pub const ENEMY_SPEED: f32 = 150.0; // baseline enemy top speed (px/s), slower than the player
 // Each enemy's speed is randomized within +/- this fraction of ENEMY_SPEED at
 // spawn, so some drive faster and some slower instead of all moving in lockstep.
 pub const ENEMY_SPEED_VARIANCE: f32 = 0.25;
 
-// A damaged tank slows down: its speed is scaled by a curve of how hurt it is
-// (0 = pristine, 1 = about to wreck). The curve stays close to full speed
+// A damaged tank slows down: both its top speed and how fast it can reach it
+// are scaled by a curve of how hurt it is (0 = pristine, 1 = about to
+// wreck; see Tank::speed_factor). The curve stays close to full effect
 // through light and moderate damage, then falls off harder as damage climbs
-// toward the max - a limp rather than a straight-line taper - bottoming out at
-// DAMAGE_SPEED_FLOOR instead of zero (a tank stops moving separately, once
-// it's a wreck).
+// toward the max - a limp rather than a straight-line taper - bottoming out
+// at DAMAGE_SPEED_FLOOR instead of zero (a tank stops moving separately,
+// once it's a wreck).
 pub const DAMAGE_SPEED_FLOOR: f32 = 0.35;
 pub const DAMAGE_SPEED_CURVE: f32 = 2.2;
+
+// Acceleration: how fast a tank's actual velocity can chase its commanded
+// target (see Game::drive_tank), expressed as a force so mass genuinely
+// matters (F = m*a - a heavier tank, if mass ever varies, ramps slower for
+// the same force) rather than a flat px/s^2 every tank shares regardless of
+// mass. Both figures are also scaled by Tank::speed_factor, so a damaged
+// tank is sluggish to speed up, not just capped at a lower top speed.
+// Deceleration is deliberately weaker than acceleration - releasing a
+// direction (or getting knocked off course) lets the tank slide for a beat
+// rather than stopping dead, which is what actually makes driving more
+// challenging, not just "slower everywhere." This same chase-toward-target
+// mechanism is also what decays ram/explosion/shell knockback now: a hit
+// pushes velocity away from wherever the tank is trying to go, which reads
+// as "slow down and correct," so it fades out via the (weak) decel rate
+// instead of a separate hand-decayed field.
+pub const TANK_ACCEL_FORCE: f32 = 1800.0; // reaches TANK_SPEED in well under a second
+pub const TANK_DECEL_FORCE: f32 = 600.0; // noticeably slower to shed speed than to gain it
+
+// Turning grip: how hard a tank's tracks cancel velocity *perpendicular* to
+// the currently commanded direction (see Game::drive_tank). Much stronger
+// than either accel or decel on purpose - real tank tracks don't slip
+// sideways the way wheels do, so a corner should snap onto the new axis
+// within a couple of frames rather than sliding through it like a car. Not
+// scaled by Tank::speed_factor: track grip is a mechanical property, not an
+// engine-power one, so a damaged tank still corners sharply even though it
+// accelerates and tops out slower. Only applies while a direction is
+// actively held (Intent::move_dir is Some) - a coasting or stationary tank
+// has no commanded axis to grip against, so residual/knockback velocity
+// there still fades via the (weak) TANK_DECEL_FORCE chase above.
+pub const TANK_TURN_GRIP_FORCE: f32 = 6000.0;
 
 // Shell ammo: the player holds up to MAX_SHELLS and recharges one shell every
 // SHELL_RECHARGE_SECONDS while below the cap.
@@ -67,15 +119,16 @@ pub const SHELL_RECHARGE_SECONDS: f32 = 2.0;
 // continuous touching doesn't drain damage every frame.
 pub const RAM_DAMAGE_COOLDOWN: f32 = 0.5;
 
-// A ram also gives both tanks a brief, small knockback shove apart (see
-// Tank::apply_knockback), scaled by their closing speed and normalized mass
-// (hull area, i.e. scale squared - see Tank::mass) so a lighter tank gets
-// shoved further than a heavier one. Wrecks are treated as infinite mass in
-// both this and the explosion knockback below - already-dead hulks stay put
-// when hit.
+// A ram also gives both tanks a brief, small knockback shove apart (a real
+// physics impulse - see Game::ram), scaled by their closing speed and
+// normalized mass (hull area, i.e. scale squared - see Tank::mass) so a
+// lighter tank gets shoved further than a heavier one. Wrecks are treated as
+// infinite mass in both this and the explosion knockback below -
+// already-dead hulks stay put when hit. The push itself decays via the same
+// acceleration chase that governs normal driving (see TANK_DECEL_FORCE
+// above), not a separate damping constant.
 pub const KNOCKBACK_STRENGTH: f32 = 0.2; // fraction of ram closing speed converted to push speed
 pub const KNOCKBACK_MAX_SPEED: f32 = 60.0; // px/s cap on any one push - keeps it small
-pub const KNOCKBACK_DAMPING: f32 = 8.0; // 1/s decay rate; higher = the push dies out faster
 
 // Enemy AI tuning. Distances are in pixels, times in seconds.
 pub const ENEMY_VIEW_RANGE: f32 = 520.0; // start chasing the player within this
@@ -87,6 +140,15 @@ pub const ENEMY_DAMAGE_MIN: f32 = 5.0; // enemy shell damage lower bound (weaker
 pub const ENEMY_DAMAGE_MAX: f32 = 15.0; // enemy shell damage upper bound
 pub const ENEMY_FLEE_DAMAGE: f32 = 70.0; // retreat once this hurt
 pub const ENEMY_RETARGET_SECONDS: f32 = 3.0; // how often patrol picks a new point
+
+// Friendly-fire avoidance: shells can hit any tank except the one that fired
+// them (see Game::update), so an enemy lined up on the player with another
+// enemy sitting on that same firing line, closer than the player, is about to
+// shoot a teammate. When that happens, this is the chance the enemy holds its
+// fire instead - not a hard block, so stray friendly fire still happens
+// sometimes rather than enemies being perfectly coordinated. See
+// Brain::friendly_blocks_shot/act_attack in ai.rs.
+pub const ENEMY_FRIENDLY_FIRE_HOLD_CHANCE: f32 = 0.6;
 
 // Point-blank misfires: when an enemy shoots while very close to the player it may
 // "misfire", throwing the shot off its aim so it sails wide instead of landing a
@@ -127,12 +189,38 @@ pub const WRECK_BURN_SECONDS: f32 = 4.0;
 // the tank sprite orientation). A tank drops a mark every TRACK_SPACING pixels it
 // travels, and each mark fades out over TRACK_LIFETIME seconds.
 pub const TRACK_TEXTURE_SIZE: f32 = 32.0;
-pub const TRACK_SPACING: f32 = 16.0; // distance travelled between dropped marks
+// Tightened ~70% from an original 16.0. A tank's real turning arc - the
+// stretch where its velocity genuinely has both axes' components at once
+// (see TANK_TURN_GRIP_FORCE/Game::drive_tank) - only lasts on the order of
+// 30px, so this needs to be small enough for several *real* samples to fall
+// within that short a distance; Game::lay_tracks stamps each mark's raw,
+// un-smoothed travel heading, so the curve you see is exactly the tank's
+// actual path, not an interpolation - the sampling density is what's tuned
+// here, not the curviness itself.
+pub const TRACK_SPACING: f32 = 5.0; // distance travelled between dropped marks
 pub const TRACK_LIFETIME: f32 = 1.0; // seconds for a mark to fully fade away
 // Marks are drawn smaller than the tank and faint, so the trail reads as a subtle
 // impression in the ground rather than a bold sprite.
 pub const TRACK_SCALE_FRACTION: f32 = 0.55; // mark size relative to the tank sprite
-pub const TRACK_MAX_OPACITY: f32 = 0.3; // opacity of a fresh mark, before fading
+pub const TRACK_MAX_OPACITY: f32 = 0.21; // opacity of a fresh mark, before fading (30% lighter than 0.3)
+
+// Per-tank track "distortion": without it, a tank driving in a straight line
+// stamps perfectly identical marks in a perfectly straight line, which reads
+// as mechanical and homogenous. Each tank rolls its own wobble
+// amplitude/wavelength/phase and scale jitter once at spawn (see
+// Tank::track_wobble_amp/track_wobble_freq/track_wobble_phase/
+// track_scale_jitter) and reuses them for every mark it lays for the whole
+// round, rather than randomizing per-mark - so a given tank's whole trail
+// reads as one coherent, tank-specific tread pattern (a wavier or straighter
+// "signature") instead of per-mark noise. See Game::lay_tracks.
+pub const TRACK_WOBBLE_AMP_MIN_DEG: f32 = 3.0;
+pub const TRACK_WOBBLE_AMP_MAX_DEG: f32 = 12.0;
+// Wavelength range: pixels of travel per full side-to-side wobble cycle.
+pub const TRACK_WOBBLE_WAVELENGTH_MIN: f32 = 40.0;
+pub const TRACK_WOBBLE_WAVELENGTH_MAX: f32 = 120.0;
+// +/- fraction of TRACK_SCALE_FRACTION, so some tanks press slightly wider or
+// narrower tread marks than others.
+pub const TRACK_SCALE_JITTER: f32 = 0.15;
 
 // Shockwave post-processing effect triggered when a tank is destroyed: a ring
 // of radial distortion expands from the hit point over the whole screen and
@@ -142,17 +230,26 @@ pub const SHOCKWAVE_SPEED: f32 = 0.8; // ring growth speed, UV units/sec
 pub const SHOCKWAVE_WIDTH: f32 = 0.08; // thickness of the distorted band, UV units
 pub const SHOCKWAVE_STRENGTH: f32 = 0.03; // how hard the ring bends the image, UV units
 
-// A tank's death also deals a small splash of damage to any other tank caught
-// nearby, on top of the shockwave visual. Deliberately weak - a chip of
-// damage, not a second kill shot.
+// A tank's death also deals a small splash of damage to any tank on the
+// *opposing* side caught nearby, on top of the shockwave visual. Deliberately
+// weak - a chip of damage, not a second kill shot - and never chips a tank's
+// own side.
 pub const EXPLOSION_RADIUS: f32 = 110.0; // px a wrecked tank's blast reaches
 pub const EXPLOSION_DAMAGE_MIN: f32 = 3.0;
 pub const EXPLOSION_DAMAGE_MAX: f32 = 8.0;
-// It also gives every live tank it reaches a small outward shove, same
-// knockback mechanism as a ram (Tank::apply_knockback / Tank::mass), but
-// driven by distance from the blast instead of closing speed: full push at
-// the center, tapering linearly to nothing at EXPLOSION_RADIUS.
+// Unlike the damage above, the outward shove isn't side-restricted: a real
+// shockwave doesn't check allegiance, so it gives *every* live tank it
+// reaches (opposing side or the dead tank's own) a shove - same knockback
+// mechanism as a ram (Tank::mass, Game::ram), but driven by distance from
+// the blast instead of closing speed: full push at the center, tapering
+// linearly to nothing at EXPLOSION_RADIUS.
 pub const EXPLOSION_KNOCKBACK_SPEED: f32 = 90.0; // px/s push at ground zero
+
+// A shell impact also gives the tank it hits a small shove along the
+// shell's travel direction - much weaker than a ram or explosion (deliberately
+// a "tap", not a shove), and, like both of those, skipped if this very hit
+// just wrecked the tank.
+pub const SHELL_IMPACT_KNOCKBACK_SPEED: f32 = 35.0; // px/s push on a shell hit
 
 // Muzzle-flash heat haze: a tiny, split-second effect localized to a small
 // patch of screen at the barrel when a tank fires. Unlike the kill shockwave
@@ -203,6 +300,14 @@ pub const PHYSICS_FIXED_DT: f32 = 1.0 / 60.0;
 // physics steps once it resumes (the classic fixed-timestep "spiral of
 // death").
 pub const PHYSICS_MAX_CATCHUP_SECONDS: f32 = 0.25;
+
+// HUD: the SHELLS/HP numbers (Game::render) shift color as that resource
+// drops, as a fraction of its max (MAX_SHELLS / MAX_DAMAGE respectively) -
+// default gray above HUD_WARN_THRESHOLD, orange between the two, red below
+// HUD_CRITICAL_THRESHOLD. Conservative on purpose: only flag real trouble,
+// not every routine dip.
+pub const HUD_WARN_THRESHOLD: f32 = 0.40;
+pub const HUD_CRITICAL_THRESHOLD: f32 = 0.15;
 
 pub mod ai;
 pub mod bt;

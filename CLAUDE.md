@@ -37,6 +37,7 @@ Bongbong is a tank shooter game. Main purpose of this game is to be a fun, fast 
 - Tank/shell rotation `0.0` = facing up.
 - Movement is 4-direction, constant-speed, no momentum: pressing a direction snaps the hull to face it and moves at a fixed speed; releasing stops instantly.
 - Sprite-sheet layouts, damage-stage frame groupings, and speed/damage tuning curves are documented as comments in `lib.rs` next to their constants — check there first.
+- `shells.png` has row-variants (`SHELL_VARIANTS`): each tank rolls one row at spawn (`Tank::shell_variant`) and every shell it fires reads from that row for its whole life. The flying frame (col 3) is pixel-identical across all rows by design — only the fire/hit frames differ — so a shell looks the same in flight no matter which tank fired it.
 
 ## Testing & tooling
 - No automated test suite exists yet (no `#[test]` in the codebase) — verify changes by running the game (`cargo run` or `cargo watch -x "run"`) rather than assuming test coverage.

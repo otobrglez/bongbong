@@ -1,9 +1,9 @@
-use rapier2d::prelude::RigidBodyHandle;
+use rapier2d::prelude::{ColliderHandle, RigidBodyHandle};
 use sola_raylib::prelude::*;
 
 use crate::{
-    DAMAGE_SPEED_CURVE, DAMAGE_SPEED_FLOOR, KNOCKBACK_DAMPING, MAX_DAMAGE, MAX_SHELLS, Position,
-    TANK_HULL_FRACTION, TANK_SPEED, TANK_TEXTURE_SIZE, WRECK_BURN_SECONDS,
+    DAMAGE_SPEED_CURVE, DAMAGE_SPEED_FLOOR, MAX_DAMAGE, MAX_SHELLS, Position, TANK_HULL_FRACTION,
+    TANK_SPEED, TANK_TEXTURE_SIZE, WRECK_BURN_SECONDS,
 };
 
 /// The four movement/facing directions. rotation 0 == up, clockwise positive,
@@ -55,6 +55,10 @@ pub struct Tank {
     /// Which sprite in the atlas to draw.
     pub row: i32,
     pub col: i32,
+    /// Row in shells.png this tank's shells are drawn from (0..SHELL_VARIANTS).
+    /// Rolled once at spawn (see Game::init) and fixed for the tank's whole
+    /// life, so all of its shots read as visually consistent.
+    pub shell_variant: i32,
     /// Center position on screen (pixels). A read-back mirror of `body`'s
     /// physics transform, synced once per frame after the physics world
     /// steps (see `Game::update`) - nothing else should write this by hand.
@@ -78,20 +82,41 @@ pub struct Tank {
     pub wreck_timer: f32,
     /// Distance travelled (pixels) since the last track mark was dropped.
     pub track_accum: f32,
-    /// Intended velocity this frame (pixels per second): the movement direction
-    /// times speed, or zero when not moving. Set by `control` and read by the AI's
-    /// predictive collision avoidance.
+    /// Number of track marks this tank has laid this round - the phase input
+    /// to its track wobble (see `track_wobble_phase`); incremented once per
+    /// mark in `Game::lay_tracks`.
+    pub track_mark_count: u32,
+    /// This tank's track-wobble amplitude in degrees, rolled once at spawn
+    /// (see TRACK_WOBBLE_AMP_MIN_DEG/MAX_DEG) and fixed for the round -
+    /// how far each mark's rotation swings side to side from the tank's
+    /// actual heading.
+    pub track_wobble_amp: f32,
+    /// This tank's track-wobble angular frequency, in radians per mark
+    /// (derived from a randomized wavelength at spawn - see
+    /// TRACK_WOBBLE_WAVELENGTH_MIN/MAX) - how tight the wobble's cycles are.
+    pub track_wobble_freq: f32,
+    /// This tank's track-wobble phase offset in radians, rolled once at
+    /// spawn, so tanks that happen to share a similar amplitude/frequency
+    /// don't wobble in lockstep.
+    pub track_wobble_phase: f32,
+    /// Fixed per-tank multiplier on track mark scale (see
+    /// TRACK_SCALE_JITTER), rolled once at spawn.
+    pub track_scale_jitter: f32,
+    /// Commanded velocity this frame (pixels per second): the movement
+    /// direction times speed, or zero when not moving. Set by `control` and
+    /// read by the AI's predictive collision avoidance, and by
+    /// `Game::drive_tank` to derive how much of the physics body's actual
+    /// velocity is "ours" versus residual momentum from a ram/explosion
+    /// impulse (see that function).
     pub velocity: Vector2,
-    /// Residual push (pixels per second) from a recent ram or explosion,
-    /// independent of `control`'s input-driven movement. Added to `velocity`
-    /// each frame when driving this tank's physics body (see `Game::drive_tank`)
-    /// and decays to zero via `decay_knockback`; see that and `Game`'s
-    /// `ram`/`apply_explosion`. Not yet a real physics impulse - see
-    /// docs/physics-engine-design.md.
-    pub knockback: Vector2,
     /// This tank's rapier rigid body, once spawned into the physics world
     /// (see `Game::init`/`physics::Physics::spawn_tank`).
     pub body: Option<RigidBodyHandle>,
+    /// This tank's shell-hit sensor collider - a second, larger collider on
+    /// the same `body` (see `physics::Physics::add_hit_sensor`), sized to
+    /// the tank's full sprite rather than its solid hull, used only to
+    /// detect when a shell hits it.
+    pub hit_sensor: Option<ColliderHandle>,
 }
 
 impl Default for Tank {
@@ -99,6 +124,7 @@ impl Default for Tank {
         Self {
             row: 0,
             col: 0,
+            shell_variant: 0,
             position: Position::default(),
             rotation: 0.0,
             scale: 2.0, // 3.0,
@@ -109,9 +135,14 @@ impl Default for Tank {
             ram_cooldown: 0.0,
             wreck_timer: 0.0,
             track_accum: 0.0,
+            track_mark_count: 0,
+            track_wobble_amp: 0.0,
+            track_wobble_freq: 0.0,
+            track_wobble_phase: 0.0,
+            track_scale_jitter: 1.0,
             velocity: Vector2::new(0.0, 0.0),
-            knockback: Vector2::new(0.0, 0.0),
             body: None,
+            hit_sensor: None,
         }
     }
 }
@@ -127,15 +158,22 @@ impl Tank {
         self.damage >= MAX_DAMAGE
     }
 
-    /// This tank's current speed, reduced as it takes damage. Holds close to
-    /// full speed through light and moderate damage, then falls off harder as
-    /// damage nears the max, bottoming out at DAMAGE_SPEED_FLOOR - a limp
-    /// rather than a linear taper.
-    pub fn effective_speed(&self) -> f32 {
+    /// How much damage has hurt this tank's mobility, from 1.0 (pristine) down
+    /// to DAMAGE_SPEED_FLOOR (about to wreck). Holds close to 1.0 through
+    /// light and moderate damage, then falls off harder as damage nears the
+    /// max - a limp rather than a linear taper. Scales both top speed
+    /// (`effective_speed`) and how fast the tank can reach it
+    /// (`TANK_ACCEL_FORCE`/`TANK_DECEL_FORCE` in `Game::drive_tank`), so a
+    /// damaged tank is sluggish to speed up too, not just capped lower.
+    pub fn speed_factor(&self) -> f32 {
         let hurt = (self.damage / MAX_DAMAGE).clamp(0.0, 1.0);
-        let factor =
-            DAMAGE_SPEED_FLOOR + (1.0 - DAMAGE_SPEED_FLOOR) * (1.0 - hurt.powf(DAMAGE_SPEED_CURVE));
-        self.speed * factor
+        DAMAGE_SPEED_FLOOR + (1.0 - DAMAGE_SPEED_FLOOR) * (1.0 - hurt.powf(DAMAGE_SPEED_CURVE))
+    }
+
+    /// This tank's current top speed, reduced as it takes damage; see
+    /// `speed_factor`.
+    pub fn effective_speed(&self) -> f32 {
+        self.speed * self.speed_factor()
     }
 
     /// True once a wreck has finished burning and settled into a dead hulk.
@@ -149,23 +187,10 @@ impl Tank {
         (self.position.x + self.position.y) * 0.01
     }
 
-    /// True if `point` lies within the tank's square footprint.
-    pub fn contains(&self, point: Position) -> bool {
-        let half = self.size() * 0.5;
-        (point.x - self.position.x).abs() <= half && (point.y - self.position.y).abs() <= half
-    }
-
     /// Collision footprint side length: the visible hull, not the full sprite
     /// tile, so tanks can close the gap left by the sprite's transparent padding.
     pub fn hull_size(&self) -> f32 {
         self.size() * TANK_HULL_FRACTION
-    }
-
-    /// True if this tank's hull footprint overlaps another's.
-    pub fn overlaps(&self, other: &Tank) -> bool {
-        let half = (self.hull_size() + other.hull_size()) * 0.5;
-        (self.position.x - other.position.x).abs() < half
-            && (self.position.y - other.position.y).abs() < half
     }
 
     /// A tank's mass for collision knockback: proportional to hull area
@@ -205,8 +230,8 @@ impl Tank {
     /// see `effective_speed`). `face` turns the hull in place without moving
     /// (used when an AI stops to aim). `move_dir` takes precedence. Shared by
     /// the player and the AI so both move identically. Does not touch
-    /// `position` - that's the physics body's job once `velocity` (plus any
-    /// `knockback`) is handed to it; see `Game::drive_tank`.
+    /// `position` - that's the physics body's job once `velocity` is handed
+    /// to it; see `Game::drive_tank`.
     pub fn control(&mut self, move_dir: Option<Dir>, face: Option<Dir>) {
         if let Some(dir) = move_dir {
             self.rotation = dir.rotation();
@@ -219,16 +244,6 @@ impl Tank {
                 self.rotation = dir.rotation();
             }
         }
-    }
-
-    /// Decay any residual knockback push toward zero. `knockback` itself is
-    /// folded into the velocity handed to this tank's physics body each frame
-    /// (see `Game::drive_tank`) rather than integrated into position by hand,
-    /// so this only needs to age the stored value down.
-    pub fn decay_knockback(&mut self, dt: f32) {
-        let decay = (1.0 - KNOCKBACK_DAMPING * dt).max(0.0);
-        self.knockback.x *= decay;
-        self.knockback.y *= decay;
     }
 }
 

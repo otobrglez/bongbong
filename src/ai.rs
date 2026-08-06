@@ -7,9 +7,9 @@ use crate::tank::{Dir, Tank};
 use crate::{
     AI_DIR_HOLD_SECONDS, AI_DIR_SWITCH_MARGIN_PX, AVOID_DODGE_SECONDS, AVOID_LOOKAHEAD,
     AVOID_MARGIN, AVOID_MIN_SPEED, ENEMY_AIM_SETTLE, ENEMY_ATTACK_RANGE, ENEMY_FIRE_ALIGN_PX,
-    ENEMY_FIRE_INTERVAL, ENEMY_FLEE_DAMAGE, ENEMY_MISFIRE_ANGLE_MAX, ENEMY_MISFIRE_ANGLE_MIN,
-    ENEMY_MISFIRE_CHANCE_MAX, ENEMY_MISFIRE_RANGE, ENEMY_RETARGET_SECONDS, ENEMY_VIEW_RANGE,
-    Position,
+    ENEMY_FIRE_INTERVAL, ENEMY_FLEE_DAMAGE, ENEMY_FRIENDLY_FIRE_HOLD_CHANCE,
+    ENEMY_MISFIRE_ANGLE_MAX, ENEMY_MISFIRE_ANGLE_MIN, ENEMY_MISFIRE_CHANCE_MAX,
+    ENEMY_MISFIRE_RANGE, ENEMY_RETARGET_SECONDS, ENEMY_VIEW_RANGE, Position,
 };
 
 /// A read-only snapshot of one tank's motion for collision prediction. The game
@@ -411,15 +411,42 @@ impl Brain<'_> {
     /// whether the player is actually in front (positive along the fire dir).
     fn aim_alignment(&self) -> (Dir, f32, bool) {
         let dir = Dir::toward(self.me.position, self.player.position);
-        let dx = self.player.position.x - self.me.position.x;
-        let dy = self.player.position.y - self.me.position.y;
-        let (off_axis, forward) = match dir {
-            Dir::Up => (dx.abs(), -dy),
-            Dir::Down => (dx.abs(), dy),
-            Dir::Left => (dy.abs(), -dx),
-            Dir::Right => (dy.abs(), dx),
-        };
+        let (off_axis, forward) = axis_offsets(self.me.position, self.player.position, dir);
         (dir, off_axis, forward > 0.0)
+    }
+
+    /// True if another enemy sits roughly on `fire_dir`'s line, closer than
+    /// `max_forward` (normally the distance to the player) - i.e. firing
+    /// straight down that axis right now would hit a teammate before the
+    /// shot ever reached its intended target. Checked against `movers`
+    /// (skipping slot 0, the player, and this tank's own slot) since that's
+    /// all the perception `Brain` is handed - see `Ai::think`'s doc comment.
+    /// Shells can hit any tank except whoever fired them (see
+    /// `Game::update`), so this is what `act_attack` uses to mostly (not
+    /// always - see `ENEMY_FRIENDLY_FIRE_HOLD_CHANCE`) hold fire rather than
+    /// shoot through a friendly.
+    fn friendly_blocks_shot(&self, fire_dir: Dir, max_forward: f32) -> bool {
+        self.movers.iter().enumerate().any(|(i, mover)| {
+            if i == 0 || i == self.my_index {
+                return false;
+            }
+            let (off_axis, forward) = axis_offsets(self.me.position, mover.position, fire_dir);
+            forward > 0.0 && forward < max_forward && off_axis <= ENEMY_FIRE_ALIGN_PX
+        })
+    }
+}
+
+/// Perpendicular and forward distance of `to` from `from` along the cardinal
+/// axis `dir` points along - shared by aim alignment (target: the player) and
+/// friendly-fire avoidance (target: another enemy), so both read the same way.
+fn axis_offsets(from: Position, to: Position, dir: Dir) -> (f32, f32) {
+    let dx = to.x - from.x;
+    let dy = to.y - from.y;
+    match dir {
+        Dir::Up => (dx.abs(), -dy),
+        Dir::Down => (dx.abs(), dy),
+        Dir::Left => (dy.abs(), -dx),
+        Dir::Right => (dy.abs(), dx),
     }
 }
 
@@ -488,9 +515,17 @@ fn act_attack(b: &mut Brain) -> Status {
         b.ai.commit(fire_dir);
 
         if b.ai.aim_settle >= ENEMY_AIM_SETTLE && b.ai.fire_timer <= 0.0 {
-            b.intent.fire = true;
-            b.intent.fire_aim_offset = b.roll_misfire();
+            let blocked = b.friendly_blocks_shot(fire_dir, b.dist_to_player());
+            let hold_fire =
+                blocked && b.rng.random_range(0.0..1.0) < ENEMY_FRIENDLY_FIRE_HOLD_CHANCE;
+            // Whether it fires or holds, this firing opportunity is spent -
+            // otherwise a held shot would just re-roll every frame at ~60Hz
+            // and fire almost immediately anyway, defeating the hold chance.
             b.ai.fire_timer = ENEMY_FIRE_INTERVAL;
+            if !hold_fire {
+                b.intent.fire = true;
+                b.intent.fire_aim_offset = b.roll_misfire();
+            }
         }
     } else {
         // Not lined up: reposition toward the player (with commitment).

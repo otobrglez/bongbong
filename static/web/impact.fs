@@ -49,10 +49,15 @@ void main() {
     vec4 color = texture2D(texture0, uv);
 
     // Bright warm spark at the impact point, decaying faster than the pulse
-    // itself so it reads as an instantaneous flash rather than a glow.
+    // itself so it reads as an instantaneous flash rather than a glow. Mixed
+    // toward the spark color (not added) so it stays visible against a
+    // bright background too - additive alone all but disappears against the
+    // near-white RAYWHITE battlefield floor (a shell that misses every tank
+    // and hits the boundary wall lands on open ground, not a dark tank
+    // sprite), since white plus more brightness just clips back to white.
     float flashRadius = width * 3.0;
     float flash = smoothstep(flashRadius, 0.0, dist) * fade * fade;
-    color.rgb += flash * vec3(1.0, 0.85, 0.5);
+    color.rgb = mix(color.rgb, vec3(1.0, 0.55, 0.15), flash);
 
     gl_FragColor = color;
 }
