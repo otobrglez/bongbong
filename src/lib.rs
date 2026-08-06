@@ -186,6 +186,24 @@ pub const IMPACT_FLASH_STRENGTH: f32 = 0.025; // how hard the punch shoves the i
 // punch's full reach plus its band width.
 pub const IMPACT_FLASH_QUAD_RADIUS: f32 = 70.0;
 
+// Physics world: rapier2d integration (see docs/physics-engine-design.md).
+// The battlefield boundary is 4 static wall colliders whose inner faces sit
+// exactly at the screen edges, matching the old hand-rolled clamp bound;
+// this is just how far they extend outward - purely internal, never
+// rendered, so the exact value doesn't matter as long as it's comfortably
+// more than a tank can move in one physics step.
+pub const WALL_THICKNESS: f32 = 100.0;
+// The physics world steps at a fixed rate regardless of render frame rate,
+// so contact resolution stays consistent; `Game::update` accumulates real
+// frame time and drains it in this many fixed chunks. Matches
+// rapier2d::prelude::IntegrationParameters::default().dt.
+pub const PHYSICS_FIXED_DT: f32 = 1.0 / 60.0;
+// Caps how much real time a single frame's accumulator can catch up on, so a
+// long stall (window drag, backgrounded tab) doesn't dump a burst of extra
+// physics steps once it resumes (the classic fixed-timestep "spiral of
+// death").
+pub const PHYSICS_MAX_CATCHUP_SECONDS: f32 = 0.25;
+
 pub mod ai;
 pub mod bt;
 pub mod damage_stage;

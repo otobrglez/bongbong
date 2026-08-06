@@ -144,8 +144,28 @@ The AI (`ai.rs`) relies heavily on predicting collisions. Instead of querying th
    convenience bundle rather than re-declaring its fields by hand, with
    gravity zeroed; `Game` now owns a `Physics` and steps it every unpaused
    frame, still with zero bodies.)
-2. **Walls + cardinal-driven bodies, no impulses.** Tanks become rotation-locked dynamic bodies. Replace `clamp_to_field` with static colliders. Delete AI wall-following hacks. Ensure `Game::update` operates on a fixed timestep accumulator.
-3. **Tank-vs-tank contact + ram damage.** Hook up Rapier's `CollisionEvent` queue. Let the solver push tanks apart naturally while applying ram damage. Delete hand-rolled `overlaps()` revert logic.
+2. **Walls + cardinal-driven bodies, no impulses.** (Completed: every tank is
+   a rotation-locked dynamic body with a hull-sized cuboid collider; 4 static
+   wall colliders replace `clamp_to_field`; `Ai::deflect_from_walls` and
+   `wall_follow` are deleted (`heads_into_wall` stays - predictive dodge
+   filtering still wants it); `Game::update` drains a fixed-timestep
+   accumulator (`PHYSICS_FIXED_DT`, capped by `PHYSICS_MAX_CATCHUP_SECONDS`)
+   into `Physics::step`. One deliberate scope note: giving tanks solid
+   colliders forces tank-vs-tank blocking to become physical *right now* -
+   two solid dynamic bodies can't be told "collide, but don't actually
+   collide yet" - so the old `overlaps()`-revert-and-shove dance in
+   `apply_movement_player`/`_enemy` is already gone, ahead of where step 3
+   below originally placed it. Knockback is *not* yet a real impulse: it's
+   still hand-decayed on `Tank` and folded into the velocity written to the
+   body each frame (`velocity + knockback`), exactly matching "no impulses
+   yet". Verified in-browser via the wasm build: a temporary debug check
+   logging any tank-hull pair found closer than their combined half-hulls
+   found zero violations across many rounds of AI combat and player-driven
+   ramming, and tanks never render outside the wall-bounded battlefield.)
+3. **Tank-vs-tank ram damage as events.** Physical blocking already happens
+   (see step 2). What's left: the ram-damage-roll trigger is still a
+   per-frame `overlaps()` poll, not driven by rapier's `CollisionEvent`
+   queue - move it to real contact-start events.
 4. **Knockback → impulses.** Convert ram and explosion knockbacks to `apply_impulse`. Delete manual decay constants (`KNOCKBACK_DAMPING`).
 5. **Shells as sensors.** Convert shells to kinematic CCD sensors. Hook intersection events to detonate logic. Drop `Tank::contains`.
 6. **Cleanup pass.** Purge dead constants and run a final clippy/fmt hygiene pass.

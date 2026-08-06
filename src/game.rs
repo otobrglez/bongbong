@@ -13,9 +13,9 @@ use crate::{
     ENEMY_SPAWN_MARGIN_MIN, ENEMY_SPEED, ENEMY_SPEED_VARIANCE, EXPLOSION_DAMAGE_MAX,
     EXPLOSION_DAMAGE_MIN, EXPLOSION_KNOCKBACK_SPEED, EXPLOSION_RADIUS, IMPACT_FLASH_DURATION,
     IMPACT_FLASH_QUAD_RADIUS, KNOCKBACK_MAX_SPEED, KNOCKBACK_STRENGTH, MAX_DAMAGE,
-    MUZZLE_FLASH_DURATION, MUZZLE_FLASH_QUAD_RADIUS, PLAYER_DAMAGE_MAX, PLAYER_DAMAGE_MIN,
-    Position, RAM_DAMAGE_COOLDOWN, RESTART_DELAY, SHOCKWAVE_DURATION, TRACK_SCALE_FRACTION,
-    TRACK_SPACING,
+    MUZZLE_FLASH_DURATION, MUZZLE_FLASH_QUAD_RADIUS, PHYSICS_FIXED_DT, PHYSICS_MAX_CATCHUP_SECONDS,
+    PLAYER_DAMAGE_MAX, PLAYER_DAMAGE_MIN, Position, RAM_DAMAGE_COOLDOWN, RESTART_DELAY,
+    SHOCKWAVE_DURATION, TRACK_SCALE_FRACTION, TRACK_SPACING, WALL_THICKNESS,
 };
 
 /// How the current round is going.
@@ -73,9 +73,12 @@ pub struct Game {
     /// True while the game is paused (toggled by the P key); simulation is
     /// frozen and rendering shows a "PAUSED" overlay.
     paused: bool,
-    /// The rapier physics world (see docs/physics-engine-design.md). Phase 1:
-    /// stepped every frame but empty - no bodies are wired to it yet.
+    /// The rapier physics world (see docs/physics-engine-design.md). Owns
+    /// every tank's rigid body plus the battlefield wall colliders.
     physics: Physics,
+    /// Leftover real time not yet consumed by a fixed physics step; see
+    /// `PHYSICS_FIXED_DT` and the accumulator loop in `update`.
+    physics_accumulator: f32,
 }
 
 /// The tank hulls live in row 0 of tanks.png, indexed 0..8 left-to-right by
@@ -107,10 +110,22 @@ impl Game {
         self.muzzle_flashes.clear();
         self.impact_flashes.clear();
 
+        // Fresh physics world each round rather than trying to reuse/resize
+        // the previous one - cheap at this scale, and simplest if the
+        // battlefield size ever changes between rounds. See
+        // docs/physics-engine-design.md.
+        self.physics = Physics::new();
+        self.physics_accumulator = 0.0;
+        spawn_walls(&mut self.physics, width, height);
+
         // Pick a random hull (any of the 8; a mix of single/twin barrel) and center it.
         self.tank.row = TANK_ROW;
         self.tank.col = rng.random_range(0..TANK_COUNT);
         self.tank.position = Position::new(width / 2.0, height / 2.0);
+        self.tank.body = Some(
+            self.physics
+                .spawn_tank(self.tank.position, self.tank.hull_size() * 0.5),
+        );
 
         // Spawn enemy tanks in a band that's 20%-40% of the shorter screen
         // dimension away from the nearest edge of the battlefield, and away from
@@ -154,14 +169,16 @@ impl Game {
             // Vary speed within +/- ENEMY_SPEED_VARIANCE so enemies don't all move
             // in lockstep; each keeps this speed for the round.
             let factor = 1.0 + rng.random_range(-ENEMY_SPEED_VARIANCE..ENEMY_SPEED_VARIANCE);
-            self.enemies.push(Tank {
+            let mut enemy = Tank {
                 row: TANK_ROW,
                 col: ecol,
                 position: pos,
                 rotation: 180.0,             // facing down, toward the player's start
                 speed: ENEMY_SPEED * factor, // enemies drive slower than the player
                 ..Tank::default()
-            });
+            };
+            enemy.body = Some(self.physics.spawn_tank(pos, enemy.hull_size() * 0.5));
+            self.enemies.push(enemy);
             self.ais.push(Ai::default());
         }
     }
@@ -176,11 +193,6 @@ impl Game {
         }
 
         let dt = rl.get_frame_time();
-
-        // Phase 1 of the physics migration: step the (still-empty) rapier
-        // world every frame so the pipeline is proven to run before any
-        // gameplay code depends on it. See docs/physics-engine-design.md.
-        self.physics.step();
 
         // Advance any in-flight shockwave regardless of round state, so it
         // finishes fading even if this frame's damage just ended the round.
@@ -257,8 +269,10 @@ impl Game {
         }
         player_intent.fire = rl.is_key_pressed(KeyboardKey::KEY_SPACE);
 
-        // Drive the player and resolve movement against every enemy footprint.
-        self.apply_movement_player(player_intent, dt, (width, height), &mut rng, &mut kills);
+        // Hand the player's commanded velocity to its physics body. Actual
+        // movement and collision (walls, tank-vs-tank blocking) happen below
+        // when the physics world steps - not here.
+        drive_tank(&mut self.physics, &mut self.tank, player_intent, dt);
         if player_intent.fire && self.tank.shells_ammo >= 1 {
             self.tank.shells_ammo -= 1;
             // The player always fires straight down the barrel.
@@ -270,11 +284,12 @@ impl Game {
             self.shells.push(shell);
         }
 
-        // --- Enemies: each brain decides an intent, then drives + maybe fires ---
+        // --- Enemies: each brain decides an intent, then hands it to physics too ---
         // Snapshot every live tank's motion for predictive collision avoidance:
-        // slot 0 is the player, slots 1.. are the enemies in order. Rebuilt each
-        // frame so positions/velocities are current; lets an enemy read the others
-        // without borrowing the mutable enemy list mid-loop.
+        // slot 0 is the player, slots 1.. are the enemies in order. Built from
+        // last frame's synced positions (nothing has moved yet this frame), so
+        // an enemy can predict the others' paths without borrowing the mutable
+        // enemy list mid-loop.
         let movers = self.motion_snapshot();
         for i in 0..self.enemies.len() {
             let intent = self.ais[i].think(
@@ -287,7 +302,7 @@ impl Game {
                 i + 1,
                 &mut rng,
             );
-            self.apply_movement_enemy(i, intent, dt, (width, height), &mut rng, &mut kills);
+            drive_tank(&mut self.physics, &mut self.enemies[i], intent, dt);
             if intent.fire && self.enemies[i].shells_ammo >= 1 {
                 self.enemies[i].shells_ammo -= 1;
                 // Point-blank shots may be thrown off-aim (see roll_misfire).
@@ -298,6 +313,46 @@ impl Game {
                 });
                 self.shells.push(shell);
             }
+        }
+
+        // --- Physics: advance the world in fixed steps ---
+        // Every tank's body already has this frame's commanded velocity (set
+        // above); stepping resolves all of this frame's movement and collision
+        // (walls, tank-vs-tank blocking) for every body at once, rather than
+        // the old per-tank sequential move-then-revert-if-overlapping dance. A
+        // fixed step keeps the contact solver's behavior consistent regardless
+        // of the render frame rate. See docs/physics-engine-design.md.
+        self.physics_accumulator = (self.physics_accumulator + dt).min(PHYSICS_MAX_CATCHUP_SECONDS);
+        while self.physics_accumulator >= PHYSICS_FIXED_DT {
+            self.physics.step();
+            self.physics_accumulator -= PHYSICS_FIXED_DT;
+        }
+
+        // --- Read positions back, then resolve ram damage and lay tracks ---
+        let tank_before = self.tank.position;
+        sync_tank_from_physics(&self.physics, &mut self.tank);
+        let enemies_before: Vec<Position> = self.enemies.iter().map(|e| e.position).collect();
+        for enemy in &mut self.enemies {
+            sync_tank_from_physics(&self.physics, enemy);
+        }
+
+        // A tank touching the opposing side takes a cooldown-gated ram-damage
+        // hit; the collider contact itself already stopped/redirected their
+        // movement during the physics step above, so this only handles the
+        // damage roll (see `ram`'s doc comment for why enemy-vs-enemy contact
+        // doesn't call this).
+        for enemy in &mut self.enemies {
+            if self.tank.overlaps(enemy) {
+                ram(&mut self.tank, false, enemy, true, &mut rng, &mut kills);
+                break;
+            }
+        }
+        lay_tracks(&mut self.tracks, &mut self.tank, tank_before);
+        for (enemy, &before) in self.enemies.iter_mut().zip(enemies_before.iter()) {
+            if enemy.overlaps(&self.tank) {
+                ram(enemy, true, &mut self.tank, false, &mut rng, &mut kills);
+            }
+            lay_tracks(&mut self.tracks, enemy, before);
         }
 
         // --- Shells: move, then damage whatever enemy tank they hit ---
@@ -417,82 +472,6 @@ impl Game {
         movers.push(to_mover(&self.tank));
         movers.extend(self.enemies.iter().map(to_mover));
         movers
-    }
-
-    /// Drive the player one frame, reverting into any enemy it would overlap and
-    /// applying one-off ramming damage (debounced by each tank's cooldown).
-    fn apply_movement_player(
-        &mut self,
-        intent: Intent,
-        dt: f32,
-        bounds: (f32, f32),
-        rng: &mut rand::rngs::ThreadRng,
-        kills: &mut Vec<(Position, bool)>,
-    ) {
-        // Settle any residual ram/explosion push before this frame's driving,
-        // so overlap-blocking below (which reverts to `before`) can't cancel it.
-        self.tank.apply_knockback(dt);
-        let before = self.tank.position;
-        self.tank.control(intent.move_dir, intent.face, dt);
-        // Keep the tank on the battlefield before resolving tank collisions.
-        self.tank.clamp_to_field(bounds.0, bounds.1);
-        for enemy in &mut self.enemies {
-            if self.tank.overlaps(enemy) {
-                self.tank.position = before;
-                ram(&mut self.tank, false, enemy, true, rng, kills);
-                break;
-            }
-        }
-        lay_tracks(&mut self.tracks, &mut self.tank, before);
-    }
-
-    /// Drive enemy `i` one frame, blocking against the player and the other
-    /// enemies so tanks never pass through each other. Ramming the player
-    /// deals damage; bumping another enemy only blocks movement (enemies
-    /// don't hurt each other, see `ram`'s doc comment).
-    fn apply_movement_enemy(
-        &mut self,
-        i: usize,
-        intent: Intent,
-        dt: f32,
-        bounds: (f32, f32),
-        rng: &mut rand::rngs::ThreadRng,
-        kills: &mut Vec<(Position, bool)>,
-    ) {
-        // Settle any residual ram/explosion push before this frame's driving,
-        // so overlap-blocking below (which reverts to `before`) can't cancel it.
-        self.enemies[i].apply_knockback(dt);
-        let before = self.enemies[i].position;
-        self.enemies[i].control(intent.move_dir, intent.face, dt);
-        // Keep the enemy on the battlefield before resolving tank collisions.
-        self.enemies[i].clamp_to_field(bounds.0, bounds.1);
-
-        // Block against the player.
-        if self.enemies[i].overlaps(&self.tank) {
-            self.enemies[i].position = before;
-            ram(
-                &mut self.enemies[i],
-                true,
-                &mut self.tank,
-                false,
-                rng,
-                kills,
-            );
-            return;
-        }
-        // Block against the other enemies (split_at_mut to borrow two entries).
-        // No `ram()` call here: enemies stop against each other but don't
-        // damage or knock each other back, so a crowded pack doesn't wear
-        // itself down on its own.
-        let (left, right) = self.enemies.split_at_mut(i);
-        let (me, rest) = right.split_first_mut().unwrap();
-        for other in left.iter_mut().chain(rest.iter_mut()) {
-            if me.overlaps(other) {
-                me.position = before;
-                break;
-            }
-        }
-        lay_tracks(&mut self.tracks, &mut self.enemies[i], before);
     }
 
     /// Draw the whole scene for this frame.
@@ -727,6 +706,61 @@ impl Game {
             }
         });
     }
+}
+
+/// Build the battlefield boundary: four static wall colliders positioned so
+/// their inner faces sit exactly at the screen edges (0..width, 0..height) -
+/// the same effective bound `Tank::clamp_to_field` used to enforce by hand,
+/// since a tank's collider stops flush against a wall's surface. Padded
+/// outward by `WALL_THICKNESS` so corners are covered with no gap; that
+/// padding is otherwise arbitrary since it's never rendered.
+fn spawn_walls(physics: &mut Physics, width: f32, height: f32) {
+    let t = WALL_THICKNESS;
+    physics.spawn_wall(
+        Position::new(-t / 2.0, height / 2.0),
+        Position::new(t / 2.0, height / 2.0 + t),
+    );
+    physics.spawn_wall(
+        Position::new(width + t / 2.0, height / 2.0),
+        Position::new(t / 2.0, height / 2.0 + t),
+    );
+    physics.spawn_wall(
+        Position::new(width / 2.0, -t / 2.0),
+        Position::new(width / 2.0 + t, t / 2.0),
+    );
+    physics.spawn_wall(
+        Position::new(width / 2.0, height + t / 2.0),
+        Position::new(width / 2.0 + t, t / 2.0),
+    );
+}
+
+/// Turn an intent into hull rotation plus the velocity written to a tank's
+/// physics body this frame: `Tank::control`'s commanded cardinal velocity
+/// plus any residual knockback drift (still hand-decayed, not yet a real
+/// physics impulse - see docs/physics-engine-design.md). Shared by the player
+/// and every enemy so both drive identically; a free function (not a `Game`
+/// method) so it can borrow `physics` and one `tank` independently of the
+/// rest of `self`.
+fn drive_tank(physics: &mut Physics, tank: &mut Tank, intent: Intent, dt: f32) {
+    tank.decay_knockback(dt);
+    tank.control(intent.move_dir, intent.face);
+    let handle = tank
+        .body
+        .expect("tank should always have a physics body once spawned");
+    let velocity = Position::new(
+        tank.velocity.x + tank.knockback.x,
+        tank.velocity.y + tank.knockback.y,
+    );
+    physics.set_velocity(handle, velocity);
+}
+
+/// Read a tank's position back from its physics body after the world steps.
+/// A free function for the same borrow-splitting reason as `drive_tank`.
+fn sync_tank_from_physics(physics: &Physics, tank: &mut Tank) {
+    let handle = tank
+        .body
+        .expect("tank should always have a physics body once spawned");
+    tank.position = physics.position(handle);
 }
 
 /// Lay fresh tread marks along the distance a tank travelled this frame, dropping

@@ -60,10 +60,6 @@ pub struct Ai {
     /// How long the tank has been lined up on the player's firing axis. It must
     /// stay aligned for ENEMY_AIM_SETTLE before it actually shoots.
     aim_settle: f32,
-    /// While sliding along a wall, the direction chosen to follow it. Held until
-    /// the tank leaves the wall or that direction is itself blocked, so it doesn't
-    /// flip back and forth against the edge every frame (the cycling bug).
-    wall_follow: Option<Dir>,
     /// Active sidestep from predictive collision avoidance: the perpendicular
     /// direction to dodge and how many seconds remain on it. Latched so a dodge
     /// commits for a short window instead of being re-decided every frame.
@@ -80,7 +76,6 @@ impl Default for Ai {
             committed_dir: None,
             dir_hold: 0.0,
             aim_settle: 0.0,
-            wall_follow: None,
             dodge_dir: None,
             dodge_timer: 0.0,
         }
@@ -133,9 +128,10 @@ impl Ai {
     /// heading unless it's been held long enough AND the freshly-computed heading
     /// beats it by a clear margin along the off-axis. This is the jitter fix.
     ///
-    /// `bounds` is the battlefield (width, height) and `half` the tank's clamp
-    /// margin, used to deflect the heading along a wall instead of driving into it
-    /// (otherwise the tank would pin itself against the edge and get stuck).
+    /// `bounds` is the battlefield (width, height) and `half` the tank's collision
+    /// radius, used by predictive collision avoidance to avoid dodging straight
+    /// into a wall (see `avoid_collisions`) - actually driving into a wall is the
+    /// physics engine's job now (see docs/physics-engine-design.md), not steering's.
     /// `ctx` carries the motion snapshot for predictive collision avoidance.
     fn steer(
         &mut self,
@@ -170,10 +166,10 @@ impl Ai {
             }
         };
 
-        // Sidestep an imminent collision, then deflect along any wall the chosen
-        // heading drives into, then commit the final heading so it holds.
+        // Sidestep an imminent collision, then commit the final heading so it
+        // holds. Driving into a wall is no longer steering's problem - the
+        // physics engine's wall colliders stop/slide the tank for real.
         let dir = self.avoid_collisions(dir, from, bounds, half, ctx);
-        let dir = self.deflect_from_walls(dir, from, target, bounds, half);
         self.commit(dir);
         dir
     }
@@ -314,78 +310,6 @@ impl Ai {
             self.dir_hold = 0.0;
         }
     }
-
-    /// If `dir` would push a tank at `from` into a wall it's already up against,
-    /// swap to a perpendicular heading that runs along the edge (so the tank
-    /// slides past the corner instead of stalling). `bounds` is the field size and
-    /// `half` the clamp margin (how close the center gets to an edge).
-    ///
-    /// The slide direction is latched in `wall_follow` and held until the tank
-    /// leaves the wall or that direction is itself blocked. Without this latch the
-    /// tank re-decides which way to slide every frame from the target's position,
-    /// and flips to the opposite way the instant it passes the target's level,
-    /// then flips back — cycling forever against the edge.
-    fn deflect_from_walls(
-        &mut self,
-        dir: Dir,
-        from: Position,
-        target: Position,
-        bounds: (f32, f32),
-        half: f32,
-    ) -> Dir {
-        let (width, height) = bounds;
-        let skin = half + 1.0;
-        let at_left = from.x <= skin;
-        let at_right = from.x >= width - skin;
-        let at_top = from.y <= skin;
-        let at_bottom = from.y >= height - skin;
-
-        // Would the heading drive further into a wall we're already against?
-        if !heads_into_wall(dir, from, bounds, half) {
-            // Free of the wall: forget any slide direction so the next wall we hit
-            // picks a fresh one.
-            self.wall_follow = None;
-            return dir;
-        }
-
-        // A latched slide direction stays in force as long as it isn't itself
-        // driving into a wall now — this is what stops the back-and-forth cycling.
-        if let Some(follow) = self.wall_follow
-            && !heads_into_wall(follow, from, bounds, half)
-        {
-            return follow;
-        }
-
-        // Pick a new slide direction along the perpendicular axis, heading toward
-        // the target and avoiding a second wall if this is a corner.
-        let follow = if dir.is_horizontal() {
-            // Hit a vertical wall (left/right): move along Y toward the target.
-            let want_down = target.y >= from.y;
-            if want_down && !at_bottom {
-                Dir::Down
-            } else if !want_down && !at_top {
-                Dir::Up
-            } else if !at_bottom {
-                Dir::Down
-            } else {
-                Dir::Up
-            }
-        } else {
-            // Hit a horizontal wall (top/bottom): move along X toward the target.
-            let want_right = target.x >= from.x;
-            if want_right && !at_right {
-                Dir::Right
-            } else if !want_right && !at_left {
-                Dir::Left
-            } else if !at_right {
-                Dir::Right
-            } else {
-                Dir::Left
-            }
-        };
-        self.wall_follow = Some(follow);
-        follow
-    }
 }
 
 impl Dir {
@@ -462,10 +386,10 @@ impl Brain<'_> {
         !self.player.is_wreck()
     }
 
-    /// Steer toward `target`, deflecting along the battlefield edges so the tank
-    /// never pins itself against a wall and sidestepping predicted collisions.
-    /// Wraps `Ai::steer` with this tank's bounds and clamp margin (which mirror
-    /// `Tank::clamp_to_field`) plus the motion snapshot for avoidance.
+    /// Steer toward `target`, sidestepping predicted collisions. Wraps
+    /// `Ai::steer` with this tank's bounds and collision radius (matching the
+    /// physics world's wall colliders, which now do the actual wall-blocking)
+    /// plus the motion snapshot for avoidance.
     fn steer(&mut self, target: Position) -> Dir {
         let half = self.me.hull_size() * 0.5;
         let ctx = AvoidCtx {

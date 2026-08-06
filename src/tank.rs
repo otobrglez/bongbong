@@ -1,3 +1,4 @@
+use rapier2d::prelude::RigidBodyHandle;
 use sola_raylib::prelude::*;
 
 use crate::{
@@ -54,7 +55,9 @@ pub struct Tank {
     /// Which sprite in the atlas to draw.
     pub row: i32,
     pub col: i32,
-    /// Center position on screen (pixels).
+    /// Center position on screen (pixels). A read-back mirror of `body`'s
+    /// physics transform, synced once per frame after the physics world
+    /// steps (see `Game::update`) - nothing else should write this by hand.
     pub position: Position,
     /// Facing angle in degrees.
     pub rotation: f32,
@@ -80,9 +83,15 @@ pub struct Tank {
     /// predictive collision avoidance.
     pub velocity: Vector2,
     /// Residual push (pixels per second) from a recent ram or explosion,
-    /// independent of `control`'s input-driven movement. Decays to zero via
-    /// `apply_knockback`; see that and `Game`'s `ram`/`apply_explosion`.
+    /// independent of `control`'s input-driven movement. Added to `velocity`
+    /// each frame when driving this tank's physics body (see `Game::drive_tank`)
+    /// and decays to zero via `decay_knockback`; see that and `Game`'s
+    /// `ram`/`apply_explosion`. Not yet a real physics impulse - see
+    /// docs/physics-engine-design.md.
     pub knockback: Vector2,
+    /// This tank's rapier rigid body, once spawned into the physics world
+    /// (see `Game::init`/`physics::Physics::spawn_tank`).
+    pub body: Option<RigidBodyHandle>,
 }
 
 impl Default for Tank {
@@ -102,6 +111,7 @@ impl Default for Tank {
             track_accum: 0.0,
             velocity: Vector2::new(0.0, 0.0),
             knockback: Vector2::new(0.0, 0.0),
+            body: None,
         }
     }
 }
@@ -189,19 +199,20 @@ impl Tank {
         }
     }
 
-    /// Drive the tank for one frame. `move_dir` faces the hull that way and steps
-    /// at its damage-scaled speed (classic 4-direction, no momentum; see
-    /// `effective_speed`). `face` turns the hull in place without moving (used
-    /// when an AI stops to aim). `move_dir` takes precedence. Shared by the
-    /// player and the AI so both move identically.
-    pub fn control(&mut self, move_dir: Option<Dir>, face: Option<Dir>, dt: f32) {
+    /// Decide this tank's rotation and commanded velocity for one frame.
+    /// `move_dir` faces the hull that way and sets `velocity` to its
+    /// damage-scaled speed along that axis (classic 4-direction, no momentum;
+    /// see `effective_speed`). `face` turns the hull in place without moving
+    /// (used when an AI stops to aim). `move_dir` takes precedence. Shared by
+    /// the player and the AI so both move identically. Does not touch
+    /// `position` - that's the physics body's job once `velocity` (plus any
+    /// `knockback`) is handed to it; see `Game::drive_tank`.
+    pub fn control(&mut self, move_dir: Option<Dir>, face: Option<Dir>) {
         if let Some(dir) = move_dir {
             self.rotation = dir.rotation();
             let step = dir.vec();
             let speed = self.effective_speed();
             self.velocity = Vector2::new(step.x * speed, step.y * speed);
-            self.position.x += step.x * speed * dt;
-            self.position.y += step.y * speed * dt;
         } else {
             self.velocity = Vector2::new(0.0, 0.0);
             if let Some(dir) = face {
@@ -210,26 +221,14 @@ impl Tank {
         }
     }
 
-    /// Integrate any residual knockback push into position, then decay it
-    /// toward zero. Called every frame for every tank, ahead of `control`'s
-    /// input-driven movement, so a ram or nearby explosion (see `Game::ram`
-    /// and `Game::apply_explosion`) plays out as a brief drift rather than an
-    /// instant jump - and, since it runs first, this frame's overlap-blocking
-    /// (which reverts `control`'s move but not this one) never cancels it.
-    pub fn apply_knockback(&mut self, dt: f32) {
-        self.position.x += self.knockback.x * dt;
-        self.position.y += self.knockback.y * dt;
+    /// Decay any residual knockback push toward zero. `knockback` itself is
+    /// folded into the velocity handed to this tank's physics body each frame
+    /// (see `Game::drive_tank`) rather than integrated into position by hand,
+    /// so this only needs to age the stored value down.
+    pub fn decay_knockback(&mut self, dt: f32) {
         let decay = (1.0 - KNOCKBACK_DAMPING * dt).max(0.0);
         self.knockback.x *= decay;
         self.knockback.y *= decay;
-    }
-
-    /// Keep the tank inside the battlefield (the `width` x `height` screen) by
-    /// clamping its center so the visible hull never crosses an edge.
-    pub fn clamp_to_field(&mut self, width: f32, height: f32) {
-        let half = self.hull_size() * 0.5;
-        self.position.x = self.position.x.clamp(half, width - half);
-        self.position.y = self.position.y.clamp(half, height - half);
     }
 }
 
