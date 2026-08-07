@@ -4,12 +4,13 @@ use sola_raylib::prelude::*;
 use crate::tank::Tank;
 use crate::{
     Position, SHADOW_DIR_X, SHADOW_DIR_Y, SHELL_SCALE, SHELL_SHADOW_OPACITY, SHELL_SPEED,
-    SHELL_TEXTURE_SIZE, TANK_MUZZLE_FORWARD_OFFSET,
+    SHELL_TEXTURE_SIZE, TANK_MUZZLE_FORWARD_OFFSET_BY_ROW,
 };
 
 /// A shell's lifecycle. Each variant maps to a column in shells.png (see
 /// SHELL_VARIANTS for the row dimension) and carries its own on-screen
-/// duration in seconds (Flying lasts until it leaves the screen).
+/// duration in seconds (Flying lasts until it hits a tank, obstacle, or
+/// battlefield wall - see `Shell::update`).
 #[derive(Clone, Copy, PartialEq)]
 pub enum ShellState {
     Fire0,  // col 0 - big muzzle blast as the shell exits the tank
@@ -35,8 +36,9 @@ impl ShellState {
         }
     }
 
-    /// How long this state is shown (seconds). Flying is time-unbounded (moves
-    /// until it hits a screen edge), so it has no fixed duration here.
+    /// How long this state is shown (seconds). Flying is time-unbounded
+    /// (moves until it physically hits something - see `Shell::update`), so
+    /// it has no fixed duration here.
     fn duration(self) -> f32 {
         match self {
             ShellState::Fire0 => 0.06,
@@ -106,13 +108,14 @@ impl Shell {
         // rotation 0 == facing up (-Y); +90 == right, etc. matches the tank movement.
         let dir = Vector2::new(rot.sin(), -rot.cos());
         // Start at the turret/barrel tip, not the tank's own center - see
-        // TANK_MUZZLE_FORWARD_OFFSET for how that distance was measured from
-        // the sprite sheet. (Self-hits are prevented separately, by physics
+        // TANK_MUZZLE_FORWARD_OFFSET_BY_ROW for how that distance was
+        // measured per tank archetype from the sprite sheet's own published
+        // bounding boxes. (Self-hits are prevented separately, by physics
         // collision groups excluding the shooter's own hit sensor - see
         // `physics::Physics::spawn_shell` - not by this offset, so this is
         // free to match the actual sprite art rather than needing to clear
         // the tank's hit sensor.)
-        let muzzle = TANK_MUZZLE_FORWARD_OFFSET * tank.scale;
+        let muzzle = TANK_MUZZLE_FORWARD_OFFSET_BY_ROW[tank.row as usize] * tank.scale;
         Shell {
             state: ShellState::Fire0,
             position: Position::new(
@@ -131,21 +134,17 @@ impl Shell {
     }
 
     /// Advance the shell: move it while flying, and step through its timed states.
-    pub fn update(&mut self, dt: f32, width: f32, height: f32) {
+    /// Flying shells detonate via a real physics hit against a tank,
+    /// obstacle, or battlefield wall (see `simulation::find_shell_target`) -
+    /// this only moves the shell, it never detonates it. Walls sit exactly
+    /// at the screen edge (see `simulation::spawn_walls`), so a shell that
+    /// would otherwise fly off the battlefield always hits one first.
+    pub fn update(&mut self, dt: f32) {
         self.timer += dt;
 
         if self.state == ShellState::Flying {
             self.position.x += self.velocity.x * dt;
             self.position.y += self.velocity.y * dt;
-
-            // Impact when the shell leaves the screen -> start the bang.
-            if self.position.x < 0.0
-                || self.position.x > width
-                || self.position.y < 0.0
-                || self.position.y > height
-            {
-                self.detonate();
-            }
             return;
         }
 

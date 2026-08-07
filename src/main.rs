@@ -83,7 +83,7 @@ fn main() {
         .build();
 
     let tanks_texture = rl
-        .load_texture(&thread, "static/tanks_candy.png")
+        .load_texture(&thread, "static/scifi_tanks_sheet.png")
         .expect("failed loading tanks texture");
     let shells_texture = rl
         .load_texture(&thread, "static/shells.png")

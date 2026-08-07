@@ -22,7 +22,9 @@ use crate::{
 pub struct Mover {
     pub position: Position,
     pub velocity: Vector2,
-    /// Collision radius (half the hull footprint).
+    /// Collision radius - see `Tank::avoidance_radius` (the true
+    /// bounding-circle radius of the tank's real, per-row physics footprint
+    /// at its current facing, not a flat approximation).
     pub radius: f32,
 }
 
@@ -405,7 +407,7 @@ struct AvoidCtx<'a> {
     movers: &'a [Mover],
     /// This tank's slot in `movers`, so it can skip itself.
     my_index: usize,
-    /// This tank's collision radius (half the hull footprint).
+    /// This tank's collision radius - see `Tank::avoidance_radius`.
     radius: f32,
     /// This tank's movement speed (px/s).
     speed: f32,
@@ -460,22 +462,23 @@ impl Brain<'_> {
 
     /// Steer toward `target`, routing around static obstacles and
     /// sidestepping predicted collisions. Wraps `Ai::steer` with this tank's
-    /// bounds and collision radius (matching the physics world's wall
-    /// colliders, which now do the actual wall-blocking), the motion
+    /// bounds and collision radius (`Tank::avoidance_radius` - a safe
+    /// over-approximation of the tank's real, per-row physics collider, so
+    /// this never assumes a tank is smaller than it actually is), the motion
     /// snapshot for avoidance, and this frame's obstacle grid.
     fn steer(&mut self, target: Position) -> Dir {
-        let half = self.me.hull_size() * 0.5;
+        let radius = self.me.avoidance_radius();
         let ctx = AvoidCtx {
             movers: self.movers,
             my_index: self.my_index,
-            radius: half,
+            radius,
             speed: self.me.effective_speed(),
         };
         self.ai.steer(
             self.me.position,
             target,
             (self.width, self.height),
-            half,
+            radius,
             ctx,
             self.grid,
         )

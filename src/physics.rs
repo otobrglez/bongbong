@@ -68,28 +68,49 @@ impl Physics {
         handle
     }
 
-    /// Spawn a rotation-locked dynamic tank body: a square collider
-    /// `half_extent` per side, centered at `position`, with mass set to
-    /// `mass` (matching `Tank::mass()`) so impulses applied later (see
+    /// Spawn a rotation-locked dynamic tank body: a rectangular collider
+    /// `half_extents` (x, y) per side, centered at `position`, with mass set
+    /// to `mass` (matching `Tank::mass()`) so impulses applied later (see
     /// `apply_impulse`) produce the exact velocity change the caller
     /// intended rather than whatever rapier's default density would give.
     /// Rotation is locked because driving stays cardinal (see
     /// docs/physics-engine-design.md) - the body only ever needs to
     /// translate, never spin; sprite facing stays the existing cosmetic
-    /// `Tank::rotation`/`Dir::rotation`.
+    /// `Tank::rotation`/`Dir::rotation`. Since the *collider* itself never
+    /// rotates either, a non-square tank's `half_extents` need to be
+    /// reoriented by hand whenever its facing changes between an X-axis and
+    /// Y-axis cardinal direction - see `resize_collider` and
+    /// `simulation::drive_tank`.
     pub fn spawn_tank(
         &mut self,
         position: Position,
-        half_extent: f32,
+        half_extents: (f32, f32),
         mass: f32,
     ) -> RigidBodyHandle {
         let (handle, _) = self.world.insert(
             RigidBodyBuilder::dynamic()
                 .translation(to_vector(position))
                 .lock_rotations(),
-            ColliderBuilder::cuboid(half_extent, half_extent).mass(mass),
+            ColliderBuilder::cuboid(half_extents.0, half_extents.1).mass(mass),
         );
         handle
+    }
+
+    /// Resize a tank's solid hull collider (the one `spawn_tank` attaches) to
+    /// new `half_extents` - used when a tank's facing swaps between an
+    /// X-axis and Y-axis cardinal direction, so its rectangular hitbox stays
+    /// oriented to match its sprite (see `simulation::drive_tank`, which
+    /// calls this only when `Tank::rotation` actually changes). `set_shape`
+    /// only marks the collider's geometry dirty - it doesn't touch the
+    /// collider's explicit `.mass(mass)` override from `spawn_tank`, so
+    /// resizing never perturbs ram/explosion knockback math.
+    pub fn resize_collider(&mut self, handle: ColliderHandle, half_extents: (f32, f32)) {
+        let collider = self
+            .world
+            .colliders
+            .get_mut(handle)
+            .expect("collider handle should always be valid");
+        collider.set_shape(SharedShape::cuboid(half_extents.0, half_extents.1));
     }
 
     /// Attach an extra sensor collider to an existing tank body, used only to
@@ -139,9 +160,38 @@ impl Physics {
     /// Spawn a kinematic-position-based sensor body for a shell: a square
     /// sensor `half_extent` per side. A sensor never gets physically pushed
     /// and never pushes anything else - it only ever reports whether it's
-    /// intersecting something (see `intersecting`). CCD is enabled so a
-    /// fast-moving shell can't tunnel past a tank within a single step
-    /// without the intersection registering.
+    /// intersecting something (see `intersecting`).
+    ///
+    /// `.ccd_enabled(true)` is set but doesn't actually protect this body:
+    /// per rapier's own docs (`RigidBody::enable_ccd`), CCD sweeping only
+    /// applies to **dynamic** bodies moving fast under velocity integration.
+    /// A kinematic-position-based body's motion is a discrete teleport via
+    /// `set_kinematic_position` each frame, which CCD never sweeps - so a
+    /// shell whose per-frame movement is ever large enough to fully clear a
+    /// thin target in one step (e.g. under a frame-rate hitch) can still
+    /// tunnel through it undetected. In practice shells move ~8px/frame at
+    /// SHELL_SPEED and everything they can hit is comfortably wider than
+    /// that, so this is a latent edge case, not the thing `.active_collision_types`
+    /// below fixes - left in place as a harmless no-op rather than removed,
+    /// since a real fix would need a swept/segment test, not just this flag.
+    ///
+    /// `.active_collision_types` explicitly re-enables `KINEMATIC_FIXED`:
+    /// rapier's own default (`ActiveCollisionTypes::default()`) is
+    /// DYNAMIC_DYNAMIC | DYNAMIC_KINEMATIC | DYNAMIC_FIXED only - kinematic
+    /// vs. fixed pairs are excluded ("platforms don't collide with walls"),
+    /// which silently broke shell-vs-obstacle and would-be shell-vs-wall
+    /// intersection entirely: obstacles are `fixed` bodies (`spawn_static`),
+    /// so without this a shell's `kinematic_position_based` sensor never
+    /// even formed a broad-phase pair with one, regardless of how deep the
+    /// geometric overlap was - `intersecting` always returned `false`, so
+    /// shells flew straight through every obstacle. Tanks were unaffected
+    /// (they're `dynamic`, and DYNAMIC_KINEMATIC *is* a default). Verified
+    /// live (web/wasm build, browser-driven): before this flag, a shell's
+    /// distance-to-obstacle log showed `intersecting=false` all the way
+    /// through a dead-center pass (down to ~3.6px from the obstacle's own
+    /// center, well inside its collision half-extent); after adding the
+    /// flag, the same shot correctly reports `intersecting=true` and
+    /// detonates.
     ///
     /// `shooter_group` (see `owner_group`) is excluded from this shell's
     /// filter, so it can never register an intersection against the hit
@@ -163,7 +213,10 @@ impl Physics {
                     Group::ALL,
                     !shooter_group,
                     InteractionTestMode::And,
-                )),
+                ))
+                .active_collision_types(
+                    ActiveCollisionTypes::default() | ActiveCollisionTypes::KINEMATIC_FIXED,
+                ),
         );
         handle
     }

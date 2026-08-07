@@ -1,7 +1,7 @@
 use sola_raylib::prelude::*;
 
 use crate::tank::Tank;
-use crate::{DAMAGE_TEXTURE_SIZE, DEAD_FRAME, MAX_DAMAGE};
+use crate::{DAMAGE_TEXTURE_SIZE, MAX_DAMAGE};
 
 /// A stage of visible damage. Each stage owns a list of overlay frame columns
 /// in damage.png that it cycles through at `fps` to animate.
@@ -81,20 +81,18 @@ fn source_rec(col: i32, row: i32) -> Rectangle {
 /// animates by cycling its stage's frames over `time`, with a per-tank phase
 /// offset so multiple burning tanks don't animate in lockstep.
 pub fn draw_damage(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank, time: f32) {
-    // A burnt-out wreck stops animating and locks onto the static DEAD_FRAME
-    // (charred hulk, no fire/smoke) instead of a fire/smoke stage frame -
-    // freezing on one of those read as a stuck render glitch (a static flame
-    // blob that could visually spill onto whatever's touching the wreck).
-    // Layered on top of the tank sprite's own DEAD_TINT_FACTOR gray wash
-    // (see tank::draw_tank) so deadness reads clearly, not just "a bit darker."
-    let col = if tank.is_dead() {
-        DEAD_FRAME
-    } else {
-        let Some(stage) = DamageStage::from_damage(tank.damage) else {
-            return;
-        };
-        stage.frame_at(time + tank.anim_phase())
+    // A burnt-out wreck (Tank::is_dead) shows no overlay at all - the wreck
+    // hull/turret art in the tank atlas itself (see Tank::hull_col/
+    // turret_col) already reads as "dead," so no fire/smoke frame is drawn
+    // on top of it (also avoids freezing on an animated frame, which read as
+    // a stuck render glitch).
+    if tank.is_dead() {
+        return;
+    }
+    let Some(stage) = DamageStage::from_damage(tank.damage) else {
+        return;
     };
+    let col = stage.frame_at(time + tank.anim_phase());
     let src = source_rec(col, tank.damage_variant);
     let size = tank.size();
     let dest = Rectangle::new(tank.position.x, tank.position.y, size, size);

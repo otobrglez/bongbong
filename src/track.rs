@@ -1,6 +1,6 @@
 use sola_raylib::prelude::*;
 
-use crate::{Position, TRACK_LIFETIME, TRACK_MAX_OPACITY, TRACK_TEXTURE_SIZE};
+use crate::{Position, TRACK_LIFETIME, TRACK_TEXTURE_SIZE};
 
 /// A single tread mark pressed into the ground where a tank drove. Marks are laid
 /// down along a tank's path and slowly fade out as they age.
@@ -9,8 +9,13 @@ pub struct Track {
     pub position: Position,
     /// Facing angle in degrees, matching the tank's heading when it was laid.
     pub rotation: f32,
-    /// How much to scale the 32x32 sprite (matches the tank that laid it).
+    /// How much to scale the 32x32 sprite (matches the tank that laid it,
+    /// including its per-chassis weight - see TRACK_WEIGHT_SCALE_BY_ROW).
     pub scale: f32,
+    /// This mark's fresh (age 0) opacity - TRACK_MAX_OPACITY scaled by the
+    /// laying tank's chassis weight (see TRACK_WEIGHT_OPACITY_BY_ROW), so a
+    /// heavier tank presses a darker mark, not just a bigger one.
+    pub max_opacity: f32,
     /// Seconds since the mark was laid; drives the fade-out.
     pub age: f32,
 }
@@ -23,10 +28,10 @@ impl Track {
         self.age >= TRACK_LIFETIME
     }
 
-    /// Remaining opacity, fading linearly from TRACK_MAX_OPACITY (fresh) to 0.0
+    /// Remaining opacity, fading linearly from `max_opacity` (fresh) to 0.0
     /// (gone) so marks stay faint even when brand new.
     fn opacity(&self) -> f32 {
-        (1.0 - self.age / TRACK_LIFETIME).clamp(0.0, 1.0) * TRACK_MAX_OPACITY
+        (1.0 - self.age / TRACK_LIFETIME).clamp(0.0, 1.0) * self.max_opacity
     }
 }
 

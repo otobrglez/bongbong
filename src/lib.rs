@@ -3,38 +3,197 @@ use sola_raylib::prelude::*;
 /// A 2D screen position in pixels.
 pub type Position = Vector2;
 
-// tanks.png is a 256x256 atlas laid out as an 8x8 grid, so each tank is 32x32.
+// scifi_tanks_sheet.png is a 416x384 atlas: 13 columns x 12 rows of 32x32
+// tiles (see docs/SPRITESHEET_SPEC.md for the full authored spec). Each row
+// is one complete, independently-styled tank ("scout", "assault", ... plus
+// the super-heavy `titan`/`leviathan` at rows 10/11 - TANK_VARIANTS/
+// TANK_SPRITE_ORDER in simulation.rs pick which row a given tank uses).
+// Columns:
+//   0      hull, idle / tread-animation frame 0
+//   1      turret (independently drawn, see `tank::draw_tank`)
+//   2,3,4  hull, tread-animation frames 1-3 (see TANK_HULL_TRACK_COLS)
+//   5      broken turret (severed barrel) - shown once a tank is a wreck
+//   6      hull, "light" damage tier - cosmetic, still fully mobile
+//   7      hull, "disabled" tier - heavy but non-fatal damage
+//   8-11   hull, four interchangeable wreck variants (see TANK_WRECK_COLS) -
+//          peers, not a severity sequence: pick one at random per kill
+//   12     ground track-mark decal, per-chassis - not used; the game keeps
+//          its existing generic ground-decal system (track.rs) instead
+// Both hull and turret are authored around the exact same pivot - the cell
+// center (16,16) - where the hull has a recessed turret-mount ring and the
+// turret is drawn around that same ring center, not its own bounding box.
+// Drawing both layers at that literal center (see TANK_PIVOT_REAR_FRACTION
+// below) is what keeps the turret visually seated on the ring at every
+// angle. Both layers still chase the same commanded heading (no independent
+// aim target) but ease toward it at their own rates - see
+// `Tank::visual_rotation`/`turret_visual_rotation` and
+// TANK_VISUAL_TURN_SPEED_DEG/TANK_TURRET_VISUAL_TURN_SPEED_DEG below - so the
+// turret visibly leads the hull into a turn instead of the two rotating in
+// lockstep.
 pub const TANK_TEXTURE_SIZE: f32 = 32.0;
+pub const TANK_HULL_COL: i32 = 0;
+pub const TANK_TURRET_COL: i32 = 1;
+// Hull tread-animation loop, in atlas-column order - see
+// `Tank::hull_frame`/TANK_HULL_TRACK_FRAME_DISTANCE and
+// `simulation::lay_tracks`. Always played forward regardless of movement
+// direction: this game's 4-direction snap-to-facing movement has no
+// continuous "current heading" for a press to be a reversal *relative to*,
+// unlike the spec's forward/reverse cycle (meant for engines with continuous
+// turning), so there's no meaningful "reverse" state to distinguish here.
+pub const TANK_HULL_TRACK_COLS: [i32; 4] = [0, 2, 3, 4];
+pub const TANK_BROKEN_TURRET_COL: i32 = 5;
+pub const TANK_HULL_LIGHT_COL: i32 = 6;
+pub const TANK_HULL_DISABLED_COL: i32 = 7;
+// Four interchangeable wrecked-hull variants - see `Tank::wreck_col`, rolled
+// once per tank the frame it first becomes a wreck (`simulation::Game::update`)
+// and kept for the rest of its lifetime, rather than picked by severity, so a
+// field of wrecks doesn't look copy-pasted.
+pub const TANK_WRECK_COLS: [i32; 4] = [8, 9, 10, 11];
+// Damage level (see Tank::damage) at which a still-alive tank's hull swaps to
+// the "light" damage art (TANK_HULL_LIGHT_COL, cosmetic - still fully
+// mobile), matching damage_stage.rs's existing "gray" tier. The heavier
+// "disabled" tier (TANK_HULL_DISABLED_COL) matches damage_stage.rs's
+// existing "large fire" tier, so the hull swaps and the smoke/fire overlay
+// escalate together. The wrecked hull/broken turret swap instead keys off
+// Tank::is_wreck() (damage >= MAX_DAMAGE), matching the spec's own state
+// machine.
+pub const TANK_HULL_LIGHT_DAMAGE: f32 = 30.0;
+pub const TANK_HULL_DISABLED_DAMAGE: f32 = 75.0;
+// World px of travel between hull tread-animation frame advances (see
+// `simulation::lay_tracks`, which already tracks per-frame distance moved for
+// the separate ground-decal system in track.rs - this reuses that same
+// distance, just accumulated into its own field so the two animations - tank
+// tread graphics vs. ground tread marks - stay independently tunable).
+pub const TANK_HULL_TRACK_FRAME_DISTANCE: f32 = 8.0;
 // The tank hull only fills part of its 32x32 tile (the rest is transparent
-// padding). Collisions use this fraction of the sprite so tanks can nudge close
-// together instead of stopping a padding-width apart.
+// padding). This scalar fraction still backs the AI's avoidance-radius math,
+// the ground-decal rear-edge offset, and spawn-clearance checks (see
+// `Tank::hull_size`) - all of those only need an approximate footprint, so
+// they're left alone. The tank's actual physics collider is sized more
+// precisely per row instead - see TANK_HULL_BBOX_BY_ROW.
 pub const TANK_HULL_FRACTION: f32 = 0.7;
+// Per-row hull footprint (width, height) in tile px, in the sprite's own
+// "facing up" reference frame - measured bounding boxes from the spec's §9
+// table. Feeds the tank's physics collider (`Physics::spawn_tank`/
+// `resize_collider`, see `simulation::drive_tank`), which - unlike
+// TANK_HULL_FRACTION above - is sized and reoriented per tank so a `titan`
+// (nearly filling its cell) and a `flak` (much smaller) don't share a
+// one-size-fits-all hitbox. Indexed by `Tank::row`.
+pub const TANK_HULL_BBOX_BY_ROW: [(f32, f32); 12] = [
+    (14.0, 19.0), // scout
+    (16.0, 22.0), // assault
+    (18.0, 24.0), // breaker
+    (16.0, 26.0), // longbow
+    (16.0, 18.0), // flak
+    (14.0, 19.0), // wraith
+    (16.0, 22.0), // warden
+    (18.0, 24.0), // ravager
+    (16.0, 17.0), // glacier
+    (16.0, 26.0), // obelisk
+    (24.0, 26.0), // titan (super-heavy)
+    (22.0, 28.0), // leviathan (super-heavy)
+];
+// The roster groups into 7 named chassis classes by handling weight (a
+// coarser grouping than TANK_HULL_BBOX_BY_ROW's precise per-row collision
+// measurements, and independent of it - this table drives `Tank::mass`
+// only, not the collider):
+//   narrow      12x18   scout, wraith
+//   compact     14x16   flak, glacier
+//   std         14x20   assault, warden
+//   long        14x24   longbow, obelisk
+//   wide        16x22   breaker, ravager
+//   super_heavy 22x24   titan
+//   super_long  20x26   leviathan
+// Each entry here is that chassis's (width*height) footprint area divided by
+// `std`'s (14*20=280), i.e. how much heavier/lighter that class is relative
+// to `std` - `std` itself normalizes to exactly 1.0. `Tank::mass` multiplies
+// this onto the old flat `scale^2` baseline (see its doc comment), so a
+// `std`-class tank's mass is unchanged from before this table existed, and
+// every other class scales relative to that same baseline: `narrow`/
+// `compact` end up lighter (faster to accelerate, less drift, easier to
+// knock around - see `Game::drive_tank`/`ram`/`explosion_hit`, all of which
+// already divided by `Tank::mass` and so pick this up automatically), while
+// `long`/`wide` and especially `super_heavy`/`super_long` end up
+// meaningfully heavier (sluggish to accelerate, more perpendicular drift
+// through a turn, and shove lighter tanks further than they get shoved back
+// in a ram).
+pub const TANK_CHASSIS_MASS_FACTOR_BY_ROW: [f32; 12] = [
+    216.0 / 280.0, // scout       (narrow)
+    1.0,           // assault     (std)
+    352.0 / 280.0, // breaker     (wide)
+    336.0 / 280.0, // longbow     (long)
+    224.0 / 280.0, // flak        (compact)
+    216.0 / 280.0, // wraith      (narrow)
+    1.0,           // warden      (std)
+    352.0 / 280.0, // ravager     (wide)
+    224.0 / 280.0, // glacier     (compact)
+    336.0 / 280.0, // obelisk     (long)
+    528.0 / 280.0, // titan       (super_heavy)
+    520.0 / 280.0, // leviathan   (super_long)
+];
 // How far forward (tile px, toward wherever the hull currently faces) a
 // shell spawns from the tank's center - i.e. where the turret/barrel tip
 // actually sits, not the tank's own center or the edge of its 32x32 tile.
-// Measured from the sprite sheet itself: for each of the 8 tank hulls (row 0,
-// tanks_candy.png), the topmost opaque pixel in the unrotated (facing "up")
-// orientation sits at tile-row ~3-4 (one twin-spike hull tops out later, at
-// row 6), all horizontally centered on the tile - averaging to row 3.6, i.e.
-// 32/2 - 3.6 = 12.4px above center. See `Shell::spawn`.
-pub const TANK_MUZZLE_FORWARD_OFFSET: f32 = 12.5;
-// Draw-time rotation pivot: rather than spinning the sprite around its exact
-// geometric center, the pivot sits this fraction of the sprite's width back
+// Varies per row: taken directly from the spec's published turret
+// bounding-box y0 per row (§9), converted to an above-center distance
+// (16 - y0). Indexed by `Tank::row` - see `Shell::spawn`.
+pub const TANK_MUZZLE_FORWARD_OFFSET_BY_ROW: [f32; 12] = [
+    14.0, 13.0, 12.0, 16.0, 10.0, 13.0, 14.0, 14.0, 14.0, 16.0, 16.0, 16.0,
+];
+// Draw-time rotation pivot, as a fraction of the sprite's width shifted back
 // toward the rear of the hull (away from the barrel) - see
-// `tank::draw_pivot`. Purely cosmetic (draw calls only, see `draw_tank`/
+// `tank::draw_pivot`. Zero for this atlas: the spec's hull/turret pivot is
+// the exact cell center (see the atlas comment above), and any rearward
+// shift would visibly drift the turret off the hull's mount ring as it
+// rotates. Purely cosmetic either way (draw calls only, see `draw_tank`/
 // `draw_tank_shadow`) - `Tank::position` itself is still the physics body's
 // real center and everything gameplay-relevant (collision, aim, track
 // heading) keeps using it unchanged.
-pub const TANK_PIVOT_REAR_FRACTION: f32 = 0.03;
+pub const TANK_PIVOT_REAR_FRACTION: f32 = 0.0;
 
-// shells.png is a 224x96 sheet: seven 32x32 frames (col, see ShellState)
-// indexed across three row-variants (see SHELL_VARIANTS / Tank::shell_variant)
+// shells.png is a 224x576 sheet: seven 32x32 frames (col, see ShellState)
+// indexed across eighteen row-variants (see SHELL_VARIANTS / Tank::shell_variant)
 // that reskin the fire and hit frames while keeping the flying frame (col 3)
-// pixel-identical across all rows.
+// pixel-identical across all rows. Rows are grouped class_base + colour:
+//   class_base: standard single = 0, standard twin = 3, standard staggered = 12
+//               super single    = 6, super twin    = 9, super staggered    = 15
+//   colour:     orange = +0, red = +1, blue = +2
+// ("staggered" rows depict the same twin-barrel shot with the left round
+// running a beat ahead of the right - see TANK_SHELL_VARIANT_STAGGERED_BY_ROW
+// - purely a cosmetic alternate to the simultaneous twin rows, still one
+// `Shell` entity per shot either way.) See TANK_SHELL_VARIANT_BY_ROW below for
+// which row matches which of the 12 tank chassis.
 pub const SHELL_TEXTURE_SIZE: f32 = 32.0;
-// Number of row-variants in shells.png. Each tank rolls one at spawn
-// (Tank::shell_variant) and every shell it fires uses that row.
-pub const SHELL_VARIANTS: i32 = 3;
+// Row count in shells.png (see the grouping above).
+pub const SHELL_VARIANTS: i32 = 18;
+// Shell row matched to each tank chassis row's real barrel count (single vs
+// twin), size class (standard vs the two super-heavy titan/leviathan
+// chassis), and accent colour - see the class_base/colour grouping in the
+// atlas comment above. Longbow (green accent) and wraith (purple accent)
+// have no matching shell colour family and fall back to blue. Set once at
+// `Tank::shell_variant` on spawn (simulation.rs) and re-set to this (or
+// TANK_SHELL_VARIANT_STAGGERED_BY_ROW - see Tank::alternate_shot) every time
+// that tank fires.
+pub const TANK_SHELL_VARIANT_BY_ROW: [i32; 12] = [
+    2,  // 0  scout      standard single, blue (cyan accent)
+    3,  // 1  assault    standard twin,   orange (amber accent)
+    1,  // 2  breaker    standard single, red
+    2,  // 3  longbow    standard single, blue (no green family)
+    5,  // 4  flak       standard twin,   blue (cyan accent)
+    2,  // 5  wraith     standard single, blue (no purple family)
+    2,  // 6  warden     standard single, blue (cyan accent)
+    3,  // 7  ravager    standard twin,   orange (amber accent)
+    2,  // 8  glacier    standard single, blue
+    4,  // 9  obelisk    standard twin,   red
+    10, // 10 titan      super twin,      red
+    8,  // 11 leviathan  super single,    blue (cyan accent)
+];
+// Staggered-twin counterpart of TANK_SHELL_VARIANT_BY_ROW, for alternating
+// fire on twin-barrel chassis (see Tank::alternate_shot). Rows with no twin
+// variant (single-barrel chassis) repeat their base value - toggling between
+// them is then a harmless no-op.
+pub const TANK_SHELL_VARIANT_STAGGERED_BY_ROW: [i32; 12] =
+    [2, 12, 1, 2, 14, 2, 2, 12, 2, 13, 16, 8];
 pub const SHELL_SPEED: f32 = 500.0;
 pub const SHELL_SCALE: f32 = 2.0;
 // Half-extent (px) of a shell's own physics sensor, used only to intersect a
@@ -77,22 +236,11 @@ pub const SHELL_SHADOW_OPACITY: f32 = 0.30;
 //   0 dusty | 1 gray | 2-3 small-smoke | 4-5 more-smoke | 6-7 small-fire
 //   8-9 large-fire | 10-12 wrecked (burning) | 13 dead (burnt-out hulk)
 pub const DAMAGE_TEXTURE_SIZE: f32 = 32.0;
-// Damage overlay column for the burnt-out dead hulk (no fire/smoke) - the
-// static frame draw_damage locks onto once Tank::is_dead, layered on top of
-// the sprite's own DEAD_TINT_FACTOR gray wash so a dead tank reads clearly
-// even at a glance, not just "a bit darker."
-pub const DEAD_FRAME: i32 = 13;
 // Number of row-variants in damage.png (see SHELL_VARIANTS for the same
 // pattern). Each tank rolls one at spawn (Tank::damage_variant) and keeps it
 // for its whole life, so a tank's whole damage sequence reads as one
 // consistent "flavour" instead of jumping between palettes frame to frame.
 pub const DAMAGE_VARIANTS: i32 = 5;
-// A dead (burnt-out) tank's own sprite is washed toward gray by this
-// fraction (0 = untouched, 1 = flat gray) - see tank::draw_tank, which blends
-// a translucent gray pass over the sprite rather than just dimming it, so it
-// visually reads as "out of the fight" even before the DEAD_FRAME overlay
-// (see draw_damage) is added on top.
-pub const DEAD_TINT_FACTOR: f32 = 0.6;
 
 // Number of enemy tanks is randomized within this range each round.
 pub const ENEMY_COUNT_MIN: usize = 3;
@@ -115,12 +263,16 @@ pub const RESTART_DELAY: f32 = 3.0;
 // facing* immediately (rotation is still instant/cosmetic) and the tank's
 // velocity along that axis chases the commanded speed via a mass-aware
 // acceleration impulse each frame rather than snapping to it - see
-// Game::drive_tank, TANK_ACCEL_FORCE/TANK_DECEL_FORCE below. Unlike a car,
-// though, a tank's tracks give it almost no lateral grip loss: any velocity
-// component *perpendicular* to the commanded direction is scrubbed off hard
-// by TANK_TURN_GRIP_FORCE, so turning a corner reads as the hull snapping
-// onto the new axis, not sliding through a curve. Momentum only survives
-// along the axis actually being driven.
+// Game::drive_tank, TANK_ACCEL_FORCE/TANK_DECEL_FORCE below. A tank's tracks
+// still resist lateral sliding - any velocity component *perpendicular* to
+// the commanded direction is scrubbed toward zero by TANK_TURN_GRIP_FORCE -
+// but deliberately not as hard as the new axis builds up, so a corner reads
+// as a genuine drift through the turn (the old heading's momentum visibly
+// carries through) rather than the hull snapping instantly onto the new
+// axis. Feedback from actually driving it: full control (snap-to-new-axis,
+// no carry-through) read as too clinical, especially cornering hard off a
+// straight line (e.g. up into left) - see TANK_TURN_GRIP_FORCE's comment for
+// the numbers.
 pub const TANK_SPEED: f32 = 220.0; // player top speed (px/s)
 pub const ENEMY_SPEED: f32 = 150.0; // baseline enemy top speed (px/s), slower than the player
 // Each enemy's speed is randomized within +/- this fraction of ENEMY_SPEED at
@@ -151,31 +303,49 @@ pub const DAMAGE_SPEED_CURVE: f32 = 2.2;
 // pushes velocity away from wherever the tank is trying to go, which reads
 // as "slow down and correct," so it fades out via the (weak) decel rate
 // instead of a separate hand-decayed field.
-// TANK_ACCEL_FORCE is deliberately kept close to TANK_TURN_GRIP_FORCE below
-// (rather than far weaker, as an earlier tuning had it) so a 90-degree turn
-// doesn't stall: the old axis's speed is scrubbed off by grip at roughly the
-// same rate the new axis's speed builds back up, so total speed dips only
-// briefly through a corner instead of bottoming out near zero for half a
-// second while the new axis crawls back up to speed.
+// TANK_ACCEL_FORCE is kept meaningfully *stronger* than TANK_TURN_GRIP_FORCE
+// below (see that constant's comment for the drift this produces) so a
+// 90-degree turn still doesn't stall: even though the old axis's momentum
+// now lingers instead of being scrubbed away immediately, the new axis's
+// speed builds up faster than that old-axis component decays, so the
+// resultant speed through a corner stays close to (or even briefly above)
+// top speed rather than bottoming out near zero for half a second while the
+// new axis crawls back up - the failure mode an earlier, far-weaker-than-grip
+// accel tuning had. A weaker-than-accel grip is a different regime from that
+// old bug, not a reversion to it: the stall came from grip *dominating*
+// accel (scrubbing the old axis faster than the new one could build), not
+// from grip merely existing.
 pub const TANK_ACCEL_FORCE: f32 = 4200.0; // reaches TANK_SPEED in well under a second
 pub const TANK_DECEL_FORCE: f32 = 600.0; // noticeably slower to shed speed than to gain it
 
 // Turning grip: how hard a tank's tracks cancel velocity *perpendicular* to
-// the currently commanded direction (see Game::drive_tank). Much stronger
-// than either accel or decel on purpose - real tank tracks don't slip
-// sideways the way wheels do, so a corner should snap onto the new axis
-// within a couple of frames rather than sliding through it like a car. Not
-// scaled by Tank::speed_factor: track grip is a mechanical property, not an
-// engine-power one, so a damaged tank still corners sharply even though it
-// accelerates and tops out slower. Only applies while a direction is
-// actively held (Intent::move_dir is Some) - a coasting or stationary tank
-// has no commanded axis to grip against, so residual/knockback velocity
-// there still fades via the (weak) TANK_DECEL_FORCE chase above. Kept only
-// moderately above TANK_ACCEL_FORCE now (not several times stronger) so a
-// turn still snaps rather than sliding through the curve, but without
-// starving the new axis of speed while the old one is scrubbed away - see
-// TANK_ACCEL_FORCE's comment.
-pub const TANK_TURN_GRIP_FORCE: f32 = 4800.0;
+// the hull's current facing (`Tank::rotation` - see Game::drive_tank).
+// Deliberately *weaker* than TANK_ACCEL_FORCE now (was 4800, kept at/above
+// accel) - direct player feedback on the fully-snapped version was that it
+// read as too clinically controlled through a corner (e.g. driving up then
+// cutting hard into left), with no sense of the tank's own momentum ever
+// carrying through a turn. That first drift pass landed at 2000 (vs. accel's
+// 4200), giving on the order of half a second for the old axis's velocity to
+// fully scrub out through a turn at top speed; a follow-up pass then dialed
+// the drift back down ~10% (2000 -> 2200) once it was actually driven, so
+// the scrub is correspondingly a bit quicker now (~10% less time carrying
+// old-axis momentum) while still comfortably below accel and still a
+// genuine, visible drift rather than a snap. Still comfortably above
+// TANK_DECEL_FORCE (600) - grip and decel govern different axes
+// (perpendicular vs. along-facing) and don't need to match, but if grip ever
+// dropped to decel's level the perpendicular carry-through would last as
+// long as a full coasting stop, which starts to feel like sliding rather
+// than driving. Not scaled by
+// Tank::speed_factor: track grip is a mechanical property, not an
+// engine-power one, so a damaged tank still corners with the same drift
+// character even though it accelerates and tops out slower. Applies every
+// frame regardless of whether a direction is currently held (real tracks
+// resist lateral sliding all the time, not just while the driver is actively
+// steering - see Game::drive_tank's own doc comment) - so a ram/explosion/
+// shell knockback that shoves a tank sideways to wherever it's currently
+// facing also gets scrubbed by this (faster than a coasting stop would via
+// the much weaker TANK_DECEL_FORCE, just no longer almost-instantly).
+pub const TANK_TURN_GRIP_FORCE: f32 = 2200.0;
 
 // Purely cosmetic hull-turn animation: `Tank::rotation` itself still snaps
 // instantly (physics/aim/track-heading math all key off it, and none of that
@@ -186,6 +356,14 @@ pub const TANK_TURN_GRIP_FORCE: f32 = 4800.0;
 // 90-degree corner or a 180-degree reversal visibly swings the hull over a
 // few frames rather than popping to the new facing on the spot.
 pub const TANK_VISUAL_TURN_SPEED_DEG: f32 = 720.0;
+
+// The turret (scifi_tanks_sheet.png's second column, see TANK_TURRET_COL) eases
+// toward the same commanded `rotation` independently of the hull, at its own
+// (faster) turn speed - see `Tank::turret_visual_rotation`/
+// `Tank::ease_turret_visual_rotation`. This makes the turret visibly lead a
+// turn while the heavier hull swings around to catch up, rather than the two
+// rotating in lockstep.
+pub const TANK_TURRET_VISUAL_TURN_SPEED_DEG: f32 = 1800.0;
 
 // Shell ammo: the player holds up to MAX_SHELLS and recharges one shell every
 // SHELL_RECHARGE_SECONDS while below the cap.
@@ -291,20 +469,59 @@ pub const WRECK_BURN_SECONDS: f32 = 4.0;
 // the tank sprite orientation). A tank drops a mark every TRACK_SPACING pixels it
 // travels, and each mark fades out over TRACK_LIFETIME seconds.
 pub const TRACK_TEXTURE_SIZE: f32 = 32.0;
-// Tightened ~70% from an original 16.0. A tank's real turning arc - the
-// stretch where its velocity genuinely has both axes' components at once
-// (see TANK_TURN_GRIP_FORCE/Game::drive_tank) - only lasts on the order of
-// 30px, so this needs to be small enough for several *real* samples to fall
-// within that short a distance; Game::lay_tracks stamps each mark's raw,
-// un-smoothed travel heading, so the curve you see is exactly the tank's
-// actual path, not an interpolation - the sampling density is what's tuned
-// here, not the curviness itself.
+// Tightened ~70% from an original 16.0, back when a tank's real turning arc -
+// the stretch where its velocity genuinely has both axes' components at once
+// (see TANK_TURN_GRIP_FORCE/Game::drive_tank) - only lasted on the order of
+// 30px; TANK_TURN_GRIP_FORCE has since been loosened for more of a drift
+// through corners, which stretches that arc out well past 30px, but this
+// value needs no retuning for it - a longer arc with the same spacing just
+// means more real samples along it, not fewer, which only helps the curve
+// read cleanly. Game::lay_tracks stamps each mark's raw, un-smoothed travel
+// heading, so the curve you see is exactly the tank's actual path, not an
+// interpolation - the sampling density is what's tuned here, not the
+// curviness itself.
 pub const TRACK_SPACING: f32 = 5.0; // distance travelled between dropped marks
-pub const TRACK_LIFETIME: f32 = 1.0; // seconds for a mark to fully fade away
+// Trimmed 20% from an original 1.0s - shortens how far a visible trail
+// stretches out behind a moving tank (trail length is roughly speed *
+// TRACK_LIFETIME at this spacing).
+pub const TRACK_LIFETIME: f32 = 0.8; // seconds for a mark to fully fade away
 // Marks are drawn smaller than the tank and faint, so the trail reads as a subtle
 // impression in the ground rather than a bold sprite.
 pub const TRACK_SCALE_FRACTION: f32 = 0.55; // mark size relative to the tank sprite
 pub const TRACK_MAX_OPACITY: f32 = 0.21; // opacity of a fresh mark, before fading (30% lighter than 0.3)
+
+// Per-chassis track "weight": without this, every row presses an identically
+// sized/shaded mark regardless of how big or heavy that chassis actually is
+// (see TANK_HULL_BBOX_BY_ROW - a titan's real footprint is over twice a
+// scout's). Multipliers below are taken from docs/SPRITESHEET_SPEC.md §8's
+// authored "intensity by chassis" table (narrow/compact/standard/long/wide/
+// super-long/super-heavy, mapped to lightest..heaviest) - the same authored
+// grouping the sheet's own per-chassis track-mark art would have used, kept
+// here instead since the game draws marks from the single generic
+// tracks.png tile, not that column. Applied on top of TRACK_SCALE_FRACTION/
+// TRACK_MAX_OPACITY and the per-tank jitter/wobble below, so a titan visibly
+// presses a bigger, darker mark than a scout, while still varying a little
+// tank-to-tank within that.
+pub const TRACK_WEIGHT_SCALE_BY_ROW: [f32; 12] = [
+    0.75, // scout (narrow - lightest)
+    1.00, // assault (standard - medium)
+    1.20, // breaker (wide - heavier)
+    1.10, // longbow (long - heavy)
+    0.85, // flak (compact - light)
+    0.75, // wraith (narrow - lightest)
+    1.00, // warden (standard - medium)
+    1.20, // ravager (wide - heavier)
+    0.85, // glacier (compact - light)
+    1.10, // obelisk (long - heavy)
+    1.45, // titan (super-heavy - heaviest)
+    1.35, // leviathan (super-long - very heavy)
+];
+// Multiplies TRACK_MAX_OPACITY per row, same tiers/ordering as
+// TRACK_WEIGHT_SCALE_BY_ROW - a heavier chassis presses a darker mark, not
+// just a bigger one.
+pub const TRACK_WEIGHT_OPACITY_BY_ROW: [f32; 12] = [
+    0.70, 1.00, 1.20, 1.10, 0.82, 0.70, 1.00, 1.20, 0.82, 1.10, 1.50, 1.35,
+];
 
 // Per-tank track "distortion": without it, a tank driving in a straight line
 // stamps perfectly identical marks in a perfectly straight line, which reads

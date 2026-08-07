@@ -27,6 +27,7 @@ use std::collections::HashMap;
 
 use hecs::Entity;
 use rand::RngExt;
+use rapier2d::prelude::ColliderHandle;
 use sola_raylib::core::math::Vector2;
 
 use crate::ai::{Ai, Intent, Mover};
@@ -48,9 +49,13 @@ use crate::{
     PATHFIND_CELL_SIZE, PHYSICS_FIXED_DT, PHYSICS_MAX_CATCHUP_SECONDS, PLAYER_DAMAGE_MAX,
     PLAYER_DAMAGE_MIN, Position,
     RAM_DAMAGE_COOLDOWN, RESTART_DELAY, SHELL_HIT_HALF_EXTENT, SHELL_IMPACT_KNOCKBACK_SPEED,
-    SHELL_SHADOW_OFFSET_MAX, SHELL_SHADOW_OFFSET_MIN, SHELL_SPEED, SHELL_VARIANTS,
-    SHOCKWAVE_DURATION, TANK_ACCEL_FORCE, TANK_DECEL_FORCE, TANK_TURN_GRIP_FORCE,
-    TRACK_SCALE_FRACTION, TRACK_SCALE_JITTER, TRACK_SPACING, TRACK_WOBBLE_AMP_MAX_DEG,
+    SHELL_SHADOW_OFFSET_MAX, SHELL_SHADOW_OFFSET_MIN, SHELL_SPEED,
+    SHOCKWAVE_DURATION, TANK_ACCEL_FORCE, TANK_DECEL_FORCE, TANK_HULL_BBOX_BY_ROW,
+    TANK_HULL_DISABLED_DAMAGE,
+    TANK_HULL_TRACK_COLS, TANK_HULL_TRACK_FRAME_DISTANCE, TANK_SHELL_VARIANT_BY_ROW,
+    TANK_SHELL_VARIANT_STAGGERED_BY_ROW, TANK_TURN_GRIP_FORCE,
+    TANK_WRECK_COLS, TRACK_MAX_OPACITY, TRACK_SCALE_FRACTION, TRACK_SCALE_JITTER, TRACK_SPACING,
+    TRACK_WEIGHT_OPACITY_BY_ROW, TRACK_WEIGHT_SCALE_BY_ROW, TRACK_WOBBLE_AMP_MAX_DEG,
     TRACK_WOBBLE_AMP_MIN_DEG, TRACK_WOBBLE_WAVELENGTH_MAX, TRACK_WOBBLE_WAVELENGTH_MIN,
     WALL_THICKNESS,
 };
@@ -119,6 +124,12 @@ pub struct Game {
     /// `pub(crate)`: `render` needs it to find the player among `world`'s
     /// entities.
     pub(crate) player: Option<Entity>,
+    /// This round's four battlefield-boundary wall colliders (see
+    /// `spawn_walls`), so a shell's flight can be checked against them the
+    /// same way as tanks/obstacles (`find_shell_target`) instead of the old
+    /// hand-rolled screen-edge coordinate check. Same `None`-only-before-
+    /// first-`init` convention as `player`.
+    walls: Option<[ColliderHandle; 4]>,
     /// Fading tread marks left behind as tanks drive, oldest first. Not
     /// part of `world`: these are pure, gameplay-inert visual trail data
     /// with no physics body and nothing ever queries "give me all tracks"
@@ -186,16 +197,18 @@ pub struct Game {
     pub enemy_count_override: Option<usize>,
 }
 
-/// The tank hulls live in row 0 of tanks.png, indexed 0..8 left-to-right by
-/// column. Barrel count is fixed per index: 1, 2, 3, 4 are twin-barrel, the rest
-/// (0, 5, 6, 7) are single-barrel.
-const TANK_ROW: i32 = 0;
-const TANK_COUNT: i32 = 8;
+/// scifi_tanks_sheet.png has 12 row-variants, one named archetype per row
+/// (see docs/SPRITESHEET_SPEC.md §4), including the super-heavy `titan`
+/// (row 10) and `leviathan` (row 11). Gun count is fixed per row: rows 1
+/// (assault), 4 (flak), 7 (ravager), 9 (obelisk), 10 (titan) are twin-barrel,
+/// the rest are single-barrel.
+const TANK_VARIANTS: i32 = 12;
 
-/// A spawn order over all 8 hulls that alternates twin- and single-barrel tanks,
-/// so however many tanks are on the field, both kinds appear (and appear early).
-/// Interleaves twins (1,2,3,4) with singles (0,5,6,7).
-const TANK_SPRITE_ORDER: [i32; 8] = [1, 0, 2, 5, 3, 6, 4, 7];
+/// A spawn order over all 12 variants that alternates twin- and single-barrel
+/// tanks, so however many tanks are on the field, both kinds appear (and
+/// appear early). Interleaves twins (1,4,7,9,10) with singles
+/// (0,2,3,5,6,8,11).
+const TANK_SPRITE_ORDER: [i32; 12] = [1, 0, 4, 2, 7, 3, 9, 5, 10, 6, 8, 11];
 
 impl Game {
     /// Set up the player and spawn the enemy tanks. Also used to restart a
@@ -222,27 +235,30 @@ impl Game {
         // docs/physics-engine-design.md.
         self.physics = Physics::new();
         self.physics_accumulator = 0.0;
-        spawn_walls(&mut self.physics, width, height);
+        self.walls = Some(spawn_walls(&mut self.physics, width, height));
 
         // --- Player ---
-        // row/col: pick a random hull (any of the 8; a mix of single/twin
-        // barrel). shell_variant/damage_variant: this round's shells.png
-        // /damage.png row-variants (see Tank::shell_variant/damage_variant).
+        // row: pick a random hull/turret variant (any of the 12; a mix of
+        // single/twin barrel, including the two super-heavy archetypes).
+        // shell_variant: matched to that chassis (see TANK_SHELL_VARIANT_BY_ROW).
+        // damage_variant: this round's damage.png row-variant (see
+        // Tank::damage_variant).
+        let row = rng.random_range(0..TANK_VARIANTS);
         let mut tank = Tank {
-            row: TANK_ROW,
-            col: rng.random_range(0..TANK_COUNT),
-            shell_variant: rng.random_range(0..SHELL_VARIANTS),
+            row,
+            shell_variant: TANK_SHELL_VARIANT_BY_ROW[row as usize],
             damage_variant: rng.random_range(0..DAMAGE_VARIANTS),
             position: Position::new(width / 2.0, height / 2.0),
             owner_slot: PLAYER_OWNER_SLOT,
             ..Tank::default()
         };
         roll_track_distortion(&mut tank, &mut rng);
-        tank.body = Some(self.physics.spawn_tank(
-            tank.position,
-            tank.hull_size() * 0.5,
-            tank.mass(),
-        ));
+        // Spawn rotation is 0.0 (facing up, Tank::default) - `along_x: false`
+        // matches that, same as `facing_along_x` would report for it.
+        tank.body = Some(
+            self.physics
+                .spawn_tank(tank.position, tank.hull_half_extents(false), tank.mass()),
+        );
         tank.hit_sensor = Some(self.physics.add_hit_sensor(
             tank.body.unwrap(),
             tank.size() * 0.5,
@@ -295,15 +311,14 @@ impl Game {
             }
             // Walk the alternating spawn order so each enemy looks distinct and the
             // group mixes single- and twin-barrel hulls.
-            let ecol = TANK_SPRITE_ORDER[enemy_positions.len() % TANK_SPRITE_ORDER.len()];
+            let erow = TANK_SPRITE_ORDER[enemy_positions.len() % TANK_SPRITE_ORDER.len()];
             // Vary speed within +/- ENEMY_SPEED_VARIANCE so enemies don't all move
             // in lockstep; each keeps this speed for the round.
             let factor = 1.0 + rng.random_range(-ENEMY_SPEED_VARIANCE..ENEMY_SPEED_VARIANCE);
             let owner_slot = enemy_owner_slot(enemy_positions.len());
             let mut enemy = Tank {
-                row: TANK_ROW,
-                col: ecol,
-                shell_variant: rng.random_range(0..SHELL_VARIANTS),
+                row: erow,
+                shell_variant: TANK_SHELL_VARIANT_BY_ROW[erow as usize],
                 damage_variant: rng.random_range(0..DAMAGE_VARIANTS),
                 position: pos,
                 rotation: 180.0,             // facing down, toward the player's start
@@ -312,10 +327,13 @@ impl Game {
                 ..Tank::default()
             };
             roll_track_distortion(&mut enemy, &mut rng);
-            enemy.body = Some(
-                self.physics
-                    .spawn_tank(pos, enemy.hull_size() * 0.5, enemy.mass()),
-            );
+            // Spawn rotation is 180.0 (facing down) - `along_x: false`, same
+            // Y-axis case as the player's spawn facing.
+            enemy.body = Some(self.physics.spawn_tank(
+                pos,
+                enemy.hull_half_extents(false),
+                enemy.mass(),
+            ));
             enemy.hit_sensor = Some(self.physics.add_hit_sensor(
                 enemy.body.unwrap(),
                 enemy.size() * 0.5,
@@ -431,6 +449,7 @@ impl Game {
             self.time += dt;
             for tank in self.world.query::<&mut Tank>().iter() {
                 tank.tick_wreck(dt);
+                roll_wreck_col(tank);
             }
             self.tracks.retain_mut(|t| !t.tick(dt));
             self.restart_timer -= dt;
@@ -449,6 +468,7 @@ impl Game {
             tank.tick_recharge(dt);
             tank.ram_cooldown = (tank.ram_cooldown - dt).max(0.0);
             tank.tick_wreck(dt);
+            roll_wreck_col(tank);
         }
         // Age existing marks and drop the ones that have fully faded.
         self.tracks.retain_mut(|t| !t.tick(dt));
@@ -488,6 +508,14 @@ impl Game {
             drive_tank(&mut self.physics, player_tank, player_intent, dt);
             if player_intent.fire && player_tank.shells_ammo >= 1 {
                 player_tank.shells_ammo -= 1;
+                // Alternate simultaneous/staggered twin shell art shot-to-shot
+                // (no-op for single-barrel chassis - see Tank::alternate_shot).
+                player_tank.shell_variant = if player_tank.alternate_shot {
+                    TANK_SHELL_VARIANT_STAGGERED_BY_ROW[player_tank.row as usize]
+                } else {
+                    TANK_SHELL_VARIANT_BY_ROW[player_tank.row as usize]
+                };
+                player_tank.alternate_shot = !player_tank.alternate_shot;
                 // The player always fires straight down the barrel.
                 let mut shell = Shell::spawn(player_tank, Owner::Player, 0.0);
                 shell.body = Some(self.physics.spawn_shell(
@@ -514,14 +542,16 @@ impl Game {
         // `Ai::steer` can route around static obstacles instead of just
         // walking into one and getting physically stuck by its collider.
         // Rebuilt fresh every frame - obstacles are few and the grid small,
-        // so this is cheap enough not to need caching. The margin is a
-        // representative tank's own half-hull, so pathfinding never routes
-        // through a gap too narrow for a tank to actually fit through.
+        // so this is cheap enough not to need caching. The margin is the
+        // *worst-case* tank in the roster (see `max_tank_avoidance_radius`),
+        // not just a representative default one, so pathfinding never routes
+        // even the biggest tank (titan/leviathan) through a gap too narrow
+        // for it to actually fit through.
         let grid = Grid::build(
             width,
             height,
             PATHFIND_CELL_SIZE,
-            Tank::default().hull_size() * 0.5,
+            max_tank_avoidance_radius(),
             self.world
                 .query::<&Obstacle>()
                 .iter()
@@ -551,6 +581,14 @@ impl Game {
             drive_tank(&mut self.physics, tank, intent, dt);
             if intent.fire && tank.shells_ammo >= 1 {
                 tank.shells_ammo -= 1;
+                // Alternate simultaneous/staggered twin shell art shot-to-shot
+                // (no-op for single-barrel chassis - see Tank::alternate_shot).
+                tank.shell_variant = if tank.alternate_shot {
+                    TANK_SHELL_VARIANT_STAGGERED_BY_ROW[tank.row as usize]
+                } else {
+                    TANK_SHELL_VARIANT_BY_ROW[tank.row as usize]
+                };
+                tank.alternate_shot = !tank.alternate_shot;
                 // Point-blank shots may be thrown off-aim (see roll_misfire).
                 let mut shell =
                     Shell::spawn(tank, Owner::Enemy(tank.owner_slot), intent.fire_aim_offset);
@@ -582,20 +620,7 @@ impl Game {
         // that step (see further down) reflect this frame's movement. See
         // docs/physics-engine-design.md.
         for shell in self.world.query::<&mut Shell>().iter() {
-            let was_flying = shell.state == ShellState::Flying;
-            shell.update(dt, width, height);
-            // Shell::update self-detonates a Flying shell that crosses the
-            // screen edge (see its doc comment) - the only detonation path
-            // that isn't already covered by the tank-hit checks further
-            // below. Without this, a shell that flies off the battlefield
-            // instead of hitting a tank vanished with no impact flash at
-            // all, unlike every other way a shell can end.
-            if was_flying && shell.state != ShellState::Flying {
-                self.impact_flashes.push(Shockwave {
-                    center: shell.position,
-                    time: 0.0,
-                });
-            }
+            shell.update(dt);
             let handle = shell
                 .body
                 .expect("shell should always have a physics body once spawned");
@@ -668,7 +693,8 @@ impl Game {
             });
         }
 
-        // --- Shells: damage whatever tank they're intersecting (Flying only) ---
+        // --- Shells: damage/detonate against whatever they're intersecting
+        // (Flying only) ---
         // A shell can hit any tank except the one that fired it - including
         // other enemies, so enemy fire is a real hazard to the whole field,
         // not just the player. Excluding the shooter's own tank matters: a
@@ -677,12 +703,16 @@ impl Game {
         // exclusion is handled by `Physics`'s collision groups now (see
         // `physics::owner_group`, `add_hit_sensor`, `spawn_shell`) - a
         // shooter's own hit sensor never registers as intersecting its own
-        // shells, so this loop doesn't need to re-check `shell.owner`
-        // against the tank it's testing. Damage amount still depends on who
-        // fired it (PLAYER_DAMAGE_*/ENEMY_DAMAGE_*), not who it hits. Hit
-        // detection reads real physics intersections (a shell's sensor vs. a
-        // tank's hit sensor - see `Physics::intersecting` and
-        // `add_hit_sensor`) rather than a hand-rolled point-in-box check.
+        // shells, so `find_shell_target` doesn't need to re-check
+        // `shell.owner` against the tank it's testing. Damage amount still
+        // depends on who fired it (PLAYER_DAMAGE_*/ENEMY_DAMAGE_*), not who
+        // it hits. Hit detection reads real physics intersections (a
+        // shell's sensor vs. a tank's hit sensor/an obstacle's collider/a
+        // wall's collider - see `Physics::intersecting`) rather than a
+        // hand-rolled point-in-box or coordinate-bounds check - a shell
+        // hits at most one target per frame, checked in priority order
+        // (player, then enemies, then obstacles, then walls).
+        let walls = self.walls.expect("walls spawned in init");
         for shell in self.world.query::<&mut Shell>().iter() {
             if shell.state != ShellState::Flying {
                 continue;
@@ -697,47 +727,39 @@ impl Game {
                 (ENEMY_DAMAGE_MIN, ENEMY_DAMAGE_MAX)
             };
 
-            let player_sensor = with_tank(&self.world, player, |t| {
-                t.hit_sensor
-                    .expect("tank should always have a hit sensor once spawned")
+            let Some(target) =
+                find_shell_target(&self.world, &self.physics, player, &walls, shell_collider)
+            else {
+                continue;
+            };
+
+            // A hit always flashes and detonates the shell, even against an
+            // already-wrecked tank or a Wall - only the damage/kill/
+            // knockback below (meaningless against a wreck, and not
+            // applicable to a Wall at all) is gated per-target.
+            self.impact_flashes.push(Shockwave {
+                center: shell.position,
+                time: 0.0,
             });
-            if self.physics.intersecting(shell_collider, player_sensor) {
-                // A hit always flashes and detonates the shell, even against
-                // an already-wrecked tank - only the damage/kill/knockback
-                // below (which would be meaningless on a wreck) is gated on
-                // liveness.
-                self.impact_flashes.push(Shockwave {
-                    center: shell.position,
-                    time: 0.0,
-                });
-                let mut q = self.world.query_one::<&mut Tank>(player);
-                let player_tank = q.get().expect("player entity always has a Tank");
-                if !player_tank.is_wreck() {
-                    let dmg = rng.random_range(dmg_min..dmg_max);
-                    player_tank.damage = (player_tank.damage + dmg).min(MAX_DAMAGE);
-                    if player_tank.is_wreck() {
-                        kills.push((player_tank.position, false));
-                    } else {
-                        shell_impact(player_tank, shell, &mut self.physics);
+            shell.detonate();
+
+            match target {
+                ShellTarget::PlayerTank => {
+                    let mut q = self.world.query_one::<&mut Tank>(player);
+                    let player_tank = q.get().expect("player entity always has a Tank");
+                    if !player_tank.is_wreck() {
+                        let dmg = rng.random_range(dmg_min..dmg_max);
+                        player_tank.damage = (player_tank.damage + dmg).min(MAX_DAMAGE);
+                        if player_tank.is_wreck() {
+                            kills.push((player_tank.position, false));
+                        } else {
+                            shell_impact(player_tank, shell, &mut self.physics);
+                        }
                     }
                 }
-                shell.detonate();
-                continue;
-            }
-
-            let mut hit_tank = false;
-            for (tank, _ai) in self.world.query::<(&mut Tank, &mut Ai)>().iter() {
-                let sensor = tank
-                    .hit_sensor
-                    .expect("tank should always have a hit sensor once spawned");
-                if self.physics.intersecting(shell_collider, sensor) {
-                    // Same wreck-gating as the player-hit branch above: the
-                    // flash and detonation always happen, only damage/kill/
-                    // knockback are skipped once the tank is already a wreck.
-                    self.impact_flashes.push(Shockwave {
-                        center: shell.position,
-                        time: 0.0,
-                    });
+                ShellTarget::EnemyTank(entity) => {
+                    let mut q = self.world.query_one::<&mut Tank>(entity);
+                    let tank = q.get().expect("shell target entity always has a Tank");
                     if !tank.is_wreck() {
                         let dmg = rng.random_range(dmg_min..dmg_max);
                         tank.damage = (tank.damage + dmg).min(MAX_DAMAGE);
@@ -747,32 +769,16 @@ impl Game {
                             shell_impact(tank, shell, &mut self.physics);
                         }
                     }
-                    shell.detonate();
-                    hit_tank = true;
-                    break; // one shell hits at most one tank
                 }
-            }
-            if hit_tank {
-                continue;
-            }
-
-            // --- Obstacles: a shell that missed every tank this frame may
-            // still land on in-arena terrain (see obstacle.rs). A Rock just
-            // detonates the shell; a Crate also takes damage and, once its
-            // health reaches zero, gets flagged `destroyed` for the cleanup
-            // pass below (mirroring how a finished Shell is dropped).
-            for obstacle in self.world.query::<&mut Obstacle>().iter() {
-                let collider = self.physics.collider_of(obstacle.body);
-                if self.physics.intersecting(shell_collider, collider) {
-                    self.impact_flashes.push(Shockwave {
-                        center: shell.position,
-                        time: 0.0,
-                    });
+                ShellTarget::Obstacle(entity) => {
+                    let mut q = self.world.query_one::<&mut Obstacle>(entity);
+                    let obstacle = q
+                        .get()
+                        .expect("shell target entity always has an Obstacle");
                     let dmg = rng.random_range(dmg_min..dmg_max);
                     obstacle.damage(dmg);
-                    shell.detonate();
-                    break; // one shell hits at most one obstacle
                 }
+                ShellTarget::Wall => {}
             }
         }
         // Remove physics bodies for shells finishing their bang animation
@@ -909,7 +915,7 @@ impl Game {
             } else {
                 t.velocity
             },
-            radius: t.hull_size() * 0.5,
+            radius: t.avoidance_radius(),
         };
         let player = self.player.expect("player entity spawned in init");
         let mut movers = Vec::new();
@@ -929,25 +935,28 @@ impl Game {
 /// enforce, since a tank's collider now stops flush against a wall's
 /// surface instead. Padded outward by `WALL_THICKNESS` so corners are
 /// covered with no gap; that padding is otherwise arbitrary since it's
-/// never rendered.
-fn spawn_walls(physics: &mut Physics, width: f32, height: f32) {
+/// never rendered. Returns each wall's collider handle (see `Game::walls`)
+/// so a shell's flight can be checked against them too, the same way as
+/// tanks/obstacles - see `find_shell_target`.
+fn spawn_walls(physics: &mut Physics, width: f32, height: f32) -> [ColliderHandle; 4] {
     let t = WALL_THICKNESS;
-    physics.spawn_static(
+    let left = physics.spawn_static(
         Position::new(-t / 2.0, height / 2.0),
         Position::new(t / 2.0, height / 2.0 + t),
     );
-    physics.spawn_static(
+    let right = physics.spawn_static(
         Position::new(width + t / 2.0, height / 2.0),
         Position::new(t / 2.0, height / 2.0 + t),
     );
-    physics.spawn_static(
+    let top = physics.spawn_static(
         Position::new(width / 2.0, -t / 2.0),
         Position::new(width / 2.0 + t, t / 2.0),
     );
-    physics.spawn_static(
+    let bottom = physics.spawn_static(
         Position::new(width / 2.0, height + t / 2.0),
         Position::new(width / 2.0 + t, t / 2.0),
     );
+    [left, right, top, bottom].map(|body| physics.collider_of(body))
 }
 
 /// True if `rotation` faces along the x axis (Right/Left) rather than y
@@ -968,17 +977,20 @@ fn facing_along_x(rotation: f32) -> bool {
 /// speeding up or the deliberately weaker `TANK_DECEL_FORCE` when
 /// slowing/reversing/coasting to a stop - both divided by `Tank::mass` and
 /// scaled by `Tank::speed_factor`, so a damaged tank is sluggish too. The
-/// axis perpendicular to the hull gets scrubbed toward zero hard by
-/// `TANK_TURN_GRIP_FORCE` instead, unscaled by mass/damage factors beyond
-/// `Tank::mass` itself - see its doc comment in `lib.rs` for why. Real tank
-/// tracks resist lateral sliding mechanically, all the time, not just while
-/// the driver is actively steering, so this applies whether or not a
-/// direction is currently held: a corner reads as the hull snapping onto the
-/// new axis rather than sliding through it, and a ram/explosion/shell
-/// knockback that shoves a tank sideways to wherever it's currently facing
-/// gets killed almost as fast, instead of skidding out at the same weak rate
-/// as a voluntary stop. (While a direction *is* held, `control` has already
-/// set `tank.rotation` to that same direction this frame, so the axis this
+/// axis perpendicular to the hull gets scrubbed toward zero by
+/// `TANK_TURN_GRIP_FORCE` instead (weaker than `TANK_ACCEL_FORCE`, so this
+/// scrub is deliberately slower than the new axis's own buildup - see its
+/// doc comment in `lib.rs` for the drift-through-corners feel this
+/// produces), unscaled by mass/damage factors beyond `Tank::mass` itself.
+/// Real tank tracks resist lateral sliding mechanically, all the time, not
+/// just while the driver is actively steering, so this applies whether or
+/// not a direction is currently held: a corner reads as a genuine drift
+/// through the turn rather than the hull snapping onto the new axis, and a
+/// ram/explosion/shell knockback that shoves a tank sideways to wherever
+/// it's currently facing gets scrubbed faster than a voluntary coasting stop
+/// would (via the much weaker `TANK_DECEL_FORCE`), just not the
+/// near-instant kill it used to be. (While a direction *is* held, `control`
+/// has already set `tank.rotation` to that same direction this frame, so the axis this
 /// picks is identical to the driven axis - unchanged from before.) Shared by
 /// the player and every enemy so both drive identically; a free function
 /// (not a `Game` method) so it can borrow `physics` and one `tank`
@@ -988,10 +1000,26 @@ fn drive_tank(physics: &mut Physics, tank: &mut Tank, intent: Intent, dt: f32) {
         .body
         .expect("tank should always have a physics body once spawned");
     let current = physics.velocity(handle);
+    let facing_before = tank.rotation;
 
     tank.control(intent.move_dir, intent.face);
     tank.ease_visual_rotation(dt);
+    tank.ease_turret_visual_rotation(dt);
     let target = tank.velocity;
+
+    // `control` above may have just snapped `rotation` to a new cardinal
+    // direction (moving a new way, or an AI turning in place to aim) - the
+    // physics collider doesn't rotate with the sprite (see
+    // `Physics::spawn_tank`'s doc comment), so a non-square hull needs its
+    // half-extents reoriented by hand whenever the facing crosses between
+    // the X-axis and Y-axis cardinal pair. Only resize on an actual change,
+    // not every frame a direction is merely held.
+    if tank.rotation != facing_before {
+        physics.resize_collider(
+            physics.collider_of(handle),
+            tank.hull_half_extents(facing_along_x(tank.rotation)),
+        );
+    }
 
     let along_x = facing_along_x(tank.rotation);
     let (current_on, target_on, current_off) = if along_x {
@@ -1044,6 +1072,67 @@ fn tanks_touching(physics: &Physics, a: &Tank, b: &Tank) -> bool {
         .body
         .expect("tank should always have a physics body once spawned");
     physics.touching(a, b)
+}
+
+/// Which target (if any) a shell's collider is currently intersecting -
+/// read-only, so `Game::update`'s shell-hit loop can decide what to do
+/// about it (damage/kill/knockback for a tank, damage for an obstacle,
+/// nothing extra for a wall) without this function needing to borrow
+/// anything mutably itself.
+enum ShellTarget {
+    PlayerTank,
+    EnemyTank(Entity),
+    Obstacle(Entity),
+    Wall,
+}
+
+/// Find what (if anything) `shell_collider` is intersecting this frame,
+/// checked in priority order: the player's tank, then every enemy tank,
+/// then every obstacle, then the four battlefield walls - a shell hits at
+/// most one target, so the first match wins. Replaces what used to be three
+/// separate, near-duplicate loops (player/enemies/obstacles) plus a
+/// completely separate hand-rolled screen-edge coordinate check standing in
+/// for walls (see `Shell::update`'s old doc comment) - walls are real,
+/// queryable colliders now (see `spawn_walls`/`Game::walls`), so they go
+/// through the exact same `Physics::intersecting` check as everything else.
+fn find_shell_target(
+    world: &hecs::World,
+    physics: &Physics,
+    player: Entity,
+    walls: &[ColliderHandle; 4],
+    shell_collider: ColliderHandle,
+) -> Option<ShellTarget> {
+    let player_sensor = with_tank(world, player, |t| {
+        t.hit_sensor
+            .expect("tank should always have a hit sensor once spawned")
+    });
+    if physics.intersecting(shell_collider, player_sensor) {
+        return Some(ShellTarget::PlayerTank);
+    }
+
+    for (entity, tank) in world.query::<(Entity, &Tank)>().with::<&Ai>().iter() {
+        let sensor = tank
+            .hit_sensor
+            .expect("tank should always have a hit sensor once spawned");
+        if physics.intersecting(shell_collider, sensor) {
+            return Some(ShellTarget::EnemyTank(entity));
+        }
+    }
+
+    for (entity, obstacle) in world.query::<(Entity, &Obstacle)>().iter() {
+        let collider = physics.collider_of(obstacle.body);
+        if physics.intersecting(shell_collider, collider) {
+            return Some(ShellTarget::Obstacle(entity));
+        }
+    }
+
+    for &wall in walls {
+        if physics.intersecting(shell_collider, wall) {
+            return Some(ShellTarget::Wall);
+        }
+    }
+
+    None
 }
 
 /// Run `f` with read-only access to one specific tank entity's `Tank`
@@ -1103,13 +1192,62 @@ fn roll_track_distortion(tank: &mut Tank, rng: &mut rand::rngs::ThreadRng) {
         rng.random_range((1.0 - TRACK_SCALE_JITTER)..(1.0 + TRACK_SCALE_JITTER));
 }
 
+/// Roll this tank's wrecked-hull variant (see `Tank::wreck_col`) the first
+/// frame it becomes a wreck, so `hull_col` has something to show - a no-op
+/// on every other frame (already rolled, or not a wreck yet).
+fn roll_wreck_col(tank: &mut Tank) {
+    if tank.is_wreck() && tank.wreck_col.is_none() {
+        tank.wreck_col = Some(TANK_WRECK_COLS[rand::rng().random_range(0..TANK_WRECK_COLS.len())]);
+    }
+}
+
+/// The largest `Tank::avoidance_radius` reachable by *any* row in
+/// TANK_HULL_BBOX_BY_ROW, in either cardinal orientation (a row's own bbox is
+/// asymmetric, so facing sideways can give a bigger radius than facing up) -
+/// used as the pathfinding grid's obstacle-clearance margin (see its call
+/// site in `Game::update`) so a route never opens a gap too narrow for the
+/// biggest tank that might need it (titan/leviathan, currently). Folds over
+/// only 12 rows x 2 orientations, so recomputing this fresh each frame
+/// (rather than caching) is well within the same "cheap enough" budget the
+/// grid rebuild itself already accepts.
+fn max_tank_avoidance_radius() -> f32 {
+    let scale = Tank::default().scale;
+    TANK_HULL_BBOX_BY_ROW
+        .iter()
+        .flat_map(|&(w, h)| [(w, h), (h, w)])
+        .map(|(w, h)| {
+            let (hx, hy) = (w * 0.5 * scale, h * 0.5 * scale);
+            (hx * hx + hy * hy).sqrt()
+        })
+        .fold(0.0, f32::max)
+}
+
 /// Lay fresh tread marks along the distance a tank travelled this frame, dropping
 /// one mark every TRACK_SPACING pixels. `before` is where the tank was at the
 /// start of the frame; if it didn't actually move (blocked/idle) nothing is laid.
+/// Also drives the tank sprite's own tread-animation frame (`Tank::hull_frame`,
+/// see TANK_HULL_TRACK_FRAME_DISTANCE) off the same distance-moved signal -
+/// a separate visual (the vehicle's own tread graphics vs. the marks it
+/// leaves on the ground) but the same underlying input, so it's cheapest to
+/// advance both from the one place that already computes `moved`. Stops
+/// entirely - no ground marks, no hull_frame advance - once the hull is
+/// disabled (TANK_HULL_DISABLED_DAMAGE) or wrecked; harmless for hull_frame
+/// either way since `hull_col` ignores it once damage crosses that
+/// threshold, but skipping it here avoids doing the work for nothing.
 fn lay_tracks(tracks: &mut Vec<Track>, tank: &mut Tank, before: Position) {
+    if tank.is_wreck() || tank.damage >= TANK_HULL_DISABLED_DAMAGE {
+        return;
+    }
     let moved = tank.position.distance_to(before);
     if moved <= 0.0 {
+        // Idle: hold the resting tread frame rather than freeze mid-cycle.
+        tank.hull_frame = 0;
         return;
+    }
+    tank.hull_anim_accum += moved;
+    while tank.hull_anim_accum >= TANK_HULL_TRACK_FRAME_DISTANCE {
+        tank.hull_anim_accum -= TANK_HULL_TRACK_FRAME_DISTANCE;
+        tank.hull_frame = (tank.hull_frame + 1) % TANK_HULL_TRACK_COLS.len() as i32;
     }
     // Unit vector pointing back along the segment the tank just travelled, used
     // to place marks evenly along the path rather than stacking them at the end.
@@ -1145,7 +1283,12 @@ fn lay_tracks(tracks: &mut Vec<Track>, tank: &mut Tank, before: Position) {
     // Push marks out to the tank's rear edge so the trail comes out from behind
     // the hull and never pokes ahead of it.
     let rear = tank.hull_size() * 0.5;
-    let scale = tank.scale * TRACK_SCALE_FRACTION * tank.track_scale_jitter;
+    // Chassis weight (see TRACK_WEIGHT_SCALE_BY_ROW/TRACK_WEIGHT_OPACITY_BY_ROW)
+    // on top of the base fraction/jitter, so a titan visibly presses a
+    // bigger, darker mark than a scout instead of every row looking the same.
+    let weight_scale = TRACK_WEIGHT_SCALE_BY_ROW[tank.row as usize];
+    let scale = tank.scale * TRACK_SCALE_FRACTION * weight_scale * tank.track_scale_jitter;
+    let max_opacity = TRACK_MAX_OPACITY * TRACK_WEIGHT_OPACITY_BY_ROW[tank.row as usize];
 
     tank.track_accum += moved;
     // Step up the path in TRACK_SPACING increments so the spacing stays even
@@ -1169,6 +1312,7 @@ fn lay_tracks(tracks: &mut Vec<Track>, tank: &mut Tank, before: Position) {
             ),
             rotation: heading + wobble,
             scale,
+            max_opacity,
             age: 0.0,
         });
         tank.track_mark_count += 1;
@@ -1315,12 +1459,18 @@ fn explosion_hit(
     }
 
     // Push harder the closer the tank was to the blast, and divide by mass
-    // relative to a default tank's so a heavier one (see Tank::mass) resists
-    // the shove more. As in `ram`, the desired push is still worked out by
-    // hand; applying it as `physics.apply_impulse` (impulse = push * this
-    // tank's own mass) is what makes it a real physics impulse.
+    // relative to this tank's own *chassis-free* baseline (scale^2 alone,
+    // the flat mass every tank shared before TANK_CHASSIS_MASS_FACTOR_BY_ROW
+    // existed - deliberately not `Tank::default().mass()`, which would key
+    // off whichever chassis `Tank::row`'s default (0, scout) happens to be
+    // rather than the neutral `std`-class baseline EXPLOSION_KNOCKBACK_SPEED
+    // was actually tuned against) so a heavier chassis (see `Tank::mass`)
+    // resists the shove more and a lighter one flies further. As in `ram`,
+    // the desired push is still worked out by hand; applying it as
+    // `physics.apply_impulse` (impulse = push * this tank's own mass) is
+    // what makes it a real physics impulse.
     let falloff = 1.0 - dist / EXPLOSION_RADIUS;
-    let reference_mass = Tank::default().mass();
+    let reference_mass = tank.scale * tank.scale;
     let push = (EXPLOSION_KNOCKBACK_SPEED * falloff * reference_mass / tank.mass())
         .min(KNOCKBACK_MAX_SPEED);
     let axis = if dist > 0.001 {

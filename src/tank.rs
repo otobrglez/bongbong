@@ -2,10 +2,14 @@ use rapier2d::prelude::{ColliderHandle, RigidBodyHandle};
 use sola_raylib::prelude::*;
 
 use crate::{
-    DAMAGE_SPEED_CURVE, DAMAGE_SPEED_FLOOR, DEAD_TINT_FACTOR, MAX_DAMAGE, MAX_SHELLS, Position,
-    SHADOW_DIR_X, SHADOW_DIR_Y, TANK_HULL_FRACTION, TANK_PIVOT_REAR_FRACTION, TANK_SHADOW_OFFSET,
-    TANK_SHADOW_OPACITY, TANK_SPEED, TANK_TEXTURE_SIZE, TANK_VISUAL_TURN_SPEED_DEG,
-    WRECK_BURN_SECONDS,
+    DAMAGE_SPEED_CURVE, DAMAGE_SPEED_FLOOR, MAX_DAMAGE, MAX_SHELLS, Position,
+    SHADOW_DIR_X, SHADOW_DIR_Y, TANK_BROKEN_TURRET_COL, TANK_CHASSIS_MASS_FACTOR_BY_ROW,
+    TANK_HULL_BBOX_BY_ROW, TANK_HULL_DISABLED_COL, TANK_HULL_DISABLED_DAMAGE, TANK_HULL_FRACTION,
+    TANK_HULL_LIGHT_COL,
+    TANK_HULL_LIGHT_DAMAGE, TANK_HULL_TRACK_COLS, TANK_PIVOT_REAR_FRACTION, TANK_SHADOW_OFFSET,
+    TANK_SHADOW_OPACITY,
+    TANK_SPEED, TANK_TEXTURE_SIZE, TANK_TURRET_COL, TANK_TURRET_VISUAL_TURN_SPEED_DEG,
+    TANK_VISUAL_TURN_SPEED_DEG, TANK_WRECK_COLS, WRECK_BURN_SECONDS,
 };
 
 /// The four movement/facing directions. rotation 0 == up, clockwise positive,
@@ -54,13 +58,25 @@ impl Dir {
 }
 
 pub struct Tank {
-    /// Which sprite in the atlas to draw.
+    /// Which of the 12 tank archetypes in scifi_tanks_sheet.png this tank
+    /// draws (see TANK_VARIANTS/TANK_SPRITE_ORDER in simulation.rs). The hull
+    /// and turret layers' columns within that row depend on this tank's
+    /// current animation/damage state - see `hull_col`/`turret_col`.
     pub row: i32,
-    pub col: i32,
-    /// Row in shells.png this tank's shells are drawn from (0..SHELL_VARIANTS).
-    /// Rolled once at spawn (see Game::init) and fixed for the tank's whole
-    /// life, so all of its shots read as visually consistent.
+    /// Row in shells.png this tank's shells are drawn from (0..SHELL_VARIANTS)
+    /// - matched to this tank's chassis (barrel count, size class, accent
+    /// colour) via TANK_SHELL_VARIANT_BY_ROW, set at spawn (see Game::init)
+    /// and refreshed on every shot this tank fires (see `alternate_shot`,
+    /// simulation.rs's two fire call sites) rather than fixed for its whole
+    /// life.
     pub shell_variant: i32,
+    /// Toggled every time this tank fires (simulation.rs), so a twin-barrel
+    /// chassis alternates between the simultaneous-twin and staggered-twin
+    /// shell art (TANK_SHELL_VARIANT_BY_ROW vs
+    /// TANK_SHELL_VARIANT_STAGGERED_BY_ROW) shot to shot instead of always
+    /// firing the same way. A no-op for single-barrel chassis, whose
+    /// staggered-table entry equals its base entry.
+    pub alternate_shot: bool,
     /// Row in damage.png this tank's damage overlay is drawn from
     /// (0..DAMAGE_VARIANTS). Rolled once at spawn (see Game::init) and fixed
     /// for the tank's whole life, so its damage sequence reads as one
@@ -81,6 +97,32 @@ pub struct Tank {
     /// few frames. Read only by `draw_tank`/`draw_tank_shadow` - nothing
     /// gameplay-relevant should ever key off this.
     pub visual_rotation: f32,
+    /// Turret-only sprite facing angle in degrees, eased toward `rotation`
+    /// independently of `visual_rotation` (see
+    /// `ease_turret_visual_rotation`/`TANK_TURRET_VISUAL_TURN_SPEED_DEG`) -
+    /// faster than the hull's own ease, so the turret visibly leads a turn
+    /// while the hull swings around to catch up. Read only by `draw_tank`/
+    /// `draw_tank_shadow`.
+    pub turret_visual_rotation: f32,
+    /// Index into TANK_HULL_TRACK_COLS (0..4) picking which tread-animation
+    /// hull frame is currently drawn - see `hull_col`/
+    /// TANK_HULL_TRACK_FRAME_DISTANCE. Only consulted while the tank is alive
+    /// and below TANK_HULL_LIGHT_DAMAGE; damaged/wrecked hulls hold a fixed
+    /// frame instead.
+    pub hull_frame: i32,
+    /// World px of travel accumulated toward the next `hull_frame` advance -
+    /// see `simulation::lay_tracks`. Deliberately separate from
+    /// `track_accum` below: that one paces the ground-decal tread marks in
+    /// track.rs, an unrelated system with its own spacing: reusing it here
+    /// would tie two independently-tuned animations together.
+    pub hull_anim_accum: f32,
+    /// Which of TANK_WRECK_COLS this tank uses once it becomes a wreck -
+    /// `None` until then. Rolled once, the frame `is_wreck()` first becomes
+    /// true (see `simulation::Game::update`, right where `tick_wreck` is
+    /// called), and kept for the rest of the tank's lifetime rather than
+    /// re-rolled each frame, so a field of wrecks shows genuine variety
+    /// instead of flickering between variants.
+    pub wreck_col: Option<i32>,
     /// How much to scale the 32x32 sprite when drawn.
     pub scale: f32,
     /// Movement speed in pixels per second (player and enemies differ).
@@ -146,12 +188,16 @@ impl Default for Tank {
     fn default() -> Self {
         Self {
             row: 0,
-            col: 0,
             shell_variant: 0,
+            alternate_shot: false,
             damage_variant: 0,
             position: Position::default(),
             rotation: 0.0,
             visual_rotation: 0.0,
+            turret_visual_rotation: 0.0,
+            hull_frame: 0,
+            hull_anim_accum: 0.0,
+            wreck_col: None,
             scale: 2.0, // 3.0,
             speed: TANK_SPEED,
             damage: 0.0,
@@ -207,6 +253,37 @@ impl Tank {
         self.is_wreck() && self.wreck_timer >= WRECK_BURN_SECONDS
     }
 
+    /// Which atlas column to draw this tank's hull from - a four-tier
+    /// escalation matching the sheet's own damage ladder: the rolled wreck
+    /// variant once it's a wreck (`wreck_col`, falling back to the first
+    /// wreck variant on the off chance this is read before that roll
+    /// happens), the disabled art once it's taken heavy but non-fatal damage
+    /// (TANK_HULL_DISABLED_DAMAGE), the cosmetic "light" art once it's taken
+    /// moderate damage (TANK_HULL_LIGHT_DAMAGE) - still fully mobile, so this
+    /// tier is static art rather than consulting `hull_frame` - otherwise
+    /// whichever tread-animation frame `hull_frame` currently points at.
+    pub fn hull_col(&self) -> i32 {
+        if self.is_wreck() {
+            self.wreck_col.unwrap_or(TANK_WRECK_COLS[0])
+        } else if self.damage >= TANK_HULL_DISABLED_DAMAGE {
+            TANK_HULL_DISABLED_COL
+        } else if self.damage >= TANK_HULL_LIGHT_DAMAGE {
+            TANK_HULL_LIGHT_COL
+        } else {
+            TANK_HULL_TRACK_COLS[self.hull_frame as usize]
+        }
+    }
+
+    /// Which atlas column to draw this tank's turret from: the severed/
+    /// broken turret once it's a wreck, otherwise the intact turret.
+    pub fn turret_col(&self) -> i32 {
+        if self.is_wreck() {
+            TANK_BROKEN_TURRET_COL
+        } else {
+            TANK_TURRET_COL
+        }
+    }
+
     /// Small phase offset (seconds) derived from screen position so that several
     /// burning tanks don't animate their smoke/fire in perfect lockstep.
     pub fn anim_phase(&self) -> f32 {
@@ -215,16 +292,60 @@ impl Tank {
 
     /// Collision footprint side length: the visible hull, not the full sprite
     /// tile, so tanks can close the gap left by the sprite's transparent padding.
+    /// A uniform-square approximation used by the AI's avoidance radius, the
+    /// ground-decal rear-edge offset, and spawn-clearance checks - all of
+    /// which only need an approximate footprint. The tank's actual physics
+    /// collider is sized more precisely per row - see `hull_half_extents`.
     pub fn hull_size(&self) -> f32 {
         self.size() * TANK_HULL_FRACTION
     }
 
-    /// A tank's mass for collision knockback: proportional to hull area
-    /// (scale squared), so it's a genuine normalization rather than an
-    /// arbitrary number - two tanks of equal scale split an impact evenly,
-    /// and a bigger one (if scale ever varies) resists more and shoves harder.
+    /// Physics-collider half-extents (x, y) for this tank's hull, in world
+    /// px, oriented for the given facing - `along_x` true when facing
+    /// Left/Right (width and height swap from the sprite's own "facing up"
+    /// reference frame), matching `simulation::facing_along_x`. Distinct from
+    /// `hull_size` above: this is the real per-row rectangle
+    /// (TANK_HULL_BBOX_BY_ROW) the physics collider is actually sized from -
+    /// see `simulation::drive_tank`/`Physics::resize_collider`.
+    pub fn hull_half_extents(&self, along_x: bool) -> (f32, f32) {
+        let (w, h) = TANK_HULL_BBOX_BY_ROW[self.row as usize];
+        let (w, h) = if along_x { (h, w) } else { (w, h) };
+        (w * 0.5 * self.scale, h * 0.5 * self.scale)
+    }
+
+    /// A safe circular over-approximation of this tank's real (rectangular,
+    /// per-row) physics footprint at its current facing - the true
+    /// bounding-circle radius (hypot of both half-extents from
+    /// `hull_half_extents`), rather than the uniform `hull_size() * 0.5`
+    /// approximation. Used anywhere collision math is circle-based (AI
+    /// predictive avoidance - `ai.rs`'s `Mover.radius`/`AvoidCtx.radius`) so
+    /// it never assumes a tank is smaller than the collider
+    /// `Physics::resize_collider` actually gave it - a mismatch that let the
+    /// AI drive tanks (titan/leviathan especially) into obstacles/other
+    /// tanks it believed were clear, wedging them until an external impulse
+    /// (a shell hit, or the player ramming through) dislodged them. Exact
+    /// equality against `Dir::Right`/`Dir::Left` is safe here (unlike an
+    /// epsilon check) because `rotation` only ever holds one of the four
+    /// exact `Dir::rotation()` constants - see `Tank::control`.
+    pub fn avoidance_radius(&self) -> f32 {
+        let along_x = self.rotation == Dir::Right.rotation() || self.rotation == Dir::Left.rotation();
+        let (hx, hy) = self.hull_half_extents(along_x);
+        (hx * hx + hy * hy).sqrt()
+    }
+
+    /// A tank's mass, for both collision knockback and (via `Game::drive_tank`,
+    /// which divides its accel/decel/turn-grip forces by this) how sluggish it
+    /// is to speed up and how much it drifts through a turn. Proportional to
+    /// `scale` squared - a genuine area normalization rather than an
+    /// arbitrary number - scaled further by this tank's chassis class (see
+    /// TANK_CHASSIS_MASS_FACTOR_BY_ROW, indexed by `row`): a `std`-class tank
+    /// (assault/warden) has exactly the old flat mass every tank used to
+    /// share, `narrow`/`compact` chassis are lighter (quicker to accelerate,
+    /// less drift, shoved further in a ram), `long`/`wide` and especially the
+    /// two `super_*` chassis are heavier (sluggish, more drift, shove lighter
+    /// tanks further than they get shoved back).
     pub fn mass(&self) -> f32 {
-        self.scale * self.scale
+        self.scale * self.scale * TANK_CHASSIS_MASS_FACTOR_BY_ROW[self.row as usize]
     }
 
     /// Recharge ammo over time toward MAX_SHELLS, one shell per interval.
@@ -288,6 +409,24 @@ impl Tank {
         let max_step = TANK_VISUAL_TURN_SPEED_DEG * dt;
         self.visual_rotation = (self.visual_rotation + diff.clamp(-max_step, max_step)) % 360.0;
     }
+
+    /// Chase `turret_visual_rotation` toward `rotation` at
+    /// TANK_TURRET_VISUAL_TURN_SPEED_DEG degrees/second, the short way round -
+    /// same mechanism as `ease_visual_rotation`, just a separate angle and a
+    /// faster rate, so the turret visibly gets to the new heading before the
+    /// hull does. Called once per frame for every tank, alongside
+    /// `ease_visual_rotation`.
+    pub fn ease_turret_visual_rotation(&mut self, dt: f32) {
+        let mut diff = (self.rotation - self.turret_visual_rotation) % 360.0;
+        if diff > 180.0 {
+            diff -= 360.0;
+        } else if diff < -180.0 {
+            diff += 360.0;
+        }
+        let max_step = TANK_TURRET_VISUAL_TURN_SPEED_DEG * dt;
+        self.turret_visual_rotation =
+            (self.turret_visual_rotation + diff.clamp(-max_step, max_step)) % 360.0;
+    }
 }
 
 /// Rotation pivot for a tank sprite of the given on-screen `size`: not the
@@ -312,9 +451,17 @@ fn source_rec(row: i32, col: i32) -> Rectangle {
     )
 }
 
-/// Draw a single tank sprite from the atlas at its center position, scaled and rotated.
+/// Draw a single tank sprite from the atlas at its center position, scaled
+/// and rotated. Hull and turret are two separate layers in the atlas (see
+/// `hull_col`/`turret_col` for which column each picks, depending on
+/// animation/damage state) drawn hull-first-then-turret at the same
+/// dest/origin but each at its own eased angle (`visual_rotation` for the
+/// hull, `turret_visual_rotation` for the turret) - the turret still just
+/// chases the tank's commanded `rotation`, not an independent aim target, but
+/// it does so faster than the hull so it visibly leads a turn.
 pub fn draw_tank(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank) {
-    let src = source_rec(tank.row, tank.col);
+    let hull_src = source_rec(tank.row, tank.hull_col());
+    let turret_src = source_rec(tank.row, tank.turret_col());
     let size = tank.size();
 
     // dest is placed at the tank's position; origin is the rear-shifted
@@ -322,29 +469,26 @@ pub fn draw_tank(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank) {
     let dest = Rectangle::new(tank.position.x, tank.position.y, size, size);
     let origin = draw_pivot(size);
 
-    d.draw_texture_pro(texture, src, dest, origin, tank.visual_rotation, Color::WHITE);
-
-    // A dead (burnt-out) tank is washed toward gray instead of showing a
-    // separate dead overlay sprite. A plain multiply tint only dims
-    // brightness (hue/saturation survive, so it barely reads as "dead" at
-    // pixel-art scale) - drawing the same sprite again with a translucent
-    // flat-gray tint blends it toward true gray instead, and reusing the
-    // same texture/src means the wash is automatically masked to the tank's
-    // own silhouette (transparent padding stays transparent).
-    if tank.is_dead() {
-        let alpha = (255.0 * DEAD_TINT_FACTOR) as u8;
-        let wash = Color::new(120, 120, 120, alpha);
-        d.draw_texture_pro(texture, src, dest, origin, tank.visual_rotation, wash);
-    }
+    d.draw_texture_pro(texture, hull_src, dest, origin, tank.visual_rotation, Color::WHITE);
+    d.draw_texture_pro(
+        texture,
+        turret_src,
+        dest,
+        origin,
+        tank.turret_visual_rotation,
+        Color::WHITE,
+    );
 }
 
-/// Draw this tank's drop shadow: the same sprite, same rotation, offset
-/// toward a fixed screen-space direction and tinted flat black - see
-/// docs/sprite-shadows-design.md. Must be called *before* `draw_tank` so the
-/// real sprite draws on top of its own shadow. No wreck/dead special-casing
-/// needed - a burnt-out hulk is still a solid object sitting on the ground.
+/// Draw this tank's drop shadow: the same two layers (each at its own eased
+/// angle, matching `draw_tank`), offset toward a fixed screen-space direction
+/// and tinted flat black - see docs/sprite-shadows-design.md. Must be called
+/// *before* `draw_tank` so the real sprite draws on top of its own shadow. No
+/// wreck/dead special-casing needed - a burnt-out hulk is still a solid
+/// object sitting on the ground.
 pub fn draw_tank_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank) {
-    let src = source_rec(tank.row, tank.col);
+    let hull_src = source_rec(tank.row, tank.hull_col());
+    let turret_src = source_rec(tank.row, tank.turret_col());
     let size = tank.size();
 
     let dest = Rectangle::new(
@@ -356,5 +500,13 @@ pub fn draw_tank_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tan
     let origin = draw_pivot(size);
     let shadow = Color::new(0, 0, 0, (255.0 * TANK_SHADOW_OPACITY) as u8);
 
-    d.draw_texture_pro(texture, src, dest, origin, tank.visual_rotation, shadow);
+    d.draw_texture_pro(texture, hull_src, dest, origin, tank.visual_rotation, shadow);
+    d.draw_texture_pro(
+        texture,
+        turret_src,
+        dest,
+        origin,
+        tank.turret_visual_rotation,
+        shadow,
+    );
 }
