@@ -112,14 +112,14 @@ impl Game {
                 draw_track(&mut d, textures.tracks, track);
             }
 
-            for (_, obstacle) in self.world.query::<&Obstacle>().iter() {
+            for obstacle in self.world.query::<&Obstacle>().iter() {
                 if self.shadows_enabled {
                     draw_obstacle_shadow(&mut d, textures.obstacles, obstacle);
                 }
                 draw_obstacle(&mut d, textures.obstacles, obstacle);
             }
 
-            for (_, tank) in self.world.query::<&Tank>().with::<&Ai>().iter() {
+            for tank in self.world.query::<&Tank>().with::<&Ai>().iter() {
                 if self.shadows_enabled {
                     draw_tank_shadow(&mut d, textures.tanks, tank);
                 }
@@ -135,7 +135,7 @@ impl Game {
                 draw_damage(&mut d, textures.damage, tank, self.time);
             });
 
-            for (_, shell) in self.world.query::<&Shell>().iter() {
+            for shell in self.world.query::<&Shell>().iter() {
                 if self.shadows_enabled && shell.state == ShellState::Flying {
                     draw_shell_shadow(&mut d, textures.shells, shell);
                 }
@@ -273,7 +273,7 @@ impl Game {
             // screen pixels (no camera transform), so the two spaces line up
             // 1:1 with no extra math.
             if self.inspect_enabled {
-                for (_, (tank, ai)) in self.world.query::<(&Tank, &Ai)>().iter() {
+                for (tank, ai) in self.world.query::<(&Tank, &Ai)>().iter() {
                     draw_tank_inspect(&mut d, tank, Some(ai));
                 }
                 crate::simulation::with_tank(&self.world, player, |tank| {

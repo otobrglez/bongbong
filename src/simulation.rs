@@ -429,7 +429,7 @@ impl Game {
         // (burning wrecks etc.) so the end screen stays lively.
         if self.outcome != Outcome::Playing {
             self.time += dt;
-            for (_, tank) in self.world.query::<&mut Tank>().iter() {
+            for tank in self.world.query::<&mut Tank>().iter() {
                 tank.tick_wreck(dt);
             }
             self.tracks.retain_mut(|t| !t.tick(dt));
@@ -445,7 +445,7 @@ impl Game {
         // one query covers both instead of a separate player statement plus
         // an enemies loop).
         self.time += dt;
-        for (_, tank) in self.world.query::<&mut Tank>().iter() {
+        for tank in self.world.query::<&mut Tank>().iter() {
             tank.tick_recharge(dt);
             tank.ram_cooldown = (tank.ram_cooldown - dt).max(0.0);
             tank.tick_wreck(dt);
@@ -476,10 +476,7 @@ impl Game {
         // actually knows the player's current state.
         let mut player_intent = input.player_intent;
         {
-            let mut q = self
-                .world
-                .query_one::<&mut Tank>(player)
-                .expect("player entity always has a Tank");
+            let mut q = self.world.query_one::<&mut Tank>(player);
             let player_tank = q.get().expect("player entity always has a Tank");
             if player_tank.is_wreck() {
                 player_intent.move_dir = None;
@@ -528,9 +525,9 @@ impl Game {
             self.world
                 .query::<&Obstacle>()
                 .iter()
-                .map(|(_, o)| (o.position, o.hull_size() * 0.5)),
+                .map(|o| (o.position, o.hull_size() * 0.5)),
         );
-        for (entity, (tank, ai)) in self.world.query::<(&mut Tank, &mut Ai)>().iter() {
+        for (entity, tank, ai) in self.world.query::<(Entity, &mut Tank, &mut Ai)>().iter() {
             let my_index = enemy_indices[&entity];
             // `Ai::think`'s targeting reads the player's tank; grabbed via a
             // separate, shared `query_one` (see `with_tank`) each iteration
@@ -584,7 +581,7 @@ impl Game {
         // physics step below, is what lets the intersection queries after
         // that step (see further down) reflect this frame's movement. See
         // docs/physics-engine-design.md.
-        for (_, shell) in self.world.query::<&mut Shell>().iter() {
+        for shell in self.world.query::<&mut Shell>().iter() {
             let was_flying = shell.state == ShellState::Flying;
             shell.update(dt, width, height);
             // Shell::update self-detonates a Flying shell that crosses the
@@ -625,12 +622,12 @@ impl Game {
         });
         let enemies_before: Vec<(Entity, Position)> = self
             .world
-            .query::<&Tank>()
+            .query::<(Entity, &Tank)>()
             .with::<&Ai>()
             .iter()
             .map(|(e, t)| (e, t.position))
             .collect();
-        for (_, tank) in self.world.query::<&mut Tank>().with::<&Ai>().iter() {
+        for tank in self.world.query::<&mut Tank>().with::<&Ai>().iter() {
             sync_tank_from_physics(&self.physics, tank);
         }
 
@@ -686,7 +683,7 @@ impl Game {
         // detection reads real physics intersections (a shell's sensor vs. a
         // tank's hit sensor - see `Physics::intersecting` and
         // `add_hit_sensor`) rather than a hand-rolled point-in-box check.
-        for (_, shell) in self.world.query::<&mut Shell>().iter() {
+        for shell in self.world.query::<&mut Shell>().iter() {
             if shell.state != ShellState::Flying {
                 continue;
             }
@@ -713,10 +710,7 @@ impl Game {
                     center: shell.position,
                     time: 0.0,
                 });
-                let mut q = self
-                    .world
-                    .query_one::<&mut Tank>(player)
-                    .expect("player entity always has a Tank");
+                let mut q = self.world.query_one::<&mut Tank>(player);
                 let player_tank = q.get().expect("player entity always has a Tank");
                 if !player_tank.is_wreck() {
                     let dmg = rng.random_range(dmg_min..dmg_max);
@@ -732,7 +726,7 @@ impl Game {
             }
 
             let mut hit_tank = false;
-            for (_, (tank, _ai)) in self.world.query::<(&mut Tank, &mut Ai)>().iter() {
+            for (tank, _ai) in self.world.query::<(&mut Tank, &mut Ai)>().iter() {
                 let sensor = tank
                     .hit_sensor
                     .expect("tank should always have a hit sensor once spawned");
@@ -767,7 +761,7 @@ impl Game {
             // detonates the shell; a Crate also takes damage and, once its
             // health reaches zero, gets flagged `destroyed` for the cleanup
             // pass below (mirroring how a finished Shell is dropped).
-            for (_, obstacle) in self.world.query::<&mut Obstacle>().iter() {
+            for obstacle in self.world.query::<&mut Obstacle>().iter() {
                 let collider = self.physics.collider_of(obstacle.body);
                 if self.physics.intersecting(shell_collider, collider) {
                     self.impact_flashes.push(Shockwave {
@@ -787,7 +781,7 @@ impl Game {
         // still active (see the `pending_shells` comment above for why).
         let done_shells: Vec<_> = self
             .world
-            .query::<&Shell>()
+            .query::<(Entity, &Shell)>()
             .iter()
             .filter(|(_, s)| s.done)
             .map(|(e, s)| (e, s.body))
@@ -804,7 +798,7 @@ impl Game {
         // cleanup just above.
         let destroyed_obstacles: Vec<_> = self
             .world
-            .query::<&Obstacle>()
+            .query::<(Entity, &Obstacle)>()
             .iter()
             .filter(|(_, o)| o.destroyed)
             .map(|(e, o)| (e, o.body))
@@ -838,7 +832,7 @@ impl Game {
             .query::<&Tank>()
             .with::<&Ai>()
             .iter()
-            .all(|(_, t)| t.is_wreck())
+            .all(|t| t.is_wreck())
         {
             self.end_round(Outcome::Won);
         }
@@ -870,10 +864,7 @@ impl Game {
     ) {
         let player = self.player.expect("player entity spawned in init");
         {
-            let mut q = self
-                .world
-                .query_one::<&mut Tank>(player)
-                .expect("player entity always has a Tank");
+            let mut q = self.world.query_one::<&mut Tank>(player);
             let tank = q.get().expect("player entity always has a Tank");
             explosion_hit(
                 tank,
@@ -885,7 +876,7 @@ impl Game {
                 kills,
             );
         }
-        for (_, (tank, _ai)) in self.world.query::<(&mut Tank, &mut Ai)>().iter() {
+        for (tank, _ai) in self.world.query::<(&mut Tank, &mut Ai)>().iter() {
             explosion_hit(
                 tank,
                 center,
@@ -924,7 +915,7 @@ impl Game {
         let mut movers = Vec::new();
         with_tank(&self.world, player, |t| movers.push(to_mover(t)));
         let mut enemy_indices = HashMap::new();
-        for (entity, tank) in self.world.query::<&Tank>().with::<&Ai>().iter() {
+        for (entity, tank) in self.world.query::<(Entity, &Tank)>().with::<&Ai>().iter() {
             enemy_indices.insert(entity, movers.len());
             movers.push(to_mover(tank));
         }
@@ -1066,18 +1057,14 @@ fn tanks_touching(physics: &Physics, a: &Tank, b: &Tank) -> bool {
 /// the first place. `pub(crate)`: `game.rs::render` reuses this too (it only
 /// ever needs read-only single-tank access).
 pub(crate) fn with_tank<R>(world: &hecs::World, entity: Entity, f: impl FnOnce(&Tank) -> R) -> R {
-    let mut q = world
-        .query_one::<&Tank>(entity)
-        .expect("entity should have a Tank component");
+    let mut q = world.query_one::<&Tank>(entity);
     let tank = q.get().expect("entity should have a Tank component");
     f(tank)
 }
 
 /// Same as `with_tank`, but for mutable access to one specific tank.
 fn with_tank_mut<R>(world: &hecs::World, entity: Entity, f: impl FnOnce(&mut Tank) -> R) -> R {
-    let mut q = world
-        .query_one::<&mut Tank>(entity)
-        .expect("entity should have a Tank component");
+    let mut q = world.query_one::<&mut Tank>(entity);
     let tank = q.get().expect("entity should have a Tank component");
     f(tank)
 }
@@ -1085,7 +1072,7 @@ fn with_tank_mut<R>(world: &hecs::World, entity: Entity, f: impl FnOnce(&mut Tan
 /// Run `f` with simultaneous mutable access to two *different* tank
 /// entities - e.g. the player and the one enemy currently ramming it, both
 /// of which `ram` needs to mutate in the same call. Backed by
-/// `World::query_many_mut`, hecs's purpose-built API for exactly this case
+/// `World::query_disjoint_mut`, hecs's purpose-built API for exactly this case
 /// ("query a fixed number of distinct entities in a uniquely borrowed
 /// world... which would otherwise be forbidden by the unique borrow").
 fn with_two_tanks_mut<R>(
@@ -1094,7 +1081,7 @@ fn with_two_tanks_mut<R>(
     b: Entity,
     f: impl FnOnce(&mut Tank, &mut Tank) -> R,
 ) -> R {
-    let [ta, tb] = world.query_many_mut::<&mut Tank, 2>([a, b]);
+    let [ta, tb] = world.query_disjoint_mut::<&mut Tank, 2>([a, b]);
     f(
         ta.expect("entity should have a Tank component"),
         tb.expect("entity should have a Tank component"),

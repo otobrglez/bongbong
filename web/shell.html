@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>bongtank</title>
+    <title>bongbong tanks!</title>
     <style>
       html, body {
         margin: 0;
@@ -20,6 +20,17 @@
         max-width: 100vw;
         max-height: 100vh;
         image-rendering: pixelated;
+        /* The canvas needs tabindex="-1" below so it can take keyboard focus
+           for game input, but that makes browsers draw a focus ring around
+           it once clicked, and click-dragging on it (e.g. a fast double
+           click while playing) can otherwise trigger the browser's normal
+           text/element selection highlight. Neither is meaningful on a
+           canvas, so both are suppressed here. */
+        outline: none;
+        -webkit-tap-highlight-color: transparent;
+        -webkit-user-select: none;
+        -moz-user-select: none;
+        user-select: none;
       }
     </style>
   </head>

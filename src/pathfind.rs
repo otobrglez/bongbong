@@ -138,6 +138,18 @@ impl Grid {
         let mut open = BinaryHeap::new();
         let mut came_from = vec![None; self.cols * self.rows];
         let mut g_score = vec![f32::INFINITY; self.cols * self.rows];
+        // Cells already expanded (popped and relaxed) once. Without this, a
+        // cell whose g_score improves after it's already been expanded gets
+        // pushed to `open` again and, once repopped, has its neighbors
+        // relaxed all over again - on an open grid with many reachable
+        // cells this reprocessing cascades combinatorially instead of the
+        // O(cells) A* is supposed to guarantee, which is cheap enough not to
+        // matter on native but was enough to stall a frame for minutes on
+        // wasm's slower per-op cost (observed as a frozen, unresponsive tab
+        // during web playtesting). Marking a cell closed the first time it's
+        // popped bounds every cell to at most one expansion, same as
+        // textbook Dijkstra/A*.
+        let mut closed = vec![false; self.cols * self.rows];
         let idx = |c: (usize, usize)| c.1 * self.cols + c.0;
 
         g_score[idx(start)] = 0.0;
@@ -147,6 +159,12 @@ impl Grid {
         });
 
         while let Some(Node { cell, .. }) = open.pop() {
+            if closed[idx(cell)] {
+                // Stale heap entry from before this cell's last improvement.
+                continue;
+            }
+            closed[idx(cell)] = true;
+
             if cell == goal {
                 // Walk back to the step right after `start`.
                 let mut step = cell;
@@ -159,6 +177,9 @@ impl Grid {
                 return Some(self.center_of(step));
             }
             for next in self.neighbors(cell) {
+                if closed[idx(next)] {
+                    continue;
+                }
                 if next != goal && self.blocked_at(next) {
                     continue;
                 }
