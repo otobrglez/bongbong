@@ -1,5 +1,8 @@
-use bongbong::game::{Effects, Game, Textures};
+use bongbong::ai::Intent;
+use bongbong::game::{Effects, Textures};
 use bongbong::shockwave::{RippleFx, RippleTuning};
+use bongbong::simulation::{Game, Input};
+use bongbong::tank::Dir;
 use bongbong::{
     IMPACT_FLASH_DURATION, IMPACT_FLASH_SPEED, IMPACT_FLASH_STRENGTH, IMPACT_FLASH_WIDTH,
     MUZZLE_FLASH_DURATION, MUZZLE_FLASH_SPEED, MUZZLE_FLASH_STRENGTH, MUZZLE_FLASH_WIDTH,
@@ -7,6 +10,7 @@ use bongbong::{
 };
 use clap::Parser;
 use sola_raylib::core::game_loop;
+use sola_raylib::prelude::KeyboardKey;
 
 static DEFAULT_SCREEN_WIDTH: i32 = 1280;
 static DEFAULT_SCREEN_HEIGHT: i32 = 720;
@@ -90,6 +94,9 @@ fn main() {
     let tracks_texture = rl
         .load_texture(&thread, "static/tracks.png")
         .expect("failed loading tracks texture");
+    let obstacles_texture = rl
+        .load_texture(&thread, "static/obstacles.png")
+        .expect("failed loading obstacles texture");
 
     let mut shock_fx = RippleFx::load(
         &mut rl,
@@ -137,14 +144,39 @@ fn main() {
     let mut game = Game::default();
     game.enemy_count_override = args.enemies;
     game.shadows_enabled = !args.no_shadows;
-    game.init(&rl);
+    game.init(screen_width as f32, screen_height as f32);
 
     // game_loop::run drives a plain `while !window_should_close()` loop on
     // native, and hands this closure to emscripten's main loop on web - same
     // source for both, and no -sASYNCIFY=1 needed to keep the browser tab
     // responsive (see .cargo/config.toml).
     game_loop::run(rl, thread, 60, move |rl, thread| {
-        game.update(rl);
+        // Gather this frame's raw input into a plain `Input` - `Game::update`
+        // itself decides what to do with it (e.g. whether a wreck can move),
+        // so nothing simulation-related needs to know a `RaylibHandle`
+        // exists. See simulation.rs's module doc comment.
+        let mut player_intent = Intent::default();
+        if rl.is_key_down(KeyboardKey::KEY_UP) {
+            player_intent.move_dir = Some(Dir::Up);
+        } else if rl.is_key_down(KeyboardKey::KEY_DOWN) {
+            player_intent.move_dir = Some(Dir::Down);
+        } else if rl.is_key_down(KeyboardKey::KEY_LEFT) {
+            player_intent.move_dir = Some(Dir::Left);
+        } else if rl.is_key_down(KeyboardKey::KEY_RIGHT) {
+            player_intent.move_dir = Some(Dir::Right);
+        }
+        player_intent.fire = rl.is_key_pressed(KeyboardKey::KEY_SPACE);
+        let input = Input {
+            player_intent,
+            pause_pressed: rl.is_key_pressed(KeyboardKey::KEY_P),
+            restart_pressed: rl.is_key_pressed(KeyboardKey::KEY_R),
+            toggle_shadows_pressed: rl.is_key_pressed(KeyboardKey::KEY_L),
+            toggle_inspect_pressed: rl.is_key_pressed(KeyboardKey::KEY_I),
+        };
+        let dt = rl.get_frame_time();
+        let (width, height) = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
+
+        game.update(input, dt, width, height);
         game.render(
             rl,
             thread,
@@ -159,6 +191,7 @@ fn main() {
                 shells: &shells_texture,
                 damage: &damage_texture,
                 tracks: &tracks_texture,
+                obstacles: &obstacles_texture,
             },
         );
     });

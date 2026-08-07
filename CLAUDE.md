@@ -18,15 +18,19 @@ Bongbong is a tank shooter game. Main purpose of this game is to be a fun, fast 
 - Tools / scripts and other things needed for the development live inside `tools/`
 
 ## Module map
-- `main.rs` — entrypoint: window/texture/shader setup, owns the raylib handle and the main loop.
+- `main.rs` — entrypoint: window/texture/shader setup, owns the raylib handle and the main loop. Gathers each frame's raw input into a `simulation::Input` and passes it to `Game::update` — nothing past this file ever touches `RaylibHandle` for input.
 - `lib.rs` — shared constants and types (`Position`, tuning values). Heavily commented inline with sprite-atlas layouts and physics tuning notes — treat those comments as the source of truth over restating them elsewhere.
-- `game.rs` — game state and the per-frame update/render loop; wires tanks, shells, AI, effects together.
+- `simulation.rs` — the simulation layer: `Game`'s state, `Game::init`/`Game::update`, and the physics/damage/AI-wiring free functions they use. No `RaylibHandle`/drawing dependency by design (see its own module doc comment) — driving a round forward needs nothing but this module and a `simulation::Input`.
+- `game.rs` — the presentation layer: `Game::render` plus `Textures`/`Effects`. Reads `Game`'s state (owned by `simulation.rs`) and draws it; never mutates it.
 - `tank.rs` — tank entity: state, movement, drawing.
 - `shell.rs` — projectile entity: state, movement, drawing.
+- `obstacle.rs` — static battlefield terrain (indestructible rocks, destructible crates): state and drawing.
+- `physics.rs` — rapier2d wrapper (`Physics`): rigid bodies/colliders, collision groups, the fixed-timestep step. See docs/physics-engine-design.md.
 - `track.rs` — tank tread marks left on the ground.
 - `damage_stage.rs` — escalating damage overlay drawn on top of a tank.
-- `ai.rs` — enemy decision-making (`Intent`, targeting, firing); builds and ticks behavior trees from `bt.rs`.
+- `ai.rs` — enemy decision-making (`Intent`, targeting, firing); builds and ticks behavior trees from `bt.rs`. `Ai::steer` routes its naive straight-line heading through `pathfind::Grid` before applying direction commitment/predictive-dodge, so obstacles are just another reason the heading bends.
 - `bt.rs` — small generic, game-agnostic behavior-tree engine (Selector/Sequence/Condition/Action) used by `ai.rs`.
+- `pathfind.rs` — small grid-based A* (`Grid`) so AI routes around static obstacles; game-agnostic like `bt.rs`. Rebuilt fresh each frame in `simulation.rs` from the current obstacle layout, per the AI-decoupling principle in docs/physics-engine-design.md (AI reasons over snapshots, never the ECS/physics world directly). Has its own `#[cfg(test)]` unit tests (the one algorithmic, non-visual piece of the codebase) — run with `cargo test --lib pathfind`.
 - `shockwave.rs` — `RippleFx`/`RippleTuning`: post-processing ripple-shader effect driver for the GLSL shaders in `static/*.fs` (shockwave, muzzle flash, impact).
 
 ## Asset pipeline (generated, not hand-drawn)
@@ -41,7 +45,7 @@ Bongbong is a tank shooter game. Main purpose of this game is to be a fun, fast 
 - `shells.png` has row-variants (`SHELL_VARIANTS`): each tank rolls one row at spawn (`Tank::shell_variant`) and every shell it fires reads from that row for its whole life. The flying frame (col 3) is pixel-identical across all rows by design — only the fire/hit frames differ — so a shell looks the same in flight no matter which tank fired it.
 
 ## Testing & tooling
-- No automated test suite exists yet (no `#[test]` in the codebase) — verify changes by running the game (`cargo run` or `cargo watch -x "run"`) rather than assuming test coverage.
+- No project-wide automated test suite — verify changes by running the game (`cargo run` or `cargo watch -x "run"`) rather than assuming test coverage. The one exception is `pathfind.rs`'s `#[cfg(test)]` module (`cargo test --lib pathfind`), added because A* correctness isn't practically verifiable by eyeballing play - everything else stays play-tested only.
 - No `rustfmt.toml` or clippy config is checked in; there's no enforced formatting/lint convention yet.
 
 ## Web / wasm build

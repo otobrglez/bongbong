@@ -110,20 +110,27 @@ Feeding variable framerates (`rl.get_frame_time()`) directly into Rapier creates
 - **Battlefield bounds**: 4 static wall colliders at the screen edges,
   replacing `clamp_to_field` — tanks colliding with them get real sliding for
   free, allowing deletion of `deflect_from_walls`/`wall_follow`.
-- **(future) Obstacles/terrain**: more static colliders.
+- **Obstacles/terrain** (`obstacle.rs`): more static colliders, spawned via
+  the same `Physics::spawn_static` walls use (renamed from `spawn_wall` once
+  it grew a second caller). A `Rock` obstacle is a permanent one, like a
+  wall; a `Crate` is identical physically but tracks health and, once a
+  shell's intersection brings it to zero, gets its body removed
+  (`remove_body`) and is dropped from `Game::obstacles` - the first entity
+  in the game whose physics body is torn down mid-round outside of a shell
+  finishing its animation.
 
 ### Collision groups (replacing `Owner`-based filtering)
 
-**Not done** - flagging this honestly rather than pretending otherwise.
-`Owner`-based `if` filtering is still exactly how `Game::update` decides
-which shell can hit which tank; phase 5 only replaced *how a hit is
-detected* (physics intersection vs. point-in-box), not *who's allowed to
-check whom*. Moving that to rapier's `InteractionGroups` (bitmask
-membership/filter on each collider) remains a legitimate future cleanup -
-it would delete the nested `if shell.owner != Owner::Player` /
-`if shell.owner == Owner::Player` branches in the shell-hit loop - but
-wasn't necessary for anything this migration needed to work, so it was
-left alone rather than done for its own sake.
+**Done**, as a follow-up pass after this migration. Each tank owns a
+collision-group bit (`physics::owner_group`, slot 0 = player, slot `i + 1` =
+`Owner::Enemy(i)`); a tank's hit sensor (`add_hit_sensor`) has that bit as
+its sole membership, and each shell it fires (`spawn_shell`) filters that bit
+out. `Physics::intersecting` therefore never reports a hit between a shell
+and its own shooter's sensor at the rapier level, and `Game::update`'s
+shell-hit loop no longer needs the `if shell.owner != Owner::Player` /
+`if shell.owner == Owner::Enemy(i)` self-exclusion branches that phase 5
+still relied on - `Owner` on `Shell` is now purely for damage/kill
+attribution, not hit filtering.
 
 ### AI Decoupling
 

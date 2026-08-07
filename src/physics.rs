@@ -22,6 +22,18 @@ pub struct Physics {
     world: PhysicsWorld,
 }
 
+/// The collision-filtering group for a tank "owner" slot - slot 0 is the
+/// player, slot `n` (n >= 1) is `Owner::Enemy(n - 1)`. Used to tell rapier
+/// "this shell's sensor shouldn't intersect that tank's hit sensor" via
+/// `InteractionGroups` (see `add_hit_sensor`/`spawn_shell`), replacing the
+/// old manual `if shell.owner == ...` self-exclusion checks in
+/// `Game::update`'s shell-hit loop. `ENEMY_COUNT_MAX` (10) plus the player
+/// leaves 21 of `Group`'s 32 bits unused for future owner-like filtering.
+pub fn owner_group(slot: usize) -> Group {
+    debug_assert!(slot < 32, "owner slot must fit in rapier's 32 group bits");
+    Group::from_bits_retain(1 << slot)
+}
+
 impl Physics {
     pub fn new() -> Self {
         Self {
@@ -40,15 +52,20 @@ impl Physics {
         self.world.step();
     }
 
-    /// Spawn a static wall collider - a fixed, immovable battlefield boundary
-    /// segment. `center` and `half_extents` are in the same pixel space as
+    /// Spawn a static, fixed-body cuboid collider: the battlefield boundary
+    /// (see `spawn_walls` in game.rs) and in-arena obstacles (see
+    /// `obstacle::Obstacle`) both reuse this exact same shape - the only
+    /// difference is whether the caller ever calls `remove_body` on the
+    /// handle later (walls never do; a destroyed `Crate` obstacle does).
+    /// `center` and `half_extents` are in the same pixel space as
     /// `Tank`/`Shell` positions; rapier does no unit conversion here (1
     /// physics unit == 1px).
-    pub fn spawn_wall(&mut self, center: Position, half_extents: Position) {
-        self.world.insert(
+    pub fn spawn_static(&mut self, center: Position, half_extents: Position) -> RigidBodyHandle {
+        let (handle, _) = self.world.insert(
             RigidBodyBuilder::fixed().translation(to_vector(center)),
             ColliderBuilder::cuboid(half_extents.x, half_extents.y),
         );
+        handle
     }
 
     /// Spawn a rotation-locked dynamic tank body: a square collider
@@ -94,11 +111,27 @@ impl Physics {
     /// bigger of the two colliders - which is exactly what was making tanks
     /// crawl: `Game::drive_tank`'s impulse is sized for `Tank::mass()`, but
     /// rapier was dividing by the real (much larger) body mass instead.
-    pub fn add_hit_sensor(&mut self, body: RigidBodyHandle, half_extent: f32) -> ColliderHandle {
+    ///
+    /// `group` (see `owner_group`) is this tank's own membership bit - a
+    /// shell fired by this same tank sets its filter to exclude that bit
+    /// (see `spawn_shell`), so `intersecting` naturally reports no hit
+    /// against its own shooter without any owner-equality check on the
+    /// call site.
+    pub fn add_hit_sensor(
+        &mut self,
+        body: RigidBodyHandle,
+        half_extent: f32,
+        group: Group,
+    ) -> ColliderHandle {
         self.world.insert_collider(
             ColliderBuilder::cuboid(half_extent, half_extent)
                 .sensor(true)
-                .mass(0.0),
+                .mass(0.0)
+                .collision_groups(InteractionGroups::new(
+                    group,
+                    Group::ALL,
+                    InteractionTestMode::And,
+                )),
             Some(body),
         )
     }
@@ -109,12 +142,28 @@ impl Physics {
     /// intersecting something (see `intersecting`). CCD is enabled so a
     /// fast-moving shell can't tunnel past a tank within a single step
     /// without the intersection registering.
-    pub fn spawn_shell(&mut self, position: Position, half_extent: f32) -> RigidBodyHandle {
+    ///
+    /// `shooter_group` (see `owner_group`) is excluded from this shell's
+    /// filter, so it can never register an intersection against the hit
+    /// sensor of the tank that fired it - it still intersects every other
+    /// tank's hit sensor normally.
+    pub fn spawn_shell(
+        &mut self,
+        position: Position,
+        half_extent: f32,
+        shooter_group: Group,
+    ) -> RigidBodyHandle {
         let (handle, _) = self.world.insert(
             RigidBodyBuilder::kinematic_position_based()
                 .translation(to_vector(position))
                 .ccd_enabled(true),
-            ColliderBuilder::cuboid(half_extent, half_extent).sensor(true),
+            ColliderBuilder::cuboid(half_extent, half_extent)
+                .sensor(true)
+                .collision_groups(InteractionGroups::new(
+                    Group::ALL,
+                    !shooter_group,
+                    InteractionTestMode::And,
+                )),
         );
         handle
     }

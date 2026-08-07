@@ -3,13 +3,15 @@ use rand::rngs::ThreadRng;
 use sola_raylib::prelude::Vector2;
 
 use crate::bt::{Node, Status, action, condition, selector, sequence};
+use crate::pathfind::Grid;
 use crate::tank::{Dir, Tank};
 use crate::{
     AI_DIR_HOLD_SECONDS, AI_DIR_SWITCH_MARGIN_PX, AVOID_DODGE_SECONDS, AVOID_LOOKAHEAD,
-    AVOID_MARGIN, AVOID_MIN_SPEED, ENEMY_AIM_SETTLE, ENEMY_ATTACK_RANGE, ENEMY_FIRE_ALIGN_PX,
-    ENEMY_FIRE_INTERVAL, ENEMY_FLEE_DAMAGE, ENEMY_FRIENDLY_FIRE_HOLD_CHANCE,
-    ENEMY_MISFIRE_ANGLE_MAX, ENEMY_MISFIRE_ANGLE_MIN, ENEMY_MISFIRE_CHANCE_MAX,
-    ENEMY_MISFIRE_RANGE, ENEMY_RETARGET_SECONDS, ENEMY_VIEW_RANGE, Position,
+    AVOID_MARGIN, AVOID_MIN_SPEED, ENEMY_AIM_SETTLE, ENEMY_AMMO_LOW, ENEMY_AMMO_RESUME,
+    ENEMY_ATTACK_RANGE, ENEMY_FIRE_ALIGN_PX, ENEMY_FIRE_INTERVAL, ENEMY_FIRE_INTERVAL_AGGRESSIVE,
+    ENEMY_FLEE_DAMAGE, ENEMY_FRIENDLY_FIRE_HOLD_CHANCE, ENEMY_MISFIRE_ANGLE_MAX,
+    ENEMY_MISFIRE_ANGLE_MIN, ENEMY_MISFIRE_CHANCE_MAX, ENEMY_MISFIRE_RANGE,
+    ENEMY_RETARGET_SECONDS, ENEMY_RETREAT_RANGE, ENEMY_VIEW_RANGE, MAX_DAMAGE, MAX_SHELLS, Position,
 };
 
 /// A read-only snapshot of one tank's motion for collision prediction. The game
@@ -65,6 +67,11 @@ pub struct Ai {
     /// commits for a short window instead of being re-decided every frame.
     dodge_dir: Option<Dir>,
     dodge_timer: f32,
+    /// True while backing off to recharge ammo. Latched between
+    /// ENEMY_AMMO_LOW and ENEMY_AMMO_RESUME (see `wants_retreat`) so the tank
+    /// doesn't flicker into and out of Attack every frame near either
+    /// threshold.
+    retreating: bool,
 }
 
 impl Default for Ai {
@@ -78,6 +85,7 @@ impl Default for Ai {
             aim_settle: 0.0,
             dodge_dir: None,
             dodge_timer: 0.0,
+            retreating: false,
         }
     }
 }
@@ -88,6 +96,8 @@ impl Ai {
     /// `movers` is a snapshot of every live tank (player + all enemies) used for
     /// predictive collision avoidance; `my_index` is this enemy's slot within it,
     /// so it can skip itself. The order matches how the game builds the slice.
+    /// `grid` is this frame's obstacle occupancy grid (see `pathfind::Grid`),
+    /// used by `steer` to route around static obstacles.
     #[allow(clippy::too_many_arguments)] // perception is passed by value, not bundled
     pub fn think(
         &mut self,
@@ -98,6 +108,7 @@ impl Ai {
         dt: f32,
         movers: &[Mover],
         my_index: usize,
+        grid: &Grid,
         rng: &mut ThreadRng,
     ) -> Intent {
         self.fire_timer = (self.fire_timer - dt).max(0.0);
@@ -116,6 +127,7 @@ impl Ai {
             dt,
             movers,
             my_index,
+            grid,
             rng,
             ai: self,
             intent: Intent::default(),
@@ -133,6 +145,11 @@ impl Ai {
     /// into a wall (see `avoid_collisions`) - actually driving into a wall is the
     /// physics engine's job now (see docs/physics-engine-design.md), not steering's.
     /// `ctx` carries the motion snapshot for predictive collision avoidance.
+    /// `grid` routes the naive straight-line heading around static obstacles
+    /// (see `pathfind::Grid::next_step`) before any of the commitment/dodge
+    /// logic below ever sees it - obstacles are just another reason the
+    /// "fresh" heading might differ from a straight line at the player/
+    /// waypoint, same as a jittery target would.
     fn steer(
         &mut self,
         from: Position,
@@ -140,8 +157,10 @@ impl Ai {
         bounds: (f32, f32),
         half: f32,
         ctx: AvoidCtx,
+        grid: &Grid,
     ) -> Dir {
-        let fresh = Dir::toward(from, target);
+        let routed = grid.next_step(from, target).unwrap_or(target);
+        let fresh = Dir::toward(from, routed);
         let dir = match self.committed_dir {
             None => {
                 self.commit(fresh);
@@ -152,10 +171,15 @@ impl Ai {
                 committed
             }
             Some(committed) => {
-                // How far off each axis is the target? Only switch if the fresh
-                // heading is meaningfully better (reduces the perpendicular error).
-                let dx = (target.x - from.x).abs();
-                let dy = (target.y - from.y).abs();
+                // How far off each axis is the (routed) aim point? Only switch
+                // if the fresh heading is meaningfully better (reduces the
+                // perpendicular error). Uses `routed`, not `target`, so this
+                // reads as "how good is `fresh` at reaching where it's
+                // actually walking toward this step" - comparing it against
+                // the original, possibly-far-away `target` would judge a
+                // pathfinding detour by the wrong yardstick.
+                let dx = (routed.x - from.x).abs();
+                let dy = (routed.y - from.y).abs();
                 let committed_off = if committed.is_horizontal() { dy } else { dx };
                 let fresh_off = if fresh.is_horizontal() { dy } else { dx };
                 if fresh != committed && committed_off - fresh_off > AI_DIR_SWITCH_MARGIN_PX {
@@ -304,6 +328,33 @@ impl Ai {
         false
     }
 
+    /// Whether this tank should be backing off to recharge instead of
+    /// fighting, given its current ammo. Hysteresis between ENEMY_AMMO_LOW
+    /// and ENEMY_AMMO_RESUME: crossing the low mark latches retreat on,
+    /// crossing the (higher) resume mark latches it back off, and anywhere
+    /// in between just keeps whatever was already decided.
+    fn wants_retreat(&mut self, ammo: i32) -> bool {
+        if ammo <= ENEMY_AMMO_LOW {
+            self.retreating = true;
+        } else if ammo >= ENEMY_AMMO_RESUME {
+            self.retreating = false;
+        }
+        self.retreating
+    }
+
+    /// True while backing off to recharge ammo (see `wants_retreat`). Read
+    /// by the inspect-mode debug overlay (`game.rs`); not used by any
+    /// gameplay decision outside this module.
+    pub fn is_retreating(&self) -> bool {
+        self.retreating
+    }
+
+    /// Seconds until this tank may fire again (zero or negative means
+    /// ready). Read by the inspect-mode debug overlay (`game.rs`).
+    pub fn fire_cooldown(&self) -> f32 {
+        self.fire_timer
+    }
+
     fn commit(&mut self, dir: Dir) {
         if self.committed_dir != Some(dir) {
             self.committed_dir = Some(dir);
@@ -372,6 +423,9 @@ struct Brain<'a> {
     movers: &'a [Mover],
     /// This tank's slot within `movers`.
     my_index: usize,
+    /// This frame's obstacle occupancy grid, for routing around static
+    /// obstacles - see `Ai::steer`.
+    grid: &'a Grid,
     rng: &'a mut ThreadRng,
     ai: &'a mut Ai,
     intent: Intent,
@@ -386,10 +440,29 @@ impl Brain<'_> {
         !self.player.is_wreck()
     }
 
-    /// Steer toward `target`, sidestepping predicted collisions. Wraps
-    /// `Ai::steer` with this tank's bounds and collision radius (matching the
-    /// physics world's wall colliders, which now do the actual wall-blocking)
-    /// plus the motion snapshot for avoidance.
+    /// Seconds to wait before firing again, scaled by how well-stocked this
+    /// tank is: a full-ammo, full-health tank re-fires at
+    /// ENEMY_FIRE_INTERVAL_AGGRESSIVE, and it eases back toward the baseline
+    /// ENEMY_FIRE_INTERVAL as either ammo or health drops - whichever
+    /// resource is scarcer sets the pace (min, not average), since being
+    /// low on either alone is reason enough to ease off. Attack is only
+    /// reached above both ENEMY_AMMO_LOW and ENEMY_FLEE_DAMAGE (lower on
+    /// either and the retreat/flee branches take over instead), so this
+    /// never actually hits the slow end in practice - it's the "more
+    /// resources, more aggressive" half; wants_retreat/act_flee are the
+    /// "running low, fall back" half.
+    fn fire_interval(&self) -> f32 {
+        let ammo_frac = (self.me.shells_ammo as f32 / MAX_SHELLS as f32).clamp(0.0, 1.0);
+        let health_frac = (1.0 - self.me.damage / MAX_DAMAGE).clamp(0.0, 1.0);
+        let aggression = ammo_frac.min(health_frac);
+        ENEMY_FIRE_INTERVAL - (ENEMY_FIRE_INTERVAL - ENEMY_FIRE_INTERVAL_AGGRESSIVE) * aggression
+    }
+
+    /// Steer toward `target`, routing around static obstacles and
+    /// sidestepping predicted collisions. Wraps `Ai::steer` with this tank's
+    /// bounds and collision radius (matching the physics world's wall
+    /// colliders, which now do the actual wall-blocking), the motion
+    /// snapshot for avoidance, and this frame's obstacle grid.
     fn steer(&mut self, target: Position) -> Dir {
         let half = self.me.hull_size() * 0.5;
         let ctx = AvoidCtx {
@@ -404,6 +477,7 @@ impl Brain<'_> {
             (self.width, self.height),
             half,
             ctx,
+            self.grid,
         )
     }
 
@@ -453,9 +527,10 @@ fn axis_offsets(from: Position, to: Position, dir: Dir) -> (f32, f32) {
 /// Build the enemy behavior tree. Priority (Selector) order, highest first:
 ///   1. Dead? do nothing.
 ///   2. Flee when badly hurt.
-///   3. Attack when in range (aim, settle, fire; else close in).
-///   4. Chase when the player is visible.
-///   5. Patrol otherwise.
+///   3. Retreat to recharge when ammo is low.
+///   4. Attack when in range (aim, settle, fire; else close in).
+///   5. Chase when the player is visible.
+///   6. Patrol otherwise.
 ///
 /// The tree is rebuilt each tick (cheap: a handful of enum nodes) for clarity.
 fn build<'a>() -> Node<Brain<'a>> {
@@ -466,21 +541,29 @@ fn build<'a>() -> Node<Brain<'a>> {
             action(|_b: &mut Brain| Status::Success),
         ]),
         // 2. Flee when badly damaged and the player is still a threat.
+        // Takes priority over the ammo-based retreat below: survival first.
         sequence(vec![
             condition(|b: &mut Brain| b.me.damage >= ENEMY_FLEE_DAMAGE && b.player_alive()),
             action(act_flee),
         ]),
-        // 3. Attack when the player is alive and within attack range.
+        // 3. Low on shells: back off and hold fire until recharged.
+        sequence(vec![
+            condition(|b: &mut Brain| {
+                b.player_alive() && b.ai.wants_retreat(b.me.shells_ammo)
+            }),
+            action(act_retreat),
+        ]),
+        // 4. Attack when the player is alive and within attack range.
         sequence(vec![
             condition(|b: &mut Brain| b.player_alive() && b.dist_to_player() <= ENEMY_ATTACK_RANGE),
             action(act_attack),
         ]),
-        // 4. Chase when the player is alive and within view range.
+        // 5. Chase when the player is alive and within view range.
         sequence(vec![
             condition(|b: &mut Brain| b.player_alive() && b.dist_to_player() <= ENEMY_VIEW_RANGE),
             action(act_chase),
         ]),
-        // 5. Fallback: patrol.
+        // 6. Fallback: patrol.
         action(act_patrol),
     ])
 }
@@ -498,6 +581,27 @@ fn act_flee(b: &mut Brain) -> Status {
     let dir = b.steer(away_point);
     b.intent.move_dir = Some(dir);
     b.reset_aim();
+    Status::Success
+}
+
+/// Back off to recharge ammo. Like `act_flee`, but only until clear of
+/// ENEMY_RETREAT_RANGE (breathing room outside attack range) rather than
+/// running all the way off - once there, it holds position, faces the
+/// player, and just waits out the recharge instead of camping the map edge.
+/// Never fires: `b.intent.fire` starts false each frame and this leaf
+/// doesn't set it.
+fn act_retreat(b: &mut Brain) -> Status {
+    b.reset_aim();
+    if b.dist_to_player() >= ENEMY_RETREAT_RANGE {
+        b.intent.face = Some(Dir::toward(b.me.position, b.player.position));
+        return Status::Success;
+    }
+    let away_point = Position::new(
+        2.0 * b.me.position.x - b.player.position.x,
+        2.0 * b.me.position.y - b.player.position.y,
+    );
+    let dir = b.steer(away_point);
+    b.intent.move_dir = Some(dir);
     Status::Success
 }
 
@@ -521,7 +625,9 @@ fn act_attack(b: &mut Brain) -> Status {
             // Whether it fires or holds, this firing opportunity is spent -
             // otherwise a held shot would just re-roll every frame at ~60Hz
             // and fire almost immediately anyway, defeating the hold chance.
-            b.ai.fire_timer = ENEMY_FIRE_INTERVAL;
+            // The interval itself scales with ammo: fuller magazine, faster
+            // follow-up shot (see Brain::fire_interval).
+            b.ai.fire_timer = b.fire_interval();
             if !hold_fire {
                 b.intent.fire = true;
                 b.intent.fire_aim_offset = b.roll_misfire();

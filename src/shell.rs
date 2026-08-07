@@ -50,10 +50,13 @@ impl ShellState {
     }
 }
 
-/// Who fired a shell, so collision can charge the right side's damage and a
-/// shell can never hit the very tank that fired it. `Enemy` carries that
-/// enemy's index into `Game::enemies`, which is stable for the round (the
-/// list is only rebuilt on restart).
+/// Who fired a shell, so collision can charge the right side's damage.
+/// (Physics collision groups - see `physics::owner_group` - are what
+/// actually stop a shell from hitting the tank that fired it; `Owner` here
+/// is purely for damage/kill attribution.) `Enemy` carries that enemy's
+/// index into `Game::enemies`, which is stable for the round (the list is
+/// only rebuilt on restart) - the same index used to derive that tank's
+/// collision-group slot (`Game::enemy_owner_slot`).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Owner {
     Player,
@@ -104,10 +107,11 @@ impl Shell {
         let dir = Vector2::new(rot.sin(), -rot.cos());
         // Start at the turret/barrel tip, not the tank's own center - see
         // TANK_MUZZLE_FORWARD_OFFSET for how that distance was measured from
-        // the sprite sheet. (Self-hits are prevented separately, by the owner
-        // exclusion in Game::update - not by this offset - so this is free to
-        // match the actual sprite art rather than needing to clear the tank's
-        // hit sensor.)
+        // the sprite sheet. (Self-hits are prevented separately, by physics
+        // collision groups excluding the shooter's own hit sensor - see
+        // `physics::Physics::spawn_shell` - not by this offset, so this is
+        // free to match the actual sprite art rather than needing to clear
+        // the tank's hit sensor.)
         let muzzle = TANK_MUZZLE_FORWARD_OFFSET * tank.scale;
         Shell {
             state: ShellState::Fire0,

@@ -18,6 +18,14 @@ pub const TANK_HULL_FRACTION: f32 = 0.7;
 // row 6), all horizontally centered on the tile - averaging to row 3.6, i.e.
 // 32/2 - 3.6 = 12.4px above center. See `Shell::spawn`.
 pub const TANK_MUZZLE_FORWARD_OFFSET: f32 = 12.5;
+// Draw-time rotation pivot: rather than spinning the sprite around its exact
+// geometric center, the pivot sits this fraction of the sprite's width back
+// toward the rear of the hull (away from the barrel) - see
+// `tank::draw_pivot`. Purely cosmetic (draw calls only, see `draw_tank`/
+// `draw_tank_shadow`) - `Tank::position` itself is still the physics body's
+// real center and everything gameplay-relevant (collision, aim, track
+// heading) keeps using it unchanged.
+pub const TANK_PIVOT_REAR_FRACTION: f32 = 0.03;
 
 // shells.png is a 224x96 sheet: seven 32x32 frames (col, see ShellState)
 // indexed across three row-variants (see SHELL_VARIANTS / Tank::shell_variant)
@@ -143,7 +151,13 @@ pub const DAMAGE_SPEED_CURVE: f32 = 2.2;
 // pushes velocity away from wherever the tank is trying to go, which reads
 // as "slow down and correct," so it fades out via the (weak) decel rate
 // instead of a separate hand-decayed field.
-pub const TANK_ACCEL_FORCE: f32 = 1800.0; // reaches TANK_SPEED in well under a second
+// TANK_ACCEL_FORCE is deliberately kept close to TANK_TURN_GRIP_FORCE below
+// (rather than far weaker, as an earlier tuning had it) so a 90-degree turn
+// doesn't stall: the old axis's speed is scrubbed off by grip at roughly the
+// same rate the new axis's speed builds back up, so total speed dips only
+// briefly through a corner instead of bottoming out near zero for half a
+// second while the new axis crawls back up to speed.
+pub const TANK_ACCEL_FORCE: f32 = 4200.0; // reaches TANK_SPEED in well under a second
 pub const TANK_DECEL_FORCE: f32 = 600.0; // noticeably slower to shed speed than to gain it
 
 // Turning grip: how hard a tank's tracks cancel velocity *perpendicular* to
@@ -156,8 +170,22 @@ pub const TANK_DECEL_FORCE: f32 = 600.0; // noticeably slower to shed speed than
 // accelerates and tops out slower. Only applies while a direction is
 // actively held (Intent::move_dir is Some) - a coasting or stationary tank
 // has no commanded axis to grip against, so residual/knockback velocity
-// there still fades via the (weak) TANK_DECEL_FORCE chase above.
-pub const TANK_TURN_GRIP_FORCE: f32 = 6000.0;
+// there still fades via the (weak) TANK_DECEL_FORCE chase above. Kept only
+// moderately above TANK_ACCEL_FORCE now (not several times stronger) so a
+// turn still snaps rather than sliding through the curve, but without
+// starving the new axis of speed while the old one is scrubbed away - see
+// TANK_ACCEL_FORCE's comment.
+pub const TANK_TURN_GRIP_FORCE: f32 = 4800.0;
+
+// Purely cosmetic hull-turn animation: `Tank::rotation` itself still snaps
+// instantly (physics/aim/track-heading math all key off it, and none of that
+// should lag a frame behind input - see Game::drive_tank, Shell::spawn).
+// `Tank::visual_rotation` is a second angle that only the sprite draw calls
+// read (draw_tank/draw_tank_shadow); it chases `rotation` at this many
+// degrees per second (shortest way round) instead of snapping with it, so a
+// 90-degree corner or a 180-degree reversal visibly swings the hull over a
+// few frames rather than popping to the new facing on the spot.
+pub const TANK_VISUAL_TURN_SPEED_DEG: f32 = 720.0;
 
 // Shell ammo: the player holds up to MAX_SHELLS and recharges one shell every
 // SHELL_RECHARGE_SECONDS while below the cap.
@@ -189,6 +217,23 @@ pub const ENEMY_DAMAGE_MIN: f32 = 5.0; // enemy shell damage lower bound (weaker
 pub const ENEMY_DAMAGE_MAX: f32 = 15.0; // enemy shell damage upper bound
 pub const ENEMY_FLEE_DAMAGE: f32 = 70.0; // retreat once this hurt
 pub const ENEMY_RETARGET_SECONDS: f32 = 3.0; // how often patrol picks a new point
+
+// Ammo-aware aggression: an enemy that runs low on shells breaks off and backs
+// away (without firing) until it has recharged enough to rejoin the fight,
+// rather than plinking the player empty. The two thresholds are deliberately
+// apart (not a single cutoff) so the enemy doesn't flicker between
+// retreating and attacking every frame it hovers near one value - see
+// Ai::wants_retreat in ai.rs.
+pub const ENEMY_AMMO_LOW: i32 = 2; // retreat once ammo drops to/below this
+pub const ENEMY_AMMO_RESUME: i32 = 5; // must recharge back up to this to re-engage
+// While retreating, back off only to breathing room outside attack range,
+// not all the way to the map edge like the health-based flee does.
+pub const ENEMY_RETREAT_RANGE: f32 = ENEMY_ATTACK_RANGE * 1.3;
+// The fuller an enemy's magazine, the faster it re-fires: at MAX_SHELLS it
+// uses this interval instead of the baseline ENEMY_FIRE_INTERVAL; ammo
+// between ENEMY_AMMO_LOW and MAX_SHELLS linearly interpolates between the
+// two - see Brain::fire_interval in ai.rs.
+pub const ENEMY_FIRE_INTERVAL_AGGRESSIVE: f32 = 1.4;
 
 // Friendly-fire avoidance: shells can hit any tank except the one that fired
 // them (see Game::update), so an enemy lined up on the player with another
@@ -225,6 +270,14 @@ pub const AVOID_MIN_SPEED: f32 = 10.0; // skip prediction when moving slower tha
 // jitter that occurs near 45-degree diagonals.
 pub const AI_DIR_HOLD_SECONDS: f32 = 0.35;
 pub const AI_DIR_SWITCH_MARGIN_PX: f32 = 20.0;
+
+// AI pathfinding (see pathfind.rs): a coarse grid A* layer so an enemy
+// routes around static obstacles (obstacle.rs) instead of just walking into
+// one and getting physically stuck by its collider - `Ai::steer` swaps its
+// naive straight-line heading for the grid's first step toward the target.
+// Rebuilt fresh every frame in Game::update (obstacles are few and the grid
+// is small, so this is cheap enough not to need caching/invalidation).
+pub const PATHFIND_CELL_SIZE: f32 = 48.0; // px per grid cell
 
 // Player shell damage bounds (unchanged behaviour, now named for symmetry).
 pub const PLAYER_DAMAGE_MIN: f32 = 10.0;
@@ -355,6 +408,39 @@ pub const PHYSICS_FIXED_DT: f32 = 1.0 / 60.0;
 // death").
 pub const PHYSICS_MAX_CATCHUP_SECONDS: f32 = 0.25;
 
+// Obstacles: static battlefield terrain (see obstacle.rs), placed once per
+// round alongside enemies. obstacles.png is a 96x64 sheet (3 cols x 2 rows
+// of 32x32): row 0 col 0 is a single indestructible rock tile
+// (ObstacleKind::Rock); row 1 cols 0..2 are a destructible crate's health
+// stages (ObstacleKind::Crate) from pristine down to about to break - see
+// Obstacle::col, which picks the frame from current/max health, the same
+// pattern damage.png's frames use for a tank.
+pub const OBSTACLE_TEXTURE_SIZE: f32 = 32.0;
+pub const OBSTACLE_SCALE: f32 = 2.0;
+pub const OBSTACLE_ROCK_ROW: i32 = 0;
+pub const OBSTACLE_CRATE_ROW: i32 = 1;
+pub const OBSTACLE_CRATE_STAGES: i32 = 3;
+pub const OBSTACLE_CRATE_HEALTH: f32 = 60.0; // hp a crate absorbs before breaking
+// Collision footprint: slightly smaller than the full sprite tile, same
+// reasoning as TANK_HULL_FRACTION - lets a shell's small hit sensor
+// (SHELL_HIT_HALF_EXTENT) register a clean hit near the sprite's visible
+// edge instead of stopping short at the tile's transparent padding.
+pub const OBSTACLE_HULL_FRACTION: f32 = 0.75;
+// Number of obstacles placed each round is randomized within this range,
+// the same pattern as ENEMY_COUNT_MIN/MAX.
+pub const OBSTACLE_COUNT_MIN: usize = 3;
+pub const OBSTACLE_COUNT_MAX: usize = 7;
+// Fraction of obstacle spawns that roll as a Crate rather than a Rock.
+pub const OBSTACLE_CRATE_CHANCE: f64 = 0.5;
+// Minimum clearance (px) an obstacle spawn must keep from the player's
+// start position, every enemy's start position, and every other already
+// -placed obstacle - same idea as the enemy_clear/clear checks in
+// Game::init, just reused for a third entity type.
+pub const OBSTACLE_CLEAR: f32 = 90.0;
+
+pub const OBSTACLE_SHADOW_OFFSET: f32 = 3.0; // px, same grounded distance as TANK_SHADOW_OFFSET
+pub const OBSTACLE_SHADOW_OPACITY: f32 = 0.35;
+
 // HUD: the SHELLS/HP numbers (Game::render) shift color as that resource
 // drops, as a fraction of its max (MAX_SHELLS / MAX_DAMAGE respectively) -
 // default gray above HUD_WARN_THRESHOLD, orange between the two, red below
@@ -367,8 +453,11 @@ pub mod ai;
 pub mod bt;
 pub mod damage_stage;
 pub mod game;
+pub mod obstacle;
+pub mod pathfind;
 pub mod physics;
 pub mod shell;
 pub mod shockwave;
+pub mod simulation;
 pub mod tank;
 pub mod track;

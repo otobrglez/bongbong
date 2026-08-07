@@ -3,8 +3,9 @@ use sola_raylib::prelude::*;
 
 use crate::{
     DAMAGE_SPEED_CURVE, DAMAGE_SPEED_FLOOR, DEAD_TINT_FACTOR, MAX_DAMAGE, MAX_SHELLS, Position,
-    SHADOW_DIR_X, SHADOW_DIR_Y, TANK_HULL_FRACTION, TANK_SHADOW_OFFSET, TANK_SHADOW_OPACITY,
-    TANK_SPEED, TANK_TEXTURE_SIZE, WRECK_BURN_SECONDS,
+    SHADOW_DIR_X, SHADOW_DIR_Y, TANK_HULL_FRACTION, TANK_PIVOT_REAR_FRACTION, TANK_SHADOW_OFFSET,
+    TANK_SHADOW_OPACITY, TANK_SPEED, TANK_TEXTURE_SIZE, TANK_VISUAL_TURN_SPEED_DEG,
+    WRECK_BURN_SECONDS,
 };
 
 /// The four movement/facing directions. rotation 0 == up, clockwise positive,
@@ -69,8 +70,17 @@ pub struct Tank {
     /// physics transform, synced once per frame after the physics world
     /// steps (see `Game::update`) - nothing else should write this by hand.
     pub position: Position,
-    /// Facing angle in degrees.
+    /// Facing angle in degrees. Snaps instantly on a direction change -
+    /// physics (`Game::drive_tank`), aiming (`Shell::spawn`) and track
+    /// heading all key off this and none of it should lag input. For the
+    /// on-screen hull animation, see `visual_rotation` instead.
     pub rotation: f32,
+    /// Sprite-only facing angle in degrees, eased toward `rotation` each
+    /// frame (see `ease_visual_rotation`/`TANK_VISUAL_TURN_SPEED_DEG`)
+    /// instead of snapping with it, so a turn visibly swings the hull over a
+    /// few frames. Read only by `draw_tank`/`draw_tank_shadow` - nothing
+    /// gameplay-relevant should ever key off this.
+    pub visual_rotation: f32,
     /// How much to scale the 32x32 sprite when drawn.
     pub scale: f32,
     /// Movement speed in pixels per second (player and enemies differ).
@@ -123,6 +133,13 @@ pub struct Tank {
     /// the tank's full sprite rather than its solid hull, used only to
     /// detect when a shell hits it.
     pub hit_sensor: Option<ColliderHandle>,
+    /// This tank's collision-group slot (see `physics::owner_group`), set
+    /// once at spawn (`Game::init`) - 0 for the player, `n` for the nth
+    /// enemy spawned. Reused whenever this tank fires (see `Game::update`)
+    /// to rebuild that same group for its shell's shooter-exclusion filter
+    /// and to tag the shell's `shell::Owner`, without needing this tank's
+    /// position in any spawn-order list.
+    pub owner_slot: usize,
 }
 
 impl Default for Tank {
@@ -134,6 +151,7 @@ impl Default for Tank {
             damage_variant: 0,
             position: Position::default(),
             rotation: 0.0,
+            visual_rotation: 0.0,
             scale: 2.0, // 3.0,
             speed: TANK_SPEED,
             damage: 0.0,
@@ -150,6 +168,7 @@ impl Default for Tank {
             velocity: Vector2::new(0.0, 0.0),
             body: None,
             hit_sensor: None,
+            owner_slot: 0,
         }
     }
 }
@@ -252,6 +271,35 @@ impl Tank {
             }
         }
     }
+
+    /// Chase `visual_rotation` toward `rotation` at TANK_VISUAL_TURN_SPEED_DEG
+    /// degrees/second, the short way round, so the sprite visibly swings into
+    /// a turn instead of popping to the new facing the instant `rotation`
+    /// snaps (see the fields' own doc comments). Called once per frame for
+    /// every tank from `Game::drive_tank`, right after `control` above sets
+    /// this frame's `rotation`.
+    pub fn ease_visual_rotation(&mut self, dt: f32) {
+        let mut diff = (self.rotation - self.visual_rotation) % 360.0;
+        if diff > 180.0 {
+            diff -= 360.0;
+        } else if diff < -180.0 {
+            diff += 360.0;
+        }
+        let max_step = TANK_VISUAL_TURN_SPEED_DEG * dt;
+        self.visual_rotation = (self.visual_rotation + diff.clamp(-max_step, max_step)) % 360.0;
+    }
+}
+
+/// Rotation pivot for a tank sprite of the given on-screen `size`: not the
+/// sprite's exact geometric center, but shifted TANK_PIVOT_REAR_FRACTION of
+/// its width back toward the rear of the hull (the sprite's "down" edge in
+/// its unrotated, facing-up orientation). `draw_texture_pro` rotates around
+/// whichever point of the sprite this names while keeping that point pinned
+/// to `tank.position`, so the visible hull ends up drawn shifted forward of
+/// `position` by the same amount, at every facing - purely a draw-time
+/// choice; nothing gameplay-relevant reads this.
+fn draw_pivot(size: f32) -> Vector2 {
+    Vector2::new(size / 2.0, size / 2.0 + size * TANK_PIVOT_REAR_FRACTION)
 }
 
 /// Source rectangle for the tank at (row, col) inside the atlas.
@@ -269,12 +317,12 @@ pub fn draw_tank(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank) {
     let src = source_rec(tank.row, tank.col);
     let size = tank.size();
 
-    // dest is placed at the tank's position; origin is half the size so the
-    // sprite is centered on `position` and rotates around its own middle.
+    // dest is placed at the tank's position; origin is the rear-shifted
+    // pivot (see `draw_pivot`), not the sprite's exact middle.
     let dest = Rectangle::new(tank.position.x, tank.position.y, size, size);
-    let origin = Vector2::new(size / 2.0, size / 2.0);
+    let origin = draw_pivot(size);
 
-    d.draw_texture_pro(texture, src, dest, origin, tank.rotation, Color::WHITE);
+    d.draw_texture_pro(texture, src, dest, origin, tank.visual_rotation, Color::WHITE);
 
     // A dead (burnt-out) tank is washed toward gray instead of showing a
     // separate dead overlay sprite. A plain multiply tint only dims
@@ -286,7 +334,7 @@ pub fn draw_tank(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank) {
     if tank.is_dead() {
         let alpha = (255.0 * DEAD_TINT_FACTOR) as u8;
         let wash = Color::new(120, 120, 120, alpha);
-        d.draw_texture_pro(texture, src, dest, origin, tank.rotation, wash);
+        d.draw_texture_pro(texture, src, dest, origin, tank.visual_rotation, wash);
     }
 }
 
@@ -305,8 +353,8 @@ pub fn draw_tank_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tan
         size,
         size,
     );
-    let origin = Vector2::new(size / 2.0, size / 2.0);
+    let origin = draw_pivot(size);
     let shadow = Color::new(0, 0, 0, (255.0 * TANK_SHADOW_OPACITY) as u8);
 
-    d.draw_texture_pro(texture, src, dest, origin, tank.rotation, shadow);
+    d.draw_texture_pro(texture, src, dest, origin, tank.visual_rotation, shadow);
 }
