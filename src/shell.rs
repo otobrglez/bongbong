@@ -2,7 +2,10 @@ use rapier2d::prelude::RigidBodyHandle;
 use sola_raylib::prelude::*;
 
 use crate::tank::Tank;
-use crate::{Position, SHELL_SCALE, SHELL_SPEED, SHELL_TEXTURE_SIZE, TANK_TEXTURE_SIZE};
+use crate::{
+    Position, SHADOW_DIR_X, SHADOW_DIR_Y, SHELL_SCALE, SHELL_SHADOW_OPACITY, SHELL_SPEED,
+    SHELL_TEXTURE_SIZE, TANK_MUZZLE_FORWARD_OFFSET,
+};
 
 /// A shell's lifecycle. Each variant maps to a column in shells.png (see
 /// SHELL_VARIANTS for the row dimension) and carries its own on-screen
@@ -80,6 +83,14 @@ pub struct Shell {
     /// against a tank's `hit_sensor` instead of a hand-rolled point-in-square
     /// check. Removed from the physics world when the shell is dropped.
     pub body: Option<RigidBodyHandle>,
+    /// This shell's drop-shadow distance (px), rolled once at fire time from
+    /// `SHELL_SHADOW_OFFSET_MIN..MAX` (see `Game::update`, right after
+    /// `Shell::spawn`) and fixed for its whole flight - different shells land
+    /// on different rolls, so they read as flying at different heights
+    /// instead of every shot looking identical. `0.0` here (like `body:
+    /// None` above) is a placeholder `spawn` itself never uses, since it has
+    /// no `rng` to roll from; the real value is set right after construction.
+    pub shadow_offset: f32,
 }
 
 impl Shell {
@@ -91,11 +102,13 @@ impl Shell {
         let rot = (tank.rotation + aim_offset).to_radians();
         // rotation 0 == facing up (-Y); +90 == right, etc. matches the tank movement.
         let dir = Vector2::new(rot.sin(), -rot.cos());
-        // Start a little ahead of the tank center so the shell exits the barrel.
-        // (Right on the tank's own hit-box boundary, in fact - see the owner
-        // exclusion in Game::update, which is what keeps a tank from instantly
-        // shooting itself.)
-        let muzzle = TANK_TEXTURE_SIZE * tank.scale * 0.5;
+        // Start at the turret/barrel tip, not the tank's own center - see
+        // TANK_MUZZLE_FORWARD_OFFSET for how that distance was measured from
+        // the sprite sheet. (Self-hits are prevented separately, by the owner
+        // exclusion in Game::update - not by this offset - so this is free to
+        // match the actual sprite art rather than needing to clear the tank's
+        // hit sensor.)
+        let muzzle = TANK_MUZZLE_FORWARD_OFFSET * tank.scale;
         Shell {
             state: ShellState::Fire0,
             position: Position::new(
@@ -109,6 +122,7 @@ impl Shell {
             owner,
             variant: tank.shell_variant,
             body: None,
+            shadow_offset: 0.0,
         }
     }
 
@@ -176,4 +190,28 @@ pub fn draw_shell(d: &mut impl RaylibDraw, texture: &Texture2D, shell: &Shell) {
     let origin = Vector2::new(size / 2.0, size / 2.0);
 
     d.draw_texture_pro(texture, src, dest, origin, shell.rotation, Color::WHITE);
+}
+
+/// Draw this shell's drop shadow: same sprite/rotation, offset further than a
+/// tank's shadow so the gap between shell and shadow reads as height - see
+/// docs/sprite-shadows-design.md. The offset itself is `shell.shadow_offset`
+/// (rolled once per shell at fire time, see the field doc on `Shell`), not a
+/// flat constant, so different shells appear to fly at different heights.
+/// Caller (`Game::render`) only calls this while `shell.state ==
+/// ShellState::Flying`; the fire/impact frames are stationary blast sprites,
+/// not airborne objects, so they get no shadow.
+pub fn draw_shell_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, shell: &Shell) {
+    let src = source_rec(shell.variant, shell.state.col());
+    let size = SHELL_TEXTURE_SIZE * SHELL_SCALE;
+
+    let dest = Rectangle::new(
+        shell.position.x + SHADOW_DIR_X * shell.shadow_offset,
+        shell.position.y + SHADOW_DIR_Y * shell.shadow_offset,
+        size,
+        size,
+    );
+    let origin = Vector2::new(size / 2.0, size / 2.0);
+    let shadow = Color::new(0, 0, 0, (255.0 * SHELL_SHADOW_OPACITY) as u8);
+
+    d.draw_texture_pro(texture, src, dest, origin, shell.rotation, shadow);
 }

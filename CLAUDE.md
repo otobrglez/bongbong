@@ -7,6 +7,7 @@ Bongbong is a tank shooter game. Main purpose of this game is to be a fun, fast 
 - This application is written in Rust.
 - The main library it uses is Raylib (written in C) but not directly it uses sola-raylib wrapper/bindings designed to work well with Rust. Source code for raylib in C is available at `../raylib`.
 - Game uses sola-raylib bindings for Raylib. Source code for sola-raylib is available at `../sola-raylib`. When needed you can always consult this source code and its wide collection of examples.
+- The game uses rapier physics game engine written in Rust. The source code for engine is available at `../rapier`. When working on physics consider consolidating the source code.
 - Dependencies and environment is isolated with the help of devenv (Nix) so there is `devenv.nix` and `.envrc` that has some credentials and it defines Rust versions etc.
 - For faster development loop developer runs `cargo watch -x "run"` that watches for source changes, compiles project and boots the application. This gives developer better overview.
 

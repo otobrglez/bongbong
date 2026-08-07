@@ -65,11 +65,12 @@ impl DamageStage {
     }
 }
 
-/// Source rectangle for a damage overlay frame (indexed by column) in damage.png.
-fn source_rec(col: i32) -> Rectangle {
+/// Source rectangle for a damage overlay frame (col, row) in damage.png,
+/// where row is the tank's rolled damage_variant (0..DAMAGE_VARIANTS).
+fn source_rec(col: i32, row: i32) -> Rectangle {
     Rectangle::new(
         col as f32 * DAMAGE_TEXTURE_SIZE,
-        0.0,
+        row as f32 * DAMAGE_TEXTURE_SIZE,
         DAMAGE_TEXTURE_SIZE,
         DAMAGE_TEXTURE_SIZE,
     )
@@ -80,7 +81,12 @@ fn source_rec(col: i32) -> Rectangle {
 /// animates by cycling its stage's frames over `time`, with a per-tank phase
 /// offset so multiple burning tanks don't animate in lockstep.
 pub fn draw_damage(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank, time: f32) {
-    // A burnt-out wreck stops animating and shows the static charred hulk.
+    // A burnt-out wreck stops animating and locks onto the static DEAD_FRAME
+    // (charred hulk, no fire/smoke) instead of a fire/smoke stage frame -
+    // freezing on one of those read as a stuck render glitch (a static flame
+    // blob that could visually spill onto whatever's touching the wreck).
+    // Layered on top of the tank sprite's own DEAD_TINT_FACTOR gray wash
+    // (see tank::draw_tank) so deadness reads clearly, not just "a bit darker."
     let col = if tank.is_dead() {
         DEAD_FRAME
     } else {
@@ -89,7 +95,7 @@ pub fn draw_damage(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank, ti
         };
         stage.frame_at(time + tank.anim_phase())
     };
-    let src = source_rec(col);
+    let src = source_rec(col, tank.damage_variant);
     let size = tank.size();
     let dest = Rectangle::new(tank.position.x, tank.position.y, size, size);
     let origin = Vector2::new(size / 2.0, size / 2.0);

@@ -2,7 +2,8 @@ use rapier2d::prelude::{ColliderHandle, RigidBodyHandle};
 use sola_raylib::prelude::*;
 
 use crate::{
-    DAMAGE_SPEED_CURVE, DAMAGE_SPEED_FLOOR, MAX_DAMAGE, MAX_SHELLS, Position, TANK_HULL_FRACTION,
+    DAMAGE_SPEED_CURVE, DAMAGE_SPEED_FLOOR, DEAD_TINT_FACTOR, MAX_DAMAGE, MAX_SHELLS, Position,
+    SHADOW_DIR_X, SHADOW_DIR_Y, TANK_HULL_FRACTION, TANK_SHADOW_OFFSET, TANK_SHADOW_OPACITY,
     TANK_SPEED, TANK_TEXTURE_SIZE, WRECK_BURN_SECONDS,
 };
 
@@ -59,6 +60,11 @@ pub struct Tank {
     /// Rolled once at spawn (see Game::init) and fixed for the tank's whole
     /// life, so all of its shots read as visually consistent.
     pub shell_variant: i32,
+    /// Row in damage.png this tank's damage overlay is drawn from
+    /// (0..DAMAGE_VARIANTS). Rolled once at spawn (see Game::init) and fixed
+    /// for the tank's whole life, so its damage sequence reads as one
+    /// consistent flavour rather than switching palettes between stages.
+    pub damage_variant: i32,
     /// Center position on screen (pixels). A read-back mirror of `body`'s
     /// physics transform, synced once per frame after the physics world
     /// steps (see `Game::update`) - nothing else should write this by hand.
@@ -125,6 +131,7 @@ impl Default for Tank {
             row: 0,
             col: 0,
             shell_variant: 0,
+            damage_variant: 0,
             position: Position::default(),
             rotation: 0.0,
             scale: 2.0, // 3.0,
@@ -268,4 +275,38 @@ pub fn draw_tank(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank) {
     let origin = Vector2::new(size / 2.0, size / 2.0);
 
     d.draw_texture_pro(texture, src, dest, origin, tank.rotation, Color::WHITE);
+
+    // A dead (burnt-out) tank is washed toward gray instead of showing a
+    // separate dead overlay sprite. A plain multiply tint only dims
+    // brightness (hue/saturation survive, so it barely reads as "dead" at
+    // pixel-art scale) - drawing the same sprite again with a translucent
+    // flat-gray tint blends it toward true gray instead, and reusing the
+    // same texture/src means the wash is automatically masked to the tank's
+    // own silhouette (transparent padding stays transparent).
+    if tank.is_dead() {
+        let alpha = (255.0 * DEAD_TINT_FACTOR) as u8;
+        let wash = Color::new(120, 120, 120, alpha);
+        d.draw_texture_pro(texture, src, dest, origin, tank.rotation, wash);
+    }
+}
+
+/// Draw this tank's drop shadow: the same sprite, same rotation, offset
+/// toward a fixed screen-space direction and tinted flat black - see
+/// docs/sprite-shadows-design.md. Must be called *before* `draw_tank` so the
+/// real sprite draws on top of its own shadow. No wreck/dead special-casing
+/// needed - a burnt-out hulk is still a solid object sitting on the ground.
+pub fn draw_tank_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank) {
+    let src = source_rec(tank.row, tank.col);
+    let size = tank.size();
+
+    let dest = Rectangle::new(
+        tank.position.x + SHADOW_DIR_X * TANK_SHADOW_OFFSET,
+        tank.position.y + SHADOW_DIR_Y * TANK_SHADOW_OFFSET,
+        size,
+        size,
+    );
+    let origin = Vector2::new(size / 2.0, size / 2.0);
+    let shadow = Color::new(0, 0, 0, (255.0 * TANK_SHADOW_OPACITY) as u8);
+
+    d.draw_texture_pro(texture, src, dest, origin, tank.rotation, shadow);
 }

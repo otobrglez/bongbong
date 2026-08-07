@@ -9,6 +9,15 @@ pub const TANK_TEXTURE_SIZE: f32 = 32.0;
 // padding). Collisions use this fraction of the sprite so tanks can nudge close
 // together instead of stopping a padding-width apart.
 pub const TANK_HULL_FRACTION: f32 = 0.7;
+// How far forward (tile px, toward wherever the hull currently faces) a
+// shell spawns from the tank's center - i.e. where the turret/barrel tip
+// actually sits, not the tank's own center or the edge of its 32x32 tile.
+// Measured from the sprite sheet itself: for each of the 8 tank hulls (row 0,
+// tanks_candy.png), the topmost opaque pixel in the unrotated (facing "up")
+// orientation sits at tile-row ~3-4 (one twin-spike hull tops out later, at
+// row 6), all horizontally centered on the tile - averaging to row 3.6, i.e.
+// 32/2 - 3.6 = 12.4px above center. See `Shell::spawn`.
+pub const TANK_MUZZLE_FORWARD_OFFSET: f32 = 12.5;
 
 // shells.png is a 224x96 sheet: seven 32x32 frames (col, see ShellState)
 // indexed across three row-variants (see SHELL_VARIANTS / Tank::shell_variant)
@@ -28,14 +37,54 @@ pub const SHELL_SCALE: f32 = 2.0;
 // the shell's box overlap the tank's box".
 pub const SHELL_HIT_HALF_EXTENT: f32 = 3.0;
 
-// damage.png is a 448x32 overlay sheet: a single row of fourteen 32x32 frames
-// indexed by column, drawn on top of a tank to show escalating damage. The
+// Drop shadows: a second copy of a tank/shell sprite drawn first, tinted flat
+// black (see Game::render / Tank::draw_tank_shadow / shell::draw_shell_shadow),
+// offset toward a fixed screen-space direction so it reads as a rotated
+// silhouette of that specific sprite sitting slightly behind/below it, not a
+// generic blob. See docs/sprite-shadows-design.md. Toggled at runtime by the
+// L key and at startup by `--no-shadows` (see Game::shadows_enabled).
+// Shared offset direction (down-right, a common top-down-arcade convention) -
+// only the *distance* differs per entity type below.
+pub const SHADOW_DIR_X: f32 = 0.6;
+pub const SHADOW_DIR_Y: f32 = 0.8;
+
+pub const TANK_SHADOW_OFFSET: f32 = 3.0; // px - grounded, stays tight to the hull
+pub const TANK_SHADOW_OPACITY: f32 = 0.35;
+
+// Bigger than the tank offset on purpose: the separation between a shell and
+// its own shadow is what reads as "airborne" with no real z-axis. Only drawn
+// while the shell is actually ShellState::Flying (see Game::render) - the
+// fire/impact frames are stationary blast sprites, not airborne objects.
+// Rolled once per shell at fire time within this range (Shell::shadow_offset,
+// set in Game::update right after Shell::spawn) rather than a flat distance,
+// so different shells read as flying at different heights instead of every
+// shot looking identical.
+pub const SHELL_SHADOW_OFFSET_MIN: f32 = 9.0; // px
+pub const SHELL_SHADOW_OFFSET_MAX: f32 = 20.0; // px
+pub const SHELL_SHADOW_OPACITY: f32 = 0.30;
+
+// damage.png is a 448x160 overlay sheet: fourteen 32x32 frames per row
+// (indexed by column), drawn on top of a tank to show escalating damage. The
 // frames are grouped into animated stages (see DamageStage):
 //   0 dusty | 1 gray | 2-3 small-smoke | 4-5 more-smoke | 6-7 small-fire
 //   8-9 large-fire | 10-12 wrecked (burning) | 13 dead (burnt-out hulk)
 pub const DAMAGE_TEXTURE_SIZE: f32 = 32.0;
-// Damage overlay column for the burnt-out dead hulk (no fire/smoke).
+// Damage overlay column for the burnt-out dead hulk (no fire/smoke) - the
+// static frame draw_damage locks onto once Tank::is_dead, layered on top of
+// the sprite's own DEAD_TINT_FACTOR gray wash so a dead tank reads clearly
+// even at a glance, not just "a bit darker."
 pub const DEAD_FRAME: i32 = 13;
+// Number of row-variants in damage.png (see SHELL_VARIANTS for the same
+// pattern). Each tank rolls one at spawn (Tank::damage_variant) and keeps it
+// for its whole life, so a tank's whole damage sequence reads as one
+// consistent "flavour" instead of jumping between palettes frame to frame.
+pub const DAMAGE_VARIANTS: i32 = 5;
+// A dead (burnt-out) tank's own sprite is washed toward gray by this
+// fraction (0 = untouched, 1 = flat gray) - see tank::draw_tank, which blends
+// a translucent gray pass over the sprite rather than just dimming it, so it
+// visually reads as "out of the fight" even before the DEAD_FRAME overlay
+// (see draw_damage) is added on top.
+pub const DEAD_TINT_FACTOR: f32 = 0.6;
 
 // Number of enemy tanks is randomized within this range each round.
 pub const ENEMY_COUNT_MIN: usize = 3;
@@ -213,8 +262,8 @@ pub const TRACK_MAX_OPACITY: f32 = 0.21; // opacity of a fresh mark, before fadi
 // round, rather than randomizing per-mark - so a given tank's whole trail
 // reads as one coherent, tank-specific tread pattern (a wavier or straighter
 // "signature") instead of per-mark noise. See Game::lay_tracks.
-pub const TRACK_WOBBLE_AMP_MIN_DEG: f32 = 3.0;
-pub const TRACK_WOBBLE_AMP_MAX_DEG: f32 = 12.0;
+pub const TRACK_WOBBLE_AMP_MIN_DEG: f32 = 1.5;
+pub const TRACK_WOBBLE_AMP_MAX_DEG: f32 = 6.0;
 // Wavelength range: pixels of travel per full side-to-side wobble cycle.
 pub const TRACK_WOBBLE_WAVELENGTH_MIN: f32 = 40.0;
 pub const TRACK_WOBBLE_WAVELENGTH_MAX: f32 = 120.0;
@@ -280,8 +329,13 @@ pub const IMPACT_FLASH_WIDTH: f32 = 0.02; // thickness of the punched band, UV u
 pub const IMPACT_FLASH_STRENGTH: f32 = 0.025; // how hard the punch shoves the image, UV units
 // Half-extent (px) of the quad the effect is drawn into; see
 // MUZZLE_FLASH_QUAD_RADIUS for why this needs to comfortably contain the
-// punch's full reach plus its band width.
-pub const IMPACT_FLASH_QUAD_RADIUS: f32 = 70.0;
+// punch's full reach plus its band width. At the default 720px-tall window
+// that reach is (IMPACT_FLASH_SPEED * IMPACT_FLASH_DURATION +
+// IMPACT_FLASH_WIDTH) * 720 =~ 125px (the ripple shaders' "UV units" are
+// normalized by screen *height*, not width - see the aspect-correction in
+// impact.fs) - was previously set to 70, well short of that, which visibly
+// clipped the outer edge of the punch.
+pub const IMPACT_FLASH_QUAD_RADIUS: f32 = 130.0;
 
 // Physics world: rapier2d integration (see docs/physics-engine-design.md).
 // The battlefield boundary is 4 static wall colliders whose inner faces sit

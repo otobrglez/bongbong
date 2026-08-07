@@ -5,10 +5,55 @@ use bongbong::{
     MUZZLE_FLASH_DURATION, MUZZLE_FLASH_SPEED, MUZZLE_FLASH_STRENGTH, MUZZLE_FLASH_WIDTH,
     SHOCKWAVE_DURATION, SHOCKWAVE_SPEED, SHOCKWAVE_STRENGTH, SHOCKWAVE_WIDTH,
 };
+use clap::Parser;
 use sola_raylib::core::game_loop;
 
 static DEFAULT_SCREEN_WIDTH: i32 = 1280;
 static DEFAULT_SCREEN_HEIGHT: i32 = 720;
+
+/// Command-line flags for bongbong's native binary. All optional - with none
+/// given, behavior matches today's defaults exactly (random enemy count,
+/// 1280x720 window, shadows on).
+#[derive(Parser)]
+#[command(name = "bongbong", about = "A pixelated tank shooter")]
+struct Args {
+    /// Override the number of enemies spawned this round (default: random
+    /// between ENEMY_COUNT_MIN and ENEMY_COUNT_MAX, see lib.rs).
+    #[arg(short = 'e', long = "enemies")]
+    enemies: Option<usize>,
+
+    /// Override the window size, e.g. `--resolution 1920x1080` (default:
+    /// 1280x720).
+    #[arg(long = "resolution", value_parser = parse_resolution)]
+    resolution: Option<(i32, i32)>,
+
+    /// Disable tank/shell drop shadows (on by default). Can also be toggled
+    /// at runtime with the L key - see docs/sprite-shadows-design.md.
+    #[arg(long = "no-shadows")]
+    no_shadows: bool,
+}
+
+/// Parses a `WxH` string (e.g. `1920x1080`) into a `(width, height)` pair,
+/// validating both parts are positive integers.
+fn parse_resolution(s: &str) -> Result<(i32, i32), String> {
+    let (w, h) = s
+        .split_once('x')
+        .ok_or_else(|| format!("invalid resolution '{s}': expected format WxH, e.g. 1920x1080"))?;
+    let width: i32 = w
+        .trim()
+        .parse()
+        .map_err(|_| format!("invalid resolution '{s}': width '{w}' is not a valid integer"))?;
+    let height: i32 = h
+        .trim()
+        .parse()
+        .map_err(|_| format!("invalid resolution '{s}': height '{h}' is not a valid integer"))?;
+    if width <= 0 || height <= 0 {
+        return Err(format!(
+            "invalid resolution '{s}': width and height must be positive"
+        ));
+    }
+    Ok((width, height))
+}
 
 // raylib's PLATFORM_WEB build defaults to OpenGL ES2, which only accepts
 // GLSL ES 100 shaders - desktop's `#version 330` files won't compile there.
@@ -23,13 +68,18 @@ fn shader_path(name: &str) -> String {
 }
 
 fn main() {
+    let args = Args::parse();
+    let (screen_width, screen_height) = args
+        .resolution
+        .unwrap_or((DEFAULT_SCREEN_WIDTH, DEFAULT_SCREEN_HEIGHT));
+
     let (mut rl, thread) = sola_raylib::init()
-        .size(DEFAULT_SCREEN_WIDTH, DEFAULT_SCREEN_HEIGHT)
+        .size(screen_width, screen_height)
         .title("bongbong")
         .build();
 
     let tanks_texture = rl
-        .load_texture(&thread, "static/tanks.png")
+        .load_texture(&thread, "static/tanks_candy.png")
         .expect("failed loading tanks texture");
     let shells_texture = rl
         .load_texture(&thread, "static/shells.png")
@@ -45,8 +95,8 @@ fn main() {
         &mut rl,
         &thread,
         &shader_path("shockwave.fs"),
-        DEFAULT_SCREEN_WIDTH,
-        DEFAULT_SCREEN_HEIGHT,
+        screen_width,
+        screen_height,
         RippleTuning {
             speed: SHOCKWAVE_SPEED,
             width: SHOCKWAVE_WIDTH,
@@ -58,8 +108,8 @@ fn main() {
         &mut rl,
         &thread,
         &shader_path("muzzle_flash.fs"),
-        DEFAULT_SCREEN_WIDTH,
-        DEFAULT_SCREEN_HEIGHT,
+        screen_width,
+        screen_height,
         RippleTuning {
             speed: MUZZLE_FLASH_SPEED,
             width: MUZZLE_FLASH_WIDTH,
@@ -71,8 +121,8 @@ fn main() {
         &mut rl,
         &thread,
         &shader_path("impact.fs"),
-        DEFAULT_SCREEN_WIDTH,
-        DEFAULT_SCREEN_HEIGHT,
+        screen_width,
+        screen_height,
         RippleTuning {
             speed: IMPACT_FLASH_SPEED,
             width: IMPACT_FLASH_WIDTH,
@@ -81,14 +131,12 @@ fn main() {
         },
     );
     let mut scene_target = rl
-        .load_render_texture(
-            &thread,
-            DEFAULT_SCREEN_WIDTH as u32,
-            DEFAULT_SCREEN_HEIGHT as u32,
-        )
+        .load_render_texture(&thread, screen_width as u32, screen_height as u32)
         .expect("failed creating scene render texture");
 
     let mut game = Game::default();
+    game.enemy_count_override = args.enemies;
+    game.shadows_enabled = !args.no_shadows;
     game.init(&rl);
 
     // game_loop::run drives a plain `while !window_should_close()` loop on

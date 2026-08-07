@@ -4,19 +4,21 @@ use sola_raylib::prelude::*;
 use crate::ai::{Ai, Intent, Mover};
 use crate::damage_stage::draw_damage;
 use crate::physics::Physics;
-use crate::shell::{Owner, Shell, ShellState, draw_shell};
+use crate::shell::{Owner, Shell, ShellState, draw_shell, draw_shell_shadow};
 use crate::shockwave::{RippleFx, Shockwave, screen_to_ripple_uv};
-use crate::tank::{Dir, Tank, draw_tank};
+use crate::tank::{Dir, Tank, draw_tank, draw_tank_shadow};
 use crate::track::{Track, draw_track};
 use crate::{
-    ENEMY_COUNT_MAX, ENEMY_COUNT_MIN, ENEMY_DAMAGE_MAX, ENEMY_DAMAGE_MIN, ENEMY_SPAWN_MARGIN_MAX,
-    ENEMY_SPAWN_MARGIN_MIN, ENEMY_SPEED, ENEMY_SPEED_VARIANCE, EXPLOSION_DAMAGE_MAX,
+    DAMAGE_VARIANTS, ENEMY_COUNT_MAX, ENEMY_COUNT_MIN, ENEMY_DAMAGE_MAX, ENEMY_DAMAGE_MIN,
+    ENEMY_SPAWN_MARGIN_MAX, ENEMY_SPAWN_MARGIN_MIN, ENEMY_SPEED, ENEMY_SPEED_VARIANCE,
+    EXPLOSION_DAMAGE_MAX,
     EXPLOSION_DAMAGE_MIN, EXPLOSION_KNOCKBACK_SPEED, EXPLOSION_RADIUS, HUD_CRITICAL_THRESHOLD,
     HUD_WARN_THRESHOLD, IMPACT_FLASH_DURATION, IMPACT_FLASH_QUAD_RADIUS, KNOCKBACK_MAX_SPEED,
     KNOCKBACK_STRENGTH, MAX_DAMAGE, MAX_SHELLS, MUZZLE_FLASH_DURATION, MUZZLE_FLASH_QUAD_RADIUS,
     PHYSICS_FIXED_DT, PHYSICS_MAX_CATCHUP_SECONDS, PLAYER_DAMAGE_MAX, PLAYER_DAMAGE_MIN, Position,
     RAM_DAMAGE_COOLDOWN, RESTART_DELAY, SHELL_HIT_HALF_EXTENT, SHELL_IMPACT_KNOCKBACK_SPEED,
-    SHELL_SPEED, SHELL_VARIANTS, SHOCKWAVE_DURATION, TANK_ACCEL_FORCE, TANK_DECEL_FORCE,
+    SHELL_SHADOW_OFFSET_MAX, SHELL_SHADOW_OFFSET_MIN, SHELL_SPEED, SHELL_VARIANTS,
+    SHOCKWAVE_DURATION, TANK_ACCEL_FORCE, TANK_DECEL_FORCE,
     TANK_TURN_GRIP_FORCE, TRACK_SCALE_FRACTION, TRACK_SCALE_JITTER, TRACK_SPACING,
     TRACK_WOBBLE_AMP_MAX_DEG, TRACK_WOBBLE_AMP_MIN_DEG, TRACK_WOBBLE_WAVELENGTH_MAX,
     TRACK_WOBBLE_WAVELENGTH_MIN, WALL_THICKNESS,
@@ -77,12 +79,25 @@ pub struct Game {
     /// True while the game is paused (toggled by the P key); simulation is
     /// frozen and rendering shows a "PAUSED" overlay.
     paused: bool,
+    /// Whether tank/shell drop shadows are drawn (toggled by the L key at
+    /// runtime, and by `--no-shadows` at startup - see main.rs). Not reset by
+    /// `init`, so it survives round restarts like `paused` does. Defaults to
+    /// `false` via `#[derive(Default)]`; main.rs sets it to `true` right
+    /// after constructing `Game` unless `--no-shadows` was passed, so
+    /// shadows are on by default in normal play.
+    pub shadows_enabled: bool,
     /// The rapier physics world (see docs/physics-engine-design.md). Owns
     /// every tank's rigid body plus the battlefield wall colliders.
     physics: Physics,
     /// Leftover real time not yet consumed by a fixed physics step; see
     /// `PHYSICS_FIXED_DT` and the accumulator loop in `update`.
     physics_accumulator: f32,
+    /// CLI-provided override for how many enemies to spawn (`--enemies`).
+    /// When `None`, `init` rolls a random count in
+    /// `ENEMY_COUNT_MIN..=ENEMY_COUNT_MAX` as before. Set once before the
+    /// first `init` call and left untouched afterwards, so it persists
+    /// across round restarts (`init` is called again on restart).
+    pub enemy_count_override: Option<usize>,
 }
 
 /// The tank hulls live in row 0 of tanks.png, indexed 0..8 left-to-right by
@@ -128,6 +143,9 @@ impl Game {
         // Pick a random shells.png row-variant for this round's shots (see
         // Tank::shell_variant).
         self.tank.shell_variant = rng.random_range(0..SHELL_VARIANTS);
+        // Pick a random damage.png row-variant for this round's damage
+        // overlay (see Tank::damage_variant).
+        self.tank.damage_variant = rng.random_range(0..DAMAGE_VARIANTS);
         roll_track_distortion(&mut self.tank, &mut rng);
         self.tank.position = Position::new(width / 2.0, height / 2.0);
         self.tank.body = Some(self.physics.spawn_tank(
@@ -153,7 +171,9 @@ impl Game {
         let short_side = width.min(height);
         let margin_min = short_side * ENEMY_SPAWN_MARGIN_MIN;
         let margin_max = short_side * ENEMY_SPAWN_MARGIN_MAX;
-        let enemy_count = rng.random_range(ENEMY_COUNT_MIN..=ENEMY_COUNT_MAX);
+        let enemy_count = self
+            .enemy_count_override
+            .unwrap_or_else(|| rng.random_range(ENEMY_COUNT_MIN..=ENEMY_COUNT_MAX));
 
         self.enemies.clear();
         self.ais.clear();
@@ -186,6 +206,7 @@ impl Game {
                 row: TANK_ROW,
                 col: ecol,
                 shell_variant: rng.random_range(0..SHELL_VARIANTS),
+                damage_variant: rng.random_range(0..DAMAGE_VARIANTS),
                 position: pos,
                 rotation: 180.0,             // facing down, toward the player's start
                 speed: ENEMY_SPEED * factor, // enemies drive slower than the player
@@ -209,6 +230,17 @@ impl Game {
     pub fn update(&mut self, rl: &RaylibHandle) {
         if rl.is_key_pressed(KeyboardKey::KEY_P) {
             self.paused = !self.paused;
+        }
+        if rl.is_key_pressed(KeyboardKey::KEY_L) {
+            self.shadows_enabled = !self.shadows_enabled;
+        }
+        // Debug convenience: instantly restart the round on demand, the same
+        // way `restart_timer` hitting zero already does after a round ends -
+        // but available at any time (mid-round, paused, or on the win/lose
+        // screen), so this is checked before the pause early-return below.
+        if rl.is_key_pressed(KeyboardKey::KEY_R) {
+            self.init(rl);
+            return;
         }
         if self.paused {
             return;
@@ -270,7 +302,10 @@ impl Game {
         // below), tagged with whether the victim was an enemy; each gets a
         // shockwave and a small splash of explosion damage to nearby tanks on
         // the *opposing* side, processed once all of this frame's movement
-        // and shell hits are resolved.
+        // and shell hits are resolved. A splash chip can itself finish off an
+        // already-critical tank - `apply_explosion` feeds that fresh kill
+        // back into this same vec (see the while-loop below), so it still
+        // gets its own shockwave/knockback instead of dying with no effect.
         let mut kills: Vec<(Position, bool)> = Vec::new();
 
         // --- Player: build an intent from the keyboard ---
@@ -303,6 +338,8 @@ impl Game {
                 self.physics
                     .spawn_shell(shell.position, SHELL_HIT_HALF_EXTENT),
             );
+            shell.shadow_offset =
+                rng.random_range(SHELL_SHADOW_OFFSET_MIN..SHELL_SHADOW_OFFSET_MAX);
             self.muzzle_flashes.push(Shockwave {
                 center: shell.position,
                 time: 0.0,
@@ -338,6 +375,8 @@ impl Game {
                     self.physics
                         .spawn_shell(shell.position, SHELL_HIT_HALF_EXTENT),
                 );
+                shell.shadow_offset =
+                    rng.random_range(SHELL_SHADOW_OFFSET_MIN..SHELL_SHADOW_OFFSET_MAX);
                 self.muzzle_flashes.push(Shockwave {
                     center: shell.position,
                     time: 0.0,
@@ -463,13 +502,17 @@ impl Game {
                     .hit_sensor
                     .expect("tank should always have a hit sensor once spawned");
                 if self.physics.intersecting(shell_collider, sensor) {
+                    // A hit always flashes and detonates the shell, even
+                    // against an already-wrecked tank - only the damage/kill/
+                    // knockback below (which would be meaningless on a wreck)
+                    // is gated on liveness.
+                    self.impact_flashes.push(Shockwave {
+                        center: shell.position,
+                        time: 0.0,
+                    });
                     if !self.tank.is_wreck() {
                         let dmg = rng.random_range(dmg_min..dmg_max);
                         self.tank.damage = (self.tank.damage + dmg).min(MAX_DAMAGE);
-                        self.impact_flashes.push(Shockwave {
-                            center: shell.position,
-                            time: 0.0,
-                        });
                         if self.tank.is_wreck() {
                             kills.push((self.tank.position, false));
                         } else {
@@ -489,13 +532,16 @@ impl Game {
                     .hit_sensor
                     .expect("tank should always have a hit sensor once spawned");
                 if self.physics.intersecting(shell_collider, sensor) {
+                    // Same wreck-gating as the player-hit branch above: the
+                    // flash and detonation always happen, only damage/kill/
+                    // knockback are skipped once the tank is already a wreck.
+                    self.impact_flashes.push(Shockwave {
+                        center: shell.position,
+                        time: 0.0,
+                    });
                     if !enemy.is_wreck() {
                         let dmg = rng.random_range(dmg_min..dmg_max);
                         enemy.damage = (enemy.damage + dmg).min(MAX_DAMAGE);
-                        self.impact_flashes.push(Shockwave {
-                            center: shell.position,
-                            time: 0.0,
-                        });
                         if enemy.is_wreck() {
                             kills.push((enemy.position, true));
                         } else {
@@ -519,10 +565,16 @@ impl Game {
         // Every tank destroyed this frame gets a shockwave (the most recent
         // kill's ring is the one that plays - see the field comment on
         // `shock`) plus a small splash of damage to nearby tanks on the
-        // opposing side.
-        for (center, victim_was_enemy) in kills {
+        // opposing side. A `while let ... pop()` rather than a plain `for`
+        // because `apply_explosion` can push a fresh kill onto this same vec
+        // (a splash chip finishing off an already-critical tank) - draining
+        // it this way picks those up too. Always terminates: a tank can only
+        // ever land in `kills` once (every path that pushes to it is gated
+        // by `is_wreck()`), so the vec can only shrink toward empty as tanks
+        // are used up.
+        while let Some((center, victim_was_enemy)) = kills.pop() {
             self.shock = Some(Shockwave { center, time: 0.0 });
-            self.apply_explosion(center, victim_was_enemy, &mut rng);
+            self.apply_explosion(center, victim_was_enemy, &mut rng, &mut kills);
         }
 
         // Check for a round end. Losing (player destroyed) takes precedence over
@@ -546,23 +598,37 @@ impl Game {
     /// allegiance - but the damage stays side-restricted exactly as before:
     /// only the side opposing whoever died takes the chip of extra damage
     /// (an enemy's death can still catch the player nearby, but never chips
-    /// other enemies standing next to it, and vice versa), so it's a chip
-    /// and a nudge, not another kill shot chaining into further explosions.
+    /// other enemies standing next to it, and vice versa). Usually just a
+    /// chip and a nudge - but if that chip finishes off an already-critical
+    /// tank, `explosion_hit` reports it into `kills` so it still gets its
+    /// own shockwave/knockback (see the while-loop in `update`), rather than
+    /// dying silently with no effect.
     fn apply_explosion(
         &mut self,
         center: Position,
         victim_was_enemy: bool,
         rng: &mut rand::rngs::ThreadRng,
+        kills: &mut Vec<(Position, bool)>,
     ) {
         explosion_hit(
             &mut self.tank,
             center,
             victim_was_enemy,
+            false,
             &mut self.physics,
             rng,
+            kills,
         );
         for enemy in &mut self.enemies {
-            explosion_hit(enemy, center, !victim_was_enemy, &mut self.physics, rng);
+            explosion_hit(
+                enemy,
+                center,
+                !victim_was_enemy,
+                true,
+                &mut self.physics,
+                rng,
+                kills,
+            );
         }
     }
 
@@ -602,11 +668,12 @@ impl Game {
         // Precompute the bottom-right version/build HUD (text width must be
         // measured on the RaylibHandle, outside the draw closure).
         let version_hud = format!(
-            "v{} ({})",
+            "v{} ({}) {}",
             env!("CARGO_PKG_VERSION"),
-            env!("BONGBONG_GIT_COMMIT")
+            env!("BONGBONG_GIT_COMMIT"),
+            "@otobrglez"
         );
-        let version_hud_w = rl.measure_text(&version_hud, 24);
+        let version_hud_w = rl.measure_text(&version_hud, 18);
 
         // Precompute the SHELLS/HP HUD as separate runs so each number can
         // carry its own color (hud_number_color) while the labels stay
@@ -656,14 +723,23 @@ impl Game {
             }
 
             for enemy in &self.enemies {
+                if self.shadows_enabled {
+                    draw_tank_shadow(&mut d, textures.tanks, enemy);
+                }
                 draw_tank(&mut d, textures.tanks, enemy);
                 draw_damage(&mut d, textures.damage, enemy, self.time);
             }
 
+            if self.shadows_enabled {
+                draw_tank_shadow(&mut d, textures.tanks, &self.tank);
+            }
             draw_tank(&mut d, textures.tanks, &self.tank);
             draw_damage(&mut d, textures.damage, &self.tank, self.time);
 
             for shell in &self.shells {
+                if self.shadows_enabled && shell.state == ShellState::Flying {
+                    draw_shell_shadow(&mut d, textures.shells, shell);
+                }
                 draw_shell(&mut d, textures.shells, shell);
             }
         });
@@ -804,7 +880,7 @@ impl Game {
             d.draw_text(&hud_hp_num, hud_x, hud_y, 24, hp_color);
             d.draw_text(
                 &version_hud,
-                screen_width - 50 - version_hud_w,
+                screen_width - 120 - version_hud_w,
                 screen_height - 50,
                 24,
                 Color::DARKGRAY,
@@ -1176,13 +1252,18 @@ fn ram(
 /// `damage` is true (the caller passes this for the side opposing whoever
 /// died, never a tank's own side), a small chip of extra damage. No-op on a
 /// wreck (immovable, and past caring about a chip of damage) or a tank
-/// outside the blast radius.
+/// outside the blast radius. If that chip of damage is what finishes `tank`
+/// off, its position (tagged with `is_enemy`, `tank`'s own side) is pushed
+/// onto `kills` so the caller gives it a shockwave/knockback of its own too,
+/// same as a kill from ramming or a shell.
 fn explosion_hit(
     tank: &mut Tank,
     center: Position,
     damage: bool,
+    is_enemy: bool,
     physics: &mut Physics,
     rng: &mut rand::rngs::ThreadRng,
+    kills: &mut Vec<(Position, bool)>,
 ) {
     if tank.is_wreck() {
         return;
@@ -1197,6 +1278,9 @@ fn explosion_hit(
     if damage {
         let dmg = rng.random_range(EXPLOSION_DAMAGE_MIN..EXPLOSION_DAMAGE_MAX);
         tank.damage = (tank.damage + dmg).min(MAX_DAMAGE);
+        if tank.is_wreck() {
+            kills.push((tank.position, is_enemy));
+        }
     }
 
     // Push harder the closer the tank was to the blast, and divide by mass
