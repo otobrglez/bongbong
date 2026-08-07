@@ -105,7 +105,7 @@ impl Game {
         // render texture, so a shockwave can distort the finished frame as a
         // whole-screen shader pass in pass 2.
         rl.draw_texture_mode(thread, scene_target, |mut d| {
-            d.clear_background(Color::RAYWHITE);
+            d.clear_background(Color::WHITE);
 
             // Tread marks go down first so tanks and everything else draw on top.
             for track in &self.tracks {
