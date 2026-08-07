@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>bongbong</title>
+    <title>bongtank</title>
     <style>
       html, body {
         margin: 0;
@@ -30,9 +30,6 @@
       tabindex="-1"
     ></canvas>
     <script>
-      // Browsers block AudioContext until the user interacts with the page.
-      // Resume on first click so raylib's audio comes through, once the
-      // game gains audio (none yet - see CLAUDE.md).
       window.addEventListener("click", function () {
         var Ctx = window.AudioContext || window.webkitAudioContext;
         if (!Ctx) return;
