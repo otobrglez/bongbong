@@ -6,3 +6,5 @@ inputs:
     inputs:
       nixpkgs:
         follows: nixpkgs
+  unstable-nixpkgs:
+    url: github:NixOS/nixpkgs/nixpkgs-unstable

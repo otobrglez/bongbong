@@ -1,6 +1,12 @@
-{ pkgs, lib, config, inputs, ... }:
+{ 
+  pkgs, lib, config, inputs, ... 
+}: let
 
-{
+  unstable = import inputs.unstable-nixpkgs {
+    inherit (pkgs.stdenv) system;
+       config.allowUnfree = true;
+     };
+in {
   name = "bongbong";
   packages = [
     pkgs.git
@@ -21,6 +27,15 @@
     # not a nix package here - see tools/setup_emscripten.sh (pinned emsdk
     # version, documented in CLAUDE.md's web build section).
     targets = [ "wasm32-unknown-emscripten" ];
+  };
+
+  languages.javascript = {
+    enable = true;
+    package = unstable.nodejs_24;
+    nodejs.enable = true;
+    yarn.enable = true;
+    # yarn.install.enable = false;
+    yarn.package = unstable.yarn-berry;
   };
 
   env = {
