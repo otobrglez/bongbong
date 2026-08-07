@@ -16,6 +16,7 @@ cargo watch -x "run"
 
 - The game is written from scratch with [raylib] via [sola-raylib] bindings for Rust.
 - The [rapier](https://github.com/dimforge/rapier) physics engine alleviates some of the physics challenges.
+- The game uses the [hecs](https://docs.rs/hecs/latest/hecs/) entity-component-system (ECS).
 - This game is confined to libraries and tools that compile to WASM, as one of the main distribution channels is the web.
 
 ## Collaboration
