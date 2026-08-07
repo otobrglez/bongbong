@@ -95,7 +95,7 @@ fn main() {
         .load_texture(&thread, "static/tracks.png")
         .expect("failed loading tracks texture");
     let obstacles_texture = rl
-        .load_texture(&thread, "static/obstacles.png")
+        .load_texture(&thread, "static/walls_sheet.png")
         .expect("failed loading obstacles texture");
 
     let mut shock_fx = RippleFx::load(

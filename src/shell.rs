@@ -82,6 +82,13 @@ pub struct Shell {
     /// `shell_variant` at spawn. Fixed for this shell's whole lifetime, same
     /// as every other shell that tank fires.
     pub variant: i32,
+    /// The firing tank's `row` (0..TANK_VARIANTS), copied at spawn - by the
+    /// time this shell resolves a hit, the shooter tank itself is out of
+    /// scope, so the shell carries its own shooter's chassis identity
+    /// forward. Used to scale damage by chassis class (see
+    /// TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW and its use in `Game::update`'s
+    /// hit-resolution).
+    pub shooter_row: i32,
     /// This shell's rapier sensor body, spawned alongside it (see
     /// `Game::update`/`physics::Physics::spawn_shell`) and kept in sync with
     /// `position` every frame so hit detection can query real intersections
@@ -128,6 +135,7 @@ impl Shell {
             done: false,
             owner,
             variant: tank.shell_variant,
+            shooter_row: tank.row,
             body: None,
             shadow_offset: 0.0,
         }

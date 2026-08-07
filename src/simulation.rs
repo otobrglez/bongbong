@@ -1,4 +1,4 @@
-//! The simulation layer: everything that decides what the game *is* doing
+ //! The simulation layer: everything that decides what the game *is* doing
 //! this frame - physics, damage, AI, spawning - with no dependency on a
 //! window, a `RaylibHandle`, or anything else that only makes sense once
 //! there's a screen to draw to. `game.rs` (the presentation layer) reads
@@ -31,11 +31,12 @@ use rapier2d::prelude::ColliderHandle;
 use sola_raylib::core::math::Vector2;
 
 use crate::ai::{Ai, Intent, Mover};
-use crate::obstacle::{Obstacle, ObstacleKind};
+use crate::obstacle::{MATERIALS, Material, Obstacle};
 use crate::pathfind::Grid;
 use crate::physics::{self, Physics};
 use crate::shell::{Owner, Shell, ShellState};
 use crate::shockwave::Shockwave;
+use crate::structures::{self, Blueprint};
 use crate::tank::Tank;
 use crate::track::Track;
 use crate::{
@@ -44,16 +45,18 @@ use crate::{
     EXPLOSION_DAMAGE_MAX, EXPLOSION_DAMAGE_MIN, EXPLOSION_KNOCKBACK_SPEED, EXPLOSION_RADIUS,
     IMPACT_FLASH_DURATION, KNOCKBACK_MAX_SPEED, KNOCKBACK_STRENGTH, MAX_DAMAGE,
     MUZZLE_FLASH_DURATION,
-    OBSTACLE_CLEAR, OBSTACLE_COUNT_MAX, OBSTACLE_COUNT_MIN, OBSTACLE_CRATE_CHANCE,
-    OBSTACLE_CRATE_HEALTH, OBSTACLE_HULL_FRACTION, OBSTACLE_SCALE, OBSTACLE_TEXTURE_SIZE,
+    OBSTACLE_CLEAR, OBSTACLE_CLUSTER_CLEAR, OBSTACLE_COUNT_MAX, OBSTACLE_COUNT_MIN,
+    OBSTACLE_GRID_SIZE, OBSTACLE_HULL_FRACTION, OBSTACLE_SCALE, OBSTACLE_STRUCTURE_CHANCE,
+    OBSTACLE_TEXTURE_SIZE, OBSTACLE_WOOD_FLAMMABLE_CHANCE,
     PATHFIND_CELL_SIZE, PHYSICS_FIXED_DT, PHYSICS_MAX_CATCHUP_SECONDS, PLAYER_DAMAGE_MAX,
-    PLAYER_DAMAGE_MIN, Position,
+    PLAYER_DAMAGE_MIN, PLAYER_FORTRESS_TANK_WIDTHS, Position,
     RAM_DAMAGE_COOLDOWN, RESTART_DELAY, SHELL_HIT_HALF_EXTENT, SHELL_IMPACT_KNOCKBACK_SPEED,
     SHELL_SHADOW_OFFSET_MAX, SHELL_SHADOW_OFFSET_MIN, SHELL_SPEED,
-    SHOCKWAVE_DURATION, TANK_ACCEL_FORCE, TANK_DECEL_FORCE, TANK_HULL_BBOX_BY_ROW,
+    SHOCKWAVE_DURATION, TANK_ACCEL_FORCE, TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW, TANK_DECEL_FORCE,
+    TANK_HULL_BBOX_BY_ROW,
     TANK_HULL_DISABLED_DAMAGE,
     TANK_HULL_TRACK_COLS, TANK_HULL_TRACK_FRAME_DISTANCE, TANK_SHELL_VARIANT_BY_ROW,
-    TANK_SHELL_VARIANT_STAGGERED_BY_ROW, TANK_TURN_GRIP_FORCE,
+    TANK_SHELL_VARIANT_STAGGERED_BY_ROW, TANK_TEXTURE_SIZE, TANK_TURN_GRIP_FORCE,
     TANK_WRECK_COLS, TRACK_MAX_OPACITY, TRACK_SCALE_FRACTION, TRACK_SCALE_JITTER, TRACK_SPACING,
     TRACK_WEIGHT_OPACITY_BY_ROW, TRACK_WEIGHT_SCALE_BY_ROW, TRACK_WOBBLE_AMP_MAX_DEG,
     TRACK_WOBBLE_AMP_MIN_DEG, TRACK_WOBBLE_WAVELENGTH_MAX, TRACK_WOBBLE_WAVELENGTH_MIN,
@@ -210,6 +213,202 @@ const TANK_VARIANTS: i32 = 12;
 /// (0,2,3,5,6,8,11).
 const TANK_SPRITE_ORDER: [i32; 12] = [1, 0, 4, 2, 7, 3, 9, 5, 10, 6, 8, 11];
 
+/// Cap on rejection-sampling attempts for a single enemy/obstacle spawn
+/// position (see `sample_clear_position`) - keeps `Game::init` provably
+/// bounded regardless of how unlucky the RNG gets, rather than an unbounded
+/// `while` loop that could in principle stall for a long time. At this
+/// scale (a few hundred px of clearance against a >=1280x720 board)
+/// satisfying every constraint on the first handful of tries is the
+/// overwhelming common case; this cap only ever matters on a genuinely
+/// pathological draw, and even then costs at most a couple thousand cheap
+/// float comparisons - not a perceptible delay, let alone the alternative.
+/// That alternative matters more than it sounds: on native a slow frame is
+/// an invisible hitch the OS schedules around, but this project's web
+/// build deliberately skips `-sASYNCIFY=1` (see `game_loop::run`'s doc
+/// comment) to keep binary size down, so `Game::init` runs as one
+/// uninterruptible synchronous call from the browser's perspective - any
+/// real stall here freezes the whole tab until it returns, not just drops
+/// a frame. Hitting the cap without finding a fully-valid position isn't
+/// treated as an error: `sample_clear_position` just returns its last
+/// (possibly still-too-close) sample rather than looping further - an
+/// occasional slightly-crowded spawn beats a frozen tab.
+const PLACEMENT_MAX_ATTEMPTS: u32 = 2000;
+
+/// Sample a random position within `margin_min..(width-margin_min)` x
+/// `margin_min..(height-margin_min)`, retrying until `valid` accepts one or
+/// `PLACEMENT_MAX_ATTEMPTS` is reached - see that constant's doc comment
+/// for why this is capped rather than an unbounded loop. Used by the enemy
+/// placement loop in `Game::init`; the obstacle loop uses the grid-snapping,
+/// multi-tile variant below instead (see `sample_structure_positions`).
+fn sample_clear_position(
+    rng: &mut rand::rngs::ThreadRng,
+    width: f32,
+    height: f32,
+    margin_min: f32,
+    mut valid: impl FnMut(Position) -> bool,
+) -> Position {
+    let mut pos = Position::new(0.0, 0.0);
+    for _ in 0..PLACEMENT_MAX_ATTEMPTS {
+        pos = Position::new(
+            rng.random_range(margin_min..(width - margin_min)),
+            rng.random_range(margin_min..(height - margin_min)),
+        );
+        if valid(pos) {
+            break;
+        }
+    }
+    pos
+}
+
+/// Rejection-samples a grid-aligned anchor cell for `blueprint` (see
+/// `structures.rs`), retrying until every one of its tiles (anchor + each
+/// offset, in grid cells) is in-bounds and passes `valid`, or
+/// `PLACEMENT_MAX_ATTEMPTS` is reached - at which point it gives up and
+/// returns `None` rather than force-placing a partially invalid shape (a
+/// multi-tile structure landing half out-of-bounds or overlapping is worse
+/// than just skipping it for this round; see `sample_clear_position` for the
+/// single-point placement loops, which instead fall back to their last
+/// attempt since a single bad point is a much smaller problem). Used by the
+/// obstacle placement loop in `Game::init`.
+fn sample_structure_positions(
+    rng: &mut rand::rngs::ThreadRng,
+    width: f32,
+    height: f32,
+    margin_min: f32,
+    grid: f32,
+    blueprint: structures::Blueprint,
+    mut valid: impl FnMut(&[Position]) -> bool,
+) -> Option<Vec<Position>> {
+    for _ in 0..PLACEMENT_MAX_ATTEMPTS {
+        let anchor_x = (rng.random_range(margin_min..(width - margin_min)) / grid).round();
+        let anchor_y = (rng.random_range(margin_min..(height - margin_min)) / grid).round();
+        let tiles: Vec<Position> = blueprint
+            .iter()
+            .map(|&(dx, dy)| {
+                Position::new((anchor_x + dx as f32) * grid, (anchor_y + dy as f32) * grid)
+            })
+            .collect();
+        let in_bounds = tiles.iter().all(|p| {
+            p.x >= margin_min
+                && p.x <= width - margin_min
+                && p.y >= margin_min
+                && p.y <= height - margin_min
+        });
+        if in_bounds && valid(&tiles) {
+            return Some(tiles);
+        }
+    }
+    None
+}
+
+/// The player's starting enclosure: a square wall roughly
+/// `PLAYER_FORTRESS_TANK_WIDTHS` tank-widths per side, centered on `center`
+/// (the player's spawn position) - left/right sides are Wood, the bottom is
+/// Brick, the top is Glass. Every tile still spawns as its own `Obstacle`,
+/// same as a `structures.rs`-generated shape, but this specific layout is
+/// fixed rather than randomly rolled and mixes materials per side (unlike
+/// the generator's "one material per structure" rule) - exactly why it's
+/// its own function instead of a `structures::Blueprint`.
+///
+/// Skips entirely (returns an empty result) if the box wouldn't fully fit
+/// inside the battlefield's walls - same "give up gracefully" convention as
+/// `sample_structure_positions`, rather than spawning a box that clips
+/// through the boundary.
+///
+/// Returns every tile position placed (folded into `Game::init`'s
+/// `obstacle_positions` so later spawns steer clear of them individually)
+/// and an exclusion radius in px - the box's half-diagonal, so a circular
+/// distance check from `center` fully contains the square regardless of
+/// which edge or corner is nearest.
+fn spawn_player_fortress(
+    physics: &mut Physics,
+    world: &mut hecs::World,
+    rng: &mut rand::rngs::ThreadRng,
+    center: Position,
+    obstacle_half_extent: f32,
+    width: f32,
+    height: f32,
+) -> (Vec<Position>, f32) {
+    let tank_width = TANK_TEXTURE_SIZE * Tank::default().scale;
+    let side_tiles =
+        ((tank_width * PLAYER_FORTRESS_TANK_WIDTHS) / OBSTACLE_GRID_SIZE).round() as i32;
+    let half = side_tiles / 2;
+    let center_gx = (center.x / OBSTACLE_GRID_SIZE).round() as i32;
+    let center_gy = (center.y / OBSTACLE_GRID_SIZE).round() as i32;
+    let (min_gx, max_gx) = (center_gx - half, center_gx + half - 1);
+    let (min_gy, max_gy) = (center_gy - half, center_gy + half - 1);
+    let grid_to_pos =
+        |gx: i32, gy: i32| Position::new(gx as f32 * OBSTACLE_GRID_SIZE, gy as f32 * OBSTACLE_GRID_SIZE);
+
+    // Left/right columns run the box's full height (the "lines" of Wood);
+    // top/bottom rows fill the span between them (excluding the corners,
+    // already covered by the Wood columns) with Glass/Brick respectively.
+    let mut tiles: Vec<(Position, Material)> = Vec::new();
+    for gy in min_gy..=max_gy {
+        tiles.push((grid_to_pos(min_gx, gy), Material::Wood));
+        tiles.push((grid_to_pos(max_gx, gy), Material::Wood));
+    }
+    for gx in (min_gx + 1)..max_gx {
+        tiles.push((grid_to_pos(gx, min_gy), Material::Glass)); // top
+        tiles.push((grid_to_pos(gx, max_gy), Material::Brick)); // bottom
+    }
+
+    // The playable area is exactly [0,width] x [0,height] - `spawn_walls`'s
+    // boundary colliders sit entirely outside that range (inner edge right
+    // at 0/width), so WALL_THICKNESS itself isn't part of this margin; only
+    // half the obstacle's own sprite needs to clear the edge.
+    let margin = obstacle_half_extent;
+    let fits = tiles.iter().all(|(p, _)| {
+        p.x >= margin && p.x <= width - margin && p.y >= margin && p.y <= height - margin
+    });
+    if !fits {
+        return (Vec::new(), 0.0);
+    }
+
+    // One variant per material (docs/WALLS_SPEC.md: "keep one variant per
+    // structure") - both Wood sides share `wood_variant` so the whole
+    // enclosure reads as one build, not four unrelated wall segments.
+    let wood_variant = rng.random_range(0..Material::Wood.variants());
+    let glass_variant = rng.random_range(0..Material::Glass.variants());
+    let brick_variant = rng.random_range(0..Material::Brick.variants());
+
+    let mut positions = Vec::with_capacity(tiles.len());
+    for (pos, material) in tiles {
+        // Only Wood/Glass/Brick ever appear here (see `tiles` above).
+        let variant = if material == Material::Wood {
+            wood_variant
+        } else if material == Material::Glass {
+            glass_variant
+        } else {
+            brick_variant
+        };
+        let max_health = material.max_health();
+        let flammable =
+            material == Material::Wood && rng.random_bool(OBSTACLE_WOOD_FLAMMABLE_CHANCE);
+        let body = physics.spawn_static(
+            pos,
+            Position::new(obstacle_half_extent, obstacle_half_extent),
+        );
+        positions.push(pos);
+        world.spawn((Obstacle {
+            material,
+            variant,
+            position: pos,
+            health: max_health,
+            max_health,
+            flammable,
+            burning: false,
+            burn_frame: 0,
+            burn_frame_timer: 0.0,
+            burn_elapsed: 0.0,
+            body,
+            destroyed: false,
+        },));
+    }
+    let exclusion_radius = (half as f32 * OBSTACLE_GRID_SIZE) * std::f32::consts::SQRT_2;
+    (positions, exclusion_radius)
+}
+
 impl Game {
     /// Set up the player and spawn the enemy tanks. Also used to restart a
     /// round. `width`/`height` are the battlefield's dimensions in pixels -
@@ -268,13 +467,29 @@ impl Game {
         // size, so grab them from this local `tank` before it's moved into
         // the world.
         let center = tank.position;
-        let clear = tank.size() * 2.0; // don't spawn on top of the player
+        let mut clear = tank.size() * 2.0; // don't spawn on top of the player - bumped below if the starting fortress needs more room
         // Also keep spawned enemies clear of each other - without this, a
         // crowded high-count round can drop two tanks on top of one another,
         // and they start ramming (and damaging) each other before the round
         // even properly begins.
         let enemy_clear = tank.size() * 1.5;
         self.player = Some(self.world.spawn((tank,)));
+
+        // --- Player fortress ---
+        // Built right after the player so enemies/regular obstacles (both
+        // spawned below) can be kept clear of it - see `spawn_player_fortress`.
+        let obstacle_half_extent =
+            OBSTACLE_TEXTURE_SIZE * OBSTACLE_SCALE * OBSTACLE_HULL_FRACTION * 0.5;
+        let (mut obstacle_positions, fortress_radius) = spawn_player_fortress(
+            &mut self.physics,
+            &mut self.world,
+            &mut rng,
+            center,
+            obstacle_half_extent,
+            width,
+            height,
+        );
+        clear = clear.max(fortress_radius);
 
         // --- Enemies ---
         // Spawn enemy tanks in a band that's 20%-40% of the shorter screen
@@ -292,23 +507,14 @@ impl Game {
         // (that's `self.world`).
         let mut enemy_positions: Vec<Position> = Vec::with_capacity(enemy_count);
         while enemy_positions.len() < enemy_count {
-            let pos = Position::new(
-                rng.random_range(margin_min..(width - margin_min)),
-                rng.random_range(margin_min..(height - margin_min)),
-            );
-            let border_dist = pos.x.min(width - pos.x).min(pos.y).min(height - pos.y);
-            if border_dist > margin_max {
-                continue;
-            }
-            if pos.distance_to(center) < clear {
-                continue;
-            }
-            if enemy_positions
-                .iter()
-                .any(|&p| pos.distance_to(p) < enemy_clear)
-            {
-                continue;
-            }
+            let pos = sample_clear_position(&mut rng, width, height, margin_min, |pos| {
+                let border_dist = pos.x.min(width - pos.x).min(pos.y).min(height - pos.y);
+                border_dist <= margin_max
+                    && pos.distance_to(center) >= clear
+                    && enemy_positions
+                        .iter()
+                        .all(|&p| pos.distance_to(p) >= enemy_clear)
+            });
             // Walk the alternating spawn order so each enemy looks distinct and the
             // group mixes single- and twin-barrel hulls.
             let erow = TANK_SPRITE_ORDER[enemy_positions.len() % TANK_SPRITE_ORDER.len()];
@@ -350,48 +556,74 @@ impl Game {
         // obstacles placed first. Reuses the same margin/border band as
         // enemy spawning (margin_min/margin_max) so obstacles land within
         // the same playable interior, not hugging the boundary walls.
-        let obstacle_half_extent =
-            OBSTACLE_TEXTURE_SIZE * OBSTACLE_SCALE * OBSTACLE_HULL_FRACTION * 0.5;
-        let obstacle_count = rng.random_range(OBSTACLE_COUNT_MIN..=OBSTACLE_COUNT_MAX);
-        let mut obstacle_positions: Vec<Position> = Vec::with_capacity(obstacle_count);
-        while obstacle_positions.len() < obstacle_count {
-            let pos = Position::new(
-                rng.random_range(margin_min..(width - margin_min)),
-                rng.random_range(margin_min..(height - margin_min)),
-            );
-            if pos.distance_to(center) < clear + OBSTACLE_CLEAR {
-                continue;
-            }
-            if enemy_positions
-                .iter()
-                .any(|&p| pos.distance_to(p) < enemy_clear + OBSTACLE_CLEAR)
-            {
-                continue;
-            }
-            if obstacle_positions
-                .iter()
-                .any(|&p| pos.distance_to(p) < OBSTACLE_CLEAR)
-            {
-                continue;
-            }
-            let kind = if rng.random_bool(OBSTACLE_CRATE_CHANCE) {
-                ObstacleKind::Crate
+        //
+        // Each iteration places one *structure* (see structures.rs) rather
+        // than one tile: usually a lone `structures::SINGLE`, sometimes
+        // (OBSTACLE_STRUCTURE_CHANCE) a real multi-tile shape - a wall run,
+        // a corner, a bunker. Every tile of a structure shares one rolled
+        // material/variant (docs/WALLS_SPEC.md: "keep one variant per
+        // structure" so the art's bond/rib/board pattern runs unbroken);
+        // Wood's `flammable` still rolls per tile. `obstacle_half_extent`/
+        // `obstacle_positions` are the same bindings the player fortress
+        // above already set up, so these structures naturally steer clear
+        // of its individual tiles too (on top of the `clear` radius check).
+        let structure_count = rng.random_range(OBSTACLE_COUNT_MIN..=OBSTACLE_COUNT_MAX);
+        for _ in 0..structure_count {
+            let blueprint: Blueprint = if rng.random_bool(OBSTACLE_STRUCTURE_CHANCE) {
+                structures::STRUCTURES[rng.random_range(0..structures::STRUCTURES.len())]
             } else {
-                ObstacleKind::Rock
+                structures::SINGLE
             };
-            let body = self.physics.spawn_static(
-                pos,
-                Position::new(obstacle_half_extent, obstacle_half_extent),
-            );
-            obstacle_positions.push(pos);
-            self.world.spawn((Obstacle {
-                kind,
-                position: pos,
-                health: OBSTACLE_CRATE_HEALTH,
-                max_health: OBSTACLE_CRATE_HEALTH,
-                body,
-                destroyed: false,
-            },));
+            let Some(tiles) = sample_structure_positions(
+                &mut rng,
+                width,
+                height,
+                margin_min,
+                OBSTACLE_GRID_SIZE,
+                blueprint,
+                |tiles| {
+                    tiles.iter().all(|pos| {
+                        pos.distance_to(center) >= clear + OBSTACLE_CLEAR
+                            && enemy_positions
+                                .iter()
+                                .all(|&p| pos.distance_to(p) >= enemy_clear + OBSTACLE_CLEAR)
+                            && obstacle_positions
+                                .iter()
+                                .all(|&p| pos.distance_to(p) >= OBSTACLE_CLUSTER_CLEAR)
+                    })
+                },
+            ) else {
+                // No valid spot found for this structure within the attempt
+                // budget - skip it rather than force-place something broken;
+                // the round just ends up with slightly fewer structures.
+                continue;
+            };
+            let material = MATERIALS[rng.random_range(0..MATERIALS.len())];
+            let variant = rng.random_range(0..material.variants());
+            let max_health = material.max_health();
+            for pos in tiles {
+                let flammable = material == Material::Wood
+                    && rng.random_bool(OBSTACLE_WOOD_FLAMMABLE_CHANCE);
+                let body = self.physics.spawn_static(
+                    pos,
+                    Position::new(obstacle_half_extent, obstacle_half_extent),
+                );
+                obstacle_positions.push(pos);
+                self.world.spawn((Obstacle {
+                    material,
+                    variant,
+                    position: pos,
+                    health: max_health,
+                    max_health,
+                    flammable,
+                    burning: false,
+                    burn_frame: 0,
+                    burn_frame_timer: 0.0,
+                    burn_elapsed: 0.0,
+                    body,
+                    destroyed: false,
+                },));
+            }
         }
     }
 
@@ -451,6 +683,9 @@ impl Game {
                 tank.tick_wreck(dt);
                 roll_wreck_col(tank);
             }
+            for obstacle in self.world.query::<&mut Obstacle>().iter() {
+                obstacle.tick_burn(dt);
+            }
             self.tracks.retain_mut(|t| !t.tick(dt));
             self.restart_timer -= dt;
             if self.restart_timer <= 0.0 {
@@ -469,6 +704,9 @@ impl Game {
             tank.ram_cooldown = (tank.ram_cooldown - dt).max(0.0);
             tank.tick_wreck(dt);
             roll_wreck_col(tank);
+        }
+        for obstacle in self.world.query::<&mut Obstacle>().iter() {
+            obstacle.tick_burn(dt);
         }
         // Age existing marks and drop the ones that have fully faded.
         self.tracks.retain_mut(|t| !t.tick(dt));
@@ -721,11 +959,18 @@ impl Game {
                 .body
                 .expect("shell should always have a physics body once spawned");
             let shell_collider = self.physics.collider_of(shell_handle);
-            let (dmg_min, dmg_max) = if shell.owner == Owner::Player {
+            let (base_dmg_min, base_dmg_max) = if shell.owner == Owner::Player {
                 (PLAYER_DAMAGE_MIN, PLAYER_DAMAGE_MAX)
             } else {
                 (ENEMY_DAMAGE_MIN, ENEMY_DAMAGE_MAX)
             };
+            // Scale by the shooter's own chassis class (see
+            // TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW) - a std-class shooter deals
+            // exactly the base range above, unchanged from before this
+            // table existed.
+            let chassis_factor = TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW[shell.shooter_row as usize];
+            let dmg_min = base_dmg_min * chassis_factor;
+            let dmg_max = base_dmg_max * chassis_factor;
 
             let Some(target) =
                 find_shell_target(&self.world, &self.physics, player, &walls, shell_collider)

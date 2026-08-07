@@ -22,10 +22,13 @@ rustflags = [
     # unchanged on web.
     "-C", "link-arg=--preload-file",
     "-C", "link-arg=static@/static",
-    # No -sASYNCIFY=1: the game loop runs via sola_raylib::core::game_loop::run
-    # (emscripten_set_main_loop_arg), not the blocking `while` pattern, and
-    # there's no audio yet. Add it back the moment either changes (see
-    # CLAUDE.md).
+    # EXPERIMENTAL: normally skipped (the game loop runs via
+    # sola_raylib::core::game_loop::run/emscripten_set_main_loop_arg, not a
+    # blocking `while` pattern, and there's no audio yet - see CLAUDE.md),
+    # since it costs real wasm size and per-call overhead. Turned on here to
+    # try letting `Game::init`'s spawn-placement loop (and anything else
+    # synchronous) yield mid-frame instead of relying on it staying bounded.
+    "-C", "link-arg=-sASYNCIFY=1",
 ]
 
 [env]

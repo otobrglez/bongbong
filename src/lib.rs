@@ -131,6 +131,33 @@ pub const TANK_CHASSIS_MASS_FACTOR_BY_ROW: [f32; 12] = [
     528.0 / 280.0, // titan       (super_heavy)
     520.0 / 280.0, // leviathan   (super_long)
 ];
+// Per-chassis shell damage multiplier, applied on top of
+// PLAYER_DAMAGE_MIN/MAX or ENEMY_DAMAGE_MIN/MAX depending on who fired (see
+// `Shell::shooter_row`/its use in `Game::update`'s hit-resolution). Same 7
+// chassis grouping as TANK_CHASSIS_MASS_FACTOR_BY_ROW (see its doc comment
+// for the class table) but tuned by the sheet's own role hints rather than
+// mirroring that table's pure footprint-area math - a sniper platform
+// (`long`) should hit hard without needing to be the heaviest thing on the
+// field. `std` again normalizes to exactly 1.0, so `assault`/`warden` deal
+// exactly the damage every tank used to deal before this table existed.
+// Pairs with the mass table above by design: `super_heavy`/`super_long` are
+// already the slowest, most drift-prone chassis to drive - this gives them
+// the payoff (hits hardest) to go with that cost, while `narrow` leans
+// further into "fast and evasive, but weak."
+pub const TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW: [f32; 12] = [
+    0.75, // scout       (narrow)       - fast recon
+    1.0,  // assault     (std)          - general purpose
+    1.20, // breaker     (wide)         - heavy brawler
+    1.35, // longbow     (long)         - artillery/sniper
+    0.90, // flak        (compact)      - anti-air/close range
+    0.75, // wraith      (narrow)       - stealth
+    1.0,  // warden      (std)          - support/defense
+    1.20, // ravager     (wide)         - heavy assault
+    0.90, // glacier     (compact)      - balanced
+    1.35, // obelisk     (long)         - siege
+    1.55, // titan       (super_heavy)  - super-heavy assault
+    1.60, // leviathan   (super_long)   - super-heavy siege
+];
 // How far forward (tile px, toward wherever the hull currently faces) a
 // shell spawns from the tank's center - i.e. where the turret/barrel tip
 // actually sits, not the tank's own center or the edge of its 32x32 tile.
@@ -626,34 +653,105 @@ pub const PHYSICS_FIXED_DT: f32 = 1.0 / 60.0;
 pub const PHYSICS_MAX_CATCHUP_SECONDS: f32 = 0.25;
 
 // Obstacles: static battlefield terrain (see obstacle.rs), placed once per
-// round alongside enemies. obstacles.png is a 96x64 sheet (3 cols x 2 rows
-// of 32x32): row 0 col 0 is a single indestructible rock tile
-// (ObstacleKind::Rock); row 1 cols 0..2 are a destructible crate's health
-// stages (ObstacleKind::Crate) from pristine down to about to break - see
-// Obstacle::col, which picks the frame from current/max health, the same
-// pattern damage.png's frames use for a tank.
+// round alongside enemies, built from one of four materials
+// (obstacle::Material). walls_sheet.png is a 256x448 sheet (8 cols x 14 rows
+// of 32x32 cells) - see docs/WALLS_SPEC.md for the full spec:
+//   rows 0-3  Brick  (cols 0-5 valid): 4 bond-pattern variants, 6 decay
+//             stages (col 5 = rubble, i.e. destroyed - never actually drawn,
+//             see Obstacle::damage, same "vanishes the instant it dies"
+//             behaviour the old Crate always had).
+//   rows 4-7  Iron   (cols 0-3 valid): 4 surface-treatment variants, never
+//             destroyed - the column only tracks a cosmetic rust stage that
+//             plateaus once fully weathered (Obstacle::damage never sets
+//             `destroyed` for Iron).
+//   rows 8-11 Wood   (cols 0-7 valid): 4 board-layout variants sharing one
+//             8-state lifecycle: intact/damaged/heavily damaged, then a
+//             fork rolled once at spawn (Obstacle::flammable) - either
+//             straight to destroyed (col 3) or a 3-frame burning loop (cols
+//             4-6, see Obstacle::tick_burn) into charred (col 7).
+//   rows 12-13 Glass (cols 0-3 valid): 2 variants (plain pane / reinforced
+//             frame - cosmetic only for now), 4 states from intact to
+//             shattered/destroyed.
+// Cells outside a material's valid column range are empty - never sampled
+// (see Material::variants/visible_stages).
 pub const OBSTACLE_TEXTURE_SIZE: f32 = 32.0;
-pub const OBSTACLE_SCALE: f32 = 2.0;
-pub const OBSTACLE_ROCK_ROW: i32 = 0;
-pub const OBSTACLE_CRATE_ROW: i32 = 1;
-pub const OBSTACLE_CRATE_STAGES: i32 = 3;
-pub const OBSTACLE_CRATE_HEALTH: f32 = 60.0; // hp a crate absorbs before breaking
+// 1.0, not TANK_SCALE-style 2.0 - an obstacle renders at its raw 32px tile
+// size, matching OBSTACLE_GRID_SIZE exactly (see below) rather than being
+// twice as big as one grid cell.
+pub const OBSTACLE_SCALE: f32 = 1.0;
+// Per-material toughness: hp absorbed before reaching the terminal state
+// (rubble/charred/shattered), or - for Iron - before its rust stage
+// plateaus. Ordered fragile to tough: glass snaps almost immediately, wood
+// breaks easily, brick holds longer, iron the longest of all on top of
+// being permanent.
+pub const OBSTACLE_GLASS_MAX_HEALTH: f32 = 20.0;
+pub const OBSTACLE_WOOD_MAX_HEALTH: f32 = 35.0;
+pub const OBSTACLE_BRICK_MAX_HEALTH: f32 = 70.0;
+pub const OBSTACLE_IRON_MAX_HEALTH: f32 = 220.0; // plateaus the rust stage, never destroys
+// Fraction of spawned Wood obstacles that catch fire when destroyed instead
+// of breaking outright (Obstacle::flammable, rolled once at spawn) -
+// "breaks easily" vs "catches fire" is gameplay data layered onto shared
+// art, per docs/WALLS_SPEC.md.
+pub const OBSTACLE_WOOD_FLAMMABLE_CHANCE: f64 = 0.5;
+// Burning wood's 3-frame flicker loop cadence (cols 4-6) - ~7.7 FPS, the
+// spec's own suggested reading for a good flicker.
+pub const OBSTACLE_WOOD_BURN_FRAME_SECONDS: f32 = 0.13;
+// Total time a Wood obstacle spends in the burning loop before charring
+// (col 7) and finally being removed - same instant-vanish-once-destroyed
+// convention as every other material (see Obstacle::tick_burn).
+pub const OBSTACLE_WOOD_BURN_SECONDS: f32 = 2.5;
 // Collision footprint: slightly smaller than the full sprite tile, same
 // reasoning as TANK_HULL_FRACTION - lets a shell's small hit sensor
 // (SHELL_HIT_HALF_EXTENT) register a clean hit near the sprite's visible
 // edge instead of stopping short at the tile's transparent padding.
 pub const OBSTACLE_HULL_FRACTION: f32 = 0.75;
-// Number of obstacles placed each round is randomized within this range,
-// the same pattern as ENEMY_COUNT_MIN/MAX.
-pub const OBSTACLE_COUNT_MIN: usize = 3;
-pub const OBSTACLE_COUNT_MAX: usize = 7;
-// Fraction of obstacle spawns that roll as a Crate rather than a Rock.
-pub const OBSTACLE_CRATE_CHANCE: f64 = 0.5;
+// Number of structures/clusters placed each round is randomized within this
+// range (see structures.rs / OBSTACLE_STRUCTURE_CHANCE) - same pattern as
+// ENEMY_COUNT_MIN/MAX. Each one contributes anywhere from 1 tile (a lone
+// `structures::SINGLE`) to 5 (e.g. `structures::WALL_LINE_5`), so a round's
+// actual total obstacle-tile count varies with which shapes get rolled.
+pub const OBSTACLE_COUNT_MIN: usize = 2;
+pub const OBSTACLE_COUNT_MAX: usize = 4;
+// Chance a placement rolls a real multi-tile shape from `structures::STRUCTURES`
+// rather than falling back to `structures::SINGLE` (a lone tile) - keeps
+// lone obstacles common alongside deliberate little builds instead of every
+// placement being an equally-likely full structure.
+pub const OBSTACLE_STRUCTURE_CHANCE: f64 = 0.5;
+// Obstacle spawn positions snap to a world-space grid this many px per cell
+// (see `sample_structure_positions` in simulation.rs) so walls - and every
+// tile of a multi-tile structure - land visually aligned instead of at
+// arbitrary fractional offsets. Exactly `Obstacle::size()`
+// (OBSTACLE_TEXTURE_SIZE * OBSTACLE_SCALE) - one grid cell is one obstacle
+// tile, so a grid-aligned obstacle's sprite exactly fills its cell with no
+// gap or overlap.
+pub const OBSTACLE_GRID_SIZE: f32 = OBSTACLE_TEXTURE_SIZE * OBSTACLE_SCALE;
 // Minimum clearance (px) an obstacle spawn must keep from the player's
-// start position, every enemy's start position, and every other already
-// -placed obstacle - same idea as the enemy_clear/clear checks in
-// Game::init, just reused for a third entity type.
+// start position and every enemy's start position - same idea as the
+// enemy_clear/clear checks in Game::init, just reused for a third entity
+// type. Obstacle-vs-obstacle spacing uses the separate, smaller
+// OBSTACLE_CLUSTER_CLEAR instead (see below).
 pub const OBSTACLE_CLEAR: f32 = 90.0;
+// Minimum center-to-center spacing between any two obstacle tiles
+// specifically - checked between every tile of a newly-placed structure and
+// every tile placed so far, including tiles from within the *same*
+// structure (adjacent `structures::Blueprint` offsets sit exactly one grid
+// cell apart, i.e. exactly at this minimum). Exactly one full tile width -
+// same value as OBSTACLE_GRID_SIZE now that a grid cell *is* a tile, so any
+// two grid-aligned tiles are either exactly touching (edge-to-edge, matching
+// walls_sheet.png's seamless-tiling art - see docs/WALLS_SPEC.md) or further
+// apart, never overlapping. Kept as its own named constant (rather than
+// reusing OBSTACLE_GRID_SIZE directly) since the two mean different things -
+// this is a spacing rule, not a placement grid - and OBSTACLE_CLEAR (90px,
+// the player/enemy-vs-obstacle spacing) is intentionally larger than either.
+pub const OBSTACLE_CLUSTER_CLEAR: f32 = OBSTACLE_TEXTURE_SIZE * OBSTACLE_SCALE;
+
+// The player's starting enclosure (see `simulation::spawn_player_fortress`):
+// a square wall centered on the player's spawn, this many tank-widths per
+// side. Left/right sides are Wood, the bottom is Brick, the top is Glass -
+// all destructible (no Iron), so it's a defensible starting position rather
+// than a permanent cage; Glass's low max_health (OBSTACLE_GLASS_MAX_HEALTH)
+// makes the top the natural place a shot punches through first.
+pub const PLAYER_FORTRESS_TANK_WIDTHS: f32 = 4.0; // 10.0 reduced 60%
 
 pub const OBSTACLE_SHADOW_OFFSET: f32 = 3.0; // px, same grounded distance as TANK_SHADOW_OFFSET
 pub const OBSTACLE_SHADOW_OPACITY: f32 = 0.35;
@@ -676,5 +774,6 @@ pub mod physics;
 pub mod shell;
 pub mod shockwave;
 pub mod simulation;
+pub mod structures;
 pub mod tank;
 pub mod track;
