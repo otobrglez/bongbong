@@ -235,7 +235,7 @@ impl Tank {
     /// light and moderate damage, then falls off harder as damage nears the
     /// max - a limp rather than a linear taper. Scales both top speed
     /// (`effective_speed`) and how fast the tank can reach it
-    /// (`TANK_ACCEL_FORCE`/`TANK_DECEL_FORCE` in `Game::drive_tank`), so a
+    /// (`TANK_ACCEL_FORCE`/`TANK_DECEL_CURVE_RATE` in `Game::drive_tank`), so a
     /// damaged tank is sluggish to speed up too, not just capped lower.
     pub fn speed_factor(&self) -> f32 {
         let hurt = (self.damage / MAX_DAMAGE).clamp(0.0, 1.0);

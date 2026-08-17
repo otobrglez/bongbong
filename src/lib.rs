@@ -290,7 +290,7 @@ pub const RESTART_DELAY: f32 = 3.0;
 // facing* immediately (rotation is still instant/cosmetic) and the tank's
 // velocity along that axis chases the commanded speed via a mass-aware
 // acceleration impulse each frame rather than snapping to it - see
-// Game::drive_tank, TANK_ACCEL_FORCE/TANK_DECEL_FORCE below. A tank's tracks
+// Game::drive_tank, TANK_ACCEL_FORCE/TANK_DECEL_CURVE_RATE below. A tank's tracks
 // still resist lateral sliding - any velocity component *perpendicular* to
 // the commanded direction is scrubbed toward zero by TANK_TURN_GRIP_FORCE -
 // but deliberately not as hard as the new axis builds up, so a corner reads
@@ -320,16 +320,8 @@ pub const DAMAGE_SPEED_CURVE: f32 = 2.2;
 // target (see Game::drive_tank), expressed as a force so mass genuinely
 // matters (F = m*a - a heavier tank, if mass ever varies, ramps slower for
 // the same force) rather than a flat px/s^2 every tank shares regardless of
-// mass. Both figures are also scaled by Tank::speed_factor, so a damaged
-// tank is sluggish to speed up, not just capped at a lower top speed.
-// Deceleration is deliberately weaker than acceleration - releasing a
-// direction (or getting knocked off course) lets the tank slide for a beat
-// rather than stopping dead, which is what actually makes driving more
-// challenging, not just "slower everywhere." This same chase-toward-target
-// mechanism is also what decays ram/explosion/shell knockback now: a hit
-// pushes velocity away from wherever the tank is trying to go, which reads
-// as "slow down and correct," so it fades out via the (weak) decel rate
-// instead of a separate hand-decayed field.
+// mass. Also scaled by Tank::speed_factor, so a damaged tank is sluggish to
+// speed up, not just capped at a lower top speed.
 // TANK_ACCEL_FORCE is kept meaningfully *stronger* than TANK_TURN_GRIP_FORCE
 // below (see that constant's comment for the drift this produces) so a
 // 90-degree turn still doesn't stall: even though the old axis's momentum
@@ -343,7 +335,42 @@ pub const DAMAGE_SPEED_CURVE: f32 = 2.2;
 // accel (scrubbing the old axis faster than the new one could build), not
 // from grip merely existing.
 pub const TANK_ACCEL_FORCE: f32 = 4200.0; // reaches TANK_SPEED in well under a second
-pub const TANK_DECEL_FORCE: f32 = 600.0; // noticeably slower to shed speed than to gain it
+
+// Deceleration (releasing a direction, reversing, or coasting off a
+// ram/explosion/shell knockback - see Game::drive_tank) used to chase toward
+// zero with the same flat-force model as acceleration above, just at a much
+// weaker force: a constant per-frame cap, so speed bled off in a straight
+// line over a fixed span of time regardless of how fast the tank was going.
+// Playtester feedback (a Slovenian-language note) was that this read as too
+// slow to stop and too flat/mechanical rather than a genuine brake - asked
+// for a curve instead of linear, and to lean into that curve rather than
+// just nudge the old number. Braking now eases current_on toward target_on
+// exponentially instead: `1 - exp(-TANK_DECEL_CURVE_RATE * dt)` is the
+// fraction of the remaining speed gap closed this frame, frame-rate
+// independent. That's a curve by construction - it bites hardest right when
+// a direction is released (most of the speed sheds in the first ~1/RATE
+// seconds) and tapers as the tank nears a stop, rather than shedding speed
+// at a constant rate the whole way down. Both old and new rates divide by
+// Tank::mass same as accel (a `std`-class tank at its default scale sits at
+// mass 4.0 - see TANK_CHASSIS_MASS_FACTOR_BY_ROW's doc comment - so that's
+// the reference point below, not unit mass): the tuned rate below gives that
+// baseline tank a full-speed-to-stop that reads as "most of the way stopped"
+// in ~150ms, vs. the old flat-600-force linear ramp's TANK_SPEED * mass / 600
+// = ~1.5s to fully stop - not just a curve, a genuinely faster one. Verified
+// headlessly with `cargo run --bin probe -- --scenario brake` (see
+// probe.rs) rather than just by the arithmetic here, since Game::apply_impulse
+// feeding rapier's own integration is one more step removed from these
+// constants than a plain formula. Still scaled by Tank::speed_factor like
+// accel, so a damaged tank is sluggish to brake too, not just to speed up.
+// The exponential only approaches zero asymptotically, so TANK_DECEL_SNAP_PX
+// is the remaining speed-gap threshold below which Game::drive_tank snaps
+// straight to the target instead of trailing an imperceptible tail forever.
+// This is the same chase-toward-target mechanism ram/explosion/shell knockback decay
+// rides on (a hit pushes velocity away from wherever the tank is trying to
+// go, which reads as "slow down and correct"), so that knockback now decays
+// on the same curve rather than a separate hand-decayed field.
+pub const TANK_DECEL_CURVE_RATE: f32 = 80.0; // 1/s - higher = snappier stop; this *is* "the curve"
+pub const TANK_DECEL_SNAP_PX: f32 = 3.0; // px/s gap below which the tail snaps to target
 
 // Turning grip: how hard a tank's tracks cancel velocity *perpendicular* to
 // the hull's current facing (`Tank::rotation` - see Game::drive_tank).
@@ -357,12 +384,13 @@ pub const TANK_DECEL_FORCE: f32 = 600.0; // noticeably slower to shed speed than
 // the drift back down ~10% (2000 -> 2200) once it was actually driven, so
 // the scrub is correspondingly a bit quicker now (~10% less time carrying
 // old-axis momentum) while still comfortably below accel and still a
-// genuine, visible drift rather than a snap. Still comfortably above
-// TANK_DECEL_FORCE (600) - grip and decel govern different axes
-// (perpendicular vs. along-facing) and don't need to match, but if grip ever
-// dropped to decel's level the perpendicular carry-through would last as
-// long as a full coasting stop, which starts to feel like sliding rather
-// than driving. Not scaled by
+// genuine, visible drift rather than a snap. Grip and decel govern different
+// axes (perpendicular vs. along-facing) on different models now (grip is
+// still a flat force, decel is the exponential curve above) and don't need
+// to match numerically, but grip's ~100ms scrub-to-zero at top speed is
+// still comfortably quicker than decel's ~150ms curve to a near-stop, so a
+// sideways ram/knockback still reads as "grip catches it fast" rather than
+// sliding as long as a full coasting stop. Not scaled by
 // Tank::speed_factor: track grip is a mechanical property, not an
 // engine-power one, so a damaged tank still corners with the same drift
 // character even though it accelerates and tops out slower. Applies every
@@ -371,7 +399,7 @@ pub const TANK_DECEL_FORCE: f32 = 600.0; // noticeably slower to shed speed than
 // steering - see Game::drive_tank's own doc comment) - so a ram/explosion/
 // shell knockback that shoves a tank sideways to wherever it's currently
 // facing also gets scrubbed by this (faster than a coasting stop would via
-// the much weaker TANK_DECEL_FORCE, just no longer almost-instantly).
+// the much weaker TANK_DECEL_CURVE_RATE, just no longer almost-instantly).
 pub const TANK_TURN_GRIP_FORCE: f32 = 2200.0;
 
 // Purely cosmetic hull-turn animation: `Tank::rotation` itself still snaps
@@ -407,7 +435,7 @@ pub const RAM_DAMAGE_COOLDOWN: f32 = 0.5;
 // lighter tank gets shoved further than a heavier one. Wrecks are treated as
 // infinite mass in both this and the explosion knockback below -
 // already-dead hulks stay put when hit. The push itself decays via the same
-// acceleration chase that governs normal driving (see TANK_DECEL_FORCE
+// deceleration curve that governs normal braking (see TANK_DECEL_CURVE_RATE
 // above), not a separate damping constant.
 pub const KNOCKBACK_STRENGTH: f32 = 0.2; // fraction of ram closing speed converted to push speed
 pub const KNOCKBACK_MAX_SPEED: f32 = 60.0; // px/s cap on any one push - keeps it small
@@ -746,12 +774,14 @@ pub const OBSTACLE_CLEAR: f32 = 90.0;
 pub const OBSTACLE_CLUSTER_CLEAR: f32 = OBSTACLE_TEXTURE_SIZE * OBSTACLE_SCALE;
 
 // The player's starting enclosure (see `simulation::spawn_player_fortress`):
-// a square wall centered on the player's spawn, this many tank-widths per
-// side. Left/right sides are Wood, the bottom is Brick, the top is Glass -
-// all destructible (no Iron), so it's a defensible starting position rather
-// than a permanent cage; Glass's low max_health (OBSTACLE_GLASS_MAX_HEALTH)
-// makes the top the natural place a shot punches through first.
-pub const PLAYER_FORTRESS_TANK_WIDTHS: f32 = 4.0; // 10.0 reduced 60%
+// the word "BONG!" spelled out in wall tiles, one material per glyph (B is
+// Brick, the O the player spawns inside is Glass, N is Wood, G is Iron, and
+// `!` reuses Brick - only four materials exist for five glyphs). Sized by
+// the pixel font in `spawn_player_fortress`'s `GLYPH_*` constants directly,
+// not by a tank-relative scale like the shape this replaced. Glass's low
+// max_health (OBSTACLE_GLASS_MAX_HEALTH) is exactly why the O got that
+// material: a shot or two from inside cracks an escape route, same role
+// this enclosure's now-removed circular predecessor gave its weakest side.
 
 pub const OBSTACLE_SHADOW_OFFSET: f32 = 3.0; // px, same grounded distance as TANK_SHADOW_OFFSET
 pub const OBSTACLE_SHADOW_OPACITY: f32 = 0.35;

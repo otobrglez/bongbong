@@ -49,14 +49,14 @@ use crate::{
     OBSTACLE_GRID_SIZE, OBSTACLE_HULL_FRACTION, OBSTACLE_SCALE, OBSTACLE_STRUCTURE_CHANCE,
     OBSTACLE_TEXTURE_SIZE, OBSTACLE_WOOD_FLAMMABLE_CHANCE,
     PATHFIND_CELL_SIZE, PHYSICS_FIXED_DT, PHYSICS_MAX_CATCHUP_SECONDS, PLAYER_DAMAGE_MAX,
-    PLAYER_DAMAGE_MIN, PLAYER_FORTRESS_TANK_WIDTHS, Position,
+    PLAYER_DAMAGE_MIN, Position,
     RAM_DAMAGE_COOLDOWN, RESTART_DELAY, SHELL_HIT_HALF_EXTENT, SHELL_IMPACT_KNOCKBACK_SPEED,
     SHELL_SHADOW_OFFSET_MAX, SHELL_SHADOW_OFFSET_MIN, SHELL_SPEED,
-    SHOCKWAVE_DURATION, TANK_ACCEL_FORCE, TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW, TANK_DECEL_FORCE,
-    TANK_HULL_BBOX_BY_ROW,
+    SHOCKWAVE_DURATION, TANK_ACCEL_FORCE, TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW,
+    TANK_DECEL_CURVE_RATE, TANK_DECEL_SNAP_PX, TANK_HULL_BBOX_BY_ROW,
     TANK_HULL_DISABLED_DAMAGE,
     TANK_HULL_TRACK_COLS, TANK_HULL_TRACK_FRAME_DISTANCE, TANK_SHELL_VARIANT_BY_ROW,
-    TANK_SHELL_VARIANT_STAGGERED_BY_ROW, TANK_TEXTURE_SIZE, TANK_TURN_GRIP_FORCE,
+    TANK_SHELL_VARIANT_STAGGERED_BY_ROW, TANK_TURN_GRIP_FORCE,
     TANK_WRECK_COLS, TRACK_MAX_OPACITY, TRACK_SCALE_FRACTION, TRACK_SCALE_JITTER, TRACK_SPACING,
     TRACK_WEIGHT_OPACITY_BY_ROW, TRACK_WEIGHT_SCALE_BY_ROW, TRACK_WOBBLE_AMP_MAX_DEG,
     TRACK_WOBBLE_AMP_MIN_DEG, TRACK_WOBBLE_WAVELENGTH_MAX, TRACK_WOBBLE_WAVELENGTH_MIN,
@@ -301,25 +301,101 @@ fn sample_structure_positions(
     None
 }
 
-/// The player's starting enclosure: a square wall roughly
-/// `PLAYER_FORTRESS_TANK_WIDTHS` tank-widths per side, centered on `center`
-/// (the player's spawn position) - left/right sides are Wood, the bottom is
-/// Brick, the top is Glass. Every tile still spawns as its own `Obstacle`,
-/// same as a `structures.rs`-generated shape, but this specific layout is
-/// fixed rather than randomly rolled and mixes materials per side (unlike
-/// the generator's "one material per structure" rule) - exactly why it's
-/// its own function instead of a `structures::Blueprint`.
+/// One glyph in the tiny pixel font `spawn_player_fortress` spells "BONG!"
+/// with. Each row is a string where `#` marks a filled tile and anything
+/// else (conventionally `.`) is empty; every row in a glyph must be the same
+/// length, since that length *is* the glyph's width in tiles - a narrower
+/// glyph (see `GLYPH_BANG`) just uses shorter rows.
+type Glyph = &'static [&'static str];
+
+const GLYPH_B: Glyph = &[
+    "####.", "#...#", "#...#", "####.", "#...#", "#...#", "####.",
+];
+const GLYPH_O: Glyph = &[
+    ".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###.",
+];
+const GLYPH_N: Glyph = &[
+    "#...#", "##..#", "#.#.#", "#.#.#", "#..##", "#...#", "#...#",
+];
+const GLYPH_G: Glyph = &[
+    ".####", "#....", "#....", "#..##", "#...#", "#...#", ".###.",
+];
+const GLYPH_BANG: Glyph = &["#", "#", "#", "#", "#", ".", "#"];
+
+/// Column gap (in tiles) between adjacent glyphs.
+const GLYPH_GAP: i32 = 2;
+const WORD_GLYPHS: [Glyph; 5] = [GLYPH_B, GLYPH_O, GLYPH_N, GLYPH_G, GLYPH_BANG];
+const WORD_MATERIALS: [Material; 5] = [
+    Material::Brick,
+    Material::Glass,
+    Material::Wood,
+    Material::Iron,
+    Material::Brick,
+];
+/// Index into `WORD_GLYPHS`/`WORD_MATERIALS` of the `O` the player spawns
+/// inside.
+const WORD_O_INDEX: usize = 1;
+
+/// Column each glyph starts at (left to right, `GLYPH_GAP` tiles apart), the
+/// column the `O` glyph is centered on, and the column the whole word's
+/// bounding box is centered on. Shared by `spawn_player_fortress` (which
+/// places every tile relative to the `O`'s column) and `fortress_center_offset`
+/// (which needs the gap between those two centers) so the two can't drift
+/// out of sync with each other or with `GLYPH_GAP`.
+fn fortress_columns() -> ([i32; 5], i32, i32) {
+    let mut glyph_start_col = [0i32; 5];
+    let mut cursor = 0;
+    for (i, glyph) in WORD_GLYPHS.iter().enumerate() {
+        glyph_start_col[i] = cursor;
+        cursor += glyph[0].len() as i32 + GLYPH_GAP;
+    }
+    let word_width_cols = cursor - GLYPH_GAP;
+    let o_width = WORD_GLYPHS[WORD_O_INDEX][0].len() as i32;
+    let o_center_col = glyph_start_col[WORD_O_INDEX] + o_width / 2;
+    let word_center_col = (word_width_cols - 1) / 2;
+    (glyph_start_col, o_center_col, word_center_col)
+}
+
+/// World-space x offset from "BONG!"'s own bounding-box center to the `O`'s
+/// center (there's no y equivalent - every glyph is the same height, so the
+/// word is already vertically symmetric around the O). `BONG!` isn't
+/// symmetric around its `O` left-to-right (just `B` hangs to the left, but
+/// `N`, `G` and `!` all hang to the right), so anchoring the word on the `O`
+/// and putting the `O` at the screen's actual center read as visibly
+/// off-center, bulked right. `Game::init` subtracts this from the screen's
+/// true center to find where the `O` - and the player spawning inside it -
+/// should actually go, so the word as a whole reads centered instead.
+fn fortress_center_offset() -> f32 {
+    let (_, o_center_col, word_center_col) = fortress_columns();
+    (word_center_col - o_center_col) as f32 * OBSTACLE_GRID_SIZE
+}
+
+/// The player's starting enclosure: not a shape this time, but the word
+/// "BONG!" spelled out in wall tiles (see `Glyph`/`GLYPH_*` above), one
+/// material per letter - B is Brick, N is Wood, G is Iron, and the `!`
+/// reuses Brick (only four materials exist, so with five glyphs one repeat
+/// is unavoidable; reusing B's non-adjacent material keeps neighboring
+/// glyphs visually distinct). The player spawns inside the `O`, which is
+/// Glass - the weakest material (`Material::max_health`) and the same
+/// material the original circular version of this enclosure used for its
+/// shootable weak point - so a shot or two from inside cracks an escape
+/// route same as before. Every tile still spawns as its own `Obstacle`,
+/// same as a `structures.rs`-generated shape, but this layout is fixed
+/// rather than randomly rolled and mixes materials per glyph (unlike the
+/// generator's "one material per structure" rule) - exactly why it's its
+/// own function instead of a `structures::Blueprint`.
 ///
-/// Skips entirely (returns an empty result) if the box wouldn't fully fit
+/// Skips entirely (returns an empty result) if the word wouldn't fully fit
 /// inside the battlefield's walls - same "give up gracefully" convention as
-/// `sample_structure_positions`, rather than spawning a box that clips
+/// `sample_structure_positions`, rather than spawning a word that clips
 /// through the boundary.
 ///
 /// Returns every tile position placed (folded into `Game::init`'s
 /// `obstacle_positions` so later spawns steer clear of them individually)
-/// and an exclusion radius in px - the box's half-diagonal, so a circular
-/// distance check from `center` fully contains the square regardless of
-/// which edge or corner is nearest.
+/// and an exclusion radius in px - the furthest any tile sits from `center`
+/// (the `O`'s own center, not the whole word's, since the word isn't
+/// symmetric around it), so a circular distance check from `center` fully
+/// contains the whole sign despite `BONG!`'s lopsided shape.
 fn spawn_player_fortress(
     physics: &mut Physics,
     world: &mut hecs::World,
@@ -329,28 +405,31 @@ fn spawn_player_fortress(
     width: f32,
     height: f32,
 ) -> (Vec<Position>, f32) {
-    let tank_width = TANK_TEXTURE_SIZE * Tank::default().scale;
-    let side_tiles =
-        ((tank_width * PLAYER_FORTRESS_TANK_WIDTHS) / OBSTACLE_GRID_SIZE).round() as i32;
-    let half = side_tiles / 2;
-    let center_gx = (center.x / OBSTACLE_GRID_SIZE).round() as i32;
-    let center_gy = (center.y / OBSTACLE_GRID_SIZE).round() as i32;
-    let (min_gx, max_gx) = (center_gx - half, center_gx + half - 1);
-    let (min_gy, max_gy) = (center_gy - half, center_gy + half - 1);
+    // Place the grid so the O's own center lands exactly on `center` - the
+    // word hangs however it hangs left/right of that, not centered as a
+    // whole (B.../!'s combined width isn't symmetric around the O; see
+    // `fortress_center_offset`, which is how `Game::init` compensates for
+    // that when it picks where `center` itself goes).
+    let (glyph_start_col, o_center_col, _) = fortress_columns();
+    let row_center = WORD_GLYPHS[0].len() as i32 / 2;
+    let center_gx = (center.x / OBSTACLE_GRID_SIZE).round() as i32 - o_center_col;
+    let center_gy = (center.y / OBSTACLE_GRID_SIZE).round() as i32 - row_center;
     let grid_to_pos =
         |gx: i32, gy: i32| Position::new(gx as f32 * OBSTACLE_GRID_SIZE, gy as f32 * OBSTACLE_GRID_SIZE);
 
-    // Left/right columns run the box's full height (the "lines" of Wood);
-    // top/bottom rows fill the span between them (excluding the corners,
-    // already covered by the Wood columns) with Glass/Brick respectively.
     let mut tiles: Vec<(Position, Material)> = Vec::new();
-    for gy in min_gy..=max_gy {
-        tiles.push((grid_to_pos(min_gx, gy), Material::Wood));
-        tiles.push((grid_to_pos(max_gx, gy), Material::Wood));
-    }
-    for gx in (min_gx + 1)..max_gx {
-        tiles.push((grid_to_pos(gx, min_gy), Material::Glass)); // top
-        tiles.push((grid_to_pos(gx, max_gy), Material::Brick)); // bottom
+    for (i, glyph) in WORD_GLYPHS.iter().enumerate() {
+        let material = WORD_MATERIALS[i];
+        for (row, line) in glyph.iter().enumerate() {
+            for (col, ch) in line.chars().enumerate() {
+                if ch != '#' {
+                    continue;
+                }
+                let gx = center_gx + glyph_start_col[i] + col as i32;
+                let gy = center_gy + row as i32;
+                tiles.push((grid_to_pos(gx, gy), material));
+            }
+        }
     }
 
     // The playable area is exactly [0,width] x [0,height] - `spawn_walls`'s
@@ -366,21 +445,21 @@ fn spawn_player_fortress(
     }
 
     // One variant per material (docs/WALLS_SPEC.md: "keep one variant per
-    // structure") - both Wood sides share `wood_variant` so the whole
-    // enclosure reads as one build, not four unrelated wall segments.
-    let wood_variant = rng.random_range(0..Material::Wood.variants());
-    let glass_variant = rng.random_range(0..Material::Glass.variants());
+    // structure") - every tile of a given material (even across the two
+    // glyphs Brick covers) shares that material's single rolled variant, so
+    // the sign reads as one consistent build rather than mismatched patches.
     let brick_variant = rng.random_range(0..Material::Brick.variants());
+    let glass_variant = rng.random_range(0..Material::Glass.variants());
+    let wood_variant = rng.random_range(0..Material::Wood.variants());
+    let iron_variant = rng.random_range(0..Material::Iron.variants());
 
     let mut positions = Vec::with_capacity(tiles.len());
     for (pos, material) in tiles {
-        // Only Wood/Glass/Brick ever appear here (see `tiles` above).
-        let variant = if material == Material::Wood {
-            wood_variant
-        } else if material == Material::Glass {
-            glass_variant
-        } else {
-            brick_variant
+        let variant = match material {
+            Material::Brick => brick_variant,
+            Material::Glass => glass_variant,
+            Material::Wood => wood_variant,
+            Material::Iron => iron_variant,
         };
         let max_health = material.max_health();
         let flammable =
@@ -405,7 +484,10 @@ fn spawn_player_fortress(
             destroyed: false,
         },));
     }
-    let exclusion_radius = (half as f32 * OBSTACLE_GRID_SIZE) * std::f32::consts::SQRT_2;
+    let exclusion_radius = positions
+        .iter()
+        .fold(0.0f32, |max, p| max.max(p.distance_to(center)))
+        + obstacle_half_extent;
     (positions, exclusion_radius)
 }
 
@@ -443,11 +525,14 @@ impl Game {
         // damage_variant: this round's damage.png row-variant (see
         // Tank::damage_variant).
         let row = rng.random_range(0..TANK_VARIANTS);
+        // The player spawns inside the fortress's O, offset from the true
+        // screen center so the "BONG!" sign as a whole reads centered - see
+        // `fortress_center_offset`.
         let mut tank = Tank {
             row,
             shell_variant: TANK_SHELL_VARIANT_BY_ROW[row as usize],
             damage_variant: rng.random_range(0..DAMAGE_VARIANTS),
-            position: Position::new(width / 2.0, height / 2.0),
+            position: Position::new(width / 2.0 - fortress_center_offset(), height / 2.0),
             owner_slot: PLAYER_OWNER_SLOT,
             ..Tank::default()
         };
@@ -1172,6 +1257,56 @@ impl Game {
         }
         (movers, enemy_indices)
     }
+
+    /// How the current round is going. Read-only counterpart to `outcome`'s
+    /// `pub(crate)` field, for external inspection - e.g. `src/bin/probe.rs`
+    /// - that has no reason to see `world`/`Entity` itself, only the result.
+    pub fn outcome(&self) -> Outcome {
+        self.outcome
+    }
+
+    /// A snapshot of every tank (player + enemies) currently in play, for
+    /// external inspection without touching `world`/`Entity` directly - see
+    /// `TankSnapshot` and `src/bin/probe.rs`, and this module's doc comment
+    /// on driving/observing a round headlessly.
+    pub fn tank_snapshots(&self) -> Vec<TankSnapshot> {
+        let player = self.player.expect("player entity spawned in init");
+        self.world
+            .query::<(Entity, &Tank)>()
+            .iter()
+            .map(|(entity, tank)| TankSnapshot {
+                is_player: entity == player,
+                position: tank.position,
+                rotation: tank.rotation,
+                // The tank's *actual* physics velocity (post accel/decel
+                // curve), not `tank.velocity` - that field holds the
+                // instantly-snapped commanded target `drive_tank` chases
+                // toward, not what the body is really doing this frame. See
+                // `TANK_DECEL_CURVE_RATE` in lib.rs: this is what you want to
+                // watch to verify the braking curve headlessly.
+                velocity: self.physics.velocity(
+                    tank.body
+                        .expect("tank should always have a physics body once spawned"),
+                ),
+                damage: tank.damage,
+                shells_ammo: tank.shells_ammo,
+                is_wreck: tank.is_wreck(),
+            })
+            .collect()
+    }
+}
+
+/// Read-only summary of one tank's externally-visible state, returned by
+/// `Game::tank_snapshots`. A non-player tank is always an enemy - the world
+/// field's doc comment on `Ai` is the source of truth for that invariant.
+pub struct TankSnapshot {
+    pub is_player: bool,
+    pub position: Position,
+    pub rotation: f32,
+    pub velocity: Position,
+    pub damage: f32,
+    pub shells_ammo: i32,
+    pub is_wreck: bool,
 }
 
 /// Build the battlefield boundary: four static wall colliders positioned so
@@ -1218,28 +1353,31 @@ fn facing_along_x(rotation: f32) -> bool {
 /// decides the *target* velocity (unchanged). Velocity always splits against
 /// the hull's own facing (`Tank::rotation`, updated by `control` above),
 /// never against whether a key happens to be held this frame: the axis along
-/// the hull (forward/back) chases the target using `TANK_ACCEL_FORCE` when
-/// speeding up or the deliberately weaker `TANK_DECEL_FORCE` when
-/// slowing/reversing/coasting to a stop - both divided by `Tank::mass` and
-/// scaled by `Tank::speed_factor`, so a damaged tank is sluggish too. The
-/// axis perpendicular to the hull gets scrubbed toward zero by
-/// `TANK_TURN_GRIP_FORCE` instead (weaker than `TANK_ACCEL_FORCE`, so this
-/// scrub is deliberately slower than the new axis's own buildup - see its
-/// doc comment in `lib.rs` for the drift-through-corners feel this
-/// produces), unscaled by mass/damage factors beyond `Tank::mass` itself.
-/// Real tank tracks resist lateral sliding mechanically, all the time, not
-/// just while the driver is actively steering, so this applies whether or
-/// not a direction is currently held: a corner reads as a genuine drift
-/// through the turn rather than the hull snapping onto the new axis, and a
-/// ram/explosion/shell knockback that shoves a tank sideways to wherever
-/// it's currently facing gets scrubbed faster than a voluntary coasting stop
-/// would (via the much weaker `TANK_DECEL_FORCE`), just not the
-/// near-instant kill it used to be. (While a direction *is* held, `control`
-/// has already set `tank.rotation` to that same direction this frame, so the axis this
-/// picks is identical to the driven axis - unchanged from before.) Shared by
-/// the player and every enemy so both drive identically; a free function
-/// (not a `Game` method) so it can borrow `physics` and one `tank`
-/// independently of the rest of `self`.
+/// the hull (forward/back) chases the target using the flat-force
+/// `TANK_ACCEL_FORCE` when speeding up (linear ramp, see its doc comment in
+/// `lib.rs`) or the exponential `TANK_DECEL_CURVE_RATE` curve when
+/// slowing/reversing/coasting to a stop (see that constant's doc comment for
+/// why braking is a curve rather than a matching flat force) - both scaled
+/// by `Tank::mass` and `Tank::speed_factor`, so a damaged tank is sluggish
+/// both ways. The axis perpendicular to the hull gets scrubbed toward zero by
+/// `TANK_TURN_GRIP_FORCE` instead (a flat force like accel, weaker than
+/// `TANK_ACCEL_FORCE` so this scrub is deliberately slower than the new
+/// axis's own buildup - see its doc comment in `lib.rs` for the
+/// drift-through-corners feel this produces), unscaled by mass/damage
+/// factors beyond `Tank::mass` itself. Real tank tracks resist lateral
+/// sliding mechanically, all the time, not just while the driver is actively
+/// steering, so this applies whether or not a direction is currently held: a
+/// corner reads as a genuine drift through the turn rather than the hull
+/// snapping onto the new axis, and a ram/explosion/shell knockback that
+/// shoves a tank sideways to wherever it's currently facing gets scrubbed
+/// faster than a voluntary coasting stop would (via the much weaker
+/// `TANK_DECEL_CURVE_RATE`), just not the near-instant kill it used to be.
+/// (While a direction *is* held, `control` has already set `tank.rotation`
+/// to that same direction this frame, so the axis this picks is identical to
+/// the driven axis - unchanged from before.) Shared by the player and every
+/// enemy so both drive identically; a free function (not a `Game` method) so
+/// it can borrow `physics` and one `tank` independently of the rest of
+/// `self`.
 fn drive_tank(physics: &mut Physics, tank: &mut Tank, intent: Intent, dt: f32) {
     let handle = tank
         .body
@@ -1275,13 +1413,23 @@ fn drive_tank(physics: &mut Physics, tank: &mut Tank, intent: Intent, dt: f32) {
 
     let want_on = target_on - current_on;
     let speeding_up = want_on * current_on >= 0.0;
-    let force = if speeding_up {
-        TANK_ACCEL_FORCE
+    let delta_on = if speeding_up {
+        let max_on = TANK_ACCEL_FORCE * tank.speed_factor() / tank.mass() * dt;
+        want_on.clamp(-max_on, max_on)
     } else {
-        TANK_DECEL_FORCE
+        // Curved brake: close a `rate`-controlled fraction of the remaining
+        // on-axis gap each frame (frame-rate independent), not a flat
+        // per-frame cap - see TANK_DECEL_CURVE_RATE's doc comment in lib.rs.
+        // Snap the last sliver to target once it's below TANK_DECEL_SNAP_PX
+        // rather than trailing the exponential's asymptotic tail forever.
+        let rate = TANK_DECEL_CURVE_RATE * tank.speed_factor() / tank.mass();
+        let remaining_gap = want_on * (-rate * dt).exp();
+        if remaining_gap.abs() < TANK_DECEL_SNAP_PX {
+            want_on
+        } else {
+            want_on - remaining_gap
+        }
     };
-    let max_on = force * tank.speed_factor() / tank.mass() * dt;
-    let delta_on = want_on.clamp(-max_on, max_on);
 
     let max_off = TANK_TURN_GRIP_FORCE / tank.mass() * dt;
     let delta_off = (-current_off).clamp(-max_off, max_off);

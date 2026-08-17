@@ -1,15 +1,16 @@
 [package]
-version = "0.0.5"
+version = "0.0.6"
 name = "bongbong"
 edition = "2024"
+default-run = "bongbong"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 hecs = "0.11"
 rand = "0.10.2"
-rapier2d = "0.34.0"
+rapier2d = "0.35.2"
 serde = { version = "1.0.229", features = ["derive"] }
 sola-raylib = {
-    version = "6.2.0"
+    version = "6.3.0"
     # features = ["serde"]
 }
