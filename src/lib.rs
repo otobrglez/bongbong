@@ -503,6 +503,16 @@ pub const AVOID_MIN_SPEED: f32 = 10.0; // skip prediction when moving slower tha
 // jitter that occurs near 45-degree diagonals.
 pub const AI_DIR_HOLD_SECONDS: f32 = 0.35;
 pub const AI_DIR_SWITCH_MARGIN_PX: f32 = 20.0;
+// A committed heading that's about to walk into a known-blocked grid cell
+// (Ai::steer's obstacle-ahead override) still needs at least this much dwell
+// time before it can be overridden *again* - much shorter than
+// AI_DIR_HOLD_SECONDS (a real obstacle should be reacted to fast), but
+// without some floor, a coarse grid's routed direction wobbling by a cell
+// near a corner can flip the override back and forth every single frame,
+// reintroducing the exact jitter AI_DIR_HOLD_SECONDS/AI_DIR_SWITCH_MARGIN_PX
+// exist to prevent (found via the probe harness's `--rounds` sweep: jitter
+// counts rose sharply without this).
+pub const AI_OBSTACLE_OVERRIDE_HOLD_SECONDS: f32 = 0.1;
 
 // AI pathfinding (see pathfind.rs): a coarse grid A* layer so an enemy
 // routes around static obstacles (obstacle.rs) instead of just walking into
@@ -511,6 +521,18 @@ pub const AI_DIR_SWITCH_MARGIN_PX: f32 = 20.0;
 // Rebuilt fresh every frame in Game::update (obstacles are few and the grid
 // is small, so this is cheap enough not to need caching/invalidation).
 pub const PATHFIND_CELL_SIZE: f32 = 48.0; // px per grid cell
+
+// Stuck-escape: a tank the AI has been commanding to move (see Ai::think's
+// `was_moving`/`stuck_timer`) whose real physics speed stays under
+// STUCK_SPEED_EPS for STUCK_ESCAPE_SECONDS running is treated as genuinely
+// stuck - not just slow-to-turn (see AI_DIR_HOLD_SECONDS above, a much
+// shorter window for a different problem) - and Ai::steer forces a hard
+// perpendicular-turn reset instead of continuing to retry whatever's been
+// failing. Catches both a bad commitment call and a layout with no path
+// around an obstacle cluster at all (see pathfind.rs's Grid::next_step
+// returning None).
+pub const STUCK_SPEED_EPS: f32 = 8.0; // px/s - top speeds are 150-220 (TANK_SPEED/ENEMY_SPEED)
+pub const STUCK_ESCAPE_SECONDS: f32 = 0.75;
 
 // Player shell damage bounds (unchanged behaviour, now named for symmetry).
 pub const PLAYER_DAMAGE_MIN: f32 = 10.0;
@@ -746,7 +768,7 @@ pub const OBSTACLE_COUNT_MAX: usize = 4;
 // placement being an equally-likely full structure.
 pub const OBSTACLE_STRUCTURE_CHANCE: f64 = 0.5;
 // Obstacle spawn positions snap to a world-space grid this many px per cell
-// (see `sample_structure_positions` in simulation.rs) so walls - and every
+// (see `sample_structure_positions` in battlefield.rs) so walls - and every
 // tile of a multi-tile structure - land visually aligned instead of at
 // arbitrary fractional offsets. Exactly `Obstacle::size()`
 // (OBSTACLE_TEXTURE_SIZE * OBSTACLE_SCALE) - one grid cell is one obstacle
@@ -773,7 +795,23 @@ pub const OBSTACLE_CLEAR: f32 = 90.0;
 // the player/enemy-vs-obstacle spacing) is intentionally larger than either.
 pub const OBSTACLE_CLUSTER_CLEAR: f32 = OBSTACLE_TEXTURE_SIZE * OBSTACLE_SCALE;
 
-// The player's starting enclosure (see `simulation::spawn_player_fortress`):
+// Ground/terrain layer (grass base, road painted under every static
+// obstacle tile and inside the fortress's B/O glyphs) - see ground.rs for
+// the placement/autotile logic, docs/GROUND_SPEC.md for the full design
+// writeup. Drawn from static/punyworld/punyworld-overworld-tileset.png, a
+// third-party tileset - deliberately NOT on the Resurrect 64 palette every
+// other sheet uses (see docs/PALETTE.md and static/punyworld/SOURCE.md), a
+// documented exception rather than an oversight.
+pub const GROUND_TEXTURE_SIZE: f32 = 16.0; // native tile size in the source sheet
+// 2x, not OBSTACLE_SCALE-style 1.0 - the source art is 16px/tile, and
+// GROUND_WORLD_TILE below needs to land on OBSTACLE_GRID_SIZE (32px) so the
+// ground layer's grid lines up with the obstacle/physics grid (see
+// ground.rs's module doc comment for the centered-vs-top-left-aligned
+// phase-matching that actually makes this line-up hold in practice).
+pub const GROUND_SCALE: f32 = 2.0;
+pub const GROUND_WORLD_TILE: f32 = GROUND_TEXTURE_SIZE * GROUND_SCALE; // = OBSTACLE_GRID_SIZE
+
+// The player's starting enclosure (see `battlefield::spawn_player_fortress`):
 // the word "BONG!" spelled out in wall tiles, one material per glyph (B is
 // Brick, the O the player spawns inside is Glass, N is Wood, G is Iron, and
 // `!` reuses Brick - only four materials exist for five glyphs). Sized by
@@ -795,9 +833,11 @@ pub const HUD_WARN_THRESHOLD: f32 = 0.40;
 pub const HUD_CRITICAL_THRESHOLD: f32 = 0.15;
 
 pub mod ai;
+pub mod battlefield;
 pub mod bt;
 pub mod damage_stage;
 pub mod game;
+pub mod ground;
 pub mod obstacle;
 pub mod pathfind;
 pub mod physics;

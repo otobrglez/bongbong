@@ -2,6 +2,10 @@
 
 .envrc
 
+# Python (tools/spritegen, tools/resurrect64.py)
+__pycache__/
+*.pyc
+
 # Claude Code worktrees (local, per-session checkouts)
 .claude/worktrees/
 

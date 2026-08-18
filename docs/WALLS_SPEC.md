@@ -48,9 +48,17 @@ col = state
 
 ## 3. Brick — rows 0–3, cols 0–5
 
-All four share one muted clay family (`#846152`–`#8C6758`) with a common mortar tone `#655A55`, differing only in **bond pattern and brick size**, so mixed-variant walls still read as one material. Mortar coverage is held near 30% across variants so none look greyer than the others.
+All four share one Puny Palette tone sampled from Puny World's own castle stone-block walls, `#ACB7A1`, with a darker step of the same stone-grey family as mortar, `#4C523C`, differing only in **bond pattern and brick size**, so mixed-variant walls still read as one material — the per-cell tone jitter (0.94–1.10×) that used to spread across a small hex range now snaps back onto the palette at each step instead, so the variation is still there but every resulting shade is one of the fixed set. See `tools/punypalette.py` / `docs/PALETTE.md`.
 
-These values sit in the same warm-brown range as the tank chassis (`#806E56`, `#705652`) — mean luminance ~105, saturation ~0.19, matching the tanks' own browns.
+A first pass here sampled brick's colour from Puny World's red roof-tiles instead, on the reasoning that "brick" should be red-ish — but the *pattern* below (§3.1) is copied from the stone walls, not the roof tiles, and a masonry-block pattern in roof-tile red doesn't correspond to anything actually in Puny World's art. It read as visibly wrong for reasons that weren't obvious until compared directly against the source screenshot. Sourcing colour and pattern from the same reference fixed it.
+
+### 3.1 Texture, not just colour
+
+`stipple_cell`/`brick_ticks` in `gen_walls.py`: each brick cell big enough to subdivide gets a mottled internal texture (a coarse grid of stone-grey patches, echoing the several-small-stones-per-panel look of the reference art's castle walls) instead of one flat rectangle, plus short pale tick marks along the mortar seams at intervals. `running` bond's smallest cells (6×2 px) are below the subdivision threshold and stay flat, matching the reference's own smallest visible course.
+
+One implementation pitfall worth knowing if touching this again: the stipple's light/dark variation must pick an **explicit different palette step** (`STONE_PALE`/`STONE_MD`), not nudge the base colour by a small percentage through `mul()`. The Puny Palette's steps are spaced far enough apart that a small multiplicative nudge snaps straight back to the same colour it started from — invisible in practice, unlike Resurrect 64's tighter ramps that technique was written for.
+
+This is the same tone as `IRONS` below (`#5D654F`-family), one step darker — both trace back to the same Puny World stone buildings, brick just uses the paler step plus the masonry-block pattern above, while iron stays flat with its own metal-surface treatments (rivets/corrugation/etc.) instead.
 
 | Row | Type | Brick | Period | Pattern |
 |---|---|---|---|---|
@@ -76,7 +84,7 @@ Bricks are blown out with a ragged edge rather than a clean rectangle.
 
 **Never destroyed** — the plate stays whole at every level, so the collider never changes.
 
-All four share a steel tone (`#666D79`–`#6D7480`) taken from the tanks' slate and blue-grey chassis (`#60656D`, `#6D7584`), differing by surface treatment. Every treatment tiles. Measured saturation 0.085 — the closest match to the tank sheet of any material here.
+All four share one Puny Palette tone sampled from Puny World's own stone/plaster building walls, `#5D654F`, differing by surface treatment. Every treatment tiles — sits in the same register as the buildings the ground layer's own art already draws.
 
 | Row | Type | Surface | Period |
 |---|---|---|---|
@@ -98,7 +106,11 @@ Damage is deformation only — no pixel is ever cleared, so an iron tile is alwa
 
 ## 5. Wood — rows 8–11, cols 0–7
 
-All four share a muted oak tone (`#7F6B4F`–`#867256`) on an 8 px board period, in the same range as the tanks' khaki and brown chassis (`#8B8A60`, `#806E56`).
+All four share one Puny Palette honey-wood tone sampled from Puny World's own wood-plank buildings, `#DE9943`, on an 8 px board period — a warm colour against Brick's now-pale stone-grey (§3), so the two stay visually distinct materials at a glance.
+
+**Colour verified against Puny World's plain wood fence tile** specifically (no roof/door art mixed in, unlike the multi-tile building sprites) — `WOOD_LT`/`WOOD_MD`/`WOOD_DK`/`WOOD_DEEPER` are literally the most common colours in that reference tile, confirming this ramp was already right.
+
+Texture is the existing per-board highlight/shadow bevel plus the sparse grain-speckle marks each `st` branch already scattered before any of this recolor work started (short streak segments at `mul(base, 0.88)`, a handful per board) — deliberately **not** a uniform overlay pattern layered on top. A tried-and-reverted middle step here added a period-4 vertical stripe across the whole tile (explicitly alternating `WOOD_PALE`/`WOOD_DK`, fixing an earlier version of the same stripe that used an invisible `mul()` nudge instead — the same bug §3.1's `stipple_cell` had, and the same fix). Getting the stripe to actually render fixed one problem and caused a worse one: at real tile scale it reads as a flat, mechanical barcode, not wood grain — it doesn't respect the board geometry it's drawn on top of, unlike the original per-board speckle marks which are scaled and positioned relative to each board. Removed entirely rather than tuned softer; the existing speckle marks were already doing the job.
 
 | Row | Type | Layout |
 |---|---|---|
@@ -128,7 +140,7 @@ Columns 4–6 are a **3-frame loop** with flames baked in:
 burning: 4, 5, 6, 4, 5, 6, ...   (~6–9 FPS reads as a good flicker)
 ```
 
-Flame patches move and resize between frames over scorched boards. Fire uses the shell sheet's own palette — `#DC461E` / `#FF9628` / `#FFEC78` with `#C4602A` embers — so explosions and burning wood match.
+Flame patches move and resize between frames over scorched boards. Fire uses the same Puny Palette fire ramp as `gen_shells.py`'s orange family and `gen_tanks.py`'s embers — dark `#9C3527`, mid `#E44219`, core `#EEA343`, with `#812F27` embers — so wall fire, shell impacts, and tank embers all match.
 
 Suggested lifecycle: `intact → damaged → heavily damaged → burning (loop) → charred`.
 
@@ -148,7 +160,7 @@ Suggested lifecycle: `intact → damaged → heavily damaged → burning (loop) 
 | 2 | Heavily cracked — multiple impacts, stress rings |
 | 3 | Shattered — wedge shards fallen away, lit edges (passable) |
 
-The only **semi-transparent** art in the sheet (body alpha 138), so terrain and units show through while still reading as a solid obstacle. Uses a desaturated blue-grey — `#547694` / `#7C9CB0` / `#B0CAD8` — pulled toward the tanks' blue-grey chassis (`#6D7584`) rather than the shells' vivid cyan, since glass is terrain and should not compete with effects.
+The only **semi-transparent** art in the sheet (body alpha 138), so terrain and units show through while still reading as a solid obstacle. Uses Puny World's own water-blue ramp — dark `#038AAB`, mid `#04A0B4`, light `#27D8C5` — the same blue as the `flak` tank's body.
 
 Both the subtle glass ripple (4 px checker) and the diagonal sheen (16 px lattice) tile seamlessly — there is no corner-to-corner gradient, since a gradient can never tile.
 
@@ -223,19 +235,18 @@ Notes:
 
 ## 8. Palette
 
-The whole sheet is tuned to sit with the tank sprites rather than beside them:
+The whole sheet draws from the same Puny Palette as every other sprite sheet in the game — tanks, shells, damage overlay, and the tread-mark decal — via the shared `tools/punypalette.py` module, itself sampled directly from the third-party Puny World ground-layer tileset (see `docs/PALETTE.md`). Every opaque/semi-transparent pixel in `walls_sheet.png` is one of the fixed set; there is no off-palette anti-aliasing or gradient anywhere in the sheet (verified by sampling every pixel against the set).
 
-| Set | Mean luminance | Mean saturation |
+Material base tones, one fixed pick per material (see §3–6 above for the reasoning behind each pick):
+
+| Material | Base | Hex |
 |---|---|---|
-| Tank sheet (reference) | 78 | 0.110 |
-| Brick intact | 105 | 0.193 |
-| Iron intact | 114 | 0.085 |
-| Wood intact | 102 | 0.227 |
-| **Walls overall** | **103** | **0.212** |
+| Brick | pale stone-grey (+ masonry-block texture, §3.1) | `#ACB7A1` |
+| Iron | stone/plaster grey | `#5D654F` |
+| Wood | honey wood | `#DE9943` |
+| Glass | water-blue ramp | `#038AAB` / `#04A0B4` / `#27D8C5` |
 
-Walls land slightly above the tanks in value, deliberately: they are the backdrop, so keeping them a step lighter lets the darker tank silhouettes read on top. Brick and wood saturation sits where the tanks' own brown and khaki chassis sit (0.18–0.20), not higher.
-
-**The one exception is fire.** Wood burn frames keep the shell sheet's vivid `#DC461E` / `#FF9628` / `#FFEC78`, well above the terrain range. That is intentional — fire is an effect, matches shell explosions, and should be the brightest thing on screen.
+**The one exception in spirit, not in palette, is fire.** Wood burn frames use the same fire ramp as `gen_shells.py`'s orange family and `gen_tanks.py`'s embers (`#EA4F36` / `#F79617` / `#FBFF86`, `#CD683D` embers) — still strictly on-palette, but the brightest, most saturated corner of the 64 colours, so it still reads as the hottest thing on screen next to the muted terrain tones above.
 
 ---
 

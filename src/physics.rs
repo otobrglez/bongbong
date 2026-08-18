@@ -53,7 +53,7 @@ impl Physics {
     }
 
     /// Spawn a static, fixed-body cuboid collider: the battlefield boundary
-    /// (see `spawn_walls` in game.rs) and in-arena obstacles (see
+    /// (see `battlefield::spawn_walls`) and in-arena obstacles (see
     /// `obstacle::Obstacle`) both reuse this exact same shape - the only
     /// difference is whether the caller ever calls `remove_body` on the
     /// handle later (walls never do; a destroyed `Crate` obstacle does).

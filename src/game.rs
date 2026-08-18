@@ -27,6 +27,7 @@ pub struct Textures<'a> {
     pub damage: &'a Texture2D,
     pub tracks: &'a Texture2D,
     pub obstacles: &'a Texture2D,
+    pub ground: &'a Texture2D,
 }
 
 /// The ripple post-effects `Game::render` drives, bundled into one param for the
@@ -106,6 +107,10 @@ impl Game {
         // whole-screen shader pass in pass 2.
         rl.draw_texture_mode(thread, scene_target, |mut d| {
             d.clear_background(Color::WHITE);
+
+            // Ground first - the floor everything else sits on. See
+            // ground.rs / docs/GROUND_SPEC.md.
+            crate::ground::draw(&mut d, textures.ground, &self.ground);
 
             // Tread marks go down first so tanks and everything else draw on top.
             for track in &self.tracks {

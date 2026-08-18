@@ -14,7 +14,7 @@ This document describes `scifi_tanks_sheet.png` for engine integration. It is wr
 | Cell size | 32 × 32 px (uniform, no padding, no margin, no gutters) |
 | Format | PNG, RGBA, straight (non-premultiplied) alpha |
 | Background | Fully transparent (alpha = 0) |
-| Art style | Top-down pixel art, hard 1 px near-black outline `#0C0A10` |
+| Art style | Top-down pixel art, hard 1 px near-black outline `#252525` (Puny Palette's darkest tone, sampled from the Puny World tileset's own shadow pixels — that pack has no true black either) |
 
 **Orientation:** All sprites face **up / north (−Y in screen space)**. Barrels point toward the top of the cell. If your engine treats 0° as "east/right", apply a **−90° offset** when converting an aim angle to sprite rotation.
 
@@ -66,20 +66,24 @@ Columns 8–11 are four **interchangeable** destroyed variants of equal severity
 
 12 tanks. Rows 0–9 are standard chassis; rows 10–11 are **super-heavy** chassis, roughly 21% larger in linear dimension than the standard baseline (about 34% larger than the current standard tanks).
 
+Body/accent are curated picks from the Puny Palette (see `tools/punypalette.py`, `docs/PALETTE.md`) — colours sampled directly from the third-party Puny World ground-layer tileset, not an abstract pixel-art palette. Every pixel in the sheet, including every shading step `gen_tanks.py` derives from these two colours, snaps onto that same set. This is the second recolor pass for this roster: an earlier one used [Resurrect 64](https://lospec.com/palette-list/resurrect-64) (see `tools/spritegen/_backup/pre-punypalette-*/gen_tanks.py`) and looked great in isolation, but once the ground layer shipped (`docs/GROUND_SPEC.md`) those candy-vivid R64 colours read as neon plastic next to Puny World's much softer terrain — see `docs/PALETTE.md`'s "why the palette changed a second time" for the full reasoning. Puny World's own art has no purple/violet anywhere in it; `wraith` was reassigned from a purple accent to a hue family the source art actually has.
+
+**Every body colour is picked from the palette's bright/mid steps, never its darkest ones** (`*_DARKEST`/`*_DEEPER` in `tools/punypalette.py`) — a first cut of this pass gave the back half of the roster, especially the two super-heavy chassis, the darkest available step of their family on the reasoning "heavier/stealthier = darker." That read as muddy and drab, the same mistake the R64 muted-pass paragraph above already covers, just rediscovered on a different palette: the body is most of a tank's on-screen area, so a dark body reads as a dark *tank* no matter how bright the rest of the scene is.
+
 | Row | Name | Chassis | Guns | Turret | Accent | Body | Role hint |
 |---|---|---|---|---|---|---|---|
-| 0 | `scout` | narrow | 1 thin | round | Cyan `#66C3E2` | Olive `#768460` | Fast recon |
-| 1 | `assault` | standard | 2 | box | Amber `#D2783C` | Green `#647453` | General purpose |
-| 2 | `breaker` | wide | 1 heavy | hex | Red `#BC5C5D` | Slate `#60656D` | Heavy brawler |
-| 3 | `longbow` | long | 1 long | round | Green `#78C88C` | Dark green `#58674B` | Artillery / sniper |
-| 4 | `flak` | compact | 2 short | hex | Cyan `#66C3E2` | Blue-grey `#6D7584` | Anti-air / close range |
-| 5 | `wraith` | narrow | 1 | wedge | Purple `#A878D2` | Violet-grey `#545268` | Stealth |
-| 6 | `warden` | standard | 1 heavy | hex | Cyan `#66C3E2` | Khaki `#8B8A60` | Support / defense |
-| 7 | `ravager` | wide | 2 | round | Amber `#D2783C` | Brown `#806E56` | Heavy assault |
-| 8 | `glacier` | compact | 1 | box | Blue `#5294BD` | Steel `#767F8A` | Balanced |
-| 9 | `obelisk` | long | 2 long | wedge | Red `#D24641` | Rust `#705652` | Siege |
-| 10 | `titan` | **super-heavy** | 2 heavy (4 px) | hex | Red `#D24641` | Dark steel `#625E66` | Super-heavy assault |
-| 11 | `leviathan` | **super-long** | 1 massive (4 px) | round | Cyan `#66C3E2` | Teal-grey `#566460` | Super-heavy siege |
+| 0 | `scout` | narrow | 1 thin | round | Gold `#EEA343` | Grass green `#85A643` | Fast recon |
+| 1 | `assault` | standard | 2 | box | Teal `#00A67F` | Honey wood `#DE9943` | General purpose |
+| 2 | `breaker` | wide | 1 heavy | hex | Warm gold `#DC9C4A` | Roof-tile red `#9C3527` | Heavy brawler |
+| 3 | `longbow` | long | 1 long | round | Bright red `#FF421A` | Forest green `#5F914B` | Artillery / sniper |
+| 4 | `flak` | compact | 2 short | hex | Pale gold `#CAC594` | Water blue `#04A0B4` | Anti-air / close range |
+| 5 | `wraith` | narrow | 1 | wedge | Pale stone `#DAE5CE` | Bright teal `#00BB8F` | Stealth |
+| 6 | `warden` | standard | 1 heavy | hex | Warm gold `#DC9C4A` | Olive green `#7C983C` | Support / defense |
+| 7 | `ravager` | wide | 2 | round | Roof-tile red-orange `#E44219` | Amber wood `#CA8A3B` | Heavy assault |
+| 8 | `glacier` | compact | 1 | box | Pale stone `#DAE5CE` | Bright water-teal `#1EB3AE` | Balanced |
+| 9 | `obelisk` | long | 2 long | wedge | Gold `#EEA343` | Dark roof-tile red `#812F27` | Siege |
+| 10 | `titan` | **super-heavy** | 2 heavy (4 px) | hex | White `#FFFFFF` | Vivid red-orange `#FF421A` | Super-heavy assault |
+| 11 | `leviathan` | **super-long** | 1 massive (4 px) | round | Bright water-teal `#27D8C5` | Bright teal `#00D097` | Super-heavy siege |
 
 Names are reference labels only; no text is baked into the art.
 

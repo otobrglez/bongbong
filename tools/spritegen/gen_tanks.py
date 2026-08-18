@@ -1,8 +1,13 @@
 from PIL import Image
-import os, random
+import os, random, sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from punypalette import BLACK, STONE_DK, STONE_MD, STONE_LT, snap
 
 S = 32
-OUTLINE = (12, 10, 16, 255)
+# Near-black tone sampled from the Puny World tileset's own shadow pixels
+# (see tools/punypalette.py) -- that pack has no true black either.
+OUTLINE = BLACK + (255,)
 OUT = os.environ.get('SPRITE_OUT', 'assets/sprites')
 os.makedirs(OUT, exist_ok=True)
 
@@ -12,9 +17,11 @@ def blank():
 
 
 def mul(c, f):
-    return (max(0, min(255, int(c[0] * f))),
-            max(0, min(255, int(c[1] * f))),
-            max(0, min(255, int(c[2] * f))), 255)
+    # Scale, then snap back onto the 64-colour set -- without this, darkening/
+    # lightening a palette colour by an arbitrary factor drifts it off-palette.
+    return snap((max(0, min(255, int(c[0] * f))),
+                 max(0, min(255, int(c[1] * f))),
+                 max(0, min(255, int(c[2] * f))), 255))
 
 
 class Ramp:
@@ -24,9 +31,11 @@ class Ramp:
         self.md = mul(b, 0.78)
         self.bs = b + (255,)
         self.lt = mul(b, 1.20)
-        self.gm = (58, 60, 68, 255)
-        self.gl = (88, 91, 100, 255)
-        self.gd = (32, 33, 40, 255)
+        # Gunmetal barrel ramp: the stone-wall grey steps sampled from Puny
+        # World's own buildings, not a generic metal grey.
+        self.gm = STONE_MD + (255,)
+        self.gl = STONE_LT + (255,)
+        self.gd = STONE_DK + (255,)
 
 
 def px(img, x, y, c):
@@ -244,7 +253,7 @@ def draw_turret(spec):
 # ----------------------------------------------------------------------
 # TRACK MARKS
 # ----------------------------------------------------------------------
-MARK_RGB = (30, 25, 22)
+MARK_RGB = BLACK
 MARK_WEIGHT = {'narrow': 74, 'compact': 86, 'std': 98, 'long': 108,
                'wide': 120, 'super_heavy': 150, 'super_long': 142}
 
@@ -283,17 +292,17 @@ def draw_tracks(spec):
 # ----------------------------------------------------------------------
 # DAMAGE
 # ----------------------------------------------------------------------
-BURN = (46, 40, 40)
-CHAR = (26, 22, 24, 255)
-EMBER = (150, 60, 34, 255)
-EMBER_HOT = (196, 96, 42, 255)
-DEBRIS = (62, 54, 52, 255)   # torn/shredded metal (lighter than a hole)
+BURN = BLACK
+CHAR = BLACK + (255,)
+EMBER = (0x81, 0x2F, 0x27, 255)      # Puny roof-tile dark red ember
+EMBER_HOT = (0xFF, 0x42, 0x1A, 255)  # Puny roof-tile bright red hot ember
+DEBRIS = STONE_DK + (255,)   # torn/shredded metal (lighter than a hole)
 
 
 def scorch(c, f=0.45):
-    return (int(c[0] * f + BURN[0] * (1 - f)),
-            int(c[1] * f + BURN[1] * (1 - f)),
-            int(c[2] * f + BURN[2] * (1 - f)), 255)
+    return snap((int(c[0] * f + BURN[0] * (1 - f)),
+                 int(c[1] * f + BURN[1] * (1 - f)),
+                 int(c[2] * f + BURN[2] * (1 - f)), 255))
 
 
 def burn_all(img, f=0.45):
@@ -505,42 +514,65 @@ def draw_damaged_hull(spec, seed, mode):
 # ----------------------------------------------------------------------
 # ROSTER — 10 regular (10% smaller) + 2 super (20% beefier)
 # ----------------------------------------------------------------------
+# Body/accent are curated picks from tools/punypalette.py -- colours sampled
+# directly from the Puny World ground-layer tileset (roof tiles, wood/stone
+# buildings, water, grass), not Resurrect 64. This is the third palette pass
+# for this roster (see tools/spritegen/_backup/{muted,pre-punypalette}-*/
+# for the earlier ones): the previous R64-vibrant pass looked great in
+# isolation but candy-neon next to Puny World's much softer, painterly
+# terrain once the ground layer actually shipped (docs/GROUND_SPEC.md) --
+# see docs/PALETTE.md for the full before/after reasoning. Puny World's own
+# art has no purple/violet family anywhere in it (checked); `wraith` was
+# reassigned from a purple accent to a hue family the source art actually
+# has rather than force an invented off-palette colour.
+#
+# EVERY body colour below is deliberately picked from the palette's bright/
+# mid steps, never its darkest ("*_DARKEST", "*_DEEPER") ones. A first cut
+# of this same pass gave the back half of the roster (wraith/ravager,
+# especially the two super-heavy titan/leviathan) the darkest available step
+# of their family, reasoning "heavier/stealthier = darker" -- this is
+# *exactly* the muted-pass mistake this file's own history already
+# documents (see above), just rediscovered a second time on a different
+# palette: a dark hull body reads as dirty/muddy regardless of which
+# palette it's snapped to, since the body is most of a tank's on-screen
+# area. Reserve the darkest palette steps for outline/shadow/damage tones
+# (BLACK, mul()'s dk step, EMBER, etc.), never for a body colour.
 TANKS = [
-    dict(name='scout',   body=(118, 132, 96),  accent=(102, 195, 226), build='narrow',
+    dict(name='scout',   body=(0x85, 0xA6, 0x43), accent=(0xEE, 0xA3, 0x43), build='narrow',
          nose='wedge',   tread='fine',  deck='ribbed', thrusters=2, sponson=False,
          tshape='round', tr=4.1, guns=1, bw=2, blen=8,  gap=0, optic=(13, 13)),
-    dict(name='assault', body=(100, 116, 83),  accent=(210, 120, 60),  build='std',
+    dict(name='assault', body=(0xDE, 0x99, 0x43), accent=(0x00, 0xA6, 0x7F), build='std',
          nose='chamfer', tread='seg',   deck='plates', thrusters=3, sponson=True,
          tshape='box',   tr=4.7, guns=2, bw=2, blen=6,  gap=3, optic=(12, 18)),
-    dict(name='breaker', body=(96, 101, 109),  accent=(188, 92, 93),   build='wide',
+    dict(name='breaker', body=(0x9C, 0x35, 0x27), accent=(0xDC, 0x9C, 0x4A), build='wide',
          nose='blunt',   tread='block', deck='ribbed', thrusters=4, sponson=True,
          tshape='hex',   tr=5.2, guns=1, bw=4, blen=5,  gap=0, optic=(12, 13)),
-    dict(name='longbow', body=(88, 103, 75),   accent=(120, 200, 140), build='long',
+    dict(name='longbow', body=(0x5F, 0x91, 0x4B), accent=(0xFF, 0x42, 0x1A), build='long',
          nose='chamfer', tread='seg',   deck='plates', thrusters=2, sponson=False,
          tshape='round', tr=4.3, guns=1, bw=2, blen=11, gap=0, optic=(13, 13)),
-    dict(name='flak',    body=(109, 117, 132), accent=(102, 195, 226), build='compact',
+    dict(name='flak',    body=(0x04, 0xA0, 0xB4), accent=(0xCA, 0xC5, 0x94), build='compact',
          nose='blunt',   tread='block', deck='ribbed', thrusters=2, sponson=False,
          tshape='hex',   tr=4.5, guns=2, bw=2, blen=4,  gap=3, optic=(12, 18)),
-    dict(name='wraith',  body=(84, 82, 104),   accent=(168, 120, 210), build='narrow',
+    dict(name='wraith',  body=(0x00, 0xBB, 0x8F), accent=(0xDA, 0xE5, 0xCE), build='narrow',
          nose='wedge',   tread='fine',  deck='plates', thrusters=2, sponson=False,
          tshape='wedge', tr=4.3, guns=1, bw=2, blen=7,  gap=0, optic=(13, 13)),
-    dict(name='warden',  body=(139, 138, 96),  accent=(102, 195, 226), build='std',
+    dict(name='warden',  body=(0x7C, 0x98, 0x3C), accent=(0xDC, 0x9C, 0x4A), build='std',
          nose='chamfer', tread='seg',   deck='ribbed', thrusters=3, sponson=True,
          tshape='hex',   tr=4.7, guns=1, bw=4, blen=7,  gap=0, optic=(12, 13)),
-    dict(name='ravager', body=(128, 110, 86),  accent=(210, 120, 60),  build='wide',
+    dict(name='ravager', body=(0xCA, 0x8A, 0x3B), accent=(0xE4, 0x42, 0x19), build='wide',
          nose='chamfer', tread='block', deck='plates', thrusters=4, sponson=False,
          tshape='round', tr=5.2, guns=2, bw=2, blen=7,  gap=3, optic=(12, 18)),
-    dict(name='glacier', body=(118, 127, 138), accent=(82, 148, 189),  build='compact',
+    dict(name='glacier', body=(0x1E, 0xB3, 0xAE), accent=(0xDA, 0xE5, 0xCE), build='compact',
          nose='wedge',   tread='fine',  deck='plates', thrusters=2, sponson=False,
          tshape='box',   tr=4.5, guns=1, bw=2, blen=8,  gap=0, optic=(13, 13)),
-    dict(name='obelisk', body=(112, 86, 82),   accent=(210, 70, 65),   build='long',
+    dict(name='obelisk', body=(0x81, 0x2F, 0x27), accent=(0xEE, 0xA3, 0x43), build='long',
          nose='blunt',   tread='block', deck='ribbed', thrusters=4, sponson=True,
          tshape='wedge', tr=5.2, guns=2, bw=2, blen=9,  gap=3, optic=(12, 18)),
     # ---- super-heavy chassis ----
-    dict(name='titan',     body=(98, 94, 102),  accent=(210, 70, 65),   build='super_heavy',
+    dict(name='titan',     body=(0xFF, 0x42, 0x1A), accent=(0xFF, 0xFF, 0xFF), build='super_heavy',
          nose='blunt',   tread='block', deck='ribbed', thrusters=4, sponson=True,
          tshape='hex',   tr=7.0, guns=2, bw=4, blen=8,  gap=5, optic=(11, 19)),
-    dict(name='leviathan', body=(86, 100, 96),  accent=(102, 195, 226), build='super_long',
+    dict(name='leviathan', body=(0x00, 0xD0, 0x97), accent=(0x27, 0xD8, 0xC5), build='super_long',
          nose='chamfer', tread='block', deck='plates', thrusters=4, sponson=True,
          tshape='round', tr=6.6, guns=1, bw=4, blen=12, gap=0, optic=(11, 13)),
 ]
@@ -569,7 +601,10 @@ for i, spec in enumerate(TANKS):
         'marks': draw_tracks(spec),
     }
     for col, key in enumerate(COL_ORDER):
-        sheet.paste(cells[key], (col * S, i * S), cells[key])
+        sheet.paste(cells[key], (col * S, i * S))   # direct copy: preserves exact RGBA
+        # (no mask arg -- passing cells[key] as its own mask would alpha-
+        # composite semi-transparent pixels against the sheet's transparent
+        # background, drifting the trackmarks decal's colour off-palette)
 
     n = spec['name']
     fnames = {'hull0': 'hull', 'turret': 'turret', 'brk_turret': 'turret_broken',

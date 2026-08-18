@@ -102,6 +102,16 @@ impl Grid {
         self.blocked[cell.1 * self.cols + cell.0]
     }
 
+    /// True if stepping one cell forward from `from` along `dir` (a unit
+    /// direction vector, e.g. `Dir::vec()`) would land in a blocked cell.
+    /// Lets a caller check "does my current heading walk into a known
+    /// obstacle" without a full `next_step` pathfind call - see
+    /// `Ai::steer`'s obstacle-vs-commitment override.
+    pub fn blocked_ahead(&self, from: Position, dir: Position) -> bool {
+        let probe = Position::new(from.x + dir.x * self.cell_size, from.y + dir.y * self.cell_size);
+        self.blocked_at(self.cell_of(probe))
+    }
+
     fn neighbors(&self, cell: (usize, usize)) -> impl Iterator<Item = (usize, usize)> + '_ {
         let (col, row) = cell;
         let cols = self.cols;

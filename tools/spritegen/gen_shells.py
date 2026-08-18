@@ -1,25 +1,35 @@
 from PIL import Image
-import os, math
+import os, math, sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from punypalette import STONE_DK, STONE_LT
 
 S = 32
 OUT = os.environ.get('SPRITE_OUT', 'assets/sprites')
 os.makedirs(OUT, exist_ok=True)
 
-# ---- palettes lifted from the original shells.png -----------------------
+# ---- palettes, curated picks from tools/punypalette.py (colours sampled
+# from the Puny World ground-layer tileset) -- each family keeps its old
+# dark/mid/core/smoke roles. Second recolor pass for this sheet (see
+# tools/spritegen/_backup/pre-punypalette-*/gen_shells.py for the R64
+# version) -- shells are the one sheet that barely needed to change, since
+# fire is fire in either palette; mostly a matter of picking the closest
+# equivalent step in the new set. Blue keeps a white spark core (Puny World
+# has no colour brighter/whiter than actual white either).
 # (smoke_rgb, smoke_a_dense, smoke_a_light, dark, mid, core)
 FAMILIES = {
-    'orange': dict(smoke=(120, 120, 128), sa=(220, 110),
-                   D=(220, 70, 30), M=(255, 150, 40), C=(255, 236, 120)),
-    'red':    dict(smoke=(90, 70, 66), sa=(230, 120),
-                   D=(170, 35, 20), M=(235, 95, 30), C=(255, 200, 110)),
-    'blue':   dict(smoke=(150, 170, 190), sa=(200, 100),
-                   D=(80, 150, 235), M=(150, 220, 255), C=(235, 250, 255)),
+    'orange': dict(smoke=(0x5D, 0x65, 0x4F), sa=(220, 110),
+                   D=(0xE4, 0x42, 0x19), M=(0xEE, 0xA3, 0x43), C=(0xCA, 0xC5, 0x94)),
+    'red':    dict(smoke=(0x4C, 0x52, 0x3C), sa=(230, 120),
+                   D=(0x9C, 0x35, 0x27), M=(0xFF, 0x42, 0x1A), C=(0xDC, 0x9C, 0x4A)),
+    'blue':   dict(smoke=(0xAC, 0xB7, 0xA1), sa=(200, 100),
+                   D=(0x03, 0x8A, 0xAB), M=(0x27, 0xD8, 0xC5), C=(0xFF, 0xFF, 0xFF)),
 }
 
 # shared casing colors (identical across all rows in the original)
-CASE_DK = (70, 72, 82, 255)
-CASE_HI = (120, 122, 132, 255)
-NOSE = (210, 180, 70, 255)
+CASE_DK = STONE_DK + (255,)
+CASE_HI = STONE_LT + (255,)
+NOSE = (0xDE, 0x99, 0x43, 255)  # Puny World bronze-gold wood tone
 WHITE = (255, 255, 255, 255)
 
 CX = CY = 15.5
@@ -332,7 +342,10 @@ COLS = 7
 sheet = Image.new('RGBA', (S * COLS, S * len(ROWS)), (0, 0, 0, 0))
 for i, (fam, cls, twin, stag) in enumerate(ROWS):
     for c, fr in enumerate(build_frames(fam, cls, twin, stag)):
-        sheet.paste(fr, (c * S, i * S), fr)
+        sheet.paste(fr, (c * S, i * S))   # direct copy: preserves exact RGBA
+        # (no mask arg -- see gen_tanks.py's sheet.paste for why: self-as-
+        # mask would alpha-composite the semi-transparent smoke pixels
+        # against the transparent background and drift them off-palette)
 
 sheet.save(f'{OUT}/shells.png')
 sc = 5

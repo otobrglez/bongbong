@@ -6,12 +6,14 @@ use crate::bt::{Node, Status, action, condition, selector, sequence};
 use crate::pathfind::Grid;
 use crate::tank::{Dir, Tank};
 use crate::{
-    AI_DIR_HOLD_SECONDS, AI_DIR_SWITCH_MARGIN_PX, AVOID_DODGE_SECONDS, AVOID_LOOKAHEAD,
+    AI_DIR_HOLD_SECONDS, AI_DIR_SWITCH_MARGIN_PX, AI_OBSTACLE_OVERRIDE_HOLD_SECONDS,
+    AVOID_DODGE_SECONDS, AVOID_LOOKAHEAD,
     AVOID_MARGIN, AVOID_MIN_SPEED, ENEMY_AIM_SETTLE, ENEMY_AMMO_LOW, ENEMY_AMMO_RESUME,
     ENEMY_ATTACK_RANGE, ENEMY_FIRE_ALIGN_PX, ENEMY_FIRE_INTERVAL, ENEMY_FIRE_INTERVAL_AGGRESSIVE,
     ENEMY_FLEE_DAMAGE, ENEMY_FRIENDLY_FIRE_HOLD_CHANCE, ENEMY_MISFIRE_ANGLE_MAX,
     ENEMY_MISFIRE_ANGLE_MIN, ENEMY_MISFIRE_CHANCE_MAX, ENEMY_MISFIRE_RANGE,
     ENEMY_RETARGET_SECONDS, ENEMY_RETREAT_RANGE, ENEMY_VIEW_RANGE, MAX_DAMAGE, MAX_SHELLS, Position,
+    STUCK_ESCAPE_SECONDS, STUCK_SPEED_EPS,
 };
 
 /// A read-only snapshot of one tank's motion for collision prediction. The game
@@ -74,6 +76,23 @@ pub struct Ai {
     /// doesn't flicker into and out of Attack every frame near either
     /// threshold.
     retreating: bool,
+    /// Whether the *previous* tick's intent had `move_dir` set - i.e.
+    /// whether this tank was actually trying to move, as opposed to
+    /// deliberately holding position (aiming, waiting out a retreat). Set
+    /// at the end of `think`; read at the start of the next `think` to
+    /// decide whether a near-zero `real_speed` counts as evidence of being
+    /// stuck. See `stuck_timer`.
+    was_moving: bool,
+    /// Seconds this tank has been asked to move (see `was_moving`) while
+    /// its real physics velocity says it genuinely hasn't - ticked in
+    /// `think`, using the real, physics-derived speed passed in from
+    /// `simulation.rs` (never read directly from `Physics` here - see this
+    /// module's AI-decoupling convention). Once it crosses
+    /// STUCK_ESCAPE_SECONDS, `steer` forces an escape and resets this to
+    /// zero. Catches everything the obstacle-ahead override in `steer`
+    /// can't: a bad commitment call it didn't foresee, or a layout with no
+    /// path around an obstacle cluster at all.
+    stuck_timer: f32,
 }
 
 impl Default for Ai {
@@ -88,6 +107,8 @@ impl Default for Ai {
             dodge_dir: None,
             dodge_timer: 0.0,
             retreating: false,
+            was_moving: false,
+            stuck_timer: 0.0,
         }
     }
 }
@@ -99,7 +120,13 @@ impl Ai {
     /// predictive collision avoidance; `my_index` is this enemy's slot within it,
     /// so it can skip itself. The order matches how the game builds the slice.
     /// `grid` is this frame's obstacle occupancy grid (see `pathfind::Grid`),
-    /// used by `steer` to route around static obstacles.
+    /// used by `steer` to route around static obstacles. `real_speed` is
+    /// this tank's actual physics speed this frame (`Physics::velocity`'s
+    /// magnitude, read back in `simulation.rs` - the one place this module
+    /// gets to see anything physics-derived, kept as a single plain number
+    /// rather than reaching into `Physics` itself, per this module's
+    /// snapshot-only convention), used to detect a tank that's been
+    /// commanded to move but genuinely hasn't - see `stuck_timer`.
     #[allow(clippy::too_many_arguments)] // perception is passed by value, not bundled
     pub fn think(
         &mut self,
@@ -108,6 +135,7 @@ impl Ai {
         width: f32,
         height: f32,
         dt: f32,
+        real_speed: f32,
         movers: &[Mover],
         my_index: usize,
         grid: &Grid,
@@ -119,6 +147,15 @@ impl Ai {
         self.dodge_timer = (self.dodge_timer - dt).max(0.0);
         if self.dodge_timer <= 0.0 {
             self.dodge_dir = None;
+        }
+        // Was asked to move last tick and still hasn't actually gone
+        // anywhere: another dt of stuck evidence. Wasn't asked to move (or
+        // did actually move) resets the count - deliberately holding
+        // position to aim/wait isn't stuck. See `steer`'s escape check.
+        if self.was_moving && real_speed < STUCK_SPEED_EPS {
+            self.stuck_timer += dt;
+        } else {
+            self.stuck_timer = 0.0;
         }
 
         let mut bb = Brain {
@@ -135,7 +172,9 @@ impl Ai {
             intent: Intent::default(),
         };
         build().tick(&mut bb);
-        bb.intent
+        let intent = bb.intent;
+        self.was_moving = intent.move_dir.is_some();
+        intent
     }
 
     /// Choose a heading toward `target`, but resist flipping: keep the committed
@@ -163,31 +202,66 @@ impl Ai {
     ) -> Dir {
         let routed = grid.next_step(from, target).unwrap_or(target);
         let fresh = Dir::toward(from, routed);
-        let dir = match self.committed_dir {
-            None => {
-                self.commit(fresh);
-                fresh
-            }
-            Some(committed) if self.dir_hold < AI_DIR_HOLD_SECONDS => {
-                // Not held long enough yet: stick with the current heading.
-                committed
-            }
-            Some(committed) => {
-                // How far off each axis is the (routed) aim point? Only switch
-                // if the fresh heading is meaningfully better (reduces the
-                // perpendicular error). Uses `routed`, not `target`, so this
-                // reads as "how good is `fresh` at reaching where it's
-                // actually walking toward this step" - comparing it against
-                // the original, possibly-far-away `target` would judge a
-                // pathfinding detour by the wrong yardstick.
-                let dx = (routed.x - from.x).abs();
-                let dy = (routed.y - from.y).abs();
-                let committed_off = if committed.is_horizontal() { dy } else { dx };
-                let fresh_off = if fresh.is_horizontal() { dy } else { dx };
-                if fresh != committed && committed_off - fresh_off > AI_DIR_SWITCH_MARGIN_PX {
+        // Continuing on the committed heading would walk into a cell the
+        // grid already knows is blocked. That's a hard geometric fact, not
+        // the wobbling-live-target case the hold/margin gate below exists
+        // to filter out, so it doesn't need AI_DIR_HOLD_SECONDS's full wait
+        // or AI_DIR_SWITCH_MARGIN_PX's off-axis-improvement bar - but it
+        // still needs *some* dwell time (AI_OBSTACLE_OVERRIDE_HOLD_SECONDS,
+        // much shorter): the coarse grid's routed direction can itself
+        // wobble by a cell frame-to-frame near a corner, and reacting to
+        // every single such wobble with an instant switch reintroduces the
+        // very jitter commitment exists to prevent, just obstacle-triggered
+        // instead of diagonal-target-triggered (see that constant's own
+        // comment - found via the probe harness's `--rounds` sweep).
+        let obstacle_ahead = self.dir_hold >= AI_OBSTACLE_OVERRIDE_HOLD_SECONDS
+            && self
+                .committed_dir
+                .is_some_and(|committed| grid.blocked_ahead(from, committed.vec()));
+
+        let dir = if self.stuck_timer >= STUCK_ESCAPE_SECONDS {
+            // Asked to move for STUCK_ESCAPE_SECONDS running and genuinely
+            // hasn't (see `think`'s real_speed tracking) - force a hard
+            // reset instead of letting a bad commitment call, or a layout
+            // with literally no path at all (Grid::next_step returning
+            // None, `routed` falling back to the unreachable `target`
+            // itself, so `fresh` is no better either), wedge the tank
+            // forever. Turn away from whatever heading has actually been
+            // failing (`committed_dir`) rather than retrying the same
+            // pathfind toward the same unreachable target.
+            self.stuck_timer = 0.0;
+            perpendicular(
+                self.committed_dir.unwrap_or(fresh),
+                ctx.my_index.is_multiple_of(2),
+            )
+        } else {
+            match self.committed_dir {
+                None => {
+                    self.commit(fresh);
                     fresh
-                } else {
+                }
+                Some(_) if obstacle_ahead => fresh,
+                Some(committed) if self.dir_hold < AI_DIR_HOLD_SECONDS => {
+                    // Not held long enough yet: stick with the current heading.
                     committed
+                }
+                Some(committed) => {
+                    // How far off each axis is the (routed) aim point? Only switch
+                    // if the fresh heading is meaningfully better (reduces the
+                    // perpendicular error). Uses `routed`, not `target`, so this
+                    // reads as "how good is `fresh` at reaching where it's
+                    // actually walking toward this step" - comparing it against
+                    // the original, possibly-far-away `target` would judge a
+                    // pathfinding detour by the wrong yardstick.
+                    let dx = (routed.x - from.x).abs();
+                    let dy = (routed.y - from.y).abs();
+                    let committed_off = if committed.is_horizontal() { dy } else { dx };
+                    let fresh_off = if fresh.is_horizontal() { dy } else { dx };
+                    if fresh != committed && committed_off - fresh_off > AI_DIR_SWITCH_MARGIN_PX {
+                        fresh
+                    } else {
+                        committed
+                    }
                 }
             }
         };

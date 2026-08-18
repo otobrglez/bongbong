@@ -90,6 +90,14 @@ struct Args {
     #[arg(short = 'e', long)]
     enemies: Option<usize>,
 
+    /// How many obstacle structures to place (default: same random range as
+    /// the real game, OBSTACLE_COUNT_MIN..=OBSTACLE_COUNT_MAX). Set this
+    /// high to stress-test navigation at a fixed, repeatable density -
+    /// e.g. `--obstacles 12 --rounds 30` to sweep for stuck/border-stuck
+    /// tanks under denser obstacle layouts than the game normally rolls.
+    #[arg(short = 'o', long)]
+    obstacles: Option<usize>,
+
     /// Maximum frames to simulate per round before giving up (default: 3600 = 60s at 60fps).
     #[arg(long, default_value_t = 3600)]
     frames: u32,
@@ -378,6 +386,7 @@ fn build_tracks(game: &Game) -> Vec<TankTrack> {
 fn run_round(args: &Args, round: u32, trace: bool) -> AnomalyTotals {
     let mut game = Game::default();
     game.enemy_count_override = args.enemies;
+    game.obstacle_count_override = args.obstacles;
     game.init(WIDTH, HEIGHT);
 
     let mut tracks = build_tracks(&game);
@@ -417,13 +426,16 @@ fn main() {
     let sweep = args.rounds > 1;
 
     println!(
-        "probe: scenario={} enemies={} frames={} rounds={}",
+        "probe: scenario={} enemies={} obstacles={} frames={} rounds={}",
         match args.scenario {
             Scenario::Afk => "afk",
             Scenario::Advance => "advance",
             Scenario::Brake => "brake",
         },
         args.enemies
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "random".to_string()),
+        args.obstacles
             .map(|n| n.to_string())
             .unwrap_or_else(|| "random".to_string()),
         args.frames,

@@ -145,7 +145,7 @@ impl Shell {
     /// Flying shells detonate via a real physics hit against a tank,
     /// obstacle, or battlefield wall (see `simulation::find_shell_target`) -
     /// this only moves the shell, it never detonates it. Walls sit exactly
-    /// at the screen edge (see `simulation::spawn_walls`), so a shell that
+    /// at the screen edge (see `battlefield::spawn_walls`), so a shell that
     /// would otherwise fly off the battlefield always hits one first.
     pub fn update(&mut self, dt: f32) {
         self.timer += dt;

@@ -97,6 +97,9 @@ fn main() {
     let obstacles_texture = rl
         .load_texture(&thread, "static/walls_sheet.png")
         .expect("failed loading obstacles texture");
+    let ground_texture = rl
+        .load_texture(&thread, "static/punyworld/punyworld-overworld-tileset.png")
+        .expect("failed loading ground texture");
 
     let mut shock_fx = RippleFx::load(
         &mut rl,
@@ -192,6 +195,7 @@ fn main() {
                 damage: &damage_texture,
                 tracks: &tracks_texture,
                 obstacles: &obstacles_texture,
+                ground: &ground_texture,
             },
         );
     });

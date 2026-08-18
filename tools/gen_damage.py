@@ -37,8 +37,27 @@ shells.png's row-variants.
 
 Simple flat pixel-art palette, in the spirit of tanks.png / shells.png.
 """
+import os
 import struct
+import sys
 import zlib
+
+sys.path.insert(0, os.path.dirname(__file__))
+from punypalette import nearest
+
+
+def _snap_palette(p):
+    """Snap every named colour in a PALETTES dict onto the Puny Palette, alpha
+    unchanged. Mechanical (nearest-neighbour) rather than hand-curated like
+    the tank roster's body/accent colours -- these are plain smoke/char/fire
+    tones with no per-variant "identity" to preserve, just a family feel
+    (warm/ashen-blue/rusty-purple/toxic-green/sooty-black) that nearest-
+    match keeps intact."""
+    out = {}
+    for name, rgba in p.items():
+        r, g, b = nearest(rgba)
+        out[name] = (r, g, b, rgba[3])
+    return out
 
 TILE = 32
 FRAMES = 14
@@ -92,7 +111,12 @@ def tscatter(col, row, points, rgba, geom):
 
 # --- Per-variant palettes -----------------------------------------------
 # Each palette is a dict of the named colours used by the frame recipe below.
-PALETTES = [
+# Snapped onto the Puny Palette below (_snap_palette) so every one of these
+# stays on-palette; the literal RGB tuples here are the pre-recolor
+# originals, kept as-is so the snap mapping is auditable/diffable against
+# history (this is the second such snap -- see tools/punypalette.py's doc
+# comment for why the shared palette changed from Resurrect 64 to this).
+_RAW_PALETTES = [
     # 0: classic warm tan/gray dust, warm orange-yellow fire
     dict(
         DUST=(200, 185, 150, 160), DUST2=(170, 150, 115, 190),
@@ -139,6 +163,8 @@ PALETTES = [
         CHAR=(22, 20, 20, 165), CHAR_D=(10, 9, 9, 210), SOOT=(45, 43, 43, 200),
     ),
 ]
+
+PALETTES = [_snap_palette(p) for p in _RAW_PALETTES]
 
 # geom = (mirror: bool, dx: float, dy: float, scale: float)
 GEOMS = [
