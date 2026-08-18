@@ -48,7 +48,9 @@ col = state
 
 ## 3. Brick — rows 0–3, cols 0–5
 
-All four share one warm terracotta family (`#C4866A`–`#CA9272`) with a common mortar tone `#967E70`, differing only in **bond pattern and brick size**, so mixed-variant walls still read as one material. Mortar coverage is held near 30% across variants so none look greyer than the others.
+All four share one muted clay family (`#846152`–`#8C6758`) with a common mortar tone `#655A55`, differing only in **bond pattern and brick size**, so mixed-variant walls still read as one material. Mortar coverage is held near 30% across variants so none look greyer than the others.
+
+These values sit in the same warm-brown range as the tank chassis (`#806E56`, `#705652`) — mean luminance ~105, saturation ~0.19, matching the tanks' own browns.
 
 | Row | Type | Brick | Period | Pattern |
 |---|---|---|---|---|
@@ -74,7 +76,7 @@ Bricks are blown out with a ragged edge rather than a clean rectangle.
 
 **Never destroyed** — the plate stays whole at every level, so the collider never changes.
 
-All four share a bright steel tone (`#9CA6B4`–`#A2AAB8`), differing by surface treatment. Every treatment tiles.
+All four share a steel tone (`#666D79`–`#6D7480`) taken from the tanks' slate and blue-grey chassis (`#60656D`, `#6D7584`), differing by surface treatment. Every treatment tiles. Measured saturation 0.085 — the closest match to the tank sheet of any material here.
 
 | Row | Type | Surface | Period |
 |---|---|---|---|
@@ -96,7 +98,7 @@ Damage is deformation only — no pixel is ever cleared, so an iron tile is alwa
 
 ## 5. Wood — rows 8–11, cols 0–7
 
-All four share a warm honey-oak tone (`#C09A6A`–`#CCA470`) on an 8 px board period.
+All four share a muted oak tone (`#7F6B4F`–`#867256`) on an 8 px board period, in the same range as the tanks' khaki and brown chassis (`#8B8A60`, `#806E56`).
 
 | Row | Type | Layout |
 |---|---|---|
@@ -146,7 +148,7 @@ Suggested lifecycle: `intact → damaged → heavily damaged → burning (loop) 
 | 2 | Heavily cracked — multiple impacts, stress rings |
 | 3 | Shattered — wedge shards fallen away, lit edges (passable) |
 
-The only **semi-transparent** art in the sheet (body alpha 138), so terrain and units show through while still reading as a solid obstacle. Uses the shell sheet's blue family — `#6CB6F2` / `#ACE6FF` / `#F2FDFF`.
+The only **semi-transparent** art in the sheet (body alpha 138), so terrain and units show through while still reading as a solid obstacle. Uses a desaturated blue-grey — `#547694` / `#7C9CB0` / `#B0CAD8` — pulled toward the tanks' blue-grey chassis (`#6D7584`) rather than the shells' vivid cyan, since glass is terrain and should not compete with effects.
 
 Both the subtle glass ripple (4 px checker) and the diagonal sheen (16 px lattice) tile seamlessly — there is no corner-to-corner gradient, since a gradient can never tile.
 
@@ -219,7 +221,25 @@ Notes:
 
 ---
 
-## 8. Known limitations
+## 8. Palette
+
+The whole sheet is tuned to sit with the tank sprites rather than beside them:
+
+| Set | Mean luminance | Mean saturation |
+|---|---|---|
+| Tank sheet (reference) | 78 | 0.110 |
+| Brick intact | 105 | 0.193 |
+| Iron intact | 114 | 0.085 |
+| Wood intact | 102 | 0.227 |
+| **Walls overall** | **103** | **0.212** |
+
+Walls land slightly above the tanks in value, deliberately: they are the backdrop, so keeping them a step lighter lets the darker tank silhouettes read on top. Brick and wood saturation sits where the tanks' own brown and khaki chassis sit (0.18–0.20), not higher.
+
+**The one exception is fire.** Wood burn frames keep the shell sheet's vivid `#DC461E` / `#FF9628` / `#FFEC78`, well above the terrain range. That is intentional — fire is an effect, matches shell explosions, and should be the brightest thing on screen.
+
+---
+
+## 9. Known limitations
 
 - **Damage patterns are baked per cell**, so two adjacent tiles at the same state show identical damage. Intact tiles tile perfectly; heavy-damage tiles placed in a long run will repeat visibly. Mitigate by mixing states along a wall, or ask and I can generate 2–3 alternate damage rolls per state.
 - **No dedicated corner, end-cap, or T-junction pieces.** None are needed for flat runs — the patterns simply continue — but there is no special art for an outer corner of a building if you want the bond to wrap.
