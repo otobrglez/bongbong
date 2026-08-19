@@ -133,8 +133,21 @@ pub struct Tank {
     pub shells_ammo: i32,
     /// Seconds accumulated toward recharging the next shell.
     pub recharge_timer: f32,
+    /// Seconds remaining before this tank may fire again (player only - see
+    /// PLAYER_FIRE_INTERVAL; enemies are gated separately by Ai's own
+    /// fire_timer). Ticked down alongside ram_cooldown every frame regardless
+    /// of owner, since it's harmless/unused idle state for enemies.
+    pub fire_cooldown: f32,
     /// Seconds remaining before this tank can take ramming damage again.
     pub ram_cooldown: f32,
+    /// Seconds remaining to show this tank's overhead health bar (see
+    /// `Game::render`) - reset to HEALTH_BAR_OVERHEAD_SECONDS by `mark_hit`
+    /// whenever this tank takes damage (shell, ram, or explosion splash),
+    /// ticked down every frame alongside `fire_cooldown`/`ram_cooldown`
+    /// (`Game::update`), and faded out over the last
+    /// HEALTH_BAR_OVERHEAD_FADE_SECONDS of that window rather than
+    /// vanishing abruptly.
+    pub hit_flash_timer: f32,
     /// Seconds spent as a wreck. Once it exceeds WRECK_BURN_SECONDS the fire
     /// dies out and the tank becomes a static charred "dead" hulk.
     pub wreck_timer: f32,
@@ -203,7 +216,9 @@ impl Default for Tank {
             damage: 0.0,
             shells_ammo: MAX_SHELLS,
             recharge_timer: 0.0,
+            fire_cooldown: 0.0,
             ram_cooldown: 0.0,
+            hit_flash_timer: 0.0,
             wreck_timer: 0.0,
             track_accum: 0.0,
             track_mark_count: 0,
@@ -369,6 +384,13 @@ impl Tank {
             // Cap the timer so it doesn't grow unbounded once the fire is out.
             self.wreck_timer = (self.wreck_timer + dt).min(WRECK_BURN_SECONDS);
         }
+    }
+
+    /// Reset `hit_flash_timer` to full - call whenever this tank takes
+    /// damage (shell, ram, or explosion splash) so its overhead health bar
+    /// shows/refreshes for another HEALTH_BAR_OVERHEAD_SECONDS.
+    pub fn mark_hit(&mut self) {
+        self.hit_flash_timer = crate::HEALTH_BAR_OVERHEAD_SECONDS;
     }
 
     /// Decide this tank's rotation and commanded velocity for one frame.

@@ -8,15 +8,20 @@ use sola_raylib::prelude::*;
 
 use crate::ai::Ai;
 use crate::damage_stage::draw_damage;
+use crate::frog::{Frog, FrogTextures, draw_frog};
 use crate::obstacle::{Obstacle, draw_obstacle, draw_obstacle_shadow};
+use crate::pickup::{Pickup, PickupKind, draw_pickup};
 use crate::shell::{Shell, ShellState, draw_shell, draw_shell_shadow};
 use crate::shockwave::{RippleFx, screen_to_ripple_uv};
 use crate::simulation::{Game, Outcome};
 use crate::tank::{Tank, draw_tank, draw_tank_shadow};
 use crate::track::draw_track;
 use crate::{
-    HUD_CRITICAL_THRESHOLD, HUD_FONT_SIZE, HUD_MARGIN, HUD_VERSION_FONT_SIZE, HUD_WARN_THRESHOLD,
-    IMPACT_FLASH_QUAD_RADIUS, MAX_DAMAGE, MAX_SHELLS, MUZZLE_FLASH_QUAD_RADIUS,
+    HEALTH_BAR_CELL_SIZE, HEALTH_BAR_COLUMNS, HEALTH_BAR_HUD_SCALE, HEALTH_BAR_ICON_OFFSET,
+    HEALTH_BAR_ICON_SIZE, HEALTH_BAR_OVERHEAD_FADE_SECONDS, HEALTH_BAR_OVERHEAD_GAP,
+    HEALTH_BAR_VARIANTS, HUD_CRITICAL_THRESHOLD, HUD_FONT_SIZE, HUD_MARGIN, HUD_VERSION_FONT_SIZE,
+    HUD_WARN_THRESHOLD, IMPACT_FLASH_QUAD_RADIUS, MAX_DAMAGE, SHELLS_HARD_CAP,
+    MUZZLE_FLASH_QUAD_RADIUS,
 };
 
 /// The sprite atlases `Game::render` draws from, bundled into one param instead
@@ -28,6 +33,14 @@ pub struct Textures<'a> {
     pub tracks: &'a Texture2D,
     pub obstacles: &'a Texture2D,
     pub ground: &'a Texture2D,
+    pub health_bar: &'a Texture2D,
+    pub frog_idle: &'a Texture2D,
+    pub frog_hurt: &'a Texture2D,
+    pub frog_hop: &'a Texture2D,
+    pub frog_attack: &'a Texture2D,
+    pub frog_explosion: &'a Texture2D,
+    pub pickup_health: &'a Texture2D,
+    pub pickup_ammo: &'a Texture2D,
 }
 
 /// The ripple post-effects `Game::render` drives, bundled into one param for the
@@ -68,7 +81,7 @@ impl Game {
                 t.shells_ammo,
             )
         });
-        let shells_color = hud_number_color(shells as f32, MAX_SHELLS as f32);
+        let shells_color = hud_number_color(shells as f32, SHELLS_HARD_CAP as f32);
         let hp_color = hud_number_color(hp as f32, MAX_DAMAGE);
         let hud_shells_label = "SHELLS: ";
         let hud_shells_num = format!("{shells}");
@@ -77,6 +90,11 @@ impl Game {
         let hud_shells_label_w = rl.measure_text(hud_shells_label, HUD_FONT_SIZE);
         let hud_shells_num_w = rl.measure_text(&hud_shells_num, HUD_FONT_SIZE);
         let hud_mid_w = rl.measure_text(hud_mid, HUD_FONT_SIZE);
+        let hud_hp_num_w = rl.measure_text(&hud_hp_num, HUD_FONT_SIZE);
+
+        // health_bar.png source rect for the player's current HP fraction -
+        // see health_bar_frame's own doc comment for the frame thresholds.
+        let health_bar_source = health_bar_source_rect(health_bar_frame(hp as f32 / MAX_DAMAGE));
 
         // Precompute the centered end-of-round banner (text width must be
         // measured on the RaylibHandle, outside the draw closure).
@@ -119,12 +137,37 @@ impl Game {
                 draw_obstacle(&mut d, textures.obstacles, obstacle);
             }
 
+            for pickup in self.world.query::<&Pickup>().iter() {
+                let texture = match pickup.kind {
+                    PickupKind::Health => textures.pickup_health,
+                    PickupKind::Ammo => textures.pickup_ammo,
+                };
+                draw_pickup(&mut d, texture, pickup);
+            }
+
+            let frog_textures = FrogTextures {
+                idle: textures.frog_idle,
+                hurt: textures.frog_hurt,
+                hop: textures.frog_hop,
+                attack: textures.frog_attack,
+                explosion: textures.frog_explosion,
+            };
+            crate::simulation::with_frog(
+                &self.world,
+                self.frog.expect("frog entity spawned in init"),
+                |frog| {
+                    draw_frog(&mut d, &frog_textures, frog, self.time);
+                    draw_frog_health_bar(&mut d, textures.health_bar, frog);
+                },
+            );
+
             for tank in self.world.query::<&Tank>().with::<&Ai>().iter() {
                 if self.shadows_enabled {
                     draw_tank_shadow(&mut d, textures.tanks, tank);
                 }
                 draw_tank(&mut d, textures.tanks, tank);
                 draw_damage(&mut d, textures.damage, tank, self.time);
+                draw_tank_overhead_health(&mut d, textures.health_bar, tank);
             }
 
             crate::simulation::with_tank(&self.world, player, |tank| {
@@ -133,6 +176,7 @@ impl Game {
                 }
                 draw_tank(&mut d, textures.tanks, tank);
                 draw_damage(&mut d, textures.damage, tank, self.time);
+                draw_tank_overhead_health(&mut d, textures.health_bar, tank);
             });
 
             for shell in self.world.query::<&Shell>().iter() {
@@ -292,6 +336,21 @@ impl Game {
             d.draw_text(hud_mid, hud_x, hud_y, HUD_FONT_SIZE, Color::WHITE);
             hud_x += hud_mid_w;
             d.draw_text(&hud_hp_num, hud_x, hud_y, HUD_FONT_SIZE, hp_color);
+            hud_x += hud_hp_num_w + 12;
+            let health_bar_dest_h = HEALTH_BAR_ICON_SIZE.1 * HEALTH_BAR_HUD_SCALE;
+            d.draw_texture_pro(
+                textures.health_bar,
+                health_bar_source,
+                Rectangle::new(
+                    hud_x as f32,
+                    hud_y as f32 + (HUD_FONT_SIZE as f32 - health_bar_dest_h) / 2.0,
+                    HEALTH_BAR_ICON_SIZE.0 * HEALTH_BAR_HUD_SCALE,
+                    health_bar_dest_h,
+                ),
+                Vector2::zero(),
+                0.0,
+                Color::WHITE,
+            );
             // Mirrors the top-left HUD's HUD_MARGIN inset, so both corners
             // sit the same distance from their edges.
             d.draw_text(
@@ -360,7 +419,7 @@ fn draw_tank_inspect(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>) {
 
     let speed = (tank.velocity.x * tank.velocity.x + tank.velocity.y * tank.velocity.y).sqrt();
     let mut lines = vec![
-        format!("AMMO {}/{}", tank.shells_ammo, MAX_SHELLS),
+        format!("AMMO {}/{}", tank.shells_ammo, SHELLS_HARD_CAP),
         format!(
             "HP {}/{}",
             (MAX_DAMAGE - tank.damage).max(0.0).round() as i32,
@@ -416,4 +475,107 @@ fn hud_number_color(current: f32, max: f32) -> Color {
     } else {
         Color::WHITE
     }
+}
+
+/// Which of health_bar.png's HEALTH_BAR_VARIANTS frames (0 = full 4/4 pips,
+/// HEALTH_BAR_VARIANTS-1 = empty 0/4) represents an HP fraction. Quarter
+/// thresholds so each frame's pip count matches its fraction range exactly
+/// (frame 1 = "3/4 pips" covers the range where 3/4 is the closest reading);
+/// only true 0 HP shows fully empty, matching how HUD_CRITICAL_THRESHOLD
+/// etc. only flag real trouble rather than every routine dip.
+fn health_bar_frame(frac: f32) -> i32 {
+    if frac > 0.75 {
+        0
+    } else if frac > 0.50 {
+        1
+    } else if frac > 0.25 {
+        2
+    } else if frac > 0.0 {
+        3
+    } else {
+        4
+    }
+    .min(HEALTH_BAR_VARIANTS - 1)
+}
+
+/// Source rect in health_bar.png for a given frame index (see
+/// health_bar_frame) - the sheet is HEALTH_BAR_COLUMNS-wide, HEALTH_BAR_CELL_SIZE
+/// per cell, with the actual icon glyph living at a fixed sub-rect
+/// (HEALTH_BAR_ICON_OFFSET/HEALTH_BAR_ICON_SIZE) inside each cell.
+fn health_bar_source_rect(frame: i32) -> Rectangle {
+    let col = frame % HEALTH_BAR_COLUMNS;
+    let row = frame / HEALTH_BAR_COLUMNS;
+    Rectangle::new(
+        col as f32 * HEALTH_BAR_CELL_SIZE + HEALTH_BAR_ICON_OFFSET.0,
+        row as f32 * HEALTH_BAR_CELL_SIZE + HEALTH_BAR_ICON_OFFSET.1,
+        HEALTH_BAR_ICON_SIZE.0,
+        HEALTH_BAR_ICON_SIZE.1,
+    )
+}
+
+/// Draw a tank's overhead health bar - only while `hit_flash_timer` is
+/// running (see `Tank::mark_hit`) and the tank isn't a wreck (past caring
+/// about its own HP). Centered under the tank's sprite, same pixel scale as
+/// the HUD copy (HEALTH_BAR_HUD_SCALE), fading out over the trailing
+/// HEALTH_BAR_OVERHEAD_FADE_SECONDS of its window instead of popping off.
+fn draw_tank_overhead_health(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank) {
+    if tank.is_wreck() || tank.hit_flash_timer <= 0.0 {
+        return;
+    }
+    let frac = ((MAX_DAMAGE - tank.damage) / MAX_DAMAGE).clamp(0.0, 1.0);
+    let source = health_bar_source_rect(health_bar_frame(frac));
+    let w = HEALTH_BAR_ICON_SIZE.0 * HEALTH_BAR_HUD_SCALE;
+    let h = HEALTH_BAR_ICON_SIZE.1 * HEALTH_BAR_HUD_SCALE;
+    let dest = Rectangle::new(
+        tank.position.x - w / 2.0,
+        tank.position.y + tank.size() * 0.5 + HEALTH_BAR_OVERHEAD_GAP,
+        w,
+        h,
+    );
+    let alpha = if tank.hit_flash_timer > HEALTH_BAR_OVERHEAD_FADE_SECONDS {
+        255
+    } else {
+        (255.0 * (tank.hit_flash_timer / HEALTH_BAR_OVERHEAD_FADE_SECONDS)).round() as u8
+    };
+    d.draw_texture_pro(
+        texture,
+        source,
+        dest,
+        Vector2::zero(),
+        0.0,
+        Color::new(255, 255, 255, alpha),
+    );
+}
+
+/// Draw the frog's overhead health bar - same "only while `hit_flash_timer`
+/// is running, fading out over the trailing HEALTH_BAR_OVERHEAD_FADE_SECONDS"
+/// convention as `draw_tank_overhead_health`, just keyed off `Frog::is_dead`
+/// instead of `Tank::is_wreck`.
+fn draw_frog_health_bar(d: &mut impl RaylibDraw, texture: &Texture2D, frog: &Frog) {
+    if frog.is_dead() || frog.hit_flash_timer <= 0.0 {
+        return;
+    }
+    let frac = (frog.health / frog.max_health).clamp(0.0, 1.0);
+    let source = health_bar_source_rect(health_bar_frame(frac));
+    let w = HEALTH_BAR_ICON_SIZE.0 * HEALTH_BAR_HUD_SCALE;
+    let h = HEALTH_BAR_ICON_SIZE.1 * HEALTH_BAR_HUD_SCALE;
+    let dest = Rectangle::new(
+        frog.position.x - w / 2.0,
+        frog.position.y + frog.size() * 0.5 + HEALTH_BAR_OVERHEAD_GAP,
+        w,
+        h,
+    );
+    let alpha = if frog.hit_flash_timer > HEALTH_BAR_OVERHEAD_FADE_SECONDS {
+        255
+    } else {
+        (255.0 * (frog.hit_flash_timer / HEALTH_BAR_OVERHEAD_FADE_SECONDS)).round() as u8
+    };
+    d.draw_texture_pro(
+        texture,
+        source,
+        dest,
+        Vector2::zero(),
+        0.0,
+        Color::new(255, 255, 255, alpha),
+    );
 }

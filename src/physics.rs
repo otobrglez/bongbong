@@ -234,6 +234,22 @@ impl Physics {
         body.set_next_kinematic_translation(to_vector(position));
     }
 
+    /// Teleport a dynamic body (a tank) straight to `position`, bypassing
+    /// normal velocity-driven movement entirely - used once, at round init,
+    /// to relocate a tank whose rolled spawn point turned out to be
+    /// pathfinding-boxed-in (see `battlefield::relocate_boxed_in_tanks`).
+    /// Zeroes velocity too, so it doesn't arrive already carrying whatever
+    /// momentum it had at the old spot.
+    pub fn set_position(&mut self, handle: RigidBodyHandle, position: Position) {
+        let body = self
+            .world
+            .bodies
+            .get_mut(handle)
+            .expect("tank physics body handle should always be valid");
+        body.set_translation(to_vector(position), true);
+        body.set_linvel(Vector::new(0.0, 0.0), true);
+    }
+
     /// Remove a body (and any colliders attached to it) from the world -
     /// used once a shell finishes its lifecycle (see `Game::update`).
     pub fn remove_body(&mut self, handle: RigidBodyHandle) {

@@ -425,6 +425,13 @@ pub const TANK_TURRET_VISUAL_TURN_SPEED_DEG: f32 = 1800.0;
 pub const MAX_SHELLS: i32 = 7;
 pub const SHELL_RECHARGE_SECONDS: f32 = 2.0;
 
+// Player fire rate: minimum seconds between consecutive player shots. Unlike
+// the AI (ENEMY_FIRE_INTERVAL/_AGGRESSIVE, gated by Ai's own fire_timer), the
+// player's fire was previously gated only by shells_ammo - holding/tapping
+// fire could dump the whole MAX_SHELLS magazine in a few frames. This is the
+// player-side equivalent of that cooldown (Tank::fire_cooldown).
+pub const PLAYER_FIRE_INTERVAL: f32 = 0.35;
+
 // Ramming: after taking collision damage a tank is immune for this long, so
 // continuous touching doesn't drain damage every frame.
 pub const RAM_DAMAGE_COOLDOWN: f32 = 0.5;
@@ -441,7 +448,12 @@ pub const KNOCKBACK_STRENGTH: f32 = 0.2; // fraction of ram closing speed conver
 pub const KNOCKBACK_MAX_SPEED: f32 = 60.0; // px/s cap on any one push - keeps it small
 
 // Enemy AI tuning. Distances are in pixels, times in seconds.
-pub const ENEMY_VIEW_RANGE: f32 = 520.0; // start chasing the player within this
+// 800 (was 520) - at the old value enemies never noticed the player past
+// roughly half the default 1280x720 window, reading as passive/oblivious
+// (user feedback, 2026-08). See also ENEMY_ALERT_HOLD_SECONDS below, which
+// extends awareness beyond even this range once any one enemy has spotted
+// the player.
+pub const ENEMY_VIEW_RANGE: f32 = 800.0; // start chasing the player within this
 pub const ENEMY_ATTACK_RANGE: f32 = 340.0; // stop and fight within this
 pub const ENEMY_FIRE_ALIGN_PX: f32 = 24.0; // fire when player is within this of the axis
 pub const ENEMY_FIRE_INTERVAL: f32 = 2.4; // min seconds between AI shots (toned down)
@@ -450,6 +462,27 @@ pub const ENEMY_DAMAGE_MIN: f32 = 5.0; // enemy shell damage lower bound (weaker
 pub const ENEMY_DAMAGE_MAX: f32 = 15.0; // enemy shell damage upper bound
 pub const ENEMY_FLEE_DAMAGE: f32 = 70.0; // retreat once this hurt
 pub const ENEMY_RETARGET_SECONDS: f32 = 3.0; // how often patrol picks a new point
+// How many candidate waypoints `Ai::wander` rolls per resample, keeping
+// whichever is both reachable and farthest from every other live tank,
+// rather than committing to the first random point - see that function's
+// own doc comment for why plain uniform sampling wasn't enough (a large
+// fraction of a typical battlefield isn't pathfinding-reachable from any
+// given spot, mainly the fortress, so independent wandering enemies kept
+// landing in the same small accessible pocket with no awareness of each
+// other). Small enough to stay cheap (each candidate costs one grid
+// pathfind check), big enough to reliably find some spread even when the
+// reachable fraction of the map is small.
+pub const WANDER_SPREAD_CANDIDATES: u32 = 6;
+
+// Shared aggression: once any enemy has the player within ENEMY_VIEW_RANGE,
+// every enemy on the field treats the player's current position as a shared
+// "last known sighting" and converges on it (see Ai::think's `alert`
+// parameter, ai.rs's act_patrol) for this many seconds after the last actual
+// sighting, instead of each enemy only reacting within its own individual
+// view range. Refreshed continuously while the sighting holds, so this is
+// purely "how long the whole map stays alerted after it loses the player
+// again," not a one-shot ping.
+pub const ENEMY_ALERT_HOLD_SECONDS: f32 = 6.0;
 
 // Ammo-aware aggression: an enemy that runs low on shells breaks off and backs
 // away (without firing) until it has recharged enough to rejoin the fight,
@@ -760,8 +793,15 @@ pub const OBSTACLE_HULL_FRACTION: f32 = 0.75;
 // ENEMY_COUNT_MIN/MAX. Each one contributes anywhere from 1 tile (a lone
 // `structures::SINGLE`) to 5 (e.g. `structures::WALL_LINE_5`), so a round's
 // actual total obstacle-tile count varies with which shapes get rolled.
-pub const OBSTACLE_COUNT_MIN: usize = 2;
-pub const OBSTACLE_COUNT_MAX: usize = 4;
+// Upper bound of 9 deliberately matches `src/bin/probe.rs`'s `--obstacles`
+// stress-test density (see its own doc comment) - the exact layout density
+// that validated `ai.rs`'s navigation/stuck-escape fixes, so raising the
+// *default* range up to that same ceiling isn't venturing into untested
+// territory. `scatter_obstacles` also degrades gracefully under a crowded
+// board (a placement that can't find a clear spot within its attempt budget
+// is just skipped), so a busier default doesn't risk an unplaceable round.
+pub const OBSTACLE_COUNT_MIN: usize = 5;
+pub const OBSTACLE_COUNT_MAX: usize = 9;
 // Chance a placement rolls a real multi-tile shape from `structures::STRUCTURES`
 // rather than falling back to `structures::SINGLE` (a lone tile) - keeps
 // lone obstacles common alongside deliberate little builds instead of every
@@ -796,7 +836,7 @@ pub const OBSTACLE_CLEAR: f32 = 90.0;
 pub const OBSTACLE_CLUSTER_CLEAR: f32 = OBSTACLE_TEXTURE_SIZE * OBSTACLE_SCALE;
 
 // Ground/terrain layer (grass base, road painted under every static
-// obstacle tile and inside the fortress's B/O glyphs) - see ground.rs for
+// obstacle tile and inside the fortress's O glyph) - see ground.rs for
 // the placement/autotile logic, docs/GROUND_SPEC.md for the full design
 // writeup. Drawn from static/punyworld/punyworld-overworld-tileset.png, a
 // third-party tileset - deliberately NOT on the Resurrect 64 palette every
@@ -812,9 +852,10 @@ pub const GROUND_SCALE: f32 = 2.0;
 pub const GROUND_WORLD_TILE: f32 = GROUND_TEXTURE_SIZE * GROUND_SCALE; // = OBSTACLE_GRID_SIZE
 
 // The player's starting enclosure (see `battlefield::spawn_player_fortress`):
-// the word "BONG!" spelled out in wall tiles, one material per glyph (B is
-// Brick, the O the player spawns inside is Glass, N is Wood, G is Iron, and
-// `!` reuses Brick - only four materials exist for five glyphs). Sized by
+// the word "HELLO" spelled out in wall tiles, one material per glyph (H is
+// Brick, E is Iron, the first L is Wood, the second L reuses Brick, and the
+// O the player spawns inside is Glass - only four materials exist for five
+// glyphs). Sized by
 // the pixel font in `spawn_player_fortress`'s `GLYPH_*` constants directly,
 // not by a tank-relative scale like the shape this replaced. Glass's low
 // max_health (OBSTACLE_GLASS_MAX_HEALTH) is exactly why the O got that
@@ -843,15 +884,189 @@ pub const HUD_VERSION_FONT_SIZE: i32 = 22; // 24 * 0.9, rounded
 // sit the same distance from their respective edges.
 pub const HUD_MARGIN: i32 = 20;
 
+// health_bar.png is a hand-authored (not tools/spritegen-generated) 96x64
+// sheet: a 3x2 grid of 32x32 cells, five used left-to-right/top-to-bottom
+// (the sixth, bottom-right cell is unused/fully transparent). Each cell
+// holds one small heart+4-pip icon at a fixed offset, depleting one pip per
+// cell: index 0 = 4/4 pips (full) through index 4 = 0/4 pips (empty). Colors
+// were remapped from the source PNG's supplied saturated red onto
+// punypalette's RED_DK to match the rest of the game's palette (see
+// docs/PALETTE.md) - see static/_original/health_bar.png for the pristine
+// pre-recolor copy.
+pub const HEALTH_BAR_CELL_SIZE: f32 = 32.0;
+pub const HEALTH_BAR_VARIANTS: i32 = 5;
+// The icon within each 32x32 cell doesn't fill it - it's a tight 22x7 glyph
+// at this offset, so drawing crops to just the glyph rather than the cell.
+pub const HEALTH_BAR_ICON_OFFSET: (f32, f32) = (5.0, 7.0);
+pub const HEALTH_BAR_ICON_SIZE: (f32, f32) = (22.0, 7.0);
+// Columns per row in the sheet (see the layout comment above) - used to turn
+// a linear frame index into a (col, row) cell position.
+pub const HEALTH_BAR_COLUMNS: i32 = 3;
+// On-screen scale for the HUD readout - deliberately matches Tank::scale
+// (2.0) so the health bar's pixels read at the same on-screen size as every
+// other sprite (tanks, walls_sheet.png's PIXELATE_FACTOR) rather than
+// looking chunkier or finer than the rest of the game.
+pub const HEALTH_BAR_HUD_SCALE: f32 = 2.0;
+
+// Overhead health bar (Game::render, drawn under a tank rather than in the
+// HUD corner): shown for HEALTH_BAR_OVERHEAD_SECONDS after `Tank::mark_hit`
+// fires, so a tank that's just been shot/rammed/caught in a blast briefly
+// reads its HP at a glance without needing the player's own HUD line.
+// Matches ENEMY_RETARGET_SECONDS's "a few seconds" ballpark rather than a
+// fresh guess. Fades out (alpha ramp) over the trailing
+// HEALTH_BAR_OVERHEAD_FADE_SECONDS instead of popping off abruptly.
+pub const HEALTH_BAR_OVERHEAD_SECONDS: f32 = 3.0;
+pub const HEALTH_BAR_OVERHEAD_FADE_SECONDS: f32 = 0.6;
+// Gap in px between a tank's sprite bottom edge and the bar drawn under it.
+pub const HEALTH_BAR_OVERHEAD_GAP: f32 = 4.0;
+
+// ToxicFrog (src/frog.rs): the player's protect-objective - a static NPC
+// that ends the round in a loss the instant its health reaches zero, same
+// severity as the player's own tank being destroyed. See
+// static/toxic_frog/SOURCE.md for the sprite's provenance and
+// docs/FROG_SPEC.md for the full frame/animation layout - each of the five
+// animation PNGs is a plain 48x48-cell filmstrip, no slicing math beyond
+// `col * FROG_TEXTURE_SIZE`.
+pub const FROG_TEXTURE_SIZE: f32 = 48.0;
+// On-screen scale - deliberately matches Tank::scale/HEALTH_BAR_HUD_SCALE
+// (2.0) for the same reason both of those do: consistent on-screen pixel
+// density across every sprite in the game. The frog's actual content is a
+// small glyph within the 48x48 cell (see docs/FROG_SPEC.md), so this reads
+// as a modest, tank-sized presence on the field, not an oversized 96px prop.
+pub const FROG_SCALE: f32 = 2.0;
+pub const FROG_IDLE_FRAMES: i32 = 8;
+pub const FROG_HURT_FRAMES: i32 = 4;
+pub const FROG_HOP_FRAMES: i32 = 7;
+pub const FROG_ATTACK_FRAMES: i32 = 6;
+pub const FROG_EXPLOSION_FRAMES: i32 = 9;
+pub const FROG_IDLE_FPS: f32 = 6.0;
+pub const FROG_HURT_FPS: f32 = 10.0;
+pub const FROG_HOP_FPS: f32 = 10.0;
+pub const FROG_ATTACK_FPS: f32 = 10.0;
+pub const FROG_EXPLOSION_FPS: f32 = 10.0;
+// How long each one-shot clip plays before `Frog::anim` falls back to a
+// lower-priority state - exactly FRAMES/FPS (one full pass); kept as their
+// own constants since `Frog::anim` needs a value, not an expression, to
+// compute "seconds elapsed since the trigger" for frame timing.
+pub const FROG_HURT_SECONDS: f32 = 0.4;
+pub const FROG_HOP_SECONDS: f32 = 0.7;
+pub const FROG_ATTACK_SECONDS: f32 = 0.6;
+// Health: deliberately much lower than MAX_DAMAGE - a couple of hits end
+// the round, so "protect the frog" is a real constraint on where the player
+// fights, not a background stat that never comes into play.
+pub const FROG_MAX_HEALTH: f32 = 40.0;
+// Physics collider half-extents (px) - sized to the sprite's actual visible
+// footprint (see docs/FROG_SPEC.md's per-frame bbox measurements), not the
+// full padded 48x48 cell. Same `Physics::spawn_static` fixed-body shape as
+// an Obstacle: blocks tank movement and doubles as the shell-hit target,
+// no separate sensor collider needed.
+pub const FROG_COLLIDER_HALF_EXTENT: (f32, f32) = (22.0, 16.0);
+// Spawn placement (Game::init): kept near the player's fortress rather than
+// anywhere on the map, so there's actually a fighting chance to defend it -
+// far enough not to spawn inside the fortress/on top of the player, close
+// enough that "protect the frog" and "protect yourself" are the same fight
+// early on rather than two unrelated ones.
+pub const FROG_SPAWN_MIN_DIST: f32 = 90.0;
+pub const FROG_SPAWN_MAX_DIST: f32 = 240.0;
+
+// Evasion: hop away from incoming fire. Both this and the attack range
+// below are expressed as a factor of `Frog::size()` (the on-screen sprite
+// footprint, FROG_TEXTURE_SIZE * FROG_SCALE) rather than an independent
+// pixel constant, so a hit/attack "reach" that reads as fair right now
+// keeps reading as fair if the frog's own on-screen size is ever retuned -
+// per-instance data, not a fixed magic number unrelated to what's actually
+// on screen. 1.5 (was 3.0, a full 3x its own size - read as an
+// unnaturally huge leap for a creature this small; halved so a hop covers
+// roughly one and a half body-lengths instead of three - user feedback,
+// 2026-08).
+pub const FROG_HOP_DISTANCE_FACTOR: f32 = 1.5;
+// Debounce so a rapid volley of hits doesn't trigger a hop every single
+// frame one lands - roughly one hop per FROG_HOP_COOLDOWN_SECONDS even
+// under sustained fire.
+pub const FROG_HOP_COOLDOWN_SECONDS: f32 = 1.0;
+// `simulation::frog_hop_target`'s search: tries the ideal dead-away-from-
+// the-shot angle first (plus a little random jitter so hops don't all look
+// mechanically identical), then this fan of offsets from it, so a frog
+// backed into a corner/wall still has a shot at finding *some* clear
+// landing spot rather than never hopping at all near terrain.
+pub const FROG_HOP_ANGLE_JITTER_DEG: f32 = 10.0;
+pub const FROG_HOP_ANGLE_FAN_DEG: [f32; 5] = [0.0, 25.0, -25.0, 50.0, -50.0];
+// Landing spots must stay this far inside the battlefield edge - same idea
+// as the enemy-spawn/obstacle-placement margins in battlefield.rs, just a
+// flat constant here since a hop's landing zone is small and local rather
+// than needing a fraction-of-board-size margin.
+pub const FROG_HOP_BOUNDS_MARGIN: f32 = 40.0;
+
+// Retaliation: bite any tank - either side - that gets too close. See
+// FROG_HOP_DISTANCE_FACTOR's comment above for why this is a size factor
+// rather than a flat pixel constant.
+pub const FROG_ATTACK_RANGE_FACTOR: f32 = 0.9;
+pub const FROG_ATTACK_COOLDOWN_SECONDS: f32 = 1.5;
+pub const FROG_ATTACK_DAMAGE_MIN: f32 = 4.0;
+pub const FROG_ATTACK_DAMAGE_MAX: f32 = 10.0;
+
+// Personal space: hop away from the nearest tank - either side, same "no
+// favorites" symmetry as the bite above - once one gets within this range,
+// independent of (and deliberately larger than) FROG_ATTACK_RANGE_FACTOR,
+// so this is "keep your distance" rather than "retaliate": the two reflexes
+// aren't mutually exclusive, a tank that closes the gap faster than
+// FROG_HOP_COOLDOWN_SECONDS clears just eats a bite before the frog gets a
+// chance to react. Bigger than FROG_ATTACK_RANGE_FACTOR but well inside
+// FROG_HOP_DISTANCE_FACTOR (a single hop reliably clears it, rather than
+// the frog needing several to actually gain distance) - scaled down to 1.2
+// alongside FROG_HOP_DISTANCE_FACTOR's own reduction (was 2.0/3.0) to keep
+// that same margin between the two.
+pub const FROG_AVOID_RANGE_FACTOR: f32 = 1.2;
+
+// Health/ammo pickups (pickup.rs): one of each battlefield corner, respawning
+// after a delay once collected. Sprite is 32x32 (see static/pickups/SOURCE.md)
+// drawn 1:1, same convention as obstacles (OBSTACLE_SCALE = 1.0) rather than
+// the tanks' chunky 2x - a pickup icon reads fine at native res and doesn't
+// need to match the tanks' pixelated look the way terrain does.
+pub const PICKUP_TEXTURE_SIZE: f32 = 32.0;
+pub const PICKUP_SCALE: f32 = 1.0;
+// How many pickups the battlefield keeps topped up to - one per corner.
+pub const PICKUP_COUNT: usize = 4;
+// Seconds after a pickup is collected before a fresh one spawns (kind and
+// corner both freshly rolled, not tied to whichever corner just emptied) -
+// keeps the total roughly at PICKUP_COUNT throughout a round instead of
+// depleting it.
+pub const PICKUP_RESPAWN_SECONDS: f32 = 15.0;
+// Placement (Game::init/simulation::respawn_pickup): each pickup's actual
+// position is rejection-sampled within this padding band from its corner
+// along both axes (see battlefield::sample_corner_position), same
+// "near, not exactly on" idea FROG_SPAWN_MIN_DIST/MAX_DIST uses around the
+// player's fortress instead. Never inside a wall/obstacle or on top of a
+// tank - checked against the same OBSTACLE_CLEAR-based clearance
+// `scatter_obstacles`/the enemy spawn loop already use.
+pub const PICKUP_CORNER_PADDING_MIN: f32 = 70.0;
+pub const PICKUP_CORNER_PADDING_MAX: f32 = 220.0;
+// How close a tank's center needs to get to collect a pickup - a bit more
+// forgiving than requiring true hull overlap, so it doesn't feel like it
+// needs pixel-perfect contact.
+pub const PICKUP_COLLECT_RADIUS: f32 = 32.0;
+// Health pickup: deliberately not a full heal (MAX_DAMAGE=100) - a
+// meaningful chunk (roughly 2-3 enemy hits' worth, see ENEMY_DAMAGE_MIN/MAX)
+// worth detouring for, not an automatic full reset.
+pub const PICKUP_HEAL_AMOUNT: f32 = 30.0;
+// Ammo pickup: how many shells it adds, and the hard ceiling that caps it -
+// separate from MAX_SHELLS (7), which stays exactly what it was: the
+// passive-recharge target (see Tank::tick_recharge, untouched by this
+// feature). A pickup is the *only* way past 7, up to SHELLS_HARD_CAP.
+pub const PICKUP_AMMO_AMOUNT: i32 = 4;
+pub const SHELLS_HARD_CAP: i32 = 10;
+
 pub mod ai;
 pub mod battlefield;
 pub mod bt;
 pub mod damage_stage;
+pub mod frog;
 pub mod game;
 pub mod ground;
 pub mod obstacle;
 pub mod pathfind;
 pub mod physics;
+pub mod pickup;
 pub mod shell;
 pub mod shockwave;
 pub mod simulation;

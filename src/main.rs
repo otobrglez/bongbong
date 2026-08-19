@@ -100,6 +100,30 @@ fn main() {
     let ground_texture = rl
         .load_texture(&thread, "static/punyworld/punyworld-overworld-tileset.png")
         .expect("failed loading ground texture");
+    let health_bar_texture = rl
+        .load_texture(&thread, "static/health_bar.png")
+        .expect("failed loading health bar texture");
+    let frog_idle_texture = rl
+        .load_texture(&thread, "static/toxic_frog/idle.png")
+        .expect("failed loading frog idle texture");
+    let frog_hurt_texture = rl
+        .load_texture(&thread, "static/toxic_frog/hurt.png")
+        .expect("failed loading frog hurt texture");
+    let frog_hop_texture = rl
+        .load_texture(&thread, "static/toxic_frog/hop.png")
+        .expect("failed loading frog hop texture");
+    let frog_attack_texture = rl
+        .load_texture(&thread, "static/toxic_frog/attack.png")
+        .expect("failed loading frog attack texture");
+    let frog_explosion_texture = rl
+        .load_texture(&thread, "static/toxic_frog/explosion.png")
+        .expect("failed loading frog explosion texture");
+    let pickup_health_texture = rl
+        .load_texture(&thread, "static/pickups/health.png")
+        .expect("failed loading health pickup texture");
+    let pickup_ammo_texture = rl
+        .load_texture(&thread, "static/pickups/ammo.png")
+        .expect("failed loading ammo pickup texture");
 
     let mut shock_fx = RippleFx::load(
         &mut rl,
@@ -196,6 +220,14 @@ fn main() {
                 tracks: &tracks_texture,
                 obstacles: &obstacles_texture,
                 ground: &ground_texture,
+                health_bar: &health_bar_texture,
+                frog_idle: &frog_idle_texture,
+                frog_hurt: &frog_hurt_texture,
+                frog_hop: &frog_hop_texture,
+                frog_attack: &frog_attack_texture,
+                frog_explosion: &frog_explosion_texture,
+                pickup_health: &pickup_health_texture,
+                pickup_ammo: &pickup_ammo_texture,
             },
         );
     });

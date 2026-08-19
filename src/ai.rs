@@ -13,7 +13,7 @@ use crate::{
     ENEMY_FLEE_DAMAGE, ENEMY_FRIENDLY_FIRE_HOLD_CHANCE, ENEMY_MISFIRE_ANGLE_MAX,
     ENEMY_MISFIRE_ANGLE_MIN, ENEMY_MISFIRE_CHANCE_MAX, ENEMY_MISFIRE_RANGE,
     ENEMY_RETARGET_SECONDS, ENEMY_RETREAT_RANGE, ENEMY_VIEW_RANGE, MAX_DAMAGE, MAX_SHELLS, Position,
-    STUCK_ESCAPE_SECONDS, STUCK_SPEED_EPS,
+    STUCK_ESCAPE_SECONDS, STUCK_SPEED_EPS, WANDER_SPREAD_CANDIDATES,
 };
 
 /// A read-only snapshot of one tank's motion for collision prediction. The game
@@ -127,6 +127,12 @@ impl Ai {
     /// rather than reaching into `Physics` itself, per this module's
     /// snapshot-only convention), used to detect a tank that's been
     /// commanded to move but genuinely hasn't - see `stuck_timer`.
+    /// `alert` is this frame's shared "last known player position" (see
+    /// `simulation.rs`'s `Game::alert_position`) - `Some` while any enemy on
+    /// the field currently has the player within `ENEMY_VIEW_RANGE` (or did
+    /// within the last `ENEMY_ALERT_HOLD_SECONDS`), so an enemy that can't
+    /// personally see the player can still converge on where the group last
+    /// saw them instead of wandering randomly - see `act_patrol`.
     #[allow(clippy::too_many_arguments)] // perception is passed by value, not bundled
     pub fn think(
         &mut self,
@@ -140,6 +146,7 @@ impl Ai {
         my_index: usize,
         grid: &Grid,
         rng: &mut ThreadRng,
+        alert: Option<Position>,
     ) -> Intent {
         self.fire_timer = (self.fire_timer - dt).max(0.0);
         self.retarget_timer = (self.retarget_timer - dt).max(0.0);
@@ -170,6 +177,7 @@ impl Ai {
             rng,
             ai: self,
             intent: Intent::default(),
+            alert,
         };
         build().tick(&mut bb);
         let intent = bb.intent;
@@ -177,30 +185,190 @@ impl Ai {
         intent
     }
 
-    /// Choose a heading toward `target`, but resist flipping: keep the committed
-    /// heading unless it's been held long enough AND the freshly-computed heading
-    /// beats it by a clear margin along the off-axis. This is the jitter fix.
+    /// Choose a heading toward `target` - or, if pathfinding can't reach
+    /// `target` at all, toward a local fallback waypoint instead (see
+    /// `wander`), so this always returns a real heading. `margin` is how
+    /// far from the battlefield edge a fallback waypoint may land (see
+    /// `wander`) - unused when `target` is directly reachable.
     ///
-    /// `bounds` is the battlefield (width, height) and `half` the tank's collision
-    /// radius, used by predictive collision avoidance to avoid dodging straight
-    /// into a wall (see `avoid_collisions`) - actually driving into a wall is the
-    /// physics engine's job now (see docs/physics-engine-design.md), not steering's.
-    /// `ctx` carries the motion snapshot for predictive collision avoidance.
-    /// `grid` routes the naive straight-line heading around static obstacles
-    /// (see `pathfind::Grid::next_step`) before any of the commitment/dodge
-    /// logic below ever sees it - obstacles are just another reason the
-    /// "fresh" heading might differ from a straight line at the player/
-    /// waypoint, same as a jittery target would.
+    /// `next_step` returns `None` for two very different reasons: no route
+    /// exists at all, or `from`/`target` already share a grid cell (see its
+    /// own `start == goal` check) - i.e. "arrived, nothing left to route"
+    /// rather than "unreachable". At PATHFIND_CELL_SIZE=48px that second
+    /// case fires constantly during ordinary close-range maneuvering (found
+    /// via the probe harness: treating every `None` as unreachable made the
+    /// fallback below trigger on almost every `steer` call once an enemy
+    /// was near attack range, not just against a genuinely sealed
+    /// obstruction) - `same_cell` is what tells the two apart.
+    ///
+    /// Genuinely no route existing is most commonly the player holed up
+    /// inside their own sealed fortress (see
+    /// `battlefield::spawn_player_fortress`'s GLYPH_O: a closed ring with no
+    /// door by design - the player is meant to shoot their own way out, not
+    /// be walked in on; even a shot-open tile is usually still narrower
+    /// than a tank's own pathfinding clearance margin, so the fortress
+    /// reads as permanently sealed to the AI in practice, not just at round
+    /// start) - and since the fortress sits at the map's center for the
+    /// *entire* round, not just at spawn, this isn't a rare edge case: it's
+    /// the common state whenever the player stops moving somewhere
+    /// pathfinding can't reach. Two earlier fixes tried here: falling back
+    /// to the raw unreachable `target` (the tank commits to ramming
+    /// whichever wall tile sits on that line, forever, since every future
+    /// tick recomputes the same straight-line heading at the same
+    /// unreachable point), and orbiting perpendicular to the obstruction in
+    /// place (did get it firing again - aim alignment is computed
+    /// independently of movement, see `Brain::aim_alignment`, so an
+    /// orbiting tank still gets lucky alignment sometimes - but the orbit
+    /// had no real destination, so over a long enough unreachable stretch,
+    /// which a sealed fortress guarantees, it regularly walked itself into
+    /// the battlefield boundary instead and got stuck there; a later
+    /// attempt made it hold position entirely instead of orbiting, which
+    /// fixed *that* but meant every enemy with no path to a stationary
+    /// player just froze solid, indefinitely, the moment the player
+    /// stopped moving - trading one visible "stuck" complaint for another).
+    /// `wander` is the fix that stuck: reuse patrol's own bounded,
+    /// already-proven-safe waypoint system instead of inventing a new
+    /// movement heuristic, so the tank still gets the lucky-alignment
+    /// upside without either failure mode.
+    #[allow(clippy::too_many_arguments)] // perception is passed by value, not bundled
     fn steer(
         &mut self,
         from: Position,
         target: Position,
         bounds: (f32, f32),
         half: f32,
+        margin: f32,
+        ctx: AvoidCtx,
+        grid: &Grid,
+        rng: &mut ThreadRng,
+    ) -> Dir {
+        let path = grid.next_step(from, target);
+        if path.is_none() && !grid.same_cell(from, target) {
+            return self.wander(from, bounds, half, margin, ctx, grid, rng);
+        }
+        self.steer_toward(from, path, target, bounds, half, ctx, grid)
+    }
+
+    /// Wander toward a roaming local waypoint - `act_patrol`'s own
+    /// top-level behavior (via `Brain::wander`) when the player's out of
+    /// view entirely, and also `steer`'s fallback whenever the real target
+    /// it was asked for has no path to it at all (see `steer`'s doc
+    /// comment for why that's common, not rare). A tank that can't get to
+    /// where it actually wants to be might as well patrol nearby instead of
+    /// freezing solid until the target happens to wander somewhere
+    /// reachable again.
+    ///
+    /// Resamples `waypoint` when it's reached, when `ENEMY_RETARGET_SECONDS`
+    /// elapses, or the moment the *current* waypoint itself turns out
+    /// unreachable (checked fresh every call - a round's static obstacle
+    /// layout only ever gains reachable area as things get destroyed, never
+    /// loses it, so a bad pick won't fix itself without a resample). That
+    /// last check is the one thing this adds beyond plain patrol's original
+    /// behavior: patrol's own waypoints were always low-stakes (only picked
+    /// once the player's out of view range entirely), but a bad pick here
+    /// would otherwise stall an actively-engaging tank for up to the full
+    /// retarget interval right as the player's watching - a fresh pick
+    /// avoids that without needing its own bounded-retry loop, since
+    /// picking again next frame (not gated behind the timer, unlike the
+    /// "reached"/"timer expired" cases) converges within a handful of
+    /// frames given how much of the battlefield is normally open ground.
+    #[allow(clippy::too_many_arguments)] // perception is passed by value, not bundled
+    fn wander(
+        &mut self,
+        from: Position,
+        bounds: (f32, f32),
+        half: f32,
+        margin: f32,
+        ctx: AvoidCtx,
+        grid: &Grid,
+        rng: &mut ThreadRng,
+    ) -> Dir {
+        let (width, height) = bounds;
+        let reachable =
+            |wp: Position| grid.next_step(from, wp).is_some() || grid.same_cell(from, wp);
+        // Only resample early over unreachability if a *different* waypoint
+        // could plausibly do better. When `from` itself is boxed in (see
+        // `Grid::boxed_in`), every candidate fails identically no matter
+        // how many times this re-rolls - without this guard, that meant a
+        // brand new random waypoint (pointing some new random direction)
+        // every single frame, which is what "the tank span in place" was:
+        // not a bug in the direction-commitment logic, a fresh target
+        // defeating it every tick. Boxed-in tanks still get a fresh
+        // roll on the normal ENEMY_RETARGET_SECONDS cadence (below, via
+        // `retarget_timer`) in case circumstances change (an obstacle
+        // burns away), just not every frame.
+        let stuck_here = grid.boxed_in(from);
+        if self.retarget_timer <= 0.0
+            || from.distance_to(self.waypoint) < margin
+            || (!stuck_here && !reachable(self.waypoint))
+        {
+            // Roll WANDER_SPREAD_CANDIDATES points and keep whichever is
+            // both reachable and farthest from every other live tank
+            // (`ctx.movers`, skipping this tank's own slot), rather than
+            // committing to the first random point - see
+            // WANDER_SPREAD_CANDIDATES's own doc comment for why plain
+            // uniform sampling wasn't enough: independent wandering
+            // enemies kept landing in the same small pathfinding-reachable
+            // pocket with no awareness of each other, reading as tanks
+            // clumping together (found via the probe harness: several
+            // enemies parked within a ~100px box for seconds, nowhere near
+            // the player). Falls back to any random point, reachable or
+            // not, only if every single candidate this pass failed
+            // reachability - matches the old single-roll behavior in that
+            // rare worst case, still self-correcting next frame via the
+            // `!reachable` check above.
+            let mut best: Option<(Position, f32)> = None;
+            for _ in 0..WANDER_SPREAD_CANDIDATES {
+                let candidate = Position::new(
+                    rng.random_range(margin..(width - margin)),
+                    rng.random_range(margin..(height - margin)),
+                );
+                if !(grid.next_step(from, candidate).is_some() || grid.same_cell(from, candidate))
+                {
+                    continue;
+                }
+                let spread = ctx
+                    .movers
+                    .iter()
+                    .enumerate()
+                    .filter(|&(i, _)| i != ctx.my_index)
+                    .map(|(_, m)| candidate.distance_to(m.position))
+                    .fold(f32::INFINITY, f32::min);
+                if best.is_none_or(|(_, best_spread)| spread > best_spread) {
+                    best = Some((candidate, spread));
+                }
+            }
+            self.waypoint = best.map(|(candidate, _)| candidate).unwrap_or_else(|| {
+                Position::new(
+                    rng.random_range(margin..(width - margin)),
+                    rng.random_range(margin..(height - margin)),
+                )
+            });
+            self.retarget_timer = ENEMY_RETARGET_SECONDS;
+        }
+        let path = grid.next_step(from, self.waypoint);
+        self.steer_toward(from, path, self.waypoint, bounds, half, ctx, grid)
+    }
+
+    /// Shared point-convergence core for both `steer` (chasing/fleeing/etc.
+    /// a real target) and `wander` (patrolling a fallback waypoint) once
+    /// the target is known-reachable (or "same cell", i.e. arrived):
+    /// commitment/hold-margin hysteresis, the obstacle-ahead override, the
+    /// stuck-escape safety net, and predictive collision dodging. `path` is
+    /// `grid.next_step(from, target)`, already computed by the caller (it
+    /// needed the result anyway, to decide whether to route here or to
+    /// `wander` in `target`'s place).
+    fn steer_toward(
+        &mut self,
+        from: Position,
+        path: Option<Position>,
+        target: Position,
+        bounds: (f32, f32),
+        half: f32,
         ctx: AvoidCtx,
         grid: &Grid,
     ) -> Dir {
-        let routed = grid.next_step(from, target).unwrap_or(target);
+        let routed = path.unwrap_or(target);
         let fresh = Dir::toward(from, routed);
         // Continuing on the committed heading would walk into a cell the
         // grid already knows is blocked. That's a hard geometric fact, not
@@ -222,13 +390,15 @@ impl Ai {
         let dir = if self.stuck_timer >= STUCK_ESCAPE_SECONDS {
             // Asked to move for STUCK_ESCAPE_SECONDS running and genuinely
             // hasn't (see `think`'s real_speed tracking) - force a hard
-            // reset instead of letting a bad commitment call, or a layout
-            // with literally no path at all (Grid::next_step returning
-            // None, `routed` falling back to the unreachable `target`
-            // itself, so `fresh` is no better either), wedge the tank
-            // forever. Turn away from whatever heading has actually been
+            // reset instead of letting a bad commitment call wedge the tank
+            // forever. This is the reactive safety net for a target that's
+            // technically reachable but still jamming in practice (a tight,
+            // contested squeeze between other tanks, say) - outright
+            // unreachability is `steer`'s job, one level up, to hand off to
+            // `wander` before this function ever sees it. Turn away from
+            // whatever heading has actually been
             // failing (`committed_dir`) rather than retrying the same
-            // pathfind toward the same unreachable target.
+            // pathfind toward the same target.
             self.stuck_timer = 0.0;
             perpendicular(
                 self.committed_dir.unwrap_or(fresh),
@@ -269,7 +439,7 @@ impl Ai {
         // Sidestep an imminent collision, then commit the final heading so it
         // holds. Driving into a wall is no longer steering's problem - the
         // physics engine's wall colliders stop/slide the tank for real.
-        let dir = self.avoid_collisions(dir, from, bounds, half, ctx);
+        let dir = self.avoid_collisions(dir, from, bounds, half, ctx, grid);
         self.commit(dir);
         dir
     }
@@ -279,6 +449,19 @@ impl Ai {
     /// hit looks likely within AVOID_LOOKAHEAD, latch a perpendicular dodge for
     /// AVOID_DODGE_SECONDS and return it. When the dodge expires, normal steering
     /// resumes and pulls the tank back on course — the "away then back" motion.
+    ///
+    /// `grid` supplements the plain geometric `heads_into_wall` check with a
+    /// grid-cell-accurate one (`Grid::blocked_ahead`) for both the battlefield
+    /// boundary and static obstacles - without it, a dodge pick could walk
+    /// toward the boundary in the narrow gap between the two checks'
+    /// thresholds (`heads_into_wall`'s is a flat pixel skin from `from`'s
+    /// exact position; the grid's is "which cell is this"), which
+    /// `steer_toward`'s own obstacle-ahead override would then immediately
+    /// veto next tick - `avoid_collisions` picks the same doomed dodge
+    /// again the tick after that (the same nearby mover is usually still
+    /// there), and so on: found as a sustained heading flip-flop with the
+    /// tank pinned in one spot near a battlefield corner, via the probe
+    /// harness's per-commit trace.
     fn avoid_collisions(
         &mut self,
         desired: Dir,
@@ -286,11 +469,13 @@ impl Ai {
         bounds: (f32, f32),
         half: f32,
         ctx: AvoidCtx,
+        grid: &Grid,
     ) -> Dir {
+        let blocked = |d: Dir| heads_into_wall(d, from, bounds, half) || grid.blocked_ahead(from, d.vec());
         // A dodge already in progress holds until its timer runs out (ticked in
-        // `think`), as long as it isn't driving into a wall.
+        // `think`), as long as it isn't driving into a wall or obstacle.
         if let Some(dodge) = self.dodge_dir {
-            if self.dodge_timer > 0.0 && !heads_into_wall(dodge, from, bounds, half) {
+            if self.dodge_timer > 0.0 && !blocked(dodge) {
                 return dodge;
             }
             self.dodge_dir = None;
@@ -352,16 +537,13 @@ impl Ai {
         let primary = perpendicular(desired, turn_left);
         let secondary = perpendicular(desired, !turn_left);
 
-        // Prefer a dodge side that is neither walled nor itself about to collide.
+        // Prefer a dodge side that is neither walled/obstructed nor itself
+        // about to collide.
         let choice = [primary, secondary]
             .into_iter()
-            .find(|&d| !heads_into_wall(d, from, bounds, half) && !self.dir_collides(d, from, ctx));
-        // Fall back to any non-walled side; if both are walls, abandon the dodge.
-        let choice = choice.or_else(|| {
-            [primary, secondary]
-                .into_iter()
-                .find(|&d| !heads_into_wall(d, from, bounds, half))
-        });
+            .find(|&d| !blocked(d) && !self.dir_collides(d, from, ctx));
+        // Fall back to any non-walled/obstructed side; if both fail, abandon the dodge.
+        let choice = choice.or_else(|| [primary, secondary].into_iter().find(|&d| !blocked(d)));
 
         match choice {
             Some(dir) => {
@@ -505,6 +687,11 @@ struct Brain<'a> {
     rng: &'a mut ThreadRng,
     ai: &'a mut Ai,
     intent: Intent,
+    /// Last known player position shared across every enemy this round,
+    /// while any one of them currently has the player within
+    /// ENEMY_VIEW_RANGE - see `think`'s `alert` parameter and
+    /// `act_patrol`. `None` when no enemy has spotted the player recently.
+    alert: Option<Position>,
 }
 
 impl Brain<'_> {
@@ -535,11 +722,16 @@ impl Brain<'_> {
     }
 
     /// Steer toward `target`, routing around static obstacles and
-    /// sidestepping predicted collisions. Wraps `Ai::steer` with this tank's
-    /// bounds and collision radius (`Tank::avoidance_radius` - a safe
-    /// over-approximation of the tank's real, per-row physics collider, so
-    /// this never assumes a tank is smaller than it actually is), the motion
-    /// snapshot for avoidance, and this frame's obstacle grid.
+    /// sidestepping predicted collisions - or toward a fallback waypoint if
+    /// `target` can't be reached at all (see `Ai::steer`), so this always
+    /// returns a real heading, never "give up and hold". Wraps `Ai::steer`
+    /// with this tank's bounds and collision radius (`Tank::avoidance_radius`
+    /// - a safe over-approximation of the tank's real, per-row physics
+    /// collider, so this never assumes a tank is smaller than it actually
+    /// is), `Tank::size()` as the fallback waypoint's clearance margin from
+    /// the battlefield edge (same margin `act_patrol` always sampled
+    /// within), the motion snapshot for avoidance, and this frame's
+    /// obstacle grid.
     fn steer(&mut self, target: Position) -> Dir {
         let radius = self.me.avoidance_radius();
         let ctx = AvoidCtx {
@@ -553,8 +745,32 @@ impl Brain<'_> {
             target,
             (self.width, self.height),
             radius,
+            self.me.size(),
             ctx,
             self.grid,
+            self.rng,
+        )
+    }
+
+    /// Wander toward a roaming local waypoint with no particular target in
+    /// mind - `act_patrol`'s own top-level behavior. Thin wrapper around
+    /// `Ai::wander`, same shape as `steer` above.
+    fn wander(&mut self) -> Dir {
+        let radius = self.me.avoidance_radius();
+        let ctx = AvoidCtx {
+            movers: self.movers,
+            my_index: self.my_index,
+            radius,
+            speed: self.me.effective_speed(),
+        };
+        self.ai.wander(
+            self.me.position,
+            (self.width, self.height),
+            radius,
+            self.me.size(),
+            ctx,
+            self.grid,
+            self.rng,
         )
     }
 
@@ -655,8 +871,7 @@ fn act_flee(b: &mut Brain) -> Status {
         2.0 * b.me.position.x - b.player.position.x,
         2.0 * b.me.position.y - b.player.position.y,
     );
-    let dir = b.steer(away_point);
-    b.intent.move_dir = Some(dir);
+    b.intent.move_dir = Some(b.steer(away_point));
     b.reset_aim();
     Status::Success
 }
@@ -677,8 +892,7 @@ fn act_retreat(b: &mut Brain) -> Status {
         2.0 * b.me.position.x - b.player.position.x,
         2.0 * b.me.position.y - b.player.position.y,
     );
-    let dir = b.steer(away_point);
-    b.intent.move_dir = Some(dir);
+    b.intent.move_dir = Some(b.steer(away_point));
     Status::Success
 }
 
@@ -713,32 +927,29 @@ fn act_attack(b: &mut Brain) -> Status {
     } else {
         // Not lined up: reposition toward the player (with commitment).
         b.reset_aim();
-        let dir = b.steer(b.player.position);
-        b.intent.move_dir = Some(dir);
+        b.intent.move_dir = Some(b.steer(b.player.position));
     }
     Status::Success
 }
 
 /// Close in on the player along a committed cardinal heading.
 fn act_chase(b: &mut Brain) -> Status {
-    let dir = b.steer(b.player.position);
-    b.intent.move_dir = Some(dir);
+    b.intent.move_dir = Some(b.steer(b.player.position));
     b.reset_aim();
     Status::Success
 }
 
-/// Wander toward a roaming waypoint, refreshed periodically or on arrival.
+/// Wander toward a roaming waypoint (see `Ai::wander`) - unless the group
+/// has a shared `alert` (see `Brain::alert`), in which case head straight
+/// for it instead of picking a random point. This is what makes the *whole*
+/// map converge on a sighting rather than just whichever single enemy
+/// happened to be close enough to personally see the player.
 fn act_patrol(b: &mut Brain) -> Status {
-    if b.ai.retarget_timer <= 0.0 || b.me.position.distance_to(b.ai.waypoint) < b.me.size() {
-        let margin = b.me.size();
-        b.ai.waypoint = Position::new(
-            b.rng.random_range(margin..(b.width - margin)),
-            b.rng.random_range(margin..(b.height - margin)),
-        );
-        b.ai.retarget_timer = ENEMY_RETARGET_SECONDS;
+    if let Some(target) = b.alert {
+        b.intent.move_dir = Some(b.steer(target));
+    } else {
+        b.intent.move_dir = Some(b.wander());
     }
-    let dir = b.steer(b.ai.waypoint);
-    b.intent.move_dir = Some(dir);
     b.reset_aim();
     Status::Success
 }

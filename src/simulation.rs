@@ -32,23 +32,32 @@ use sola_raylib::core::math::Vector2;
 
 use crate::ai::{Ai, Intent, Mover};
 use crate::battlefield;
+use crate::frog::Frog;
 use crate::obstacle::Obstacle;
 use crate::pathfind::Grid;
 use crate::physics::{self, Physics};
+use crate::pickup::{Pickup, PickupKind};
 use crate::shell::{Owner, Shell, ShellState};
 use crate::shockwave::Shockwave;
 use crate::tank::Tank;
 use crate::track::Track;
 use crate::{
-    DAMAGE_VARIANTS, ENEMY_COUNT_MAX, ENEMY_COUNT_MIN, ENEMY_DAMAGE_MAX, ENEMY_DAMAGE_MIN,
+    DAMAGE_VARIANTS, ENEMY_ALERT_HOLD_SECONDS, ENEMY_COUNT_MAX, ENEMY_COUNT_MIN, ENEMY_DAMAGE_MAX,
+    ENEMY_DAMAGE_MIN,
     ENEMY_SPAWN_MARGIN_MAX, ENEMY_SPAWN_MARGIN_MIN, ENEMY_SPEED, ENEMY_SPEED_VARIANCE,
+    ENEMY_VIEW_RANGE,
     EXPLOSION_DAMAGE_MAX, EXPLOSION_DAMAGE_MIN, EXPLOSION_KNOCKBACK_SPEED, EXPLOSION_RADIUS,
+    FROG_ATTACK_DAMAGE_MAX, FROG_ATTACK_DAMAGE_MIN, FROG_COLLIDER_HALF_EXTENT,
+    FROG_HOP_ANGLE_FAN_DEG, FROG_HOP_ANGLE_JITTER_DEG, FROG_HOP_BOUNDS_MARGIN, FROG_MAX_HEALTH,
+    FROG_SPAWN_MAX_DIST, FROG_SPAWN_MIN_DIST,
     IMPACT_FLASH_DURATION, KNOCKBACK_MAX_SPEED, KNOCKBACK_STRENGTH, MAX_DAMAGE,
     MUZZLE_FLASH_DURATION,
-    OBSTACLE_HULL_FRACTION, OBSTACLE_SCALE, OBSTACLE_TEXTURE_SIZE,
-    PATHFIND_CELL_SIZE, PHYSICS_FIXED_DT, PHYSICS_MAX_CATCHUP_SECONDS, PLAYER_DAMAGE_MAX,
-    PLAYER_DAMAGE_MIN, Position,
-    RAM_DAMAGE_COOLDOWN, RESTART_DELAY, SHELL_HIT_HALF_EXTENT, SHELL_IMPACT_KNOCKBACK_SPEED,
+    OBSTACLE_CLEAR, OBSTACLE_HULL_FRACTION, OBSTACLE_SCALE, OBSTACLE_TEXTURE_SIZE,
+    PATHFIND_CELL_SIZE, PHYSICS_FIXED_DT, PHYSICS_MAX_CATCHUP_SECONDS, PICKUP_AMMO_AMOUNT,
+    PICKUP_COLLECT_RADIUS, PICKUP_COUNT, PICKUP_HEAL_AMOUNT, PICKUP_RESPAWN_SECONDS,
+    PLAYER_DAMAGE_MAX, PLAYER_DAMAGE_MIN, PLAYER_FIRE_INTERVAL, Position,
+    RAM_DAMAGE_COOLDOWN, RESTART_DELAY, SHELLS_HARD_CAP, SHELL_HIT_HALF_EXTENT,
+    SHELL_IMPACT_KNOCKBACK_SPEED,
     SHELL_SHADOW_OFFSET_MAX, SHELL_SHADOW_OFFSET_MIN, SHELL_SPEED,
     SHOCKWAVE_DURATION, TANK_ACCEL_FORCE, TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW,
     TANK_DECEL_CURVE_RATE, TANK_DECEL_SNAP_PX,
@@ -124,6 +133,16 @@ pub struct Game {
     /// `pub(crate)`: `render` needs it to find the player among `world`'s
     /// entities.
     pub(crate) player: Option<Entity>,
+    /// The protect-objective frog's entity in `world` (see `frog::Frog`) -
+    /// same "always `Some` once `init` has run" convention as `player`.
+    /// `pub(crate)`: `render` needs it to find the frog among `world`'s
+    /// entities.
+    pub(crate) frog: Option<Entity>,
+    /// Seconds until the next pickup respawn attempt - only counts down
+    /// while `world` holds fewer than `PICKUP_COUNT` live `Pickup` entities
+    /// (see `Game::update`'s pickup section); reset to `PICKUP_RESPAWN_SECONDS`
+    /// every time it fires, whether or not that attempt actually finds room.
+    pickup_respawn_timer: f32,
     /// This round's four battlefield-boundary wall colliders (see
     /// `battlefield::spawn_walls`), so a shell's flight can be checked against them the
     /// same way as tanks/obstacles (`find_shell_target`) instead of the old
@@ -151,6 +170,17 @@ pub struct Game {
     /// Seconds counting down after the round ends; at zero the game
     /// restarts. `pub(crate)`: read by `render` for the banner's countdown text.
     pub(crate) restart_timer: f32,
+    /// Shared enemy "last known player position" - `Some` while
+    /// `alert_timer` is still counting down. Set/refreshed every frame any
+    /// one enemy has the player within `ENEMY_VIEW_RANGE`, so an enemy
+    /// outside its own view range can still converge on a sighting the
+    /// group made instead of patrolling blind. See `ai::Ai::think`'s
+    /// `alert` parameter and `ai::act_patrol`.
+    alert_position: Option<Position>,
+    /// Seconds remaining before `alert_position` goes stale and is cleared -
+    /// reset to `ENEMY_ALERT_HOLD_SECONDS` every frame the sighting holds,
+    /// ticked down otherwise.
+    alert_timer: f32,
     /// The screen-distortion ring from the most recent tank kill, if one is
     /// still playing out. `pub(crate)`: driven into the shockwave shader by `render`.
     pub(crate) shock: Option<Shockwave>,
@@ -237,6 +267,9 @@ impl Game {
         self.time = 0.0;
         self.outcome = Outcome::Playing;
         self.restart_timer = 0.0;
+        self.alert_position = None;
+        self.alert_timer = 0.0;
+        self.pickup_respawn_timer = 0.0;
         self.shock = None;
         self.muzzle_flashes.clear();
         self.impact_flashes.clear();
@@ -257,7 +290,7 @@ impl Game {
         // Tank::damage_variant).
         let row = rng.random_range(0..TANK_VARIANTS);
         // The player spawns inside the fortress's O, offset from the true
-        // screen center so the "BONG!" sign as a whole reads centered - see
+        // screen center so the "HELLO" sign as a whole reads centered - see
         // `fortress_center_offset`.
         let mut tank = Tank {
             row,
@@ -283,7 +316,19 @@ impl Game {
         // size, so grab them from this local `tank` before it's moved into
         // the world.
         let center = tank.position;
-        let mut clear = tank.size() * 2.0; // don't spawn on top of the player - bumped below if the starting fortress needs more room
+        // Keeps enemies/obstacles off the player's own exact spawn point.
+        // Deliberately *not* also bumped up to cover the fortress as a
+        // whole (an earlier version maxed this against a
+        // furthest-tile-from-`center` radius) - for a word as lopsided as
+        // "HELLO" (the `O` is the *last* letter, so the rest of the word
+        // hangs far off to one side - see `fortress_center_offset`) that
+        // radius ballooned to nearly the size of the whole battlefield,
+        // which starved enemy/obstacle placement almost everywhere instead
+        // of just near the fortress. The precise per-tile checks below
+        // (against every real fortress wall tile) already fully guarantee
+        // fortress clearance on their own; the radius was a redundant,
+        // shape-blind broad-phase check on top of them, not load-bearing.
+        let clear = tank.size() * 2.0;
         // Also keep spawned enemies clear of each other - without this, a
         // crowded high-count round can drop two tanks on top of one another,
         // and they start ramming (and damaging) each other before the round
@@ -305,7 +350,6 @@ impl Game {
             width,
             height,
         );
-        clear = clear.max(fortress.exclusion_radius);
         let mut obstacle_positions = fortress.tiles;
         let fortress_road_cells = fortress.road_cells;
 
@@ -332,6 +376,19 @@ impl Game {
                     && enemy_positions
                         .iter()
                         .all(|&p| pos.distance_to(p) >= enemy_clear)
+                    // The `clear`-from-`center` check above only guards the
+                    // player's own exact spawn point, not the fortress as a
+                    // whole - that's this per-tile check instead, against
+                    // every real fortress wall tile individually
+                    // (obstacle_positions holds only fortress tiles at this
+                    // point in init). Same per-tile clearance rule
+                    // scatter_obstacles already uses for obstacles vs. the
+                    // fortress (battlefield.rs) - see `clear`'s own comment
+                    // above for why a single bounding-radius check (tried
+                    // first) doesn't work for a word shape this lopsided.
+                    && obstacle_positions
+                        .iter()
+                        .all(|&p| pos.distance_to(p) >= enemy_clear + OBSTACLE_CLEAR)
             });
             // Walk the alternating spawn order so each enemy looks distinct and the
             // group mixes single- and twin-barrel hulls.
@@ -391,6 +448,74 @@ impl Game {
             &mut obstacle_positions,
             structure_count,
         );
+
+        // Now that every obstacle for the round is down, catch any enemy
+        // whose rolled spawn point ended up fully boxed in by the
+        // *cumulative* effect of several individually-fine obstacle
+        // placements (see `relocate_boxed_in_tanks`'s own doc comment) and
+        // relocate it - then refresh `enemy_positions` from the
+        // now-possibly-moved tanks so the frog's own clearance check below
+        // sees where they actually ended up.
+        battlefield::relocate_boxed_in_tanks(&mut self.physics, &mut self.world, width, height);
+        enemy_positions = self
+            .world
+            .query::<&Tank>()
+            .with::<&Ai>()
+            .iter()
+            .map(|t| t.position)
+            .collect();
+
+        // --- Frog (protect-objective) ---
+        // Placed near the player's fortress (FROG_SPAWN_MIN_DIST/MAX_DIST
+        // from `center`) rather than anywhere on the map, so defending it
+        // and defending the player's own start are the same early fight
+        // instead of two unrelated ones. Spawned after obstacles so
+        // `obstacle_positions` already holds every fortress + scattered-
+        // structure tile to steer clear of; reuses the same rejection-
+        // sampling `sample_clear_position` the enemy loop above uses.
+        let frog_clear =
+            FROG_COLLIDER_HALF_EXTENT.0.max(FROG_COLLIDER_HALF_EXTENT.1) + OBSTACLE_CLEAR;
+        let frog_pos = battlefield::sample_clear_position(&mut rng, width, height, margin_min, |pos| {
+            let dist = pos.distance_to(center);
+            dist >= FROG_SPAWN_MIN_DIST
+                && dist <= FROG_SPAWN_MAX_DIST
+                && enemy_positions.iter().all(|&p| pos.distance_to(p) >= enemy_clear)
+                && obstacle_positions.iter().all(|&p| pos.distance_to(p) >= frog_clear)
+        });
+        let frog_body = self.physics.spawn_static(
+            frog_pos,
+            Position::new(FROG_COLLIDER_HALF_EXTENT.0, FROG_COLLIDER_HALF_EXTENT.1),
+        );
+        self.frog = Some(self.world.spawn((Frog {
+            position: frog_pos,
+            health: FROG_MAX_HEALTH,
+            max_health: FROG_MAX_HEALTH,
+            body: frog_body,
+            hurt_timer: 0.0,
+            hit_flash_timer: 0.0,
+            hop_timer: 0.0,
+            hop_start: frog_pos,
+            hop_end: frog_pos,
+            hop_cooldown: 0.0,
+            attack_timer: 0.0,
+            attack_cooldown: 0.0,
+            death_elapsed: None,
+        },)));
+
+        // --- Pickups (health/ammo) ---
+        // One per corner at round start (PICKUP_COUNT); `Game::update` tops
+        // this back up over time as pickups are collected, via this same
+        // function (see `spawn_pickup`'s own doc comment). Placed after the
+        // frog so pickups steer clear of it too, same "clear of whatever's
+        // already down" order obstacles/frog themselves follow - and after
+        // every fortress/scattered-obstacle tile, all of which are already
+        // `Obstacle` entities in `self.world` by now, so `spawn_pickup`'s
+        // own live query picks up fortress clearance for free without
+        // needing `center`/`clear` passed in separately the way the frog's
+        // placement above does.
+        for _ in 0..PICKUP_COUNT {
+            spawn_pickup(&mut self.world, &mut rng, width, height);
+        }
 
         // --- Ground ---
         // Built last, once every wall/brick object for the round (fortress +
@@ -462,6 +587,14 @@ impl Game {
             for obstacle in self.world.query::<&mut Obstacle>().iter() {
                 obstacle.tick_burn(dt);
             }
+            for frog in self.world.query::<&mut Frog>().iter() {
+                frog.tick(dt);
+                // Keep the physics body in step with `position` while a
+                // hop is animating (see `Frog::tick`'s doc comment) - the
+                // "round is over" branch still runs this so an in-flight
+                // hop finishes visually instead of freezing mid-air.
+                self.physics.set_position(frog.body, frog.position);
+            }
             self.tracks.retain_mut(|t| !t.tick(dt));
             self.restart_timer -= dt;
             if self.restart_timer <= 0.0 {
@@ -477,12 +610,22 @@ impl Game {
         self.time += dt;
         for tank in self.world.query::<&mut Tank>().iter() {
             tank.tick_recharge(dt);
+            tank.fire_cooldown = (tank.fire_cooldown - dt).max(0.0);
             tank.ram_cooldown = (tank.ram_cooldown - dt).max(0.0);
+            tank.hit_flash_timer = (tank.hit_flash_timer - dt).max(0.0);
             tank.tick_wreck(dt);
             roll_wreck_col(tank);
         }
         for obstacle in self.world.query::<&mut Obstacle>().iter() {
             obstacle.tick_burn(dt);
+        }
+        for frog in self.world.query::<&mut Frog>().iter() {
+            frog.tick(dt);
+            // Keep the physics body in step with `position` while a hop is
+            // animating (see `Frog::tick`'s doc comment) - a no-op write
+            // the rest of the time, since `tick` only moves `position`
+            // during an in-flight hop.
+            self.physics.set_position(frog.body, frog.position);
         }
         // Age existing marks and drop the ones that have fully faded.
         self.tracks.retain_mut(|t| !t.tick(dt));
@@ -504,6 +647,161 @@ impl Game {
         // one batch after the player/enemy sections finish querying tanks.
         let mut pending_shells: Vec<Shell> = Vec::new();
 
+        // --- Frog: bite the nearest tank in range ---
+        // Independent of the hop-on-hit reaction handled down in the shell
+        // loop below - checked every frame regardless of whether the frog
+        // has taken any fire this round, so standing next to it is
+        // dangerous even if it's never been shot. Only the single nearest
+        // in-range tank (either side) is bitten per attack tick, gated by
+        // `Frog::can_attack`/FROG_ATTACK_COOLDOWN_SECONDS the same way a
+        // tank's own `fire_cooldown` paces its shots.
+        {
+            let frog_entity = self.frog.expect("frog entity spawned in init");
+            let (can_attack, frog_pos, attack_range) = with_frog(&self.world, frog_entity, |f| {
+                (f.can_attack(), f.position, f.attack_range())
+            });
+            if can_attack {
+                let mut nearest: Option<(Entity, f32)> = None;
+                for (entity, tank) in self.world.query::<(Entity, &Tank)>().iter() {
+                    if tank.is_wreck() {
+                        continue;
+                    }
+                    let d = tank.position.distance_to(frog_pos);
+                    let closer_than_current = match nearest {
+                        None => true,
+                        Some((_, nd)) => d < nd,
+                    };
+                    if d <= attack_range && closer_than_current {
+                        nearest = Some((entity, d));
+                    }
+                }
+                if let Some((target, _)) = nearest {
+                    let dmg = rng.random_range(FROG_ATTACK_DAMAGE_MIN..FROG_ATTACK_DAMAGE_MAX);
+                    let (became_wreck, victim_pos) = {
+                        let mut q = self.world.query_one::<&mut Tank>(target);
+                        let tank = q.get().expect("attack target should always have a Tank");
+                        tank.damage = (tank.damage + dmg).min(MAX_DAMAGE);
+                        tank.mark_hit();
+                        (tank.is_wreck(), tank.position)
+                    };
+                    if became_wreck {
+                        kills.push((victim_pos, target != player));
+                    }
+                    with_frog_mut(&self.world, frog_entity, |f| f.start_attack());
+                }
+            }
+        }
+
+        // --- Frog: hop away from the nearest tank if one's gotten close ---
+        // Same "either side" symmetry as the bite above - friendly and
+        // enemy tanks both count as too close. Independent of the bite
+        // above rather than an alternative to it (see FROG_AVOID_RANGE_FACTOR's
+        // own comment): a tank already within bite range is *also* within
+        // avoid range (the latter is deliberately the bigger of the two),
+        // so both can trigger the same round - the frog bites whatever's
+        // adjacent to it this frame, on its own cooldown, while separately
+        // trying to open up distance from whichever tank is nearest, on
+        // *its* own cooldown.
+        {
+            let frog_entity = self.frog.expect("frog entity spawned in init");
+            let (can_hop, frog_pos, avoid_range, hop_distance) =
+                with_frog(&self.world, frog_entity, |f| {
+                    (f.can_hop(), f.position, f.avoid_range(), f.hop_distance())
+                });
+            if can_hop {
+                let nearest_tank = self
+                    .world
+                    .query::<&Tank>()
+                    .iter()
+                    .filter(|t| !t.is_wreck())
+                    .map(|t| (t.position, t.position.distance_to(frog_pos)))
+                    .filter(|&(_, d)| d <= avoid_range)
+                    .min_by(|a, b| a.1.total_cmp(&b.1));
+                if let Some((tank_pos, _)) = nearest_tank {
+                    // Obstacle positions collected fresh here (infrequent -
+                    // only when a tank has actually closed within avoid
+                    // range and the frog isn't on hop cooldown, not every
+                    // frame) rather than threaded through from elsewhere,
+                    // same reasoning as the shell-hit hop below.
+                    let obstacle_positions: Vec<Position> = self
+                        .world
+                        .query::<&Obstacle>()
+                        .iter()
+                        .map(|o| o.position)
+                        .collect();
+                    let away_from_tank =
+                        Position::new(frog_pos.x - tank_pos.x, frog_pos.y - tank_pos.y);
+                    if let Some(new_pos) = frog_hop_target(
+                        &mut rng,
+                        frog_pos,
+                        away_from_tank,
+                        hop_distance,
+                        &obstacle_positions,
+                        width,
+                        height,
+                    ) {
+                        with_frog_mut(&self.world, frog_entity, |f| f.start_hop(new_pos));
+                    }
+                }
+            }
+        }
+
+        // --- Pickups: collect on touch, keep the field topped up ---
+        // Checked every frame against every living tank's current position -
+        // pure proximity, no physics body (see pickup.rs's module doc
+        // comment for why). Collect-then-apply: snapshot which tank (if any)
+        // is in range of each pickup first, then apply effects/despawn
+        // after, same reason as the destroyed-obstacle/kill cleanup
+        // elsewhere in this function - can't despawn a `world` entity while
+        // a query over it is still borrowed.
+        {
+            let living_tanks: Vec<(Entity, Position)> = self
+                .world
+                .query::<(Entity, &Tank)>()
+                .iter()
+                .filter(|(_, t)| !t.is_wreck())
+                .map(|(e, t)| (e, t.position))
+                .collect();
+            let collected: Vec<(Entity, Entity, PickupKind)> = self
+                .world
+                .query::<(Entity, &Pickup)>()
+                .iter()
+                .filter_map(|(pickup_entity, pickup)| {
+                    living_tanks
+                        .iter()
+                        .find(|(_, pos)| pos.distance_to(pickup.position) <= PICKUP_COLLECT_RADIUS)
+                        .map(|&(tank_entity, _)| (pickup_entity, tank_entity, pickup.kind))
+                })
+                .collect();
+            for (pickup_entity, tank_entity, kind) in collected {
+                let mut q = self.world.query_one::<&mut Tank>(tank_entity);
+                let tank = q.get().expect("collector entity always has a Tank");
+                match kind {
+                    PickupKind::Health => tank.damage = (tank.damage - PICKUP_HEAL_AMOUNT).max(0.0),
+                    PickupKind::Ammo => {
+                        tank.shells_ammo = (tank.shells_ammo + PICKUP_AMMO_AMOUNT).min(SHELLS_HARD_CAP)
+                    }
+                }
+                drop(q);
+                self.world.despawn(pickup_entity).ok();
+            }
+
+            // Top back up to PICKUP_COUNT after a delay, once collection (or,
+            // at round start before the very first spawn_pickup calls in
+            // `init`, never - this only ever runs once `update` is already
+            // ticking) drops the live count below it. Not tied to *which*
+            // corner just emptied, just "how many are live right now".
+            if self.world.query::<&Pickup>().iter().count() < PICKUP_COUNT {
+                self.pickup_respawn_timer -= dt;
+                if self.pickup_respawn_timer <= 0.0 {
+                    spawn_pickup(&mut self.world, &mut rng, width, height);
+                    self.pickup_respawn_timer = PICKUP_RESPAWN_SECONDS;
+                }
+            } else {
+                self.pickup_respawn_timer = 0.0;
+            }
+        }
+
         // --- Player: hand this frame's intent to physics ---
         // A wreck can't move but may still fire - `update` (not the input
         // source) is what decides that, since it's the one thing here that
@@ -520,8 +818,9 @@ impl Game {
             // movement and collision (walls, tank-vs-tank blocking) happen below
             // when the physics world steps - not here.
             drive_tank(&mut self.physics, player_tank, player_intent, dt);
-            if player_intent.fire && player_tank.shells_ammo >= 1 {
+            if player_intent.fire && player_tank.shells_ammo >= 1 && player_tank.fire_cooldown <= 0.0 {
                 player_tank.shells_ammo -= 1;
+                player_tank.fire_cooldown = PLAYER_FIRE_INTERVAL;
                 // Alternate simultaneous/staggered twin shell art shot-to-shot
                 // (no-op for single-barrel chassis - see Tank::alternate_shot).
                 player_tank.shell_variant = if player_tank.alternate_shot {
@@ -561,6 +860,19 @@ impl Game {
         // not just a representative default one, so pathfinding never routes
         // even the biggest tank (titan/leviathan) through a gap too narrow
         // for it to actually fit through.
+        //
+        // The frog is chained in alongside `Obstacle` for the same reason:
+        // it's spawned as a real, solid `Physics::spawn_static` body (see
+        // `Game::init`) that blocks tank movement exactly like an obstacle
+        // tile does, and it can relocate mid-round (`Frog::start_hop`) - but
+        // it isn't an `Obstacle` component, so without this the grid had no
+        // idea it existed at all. That's the *literal* version of this
+        // comment's own "walking into one and getting physically stuck by
+        // its collider" warning: pathfinding treated the frog's cell as
+        // open ground, routed tanks straight through it, and physics
+        // stopped them cold - a "stuck near the frog" symptom that read
+        // like a bug in steering when the grid simply never knew to route
+        // around it.
         let grid = Grid::build(
             width,
             height,
@@ -569,8 +881,36 @@ impl Game {
             self.world
                 .query::<&Obstacle>()
                 .iter()
-                .map(|o| (o.position, o.hull_size() * 0.5)),
+                .map(|o| (o.position, o.hull_size() * 0.5))
+                .chain(self.world.query::<&Frog>().iter().map(|f| {
+                    (
+                        f.position,
+                        FROG_COLLIDER_HALF_EXTENT.0.max(FROG_COLLIDER_HALF_EXTENT.1),
+                    )
+                })),
         );
+        // Shared aggression (see ENEMY_ALERT_HOLD_SECONDS): if any enemy
+        // currently has the player within ENEMY_VIEW_RANGE, refresh the
+        // group's shared "last known player position" so every enemy - even
+        // ones with the player well outside their own view range - can
+        // converge on it via act_patrol instead of wandering randomly.
+        let player_alive = with_tank(&self.world, player, |t| !t.is_wreck());
+        let player_pos = movers[0].position;
+        let any_enemy_sees_player = player_alive
+            && movers[1..]
+                .iter()
+                .any(|m| m.position.distance_to(player_pos) <= ENEMY_VIEW_RANGE);
+        if any_enemy_sees_player {
+            self.alert_position = Some(player_pos);
+            self.alert_timer = ENEMY_ALERT_HOLD_SECONDS;
+        } else {
+            self.alert_timer = (self.alert_timer - dt).max(0.0);
+            if self.alert_timer <= 0.0 {
+                self.alert_position = None;
+            }
+        }
+        let alert = self.alert_position.filter(|_| self.alert_timer > 0.0);
+
         for (entity, tank, ai) in self.world.query::<(Entity, &mut Tank, &mut Ai)>().iter() {
             let my_index = enemy_indices[&entity];
             // `Ai::think`'s targeting reads the player's tank; grabbed via a
@@ -603,6 +943,7 @@ impl Game {
                     my_index,
                     &grid,
                     &mut rng,
+                    alert,
                 )
             });
             drive_tank(&mut self.physics, tank, intent, dt);
@@ -860,6 +1201,7 @@ impl Game {
                     if !player_tank.is_wreck() {
                         let dmg = rng.random_range(dmg_min..dmg_max);
                         player_tank.damage = (player_tank.damage + dmg).min(MAX_DAMAGE);
+                        player_tank.mark_hit();
                         if player_tank.is_wreck() {
                             kills.push((player_tank.position, false));
                         } else {
@@ -873,10 +1215,65 @@ impl Game {
                     if !tank.is_wreck() {
                         let dmg = rng.random_range(dmg_min..dmg_max);
                         tank.damage = (tank.damage + dmg).min(MAX_DAMAGE);
+                        tank.mark_hit();
                         if tank.is_wreck() {
                             kills.push((tank.position, true));
                         } else {
                             shell_impact(tank, shell, &mut self.physics);
+                        }
+                    }
+                }
+                ShellTarget::Frog(entity) => {
+                    let (now_dead, frog_pos, can_hop, hop_distance) = {
+                        let mut q = self.world.query_one::<&mut Frog>(entity);
+                        let frog = q.get().expect("shell target entity always has a Frog");
+                        if frog.is_dead() {
+                            (true, frog.position, false, 0.0)
+                        } else {
+                            let dmg = rng.random_range(dmg_min..dmg_max);
+                            frog.damage(dmg);
+                            (
+                                frog.is_dead(),
+                                frog.position,
+                                frog.can_hop(),
+                                frog.hop_distance(),
+                            )
+                        }
+                    };
+                    if now_dead {
+                        self.shock = Some(Shockwave {
+                            center: frog_pos,
+                            time: 0.0,
+                        });
+                    } else if can_hop {
+                        // Try to hop away from this shot - see
+                        // frog_hop_target's own doc comment for the search.
+                        // Obstacle positions collected fresh each hit
+                        // (infrequent - only on an actual frog hit, not
+                        // every frame) rather than threaded through from
+                        // elsewhere, since nothing else in this loop needs
+                        // them.
+                        let obstacle_positions: Vec<Position> = self
+                            .world
+                            .query::<&Obstacle>()
+                            .iter()
+                            .map(|o| o.position)
+                            .collect();
+                        if let Some(new_pos) = frog_hop_target(
+                            &mut rng,
+                            frog_pos,
+                            shell.velocity,
+                            hop_distance,
+                            &obstacle_positions,
+                            width,
+                            height,
+                        ) {
+                            // start_hop only records where the hop is
+                            // headed - it doesn't move `position` itself
+                            // (see its own doc comment); the per-frame tick
+                            // loop below carries it there smoothly and
+                            // keeps the physics body in step.
+                            with_frog_mut(&self.world, entity, |f| f.start_hop(new_pos));
                         }
                     }
                 }
@@ -939,9 +1336,13 @@ impl Game {
             self.apply_explosion(center, victim_was_enemy, &mut rng, &mut kills);
         }
 
-        // Check for a round end. Losing (player destroyed) takes precedence over
-        // winning in case the last enemy and the player die on the same frame.
-        if with_tank(&self.world, player, |t| t.is_wreck()) {
+        // Check for a round end. Losing (player destroyed, or the frog
+        // dying) takes precedence over winning in case the last enemy and
+        // the player/frog die on the same frame.
+        let frog = self.frog.expect("frog entity spawned in init");
+        if with_tank(&self.world, player, |t| t.is_wreck())
+            || with_frog(&self.world, frog, Frog::is_dead)
+        {
             self.end_round(Outcome::Lost);
         } else if self
             .world
@@ -1225,19 +1626,23 @@ fn tanks_touching(physics: &Physics, a: &Tank, b: &Tank) -> bool {
 enum ShellTarget {
     PlayerTank,
     EnemyTank(Entity),
+    Frog(Entity),
     Obstacle(Entity),
     Wall,
 }
 
 /// Find what (if anything) `shell_collider` is intersecting this frame,
 /// checked in priority order: the player's tank, then every enemy tank,
-/// then every obstacle, then the four battlefield walls - a shell hits at
-/// most one target, so the first match wins. Replaces what used to be three
-/// separate, near-duplicate loops (player/enemies/obstacles) plus a
-/// completely separate hand-rolled screen-edge coordinate check standing in
-/// for walls (see `Shell::update`'s old doc comment) - walls are real,
-/// queryable colliders now (see `battlefield::spawn_walls`/`Game::walls`), so they go
-/// through the exact same `Physics::intersecting` check as everything else.
+/// then the protect-objective frog, then every obstacle, then the four
+/// battlefield walls - a shell hits at most one target, so the first match
+/// wins. Replaces what used to be three separate, near-duplicate loops
+/// (player/enemies/obstacles) plus a completely separate hand-rolled
+/// screen-edge coordinate check standing in for walls (see `Shell::update`'s
+/// old doc comment) - walls are real, queryable colliders now (see
+/// `battlefield::spawn_walls`/`Game::walls`), so they go through the exact
+/// same `Physics::intersecting` check as everything else. The frog is
+/// checked ahead of obstacles for the same "living things before terrain"
+/// reasoning that already puts tanks first.
 fn find_shell_target(
     world: &hecs::World,
     physics: &Physics,
@@ -1262,6 +1667,13 @@ fn find_shell_target(
         }
     }
 
+    for (entity, frog) in world.query::<(Entity, &Frog)>().iter() {
+        let collider = physics.collider_of(frog.body);
+        if physics.intersecting(shell_collider, collider) {
+            return Some(ShellTarget::Frog(entity));
+        }
+    }
+
     for (entity, obstacle) in world.query::<(Entity, &Obstacle)>().iter() {
         let collider = physics.collider_of(obstacle.body);
         if physics.intersecting(shell_collider, collider) {
@@ -1278,6 +1690,89 @@ fn find_shell_target(
     None
 }
 
+/// Try to find a landing spot for the frog's evasive hop, roughly
+/// `distance` px away, continuing along `away_from_dir`'s direction (only
+/// its angle matters, not its magnitude, so callers don't need to
+/// normalize it first) - a shell's own velocity when it hit the frog (it
+/// was heading *into* the frog, so carrying on that line moves the frog
+/// further from whoever fired it), or simply `frog_pos` minus a too-close
+/// tank's position (see the frog-avoidance section of `Game::update`) for
+/// the other caller. Tries that ideal angle (plus a little random jitter,
+/// so hops don't all look mechanically identical) first, then
+/// FROG_HOP_ANGLE_FAN_DEG's offsets from it in turn, landing on the first
+/// candidate that's both inside the battlefield (FROG_HOP_BOUNDS_MARGIN)
+/// and clear of every current obstacle - so a frog backed into a corner or
+/// wall still gets a real shot at finding *some* clear spot rather than
+/// only ever trying the one exact "dead away" direction. Returns `None` if
+/// every candidate is blocked: per the mechanic's own framing ("hop away if
+/// it can"), this is a best-effort evasion, not a guaranteed one - the
+/// caller just leaves the frog where it is when this happens.
+fn frog_hop_target(
+    rng: &mut rand::rngs::ThreadRng,
+    frog_pos: Position,
+    away_from_dir: Position,
+    distance: f32,
+    obstacle_positions: &[Position],
+    width: f32,
+    height: f32,
+) -> Option<Position> {
+    let clear = FROG_COLLIDER_HALF_EXTENT.0.max(FROG_COLLIDER_HALF_EXTENT.1) + OBSTACLE_CLEAR;
+    let jitter = rng
+        .random_range(-FROG_HOP_ANGLE_JITTER_DEG..FROG_HOP_ANGLE_JITTER_DEG)
+        .to_radians();
+    let base_angle = away_from_dir.y.atan2(away_from_dir.x) + jitter;
+    for offset_deg in FROG_HOP_ANGLE_FAN_DEG {
+        let angle = base_angle + offset_deg.to_radians();
+        let candidate = Position::new(
+            frog_pos.x + angle.cos() * distance,
+            frog_pos.y + angle.sin() * distance,
+        );
+        let in_bounds = candidate.x >= FROG_HOP_BOUNDS_MARGIN
+            && candidate.x <= width - FROG_HOP_BOUNDS_MARGIN
+            && candidate.y >= FROG_HOP_BOUNDS_MARGIN
+            && candidate.y <= height - FROG_HOP_BOUNDS_MARGIN;
+        let clear_of_obstacles = obstacle_positions
+            .iter()
+            .all(|&p| candidate.distance_to(p) >= clear);
+        if in_bounds && clear_of_obstacles {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Roll a kind and a clear, corner-adjacent position for one new pickup and
+/// spawn it into `world` - used identically both at round init (called
+/// PICKUP_COUNT times, once every other entity for the round is down) and
+/// by `Game::update` to top the field back up once the live count drops
+/// below `PICKUP_COUNT`. Gathers clearance data (every obstacle - which
+/// already includes every fortress tile, see
+/// `battlefield::spawn_player_fortress` - every tank, the frog, and every
+/// other live pickup) fresh from `world` on each call rather than taking it
+/// as parameters, so the exact same function is correct whether it's round
+/// start or five minutes into a round with some obstacles since destroyed
+/// and every tank long since moved.
+fn spawn_pickup(world: &mut hecs::World, rng: &mut rand::rngs::ThreadRng, width: f32, height: f32) {
+    let obstacles: Vec<Position> = world.query::<&Obstacle>().iter().map(|o| o.position).collect();
+    let tanks: Vec<Position> = world.query::<&Tank>().iter().map(|t| t.position).collect();
+    let frog: Vec<Position> = world.query::<&Frog>().iter().map(|f| f.position).collect();
+    let pickups: Vec<Position> = world.query::<&Pickup>().iter().map(|p| p.position).collect();
+    let pos = battlefield::sample_corner_position(rng, width, height, |pos| {
+        obstacles.iter().all(|&p| pos.distance_to(p) >= OBSTACLE_CLEAR)
+            && tanks.iter().all(|&p| pos.distance_to(p) >= OBSTACLE_CLEAR)
+            && frog.iter().all(|&p| pos.distance_to(p) >= OBSTACLE_CLEAR)
+            && pickups
+                .iter()
+                .all(|&p| pos.distance_to(p) >= PICKUP_COLLECT_RADIUS * 2.0)
+    });
+    let kind = if rng.random_bool(0.5) {
+        PickupKind::Health
+    } else {
+        PickupKind::Ammo
+    };
+    world.spawn((Pickup { kind, position: pos },));
+}
+
 /// Run `f` with read-only access to one specific tank entity's `Tank`
 /// component. Backed by `World::query_one` - a dynamically borrow-checked,
 /// shared (`&World`) query - rather than `query_one_mut`, specifically so
@@ -1292,6 +1787,21 @@ pub(crate) fn with_tank<R>(world: &hecs::World, entity: Entity, f: impl FnOnce(&
     let mut q = world.query_one::<&Tank>(entity);
     let tank = q.get().expect("entity should have a Tank component");
     f(tank)
+}
+
+/// Same as `with_tank`, for the (always exactly one) protect-objective
+/// `Frog`.
+pub(crate) fn with_frog<R>(world: &hecs::World, entity: Entity, f: impl FnOnce(&Frog) -> R) -> R {
+    let mut q = world.query_one::<&Frog>(entity);
+    let frog = q.get().expect("entity should have a Frog component");
+    f(frog)
+}
+
+/// Same as `with_frog`, but for mutable access.
+fn with_frog_mut<R>(world: &hecs::World, entity: Entity, f: impl FnOnce(&mut Frog) -> R) -> R {
+    let mut q = world.query_one::<&mut Frog>(entity);
+    let frog = q.get().expect("entity should have a Frog component");
+    f(frog)
 }
 
 /// Same as `with_tank`, but for mutable access to one specific tank.
@@ -1489,6 +1999,8 @@ fn ram(
         let dmg = rng.random_range(2.0..6.0);
         a.damage = (a.damage + dmg).min(MAX_DAMAGE);
         b.damage = (b.damage + dmg).min(MAX_DAMAGE);
+        a.mark_hit();
+        b.mark_hit();
         a.ram_cooldown = RAM_DAMAGE_COOLDOWN;
         b.ram_cooldown = RAM_DAMAGE_COOLDOWN;
         if !a_was_wreck && a.is_wreck() {
@@ -1575,6 +2087,7 @@ fn explosion_hit(
     if damage {
         let dmg = rng.random_range(EXPLOSION_DAMAGE_MIN..EXPLOSION_DAMAGE_MAX);
         tank.damage = (tank.damage + dmg).min(MAX_DAMAGE);
+        tank.mark_hit();
         if tank.is_wreck() {
             kills.push((tank.position, is_enemy));
         }

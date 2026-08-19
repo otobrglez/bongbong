@@ -1,5 +1,5 @@
 //! Static battlefield terrain generation: the boundary walls, the player's
-//! "BONG!" fortress, and the scattered obstacle structures - everything that
+//! "HELLO" fortress, and the scattered obstacle structures - everything that
 //! decides *where* static terrain goes for a fresh round. Called from
 //! `simulation::Game::init` at the points where the data each step needs
 //! becomes available (`spawn_player_fortress` needs the player's spawn
@@ -18,13 +18,16 @@ use std::collections::HashSet;
 use rand::RngExt;
 use rapier2d::prelude::ColliderHandle;
 
+use crate::ai::Ai;
 use crate::obstacle::{MATERIALS, Material, Obstacle};
+use crate::pathfind::Grid;
 use crate::physics::Physics;
 use crate::structures::{self, Blueprint};
 use crate::tank::Tank;
 use crate::{
     OBSTACLE_CLEAR, OBSTACLE_CLUSTER_CLEAR, OBSTACLE_COUNT_MAX, OBSTACLE_COUNT_MIN,
-    OBSTACLE_GRID_SIZE, OBSTACLE_STRUCTURE_CHANCE, OBSTACLE_WOOD_FLAMMABLE_CHANCE, Position,
+    OBSTACLE_GRID_SIZE, OBSTACLE_STRUCTURE_CHANCE, OBSTACLE_WOOD_FLAMMABLE_CHANCE,
+    PATHFIND_CELL_SIZE, PICKUP_CORNER_PADDING_MAX, PICKUP_CORNER_PADDING_MIN, Position,
     TANK_HULL_BBOX_BY_ROW, WALL_THICKNESS,
 };
 
@@ -75,6 +78,41 @@ pub fn sample_clear_position(
     pos
 }
 
+/// Roll a position near a randomly chosen battlefield corner - within
+/// `PICKUP_CORNER_PADDING_MIN..MAX` of it along *both* axes, so it's never
+/// sitting against either of that corner's two boundary walls at once -
+/// retrying until `valid` accepts one or `PLACEMENT_MAX_ATTEMPTS` is
+/// reached. Otherwise mirrors `sample_clear_position` closely (same
+/// give-up-gracefully convention), just corner-relative sampling instead of
+/// uniform-across-the-board. Used to place health/ammo pickups
+/// (`simulation::respawn_pickup`).
+pub fn sample_corner_position(
+    rng: &mut rand::rngs::ThreadRng,
+    width: f32,
+    height: f32,
+    mut valid: impl FnMut(Position) -> bool,
+) -> Position {
+    let corners = [
+        Position::new(0.0, 0.0),
+        Position::new(width, 0.0),
+        Position::new(0.0, height),
+        Position::new(width, height),
+    ];
+    let mut pos = corners[0];
+    for _ in 0..PLACEMENT_MAX_ATTEMPTS {
+        let corner = corners[rng.random_range(0..corners.len())];
+        let dx = rng.random_range(PICKUP_CORNER_PADDING_MIN..PICKUP_CORNER_PADDING_MAX);
+        let dy = rng.random_range(PICKUP_CORNER_PADDING_MIN..PICKUP_CORNER_PADDING_MAX);
+        let x = if corner.x <= 0.0 { corner.x + dx } else { corner.x - dx };
+        let y = if corner.y <= 0.0 { corner.y + dy } else { corner.y - dy };
+        pos = Position::new(x, y);
+        if valid(pos) {
+            break;
+        }
+    }
+    pos
+}
+
 /// Rejection-samples a grid-aligned anchor cell for `blueprint` (see
 /// `structures.rs`), retrying until every one of its tiles (anchor + each
 /// offset, in grid cells) is in-bounds and passes `valid`, or
@@ -116,42 +154,57 @@ pub fn sample_structure_positions(
     None
 }
 
-/// One glyph in the tiny pixel font `spawn_player_fortress` spells "BONG!"
+/// One glyph in the tiny pixel font `spawn_player_fortress` spells "HELLO"
 /// with. Each row is a string where `#` marks a filled tile and anything
 /// else (conventionally `.`) is empty; every row in a glyph must be the same
 /// length, since that length *is* the glyph's width in tiles - a narrower
-/// glyph (see `GLYPH_BANG`) just uses shorter rows.
+/// glyph could use shorter rows, though every glyph below happens to be the
+/// same 6x8 size. 6x8 rather than the previous 5x7 - a size bump (20% wider,
+/// 14% taller, ~37% more area) so the whole sign reads bigger on screen,
+/// deliberately not pushed further: the whole word's *total* width
+/// (5 glyphs + GLYPH_GAP between them) has to fit inside
+/// DEFAULT_SCREEN_WIDTH (1280px, main.rs) with room for
+/// spawn_player_fortress's own margin, or that function's `fits` check
+/// silently skips the fortress for the round entirely (first tried a 7x9
+/// size - 1376px total - and hit exactly that: no visible failure, the
+/// fortress just never spawned). At 6x8 the word is 38 grid cells wide
+/// (1216px), comfortably under the ~39-cell budget. Nothing about the
+/// placement/interior-flood-fill math below assumes a fixed glyph size (it
+/// all derives sizes from `.len()`), so only the art needed to change.
 type Glyph = &'static [&'static str];
 
-const GLYPH_B: Glyph = &[
-    "####.", "#...#", "#...#", "####.", "#...#", "#...#", "####.",
+const GLYPH_H: Glyph = &[
+    "#....#", "#....#", "#....#", "######", "#....#", "#....#", "#....#", "#....#",
+];
+const GLYPH_E: Glyph = &[
+    "######", "#.....", "#.....", "#.....", "######", "#.....", "#.....", "######",
+];
+const GLYPH_L: Glyph = &[
+    "#.....", "#.....", "#.....", "#.....", "#.....", "#.....", "#.....", "######",
 ];
 const GLYPH_O: Glyph = &[
-    ".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###.",
+    ".####.", "#....#", "#....#", "#....#", "#....#", "#....#", "#....#", ".####.",
 ];
-const GLYPH_N: Glyph = &[
-    "#...#", "##..#", "#.#.#", "#.#.#", "#..##", "#...#", "#...#",
-];
-const GLYPH_G: Glyph = &[
-    ".####", "#....", "#....", "#..##", "#...#", "#...#", ".###.",
-];
-const GLYPH_BANG: Glyph = &["#", "#", "#", "#", "#", ".", "#"];
 
 /// Column gap (in tiles) between adjacent glyphs.
 const GLYPH_GAP: i32 = 2;
-const WORD_GLYPHS: [Glyph; 5] = [GLYPH_B, GLYPH_O, GLYPH_N, GLYPH_G, GLYPH_BANG];
+const WORD_GLYPHS: [Glyph; 5] = [GLYPH_H, GLYPH_E, GLYPH_L, GLYPH_L, GLYPH_O];
+/// One material per glyph - only four materials exist for five glyphs, so
+/// one repeat is unavoidable; Brick repeats on H and the second L (indices 0
+/// and 3, not adjacent to each other) so no two neighboring glyphs share a
+/// material and blur together visually.
 const WORD_MATERIALS: [Material; 5] = [
     Material::Brick,
-    Material::Glass,
-    Material::Wood,
     Material::Iron,
+    Material::Wood,
     Material::Brick,
+    Material::Glass,
 ];
 /// Index into `WORD_GLYPHS`/`WORD_MATERIALS` of the `O` the player spawns
 /// inside.
-const WORD_O_INDEX: usize = 1;
+const WORD_O_INDEX: usize = 4;
 
-/// How many grid cells of road to surround each of the "BONG!" sign's wall
+/// How many grid cells of road to surround each of the "HELLO" sign's wall
 /// tiles with (a Chebyshev/square dilation - see `dilate_cells`), in grid
 /// cells (each `OBSTACLE_GRID_SIZE`/`GROUND_WORLD_TILE`, the same width as
 /// one wall tile). 0 since the de-green pass (docs/PALETTE.md): at 1, the
@@ -186,13 +239,13 @@ fn fortress_columns() -> ([i32; 5], i32, i32) {
 
 /// Every `.` cell of `glyph` that's enclosed by `#` tiles (unreachable from
 /// outside the glyph's own bounding box without crossing one) - e.g. the
-/// donut hole in `GLYPH_O`, or `GLYPH_B`'s two loops. Found by flood-filling
-/// from just outside the glyph (a 1-cell padding border, guaranteed empty)
-/// and marking every `.` cell that flood reaches; whatever's left over is
-/// interior. Returns `(row, col)` offsets in the same indexing
-/// `spawn_player_fortress`'s own wall-tile loop uses. General on purpose (no
-/// hand-picked coordinates) so it stays correct if `GLYPH_B`/`GLYPH_O`'s art
-/// ever changes.
+/// donut hole in `GLYPH_O`. Found by flood-filling from just outside the
+/// glyph (a 1-cell padding border, guaranteed empty) and marking every `.`
+/// cell that flood reaches; whatever's left over is interior. Returns
+/// `(row, col)` offsets in the same indexing `spawn_player_fortress`'s own
+/// wall-tile loop uses. General on purpose (no hand-picked coordinates) so
+/// it stays correct for any glyph's art, holes or no holes - e.g. correctly
+/// finds nothing for `GLYPH_H`/`GLYPH_E`/`GLYPH_L`, all fully open shapes.
 fn glyph_interior_cells(glyph: Glyph) -> Vec<(i32, i32)> {
     let rows = glyph.len() as i32;
     let cols = glyph[0].len() as i32;
@@ -243,15 +296,16 @@ fn dilate_cells(cells: &HashSet<(i32, i32)>, radius: i32) -> Vec<(i32, i32)> {
     ring.into_iter().collect()
 }
 
-/// World-space x offset from "BONG!"'s own bounding-box center to the `O`'s
+/// World-space x offset from "HELLO"'s own bounding-box center to the `O`'s
 /// center (there's no y equivalent - every glyph is the same height, so the
-/// word is already vertically symmetric around the O). `BONG!` isn't
-/// symmetric around its `O` left-to-right (just `B` hangs to the left, but
-/// `N`, `G` and `!` all hang to the right), so anchoring the word on the `O`
-/// and putting the `O` at the screen's actual center read as visibly
-/// off-center, bulked right. `Game::init` subtracts this from the screen's
-/// true center to find where the `O` - and the player spawning inside it -
-/// should actually go, so the word as a whole reads centered instead.
+/// word is already vertically symmetric around the O). `HELLO` isn't
+/// symmetric around its `O` left-to-right at all - the `O` is the *last*
+/// letter, so the entire rest of the word (`H`, `E`, `L`, `L`) hangs off its
+/// left side - so anchoring the word on the `O` and putting the `O` at the
+/// screen's actual center would read as visibly off-center, bulked left.
+/// `Game::init` subtracts this from the screen's true center to find where
+/// the `O` - and the player spawning inside it - should actually go, so the
+/// word as a whole reads centered instead.
 pub fn fortress_center_offset() -> f32 {
     let (_, o_center_col, word_center_col) = fortress_columns();
     (word_center_col - o_center_col) as f32 * OBSTACLE_GRID_SIZE
@@ -261,30 +315,27 @@ pub fn fortress_center_offset() -> f32 {
 pub struct Fortress {
     /// Every wall-tile position placed (folded into `Game::init`'s
     /// `obstacle_positions` so later spawns steer clear of them
-    /// individually, and so ground can paint road under each one).
+    /// individually - a precise per-tile check, not a bounding radius from
+    /// `center`; a single circle was tried and dropped, see `Game::init`'s
+    /// `clear` comment for why - and so ground can paint road under each one).
     pub tiles: Vec<Position>,
-    /// Exclusion radius in px - the furthest any tile sits from `center`
-    /// (the `O`'s own center, not the whole word's, since the word isn't
-    /// symmetric around it), so a circular distance check from `center`
-    /// fully contains the whole sign despite `BONG!`'s lopsided shape.
-    pub exclusion_radius: f32,
     /// World positions of extra ground cells `Game::init` should paint road
     /// onto, on top of the "road under every object" treatment wall tiles
-    /// already get elsewhere: the `B`/`O` glyphs' own hollow interior cells
-    /// (see `glyph_interior_cells` - not wall tiles, just the floor inside
-    /// them, where the player spawns in the `O`'s case) plus a
+    /// already get elsewhere: every glyph's own hollow interior cells (see
+    /// `glyph_interior_cells` - not wall tiles, just the floor inside them;
+    /// only the `O` actually has any, where the player spawns) plus a
     /// `FORTRESS_ROAD_SURROUND`-wide ring around every wall tile (see
     /// `dilate_cells`).
     pub road_cells: Vec<Position>,
 }
 
 /// The player's starting enclosure: not a shape this time, but the word
-/// "BONG!" spelled out in wall tiles (see `Glyph`/`GLYPH_*` above), one
-/// material per letter - B is Brick, N is Wood, G is Iron, and the `!`
-/// reuses Brick (only four materials exist, so with five glyphs one repeat
-/// is unavoidable; reusing B's non-adjacent material keeps neighboring
-/// glyphs visually distinct). The player spawns inside the `O`, which is
-/// Glass - the weakest material (`Material::max_health`) and the same
+/// "HELLO" spelled out in wall tiles (see `Glyph`/`GLYPH_*` above), one
+/// material per letter - H is Brick, E is Iron, the first L is Wood, and the
+/// second L reuses Brick (only four materials exist, so with five glyphs one
+/// repeat is unavoidable; reusing it on a non-adjacent glyph keeps
+/// neighboring glyphs visually distinct). The player spawns inside the `O`,
+/// which is Glass - the weakest material (`Material::max_health`) and the same
 /// material the original circular version of this enclosure used for its
 /// shootable weak point - so a shot or two from inside cracks an escape
 /// route same as before. Every tile still spawns as its own `Obstacle`,
@@ -346,16 +397,18 @@ pub fn spawn_player_fortress(
     if !fits {
         return Fortress {
             tiles: Vec::new(),
-            exclusion_radius: 0.0,
             road_cells: Vec::new(),
         };
     }
 
-    // Cells enclosed by the B and O glyphs (not wall tiles - the hollow
-    // floor inside them, see `glyph_interior_cells`), in the same
-    // grid-offset coordinate space the wall tiles above were placed in.
-    let mut road_cells: Vec<Position> = [0usize, WORD_O_INDEX]
-        .into_iter()
+    // Cells enclosed by any glyph (not wall tiles - the hollow floor inside
+    // them, see `glyph_interior_cells`), in the same grid-offset coordinate
+    // space the wall tiles above were placed in. Checks every glyph rather
+    // than hand-picking which ones have holes (only the `O` does in
+    // "HELLO", same as only `B`/`O` did in the old "BONG!") - general on
+    // purpose, same reasoning as `glyph_interior_cells`'s own doc comment,
+    // so this stays correct if the word changes again.
+    let mut road_cells: Vec<Position> = (0..WORD_GLYPHS.len())
         .flat_map(|glyph_index| {
             glyph_interior_cells(WORD_GLYPHS[glyph_index])
                 .into_iter()
@@ -414,13 +467,8 @@ pub fn spawn_player_fortress(
             destroyed: false,
         },));
     }
-    let exclusion_radius = positions
-        .iter()
-        .fold(0.0f32, |max, p| max.max(p.distance_to(center)))
-        + obstacle_half_extent;
     Fortress {
         tiles: positions,
-        exclusion_radius,
         road_cells,
     }
 }
@@ -598,4 +646,72 @@ pub fn max_tank_avoidance_radius() -> f32 {
             (hx * hx + hy * hy).sqrt()
         })
         .fold(0.0, f32::max)
+}
+
+/// After every obstacle for the round is placed (fortress + scattered
+/// structures - called once, from `Game::init`, right after
+/// `scatter_obstacles`), check every enemy tank against the same
+/// pathfinding grid `Game::update` builds each frame (see `pathfind::Grid`)
+/// and teleport any whose rolled spawn point turned out fully boxed in
+/// (`Grid::boxed_in` - every cardinal neighbor cell blocked, so `Ai::wander`
+/// could never route it anywhere) to the nearest cell that isn't.
+///
+/// This can happen even though the enemy spawn loop's own rejection
+/// sampling already keeps each enemy clear of every *individual*
+/// obstacle/fortress tile (`OBSTACLE_CLEAR`): several independently-placed
+/// obstacles, each individually respecting that clearance from the enemy,
+/// can still collectively seal every direction out of its cell - the
+/// per-placement checks only ever reason about one obstacle at a time, so
+/// nothing during placement itself catches the *cumulative* effect. A check
+/// against the finished layout is the only way to catch it, which is why
+/// this runs once, after everything else this round is already down.
+///
+/// The player is deliberately excluded (`.with::<&Ai>()` - only enemies
+/// have one): its own spawn point, inside the fortress's sealed "O", is
+/// *meant* to be enclosed (see `spawn_player_fortress`'s doc comment,
+/// "shoot your own way out") - relocating it would break that mechanic
+/// entirely, not fix a bug.
+pub fn relocate_boxed_in_tanks(physics: &mut Physics, world: &mut hecs::World, width: f32, height: f32) {
+    let grid = Grid::build(
+        width,
+        height,
+        PATHFIND_CELL_SIZE,
+        max_tank_avoidance_radius(),
+        world
+            .query::<&Obstacle>()
+            .iter()
+            .map(|o| (o.position, o.hull_size() * 0.5)),
+    );
+    // Snapshot every enemy's entity + position up front, then keep it in
+    // sync as tanks get relocated below - `nearest_open`'s `avoid` list
+    // needs every *other* tank's current position, relocated ones
+    // included, not just the original layout, so two boxed-in tanks near
+    // each other never both land on the exact same nearest cell (found via
+    // the probe harness: two enemies at literally identical coordinates).
+    let mut positions: Vec<(hecs::Entity, Position)> = world
+        .query::<(hecs::Entity, &Tank)>()
+        .with::<&Ai>()
+        .iter()
+        .map(|(entity, tank)| (entity, tank.position))
+        .collect();
+    for i in 0..positions.len() {
+        let (entity, pos) = positions[i];
+        if !grid.boxed_in(pos) {
+            continue;
+        }
+        let avoid: Vec<Position> = positions
+            .iter()
+            .enumerate()
+            .filter(|&(j, _)| j != i)
+            .map(|(_, &(_, p))| p)
+            .collect();
+        let new_pos = grid.nearest_open(pos, &avoid, OBSTACLE_CLEAR);
+        positions[i].1 = new_pos;
+        let mut q = world.query_one::<&mut Tank>(entity);
+        let tank = q.get().expect("entity from this same world's own query always has a Tank");
+        tank.position = new_pos;
+        if let Some(body) = tank.body {
+            physics.set_position(body, new_pos);
+        }
+    }
 }
