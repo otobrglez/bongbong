@@ -13,6 +13,15 @@ installers = []
 targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 # Extra static files to include in each App (path relative to this Cargo.toml's dir)
 include = ["static"]
+# cargo-dist defaults to statically linking the Windows CRT (+crt-static),
+# but raylib-sys builds raylib's C sources via the `cmake` crate, which does
+# not follow Cargo's crt-static target feature and always compiles
+# dynamically - the mismatch (static Rust std + dynamic raylib objects)
+# fails the MSVC link with unresolved __imp_* CRT symbols (realloc, fopen,
+# etc). Disabling this falls back to Rust's normal default (dynamic CRT),
+# the same thing a plain `cargo build` on Windows already does - no new
+# runtime requirement vs. today's dev builds.
+msvc-crt-static = false
 
 # raylib (via sola-raylib -> raylib-sys) needs X11/OpenGL/audio/input dev
 # headers to build on Linux; macOS and Windows runners need nothing extra
