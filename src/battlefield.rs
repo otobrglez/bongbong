@@ -154,11 +154,15 @@ const WORD_O_INDEX: usize = 1;
 /// How many grid cells of road to surround each of the "BONG!" sign's wall
 /// tiles with (a Chebyshev/square dilation - see `dilate_cells`), in grid
 /// cells (each `OBSTACLE_GRID_SIZE`/`GROUND_WORLD_TILE`, the same width as
-/// one wall tile) - "1x width of the wall". `GLYPH_GAP` (2) is wider than
-/// this, so adjacent glyphs' rings stay separate (a 1-cell grass sliver
-/// between neighbouring glyphs) rather than merging into one continuous
-/// moat the way a wider margin would.
-const FORTRESS_ROAD_SURROUND: i32 = 1;
+/// one wall tile). 0 since the de-green pass (docs/PALETTE.md): at 1, the
+/// dirt tiles' soft baked-in fringes visually closed the 1-cell gap the
+/// `GLYPH_GAP` (2) spacing was supposed to keep, merging every glyph's ring
+/// into one giant khaki moat spanning the whole word - a huge fraction of
+/// the screen reading yellow. With 0, dirt shows only inside the `B`/`O`
+/// courtyards and as thin autotile fringes peeking out from under wall
+/// tiles, and the sign sits on grass. Bump back up for a deliberate
+/// plaza/moat look, knowing rings will merge.
+const FORTRESS_ROAD_SURROUND: i32 = 0;
 
 /// Column each glyph starts at (left to right, `GLYPH_GAP` tiles apart), the
 /// column the `O` glyph is centered on, and the column the whole word's

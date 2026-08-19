@@ -2,7 +2,7 @@ from PIL import Image
 import os, math, sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from punypalette import STONE_DARKEST, STONE_DK, STONE_LT
+from punypalette import STONE_DK, STONE_LT
 
 S = 32
 OUT = os.environ.get('SPRITE_OUT', 'assets/sprites')
@@ -17,15 +17,12 @@ os.makedirs(OUT, exist_ok=True)
 # equivalent step in the new set. Blue keeps a white spark core (Puny World
 # has no colour brighter/whiter than actual white either).
 # (smoke_rgb, smoke_a_dense, smoke_a_light, dark, mid, core)
-# De-green pass (2026-08): smoke used the old olive "stone" tones and read
-# green -- now the true neutral greys at matching lightness per family
-# (smoke is grey; only fire carries the family's hue).
 FAMILIES = {
-    'orange': dict(smoke=STONE_DK, sa=(220, 110),
+    'orange': dict(smoke=(0x5D, 0x65, 0x4F), sa=(220, 110),
                    D=(0xE4, 0x42, 0x19), M=(0xEE, 0xA3, 0x43), C=(0xCA, 0xC5, 0x94)),
-    'red':    dict(smoke=STONE_DARKEST, sa=(230, 120),
+    'red':    dict(smoke=(0x4C, 0x52, 0x3C), sa=(230, 120),
                    D=(0x9C, 0x35, 0x27), M=(0xFF, 0x42, 0x1A), C=(0xDC, 0x9C, 0x4A)),
-    'blue':   dict(smoke=STONE_LT, sa=(200, 100),
+    'blue':   dict(smoke=(0xAC, 0xB7, 0xA1), sa=(200, 100),
                    D=(0x03, 0x8A, 0xAB), M=(0x27, 0xD8, 0xC5), C=(0xFF, 0xFF, 0xFF)),
 }
 

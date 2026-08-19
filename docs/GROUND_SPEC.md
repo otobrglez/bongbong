@@ -28,7 +28,27 @@ pre-built autotile data, used as-is.
 
 `static/punyworld/punyworld-overworld-tileset.png` — the "Puny World"
 overworld tileset (432×1040, 16×16 tiles, 27 columns), third-party,
-confirmed usable by the project owner. See `static/punyworld/SOURCE.md` for
+confirmed usable by the project owner.
+
+**The live PNG is a retinted copy since the de-green pass (2026-08).** The
+pack's own grass fill (`#85A643`, hue ~80°) is a yellow-green and its
+dirt-path tiles (`#C4B253`, hue ~50°) bright yellow-khaki — with the ground
+covering most of the screen, the whole game read yellow/green even after
+the sprite sheets were de-olived (see `docs/PALETTE.md`, "The de-green
+pass"). `tools/retint_ground.py` applies a smooth piecewise-linear HSV
+curve: grass hues shift toward the pack's *own* deeper tree-canopy green
+(`#85A643` → `#619541`, landing next to its `#5E914B` foliage), dirt is
+desaturated/darkened toward earth-tan (`#C4B253` → `#B1A567`), and
+everything outside hue 40–110° (wood, red/teal roofs, water, greys) is
+untouched. The script always reads the pristine original preserved at
+`static/punyworld/_original/punyworld-overworld-tileset.png` and writes the
+live path, so it's idempotent — tweak its `CURVE` control points and rerun
+to iterate; never hand-edit the live PNG or overwrite `_original/`. The
+same pass also set `battlefield.rs`'s `FORTRESS_ROAD_SURROUND` to 0 (see
+§5 and that constant's doc comment) so the fortress no longer sits in a
+merged dirt moat.
+
+See `static/punyworld/SOURCE.md` for
 the full provenance note, including: no license file was bundled with it,
 and it's **deliberately not on the Resurrect 64 palette** (see
 `docs/PALETTE.md`) — mechanically snapping it onto R64 was tried and

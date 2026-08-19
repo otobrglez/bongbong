@@ -537,19 +537,8 @@ def draw_damaged_hull(spec, seed, mode):
 # palette it's snapped to, since the body is most of a tank's on-screen
 # area. Reserve the darkest palette steps for outline/shadow/damage tones
 # (BLACK, mul()'s dk step, EMBER, etc.), never for a body colour.
-#
-# De-green pass (2026-08): the first Puny pass gave 5 of these 12 bodies a
-# green/teal-green family *and* olive "greys" for every tank's greebles, so
-# the roster as a whole read green-on-green over the grass. Rebalanced to
-# match the tileset's actual building distribution (orange wood dominant,
-# then red + teal roofs, sand paths, grey rock props): exactly one
-# grass-green body remains (longbow, the deliberate army-green one) and one
-# teal (leviathan); scout went desert-sand, warden amber-wood, wraith
-# neutral ghost-grey (its third identity: purple -> mossy -> grey, see the
-# purple note above). Pale-mint #DAE5CE accents became true-white-grey
-# STONE_PALE when that olive tone left the palette.
 TANKS = [
-    dict(name='scout',   body=(0xC9, 0xB2, 0x66), accent=(0xE4, 0x42, 0x19), build='narrow',
+    dict(name='scout',   body=(0x85, 0xA6, 0x43), accent=(0xEE, 0xA3, 0x43), build='narrow',
          nose='wedge',   tread='fine',  deck='ribbed', thrusters=2, sponson=False,
          tshape='round', tr=4.1, guns=1, bw=2, blen=8,  gap=0, optic=(13, 13)),
     dict(name='assault', body=(0xDE, 0x99, 0x43), accent=(0x00, 0xA6, 0x7F), build='std',
@@ -564,16 +553,16 @@ TANKS = [
     dict(name='flak',    body=(0x04, 0xA0, 0xB4), accent=(0xCA, 0xC5, 0x94), build='compact',
          nose='blunt',   tread='block', deck='ribbed', thrusters=2, sponson=False,
          tshape='hex',   tr=4.5, guns=2, bw=2, blen=4,  gap=3, optic=(12, 18)),
-    dict(name='wraith',  body=(0x9E, 0x9E, 0x96), accent=(0xF0, 0xF0, 0xF0), build='narrow',
+    dict(name='wraith',  body=(0x00, 0xBB, 0x8F), accent=(0xDA, 0xE5, 0xCE), build='narrow',
          nose='wedge',   tread='fine',  deck='plates', thrusters=2, sponson=False,
          tshape='wedge', tr=4.3, guns=1, bw=2, blen=7,  gap=0, optic=(13, 13)),
-    dict(name='warden',  body=(0xB5, 0x7A, 0x28), accent=(0x00, 0xD0, 0x97), build='std',
+    dict(name='warden',  body=(0x7C, 0x98, 0x3C), accent=(0xDC, 0x9C, 0x4A), build='std',
          nose='chamfer', tread='seg',   deck='ribbed', thrusters=3, sponson=True,
          tshape='hex',   tr=4.7, guns=1, bw=4, blen=7,  gap=0, optic=(12, 13)),
     dict(name='ravager', body=(0xCA, 0x8A, 0x3B), accent=(0xE4, 0x42, 0x19), build='wide',
          nose='chamfer', tread='block', deck='plates', thrusters=4, sponson=False,
          tshape='round', tr=5.2, guns=2, bw=2, blen=7,  gap=3, optic=(12, 18)),
-    dict(name='glacier', body=(0x1E, 0xB3, 0xAE), accent=(0xF0, 0xF0, 0xF0), build='compact',
+    dict(name='glacier', body=(0x1E, 0xB3, 0xAE), accent=(0xDA, 0xE5, 0xCE), build='compact',
          nose='wedge',   tread='fine',  deck='plates', thrusters=2, sponson=False,
          tshape='box',   tr=4.5, guns=1, bw=2, blen=8,  gap=0, optic=(13, 13)),
     dict(name='obelisk', body=(0x81, 0x2F, 0x27), accent=(0xEE, 0xA3, 0x43), build='long',

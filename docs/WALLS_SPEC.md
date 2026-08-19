@@ -48,7 +48,7 @@ col = state
 
 ## 3. Brick — rows 0–3, cols 0–5
 
-All four share one Puny Palette tone sampled from Puny World's own castle stone-block walls, `#ACB7A1`, with a darker step of the same stone-grey family as mortar, `#4C523C`, differing only in **bond pattern and brick size**, so mixed-variant walls still read as one material — the per-cell tone jitter (0.94–1.10×) that used to spread across a small hex range now snaps back onto the palette at each step instead, so the variation is still there but every resulting shade is one of the fixed set. See `tools/punypalette.py` / `docs/PALETTE.md`.
+All four share one Puny Palette stone tone, `#C1C1C1`, with a darker step of the same stone-grey family as mortar, `#7E7E7E`, differing only in **bond pattern and brick size**, so mixed-variant walls still read as one material. (De-green pass, 2026-08: the tone was previously `#ACB7A1`, sampled from Puny World's castle stone-block walls — which are really *green*-grey, so brick read olive; the STONE family now holds the pack's true neutral greys, sampled from its rock/well props instead. The masonry pattern is still traced from the castle walls.) — the per-cell tone jitter (0.94–1.10×) that used to spread across a small hex range now snaps back onto the palette at each step instead, so the variation is still there but every resulting shade is one of the fixed set. See `tools/punypalette.py` / `docs/PALETTE.md`.
 
 A first pass here sampled brick's colour from Puny World's red roof-tiles instead, on the reasoning that "brick" should be red-ish — but the *pattern* below (§3.1) is copied from the stone walls, not the roof tiles, and a masonry-block pattern in roof-tile red doesn't correspond to anything actually in Puny World's art. It read as visibly wrong for reasons that weren't obvious until compared directly against the source screenshot. Sourcing colour and pattern from the same reference fixed it.
 
@@ -58,7 +58,7 @@ A first pass here sampled brick's colour from Puny World's red roof-tiles instea
 
 One implementation pitfall worth knowing if touching this again: the stipple's light/dark variation must pick an **explicit different palette step** (`STONE_PALE`/`STONE_MD`), not nudge the base colour by a small percentage through `mul()`. The Puny Palette's steps are spaced far enough apart that a small multiplicative nudge snaps straight back to the same colour it started from — invisible in practice, unlike Resurrect 64's tighter ramps that technique was written for.
 
-This is the same tone as `IRONS` below (`#5D654F`-family), one step darker — both trace back to the same Puny World stone buildings, brick just uses the paler step plus the masonry-block pattern above, while iron stays flat with its own metal-surface treatments (rivets/corrugation/etc.) instead.
+This is the same STONE family as `IRONS` below (`#7E7E7E`), brick just uses the paler step plus the masonry-block pattern above, while iron stays flat with its own metal-surface treatments (rivets/corrugation/etc.) instead.
 
 | Row | Type | Brick | Period | Pattern |
 |---|---|---|---|---|
@@ -84,7 +84,7 @@ Bricks are blown out with a ragged edge rather than a clean rectangle.
 
 **Never destroyed** — the plate stays whole at every level, so the collider never changes.
 
-All four share one Puny Palette tone sampled from Puny World's own stone/plaster building walls, `#5D654F`, differing by surface treatment. Every treatment tiles — sits in the same register as the buildings the ground layer's own art already draws.
+All four share one Puny Palette steel tone, `#7E7E7E` (true neutral `STONE_DK`; was olive `#5D654F` before the 2026-08 de-green pass), differing by surface treatment. Every treatment tiles — one palette step darker than brick's base so the two grey materials still separate at a glance.
 
 | Row | Type | Surface | Period |
 |---|---|---|---|
@@ -241,8 +241,8 @@ Material base tones, one fixed pick per material (see §3–6 above for the reas
 
 | Material | Base | Hex |
 |---|---|---|
-| Brick | pale stone-grey (+ masonry-block texture, §3.1) | `#ACB7A1` |
-| Iron | stone/plaster grey | `#5D654F` |
+| Brick | pale neutral stone-grey (+ masonry-block texture, §3.1) | `#C1C1C1` |
+| Iron | neutral steel grey | `#7E7E7E` |
 | Wood | honey wood | `#DE9943` |
 | Glass | water-blue ramp | `#038AAB` / `#04A0B4` / `#27D8C5` |
 

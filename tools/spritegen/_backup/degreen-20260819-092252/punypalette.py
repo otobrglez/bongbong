@@ -18,13 +18,6 @@ violet family (checked: none found anywhere in the populated region of the
 sheet) -- rather than force an off-palette invented purple, roles that used
 to be "the purple one" (e.g. the `wraith` tank) were reassigned to a hue
 family the source art actually has. See gen_tanks.py's roster comment.
-
-De-green pass (2026-08): the first extraction sampled its "stone grey" ramp
-from the grey building walls, which are really green-grey, and the whole
-game inherited an olive cast through every grey role. The STONE_* family now
-holds the tileset's true neutral greys (rock/well props), a warm SAND_*
-family (dirt paths) was added, and no olive tone remains in PUNY_PALETTE --
-see the per-family comments below and docs/PALETTE.md.
 """
 
 # Near-black outline/char tone -- from the building region's darkest
@@ -36,43 +29,18 @@ BLACK = (0x25, 0x25, 0x25)
 # these pixels count as on-palette rather than needing a special case.
 WHITE = (0xFF, 0xFF, 0xFF)
 
-# Stone ramp (light -> dark) -- TRUE NEUTRAL greys, from the tileset's
-# rock/well props and building window/chimney details (e.g. the well at
-# ~(52,467), windows at ~(121,418)). The first Puny Palette pass sampled
-# this family from the grey *building walls* instead, which are actually
-# green-grey (#ACB7A1/#5D654F/#4C523C -- green channel dominant); since
-# every "grey" role (tank greebles/treads, brick + iron walls, shell smoke)
-# routed through them, the whole game picked up an olive cast on top of the
-# already-green grass. De-green pass (2026-08): olive is out of the palette
-# entirely -- the only greens left are the grass-green GREEN_* family,
-# reserved for deliberately-green identities, never for "grey" roles.
-STONE_PALE = (0xF0, 0xF0, 0xF0)
-STONE_LT = (0xC1, 0xC1, 0xC1)
-STONE_MD = (0x9E, 0x9E, 0x96)
-STONE_DK = (0x7E, 0x7E, 0x7E)
-STONE_DARKEST = (0x37, 0x37, 0x37)
+# Stone/plaster wall ramp (light -> dark), from the grey building walls.
+STONE_PALE = (0xDA, 0xE5, 0xCE)
+STONE_LT = (0xAC, 0xB7, 0xA1)
+STONE_MD = (0x5D, 0x65, 0x4F)
+STONE_DK = (0x4C, 0x52, 0x3C)
 
-# Sand/khaki ramp (light -> dark), from the dirt patches and sand paths --
-# the pack's single biggest non-grass, non-water ground colour, missed
-# entirely by the first palette pass. Warm (r >= g > b) all the way down;
-# the dark step comes from crate/prop shadow browns, not the olive
-# dark-khakis (#787F4F etc.) that dominate the path *edges*.
-SAND_PALE = (0xD2, 0xBA, 0x6B)
-SAND_LT = (0xC9, 0xB2, 0x66)
-SAND_MD = (0xB7, 0xA2, 0x48)
-SAND_DK = (0x67, 0x51, 0x2A)
-
-# Wood/tan ramp (light -> dark), from wood-plank building walls and props,
-# extended in the de-green pass with the orange-building midtones
-# (#B57A28/#A76921) and deep shadow (#50330B) so warm shading math snaps
-# within the family instead of drifting to whatever else is nearby.
+# Wood/tan ramp (light -> dark), from wood-plank building walls and props.
 WOOD_PALE = (0xD8, 0xBF, 0x8E)
 WOOD_LT = (0xDE, 0x99, 0x43)
 WOOD_MD = (0xCA, 0x8A, 0x3B)
-WOOD_AMBER = (0xB5, 0x7A, 0x28)
 WOOD_DK = (0x99, 0x65, 0x24)
 WOOD_DEEPER = (0x68, 0x47, 0x1D)
-WOOD_DARKEST = (0x50, 0x33, 0x0B)
 
 # Red ramp (bright -> dark), from red-tile roofs.
 RED_BRIGHT = (0xFF, 0x42, 0x1A)
@@ -109,9 +77,8 @@ GOLD_PALE = (0xCA, 0xC5, 0x94)
 
 PUNY_PALETTE = [
     BLACK, WHITE,
-    STONE_PALE, STONE_LT, STONE_MD, STONE_DK, STONE_DARKEST,
-    SAND_PALE, SAND_LT, SAND_MD, SAND_DK,
-    WOOD_PALE, WOOD_LT, WOOD_MD, WOOD_AMBER, WOOD_DK, WOOD_DEEPER, WOOD_DARKEST,
+    STONE_PALE, STONE_LT, STONE_MD, STONE_DK,
+    WOOD_PALE, WOOD_LT, WOOD_MD, WOOD_DK, WOOD_DEEPER,
     RED_BRIGHT, RED_MD, RED_DEEP, RED_DK, RED_DARKEST,
     TEAL_BRIGHT, TEAL_LT, TEAL_MD, TEAL_DK, TEAL_DARKEST,
     BLUE_BRIGHT, BLUE_LT, BLUE_MD, BLUE_DK, BLUE_DARKEST,

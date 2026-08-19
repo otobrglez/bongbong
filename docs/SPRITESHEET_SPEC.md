@@ -68,19 +68,21 @@ Columns 8–11 are four **interchangeable** destroyed variants of equal severity
 
 Body/accent are curated picks from the Puny Palette (see `tools/punypalette.py`, `docs/PALETTE.md`) — colours sampled directly from the third-party Puny World ground-layer tileset, not an abstract pixel-art palette. Every pixel in the sheet, including every shading step `gen_tanks.py` derives from these two colours, snaps onto that same set. This is the second recolor pass for this roster: an earlier one used [Resurrect 64](https://lospec.com/palette-list/resurrect-64) (see `tools/spritegen/_backup/pre-punypalette-*/gen_tanks.py`) and looked great in isolation, but once the ground layer shipped (`docs/GROUND_SPEC.md`) those candy-vivid R64 colours read as neon plastic next to Puny World's much softer terrain — see `docs/PALETTE.md`'s "why the palette changed a second time" for the full reasoning. Puny World's own art has no purple/violet anywhere in it; `wraith` was reassigned from a purple accent to a hue family the source art actually has.
 
+A third, **de-green** pass (2026-08) rebalanced the roster's hue distribution: the first Puny pass gave 5 of 12 bodies a green/teal-green family *and* sampled the shared greeble-grey ramp from Puny World's green-grey building walls, so the whole roster read green-on-green over the grass. Now the bodies follow the tileset's actual building distribution (orange wood dominant, then red/teal roofs, sand paths, neutral rock-grey), exactly one grass-green body remains (`longbow`), and the greeble greys are true neutrals — see `docs/PALETTE.md`'s de-green section.
+
 **Every body colour is picked from the palette's bright/mid steps, never its darkest ones** (`*_DARKEST`/`*_DEEPER` in `tools/punypalette.py`) — a first cut of this pass gave the back half of the roster, especially the two super-heavy chassis, the darkest available step of their family on the reasoning "heavier/stealthier = darker." That read as muddy and drab, the same mistake the R64 muted-pass paragraph above already covers, just rediscovered on a different palette: the body is most of a tank's on-screen area, so a dark body reads as a dark *tank* no matter how bright the rest of the scene is.
 
 | Row | Name | Chassis | Guns | Turret | Accent | Body | Role hint |
 |---|---|---|---|---|---|---|---|
-| 0 | `scout` | narrow | 1 thin | round | Gold `#EEA343` | Grass green `#85A643` | Fast recon |
+| 0 | `scout` | narrow | 1 thin | round | Roof-tile red-orange `#E44219` | Desert sand `#C9B266` | Fast recon |
 | 1 | `assault` | standard | 2 | box | Teal `#00A67F` | Honey wood `#DE9943` | General purpose |
 | 2 | `breaker` | wide | 1 heavy | hex | Warm gold `#DC9C4A` | Roof-tile red `#9C3527` | Heavy brawler |
 | 3 | `longbow` | long | 1 long | round | Bright red `#FF421A` | Forest green `#5F914B` | Artillery / sniper |
 | 4 | `flak` | compact | 2 short | hex | Pale gold `#CAC594` | Water blue `#04A0B4` | Anti-air / close range |
-| 5 | `wraith` | narrow | 1 | wedge | Pale stone `#DAE5CE` | Bright teal `#00BB8F` | Stealth |
-| 6 | `warden` | standard | 1 heavy | hex | Warm gold `#DC9C4A` | Olive green `#7C983C` | Support / defense |
+| 5 | `wraith` | narrow | 1 | wedge | Near-white `#F0F0F0` | Ghost grey `#9E9E96` | Stealth |
+| 6 | `warden` | standard | 1 heavy | hex | Bright teal `#00D097` | Amber wood `#B57A28` | Support / defense |
 | 7 | `ravager` | wide | 2 | round | Roof-tile red-orange `#E44219` | Amber wood `#CA8A3B` | Heavy assault |
-| 8 | `glacier` | compact | 1 | box | Pale stone `#DAE5CE` | Bright water-teal `#1EB3AE` | Balanced |
+| 8 | `glacier` | compact | 1 | box | Near-white `#F0F0F0` | Bright water-teal `#1EB3AE` | Balanced |
 | 9 | `obelisk` | long | 2 long | wedge | Gold `#EEA343` | Dark roof-tile red `#812F27` | Siege |
 | 10 | `titan` | **super-heavy** | 2 heavy (4 px) | hex | White `#FFFFFF` | Vivid red-orange `#FF421A` | Super-heavy assault |
 | 11 | `leviathan` | **super-long** | 1 massive (4 px) | round | Bright water-teal `#27D8C5` | Bright teal `#00D097` | Super-heavy siege |

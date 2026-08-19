@@ -2,7 +2,7 @@ from PIL import Image
 import os, random, math, sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from punypalette import STONE_DARKEST, STONE_DK, STONE_LT, STONE_MD, STONE_PALE, snap
+from punypalette import STONE_DK, STONE_LT, STONE_MD, STONE_PALE, snap
 
 S = 32
 OUT = os.environ.get('SPRITE_OUT', 'assets/sprites')
@@ -281,17 +281,15 @@ def draw_brick(v, decay, seed):
 # IRON -- clean steel, rust arrives with damage
 # ======================================================================
 # Same one-shared-tone approach as BRICKS -- "all four share a steel tone...
-# differing by surface treatment" (per WALLS_SPEC.md). De-green pass
-# (2026-08): the steel tone was #5D654F, sampled from Puny World's building
-# walls, which are really green-grey -- iron walls read as olive. Now the
-# true neutral STONE_DK grey (from the pack's rock/well props), one step
-# darker than brick's STONE_LT base so the two grey materials still
-# separate at a glance; rust accents unchanged.
+# differing by surface treatment" (per WALLS_SPEC.md). Sampled from Puny
+# World's own stone/plaster building walls rather than an invented steel
+# grey, so it sits in the same register as the buildings the ground-layer
+# art already draws.
 IRONS = [
-    dict(name='riveted',    base=STONE_DK, style='rivet'),
-    dict(name='corrugated', base=STONE_DK, style='corr'),
-    dict(name='banded',     base=STONE_DK, style='band'),
-    dict(name='tread',      base=STONE_DK, style='tread'),
+    dict(name='riveted',    base=(0x5D, 0x65, 0x4F), style='rivet'),
+    dict(name='corrugated', base=(0x5D, 0x65, 0x4F), style='corr'),
+    dict(name='banded',     base=(0x5D, 0x65, 0x4F), style='band'),
+    dict(name='tread',      base=(0x5D, 0x65, 0x4F), style='tread'),
 ]
 RUST = (0x99, 0x65, 0x24, 255)
 RUST_D = (0x68, 0x47, 0x1D, 255)
@@ -368,7 +366,7 @@ def draw_iron(v, dmg, seed):
                   mul(base, 0.64), rng)
         for _ in range(dmg):
             splat(img, rng.randint(4, 27), rng.randint(4, 27),
-                  rng.uniform(2.2, 3.6), STONE_DARKEST + (255,), rng, 4)
+                  rng.uniform(2.2, 3.6), (0x4C, 0x52, 0x3C, 255), rng, 4)
     return img
 
 
@@ -502,7 +500,7 @@ def draw_wood(v, state, seed):
         for _ in range(9):
             px(img, rng.randint(0, 31), rng.randint(0, 31), EMBER)
         for _ in range(5):
-            px(img, rng.randint(0, 31), rng.randint(0, 31), STONE_DARKEST + (255,))
+            px(img, rng.randint(0, 31), rng.randint(0, 31), (0x4C, 0x52, 0x3C, 255))
         declutter(img, 5)
         inner_shadow(img)
         return img
@@ -540,7 +538,7 @@ def draw_wood(v, state, seed):
         for _ in range(7):
             px(img, rng.randint(0, 31), rng.randint(0, 31), EMBER)
         for _ in range(6):
-            px(img, rng.randint(0, 31), rng.randint(0, 31), STONE_DK + (190,))
+            px(img, rng.randint(0, 31), rng.randint(0, 31), (0x5D, 0x65, 0x4F, 190))
 
     declutter(img, 4)
     inner_shadow(img)
@@ -551,14 +549,14 @@ def draw_wood(v, state, seed):
 # GLASS -- plain pane + wire-mesh reinforced (mesh tiles on an 8px grid)
 # ======================================================================
 GLASSES = [dict(name='pane', mesh=False), dict(name='reinforced', mesh=True)]
-MESH = STONE_DARKEST + (235,)
+MESH = (0x4C, 0x52, 0x3C, 235)
 
 
 def draw_glass(v, state, seed):
     rng = random.Random(seed)
     img = blank()
     CRACK_D = (0x03, 0x8A, 0xAB, 205)
-    CRACK_L = STONE_PALE + (245,)
+    CRACK_L = (0xDA, 0xE5, 0xCE, 245)
 
     rect(img, 0, 0, 31, 31, (GL_M[0], GL_M[1], GL_M[2], 138))
     # subtle tiling ripple instead of a corner gradient (which cannot tile)

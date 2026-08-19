@@ -21,3 +21,9 @@ by bongbong's own generators.
 - The pack ships full Tiled "wangset" autotile metadata (which tile goes
   where, by corner/edge terrain matching) in the `.tsx` — `docs/GROUND_SPEC.md`
   documents the exact lookup tables `src/ground.rs` extracted from it.
+- **The live `punyworld-overworld-tileset.png` here is a retinted copy**,
+  produced by `tools/retint_ground.py` from the pristine original kept at
+  `_original/punyworld-overworld-tileset.png` (de-green pass, 2026-08 —
+  deeper grass, muted dirt; see `docs/GROUND_SPEC.md` §1). `_original/` is
+  the untouched third-party art; keep it pristine and rerun the script to
+  regenerate the live copy.

@@ -1,0 +1,32 @@
+[workspace]
+members = ["cargo:."]
+
+# Config for 'dist'
+[dist]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.32.0"
+# CI backends to support
+ci = "github"
+# The installers to generate for each app
+installers = []
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+# Extra static files to include in each App (path relative to this Cargo.toml's dir)
+include = ["static"]
+
+# raylib (via sola-raylib -> raylib-sys) needs X11/OpenGL/audio/input dev
+# headers to build on Linux; macOS and Windows runners need nothing extra
+# (Xcode/MSVC already have what's required). Same package list as
+# sola-raylib's own working CI (../sola-raylib/.github/workflows/ci.yml),
+# which builds this exact dependency across ubuntu-latest/-arm, macos-latest
+# and windows-latest already - not a guess assembled from general raylib
+# advice.
+[dist.dependencies.apt]
+libasound2-dev = '*'   # audio
+libudev-dev = '*'      # gamepad/input
+libx11-dev = '*'
+libxcursor-dev = '*'
+libxinerama-dev = '*'
+libxrandr-dev = '*'
+libxi-dev = '*'
+libgl1-mesa-dev = '*'

@@ -8,7 +8,7 @@ Puny World ground-layer tileset (`static/punyworld/`, see
 of truth is `tools/punypalette.py`:
 
 ```python
-PUNY_PALETTE = [ ... ~35 (r, g, b) tuples, named by family ... ]
+PUNY_PALETTE = [ ... ~40 (r, g, b) tuples, named by family ... ]
 nearest(rgb)   # closest palette colour by squared RGB distance
 snap(rgba)     # nearest(), alpha passed through unchanged
 ```
@@ -72,6 +72,63 @@ The lesson that carried across both changes: **a palette being technically
 "on-palette" says nothing about whether it's the *right* palette for the
 scene it ends up in.** Vibrant-R64 was correct by its own rule and still
 wrong once real ground art shipped next to it.
+
+## The de-green pass (2026-08)
+
+A fourth state, fixing a flaw in the *first* Puny extraction rather than
+changing source: the game read distinctly green-ish overall, beyond the
+(deliberately green) grass. Two causes, found by re-sampling the tileset:
+
+1. **The "stone grey" family was olive.** The first extraction sampled
+   STONE_* from Puny World's grey *building walls* — which are actually
+   green-grey (`#ACB7A1`/`#5D654F`/`#4C523C`, green channel dominant).
+   Every "grey" role routed through them: tank greebles/treads on all 12
+   chassis, brick's base *and* mortar, all four iron variants, shell smoke,
+   glass mesh. The pack does have true neutral greys — its rock/well props
+   and window details (`#F0F0F0`/`#C1C1C1`/`#9E9E96`/`#7E7E7E`/`#373737`)
+   — and STONE_* now holds those. No olive tone remains in `PUNY_PALETTE`
+   at all, so `nearest()` snapping can no longer drift derived shades
+   toward green either.
+2. **The tank roster over-used green/teal.** 5 of 12 bodies were
+   green/teal-green. Rebalanced to the tileset's actual building
+   distribution (orange wood dominant, then red + teal roofs, sand, grey):
+   one grass-green body remains (`longbow`), one teal (`leviathan`).
+
+The re-sampling also surfaced a family the first pass missed entirely:
+**SAND_*** (`#D2BA6B`/`#C9B266`/`#B7A248`/`#67512A`), from the dirt
+patches and sand paths — the pack's biggest non-grass, non-water ground
+colour — now used for the `scout`'s desert body. WOOD_* gained the
+orange-building midtones (`#B57A28`) and deep shadow (`#50330B`) so warm
+shading snaps within family.
+
+Backups for this pass: `static/_backup/degreen-*/` and
+`tools/spritegen/_backup/degreen-*/`.
+
+### Part 2: the ground itself (same pass, second round of feedback)
+
+De-oliving the sprites wasn't enough — the *ground layer* is most of the
+screen, and it was still carrying both casts: Puny World's grass fill is a
+yellow-green (`#85A643`, hue ~80°) and its dirt-path tiles are bright
+yellow-khaki (`#C4B253`, hue ~50°), and `battlefield.rs` dilated a
+1-cell dirt ring around every fortress wall tile whose soft tile fringes
+merged into one giant khaki moat spanning the whole "BONG!" word. Fixed by:
+
+1. **Retinting the ground tileset** (`tools/retint_ground.py`, idempotent —
+   reads the pristine copy at `static/punyworld/_original/`, writes the
+   live PNG): a smooth hue-based HSV curve pushes grass toward the pack's
+   *own* deeper tree-canopy green (`#85A643` → `#619541`, next to its
+   `#5E914B` foliage) and mutes dirt toward earth-tan (`#C4B253` →
+   `#B1A567`); wood/red/teal/water/greys untouched. Details in
+   `docs/GROUND_SPEC.md` §1.
+2. **Dropping the fortress dirt ring** (`FORTRESS_ROAD_SURROUND` 1 → 0) —
+   dirt now shows only inside the `B`/`O` courtyards and under wall tiles.
+
+Note this partially supersedes the older "everything was recolored to match
+the ground, never the other way around" framing: the ground's *hues* are now
+tuned too (grass greener, dirt browner), though its painterly register still
+sets the scene and `PUNY_PALETTE` is still sampled from the pack's art.
+Ground backup: `static/_backup/degreen2-*/` (plus the permanent pristine
+copy in `static/punyworld/_original/`).
 
 ## Extraction method (how `tools/punypalette.py` was built)
 
@@ -159,6 +216,9 @@ before each recolor pass, as plain file copies (not a build artifact) under
 - `muted-pass-<timestamp>/` — R64, hulls picked from the dim/grey corner.
 - `pre-punypalette-<timestamp>/` — R64, vibrant pass (the version that
   shipped right up until the ground layer went in and exposed the clash).
+- `degreen-<timestamp>/` — the first Puny Palette pass, with the olive
+  "stone" family and green-heavy tank roster (see "The de-green pass"
+  above).
 
 Safe to delete once you're confident in the current palette, or keep
 indefinitely for before/after comparison.

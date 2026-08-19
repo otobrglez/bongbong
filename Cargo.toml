@@ -1,8 +1,9 @@
 [package]
-version = "0.0.7"
+version = "0.0.8"
 name = "bongbong"
 edition = "2024"
 default-run = "bongbong"
+repository = "https://github.com/otobrglez/bongbong"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
@@ -10,7 +11,9 @@ hecs = "0.11"
 rand = "0.10.2"
 rapier2d = "0.35.2"
 serde = { version = "1.0.229", features = ["derive"] }
-sola-raylib = {
-    version = "6.3.0"
-    # features = ["serde"]
-}
+sola-raylib = { version = "6.3.0" }
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
