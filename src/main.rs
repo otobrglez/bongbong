@@ -153,7 +153,7 @@ fn main() {
     // native, and hands this closure to emscripten's main loop on web - same
     // source for both, and no -sASYNCIFY=1 needed to keep the browser tab
     // responsive (see .cargo/config.toml).
-    game_loop::run(rl, thread, 60, move |rl, thread| {
+    game_loop::run(rl, thread, 120, move |rl, thread| {
         // Gather this frame's raw input into a plain `Input` - `Game::update`
         // itself decides what to do with it (e.g. whether a wreck can move),
         // so nothing simulation-related needs to know a `RaylibHandle`
