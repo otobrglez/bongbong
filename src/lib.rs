@@ -832,6 +832,17 @@ pub const OBSTACLE_SHADOW_OPACITY: f32 = 0.35;
 pub const HUD_WARN_THRESHOLD: f32 = 0.40;
 pub const HUD_CRITICAL_THRESHOLD: f32 = 0.15;
 
+// HUD font sizes (Game::render): the SHELLS/HP line reads as the "primary"
+// readout so it's drawn 10% bigger than the base 24px; the version/build
+// line is secondary, drawn 10% smaller.
+pub const HUD_FONT_SIZE: i32 = 26; // 24 * 1.1, rounded
+pub const HUD_VERSION_FONT_SIZE: i32 = 22; // 24 * 0.9, rounded
+
+// Shared screen-edge inset for both HUD corners: the SHELLS/HP line's
+// top-left origin and the version line's bottom-right origin, so the two
+// sit the same distance from their respective edges.
+pub const HUD_MARGIN: i32 = 20;
+
 pub mod ai;
 pub mod battlefield;
 pub mod bt;

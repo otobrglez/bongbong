@@ -15,8 +15,8 @@ use crate::simulation::{Game, Outcome};
 use crate::tank::{Tank, draw_tank, draw_tank_shadow};
 use crate::track::draw_track;
 use crate::{
-    HUD_CRITICAL_THRESHOLD, HUD_WARN_THRESHOLD, IMPACT_FLASH_QUAD_RADIUS, MAX_DAMAGE, MAX_SHELLS,
-    MUZZLE_FLASH_QUAD_RADIUS,
+    HUD_CRITICAL_THRESHOLD, HUD_FONT_SIZE, HUD_MARGIN, HUD_VERSION_FONT_SIZE, HUD_WARN_THRESHOLD,
+    IMPACT_FLASH_QUAD_RADIUS, MAX_DAMAGE, MAX_SHELLS, MUZZLE_FLASH_QUAD_RADIUS,
 };
 
 /// The sprite atlases `Game::render` draws from, bundled into one param instead
@@ -54,13 +54,8 @@ impl Game {
 
         // Precompute the bottom-right version/build HUD (text width must be
         // measured on the RaylibHandle, outside the draw closure).
-        let version_hud = format!(
-            "v{} ({}) {}",
-            env!("CARGO_PKG_VERSION"),
-            env!("BONGBONG_GIT_COMMIT"),
-            "@otobrglez"
-        );
-        let version_hud_w = rl.measure_text(&version_hud, 18);
+        let version_hud = format!("v{} {}", env!("CARGO_PKG_VERSION"), "@otobrglez");
+        let version_hud_w = rl.measure_text(&version_hud, HUD_VERSION_FONT_SIZE);
 
         // Precompute the SHELLS/HP HUD as separate runs so each number can
         // carry its own color (hud_number_color) while the labels stay
@@ -79,9 +74,9 @@ impl Game {
         let hud_shells_num = format!("{shells}");
         let hud_mid = "   HP: ";
         let hud_hp_num = format!("{hp}");
-        let hud_shells_label_w = rl.measure_text(hud_shells_label, 24);
-        let hud_shells_num_w = rl.measure_text(&hud_shells_num, 24);
-        let hud_mid_w = rl.measure_text(hud_mid, 24);
+        let hud_shells_label_w = rl.measure_text(hud_shells_label, HUD_FONT_SIZE);
+        let hud_shells_num_w = rl.measure_text(&hud_shells_num, HUD_FONT_SIZE);
+        let hud_mid_w = rl.measure_text(hud_mid, HUD_FONT_SIZE);
 
         // Precompute the centered end-of-round banner (text width must be
         // measured on the RaylibHandle, outside the draw closure).
@@ -288,21 +283,23 @@ impl Game {
 
             // HUD and the end-of-round banner draw undistorted, on top of the
             // (possibly rippling) scene.
-            let hud_y = screen_height - 50;
-            let mut hud_x = 50;
-            d.draw_text(hud_shells_label, hud_x, hud_y, 24, Color::DARKGRAY);
+            let hud_y = HUD_MARGIN;
+            let mut hud_x = HUD_MARGIN;
+            d.draw_text(hud_shells_label, hud_x, hud_y, HUD_FONT_SIZE, Color::WHITE);
             hud_x += hud_shells_label_w;
-            d.draw_text(&hud_shells_num, hud_x, hud_y, 24, shells_color);
+            d.draw_text(&hud_shells_num, hud_x, hud_y, HUD_FONT_SIZE, shells_color);
             hud_x += hud_shells_num_w;
-            d.draw_text(hud_mid, hud_x, hud_y, 24, Color::DARKGRAY);
+            d.draw_text(hud_mid, hud_x, hud_y, HUD_FONT_SIZE, Color::WHITE);
             hud_x += hud_mid_w;
-            d.draw_text(&hud_hp_num, hud_x, hud_y, 24, hp_color);
+            d.draw_text(&hud_hp_num, hud_x, hud_y, HUD_FONT_SIZE, hp_color);
+            // Mirrors the top-left HUD's HUD_MARGIN inset, so both corners
+            // sit the same distance from their edges.
             d.draw_text(
                 &version_hud,
-                screen_width - 120 - version_hud_w,
-                screen_height - 50,
-                24,
-                Color::DARKGRAY,
+                screen_width - HUD_MARGIN - version_hud_w,
+                screen_height - HUD_MARGIN - HUD_VERSION_FONT_SIZE,
+                HUD_VERSION_FONT_SIZE,
+                Color::WHITE,
             );
 
             // End-of-round banner over a dimming overlay.
@@ -417,6 +414,6 @@ fn hud_number_color(current: f32, max: f32) -> Color {
     } else if frac < HUD_WARN_THRESHOLD {
         Color::ORANGE
     } else {
-        Color::DARKGRAY
+        Color::WHITE
     }
 }
