@@ -8,16 +8,58 @@ use bongbong::{
     MUZZLE_FLASH_DURATION, MUZZLE_FLASH_SPEED, MUZZLE_FLASH_STRENGTH, MUZZLE_FLASH_WIDTH,
     SHOCKWAVE_DURATION, SHOCKWAVE_SPEED, SHOCKWAVE_STRENGTH, SHOCKWAVE_WIDTH,
 };
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use sola_raylib::core::game_loop;
 use sola_raylib::prelude::KeyboardKey;
 
 static DEFAULT_SCREEN_WIDTH: i32 = 1280;
 static DEFAULT_SCREEN_HEIGHT: i32 = 720;
 
+/// The 12 chassis rows in scifi_tanks_sheet.png, by name - see
+/// docs/SPRITESHEET_SPEC.md §4 and the TANK_CHASSIS_*_BY_ROW tables in
+/// lib.rs for the same row order. Lets `--tank` name a chassis instead of
+/// remembering its row index. `ValueEnum` renders each variant as its
+/// lowercase name for the CLI (e.g. `Titan` -> `titan`), so this list also
+/// doubles as `--help`'s own reference.
+#[derive(Clone, Copy, ValueEnum)]
+enum TankKind {
+    Scout,
+    Assault,
+    Breaker,
+    Longbow,
+    Flak,
+    Wraith,
+    Warden,
+    Ravager,
+    Glacier,
+    Obelisk,
+    Titan,
+    Leviathan,
+}
+
+impl TankKind {
+    /// This chassis's row index into scifi_tanks_sheet.png (0..TANK_VARIANTS).
+    fn row(self) -> i32 {
+        match self {
+            TankKind::Scout => 0,
+            TankKind::Assault => 1,
+            TankKind::Breaker => 2,
+            TankKind::Longbow => 3,
+            TankKind::Flak => 4,
+            TankKind::Wraith => 5,
+            TankKind::Warden => 6,
+            TankKind::Ravager => 7,
+            TankKind::Glacier => 8,
+            TankKind::Obelisk => 9,
+            TankKind::Titan => 10,
+            TankKind::Leviathan => 11,
+        }
+    }
+}
+
 /// Command-line flags for bongbong's native binary. All optional - with none
 /// given, behavior matches today's defaults exactly (random enemy count,
-/// 1280x720 window, shadows on).
+/// random player chassis, 1280x720 window, shadows on).
 #[derive(Parser)]
 #[command(name = "bongbong", about = "A pixelated tank shooter")]
 struct Args {
@@ -25,6 +67,13 @@ struct Args {
     /// between ENEMY_COUNT_MIN and ENEMY_COUNT_MAX, see lib.rs).
     #[arg(short = 'e', long = "enemies")]
     enemies: Option<usize>,
+
+    /// Force the player's tank to a specific chassis instead of a random one
+    /// each round (default: random, matching today's behavior) - e.g.
+    /// `--tank titan` for the twin-barrel super-heavy, without restarting
+    /// until it happens to roll. Persists across in-game restarts (R key).
+    #[arg(long = "tank", value_enum)]
+    tank: Option<TankKind>,
 
     /// Override the window size, e.g. `--resolution 1920x1080` (default:
     /// 1280x720).
@@ -35,6 +84,46 @@ struct Args {
     /// at runtime with the L key - see docs/sprite-shadows-design.md.
     #[arg(long = "no-shadows")]
     no_shadows: bool,
+
+    /// Load a saved battlefield (see docs/map-editor-design.md) instead of
+    /// today's fully-random layout - border walls, the player fortress, and
+    /// enemy spawns stay procedural on top of the map's terrain. Loaded (and
+    /// validated) eagerly at CLI-parse time, so a missing/malformed map file
+    /// fails fast with a clear error instead of silently falling back to
+    /// random. With `--editor` (map-editor builds only), this instead
+    /// pre-loads the named map into the editor's canvas.
+    #[arg(short = 'm', long = "map", value_parser = parse_map)]
+    map: Option<bongbong::map::MapFile>,
+
+    /// Open the dev-only battlefield map editor instead of starting a round
+    /// - see docs/map-editor-design.md. Combine with `--map` to edit an
+    /// existing map rather than starting from a blank canvas. Only exists in
+    /// builds compiled with `--features map-editor`; never present in a
+    /// release build.
+    #[cfg(feature = "map-editor")]
+    #[arg(long = "editor")]
+    editor: bool,
+}
+
+fn parse_map(s: &str) -> Result<bongbong::map::MapFile, String> {
+    bongbong::map::MapFile::load(std::path::Path::new(s))
+}
+
+/// The battlefield a normal (non-`--editor`) round loads when `-m`/`--map`
+/// wasn't given. Embedded into the binary at compile time (`include_str!`)
+/// rather than read from `maps/default.toml` on disk at startup - neither
+/// the wasm/web build's emscripten virtual filesystem nor a cargo-dist
+/// native release archive bundles anything outside `static/` (see
+/// `MapFile::from_toml_str`'s doc comment and CLAUDE.md's Web/wasm build and
+/// Releases sections), so a disk read here would fail in both of this
+/// project's actual distribution paths - it only ever worked when run from
+/// a `cargo run` checkout with `maps/` sitting right there. `cargo watch -x
+/// "run"` still picks up edits to the on-disk `maps/default.toml` live in
+/// dev, since `include_str!` makes rustc treat it as a compile input and
+/// trigger a rebuild.
+fn default_map() -> bongbong::map::MapFile {
+    bongbong::map::MapFile::from_toml_str(include_str!("../maps/default.toml"))
+        .expect("failed parsing the embedded default map")
 }
 
 /// Parses a `WxH` string (e.g. `1920x1080`) into a `(width, height)` pair,
@@ -103,27 +192,75 @@ fn main() {
     let health_bar_texture = rl
         .load_texture(&thread, "static/health_bar.png")
         .expect("failed loading health bar texture");
-    let frog_idle_texture = rl
-        .load_texture(&thread, "static/toxic_frog/idle.png")
-        .expect("failed loading frog idle texture");
-    let frog_hurt_texture = rl
-        .load_texture(&thread, "static/toxic_frog/hurt.png")
-        .expect("failed loading frog hurt texture");
-    let frog_hop_texture = rl
-        .load_texture(&thread, "static/toxic_frog/hop.png")
-        .expect("failed loading frog hop texture");
-    let frog_attack_texture = rl
-        .load_texture(&thread, "static/toxic_frog/attack.png")
-        .expect("failed loading frog attack texture");
-    let frog_explosion_texture = rl
-        .load_texture(&thread, "static/toxic_frog/explosion.png")
-        .expect("failed loading frog explosion texture");
+    // One full clip set per colour variant (see `frog::FROG_VARIANT_DIRS`) -
+    // `Frog::variant` (rolled per round in `Game::init`) picks which one
+    // `game.rs::render` draws from. Loaded up front like every other
+    // texture, kept alive for the whole game loop.
+    let frog_textures: Vec<bongbong::frog::FrogVariantTextures> = bongbong::frog::FROG_VARIANT_DIRS
+        .iter()
+        .map(|dir| bongbong::frog::FrogVariantTextures {
+            idle: rl
+                .load_texture(&thread, &format!("static/toxic_frog/{dir}/idle.png"))
+                .expect("failed loading frog idle texture"),
+            hurt: rl
+                .load_texture(&thread, &format!("static/toxic_frog/{dir}/hurt.png"))
+                .expect("failed loading frog hurt texture"),
+            hop: rl
+                .load_texture(&thread, &format!("static/toxic_frog/{dir}/hop.png"))
+                .expect("failed loading frog hop texture"),
+            attack: rl
+                .load_texture(&thread, &format!("static/toxic_frog/{dir}/attack.png"))
+                .expect("failed loading frog attack texture"),
+            explosion: rl
+                .load_texture(&thread, &format!("static/toxic_frog/{dir}/explosion.png"))
+                .expect("failed loading frog explosion texture"),
+        })
+        .collect();
     let pickup_health_texture = rl
         .load_texture(&thread, "static/pickups/health.png")
         .expect("failed loading health pickup texture");
     let pickup_ammo_texture = rl
         .load_texture(&thread, "static/pickups/ammo.png")
         .expect("failed loading ammo pickup texture");
+    #[cfg(feature = "map-editor")]
+    let eraser_texture = rl
+        .load_texture(&thread, "static/ui/eraser.png")
+        .expect("failed loading eraser texture");
+
+    // `--editor`: skip `Game`/`simulation::Input` entirely and drive
+    // `MapEditor`'s own update/render loop instead - same window, same
+    // already-loaded textures, different top-level driver. See
+    // docs/map-editor-design.md's "Entering the editor" section. Only
+    // compiled into `map-editor`-feature builds.
+    #[cfg(feature = "map-editor")]
+    if args.editor {
+        let mut editor = bongbong::editor::MapEditor::new(args.map, screen_width as f32, screen_height as f32);
+        game_loop::run(rl, thread, 60, move |rl, thread| {
+            let (width, height) = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
+            if let bongbong::editor::EditorAction::Close = editor.update(rl, width, height) {
+                rl.request_quit();
+            }
+            editor.render(
+                rl,
+                thread,
+                width,
+                height,
+                &bongbong::editor::EditorTextures {
+                    obstacles: &obstacles_texture,
+                    ground: &ground_texture,
+                    // Editor palette icon: just the first colour variant's
+                    // idle frame - a fixed representative sprite, since the
+                    // editor places a frog *cell*, not a rolled colour (that
+                    // roll only happens per-round, in `Game::init`).
+                    frog_idle: &frog_textures[0].idle,
+                    pickup_health: &pickup_health_texture,
+                    pickup_ammo: &pickup_ammo_texture,
+                    eraser: &eraser_texture,
+                },
+            );
+        });
+        return;
+    }
 
     let mut shock_fx = RippleFx::load(
         &mut rl,
@@ -170,7 +307,9 @@ fn main() {
 
     let mut game = Game::default();
     game.enemy_count_override = args.enemies;
+    game.player_row_override = args.tank.map(TankKind::row);
     game.shadows_enabled = !args.no_shadows;
+    game.map = args.map.unwrap_or_else(default_map);
     game.init(screen_width as f32, screen_height as f32);
 
     // game_loop::run drives a plain `while !window_should_close()` loop on
@@ -221,11 +360,7 @@ fn main() {
                 obstacles: &obstacles_texture,
                 ground: &ground_texture,
                 health_bar: &health_bar_texture,
-                frog_idle: &frog_idle_texture,
-                frog_hurt: &frog_hurt_texture,
-                frog_hop: &frog_hop_texture,
-                frog_attack: &frog_attack_texture,
-                frog_explosion: &frog_explosion_texture,
+                frog_variants: &frog_textures,
                 pickup_health: &pickup_health_texture,
                 pickup_ammo: &pickup_ammo_texture,
             },

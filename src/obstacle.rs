@@ -1,4 +1,5 @@
 use rapier2d::prelude::RigidBodyHandle;
+use serde::{Deserialize, Serialize};
 use sola_raylib::prelude::*;
 
 use crate::{
@@ -11,7 +12,8 @@ use crate::{
 /// Which of the four materials a static battlefield wall is built from - see
 /// walls_sheet.png / docs/WALLS_SPEC.md for the sheet layout each one draws
 /// from.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Material {
     Brick,
     Iron,
@@ -202,6 +204,14 @@ impl Obstacle {
             self.destroyed = true;
         }
     }
+}
+
+/// Source rectangle for `material`'s pristine (variant 0, undamaged) tile -
+/// used by the map editor's toolbar (`editor.rs`) to draw a representative
+/// icon for each wall material without needing a live `Obstacle` instance.
+#[cfg(feature = "map-editor")]
+pub fn icon_source_rec(material: Material) -> Rectangle {
+    source_rec(material.row_base(), 0)
 }
 
 /// Source rectangle for the obstacle at (row, col) inside the atlas.

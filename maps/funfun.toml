@@ -1,0 +1,528 @@
+version = 1
+
+[cells."29,17"]
+kind = "wall"
+material = "glass"
+
+[cells."16,18"]
+kind = "wall"
+material = "wood"
+
+[cells."39,18"]
+kind = "wall"
+material = "brick"
+
+[cells."33,12"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."35,11"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."35,18"]
+kind = "wall"
+material = "wood"
+
+[cells."38,5"]
+kind = "wall"
+material = "brick"
+
+[cells."22,18"]
+kind = "wall"
+material = "wood"
+
+[cells."19,16"]
+kind = "frog"
+
+[cells."20,18"]
+kind = "wall"
+material = "wood"
+
+[cells."39,13"]
+kind = "wall"
+material = "brick"
+
+[cells."9,5"]
+kind = "wall"
+material = "brick"
+
+[cells."32,11"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."20,13"]
+kind = "wall"
+material = "wood"
+
+[cells."29,9"]
+kind = "wall"
+material = "wood"
+
+[cells."29,6"]
+kind = "wall"
+material = "glass"
+
+[cells."31,5"]
+kind = "wall"
+material = "glass"
+
+[cells."34,10"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."39,8"]
+kind = "wall"
+material = "brick"
+
+[cells."9,8"]
+kind = "wall"
+material = "brick"
+
+[cells."7,3"]
+kind = "wall"
+material = "brick"
+
+[cells."34,9"]
+kind = "wall"
+material = "brick"
+
+[cells."35,13"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."34,13"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."39,5"]
+kind = "wall"
+material = "brick"
+
+[cells."19,13"]
+kind = "wall"
+material = "wood"
+
+[cells."6,5"]
+kind = "pickup"
+pickup = "health"
+
+[cells."34,11"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."17,13"]
+kind = "wall"
+material = "wood"
+
+[cells."9,3"]
+kind = "wall"
+material = "brick"
+
+[cells."6,3"]
+kind = "wall"
+material = "brick"
+
+[cells."9,7"]
+kind = "wall"
+material = "brick"
+
+[cells."36,12"]
+kind = "wall"
+material = "brick"
+
+[cells."33,18"]
+kind = "wall"
+material = "wood"
+
+[cells."39,6"]
+kind = "wall"
+material = "brick"
+
+[cells."34,14"]
+kind = "wall"
+material = "brick"
+
+[cells."9,9"]
+kind = "wall"
+material = "brick"
+
+[cells."33,9"]
+kind = "wall"
+material = "brick"
+
+[cells."31,7"]
+kind = "wall"
+material = "glass"
+
+[cells."39,11"]
+kind = "wall"
+material = "brick"
+
+[cells."31,10"]
+kind = "wall"
+material = "brick"
+
+[cells."4,9"]
+kind = "wall"
+material = "brick"
+
+[cells."5,5"]
+kind = "pickup"
+pickup = "health"
+
+[cells."34,12"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."35,12"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."39,17"]
+kind = "wall"
+material = "brick"
+
+[cells."36,5"]
+kind = "wall"
+material = "brick"
+
+[cells."4,8"]
+kind = "wall"
+material = "brick"
+
+[cells."21,18"]
+kind = "wall"
+material = "wood"
+
+[cells."16,17"]
+kind = "wall"
+material = "wood"
+
+[cells."35,14"]
+kind = "wall"
+material = "brick"
+
+[cells."5,6"]
+kind = "pickup"
+pickup = "health"
+
+[cells."37,18"]
+kind = "wall"
+material = "wood"
+
+[cells."39,15"]
+kind = "wall"
+material = "brick"
+
+[cells."32,12"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."7,6"]
+kind = "pickup"
+pickup = "health"
+
+[cells."9,4"]
+kind = "wall"
+material = "brick"
+
+[cells."32,13"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."7,9"]
+kind = "wall"
+material = "brick"
+
+[cells."21,13"]
+kind = "wall"
+material = "wood"
+
+[cells."31,11"]
+kind = "wall"
+material = "brick"
+
+[cells."36,11"]
+kind = "wall"
+material = "brick"
+
+[cells."4,3"]
+kind = "wall"
+material = "brick"
+
+[cells."16,16"]
+kind = "wall"
+material = "wood"
+
+[cells."37,5"]
+kind = "wall"
+material = "brick"
+
+[cells."36,18"]
+kind = "wall"
+material = "wood"
+
+[cells."17,11"]
+kind = "wall"
+material = "brick"
+
+[cells."36,10"]
+kind = "wall"
+material = "brick"
+
+[cells."19,18"]
+kind = "wall"
+material = "wood"
+
+[cells."3,3"]
+kind = "wall"
+material = "brick"
+
+[cells."22,15"]
+kind = "wall"
+material = "wood"
+
+[cells."33,5"]
+kind = "wall"
+material = "brick"
+
+[cells."9,6"]
+kind = "wall"
+material = "brick"
+
+[cells."29,14"]
+kind = "wall"
+material = "wood"
+
+[cells."39,10"]
+kind = "wall"
+material = "brick"
+
+[cells."33,14"]
+kind = "wall"
+material = "brick"
+
+[cells."22,17"]
+kind = "wall"
+material = "wood"
+
+[cells."32,10"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."16,13"]
+kind = "wall"
+material = "wood"
+
+[cells."30,7"]
+kind = "wall"
+material = "glass"
+
+[cells."17,18"]
+kind = "wall"
+material = "wood"
+
+[cells."29,11"]
+kind = "wall"
+material = "wood"
+
+[cells."22,13"]
+kind = "wall"
+material = "wood"
+
+[cells."35,10"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."31,9"]
+kind = "wall"
+material = "brick"
+
+[cells."8,9"]
+kind = "wall"
+material = "brick"
+
+[cells."31,12"]
+kind = "wall"
+material = "brick"
+
+[cells."32,9"]
+kind = "wall"
+material = "brick"
+
+[cells."29,12"]
+kind = "wall"
+material = "wood"
+
+[cells."29,15"]
+kind = "wall"
+material = "wood"
+
+[cells."3,4"]
+kind = "wall"
+material = "brick"
+
+[cells."29,18"]
+kind = "wall"
+material = "wood"
+
+[cells."18,13"]
+kind = "wall"
+material = "wood"
+
+[cells."6,9"]
+kind = "wall"
+material = "brick"
+
+[cells."34,5"]
+kind = "wall"
+material = "brick"
+
+[cells."39,9"]
+kind = "wall"
+material = "brick"
+
+[cells."32,18"]
+kind = "wall"
+material = "wood"
+
+[cells."29,13"]
+kind = "wall"
+material = "wood"
+
+[cells."4,7"]
+kind = "wall"
+material = "brick"
+
+[cells."8,3"]
+kind = "wall"
+material = "brick"
+
+[cells."32,14"]
+kind = "wall"
+material = "brick"
+
+[cells."36,13"]
+kind = "wall"
+material = "brick"
+
+[cells."5,3"]
+kind = "wall"
+material = "brick"
+
+[cells."30,18"]
+kind = "wall"
+material = "wood"
+
+[cells."39,12"]
+kind = "wall"
+material = "brick"
+
+[cells."31,6"]
+kind = "wall"
+material = "glass"
+
+[cells."29,10"]
+kind = "wall"
+material = "wood"
+
+[cells."5,9"]
+kind = "wall"
+material = "brick"
+
+[cells."34,18"]
+kind = "wall"
+material = "wood"
+
+[cells."36,9"]
+kind = "wall"
+material = "brick"
+
+[cells."39,14"]
+kind = "wall"
+material = "brick"
+
+[cells."35,9"]
+kind = "wall"
+material = "brick"
+
+[cells."29,8"]
+kind = "wall"
+material = "wood"
+
+[cells."33,11"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."22,16"]
+kind = "wall"
+material = "wood"
+
+[cells."31,18"]
+kind = "wall"
+material = "wood"
+
+[cells."39,16"]
+kind = "wall"
+material = "brick"
+
+[cells."7,5"]
+kind = "pickup"
+pickup = "health"
+
+[cells."31,13"]
+kind = "wall"
+material = "brick"
+
+[cells."30,6"]
+kind = "wall"
+material = "glass"
+
+[cells."36,14"]
+kind = "wall"
+material = "brick"
+
+[cells."16,15"]
+kind = "wall"
+material = "wood"
+
+[cells."29,16"]
+kind = "wall"
+material = "glass"
+
+[cells."33,10"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."6,6"]
+kind = "pickup"
+pickup = "health"
+
+[cells."29,7"]
+kind = "wall"
+material = "glass"
+
+[cells."31,14"]
+kind = "wall"
+material = "brick"
+
+[cells."38,18"]
+kind = "wall"
+material = "wood"
+
+[cells."39,7"]
+kind = "wall"
+material = "brick"
+
+[cells."33,13"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."35,5"]
+kind = "wall"
+material = "brick"
+
+[cells."18,18"]
+kind = "wall"
+material = "wood"

@@ -1,8 +1,12 @@
 # ToxicFrog Sprite — Integration Notes
 
-`static/toxic_frog/{idle,hurt,hop,attack,explosion}.png` — the player's
-protect objective (`src/frog.rs`). Third-party art, provenance in
-`static/toxic_frog/SOURCE.md`.
+`static/toxic_frog/<variant>/{idle,hurt,hop,attack,explosion}.png` — the
+player's protect objective (`src/frog.rs`). Six colour `<variant>` folders
+(`purple_white`, `blue_blue`, `blue_brown`, `green_blue`, `green_brown`,
+`purple_blue` - see `crate::frog::FROG_VARIANT_DIRS`), one rolled at random
+per round (`Frog::variant`) and fixed for that frog's whole life - purely
+cosmetic, identical layout/frame counts/timing across all six. Third-party
+art, provenance in `static/toxic_frog/SOURCE.md`.
 
 ## Layout
 

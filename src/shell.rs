@@ -109,8 +109,14 @@ impl Shell {
     /// Create a shell at the tank's muzzle, travelling in the direction the tank
     /// faces. `owner` tags which tank fired it for collision purposes.
     /// `aim_offset` (degrees) skews the travel direction off the barrel so a shot
-    /// can miss; pass 0.0 for a clean shot straight ahead.
-    pub fn spawn(tank: &Tank, owner: Owner, aim_offset: f32) -> Shell {
+    /// can miss; pass 0.0 for a clean shot straight ahead. `lateral_offset`
+    /// (tile px, pre-scale) shifts the spawn point sideways from the tank's
+    /// centerline - nonzero only for a twin-barrel chassis's two independent
+    /// shells (see TANK_BARREL_LATERAL_OFFSET_BY_ROW), zero for every
+    /// single-barrel shot, which fires from dead center. The travel
+    /// direction itself is unaffected by this - both barrels of a twin
+    /// chassis fire parallel, not converging/diverging.
+    pub fn spawn(tank: &Tank, owner: Owner, aim_offset: f32, lateral_offset: f32) -> Shell {
         let rot = (tank.rotation + aim_offset).to_radians();
         // rotation 0 == facing up (-Y); +90 == right, etc. matches the tank movement.
         let dir = Vector2::new(rot.sin(), -rot.cos());
@@ -123,11 +129,20 @@ impl Shell {
         // free to match the actual sprite art rather than needing to clear
         // the tank's hit sensor.)
         let muzzle = TANK_MUZZLE_FORWARD_OFFSET_BY_ROW[tank.row as usize] * tank.scale;
+        // Perpendicular to `dir`, using the *tank's own* rotation (not
+        // rotation + aim_offset) - a misfire's aim skew shouldn't also swing
+        // which side of the hull a barrel sits on. Rotating (sin,-cos) by
+        // +90 degrees gives (cos, sin): at rotation 0 (facing up) this is
+        // (1, 0), i.e. screen +x - the tank's right-hand side - matching
+        // TANK_BARREL_LATERAL_OFFSET_BY_ROW's "positive = right barrel"
+        // convention.
+        let hull_rot = tank.rotation.to_radians();
+        let lateral = Vector2::new(hull_rot.cos(), hull_rot.sin()) * (lateral_offset * tank.scale);
         Shell {
             state: ShellState::Fire0,
             position: Position::new(
-                tank.position.x + dir.x * muzzle,
-                tank.position.y + dir.y * muzzle,
+                tank.position.x + dir.x * muzzle + lateral.x,
+                tank.position.y + dir.y * muzzle + lateral.y,
             ),
             velocity: Vector2::new(dir.x * SHELL_SPEED, dir.y * SHELL_SPEED),
             rotation: tank.rotation + aim_offset,

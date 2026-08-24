@@ -4,13 +4,14 @@ use sola_raylib::prelude::Vector2;
 
 use crate::bt::{Node, Status, action, condition, selector, sequence};
 use crate::pathfind::Grid;
+use crate::pickup::PickupKind;
 use crate::tank::{Dir, Tank};
 use crate::{
     AI_DIR_HOLD_SECONDS, AI_DIR_SWITCH_MARGIN_PX, AI_OBSTACLE_OVERRIDE_HOLD_SECONDS,
     AVOID_DODGE_SECONDS, AVOID_LOOKAHEAD,
     AVOID_MARGIN, AVOID_MIN_SPEED, ENEMY_AIM_SETTLE, ENEMY_AMMO_LOW, ENEMY_AMMO_RESUME,
     ENEMY_ATTACK_RANGE, ENEMY_FIRE_ALIGN_PX, ENEMY_FIRE_INTERVAL, ENEMY_FIRE_INTERVAL_AGGRESSIVE,
-    ENEMY_FLEE_DAMAGE, ENEMY_FRIENDLY_FIRE_HOLD_CHANCE, ENEMY_MISFIRE_ANGLE_MAX,
+    ENEMY_FLEE_DAMAGE, ENEMY_FRIENDLY_FIRE_HOLD_CHANCE, ENEMY_HIT_ALERT_SECONDS, ENEMY_MISFIRE_ANGLE_MAX,
     ENEMY_MISFIRE_ANGLE_MIN, ENEMY_MISFIRE_CHANCE_MAX, ENEMY_MISFIRE_RANGE,
     ENEMY_RETARGET_SECONDS, ENEMY_RETREAT_RANGE, ENEMY_VIEW_RANGE, MAX_DAMAGE, MAX_SHELLS, Position,
     STUCK_ESCAPE_SECONDS, STUCK_SPEED_EPS, WANDER_SPREAD_CANDIDATES,
@@ -93,6 +94,12 @@ pub struct Ai {
     /// can't: a bad commitment call it didn't foresee, or a layout with no
     /// path around an obstacle cluster at all.
     stuck_timer: f32,
+    /// Seconds remaining since this tank last took a hit - see
+    /// `notify_hit`/`ENEMY_HIT_ALERT_SECONDS`. `build`'s Chase condition
+    /// treats this as equivalent to having the player in view range, so a
+    /// tank that gets shot from outside its normal awareness range still
+    /// fights back instead of obliviously continuing to patrol/wander.
+    hit_alert_timer: f32,
 }
 
 impl Default for Ai {
@@ -109,6 +116,7 @@ impl Default for Ai {
             retreating: false,
             was_moving: false,
             stuck_timer: 0.0,
+            hit_alert_timer: 0.0,
         }
     }
 }
@@ -133,6 +141,20 @@ impl Ai {
     /// within the last `ENEMY_ALERT_HOLD_SECONDS`), so an enemy that can't
     /// personally see the player can still converge on where the group last
     /// saw them instead of wandering randomly - see `act_patrol`.
+    /// `engage_target` is this tank's assigned point on the shared
+    /// engagement ring around the player (see `simulation.rs::Game::update`'s
+    /// `engage_targets`, and `ENGAGE_RING_RADIUS`'s doc comment) - `Some`
+    /// whenever two or more enemies are simultaneously within
+    /// `ENEMY_VIEW_RANGE`, so `act_chase`/`act_attack` can steer at a point
+    /// that's spread out from the other engaged enemies instead of the
+    /// player's exact position, which is what used to send a whole group
+    /// at the same spot and pile them up. `None` when this tank is the only
+    /// one engaged (or the player is dead) - nothing to spread out from, so
+    /// those fall back to the raw player position.
+    /// `pickups` is every currently-live health/ammo pickup on the
+    /// battlefield this frame (kind + position) - see `Brain::nearest_pickup`,
+    /// used by `act_flee`/`act_retreat` so a hurting or ammo-starved tank
+    /// heads for a pickup instead of just running blind.
     #[allow(clippy::too_many_arguments)] // perception is passed by value, not bundled
     pub fn think(
         &mut self,
@@ -147,9 +169,12 @@ impl Ai {
         grid: &Grid,
         rng: &mut ThreadRng,
         alert: Option<Position>,
+        engage_target: Option<Position>,
+        pickups: &[(PickupKind, Position)],
     ) -> Intent {
         self.fire_timer = (self.fire_timer - dt).max(0.0);
         self.retarget_timer = (self.retarget_timer - dt).max(0.0);
+        self.hit_alert_timer = (self.hit_alert_timer - dt).max(0.0);
         self.dir_hold += dt;
         self.dodge_timer = (self.dodge_timer - dt).max(0.0);
         if self.dodge_timer <= 0.0 {
@@ -178,11 +203,23 @@ impl Ai {
             ai: self,
             intent: Intent::default(),
             alert,
+            engage_target,
+            pickups,
         };
         build().tick(&mut bb);
         let intent = bb.intent;
         self.was_moving = intent.move_dir.is_some();
         intent
+    }
+
+    /// Called from `simulation.rs`'s shell-hit resolution whenever a shell
+    /// damages this tank without killing it - see `ENEMY_HIT_ALERT_SECONDS`
+    /// for why this exists. Refreshes (rather than adds to) the timer, same
+    /// "how long since last contact" convention as `ENEMY_ALERT_HOLD_SECONDS`,
+    /// so a tank taking sustained fire just stays alert continuously instead
+    /// of the timer stacking up.
+    pub fn notify_hit(&mut self) {
+        self.hit_alert_timer = ENEMY_HIT_ALERT_SECONDS;
     }
 
     /// Choose a heading toward `target` - or, if pathfinding can't reach
@@ -692,6 +729,14 @@ struct Brain<'a> {
     /// ENEMY_VIEW_RANGE - see `think`'s `alert` parameter and
     /// `act_patrol`. `None` when no enemy has spotted the player recently.
     alert: Option<Position>,
+    /// This tank's assigned spot on the shared engagement ring around the
+    /// player - see `think`'s `engage_target` parameter. `None` when this
+    /// tank is the only one currently engaged (or the player's dead), in
+    /// which case `engage_point` falls back to the raw player position.
+    engage_target: Option<Position>,
+    /// Every currently-live pickup on the battlefield - see `think`'s
+    /// `pickups` parameter and `nearest_pickup`.
+    pickups: &'a [(PickupKind, Position)],
 }
 
 impl Brain<'_> {
@@ -699,8 +744,38 @@ impl Brain<'_> {
         self.me.position.distance_to(self.player.position)
     }
 
+    /// Where to steer when closing in on/repositioning around the player -
+    /// this tank's engagement-ring slot if it has one, otherwise the
+    /// player's exact position. Used by `act_chase` and `act_attack`'s
+    /// reposition branch; firing/aim (`aim_alignment`) always targets the
+    /// real player regardless, so spreading out changes where a tank walks,
+    /// never what it shoots at.
+    fn engage_point(&self) -> Position {
+        self.engage_target.unwrap_or(self.player.position)
+    }
+
     fn player_alive(&self) -> bool {
         !self.player.is_wreck()
+    }
+
+    /// This tank's own position to the nearest currently-live pickup of
+    /// `kind`, if any exist right now - used by `act_flee`/`act_retreat` so
+    /// a hurting or ammo-starved tank heads for a pickup instead of just
+    /// running blind. `None` when no pickup of that kind is on the field
+    /// this frame (already collected and still respawning - see
+    /// PICKUP_RESPAWN_SECONDS), in which case those callers fall back to
+    /// their old player-relative behavior.
+    fn nearest_pickup(&self, kind: PickupKind) -> Option<Position> {
+        self.pickups
+            .iter()
+            .filter(|(k, _)| *k == kind)
+            .map(|&(_, pos)| pos)
+            .min_by(|&a, &b| {
+                self.me
+                    .position
+                    .distance_to(a)
+                    .total_cmp(&self.me.position.distance_to(b))
+            })
     }
 
     /// Seconds to wait before firing again, scaled by how well-stocked this
@@ -851,9 +926,15 @@ fn build<'a>() -> Node<Brain<'a>> {
             condition(|b: &mut Brain| b.player_alive() && b.dist_to_player() <= ENEMY_ATTACK_RANGE),
             action(act_attack),
         ]),
-        // 5. Chase when the player is alive and within view range.
+        // 5. Chase when the player is alive and either within view range or
+        // this tank has recently taken a hit - see `Ai::notify_hit`/
+        // `ENEMY_HIT_ALERT_SECONDS`'s own doc comment: a shot landing from
+        // outside normal awareness range shouldn't just be shrugged off.
         sequence(vec![
-            condition(|b: &mut Brain| b.player_alive() && b.dist_to_player() <= ENEMY_VIEW_RANGE),
+            condition(|b: &mut Brain| {
+                b.player_alive()
+                    && (b.dist_to_player() <= ENEMY_VIEW_RANGE || b.ai.hit_alert_timer > 0.0)
+            }),
             action(act_chase),
         ]),
         // 6. Fallback: patrol.
@@ -863,8 +944,19 @@ fn build<'a>() -> Node<Brain<'a>> {
 
 // --- Leaf actions. Each fills in `b.intent` and returns Success. ---
 
-/// Drive away from the player along a committed cardinal heading.
+/// Drive away from the player along a committed cardinal heading - or, if a
+/// Health pickup is currently on the field, straight for that instead (see
+/// `Brain::nearest_pickup`): a hurt tank actively trying to patch itself up
+/// reads as far more purposeful than blindly running, and it's usually
+/// heading away from the fight anyway since pickups respawn near the
+/// battlefield's corners. Falls back to the old blind-flee behavior once no
+/// Health pickup exists (already collected, still respawning).
 fn act_flee(b: &mut Brain) -> Status {
+    b.reset_aim();
+    if let Some(target) = b.nearest_pickup(PickupKind::Health) {
+        b.intent.move_dir = Some(b.steer(target));
+        return Status::Success;
+    }
     // Steer toward a point behind us (mirror of the player across our position),
     // so commitment/hysteresis applies just like chasing.
     let away_point = Position::new(
@@ -872,18 +964,24 @@ fn act_flee(b: &mut Brain) -> Status {
         2.0 * b.me.position.y - b.player.position.y,
     );
     b.intent.move_dir = Some(b.steer(away_point));
-    b.reset_aim();
     Status::Success
 }
 
-/// Back off to recharge ammo. Like `act_flee`, but only until clear of
-/// ENEMY_RETREAT_RANGE (breathing room outside attack range) rather than
-/// running all the way off - once there, it holds position, faces the
-/// player, and just waits out the recharge instead of camping the map edge.
-/// Never fires: `b.intent.fire` starts false each frame and this leaf
-/// doesn't set it.
+/// Back off to recharge ammo - or, if an Ammo pickup is currently on the
+/// field, head straight for that instead (see `Brain::nearest_pickup` and
+/// `act_flee`'s doc comment for the same reasoning: an active pickup run
+/// beats blindly backing away). Without one, falls back to the old
+/// behavior: retreat only until clear of ENEMY_RETREAT_RANGE (breathing
+/// room outside attack range) rather than running all the way off - once
+/// there, hold position, face the player, and just wait out the passive
+/// recharge instead of camping the map edge. Never fires: `b.intent.fire`
+/// starts false each frame and this leaf doesn't set it.
 fn act_retreat(b: &mut Brain) -> Status {
     b.reset_aim();
+    if let Some(target) = b.nearest_pickup(PickupKind::Ammo) {
+        b.intent.move_dir = Some(b.steer(target));
+        return Status::Success;
+    }
     if b.dist_to_player() >= ENEMY_RETREAT_RANGE {
         b.intent.face = Some(Dir::toward(b.me.position, b.player.position));
         return Status::Success;
@@ -925,16 +1023,22 @@ fn act_attack(b: &mut Brain) -> Status {
             }
         }
     } else {
-        // Not lined up: reposition toward the player (with commitment).
+        // Not lined up: reposition toward this tank's engagement-ring slot
+        // (with commitment) rather than the player's exact position, so a
+        // group of attackers spreads out instead of piling onto the same
+        // point - see `Brain::engage_point`.
         b.reset_aim();
-        b.intent.move_dir = Some(b.steer(b.player.position));
+        b.intent.move_dir = Some(b.steer(b.engage_point()));
     }
     Status::Success
 }
 
-/// Close in on the player along a committed cardinal heading.
+/// Close in on the player along a committed cardinal heading - toward this
+/// tank's engagement-ring slot, not the player's exact position, so a group
+/// of chasers spreads out instead of converging on the same point. See
+/// `Brain::engage_point`.
 fn act_chase(b: &mut Brain) -> Status {
-    b.intent.move_dir = Some(b.steer(b.player.position));
+    b.intent.move_dir = Some(b.steer(b.engage_point()));
     b.reset_aim();
     Status::Success
 }

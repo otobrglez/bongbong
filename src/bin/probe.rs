@@ -23,9 +23,21 @@ use std::collections::VecDeque;
 
 use bongbong::Position;
 use bongbong::ai::Intent;
+use bongbong::map::MapFile;
 use bongbong::simulation::{Game, Input, Outcome};
 use bongbong::tank::Dir;
 use clap::{Parser, ValueEnum};
+
+/// Same `-m`/`--map` fallback the real game applies (main.rs) - the
+/// embedded default map, so a probe run exercises the same battlefield the
+/// game actually ships with, rather than the empty `MapFile::default()`
+/// `Game::default()` would otherwise leave in place. Embedded via
+/// `include_str!` rather than read from disk for the same reason main.rs's
+/// own `default_map()` is - see `MapFile::from_toml_str`'s doc comment.
+fn default_map() -> MapFile {
+    MapFile::from_toml_str(include_str!("../../maps/default.toml"))
+        .expect("failed parsing the embedded default map")
+}
 
 const WIDTH: f32 = 1280.0;
 const HEIGHT: f32 = 720.0;
@@ -55,6 +67,18 @@ const BORDER_FRAMES_THRESHOLD: u32 = 90; // 1.5s
 // inside JITTER_WINDOW_FRAMES flags it.
 const JITTER_WINDOW_FRAMES: u32 = 120; // 2s
 const JITTER_THRESHOLD: u32 = 4;
+// Clustering: enemies pathing to the same point (or funneling through the
+// same chokepoint) piling up on top of each other instead of spreading out -
+// see ENGAGE_RING_RADIUS in lib.rs, added specifically to fix this. Distinct
+// from ordinary close passing: needs at least CLUSTER_MIN_GROUP enemies
+// mutually within CLUSTER_RADIUS of each other, sustained for
+// CLUSTER_FRAMES_THRESHOLD, not just a momentary crossing. CLUSTER_RADIUS is
+// well under ENGAGE_RING_RADIUS's ~272px slot spacing so a healthy, spread
+// engagement doesn't trip it, but loose enough to catch a genuine pile-up
+// rather than only exact overlap.
+const CLUSTER_RADIUS: f32 = 90.0; // px between tank centers
+const CLUSTER_MIN_GROUP: usize = 3; // this many mutually-close enemies counts as a cluster
+const CLUSTER_FRAMES_THRESHOLD: u32 = 180; // 3s, matching STALL_FRAMES_THRESHOLD's window
 
 #[derive(Clone, Copy, ValueEnum)]
 enum Scenario {
@@ -89,14 +113,6 @@ struct Args {
     /// How many enemies to spawn (default: same random range as the real game).
     #[arg(short = 'e', long)]
     enemies: Option<usize>,
-
-    /// How many obstacle structures to place (default: same random range as
-    /// the real game, OBSTACLE_COUNT_MIN..=OBSTACLE_COUNT_MAX). Set this
-    /// high to stress-test navigation at a fixed, repeatable density -
-    /// e.g. `--obstacles 12 --rounds 30` to sweep for stuck/border-stuck
-    /// tanks under denser obstacle layouts than the game normally rolls.
-    #[arg(short = 'o', long)]
-    obstacles: Option<usize>,
 
     /// Maximum frames to simulate per round before giving up (default: 3600 = 60s at 60fps).
     #[arg(long, default_value_t = 3600)]
@@ -178,11 +194,12 @@ struct AnomalyTotals {
     stall: u32,
     border_stuck: u32,
     jitter: u32,
+    clustering: u32,
 }
 
 impl AnomalyTotals {
     fn total(&self) -> u32 {
-        self.stale_start + self.stall + self.border_stuck + self.jitter
+        self.stale_start + self.stall + self.border_stuck + self.jitter + self.clustering
     }
 }
 
@@ -201,6 +218,8 @@ struct TankTrack {
     stall_flagged: bool,
     border_flagged: bool,
     jitter_flagged: bool,
+    cluster_frames: u32,
+    cluster_flagged: bool,
     // Last up to 3 *distinct* headings seen, oldest first - an A,B,A pattern
     // here is a genuine flip-flop, not just "still facing the same way".
     heading_history: VecDeque<f32>,
@@ -222,6 +241,8 @@ impl TankTrack {
             stall_flagged: false,
             border_flagged: false,
             jitter_flagged: false,
+            cluster_frames: 0,
+            cluster_flagged: false,
             heading_history,
             recent_flips: VecDeque::new(),
         }
@@ -256,12 +277,23 @@ fn check_anomalies(
     if game.outcome() != Outcome::Playing {
         return;
     }
+    // Live (non-wreck) enemy positions, indexed in lockstep with `tracks` -
+    // built up front so the clustering check below can look at every other
+    // enemy's position, not just the one `TankTrack` the main loop happens
+    // to be on.
+    let live_positions: Vec<Option<Position>> = game
+        .tank_snapshots()
+        .into_iter()
+        .filter(|t| !t.is_player)
+        .map(|t| (!t.is_wreck).then_some(t.position))
+        .collect();
     let mut enemy_index = 0;
     for tank in game.tank_snapshots() {
         if tank.is_player {
             continue;
         }
         let track = &mut tracks[enemy_index];
+        let my_index = enemy_index;
         enemy_index += 1;
         if tank.is_wreck {
             continue;
@@ -363,6 +395,35 @@ fn check_anomalies(
                 }
             }
         }
+
+        // Clustering: how many other live enemies are mutually within
+        // CLUSTER_RADIUS of this one right now.
+        let nearby = live_positions
+            .iter()
+            .enumerate()
+            .filter(|&(i, other)| {
+                i != my_index && other.is_some_and(|p| p.distance_to(pos) <= CLUSTER_RADIUS)
+            })
+            .count();
+        if nearby + 1 >= CLUSTER_MIN_GROUP {
+            track.cluster_frames += 1;
+        } else {
+            track.cluster_frames = 0;
+        }
+        if !track.cluster_flagged && track.cluster_frames >= CLUSTER_FRAMES_THRESHOLD {
+            report(
+                round,
+                frame,
+                track,
+                "clustering",
+                &format!(
+                    "{CLUSTER_MIN_GROUP}+ enemies mutually within {CLUSTER_RADIUS:.0}px for {CLUSTER_FRAMES_THRESHOLD} frames"
+                ),
+                pos,
+            );
+            track.cluster_flagged = true;
+            totals.clustering += 1;
+        }
     }
 }
 
@@ -386,7 +447,7 @@ fn build_tracks(game: &Game) -> Vec<TankTrack> {
 fn run_round(args: &Args, round: u32, trace: bool) -> AnomalyTotals {
     let mut game = Game::default();
     game.enemy_count_override = args.enemies;
-    game.obstacle_count_override = args.obstacles;
+    game.map = default_map();
     game.init(WIDTH, HEIGHT);
 
     let mut tracks = build_tracks(&game);
@@ -426,16 +487,13 @@ fn main() {
     let sweep = args.rounds > 1;
 
     println!(
-        "probe: scenario={} enemies={} obstacles={} frames={} rounds={}",
+        "probe: scenario={} enemies={} frames={} rounds={}",
         match args.scenario {
             Scenario::Afk => "afk",
             Scenario::Advance => "advance",
             Scenario::Brake => "brake",
         },
         args.enemies
-            .map(|n| n.to_string())
-            .unwrap_or_else(|| "random".to_string()),
-        args.obstacles
             .map(|n| n.to_string())
             .unwrap_or_else(|| "random".to_string()),
         args.frames,
@@ -451,18 +509,20 @@ fn main() {
             if totals.total() > 0 {
                 rounds_with_anomalies += 1;
                 println!(
-                    "round={round} anomalies={} (stale-start={} stall={} border-stuck={} jitter={})",
+                    "round={round} anomalies={} (stale-start={} stall={} border-stuck={} jitter={} clustering={})",
                     totals.total(),
                     totals.stale_start,
                     totals.stall,
                     totals.border_stuck,
                     totals.jitter,
+                    totals.clustering,
                 );
             }
             grand_total.stale_start += totals.stale_start;
             grand_total.stall += totals.stall;
             grand_total.border_stuck += totals.border_stuck;
             grand_total.jitter += totals.jitter;
+            grand_total.clustering += totals.clustering;
         } else {
             grand_total = totals;
         }
@@ -470,13 +530,14 @@ fn main() {
 
     if sweep {
         println!(
-            "probe: {}/{} rounds flagged - totals: stale-start={} stall={} border-stuck={} jitter={}",
+            "probe: {}/{} rounds flagged - totals: stale-start={} stall={} border-stuck={} jitter={} clustering={}",
             rounds_with_anomalies,
             args.rounds,
             grand_total.stale_start,
             grand_total.stall,
             grand_total.border_stuck,
             grand_total.jitter,
+            grand_total.clustering,
         );
     } else if grand_total.total() == 0 {
         println!("probe: no anomalies detected");

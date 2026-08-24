@@ -33,17 +33,18 @@ use sola_raylib::core::math::Vector2;
 use crate::ai::{Ai, Intent, Mover};
 use crate::battlefield;
 use crate::frog::Frog;
+use crate::map::MapFile;
 use crate::obstacle::Obstacle;
 use crate::pathfind::Grid;
 use crate::physics::{self, Physics};
 use crate::pickup::{Pickup, PickupKind};
 use crate::shell::{Owner, Shell, ShellState};
 use crate::shockwave::Shockwave;
-use crate::tank::Tank;
+use crate::tank::{PendingShot, Tank};
 use crate::track::Track;
 use crate::{
     DAMAGE_VARIANTS, ENEMY_ALERT_HOLD_SECONDS, ENEMY_COUNT_MAX, ENEMY_COUNT_MIN, ENEMY_DAMAGE_MAX,
-    ENEMY_DAMAGE_MIN,
+    ENEMY_DAMAGE_MIN, ENGAGE_RING_RADIUS,
     ENEMY_SPAWN_MARGIN_MAX, ENEMY_SPAWN_MARGIN_MIN, ENEMY_SPEED, ENEMY_SPEED_VARIANCE,
     ENEMY_VIEW_RANGE,
     EXPLOSION_DAMAGE_MAX, EXPLOSION_DAMAGE_MIN, EXPLOSION_KNOCKBACK_SPEED, EXPLOSION_RADIUS,
@@ -54,16 +55,17 @@ use crate::{
     MUZZLE_FLASH_DURATION,
     OBSTACLE_CLEAR, OBSTACLE_HULL_FRACTION, OBSTACLE_SCALE, OBSTACLE_TEXTURE_SIZE,
     PATHFIND_CELL_SIZE, PHYSICS_FIXED_DT, PHYSICS_MAX_CATCHUP_SECONDS, PICKUP_AMMO_AMOUNT,
-    PICKUP_COLLECT_RADIUS, PICKUP_COUNT, PICKUP_HEAL_AMOUNT, PICKUP_RESPAWN_SECONDS,
+    PICKUP_COLLECT_RADIUS, PICKUP_HEAL_AMOUNT, PICKUP_RESPAWN_SECONDS,
     PLAYER_DAMAGE_MAX, PLAYER_DAMAGE_MIN, PLAYER_FIRE_INTERVAL, Position,
-    RAM_DAMAGE_COOLDOWN, RESTART_DELAY, SHELLS_HARD_CAP, SHELL_HIT_HALF_EXTENT,
+    RAM_DAMAGE_COOLDOWN, RESTART_DELAY, SHELL_HIT_HALF_EXTENT,
     SHELL_IMPACT_KNOCKBACK_SPEED,
-    SHELL_SHADOW_OFFSET_MAX, SHELL_SHADOW_OFFSET_MIN, SHELL_SPEED,
-    SHOCKWAVE_DURATION, TANK_ACCEL_FORCE, TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW,
+    SHELL_SHADOW_OFFSET_MAX, SHELL_SHADOW_OFFSET_MIN, SHELL_SPEED, WALL_THICKNESS,
+    SHOCKWAVE_DURATION, TANK_ACCEL_FORCE, TANK_BARREL_LATERAL_OFFSET_BY_ROW,
+    TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW,
     TANK_DECEL_CURVE_RATE, TANK_DECEL_SNAP_PX,
     TANK_HULL_DISABLED_DAMAGE,
     TANK_HULL_TRACK_COLS, TANK_HULL_TRACK_FRAME_DISTANCE, TANK_SHELL_VARIANT_BY_ROW,
-    TANK_SHELL_VARIANT_STAGGERED_BY_ROW, TANK_TURN_GRIP_FORCE,
+    TANK_TURN_GRIP_FORCE, TANK_TWIN_SHOT_DELAY_SECONDS,
     TANK_WRECK_COLS, TRACK_MAX_OPACITY, TRACK_SCALE_FRACTION, TRACK_SCALE_JITTER, TRACK_SPACING,
     TRACK_WEIGHT_OPACITY_BY_ROW, TRACK_WEIGHT_SCALE_BY_ROW, TRACK_WOBBLE_AMP_MAX_DEG,
     TRACK_WOBBLE_AMP_MIN_DEG, TRACK_WOBBLE_WAVELENGTH_MAX, TRACK_WOBBLE_WAVELENGTH_MIN,
@@ -139,9 +141,10 @@ pub struct Game {
     /// entities.
     pub(crate) frog: Option<Entity>,
     /// Seconds until the next pickup respawn attempt - only counts down
-    /// while `world` holds fewer than `PICKUP_COUNT` live `Pickup` entities
-    /// (see `Game::update`'s pickup section); reset to `PICKUP_RESPAWN_SECONDS`
-    /// every time it fires, whether or not that attempt actually finds room.
+    /// while `world` holds fewer live `Pickup` entities than
+    /// `map_pickup_slots` has slots (see `Game::update`'s pickup section);
+    /// reset to `PICKUP_RESPAWN_SECONDS` every time it fires, whether or not
+    /// that attempt actually finds room.
     pickup_respawn_timer: f32,
     /// This round's four battlefield-boundary wall colliders (see
     /// `battlefield::spawn_walls`), so a shell's flight can be checked against them the
@@ -181,6 +184,11 @@ pub struct Game {
     /// reset to `ENEMY_ALERT_HOLD_SECONDS` every frame the sighting holds,
     /// ticked down otherwise.
     alert_timer: f32,
+    /// This round's fixed random rotation (radians) applied to every
+    /// engagement-ring slot angle (see `update`'s `engage_targets`), so slot
+    /// 0 doesn't always land due north of the player every round - purely
+    /// cosmetic variety, rolled once in `init`.
+    engage_phase: f32,
     /// The screen-distortion ring from the most recent tank kill, if one is
     /// still playing out. `pub(crate)`: driven into the shockwave shader by `render`.
     pub(crate) shock: Option<Shockwave>,
@@ -230,13 +238,30 @@ pub struct Game {
     /// first `init` call and left untouched afterwards, so it persists
     /// across round restarts (`init` is called again on restart).
     pub enemy_count_override: Option<usize>,
-    /// Same idea as `enemy_count_override`, for how many obstacle
-    /// structures to place (`src/bin/probe.rs`'s `--obstacles`, for
-    /// stress-testing navigation at a deliberately high, fixed density
-    /// rather than `OBSTACLE_COUNT_MIN..=OBSTACLE_COUNT_MAX`'s random
-    /// range). Not currently wired to a real-game CLI flag in `main.rs` -
-    /// probe-only for now.
-    pub obstacle_count_override: Option<usize>,
+    /// CLI-provided override for the player's chassis (`--tank`, main.rs -
+    /// e.g. `--tank titan`). When `None`, `init` rolls a random row in
+    /// `0..TANK_VARIANTS` as before. Same "set once before the first `init`
+    /// call, persists across round restarts" convention as
+    /// `enemy_count_override` - handy for dev/testing a specific archetype
+    /// (a twin-barrel chassis's two-shell fire, a super-heavy's handling)
+    /// without restarting until it happens to roll.
+    pub player_row_override: Option<i32>,
+    /// The hand-authored/editor-saved battlefield this round's static
+    /// terrain (walls/road/frog/pickup slots) comes from - see
+    /// docs/map-editor-design.md. `main.rs` always sets this before the
+    /// first `init` call: `-m`/`--map` if given, otherwise
+    /// `maps/default.toml`. There is no procedural fallback any more - a
+    /// map is the only source of static terrain. Same "set once, persists
+    /// across round restarts, `init` reads it fresh each time" convention
+    /// as `enemy_count_override`.
+    pub map: MapFile,
+    /// This round's health/ammo pickup spawn slots, from `map`'s `Pickup`
+    /// cells - `init` fills this in from `battlefield::spawn_from_map`'s
+    /// result so `update`'s respawn-over-time logic can keep drawing from
+    /// the same fixed slots. Empty means the map placed no pickup cells, in
+    /// which case the round simply has no pickups - see "Pickups: fixed
+    /// spawn slots" in docs/map-editor-design.md.
+    map_pickup_slots: Vec<(Position, PickupKind)>,
 }
 
 /// scifi_tanks_sheet.png has 12 row-variants, one named archetype per row
@@ -269,6 +294,7 @@ impl Game {
         self.restart_timer = 0.0;
         self.alert_position = None;
         self.alert_timer = 0.0;
+        self.engage_phase = rng.random_range(0.0..std::f32::consts::TAU);
         self.pickup_respawn_timer = 0.0;
         self.shock = None;
         self.muzzle_flashes.clear();
@@ -284,19 +310,21 @@ impl Game {
 
         // --- Player ---
         // row: pick a random hull/turret variant (any of the 12; a mix of
-        // single/twin barrel, including the two super-heavy archetypes).
+        // single/twin barrel, including the two super-heavy archetypes) -
+        // unless `player_row_override` (--tank, main.rs) pins it to one.
         // shell_variant: matched to that chassis (see TANK_SHELL_VARIANT_BY_ROW).
         // damage_variant: this round's damage.png row-variant (see
         // Tank::damage_variant).
-        let row = rng.random_range(0..TANK_VARIANTS);
-        // The player spawns inside the fortress's O, offset from the true
-        // screen center so the "HELLO" sign as a whole reads centered - see
-        // `fortress_center_offset`.
+        let row = self
+            .player_row_override
+            .unwrap_or_else(|| rng.random_range(0..TANK_VARIANTS));
+        // The player always spawns at the exact screen center now that
+        // there's no fortress to spawn inside of.
         let mut tank = Tank {
             row,
             shell_variant: TANK_SHELL_VARIANT_BY_ROW[row as usize],
             damage_variant: rng.random_range(0..DAMAGE_VARIANTS),
-            position: Position::new(width / 2.0 - battlefield::fortress_center_offset(), height / 2.0),
+            position: Position::new(width / 2.0, height / 2.0),
             owner_slot: PLAYER_OWNER_SLOT,
             ..Tank::default()
         };
@@ -317,17 +345,6 @@ impl Game {
         // the world.
         let center = tank.position;
         // Keeps enemies/obstacles off the player's own exact spawn point.
-        // Deliberately *not* also bumped up to cover the fortress as a
-        // whole (an earlier version maxed this against a
-        // furthest-tile-from-`center` radius) - for a word as lopsided as
-        // "HELLO" (the `O` is the *last* letter, so the rest of the word
-        // hangs far off to one side - see `fortress_center_offset`) that
-        // radius ballooned to nearly the size of the whole battlefield,
-        // which starved enemy/obstacle placement almost everywhere instead
-        // of just near the fortress. The precise per-tile checks below
-        // (against every real fortress wall tile) already fully guarantee
-        // fortress clearance on their own; the radius was a redundant,
-        // shape-blind broad-phase check on top of them, not load-bearing.
         let clear = tank.size() * 2.0;
         // Also keep spawned enemies clear of each other - without this, a
         // crowded high-count round can drop two tanks on top of one another,
@@ -336,22 +353,29 @@ impl Game {
         let enemy_clear = tank.size() * 1.5;
         self.player = Some(self.world.spawn((tank,)));
 
-        // --- Player fortress ---
-        // Built right after the player so enemies/regular obstacles (both
-        // spawned below) can be kept clear of it - see `battlefield::spawn_player_fortress`.
+        // --- Map terrain (walls/road/frog/pickup slots) ---
+        // Spawned right after the player and before enemies are placed, so
+        // the enemy-placement clearance check just below (which already
+        // tests every candidate spawn against `obstacle_positions`) makes
+        // enemies avoid the map's walls for free - no separate map-aware
+        // check needed there. See `battlefield::spawn_from_map`'s own doc
+        // comment and docs/map-editor-design.md. `self.map` is always
+        // populated by the time `init` runs (main.rs sets it - `-m`/`--map`
+        // or `maps/default.toml`), so this always runs; there's no
+        // procedural fallback battlefield any more.
         let obstacle_half_extent =
             OBSTACLE_TEXTURE_SIZE * OBSTACLE_SCALE * OBSTACLE_HULL_FRACTION * 0.5;
-        let fortress = battlefield::spawn_player_fortress(
+        let map_spawn = battlefield::spawn_from_map(
             &mut self.physics,
             &mut self.world,
             &mut rng,
-            center,
+            &self.map,
             obstacle_half_extent,
-            width,
-            height,
         );
-        let mut obstacle_positions = fortress.tiles;
-        let fortress_road_cells = fortress.road_cells;
+        let obstacle_positions = map_spawn.obstacle_positions;
+        let map_road_cells = map_spawn.road_cells;
+        let map_frog_pos = map_spawn.frog_pos;
+        self.map_pickup_slots = map_spawn.pickup_slots;
 
         // --- Enemies ---
         // Spawn enemy tanks in a band that's 20%-40% of the shorter screen
@@ -377,15 +401,11 @@ impl Game {
                         .iter()
                         .all(|&p| pos.distance_to(p) >= enemy_clear)
                     // The `clear`-from-`center` check above only guards the
-                    // player's own exact spawn point, not the fortress as a
-                    // whole - that's this per-tile check instead, against
-                    // every real fortress wall tile individually
-                    // (obstacle_positions holds only fortress tiles at this
-                    // point in init). Same per-tile clearance rule
-                    // scatter_obstacles already uses for obstacles vs. the
-                    // fortress (battlefield.rs) - see `clear`'s own comment
-                    // above for why a single bounding-radius check (tried
-                    // first) doesn't work for a word shape this lopsided.
+                    // player's own exact spawn point, not the map's walls as
+                    // a whole - that's this per-tile check instead, against
+                    // every real map wall tile individually
+                    // (obstacle_positions holds every map wall tile by this
+                    // point in init).
                     && obstacle_positions
                         .iter()
                         .all(|&p| pos.distance_to(p) >= enemy_clear + OBSTACLE_CLEAR)
@@ -424,31 +444,6 @@ impl Game {
             self.world.spawn((enemy, Ai::default()));
         }
 
-        // --- Obstacles ---
-        // Static in-arena terrain: scattered after tanks so it can steer
-        // clear of both the player's fixed start and every enemy's rolled
-        // start, instead of tanks needing to dodge obstacles placed first.
-        // See `battlefield::scatter_obstacles` for the placement rules
-        // (structure shapes, per-structure material/variant, the
-        // cross-structure corridor-clearance margin).
-        let structure_count =
-            battlefield::roll_structure_count(&mut rng, self.obstacle_count_override);
-        battlefield::scatter_obstacles(
-            &mut self.physics,
-            &mut self.world,
-            &mut rng,
-            width,
-            height,
-            margin_min,
-            obstacle_half_extent,
-            center,
-            clear,
-            &enemy_positions,
-            enemy_clear,
-            &mut obstacle_positions,
-            structure_count,
-        );
-
         // Now that every obstacle for the round is down, catch any enemy
         // whose rolled spawn point ended up fully boxed in by the
         // *cumulative* effect of several individually-fine obstacle
@@ -466,21 +461,27 @@ impl Game {
             .collect();
 
         // --- Frog (protect-objective) ---
-        // Placed near the player's fortress (FROG_SPAWN_MIN_DIST/MAX_DIST
-        // from `center`) rather than anywhere on the map, so defending it
-        // and defending the player's own start are the same early fight
-        // instead of two unrelated ones. Spawned after obstacles so
-        // `obstacle_positions` already holds every fortress + scattered-
-        // structure tile to steer clear of; reuses the same rejection-
-        // sampling `sample_clear_position` the enemy loop above uses.
+        // A map-placed frog cell (see `MapSpawn::frog_pos`) wins outright -
+        // it's a deliberate placement, not sampled/rejection-checked. A map
+        // with no frog cell at all falls back to a random roll near the
+        // player's spawn (FROG_SPAWN_MIN_DIST/MAX_DIST from `center`), so
+        // defending it and defending the player's own start are still the
+        // same early fight instead of two unrelated ones - every round
+        // needs exactly one live frog for the protect-objective mechanic to
+        // mean anything. Spawned after obstacles so `obstacle_positions`
+        // already holds every map wall tile to steer clear of; reuses the
+        // same rejection-sampling `sample_clear_position` the enemy loop
+        // above uses.
         let frog_clear =
             FROG_COLLIDER_HALF_EXTENT.0.max(FROG_COLLIDER_HALF_EXTENT.1) + OBSTACLE_CLEAR;
-        let frog_pos = battlefield::sample_clear_position(&mut rng, width, height, margin_min, |pos| {
-            let dist = pos.distance_to(center);
-            dist >= FROG_SPAWN_MIN_DIST
-                && dist <= FROG_SPAWN_MAX_DIST
-                && enemy_positions.iter().all(|&p| pos.distance_to(p) >= enemy_clear)
-                && obstacle_positions.iter().all(|&p| pos.distance_to(p) >= frog_clear)
+        let frog_pos = map_frog_pos.unwrap_or_else(|| {
+            battlefield::sample_clear_position(&mut rng, width, height, margin_min, |pos| {
+                let dist = pos.distance_to(center);
+                dist >= FROG_SPAWN_MIN_DIST
+                    && dist <= FROG_SPAWN_MAX_DIST
+                    && enemy_positions.iter().all(|&p| pos.distance_to(p) >= enemy_clear)
+                    && obstacle_positions.iter().all(|&p| pos.distance_to(p) >= frog_clear)
+            })
         });
         let frog_body = self.physics.spawn_static(
             frog_pos,
@@ -490,6 +491,7 @@ impl Game {
             position: frog_pos,
             health: FROG_MAX_HEALTH,
             max_health: FROG_MAX_HEALTH,
+            variant: rng.random_range(0..crate::frog::FROG_VARIANT_DIRS.len() as i32),
             body: frog_body,
             hurt_timer: 0.0,
             hit_flash_timer: 0.0,
@@ -503,29 +505,29 @@ impl Game {
         },)));
 
         // --- Pickups (health/ammo) ---
-        // One per corner at round start (PICKUP_COUNT); `Game::update` tops
-        // this back up over time as pickups are collected, via this same
-        // function (see `spawn_pickup`'s own doc comment). Placed after the
-        // frog so pickups steer clear of it too, same "clear of whatever's
-        // already down" order obstacles/frog themselves follow - and after
-        // every fortress/scattered-obstacle tile, all of which are already
-        // `Obstacle` entities in `self.world` by now, so `spawn_pickup`'s
-        // own live query picks up fortress clearance for free without
-        // needing `center`/`clear` passed in separately the way the frog's
-        // placement above does.
-        for _ in 0..PICKUP_COUNT {
-            spawn_pickup(&mut self.world, &mut rng, width, height);
+        // The map's own `Pickup` cells *are* the pickup slots - every one
+        // spawns immediately, subject to the same clearance check
+        // `spawn_pickup_at` always applies (a slot placed on top of a wall
+        // is simply skipped). There's no random-placement fallback any
+        // more: a map with no pickup cells just has no pickups this round.
+        // `self.map_pickup_slots` (set above, from `map_spawn`) is kept for
+        // the rest of the round so `update`'s top-up respawn keeps drawing
+        // from these same fixed slots - see "Pickups: fixed spawn slots" in
+        // docs/map-editor-design.md. Placed after the frog so pickups steer
+        // clear of it too, same "clear of whatever's already down" order
+        // obstacles/frog themselves follow.
+        for &(pos, kind) in &self.map_pickup_slots {
+            spawn_pickup_at(&mut self.world, pos, kind);
         }
 
         // --- Ground ---
-        // Built last, once every wall/brick object for the round (fortress +
-        // scattered structures, all folded into `obstacle_positions` by now)
-        // and the fortress's own B/O interior cells are known - grass
-        // everywhere, road painted under each of those and nowhere else. See
-        // `ground::build`.
+        // Built last, once every wall for the round (all folded into
+        // `obstacle_positions` by now) is known - grass everywhere, road
+        // painted under each of those, under the map's own explicit road
+        // cells, and nowhere else. See `ground::build`.
         let mut road_cells = obstacle_positions;
-        road_cells.extend(fortress_road_cells);
-        self.ground = crate::ground::build(width, height, &mut rng, &road_cells);
+        road_cells.extend(map_road_cells);
+        self.ground = crate::ground::build(width, height, rng.random(), &road_cells);
     }
 
     /// Step the simulation one frame. `input` is this frame's player
@@ -677,10 +679,18 @@ impl Game {
                 }
                 if let Some((target, _)) = nearest {
                     let dmg = rng.random_range(FROG_ATTACK_DAMAGE_MIN..FROG_ATTACK_DAMAGE_MAX);
+                    // The frog is a hazard, not a fair fight - never let its bite be
+                    // the killing blow on the player (enemies remain fully vulnerable
+                    // to it), so cap the player's damage just short of wreck.
+                    let damage_cap = if target == player {
+                        MAX_DAMAGE - 1.0
+                    } else {
+                        MAX_DAMAGE
+                    };
                     let (became_wreck, victim_pos) = {
                         let mut q = self.world.query_one::<&mut Tank>(target);
                         let tank = q.get().expect("attack target should always have a Tank");
-                        tank.damage = (tank.damage + dmg).min(MAX_DAMAGE);
+                        tank.damage = (tank.damage + dmg).min(damage_cap);
                         tank.mark_hit();
                         (tank.is_wreck(), tank.position)
                     };
@@ -778,23 +788,22 @@ impl Game {
                 let tank = q.get().expect("collector entity always has a Tank");
                 match kind {
                     PickupKind::Health => tank.damage = (tank.damage - PICKUP_HEAL_AMOUNT).max(0.0),
-                    PickupKind::Ammo => {
-                        tank.shells_ammo = (tank.shells_ammo + PICKUP_AMMO_AMOUNT).min(SHELLS_HARD_CAP)
-                    }
+                    PickupKind::Ammo => tank.shells_ammo += PICKUP_AMMO_AMOUNT,
                 }
                 drop(q);
                 self.world.despawn(pickup_entity).ok();
             }
 
-            // Top back up to PICKUP_COUNT after a delay, once collection (or,
-            // at round start before the very first spawn_pickup calls in
-            // `init`, never - this only ever runs once `update` is already
-            // ticking) drops the live count below it. Not tied to *which*
-            // corner just emptied, just "how many are live right now".
-            if self.world.query::<&Pickup>().iter().count() < PICKUP_COUNT {
+            // Top back up to however many slots the map placed
+            // (`map_pickup_slots.len()`) after a delay, once collection
+            // drops the live count below it. Not tied to *which* slot just
+            // emptied, just "how many are live right now" - a map with no
+            // pickup slots at all trivially never triggers this (0 < 0 is
+            // false), so the timer just sits idle for the whole round.
+            if self.world.query::<&Pickup>().iter().count() < self.map_pickup_slots.len() {
                 self.pickup_respawn_timer -= dt;
                 if self.pickup_respawn_timer <= 0.0 {
-                    spawn_pickup(&mut self.world, &mut rng, width, height);
+                    respawn_from_slots(&mut self.world, &mut rng, &self.map_pickup_slots);
                     self.pickup_respawn_timer = PICKUP_RESPAWN_SECONDS;
                 }
             } else {
@@ -818,31 +827,62 @@ impl Game {
             // movement and collision (walls, tank-vs-tank blocking) happen below
             // when the physics world steps - not here.
             drive_tank(&mut self.physics, player_tank, player_intent, dt);
-            if player_intent.fire && player_tank.shells_ammo >= 1 && player_tank.fire_cooldown <= 0.0 {
-                player_tank.shells_ammo -= 1;
-                player_tank.fire_cooldown = PLAYER_FIRE_INTERVAL;
-                // Alternate simultaneous/staggered twin shell art shot-to-shot
-                // (no-op for single-barrel chassis - see Tank::alternate_shot).
-                player_tank.shell_variant = if player_tank.alternate_shot {
-                    TANK_SHELL_VARIANT_STAGGERED_BY_ROW[player_tank.row as usize]
+
+            // Resolve a twin-barrel chassis's queued second shell before
+            // handling any *new* fire input below - see Tank::pending_shot.
+            // Runs every frame regardless of `player_intent.fire` so the
+            // second shell still lands even if the player doesn't hold fire.
+            if let Some(mut pending) = player_tank.pending_shot {
+                pending.timer -= dt;
+                if pending.timer <= 0.0 {
+                    fire_shell(
+                        &mut self.physics,
+                        &mut self.muzzle_flashes,
+                        &mut rng,
+                        &mut pending_shells,
+                        player_tank,
+                        Owner::Player,
+                        pending.aim_offset,
+                        pending.lateral_offset,
+                    );
+                    player_tank.pending_shot = None;
                 } else {
-                    TANK_SHELL_VARIANT_BY_ROW[player_tank.row as usize]
-                };
-                player_tank.alternate_shot = !player_tank.alternate_shot;
-                // The player always fires straight down the barrel.
-                let mut shell = Shell::spawn(player_tank, Owner::Player, 0.0);
-                shell.body = Some(self.physics.spawn_shell(
-                    shell.position,
-                    SHELL_HIT_HALF_EXTENT,
-                    physics::owner_group(PLAYER_OWNER_SLOT),
-                ));
-                shell.shadow_offset =
-                    rng.random_range(SHELL_SHADOW_OFFSET_MIN..SHELL_SHADOW_OFFSET_MAX);
-                self.muzzle_flashes.push(Shockwave {
-                    center: shell.position,
-                    time: 0.0,
-                });
-                pending_shells.push(shell);
+                    player_tank.pending_shot = Some(pending);
+                }
+            }
+
+            // Twin-barrel chassis (nonzero TANK_BARREL_LATERAL_OFFSET_BY_ROW)
+            // fire two independent shells - one now, one
+            // TANK_TWIN_SHOT_DELAY_SECONDS later via `pending_shot` above -
+            // so a shot costs 2 ammo instead of 1.
+            let lateral = TANK_BARREL_LATERAL_OFFSET_BY_ROW[player_tank.row as usize];
+            let ammo_cost = if lateral > 0.0 { 2 } else { 1 };
+            if player_intent.fire
+                && player_tank.shells_ammo >= ammo_cost
+                && player_tank.fire_cooldown <= 0.0
+            {
+                player_tank.shells_ammo -= ammo_cost;
+                player_tank.fire_cooldown = PLAYER_FIRE_INTERVAL;
+                // The player always fires straight down the barrel. First
+                // shell from the left barrel (negative lateral offset, or
+                // dead center for a single-barrel chassis).
+                fire_shell(
+                    &mut self.physics,
+                    &mut self.muzzle_flashes,
+                    &mut rng,
+                    &mut pending_shells,
+                    player_tank,
+                    Owner::Player,
+                    0.0,
+                    -lateral,
+                );
+                if lateral > 0.0 {
+                    player_tank.pending_shot = Some(PendingShot {
+                        timer: TANK_TWIN_SHOT_DELAY_SECONDS,
+                        aim_offset: 0.0,
+                        lateral_offset: lateral,
+                    });
+                }
             }
         }
 
@@ -911,6 +951,55 @@ impl Game {
         }
         let alert = self.alert_position.filter(|_| self.alert_timer > 0.0);
 
+        // Engagement slots: give every enemy currently within
+        // ENEMY_VIEW_RANGE of the player a distinct point on a ring around
+        // them (see ENGAGE_RING_RADIUS's doc comment for why - this is what
+        // stops act_chase/act_attack from sending a whole group of enemies
+        // at the player's exact position and piling up). Sorted by `Entity`
+        // (which orders by id then generation - stable across frames for
+        // any tank that hasn't respawned) rather than `enemy_indices`'
+        // HashMap iteration order, so slot assignment doesn't shuffle
+        // frame-to-frame on its own; a tank's slot number can still shift
+        // when an earlier-sorted tank dies, but that's a rare, one-off
+        // retarget that the normal steer_toward commitment hysteresis
+        // absorbs, not a per-frame jitter source. Skipped entirely (empty
+        // map, so every enemy falls back to the raw player position) once
+        // the player is dead or only one enemy is engaged - nobody to
+        // spread out from.
+        let mut engaged: Vec<Entity> = enemy_indices
+            .iter()
+            .filter(|&(_, &idx)| movers[idx].position.distance_to(player_pos) <= ENEMY_VIEW_RANGE)
+            .map(|(&entity, _)| entity)
+            .collect();
+        engaged.sort();
+        let mut engage_targets: HashMap<Entity, Position> = HashMap::new();
+        if player_alive && engaged.len() >= 2 {
+            let slot_count = engaged.len() as f32;
+            for (slot, &entity) in engaged.iter().enumerate() {
+                let theta =
+                    self.engage_phase + slot as f32 * std::f32::consts::TAU / slot_count;
+                engage_targets.insert(
+                    entity,
+                    Position::new(
+                        player_pos.x + ENGAGE_RING_RADIUS * theta.cos(),
+                        player_pos.y + ENGAGE_RING_RADIUS * theta.sin(),
+                    ),
+                );
+            }
+        }
+
+        // Every pickup currently on the field, for `Ai::think`'s
+        // `pickups` parameter - see `ai::Brain::nearest_pickup`, used by
+        // act_flee/act_retreat so a hurting or ammo-starved enemy heads for
+        // one instead of just running blind. Small (one per map pickup
+        // slot), so a fresh snapshot every frame is cheap.
+        let pickups: Vec<(PickupKind, Position)> = self
+            .world
+            .query::<&Pickup>()
+            .iter()
+            .map(|p| (p.kind, p.position))
+            .collect();
+
         for (entity, tank, ai) in self.world.query::<(Entity, &mut Tank, &mut Ai)>().iter() {
             let my_index = enemy_indices[&entity];
             // `Ai::think`'s targeting reads the player's tank; grabbed via a
@@ -931,6 +1020,7 @@ impl Game {
                     (v.x * v.x + v.y * v.y).sqrt()
                 })
                 .unwrap_or(0.0);
+            let engage_target = engage_targets.get(&entity).copied();
             let intent = with_tank(&self.world, player, |player_tank| {
                 ai.think(
                     tank,
@@ -944,34 +1034,65 @@ impl Game {
                     &grid,
                     &mut rng,
                     alert,
+                    engage_target,
+                    &pickups,
                 )
             });
             drive_tank(&mut self.physics, tank, intent, dt);
-            if intent.fire && tank.shells_ammo >= 1 {
-                tank.shells_ammo -= 1;
-                // Alternate simultaneous/staggered twin shell art shot-to-shot
-                // (no-op for single-barrel chassis - see Tank::alternate_shot).
-                tank.shell_variant = if tank.alternate_shot {
-                    TANK_SHELL_VARIANT_STAGGERED_BY_ROW[tank.row as usize]
+
+            // Resolve a twin-barrel chassis's queued second shell before
+            // handling any *new* fire decision below - see
+            // Tank::pending_shot. Runs every frame regardless of
+            // `intent.fire` so the second shell still lands even if this
+            // enemy's AI has moved on to a different action by then.
+            if let Some(mut pending) = tank.pending_shot {
+                pending.timer -= dt;
+                if pending.timer <= 0.0 {
+                    fire_shell(
+                        &mut self.physics,
+                        &mut self.muzzle_flashes,
+                        &mut rng,
+                        &mut pending_shells,
+                        tank,
+                        Owner::Enemy(tank.owner_slot - 1),
+                        pending.aim_offset,
+                        pending.lateral_offset,
+                    );
+                    tank.pending_shot = None;
                 } else {
-                    TANK_SHELL_VARIANT_BY_ROW[tank.row as usize]
-                };
-                tank.alternate_shot = !tank.alternate_shot;
-                // Point-blank shots may be thrown off-aim (see roll_misfire).
-                let mut shell =
-                    Shell::spawn(tank, Owner::Enemy(tank.owner_slot), intent.fire_aim_offset);
-                shell.body = Some(self.physics.spawn_shell(
-                    shell.position,
-                    SHELL_HIT_HALF_EXTENT,
-                    physics::owner_group(tank.owner_slot),
-                ));
-                shell.shadow_offset =
-                    rng.random_range(SHELL_SHADOW_OFFSET_MIN..SHELL_SHADOW_OFFSET_MAX);
-                self.muzzle_flashes.push(Shockwave {
-                    center: shell.position,
-                    time: 0.0,
-                });
-                pending_shells.push(shell);
+                    tank.pending_shot = Some(pending);
+                }
+            }
+
+            // Twin-barrel chassis (nonzero TANK_BARREL_LATERAL_OFFSET_BY_ROW)
+            // fire two independent shells - one now, one
+            // TANK_TWIN_SHOT_DELAY_SECONDS later via `pending_shot` above -
+            // so a shot costs 2 ammo instead of 1.
+            let lateral = TANK_BARREL_LATERAL_OFFSET_BY_ROW[tank.row as usize];
+            let ammo_cost = if lateral > 0.0 { 2 } else { 1 };
+            if intent.fire && tank.shells_ammo >= ammo_cost {
+                tank.shells_ammo -= ammo_cost;
+                // Point-blank shots may be thrown off-aim (see roll_misfire);
+                // both barrels of a twin volley share the same misfire skew.
+                // First shell from the left barrel (negative lateral offset,
+                // or dead center for a single-barrel chassis).
+                fire_shell(
+                    &mut self.physics,
+                    &mut self.muzzle_flashes,
+                    &mut rng,
+                    &mut pending_shells,
+                    tank,
+                    Owner::Enemy(tank.owner_slot - 1),
+                    intent.fire_aim_offset,
+                    -lateral,
+                );
+                if lateral > 0.0 {
+                    tank.pending_shot = Some(PendingShot {
+                        timer: TANK_TWIN_SHOT_DELAY_SECONDS,
+                        aim_offset: intent.fire_aim_offset,
+                        lateral_offset: lateral,
+                    });
+                }
             }
         }
         // Now safe to actually insert this frame's shots - no tank/Ai query
@@ -1165,6 +1286,10 @@ impl Game {
                 .body
                 .expect("shell should always have a physics body once spawned");
             let shell_collider = self.physics.collider_of(shell_handle);
+            // This frame's movement segment, for the swept fallback check
+            // below - same "position minus this frame's displacement" the
+            // shell-vs-shell closest-approach check above already uses.
+            let shell_prev = shell.position - shell.velocity * dt;
             let (base_dmg_min, base_dmg_max) = if shell.owner == Owner::Player {
                 (PLAYER_DAMAGE_MIN, PLAYER_DAMAGE_MAX)
             } else {
@@ -1178,9 +1303,18 @@ impl Game {
             let dmg_min = base_dmg_min * chassis_factor;
             let dmg_max = base_dmg_max * chassis_factor;
 
-            let Some(target) =
-                find_shell_target(&self.world, &self.physics, player, &walls, shell_collider)
-            else {
+            let Some(target) = find_shell_target(
+                &self.world,
+                &self.physics,
+                player,
+                &walls,
+                shell_collider,
+                owner_slot(shell.owner),
+                shell_prev,
+                shell.position,
+                width,
+                height,
+            ) else {
                 continue;
             };
 
@@ -1210,17 +1344,32 @@ impl Game {
                     }
                 }
                 ShellTarget::EnemyTank(entity) => {
-                    let mut q = self.world.query_one::<&mut Tank>(entity);
-                    let tank = q.get().expect("shell target entity always has a Tank");
-                    if !tank.is_wreck() {
-                        let dmg = rng.random_range(dmg_min..dmg_max);
-                        tank.damage = (tank.damage + dmg).min(MAX_DAMAGE);
-                        tank.mark_hit();
+                    let survived_hit = {
+                        let mut q = self.world.query_one::<&mut Tank>(entity);
+                        let tank = q.get().expect("shell target entity always has a Tank");
                         if tank.is_wreck() {
-                            kills.push((tank.position, true));
+                            false
                         } else {
-                            shell_impact(tank, shell, &mut self.physics);
+                            let dmg = rng.random_range(dmg_min..dmg_max);
+                            tank.damage = (tank.damage + dmg).min(MAX_DAMAGE);
+                            tank.mark_hit();
+                            if tank.is_wreck() {
+                                kills.push((tank.position, true));
+                                false
+                            } else {
+                                shell_impact(tank, shell, &mut self.physics);
+                                true
+                            }
                         }
+                    };
+                    // Getting shot is itself a reason to fight back, even
+                    // from outside this tank's normal view range - see
+                    // `Ai::notify_hit`'s own doc comment.
+                    if survived_hit {
+                        let mut ai_q = self.world.query_one::<&mut Ai>(entity);
+                        ai_q.get()
+                            .expect("enemy tank shell targets always have an Ai component")
+                            .notify_hit();
                     }
                 }
                 ShellTarget::Frog(entity) => {
@@ -1403,6 +1552,20 @@ impl Game {
                 rng,
                 kills,
             );
+        }
+        // A dying tank's blast doesn't stop at flesh and steel - any
+        // obstacle caught in it cracks a little too, same falloff as the
+        // tank damage above, no side-restriction (an explosion doesn't
+        // check whose wall it's near). A destroyed tile is picked up by the
+        // same generic `destroyed_obstacles` sweep the shell-hit path
+        // already relies on, later this same frame - no separate handling
+        // needed here. Deliberately not extended to the frog: it's a loss
+        // condition (see `Outcome::Lost` above), so making it vulnerable to
+        // incidental splash damage - rather than only a direct hit - is a
+        // real balance call, not just "more things react to explosions",
+        // and wasn't part of what was asked for here.
+        for obstacle in self.world.query::<&mut Obstacle>().iter() {
+            explosion_hit_obstacle(obstacle, center, rng);
         }
     }
 
@@ -1597,6 +1760,40 @@ fn drive_tank(physics: &mut Physics, tank: &mut Tank, intent: Intent, dt: f32) {
     );
 }
 
+/// Spawns one shell from `tank` and wires up everything a shot needs beyond
+/// the `Shell` struct itself: its physics sensor, a rolled drop-shadow
+/// offset, and a muzzle-flash shockwave. Shared by the player's and every
+/// enemy's fire handling in `update`, and by both shells of a twin-barrel
+/// volley (see `Tank::pending_shot`) - a free function for the same borrow-
+/// splitting reason as `drive_tank` (needs `physics`/`muzzle_flashes`/`rng`
+/// independently of the rest of `self`, which is mid-query at every call
+/// site). `lateral_offset` is passed straight through to `Shell::spawn` -
+/// zero for a single-barrel shot, nonzero for one barrel of a twin volley.
+#[allow(clippy::too_many_arguments)] // plumbing borrows split off of `self`, not real complexity
+fn fire_shell(
+    physics: &mut Physics,
+    muzzle_flashes: &mut Vec<Shockwave>,
+    rng: &mut rand::rngs::ThreadRng,
+    pending_shells: &mut Vec<Shell>,
+    tank: &Tank,
+    owner: Owner,
+    aim_offset: f32,
+    lateral_offset: f32,
+) {
+    let mut shell = Shell::spawn(tank, owner, aim_offset, lateral_offset);
+    shell.body = Some(physics.spawn_shell(
+        shell.position,
+        SHELL_HIT_HALF_EXTENT,
+        physics::owner_group(tank.owner_slot),
+    ));
+    shell.shadow_offset = rng.random_range(SHELL_SHADOW_OFFSET_MIN..SHELL_SHADOW_OFFSET_MAX);
+    muzzle_flashes.push(Shockwave {
+        center: shell.position,
+        time: 0.0,
+    });
+    pending_shells.push(shell);
+}
+
 /// Read a tank's position back from its physics body after the world steps.
 /// A free function for the same borrow-splitting reason as `drive_tank`.
 fn sync_tank_from_physics(physics: &Physics, tank: &mut Tank) {
@@ -1643,12 +1840,21 @@ enum ShellTarget {
 /// same `Physics::intersecting` check as everything else. The frog is
 /// checked ahead of obstacles for the same "living things before terrain"
 /// reasoning that already puts tanks first.
+///
+/// This is an end-of-frame *position* check only - see `swept_shell_target`
+/// below for the fallback that catches what this one structurally can't.
+#[allow(clippy::too_many_arguments)]
 fn find_shell_target(
     world: &hecs::World,
     physics: &Physics,
     player: Entity,
     walls: &[ColliderHandle; 4],
     shell_collider: ColliderHandle,
+    shooter_slot: usize,
+    shell_prev: Position,
+    shell_new: Position,
+    width: f32,
+    height: f32,
 ) -> Option<ShellTarget> {
     let player_sensor = with_tank(world, player, |t| {
         t.hit_sensor
@@ -1687,7 +1893,315 @@ fn find_shell_target(
         }
     }
 
-    None
+    // The physics-sensor check above only ever samples where the shell
+    // *ended up* this frame - it can't see anything it passed through on
+    // the way there. At SHELL_SPEED a shell's normal per-frame movement
+    // (~8px at 60fps) is comfortably smaller than anything it can hit, but
+    // a frame-time hitch (a stutter/lag spike, or a slow debug build under
+    // load) can make one frame's `dt` big enough for the shell to jump
+    // clean over a thin obstacle - most visibly Glass, the fastest-dying
+    // material (OBSTACLE_GLASS_MAX_HEALTH) - without its position ever
+    // overlapping the collider at a frame boundary. `Physics::spawn_shell`'s
+    // own doc comment already flagged this as a latent gap needing "a real
+    // swept/segment test" - this is that test, done in plain geometry
+    // rather than through rapier (matching the shell-vs-shell
+    // closest-approach check above, which solves the exact same tunneling
+    // problem for two shells meeting head-on). `shooter_slot` mirrors the
+    // physics collision-group self-exclusion `find_shell_target`'s primary
+    // check gets for free (see `physics::owner_group`) - this fallback
+    // knows nothing about physics groups, so it has to skip the shooter's
+    // own tank explicitly instead.
+    swept_shell_target(world, player, shooter_slot, shell_prev, shell_new, width, height)
+}
+
+/// Pure-geometry swept fallback for `find_shell_target` - see that
+/// function's doc comment for why it exists. Checks whether the shell's
+/// entire movement segment this frame (`p0` to `p1`), not just its
+/// endpoint, ever came within `SHELL_HIT_HALF_EXTENT` of each candidate's
+/// own hitbox, via `segment_hits_aabb`.
+///
+/// Unlike the primary end-of-frame check above - where at most one target
+/// can ever contain a single point, since obstacles/tanks never overlap
+/// each other - a long enough segment (an unusually large `dt`, or just a
+/// long unobstructed lane on a bigger battlefield) can legitimately cross
+/// *several* candidates in one frame. Stopping at the first one found in
+/// hecs's (arbitrary, insertion-order) query iteration would let a shell
+/// "hit" something it should never have reached, skipping right over
+/// whatever it actually would have struck first - which looks exactly like
+/// this function's whole reason for existing (a shell sailing through an
+/// obstacle) rather than fixing it. So every candidate whose hitbox the
+/// segment enters is scored by its own entry time (`segment_hits_aabb`'s
+/// returned `t`, 0..1 along `p0..p1`) and the *nearest* one wins; the
+/// original player > enemies > frog > obstacles > walls order only breaks
+/// an exact tie.
+fn swept_shell_target(
+    world: &hecs::World,
+    player: Entity,
+    shooter_slot: usize,
+    p0: Position,
+    p1: Position,
+    width: f32,
+    height: f32,
+) -> Option<ShellTarget> {
+    let shell_half = Position::new(SHELL_HIT_HALF_EXTENT, SHELL_HIT_HALF_EXTENT);
+    let mut best: Option<(f32, u8, ShellTarget)> = None;
+
+    let (player_pos, player_slot, player_half) = with_tank(world, player, |t| {
+        let half = t.size() * 0.5;
+        (t.position, t.owner_slot, Position::new(half, half))
+    });
+    if player_slot != shooter_slot {
+        consider_hit(
+            &mut best,
+            segment_hits_aabb(p0, p1, player_pos, player_half + shell_half),
+            0,
+            ShellTarget::PlayerTank,
+        );
+    }
+
+    for (entity, tank) in world.query::<(Entity, &Tank)>().with::<&Ai>().iter() {
+        if tank.owner_slot == shooter_slot {
+            continue;
+        }
+        let half = tank.size() * 0.5;
+        let half = Position::new(half, half);
+        consider_hit(
+            &mut best,
+            segment_hits_aabb(p0, p1, tank.position, half + shell_half),
+            1,
+            ShellTarget::EnemyTank(entity),
+        );
+    }
+
+    for (entity, frog) in world.query::<(Entity, &Frog)>().iter() {
+        let half = Position::new(FROG_COLLIDER_HALF_EXTENT.0, FROG_COLLIDER_HALF_EXTENT.1);
+        consider_hit(
+            &mut best,
+            segment_hits_aabb(p0, p1, frog.position, half + shell_half),
+            2,
+            ShellTarget::Frog(entity),
+        );
+    }
+
+    // Same neighbor-widened half-extent `battlefield::tile_hull_half_extent`
+    // bakes into each tile's *physics* collider at spawn time (closing the
+    // inter-tile seam a structure's own OBSTACLE_HULL_FRACTION-shrunk tiles
+    // would otherwise leave - see that function's doc comment), recomputed
+    // here from the current obstacle layout so this fallback's geometry
+    // never disagrees with what the primary physics check actually stops a
+    // shell on.
+    let obstacle_cells: HashSet<(i32, i32)> = world
+        .query::<&Obstacle>()
+        .iter()
+        .map(|o| battlefield::pos_to_cell(o.position))
+        .collect();
+    for (entity, obstacle) in world.query::<(Entity, &Obstacle)>().iter() {
+        let base = obstacle.hull_size() * 0.5;
+        let (gx, gy) = battlefield::pos_to_cell(obstacle.position);
+        let half = battlefield::tile_hull_half_extent(&obstacle_cells, gx, gy, base);
+        consider_hit(
+            &mut best,
+            segment_hits_aabb(p0, p1, obstacle.position, half + shell_half),
+            3,
+            ShellTarget::Obstacle(entity),
+        );
+    }
+
+    // Same four boundary rectangles as `battlefield::spawn_walls` builds -
+    // duplicated here rather than threaded through as extra state, since
+    // it's just `width`/`height`/`WALL_THICKNESS` arithmetic either way.
+    let t = WALL_THICKNESS;
+    let wall_rects = [
+        (
+            Position::new(-t * 0.5, height * 0.5),
+            Position::new(t * 0.5, height * 0.5 + t),
+        ),
+        (
+            Position::new(width + t * 0.5, height * 0.5),
+            Position::new(t * 0.5, height * 0.5 + t),
+        ),
+        (
+            Position::new(width * 0.5, -t * 0.5),
+            Position::new(width * 0.5 + t, t * 0.5),
+        ),
+        (
+            Position::new(width * 0.5, height + t * 0.5),
+            Position::new(width * 0.5 + t, t * 0.5),
+        ),
+    ];
+    for (center, half) in wall_rects {
+        consider_hit(
+            &mut best,
+            segment_hits_aabb(p0, p1, center, half + shell_half),
+            4,
+            ShellTarget::Wall,
+        );
+    }
+
+    best.map(|(_, _, target)| target)
+}
+
+/// Keep `*best` as whichever candidate has the smallest entry time seen so
+/// far (ties broken by `rank`, ascending) - see `swept_shell_target`'s doc
+/// comment. `hit` is `segment_hits_aabb`'s result: `None` if this
+/// particular candidate wasn't on the segment at all.
+fn consider_hit(best: &mut Option<(f32, u8, ShellTarget)>, hit: Option<f32>, rank: u8, target: ShellTarget) {
+    let Some(t) = hit else { return };
+    let better = match best {
+        None => true,
+        Some((best_t, best_rank, _)) => (t, rank) < (*best_t, *best_rank),
+    };
+    if better {
+        *best = Some((t, rank, target));
+    }
+}
+
+/// Who fired a shell, as the physics collision-group slot `Physics::owner_group`
+/// uses for that same tank's hit sensor (slot 0 = player, slot `idx + 1` =
+/// `Owner::Enemy(idx)`) - see that function's own doc comment. Used only by
+/// `swept_shell_target`'s manual self-exclusion, since that fallback never
+/// touches physics collision groups at all.
+fn owner_slot(owner: Owner) -> usize {
+    match owner {
+        Owner::Player => PLAYER_OWNER_SLOT,
+        Owner::Enemy(idx) => idx + 1,
+    }
+}
+
+/// If the line segment from `p0` to `p1` ever passes through the
+/// axis-aligned box centered at `center` with half-extents `half`, returns
+/// the parametric time `t` (`0..=1` along `p0..p1`) it first enters the box
+/// - `None` if it never does. The classic slab method (clip the segment's
+/// parametric range against each axis's slab in turn); `t_enter` starts
+/// clamped at `0.0` rather than unbounded, so a segment that starts already
+/// inside the box correctly reports `t = 0.0` (an immediate hit) instead of
+/// a negative "entered before the segment began." Degenerates cleanly to a
+/// plain point-in-box test when `p0 == p1` (a stationary or barely-moving
+/// shell), since a zero-length segment's parametric range collapses to a
+/// single point. See `swept_shell_target`'s own doc comment both for why
+/// this exists instead of a discrete end-of-frame overlap check, and for
+/// why the caller needs the entry time rather than a plain bool.
+fn segment_hits_aabb(p0: Position, p1: Position, center: Position, half: Position) -> Option<f32> {
+    let d = Position::new(p1.x - p0.x, p1.y - p0.y);
+    let mut t_enter = 0.0f32;
+    let mut t_exit = 1.0f32;
+    for axis in 0..2 {
+        let (p0a, da, min_b, max_b) = if axis == 0 {
+            (p0.x, d.x, center.x - half.x, center.x + half.x)
+        } else {
+            (p0.y, d.y, center.y - half.y, center.y + half.y)
+        };
+        if da.abs() < f32::EPSILON {
+            if p0a < min_b || p0a > max_b {
+                return None;
+            }
+        } else {
+            let inv_d = 1.0 / da;
+            let (mut t1, mut t2) = ((min_b - p0a) * inv_d, (max_b - p0a) * inv_d);
+            if t1 > t2 {
+                std::mem::swap(&mut t1, &mut t2);
+            }
+            t_enter = t_enter.max(t1);
+            t_exit = t_exit.min(t2);
+            if t_enter > t_exit {
+                return None;
+            }
+        }
+    }
+    Some(t_enter)
+}
+
+#[cfg(test)]
+mod shell_sweep_tests {
+    use super::*;
+
+    #[test]
+    fn stationary_point_inside_box_hits() {
+        let p = Position::new(5.0, 5.0);
+        assert_eq!(
+            segment_hits_aabb(p, p, Position::new(0.0, 0.0), Position::new(10.0, 10.0)),
+            Some(0.0)
+        );
+    }
+
+    #[test]
+    fn stationary_point_outside_box_misses() {
+        let p = Position::new(50.0, 50.0);
+        assert_eq!(
+            segment_hits_aabb(p, p, Position::new(0.0, 0.0), Position::new(10.0, 10.0)),
+            None
+        );
+    }
+
+    #[test]
+    fn fast_pass_through_a_thin_box_is_still_caught() {
+        // A shell jumping from well left of a 24px-wide obstacle to well
+        // right of it in a single (hitch-sized) step - the exact tunneling
+        // case an end-of-frame-only point check misses.
+        let p0 = Position::new(-100.0, 0.0);
+        let p1 = Position::new(100.0, 0.0);
+        assert!(segment_hits_aabb(p0, p1, Position::new(0.0, 0.0), Position::new(12.0, 12.0)).is_some());
+    }
+
+    #[test]
+    fn segment_that_never_comes_close_misses() {
+        let p0 = Position::new(-100.0, 500.0);
+        let p1 = Position::new(100.0, 500.0);
+        assert_eq!(
+            segment_hits_aabb(p0, p1, Position::new(0.0, 0.0), Position::new(12.0, 12.0)),
+            None
+        );
+    }
+
+    #[test]
+    fn diagonal_segment_clipping_a_corner_hits() {
+        let p0 = Position::new(-20.0, -20.0);
+        let p1 = Position::new(20.0, 20.0);
+        assert!(segment_hits_aabb(p0, p1, Position::new(15.0, 15.0), Position::new(3.0, 3.0)).is_some());
+    }
+
+    #[test]
+    fn parallel_segment_outside_the_slab_misses() {
+        // Moves only along X, well outside the box's Y slab - the
+        // zero-movement axis-parallel branch must reject this, not divide
+        // by zero and false-positive.
+        let p0 = Position::new(-100.0, 100.0);
+        let p1 = Position::new(100.0, 100.0);
+        assert_eq!(
+            segment_hits_aabb(p0, p1, Position::new(0.0, 0.0), Position::new(12.0, 12.0)),
+            None
+        );
+    }
+
+    #[test]
+    fn entry_time_orders_two_boxes_on_the_same_segment_by_distance() {
+        // A long segment crossing two separate, non-overlapping boxes -
+        // the nearer one (smaller t) must report a smaller entry time than
+        // the farther one, so `swept_shell_target`'s nearest-wins selection
+        // (see its own doc comment on why first-in-iteration-order isn't
+        // good enough) picks the one the shell would actually reach first.
+        let p0 = Position::new(0.0, 0.0);
+        let p1 = Position::new(1000.0, 0.0);
+        let near = segment_hits_aabb(p0, p1, Position::new(100.0, 0.0), Position::new(10.0, 10.0));
+        let far = segment_hits_aabb(p0, p1, Position::new(900.0, 0.0), Position::new(10.0, 10.0));
+        assert!(near.unwrap() < far.unwrap());
+    }
+
+    #[test]
+    fn consider_hit_keeps_the_nearer_candidate_regardless_of_call_order() {
+        let mut best = None;
+        consider_hit(&mut best, Some(0.8), 3, ShellTarget::Obstacle(Entity::DANGLING));
+        consider_hit(&mut best, Some(0.2), 4, ShellTarget::Wall);
+        assert!(matches!(best, Some((t, _, ShellTarget::Wall)) if t == 0.2));
+    }
+
+    #[test]
+    fn consider_hit_breaks_an_exact_tie_by_rank() {
+        let mut best = None;
+        consider_hit(&mut best, Some(0.5), 3, ShellTarget::Obstacle(Entity::DANGLING));
+        consider_hit(&mut best, Some(0.5), 1, ShellTarget::EnemyTank(Entity::DANGLING));
+        assert!(matches!(best, Some((_, 1, ShellTarget::EnemyTank(_)))));
+    }
 }
 
 /// Try to find a landing spot for the frog's evasive hop, roughly
@@ -1741,36 +2255,49 @@ fn frog_hop_target(
     None
 }
 
-/// Roll a kind and a clear, corner-adjacent position for one new pickup and
-/// spawn it into `world` - used identically both at round init (called
-/// PICKUP_COUNT times, once every other entity for the round is down) and
-/// by `Game::update` to top the field back up once the live count drops
-/// below `PICKUP_COUNT`. Gathers clearance data (every obstacle - which
-/// already includes every fortress tile, see
-/// `battlefield::spawn_player_fortress` - every tank, the frog, and every
-/// other live pickup) fresh from `world` on each call rather than taking it
-/// as parameters, so the exact same function is correct whether it's round
-/// start or five minutes into a round with some obstacles since destroyed
-/// and every tank long since moved.
-fn spawn_pickup(world: &mut hecs::World, rng: &mut rand::rngs::ThreadRng, width: f32, height: f32) {
+/// Spawn one pickup at a fixed, map-chosen position (see
+/// `Game::map_pickup_slots`) - checked once against the given `pos` against
+/// the same clearance rule everywhere else in this module uses
+/// (obstacles/tanks/frog at `OBSTACLE_CLEAR`, other pickups at
+/// `PICKUP_COLLECT_RADIUS * 2.0`). Returns whether it actually spawned - a
+/// slot that fails the check (e.g. placed on top of a wall) is just
+/// skipped, same "give up gracefully" convention as everywhere else in this
+/// module, rather than forcing an overlapping pickup into existence.
+fn spawn_pickup_at(world: &mut hecs::World, pos: Position, kind: PickupKind) -> bool {
     let obstacles: Vec<Position> = world.query::<&Obstacle>().iter().map(|o| o.position).collect();
     let tanks: Vec<Position> = world.query::<&Tank>().iter().map(|t| t.position).collect();
     let frog: Vec<Position> = world.query::<&Frog>().iter().map(|f| f.position).collect();
     let pickups: Vec<Position> = world.query::<&Pickup>().iter().map(|p| p.position).collect();
-    let pos = battlefield::sample_corner_position(rng, width, height, |pos| {
-        obstacles.iter().all(|&p| pos.distance_to(p) >= OBSTACLE_CLEAR)
-            && tanks.iter().all(|&p| pos.distance_to(p) >= OBSTACLE_CLEAR)
-            && frog.iter().all(|&p| pos.distance_to(p) >= OBSTACLE_CLEAR)
-            && pickups
-                .iter()
-                .all(|&p| pos.distance_to(p) >= PICKUP_COLLECT_RADIUS * 2.0)
-    });
-    let kind = if rng.random_bool(0.5) {
-        PickupKind::Health
-    } else {
-        PickupKind::Ammo
-    };
-    world.spawn((Pickup { kind, position: pos },));
+    let ok = obstacles.iter().all(|&p| pos.distance_to(p) >= OBSTACLE_CLEAR)
+        && tanks.iter().all(|&p| pos.distance_to(p) >= OBSTACLE_CLEAR)
+        && frog.iter().all(|&p| pos.distance_to(p) >= OBSTACLE_CLEAR)
+        && pickups.iter().all(|&p| pos.distance_to(p) >= PICKUP_COLLECT_RADIUS * 2.0);
+    if ok {
+        world.spawn((Pickup { kind, position: pos },));
+    }
+    ok
+}
+
+/// Top up one pickup drawn from `slots` (see `Game::map_pickup_slots`)
+/// instead of a random corner - picks a uniformly random slot that isn't
+/// already occupied by a live pickup (within a tight epsilon of that slot's
+/// exact position, since a spawned pickup's position is always exactly the
+/// slot's) and spawns there via `spawn_pickup_at`. A no-op if every slot is
+/// currently occupied, or if none is currently valid (`spawn_pickup_at`
+/// failing its clearance check) - the timer resets regardless
+/// (`Game::update`), so the next attempt just tries again later.
+fn respawn_from_slots(world: &mut hecs::World, rng: &mut rand::rngs::ThreadRng, slots: &[(Position, PickupKind)]) {
+    let occupied: Vec<Position> = world.query::<&Pickup>().iter().map(|p| p.position).collect();
+    let free: Vec<(Position, PickupKind)> = slots
+        .iter()
+        .copied()
+        .filter(|&(pos, _)| occupied.iter().all(|&p| p.distance_to(pos) > 0.5))
+        .collect();
+    if free.is_empty() {
+        return;
+    }
+    let (pos, kind) = free[rng.random_range(0..free.len())];
+    spawn_pickup_at(world, pos, kind);
 }
 
 /// Run `f` with read-only access to one specific tank entity's `Tank`
@@ -2122,4 +2649,26 @@ fn explosion_hit(
         handle,
         Position::new(axis.x * push * tank.mass(), axis.y * push * tank.mass()),
     );
+}
+
+/// Apply one obstacle's share of a nearby tank explosion - same linear
+/// falloff as `explosion_hit`'s tank version (full damage at the blast
+/// center, nothing at EXPLOSION_RADIUS), no knockback (obstacles are static
+/// bodies - see `Physics::spawn_static`). No-op on an already-destroyed
+/// obstacle or one outside the blast radius. Destruction (a tile reaching
+/// zero health) is handled the same generic way a shell-destroyed tile is:
+/// `Obstacle::damage` sets `destroyed`, and `Game::update`'s
+/// `destroyed_obstacles` sweep removes the physics body/entity later this
+/// same frame - this function doesn't need to know or report which.
+fn explosion_hit_obstacle(obstacle: &mut Obstacle, center: Position, rng: &mut rand::rngs::ThreadRng) {
+    if obstacle.destroyed {
+        return;
+    }
+    let dist = obstacle.position.distance_to(center);
+    if dist > EXPLOSION_RADIUS {
+        return;
+    }
+    let falloff = 1.0 - dist / EXPLOSION_RADIUS;
+    let dmg = rng.random_range(EXPLOSION_DAMAGE_MIN..EXPLOSION_DAMAGE_MAX) * falloff;
+    obstacle.damage(dmg);
 }

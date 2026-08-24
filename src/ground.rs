@@ -31,7 +31,6 @@
 //! actually makes `road_cells` in `build` line up pixel-for-pixel with the
 //! object it's meant to sit under.
 
-use rand::RngExt;
 use sola_raylib::prelude::*;
 
 use crate::{GROUND_WORLD_TILE, Position};
@@ -99,22 +98,47 @@ impl GroundGrid {
     }
 }
 
+/// Deterministic per-cell grass-fill variant pick, keyed by `seed` (one
+/// value for the whole `build` call - see its own doc comment) and the
+/// cell's own grid coordinates, rather than a shared sequential RNG stream.
+/// This matters because a plain `rng.random_range(..)` draw per cell (the
+/// original implementation) makes every *later* cell's pick depend on how
+/// many earlier cells happened to be Grass vs Road - so re-running `build`
+/// after just one cell's material changes (Grass<->Road) would shift every
+/// subsequent Grass cell's draw and reshuffle its tile, even though nothing
+/// about that cell itself changed. Hashing `(seed, x, y)` directly instead
+/// makes each cell's pick depend only on itself: calling `build` again with
+/// the same `seed`/`road_cells` reproduces byte-identical output, and
+/// changing one cell never touches any other cell's tile. A live round only
+/// ever calls `build` once (so the old stream-based version never visibly
+/// misbehaved there), but the map editor (`editor.rs`) rebuilds this layer
+/// after every single edit - see its own `rebuild_ground` doc comment.
+/// (SplitMix64's mixing step - fast, decent avalanche, no external crate.)
+fn grass_variant(seed: u64, x: i32, y: i32) -> i32 {
+    let mut h = seed ^ 0x9E37_79B9_7F4A_7C15;
+    h ^= (x as i64 as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    h ^= (y as i64 as u64).wrapping_mul(0x94D0_49BB_1331_11EB);
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xFF51_AFD7_ED55_8CCD);
+    h ^= h >> 33;
+    GRASS_FILL[(h as usize) % GRASS_FILL.len()]
+}
+
 /// Roll this round's ground layout: grass everywhere, then road painted at
 /// exactly `road_cells` (world positions - typically every static obstacle
 /// tile's own position plus the player fortress's `B`/`O` interior cells,
 /// see `Game::init`) and nowhere else. `width`/`height` are the same
 /// playable-area extents `Game::init` already threads through everything
-/// else (`battlefield::spawn_walls`, enemy/obstacle placement). A
+/// else (`battlefield::spawn_walls`, enemy/obstacle placement). `seed`
+/// drives every grass cell's cosmetic tile pick (`grass_variant`) - pass a
+/// freshly rolled value (e.g. `rng.random()`) for a normal round so it
+/// varies, or a value held fixed across repeated calls (the editor) so
+/// unrelated cells' grass doesn't visibly change on every edit. A
 /// `road_cells` entry that lands outside the grid (shouldn't happen given
 /// every real caller's positions are already clamped inside the
 /// battlefield, but not asserted here) is silently ignored rather than
 /// panicking.
-pub fn build(
-    width: f32,
-    height: f32,
-    rng: &mut rand::rngs::ThreadRng,
-    road_cells: &[Position],
-) -> GroundGrid {
+pub fn build(width: f32, height: f32, seed: u64, road_cells: &[Position]) -> GroundGrid {
     // +1 over the plain `ceil(width / T)` cell count: since cells are
     // centered rather than top-left-aligned (see module doc comment), the
     // last cell's own right/bottom half-tile can fall short of `width`/
@@ -143,7 +167,7 @@ pub fn build(
     for y in 0..rows as i32 {
         for x in 0..cols as i32 {
             let tile = match at(&material, x, y) {
-                Material::Grass => GRASS_FILL[rng.random_range(0..GRASS_FILL.len())],
+                Material::Grass => grass_variant(seed, x, y),
                 Material::Road => {
                     let is_road = |dx: i32, dy: i32| at(&material, x + dx, y + dy) == Material::Road;
                     let n = is_road(0, -1);

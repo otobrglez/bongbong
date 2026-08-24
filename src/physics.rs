@@ -169,11 +169,18 @@ impl Physics {
     /// `set_kinematic_position` each frame, which CCD never sweeps - so a
     /// shell whose per-frame movement is ever large enough to fully clear a
     /// thin target in one step (e.g. under a frame-rate hitch) can still
-    /// tunnel through it undetected. In practice shells move ~8px/frame at
-    /// SHELL_SPEED and everything they can hit is comfortably wider than
-    /// that, so this is a latent edge case, not the thing `.active_collision_types`
-    /// below fixes - left in place as a harmless no-op rather than removed,
-    /// since a real fix would need a swept/segment test, not just this flag.
+    /// tunnel through it undetected by *this* check. In practice shells move
+    /// ~8px/frame at SHELL_SPEED and everything they can hit is comfortably
+    /// wider than that, so this was long treated as a latent edge case, not
+    /// the thing `.active_collision_types` below fixes - but it did show up
+    /// in practice (reported as shells occasionally flying straight over an
+    /// unbroken Glass obstacle, the fastest-dying material). The actual fix
+    /// is `simulation::swept_shell_target` - a hand-rolled segment-vs-box
+    /// sweep checked as a fallback whenever this discrete end-of-frame
+    /// check finds nothing, covering the shell's whole path for the frame
+    /// instead of just where it ended up. `.ccd_enabled(true)` is left here
+    /// as a harmless no-op rather than removed, in case rapier ever extends
+    /// real CCD to kinematic bodies.
     ///
     /// `.active_collision_types` explicitly re-enables `KINEMATIC_FIXED`:
     /// rapier's own default (`ActiveCollisionTypes::default()`) is

@@ -167,6 +167,29 @@ pub const TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW: [f32; 12] = [
 pub const TANK_MUZZLE_FORWARD_OFFSET_BY_ROW: [f32; 12] = [
     14.0, 13.0, 12.0, 16.0, 10.0, 13.0, 14.0, 14.0, 14.0, 16.0, 16.0, 16.0,
 ];
+// Sideways (tile px, pre-scale) distance from the tank's center to each
+// barrel, for the five twin-barrel chassis (rows 1, 4, 7, 9, 10 - assault,
+// flak, ravager, obelisk, titan); zero for every single-barrel row, which
+// fires from dead center. Symmetrized from docs/SHELLS_SPEC.md §"Projectile
+// alignment"'s published tank-barrel column ranges (standard twin: x12-13 and
+// x18-19 around a tile center of x16, i.e. -3.5/+2.5 - averaged to a clean
+// ±3.0; super twin/`titan`: x9-12 and x19-22, i.e. -5.5/+4.5 - averaged to
+// ±5.0) rather than kept asymmetric, since two independently-simulated
+// shells read better evenly spaced than reproducing the art's minor
+// asymmetry exactly. See `Shell::spawn`'s `lateral_offset` param and
+// `Game::update`'s twin-barrel fire handling - a positive offset is the
+// right-hand barrel (screen +x at rotation 0/facing up), negative is left.
+pub const TANK_BARREL_LATERAL_OFFSET_BY_ROW: [f32; 12] = [
+    0.0, 3.0, 0.0, 0.0, 3.0, 0.0, 0.0, 3.0, 0.0, 3.0, 5.0, 0.0,
+];
+// How long after a twin-barrel chassis's first shell the second one fires
+// (see `Tank::pending_shot`) - long enough to read as two distinct shots,
+// short enough that it's still clearly one trigger-pull. Comfortably under
+// both PLAYER_FIRE_INTERVAL (0.15s) and the enemy AI's fastest fire_interval
+// (ENEMY_FIRE_INTERVAL_AGGRESSIVE, 0.7s), so the pending second shell always
+// resolves well before that same tank could legally fire again - nothing
+// handles a fresh trigger-pull arriving while one is still pending.
+pub const TANK_TWIN_SHOT_DELAY_SECONDS: f32 = 0.05;
 // Draw-time rotation pivot, as a fraction of the sprite's width shifted back
 // toward the rear of the hull (away from the barrel) - see
 // `tank::draw_pivot`. Zero for this atlas: the spec's hull/turret pivot is
@@ -185,42 +208,46 @@ pub const TANK_PIVOT_REAR_FRACTION: f32 = 0.0;
 //   class_base: standard single = 0, standard twin = 3, standard staggered = 12
 //               super single    = 6, super twin    = 9, super staggered    = 15
 //   colour:     orange = +0, red = +1, blue = +2
-// ("staggered" rows depict the same twin-barrel shot with the left round
-// running a beat ahead of the right - see TANK_SHELL_VARIANT_STAGGERED_BY_ROW
-// - purely a cosmetic alternate to the simultaneous twin rows, still one
-// `Shell` entity per shot either way.) See TANK_SHELL_VARIANT_BY_ROW below for
-// which row matches which of the 12 tank chassis.
+// The twin/staggered rows (3-5, 9-17) depict one shell sprite showing both
+// barrels discharging at once (or staggered a beat apart) and were designed
+// for a twin-barrel chassis firing a single `Shell` entity. Since twin-barrel
+// chassis now fire two independent, genuinely separate shells instead (see
+// TANK_BARREL_LATERAL_OFFSET_BY_ROW/TANK_TWIN_SHOT_DELAY_SECONDS and
+// `Game::update`'s fire handling), each of those two shells is just a normal
+// single-barrel shot in its own right - so no chassis selects the twin/
+// staggered rows anymore. They're still valid, still-loaded art, just
+// currently unreferenced by any `TANK_SHELL_VARIANT_BY_ROW` entry; kept in
+// the sheet rather than pruned in case a future single-`Shell`-entity use
+// case wants them back.
 pub const SHELL_TEXTURE_SIZE: f32 = 32.0;
 // Row count in shells.png (see the grouping above).
 pub const SHELL_VARIANTS: i32 = 18;
-// Shell row matched to each tank chassis row's real barrel count (single vs
-// twin), size class (standard vs the two super-heavy titan/leviathan
-// chassis), and accent colour - see the class_base/colour grouping in the
-// atlas comment above. Longbow (green accent) and wraith (purple accent)
-// have no matching shell colour family and fall back to blue. Set once at
-// `Tank::shell_variant` on spawn (simulation.rs) and re-set to this (or
-// TANK_SHELL_VARIANT_STAGGERED_BY_ROW - see Tank::alternate_shot) every time
-// that tank fires.
+// Shell row matched to each tank chassis row's size class (standard vs the
+// two super-heavy titan/leviathan chassis) and accent colour - see the
+// class_base/colour grouping in the atlas comment above. Always a *single*-
+// barrel row now, even for the five twin-barrel chassis (1, 4, 7, 9, 10):
+// each barrel fires its own independent shell (see
+// TANK_BARREL_LATERAL_OFFSET_BY_ROW), so every individual shell is a normal
+// single-barrel shot regardless of which chassis fired it. Longbow (green
+// accent) and wraith (purple accent) have no matching shell colour family
+// and fall back to blue. Set once at `Tank::shell_variant` on spawn
+// (simulation.rs) and fixed for that tank's whole life - unlike before this
+// no longer needs to change shot to shot, since there's no more twin/
+// staggered art alternation to toggle between.
 pub const TANK_SHELL_VARIANT_BY_ROW: [i32; 12] = [
-    2,  // 0  scout      standard single, blue (cyan accent)
-    3,  // 1  assault    standard twin,   orange (amber accent)
-    1,  // 2  breaker    standard single, red
-    2,  // 3  longbow    standard single, blue (no green family)
-    5,  // 4  flak       standard twin,   blue (cyan accent)
-    2,  // 5  wraith     standard single, blue (no purple family)
-    2,  // 6  warden     standard single, blue (cyan accent)
-    3,  // 7  ravager    standard twin,   orange (amber accent)
-    2,  // 8  glacier    standard single, blue
-    4,  // 9  obelisk    standard twin,   red
-    10, // 10 titan      super twin,      red
-    8,  // 11 leviathan  super single,    blue (cyan accent)
+    2, // 0  scout      standard single, blue (cyan accent)
+    0, // 1  assault    standard single, orange (amber accent) - twin chassis, single-shell art (see above)
+    1, // 2  breaker    standard single, red
+    2, // 3  longbow    standard single, blue (no green family)
+    2, // 4  flak       standard single, blue (cyan accent) - twin chassis, single-shell art (see above)
+    2, // 5  wraith     standard single, blue (no purple family)
+    2, // 6  warden     standard single, blue (cyan accent)
+    0, // 7  ravager    standard single, orange (amber accent) - twin chassis, single-shell art (see above)
+    2, // 8  glacier    standard single, blue
+    1, // 9  obelisk    standard single, red - twin chassis, single-shell art (see above)
+    7, // 10 titan      super single,    red - twin chassis, single-shell art (see above)
+    8, // 11 leviathan  super single,    blue (cyan accent)
 ];
-// Staggered-twin counterpart of TANK_SHELL_VARIANT_BY_ROW, for alternating
-// fire on twin-barrel chassis (see Tank::alternate_shot). Rows with no twin
-// variant (single-barrel chassis) repeat their base value - toggling between
-// them is then a harmless no-op.
-pub const TANK_SHELL_VARIANT_STAGGERED_BY_ROW: [i32; 12] =
-    [2, 12, 1, 2, 14, 2, 2, 12, 2, 13, 16, 8];
 pub const SHELL_SPEED: f32 = 500.0;
 pub const SHELL_SCALE: f32 = 2.0;
 // Half-extent (px) of a shell's own physics sensor, used only to intersect a
@@ -422,7 +449,7 @@ pub const TANK_TURRET_VISUAL_TURN_SPEED_DEG: f32 = 1800.0;
 
 // Shell ammo: the player holds up to MAX_SHELLS and recharges one shell every
 // SHELL_RECHARGE_SECONDS while below the cap.
-pub const MAX_SHELLS: i32 = 7;
+pub const MAX_SHELLS: i32 = 10;
 pub const SHELL_RECHARGE_SECONDS: f32 = 2.0;
 
 // Player fire rate: minimum seconds between consecutive player shots. Unlike
@@ -430,7 +457,7 @@ pub const SHELL_RECHARGE_SECONDS: f32 = 2.0;
 // player's fire was previously gated only by shells_ammo - holding/tapping
 // fire could dump the whole MAX_SHELLS magazine in a few frames. This is the
 // player-side equivalent of that cooldown (Tank::fire_cooldown).
-pub const PLAYER_FIRE_INTERVAL: f32 = 0.35;
+pub const PLAYER_FIRE_INTERVAL: f32 = 0.15;
 
 // Ramming: after taking collision damage a tank is immune for this long, so
 // continuous touching doesn't drain damage every frame.
@@ -456,8 +483,8 @@ pub const KNOCKBACK_MAX_SPEED: f32 = 60.0; // px/s cap on any one push - keeps i
 pub const ENEMY_VIEW_RANGE: f32 = 800.0; // start chasing the player within this
 pub const ENEMY_ATTACK_RANGE: f32 = 340.0; // stop and fight within this
 pub const ENEMY_FIRE_ALIGN_PX: f32 = 24.0; // fire when player is within this of the axis
-pub const ENEMY_FIRE_INTERVAL: f32 = 2.4; // min seconds between AI shots (toned down)
-pub const ENEMY_AIM_SETTLE: f32 = 0.45; // must be lined up this long before firing
+pub const ENEMY_FIRE_INTERVAL: f32 = 1.2; // min seconds between AI shots
+pub const ENEMY_AIM_SETTLE: f32 = 0.25; // must be lined up this long before firing
 pub const ENEMY_DAMAGE_MIN: f32 = 5.0; // enemy shell damage lower bound (weaker)
 pub const ENEMY_DAMAGE_MAX: f32 = 15.0; // enemy shell damage upper bound
 pub const ENEMY_FLEE_DAMAGE: f32 = 70.0; // retreat once this hurt
@@ -474,6 +501,22 @@ pub const ENEMY_RETARGET_SECONDS: f32 = 3.0; // how often patrol picks a new poi
 // reachable fraction of the map is small.
 pub const WANDER_SPREAD_CANDIDATES: u32 = 6;
 
+// Engagement spacing: `act_chase` and `act_attack`'s reposition branch used
+// to steer every enemy that's chasing or repositioning at the player's exact
+// position, so any group of enemies converging on the player independently
+// picked the same destination and piled up on top of each other/each other's
+// pathfinding routes - the actual cause of tank "clustering", not a
+// pathfinding bug. `simulation.rs::Game::update` now assigns each currently-
+// engaged enemy a distinct point on a ring around the player instead (see
+// its `engage_targets` map and Ai::think's `engage_target` parameter), the
+// same "known positions of teammates -> spread out" idea `wander`'s
+// WANDER_SPREAD_CANDIDATES already uses for patrol, just as a deterministic
+// slot assignment (stable per-tank angle) rather than resampled candidates,
+// since here the target needs to hold steady rather than be re-picked.
+// Comfortably inside ENEMY_ATTACK_RANGE so a ringed enemy still ends up
+// close enough to fight rather than orbiting just outside range.
+pub const ENGAGE_RING_RADIUS: f32 = ENEMY_ATTACK_RANGE * 0.8;
+
 // Shared aggression: once any enemy has the player within ENEMY_VIEW_RANGE,
 // every enemy on the field treats the player's current position as a shared
 // "last known sighting" and converges on it (see Ai::think's `alert`
@@ -483,6 +526,23 @@ pub const WANDER_SPREAD_CANDIDATES: u32 = 6;
 // purely "how long the whole map stays alerted after it loses the player
 // again," not a one-shot ping.
 pub const ENEMY_ALERT_HOLD_SECONDS: f32 = 6.0;
+
+// Retaliation: getting shot is itself a reason to fight back, independent of
+// ENEMY_VIEW_RANGE/the shared alert above - both of those gate on the enemy
+// having actually *seen* the player, so a shot landing from outside view
+// range (or before any enemy has spotted the player at all) previously did
+// nothing but chip health; the hit tank just kept patrolling/wandering as if
+// nothing happened. `Ai::notify_hit` (called from `Game::update`'s shell-hit
+// resolution whenever a shell damages a still-alive enemy) sets this many
+// seconds on that one tank's own `hit_alert_timer`, which `ai.rs`'s Chase
+// condition treats as equivalent to "player in view range" - so a hit enemy
+// immediately starts closing in and fighting back (or fleeing/retreating
+// first, if ENEMY_FLEE_DAMAGE/ammo-low already applies - those checks sit
+// above Chase in the behavior tree's priority order and are unconditional on
+// visibility already). Deliberately per-tank, not broadcast to the whole map
+// like ENEMY_ALERT_HOLD_SECONDS - shooting one enemy makes *it* fight back,
+// not summon the whole field.
+pub const ENEMY_HIT_ALERT_SECONDS: f32 = 6.0;
 
 // Ammo-aware aggression: an enemy that runs low on shells breaks off and backs
 // away (without firing) until it has recharged enough to rejoin the fight,
@@ -499,7 +559,7 @@ pub const ENEMY_RETREAT_RANGE: f32 = ENEMY_ATTACK_RANGE * 1.3;
 // uses this interval instead of the baseline ENEMY_FIRE_INTERVAL; ammo
 // between ENEMY_AMMO_LOW and MAX_SHELLS linearly interpolates between the
 // two - see Brain::fire_interval in ai.rs.
-pub const ENEMY_FIRE_INTERVAL_AGGRESSIVE: f32 = 1.4;
+pub const ENEMY_FIRE_INTERVAL_AGGRESSIVE: f32 = 0.7;
 
 // Friendly-fire avoidance: shells can hit any tank except the one that fired
 // them (see Game::update), so an enemy lined up on the player with another
@@ -788,60 +848,27 @@ pub const OBSTACLE_WOOD_BURN_SECONDS: f32 = 2.5;
 // (SHELL_HIT_HALF_EXTENT) register a clean hit near the sprite's visible
 // edge instead of stopping short at the tile's transparent padding.
 pub const OBSTACLE_HULL_FRACTION: f32 = 0.75;
-// Number of structures/clusters placed each round is randomized within this
-// range (see structures.rs / OBSTACLE_STRUCTURE_CHANCE) - same pattern as
-// ENEMY_COUNT_MIN/MAX. Each one contributes anywhere from 1 tile (a lone
-// `structures::SINGLE`) to 5 (e.g. `structures::WALL_LINE_5`), so a round's
-// actual total obstacle-tile count varies with which shapes get rolled.
-// Upper bound of 9 deliberately matches `src/bin/probe.rs`'s `--obstacles`
-// stress-test density (see its own doc comment) - the exact layout density
-// that validated `ai.rs`'s navigation/stuck-escape fixes, so raising the
-// *default* range up to that same ceiling isn't venturing into untested
-// territory. `scatter_obstacles` also degrades gracefully under a crowded
-// board (a placement that can't find a clear spot within its attempt budget
-// is just skipped), so a busier default doesn't risk an unplaceable round.
-pub const OBSTACLE_COUNT_MIN: usize = 5;
-pub const OBSTACLE_COUNT_MAX: usize = 9;
-// Chance a placement rolls a real multi-tile shape from `structures::STRUCTURES`
-// rather than falling back to `structures::SINGLE` (a lone tile) - keeps
-// lone obstacles common alongside deliberate little builds instead of every
-// placement being an equally-likely full structure.
-pub const OBSTACLE_STRUCTURE_CHANCE: f64 = 0.5;
-// Obstacle spawn positions snap to a world-space grid this many px per cell
-// (see `sample_structure_positions` in battlefield.rs) so walls - and every
-// tile of a multi-tile structure - land visually aligned instead of at
-// arbitrary fractional offsets. Exactly `Obstacle::size()`
-// (OBSTACLE_TEXTURE_SIZE * OBSTACLE_SCALE) - one grid cell is one obstacle
-// tile, so a grid-aligned obstacle's sprite exactly fills its cell with no
-// gap or overlap.
+// Obstacle positions land on a world-space grid this many px per cell (see
+// `map::cell_to_world`) so every wall tile a map places lands visually
+// aligned instead of at arbitrary fractional offsets. Exactly
+// `Obstacle::size()` (OBSTACLE_TEXTURE_SIZE * OBSTACLE_SCALE) - one grid
+// cell is one obstacle tile, so a grid-aligned obstacle's sprite exactly
+// fills its cell with no gap or overlap.
 pub const OBSTACLE_GRID_SIZE: f32 = OBSTACLE_TEXTURE_SIZE * OBSTACLE_SCALE;
 // Minimum clearance (px) an obstacle spawn must keep from the player's
 // start position and every enemy's start position - same idea as the
 // enemy_clear/clear checks in Game::init, just reused for a third entity
-// type. Obstacle-vs-obstacle spacing uses the separate, smaller
-// OBSTACLE_CLUSTER_CLEAR instead (see below).
+// type.
 pub const OBSTACLE_CLEAR: f32 = 90.0;
-// Minimum center-to-center spacing between any two obstacle tiles
-// specifically - checked between every tile of a newly-placed structure and
-// every tile placed so far, including tiles from within the *same*
-// structure (adjacent `structures::Blueprint` offsets sit exactly one grid
-// cell apart, i.e. exactly at this minimum). Exactly one full tile width -
-// same value as OBSTACLE_GRID_SIZE now that a grid cell *is* a tile, so any
-// two grid-aligned tiles are either exactly touching (edge-to-edge, matching
-// walls_sheet.png's seamless-tiling art - see docs/WALLS_SPEC.md) or further
-// apart, never overlapping. Kept as its own named constant (rather than
-// reusing OBSTACLE_GRID_SIZE directly) since the two mean different things -
-// this is a spacing rule, not a placement grid - and OBSTACLE_CLEAR (90px,
-// the player/enemy-vs-obstacle spacing) is intentionally larger than either.
-pub const OBSTACLE_CLUSTER_CLEAR: f32 = OBSTACLE_TEXTURE_SIZE * OBSTACLE_SCALE;
 
 // Ground/terrain layer (grass base, road painted under every static
-// obstacle tile and inside the fortress's O glyph) - see ground.rs for
-// the placement/autotile logic, docs/GROUND_SPEC.md for the full design
-// writeup. Drawn from static/punyworld/punyworld-overworld-tileset.png, a
-// third-party tileset - deliberately NOT on the Resurrect 64 palette every
-// other sheet uses (see docs/PALETTE.md and static/punyworld/SOURCE.md), a
-// documented exception rather than an oversight.
+// obstacle tile and every cell a map explicitly marks as road) - see
+// ground.rs for the placement/autotile logic, docs/GROUND_SPEC.md for the
+// full design writeup. Drawn from
+// static/punyworld/punyworld-overworld-tileset.png, a third-party tileset -
+// deliberately NOT on the Resurrect 64 palette every other sheet uses (see
+// docs/PALETTE.md and static/punyworld/SOURCE.md), a documented exception
+// rather than an oversight.
 pub const GROUND_TEXTURE_SIZE: f32 = 16.0; // native tile size in the source sheet
 // 2x, not OBSTACLE_SCALE-style 1.0 - the source art is 16px/tile, and
 // GROUND_WORLD_TILE below needs to land on OBSTACLE_GRID_SIZE (32px) so the
@@ -850,17 +877,6 @@ pub const GROUND_TEXTURE_SIZE: f32 = 16.0; // native tile size in the source she
 // phase-matching that actually makes this line-up hold in practice).
 pub const GROUND_SCALE: f32 = 2.0;
 pub const GROUND_WORLD_TILE: f32 = GROUND_TEXTURE_SIZE * GROUND_SCALE; // = OBSTACLE_GRID_SIZE
-
-// The player's starting enclosure (see `battlefield::spawn_player_fortress`):
-// the word "HELLO" spelled out in wall tiles, one material per glyph (H is
-// Brick, E is Iron, the first L is Wood, the second L reuses Brick, and the
-// O the player spawns inside is Glass - only four materials exist for five
-// glyphs). Sized by
-// the pixel font in `spawn_player_fortress`'s `GLYPH_*` constants directly,
-// not by a tank-relative scale like the shape this replaced. Glass's low
-// max_health (OBSTACLE_GLASS_MAX_HEALTH) is exactly why the O got that
-// material: a shot or two from inside cracks an escape route, same role
-// this enclosure's now-removed circular predecessor gave its weakest side.
 
 pub const OBSTACLE_SHADOW_OFFSET: f32 = 3.0; // px, same grounded distance as TANK_SHADOW_OFFSET
 pub const OBSTACLE_SHADOW_OPACITY: f32 = 0.35;
@@ -975,11 +991,11 @@ pub const FROG_SPAWN_MAX_DIST: f32 = 240.0;
 // pixel constant, so a hit/attack "reach" that reads as fair right now
 // keeps reading as fair if the frog's own on-screen size is ever retuned -
 // per-instance data, not a fixed magic number unrelated to what's actually
-// on screen. 1.5 (was 3.0, a full 3x its own size - read as an
-// unnaturally huge leap for a creature this small; halved so a hop covers
-// roughly one and a half body-lengths instead of three - user feedback,
-// 2026-08).
-pub const FROG_HOP_DISTANCE_FACTOR: f32 = 1.5;
+// on screen. 0.75 (was 1.5, itself halved from an original 3.0 - a full 3x
+// its own size, read as an unnaturally huge leap for a creature this small;
+// halved again so a hop now covers roughly three-quarters of a body-length
+// instead of one and a half - user feedback, 2026-08).
+pub const FROG_HOP_DISTANCE_FACTOR: f32 = 0.75;
 // Debounce so a rapid volley of hits doesn't trigger a hop every single
 // frame one lands - roughly one hop per FROG_HOP_COOLDOWN_SECONDS even
 // under sustained fire.
@@ -1018,29 +1034,21 @@ pub const FROG_ATTACK_DAMAGE_MAX: f32 = 10.0;
 // that same margin between the two.
 pub const FROG_AVOID_RANGE_FACTOR: f32 = 1.2;
 
-// Health/ammo pickups (pickup.rs): one of each battlefield corner, respawning
-// after a delay once collected. Sprite is 32x32 (see static/pickups/SOURCE.md)
-// drawn 1:1, same convention as obstacles (OBSTACLE_SCALE = 1.0) rather than
-// the tanks' chunky 2x - a pickup icon reads fine at native res and doesn't
-// need to match the tanks' pixelated look the way terrain does.
+// Health/ammo pickups (pickup.rs): spawn only at the map's own `Pickup`
+// cells (see `map::CellObject::Pickup`, `battlefield::spawn_from_map`) - the
+// map's placed cells are the pickup *slots*, respawning at a random
+// currently-empty slot after a delay once collected. A map with no pickup
+// cells simply has no pickups; there's no random-placement fallback. Sprite
+// is 32x32 (see static/pickups/SOURCE.md) drawn 1:1, same convention as
+// obstacles (OBSTACLE_SCALE = 1.0) rather than the tanks' chunky 2x - a
+// pickup icon reads fine at native res and doesn't need to match the tanks'
+// pixelated look the way terrain does.
 pub const PICKUP_TEXTURE_SIZE: f32 = 32.0;
 pub const PICKUP_SCALE: f32 = 1.0;
-// How many pickups the battlefield keeps topped up to - one per corner.
-pub const PICKUP_COUNT: usize = 4;
-// Seconds after a pickup is collected before a fresh one spawns (kind and
-// corner both freshly rolled, not tied to whichever corner just emptied) -
-// keeps the total roughly at PICKUP_COUNT throughout a round instead of
-// depleting it.
+// Seconds after a pickup is collected before a fresh one spawns at a random
+// empty slot (see `simulation::respawn_from_slots`) - keeps the field topped
+// up to however many slots the map placed, rather than depleting it.
 pub const PICKUP_RESPAWN_SECONDS: f32 = 15.0;
-// Placement (Game::init/simulation::respawn_pickup): each pickup's actual
-// position is rejection-sampled within this padding band from its corner
-// along both axes (see battlefield::sample_corner_position), same
-// "near, not exactly on" idea FROG_SPAWN_MIN_DIST/MAX_DIST uses around the
-// player's fortress instead. Never inside a wall/obstacle or on top of a
-// tank - checked against the same OBSTACLE_CLEAR-based clearance
-// `scatter_obstacles`/the enemy spawn loop already use.
-pub const PICKUP_CORNER_PADDING_MIN: f32 = 70.0;
-pub const PICKUP_CORNER_PADDING_MAX: f32 = 220.0;
 // How close a tank's center needs to get to collect a pickup - a bit more
 // forgiving than requiring true hull overlap, so it doesn't feel like it
 // needs pixel-perfect contact.
@@ -1049,20 +1057,63 @@ pub const PICKUP_COLLECT_RADIUS: f32 = 32.0;
 // meaningful chunk (roughly 2-3 enemy hits' worth, see ENEMY_DAMAGE_MIN/MAX)
 // worth detouring for, not an automatic full reset.
 pub const PICKUP_HEAL_AMOUNT: f32 = 30.0;
-// Ammo pickup: how many shells it adds, and the hard ceiling that caps it -
-// separate from MAX_SHELLS (7), which stays exactly what it was: the
-// passive-recharge target (see Tank::tick_recharge, untouched by this
-// feature). A pickup is the *only* way past 7, up to SHELLS_HARD_CAP.
+// Ammo pickup: how many shells it adds. Uncapped - separate from MAX_SHELLS
+// (7), which stays exactly what it was: the passive-recharge target (see
+// Tank::tick_recharge, untouched by this feature). A pickup is the only way
+// past 7, and stacking pickups can push a magazine arbitrarily high.
 pub const PICKUP_AMMO_AMOUNT: i32 = 4;
-pub const SHELLS_HARD_CAP: i32 = 10;
+
+// --- Map editor (dev-only, docs/map-editor-design.md) ---
+// Kept minimal - the editor is a `map-editor`-feature-only, presentation-only
+// tool, not gameplay tuning, so most of its layout math lives directly in
+// `editor.rs` rather than here. These are the few values worth naming since
+// they're shared between the palette panel and the in-game hamburger toggle
+// (main.rs).
+
+/// Side length of one palette/toolbar icon button, in pixels.
+pub const EDITOR_ICON_SIZE: f32 = 48.0;
+/// Gap between adjacent icon buttons within a panel, in pixels.
+pub const EDITOR_ICON_GAP: f32 = 8.0;
+/// Padding between a panel's edge and the icons/controls inside it.
+pub const EDITOR_PANEL_PADDING: f32 = 10.0;
+/// Corner roundness passed to `draw_rectangle_rounded` (raylib's 0..1
+/// fraction of the shorter side, not a pixel radius) - small on purpose, a
+/// gentle curve rather than a pill shape.
+pub const EDITOR_PANEL_ROUNDNESS: f32 = 0.12;
+/// Segment count for the rounded-rect draw calls - raylib's usual default.
+pub const EDITOR_PANEL_SEGMENTS: i32 = 8;
+/// Panel drop-shadow offset, in pixels (down-right), and its opacity
+/// fraction of solid black.
+pub const EDITOR_PANEL_SHADOW_OFFSET: f32 = 4.0;
+pub const EDITOR_PANEL_SHADOW_OPACITY: f32 = 0.35;
+/// Panel border thickness, in pixels, and its opacity fraction of solid
+/// black.
+pub const EDITOR_PANEL_BORDER_THICKNESS: f32 = 1.5;
+pub const EDITOR_PANEL_BORDER_OPACITY: f32 = 0.6;
+/// Panel fill color (a dark near-opaque backing so icon sprites with
+/// transparent/light edges stay legible over any battlefield tile behind
+/// them) and its opacity.
+pub const EDITOR_PANEL_FILL: (u8, u8, u8) = (20, 20, 24);
+pub const EDITOR_PANEL_FILL_OPACITY: f32 = 0.85;
+/// Fixed gap between the bottom-center object palette and the bottom of the
+/// screen.
+pub const EDITOR_PALETTE_BOTTOM_MARGIN: f32 = 16.0;
+/// Fixed margin from the top-right corner for the Save/Load/Close toolbar,
+/// and from the top-left corner for the hamburger toggle button.
+pub const EDITOR_TOOLBAR_MARGIN: f32 = 16.0;
+/// Side length of the top-left hamburger/back toggle button.
+pub const EDITOR_HAMBURGER_SIZE: f32 = 40.0;
 
 pub mod ai;
 pub mod battlefield;
 pub mod bt;
 pub mod damage_stage;
+#[cfg(feature = "map-editor")]
+pub mod editor;
 pub mod frog;
 pub mod game;
 pub mod ground;
+pub mod map;
 pub mod obstacle;
 pub mod pathfind;
 pub mod physics;
@@ -1070,6 +1121,5 @@ pub mod pickup;
 pub mod shell;
 pub mod shockwave;
 pub mod simulation;
-pub mod structures;
 pub mod tank;
 pub mod track;

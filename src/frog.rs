@@ -29,6 +29,12 @@ pub struct Frog {
     pub position: Position,
     pub health: f32,
     pub max_health: f32,
+    /// This frog's colour: an index into `FROG_VARIANT_DIRS`, rolled once at
+    /// spawn and fixed for the round. Purely cosmetic - every variant shares
+    /// identical layout/frame counts/timing (see docs/FROG_SPEC.md), so
+    /// nothing gameplay-relevant reads this - only `game.rs::render` does,
+    /// to pick which of `Textures::frog_variants`' texture sets to draw.
+    pub variant: i32,
     /// This frog's rapier fixed-body collider (see
     /// `physics::Physics::spawn_static`) - the same "blocks tank movement
     /// and doubles as the shell-hit target" role `Obstacle::body` plays,
@@ -238,6 +244,23 @@ impl Frog {
     }
 }
 
+/// The `static/toxic_frog/<dir>/` colour variants (see docs/FROG_SPEC.md and
+/// `static/toxic_frog/SOURCE.md`), in `Frog::variant` index order - the
+/// single source of truth for both "which directory" and "how many
+/// variants exist" (`main.rs` loads one `FrogVariantTextures` per entry;
+/// `Game::init` rolls `Frog::variant` via `rng.random_range(0..FROG_VARIANT_DIRS.len())`).
+/// All six are pixel-layout-identical (same frame counts/timing/cell size),
+/// just a different colour third-party art asset - see `SOURCE.md` for the
+/// pack-folder each one came from.
+pub const FROG_VARIANT_DIRS: [&str; 6] = [
+    "purple_white",
+    "blue_blue",
+    "blue_brown",
+    "green_blue",
+    "green_brown",
+    "purple_blue",
+];
+
 /// The five animation filmstrips `draw_frog` picks from (see
 /// docs/FROG_SPEC.md), bundled into one param the same way `game::Textures`
 /// bundles the rest of the game's atlases - so `draw_frog`'s signature
@@ -248,6 +271,32 @@ pub struct FrogTextures<'a> {
     pub hop: &'a Texture2D,
     pub attack: &'a Texture2D,
     pub explosion: &'a Texture2D,
+}
+
+/// One colour variant's full set of five clips, owned rather than borrowed
+/// (unlike `FrogTextures`) - `main.rs` loads one of these per
+/// `FROG_VARIANT_DIRS` entry and keeps the whole set alive for the game's
+/// lifetime; `game::Textures::frog_variants` then hands `render` a slice of
+/// them to index into by `Frog::variant` each frame.
+pub struct FrogVariantTextures {
+    pub idle: Texture2D,
+    pub hurt: Texture2D,
+    pub hop: Texture2D,
+    pub attack: Texture2D,
+    pub explosion: Texture2D,
+}
+
+impl FrogVariantTextures {
+    /// Borrow this variant's five clips as a `FrogTextures` for `draw_frog`.
+    pub fn as_frog_textures(&self) -> FrogTextures<'_> {
+        FrogTextures {
+            idle: &self.idle,
+            hurt: &self.hurt,
+            hop: &self.hop,
+            attack: &self.attack,
+            explosion: &self.explosion,
+        }
+    }
 }
 
 /// Draw the frog: whichever of `textures`' five clips `Frog::anim` picks

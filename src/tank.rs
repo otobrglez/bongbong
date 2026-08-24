@@ -57,6 +57,20 @@ impl Dir {
     }
 }
 
+/// A twin-barrel chassis's second shell, waiting to fire a beat after the
+/// first - see `Tank::pending_shot`.
+#[derive(Clone, Copy)]
+pub struct PendingShot {
+    /// Seconds remaining until this shell fires.
+    pub timer: f32,
+    /// Same off-aim deflection as the first shell (see `Shell::spawn`'s
+    /// `aim_offset` param) - a misfire skews both rounds identically.
+    pub aim_offset: f32,
+    /// This barrel's lateral offset (see `Shell::spawn`'s `lateral_offset`
+    /// param) - the opposite side from the first shell's barrel.
+    pub lateral_offset: f32,
+}
+
 pub struct Tank {
     /// Which of the 12 tank archetypes in scifi_tanks_sheet.png this tank
     /// draws (see TANK_VARIANTS/TANK_SPRITE_ORDER in simulation.rs). The hull
@@ -64,19 +78,20 @@ pub struct Tank {
     /// current animation/damage state - see `hull_col`/`turret_col`.
     pub row: i32,
     /// Row in shells.png this tank's shells are drawn from (0..SHELL_VARIANTS)
-    /// - matched to this tank's chassis (barrel count, size class, accent
-    /// colour) via TANK_SHELL_VARIANT_BY_ROW, set at spawn (see Game::init)
-    /// and refreshed on every shot this tank fires (see `alternate_shot`,
-    /// simulation.rs's two fire call sites) rather than fixed for its whole
-    /// life.
+    /// - matched to this tank's chassis (size class, accent colour) via
+    /// TANK_SHELL_VARIANT_BY_ROW, set once at spawn (see Game::init) and
+    /// fixed for this tank's whole life - every shell it ever fires,
+    /// including both independent shots from a twin-barrel chassis (see
+    /// `pending_shot`), uses this same single-barrel row.
     pub shell_variant: i32,
-    /// Toggled every time this tank fires (simulation.rs), so a twin-barrel
-    /// chassis alternates between the simultaneous-twin and staggered-twin
-    /// shell art (TANK_SHELL_VARIANT_BY_ROW vs
-    /// TANK_SHELL_VARIANT_STAGGERED_BY_ROW) shot to shot instead of always
-    /// firing the same way. A no-op for single-barrel chassis, whose
-    /// staggered-table entry equals its base entry.
-    pub alternate_shot: bool,
+    /// A twin-barrel chassis's second shell, queued to fire
+    /// TANK_TWIN_SHOT_DELAY_SECONDS after the first so the two rounds read
+    /// as one barrel, then the other, rather than appearing in the same
+    /// instant. `None` the rest of the time; a single-barrel chassis never
+    /// sets this (see `TANK_BARREL_LATERAL_OFFSET_BY_ROW`). Ticked down and
+    /// resolved once per frame in `Game::update`, at the same site this
+    /// tank's own fire input is handled.
+    pub pending_shot: Option<PendingShot>,
     /// Row in damage.png this tank's damage overlay is drawn from
     /// (0..DAMAGE_VARIANTS). Rolled once at spawn (see Game::init) and fixed
     /// for the tank's whole life, so its damage sequence reads as one
@@ -202,7 +217,7 @@ impl Default for Tank {
         Self {
             row: 0,
             shell_variant: 0,
-            alternate_shot: false,
+            pending_shot: None,
             damage_variant: 0,
             position: Position::default(),
             rotation: 0.0,

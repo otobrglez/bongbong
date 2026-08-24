@@ -1,0 +1,134 @@
+# bongbong's default battlefield - loaded automatically whenever the game is
+# started without -m/--map (see main.rs's default_map()). Hand-authored, not
+# generated - a modest scatter of wall clusters (one small cluster per
+# material) plus a frog and four pickup slots, leaving the center open for
+# the player's spawn. Edit with `cargo run --features map-editor -- --editor
+# --map maps/default.toml`.
+version = 1
+
+# --- Brick ---
+[cells."6,5"]
+kind = "wall"
+material = "brick"
+[cells."7,5"]
+kind = "wall"
+material = "brick"
+[cells."8,5"]
+kind = "wall"
+material = "brick"
+[cells."6,16"]
+kind = "wall"
+material = "brick"
+[cells."6,17"]
+kind = "wall"
+material = "brick"
+[cells."33,5"]
+kind = "wall"
+material = "brick"
+[cells."34,5"]
+kind = "wall"
+material = "brick"
+
+# --- Iron ---
+[cells."30,15"]
+kind = "wall"
+material = "iron"
+[cells."31,15"]
+kind = "wall"
+material = "iron"
+[cells."30,16"]
+kind = "wall"
+material = "iron"
+[cells."31,16"]
+kind = "wall"
+material = "iron"
+[cells."10,17"]
+kind = "wall"
+material = "iron"
+[cells."11,17"]
+kind = "wall"
+material = "iron"
+[cells."12,17"]
+kind = "wall"
+material = "iron"
+[cells."4,9"]
+kind = "wall"
+material = "iron"
+[cells."4,10"]
+kind = "wall"
+material = "iron"
+
+# --- Wood ---
+[cells."15,4"]
+kind = "wall"
+material = "wood"
+[cells."16,4"]
+kind = "wall"
+material = "wood"
+[cells."17,4"]
+kind = "wall"
+material = "wood"
+[cells."34,11"]
+kind = "wall"
+material = "wood"
+[cells."34,12"]
+kind = "wall"
+material = "wood"
+[cells."34,13"]
+kind = "wall"
+material = "wood"
+[cells."9,9"]
+kind = "wall"
+material = "wood"
+[cells."10,9"]
+kind = "wall"
+material = "wood"
+
+# --- Glass ---
+[cells."28,4"]
+kind = "wall"
+material = "glass"
+[cells."29,4"]
+kind = "wall"
+material = "glass"
+[cells."6,12"]
+kind = "wall"
+material = "glass"
+[cells."6,13"]
+kind = "wall"
+material = "glass"
+[cells."24,18"]
+kind = "wall"
+material = "glass"
+[cells."25,18"]
+kind = "wall"
+material = "glass"
+[cells."26,18"]
+kind = "wall"
+material = "glass"
+
+# --- Road: a short path from the player's spawn up to the frog ---
+[cells."20,8"]
+kind = "road"
+[cells."20,9"]
+kind = "road"
+[cells."20,10"]
+kind = "road"
+
+# --- Frog (protect-objective) ---
+[cells."20,7"]
+kind = "frog"
+
+# --- Pickup slots ---
+[cells."13,7"]
+kind = "pickup"
+pickup = "health"
+[cells."27,14"]
+kind = "pickup"
+pickup = "health"
+[cells."30,8"]
+kind = "pickup"
+pickup = "ammo"
+[cells."9,14"]
+kind = "pickup"
+pickup = "ammo"

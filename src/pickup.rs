@@ -5,12 +5,14 @@
 //! by proximity alone (`simulation::collect_pickups`), so it's just a
 //! position and a kind, checked against every living tank each frame.
 
+use serde::{Deserialize, Serialize};
 use sola_raylib::prelude::*;
 
 use crate::{PICKUP_SCALE, PICKUP_TEXTURE_SIZE, Position};
 
 /// Which effect a pickup has when collected - see `simulation::collect_pickups`.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum PickupKind {
     Health,
     Ammo,

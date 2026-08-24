@@ -8,7 +8,7 @@ use sola_raylib::prelude::*;
 
 use crate::ai::Ai;
 use crate::damage_stage::draw_damage;
-use crate::frog::{Frog, FrogTextures, draw_frog};
+use crate::frog::{Frog, FrogVariantTextures, draw_frog};
 use crate::obstacle::{Obstacle, draw_obstacle, draw_obstacle_shadow};
 use crate::pickup::{Pickup, PickupKind, draw_pickup};
 use crate::shell::{Shell, ShellState, draw_shell, draw_shell_shadow};
@@ -20,7 +20,7 @@ use crate::{
     HEALTH_BAR_CELL_SIZE, HEALTH_BAR_COLUMNS, HEALTH_BAR_HUD_SCALE, HEALTH_BAR_ICON_OFFSET,
     HEALTH_BAR_ICON_SIZE, HEALTH_BAR_OVERHEAD_FADE_SECONDS, HEALTH_BAR_OVERHEAD_GAP,
     HEALTH_BAR_VARIANTS, HUD_CRITICAL_THRESHOLD, HUD_FONT_SIZE, HUD_MARGIN, HUD_VERSION_FONT_SIZE,
-    HUD_WARN_THRESHOLD, IMPACT_FLASH_QUAD_RADIUS, MAX_DAMAGE, SHELLS_HARD_CAP,
+    HUD_WARN_THRESHOLD, IMPACT_FLASH_QUAD_RADIUS, MAX_DAMAGE, MAX_SHELLS,
     MUZZLE_FLASH_QUAD_RADIUS,
 };
 
@@ -34,11 +34,9 @@ pub struct Textures<'a> {
     pub obstacles: &'a Texture2D,
     pub ground: &'a Texture2D,
     pub health_bar: &'a Texture2D,
-    pub frog_idle: &'a Texture2D,
-    pub frog_hurt: &'a Texture2D,
-    pub frog_hop: &'a Texture2D,
-    pub frog_attack: &'a Texture2D,
-    pub frog_explosion: &'a Texture2D,
+    /// One `FrogVariantTextures` per `frog::FROG_VARIANT_DIRS` entry, in the
+    /// same order - `render` indexes into this by `Frog::variant`.
+    pub frog_variants: &'a [FrogVariantTextures],
     pub pickup_health: &'a Texture2D,
     pub pickup_ammo: &'a Texture2D,
 }
@@ -81,7 +79,7 @@ impl Game {
                 t.shells_ammo,
             )
         });
-        let shells_color = hud_number_color(shells as f32, SHELLS_HARD_CAP as f32);
+        let shells_color = hud_number_color(shells as f32, MAX_SHELLS as f32);
         let hp_color = hud_number_color(hp as f32, MAX_DAMAGE);
         let hud_shells_label = "SHELLS: ";
         let hud_shells_num = format!("{shells}");
@@ -145,18 +143,12 @@ impl Game {
                 draw_pickup(&mut d, texture, pickup);
             }
 
-            let frog_textures = FrogTextures {
-                idle: textures.frog_idle,
-                hurt: textures.frog_hurt,
-                hop: textures.frog_hop,
-                attack: textures.frog_attack,
-                explosion: textures.frog_explosion,
-            };
             crate::simulation::with_frog(
                 &self.world,
                 self.frog.expect("frog entity spawned in init"),
                 |frog| {
-                    draw_frog(&mut d, &frog_textures, frog, self.time);
+                    let variant = &textures.frog_variants[frog.variant as usize];
+                    draw_frog(&mut d, &variant.as_frog_textures(), frog, self.time);
                     draw_frog_health_bar(&mut d, textures.health_bar, frog);
                 },
             );
@@ -419,7 +411,7 @@ fn draw_tank_inspect(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>) {
 
     let speed = (tank.velocity.x * tank.velocity.x + tank.velocity.y * tank.velocity.y).sqrt();
     let mut lines = vec![
-        format!("AMMO {}/{}", tank.shells_ammo, SHELLS_HARD_CAP),
+        format!("AMMO {}", tank.shells_ammo),
         format!(
             "HP {}/{}",
             (MAX_DAMAGE - tank.damage).max(0.0).round() as i32,
