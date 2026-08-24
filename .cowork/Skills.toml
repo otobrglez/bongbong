@@ -1,0 +1,30 @@
+[project]
+name = "bongbong"
+
+[skills.global]
+
+[skills.dev.m09-domain]
+path = "/Users/oto/.cowork/repos/rust-skills/skills/m09-domain"
+local = false
+
+[skills.dev.m10-performance]
+path = "/Users/oto/.cowork/repos/rust-skills/skills/m10-performance"
+local = false
+
+[skills.dev.domain-cli]
+path = "/Users/oto/.cowork/repos/rust-skills/skills/domain-cli"
+local = false
+
+[skills.dev.m12-lifecycle]
+path = "/Users/oto/.cowork/repos/rust-skills/skills/m12-lifecycle"
+local = false
+
+[skills.groups]
+
+[triggers]
+
+[security]
+require_lockfile = false
+verify_checksums = false
+show_update_diff = false
+auto_reject_high_risk = false
