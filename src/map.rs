@@ -39,6 +39,7 @@ pub enum CellObject {
     Wall { material: Material },
     Road,
     Frog,
+    Start,
     Pickup { pickup: PickupKind },
 }
 
@@ -49,6 +50,14 @@ pub enum CellObject {
 pub struct MapFile {
     pub version: u32,
     pub cells: HashMap<String, CellObject>,
+    /// Default number of enemy tanks to spawn on this map, unless overridden
+    /// at runtime by `-e`/`--enemies` (see `main.rs`). `None` (the default -
+    /// absent from a map's TOML, `#[serde(default)]` so older map files
+    /// still parse) means "no map-level default", in which case `Game::init`
+    /// falls back to its usual random `ENEMY_COUNT_MIN..=ENEMY_COUNT_MAX`
+    /// roll, same as today.
+    #[serde(default)]
+    pub tanks: Option<u32>,
 }
 
 fn cell_key(col: i32, row: i32) -> String {
@@ -79,7 +88,7 @@ pub fn world_to_cell(pos: Position) -> (i32, i32) {
 
 impl MapFile {
     pub fn new() -> Self {
-        MapFile { version: CURRENT_VERSION, cells: HashMap::new() }
+        MapFile { version: CURRENT_VERSION, cells: HashMap::new(), tanks: None }
     }
 
     pub fn load(path: &Path) -> Result<Self, String> {
@@ -149,6 +158,59 @@ impl MapFile {
         self.iter_cells()
             .find(|(_, _, obj)| matches!(obj, CellObject::Frog))
             .map(|(col, row, _)| (col, row))
+    }
+
+    /// The map's one player-start cell, if it placed one - same singleton
+    /// convention as `frog_cell` (enforced by the editor when placing one,
+    /// not by this type). `Game::init` reads this directly (rather than
+    /// waiting on `battlefield::spawn_from_map`'s output) since the player
+    /// is spawned before map terrain is; when a map places no start cell,
+    /// `Game::init` falls back to `nearest_free_cell` around the
+    /// battlefield's center instead.
+    pub fn start_cell(&self) -> Option<(i32, i32)> {
+        self.iter_cells()
+            .find(|(_, _, obj)| matches!(obj, CellObject::Start))
+            .map(|(col, row, _)| (col, row))
+    }
+
+    /// Cap on how far `nearest_free_cell` will spiral out looking for an
+    /// unwalled cell - 64 cells (2048px at `OBSTACLE_GRID_SIZE`) comfortably
+    /// covers the default 1280x720 battlefield (40x22.5 cells) from any
+    /// starting point, so this only matters as a bound against a
+    /// pathological future map, not something normal play ever brushes up
+    /// against.
+    const NEAREST_FREE_CELL_MAX_RADIUS: i32 = 64;
+
+    /// `(col, row)` if it holds a `Wall`, else the nearest cell to it (by
+    /// expanding ring, closest first) that isn't - only walls block a tank
+    /// spawn; road/pickup/frog cells are fine to spawn on top of. Used as
+    /// the fallback player-start position when a map places no `Start` cell
+    /// (`Game::init`), so the player never spawns wedged inside a wall a
+    /// hand-authored map happened to place at/near the exact center.
+    /// Gives up and returns the original cell unchanged past
+    /// `NEAREST_FREE_CELL_MAX_RADIUS` rings - an occasional wall-embedded
+    /// spawn on a pathological map beats an unbounded search.
+    pub fn nearest_free_cell(&self, col: i32, row: i32) -> (i32, i32) {
+        let is_wall = |c: i32, r: i32| matches!(self.cell(c, r), Some(CellObject::Wall { .. }));
+        if !is_wall(col, row) {
+            return (col, row);
+        }
+        for radius in 1..=Self::NEAREST_FREE_CELL_MAX_RADIUS {
+            for dy in -radius..=radius {
+                for dx in -radius..=radius {
+                    // Only the ring at exactly this radius - smaller
+                    // radii were already checked on an earlier iteration.
+                    if dx.abs().max(dy.abs()) != radius {
+                        continue;
+                    }
+                    let (c, r) = (col + dx, row + dy);
+                    if !is_wall(c, r) {
+                        return (c, r);
+                    }
+                }
+            }
+        }
+        (col, row)
     }
 }
 

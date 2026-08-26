@@ -93,6 +93,42 @@ pub const TANK_HULL_BBOX_BY_ROW: [(f32, f32); 12] = [
     (24.0, 26.0), // titan (super-heavy)
     (22.0, 28.0), // leviathan (super-heavy)
 ];
+// Per-row turret+barrel footprint, as raw (x0,y0,x1,y1) inclusive pixel
+// coordinates in the 32x32 cell (same "facing up" reference frame as
+// TANK_HULL_BBOX_BY_ROW) - straight from the "Turret bbox" column of
+// docs/SPRITESHEET_SPEC.md §9's measured table. Unlike the hull table, kept
+// as raw corners rather than a (width, height) pair: the turret+barrel
+// silhouette isn't centered on the tile the way the hull roughly is - the
+// barrel extends it well past center toward the front - so `Tank::
+// turret_bbox_world` needs both corners to reconstruct that off-center
+// footprint.
+//
+// **Not used for movement collision** - a tank's solid hull collider
+// (`Physics::spawn_tank`/`resize_collider`) stays hull-only, so the barrel
+// still isn't a physical obstacle other tanks/shells can ram or get blocked
+// by. It *is* used for shell/laser hit-testing though: `Tank::
+// turret_hit_sensor` (a second sensor collider, sized/positioned from
+// `Tank::turret_bbox_world`) and `simulation::swept_shell_target`'s
+// hand-rolled fallback both check this box alongside the hull box, so a
+// shot landing on the visible barrel registers as a hit - overriding
+// docs/SPRITESHEET_SPEC.md §9's original "exclude the barrel from
+// collision" note after visually confirming (via `game.rs`'s "I"-key debug
+// inspect overlay, which draws this exact box) that it tracks the art
+// closely enough to be worth it.
+pub const TANK_TURRET_BBOX_BY_ROW: [(f32, f32, f32, f32); 12] = [
+    (11.0, 2.0, 20.0, 20.0), // scout
+    (10.0, 3.0, 21.0, 21.0), // assault
+    (10.0, 4.0, 21.0, 21.0), // breaker
+    (11.0, 0.0, 20.0, 20.0), // longbow
+    (10.0, 6.0, 21.0, 21.0), // flak
+    (10.0, 3.0, 21.0, 20.0), // wraith
+    (10.0, 2.0, 21.0, 21.0), // warden
+    (10.0, 2.0, 21.0, 21.0), // ravager
+    (11.0, 2.0, 20.0, 21.0), // glacier
+    (10.0, 0.0, 21.0, 21.0), // obelisk
+    (7.0, 0.0, 24.0, 23.0),  // titan (super-heavy)
+    (8.0, 0.0, 23.0, 23.0),  // leviathan (super-heavy)
+];
 // The roster groups into 7 named chassis classes by handling weight (a
 // coarser grouping than TANK_HULL_BBOX_BY_ROW's precise per-row collision
 // measurements, and independent of it - this table drives `Tank::mass`
@@ -308,6 +344,17 @@ pub const MAX_DAMAGE: f32 = 100.0;
 pub const ENEMY_SPAWN_MARGIN_MIN: f32 = 0.2;
 pub const ENEMY_SPAWN_MARGIN_MAX: f32 = 0.4;
 
+// Fraction of enemies that start each round already carrying a special
+// weapon (laser or minigun, see ENEMY_SPECIAL_WEAPON_LASER_SHARE) loaded
+// with a full pickup's worth of ammo, rather than the shell-only default
+// every tank otherwise spawns with (see Game::init's enemy spawn loop).
+// Rolled independently per enemy, so this is an expected fraction across a
+// round, not an exact headcount.
+pub const ENEMY_SPECIAL_WEAPON_CHANCE: f32 = 0.4;
+// Of an enemy that rolls a special weapon, the odds it's a laser rather
+// than a minigun - the remaining share gets a minigun instead.
+pub const ENEMY_SPECIAL_WEAPON_LASER_SHARE: f32 = 0.5;
+
 // When the round ends (player destroyed, or all enemies destroyed) the result
 // is shown for this long, then the game restarts.
 pub const RESTART_DELAY: f32 = 3.0;
@@ -474,6 +521,29 @@ pub const RAM_DAMAGE_COOLDOWN: f32 = 0.5;
 pub const KNOCKBACK_STRENGTH: f32 = 0.2; // fraction of ram closing speed converted to push speed
 pub const KNOCKBACK_MAX_SPEED: f32 = 60.0; // px/s cap on any one push - keeps it small
 
+// Firing recoil: a small backward impulse on the shooter along the shell's
+// own travel axis (so a misfire's aim skew skews the kick too), applied in
+// `fire_shell`. Mass-normalized the same way as ram/explosion knockback
+// above (reference mass = chassis-free scale^2, divided by the shooter's
+// real `Tank::mass`) so a heavier chassis visibly recoils less per shot than
+// a lighter one - "feels heavier" without needing its own per-chassis table.
+// Deliberately much smaller than KNOCKBACK_MAX_SPEED: this is felt, not a
+// real shove.
+pub const SHELL_RECOIL_SPEED: f32 = 18.0;
+pub const SHELL_RECOIL_MAX_SPEED: f32 = 40.0;
+
+// Ricochet: a shell reflects off an indestructible Iron obstacle instead of
+// detonating, up to this many times per shell (see `Shell::bounces_left`) -
+// every other target (a tank, the frog, the battlefield's outer boundary
+// wall, any destructible wall material) still detonates on first contact
+// regardless. The outer boundary is deliberately excluded even though it's
+// also an indestructible wall: bouncing off the edge of the arena reads as
+// "the game rejected my shot," not as a mechanic to play around, so it's
+// just a hit. One bounce keeps the Iron case readable: a shot that grazes
+// a pillar gets one more chance to land, not an indefinitely ping-ponging
+// shell.
+pub const SHELL_RICOCHET_BOUNCES: u32 = 1;
+
 // Enemy AI tuning. Distances are in pixels, times in seconds.
 // 800 (was 520) - at the old value enemies never noticed the player past
 // roughly half the default 1280x720 window, reading as passive/oblivious
@@ -506,16 +576,47 @@ pub const WANDER_SPREAD_CANDIDATES: u32 = 6;
 // position, so any group of enemies converging on the player independently
 // picked the same destination and piled up on top of each other/each other's
 // pathfinding routes - the actual cause of tank "clustering", not a
-// pathfinding bug. `simulation.rs::Game::update` now assigns each currently-
-// engaged enemy a distinct point on a ring around the player instead (see
-// its `engage_targets` map and Ai::think's `engage_target` parameter), the
-// same "known positions of teammates -> spread out" idea `wander`'s
-// WANDER_SPREAD_CANDIDATES already uses for patrol, just as a deterministic
-// slot assignment (stable per-tank angle) rather than resampled candidates,
-// since here the target needs to hold steady rather than be re-picked.
-// Comfortably inside ENEMY_ATTACK_RANGE so a ringed enemy still ends up
-// close enough to fight rather than orbiting just outside range.
+// pathfinding bug. `simulation.rs::Game::update` now claims each engaged
+// enemy a distinct slot out of 4 cardinal axes (N/E/S/W through the player,
+// since `act_attack` can only ever fire from exactly on-axis -
+// ENEMY_FIRE_ALIGN_PX - so an off-axis point would strand a tank that could
+// never turn it into a firing solution) x 2 lateral firing positions x a
+// reserve rank (see ENGAGE_LATERAL_OFFSET/ENGAGE_RESERVE_RADIUS below), with
+// real per-frame mutual exclusion so two tanks can never both resolve to the
+// same point - the same "known positions of teammates -> spread out" idea
+// `wander`'s WANDER_SPREAD_CANDIDATES already uses for patrol, just claimed
+// once and held steady (see `engage_slot_choice`) rather than resampled
+// every frame. Comfortably inside ENEMY_ATTACK_RANGE so a firing-line enemy
+// still ends up close enough to fight rather than orbiting just outside
+// range.
 pub const ENGAGE_RING_RADIUS: f32 = ENEMY_ATTACK_RANGE * 0.8;
+
+// Lateral offset (px, perpendicular to the axis) between the two rank-0
+// firing slots on the same cardinal axis. Kept under ENEMY_FIRE_ALIGN_PX
+// (24) so *both* slots stay inside the fire-alignment band - a tank in
+// either one can still get a shot off - while still separating the pair by
+// double this (36px), comfortably clear of every hull width
+// (TANK_HULL_BBOX_BY_ROW) and of ENEMY_FIRE_ALIGN_PX itself, so
+// `friendly_blocks_shot` no longer treats a paired teammate as blocking the
+// shot the way same-axis depth-stacking used to.
+pub const ENGAGE_LATERAL_OFFSET: f32 = 18.0;
+
+// Forward distance (px) of the reserve rank (rank 1) an axis's 3rd/4th
+// engaged tank claims once both rank-0 firing slots on every reachable axis
+// are taken. Deliberately past ENEMY_ATTACK_RANGE so a reserve tank neither
+// attempts to fire nor sits in a firing lane, and far enough behind
+// ENGAGE_RING_RADIUS (128px) to stay outside the probe's CLUSTER_RADIUS,
+// while still comfortably inside ENEMY_VIEW_RANGE so Chase keeps steering
+// it there instead of losing track of the fight.
+pub const ENGAGE_RESERVE_RADIUS: f32 = ENEMY_ATTACK_RANGE + 60.0;
+
+// The shortest forward distance a rank-0 firing slot may be clamped down to
+// when a near-wall player would otherwise push the full ENGAGE_RING_RADIUS
+// point off the battlefield (see `simulation.rs`'s `engage_point` closure) -
+// below this the slot is invalid rather than clamped further. Set just past
+// ENEMY_MISFIRE_RANGE so a clamped slot never lands inside the forced-
+// misfire zone.
+pub const ENGAGE_MIN_RADIUS: f32 = 190.0;
 
 // Shared aggression: once any enemy has the player within ENEMY_VIEW_RANGE,
 // every enemy on the field treats the player's current position as a shared
@@ -718,6 +819,15 @@ pub const SHOCKWAVE_DURATION: f32 = 1.0; // seconds the effect plays before clea
 pub const SHOCKWAVE_SPEED: f32 = 0.8; // ring growth speed, UV units/sec
 pub const SHOCKWAVE_WIDTH: f32 = 0.08; // thickness of the distorted band, UV units
 pub const SHOCKWAVE_STRENGTH: f32 = 0.03; // how hard the ring bends the image, UV units
+
+// Camera shake: a short, decaying screen-space wobble on the exact same
+// "kill shockwave" trigger `Game::shock` already drives (see `Shockwave`
+// above and `Game::render`'s blit of `scene_target`) - no separate trigger
+// plumbing needed. Deliberately much shorter than SHOCKWAVE_DURATION so it
+// reads as one punchy hit rather than a full second of wobble.
+pub const CAMERA_SHAKE_DURATION: f32 = 0.3; // seconds the shake lasts
+pub const CAMERA_SHAKE_MAGNITUDE: f32 = 10.0; // px offset at full strength
+pub const CAMERA_SHAKE_FREQUENCY: f32 = 40.0; // radians/sec of the underlying wobble
 
 // A tank's death also deals a small splash of damage to any tank on the
 // *opposing* side caught nearby, on top of the shockwave visual. Deliberately
@@ -1058,10 +1168,116 @@ pub const PICKUP_COLLECT_RADIUS: f32 = 32.0;
 // worth detouring for, not an automatic full reset.
 pub const PICKUP_HEAL_AMOUNT: f32 = 30.0;
 // Ammo pickup: how many shells it adds. Uncapped - separate from MAX_SHELLS
-// (7), which stays exactly what it was: the passive-recharge target (see
+// (10), which stays exactly what it was: the passive-recharge target (see
 // Tank::tick_recharge, untouched by this feature). A pickup is the only way
-// past 7, and stacking pickups can push a magazine arbitrarily high.
+// past 10, and stacking pickups can push a magazine arbitrarily high.
 pub const PICKUP_AMMO_AMOUNT: i32 = 4;
+
+// --- Laser pickup/weapon (pickup.rs's PickupKind::Laser, laser.rs,
+// simulation.rs's fire_laser/resolve_laser_hit) ---
+// A limited-charge, instant-hit weapon: while Tank::laser_charges > 0,
+// firing resolves a hit the same frame (no travel time, unlike Shell) and
+// consumes one charge; at zero the tank reverts to its normal shell. Same
+// pickup mechanics as health/ammo (collect on touch, respawn from map
+// slots) - see PickupKind::Laser's own handling in
+// `Game::update`'s pickup-collection section.
+pub const LASER_CHARGES_PER_PICKUP: i32 = 6;
+// Lower than PLAYER_DAMAGE_MIN/MAX (10..30) - a laser never misses (no
+// travel time to dodge), so its per-hit damage is toned down to compensate
+// for that guaranteed accuracy rather than stacking a shell's damage on top
+// of it.
+pub const LASER_DAMAGE_MIN: f32 = 8.0;
+pub const LASER_DAMAGE_MAX: f32 = 14.0;
+// Two variants (see `laser::LaserVariant`), rolled once per pickup rather
+// than per shot - LASER_BLUE_PICKUP_CHANCE is Blue's odds (so Red is the
+// remaining 60%), and a Blue charge batch fires at LASER_DAMAGE_MIN/MAX
+// scaled by this factor instead of the Red baseline.
+pub const LASER_BLUE_PICKUP_CHANCE: f32 = 0.4;
+pub const LASER_BLUE_DAMAGE_FACTOR: f32 = 1.2;
+// How long a fired beam stays on screen before fading out (see
+// `laser::LaserBeam`) - purely cosmetic, long enough to read as a flash,
+// short enough not to look like it lingers.
+pub const LASER_BEAM_DISPLAY_SECONDS: f32 = 0.12;
+// Line thickness (px) `laser::draw_laser_beam` draws its glow pass at - the
+// core pass draws thinner, at a fixed fraction of this.
+pub const LASER_BEAM_WIDTH: f32 = 4.0;
+
+// --- Minigun pickup/weapon (pickup.rs's PickupKind::Minigun, bullet.rs,
+// simulation.rs's fire_bullet/MinigunBurst handling) ---
+// Sits in weapon priority between the laser (used/depleted first) and the
+// tank's traditional shell (used last) - see Tank::active_weapon. A burst
+// fires MINIGUN_BURST_SIZE individually-simulated Bullet entities, not one
+// abstract "burst" object: the first immediately on the trigger frame, the
+// rest queued MINIGUN_BULLET_DELAY_SECONDS apart (Tank::minigun_burst).
+pub const MINIGUN_AMMO_PER_PICKUP: i32 = 40; // ~5 full bursts per pickup
+pub const MINIGUN_BURST_SIZE: u32 = 8;
+// In TANK_TWIN_SHOT_DELAY_SECONDS's own 0.05s neighborhood, just a touch
+// tighter so the stutter reads faster/busier than a twin-cannon's one-beat
+// second shot.
+pub const MINIGUN_BULLET_DELAY_SECONDS: f32 = 0.04;
+// Extra gap held after a burst's last bullet before Tank::fire_cooldown
+// clears, so a fresh trigger pulse can't stack a new burst on an unfinished
+// one (same mechanism/field pending_shot's own TANK_TWIN_SHOT_DELAY_SECONDS
+// already relies on, just generalized to a much longer queue).
+pub const MINIGUN_BURST_TRAILING_GAP_SECONDS: f32 = 0.1;
+pub const MINIGUN_BURST_COOLDOWN_SECONDS: f32 = (MINIGUN_BURST_SIZE - 1) as f32
+    * MINIGUN_BULLET_DELAY_SECONDS
+    + MINIGUN_BURST_TRAILING_GAP_SECONDS;
+// Each bullet's direction is jittered by up to this many degrees off the aim
+// line, independent of (and stacked on top of) the same point-blank misfire
+// skew a shell/laser can already roll - the minigun's own "spray" identity,
+// distinct from the laser's guaranteed hit and a shell's clean-unless-
+// misfired aim.
+pub const MINIGUN_BULLET_SPREAD_DEG: f32 = 4.0;
+
+pub const MINIGUN_BULLET_TEXTURE_SIZE: f32 = 32.0;
+pub const MINIGUN_BULLET_SCALE: f32 = 2.0; // matches SHELL_SCALE - same on-screen chunkiness
+pub const MINIGUN_BULLET_SPEED: f32 = 900.0; // faster than SHELL_SPEED (500) - a zippy tracer, not a lobbed shell
+pub const MINIGUN_BULLET_HIT_HALF_EXTENT: f32 = 2.0; // smaller than SHELL_HIT_HALF_EXTENT (3.0) - a lighter caliber
+// Deliberately well below LASER_DAMAGE_MIN/MAX (8..14) and PLAYER_DAMAGE_
+// MIN/MAX (10..30) per bullet - a single round is a non-event. A fully-
+// landed burst (8 * ~3.0 avg = ~24) lands near one solid shell hit or a bit
+// above one laser hit, rewarding sustained accuracy across a whole burst
+// rather than any single round mattering. Applied the same way laser damage
+// is - one shared range for player and enemy, scaled only by
+// TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW, not shell's PLAYER_/ENEMY_ split.
+pub const MINIGUN_BULLET_DAMAGE_MIN: f32 = 2.0;
+pub const MINIGUN_BULLET_DAMAGE_MAX: f32 = 4.0;
+// Much lighter than SHELL_RECOIL_SPEED/_MAX (18.0/40.0) - a full burst
+// should rattle the tank, not shove it once hard like a cannon shot.
+pub const MINIGUN_BULLET_RECOIL_SPEED: f32 = 3.0;
+pub const MINIGUN_BULLET_RECOIL_MAX_SPEED: f32 = 10.0;
+// Tighter than SHELL_SHADOW_OFFSET_MIN/MAX (9..20) - a smaller, lower round.
+pub const MINIGUN_BULLET_SHADOW_OFFSET_MIN: f32 = 5.0;
+pub const MINIGUN_BULLET_SHADOW_OFFSET_MAX: f32 = 10.0;
+pub const MINIGUN_BULLET_SHADOW_OPACITY: f32 = 0.30; // matches SHELL_SHADOW_OPACITY
+
+// --- Minigun mount (visual only): tank.rs's draw_minigun_mount, the
+// barrel-cluster overlay layered on the turret while minigun_ammo > 0 -
+// tools/spritegen/gen_minigun_mount.py ---
+pub const MINIGUN_MOUNT_TEXTURE_SIZE: f32 = 32.0;
+// How long each of minigun_mount.png's 3 "hot barrel" frames is shown
+// before advancing to the next, while a burst is active - see
+// Tank::tick_minigun_spin/minigun_cycle_frame. Deliberately a discrete
+// frame swap, not a continuous rotation: this game is top-down, and a real
+// minigun's barrels point along the ground plane toward the target, so
+// their rotation axis is edge-on to the camera, not face-on to it -
+// spinning the sprite in the screen plane would read as a helicopter rotor
+// seen from above (wrong axis for this camera angle), not a side-mounted
+// minigun. Cycling which barrel reads as freshly-fired fakes "rounds
+// cycling through firing position" correctly for this view instead. Tuned
+// close to MINIGUN_BULLET_DELAY_SECONDS (0.04) so roughly one barrel-swap
+// happens per bullet fired.
+pub const MINIGUN_CYCLE_SECONDS: f32 = 0.05;
+// Dest-rect scale for the one shared mount texture, layered on top of
+// Tank::scale - deliberately the same on every chassis (not indexed by
+// row): the minigun is a fixed piece of hardware, so it reads as one
+// consistent size regardless of which tank it's bolted to, the same way
+// its ammo count/damage don't scale with chassis either. Since Tank::scale
+// itself is already a flat 2.0 for every chassis (the tank-to-tank size
+// difference lives in the sprite art, not in `scale`), this constant alone
+// is what to tune if the mount should read bigger/smaller overall.
+pub const MINIGUN_MOUNT_SCALE: f32 = 1.0;
 
 // --- Map editor (dev-only, docs/map-editor-design.md) ---
 // Kept minimal - the editor is a `map-editor`-feature-only, presentation-only
@@ -1107,12 +1323,14 @@ pub const EDITOR_HAMBURGER_SIZE: f32 = 40.0;
 pub mod ai;
 pub mod battlefield;
 pub mod bt;
+pub mod bullet;
 pub mod damage_stage;
 #[cfg(feature = "map-editor")]
 pub mod editor;
 pub mod frog;
 pub mod game;
 pub mod ground;
+pub mod laser;
 pub mod map;
 pub mod obstacle;
 pub mod pathfind;

@@ -1,0 +1,145 @@
+---
+---
+
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
+    <link rel="icon" href="/favicon.ico"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>BongBong!</title>
+    <style lang="scss">
+      $font-size: 10pt;
+      $font-color: #c6c6c6;
+
+      html, body {
+        margin: 0;
+        min-height: 100%;
+        background-color: #2e2e2e;
+        color: $font-color;
+        font-family: sans-serif;
+        font-size: $font-size;
+      }
+
+      a {
+        color:#888;
+      }
+
+      .wrapper {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        width: 100%;
+        min-height: 100vh;
+
+        .game, .footer {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          width: 100%;
+        }
+
+        .game {
+          canvas {
+            display: block;
+            width: min(100vw, 1280px);
+            height: min(100vh, 720px);
+            object-fit: contain;
+            outline: none;
+            -webkit-tap-highlight-color: transparent;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            user-select: none;
+            image-rendering: pixelated;
+          }
+
+          .instructions {
+            text-align: center;
+            font-size: $font-size;
+            padding: 8px 12px;
+            margin-top: 10px !important;
+
+            p {
+              margin: 0.3em 0;
+            }
+          }
+        }
+
+        .footer {
+          .newsletter {
+            text-align: center;
+            font-size: $font-size;
+            padding: 0px;
+            width: 800px;
+            max-width: calc(100vw - 24px);
+
+            p {
+              margin: 0.3em 0;
+            }
+
+            :global(.formkit-input), :global(.formkit-submit) {
+              font-size: $font-size !important;
+              color: #fff !important;
+              background-color: #333333 !important;
+              border: none;
+            }
+
+            :global(div[data-style=clean]) {
+              padding-top: 10px !important;
+            }
+
+            :global(.formkit-form) {
+              margin: 0 auto !important;
+              padding-top: 3px !important;
+            }
+
+            :global(.formkit-powered-by-convertkit-container) {
+              display: none !important;
+            }
+          }
+        }
+      }
+    </style>
+</head>
+<body>
+
+<div class="wrapper">
+    <div class="game">
+        <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+        <div class="instructions">
+            <p>Use arrow keys to move the tank. <kbd>Space</kbd> to fire and <kbd>r</kbd> to restart the game.</p>
+        </div>
+    </div>
+    <div class="footer">
+        <div class="newsletter">
+            <p>Please subscribe to get notified about new releases and updates to BongBong!</p>
+            <script is:inline async data-uid="d4592cd03e" src="https://bong.kit.com/d4592cd03e/index.js"></script>
+        </div>
+        <div>
+            <p>Feedback and suggestions are welcome via <a href="https://github.com/otobrglez">@otobrglez</a>. </p>
+        </div>
+    </div>
+</div>
+
+
+<script is:inline>
+    var Module = {
+        canvas: document.getElementById("canvas"),
+        locateFile: (path) => "/game/" + path,
+        print: (t) => console.log(t),
+        printErr: (t) => console.error(t),
+    };
+    window.addEventListener(
+        "click",
+        function () {
+            const Ctx = window.AudioContext || window.webkitAudioContext;
+            if (!Ctx) return;
+            [Ctx, Module && Module.audioContext].forEach(function (ctx) {
+                if (ctx && ctx.state === "suspended") ctx.resume();
+            });
+        },
+        {once: true},
+    );</script>
+<script is:inline src="/game/bongbong.js"></script>
+</body>
+</html>

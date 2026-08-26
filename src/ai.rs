@@ -5,7 +5,7 @@ use sola_raylib::prelude::Vector2;
 use crate::bt::{Node, Status, action, condition, selector, sequence};
 use crate::pathfind::Grid;
 use crate::pickup::PickupKind;
-use crate::tank::{Dir, Tank};
+use crate::tank::{ActiveWeapon, Dir, Tank};
 use crate::{
     AI_DIR_HOLD_SECONDS, AI_DIR_SWITCH_MARGIN_PX, AI_OBSTACLE_OVERRIDE_HOLD_SECONDS,
     AVOID_DODGE_SECONDS, AVOID_LOOKAHEAD,
@@ -155,6 +155,17 @@ impl Ai {
     /// battlefield this frame (kind + position) - see `Brain::nearest_pickup`,
     /// used by `act_flee`/`act_retreat` so a hurting or ammo-starved tank
     /// heads for a pickup instead of just running blind.
+    /// `line_of_sight` is whether this tank's straight line to the player is
+    /// currently unobstructed by terrain (any obstacle, or the frog) -
+    /// computed in `simulation.rs` (see `terrain_line_of_sight`) against the
+    /// real, un-margined obstacle geometry a shot would actually resolve
+    /// against, deliberately *not* `pathfind::Grid`: that grid's clearance
+    /// margin is sized for a tank's own hull to route through gaps, not for
+    /// a shell's, so reusing it here rejected plenty of geometrically clear
+    /// shots on denser maps and left engaged enemies unable to ever find a
+    /// firing solution. Gates `act_attack`'s fire decision so an enemy
+    /// aligned through a wall it can't destroy (or with the frog in the way)
+    /// doesn't just fire into it forever.
     #[allow(clippy::too_many_arguments)] // perception is passed by value, not bundled
     pub fn think(
         &mut self,
@@ -171,6 +182,7 @@ impl Ai {
         alert: Option<Position>,
         engage_target: Option<Position>,
         pickups: &[(PickupKind, Position)],
+        line_of_sight: bool,
     ) -> Intent {
         self.fire_timer = (self.fire_timer - dt).max(0.0);
         self.retarget_timer = (self.retarget_timer - dt).max(0.0);
@@ -205,6 +217,7 @@ impl Ai {
             alert,
             engage_target,
             pickups,
+            line_of_sight,
         };
         build().tick(&mut bb);
         let intent = bb.intent;
@@ -638,10 +651,20 @@ impl Ai {
     }
 
     /// True while backing off to recharge ammo (see `wants_retreat`). Read
-    /// by the inspect-mode debug overlay (`game.rs`); not used by any
-    /// gameplay decision outside this module.
+    /// by the inspect-mode debug overlay (`game.rs`) and by `Game::update`'s
+    /// engagement-slot assignment, which excludes a retreating tank from the
+    /// engaged set - it isn't attacking, so it shouldn't consume a slot.
     pub fn is_retreating(&self) -> bool {
         self.retreating
+    }
+
+    /// True while this tank is still reacting to a recent hit (see
+    /// `notify_hit`/`ENEMY_HIT_ALERT_SECONDS`) - used by `Game::update`'s
+    /// engagement-slot assignment so a hit-alerted tank outside normal view
+    /// range is still routed through the same spread-slot system instead of
+    /// falling back to the raw player position.
+    pub fn is_hit_alerted(&self) -> bool {
+        self.hit_alert_timer > 0.0
     }
 
     /// Seconds until this tank may fire again (zero or negative means
@@ -737,6 +760,9 @@ struct Brain<'a> {
     /// Every currently-live pickup on the battlefield - see `think`'s
     /// `pickups` parameter and `nearest_pickup`.
     pickups: &'a [(PickupKind, Position)],
+    /// Whether this tank's straight line to the player is currently clear
+    /// of terrain - see `think`'s `line_of_sight` parameter.
+    line_of_sight: bool,
 }
 
 impl Brain<'_> {
@@ -790,7 +816,15 @@ impl Brain<'_> {
     /// resources, more aggressive" half; wants_retreat/act_flee are the
     /// "running low, fall back" half.
     fn fire_interval(&self) -> f32 {
-        let ammo_frac = (self.me.shells_ammo as f32 / MAX_SHELLS as f32).clamp(0.0, 1.0);
+        // A held laser charge or minigun ammo costs no shells, so either one
+        // counts as full ammo confidence for pacing purposes - same
+        // reasoning as tier 3's retreat-skip above (`build`), just for
+        // firing cadence instead of whether to retreat at all.
+        let ammo_frac = if self.me.active_weapon() != ActiveWeapon::Shell {
+            1.0
+        } else {
+            (self.me.shells_ammo as f32 / MAX_SHELLS as f32).clamp(0.0, 1.0)
+        };
         let health_frac = (1.0 - self.me.damage / MAX_DAMAGE).clamp(0.0, 1.0);
         let aggression = ammo_frac.min(health_frac);
         ENEMY_FIRE_INTERVAL - (ENEMY_FIRE_INTERVAL - ENEMY_FIRE_INTERVAL_AGGRESSIVE) * aggression
@@ -857,6 +891,7 @@ impl Brain<'_> {
         (dir, off_axis, forward > 0.0)
     }
 
+
     /// True if another enemy sits roughly on `fire_dir`'s line, closer than
     /// `max_forward` (normally the distance to the player) - i.e. firing
     /// straight down that axis right now would hit a teammate before the
@@ -914,10 +949,18 @@ fn build<'a>() -> Node<Brain<'a>> {
             condition(|b: &mut Brain| b.me.damage >= ENEMY_FLEE_DAMAGE && b.player_alive()),
             action(act_flee),
         ]),
-        // 3. Low on shells: back off and hold fire until recharged.
+        // 3. Low on shells: back off and hold fire until recharged - unless
+        // a laser charge is available, since that's a shot that costs no
+        // shells at all and there's nothing to recharge by retreating from.
+        // Deliberately short-circuits before `wants_retreat` so its ammo
+        // hysteresis doesn't even latch on while the laser/minigun covers
+        // for it; once both run out, the next tick evaluates fresh against
+        // whatever `shells_ammo` actually is by then.
         sequence(vec![
             condition(|b: &mut Brain| {
-                b.player_alive() && b.ai.wants_retreat(b.me.shells_ammo)
+                b.player_alive()
+                    && b.me.active_weapon() == ActiveWeapon::Shell
+                    && b.ai.wants_retreat(b.me.shells_ammo)
             }),
             action(act_retreat),
         ]),
@@ -936,6 +979,31 @@ fn build<'a>() -> Node<Brain<'a>> {
                     && (b.dist_to_player() <= ENEMY_VIEW_RANGE || b.ai.hit_alert_timer > 0.0)
             }),
             action(act_chase),
+        ]),
+        // 5.5. Opportunistically go collect a live Laser pickup when out of
+        // charges - reached only once nothing higher-priority (fleeing,
+        // retreating, attacking, chasing) already claimed this tank, so it
+        // never interrupts a fight, just fills idle patrol time with a
+        // purposeful detour instead. See `act_seek_laser`.
+        sequence(vec![
+            condition(|b: &mut Brain| {
+                b.me.laser_charges <= 0 && b.pickups.iter().any(|(k, _)| *k == PickupKind::Laser)
+            }),
+            action(act_seek_laser),
+        ]),
+        // 5.6. Same idea for a live Minigun pickup, but only once this tank
+        // has fallen all the way back to shells (`active_weapon() ==
+        // Shell`) - a laser-charged tank has no reason to detour for
+        // minigun ammo, since laser always outranks it anyway (unlike tier
+        // 5.5 above, which stays unconditional: laser is worth detouring
+        // for regardless of what else is currently equipped).
+        sequence(vec![
+            condition(|b: &mut Brain| {
+                b.me.minigun_ammo <= 0
+                    && b.me.active_weapon() == ActiveWeapon::Shell
+                    && b.pickups.iter().any(|(k, _)| *k == PickupKind::Minigun)
+            }),
+            action(act_seek_minigun),
         ]),
         // 6. Fallback: patrol.
         action(act_patrol),
@@ -994,11 +1062,42 @@ fn act_retreat(b: &mut Brain) -> Status {
     Status::Success
 }
 
+/// Head for the nearest live Laser pickup - see the behavior tree's tier 5.5
+/// (`build`) for when this is actually reached. Failure (rather than a blind
+/// fallback like `act_flee`/`act_retreat` have) is deliberate: the tree's
+/// own condition already guarantees a pickup exists whenever this runs, so
+/// `None` here would mean it was collected the same frame another enemy
+/// reached it first - falling through to patrol is the right response, not
+/// wandering toward a spot that's no longer there.
+fn act_seek_laser(b: &mut Brain) -> Status {
+    b.reset_aim();
+    let Some(target) = b.nearest_pickup(PickupKind::Laser) else {
+        return Status::Failure;
+    };
+    b.intent.move_dir = Some(b.steer(target));
+    Status::Success
+}
+
+/// Same idea as `act_seek_laser`, for a Minigun pickup instead - see tier
+/// 5.6 (`build`) for when this is actually reached.
+fn act_seek_minigun(b: &mut Brain) -> Status {
+    b.reset_aim();
+    let Some(target) = b.nearest_pickup(PickupKind::Minigun) else {
+        return Status::Failure;
+    };
+    b.intent.move_dir = Some(b.steer(target));
+    Status::Success
+}
+
 /// Hold near the player and shoot when lined up on a cardinal axis. The tank
 /// only fires after staying aligned for ENEMY_AIM_SETTLE, and stops to aim.
 fn act_attack(b: &mut Brain) -> Status {
     let (fire_dir, off_axis, in_front) = b.aim_alignment();
-    let aligned = off_axis <= ENEMY_FIRE_ALIGN_PX && in_front;
+    // A geometrically on-axis spot the AI can't actually shoot from (a wall
+    // in the way) is treated the same as not being aligned at all, so the
+    // tank repositions instead of settling in and holding a shot it can
+    // never take - see `think`'s `line_of_sight` parameter doc comment.
+    let aligned = off_axis <= ENEMY_FIRE_ALIGN_PX && in_front && b.line_of_sight;
 
     if aligned {
         // Line up: face the fire direction and hold position while settling.
@@ -1047,10 +1146,19 @@ fn act_chase(b: &mut Brain) -> Status {
 /// has a shared `alert` (see `Brain::alert`), in which case head straight
 /// for it instead of picking a random point. This is what makes the *whole*
 /// map converge on a sighting rather than just whichever single enemy
-/// happened to be close enough to personally see the player.
+/// happened to be close enough to personally see the player. Steers at
+/// `engage_target` instead of the raw alert point on the rare tick this
+/// tank already has one despite still being outside view range (it took a
+/// hit and got pulled into slot assignment early - see `Game::update`'s
+/// `hit_alerted`); a merely alert-following tank with no personal sighting
+/// yet has no slot and just heads for the raw point, which is deliberate -
+/// see `Game::update`'s engagement-slot doc comment for why broadening slot
+/// assignment to every alerted tank, not just hit ones, made clustering
+/// worse instead of better (a still-distant pack funnels toward its
+/// eventual axis slots through the same bottleneck for its whole transit).
 fn act_patrol(b: &mut Brain) -> Status {
     if let Some(target) = b.alert {
-        b.intent.move_dir = Some(b.steer(target));
+        b.intent.move_dir = Some(b.steer(b.engage_target.unwrap_or(target)));
     } else {
         b.intent.move_dir = Some(b.wander());
     }

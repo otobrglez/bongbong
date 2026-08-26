@@ -12,9 +12,7 @@ in {
     pkgs.git
     pkgs.cmake
     pkgs.SDL2
-    # Used by tools/gen_*.py (asset generators) and tools/setup_emscripten.sh.
     pkgs.python3
-    # Runs the web build/serve recipes in `justfile`.
     pkgs.just
     # CLI tool for managing CoWork Skills (https://crates.io/crates/cowork).
     # Built from crates.io rather than cargo-install'd, so it's reproducible

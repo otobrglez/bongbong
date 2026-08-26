@@ -340,6 +340,11 @@ pub fn spawn_from_map(
             }
             CellObject::Road => road_cells.push(pos),
             CellObject::Frog => frog_pos = Some(pos),
+            // The player's start position is read directly from
+            // `self.map.start_cell()` in `Game::init`, before this function
+            // runs (the player is spawned before map terrain is) - nothing
+            // here needs to track it.
+            CellObject::Start => {}
             CellObject::Pickup { pickup } => pickup_slots.push((pos, pickup)),
         }
     }

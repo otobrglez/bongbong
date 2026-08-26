@@ -1,9 +1,9 @@
 name: Cloudflare Deploy
 
-# Builds the wasm/web build (same steps as `just build-web`, see justfile
-# and CLAUDE.md's "Web / wasm build" section) and deploys target/web/ to
-# the "bongbong" Cloudflare Worker (static assets, see wrangler.toml) that
-# already serves bongbong.io. Mirrors release.yml's tag trigger so a
+# Builds the wasm/web build and the Astro site around it (same steps as
+# `just build-web`, see justfile and site/README.md) and deploys site/dist/
+# to the "bongbong" Cloudflare Worker (static assets, see wrangler.toml)
+# that already serves bongbong.io. Mirrors release.yml's tag trigger so a
 # `git tag vX.Y.Z && git push --tags` ships both the native binaries
 # (release.yml, cargo-dist) and the web build (this workflow) together.
 #
@@ -37,6 +37,20 @@ jobs:
           toolchain: ${{ env.RUST_VERSION }}
           targets: wasm32-unknown-emscripten
 
+      - name: Enable corepack (pins yarn to site/package.json's packageManager)
+        run: corepack enable
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: yarn
+          cache-dependency-path: site/yarn.lock
+
+      - name: Install site dependencies
+        working-directory: site
+        run: yarn install --immutable
+
       - name: Cache cargo/emsdk
         uses: actions/cache@v4
         with:
@@ -58,16 +72,19 @@ jobs:
           ./emsdk install "$EMSDK_VERSION"
           ./emsdk activate "$EMSDK_VERSION"
 
-      - name: Build web bundle
+      - name: Build wasm
         run: |
           source ~/.local/share/emsdk/emsdk_env.sh
           cargo build --release --target wasm32-unknown-emscripten
-          mkdir -p target/web
-          rm -f target/web/*
-          sed 's/__BONGBONG_BIN__/bongbong/g' web/shell.html > target/web/index.html
-          cp target/wasm32-unknown-emscripten/release/bongbong.wasm target/web/
-          cp target/wasm32-unknown-emscripten/release/bongbong.js target/web/
-          cp target/wasm32-unknown-emscripten/release/deps/bongbong.data target/web/
+          mkdir -p site/public/game
+          rm -f site/public/game/*
+          cp target/wasm32-unknown-emscripten/release/bongbong.wasm site/public/game/
+          cp target/wasm32-unknown-emscripten/release/bongbong.js site/public/game/
+          cp target/wasm32-unknown-emscripten/release/deps/bongbong.data site/public/game/
+
+      - name: Build Astro site
+        working-directory: site
+        run: yarn build
 
       - name: Deploy to Cloudflare Workers
         uses: cloudflare/wrangler-action@v4

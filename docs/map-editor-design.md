@@ -36,6 +36,37 @@ one (a map with no `Frog` cell still gets a random near-center placement,
 since a round needs exactly one live frog for the protect-objective
 mechanic to mean anything).
 
+**Later change #2: player start point + a map-level default enemy count.**
+A map can now place one `Start` cell (editor palette icon: a tank sprite,
+same fixed representative sprite - `tank::icon_source_rec`, Scout row/col
+0 - as the other editor icons, not any particular round's rolled chassis) -
+singleton, same "clicking a new cell moves it" convention as the Frog tool
+(`MapFile::start_cell`, mirroring `frog_cell`). `Game::init` reads it
+directly off `self.map` *before* spawning the player (the player is created
+before `battlefield::spawn_from_map` runs, so it can't wait on that
+function's output the way the frog fallback does) and uses it as the
+player's spawn position; a map with no `Start` cell falls back to
+`MapFile::nearest_free_cell` around the battlefield's exact center - an
+expanding-ring search (by grid cell, only `Wall` cells block it) that snaps
+to the nearest non-wall cell rather than always the literal center point,
+so a map with a wall placed at/near center doesn't spawn the player wedged
+inside it.
+`battlefield::spawn_from_map`'s own per-cell match still has to handle the
+`CellObject::Start` variant (the match is exhaustive) but does nothing with
+it there - it exists purely as saved position data, not something that
+spawns an entity.
+
+`MapFile` also gained a plain `tanks: Option<u32>` field (TOML: a top-level
+`tanks = N` alongside `version`, not a cell) - the map's own default enemy
+count. Precedence in `Game::init`: `-e`/`--enemies` wins outright when
+given; otherwise `map.tanks` if the map set one; otherwise the existing
+random `ENEMY_COUNT_MIN..=ENEMY_COUNT_MAX` roll. `#[serde(default)]` keeps
+every map file saved before this change (including the ones already in
+`maps/`) parsing unchanged as `tanks = None`. Not exposed anywhere in the
+editor UI (no button/field for it) - a designer sets it by hand-editing the
+saved TOML's `tanks = N` line, the same way `version` itself is never
+edited through the UI either.
+
 ## Goals
 
 - Let a developer hand-author a battlefield layout — walls (per material),
@@ -100,8 +131,11 @@ object, left to right:
 | Glass wall | `Obstacle` material `Glass` | called out separately in the requirements, but it's just the fourth `obstacle::Material` — same placement code path as the other three |
 | Road | `ground::GroundGrid` cell → `Road` | see "Road & autotiling" below |
 | Frog | single `Frog` placement | see "Frog: singleton enforcement" below |
+| Tank (start point) | single `Start` placement | player spawn position - see "Later change #2" above; singleton, same move-on-click behavior as Frog |
 | Health pickup | a `Pickup` spawn slot, kind `Health` | see "Pickups: fixed spawn slots" below |
 | Ammo pickup | a `Pickup` spawn slot, kind `Ammo` | " |
+| Laser pickup | a `Pickup` spawn slot, kind `Laser` | " |
+| Minigun pickup | a `Pickup` spawn slot, kind `Minigun` | " |
 | Eraser | clears whatever occupies the clicked cell | see "Eraser" below |
 
 Each icon is a small button (~48x48px) drawn with the corresponding sprite
@@ -191,26 +225,29 @@ one already exists.
 Today's pickups (`pickup.rs`, `simulation.rs`'s `spawn_pickup`) have no
 fixed positions at all — at round start, and again any time the live count
 drops below `PICKUP_COUNT`, a kind and a random corner-adjacent position
-are rolled fresh. A map's Health/Ammo placements don't replace that
-mechanism, they give it fixed candidate *slots* to draw from instead of
-rolling a random corner: any number of each may be placed (no singleton
-restriction like the frog — a map with zero, three, or ten health pickups
-is equally valid), each cell records only its kind, not "currently
+are rolled fresh. A map's Health/Ammo/Laser/Minigun placements don't
+replace that mechanism, they give it fixed candidate *slots* to draw from
+instead of rolling a random corner: any number of each may be placed (no
+singleton restriction like the frog — a map with zero, three, or ten health
+pickups is equally valid), each cell records only its kind, not "currently
 occupied," since a slot's occupancy is just whether a live `Pickup` entity
 currently sits there.
 
-At round start with a map loaded, every placed slot spawns its pickup
-immediately (subject to the same normal clearance-from-obstacles check
-`spawn_pickup` already does — a slot placed on top of a wall is simply
-skipped, same "budget attempt, don't force it" pattern
-`sample_structure_positions` uses for obstacle clusters). When a pickup is
-collected and the live count drops below `PICKUP_COUNT` again, the
-top-up re-spawn also draws from the map's slot list (an empty slot,
-picked at random among currently-unoccupied ones) instead of
-`battlefield::sample_corner_position`, so a designed map's pickups keep
-reappearing where they were placed rather than drifting to random
-corners after the first collection. Maps with no pickup slots at all keep
-today's fully-random corner behavior unchanged — this only activates when
+**Superseded again, past even the "Later change" note at the top of this
+doc:** at round start every placed slot spawns its pickup unconditionally,
+with no clearance check at all (`simulation::spawn_pickup_at`) — a
+map-placed pickup is a deliberate placement, same as the frog, so it's
+honored exactly rather than silently skipped for sitting close to a wall.
+An earlier version of this feature *did* apply the old random-placement's
+clearance check here too, which meant pickups placed near a dense wall
+cluster (the kind a real hand-authored map tends to have) would often just
+silently fail to spawn - not what "map represents placeholders for health
+and ammo spawning" was supposed to mean. When a pickup is collected and the
+live count drops below the slot count, the top-up re-spawn draws from the
+map's slot list (an empty slot, picked at random among currently-unoccupied
+ones), so a designed map's pickups keep reappearing exactly where they were
+placed. Maps with no pickup slots at all simply have no pickups — this only
+activates when
 the map actually places at least one.
 
 ### Eraser

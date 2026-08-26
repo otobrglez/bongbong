@@ -3,8 +3,8 @@ use sola_raylib::prelude::*;
 
 use crate::tank::Tank;
 use crate::{
-    Position, SHADOW_DIR_X, SHADOW_DIR_Y, SHELL_SCALE, SHELL_SHADOW_OPACITY, SHELL_SPEED,
-    SHELL_TEXTURE_SIZE, TANK_MUZZLE_FORWARD_OFFSET_BY_ROW,
+    Position, SHADOW_DIR_X, SHADOW_DIR_Y, SHELL_RICOCHET_BOUNCES, SHELL_SCALE,
+    SHELL_SHADOW_OPACITY, SHELL_SPEED, SHELL_TEXTURE_SIZE, TANK_MUZZLE_FORWARD_OFFSET_BY_ROW,
 };
 
 /// A shell's lifecycle. Each variant maps to a column in shells.png (see
@@ -103,6 +103,23 @@ pub struct Shell {
     /// None` above) is a placeholder `spawn` itself never uses, since it has
     /// no `rng` to roll from; the real value is set right after construction.
     pub shadow_offset: f32,
+    /// True only on a frame where `update` actually advanced `position` by
+    /// `velocity * dt` - i.e. every Flying frame except the very first one
+    /// (the Fire2->Flying transition itself moves nothing; see `update`'s
+    /// doc comment). Callers reconstructing this frame's swept movement
+    /// segment as `position - velocity * dt` (the shell-vs-shell and
+    /// shell-vs-target checks in `simulation.rs`) need this to avoid
+    /// backdating that segment into space the shell was never actually in
+    /// - on that first frame the segment should collapse to a single point
+    /// at `position`, not an `SHELL_SPEED * dt`-long phantom stretch behind
+    /// the muzzle.
+    pub flew: bool,
+    /// How many more times this shell may ricochet off a battlefield
+    /// boundary wall or an indestructible Iron obstacle before it detonates
+    /// on one instead - see `simulation.rs`'s shell hit-resolution loop.
+    /// Every other target (a tank, the frog, any destructible obstacle
+    /// material) still detonates on first contact regardless of this.
+    pub bounces_left: u32,
 }
 
 impl Shell {
@@ -153,6 +170,8 @@ impl Shell {
             shooter_row: tank.row,
             body: None,
             shadow_offset: 0.0,
+            flew: false,
+            bounces_left: SHELL_RICOCHET_BOUNCES,
         }
     }
 
@@ -164,10 +183,12 @@ impl Shell {
     /// would otherwise fly off the battlefield always hits one first.
     pub fn update(&mut self, dt: f32) {
         self.timer += dt;
+        self.flew = false;
 
         if self.state == ShellState::Flying {
             self.position.x += self.velocity.x * dt;
             self.position.y += self.velocity.y * dt;
+            self.flew = true;
             return;
         }
 

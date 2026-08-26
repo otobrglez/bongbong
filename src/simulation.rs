@@ -32,19 +32,23 @@ use sola_raylib::core::math::Vector2;
 
 use crate::ai::{Ai, Intent, Mover};
 use crate::battlefield;
+use crate::bullet::{Bullet, BulletState};
 use crate::frog::Frog;
-use crate::map::MapFile;
-use crate::obstacle::Obstacle;
+use crate::laser::{LaserBeam, LaserVariant};
+use crate::map::{self, MapFile};
+use crate::obstacle::{Material, Obstacle};
 use crate::pathfind::Grid;
 use crate::physics::{self, Physics};
 use crate::pickup::{Pickup, PickupKind};
 use crate::shell::{Owner, Shell, ShellState};
 use crate::shockwave::Shockwave;
-use crate::tank::{PendingShot, Tank};
+use crate::tank::{ActiveWeapon, MinigunBurst, PendingShot, Tank};
 use crate::track::Track;
 use crate::{
-    DAMAGE_VARIANTS, ENEMY_ALERT_HOLD_SECONDS, ENEMY_COUNT_MAX, ENEMY_COUNT_MIN, ENEMY_DAMAGE_MAX,
-    ENEMY_DAMAGE_MIN, ENGAGE_RING_RADIUS,
+    DAMAGE_VARIANTS, ENEMY_ALERT_HOLD_SECONDS, ENEMY_COUNT_MAX,
+    ENEMY_COUNT_MIN, ENEMY_DAMAGE_MAX,
+    ENEMY_DAMAGE_MIN, ENEMY_FLEE_DAMAGE,
+    ENGAGE_LATERAL_OFFSET, ENGAGE_MIN_RADIUS, ENGAGE_RESERVE_RADIUS, ENGAGE_RING_RADIUS,
     ENEMY_SPAWN_MARGIN_MAX, ENEMY_SPAWN_MARGIN_MIN, ENEMY_SPEED, ENEMY_SPEED_VARIANCE,
     ENEMY_VIEW_RANGE,
     EXPLOSION_DAMAGE_MAX, EXPLOSION_DAMAGE_MIN, EXPLOSION_KNOCKBACK_SPEED, EXPLOSION_RADIUS,
@@ -52,19 +56,26 @@ use crate::{
     FROG_HOP_ANGLE_FAN_DEG, FROG_HOP_ANGLE_JITTER_DEG, FROG_HOP_BOUNDS_MARGIN, FROG_MAX_HEALTH,
     FROG_SPAWN_MAX_DIST, FROG_SPAWN_MIN_DIST,
     IMPACT_FLASH_DURATION, KNOCKBACK_MAX_SPEED, KNOCKBACK_STRENGTH, MAX_DAMAGE,
+    ENEMY_SPECIAL_WEAPON_CHANCE, ENEMY_SPECIAL_WEAPON_LASER_SHARE,
+    LASER_BLUE_PICKUP_CHANCE, LASER_CHARGES_PER_PICKUP, LASER_DAMAGE_MAX, LASER_DAMAGE_MIN,
+    MINIGUN_AMMO_PER_PICKUP, MINIGUN_BULLET_DAMAGE_MAX, MINIGUN_BULLET_DAMAGE_MIN,
+    MINIGUN_BULLET_HIT_HALF_EXTENT, MINIGUN_BULLET_RECOIL_MAX_SPEED, MINIGUN_BULLET_RECOIL_SPEED,
+    MINIGUN_BULLET_SHADOW_OFFSET_MAX, MINIGUN_BULLET_SHADOW_OFFSET_MIN, MINIGUN_BULLET_SPREAD_DEG,
+    MINIGUN_BURST_COOLDOWN_SECONDS, MINIGUN_BURST_SIZE, MINIGUN_BULLET_DELAY_SECONDS,
     MUZZLE_FLASH_DURATION,
     OBSTACLE_CLEAR, OBSTACLE_HULL_FRACTION, OBSTACLE_SCALE, OBSTACLE_TEXTURE_SIZE,
     PATHFIND_CELL_SIZE, PHYSICS_FIXED_DT, PHYSICS_MAX_CATCHUP_SECONDS, PICKUP_AMMO_AMOUNT,
     PICKUP_COLLECT_RADIUS, PICKUP_HEAL_AMOUNT, PICKUP_RESPAWN_SECONDS,
     PLAYER_DAMAGE_MAX, PLAYER_DAMAGE_MIN, PLAYER_FIRE_INTERVAL, Position,
     RAM_DAMAGE_COOLDOWN, RESTART_DELAY, SHELL_HIT_HALF_EXTENT,
-    SHELL_IMPACT_KNOCKBACK_SPEED,
+    SHELL_IMPACT_KNOCKBACK_SPEED, SHELL_RECOIL_MAX_SPEED, SHELL_RECOIL_SPEED,
     SHELL_SHADOW_OFFSET_MAX, SHELL_SHADOW_OFFSET_MIN, SHELL_SPEED, WALL_THICKNESS,
     SHOCKWAVE_DURATION, TANK_ACCEL_FORCE, TANK_BARREL_LATERAL_OFFSET_BY_ROW,
     TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW,
     TANK_DECEL_CURVE_RATE, TANK_DECEL_SNAP_PX,
     TANK_HULL_DISABLED_DAMAGE,
-    TANK_HULL_TRACK_COLS, TANK_HULL_TRACK_FRAME_DISTANCE, TANK_SHELL_VARIANT_BY_ROW,
+    TANK_HULL_TRACK_COLS, TANK_HULL_TRACK_FRAME_DISTANCE, TANK_MUZZLE_FORWARD_OFFSET_BY_ROW,
+    TANK_SHELL_VARIANT_BY_ROW,
     TANK_TURN_GRIP_FORCE, TANK_TWIN_SHOT_DELAY_SECONDS,
     TANK_WRECK_COLS, TRACK_MAX_OPACITY, TRACK_SCALE_FRACTION, TRACK_SCALE_JITTER, TRACK_SPACING,
     TRACK_WEIGHT_OPACITY_BY_ROW, TRACK_WEIGHT_SCALE_BY_ROW, TRACK_WOBBLE_AMP_MAX_DEG,
@@ -82,10 +93,14 @@ use crate::{
 #[derive(Default, Clone, Copy)]
 pub struct Input {
     /// This frame's commanded movement/fire, straight from raw key state -
-    /// `update` itself decides whether to actually honor `move_dir` (e.g.
-    /// a wreck can't move but may still fire), not the caller, so the
-    /// caller doesn't need to know anything about simulation state to
-    /// produce this.
+    /// `update` itself decides whether to actually honor it, not the
+    /// caller, so the caller doesn't need to know anything about simulation
+    /// state to produce this. `fire` in particular is just "is the fire key held
+    /// down this frame", not edge-detected - `update` is the one that
+    /// decides whether that should fire (a charged laser fires every frame
+    /// it's held; shells need a fresh press) since that depends on the
+    /// player's current weapon state, which the caller has no reason to
+    /// know about. See the fire-handling block in `update`'s own comment.
     pub player_intent: Intent,
     pub pause_pressed: bool,
     pub restart_pressed: bool,
@@ -105,6 +120,19 @@ pub(crate) const PLAYER_OWNER_SLOT: usize = 0;
 /// later needs this enemy's position in any spawn-order list to rebuild it.
 fn enemy_owner_slot(n: usize) -> usize {
     n + 1
+}
+
+/// One claimed engagement-slot identity: which of the 4 cardinal axes
+/// through the player, which rank along it (0 = the firing line at
+/// `ENGAGE_RING_RADIUS`, 1 = the reserve rank at `ENGAGE_RESERVE_RADIUS`),
+/// and which of the 2 lateral positions (`side`, -1/+1) on that axis+rank.
+/// See `update`'s engagement-slot assignment block for how this is claimed
+/// and turned into an actual `Position`.
+#[derive(Clone, Copy)]
+struct EngageSlot {
+    axis: u8,
+    rank: u8,
+    side: i8,
 }
 
 /// How the current round is going.
@@ -184,11 +212,22 @@ pub struct Game {
     /// reset to `ENEMY_ALERT_HOLD_SECONDS` every frame the sighting holds,
     /// ticked down otherwise.
     alert_timer: f32,
-    /// This round's fixed random rotation (radians) applied to every
-    /// engagement-ring slot angle (see `update`'s `engage_targets`), so slot
-    /// 0 doesn't always land due north of the player every round - purely
-    /// cosmetic variety, rolled once in `init`.
-    engage_phase: f32,
+    /// Each currently-engaged enemy's last-claimed `EngageSlot` (axis/rank/
+    /// side) from `update`'s claim-based engagement-slot assignment - kept
+    /// across frames so a tank sticks with whichever slot it already holds,
+    /// re-searching only once that slot actually stops being valid or gets
+    /// claimed out from under it, rather than re-running the full search
+    /// fresh every single frame. Re-evaluating from scratch every frame
+    /// independently of the previous frame's answer let the *choice itself*
+    /// flip between two equally-valid slots near a reachability/LOS
+    /// boundary - unlike a pure angle, whether a candidate qualifies can
+    /// flicker true/false with sub-pixel movement, and a flipping *target
+    /// position* (not just heading) is a discontinuity `Ai::steer`'s
+    /// heading-commitment hysteresis was never built to absorb, showing up
+    /// as extra jitter/clustering anomalies (found via the probe harness's
+    /// `--rounds` sweep). Cleared in `init`; stale entries for despawned
+    /// tanks are simply never read again, not worth pruning.
+    engage_slot_choice: HashMap<Entity, EngageSlot>,
     /// The screen-distortion ring from the most recent tank kill, if one is
     /// still playing out. `pub(crate)`: driven into the shockwave shader by `render`.
     pub(crate) shock: Option<Shockwave>,
@@ -202,6 +241,11 @@ pub struct Game {
     /// shells can land in the same frame or overlap in flight. `pub(crate)`:
     /// drawn by `render`.
     pub(crate) impact_flashes: Vec<Shockwave>,
+    /// Every laser beam fired recently that hasn't finished its short
+    /// on-screen display window yet, oldest first - see `laser::LaserBeam`.
+    /// Same list-of-many shape as `muzzle_flashes`/`impact_flashes`, ticked
+    /// down and pruned the same way. `pub(crate)`: drawn by `render`.
+    pub(crate) laser_beams: Vec<LaserBeam>,
     /// True while the game is paused (toggled by `Input::pause_pressed`);
     /// simulation is frozen and `render` shows a "PAUSED" overlay.
     /// `pub(crate)`: read by `render`.
@@ -262,6 +306,14 @@ pub struct Game {
     /// which case the round simply has no pickups - see "Pickups: fixed
     /// spawn slots" in docs/map-editor-design.md.
     map_pickup_slots: Vec<(Position, PickupKind)>,
+    /// Last frame's raw `Input::player_intent.fire` (i.e. whether the fire
+    /// key was physically held down), so `update` can edge-detect a fresh
+    /// press for shell fire - see the fire-handling block's own comment for
+    /// why shells stay edge-triggered while a charged laser fires
+    /// automatically for as long as the key is held. Defaults to `false` via
+    /// `#[derive(Default)]`, same as every other per-frame tracking field
+    /// here.
+    player_fire_held_last_frame: bool,
 }
 
 /// scifi_tanks_sheet.png has 12 row-variants, one named archetype per row
@@ -292,13 +344,20 @@ impl Game {
         self.time = 0.0;
         self.outcome = Outcome::Playing;
         self.restart_timer = 0.0;
+        // A fresh round should never start behind the pause overlay - most
+        // reachable via the R-key debug restart (see `update`'s
+        // `restart_pressed` handling), which is deliberately allowed while
+        // paused, so without this a paused restart would otherwise hand the
+        // player a new round frozen the instant it begins.
+        self.paused = false;
         self.alert_position = None;
         self.alert_timer = 0.0;
-        self.engage_phase = rng.random_range(0.0..std::f32::consts::TAU);
+        self.engage_slot_choice.clear();
         self.pickup_respawn_timer = 0.0;
         self.shock = None;
         self.muzzle_flashes.clear();
         self.impact_flashes.clear();
+        self.laser_beams.clear();
 
         // Fresh physics world each round rather than trying to reuse/resize
         // the previous one - cheap at this scale, and simplest if the
@@ -318,13 +377,25 @@ impl Game {
         let row = self
             .player_row_override
             .unwrap_or_else(|| rng.random_range(0..TANK_VARIANTS));
-        // The player always spawns at the exact screen center now that
-        // there's no fortress to spawn inside of.
+        // The player spawns at the map's start cell if it placed one
+        // (editor's tank-icon tool - see docs/map-editor-design.md); with no
+        // start cell, fall back to the nearest non-wall cell to the exact
+        // battlefield center (`MapFile::nearest_free_cell`) rather than the
+        // literal center point, so a map with a wall placed at/near center
+        // doesn't spawn the player wedged inside it. Read directly off
+        // `self.map` rather than waiting on `battlefield::spawn_from_map`'s
+        // result below, since the player is spawned before map terrain is.
+        let start_cell = self.map.start_cell().unwrap_or_else(|| {
+            let (center_col, center_row) =
+                map::world_to_cell(Position::new(width / 2.0, height / 2.0));
+            self.map.nearest_free_cell(center_col, center_row)
+        });
+        let start_pos = map::cell_to_world(start_cell.0, start_cell.1);
         let mut tank = Tank {
             row,
             shell_variant: TANK_SHELL_VARIANT_BY_ROW[row as usize],
             damage_variant: rng.random_range(0..DAMAGE_VARIANTS),
-            position: Position::new(width / 2.0, height / 2.0),
+            position: start_pos,
             owner_slot: PLAYER_OWNER_SLOT,
             ..Tank::default()
         };
@@ -335,11 +406,7 @@ impl Game {
             self.physics
                 .spawn_tank(tank.position, tank.hull_half_extents(false), tank.mass()),
         );
-        tank.hit_sensor = Some(self.physics.add_hit_sensor(
-            tank.body.unwrap(),
-            tank.size() * 0.5,
-            physics::owner_group(PLAYER_OWNER_SLOT),
-        ));
+        attach_hit_sensors(&mut self.physics, &mut tank, PLAYER_OWNER_SLOT);
         // Clearance figures below are derived from the player's own hull
         // size, so grab them from this local `tank` before it's moved into
         // the world.
@@ -384,9 +451,26 @@ impl Game {
         let short_side = width.min(height);
         let margin_min = short_side * ENEMY_SPAWN_MARGIN_MIN;
         let margin_max = short_side * ENEMY_SPAWN_MARGIN_MAX;
-        let enemy_count = self
-            .enemy_count_override
-            .unwrap_or_else(|| rng.random_range(ENEMY_COUNT_MIN..=ENEMY_COUNT_MAX));
+        // Precedence: `-e`/`--enemies` (`enemy_count_override`) wins outright
+        // when given; otherwise the map's own `tanks` default (see
+        // `MapFile::tanks`'s doc comment) if it set one; otherwise the usual
+        // random roll, exactly as before either of those existed.
+        let enemy_count = self.enemy_count_override.unwrap_or_else(|| {
+            self.map
+                .tanks
+                .map(|n| n as usize)
+                .unwrap_or_else(|| rng.random_range(ENEMY_COUNT_MIN..=ENEMY_COUNT_MAX))
+        });
+        // Clamped regardless of source (`-e`/`--enemies` or a map's `tanks`
+        // field are both free-form user input, unlike the ordinary random
+        // roll above): `enemy_owner_slot` packs each enemy into its own bit
+        // of a 32-bit rapier `Group` (see `physics::owner_group`), so a
+        // count above 31 wraps two tanks onto the same collision group -
+        // each becomes silently immune to the other's shells in release
+        // (debug builds panic on the bit-shift overflow instead). A count of
+        // 0 is its own failure mode: an instantly-Won round that auto-
+        // restarts every RESTART_DELAY seconds forever.
+        let enemy_count = enemy_count.clamp(1, 31);
 
         // Positions of enemies placed so far - purely local bookkeeping for
         // the clearance checks below, not the entities' actual storage
@@ -427,6 +511,23 @@ impl Game {
                 owner_slot,
                 ..Tank::default()
             };
+            // A fraction of enemies start each round already armed - see
+            // ENEMY_SPECIAL_WEAPON_CHANCE's doc comment - loaded with exactly
+            // what one pickup of that weapon would grant, so an armed spawn
+            // plays identically to a tank that happened to collect one on
+            // frame zero rather than needing its own separate balance.
+            if rng.random_range(0.0..1.0) < ENEMY_SPECIAL_WEAPON_CHANCE {
+                if rng.random_range(0.0..1.0) < ENEMY_SPECIAL_WEAPON_LASER_SHARE {
+                    enemy.laser_charges += LASER_CHARGES_PER_PICKUP;
+                    enemy.laser_variant = if rng.random_range(0.0..1.0) < LASER_BLUE_PICKUP_CHANCE {
+                        LaserVariant::Blue
+                    } else {
+                        LaserVariant::Red
+                    };
+                } else {
+                    enemy.minigun_ammo += MINIGUN_AMMO_PER_PICKUP;
+                }
+            }
             roll_track_distortion(&mut enemy, &mut rng);
             // Spawn rotation is 180.0 (facing down) - `along_x: false`, same
             // Y-axis case as the player's spawn facing.
@@ -435,11 +536,7 @@ impl Game {
                 enemy.hull_half_extents(false),
                 enemy.mass(),
             ));
-            enemy.hit_sensor = Some(self.physics.add_hit_sensor(
-                enemy.body.unwrap(),
-                enemy.size() * 0.5,
-                physics::owner_group(owner_slot),
-            ));
+            attach_hit_sensors(&mut self.physics, &mut enemy, owner_slot);
             enemy_positions.push(pos);
             self.world.spawn((enemy, Ai::default()));
         }
@@ -506,16 +603,15 @@ impl Game {
 
         // --- Pickups (health/ammo) ---
         // The map's own `Pickup` cells *are* the pickup slots - every one
-        // spawns immediately, subject to the same clearance check
-        // `spawn_pickup_at` always applies (a slot placed on top of a wall
-        // is simply skipped). There's no random-placement fallback any
+        // spawns immediately, unconditionally, at exactly the cell the map
+        // placed it at (same "a deliberate placement wins outright, it's
+        // not rejection-sampled" treatment the frog gets above - see
+        // `spawn_pickup_at`). There's no random-placement fallback any
         // more: a map with no pickup cells just has no pickups this round.
         // `self.map_pickup_slots` (set above, from `map_spawn`) is kept for
         // the rest of the round so `update`'s top-up respawn keeps drawing
         // from these same fixed slots - see "Pickups: fixed spawn slots" in
-        // docs/map-editor-design.md. Placed after the frog so pickups steer
-        // clear of it too, same "clear of whatever's already down" order
-        // obstacles/frog themselves follow.
+        // docs/map-editor-design.md.
         for &(pos, kind) in &self.map_pickup_slots {
             spawn_pickup_at(&mut self.world, pos, kind);
         }
@@ -577,6 +673,8 @@ impl Game {
             flash.time += dt;
             flash.time < IMPACT_FLASH_DURATION
         });
+        // Same, but for every in-flight laser beam flash.
+        self.laser_beams.retain_mut(|beam| !beam.tick(dt));
 
         // Round is over: count down and restart, but keep animating the scene
         // (burning wrecks etc.) so the end screen stays lively.
@@ -616,6 +714,7 @@ impl Game {
             tank.ram_cooldown = (tank.ram_cooldown - dt).max(0.0);
             tank.hit_flash_timer = (tank.hit_flash_timer - dt).max(0.0);
             tank.tick_wreck(dt);
+            tank.tick_minigun_spin(dt);
             roll_wreck_col(tank);
         }
         for obstacle in self.world.query::<&mut Obstacle>().iter() {
@@ -648,6 +747,19 @@ impl Game {
         // every shot fired below is collected here and actually spawned in
         // one batch after the player/enemy sections finish querying tanks.
         let mut pending_shells: Vec<Shell> = Vec::new();
+        // Laser shots fired this frame - same deferred-resolution reason as
+        // `pending_shells` (hecs won't allow another mutable Tank query
+        // while the player/enemy tank loops below are still iterating), but
+        // resolved to a damage/visual outcome right after those loops
+        // finish rather than spawned as a `Shell` entity - see the "Lasers:
+        // resolve this frame's beam shots instantly" section below, and
+        // `resolve_laser_hit`.
+        let mut pending_laser_shots: Vec<PendingLaserShot> = Vec::new();
+        // Bullets fired this frame - same deferred-spawn reason as
+        // `pending_shells` above (hecs won't allow spawning into
+        // `self.world` while the player/enemy tank loops below are still
+        // iterating a query over it).
+        let mut pending_bullets: Vec<Bullet> = Vec::new();
 
         // --- Frog: bite the nearest tank in range ---
         // Independent of the hop-on-hit reaction handled down in the shell
@@ -789,6 +901,18 @@ impl Game {
                 match kind {
                     PickupKind::Health => tank.damage = (tank.damage - PICKUP_HEAL_AMOUNT).max(0.0),
                     PickupKind::Ammo => tank.shells_ammo += PICKUP_AMMO_AMOUNT,
+                    PickupKind::Laser => {
+                        tank.laser_charges += LASER_CHARGES_PER_PICKUP;
+                        // Rerolled on every pickup - see LASER_BLUE_PICKUP_CHANCE's
+                        // doc comment - so a fresh batch of charges can swap the
+                        // tank's current variant, not just top up the count.
+                        tank.laser_variant = if rng.random_range(0.0..1.0) < LASER_BLUE_PICKUP_CHANCE {
+                            LaserVariant::Blue
+                        } else {
+                            LaserVariant::Red
+                        };
+                    }
+                    PickupKind::Minigun => tank.minigun_ammo += MINIGUN_AMMO_PER_PICKUP,
                 }
                 drop(q);
                 self.world.despawn(pickup_entity).ok();
@@ -812,16 +936,15 @@ impl Game {
         }
 
         // --- Player: hand this frame's intent to physics ---
-        // A wreck can't move but may still fire - `update` (not the input
-        // source) is what decides that, since it's the one thing here that
-        // actually knows the player's current state.
-        let mut player_intent = input.player_intent;
+        // No wreck-check needed here: the round-over branch above already
+        // returns before this point the moment `self.outcome` isn't
+        // `Playing`, and the player becoming a wreck is exactly what sets
+        // that outcome to `Lost` (see `end_round`) - so by construction, the
+        // player tank is never a wreck by the time execution reaches here.
+        let player_intent = input.player_intent;
         {
             let mut q = self.world.query_one::<&mut Tank>(player);
             let player_tank = q.get().expect("player entity always has a Tank");
-            if player_tank.is_wreck() {
-                player_intent.move_dir = None;
-            }
 
             // Hand the player's commanded velocity to its physics body. Actual
             // movement and collision (walls, tank-vs-tank blocking) happen below
@@ -851,37 +974,132 @@ impl Game {
                 }
             }
 
+            // Resolve any in-progress minigun burst's next queued bullet
+            // before handling any *new* fire input below - same
+            // placement/shape as `pending_shot`'s own tick just above, for
+            // the same reason (needs the physics/rng borrows only available
+            // here, not in the unified per-tank timer loop). Runs every
+            // frame regardless of `player_intent.fire` so the burst keeps
+            // stuttering out even if the player releases the trigger
+            // mid-burst.
+            if let Some(mut burst) = player_tank.minigun_burst {
+                burst.timer -= dt;
+                if burst.timer <= 0.0 {
+                    if player_tank.minigun_ammo > 0 {
+                        player_tank.minigun_ammo -= 1;
+                        fire_bullet(
+                            &mut self.physics,
+                            &mut rng,
+                            &mut pending_bullets,
+                            player_tank,
+                            Owner::Player,
+                            burst.aim_offset,
+                        );
+                        burst.bullets_remaining -= 1;
+                        player_tank.minigun_burst = if burst.bullets_remaining == 0 {
+                            None
+                        } else {
+                            burst.timer = MINIGUN_BULLET_DELAY_SECONDS;
+                            Some(burst)
+                        };
+                    } else {
+                        // Out of ammo mid-burst - stop short, no fallback to shells.
+                        player_tank.minigun_burst = None;
+                    }
+                } else {
+                    player_tank.minigun_burst = Some(burst);
+                }
+            }
+
             // Twin-barrel chassis (nonzero TANK_BARREL_LATERAL_OFFSET_BY_ROW)
             // fire two independent shells - one now, one
             // TANK_TWIN_SHOT_DELAY_SECONDS later via `pending_shot` above -
             // so a shot costs 2 ammo instead of 1.
             let lateral = TANK_BARREL_LATERAL_OFFSET_BY_ROW[player_tank.row as usize];
             let ammo_cost = if lateral > 0.0 { 2 } else { 1 };
-            if player_intent.fire
-                && player_tank.shells_ammo >= ammo_cost
-                && player_tank.fire_cooldown <= 0.0
-            {
-                player_tank.shells_ammo -= ammo_cost;
-                player_tank.fire_cooldown = PLAYER_FIRE_INTERVAL;
-                // The player always fires straight down the barrel. First
-                // shell from the left barrel (negative lateral offset, or
-                // dead center for a single-barrel chassis).
-                fire_shell(
-                    &mut self.physics,
-                    &mut self.muzzle_flashes,
-                    &mut rng,
-                    &mut pending_shells,
-                    player_tank,
-                    Owner::Player,
-                    0.0,
-                    -lateral,
-                );
-                if lateral > 0.0 {
-                    player_tank.pending_shot = Some(PendingShot {
-                        timer: TANK_TWIN_SHOT_DELAY_SECONDS,
-                        aim_offset: 0.0,
-                        lateral_offset: lateral,
-                    });
+            // `player_intent.fire` is the raw "is the fire key held down
+            // this frame" state (see `Input::player_intent`'s doc comment) -
+            // whether that should actually trigger a shot depends on the
+            // weapon: a charged laser or a loaded minigun is full-auto,
+            // firing (or, for the minigun, starting a fresh burst) every
+            // frame the key is held (still rate-limited by `fire_cooldown`
+            // below - that's what turns "held" into shots/bursts at a fixed
+            // cadence rather than one per frame); shells stay edge-triggered,
+            // one pull per physical press, exactly like a real trigger -
+            // `player_fire_held_last_frame` tracks last frame's raw state by
+            // hand so a still-held key can never re-arm a shell shot no
+            // matter how `fire_cooldown` lines up.
+            let fire_pressed = player_intent.fire && !self.player_fire_held_last_frame;
+            self.player_fire_held_last_frame = player_intent.fire;
+            let active_weapon = player_tank.active_weapon();
+            let should_fire = match active_weapon {
+                ActiveWeapon::Laser | ActiveWeapon::Minigun => player_intent.fire,
+                ActiveWeapon::Shell => fire_pressed,
+            };
+            if should_fire && player_tank.fire_cooldown <= 0.0 {
+                match active_weapon {
+                    ActiveWeapon::Laser => {
+                        // Charged with a laser: one instant beam per trigger
+                        // pull, straight down the centerline (no twin-barrel
+                        // split, no ammo cost) - see `laser_shot`.
+                        player_tank.laser_charges -= 1;
+                        player_tank.fire_cooldown = PLAYER_FIRE_INTERVAL;
+                        pending_laser_shots.push(laser_shot(
+                            player_tank,
+                            Owner::Player,
+                            0.0,
+                            player_tank.laser_variant,
+                        ));
+                    }
+                    ActiveWeapon::Minigun => {
+                        if player_tank.minigun_ammo > 0 {
+                            player_tank.minigun_ammo -= 1;
+                            fire_bullet(
+                                &mut self.physics,
+                                &mut rng,
+                                &mut pending_bullets,
+                                player_tank,
+                                Owner::Player,
+                                0.0,
+                            );
+                            let muzzle_pos = pending_bullets.last().expect("just pushed").position;
+                            self.muzzle_flashes.push(Shockwave { center: muzzle_pos, time: 0.0 });
+                            if MINIGUN_BURST_SIZE > 1 {
+                                player_tank.minigun_burst = Some(MinigunBurst {
+                                    bullets_remaining: MINIGUN_BURST_SIZE - 1,
+                                    timer: MINIGUN_BULLET_DELAY_SECONDS,
+                                    aim_offset: 0.0,
+                                });
+                            }
+                            player_tank.fire_cooldown = MINIGUN_BURST_COOLDOWN_SECONDS;
+                        }
+                    }
+                    ActiveWeapon::Shell => {
+                        if player_tank.shells_ammo >= ammo_cost {
+                            player_tank.shells_ammo -= ammo_cost;
+                            player_tank.fire_cooldown = PLAYER_FIRE_INTERVAL;
+                            // The player always fires straight down the barrel. First
+                            // shell from the left barrel (negative lateral offset, or
+                            // dead center for a single-barrel chassis).
+                            fire_shell(
+                                &mut self.physics,
+                                &mut self.muzzle_flashes,
+                                &mut rng,
+                                &mut pending_shells,
+                                player_tank,
+                                Owner::Player,
+                                0.0,
+                                -lateral,
+                            );
+                            if lateral > 0.0 {
+                                player_tank.pending_shot = Some(PendingShot {
+                                    timer: TANK_TWIN_SHOT_DELAY_SECONDS,
+                                    aim_offset: 0.0,
+                                    lateral_offset: lateral,
+                                });
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -951,40 +1169,242 @@ impl Game {
         }
         let alert = self.alert_position.filter(|_| self.alert_timer > 0.0);
 
-        // Engagement slots: give every enemy currently within
-        // ENEMY_VIEW_RANGE of the player a distinct point on a ring around
-        // them (see ENGAGE_RING_RADIUS's doc comment for why - this is what
-        // stops act_chase/act_attack from sending a whole group of enemies
-        // at the player's exact position and piling up). Sorted by `Entity`
-        // (which orders by id then generation - stable across frames for
-        // any tank that hasn't respawned) rather than `enemy_indices`'
-        // HashMap iteration order, so slot assignment doesn't shuffle
-        // frame-to-frame on its own; a tank's slot number can still shift
-        // when an earlier-sorted tank dies, but that's a rare, one-off
-        // retarget that the normal steer_toward commitment hysteresis
-        // absorbs, not a per-frame jitter source. Skipped entirely (empty
-        // map, so every enemy falls back to the raw player position) once
-        // the player is dead or only one enemy is engaged - nobody to
-        // spread out from.
+        // Engagement slots: give every enemy that's actually attacking a
+        // distinct point near the player instead of letting several of them
+        // converge on the same spot and pile up (see ENGAGE_RING_RADIUS's
+        // doc comment for the geometry). Excludes a tank that isn't really
+        // fighting right now - it shouldn't tie up a slot a real attacker
+        // could use - and includes a hit-alerted one even outside normal
+        // view range, so retaliating at a shooter it can't yet see doesn't
+        // mean walking at the raw player position. Deliberately does NOT
+        // broaden this to every merely alert-following tank (i.e. `alert`
+        // being `Some` isn't on its own enough) - a tank that's still
+        // hundreds of pixels out has a long transit ahead of it, often
+        // through the same obstacle bottleneck as its spawn-region
+        // neighbors, and claiming a specific far-off axis slot that early
+        // just holds a pack of still-approaching tanks in loose formation
+        // near each other for the whole transit instead of only once
+        // they're actually close enough to matter - measured directly via
+        // the probe's clustering anomaly, which this doc comment used to
+        // (wrongly) predict wouldn't happen. `act_patrol`'s plain alert
+        // branch (steering at the raw alert point) is a fine fallback for
+        // that case; it's only wasteful in the moment two-plus enemies are
+        // already both close enough to be assigned real slots anyway.
+        let (excluded, hit_alerted): (HashSet<Entity>, HashSet<Entity>) = {
+            let mut excluded = HashSet::new();
+            let mut hit_alerted = HashSet::new();
+            for (entity, tank, ai) in self.world.query::<(Entity, &Tank, &Ai)>().iter() {
+                if tank.is_wreck()
+                    || tank.damage >= ENEMY_FLEE_DAMAGE
+                    || (tank.active_weapon() == ActiveWeapon::Shell && ai.is_retreating())
+                {
+                    excluded.insert(entity);
+                }
+                if ai.is_hit_alerted() {
+                    hit_alerted.insert(entity);
+                }
+            }
+            (excluded, hit_alerted)
+        };
+        // Sorted by `Entity` (which orders by id then generation - stable
+        // across frames for any tank that hasn't respawned) rather than
+        // `enemy_indices`' HashMap iteration order, so slot assignment
+        // doesn't shuffle frame-to-frame on its own; a tank's place in this
+        // list can still shift when an earlier-sorted tank dies or drops
+        // out (flees/retreats/wrecked), but that's a rare, one-off retarget
+        // the normal steer_toward commitment hysteresis absorbs, not a
+        // per-frame jitter source. Skipped entirely (empty map, so every
+        // enemy falls back to the raw player position) once the player is
+        // dead or fewer than two attackers are engaged - nobody to spread
+        // out from.
         let mut engaged: Vec<Entity> = enemy_indices
             .iter()
-            .filter(|&(_, &idx)| movers[idx].position.distance_to(player_pos) <= ENEMY_VIEW_RANGE)
+            .filter(|&(&entity, &idx)| {
+                !excluded.contains(&entity)
+                    && (movers[idx].position.distance_to(player_pos) <= ENEMY_VIEW_RANGE
+                        || hit_alerted.contains(&entity))
+            })
             .map(|(&entity, _)| entity)
             .collect();
         engaged.sort();
         let mut engage_targets: HashMap<Entity, Position> = HashMap::new();
         if player_alive && engaged.len() >= 2 {
-            let slot_count = engaged.len() as f32;
-            for (slot, &entity) in engaged.iter().enumerate() {
-                let theta =
-                    self.engage_phase + slot as f32 * std::f32::consts::TAU / slot_count;
-                engage_targets.insert(
-                    entity,
-                    Position::new(
-                        player_pos.x + ENGAGE_RING_RADIUS * theta.cos(),
-                        player_pos.y + ENGAGE_RING_RADIUS * theta.sin(),
-                    ),
-                );
+            // 4 cardinal axes (N/E/S/W) through the player, each with 2
+            // lateral firing slots (rank 0, ENGAGE_RING_RADIUS out - both
+            // within ENEMY_FIRE_ALIGN_PX of the axis, so either can still
+            // fire) and a reserve rank (rank 1, ENGAGE_RESERVE_RADIUS out,
+            // beyond ENEMY_ATTACK_RANGE so a reserve tank neither fires nor
+            // blocks a firing lane). 16 distinct points total, claimed
+            // greedily with per-frame mutual exclusion (`claimed` below) so
+            // two tanks can never be assigned the same slot - see
+            // ENGAGE_LATERAL_OFFSET/ENGAGE_RESERVE_RADIUS's doc comments for
+            // why this geometry keeps every steady-state pair/trio spread
+            // well apart instead of stacking depth-wise into one shared
+            // lane, which used to let the rear tank's shot be blocked by
+            // the front one and pile up silently.
+            const DIRS: [(f32, f32); 4] = [(0.0, -1.0), (1.0, 0.0), (0.0, 1.0), (-1.0, 0.0)];
+            // Rotate a cardinal unit vector 90 degrees - always yields
+            // another cardinal unit vector, so the lateral offset below
+            // moves along a single axis exactly like `forward` does, never
+            // diagonally - which is what keeps the boundary-clamp math
+            // below (one coordinate driven by `forward`, the other only by
+            // `lateral`) exact rather than approximate.
+            let perp_of = |d: (f32, f32)| (-d.1, d.0);
+            // Same clearance margin `Grid::build` already uses for the
+            // pathfinding grid - keeps an engagement point at least one
+            // worst-case tank's width clear of a wall.
+            let margin = battlefield::max_tank_avoidance_radius() + 8.0;
+            // The actual world point for (axis, rank, side), or `None` if no
+            // forward distance between ENGAGE_MIN_RADIUS and the slot's
+            // full radius keeps it inside the battlefield - see Bug D in
+            // the clustering-fix plan: candidates used to be raw arithmetic
+            // off the player with no bounds check at all, so a near-wall
+            // player handed out off-map "valid" targets. Rank 0 clamps
+            // `forward` down to fit (never below ENGAGE_MIN_RADIUS, just
+            // past ENEMY_MISFIRE_RANGE so a clamped slot isn't inside the
+            // forced-misfire zone); rank 1 never clamps - a clamped reserve
+            // would land back inside the firing lane and recreate the same
+            // pile-up rank 1 exists to avoid, so it's simply invalid here
+            // instead.
+            let engage_point = |axis: usize, rank: u8, side: i8| -> Option<Position> {
+                let dir = DIRS[axis];
+                let perp = perp_of(dir);
+                let lateral = side as f32 * ENGAGE_LATERAL_OFFSET;
+                // The coordinate `lateral` moves is independent of
+                // `forward`, so if it's already against a wall no amount of
+                // forward-clamping saves this slot.
+                let lat_x = player_pos.x + perp.0 * lateral;
+                let lat_y = player_pos.y + perp.1 * lateral;
+                if lat_x < margin || lat_x > width - margin || lat_y < margin || lat_y > height - margin
+                {
+                    return None;
+                }
+                let desired = if rank == 0 {
+                    ENGAGE_RING_RADIUS
+                } else {
+                    ENGAGE_RESERVE_RADIUS
+                };
+                let mut forward = desired;
+                if rank == 0 {
+                    if dir.0 > 0.0 {
+                        forward = forward.min(width - margin - player_pos.x);
+                    } else if dir.0 < 0.0 {
+                        forward = forward.min(player_pos.x - margin);
+                    }
+                    if dir.1 > 0.0 {
+                        forward = forward.min(height - margin - player_pos.y);
+                    } else if dir.1 < 0.0 {
+                        forward = forward.min(player_pos.y - margin);
+                    }
+                    if forward < ENGAGE_MIN_RADIUS {
+                        return None;
+                    }
+                } else {
+                    let fits = if dir.0 > 0.0 {
+                        player_pos.x + forward <= width - margin
+                    } else if dir.0 < 0.0 {
+                        player_pos.x - forward >= margin
+                    } else if dir.1 > 0.0 {
+                        player_pos.y + forward <= height - margin
+                    } else {
+                        player_pos.y - forward >= margin
+                    };
+                    if !fits {
+                        return None;
+                    }
+                }
+                Some(Position::new(
+                    player_pos.x + dir.0 * forward + perp.0 * lateral,
+                    player_pos.y + dir.1 * forward + perp.1 * lateral,
+                ))
+            };
+            // Reachable alone isn't enough: a point can be a perfectly
+            // walkable dead end with an obstacle sitting between it and the
+            // player, which - being aligned but never LOS-clear (see
+            // `terrain_line_of_sight`) - would otherwise assign a target the
+            // tank can walk to and then never be able to fire from, with no
+            // other point left to try once it's already standing there.
+            let world = &self.world;
+            let is_valid = |my_pos: Position, axis: usize, rank: u8, side: i8| -> Option<Position> {
+                let candidate = engage_point(axis, rank, side)?;
+                let reachable = grid.next_step(my_pos, candidate).is_some()
+                    || grid.same_cell(my_pos, candidate);
+                (reachable && terrain_line_of_sight(world, candidate, player_pos)).then_some(candidate)
+            };
+            let side_idx = |side: i8| if side < 0 { 0usize } else { 1usize };
+            // axis x rank x side occupancy - the actual mutual-exclusion
+            // mechanism: once a tank claims a slot below, every later tank
+            // in this same pass sees it as taken and moves on to its next
+            // candidate instead of computing the identical point.
+            let mut claimed = [[[false; 2]; 2]; 4];
+            for &entity in &engaged {
+                let my_pos = movers[enemy_indices[&entity]].position;
+                // Bearing-based axis/side preference: prefer the axis this
+                // tank is already closest to (so it approaches from where
+                // it stands rather than crossing the ring) and, within an
+                // axis, the side nearer its current position - replaces the
+                // old `engage_phase` rotation, which wasn't aware of any
+                // tank's actual position at all.
+                let to_me = (my_pos.x - player_pos.x, my_pos.y - player_pos.y);
+                let bearing_len = (to_me.0 * to_me.0 + to_me.1 * to_me.1).sqrt().max(1.0);
+                let bearing = (to_me.0 / bearing_len, to_me.1 / bearing_len);
+                let mut axis_order = [0usize, 1, 2, 3];
+                axis_order.sort_by(|&a, &b| {
+                    let da = DIRS[a].0 * bearing.0 + DIRS[a].1 * bearing.1;
+                    let db = DIRS[b].0 * bearing.0 + DIRS[b].1 * bearing.1;
+                    db.partial_cmp(&da).unwrap()
+                });
+                let side_pref = |axis: usize| -> [i8; 2] {
+                    let perp = perp_of(DIRS[axis]);
+                    let dot = to_me.0 * perp.0 + to_me.1 * perp.1;
+                    if dot >= 0.0 { [1, -1] } else { [-1, 1] }
+                };
+                // All rank-0 (firing) slots, axis/side-ordered as above,
+                // before any rank-1 (reserve) slot - a tank always prefers
+                // an open firing position on *any* axis over a reserve spot
+                // on its preferred one.
+                let mut candidates: Vec<(usize, u8, i8)> = Vec::with_capacity(16);
+                for rank in 0u8..2 {
+                    for &axis in &axis_order {
+                        for &side in &side_pref(axis) {
+                            candidates.push((axis, rank, side));
+                        }
+                    }
+                }
+                let sticky = self.engage_slot_choice.get(&entity).copied().and_then(|s| {
+                    if claimed[s.axis as usize][s.rank as usize][side_idx(s.side)] {
+                        None
+                    } else {
+                        is_valid(my_pos, s.axis as usize, s.rank, s.side).map(|p| (s, p))
+                    }
+                });
+                let chosen = sticky.or_else(|| {
+                    candidates.iter().copied().find_map(|(axis, rank, side)| {
+                        if claimed[axis][rank as usize][side_idx(side)] {
+                            return None;
+                        }
+                        is_valid(my_pos, axis, rank, side).map(|p| {
+                            (
+                                EngageSlot {
+                                    axis: axis as u8,
+                                    rank,
+                                    side,
+                                },
+                                p,
+                            )
+                        })
+                    })
+                });
+                match chosen {
+                    Some((slot, point)) => {
+                        claimed[slot.axis as usize][slot.rank as usize][side_idx(slot.side)] = true;
+                        self.engage_slot_choice.insert(entity, slot);
+                        engage_targets.insert(entity, point);
+                    }
+                    None => {
+                        self.engage_slot_choice.remove(&entity);
+                    }
+                }
             }
         }
 
@@ -1021,6 +1441,10 @@ impl Game {
                 })
                 .unwrap_or(0.0);
             let engage_target = engage_targets.get(&entity).copied();
+            // See `terrain_line_of_sight`'s own doc comment for why this is
+            // real obstacle/frog geometry rather than a `pathfind::Grid`
+            // lookup.
+            let line_of_sight = terrain_line_of_sight(&self.world, tank.position, player_pos);
             let intent = with_tank(&self.world, player, |player_tank| {
                 ai.think(
                     tank,
@@ -1036,6 +1460,7 @@ impl Game {
                     alert,
                     engage_target,
                     &pickups,
+                    line_of_sight,
                 )
             });
             drive_tank(&mut self.physics, tank, intent, dt);
@@ -1064,34 +1489,120 @@ impl Game {
                 }
             }
 
+            // Resolve any in-progress minigun burst's next queued bullet -
+            // same placement/shape as `pending_shot`'s own tick just above.
+            if let Some(mut burst) = tank.minigun_burst {
+                burst.timer -= dt;
+                if burst.timer <= 0.0 {
+                    if tank.is_wreck() {
+                        // Destroyed mid-burst - stop firing from a wreck
+                        // instead of posthumously spraying bullets.
+                        // `pending_shot`'s own tick never needed this guard
+                        // (its window is TANK_TWIN_SHOT_DELAY_SECONDS =
+                        // 0.05s, barely one frame), but a minigun burst spans
+                        // ~0.3s - long enough that "a wreck keeps shooting"
+                        // would actually be visible.
+                        tank.minigun_burst = None;
+                    } else if tank.minigun_ammo > 0 {
+                        tank.minigun_ammo -= 1;
+                        fire_bullet(
+                            &mut self.physics,
+                            &mut rng,
+                            &mut pending_bullets,
+                            tank,
+                            Owner::Enemy(tank.owner_slot - 1),
+                            burst.aim_offset,
+                        );
+                        burst.bullets_remaining -= 1;
+                        tank.minigun_burst = if burst.bullets_remaining == 0 {
+                            None
+                        } else {
+                            burst.timer = MINIGUN_BULLET_DELAY_SECONDS;
+                            Some(burst)
+                        };
+                    } else {
+                        tank.minigun_burst = None;
+                    }
+                } else {
+                    tank.minigun_burst = Some(burst);
+                }
+            }
+
             // Twin-barrel chassis (nonzero TANK_BARREL_LATERAL_OFFSET_BY_ROW)
             // fire two independent shells - one now, one
             // TANK_TWIN_SHOT_DELAY_SECONDS later via `pending_shot` above -
             // so a shot costs 2 ammo instead of 1.
             let lateral = TANK_BARREL_LATERAL_OFFSET_BY_ROW[tank.row as usize];
             let ammo_cost = if lateral > 0.0 { 2 } else { 1 };
-            if intent.fire && tank.shells_ammo >= ammo_cost {
-                tank.shells_ammo -= ammo_cost;
-                // Point-blank shots may be thrown off-aim (see roll_misfire);
-                // both barrels of a twin volley share the same misfire skew.
-                // First shell from the left barrel (negative lateral offset,
-                // or dead center for a single-barrel chassis).
-                fire_shell(
-                    &mut self.physics,
-                    &mut self.muzzle_flashes,
-                    &mut rng,
-                    &mut pending_shells,
-                    tank,
-                    Owner::Enemy(tank.owner_slot - 1),
-                    intent.fire_aim_offset,
-                    -lateral,
-                );
-                if lateral > 0.0 {
-                    tank.pending_shot = Some(PendingShot {
-                        timer: TANK_TWIN_SHOT_DELAY_SECONDS,
-                        aim_offset: intent.fire_aim_offset,
-                        lateral_offset: lateral,
-                    });
+            let owner = Owner::Enemy(tank.owner_slot - 1);
+            if intent.fire {
+                match tank.active_weapon() {
+                    ActiveWeapon::Laser => {
+                        // Charged with a laser: one instant beam per trigger
+                        // pull, straight down the centerline - see `laser_shot`.
+                        tank.laser_charges -= 1;
+                        pending_laser_shots.push(laser_shot(
+                            tank,
+                            owner,
+                            intent.fire_aim_offset,
+                            tank.laser_variant,
+                        ));
+                    }
+                    ActiveWeapon::Minigun => {
+                        if tank.minigun_ammo > 0 {
+                            tank.minigun_ammo -= 1;
+                            fire_bullet(
+                                &mut self.physics,
+                                &mut rng,
+                                &mut pending_bullets,
+                                tank,
+                                owner,
+                                intent.fire_aim_offset,
+                            );
+                            let muzzle_pos = pending_bullets.last().expect("just pushed").position;
+                            self.muzzle_flashes.push(Shockwave { center: muzzle_pos, time: 0.0 });
+                            if MINIGUN_BURST_SIZE > 1 {
+                                tank.minigun_burst = Some(MinigunBurst {
+                                    bullets_remaining: MINIGUN_BURST_SIZE - 1,
+                                    timer: MINIGUN_BULLET_DELAY_SECONDS,
+                                    aim_offset: intent.fire_aim_offset,
+                                });
+                            }
+                            // Inert for enemies today (their dispatch is
+                            // gated by `Ai::fire_timer`, not `fire_cooldown`
+                            // - see that field's own doc comment) - set
+                            // anyway for symmetry with the player path and
+                            // as a guard if the burst constants are ever
+                            // retuned closer to ENEMY_FIRE_INTERVAL_AGGRESSIVE.
+                            tank.fire_cooldown = MINIGUN_BURST_COOLDOWN_SECONDS;
+                        }
+                    }
+                    ActiveWeapon::Shell => {
+                        if tank.shells_ammo >= ammo_cost {
+                            tank.shells_ammo -= ammo_cost;
+                            // Point-blank shots may be thrown off-aim (see roll_misfire);
+                            // both barrels of a twin volley share the same misfire skew.
+                            // First shell from the left barrel (negative lateral offset,
+                            // or dead center for a single-barrel chassis).
+                            fire_shell(
+                                &mut self.physics,
+                                &mut self.muzzle_flashes,
+                                &mut rng,
+                                &mut pending_shells,
+                                tank,
+                                owner,
+                                intent.fire_aim_offset,
+                                -lateral,
+                            );
+                            if lateral > 0.0 {
+                                tank.pending_shot = Some(PendingShot {
+                                    timer: TANK_TWIN_SHOT_DELAY_SECONDS,
+                                    aim_offset: intent.fire_aim_offset,
+                                    lateral_offset: lateral,
+                                });
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1099,6 +1610,122 @@ impl Game {
         // is active anymore.
         for shell in pending_shells {
             self.world.spawn((shell,));
+        }
+        for bullet in pending_bullets {
+            self.world.spawn((bullet,));
+        }
+
+        // --- Lasers: resolve this frame's beam shots instantly ---
+        // Unlike a Shell, a laser has no travel time - the hit is resolved
+        // the instant it's fired, reusing `swept_shell_target`'s pure-geometry
+        // segment test (the same test shells fall back on to catch a
+        // same-frame tunneling hit) over the beam's whole length rather than
+        // one frame's worth of shell movement. Safe here for the same reason
+        // spawning `pending_shells` is: no tank/Ai query is active anymore.
+        for shot in pending_laser_shots {
+            let (hit_pos, target) = resolve_laser_hit(
+                &self.world,
+                player,
+                shot.shooter_slot,
+                shot.start,
+                shot.end,
+                width,
+                height,
+            );
+            self.muzzle_flashes.push(Shockwave {
+                center: shot.start,
+                time: 0.0,
+            });
+            self.laser_beams
+                .push(LaserBeam::new(shot.start, hit_pos, shot.variant));
+            let Some(target) = target else { continue };
+            self.impact_flashes.push(Shockwave {
+                center: hit_pos,
+                time: 0.0,
+            });
+            // Scaled by the shooter's own chassis class, same as a shell's
+            // damage (see TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW's use above) -
+            // and toned down from a shell's own base range in the first
+            // place (see LASER_DAMAGE_MIN/MAX's own doc comment).
+            let chassis_factor = TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW[shot.shooter_row as usize];
+            let variant_factor = shot.variant.damage_factor();
+            let dmg_min = LASER_DAMAGE_MIN * chassis_factor * variant_factor;
+            let dmg_max = LASER_DAMAGE_MAX * chassis_factor * variant_factor;
+            match target {
+                ShellTarget::PlayerTank => {
+                    let mut q = self.world.query_one::<&mut Tank>(player);
+                    let player_tank = q.get().expect("player entity always has a Tank");
+                    if !player_tank.is_wreck() {
+                        let dmg = rng.random_range(dmg_min..dmg_max);
+                        player_tank.damage = (player_tank.damage + dmg).min(MAX_DAMAGE);
+                        player_tank.mark_hit();
+                        if player_tank.is_wreck() {
+                            kills.push((player_tank.position, false));
+                        }
+                    }
+                }
+                ShellTarget::EnemyTank(entity) => {
+                    let survived_hit = {
+                        let mut q = self.world.query_one::<&mut Tank>(entity);
+                        let tank = q.get().expect("laser target entity always has a Tank");
+                        if tank.is_wreck() {
+                            false
+                        } else {
+                            let dmg = rng.random_range(dmg_min..dmg_max);
+                            tank.damage = (tank.damage + dmg).min(MAX_DAMAGE);
+                            tank.mark_hit();
+                            if tank.is_wreck() {
+                                kills.push((tank.position, true));
+                                false
+                            } else {
+                                true
+                            }
+                        }
+                    };
+                    // Same "getting shot is itself a reason to fight back"
+                    // notification a shell hit gives (see the shell hit
+                    // loop below).
+                    if survived_hit {
+                        let mut ai_q = self.world.query_one::<&mut Ai>(entity);
+                        ai_q.get()
+                            .expect("enemy tank laser targets always have an Ai component")
+                            .notify_hit();
+                    }
+                }
+                ShellTarget::Frog(entity) => {
+                    // Deliberately simpler than a shell's frog hit: no
+                    // evasive hop (see `frog_hop_target`) - a hazard that
+                    // reacts to an unavoidable instant beam the same way it
+                    // dodges a slow, visible shell wouldn't read as
+                    // sensible, so it just takes the damage.
+                    let (now_dead, frog_pos) = {
+                        let mut q = self.world.query_one::<&mut Frog>(entity);
+                        let frog = q.get().expect("laser target entity always has a Frog");
+                        if frog.is_dead() {
+                            (true, frog.position)
+                        } else {
+                            let dmg = rng.random_range(dmg_min..dmg_max);
+                            frog.damage(dmg);
+                            (frog.is_dead(), frog.position)
+                        }
+                    };
+                    if now_dead {
+                        self.shock = Some(Shockwave {
+                            center: frog_pos,
+                            time: 0.0,
+                        });
+                    }
+                }
+                ShellTarget::Obstacle(entity) => {
+                    let mut q = self.world.query_one::<&mut Obstacle>(entity);
+                    let obstacle = q
+                        .get()
+                        .expect("laser target entity always has an Obstacle");
+                    let dmg = rng.random_range(dmg_min..dmg_max);
+                    obstacle.damage(dmg);
+                }
+                ShellTarget::Wall => {}
+            }
         }
 
         // --- Shells: advance movement/animation, then sync into physics ---
@@ -1114,6 +1741,14 @@ impl Game {
                 .body
                 .expect("shell should always have a physics body once spawned");
             self.physics.set_kinematic_position(handle, shell.position);
+        }
+        // --- Bullets: same movement/sync treatment as shells above ---
+        for bullet in self.world.query::<&mut Bullet>().iter() {
+            bullet.update(dt);
+            let handle = bullet
+                .body
+                .expect("bullet should always have a physics body once spawned");
+            self.physics.set_kinematic_position(handle, bullet.position);
         }
 
         // --- Physics: advance the world in fixed steps ---
@@ -1151,20 +1786,12 @@ impl Game {
         // damage roll (see `ram`'s doc comment for why enemy-vs-enemy contact
         // doesn't call this). "Touching" is read straight from rapier's own
         // narrow-phase contact state (see `Physics::touching`), not a
-        // hand-rolled geometric re-check.
-        for (enemy_entity, _) in &enemies_before {
-            let touching = with_tank(&self.world, player, |p| {
-                with_tank(&self.world, *enemy_entity, |e| {
-                    tanks_touching(&self.physics, p, e)
-                })
-            });
-            if touching {
-                with_two_tanks_mut(&mut self.world, player, *enemy_entity, |p, e| {
-                    ram(p, false, e, true, &mut self.physics, &mut rng, &mut kills);
-                });
-                break;
-            }
-        }
+        // hand-rolled geometric re-check. `ram` is symmetric in its two
+        // tanks and gates on *both* sides' cooldown, so this single loop
+        // over every enemy already caps the player at one ram hit per frame
+        // on its own: whichever enemy is processed first sets the player's
+        // cooldown, which blocks the guard for every other touching enemy
+        // later in the same loop.
         with_tank_mut(&self.world, player, |t| {
             lay_tracks(&mut self.tracks, t, tank_before)
         });
@@ -1192,20 +1819,27 @@ impl Game {
         // each other between frames without their positions ever
         // overlapping at a frame boundary. Instead this finds, for each
         // pair, the moment of closest approach over the frame's straight-
-        // line motion and checks the distance there. Same-owner pairs are
-        // skipped - mirrors the shooter-exclusion physics groups already
-        // give shell-vs-tank hits (see `find_shell_target`'s doc comment) -
-        // so a tank's own shells (e.g. a double-barrel chassis's paired
-        // shots) never detonate on each other. No damage/knockback to
-        // nearby tanks here, unlike a tank kill's `apply_explosion` splash -
-        // this is purely two shells cancelling each other out.
+        // line motion and checks the distance there. Same-*side* pairs are
+        // skipped, not just same-owner: this covers a tank's own paired
+        // shots (e.g. a double-barrel chassis) never detonating on each
+        // other exactly like same-owner did, but also keeps two different
+        // enemies' shells from cancelling each other, consistent with
+        // `Brain::friendly_blocks_shot` already treating every other enemy
+        // (never the player) as a friendly whose line of fire is worth
+        // holding for. No damage/knockback to nearby tanks here, unlike a
+        // tank kill's `apply_explosion` splash - this is purely two shells
+        // cancelling each other out.
         let flying_shells: Vec<(Entity, Position, Vector2, Owner)> = self
             .world
             .query::<(Entity, &Shell)>()
             .iter()
             .filter(|(_, s)| s.state == ShellState::Flying)
             .map(|(e, s)| {
-                let disp = s.velocity * dt;
+                // Zero on the Fire2->Flying transition frame (`s.flew`) so
+                // this doesn't backdate `prev` into a phantom segment the
+                // shell never actually crossed - see `Shell::flew`'s doc
+                // comment.
+                let disp = if s.flew { s.velocity * dt } else { Vector2::new(0.0, 0.0) };
                 (e, s.position - disp, disp, s.owner)
             })
             .collect();
@@ -1219,7 +1853,7 @@ impl Game {
                 continue;
             }
             for &(e2, prev2, disp2, owner2) in &flying_shells[i + 1..] {
-                if owner1 == owner2 || claimed_shells.contains(&e2) {
+                if same_side(owner1, owner2) || claimed_shells.contains(&e2) {
                     continue;
                 }
                 // Closest approach of the two shells' straight-line motion
@@ -1288,8 +1922,10 @@ impl Game {
             let shell_collider = self.physics.collider_of(shell_handle);
             // This frame's movement segment, for the swept fallback check
             // below - same "position minus this frame's displacement" the
-            // shell-vs-shell closest-approach check above already uses.
-            let shell_prev = shell.position - shell.velocity * dt;
+            // shell-vs-shell closest-approach check above already uses,
+            // including the `flew` guard against backdating a shell that
+            // hasn't actually moved yet this frame (see `Shell::flew`).
+            let shell_prev = shell.position - if shell.flew { shell.velocity * dt } else { Vector2::new(0.0, 0.0) };
             let (base_dmg_min, base_dmg_max) = if shell.owner == Owner::Player {
                 (PLAYER_DAMAGE_MIN, PLAYER_DAMAGE_MAX)
             } else {
@@ -1318,14 +1954,56 @@ impl Game {
                 continue;
             };
 
-            // A hit always flashes and detonates the shell, even against an
-            // already-wrecked tank or a Wall - only the damage/kill/
-            // knockback below (meaningless against a wreck, and not
-            // applicable to a Wall at all) is gated per-target.
+            // A hit always flashes, even a bounce below - only whether it
+            // *detonates* the shell is conditional now.
             self.impact_flashes.push(Shockwave {
                 center: shell.position,
                 time: 0.0,
             });
+
+            // Ricochet: an indestructible Iron obstacle reflects the shell
+            // instead of detonating it, while a bounce remains (see
+            // SHELL_RICOCHET_BOUNCES/Shell::bounces_left) - the battlefield's
+            // outer boundary wall does not bounce shells, only Iron obstacles
+            // do (see SHELL_RICOCHET_BOUNCES's doc comment for why); every
+            // other target still detonates exactly as before, so this is
+            // checked (and, on a miss, falls through to the unconditional
+            // detonate below) rather than folded into the match arms
+            // themselves.
+            let bounce_axis = if shell.bounces_left == 0 {
+                None
+            } else {
+                match target {
+                    ShellTarget::Obstacle(entity) => {
+                        let mut q = self.world.query_one::<&Obstacle>(entity);
+                        q.get()
+                            .ok()
+                            .filter(|o| o.material == Material::Iron && !o.destroyed)
+                            .map(|o| obstacle_reflect_axis(shell_prev, o.position, o.hull_size() * 0.5))
+                    }
+                    _ => None,
+                }
+            };
+            if let Some((reflect_x, reflect_y)) = bounce_axis {
+                shell.bounces_left -= 1;
+                if reflect_x {
+                    shell.velocity.x = -shell.velocity.x;
+                }
+                if reflect_y {
+                    shell.velocity.y = -shell.velocity.y;
+                }
+                shell.rotation = shell.velocity.x.atan2(-shell.velocity.y).to_degrees();
+                // Rewind to `shell_prev` - a known-clear point from just
+                // before this frame's motion crossed into the wall/obstacle
+                // - rather than leaving it at the (currently overlapping)
+                // hit position, so next frame's movement starts clear of
+                // the collider instead of immediately re-triggering a
+                // second "hit" against the very same thing before the
+                // reflected velocity has actually carried it away.
+                shell.position = shell_prev;
+                continue;
+            }
+
             shell.detonate();
 
             match target {
@@ -1437,6 +2115,126 @@ impl Game {
                 ShellTarget::Wall => {}
             }
         }
+
+        // --- Bullets: damage/detonate against whatever they're intersecting
+        // (Flying only) - same reuse of `find_shell_target` as shells above
+        // (it's already generic over "a collider handle + two Positions",
+        // nothing shell-specific inside it), but deliberately simpler: no
+        // ricochet (a machine-gun round doesn't bounce), no shell-vs-shell-
+        // style mutual detonation between bullets (too numerous for that to
+        // matter), and no knockback-on-hit (a per-bullet impulse repeated up
+        // to MINIGUN_BURST_SIZE times in ~0.3s would read as the tank
+        // juddering chaotically rather than one clean recoil beat). Damage
+        // is applied the same way laser damage is - one shared range for
+        // player and enemy, scaled only by TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW,
+        // not shell's PLAYER_/ENEMY_ split. A frog hit by a bullet takes
+        // damage with no evasive hop - a burst landing several rounds in
+        // under a third of a second makes a hop-per-bullet read as chaotic
+        // rather than sensible.
+        for bullet in self.world.query::<&mut Bullet>().iter() {
+            if bullet.state != BulletState::Flying {
+                continue;
+            }
+            let bullet_handle = bullet
+                .body
+                .expect("bullet should always have a physics body once spawned");
+            let bullet_collider = self.physics.collider_of(bullet_handle);
+            let bullet_prev = bullet.position
+                - if bullet.flew { bullet.velocity * dt } else { Vector2::new(0.0, 0.0) };
+            let chassis_factor = TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW[bullet.shooter_row as usize];
+            let dmg_min = MINIGUN_BULLET_DAMAGE_MIN * chassis_factor;
+            let dmg_max = MINIGUN_BULLET_DAMAGE_MAX * chassis_factor;
+
+            let Some(target) = find_shell_target(
+                &self.world,
+                &self.physics,
+                player,
+                &walls,
+                bullet_collider,
+                owner_slot(bullet.owner),
+                bullet_prev,
+                bullet.position,
+                width,
+                height,
+            ) else {
+                continue;
+            };
+
+            self.impact_flashes.push(Shockwave {
+                center: bullet.position,
+                time: 0.0,
+            });
+            bullet.detonate();
+
+            match target {
+                ShellTarget::PlayerTank => {
+                    let mut q = self.world.query_one::<&mut Tank>(player);
+                    let player_tank = q.get().expect("player entity always has a Tank");
+                    if !player_tank.is_wreck() {
+                        let dmg = rng.random_range(dmg_min..dmg_max);
+                        player_tank.damage = (player_tank.damage + dmg).min(MAX_DAMAGE);
+                        player_tank.mark_hit();
+                        if player_tank.is_wreck() {
+                            kills.push((player_tank.position, false));
+                        }
+                    }
+                }
+                ShellTarget::EnemyTank(entity) => {
+                    let survived_hit = {
+                        let mut q = self.world.query_one::<&mut Tank>(entity);
+                        let tank = q.get().expect("bullet target entity always has a Tank");
+                        if tank.is_wreck() {
+                            false
+                        } else {
+                            let dmg = rng.random_range(dmg_min..dmg_max);
+                            tank.damage = (tank.damage + dmg).min(MAX_DAMAGE);
+                            tank.mark_hit();
+                            if tank.is_wreck() {
+                                kills.push((tank.position, true));
+                                false
+                            } else {
+                                true
+                            }
+                        }
+                    };
+                    if survived_hit {
+                        let mut ai_q = self.world.query_one::<&mut Ai>(entity);
+                        ai_q.get()
+                            .expect("enemy tank bullet targets always have an Ai component")
+                            .notify_hit();
+                    }
+                }
+                ShellTarget::Frog(entity) => {
+                    let (now_dead, frog_pos) = {
+                        let mut q = self.world.query_one::<&mut Frog>(entity);
+                        let frog = q.get().expect("bullet target entity always has a Frog");
+                        if frog.is_dead() {
+                            (true, frog.position)
+                        } else {
+                            let dmg = rng.random_range(dmg_min..dmg_max);
+                            frog.damage(dmg);
+                            (frog.is_dead(), frog.position)
+                        }
+                    };
+                    if now_dead {
+                        self.shock = Some(Shockwave {
+                            center: frog_pos,
+                            time: 0.0,
+                        });
+                    }
+                }
+                ShellTarget::Obstacle(entity) => {
+                    let mut q = self.world.query_one::<&mut Obstacle>(entity);
+                    let obstacle = q
+                        .get()
+                        .expect("bullet target entity always has an Obstacle");
+                    let dmg = rng.random_range(dmg_min..dmg_max);
+                    obstacle.damage(dmg);
+                }
+                ShellTarget::Wall => {}
+            }
+        }
+
         // Remove physics bodies for shells finishing their bang animation
         // this frame, then despawn them. Collected first, then applied -
         // hecs doesn't allow despawning while a query over the same world is
@@ -1449,6 +2247,23 @@ impl Game {
             .map(|(e, s)| (e, s.body))
             .collect();
         for (entity, body) in done_shells {
+            if let Some(handle) = body {
+                self.physics.remove_body(handle);
+            }
+            self.world.despawn(entity).ok();
+        }
+
+        // Remove physics bodies for bullets finishing their impact animation
+        // this frame, then despawn them - same collect-then-apply pattern as
+        // the shell cleanup just above.
+        let done_bullets: Vec<_> = self
+            .world
+            .query::<(Entity, &Bullet)>()
+            .iter()
+            .filter(|(_, b)| b.done)
+            .map(|(e, b)| (e, b.body))
+            .collect();
+        for (entity, body) in done_bullets {
             if let Some(handle) = body {
                 self.physics.remove_body(handle);
             }
@@ -1634,6 +2449,7 @@ impl Game {
                 ),
                 damage: tank.damage,
                 shells_ammo: tank.shells_ammo,
+                minigun_ammo: tank.minigun_ammo,
                 is_wreck: tank.is_wreck(),
             })
             .collect()
@@ -1650,6 +2466,7 @@ pub struct TankSnapshot {
     pub velocity: Position,
     pub damage: f32,
     pub shells_ammo: i32,
+    pub minigun_ammo: i32,
     pub is_wreck: bool,
 }
 
@@ -1659,6 +2476,42 @@ pub struct TankSnapshot {
 fn facing_along_x(rotation: f32) -> bool {
     let r = rotation.rem_euclid(360.0);
     (r - 90.0).abs() < 1.0 || (r - 270.0).abs() < 1.0
+}
+
+/// Attach `tank`'s pair of shell-hit sensors (hull + turret+barrel - see
+/// `Tank::hit_sensor`/`turret_hit_sensor`'s own doc comments) right after
+/// its physics body is spawned. `tank.body`/`tank.position`/`tank.rotation`
+/// must already be set (both `Game::init`'s player and enemy spawn blocks
+/// call this immediately after `Physics::spawn_tank`, at the tank's spawn
+/// facing). `owner_slot` becomes both sensors' `InteractionGroups`
+/// membership bit (see `physics::owner_group`) - the same bit a shell this
+/// tank later fires excludes from its own filter, so neither sensor ever
+/// registers this tank's own shots.
+fn attach_hit_sensors(physics: &mut Physics, tank: &mut Tank, owner_slot: usize) {
+    let body = tank
+        .body
+        .expect("tank should have a physics body before attaching hit sensors");
+    let group = physics::owner_group(owner_slot);
+
+    let (_, hull_half) = tank.hull_bbox_world();
+    tank.hit_sensor = Some(physics.add_hit_sensor(
+        body,
+        (hull_half.x, hull_half.y),
+        Position::new(0.0, 0.0),
+        group,
+    ));
+
+    let (turret_center, turret_half) = tank.turret_bbox_world();
+    let turret_offset = Position::new(
+        turret_center.x - tank.position.x,
+        turret_center.y - tank.position.y,
+    );
+    tank.turret_hit_sensor = Some(physics.add_hit_sensor(
+        body,
+        (turret_half.x, turret_half.y),
+        turret_offset,
+        group,
+    ));
 }
 
 /// Turn an intent into hull rotation plus a mass-aware acceleration impulse
@@ -1716,6 +2569,22 @@ fn drive_tank(physics: &mut Physics, tank: &mut Tank, intent: Intent, dt: f32) {
             physics.collider_of(handle),
             tank.hull_half_extents(facing_along_x(tank.rotation)),
         );
+        // The hull and turret+barrel hit sensors (`attach_hit_sensors`) are
+        // sized/positioned off the exact same facing - keep them in step
+        // whenever it changes, same trigger as the solid collider's own
+        // resize just above.
+        if let Some(sensor) = tank.hit_sensor {
+            let (_, hull_half) = tank.hull_bbox_world();
+            physics.resize_hit_sensor(sensor, (hull_half.x, hull_half.y), Position::new(0.0, 0.0));
+        }
+        if let Some(sensor) = tank.turret_hit_sensor {
+            let (turret_center, turret_half) = tank.turret_bbox_world();
+            let offset = Position::new(
+                turret_center.x - tank.position.x,
+                turret_center.y - tank.position.y,
+            );
+            physics.resize_hit_sensor(sensor, (turret_half.x, turret_half.y), offset);
+        }
     }
 
     let along_x = facing_along_x(tank.rotation);
@@ -1791,7 +2660,154 @@ fn fire_shell(
         center: shell.position,
         time: 0.0,
     });
+
+    // Firing recoil: push the shooter back along the shell's own travel
+    // axis (see SHELL_RECOIL_SPEED's doc comment), so a misfire's aim skew
+    // skews the kick the same way it skews the shot.
+    let speed = (shell.velocity.x * shell.velocity.x + shell.velocity.y * shell.velocity.y).sqrt();
+    if let (Some(handle), true) = (tank.body, speed > f32::EPSILON) {
+        let axis = Vector2::new(-shell.velocity.x / speed, -shell.velocity.y / speed);
+        let reference_mass = tank.scale * tank.scale;
+        let push = (SHELL_RECOIL_SPEED * reference_mass / tank.mass()).min(SHELL_RECOIL_MAX_SPEED);
+        physics.apply_impulse(
+            handle,
+            Position::new(axis.x * push * tank.mass(), axis.y * push * tank.mass()),
+        );
+    }
+
     pending_shells.push(shell);
+}
+
+/// Fire one minigun bullet from `tank`'s muzzle - the per-bullet analogue of
+/// `fire_shell`, called once immediately when a burst starts and once more
+/// per queued bullet as `Tank::minigun_burst` ticks down. Unlike
+/// `fire_shell` this does NOT push a muzzle-flash `Shockwave` itself - at
+/// MINIGUN_BULLET_DELAY_SECONDS spacing, a full heat-haze ripple per bullet
+/// would stack several overlapping shader passes during a single burst and
+/// read as mush rather than a crisp stutter; the caller pushes exactly one,
+/// for the burst's first bullet only. Recoil is applied per bullet but at
+/// MINIGUN_BULLET_RECOIL_SPEED/_MAX_SPEED, a fraction of a shell's kick, so a
+/// whole burst rattles the tank rather than shoving it once hard. Always
+/// fires dead-center (no `lateral_offset` param, unlike `fire_shell`) - see
+/// `Bullet::spawn`'s own doc comment for why.
+fn fire_bullet(
+    physics: &mut Physics,
+    rng: &mut rand::rngs::ThreadRng,
+    pending_bullets: &mut Vec<Bullet>,
+    tank: &Tank,
+    owner: Owner,
+    aim_offset: f32,
+) {
+    let spread = rng.random_range(-MINIGUN_BULLET_SPREAD_DEG..MINIGUN_BULLET_SPREAD_DEG);
+    let mut bullet = Bullet::spawn(tank, owner, aim_offset + spread);
+    bullet.body = Some(physics.spawn_shell(
+        bullet.position,
+        MINIGUN_BULLET_HIT_HALF_EXTENT,
+        physics::owner_group(tank.owner_slot),
+    ));
+    bullet.shadow_offset =
+        rng.random_range(MINIGUN_BULLET_SHADOW_OFFSET_MIN..MINIGUN_BULLET_SHADOW_OFFSET_MAX);
+
+    let speed =
+        (bullet.velocity.x * bullet.velocity.x + bullet.velocity.y * bullet.velocity.y).sqrt();
+    if let (Some(handle), true) = (tank.body, speed > f32::EPSILON) {
+        let axis = Vector2::new(-bullet.velocity.x / speed, -bullet.velocity.y / speed);
+        let reference_mass = tank.scale * tank.scale;
+        let push = (MINIGUN_BULLET_RECOIL_SPEED * reference_mass / tank.mass())
+            .min(MINIGUN_BULLET_RECOIL_MAX_SPEED);
+        physics.apply_impulse(
+            handle,
+            Position::new(axis.x * push * tank.mass(), axis.y * push * tank.mass()),
+        );
+    }
+
+    pending_bullets.push(bullet);
+}
+
+/// How far a laser beam's segment test reaches past its muzzle - long
+/// enough to guarantee it always reaches a battlefield wall (the diagonal of
+/// any realistic map) before `resolve_laser_hit`'s segment test runs out of
+/// room, regardless of what it actually hits first.
+const LASER_MAX_RANGE: f32 = 4000.0;
+
+/// One tank's laser shot, queued during the player/enemy tank loops in
+/// `Game::update` (see `pending_laser_shots`) and resolved once those loops
+/// finish - same deferred-processing reason as `pending_shells` (hecs won't
+/// allow another mutable `Tank` query while the loop that produced this is
+/// still iterating).
+struct PendingLaserShot {
+    /// Muzzle position the beam starts from.
+    start: Position,
+    /// The far end of the beam's un-clipped segment - `resolve_laser_hit`
+    /// finds where along `start..end` it actually stops.
+    end: Position,
+    /// The firing tank's `row`, copied at fire time (see `Shell::shooter_row`'s
+    /// identical reasoning) so damage can be scaled by chassis class after
+    /// the firing tank is out of scope.
+    shooter_row: i32,
+    /// Collision-group slot of whoever fired this (see `owner_slot`) - used
+    /// to exclude the shooter's own tank from `resolve_laser_hit`'s hit
+    /// test, same as a shell's shooter-exclusion.
+    shooter_slot: usize,
+    /// Which `LaserVariant` the shooter's charge batch was at fire time (see
+    /// `Tank::laser_variant`) - copied here for the same out-of-scope reason
+    /// as `shooter_row`, drives both this shot's damage factor and its
+    /// beam's color.
+    variant: LaserVariant,
+}
+
+/// Build a laser shot from `tank`'s current muzzle position and facing.
+/// `aim_offset` (degrees) is the same point-blank misfire skew
+/// `Shell::spawn` takes - see `Brain::roll_misfire` - so a laser at
+/// point-blank range is just as capable of missing as a shell; pass 0.0 for
+/// a clean shot (always true for the player, who never misfires). No
+/// twin-barrel split the way `Shell::spawn`'s `lateral_offset` supports - a
+/// single instant beam per trigger pull regardless of chassis.
+fn laser_shot(tank: &Tank, owner: Owner, aim_offset: f32, variant: LaserVariant) -> PendingLaserShot {
+    let rot = (tank.rotation + aim_offset).to_radians();
+    let dir = Vector2::new(rot.sin(), -rot.cos());
+    let muzzle = TANK_MUZZLE_FORWARD_OFFSET_BY_ROW[tank.row as usize] * tank.scale;
+    let start = Position::new(
+        tank.position.x + dir.x * muzzle,
+        tank.position.y + dir.y * muzzle,
+    );
+    let end = Position::new(
+        start.x + dir.x * LASER_MAX_RANGE,
+        start.y + dir.y * LASER_MAX_RANGE,
+    );
+    PendingLaserShot {
+        start,
+        end,
+        shooter_row: tank.row,
+        shooter_slot: owner_slot(owner),
+        variant,
+    }
+}
+
+/// Resolve one laser beam's hit: reuses `swept_shell_target`'s pure-geometry
+/// segment test (see that function's own doc comment) over the beam's whole
+/// `start..end` span instead of one frame's shell movement, then converts
+/// the returned parametric entry time back into a world-space point so the
+/// beam's on-screen flash (`laser::LaserBeam`) stops exactly where it hit,
+/// not at the segment's far end. Returns that point plus whatever it hit
+/// (`None` if the beam reached `end` without hitting anything, e.g. an
+/// unrealistically short `LASER_MAX_RANGE` - `hit_pos` is just `end` then).
+fn resolve_laser_hit(
+    world: &hecs::World,
+    player: Entity,
+    shooter_slot: usize,
+    start: Position,
+    end: Position,
+    width: f32,
+    height: f32,
+) -> (Position, Option<ShellTarget>) {
+    match swept_shell_target(world, player, shooter_slot, start, end, width, height) {
+        Some((target, t)) => {
+            let hit = Position::new(start.x + (end.x - start.x) * t, start.y + (end.y - start.y) * t);
+            (hit, Some(target))
+        }
+        None => (end, None),
+    }
 }
 
 /// Read a tank's position back from its physics body after the world steps.
@@ -1813,6 +2829,19 @@ fn tanks_touching(physics: &Physics, a: &Tank, b: &Tank) -> bool {
         .body
         .expect("tank should always have a physics body once spawned");
     physics.touching(a, b)
+}
+
+/// Which single axis a shell should reflect on to bounce off an obstacle,
+/// given its position just before this frame's motion crossed into it
+/// (`shell_prev`, not the current, already-overlapping position). Standard
+/// swept-AABB face heuristic: whichever axis `prev` was more clearly still
+/// outside the obstacle's square footprint on is the face that was actually
+/// hit - obstacles are square tiles (`Obstacle::hull_size`), so one `half`
+/// covers both axes.
+fn obstacle_reflect_axis(prev: Position, obstacle_pos: Position, half: f32) -> (bool, bool) {
+    let dx = (prev.x - obstacle_pos.x).abs() - half;
+    let dy = (prev.y - obstacle_pos.y).abs() - half;
+    if dx > dy { (true, false) } else { (false, true) }
 }
 
 /// Which target (if any) a shell's collider is currently intersecting -
@@ -1856,19 +2885,29 @@ fn find_shell_target(
     width: f32,
     height: f32,
 ) -> Option<ShellTarget> {
-    let player_sensor = with_tank(world, player, |t| {
-        t.hit_sensor
-            .expect("tank should always have a hit sensor once spawned")
+    let (player_hull, player_turret) = with_tank(world, player, |t| {
+        (
+            t.hit_sensor
+                .expect("tank should always have a hit sensor once spawned"),
+            t.turret_hit_sensor
+                .expect("tank should always have a turret hit sensor once spawned"),
+        )
     });
-    if physics.intersecting(shell_collider, player_sensor) {
+    if physics.intersecting(shell_collider, player_hull)
+        || physics.intersecting(shell_collider, player_turret)
+    {
         return Some(ShellTarget::PlayerTank);
     }
 
     for (entity, tank) in world.query::<(Entity, &Tank)>().with::<&Ai>().iter() {
-        let sensor = tank
+        let hull = tank
             .hit_sensor
             .expect("tank should always have a hit sensor once spawned");
-        if physics.intersecting(shell_collider, sensor) {
+        let turret = tank
+            .turret_hit_sensor
+            .expect("tank should always have a turret hit sensor once spawned");
+        if physics.intersecting(shell_collider, hull) || physics.intersecting(shell_collider, turret)
+        {
             return Some(ShellTarget::EnemyTank(entity));
         }
     }
@@ -1912,6 +2951,7 @@ fn find_shell_target(
     // knows nothing about physics groups, so it has to skip the shooter's
     // own tank explicitly instead.
     swept_shell_target(world, player, shooter_slot, shell_prev, shell_new, width, height)
+        .map(|(target, _t)| target)
 }
 
 /// Pure-geometry swept fallback for `find_shell_target` - see that
@@ -1934,6 +2974,54 @@ fn find_shell_target(
 /// returned `t`, 0..1 along `p0..p1`) and the *nearest* one wins; the
 /// original player > enemies > frog > obstacles > walls order only breaks
 /// an exact tie.
+///
+/// Also doubles as `resolve_laser_hit`'s entire hit test (a laser has no
+/// travel time to speak of, so its "movement segment" is just its whole
+/// beam length) - that's why this returns the winning entry time `t`
+/// alongside the target rather than just the target: `find_shell_target`
+/// only needs *what* was hit, but a laser beam's on-screen flash needs
+/// *where*, and `t` (0..1 along `p0..p1`) is what lets the caller recover
+/// that world-space point.
+/// Whether a straight line from `from` to `to` is unobstructed by terrain -
+/// any obstacle, or the frog - using the same segment-vs-AABB geometry (and
+/// the same neighbor-widened `battlefield::tile_hull_half_extent` seam-
+/// closing) `swept_shell_target` below resolves a real shot's hit against,
+/// so this answers "would a shot actually get there" rather than a coarser
+/// approximation. Deliberately *not* `pathfind::Grid::blocked_at` - that
+/// grid's cells are inflated by a tank's own clearance margin (see
+/// `Grid::build`), sized for a hull to route through a gap, not for a
+/// shell's near-zero width; reusing it here rejected plenty of
+/// geometrically clear shots on a denser map and left engaged enemies
+/// unable to ever find a firing solution. Deliberately ignores tanks and
+/// battlefield walls too: another tank in the way is
+/// `ai::Brain::friendly_blocks_shot`'s job, not this one, and both `from`
+/// and `to` are always battlefield-interior positions that would never
+/// cross a boundary wall anyway. Called once per engaged enemy per frame
+/// (see `Game::update`) to gate the AI's fire decision - see `ai::Ai::think`'s
+/// `line_of_sight` parameter.
+fn terrain_line_of_sight(world: &hecs::World, from: Position, to: Position) -> bool {
+    let obstacle_cells: HashSet<(i32, i32)> = world
+        .query::<&Obstacle>()
+        .iter()
+        .map(|o| battlefield::pos_to_cell(o.position))
+        .collect();
+    for obstacle in world.query::<&Obstacle>().iter() {
+        let base = obstacle.hull_size() * 0.5;
+        let (gx, gy) = battlefield::pos_to_cell(obstacle.position);
+        let half = battlefield::tile_hull_half_extent(&obstacle_cells, gx, gy, base);
+        if segment_hits_aabb(from, to, obstacle.position, half).is_some() {
+            return false;
+        }
+    }
+    let frog_half = Position::new(FROG_COLLIDER_HALF_EXTENT.0, FROG_COLLIDER_HALF_EXTENT.1);
+    for frog in world.query::<&Frog>().iter() {
+        if segment_hits_aabb(from, to, frog.position, frog_half).is_some() {
+            return false;
+        }
+    }
+    true
+}
+
 fn swept_shell_target(
     world: &hecs::World,
     player: Entity,
@@ -1942,18 +3030,23 @@ fn swept_shell_target(
     p1: Position,
     width: f32,
     height: f32,
-) -> Option<ShellTarget> {
+) -> Option<(ShellTarget, f32)> {
     let shell_half = Position::new(SHELL_HIT_HALF_EXTENT, SHELL_HIT_HALF_EXTENT);
     let mut best: Option<(f32, u8, ShellTarget)> = None;
 
-    let (player_pos, player_slot, player_half) = with_tank(world, player, |t| {
-        let half = t.size() * 0.5;
-        (t.position, t.owner_slot, Position::new(half, half))
+    let (player_slot, player_hull, player_turret) = with_tank(world, player, |t| {
+        (t.owner_slot, t.hull_bbox_world(), t.turret_bbox_world())
     });
     if player_slot != shooter_slot {
         consider_hit(
             &mut best,
-            segment_hits_aabb(p0, p1, player_pos, player_half + shell_half),
+            segment_hits_aabb(p0, p1, player_hull.0, player_hull.1 + shell_half),
+            0,
+            ShellTarget::PlayerTank,
+        );
+        consider_hit(
+            &mut best,
+            segment_hits_aabb(p0, p1, player_turret.0, player_turret.1 + shell_half),
             0,
             ShellTarget::PlayerTank,
         );
@@ -1963,11 +3056,17 @@ fn swept_shell_target(
         if tank.owner_slot == shooter_slot {
             continue;
         }
-        let half = tank.size() * 0.5;
-        let half = Position::new(half, half);
+        let (hull_center, hull_half) = tank.hull_bbox_world();
         consider_hit(
             &mut best,
-            segment_hits_aabb(p0, p1, tank.position, half + shell_half),
+            segment_hits_aabb(p0, p1, hull_center, hull_half + shell_half),
+            1,
+            ShellTarget::EnemyTank(entity),
+        );
+        let (turret_center, turret_half) = tank.turret_bbox_world();
+        consider_hit(
+            &mut best,
+            segment_hits_aabb(p0, p1, turret_center, turret_half + shell_half),
             1,
             ShellTarget::EnemyTank(entity),
         );
@@ -2038,7 +3137,7 @@ fn swept_shell_target(
         );
     }
 
-    best.map(|(_, _, target)| target)
+    best.map(|(t, _, target)| (target, t))
 }
 
 /// Keep `*best` as whichever candidate has the smallest entry time seen so
@@ -2256,26 +3355,13 @@ fn frog_hop_target(
 }
 
 /// Spawn one pickup at a fixed, map-chosen position (see
-/// `Game::map_pickup_slots`) - checked once against the given `pos` against
-/// the same clearance rule everywhere else in this module uses
-/// (obstacles/tanks/frog at `OBSTACLE_CLEAR`, other pickups at
-/// `PICKUP_COLLECT_RADIUS * 2.0`). Returns whether it actually spawned - a
-/// slot that fails the check (e.g. placed on top of a wall) is just
-/// skipped, same "give up gracefully" convention as everywhere else in this
-/// module, rather than forcing an overlapping pickup into existence.
-fn spawn_pickup_at(world: &mut hecs::World, pos: Position, kind: PickupKind) -> bool {
-    let obstacles: Vec<Position> = world.query::<&Obstacle>().iter().map(|o| o.position).collect();
-    let tanks: Vec<Position> = world.query::<&Tank>().iter().map(|t| t.position).collect();
-    let frog: Vec<Position> = world.query::<&Frog>().iter().map(|f| f.position).collect();
-    let pickups: Vec<Position> = world.query::<&Pickup>().iter().map(|p| p.position).collect();
-    let ok = obstacles.iter().all(|&p| pos.distance_to(p) >= OBSTACLE_CLEAR)
-        && tanks.iter().all(|&p| pos.distance_to(p) >= OBSTACLE_CLEAR)
-        && frog.iter().all(|&p| pos.distance_to(p) >= OBSTACLE_CLEAR)
-        && pickups.iter().all(|&p| pos.distance_to(p) >= PICKUP_COLLECT_RADIUS * 2.0);
-    if ok {
-        world.spawn((Pickup { kind, position: pos },));
-    }
-    ok
+/// `Game::map_pickup_slots`) - unconditionally, no clearance check. A map's
+/// `Pickup` cell is a deliberate placement a human made in the editor, same
+/// as the frog's map cell (see its own comment in `Game::init`) - honoring
+/// it exactly is the point, not rejection-sampling around it the way the
+/// old random-corner placement (since removed) had to.
+fn spawn_pickup_at(world: &mut hecs::World, pos: Position, kind: PickupKind) {
+    world.spawn((Pickup { kind, position: pos },));
 }
 
 /// Top up one pickup drawn from `slots` (see `Game::map_pickup_slots`)
@@ -2283,9 +3369,8 @@ fn spawn_pickup_at(world: &mut hecs::World, pos: Position, kind: PickupKind) -> 
 /// already occupied by a live pickup (within a tight epsilon of that slot's
 /// exact position, since a spawned pickup's position is always exactly the
 /// slot's) and spawns there via `spawn_pickup_at`. A no-op if every slot is
-/// currently occupied, or if none is currently valid (`spawn_pickup_at`
-/// failing its clearance check) - the timer resets regardless
-/// (`Game::update`), so the next attempt just tries again later.
+/// currently occupied - the timer resets regardless (`Game::update`), so
+/// the next attempt just tries again later.
 fn respawn_from_slots(world: &mut hecs::World, rng: &mut rand::rngs::ThreadRng, slots: &[(Position, PickupKind)]) {
     let occupied: Vec<Position> = world.query::<&Pickup>().iter().map(|p| p.position).collect();
     let free: Vec<(Position, PickupKind)> = slots
@@ -2511,6 +3596,18 @@ fn shell_impact(tank: &mut Tank, shell: &Shell, physics: &mut Physics) {
 /// tank freshly killed by the collision, tagged with which side it was on,
 /// so the caller can trigger its shockwave and (opposing-side-only)
 /// explosion splash.
+/// True if two shell owners are on the same side (both `Player`, or both
+/// some `Enemy` regardless of which enemy) - see the shell-vs-shell
+/// collision loop's own comment for why this is different from plain
+/// equality: `Owner::Enemy(0)` and `Owner::Enemy(1)` aren't the same owner,
+/// but they're not opponents either.
+fn same_side(a: Owner, b: Owner) -> bool {
+    matches!(
+        (a, b),
+        (Owner::Player, Owner::Player) | (Owner::Enemy(_), Owner::Enemy(_))
+    )
+}
+
 fn ram(
     a: &mut Tank,
     a_is_enemy: bool,
@@ -2610,9 +3707,13 @@ fn explosion_hit(
     if dist > EXPLOSION_RADIUS {
         return;
     }
+    // Same linear falloff `explosion_hit_obstacle` already scales its damage
+    // by - full strength at the blast center, nothing at EXPLOSION_RADIUS -
+    // rather than a flat roll regardless of distance.
+    let falloff = 1.0 - dist / EXPLOSION_RADIUS;
 
     if damage {
-        let dmg = rng.random_range(EXPLOSION_DAMAGE_MIN..EXPLOSION_DAMAGE_MAX);
+        let dmg = rng.random_range(EXPLOSION_DAMAGE_MIN..EXPLOSION_DAMAGE_MAX) * falloff;
         tank.damage = (tank.damage + dmg).min(MAX_DAMAGE);
         tank.mark_hit();
         if tank.is_wreck() {
@@ -2631,7 +3732,6 @@ fn explosion_hit(
     // the desired push is still worked out by hand; applying it as
     // `physics.apply_impulse` (impulse = push * this tank's own mass) is
     // what makes it a real physics impulse.
-    let falloff = 1.0 - dist / EXPLOSION_RADIUS;
     let reference_mass = tank.scale * tank.scale;
     let push = (EXPLOSION_KNOCKBACK_SPEED * falloff * reference_mass / tank.mass())
         .min(KNOCKBACK_MAX_SPEED);

@@ -16,6 +16,15 @@ use crate::{PICKUP_SCALE, PICKUP_TEXTURE_SIZE, Position};
 pub enum PickupKind {
     Health,
     Ammo,
+    /// Grants LASER_CHARGES_PER_PICKUP laser charges (see
+    /// `tank::Tank::laser_charges`, `laser.rs`) - while charged, firing
+    /// resolves an instant beam hit instead of the tank's normal shell.
+    Laser,
+    /// Grants MINIGUN_AMMO_PER_PICKUP rounds of minigun ammo (see
+    /// `tank::Tank::minigun_ammo`, `bullet.rs`) - while positive, the next
+    /// trigger pull fires a multi-bullet burst instead of a laser beam (if
+    /// also charged) or a normal shell - see `tank::Tank::active_weapon`.
+    Minigun,
 }
 
 pub struct Pickup {

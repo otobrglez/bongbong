@@ -31,7 +31,10 @@ pub struct EditorTextures<'a> {
     pub frog_idle: &'a Texture2D,
     pub pickup_health: &'a Texture2D,
     pub pickup_ammo: &'a Texture2D,
+    pub pickup_laser: &'a Texture2D,
+    pub pickup_minigun: &'a Texture2D,
     pub eraser: &'a Texture2D,
+    pub tanks: &'a Texture2D,
 }
 
 /// One palette tool - what a grid click currently does. Order here is the
@@ -41,19 +44,23 @@ enum Tool {
     Wall(Material),
     Road,
     Frog,
+    Start,
     Pickup(PickupKind),
     Eraser,
 }
 
-const TOOLS: [Tool; 9] = [
+const TOOLS: [Tool; 12] = [
     Tool::Wall(Material::Brick),
     Tool::Wall(Material::Iron),
     Tool::Wall(Material::Wood),
     Tool::Wall(Material::Glass),
     Tool::Road,
     Tool::Frog,
+    Tool::Start,
     Tool::Pickup(PickupKind::Health),
     Tool::Pickup(PickupKind::Ammo),
+    Tool::Pickup(PickupKind::Laser),
+    Tool::Pickup(PickupKind::Minigun),
     Tool::Eraser,
 ];
 
@@ -382,6 +389,14 @@ impl MapEditor {
                 }
                 self.map.set_cell(col, row, CellObject::Frog);
             }
+            Tool::Start => {
+                // Singleton, same "move it" convention as Frog above -
+                // there can only be one player start point.
+                if let Some((oc, or)) = self.map.start_cell() {
+                    self.map.clear_cell(oc, or);
+                }
+                self.map.set_cell(col, row, CellObject::Start);
+            }
             Tool::Pickup(pickup) => self.map.set_cell(col, row, CellObject::Pickup { pickup }),
             Tool::Eraser => self.map.clear_cell(col, row),
         }
@@ -420,10 +435,16 @@ impl MapEditor {
                     let src = Rectangle::new(0.0, 0.0, crate::FROG_TEXTURE_SIZE, crate::FROG_TEXTURE_SIZE);
                     d.draw_texture_pro(textures.frog_idle, src, dest, origin, 0.0, Color::WHITE);
                 }
+                CellObject::Start => {
+                    let src = crate::tank::icon_source_rec();
+                    d.draw_texture_pro(textures.tanks, src, dest, origin, 0.0, Color::WHITE);
+                }
                 CellObject::Pickup { pickup } => {
                     let texture = match pickup {
                         PickupKind::Health => textures.pickup_health,
                         PickupKind::Ammo => textures.pickup_ammo,
+                        PickupKind::Laser => textures.pickup_laser,
+                        PickupKind::Minigun => textures.pickup_minigun,
                     };
                     let src =
                         Rectangle::new(0.0, 0.0, crate::PICKUP_TEXTURE_SIZE, crate::PICKUP_TEXTURE_SIZE);
@@ -465,6 +486,14 @@ impl MapEditor {
             }
             draw_tool_icon(&mut d, textures, tool, rect);
             if tool == Tool::Frog && self.map.frog_cell().is_some() {
+                d.draw_circle(
+                    (rect.x + rect.width - 6.0) as i32,
+                    (rect.y + 6.0) as i32,
+                    5.0,
+                    Color::LIME,
+                );
+            }
+            if tool == Tool::Start && self.map.start_cell().is_some() {
                 d.draw_circle(
                     (rect.x + rect.width - 6.0) as i32,
                     (rect.y + 6.0) as i32,
@@ -590,10 +619,16 @@ fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, tool: Tool
             let src = Rectangle::new(0.0, 0.0, crate::FROG_TEXTURE_SIZE, crate::FROG_TEXTURE_SIZE);
             d.draw_texture_pro(textures.frog_idle, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
+        Tool::Start => {
+            let src = crate::tank::icon_source_rec();
+            d.draw_texture_pro(textures.tanks, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+        }
         Tool::Pickup(pickup) => {
             let texture = match pickup {
                 PickupKind::Health => textures.pickup_health,
                 PickupKind::Ammo => textures.pickup_ammo,
+                PickupKind::Laser => textures.pickup_laser,
+                PickupKind::Minigun => textures.pickup_minigun,
             };
             let src = Rectangle::new(0.0, 0.0, crate::PICKUP_TEXTURE_SIZE, crate::PICKUP_TEXTURE_SIZE);
             d.draw_texture_pro(texture, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);

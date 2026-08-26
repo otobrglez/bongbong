@@ -1,5 +1,18 @@
 # Health & ammo pickup icons — provenance
 
+`laser.png` is **not** from the same pack (it has no laser variant) - it's
+generated from scratch by `tools/gen_laser_pickup.py` (raw PNG bytes, no
+Pillow, same convention as `tools/gen_damage.py`), deliberately in the same
+loud/high-contrast spirit as the two below rather than recolored onto
+punypalette. Regenerate with `python3 tools/gen_laser_pickup.py`.
+
+`minigun.png` is likewise not from the pack - generated from scratch by
+`tools/gen_minigun_pickup.py`, same raw-PNG-bytes/no-Pillow convention as
+`laser.png` above and the same not-palette-snapped, loud/high-contrast
+treatment. Three small muzzle sparks with short staggered trailing streaks
+(bold amber-orange), encoding "burst of rounds" the way `laser.png` encodes
+"one continuous beam". Regenerate with `python3 tools/gen_minigun_pickup.py`.
+
 `health.png` and `ammo.png` are `health-red 32px.png` and
 `ammo-pistol 32px.png` from the third-party "2D Health & Ammo Pickups v6.2"
 pack (`bongbong-assets/2D Health & Ammo Pickups v6.2/32px/`), copied in

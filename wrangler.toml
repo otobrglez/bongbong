@@ -1,6 +1,8 @@
-# Deploys the wasm/web build (see justfile's build-web, CLAUDE.md's "Web /
-# wasm build" section) as a Cloudflare Worker with static assets — this is
-# a pure static site, no Worker script (`main`) needed.
+# Deploys the Astro site (see justfile's build-web, site/README.md, and
+# CLAUDE.md's "Web / wasm build" section) as a Cloudflare Worker with static
+# assets — this is a pure static site, no Worker script (`main`) needed.
+# The wasm/js/data build artifacts are baked into site/dist/ as part of
+# `just build-web`, not deployed separately.
 #
 # Matches the "bongbong" Worker already live at bongbong.io (previously
 # deployed manually via the Cloudflare dashboard); this file lets
@@ -10,4 +12,4 @@ name = "bongbong"
 compatibility_date = "2026-08-18"
 
 [assets]
-directory = "target/web"
+directory = "site/dist"

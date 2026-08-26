@@ -63,8 +63,10 @@ impl TankKind {
 #[derive(Parser)]
 #[command(name = "bongbong", about = "A pixelated tank shooter")]
 struct Args {
-    /// Override the number of enemies spawned this round (default: random
-    /// between ENEMY_COUNT_MIN and ENEMY_COUNT_MAX, see lib.rs).
+    /// Override the number of enemies spawned this round. Takes precedence
+    /// over the loaded map's own `tanks` default (see `-m`/`--map` below and
+    /// `map::MapFile::tanks`); with neither given, falls back to a random
+    /// count between ENEMY_COUNT_MIN and ENEMY_COUNT_MAX (see lib.rs).
     #[arg(short = 'e', long = "enemies")]
     enemies: Option<usize>,
 
@@ -168,7 +170,7 @@ fn main() {
 
     let (mut rl, thread) = sola_raylib::init()
         .size(screen_width, screen_height)
-        .title("bongbong")
+        .title("BongBong!")
         .build();
 
     let tanks_texture = rl
@@ -177,6 +179,12 @@ fn main() {
     let shells_texture = rl
         .load_texture(&thread, "static/shells.png")
         .expect("failed loading shells texture");
+    let minigun_bullets_texture = rl
+        .load_texture(&thread, "static/minigun_bullets.png")
+        .expect("failed loading minigun bullets texture");
+    let minigun_mount_texture = rl
+        .load_texture(&thread, "static/minigun_mount.png")
+        .expect("failed loading minigun mount texture");
     let damage_texture = rl
         .load_texture(&thread, "static/damage.png")
         .expect("failed loading damage texture");
@@ -222,6 +230,12 @@ fn main() {
     let pickup_ammo_texture = rl
         .load_texture(&thread, "static/pickups/ammo.png")
         .expect("failed loading ammo pickup texture");
+    let pickup_laser_texture = rl
+        .load_texture(&thread, "static/pickups/laser.png")
+        .expect("failed loading laser pickup texture");
+    let pickup_minigun_texture = rl
+        .load_texture(&thread, "static/pickups/minigun.png")
+        .expect("failed loading minigun pickup texture");
     #[cfg(feature = "map-editor")]
     let eraser_texture = rl
         .load_texture(&thread, "static/ui/eraser.png")
@@ -255,7 +269,10 @@ fn main() {
                     frog_idle: &frog_textures[0].idle,
                     pickup_health: &pickup_health_texture,
                     pickup_ammo: &pickup_ammo_texture,
+                    pickup_laser: &pickup_laser_texture,
+                    pickup_minigun: &pickup_minigun_texture,
                     eraser: &eraser_texture,
+                    tanks: &tanks_texture,
                 },
             );
         });
@@ -331,7 +348,10 @@ fn main() {
         } else if rl.is_key_down(KeyboardKey::KEY_RIGHT) {
             player_intent.move_dir = Some(Dir::Right);
         }
-        player_intent.fire = rl.is_key_pressed(KeyboardKey::KEY_SPACE);
+        // Raw held-state - whether this actually fires (edge-triggered for
+        // shells, full-auto while a laser is charged) is `Game::update`'s
+        // call, not this closure's; see `Input::player_intent`'s doc comment.
+        player_intent.fire = rl.is_key_down(KeyboardKey::KEY_SPACE);
         let input = Input {
             player_intent,
             pause_pressed: rl.is_key_pressed(KeyboardKey::KEY_P),
@@ -355,6 +375,7 @@ fn main() {
             &Textures {
                 tanks: &tanks_texture,
                 shells: &shells_texture,
+                minigun_bullets: &minigun_bullets_texture,
                 damage: &damage_texture,
                 tracks: &tracks_texture,
                 obstacles: &obstacles_texture,
@@ -363,6 +384,9 @@ fn main() {
                 frog_variants: &frog_textures,
                 pickup_health: &pickup_health_texture,
                 pickup_ammo: &pickup_ammo_texture,
+                pickup_laser: &pickup_laser_texture,
+                pickup_minigun: &pickup_minigun_texture,
+                minigun_mount: &minigun_mount_texture,
             },
         );
     });

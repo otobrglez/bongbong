@@ -69,13 +69,18 @@ const JITTER_WINDOW_FRAMES: u32 = 120; // 2s
 const JITTER_THRESHOLD: u32 = 4;
 // Clustering: enemies pathing to the same point (or funneling through the
 // same chokepoint) piling up on top of each other instead of spreading out -
-// see ENGAGE_RING_RADIUS in lib.rs, added specifically to fix this. Distinct
-// from ordinary close passing: needs at least CLUSTER_MIN_GROUP enemies
-// mutually within CLUSTER_RADIUS of each other, sustained for
-// CLUSTER_FRAMES_THRESHOLD, not just a momentary crossing. CLUSTER_RADIUS is
-// well under ENGAGE_RING_RADIUS's ~272px slot spacing so a healthy, spread
-// engagement doesn't trip it, but loose enough to catch a genuine pile-up
-// rather than only exact overlap.
+// see the claim-based engagement-slot system in simulation.rs::Game::update
+// (ENGAGE_RING_RADIUS/ENGAGE_LATERAL_OFFSET/ENGAGE_RESERVE_RADIUS in lib.rs),
+// added specifically to fix this. Not a mutual clique - it's "this enemy has
+// at least CLUSTER_MIN_GROUP - 1 other live enemies within CLUSTER_RADIUS of
+// itself", sustained for CLUSTER_FRAMES_THRESHOLD, not just a momentary
+// crossing. The current geometry's tightest steady-state grouping is a
+// same-axis firing pair, 2 * ENGAGE_LATERAL_OFFSET (36px) apart - only 2
+// tanks, one short of CLUSTER_MIN_GROUP - with the nearest third point
+// either the reserve rank (ENGAGE_RESERVE_RADIUS - ENGAGE_RING_RADIUS =
+// 128px behind it) or an adjacent axis's pair (~385px away), both well
+// outside CLUSTER_RADIUS. So a sustained 3-within-90px reading is still a
+// genuine failure, not a side effect of the geometry itself.
 const CLUSTER_RADIUS: f32 = 90.0; // px between tank centers
 const CLUSTER_MIN_GROUP: usize = 3; // this many mutually-close enemies counts as a cluster
 const CLUSTER_FRAMES_THRESHOLD: u32 = 180; // 3s, matching STALL_FRAMES_THRESHOLD's window
@@ -182,8 +187,8 @@ fn log_frame(game: &Game, frame: u32) {
         };
         let speed = (tank.velocity.x * tank.velocity.x + tank.velocity.y * tank.velocity.y).sqrt();
         println!(
-            "  {label} pos=({:6.1},{:6.1}) vel=({:6.1},{:6.1}) speed={:6.1} rot={:5.0} dmg={:5.1}/100 ammo={:2} wreck={}",
-            tank.position.x, tank.position.y, tank.velocity.x, tank.velocity.y, speed, tank.rotation, tank.damage, tank.shells_ammo, tank.is_wreck,
+            "  {label} pos=({:6.1},{:6.1}) vel=({:6.1},{:6.1}) speed={:6.1} rot={:5.0} dmg={:5.1}/100 ammo={:2} minigun={:3} wreck={}",
+            tank.position.x, tank.position.y, tank.velocity.x, tank.velocity.y, speed, tank.rotation, tank.damage, tank.shells_ammo, tank.minigun_ammo, tank.is_wreck,
         );
     }
 }

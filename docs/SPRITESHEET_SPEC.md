@@ -118,8 +118,32 @@ Draw the turret at the **same world position** as the hull, both pivots centered
 1. ground decals (col 12)   — below everything
 2. hull (col 0/2/3/4, or a damage column)
 3. turret (col 1, or col 5 if destroyed)
+3.5. turret-mounted weapon accessory (optional) — own separate texture, not
+     baked into this sheet
 4. muzzle flash / FX        — not included
 ```
+
+A turret-mounted weapon accessory (step 3.5) is its own texture, drawn as a
+third layer on top of the turret at the exact same shared pivot (`(16,
+16)`, `draw_pivot` in `tank.rs`) and rotated at the turret's own eased
+angle — the same "rotate a full layer freely around the shared pivot"
+mechanism this sheet's own hull/turret split already relies on, just
+applied one layer further out. The first instance is the minigun
+barrel-cluster overlay (`static/minigun_mount.png`,
+`tools/spritegen/gen_minigun_mount.py`, drawn by `tank::draw_minigun_mount`)
+— a small 3-frame sheet (one "hot barrel" per frame, cycled by
+`Tank::minigun_cycle_frame` while firing), **not** an extra rotation added
+on top of the turret's own angle. This game is top-down, and a real
+minigun's barrels point along the ground plane toward the target, so their
+rotation axis is edge-on to the camera, not face-on to it — spinning an
+accessory's sprite further in the screen plane on top of the turret's own
+rotation would read as looking straight down the barrels (a helicopter
+rotor from above), the wrong axis for this camera angle. A future weapon
+overlay that doesn't have this rotating-cylinder shape could still rotate
+freely the way the turret itself does; one that does should follow the
+frame-cycling precedent here instead. See
+`tools/spritegen/gen_minigun_mount.py`'s module doc comment for the full
+reasoning.
 
 ---
 

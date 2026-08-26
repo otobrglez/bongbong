@@ -114,24 +114,35 @@ impl Physics {
     }
 
     /// Attach an extra sensor collider to an existing tank body, used only to
-    /// detect shell hits - a separate, larger hit box (typically the tank's
-    /// full sprite size, see `Tank::size` vs the solid hull collider's
-    /// `Tank::hull_size`) than what blocks movement, so switching shell hit
-    /// detection to physics doesn't shrink what counts as "in range" of a
-    /// shell. Returns the new collider's handle - callers need it directly
-    /// for `intersecting`, since a tank body now has two colliders and
-    /// `collider_of`'s "the first one" convention only ever refers to the
-    /// original solid hull collider `spawn_tank` attaches.
+    /// detect shell hits - a separate collider from what blocks movement
+    /// (the solid hull collider `spawn_tank` attaches), because a shell's
+    /// owner-exclusion `InteractionGroups` filter (see `group` below) can't
+    /// share a collider with movement collision, which needs to interact
+    /// with *everything* (every other tank, every wall/obstacle) regardless
+    /// of ownership. A tank carries two of these - one sized/positioned to
+    /// the hull box, one to the turret+barrel box (`Tank::hull_bbox_world`/
+    /// `turret_bbox_world`) - so a shot registers across the tank's actual
+    /// visible silhouette without also counting the sprite tile's
+    /// transparent padding as a hit. `half_extents`/`offset` are in the
+    /// body's own frame; since a tank body's rotation is locked (see
+    /// `spawn_tank`), that frame never itself rotates, so `offset` is
+    /// exactly the world-space offset from the tank's position at the
+    /// moment this is called - `resize_hit_sensor` updates both when the
+    /// tank's facing changes. Returns the new collider's handle - callers
+    /// need it directly for `intersecting`, since a tank body now has three
+    /// colliders total and `collider_of`'s "the first one" convention only
+    /// ever refers to the original solid hull collider `spawn_tank`
+    /// attaches.
     ///
     /// Explicitly zero-mass: rapier still folds a collider's density-based
     /// mass into its body's total mass even when `.sensor(true)` - being a
     /// sensor only exempts it from collision *response*, not mass-property
-    /// aggregation. Left at the default density (1.0), this sensor's full
-    /// tank-sized area would silently outweigh the hull's own explicit mass
-    /// (`Tank::mass`, ~4) by three orders of magnitude, since it's the
-    /// bigger of the two colliders - which is exactly what was making tanks
-    /// crawl: `Game::drive_tank`'s impulse is sized for `Tank::mass()`, but
-    /// rapier was dividing by the real (much larger) body mass instead.
+    /// aggregation. Left at the default density (1.0), a sensor's area would
+    /// silently perturb the body's total mass on top of the hull's own
+    /// explicit mass (`Tank::mass`) - which is exactly what was making tanks
+    /// crawl back when this sensor covered the tank's full sprite tile:
+    /// `Game::drive_tank`'s impulse is sized for `Tank::mass()`, but rapier
+    /// was dividing by the real (much larger) body mass instead.
     ///
     /// `group` (see `owner_group`) is this tank's own membership bit - a
     /// shell fired by this same tank sets its filter to exclude that bit
@@ -141,11 +152,13 @@ impl Physics {
     pub fn add_hit_sensor(
         &mut self,
         body: RigidBodyHandle,
-        half_extent: f32,
+        half_extents: (f32, f32),
+        offset: Position,
         group: Group,
     ) -> ColliderHandle {
         self.world.insert_collider(
-            ColliderBuilder::cuboid(half_extent, half_extent)
+            ColliderBuilder::cuboid(half_extents.0, half_extents.1)
+                .translation(to_vector(offset))
                 .sensor(true)
                 .mass(0.0)
                 .collision_groups(InteractionGroups::new(
@@ -155,6 +168,23 @@ impl Physics {
                 )),
             Some(body),
         )
+    }
+
+    /// Resize and reposition an existing hit-sensor collider (see
+    /// `add_hit_sensor`) - called whenever a tank's facing crosses between
+    /// an X-axis and Y-axis cardinal direction, the same trigger
+    /// `resize_collider` reacts to for the solid hull collider (see
+    /// `simulation::drive_tank`). `set_shape` only marks the geometry dirty,
+    /// same as `resize_collider`; `set_translation_wrt_parent` moves the
+    /// sensor's offset within the (non-rotating) body frame to match.
+    pub fn resize_hit_sensor(&mut self, handle: ColliderHandle, half_extents: (f32, f32), offset: Position) {
+        let collider = self
+            .world
+            .colliders
+            .get_mut(handle)
+            .expect("collider handle should always be valid");
+        collider.set_shape(SharedShape::cuboid(half_extents.0, half_extents.1));
+        collider.set_translation_wrt_parent(to_vector(offset));
     }
 
     /// Spawn a kinematic-position-based sensor body for a shell: a square

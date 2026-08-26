@@ -1,14 +1,17 @@
 use rapier2d::prelude::{ColliderHandle, RigidBodyHandle};
 use sola_raylib::prelude::*;
 
+use crate::laser::LaserVariant;
 use crate::{
-    DAMAGE_SPEED_CURVE, DAMAGE_SPEED_FLOOR, MAX_DAMAGE, MAX_SHELLS, Position,
+    DAMAGE_SPEED_CURVE, DAMAGE_SPEED_FLOOR, MAX_DAMAGE, MAX_SHELLS, MINIGUN_MOUNT_SCALE,
+    MINIGUN_CYCLE_SECONDS, MINIGUN_MOUNT_TEXTURE_SIZE, Position,
     SHADOW_DIR_X, SHADOW_DIR_Y, TANK_BROKEN_TURRET_COL, TANK_CHASSIS_MASS_FACTOR_BY_ROW,
     TANK_HULL_BBOX_BY_ROW, TANK_HULL_DISABLED_COL, TANK_HULL_DISABLED_DAMAGE, TANK_HULL_FRACTION,
     TANK_HULL_LIGHT_COL,
     TANK_HULL_LIGHT_DAMAGE, TANK_HULL_TRACK_COLS, TANK_PIVOT_REAR_FRACTION, TANK_SHADOW_OFFSET,
     TANK_SHADOW_OPACITY,
-    TANK_SPEED, TANK_TEXTURE_SIZE, TANK_TURRET_COL, TANK_TURRET_VISUAL_TURN_SPEED_DEG,
+    TANK_SPEED, TANK_TEXTURE_SIZE, TANK_TURRET_BBOX_BY_ROW, TANK_TURRET_COL,
+    TANK_TURRET_VISUAL_TURN_SPEED_DEG,
     TANK_VISUAL_TURN_SPEED_DEG, TANK_WRECK_COLS, WRECK_BURN_SECONDS,
 };
 
@@ -71,6 +74,32 @@ pub struct PendingShot {
     pub lateral_offset: f32,
 }
 
+/// A minigun burst in progress: `bullets_remaining` more bullets queued to
+/// fire at MINIGUN_BULLET_DELAY_SECONDS spacing after the one that just
+/// fired - see `Tank::minigun_burst`. Generalizes `PendingShot`'s "one
+/// queued extra shot" to "N queued burst bullets" using the identical
+/// tick-once-per-frame shape.
+#[derive(Clone, Copy)]
+pub struct MinigunBurst {
+    pub bullets_remaining: u32,
+    /// Seconds remaining until the next queued bullet fires.
+    pub timer: f32,
+    /// Same point-blank misfire skew as `PendingShot::aim_offset` - rolled
+    /// once when the burst starts and shared by every bullet in it; each
+    /// bullet additionally gets its own fresh MINIGUN_BULLET_SPREAD_DEG
+    /// jitter on top of this at the moment it actually fires (see
+    /// `simulation::fire_bullet`).
+    pub aim_offset: f32,
+}
+
+/// Which weapon a tank's next trigger-pull fires - see `Tank::active_weapon`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ActiveWeapon {
+    Laser,
+    Minigun,
+    Shell,
+}
+
 pub struct Tank {
     /// Which of the 12 tank archetypes in scifi_tanks_sheet.png this tank
     /// draws (see TANK_VARIANTS/TANK_SPRITE_ORDER in simulation.rs). The hull
@@ -92,6 +121,13 @@ pub struct Tank {
     /// resolved once per frame in `Game::update`, at the same site this
     /// tank's own fire input is handled.
     pub pending_shot: Option<PendingShot>,
+    /// A minigun burst in progress, queued the same way `pending_shot`
+    /// above queues a twin-barrel chassis's second shell - generalized from
+    /// "one queued extra shot" to "N queued burst bullets". `None` the rest
+    /// of the time. Ticked/resolved once per frame in `Game::update`, at
+    /// the same call sites `pending_shot` is already ticked for player and
+    /// enemy.
+    pub minigun_burst: Option<MinigunBurst>,
     /// Row in damage.png this tank's damage overlay is drawn from
     /// (0..DAMAGE_VARIANTS). Rolled once at spawn (see Game::init) and fixed
     /// for the tank's whole life, so its damage sequence reads as one
@@ -119,6 +155,24 @@ pub struct Tank {
     /// while the hull swings around to catch up. Read only by `draw_tank`/
     /// `draw_tank_shadow`.
     pub turret_visual_rotation: f32,
+    /// Seconds accumulated toward the minigun barrel-cluster overlay's next
+    /// "hot barrel" frame swap (see `draw_minigun_mount`), advanced while
+    /// `minigun_burst` is active (see `tick_minigun_spin`) and held in place
+    /// - not reset to 0 - the rest of the time, so the mount doesn't
+    /// visually snap back to frame 0 between bursts. Wrapped to
+    /// `MINIGUN_CYCLE_SECONDS * 3.0` (one full lap of the 3 frames) rather
+    /// than growing unbounded.
+    ///
+    /// This deliberately drives a discrete frame swap, not a continuous
+    /// rotation: `minigun_mount.png`'s barrels point along the ground plane
+    /// toward the target, so their real rotation axis is edge-on to this
+    /// game's top-down camera, not face-on to it - spinning the whole
+    /// sprite in the screen plane would read as a helicopter rotor seen
+    /// from above, not a side-mounted minigun. Cycling which barrel reads
+    /// as freshly-fired fakes the same "rounds cycling through" idea
+    /// correctly for this camera angle instead. See
+    /// `tools/spritegen/gen_minigun_mount.py`'s module doc comment.
+    pub minigun_cycle_timer: f32,
     /// Index into TANK_HULL_TRACK_COLS (0..4) picking which tread-animation
     /// hull frame is currently drawn - see `hull_col`/
     /// TANK_HULL_TRACK_FRAME_DISTANCE. Only consulted while the tank is alive
@@ -146,6 +200,21 @@ pub struct Tank {
     pub damage: f32,
     /// Remaining shells this tank can fire before it must recharge.
     pub shells_ammo: i32,
+    /// Remaining laser charges (see `pickup::PickupKind::Laser`,
+    /// `laser.rs`). While positive, firing consumes one charge and resolves
+    /// an instant beam hit instead of a normal shell (see `simulation.rs`'s
+    /// fire dispatch); at zero this tank fires shells as usual.
+    pub laser_charges: i32,
+    /// Which `laser::LaserVariant` the current charge batch fires as -
+    /// rolled fresh on each `PickupKind::Laser` pickup (see
+    /// `LASER_BLUE_PICKUP_CHANCE`), meaningless while `laser_charges == 0`.
+    pub laser_variant: LaserVariant,
+    /// Remaining minigun ammo (see `pickup::PickupKind::Minigun`,
+    /// `bullet.rs`). Pickup-only, no passive regen - mirrors `laser_charges`
+    /// exactly. While positive and no laser is charged, firing starts a
+    /// burst of MINIGUN_BURST_SIZE individually-simulated `bullet::Bullet`s
+    /// instead of a normal shell - see `Tank::active_weapon`.
+    pub minigun_ammo: i32,
     /// Seconds accumulated toward recharging the next shell.
     pub recharge_timer: f32,
     /// Seconds remaining before this tank may fire again (player only - see
@@ -198,11 +267,26 @@ pub struct Tank {
     /// This tank's rapier rigid body, once spawned into the physics world
     /// (see `Game::init`/`physics::Physics::spawn_tank`).
     pub body: Option<RigidBodyHandle>,
-    /// This tank's shell-hit sensor collider - a second, larger collider on
-    /// the same `body` (see `physics::Physics::add_hit_sensor`), sized to
-    /// the tank's full sprite rather than its solid hull, used only to
-    /// detect when a shell hits it.
+    /// This tank's hull shell-hit sensor - a second collider on the same
+    /// `body` (see `physics::Physics::add_hit_sensor`), sized/positioned
+    /// exactly like the solid hull collider (`hull_half_extents`) but with
+    /// its own owner-exclusion `InteractionGroups` filter, which the solid
+    /// collider can't carry without also filtering *movement* collisions
+    /// (tank-vs-tank ramming, tank-vs-wall) the same way - see
+    /// `find_shell_target`. Paired with `turret_hit_sensor` below for the
+    /// turret+barrel portion of the same hit test.
     pub hit_sensor: Option<ColliderHandle>,
+    /// This tank's turret+barrel shell-hit sensor - same idea as
+    /// `hit_sensor` above, sized/positioned from `turret_bbox_world`
+    /// instead of the hull box. Splitting the hit test into these two boxes
+    /// (rather than one box covering both, or one oversized box padded to
+    /// cover both) is what lets a shot land anywhere on the visible hull
+    /// *or* the barrel and register, without also counting the transparent
+    /// padding around either shape as a hit - this pair of boxes is exactly
+    /// what the "I" key debug inspect overlay (`game.rs::draw_tank_inspect`)
+    /// already draws, which is how this shape was chosen and checked
+    /// against the art before being wired in here.
+    pub turret_hit_sensor: Option<ColliderHandle>,
     /// This tank's collision-group slot (see `physics::owner_group`), set
     /// once at spawn (`Game::init`) - 0 for the player, `n` for the nth
     /// enemy spawned. Reused whenever this tank fires (see `Game::update`)
@@ -218,11 +302,13 @@ impl Default for Tank {
             row: 0,
             shell_variant: 0,
             pending_shot: None,
+            minigun_burst: None,
             damage_variant: 0,
             position: Position::default(),
             rotation: 0.0,
             visual_rotation: 0.0,
             turret_visual_rotation: 0.0,
+            minigun_cycle_timer: 0.0,
             hull_frame: 0,
             hull_anim_accum: 0.0,
             wreck_col: None,
@@ -230,6 +316,9 @@ impl Default for Tank {
             speed: TANK_SPEED,
             damage: 0.0,
             shells_ammo: MAX_SHELLS,
+            laser_charges: 0,
+            laser_variant: LaserVariant::Red,
+            minigun_ammo: 0,
             recharge_timer: 0.0,
             fire_cooldown: 0.0,
             ram_cooldown: 0.0,
@@ -244,6 +333,7 @@ impl Default for Tank {
             velocity: Vector2::new(0.0, 0.0),
             body: None,
             hit_sensor: None,
+            turret_hit_sensor: None,
             owner_slot: 0,
         }
     }
@@ -314,6 +404,42 @@ impl Tank {
         }
     }
 
+    /// Which weapon this tank's next trigger-pull actually fires, by
+    /// priority: a charged laser first (most powerful, depleted first),
+    /// then minigun ammo, then a traditional shell last. Purely picks the
+    /// *tier* - whether that tier's own ammo is actually sufficient to fire
+    /// *this instant* is still checked at each dispatch site in
+    /// `Game::update` (a twin-barrel chassis needing 2 shells per shot can
+    /// still be `ActiveWeapon::Shell` while short of the 2 it needs, exactly
+    /// as before this existed).
+    pub fn active_weapon(&self) -> ActiveWeapon {
+        if self.laser_charges > 0 {
+            ActiveWeapon::Laser
+        } else if self.minigun_ammo > 0 {
+            ActiveWeapon::Minigun
+        } else {
+            ActiveWeapon::Shell
+        }
+    }
+
+    /// Advance the minigun's barrel-cycle timer while a burst is active;
+    /// hold it otherwise (see `minigun_cycle_timer`'s doc comment). Called
+    /// once per frame for every tank alongside `tick_recharge`/`tick_wreck`
+    /// in `Game::update`'s unified per-tank timer loop.
+    pub fn tick_minigun_spin(&mut self, dt: f32) {
+        if self.minigun_burst.is_some() {
+            self.minigun_cycle_timer =
+                (self.minigun_cycle_timer + dt) % (MINIGUN_CYCLE_SECONDS * 3.0);
+        }
+    }
+
+    /// Which of `minigun_mount.png`'s 3 "hot barrel" frames to draw right
+    /// now - see `minigun_cycle_timer`'s doc comment for why this is a
+    /// discrete frame index, not a rotation angle.
+    fn minigun_cycle_frame(&self) -> i32 {
+        ((self.minigun_cycle_timer / MINIGUN_CYCLE_SECONDS) as i32).clamp(0, 2)
+    }
+
     /// Small phase offset (seconds) derived from screen position so that several
     /// burning tanks don't animate their smoke/fire in perfect lockstep.
     pub fn anim_phase(&self) -> f32 {
@@ -343,6 +469,73 @@ impl Tank {
         (w * 0.5 * self.scale, h * 0.5 * self.scale)
     }
 
+    /// True when `rotation` currently faces Left/Right rather than Up/Down -
+    /// shared by every method below that needs to know which axis is the
+    /// hull's "long" one. `rotation` is always exactly one of
+    /// `Dir::rotation()`'s four values (see `Tank::control`), so a plain
+    /// `==` match is exact here, no epsilon needed.
+    fn facing_along_x(&self) -> bool {
+        self.rotation == Dir::Right.rotation() || self.rotation == Dir::Left.rotation()
+    }
+
+    /// This tank's hull collider footprint in world space right now -
+    /// `position` as the center (the hull box is symmetric front-to-back
+    /// and side-to-side, so it never needs an offset) and
+    /// `hull_half_extents` oriented for the current facing. A convenience
+    /// over calling `hull_half_extents` directly for a caller that doesn't
+    /// already have `along_x` in hand (shell-hit testing, see
+    /// `simulation::swept_shell_target`) - `simulation::drive_tank`'s own
+    /// resize call site still calls `hull_half_extents` directly since it
+    /// already knows the along_x it's transitioning *to*.
+    pub fn hull_bbox_world(&self) -> (Position, Position) {
+        let (hw, hh) = self.hull_half_extents(self.facing_along_x());
+        (self.position, Position::new(hw, hh))
+    }
+
+    /// World-space center and half-extents of this tank's turret+barrel
+    /// bounding box (`TANK_TURRET_BBOX_BY_ROW`) at its current `rotation` -
+    /// backs both the "I" key debug inspect overlay
+    /// (`game.rs::draw_tank_inspect`) and `Tank::turret_hit_sensor`'s
+    /// shape/position (kept in sync on every facing change by
+    /// `simulation::drive_tank`, same trigger as the hull collider's own
+    /// resize). Unlike `hull_half_extents`'s `along_x` swap (safe because
+    /// the hull box is roughly centered on the tank), the turret+barrel box
+    /// is off-center - the barrel extends it well past the tile center
+    /// toward the front - so this needs a real per-direction rotation of
+    /// both the offset and the extents, not just a width/height swap.
+    pub fn turret_bbox_world(&self) -> (Position, Position) {
+        let (x0, y0, x1, y1) = TANK_TURRET_BBOX_BY_ROW[self.row as usize];
+        // Local "facing up" frame, origin at the tile center (16,16) -
+        // same convention TANK_HULL_BBOX_BY_ROW's own values are measured
+        // in.
+        let half = TANK_TEXTURE_SIZE * 0.5;
+        let local_cx = (x0 + x1 + 1.0) * 0.5 - half;
+        let local_cy = (y0 + y1 + 1.0) * 0.5 - half;
+        let local_hw = (x1 - x0 + 1.0) * 0.5;
+        let local_hh = (y1 - y0 + 1.0) * 0.5;
+        // Clockwise rotation of the local (x,y) offset by `rotation` - the
+        // same mapping `Dir::vec` encodes (Up's local "forward", -y, must
+        // land on each direction's own forward vector): identity at Up,
+        // (x,y)->(-y,x) at Right, negate-both at Down, (x,y)->(y,-x) at
+        // Left. Half-extents swap width/height exactly when the offset
+        // rotation does (Right/Left), matching `hull_half_extents`'s own
+        // along_x swap.
+        let (ox, oy, hw, hh) = if self.rotation == Dir::Up.rotation() {
+            (local_cx, local_cy, local_hw, local_hh)
+        } else if self.rotation == Dir::Right.rotation() {
+            (-local_cy, local_cx, local_hh, local_hw)
+        } else if self.rotation == Dir::Down.rotation() {
+            (-local_cx, -local_cy, local_hw, local_hh)
+        } else {
+            (local_cy, -local_cx, local_hh, local_hw)
+        };
+        let center = Position::new(
+            self.position.x + ox * self.scale,
+            self.position.y + oy * self.scale,
+        );
+        (center, Position::new(hw * self.scale, hh * self.scale))
+    }
+
     /// A safe circular over-approximation of this tank's real (rectangular,
     /// per-row) physics footprint at its current facing - the true
     /// bounding-circle radius (hypot of both half-extents from
@@ -353,13 +546,9 @@ impl Tank {
     /// `Physics::resize_collider` actually gave it - a mismatch that let the
     /// AI drive tanks (titan/leviathan especially) into obstacles/other
     /// tanks it believed were clear, wedging them until an external impulse
-    /// (a shell hit, or the player ramming through) dislodged them. Exact
-    /// equality against `Dir::Right`/`Dir::Left` is safe here (unlike an
-    /// epsilon check) because `rotation` only ever holds one of the four
-    /// exact `Dir::rotation()` constants - see `Tank::control`.
+    /// (a shell hit, or the player ramming through) dislodged them.
     pub fn avoidance_radius(&self) -> f32 {
-        let along_x = self.rotation == Dir::Right.rotation() || self.rotation == Dir::Left.rotation();
-        let (hx, hy) = self.hull_half_extents(along_x);
+        let (hx, hy) = self.hull_half_extents(self.facing_along_x());
         (hx * hx + hy * hy).sqrt()
     }
 
@@ -478,6 +667,14 @@ fn draw_pivot(size: f32) -> Vector2 {
     Vector2::new(size / 2.0, size / 2.0 + size * TANK_PIVOT_REAR_FRACTION)
 }
 
+/// Source rectangle for a fixed representative tank sprite - the Scout
+/// chassis's idle hull frame (row 0, col 0) - used by the map editor's
+/// start-point palette icon and placed-cell marker, which need one fixed
+/// tank sprite rather than any particular round's rolled chassis.
+pub fn icon_source_rec() -> Rectangle {
+    source_rec(0, 0)
+}
+
 /// Source rectangle for the tank at (row, col) inside the atlas.
 fn source_rec(row: i32, col: i32) -> Rectangle {
     Rectangle::new(
@@ -546,4 +743,88 @@ pub fn draw_tank_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tan
         tank.turret_visual_rotation,
         shadow,
     );
+}
+
+/// Draw the minigun barrel-cluster overlay on top of this tank's turret, if
+/// it currently has the weapon (`minigun_ammo > 0`) and isn't a wreck - the
+/// existing broken-turret art (`turret_col`) already communicates
+/// "destroyed" on its own, so this simply stops drawing once `is_wreck()`
+/// rather than authoring a separate broken-minigun asset. Visible whenever
+/// the tank *possesses* the weapon, regardless of whether laser currently
+/// outranks it in `active_weapon()` - the mount is a physical object on the
+/// turret, not a firing-mode indicator. Independent of hull damage tier
+/// (`hull_col`'s light/disabled/wreck ladder): hull and turret art are
+/// already fully decoupled layers, and this overlay only checks
+/// turret-adjacent state (`is_wreck`), so a hull that's gone
+/// light/disabled never hides it.
+///
+/// Drawn at the exact same `dest`/`origin` as `draw_tank`'s hull/turret
+/// layers (same shared pivot, see `draw_pivot`) - the overlay's own art
+/// (`tools/spritegen/gen_minigun_mount.py`) is authored around that
+/// identical cell-center-ish pivot, with its barrels extending forward from
+/// it by a fixed on-canvas distance exactly like `gen_tanks.py` already
+/// draws every turret's own barrel rects from that same pivot outward - so
+/// it drops into place with no offset math, exactly like the turret layer
+/// itself. Positioning it instead via the muzzle-offset formula
+/// (`TANK_MUZZLE_FORWARD_OFFSET_BY_ROW`, which uses the tank's instant,
+/// snapped `rotation`) would visibly detach the cluster from the turret
+/// mid-turn, since this overlay rotates at the eased
+/// `turret_visual_rotation` instead - that formula stays reserved for what
+/// it's proven for: positioning where `Bullet`s actually spawn.
+///
+/// Rotated by `turret_visual_rotation` ONLY (to track the turret's own
+/// eased aim) - unlike the turret itself, this does NOT add any further
+/// spin: `minigun_mount.png` is a 3-column sheet, one "hot barrel" per
+/// column (see `minigun_cycle_frame`/`minigun_cycle_timer`), cycled instead
+/// of rotated. A top-down camera looks edge-on at a barrel cluster's real
+/// rotation axis (the barrels point along the ground plane, toward the
+/// target), so spinning this sprite in the screen plane would read as a
+/// helicopter rotor seen from above - the wrong axis entirely for this
+/// camera angle. See `tools/spritegen/gen_minigun_mount.py`'s module doc
+/// comment for the full reasoning. Scaled by the flat `MINIGUN_MOUNT_SCALE`
+/// (not indexed by chassis row) layered on the tank's own `scale` - the
+/// mount is deliberately the same size on every chassis, a fixed piece of
+/// hardware rather than something that scales with the tank it's bolted to.
+pub fn draw_minigun_mount(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank) {
+    if tank.minigun_ammo <= 0 || tank.is_wreck() {
+        return;
+    }
+    let src = Rectangle::new(
+        tank.minigun_cycle_frame() as f32 * MINIGUN_MOUNT_TEXTURE_SIZE,
+        0.0,
+        MINIGUN_MOUNT_TEXTURE_SIZE,
+        MINIGUN_MOUNT_TEXTURE_SIZE,
+    );
+    let size = MINIGUN_MOUNT_TEXTURE_SIZE * tank.scale * MINIGUN_MOUNT_SCALE;
+    let dest = Rectangle::new(tank.position.x, tank.position.y, size, size);
+    let origin = draw_pivot(size);
+    d.draw_texture_pro(texture, src, dest, origin, tank.turret_visual_rotation, Color::WHITE);
+}
+
+/// Shadow pass for `draw_minigun_mount` - same tint/offset convention as
+/// `draw_tank_shadow` (`TANK_SHADOW_OFFSET`/`TANK_SHADOW_OPACITY`, not a
+/// separate constant): it's rigidly bolted to the turret, so it should read
+/// at the exact same height/offset as the turret's own shadow. Call before
+/// `draw_minigun_mount` (and after `draw_tank_shadow`), same ordering rule
+/// as every other shadow pass.
+pub fn draw_minigun_mount_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank) {
+    if tank.minigun_ammo <= 0 || tank.is_wreck() {
+        return;
+    }
+    let src = Rectangle::new(
+        tank.minigun_cycle_frame() as f32 * MINIGUN_MOUNT_TEXTURE_SIZE,
+        0.0,
+        MINIGUN_MOUNT_TEXTURE_SIZE,
+        MINIGUN_MOUNT_TEXTURE_SIZE,
+    );
+    let size = MINIGUN_MOUNT_TEXTURE_SIZE * tank.scale * MINIGUN_MOUNT_SCALE;
+    let dest = Rectangle::new(
+        tank.position.x + SHADOW_DIR_X * TANK_SHADOW_OFFSET,
+        tank.position.y + SHADOW_DIR_Y * TANK_SHADOW_OFFSET,
+        size,
+        size,
+    );
+    let origin = draw_pivot(size);
+    let shadow = Color::new(0, 0, 0, (255.0 * TANK_SHADOW_OPACITY) as u8);
+    d.draw_texture_pro(texture, src, dest, origin, tank.turret_visual_rotation, shadow);
 }
