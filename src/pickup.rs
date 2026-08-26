@@ -25,6 +25,12 @@ pub enum PickupKind {
     /// trigger pull fires a multi-bullet burst instead of a laser beam (if
     /// also charged) or a normal shell - see `tank::Tank::active_weapon`.
     Minigun,
+    /// Grants PLASMA_AMMO_PER_PICKUP rounds of plasma ammo (see
+    /// `tank::Tank::plasma_ammo`, `plasma.rs`) - while positive and no laser
+    /// is charged, firing shoots a glowing plasma bolt from the barrel
+    /// instead of a normal shell (one bolt per barrel on a twin-barrel
+    /// chassis, same as `Shell`) - see `tank::Tank::active_weapon`.
+    Plasma,
 }
 
 pub struct Pickup {

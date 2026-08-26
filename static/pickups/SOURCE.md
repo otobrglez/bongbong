@@ -13,6 +13,16 @@ treatment. Three small muzzle sparks with short staggered trailing streaks
 (bold amber-orange), encoding "burst of rounds" the way `laser.png` encodes
 "one continuous beam". Regenerate with `python3 tools/gen_minigun_pickup.py`.
 
+`plasma.png` is likewise not from the pack - generated from scratch by
+`tools/gen_plasma_pickup.py`, same raw-PNG-bytes/no-Pillow convention as
+`laser.png`/`minigun.png` above and the same not-palette-snapped, loud/
+high-contrast treatment. A centered glowing cyan/teal orb with four short
+electric arcs radiating outward, echoing `static/plasma.png`'s own in-flight/
+impact art (`tools/spritegen/gen_plasma.py`) so the ground icon and the
+projectile read as the same weapon - distinct from `laser.png`'s beam and
+`minigun.png`'s muzzle sparks, since the plasma cannon's identity is the bolt
+itself, not a stream. Regenerate with `python3 tools/gen_plasma_pickup.py`.
+
 `health.png` and `ammo.png` are `health-red 32px.png` and
 `ammo-pistol 32px.png` from the third-party "2D Health & Ammo Pickups v6.2"
 pack (`bongbong-assets/2D Health & Ammo Pickups v6.2/32px/`), copied in

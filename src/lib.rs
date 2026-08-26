@@ -345,15 +345,20 @@ pub const ENEMY_SPAWN_MARGIN_MIN: f32 = 0.2;
 pub const ENEMY_SPAWN_MARGIN_MAX: f32 = 0.4;
 
 // Fraction of enemies that start each round already carrying a special
-// weapon (laser or minigun, see ENEMY_SPECIAL_WEAPON_LASER_SHARE) loaded
-// with a full pickup's worth of ammo, rather than the shell-only default
-// every tank otherwise spawns with (see Game::init's enemy spawn loop).
-// Rolled independently per enemy, so this is an expected fraction across a
-// round, not an exact headcount.
+// weapon (laser, plasma, or minigun, see ENEMY_SPECIAL_WEAPON_LASER_SHARE/
+// ENEMY_SPECIAL_WEAPON_PLASMA_SHARE) loaded with a full pickup's worth of
+// ammo, rather than the shell-only default every tank otherwise spawns with
+// (see Game::init's enemy spawn loop). Rolled independently per enemy, so
+// this is an expected fraction across a round, not an exact headcount.
 pub const ENEMY_SPECIAL_WEAPON_CHANCE: f32 = 0.4;
-// Of an enemy that rolls a special weapon, the odds it's a laser rather
-// than a minigun - the remaining share gets a minigun instead.
+// Of an enemy that rolls a special weapon, the odds it's a laser - unchanged
+// from before plasma existed, so laser's own odds aren't disturbed by this
+// three-way split.
 pub const ENEMY_SPECIAL_WEAPON_LASER_SHARE: f32 = 0.5;
+// Of the remaining (non-laser) share, the odds it's plasma rather than a
+// minigun - the remainder gets a minigun instead. 0.5 means the two split
+// the non-laser half evenly (laser 50%, plasma 25%, minigun 25% overall).
+pub const ENEMY_SPECIAL_WEAPON_PLASMA_SHARE: f32 = 0.5;
 
 // When the round ends (player destroyed, or all enemies destroyed) the result
 // is shown for this long, then the game restarts.
@@ -1279,6 +1284,71 @@ pub const MINIGUN_CYCLE_SECONDS: f32 = 0.05;
 // is what to tune if the mount should read bigger/smaller overall.
 pub const MINIGUN_MOUNT_SCALE: f32 = 1.0;
 
+// --- Plasma pickup/weapon (pickup.rs's PickupKind::Plasma, plasma.rs,
+// simulation.rs's fire_plasma/PendingPlasmaShot handling) ---
+// Sits above the traditional shell in weapon priority but below the
+// instant-hit laser (see Tank::active_weapon) - a straight damage upgrade
+// over a shell rather than a different playstyle the way the laser
+// (guaranteed hit) and minigun (spray) are. Fired the exact same way a
+// shell is - straight down the barrel, a twin-barrel chassis firing one
+// bolt per barrel a beat apart (see PendingPlasmaShot, mirroring
+// Tank::pending_shot) rather than the minigun's rapid individually-queued
+// burst - so it costs 2 ammo per twin-barrel shot exactly like a shell does.
+pub const PLASMA_AMMO_PER_PICKUP: i32 = 10; // 10 single shots, or 5 twin-barrel volleys
+// 24% stronger than a traditional shell - applied as a flat multiplier on
+// top of PLAYER_DAMAGE_MIN/MAX or ENEMY_DAMAGE_MIN/MAX (same split a shell
+// itself uses) and TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW, not a separate damage
+// range of its own - see the plasma hit-resolution block in
+// simulation.rs's `update`.
+pub const PLASMA_DAMAGE_FACTOR: f32 = 1.24;
+
+pub const PLASMA_TEXTURE_SIZE: f32 = 32.0;
+// Bigger than SHELL_SCALE (2.0) - a plasma bolt reads as visibly larger and
+// heavier than a normal shell, matching its bigger damage per hit. Also
+// scales the in-flight pulse glow (see `plasma::glow_pulse`'s `base_radius`),
+// so this one constant sizes the whole effect. 2.08 = the original 2.6
+// tuning, reduced 20% after it read too big on screen.
+pub const PLASMA_SCALE: f32 = 2.08;
+// 504 = the original 420 tuning, increased 20% for a punchier, faster-
+// closing round - now a touch faster than SHELL_SPEED (500) rather than
+// slower, on top of already hitting harder (PLASMA_DAMAGE_FACTOR).
+pub const PLASMA_SPEED: f32 = 504.0;
+// Bigger than SHELL_HIT_HALF_EXTENT (3.0) - a fatter bolt is easier to land
+// a hit with, matching its bigger on-screen size.
+pub const PLASMA_HIT_HALF_EXTENT: f32 = 5.0;
+// A bit more than SHELL_RECOIL_SPEED/_MAX (18.0/40.0) - a heavier launch kick.
+pub const PLASMA_RECOIL_SPEED: f32 = 22.0;
+pub const PLASMA_RECOIL_MAX_SPEED: f32 = 45.0;
+pub const PLASMA_SHADOW_OFFSET_MIN: f32 = 10.0; // px
+pub const PLASMA_SHADOW_OFFSET_MAX: f32 = 22.0; // px
+pub const PLASMA_SHADOW_OPACITY: f32 = 0.30; // matches SHELL_SHADOW_OPACITY
+// More than SHELL_IMPACT_KNOCKBACK_SPEED (35.0) - a heavier "tap" on hit,
+// matching the bolt's own bigger mass/damage.
+pub const PLASMA_IMPACT_KNOCKBACK_SPEED: f32 = 45.0;
+// Pulsating in-flight glow (see plasma::draw_plasma) - a sine wave drawn on
+// top of the base sprite at runtime, the same "cheap per-frame animation"
+// convention laser::draw_laser_beam's fade-out already uses.
+pub const PLASMA_PULSE_HZ: f32 = 6.0; // pulses per second while flying
+pub const PLASMA_PULSE_MIN_SCALE: f32 = 0.85; // glow radius at the pulse's low point (x sprite radius)
+pub const PLASMA_PULSE_MAX_SCALE: f32 = 1.35; // glow radius at the pulse's high point
+// The Flying state's own baked art also breathes now (4 keyframes -
+// plasma::flying_col - instead of one static frame), layered underneath the
+// runtime glow above rather than duplicating it: a subtle in/out pulse on
+// the orb's core/rim, cycling through all 4 frames this many times per
+// second. Deliberately not tied to PLASMA_PULSE_HZ - two independent cycles
+// (a discrete 4-frame baked shimmer plus a continuous drawn halo) read as
+// richer than the same single rate driving both.
+pub const PLASMA_FLYING_CYCLE_FPS: f32 = 10.0;
+
+// Two variants (see plasma::PlasmaVariant), rolled once per PickupKind::Plasma
+// pickup rather than per shot - same mechanism as LASER_BLUE_PICKUP_CHANCE/
+// LASER_BLUE_DAMAGE_FACTOR. PLASMA_PURPLE_PICKUP_CHANCE is Purple's odds (so
+// Teal, the base variant, is the remaining 70%), and a Purple charge batch
+// fires at PLASMA_DAMAGE_FACTOR scaled further by this factor instead of the
+// Teal baseline.
+pub const PLASMA_PURPLE_PICKUP_CHANCE: f32 = 0.3;
+pub const PLASMA_PURPLE_DAMAGE_FACTOR: f32 = 1.10;
+
 // --- Map editor (dev-only, docs/map-editor-design.md) ---
 // Kept minimal - the editor is a `map-editor`-feature-only, presentation-only
 // tool, not gameplay tuning, so most of its layout math lives directly in
@@ -1336,6 +1406,7 @@ pub mod obstacle;
 pub mod pathfind;
 pub mod physics;
 pub mod pickup;
+pub mod plasma;
 pub mod shell;
 pub mod shockwave;
 pub mod simulation;

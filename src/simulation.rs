@@ -40,9 +40,10 @@ use crate::obstacle::{Material, Obstacle};
 use crate::pathfind::Grid;
 use crate::physics::{self, Physics};
 use crate::pickup::{Pickup, PickupKind};
+use crate::plasma::{Plasma, PlasmaState, PlasmaVariant};
 use crate::shell::{Owner, Shell, ShellState};
 use crate::shockwave::Shockwave;
-use crate::tank::{ActiveWeapon, MinigunBurst, PendingShot, Tank};
+use crate::tank::{ActiveWeapon, MinigunBurst, PendingPlasmaShot, PendingShot, Tank};
 use crate::track::Track;
 use crate::{
     DAMAGE_VARIANTS, ENEMY_ALERT_HOLD_SECONDS, ENEMY_COUNT_MAX,
@@ -56,7 +57,7 @@ use crate::{
     FROG_HOP_ANGLE_FAN_DEG, FROG_HOP_ANGLE_JITTER_DEG, FROG_HOP_BOUNDS_MARGIN, FROG_MAX_HEALTH,
     FROG_SPAWN_MAX_DIST, FROG_SPAWN_MIN_DIST,
     IMPACT_FLASH_DURATION, KNOCKBACK_MAX_SPEED, KNOCKBACK_STRENGTH, MAX_DAMAGE,
-    ENEMY_SPECIAL_WEAPON_CHANCE, ENEMY_SPECIAL_WEAPON_LASER_SHARE,
+    ENEMY_SPECIAL_WEAPON_CHANCE, ENEMY_SPECIAL_WEAPON_LASER_SHARE, ENEMY_SPECIAL_WEAPON_PLASMA_SHARE,
     LASER_BLUE_PICKUP_CHANCE, LASER_CHARGES_PER_PICKUP, LASER_DAMAGE_MAX, LASER_DAMAGE_MIN,
     MINIGUN_AMMO_PER_PICKUP, MINIGUN_BULLET_DAMAGE_MAX, MINIGUN_BULLET_DAMAGE_MIN,
     MINIGUN_BULLET_HIT_HALF_EXTENT, MINIGUN_BULLET_RECOIL_MAX_SPEED, MINIGUN_BULLET_RECOIL_SPEED,
@@ -66,6 +67,9 @@ use crate::{
     OBSTACLE_CLEAR, OBSTACLE_HULL_FRACTION, OBSTACLE_SCALE, OBSTACLE_TEXTURE_SIZE,
     PATHFIND_CELL_SIZE, PHYSICS_FIXED_DT, PHYSICS_MAX_CATCHUP_SECONDS, PICKUP_AMMO_AMOUNT,
     PICKUP_COLLECT_RADIUS, PICKUP_HEAL_AMOUNT, PICKUP_RESPAWN_SECONDS,
+    PLASMA_AMMO_PER_PICKUP, PLASMA_DAMAGE_FACTOR, PLASMA_HIT_HALF_EXTENT,
+    PLASMA_IMPACT_KNOCKBACK_SPEED, PLASMA_PURPLE_PICKUP_CHANCE, PLASMA_RECOIL_MAX_SPEED,
+    PLASMA_RECOIL_SPEED, PLASMA_SHADOW_OFFSET_MAX, PLASMA_SHADOW_OFFSET_MIN, PLASMA_SPEED,
     PLAYER_DAMAGE_MAX, PLAYER_DAMAGE_MIN, PLAYER_FIRE_INTERVAL, Position,
     RAM_DAMAGE_COOLDOWN, RESTART_DELAY, SHELL_HIT_HALF_EXTENT,
     SHELL_IMPACT_KNOCKBACK_SPEED, SHELL_RECOIL_MAX_SPEED, SHELL_RECOIL_SPEED,
@@ -524,6 +528,13 @@ impl Game {
                     } else {
                         LaserVariant::Red
                     };
+                } else if rng.random_range(0.0..1.0) < ENEMY_SPECIAL_WEAPON_PLASMA_SHARE {
+                    enemy.plasma_ammo += PLASMA_AMMO_PER_PICKUP;
+                    enemy.plasma_variant = if rng.random_range(0.0..1.0) < PLASMA_PURPLE_PICKUP_CHANCE {
+                        PlasmaVariant::Purple
+                    } else {
+                        PlasmaVariant::Teal
+                    };
                 } else {
                     enemy.minigun_ammo += MINIGUN_AMMO_PER_PICKUP;
                 }
@@ -747,6 +758,9 @@ impl Game {
         // every shot fired below is collected here and actually spawned in
         // one batch after the player/enemy sections finish querying tanks.
         let mut pending_shells: Vec<Shell> = Vec::new();
+        // Plasma bolts fired this frame - same deferred-spawn reason as
+        // `pending_shells` above.
+        let mut pending_plasmas: Vec<Plasma> = Vec::new();
         // Laser shots fired this frame - same deferred-resolution reason as
         // `pending_shells` (hecs won't allow another mutable Tank query
         // while the player/enemy tank loops below are still iterating), but
@@ -913,6 +927,18 @@ impl Game {
                         };
                     }
                     PickupKind::Minigun => tank.minigun_ammo += MINIGUN_AMMO_PER_PICKUP,
+                    PickupKind::Plasma => {
+                        tank.plasma_ammo += PLASMA_AMMO_PER_PICKUP;
+                        // Rerolled on every pickup - see
+                        // PLASMA_PURPLE_PICKUP_CHANCE's doc comment - same
+                        // "a fresh batch can swap the tank's current variant"
+                        // convention as PickupKind::Laser above.
+                        tank.plasma_variant = if rng.random_range(0.0..1.0) < PLASMA_PURPLE_PICKUP_CHANCE {
+                            PlasmaVariant::Purple
+                        } else {
+                            PlasmaVariant::Teal
+                        };
+                    }
                 }
                 drop(q);
                 self.world.despawn(pickup_entity).ok();
@@ -971,6 +997,28 @@ impl Game {
                     player_tank.pending_shot = None;
                 } else {
                     player_tank.pending_shot = Some(pending);
+                }
+            }
+
+            // Resolve a twin-barrel chassis's queued second plasma bolt -
+            // same placement/shape as `pending_shot`'s own tick just above,
+            // for the same twin-barrel-delay reason.
+            if let Some(mut pending) = player_tank.pending_plasma_shot {
+                pending.timer -= dt;
+                if pending.timer <= 0.0 {
+                    fire_plasma(
+                        &mut self.physics,
+                        &mut self.muzzle_flashes,
+                        &mut rng,
+                        &mut pending_plasmas,
+                        player_tank,
+                        Owner::Player,
+                        pending.aim_offset,
+                        pending.lateral_offset,
+                    );
+                    player_tank.pending_plasma_shot = None;
+                } else {
+                    player_tank.pending_plasma_shot = Some(pending);
                 }
             }
 
@@ -1034,7 +1082,10 @@ impl Game {
             let active_weapon = player_tank.active_weapon();
             let should_fire = match active_weapon {
                 ActiveWeapon::Laser | ActiveWeapon::Minigun => player_intent.fire,
-                ActiveWeapon::Shell => fire_pressed,
+                // Plasma fires the same way a shell does - one discrete bolt
+                // per physical trigger pull, not a full-auto stream - so it
+                // shares the shell's edge-triggered gate.
+                ActiveWeapon::Plasma | ActiveWeapon::Shell => fire_pressed,
             };
             if should_fire && player_tank.fire_cooldown <= 0.0 {
                 match active_weapon {
@@ -1072,6 +1123,32 @@ impl Game {
                                 });
                             }
                             player_tank.fire_cooldown = MINIGUN_BURST_COOLDOWN_SECONDS;
+                        }
+                    }
+                    ActiveWeapon::Plasma => {
+                        if player_tank.plasma_ammo >= ammo_cost {
+                            player_tank.plasma_ammo -= ammo_cost;
+                            player_tank.fire_cooldown = PLAYER_FIRE_INTERVAL;
+                            // Same twin-barrel dispatch as Shell below: first
+                            // bolt from the left barrel now, the second
+                            // queued via `pending_plasma_shot`.
+                            fire_plasma(
+                                &mut self.physics,
+                                &mut self.muzzle_flashes,
+                                &mut rng,
+                                &mut pending_plasmas,
+                                player_tank,
+                                Owner::Player,
+                                0.0,
+                                -lateral,
+                            );
+                            if lateral > 0.0 {
+                                player_tank.pending_plasma_shot = Some(PendingPlasmaShot {
+                                    timer: TANK_TWIN_SHOT_DELAY_SECONDS,
+                                    aim_offset: 0.0,
+                                    lateral_offset: lateral,
+                                });
+                            }
                         }
                     }
                     ActiveWeapon::Shell => {
@@ -1489,6 +1566,27 @@ impl Game {
                 }
             }
 
+            // Resolve a twin-barrel chassis's queued second plasma bolt -
+            // same placement/shape as `pending_shot`'s own tick just above.
+            if let Some(mut pending) = tank.pending_plasma_shot {
+                pending.timer -= dt;
+                if pending.timer <= 0.0 {
+                    fire_plasma(
+                        &mut self.physics,
+                        &mut self.muzzle_flashes,
+                        &mut rng,
+                        &mut pending_plasmas,
+                        tank,
+                        Owner::Enemy(tank.owner_slot - 1),
+                        pending.aim_offset,
+                        pending.lateral_offset,
+                    );
+                    tank.pending_plasma_shot = None;
+                } else {
+                    tank.pending_plasma_shot = Some(pending);
+                }
+            }
+
             // Resolve any in-progress minigun burst's next queued bullet -
             // same placement/shape as `pending_shot`'s own tick just above.
             if let Some(mut burst) = tank.minigun_burst {
@@ -1577,6 +1675,29 @@ impl Game {
                             tank.fire_cooldown = MINIGUN_BURST_COOLDOWN_SECONDS;
                         }
                     }
+                    ActiveWeapon::Plasma => {
+                        if tank.plasma_ammo >= ammo_cost {
+                            tank.plasma_ammo -= ammo_cost;
+                            // Same misfire/twin-barrel dispatch as Shell below.
+                            fire_plasma(
+                                &mut self.physics,
+                                &mut self.muzzle_flashes,
+                                &mut rng,
+                                &mut pending_plasmas,
+                                tank,
+                                owner,
+                                intent.fire_aim_offset,
+                                -lateral,
+                            );
+                            if lateral > 0.0 {
+                                tank.pending_plasma_shot = Some(PendingPlasmaShot {
+                                    timer: TANK_TWIN_SHOT_DELAY_SECONDS,
+                                    aim_offset: intent.fire_aim_offset,
+                                    lateral_offset: lateral,
+                                });
+                            }
+                        }
+                    }
                     ActiveWeapon::Shell => {
                         if tank.shells_ammo >= ammo_cost {
                             tank.shells_ammo -= ammo_cost;
@@ -1610,6 +1731,9 @@ impl Game {
         // is active anymore.
         for shell in pending_shells {
             self.world.spawn((shell,));
+        }
+        for plasma in pending_plasmas {
+            self.world.spawn((plasma,));
         }
         for bullet in pending_bullets {
             self.world.spawn((bullet,));
@@ -1750,6 +1874,14 @@ impl Game {
                 .expect("bullet should always have a physics body once spawned");
             self.physics.set_kinematic_position(handle, bullet.position);
         }
+        // --- Plasma bolts: same movement/sync treatment as shells above ---
+        for plasma in self.world.query::<&mut Plasma>().iter() {
+            plasma.update(dt);
+            let handle = plasma
+                .body
+                .expect("plasma should always have a physics body once spawned");
+            self.physics.set_kinematic_position(handle, plasma.position);
+        }
 
         // --- Physics: advance the world in fixed steps ---
         // Every tank's body already has this frame's commanded velocity (set
@@ -1759,9 +1891,11 @@ impl Game {
         // fixed step keeps the contact solver's behavior consistent regardless
         // of the render frame rate. See docs/physics-engine-design.md.
         self.physics_accumulator = (self.physics_accumulator + dt).min(PHYSICS_MAX_CATCHUP_SECONDS);
+        let mut physics_stepped = false;
         while self.physics_accumulator >= PHYSICS_FIXED_DT {
             self.physics.step();
             self.physics_accumulator -= PHYSICS_FIXED_DT;
+            physics_stepped = true;
         }
 
         // --- Read positions back, then resolve ram damage and lay tracks ---
@@ -1792,9 +1926,11 @@ impl Game {
         // on its own: whichever enemy is processed first sets the player's
         // cooldown, which blocks the guard for every other touching enemy
         // later in the same loop.
-        with_tank_mut(&self.world, player, |t| {
-            lay_tracks(&mut self.tracks, t, tank_before)
-        });
+        if physics_stepped {
+            with_tank_mut(&self.world, player, |t| {
+                lay_tracks(&mut self.tracks, t, tank_before)
+            });
+        }
         for (enemy_entity, before) in &enemies_before {
             let touching = with_tank(&self.world, *enemy_entity, |e| {
                 with_tank(&self.world, player, |p| tanks_touching(&self.physics, e, p))
@@ -1804,9 +1940,11 @@ impl Game {
                     ram(e, true, p, false, &mut self.physics, &mut rng, &mut kills);
                 });
             }
-            with_tank_mut(&self.world, *enemy_entity, |t| {
-                lay_tracks(&mut self.tracks, t, *before)
-            });
+            if physics_stepped {
+                with_tank_mut(&self.world, *enemy_entity, |t| {
+                    lay_tracks(&mut self.tracks, t, *before)
+                });
+            }
         }
 
         // --- Shells: mutual detonation when two shells from opposing
@@ -2235,6 +2373,153 @@ impl Game {
             }
         }
 
+        // --- Plasma bolts: damage/detonate against whatever they're
+        // intersecting (Flying only) - same reuse of `find_shell_target` as
+        // shells/bullets above. Closer to a shell than a bullet in feel (a
+        // single heavy round, not a rapid-fire burst): scaled by the same
+        // PLAYER_/ENEMY_ damage split and TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW a
+        // shell gets (just boosted by PLASMA_DAMAGE_FACTOR - see that
+        // constant's doc comment), knocks the target back
+        // (`plasma_impact`), and lets the frog hop away exactly like a shell
+        // hit does. Unlike a shell, never ricochets - a heavy bolt detonates
+        // on first contact instead of bouncing off Iron/walls (see
+        // `plasma::Plasma`'s own doc comment).
+        for plasma in self.world.query::<&mut Plasma>().iter() {
+            if plasma.state != PlasmaState::Flying {
+                continue;
+            }
+            let plasma_handle = plasma
+                .body
+                .expect("plasma should always have a physics body once spawned");
+            let plasma_collider = self.physics.collider_of(plasma_handle);
+            let plasma_prev = plasma.position
+                - if plasma.flew { plasma.velocity * dt } else { Vector2::new(0.0, 0.0) };
+            let (base_dmg_min, base_dmg_max) = if plasma.owner == Owner::Player {
+                (PLAYER_DAMAGE_MIN, PLAYER_DAMAGE_MAX)
+            } else {
+                (ENEMY_DAMAGE_MIN, ENEMY_DAMAGE_MAX)
+            };
+            let chassis_factor = TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW[plasma.shooter_row as usize];
+            let variant_factor = plasma.variant.damage_factor();
+            let dmg_min = base_dmg_min * chassis_factor * PLASMA_DAMAGE_FACTOR * variant_factor;
+            let dmg_max = base_dmg_max * chassis_factor * PLASMA_DAMAGE_FACTOR * variant_factor;
+
+            let Some(target) = find_shell_target(
+                &self.world,
+                &self.physics,
+                player,
+                &walls,
+                plasma_collider,
+                owner_slot(plasma.owner),
+                plasma_prev,
+                plasma.position,
+                width,
+                height,
+            ) else {
+                continue;
+            };
+
+            self.impact_flashes.push(Shockwave {
+                center: plasma.position,
+                time: 0.0,
+            });
+            plasma.detonate();
+
+            match target {
+                ShellTarget::PlayerTank => {
+                    let mut q = self.world.query_one::<&mut Tank>(player);
+                    let player_tank = q.get().expect("player entity always has a Tank");
+                    if !player_tank.is_wreck() {
+                        let dmg = rng.random_range(dmg_min..dmg_max);
+                        player_tank.damage = (player_tank.damage + dmg).min(MAX_DAMAGE);
+                        player_tank.mark_hit();
+                        if player_tank.is_wreck() {
+                            kills.push((player_tank.position, false));
+                        } else {
+                            plasma_impact(player_tank, plasma, &mut self.physics);
+                        }
+                    }
+                }
+                ShellTarget::EnemyTank(entity) => {
+                    let survived_hit = {
+                        let mut q = self.world.query_one::<&mut Tank>(entity);
+                        let tank = q.get().expect("plasma target entity always has a Tank");
+                        if tank.is_wreck() {
+                            false
+                        } else {
+                            let dmg = rng.random_range(dmg_min..dmg_max);
+                            tank.damage = (tank.damage + dmg).min(MAX_DAMAGE);
+                            tank.mark_hit();
+                            if tank.is_wreck() {
+                                kills.push((tank.position, true));
+                                false
+                            } else {
+                                plasma_impact(tank, plasma, &mut self.physics);
+                                true
+                            }
+                        }
+                    };
+                    if survived_hit {
+                        let mut ai_q = self.world.query_one::<&mut Ai>(entity);
+                        ai_q.get()
+                            .expect("enemy tank plasma targets always have an Ai component")
+                            .notify_hit();
+                    }
+                }
+                ShellTarget::Frog(entity) => {
+                    let (now_dead, frog_pos, can_hop, hop_distance) = {
+                        let mut q = self.world.query_one::<&mut Frog>(entity);
+                        let frog = q.get().expect("plasma target entity always has a Frog");
+                        if frog.is_dead() {
+                            (true, frog.position, false, 0.0)
+                        } else {
+                            let dmg = rng.random_range(dmg_min..dmg_max);
+                            frog.damage(dmg);
+                            (
+                                frog.is_dead(),
+                                frog.position,
+                                frog.can_hop(),
+                                frog.hop_distance(),
+                            )
+                        }
+                    };
+                    if now_dead {
+                        self.shock = Some(Shockwave {
+                            center: frog_pos,
+                            time: 0.0,
+                        });
+                    } else if can_hop {
+                        let obstacle_positions: Vec<Position> = self
+                            .world
+                            .query::<&Obstacle>()
+                            .iter()
+                            .map(|o| o.position)
+                            .collect();
+                        if let Some(new_pos) = frog_hop_target(
+                            &mut rng,
+                            frog_pos,
+                            plasma.velocity,
+                            hop_distance,
+                            &obstacle_positions,
+                            width,
+                            height,
+                        ) {
+                            with_frog_mut(&self.world, entity, |f| f.start_hop(new_pos));
+                        }
+                    }
+                }
+                ShellTarget::Obstacle(entity) => {
+                    let mut q = self.world.query_one::<&mut Obstacle>(entity);
+                    let obstacle = q
+                        .get()
+                        .expect("plasma target entity always has an Obstacle");
+                    let dmg = rng.random_range(dmg_min..dmg_max);
+                    obstacle.damage(dmg);
+                }
+                ShellTarget::Wall => {}
+            }
+        }
+
         // Remove physics bodies for shells finishing their bang animation
         // this frame, then despawn them. Collected first, then applied -
         // hecs doesn't allow despawning while a query over the same world is
@@ -2264,6 +2549,23 @@ impl Game {
             .map(|(e, b)| (e, b.body))
             .collect();
         for (entity, body) in done_bullets {
+            if let Some(handle) = body {
+                self.physics.remove_body(handle);
+            }
+            self.world.despawn(entity).ok();
+        }
+
+        // Remove physics bodies for plasma bolts finishing their impact
+        // animation this frame, then despawn them - same collect-then-apply
+        // pattern as the shell cleanup above.
+        let done_plasmas: Vec<_> = self
+            .world
+            .query::<(Entity, &Plasma)>()
+            .iter()
+            .filter(|(_, p)| p.done)
+            .map(|(e, p)| (e, p.body))
+            .collect();
+        for (entity, body) in done_plasmas {
             if let Some(handle) = body {
                 self.physics.remove_body(handle);
             }
@@ -2450,6 +2752,7 @@ impl Game {
                 damage: tank.damage,
                 shells_ammo: tank.shells_ammo,
                 minigun_ammo: tank.minigun_ammo,
+                plasma_ammo: tank.plasma_ammo,
                 is_wreck: tank.is_wreck(),
             })
             .collect()
@@ -2467,6 +2770,7 @@ pub struct TankSnapshot {
     pub damage: f32,
     pub shells_ammo: i32,
     pub minigun_ammo: i32,
+    pub plasma_ammo: i32,
     pub is_wreck: bool,
 }
 
@@ -2676,6 +2980,52 @@ fn fire_shell(
     }
 
     pending_shells.push(shell);
+}
+
+/// Spawns one plasma bolt from `tank` and wires up everything a shot needs
+/// beyond the `Plasma` struct itself - the plasma analogue of `fire_shell`
+/// (identical shape: physics sensor, rolled drop-shadow offset, muzzle-flash
+/// shockwave, recoil impulse), just at `PLASMA_*` tuning instead of
+/// `SHELL_*`. Shared by the player's and every enemy's fire handling in
+/// `update`, and by both bolts of a twin-barrel volley (see
+/// `Tank::pending_plasma_shot`).
+#[allow(clippy::too_many_arguments)] // plumbing borrows split off of `self`, not real complexity
+fn fire_plasma(
+    physics: &mut Physics,
+    muzzle_flashes: &mut Vec<Shockwave>,
+    rng: &mut rand::rngs::ThreadRng,
+    pending_plasmas: &mut Vec<Plasma>,
+    tank: &Tank,
+    owner: Owner,
+    aim_offset: f32,
+    lateral_offset: f32,
+) {
+    let mut plasma = Plasma::spawn(tank, owner, tank.plasma_variant, aim_offset, lateral_offset);
+    plasma.body = Some(physics.spawn_shell(
+        plasma.position,
+        PLASMA_HIT_HALF_EXTENT,
+        physics::owner_group(tank.owner_slot),
+    ));
+    plasma.shadow_offset = rng.random_range(PLASMA_SHADOW_OFFSET_MIN..PLASMA_SHADOW_OFFSET_MAX);
+    muzzle_flashes.push(Shockwave {
+        center: plasma.position,
+        time: 0.0,
+    });
+
+    let speed =
+        (plasma.velocity.x * plasma.velocity.x + plasma.velocity.y * plasma.velocity.y).sqrt();
+    if let (Some(handle), true) = (tank.body, speed > f32::EPSILON) {
+        let axis = Vector2::new(-plasma.velocity.x / speed, -plasma.velocity.y / speed);
+        let reference_mass = tank.scale * tank.scale;
+        let push =
+            (PLASMA_RECOIL_SPEED * reference_mass / tank.mass()).min(PLASMA_RECOIL_MAX_SPEED);
+        physics.apply_impulse(
+            handle,
+            Position::new(axis.x * push * tank.mass(), axis.y * push * tank.mass()),
+        );
+    }
+
+    pending_plasmas.push(plasma);
 }
 
 /// Fire one minigun bullet from `tank`'s muzzle - the per-bullet analogue of
@@ -3469,6 +3819,13 @@ fn roll_wreck_col(tank: &mut Tank) {
 /// Lay fresh tread marks along the distance a tank travelled this frame, dropping
 /// one mark every TRACK_SPACING pixels. `before` is where the tank was at the
 /// start of the frame; if it didn't actually move (blocked/idle) nothing is laid.
+/// Callers must only invoke this on a frame where the physics world actually
+/// stepped (see the `physics_stepped` guard in `Game::update`) - otherwise
+/// `before` and the tank's current position are identical simply because
+/// nothing advanced yet (PHYSICS_FIXED_DT hasn't been reached at render rates
+/// above ~60fps), and this fn has no way to tell that apart from genuine
+/// idle/blocked, which would spuriously reset `hull_frame` to its resting
+/// pose every such frame.
 /// Also drives the tank sprite's own tread-animation frame (`Tank::hull_frame`,
 /// see TANK_HULL_TRACK_FRAME_DISTANCE) off the same distance-moved signal -
 /// a separate visual (the vehicle's own tread graphics vs. the marks it
@@ -3583,6 +3940,27 @@ fn shell_impact(tank: &mut Tank, shell: &Shell, physics: &mut Physics) {
         Position::new(
             dir.x * SHELL_IMPACT_KNOCKBACK_SPEED * tank.mass(),
             dir.y * SHELL_IMPACT_KNOCKBACK_SPEED * tank.mass(),
+        ),
+    );
+}
+
+/// The plasma analogue of `shell_impact` - same "tap" shove along the
+/// bolt's own travel direction, just at `PLASMA_SPEED`/
+/// `PLASMA_IMPACT_KNOCKBACK_SPEED` instead of a shell's, matching a heavier
+/// bolt's bigger kick.
+fn plasma_impact(tank: &mut Tank, plasma: &Plasma, physics: &mut Physics) {
+    let dir = Vector2::new(
+        plasma.velocity.x / PLASMA_SPEED,
+        plasma.velocity.y / PLASMA_SPEED,
+    );
+    let handle = tank
+        .body
+        .expect("tank should always have a physics body once spawned");
+    physics.apply_impulse(
+        handle,
+        Position::new(
+            dir.x * PLASMA_IMPACT_KNOCKBACK_SPEED * tank.mass(),
+            dir.y * PLASMA_IMPACT_KNOCKBACK_SPEED * tank.mass(),
         ),
     );
 }

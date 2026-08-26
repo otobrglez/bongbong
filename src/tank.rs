@@ -2,6 +2,7 @@ use rapier2d::prelude::{ColliderHandle, RigidBodyHandle};
 use sola_raylib::prelude::*;
 
 use crate::laser::LaserVariant;
+use crate::plasma::PlasmaVariant;
 use crate::{
     DAMAGE_SPEED_CURVE, DAMAGE_SPEED_FLOOR, MAX_DAMAGE, MAX_SHELLS, MINIGUN_MOUNT_SCALE,
     MINIGUN_CYCLE_SECONDS, MINIGUN_MOUNT_TEXTURE_SIZE, Position,
@@ -74,6 +75,22 @@ pub struct PendingShot {
     pub lateral_offset: f32,
 }
 
+/// A twin-barrel chassis's second plasma bolt, waiting to fire a beat after
+/// the first - see `Tank::pending_plasma_shot`. Identical shape to
+/// `PendingShot`, just for `plasma::Plasma` instead of `Shell` - kept as its
+/// own type (not a shared generic) since the two weapons' fire-dispatch
+/// sites in `simulation::Game::update` are already separate match arms with
+/// nothing else in common to factor through.
+#[derive(Clone, Copy)]
+pub struct PendingPlasmaShot {
+    /// Seconds remaining until this bolt fires.
+    pub timer: f32,
+    /// Same off-aim deflection as the first bolt (see `PendingShot::aim_offset`).
+    pub aim_offset: f32,
+    /// This barrel's lateral offset (see `PendingShot::lateral_offset`).
+    pub lateral_offset: f32,
+}
+
 /// A minigun burst in progress: `bullets_remaining` more bullets queued to
 /// fire at MINIGUN_BULLET_DELAY_SECONDS spacing after the one that just
 /// fired - see `Tank::minigun_burst`. Generalizes `PendingShot`'s "one
@@ -96,6 +113,7 @@ pub struct MinigunBurst {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ActiveWeapon {
     Laser,
+    Plasma,
     Minigun,
     Shell,
 }
@@ -121,6 +139,11 @@ pub struct Tank {
     /// resolved once per frame in `Game::update`, at the same site this
     /// tank's own fire input is handled.
     pub pending_shot: Option<PendingShot>,
+    /// A twin-barrel chassis's second plasma bolt, queued the same way
+    /// `pending_shot` queues a shell's second barrel - see
+    /// `PendingPlasmaShot`. `None` the rest of the time; a single-barrel
+    /// chassis never sets this.
+    pub pending_plasma_shot: Option<PendingPlasmaShot>,
     /// A minigun burst in progress, queued the same way `pending_shot`
     /// above queues a twin-barrel chassis's second shell - generalized from
     /// "one queued extra shot" to "N queued burst bullets". `None` the rest
@@ -215,6 +238,17 @@ pub struct Tank {
     /// burst of MINIGUN_BURST_SIZE individually-simulated `bullet::Bullet`s
     /// instead of a normal shell - see `Tank::active_weapon`.
     pub minigun_ammo: i32,
+    /// Remaining plasma ammo (see `pickup::PickupKind::Plasma`, `plasma.rs`).
+    /// Pickup-only, no passive regen - mirrors `minigun_ammo`/`laser_charges`
+    /// exactly. While positive and no laser is charged, firing shoots a
+    /// `plasma::Plasma` bolt from the barrel instead of a normal shell - see
+    /// `Tank::active_weapon`.
+    pub plasma_ammo: i32,
+    /// Which `plasma::PlasmaVariant` the current charge batch fires as -
+    /// rolled fresh on each `PickupKind::Plasma` pickup (see
+    /// `PLASMA_PURPLE_PICKUP_CHANCE`), meaningless while `plasma_ammo == 0`.
+    /// Same mechanism as `laser_variant`.
+    pub plasma_variant: PlasmaVariant,
     /// Seconds accumulated toward recharging the next shell.
     pub recharge_timer: f32,
     /// Seconds remaining before this tank may fire again (player only - see
@@ -302,6 +336,7 @@ impl Default for Tank {
             row: 0,
             shell_variant: 0,
             pending_shot: None,
+            pending_plasma_shot: None,
             minigun_burst: None,
             damage_variant: 0,
             position: Position::default(),
@@ -319,6 +354,8 @@ impl Default for Tank {
             laser_charges: 0,
             laser_variant: LaserVariant::Red,
             minigun_ammo: 0,
+            plasma_ammo: 0,
+            plasma_variant: PlasmaVariant::Teal,
             recharge_timer: 0.0,
             fire_cooldown: 0.0,
             ram_cooldown: 0.0,
@@ -405,16 +442,19 @@ impl Tank {
     }
 
     /// Which weapon this tank's next trigger-pull actually fires, by
-    /// priority: a charged laser first (most powerful, depleted first),
-    /// then minigun ammo, then a traditional shell last. Purely picks the
-    /// *tier* - whether that tier's own ammo is actually sufficient to fire
-    /// *this instant* is still checked at each dispatch site in
-    /// `Game::update` (a twin-barrel chassis needing 2 shells per shot can
-    /// still be `ActiveWeapon::Shell` while short of the 2 it needs, exactly
-    /// as before this existed).
+    /// priority: a charged laser first (most powerful, depleted first), then
+    /// plasma ammo (a straight damage upgrade over a shell, see
+    /// PLASMA_DAMAGE_FACTOR), then minigun ammo, then a traditional shell
+    /// last. Purely picks the *tier* - whether that tier's own ammo is
+    /// actually sufficient to fire *this instant* is still checked at each
+    /// dispatch site in `Game::update` (a twin-barrel chassis needing 2
+    /// shells/bolts per shot can still be `ActiveWeapon::Shell`/`Plasma`
+    /// while short of the 2 it needs, exactly as before this existed).
     pub fn active_weapon(&self) -> ActiveWeapon {
         if self.laser_charges > 0 {
             ActiveWeapon::Laser
+        } else if self.plasma_ammo > 0 {
+            ActiveWeapon::Plasma
         } else if self.minigun_ammo > 0 {
             ActiveWeapon::Minigun
         } else {

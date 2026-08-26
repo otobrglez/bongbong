@@ -13,6 +13,7 @@ use crate::frog::{Frog, FrogVariantTextures, draw_frog};
 use crate::laser::draw_laser_beam;
 use crate::obstacle::{Obstacle, draw_obstacle, draw_obstacle_shadow};
 use crate::pickup::{Pickup, PickupKind, draw_pickup};
+use crate::plasma::{Plasma, PlasmaState, draw_plasma, draw_plasma_shadow};
 use crate::shell::{Shell, ShellState, draw_shell, draw_shell_shadow};
 use crate::shockwave::{RippleFx, screen_to_ripple_uv};
 use crate::simulation::{Game, Outcome};
@@ -32,6 +33,7 @@ use crate::{
 pub struct Textures<'a> {
     pub tanks: &'a Texture2D,
     pub shells: &'a Texture2D,
+    pub plasma: &'a Texture2D,
     pub minigun_bullets: &'a Texture2D,
     pub damage: &'a Texture2D,
     pub tracks: &'a Texture2D,
@@ -45,6 +47,7 @@ pub struct Textures<'a> {
     pub pickup_ammo: &'a Texture2D,
     pub pickup_laser: &'a Texture2D,
     pub pickup_minigun: &'a Texture2D,
+    pub pickup_plasma: &'a Texture2D,
     /// The minigun barrel-cluster overlay drawn on a tank's turret while it
     /// holds minigun ammo - see `tank::draw_minigun_mount`. One shared
     /// texture for every chassis (unlike `tanks` above), not a sheet.
@@ -83,12 +86,13 @@ impl Game {
         // neutral - raylib's draw_text is single-color per call, so the line
         // is drawn as four adjacent segments rather than one string. Widths
         // measured here for the same reason as version_hud_w above.
-        let (hp, shells, laser_charges, minigun_ammo) =
+        let (hp, shells, laser_charges, plasma_ammo, minigun_ammo) =
             crate::simulation::with_tank(&self.world, player, |t| {
                 (
                     (MAX_DAMAGE - t.damage).max(0.0).round() as i32,
                     t.shells_ammo,
                     t.laser_charges,
+                    t.plasma_ammo,
                     t.minigun_ammo,
                 )
             });
@@ -107,6 +111,14 @@ impl Game {
         let hud_laser = (laser_charges > 0).then(|| {
             let label = "   LASER: ";
             let num = format!("{laser_charges}");
+            let label_w = rl.measure_text(label, HUD_FONT_SIZE);
+            let num_w = rl.measure_text(&num, HUD_FONT_SIZE);
+            (label, num, label_w, num_w)
+        });
+        // Same idea as hud_laser above, for plasma ammo.
+        let hud_plasma = (plasma_ammo > 0).then(|| {
+            let label = "   PLASMA: ";
+            let num = format!("{plasma_ammo}");
             let label_w = rl.measure_text(label, HUD_FONT_SIZE);
             let num_w = rl.measure_text(&num, HUD_FONT_SIZE);
             (label, num, label_w, num_w)
@@ -171,6 +183,7 @@ impl Game {
                     PickupKind::Ammo => textures.pickup_ammo,
                     PickupKind::Laser => textures.pickup_laser,
                     PickupKind::Minigun => textures.pickup_minigun,
+                    PickupKind::Plasma => textures.pickup_plasma,
                 };
                 draw_pickup(&mut d, texture, pickup);
             }
@@ -212,6 +225,13 @@ impl Game {
                     draw_shell_shadow(&mut d, textures.shells, shell);
                 }
                 draw_shell(&mut d, textures.shells, shell);
+            }
+
+            for plasma in self.world.query::<&Plasma>().iter() {
+                if self.shadows_enabled && plasma.state == PlasmaState::Flying {
+                    draw_plasma_shadow(&mut d, textures.plasma, plasma);
+                }
+                draw_plasma(&mut d, textures.plasma, plasma);
             }
 
             for bullet in self.world.query::<&Bullet>().iter() {
@@ -398,6 +418,12 @@ impl Game {
                 d.draw_text(label, hud_x, hud_y, HUD_FONT_SIZE, Color::WHITE);
                 hud_x += label_w;
                 d.draw_text(num, hud_x, hud_y, HUD_FONT_SIZE, Color::new(255, 60, 160, 255));
+                hud_x += num_w;
+            }
+            if let Some((label, num, label_w, num_w)) = &hud_plasma {
+                d.draw_text(label, hud_x, hud_y, HUD_FONT_SIZE, Color::WHITE);
+                hud_x += label_w;
+                d.draw_text(num, hud_x, hud_y, HUD_FONT_SIZE, Color::new(60, 220, 200, 255));
                 hud_x += num_w;
             }
             if let Some((label, num, label_w, num_w)) = &hud_minigun {

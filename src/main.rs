@@ -179,6 +179,9 @@ fn main() {
     let shells_texture = rl
         .load_texture(&thread, "static/shells.png")
         .expect("failed loading shells texture");
+    let plasma_texture = rl
+        .load_texture(&thread, "static/plasma.png")
+        .expect("failed loading plasma texture");
     let minigun_bullets_texture = rl
         .load_texture(&thread, "static/minigun_bullets.png")
         .expect("failed loading minigun bullets texture");
@@ -236,6 +239,9 @@ fn main() {
     let pickup_minigun_texture = rl
         .load_texture(&thread, "static/pickups/minigun.png")
         .expect("failed loading minigun pickup texture");
+    let pickup_plasma_texture = rl
+        .load_texture(&thread, "static/pickups/plasma.png")
+        .expect("failed loading plasma pickup texture");
     #[cfg(feature = "map-editor")]
     let eraser_texture = rl
         .load_texture(&thread, "static/ui/eraser.png")
@@ -271,6 +277,7 @@ fn main() {
                     pickup_ammo: &pickup_ammo_texture,
                     pickup_laser: &pickup_laser_texture,
                     pickup_minigun: &pickup_minigun_texture,
+                    pickup_plasma: &pickup_plasma_texture,
                     eraser: &eraser_texture,
                     tanks: &tanks_texture,
                 },
@@ -375,6 +382,7 @@ fn main() {
             &Textures {
                 tanks: &tanks_texture,
                 shells: &shells_texture,
+                plasma: &plasma_texture,
                 minigun_bullets: &minigun_bullets_texture,
                 damage: &damage_texture,
                 tracks: &tracks_texture,
@@ -386,6 +394,7 @@ fn main() {
                 pickup_ammo: &pickup_ammo_texture,
                 pickup_laser: &pickup_laser_texture,
                 pickup_minigun: &pickup_minigun_texture,
+                pickup_plasma: &pickup_plasma_texture,
                 minigun_mount: &minigun_mount_texture,
             },
         );

@@ -991,12 +991,26 @@ fn build<'a>() -> Node<Brain<'a>> {
             }),
             action(act_seek_laser),
         ]),
-        // 5.6. Same idea for a live Minigun pickup, but only once this tank
+        // 5.6. Same idea for a live Plasma pickup - reached whenever this
+        // tank has none and isn't already laser-charged (`active_weapon()
+        // != Laser`), since laser always outranks plasma anyway. Unlike
+        // tier 5.7 below, this stays worth detouring for even while
+        // Minigun-active: plasma outranks minigun in `Tank::active_weapon`,
+        // so it's a genuine upgrade over what this tank is currently firing.
+        sequence(vec![
+            condition(|b: &mut Brain| {
+                b.me.plasma_ammo <= 0
+                    && b.me.active_weapon() != ActiveWeapon::Laser
+                    && b.pickups.iter().any(|(k, _)| *k == PickupKind::Plasma)
+            }),
+            action(act_seek_plasma),
+        ]),
+        // 5.7. Same idea for a live Minigun pickup, but only once this tank
         // has fallen all the way back to shells (`active_weapon() ==
-        // Shell`) - a laser-charged tank has no reason to detour for
-        // minigun ammo, since laser always outranks it anyway (unlike tier
-        // 5.5 above, which stays unconditional: laser is worth detouring
-        // for regardless of what else is currently equipped).
+        // Shell`) - a laser- or plasma-equipped tank has no reason to
+        // detour for minigun ammo, since both outrank it anyway (unlike
+        // tier 5.5 above, which stays unconditional: laser is worth
+        // detouring for regardless of what else is currently equipped).
         sequence(vec![
             condition(|b: &mut Brain| {
                 b.me.minigun_ammo <= 0
@@ -1078,8 +1092,19 @@ fn act_seek_laser(b: &mut Brain) -> Status {
     Status::Success
 }
 
-/// Same idea as `act_seek_laser`, for a Minigun pickup instead - see tier
+/// Same idea as `act_seek_laser`, for a Plasma pickup instead - see tier
 /// 5.6 (`build`) for when this is actually reached.
+fn act_seek_plasma(b: &mut Brain) -> Status {
+    b.reset_aim();
+    let Some(target) = b.nearest_pickup(PickupKind::Plasma) else {
+        return Status::Failure;
+    };
+    b.intent.move_dir = Some(b.steer(target));
+    Status::Success
+}
+
+/// Same idea as `act_seek_laser`, for a Minigun pickup instead - see tier
+/// 5.7 (`build`) for when this is actually reached.
 fn act_seek_minigun(b: &mut Brain) -> Status {
     b.reset_aim();
     let Some(target) = b.nearest_pickup(PickupKind::Minigun) else {
