@@ -139,6 +139,19 @@
             });
         },
         {once: true},
+    );
+    // Arrow keys and Space are game controls, but browsers also bind them to
+    // page scrolling by default - on viewports too short to fit the whole
+    // layout, that scroll becomes visible and fights the tank's movement.
+    var gameKeys = new Set([
+        "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space",
+    ]);
+    window.addEventListener(
+        "keydown",
+        function (e) {
+            if (gameKeys.has(e.code)) e.preventDefault();
+        },
+        {passive: false},
     );</script>
 <script is:inline src="/game/bongbong.js"></script>
 </body>
