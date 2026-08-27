@@ -1,5 +1,5 @@
 use rand::RngExt;
-use rand::rngs::ThreadRng;
+use rand::rngs::SmallRng;
 use sola_raylib::prelude::Vector2;
 
 use crate::bt::{Node, Status, action, condition, selector, sequence};
@@ -178,7 +178,7 @@ impl Ai {
         movers: &[Mover],
         my_index: usize,
         grid: &Grid,
-        rng: &mut ThreadRng,
+        rng: &mut SmallRng,
         alert: Option<Position>,
         engage_target: Option<Position>,
         pickups: &[(PickupKind, Position)],
@@ -290,7 +290,7 @@ impl Ai {
         margin: f32,
         ctx: AvoidCtx,
         grid: &Grid,
-        rng: &mut ThreadRng,
+        rng: &mut SmallRng,
     ) -> Dir {
         let path = grid.next_step(from, target);
         if path.is_none() && !grid.same_cell(from, target) {
@@ -331,7 +331,7 @@ impl Ai {
         margin: f32,
         ctx: AvoidCtx,
         grid: &Grid,
-        rng: &mut ThreadRng,
+        rng: &mut SmallRng,
     ) -> Dir {
         let (width, height) = bounds;
         let reachable =
@@ -744,7 +744,7 @@ struct Brain<'a> {
     /// This frame's obstacle occupancy grid, for routing around static
     /// obstacles - see `Ai::steer`.
     grid: &'a Grid,
-    rng: &'a mut ThreadRng,
+    rng: &'a mut SmallRng,
     ai: &'a mut Ai,
     intent: Intent,
     /// Last known player position shared across every enemy this round,
@@ -1019,6 +1019,17 @@ fn build<'a>() -> Node<Brain<'a>> {
             }),
             action(act_seek_minigun),
         ]),
+        // 5.8. Same idea for a live SpeedUp pickup, reached whenever this
+        // tank isn't currently boosted - unlike the weapon tiers above, this
+        // isn't gated on `active_weapon` (a stat buff, not a weapon), just
+        // "not already benefiting from one".
+        sequence(vec![
+            condition(|b: &mut Brain| {
+                b.me.speed_boost_timer <= 0.0
+                    && b.pickups.iter().any(|(k, _)| *k == PickupKind::SpeedUp)
+            }),
+            action(act_seek_speedup),
+        ]),
         // 6. Fallback: patrol.
         action(act_patrol),
     ])
@@ -1108,6 +1119,17 @@ fn act_seek_plasma(b: &mut Brain) -> Status {
 fn act_seek_minigun(b: &mut Brain) -> Status {
     b.reset_aim();
     let Some(target) = b.nearest_pickup(PickupKind::Minigun) else {
+        return Status::Failure;
+    };
+    b.intent.move_dir = Some(b.steer(target));
+    Status::Success
+}
+
+/// Same idea as `act_seek_laser`, for a SpeedUp pickup instead - see tier
+/// 5.8 (`build`) for when this is actually reached.
+fn act_seek_speedup(b: &mut Brain) -> Status {
+    b.reset_aim();
+    let Some(target) = b.nearest_pickup(PickupKind::SpeedUp) else {
         return Status::Failure;
     };
     b.intent.move_dir = Some(b.steer(target));

@@ -1,0 +1,92 @@
+# Shared web-build steps (wasm + Astro site) used by both
+# .github/workflows/cloudflare-deploy.yml (tagged production deploys) and
+# .github/workflows/pr-preview.yml (per-PR preview workers) so the two can't
+# drift. Mirrors the justfile's `build-web`: build the release wasm binary,
+# stage bongbong.{wasm,js,data} into site/public/game/ (gitignored), then
+# build the Astro site into site/dist/ — which wrangler.toml serves as the
+# Worker's static assets. See site/README.md and CLAUDE.md's "Web / wasm
+# build" section.
+#
+# The toolchain pins live here (input defaults) as the single source of truth
+# for CI; keep them in sync with devenv.nix (Rust) and
+# tools/setup_emscripten.sh (emsdk).
+name: Build web
+description: Build the wasm32-unknown-emscripten binary and the Astro site around it (site/dist/)
+
+inputs:
+  rust-version:
+    description: Rust toolchain version. Pinned to match devenv.nix's languages.rust.version.
+    required: false
+    default: "1.97.1"
+  emsdk-version:
+    description: >-
+      emsdk version. Pinned to match tools/setup_emscripten.sh (newer emsdk's
+      wasm-opt breaks on wasm built with -fwasm-exceptions, which rustc 1.93+
+      emits).
+    required: false
+    default: "5.0.6"
+
+runs:
+  using: composite
+  steps:
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ inputs.rust-version }}
+        targets: wasm32-unknown-emscripten
+
+    - name: Enable corepack (pins yarn to site/package.json's packageManager)
+      shell: bash
+      run: corepack enable
+
+    - name: Install Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: "24"
+        cache: yarn
+        cache-dependency-path: site/yarn.lock
+
+    - name: Install site dependencies
+      shell: bash
+      working-directory: site
+      run: yarn install --immutable
+
+    - name: Cache cargo/emsdk
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+          ~/.local/share/emsdk
+        key: cloudflare-web-${{ runner.os }}-${{ inputs.emsdk-version }}-${{ hashFiles('Cargo.lock') }}
+        restore-keys: |
+          cloudflare-web-${{ runner.os }}-${{ inputs.emsdk-version }}-
+
+    - name: Install emsdk
+      shell: bash
+      env:
+        EMSDK_VERSION: ${{ inputs.emsdk-version }}
+      run: |
+        if [[ ! -d ~/.local/share/emsdk ]]; then
+          git clone https://github.com/emscripten-core/emsdk.git ~/.local/share/emsdk
+        fi
+        cd ~/.local/share/emsdk
+        ./emsdk install "$EMSDK_VERSION"
+        ./emsdk activate "$EMSDK_VERSION"
+
+    - name: Build wasm
+      shell: bash
+      run: |
+        source ~/.local/share/emsdk/emsdk_env.sh
+        cargo build --release --target wasm32-unknown-emscripten
+        mkdir -p site/public/game
+        rm -f site/public/game/*
+        cp target/wasm32-unknown-emscripten/release/bongbong.wasm site/public/game/
+        cp target/wasm32-unknown-emscripten/release/bongbong.js site/public/game/
+        cp target/wasm32-unknown-emscripten/release/deps/bongbong.data site/public/game/
+
+    - name: Build Astro site
+      shell: bash
+      working-directory: site
+      run: yarn build

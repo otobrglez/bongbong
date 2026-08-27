@@ -11,7 +11,7 @@
 
 use rapier2d::prelude::*;
 
-use crate::Position;
+use crate::{Position, TANK_MOVE_CORNER_RADIUS};
 
 /// Owns the rapier simulation state. Wraps rapier's own `PhysicsWorld`
 /// convenience bundle (rigid bodies, colliders, broad/narrow-phase, solver,
@@ -32,6 +32,33 @@ pub struct Physics {
 pub fn owner_group(slot: usize) -> Group {
     debug_assert!(slot < 32, "owner slot must fit in rapier's 32 group bits");
     Group::from_bits_retain(1 << slot)
+}
+
+/// The corner rounding actually applied to a tank movement collider with
+/// these overall `half_extents`: TANK_MOVE_CORNER_RADIUS, clamped to half
+/// the smaller half-extent so the collider's core box (which
+/// `tank_move_shape` shrinks by this radius) always keeps real area even
+/// for the smallest hull in the roster. Public so the "I"-key inspect
+/// overlay (`game.rs::draw_tank_inspect`) can draw the exact rounding the
+/// physics body carries rather than re-deriving (and possibly drifting
+/// from) this clamp.
+pub fn tank_corner_radius(half_extents: (f32, f32)) -> f32 {
+    TANK_MOVE_CORNER_RADIUS.min(half_extents.0.min(half_extents.1) * 0.5)
+}
+
+/// The shared shape for a tank's solid movement collider: a round cuboid
+/// whose *overall* footprint (core box dilated by the border radius -
+/// that's parry's `RoundShape` semantics, the radius grows the shape
+/// outward) is exactly the given `half_extents`, with
+/// `tank_corner_radius`-rounded corners. Rounded rather than sharp because
+/// box-vs-box corners catch on the internal seams between adjacent
+/// wall/obstacle cell colliders (tanks visibly snagged mid-slide along a
+/// flat wall run) - a rounded corner slides past instead. Used by both
+/// `spawn_tank` and `resize_collider` so spawn and facing-change resize can
+/// never disagree about the shape.
+fn tank_move_shape(half_extents: (f32, f32)) -> SharedShape {
+    let r = tank_corner_radius(half_extents);
+    SharedShape::round_cuboid(half_extents.0 - r, half_extents.1 - r, r)
 }
 
 impl Physics {
@@ -68,18 +95,20 @@ impl Physics {
         handle
     }
 
-    /// Spawn a rotation-locked dynamic tank body: a rectangular collider
-    /// `half_extents` (x, y) per side, centered at `position`, with mass set
-    /// to `mass` (matching `Tank::mass()`) so impulses applied later (see
-    /// `apply_impulse`) produce the exact velocity change the caller
-    /// intended rather than whatever rapier's default density would give.
-    /// Rotation is locked because driving stays cardinal (see
-    /// docs/physics-engine-design.md) - the body only ever needs to
-    /// translate, never spin; sprite facing stays the existing cosmetic
-    /// `Tank::rotation`/`Dir::rotation`. Since the *collider* itself never
-    /// rotates either, a non-square tank's `half_extents` need to be
-    /// reoriented by hand whenever its facing changes between an X-axis and
-    /// Y-axis cardinal direction - see `resize_collider` and
+    /// Spawn a rotation-locked dynamic tank body: a corner-rounded
+    /// rectangular collider (`tank_move_shape`) of overall `half_extents`
+    /// (x, y) per side - callers pass `Tank::move_half_extents`, the
+    /// shrunken movement box, not the full hull damage box - centered at
+    /// `position`, with mass set to `mass` (matching `Tank::mass()`) so
+    /// impulses applied later (see `apply_impulse`) produce the exact
+    /// velocity change the caller intended rather than whatever rapier's
+    /// default density would give. Rotation is locked because driving stays
+    /// cardinal (see docs/physics-engine-design.md) - the body only ever
+    /// needs to translate, never spin; sprite facing stays the existing
+    /// cosmetic `Tank::rotation`/`Dir::rotation`. Since the *collider*
+    /// itself never rotates either, a non-square tank's `half_extents` need
+    /// to be reoriented by hand whenever its facing changes between an
+    /// X-axis and Y-axis cardinal direction - see `resize_collider` and
     /// `simulation::drive_tank`.
     pub fn spawn_tank(
         &mut self,
@@ -91,31 +120,33 @@ impl Physics {
             RigidBodyBuilder::dynamic()
                 .translation(to_vector(position))
                 .lock_rotations(),
-            ColliderBuilder::cuboid(half_extents.0, half_extents.1).mass(mass),
+            ColliderBuilder::new(tank_move_shape(half_extents)).mass(mass),
         );
         handle
     }
 
-    /// Resize a tank's solid hull collider (the one `spawn_tank` attaches) to
-    /// new `half_extents` - used when a tank's facing swaps between an
-    /// X-axis and Y-axis cardinal direction, so its rectangular hitbox stays
-    /// oriented to match its sprite (see `simulation::drive_tank`, which
-    /// calls this only when `Tank::rotation` actually changes). `set_shape`
-    /// only marks the collider's geometry dirty - it doesn't touch the
-    /// collider's explicit `.mass(mass)` override from `spawn_tank`, so
-    /// resizing never perturbs ram/explosion knockback math.
+    /// Resize a tank's solid movement collider (the one `spawn_tank`
+    /// attaches) to new overall `half_extents` (`Tank::move_half_extents`,
+    /// same as at spawn; the corner rounding is re-derived via
+    /// `tank_move_shape`) - used when a tank's facing swaps between an
+    /// X-axis and Y-axis cardinal direction, so its hitbox stays oriented
+    /// to match its sprite (see `simulation::drive_tank`, which calls this
+    /// only when `Tank::rotation` actually changes). `set_shape` only marks
+    /// the collider's geometry dirty - it doesn't touch the collider's
+    /// explicit `.mass(mass)` override from `spawn_tank`, so resizing never
+    /// perturbs ram/explosion knockback math.
     pub fn resize_collider(&mut self, handle: ColliderHandle, half_extents: (f32, f32)) {
         let collider = self
             .world
             .colliders
             .get_mut(handle)
             .expect("collider handle should always be valid");
-        collider.set_shape(SharedShape::cuboid(half_extents.0, half_extents.1));
+        collider.set_shape(tank_move_shape(half_extents));
     }
 
     /// Attach an extra sensor collider to an existing tank body, used only to
     /// detect shell hits - a separate collider from what blocks movement
-    /// (the solid hull collider `spawn_tank` attaches), because a shell's
+    /// (the solid movement collider `spawn_tank` attaches), because a shell's
     /// owner-exclusion `InteractionGroups` filter (see `group` below) can't
     /// share a collider with movement collision, which needs to interact
     /// with *everything* (every other tank, every wall/obstacle) regardless
@@ -131,7 +162,7 @@ impl Physics {
     /// tank's facing changes. Returns the new collider's handle - callers
     /// need it directly for `intersecting`, since a tank body now has three
     /// colliders total and `collider_of`'s "the first one" convention only
-    /// ever refers to the original solid hull collider `spawn_tank`
+    /// ever refers to the original solid movement collider `spawn_tank`
     /// attaches.
     ///
     /// Explicitly zero-mass: rapier still folds a collider's density-based
@@ -301,9 +332,9 @@ impl Physics {
     }
 
     /// The first collider attached to a body - the sole collider for a
-    /// single-collider body (walls, shells), or specifically the solid hull
-    /// collider for a tank body (`spawn_tank` always inserts it first; any
-    /// hit sensor `add_hit_sensor` adds later comes second).
+    /// single-collider body (walls, shells), or specifically the solid
+    /// movement collider for a tank body (`spawn_tank` always inserts it
+    /// first; any hit sensor `add_hit_sensor` adds later comes second).
     pub fn collider_of(&self, body: RigidBodyHandle) -> ColliderHandle {
         self.world
             .bodies

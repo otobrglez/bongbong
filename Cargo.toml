@@ -1,5 +1,5 @@
 [package]
-version = "0.0.15"
+version = "0.0.16"
 name = "bongbong"
 edition = "2024"
 default-run = "bongbong"
@@ -12,7 +12,7 @@ rand = "0.10.2"
 rapier2d = "0.35.2"
 serde = { version = "1.0.229", features = ["derive"] }
 sola-raylib = { version = "6.3.0" }
-toml = "0.8"
+toml = "1"
 
 # Dev-only battlefield map editor (docs/map-editor-design.md) - off by
 # default so it never ships in a release build. Enable with

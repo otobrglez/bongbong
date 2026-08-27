@@ -141,13 +141,32 @@ impl MapFile {
         self.cells.remove(&cell_key(col, row));
     }
 
-    /// Every placed cell as `(col, row, &CellObject)` - silently skips a
-    /// malformed key rather than panicking, defensive against a hand-edited
-    /// file (this module's own writer never produces one).
+    /// Every placed cell as `(col, row, &CellObject)`, in a fixed
+    /// row-then-column order - silently skips a malformed key rather than
+    /// panicking, defensive against a hand-edited file (this module's own
+    /// writer never produces one).
+    ///
+    /// The sort is load-bearing for seeded-round determinism, not
+    /// cosmetics: `cells` is a `HashMap`, whose iteration order varies per
+    /// process, and `battlefield::spawn_from_map` both consumes RNG per
+    /// Wood tile and spawns hecs entities while walking this iterator - so
+    /// unordered iteration would make the RNG stream and the entity
+    /// creation order (hence every later `world.query` iteration order)
+    /// differ run-to-run even under a fixed seed (see
+    /// docs/gameplay-verification-design.md §1.3). Sorting the parsed
+    /// `(row, col)` tuples here covers every consumer at once; sorting the
+    /// raw string keys instead would be a trap (`"10,2" < "2,3"`
+    /// lexicographically), which is also why `cells` isn't simply a
+    /// `BTreeMap`. Maps are a few hundred cells, so the collect+sort cost
+    /// is irrelevant next to what callers do with the result.
     pub fn iter_cells(&self) -> impl Iterator<Item = (i32, i32, &CellObject)> {
-        self.cells
+        let mut cells: Vec<(i32, i32, &CellObject)> = self
+            .cells
             .iter()
             .filter_map(|(key, obj)| parse_cell_key(key).map(|(col, row)| (col, row, obj)))
+            .collect();
+        cells.sort_by_key(|&(col, row, _)| (row, col));
+        cells.into_iter()
     }
 
     /// The map's one frog cell, if it placed one - see "Frog: singleton

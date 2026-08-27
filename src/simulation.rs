@@ -26,7 +26,8 @@
 use std::collections::{HashMap, HashSet};
 
 use hecs::Entity;
-use rand::RngExt;
+use rand::rngs::SmallRng;
+use rand::{RngExt, SeedableRng};
 use rapier2d::prelude::ColliderHandle;
 use sola_raylib::core::math::Vector2;
 
@@ -74,7 +75,7 @@ use crate::{
     RAM_DAMAGE_COOLDOWN, RESTART_DELAY, SHELL_HIT_HALF_EXTENT,
     SHELL_IMPACT_KNOCKBACK_SPEED, SHELL_RECOIL_MAX_SPEED, SHELL_RECOIL_SPEED,
     SHELL_SHADOW_OFFSET_MAX, SHELL_SHADOW_OFFSET_MIN, SHELL_SPEED, WALL_THICKNESS,
-    SHOCKWAVE_DURATION, TANK_ACCEL_FORCE, TANK_BARREL_LATERAL_OFFSET_BY_ROW,
+    SHOCKWAVE_DURATION, SPEED_BOOST_DURATION_SECONDS, TANK_ACCEL_FORCE, TANK_BARREL_LATERAL_OFFSET_BY_ROW,
     TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW,
     TANK_DECEL_CURVE_RATE, TANK_DECEL_SNAP_PX,
     TANK_HULL_DISABLED_DAMAGE,
@@ -294,6 +295,30 @@ pub struct Game {
     /// (a twin-barrel chassis's two-shell fire, a super-heavy's handling)
     /// without restarting until it happens to roll.
     pub player_row_override: Option<i32>,
+    /// CLI-provided fixed round seed (`--seed`, main.rs / src/bin/probe.rs -
+    /// see docs/gameplay-verification-design.md). When `None`, `init` draws
+    /// a fresh random seed each round. Same "set once before the first
+    /// `init` call, persists across round restarts" convention as
+    /// `enemy_count_override` - which means a seeded game replays the
+    /// *identical* round on every restart (R key or auto), and that's the
+    /// point: it's the repro loop for a round the probe flagged.
+    pub seed_override: Option<u64>,
+    /// The seed the current round actually ran with - `seed_override` when
+    /// set, otherwise the fresh entropy draw `init` made - kept so external
+    /// tooling can report it for replay (see `round_seed()`; the probe
+    /// prints it in every ANOMALY line).
+    round_seed: u64,
+    /// The round's single seeded RNG stream (`round_seed` fed through
+    /// `SmallRng::seed_from_u64`), the *only* randomness source once a
+    /// round is running - every helper that rolls anything borrows this,
+    /// and nothing may call `rand::rng()` on the simulation path (a stray
+    /// call silently breaks seeded replay; the determinism test at the
+    /// bottom of this file exists to catch exactly that). `None` only
+    /// before the first `init` call, same convention as `player`/`frog`.
+    /// Held as an `Option` so `update` can `take()` it into a plain local
+    /// for its whole body and put it back at the end - the shape every
+    /// call site already expects, with no partial-`self`-borrow fights.
+    rng: Option<SmallRng>,
     /// The hand-authored/editor-saved battlefield this round's static
     /// terrain (walls/road/frog/pickup slots) comes from - see
     /// docs/map-editor-design.md. `main.rs` always sets this before the
@@ -339,7 +364,14 @@ impl Game {
     /// `main.rs` passes the window's current size, but nothing here cares
     /// where the number came from.
     pub fn init(&mut self, width: f32, height: f32) {
-        let mut rng = rand::rng();
+        // This round's one RNG stream (see the `rng` field): seeded from
+        // `--seed` when given, otherwise from a single entropy draw - the
+        // only `rand::rng()` use on the simulation path, and it only ever
+        // picks the seed, so an unseeded round is just as replayable once
+        // its `round_seed` has been printed/read back.
+        let seed = self.seed_override.unwrap_or_else(|| rand::rng().random());
+        self.round_seed = seed;
+        let mut rng = SmallRng::seed_from_u64(seed);
 
         // Fresh round state: a new World discards every tank/shell/obstacle
         // entity from the previous round in one shot.
@@ -408,7 +440,7 @@ impl Game {
         // matches that, same as `facing_along_x` would report for it.
         tank.body = Some(
             self.physics
-                .spawn_tank(tank.position, tank.hull_half_extents(false), tank.mass()),
+                .spawn_tank(tank.position, tank.move_half_extents(false), tank.mass()),
         );
         attach_hit_sensors(&mut self.physics, &mut tank, PLAYER_OWNER_SLOT);
         // Clearance figures below are derived from the player's own hull
@@ -544,7 +576,7 @@ impl Game {
             // Y-axis case as the player's spawn facing.
             enemy.body = Some(self.physics.spawn_tank(
                 pos,
-                enemy.hull_half_extents(false),
+                enemy.move_half_extents(false),
                 enemy.mass(),
             ));
             attach_hit_sensors(&mut self.physics, &mut enemy, owner_slot);
@@ -635,6 +667,11 @@ impl Game {
         let mut road_cells = obstacle_positions;
         road_cells.extend(map_road_cells);
         self.ground = crate::ground::build(width, height, rng.random(), &road_cells);
+
+        // Hand the stream to `update` (see the `rng` field's doc comment) -
+        // the round's remaining randomness continues from exactly where
+        // init's own draws left off.
+        self.rng = Some(rng);
     }
 
     /// Step the simulation one frame. `input` is this frame's player
@@ -643,6 +680,15 @@ impl Game {
     /// plain data, gathered by the caller from wherever it likes (a live
     /// `RaylibHandle` in `main.rs` today).
     pub fn update(&mut self, input: Input, dt: f32, width: f32, height: f32) {
+        // `update` takes the round RNG out of `self` below and puts it back
+        // at its very end; a `Some` here proves the previous frame's
+        // restore actually ran. If this ever fires, an early `return` was
+        // added between that take and the restore - move the new return
+        // above the take, or restore before it.
+        debug_assert!(
+            self.rng.is_some(),
+            "Game::rng missing at update entry - an early return slipped between update's rng take and restore"
+        );
         if input.pause_pressed {
             self.paused = !self.paused;
         }
@@ -691,9 +737,15 @@ impl Game {
         // (burning wrecks etc.) so the end screen stays lively.
         if self.outcome != Outcome::Playing {
             self.time += dt;
+            // Borrowed in place rather than taken like the main flow below
+            // does: this branch returns early, and a take here would need
+            // its own restore on that path. Field-disjoint from the
+            // `self.world` query borrow, so this compiles fine; NLL ends
+            // the borrow at the loop, before the `init` call further down.
+            let rng = self.rng.as_mut().expect("rng seeded in init");
             for tank in self.world.query::<&mut Tank>().iter() {
                 tank.tick_wreck(dt);
-                roll_wreck_col(tank);
+                roll_wreck_col(tank, rng);
             }
             for obstacle in self.world.query::<&mut Obstacle>().iter() {
                 obstacle.tick_burn(dt);
@@ -714,6 +766,15 @@ impl Game {
             return;
         }
 
+        // The round's seeded RNG stream (see the `rng` field), taken into a
+        // plain local for the whole rest of `update` - every existing
+        // `&mut rng` call site below works unchanged, with no
+        // partial-`self` borrows to fight - and restored as `update`'s very
+        // last statement. Every early `return` above precedes this take;
+        // none may be added below it (the debug_assert at the top of
+        // `update` catches a violation on the very next frame).
+        let mut rng = self.rng.take().expect("rng seeded in init");
+
         // Advance the global animation clock and per-tank timers (every
         // tank - player and enemies alike share the exact same ticking, so
         // one query covers both instead of a separate player statement plus
@@ -724,9 +785,10 @@ impl Game {
             tank.fire_cooldown = (tank.fire_cooldown - dt).max(0.0);
             tank.ram_cooldown = (tank.ram_cooldown - dt).max(0.0);
             tank.hit_flash_timer = (tank.hit_flash_timer - dt).max(0.0);
+            tank.speed_boost_timer = (tank.speed_boost_timer - dt).max(0.0);
             tank.tick_wreck(dt);
             tank.tick_minigun_spin(dt);
-            roll_wreck_col(tank);
+            roll_wreck_col(tank, &mut rng);
         }
         for obstacle in self.world.query::<&mut Obstacle>().iter() {
             obstacle.tick_burn(dt);
@@ -742,7 +804,6 @@ impl Game {
         // Age existing marks and drop the ones that have fully faded.
         self.tracks.retain_mut(|t| !t.tick(dt));
 
-        let mut rng = rand::rng();
         // Tanks freshly destroyed this frame (by ramming or by shellfire
         // below), tagged with whether the victim was an enemy; each gets a
         // shockwave and a small splash of explosion damage to nearby tanks on
@@ -939,6 +1000,7 @@ impl Game {
                             PlasmaVariant::Teal
                         };
                     }
+                    PickupKind::SpeedUp => tank.speed_boost_timer = SPEED_BOOST_DURATION_SECONDS,
                 }
                 drop(q);
                 self.world.despawn(pickup_entity).ok();
@@ -2619,6 +2681,11 @@ impl Game {
         {
             self.end_round(Outcome::Won);
         }
+
+        // Put the round RNG stream back for the next frame - the required
+        // counterpart of the take further up; see the debug_assert at the
+        // top of `update`.
+        self.rng = Some(rng);
     }
 
     /// Enter the end-of-round state and start the restart countdown.
@@ -2642,7 +2709,7 @@ impl Game {
         &mut self,
         center: Position,
         victim_was_enemy: bool,
-        rng: &mut rand::rngs::ThreadRng,
+        rng: &mut SmallRng,
         kills: &mut Vec<(Position, bool)>,
     ) {
         let player = self.player.expect("player entity spawned in init");
@@ -2717,6 +2784,15 @@ impl Game {
             movers.push(to_mover(tank));
         }
         (movers, enemy_indices)
+    }
+
+    /// The seed the current round is actually running with - whatever
+    /// `seed_override` pinned, or the fresh draw `init` made without one.
+    /// For external inspection/reporting (same convention as `outcome()`):
+    /// the probe prints this in every ANOMALY line so any flagged round
+    /// can be replayed exactly with `--seed`.
+    pub fn round_seed(&self) -> u64 {
+        self.round_seed
     }
 
     /// How the current round is going. Read-only counterpart to `outcome`'s
@@ -2871,7 +2947,7 @@ fn drive_tank(physics: &mut Physics, tank: &mut Tank, intent: Intent, dt: f32) {
     if tank.rotation != facing_before {
         physics.resize_collider(
             physics.collider_of(handle),
-            tank.hull_half_extents(facing_along_x(tank.rotation)),
+            tank.move_half_extents(facing_along_x(tank.rotation)),
         );
         // The hull and turret+barrel hit sensors (`attach_hit_sensors`) are
         // sized/positioned off the exact same facing - keep them in step
@@ -2946,7 +3022,7 @@ fn drive_tank(physics: &mut Physics, tank: &mut Tank, intent: Intent, dt: f32) {
 fn fire_shell(
     physics: &mut Physics,
     muzzle_flashes: &mut Vec<Shockwave>,
-    rng: &mut rand::rngs::ThreadRng,
+    rng: &mut SmallRng,
     pending_shells: &mut Vec<Shell>,
     tank: &Tank,
     owner: Owner,
@@ -2993,7 +3069,7 @@ fn fire_shell(
 fn fire_plasma(
     physics: &mut Physics,
     muzzle_flashes: &mut Vec<Shockwave>,
-    rng: &mut rand::rngs::ThreadRng,
+    rng: &mut SmallRng,
     pending_plasmas: &mut Vec<Plasma>,
     tank: &Tank,
     owner: Owner,
@@ -3042,7 +3118,7 @@ fn fire_plasma(
 /// `Bullet::spawn`'s own doc comment for why.
 fn fire_bullet(
     physics: &mut Physics,
-    rng: &mut rand::rngs::ThreadRng,
+    rng: &mut SmallRng,
     pending_bullets: &mut Vec<Bullet>,
     tank: &Tank,
     owner: Owner,
@@ -3671,7 +3747,7 @@ mod shell_sweep_tests {
 /// it can"), this is a best-effort evasion, not a guaranteed one - the
 /// caller just leaves the frog where it is when this happens.
 fn frog_hop_target(
-    rng: &mut rand::rngs::ThreadRng,
+    rng: &mut SmallRng,
     frog_pos: Position,
     away_from_dir: Position,
     distance: f32,
@@ -3721,7 +3797,7 @@ fn spawn_pickup_at(world: &mut hecs::World, pos: Position, kind: PickupKind) {
 /// slot's) and spawns there via `spawn_pickup_at`. A no-op if every slot is
 /// currently occupied - the timer resets regardless (`Game::update`), so
 /// the next attempt just tries again later.
-fn respawn_from_slots(world: &mut hecs::World, rng: &mut rand::rngs::ThreadRng, slots: &[(Position, PickupKind)]) {
+fn respawn_from_slots(world: &mut hecs::World, rng: &mut SmallRng, slots: &[(Position, PickupKind)]) {
     let occupied: Vec<Position> = world.query::<&Pickup>().iter().map(|p| p.position).collect();
     let free: Vec<(Position, PickupKind)> = slots
         .iter()
@@ -3795,7 +3871,7 @@ fn with_two_tanks_mut<R>(
 /// Roll a fresh set of per-tank track-distortion parameters (see
 /// TRACK_WOBBLE_AMP_MIN_DEG etc. in lib.rs) onto `tank`. Shared by the player
 /// and every enemy spawn site in `Game::init` so both roll the same way.
-fn roll_track_distortion(tank: &mut Tank, rng: &mut rand::rngs::ThreadRng) {
+fn roll_track_distortion(tank: &mut Tank, rng: &mut SmallRng) {
     tank.track_wobble_amp = rng.random_range(TRACK_WOBBLE_AMP_MIN_DEG..TRACK_WOBBLE_AMP_MAX_DEG);
     let wavelength = rng.random_range(TRACK_WOBBLE_WAVELENGTH_MIN..TRACK_WOBBLE_WAVELENGTH_MAX);
     // Radians per mark: each mark represents TRACK_SPACING px of travel, so a
@@ -3809,10 +3885,13 @@ fn roll_track_distortion(tank: &mut Tank, rng: &mut rand::rngs::ThreadRng) {
 
 /// Roll this tank's wrecked-hull variant (see `Tank::wreck_col`) the first
 /// frame it becomes a wreck, so `hull_col` has something to show - a no-op
-/// on every other frame (already rolled, or not a wreck yet).
-fn roll_wreck_col(tank: &mut Tank) {
+/// on every other frame (already rolled, or not a wreck yet). `rng` is the
+/// round's seeded stream like every other roll here - this used to call
+/// `rand::rng()` inline, which was the one stray draw outside the stream
+/// and would have silently broken seeded replay (see `Game::rng`).
+fn roll_wreck_col(tank: &mut Tank, rng: &mut SmallRng) {
     if tank.is_wreck() && tank.wreck_col.is_none() {
-        tank.wreck_col = Some(TANK_WRECK_COLS[rand::rng().random_range(0..TANK_WRECK_COLS.len())]);
+        tank.wreck_col = Some(TANK_WRECK_COLS[rng.random_range(0..TANK_WRECK_COLS.len())]);
     }
 }
 
@@ -3992,7 +4071,7 @@ fn ram(
     b: &mut Tank,
     b_is_enemy: bool,
     physics: &mut Physics,
-    rng: &mut rand::rngs::ThreadRng,
+    rng: &mut SmallRng,
     kills: &mut Vec<(Position, bool)>,
 ) {
     if a.ram_cooldown <= 0.0 && b.ram_cooldown <= 0.0 {
@@ -4073,7 +4152,7 @@ fn explosion_hit(
     damage: bool,
     is_enemy: bool,
     physics: &mut Physics,
-    rng: &mut rand::rngs::ThreadRng,
+    rng: &mut SmallRng,
     kills: &mut Vec<(Position, bool)>,
 ) {
     if tank.is_wreck() {
@@ -4138,7 +4217,7 @@ fn explosion_hit(
 /// `Obstacle::damage` sets `destroyed`, and `Game::update`'s
 /// `destroyed_obstacles` sweep removes the physics body/entity later this
 /// same frame - this function doesn't need to know or report which.
-fn explosion_hit_obstacle(obstacle: &mut Obstacle, center: Position, rng: &mut rand::rngs::ThreadRng) {
+fn explosion_hit_obstacle(obstacle: &mut Obstacle, center: Position, rng: &mut SmallRng) {
     if obstacle.destroyed {
         return;
     }
@@ -4149,4 +4228,86 @@ fn explosion_hit_obstacle(obstacle: &mut Obstacle, center: Position, rng: &mut r
     let falloff = 1.0 - dist / EXPLOSION_RADIUS;
     let dmg = rng.random_range(EXPLOSION_DAMAGE_MIN..EXPLOSION_DAMAGE_MAX) * falloff;
     obstacle.damage(dmg);
+}
+
+#[cfg(test)]
+mod determinism_tests {
+    use super::*;
+
+    /// Run one seeded round headlessly for `frames` frames of default
+    /// (AFK) input at the fixed probe timestep, sampling `tank_snapshots`
+    /// every `sample_every` frames (plus frame 0). The shape mirrors
+    /// src/bin/probe.rs's `run_round` on purpose - this is the same drive
+    /// path external tooling uses, through the same public-ish surface.
+    fn run_sampled(seed: u64, frames: u32, sample_every: u32) -> Vec<Vec<TankSnapshot>> {
+        let mut game = Game::default();
+        game.enemy_count_override = Some(4);
+        game.seed_override = Some(seed);
+        game.map = MapFile::from_toml_str(include_str!("../maps/default.toml"))
+            .expect("embedded default map parses");
+        game.init(1280.0, 720.0);
+        let mut samples = vec![game.tank_snapshots()];
+        for frame in 1..=frames {
+            game.update(Input::default(), 1.0 / 60.0, 1280.0, 720.0);
+            if frame % sample_every == 0 {
+                samples.push(game.tank_snapshots());
+            }
+        }
+        samples
+    }
+
+    /// A snapshot reduced to bit-comparable form: `f32::to_bits` so the
+    /// assertion is exact bit equality (plain `==` would also pass for
+    /// bit-identical values, but bits make a mismatch's debug output
+    /// unambiguous and sidestep any NaN-equality surprise).
+    fn key(s: &TankSnapshot) -> (bool, [u32; 6], i32, i32, i32, bool) {
+        (
+            s.is_player,
+            [
+                s.position.x.to_bits(),
+                s.position.y.to_bits(),
+                s.velocity.x.to_bits(),
+                s.velocity.y.to_bits(),
+                s.rotation.to_bits(),
+                s.damage.to_bits(),
+            ],
+            s.shells_ammo,
+            s.minigun_ammo,
+            s.plasma_ammo,
+            s.is_wreck,
+        )
+    }
+
+    /// The guard that keeps seeded replay from silently rotting (see
+    /// docs/gameplay-verification-design.md §1.6): two full runs of the
+    /// same seed must agree bit-for-bit on every sampled tank state. 600
+    /// frames of an AFK round crosses spawn, patrol, alert sharing,
+    /// engagement and firing, so every RNG consumer on the simulation path
+    /// gets exercised. The classic ways to break this are iterating a
+    /// HashMap/HashSet where the loop body consumes RNG, spawns entities,
+    /// or breaks ties (sort first - see `MapFile::iter_cells`), and
+    /// calling `rand::rng()` anywhere on the simulation path instead of
+    /// borrowing the round's stream (see `Game::rng`).
+    #[test]
+    fn same_seed_replays_bit_identical() {
+        for seed in [0xB0B5_u64, 0xC0FFEE_u64] {
+            let a = run_sampled(seed, 600, 60);
+            let b = run_sampled(seed, 600, 60);
+            assert_eq!(a.len(), b.len(), "seed {seed:#x}: sample counts differ");
+            for (i, (sa, sb)) in a.iter().zip(&b).enumerate() {
+                assert_eq!(
+                    sa.len(),
+                    sb.len(),
+                    "seed {seed:#x}, sample {i}: tank counts differ"
+                );
+                for (t, (ta, tb)) in sa.iter().zip(sb).enumerate() {
+                    assert_eq!(
+                        key(ta),
+                        key(tb),
+                        "seed {seed:#x}, sample {i}, tank {t}: state diverged"
+                    );
+                }
+            }
+        }
+    }
 }

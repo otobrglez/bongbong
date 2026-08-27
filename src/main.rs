@@ -105,6 +105,19 @@ struct Args {
     #[cfg(feature = "map-editor")]
     #[arg(long = "editor")]
     editor: bool,
+
+    /// Pin the round RNG seed (decimal or 0x-hex) so the round replays
+    /// identically - spawn layout, chassis/speed rolls, ground cosmetics
+    /// and AI decisions all reproduce, and the R-key/auto restart replays
+    /// the *same* round instead of rolling a new one. This is the repro
+    /// loop for a round the probe harness flagged: paste the `seed=0x...`
+    /// from its ANOMALY line here (with the same `--map`/`--enemies`) to
+    /// watch that exact layout play out. See
+    /// docs/gameplay-verification-design.md for what a seed does and
+    /// doesn't promise (windowed runs share the probe's layout but diverge
+    /// over time under variable frame dt).
+    #[arg(long = "seed", value_parser = bongbong::parse_seed)]
+    seed: Option<u64>,
 }
 
 fn parse_map(s: &str) -> Result<bongbong::map::MapFile, String> {
@@ -242,6 +255,9 @@ fn main() {
     let pickup_plasma_texture = rl
         .load_texture(&thread, "static/pickups/plasma.png")
         .expect("failed loading plasma pickup texture");
+    let pickup_speedup_texture = rl
+        .load_texture(&thread, "static/pickups/speedup.png")
+        .expect("failed loading speed-up pickup texture");
     #[cfg(feature = "map-editor")]
     let eraser_texture = rl
         .load_texture(&thread, "static/ui/eraser.png")
@@ -278,6 +294,7 @@ fn main() {
                     pickup_laser: &pickup_laser_texture,
                     pickup_minigun: &pickup_minigun_texture,
                     pickup_plasma: &pickup_plasma_texture,
+                    pickup_speedup: &pickup_speedup_texture,
                     eraser: &eraser_texture,
                     tanks: &tanks_texture,
                 },
@@ -333,6 +350,7 @@ fn main() {
     game.enemy_count_override = args.enemies;
     game.player_row_override = args.tank.map(TankKind::row);
     game.shadows_enabled = !args.no_shadows;
+    game.seed_override = args.seed;
     game.map = args.map.unwrap_or_else(default_map);
     game.init(screen_width as f32, screen_height as f32);
 
@@ -395,6 +413,7 @@ fn main() {
                 pickup_laser: &pickup_laser_texture,
                 pickup_minigun: &pickup_minigun_texture,
                 pickup_plasma: &pickup_plasma_texture,
+                pickup_speedup: &pickup_speedup_texture,
                 minigun_mount: &minigun_mount_texture,
             },
         );

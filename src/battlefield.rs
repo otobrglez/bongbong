@@ -17,6 +17,7 @@
 use std::collections::{HashMap, HashSet};
 
 use rand::RngExt;
+use rand::rngs::SmallRng;
 use rapier2d::prelude::ColliderHandle;
 
 use crate::ai::Ai;
@@ -28,7 +29,7 @@ use crate::pickup::PickupKind;
 use crate::tank::Tank;
 use crate::{
     OBSTACLE_CLEAR, OBSTACLE_GRID_SIZE, OBSTACLE_WOOD_FLAMMABLE_CHANCE, PATHFIND_CELL_SIZE,
-    Position, TANK_HULL_BBOX_BY_ROW, WALL_THICKNESS,
+    Position, TANK_HULL_BBOX_BY_ROW, TANK_MOVE_BBOX_FRACTION, WALL_THICKNESS,
 };
 
 /// Cap on rejection-sampling attempts for a single enemy/obstacle spawn
@@ -58,7 +59,7 @@ const PLACEMENT_MAX_ATTEMPTS: u32 = 2000;
 /// for why this is capped rather than an unbounded loop. Used by the enemy
 /// and frog-fallback placement loops in `Game::init`.
 pub fn sample_clear_position(
-    rng: &mut rand::rngs::ThreadRng,
+    rng: &mut SmallRng,
     width: f32,
     height: f32,
     margin_min: f32,
@@ -157,17 +158,23 @@ pub fn spawn_walls(physics: &mut Physics, width: f32, height: f32) -> [ColliderH
 /// asymmetric, so facing sideways can give a bigger radius than facing up) -
 /// used as the pathfinding grid's obstacle-clearance margin (see its call site in
 /// `Game::update`) so a route never opens a gap too narrow for the biggest
-/// tank that might need it (titan/leviathan, currently). Folds over only 12
-/// rows x 2 orientations, so recomputing this fresh each frame (rather than
-/// caching) is well within the same "cheap enough" budget the grid rebuild
-/// itself already accepts.
+/// tank that might need it (titan/leviathan, currently). Applies the same
+/// TANK_MOVE_BBOX_FRACTION shrink `Tank::move_half_extents` does, mirroring
+/// `avoidance_radius`'s own movement-box basis - keep the two formulas in
+/// lockstep, or the grid's notion of "fits" drifts from what the physics
+/// bodies actually block on. Folds over only 12 rows x 2 orientations, so
+/// recomputing this fresh each frame (rather than caching) is well within
+/// the same "cheap enough" budget the grid rebuild itself already accepts.
 pub fn max_tank_avoidance_radius() -> f32 {
     let scale = Tank::default().scale;
     TANK_HULL_BBOX_BY_ROW
         .iter()
         .flat_map(|&(w, h)| [(w, h), (h, w)])
         .map(|(w, h)| {
-            let (hx, hy) = (w * 0.5 * scale, h * 0.5 * scale);
+            let (hx, hy) = (
+                w * 0.5 * scale * TANK_MOVE_BBOX_FRACTION,
+                h * 0.5 * scale * TANK_MOVE_BBOX_FRACTION,
+            );
             (hx * hx + hy * hy).sqrt()
         })
         .fold(0.0, f32::max)
@@ -285,7 +292,7 @@ pub struct MapSpawn {
 pub fn spawn_from_map(
     physics: &mut Physics,
     world: &mut hecs::World,
-    rng: &mut rand::rngs::ThreadRng,
+    rng: &mut SmallRng,
     map: &MapFile,
     obstacle_half_extent: f32,
 ) -> MapSpawn {

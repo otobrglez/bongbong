@@ -137,6 +137,7 @@ object, left to right:
 | Laser pickup | a `Pickup` spawn slot, kind `Laser` | " |
 | Minigun pickup | a `Pickup` spawn slot, kind `Minigun` | " |
 | Plasma pickup | a `Pickup` spawn slot, kind `Plasma` | " |
+| Speed-up pickup | a `Pickup` spawn slot, kind `SpeedUp` | " |
 | Eraser | clears whatever occupies the clicked cell | see "Eraser" below |
 
 Each icon is a small button (~48x48px) drawn with the corresponding sprite

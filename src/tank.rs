@@ -5,11 +5,12 @@ use crate::laser::LaserVariant;
 use crate::plasma::PlasmaVariant;
 use crate::{
     DAMAGE_SPEED_CURVE, DAMAGE_SPEED_FLOOR, MAX_DAMAGE, MAX_SHELLS, MINIGUN_MOUNT_SCALE,
-    MINIGUN_CYCLE_SECONDS, MINIGUN_MOUNT_TEXTURE_SIZE, Position,
+    MINIGUN_CYCLE_SECONDS, MINIGUN_MOUNT_TEXTURE_SIZE, Position, SPEED_BOOST_MULTIPLIER,
     SHADOW_DIR_X, SHADOW_DIR_Y, TANK_BROKEN_TURRET_COL, TANK_CHASSIS_MASS_FACTOR_BY_ROW,
     TANK_HULL_BBOX_BY_ROW, TANK_HULL_DISABLED_COL, TANK_HULL_DISABLED_DAMAGE, TANK_HULL_FRACTION,
     TANK_HULL_LIGHT_COL,
-    TANK_HULL_LIGHT_DAMAGE, TANK_HULL_TRACK_COLS, TANK_PIVOT_REAR_FRACTION, TANK_SHADOW_OFFSET,
+    TANK_HULL_LIGHT_DAMAGE, TANK_HULL_TRACK_COLS, TANK_MOVE_BBOX_FRACTION,
+    TANK_PIVOT_REAR_FRACTION, TANK_SHADOW_OFFSET,
     TANK_SHADOW_OPACITY,
     TANK_SPEED, TANK_TEXTURE_SIZE, TANK_TURRET_BBOX_BY_ROW, TANK_TURRET_COL,
     TANK_TURRET_VISUAL_TURN_SPEED_DEG,
@@ -249,6 +250,12 @@ pub struct Tank {
     /// `PLASMA_PURPLE_PICKUP_CHANCE`), meaningless while `plasma_ammo == 0`.
     /// Same mechanism as `laser_variant`.
     pub plasma_variant: PlasmaVariant,
+    /// Seconds remaining on a `pickup::PickupKind::SpeedUp` boost - while
+    /// positive, `effective_speed` scales top speed by
+    /// SPEED_BOOST_MULTIPLIER. Set (not added to) on pickup, so a fresh
+    /// pickup refreshes the duration instead of stacking with an
+    /// already-active boost - see `PickupKind::SpeedUp`'s doc comment.
+    pub speed_boost_timer: f32,
     /// Seconds accumulated toward recharging the next shell.
     pub recharge_timer: f32,
     /// Seconds remaining before this tank may fire again (player only - see
@@ -302,11 +309,13 @@ pub struct Tank {
     /// (see `Game::init`/`physics::Physics::spawn_tank`).
     pub body: Option<RigidBodyHandle>,
     /// This tank's hull shell-hit sensor - a second collider on the same
-    /// `body` (see `physics::Physics::add_hit_sensor`), sized/positioned
-    /// exactly like the solid hull collider (`hull_half_extents`) but with
-    /// its own owner-exclusion `InteractionGroups` filter, which the solid
-    /// collider can't carry without also filtering *movement* collisions
-    /// (tank-vs-tank ramming, tank-vs-wall) the same way - see
+    /// `body` (see `physics::Physics::add_hit_sensor`), covering the full
+    /// measured hull silhouette (`hull_half_extents`) - deliberately larger
+    /// than the solid movement collider, which is shrunk and
+    /// corner-rounded for smoother driving (`move_half_extents`) - and
+    /// carrying its own owner-exclusion `InteractionGroups` filter, which
+    /// the solid collider can't without also filtering *movement*
+    /// collisions (tank-vs-tank ramming, tank-vs-wall) the same way - see
     /// `find_shell_target`. Paired with `turret_hit_sensor` below for the
     /// turret+barrel portion of the same hit test.
     pub hit_sensor: Option<ColliderHandle>,
@@ -356,6 +365,7 @@ impl Default for Tank {
             minigun_ammo: 0,
             plasma_ammo: 0,
             plasma_variant: PlasmaVariant::Teal,
+            speed_boost_timer: 0.0,
             recharge_timer: 0.0,
             fire_cooldown: 0.0,
             ram_cooldown: 0.0,
@@ -399,10 +409,12 @@ impl Tank {
         DAMAGE_SPEED_FLOOR + (1.0 - DAMAGE_SPEED_FLOOR) * (1.0 - hurt.powf(DAMAGE_SPEED_CURVE))
     }
 
-    /// This tank's current top speed, reduced as it takes damage; see
-    /// `speed_factor`.
+    /// This tank's current top speed, reduced as it takes damage (see
+    /// `speed_factor`) and boosted by SPEED_BOOST_MULTIPLIER while
+    /// `speed_boost_timer` is positive (see `pickup::PickupKind::SpeedUp`).
     pub fn effective_speed(&self) -> f32 {
-        self.speed * self.speed_factor()
+        let boost = if self.speed_boost_timer > 0.0 { SPEED_BOOST_MULTIPLIER } else { 1.0 };
+        self.speed * self.speed_factor() * boost
     }
 
     /// True once a wreck has finished burning and settled into a dead hulk.
@@ -496,17 +508,30 @@ impl Tank {
         self.size() * TANK_HULL_FRACTION
     }
 
-    /// Physics-collider half-extents (x, y) for this tank's hull, in world
-    /// px, oriented for the given facing - `along_x` true when facing
-    /// Left/Right (width and height swap from the sprite's own "facing up"
-    /// reference frame), matching `simulation::facing_along_x`. Distinct from
+    /// Damage-box half-extents (x, y) for this tank's hull, in world px,
+    /// oriented for the given facing - `along_x` true when facing Left/Right
+    /// (width and height swap from the sprite's own "facing up" reference
+    /// frame), matching `simulation::facing_along_x`. Distinct from
     /// `hull_size` above: this is the real per-row rectangle
-    /// (TANK_HULL_BBOX_BY_ROW) the physics collider is actually sized from -
-    /// see `simulation::drive_tank`/`Physics::resize_collider`.
+    /// (TANK_HULL_BBOX_BY_ROW) - the full visible hull silhouette - that
+    /// sizes the hull shell-hit sensor (`hit_sensor`) and the swept-shell
+    /// fallback. The solid *movement* collider is smaller: see
+    /// `move_half_extents` below.
     pub fn hull_half_extents(&self, along_x: bool) -> (f32, f32) {
         let (w, h) = TANK_HULL_BBOX_BY_ROW[self.row as usize];
         let (w, h) = if along_x { (h, w) } else { (w, h) };
         (w * 0.5 * self.scale, h * 0.5 * self.scale)
+    }
+
+    /// Movement-collider half-extents (x, y): `hull_half_extents` scaled
+    /// down by TANK_MOVE_BBOX_FRACTION (see that constant's doc comment for
+    /// the damage-box-vs-movement-box split). This is the overall footprint
+    /// the physics body actually blocks with (`Physics::spawn_tank`/
+    /// `resize_collider` - which additionally round its corners, keeping
+    /// this exact footprint; see `physics::tank_corner_radius`).
+    pub fn move_half_extents(&self, along_x: bool) -> (f32, f32) {
+        let (hx, hy) = self.hull_half_extents(along_x);
+        (hx * TANK_MOVE_BBOX_FRACTION, hy * TANK_MOVE_BBOX_FRACTION)
     }
 
     /// True when `rotation` currently faces Left/Right rather than Up/Down -
@@ -576,19 +601,25 @@ impl Tank {
         (center, Position::new(hw * self.scale, hh * self.scale))
     }
 
-    /// A safe circular over-approximation of this tank's real (rectangular,
-    /// per-row) physics footprint at its current facing - the true
-    /// bounding-circle radius (hypot of both half-extents from
-    /// `hull_half_extents`), rather than the uniform `hull_size() * 0.5`
-    /// approximation. Used anywhere collision math is circle-based (AI
-    /// predictive avoidance - `ai.rs`'s `Mover.radius`/`AvoidCtx.radius`) so
-    /// it never assumes a tank is smaller than the collider
-    /// `Physics::resize_collider` actually gave it - a mismatch that let the
-    /// AI drive tanks (titan/leviathan especially) into obstacles/other
-    /// tanks it believed were clear, wedging them until an external impulse
-    /// (a shell hit, or the player ramming through) dislodged them.
+    /// A safe circular over-approximation of this tank's real (per-row)
+    /// physics footprint at its current facing - the bounding-circle radius
+    /// (hypot of both half-extents) of the *movement* collider
+    /// (`move_half_extents`, the box the physics body actually blocks
+    /// with - the corner rounding only ever cuts inside that box, so this
+    /// still never under-estimates it), rather than the uniform
+    /// `hull_size() * 0.5` approximation. Used anywhere collision math is
+    /// circle-based (AI predictive avoidance - `ai.rs`'s
+    /// `Mover.radius`/`AvoidCtx.radius`) so it never assumes a tank is
+    /// smaller than the collider `Physics::resize_collider` actually gave
+    /// it - a mismatch that let the AI drive tanks (titan/leviathan
+    /// especially) into obstacles/other tanks it believed were clear,
+    /// wedging them until an external impulse (a shell hit, or the player
+    /// ramming through) dislodged them. Tracking the movement box rather
+    /// than the full damage box also means the shrink
+    /// (TANK_MOVE_BBOX_FRACTION) automatically buys the pathfinder tighter
+    /// clearance margins - see `battlefield::max_tank_avoidance_radius`.
     pub fn avoidance_radius(&self) -> f32 {
-        let (hx, hy) = self.hull_half_extents(self.facing_along_x());
+        let (hx, hy) = self.move_half_extents(self.facing_along_x());
         (hx * hx + hy * hy).sqrt()
     }
 

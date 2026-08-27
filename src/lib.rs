@@ -74,11 +74,14 @@ pub const TANK_HULL_TRACK_FRAME_DISTANCE: f32 = 8.0;
 pub const TANK_HULL_FRACTION: f32 = 0.7;
 // Per-row hull footprint (width, height) in tile px, in the sprite's own
 // "facing up" reference frame - measured bounding boxes from the spec's §9
-// table. Feeds the tank's physics collider (`Physics::spawn_tank`/
-// `resize_collider`, see `simulation::drive_tank`), which - unlike
-// TANK_HULL_FRACTION above - is sized and reoriented per tank so a `titan`
-// (nearly filling its cell) and a `flak` (much smaller) don't share a
-// one-size-fits-all hitbox. Indexed by `Tank::row`.
+// table. This is the tank's *damage* silhouette: it sizes the hull shell-hit
+// sensor (`Tank::hit_sensor`/`Physics::add_hit_sensor`) and the swept-shell
+// fallback check directly, and - unlike TANK_HULL_FRACTION above - is
+// measured per row so a `titan` (nearly filling its cell) and a `flak`
+// (much smaller) don't share a one-size-fits-all hitbox. The *movement*
+// collider derives from this same table but deliberately smaller and
+// rounder - see TANK_MOVE_BBOX_FRACTION/TANK_MOVE_CORNER_RADIUS just below.
+// Indexed by `Tank::row`.
 pub const TANK_HULL_BBOX_BY_ROW: [(f32, f32); 12] = [
     (14.0, 19.0), // scout
     (16.0, 22.0), // assault
@@ -93,6 +96,28 @@ pub const TANK_HULL_BBOX_BY_ROW: [(f32, f32); 12] = [
     (24.0, 26.0), // titan (super-heavy)
     (22.0, 28.0), // leviathan (super-heavy)
 ];
+// The movement collider (the solid body walls/obstacles/other tanks actually
+// block against - `Physics::spawn_tank`/`resize_collider`) is deliberately
+// *smaller* than the hull damage box above: the classic arcade split where
+// the damage box matches the visible silhouette (hits feel fair) while the
+// movement box is forgiving (tanks slide through gaps and past each other
+// instead of snagging pixel-perfectly). Each half-extent from
+// TANK_HULL_BBOX_BY_ROW is scaled by this before reaching the physics body -
+// see `Tank::move_half_extents`. ~10% is invisible in play (sprites don't
+// visibly interpenetrate); past ~25% tanks start reading as clipping
+// *into* walls, so tune in small steps (the "I"-key inspect overlay draws
+// both boxes for exactly this).
+pub const TANK_MOVE_BBOX_FRACTION: f32 = 0.9;
+// Corner rounding (world px) of the movement collider: the collider is a
+// rapier round-cuboid (a box dilated by this radius - `Physics` shrinks the
+// core box by the same amount so the overall footprint stays exactly
+// `Tank::move_half_extents`), not a sharp cuboid. Sharp box-vs-box corners
+// catch on the seams between adjacent wall-cell colliders (the classic
+// internal-edge artifact - tanks visibly snagged mid-slide along a flat
+// wall run); a rounded corner slides past instead, the same reason
+// character controllers are near-universally capsules. Clamped per tank so
+// tiny hulls stay valid - see `physics::tank_corner_radius`.
+pub const TANK_MOVE_CORNER_RADIUS: f32 = 4.0;
 // Per-row turret+barrel footprint, as raw (x0,y0,x1,y1) inclusive pixel
 // coordinates in the 32x32 cell (same "facing up" reference frame as
 // TANK_HULL_BBOX_BY_ROW) - straight from the "Turret bbox" column of
@@ -1349,6 +1374,20 @@ pub const PLASMA_FLYING_CYCLE_FPS: f32 = 10.0;
 pub const PLASMA_PURPLE_PICKUP_CHANCE: f32 = 0.3;
 pub const PLASMA_PURPLE_DAMAGE_FACTOR: f32 = 1.10;
 
+// --- Speed-up pickup (pickup.rs's PickupKind::SpeedUp, Tank::speed_boost_timer) ---
+// A timed stat buff rather than a weapon/ammo pickup: collecting one sets
+// (not adds to - see "only one at a time" below) `speed_boost_timer` to
+// this many seconds, during which `Tank::effective_speed` is scaled by
+// SPEED_BOOST_MULTIPLIER. Same pickup mechanics as every other kind (collect
+// on touch, respawn from map slots) - see PickupKind::SpeedUp's handling in
+// `Game::update`'s pickup-collection section.
+pub const SPEED_BOOST_MULTIPLIER: f32 = 1.3; // 30% faster top speed while active
+// Picking up a second one while already boosted refreshes this timer back
+// to the full duration rather than adding to it or stacking the multiplier
+// - a tank can only ever be under one speed boost at a time, never a
+// double-strength one.
+pub const SPEED_BOOST_DURATION_SECONDS: f32 = 12.0;
+
 // --- Map editor (dev-only, docs/map-editor-design.md) ---
 // Kept minimal - the editor is a `map-editor`-feature-only, presentation-only
 // tool, not gameplay tuning, so most of its layout math lives directly in
@@ -1389,6 +1428,24 @@ pub const EDITOR_PALETTE_BOTTOM_MARGIN: f32 = 16.0;
 pub const EDITOR_TOOLBAR_MARGIN: f32 = 16.0;
 /// Side length of the top-left hamburger/back toggle button.
 pub const EDITOR_HAMBURGER_SIZE: f32 = 40.0;
+
+/// Parse a round-seed CLI value: plain decimal, or hex with a `0x`/`0X`
+/// prefix - shared by both binaries' `--seed` flags (main.rs and
+/// src/bin/probe.rs; a bin can't import from another bin, so this lives in
+/// the library). Hex matters because that's the form seeds are *printed*
+/// in (`seed=0x{:016x}` in the probe's ANOMALY/summary lines - see
+/// docs/gameplay-verification-design.md §1.5), so a printed seed must
+/// paste straight back into `--seed` without a manual base conversion.
+pub fn parse_seed(s: &str) -> Result<u64, String> {
+    let s = s.trim();
+    match s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        Some(hex) => u64::from_str_radix(hex, 16)
+            .map_err(|e| format!("invalid seed '{s}': {e}")),
+        None => s
+            .parse()
+            .map_err(|e| format!("invalid seed '{s}': {e}")),
+    }
+}
 
 pub mod ai;
 pub mod battlefield;

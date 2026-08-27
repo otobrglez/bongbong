@@ -48,6 +48,7 @@ pub struct Textures<'a> {
     pub pickup_laser: &'a Texture2D,
     pub pickup_minigun: &'a Texture2D,
     pub pickup_plasma: &'a Texture2D,
+    pub pickup_speedup: &'a Texture2D,
     /// The minigun barrel-cluster overlay drawn on a tank's turret while it
     /// holds minigun ammo - see `tank::draw_minigun_mount`. One shared
     /// texture for every chassis (unlike `tanks` above), not a sheet.
@@ -184,6 +185,7 @@ impl Game {
                     PickupKind::Laser => textures.pickup_laser,
                     PickupKind::Minigun => textures.pickup_minigun,
                     PickupKind::Plasma => textures.pickup_plasma,
+                    PickupKind::SpeedUp => textures.pickup_speedup,
                 };
                 draw_pickup(&mut d, texture, pickup);
             }
@@ -387,8 +389,8 @@ impl Game {
                 });
             }
 
-            // Debug inspect overlay: a bounding square plus a stat readout for
-            // every tank. Drawn here (screen space, post-composite) rather
+            // Debug inspect overlay: hitbox/collider outlines plus a stat
+            // readout for every tank. Drawn here (screen space, post-composite) rather
             // than into scene_target, so it's never warped by an in-flight
             // shockwave and always renders crisp - tank.position is already
             // screen pixels (no camera transform), so the two spaces line up
@@ -491,26 +493,34 @@ impl Game {
     }
 }
 
-/// Debug inspect-mode overlay for one tank: its actual hull collider box
-/// plus a second, visually distinct turret+barrel box (see
-/// `Game::inspect_enabled`, toggled by the "I" key), plus a small stat
-/// block - ammo, health, current speed and velocity for every tank, and
-/// additionally (`ai: Some`, i.e. this isn't the player) whether it's
-/// currently retreating to recharge and its fire cooldown, pulled straight
-/// from its `Ai` - the same state `ai.rs`'s `wants_retreat`/`fire_interval`
-/// act on. Purely diagnostic: reads state, draws it, mutates nothing.
+/// Debug inspect-mode overlay for one tank: its hull damage box, its
+/// turret+barrel damage box, and its (smaller, corner-rounded) movement
+/// collider (see `Game::inspect_enabled`, toggled by the "I" key), plus a
+/// small stat block - ammo, health, current speed and velocity for every
+/// tank, and additionally (`ai: Some`, i.e. this isn't the player) whether
+/// it's currently retreating to recharge and its fire cooldown, pulled
+/// straight from its `Ai` - the same state `ai.rs`'s
+/// `wants_retreat`/`fire_interval` act on. Purely diagnostic: reads state,
+/// draws it, mutates nothing.
 ///
-/// The first (lime/orange/gray) box is `Tank::hull_half_extents` - the same
-/// per-row (TANK_HULL_BBOX_BY_ROW), facing-oriented rectangle
-/// `simulation::drive_tank`/`Physics::resize_collider` actually gives this
-/// tank's movement collider, and (via `Tank::hit_sensor`) the shell-hit
-/// sensor covering the hull - not the full 32x32 sprite tile
-/// (`Tank::size`/`Tank::hull_size`), which is a uniform square padded well
-/// past the visible hull art on every row. The second (yellow) box is
-/// `Tank::turret_bbox_world` - the turret+barrel silhouette, backing
-/// `Tank::turret_hit_sensor` the same way. Together these two boxes are
-/// exactly what a shell can hit; this overlay draws the real hit-testing
-/// shape, not an approximation of it.
+/// Three shapes, each the *real* thing physics uses, not an approximation:
+/// - The lime/orange/gray box is `Tank::hull_half_extents` - the per-row
+///   (TANK_HULL_BBOX_BY_ROW), facing-oriented hull silhouette backing the
+///   shell-hit sensor (`Tank::hit_sensor`) - not the full 32x32 sprite tile
+///   (`Tank::size`/`Tank::hull_size`), which is a uniform square padded
+///   well past the visible hull art on every row.
+/// - The yellow box is `Tank::turret_bbox_world` - the turret+barrel
+///   silhouette, backing `Tank::turret_hit_sensor` the same way. Together
+///   these two boxes are exactly what a shell can hit.
+/// - The sky-blue rounded box is `Tank::move_half_extents` +
+///   `physics::tank_corner_radius` - the solid movement collider walls/
+///   obstacles/other tanks actually block against, deliberately smaller
+///   and rounder than the damage boxes (see TANK_MOVE_BBOX_FRACTION/
+///   TANK_MOVE_CORNER_RADIUS in `lib.rs`). The visible gap between blue
+///   and lime is the tuning surface: widen it (smaller fraction) for more
+///   forgiving driving, shrink it if sprites start visibly clipping into
+///   walls. The stat block's MOVE line prints its current world-px size
+///   and corner radius for the same purpose.
 fn draw_tank_inspect(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>) {
     // Same "which axis is the long one" check as `Tank::avoidance_radius` -
     // tanks only ever face one of the four `Dir::rotation()` values, so an
@@ -543,6 +553,21 @@ fn draw_tank_inspect(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>) {
     let th = (turret_half.y * 2.0).round() as i32;
     d.draw_rectangle_lines(tx, ty, tw, th, Color::YELLOW);
 
+    // Movement collider (see the doc comment above): drawn with the exact
+    // clamped corner radius the physics shape carries
+    // (`physics::tank_corner_radius`), mapped onto raylib's relative
+    // roundness factor (corner radius = roundness * min(w, h) / 2, so the
+    // division below inverts that).
+    let (mx, my) = tank.move_half_extents(along_x);
+    let corner = crate::physics::tank_corner_radius((mx, my));
+    let move_rect = Rectangle::new(
+        tank.position.x - mx,
+        tank.position.y - my,
+        mx * 2.0,
+        my * 2.0,
+    );
+    d.draw_rectangle_rounded_lines(move_rect, corner / mx.min(my), 8, Color::SKYBLUE);
+
     let speed = (tank.velocity.x * tank.velocity.x + tank.velocity.y * tank.velocity.y).sqrt();
     let mut lines = vec![
         format!("AMMO {}", tank.shells_ammo),
@@ -553,6 +578,7 @@ fn draw_tank_inspect(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>) {
         ),
         format!("SPD {speed:.0}px/s"),
         format!("VEL ({:.0},{:.0})", tank.velocity.x, tank.velocity.y),
+        format!("MOVE {:.0}x{:.0} r{corner:.0}", mx * 2.0, my * 2.0),
     ];
     if let Some(ai) = ai {
         lines.push(format!(

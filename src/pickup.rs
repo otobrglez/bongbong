@@ -31,6 +31,12 @@ pub enum PickupKind {
     /// instead of a normal shell (one bolt per barrel on a twin-barrel
     /// chassis, same as `Shell`) - see `tank::Tank::active_weapon`.
     Plasma,
+    /// Sets `tank::Tank::speed_boost_timer` to SPEED_BOOST_DURATION_SECONDS -
+    /// while positive, `Tank::effective_speed` is scaled by
+    /// SPEED_BOOST_MULTIPLIER. A stat buff, not a weapon: picking up another
+    /// one while already boosted refreshes the timer rather than stacking
+    /// it, so a tank is only ever under one speed boost at a time.
+    SpeedUp,
 }
 
 pub struct Pickup {

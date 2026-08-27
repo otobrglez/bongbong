@@ -4,11 +4,17 @@
 //! mechanics (movement, damage, AI behavior, round outcome) without
 //! eyeballing the actual game. See CLAUDE.md's "Testing & tooling" section.
 //!
-//! Not deterministic across runs: `Game::init`/the AI roll their own RNG
-//! internally (matching the real game) rather than taking a seed, so treat
-//! this as an exploration/inspection tool, not a reproducible test oracle -
-//! use `#[cfg(test)]` in `simulation.rs` for that once a scenario's expected
-//! behavior is nailed down.
+//! Deterministic given a seed: `Game::init` seeds the whole round's one
+//! RNG stream (see `Game::rng` and docs/gameplay-verification-design.md),
+//! so the same `--seed` replays a round bit-for-bit. Every `ANOMALY` line
+//! carries its round's own `seed=0x...`, ready to paste straight back into
+//! `--seed` - here for a frame-level trace (`--log-every 1`), or into the
+//! game binary's own `--seed` to watch that exact layout play out (same
+//! setup, though windowed evolution diverges over time under variable
+//! frame dt). Unseeded runs draw and print a random base seed, so they're
+//! just as replayable after the fact. The guard keeping all of this true
+//! is `simulation::determinism_tests`; promote a nailed-down scenario to a
+//! `#[cfg(test)]` there once it's worth locking in as a regression check.
 //!
 //! Besides the scripted per-frame trace (`log_frame`/`--log-every`), this
 //! also runs a set of standing anomaly checks (`AnomalyTracker`) against
@@ -24,9 +30,10 @@ use std::collections::VecDeque;
 use bongbong::Position;
 use bongbong::ai::Intent;
 use bongbong::map::MapFile;
-use bongbong::simulation::{Game, Input, Outcome};
+use bongbong::simulation::{Game, Input, Outcome, TankSnapshot};
 use bongbong::tank::Dir;
 use clap::{Parser, ValueEnum};
+use rand::RngExt;
 
 /// Same `-m`/`--map` fallback the real game applies (main.rs) - the
 /// embedded default map, so a probe run exercises the same battlefield the
@@ -84,6 +91,19 @@ const JITTER_THRESHOLD: u32 = 4;
 const CLUSTER_RADIUS: f32 = 90.0; // px between tank centers
 const CLUSTER_MIN_GROUP: usize = 3; // this many mutually-close enemies counts as a cluster
 const CLUSTER_FRAMES_THRESHOLD: u32 = 180; // 3s, matching STALL_FRAMES_THRESHOLD's window
+// --- Frame-invariant sanity bounds (kind=invariant) ---
+// Physics sanity rather than behavior: any violation is a hard bug (solver
+// explosion, tunneling through the boundary walls, NaN poisoning) with the
+// printed seed as a perfect repro. Checked for *every* tank, player
+// included - unlike the behavior checks, a physics blow-up on the player
+// isn't explained by the scripted Scenario. Bounds are generous on purpose
+// so legitimate gameplay can never trip them: the position margin sits
+// outside the walls' inner faces (0/WIDTH/0/HEIGHT, see spawn_walls) but
+// inside their WALL_THICKNESS-padded outer extent, and the speed cap is
+// well above TANK_SPEED (220px/s) times SPEED_BOOST_MULTIPLIER plus any
+// legitimate ram/explosion knockback spike.
+const INVARIANT_POS_MARGIN: f32 = 50.0; // px outside the walls' inner faces
+const INVARIANT_SPEED_MAX: f32 = 800.0; // px/s
 
 #[derive(Clone, Copy, ValueEnum)]
 enum Scenario {
@@ -137,6 +157,16 @@ struct Args {
     /// how many independent layouts get checked.
     #[arg(long, default_value_t = 1)]
     rounds: u32,
+
+    /// Pin the base RNG seed (decimal or 0x-hex) for exact replay. Round i
+    /// of a run uses base+i, so a `--rounds` sweep stays one command while
+    /// every round keeps its own printed `seed=0x...` - paste that value
+    /// back here (with the default `--rounds 1`) to replay just that round,
+    /// or into the game binary's `--seed` to watch it. Unseeded runs draw
+    /// a random base and print it, so they're replayable after the fact
+    /// too.
+    #[arg(long, value_parser = bongbong::parse_seed)]
+    seed: Option<u64>,
 }
 
 fn input_for_frame(scenario: Scenario, frame: u32) -> Input {
@@ -200,11 +230,17 @@ struct AnomalyTotals {
     border_stuck: u32,
     jitter: u32,
     clustering: u32,
+    invariant: u32,
 }
 
 impl AnomalyTotals {
     fn total(&self) -> u32 {
-        self.stale_start + self.stall + self.border_stuck + self.jitter + self.clustering
+        self.stale_start
+            + self.stall
+            + self.border_stuck
+            + self.jitter
+            + self.clustering
+            + self.invariant
     }
 }
 
@@ -254,26 +290,44 @@ impl TankTrack {
     }
 }
 
-/// Prints an `ANOMALY` line and returns which kind it was, for the caller to
-/// tally into `AnomalyTotals`.
-fn report(round: u32, frame: u32, track: &TankTrack, kind: &str, detail: &str, pos: Position) {
+/// Prints an `ANOMALY` line; the caller tallies the kind into
+/// `AnomalyTotals`. `seed` is the round's own effective seed
+/// (`Game::round_seed`), printed in `--seed`-pasteable form so every
+/// single anomaly is a self-contained replay recipe.
+fn report(round: u32, seed: u64, frame: u32, label: &str, kind: &str, detail: &str, pos: Position) {
     println!(
-        "ANOMALY round={round} frame={frame:5} t={:6.2}s kind={kind:<12} tank={} pos=({:6.1},{:6.1}) {detail}",
+        "ANOMALY round={round} seed=0x{seed:016x} frame={frame:5} t={:6.2}s kind={kind:<12} tank={label} pos=({:6.1},{:6.1}) {detail}",
         frame as f32 * DT,
-        track.label,
         pos.x,
         pos.y,
     );
 }
 
-/// Runs every enemy-tank anomaly check for this frame. Scoped to enemies
-/// only - the player's movement is fully explained by the scripted
+/// Display label for the tank at `index` of a `tank_snapshots()` slice -
+/// "PLAYER", or "ENEMY#k" numbering the non-player tanks in snapshot
+/// order, matching `build_tracks`/`log_frame`'s numbering exactly (the
+/// snapshot order is stable for the whole round - see `TankTrack`).
+fn tank_label(snapshots: &[TankSnapshot], index: usize) -> String {
+    if snapshots[index].is_player {
+        "PLAYER".to_string()
+    } else {
+        let ordinal = snapshots[..index].iter().filter(|t| !t.is_player).count();
+        format!("ENEMY#{ordinal}")
+    }
+}
+
+/// Runs this frame's standing checks: first the frame invariants over
+/// *every* tank (player and wrecks included - see the INVARIANT_* consts),
+/// then the behavior checks over enemies. Behavior checks stay scoped to
+/// enemies only - the player's movement is fully explained by the scripted
 /// `Scenario` already (e.g. `Afk` deliberately never moves), so checking it
 /// would just be re-detecting the script, not a real anomaly. Skips checks
 /// entirely once the round has ended (`Outcome != Playing`): a tank sitting
-/// still on the win/lose screen isn't a bug.
+/// still on the win/lose screen isn't a bug (and post-round frames aren't
+/// simulated anyway - `update` early-returns into its end-screen branch).
 fn check_anomalies(
     tracks: &mut [TankTrack],
+    invariant_flagged: &mut [bool],
     game: &Game,
     round: u32,
     frame: u32,
@@ -282,18 +336,60 @@ fn check_anomalies(
     if game.outcome() != Outcome::Playing {
         return;
     }
+    let seed = game.round_seed();
+    let snapshots = game.tank_snapshots();
+
+    // --- Frame invariants: physics sanity for every tank, wrecks included
+    // (a wreck keeps its physics body, so a solver blow-up can fling it
+    // just the same). One-shot per tank per round, like every other kind.
+    for (i, tank) in snapshots.iter().enumerate() {
+        if invariant_flagged[i] {
+            continue;
+        }
+        let pos = tank.position;
+        let vel = tank.velocity;
+        let finite =
+            pos.x.is_finite() && pos.y.is_finite() && vel.x.is_finite() && vel.y.is_finite();
+        let speed = (vel.x * vel.x + vel.y * vel.y).sqrt();
+        let in_bounds = pos.x >= -INVARIANT_POS_MARGIN
+            && pos.x <= WIDTH + INVARIANT_POS_MARGIN
+            && pos.y >= -INVARIANT_POS_MARGIN
+            && pos.y <= HEIGHT + INVARIANT_POS_MARGIN;
+        // Ordered so a NaN reports as itself rather than as a bounds/speed
+        // trip (every comparison involving a NaN is false).
+        let violation = if !finite {
+            format!("non-finite position/velocity vel=({},{})", vel.x, vel.y)
+        } else if !in_bounds {
+            format!("escaped battlefield bounds (margin {INVARIANT_POS_MARGIN:.0}px)")
+        } else if speed > INVARIANT_SPEED_MAX {
+            format!("speed {speed:.0}px/s above sanity cap {INVARIANT_SPEED_MAX:.0}px/s")
+        } else {
+            continue;
+        };
+        report(
+            round,
+            seed,
+            frame,
+            &tank_label(&snapshots, i),
+            "invariant",
+            &violation,
+            pos,
+        );
+        invariant_flagged[i] = true;
+        totals.invariant += 1;
+    }
+
     // Live (non-wreck) enemy positions, indexed in lockstep with `tracks` -
     // built up front so the clustering check below can look at every other
     // enemy's position, not just the one `TankTrack` the main loop happens
     // to be on.
-    let live_positions: Vec<Option<Position>> = game
-        .tank_snapshots()
-        .into_iter()
+    let live_positions: Vec<Option<Position>> = snapshots
+        .iter()
         .filter(|t| !t.is_player)
         .map(|t| (!t.is_wreck).then_some(t.position))
         .collect();
     let mut enemy_index = 0;
-    for tank in game.tank_snapshots() {
+    for tank in &snapshots {
         if tank.is_player {
             continue;
         }
@@ -313,8 +409,9 @@ fn check_anomalies(
             if (dx * dx + dy * dy).sqrt() < STALE_START_EPS {
                 report(
                     round,
+                    seed,
                     frame,
-                    track,
+                    &track.label,
                     "stale-start",
                     &format!("hasn't left spawn in {STALE_START_FRAMES} frames"),
                     pos,
@@ -336,8 +433,9 @@ fn check_anomalies(
             if !track.stall_flagged && track.stall_frames >= STALL_FRAMES_THRESHOLD {
                 report(
                     round,
+                    seed,
                     frame,
-                    track,
+                    &track.label,
                     "stall",
                     &format!("speed <{STALL_SPEED_EPS:.0}px/s for {STALL_FRAMES_THRESHOLD} frames"),
                     pos,
@@ -357,8 +455,9 @@ fn check_anomalies(
         if !track.border_flagged && track.border_frames >= BORDER_FRAMES_THRESHOLD {
             report(
                 round,
+                seed,
                 frame,
-                track,
+                &track.label,
                 "border-stuck",
                 &format!("within {BORDER_MARGIN:.0}px of a wall for {BORDER_FRAMES_THRESHOLD} frames"),
                 pos,
@@ -387,8 +486,9 @@ fn check_anomalies(
                 if !track.jitter_flagged && track.recent_flips.len() as u32 >= JITTER_THRESHOLD {
                     report(
                         round,
+                        seed,
                         frame,
-                        track,
+                        &track.label,
                         "jitter",
                         &format!(
                             "{JITTER_THRESHOLD}+ heading flip-flops within {JITTER_WINDOW_FRAMES} frames"
@@ -418,8 +518,9 @@ fn check_anomalies(
         if !track.cluster_flagged && track.cluster_frames >= CLUSTER_FRAMES_THRESHOLD {
             report(
                 round,
+                seed,
                 frame,
-                track,
+                &track.label,
                 "clustering",
                 &format!(
                     "{CLUSTER_MIN_GROUP}+ enemies mutually within {CLUSTER_RADIUS:.0}px for {CLUSTER_FRAMES_THRESHOLD} frames"
@@ -448,25 +549,32 @@ fn build_tracks(game: &Game) -> Vec<TankTrack> {
 /// Runs one round to completion (or the frame limit). Returns this round's
 /// anomaly totals. `trace` controls whether the per-frame `log_frame`
 /// snapshots print (single-round mode) or stay silent (sweep mode, where
-/// only ANOMALY lines and the round summary matter).
-fn run_round(args: &Args, round: u32, trace: bool) -> AnomalyTotals {
+/// only ANOMALY lines and the round summary matter). `seed` pins the
+/// round's whole RNG stream (`Game::seed_override`), derived per round by
+/// `main` - see the `--seed` flag's doc comment.
+fn run_round(args: &Args, round: u32, trace: bool, seed: u64) -> AnomalyTotals {
     let mut game = Game::default();
     game.enemy_count_override = args.enemies;
+    game.seed_override = Some(seed);
     game.map = default_map();
     game.init(WIDTH, HEIGHT);
 
     let mut tracks = build_tracks(&game);
+    // One flag slot per tank (player included, unlike `tracks`) for the
+    // one-shot frame-invariant checks - same stable snapshot-order
+    // indexing convention as `TankTrack`.
+    let mut invariant_flagged = vec![false; game.tank_snapshots().len()];
     let mut totals = AnomalyTotals::default();
 
     if trace {
         log_frame(&game, 0);
     }
-    check_anomalies(&mut tracks, &game, round, 0, &mut totals);
+    check_anomalies(&mut tracks, &mut invariant_flagged, &game, round, 0, &mut totals);
 
     for frame in 1..=args.frames {
         let input = input_for_frame(args.scenario, frame);
         game.update(input, DT, WIDTH, HEIGHT);
-        check_anomalies(&mut tracks, &game, round, frame, &mut totals);
+        check_anomalies(&mut tracks, &mut invariant_flagged, &game, round, frame, &mut totals);
 
         if trace && frame % args.log_every == 0 {
             log_frame(&game, frame);
@@ -491,8 +599,15 @@ fn main() {
     let args = Args::parse();
     let sweep = args.rounds > 1;
 
+    // The whole run's base seed: `--seed` when given, one entropy draw
+    // otherwise - either way it's printed in the header, so *every* run is
+    // replayable after the fact. Round i runs on base+i (see the `--seed`
+    // flag's doc comment; SmallRng's seed_from_u64 mixes the raw value
+    // through SplitMix64, so adjacent seeds are fully decorrelated rounds).
+    let base_seed: u64 = args.seed.unwrap_or_else(|| rand::rng().random());
+
     println!(
-        "probe: scenario={} enemies={} frames={} rounds={}",
+        "probe: scenario={} enemies={} frames={} rounds={} seed=0x{base_seed:016x}",
         match args.scenario {
             Scenario::Afk => "afk",
             Scenario::Advance => "advance",
@@ -506,21 +621,25 @@ fn main() {
     );
 
     let mut grand_total = AnomalyTotals::default();
-    let mut rounds_with_anomalies = 0;
+    // Every flagged round's (round, seed), for the end-of-sweep replay
+    // recap - the per-round lines above it scroll away on a big sweep.
+    let mut flagged: Vec<(u32, u64)> = Vec::new();
 
     for round in 0..args.rounds {
-        let totals = run_round(&args, round, !sweep);
+        let seed = base_seed.wrapping_add(round as u64);
+        let totals = run_round(&args, round, !sweep, seed);
         if sweep {
             if totals.total() > 0 {
-                rounds_with_anomalies += 1;
+                flagged.push((round, seed));
                 println!(
-                    "round={round} anomalies={} (stale-start={} stall={} border-stuck={} jitter={} clustering={})",
+                    "round={round} seed=0x{seed:016x} anomalies={} (stale-start={} stall={} border-stuck={} jitter={} clustering={} invariant={})",
                     totals.total(),
                     totals.stale_start,
                     totals.stall,
                     totals.border_stuck,
                     totals.jitter,
                     totals.clustering,
+                    totals.invariant,
                 );
             }
             grand_total.stale_start += totals.stale_start;
@@ -528,6 +647,7 @@ fn main() {
             grand_total.border_stuck += totals.border_stuck;
             grand_total.jitter += totals.jitter;
             grand_total.clustering += totals.clustering;
+            grand_total.invariant += totals.invariant;
         } else {
             grand_total = totals;
         }
@@ -535,15 +655,24 @@ fn main() {
 
     if sweep {
         println!(
-            "probe: {}/{} rounds flagged - totals: stale-start={} stall={} border-stuck={} jitter={} clustering={}",
-            rounds_with_anomalies,
+            "probe: {}/{} rounds flagged - totals: stale-start={} stall={} border-stuck={} jitter={} clustering={} invariant={}",
+            flagged.len(),
             args.rounds,
             grand_total.stale_start,
             grand_total.stall,
             grand_total.border_stuck,
             grand_total.jitter,
             grand_total.clustering,
+            grand_total.invariant,
         );
+        if !flagged.is_empty() {
+            let recap = flagged
+                .iter()
+                .map(|&(round, seed)| format!("round {round} -> --seed 0x{seed:016x}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!("probe: replay a flagged round (with --rounds 1): {recap}");
+        }
     } else if grand_total.total() == 0 {
         println!("probe: no anomalies detected");
     }
