@@ -1,3 +1,4 @@
+use crate::tuning::tuning;
 use rand::RngExt;
 use rand::rngs::SmallRng;
 use sola_raylib::prelude::Vector2;
@@ -7,14 +8,8 @@ use crate::pathfind::Grid;
 use crate::pickup::PickupKind;
 use crate::tank::{ActiveWeapon, Dir, Tank};
 use crate::{
-    AI_DIR_HOLD_SECONDS, AI_DIR_SWITCH_MARGIN_PX, AI_OBSTACLE_OVERRIDE_HOLD_SECONDS,
-    AVOID_DODGE_SECONDS, AVOID_LOOKAHEAD,
-    AVOID_MARGIN, AVOID_MIN_SPEED, ENEMY_AIM_SETTLE, ENEMY_AMMO_LOW, ENEMY_AMMO_RESUME,
-    ENEMY_ATTACK_RANGE, ENEMY_FIRE_ALIGN_PX, ENEMY_FIRE_INTERVAL, ENEMY_FIRE_INTERVAL_AGGRESSIVE,
-    ENEMY_FLEE_DAMAGE, ENEMY_FRIENDLY_FIRE_HOLD_CHANCE, ENEMY_HIT_ALERT_SECONDS, ENEMY_MISFIRE_ANGLE_MAX,
-    ENEMY_MISFIRE_ANGLE_MIN, ENEMY_MISFIRE_CHANCE_MAX, ENEMY_MISFIRE_RANGE,
-    ENEMY_RETARGET_SECONDS, ENEMY_RETREAT_RANGE, ENEMY_VIEW_RANGE, MAX_DAMAGE, MAX_SHELLS, Position,
-    STUCK_ESCAPE_SECONDS, STUCK_SPEED_EPS, WANDER_SPREAD_CANDIDATES,
+    MAX_DAMAGE,
+    Position,
 };
 
 /// A read-only snapshot of one tank's motion for collision prediction. The game
@@ -121,7 +116,7 @@ impl Default for Ai {
         Self {
             waypoint: Position::default(),
             retarget_timer: 0.0,
-            fire_timer: ENEMY_FIRE_INTERVAL,
+            fire_timer: tuning().enemy_fire_interval,
             committed_dir: None,
             dir_hold: 0.0,
             aim_settle: 0.0,
@@ -211,7 +206,7 @@ impl Ai {
         // anywhere: another dt of stuck evidence. Wasn't asked to move (or
         // did actually move) resets the count - deliberately holding
         // position to aim/wait isn't stuck. See `steer`'s escape check.
-        if self.was_moving && real_speed < STUCK_SPEED_EPS {
+        if self.was_moving && real_speed < tuning().stuck_speed_eps {
             self.stuck_timer += dt;
         } else {
             self.stuck_timer = 0.0;
@@ -247,7 +242,7 @@ impl Ai {
     /// so a tank taking sustained fire just stays alert continuously instead
     /// of the timer stacking up.
     pub fn notify_hit(&mut self) {
-        self.hit_alert_timer = ENEMY_HIT_ALERT_SECONDS;
+        self.hit_alert_timer = tuning().enemy_hit_alert_seconds;
     }
 
     /// Choose a heading toward `target` - or, if pathfinding can't reach
@@ -386,7 +381,7 @@ impl Ai {
             // rare worst case, still self-correcting next frame via the
             // `!reachable` check above.
             let mut best: Option<(Position, f32)> = None;
-            for _ in 0..WANDER_SPREAD_CANDIDATES {
+            for _ in 0..tuning().wander_spread_candidates {
                 let candidate = Position::new(
                     rng.random_range(margin..(width - margin)),
                     rng.random_range(margin..(height - margin)),
@@ -417,7 +412,7 @@ impl Ai {
                     rng.random_range(margin..(height - margin)),
                 )
             });
-            self.retarget_timer = ENEMY_RETARGET_SECONDS;
+            self.retarget_timer = tuning().enemy_retarget_seconds;
         }
         let path = grid.next_step(from, self.waypoint);
         self.steer_toward(from, path, self.waypoint, bounds, half, ctx, grid)
@@ -455,12 +450,12 @@ impl Ai {
         // very jitter commitment exists to prevent, just obstacle-triggered
         // instead of diagonal-target-triggered (see that constant's own
         // comment - found via the probe harness's `--rounds` sweep).
-        let obstacle_ahead = self.dir_hold >= AI_OBSTACLE_OVERRIDE_HOLD_SECONDS
+        let obstacle_ahead = self.dir_hold >= tuning().ai_obstacle_override_hold_seconds
             && self
                 .committed_dir
                 .is_some_and(|committed| grid.blocked_ahead(from, committed.vec()));
 
-        let dir = if self.stuck_timer >= STUCK_ESCAPE_SECONDS {
+        let dir = if self.stuck_timer >= tuning().stuck_escape_seconds {
             // Asked to move for STUCK_ESCAPE_SECONDS running and genuinely
             // hasn't (see `think`'s real_speed tracking) - force a hard
             // reset instead of letting a bad commitment call wedge the tank
@@ -484,7 +479,7 @@ impl Ai {
                     fresh
                 }
                 Some(_) if obstacle_ahead => fresh,
-                Some(committed) if self.dir_hold < AI_DIR_HOLD_SECONDS => {
+                Some(committed) if self.dir_hold < tuning().ai_dir_hold_seconds => {
                     // Not held long enough yet: stick with the current heading.
                     committed
                 }
@@ -500,7 +495,7 @@ impl Ai {
                     let dy = (routed.y - from.y).abs();
                     let committed_off = if committed.is_horizontal() { dy } else { dx };
                     let fresh_off = if fresh.is_horizontal() { dy } else { dx };
-                    if fresh != committed && committed_off - fresh_off > AI_DIR_SWITCH_MARGIN_PX {
+                    if fresh != committed && committed_off - fresh_off > tuning().ai_dir_switch_margin_px {
                         fresh
                     } else {
                         committed
@@ -555,7 +550,7 @@ impl Ai {
         }
 
         // Too slow to meaningfully predict our own path: don't dodge.
-        if ctx.speed < AVOID_MIN_SPEED {
+        if ctx.speed < tuning().avoid_min_speed {
             return desired;
         }
 
@@ -576,7 +571,7 @@ impl Ai {
             }
             // Already overlapping is the ram system's job, not ours.
             let sep_now = (p.x * p.x + p.y * p.y).sqrt();
-            let reach = ctx.radius + other.radius + AVOID_MARGIN;
+            let reach = ctx.radius + other.radius + tuning().avoid_margin;
             if sep_now < reach {
                 continue;
             }
@@ -585,7 +580,7 @@ impl Ai {
             if pv >= 0.0 {
                 continue;
             }
-            let t = (-pv / vv).clamp(0.0, AVOID_LOOKAHEAD);
+            let t = (-pv / vv).clamp(0.0, tuning().avoid_lookahead);
             let cx = p.x + v.x * t;
             let cy = p.y + v.y * t;
             let closest = (cx * cx + cy * cy).sqrt();
@@ -621,7 +616,7 @@ impl Ai {
         match choice {
             Some(dir) => {
                 self.dodge_dir = Some(dir);
-                self.dodge_timer = AVOID_DODGE_SECONDS;
+                self.dodge_timer = tuning().avoid_dodge_seconds;
                 dir
             }
             None => desired,
@@ -648,11 +643,11 @@ impl Ai {
             if pv >= 0.0 {
                 continue;
             }
-            let t = (-pv / vv).clamp(0.0, AVOID_LOOKAHEAD);
+            let t = (-pv / vv).clamp(0.0, tuning().avoid_lookahead);
             let cx = p.x + v.x * t;
             let cy = p.y + v.y * t;
             let closest = (cx * cx + cy * cy).sqrt();
-            if closest < ctx.radius + other.radius + AVOID_MARGIN {
+            if closest < ctx.radius + other.radius + tuning().avoid_margin {
                 return true;
             }
         }
@@ -665,9 +660,9 @@ impl Ai {
     /// crossing the (higher) resume mark latches it back off, and anywhere
     /// in between just keeps whatever was already decided.
     fn wants_retreat(&mut self, ammo: i32) -> bool {
-        if ammo <= ENEMY_AMMO_LOW {
+        if ammo <= tuning().enemy_ammo_low {
             self.retreating = true;
-        } else if ammo >= ENEMY_AMMO_RESUME {
+        } else if ammo >= tuning().enemy_ammo_resume {
             self.retreating = false;
         }
         self.retreating
@@ -846,11 +841,11 @@ impl Brain<'_> {
         let ammo_frac = if self.me.active_weapon() != ActiveWeapon::Shell {
             1.0
         } else {
-            (self.me.shells_ammo as f32 / MAX_SHELLS as f32).clamp(0.0, 1.0)
+            (self.me.shells_ammo as f32 / tuning().max_shells as f32).clamp(0.0, 1.0)
         };
         let health_frac = (1.0 - self.me.damage / MAX_DAMAGE).clamp(0.0, 1.0);
         let aggression = ammo_frac.min(health_frac);
-        ENEMY_FIRE_INTERVAL - (ENEMY_FIRE_INTERVAL - ENEMY_FIRE_INTERVAL_AGGRESSIVE) * aggression
+        tuning().enemy_fire_interval - (tuning().enemy_fire_interval - tuning().enemy_fire_interval_aggressive) * aggression
     }
 
     /// Steer toward `target`, routing around static obstacles and
@@ -931,7 +926,7 @@ impl Brain<'_> {
                 return false;
             }
             let (off_axis, forward) = axis_offsets(self.me.position, mover.position, fire_dir);
-            forward > 0.0 && forward < max_forward && off_axis <= ENEMY_FIRE_ALIGN_PX
+            forward > 0.0 && forward < max_forward && off_axis <= tuning().enemy_fire_align_px
         })
     }
 }
@@ -969,7 +964,7 @@ fn build<'a>() -> Node<Brain<'a>> {
         // 2. Flee when badly damaged and the player is still a threat.
         // Takes priority over the ammo-based retreat below: survival first.
         sequence(vec![
-            condition(|b: &mut Brain| b.me.damage >= ENEMY_FLEE_DAMAGE && b.player_alive()),
+            condition(|b: &mut Brain| b.me.damage >= tuning().enemy_flee_damage && b.player_alive()),
             action(act_flee),
         ]),
         // 3. Low on shells: back off and hold fire until recharged - unless
@@ -990,7 +985,7 @@ fn build<'a>() -> Node<Brain<'a>> {
         ]),
         // 4. Attack when the player is alive and within attack range.
         sequence(vec![
-            condition(|b: &mut Brain| b.player_alive() && b.dist_to_player() <= ENEMY_ATTACK_RANGE),
+            condition(|b: &mut Brain| b.player_alive() && b.dist_to_player() <= tuning().enemy_attack_range),
             action(act_attack),
         ]),
         // 5. Chase when the player is alive and either within view range or
@@ -1000,7 +995,7 @@ fn build<'a>() -> Node<Brain<'a>> {
         sequence(vec![
             condition(|b: &mut Brain| {
                 b.player_alive()
-                    && (b.dist_to_player() <= ENEMY_VIEW_RANGE || b.ai.hit_alert_timer > 0.0)
+                    && (b.dist_to_player() <= tuning().enemy_view_range || b.ai.hit_alert_timer > 0.0)
             }),
             action(act_chase),
         ]),
@@ -1096,7 +1091,7 @@ fn act_retreat(b: &mut Brain) -> Status {
         b.intent.move_dir = Some(b.steer(target));
         return Status::Success;
     }
-    if b.dist_to_player() >= ENEMY_RETREAT_RANGE {
+    if b.dist_to_player() >= tuning().enemy_retreat_range() {
         b.intent.face = Some(Dir::toward(b.me.position, b.player.position));
         return Status::Success;
     }
@@ -1165,7 +1160,7 @@ fn act_attack(b: &mut Brain) -> Status {
     // in the way) is treated the same as not being aligned at all, so the
     // tank repositions instead of settling in and holding a shot it can
     // never take - see `think`'s `line_of_sight` parameter doc comment.
-    let aligned = off_axis <= ENEMY_FIRE_ALIGN_PX && in_front && b.line_of_sight;
+    let aligned = off_axis <= tuning().enemy_fire_align_px && in_front && b.line_of_sight;
 
     if aligned {
         // Line up: face the fire direction and hold position while settling.
@@ -1174,10 +1169,10 @@ fn act_attack(b: &mut Brain) -> Status {
         // Keep the committed heading in sync so leaving Attack doesn't snap.
         b.ai.commit(fire_dir);
 
-        if b.ai.aim_settle >= ENEMY_AIM_SETTLE && b.ai.fire_timer <= 0.0 {
+        if b.ai.aim_settle >= tuning().enemy_aim_settle && b.ai.fire_timer <= 0.0 {
             let blocked = b.friendly_blocks_shot(fire_dir, b.dist_to_player());
             let hold_fire =
-                blocked && b.rng.random_range(0.0..1.0) < ENEMY_FRIENDLY_FIRE_HOLD_CHANCE;
+                blocked && b.rng.random_range(0.0..1.0) < tuning().enemy_friendly_fire_hold_chance;
             // Whether it fires or holds, this firing opportunity is spent -
             // otherwise a held shot would just re-roll every frame at ~60Hz
             // and fire almost immediately anyway, defeating the hold chance.
@@ -1246,19 +1241,19 @@ impl Brain<'_> {
     /// ENEMY_MISFIRE_RANGE the enemy always fires straight.
     fn roll_misfire(&mut self) -> f32 {
         let dist = self.dist_to_player();
-        if dist >= ENEMY_MISFIRE_RANGE {
+        if dist >= tuning().enemy_misfire_range {
             return 0.0;
         }
         // Chance ramps from 0 at the range edge up to _CHANCE_MAX point-blank.
-        let closeness = 1.0 - dist / ENEMY_MISFIRE_RANGE;
-        let chance = closeness * ENEMY_MISFIRE_CHANCE_MAX;
+        let closeness = 1.0 - dist / tuning().enemy_misfire_range;
+        let chance = closeness * tuning().enemy_misfire_chance_max;
         if self.rng.random_range(0.0..1.0) >= chance {
             return 0.0;
         }
         // Misfire: deflect by a random magnitude to either side.
         let mag = self
             .rng
-            .random_range(ENEMY_MISFIRE_ANGLE_MIN..ENEMY_MISFIRE_ANGLE_MAX);
+            .random_range(tuning().enemy_misfire_angle_min..tuning().enemy_misfire_angle_max);
         if self.rng.random_range(0.0..1.0) < 0.5 {
             -mag
         } else {

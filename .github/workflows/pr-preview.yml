@@ -53,8 +53,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Build web (wasm + Astro site)
+      # Previews are the QA surface: build with the dev-tools feature so the
+      # runtime tuning panel (docs/runtime-tuning-design.md) is available at
+      # pr-<N>.preview.bongbong.io. Production (cloudflare-deploy.yml)
+      # never passes this.
+      - name: Build web (wasm + Astro site, dev-tools)
         uses: ./.github/actions/build-web
+        with:
+          cargo-features: --features dev-tools
 
       # A per-PR config rather than `--name` overrides, because the custom
       # domain can only be expressed in config (routes with custom_domain),

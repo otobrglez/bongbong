@@ -37,12 +37,20 @@ setup-web:
 # site/public/game/ (gitignored - see site/README.md), then build the Astro
 # site (site/dist/) around it. Auto-sources emsdk_env.sh from
 # ~/.local/share/emsdk if emcc is not on PATH.
-build-web:
+build-web: (_build-web "")
+
+# Same as build-web but with the `dev-tools` cargo feature: the wasm exports
+# the tuning C API (src/capi.rs) and the page's tuning panel appears under
+# the canvas (docs/runtime-tuning-design.md). This is what PR previews ship;
+# production (cloudflare-deploy.yml) uses plain build-web.
+build-web-dev: (_build-web "--features dev-tools")
+
+_build-web features:
     bash -c 'set -e; \
         command -v emcc >/dev/null 2>&1 \
             || source ~/.local/share/emsdk/emsdk_env.sh >/dev/null 2>&1 \
             || { echo "[build-web] emcc not on PATH and no emsdk at ~/.local/share/emsdk/. Run just setup-web first." >&2; exit 1; }; \
-        cargo build --release --target wasm32-unknown-emscripten'
+        cargo build --release --target wasm32-unknown-emscripten {{features}}'
     mkdir -p site/public/game
     rm -f site/public/game/*
     cp target/wasm32-unknown-emscripten/release/bongbong.wasm site/public/game/
@@ -53,4 +61,15 @@ build-web:
 
 # Build (see build-web) then preview site/dist/ at http://localhost:4321.
 serve-web: build-web
+    cd site && yarn preview --port ${PORT:=4321}
+
+# Dev-tools build (see build-web-dev) then preview it at http://localhost:4321.
+serve-web-dev: build-web-dev
+    cd site && yarn preview --port ${PORT:=4321}
+
+# Preview whatever site/dist/ currently holds, without rebuilding - so a
+# `just build-web-dev` isn't silently overwritten by serve-web's own
+# (feature-less) build-web dependency. Fails if nothing has been built yet.
+preview-web:
+    test -f site/dist/index.html || { echo "[preview-web] nothing built yet - run just build-web or just build-web-dev first" >&2; exit 1; }
     cd site && yarn preview --port ${PORT:=4321}

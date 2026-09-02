@@ -18,6 +18,7 @@
 //! for the supported-map gate, the fixture-profile assertions, and the
 //! print-only scratch-map tier).
 
+use crate::tuning::tuning;
 use std::collections::{HashSet, VecDeque};
 use std::fmt;
 
@@ -30,9 +31,14 @@ use crate::pathfind::Grid;
 use crate::simulation::Game;
 use crate::tank::Tank;
 use crate::{
-    ENEMY_COUNT_MAX, ENEMY_COUNT_MIN, ENEMY_SPAWN_MARGIN_MAX, ENEMY_SPAWN_MARGIN_MIN,
-    FROG_COLLIDER_HALF_EXTENT, OBSTACLE_CLEAR, OBSTACLE_HULL_FRACTION, OBSTACLE_SCALE,
-    OBSTACLE_TEXTURE_SIZE, PATHFIND_CELL_SIZE, Position, battlefield,
+    FROG_COLLIDER_HALF_EXTENT,
+    OBSTACLE_CLEAR,
+    OBSTACLE_HULL_FRACTION,
+    OBSTACLE_SCALE,
+    OBSTACLE_TEXTURE_SIZE,
+    PATHFIND_CELL_SIZE,
+    Position,
+    battlefield,
 };
 
 /// How far past a target point's own footprint a tank must be able to
@@ -428,8 +434,8 @@ fn check_spawn_band(
     findings: &mut Vec<LintFinding>,
 ) {
     let short_side = width.min(height);
-    let margin_min = short_side * ENEMY_SPAWN_MARGIN_MIN;
-    let margin_max = short_side * ENEMY_SPAWN_MARGIN_MAX;
+    let margin_min = short_side * tuning().enemy_spawn_margin_min;
+    let margin_max = short_side * tuning().enemy_spawn_margin_max;
     let clear = player_size * 2.0;
     let enemy_clear = player_size * 1.5;
 
@@ -463,7 +469,7 @@ fn check_spawn_band(
         .map
         .tanks
         .map(|n| (n as usize).clamp(1, 31))
-        .unwrap_or(ENEMY_COUNT_MIN);
+        .unwrap_or(tuning().enemy_count_min);
     if capacity < required {
         findings.push(LintFinding {
             severity: LintSeverity::Error,
@@ -472,12 +478,13 @@ fn check_spawn_band(
                 "only {capacity} legal enemy-spawn cell(s) in the border band for {required} tank(s) - spawning will hit the rejection-sampling attempt cap"
             ),
         });
-    } else if capacity < ENEMY_COUNT_MAX {
+    } else if capacity < tuning().enemy_count_max {
         findings.push(LintFinding {
             severity: LintSeverity::Warning,
             kind: LintKind::SpawnBandTooTight,
             message: format!(
-                "only {capacity} legal enemy-spawn cell(s) in the border band (fewer than ENEMY_COUNT_MAX = {ENEMY_COUNT_MAX}) - high tank counts will crowd or degrade to the attempt cap"
+                "only {capacity} legal enemy-spawn cell(s) in the border band (fewer than enemy_count_max = {}) - high tank counts will crowd or degrade to the attempt cap",
+                tuning().enemy_count_max
             ),
         });
     }

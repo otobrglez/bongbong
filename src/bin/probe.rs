@@ -25,6 +25,7 @@
 //! restart) to get statistical coverage of rare, spawn-dependent bugs in one
 //! command - see the "Capturing gameplay anomalies" section of CLAUDE.md.
 
+use bongbong::tuning::tuning;
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::Write as _;
@@ -37,8 +38,9 @@ use bongbong::map::MapFile;
 use bongbong::simulation::{Game, Input, Outcome, TankSnapshot};
 use bongbong::tank::Dir;
 use bongbong::{
-    DEFAULT_SCREEN_HEIGHT, DEFAULT_SCREEN_WIDTH, ENEMY_AMMO_RESUME, ENEMY_ATTACK_RANGE,
-    ENEMY_FIRE_ALIGN_PX, ENEMY_RETREAT_RANGE, PATHFIND_CELL_SIZE,
+    DEFAULT_SCREEN_HEIGHT,
+    DEFAULT_SCREEN_WIDTH,
+    PATHFIND_CELL_SIZE,
 };
 use clap::{Parser, ValueEnum};
 use rand::RngExt;
@@ -113,7 +115,7 @@ const STALE_START_EPS: f32 = 5.0; // px
 // After the stale-start window, a tank sitting near-zero speed for this many
 // consecutive frames (while the round is still Playing and it isn't a
 // wreck) is flagged as stalled out mid-round.
-const STALL_SPEED_EPS: f32 = 5.0; // px/s - top speeds are 150-220 (TANK_SPEED/ENEMY_SPEED in lib.rs)
+const STALL_SPEED_EPS: f32 = 5.0; // px/s - top speeds are 150-220 (tank_speed/enemy_speed in tuning.rs)
 const STALL_FRAMES_THRESHOLD: u32 = 180; // 3s
 // Standing still is only an anomaly when the tank has no fighting reason to
 // hold position - `act_attack` deliberately stops to aim/settle/fire, and
@@ -325,6 +327,14 @@ struct Args {
     /// too.
     #[arg(long, value_parser = bongbong::parse_seed)]
     seed: Option<u64>,
+
+    /// Load a tuning patch (JSON object of `{"knob": value}` pairs - see
+    /// docs/runtime-tuning-design.md) before the first round, so a sweep
+    /// can measure a candidate tuning set headlessly. Applied once, up
+    /// front; `(seed, tuning diff)` is the replay pair, and the diff is
+    /// echoed in the run header and each `--json-out` record.
+    #[arg(long = "tuning")]
+    tuning: Option<std::path::PathBuf>,
 
     /// Battlefield map to probe (same `-m`/`--map` semantics as the game
     /// binary, loaded and validated eagerly); defaults to the embedded
@@ -601,8 +611,8 @@ impl TankTrack {
         let dx = (player.position.x - tank.position.x).abs();
         let dy = (player.position.y - tank.position.y).abs();
         let dist = tank.position.distance_to(player.position);
-        let aligned_in_range = dx.min(dy) <= ENEMY_FIRE_ALIGN_PX && dist <= ENEMY_ATTACK_RANGE;
-        let retreat_wait = dist >= ENEMY_RETREAT_RANGE && tank.shells_ammo < ENEMY_AMMO_RESUME;
+        let aligned_in_range = dx.min(dy) <= tuning().enemy_fire_align_px && dist <= tuning().enemy_attack_range;
+        let retreat_wait = dist >= tuning().enemy_retreat_range() && tank.shells_ammo < tuning().enemy_ammo_resume;
         aligned_in_range || retreat_wait
     }
 }
@@ -808,7 +818,7 @@ fn check_anomalies(
         // path-stretch metric (see NAV_GRACE_SECONDS's comment). Recorded
         // here, judged once at round end by `run_round`.
         if track.time_to_engage.is_none()
-            && pos.distance_to(player_snap.position) <= ENEMY_ATTACK_RANGE
+            && pos.distance_to(player_snap.position) <= tuning().enemy_attack_range
         {
             track.time_to_engage = Some(frame as f32 * DT);
         }
@@ -1389,7 +1399,7 @@ fn json_escape(s: &str) -> String {
 /// Hand-emitted - the schema is flat numbers plus four short strings, not
 /// worth a serde_json dependency (same call the map format made for TOML
 /// only because serde was already there for it).
-fn json_round_line(args: &Args, round: u32, seed: u64, result: &RoundResult) -> String {
+fn json_round_line(args: &Args, round: u32, seed: u64, result: &RoundResult, tuning_diff: &str) -> String {
     let anomalies = ANOMALY_KINDS
         .iter()
         .map(|kind| format!("\"{}\":{}", kind.replace('-', "_"), result.totals.count(kind)))
@@ -1414,7 +1424,7 @@ fn json_round_line(args: &Args, round: u32, seed: u64, result: &RoundResult) -> 
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\"v\":1,\"round\":{round},\"seed\":\"0x{seed:016x}\",\"map\":\"{}\",\"scenario\":\"{}\",\"enemies\":{},\"frames_run\":{},\"outcome\":\"{}\",\"anomalies\":{{{anomalies}}},\"tanks\":[{tanks}]}}",
+        "{{\"v\":1,\"round\":{round},\"seed\":\"0x{seed:016x}\",\"tuning\":{tuning_diff},\"map\":\"{}\",\"scenario\":\"{}\",\"enemies\":{},\"frames_run\":{},\"outcome\":\"{}\",\"anomalies\":{{{anomalies}}},\"tanks\":[{tanks}]}}",
         json_escape(map_display(args)),
         scenario_str(args.scenario),
         result.tanks.len(),
@@ -1495,6 +1505,19 @@ fn main() -> ExitCode {
     // through SplitMix64, so adjacent seeds are fully decorrelated rounds).
     let base_seed: u64 = args.seed.unwrap_or_else(|| rand::rng().random());
 
+    // `--tuning`: applied once, before any round, straight into the live
+    // table (there's no frame loop to stage against yet). The diff is part
+    // of the replay recipe alongside the seed, so it's echoed in the header
+    // and in every --json-out record.
+    if let Some(path) = &args.tuning {
+        if let Err(e) = bongbong::tuning::submit_file(path) {
+            eprintln!("--tuning: {e}");
+            return ExitCode::from(2);
+        }
+        bongbong::tuning::apply_pending();
+    }
+    let tuning_diff = bongbong::tuning::diff_json();
+
     // Created (truncating) up front so a bad path fails before any rounds
     // burn time; each round's record is written as it finishes, so even an
     // interrupted sweep leaves valid JSONL behind.
@@ -1505,7 +1528,7 @@ fn main() -> ExitCode {
     });
 
     println!(
-        "probe: scenario={} enemies={} frames={} rounds={} seed=0x{base_seed:016x} map={}",
+        "probe: scenario={} enemies={} frames={} rounds={} seed=0x{base_seed:016x} map={} tuning={}",
         scenario_str(args.scenario),
         args.enemies
             .map(|n| n.to_string())
@@ -1513,6 +1536,7 @@ fn main() -> ExitCode {
         args.frames,
         args.rounds,
         map_display(&args),
+        if tuning_diff == "{}" { "default".to_string() } else { tuning_diff.clone() },
     );
 
     let mut grand_total = AnomalyTotals::default();
@@ -1526,7 +1550,7 @@ fn main() -> ExitCode {
         let seed = base_seed.wrapping_add(round as u64);
         let result = run_round(&args, round, !sweep, seed, &mut heat);
         if let Some(file) = &mut json_out {
-            writeln!(file, "{}", json_round_line(&args, round, seed, &result))
+            writeln!(file, "{}", json_round_line(&args, round, seed, &result, &tuning_diff))
                 .unwrap_or_else(|e| panic!("writing --json-out: {e}"));
         }
         let totals = result.totals;

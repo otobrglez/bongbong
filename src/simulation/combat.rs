@@ -2,6 +2,7 @@
 //! ram contact between the player and an enemy, a wreck's explosion, and
 //! the frog's evasive hop.
 
+use crate::tuning::tuning;
 use rand::RngExt;
 use rand::rngs::SmallRng;
 use sola_raylib::core::math::Vector2;
@@ -13,10 +14,11 @@ use crate::physics::Physics;
 use crate::shockwave::Shockwave;
 use crate::tank::Tank;
 use crate::{
-    EXPLOSION_DAMAGE_MAX, EXPLOSION_DAMAGE_MIN, EXPLOSION_KNOCKBACK_SPEED, EXPLOSION_RADIUS,
-    FROG_COLLIDER_HALF_EXTENT, FROG_HOP_ANGLE_FAN_DEG, FROG_HOP_ANGLE_JITTER_DEG,
-    FROG_HOP_BOUNDS_MARGIN, KNOCKBACK_MAX_SPEED, KNOCKBACK_STRENGTH, MAX_DAMAGE, OBSTACLE_CLEAR,
-    Position, RAM_DAMAGE_COOLDOWN, RAM_DAMAGE_MAX, RAM_DAMAGE_MIN,
+    FROG_COLLIDER_HALF_EXTENT,
+    FROG_HOP_ANGLE_FAN_DEG,
+    MAX_DAMAGE,
+    OBSTACLE_CLEAR,
+    Position,
 };
 
 use super::hits::ShellTarget;
@@ -162,13 +164,13 @@ pub(super) fn ram(
     if a.is_wreck() || b.is_wreck() || a.ram_cooldown > 0.0 || b.ram_cooldown > 0.0 {
         return;
     }
-    let dmg = rng.random_range(RAM_DAMAGE_MIN..RAM_DAMAGE_MAX);
+    let dmg = rng.random_range(tuning().ram_damage_min..tuning().ram_damage_max);
     a.damage = (a.damage + dmg).min(MAX_DAMAGE);
     b.damage = (b.damage + dmg).min(MAX_DAMAGE);
     a.mark_hit();
     b.mark_hit();
-    a.ram_cooldown = RAM_DAMAGE_COOLDOWN;
-    b.ram_cooldown = RAM_DAMAGE_COOLDOWN;
+    a.ram_cooldown = tuning().ram_damage_cooldown;
+    b.ram_cooldown = tuning().ram_damage_cooldown;
     if a.is_wreck() {
         kills.push((a.position, a_is_enemy));
     }
@@ -186,15 +188,15 @@ pub(super) fn ram(
     let rel_x = a.velocity.x - b.velocity.x;
     let rel_y = a.velocity.y - b.velocity.y;
     let impact_speed = (rel_x * rel_x + rel_y * rel_y).sqrt();
-    let push = (impact_speed * KNOCKBACK_STRENGTH).min(KNOCKBACK_MAX_SPEED);
+    let push = (impact_speed * tuning().knockback_strength).min(tuning().knockback_max_speed);
     let total_mass = a.mass() + b.mass();
     // A tank this very hit just killed stays put, like any wreck.
     if !a.is_wreck() {
-        let a_push = (push * 2.0 * b.mass() / total_mass).min(KNOCKBACK_MAX_SPEED);
+        let a_push = (push * 2.0 * b.mass() / total_mass).min(tuning().knockback_max_speed);
         knockback(a, physics, axis, a_push);
     }
     if !b.is_wreck() {
-        let b_push = (push * 2.0 * a.mass() / total_mass).min(KNOCKBACK_MAX_SPEED);
+        let b_push = (push * 2.0 * a.mass() / total_mass).min(tuning().knockback_max_speed);
         knockback(b, physics, Vector2::new(-axis.x, -axis.y), b_push);
     }
 }
@@ -218,13 +220,13 @@ fn explosion_hit(
     let dx = tank.position.x - center.x;
     let dy = tank.position.y - center.y;
     let dist = (dx * dx + dy * dy).sqrt();
-    if dist > EXPLOSION_RADIUS {
+    if dist > tuning().explosion_radius {
         return;
     }
-    let falloff = 1.0 - dist / EXPLOSION_RADIUS;
+    let falloff = 1.0 - dist / tuning().explosion_radius;
 
     if damage {
-        let dmg = rng.random_range(EXPLOSION_DAMAGE_MIN..EXPLOSION_DAMAGE_MAX) * falloff;
+        let dmg = rng.random_range(tuning().explosion_damage_min..tuning().explosion_damage_max) * falloff;
         tank.damage = (tank.damage + dmg).min(MAX_DAMAGE);
         tank.mark_hit();
         if tank.is_wreck() {
@@ -236,7 +238,7 @@ fn explosion_hit(
     // The push is tuned against the chassis-free baseline mass (scale
     // squared), so a heavy chassis resists it and a light one flies.
     let reference_mass = tank.scale * tank.scale;
-    let push = (EXPLOSION_KNOCKBACK_SPEED * falloff * reference_mass / tank.mass()).min(KNOCKBACK_MAX_SPEED);
+    let push = (tuning().explosion_knockback_speed * falloff * reference_mass / tank.mass()).min(tuning().knockback_max_speed);
     let axis = if dist > 0.001 {
         Vector2::new(dx / dist, dy / dist)
     } else {
@@ -254,11 +256,11 @@ fn explosion_hit_obstacle(obstacle: &mut Obstacle, center: Position, rng: &mut S
         return;
     }
     let dist = obstacle.position.distance_to(center);
-    if dist > EXPLOSION_RADIUS {
+    if dist > tuning().explosion_radius {
         return;
     }
-    let falloff = 1.0 - dist / EXPLOSION_RADIUS;
-    obstacle.damage(rng.random_range(EXPLOSION_DAMAGE_MIN..EXPLOSION_DAMAGE_MAX) * falloff);
+    let falloff = 1.0 - dist / tuning().explosion_radius;
+    obstacle.damage(rng.random_range(tuning().explosion_damage_min..tuning().explosion_damage_max) * falloff);
 }
 
 /// A landing spot for the frog's evasive hop, roughly `distance` px away
@@ -278,7 +280,7 @@ pub(super) fn frog_hop_target(
 ) -> Option<Position> {
     let clear = FROG_COLLIDER_HALF_EXTENT.0.max(FROG_COLLIDER_HALF_EXTENT.1) + OBSTACLE_CLEAR;
     let jitter = rng
-        .random_range(-FROG_HOP_ANGLE_JITTER_DEG..FROG_HOP_ANGLE_JITTER_DEG)
+        .random_range(-tuning().frog_hop_angle_jitter_deg..tuning().frog_hop_angle_jitter_deg)
         .to_radians();
     let base_angle = away_dir.y.atan2(away_dir.x) + jitter;
     for offset_deg in FROG_HOP_ANGLE_FAN_DEG {
@@ -287,10 +289,10 @@ pub(super) fn frog_hop_target(
             frog_pos.x + angle.cos() * distance,
             frog_pos.y + angle.sin() * distance,
         );
-        let in_bounds = candidate.x >= FROG_HOP_BOUNDS_MARGIN
-            && candidate.x <= width - FROG_HOP_BOUNDS_MARGIN
-            && candidate.y >= FROG_HOP_BOUNDS_MARGIN
-            && candidate.y <= height - FROG_HOP_BOUNDS_MARGIN;
+        let in_bounds = candidate.x >= tuning().frog_hop_bounds_margin
+            && candidate.x <= width - tuning().frog_hop_bounds_margin
+            && candidate.y >= tuning().frog_hop_bounds_margin
+            && candidate.y <= height - tuning().frog_hop_bounds_margin;
         let clear_of_obstacles = obstacle_positions.iter().all(|&p| candidate.distance_to(p) >= clear);
         if in_bounds && clear_of_obstacles {
             return Some(candidate);
@@ -335,9 +337,9 @@ mod ram_tests {
         let mut rng = SmallRng::seed_from_u64(1);
         let mut kills = Vec::new();
         ram(&mut a, true, &mut b, false, &mut physics, &mut rng, &mut kills);
-        assert!(a.damage >= RAM_DAMAGE_MIN && a.damage < RAM_DAMAGE_MAX);
+        assert!(a.damage >= tuning().ram_damage_min && a.damage < tuning().ram_damage_max);
         assert_eq!(a.damage, b.damage);
-        assert_eq!(a.ram_cooldown, RAM_DAMAGE_COOLDOWN);
+        assert_eq!(a.ram_cooldown, tuning().ram_damage_cooldown);
         let before = b.damage;
         ram(&mut a, true, &mut b, false, &mut physics, &mut rng, &mut kills);
         assert_eq!(b.damage, before, "second contact inside the cooldown must not re-damage");

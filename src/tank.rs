@@ -1,3 +1,4 @@
+use crate::tuning::tuning;
 use rapier2d::prelude::RigidBodyHandle;
 use sola_raylib::prelude::*;
 
@@ -5,17 +6,24 @@ use crate::laser::LaserVariant;
 use crate::plasma::PlasmaVariant;
 use crate::shell::Owner;
 use crate::{
-    DAMAGE_SPEED_CURVE, DAMAGE_SPEED_FLOOR, MAX_DAMAGE, MAX_SHELLS, MINIGUN_MOUNT_SCALE,
-    MINIGUN_CYCLE_SECONDS, MINIGUN_MOUNT_TEXTURE_SIZE, Position, SPEED_BOOST_MULTIPLIER,
-    SHADOW_DIR_X, SHADOW_DIR_Y, TANK_BROKEN_TURRET_COL, TANK_CHASSIS_MASS_FACTOR_BY_ROW,
-    TANK_HULL_BBOX_BY_ROW, TANK_HULL_DISABLED_COL, TANK_HULL_DISABLED_DAMAGE, TANK_HULL_FRACTION,
+    MAX_DAMAGE,
+    MINIGUN_MOUNT_SCALE,
+    MINIGUN_MOUNT_TEXTURE_SIZE,
+    Position,
+    TANK_BROKEN_TURRET_COL,
+    TANK_HULL_BBOX_BY_ROW,
+    TANK_HULL_DISABLED_COL,
+    TANK_HULL_DISABLED_DAMAGE,
+    TANK_HULL_FRACTION,
     TANK_HULL_LIGHT_COL,
-    TANK_HULL_LIGHT_DAMAGE, TANK_HULL_TRACK_COLS, TANK_MOVE_BBOX_FRACTION,
-    TANK_PIVOT_REAR_FRACTION, TANK_SHADOW_OFFSET,
-    TANK_SHADOW_OPACITY,
-    TANK_SPEED, TANK_TEXTURE_SIZE, TANK_TURRET_BBOX_BY_ROW, TANK_TURRET_COL,
-    TANK_TURRET_VISUAL_TURN_SPEED_DEG,
-    TANK_VISUAL_TURN_SPEED_DEG, TANK_WRECK_COLS, WRECK_BURN_SECONDS,
+    TANK_HULL_LIGHT_DAMAGE,
+    TANK_HULL_TRACK_COLS,
+    TANK_MOVE_BBOX_FRACTION,
+    TANK_PIVOT_REAR_FRACTION,
+    TANK_TEXTURE_SIZE,
+    TANK_TURRET_BBOX_BY_ROW,
+    TANK_TURRET_COL,
+    TANK_WRECK_COLS,
 };
 
 /// The four movement/facing directions. rotation 0 == up, clockwise positive,
@@ -219,8 +227,13 @@ pub struct Tank {
     pub wreck_col: Option<i32>,
     /// How much to scale the 32x32 sprite when drawn.
     pub scale: f32,
-    /// Movement speed in pixels per second (player and enemies differ).
-    pub speed: f32,
+    /// Per-tank multiplier on the live base speed (`tuning().tank_speed`
+    /// for the player, `tuning().enemy_speed` for an enemy - see
+    /// `base_speed`): 1.0 for the player, an enemy's spawn-rolled
+    /// `enemy_speed_variance` factor. Stored as a factor rather than an
+    /// absolute px/s so dragging the speed knob mid-round moves every tank
+    /// on the field, not just the next one to spawn.
+    pub speed_scale: f32,
     /// Accumulated damage, 0 (pristine) .. MAX_DAMAGE (destroyed wreck).
     pub damage: f32,
     /// Remaining shells this tank can fire before it must recharge.
@@ -352,9 +365,9 @@ impl Default for Tank {
             hull_anim_accum: 0.0,
             wreck_col: None,
             scale: 2.0, // 3.0,
-            speed: TANK_SPEED,
+            speed_scale: 1.0,
             damage: 0.0,
-            shells_ammo: MAX_SHELLS,
+            shells_ammo: tuning().max_shells,
             laser_charges: 0,
             laser_variant: LaserVariant::Red,
             minigun_ammo: 0,
@@ -411,20 +424,28 @@ impl Tank {
     /// damaged tank is sluggish to speed up too, not just capped lower.
     pub fn speed_factor(&self) -> f32 {
         let hurt = (self.damage / MAX_DAMAGE).clamp(0.0, 1.0);
-        DAMAGE_SPEED_FLOOR + (1.0 - DAMAGE_SPEED_FLOOR) * (1.0 - hurt.powf(DAMAGE_SPEED_CURVE))
+        tuning().damage_speed_floor + (1.0 - tuning().damage_speed_floor) * (1.0 - hurt.powf(tuning().damage_speed_curve))
     }
 
     /// This tank's current top speed, reduced as it takes damage (see
     /// `speed_factor`) and boosted by SPEED_BOOST_MULTIPLIER while
     /// `speed_boost_timer` is positive (see `pickup::PickupKind::SpeedUp`).
     pub fn effective_speed(&self) -> f32 {
-        let boost = if self.speed_boost_timer > 0.0 { SPEED_BOOST_MULTIPLIER } else { 1.0 };
-        self.speed * self.speed_factor() * boost
+        let boost = if self.speed_boost_timer > 0.0 { tuning().speed_boost_multiplier } else { 1.0 };
+        self.base_speed() * self.speed_factor() * boost
+    }
+
+    /// This tank's undamaged, unboosted top speed (px/s): the live
+    /// player/enemy base knob times `speed_scale`.
+    pub fn base_speed(&self) -> f32 {
+        let t = tuning();
+        let base = if self.owner_slot == 0 { t.tank_speed } else { t.enemy_speed };
+        base * self.speed_scale
     }
 
     /// True once a wreck has finished burning and settled into a dead hulk.
     pub fn is_dead(&self) -> bool {
-        self.is_wreck() && self.wreck_timer >= WRECK_BURN_SECONDS
+        self.is_wreck() && self.wreck_timer >= tuning().wreck_burn_seconds
     }
 
     /// Which atlas column to draw this tank's hull from - a four-tier
@@ -518,7 +539,7 @@ impl Tank {
     pub fn tick_minigun_spin(&mut self, dt: f32) {
         if self.minigun_burst.is_some() {
             self.minigun_cycle_timer =
-                (self.minigun_cycle_timer + dt) % (MINIGUN_CYCLE_SECONDS * 3.0);
+                (self.minigun_cycle_timer + dt) % (tuning().minigun_cycle_seconds * 3.0);
         }
     }
 
@@ -526,7 +547,7 @@ impl Tank {
     /// now - see `minigun_cycle_timer`'s doc comment for why this is a
     /// discrete frame index, not a rotation angle.
     fn minigun_cycle_frame(&self) -> i32 {
-        ((self.minigun_cycle_timer / MINIGUN_CYCLE_SECONDS) as i32).clamp(0, 2)
+        ((self.minigun_cycle_timer / tuning().minigun_cycle_seconds) as i32).clamp(0, 2)
     }
 
     /// Small phase offset (seconds) derived from screen position so that several
@@ -663,19 +684,19 @@ impl Tank {
     /// two `super_*` chassis are heavier (sluggish, more drift, shove lighter
     /// tanks further than they get shoved back).
     pub fn mass(&self) -> f32 {
-        self.scale * self.scale * TANK_CHASSIS_MASS_FACTOR_BY_ROW[self.row as usize]
+        self.scale * self.scale * tuning().tank_mass_factor[self.row as usize]
     }
 
     /// Recharge ammo over time toward MAX_SHELLS, one shell per interval.
     pub fn tick_recharge(&mut self, dt: f32) {
-        if self.shells_ammo >= MAX_SHELLS {
+        if self.shells_ammo >= tuning().max_shells {
             self.recharge_timer = 0.0;
             return;
         }
         self.recharge_timer += dt;
-        while self.recharge_timer >= crate::SHELL_RECHARGE_SECONDS && self.shells_ammo < MAX_SHELLS
+        while self.recharge_timer >= tuning().shell_recharge_seconds && self.shells_ammo < tuning().max_shells
         {
-            self.recharge_timer -= crate::SHELL_RECHARGE_SECONDS;
+            self.recharge_timer -= tuning().shell_recharge_seconds;
             self.shells_ammo += 1;
         }
     }
@@ -685,7 +706,7 @@ impl Tank {
     pub fn tick_wreck(&mut self, dt: f32) {
         if self.is_wreck() {
             // Cap the timer so it doesn't grow unbounded once the fire is out.
-            self.wreck_timer = (self.wreck_timer + dt).min(WRECK_BURN_SECONDS);
+            self.wreck_timer = (self.wreck_timer + dt).min(tuning().wreck_burn_seconds);
         }
     }
 
@@ -693,7 +714,7 @@ impl Tank {
     /// damage (shell, ram, or explosion splash) so its overhead health bar
     /// shows/refreshes for another HEALTH_BAR_OVERHEAD_SECONDS.
     pub fn mark_hit(&mut self) {
-        self.hit_flash_timer = crate::HEALTH_BAR_OVERHEAD_SECONDS;
+        self.hit_flash_timer = tuning().health_bar_overhead_seconds;
     }
 
     /// Decide this tank's rotation and commanded velocity for one frame.
@@ -731,7 +752,7 @@ impl Tank {
         } else if diff < -180.0 {
             diff += 360.0;
         }
-        let max_step = TANK_VISUAL_TURN_SPEED_DEG * dt;
+        let max_step = tuning().tank_visual_turn_speed_deg * dt;
         self.visual_rotation = (self.visual_rotation + diff.clamp(-max_step, max_step)) % 360.0;
     }
 
@@ -748,7 +769,7 @@ impl Tank {
         } else if diff < -180.0 {
             diff += 360.0;
         }
-        let max_step = TANK_TURRET_VISUAL_TURN_SPEED_DEG * dt;
+        let max_step = tuning().tank_turret_visual_turn_speed_deg * dt;
         self.turret_visual_rotation =
             (self.turret_visual_rotation + diff.clamp(-max_step, max_step)) % 360.0;
     }
@@ -825,13 +846,13 @@ pub fn draw_tank_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tan
     let size = tank.size();
 
     let dest = Rectangle::new(
-        tank.position.x + SHADOW_DIR_X * TANK_SHADOW_OFFSET,
-        tank.position.y + SHADOW_DIR_Y * TANK_SHADOW_OFFSET,
+        tank.position.x + tuning().shadow_dir_x * tuning().tank_shadow_offset,
+        tank.position.y + tuning().shadow_dir_y * tuning().tank_shadow_offset,
         size,
         size,
     );
     let origin = draw_pivot(size);
-    let shadow = Color::new(0, 0, 0, (255.0 * TANK_SHADOW_OPACITY) as u8);
+    let shadow = Color::new(0, 0, 0, (255.0 * tuning().tank_shadow_opacity) as u8);
 
     d.draw_texture_pro(texture, hull_src, dest, origin, tank.visual_rotation, shadow);
     d.draw_texture_pro(
@@ -918,13 +939,13 @@ pub fn draw_minigun_mount_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, t
     );
     let size = MINIGUN_MOUNT_TEXTURE_SIZE * tank.scale * MINIGUN_MOUNT_SCALE;
     let dest = Rectangle::new(
-        tank.position.x + SHADOW_DIR_X * TANK_SHADOW_OFFSET,
-        tank.position.y + SHADOW_DIR_Y * TANK_SHADOW_OFFSET,
+        tank.position.x + tuning().shadow_dir_x * tuning().tank_shadow_offset,
+        tank.position.y + tuning().shadow_dir_y * tuning().tank_shadow_offset,
         size,
         size,
     );
     let origin = draw_pivot(size);
-    let shadow = Color::new(0, 0, 0, (255.0 * TANK_SHADOW_OPACITY) as u8);
+    let shadow = Color::new(0, 0, 0, (255.0 * tuning().tank_shadow_opacity) as u8);
     d.draw_texture_pro(texture, src, dest, origin, tank.turret_visual_rotation, shadow);
 }
 

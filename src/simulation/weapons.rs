@@ -4,6 +4,7 @@
 //! player and every enemy share, and the `Projectile` view of the three
 //! projectile types that lets one hit-resolution loop serve them all.
 
+use crate::tuning::tuning;
 use rand::RngExt;
 use sola_raylib::core::math::Vector2;
 
@@ -16,17 +17,7 @@ use crate::shell::{Owner, Shell, ShellState};
 use crate::shockwave::Shockwave;
 use crate::tank::{ActiveWeapon, MinigunBurst, PendingPlasmaShot, PendingShot, Tank};
 use crate::{
-    ENEMY_DAMAGE_MAX, ENEMY_DAMAGE_MIN, LASER_DAMAGE_MAX, LASER_DAMAGE_MIN,
-    MINIGUN_BULLET_DAMAGE_MAX, MINIGUN_BULLET_DAMAGE_MIN, MINIGUN_BULLET_DELAY_SECONDS,
-    MINIGUN_BULLET_HIT_HALF_EXTENT, MINIGUN_BULLET_RECOIL_MAX_SPEED, MINIGUN_BULLET_RECOIL_SPEED,
-    MINIGUN_BULLET_SHADOW_OFFSET_MAX, MINIGUN_BULLET_SHADOW_OFFSET_MIN, MINIGUN_BULLET_SPREAD_DEG,
-    MINIGUN_BURST_COOLDOWN_SECONDS, MINIGUN_BURST_SIZE, PLASMA_DAMAGE_FACTOR,
-    PLASMA_HIT_HALF_EXTENT, PLASMA_IMPACT_KNOCKBACK_SPEED, PLASMA_RECOIL_MAX_SPEED,
-    PLASMA_RECOIL_SPEED, PLASMA_SHADOW_OFFSET_MAX, PLASMA_SHADOW_OFFSET_MIN, PLAYER_DAMAGE_MAX,
-    PLAYER_DAMAGE_MIN, PLAYER_FIRE_INTERVAL, Position, SHELL_HIT_HALF_EXTENT,
-    SHELL_IMPACT_KNOCKBACK_SPEED, SHELL_RECOIL_MAX_SPEED, SHELL_RECOIL_SPEED,
-    SHELL_SHADOW_OFFSET_MAX, SHELL_SHADOW_OFFSET_MIN, TANK_BARREL_LATERAL_OFFSET_BY_ROW,
-    TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW, TANK_MUZZLE_FORWARD_OFFSET_BY_ROW, TANK_TWIN_SHOT_DELAY_SECONDS,
+    Position,
 };
 
 use super::hits::{obstacle_reflect_axis, TerrainBox};
@@ -39,7 +30,9 @@ const LASER_MAX_RANGE: f32 = 4000.0;
 
 /// Half-width of a laser beam's hit segment - a shell's, so a beam lands on
 /// the same boxes a shell would.
-pub(super) const LASER_BEAM_HALF_WIDTH: f32 = SHELL_HIT_HALF_EXTENT;
+pub(super) fn laser_beam_half_width() -> f32 {
+    tuning().shell_hit_half_extent
+}
 
 /// A laser shot queued during the tank loops and resolved once they are
 /// done (no other mutable tank query may run while they iterate).
@@ -56,8 +49,8 @@ pub(super) struct PendingLaserShot {
 /// Damage range of one laser shot: LASER_DAMAGE_MIN..MAX scaled by the
 /// shooter's chassis class and the beam variant.
 pub(super) fn laser_damage_range(shot: &PendingLaserShot) -> (f32, f32) {
-    let factor = TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW[shot.shooter_row as usize] * shot.variant.damage_factor();
-    (LASER_DAMAGE_MIN * factor, LASER_DAMAGE_MAX * factor)
+    let factor = tuning().tank_damage_factor[shot.shooter_row as usize] * shot.variant.damage_factor();
+    (tuning().laser_damage_min * factor, tuning().laser_damage_max * factor)
 }
 
 /// Build a laser shot from `tank`'s muzzle along its facing. `aim_offset`
@@ -66,7 +59,7 @@ pub(super) fn laser_damage_range(shot: &PendingLaserShot) -> (f32, f32) {
 fn laser_shot(tank: &Tank, owner: Owner, aim_offset: f32, variant: LaserVariant) -> PendingLaserShot {
     let rot = (tank.rotation + aim_offset).to_radians();
     let dir = Vector2::new(rot.sin(), -rot.cos());
-    let muzzle = TANK_MUZZLE_FORWARD_OFFSET_BY_ROW[tank.row as usize] * tank.scale;
+    let muzzle = tuning().tank_muzzle_forward_offset[tank.row as usize] * tank.scale;
     let start = Position::new(tank.position.x + dir.x * muzzle, tank.position.y + dir.y * muzzle);
     let end = Position::new(start.x + dir.x * LASER_MAX_RANGE, start.y + dir.y * LASER_MAX_RANGE);
     PendingLaserShot {
@@ -99,18 +92,18 @@ fn apply_recoil(physics: &mut Physics, tank: &Tank, velocity: Vector2, speed: f3
 /// single-barrel shot, +/- the barrel offset for one half of a twin volley.
 fn fire_shell(physics: &mut Physics, f: &mut Frame, tank: &Tank, owner: Owner, aim_offset: f32, lateral_offset: f32) {
     let mut shell = Shell::spawn(tank, owner, aim_offset, lateral_offset);
-    shell.shadow_offset = f.rng.random_range(SHELL_SHADOW_OFFSET_MIN..SHELL_SHADOW_OFFSET_MAX);
+    shell.shadow_offset = f.rng.random_range(tuning().shell_shadow_offset_min..tuning().shell_shadow_offset_max);
     f.muzzle_flashes.push(Shockwave { center: shell.position, time: 0.0 });
-    apply_recoil(physics, tank, shell.velocity, SHELL_RECOIL_SPEED, SHELL_RECOIL_MAX_SPEED);
+    apply_recoil(physics, tank, shell.velocity, tuning().shell_recoil_speed, tuning().shell_recoil_max_speed);
     f.pending_shells.push(shell);
 }
 
 /// The plasma analogue of `fire_shell`, at PLASMA_* tuning.
 fn fire_plasma(physics: &mut Physics, f: &mut Frame, tank: &Tank, owner: Owner, aim_offset: f32, lateral_offset: f32) {
     let mut plasma = Plasma::spawn(tank, owner, tank.plasma_variant, aim_offset, lateral_offset);
-    plasma.shadow_offset = f.rng.random_range(PLASMA_SHADOW_OFFSET_MIN..PLASMA_SHADOW_OFFSET_MAX);
+    plasma.shadow_offset = f.rng.random_range(tuning().plasma_shadow_offset_min..tuning().plasma_shadow_offset_max);
     f.muzzle_flashes.push(Shockwave { center: plasma.position, time: 0.0 });
-    apply_recoil(physics, tank, plasma.velocity, PLASMA_RECOIL_SPEED, PLASMA_RECOIL_MAX_SPEED);
+    apply_recoil(physics, tank, plasma.velocity, tuning().plasma_recoil_speed, tuning().plasma_recoil_max_speed);
     f.pending_plasmas.push(plasma);
 }
 
@@ -120,10 +113,10 @@ fn fire_plasma(physics: &mut Physics, f: &mut Frame, tank: &Tank, owner: Owner, 
 /// pushes one for the burst's first bullet; recoil is per bullet at the
 /// minigun's much smaller kick. Returns the bullet's spawn position.
 fn fire_bullet(physics: &mut Physics, f: &mut Frame, tank: &Tank, owner: Owner, aim_offset: f32) -> Position {
-    let spread = f.rng.random_range(-MINIGUN_BULLET_SPREAD_DEG..MINIGUN_BULLET_SPREAD_DEG);
+    let spread = f.rng.random_range(-tuning().minigun_bullet_spread_deg..tuning().minigun_bullet_spread_deg);
     let mut bullet = Bullet::spawn(tank, owner, aim_offset + spread);
-    bullet.shadow_offset = f.rng.random_range(MINIGUN_BULLET_SHADOW_OFFSET_MIN..MINIGUN_BULLET_SHADOW_OFFSET_MAX);
-    apply_recoil(physics, tank, bullet.velocity, MINIGUN_BULLET_RECOIL_SPEED, MINIGUN_BULLET_RECOIL_MAX_SPEED);
+    bullet.shadow_offset = f.rng.random_range(tuning().minigun_bullet_shadow_offset_min..tuning().minigun_bullet_shadow_offset_max);
+    apply_recoil(physics, tank, bullet.velocity, tuning().minigun_bullet_recoil_speed, tuning().minigun_bullet_recoil_max_speed);
     let position = bullet.position;
     f.pending_bullets.push(bullet);
     position
@@ -176,7 +169,7 @@ pub(super) fn tick_queued_shots(physics: &mut Physics, f: &mut Frame, tank: &mut
                 tank.minigun_burst = if burst.bullets_remaining == 0 {
                     None
                 } else {
-                    burst.timer = MINIGUN_BULLET_DELAY_SECONDS;
+                    burst.timer = tuning().minigun_bullet_delay_seconds;
                     Some(burst)
                 };
             }
@@ -195,12 +188,12 @@ pub(super) fn tick_queued_shots(physics: &mut Physics, f: &mut Frame, tank: &mut
 /// the right one TANK_TWIN_SHOT_DELAY_SECONDS later, costing 2 ammo. A
 /// weapon short of the ammo it needs simply does nothing.
 pub(super) fn dispatch_fire(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, owner: Owner, aim_offset: f32) {
-    let lateral = TANK_BARREL_LATERAL_OFFSET_BY_ROW[tank.row as usize];
+    let lateral = tuning().tank_barrel_lateral_offset[tank.row as usize];
     let ammo_cost = if lateral > 0.0 { 2 } else { 1 };
     match tank.active_weapon() {
         ActiveWeapon::Laser => {
             tank.laser_charges -= 1;
-            tank.fire_cooldown = PLAYER_FIRE_INTERVAL;
+            tank.fire_cooldown = tuning().player_fire_interval;
             f.pending_lasers.push(laser_shot(tank, owner, aim_offset, tank.laser_variant));
         }
         ActiveWeapon::Minigun => {
@@ -208,24 +201,24 @@ pub(super) fn dispatch_fire(physics: &mut Physics, f: &mut Frame, tank: &mut Tan
                 tank.minigun_ammo -= 1;
                 let muzzle = fire_bullet(physics, f, tank, owner, aim_offset);
                 f.muzzle_flashes.push(Shockwave { center: muzzle, time: 0.0 });
-                if MINIGUN_BURST_SIZE > 1 {
+                if tuning().minigun_burst_size > 1 {
                     tank.minigun_burst = Some(MinigunBurst {
-                        bullets_remaining: MINIGUN_BURST_SIZE - 1,
-                        timer: MINIGUN_BULLET_DELAY_SECONDS,
+                        bullets_remaining: tuning().minigun_burst_size - 1,
+                        timer: tuning().minigun_bullet_delay_seconds,
                         aim_offset,
                     });
                 }
-                tank.fire_cooldown = MINIGUN_BURST_COOLDOWN_SECONDS;
+                tank.fire_cooldown = tuning().minigun_burst_cooldown_seconds();
             }
         }
         ActiveWeapon::Plasma => {
             if tank.plasma_ammo >= ammo_cost {
                 tank.plasma_ammo -= ammo_cost;
-                tank.fire_cooldown = PLAYER_FIRE_INTERVAL;
+                tank.fire_cooldown = tuning().player_fire_interval;
                 fire_plasma(physics, f, tank, owner, aim_offset, -lateral);
                 if lateral > 0.0 {
                     tank.pending_plasma_shot = Some(PendingPlasmaShot {
-                        timer: TANK_TWIN_SHOT_DELAY_SECONDS,
+                        timer: tuning().tank_twin_shot_delay_seconds,
                         aim_offset,
                         lateral_offset: lateral,
                     });
@@ -235,11 +228,11 @@ pub(super) fn dispatch_fire(physics: &mut Physics, f: &mut Frame, tank: &mut Tan
         ActiveWeapon::Shell => {
             if tank.shells_ammo >= ammo_cost {
                 tank.shells_ammo -= ammo_cost;
-                tank.fire_cooldown = PLAYER_FIRE_INTERVAL;
+                tank.fire_cooldown = tuning().player_fire_interval;
                 fire_shell(physics, f, tank, owner, aim_offset, -lateral);
                 if lateral > 0.0 {
                     tank.pending_shot = Some(PendingShot {
-                        timer: TANK_TWIN_SHOT_DELAY_SECONDS,
+                        timer: tuning().tank_twin_shot_delay_seconds,
                         aim_offset,
                         lateral_offset: lateral,
                     });
@@ -278,10 +271,10 @@ pub(super) trait Projectile: hecs::Component {
 
 fn side_damage(owner: Owner, shooter_row: i32) -> (f32, f32) {
     let (min, max) = match owner {
-        Owner::Player => (PLAYER_DAMAGE_MIN, PLAYER_DAMAGE_MAX),
-        Owner::Enemy(_) => (ENEMY_DAMAGE_MIN, ENEMY_DAMAGE_MAX),
+        Owner::Player => (tuning().player_damage_min, tuning().player_damage_max),
+        Owner::Enemy(_) => (tuning().enemy_damage_min, tuning().enemy_damage_max),
     };
-    let factor = TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW[shooter_row as usize];
+    let factor = tuning().tank_damage_factor[shooter_row as usize];
     (min * factor, max * factor)
 }
 
@@ -296,9 +289,9 @@ impl Projectile for Shell {
     fn owner(&self) -> Owner { self.owner }
     fn advance(&mut self, dt: f32) { self.update(dt); }
     fn detonate(&mut self) { Shell::detonate(self); }
-    fn hit_half_extent() -> f32 { SHELL_HIT_HALF_EXTENT }
+    fn hit_half_extent() -> f32 { tuning().shell_hit_half_extent }
     fn damage_range(&self) -> (f32, f32) { side_damage(self.owner, self.shooter_row) }
-    fn knockback_speed() -> Option<f32> { Some(SHELL_IMPACT_KNOCKBACK_SPEED) }
+    fn knockback_speed() -> Option<f32> { Some(tuning().shell_impact_knockback_speed) }
     fn frog_hops() -> bool { true }
 
     /// Shells ricochet off indestructible Iron while `bounces_left` lasts:
@@ -333,11 +326,11 @@ impl Projectile for Bullet {
     fn owner(&self) -> Owner { self.owner }
     fn advance(&mut self, dt: f32) { self.update(dt); }
     fn detonate(&mut self) { Bullet::detonate(self); }
-    fn hit_half_extent() -> f32 { MINIGUN_BULLET_HIT_HALF_EXTENT }
+    fn hit_half_extent() -> f32 { tuning().minigun_bullet_hit_half_extent }
     /// One shared range for player and enemy, chassis-scaled only.
     fn damage_range(&self) -> (f32, f32) {
-        let factor = TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW[self.shooter_row as usize];
-        (MINIGUN_BULLET_DAMAGE_MIN * factor, MINIGUN_BULLET_DAMAGE_MAX * factor)
+        let factor = tuning().tank_damage_factor[self.shooter_row as usize];
+        (tuning().minigun_bullet_damage_min * factor, tuning().minigun_bullet_damage_max * factor)
     }
     /// No per-bullet shove: a burst of them would read as juddering.
     fn knockback_speed() -> Option<f32> { None }
@@ -357,12 +350,12 @@ impl Projectile for Plasma {
     fn owner(&self) -> Owner { self.owner }
     fn advance(&mut self, dt: f32) { self.update(dt); }
     fn detonate(&mut self) { Plasma::detonate(self); }
-    fn hit_half_extent() -> f32 { PLASMA_HIT_HALF_EXTENT }
+    fn hit_half_extent() -> f32 { tuning().plasma_hit_half_extent }
     fn damage_range(&self) -> (f32, f32) {
         let (min, max) = side_damage(self.owner, self.shooter_row);
-        let factor = PLASMA_DAMAGE_FACTOR * self.variant.damage_factor();
+        let factor = tuning().plasma_damage_factor * self.variant.damage_factor();
         (min * factor, max * factor)
     }
-    fn knockback_speed() -> Option<f32> { Some(PLASMA_IMPACT_KNOCKBACK_SPEED) }
+    fn knockback_speed() -> Option<f32> { Some(tuning().plasma_impact_knockback_speed) }
     fn frog_hops() -> bool { true }
 }

@@ -24,6 +24,7 @@ mod engage;
 mod hits;
 mod weapons;
 
+use crate::tuning::tuning;
 use std::collections::{HashMap, HashSet};
 
 use hecs::Entity;
@@ -47,29 +48,27 @@ use crate::shockwave::Shockwave;
 use crate::tank::{ActiveWeapon, Tank};
 use crate::track::Track;
 use crate::{
-    DAMAGE_VARIANTS, ENEMY_ALERT_HOLD_SECONDS, ENEMY_COUNT_MAX, ENEMY_COUNT_MIN, ENEMY_FLEE_DAMAGE,
-    ENEMY_SPAWN_MARGIN_MAX, ENEMY_SPAWN_MARGIN_MIN, ENEMY_SPECIAL_WEAPON_CHANCE,
-    ENEMY_SPECIAL_WEAPON_LASER_SHARE, ENEMY_SPECIAL_WEAPON_PLASMA_SHARE, ENEMY_SPEED,
-    ENEMY_SPEED_VARIANCE, ENEMY_VIEW_RANGE, FROG_ATTACK_DAMAGE_MAX, FROG_ATTACK_DAMAGE_MIN,
-    FROG_COLLIDER_HALF_EXTENT, FROG_MAX_HEALTH, FROG_SPAWN_MAX_DIST, FROG_SPAWN_MIN_DIST,
-    IMPACT_FLASH_DURATION, LASER_BLUE_PICKUP_CHANCE, LASER_CHARGES_PER_PICKUP, MAX_DAMAGE,
-    MINIGUN_AMMO_PER_PICKUP, MUZZLE_FLASH_DURATION, OBSTACLE_CLEAR, OBSTACLE_HULL_FRACTION,
-    OBSTACLE_SCALE, OBSTACLE_TEXTURE_SIZE, PATHFIND_CELL_SIZE, PHYSICS_FIXED_DT,
-    PHYSICS_MAX_CATCHUP_SECONDS, PICKUP_AMMO_AMOUNT, PICKUP_COLLECT_RADIUS, PICKUP_HEAL_AMOUNT,
-    PICKUP_RESPAWN_SECONDS, PLASMA_AMMO_PER_PICKUP, PLASMA_PURPLE_PICKUP_CHANCE, Position,
-    RESTART_DELAY, SHELL_HIT_HALF_EXTENT, SHOCKWAVE_DURATION, SPEED_BOOST_DURATION_SECONDS,
-    TANK_ACCEL_FORCE, TANK_DECEL_CURVE_RATE, TANK_DECEL_SNAP_PX, TANK_HULL_DISABLED_DAMAGE,
-    TANK_HULL_TRACK_COLS, TANK_HULL_TRACK_FRAME_DISTANCE, TANK_SHELL_VARIANT_BY_ROW,
-    TANK_TURN_GRIP_FORCE, TANK_WRECK_COLS, TRACK_MAX_OPACITY, TRACK_SCALE_FRACTION,
-    TRACK_SCALE_JITTER, TRACK_SPACING, TRACK_WEIGHT_OPACITY_BY_ROW, TRACK_WEIGHT_SCALE_BY_ROW,
-    TRACK_WOBBLE_AMP_MAX_DEG, TRACK_WOBBLE_AMP_MIN_DEG, TRACK_WOBBLE_WAVELENGTH_MAX,
-    TRACK_WOBBLE_WAVELENGTH_MIN,
+    DAMAGE_VARIANTS,
+    FROG_COLLIDER_HALF_EXTENT,
+    MAX_DAMAGE,
+    OBSTACLE_CLEAR,
+    OBSTACLE_HULL_FRACTION,
+    OBSTACLE_SCALE,
+    OBSTACLE_TEXTURE_SIZE,
+    PATHFIND_CELL_SIZE,
+    PHYSICS_FIXED_DT,
+    PHYSICS_MAX_CATCHUP_SECONDS,
+    Position,
+    TANK_HULL_DISABLED_DAMAGE,
+    TANK_HULL_TRACK_COLS,
+    TANK_SHELL_VARIANT_BY_ROW,
+    TANK_WRECK_COLS,
 };
 
 use combat::{frog_hop_target, ram, HitEffects};
 use engage::{EngageCtx, EngageRing};
 use hits::{ShellTarget, Terrain};
-use weapons::{dispatch_fire, laser_damage_range, tick_queued_shots, PendingLaserShot, Projectile, LASER_BEAM_HALF_WIDTH};
+use weapons::{dispatch_fire, laser_damage_range, tick_queued_shots, PendingLaserShot, Projectile, laser_beam_half_width};
 
 /// One frame's player input, gathered by the caller (`main.rs` reading a
 /// live `RaylibHandle`, or a scripted probe) - the entire interface
@@ -268,7 +267,7 @@ impl Game {
         self.alert_position = None;
         self.alert_timer = 0.0;
         self.engage.clear();
-        self.pickup_respawn_timer = PICKUP_RESPAWN_SECONDS;
+        self.pickup_respawn_timer = tuning().pickup_respawn_seconds;
         self.player_fire_held_last_frame = false;
         self.shock = None;
         self.muzzle_flashes.clear();
@@ -320,14 +319,14 @@ impl Game {
         // Spawn in a band ENEMY_SPAWN_MARGIN_MIN..MAX of the shorter screen
         // side in from the nearest edge, clear of the player and each other.
         let short_side = width.min(height);
-        let margin_min = short_side * ENEMY_SPAWN_MARGIN_MIN;
-        let margin_max = short_side * ENEMY_SPAWN_MARGIN_MAX;
+        let margin_min = short_side * tuning().enemy_spawn_margin_min;
+        let margin_max = short_side * tuning().enemy_spawn_margin_max;
         // `--enemies` wins, then the map's `tanks`, then a random roll.
         let enemy_count = self.enemy_count_override.unwrap_or_else(|| {
             self.map
                 .tanks
                 .map(|n| n as usize)
-                .unwrap_or_else(|| rng.random_range(ENEMY_COUNT_MIN..=ENEMY_COUNT_MAX))
+                .unwrap_or_else(|| rng.random_range(tuning().enemy_count_min..=tuning().enemy_count_max))
         });
         // Both overrides are free-form user input: 0 would be an instantly
         // won round restarting forever, and the cap keeps owner slots small.
@@ -347,7 +346,7 @@ impl Game {
             let erow = TANK_SPRITE_ORDER[enemy_positions.len() % TANK_SPRITE_ORDER.len()];
             // Per-enemy speed within +/- ENEMY_SPEED_VARIANCE, so they don't
             // move in lockstep.
-            let factor = 1.0 + rng.random_range(-ENEMY_SPEED_VARIANCE..ENEMY_SPEED_VARIANCE);
+            let factor = 1.0 + rng.random_range(-tuning().enemy_speed_variance..tuning().enemy_speed_variance);
             let owner_slot = enemy_owner_slot(enemy_positions.len());
             let mut enemy = Tank {
                 row: erow,
@@ -355,32 +354,32 @@ impl Game {
                 damage_variant: rng.random_range(0..DAMAGE_VARIANTS),
                 position: pos,
                 rotation: 180.0, // facing down, toward the player's start
-                speed: ENEMY_SPEED * factor,
+                speed_scale: factor,
                 owner_slot,
                 ..Tank::default()
             };
             // Some enemies start armed with exactly one pickup's worth of a
             // special weapon (see ENEMY_SPECIAL_WEAPON_CHANCE).
-            if rng.random_range(0.0..1.0) < ENEMY_SPECIAL_WEAPON_CHANCE {
-                if rng.random_range(0.0..1.0) < ENEMY_SPECIAL_WEAPON_LASER_SHARE {
+            if rng.random_range(0.0..1.0) < tuning().enemy_special_weapon_chance {
+                if rng.random_range(0.0..1.0) < tuning().enemy_special_weapon_laser_share {
                     enemy.enqueue_weapon(ActiveWeapon::Laser);
-                    enemy.laser_charges += LASER_CHARGES_PER_PICKUP;
-                    enemy.laser_variant = if rng.random_range(0.0..1.0) < LASER_BLUE_PICKUP_CHANCE {
+                    enemy.laser_charges += tuning().laser_charges_per_pickup;
+                    enemy.laser_variant = if rng.random_range(0.0..1.0) < tuning().laser_blue_pickup_chance {
                         LaserVariant::Blue
                     } else {
                         LaserVariant::Red
                     };
-                } else if rng.random_range(0.0..1.0) < ENEMY_SPECIAL_WEAPON_PLASMA_SHARE {
+                } else if rng.random_range(0.0..1.0) < tuning().enemy_special_weapon_plasma_share {
                     enemy.enqueue_weapon(ActiveWeapon::Plasma);
-                    enemy.plasma_ammo += PLASMA_AMMO_PER_PICKUP;
-                    enemy.plasma_variant = if rng.random_range(0.0..1.0) < PLASMA_PURPLE_PICKUP_CHANCE {
+                    enemy.plasma_ammo += tuning().plasma_ammo_per_pickup;
+                    enemy.plasma_variant = if rng.random_range(0.0..1.0) < tuning().plasma_purple_pickup_chance {
                         PlasmaVariant::Purple
                     } else {
                         PlasmaVariant::Teal
                     };
                 } else {
                     enemy.enqueue_weapon(ActiveWeapon::Minigun);
-                    enemy.minigun_ammo += MINIGUN_AMMO_PER_PICKUP;
+                    enemy.minigun_ammo += tuning().minigun_ammo_per_pickup;
                 }
             }
             roll_track_distortion(&mut enemy, &mut rng);
@@ -408,7 +407,7 @@ impl Game {
         let frog_pos = map_frog_pos.unwrap_or_else(|| {
             battlefield::sample_clear_position(&mut rng, width, height, margin_min, |pos| {
                 let dist = pos.distance_to(center);
-                (FROG_SPAWN_MIN_DIST..=FROG_SPAWN_MAX_DIST).contains(&dist)
+                (tuning().frog_spawn_min_dist..=tuning().frog_spawn_max_dist).contains(&dist)
                     && enemy_positions.iter().all(|&p| pos.distance_to(p) >= enemy_clear)
                     && obstacle_positions.iter().all(|&p| pos.distance_to(p) >= frog_clear)
             })
@@ -419,8 +418,8 @@ impl Game {
         );
         self.frog = Some(self.world.spawn((Frog {
             position: frog_pos,
-            health: FROG_MAX_HEALTH,
-            max_health: FROG_MAX_HEALTH,
+            health: tuning().frog_max_health,
+            max_health: tuning().frog_max_health,
             variant: rng.random_range(0..crate::frog::FROG_VARIANT_DIRS.len() as i32),
             body: frog_body,
             hurt_timer: 0.0,
@@ -526,17 +525,17 @@ impl Game {
     fn tick_effects(&mut self, dt: f32) {
         if let Some(shock) = &mut self.shock {
             shock.time += dt;
-            if shock.time >= SHOCKWAVE_DURATION {
+            if shock.time >= tuning().shockwave_duration {
                 self.shock = None;
             }
         }
         self.muzzle_flashes.retain_mut(|flash| {
             flash.time += dt;
-            flash.time < MUZZLE_FLASH_DURATION
+            flash.time < tuning().muzzle_flash_duration
         });
         self.impact_flashes.retain_mut(|flash| {
             flash.time += dt;
-            flash.time < IMPACT_FLASH_DURATION
+            flash.time < tuning().impact_flash_duration
         });
         self.laser_beams.retain_mut(|beam| !beam.tick(dt));
     }
@@ -586,7 +585,7 @@ impl Game {
         let Some((target, tank_pos, dist)) = nearest else { return };
 
         if can_attack && dist <= attack_range {
-            let dmg = f.rng.random_range(FROG_ATTACK_DAMAGE_MIN..FROG_ATTACK_DAMAGE_MAX);
+            let dmg = f.rng.random_range(tuning().frog_attack_damage_min..tuning().frog_attack_damage_max);
             let cap = if target == player { MAX_DAMAGE - 1.0 } else { MAX_DAMAGE };
             let (became_wreck, victim_pos) = {
                 let mut q = self.world.query_one::<&mut Tank>(target);
@@ -628,7 +627,7 @@ impl Game {
             .filter_map(|(pickup_entity, pickup)| {
                 living_tanks
                     .iter()
-                    .find(|(_, pos)| pos.distance_to(pickup.position) <= PICKUP_COLLECT_RADIUS)
+                    .find(|(_, pos)| pos.distance_to(pickup.position) <= tuning().pickup_collect_radius)
                     .map(|&(tank_entity, _)| (pickup_entity, tank_entity, pickup.kind))
             })
             .collect();
@@ -640,13 +639,13 @@ impl Game {
                 // `Tank::weapon_queue`); `enqueue_weapon` must run before
                 // the ammo grant. Health/Ammo/SpeedUp never touch the queue.
                 match kind {
-                    PickupKind::Health => tank.damage = (tank.damage - PICKUP_HEAL_AMOUNT).max(0.0),
-                    PickupKind::Ammo => tank.shells_ammo += PICKUP_AMMO_AMOUNT,
+                    PickupKind::Health => tank.damage = (tank.damage - tuning().pickup_heal_amount).max(0.0),
+                    PickupKind::Ammo => tank.shells_ammo += tuning().pickup_ammo_amount,
                     PickupKind::Laser => {
                         tank.enqueue_weapon(ActiveWeapon::Laser);
-                        tank.laser_charges += LASER_CHARGES_PER_PICKUP;
+                        tank.laser_charges += tuning().laser_charges_per_pickup;
                         // Rerolled per pickup so a fresh batch can swap the variant.
-                        tank.laser_variant = if f.rng.random_range(0.0..1.0) < LASER_BLUE_PICKUP_CHANCE {
+                        tank.laser_variant = if f.rng.random_range(0.0..1.0) < tuning().laser_blue_pickup_chance {
                             LaserVariant::Blue
                         } else {
                             LaserVariant::Red
@@ -654,19 +653,19 @@ impl Game {
                     }
                     PickupKind::Minigun => {
                         tank.enqueue_weapon(ActiveWeapon::Minigun);
-                        tank.minigun_ammo += MINIGUN_AMMO_PER_PICKUP;
+                        tank.minigun_ammo += tuning().minigun_ammo_per_pickup;
                     }
                     PickupKind::Plasma => {
                         tank.enqueue_weapon(ActiveWeapon::Plasma);
-                        tank.plasma_ammo += PLASMA_AMMO_PER_PICKUP;
-                        tank.plasma_variant = if f.rng.random_range(0.0..1.0) < PLASMA_PURPLE_PICKUP_CHANCE {
+                        tank.plasma_ammo += tuning().plasma_ammo_per_pickup;
+                        tank.plasma_variant = if f.rng.random_range(0.0..1.0) < tuning().plasma_purple_pickup_chance {
                             PlasmaVariant::Purple
                         } else {
                             PlasmaVariant::Teal
                         };
                     }
                     // Refreshes rather than stacks: one boost at a time.
-                    PickupKind::SpeedUp => tank.speed_boost_timer = SPEED_BOOST_DURATION_SECONDS,
+                    PickupKind::SpeedUp => tank.speed_boost_timer = tuning().speed_boost_duration_seconds,
                 }
             }
             self.world.despawn(pickup_entity).ok();
@@ -676,10 +675,10 @@ impl Game {
             self.pickup_respawn_timer -= f.dt;
             if self.pickup_respawn_timer <= 0.0 {
                 respawn_from_slots(&mut self.world, &mut f.rng, &self.map_pickup_slots);
-                self.pickup_respawn_timer = PICKUP_RESPAWN_SECONDS;
+                self.pickup_respawn_timer = tuning().pickup_respawn_seconds;
             }
         } else {
-            self.pickup_respawn_timer = PICKUP_RESPAWN_SECONDS;
+            self.pickup_respawn_timer = tuning().pickup_respawn_seconds;
         }
     }
 
@@ -723,10 +722,10 @@ impl Game {
         // patrolling blind.
         let any_enemy_sees_player = movers[1..]
             .iter()
-            .any(|m| m.position.distance_to(player_pos) <= ENEMY_VIEW_RANGE);
+            .any(|m| m.position.distance_to(player_pos) <= tuning().enemy_view_range);
         if any_enemy_sees_player {
             self.alert_position = Some(player_pos);
-            self.alert_timer = ENEMY_ALERT_HOLD_SECONDS;
+            self.alert_timer = tuning().enemy_alert_hold_seconds;
         } else {
             self.alert_timer = (self.alert_timer - f.dt).max(0.0);
             if self.alert_timer <= 0.0 {
@@ -744,9 +743,9 @@ impl Game {
         let mut engaged: Vec<(Entity, Position)> = Vec::new();
         for (entity, tank, ai) in self.world.query::<(Entity, &Tank, &Ai)>().iter() {
             let excluded = tank.is_wreck()
-                || tank.damage >= ENEMY_FLEE_DAMAGE
+                || tank.damage >= tuning().enemy_flee_damage
                 || (tank.active_weapon() == ActiveWeapon::Shell && ai.is_retreating());
-            let near = tank.position.distance_to(player_pos) <= ENEMY_VIEW_RANGE || ai.is_hit_alerted();
+            let near = tank.position.distance_to(player_pos) <= tuning().enemy_view_range || ai.is_hit_alerted();
             if !excluded && near {
                 engaged.push((entity, tank.position));
             }
@@ -843,7 +842,7 @@ impl Game {
         let player = self.player.expect("player entity spawned in init");
         let shots = std::mem::take(&mut f.pending_lasers);
         for shot in shots {
-            let hit = f.terrain.sweep(&self.world, player, shot.owner, shot.start, shot.end, LASER_BEAM_HALF_WIDTH);
+            let hit = f.terrain.sweep(&self.world, player, shot.owner, shot.start, shot.end, laser_beam_half_width());
             let (hit_pos, target) = match hit {
                 Some((target, t)) => (shot.start + (shot.end - shot.start) * t, Some(target)),
                 None => (shot.end, None),
@@ -940,7 +939,7 @@ impl Game {
             .filter(|(_, s)| s.state == ShellState::Flying)
             .map(|(e, s)| (e, s.prev_position, s.position - s.prev_position, s.owner))
             .collect();
-        let collide_dist = SHELL_HIT_HALF_EXTENT * 2.0;
+        let collide_dist = tuning().shell_hit_half_extent * 2.0;
         let mut claimed: HashSet<Entity> = HashSet::new();
         let mut collisions: Vec<(Entity, Entity, Position)> = Vec::new();
         for i in 0..flying.len() {
@@ -1105,7 +1104,7 @@ impl Game {
 
     fn end_round(&mut self, outcome: Outcome) {
         self.outcome = outcome;
-        self.restart_timer = RESTART_DELAY;
+        self.restart_timer = tuning().restart_delay;
     }
 
     /// Every tank's motion for the AI's predictive avoidance: slot 0 is the
@@ -1185,7 +1184,7 @@ impl Game {
                     rotation: tank.rotation,
                     velocity: self.physics.velocity(body),
                     commanded_velocity: tank.velocity,
-                    top_speed: tank.speed,
+                    top_speed: tank.base_speed(),
                     damage: tank.damage,
                     shells_ammo: tank.shells_ammo,
                     minigun_ammo: tank.minigun_ammo,
@@ -1260,18 +1259,18 @@ fn drive_tank(physics: &mut Physics, tank: &mut Tank, intent: Intent, dt: f32) {
     let want_on = target_on - current_on;
     let speeding_up = want_on * current_on >= 0.0;
     let delta_on = if speeding_up {
-        let max_on = TANK_ACCEL_FORCE * tank.speed_factor() / tank.mass() * dt;
+        let max_on = tuning().tank_accel_force * tank.speed_factor() / tank.mass() * dt;
         want_on.clamp(-max_on, max_on)
     } else {
         // Close a rate-controlled fraction of the remaining gap each frame
         // (frame-rate independent); snap the last sliver below
         // TANK_DECEL_SNAP_PX rather than trailing the asymptote forever.
-        let rate = TANK_DECEL_CURVE_RATE * tank.speed_factor() / tank.mass();
+        let rate = tuning().tank_decel_curve_rate * tank.speed_factor() / tank.mass();
         let remaining_gap = want_on * (-rate * dt).exp();
-        if remaining_gap.abs() < TANK_DECEL_SNAP_PX { want_on } else { want_on - remaining_gap }
+        if remaining_gap.abs() < tuning().tank_decel_snap_px { want_on } else { want_on - remaining_gap }
     };
 
-    let max_off = TANK_TURN_GRIP_FORCE / tank.mass() * dt;
+    let max_off = tuning().tank_turn_grip_force / tank.mass() * dt;
     let delta_off = (-current_off).clamp(-max_off, max_off);
 
     let delta = if along_x {
@@ -1352,13 +1351,13 @@ fn with_two_tanks_mut<R>(world: &mut hecs::World, a: Entity, b: Entity, f: impl 
 /// Roll a tank's per-tank track-distortion parameters (see
 /// TRACK_WOBBLE_AMP_MIN_DEG etc. in lib.rs).
 fn roll_track_distortion(tank: &mut Tank, rng: &mut SmallRng) {
-    tank.track_wobble_amp = rng.random_range(TRACK_WOBBLE_AMP_MIN_DEG..TRACK_WOBBLE_AMP_MAX_DEG);
-    let wavelength = rng.random_range(TRACK_WOBBLE_WAVELENGTH_MIN..TRACK_WOBBLE_WAVELENGTH_MAX);
+    tank.track_wobble_amp = rng.random_range(tuning().track_wobble_amp_min_deg..tuning().track_wobble_amp_max_deg);
+    let wavelength = rng.random_range(tuning().track_wobble_wavelength_min..tuning().track_wobble_wavelength_max);
     // Radians per mark: one mark per TRACK_SPACING px, a full cycle per
     // `wavelength` px.
-    tank.track_wobble_freq = std::f32::consts::TAU * TRACK_SPACING / wavelength;
+    tank.track_wobble_freq = std::f32::consts::TAU * tuning().track_spacing / wavelength;
     tank.track_wobble_phase = rng.random_range(0.0..std::f32::consts::TAU);
-    tank.track_scale_jitter = rng.random_range((1.0 - TRACK_SCALE_JITTER)..(1.0 + TRACK_SCALE_JITTER));
+    tank.track_scale_jitter = rng.random_range((1.0 - tuning().track_scale_jitter)..(1.0 + tuning().track_scale_jitter));
 }
 
 /// Roll a tank's wrecked-hull variant the first frame it is a wreck; a
@@ -1386,8 +1385,8 @@ fn lay_tracks(tracks: &mut Vec<Track>, tank: &mut Tank, before: Position) {
         return;
     }
     tank.hull_anim_accum += moved;
-    while tank.hull_anim_accum >= TANK_HULL_TRACK_FRAME_DISTANCE {
-        tank.hull_anim_accum -= TANK_HULL_TRACK_FRAME_DISTANCE;
+    while tank.hull_anim_accum >= tuning().tank_hull_track_frame_distance {
+        tank.hull_anim_accum -= tuning().tank_hull_track_frame_distance;
         tank.hull_frame = (tank.hull_frame + 1) % TANK_HULL_TRACK_COLS.len() as i32;
     }
     // Unit vector pointing back along this frame's travel.
@@ -1398,13 +1397,13 @@ fn lay_tracks(tracks: &mut Vec<Track>, tank: &mut Tank, before: Position) {
     }
     // Marks start at the rear edge so the trail never pokes ahead of the hull.
     let rear = tank.hull_size() * 0.5;
-    let weight_scale = TRACK_WEIGHT_SCALE_BY_ROW[tank.row as usize];
-    let scale = tank.scale * TRACK_SCALE_FRACTION * weight_scale * tank.track_scale_jitter;
-    let max_opacity = TRACK_MAX_OPACITY * TRACK_WEIGHT_OPACITY_BY_ROW[tank.row as usize];
+    let weight_scale = tuning().track_weight_scale[tank.row as usize];
+    let scale = tank.scale * tuning().track_scale_fraction * weight_scale * tank.track_scale_jitter;
+    let max_opacity = tuning().track_max_opacity * tuning().track_weight_opacity[tank.row as usize];
 
     tank.track_accum += moved;
-    while tank.track_accum >= TRACK_SPACING {
-        tank.track_accum -= TRACK_SPACING;
+    while tank.track_accum >= tuning().track_spacing {
+        tank.track_accum -= tuning().track_spacing;
         let dist_back = rear + tank.track_accum;
         // Per-tank wobble so a straight drive doesn't stamp identical marks.
         let wobble = tank.track_wobble_amp
@@ -1540,12 +1539,12 @@ cells."30,20" = { kind = "frog" }
         let mut game = game_on(SEALED_CRATE_MAP, 1, Some(0));
         assert_eq!(player_ammo(&game), 10);
         step(&mut game, Input::default());
-        assert_eq!(player_ammo(&game), 14, "one crate grants PICKUP_AMMO_AMOUNT once");
-        let delay_frames = (PICKUP_RESPAWN_SECONDS * 60.0) as u32;
+        assert_eq!(player_ammo(&game), 14, "one crate grants tuning().pickup_ammo_amount once");
+        let delay_frames = (tuning().pickup_respawn_seconds * 60.0) as u32;
         for _ in 0..delay_frames - 30 {
             step(&mut game, Input::default());
         }
-        assert_eq!(player_ammo(&game), 14, "no second grant before PICKUP_RESPAWN_SECONDS");
+        assert_eq!(player_ammo(&game), 14, "no second grant before tuning().pickup_respawn_seconds");
         for _ in 0..90 {
             step(&mut game, Input::default());
         }

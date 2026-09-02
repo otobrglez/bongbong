@@ -1,9 +1,11 @@
+use crate::tuning::tuning;
 use sola_raylib::prelude::*;
 
 use crate::tank::Tank;
 use crate::{
-    Position, SHADOW_DIR_X, SHADOW_DIR_Y, SHELL_RICOCHET_BOUNCES, SHELL_SCALE,
-    SHELL_SHADOW_OPACITY, SHELL_SPEED, SHELL_TEXTURE_SIZE, TANK_MUZZLE_FORWARD_OFFSET_BY_ROW,
+    Position,
+    SHELL_SCALE,
+    SHELL_TEXTURE_SIZE,
 };
 
 /// A shell's lifecycle. Each variant maps to a column in shells.png (see
@@ -143,7 +145,7 @@ impl Shell {
         // bounding boxes. (Self-hits are prevented by the hit test skipping
         // the shooter's own boxes - see `simulation::hits::Terrain::sweep` -
         // not by this offset, so it's free to match the sprite art.)
-        let muzzle = TANK_MUZZLE_FORWARD_OFFSET_BY_ROW[tank.row as usize] * tank.scale;
+        let muzzle = tuning().tank_muzzle_forward_offset[tank.row as usize] * tank.scale;
         // Perpendicular to `dir`, using the *tank's own* rotation (not
         // rotation + aim_offset) - a misfire's aim skew shouldn't also swing
         // which side of the hull a barrel sits on. Rotating (sin,-cos) by
@@ -160,7 +162,7 @@ impl Shell {
         Shell {
             state: ShellState::Fire0,
             position,
-            velocity: Vector2::new(dir.x * SHELL_SPEED, dir.y * SHELL_SPEED),
+            velocity: Vector2::new(dir.x * tuning().shell_speed, dir.y * tuning().shell_speed),
             rotation: tank.rotation + aim_offset,
             timer: 0.0,
             done: false,
@@ -169,7 +171,7 @@ impl Shell {
             shooter_row: tank.row,
             shadow_offset: 0.0,
             prev_position: position,
-            bounces_left: SHELL_RICOCHET_BOUNCES,
+            bounces_left: tuning().shell_ricochet_bounces,
         }
     }
 
@@ -247,13 +249,13 @@ pub fn draw_shell_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, shell: &S
     let size = SHELL_TEXTURE_SIZE * SHELL_SCALE;
 
     let dest = Rectangle::new(
-        shell.position.x + SHADOW_DIR_X * shell.shadow_offset,
-        shell.position.y + SHADOW_DIR_Y * shell.shadow_offset,
+        shell.position.x + tuning().shadow_dir_x * shell.shadow_offset,
+        shell.position.y + tuning().shadow_dir_y * shell.shadow_offset,
         size,
         size,
     );
     let origin = Vector2::new(size / 2.0, size / 2.0);
-    let shadow = Color::new(0, 0, 0, (255.0 * SHELL_SHADOW_OPACITY) as u8);
+    let shadow = Color::new(0, 0, 0, (255.0 * tuning().shell_shadow_opacity) as u8);
 
     d.draw_texture_pro(texture, src, dest, origin, shell.rotation, shadow);
 }

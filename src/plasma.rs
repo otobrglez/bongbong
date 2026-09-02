@@ -23,14 +23,15 @@
 //! ricochets (no `bounces_left`): a heavy plasma bolt detonates on first
 //! contact rather than bouncing off Iron/walls the way a shell can.
 
+use crate::tuning::tuning;
 use sola_raylib::prelude::*;
 
 use crate::shell::Owner;
 use crate::tank::Tank;
 use crate::{
-    PLASMA_FLYING_CYCLE_FPS, PLASMA_PULSE_HZ, PLASMA_PULSE_MAX_SCALE, PLASMA_PULSE_MIN_SCALE,
-    PLASMA_PURPLE_DAMAGE_FACTOR, PLASMA_SCALE, PLASMA_SHADOW_OPACITY, PLASMA_SPEED,
-    PLASMA_TEXTURE_SIZE, Position, SHADOW_DIR_X, SHADOW_DIR_Y, TANK_MUZZLE_FORWARD_OFFSET_BY_ROW,
+    PLASMA_SCALE,
+    PLASMA_TEXTURE_SIZE,
+    Position,
 };
 
 /// A plasma bolt's lifecycle - same overall Fire/Flying/Hit shape as
@@ -101,7 +102,7 @@ impl PlasmaVariant {
     pub fn damage_factor(self) -> f32 {
         match self {
             PlasmaVariant::Teal => 1.0,
-            PlasmaVariant::Purple => PLASMA_PURPLE_DAMAGE_FACTOR,
+            PlasmaVariant::Purple => tuning().plasma_purple_damage_factor,
         }
     }
 
@@ -185,7 +186,7 @@ impl Plasma {
     ) -> Plasma {
         let rot = (tank.rotation + aim_offset).to_radians();
         let dir = Vector2::new(rot.sin(), -rot.cos());
-        let muzzle = TANK_MUZZLE_FORWARD_OFFSET_BY_ROW[tank.row as usize] * tank.scale;
+        let muzzle = tuning().tank_muzzle_forward_offset[tank.row as usize] * tank.scale;
         let hull_rot = tank.rotation.to_radians();
         let lateral = Vector2::new(hull_rot.cos(), hull_rot.sin()) * (lateral_offset * tank.scale);
         let position = Position::new(
@@ -195,7 +196,7 @@ impl Plasma {
         Plasma {
             state: PlasmaState::Fire0,
             position,
-            velocity: Vector2::new(dir.x * PLASMA_SPEED, dir.y * PLASMA_SPEED),
+            velocity: Vector2::new(dir.x * tuning().plasma_speed, dir.y * tuning().plasma_speed),
             rotation: tank.rotation + aim_offset,
             timer: 0.0,
             done: false,
@@ -263,7 +264,7 @@ fn source_rec(col: i32, variant: PlasmaVariant) -> Rectangle {
 /// cycle through them already reads as pulsing without needing to sample a
 /// continuous curve.
 fn flying_col(timer: f32) -> i32 {
-    3 + (timer * PLASMA_FLYING_CYCLE_FPS) as i32 % 4
+    3 + (timer * tuning().plasma_flying_cycle_fps) as i32 % 4
 }
 
 /// The in-flight glow halo's current radius/alpha, derived from `timer`
@@ -275,8 +276,8 @@ fn flying_col(timer: f32) -> i32 {
 /// PLASMA_FLYING_CYCLE_FPS's doc comment.
 fn glow_pulse(plasma: &Plasma) -> (f32, f32) {
     let base_radius = PLASMA_TEXTURE_SIZE * PLASMA_SCALE * 0.5;
-    let phase = (plasma.timer * PLASMA_PULSE_HZ * std::f32::consts::TAU).sin() * 0.5 + 0.5;
-    let scale = PLASMA_PULSE_MIN_SCALE + (PLASMA_PULSE_MAX_SCALE - PLASMA_PULSE_MIN_SCALE) * phase;
+    let phase = (plasma.timer * tuning().plasma_pulse_hz * std::f32::consts::TAU).sin() * 0.5 + 0.5;
+    let scale = tuning().plasma_pulse_min_scale + (tuning().plasma_pulse_max_scale - tuning().plasma_pulse_min_scale) * phase;
     (base_radius * scale, phase)
 }
 
@@ -325,12 +326,12 @@ pub fn draw_plasma_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, plasma: 
     let src = source_rec(flying_col(plasma.timer), plasma.variant);
     let size = PLASMA_TEXTURE_SIZE * PLASMA_SCALE;
     let dest = Rectangle::new(
-        plasma.position.x + SHADOW_DIR_X * plasma.shadow_offset,
-        plasma.position.y + SHADOW_DIR_Y * plasma.shadow_offset,
+        plasma.position.x + tuning().shadow_dir_x * plasma.shadow_offset,
+        plasma.position.y + tuning().shadow_dir_y * plasma.shadow_offset,
         size,
         size,
     );
     let origin = Vector2::new(size / 2.0, size / 2.0);
-    let shadow = Color::new(0, 0, 0, (255.0 * PLASMA_SHADOW_OPACITY) as u8);
+    let shadow = Color::new(0, 0, 0, (255.0 * tuning().plasma_shadow_opacity) as u8);
     d.draw_texture_pro(texture, src, dest, origin, plasma.rotation, shadow);
 }

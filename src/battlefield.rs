@@ -14,6 +14,7 @@
 //! deciding which world-space positions get a wall, and spawning the
 //! physics bodies/ECS entities for them.
 
+use crate::tuning::tuning;
 use std::collections::{HashMap, HashSet};
 
 use rand::RngExt;
@@ -27,8 +28,13 @@ use crate::physics::Physics;
 use crate::pickup::PickupKind;
 use crate::tank::Tank;
 use crate::{
-    OBSTACLE_CLEAR, OBSTACLE_GRID_SIZE, OBSTACLE_WOOD_FLAMMABLE_CHANCE, PATHFIND_CELL_SIZE,
-    Position, TANK_HULL_BBOX_BY_ROW, TANK_MOVE_BBOX_FRACTION, WALL_THICKNESS,
+    OBSTACLE_CLEAR,
+    OBSTACLE_GRID_SIZE,
+    PATHFIND_CELL_SIZE,
+    Position,
+    TANK_HULL_BBOX_BY_ROW,
+    TANK_MOVE_BBOX_FRACTION,
+    WALL_THICKNESS,
 };
 
 /// Cap on rejection-sampling attempts for a single enemy/obstacle spawn
@@ -317,7 +323,7 @@ pub fn spawn_from_map(
                 let variant = material_variant[&material];
                 let max_health = material.max_health();
                 let flammable =
-                    material == Material::Wood && rng.random_bool(OBSTACLE_WOOD_FLAMMABLE_CHANCE);
+                    material == Material::Wood && rng.random_bool(tuning().wood_flammable_chance);
                 let body = physics.spawn_static(
                     pos,
                     tile_hull_half_extent(&wall_cells, col, row, obstacle_half_extent),

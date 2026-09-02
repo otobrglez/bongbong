@@ -4,6 +4,7 @@
 //! and friends without that dependency leaking back into `simulation.rs`.
 //! See `simulation.rs`'s module doc comment for the other half of this split.
 
+use crate::tuning::tuning;
 use sola_raylib::prelude::*;
 
 use crate::ai::Ai;
@@ -20,12 +21,17 @@ use crate::simulation::{Game, Outcome};
 use crate::tank::{ActiveWeapon, Dir, Tank, draw_minigun_mount, draw_minigun_mount_shadow, draw_tank, draw_tank_shadow};
 use crate::track::draw_track;
 use crate::{
-    CAMERA_SHAKE_DURATION, CAMERA_SHAKE_FREQUENCY, CAMERA_SHAKE_MAGNITUDE, HEALTH_BAR_CELL_SIZE,
-    HEALTH_BAR_COLUMNS, HEALTH_BAR_HUD_SCALE, HEALTH_BAR_ICON_OFFSET,
-    HEALTH_BAR_ICON_SIZE, HEALTH_BAR_OVERHEAD_FADE_SECONDS, HEALTH_BAR_OVERHEAD_GAP,
-    HEALTH_BAR_VARIANTS, HUD_CRITICAL_THRESHOLD, HUD_FONT_SIZE, HUD_MARGIN, HUD_VERSION_FONT_SIZE,
-    HUD_WARN_THRESHOLD, IMPACT_FLASH_QUAD_RADIUS, MAX_DAMAGE, MAX_SHELLS,
-    MUZZLE_FLASH_QUAD_RADIUS,
+    HEALTH_BAR_CELL_SIZE,
+    HEALTH_BAR_COLUMNS,
+    HEALTH_BAR_HUD_SCALE,
+    HEALTH_BAR_ICON_OFFSET,
+    HEALTH_BAR_ICON_SIZE,
+    HEALTH_BAR_OVERHEAD_GAP,
+    HEALTH_BAR_VARIANTS,
+    HUD_FONT_SIZE,
+    HUD_MARGIN,
+    HUD_VERSION_FONT_SIZE,
+    MAX_DAMAGE,
 };
 
 /// Accent colors for the HUD's special-weapon ammo counts - one per
@@ -107,7 +113,7 @@ impl Game {
                     t.active_weapon(),
                 )
             });
-        let shells_color = hud_number_color(shells as f32, MAX_SHELLS as f32);
+        let shells_color = hud_number_color(shells as f32, tuning().max_shells as f32);
         let hp_color = hud_number_color(hp as f32, MAX_DAMAGE);
         // The live weapon's label carries a ">" marker (and, for a special,
         // its own accent color instead of neutral white) - with the FIFO
@@ -309,12 +315,12 @@ impl Game {
         // they're either their own small on-screen quad or meant to stay put.
         let mut blit_offset = Vector2::new(0.0, 0.0);
         if let Some(shock) = &self.shock {
-            let decay = (1.0 - shock.time / CAMERA_SHAKE_DURATION).max(0.0);
+            let decay = (1.0 - shock.time / tuning().camera_shake_duration).max(0.0);
             if decay > 0.0 {
-                let t = shock.time * CAMERA_SHAKE_FREQUENCY;
+                let t = shock.time * tuning().camera_shake_frequency;
                 blit_offset = Vector2::new(
-                    t.sin() * CAMERA_SHAKE_MAGNITUDE * decay,
-                    (t * 1.3 + 1.7).sin() * CAMERA_SHAKE_MAGNITUDE * decay,
+                    t.sin() * tuning().camera_shake_magnitude * decay,
+                    (t * 1.3 + 1.7).sin() * tuning().camera_shake_magnitude * decay,
                 );
             }
         }
@@ -347,7 +353,7 @@ impl Game {
                     .shader
                     .set_shader_value(effects.muzzle.time_loc, flash.time);
 
-                let r = MUZZLE_FLASH_QUAD_RADIUS;
+                let r = tuning().muzzle_flash_quad_radius;
                 let flash_source = Rectangle {
                     x: flash.center.x - r,
                     y: (screen_height as f32 - flash.center.y) - r,
@@ -387,7 +393,7 @@ impl Game {
                     .shader
                     .set_shader_value(effects.impact.time_loc, flash.time);
 
-                let r = IMPACT_FLASH_QUAD_RADIUS;
+                let r = tuning().impact_flash_quad_radius;
                 let flash_source = Rectangle {
                     x: flash.center.x - r,
                     y: (screen_height as f32 - flash.center.y) - r,
@@ -657,9 +663,9 @@ fn draw_tank_inspect(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>) {
 /// current/max shape, just different units.
 fn hud_number_color(current: f32, max: f32) -> Color {
     let frac = if max > 0.0 { current / max } else { 0.0 };
-    if frac < HUD_CRITICAL_THRESHOLD {
+    if frac < tuning().hud_critical_threshold {
         Color::RED
-    } else if frac < HUD_WARN_THRESHOLD {
+    } else if frac < tuning().hud_warn_threshold {
         Color::ORANGE
     } else {
         Color::WHITE
@@ -721,10 +727,10 @@ fn draw_tank_overhead_health(d: &mut impl RaylibDraw, texture: &Texture2D, tank:
         w,
         h,
     );
-    let alpha = if tank.hit_flash_timer > HEALTH_BAR_OVERHEAD_FADE_SECONDS {
+    let alpha = if tank.hit_flash_timer > tuning().health_bar_overhead_fade_seconds {
         255
     } else {
-        (255.0 * (tank.hit_flash_timer / HEALTH_BAR_OVERHEAD_FADE_SECONDS)).round() as u8
+        (255.0 * (tank.hit_flash_timer / tuning().health_bar_overhead_fade_seconds)).round() as u8
     };
     d.draw_texture_pro(
         texture,
@@ -754,10 +760,10 @@ fn draw_frog_health_bar(d: &mut impl RaylibDraw, texture: &Texture2D, frog: &Fro
         w,
         h,
     );
-    let alpha = if frog.hit_flash_timer > HEALTH_BAR_OVERHEAD_FADE_SECONDS {
+    let alpha = if frog.hit_flash_timer > tuning().health_bar_overhead_fade_seconds {
         255
     } else {
-        (255.0 * (frog.hit_flash_timer / HEALTH_BAR_OVERHEAD_FADE_SECONDS)).round() as u8
+        (255.0 * (frog.hit_flash_timer / tuning().health_bar_overhead_fade_seconds)).round() as u8
     };
     d.draw_texture_pro(
         texture,

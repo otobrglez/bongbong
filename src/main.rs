@@ -1,13 +1,13 @@
+use bongbong::tuning::tuning;
 use bongbong::ai::Intent;
 use bongbong::game::{Effects, Textures};
 use bongbong::shockwave::{RippleFx, RippleTuning};
 use bongbong::simulation::{Game, Input};
+use bongbong::tuning;
 use bongbong::tank::Dir;
 use bongbong::{
-    DEFAULT_SCREEN_HEIGHT, DEFAULT_SCREEN_WIDTH, IMPACT_FLASH_DURATION, IMPACT_FLASH_SPEED,
-    IMPACT_FLASH_STRENGTH, IMPACT_FLASH_WIDTH, MUZZLE_FLASH_DURATION, MUZZLE_FLASH_SPEED,
-    MUZZLE_FLASH_STRENGTH, MUZZLE_FLASH_WIDTH, SHOCKWAVE_DURATION, SHOCKWAVE_SPEED,
-    SHOCKWAVE_STRENGTH, SHOCKWAVE_WIDTH,
+    DEFAULT_SCREEN_HEIGHT,
+    DEFAULT_SCREEN_WIDTH,
 };
 use clap::{Parser, ValueEnum};
 use sola_raylib::core::game_loop;
@@ -116,6 +116,15 @@ struct Args {
     /// over time under variable frame dt).
     #[arg(long = "seed", value_parser = bongbong::parse_seed)]
     seed: Option<u64>,
+
+    /// Load a tuning patch (a JSON object of `{"knob": value}` pairs - the
+    /// dev panel's "Copy JSON" output, see docs/runtime-tuning-design.md)
+    /// at startup, and keep watching the file: every edit saved to it is
+    /// re-applied at the next frame boundary, so any text editor becomes a
+    /// tuning UI on native. A malformed file at startup fails fast; a
+    /// malformed edit later is reported on stderr and ignored.
+    #[arg(long = "tuning")]
+    tuning: Option<std::path::PathBuf>,
 }
 
 fn parse_map(s: &str) -> Result<bongbong::map::MapFile, String> {
@@ -173,7 +182,56 @@ fn shader_path(name: &str) -> String {
     format!("static/{name}")
 }
 
+
+/// Native-only tuning transport: re-apply `--tuning <file>` whenever its
+/// mtime changes (polled every `POLL_FRAMES` frames - a stat, not a read),
+/// so editing the JSON in any editor is a live tuning UI. Web gets the same
+/// effect through the page's panel and capi.rs instead.
+struct TuningWatch {
+    path: std::path::PathBuf,
+    last_modified: Option<std::time::SystemTime>,
+    frames: u32,
+}
+
+impl TuningWatch {
+    const POLL_FRAMES: u32 = 30;
+
+    fn new(path: &std::path::Path) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            last_modified: std::fs::metadata(path).and_then(|m| m.modified()).ok(),
+            frames: 0,
+        }
+    }
+
+    fn poll(&mut self) {
+        self.frames += 1;
+        if self.frames < Self::POLL_FRAMES {
+            return;
+        }
+        self.frames = 0;
+        let Ok(modified) = std::fs::metadata(&self.path).and_then(|m| m.modified()) else {
+            return;
+        };
+        if self.last_modified == Some(modified) {
+            return;
+        }
+        self.last_modified = Some(modified);
+        match tuning::submit_file(&self.path) {
+            Ok(n) => eprintln!("[tuning] reloaded {n} knob(s) from {}", self.path.display()),
+            Err(e) => eprintln!("[tuning] ignored edit: {e}"),
+        }
+    }
+}
+
 fn main() {
+    // Keep the `dev-tools` C API (src/capi.rs) linked into this binary: an
+    // `extern "C"` function nobody here references is fair game for the
+    // linker to drop before emcc's EXPORTED_FUNCTIONS (build.rs) can export
+    // it. See `capi::keep_alive`.
+    #[cfg(feature = "dev-tools")]
+    bongbong::capi::keep_alive();
+
     let args = Args::parse();
     let (screen_width, screen_height) = args
         .resolution
@@ -308,10 +366,10 @@ fn main() {
         screen_width,
         screen_height,
         RippleTuning {
-            speed: SHOCKWAVE_SPEED,
-            width: SHOCKWAVE_WIDTH,
-            strength: SHOCKWAVE_STRENGTH,
-            duration: SHOCKWAVE_DURATION,
+            speed: tuning().shockwave_speed,
+            width: tuning().shockwave_width,
+            strength: tuning().shockwave_strength,
+            duration: tuning().shockwave_duration,
         },
     );
     let mut muzzle_fx = RippleFx::load(
@@ -321,10 +379,10 @@ fn main() {
         screen_width,
         screen_height,
         RippleTuning {
-            speed: MUZZLE_FLASH_SPEED,
-            width: MUZZLE_FLASH_WIDTH,
-            strength: MUZZLE_FLASH_STRENGTH,
-            duration: MUZZLE_FLASH_DURATION,
+            speed: tuning().muzzle_flash_speed,
+            width: tuning().muzzle_flash_width,
+            strength: tuning().muzzle_flash_strength,
+            duration: tuning().muzzle_flash_duration,
         },
     );
     let mut impact_fx = RippleFx::load(
@@ -334,15 +392,27 @@ fn main() {
         screen_width,
         screen_height,
         RippleTuning {
-            speed: IMPACT_FLASH_SPEED,
-            width: IMPACT_FLASH_WIDTH,
-            strength: IMPACT_FLASH_STRENGTH,
-            duration: IMPACT_FLASH_DURATION,
+            speed: tuning().impact_flash_speed,
+            width: tuning().impact_flash_width,
+            strength: tuning().impact_flash_strength,
+            duration: tuning().impact_flash_duration,
         },
     );
     let mut scene_target = rl
         .load_render_texture(&thread, screen_width as u32, screen_height as u32)
         .expect("failed creating scene render texture");
+
+    if let Some(path) = &args.tuning {
+        match tuning::submit_file(path) {
+            Ok(n) => eprintln!("[tuning] loaded {n} knob(s) from {}", path.display()),
+            Err(e) => {
+                eprintln!("[tuning] {e}");
+                std::process::exit(2);
+            }
+        }
+        tuning::apply_pending();
+    }
+    let mut tuning_watch = args.tuning.as_deref().map(TuningWatch::new);
 
     let mut game = Game::default();
     game.enemy_count_override = args.enemies;
@@ -357,6 +427,35 @@ fn main() {
     // source for both, and no -sASYNCIFY=1 needed to keep the browser tab
     // responsive (see .cargo/config.toml).
     game_loop::run(rl, thread, 120, move |rl, thread| {
+        // Frame boundary: land any tuning edits staged since last frame
+        // (dev panel via capi.rs, or the `--tuning` file watch) before the
+        // simulation reads the table, so a frame never sees two values of
+        // one knob. The ripple shaders cache their knobs as uniforms, so
+        // re-upload those only when something actually changed.
+        if let Some(watch) = &mut tuning_watch {
+            watch.poll();
+        }
+        if tuning::apply_pending() {
+            let t = tuning::current();
+            shock_fx.set_tuning(RippleTuning {
+                speed: t.shockwave_speed,
+                width: t.shockwave_width,
+                strength: t.shockwave_strength,
+                duration: t.shockwave_duration,
+            });
+            muzzle_fx.set_tuning(RippleTuning {
+                speed: t.muzzle_flash_speed,
+                width: t.muzzle_flash_width,
+                strength: t.muzzle_flash_strength,
+                duration: t.muzzle_flash_duration,
+            });
+            impact_fx.set_tuning(RippleTuning {
+                speed: t.impact_flash_speed,
+                width: t.impact_flash_width,
+                strength: t.impact_flash_strength,
+                duration: t.impact_flash_duration,
+            });
+        }
         // Gather this frame's raw input into a plain `Input` - `Game::update`
         // itself decides what to do with it (e.g. whether a wreck can move),
         // so nothing simulation-related needs to know a `RaylibHandle`
@@ -378,7 +477,10 @@ fn main() {
         let input = Input {
             player_intent,
             pause_pressed: rl.is_key_pressed(KeyboardKey::KEY_P),
-            restart_pressed: rl.is_key_pressed(KeyboardKey::KEY_R),
+            // The dev panel's "Restart round" button lands here too, as if
+            // R had been pressed - the simulation never learns a browser
+            // exists.
+            restart_pressed: rl.is_key_pressed(KeyboardKey::KEY_R) || tuning::take_restart_request(),
             toggle_shadows_pressed: rl.is_key_pressed(KeyboardKey::KEY_L),
             toggle_inspect_pressed: rl.is_key_pressed(KeyboardKey::KEY_I),
         };

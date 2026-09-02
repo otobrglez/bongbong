@@ -1,6 +1,11 @@
 # Runtime tuning: live-editable game parameters (design proposal)
 
-Status: proposal, 2026-09-02. Nothing here is implemented yet.
+Status: **implemented 2026-09-02** (phases 1-4 of §11 landed in one pass:
+`src/tuning.rs`, `src/capi.rs`, `build.rs`, the `dev-tools` feature, the
+Astro panel, `just build-web-dev`, the CI `cargo-features` input, `--tuning`
+on both binaries with the native mtime watch). Phase 5 (localhost HTTP/MCP,
+live-stats JSON) is still open. Where the implementation diverged from the
+text below it's noted inline as *[impl]*.
 
 ## 1. Goal
 
@@ -205,6 +210,11 @@ grammars, and the JSON diff of "titan's mass" would be a nested path. The
 labelled-array form keeps one flat namespace, one grammar, and the pivot is
 a UI concern.
 
+*[impl]* Landed as above, with two small additions: `f64` is also a `Knob`
+(for `wood_flammable_chance`), and the schema JSON carries each row's
+`default` value alongside the `ParamMeta` fields so the panel can reset a
+row without a second call.
+
 ## 4. Runtime storage and the read path
 
 ```rust
@@ -273,6 +283,15 @@ diff, so a value found in the browser can be pasted straight back into the
 `tunables!` table. That closes the loop: the table is the source of truth,
 the browser is a scratchpad.
 
+*[impl]* `tuning()` returns the `RwLockReadGuard` directly. Staging is a
+`Mutex<Option<Tuning>>` holding the *next whole table* rather than a queue of
+patches: each `submit_json` applies its patch to a copy of whatever is staged
+(or live), so a rejected patch never half-applies and a burst of submits
+between two frames lands together. Restart is an `AtomicBool`.
+`Tank::speed` became `Tank::speed_scale` so the speed knobs are `Live`, not
+`Spawn`; `RippleFx::set_tuning` re-uploads shader uniforms when
+`apply_pending` reports a change.
+
 ## 6. C API (`src/capi.rs`, feature `dev-tools`)
 
 ```rust
@@ -306,6 +325,14 @@ the browser is a scratchpad.
   unused until a native transport (§8) calls them, or can be exercised
   from a test.
 
+*[impl]* Eight entry points rather than seven (`bb_tuning_diff_rust` and
+`bb_last_error` were added, `bb_tuning_reset`/`bb_game_restart` as planned).
+The keep-alive is `capi::keep_alive()` called from `main`, not a `#[used]`
+static (a `*const ()` table isn't `Sync`). `build.rs` uses
+`cargo:rustc-link-arg-bin=bongbong=...` so `probe`'s wasm link (also built by
+a bare `cargo build --target wasm32-unknown-emscripten`) isn't asked to
+export symbols it never references.
+
 ## 7. Web panel (Astro, `site/src/pages/index.astro`)
 
 Under the canvas, a `<details>` "Tuning" panel, rendered entirely from the
@@ -331,6 +358,12 @@ with zero site changes):
   passes `dev-tools`, `cloudflare-deploy.yml` doesn't. Every
   `pr-<N>.preview.bongbong.io` then has the panel, production never does.
 
+*[impl]* As designed, plus a filter box (185 rows is a lot to scroll) and an
+Import textarea instead of a `prompt()` dialog. Verified in Chrome against
+the real `just build-web-dev` output: a slider edit reaches the live table at
+the next frame, the 12-by-6 tank-model grid and the 4-row walls grid pivot
+from the labels, and a reload restores the saved diff.
+
 ## 8. Native transports (after web works)
 
 Same `tuning.rs` core, different writer:
@@ -345,6 +378,9 @@ Same `tuning.rs` core, different writer:
    documents over localhost, which is exactly the surface an MCP server
    needs (`get_schema`, `get_tuning`, `set_tuning`, `restart`). Deferred;
    the JSON contract in §5 is designed so this is purely additive.
+
+*[impl]* Items 1 and 2 landed (`--tuning` on both binaries; the game polls
+the file's mtime every 30 frames). Item 3 is still open.
 
 ## 9. Determinism, the probe, and "applies"
 

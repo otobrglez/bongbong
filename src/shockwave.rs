@@ -25,10 +25,14 @@ pub struct RippleFx {
     pub shader: Shader,
     pub center_loc: i32,
     pub time_loc: i32,
+    speed_loc: i32,
+    width_loc: i32,
+    strength_loc: i32,
+    duration_loc: i32,
 }
 
-/// The tuning knobs for one `RippleFx` instance, set once at load and fixed for
-/// the run. Bundled into one struct (rather than four loose params) since every
+/// The tuning knobs for one `RippleFx` instance, set at load and re-uploaded
+/// by `set_tuning` whenever the live tuning table changes. Bundled into one struct (rather than four loose params) since every
 /// effect - kill shockwave, muzzle flash, shell impact - supplies all four
 /// together from its own block of constants in `lib.rs`.
 pub struct RippleTuning {
@@ -78,7 +82,21 @@ impl RippleFx {
             shader,
             center_loc,
             time_loc,
+            speed_loc,
+            width_loc,
+            strength_loc,
+            duration_loc,
         }
+    }
+
+    /// Re-upload the tuning uniforms - called by `main.rs` whenever the
+    /// live tuning table changes (`tuning::apply_pending`), so the `fx`
+    /// knobs are live like everything else instead of fixed at load.
+    pub fn set_tuning(&mut self, tuning: RippleTuning) {
+        self.shader.set_shader_value(self.speed_loc, tuning.speed);
+        self.shader.set_shader_value(self.width_loc, tuning.width);
+        self.shader.set_shader_value(self.strength_loc, tuning.strength);
+        self.shader.set_shader_value(self.duration_loc, tuning.duration);
     }
 }
 

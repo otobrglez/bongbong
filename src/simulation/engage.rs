@@ -8,11 +8,12 @@
 //! Pure geometry plus two callbacks; no world access, so it is unit-tested
 //! on its own.
 
+use crate::tuning::tuning;
 use std::collections::HashMap;
 
 use hecs::Entity;
 
-use crate::{ENGAGE_LATERAL_OFFSET, ENGAGE_MIN_RADIUS, ENGAGE_RESERVE_RADIUS, ENGAGE_RING_RADIUS, Position};
+use crate::{Position};
 
 /// One slot identity: cardinal axis (0 = N, 1 = E, 2 = S, 3 = W), rank (0
 /// firing line, 1 reserve) and lateral side (-1/+1).
@@ -132,7 +133,7 @@ impl EngageRing {
 fn engage_point(ctx: &EngageCtx, slot: EngageSlot) -> Option<Position> {
     let dir = DIRS[slot.axis as usize];
     let perp = perp_of(dir);
-    let lateral = slot.side as f32 * ENGAGE_LATERAL_OFFSET;
+    let lateral = slot.side as f32 * tuning().engage_lateral_offset;
     let (px, py, m) = (ctx.player_pos.x, ctx.player_pos.y, ctx.margin);
     // The lateral coordinate is independent of the forward distance: if
     // it's already against a wall no clamping can save this slot.
@@ -141,7 +142,7 @@ fn engage_point(ctx: &EngageCtx, slot: EngageSlot) -> Option<Position> {
     if lat_x < m || lat_x > ctx.width - m || lat_y < m || lat_y > ctx.height - m {
         return None;
     }
-    let mut forward = if slot.rank == 0 { ENGAGE_RING_RADIUS } else { ENGAGE_RESERVE_RADIUS };
+    let mut forward = if slot.rank == 0 { tuning().engage_ring_radius() } else { tuning().engage_reserve_radius() };
     let room = if dir.0 > 0.0 {
         ctx.width - m - px
     } else if dir.0 < 0.0 {
@@ -153,7 +154,7 @@ fn engage_point(ctx: &EngageCtx, slot: EngageSlot) -> Option<Position> {
     };
     if slot.rank == 0 {
         forward = forward.min(room);
-        if forward < ENGAGE_MIN_RADIUS {
+        if forward < tuning().engage_min_radius {
             return None;
         }
     } else if forward > room {
@@ -187,7 +188,7 @@ mod tests {
         let te = targets[&east.0];
         assert!(tw.x < player.x, "west tank should be assigned west of the player");
         assert!(te.x > player.x, "east tank should be assigned east of the player");
-        assert!((tw.x - player.x).abs() > ENGAGE_MIN_RADIUS && (te.x - player.x).abs() > ENGAGE_MIN_RADIUS);
+        assert!((tw.x - player.x).abs() > tuning().engage_min_radius && (te.x - player.x).abs() > tuning().engage_min_radius);
         assert_ne!(tw, te);
     }
 
