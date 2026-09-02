@@ -1,0 +1,56 @@
+# maps/test/ fixture - an adversarial layout provoking one known failure
+# class; see docs/gameplay-verification-design.md #2.2. Hand-authored:
+# re-saving from the map editor would drop these comments.
+#
+# tight-corridors: two 21-tile rails 6 cells apart - a two-cell
+# open lane between - player start at the tube's center: reaching
+# it means driving ~300px of corridor with ~55px of physical
+# slack per side.
+
+version = 1
+tanks = 4
+
+cells."10,8" = { kind = "wall", material = "iron" }
+cells."11,8" = { kind = "wall", material = "iron" }
+cells."12,8" = { kind = "wall", material = "iron" }
+cells."13,8" = { kind = "wall", material = "iron" }
+cells."14,8" = { kind = "wall", material = "iron" }
+cells."15,8" = { kind = "wall", material = "iron" }
+cells."16,8" = { kind = "wall", material = "iron" }
+cells."17,8" = { kind = "wall", material = "iron" }
+cells."18,8" = { kind = "wall", material = "iron" }
+cells."19,8" = { kind = "wall", material = "iron" }
+cells."20,8" = { kind = "wall", material = "iron" }
+cells."21,8" = { kind = "wall", material = "iron" }
+cells."22,8" = { kind = "wall", material = "iron" }
+cells."23,8" = { kind = "wall", material = "iron" }
+cells."24,8" = { kind = "wall", material = "iron" }
+cells."25,8" = { kind = "wall", material = "iron" }
+cells."26,8" = { kind = "wall", material = "iron" }
+cells."27,8" = { kind = "wall", material = "iron" }
+cells."28,8" = { kind = "wall", material = "iron" }
+cells."29,8" = { kind = "wall", material = "iron" }
+cells."30,8" = { kind = "wall", material = "iron" }
+cells."20,11" = { kind = "start" }
+cells."10,14" = { kind = "wall", material = "iron" }
+cells."11,14" = { kind = "wall", material = "iron" }
+cells."12,14" = { kind = "wall", material = "iron" }
+cells."13,14" = { kind = "wall", material = "iron" }
+cells."14,14" = { kind = "wall", material = "iron" }
+cells."15,14" = { kind = "wall", material = "iron" }
+cells."16,14" = { kind = "wall", material = "iron" }
+cells."17,14" = { kind = "wall", material = "iron" }
+cells."18,14" = { kind = "wall", material = "iron" }
+cells."19,14" = { kind = "wall", material = "iron" }
+cells."20,14" = { kind = "wall", material = "iron" }
+cells."21,14" = { kind = "wall", material = "iron" }
+cells."22,14" = { kind = "wall", material = "iron" }
+cells."23,14" = { kind = "wall", material = "iron" }
+cells."24,14" = { kind = "wall", material = "iron" }
+cells."25,14" = { kind = "wall", material = "iron" }
+cells."26,14" = { kind = "wall", material = "iron" }
+cells."27,14" = { kind = "wall", material = "iron" }
+cells."28,14" = { kind = "wall", material = "iron" }
+cells."29,14" = { kind = "wall", material = "iron" }
+cells."30,14" = { kind = "wall", material = "iron" }
+cells."20,19" = { kind = "frog" }

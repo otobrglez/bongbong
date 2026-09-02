@@ -17,7 +17,7 @@ use crate::plasma::{Plasma, PlasmaState, draw_plasma, draw_plasma_shadow};
 use crate::shell::{Shell, ShellState, draw_shell, draw_shell_shadow};
 use crate::shockwave::{RippleFx, screen_to_ripple_uv};
 use crate::simulation::{Game, Outcome};
-use crate::tank::{Dir, Tank, draw_minigun_mount, draw_minigun_mount_shadow, draw_tank, draw_tank_shadow};
+use crate::tank::{ActiveWeapon, Dir, Tank, draw_minigun_mount, draw_minigun_mount_shadow, draw_tank, draw_tank_shadow};
 use crate::track::draw_track;
 use crate::{
     CAMERA_SHAKE_DURATION, CAMERA_SHAKE_FREQUENCY, CAMERA_SHAKE_MAGNITUDE, HEALTH_BAR_CELL_SIZE,
@@ -27,6 +27,15 @@ use crate::{
     HUD_WARN_THRESHOLD, IMPACT_FLASH_QUAD_RADIUS, MAX_DAMAGE, MAX_SHELLS,
     MUZZLE_FLASH_QUAD_RADIUS,
 };
+
+/// Accent colors for the HUD's special-weapon ammo counts - one per
+/// `ActiveWeapon` special, shared between each weapon's count number
+/// (always) and its label (only while that weapon is the live one - see
+/// the HUD block in `render`). Presentation-only, so they live here rather
+/// than in `lib.rs`'s gameplay tuning.
+const HUD_LASER_COLOR: Color = Color::new(255, 60, 160, 255);
+const HUD_PLASMA_COLOR: Color = Color::new(60, 220, 200, 255);
+const HUD_MINIGUN_COLOR: Color = Color::new(190, 205, 215, 255);
 
 /// The sprite atlases `Game::render` draws from, bundled into one param instead
 /// of four so the signature doesn't grow with every new texture.
@@ -87,7 +96,7 @@ impl Game {
         // neutral - raylib's draw_text is single-color per call, so the line
         // is drawn as four adjacent segments rather than one string. Widths
         // measured here for the same reason as version_hud_w above.
-        let (hp, shells, laser_charges, plasma_ammo, minigun_ammo) =
+        let (hp, shells, laser_charges, plasma_ammo, minigun_ammo, active_weapon) =
             crate::simulation::with_tank(&self.world, player, |t| {
                 (
                     (MAX_DAMAGE - t.damage).max(0.0).round() as i32,
@@ -95,11 +104,21 @@ impl Game {
                     t.laser_charges,
                     t.plasma_ammo,
                     t.minigun_ammo,
+                    t.active_weapon(),
                 )
             });
         let shells_color = hud_number_color(shells as f32, MAX_SHELLS as f32);
         let hp_color = hud_number_color(hp as f32, MAX_DAMAGE);
-        let hud_shells_label = "SHELLS: ";
+        // The live weapon's label carries a ">" marker (and, for a special,
+        // its own accent color instead of neutral white) - with the FIFO
+        // weapon queue (see `Tank::weapon_queue`), several stocked weapons
+        // can show at once and the counts alone no longer say which one
+        // the trigger actually fires.
+        let hud_shells_label = if active_weapon == ActiveWeapon::Shell {
+            ">SHELLS: "
+        } else {
+            "SHELLS: "
+        };
         let hud_shells_num = format!("{shells}");
         let hud_mid = "   HP: ";
         let hud_hp_num = format!("{hp}");
@@ -110,27 +129,33 @@ impl Game {
         // Only shown while charged (see Tank::laser_charges) - most rounds
         // never pick one up, so this stays out of the way otherwise.
         let hud_laser = (laser_charges > 0).then(|| {
-            let label = "   LASER: ";
+            let active = active_weapon == ActiveWeapon::Laser;
+            let label = if active { "   >LASER: " } else { "   LASER: " };
             let num = format!("{laser_charges}");
             let label_w = rl.measure_text(label, HUD_FONT_SIZE);
             let num_w = rl.measure_text(&num, HUD_FONT_SIZE);
-            (label, num, label_w, num_w)
+            let label_color = if active { HUD_LASER_COLOR } else { Color::WHITE };
+            (label, num, label_w, num_w, label_color)
         });
         // Same idea as hud_laser above, for plasma ammo.
         let hud_plasma = (plasma_ammo > 0).then(|| {
-            let label = "   PLASMA: ";
+            let active = active_weapon == ActiveWeapon::Plasma;
+            let label = if active { "   >PLASMA: " } else { "   PLASMA: " };
             let num = format!("{plasma_ammo}");
             let label_w = rl.measure_text(label, HUD_FONT_SIZE);
             let num_w = rl.measure_text(&num, HUD_FONT_SIZE);
-            (label, num, label_w, num_w)
+            let label_color = if active { HUD_PLASMA_COLOR } else { Color::WHITE };
+            (label, num, label_w, num_w, label_color)
         });
         // Same idea as hud_laser above, for minigun ammo.
         let hud_minigun = (minigun_ammo > 0).then(|| {
-            let label = "   MINIGUN: ";
+            let active = active_weapon == ActiveWeapon::Minigun;
+            let label = if active { "   >MINIGUN: " } else { "   MINIGUN: " };
             let num = format!("{minigun_ammo}");
             let label_w = rl.measure_text(label, HUD_FONT_SIZE);
             let num_w = rl.measure_text(&num, HUD_FONT_SIZE);
-            (label, num, label_w, num_w)
+            let label_color = if active { HUD_MINIGUN_COLOR } else { Color::WHITE };
+            (label, num, label_w, num_w, label_color)
         });
 
         // health_bar.png source rect for the player's current HP fraction -
@@ -416,22 +441,22 @@ impl Game {
             hud_x += hud_mid_w;
             d.draw_text(&hud_hp_num, hud_x, hud_y, HUD_FONT_SIZE, hp_color);
             hud_x += hud_hp_num_w;
-            if let Some((label, num, label_w, num_w)) = &hud_laser {
-                d.draw_text(label, hud_x, hud_y, HUD_FONT_SIZE, Color::WHITE);
+            if let Some((label, num, label_w, num_w, label_color)) = &hud_laser {
+                d.draw_text(label, hud_x, hud_y, HUD_FONT_SIZE, *label_color);
                 hud_x += label_w;
-                d.draw_text(num, hud_x, hud_y, HUD_FONT_SIZE, Color::new(255, 60, 160, 255));
+                d.draw_text(num, hud_x, hud_y, HUD_FONT_SIZE, HUD_LASER_COLOR);
                 hud_x += num_w;
             }
-            if let Some((label, num, label_w, num_w)) = &hud_plasma {
-                d.draw_text(label, hud_x, hud_y, HUD_FONT_SIZE, Color::WHITE);
+            if let Some((label, num, label_w, num_w, label_color)) = &hud_plasma {
+                d.draw_text(label, hud_x, hud_y, HUD_FONT_SIZE, *label_color);
                 hud_x += label_w;
-                d.draw_text(num, hud_x, hud_y, HUD_FONT_SIZE, Color::new(60, 220, 200, 255));
+                d.draw_text(num, hud_x, hud_y, HUD_FONT_SIZE, HUD_PLASMA_COLOR);
                 hud_x += num_w;
             }
-            if let Some((label, num, label_w, num_w)) = &hud_minigun {
-                d.draw_text(label, hud_x, hud_y, HUD_FONT_SIZE, Color::WHITE);
+            if let Some((label, num, label_w, num_w, label_color)) = &hud_minigun {
+                d.draw_text(label, hud_x, hud_y, HUD_FONT_SIZE, *label_color);
                 hud_x += label_w;
-                d.draw_text(num, hud_x, hud_y, HUD_FONT_SIZE, Color::new(190, 205, 215, 255));
+                d.draw_text(num, hud_x, hud_y, HUD_FONT_SIZE, HUD_MINIGUN_COLOR);
                 hud_x += num_w;
             }
             hud_x += 12;
@@ -569,8 +594,20 @@ fn draw_tank_inspect(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>) {
     d.draw_rectangle_rounded_lines(move_rect, corner / mx.min(my), 8, Color::SKYBLUE);
 
     let speed = (tank.velocity.x * tank.velocity.x + tank.velocity.y * tank.velocity.y).sqrt();
+    // What the trigger fires right now, with its own remaining ammo -
+    // under the FIFO inventory (`Tank::weapon_queue`) this advances when
+    // the live weapon runs dry (and a first pickup arms it directly), so
+    // surface it here to watch the handover live (WPN SHELL duplicates the
+    // AMMO line above; harmless, and it keeps this line self-contained).
+    let (wpn_name, wpn_ammo) = match tank.active_weapon() {
+        ActiveWeapon::Laser => ("LASER", tank.laser_charges),
+        ActiveWeapon::Plasma => ("PLASMA", tank.plasma_ammo),
+        ActiveWeapon::Minigun => ("MINIGUN", tank.minigun_ammo),
+        ActiveWeapon::Shell => ("SHELL", tank.shells_ammo),
+    };
     let mut lines = vec![
         format!("AMMO {}", tank.shells_ammo),
+        format!("WPN {wpn_name} {wpn_ammo}"),
         format!(
             "HP {}/{}",
             (MAX_DAMAGE - tank.damage).max(0.0).round() as i32,

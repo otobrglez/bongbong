@@ -554,6 +554,7 @@ impl Game {
             // frame zero rather than needing its own separate balance.
             if rng.random_range(0.0..1.0) < ENEMY_SPECIAL_WEAPON_CHANCE {
                 if rng.random_range(0.0..1.0) < ENEMY_SPECIAL_WEAPON_LASER_SHARE {
+                    enemy.enqueue_weapon(ActiveWeapon::Laser);
                     enemy.laser_charges += LASER_CHARGES_PER_PICKUP;
                     enemy.laser_variant = if rng.random_range(0.0..1.0) < LASER_BLUE_PICKUP_CHANCE {
                         LaserVariant::Blue
@@ -561,6 +562,7 @@ impl Game {
                         LaserVariant::Red
                     };
                 } else if rng.random_range(0.0..1.0) < ENEMY_SPECIAL_WEAPON_PLASMA_SHARE {
+                    enemy.enqueue_weapon(ActiveWeapon::Plasma);
                     enemy.plasma_ammo += PLASMA_AMMO_PER_PICKUP;
                     enemy.plasma_variant = if rng.random_range(0.0..1.0) < PLASMA_PURPLE_PICKUP_CHANCE {
                         PlasmaVariant::Purple
@@ -568,6 +570,7 @@ impl Game {
                         PlasmaVariant::Teal
                     };
                 } else {
+                    enemy.enqueue_weapon(ActiveWeapon::Minigun);
                     enemy.minigun_ammo += MINIGUN_AMMO_PER_PICKUP;
                 }
             }
@@ -973,10 +976,19 @@ impl Game {
             for (pickup_entity, tank_entity, kind) in collected {
                 let mut q = self.world.query_one::<&mut Tank>(tank_entity);
                 let tank = q.get().expect("collector entity always has a Tank");
+                // A weapon pickup (Laser/Minigun/Plasma) also *queues* that
+                // weapon - FIFO inventory, see `Tank::weapon_queue`: the
+                // weapon currently holding the trigger keeps it until its
+                // ammo runs dry, then the next queued pickup takes over,
+                // then shells. `enqueue_weapon` must run *before* the ammo
+                // grant (see its doc comment). Health/Ammo/SpeedUp never
+                // touch the queue: an ammo crate is a resupply for the
+                // always-recharging shell cannon, not a queue entry.
                 match kind {
                     PickupKind::Health => tank.damage = (tank.damage - PICKUP_HEAL_AMOUNT).max(0.0),
                     PickupKind::Ammo => tank.shells_ammo += PICKUP_AMMO_AMOUNT,
                     PickupKind::Laser => {
+                        tank.enqueue_weapon(ActiveWeapon::Laser);
                         tank.laser_charges += LASER_CHARGES_PER_PICKUP;
                         // Rerolled on every pickup - see LASER_BLUE_PICKUP_CHANCE's
                         // doc comment - so a fresh batch of charges can swap the
@@ -987,8 +999,12 @@ impl Game {
                             LaserVariant::Red
                         };
                     }
-                    PickupKind::Minigun => tank.minigun_ammo += MINIGUN_AMMO_PER_PICKUP,
+                    PickupKind::Minigun => {
+                        tank.enqueue_weapon(ActiveWeapon::Minigun);
+                        tank.minigun_ammo += MINIGUN_AMMO_PER_PICKUP;
+                    }
                     PickupKind::Plasma => {
+                        tank.enqueue_weapon(ActiveWeapon::Plasma);
                         tank.plasma_ammo += PLASMA_AMMO_PER_PICKUP;
                         // Rerolled on every pickup - see
                         // PLASMA_PURPLE_PICKUP_CHANCE's doc comment - same
@@ -1248,44 +1264,13 @@ impl Game {
         // plus a map from each enemy's entity to its slot in that snapshot
         // (slot 0 is always the player) - see `motion_snapshot`.
         let (movers, enemy_indices) = self.motion_snapshot();
-        // This frame's obstacle occupancy grid (see pathfind::Grid), so
-        // `Ai::steer` can route around static obstacles instead of just
-        // walking into one and getting physically stuck by its collider.
+        // This frame's obstacle occupancy grid, so `Ai::steer` can route
+        // around static obstacles instead of just walking into one and
+        // getting physically stuck by its collider - see `nav_grid`'s own
+        // doc comment for the full story (including why the frog is in it).
         // Rebuilt fresh every frame - obstacles are few and the grid small,
-        // so this is cheap enough not to need caching. The margin is the
-        // *worst-case* tank in the roster (see `max_tank_avoidance_radius`),
-        // not just a representative default one, so pathfinding never routes
-        // even the biggest tank (titan/leviathan) through a gap too narrow
-        // for it to actually fit through.
-        //
-        // The frog is chained in alongside `Obstacle` for the same reason:
-        // it's spawned as a real, solid `Physics::spawn_static` body (see
-        // `Game::init`) that blocks tank movement exactly like an obstacle
-        // tile does, and it can relocate mid-round (`Frog::start_hop`) - but
-        // it isn't an `Obstacle` component, so without this the grid had no
-        // idea it existed at all. That's the *literal* version of this
-        // comment's own "walking into one and getting physically stuck by
-        // its collider" warning: pathfinding treated the frog's cell as
-        // open ground, routed tanks straight through it, and physics
-        // stopped them cold - a "stuck near the frog" symptom that read
-        // like a bug in steering when the grid simply never knew to route
-        // around it.
-        let grid = Grid::build(
-            width,
-            height,
-            PATHFIND_CELL_SIZE,
-            battlefield::max_tank_avoidance_radius(),
-            self.world
-                .query::<&Obstacle>()
-                .iter()
-                .map(|o| (o.position, o.hull_size() * 0.5))
-                .chain(self.world.query::<&Frog>().iter().map(|f| {
-                    (
-                        f.position,
-                        FROG_COLLIDER_HALF_EXTENT.0.max(FROG_COLLIDER_HALF_EXTENT.1),
-                    )
-                })),
-        );
+        // so this is cheap enough not to need caching.
+        let grid = self.nav_grid(width, height);
         // Shared aggression (see ENEMY_ALERT_HOLD_SECONDS): if any enemy
         // currently has the player within ENEMY_VIEW_RANGE, refresh the
         // group's shared "last known player position" so every enemy - even
@@ -2786,6 +2771,70 @@ impl Game {
         (movers, enemy_indices)
     }
 
+    /// Build the obstacle-occupancy pathfinding grid for the round's
+    /// *current* static terrain (see `pathfind::Grid`) - the grid every
+    /// `Ai::steer` routes by, rebuilt fresh each frame by `update`, and
+    /// built exactly once by the map linter (`maplint::lint`, see
+    /// docs/gameplay-verification-design.md §3.1 - extracting this into
+    /// one method is what guarantees the linter verifies the *same* grid
+    /// the AI steers by, rather than a parallel reimplementation that
+    /// could drift).
+    ///
+    /// The margin is the *worst-case* tank in the roster (see
+    /// `max_tank_avoidance_radius`), not just a representative default
+    /// one, so pathfinding never routes even the biggest tank
+    /// (titan/leviathan) through a gap too narrow for it to actually fit
+    /// through.
+    ///
+    /// The frog is chained in alongside `Obstacle` for the same reason:
+    /// it's spawned as a real, solid `Physics::spawn_static` body (see
+    /// `Game::init`) that blocks tank movement exactly like an obstacle
+    /// tile does, and it can relocate mid-round (`Frog::start_hop`) - but
+    /// it isn't an `Obstacle` component, so without this the grid had no
+    /// idea it existed at all. That's the *literal* version of the
+    /// "walking into one and getting physically stuck by its collider"
+    /// failure this grid exists to prevent: pathfinding treated the
+    /// frog's cell as open ground, routed tanks straight through it, and
+    /// physics stopped them cold - a "stuck near the frog" symptom that
+    /// read like a bug in steering when the grid simply never knew to
+    /// route around it.
+    pub(crate) fn nav_grid(&self, width: f32, height: f32) -> Grid {
+        Grid::build(
+            width,
+            height,
+            PATHFIND_CELL_SIZE,
+            battlefield::max_tank_avoidance_radius(),
+            self.world
+                .query::<&Obstacle>()
+                .iter()
+                .map(|o| (o.position, o.hull_size() * 0.5))
+                .chain(self.world.query::<&Frog>().iter().map(|f| {
+                    (
+                        f.position,
+                        FROG_COLLIDER_HALF_EXTENT.0.max(FROG_COLLIDER_HALF_EXTENT.1),
+                    )
+                })),
+        )
+    }
+
+    /// Shortest-route length between two points on this round's nav grid,
+    /// in grid cells - `nav_grid` + `Grid::path_cost`, so the answer is
+    /// measured on the exact grid the AI steers by. `None` means no route
+    /// exists; `Some(0)` means same cell. For external tooling's
+    /// path-stretch metric (src/bin/probe.rs's `never-arrived` check, see
+    /// docs/gameplay-verification-design.md §5.2) - meant to be called at
+    /// round start, once per tank, not per frame: every call builds a
+    /// fresh grid, which is fine once and waste at 60Hz.
+    pub fn nav_path_cells(
+        &self,
+        from: Position,
+        to: Position,
+        width: f32,
+        height: f32,
+    ) -> Option<u32> {
+        self.nav_grid(width, height).path_cost(from, to)
+    }
+
     /// The seed the current round is actually running with - whatever
     /// `seed_override` pinned, or the fresh draw `init` made without one.
     /// For external inspection/reporting (same convention as `outcome()`):
@@ -2811,25 +2860,38 @@ impl Game {
         self.world
             .query::<(Entity, &Tank)>()
             .iter()
-            .map(|(entity, tank)| TankSnapshot {
-                is_player: entity == player,
-                position: tank.position,
-                rotation: tank.rotation,
-                // The tank's *actual* physics velocity (post accel/decel
-                // curve), not `tank.velocity` - that field holds the
-                // instantly-snapped commanded target `drive_tank` chases
-                // toward, not what the body is really doing this frame. See
-                // `TANK_DECEL_CURVE_RATE` in lib.rs: this is what you want to
-                // watch to verify the braking curve headlessly.
-                velocity: self.physics.velocity(
-                    tank.body
-                        .expect("tank should always have a physics body once spawned"),
-                ),
-                damage: tank.damage,
-                shells_ammo: tank.shells_ammo,
-                minigun_ammo: tank.minigun_ammo,
-                plasma_ammo: tank.plasma_ammo,
-                is_wreck: tank.is_wreck(),
+            .map(|(entity, tank)| {
+                let body = tank
+                    .body
+                    .expect("tank should always have a physics body once spawned");
+                let contact = self.physics.contact_stats(body);
+                TankSnapshot {
+                    is_player: entity == player,
+                    position: tank.position,
+                    rotation: tank.rotation,
+                    // The tank's *actual* physics velocity (post accel/decel
+                    // curve), not `tank.velocity` - that field holds the
+                    // instantly-snapped commanded target `drive_tank` chases
+                    // toward, not what the body is really doing this frame. See
+                    // `TANK_DECEL_CURVE_RATE` in lib.rs: this is what you want to
+                    // watch to verify the braking curve headlessly.
+                    velocity: self.physics.velocity(body),
+                    // ...and the commanded target itself, so intent-vs-outcome
+                    // ("trying to move but not moving") is computable outside.
+                    commanded_velocity: tank.velocity,
+                    top_speed: tank.speed,
+                    damage: tank.damage,
+                    shells_ammo: tank.shells_ammo,
+                    minigun_ammo: tank.minigun_ammo,
+                    plasma_ammo: tank.plasma_ammo,
+                    laser_charges: tank.laser_charges,
+                    // Narrow-phase contact read-back as of this update's last
+                    // physics step (exactly one step per frame under the
+                    // probe's fixed DT) - see `Physics::contact_stats`.
+                    touching_static: contact.touching_static,
+                    contact_impulse: contact.max_impulse,
+                    is_wreck: tank.is_wreck(),
+                }
             })
             .collect()
     }
@@ -2842,11 +2904,30 @@ pub struct TankSnapshot {
     pub is_player: bool,
     pub position: Position,
     pub rotation: f32,
+    /// Real physics velocity read back from the body (see the field's
+    /// construction comment in `tank_snapshots`).
     pub velocity: Position,
+    /// The commanded target velocity `drive_tank` is chasing
+    /// (`Tank::velocity` - snapped by `Tank::control`, not physics). The
+    /// spread between this and `velocity` is the intent-vs-outcome signal
+    /// the probe's `low-progress`/`wall-grind` kinds window over
+    /// (docs/gameplay-verification-design.md §4).
+    pub commanded_velocity: Position,
+    /// This tank's rolled base top speed (`Tank::speed` - varies per enemy
+    /// by ENEMY_SPEED_VARIANCE at spawn), before damage/boost scaling.
+    pub top_speed: f32,
     pub damage: f32,
     pub shells_ammo: i32,
     pub minigun_ammo: i32,
     pub plasma_ammo: i32,
+    pub laser_charges: i32,
+    /// The solid hull has an active narrow-phase contact with static
+    /// terrain (wall/obstacle/frog) right now - see
+    /// `Physics::contact_stats`; instantaneous fact, no accumulation.
+    pub touching_static: bool,
+    /// Strongest solver contact impulse on the hull this step (0.0 when
+    /// untouched) - scrape vs ram magnitude, same source as above.
+    pub contact_impulse: f32,
     pub is_wreck: bool,
 }
 

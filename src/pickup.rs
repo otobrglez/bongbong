@@ -16,20 +16,23 @@ use crate::{PICKUP_SCALE, PICKUP_TEXTURE_SIZE, Position};
 pub enum PickupKind {
     Health,
     Ammo,
-    /// Grants LASER_CHARGES_PER_PICKUP laser charges (see
-    /// `tank::Tank::laser_charges`, `laser.rs`) - while charged, firing
-    /// resolves an instant beam hit instead of the tank's normal shell.
+    /// Grants LASER_CHARGES_PER_PICKUP laser charges and queues the laser
+    /// in the collector's FIFO weapon rotation (see
+    /// `tank::Tank::weapon_queue` - the weapon currently firing keeps the
+    /// trigger until depleted; a first pickup arms immediately) - while
+    /// live and charged, firing resolves an instant beam hit instead of
+    /// the tank's normal shell.
     Laser,
-    /// Grants MINIGUN_AMMO_PER_PICKUP rounds of minigun ammo (see
-    /// `tank::Tank::minigun_ammo`, `bullet.rs`) - while positive, the next
-    /// trigger pull fires a multi-bullet burst instead of a laser beam (if
-    /// also charged) or a normal shell - see `tank::Tank::active_weapon`.
+    /// Grants MINIGUN_AMMO_PER_PICKUP rounds of minigun ammo and queues
+    /// the minigun (FIFO, as above) - while live and stocked, the trigger
+    /// fires a multi-bullet burst instead of a normal shell - see
+    /// `tank::Tank::active_weapon`.
     Minigun,
-    /// Grants PLASMA_AMMO_PER_PICKUP rounds of plasma ammo (see
-    /// `tank::Tank::plasma_ammo`, `plasma.rs`) - while positive and no laser
-    /// is charged, firing shoots a glowing plasma bolt from the barrel
-    /// instead of a normal shell (one bolt per barrel on a twin-barrel
-    /// chassis, same as `Shell`) - see `tank::Tank::active_weapon`.
+    /// Grants PLASMA_AMMO_PER_PICKUP rounds of plasma ammo and queues the
+    /// plasma cannon (FIFO, as above) - while live and stocked, firing
+    /// shoots a glowing plasma bolt from the barrel instead of a normal
+    /// shell (one bolt per barrel on a twin-barrel chassis, same as
+    /// `Shell`) - see `tank::Tank::active_weapon`.
     Plasma,
     /// Sets `tank::Tank::speed_boost_timer` to SPEED_BOOST_DURATION_SECONDS -
     /// while positive, `Tank::effective_speed` is scaled by

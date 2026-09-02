@@ -917,6 +917,15 @@ pub const IMPACT_FLASH_STRENGTH: f32 = 0.025; // how hard the punch shoves the i
 // clipped the outer edge of the punch.
 pub const IMPACT_FLASH_QUAD_RADIUS: f32 = 130.0;
 
+// Default window (and battlefield) size, shared by the game binary and the
+// headless probe (src/bin/probe.rs) so the battlefield the probe sweeps is
+// byte-for-byte the one the real game opens with - moved here from a
+// main.rs-private static exactly so the two can't drift (a bin can't
+// import from another bin). `--resolution` (main.rs) still overrides at
+// runtime; the probe always runs at this default.
+pub const DEFAULT_SCREEN_WIDTH: i32 = 1280;
+pub const DEFAULT_SCREEN_HEIGHT: i32 = 720;
+
 // Physics world: rapier2d integration (see docs/physics-engine-design.md).
 // The battlefield boundary is 4 static wall colliders whose inner faces sit
 // exactly at the screen edges, matching the old hand-rolled clamp bound;
@@ -1234,8 +1243,9 @@ pub const LASER_BEAM_WIDTH: f32 = 4.0;
 
 // --- Minigun pickup/weapon (pickup.rs's PickupKind::Minigun, bullet.rs,
 // simulation.rs's fire_bullet/MinigunBurst handling) ---
-// Sits in weapon priority between the laser (used/depleted first) and the
-// tank's traditional shell (used last) - see Tank::active_weapon. A burst
+// Fires once it reaches the front of the tank's FIFO weapon queue (see
+// Tank::weapon_queue/active_weapon) and holds the trigger until its ammo
+// runs out - then the next queued pickup, then the traditional shell. A burst
 // fires MINIGUN_BURST_SIZE individually-simulated Bullet entities, not one
 // abstract "burst" object: the first immediately on the trigger frame, the
 // rest queued MINIGUN_BULLET_DELAY_SECONDS apart (Tank::minigun_burst).
@@ -1311,10 +1321,10 @@ pub const MINIGUN_MOUNT_SCALE: f32 = 1.0;
 
 // --- Plasma pickup/weapon (pickup.rs's PickupKind::Plasma, plasma.rs,
 // simulation.rs's fire_plasma/PendingPlasmaShot handling) ---
-// Sits above the traditional shell in weapon priority but below the
-// instant-hit laser (see Tank::active_weapon) - a straight damage upgrade
-// over a shell rather than a different playstyle the way the laser
-// (guaranteed hit) and minigun (spray) are. Fired the exact same way a
+// Fires once it reaches the front of the tank's FIFO weapon queue (see
+// Tank::weapon_queue/active_weapon) - a straight damage upgrade over a
+// shell rather than a different playstyle the way the laser (guaranteed
+// hit) and minigun (spray) are. Fired the exact same way a
 // shell is - straight down the barrel, a twin-barrel chassis firing one
 // bolt per barrel a beat apart (see PendingPlasmaShot, mirroring
 // Tank::pending_shot) rather than the minigun's rapid individually-queued
@@ -1459,6 +1469,7 @@ pub mod game;
 pub mod ground;
 pub mod laser;
 pub mod map;
+pub mod maplint;
 pub mod obstacle;
 pub mod pathfind;
 pub mod physics;

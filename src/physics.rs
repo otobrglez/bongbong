@@ -390,6 +390,72 @@ impl Physics {
             .contact_pair(collider_a, collider_b)
             .is_some_and(|pair| pair.has_any_active_contact())
     }
+
+    /// What a tank body's solid hull is pressing against *right now*, read
+    /// straight out of rapier's narrow phase as of the last step - the
+    /// ground truth behind the probe's contact anomaly kinds (wall-grind/
+    /// bump-rate, see docs/gameplay-verification-design.md §4), which the
+    /// kinematic checks could only ever infer from symptoms. Same
+    /// `has_any_active_contact` basis as `touching` above, but fanned out
+    /// over every pair the hull is in (`contact_pairs_with`) instead of
+    /// one known opponent, and classified by what's on the other side.
+    ///
+    /// Only solid-vs-solid shows up here: sensors (shell/bullet bodies,
+    /// tank hit sensors) produce intersection pairs, never solver
+    /// contacts, so the pairs iterated are exactly the hull against walls,
+    /// obstacles, the frog (all `fixed` bodies -> `touching_static` - the
+    /// frog counting as terrain is deliberate, it's the historical
+    /// stuck-against case) and other tanks' hulls (`dynamic` ->
+    /// `touching_tank`). `max_impulse` is the strongest per-point normal
+    /// impulse rapier's solver applied among those active contacts this
+    /// step - 0.0 while merely resting in broad-phase proximity,
+    /// mass-scaled (see `spawn_tank`), so a ram spike dwarfs a scrape.
+    pub fn contact_stats(&self, body: RigidBodyHandle) -> ContactStats {
+        let hull = self.collider_of(body);
+        let mut stats = ContactStats::default();
+        for pair in self.world.contact_pairs_with(hull) {
+            if !pair.has_any_active_contact() {
+                continue;
+            }
+            let other = if pair.collider1 == hull { pair.collider2 } else { pair.collider1 };
+            // A live pair's colliders/bodies always resolve; the chained
+            // lookups are just totality, not an expected failure path.
+            let other_is_fixed = self
+                .world
+                .colliders
+                .get(other)
+                .and_then(|c| c.parent())
+                .and_then(|b| self.world.bodies.get(b))
+                .is_some_and(|b| b.is_fixed());
+            if other_is_fixed {
+                stats.touching_static = true;
+            } else {
+                stats.touching_tank = true;
+            }
+            for manifold in &pair.manifolds {
+                for point in &manifold.points {
+                    stats.max_impulse = stats.max_impulse.max(point.data.impulse);
+                }
+            }
+        }
+        stats
+    }
+}
+
+/// Result of `Physics::contact_stats`: what a tank's solid hull currently
+/// has active solver contacts with, plus the strongest of their impulses.
+/// Plain instantaneous facts - any windowing/accumulation lives in the
+/// consumer (the probe), per the design doc's §4.2.
+#[derive(Default, Clone, Copy)]
+pub struct ContactStats {
+    /// Actively contacting any `fixed` body: boundary wall, obstacle tile,
+    /// or the frog.
+    pub touching_static: bool,
+    /// Actively contacting another tank's hull (`dynamic` body).
+    pub touching_tank: bool,
+    /// Strongest per-contact-point normal impulse the solver applied this
+    /// step across those contacts; 0.0 when nothing is actively touching.
+    pub max_impulse: f32,
 }
 
 impl Default for Physics {

@@ -1,16 +1,20 @@
 # Gameplay verification & stuck-detection tooling — design doc
 
-Status: design only, nothing implemented yet. Six phases, each independently
-landable and verified on its own; Phase 1 (determinism) is the enabler for
-everything else and must land first. When a phase lands, update CLAUDE.md's
-"Testing & tooling" section and flip that phase's checkbox here.
+Status: ALL SIX PHASES LANDED (2026-08-27). See each phase's "Landed"
+notes for deviations, and the wave-5 close-out at the end of Phase 6 for
+the definitive standing baselines, the budget gate, and the burn-down
+list of real findings this tooling produced on day one. Six phases, each independently
+landable and verified on its own; Phase 1 (determinism) is the enabler
+for everything else and landed first. When a phase lands, update
+CLAUDE.md's "Testing & tooling" section and flip that phase's checkbox
+here.
 
-- [ ] Phase 1 — Seeded, replayable rounds (+ frame invariants)
-- [ ] Phase 2 — `--map` for the probe + adversarial fixture maps
-- [ ] Phase 3 — Static map linter (exhaustive, in `cargo test`)
-- [ ] Phase 4 — Contact-level metrics (wall-grind / bump-rate / low-progress)
-- [ ] Phase 5 — Navigation e2e (path-stretch / never-arrived)
-- [ ] Phase 6 — Sweep ergonomics (JSONL, budgets, heatmaps, CI)
+- [x] Phase 1 — Seeded, replayable rounds (+ frame invariants) — landed 2026-08-27, see the "Landed" notes at the end of its section
+- [x] Phase 2 — `--map` for the probe + adversarial fixture maps — landed 2026-08-27, see its "Landed" notes
+- [x] Phase 3 — Static map linter (exhaustive, in `cargo test`) — landed 2026-08-27, see its "Landed" notes
+- [x] Phase 4 — Contact-level metrics (wall-grind / bump-rate / low-progress) — landed 2026-08-27, see its "Landed" notes
+- [x] Phase 5 — Navigation e2e (path-stretch / never-arrived) — landed 2026-08-27 (§5.1 early, §5.2 same day), see its "Landed" notes
+- [x] Phase 6 — Sweep ergonomics (JSONL, budgets, heatmaps, CI) — landed 2026-08-27; see its "Landed" notes and the wave-5 close-out
 
 ## Problem
 
@@ -300,7 +304,10 @@ determinism_two_runs_agree:
 600 frames crosses spawn, patrol, alert, engagement, and firing — enough
 to sweep every RNG consumer. If someone later adds an unsorted-HashMap
 iteration or a stray `rand::rng()`, this fails within one CI run instead
-of quietly poisoning every future sweep. Runs in well under a second.
+of quietly poisoning every future sweep. (Measured: ~6.5s in a debug
+build — the doc's original "well under a second" guess was wrong; 2400
+simulated frames of debug-profile physics + per-frame A* grid rebuilds
+dominate. Accepted as the price of the guard rather than trimmed.)
 
 ### 1.7 Frame invariants (small add-on while we're in the probe)
 
@@ -322,6 +329,29 @@ isn't explained by the script).
 `--seed`ed probe command twice and diffing stdout (identical); running
 `bongbong --seed` and confirming restart reproduces the layout; a 30-round
 sweep confirming per-round seeds print and replay.
+
+**Landed (2026-08-27).** All of 1.1–1.7 as designed, plus verification:
+the smoke test passes; two same-`--seed` probe runs diff byte-identical;
+an *unseeded* run replayed byte-identically from its printed seed; and a
+flagged sweep round (round 28, seed `0x404`) replayed with `--rounds 1
+--seed 0x404` reproduced both its anomalies at the same frames and
+positions to the decimal. Deviations from the plan, for the record:
+
+- The take/put-back sketch missed that `update`'s post-round early-return
+  branch itself consumes RNG (`roll_wreck_col` while wrecks burn on the
+  end screen). That branch borrows `self.rng.as_mut()` in place instead
+  of taking — field-disjoint from the `world` query borrow, and NLL ends
+  it before the branch's own `self.init(..)` restart call.
+- `roll_wreck_col` (the stray-inline-`rand::rng()` fix) is called from
+  both that branch and the main flow, so it gained the `rng` parameter as
+  planned but with two differently-sourced call sites.
+- The smoke test costs ~6.5s (debug build), not the predicted sub-second
+  — noted at §1.6, kept as-is.
+- First seeded baseline sweep (`afk --enemies 4 --frames 900 --rounds 30
+  --seed 1000`): 22/30 rounds flagged — stale-start=8 stall=11
+  border-stuck=1 jitter=19 clustering=22 invariant=0. That is the Phase 6
+  budget baseline to beat, and `--seed 1000` makes this exact sweep
+  re-runnable for comparison after any AI change.
 
 ---
 
@@ -364,6 +394,54 @@ users nothing.
 **Phase 2 verified by:** `probe --map maps/test/<each>.toml --scenario afk
 --rounds 10` runs clean end-to-end; fixture-by-fixture baseline numbers
 recorded for Phase 6's budgets.
+
+**Landed (2026-08-27).** `--map` (+ `NamedMap` so the header names the
+battlefield), `DEFAULT_SCREEN_WIDTH/HEIGHT` moved to lib.rs, and all six
+fixtures committed. Verified: every fixture loads, spawns, and fights
+(tight-corridors traced end-to-end: enemies entered the tube from both
+ends, drove its single open grid row, and finished an AFK player at frame
+237); the u-trap start cell places the player at exactly (640, 512);
+`cargo test --lib` stays green. Deviations and findings:
+
+- Fixtures were emitted by a one-off generator script (scratchpad-only,
+  not committed) rather than clicked out in the editor — the k≥6
+  corridor-clearance arithmetic was much safer done programmatically.
+  The files are inline-table TOML with explanatory `#` header comments;
+  an editor re-save would drop those comments, so edit fixtures by hand
+  (or regenerate), don't round-trip them through the editor.
+- The probe caught its first fixture defect before the corpus even
+  shipped: maze's rails at rows 4/18 left the only route north of the
+  top rail inside the 40px border margin, flagging `border-stuck` ×10 as
+  pure routing artifact. Rails moved to rows 5/17 (which also tightens
+  both lanes to exactly k=6): border-stuck 10 → 0, jitter/clustering
+  preserved. Fixture design lesson recorded: keep at least one legal
+  route outside `BORDER_MARGIN` of every boundary, or the border-stuck
+  check measures the map, not the AI.
+- Baselines (afk, map-default tank counts, 1800 frames, 10 rounds,
+  `--seed 1000` — rerunnable verbatim). Measured twice the day they
+  landed: first on the six-kind detector set, then again after the
+  `spin`/`churn` detectors (and the `circle` scenario) were added
+  concurrently in probe.rs — every original-kind count replayed
+  *identically* across the two builds, a live cross-check that detectors
+  are pure observers of a seed-determined round. Current (eight-kind)
+  numbers:
+
+  | fixture | flagged | signature |
+  |---|---|---|
+  | u-trap | 6/10 | stale-start=4 stall=1 jitter=3 churn=1 clustering=1 |
+  | choke | 6/10 | stale-start=3 border-stuck=1 jitter=2 churn=4 |
+  | tight-corridors | 2/10 | churn=1 clustering=6 |
+  | frog-block | 5/10 | stale-start=1 jitter=2 churn=2 clustering=6 |
+  | maze | 8/10 | stall=1 jitter=9 spin=3 churn=17 clustering=17 |
+  | pockets | 6/10 | stale-start=4 jitter=2 churn=2 |
+
+  Zero `invariant` hits anywhere. Each fixture provokes a distinct
+  signature matching its intent (maze → weaving jitter/spin/churn plus
+  entrance funneling — it's also the loudest map for the two new
+  detectors; tight-corridors/frog-block → clustering at the choke;
+  u-trap/pockets → spawn-adjacent stale-starts). The stale-starts and
+  stalls across u-trap/choke/pockets are the standing AI findings to
+  chase with these seeds, not fixture defects.
 
 ---
 
@@ -447,6 +525,61 @@ boxed-in cell, tank-count 10 on a nearly-full map) and watching each check
 fire; `cargo test` green on `SUPPORTED_MAPS`; runtime for the whole maps
 directory under a second.
 
+**Landed (2026-08-27).** Implemented by a subagent fork (which stalled at
+8/11 tests mid-diagnosis and was finished inline); its wave partner
+delivered §5.1's `Grid::path_cost` early. Architecture exactly as §3.1
+demanded — and that choice immediately paid off, twice:
+
+- **The linter cannot disagree with the AI, so it caught the AI's world
+  changing mid-landing.** The parallel AI-mechanics session changed
+  `Grid::build`'s rasterization from any-overlap to *cell-center-inside-
+  reach* (killing a hidden extra ~half-cell of margin per side — the root
+  cause of the spinning/dancing tanks: sealed pockets → failed
+  reachability → per-frame wander re-rolls; their before/after at seed
+  0x5eed0001, 30 rounds: advance spin 34→5 churn 96→19, afk spin 5→2
+  churn 44→25, circle spin 19→14 churn 83→58). The lint tests failed the
+  moment the rule changed, and the failure dumps were what root-caused it
+  here independently before the other session's heads-up arrived.
+  Absorbed: `sealed_ring` resized to a 5×5 ring (exactly one open center
+  per axis ⇒ a genuine single boxed cell), a wider `sealed_vault` kept
+  for the pickup/frog burial tests (whose ~128/~150px approach reaches
+  need the deeper interior), **maps/test/pockets.toml regenerated** with
+  the small ring so the on-disk fixture still carries the boxed-cell
+  pathology, and all fixture headers/generator prose re-derived
+  (guaranteed grid-passable is now ≥5 cells of wall separation; 3–4 is
+  48px-alignment-dependent; choke/tight-corridors/frog-block lanes are
+  now two cells wide, so `NarrowCorridor` rightly stays silent for them
+  and their provocations are recorded as behavioral).
+- **Day-one real findings in the shipped map.** `default.toml` carries a
+  strip of pickups along its top edge that no playfield cell comes
+  within approach reach of, and — the big one — a border band with
+  **zero** cells passing the enemy-spawn legality predicate: every enemy
+  spawn on the default map degrades to `sample_clear_position`'s
+  documented attempt-cap fallback, a very plausible driver of that map's
+  stale-start/stall baseline. Real map debt, recorded, not "fixed" by
+  loosening the checks.
+
+Deviations from the plan:
+
+- The zero-error `SUPPORTED_MAPS` gate became
+  `supported_maps_no_new_errors` ratcheting against `KNOWN_ERROR_KINDS` —
+  an allowlist of error *kinds* (not counts): default.toml is under
+  active hand-editing (its unreachable-pickup count grew from 5 to 12
+  while the gate was being written), and count-ratcheting a live canvas
+  just flaps. A brand-new error class (boxed-in cell, planner/physics
+  mismatch, unreachable frog) still fails instantly. Tighten back to
+  per-kind counts once the map settles.
+- `tight-corridors.toml`'s profile now *includes* `SpawnBandTooTight`
+  (its 21-tile rails leave ~3 legal band cells for 4 tanks) — spawn
+  pressure is part of that fixture's identity, asserted as the only
+  error kind it may carry.
+- Suite at this point: **36 tests green** (linter + path_cost + the
+  AI-session's weapon-queue tests). Standing caveat: the Phase 2
+  baseline table predates both the center-rule change and the probe's
+  new deliberate-hold suppression (stall/stale-start muted for tanks
+  that are firing/aiming/recharge-waiting), so every recorded anomaly
+  baseline is stale until the wave-5 re-baseline on the final binary.
+
 ---
 
 ## Phase 4 — Contact-level metrics
@@ -520,6 +653,35 @@ near zero; manually wedging the player into a wall in a windowed `--seed`
 run and confirming the same frames flag in the probe replay; the
 determinism smoke test still green (contact reads are pure queries).
 
+**Landed (2026-08-27, subagent fork, whole phase).** As designed:
+`Physics::contact_stats` (pair iteration on the hull collider, fixed ⇒
+static incl. walls/frog, max per-point solver impulse), four snapshot
+fields slotted beside the AI-session's `laser_charges`, three probe kinds
+wired through every total/summary. No accumulators in the sim — §4.2's
+instantaneous-facts split held. Thresholds were **measured, then set**
+(temporary rising-edge instrumentation, added and removed): per-tank
+bump-window maxima of 7/13/12 per minute on the default map
+(afk/advance/circle) and 0–5 on every fixture ⇒ `BUMP_RATE_MAX = 30`,
+~2.3× the worst legitimate peak and below collide-thrash rates; the
+measurement table lives in the const's comment. Suite 36/36 green,
+independently re-verified.
+
+The interesting part: **the verified-by prediction above was wrong in
+direction, for a good reason.** Post-rasterization-fix routing is clean —
+`tight-corridors` logged *zero* contact events across 10 afk rounds; the
+snug tube is driven without a scrape. It's the dense shipped
+`default.toml` that carries the real contact population: wall-grind 4/3/3
+and low-progress 8/9/6 (afk/advance/circle, 10 rounds each, `--seed
+1000`), zero `invariant` anywhere. Every hit is a seeded repro; the
+canonical specimen — seed `0x3e9`, frame 120, an enemy at (960, 374)
+commanding 173px/s while achieving 0 against ~2040 impulse, flagged by
+`wall-grind` and then `low-progress` 70 frames later — looks like a
+genuine stuck spot on the current default map, queued for the same
+burn-down list as its lint debt. Two small deviations: `touching_tank`
+exists in `ContactStats` but isn't yet a snapshot field (ready for future
+ram/pile-up metrics); the windowed wedge-the-player check was superseded
+by that seeded specimen.
+
 ---
 
 ## Phase 5 — Navigation e2e (path-stretch)
@@ -533,6 +695,11 @@ body into an internal search shared with `next_step` (both need
 `came_from`/`g_score`; `next_step`'s public behavior is unchanged). Unit
 tests alongside the existing ones: open-field cost equals Manhattan cell
 distance; a detour costs more; sealed goal returns `None`.
+
+*Landed 2026-08-27 (early, alongside Phase 3):* the shared internal
+`search` returns `SearchHit { first_step, cost }`; `Some(0)` for
+same-cell is deliberate and documented against `next_step`'s conflating
+`None`. Four new tests; `next_step`'s pre-existing tests pass untouched.
 
 ### 5.2 The metric, on `pub` API only
 
@@ -574,6 +741,38 @@ enemy that already engaged once is out of scope (first crossing only).
 `u-trap.toml`/`maze.toml` (higher stretch, still arriving) vs a
 deliberately-sealed throwaway map (`path_cells = None` ⇒ excluded, no
 false flag).
+
+**Landed (2026-08-27, subagent fork; §5.1 had landed earlier).**
+`Game::nav_path_cells` beside `round_seed()`; `NAV_GRACE_SECONDS = 10` /
+`NAV_STRETCH_MAX = 4.0`; `TankTrack` carries route/ideal/time-to-engage
+and the verdict runs once at round end — deliberately *outside*
+`check_anomalies`' still-Playing gate, since "never arrived" is only
+decidable when arriving can no longer happen. Trace mode prints a
+per-enemy stretch table. At production thresholds: `never-arrived` = 0
+and `invariant` = 0 across default/maze/u-trap/tight-corridors/
+frog-block (10 seeded rounds each); since nothing fired naturally, the
+wiring was proven by a temporary threshold-floor positive control (maze
+seed `0x3ea`: "route existed (15 cells, ideal 4.3s) but no engagement in
+13.1s") and then reverted to byte-identical sweep output. Suite 36/36.
+
+Reality vs the prediction above, and two recorded caveats:
+
+- Stretch distributions run **sub-1.0** (u-trap 0.0–0.6, maze 0.0–1.0),
+  not the predicted 1–2: "engaged" fires `ENEMY_ATTACK_RANGE` (340px)
+  short of the player while `ideal` prices the full route. The health
+  signal is the tail (≫1 or never), not the mean — the trace table shows
+  the distribution for exactly this reason.
+- **Euclidean engagement blind spot**: maze enemies with 34–37-cell
+  routes log `engaged=0.0s` — within 340px of the player *through the
+  walls*. Faithful to §5.2 as specified (and to the AI itself, whose
+  attack gate is equally Euclidean); a future refinement could gate
+  arrival on line-of-sight or route distance.
+- **`route=none` on the shipped map**: a default.toml round (seed 1000)
+  spawned an enemy with *no route to the player at all* — independent
+  corroboration of the linter's spawn-band finding (attempt-cap fallback
+  spawns landing in grid-sealed areas). Excluded from `never-arrived` by
+  design; currently visible only in the trace table, so a
+  `no-route-at-spawn` anomaly kind is a candidate promotion.
 
 ---
 
@@ -645,6 +844,60 @@ json.loads` loop over the file; a deliberately-tight budget exiting 1; the
 workflow green on a clean branch and red on a branch with a seeded,
 known-bad regression (e.g. temporarily reverting the frog-in-grid fix).
 
+**Landed (2026-08-27, subagent fork + wave-5 finishing pass).** As
+designed, with an `ANOMALY_KINDS` registry (12 tags in reporting order)
+as the single source of truth wiring every kind into JSONL, budgets, and
+heatmaps at once. `--json-out` writes each round's record as it finishes
+(an interrupted sweep still leaves valid JSONL) and reports the *actual*
+spawned enemy count; `path_cells: null` per tank makes the
+no-route-at-spawn population machine-visible. `--budget` parses strictly
+(unknown kinds are clap errors listing the valid set) and exits 1 after
+all other output on a breach. The first heatmap render localized the
+default map's stalls/jitter to the row-3 band beside its walled top
+strip — converging with the lint debt, independently. All verified twice
+(fork, then parent session): suite 36/36, JSONL `json.loads`-clean,
+budget exit codes 0/1, `just probe-fixtures` end-to-end. ci.yml's apt
+list is a verbatim copy of `dist-workspace.toml`'s; its first real
+validation happens on push, by design.
+
+## Wave-5 close-out: the standing baselines (2026-08-27, final binary)
+
+All phases landed; these are the definitive seeded baselines every
+recorded number in earlier landed notes is superseded by (`--seed 1000`,
+afk, 1800 frames; default 30 rounds `--enemies 4`, fixtures 10 rounds at
+map tank counts):
+
+| map | flagged | totals (nonzero kinds) |
+|---|---|---|
+| default.toml | 27/30 | stale-start=5 stall=5 border-stuck=5 jitter=20 spin=1 churn=37 clustering=15 wall-grind=7 low-progress=38 **never-arrived=1** |
+| u-trap | 4/10 | jitter=1 spin=2 churn=1 |
+| choke | 3/10 | jitter=1 churn=2 |
+| tight-corridors | 3/10 | jitter=1 spin=2 clustering=3 |
+| frog-block | 3/10 | jitter=1 clustering=4 |
+| maze | 8/10 | jitter=8 spin=1 churn=5 clustering=6 low-progress=3 |
+| pockets | 1/10 | churn=2 |
+
+`invariant` and `bump-rate` are zero everywhere. The fixture gate
+(`just probe-fixtures`, mirrored in ci.yml) pins the seed and holds each
+kind to its cross-fixture maximum exactly — deterministic, so an
+exceedance is a real behavior change; the justfile comment carries the
+re-baselining policy.
+
+**The burn-down list**, where every instrument now points at the same
+place — the default map, especially its walled top strip:
+
+1. `default.toml` lint debt (`KNOWN_ERROR_KINDS`): the unreachable
+   top-strip pickups and the zero-legal-cell spawn band.
+2. The natural `never-arrived`: seed `0x3fd`, an enemy at (507, 170) —
+   nav-grid row ~3, beside that same strip — alive with a 9-cell route
+   (ideal 2.3s) and no engagement in 26.8s.
+3. The wall-grind family: seed `0x3e9`, (960, 374), commanded 173px/s
+   achieving 0.
+4. The heatmap's stall/jitter concentration in the row-3 band.
+
+Fixing the map's top strip (or the spawn band predicate) and replaying
+those seeds is the intended next use of this tooling.
+
 ---
 
 ## Promotion path: from sweep finding to pinned regression
@@ -676,7 +929,7 @@ proofs: unit tests, the determinism smoke, map lint, pinned regressions.
 | const | start | why |
 |---|---|---|
 | `GRIND_FRAMES` | 120 (2s) | matches `STALE_START_FRAMES` scale; > any legitimate corner brush |
-| `BUMP_RATE_MAX` | from baseline | set after Phase 6 baseline pass, per map class |
+| `BUMP_RATE_MAX` | 30/min | measured maxima: 7/13/12 per min on default (afk/advance/circle), 0–5 on fixtures; ≈2.3× worst legitimate peak, below collide-thrash rates |
 | `PROGRESS_FRAMES` | 180 (3s) | matches `STALL_FRAMES_THRESHOLD`; ~4× the AI's own `STUCK_ESCAPE_SECONDS` |
 | `NAV_STRETCH_MAX` | 4.0 | dodging/commitment/engagement detours legitimately cost 2–3× |
 | `NAV_GRACE_SECONDS` | 10 | patrol wander + alert propagation before pursuit starts |

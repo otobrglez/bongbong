@@ -100,6 +100,20 @@ pub struct Ai {
     /// tank that gets shot from outside its normal awareness range still
     /// fights back instead of obliviously continuing to patrol/wander.
     hit_alert_timer: f32,
+    /// True while `wander`'s last waypoint resample came up completely
+    /// empty-handed - every candidate it rolled was unreachable, so the
+    /// waypoint it settled on is a known-unreachable fallback. While set,
+    /// the "current waypoint turned out unreachable, resample right now"
+    /// fast path stays suppressed (the normal ENEMY_RETARGET_SECONDS
+    /// cadence still applies): re-rolling would almost certainly come up
+    /// empty again, and doing that every frame hands the tank a brand-new
+    /// random heading per tick - the same spin-in-place failure
+    /// `Grid::boxed_in`'s guard exists for, just in a *multi-cell*
+    /// reachability pocket where `boxed_in` (a single-cell check) stays
+    /// false. Found via the probe harness's `spin` anomaly sweep: tanks
+    /// lapping a tight box at full speed, one fresh unreachable waypoint
+    /// per frame.
+    wander_pocketed: bool,
 }
 
 impl Default for Ai {
@@ -117,6 +131,7 @@ impl Default for Ai {
             was_moving: false,
             stuck_timer: 0.0,
             hit_alert_timer: 0.0,
+            wander_pocketed: false,
         }
     }
 }
@@ -348,9 +363,12 @@ impl Ai {
         // `retarget_timer`) in case circumstances change (an obstacle
         // burns away), just not every frame.
         let stuck_here = grid.boxed_in(from);
+        // `wander_pocketed` suppresses the third, unreachability-triggered
+        // resample the same way `stuck_here` does, for the same reason at a
+        // different scale - see the field's own doc comment.
         if self.retarget_timer <= 0.0
             || from.distance_to(self.waypoint) < margin
-            || (!stuck_here && !reachable(self.waypoint))
+            || (!stuck_here && !self.wander_pocketed && !reachable(self.waypoint))
         {
             // Roll WANDER_SPREAD_CANDIDATES points and keep whichever is
             // both reachable and farthest from every other live tank
@@ -388,6 +406,11 @@ impl Ai {
                     best = Some((candidate, spread));
                 }
             }
+            // Latch (or clear) the pocket state off this pass's outcome:
+            // empty-handed means the fallback waypoint below is known
+            // unreachable, and re-rolling before the normal retarget
+            // cadence would just spin the tank - see `wander_pocketed`.
+            self.wander_pocketed = best.is_none();
             self.waypoint = best.map(|(candidate, _)| candidate).unwrap_or_else(|| {
                 Position::new(
                     rng.random_range(margin..(width - margin)),
@@ -950,12 +973,13 @@ fn build<'a>() -> Node<Brain<'a>> {
             action(act_flee),
         ]),
         // 3. Low on shells: back off and hold fire until recharged - unless
-        // a laser charge is available, since that's a shot that costs no
-        // shells at all and there's nothing to recharge by retreating from.
-        // Deliberately short-circuits before `wants_retreat` so its ammo
-        // hysteresis doesn't even latch on while the laser/minigun covers
-        // for it; once both run out, the next tick evaluates fresh against
-        // whatever `shells_ammo` actually is by then.
+        // a queued special weapon still has ammo, since firing that costs
+        // no shells at all and there's nothing to recharge by retreating
+        // from. Deliberately short-circuits before `wants_retreat` so its
+        // ammo hysteresis doesn't even latch on while a special covers for
+        // it; once the whole queue runs dry (`active_weapon()` falls back
+        // to Shell), the next tick evaluates fresh against whatever
+        // `shells_ammo` actually is by then.
         sequence(vec![
             condition(|b: &mut Brain| {
                 b.player_alive()
@@ -984,37 +1008,34 @@ fn build<'a>() -> Node<Brain<'a>> {
         // charges - reached only once nothing higher-priority (fleeing,
         // retreating, attacking, chasing) already claimed this tank, so it
         // never interrupts a fight, just fills idle patrol time with a
-        // purposeful detour instead. See `act_seek_laser`.
+        // purposeful detour instead. Under the FIFO inventory (see
+        // `Tank::weapon_queue`) collecting a weapon never downgrades what's
+        // currently firing - it just lines up behind it - so this tier and
+        // the two below are each gated only on "not already stocked with
+        // that kind"; which detour is worth taking *first* is expressed by
+        // their tier order (laser, then plasma, then minigun - strongest
+        // first). See `act_seek_laser`.
         sequence(vec![
             condition(|b: &mut Brain| {
                 b.me.laser_charges <= 0 && b.pickups.iter().any(|(k, _)| *k == PickupKind::Laser)
             }),
             action(act_seek_laser),
         ]),
-        // 5.6. Same idea for a live Plasma pickup - reached whenever this
-        // tank has none and isn't already laser-charged (`active_weapon()
-        // != Laser`), since laser always outranks plasma anyway. Unlike
-        // tier 5.7 below, this stays worth detouring for even while
-        // Minigun-active: plasma outranks minigun in `Tank::active_weapon`,
-        // so it's a genuine upgrade over what this tank is currently firing.
+        // 5.6. Same idea for a live Plasma pickup - queueing it behind
+        // whatever is currently live is a pure gain (see tier 5.5's
+        // comment), so no gating on the live weapon.
         sequence(vec![
             condition(|b: &mut Brain| {
                 b.me.plasma_ammo <= 0
-                    && b.me.active_weapon() != ActiveWeapon::Laser
                     && b.pickups.iter().any(|(k, _)| *k == PickupKind::Plasma)
             }),
             action(act_seek_plasma),
         ]),
-        // 5.7. Same idea for a live Minigun pickup, but only once this tank
-        // has fallen all the way back to shells (`active_weapon() ==
-        // Shell`) - a laser- or plasma-equipped tank has no reason to
-        // detour for minigun ammo, since both outrank it anyway (unlike
-        // tier 5.5 above, which stays unconditional: laser is worth
-        // detouring for regardless of what else is currently equipped).
+        // 5.7. Same idea for a live Minigun pickup, last of the weapon
+        // tiers (see tier 5.5's comment on ordering).
         sequence(vec![
             condition(|b: &mut Brain| {
                 b.me.minigun_ammo <= 0
-                    && b.me.active_weapon() == ActiveWeapon::Shell
                     && b.pickups.iter().any(|(k, _)| *k == PickupKind::Minigun)
             }),
             action(act_seek_minigun),

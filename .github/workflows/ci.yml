@@ -1,0 +1,69 @@
+# Test lane (Phase 6 of docs/gameplay-verification-design.md): cargo test
+# (unit + determinism + map lint) plus the budgeted probe fixture sweeps.
+# Deliberately separate from the deploy lanes (cloudflare-deploy.yml /
+# pr-preview.yml) and never touching release.yml (cargo-dist-generated).
+# First real validation happens on push - a workflow file can't run before
+# it exists on the branch.
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # raylib-sys builds raylib from source - same system dev packages as
+      # the release builds (keep in sync with dist-workspace.toml's
+      # [dist.dependencies.apt]; that list came from sola-raylib's own
+      # working CI, see CLAUDE.md's Releases section).
+      - name: Install raylib build dependencies
+        run: >
+          sudo apt-get update && sudo apt-get install -y
+          libasound2-dev libudev-dev libx11-dev libxcursor-dev
+          libxinerama-dev libxrandr-dev libxi-dev libgl1-mesa-dev
+
+      # Same pinned toolchain as .github/actions/build-web/action.yml -
+      # keep the two (and devenv.nix's languages.rust.version) in sync.
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.1"
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ci-test-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ci-test-${{ runner.os }}-
+
+      # The whole `cargo test --lib` suite: pathfind/shell-sweep/tile-seam/
+      # weapon-queue units, the seeded-replay determinism guard, and the
+      # static map linter with its supported-map gate.
+      - name: cargo test
+        run: cargo test --lib
+
+      # Budgeted probe sweeps over every adversarial fixture map - headless,
+      # no display needed. Mirrors the justfile's `probe-fixtures` recipe
+      # inline (no `just` on the runner): pinned seed, ceilings = the
+      # 2026-08-27 baseline maxima across all six fixtures (deterministic
+      # under the pinned seed, so an exceedance is a real behavior change).
+      # Keep these budgets in lockstep with the justfile recipe - that
+      # recipe's comment carries the re-baselining policy.
+      - name: probe fixture sweeps
+        run: |
+          for m in maps/test/*.toml; do
+            cargo run --bin probe -- --map "$m" --frames 1800 --rounds 10 --seed 1000 \
+              --budget stale-start=0 --budget stall=0 --budget border-stuck=0 \
+              --budget jitter=8 --budget spin=2 --budget churn=5 --budget clustering=6 \
+              --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=3 \
+              --budget never-arrived=0 --budget invariant=0 || exit 1
+          done
