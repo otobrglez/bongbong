@@ -18,7 +18,6 @@ use std::collections::{HashMap, HashSet};
 
 use rand::RngExt;
 use rand::rngs::SmallRng;
-use rapier2d::prelude::ColliderHandle;
 
 use crate::ai::Ai;
 use crate::map::{CellObject, MapFile, cell_to_world};
@@ -90,7 +89,7 @@ pub fn sample_clear_position(
 /// (`SHELL_HIT_HALF_EXTENT * 2` = 6px) fits inside that gap, so a
 /// well-aligned shot can thread clean between two visually touching wall
 /// tiles without ever registering a hit on either one - no frame hitch or
-/// lucky timing needed (contrast `simulation::swept_shell_target`'s doc
+/// lucky timing needed (contrast `simulation::hits::Terrain::sweep`'s doc
 /// comment, which covers a *timing*-based tunneling gap; this one is a pure
 /// placement gap, deterministic the moment a shot lines up with the seam).
 ///
@@ -123,34 +122,28 @@ pub(crate) fn pos_to_cell(pos: Position) -> (i32, i32) {
     )
 }
 
-/// Build the battlefield boundary: four static wall colliders positioned so
-/// their inner faces sit exactly at the screen edges (0..width, 0..height) -
-/// the same bound the old hand-rolled `Tank::clamp_to_field` used to
-/// enforce, since a tank's collider now stops flush against a wall's
-/// surface instead. Padded outward by `WALL_THICKNESS` so corners are
-/// covered with no gap; that padding is otherwise arbitrary since it's
-/// never rendered. Returns each wall's collider handle (see `Game::walls`)
-/// so a shell's flight can be checked against them too, the same way as
-/// tanks/obstacles - see `find_shell_target`.
-pub fn spawn_walls(physics: &mut Physics, width: f32, height: f32) -> [ColliderHandle; 4] {
+/// The four battlefield boundary walls as (center, half-extents) rectangles:
+/// inner faces exactly at the screen edges (0..width, 0..height), padded
+/// outward by `WALL_THICKNESS` so the corners are covered. Shared by
+/// `spawn_walls` (the physics bodies tanks stop against) and the projectile
+/// hit test (`simulation::hits::Terrain`), so the two can never disagree.
+pub fn wall_rects(width: f32, height: f32) -> [(Position, Position); 4] {
     let t = WALL_THICKNESS;
-    let left = physics.spawn_static(
-        Position::new(-t / 2.0, height / 2.0),
-        Position::new(t / 2.0, height / 2.0 + t),
-    );
-    let right = physics.spawn_static(
-        Position::new(width + t / 2.0, height / 2.0),
-        Position::new(t / 2.0, height / 2.0 + t),
-    );
-    let top = physics.spawn_static(
-        Position::new(width / 2.0, -t / 2.0),
-        Position::new(width / 2.0 + t, t / 2.0),
-    );
-    let bottom = physics.spawn_static(
-        Position::new(width / 2.0, height + t / 2.0),
-        Position::new(width / 2.0 + t, t / 2.0),
-    );
-    [left, right, top, bottom].map(|body| physics.collider_of(body))
+    [
+        (Position::new(-t / 2.0, height / 2.0), Position::new(t / 2.0, height / 2.0 + t)),
+        (Position::new(width + t / 2.0, height / 2.0), Position::new(t / 2.0, height / 2.0 + t)),
+        (Position::new(width / 2.0, -t / 2.0), Position::new(width / 2.0 + t, t / 2.0)),
+        (Position::new(width / 2.0, height + t / 2.0), Position::new(width / 2.0 + t, t / 2.0)),
+    ]
+}
+
+/// Spawn the battlefield boundary: four static wall colliders (see
+/// `wall_rects`) a tank's movement collider stops flush against. Never
+/// rendered and never removed.
+pub fn spawn_walls(physics: &mut Physics, width: f32, height: f32) {
+    for (center, half) in wall_rects(width, height) {
+        physics.spawn_static(center, half);
+    }
 }
 
 /// The largest `Tank::avoidance_radius` reachable by *any* row in

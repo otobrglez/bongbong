@@ -2,8 +2,8 @@
 //! `pickup::PickupKind::Laser` pickup (see `pickup.rs`, `Tank::laser_charges`,
 //! `Tank::laser_variant`). Unlike `Shell` there's no travel time or
 //! sprite-sheet animation to animate through - firing resolves the hit the
-//! same frame (see `simulation.rs`'s `laser_shot`/`resolve_laser_hit`, which
-//! reuse `swept_shell_target`'s pure-geometry segment test), and this type is
+//! same frame (see `simulation::weapons` and `Game::resolve_lasers`, which
+//! reuse `hits::Terrain::sweep`'s segment test), and this type is
 //! purely the resulting on-screen flash: a short-lived line from muzzle to
 //! whatever it hit, ticked down and dropped once its display window elapses.
 

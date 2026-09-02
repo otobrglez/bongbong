@@ -15,7 +15,7 @@
 //! mechanism `laser::LaserVariant` already uses.
 //!
 //! Mirrors `shell::Shell`'s shape (position/velocity/rotation/timer/owner/
-//! body/shadow_offset/flew) and its 7-state Fire/Flying/Hit choreography,
+//! shadow_offset/prev_position) and its 7-state Fire/Flying/Hit choreography,
 //! but - like `bullet::Bullet` - carries no chassis-matched sprite row (the
 //! sheet's two rows are `PlasmaVariant`, a property of the ammo, not the
 //! shooter chassis - every tank's bolts of the same variant look identical,
@@ -23,7 +23,6 @@
 //! ricochets (no `bounces_left`): a heavy plasma bolt detonates on first
 //! contact rather than bouncing off Iron/walls the way a shell can.
 
-use rapier2d::prelude::RigidBodyHandle;
 use sola_raylib::prelude::*;
 
 use crate::shell::Owner;
@@ -163,13 +162,12 @@ pub struct Plasma {
     /// scale damage by chassis class (TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW),
     /// same as `Shell::shooter_row`/`Bullet::shooter_row`.
     pub shooter_row: i32,
-    /// This bolt's rapier sensor body - same role as `Shell::body`.
-    pub body: Option<RigidBodyHandle>,
     /// This bolt's drop-shadow distance (px), rolled once at fire time -
     /// same role as `Shell::shadow_offset`.
     pub shadow_offset: f32,
-    /// Same tunneling-guard purpose as `Shell::flew` - see its doc comment.
-    pub flew: bool,
+    /// Same role as `Shell::prev_position` - the start of this frame's
+    /// swept hit segment, written by the simulation.
+    pub prev_position: Position,
 }
 
 impl Plasma {
@@ -190,12 +188,13 @@ impl Plasma {
         let muzzle = TANK_MUZZLE_FORWARD_OFFSET_BY_ROW[tank.row as usize] * tank.scale;
         let hull_rot = tank.rotation.to_radians();
         let lateral = Vector2::new(hull_rot.cos(), hull_rot.sin()) * (lateral_offset * tank.scale);
+        let position = Position::new(
+            tank.position.x + dir.x * muzzle + lateral.x,
+            tank.position.y + dir.y * muzzle + lateral.y,
+        );
         Plasma {
             state: PlasmaState::Fire0,
-            position: Position::new(
-                tank.position.x + dir.x * muzzle + lateral.x,
-                tank.position.y + dir.y * muzzle + lateral.y,
-            ),
+            position,
             velocity: Vector2::new(dir.x * PLASMA_SPEED, dir.y * PLASMA_SPEED),
             rotation: tank.rotation + aim_offset,
             timer: 0.0,
@@ -203,9 +202,8 @@ impl Plasma {
             owner,
             variant,
             shooter_row: tank.row,
-            body: None,
             shadow_offset: 0.0,
-            flew: false,
+            prev_position: position,
         }
     }
 
@@ -213,12 +211,10 @@ impl Plasma {
     /// states. Mirrors `Shell::update` exactly, just over `PlasmaState`.
     pub fn update(&mut self, dt: f32) {
         self.timer += dt;
-        self.flew = false;
 
         if self.state == PlasmaState::Flying {
             self.position.x += self.velocity.x * dt;
             self.position.y += self.velocity.y * dt;
-            self.flew = true;
             return;
         }
 

@@ -531,11 +531,11 @@ impl Game {
 /// Three shapes, each the *real* thing physics uses, not an approximation:
 /// - The lime/orange/gray box is `Tank::hull_half_extents` - the per-row
 ///   (TANK_HULL_BBOX_BY_ROW), facing-oriented hull silhouette backing the
-///   shell-hit sensor (`Tank::hit_sensor`) - not the full 32x32 sprite tile
+///   projectile hit box (see `simulation::hits`) - not the full 32x32 sprite tile
 ///   (`Tank::size`/`Tank::hull_size`), which is a uniform square padded
 ///   well past the visible hull art on every row.
 /// - The yellow box is `Tank::turret_bbox_world` - the turret+barrel
-///   silhouette, backing `Tank::turret_hit_sensor` the same way. Together
+///   silhouette, hit-tested the same way. Together
 ///   these two boxes are exactly what a shell can hit.
 /// - The sky-blue rounded box is `Tank::move_half_extents` +
 ///   `physics::tank_corner_radius` - the solid movement collider walls/

@@ -172,7 +172,7 @@ impl Ai {
     /// heads for a pickup instead of just running blind.
     /// `line_of_sight` is whether this tank's straight line to the player is
     /// currently unobstructed by terrain (any obstacle, or the frog) -
-    /// computed in `simulation.rs` (see `terrain_line_of_sight`) against the
+    /// computed in `simulation` (see `hits::Terrain::line_of_sight`) against the
     /// real, un-margined obstacle geometry a shot would actually resolve
     /// against, deliberately *not* `pathfind::Grid`: that grid's clearance
     /// margin is sized for a tank's own hull to route through gaps, not for

@@ -1,8 +1,9 @@
-use rapier2d::prelude::{ColliderHandle, RigidBodyHandle};
+use rapier2d::prelude::RigidBodyHandle;
 use sola_raylib::prelude::*;
 
 use crate::laser::LaserVariant;
 use crate::plasma::PlasmaVariant;
+use crate::shell::Owner;
 use crate::{
     DAMAGE_SPEED_CURVE, DAMAGE_SPEED_FLOOR, MAX_DAMAGE, MAX_SHELLS, MINIGUN_MOUNT_SCALE,
     MINIGUN_CYCLE_SECONDS, MINIGUN_MOUNT_TEXTURE_SIZE, Position, SPEED_BOOST_MULTIPLIER,
@@ -327,34 +328,9 @@ pub struct Tank {
     /// This tank's rapier rigid body, once spawned into the physics world
     /// (see `Game::init`/`physics::Physics::spawn_tank`).
     pub body: Option<RigidBodyHandle>,
-    /// This tank's hull shell-hit sensor - a second collider on the same
-    /// `body` (see `physics::Physics::add_hit_sensor`), covering the full
-    /// measured hull silhouette (`hull_half_extents`) - deliberately larger
-    /// than the solid movement collider, which is shrunk and
-    /// corner-rounded for smoother driving (`move_half_extents`) - and
-    /// carrying its own owner-exclusion `InteractionGroups` filter, which
-    /// the solid collider can't without also filtering *movement*
-    /// collisions (tank-vs-tank ramming, tank-vs-wall) the same way - see
-    /// `find_shell_target`. Paired with `turret_hit_sensor` below for the
-    /// turret+barrel portion of the same hit test.
-    pub hit_sensor: Option<ColliderHandle>,
-    /// This tank's turret+barrel shell-hit sensor - same idea as
-    /// `hit_sensor` above, sized/positioned from `turret_bbox_world`
-    /// instead of the hull box. Splitting the hit test into these two boxes
-    /// (rather than one box covering both, or one oversized box padded to
-    /// cover both) is what lets a shot land anywhere on the visible hull
-    /// *or* the barrel and register, without also counting the transparent
-    /// padding around either shape as a hit - this pair of boxes is exactly
-    /// what the "I" key debug inspect overlay (`game.rs::draw_tank_inspect`)
-    /// already draws, which is how this shape was chosen and checked
-    /// against the art before being wired in here.
-    pub turret_hit_sensor: Option<ColliderHandle>,
-    /// This tank's collision-group slot (see `physics::owner_group`), set
-    /// once at spawn (`Game::init`) - 0 for the player, `n` for the nth
-    /// enemy spawned. Reused whenever this tank fires (see `Game::update`)
-    /// to rebuild that same group for its shell's shooter-exclusion filter
-    /// and to tag the shell's `shell::Owner`, without needing this tank's
-    /// position in any spawn-order list.
+    /// This tank's owner slot, set once at spawn (`Game::init`): 0 for the
+    /// player, `n` for the nth enemy spawned. Identifies the tank as a
+    /// projectile owner (`owner()`) so a shot never hits its own shooter.
     pub owner_slot: usize,
 }
 
@@ -399,8 +375,7 @@ impl Default for Tank {
             track_scale_jitter: 1.0,
             velocity: Vector2::new(0.0, 0.0),
             body: None,
-            hit_sensor: None,
-            turret_hit_sensor: None,
+
             owner_slot: 0,
         }
     }
@@ -415,6 +390,16 @@ impl Tank {
     /// True once the tank has taken maximum damage (a burning wreck).
     pub fn is_wreck(&self) -> bool {
         self.damage >= MAX_DAMAGE
+    }
+
+    /// Who this tank is as a projectile owner - the inverse of
+    /// `Owner::slot`.
+    pub fn owner(&self) -> Owner {
+        if self.owner_slot == 0 {
+            Owner::Player
+        } else {
+            Owner::Enemy(self.owner_slot - 1)
+        }
     }
 
     /// How much damage has hurt this tank's mobility, from 1.0 (pristine) down
@@ -563,12 +548,10 @@ impl Tank {
     /// Damage-box half-extents (x, y) for this tank's hull, in world px,
     /// oriented for the given facing - `along_x` true when facing Left/Right
     /// (width and height swap from the sprite's own "facing up" reference
-    /// frame), matching `simulation::facing_along_x`. Distinct from
-    /// `hull_size` above: this is the real per-row rectangle
-    /// (TANK_HULL_BBOX_BY_ROW) - the full visible hull silhouette - that
-    /// sizes the hull shell-hit sensor (`hit_sensor`) and the swept-shell
-    /// fallback. The solid *movement* collider is smaller: see
-    /// `move_half_extents` below.
+    /// frame), matching `facing_along_x`. Distinct from `hull_size` above:
+    /// this is the real per-row rectangle (TANK_HULL_BBOX_BY_ROW) - the full
+    /// visible hull silhouette - that the projectile hit test checks. The
+    /// solid *movement* collider is smaller: see `move_half_extents` below.
     pub fn hull_half_extents(&self, along_x: bool) -> (f32, f32) {
         let (w, h) = TANK_HULL_BBOX_BY_ROW[self.row as usize];
         let (w, h) = if along_x { (h, w) } else { (w, h) };
@@ -587,23 +570,18 @@ impl Tank {
     }
 
     /// True when `rotation` currently faces Left/Right rather than Up/Down -
-    /// shared by every method below that needs to know which axis is the
-    /// hull's "long" one. `rotation` is always exactly one of
-    /// `Dir::rotation()`'s four values (see `Tank::control`), so a plain
+    /// which axis is the hull's "long" one. `rotation` is always exactly one
+    /// of `Dir::rotation()`'s four values (see `Tank::control`), so a plain
     /// `==` match is exact here, no epsilon needed.
-    fn facing_along_x(&self) -> bool {
+    pub fn facing_along_x(&self) -> bool {
         self.rotation == Dir::Right.rotation() || self.rotation == Dir::Left.rotation()
     }
 
     /// This tank's hull collider footprint in world space right now -
     /// `position` as the center (the hull box is symmetric front-to-back
     /// and side-to-side, so it never needs an offset) and
-    /// `hull_half_extents` oriented for the current facing. A convenience
-    /// over calling `hull_half_extents` directly for a caller that doesn't
-    /// already have `along_x` in hand (shell-hit testing, see
-    /// `simulation::swept_shell_target`) - `simulation::drive_tank`'s own
-    /// resize call site still calls `hull_half_extents` directly since it
-    /// already knows the along_x it's transitioning *to*.
+    /// `hull_half_extents` oriented for the current facing - the hull box
+    /// the projectile hit test checks (`simulation::hits::Terrain::sweep`).
     pub fn hull_bbox_world(&self) -> (Position, Position) {
         let (hw, hh) = self.hull_half_extents(self.facing_along_x());
         (self.position, Position::new(hw, hh))
@@ -611,11 +589,9 @@ impl Tank {
 
     /// World-space center and half-extents of this tank's turret+barrel
     /// bounding box (`TANK_TURRET_BBOX_BY_ROW`) at its current `rotation` -
-    /// backs both the "I" key debug inspect overlay
-    /// (`game.rs::draw_tank_inspect`) and `Tank::turret_hit_sensor`'s
-    /// shape/position (kept in sync on every facing change by
-    /// `simulation::drive_tank`, same trigger as the hull collider's own
-    /// resize). Unlike `hull_half_extents`'s `along_x` swap (safe because
+    /// the second box the projectile hit test checks, and what the "I" key
+    /// debug inspect overlay (`game.rs::draw_tank_inspect`) draws.
+    /// Unlike `hull_half_extents`'s `along_x` swap (safe because
     /// the hull box is roughly centered on the tank), the turret+barrel box
     /// is off-center - the barrel extends it well past the tile center
     /// toward the front - so this needs a real per-direction rotation of

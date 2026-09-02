@@ -17,6 +17,27 @@ use std::collections::{BinaryHeap, VecDeque};
 
 use crate::Position;
 
+/// Connected-component labels over a `Grid`'s open cells - see
+/// `Grid::components`.
+pub struct Components {
+    /// Per cell: 0 for blocked, otherwise a component id starting at 1.
+    label: Vec<u32>,
+}
+
+impl Components {
+    /// True if a cardinal-step route exists between `from` and `to` on
+    /// `grid` (the grid these labels were built from) - equivalent to
+    /// `grid.next_step(from, to).is_some() || grid.same_cell(from, to)`,
+    /// including A*'s rule that the start and goal cells count as open.
+    pub fn connected(&self, grid: &Grid, from: Position, to: Position) -> bool {
+        if grid.same_cell(from, to) {
+            return true;
+        }
+        let from_labels: Vec<u32> = grid.component_labels(self, from).collect();
+        grid.component_labels(self, to).any(|l| from_labels.contains(&l))
+    }
+}
+
 /// A coarse occupancy grid over a rectangular area, marking which cells are
 /// blocked (a static obstacle occupies them, plus a clearance margin - see
 /// `build`) versus open.
@@ -229,6 +250,57 @@ impl Grid {
             }
         }
         from
+    }
+
+    /// Label every open cell with its connected component (4-neighbour
+    /// flood fill) so `Components::connected` answers "does a route exist
+    /// between these two points" in O(1) - the same answer `next_step`
+    /// would give, without running A* per query. Build once per frame and
+    /// query as often as needed (engagement-slot validation asks up to 16
+    /// times per enemy).
+    pub fn components(&self) -> Components {
+        let mut label = vec![0u32; self.cols * self.rows];
+        let mut next = 1u32;
+        let mut stack = Vec::new();
+        for row in 0..self.rows {
+            for col in 0..self.cols {
+                let idx = row * self.cols + col;
+                if self.blocked[idx] || label[idx] != 0 {
+                    continue;
+                }
+                label[idx] = next;
+                stack.push((col, row));
+                while let Some(cell) = stack.pop() {
+                    for n in self.neighbors(cell) {
+                        let ni = n.1 * self.cols + n.0;
+                        if !self.blocked[ni] && label[ni] == 0 {
+                            label[ni] = next;
+                            stack.push(n);
+                        }
+                    }
+                }
+                next += 1;
+            }
+        }
+        Components { label }
+    }
+
+    /// The component labels a point can start a route from: its own cell's
+    /// label if that cell is open, otherwise the labels of its open
+    /// cardinal neighbours - mirroring `search`, which treats the start and
+    /// goal cells as open regardless of `blocked`.
+    fn component_labels(&self, comps: &Components, p: Position) -> impl Iterator<Item = u32> + '_ {
+        let cell = self.cell_of(p);
+        let own = if self.blocked_at(cell) { 0 } else { comps.label[cell.1 * self.cols + cell.0] };
+        let labels: Vec<u32> = if own != 0 {
+            vec![own]
+        } else {
+            self.neighbors(cell)
+                .map(|n| comps.label[n.1 * self.cols + n.0])
+                .filter(|&l| l != 0)
+                .collect()
+        };
+        labels.into_iter()
     }
 
     fn neighbors(&self, cell: (usize, usize)) -> impl Iterator<Item = (usize, usize)> + '_ {
@@ -550,5 +622,45 @@ mod tests {
             grid.path_cost(Position::new(20.0, 20.0), Position::new(380.0, 20.0)),
             None
         );
+    }
+}
+
+#[cfg(test)]
+mod component_tests {
+    use super::*;
+
+    /// A full-height wall down the middle with no gap: the two halves are
+    /// separate components, so `connected` must agree with `next_step`.
+    #[test]
+    fn components_agree_with_astar_across_a_sealed_wall() {
+        let cell = 40.0;
+        let obstacles = (0..10).map(|row| {
+            (Position::new(220.0, row as f32 * cell + cell / 2.0), cell / 2.0)
+        });
+        let grid = Grid::build(400.0, 400.0, cell, 0.0, obstacles);
+        let comps = grid.components();
+        let left = Position::new(20.0, 20.0);
+        let right = Position::new(380.0, 20.0);
+        let left_low = Position::new(20.0, 380.0);
+        assert!(grid.next_step(left, right).is_none());
+        assert!(!comps.connected(&grid, left, right));
+        assert!(grid.next_step(left, left_low).is_some());
+        assert!(comps.connected(&grid, left, left_low));
+        // Same cell counts as connected, matching `same_cell`.
+        assert!(comps.connected(&grid, left, Position::new(25.0, 25.0)));
+    }
+
+    /// A point standing inside a blocked cell (an obstacle's clearance
+    /// margin) still routes out through its open neighbours - A* treats
+    /// the start cell as open, and so must this.
+    #[test]
+    fn blocked_start_cell_uses_its_open_neighbours() {
+        let cell = 40.0;
+        let grid = Grid::build(400.0, 400.0, cell, 0.0, std::iter::once((Position::new(220.0, 220.0), cell / 2.0)));
+        let comps = grid.components();
+        let inside = Position::new(220.0, 220.0);
+        let far = Position::new(20.0, 20.0);
+        assert!(grid.next_step(inside, far).is_some());
+        assert!(comps.connected(&grid, inside, far));
     }
 }

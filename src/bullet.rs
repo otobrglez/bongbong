@@ -13,7 +13,6 @@
 //! ricochet (see `simulation.rs`'s bullet hit-resolution, which skips the
 //! shell loop's ricochet branch entirely).
 
-use rapier2d::prelude::RigidBodyHandle;
 use sola_raylib::prelude::*;
 
 use crate::shell::Owner;
@@ -75,13 +74,12 @@ pub struct Bullet {
     /// scale damage by chassis class (TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW),
     /// same as `Shell::shooter_row`.
     pub shooter_row: i32,
-    /// This bullet's rapier sensor body - same role as `Shell::body`.
-    pub body: Option<RigidBodyHandle>,
     /// This bullet's drop-shadow distance (px), rolled once at fire time -
     /// same role as `Shell::shadow_offset`.
     pub shadow_offset: f32,
-    /// Same tunneling-guard purpose as `Shell::flew` - see its doc comment.
-    pub flew: bool,
+    /// Same role as `Shell::prev_position` - the start of this frame's
+    /// swept hit segment, written by the simulation.
+    pub prev_position: Position,
 }
 
 impl Bullet {
@@ -98,21 +96,21 @@ impl Bullet {
         let rot = (tank.rotation + aim_offset).to_radians();
         let dir = Vector2::new(rot.sin(), -rot.cos());
         let muzzle = TANK_MUZZLE_FORWARD_OFFSET_BY_ROW[tank.row as usize] * tank.scale;
+        let position = Position::new(
+            tank.position.x + dir.x * muzzle,
+            tank.position.y + dir.y * muzzle,
+        );
         Bullet {
             state: BulletState::Muzzle,
-            position: Position::new(
-                tank.position.x + dir.x * muzzle,
-                tank.position.y + dir.y * muzzle,
-            ),
+            position,
             velocity: Vector2::new(dir.x * MINIGUN_BULLET_SPEED, dir.y * MINIGUN_BULLET_SPEED),
             rotation: tank.rotation + aim_offset,
             timer: 0.0,
             done: false,
             owner,
             shooter_row: tank.row,
-            body: None,
             shadow_offset: 0.0,
-            flew: false,
+            prev_position: position,
         }
     }
 
@@ -121,12 +119,10 @@ impl Bullet {
     /// machine above.
     pub fn update(&mut self, dt: f32) {
         self.timer += dt;
-        self.flew = false;
 
         if self.state == BulletState::Flying {
             self.position.x += self.velocity.x * dt;
             self.position.y += self.velocity.y * dt;
-            self.flew = true;
             return;
         }
 

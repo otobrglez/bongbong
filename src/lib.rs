@@ -74,9 +74,9 @@ pub const TANK_HULL_TRACK_FRAME_DISTANCE: f32 = 8.0;
 pub const TANK_HULL_FRACTION: f32 = 0.7;
 // Per-row hull footprint (width, height) in tile px, in the sprite's own
 // "facing up" reference frame - measured bounding boxes from the spec's §9
-// table. This is the tank's *damage* silhouette: it sizes the hull shell-hit
-// sensor (`Tank::hit_sensor`/`Physics::add_hit_sensor`) and the swept-shell
-// fallback check directly, and - unlike TANK_HULL_FRACTION above - is
+// table. This is the tank's *damage* silhouette: it sizes the hull hit box
+// the swept projectile test (`simulation::hits::Terrain::sweep`) checks
+// directly, and - unlike TANK_HULL_FRACTION above - is
 // measured per row so a `titan` (nearly filling its cell) and a `flak`
 // (much smaller) don't share a one-size-fits-all hitbox. The *movement*
 // collider derives from this same table but deliberately smaller and
@@ -131,10 +131,9 @@ pub const TANK_MOVE_CORNER_RADIUS: f32 = 4.0;
 // **Not used for movement collision** - a tank's solid hull collider
 // (`Physics::spawn_tank`/`resize_collider`) stays hull-only, so the barrel
 // still isn't a physical obstacle other tanks/shells can ram or get blocked
-// by. It *is* used for shell/laser hit-testing though: `Tank::
-// turret_hit_sensor` (a second sensor collider, sized/positioned from
-// `Tank::turret_bbox_world`) and `simulation::swept_shell_target`'s
-// hand-rolled fallback both check this box alongside the hull box, so a
+// by. It *is* used for shell/laser hit-testing though: the swept projectile
+// test (`simulation::hits::Terrain::sweep`) checks `Tank::turret_bbox_world`
+// alongside the hull box, so a
 // shot landing on the visible barrel registers as a hit - overriding
 // docs/SPRITESHEET_SPEC.md §9's original "exclude the barrel from
 // collision" note after visually confirming (via `game.rs`'s "I"-key debug
@@ -172,7 +171,7 @@ pub const TANK_TURRET_BBOX_BY_ROW: [(f32, f32, f32, f32); 12] = [
 // `std`-class tank's mass is unchanged from before this table existed, and
 // every other class scales relative to that same baseline: `narrow`/
 // `compact` end up lighter (faster to accelerate, less drift, easier to
-// knock around - see `Game::drive_tank`/`ram`/`explosion_hit`, all of which
+// knock around - see `simulation::drive_tank` and `simulation::combat`, all of which
 // already divided by `Tank::mass` and so pick this up automatically), while
 // `long`/`wide` and especially `super_heavy`/`super_long` end up
 // meaningfully heavier (sluggish to accelerate, more perpendicular drift
@@ -311,12 +310,11 @@ pub const TANK_SHELL_VARIANT_BY_ROW: [i32; 12] = [
 ];
 pub const SHELL_SPEED: f32 = 500.0;
 pub const SHELL_SCALE: f32 = 2.0;
-// Half-extent (px) of a shell's own physics sensor, used only to intersect a
-// tank's hit sensor (see TANK_HULL_FRACTION/Tank::size and
-// physics::Physics::add_hit_sensor). Kept small and near-point-like so the
-// intersection test still reads as "did the shell's exact position land
-// inside the tank", matching the old point-in-box check, rather than "did
-// the shell's box overlap the tank's box".
+// Half-extent (px) of a shell's own hit box, inflating every target box the
+// swept hit test (`simulation::hits::Terrain::sweep`) checks its flight
+// segment against. Kept small and near-point-like so a hit still reads as
+// "did the shell's position land inside the tank" rather than "did two
+// boxes overlap". Also the laser beam's half-width.
 pub const SHELL_HIT_HALF_EXTENT: f32 = 3.0;
 
 // Drop shadows: a second copy of a tank/shell sprite drawn first, tinted flat
@@ -539,6 +537,10 @@ pub const PLAYER_FIRE_INTERVAL: f32 = 0.15;
 // Ramming: after taking collision damage a tank is immune for this long, so
 // continuous touching doesn't drain damage every frame.
 pub const RAM_DAMAGE_COOLDOWN: f32 = 0.5;
+// Damage both tanks take from one ram contact, rolled uniformly in this
+// range (see simulation::combat::ram). Wrecks neither deal nor take it.
+pub const RAM_DAMAGE_MIN: f32 = 2.0;
+pub const RAM_DAMAGE_MAX: f32 = 6.0;
 
 // A ram also gives both tanks a brief, small knockback shove apart (a real
 // physics impulse - see Game::ram), scaled by their closing speed and
@@ -615,7 +617,7 @@ pub const WANDER_SPREAD_CANDIDATES: u32 = 6;
 // real per-frame mutual exclusion so two tanks can never both resolve to the
 // same point - the same "known positions of teammates -> spread out" idea
 // `wander`'s WANDER_SPREAD_CANDIDATES already uses for patrol, just claimed
-// once and held steady (see `engage_slot_choice`) rather than resampled
+// once and held steady (see `simulation::engage::EngageRing`) rather than resampled
 // every frame. Comfortably inside ENEMY_ATTACK_RANGE so a firing-line enemy
 // still ends up close enough to fight rather than orbiting just outside
 // range.
@@ -1213,7 +1215,7 @@ pub const PICKUP_HEAL_AMOUNT: f32 = 30.0;
 pub const PICKUP_AMMO_AMOUNT: i32 = 4;
 
 // --- Laser pickup/weapon (pickup.rs's PickupKind::Laser, laser.rs,
-// simulation.rs's fire_laser/resolve_laser_hit) ---
+// simulation::weapons and Game::resolve_lasers) ---
 // A limited-charge, instant-hit weapon: while Tank::laser_charges > 0,
 // firing resolves a hit the same frame (no travel time, unlike Shell) and
 // consumes one charge; at zero the tank reverts to its normal shell. Same

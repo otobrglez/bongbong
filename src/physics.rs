@@ -2,12 +2,12 @@
 //!
 //! Tanks are rotation-locked dynamic bodies, accelerated toward their
 //! commanded velocity by a mass-aware impulse every frame rather than
-//! snapped to it (see `Game`'s `drive_tank`); the battlefield edges are
-//! static wall colliders. Ram/explosion/shell-impact knockback is a real
-//! impulse too (`apply_impulse`). Shells are kinematic-position-based sensor bodies
-//! (`spawn_shell`) - their position is still hand-moved every frame (see
-//! `Shell::update`), not driven by velocity; the physics engine's only job
-//! for them is precise intersection detection against tanks.
+//! snapped to it (see `simulation::drive_tank`); the battlefield edges,
+//! obstacles and the frog are static colliders. Ram/explosion/projectile
+//! knockback is a real impulse too (`apply_impulse`). Projectiles have no
+//! physics body at all: they are hand-integrated and hit-tested by a swept
+//! segment check in `simulation::hits`, so rapier only ever sees solid
+//! bodies.
 
 use rapier2d::prelude::*;
 
@@ -20,18 +20,6 @@ use crate::{Position, TANK_MOVE_CORNER_RADIUS};
 /// for anything to fall along.
 pub struct Physics {
     world: PhysicsWorld,
-}
-
-/// The collision-filtering group for a tank "owner" slot - slot 0 is the
-/// player, slot `n` (n >= 1) is `Owner::Enemy(n - 1)`. Used to tell rapier
-/// "this shell's sensor shouldn't intersect that tank's hit sensor" via
-/// `InteractionGroups` (see `add_hit_sensor`/`spawn_shell`), replacing the
-/// old manual `if shell.owner == ...` self-exclusion checks in
-/// `Game::update`'s shell-hit loop. `ENEMY_COUNT_MAX` (10) plus the player
-/// leaves 21 of `Group`'s 32 bits unused for future owner-like filtering.
-pub fn owner_group(slot: usize) -> Group {
-    debug_assert!(slot < 32, "owner slot must fit in rapier's 32 group bits");
-    Group::from_bits_retain(1 << slot)
 }
 
 /// The corner rounding actually applied to a tank movement collider with
@@ -83,7 +71,7 @@ impl Physics {
     /// (see `battlefield::spawn_walls`) and in-arena obstacles (see
     /// `obstacle::Obstacle`) both reuse this exact same shape - the only
     /// difference is whether the caller ever calls `remove_body` on the
-    /// handle later (walls never do; a destroyed `Crate` obstacle does).
+    /// handle later (walls never do; a destroyed obstacle does).
     /// `center` and `half_extents` are in the same pixel space as
     /// `Tank`/`Shell` positions; rapier does no unit conversion here (1
     /// physics unit == 1px).
@@ -144,164 +132,6 @@ impl Physics {
         collider.set_shape(tank_move_shape(half_extents));
     }
 
-    /// Attach an extra sensor collider to an existing tank body, used only to
-    /// detect shell hits - a separate collider from what blocks movement
-    /// (the solid movement collider `spawn_tank` attaches), because a shell's
-    /// owner-exclusion `InteractionGroups` filter (see `group` below) can't
-    /// share a collider with movement collision, which needs to interact
-    /// with *everything* (every other tank, every wall/obstacle) regardless
-    /// of ownership. A tank carries two of these - one sized/positioned to
-    /// the hull box, one to the turret+barrel box (`Tank::hull_bbox_world`/
-    /// `turret_bbox_world`) - so a shot registers across the tank's actual
-    /// visible silhouette without also counting the sprite tile's
-    /// transparent padding as a hit. `half_extents`/`offset` are in the
-    /// body's own frame; since a tank body's rotation is locked (see
-    /// `spawn_tank`), that frame never itself rotates, so `offset` is
-    /// exactly the world-space offset from the tank's position at the
-    /// moment this is called - `resize_hit_sensor` updates both when the
-    /// tank's facing changes. Returns the new collider's handle - callers
-    /// need it directly for `intersecting`, since a tank body now has three
-    /// colliders total and `collider_of`'s "the first one" convention only
-    /// ever refers to the original solid movement collider `spawn_tank`
-    /// attaches.
-    ///
-    /// Explicitly zero-mass: rapier still folds a collider's density-based
-    /// mass into its body's total mass even when `.sensor(true)` - being a
-    /// sensor only exempts it from collision *response*, not mass-property
-    /// aggregation. Left at the default density (1.0), a sensor's area would
-    /// silently perturb the body's total mass on top of the hull's own
-    /// explicit mass (`Tank::mass`) - which is exactly what was making tanks
-    /// crawl back when this sensor covered the tank's full sprite tile:
-    /// `Game::drive_tank`'s impulse is sized for `Tank::mass()`, but rapier
-    /// was dividing by the real (much larger) body mass instead.
-    ///
-    /// `group` (see `owner_group`) is this tank's own membership bit - a
-    /// shell fired by this same tank sets its filter to exclude that bit
-    /// (see `spawn_shell`), so `intersecting` naturally reports no hit
-    /// against its own shooter without any owner-equality check on the
-    /// call site.
-    pub fn add_hit_sensor(
-        &mut self,
-        body: RigidBodyHandle,
-        half_extents: (f32, f32),
-        offset: Position,
-        group: Group,
-    ) -> ColliderHandle {
-        self.world.insert_collider(
-            ColliderBuilder::cuboid(half_extents.0, half_extents.1)
-                .translation(to_vector(offset))
-                .sensor(true)
-                .mass(0.0)
-                .collision_groups(InteractionGroups::new(
-                    group,
-                    Group::ALL,
-                    InteractionTestMode::And,
-                )),
-            Some(body),
-        )
-    }
-
-    /// Resize and reposition an existing hit-sensor collider (see
-    /// `add_hit_sensor`) - called whenever a tank's facing crosses between
-    /// an X-axis and Y-axis cardinal direction, the same trigger
-    /// `resize_collider` reacts to for the solid hull collider (see
-    /// `simulation::drive_tank`). `set_shape` only marks the geometry dirty,
-    /// same as `resize_collider`; `set_translation_wrt_parent` moves the
-    /// sensor's offset within the (non-rotating) body frame to match.
-    pub fn resize_hit_sensor(&mut self, handle: ColliderHandle, half_extents: (f32, f32), offset: Position) {
-        let collider = self
-            .world
-            .colliders
-            .get_mut(handle)
-            .expect("collider handle should always be valid");
-        collider.set_shape(SharedShape::cuboid(half_extents.0, half_extents.1));
-        collider.set_translation_wrt_parent(to_vector(offset));
-    }
-
-    /// Spawn a kinematic-position-based sensor body for a shell: a square
-    /// sensor `half_extent` per side. A sensor never gets physically pushed
-    /// and never pushes anything else - it only ever reports whether it's
-    /// intersecting something (see `intersecting`).
-    ///
-    /// `.ccd_enabled(true)` is set but doesn't actually protect this body:
-    /// per rapier's own docs (`RigidBody::enable_ccd`), CCD sweeping only
-    /// applies to **dynamic** bodies moving fast under velocity integration.
-    /// A kinematic-position-based body's motion is a discrete teleport via
-    /// `set_kinematic_position` each frame, which CCD never sweeps - so a
-    /// shell whose per-frame movement is ever large enough to fully clear a
-    /// thin target in one step (e.g. under a frame-rate hitch) can still
-    /// tunnel through it undetected by *this* check. In practice shells move
-    /// ~8px/frame at SHELL_SPEED and everything they can hit is comfortably
-    /// wider than that, so this was long treated as a latent edge case, not
-    /// the thing `.active_collision_types` below fixes - but it did show up
-    /// in practice (reported as shells occasionally flying straight over an
-    /// unbroken Glass obstacle, the fastest-dying material). The actual fix
-    /// is `simulation::swept_shell_target` - a hand-rolled segment-vs-box
-    /// sweep checked as a fallback whenever this discrete end-of-frame
-    /// check finds nothing, covering the shell's whole path for the frame
-    /// instead of just where it ended up. `.ccd_enabled(true)` is left here
-    /// as a harmless no-op rather than removed, in case rapier ever extends
-    /// real CCD to kinematic bodies.
-    ///
-    /// `.active_collision_types` explicitly re-enables `KINEMATIC_FIXED`:
-    /// rapier's own default (`ActiveCollisionTypes::default()`) is
-    /// DYNAMIC_DYNAMIC | DYNAMIC_KINEMATIC | DYNAMIC_FIXED only - kinematic
-    /// vs. fixed pairs are excluded ("platforms don't collide with walls"),
-    /// which silently broke shell-vs-obstacle and would-be shell-vs-wall
-    /// intersection entirely: obstacles are `fixed` bodies (`spawn_static`),
-    /// so without this a shell's `kinematic_position_based` sensor never
-    /// even formed a broad-phase pair with one, regardless of how deep the
-    /// geometric overlap was - `intersecting` always returned `false`, so
-    /// shells flew straight through every obstacle. Tanks were unaffected
-    /// (they're `dynamic`, and DYNAMIC_KINEMATIC *is* a default). Verified
-    /// live (web/wasm build, browser-driven): before this flag, a shell's
-    /// distance-to-obstacle log showed `intersecting=false` all the way
-    /// through a dead-center pass (down to ~3.6px from the obstacle's own
-    /// center, well inside its collision half-extent); after adding the
-    /// flag, the same shot correctly reports `intersecting=true` and
-    /// detonates.
-    ///
-    /// `shooter_group` (see `owner_group`) is excluded from this shell's
-    /// filter, so it can never register an intersection against the hit
-    /// sensor of the tank that fired it - it still intersects every other
-    /// tank's hit sensor normally.
-    pub fn spawn_shell(
-        &mut self,
-        position: Position,
-        half_extent: f32,
-        shooter_group: Group,
-    ) -> RigidBodyHandle {
-        let (handle, _) = self.world.insert(
-            RigidBodyBuilder::kinematic_position_based()
-                .translation(to_vector(position))
-                .ccd_enabled(true),
-            ColliderBuilder::cuboid(half_extent, half_extent)
-                .sensor(true)
-                .collision_groups(InteractionGroups::new(
-                    Group::ALL,
-                    !shooter_group,
-                    InteractionTestMode::And,
-                ))
-                .active_collision_types(
-                    ActiveCollisionTypes::default() | ActiveCollisionTypes::KINEMATIC_FIXED,
-                ),
-        );
-        handle
-    }
-
-    /// Move a kinematic body (a shell) to `position` ahead of the next step -
-    /// see `spawn_shell`. Unlike `set_velocity`, this is a direct position
-    /// write: the shell's own `velocity * dt` integration (see
-    /// `Shell::update`) is still what actually decides where it goes.
-    pub fn set_kinematic_position(&mut self, handle: RigidBodyHandle, position: Position) {
-        let body = self
-            .world
-            .bodies
-            .get_mut(handle)
-            .expect("shell physics body handle should always be valid");
-        body.set_next_kinematic_translation(to_vector(position));
-    }
-
     /// Teleport a dynamic body (a tank) straight to `position`, bypassing
     /// normal velocity-driven movement entirely - used once, at round init,
     /// to relocate a tank whose rolled spawn point turned out to be
@@ -319,22 +149,14 @@ impl Physics {
     }
 
     /// Remove a body (and any colliders attached to it) from the world -
-    /// used once a shell finishes its lifecycle (see `Game::update`).
+    /// used once an obstacle is destroyed (see `Game::update`).
     pub fn remove_body(&mut self, handle: RigidBodyHandle) {
         self.world.remove_body(handle);
     }
 
-    /// True if colliders `a` and `b` currently intersect. Used for shell-hit
-    /// detection: one side is typically a shell's sensor, the other a tank's
-    /// hit sensor (see `add_hit_sensor`).
-    pub fn intersecting(&self, a: ColliderHandle, b: ColliderHandle) -> bool {
-        self.world.intersection_pair(a, b).unwrap_or(false)
-    }
-
-    /// The first collider attached to a body - the sole collider for a
-    /// single-collider body (walls, shells), or specifically the solid
-    /// movement collider for a tank body (`spawn_tank` always inserts it
-    /// first; any hit sensor `add_hit_sensor` adds later comes second).
+    /// The sole collider attached to a body (every body here carries
+    /// exactly one: a tank's solid movement collider, a wall/obstacle/frog
+    /// cuboid).
     pub fn collider_of(&self, body: RigidBodyHandle) -> ColliderHandle {
         self.world
             .bodies
@@ -355,7 +177,7 @@ impl Physics {
 
     /// Apply an instantaneous impulse to a body: an immediate change in
     /// momentum, i.e. its velocity changes by `impulse / mass`. Used for ram
-    /// and explosion knockback (see `Game`'s `ram`/`explosion_hit`) - the
+    /// and explosion knockback (see `simulation::combat`) - the
     /// mass division means a lighter tank (see `spawn_tank`'s `mass`) gets
     /// shoved further by the same impulse, automatically, with no separate
     /// hand-rolled mass-weighting formula needed.
@@ -400,9 +222,8 @@ impl Physics {
     /// over every pair the hull is in (`contact_pairs_with`) instead of
     /// one known opponent, and classified by what's on the other side.
     ///
-    /// Only solid-vs-solid shows up here: sensors (shell/bullet bodies,
-    /// tank hit sensors) produce intersection pairs, never solver
-    /// contacts, so the pairs iterated are exactly the hull against walls,
+    /// Every body here is solid (projectiles have no physics body at all),
+    /// so the pairs iterated are exactly the hull against walls,
     /// obstacles, the frog (all `fixed` bodies -> `touching_static` - the
     /// frog counting as terrain is deliberate, it's the historical
     /// stuck-against case) and other tanks' hulls (`dynamic` ->

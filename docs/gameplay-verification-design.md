@@ -91,7 +91,7 @@ Working today, and load-bearing for this design:
   greppable `ANOMALY` lines, and sweeps N independent rounds with
   `--rounds`. Multiple fixed bugs cite it as the discovery tool (see
   `pathfind::Grid::boxed_in`, `Grid::same_cell`, `nearest_open`,
-  `Game::engage_slot_choice`'s doc comments).
+  `simulation::engage::EngageRing`'s doc comments).
 - `pathfind.rs` has real unit tests and the stuck-adjacent helpers
   (`boxed_in`, `blocked_ahead`, `nearest_open`);
   `battlefield::relocate_boxed_in_tanks` already audits spawns against the
@@ -249,7 +249,7 @@ Audit of the remaining `HashMap`/`HashSet` uses on the simulation path,
 for the record (all safe today, listed so a future change knows the rule):
 `enemy_indices` is sorted into `engaged` before any order-dependent use
 (the comment on that sort already explains why); `excluded`/`hit_alerted`/
-`wall_cells`/`material_variant`/`engage_slot_choice` are lookup-only;
+`wall_cells`/`material_variant`/`EngageRing::choice` are lookup-only;
 `material_variant` is *built* by iterating the `MATERIALS` const slice
 (deterministic). **The rule going forward: never iterate a HashMap/HashSet
 on the simulation path where the loop body consumes RNG, spawns entities,
