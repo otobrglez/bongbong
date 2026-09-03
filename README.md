@@ -4,6 +4,7 @@ BongBong is a simplistic and entertaining modern tank shooter game.
 
 The main goal of this project is to build a fun, entertaining game with retro graphics and an illusion of modern physics, while paying respect to old-school tank games.
 
+Play it live @ [bongbong.io](https://bongbong.io) or [subscribe and follow the progress via the blog](https://blog.bongbong.io).
 
 ## Development
 
