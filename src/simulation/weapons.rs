@@ -267,6 +267,50 @@ pub(super) trait Projectile: hecs::Component {
     fn try_ricochet(&mut self, _hit: &TerrainBox) -> bool {
         false
     }
+    /// Bounce off a shielded tank centred at `center`: leave along
+    /// `deflected_velocity`, rewind to the pre-motion position so next
+    /// frame starts clear of the tank, and become `new_owner`'s projectile
+    /// (the shielded tank's) so it can hit whoever fired it. Every
+    /// projectile kind does this - unlike `try_ricochet`, which only
+    /// shells get.
+    fn deflect(&mut self, center: Position, new_owner: Owner);
+}
+
+/// Velocity of a projectile bouncing off a shield centred at `center`: the
+/// approach velocity mirrored across the radial normal from the centre to
+/// where the projectile was before this frame's motion, so a shot straight
+/// at the centre goes straight back and a glancing one skims off. Should
+/// the mirror still point inward (a projectile that started inside the
+/// box), it leaves straight outward along the normal instead.
+pub(super) fn deflected_velocity(prev: Position, vel: Vector2, center: Position) -> Vector2 {
+    let (nx, ny) = (prev.x - center.x, prev.y - center.y);
+    let len = (nx * nx + ny * ny).sqrt();
+    if len < f32::EPSILON {
+        return Vector2::new(-vel.x, -vel.y);
+    }
+    let (nx, ny) = (nx / len, ny / len);
+    let dot = vel.x * nx + vel.y * ny;
+    let (rx, ry) = (vel.x - 2.0 * dot * nx, vel.y - 2.0 * dot * ny);
+    if rx * nx + ry * ny > 0.0 {
+        Vector2::new(rx, ry)
+    } else {
+        let speed = (vel.x * vel.x + vel.y * vel.y).sqrt();
+        Vector2::new(nx * speed, ny * speed)
+    }
+}
+
+/// The `Projectile::deflect` body shared by every projectile kind - they
+/// all carry the same `velocity`/`rotation`/`position`/`prev_position`/
+/// `owner` fields.
+macro_rules! deflect_impl {
+    () => {
+        fn deflect(&mut self, center: Position, new_owner: Owner) {
+            self.velocity = deflected_velocity(self.prev_position, self.velocity, center);
+            self.rotation = self.velocity.x.atan2(-self.velocity.y).to_degrees();
+            self.position = self.prev_position;
+            self.owner = new_owner;
+        }
+    };
 }
 
 fn side_damage(owner: Owner, shooter_row: i32) -> (f32, f32) {
@@ -293,6 +337,7 @@ impl Projectile for Shell {
     fn damage_range(&self) -> (f32, f32) { side_damage(self.owner, self.shooter_row) }
     fn knockback_speed() -> Option<f32> { Some(tuning().shell_impact_knockback_speed) }
     fn frog_hops() -> bool { true }
+    deflect_impl!();
 
     /// Shells ricochet off indestructible Iron while `bounces_left` lasts:
     /// reflect on the face that was struck and rewind to the pre-motion
@@ -337,6 +382,7 @@ impl Projectile for Bullet {
     /// No hop per bullet: several rounds in a third of a second would make
     /// the frog flail rather than dodge.
     fn frog_hops() -> bool { false }
+    deflect_impl!();
 }
 
 impl Projectile for Plasma {
@@ -358,4 +404,39 @@ impl Projectile for Plasma {
     }
     fn knockback_speed() -> Option<f32> { Some(tuning().plasma_impact_knockback_speed) }
     fn frog_hops() -> bool { true }
+    deflect_impl!();
+}
+
+#[cfg(test)]
+mod deflect_tests {
+    use super::*;
+
+    fn outward(prev: Position, vel: Vector2, center: Position) -> f32 {
+        let v = deflected_velocity(prev, vel, center);
+        (v.x * (prev.x - center.x) + v.y * (prev.y - center.y)) / ((prev.x - center.x).hypot(prev.y - center.y))
+    }
+
+    #[test]
+    fn a_head_on_shot_comes_straight_back_at_full_speed() {
+        let v = deflected_velocity(Position::new(0.0, -100.0), Vector2::new(0.0, 300.0), Position::new(0.0, 0.0));
+        assert!((v.x).abs() < 1e-3 && (v.y + 300.0).abs() < 1e-3, "{v:?}");
+    }
+
+    #[test]
+    fn a_glancing_shot_skims_off_away_from_the_centre() {
+        let prev = Position::new(-80.0, -60.0);
+        let vel = Vector2::new(300.0, 0.0);
+        let v = deflected_velocity(prev, vel, Position::new(0.0, 0.0));
+        assert!(outward(prev, vel, Position::new(0.0, 0.0)) > 0.0, "leaves outward: {v:?}");
+        assert!((v.x.hypot(v.y) - 300.0).abs() < 1e-3, "speed is preserved");
+    }
+
+    #[test]
+    fn a_projectile_already_inside_leaves_straight_outward() {
+        // Moving away from the centre already: the mirror would point back
+        // in, so it exits along the normal instead.
+        let prev = Position::new(10.0, 0.0);
+        let v = deflected_velocity(prev, Vector2::new(200.0, 0.0), Position::new(0.0, 0.0));
+        assert!(v.x > 0.0 && v.y.abs() < 1e-3, "{v:?}");
+    }
 }

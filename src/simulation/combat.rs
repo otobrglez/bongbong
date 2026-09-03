@@ -64,7 +64,7 @@ impl Game {
                         false
                     } else {
                         let d = f.rng.random_range(dmg.0..dmg.1);
-                        tank.damage = (tank.damage + d).min(MAX_DAMAGE);
+                        tank.take_damage(d, MAX_DAMAGE);
                         tank.mark_hit();
                         if tank.is_wreck() {
                             f.kills.push((tank.position, is_enemy));
@@ -165,8 +165,8 @@ pub(super) fn ram(
         return;
     }
     let dmg = rng.random_range(tuning().ram_damage_min..tuning().ram_damage_max);
-    a.damage = (a.damage + dmg).min(MAX_DAMAGE);
-    b.damage = (b.damage + dmg).min(MAX_DAMAGE);
+    a.take_damage(dmg, MAX_DAMAGE);
+    b.take_damage(dmg, MAX_DAMAGE);
     a.mark_hit();
     b.mark_hit();
     a.ram_cooldown = tuning().ram_damage_cooldown;
@@ -227,7 +227,7 @@ fn explosion_hit(
 
     if damage {
         let dmg = rng.random_range(tuning().explosion_damage_min..tuning().explosion_damage_max) * falloff;
-        tank.damage = (tank.damage + dmg).min(MAX_DAMAGE);
+        tank.take_damage(dmg, MAX_DAMAGE);
         tank.mark_hit();
         if tank.is_wreck() {
             kills.push((tank.position, is_enemy));

@@ -40,6 +40,14 @@ pub enum PickupKind {
     /// one while already boosted refreshes the timer rather than stacking
     /// it, so a tank is only ever under one speed boost at a time.
     SpeedUp,
+    /// Rainbow shield: heals the collector to full and sets
+    /// `tank::Tank::shield_timer` to SHIELD_DURATION_SECONDS - while
+    /// positive the tank takes no damage from anything (`Tank::take_damage`).
+    /// Refreshes rather than stacks, like `SpeedUp`. Never a map slot of its
+    /// own in the shipped maps: it appears as an un-slotted bonus dropped
+    /// next to a Health slot with SHIELD_NEAR_HEALTH_CHANCE odds each time
+    /// that slot is (re)spawned - see `simulation::maybe_spawn_bonus_shield`.
+    Shield,
 }
 
 pub struct Pickup {

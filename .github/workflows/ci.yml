@@ -62,8 +62,8 @@ jobs:
         run: |
           for m in maps/test/*.toml; do
             cargo run --bin probe -- --map "$m" --frames 1800 --rounds 10 --seed 1000 \
-              --budget stale-start=0 --budget stall=0 --budget border-stuck=1 \
-              --budget jitter=3 --budget spin=2 --budget churn=14 --budget clustering=17 \
-              --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=4 \
+              --budget stale-start=0 --budget stall=0 --budget border-stuck=0 \
+              --budget jitter=5 --budget spin=3 --budget churn=14 --budget clustering=17 \
+              --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=2 \
               --budget never-arrived=0 --budget invariant=0 || exit 1
           done

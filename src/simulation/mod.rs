@@ -37,7 +37,7 @@ use crate::battlefield;
 use crate::bullet::Bullet;
 use crate::frog::Frog;
 use crate::laser::{LaserBeam, LaserVariant};
-use crate::map::{self, MapFile};
+use crate::map::{self, CellObject, MapFile};
 use crate::obstacle::Obstacle;
 use crate::pathfind::Grid;
 use crate::physics::Physics;
@@ -52,6 +52,7 @@ use crate::{
     FROG_COLLIDER_HALF_EXTENT,
     MAX_DAMAGE,
     OBSTACLE_CLEAR,
+    OBSTACLE_GRID_SIZE,
     OBSTACLE_HULL_FRACTION,
     OBSTACLE_SCALE,
     OBSTACLE_TEXTURE_SIZE,
@@ -296,6 +297,9 @@ impl Game {
             owner_slot: PLAYER_OWNER_SLOT,
             ..Tank::default()
         };
+        if rng.random_range(0.0..1.0) < tuning().spawn_shield_chance {
+            tank.shield_timer = tuning().shield_duration_seconds;
+        }
         roll_track_distortion(&mut tank, &mut rng);
         // Spawn facing up (rotation 0): the Y-axis collider orientation.
         tank.body = Some(self.physics.spawn_tank(tank.position, tank.move_half_extents(false), tank.mass()));
@@ -407,6 +411,11 @@ impl Game {
                     enemy.minigun_ammo += tuning().minigun_ammo_per_pickup;
                 }
             }
+            // A few start the round already shielded (SPAWN_SHIELD_CHANCE,
+            // same roll the player gets above).
+            if rng.random_range(0.0..1.0) < tuning().spawn_shield_chance {
+                enemy.shield_timer = tuning().shield_duration_seconds;
+            }
             roll_track_distortion(&mut enemy, &mut rng);
             enemy.body = Some(self.physics.spawn_tank(pos, enemy.move_half_extents(false), enemy.mass()));
             enemy_positions.push(pos);
@@ -470,6 +479,13 @@ impl Game {
         // --- Pickups: every map slot spawns immediately ---
         for &(pos, kind) in &self.map_pickup_slots {
             spawn_pickup_at(&mut self.world, pos, kind);
+        }
+        // Bonus shields roll only once every slot is placed, so a bonus
+        // can't land on a slot that hasn't spawned yet.
+        for &(pos, kind) in &self.map_pickup_slots {
+            if kind == PickupKind::Health {
+                maybe_spawn_bonus_shield(&mut self.world, &self.map, pos, width, height, &mut rng);
+            }
         }
 
         // --- Ground: road under every wall tile and explicit road cell ---
@@ -584,6 +600,7 @@ impl Game {
             tank.ram_cooldown = (tank.ram_cooldown - dt).max(0.0);
             tank.hit_flash_timer = (tank.hit_flash_timer - dt).max(0.0);
             tank.speed_boost_timer = (tank.speed_boost_timer - dt).max(0.0);
+            tank.shield_timer = (tank.shield_timer - dt).max(0.0);
             tank.tick_wreck(dt);
             tank.tick_minigun_spin(dt);
             roll_wreck_col(tank, rng);
@@ -624,7 +641,7 @@ impl Game {
             let (became_wreck, victim_pos) = {
                 let mut q = self.world.query_one::<&mut Tank>(target);
                 let tank = q.get().expect("attack target always has a Tank");
-                tank.damage = (tank.damage + dmg).min(cap);
+                tank.take_damage(dmg, cap);
                 tank.mark_hit();
                 (tank.is_wreck(), tank.position)
             };
@@ -700,15 +717,21 @@ impl Game {
                     }
                     // Refreshes rather than stacks: one boost at a time.
                     PickupKind::SpeedUp => tank.speed_boost_timer = tuning().speed_boost_duration_seconds,
+                    // Full heal (damage is the health model, 0 = pristine)
+                    // plus a refreshed, never stacked, invulnerability window.
+                    PickupKind::Shield => {
+                        tank.damage = 0.0;
+                        tank.shield_timer = tuning().shield_duration_seconds;
+                    }
                 }
             }
             self.world.despawn(pickup_entity).ok();
         }
 
-        if self.world.query::<&Pickup>().iter().count() < self.map_pickup_slots.len() {
+        if slot_backed_count(&self.world, &self.map_pickup_slots) < self.map_pickup_slots.len() {
             self.pickup_respawn_timer -= f.dt;
             if self.pickup_respawn_timer <= 0.0 {
-                respawn_from_slots(&mut self.world, &mut f.rng, &self.map_pickup_slots);
+                respawn_from_slots(&mut self.world, &self.map, &self.map_pickup_slots, f.width, f.height, &mut f.rng);
                 self.pickup_respawn_timer = tuning().pickup_respawn_seconds;
             }
         } else {
@@ -814,15 +837,12 @@ impl Game {
 
         for (entity, tank, ai) in self.world.query::<(Entity, &mut Tank, &mut Ai)>().iter() {
             let my_index = enemy_indices[&entity];
-            // Real physics speed, so the AI's stuck check can tell
-            // "commanded to move" from "actually moved".
-            let real_speed = tank
+            // Real physics velocity, so the AI's stuck check can tell
+            // "commanded to move" from "actually got somewhere that way".
+            let real_velocity = tank
                 .body
-                .map(|handle| {
-                    let v = self.physics.velocity(handle);
-                    (v.x * v.x + v.y * v.y).sqrt()
-                })
-                .unwrap_or(0.0);
+                .map(|handle| self.physics.velocity(handle))
+                .unwrap_or_default();
             let engage_target = engage_targets.get(&entity).copied();
             let line_of_sight = f.terrain.line_of_sight(tank.position, player_pos);
             // The player lives in a different archetype (no `Ai`), so this
@@ -834,7 +854,7 @@ impl Game {
                     f.width,
                     f.height,
                     f.dt,
-                    real_speed,
+                    real_velocity,
                     &movers,
                     my_index,
                     &grid,
@@ -845,7 +865,6 @@ impl Game {
                     line_of_sight,
                 )
             });
-            if std::env::var_os("BB_AI_TRACE").is_some() { eprintln!("AITRACE idx={} pos=({:.1},{:.1}) rspeed={:.1} mv={:?} face={:?} {}", my_index, tank.position.x, tank.position.y, real_speed, intent.move_dir.map(|d| d.rotation()), intent.face.map(|d| d.rotation()), ai.trace_state()); }
             drive_tank(&mut self.physics, tank, intent, f.dt);
             let owner = tank.owner();
             tick_queued_shots(&mut self.physics, f, tank, owner);
@@ -1048,6 +1067,20 @@ impl Game {
             };
             let hit_pos = prev + (pos - prev) * t;
             f.impact_flashes.push(Shockwave { center: hit_pos, time: 0.0 });
+            // A shielded tank bounces the projectile away instead of taking
+            // the hit - see `Projectile::deflect`. No damage, no knockback,
+            // no hit flash on the tank; the impact flash above still shows
+            // where the shield was struck.
+            let shield = match target {
+                ShellTarget::PlayerTank => shield_deflector(&self.world, player),
+                ShellTarget::EnemyTank(e) => shield_deflector(&self.world, e),
+                _ => None,
+            };
+            if let Some((center, new_owner)) = shield {
+                let mut q = self.world.query_one::<&mut P>(entity);
+                q.get().expect("projectile collected this frame still exists").deflect(center, new_owner);
+                continue;
+            }
             let bounced = {
                 let mut q = self.world.query_one::<&mut P>(entity);
                 let p = q.get().expect("projectile collected this frame still exists");
@@ -1225,6 +1258,7 @@ impl Game {
                     minigun_ammo: tank.minigun_ammo,
                     plasma_ammo: tank.plasma_ammo,
                     laser_charges: tank.laser_charges,
+                    shield_timer: tank.shield_timer,
                     touching_static: contact.touching_static,
                     contact_impulse: contact.max_impulse,
                     is_wreck: tank.is_wreck(),
@@ -1253,6 +1287,8 @@ pub struct TankSnapshot {
     pub minigun_ammo: i32,
     pub plasma_ammo: i32,
     pub laser_charges: i32,
+    /// Seconds of rainbow shield left (0 = unshielded).
+    pub shield_timer: f32,
     /// The hull has an active contact with static terrain right now.
     pub touching_static: bool,
     /// Strongest solver contact impulse on the hull this step.
@@ -1334,9 +1370,33 @@ fn spawn_pickup_at(world: &mut hecs::World, pos: Position, kind: PickupKind) {
     world.spawn((Pickup { kind, position: pos },));
 }
 
-/// Top up one pickup at a uniformly random slot not currently occupied.
-/// A no-op if every slot is full.
-fn respawn_from_slots(world: &mut hecs::World, rng: &mut SmallRng, slots: &[(Position, PickupKind)]) {
+/// If the tank at `entity` is holding a live rainbow shield, its centre and
+/// owner - what a projectile that strikes it bounces off and becomes.
+fn shield_deflector(world: &hecs::World, entity: Entity) -> Option<(Position, Owner)> {
+    with_tank(world, entity, |t| (t.is_shielded() && !t.is_wreck()).then(|| (t.position, t.owner())))
+}
+
+/// Live pickups sitting on a map slot. An un-slotted bonus shield doesn't
+/// count, so it can never make the field look full to the respawn timer.
+fn slot_backed_count(world: &hecs::World, slots: &[(Position, PickupKind)]) -> usize {
+    world
+        .query::<&Pickup>()
+        .iter()
+        .filter(|p| slots.iter().any(|&(pos, _)| pos.distance_to(p.position) <= 0.5))
+        .count()
+}
+
+/// Top up one pickup at a uniformly random slot not currently occupied,
+/// with a bonus shield roll if that slot is a health pack. A no-op if every
+/// slot is full.
+fn respawn_from_slots(
+    world: &mut hecs::World,
+    map: &MapFile,
+    slots: &[(Position, PickupKind)],
+    width: f32,
+    height: f32,
+    rng: &mut SmallRng,
+) {
     let occupied: Vec<Position> = world.query::<&Pickup>().iter().map(|p| p.position).collect();
     let free: Vec<(Position, PickupKind)> = slots
         .iter()
@@ -1348,6 +1408,69 @@ fn respawn_from_slots(world: &mut hecs::World, rng: &mut SmallRng, slots: &[(Pos
     }
     let (pos, kind) = free[rng.random_range(0..free.len())];
     spawn_pickup_at(world, pos, kind);
+    if kind == PickupKind::Health {
+        maybe_spawn_bonus_shield(world, map, pos, width, height, rng);
+    }
+}
+
+/// Roll SHIELD_NEAR_HEALTH_CHANCE for the health slot just (re)spawned at
+/// `slot` and, on success, drop a `PickupKind::Shield` in a free cell next
+/// to it. Skipped while a shield already sits beside this slot, so repeated
+/// health respawns can't pile them up.
+fn maybe_spawn_bonus_shield(
+    world: &mut hecs::World,
+    map: &MapFile,
+    slot: Position,
+    width: f32,
+    height: f32,
+    rng: &mut SmallRng,
+) {
+    let occupied: Vec<Position> = world.query::<&Pickup>().iter().map(|p| p.position).collect();
+    let already_there = world
+        .query::<&Pickup>()
+        .iter()
+        .any(|p| p.kind == PickupKind::Shield && p.position.distance_to(slot) <= OBSTACLE_GRID_SIZE * 1.5);
+    if already_there || rng.random_range(0.0..1.0) >= tuning().shield_near_health_chance {
+        return;
+    }
+    if let Some(pos) = bonus_shield_cell(map, slot, &occupied, width, height, rng) {
+        spawn_pickup_at(world, pos, PickupKind::Shield);
+    }
+}
+
+/// A uniformly random free cell touching the slot at `slot`, or `None`
+/// when all eight neighbours are taken. Eligible: empty or road in the map
+/// (walls, the frog, the start cell and other slots are not), centre inside
+/// the border walls (their inner faces sit at 0/`width`/0/`height`), and no
+/// live pickup already on it. Map walls are checked rather than the live
+/// obstacle set: a shot-away wall's cell stays off limits, which is
+/// conservative but keeps this independent of the physics world.
+fn bonus_shield_cell(
+    map: &MapFile,
+    slot: Position,
+    occupied: &[Position],
+    width: f32,
+    height: f32,
+    rng: &mut SmallRng,
+) -> Option<Position> {
+    const NEIGHBOURS: [(i32, i32); 8] = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)];
+    let (col, row) = map::world_to_cell(slot);
+    let half = OBSTACLE_GRID_SIZE * 0.5;
+    let candidates: Vec<Position> = NEIGHBOURS
+        .iter()
+        .filter_map(|&(dx, dy)| {
+            let (c, r) = (col + dx, row + dy);
+            let open = matches!(map.cell(c, r), None | Some(CellObject::Road));
+            let pos = map::cell_to_world(c, r);
+            let inside = pos.x >= half && pos.x <= width - half && pos.y >= half && pos.y <= height - half;
+            let free = occupied.iter().all(|&p| p.distance_to(pos) > 0.5);
+            (open && inside && free).then_some(pos)
+        })
+        .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+    Some(candidates[rng.random_range(0..candidates.len())])
 }
 
 /// Read-only access to one tank. Backed by the dynamically borrow-checked
@@ -1457,7 +1580,6 @@ fn lay_tracks(tracks: &mut Vec<Track>, tank: &mut Tank, before: Position) {
 #[cfg(test)]
 mod spawn_tests {
     use super::*;
-    use crate::OBSTACLE_GRID_SIZE;
 
     /// No enemy ever starts inside, or touching, a wall on the shipped map.
     /// The default map's border band is dense enough that the spawn
@@ -1521,7 +1643,7 @@ mod determinism_tests {
     }
 
     /// Bit-comparable form (`to_bits`), so a mismatch is unambiguous.
-    fn key(s: &TankSnapshot) -> (bool, [u32; 6], i32, i32, i32, bool) {
+    fn key(s: &TankSnapshot) -> (bool, [u32; 7], i32, i32, i32, bool) {
         (
             s.is_player,
             [
@@ -1531,6 +1653,7 @@ mod determinism_tests {
                 s.velocity.y.to_bits(),
                 s.rotation.to_bits(),
                 s.damage.to_bits(),
+                s.shield_timer.to_bits(),
             ],
             s.shells_ammo,
             s.minigun_ammo,
@@ -1670,5 +1793,144 @@ cells."30,20" = { kind = "frog" }
             step(&mut game, fire);
         }
         assert_eq!(player_ammo(&game), tuning().max_shells - 1);
+    }
+
+    /// `SEALED_CRATE_MAP` with the crate swapped for a rainbow shield.
+    const SEALED_SHIELD_MAP: &str = r#"
+version = 1
+tanks = 1
+cells."8,8" = { kind = "wall", material = "iron" }
+cells."9,8" = { kind = "wall", material = "iron" }
+cells."10,8" = { kind = "wall", material = "iron" }
+cells."11,8" = { kind = "wall", material = "iron" }
+cells."12,8" = { kind = "wall", material = "iron" }
+cells."13,8" = { kind = "wall", material = "iron" }
+cells."8,9" = { kind = "wall", material = "iron" }
+cells."13,9" = { kind = "wall", material = "iron" }
+cells."8,10" = { kind = "wall", material = "iron" }
+cells."10,10" = { kind = "start" }
+cells."11,10" = { kind = "pickup", pickup = "shield" }
+cells."13,10" = { kind = "wall", material = "iron" }
+cells."8,11" = { kind = "wall", material = "iron" }
+cells."13,11" = { kind = "wall", material = "iron" }
+cells."8,12" = { kind = "wall", material = "iron" }
+cells."9,12" = { kind = "wall", material = "iron" }
+cells."10,12" = { kind = "wall", material = "iron" }
+cells."11,12" = { kind = "wall", material = "iron" }
+cells."12,12" = { kind = "wall", material = "iron" }
+cells."13,12" = { kind = "wall", material = "iron" }
+cells."30,20" = { kind = "frog" }
+"#;
+
+    fn player_snapshot(game: &Game) -> TankSnapshot {
+        game.tank_snapshots().into_iter().find(|t| t.is_player).expect("player")
+    }
+
+    #[test]
+    fn a_shield_pickup_heals_to_full_and_protects_for_its_duration() {
+        let mut game = game_on(SEALED_SHIELD_MAP, 1, Some(0));
+        let player = game.player.expect("player");
+        {
+            let mut q = game.world.query_one::<&mut Tank>(player);
+            let tank = q.get().expect("player tank");
+            tank.damage = 50.0;
+            tank.shield_timer = 0.0;
+        }
+        step(&mut game, Input::default());
+        let snap = player_snapshot(&game);
+        assert_eq!(snap.damage, 0.0, "the shield pickup is a full heal");
+        let duration = tuning().shield_duration_seconds;
+        assert!(
+            (snap.shield_timer - duration).abs() <= 1.0 / 60.0 + 1e-4,
+            "timer set to tuning().shield_duration_seconds, got {}",
+            snap.shield_timer
+        );
+        // Damage applied through the one damage path is swallowed while
+        // the timer runs...
+        {
+            let mut q = game.world.query_one::<&mut Tank>(player);
+            let tank = q.get().expect("player tank");
+            tank.take_damage(30.0, MAX_DAMAGE);
+            assert_eq!(tank.damage, 0.0);
+        }
+        // ...and the timer counts down to exactly zero and stays there. The
+        // slot is cleared first so the crate can't respawn into the sealed
+        // ring and refresh the timer mid-countdown.
+        game.map_pickup_slots.clear();
+        for _ in 0..((duration * 60.0) as u32 + 5) {
+            step(&mut game, Input::default());
+        }
+        assert_eq!(player_snapshot(&game).shield_timer, 0.0);
+        {
+            let mut q = game.world.query_one::<&mut Tank>(player);
+            let tank = q.get().expect("player tank");
+            tank.take_damage(30.0, MAX_DAMAGE);
+            assert_eq!(tank.damage, 30.0, "unshielded again once the timer runs out");
+        }
+    }
+
+    /// Drop an enemy-owned shell `above` px above the player, flying
+    /// straight down at it, and run `frames` frames. Returns whether a
+    /// shell ever ended up owned by the player (i.e. was deflected) and the
+    /// player's damage at the end.
+    fn shell_from_above(shielded: bool, above: f32, frames: u32) -> (bool, f32) {
+        let mut game = game_on(OPEN_MAP, 0, Some(0));
+        let player = game.player.expect("player");
+        let (pos, row) = {
+            let mut q = game.world.query_one::<&mut Tank>(player);
+            let tank = q.get().expect("player tank");
+            tank.shield_timer = if shielded { 100.0 } else { 0.0 };
+            (tank.position, tank.row)
+        };
+        let shooter = Tank { row, position: Position::new(pos.x, pos.y - above), rotation: 180.0, ..Tank::default() };
+        let shell = Shell::spawn(&shooter, Owner::Enemy(0), 0.0, 0.0);
+        game.world.spawn((shell,));
+        let mut deflected = false;
+        for _ in 0..frames {
+            step(&mut game, Input::default());
+            deflected |= game.world.query::<&Shell>().iter().any(|s| s.owner == Owner::Player && s.velocity.y < 0.0);
+        }
+        (deflected, player_snapshot(&game).damage)
+    }
+
+    #[test]
+    fn a_shielded_tank_bounces_a_shell_back_at_its_shooter() {
+        let (deflected, damage) = shell_from_above(true, 160.0, 240);
+        assert!(deflected, "the shell should come back player-owned and travelling up");
+        assert_eq!(damage, 0.0, "and the player takes nothing");
+        // Same shot without the shield lands, so the setup really does aim
+        // at the player.
+        let (deflected, damage) = shell_from_above(false, 160.0, 240);
+        assert!(!deflected);
+        assert!(damage > 0.0, "unshielded control: the shell hits");
+    }
+
+    #[test]
+    fn a_bonus_shield_lands_on_a_free_neighbouring_cell() {
+        let map = MapFile::from_toml_str(OPEN_MAP).expect("map parses");
+        let slot = map::cell_to_world(20, 11);
+        let mut rng = SmallRng::seed_from_u64(3);
+        // The slot itself is occupied by its health pack; every neighbour is
+        // free and inside the field.
+        let pos = bonus_shield_cell(&map, slot, &[slot], W, H, &mut rng).expect("an open map has a free neighbour");
+        let (c, r) = map::world_to_cell(pos);
+        assert!((c - 20).abs() <= 1 && (r - 11).abs() <= 1 && (c, r) != (20, 11), "adjacent, not the slot: {c},{r}");
+        assert!(matches!(map.cell(c, r), None | Some(CellObject::Road)));
+    }
+
+    #[test]
+    fn a_walled_in_health_slot_gets_no_bonus_shield() {
+        // Cell 11,10 inside the sealed ring: its eight neighbours are the
+        // start cell (10,10), walls, or cells already holding a pickup.
+        let map = MapFile::from_toml_str(SEALED_CRATE_MAP).expect("map parses");
+        let slot = map::cell_to_world(11, 10);
+        let mut rng = SmallRng::seed_from_u64(3);
+        let open_neighbours: Vec<Position> = [(12, 9), (12, 10), (12, 11), (9, 9), (9, 10), (9, 11), (10, 9), (10, 11), (11, 9), (11, 11)]
+            .iter()
+            .map(|&(c, r)| map::cell_to_world(c, r))
+            .collect();
+        let mut occupied = open_neighbours.clone();
+        occupied.push(slot);
+        assert_eq!(bonus_shield_cell(&map, slot, &occupied, W, H, &mut rng), None);
     }
 }

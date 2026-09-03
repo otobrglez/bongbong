@@ -314,6 +314,9 @@ fn main() {
     let pickup_speedup_texture = rl
         .load_texture(&thread, "static/pickups/speedup.png")
         .expect("failed loading speed-up pickup texture");
+    let pickup_shield_texture = rl
+        .load_texture(&thread, "static/pickups/shield.png")
+        .expect("failed loading shield pickup texture");
     #[cfg(feature = "map-editor")]
     let eraser_texture = rl
         .load_texture(&thread, "static/ui/eraser.png")
@@ -351,6 +354,7 @@ fn main() {
                     pickup_minigun: &pickup_minigun_texture,
                     pickup_plasma: &pickup_plasma_texture,
                     pickup_speedup: &pickup_speedup_texture,
+                    pickup_shield: &pickup_shield_texture,
                     eraser: &eraser_texture,
                     tanks: &tanks_texture,
                 },
@@ -514,6 +518,7 @@ fn main() {
                 pickup_minigun: &pickup_minigun_texture,
                 pickup_plasma: &pickup_plasma_texture,
                 pickup_speedup: &pickup_speedup_texture,
+                pickup_shield: &pickup_shield_texture,
                 minigun_mount: &minigun_mount_texture,
             },
         );

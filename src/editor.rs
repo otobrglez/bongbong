@@ -46,6 +46,7 @@ pub struct EditorTextures<'a> {
     pub pickup_minigun: &'a Texture2D,
     pub pickup_plasma: &'a Texture2D,
     pub pickup_speedup: &'a Texture2D,
+    pub pickup_shield: &'a Texture2D,
     pub eraser: &'a Texture2D,
     pub tanks: &'a Texture2D,
 }
@@ -62,7 +63,7 @@ enum Tool {
     Eraser,
 }
 
-const TOOLS: [Tool; 14] = [
+const TOOLS: [Tool; 15] = [
     Tool::Wall(Material::Brick),
     Tool::Wall(Material::Iron),
     Tool::Wall(Material::Wood),
@@ -76,6 +77,7 @@ const TOOLS: [Tool; 14] = [
     Tool::Pickup(PickupKind::Minigun),
     Tool::Pickup(PickupKind::Plasma),
     Tool::Pickup(PickupKind::SpeedUp),
+    Tool::Pickup(PickupKind::Shield),
     Tool::Eraser,
 ];
 
@@ -462,6 +464,7 @@ impl MapEditor {
                         PickupKind::Minigun => textures.pickup_minigun,
                         PickupKind::Plasma => textures.pickup_plasma,
                         PickupKind::SpeedUp => textures.pickup_speedup,
+                        PickupKind::Shield => textures.pickup_shield,
                     };
                     let src =
                         Rectangle::new(0.0, 0.0, crate::PICKUP_TEXTURE_SIZE, crate::PICKUP_TEXTURE_SIZE);
@@ -648,6 +651,7 @@ fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, tool: Tool
                 PickupKind::Minigun => textures.pickup_minigun,
                 PickupKind::Plasma => textures.pickup_plasma,
                 PickupKind::SpeedUp => textures.pickup_speedup,
+                PickupKind::Shield => textures.pickup_shield,
             };
             let src = Rectangle::new(0.0, 0.0, crate::PICKUP_TEXTURE_SIZE, crate::PICKUP_TEXTURE_SIZE);
             d.draw_texture_pro(texture, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);

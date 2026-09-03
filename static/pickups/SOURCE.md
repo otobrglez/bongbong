@@ -31,6 +31,15 @@ snapped, loud/high-contrast treatment. A filled lightning-bolt polygon
 universal "speed boost" symbol, distinct from the other three's beam/
 sparks/orb. Regenerate with `python3 tools/gen_speedup_pickup.py`.
 
+`shield.png` is derived from `health.png` below: `tools/gen_shield_pickup.py`
+reads the health pack and sweeps its red through the rainbow (diagonally,
+red top-left to violet bottom-right), leaving the white cross, dark outline
+and all shading untouched - so the rainbow shield reads as "a health pack,
+but rainbow", the pickup it always appears next to. Same raw-PNG-bytes/no-
+Pillow convention as the generators above, plus a minimal PNG decoder for
+the source. Being a recolour of the pack's art, it inherits `health.png`'s
+provenance and terms. Regenerate with `python3 tools/gen_shield_pickup.py`.
+
 `health.png` and `ammo.png` are `health-red 32px.png` and
 `ammo-pistol 32px.png` from the third-party "2D Health & Ammo Pickups v6.2"
 pack (`bongbong-assets/2D Health & Ammo Pickups v6.2/32px/`), copied in

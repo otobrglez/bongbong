@@ -289,6 +289,11 @@ pub struct Tank {
     /// pickup refreshes the duration instead of stacking with an
     /// already-active boost - see `PickupKind::SpeedUp`'s doc comment.
     pub speed_boost_timer: f32,
+    /// Seconds remaining on a `pickup::PickupKind::Shield` - while positive
+    /// `take_damage` is a no-op and `draw_tank_shield` draws the rainbow
+    /// ring. Set (not added to) on pickup, same refresh-not-stack rule as
+    /// `speed_boost_timer`.
+    pub shield_timer: f32,
     /// Seconds accumulated toward recharging the next shell.
     pub recharge_timer: f32,
     /// Seconds remaining before this tank may fire again (player only - see
@@ -375,6 +380,7 @@ impl Default for Tank {
             plasma_variant: PlasmaVariant::Teal,
             weapon_queue: Vec::new(),
             speed_boost_timer: 0.0,
+            shield_timer: 0.0,
             recharge_timer: 0.0,
             fire_cooldown: 0.0,
             ram_cooldown: 0.0,
@@ -403,6 +409,24 @@ impl Tank {
     /// True once the tank has taken maximum damage (a burning wreck).
     pub fn is_wreck(&self) -> bool {
         self.damage >= MAX_DAMAGE
+    }
+
+    /// True while a rainbow shield is active (see `shield_timer`).
+    pub fn is_shielded(&self) -> bool {
+        self.shield_timer > 0.0
+    }
+
+    /// The one way damage lands on a tank: adds `amount`, capped at `cap`
+    /// (MAX_DAMAGE, or one below it for the player's frog bites). A no-op
+    /// while shielded - the shield absorbs every source, shells, bullets,
+    /// plasma, laser, ram, explosions and the frog alike. Callers keep their
+    /// hit flash/knockback/alert side effects, so a blocked shot still
+    /// visibly lands; only the health change is swallowed.
+    pub fn take_damage(&mut self, amount: f32, cap: f32) {
+        if self.is_shielded() {
+            return;
+        }
+        self.damage = (self.damage + amount).min(cap);
     }
 
     /// Who this tank is as a projectile owner - the inverse of
@@ -834,6 +858,46 @@ pub fn draw_tank(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank) {
     );
 }
 
+/// Draw the rainbow shield ring while `Tank::shield_timer` is running: six
+/// 60-degree arcs, each one hue step apart, all cycling through the rainbow
+/// at SHIELD_GLOW_HUE_HZ (offset by `anim_phase` so neighbouring tanks
+/// don't cycle in lockstep), plus a faint disc of the leading hue inside.
+/// Radius breathes gently around `Tank::size() * SHIELD_GLOW_RADIUS_FACTOR`
+/// and everything fades over the final SHIELD_GLOW_FADE_SECONDS. Called
+/// before `draw_tank_shadow`, so the ring is a translucent ground decal
+/// under the whole tank - the sprite stays crisp and only the part reaching
+/// past the hull shows. Centered on `tank.position`, not the rear-shifted
+/// `draw_pivot`.
+pub fn draw_tank_shield(d: &mut impl RaylibDraw, tank: &Tank, time: f32) {
+    if !tank.is_shielded() || tank.is_wreck() {
+        return;
+    }
+    let t = tuning();
+    let fade = if t.shield_glow_fade_seconds > 0.0 {
+        (tank.shield_timer / t.shield_glow_fade_seconds).min(1.0)
+    } else {
+        1.0
+    };
+    let pulse = ((time + tank.anim_phase()) * std::f32::consts::TAU * 1.5).sin() * 0.5 + 0.5;
+    let radius = tank.size() * t.shield_glow_radius_factor * (0.94 + 0.06 * pulse);
+    let thickness = radius * 0.22;
+    let base_hue = (time * t.shield_glow_hue_hz * 360.0 + tank.anim_phase() * 360.0).rem_euclid(360.0);
+    let with_alpha = |c: Color, alpha: f32| Color::new(c.r, c.g, c.b, (alpha * fade).clamp(0.0, 255.0) as u8);
+
+    let fill = Color::color_from_hsv(base_hue, 0.6, 1.0);
+    d.draw_circle_v(tank.position, radius - thickness, with_alpha(fill, 22.0 + 10.0 * pulse));
+    const ARCS: i32 = 6;
+    let step = 360.0 / ARCS as f32;
+    for i in 0..ARCS {
+        let hue = (base_hue + i as f32 * step).rem_euclid(360.0);
+        // Arcs rotate with the hue so the bands visibly travel around the
+        // ring rather than just recolouring in place.
+        let start = i as f32 * step - base_hue;
+        let color = with_alpha(Color::color_from_hsv(hue, 0.85, 1.0), 95.0 + 30.0 * pulse);
+        d.draw_ring(tank.position, radius - thickness, radius, start, start + step, 12, color);
+    }
+}
+
 /// Draw this tank's drop shadow: the same two layers (each at its own eased
 /// angle, matching `draw_tank`), offset toward a fixed screen-space direction
 /// and tinted flat black - see docs/sprite-shadows-design.md. Must be called
@@ -1011,5 +1075,30 @@ mod weapon_queue_tests {
             vec![ActiveWeapon::Plasma, ActiveWeapon::Minigun]
         );
         assert_eq!(tank.active_weapon(), ActiveWeapon::Plasma);
+    }
+}
+
+#[cfg(test)]
+mod shield_tests {
+    use super::*;
+
+    #[test]
+    fn a_shielded_tank_takes_no_damage() {
+        let mut tank = Tank { damage: 10.0, shield_timer: 1.0, ..Tank::default() };
+        tank.take_damage(30.0, MAX_DAMAGE);
+        assert_eq!(tank.damage, 10.0, "shield absorbs the whole hit");
+        assert!(!tank.is_wreck());
+    }
+
+    #[test]
+    fn damage_lands_and_caps_once_the_shield_is_gone() {
+        let mut tank = Tank { damage: 10.0, shield_timer: 0.0, ..Tank::default() };
+        tank.take_damage(30.0, MAX_DAMAGE);
+        assert_eq!(tank.damage, 40.0);
+        tank.take_damage(1000.0, MAX_DAMAGE - 1.0);
+        assert_eq!(tank.damage, MAX_DAMAGE - 1.0, "capped at the caller's ceiling");
+        assert!(!tank.is_wreck());
+        tank.take_damage(1000.0, MAX_DAMAGE);
+        assert!(tank.is_wreck());
     }
 }

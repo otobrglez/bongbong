@@ -309,6 +309,10 @@ tunables! {
         /// independently per enemy, so this is an expected fraction across
         /// a round, not an exact headcount.
         enemy_special_weapon_chance: f32 = 0.268 in 0.0 ..= 1.0 @ Restart;
+        /// Odds any tank (the player included) starts the round already
+        /// under a rainbow shield (`Tank::shield_timer` set to
+        /// `shield_duration_seconds`). Rolled independently per tank.
+        spawn_shield_chance: f32 = 0.05 in 0.0 ..= 1.0 @ Restart;
         /// Of an enemy that rolls a special weapon, the odds it's a laser.
         enemy_special_weapon_laser_share: f32 = 0.5 in 0.0 ..= 1.0 @ Restart;
         /// Of the remaining (non-laser) share, the odds it's plasma rather
@@ -575,6 +579,16 @@ tunables! {
         /// one refreshes it rather than stacking) - a tank is only ever
         /// under one boost at a time.
         speed_boost_duration_seconds: f32 = 12.0 in 0.0 ..= 120.0;
+        /// Rainbow shield: collecting one heals the tank to full and *sets*
+        /// `Tank::shield_timer` to this (a second one refreshes it rather
+        /// than stacking). While positive the tank takes no damage from any
+        /// source - see `Tank::take_damage`.
+        shield_duration_seconds: f32 = 30.0 in 0.0 ..= 120.0;
+        /// Odds that a rainbow shield pickup is dropped in a free cell next
+        /// to a Health slot each time that slot is spawned or respawned.
+        /// The shield is an un-slotted bonus: it never respawns on its own,
+        /// only ever alongside a health pack.
+        shield_near_health_chance: f32 = 0.2 in 0.0 ..= 1.0;
     }
 
     group combat {
@@ -687,8 +701,9 @@ tunables! {
         /// coarse grid's routed direction flip-flops every frame near a
         /// corner (found via the probe's `--rounds` sweep).
         ai_obstacle_override_hold_seconds: f32 = 0.1 in 0.0 ..= 2.0;
-        /// Stuck-escape: a tank commanded to move whose real physics speed
-        /// stays under this (px/s) ...
+        /// Stuck-escape: a tank commanded to move whose real physics
+        /// velocity, projected onto the commanded heading, stays under
+        /// this (px/s) - sideways drift in a jam is not progress ...
         stuck_speed_eps: f32 = 8.0 in 0.0 ..= 100.0;
         /// ... for this many seconds running is treated as genuinely stuck,
         /// and `Ai::steer` forces a hard perpendicular-turn reset.
@@ -831,6 +846,15 @@ tunables! {
         /// Tank shadow distance (px) - grounded, stays tight to the hull.
         tank_shadow_offset: f32 = 3.0 in 0.0 ..= 20.0;
         tank_shadow_opacity: f32 = 0.486 in 0.0 ..= 1.0;
+        /// Rainbow shield ring radius as a multiple of `Tank::size()`. Drawn
+        /// under the tank and its shadow, so only what reaches past the
+        /// hull shows.
+        shield_glow_radius_factor: f32 = 0.385 in 0.1 ..= 2.0;
+        /// How many full rainbow hue cycles the shield ring makes per second.
+        shield_glow_hue_hz: f32 = 0.4 in 0.0 ..= 5.0;
+        /// The ring fades out over this many final seconds of the shield so
+        /// the wearer can see it about to drop.
+        shield_glow_fade_seconds: f32 = 2.0 in 0.0 ..= 10.0;
         /// Shell shadow distance, rolled once per shell at fire time within
         /// this range - the separation is what reads as "airborne", and
         /// different shells reading as flying at different heights beats

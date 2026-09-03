@@ -18,7 +18,9 @@ use crate::plasma::{Plasma, PlasmaState, draw_plasma, draw_plasma_shadow};
 use crate::shell::{Shell, ShellState, draw_shell, draw_shell_shadow};
 use crate::shockwave::{RippleFx, screen_to_ripple_uv};
 use crate::simulation::{Game, Outcome};
-use crate::tank::{ActiveWeapon, Dir, Tank, draw_minigun_mount, draw_minigun_mount_shadow, draw_tank, draw_tank_shadow};
+use crate::tank::{
+    ActiveWeapon, Dir, Tank, draw_minigun_mount, draw_minigun_mount_shadow, draw_tank, draw_tank_shadow, draw_tank_shield,
+};
 use crate::track::draw_track;
 use crate::{
     HEALTH_BAR_CELL_SIZE,
@@ -64,6 +66,7 @@ pub struct Textures<'a> {
     pub pickup_minigun: &'a Texture2D,
     pub pickup_plasma: &'a Texture2D,
     pub pickup_speedup: &'a Texture2D,
+    pub pickup_shield: &'a Texture2D,
     /// The minigun barrel-cluster overlay drawn on a tank's turret while it
     /// holds minigun ammo - see `tank::draw_minigun_mount`. One shared
     /// texture for every chassis (unlike `tanks` above), not a sheet.
@@ -217,6 +220,7 @@ impl Game {
                     PickupKind::Minigun => textures.pickup_minigun,
                     PickupKind::Plasma => textures.pickup_plasma,
                     PickupKind::SpeedUp => textures.pickup_speedup,
+                    PickupKind::Shield => textures.pickup_shield,
                 };
                 draw_pickup(&mut d, texture, pickup);
             }
@@ -232,6 +236,7 @@ impl Game {
             );
 
             for tank in self.world.query::<&Tank>().with::<&Ai>().iter() {
+                draw_tank_shield(&mut d, tank, self.time);
                 if self.shadows_enabled {
                     draw_tank_shadow(&mut d, textures.tanks, tank);
                     draw_minigun_mount_shadow(&mut d, textures.minigun_mount, tank);
@@ -243,6 +248,7 @@ impl Game {
             }
 
             crate::simulation::with_tank(&self.world, player, |tank| {
+                draw_tank_shield(&mut d, tank, self.time);
                 if self.shadows_enabled {
                     draw_tank_shadow(&mut d, textures.tanks, tank);
                     draw_minigun_mount_shadow(&mut d, textures.minigun_mount, tank);

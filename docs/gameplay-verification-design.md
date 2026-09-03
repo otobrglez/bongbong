@@ -927,35 +927,56 @@ breachable only through the brick columns beside it) are all gated, so
 the map carries no lint errors any more. Ceilings in `just probe-fixtures`/ci.yml are the
 new cross-fixture maxima.
 
-### Re-baseline 2026-09-04: QA'd tuning defaults
+### Re-baseline 2026-09-04: QA'd tuning defaults + progress-based stuck detection
 
 The QA'd knob set from the web panel became `tuning.rs`'s defaults
 (player 220->210 px/s, enemies 150->160, 12 shells, minigun bursts of 6
 at 570 px/s dealing 3-6, ammo crates +10, fragile brick/wood/glass walls,
 plus shadow/HUD/shockwave cosmetics). Speeds and ammo shift every round's
-RNG stream, so the pinned-seed numbers were re-read (same sweep
-parameters as above):
+RNG stream, and the first re-read surfaced the first fixture
+`border-stuck` ever: maze round 6 (`--seed 0x3ee`), ENEMY#0 reaching the
+right border wall at ~15s and sitting there nudging it at ~8px/s. A
+per-frame AI trace showed a three-tank jam in the open ground east of the
+maze: two chasers with correct but opposed first legs (Down and Up, their
+engagement slots one nav row apart) plus a third committed Right while
+its route said Left. Pressed together, the rounded tank colliders slid the
+whole jam east at up to 100px/s until the wall stopped it - and because
+every tank in it *was* moving, `Ai`'s stuck escape (gated on real speed
+under `stuck_speed_eps`) never fired, while predictive avoidance skips
+tanks already in contact. `Ai::think` now takes the real velocity vector
+and projects it onto the heading it commanded last tick, so being carried
+sideways or backwards counts as stuck; the escape prefers an unblocked
+perpendicular and backs straight out as a last resort (`ai.rs`'s
+`stuck_tests`). Letting the commitment gate flip on a straight reversal
+was tried alongside and rejected: `act_chase` never stops at its slot, so
+a reversible tank overshoots, flips, overshoots again, and the default
+map's 30-round jitter went 6->30. The pinned-seed numbers (same sweep
+parameters as above) with both changes in:
 
 | map | flagged | totals (nonzero kinds) |
 |---|---|---|
-| default.toml | 26/30 | border-stuck=1 jitter=6 spin=1 churn=34 clustering=3 low-progress=7 |
+| default.toml | 25/30 | border-stuck=1 jitter=6 spin=1 churn=35 clustering=3 low-progress=4 |
 | u-trap | 2/10 | jitter=1 churn=2 |
-| choke | 3/10 | churn=2 clustering=1 low-progress=4 |
+| choke | 3/10 | churn=5 |
 | tight-corridors | 6/10 | jitter=1 churn=5 clustering=1 low-progress=2 |
 | frog-block | 1/10 | clustering=3 |
-| maze | 8/10 | border-stuck=1 jitter=3 spin=2 churn=14 clustering=17 |
+| maze | 8/10 | jitter=4 spin=3 churn=14 clustering=17 |
 | pockets | 2/10 | jitter=1 churn=3 |
 
-The default map improved on every kind (stall and wall-grind now zero,
-jitter 15->6, churn 48->34, low-progress 30->7). The maze's churn rise is
-a pinned-seed artifact: a 30-round sweep at `--seed 5000` reads jitter=10
-spin=3 churn=21 clustering=21 low-progress=2 after versus jitter=18
-spin=6 churn=25 clustering=26 low-progress=7 before. Its one
-`border-stuck` (round 6, `--seed 0x3ee`) is real but rare: ENEMY#0 drives
-to the right border wall at ~15s and sits nudging it at ~8px/s - the
-first fixture hit of that kind, now carried as a ceiling of 1 in
-`just probe-fixtures`/ci.yml rather than hidden. Ceilings there are the
-new cross-fixture maxima.
+The default map improved on every kind versus the 2026-09-03 read (stall
+and wall-grind now zero, jitter 15->6, churn 48->35, low-progress 30->4).
+The maze's churn rise is a pinned-seed artifact: a 30-round sweep at
+`--seed 5000` reads jitter=10 spin=3 churn=21 clustering=22
+low-progress=2 after versus jitter=18 spin=6 churn=25 clustering=26
+low-progress=7 before. The fixtures produce no `border-stuck` at all
+again; the default map's one remaining hit predates both changes and is
+untouched by them. Ceilings in `just probe-fixtures`/ci.yml are the new
+cross-fixture maxima. One later shift: the rainbow-shield spawn roll
+(one RNG draw per tank in `Game::init`, 2026-09-04) moved every pinned
+stream and the maze now reads jitter=5 spin=2 churn=6 clustering=7
+low-progress=2 at the same seed - identical with the shield knobs zeroed,
+so the jitter ceiling went 4->5 as a stream artifact, not a behaviour
+change (the maze has no health cells, so no shield ever spawns there).
 
 **The burn-down list**, where every instrument now points at the same
 place — the default map, especially its walled top strip:
