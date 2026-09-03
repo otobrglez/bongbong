@@ -332,16 +332,41 @@ impl Game {
         // won round restarting forever, and the cap keeps owner slots small.
         let enemy_count = enemy_count.clamp(1, 31);
 
+        // Terrain legality is the nav grid's `usable` test (see
+        // `battlefield::enemy_spawn_legal`); the frog is not down yet, so
+        // this grid is walls only - the same grid `relocate_unusable_spawns`
+        // audits against below.
+        let spawn_grid = self.nav_grid(width, height);
         let mut enemy_positions: Vec<Position> = Vec::with_capacity(enemy_count);
         while enemy_positions.len() < enemy_count {
+            let legal = |pos: Position| {
+                battlefield::enemy_spawn_legal(
+                    pos,
+                    width,
+                    height,
+                    margin_min,
+                    margin_max,
+                    center,
+                    clear,
+                    &spawn_grid,
+                    &obstacle_positions,
+                )
+            };
             let pos = battlefield::sample_clear_position(&mut rng, width, height, margin_min, |pos| {
-                let border_dist = pos.x.min(width - pos.x).min(pos.y).min(height - pos.y);
-                border_dist <= margin_max
-                    && pos.distance_to(center) >= clear
-                    && enemy_positions.iter().all(|&p| pos.distance_to(p) >= enemy_clear)
-                    && obstacle_positions
-                        .iter()
-                        .all(|&p| pos.distance_to(p) >= enemy_clear + OBSTACLE_CLEAR)
+                legal(pos) && enemy_positions.iter().all(|&p| pos.distance_to(p) >= enemy_clear)
+            })
+            .unwrap_or_else(|| {
+                // Attempt cap: the band is too crowded for a fully legal
+                // spot. Snap one more band sample to the nearest usable
+                // cell that keeps its distance from the tanks already
+                // down, so the fallback can still never land in a wall.
+                let sample = Position::new(
+                    rng.random_range(margin_min..(width - margin_min)),
+                    rng.random_range(margin_min..(height - margin_min)),
+                );
+                let mut avoid = enemy_positions.clone();
+                avoid.push(center);
+                spawn_grid.nearest_open(sample, &avoid, enemy_clear)
             });
             let erow = TANK_SPRITE_ORDER[enemy_positions.len() % TANK_SPRITE_ORDER.len()];
             // Per-enemy speed within +/- ENEMY_SPEED_VARIANCE, so they don't
@@ -389,9 +414,10 @@ impl Game {
         }
 
         // Several individually-fine wall placements can still seal an
-        // enemy's spawn cell; relocate those, then re-read positions for
+        // enemy's spawn cell; relocate those (and any spawn the fallback
+        // above still left in a blocked cell), then re-read positions for
         // the frog's clearance check.
-        battlefield::relocate_boxed_in_tanks(&mut self.physics, &mut self.world, width, height);
+        battlefield::relocate_unusable_spawns(&mut self.physics, &mut self.world, width, height);
         enemy_positions = self
             .world
             .query::<&Tank>()
@@ -410,6 +436,14 @@ impl Game {
                 (tuning().frog_spawn_min_dist..=tuning().frog_spawn_max_dist).contains(&dist)
                     && enemy_positions.iter().all(|&p| pos.distance_to(p) >= enemy_clear)
                     && obstacle_positions.iter().all(|&p| pos.distance_to(p) >= frog_clear)
+            })
+            .unwrap_or_else(|| {
+                // Attempt cap: snap to the nearest usable nav cell clear of
+                // every tank rather than accept a sample inside a wall.
+                let sample = Position::new(width * 0.5, height * 0.5);
+                let mut avoid = enemy_positions.clone();
+                avoid.push(center);
+                spawn_grid.nearest_open(sample, &avoid, enemy_clear)
             })
         });
         let frog_body = self.physics.spawn_static(
@@ -811,6 +845,7 @@ impl Game {
                     line_of_sight,
                 )
             });
+            if std::env::var_os("BB_AI_TRACE").is_some() { eprintln!("AITRACE idx={} pos=({:.1},{:.1}) rspeed={:.1} mv={:?} face={:?} {}", my_index, tank.position.x, tank.position.y, real_speed, intent.move_dir.map(|d| d.rotation()), intent.face.map(|d| d.rotation()), ai.trace_state()); }
             drive_tank(&mut self.physics, tank, intent, f.dt);
             let owner = tank.owner();
             tick_queued_shots(&mut self.physics, f, tank, owner);
@@ -1420,6 +1455,49 @@ fn lay_tracks(tracks: &mut Vec<Track>, tank: &mut Tank, before: Position) {
 }
 
 #[cfg(test)]
+mod spawn_tests {
+    use super::*;
+    use crate::OBSTACLE_GRID_SIZE;
+
+    /// No enemy ever starts inside, or touching, a wall on the shipped map.
+    /// The default map's border band is dense enough that the spawn
+    /// sampler used to hit its attempt cap on every round and hand back a
+    /// raw sample, which put roughly one enemy in eleven inside a wall
+    /// tile; the sampler now only accepts `battlefield::enemy_spawn_legal`
+    /// spots and snaps to `Grid::nearest_open` on a cap, and
+    /// `relocate_unusable_spawns` audits the result. Checked as an AABB
+    /// test between each enemy's movement collider and every wall tile at
+    /// its widest (seam-closed) half-extent, over a spread of seeds and a
+    /// crowded enemy count, so a regression in any of the three layers
+    /// shows up.
+    #[test]
+    fn enemies_never_spawn_inside_walls() {
+        let wall_half = OBSTACLE_GRID_SIZE * 0.5;
+        for seed in 1..=40u64 {
+            let mut game = Game::default();
+            game.enemy_count_override = Some(8);
+            game.seed_override = Some(seed);
+            game.map = MapFile::from_toml_str(include_str!("../../maps/default.toml")).expect("embedded default map parses");
+            game.init(1280.0, 720.0);
+            let walls: Vec<Position> = game.world.query::<&Obstacle>().iter().map(|o| o.position).collect();
+            for (tank, _) in game.world.query::<(&Tank, &Ai)>().iter() {
+                let (hx, hy) = tank.move_half_extents(false);
+                let overlap = walls.iter().find(|w| {
+                    (tank.position.x - w.x).abs() < hx + wall_half && (tank.position.y - w.y).abs() < hy + wall_half
+                });
+                assert!(
+                    overlap.is_none(),
+                    "seed {seed}: enemy at ({:.1},{:.1}) overlaps wall at {:?}",
+                    tank.position.x,
+                    tank.position.y,
+                    overlap
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod determinism_tests {
     use super::*;
 
@@ -1537,19 +1615,21 @@ cells."30,20" = { kind = "frog" }
     #[test]
     fn a_collected_pickup_respawns_only_after_the_delay() {
         let mut game = game_on(SEALED_CRATE_MAP, 1, Some(0));
-        assert_eq!(player_ammo(&game), 10);
+        let full = tuning().max_shells;
+        let grant = tuning().pickup_ammo_amount;
+        assert_eq!(player_ammo(&game), full);
         step(&mut game, Input::default());
-        assert_eq!(player_ammo(&game), 14, "one crate grants tuning().pickup_ammo_amount once");
+        assert_eq!(player_ammo(&game), full + grant, "one crate grants tuning().pickup_ammo_amount once");
         let delay_frames = (tuning().pickup_respawn_seconds * 60.0) as u32;
         for _ in 0..delay_frames - 30 {
             step(&mut game, Input::default());
         }
-        assert_eq!(player_ammo(&game), 14, "no second grant before tuning().pickup_respawn_seconds");
+        assert_eq!(player_ammo(&game), full + grant, "no second grant before tuning().pickup_respawn_seconds");
         for _ in 0..90 {
             step(&mut game, Input::default());
         }
         assert_eq!(game.outcome(), Outcome::Playing);
-        assert_eq!(player_ammo(&game), 18, "the crate respawned once the delay elapsed");
+        assert_eq!(player_ammo(&game), full + 2 * grant, "the crate respawned once the delay elapsed");
     }
 
     const OPEN_MAP: &str = r#"
@@ -1574,8 +1654,9 @@ cells."30,20" = { kind = "frog" }
 
     #[test]
     fn a_twin_barrel_shot_costs_two_shells_and_a_single_costs_one() {
-        assert_eq!(fire_once(1), 8, "row 1 (assault) is twin-barrel");
-        assert_eq!(fire_once(0), 9, "row 0 (scout) is single-barrel");
+        let full = tuning().max_shells;
+        assert_eq!(fire_once(1), full - 2, "row 1 (assault) is twin-barrel");
+        assert_eq!(fire_once(0), full - 1, "row 0 (scout) is single-barrel");
     }
 
     #[test]
@@ -1588,6 +1669,6 @@ cells."30,20" = { kind = "frog" }
         for _ in 0..30 {
             step(&mut game, fire);
         }
-        assert_eq!(player_ammo(&game), 9);
+        assert_eq!(player_ammo(&game), tuning().max_shells - 1);
     }
 }

@@ -94,7 +94,7 @@ Working today, and load-bearing for this design:
   `simulation::engage::EngageRing`'s doc comments).
 - `pathfind.rs` has real unit tests and the stuck-adjacent helpers
   (`boxed_in`, `blocked_ahead`, `nearest_open`);
-  `battlefield::relocate_boxed_in_tanks` already audits spawns against the
+  `battlefield::relocate_unusable_spawns` already audits spawns against the
   finished layout once per round.
 - `physics.rs` wraps rapier's `PhysicsWorld`, which exposes everything the
   contact metrics need (`contact_pairs_with`, `ContactPair::
@@ -382,7 +382,7 @@ into it:
 | `tight-corridors.toml` | long corridors exactly at clearance width | wall-grind (Phase 4's target metric) |
 | `frog-block.toml` | frog parked in a corridor mouth | the grid-didn't-know-about-the-frog stuck bug |
 | `maze.toml` | dense right-angle maze | heading jitter vs. legitimate weaving (the known `jitter` blind spot) |
-| `pockets.toml` | almost-sealed pockets in the spawn band | `boxed_in` spawns / `relocate_boxed_in_tanks` |
+| `pockets.toml` | almost-sealed pockets in the spawn band | `boxed_in` spawns / `relocate_unusable_spawns` |
 
 Conventions: every fixture places an explicit `Start` cell and a `Frog`
 cell (so nothing about its terrain depends on random fallback placement),
@@ -557,7 +557,12 @@ demanded — and that choice immediately paid off, twice:
   spawn on the default map degrades to `sample_clear_position`'s
   documented attempt-cap fallback, a very plausible driver of that map's
   stale-start/stall baseline. Real map debt, recorded, not "fixed" by
-  loosening the checks.
+  loosening the checks. *(Resolved 2026-09-03: the distance-based
+  predicate was replaced by `battlefield::enemy_spawn_legal` - nav-grid
+  usability plus a tank-box-vs-wall-box separation - shared by the
+  sampler and the linter; the sampler no longer returns a rejected
+  sample on its attempt cap, and `relocate_unusable_spawns` audits
+  blocked cells too. Root cause of enemies spawning inside walls.)*
 
 Deviations from the plan:
 
@@ -882,6 +887,75 @@ map tank counts):
 kind to its cross-fixture maximum exactly — deterministic, so an
 exceedance is a real behavior change; the justfile comment carries the
 re-baselining policy.
+
+### Re-baseline 2026-09-03: nav-grid spawn legality
+
+Enemy spawn placement changed (`battlefield::enemy_spawn_legal` replaced
+the `enemy_clear + OBSTACLE_CLEAR` distance term - which no cell of the
+default map's band could satisfy, so every enemy there was an attempt-cap
+fallback, ~9% of them with their center inside a wall tile - with
+nav-grid usability plus a tank-box-vs-wall-box separation; the sampler
+no longer hands back a rejected sample, and `relocate_unusable_spawns`
+also relocates blocked cells). Every round's RNG stream shifts with it,
+so the pinned-seed numbers were re-read (same sweep parameters as above):
+
+| map | flagged | totals (nonzero kinds) |
+|---|---|---|
+| default.toml | 27/30 | stall=1 border-stuck=4 jitter=15 spin=2 churn=48 clustering=6 wall-grind=1 low-progress=30 |
+| u-trap | 2/10 | jitter=1 spin=1 |
+| choke | 4/10 | jitter=2 churn=2 |
+| tight-corridors | 2/10 | jitter=1 spin=1 churn=1 |
+| frog-block | 2/10 | churn=3 |
+| maze | 8/10 | jitter=7 spin=2 churn=5 clustering=16 low-progress=7 |
+| pockets | 4/10 | jitter=5 churn=3 |
+
+The default map's stall/wall-grind/stale-start counts fell several-fold
+(the spawn fallback was seeding tanks in or against walls); `never-arrived`
+is gone (its one case was a fallback spawn in a sealed area). The maze's
+clustering/low-progress rise is a pinned-seed artifact: a 30-round sweep
+at `--seed 2000` reads clustering=26 jitter=16 low-progress=6 after versus
+clustering=34 jitter=24 low-progress=11 before. `stale-start` now judges
+the farthest a tank got from spawn inside the window instead of where it
+stands when the window closes (its two remaining hits were tanks driving
+at full speed that happened to pass back through spawn at the 2s mark), so
+it reads zero everywhere again. In the same pass the linter learned to
+tell gated loot from sealed loot: a pickup approachable only after
+destructible walls are gone is a `gated-pickup` warning. default.toml's
+28 formerly-unreachable slots (the top-edge strip and the bottom-right
+rows; the three top-center health packs sit behind a permanent iron gate
+breachable only through the brick columns beside it) are all gated, so
+the map carries no lint errors any more. Ceilings in `just probe-fixtures`/ci.yml are the
+new cross-fixture maxima.
+
+### Re-baseline 2026-09-04: QA'd tuning defaults
+
+The QA'd knob set from the web panel became `tuning.rs`'s defaults
+(player 220->210 px/s, enemies 150->160, 12 shells, minigun bursts of 6
+at 570 px/s dealing 3-6, ammo crates +10, fragile brick/wood/glass walls,
+plus shadow/HUD/shockwave cosmetics). Speeds and ammo shift every round's
+RNG stream, so the pinned-seed numbers were re-read (same sweep
+parameters as above):
+
+| map | flagged | totals (nonzero kinds) |
+|---|---|---|
+| default.toml | 26/30 | border-stuck=1 jitter=6 spin=1 churn=34 clustering=3 low-progress=7 |
+| u-trap | 2/10 | jitter=1 churn=2 |
+| choke | 3/10 | churn=2 clustering=1 low-progress=4 |
+| tight-corridors | 6/10 | jitter=1 churn=5 clustering=1 low-progress=2 |
+| frog-block | 1/10 | clustering=3 |
+| maze | 8/10 | border-stuck=1 jitter=3 spin=2 churn=14 clustering=17 |
+| pockets | 2/10 | jitter=1 churn=3 |
+
+The default map improved on every kind (stall and wall-grind now zero,
+jitter 15->6, churn 48->34, low-progress 30->7). The maze's churn rise is
+a pinned-seed artifact: a 30-round sweep at `--seed 5000` reads jitter=10
+spin=3 churn=21 clustering=21 low-progress=2 after versus jitter=18
+spin=6 churn=25 clustering=26 low-progress=7 before. Its one
+`border-stuck` (round 6, `--seed 0x3ee`) is real but rare: ENEMY#0 drives
+to the right border wall at ~15s and sits nudging it at ~8px/s - the
+first fixture hit of that kind, now carried as a ceiling of 1 in
+`just probe-fixtures`/ci.yml rather than hidden. Ceilings there are the
+new cross-fixture maxima.
 
 **The burn-down list**, where every instrument now points at the same
 place — the default map, especially its walled top strip:

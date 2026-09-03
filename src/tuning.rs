@@ -300,7 +300,7 @@ tunables! {
         /// shorter screen dimension away from the nearest edge of the
         /// battlefield - close enough to feel like they're closing in from
         /// the sides, but never right on the edge or dropped in the middle.
-        enemy_spawn_margin_min: f32 = 0.2 in 0.0 ..= 0.5 @ Restart;
+        enemy_spawn_margin_min: f32 = 0.272 in 0.0 ..= 0.5 @ Restart;
         enemy_spawn_margin_max: f32 = 0.4 in 0.0 ..= 0.5 @ Restart;
         /// Fraction of enemies that start each round already carrying a
         /// special weapon (laser, plasma, or minigun - see the two shares
@@ -308,7 +308,7 @@ tunables! {
         /// shell-only default every tank otherwise spawns with. Rolled
         /// independently per enemy, so this is an expected fraction across
         /// a round, not an exact headcount.
-        enemy_special_weapon_chance: f32 = 0.4 in 0.0 ..= 1.0 @ Restart;
+        enemy_special_weapon_chance: f32 = 0.268 in 0.0 ..= 1.0 @ Restart;
         /// Of an enemy that rolls a special weapon, the odds it's a laser.
         enemy_special_weapon_laser_share: f32 = 0.5 in 0.0 ..= 1.0 @ Restart;
         /// Of the remaining (non-laser) share, the odds it's plasma rather
@@ -327,11 +327,11 @@ tunables! {
         /// the velocity along that axis chases the commanded speed via a
         /// mass-aware acceleration impulse each frame (see
         /// `Game::drive_tank`, `tank_accel_force`/`tank_decel_curve_rate`).
-        tank_speed: f32 = 220.0 in 20.0 ..= 800.0;
+        tank_speed: f32 = 210.0 in 20.0 ..= 800.0;
         /// Baseline enemy top speed (px/s), slower than the player. Each
         /// enemy's own top speed is this times its spawn-rolled
         /// `Tank::speed_scale` (see `enemy_speed_variance`).
-        enemy_speed: f32 = 150.0 in 20.0 ..= 800.0;
+        enemy_speed: f32 = 160.0 in 20.0 ..= 800.0;
         /// Each enemy's speed is randomized within +/- this fraction of
         /// `enemy_speed` at spawn, so some drive faster and some slower
         /// instead of all moving in lockstep.
@@ -372,7 +372,7 @@ tunables! {
         /// this is the remaining speed-gap (px/s) below which
         /// `Game::drive_tank` snaps straight to the target instead of
         /// trailing an imperceptible tail forever.
-        tank_decel_snap_px: f32 = 3.0 in 0.0 ..= 50.0;
+        tank_decel_snap_px: f32 = 4.0 in 0.0 ..= 50.0;
         /// Turning grip: how hard a tank's tracks cancel velocity
         /// *perpendicular* to the hull's current facing - the "traction"
         /// knob. Deliberately *weaker* than `tank_accel_force`: full
@@ -383,7 +383,7 @@ tunables! {
         /// mechanical property, not engine power). Applies every frame
         /// whether or not a direction is held, so sideways knockback gets
         /// scrubbed by this too.
-        tank_turn_grip_force: f32 = 2200.0 in 0.0 ..= 30000.0;
+        tank_turn_grip_force: f32 = 2000.0 in 0.0 ..= 30000.0;
         /// Purely cosmetic hull-turn animation: `Tank::rotation` itself
         /// still snaps instantly (physics/aim/track heading all key off it);
         /// `Tank::visual_rotation` chases it at this many degrees per second
@@ -409,7 +409,7 @@ tunables! {
         /// Shell ammo: a tank holds up to this many shells (its magazine at
         /// spawn, and the passive-recharge cap) - a pickup is the only way
         /// past it.
-        max_shells: i32 = 10 in 1 ..= 100 @ Spawn;
+        max_shells: i32 = 12 in 1 ..= 100 @ Spawn;
         /// Recharge one shell every this many seconds while below
         /// `max_shells`.
         shell_recharge_seconds: f32 = 2.0 in 0.05 ..= 30.0;
@@ -457,7 +457,7 @@ tunables! {
         /// are queued `minigun_bullet_delay_seconds` apart
         /// (`Tank::minigun_burst`). Each is an individually simulated
         /// `Bullet`, not one abstract burst object.
-        minigun_burst_size: u32 = 8 in 1 ..= 64;
+        minigun_burst_size: u32 = 6 in 1 ..= 64;
         /// Gap between successive bullets of one burst. In
         /// `tank_twin_shot_delay_seconds`'s neighborhood, a touch tighter so
         /// the stutter reads busier than a twin-cannon's second shot.
@@ -472,7 +472,7 @@ tunables! {
         minigun_bullet_spread_deg: f32 = 4.0 in 0.0 ..= 90.0;
         /// Bullet flight speed (px/s) - faster than a shell: a zippy tracer,
         /// not a lobbed shell.
-        minigun_bullet_speed: f32 = 900.0 in 50.0 ..= 5000.0;
+        minigun_bullet_speed: f32 = 570.0 in 50.0 ..= 5000.0;
         /// Bullet hit-box half-extent (px) - smaller than a shell's, a
         /// lighter caliber.
         minigun_bullet_hit_half_extent: f32 = 2.0 in 0.5 ..= 32.0;
@@ -480,8 +480,8 @@ tunables! {
         /// a single round is a non-event; a fully-landed burst lands near
         /// one solid shell hit. One shared range for player and enemy,
         /// scaled only by `tank_damage_factor`.
-        minigun_bullet_damage_min: f32 = 2.0 in 0.0 ..= 100.0;
-        minigun_bullet_damage_max: f32 = 4.0 in 0.0 ..= 100.0;
+        minigun_bullet_damage_min: f32 = 3.0 in 0.0 ..= 100.0;
+        minigun_bullet_damage_max: f32 = 6.0 in 0.0 ..= 100.0;
         /// Per-bullet recoil, much lighter than a shell's - a burst should
         /// rattle the tank, not shove it once hard.
         minigun_bullet_recoil_speed: f32 = 3.0 in 0.0 ..= 200.0;
@@ -563,11 +563,11 @@ tunables! {
         pickup_collect_radius: f32 = 32.0 in 4.0 ..= 200.0;
         /// Health pickup: deliberately not a full heal - roughly 2-3 enemy
         /// hits' worth, worth detouring for.
-        pickup_heal_amount: f32 = 30.0 in 0.0 ..= 100.0;
+        pickup_heal_amount: f32 = 40.0 in 0.0 ..= 100.0;
         /// Ammo pickup: how many shells it adds. Uncapped - the only way past
         /// `max_shells`, and stacking pickups can push a magazine
         /// arbitrarily high.
-        pickup_ammo_amount: i32 = 4 in 0 ..= 100;
+        pickup_ammo_amount: i32 = 10 in 0 ..= 100;
         /// Speed-up pickup: `Tank::effective_speed` is scaled by this while
         /// the boost is active.
         speed_boost_multiplier: f32 = 1.3 in 1.0 ..= 4.0;
@@ -771,13 +771,13 @@ tunables! {
         /// tough: glass snaps almost immediately, wood breaks easily, brick
         /// holds longer, iron the longest of all on top of being permanent.
         /// Baked into each wall's health when the map is spawned.
-        wall_max_health: [f32; 4] = [70.0, 220.0, 35.0, 20.0] in 1.0 ..= 1000.0 labels MATERIAL_NAMES @ Spawn;
+        wall_max_health: [f32; 4] = [20.0, 220.0, 10.0, 2.0] in 1.0 ..= 1000.0 labels MATERIAL_NAMES @ Spawn;
         /// Fraction of spawned Wood obstacles that catch fire when destroyed
         /// instead of breaking outright (`Obstacle::flammable`, rolled once
         /// at spawn).
-        wood_flammable_chance: f64 = 0.5 in 0.0 ..= 1.0 @ Spawn;
+        wood_flammable_chance: f64 = 0.7 in 0.0 ..= 1.0 @ Spawn;
         /// Burning wood's 3-frame flicker loop cadence (~7.7 FPS at 0.13).
-        wood_burn_frame_seconds: f32 = 0.13 in 0.01 ..= 2.0;
+        wood_burn_frame_seconds: f32 = 0.395 in 0.01 ..= 2.0;
         /// Total time a Wood obstacle spends burning before charring and
         /// being removed.
         wood_burn_seconds: f32 = 2.5 in 0.1 ..= 30.0;
@@ -826,17 +826,17 @@ tunables! {
         /// Drop shadows: shared screen-space offset direction (down-right, a
         /// top-down-arcade convention) - only the distance differs per
         /// entity type. See docs/sprite-shadows-design.md.
-        shadow_dir_x: f32 = 0.6 in -1.0 ..= 1.0;
-        shadow_dir_y: f32 = 0.8 in -1.0 ..= 1.0;
+        shadow_dir_x: f32 = 0.595 in -1.0 ..= 1.0;
+        shadow_dir_y: f32 = 0.48 in -1.0 ..= 1.0;
         /// Tank shadow distance (px) - grounded, stays tight to the hull.
         tank_shadow_offset: f32 = 3.0 in 0.0 ..= 20.0;
-        tank_shadow_opacity: f32 = 0.35 in 0.0 ..= 1.0;
+        tank_shadow_opacity: f32 = 0.486 in 0.0 ..= 1.0;
         /// Shell shadow distance, rolled once per shell at fire time within
         /// this range - the separation is what reads as "airborne", and
         /// different shells reading as flying at different heights beats
         /// every shot looking identical.
         shell_shadow_offset_min: f32 = 9.0 in 0.0 ..= 60.0;
-        shell_shadow_offset_max: f32 = 20.0 in 0.0 ..= 60.0;
+        shell_shadow_offset_max: f32 = 28.4 in 0.0 ..= 60.0;
         shell_shadow_opacity: f32 = 0.30 in 0.0 ..= 1.0;
         /// Minigun bullet shadow distance range - tighter than a shell's, a
         /// smaller, lower round.
@@ -880,22 +880,22 @@ tunables! {
         health_bar_overhead_fade_seconds: f32 = 0.6 in 0.0 ..= 5.0;
         /// HUD numbers (SHELLS/HP) turn orange below this fraction of max
         /// ...
-        hud_warn_threshold: f32 = 0.40 in 0.0 ..= 1.0;
+        hud_warn_threshold: f32 = 0.34 in 0.0 ..= 1.0;
         /// ... and red below this. Conservative on purpose: only flag real
         /// trouble.
-        hud_critical_threshold: f32 = 0.15 in 0.0 ..= 1.0;
+        hud_critical_threshold: f32 = 0.104 in 0.0 ..= 1.0;
     }
 
     group fx {
         /// Kill shockwave (shockwave.fs): seconds the effect plays before
         /// clearing.
-        shockwave_duration: f32 = 1.0 in 0.05 ..= 5.0;
+        shockwave_duration: f32 = 1.18 in 0.05 ..= 5.0;
         /// Ring growth speed, UV units/sec.
-        shockwave_speed: f32 = 0.8 in 0.0 ..= 5.0;
+        shockwave_speed: f32 = 0.56 in 0.0 ..= 5.0;
         /// Thickness of the distorted band, UV units.
-        shockwave_width: f32 = 0.08 in 0.0 ..= 1.0;
+        shockwave_width: f32 = 0.13 in 0.0 ..= 1.0;
         /// How hard the ring bends the image, UV units.
-        shockwave_strength: f32 = 0.03 in 0.0 ..= 0.5;
+        shockwave_strength: f32 = 0.102 in 0.0 ..= 0.5;
         /// Camera shake on the same kill trigger: duration (much shorter
         /// than the shockwave so it reads as one punchy hit), px offset at
         /// full strength, and radians/sec of the wobble.
@@ -907,7 +907,7 @@ tunables! {
         /// tuned lower than the shockwave for similar visual intensity.
         muzzle_flash_duration: f32 = 0.12 in 0.01 ..= 2.0;
         muzzle_flash_speed: f32 = 0.9 in 0.0 ..= 5.0;
-        muzzle_flash_width: f32 = 0.015 in 0.0 ..= 0.5;
+        muzzle_flash_width: f32 = 0.032 in 0.0 ..= 0.5;
         muzzle_flash_strength: f32 = 0.015 in 0.0 ..= 0.5;
         /// Half-extent (px) of the quad the muzzle flash is drawn into -
         /// must contain the ring's full reach (speed * duration, in screen
@@ -1299,7 +1299,7 @@ mod tests {
         assert!(rust.contains("tank_speed: f32 = 99.0 in 20.0 ..= 800.0;"), "{rust}");
         assert!(rust.contains("max_shells: i32 = 23 in 1 ..= 100 @ Spawn;"), "{rust}");
         assert!(
-            rust.contains("wall_max_health: [f32; 4] = [70.0, 220.0, 40.0, 20.0] in 1.0 ..= 1000.0 labels MATERIAL_NAMES @ Spawn;"),
+            rust.contains("wall_max_health: [f32; 4] = [20.0, 220.0, 40.0, 2.0] in 1.0 ..= 1000.0 labels MATERIAL_NAMES @ Spawn;"),
             "{rust}"
         );
     }
@@ -1312,7 +1312,7 @@ mod tests {
         assert_eq!(t.enemy_retreat_range(), 340.0 * 1.3);
         t.enemy_attack_range = 500.0;
         assert_eq!(t.engage_ring_radius(), 400.0);
-        assert_eq!(t.minigun_burst_cooldown_seconds(), 7.0 * 0.04 + 0.1);
+        assert_eq!(t.minigun_burst_cooldown_seconds(), 5.0 * 0.04 + 0.1);
     }
 
     #[test]
@@ -1323,7 +1323,7 @@ mod tests {
         let speed = rows.iter().find(|r| r["name"] == "tank_speed").unwrap();
         assert_eq!(speed["group"], "movement");
         assert_eq!(speed["kind"], "f32");
-        assert_eq!(speed["default"], Value::from(220.0));
+        assert_eq!(speed["default"], Value::from(210.0));
         assert_eq!(speed["applies"], "live");
         assert!(speed["doc"].as_str().unwrap().contains("Player top speed"));
         let walls = rows.iter().find(|r| r["name"] == "wall_max_health").unwrap();

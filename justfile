@@ -10,17 +10,23 @@ probe-sweep:
     cargo run --bin probe -- --scenario afk --enemies 4 --frames 1800 --rounds 30 --heatmap
 
 # Sweep every maps/test/ adversarial fixture at a pinned seed and hold it
-# to the recorded baseline (measured 2026-08-27 on the landed Phase 1-6
-# binary; each ceiling is the observed maximum across all six fixtures -
-# deterministic under the pinned seed, so any exceedance is a real
-# behavior change, not noise). After a deliberate AI/map change shifts
-# the numbers: rerun, read the new totals, and re-baseline consciously -
-# never bump a ceiling just to go green. Zero-ceilings (stale-start,
-# stall, border-stuck, wall-grind, bump-rate, never-arrived, invariant)
-# are kinds no fixture currently produces at all. See
-# docs/gameplay-verification-design.md.
+# to the recorded baseline (re-measured 2026-09-04 after the QA'd tuning
+# defaults landed in tuning.rs - slower player/faster enemies, 12 shells,
+# etc. - which shifts every round's RNG stream; each ceiling is the
+# observed maximum across all six fixtures - deterministic under the
+# pinned seed, so any exceedance is a real behavior change, not noise).
+# After a deliberate AI/map/tuning change shifts the numbers: rerun, read
+# the new totals, and re-baseline consciously - never bump a ceiling just
+# to go green. Zero-ceilings (stale-start, stall, wall-grind, bump-rate,
+# never-arrived, invariant) are kinds no fixture currently produces at
+# all. churn=14, clustering=17 and border-stuck=1 are all the maze at this
+# one seed (a 30-round sweep at seed 5000 shows the maze *improved* on
+# every kind versus the previous defaults - the pinned-seed maximum is
+# just less lucky now). The single border-stuck is maze round 6
+# (--seed 0x3ee): ENEMY#0 reaches the right border wall at ~15s and sits
+# nudging it at ~8px/s - a real, rare AI park, not a tuning artifact.
 probe-fixtures:
-    for m in maps/test/*.toml; do cargo run --bin probe -- --map $m --frames 1800 --rounds 10 --seed 1000 --budget stale-start=0 --budget stall=0 --budget border-stuck=0 --budget jitter=8 --budget spin=2 --budget churn=5 --budget clustering=6 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=3 --budget never-arrived=0 --budget invariant=0 || exit 1; done
+    for m in maps/test/*.toml; do cargo run --bin probe -- --map $m --frames 1800 --rounds 10 --seed 1000 --budget stale-start=0 --budget stall=0 --budget border-stuck=1 --budget jitter=3 --budget spin=2 --budget churn=14 --budget clustering=17 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=4 --budget never-arrived=0 --budget invariant=0 || exit 1; done
 
 run:
     cargo run

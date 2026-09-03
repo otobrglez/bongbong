@@ -4,7 +4,7 @@
 #
 # pockets: a sealed ring (sized to Grid::build's center-blocking
 # rule) whose interior is exactly one open-but-boxed-in pathfind
-# cell - the relocate_boxed_in_tanks / map-lint pathology - plus two
+# cell - the relocate_unusable_spawns / map-lint pathology - plus two
 # almost-sealed C pockets sitting in the enemy spawn band's
 # corners. tanks=5 for extra spawn pressure.
 

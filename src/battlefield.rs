@@ -37,50 +37,82 @@ use crate::{
     WALL_THICKNESS,
 };
 
-/// Cap on rejection-sampling attempts for a single enemy/obstacle spawn
+/// Cap on rejection-sampling attempts for a single enemy/frog spawn
 /// position (see `sample_clear_position`) - keeps `Game::init` provably
 /// bounded regardless of how unlucky the RNG gets, rather than an unbounded
-/// `while` loop that could in principle stall for a long time. At this
-/// scale (a few hundred px of clearance against a >=1280x720 board)
-/// satisfying every constraint on the first handful of tries is the
-/// overwhelming common case; this cap only ever matters on a genuinely
-/// pathological draw, and even then costs at most a couple thousand cheap
-/// float comparisons - not a perceptible delay, let alone the alternative.
-/// That alternative matters more than it sounds: on native a slow frame is
-/// an invisible hitch the OS schedules around, but this project's web
-/// build deliberately skips `-sASYNCIFY=1` (see `game_loop::run`'s doc
-/// comment) to keep binary size down, so `Game::init` runs as one
-/// uninterruptible synchronous call from the browser's perspective - any
-/// real stall here freezes the whole tab until it returns, not just drops
-/// a frame. Hitting the cap without finding a fully-valid position isn't
-/// treated as an error: `sample_clear_position` just returns its last
-/// (possibly still-too-close) sample rather than looping further - an
-/// occasional slightly-crowded spawn beats a frozen tab.
+/// `while` loop that could in principle stall for a long time. This
+/// project's web build deliberately skips `-sASYNCIFY=1` (see
+/// `game_loop::run`'s doc comment), so `Game::init` runs as one
+/// uninterruptible synchronous call from the browser's perspective - a
+/// real stall here freezes the whole tab until it returns. Hitting the cap
+/// is not an error: the sampler reports it (`None`) and the caller falls
+/// back to a snapped-to-open-cell placement instead of looping further.
 const PLACEMENT_MAX_ATTEMPTS: u32 = 2000;
 
 /// Sample a random position within `margin_min..(width-margin_min)` x
-/// `margin_min..(height-margin_min)`, retrying until `valid` accepts one or
-/// `PLACEMENT_MAX_ATTEMPTS` is reached - see that constant's doc comment
-/// for why this is capped rather than an unbounded loop. Used by the enemy
-/// and frog-fallback placement loops in `Game::init`.
+/// `margin_min..(height-margin_min)`, retrying until `valid` accepts one.
+/// `None` once `PLACEMENT_MAX_ATTEMPTS` is reached without an accepted
+/// sample - see that constant's doc comment for why this is capped rather
+/// than an unbounded loop. A caller must then place the entity some other
+/// way (`Game::init` snaps a fresh band sample to `Grid::nearest_open`);
+/// the last rejected sample is deliberately not handed back, because a
+/// rejected sample can sit inside a wall. Used by the enemy and
+/// frog-fallback placement loops in `Game::init`.
 pub fn sample_clear_position(
     rng: &mut SmallRng,
     width: f32,
     height: f32,
     margin_min: f32,
     mut valid: impl FnMut(Position) -> bool,
-) -> Position {
-    let mut pos = Position::new(0.0, 0.0);
+) -> Option<Position> {
     for _ in 0..PLACEMENT_MAX_ATTEMPTS {
-        pos = Position::new(
+        let pos = Position::new(
             rng.random_range(margin_min..(width - margin_min)),
             rng.random_range(margin_min..(height - margin_min)),
         );
         if valid(pos) {
-            break;
+            return Some(pos);
         }
     }
-    pos
+    None
+}
+
+/// Whether `pos` is a legal enemy spawn point on its own merits (the
+/// per-round terms - clearance from the other enemies already placed - are
+/// the caller's): inside the border band `margin_min..=margin_max` from the
+/// nearest edge, at least `player_clear` from the player's start, in a
+/// `Grid::usable` cell of `grid` (the nav grid built from the round's
+/// walls, so the tank can be routed out of it), and with a worst-case
+/// tank's box (`max_tank_avoidance_radius` per side) clear of every wall
+/// tile in `wall_positions` (each taken at a full half-cell, the widest
+/// seam-closed collider a tile can have). The usable-cell term alone is
+/// not enough for that last guarantee: the grid pads walls from the
+/// cell *center*, while a sample lands anywhere in a 48px cell. This is
+/// the one definition `Game::init`'s sampler and `maplint`'s spawn-band
+/// capacity count both use, so the linter's "legal spawn cells" is
+/// exactly what the sampler accepts.
+#[allow(clippy::too_many_arguments)] // one predicate, its terms spelled out
+pub fn enemy_spawn_legal(
+    pos: Position,
+    width: f32,
+    height: f32,
+    margin_min: f32,
+    margin_max: f32,
+    player_pos: Position,
+    player_clear: f32,
+    grid: &Grid,
+    wall_positions: &[Position],
+) -> bool {
+    let in_domain = pos.x >= margin_min && pos.x <= width - margin_min && pos.y >= margin_min && pos.y <= height - margin_min;
+    let border_dist = pos.x.min(width - pos.x).min(pos.y).min(height - pos.y);
+    let separation = OBSTACLE_GRID_SIZE * 0.5 + max_tank_avoidance_radius();
+    in_domain
+        && border_dist <= margin_max
+        && pos.distance_to(player_pos) >= player_clear
+        && grid.usable(pos)
+        && wall_positions
+            .iter()
+            .all(|w| (pos.x - w.x).abs() >= separation || (pos.y - w.y).abs() >= separation)
 }
 
 /// Collision half-extents for one obstacle tile at grid cell `(gx, gy)`,
@@ -179,29 +211,25 @@ pub fn max_tank_avoidance_radius() -> f32 {
         .fold(0.0, f32::max)
 }
 
-/// After every obstacle for the round is placed (a map's own walls - called
-/// once, from `Game::init`, right after `spawn_from_map`), check every enemy
-/// tank against the same pathfinding grid `Game::update` builds each frame
-/// (see `pathfind::Grid`) and teleport any whose rolled spawn point turned
-/// out fully boxed in (`Grid::boxed_in` - every cardinal neighbor cell
-/// blocked, so `Ai::wander` could never route it anywhere) to the nearest
-/// cell that isn't.
+/// Rebuild the nav grid from the finished obstacle layout (see
+/// `pathfind::Grid`) and teleport any enemy whose spawn point is not
+/// `Grid::usable` - sitting in a blocked cell (inside a wall's padded
+/// footprint) or boxed in (every cardinal neighbor blocked, so `Ai::wander`
+/// could never route it anywhere) - to the nearest cell that is.
 ///
-/// This can happen even though the enemy spawn loop's own rejection
-/// sampling already keeps each enemy clear of every *individual* obstacle
-/// tile (`OBSTACLE_CLEAR`): several independently-placed obstacles, each
-/// individually respecting that clearance from the enemy, can still
-/// collectively seal every direction out of its cell - the per-placement
-/// checks only ever reason about one obstacle at a time, so nothing during
-/// placement itself catches the *cumulative* effect. A check against the
-/// finished layout is the only way to catch it, which is why this runs
-/// once, after everything else this round is already down.
+/// The spawn sampler already only accepts usable cells, so this catches
+/// the cases it can't: a round whose sampler hit its attempt cap and fell
+/// back to a snapped placement near other tanks, and the cumulative effect
+/// of several walls each individually clear of a spawn but collectively
+/// sealing it in. A check against the finished layout is the only way to
+/// catch the latter, which is why this runs once, after everything else
+/// this round is already down.
 ///
 /// The player is deliberately excluded (`.with::<&Ai>()` - only enemies have
 /// one) - a hand-authored map can still enclose the player's fixed spawn
 /// point on purpose, and relocating it would silently override that
 /// design choice rather than respect it.
-pub fn relocate_boxed_in_tanks(physics: &mut Physics, world: &mut hecs::World, width: f32, height: f32) {
+pub fn relocate_unusable_spawns(physics: &mut Physics, world: &mut hecs::World, width: f32, height: f32) {
     let grid = Grid::build(
         width,
         height,
@@ -215,9 +243,8 @@ pub fn relocate_boxed_in_tanks(physics: &mut Physics, world: &mut hecs::World, w
     // Snapshot every enemy's entity + position up front, then keep it in
     // sync as tanks get relocated below - `nearest_open`'s `avoid` list
     // needs every *other* tank's current position, relocated ones
-    // included, not just the original layout, so two boxed-in tanks near
-    // each other never both land on the exact same nearest cell (found via
-    // the probe harness: two enemies at literally identical coordinates).
+    // included, so two stranded tanks near each other never both land on
+    // the exact same nearest cell.
     let mut positions: Vec<(hecs::Entity, Position)> = world
         .query::<(hecs::Entity, &Tank)>()
         .with::<&Ai>()
@@ -226,7 +253,7 @@ pub fn relocate_boxed_in_tanks(physics: &mut Physics, world: &mut hecs::World, w
         .collect();
     for i in 0..positions.len() {
         let (entity, pos) = positions[i];
-        if !grid.boxed_in(pos) {
+        if grid.usable(pos) {
             continue;
         }
         let avoid: Vec<Position> = positions

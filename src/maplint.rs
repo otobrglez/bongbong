@@ -26,13 +26,12 @@ use hecs::Entity;
 
 use crate::frog::Frog;
 use crate::map::{self, CellObject};
-use crate::obstacle::Obstacle;
+use crate::obstacle::{Material, Obstacle};
 use crate::pathfind::Grid;
 use crate::simulation::Game;
 use crate::tank::Tank;
 use crate::{
     FROG_COLLIDER_HALF_EXTENT,
-    OBSTACLE_CLEAR,
     OBSTACLE_HULL_FRACTION,
     OBSTACLE_SCALE,
     OBSTACLE_TEXTURE_SIZE,
@@ -84,8 +83,14 @@ impl fmt::Display for LintSeverity {
 pub enum LintKind {
     /// The frog can't be approached from the playfield (§3.2.1).
     UnreachableFrog,
-    /// A pickup slot can't be approached from the playfield (§3.2.1).
+    /// A pickup slot can't be approached from the playfield even with
+    /// every destructible wall shot away (§3.2.1).
     UnreachablePickup,
+    /// A pickup slot only approachable once one or more destructible
+    /// (non-Iron) walls are destroyed (§3.2.1) - deliberate gated loot the
+    /// player can breach, but which the AI (which routes on intact
+    /// terrain) will never go for.
+    GatedPickup,
     /// An open region disconnected from the playfield (§3.2.1).
     DisconnectedRegion,
     /// An open cell every one of whose neighbors is blocked (§3.2.2).
@@ -104,6 +109,7 @@ impl LintKind {
         match self {
             LintKind::UnreachableFrog => "unreachable-frog",
             LintKind::UnreachablePickup => "unreachable-pickup",
+            LintKind::GatedPickup => "gated-pickup",
             LintKind::DisconnectedRegion => "disconnected-region",
             LintKind::BoxedInCell => "boxed-in-cell",
             LintKind::SpawnBandTooTight => "spawn-band-too-tight",
@@ -239,12 +245,40 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
     let start_cell = cells.cell_of(player_pos);
     flood(&mut cells, start_cell);
 
+    // The same playfield once every destructible wall is gone: only Iron
+    // (never destroyed - see `obstacle::Material`) and the frog still
+    // block. Built exactly like `Game::nav_grid`, minus the breakable
+    // tiles, so "reachable by breaching" is the AI's own occupancy rule
+    // applied to the terrain a player can shoot their way to.
+    let breach_grid = Grid::build(
+        width,
+        height,
+        PATHFIND_CELL_SIZE,
+        battlefield::max_tank_avoidance_radius(),
+        game.world
+            .query::<&Obstacle>()
+            .iter()
+            .filter(|o| o.material == Material::Iron)
+            .map(|o| (o.position, o.hull_size() * 0.5))
+            .chain(game.world.query::<&Frog>().iter().map(|fr| {
+                (fr.position, FROG_COLLIDER_HALF_EXTENT.0.max(FROG_COLLIDER_HALF_EXTENT.1))
+            })),
+    );
+    let mut breach_open = vec![false; cols * rows];
+    for row in 0..rows {
+        for col in 0..cols {
+            breach_open[row * cols + col] = probe_open(&breach_grid, cols, rows, col, row);
+        }
+    }
+    let mut breach_cells = Cells { cols, rows, open: breach_open, playfield: vec![false; cols * rows] };
+    flood(&mut breach_cells, start_cell);
+
     let obstacle_positions: Vec<Position> =
         game.world.query::<&Obstacle>().iter().map(|o| o.position).collect();
     let frog_pos = game.world.query::<&Frog>().iter().next().map(|f| f.position);
 
     let mut findings = Vec::new();
-    check_reachability(game, &cells, frog_pos, &mut findings);
+    check_reachability(game, &cells, &breach_cells, frog_pos, &mut findings);
     check_disconnected_regions(&cells, &mut findings);
     check_boxed_in(&grid, &cells, &mut findings);
     check_spawn_band(
@@ -254,6 +288,7 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
         height,
         player_pos,
         player_size,
+        &grid,
         &obstacle_positions,
         &mut findings,
     );
@@ -284,7 +319,9 @@ fn flood(cells: &mut Cells, seed: (usize, usize)) {
 }
 
 /// §3.2.1 (targets): the frog and every map pickup slot must be
-/// approachable from the playfield. "Approachable" is a radius test
+/// approachable from the playfield - a pickup approachable only after
+/// destructible walls are shot away is a `GatedPickup` warning rather
+/// than an error (see `LintKind`). "Approachable" is a radius test
 /// against playfield cell centers rather than "its own cell is
 /// playfield", because both targets legitimately sit on blocked cells:
 /// the frog *is* an obstacle in the nav grid (its own cell is always
@@ -294,6 +331,7 @@ fn flood(cells: &mut Cells, seed: (usize, usize)) {
 fn check_reachability(
     game: &Game,
     cells: &Cells,
+    breach_cells: &Cells,
     frog_pos: Option<Position>,
     findings: &mut Vec<LintFinding>,
 ) {
@@ -320,12 +358,26 @@ fn check_reachability(
             continue;
         }
         let pos = map::cell_to_world(col, row);
-        if !point_reachable(cells, pos, pickup_reach) {
+        if point_reachable(cells, pos, pickup_reach) {
+            continue;
+        }
+        // Not approachable on intact terrain. Gated loot if shooting the
+        // breakable walls away opens a way in; sealed for good otherwise.
+        if point_reachable(breach_cells, pos, pickup_reach) {
+            findings.push(LintFinding {
+                severity: LintSeverity::Warning,
+                kind: LintKind::GatedPickup,
+                message: format!(
+                    "pickup slot at map cell ({col},{row}) = ({:.0},{:.0}) is only reachable by destroying walls - the AI never will",
+                    pos.x, pos.y
+                ),
+            });
+        } else {
             findings.push(LintFinding {
                 severity: LintSeverity::Error,
                 kind: LintKind::UnreachablePickup,
                 message: format!(
-                    "pickup slot at map cell ({col},{row}) = ({:.0},{:.0}) has no playfield cell within {pickup_reach:.0}px",
+                    "pickup slot at map cell ({col},{row}) = ({:.0},{:.0}) has no playfield cell within {pickup_reach:.0}px even with every destructible wall gone",
                     pos.x, pos.y
                 ),
             });
@@ -411,11 +463,12 @@ fn check_boxed_in(grid: &Grid, cells: &Cells, findings: &mut Vec<LintFinding>) {
     }
 }
 
-/// §3.2.3: enough legal enemy-spawn cells in the border band. Mirrors the
-/// clearance predicate of `Game::init`'s enemy loop cell-by-cell (sample
-/// domain, band depth, player clearance, per-tile obstacle clearance) -
-/// minus the enemy-vs-enemy spacing term, which depends on where earlier
-/// enemies landed rather than on the map. Cell count is a capacity
+/// §3.2.3: enough legal enemy-spawn cells in the border band. Counts
+/// playfield cells passing `battlefield::enemy_spawn_legal` - the very
+/// predicate `Game::init`'s enemy loop samples with (sample domain, band
+/// depth, player clearance, nav-grid usability) - minus the enemy-vs-enemy
+/// spacing term, which depends on where earlier enemies landed rather
+/// than on the map. Cell count is a capacity
 /// *proxy* (tanks also need ~1.5-tank spacing between each other), so the
 /// thresholds are deliberately the loosest defensible ones: fewer cells
 /// than tanks is provably too tight (`Error`), fewer than
@@ -430,6 +483,7 @@ fn check_spawn_band(
     height: f32,
     player_pos: Position,
     player_size: f32,
+    grid: &Grid,
     obstacle_positions: &[Position],
     findings: &mut Vec<LintFinding>,
 ) {
@@ -437,7 +491,6 @@ fn check_spawn_band(
     let margin_min = short_side * tuning().enemy_spawn_margin_min;
     let margin_max = short_side * tuning().enemy_spawn_margin_max;
     let clear = player_size * 2.0;
-    let enemy_clear = player_size * 1.5;
 
     let mut capacity = 0usize;
     for row in 0..cells.rows {
@@ -446,18 +499,17 @@ fn check_spawn_band(
                 continue;
             }
             let p = cells.center(col, row);
-            let in_domain = p.x >= margin_min
-                && p.x <= width - margin_min
-                && p.y >= margin_min
-                && p.y <= height - margin_min;
-            let border_dist = p.x.min(width - p.x).min(p.y).min(height - p.y);
-            if in_domain
-                && border_dist <= margin_max
-                && p.distance_to(player_pos) >= clear
-                && obstacle_positions
-                    .iter()
-                    .all(|&o| p.distance_to(o) >= enemy_clear + OBSTACLE_CLEAR)
-            {
+            if battlefield::enemy_spawn_legal(
+                p,
+                width,
+                height,
+                margin_min,
+                margin_max,
+                player_pos,
+                clear,
+                grid,
+                obstacle_positions,
+            ) {
                 capacity += 1;
             }
         }
@@ -637,10 +689,7 @@ mod map_lint_tests {
     /// predicate - so every enemy spawn on this map degrades to
     /// `sample_clear_position`'s attempt-cap fallback (a very plausible
     /// source of this map's recorded stale-start/stall anomaly baseline).
-    const KNOWN_ERROR_KINDS: &[(&str, &[LintKind])] = &[(
-        "maps/default.toml",
-        &[LintKind::UnreachablePickup, LintKind::SpawnBandTooTight],
-    )];
+    const KNOWN_ERROR_KINDS: &[(&str, &[LintKind])] = &[("maps/default.toml", &[])];
 
     /// Headless seeded round on `map`, linted - the §3.1 setup. The fixed
     /// seed matters for maps that leave frog/start placement to `init`'s
@@ -747,6 +796,27 @@ mod map_lint_tests {
         let findings = lint_map(map);
         dump("sealed pickup", &findings);
         assert!(has(&findings, LintKind::UnreachablePickup));
+    }
+
+    /// The same vault in Brick: the player can shoot a way in, so the
+    /// slot is gated loot (a warning), not sealed (an error).
+    #[test]
+    fn brick_vaulted_pickup_is_gated_not_unreachable() {
+        let mut map = base_map();
+        sealed_vault(&mut map);
+        let iron: Vec<(i32, i32)> = map
+            .iter_cells()
+            .filter(|(_, _, obj)| matches!(obj, CellObject::Wall { material: Material::Iron }))
+            .map(|(c, r, _)| (c, r))
+            .collect();
+        for (col, row) in iron {
+            map.set_cell(col, row, CellObject::Wall { material: Material::Brick });
+        }
+        map.set_cell(17, 11, CellObject::Pickup { pickup: PickupKind::Health });
+        let findings = lint_map(map);
+        dump("brick vault pickup", &findings);
+        assert!(has(&findings, LintKind::GatedPickup));
+        assert!(!has(&findings, LintKind::UnreachablePickup));
     }
 
     #[test]
@@ -911,16 +981,10 @@ mod map_lint_tests {
 
         let f = lint_path("maps/test/tight-corridors.toml").expect("fixture loads");
         dump("tight-corridors", &f);
-        // The 21-tile rails eat most of the border band's tile clearance:
-        // the linter counts only ~3 legal spawn cells for the map's 4
-        // tanks, so spawn pressure (attempt-cap fallback spawns) is part
-        // of this fixture's recorded profile - but nothing else about it
-        // may be illegal.
-        assert!(
-            errors(&f).iter().all(|e| e.kind == LintKind::SpawnBandTooTight),
-            "tight-corridors may only carry its known spawn-band pressure"
-        );
-        assert!(has(&f, LintKind::SpawnBandTooTight), "the rails squeeze the band by design");
+        // The 21-tile rails leave the band's outer cells legal under the
+        // nav-grid spawn predicate, so the fixture is fully legal: its
+        // provocation is the corridor drive itself, not spawn pressure.
+        assert!(errors(&f).is_empty(), "tight-corridors is tight but fully legal");
 
         let f = lint_path("maps/test/frog-block.toml").expect("fixture loads");
         dump("frog-block", &f);

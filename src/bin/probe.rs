@@ -108,8 +108,10 @@ const DT: f32 = 1.0 / 60.0;
 const BRAKE_HOLD_FRAMES: u32 = 18;
 
 // --- Anomaly-detection tuning ---
-// A tank must move at least this far from its spawn point within
-// STALE_START_FRAMES or it's flagged as never having left spawn.
+// A tank must get at least this far from its spawn point at some point
+// within STALE_START_FRAMES or it's flagged as never having left spawn.
+// Judged on the *farthest* it got, not where it happens to be when the
+// window closes: a tank that drove off and wandered back is not stale.
 const STALE_START_FRAMES: u32 = 120; // 2s
 const STALE_START_EPS: f32 = 5.0; // px
 // After the stale-start window, a tank sitting near-zero speed for this many
@@ -336,6 +338,13 @@ struct Args {
     #[arg(long = "tuning")]
     tuning: Option<std::path::PathBuf>,
 
+    /// With `--tuning`: print the loaded patch as `tunables!` table rows
+    /// (the same text as the web panel's "Copy as Rust") and exit, for
+    /// pasting over the matching rows in src/tuning.rs to make a QA'd set
+    /// the new default. Runs no rounds.
+    #[arg(long = "print-rust", requires = "tuning")]
+    print_rust: bool,
+
     /// Battlefield map to probe (same `-m`/`--map` semantics as the game
     /// binary, loaded and validated eagerly); defaults to the embedded
     /// `maps/default.toml` the game itself ships with. Point it at a
@@ -509,6 +518,8 @@ impl AnomalyTotals {
 struct TankTrack {
     label: String,
     spawn_pos: Position,
+    // Farthest the tank has been from `spawn_pos` so far (stale-start).
+    max_spawn_dist: f32,
     stall_frames: u32,
     border_frames: u32,
     stale_flagged: bool,
@@ -624,6 +635,7 @@ impl TankTrack {
         Self {
             label,
             spawn_pos,
+            max_spawn_dist: 0.0,
             stall_frames: 0,
             border_frames: 0,
             stale_flagged: false,
@@ -840,11 +852,12 @@ fn check_anomalies(
         track.prev_ammo = Some(ammo);
         let holding = track.deliberate_hold(frame, tank, player_snap);
 
-        // Stale-start: hasn't left spawn within STALE_START_FRAMES.
+        // Stale-start: never got clear of spawn within STALE_START_FRAMES.
+        if frame <= STALE_START_FRAMES {
+            track.max_spawn_dist = track.max_spawn_dist.max(pos.distance_to(track.spawn_pos));
+        }
         if !track.stale_flagged && frame == STALE_START_FRAMES && !holding {
-            let dx = pos.x - track.spawn_pos.x;
-            let dy = pos.y - track.spawn_pos.y;
-            if (dx * dx + dy * dy).sqrt() < STALE_START_EPS {
+            if track.max_spawn_dist < STALE_START_EPS {
                 report(
                     heat,
                     round,
@@ -1517,6 +1530,10 @@ fn main() -> ExitCode {
         bongbong::tuning::apply_pending();
     }
     let tuning_diff = bongbong::tuning::diff_json();
+    if args.print_rust {
+        print!("{}", bongbong::tuning::diff_rust());
+        return ExitCode::SUCCESS;
+    }
 
     // Created (truncating) up front so a bad path fails before any rounds
     // burn time; each round's record is written as it finishes, so even an

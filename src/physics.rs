@@ -135,7 +135,7 @@ impl Physics {
     /// Teleport a dynamic body (a tank) straight to `position`, bypassing
     /// normal velocity-driven movement entirely - used once, at round init,
     /// to relocate a tank whose rolled spawn point turned out to be
-    /// pathfinding-boxed-in (see `battlefield::relocate_boxed_in_tanks`).
+    /// pathfinding-boxed-in (see `battlefield::relocate_unusable_spawns`).
     /// Zeroes velocity too, so it doesn't arrive already carrying whatever
     /// momentum it had at the old spot.
     pub fn set_position(&mut self, handle: RigidBodyHandle, position: Position) {

@@ -196,7 +196,7 @@ impl Grid {
     /// asked about. A tank can end up here two ways: several
     /// independently-placed obstacles each individually respecting their
     /// own clearance from it, but collectively still sealing every
-    /// direction out (see `battlefield::relocate_boxed_in_tanks`, which
+    /// direction out (see `battlefield::relocate_unusable_spawns`, which
     /// checks every tank against this once at round init and relocates any
     /// that fail); or getting rammed/knocked into a tight pocket mid-round.
     /// Either way, resampling a *different* target (see `Ai::wander`)
@@ -211,6 +211,21 @@ impl Grid {
         self.neighbors_all_blocked(self.cell_of(from))
     }
 
+    /// True if a tank standing at `at` can actually be routed from there:
+    /// its own cell is open (it is not sitting inside an obstacle's
+    /// footprint) and it is not `boxed_in`. This is the spawn-legality
+    /// test `battlefield::enemy_spawn_legal` and
+    /// `battlefield::relocate_unusable_spawns` share - a spawn that fails
+    /// it is either physically inside terrain or sealed in, and either
+    /// way needs relocating, so the two tests stay one check.
+    pub fn usable(&self, at: Position) -> bool {
+        self.usable_cell(self.cell_of(at))
+    }
+
+    fn usable_cell(&self, cell: (usize, usize)) -> bool {
+        !self.blocked_at(cell) && !self.neighbors_all_blocked(cell)
+    }
+
     /// The center of the nearest cell to `from` that is both unblocked and
     /// not itself boxed in (see `boxed_in`) - i.e. a genuinely usable spot,
     /// not just a technically-open single cell surrounded by blocked ones
@@ -223,7 +238,7 @@ impl Grid {
     /// way to know about each other). BFS outward cardinally from `from`'s
     /// own cell, so "nearest" means fewest grid steps, not raw pixel
     /// distance - used once per flagged tank at round init (see
-    /// `battlefield::relocate_boxed_in_tanks`), not a hot path. Falls back
+    /// `battlefield::relocate_unusable_spawns`), not a hot path. Falls back
     /// to `from` itself if the entire grid turns out unusable (never
     /// actually hit in practice - a real obstacle layout leaves most of the
     /// battlefield open - but a plain fallback beats a panic over a
@@ -236,7 +251,7 @@ impl Grid {
         let mut queue = VecDeque::new();
         queue.push_back(start);
         while let Some(cell) = queue.pop_front() {
-            if !self.blocked_at(cell) && !self.neighbors_all_blocked(cell) {
+            if self.usable_cell(cell) {
                 let center = self.center_of(cell);
                 if avoid.iter().all(|&p| center.distance_to(p) >= avoid_clear) {
                     return center;

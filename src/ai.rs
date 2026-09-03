@@ -109,6 +109,7 @@ pub struct Ai {
     /// lapping a tight box at full speed, one fresh unreachable waypoint
     /// per frame.
     wander_pocketed: bool,
+    pub trace_act: &'static str,
 }
 
 impl Default for Ai {
@@ -127,6 +128,7 @@ impl Default for Ai {
             stuck_timer: 0.0,
             hit_alert_timer: 0.0,
             wander_pocketed: false,
+            trace_act: "",
         }
     }
 }
@@ -691,6 +693,8 @@ impl Ai {
         self.fire_timer
     }
 
+    pub fn trace_state(&self) -> String { format!("commit={:?} hold={:.2} stuck={:.2} dodge={:?}/{:.2} wp=({:.0},{:.0}) retreat={} act={}", self.committed_dir.map(|d| d.rotation()), self.dir_hold, self.stuck_timer, self.dodge_dir.map(|d| d.rotation()), self.dodge_timer, self.waypoint.x, self.waypoint.y, self.retreating, self.trace_act) }
+
     fn commit(&mut self, dir: Dir) {
         if self.committed_dir != Some(dir) {
             self.committed_dir = Some(dir);
@@ -1061,6 +1065,7 @@ fn build<'a>() -> Node<Brain<'a>> {
 /// battlefield's corners. Falls back to the old blind-flee behavior once no
 /// Health pickup exists (already collected, still respawning).
 fn act_flee(b: &mut Brain) -> Status {
+    b.ai.trace_act = "act_flee";
     b.reset_aim();
     if let Some(target) = b.nearest_pickup(PickupKind::Health) {
         b.intent.move_dir = Some(b.steer(target));
@@ -1086,6 +1091,7 @@ fn act_flee(b: &mut Brain) -> Status {
 /// recharge instead of camping the map edge. Never fires: `b.intent.fire`
 /// starts false each frame and this leaf doesn't set it.
 fn act_retreat(b: &mut Brain) -> Status {
+    b.ai.trace_act = "act_retreat";
     b.reset_aim();
     if let Some(target) = b.nearest_pickup(PickupKind::Ammo) {
         b.intent.move_dir = Some(b.steer(target));
@@ -1111,6 +1117,7 @@ fn act_retreat(b: &mut Brain) -> Status {
 /// reached it first - falling through to patrol is the right response, not
 /// wandering toward a spot that's no longer there.
 fn act_seek_laser(b: &mut Brain) -> Status {
+    b.ai.trace_act = "act_seek_laser";
     b.reset_aim();
     let Some(target) = b.nearest_pickup(PickupKind::Laser) else {
         return Status::Failure;
@@ -1122,6 +1129,7 @@ fn act_seek_laser(b: &mut Brain) -> Status {
 /// Same idea as `act_seek_laser`, for a Plasma pickup instead - see tier
 /// 5.6 (`build`) for when this is actually reached.
 fn act_seek_plasma(b: &mut Brain) -> Status {
+    b.ai.trace_act = "act_seek_plasma";
     b.reset_aim();
     let Some(target) = b.nearest_pickup(PickupKind::Plasma) else {
         return Status::Failure;
@@ -1133,6 +1141,7 @@ fn act_seek_plasma(b: &mut Brain) -> Status {
 /// Same idea as `act_seek_laser`, for a Minigun pickup instead - see tier
 /// 5.7 (`build`) for when this is actually reached.
 fn act_seek_minigun(b: &mut Brain) -> Status {
+    b.ai.trace_act = "act_seek_minigun";
     b.reset_aim();
     let Some(target) = b.nearest_pickup(PickupKind::Minigun) else {
         return Status::Failure;
@@ -1144,6 +1153,7 @@ fn act_seek_minigun(b: &mut Brain) -> Status {
 /// Same idea as `act_seek_laser`, for a SpeedUp pickup instead - see tier
 /// 5.8 (`build`) for when this is actually reached.
 fn act_seek_speedup(b: &mut Brain) -> Status {
+    b.ai.trace_act = "act_seek_speedup";
     b.reset_aim();
     let Some(target) = b.nearest_pickup(PickupKind::SpeedUp) else {
         return Status::Failure;
@@ -1155,6 +1165,7 @@ fn act_seek_speedup(b: &mut Brain) -> Status {
 /// Hold near the player and shoot when lined up on a cardinal axis. The tank
 /// only fires after staying aligned for ENEMY_AIM_SETTLE, and stops to aim.
 fn act_attack(b: &mut Brain) -> Status {
+    b.ai.trace_act = "act_attack";
     let (fire_dir, off_axis, in_front) = b.aim_alignment();
     // A geometrically on-axis spot the AI can't actually shoot from (a wall
     // in the way) is treated the same as not being aligned at all, so the
@@ -1200,6 +1211,7 @@ fn act_attack(b: &mut Brain) -> Status {
 /// of chasers spreads out instead of converging on the same point. See
 /// `Brain::engage_point`.
 fn act_chase(b: &mut Brain) -> Status {
+    b.ai.trace_act = "act_chase";
     b.intent.move_dir = Some(b.steer(b.engage_point()));
     b.reset_aim();
     Status::Success
@@ -1220,6 +1232,7 @@ fn act_chase(b: &mut Brain) -> Status {
 /// worse instead of better (a still-distant pack funnels toward its
 /// eventual axis slots through the same bottleneck for its whole transit).
 fn act_patrol(b: &mut Brain) -> Status {
+    b.ai.trace_act = "act_patrol";
     if let Some(target) = b.alert {
         b.intent.move_dir = Some(b.steer(b.engage_target.unwrap_or(target)));
     } else {
