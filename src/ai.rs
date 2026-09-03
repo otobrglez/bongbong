@@ -510,6 +510,7 @@ impl Ai {
         // holds. Driving into a wall is no longer steering's problem - the
         // physics engine's wall colliders stop/slide the tank for real.
         let dir = self.avoid_collisions(dir, from, bounds, half, ctx, grid);
+        if std::env::var_os("BB_AI_TRACE").is_some() { eprintln!("STEER idx={} from=({:.0},{:.0}) target=({:.0},{:.0}) routed=({:.0},{:.0}) fresh={} chosen={} obst={}", ctx.my_index, from.x, from.y, target.x, target.y, routed.x, routed.y, fresh.rotation(), dir.rotation(), obstacle_ahead); }
         self.commit(dir);
         dir
     }
