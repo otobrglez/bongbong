@@ -1,12 +1,13 @@
+use crate::tuning::tuning;
 use rapier2d::prelude::RigidBodyHandle;
 use serde::{Deserialize, Serialize};
 use sola_raylib::prelude::*;
 
 use crate::{
-    OBSTACLE_BRICK_MAX_HEALTH, OBSTACLE_GLASS_MAX_HEALTH, OBSTACLE_HULL_FRACTION,
-    OBSTACLE_IRON_MAX_HEALTH, OBSTACLE_SCALE, OBSTACLE_SHADOW_OFFSET, OBSTACLE_SHADOW_OPACITY,
-    OBSTACLE_TEXTURE_SIZE, OBSTACLE_WOOD_BURN_FRAME_SECONDS, OBSTACLE_WOOD_BURN_SECONDS,
-    OBSTACLE_WOOD_MAX_HEALTH, Position, SHADOW_DIR_X, SHADOW_DIR_Y,
+    OBSTACLE_HULL_FRACTION,
+    OBSTACLE_SCALE,
+    OBSTACLE_TEXTURE_SIZE,
+    Position,
 };
 
 /// Which of the four materials a static battlefield wall is built from - see
@@ -52,12 +53,9 @@ impl Material {
     /// tough: glass snaps almost immediately, wood breaks easily, brick
     /// holds longer, iron the longest of all on top of being permanent.
     pub fn max_health(self) -> f32 {
-        match self {
-            Material::Glass => OBSTACLE_GLASS_MAX_HEALTH,
-            Material::Wood => OBSTACLE_WOOD_MAX_HEALTH,
-            Material::Brick => OBSTACLE_BRICK_MAX_HEALTH,
-            Material::Iron => OBSTACLE_IRON_MAX_HEALTH,
-        }
+        // Indexed by declaration order, which `tuning::MATERIAL_NAMES`
+        // mirrors (brick, iron, wood, glass).
+        tuning().wall_max_health[self as usize]
     }
 
     /// Number of visible damage-stage columns this material ever actually
@@ -195,12 +193,12 @@ impl Obstacle {
             return;
         }
         self.burn_frame_timer += dt;
-        if self.burn_frame_timer >= OBSTACLE_WOOD_BURN_FRAME_SECONDS {
-            self.burn_frame_timer -= OBSTACLE_WOOD_BURN_FRAME_SECONDS;
+        if self.burn_frame_timer >= tuning().wood_burn_frame_seconds {
+            self.burn_frame_timer -= tuning().wood_burn_frame_seconds;
             self.burn_frame = (self.burn_frame + 1) % 3;
         }
         self.burn_elapsed += dt;
-        if self.burn_elapsed >= OBSTACLE_WOOD_BURN_SECONDS {
+        if self.burn_elapsed >= tuning().wood_burn_seconds {
             self.destroyed = true;
         }
     }
@@ -241,12 +239,12 @@ pub fn draw_obstacle_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, obstac
     let src = source_rec(obstacle.row(), obstacle.col());
     let size = obstacle.size();
     let dest = Rectangle::new(
-        obstacle.position.x + SHADOW_DIR_X * OBSTACLE_SHADOW_OFFSET,
-        obstacle.position.y + SHADOW_DIR_Y * OBSTACLE_SHADOW_OFFSET,
+        obstacle.position.x + tuning().shadow_dir_x * tuning().obstacle_shadow_offset,
+        obstacle.position.y + tuning().shadow_dir_y * tuning().obstacle_shadow_offset,
         size,
         size,
     );
     let origin = Vector2::new(size / 2.0, size / 2.0);
-    let shadow = Color::new(0, 0, 0, (255.0 * OBSTACLE_SHADOW_OPACITY) as u8);
+    let shadow = Color::new(0, 0, 0, (255.0 * tuning().obstacle_shadow_opacity) as u8);
     d.draw_texture_pro(texture, src, dest, origin, 0.0, shadow);
 }

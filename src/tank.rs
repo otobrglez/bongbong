@@ -1,19 +1,29 @@
-use rapier2d::prelude::{ColliderHandle, RigidBodyHandle};
+use crate::tuning::tuning;
+use rapier2d::prelude::RigidBodyHandle;
 use sola_raylib::prelude::*;
 
 use crate::laser::LaserVariant;
 use crate::plasma::PlasmaVariant;
+use crate::shell::Owner;
 use crate::{
-    DAMAGE_SPEED_CURVE, DAMAGE_SPEED_FLOOR, MAX_DAMAGE, MAX_SHELLS, MINIGUN_MOUNT_SCALE,
-    MINIGUN_CYCLE_SECONDS, MINIGUN_MOUNT_TEXTURE_SIZE, Position,
-    SHADOW_DIR_X, SHADOW_DIR_Y, TANK_BROKEN_TURRET_COL, TANK_CHASSIS_MASS_FACTOR_BY_ROW,
-    TANK_HULL_BBOX_BY_ROW, TANK_HULL_DISABLED_COL, TANK_HULL_DISABLED_DAMAGE, TANK_HULL_FRACTION,
+    MAX_DAMAGE,
+    MINIGUN_MOUNT_SCALE,
+    MINIGUN_MOUNT_TEXTURE_SIZE,
+    Position,
+    TANK_BROKEN_TURRET_COL,
+    TANK_HULL_BBOX_BY_ROW,
+    TANK_HULL_DISABLED_COL,
+    TANK_HULL_DISABLED_DAMAGE,
+    TANK_HULL_FRACTION,
     TANK_HULL_LIGHT_COL,
-    TANK_HULL_LIGHT_DAMAGE, TANK_HULL_TRACK_COLS, TANK_PIVOT_REAR_FRACTION, TANK_SHADOW_OFFSET,
-    TANK_SHADOW_OPACITY,
-    TANK_SPEED, TANK_TEXTURE_SIZE, TANK_TURRET_BBOX_BY_ROW, TANK_TURRET_COL,
-    TANK_TURRET_VISUAL_TURN_SPEED_DEG,
-    TANK_VISUAL_TURN_SPEED_DEG, TANK_WRECK_COLS, WRECK_BURN_SECONDS,
+    TANK_HULL_LIGHT_DAMAGE,
+    TANK_HULL_TRACK_COLS,
+    TANK_MOVE_BBOX_FRACTION,
+    TANK_PIVOT_REAR_FRACTION,
+    TANK_TEXTURE_SIZE,
+    TANK_TURRET_BBOX_BY_ROW,
+    TANK_TURRET_COL,
+    TANK_WRECK_COLS,
 };
 
 /// The four movement/facing directions. rotation 0 == up, clockwise positive,
@@ -110,7 +120,7 @@ pub struct MinigunBurst {
 }
 
 /// Which weapon a tank's next trigger-pull fires - see `Tank::active_weapon`.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActiveWeapon {
     Laser,
     Plasma,
@@ -217,16 +227,23 @@ pub struct Tank {
     pub wreck_col: Option<i32>,
     /// How much to scale the 32x32 sprite when drawn.
     pub scale: f32,
-    /// Movement speed in pixels per second (player and enemies differ).
-    pub speed: f32,
+    /// Per-tank multiplier on the live base speed (`tuning().tank_speed`
+    /// for the player, `tuning().enemy_speed` for an enemy - see
+    /// `base_speed`): 1.0 for the player, an enemy's spawn-rolled
+    /// `enemy_speed_variance` factor. Stored as a factor rather than an
+    /// absolute px/s so dragging the speed knob mid-round moves every tank
+    /// on the field, not just the next one to spawn.
+    pub speed_scale: f32,
     /// Accumulated damage, 0 (pristine) .. MAX_DAMAGE (destroyed wreck).
     pub damage: f32,
     /// Remaining shells this tank can fire before it must recharge.
     pub shells_ammo: i32,
     /// Remaining laser charges (see `pickup::PickupKind::Laser`,
-    /// `laser.rs`). While positive, firing consumes one charge and resolves
-    /// an instant beam hit instead of a normal shell (see `simulation.rs`'s
-    /// fire dispatch); at zero this tank fires shells as usual.
+    /// `laser.rs`). While this is the live weapon (front of the stocked
+    /// `weapon_queue` - see `active_weapon`) and positive, firing consumes
+    /// one charge and resolves an instant beam hit instead of a normal
+    /// shell (see `simulation.rs`'s fire dispatch); a nonzero balance sits
+    /// waiting while an earlier-queued weapon holds the trigger.
     pub laser_charges: i32,
     /// Which `laser::LaserVariant` the current charge batch fires as -
     /// rolled fresh on each `PickupKind::Laser` pickup (see
@@ -234,21 +251,49 @@ pub struct Tank {
     pub laser_variant: LaserVariant,
     /// Remaining minigun ammo (see `pickup::PickupKind::Minigun`,
     /// `bullet.rs`). Pickup-only, no passive regen - mirrors `laser_charges`
-    /// exactly. While positive and no laser is charged, firing starts a
+    /// exactly. While this is the live weapon and positive, firing starts a
     /// burst of MINIGUN_BURST_SIZE individually-simulated `bullet::Bullet`s
     /// instead of a normal shell - see `Tank::active_weapon`.
     pub minigun_ammo: i32,
     /// Remaining plasma ammo (see `pickup::PickupKind::Plasma`, `plasma.rs`).
     /// Pickup-only, no passive regen - mirrors `minigun_ammo`/`laser_charges`
-    /// exactly. While positive and no laser is charged, firing shoots a
-    /// `plasma::Plasma` bolt from the barrel instead of a normal shell - see
-    /// `Tank::active_weapon`.
+    /// exactly. While this is the live weapon and positive, firing shoots a
+    /// `plasma::Plasma` bolt from the barrel instead of a normal shell -
+    /// see `Tank::active_weapon`.
     pub plasma_ammo: i32,
     /// Which `plasma::PlasmaVariant` the current charge batch fires as -
     /// rolled fresh on each `PickupKind::Plasma` pickup (see
     /// `PLASMA_PURPLE_PICKUP_CHANCE`), meaningless while `plasma_ammo == 0`.
     /// Same mechanism as `laser_variant`.
     pub plasma_variant: PlasmaVariant,
+    /// FIFO queue of this tank's collected special weapons. The inventory
+    /// rule: the weapon at the front keeps firing until its own ammo runs
+    /// dry - a fresh pickup never interrupts it, it lines up *behind* (see
+    /// `enqueue_weapon`, called from `Game::update`'s pickup-collection
+    /// block and the armed-spawn roll in `Game::init`) - then the next
+    /// queued weapon takes over, and only once every queued special is
+    /// spent does the trigger fall back to the default, always-recharging
+    /// shell cannon. `active_weapon` derives all of that by scanning this
+    /// queue; spent entries are skipped there and pruned lazily on the next
+    /// pickup (`enqueue_weapon`) rather than eagerly popped at the many
+    /// places ammo can hit zero. Ammo/Health/SpeedUp pickups never touch
+    /// this: an ammo crate is a resupply for the shell cannon, not a queue
+    /// entry. At most one entry per weapon kind ever sits here (a repeat
+    /// pickup of a still-stocked kind just tops up its ammo counter and
+    /// keeps its place in line), so the queue never exceeds the three
+    /// special kinds.
+    pub weapon_queue: Vec<ActiveWeapon>,
+    /// Seconds remaining on a `pickup::PickupKind::SpeedUp` boost - while
+    /// positive, `effective_speed` scales top speed by
+    /// SPEED_BOOST_MULTIPLIER. Set (not added to) on pickup, so a fresh
+    /// pickup refreshes the duration instead of stacking with an
+    /// already-active boost - see `PickupKind::SpeedUp`'s doc comment.
+    pub speed_boost_timer: f32,
+    /// Seconds remaining on a `pickup::PickupKind::Shield` - while positive
+    /// `take_damage` is a no-op and `draw_tank_shield` draws the rainbow
+    /// ring. Set (not added to) on pickup, same refresh-not-stack rule as
+    /// `speed_boost_timer`.
+    pub shield_timer: f32,
     /// Seconds accumulated toward recharging the next shell.
     pub recharge_timer: f32,
     /// Seconds remaining before this tank may fire again (player only - see
@@ -301,32 +346,9 @@ pub struct Tank {
     /// This tank's rapier rigid body, once spawned into the physics world
     /// (see `Game::init`/`physics::Physics::spawn_tank`).
     pub body: Option<RigidBodyHandle>,
-    /// This tank's hull shell-hit sensor - a second collider on the same
-    /// `body` (see `physics::Physics::add_hit_sensor`), sized/positioned
-    /// exactly like the solid hull collider (`hull_half_extents`) but with
-    /// its own owner-exclusion `InteractionGroups` filter, which the solid
-    /// collider can't carry without also filtering *movement* collisions
-    /// (tank-vs-tank ramming, tank-vs-wall) the same way - see
-    /// `find_shell_target`. Paired with `turret_hit_sensor` below for the
-    /// turret+barrel portion of the same hit test.
-    pub hit_sensor: Option<ColliderHandle>,
-    /// This tank's turret+barrel shell-hit sensor - same idea as
-    /// `hit_sensor` above, sized/positioned from `turret_bbox_world`
-    /// instead of the hull box. Splitting the hit test into these two boxes
-    /// (rather than one box covering both, or one oversized box padded to
-    /// cover both) is what lets a shot land anywhere on the visible hull
-    /// *or* the barrel and register, without also counting the transparent
-    /// padding around either shape as a hit - this pair of boxes is exactly
-    /// what the "I" key debug inspect overlay (`game.rs::draw_tank_inspect`)
-    /// already draws, which is how this shape was chosen and checked
-    /// against the art before being wired in here.
-    pub turret_hit_sensor: Option<ColliderHandle>,
-    /// This tank's collision-group slot (see `physics::owner_group`), set
-    /// once at spawn (`Game::init`) - 0 for the player, `n` for the nth
-    /// enemy spawned. Reused whenever this tank fires (see `Game::update`)
-    /// to rebuild that same group for its shell's shooter-exclusion filter
-    /// and to tag the shell's `shell::Owner`, without needing this tank's
-    /// position in any spawn-order list.
+    /// This tank's owner slot, set once at spawn (`Game::init`): 0 for the
+    /// player, `n` for the nth enemy spawned. Identifies the tank as a
+    /// projectile owner (`owner()`) so a shot never hits its own shooter.
     pub owner_slot: usize,
 }
 
@@ -348,14 +370,17 @@ impl Default for Tank {
             hull_anim_accum: 0.0,
             wreck_col: None,
             scale: 2.0, // 3.0,
-            speed: TANK_SPEED,
+            speed_scale: 1.0,
             damage: 0.0,
-            shells_ammo: MAX_SHELLS,
+            shells_ammo: tuning().max_shells,
             laser_charges: 0,
             laser_variant: LaserVariant::Red,
             minigun_ammo: 0,
             plasma_ammo: 0,
             plasma_variant: PlasmaVariant::Teal,
+            weapon_queue: Vec::new(),
+            speed_boost_timer: 0.0,
+            shield_timer: 0.0,
             recharge_timer: 0.0,
             fire_cooldown: 0.0,
             ram_cooldown: 0.0,
@@ -369,8 +394,7 @@ impl Default for Tank {
             track_scale_jitter: 1.0,
             velocity: Vector2::new(0.0, 0.0),
             body: None,
-            hit_sensor: None,
-            turret_hit_sensor: None,
+
             owner_slot: 0,
         }
     }
@@ -387,6 +411,34 @@ impl Tank {
         self.damage >= MAX_DAMAGE
     }
 
+    /// True while a rainbow shield is active (see `shield_timer`).
+    pub fn is_shielded(&self) -> bool {
+        self.shield_timer > 0.0
+    }
+
+    /// The one way damage lands on a tank: adds `amount`, capped at `cap`
+    /// (MAX_DAMAGE, or one below it for the player's frog bites). A no-op
+    /// while shielded - the shield absorbs every source, shells, bullets,
+    /// plasma, laser, ram, explosions and the frog alike. Callers keep their
+    /// hit flash/knockback/alert side effects, so a blocked shot still
+    /// visibly lands; only the health change is swallowed.
+    pub fn take_damage(&mut self, amount: f32, cap: f32) {
+        if self.is_shielded() {
+            return;
+        }
+        self.damage = (self.damage + amount).min(cap);
+    }
+
+    /// Who this tank is as a projectile owner - the inverse of
+    /// `Owner::slot`.
+    pub fn owner(&self) -> Owner {
+        if self.owner_slot == 0 {
+            Owner::Player
+        } else {
+            Owner::Enemy(self.owner_slot - 1)
+        }
+    }
+
     /// How much damage has hurt this tank's mobility, from 1.0 (pristine) down
     /// to DAMAGE_SPEED_FLOOR (about to wreck). Holds close to 1.0 through
     /// light and moderate damage, then falls off harder as damage nears the
@@ -396,18 +448,28 @@ impl Tank {
     /// damaged tank is sluggish to speed up too, not just capped lower.
     pub fn speed_factor(&self) -> f32 {
         let hurt = (self.damage / MAX_DAMAGE).clamp(0.0, 1.0);
-        DAMAGE_SPEED_FLOOR + (1.0 - DAMAGE_SPEED_FLOOR) * (1.0 - hurt.powf(DAMAGE_SPEED_CURVE))
+        tuning().damage_speed_floor + (1.0 - tuning().damage_speed_floor) * (1.0 - hurt.powf(tuning().damage_speed_curve))
     }
 
-    /// This tank's current top speed, reduced as it takes damage; see
-    /// `speed_factor`.
+    /// This tank's current top speed, reduced as it takes damage (see
+    /// `speed_factor`) and boosted by SPEED_BOOST_MULTIPLIER while
+    /// `speed_boost_timer` is positive (see `pickup::PickupKind::SpeedUp`).
     pub fn effective_speed(&self) -> f32 {
-        self.speed * self.speed_factor()
+        let boost = if self.speed_boost_timer > 0.0 { tuning().speed_boost_multiplier } else { 1.0 };
+        self.base_speed() * self.speed_factor() * boost
+    }
+
+    /// This tank's undamaged, unboosted top speed (px/s): the live
+    /// player/enemy base knob times `speed_scale`.
+    pub fn base_speed(&self) -> f32 {
+        let t = tuning();
+        let base = if self.owner_slot == 0 { t.tank_speed } else { t.enemy_speed };
+        base * self.speed_scale
     }
 
     /// True once a wreck has finished burning and settled into a dead hulk.
     pub fn is_dead(&self) -> bool {
-        self.is_wreck() && self.wreck_timer >= WRECK_BURN_SECONDS
+        self.is_wreck() && self.wreck_timer >= tuning().wreck_burn_seconds
     }
 
     /// Which atlas column to draw this tank's hull from - a four-tier
@@ -441,24 +503,56 @@ impl Tank {
         }
     }
 
-    /// Which weapon this tank's next trigger-pull actually fires, by
-    /// priority: a charged laser first (most powerful, depleted first), then
-    /// plasma ammo (a straight damage upgrade over a shell, see
-    /// PLASMA_DAMAGE_FACTOR), then minigun ammo, then a traditional shell
-    /// last. Purely picks the *tier* - whether that tier's own ammo is
-    /// actually sufficient to fire *this instant* is still checked at each
-    /// dispatch site in `Game::update` (a twin-barrel chassis needing 2
-    /// shells/bolts per shot can still be `ActiveWeapon::Shell`/`Plasma`
-    /// while short of the 2 it needs, exactly as before this existed).
+    /// Which weapon this tank's next trigger-pull actually fires: the
+    /// first entry in `weapon_queue` that still has ammo (FIFO - the front
+    /// weapon holds the trigger until it runs dry, then the next queued
+    /// pickup takes over; see that field's doc comment), or the default
+    /// shell cannon once every queued special is spent. Spent entries are
+    /// *skipped* here rather than eagerly popped at every place ammo can
+    /// hit zero (player dispatch, enemy dispatch, mid-burst) -
+    /// `enqueue_weapon` prunes them on the next pickup instead. Purely
+    /// picks the *tier* - whether that tier's own ammo is actually
+    /// sufficient to fire *this instant* is still checked at each dispatch
+    /// site in `Game::update` (a twin-barrel chassis needing 2 shells/bolts
+    /// per shot can still be `ActiveWeapon::Shell`/`Plasma` while short of
+    /// the 2 it needs, exactly as before this existed).
     pub fn active_weapon(&self) -> ActiveWeapon {
-        if self.laser_charges > 0 {
-            ActiveWeapon::Laser
-        } else if self.plasma_ammo > 0 {
-            ActiveWeapon::Plasma
-        } else if self.minigun_ammo > 0 {
-            ActiveWeapon::Minigun
-        } else {
-            ActiveWeapon::Shell
+        self.weapon_queue
+            .iter()
+            .copied()
+            .find(|&w| self.weapon_ammo(w) > 0)
+            .unwrap_or(ActiveWeapon::Shell)
+    }
+
+    /// The ammo counter behind `weapon` - the one shared currency between
+    /// the queue logic (`active_weapon`/`enqueue_weapon`) and the fire
+    /// dispatch sites that actually decrement these fields.
+    fn weapon_ammo(&self, weapon: ActiveWeapon) -> i32 {
+        match weapon {
+            ActiveWeapon::Laser => self.laser_charges,
+            ActiveWeapon::Plasma => self.plasma_ammo,
+            ActiveWeapon::Minigun => self.minigun_ammo,
+            ActiveWeapon::Shell => self.shells_ammo,
+        }
+    }
+
+    /// Register a collected special-weapon pickup in `weapon_queue` (see
+    /// that field's doc comment for the FIFO inventory rule). Call this
+    /// *before* adding the pickup's ammo grant: it first prunes entries
+    /// whose ammo has run dry - which must still read zero at that point,
+    /// so a re-collected spent weapon re-enters at the *back* of the line
+    /// instead of resurrecting in its old slot - then appends `weapon`
+    /// unless a still-stocked batch of it is already queued (a repeat
+    /// pickup is then just a top-up that keeps its place in line).
+    pub fn enqueue_weapon(&mut self, weapon: ActiveWeapon) {
+        let queue = std::mem::take(&mut self.weapon_queue);
+        let kept: Vec<ActiveWeapon> = queue
+            .into_iter()
+            .filter(|&w| self.weapon_ammo(w) > 0)
+            .collect();
+        self.weapon_queue = kept;
+        if !self.weapon_queue.contains(&weapon) {
+            self.weapon_queue.push(weapon);
         }
     }
 
@@ -469,7 +563,7 @@ impl Tank {
     pub fn tick_minigun_spin(&mut self, dt: f32) {
         if self.minigun_burst.is_some() {
             self.minigun_cycle_timer =
-                (self.minigun_cycle_timer + dt) % (MINIGUN_CYCLE_SECONDS * 3.0);
+                (self.minigun_cycle_timer + dt) % (tuning().minigun_cycle_seconds * 3.0);
         }
     }
 
@@ -477,7 +571,7 @@ impl Tank {
     /// now - see `minigun_cycle_timer`'s doc comment for why this is a
     /// discrete frame index, not a rotation angle.
     fn minigun_cycle_frame(&self) -> i32 {
-        ((self.minigun_cycle_timer / MINIGUN_CYCLE_SECONDS) as i32).clamp(0, 2)
+        ((self.minigun_cycle_timer / tuning().minigun_cycle_seconds) as i32).clamp(0, 2)
     }
 
     /// Small phase offset (seconds) derived from screen position so that several
@@ -496,37 +590,43 @@ impl Tank {
         self.size() * TANK_HULL_FRACTION
     }
 
-    /// Physics-collider half-extents (x, y) for this tank's hull, in world
-    /// px, oriented for the given facing - `along_x` true when facing
-    /// Left/Right (width and height swap from the sprite's own "facing up"
-    /// reference frame), matching `simulation::facing_along_x`. Distinct from
-    /// `hull_size` above: this is the real per-row rectangle
-    /// (TANK_HULL_BBOX_BY_ROW) the physics collider is actually sized from -
-    /// see `simulation::drive_tank`/`Physics::resize_collider`.
+    /// Damage-box half-extents (x, y) for this tank's hull, in world px,
+    /// oriented for the given facing - `along_x` true when facing Left/Right
+    /// (width and height swap from the sprite's own "facing up" reference
+    /// frame), matching `facing_along_x`. Distinct from `hull_size` above:
+    /// this is the real per-row rectangle (TANK_HULL_BBOX_BY_ROW) - the full
+    /// visible hull silhouette - that the projectile hit test checks. The
+    /// solid *movement* collider is smaller: see `move_half_extents` below.
     pub fn hull_half_extents(&self, along_x: bool) -> (f32, f32) {
         let (w, h) = TANK_HULL_BBOX_BY_ROW[self.row as usize];
         let (w, h) = if along_x { (h, w) } else { (w, h) };
         (w * 0.5 * self.scale, h * 0.5 * self.scale)
     }
 
+    /// Movement-collider half-extents (x, y): `hull_half_extents` scaled
+    /// down by TANK_MOVE_BBOX_FRACTION (see that constant's doc comment for
+    /// the damage-box-vs-movement-box split). This is the overall footprint
+    /// the physics body actually blocks with (`Physics::spawn_tank`/
+    /// `resize_collider` - which additionally round its corners, keeping
+    /// this exact footprint; see `physics::tank_corner_radius`).
+    pub fn move_half_extents(&self, along_x: bool) -> (f32, f32) {
+        let (hx, hy) = self.hull_half_extents(along_x);
+        (hx * TANK_MOVE_BBOX_FRACTION, hy * TANK_MOVE_BBOX_FRACTION)
+    }
+
     /// True when `rotation` currently faces Left/Right rather than Up/Down -
-    /// shared by every method below that needs to know which axis is the
-    /// hull's "long" one. `rotation` is always exactly one of
-    /// `Dir::rotation()`'s four values (see `Tank::control`), so a plain
+    /// which axis is the hull's "long" one. `rotation` is always exactly one
+    /// of `Dir::rotation()`'s four values (see `Tank::control`), so a plain
     /// `==` match is exact here, no epsilon needed.
-    fn facing_along_x(&self) -> bool {
+    pub fn facing_along_x(&self) -> bool {
         self.rotation == Dir::Right.rotation() || self.rotation == Dir::Left.rotation()
     }
 
     /// This tank's hull collider footprint in world space right now -
     /// `position` as the center (the hull box is symmetric front-to-back
     /// and side-to-side, so it never needs an offset) and
-    /// `hull_half_extents` oriented for the current facing. A convenience
-    /// over calling `hull_half_extents` directly for a caller that doesn't
-    /// already have `along_x` in hand (shell-hit testing, see
-    /// `simulation::swept_shell_target`) - `simulation::drive_tank`'s own
-    /// resize call site still calls `hull_half_extents` directly since it
-    /// already knows the along_x it's transitioning *to*.
+    /// `hull_half_extents` oriented for the current facing - the hull box
+    /// the projectile hit test checks (`simulation::hits::Terrain::sweep`).
     pub fn hull_bbox_world(&self) -> (Position, Position) {
         let (hw, hh) = self.hull_half_extents(self.facing_along_x());
         (self.position, Position::new(hw, hh))
@@ -534,11 +634,9 @@ impl Tank {
 
     /// World-space center and half-extents of this tank's turret+barrel
     /// bounding box (`TANK_TURRET_BBOX_BY_ROW`) at its current `rotation` -
-    /// backs both the "I" key debug inspect overlay
-    /// (`game.rs::draw_tank_inspect`) and `Tank::turret_hit_sensor`'s
-    /// shape/position (kept in sync on every facing change by
-    /// `simulation::drive_tank`, same trigger as the hull collider's own
-    /// resize). Unlike `hull_half_extents`'s `along_x` swap (safe because
+    /// the second box the projectile hit test checks, and what the "I" key
+    /// debug inspect overlay (`game.rs::draw_tank_inspect`) draws.
+    /// Unlike `hull_half_extents`'s `along_x` swap (safe because
     /// the hull box is roughly centered on the tank), the turret+barrel box
     /// is off-center - the barrel extends it well past the tile center
     /// toward the front - so this needs a real per-direction rotation of
@@ -576,19 +674,25 @@ impl Tank {
         (center, Position::new(hw * self.scale, hh * self.scale))
     }
 
-    /// A safe circular over-approximation of this tank's real (rectangular,
-    /// per-row) physics footprint at its current facing - the true
-    /// bounding-circle radius (hypot of both half-extents from
-    /// `hull_half_extents`), rather than the uniform `hull_size() * 0.5`
-    /// approximation. Used anywhere collision math is circle-based (AI
-    /// predictive avoidance - `ai.rs`'s `Mover.radius`/`AvoidCtx.radius`) so
-    /// it never assumes a tank is smaller than the collider
-    /// `Physics::resize_collider` actually gave it - a mismatch that let the
-    /// AI drive tanks (titan/leviathan especially) into obstacles/other
-    /// tanks it believed were clear, wedging them until an external impulse
-    /// (a shell hit, or the player ramming through) dislodged them.
+    /// A safe circular over-approximation of this tank's real (per-row)
+    /// physics footprint at its current facing - the bounding-circle radius
+    /// (hypot of both half-extents) of the *movement* collider
+    /// (`move_half_extents`, the box the physics body actually blocks
+    /// with - the corner rounding only ever cuts inside that box, so this
+    /// still never under-estimates it), rather than the uniform
+    /// `hull_size() * 0.5` approximation. Used anywhere collision math is
+    /// circle-based (AI predictive avoidance - `ai.rs`'s
+    /// `Mover.radius`/`AvoidCtx.radius`) so it never assumes a tank is
+    /// smaller than the collider `Physics::resize_collider` actually gave
+    /// it - a mismatch that let the AI drive tanks (titan/leviathan
+    /// especially) into obstacles/other tanks it believed were clear,
+    /// wedging them until an external impulse (a shell hit, or the player
+    /// ramming through) dislodged them. Tracking the movement box rather
+    /// than the full damage box also means the shrink
+    /// (TANK_MOVE_BBOX_FRACTION) automatically buys the pathfinder tighter
+    /// clearance margins - see `battlefield::max_tank_avoidance_radius`.
     pub fn avoidance_radius(&self) -> f32 {
-        let (hx, hy) = self.hull_half_extents(self.facing_along_x());
+        let (hx, hy) = self.move_half_extents(self.facing_along_x());
         (hx * hx + hy * hy).sqrt()
     }
 
@@ -604,19 +708,19 @@ impl Tank {
     /// two `super_*` chassis are heavier (sluggish, more drift, shove lighter
     /// tanks further than they get shoved back).
     pub fn mass(&self) -> f32 {
-        self.scale * self.scale * TANK_CHASSIS_MASS_FACTOR_BY_ROW[self.row as usize]
+        self.scale * self.scale * tuning().tank_mass_factor[self.row as usize]
     }
 
     /// Recharge ammo over time toward MAX_SHELLS, one shell per interval.
     pub fn tick_recharge(&mut self, dt: f32) {
-        if self.shells_ammo >= MAX_SHELLS {
+        if self.shells_ammo >= tuning().max_shells {
             self.recharge_timer = 0.0;
             return;
         }
         self.recharge_timer += dt;
-        while self.recharge_timer >= crate::SHELL_RECHARGE_SECONDS && self.shells_ammo < MAX_SHELLS
+        while self.recharge_timer >= tuning().shell_recharge_seconds && self.shells_ammo < tuning().max_shells
         {
-            self.recharge_timer -= crate::SHELL_RECHARGE_SECONDS;
+            self.recharge_timer -= tuning().shell_recharge_seconds;
             self.shells_ammo += 1;
         }
     }
@@ -626,7 +730,7 @@ impl Tank {
     pub fn tick_wreck(&mut self, dt: f32) {
         if self.is_wreck() {
             // Cap the timer so it doesn't grow unbounded once the fire is out.
-            self.wreck_timer = (self.wreck_timer + dt).min(WRECK_BURN_SECONDS);
+            self.wreck_timer = (self.wreck_timer + dt).min(tuning().wreck_burn_seconds);
         }
     }
 
@@ -634,7 +738,7 @@ impl Tank {
     /// damage (shell, ram, or explosion splash) so its overhead health bar
     /// shows/refreshes for another HEALTH_BAR_OVERHEAD_SECONDS.
     pub fn mark_hit(&mut self) {
-        self.hit_flash_timer = crate::HEALTH_BAR_OVERHEAD_SECONDS;
+        self.hit_flash_timer = tuning().health_bar_overhead_seconds;
     }
 
     /// Decide this tank's rotation and commanded velocity for one frame.
@@ -672,7 +776,7 @@ impl Tank {
         } else if diff < -180.0 {
             diff += 360.0;
         }
-        let max_step = TANK_VISUAL_TURN_SPEED_DEG * dt;
+        let max_step = tuning().tank_visual_turn_speed_deg * dt;
         self.visual_rotation = (self.visual_rotation + diff.clamp(-max_step, max_step)) % 360.0;
     }
 
@@ -689,7 +793,7 @@ impl Tank {
         } else if diff < -180.0 {
             diff += 360.0;
         }
-        let max_step = TANK_TURRET_VISUAL_TURN_SPEED_DEG * dt;
+        let max_step = tuning().tank_turret_visual_turn_speed_deg * dt;
         self.turret_visual_rotation =
             (self.turret_visual_rotation + diff.clamp(-max_step, max_step)) % 360.0;
     }
@@ -754,6 +858,46 @@ pub fn draw_tank(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank) {
     );
 }
 
+/// Draw the rainbow shield ring while `Tank::shield_timer` is running: six
+/// 60-degree arcs, each one hue step apart, all cycling through the rainbow
+/// at SHIELD_GLOW_HUE_HZ (offset by `anim_phase` so neighbouring tanks
+/// don't cycle in lockstep), plus a faint disc of the leading hue inside.
+/// Radius breathes gently around `Tank::size() * SHIELD_GLOW_RADIUS_FACTOR`
+/// and everything fades over the final SHIELD_GLOW_FADE_SECONDS. Called
+/// before `draw_tank_shadow`, so the ring is a translucent ground decal
+/// under the whole tank - the sprite stays crisp and only the part reaching
+/// past the hull shows. Centered on `tank.position`, not the rear-shifted
+/// `draw_pivot`.
+pub fn draw_tank_shield(d: &mut impl RaylibDraw, tank: &Tank, time: f32) {
+    if !tank.is_shielded() || tank.is_wreck() {
+        return;
+    }
+    let t = tuning();
+    let fade = if t.shield_glow_fade_seconds > 0.0 {
+        (tank.shield_timer / t.shield_glow_fade_seconds).min(1.0)
+    } else {
+        1.0
+    };
+    let pulse = ((time + tank.anim_phase()) * std::f32::consts::TAU * 1.5).sin() * 0.5 + 0.5;
+    let radius = tank.size() * t.shield_glow_radius_factor * (0.94 + 0.06 * pulse);
+    let thickness = radius * 0.22;
+    let base_hue = (time * t.shield_glow_hue_hz * 360.0 + tank.anim_phase() * 360.0).rem_euclid(360.0);
+    let with_alpha = |c: Color, alpha: f32| Color::new(c.r, c.g, c.b, (alpha * fade).clamp(0.0, 255.0) as u8);
+
+    let fill = Color::color_from_hsv(base_hue, 0.6, 1.0);
+    d.draw_circle_v(tank.position, radius - thickness, with_alpha(fill, 22.0 + 10.0 * pulse));
+    const ARCS: i32 = 6;
+    let step = 360.0 / ARCS as f32;
+    for i in 0..ARCS {
+        let hue = (base_hue + i as f32 * step).rem_euclid(360.0);
+        // Arcs rotate with the hue so the bands visibly travel around the
+        // ring rather than just recolouring in place.
+        let start = i as f32 * step - base_hue;
+        let color = with_alpha(Color::color_from_hsv(hue, 0.85, 1.0), 95.0 + 30.0 * pulse);
+        d.draw_ring(tank.position, radius - thickness, radius, start, start + step, 12, color);
+    }
+}
+
 /// Draw this tank's drop shadow: the same two layers (each at its own eased
 /// angle, matching `draw_tank`), offset toward a fixed screen-space direction
 /// and tinted flat black - see docs/sprite-shadows-design.md. Must be called
@@ -766,13 +910,13 @@ pub fn draw_tank_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tan
     let size = tank.size();
 
     let dest = Rectangle::new(
-        tank.position.x + SHADOW_DIR_X * TANK_SHADOW_OFFSET,
-        tank.position.y + SHADOW_DIR_Y * TANK_SHADOW_OFFSET,
+        tank.position.x + tuning().shadow_dir_x * tuning().tank_shadow_offset,
+        tank.position.y + tuning().shadow_dir_y * tuning().tank_shadow_offset,
         size,
         size,
     );
     let origin = draw_pivot(size);
-    let shadow = Color::new(0, 0, 0, (255.0 * TANK_SHADOW_OPACITY) as u8);
+    let shadow = Color::new(0, 0, 0, (255.0 * tuning().tank_shadow_opacity) as u8);
 
     d.draw_texture_pro(texture, hull_src, dest, origin, tank.visual_rotation, shadow);
     d.draw_texture_pro(
@@ -859,12 +1003,102 @@ pub fn draw_minigun_mount_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, t
     );
     let size = MINIGUN_MOUNT_TEXTURE_SIZE * tank.scale * MINIGUN_MOUNT_SCALE;
     let dest = Rectangle::new(
-        tank.position.x + SHADOW_DIR_X * TANK_SHADOW_OFFSET,
-        tank.position.y + SHADOW_DIR_Y * TANK_SHADOW_OFFSET,
+        tank.position.x + tuning().shadow_dir_x * tuning().tank_shadow_offset,
+        tank.position.y + tuning().shadow_dir_y * tuning().tank_shadow_offset,
         size,
         size,
     );
     let origin = draw_pivot(size);
-    let shadow = Color::new(0, 0, 0, (255.0 * TANK_SHADOW_OPACITY) as u8);
+    let shadow = Color::new(0, 0, 0, (255.0 * tuning().tank_shadow_opacity) as u8);
     d.draw_texture_pro(texture, src, dest, origin, tank.turret_visual_rotation, shadow);
+}
+
+// The FIFO weapon-inventory rule (`weapon_queue`/`active_weapon`/
+// `enqueue_weapon`) is pure `Tank` logic - no physics, no rendering - so it
+// gets a real unit test rather than staying play-tested-only, same
+// reasoning as `pathfind.rs`'s tests (see CLAUDE.md's testing section).
+// Ammo is set directly here instead of going through `Game`'s pickup
+// collection; the contract under test is the queue's, and the collection
+// block's only obligations (enqueue before granting ammo, one call per
+// pickup) are documented on `enqueue_weapon` itself.
+#[cfg(test)]
+mod weapon_queue_tests {
+    use super::*;
+
+    #[test]
+    fn fifo_weapon_rotation() {
+        let mut tank = Tank::default();
+        assert_eq!(tank.active_weapon(), ActiveWeapon::Shell);
+
+        // A first pickup arms immediately (nothing ahead of it in line).
+        tank.enqueue_weapon(ActiveWeapon::Minigun);
+        tank.minigun_ammo += 40;
+        assert_eq!(tank.active_weapon(), ActiveWeapon::Minigun);
+
+        // A later pickup queues *behind* the live weapon - it must not
+        // hijack the trigger.
+        tank.enqueue_weapon(ActiveWeapon::Laser);
+        tank.laser_charges += 3;
+        assert_eq!(tank.active_weapon(), ActiveWeapon::Minigun);
+
+        // Depleting the live weapon hands the trigger to the next in line.
+        tank.minigun_ammo = 0;
+        assert_eq!(tank.active_weapon(), ActiveWeapon::Laser);
+
+        // Re-collecting a spent weapon re-enters at the *back* of the
+        // line, never resurrecting in its old front slot.
+        tank.enqueue_weapon(ActiveWeapon::Minigun);
+        tank.minigun_ammo += 40;
+        assert_eq!(tank.active_weapon(), ActiveWeapon::Laser);
+
+        // The rotation keeps advancing in pickup order, and only a fully
+        // spent queue falls back to shells.
+        tank.laser_charges = 0;
+        assert_eq!(tank.active_weapon(), ActiveWeapon::Minigun);
+        tank.minigun_ammo = 0;
+        assert_eq!(tank.active_weapon(), ActiveWeapon::Shell);
+    }
+
+    #[test]
+    fn topping_up_keeps_place_in_line() {
+        let mut tank = Tank::default();
+        tank.enqueue_weapon(ActiveWeapon::Plasma);
+        tank.plasma_ammo += 4;
+        tank.enqueue_weapon(ActiveWeapon::Minigun);
+        tank.minigun_ammo += 40;
+        // Re-collecting the still-stocked live weapon is a plain top-up: no
+        // duplicate entry, no change to the order.
+        tank.enqueue_weapon(ActiveWeapon::Plasma);
+        tank.plasma_ammo += 4;
+        assert_eq!(
+            tank.weapon_queue,
+            vec![ActiveWeapon::Plasma, ActiveWeapon::Minigun]
+        );
+        assert_eq!(tank.active_weapon(), ActiveWeapon::Plasma);
+    }
+}
+
+#[cfg(test)]
+mod shield_tests {
+    use super::*;
+
+    #[test]
+    fn a_shielded_tank_takes_no_damage() {
+        let mut tank = Tank { damage: 10.0, shield_timer: 1.0, ..Tank::default() };
+        tank.take_damage(30.0, MAX_DAMAGE);
+        assert_eq!(tank.damage, 10.0, "shield absorbs the whole hit");
+        assert!(!tank.is_wreck());
+    }
+
+    #[test]
+    fn damage_lands_and_caps_once_the_shield_is_gone() {
+        let mut tank = Tank { damage: 10.0, shield_timer: 0.0, ..Tank::default() };
+        tank.take_damage(30.0, MAX_DAMAGE);
+        assert_eq!(tank.damage, 40.0);
+        tank.take_damage(1000.0, MAX_DAMAGE - 1.0);
+        assert_eq!(tank.damage, MAX_DAMAGE - 1.0, "capped at the caller's ceiling");
+        assert!(!tank.is_wreck());
+        tank.take_damage(1000.0, MAX_DAMAGE);
+        assert!(tank.is_wreck());
+    }
 }

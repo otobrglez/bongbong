@@ -2,14 +2,15 @@
 //! `pickup::PickupKind::Laser` pickup (see `pickup.rs`, `Tank::laser_charges`,
 //! `Tank::laser_variant`). Unlike `Shell` there's no travel time or
 //! sprite-sheet animation to animate through - firing resolves the hit the
-//! same frame (see `simulation.rs`'s `laser_shot`/`resolve_laser_hit`, which
-//! reuse `swept_shell_target`'s pure-geometry segment test), and this type is
+//! same frame (see `simulation::weapons` and `Game::resolve_lasers`, which
+//! reuse `hits::Terrain::sweep`'s segment test), and this type is
 //! purely the resulting on-screen flash: a short-lived line from muzzle to
 //! whatever it hit, ticked down and dropped once its display window elapses.
 
+use crate::tuning::tuning;
 use sola_raylib::prelude::*;
 
-use crate::{LASER_BEAM_DISPLAY_SECONDS, LASER_BEAM_WIDTH, LASER_BLUE_DAMAGE_FACTOR, Position};
+use crate::{Position};
 
 /// Which of the two laser variants a charge batch is - rolled once per
 /// `PickupKind::Laser` pickup (see `LASER_BLUE_PICKUP_CHANCE`) and carried on
@@ -28,7 +29,7 @@ impl LaserVariant {
     pub fn damage_factor(self) -> f32 {
         match self {
             LaserVariant::Red => 1.0,
-            LaserVariant::Blue => LASER_BLUE_DAMAGE_FACTOR,
+            LaserVariant::Blue => tuning().laser_blue_damage_factor,
         }
     }
 
@@ -57,7 +58,7 @@ impl LaserBeam {
             start,
             end,
             variant,
-            timer: LASER_BEAM_DISPLAY_SECONDS,
+            timer: tuning().laser_beam_display_seconds,
         }
     }
 
@@ -76,10 +77,10 @@ impl LaserBeam {
 /// `LaserVariant::colors`) - rather than a sprite, since an instant beam has
 /// no frames to animate through.
 pub fn draw_laser_beam(d: &mut impl RaylibDraw, beam: &LaserBeam) {
-    let alpha = (beam.timer / LASER_BEAM_DISPLAY_SECONDS).clamp(0.0, 1.0);
+    let alpha = (beam.timer / tuning().laser_beam_display_seconds).clamp(0.0, 1.0);
     let (glow, core) = beam.variant.colors();
     let glow = Color::new(glow.r, glow.g, glow.b, (glow.a as f32 * alpha) as u8);
     let core = Color::new(core.r, core.g, core.b, (core.a as f32 * alpha) as u8);
-    d.draw_line_ex(beam.start, beam.end, LASER_BEAM_WIDTH, glow);
-    d.draw_line_ex(beam.start, beam.end, LASER_BEAM_WIDTH * 0.4, core);
+    d.draw_line_ex(beam.start, beam.end, tuning().laser_beam_width, glow);
+    d.draw_line_ex(beam.start, beam.end, tuning().laser_beam_width * 0.4, core);
 }

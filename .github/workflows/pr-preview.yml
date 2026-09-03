@@ -1,0 +1,176 @@
+name: PR Preview
+
+# Deploys every open PR as its own ephemeral Cloudflare Worker
+# (`bongbong-pr-<N>`, static assets from site/dist) so the game can be played
+# at https://pr-<N>.preview.bongbong.io before merging. The worker is deployed
+# from a generated per-PR config (wrangler.preview.toml, derived from
+# wrangler.toml — see the "Write preview wrangler config" step) that attaches
+# that hostname as a Workers Custom Domain: Cloudflare creates the DNS record
+# and issues the TLS cert automatically, and both are removed again when the
+# worker is deleted. The cert is per-hostname (pr-N.preview.* sits one level
+# below the universal *.bongbong.io cert), so the first visit right after a
+# deploy can take a minute or two before TLS is live — the comment includes
+# the instantly-available workers.dev URL as a fallback.
+# The preview URL is posted/updated as a sticky PR comment; when the PR
+# closes (merged or not) the worker is deleted. Production (the "bongbong"
+# worker serving bongbong.io) is never touched — previews only ever own
+# pr-<N>.preview.bongbong.io.
+#
+# Requires the same repo secrets as cloudflare-deploy.yml:
+#   CLOUDFLARE_API_TOKEN — account-level Workers Scripts:Edit plus zone-scoped
+#     Workers Routes:Edit for the custom-domain attach. The live account token
+#     ("bongbong-token") already carries both — account Workers perms + a
+#     "Workers Routes Write on all zones" policy (verified in the dashboard,
+#     2026-08-27) — matching Cloudflare's own "Edit Cloudflare Workers"
+#     template. DNS records/certs for custom domains are Cloudflare-managed
+#     via the Workers API, so no DNS:Edit or SSL:Edit is needed.
+#   CLOUDFLARE_ACCOUNT_ID
+#
+# Fork PRs: `pull_request` runs from forks get no secrets, so previews only
+# deploy for same-repo branches. That's the intended security posture — do
+# NOT switch this to `pull_request_target` to "fix" fork previews (it would
+# hand untrusted PR code the Cloudflare token).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches:
+      - master
+
+# One group per PR: a new push cancels the superseded build, and a close
+# event cancels any in-flight build so teardown can't race a deploy that
+# would re-create the worker after deletion.
+concurrency:
+  group: pr-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+
+      # Previews are the QA surface: build with the dev-tools feature so the
+      # runtime tuning panel (docs/runtime-tuning-design.md) is available at
+      # pr-<N>.preview.bongbong.io. Production (cloudflare-deploy.yml)
+      # never passes this.
+      - name: Build web (wasm + Astro site, dev-tools)
+        uses: ./.github/actions/build-web
+        with:
+          cargo-features: --features dev-tools
+
+      # A per-PR config rather than `--name` overrides, because the custom
+      # domain can only be expressed in config (routes with custom_domain),
+      # not as a CLI flag. compatibility_date is read out of wrangler.toml so
+      # it has a single source; workers_dev stays on as the instant fallback
+      # URL while the custom domain's cert provisions. Gitignored — CI-only.
+      - name: Write preview wrangler config
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          compat=$(grep -E '^compatibility_date' wrangler.toml)
+          cat > wrangler.preview.toml <<EOF
+          name = "bongbong-pr-${PR_NUMBER}"
+          ${compat}
+          workers_dev = true
+          routes = [
+            { pattern = "pr-${PR_NUMBER}.preview.bongbong.io", custom_domain = true }
+          ]
+
+          [assets]
+          directory = "site/dist"
+          EOF
+          cat wrangler.preview.toml
+
+      - name: Deploy preview worker
+        id: deploy
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --config wrangler.preview.toml
+
+      - name: Comment preview URL on PR
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment-url }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        with:
+          script: |
+            const marker = '<!-- bongbong-pr-preview -->';
+            const url = `https://pr-${process.env.PR_NUMBER}.preview.bongbong.io`;
+            const fallback = process.env.DEPLOYMENT_URL;
+            const sha = process.env.HEAD_SHA.slice(0, 7);
+            const lines = [marker, `🎮 **Play this PR:** ${url}`];
+            if (fallback && !fallback.includes('preview.bongbong.io')) {
+              lines.push('', `If TLS is still provisioning there (first minute or two after a deploy), use ${fallback}.`);
+            }
+            lines.push('', `Updated for ${sha}. The preview worker is deleted automatically when this PR closes.`);
+            const body = lines.join('\n');
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner, repo, issue_number, per_page: 100,
+            });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+  teardown:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-22.04
+    permissions:
+      pull-requests: write
+    steps:
+      # No checkout: the merge ref may already be gone for a closed PR, and
+      # deletion only needs the worker name, not wrangler.toml. wrangler runs
+      # non-interactively in CI, so `delete` needs no confirmation. Deleting
+      # the worker also detaches its pr-<N>.preview.bongbong.io custom domain
+      # (DNS record + cert are Cloudflare-managed and removed with it). A
+      # missing worker (PR closed before any successful deploy, or secrets
+      # absent on a fork PR) is treated as already-clean, not a failure; any
+      # other wrangler error — including a refusal over the attached custom
+      # domain, should wrangler ever require force for that — still fails the
+      # job visibly.
+      - name: Delete preview worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WORKER_NAME: bongbong-pr-${{ github.event.pull_request.number }}
+        run: |
+          set +e
+          out=$(npx wrangler@4 delete --name "$WORKER_NAME" 2>&1)
+          status=$?
+          echo "$out"
+          if [[ $status -ne 0 ]]; then
+            if grep -qiE 'not found|10007' <<<"$out"; then
+              echo "Worker $WORKER_NAME does not exist — nothing to delete."
+              exit 0
+            fi
+            exit $status
+          fi
+
+      - name: Mark preview comment as removed
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = '<!-- bongbong-pr-preview -->';
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner, repo, issue_number, per_page: 100,
+            });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (!existing) return; // no preview was ever deployed — nothing to mark
+            const body = [
+              marker,
+              '🧹 The preview worker for this PR has been removed.',
+            ].join('\n');
+            await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });

@@ -17,6 +17,27 @@ use std::collections::{BinaryHeap, VecDeque};
 
 use crate::Position;
 
+/// Connected-component labels over a `Grid`'s open cells - see
+/// `Grid::components`.
+pub struct Components {
+    /// Per cell: 0 for blocked, otherwise a component id starting at 1.
+    label: Vec<u32>,
+}
+
+impl Components {
+    /// True if a cardinal-step route exists between `from` and `to` on
+    /// `grid` (the grid these labels were built from) - equivalent to
+    /// `grid.next_step(from, to).is_some() || grid.same_cell(from, to)`,
+    /// including A*'s rule that the start and goal cells count as open.
+    pub fn connected(&self, grid: &Grid, from: Position, to: Position) -> bool {
+        if grid.same_cell(from, to) {
+            return true;
+        }
+        let from_labels: Vec<u32> = grid.component_labels(self, from).collect();
+        grid.component_labels(self, to).any(|l| from_labels.contains(&l))
+    }
+}
+
 /// A coarse occupancy grid over a rectangular area, marking which cells are
 /// blocked (a static obstacle occupies them, plus a clearance margin - see
 /// `build`) versus open.
@@ -30,10 +51,27 @@ pub struct Grid {
 impl Grid {
     /// Build a grid covering `0..width, 0..height` in `cell_size`-px cells.
     /// `obstacles` is every blocking shape as (center, half-extent); each
-    /// obstacle blocks every cell within `half_extent + margin` of its
-    /// center (in both axes) - `margin` should be roughly a tank's own half
-    /// -hull, so pathfinding never routes through a gap too narrow for a
-    /// tank to actually fit through.
+    /// obstacle blocks every cell whose *center* lies within
+    /// `half_extent + margin` of its own center (in both axes) - `margin`
+    /// should be a tank's worst-case half-hull, so pathfinding never
+    /// routes through a gap too narrow for a tank to actually fit through.
+    ///
+    /// Cell-center occupancy, not any-overlap, on purpose: `next_step`
+    /// steers tanks *at cell centers* (`center_of`), so "can a tank's
+    /// center stand at this cell's center" is exactly the question the
+    /// router needs answered, and a center outside `reach` already
+    /// guarantees the full `margin` of hull clearance from the obstacle's
+    /// edge. The earlier any-overlap rule ("blocked if the inflated box
+    /// touches any part of the cell") stacked a second, hidden margin of
+    /// up to a whole `cell_size` per side on top of the real one: a
+    /// physically drivable corridor needed ~`2*margin + obstacle +
+    /// 2*cell_size` of gap before a single open cell survived
+    /// rasterization, which on the shipped default map sealed most of the
+    /// battlefield into disconnected pockets - engagement slots all
+    /// failed their reachability check, `Ai::steer` fell back to `wander`
+    /// nearly everywhere, and pocketed tanks visibly spun in place
+    /// (found via the probe harness's `spin`/`churn` sweeps and a
+    /// frame-by-frame slot trace; see docs/gameplay-verification-design.md).
     pub fn build(
         width: f32,
         height: f32,
@@ -47,17 +85,16 @@ impl Grid {
 
         for (center, half_extent) in obstacles {
             let reach = half_extent + margin;
-            // Lowest/highest cell index the span [center-reach, center+reach]
-            // actually has positive overlap with, not just touches - the
-            // upper bound in particular needs `ceil(..) - 1`, not `floor`:
-            // a span whose edge lands exactly on a cell boundary (e.g. an
-            // obstacle exactly `cell_size` wide) touches the next cell at a
-            // single point without overlapping its interior, and `floor`
-            // alone would wrongly mark that next cell blocked too.
-            let min_col_raw = ((center.x - reach) / cell_size).floor() as isize;
-            let max_col_raw = ((center.x + reach) / cell_size).ceil() as isize - 1;
-            let min_row_raw = ((center.y - reach) / cell_size).floor() as isize;
-            let max_row_raw = ((center.y + reach) / cell_size).ceil() as isize - 1;
+            // Lowest/highest cell index whose center (at `(i + 0.5) *
+            // cell_size`) falls inside `[center-reach, center+reach]`:
+            // solving `(i + 0.5) * cell_size >= center - reach` for the
+            // lower bound and the mirror for the upper. A center landing
+            // exactly on the boundary counts as blocked (it would leave
+            // exactly zero hull clearance).
+            let min_col_raw = ((center.x - reach) / cell_size - 0.5).ceil() as isize;
+            let max_col_raw = ((center.x + reach) / cell_size - 0.5).floor() as isize;
+            let min_row_raw = ((center.y - reach) / cell_size - 0.5).ceil() as isize;
+            let max_row_raw = ((center.y + reach) / cell_size - 0.5).floor() as isize;
             // Entirely outside the grid on at least one axis - no cell to mark.
             if max_col_raw < 0
                 || min_col_raw >= cols as isize
@@ -159,7 +196,7 @@ impl Grid {
     /// asked about. A tank can end up here two ways: several
     /// independently-placed obstacles each individually respecting their
     /// own clearance from it, but collectively still sealing every
-    /// direction out (see `battlefield::relocate_boxed_in_tanks`, which
+    /// direction out (see `battlefield::relocate_unusable_spawns`, which
     /// checks every tank against this once at round init and relocates any
     /// that fail); or getting rammed/knocked into a tight pocket mid-round.
     /// Either way, resampling a *different* target (see `Ai::wander`)
@@ -174,6 +211,21 @@ impl Grid {
         self.neighbors_all_blocked(self.cell_of(from))
     }
 
+    /// True if a tank standing at `at` can actually be routed from there:
+    /// its own cell is open (it is not sitting inside an obstacle's
+    /// footprint) and it is not `boxed_in`. This is the spawn-legality
+    /// test `battlefield::enemy_spawn_legal` and
+    /// `battlefield::relocate_unusable_spawns` share - a spawn that fails
+    /// it is either physically inside terrain or sealed in, and either
+    /// way needs relocating, so the two tests stay one check.
+    pub fn usable(&self, at: Position) -> bool {
+        self.usable_cell(self.cell_of(at))
+    }
+
+    fn usable_cell(&self, cell: (usize, usize)) -> bool {
+        !self.blocked_at(cell) && !self.neighbors_all_blocked(cell)
+    }
+
     /// The center of the nearest cell to `from` that is both unblocked and
     /// not itself boxed in (see `boxed_in`) - i.e. a genuinely usable spot,
     /// not just a technically-open single cell surrounded by blocked ones
@@ -186,7 +238,7 @@ impl Grid {
     /// way to know about each other). BFS outward cardinally from `from`'s
     /// own cell, so "nearest" means fewest grid steps, not raw pixel
     /// distance - used once per flagged tank at round init (see
-    /// `battlefield::relocate_boxed_in_tanks`), not a hot path. Falls back
+    /// `battlefield::relocate_unusable_spawns`), not a hot path. Falls back
     /// to `from` itself if the entire grid turns out unusable (never
     /// actually hit in practice - a real obstacle layout leaves most of the
     /// battlefield open - but a plain fallback beats a panic over a
@@ -199,7 +251,7 @@ impl Grid {
         let mut queue = VecDeque::new();
         queue.push_back(start);
         while let Some(cell) = queue.pop_front() {
-            if !self.blocked_at(cell) && !self.neighbors_all_blocked(cell) {
+            if self.usable_cell(cell) {
                 let center = self.center_of(cell);
                 if avoid.iter().all(|&p| center.distance_to(p) >= avoid_clear) {
                     return center;
@@ -213,6 +265,57 @@ impl Grid {
             }
         }
         from
+    }
+
+    /// Label every open cell with its connected component (4-neighbour
+    /// flood fill) so `Components::connected` answers "does a route exist
+    /// between these two points" in O(1) - the same answer `next_step`
+    /// would give, without running A* per query. Build once per frame and
+    /// query as often as needed (engagement-slot validation asks up to 16
+    /// times per enemy).
+    pub fn components(&self) -> Components {
+        let mut label = vec![0u32; self.cols * self.rows];
+        let mut next = 1u32;
+        let mut stack = Vec::new();
+        for row in 0..self.rows {
+            for col in 0..self.cols {
+                let idx = row * self.cols + col;
+                if self.blocked[idx] || label[idx] != 0 {
+                    continue;
+                }
+                label[idx] = next;
+                stack.push((col, row));
+                while let Some(cell) = stack.pop() {
+                    for n in self.neighbors(cell) {
+                        let ni = n.1 * self.cols + n.0;
+                        if !self.blocked[ni] && label[ni] == 0 {
+                            label[ni] = next;
+                            stack.push(n);
+                        }
+                    }
+                }
+                next += 1;
+            }
+        }
+        Components { label }
+    }
+
+    /// The component labels a point can start a route from: its own cell's
+    /// label if that cell is open, otherwise the labels of its open
+    /// cardinal neighbours - mirroring `search`, which treats the start and
+    /// goal cells as open regardless of `blocked`.
+    fn component_labels(&self, comps: &Components, p: Position) -> impl Iterator<Item = u32> + '_ {
+        let cell = self.cell_of(p);
+        let own = if self.blocked_at(cell) { 0 } else { comps.label[cell.1 * self.cols + cell.0] };
+        let labels: Vec<u32> = if own != 0 {
+            vec![own]
+        } else {
+            self.neighbors(cell)
+                .map(|n| comps.label[n.1 * self.cols + n.0])
+                .filter(|&l| l != 0)
+                .collect()
+        };
+        labels.into_iter()
     }
 
     fn neighbors(&self, cell: (usize, usize)) -> impl Iterator<Item = (usize, usize)> + '_ {
@@ -247,7 +350,37 @@ impl Grid {
         if start == goal {
             return None;
         }
+        self.search(start, goal)
+            .map(|hit| self.center_of(hit.first_step))
+    }
 
+    /// Shortest-path length from `from` to `to`, in grid steps (cells, not
+    /// pixels - multiply by the grid's cell size for a px length): the same
+    /// route `next_step` walks one step at a time, measured whole. `Some(0)`
+    /// when the two points already share a cell - unlike `next_step`, which
+    /// deliberately conflates "already arrived" with "unreachable" into
+    /// `None` (see `same_cell`), a cost query has room to keep the two
+    /// apart: `None` here always means genuinely no path. Start and goal
+    /// cells are treated as open exactly like `next_step` does. Built for
+    /// external tooling (the probe's path-stretch metric - see
+    /// docs/gameplay-verification-design.md §5), not the per-frame AI path,
+    /// so it's fine to call this once per round rather than per tick.
+    pub fn path_cost(&self, from: Position, to: Position) -> Option<u32> {
+        let start = self.cell_of(from);
+        let goal = self.cell_of(to);
+        if start == goal {
+            return Some(0);
+        }
+        self.search(start, goal).map(|hit| hit.cost)
+    }
+
+    /// The one A* implementation both `next_step` and `path_cost` share -
+    /// callers guarantee `start != goal` (each handles the same-cell case
+    /// itself, with different semantics). Returns `None` when no path
+    /// exists; on a hit, both the first cell to move into (what `next_step`
+    /// wants) and the whole path's step count (what `path_cost` wants),
+    /// since the goal-pop moment has both on hand anyway.
+    fn search(&self, start: (usize, usize), goal: (usize, usize)) -> Option<SearchHit> {
         let mut open = BinaryHeap::new();
         let mut came_from = vec![None; self.cols * self.rows];
         let mut g_score = vec![f32::INFINITY; self.cols * self.rows];
@@ -279,15 +412,19 @@ impl Grid {
             closed[idx(cell)] = true;
 
             if cell == goal {
+                // Unit-cost steps summed in f32 stay exact integers (well
+                // under f32's 2^24 exact-integer range on any sane grid),
+                // so this cast is lossless.
+                let cost = g_score[idx(cell)] as u32;
                 // Walk back to the step right after `start`.
                 let mut step = cell;
                 while let Some(prev) = came_from[idx(step)] {
                     if prev == start {
-                        return Some(self.center_of(step));
+                        return Some(SearchHit { first_step: step, cost });
                     }
                     step = prev;
                 }
-                return Some(self.center_of(step));
+                return Some(SearchHit { first_step: step, cost });
             }
             for next in self.neighbors(cell) {
                 if closed[idx(next)] {
@@ -309,6 +446,14 @@ impl Grid {
         }
         None
     }
+}
+
+/// What one successful `Grid::search` run hands back to its two public
+/// wrappers: the first cell to step into (for `next_step`) and the full
+/// path's step count (for `path_cost`).
+struct SearchHit {
+    first_step: (usize, usize),
+    cost: u32,
 }
 
 /// Manhattan distance in cells - admissible since movement is 4-directional
@@ -414,5 +559,123 @@ mod tests {
             }
         }
         assert!(reached_other_side, "path never made it past the wall");
+    }
+
+    #[test]
+    fn path_cost_same_cell_is_zero() {
+        // Unlike `next_step` (whose same-cell answer is `None` - see
+        // `same_cell`'s doc comment), a cost query keeps "already there"
+        // and "unreachable" apart.
+        let grid = Grid::build(400.0, 400.0, 40.0, 0.0, std::iter::empty());
+        assert_eq!(
+            grid.path_cost(Position::new(10.0, 10.0), Position::new(15.0, 15.0)),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn path_cost_open_field_is_manhattan_cell_distance() {
+        let grid = Grid::build(400.0, 400.0, 40.0, 0.0, std::iter::empty());
+        // Straight along one row: cells (0,0) -> (8,0).
+        assert_eq!(
+            grid.path_cost(Position::new(20.0, 20.0), Position::new(340.0, 20.0)),
+            Some(8)
+        );
+        // Diagonal corner-to-corner: cardinal-only movement pays the full
+        // Manhattan sum, cells (0,0) -> (8,8).
+        assert_eq!(
+            grid.path_cost(Position::new(20.0, 20.0), Position::new(340.0, 340.0)),
+            Some(16)
+        );
+    }
+
+    #[test]
+    fn path_cost_detour_exceeds_open_field_cost() {
+        // Same wall-with-one-gap layout as
+        // `routes_around_a_wall_spanning_obstacle`: crossing the middle
+        // column is only possible at the bottom row, so the shortest path
+        // from (0,0) to (9,0) is down 9, across 9, back up 9 - strictly
+        // more than the open-field Manhattan distance of 9.
+        let cell = 40.0;
+        let width = 400.0;
+        let height = 400.0;
+        let gap_row = (height / cell) as usize - 1;
+        let mut obstacles = Vec::new();
+        for row in 0..(height / cell) as usize {
+            if row == gap_row {
+                continue;
+            }
+            obstacles.push((
+                Position::new(width / 2.0 + cell / 2.0, row as f32 * cell + cell / 2.0),
+                cell / 2.0,
+            ));
+        }
+        let grid = Grid::build(width, height, cell, 0.0, obstacles.into_iter());
+        let from = Position::new(20.0, 20.0);
+        let to = Position::new(380.0, 20.0);
+
+        let open = Grid::build(width, height, cell, 0.0, std::iter::empty());
+        let open_cost = open.path_cost(from, to).expect("open field always has a path");
+        let detour_cost = grid.path_cost(from, to).expect("gap route should exist");
+        assert_eq!(open_cost, 9);
+        assert_eq!(detour_cost, 27);
+        assert!(detour_cost > open_cost);
+    }
+
+    #[test]
+    fn path_cost_sealed_goal_is_none() {
+        // Corner goal cell (9,0) with both of its in-bounds neighbors -
+        // (8,0) and (9,1) - blocked: the goal cell itself counts as open
+        // (same rule as `next_step`), but nothing can ever reach it.
+        let cell = 40.0;
+        let obstacles = vec![
+            (Position::new(340.0, 20.0), cell / 2.0),
+            (Position::new(380.0, 60.0), cell / 2.0),
+        ];
+        let grid = Grid::build(400.0, 400.0, cell, 0.0, obstacles.into_iter());
+        assert_eq!(
+            grid.path_cost(Position::new(20.0, 20.0), Position::new(380.0, 20.0)),
+            None
+        );
+    }
+}
+
+#[cfg(test)]
+mod component_tests {
+    use super::*;
+
+    /// A full-height wall down the middle with no gap: the two halves are
+    /// separate components, so `connected` must agree with `next_step`.
+    #[test]
+    fn components_agree_with_astar_across_a_sealed_wall() {
+        let cell = 40.0;
+        let obstacles = (0..10).map(|row| {
+            (Position::new(220.0, row as f32 * cell + cell / 2.0), cell / 2.0)
+        });
+        let grid = Grid::build(400.0, 400.0, cell, 0.0, obstacles);
+        let comps = grid.components();
+        let left = Position::new(20.0, 20.0);
+        let right = Position::new(380.0, 20.0);
+        let left_low = Position::new(20.0, 380.0);
+        assert!(grid.next_step(left, right).is_none());
+        assert!(!comps.connected(&grid, left, right));
+        assert!(grid.next_step(left, left_low).is_some());
+        assert!(comps.connected(&grid, left, left_low));
+        // Same cell counts as connected, matching `same_cell`.
+        assert!(comps.connected(&grid, left, Position::new(25.0, 25.0)));
+    }
+
+    /// A point standing inside a blocked cell (an obstacle's clearance
+    /// margin) still routes out through its open neighbours - A* treats
+    /// the start cell as open, and so must this.
+    #[test]
+    fn blocked_start_cell_uses_its_open_neighbours() {
+        let cell = 40.0;
+        let grid = Grid::build(400.0, 400.0, cell, 0.0, std::iter::once((Position::new(220.0, 220.0), cell / 2.0)));
+        let comps = grid.components();
+        let inside = Position::new(220.0, 220.0);
+        let far = Position::new(20.0, 20.0);
+        assert!(grid.next_step(inside, far).is_some());
+        assert!(comps.connected(&grid, inside, far));
     }
 }

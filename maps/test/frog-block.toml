@@ -1,0 +1,29 @@
+# maps/test/ fixture - an adversarial layout provoking one known failure
+# class; see docs/gameplay-verification-design.md #2.2. Hand-authored:
+# re-saving from the map editor would drop these comments.
+#
+# frog-block: a north-south corridor two grid columns wide - and
+# the frog parked dead-center inside, plugging both columns.
+# Regression trap for the frog-missing-from-the-nav-grid bug:
+# healthy routing goes around the structure; jamming against the
+# frog inside the corridor means the grid no longer knows it.
+
+version = 1
+tanks = 4
+
+cells."17,8" = { kind = "wall", material = "iron" }
+cells."23,8" = { kind = "wall", material = "iron" }
+cells."17,9" = { kind = "wall", material = "iron" }
+cells."23,9" = { kind = "wall", material = "iron" }
+cells."17,10" = { kind = "wall", material = "iron" }
+cells."23,10" = { kind = "wall", material = "iron" }
+cells."17,11" = { kind = "wall", material = "iron" }
+cells."20,11" = { kind = "frog" }
+cells."23,11" = { kind = "wall", material = "iron" }
+cells."17,12" = { kind = "wall", material = "iron" }
+cells."23,12" = { kind = "wall", material = "iron" }
+cells."17,13" = { kind = "wall", material = "iron" }
+cells."23,13" = { kind = "wall", material = "iron" }
+cells."17,14" = { kind = "wall", material = "iron" }
+cells."23,14" = { kind = "wall", material = "iron" }
+cells."20,17" = { kind = "start" }

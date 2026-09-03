@@ -119,9 +119,29 @@ Feeding variable framerates (`rl.get_frame_time()`) directly into Rapier creates
   in the game whose physics body is torn down mid-round outside of a shell
   finishing its animation.
 
-### Collision groups (replacing `Owner`-based filtering)
+### Projectile hit testing (revised 2026-09-02)
 
-**Done**, as a follow-up pass after this migration. Each tank owns a
+**Supersedes the "Collision groups" section and phase 5 below.** Projectiles
+no longer have a physics body at all, and tanks no longer carry hit-sensor
+colliders. Hit detection is `simulation::hits::Terrain::sweep`: a per-frame
+snapshot of the static terrain (obstacle tiles with their seams closed via
+`battlefield::tile_hull_half_extent`, the frog, the four walls from
+`battlefield::wall_rects`) plus the live tanks' `hull_bbox_world`/
+`turret_bbox_world` boxes, swept by the projectile's whole movement segment
+this frame (`prev_position..position`, integrated inside the fixed-step
+loop alongside the rapier step) with nearest-entry-time selection. The
+shooter's own boxes are skipped by comparing `Owner`, so collision groups
+became unnecessary. Reasons: the sensor pass could only see where a
+projectile *ended up* (the swept test had already been added as its
+fallback and was in practice running every frame anyway), the two tests
+could disagree on hit priority, and dropping the sensor plumbing removed
+`owner_group`/`add_hit_sensor`/`resize_hit_sensor`/`spawn_shell`/
+`set_kinematic_position`/`intersecting` from `physics.rs` outright. Rapier
+now only ever sees solid bodies: tanks, walls, obstacles, the frog.
+
+### Collision groups (replacing `Owner`-based filtering) - superseded
+
+**Done at the time, since removed** (see the section above). Each tank owned a
 collision-group bit (`physics::owner_group`, slot 0 = player, slot `i + 1` =
 `Owner::Enemy(i)`); a tank's hit sensor (`add_hit_sensor`) has that bit as
 its sole membership, and each shell it fires (`spawn_shell`) filters that bit
@@ -156,13 +176,10 @@ The AI (`ai.rs`) relies heavily on predicting collisions. Instead of querying th
   `set_kinematic_position`, `position`, `touching`, `intersecting`,
   `collider_of`, and a `Position <-> glam::Vec2` conversion pair (rapier
   2D/f32 uses glam, not nalgebra, for its `Vector` type).
-- `Tank` gains `body: Option<RigidBodyHandle>` (the solid hull collider) and
-  `hit_sensor: Option<ColliderHandle>` (a second, sprite-sized sensor
-  collider used only for shell hits - see phase 5's note on why one
-  collider wasn't enough). `Tank::knockback` is gone (see phase 4: the
-  residual is derived fresh each frame instead of stored).
-- `Shell` gains `body: Option<RigidBodyHandle>` (a kinematic sensor; see
-  phase 5).
+- `Tank` gains `body: Option<RigidBodyHandle>` (the solid hull collider).
+  `Tank::knockback` is gone (see phase 4: the residual is derived fresh
+  each frame instead of stored). The hit-sensor collider and `Shell::body`
+  described in phase 5 were later removed - see "Projectile hit testing".
 - `Game` owns one `Physics` instance plus a `physics_accumulator: f32` for
   the fixed-timestep loop. `ram()`/`explosion_hit()` take `&mut Physics` and
   call `apply_impulse` directly on each tank's own body.
@@ -230,7 +247,9 @@ The AI (`ai.rs`) relies heavily on predicting collisions. Instead of querying th
    two consecutive screenshots with no key input showed zero pixel drift on
    any tank, confirming no coasting was introduced; ram/explosion
    damage-and-shove still visibly functioning.)
-5. **Shells as sensors.** (Completed, with one scope addition discovered
+5. **Shells as sensors.** (Completed at the time; superseded on 2026-09-02
+   by the swept hit test - see "Projectile hit testing" above. Kept as
+   history.) (Completed, with one scope addition discovered
    during implementation: a tank now carries **two** colliders, not one.
    Reusing the existing hull collider (sized to `Tank::hull_size`, used for
    tank-vs-tank/wall blocking) for shell-hit detection too would have

@@ -23,6 +23,23 @@ projectile read as the same weapon - distinct from `laser.png`'s beam and
 `minigun.png`'s muzzle sparks, since the plasma cannon's identity is the bolt
 itself, not a stream. Regenerate with `python3 tools/gen_plasma_pickup.py`.
 
+`speedup.png` is likewise not from the pack - generated from scratch by
+`tools/gen_speedup_pickup.py`, same raw-PNG-bytes/no-Pillow convention as
+`laser.png`/`minigun.png`/`plasma.png` above and the same not-palette-
+snapped, loud/high-contrast treatment. A filled lightning-bolt polygon
+(electric yellow, dark outline, white-hot core down the middle) - the
+universal "speed boost" symbol, distinct from the other three's beam/
+sparks/orb. Regenerate with `python3 tools/gen_speedup_pickup.py`.
+
+`shield.png` is derived from `health.png` below: `tools/gen_shield_pickup.py`
+reads the health pack and sweeps its red through the rainbow (diagonally,
+red top-left to violet bottom-right), leaving the white cross, dark outline
+and all shading untouched - so the rainbow shield reads as "a health pack,
+but rainbow", the pickup it always appears next to. Same raw-PNG-bytes/no-
+Pillow convention as the generators above, plus a minimal PNG decoder for
+the source. Being a recolour of the pack's art, it inherits `health.png`'s
+provenance and terms. Regenerate with `python3 tools/gen_shield_pickup.py`.
+
 `health.png` and `ammo.png` are `health-red 32px.png` and
 `ammo-pistol 32px.png` from the third-party "2D Health & Ammo Pickups v6.2"
 pack (`bongbong-assets/2D Health & Ammo Pickups v6.2/32px/`), copied in

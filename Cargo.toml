@@ -1,5 +1,5 @@
 [package]
-version = "0.0.14"
+version = "0.0.16"
 name = "bongbong"
 edition = "2024"
 default-run = "bongbong"
@@ -11,14 +11,22 @@ hecs = "0.11"
 rand = "0.10.2"
 rapier2d = "0.35.2"
 serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1"
 sola-raylib = { version = "6.3.0" }
-toml = "0.8"
+toml = "1"
 
 # Dev-only battlefield map editor (docs/map-editor-design.md) - off by
 # default so it never ships in a release build. Enable with
 # `cargo run --features map-editor -- --editor`.
 [features]
 map-editor = []
+# Dev/QA-only runtime tuning surface (docs/runtime-tuning-design.md): the
+# `extern "C"` API in src/capi.rs that the web page's tuning panel drives,
+# exported from the wasm binary via build.rs. Off by default so a release
+# build carries no writer for the tuning table (the table itself -
+# src/tuning.rs - is always compiled; only the ways to change it at runtime
+# are gated). Enable with `--features dev-tools` (`just build-web-dev`).
+dev-tools = []
 
 # The profile that 'dist' will build with
 [profile.dist]

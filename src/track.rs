@@ -1,6 +1,7 @@
+use crate::tuning::tuning;
 use sola_raylib::prelude::*;
 
-use crate::{Position, TRACK_LIFETIME, TRACK_TEXTURE_SIZE};
+use crate::{Position, TRACK_TEXTURE_SIZE};
 
 /// A single tread mark pressed into the ground where a tank drove. Marks are laid
 /// down along a tank's path and slowly fade out as they age.
@@ -25,13 +26,13 @@ impl Track {
     /// dropped.
     pub fn tick(&mut self, dt: f32) -> bool {
         self.age += dt;
-        self.age >= TRACK_LIFETIME
+        self.age >= tuning().track_lifetime
     }
 
     /// Remaining opacity, fading linearly from `max_opacity` (fresh) to 0.0
     /// (gone) so marks stay faint even when brand new.
     fn opacity(&self) -> f32 {
-        (1.0 - self.age / TRACK_LIFETIME).clamp(0.0, 1.0) * self.max_opacity
+        (1.0 - self.age / tuning().track_lifetime).clamp(0.0, 1.0) * self.max_opacity
     }
 }
 

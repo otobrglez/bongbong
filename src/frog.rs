@@ -13,16 +13,27 @@
 //! loss (`Game::update`), the same severity as the player's own tank being
 //! destroyed.
 
+use crate::tuning::tuning;
 use rapier2d::prelude::RigidBodyHandle;
 use sola_raylib::prelude::*;
 
 use crate::{
-    FROG_ATTACK_COOLDOWN_SECONDS, FROG_ATTACK_FPS, FROG_ATTACK_FRAMES, FROG_ATTACK_RANGE_FACTOR,
-    FROG_ATTACK_SECONDS, FROG_AVOID_RANGE_FACTOR, FROG_EXPLOSION_FPS, FROG_EXPLOSION_FRAMES,
-    FROG_HOP_COOLDOWN_SECONDS,
-    FROG_HOP_DISTANCE_FACTOR, FROG_HOP_FPS, FROG_HOP_FRAMES, FROG_HOP_SECONDS, FROG_HURT_FPS,
-    FROG_HURT_FRAMES, FROG_HURT_SECONDS, FROG_IDLE_FPS, FROG_IDLE_FRAMES, FROG_SCALE,
-    FROG_TEXTURE_SIZE, HEALTH_BAR_OVERHEAD_SECONDS, Position,
+    FROG_ATTACK_FPS,
+    FROG_ATTACK_FRAMES,
+    FROG_ATTACK_SECONDS,
+    FROG_EXPLOSION_FPS,
+    FROG_EXPLOSION_FRAMES,
+    FROG_HOP_FPS,
+    FROG_HOP_FRAMES,
+    FROG_HOP_SECONDS,
+    FROG_HURT_FPS,
+    FROG_HURT_FRAMES,
+    FROG_HURT_SECONDS,
+    FROG_IDLE_FPS,
+    FROG_IDLE_FRAMES,
+    FROG_SCALE,
+    FROG_TEXTURE_SIZE,
+    Position,
 };
 
 pub struct Frog {
@@ -115,19 +126,19 @@ impl Frog {
     /// comment for why this is a factor of `size()` rather than a flat
     /// constant.
     pub fn hop_distance(&self) -> f32 {
-        self.size() * FROG_HOP_DISTANCE_FACTOR
+        self.size() * tuning().frog_hop_distance_factor
     }
 
     /// How close (px, center to center) a tank has to get before the frog
     /// bites it - see FROG_HOP_DISTANCE_FACTOR's comment.
     pub fn attack_range(&self) -> f32 {
-        self.size() * FROG_ATTACK_RANGE_FACTOR
+        self.size() * tuning().frog_attack_range_factor
     }
 
     /// How close (px, center to center) a tank has to get before the frog
     /// tries to hop away from it - see FROG_AVOID_RANGE_FACTOR's comment.
     pub fn avoid_range(&self) -> f32 {
-        self.size() * FROG_AVOID_RANGE_FACTOR
+        self.size() * tuning().frog_avoid_range_factor
     }
 
     /// Whether a hop can trigger right now - alive, and not still cooling
@@ -154,7 +165,7 @@ impl Frog {
         }
         self.health = (self.health - amount).max(0.0);
         self.hurt_timer = FROG_HURT_SECONDS;
-        self.hit_flash_timer = HEALTH_BAR_OVERHEAD_SECONDS;
+        self.hit_flash_timer = tuning().health_bar_overhead_seconds;
         if self.health <= 0.0 {
             self.death_elapsed = Some(0.0);
         }
@@ -169,7 +180,7 @@ impl Frog {
         self.hop_start = self.position;
         self.hop_end = target;
         self.hop_timer = FROG_HOP_SECONDS;
-        self.hop_cooldown = FROG_HOP_COOLDOWN_SECONDS;
+        self.hop_cooldown = tuning().frog_hop_cooldown_seconds;
     }
 
     /// Register that the frog just bit a tank - starts the cosmetic Attack
@@ -178,7 +189,7 @@ impl Frog {
     /// own reaction/pacing state.
     pub fn start_attack(&mut self) {
         self.attack_timer = FROG_ATTACK_SECONDS;
-        self.attack_cooldown = FROG_ATTACK_COOLDOWN_SECONDS;
+        self.attack_cooldown = tuning().frog_attack_cooldown_seconds;
     }
 
     /// Advance this frog's per-frame animation/cooldown timers, including

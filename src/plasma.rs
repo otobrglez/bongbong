@@ -15,7 +15,7 @@
 //! mechanism `laser::LaserVariant` already uses.
 //!
 //! Mirrors `shell::Shell`'s shape (position/velocity/rotation/timer/owner/
-//! body/shadow_offset/flew) and its 7-state Fire/Flying/Hit choreography,
+//! shadow_offset/prev_position) and its 7-state Fire/Flying/Hit choreography,
 //! but - like `bullet::Bullet` - carries no chassis-matched sprite row (the
 //! sheet's two rows are `PlasmaVariant`, a property of the ammo, not the
 //! shooter chassis - every tank's bolts of the same variant look identical,
@@ -23,15 +23,15 @@
 //! ricochets (no `bounces_left`): a heavy plasma bolt detonates on first
 //! contact rather than bouncing off Iron/walls the way a shell can.
 
-use rapier2d::prelude::RigidBodyHandle;
+use crate::tuning::tuning;
 use sola_raylib::prelude::*;
 
 use crate::shell::Owner;
 use crate::tank::Tank;
 use crate::{
-    PLASMA_FLYING_CYCLE_FPS, PLASMA_PULSE_HZ, PLASMA_PULSE_MAX_SCALE, PLASMA_PULSE_MIN_SCALE,
-    PLASMA_PURPLE_DAMAGE_FACTOR, PLASMA_SCALE, PLASMA_SHADOW_OPACITY, PLASMA_SPEED,
-    PLASMA_TEXTURE_SIZE, Position, SHADOW_DIR_X, SHADOW_DIR_Y, TANK_MUZZLE_FORWARD_OFFSET_BY_ROW,
+    PLASMA_SCALE,
+    PLASMA_TEXTURE_SIZE,
+    Position,
 };
 
 /// A plasma bolt's lifecycle - same overall Fire/Flying/Hit shape as
@@ -102,7 +102,7 @@ impl PlasmaVariant {
     pub fn damage_factor(self) -> f32 {
         match self {
             PlasmaVariant::Teal => 1.0,
-            PlasmaVariant::Purple => PLASMA_PURPLE_DAMAGE_FACTOR,
+            PlasmaVariant::Purple => tuning().plasma_purple_damage_factor,
         }
     }
 
@@ -163,13 +163,12 @@ pub struct Plasma {
     /// scale damage by chassis class (TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW),
     /// same as `Shell::shooter_row`/`Bullet::shooter_row`.
     pub shooter_row: i32,
-    /// This bolt's rapier sensor body - same role as `Shell::body`.
-    pub body: Option<RigidBodyHandle>,
     /// This bolt's drop-shadow distance (px), rolled once at fire time -
     /// same role as `Shell::shadow_offset`.
     pub shadow_offset: f32,
-    /// Same tunneling-guard purpose as `Shell::flew` - see its doc comment.
-    pub flew: bool,
+    /// Same role as `Shell::prev_position` - the start of this frame's
+    /// swept hit segment, written by the simulation.
+    pub prev_position: Position,
 }
 
 impl Plasma {
@@ -187,25 +186,25 @@ impl Plasma {
     ) -> Plasma {
         let rot = (tank.rotation + aim_offset).to_radians();
         let dir = Vector2::new(rot.sin(), -rot.cos());
-        let muzzle = TANK_MUZZLE_FORWARD_OFFSET_BY_ROW[tank.row as usize] * tank.scale;
+        let muzzle = tuning().tank_muzzle_forward_offset[tank.row as usize] * tank.scale;
         let hull_rot = tank.rotation.to_radians();
         let lateral = Vector2::new(hull_rot.cos(), hull_rot.sin()) * (lateral_offset * tank.scale);
+        let position = Position::new(
+            tank.position.x + dir.x * muzzle + lateral.x,
+            tank.position.y + dir.y * muzzle + lateral.y,
+        );
         Plasma {
             state: PlasmaState::Fire0,
-            position: Position::new(
-                tank.position.x + dir.x * muzzle + lateral.x,
-                tank.position.y + dir.y * muzzle + lateral.y,
-            ),
-            velocity: Vector2::new(dir.x * PLASMA_SPEED, dir.y * PLASMA_SPEED),
+            position,
+            velocity: Vector2::new(dir.x * tuning().plasma_speed, dir.y * tuning().plasma_speed),
             rotation: tank.rotation + aim_offset,
             timer: 0.0,
             done: false,
             owner,
             variant,
             shooter_row: tank.row,
-            body: None,
             shadow_offset: 0.0,
-            flew: false,
+            prev_position: position,
         }
     }
 
@@ -213,12 +212,10 @@ impl Plasma {
     /// states. Mirrors `Shell::update` exactly, just over `PlasmaState`.
     pub fn update(&mut self, dt: f32) {
         self.timer += dt;
-        self.flew = false;
 
         if self.state == PlasmaState::Flying {
             self.position.x += self.velocity.x * dt;
             self.position.y += self.velocity.y * dt;
-            self.flew = true;
             return;
         }
 
@@ -267,7 +264,7 @@ fn source_rec(col: i32, variant: PlasmaVariant) -> Rectangle {
 /// cycle through them already reads as pulsing without needing to sample a
 /// continuous curve.
 fn flying_col(timer: f32) -> i32 {
-    3 + (timer * PLASMA_FLYING_CYCLE_FPS) as i32 % 4
+    3 + (timer * tuning().plasma_flying_cycle_fps) as i32 % 4
 }
 
 /// The in-flight glow halo's current radius/alpha, derived from `timer`
@@ -279,8 +276,8 @@ fn flying_col(timer: f32) -> i32 {
 /// PLASMA_FLYING_CYCLE_FPS's doc comment.
 fn glow_pulse(plasma: &Plasma) -> (f32, f32) {
     let base_radius = PLASMA_TEXTURE_SIZE * PLASMA_SCALE * 0.5;
-    let phase = (plasma.timer * PLASMA_PULSE_HZ * std::f32::consts::TAU).sin() * 0.5 + 0.5;
-    let scale = PLASMA_PULSE_MIN_SCALE + (PLASMA_PULSE_MAX_SCALE - PLASMA_PULSE_MIN_SCALE) * phase;
+    let phase = (plasma.timer * tuning().plasma_pulse_hz * std::f32::consts::TAU).sin() * 0.5 + 0.5;
+    let scale = tuning().plasma_pulse_min_scale + (tuning().plasma_pulse_max_scale - tuning().plasma_pulse_min_scale) * phase;
     (base_radius * scale, phase)
 }
 
@@ -329,12 +326,12 @@ pub fn draw_plasma_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, plasma: 
     let src = source_rec(flying_col(plasma.timer), plasma.variant);
     let size = PLASMA_TEXTURE_SIZE * PLASMA_SCALE;
     let dest = Rectangle::new(
-        plasma.position.x + SHADOW_DIR_X * plasma.shadow_offset,
-        plasma.position.y + SHADOW_DIR_Y * plasma.shadow_offset,
+        plasma.position.x + tuning().shadow_dir_x * plasma.shadow_offset,
+        plasma.position.y + tuning().shadow_dir_y * plasma.shadow_offset,
         size,
         size,
     );
     let origin = Vector2::new(size / 2.0, size / 2.0);
-    let shadow = Color::new(0, 0, 0, (255.0 * PLASMA_SHADOW_OPACITY) as u8);
+    let shadow = Color::new(0, 0, 0, (255.0 * tuning().plasma_shadow_opacity) as u8);
     d.draw_texture_pro(texture, src, dest, origin, plasma.rotation, shadow);
 }

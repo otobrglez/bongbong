@@ -4,6 +4,7 @@
 //! and friends without that dependency leaking back into `simulation.rs`.
 //! See `simulation.rs`'s module doc comment for the other half of this split.
 
+use crate::tuning::tuning;
 use sola_raylib::prelude::*;
 
 use crate::ai::Ai;
@@ -17,16 +18,32 @@ use crate::plasma::{Plasma, PlasmaState, draw_plasma, draw_plasma_shadow};
 use crate::shell::{Shell, ShellState, draw_shell, draw_shell_shadow};
 use crate::shockwave::{RippleFx, screen_to_ripple_uv};
 use crate::simulation::{Game, Outcome};
-use crate::tank::{Dir, Tank, draw_minigun_mount, draw_minigun_mount_shadow, draw_tank, draw_tank_shadow};
+use crate::tank::{
+    ActiveWeapon, Dir, Tank, draw_minigun_mount, draw_minigun_mount_shadow, draw_tank, draw_tank_shadow, draw_tank_shield,
+};
 use crate::track::draw_track;
 use crate::{
-    CAMERA_SHAKE_DURATION, CAMERA_SHAKE_FREQUENCY, CAMERA_SHAKE_MAGNITUDE, HEALTH_BAR_CELL_SIZE,
-    HEALTH_BAR_COLUMNS, HEALTH_BAR_HUD_SCALE, HEALTH_BAR_ICON_OFFSET,
-    HEALTH_BAR_ICON_SIZE, HEALTH_BAR_OVERHEAD_FADE_SECONDS, HEALTH_BAR_OVERHEAD_GAP,
-    HEALTH_BAR_VARIANTS, HUD_CRITICAL_THRESHOLD, HUD_FONT_SIZE, HUD_MARGIN, HUD_VERSION_FONT_SIZE,
-    HUD_WARN_THRESHOLD, IMPACT_FLASH_QUAD_RADIUS, MAX_DAMAGE, MAX_SHELLS,
-    MUZZLE_FLASH_QUAD_RADIUS,
+    HEALTH_BAR_CELL_SIZE,
+    HEALTH_BAR_COLUMNS,
+    HEALTH_BAR_HUD_SCALE,
+    HEALTH_BAR_ICON_OFFSET,
+    HEALTH_BAR_ICON_SIZE,
+    HEALTH_BAR_OVERHEAD_GAP,
+    HEALTH_BAR_VARIANTS,
+    HUD_FONT_SIZE,
+    HUD_MARGIN,
+    HUD_VERSION_FONT_SIZE,
+    MAX_DAMAGE,
 };
+
+/// Accent colors for the HUD's special-weapon ammo counts - one per
+/// `ActiveWeapon` special, shared between each weapon's count number
+/// (always) and its label (only while that weapon is the live one - see
+/// the HUD block in `render`). Presentation-only, so they live here rather
+/// than in `lib.rs`'s gameplay tuning.
+const HUD_LASER_COLOR: Color = Color::new(255, 60, 160, 255);
+const HUD_PLASMA_COLOR: Color = Color::new(60, 220, 200, 255);
+const HUD_MINIGUN_COLOR: Color = Color::new(190, 205, 215, 255);
 
 /// The sprite atlases `Game::render` draws from, bundled into one param instead
 /// of four so the signature doesn't grow with every new texture.
@@ -48,6 +65,8 @@ pub struct Textures<'a> {
     pub pickup_laser: &'a Texture2D,
     pub pickup_minigun: &'a Texture2D,
     pub pickup_plasma: &'a Texture2D,
+    pub pickup_speedup: &'a Texture2D,
+    pub pickup_shield: &'a Texture2D,
     /// The minigun barrel-cluster overlay drawn on a tank's turret while it
     /// holds minigun ammo - see `tank::draw_minigun_mount`. One shared
     /// texture for every chassis (unlike `tanks` above), not a sheet.
@@ -86,7 +105,7 @@ impl Game {
         // neutral - raylib's draw_text is single-color per call, so the line
         // is drawn as four adjacent segments rather than one string. Widths
         // measured here for the same reason as version_hud_w above.
-        let (hp, shells, laser_charges, plasma_ammo, minigun_ammo) =
+        let (hp, shells, laser_charges, plasma_ammo, minigun_ammo, active_weapon) =
             crate::simulation::with_tank(&self.world, player, |t| {
                 (
                     (MAX_DAMAGE - t.damage).max(0.0).round() as i32,
@@ -94,11 +113,21 @@ impl Game {
                     t.laser_charges,
                     t.plasma_ammo,
                     t.minigun_ammo,
+                    t.active_weapon(),
                 )
             });
-        let shells_color = hud_number_color(shells as f32, MAX_SHELLS as f32);
+        let shells_color = hud_number_color(shells as f32, tuning().max_shells as f32);
         let hp_color = hud_number_color(hp as f32, MAX_DAMAGE);
-        let hud_shells_label = "SHELLS: ";
+        // The live weapon's label carries a ">" marker (and, for a special,
+        // its own accent color instead of neutral white) - with the FIFO
+        // weapon queue (see `Tank::weapon_queue`), several stocked weapons
+        // can show at once and the counts alone no longer say which one
+        // the trigger actually fires.
+        let hud_shells_label = if active_weapon == ActiveWeapon::Shell {
+            ">SHELLS: "
+        } else {
+            "SHELLS: "
+        };
         let hud_shells_num = format!("{shells}");
         let hud_mid = "   HP: ";
         let hud_hp_num = format!("{hp}");
@@ -109,27 +138,33 @@ impl Game {
         // Only shown while charged (see Tank::laser_charges) - most rounds
         // never pick one up, so this stays out of the way otherwise.
         let hud_laser = (laser_charges > 0).then(|| {
-            let label = "   LASER: ";
+            let active = active_weapon == ActiveWeapon::Laser;
+            let label = if active { "   >LASER: " } else { "   LASER: " };
             let num = format!("{laser_charges}");
             let label_w = rl.measure_text(label, HUD_FONT_SIZE);
             let num_w = rl.measure_text(&num, HUD_FONT_SIZE);
-            (label, num, label_w, num_w)
+            let label_color = if active { HUD_LASER_COLOR } else { Color::WHITE };
+            (label, num, label_w, num_w, label_color)
         });
         // Same idea as hud_laser above, for plasma ammo.
         let hud_plasma = (plasma_ammo > 0).then(|| {
-            let label = "   PLASMA: ";
+            let active = active_weapon == ActiveWeapon::Plasma;
+            let label = if active { "   >PLASMA: " } else { "   PLASMA: " };
             let num = format!("{plasma_ammo}");
             let label_w = rl.measure_text(label, HUD_FONT_SIZE);
             let num_w = rl.measure_text(&num, HUD_FONT_SIZE);
-            (label, num, label_w, num_w)
+            let label_color = if active { HUD_PLASMA_COLOR } else { Color::WHITE };
+            (label, num, label_w, num_w, label_color)
         });
         // Same idea as hud_laser above, for minigun ammo.
         let hud_minigun = (minigun_ammo > 0).then(|| {
-            let label = "   MINIGUN: ";
+            let active = active_weapon == ActiveWeapon::Minigun;
+            let label = if active { "   >MINIGUN: " } else { "   MINIGUN: " };
             let num = format!("{minigun_ammo}");
             let label_w = rl.measure_text(label, HUD_FONT_SIZE);
             let num_w = rl.measure_text(&num, HUD_FONT_SIZE);
-            (label, num, label_w, num_w)
+            let label_color = if active { HUD_MINIGUN_COLOR } else { Color::WHITE };
+            (label, num, label_w, num_w, label_color)
         });
 
         // health_bar.png source rect for the player's current HP fraction -
@@ -184,6 +219,8 @@ impl Game {
                     PickupKind::Laser => textures.pickup_laser,
                     PickupKind::Minigun => textures.pickup_minigun,
                     PickupKind::Plasma => textures.pickup_plasma,
+                    PickupKind::SpeedUp => textures.pickup_speedup,
+                    PickupKind::Shield => textures.pickup_shield,
                 };
                 draw_pickup(&mut d, texture, pickup);
             }
@@ -199,6 +236,7 @@ impl Game {
             );
 
             for tank in self.world.query::<&Tank>().with::<&Ai>().iter() {
+                draw_tank_shield(&mut d, tank, self.time);
                 if self.shadows_enabled {
                     draw_tank_shadow(&mut d, textures.tanks, tank);
                     draw_minigun_mount_shadow(&mut d, textures.minigun_mount, tank);
@@ -210,6 +248,7 @@ impl Game {
             }
 
             crate::simulation::with_tank(&self.world, player, |tank| {
+                draw_tank_shield(&mut d, tank, self.time);
                 if self.shadows_enabled {
                     draw_tank_shadow(&mut d, textures.tanks, tank);
                     draw_minigun_mount_shadow(&mut d, textures.minigun_mount, tank);
@@ -282,12 +321,12 @@ impl Game {
         // they're either their own small on-screen quad or meant to stay put.
         let mut blit_offset = Vector2::new(0.0, 0.0);
         if let Some(shock) = &self.shock {
-            let decay = (1.0 - shock.time / CAMERA_SHAKE_DURATION).max(0.0);
+            let decay = (1.0 - shock.time / tuning().camera_shake_duration).max(0.0);
             if decay > 0.0 {
-                let t = shock.time * CAMERA_SHAKE_FREQUENCY;
+                let t = shock.time * tuning().camera_shake_frequency;
                 blit_offset = Vector2::new(
-                    t.sin() * CAMERA_SHAKE_MAGNITUDE * decay,
-                    (t * 1.3 + 1.7).sin() * CAMERA_SHAKE_MAGNITUDE * decay,
+                    t.sin() * tuning().camera_shake_magnitude * decay,
+                    (t * 1.3 + 1.7).sin() * tuning().camera_shake_magnitude * decay,
                 );
             }
         }
@@ -320,7 +359,7 @@ impl Game {
                     .shader
                     .set_shader_value(effects.muzzle.time_loc, flash.time);
 
-                let r = MUZZLE_FLASH_QUAD_RADIUS;
+                let r = tuning().muzzle_flash_quad_radius;
                 let flash_source = Rectangle {
                     x: flash.center.x - r,
                     y: (screen_height as f32 - flash.center.y) - r,
@@ -360,7 +399,7 @@ impl Game {
                     .shader
                     .set_shader_value(effects.impact.time_loc, flash.time);
 
-                let r = IMPACT_FLASH_QUAD_RADIUS;
+                let r = tuning().impact_flash_quad_radius;
                 let flash_source = Rectangle {
                     x: flash.center.x - r,
                     y: (screen_height as f32 - flash.center.y) - r,
@@ -387,8 +426,8 @@ impl Game {
                 });
             }
 
-            // Debug inspect overlay: a bounding square plus a stat readout for
-            // every tank. Drawn here (screen space, post-composite) rather
+            // Debug inspect overlay: hitbox/collider outlines plus a stat
+            // readout for every tank. Drawn here (screen space, post-composite) rather
             // than into scene_target, so it's never warped by an in-flight
             // shockwave and always renders crisp - tank.position is already
             // screen pixels (no camera transform), so the two spaces line up
@@ -414,22 +453,22 @@ impl Game {
             hud_x += hud_mid_w;
             d.draw_text(&hud_hp_num, hud_x, hud_y, HUD_FONT_SIZE, hp_color);
             hud_x += hud_hp_num_w;
-            if let Some((label, num, label_w, num_w)) = &hud_laser {
-                d.draw_text(label, hud_x, hud_y, HUD_FONT_SIZE, Color::WHITE);
+            if let Some((label, num, label_w, num_w, label_color)) = &hud_laser {
+                d.draw_text(label, hud_x, hud_y, HUD_FONT_SIZE, *label_color);
                 hud_x += label_w;
-                d.draw_text(num, hud_x, hud_y, HUD_FONT_SIZE, Color::new(255, 60, 160, 255));
+                d.draw_text(num, hud_x, hud_y, HUD_FONT_SIZE, HUD_LASER_COLOR);
                 hud_x += num_w;
             }
-            if let Some((label, num, label_w, num_w)) = &hud_plasma {
-                d.draw_text(label, hud_x, hud_y, HUD_FONT_SIZE, Color::WHITE);
+            if let Some((label, num, label_w, num_w, label_color)) = &hud_plasma {
+                d.draw_text(label, hud_x, hud_y, HUD_FONT_SIZE, *label_color);
                 hud_x += label_w;
-                d.draw_text(num, hud_x, hud_y, HUD_FONT_SIZE, Color::new(60, 220, 200, 255));
+                d.draw_text(num, hud_x, hud_y, HUD_FONT_SIZE, HUD_PLASMA_COLOR);
                 hud_x += num_w;
             }
-            if let Some((label, num, label_w, num_w)) = &hud_minigun {
-                d.draw_text(label, hud_x, hud_y, HUD_FONT_SIZE, Color::WHITE);
+            if let Some((label, num, label_w, num_w, label_color)) = &hud_minigun {
+                d.draw_text(label, hud_x, hud_y, HUD_FONT_SIZE, *label_color);
                 hud_x += label_w;
-                d.draw_text(num, hud_x, hud_y, HUD_FONT_SIZE, Color::new(190, 205, 215, 255));
+                d.draw_text(num, hud_x, hud_y, HUD_FONT_SIZE, HUD_MINIGUN_COLOR);
                 hud_x += num_w;
             }
             hud_x += 12;
@@ -491,26 +530,34 @@ impl Game {
     }
 }
 
-/// Debug inspect-mode overlay for one tank: its actual hull collider box
-/// plus a second, visually distinct turret+barrel box (see
-/// `Game::inspect_enabled`, toggled by the "I" key), plus a small stat
-/// block - ammo, health, current speed and velocity for every tank, and
-/// additionally (`ai: Some`, i.e. this isn't the player) whether it's
-/// currently retreating to recharge and its fire cooldown, pulled straight
-/// from its `Ai` - the same state `ai.rs`'s `wants_retreat`/`fire_interval`
-/// act on. Purely diagnostic: reads state, draws it, mutates nothing.
+/// Debug inspect-mode overlay for one tank: its hull damage box, its
+/// turret+barrel damage box, and its (smaller, corner-rounded) movement
+/// collider (see `Game::inspect_enabled`, toggled by the "I" key), plus a
+/// small stat block - ammo, health, current speed and velocity for every
+/// tank, and additionally (`ai: Some`, i.e. this isn't the player) whether
+/// it's currently retreating to recharge and its fire cooldown, pulled
+/// straight from its `Ai` - the same state `ai.rs`'s
+/// `wants_retreat`/`fire_interval` act on. Purely diagnostic: reads state,
+/// draws it, mutates nothing.
 ///
-/// The first (lime/orange/gray) box is `Tank::hull_half_extents` - the same
-/// per-row (TANK_HULL_BBOX_BY_ROW), facing-oriented rectangle
-/// `simulation::drive_tank`/`Physics::resize_collider` actually gives this
-/// tank's movement collider, and (via `Tank::hit_sensor`) the shell-hit
-/// sensor covering the hull - not the full 32x32 sprite tile
-/// (`Tank::size`/`Tank::hull_size`), which is a uniform square padded well
-/// past the visible hull art on every row. The second (yellow) box is
-/// `Tank::turret_bbox_world` - the turret+barrel silhouette, backing
-/// `Tank::turret_hit_sensor` the same way. Together these two boxes are
-/// exactly what a shell can hit; this overlay draws the real hit-testing
-/// shape, not an approximation of it.
+/// Three shapes, each the *real* thing physics uses, not an approximation:
+/// - The lime/orange/gray box is `Tank::hull_half_extents` - the per-row
+///   (TANK_HULL_BBOX_BY_ROW), facing-oriented hull silhouette backing the
+///   projectile hit box (see `simulation::hits`) - not the full 32x32 sprite tile
+///   (`Tank::size`/`Tank::hull_size`), which is a uniform square padded
+///   well past the visible hull art on every row.
+/// - The yellow box is `Tank::turret_bbox_world` - the turret+barrel
+///   silhouette, hit-tested the same way. Together
+///   these two boxes are exactly what a shell can hit.
+/// - The sky-blue rounded box is `Tank::move_half_extents` +
+///   `physics::tank_corner_radius` - the solid movement collider walls/
+///   obstacles/other tanks actually block against, deliberately smaller
+///   and rounder than the damage boxes (see TANK_MOVE_BBOX_FRACTION/
+///   TANK_MOVE_CORNER_RADIUS in `lib.rs`). The visible gap between blue
+///   and lime is the tuning surface: widen it (smaller fraction) for more
+///   forgiving driving, shrink it if sprites start visibly clipping into
+///   walls. The stat block's MOVE line prints its current world-px size
+///   and corner radius for the same purpose.
 fn draw_tank_inspect(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>) {
     // Same "which axis is the long one" check as `Tank::avoidance_radius` -
     // tanks only ever face one of the four `Dir::rotation()` values, so an
@@ -543,9 +590,36 @@ fn draw_tank_inspect(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>) {
     let th = (turret_half.y * 2.0).round() as i32;
     d.draw_rectangle_lines(tx, ty, tw, th, Color::YELLOW);
 
+    // Movement collider (see the doc comment above): drawn with the exact
+    // clamped corner radius the physics shape carries
+    // (`physics::tank_corner_radius`), mapped onto raylib's relative
+    // roundness factor (corner radius = roundness * min(w, h) / 2, so the
+    // division below inverts that).
+    let (mx, my) = tank.move_half_extents(along_x);
+    let corner = crate::physics::tank_corner_radius((mx, my));
+    let move_rect = Rectangle::new(
+        tank.position.x - mx,
+        tank.position.y - my,
+        mx * 2.0,
+        my * 2.0,
+    );
+    d.draw_rectangle_rounded_lines(move_rect, corner / mx.min(my), 8, Color::SKYBLUE);
+
     let speed = (tank.velocity.x * tank.velocity.x + tank.velocity.y * tank.velocity.y).sqrt();
+    // What the trigger fires right now, with its own remaining ammo -
+    // under the FIFO inventory (`Tank::weapon_queue`) this advances when
+    // the live weapon runs dry (and a first pickup arms it directly), so
+    // surface it here to watch the handover live (WPN SHELL duplicates the
+    // AMMO line above; harmless, and it keeps this line self-contained).
+    let (wpn_name, wpn_ammo) = match tank.active_weapon() {
+        ActiveWeapon::Laser => ("LASER", tank.laser_charges),
+        ActiveWeapon::Plasma => ("PLASMA", tank.plasma_ammo),
+        ActiveWeapon::Minigun => ("MINIGUN", tank.minigun_ammo),
+        ActiveWeapon::Shell => ("SHELL", tank.shells_ammo),
+    };
     let mut lines = vec![
         format!("AMMO {}", tank.shells_ammo),
+        format!("WPN {wpn_name} {wpn_ammo}"),
         format!(
             "HP {}/{}",
             (MAX_DAMAGE - tank.damage).max(0.0).round() as i32,
@@ -553,6 +627,7 @@ fn draw_tank_inspect(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>) {
         ),
         format!("SPD {speed:.0}px/s"),
         format!("VEL ({:.0},{:.0})", tank.velocity.x, tank.velocity.y),
+        format!("MOVE {:.0}x{:.0} r{corner:.0}", mx * 2.0, my * 2.0),
     ];
     if let Some(ai) = ai {
         lines.push(format!(
@@ -594,9 +669,9 @@ fn draw_tank_inspect(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>) {
 /// current/max shape, just different units.
 fn hud_number_color(current: f32, max: f32) -> Color {
     let frac = if max > 0.0 { current / max } else { 0.0 };
-    if frac < HUD_CRITICAL_THRESHOLD {
+    if frac < tuning().hud_critical_threshold {
         Color::RED
-    } else if frac < HUD_WARN_THRESHOLD {
+    } else if frac < tuning().hud_warn_threshold {
         Color::ORANGE
     } else {
         Color::WHITE
@@ -658,10 +733,10 @@ fn draw_tank_overhead_health(d: &mut impl RaylibDraw, texture: &Texture2D, tank:
         w,
         h,
     );
-    let alpha = if tank.hit_flash_timer > HEALTH_BAR_OVERHEAD_FADE_SECONDS {
+    let alpha = if tank.hit_flash_timer > tuning().health_bar_overhead_fade_seconds {
         255
     } else {
-        (255.0 * (tank.hit_flash_timer / HEALTH_BAR_OVERHEAD_FADE_SECONDS)).round() as u8
+        (255.0 * (tank.hit_flash_timer / tuning().health_bar_overhead_fade_seconds)).round() as u8
     };
     d.draw_texture_pro(
         texture,
@@ -691,10 +766,10 @@ fn draw_frog_health_bar(d: &mut impl RaylibDraw, texture: &Texture2D, frog: &Fro
         w,
         h,
     );
-    let alpha = if frog.hit_flash_timer > HEALTH_BAR_OVERHEAD_FADE_SECONDS {
+    let alpha = if frog.hit_flash_timer > tuning().health_bar_overhead_fade_seconds {
         255
     } else {
-        (255.0 * (frog.hit_flash_timer / HEALTH_BAR_OVERHEAD_FADE_SECONDS)).round() as u8
+        (255.0 * (frog.hit_flash_timer / tuning().health_bar_overhead_fade_seconds)).round() as u8
     };
     d.draw_texture_pro(
         texture,

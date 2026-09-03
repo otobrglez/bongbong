@@ -40,6 +40,29 @@
         }
 
         .game {
+          position: relative;
+
+          /* Sits in the canvas's top-right corner: the canvas is centered in
+             .game, so its right edge is half the leftover width in from ours. */
+          .subscribe-link {
+            position: absolute;
+            top: 8px;
+            right: calc((100% - min(100vw, 1280px)) / 2 + 10px);
+            z-index: 1;
+            padding: 3px 8px;
+            border-radius: 3px;
+            background: rgba(46, 46, 46, 0.75);
+            color: #ddd;
+            text-decoration: none;
+            font-size: $font-size;
+
+            &:hover, &:focus-visible {
+              color: #fff;
+              background: rgba(46, 46, 46, 0.95);
+              text-decoration: underline;
+            }
+          }
+
           canvas {
             display: block;
             width: min(100vw, 1280px);
@@ -66,37 +89,148 @@
         }
 
         .footer {
-          .newsletter {
-            text-align: center;
-            font-size: $font-size;
-            padding: 0px;
-            width: 800px;
-            max-width: calc(100vw - 24px);
-
-            p {
-              margin: 0.3em 0;
-            }
-
-            :global(.formkit-input), :global(.formkit-submit) {
-              font-size: $font-size !important;
-              color: #fff !important;
-              background-color: #333333 !important;
-              border: none;
-            }
-
-            :global(div[data-style=clean]) {
-              padding-top: 10px !important;
-            }
-
-            :global(.formkit-form) {
-              margin: 0 auto !important;
-              padding-top: 3px !important;
-            }
-
-            :global(.formkit-powered-by-convertkit-container) {
-              display: none !important;
-            }
+          p {
+            margin: 0.3em 0;
           }
+        }
+      }
+
+      /* Runtime tuning panel (docs/runtime-tuning-design.md). Only shown
+         when the loaded wasm exports the dev-tools C API (bb_*), i.e. a
+         `just build-web-dev` / PR-preview build - production never has it. */
+      .tuning {
+        width: min(100vw, 1280px);
+        box-sizing: border-box;
+        margin-top: 12px;
+        padding: 0 12px 12px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+        color: #c6c6c6;
+        border: 1px solid #444;
+        border-radius: 4px;
+        background: #262626;
+
+        summary {
+          cursor: pointer;
+          padding: 8px 0;
+          font-family: sans-serif;
+          font-size: $font-size;
+          user-select: none;
+
+          .badge {
+            display: inline-block;
+            margin-left: 6px;
+            padding: 1px 6px;
+            border-radius: 3px;
+            background: #5a3d0c;
+            color: #f5c76a;
+            font-size: 9px;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+          }
+        }
+
+        .toolbar {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+          align-items: center;
+          margin-bottom: 8px;
+
+          input[type="search"] {
+            flex: 1 1 160px;
+            min-width: 120px;
+          }
+        }
+
+        .tabs {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 4px;
+          margin-bottom: 8px;
+
+          button[aria-selected="true"] {
+            background: #4a4a4a;
+            color: #fff;
+          }
+        }
+
+        button, input[type="search"], textarea {
+          font: inherit;
+          color: #ddd;
+          background: #333;
+          border: 1px solid #555;
+          border-radius: 3px;
+          padding: 3px 8px;
+        }
+        button { cursor: pointer; }
+        button:hover { background: #3e3e3e; }
+        button.reset { padding: 1px 5px; color: #999; }
+
+        .status {
+          margin-left: auto;
+          color: #8fbf8f;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          max-width: 40%;
+        }
+        .status.error { color: #e88; }
+
+        .scroll { overflow-x: auto; }
+
+        table {
+          border-collapse: collapse;
+          width: 100%;
+          margin-bottom: 10px;
+
+          th, td {
+            padding: 2px 6px;
+            border-bottom: 1px solid #383838;
+            text-align: left;
+            white-space: nowrap;
+            vertical-align: middle;
+          }
+          th { color: #999; font-weight: normal; }
+          td.name { color: #e0e0e0; cursor: help; }
+          td.name.changed { color: #f5c76a; }
+          td.ctl { width: 260px; }
+          td.val { width: 80px; text-align: right; font-variant-numeric: tabular-nums; }
+          td.def { width: 70px; text-align: right; color: #777; font-variant-numeric: tabular-nums; }
+          td.badge span {
+            padding: 0 5px;
+            border-radius: 3px;
+            background: #3b3b3b;
+            color: #aaa;
+            font-size: 9px;
+            text-transform: uppercase;
+          }
+          input[type="range"] { width: 160px; vertical-align: middle; }
+          input[type="number"] {
+            width: 84px;
+            font: inherit;
+            color: #ddd;
+            background: #333;
+            border: 1px solid #555;
+            border-radius: 3px;
+            padding: 1px 4px;
+            text-align: right;
+          }
+          input[type="number"].changed { color: #f5c76a; }
+        }
+
+        h4 {
+          margin: 6px 0 4px;
+          font-weight: normal;
+          color: #999;
+        }
+
+        .import {
+          display: none;
+          gap: 6px;
+          margin: 0 0 8px;
+          &.open { display: flex; }
+          textarea { flex: 1; min-height: 60px; }
         }
       }
     </style>
@@ -105,16 +239,31 @@
 
 <div class="wrapper">
     <div class="game">
+        <a class="subscribe-link" href="/subscribe">Subscribe for updates.</a>
         <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
         <div class="instructions">
             <p>Use arrow keys to move the tank. <kbd>Space</kbd> to fire and <kbd>r</kbd> to restart the game.</p>
         </div>
+        <details class="tuning" id="tuning" hidden>
+            <summary>Tuning <span class="badge">dev build</span></summary>
+            <div class="toolbar">
+                <input type="search" id="tun-filter" placeholder="filter knobs…" autocomplete="off"/>
+                <button id="tun-restart" title="Restart the round (same as R) so a tuned set plays out from a fresh spawn">Restart round</button>
+                <button id="tun-reset" title="Every knob back to its default">Reset all</button>
+                <button id="tun-copy-json" title="Copy only the knobs that differ from default, as JSON (paste into --tuning file or Import)">Copy JSON</button>
+                <button id="tun-import" title="Paste a JSON patch to apply">Import…</button>
+                <button id="tun-copy-rust" title="Copy the changed knobs as tunables! rows for src/tuning.rs">Copy as Rust</button>
+                <span class="status" id="tun-status"></span>
+            </div>
+            <div class="import" id="tun-import-box">
+                <textarea id="tun-import-text" placeholder='{"tank_speed": 300, "wall_max_health.wood": 50}'></textarea>
+                <button id="tun-import-apply">Apply</button>
+            </div>
+            <nav class="tabs" id="tun-tabs"></nav>
+            <div class="scroll" id="tun-body"></div>
+        </details>
     </div>
     <div class="footer">
-        <div class="newsletter">
-            <p>Please subscribe to get notified about new releases and updates to BongBong!</p>
-            <script is:inline async data-uid="d4592cd03e" src="https://bong.kit.com/d4592cd03e/index.js"></script>
-        </div>
         <div>
             <p>Feedback and suggestions are welcome via <a href="https://github.com/otobrglez">@otobrglez</a>. </p>
         </div>
@@ -139,7 +288,321 @@
             });
         },
         {once: true},
+    );
+    // Arrow keys and Space are game controls, but browsers also bind them to
+    // page scrolling by default - on viewports too short to fit the whole
+    // layout, that scroll becomes visible and fights the tank's movement.
+    var gameKeys = new Set([
+        "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space",
+    ]);
+    window.addEventListener(
+        "keydown",
+        function (e) {
+            if (gameKeys.has(e.code)) e.preventDefault();
+        },
+        {passive: false},
     );</script>
+<script is:inline>
+    // Runtime tuning panel - see docs/runtime-tuning-design.md §7. Renders
+    // itself entirely from the schema the wasm exports (bb_tuning_schema_json),
+    // so a new row in src/tuning.rs's tunables! table shows up here with no
+    // site change. Every edit is a JSON patch pushed through
+    // bb_tuning_apply_json and lands at the game's next frame boundary. The
+    // changed set persists in localStorage and is re-applied on reload.
+    (function () {
+        var STORAGE_KEY = "bongbong.tuning.diff";
+        var TAB_KEY = "bongbong.tuning.tab";
+        var panel = document.getElementById("tuning");
+        var $ = function (id) { return document.getElementById(id); };
+        var schema = [], byName = {}, values = {}, defaults = {};
+        var activeTab = null, filter = "";
+
+        function api(name, ret, argTypes, args) {
+            return Module.ccall(name, ret, argTypes || [], args || []);
+        }
+        function status(text, isError) {
+            var el = $("tun-status");
+            el.textContent = text;
+            el.className = "status" + (isError ? " error" : "");
+        }
+        function store(key, value) {
+            try { localStorage.setItem(key, value); } catch (e) { /* private mode etc. */ }
+        }
+        function load(key) {
+            try { return localStorage.getItem(key); } catch (e) { return null; }
+        }
+        function isInt(row) { return row.kind === "i32" || row.kind === "u32" || row.kind === "usize"; }
+        function fmt(v, row) {
+            if (row.kind === "bool") return v ? "true" : "false";
+            if (isInt(row)) return String(Math.round(v));
+            var s = Number(v).toPrecision(5);
+            return String(Number(s));
+        }
+        function niceStep(row) {
+            if (isInt(row) || row.kind === "bool") return 1;
+            var raw = (row.max - row.min) / 500;
+            if (raw <= 0) return 0.01;
+            var pow = Math.pow(10, Math.floor(Math.log10(raw)));
+            var m = raw / pow;
+            return (m < 1.5 ? 1 : m < 3.5 ? 2 : m < 7.5 ? 5 : 10) * pow;
+        }
+        function sameValue(a, b) {
+            if (Array.isArray(a)) return a.every(function (x, i) { return x === b[i]; });
+            return a === b;
+        }
+        function diff() {
+            var out = {};
+            schema.forEach(function (row) {
+                if (!sameValue(values[row.name], defaults[row.name])) out[row.name] = values[row.name];
+            });
+            return out;
+        }
+        function persist() {
+            var d = diff();
+            if (Object.keys(d).length) store(STORAGE_KEY, JSON.stringify(d));
+            else store(STORAGE_KEY, "");
+        }
+        // Push a patch to the game; on success mirror it into `values`.
+        function apply(patch, note) {
+            var rc = api("bb_tuning_apply_json", "number", ["string"], [JSON.stringify(patch)]);
+            if (rc < 0) {
+                status(api("bb_last_error", "string"), true);
+                return false;
+            }
+            Object.keys(patch).forEach(function (key) {
+                var dot = key.indexOf(".");
+                if (dot < 0) { values[key] = patch[key]; return; }
+                var name = key.slice(0, dot), elem = key.slice(dot + 1);
+                var row = byName[name];
+                var i = row.labels.indexOf(elem);
+                if (i < 0) i = parseInt(elem, 10);
+                values[name][i] = patch[key];
+            });
+            persist();
+            status(note || ("applied " + rc + " knob" + (rc === 1 ? "" : "s")));
+            return true;
+        }
+
+        // ---- rendering -------------------------------------------------
+        function badge(row) {
+            return row.applies === "live" ? "" : "<span title=\"takes effect on " + row.applies + "\">" + row.applies + "</span>";
+        }
+        function tooltip(row) {
+            return (row.doc || "").trim() + "\n\nrange " + row.min + " ..= " + row.max + ", default " + JSON.stringify(row.default);
+        }
+        function scalarControl(key, row, value) {
+            var step = niceStep(row);
+            if (row.kind === "bool") {
+                return "<input type=\"checkbox\" data-key=\"" + key + "\"" + (value ? " checked" : "") + "/>";
+            }
+            return "<input type=\"range\" data-key=\"" + key + "\" min=\"" + row.min + "\" max=\"" + row.max +
+                "\" step=\"" + step + "\" value=\"" + value + "\"/>";
+        }
+        function numberBox(key, row, value, changed) {
+            return "<input type=\"number\" data-key=\"" + key + "\" min=\"" + row.min + "\" max=\"" + row.max +
+                "\" step=\"" + (isInt(row) ? 1 : "any") + "\" value=\"" + fmt(value, row) + "\"" +
+                (changed ? " class=\"changed\"" : "") + "/>";
+        }
+        function renderScalars(rows) {
+            if (!rows.length) return "";
+            var h = "<table><thead><tr><th>knob</th><th></th><th>value</th><th>default</th><th></th><th></th></tr></thead><tbody>";
+            rows.forEach(function (row) {
+                var v = values[row.name], changed = v !== defaults[row.name];
+                h += "<tr><td class=\"name" + (changed ? " changed" : "") + "\" title=\"" + escapeAttr(tooltip(row)) + "\">" + row.name + "</td>" +
+                    "<td class=\"ctl\">" + scalarControl(row.name, row, v) + "</td>" +
+                    "<td class=\"val\">" + numberBox(row.name, row, v, changed) + "</td>" +
+                    "<td class=\"def\">" + fmt(row.default, row) + "</td>" +
+                    "<td class=\"badge\">" + badge(row) + "</td>" +
+                    "<td><button class=\"reset\" data-reset=\"" + row.name + "\" title=\"back to default\">&#x21ba;</button></td></tr>";
+            });
+            return h + "</tbody></table>";
+        }
+        // Array rows sharing one label set pivot into a grid: one line per
+        // label (a tank model, a wall material), one column per knob.
+        function renderMatrix(rows) {
+            var labels = rows[0].labels;
+            var h = "<table><thead><tr><th></th>";
+            rows.forEach(function (row) {
+                h += "<th title=\"" + escapeAttr(tooltip(row)) + "\">" + row.name + " " + badge(row) +
+                    " <button class=\"reset\" data-reset=\"" + row.name + "\" title=\"whole column back to default\">&#x21ba;</button></th>";
+            });
+            h += "</tr></thead><tbody>";
+            labels.forEach(function (label, i) {
+                h += "<tr><td class=\"name\">" + label + "</td>";
+                rows.forEach(function (row) {
+                    var v = values[row.name][i], changed = v !== defaults[row.name][i];
+                    h += "<td>" + numberBox(row.name + "." + label, row, v, changed) + "</td>";
+                });
+                h += "</tr>";
+            });
+            return h + "</tbody></table>";
+        }
+        function escapeAttr(s) {
+            return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+        }
+        function render() {
+            var groups = [];
+            schema.forEach(function (row) { if (groups.indexOf(row.group) < 0) groups.push(row.group); });
+            if (!activeTab || groups.indexOf(activeTab) < 0) activeTab = groups[0];
+            var tabs = $("tun-tabs");
+            tabs.innerHTML = groups.map(function (g) {
+                return "<button data-tab=\"" + g + "\" aria-selected=\"" + (g === activeTab && !filter) + "\">" + g + "</button>";
+            }).join("");
+            var rows = schema.filter(function (row) {
+                return filter ? row.name.indexOf(filter) >= 0 : row.group === activeTab;
+            });
+            var scalars = rows.filter(function (r) { return !r.labels.length; });
+            var matrices = {};
+            rows.filter(function (r) { return r.labels.length; }).forEach(function (r) {
+                var sig = r.labels.join(",");
+                (matrices[sig] = matrices[sig] || []).push(r);
+            });
+            var h = renderScalars(scalars);
+            Object.keys(matrices).forEach(function (sig) {
+                h += "<h4>" + matrices[sig][0].labels.length + " × " + matrices[sig].length + " (per " +
+                    (matrices[sig][0].labels.length === 12 ? "tank model" : "variant") + ")</h4>" + renderMatrix(matrices[sig]);
+            });
+            if (!rows.length) h = "<p>no knob matches \"" + escapeAttr(filter) + "\"</p>";
+            $("tun-body").innerHTML = h;
+        }
+
+        // ---- events ----------------------------------------------------
+        var pending = {}, timer = null;
+        function queue(key, value) {
+            pending[key] = value;
+            clearTimeout(timer);
+            timer = setTimeout(function () {
+                var patch = pending; pending = {};
+                apply(patch);
+                // keep the paired inputs (slider / number box) in sync
+                Object.keys(patch).forEach(function (k) {
+                    document.querySelectorAll("[data-key=\"" + k + "\"]").forEach(function (el) {
+                        if (el.type === "checkbox") el.checked = !!patch[k];
+                        else if (document.activeElement !== el) el.value = el.type === "number" ? fmt(patch[k], rowFor(k)) : patch[k];
+                    });
+                });
+                markChanged();
+            }, 60);
+        }
+        function rowFor(key) { return byName[key.split(".")[0]]; }
+        function markChanged() {
+            document.querySelectorAll("#tun-body td.name[title]").forEach(function (td) {
+                var row = byName[td.textContent];
+                if (row) td.classList.toggle("changed", !sameValue(values[row.name], defaults[row.name]));
+            });
+            document.querySelectorAll("#tun-body input[type=number]").forEach(function (el) {
+                var key = el.dataset.key, row = rowFor(key), dot = key.indexOf(".");
+                var v, d;
+                if (dot < 0) { v = values[key]; d = defaults[key]; }
+                else { var i = row.labels.indexOf(key.slice(dot + 1)); v = values[row.name][i]; d = defaults[row.name][i]; }
+                el.classList.toggle("changed", v !== d);
+            });
+        }
+        function readInput(el) {
+            var row = rowFor(el.dataset.key);
+            if (el.type === "checkbox") return el.checked;
+            var v = parseFloat(el.value);
+            if (!isFinite(v)) return null;
+            if (isInt(row)) v = Math.round(v);
+            return Math.min(row.max, Math.max(row.min, v));
+        }
+        $("tun-body").addEventListener("input", function (e) {
+            var el = e.target;
+            if (!el.dataset || !el.dataset.key) return;
+            if (el.type === "number" && e.type === "input") return; // wait for change on typed values
+            var v = readInput(el);
+            if (v !== null) queue(el.dataset.key, v);
+        });
+        $("tun-body").addEventListener("change", function (e) {
+            var el = e.target;
+            if (!el.dataset || !el.dataset.key || el.type !== "number") return;
+            var v = readInput(el);
+            if (v !== null) queue(el.dataset.key, v);
+        });
+        $("tun-body").addEventListener("click", function (e) {
+            var name = e.target.dataset && e.target.dataset.reset;
+            if (!name) return;
+            var patch = {}; patch[name] = defaults[name];
+            if (apply(patch, name + " reset")) render();
+        });
+        $("tun-tabs").addEventListener("click", function (e) {
+            var tab = e.target.dataset && e.target.dataset.tab;
+            if (!tab) return;
+            activeTab = tab; filter = ""; $("tun-filter").value = "";
+            store(TAB_KEY, tab);
+            render();
+        });
+        $("tun-filter").addEventListener("input", function (e) {
+            filter = e.target.value.trim().toLowerCase();
+            render();
+        });
+        $("tun-reset").addEventListener("click", function () {
+            api("bb_tuning_reset", null);
+            schema.forEach(function (row) {
+                values[row.name] = Array.isArray(defaults[row.name]) ? defaults[row.name].slice() : defaults[row.name];
+            });
+            persist();
+            status("all knobs reset");
+            render();
+        });
+        $("tun-restart").addEventListener("click", function () {
+            api("bb_game_restart", null);
+            status("round restarted");
+            document.getElementById("canvas").focus();
+        });
+        function copy(text, note) {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(function () { status(note); }, function () {
+                    $("tun-import-text").value = text; $("tun-import-box").classList.add("open"); status("clipboard blocked - copy from the box");
+                });
+            } else {
+                $("tun-import-text").value = text; $("tun-import-box").classList.add("open"); status("copy from the box");
+            }
+        }
+        $("tun-copy-json").addEventListener("click", function () {
+            copy(JSON.stringify(diff(), null, 2), "changed knobs copied as JSON");
+        });
+        $("tun-copy-rust").addEventListener("click", function () {
+            // Read from the game rather than recomputing: the Rust rendering
+            // (types, ranges, labels, applies markers) lives there.
+            var rust = api("bb_tuning_diff_rust", "string");
+            copy(rust || "// nothing differs from the defaults\n", "changed knobs copied as tunables! rows");
+        });
+        $("tun-import").addEventListener("click", function () {
+            $("tun-import-box").classList.toggle("open");
+        });
+        $("tun-import-apply").addEventListener("click", function () {
+            var patch;
+            try { patch = JSON.parse($("tun-import-text").value); } catch (e) { status("not valid JSON: " + e.message, true); return; }
+            if (!patch || typeof patch !== "object" || Array.isArray(patch)) { status("expected a JSON object", true); return; }
+            if (apply(patch, "imported " + Object.keys(patch).length + " knob(s)")) render();
+        });
+
+        // ---- bring-up ---------------------------------------------------
+        function init() {
+            if (typeof Module._bb_tuning_schema_json !== "function") return; // production wasm: no panel
+            schema = JSON.parse(api("bb_tuning_schema_json", "string"));
+            values = JSON.parse(api("bb_tuning_current_json", "string"));
+            schema.forEach(function (row) { byName[row.name] = row; defaults[row.name] = row.default; });
+            activeTab = load(TAB_KEY);
+            var saved = load(STORAGE_KEY);
+            if (saved) {
+                try {
+                    var patch = JSON.parse(saved);
+                    if (apply(patch, "restored " + Object.keys(patch).length + " saved knob(s)")) { /* values updated */ }
+                    else { store(STORAGE_KEY, ""); }
+                } catch (e) { store(STORAGE_KEY, ""); }
+            }
+            panel.hidden = false;
+            render();
+        }
+        var previous = Module.onRuntimeInitialized;
+        Module.onRuntimeInitialized = function () {
+            if (previous) previous();
+            try { init(); } catch (e) { console.error("tuning panel:", e); }
+        };
+    })();
+</script>
 <script is:inline src="/game/bongbong.js"></script>
 </body>
 </html>

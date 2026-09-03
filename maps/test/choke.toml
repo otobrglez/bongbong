@@ -1,0 +1,30 @@
+# maps/test/ fixture - an adversarial layout provoking one known failure
+# class; see docs/gameplay-verification-design.md #2.2. Hand-authored:
+# re-saving from the map editor would drop these comments.
+#
+# choke: a full-height wall at col 20 with one 6-cell gap (rows
+# 8-12) - a two-cell-tall open window through it. Every left-half
+# spawn must funnel through to reach the player on the right
+# (funnel pile-ups, clustering, corridor scraping).
+
+version = 1
+tanks = 4
+
+cells."20,1" = { kind = "wall", material = "iron" }
+cells."20,2" = { kind = "wall", material = "iron" }
+cells."20,3" = { kind = "wall", material = "iron" }
+cells."20,4" = { kind = "wall", material = "iron" }
+cells."20,5" = { kind = "wall", material = "iron" }
+cells."20,6" = { kind = "wall", material = "iron" }
+cells."20,7" = { kind = "wall", material = "iron" }
+cells."28,11" = { kind = "start" }
+cells."20,13" = { kind = "wall", material = "iron" }
+cells."20,14" = { kind = "wall", material = "iron" }
+cells."20,15" = { kind = "wall", material = "iron" }
+cells."20,16" = { kind = "wall", material = "iron" }
+cells."10,17" = { kind = "frog" }
+cells."20,17" = { kind = "wall", material = "iron" }
+cells."20,18" = { kind = "wall", material = "iron" }
+cells."20,19" = { kind = "wall", material = "iron" }
+cells."20,20" = { kind = "wall", material = "iron" }
+cells."20,21" = { kind = "wall", material = "iron" }

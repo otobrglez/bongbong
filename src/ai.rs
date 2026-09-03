@@ -1,5 +1,6 @@
+use crate::tuning::tuning;
 use rand::RngExt;
-use rand::rngs::ThreadRng;
+use rand::rngs::SmallRng;
 use sola_raylib::prelude::Vector2;
 
 use crate::bt::{Node, Status, action, condition, selector, sequence};
@@ -7,14 +8,8 @@ use crate::pathfind::Grid;
 use crate::pickup::PickupKind;
 use crate::tank::{ActiveWeapon, Dir, Tank};
 use crate::{
-    AI_DIR_HOLD_SECONDS, AI_DIR_SWITCH_MARGIN_PX, AI_OBSTACLE_OVERRIDE_HOLD_SECONDS,
-    AVOID_DODGE_SECONDS, AVOID_LOOKAHEAD,
-    AVOID_MARGIN, AVOID_MIN_SPEED, ENEMY_AIM_SETTLE, ENEMY_AMMO_LOW, ENEMY_AMMO_RESUME,
-    ENEMY_ATTACK_RANGE, ENEMY_FIRE_ALIGN_PX, ENEMY_FIRE_INTERVAL, ENEMY_FIRE_INTERVAL_AGGRESSIVE,
-    ENEMY_FLEE_DAMAGE, ENEMY_FRIENDLY_FIRE_HOLD_CHANCE, ENEMY_HIT_ALERT_SECONDS, ENEMY_MISFIRE_ANGLE_MAX,
-    ENEMY_MISFIRE_ANGLE_MIN, ENEMY_MISFIRE_CHANCE_MAX, ENEMY_MISFIRE_RANGE,
-    ENEMY_RETARGET_SECONDS, ENEMY_RETREAT_RANGE, ENEMY_VIEW_RANGE, MAX_DAMAGE, MAX_SHELLS, Position,
-    STUCK_ESCAPE_SECONDS, STUCK_SPEED_EPS, WANDER_SPREAD_CANDIDATES,
+    MAX_DAMAGE,
+    Position,
 };
 
 /// A read-only snapshot of one tank's motion for collision prediction. The game
@@ -77,22 +72,27 @@ pub struct Ai {
     /// doesn't flicker into and out of Attack every frame near either
     /// threshold.
     retreating: bool,
-    /// Whether the *previous* tick's intent had `move_dir` set - i.e.
-    /// whether this tank was actually trying to move, as opposed to
-    /// deliberately holding position (aiming, waiting out a retreat). Set
-    /// at the end of `think`; read at the start of the next `think` to
-    /// decide whether a near-zero `real_speed` counts as evidence of being
-    /// stuck. See `stuck_timer`.
-    was_moving: bool,
-    /// Seconds this tank has been asked to move (see `was_moving`) while
-    /// its real physics velocity says it genuinely hasn't - ticked in
-    /// `think`, using the real, physics-derived speed passed in from
-    /// `simulation.rs` (never read directly from `Physics` here - see this
-    /// module's AI-decoupling convention). Once it crosses
-    /// STUCK_ESCAPE_SECONDS, `steer` forces an escape and resets this to
-    /// zero. Catches everything the obstacle-ahead override in `steer`
-    /// can't: a bad commitment call it didn't foresee, or a layout with no
-    /// path around an obstacle cluster at all.
+    /// The *previous* tick's `move_dir` - `None` when this tank was
+    /// deliberately holding position (aiming, waiting out a retreat)
+    /// rather than trying to move. Set at the end of `think`; read at the
+    /// start of the next `think` to judge how much of the real velocity
+    /// was progress in the direction that was asked for. See
+    /// `stuck_timer`.
+    last_move_dir: Option<Dir>,
+    /// Seconds this tank has been asked to move (see `last_move_dir`)
+    /// while its real physics velocity shows no progress *along that
+    /// heading* - ticked in `think`, using the real, physics-derived
+    /// velocity passed in from `simulation.rs` (never read directly from
+    /// `Physics` here - see this module's AI-decoupling convention).
+    /// Progress is the velocity's component along the commanded heading,
+    /// not its magnitude: a tank wedged in a jam of other tanks can be
+    /// carried sideways at near full speed while getting nowhere it was
+    /// told to go, and a speed check reads that as "moving fine". Once
+    /// this crosses STUCK_ESCAPE_SECONDS, `steer` forces an escape and
+    /// resets it to zero. Catches everything the obstacle-ahead override
+    /// in `steer` can't: a bad commitment call it didn't foresee, a jam
+    /// against other tanks, or a layout with no path around an obstacle
+    /// cluster at all.
     stuck_timer: f32,
     /// Seconds remaining since this tank last took a hit - see
     /// `notify_hit`/`ENEMY_HIT_ALERT_SECONDS`. `build`'s Chase condition
@@ -100,6 +100,20 @@ pub struct Ai {
     /// tank that gets shot from outside its normal awareness range still
     /// fights back instead of obliviously continuing to patrol/wander.
     hit_alert_timer: f32,
+    /// True while `wander`'s last waypoint resample came up completely
+    /// empty-handed - every candidate it rolled was unreachable, so the
+    /// waypoint it settled on is a known-unreachable fallback. While set,
+    /// the "current waypoint turned out unreachable, resample right now"
+    /// fast path stays suppressed (the normal ENEMY_RETARGET_SECONDS
+    /// cadence still applies): re-rolling would almost certainly come up
+    /// empty again, and doing that every frame hands the tank a brand-new
+    /// random heading per tick - the same spin-in-place failure
+    /// `Grid::boxed_in`'s guard exists for, just in a *multi-cell*
+    /// reachability pocket where `boxed_in` (a single-cell check) stays
+    /// false. Found via the probe harness's `spin` anomaly sweep: tanks
+    /// lapping a tight box at full speed, one fresh unreachable waypoint
+    /// per frame.
+    wander_pocketed: bool,
 }
 
 impl Default for Ai {
@@ -107,16 +121,17 @@ impl Default for Ai {
         Self {
             waypoint: Position::default(),
             retarget_timer: 0.0,
-            fire_timer: ENEMY_FIRE_INTERVAL,
+            fire_timer: tuning().enemy_fire_interval,
             committed_dir: None,
             dir_hold: 0.0,
             aim_settle: 0.0,
             dodge_dir: None,
             dodge_timer: 0.0,
             retreating: false,
-            was_moving: false,
+            last_move_dir: None,
             stuck_timer: 0.0,
             hit_alert_timer: 0.0,
+            wander_pocketed: false,
         }
     }
 }
@@ -128,13 +143,14 @@ impl Ai {
     /// predictive collision avoidance; `my_index` is this enemy's slot within it,
     /// so it can skip itself. The order matches how the game builds the slice.
     /// `grid` is this frame's obstacle occupancy grid (see `pathfind::Grid`),
-    /// used by `steer` to route around static obstacles. `real_speed` is
-    /// this tank's actual physics speed this frame (`Physics::velocity`'s
-    /// magnitude, read back in `simulation.rs` - the one place this module
-    /// gets to see anything physics-derived, kept as a single plain number
-    /// rather than reaching into `Physics` itself, per this module's
-    /// snapshot-only convention), used to detect a tank that's been
-    /// commanded to move but genuinely hasn't - see `stuck_timer`.
+    /// used by `steer` to route around static obstacles. `real_velocity`
+    /// is this tank's actual physics velocity this frame
+    /// (`Physics::velocity`, read back in `simulation.rs` - the one place
+    /// this module gets to see anything physics-derived, kept as a plain
+    /// vector rather than reaching into `Physics` itself, per this
+    /// module's snapshot-only convention), used to detect a tank that's
+    /// been commanded to move but isn't getting anywhere along that
+    /// heading - see `stuck_timer`.
     /// `alert` is this frame's shared "last known player position" (see
     /// `simulation.rs`'s `Game::alert_position`) - `Some` while any enemy on
     /// the field currently has the player within `ENEMY_VIEW_RANGE` (or did
@@ -157,7 +173,7 @@ impl Ai {
     /// heads for a pickup instead of just running blind.
     /// `line_of_sight` is whether this tank's straight line to the player is
     /// currently unobstructed by terrain (any obstacle, or the frog) -
-    /// computed in `simulation.rs` (see `terrain_line_of_sight`) against the
+    /// computed in `simulation` (see `hits::Terrain::line_of_sight`) against the
     /// real, un-margined obstacle geometry a shot would actually resolve
     /// against, deliberately *not* `pathfind::Grid`: that grid's clearance
     /// margin is sized for a tank's own hull to route through gaps, not for
@@ -174,11 +190,11 @@ impl Ai {
         width: f32,
         height: f32,
         dt: f32,
-        real_speed: f32,
+        real_velocity: Position,
         movers: &[Mover],
         my_index: usize,
         grid: &Grid,
-        rng: &mut ThreadRng,
+        rng: &mut SmallRng,
         alert: Option<Position>,
         engage_target: Option<Position>,
         pickups: &[(PickupKind, Position)],
@@ -192,11 +208,17 @@ impl Ai {
         if self.dodge_timer <= 0.0 {
             self.dodge_dir = None;
         }
-        // Was asked to move last tick and still hasn't actually gone
-        // anywhere: another dt of stuck evidence. Wasn't asked to move (or
-        // did actually move) resets the count - deliberately holding
-        // position to aim/wait isn't stuck. See `steer`'s escape check.
-        if self.was_moving && real_speed < STUCK_SPEED_EPS {
+        // Was asked to move last tick and made no headway in that
+        // direction: another dt of stuck evidence. Only the velocity
+        // component along the commanded heading counts - being shoved
+        // sideways or backwards by other tanks is not progress. Wasn't
+        // asked to move (or did make headway) resets the count -
+        // deliberately holding position to aim/wait isn't stuck. See
+        // `steer_toward`'s escape.
+        let progress = self
+            .last_move_dir
+            .map(|dir| real_velocity.x * dir.vec().x + real_velocity.y * dir.vec().y);
+        if progress.is_some_and(|p| p < tuning().stuck_speed_eps) {
             self.stuck_timer += dt;
         } else {
             self.stuck_timer = 0.0;
@@ -221,7 +243,7 @@ impl Ai {
         };
         build().tick(&mut bb);
         let intent = bb.intent;
-        self.was_moving = intent.move_dir.is_some();
+        self.last_move_dir = intent.move_dir;
         intent
     }
 
@@ -232,7 +254,7 @@ impl Ai {
     /// so a tank taking sustained fire just stays alert continuously instead
     /// of the timer stacking up.
     pub fn notify_hit(&mut self) {
-        self.hit_alert_timer = ENEMY_HIT_ALERT_SECONDS;
+        self.hit_alert_timer = tuning().enemy_hit_alert_seconds;
     }
 
     /// Choose a heading toward `target` - or, if pathfinding can't reach
@@ -290,7 +312,7 @@ impl Ai {
         margin: f32,
         ctx: AvoidCtx,
         grid: &Grid,
-        rng: &mut ThreadRng,
+        rng: &mut SmallRng,
     ) -> Dir {
         let path = grid.next_step(from, target);
         if path.is_none() && !grid.same_cell(from, target) {
@@ -331,7 +353,7 @@ impl Ai {
         margin: f32,
         ctx: AvoidCtx,
         grid: &Grid,
-        rng: &mut ThreadRng,
+        rng: &mut SmallRng,
     ) -> Dir {
         let (width, height) = bounds;
         let reachable =
@@ -348,9 +370,12 @@ impl Ai {
         // `retarget_timer`) in case circumstances change (an obstacle
         // burns away), just not every frame.
         let stuck_here = grid.boxed_in(from);
+        // `wander_pocketed` suppresses the third, unreachability-triggered
+        // resample the same way `stuck_here` does, for the same reason at a
+        // different scale - see the field's own doc comment.
         if self.retarget_timer <= 0.0
             || from.distance_to(self.waypoint) < margin
-            || (!stuck_here && !reachable(self.waypoint))
+            || (!stuck_here && !self.wander_pocketed && !reachable(self.waypoint))
         {
             // Roll WANDER_SPREAD_CANDIDATES points and keep whichever is
             // both reachable and farthest from every other live tank
@@ -368,7 +393,7 @@ impl Ai {
             // rare worst case, still self-correcting next frame via the
             // `!reachable` check above.
             let mut best: Option<(Position, f32)> = None;
-            for _ in 0..WANDER_SPREAD_CANDIDATES {
+            for _ in 0..tuning().wander_spread_candidates {
                 let candidate = Position::new(
                     rng.random_range(margin..(width - margin)),
                     rng.random_range(margin..(height - margin)),
@@ -388,13 +413,18 @@ impl Ai {
                     best = Some((candidate, spread));
                 }
             }
+            // Latch (or clear) the pocket state off this pass's outcome:
+            // empty-handed means the fallback waypoint below is known
+            // unreachable, and re-rolling before the normal retarget
+            // cadence would just spin the tank - see `wander_pocketed`.
+            self.wander_pocketed = best.is_none();
             self.waypoint = best.map(|(candidate, _)| candidate).unwrap_or_else(|| {
                 Position::new(
                     rng.random_range(margin..(width - margin)),
                     rng.random_range(margin..(height - margin)),
                 )
             });
-            self.retarget_timer = ENEMY_RETARGET_SECONDS;
+            self.retarget_timer = tuning().enemy_retarget_seconds;
         }
         let path = grid.next_step(from, self.waypoint);
         self.steer_toward(from, path, self.waypoint, bounds, half, ctx, grid)
@@ -432,28 +462,36 @@ impl Ai {
         // very jitter commitment exists to prevent, just obstacle-triggered
         // instead of diagonal-target-triggered (see that constant's own
         // comment - found via the probe harness's `--rounds` sweep).
-        let obstacle_ahead = self.dir_hold >= AI_OBSTACLE_OVERRIDE_HOLD_SECONDS
+        let obstacle_ahead = self.dir_hold >= tuning().ai_obstacle_override_hold_seconds
             && self
                 .committed_dir
                 .is_some_and(|committed| grid.blocked_ahead(from, committed.vec()));
 
-        let dir = if self.stuck_timer >= STUCK_ESCAPE_SECONDS {
-            // Asked to move for STUCK_ESCAPE_SECONDS running and genuinely
-            // hasn't (see `think`'s real_speed tracking) - force a hard
-            // reset instead of letting a bad commitment call wedge the tank
-            // forever. This is the reactive safety net for a target that's
-            // technically reachable but still jamming in practice (a tight,
-            // contested squeeze between other tanks, say) - outright
+        let dir = if self.stuck_timer >= tuning().stuck_escape_seconds {
+            // Asked to move for STUCK_ESCAPE_SECONDS running and made no
+            // headway that way (see `think`'s progress tracking) - force a
+            // hard reset instead of letting a bad commitment call wedge the
+            // tank forever. This is the reactive safety net for a target
+            // that's technically reachable but still jamming in practice (a
+            // tight, contested squeeze between other tanks, say) - outright
             // unreachability is `steer`'s job, one level up, to hand off to
             // `wander` before this function ever sees it. Turn away from
-            // whatever heading has actually been
-            // failing (`committed_dir`) rather than retrying the same
-            // pathfind toward the same target.
+            // whatever heading has actually been failing (`committed_dir`)
+            // rather than retrying the same pathfind toward the same
+            // target: a perpendicular first (side chosen by index parity so
+            // two jammed tanks don't mirror each other), the other
+            // perpendicular if that one drives into a wall or blocked cell,
+            // and straight back out as the last resort - a tank pinned in a
+            // corner has nowhere else to go.
             self.stuck_timer = 0.0;
-            perpendicular(
-                self.committed_dir.unwrap_or(fresh),
-                ctx.my_index.is_multiple_of(2),
-            )
+            let failing = self.committed_dir.unwrap_or(fresh);
+            let left = ctx.my_index.is_multiple_of(2);
+            let blocked =
+                |d: Dir| heads_into_wall(d, from, bounds, half) || grid.blocked_ahead(from, d.vec());
+            [perpendicular(failing, left), perpendicular(failing, !left), opposite(failing)]
+                .into_iter()
+                .find(|&d| !blocked(d))
+                .unwrap_or_else(|| perpendicular(failing, left))
         } else {
             match self.committed_dir {
                 None => {
@@ -461,7 +499,7 @@ impl Ai {
                     fresh
                 }
                 Some(_) if obstacle_ahead => fresh,
-                Some(committed) if self.dir_hold < AI_DIR_HOLD_SECONDS => {
+                Some(committed) if self.dir_hold < tuning().ai_dir_hold_seconds => {
                     // Not held long enough yet: stick with the current heading.
                     committed
                 }
@@ -477,7 +515,17 @@ impl Ai {
                     let dy = (routed.y - from.y).abs();
                     let committed_off = if committed.is_horizontal() { dy } else { dx };
                     let fresh_off = if fresh.is_horizontal() { dy } else { dx };
-                    if fresh != committed && committed_off - fresh_off > AI_DIR_SWITCH_MARGIN_PX {
+                    // Deliberately blind to a straight reversal: Left and
+                    // Right leave the same perpendicular error, so a routed
+                    // point directly *behind* the tank never wins here and
+                    // the tank keeps going until the obstacle override or
+                    // the stuck escape intervenes. Letting a routed point
+                    // behind the tank flip it was tried and rejected:
+                    // `act_chase` never stops at its slot, so a tank
+                    // overshoots by a whole hold period, flips, overshoots
+                    // the other way, and reads as jitter (a 30-round
+                    // default-map sweep went from jitter=6 to jitter=30).
+                    if fresh != committed && committed_off - fresh_off > tuning().ai_dir_switch_margin_px {
                         fresh
                     } else {
                         committed
@@ -532,7 +580,7 @@ impl Ai {
         }
 
         // Too slow to meaningfully predict our own path: don't dodge.
-        if ctx.speed < AVOID_MIN_SPEED {
+        if ctx.speed < tuning().avoid_min_speed {
             return desired;
         }
 
@@ -553,7 +601,7 @@ impl Ai {
             }
             // Already overlapping is the ram system's job, not ours.
             let sep_now = (p.x * p.x + p.y * p.y).sqrt();
-            let reach = ctx.radius + other.radius + AVOID_MARGIN;
+            let reach = ctx.radius + other.radius + tuning().avoid_margin;
             if sep_now < reach {
                 continue;
             }
@@ -562,7 +610,7 @@ impl Ai {
             if pv >= 0.0 {
                 continue;
             }
-            let t = (-pv / vv).clamp(0.0, AVOID_LOOKAHEAD);
+            let t = (-pv / vv).clamp(0.0, tuning().avoid_lookahead);
             let cx = p.x + v.x * t;
             let cy = p.y + v.y * t;
             let closest = (cx * cx + cy * cy).sqrt();
@@ -598,7 +646,7 @@ impl Ai {
         match choice {
             Some(dir) => {
                 self.dodge_dir = Some(dir);
-                self.dodge_timer = AVOID_DODGE_SECONDS;
+                self.dodge_timer = tuning().avoid_dodge_seconds;
                 dir
             }
             None => desired,
@@ -625,11 +673,11 @@ impl Ai {
             if pv >= 0.0 {
                 continue;
             }
-            let t = (-pv / vv).clamp(0.0, AVOID_LOOKAHEAD);
+            let t = (-pv / vv).clamp(0.0, tuning().avoid_lookahead);
             let cx = p.x + v.x * t;
             let cy = p.y + v.y * t;
             let closest = (cx * cx + cy * cy).sqrt();
-            if closest < ctx.radius + other.radius + AVOID_MARGIN {
+            if closest < ctx.radius + other.radius + tuning().avoid_margin {
                 return true;
             }
         }
@@ -642,9 +690,9 @@ impl Ai {
     /// crossing the (higher) resume mark latches it back off, and anywhere
     /// in between just keeps whatever was already decided.
     fn wants_retreat(&mut self, ammo: i32) -> bool {
-        if ammo <= ENEMY_AMMO_LOW {
+        if ammo <= tuning().enemy_ammo_low {
             self.retreating = true;
-        } else if ammo >= ENEMY_AMMO_RESUME {
+        } else if ammo >= tuning().enemy_ammo_resume {
             self.retreating = false;
         }
         self.retreating
@@ -703,6 +751,17 @@ fn perpendicular(dir: Dir, left: bool) -> Dir {
     }
 }
 
+/// The reverse of `dir` - the heading a stuck tank backs out along once
+/// both perpendiculars are blocked.
+fn opposite(dir: Dir) -> Dir {
+    match dir {
+        Dir::Up => Dir::Down,
+        Dir::Down => Dir::Up,
+        Dir::Left => Dir::Right,
+        Dir::Right => Dir::Left,
+    }
+}
+
 /// True if heading `dir` from `from` would drive further into a battlefield edge
 /// the tank is already pressed against (within a 1px skin over the clamp margin).
 fn heads_into_wall(dir: Dir, from: Position, bounds: (f32, f32), half: f32) -> bool {
@@ -744,7 +803,7 @@ struct Brain<'a> {
     /// This frame's obstacle occupancy grid, for routing around static
     /// obstacles - see `Ai::steer`.
     grid: &'a Grid,
-    rng: &'a mut ThreadRng,
+    rng: &'a mut SmallRng,
     ai: &'a mut Ai,
     intent: Intent,
     /// Last known player position shared across every enemy this round,
@@ -823,11 +882,11 @@ impl Brain<'_> {
         let ammo_frac = if self.me.active_weapon() != ActiveWeapon::Shell {
             1.0
         } else {
-            (self.me.shells_ammo as f32 / MAX_SHELLS as f32).clamp(0.0, 1.0)
+            (self.me.shells_ammo as f32 / tuning().max_shells as f32).clamp(0.0, 1.0)
         };
         let health_frac = (1.0 - self.me.damage / MAX_DAMAGE).clamp(0.0, 1.0);
         let aggression = ammo_frac.min(health_frac);
-        ENEMY_FIRE_INTERVAL - (ENEMY_FIRE_INTERVAL - ENEMY_FIRE_INTERVAL_AGGRESSIVE) * aggression
+        tuning().enemy_fire_interval - (tuning().enemy_fire_interval - tuning().enemy_fire_interval_aggressive) * aggression
     }
 
     /// Steer toward `target`, routing around static obstacles and
@@ -908,7 +967,7 @@ impl Brain<'_> {
                 return false;
             }
             let (off_axis, forward) = axis_offsets(self.me.position, mover.position, fire_dir);
-            forward > 0.0 && forward < max_forward && off_axis <= ENEMY_FIRE_ALIGN_PX
+            forward > 0.0 && forward < max_forward && off_axis <= tuning().enemy_fire_align_px
         })
     }
 }
@@ -946,16 +1005,17 @@ fn build<'a>() -> Node<Brain<'a>> {
         // 2. Flee when badly damaged and the player is still a threat.
         // Takes priority over the ammo-based retreat below: survival first.
         sequence(vec![
-            condition(|b: &mut Brain| b.me.damage >= ENEMY_FLEE_DAMAGE && b.player_alive()),
+            condition(|b: &mut Brain| b.me.damage >= tuning().enemy_flee_damage && b.player_alive()),
             action(act_flee),
         ]),
         // 3. Low on shells: back off and hold fire until recharged - unless
-        // a laser charge is available, since that's a shot that costs no
-        // shells at all and there's nothing to recharge by retreating from.
-        // Deliberately short-circuits before `wants_retreat` so its ammo
-        // hysteresis doesn't even latch on while the laser/minigun covers
-        // for it; once both run out, the next tick evaluates fresh against
-        // whatever `shells_ammo` actually is by then.
+        // a queued special weapon still has ammo, since firing that costs
+        // no shells at all and there's nothing to recharge by retreating
+        // from. Deliberately short-circuits before `wants_retreat` so its
+        // ammo hysteresis doesn't even latch on while a special covers for
+        // it; once the whole queue runs dry (`active_weapon()` falls back
+        // to Shell), the next tick evaluates fresh against whatever
+        // `shells_ammo` actually is by then.
         sequence(vec![
             condition(|b: &mut Brain| {
                 b.player_alive()
@@ -966,7 +1026,7 @@ fn build<'a>() -> Node<Brain<'a>> {
         ]),
         // 4. Attack when the player is alive and within attack range.
         sequence(vec![
-            condition(|b: &mut Brain| b.player_alive() && b.dist_to_player() <= ENEMY_ATTACK_RANGE),
+            condition(|b: &mut Brain| b.player_alive() && b.dist_to_player() <= tuning().enemy_attack_range),
             action(act_attack),
         ]),
         // 5. Chase when the player is alive and either within view range or
@@ -976,7 +1036,7 @@ fn build<'a>() -> Node<Brain<'a>> {
         sequence(vec![
             condition(|b: &mut Brain| {
                 b.player_alive()
-                    && (b.dist_to_player() <= ENEMY_VIEW_RANGE || b.ai.hit_alert_timer > 0.0)
+                    && (b.dist_to_player() <= tuning().enemy_view_range || b.ai.hit_alert_timer > 0.0)
             }),
             action(act_chase),
         ]),
@@ -984,40 +1044,57 @@ fn build<'a>() -> Node<Brain<'a>> {
         // charges - reached only once nothing higher-priority (fleeing,
         // retreating, attacking, chasing) already claimed this tank, so it
         // never interrupts a fight, just fills idle patrol time with a
-        // purposeful detour instead. See `act_seek_laser`.
+        // purposeful detour instead. Under the FIFO inventory (see
+        // `Tank::weapon_queue`) collecting a weapon never downgrades what's
+        // currently firing - it just lines up behind it - so this tier and
+        // the two below are each gated only on "not already stocked with
+        // that kind"; which detour is worth taking *first* is expressed by
+        // their tier order (laser, then plasma, then minigun - strongest
+        // first). See `act_seek_laser`.
         sequence(vec![
             condition(|b: &mut Brain| {
                 b.me.laser_charges <= 0 && b.pickups.iter().any(|(k, _)| *k == PickupKind::Laser)
             }),
             action(act_seek_laser),
         ]),
-        // 5.6. Same idea for a live Plasma pickup - reached whenever this
-        // tank has none and isn't already laser-charged (`active_weapon()
-        // != Laser`), since laser always outranks plasma anyway. Unlike
-        // tier 5.7 below, this stays worth detouring for even while
-        // Minigun-active: plasma outranks minigun in `Tank::active_weapon`,
-        // so it's a genuine upgrade over what this tank is currently firing.
+        // 5.6. Same idea for a live Plasma pickup - queueing it behind
+        // whatever is currently live is a pure gain (see tier 5.5's
+        // comment), so no gating on the live weapon.
         sequence(vec![
             condition(|b: &mut Brain| {
                 b.me.plasma_ammo <= 0
-                    && b.me.active_weapon() != ActiveWeapon::Laser
                     && b.pickups.iter().any(|(k, _)| *k == PickupKind::Plasma)
             }),
             action(act_seek_plasma),
         ]),
-        // 5.7. Same idea for a live Minigun pickup, but only once this tank
-        // has fallen all the way back to shells (`active_weapon() ==
-        // Shell`) - a laser- or plasma-equipped tank has no reason to
-        // detour for minigun ammo, since both outrank it anyway (unlike
-        // tier 5.5 above, which stays unconditional: laser is worth
-        // detouring for regardless of what else is currently equipped).
+        // 5.7. Same idea for a live Minigun pickup, last of the weapon
+        // tiers (see tier 5.5's comment on ordering).
         sequence(vec![
             condition(|b: &mut Brain| {
                 b.me.minigun_ammo <= 0
-                    && b.me.active_weapon() == ActiveWeapon::Shell
                     && b.pickups.iter().any(|(k, _)| *k == PickupKind::Minigun)
             }),
             action(act_seek_minigun),
+        ]),
+        // 5.8. Same idea for a live SpeedUp pickup, reached whenever this
+        // tank isn't currently boosted - unlike the weapon tiers above, this
+        // isn't gated on `active_weapon` (a stat buff, not a weapon), just
+        // "not already benefiting from one".
+        sequence(vec![
+            condition(|b: &mut Brain| {
+                b.me.speed_boost_timer <= 0.0
+                    && b.pickups.iter().any(|(k, _)| *k == PickupKind::SpeedUp)
+            }),
+            action(act_seek_speedup),
+        ]),
+        // 5.9. And for a live rainbow shield, whenever this tank isn't
+        // already shielded - a full heal plus invulnerability is worth the
+        // detour at any health.
+        sequence(vec![
+            condition(|b: &mut Brain| {
+                b.me.shield_timer <= 0.0 && b.pickups.iter().any(|(k, _)| *k == PickupKind::Shield)
+            }),
+            action(act_seek_shield),
         ]),
         // 6. Fallback: patrol.
         action(act_patrol),
@@ -1064,7 +1141,7 @@ fn act_retreat(b: &mut Brain) -> Status {
         b.intent.move_dir = Some(b.steer(target));
         return Status::Success;
     }
-    if b.dist_to_player() >= ENEMY_RETREAT_RANGE {
+    if b.dist_to_player() >= tuning().enemy_retreat_range() {
         b.intent.face = Some(Dir::toward(b.me.position, b.player.position));
         return Status::Success;
     }
@@ -1114,6 +1191,28 @@ fn act_seek_minigun(b: &mut Brain) -> Status {
     Status::Success
 }
 
+/// Same idea as `act_seek_laser`, for a SpeedUp pickup instead - see tier
+/// 5.8 (`build`) for when this is actually reached.
+fn act_seek_speedup(b: &mut Brain) -> Status {
+    b.reset_aim();
+    let Some(target) = b.nearest_pickup(PickupKind::SpeedUp) else {
+        return Status::Failure;
+    };
+    b.intent.move_dir = Some(b.steer(target));
+    Status::Success
+}
+
+/// Same idea as `act_seek_speedup`, for a rainbow shield pickup - see tier
+/// 5.9 (`build`) for when this is actually reached.
+fn act_seek_shield(b: &mut Brain) -> Status {
+    b.reset_aim();
+    let Some(target) = b.nearest_pickup(PickupKind::Shield) else {
+        return Status::Failure;
+    };
+    b.intent.move_dir = Some(b.steer(target));
+    Status::Success
+}
+
 /// Hold near the player and shoot when lined up on a cardinal axis. The tank
 /// only fires after staying aligned for ENEMY_AIM_SETTLE, and stops to aim.
 fn act_attack(b: &mut Brain) -> Status {
@@ -1122,7 +1221,7 @@ fn act_attack(b: &mut Brain) -> Status {
     // in the way) is treated the same as not being aligned at all, so the
     // tank repositions instead of settling in and holding a shot it can
     // never take - see `think`'s `line_of_sight` parameter doc comment.
-    let aligned = off_axis <= ENEMY_FIRE_ALIGN_PX && in_front && b.line_of_sight;
+    let aligned = off_axis <= tuning().enemy_fire_align_px && in_front && b.line_of_sight;
 
     if aligned {
         // Line up: face the fire direction and hold position while settling.
@@ -1131,10 +1230,10 @@ fn act_attack(b: &mut Brain) -> Status {
         // Keep the committed heading in sync so leaving Attack doesn't snap.
         b.ai.commit(fire_dir);
 
-        if b.ai.aim_settle >= ENEMY_AIM_SETTLE && b.ai.fire_timer <= 0.0 {
+        if b.ai.aim_settle >= tuning().enemy_aim_settle && b.ai.fire_timer <= 0.0 {
             let blocked = b.friendly_blocks_shot(fire_dir, b.dist_to_player());
             let hold_fire =
-                blocked && b.rng.random_range(0.0..1.0) < ENEMY_FRIENDLY_FIRE_HOLD_CHANCE;
+                blocked && b.rng.random_range(0.0..1.0) < tuning().enemy_friendly_fire_hold_chance;
             // Whether it fires or holds, this firing opportunity is spent -
             // otherwise a held shot would just re-roll every frame at ~60Hz
             // and fire almost immediately anyway, defeating the hold chance.
@@ -1203,23 +1302,113 @@ impl Brain<'_> {
     /// ENEMY_MISFIRE_RANGE the enemy always fires straight.
     fn roll_misfire(&mut self) -> f32 {
         let dist = self.dist_to_player();
-        if dist >= ENEMY_MISFIRE_RANGE {
+        if dist >= tuning().enemy_misfire_range {
             return 0.0;
         }
         // Chance ramps from 0 at the range edge up to _CHANCE_MAX point-blank.
-        let closeness = 1.0 - dist / ENEMY_MISFIRE_RANGE;
-        let chance = closeness * ENEMY_MISFIRE_CHANCE_MAX;
+        let closeness = 1.0 - dist / tuning().enemy_misfire_range;
+        let chance = closeness * tuning().enemy_misfire_chance_max;
         if self.rng.random_range(0.0..1.0) >= chance {
             return 0.0;
         }
         // Misfire: deflect by a random magnitude to either side.
         let mag = self
             .rng
-            .random_range(ENEMY_MISFIRE_ANGLE_MIN..ENEMY_MISFIRE_ANGLE_MAX);
+            .random_range(tuning().enemy_misfire_angle_min..tuning().enemy_misfire_angle_max);
         if self.rng.random_range(0.0..1.0) < 0.5 {
             -mag
         } else {
             mag
         }
+    }
+}
+
+#[cfg(test)]
+mod stuck_tests {
+    use super::*;
+    use rand::SeedableRng;
+
+    /// One `think` tick for an enemy at `me` with the player far off its
+    /// firing axes (so the tree wants to move, not hold and aim), reporting
+    /// `real_velocity` as what physics actually did last frame.
+    fn tick(ai: &mut Ai, real_velocity: Position, dt: f32) -> Intent {
+        let mut me = Tank::default();
+        me.position = Position::new(600.0, 300.0);
+        let mut player = Tank::default();
+        player.position = Position::new(200.0, 600.0);
+        let grid = Grid::build(1280.0, 720.0, 48.0, 0.0, std::iter::empty());
+        let movers = [
+            Mover { position: player.position, velocity: Vector2::new(0.0, 0.0), radius: 20.0 },
+            Mover { position: me.position, velocity: real_velocity, radius: 20.0 },
+        ];
+        let mut rng = SmallRng::seed_from_u64(7);
+        ai.think(
+            &me,
+            &player,
+            1280.0,
+            720.0,
+            dt,
+            real_velocity,
+            &movers,
+            1,
+            &grid,
+            &mut rng,
+            None,
+            None,
+            &[],
+            false,
+        )
+    }
+
+    /// Feed `frames` ticks of `real_velocity` while the tank is on record
+    /// as having been told to drive `commanded` every tick.
+    fn drive(ai: &mut Ai, commanded: Dir, real_velocity: Position, frames: u32) -> Intent {
+        let mut intent = Intent::default();
+        for _ in 0..frames {
+            ai.last_move_dir = Some(commanded);
+            ai.committed_dir = Some(commanded);
+            intent = tick(ai, real_velocity, 1.0 / 60.0);
+        }
+        intent
+    }
+
+    #[test]
+    fn only_progress_along_the_commanded_heading_resets_the_stuck_clock() {
+        let mut ai = Ai::default();
+        // Told to go Down, carried East at speed by a jam: no progress.
+        drive(&mut ai, Dir::Down, Position::new(100.0, 0.0), 12);
+        assert!(ai.stuck_timer > 0.15, "sideways drift counted as movement: {}", ai.stuck_timer);
+        // Actually driving Down clears it at once.
+        drive(&mut ai, Dir::Down, Position::new(0.0, 100.0), 1);
+        assert_eq!(ai.stuck_timer, 0.0);
+        // Shoved backwards is no better than standing still.
+        drive(&mut ai, Dir::Down, Position::new(0.0, -100.0), 12);
+        assert!(ai.stuck_timer > 0.15);
+        // Deliberately holding position is not stuck, whatever physics says.
+        ai.last_move_dir = None;
+        tick(&mut ai, Position::new(0.0, 0.0), 1.0 / 60.0);
+        assert_eq!(ai.stuck_timer, 0.0);
+    }
+
+    #[test]
+    fn a_tank_carried_sideways_long_enough_escapes_perpendicular() {
+        let mut ai = Ai::default();
+        let budget = (tuning().stuck_escape_seconds * 60.0) as u32 + 3;
+        let mut escaped = None;
+        for frame in 1..=budget {
+            let intent = drive(&mut ai, Dir::Down, Position::new(100.0, 0.0), 1);
+            let dir = intent.move_dir.expect("still trying to move");
+            if dir != Dir::Down {
+                escaped = Some((frame, dir));
+                break;
+            }
+        }
+        let (frame, dir) = escaped.expect("never escaped the failing heading");
+        assert!(dir.is_horizontal(), "escape should turn off the failing axis, got {}", dir.rotation());
+        assert!(
+            frame as f32 / 60.0 >= tuning().stuck_escape_seconds,
+            "escaped after {frame} frames, before stuck_escape_seconds elapsed"
+        );
+        assert_eq!(ai.stuck_timer, 0.0, "the escape spends the stuck evidence");
     }
 }

@@ -1,0 +1,31 @@
+# maps/test/ fixture - an adversarial layout provoking one known failure
+# class; see docs/gameplay-verification-design.md #2.2. Hand-authored:
+# re-saving from the map editor would drop these comments.
+#
+# u-trap: a U-shaped cul-de-sac, mouth facing the top spawn band,
+# player start due south behind the bar - naive straight-line
+# steering enters the pocket and has to escape back north and
+# around (stuck-escape / committed-heading override territory).
+
+version = 1
+tanks = 4
+
+cells."16,6" = { kind = "wall", material = "iron" }
+cells."24,6" = { kind = "wall", material = "iron" }
+cells."16,7" = { kind = "wall", material = "iron" }
+cells."24,7" = { kind = "wall", material = "iron" }
+cells."16,8" = { kind = "wall", material = "iron" }
+cells."24,8" = { kind = "wall", material = "iron" }
+cells."16,9" = { kind = "wall", material = "iron" }
+cells."24,9" = { kind = "wall", material = "iron" }
+cells."16,10" = { kind = "wall", material = "iron" }
+cells."17,10" = { kind = "wall", material = "iron" }
+cells."18,10" = { kind = "wall", material = "iron" }
+cells."19,10" = { kind = "wall", material = "iron" }
+cells."20,10" = { kind = "wall", material = "iron" }
+cells."21,10" = { kind = "wall", material = "iron" }
+cells."22,10" = { kind = "wall", material = "iron" }
+cells."23,10" = { kind = "wall", material = "iron" }
+cells."24,10" = { kind = "wall", material = "iron" }
+cells."20,16" = { kind = "start" }
+cells."30,17" = { kind = "frog" }

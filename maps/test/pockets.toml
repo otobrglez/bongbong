@@ -1,0 +1,45 @@
+# maps/test/ fixture - an adversarial layout provoking one known failure
+# class; see docs/gameplay-verification-design.md #2.2. Hand-authored:
+# re-saving from the map editor would drop these comments.
+#
+# pockets: a sealed ring (sized to Grid::build's center-blocking
+# rule) whose interior is exactly one open-but-boxed-in pathfind
+# cell - the relocate_unusable_spawns / map-lint pathology - plus two
+# almost-sealed C pockets sitting in the enemy spawn band's
+# corners. tanks=5 for extra spawn pressure.
+
+version = 1
+tanks = 5
+
+cells."6,5" = { kind = "wall", material = "iron" }
+cells."7,5" = { kind = "wall", material = "iron" }
+cells."8,5" = { kind = "wall", material = "iron" }
+cells."6,6" = { kind = "wall", material = "iron" }
+cells."6,7" = { kind = "wall", material = "iron" }
+cells."7,7" = { kind = "wall", material = "iron" }
+cells."8,7" = { kind = "wall", material = "iron" }
+cells."14,8" = { kind = "wall", material = "iron" }
+cells."15,8" = { kind = "wall", material = "iron" }
+cells."16,8" = { kind = "wall", material = "iron" }
+cells."17,8" = { kind = "wall", material = "iron" }
+cells."18,8" = { kind = "wall", material = "iron" }
+cells."14,9" = { kind = "wall", material = "iron" }
+cells."18,9" = { kind = "wall", material = "iron" }
+cells."14,10" = { kind = "wall", material = "iron" }
+cells."18,10" = { kind = "wall", material = "iron" }
+cells."14,11" = { kind = "wall", material = "iron" }
+cells."18,11" = { kind = "wall", material = "iron" }
+cells."27,11" = { kind = "start" }
+cells."7,12" = { kind = "frog" }
+cells."14,12" = { kind = "wall", material = "iron" }
+cells."15,12" = { kind = "wall", material = "iron" }
+cells."16,12" = { kind = "wall", material = "iron" }
+cells."17,12" = { kind = "wall", material = "iron" }
+cells."18,12" = { kind = "wall", material = "iron" }
+cells."32,16" = { kind = "wall", material = "iron" }
+cells."33,16" = { kind = "wall", material = "iron" }
+cells."34,16" = { kind = "wall", material = "iron" }
+cells."34,17" = { kind = "wall", material = "iron" }
+cells."32,18" = { kind = "wall", material = "iron" }
+cells."33,18" = { kind = "wall", material = "iron" }
+cells."34,18" = { kind = "wall", material = "iron" }

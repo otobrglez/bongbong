@@ -14,11 +14,22 @@ use crate::map::{self, CellObject, MapFile};
 use crate::obstacle::{self, Material};
 use crate::pickup::PickupKind;
 use crate::{
-    EDITOR_HAMBURGER_SIZE, EDITOR_ICON_GAP, EDITOR_ICON_SIZE, EDITOR_PALETTE_BOTTOM_MARGIN,
-    EDITOR_PANEL_BORDER_OPACITY, EDITOR_PANEL_BORDER_THICKNESS, EDITOR_PANEL_FILL,
-    EDITOR_PANEL_FILL_OPACITY, EDITOR_PANEL_PADDING, EDITOR_PANEL_ROUNDNESS,
-    EDITOR_PANEL_SEGMENTS, EDITOR_PANEL_SHADOW_OFFSET, EDITOR_PANEL_SHADOW_OPACITY,
-    EDITOR_TOOLBAR_MARGIN, OBSTACLE_GRID_SIZE, Position,
+    EDITOR_HAMBURGER_SIZE,
+    EDITOR_ICON_GAP,
+    EDITOR_ICON_SIZE,
+    EDITOR_PALETTE_BOTTOM_MARGIN,
+    EDITOR_PANEL_BORDER_OPACITY,
+    EDITOR_PANEL_BORDER_THICKNESS,
+    EDITOR_PANEL_FILL,
+    EDITOR_PANEL_FILL_OPACITY,
+    EDITOR_PANEL_PADDING,
+    EDITOR_PANEL_ROUNDNESS,
+    EDITOR_PANEL_SEGMENTS,
+    EDITOR_PANEL_SHADOW_OFFSET,
+    EDITOR_PANEL_SHADOW_OPACITY,
+    EDITOR_TOOLBAR_MARGIN,
+    OBSTACLE_GRID_SIZE,
+    Position,
 };
 
 /// The sprite atlases the editor needs to draw placed objects and their
@@ -34,6 +45,8 @@ pub struct EditorTextures<'a> {
     pub pickup_laser: &'a Texture2D,
     pub pickup_minigun: &'a Texture2D,
     pub pickup_plasma: &'a Texture2D,
+    pub pickup_speedup: &'a Texture2D,
+    pub pickup_shield: &'a Texture2D,
     pub eraser: &'a Texture2D,
     pub tanks: &'a Texture2D,
 }
@@ -50,7 +63,7 @@ enum Tool {
     Eraser,
 }
 
-const TOOLS: [Tool; 13] = [
+const TOOLS: [Tool; 15] = [
     Tool::Wall(Material::Brick),
     Tool::Wall(Material::Iron),
     Tool::Wall(Material::Wood),
@@ -63,6 +76,8 @@ const TOOLS: [Tool; 13] = [
     Tool::Pickup(PickupKind::Laser),
     Tool::Pickup(PickupKind::Minigun),
     Tool::Pickup(PickupKind::Plasma),
+    Tool::Pickup(PickupKind::SpeedUp),
+    Tool::Pickup(PickupKind::Shield),
     Tool::Eraser,
 ];
 
@@ -448,6 +463,8 @@ impl MapEditor {
                         PickupKind::Laser => textures.pickup_laser,
                         PickupKind::Minigun => textures.pickup_minigun,
                         PickupKind::Plasma => textures.pickup_plasma,
+                        PickupKind::SpeedUp => textures.pickup_speedup,
+                        PickupKind::Shield => textures.pickup_shield,
                     };
                     let src =
                         Rectangle::new(0.0, 0.0, crate::PICKUP_TEXTURE_SIZE, crate::PICKUP_TEXTURE_SIZE);
@@ -633,6 +650,8 @@ fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, tool: Tool
                 PickupKind::Laser => textures.pickup_laser,
                 PickupKind::Minigun => textures.pickup_minigun,
                 PickupKind::Plasma => textures.pickup_plasma,
+                PickupKind::SpeedUp => textures.pickup_speedup,
+                PickupKind::Shield => textures.pickup_shield,
             };
             let src = Rectangle::new(0.0, 0.0, crate::PICKUP_TEXTURE_SIZE, crate::PICKUP_TEXTURE_SIZE);
             d.draw_texture_pro(texture, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);

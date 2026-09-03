@@ -1,10 +1,11 @@
-use rapier2d::prelude::RigidBodyHandle;
+use crate::tuning::tuning;
 use sola_raylib::prelude::*;
 
 use crate::tank::Tank;
 use crate::{
-    Position, SHADOW_DIR_X, SHADOW_DIR_Y, SHELL_RICOCHET_BOUNCES, SHELL_SCALE,
-    SHELL_SHADOW_OPACITY, SHELL_SPEED, SHELL_TEXTURE_SIZE, TANK_MUZZLE_FORWARD_OFFSET_BY_ROW,
+    Position,
+    SHELL_SCALE,
+    SHELL_TEXTURE_SIZE,
 };
 
 /// A shell's lifecycle. Each variant maps to a column in shells.png (see
@@ -52,17 +53,30 @@ impl ShellState {
     }
 }
 
-/// Who fired a shell, so collision can charge the right side's damage.
-/// (Physics collision groups - see `physics::owner_group` - are what
-/// actually stop a shell from hitting the tank that fired it; `Owner` here
-/// is purely for damage/kill attribution.) `Enemy` carries that enemy's
-/// index into `Game::enemies`, which is stable for the round (the list is
-/// only rebuilt on restart) - the same index used to derive that tank's
-/// collision-group slot (`Game::enemy_owner_slot`).
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// Who fired a projectile: damage/kill attribution, same-side checks, and
+/// shooter self-exclusion in the hit test. `Enemy(n)` is the nth enemy
+/// spawned this round (`Tank::owner_slot - 1`, see `Tank::owner`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Owner {
     Player,
     Enemy(usize),
+}
+
+impl Owner {
+    /// The owner slot this maps to (`Tank::owner_slot`): 0 for the player,
+    /// `n + 1` for `Enemy(n)`.
+    pub fn slot(self) -> usize {
+        match self {
+            Owner::Player => 0,
+            Owner::Enemy(n) => n + 1,
+        }
+    }
+
+    /// True if both owners fight on the same side - every enemy counts as
+    /// friendly to every other enemy, never to the player.
+    pub fn same_side(self, other: Owner) -> bool {
+        matches!((self, other), (Owner::Player, Owner::Player) | (Owner::Enemy(_), Owner::Enemy(_)))
+    }
 }
 
 pub struct Shell {
@@ -89,12 +103,7 @@ pub struct Shell {
     /// TANK_CHASSIS_DAMAGE_FACTOR_BY_ROW and its use in `Game::update`'s
     /// hit-resolution).
     pub shooter_row: i32,
-    /// This shell's rapier sensor body, spawned alongside it (see
-    /// `Game::update`/`physics::Physics::spawn_shell`) and kept in sync with
-    /// `position` every frame so hit detection can query real intersections
-    /// against a tank's `hit_sensor` instead of a hand-rolled point-in-square
-    /// check. Removed from the physics world when the shell is dropped.
-    pub body: Option<RigidBodyHandle>,
+
     /// This shell's drop-shadow distance (px), rolled once at fire time from
     /// `SHELL_SHADOW_OFFSET_MIN..MAX` (see `Game::update`, right after
     /// `Shell::spawn`) and fixed for its whole flight - different shells land
@@ -103,22 +112,15 @@ pub struct Shell {
     /// None` above) is a placeholder `spawn` itself never uses, since it has
     /// no `rng` to roll from; the real value is set right after construction.
     pub shadow_offset: f32,
-    /// True only on a frame where `update` actually advanced `position` by
-    /// `velocity * dt` - i.e. every Flying frame except the very first one
-    /// (the Fire2->Flying transition itself moves nothing; see `update`'s
-    /// doc comment). Callers reconstructing this frame's swept movement
-    /// segment as `position - velocity * dt` (the shell-vs-shell and
-    /// shell-vs-target checks in `simulation.rs`) need this to avoid
-    /// backdating that segment into space the shell was never actually in
-    /// - on that first frame the segment should collapse to a single point
-    /// at `position`, not an `SHELL_SPEED * dt`-long phantom stretch behind
-    /// the muzzle.
-    pub flew: bool,
-    /// How many more times this shell may ricochet off a battlefield
-    /// boundary wall or an indestructible Iron obstacle before it detonates
-    /// on one instead - see `simulation.rs`'s shell hit-resolution loop.
-    /// Every other target (a tank, the frog, any destructible obstacle
-    /// material) still detonates on first contact regardless of this.
+    /// Where this shell was at the start of the current frame's physics
+    /// steps - written by the simulation before it advances projectiles,
+    /// never by `update`. `prev_position..position` is the segment the
+    /// swept hit test checks, so a shell can't tunnel through a thin
+    /// target however far one frame carries it.
+    pub prev_position: Position,
+    /// How many more times this shell may ricochet off an indestructible
+    /// Iron obstacle before detonating on one instead. Battlefield walls
+    /// and every other target detonate it on first contact regardless.
     pub bounces_left: u32,
 }
 
@@ -140,12 +142,10 @@ impl Shell {
         // Start at the turret/barrel tip, not the tank's own center - see
         // TANK_MUZZLE_FORWARD_OFFSET_BY_ROW for how that distance was
         // measured per tank archetype from the sprite sheet's own published
-        // bounding boxes. (Self-hits are prevented separately, by physics
-        // collision groups excluding the shooter's own hit sensor - see
-        // `physics::Physics::spawn_shell` - not by this offset, so this is
-        // free to match the actual sprite art rather than needing to clear
-        // the tank's hit sensor.)
-        let muzzle = TANK_MUZZLE_FORWARD_OFFSET_BY_ROW[tank.row as usize] * tank.scale;
+        // bounding boxes. (Self-hits are prevented by the hit test skipping
+        // the shooter's own boxes - see `simulation::hits::Terrain::sweep` -
+        // not by this offset, so it's free to match the sprite art.)
+        let muzzle = tuning().tank_muzzle_forward_offset[tank.row as usize] * tank.scale;
         // Perpendicular to `dir`, using the *tank's own* rotation (not
         // rotation + aim_offset) - a misfire's aim skew shouldn't also swing
         // which side of the hull a barrel sits on. Rotating (sin,-cos) by
@@ -155,40 +155,37 @@ impl Shell {
         // convention.
         let hull_rot = tank.rotation.to_radians();
         let lateral = Vector2::new(hull_rot.cos(), hull_rot.sin()) * (lateral_offset * tank.scale);
+        let position = Position::new(
+            tank.position.x + dir.x * muzzle + lateral.x,
+            tank.position.y + dir.y * muzzle + lateral.y,
+        );
         Shell {
             state: ShellState::Fire0,
-            position: Position::new(
-                tank.position.x + dir.x * muzzle + lateral.x,
-                tank.position.y + dir.y * muzzle + lateral.y,
-            ),
-            velocity: Vector2::new(dir.x * SHELL_SPEED, dir.y * SHELL_SPEED),
+            position,
+            velocity: Vector2::new(dir.x * tuning().shell_speed, dir.y * tuning().shell_speed),
             rotation: tank.rotation + aim_offset,
             timer: 0.0,
             done: false,
             owner,
             variant: tank.shell_variant,
             shooter_row: tank.row,
-            body: None,
             shadow_offset: 0.0,
-            flew: false,
-            bounces_left: SHELL_RICOCHET_BOUNCES,
+            prev_position: position,
+            bounces_left: tuning().shell_ricochet_bounces,
         }
     }
 
     /// Advance the shell: move it while flying, and step through its timed states.
-    /// Flying shells detonate via a real physics hit against a tank,
-    /// obstacle, or battlefield wall (see `simulation::find_shell_target`) -
-    /// this only moves the shell, it never detonates it. Walls sit exactly
-    /// at the screen edge (see `battlefield::spawn_walls`), so a shell that
+    /// Flying shells are detonated by the simulation's swept hit test
+    /// (`simulation::hits::Terrain::sweep`), never here. Walls sit exactly
+    /// at the screen edge (see `battlefield::wall_rects`), so a shell that
     /// would otherwise fly off the battlefield always hits one first.
     pub fn update(&mut self, dt: f32) {
         self.timer += dt;
-        self.flew = false;
 
         if self.state == ShellState::Flying {
             self.position.x += self.velocity.x * dt;
             self.position.y += self.velocity.y * dt;
-            self.flew = true;
             return;
         }
 
@@ -252,13 +249,13 @@ pub fn draw_shell_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, shell: &S
     let size = SHELL_TEXTURE_SIZE * SHELL_SCALE;
 
     let dest = Rectangle::new(
-        shell.position.x + SHADOW_DIR_X * shell.shadow_offset,
-        shell.position.y + SHADOW_DIR_Y * shell.shadow_offset,
+        shell.position.x + tuning().shadow_dir_x * shell.shadow_offset,
+        shell.position.y + tuning().shadow_dir_y * shell.shadow_offset,
         size,
         size,
     );
     let origin = Vector2::new(size / 2.0, size / 2.0);
-    let shadow = Color::new(0, 0, 0, (255.0 * SHELL_SHADOW_OPACITY) as u8);
+    let shadow = Color::new(0, 0, 0, (255.0 * tuning().shell_shadow_opacity) as u8);
 
     d.draw_texture_pro(texture, src, dest, origin, shell.rotation, shadow);
 }
