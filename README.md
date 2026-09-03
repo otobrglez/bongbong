@@ -9,7 +9,13 @@ The main goal of this project is to build a fun, entertaining game with retro gr
 
 ```bash
 # Use devenv (Nix)
-cargo watch -x "run"
+cargo watch -x "run -- -e 12 --map=maps/default.toml"
+
+# Map editor
+cargo run --features map-editor -- --editor --map=maps/default.toml
+
+# Preview web
+just build-web-dev && just preview-web
 ```
 
 ## Dependencies
@@ -21,7 +27,7 @@ cargo watch -x "run"
 
 ## Collaboration
 
-Please feel free to reach out and/or interact with me if you have any ideas or whatever. ;\)
+Please feel free to reach out or interact with me if you have any ideas or anything else. ;\)
 
 \- Oto Brglez
 
