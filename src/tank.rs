@@ -234,6 +234,18 @@ pub struct Tank {
     /// while the hull swings around to catch up. Read only by `draw_tank`/
     /// `draw_tank_shadow`.
     pub turret_visual_rotation: f32,
+    /// Where this tank's ground ring (the shield ring, the player's white
+    /// marker - see `draw_ground_ring`) is drawn. A sleepy follower of
+    /// `position`: it has its own `ring_velocity` and chases the hull as a
+    /// spring-damper (`ease_ring_position`/`tank_ring_spring_hz`/
+    /// `tank_ring_damping`), so it hangs back when the tank sets off, trails
+    /// further the faster the hull moves, then swings in and settles once
+    /// the tank stops. Snaps whenever the hull is teleported or spawned far
+    /// from it. Presentation-only, like `visual_rotation`.
+    pub ring_position: Position,
+    /// The ground ring's own velocity (px/s) - the inertia that makes it
+    /// lag and catch up rather than track the hull instantly.
+    pub ring_velocity: Vector2,
     /// Seconds accumulated toward the minigun barrel-cluster overlay's next
     /// "hot barrel" frame swap (see `draw_minigun_mount`), advanced while
     /// `minigun_burst` is active (see `tick_minigun_spin`) and held in place
@@ -411,6 +423,8 @@ impl Default for Tank {
             rotation: 0.0,
             visual_rotation: 0.0,
             turret_visual_rotation: 0.0,
+            ring_position: Position::default(),
+            ring_velocity: Vector2::new(0.0, 0.0),
             minigun_cycle_timer: 0.0,
             hull_frame: 0,
             hull_anim_accum: 0.0,
@@ -618,6 +632,53 @@ impl Tank {
     /// discrete frame index, not a rotation angle.
     fn minigun_cycle_frame(&self) -> i32 {
         ((self.minigun_cycle_timer / tuning().minigun_cycle_seconds) as i32).clamp(0, 2)
+    }
+
+    /// Pull `ring_position` toward `position` as a damped spring: the ring
+    /// accelerates toward the hull in proportion to how far behind it is
+    /// (`tank_ring_spring_hz` sets how briskly) and bleeds off its own speed
+    /// (`tank_ring_damping`, a damping ratio - under 1 lets it overshoot a
+    /// touch as it settles). That gives the sleepy feel for free: a tank
+    /// setting off leaves the ring behind for a beat, a cruising tank drags
+    /// it at a steady offset that grows with speed (so a speed boost visibly
+    /// stretches the trail), and a stopping tank has it glide in and settle.
+    /// The trail is leashed to `tank_ring_max_trail_px` so the ring stays
+    /// tucked under the hull no matter how fast it goes. Snaps outright when
+    /// the hull is more than a body length away (spawn, teleport) so the
+    /// ring never visibly flies across the map to catch up.
+    pub fn ease_ring_position(&mut self, dt: f32) {
+        let dx = self.position.x - self.ring_position.x;
+        let dy = self.position.y - self.ring_position.y;
+        let snap = self.size();
+        if dx * dx + dy * dy > snap * snap {
+            self.ring_position = self.position;
+            self.ring_velocity = Vector2::new(0.0, 0.0);
+            return;
+        }
+        let t = tuning();
+        let omega = t.tank_ring_spring_hz * std::f32::consts::TAU;
+        if omega <= 0.0 {
+            self.ring_position = self.position;
+            self.ring_velocity = Vector2::new(0.0, 0.0);
+            return;
+        }
+        // Semi-implicit Euler: stable for the omega*dt this game runs at
+        // (a few Hz at 60 fps), and cheap enough for every tank every frame.
+        let damping = 2.0 * t.tank_ring_damping * omega;
+        self.ring_velocity.x += (omega * omega * dx - damping * self.ring_velocity.x) * dt;
+        self.ring_velocity.y += (omega * omega * dy - damping * self.ring_velocity.y) * dt;
+        self.ring_position.x += self.ring_velocity.x * dt;
+        self.ring_position.y += self.ring_velocity.y * dt;
+        // Leash: never further than `tank_ring_max_trail_px` behind the hull.
+        let dx = self.position.x - self.ring_position.x;
+        let dy = self.position.y - self.ring_position.y;
+        let dist = (dx * dx + dy * dy).sqrt();
+        let leash = t.tank_ring_max_trail_px;
+        if dist > leash && dist > 0.0 {
+            let pull = 1.0 - leash / dist;
+            self.ring_position.x += dx * pull;
+            self.ring_position.y += dy * pull;
+        }
     }
 
     /// Small phase offset (seconds) derived from screen position so that several
@@ -904,44 +965,110 @@ pub fn draw_tank(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank) {
     );
 }
 
-/// Draw the rainbow shield ring while `Tank::shield_timer` is running: six
-/// 60-degree arcs, each one hue step apart, all cycling through the rainbow
-/// at SHIELD_GLOW_HUE_HZ (offset by `anim_phase` so neighbouring tanks
-/// don't cycle in lockstep), plus a faint disc of the leading hue inside.
-/// Radius breathes gently around `Tank::size() * SHIELD_GLOW_RADIUS_FACTOR`
-/// and everything fades over the final SHIELD_GLOW_FADE_SECONDS. Called
-/// before `draw_tank_shadow`, so the ring is a translucent ground decal
-/// under the whole tank - the sprite stays crisp and only the part reaching
-/// past the hull shows. Centered on `tank.position`, not the rear-shifted
-/// `draw_pivot`.
-pub fn draw_tank_shield(d: &mut impl RaylibDraw, tank: &Tank, time: f32) {
-    if !tank.is_shielded() || tank.is_wreck() {
+/// How a tank's ground ring is coloured - the one thing that differs between
+/// the rainbow shield ring and the player's plain white marker. Size,
+/// thickness, breathing, translucency and placement are all shared in
+/// `draw_ground_ring`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RingStyle {
+    /// Six 60-degree arcs one hue step apart, all cycling through the
+    /// rainbow starting from this hue (degrees), with the arcs rotating
+    /// along with it so the bands visibly travel around the ring; the
+    /// inner disc takes the leading hue.
+    Rainbow { base_hue: f32 },
+    /// One flat colour for both the ring and its inner disc. The colour's
+    /// own alpha is the band's opacity (the inner disc takes a quarter of
+    /// it) - the shield's translucency is far too faint for a plain colour
+    /// to read as itself over grass, so a solid ring chooses its own.
+    Solid(Color),
+}
+
+/// Draw one translucent ground ring under a tank: a band of radius
+/// `Tank::size() * shield_glow_radius_factor` (breathing gently around it
+/// for the rainbow style, fixed for a solid one) plus a faint disc inside,
+/// coloured per `style` and scaled by `fade` (0..=1).
+/// Called before `draw_tank_shadow`, so it is a ground decal under the whole
+/// tank - the sprite stays crisp and only the part reaching past the hull
+/// shows. Centered on `Tank::ring_position`, the eased follower of the hull,
+/// not the rear-shifted `draw_pivot`. `draw_tank_shield` and
+/// `draw_player_ring` are the two callers; they share every number here so
+/// the two rings read as the same object in different colours.
+pub fn draw_ground_ring(d: &mut impl RaylibDraw, tank: &Tank, time: f32, style: RingStyle, fade: f32) {
+    if fade <= 0.0 {
         return;
     }
-    let t = tuning();
-    let fade = if t.shield_glow_fade_seconds > 0.0 {
-        (tank.shield_timer / t.shield_glow_fade_seconds).min(1.0)
-    } else {
-        1.0
+    // Only the rainbow breathes (radius and alpha ride a slow sine); a solid
+    // ring is deliberately static - a plain, steady marker - so it uses the
+    // sine's midpoint as fixed values and reads the same size/opacity on
+    // average as the shield ring.
+    let pulse = match style {
+        RingStyle::Rainbow { .. } => ((time + tank.anim_phase()) * std::f32::consts::TAU * 1.5).sin() * 0.5 + 0.5,
+        RingStyle::Solid(_) => 0.5,
     };
-    let pulse = ((time + tank.anim_phase()) * std::f32::consts::TAU * 1.5).sin() * 0.5 + 0.5;
-    let radius = tank.size() * t.shield_glow_radius_factor * (0.94 + 0.06 * pulse);
+    let radius = tank.size() * tuning().shield_glow_radius_factor * (0.94 + 0.06 * pulse);
     let thickness = radius * 0.22;
-    let base_hue = (time * t.shield_glow_hue_hz * 360.0 + tank.anim_phase() * 360.0).rem_euclid(360.0);
+    let center = tank.ring_position;
     let with_alpha = |c: Color, alpha: f32| Color::new(c.r, c.g, c.b, (alpha * fade).clamp(0.0, 255.0) as u8);
+    let (disc_alpha, band_alpha) = match style {
+        RingStyle::Rainbow { .. } => (22.0 + 10.0 * pulse, 95.0 + 30.0 * pulse),
+        RingStyle::Solid(color) => (color.a as f32 * 0.25, color.a as f32),
+    };
 
-    let fill = Color::color_from_hsv(base_hue, 0.6, 1.0);
-    d.draw_circle_v(tank.position, radius - thickness, with_alpha(fill, 22.0 + 10.0 * pulse));
-    const ARCS: i32 = 6;
-    let step = 360.0 / ARCS as f32;
-    for i in 0..ARCS {
-        let hue = (base_hue + i as f32 * step).rem_euclid(360.0);
-        // Arcs rotate with the hue so the bands visibly travel around the
-        // ring rather than just recolouring in place.
-        let start = i as f32 * step - base_hue;
-        let color = with_alpha(Color::color_from_hsv(hue, 0.85, 1.0), 95.0 + 30.0 * pulse);
-        d.draw_ring(tank.position, radius - thickness, radius, start, start + step, 12, color);
+    match style {
+        RingStyle::Rainbow { base_hue } => {
+            let fill = Color::color_from_hsv(base_hue, 0.6, 1.0);
+            d.draw_circle_v(center, radius - thickness, with_alpha(fill, disc_alpha));
+            const ARCS: i32 = 6;
+            let step = 360.0 / ARCS as f32;
+            for i in 0..ARCS {
+                let hue = (base_hue + i as f32 * step).rem_euclid(360.0);
+                let start = i as f32 * step - base_hue;
+                let color = with_alpha(Color::color_from_hsv(hue, 0.85, 1.0), band_alpha);
+                d.draw_ring(center, radius - thickness, radius, start, start + step, 12, color);
+            }
+        }
+        RingStyle::Solid(color) => {
+            d.draw_circle_v(center, radius - thickness, with_alpha(color, disc_alpha));
+            d.draw_ring(center, radius - thickness, radius, 0.0, 360.0, 48, with_alpha(color, band_alpha));
+        }
     }
+}
+
+/// How far into its final fade-out a tank's shield is: 1 while it has more
+/// than `shield_glow_fade_seconds` left, falling to 0 as it expires, 0 when
+/// there is no shield at all. Drives the shield ring's opacity and, inverted,
+/// the player marker's, so the two cross-fade instead of stacking.
+fn shield_visibility(tank: &Tank) -> f32 {
+    if !tank.is_shielded() {
+        return 0.0;
+    }
+    let fade_seconds = tuning().shield_glow_fade_seconds;
+    if fade_seconds > 0.0 { (tank.shield_timer / fade_seconds).min(1.0) } else { 1.0 }
+}
+
+/// Draw the rainbow shield ring while `Tank::shield_timer` is running: a
+/// `RingStyle::Rainbow` ground ring whose hue cycles at `shield_glow_hue_hz`
+/// (offset by `anim_phase` so neighbouring tanks don't cycle in lockstep),
+/// fading out over the final `shield_glow_fade_seconds`.
+pub fn draw_tank_shield(d: &mut impl RaylibDraw, tank: &Tank, time: f32) {
+    if tank.is_wreck() {
+        return;
+    }
+    let base_hue = (time * tuning().shield_glow_hue_hz * 360.0 + tank.anim_phase() * 360.0).rem_euclid(360.0);
+    draw_ground_ring(d, tank, time, RingStyle::Rainbow { base_hue }, shield_visibility(tank));
+}
+
+/// Draw the player's white marker ring: the same ground ring as the shield
+/// (same radius and thickness, minus the breathing), `RingStyle::Solid`
+/// white at `player_ring_opacity`, so the player's own tank is always the
+/// one with a steady halo. Yields to the shield ring while one is up - it fades back in
+/// as the shield fades out - and disappears with the wreck.
+pub fn draw_player_ring(d: &mut impl RaylibDraw, tank: &Tank, time: f32) {
+    if tank.is_wreck() {
+        return;
+    }
+    let white = Color::new(255, 255, 255, (tuning().player_ring_opacity * 255.0).round().clamp(0.0, 255.0) as u8);
+    draw_ground_ring(d, tank, time, RingStyle::Solid(white), 1.0 - shield_visibility(tank));
 }
 
 /// Draw this tank's drop shadow: the same two layers (each at its own eased
@@ -1146,5 +1273,77 @@ mod shield_tests {
         assert!(!tank.is_wreck());
         tank.take_damage(1000.0, MAX_DAMAGE);
         assert!(tank.is_wreck());
+    }
+}
+
+#[cfg(test)]
+mod ring_tests {
+    use super::*;
+
+    #[test]
+    fn ring_snaps_when_the_hull_is_far_away() {
+        let mut tank = Tank { position: Position::new(500.0, 300.0), ..Tank::default() };
+        tank.ease_ring_position(1.0 / 60.0);
+        assert_eq!(tank.ring_position, tank.position);
+    }
+
+    #[test]
+    fn ring_snaps_when_the_hull_is_far_away_and_drops_its_speed() {
+        let mut tank = Tank { position: Position::new(500.0, 300.0), ..Tank::default() };
+        tank.ring_velocity = Vector2::new(40.0, 0.0);
+        tank.ease_ring_position(1.0 / 60.0);
+        assert_eq!(tank.ring_velocity, Vector2::new(0.0, 0.0));
+    }
+
+    #[test]
+    fn ring_hangs_back_first_then_catches_up_and_settles() {
+        let dt = 1.0 / 60.0;
+        // Start inside the leash so only the spring is being tested.
+        let mut tank = Tank { position: Position::new(10.0, 0.0), ..Tank::default() };
+        // Sleepy: after one frame it has barely moved, well behind a plain
+        // exponential follow would be.
+        tank.ease_ring_position(dt);
+        assert!(tank.ring_position.x < 1.0, "ring should start lazily, got {}", tank.ring_position.x);
+        // ...but it does get going.
+        for _ in 0..10 {
+            tank.ease_ring_position(dt);
+        }
+        assert!(tank.ring_position.x > 5.0, "ring should be on its way, got {}", tank.ring_position.x);
+        // ...and settles on the hull within a couple of seconds.
+        for _ in 0..120 {
+            tank.ease_ring_position(dt);
+        }
+        assert!((tank.ring_position.x - 10.0).abs() < 0.5, "ring should have settled, at {}", tank.ring_position.x);
+        assert!(tank.ring_velocity.x.abs() < 5.0, "ring should be at rest, v={}", tank.ring_velocity.x);
+    }
+
+    #[test]
+    fn ring_trails_further_behind_a_faster_hull() {
+        let dt = 1.0 / 60.0;
+        let trail_at = |speed: f32| {
+            let mut tank = Tank::default();
+            for _ in 0..300 {
+                tank.position.x += speed * dt;
+                tank.ease_ring_position(dt);
+            }
+            tank.position.x - tank.ring_position.x
+        };
+        let slow = trail_at(40.0);
+        let fast = trail_at(80.0);
+        assert!(slow > 0.0, "ring should trail a moving hull, got {slow}");
+        assert!(fast > slow * 1.5, "faster hull should stretch the trail: slow={slow} fast={fast}");
+    }
+
+    #[test]
+    fn ring_trail_is_leashed_at_any_speed() {
+        let dt = 1.0 / 60.0;
+        let mut tank = Tank::default();
+        let leash = tuning().tank_ring_max_trail_px;
+        for _ in 0..300 {
+            tank.position.x += 400.0 * dt;
+            tank.ease_ring_position(dt);
+            let trail = tank.position.x - tank.ring_position.x;
+            assert!(trail <= leash + 1e-3, "trail {trail} exceeds leash {leash}");
+        }
     }
 }

@@ -21,10 +21,17 @@ use crate::tank::{ActiveWeapon, Tank};
 use crate::tuning::{TANK_NAMES, tuning};
 use crate::{DAMAGE_VARIANTS, MAX_DAMAGE, Position, TANK_SHELL_VARIANT_BY_ROW};
 
+use super::engage::{EngageStatus, Rejections};
 use super::{
     Frame, Game, Outcome, PLAYER_OWNER_SLOT, TANK_SPRITE_ORDER, TANK_VARIANTS, enemy_owner_slot, roll_track_distortion,
     with_frog, with_tank,
 };
+
+/// Two live enemies closer than this are "clustered" for `DebugSnapshot::clusters`
+/// and the dev server's history aggregates - the probe's clustering anomaly
+/// uses the same distance (its comment explains why 90 px is above the
+/// ring's tightest legitimate pairing).
+pub const CLUSTER_RADIUS_PX: f32 = 90.0;
 
 /// How much of the world `Game::debug_snapshot` serialises.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Deserialize)]
@@ -58,8 +65,11 @@ pub struct DebugSnapshot {
     pub pickups: Vec<PickupDebug>,
     pub frog: Option<FrogDebug>,
     pub obstacles_alive: usize,
-    /// Last enemy phase's engagement-slot targets, by owner slot.
-    pub engage: Vec<EngageDebug>,
+    /// What the last enemy phase's engagement-slot assignment decided.
+    pub engage: EngageSnapshot,
+    /// Groups of two or more live enemies transitively within
+    /// `CLUSTER_RADIUS_PX` of each other, as owner slots.
+    pub clusters: Vec<Vec<usize>>,
 }
 
 #[derive(Serialize, Debug)]
@@ -90,6 +100,9 @@ pub struct TankDebug {
     pub weapon: &'static str,
     pub shield: f32,
     pub boost: f32,
+    /// Distance to the closest other live enemy; live enemies only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nearest_ally_px: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub touching_static: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -126,10 +139,61 @@ pub struct FrogDebug {
 }
 
 #[derive(Serialize, Debug)]
-pub struct EngageDebug {
+pub struct EngageSnapshot {
+    /// False when fewer than two enemies were engaged, so no ring was built.
+    pub built: bool,
+    /// Every enemy, by owner slot.
+    pub tanks: Vec<EngageTankDebug>,
+    /// The 16 ring slots (`Full` only, and only when built).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slots: Option<Vec<EngageSlotDebug>>,
+}
+
+#[derive(Serialize, Debug)]
+pub struct EngageTankDebug {
+    pub slot: usize,
+    pub status: EngageStatus,
+    /// Index into `slots` of the ring slot held; `None` = steering at the
+    /// player directly.
+    pub ring: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<f32>,
+    /// Kept the slot from last frame without a new search.
+    pub sticky: bool,
+    /// Candidates the search passed over, by reason (`Full` only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rejected: Option<Rejections>,
+}
+
+#[derive(Serialize, Debug)]
+pub struct EngageSlotDebug {
+    pub i: u8,
+    pub axis: &'static str,
+    pub rank: u8,
+    pub side: i8,
+    /// `None` = off the map for this player position.
+    pub x: Option<f32>,
+    pub y: Option<f32>,
+    /// Line of sight to the player; `None` = never checked this frame.
+    pub los: Option<bool>,
+    /// Owner slot of the tank holding it.
+    pub claimed_by: Option<usize>,
+}
+
+/// One tank's per-frame row for the dev server's history ring - the few
+/// fields worth accumulating over time, read cheaply enough to record on
+/// every stepped frame.
+#[derive(Clone, Serialize, Debug)]
+pub struct TrackRow {
     pub slot: usize,
     pub x: f32,
     pub y: f32,
+    pub action: Option<&'static str>,
+    pub ring: Option<u8>,
+    pub stuck: bool,
+    pub touching_static: bool,
 }
 
 /// Fields `Game::debug_set_tank` overwrites; anything left `None` is untouched.
@@ -151,6 +215,50 @@ const PROJECTILE_CAP: usize = 64;
 
 fn r1(v: f32) -> f32 {
     (v * 10.0).round() / 10.0
+}
+
+/// Groups of two or more tanks transitively within `radius` of each other
+/// (union-find over the pairs), each group's slots ascending, groups by
+/// their first slot.
+pub fn clusters(tanks: &[(usize, Position)], radius: f32) -> Vec<Vec<usize>> {
+    let n = tanks.len();
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn find(parent: &mut [usize], i: usize) -> usize {
+        let mut i = i;
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    for a in 0..n {
+        for b in a + 1..n {
+            if tanks[a].1.distance_to(tanks[b].1) <= radius {
+                let (ra, rb) = (find(&mut parent, a), find(&mut parent, b));
+                if ra != rb {
+                    parent[ra] = rb;
+                }
+            }
+        }
+    }
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    let mut roots: Vec<usize> = Vec::new();
+    for i in 0..n {
+        let root = find(&mut parent, i);
+        match roots.iter().position(|&r| r == root) {
+            Some(g) => groups[g].push(tanks[i].0),
+            None => {
+                roots.push(root);
+                groups.push(vec![tanks[i].0]);
+            }
+        }
+    }
+    groups.retain(|g| g.len() >= 2);
+    for g in &mut groups {
+        g.sort_unstable();
+    }
+    groups.sort_by_key(|g| g[0]);
+    groups
 }
 
 fn shell_state_name(s: ShellState) -> &'static str {
@@ -182,6 +290,13 @@ impl Game {
     /// owner slot so two snapshots line up entry for entry.
     pub fn debug_snapshot(&self, width: f32, height: f32, detail: Detail) -> DebugSnapshot {
         let full = detail == Detail::Full;
+        let live_enemies: Vec<(usize, Position)> = self
+            .world
+            .query::<(&Tank, &Ai)>()
+            .iter()
+            .filter(|(t, _)| !t.is_wreck())
+            .map(|(t, _)| (t.owner_slot, t.position))
+            .collect();
         let mut tanks: Vec<TankDebug> = self
             .world
             .query::<(&Tank, Option<&Ai>)>()
@@ -189,6 +304,16 @@ impl Game {
             .map(|(tank, ai)| {
                 let body = tank.body.expect("tank should always have a physics body once spawned");
                 let vel = self.physics.velocity(body);
+                let nearest_ally_px = (ai.is_some() && !tank.is_wreck())
+                    .then(|| {
+                        live_enemies
+                            .iter()
+                            .filter(|(slot, _)| *slot != tank.owner_slot)
+                            .map(|(_, p)| p.distance_to(tank.position))
+                            .fold(f32::INFINITY, f32::min)
+                    })
+                    .filter(|d| d.is_finite())
+                    .map(r1);
                 TankDebug {
                     slot: tank.owner_slot,
                     is_player: tank.owner_slot == PLAYER_OWNER_SLOT,
@@ -211,6 +336,7 @@ impl Game {
                     weapon: tank.active_weapon().name(),
                     shield: r1(tank.shield_timer),
                     boost: r1(tank.speed_boost_timer),
+                    nearest_ally_px,
                     touching_static: full.then(|| self.physics.contact_stats(body).touching_static),
                     ai: if full { ai.map(Ai::snapshot) } else { None },
                 }
@@ -274,15 +400,44 @@ impl Game {
             })
         });
 
-        let mut engage: Vec<EngageDebug> = self
-            .last_engage_targets
-            .iter()
-            .filter_map(|(&entity, &target)| {
-                let mut q = self.world.query_one::<&Tank>(entity);
-                q.get().ok().map(|t| EngageDebug { slot: t.owner_slot, x: r1(target.x), y: r1(target.y) })
-            })
-            .collect();
-        engage.sort_by_key(|e| e.slot);
+        let report = &self.last_engage;
+        let owner_of = |entity: hecs::Entity| report.tanks.iter().find(|t| t.entity == entity).map(|t| t.owner);
+        let engage = EngageSnapshot {
+            built: report.built,
+            tanks: report
+                .tanks
+                .iter()
+                .map(|t| EngageTankDebug {
+                    slot: t.owner,
+                    status: t.status,
+                    ring: t.slot.map(|s| s.index() as u8),
+                    x: t.target.map(|p| r1(p.x)),
+                    y: t.target.map(|p| r1(p.y)),
+                    sticky: t.sticky,
+                    rejected: (full && t.status == EngageStatus::Engaged).then_some(t.rejected),
+                })
+                .collect(),
+            slots: (full && report.built).then(|| {
+                report
+                    .slots
+                    .iter()
+                    .enumerate()
+                    .map(|(i, s)| {
+                        let slot = super::engage::EngageSlot::from_index(i);
+                        EngageSlotDebug {
+                            i: i as u8,
+                            axis: slot.axis_name(),
+                            rank: slot.rank,
+                            side: slot.side,
+                            x: s.point.map(|p| r1(p.x)),
+                            y: s.point.map(|p| r1(p.y)),
+                            los: s.line_of_sight,
+                            claimed_by: s.claimed_by.and_then(owner_of),
+                        }
+                    })
+                    .collect()
+            }),
+        };
 
         DebugSnapshot {
             frame: self.frame,
@@ -300,7 +455,33 @@ impl Game {
             frog,
             obstacles_alive: self.world.query::<&Obstacle>().iter().filter(|o| !o.destroyed).count(),
             engage,
+            clusters: clusters(&live_enemies, CLUSTER_RADIUS_PX),
         }
+    }
+
+    /// One `TrackRow` per live tank, sorted by owner slot - see `TrackRow`.
+    pub fn debug_track_rows(&self) -> Vec<TrackRow> {
+        let mut rows: Vec<TrackRow> = self
+            .world
+            .query::<(Entity, &Tank, Option<&Ai>)>()
+            .iter()
+            .filter(|(_, t, _)| !t.is_wreck())
+            .map(|(entity, tank, ai)| {
+                let body = tank.body.expect("tank should always have a physics body once spawned");
+                let ai = ai.map(Ai::snapshot);
+                TrackRow {
+                    slot: tank.owner_slot,
+                    x: r1(tank.position.x),
+                    y: r1(tank.position.y),
+                    action: ai.and_then(|a| a.last_action),
+                    ring: self.last_engage.slot_of(entity).map(|s| s.index() as u8),
+                    stuck: ai.is_some_and(|a| a.stuck_timer > 0.0),
+                    touching_static: self.physics.contact_stats(body).touching_static,
+                }
+            })
+            .collect();
+        rows.sort_by_key(|r| r.slot);
+        rows
     }
 
     /// The tank entity in owner slot `slot` (0 = player), if any.
@@ -323,6 +504,8 @@ impl Game {
             let mut q = self.world.query_one::<&mut Tank>(entity);
             let tank = q.get().map_err(|e| e.to_string())?;
             tank.position = pos;
+            tank.ring_position = pos;
+            tank.ring_velocity = Vector2::new(0.0, 0.0);
             tank.velocity = Vector2::new(0.0, 0.0);
             if let Some(rot) = rotation {
                 tank.rotation = rot;

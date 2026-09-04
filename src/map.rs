@@ -58,6 +58,12 @@ pub struct MapFile {
     /// roll, same as today.
     #[serde(default)]
     pub tanks: Option<u32>,
+    /// Where this map came from, for display only: the file stem when
+    /// `load` read it, `"default"` for the embedded map, `None` for text
+    /// handed over directly (the dev server's inline `map_toml`). Never
+    /// written to disk.
+    #[serde(skip)]
+    pub name: Option<String>,
 }
 
 fn cell_key(col: i32, row: i32) -> String {
@@ -88,13 +94,15 @@ pub fn world_to_cell(pos: Position) -> (i32, i32) {
 
 impl MapFile {
     pub fn new() -> Self {
-        MapFile { version: CURRENT_VERSION, cells: HashMap::new(), tanks: None }
+        MapFile { version: CURRENT_VERSION, cells: HashMap::new(), tanks: None, name: None }
     }
 
     pub fn load(path: &Path) -> Result<Self, String> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| format!("reading map {}: {e}", path.display()))?;
-        Self::from_toml_str(&text).map_err(|e| format!("parsing map {}: {e}", path.display()))
+        let mut map = Self::from_toml_str(&text).map_err(|e| format!("parsing map {}: {e}", path.display()))?;
+        map.name = path.file_stem().map(|s| s.to_string_lossy().into_owned());
+        Ok(map)
     }
 
     /// Parse already-in-memory TOML text rather than reading it from a path -
@@ -125,8 +133,14 @@ impl MapFile {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("creating {}: {e}", parent.display()))?;
         }
-        let text = toml::to_string_pretty(self).map_err(|e| format!("serializing map: {e}"))?;
+        let text = self.to_toml_string()?;
         std::fs::write(path, text).map_err(|e| format!("writing {}: {e}", path.display()))
+    }
+
+    /// The map as TOML text, in the shape `save` writes (one table per
+    /// cell) - what `from_toml_str` parses back.
+    pub fn to_toml_string(&self) -> Result<String, String> {
+        toml::to_string_pretty(self).map_err(|e| format!("serializing map: {e}"))
     }
 
     pub fn cell(&self, col: i32, row: i32) -> Option<&CellObject> {
@@ -255,4 +269,29 @@ pub fn list_maps() -> Vec<String> {
         .collect();
     names.sort();
     names
+}
+
+#[cfg(test)]
+mod toml_tests {
+    use super::*;
+
+    #[test]
+    fn toml_string_round_trips_the_default_map() {
+        let map = MapFile::from_toml_str(include_str!("../maps/default.toml")).unwrap();
+        let back = MapFile::from_toml_str(&map.to_toml_string().unwrap()).unwrap();
+        assert_eq!(back.version, map.version);
+        assert_eq!(back.tanks, map.tanks);
+        assert_eq!(back.cells.len(), map.cells.len());
+        for (key, cell) in &map.cells {
+            assert!(back.cells.get(key) == Some(cell), "cell {key} changed");
+        }
+        assert_eq!(back.name, None, "name is not part of the file");
+    }
+
+    #[test]
+    fn load_names_the_map_after_its_file() {
+        let map = MapFile::load(Path::new("maps/test/choke.toml")).unwrap();
+        assert_eq!(map.name.as_deref(), Some("choke"));
+        assert_eq!(map.tanks, Some(4));
+    }
 }

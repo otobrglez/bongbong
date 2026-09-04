@@ -222,7 +222,7 @@ const PROGRESS_ACHIEVED_FRACTION: f32 = 0.3; // real < this * commanded
 // 128px behind it) or an adjacent axis's pair (~385px away), both well
 // outside CLUSTER_RADIUS. So a sustained 3-within-90px reading is still a
 // genuine failure, not a side effect of the geometry itself.
-const CLUSTER_RADIUS: f32 = 90.0; // px between tank centers
+const CLUSTER_RADIUS: f32 = bongbong::simulation::debug::CLUSTER_RADIUS_PX; // px between tank centers, shared with the live snapshot
 const CLUSTER_MIN_GROUP: usize = 3; // this many mutually-close enemies counts as a cluster
 const CLUSTER_FRAMES_THRESHOLD: u32 = 180; // 3s, matching STALL_FRAMES_THRESHOLD's window
 // --- Navigation e2e: path-stretch (docs/gameplay-verification-design.md §5.2) ---
@@ -410,7 +410,7 @@ fn input_for_frame(scenario: Scenario, frame: u32) -> Input {
         pause_pressed: false,
         restart_pressed: false,
         toggle_shadows_pressed: false,
-        toggle_inspect_pressed: false,
+        cycle_overlays_pressed: false,
     }
 }
 

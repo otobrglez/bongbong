@@ -158,8 +158,10 @@ fn parse_map(s: &str) -> Result<bongbong::map::MapFile, String> {
 /// dev, since `include_str!` makes rustc treat it as a compile input and
 /// trigger a rebuild.
 fn default_map() -> bongbong::map::MapFile {
-    bongbong::map::MapFile::from_toml_str(include_str!("../maps/default.toml"))
-        .expect("failed parsing the embedded default map")
+    let mut map = bongbong::map::MapFile::from_toml_str(include_str!("../maps/default.toml"))
+        .expect("failed parsing the embedded default map");
+    map.name = Some("default".to_string());
+    map
 }
 
 /// Parses a `WxH` string (e.g. `1920x1080`) into a `(width, height)` pair,
@@ -530,7 +532,8 @@ fn main() {
             // exists.
             restart_pressed: rl.is_key_pressed(KeyboardKey::KEY_R) || tuning::take_restart_request(),
             toggle_shadows_pressed: rl.is_key_pressed(KeyboardKey::KEY_L),
-            toggle_inspect_pressed: rl.is_key_pressed(KeyboardKey::KEY_I),
+            // The I key is inert in a release build: overlays are dev-only.
+            cycle_overlays_pressed: cfg!(feature = "dev-tools") && rl.is_key_pressed(KeyboardKey::KEY_I),
         };
         // Injected input (the dev server's `input` tool) replaces the
         // keyboard's intent for as many frames as it asked.

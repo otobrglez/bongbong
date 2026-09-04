@@ -30,7 +30,7 @@ use sola_raylib::prelude::{RaylibHandle, RaylibTexture2D, RaylibThread, RenderTe
 
 use crate::ai::Intent;
 use crate::map::MapFile;
-use crate::simulation::debug::{Detail, TankPatch};
+use crate::simulation::debug::{CLUSTER_RADIUS_PX, Detail, TankPatch, TrackRow};
 use crate::simulation::{Event, Game, Input, Overlays};
 use crate::tank::Dir;
 use crate::tuning;
@@ -47,8 +47,13 @@ const REPLY_TIMEOUT: Duration = Duration::from_secs(120);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 /// Upper bound on `step`'s frame count per request.
 const MAX_STEP_FRAMES: u64 = 100_000;
-/// Events kept for the `events` tool.
-const EVENT_RING: usize = 1024;
+/// Events kept for the `events` tool (the AI-decision events are chatty:
+/// a full round of enemies produces tens per second).
+const EVENT_RING: usize = 4096;
+/// Frames of per-tank history kept for the `history` tool (60 s).
+const HISTORY_FRAMES: usize = 3600;
+/// Rows one `history` reply returns at most.
+const HISTORY_MAX_ROWS: usize = 2000;
 /// Events returned inline by one `step` reply.
 const STEP_EVENT_CAP: usize = 256;
 /// Where screenshots land (under the gitignored `target/`).
@@ -70,28 +75,28 @@ const SLOT_PARAMS: &str = r#"{"type":"object","properties":{"slot":{"type":"inte
 pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "status",
-        description: "Where the running game is: seed, frame, time, outcome, paused/lockstep, tank count, overlay flags. Cheap; call first.",
+        description: "Where the running game is: seed, frame, time, outcome, paused/lockstep, tank count, overlay flags, the loaded map. Cheap; call first.",
         schema: NO_PARAMS,
     },
     ToolSpec {
         name: "snapshot",
-        description: "World state as JSON: every tank (position, velocity, damage/hp, ammo, weapon, shield/boost), projectiles, pickups, frog, engagement targets. detail=full adds each enemy's AI memory (waypoint, committed heading, last behaviour-tree action, stuck timer, intent).",
+        description: "World state as JSON: every tank (position, velocity, damage/hp, ammo, weapon, shield/boost, nearest_ally_px), projectiles, pickups, frog, `engage` (the engagement ring: per enemy its status - engaged/wreck/fleeing/retreating/out_of_range - the ring slot it holds and its target point; an engaged enemy with ring=null steers at the player directly, the pile-up case) and `clusters` (groups of live enemies within 90 px of each other). detail=full adds each enemy's AI memory (waypoint, committed heading, last behaviour-tree action, stuck timer, intent), the per-enemy slot rejection tally (claimed/off_map/unreachable/no_los) and the 16-slot table (point, line of sight, who holds it).",
         schema: r#"{"type":"object","properties":{"detail":{"type":"string","enum":["compact","full"],"default":"compact"}}}"#,
     },
     ToolSpec {
         name: "events",
-        description: "Gameplay events recorded since `since` (a seq number; 0 = everything kept, up to 1024): fired, hit, wreck, ram, deflected (off a shield), shells_collided, frog_bite, pickup_collected, pickup_respawned, round_started, round_ended. Each carries the frame it happened on.",
-        schema: r#"{"type":"object","properties":{"since":{"type":"integer","default":0,"description":"Return events with seq > since"},"limit":{"type":"integer","default":200}}}"#,
+        description: "Gameplay events recorded since `since` (a seq number; 0 = everything kept, up to 4096): fired, hit, wreck, ram, deflected (off a shield), shells_collided, frog_bite, pickup_collected, pickup_respawned, round_started, round_ended, plus AI decisions - ai_action (behaviour-tree action changed), engage_slot (ring slot changed; null = steering at the player), stuck_escape, breach (dir, or null when it ends), retreat (on/off), alert (shared last-known player position on/off). Each carries the frame it happened on. `kinds` keeps only those event names, `exclude` drops them.",
+        schema: r#"{"type":"object","properties":{"since":{"type":"integer","default":0,"description":"Return events with seq > since"},"limit":{"type":"integer","default":200},"kinds":{"type":"array","items":{"type":"string"},"description":"Only these event names"},"exclude":{"type":"array","items":{"type":"string"},"description":"Drop these event names"}}}"#,
     },
     ToolSpec {
         name: "step",
-        description: "Freeze the game in lockstep and advance exactly `frames` simulation frames at the fixed 1/60 s timestep (all in one rendered frame, so it is fast and deterministic). Optional player input is held for those frames; shells/plasma fire once per press, so set fire_every=N to tap the trigger every N frames instead of holding it. Replies with the events of the step and, by default, a compact snapshot. Use `resume` to let the game run in real time again.",
-        schema: r#"{"type":"object","properties":{"frames":{"type":"integer","default":1,"minimum":1,"maximum":100000},"move_dir":{"type":"string","enum":["up","down","left","right"]},"face":{"type":"string","enum":["up","down","left","right"]},"fire":{"type":"boolean"},"fire_every":{"type":"integer","minimum":1,"description":"With fire=true: press the trigger on frames 0, N, 2N... and release in between"},"snapshot":{"type":"boolean","default":true},"detail":{"type":"string","enum":["compact","full"],"default":"compact"}}}"#,
+        description: "Freeze the game in lockstep and advance exactly `frames` simulation frames at the fixed 1/60 s timestep (all in one rendered frame, so it is fast and deterministic). Optional player input is held for those frames; shells/plasma fire once per press, so set fire_every=N to tap the trigger every N frames instead of holding it. Replies with the events of the step (first 256; `kinds`/`exclude` filter by event name, see `events`) and, by default, a compact snapshot. Use `resume` to let the game run in real time again.",
+        schema: r#"{"type":"object","properties":{"frames":{"type":"integer","default":1,"minimum":1,"maximum":100000},"move_dir":{"type":"string","enum":["up","down","left","right"]},"face":{"type":"string","enum":["up","down","left","right"]},"fire":{"type":"boolean"},"fire_every":{"type":"integer","minimum":1,"description":"With fire=true: press the trigger on frames 0, N, 2N... and release in between"},"snapshot":{"type":"boolean","default":true},"detail":{"type":"string","enum":["compact","full"],"default":"compact"},"kinds":{"type":"array","items":{"type":"string"}},"exclude":{"type":"array","items":{"type":"string"}}}}"#,
     },
     ToolSpec {
         name: "input",
-        description: "Override the player's input for the next `frames` real-time frames (keyboard is ignored meanwhile). Works while the game runs; in lockstep prefer step's own input fields.",
-        schema: r#"{"type":"object","properties":{"move_dir":{"type":"string","enum":["up","down","left","right"]},"face":{"type":"string","enum":["up","down","left","right"]},"fire":{"type":"boolean"},"frames":{"type":"integer","default":1}}}"#,
+        description: "Override the player's input for the next `frames` real-time frames (keyboard is ignored meanwhile). Works while the game runs; in lockstep prefer step's own input fields. `cycle_overlays: true` presses the I key once: cycles the overlay presets off -> inspect -> all -> off (with no move_dir/face/fire it leaves the keyboard alone).",
+        schema: r#"{"type":"object","properties":{"move_dir":{"type":"string","enum":["up","down","left","right"]},"face":{"type":"string","enum":["up","down","left","right"]},"fire":{"type":"boolean"},"frames":{"type":"integer","default":1},"cycle_overlays":{"type":"boolean","default":false}}}"#,
     },
     ToolSpec {
         name: "pause",
@@ -105,8 +110,18 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "restart",
-        description: "Start a fresh round, frozen in lockstep (call `resume` to let it run in real time). Optional seed (number or 0x-hex string; pinned for later restarts too), enemy count, player chassis row (0-11), map path (TOML under maps/). Same seed + same steps replays bit-for-bit.",
-        schema: r#"{"type":"object","properties":{"seed":{"type":["integer","string"]},"enemies":{"type":"integer","minimum":1,"maximum":31},"tank_row":{"type":"integer","minimum":0,"maximum":11},"map":{"type":"string","description":"Path to a map .toml, relative to the game's working directory"}}}"#,
+        description: "Start a fresh round, frozen in lockstep (call `resume` to let it run in real time). Optional seed (number or 0x-hex string; pinned for later restarts too), enemy count, player chassis row (0-11), and the map: `map` (a path to a TOML under maps/) or `map_toml` (the map's TOML text inline - see `map_get` for the format; the round keeps its current map when neither is given). Same seed + same steps replays bit-for-bit.",
+        schema: r#"{"type":"object","properties":{"seed":{"type":["integer","string"]},"enemies":{"type":"integer","minimum":1,"maximum":31},"tank_row":{"type":"integer","minimum":0,"maximum":11},"map":{"type":"string","description":"Path to a map .toml, relative to the game's working directory"},"map_toml":{"type":"string","description":"Map TOML text, e.g. `version = 1\ntanks = 4\ncells.\"20,8\" = { kind = \"wall\", material = \"iron\" }`"}}}"#,
+    },
+    ToolSpec {
+        name: "map_get",
+        description: "The current map as TOML text (plus name, cell count, default tank count) - edit it and hand it back through `restart {map_toml}`. Format: `version = 1`, optional `tanks = N` (default enemy count), and one `cells.\"col,row\"` entry per occupied 32 px grid cell (40 columns x 23 rows at 1280x720, col/row from 0 at the top-left): `{ kind = \"wall\", material = \"brick\"|\"iron\"|\"wood\"|\"glass\" }`, `{ kind = \"road\" }`, `{ kind = \"frog\" }` (one), `{ kind = \"start\" }` (the player, one), `{ kind = \"pickup\", pickup = \"health\"|\"ammo\"|\"laser\"|\"minigun\"|\"plasma\"|\"speedup\"|\"shield\" }`. Iron is indestructible, the rest can be shot away. Border walls and enemy spawns are added by the game on top.",
+        schema: NO_PARAMS,
+    },
+    ToolSpec {
+        name: "history",
+        description: "Per-tank rows recorded every frame (last 60 s, cleared on restart): position, behaviour-tree action, ring slot, stuck, touching terrain. Replies with every N-th frame's rows (`every`) over the last `last` frames, optionally one `slot`, plus per-tank aggregates over the whole window: frames seen, distance travelled, net displacement, cluster_frames (2+ other live enemies within 90 px), stuck_frames, no_ring_frames (engaged without a slot), touching_frames. The live-game counterpart of the probe's per-round stats.",
+        schema: r#"{"type":"object","properties":{"slot":{"type":"integer","description":"Only this tank's rows (aggregates still cover every tank)"},"last":{"type":"integer","default":600,"minimum":1,"maximum":3600,"description":"Window in frames, ending at the latest recorded one"},"every":{"type":"integer","default":10,"minimum":1,"description":"Row sampling stride in frames"}}}"#,
     },
     ToolSpec {
         name: "screenshot",
@@ -115,7 +130,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "overlays",
-        description: "Set persistent debug overlays drawn on top of the game (visible to the human too): nav_grid (blocked pathfinding cells), ai (each enemy's waypoint, heading, last behaviour-tree action), projectiles (hit boxes + velocity), engage (engagement-ring targets), pickups (collect radius), inspect (the I-key hitbox/stat overlay). Omitted flags keep their value; replies with the current flags.",
+        description: "Set persistent debug overlays drawn on top of the game (visible to the human too), one flag at a time: nav_grid (blocked pathfinding cells), ai (each enemy's waypoint, heading, last behaviour-tree action), projectiles (hit boxes + velocity), engage (engagement-ring targets), pickups (collect radius), inspect (tank hitboxes + stat readout). Omitted flags keep their value; replies with the current flags. The I key in the game window cycles presets instead (off -> inspect -> all); `input {cycle_overlays: true}` presses it.",
         schema: r#"{"type":"object","properties":{"nav_grid":{"type":"boolean"},"ai":{"type":"boolean"},"projectiles":{"type":"boolean"},"engage":{"type":"boolean"},"pickups":{"type":"boolean"},"inspect":{"type":"boolean"}}}"#,
     },
     ToolSpec {
@@ -181,8 +196,50 @@ type Reply = mpsc::Sender<Result<Value, String>>;
 struct EventRecord {
     seq: u64,
     frame: u64,
+    /// The event's serialised `event` tag, for `EventFilter`.
+    #[serde(skip)]
+    kind: String,
     #[serde(flatten)]
     event: Event,
+}
+
+/// `kinds`/`exclude` from an `events` or `step` request; empty = keep all.
+#[derive(Clone, Default)]
+struct EventFilter {
+    kinds: Vec<String>,
+    exclude: Vec<String>,
+}
+
+impl EventFilter {
+    fn keeps(&self, kind: &str) -> bool {
+        (self.kinds.is_empty() || self.kinds.iter().any(|k| k == kind)) && !self.exclude.iter().any(|k| k == kind)
+    }
+}
+
+/// One frame of the history ring: every live tank's `TrackRow`.
+struct HistoryFrame {
+    frame: u64,
+    rows: Vec<TrackRow>,
+}
+
+/// Per-tank aggregates over a `history` window.
+#[derive(Default, Serialize)]
+struct TrackStats {
+    frames: u32,
+    /// Path length driven.
+    distance: f32,
+    /// Straight-line distance from the first to the last position.
+    net: f32,
+    /// Frames with at least two other live enemies within `CLUSTER_RADIUS_PX`.
+    cluster_frames: u32,
+    stuck_frames: u32,
+    /// Frames an enemy held no ring slot.
+    no_ring_frames: u32,
+    touching_frames: u32,
+    #[serde(skip)]
+    first: Option<Position>,
+    #[serde(skip)]
+    last: Option<Position>,
 }
 
 struct PendingStep {
@@ -192,6 +249,7 @@ struct PendingStep {
     fire_every: Option<u64>,
     want_snapshot: bool,
     detail: Detail,
+    filter: EventFilter,
     events: Vec<EventRecord>,
     restarted: bool,
     reply: Reply,
@@ -220,10 +278,15 @@ pub struct DevServer {
     pending_step: Option<PendingStep>,
     /// Player intent to substitute for the keyboard, and frames left.
     injected: Option<(Intent, u32)>,
+    /// An `input {cycle_overlays}` request waiting to press the I key on
+    /// the next frame's input.
+    cycle_overlays_pending: bool,
     pending_shot: Option<PendingShot>,
     events: VecDeque<EventRecord>,
     next_seq: u64,
     shot_seq: u64,
+    /// One entry per simulated frame, oldest first - see `history`.
+    history: VecDeque<HistoryFrame>,
 }
 
 impl DevServer {
@@ -260,10 +323,12 @@ impl DevServer {
             lockstep: false,
             pending_step: None,
             injected: None,
+            cycle_overlays_pending: false,
             pending_shot: None,
             events: VecDeque::with_capacity(EVENT_RING),
             next_seq: 1,
             shot_seq: 0,
+            history: VecDeque::with_capacity(HISTORY_FRAMES),
         }
     }
 
@@ -280,17 +345,26 @@ impl DevServer {
     /// that can be answered now and arm `step`/`screenshot` for later in
     /// this frame. `width`/`height` are the battlefield size.
     pub fn before_frame(&mut self, game: &mut Game, width: f32, height: f32) {
+        // The AI-decision events exist for this server's `events` feed.
+        game.trace_ai = true;
         while let Ok(req) = self.rx.try_recv() {
             self.dispatch(game, req, width, height);
         }
     }
 
     /// Substitute injected player intent for the keyboard's, if any is
-    /// pending; counts that override down by one frame.
+    /// pending (counts that override down by one frame), and press the I
+    /// key for this one frame when an `input {cycle_overlays}` is waiting.
     pub fn shape_input(&mut self, real: Input) -> Input {
-        let Some((intent, left)) = self.injected else { return real };
-        self.injected = (left > 1).then_some((intent, left - 1));
-        Input { player_intent: intent, ..real }
+        let mut input = real;
+        if let Some((intent, left)) = self.injected {
+            self.injected = (left > 1).then_some((intent, left - 1));
+            input.player_intent = intent;
+        }
+        if std::mem::take(&mut self.cycle_overlays_pending) {
+            input.cycle_overlays_pressed = true;
+        }
+        input
     }
 
     /// Advance the game for this rendered frame: a pending `step` runs its
@@ -309,8 +383,9 @@ impl DevServer {
                     step.restarted = true;
                 }
                 let mut sink = std::mem::take(&mut step.events);
-                self.drain_events(game, Some(&mut sink));
+                self.drain_events(game, Some((&mut sink, &step.filter)));
                 step.events = sink;
+                self.record_history(game);
             }
             let snapshot = step.want_snapshot.then(|| to_value(game.debug_snapshot(width, height, step.detail)));
             let _ = step.reply.send(Ok(json!({
@@ -325,7 +400,72 @@ impl DevServer {
         } else if !self.lockstep {
             game.update(input, real_dt, width, height);
             self.drain_events(game, None);
+            self.record_history(game);
         }
+    }
+
+    /// Append this frame's `TrackRow`s to the history ring. A frame number
+    /// that doesn't follow the last one means the round restarted, so the
+    /// ring starts over.
+    fn record_history(&mut self, game: &Game) {
+        if self.history.back().is_some_and(|last| game.frame() <= last.frame) {
+            self.history.clear();
+        }
+        if self.history.len() == HISTORY_FRAMES {
+            self.history.pop_front();
+        }
+        self.history.push_back(HistoryFrame { frame: game.frame(), rows: game.debug_track_rows() });
+    }
+
+    /// The `history` reply: sampled rows plus per-tank aggregates over the
+    /// last `last` frames.
+    fn history_json(&self, last: usize, every: usize, slot: Option<usize>) -> Value {
+        let skip = self.history.len().saturating_sub(last);
+        let window: Vec<&HistoryFrame> = self.history.iter().skip(skip).collect();
+        let mut stats: std::collections::BTreeMap<usize, TrackStats> = std::collections::BTreeMap::new();
+        let mut rows = Vec::new();
+        for (i, hf) in window.iter().enumerate() {
+            let sample = i % every == 0 && rows.len() < HISTORY_MAX_ROWS;
+            for row in &hf.rows {
+                let pos = Position::new(row.x, row.y);
+                let others_near = hf
+                    .rows
+                    .iter()
+                    .filter(|o| o.slot != row.slot && o.slot != 0 && Position::new(o.x, o.y).distance_to(pos) <= CLUSTER_RADIUS_PX)
+                    .count();
+                let st = stats.entry(row.slot).or_default();
+                st.frames += 1;
+                if let Some(prev) = st.last {
+                    st.distance += prev.distance_to(pos);
+                }
+                st.first.get_or_insert(pos);
+                st.last = Some(pos);
+                st.cluster_frames += u32::from(row.slot != 0 && others_near >= 2);
+                st.stuck_frames += u32::from(row.stuck);
+                st.no_ring_frames += u32::from(row.slot != 0 && row.ring.is_none());
+                st.touching_frames += u32::from(row.touching_static);
+                if sample && slot.is_none_or(|s| s == row.slot) {
+                    let mut v = to_value(row);
+                    v["frame"] = json!(hf.frame);
+                    rows.push(v);
+                }
+            }
+        }
+        for st in stats.values_mut() {
+            st.net = match (st.first, st.last) {
+                (Some(a), Some(b)) => a.distance_to(b),
+                _ => 0.0,
+            };
+            st.distance = (st.distance * 10.0).round() / 10.0;
+            st.net = (st.net * 10.0).round() / 10.0;
+        }
+        json!({
+            "from": window.first().map(|f| f.frame),
+            "to": window.last().map(|f| f.frame),
+            "every": every,
+            "rows": rows,
+            "tanks": stats,
+        })
     }
 
     /// After `Game::render`: take the pending screenshot and reply with it.
@@ -389,15 +529,17 @@ impl DevServer {
     /// Move the game's per-frame events into the ring (and `sink`, if
     /// given). Call exactly once per `update`/`init`, never otherwise -
     /// `Game::events` holds the last frame's events until the next.
-    fn drain_events(&mut self, game: &Game, mut sink: Option<&mut Vec<EventRecord>>) {
+    fn drain_events(&mut self, game: &Game, mut sink: Option<(&mut Vec<EventRecord>, &EventFilter)>) {
         for event in game.events() {
-            let record = EventRecord { seq: self.next_seq, frame: game.frame(), event: event.clone() };
+            let kind = to_value(event).get("event").and_then(Value::as_str).unwrap_or("?").to_string();
+            let record = EventRecord { seq: self.next_seq, frame: game.frame(), kind, event: event.clone() };
             self.next_seq += 1;
             if self.events.len() == EVENT_RING {
                 self.events.pop_front();
             }
-            if let Some(sink) = sink.as_deref_mut()
+            if let Some((sink, filter)) = sink.as_mut()
                 && sink.len() < STEP_EVENT_CAP
+                && filter.keeps(&record.kind)
             {
                 sink.push(record.clone());
             }
@@ -422,8 +564,10 @@ impl DevServer {
             "width": width,
             "height": height,
             "overlays": overlays_json(game),
+            "map": map_json(&game.map),
             "events_kept": self.events.len(),
             "next_event_seq": self.next_seq,
+            "history_frames": self.history.len(),
         })
     }
 
@@ -432,19 +576,20 @@ impl DevServer {
         let result = match method.as_str() {
             "status" => Ok(self.status(game, width, height)),
             "snapshot" => detail_param(&params).map(|d| to_value(game.debug_snapshot(width, height, d))),
-            "events" => {
+            "events" => event_filter(&params).and_then(|filter| {
                 let since = params.get("since").and_then(Value::as_u64).unwrap_or(0);
                 let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(200) as usize;
-                let events: Vec<&EventRecord> = self.events.iter().filter(|e| e.seq > since).take(limit).collect();
+                let events: Vec<&EventRecord> =
+                    self.events.iter().filter(|e| e.seq > since && filter.keeps(&e.kind)).take(limit).collect();
                 let next = events.last().map_or(since, |e| e.seq);
                 Ok(json!({ "next": next, "events": events }))
-            }
+            }),
             "step" => {
                 if self.pending_step.is_some() {
                     Err("a step is already in progress".to_string())
                 } else {
-                    match (frames_param(&params, 1), parse_intent(&params), detail_param(&params)) {
-                        (Ok(remaining), Ok(intent), Ok(detail)) => {
+                    match (frames_param(&params, 1), parse_intent(&params), detail_param(&params), event_filter(&params)) {
+                        (Ok(remaining), Ok(intent), Ok(detail), Ok(filter)) => {
                             self.lockstep = true;
                             self.pending_step = Some(PendingStep {
                                 remaining,
@@ -452,20 +597,24 @@ impl DevServer {
                                 fire_every: params.get("fire_every").and_then(Value::as_u64).filter(|&n| n >= 1),
                                 want_snapshot: params.get("snapshot").and_then(Value::as_bool).unwrap_or(true),
                                 detail,
+                                filter,
                                 events: Vec::new(),
                                 restarted: false,
                                 reply,
                             });
                             return;
                         }
-                        (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => Err(e),
+                        (Err(e), _, _, _) | (_, Err(e), _, _) | (_, _, Err(e), _) | (_, _, _, Err(e)) => Err(e),
                     }
                 }
             }
             "input" => match (parse_intent(&params), frames_param(&params, 1)) {
                 (Ok(intent), Ok(frames)) => {
-                    self.injected = Some((intent.unwrap_or_default(), frames.min(u32::MAX as u64) as u32));
-                    Ok(json!({ "frames": frames }))
+                    if let Some(intent) = intent {
+                        self.injected = Some((intent, frames.min(u32::MAX as u64) as u32));
+                    }
+                    self.cycle_overlays_pending = params.get("cycle_overlays").and_then(Value::as_bool).unwrap_or(false);
+                    Ok(json!({ "frames": frames, "cycle_overlays": self.cycle_overlays_pending }))
                 }
                 (Err(e), _) | (_, Err(e)) => Err(e),
             },
@@ -506,6 +655,17 @@ impl DevServer {
                 Ok(overlays_json(game))
             }
             "nav_grid" => Ok(json!({ "grid": game.nav_grid_ascii(width, height) })),
+            "map_get" => game.map.to_toml_string().map(|toml| {
+                let mut v = map_json(&game.map);
+                v["toml"] = Value::String(toml);
+                v
+            }),
+            "history" => {
+                let last = params.get("last").and_then(Value::as_u64).unwrap_or(600).clamp(1, HISTORY_FRAMES as u64) as usize;
+                let every = params.get("every").and_then(Value::as_u64).unwrap_or(10).max(1) as usize;
+                let slot = params.get("slot").and_then(Value::as_u64).map(|s| s as usize);
+                Ok(self.history_json(last, every, slot))
+            }
             "teleport" => match (slot_param(&params), f32_param(&params, "x"), f32_param(&params, "y")) {
                 (Ok(slot), Some(x), Some(y)) => {
                     let facing = match params.get("facing").and_then(Value::as_str) {
@@ -580,12 +740,23 @@ impl DevServer {
         if let Some(row) = params.get("tank_row") {
             game.player_row_override = Some(row.as_i64().ok_or("tank_row must be an integer")? as i32);
         }
-        if let Some(path) = params.get("map") {
-            let path = path.as_str().ok_or("map must be a path string")?;
-            game.map = MapFile::load(Path::new(path))?;
+        let map_path = params.get("map").filter(|v| !v.is_null());
+        let map_toml = params.get("map_toml").filter(|v| !v.is_null());
+        match (map_path, map_toml) {
+            (Some(_), Some(_)) => return Err("give either map (a path) or map_toml (inline TOML), not both".to_string()),
+            (Some(path), None) => {
+                let path = path.as_str().ok_or("map must be a path string")?;
+                game.map = MapFile::load(Path::new(path))?;
+            }
+            (None, Some(text)) => {
+                let text = text.as_str().ok_or("map_toml must be a string of map TOML")?;
+                game.map = MapFile::from_toml_str(text).map_err(|e| format!("map_toml: {e}"))?;
+            }
+            (None, None) => {}
         }
         game.init(width, height);
         self.drain_events(game, None);
+        self.record_history(game);
         // A restart is the start of a repro: hold the new round still so no
         // wall-clock frames slip in before the first `step`.
         self.lockstep = true;
@@ -641,12 +812,32 @@ fn to_value<T: Serialize>(v: T) -> Value {
     serde_json::to_value(v).unwrap_or(Value::Null)
 }
 
+/// The loaded map's identity for `status`/`map_get`.
+fn map_json(map: &MapFile) -> Value {
+    json!({
+        "name": map.name.as_deref().unwrap_or("inline"),
+        "cells": map.cells.len(),
+        "tanks": map.tanks,
+    })
+}
+
+/// `kinds`/`exclude` from `params`: string arrays, both optional.
+fn event_filter(params: &Value) -> Result<EventFilter, String> {
+    let list = |key: &str| -> Result<Vec<String>, String> {
+        match params.get(key) {
+            None | Some(Value::Null) => Ok(Vec::new()),
+            Some(Value::Array(items)) => items
+                .iter()
+                .map(|v| v.as_str().map(str::to_string).ok_or_else(|| format!("{key} must be an array of event names")))
+                .collect(),
+            Some(other) => Err(format!("{key} must be an array of event names, got {other}")),
+        }
+    };
+    Ok(EventFilter { kinds: list("kinds")?, exclude: list("exclude")? })
+}
+
 fn overlays_json(game: &Game) -> Value {
-    let mut v = to_value(game.debug_overlays);
-    if let Value::Object(map) = &mut v {
-        map.insert("inspect".into(), Value::Bool(game.inspect_enabled));
-    }
-    v
+    to_value(game.debug_overlays)
 }
 
 /// Set only the overlay flags present in `flags`.
@@ -669,7 +860,7 @@ fn apply_overlays(game: &mut Game, flags: &Value) {
         o.pickups = b;
     }
     if let Some(b) = flag("inspect") {
-        game.inspect_enabled = b;
+        o.inspect = b;
     }
 }
 
@@ -899,6 +1090,45 @@ mod tests {
     }
 
     #[test]
+    fn overlays_sets_inspect_like_any_other_flag() {
+        let (mut server, tx) = DevServer::headless();
+        let mut game = game(6);
+        let rx = call(&tx, "overlays", json!({ "inspect": true, "ai": true }));
+        server.before_frame(&mut game, W, H);
+        let flags = rx.recv().unwrap().unwrap();
+        assert_eq!(flags["inspect"], true, "{flags}");
+        assert_eq!(flags["ai"], true, "{flags}");
+        assert_eq!(flags["nav_grid"], false, "{flags}");
+        let rx = call(&tx, "status", json!({}));
+        server.before_frame(&mut game, W, H);
+        let status = rx.recv().unwrap().unwrap();
+        assert_eq!(status["overlays"]["inspect"], true, "{status}");
+    }
+
+    #[test]
+    fn input_cycle_overlays_presses_the_i_key_once() {
+        let (mut server, tx) = DevServer::headless();
+        let mut game = game(7);
+        assert!(!server.lockstep(), "a fresh server runs in real time");
+        let expected = [Overlays::INSPECT, Overlays::ALL, Overlays::NONE];
+        for preset in expected {
+            let rx = call(&tx, "input", json!({ "cycle_overlays": true }));
+            server.before_frame(&mut game, W, H);
+            rx.recv().unwrap().unwrap();
+            let input = server.shape_input(Input::default());
+            assert!(input.cycle_overlays_pressed);
+            assert!(input.player_intent.move_dir.is_none(), "a bare cycle request leaves the keyboard alone");
+            server.advance(&mut game, input, 0.016, W, H);
+            assert_eq!(game.debug_overlays, preset);
+            // One-shot: the next frame's input does not press the key again.
+            let input = server.shape_input(Input::default());
+            assert!(!input.cycle_overlays_pressed);
+            server.advance(&mut game, input, 0.016, W, H);
+            assert_eq!(game.debug_overlays, preset);
+        }
+    }
+
+    #[test]
     fn nav_grid_and_full_snapshot_have_the_expected_shape() {
         let (mut server, tx) = DevServer::headless();
         let mut game = game(21);
@@ -915,9 +1145,131 @@ mod tests {
         server.advance(&mut game, Input::default(), 0.016, W, H);
         let reply = rx.recv().unwrap().unwrap();
         let text = reply["snapshot"].to_string();
-        assert!(text.len() < 12_000, "full snapshot is {} bytes", text.len());
+        assert!(text.len() < 16_000, "full snapshot is {} bytes", text.len());
         let enemy = &reply["snapshot"]["tanks"][1];
         assert!(enemy["ai"]["last_action"].is_string(), "{enemy}");
+        let engage = &reply["snapshot"]["engage"];
+        assert_eq!(engage["tanks"].as_array().unwrap().len(), 4, "{engage}");
+        assert!(engage["tanks"][0]["status"].is_string(), "{engage}");
+        assert!(reply["snapshot"]["clusters"].is_array());
+        if engage["built"] == true {
+            assert_eq!(engage["slots"].as_array().unwrap().len(), 16, "{engage}");
+        }
+        let rx = call(&tx, "snapshot", json!({}));
+        server.before_frame(&mut game, W, H);
+        let compact = rx.recv().unwrap().unwrap();
+        assert!(compact["engage"]["slots"].is_null(), "the slot table is full-detail only");
+        assert!(compact.to_string().len() < 6_000, "compact snapshot is {} bytes", compact.to_string().len());
+    }
+
+    const INLINE_MAP: &str = r#"
+version = 1
+tanks = 2
+cells."5,5" = { kind = "start" }
+cells."30,15" = { kind = "frog" }
+cells."20,8" = { kind = "wall", material = "iron" }
+"#;
+
+    #[test]
+    fn restart_with_map_toml_starts_a_round_on_it() {
+        let (mut server, tx) = DevServer::headless();
+        let mut game = game(12);
+        let rx = call(&tx, "restart", json!({ "map_toml": INLINE_MAP, "seed": 5, "enemies": 2 }));
+        server.before_frame(&mut game, W, H);
+        let status = rx.recv().unwrap().unwrap();
+        assert_eq!(status["map"]["name"], "inline", "{status}");
+        assert_eq!(status["map"]["cells"], 3);
+        assert_eq!(status["map"]["tanks"], 2);
+        assert_eq!(status["frame"], 0);
+        assert_eq!(status["lockstep"], true);
+        assert_eq!(status["tanks"], 3);
+        // The start cell put the player at (5, 5) cells.
+        let rx = call(&tx, "snapshot", json!({}));
+        server.before_frame(&mut game, W, H);
+        let snap = rx.recv().unwrap().unwrap();
+        assert_eq!(snap["tanks"][0]["x"], 160.0, "{}", snap["tanks"][0]);
+        assert_eq!(snap["tanks"][0]["y"], 160.0);
+        assert_eq!(snap["frog"]["x"], 960.0, "{}", snap["frog"]);
+        assert_eq!(snap["obstacles_alive"], 1);
+        // A bad map is an error and leaves the round alone.
+        let bad = r#"version = 1
+cells."1,1" = { kind = "wall" }"#;
+        let rx = call(&tx, "restart", json!({ "map_toml": bad }));
+        server.before_frame(&mut game, W, H);
+        assert!(rx.recv().unwrap().unwrap_err().starts_with("map_toml:"));
+        let rx = call(&tx, "restart", json!({ "map_toml": INLINE_MAP, "map": "maps/default.toml" }));
+        server.before_frame(&mut game, W, H);
+        assert!(rx.recv().unwrap().is_err(), "map and map_toml together");
+    }
+
+    #[test]
+    fn map_get_round_trips_through_restart() {
+        let (mut server, tx) = DevServer::headless();
+        let mut game = game(13);
+        let rx = call(&tx, "map_get", json!({}));
+        server.before_frame(&mut game, W, H);
+        let got = rx.recv().unwrap().unwrap();
+        let cells = got["cells"].as_u64().unwrap();
+        assert!(cells > 100, "{cells} cells in the default map");
+        let toml = got["toml"].as_str().unwrap().to_string();
+        let rx = call(&tx, "restart", json!({ "map_toml": toml }));
+        server.before_frame(&mut game, W, H);
+        let status = rx.recv().unwrap().unwrap();
+        assert_eq!(status["map"]["cells"], cells);
+    }
+
+    #[test]
+    fn history_after_a_step_has_rows_and_aggregates() {
+        let (mut server, tx) = DevServer::headless();
+        let mut game = game(14);
+        let rx = call(&tx, "step", json!({ "frames": 120, "snapshot": false }));
+        server.before_frame(&mut game, W, H);
+        server.advance(&mut game, Input::default(), 0.016, W, H);
+        rx.recv().unwrap().unwrap();
+        let rx = call(&tx, "history", json!({ "last": 100, "every": 10, "slot": 1 }));
+        server.before_frame(&mut game, W, H);
+        let history = rx.recv().unwrap().unwrap();
+        assert_eq!(history["from"], 21);
+        assert_eq!(history["to"], 120);
+        let rows = history["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 10, "{history}");
+        assert!(rows.iter().all(|r| r["slot"] == 1 && r["frame"].is_u64()));
+        let stats = &history["tanks"]["1"];
+        assert_eq!(stats["frames"], 100);
+        assert!(stats["distance"].as_f64().unwrap() >= stats["net"].as_f64().unwrap(), "{stats}");
+        assert!(history["tanks"]["0"]["frames"] == 100, "aggregates cover every tank: {}", history["tanks"]);
+        // A restart clears the ring.
+        let rx = call(&tx, "restart", json!({ "seed": 1 }));
+        server.before_frame(&mut game, W, H);
+        rx.recv().unwrap().unwrap();
+        let rx = call(&tx, "history", json!({}));
+        server.before_frame(&mut game, W, H);
+        let history = rx.recv().unwrap().unwrap();
+        assert_eq!(history["from"], 0);
+        assert_eq!(history["to"], 0);
+    }
+
+    #[test]
+    fn events_kinds_filter_keeps_only_requested_kinds() {
+        let (mut server, tx) = DevServer::headless();
+        let mut game = game(15);
+        let rx = call(&tx, "step", json!({ "frames": 300, "snapshot": false, "kinds": ["ai_action"] }));
+        server.before_frame(&mut game, W, H);
+        assert!(game.trace_ai, "the server switches AI tracing on");
+        server.advance(&mut game, Input::default(), 0.016, W, H);
+        let step = rx.recv().unwrap().unwrap();
+        let events = step["events"].as_array().unwrap();
+        assert!(!events.is_empty(), "300 frames of AI produce action changes");
+        assert!(events.iter().all(|e| e["event"] == "ai_action"), "{events:?}");
+        let rx = call(&tx, "events", json!({ "exclude": ["ai_action", "engage_slot"], "limit": 4096 }));
+        server.before_frame(&mut game, W, H);
+        let all = rx.recv().unwrap().unwrap();
+        let kinds: Vec<&str> = all["events"].as_array().unwrap().iter().map(|e| e["event"].as_str().unwrap()).collect();
+        assert!(kinds.contains(&"fired"), "{kinds:?}");
+        assert!(!kinds.iter().any(|k| *k == "ai_action" || *k == "engage_slot"), "{kinds:?}");
+        let rx = call(&tx, "events", json!({ "kinds": "ai_action" }));
+        server.before_frame(&mut game, W, H);
+        assert!(rx.recv().unwrap().is_err(), "kinds must be an array");
     }
 
     #[test]

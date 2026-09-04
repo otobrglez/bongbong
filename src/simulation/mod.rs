@@ -34,7 +34,7 @@ use rand::{RngExt, SeedableRng};
 use serde::{Deserialize, Serialize};
 use sola_raylib::core::math::Vector2;
 
-use crate::ai::{Ai, Intent, Mover, WallAhead};
+use crate::ai::{Ai, AiSnapshot, Intent, Mover, WallAhead};
 use crate::battlefield;
 use crate::bullet::Bullet;
 use crate::frog::Frog;
@@ -69,7 +69,7 @@ use crate::{
 };
 
 use combat::{frog_hop_target, ram, HitEffects};
-use engage::{EngageCtx, EngageRing};
+use engage::{EngageCtx, EngageReport, EngageRing, EngageStatus, EngageTank};
 use hits::{ShellTarget, Terrain};
 use weapons::{dispatch_fire, laser_damage_range, tick_queued_shots, PendingLaserShot, Projectile, laser_beam_half_width};
 
@@ -89,8 +89,10 @@ pub struct Input {
     pub pause_pressed: bool,
     pub restart_pressed: bool,
     pub toggle_shadows_pressed: bool,
-    /// Toggles the debug inspect overlay - see `Game::inspect_enabled`.
-    pub toggle_inspect_pressed: bool,
+    /// The I key in a dev build (`--features dev-tools`): cycles
+    /// `Game::debug_overlays` through its presets (`Overlays::next_preset`).
+    /// Never set in a release build.
+    pub cycle_overlays_pressed: bool,
 }
 
 /// The player tank's owner slot (`Tank::owner_slot`); enemies take `n + 1`.
@@ -138,6 +140,24 @@ pub enum Event {
     ShellsCollided { x: f32, y: f32 },
     /// The frog bit the tank in `slot`.
     FrogBite { slot: usize, damage: f32, killed: bool },
+    // --- AI decisions, recorded only while `Game::trace_ai` is set: each
+    // is a transition the enemy phase observed by comparing an enemy's
+    // `AiSnapshot` before and after its `think`, so `ai.rs` stays
+    // snapshot-only and the recording adds nothing to the simulation. ---
+    /// The behaviour tree settled on a different action than last frame.
+    AiAction { slot: usize, from: Option<&'static str>, to: Option<&'static str> },
+    /// The engagement ring gave `slot` a different slot index (see
+    /// `engage::EngageSlot::index`; `None` = steering at the player).
+    EngageSlot { slot: usize, from: Option<u8>, to: Option<u8> },
+    /// The stuck escape fired (`escapes` so far this round).
+    StuckEscape { slot: usize, escapes: u32 },
+    /// A breach started toward `dir`, or ended (`None`).
+    Breach { slot: usize, dir: Option<&'static str> },
+    /// The ammo retreat latched (`on`) or released.
+    Retreat { slot: usize, on: bool },
+    /// The shared last-known player position appeared or expired; `x`/`y`
+    /// is the position (the last known one when `on` is false).
+    Alert { on: bool, x: f32, y: f32 },
 }
 
 /// What an `Event::Hit` landed on.
@@ -151,11 +171,15 @@ pub enum HitTarget {
     Wall,
 }
 
-/// Debug overlay switches `render` reads (see `game.rs`), set by the dev
-/// server's `overlays` tool. Survive restarts; all off by default.
-#[derive(Clone, Copy, Default, Debug, Serialize, Deserialize)]
+/// Debug overlay switches `render` reads (dev builds only - see `game.rs`),
+/// set by the dev server's `overlays` tool or cycled by the I key. Survive
+/// restarts; all off by default.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Overlays {
+    /// The hitbox/collider outlines and per-tank stat readout (`game.rs`'s
+    /// `draw_tank_inspect`).
+    pub inspect: bool,
     /// Blocked nav-grid cells.
     pub nav_grid: bool,
     /// Each enemy's waypoint, committed heading and last behaviour-tree action.
@@ -166,6 +190,50 @@ pub struct Overlays {
     pub engage: bool,
     /// Pickup collection radii.
     pub pickups: bool,
+}
+
+impl Overlays {
+    /// Every overlay off.
+    pub const NONE: Overlays = Overlays {
+        inspect: false,
+        nav_grid: false,
+        ai: false,
+        projectiles: false,
+        engage: false,
+        pickups: false,
+    };
+    /// Only the inspect layer.
+    pub const INSPECT: Overlays = Overlays {
+        inspect: true,
+        ..Overlays::NONE
+    };
+    /// Every overlay on.
+    pub const ALL: Overlays = Overlays {
+        inspect: true,
+        nav_grid: true,
+        ai: true,
+        projectiles: true,
+        engage: true,
+        pickups: true,
+    };
+
+    /// Whether any layer is on.
+    pub fn any(self) -> bool {
+        self != Overlays::NONE
+    }
+
+    /// The I key's cycle: `NONE` -> `INSPECT` -> `ALL` -> `NONE`. A hand-set
+    /// mix (the dev server's `overlays` tool) snaps to its next step: nothing
+    /// on -> `INSPECT`, exactly `INSPECT` -> `ALL`, anything else -> `NONE`.
+    pub fn next_preset(self) -> Overlays {
+        if !self.any() {
+            Overlays::INSPECT
+        } else if self == Overlays::INSPECT {
+            Overlays::ALL
+        } else {
+            Overlays::NONE
+        }
+    }
 }
 
 /// scifi_tanks_sheet.png has 12 row-variants, one archetype per row (see
@@ -225,9 +293,6 @@ pub struct Game {
     /// Drop shadows on/off (toggle key, and `--no-shadows` at startup).
     /// Survives restarts; `main.rs` sets the default.
     pub shadows_enabled: bool,
-    /// Debug inspect overlay (the "I" key): hit boxes plus a per-tank stat
-    /// readout. Survives restarts; off by default.
-    pub inspect_enabled: bool,
     /// The rapier world: tank bodies plus wall/obstacle/frog colliders.
     physics: Physics,
     /// Real time not yet consumed by a fixed physics step.
@@ -261,15 +326,22 @@ pub struct Game {
     pub(crate) frame: u64,
     /// What happened during the most recent `update` - see `Event`.
     pub(crate) events: Vec<Event>,
-    /// The engagement-slot targets handed out by the last enemy phase, kept
-    /// for the `engage` overlay and the debug snapshot.
-    pub(crate) last_engage_targets: HashMap<Entity, Position>,
+    /// What the last enemy phase's engagement-slot assignment decided (every
+    /// enemy's status, slot and target, the slot table), kept for the
+    /// `engage` overlay, the debug snapshot and the AI event diff.
+    pub(crate) last_engage: EngageReport,
     /// Owner slots the dev server asked to kill; applied by
     /// `apply_debug_kills` at the top of the next playing frame, so the
     /// kill runs through the normal explosion/round-end path.
     pub(crate) debug_kills: Vec<usize>,
-    /// Debug overlay switches for `render`.
+    /// Debug overlay switches `render` reads (dev builds only - see
+    /// `game.rs`), set by the dev server's `overlays` tool or cycled by the
+    /// I key. Survive restarts; all off by default.
     pub debug_overlays: Overlays,
+    /// Record the AI-decision `Event`s (`AiAction`, `EngageSlot`, ...).
+    /// Tooling-only: the dev server turns it on; the simulation never
+    /// reads it, and off by default so a quiet frame has no events.
+    pub trace_ai: bool,
 }
 
 /// Per-frame scratch state threaded through `Game::update`'s phases: the
@@ -350,7 +422,7 @@ impl Game {
         self.impact_flashes.clear();
         self.laser_beams.clear();
         self.frame = 0;
-        self.last_engage_targets.clear();
+        self.last_engage.clear();
         self.debug_kills.clear();
 
         self.physics = Physics::new();
@@ -589,8 +661,8 @@ impl Game {
         if input.toggle_shadows_pressed {
             self.shadows_enabled = !self.shadows_enabled;
         }
-        if input.toggle_inspect_pressed {
-            self.inspect_enabled = !self.inspect_enabled;
+        if input.cycle_overlays_pressed {
+            self.debug_overlays = self.debug_overlays.next_preset();
         }
         // Debug restart: any time, including paused or on the end screen.
         if input.restart_pressed {
@@ -869,6 +941,7 @@ impl Game {
         // Shared aggression: any enemy seeing the player refreshes the
         // group's last-known position, so the rest converge instead of
         // patrolling blind.
+        let alert_before = self.alert_position.filter(|_| self.alert_timer > 0.0);
         let any_enemy_sees_player = movers[1..]
             .iter()
             .any(|m| m.position.distance_to(player_pos) <= tuning().enemy_view_range);
@@ -882,26 +955,31 @@ impl Game {
             }
         }
         let alert = self.alert_position.filter(|_| self.alert_timer > 0.0);
+        if self.trace_ai && alert_before.is_some() != alert.is_some() {
+            let p = alert.or(alert_before).unwrap_or(player_pos);
+            f.events.push(Event::Alert { on: alert.is_some(), x: p.x, y: p.y });
+        }
 
         // Engagement slots go to tanks that are really fighting: not
         // wrecked, fleeing or retreating, and either within view range or
-        // hit-alerted. Merely alert-following tanks still far out don't
-        // claim one - that held approaching packs in loose formation
-        // through the same bottleneck (measured via the probe's clustering
-        // anomaly); steering at the raw alert point is fine for them.
+        // hit-alerted (`engage_status`). Merely alert-following tanks still
+        // far out don't claim one - that held approaching packs in loose
+        // formation through the same bottleneck (measured via the probe's
+        // clustering anomaly); steering at the raw alert point is fine for
+        // them.
+        let mut report = EngageReport::default();
         let mut engaged: Vec<(Entity, Position)> = Vec::new();
         for (entity, tank, ai) in self.world.query::<(Entity, &Tank, &Ai)>().iter() {
-            let excluded = tank.is_wreck()
-                || tank.damage >= tuning().enemy_flee_damage
-                || (tank.active_weapon() == ActiveWeapon::Shell && ai.is_retreating());
-            let near = tank.position.distance_to(player_pos) <= tuning().enemy_view_range || ai.is_hit_alerted();
-            if !excluded && near {
+            let status = engage_status(tank, ai, player_pos);
+            report.tanks.push(EngageTank::new(entity, tank.owner_slot, status));
+            if status == EngageStatus::Engaged {
                 engaged.push((entity, tank.position));
             }
         }
+        report.tanks.sort_by_key(|t| t.owner);
         // Sorted by entity so the greedy claim order is stable frame to frame.
         engaged.sort_by_key(|(e, _)| *e);
-        let engage_targets: HashMap<Entity, Position> = if engaged.len() >= 2 {
+        if engaged.len() >= 2 {
             let reachable = |a: Position, b: Position| components.connected(&grid, a, b);
             let line_of_sight = |a: Position, b: Position| f.terrain.line_of_sight(a, b);
             self.engage.assign(
@@ -915,11 +993,19 @@ impl Game {
                     reachable: &reachable,
                     line_of_sight: &line_of_sight,
                 },
-            )
-        } else {
-            HashMap::new()
-        };
-        self.last_engage_targets = engage_targets.clone();
+                &mut report,
+            );
+        }
+        let prev = std::mem::replace(&mut self.last_engage, report);
+        if self.trace_ai {
+            for t in &self.last_engage.tanks {
+                let from = prev.slot_of(t.entity).map(|s| s.index() as u8);
+                let to = t.slot.map(|s| s.index() as u8);
+                if from != to {
+                    f.events.push(Event::EngageSlot { slot: t.owner, from, to });
+                }
+            }
+        }
 
         let pickups: Vec<(PickupKind, Position)> = self
             .world
@@ -947,8 +1033,9 @@ impl Game {
                 .body
                 .map(|handle| self.physics.velocity(handle))
                 .unwrap_or_default();
-            let engage_target = engage_targets.get(&entity).copied();
+            let engage_target = self.last_engage.target(entity);
             let line_of_sight = f.terrain.line_of_sight(tank.position, player_pos);
+            let before = self.trace_ai.then(|| ai.snapshot());
             // The player lives in a different archetype (no `Ai`), so this
             // shared read never aliases the exclusive borrow above.
             let intent = with_tank(&self.world, player, |player_tank| {
@@ -970,6 +1057,9 @@ impl Game {
                     walls_ahead,
                 )
             });
+            if let Some(before) = before {
+                ai_transition_events(&mut f.events, tank.owner_slot, &before, &ai.snapshot());
+            }
             drive_tank(&mut self.physics, tank, intent, f.dt);
             let owner = tank.owner();
             tick_queued_shots(&mut self.physics, f, tank, owner);
@@ -1437,6 +1527,7 @@ fn drive_tank(physics: &mut Physics, tank: &mut Tank, intent: Intent, dt: f32) {
     tank.control(intent.move_dir, intent.face);
     tank.ease_visual_rotation(dt);
     tank.ease_turret_visual_rotation(dt);
+    tank.ease_ring_position(dt);
     let target = tank.velocity;
 
     if tank.rotation != facing_before {
@@ -1698,6 +1789,61 @@ fn lay_tracks(tracks: &mut Vec<Track>, tank: &mut Tank, before: Position) {
             age: 0.0,
         });
         tank.track_mark_count += 1;
+    }
+}
+
+/// Whether an enemy competes for an engagement slot this frame, and if
+/// not, why - the exclusions win over the range test.
+fn engage_status(tank: &Tank, ai: &Ai, player_pos: Position) -> EngageStatus {
+    if tank.is_wreck() {
+        EngageStatus::Wreck
+    } else if tank.damage >= tuning().enemy_flee_damage {
+        EngageStatus::Fleeing
+    } else if tank.active_weapon() == ActiveWeapon::Shell && ai.is_retreating() {
+        EngageStatus::Retreating
+    } else if tank.position.distance_to(player_pos) <= tuning().enemy_view_range || ai.is_hit_alerted() {
+        EngageStatus::Engaged
+    } else {
+        EngageStatus::OutOfRange
+    }
+}
+
+/// The AI-decision events for one enemy's `think`: every transition
+/// between its memory before and after (see `Event`'s AI variants).
+fn ai_transition_events(events: &mut Vec<Event>, slot: usize, before: &AiSnapshot, after: &AiSnapshot) {
+    if before.last_action != after.last_action {
+        events.push(Event::AiAction { slot, from: before.last_action, to: after.last_action });
+    }
+    if before.retreating != after.retreating {
+        events.push(Event::Retreat { slot, on: after.retreating });
+    }
+    if before.breaching != after.breaching {
+        events.push(Event::Breach { slot, dir: after.breaching });
+    }
+    if before.escapes != after.escapes {
+        events.push(Event::StuckEscape { slot, escapes: after.escapes });
+    }
+}
+
+#[cfg(test)]
+mod overlay_tests {
+    use super::Overlays;
+
+    /// The I key walks NONE -> INSPECT -> ALL -> NONE, and a hand-set mix
+    /// snaps back to NONE.
+    #[test]
+    fn presets_cycle_and_mixes_snap() {
+        assert_eq!(Overlays::default(), Overlays::NONE);
+        assert_eq!(Overlays::NONE.next_preset(), Overlays::INSPECT);
+        assert_eq!(Overlays::INSPECT.next_preset(), Overlays::ALL);
+        assert_eq!(Overlays::ALL.next_preset(), Overlays::NONE);
+        let mixed = Overlays {
+            nav_grid: true,
+            ..Overlays::NONE
+        };
+        assert!(mixed.any());
+        assert_eq!(mixed.next_preset(), Overlays::NONE);
+        assert!(!Overlays::NONE.any());
     }
 }
 

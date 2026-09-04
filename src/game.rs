@@ -18,8 +18,13 @@ use crate::plasma::{Plasma, PlasmaState, draw_plasma, draw_plasma_shadow};
 use crate::shell::{Shell, ShellState, draw_shell, draw_shell_shadow};
 use crate::shockwave::{RippleFx, screen_to_ripple_uv};
 use crate::simulation::{Game, Outcome};
+#[cfg(feature = "dev-tools")]
+use crate::simulation::Overlays;
+#[cfg(feature = "dev-tools")]
+use crate::tank::Dir;
 use crate::tank::{
-    ActiveWeapon, Dir, Tank, draw_minigun_mount, draw_minigun_mount_shadow, draw_tank, draw_tank_shadow, draw_tank_shield,
+    ActiveWeapon, Tank, draw_minigun_mount, draw_minigun_mount_shadow, draw_player_ring, draw_tank, draw_tank_shadow,
+    draw_tank_shield,
 };
 use crate::track::draw_track;
 use crate::{
@@ -248,6 +253,7 @@ impl Game {
             }
 
             crate::simulation::with_tank(&self.world, player, |tank| {
+                draw_player_ring(&mut d, tank, self.time);
                 draw_tank_shield(&mut d, tank, self.time);
                 if self.shadows_enabled {
                     draw_tank_shadow(&mut d, textures.tanks, tank);
@@ -426,21 +432,56 @@ impl Game {
                 });
             }
 
-            // Debug inspect overlay: hitbox/collider outlines plus a stat
-            // readout for every tank. Drawn here (screen space, post-composite) rather
-            // than into scene_target, so it's never warped by an in-flight
-            // shockwave and always renders crisp - tank.position is already
-            // screen pixels (no camera transform), so the two spaces line up
-            // 1:1 with no extra math.
-            if self.inspect_enabled {
-                for (tank, ai) in self.world.query::<(&Tank, &Ai)>().iter() {
-                    draw_tank_inspect(&mut d, tank, Some(ai));
+            // Debug overlays (dev builds only): the inspect layer's
+            // hitbox/collider outlines plus a stat readout for every tank,
+            // then the dev server's other layers. Drawn here (screen space,
+            // post-composite) rather than into scene_target, so they're
+            // never warped by an in-flight shockwave and always render
+            // crisp - tank.position is already screen pixels (no camera
+            // transform), so the two spaces line up 1:1 with no extra math.
+            #[cfg(feature = "dev-tools")]
+            {
+                if self.debug_overlays.inspect {
+                    for (tank, ai) in self.world.query::<(&Tank, &Ai)>().iter() {
+                        draw_tank_inspect(&mut d, tank, Some(ai));
+                    }
+                    crate::simulation::with_tank(&self.world, player, |tank| {
+                        draw_tank_inspect(&mut d, tank, None);
+                    });
                 }
-                crate::simulation::with_tank(&self.world, player, |tank| {
-                    draw_tank_inspect(&mut d, tank, None);
-                });
+                self.draw_debug_overlays(&mut d, screen_width as f32, screen_height as f32);
+                // Which preset is live, one line under the top-left HUD row,
+                // so the I key's cycling is visible without counting layers.
+                if self.debug_overlays.any() {
+                    let preset = if self.debug_overlays == Overlays::INSPECT {
+                        "inspect"
+                    } else if self.debug_overlays == Overlays::ALL {
+                        "all"
+                    } else {
+                        "custom"
+                    };
+                    let label = format!("DEV overlays: {preset} (I cycles)");
+                    const LABEL_FONT_SIZE: i32 = if HUD_FONT_SIZE / 2 < 14 { HUD_FONT_SIZE / 2 } else { 14 };
+                    let label_y = HUD_MARGIN + HUD_FONT_SIZE + 6;
+                    // Same 8px/char width estimate as `draw_tank_inspect`'s
+                    // stat panel - no font handle inside the draw closure.
+                    let label_w = label.len() as i32 * 8 + 8;
+                    d.draw_rectangle(
+                        HUD_MARGIN - 4,
+                        label_y - 2,
+                        label_w,
+                        LABEL_FONT_SIZE + 4,
+                        Color::new(0, 0, 0, 150),
+                    );
+                    d.draw_text(
+                        &label,
+                        HUD_MARGIN,
+                        label_y,
+                        LABEL_FONT_SIZE,
+                        Color::new(80, 200, 255, 255),
+                    );
+                }
             }
-            self.draw_debug_overlays(&mut d, screen_width as f32, screen_height as f32);
 
             // HUD and the end-of-round banner draw undistorted, on top of the
             // (possibly rippling) scene.
@@ -531,10 +572,10 @@ impl Game {
     }
 }
 
-/// Debug inspect-mode overlay for one tank: its hull damage box, its
+/// The inspect overlay for one tank (dev builds only - `Overlays::inspect`,
+/// part of the presets the I key cycles): its hull damage box, its
 /// turret+barrel damage box, and its (smaller, corner-rounded) movement
-/// collider (see `Game::inspect_enabled`, toggled by the "I" key), plus a
-/// small stat block - ammo, health, current speed and velocity for every
+/// collider, plus a small stat block - ammo, health, current speed and velocity for every
 /// tank, and additionally (`ai: Some`, i.e. this isn't the player) whether
 /// it's currently retreating to recharge and its fire cooldown, pulled
 /// straight from its `Ai` - the same state `ai.rs`'s
@@ -559,6 +600,7 @@ impl Game {
 ///   forgiving driving, shrink it if sprites start visibly clipping into
 ///   walls. The stat block's MOVE line prints its current world-px size
 ///   and corner radius for the same purpose.
+#[cfg(feature = "dev-tools")]
 fn draw_tank_inspect(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>) {
     // Same "which axis is the long one" check as `Tank::avoidance_radius` -
     // tanks only ever face one of the four `Dir::rotation()` values, so an
@@ -664,11 +706,13 @@ fn draw_tank_inspect(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>) {
     }
 }
 
+#[cfg(feature = "dev-tools")]
 impl Game {
-    /// The dev server's overlays (`Game::debug_overlays`, docs/dev-server-design.md),
-    /// screen space and post-composite like the inspect block: blocked nav
-    /// cells, each enemy's AI memory, projectile hit boxes, engagement
-    /// targets, pickup collect radii. Each layer costs nothing while off.
+    /// The debug overlay layers beyond inspect (`Game::debug_overlays`,
+    /// docs/dev-server-design.md; dev builds only), screen space and
+    /// post-composite like the inspect block: blocked nav cells, each
+    /// enemy's AI memory, projectile hit boxes, engagement targets, pickup
+    /// collect radii. Each layer costs nothing while off.
     fn draw_debug_overlays(&self, d: &mut impl RaylibDraw, width: f32, height: f32) {
         let ov = self.debug_overlays;
         if ov.nav_grid {
@@ -746,7 +790,7 @@ impl Game {
                     d.draw_rectangle(x - 2, ty, label.len() as i32 * 7 + 4, 14, Color::new(0, 0, 0, 150));
                     d.draw_text(&label, x, ty + 1, 12, Color::new(80, 200, 255, 255));
                 }
-                if ov.engage && let Some(target) = self.last_engage_targets.get(&entity) {
+                if ov.engage && let Some(target) = self.last_engage.target(entity) {
                     let (tx, ty) = (target.x as i32, target.y as i32);
                     d.draw_line(x, y, tx, ty, Color::SKYBLUE);
                     d.draw_line(tx - 5, ty - 5, tx + 5, ty + 5, Color::SKYBLUE);

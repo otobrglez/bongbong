@@ -146,6 +146,10 @@ pub struct Ai {
     wall_ahead_timer: f32,
     /// The breach in progress, if any - see `Brain::wants_breach`.
     breach: Option<Breach>,
+    /// Stuck escapes fired this round (see `stuck_timer`) - a counter
+    /// rather than a flag so tooling can see an escape that fired and
+    /// reset within one frame.
+    escapes: u32,
 }
 
 /// Read-only view of an `Ai`'s memory for tooling (`Ai::snapshot`).
@@ -171,6 +175,10 @@ pub struct AiSnapshot {
     pub intent_move: Option<&'static str>,
     pub intent_face: Option<&'static str>,
     pub intent_fire: bool,
+    pub retarget_timer: f32,
+    /// Seconds left before the breach in progress is given up.
+    pub breach_timer: Option<f32>,
+    pub escapes: u32,
 }
 
 impl Default for Ai {
@@ -193,6 +201,7 @@ impl Default for Ai {
             last_intent: Intent::default(),
             wall_ahead_timer: 0.0,
             breach: None,
+            escapes: 0,
         }
     }
 }
@@ -354,6 +363,9 @@ impl Ai {
             intent_move: self.last_intent.move_dir.map(Dir::name),
             intent_face: self.last_intent.face.map(Dir::name),
             intent_fire: self.last_intent.fire,
+            retarget_timer: self.retarget_timer,
+            breach_timer: self.breach.map(|b| b.timer),
+            escapes: self.escapes,
         }
     }
 
@@ -594,6 +606,7 @@ impl Ai {
             // and straight back out as the last resort - a tank pinned in a
             // corner has nowhere else to go.
             self.stuck_timer = 0.0;
+            self.escapes += 1;
             let failing = self.committed_dir.unwrap_or(fresh);
             let left = ctx.my_index.is_multiple_of(2);
             let blocked =

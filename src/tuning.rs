@@ -872,6 +872,25 @@ tunables! {
         /// The ring fades out over this many final seconds of the shield so
         /// the wearer can see it about to drop.
         shield_glow_fade_seconds: f32 = 2.0 in 0.0 ..= 10.0;
+        /// A tank's ground ring (`Tank::ring_position`: the shield ring and
+        /// the player's white marker) follows the hull as a damped spring.
+        /// This is its natural frequency: how briskly it accelerates after
+        /// a hull that left it behind - lower is sleepier and trails further
+        /// at speed, higher hugs the hull. 0 pins it to the hull.
+        tank_ring_spring_hz: f32 = 2.4 in 0.0 ..= 10.0;
+        /// Hard cap (px) on how far the ring may trail behind the hull, so
+        /// it stays tucked under the tank at any speed; the spring still
+        /// sets how it moves inside that leash.
+        tank_ring_max_trail_px: f32 = 12.0 in 0.0 ..= 64.0;
+        /// Opacity of the player's white ground ring: high enough to read
+        /// as white rather than grass-tinted grey, with a little ground
+        /// showing through. The shield ring's own translucency is fixed in
+        /// `draw_ground_ring`.
+        player_ring_opacity: f32 = 0.8 in 0.0 ..= 1.0;
+        /// The ring spring's damping ratio: below 1 it overshoots a touch
+        /// and settles with a wobble when the tank stops, 1 is the fastest
+        /// settle with no overshoot, above 1 is sluggish.
+        tank_ring_damping: f32 = 0.7 in 0.05 ..= 3.0;
         /// Shell shadow distance, rolled once per shell at fire time within
         /// this range - the separation is what reads as "airborne", and
         /// different shells reading as flying at different heights beats
