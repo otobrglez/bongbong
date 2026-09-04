@@ -894,6 +894,75 @@ tunables! {
         wood_burn_seconds: f32 = 1.0 in 0.1 ..= 30.0;
     }
 
+    group props {
+        /// Sandbag toughness: hp absorbed over its three visible stages
+        /// (intact, torn, collapsed) before it flattens. Baked in at spawn.
+        sandbag_max_health: f32 = 45.0 in 1.0 ..= 500.0 @ Spawn;
+        /// Odds a shell, bullet or plasma bolt sails over a sandbag tile
+        /// instead of hitting it, rolled per projectile per tile.
+        sandbag_pass_over_chance: f64 = 0.35 in 0.0 ..= 1.0;
+        /// Seconds a tank has to keep pushing into a sandbag before it
+        /// collapses. Kept under `enemy_breach_after_seconds` so an AI that
+        /// drives into one pushes through instead of stopping to shoot it.
+        sandbag_ram_seconds: f32 = 0.4 in 0.05 ..= 5.0;
+        /// Barrel toughness before it detonates: a player shell usually pops
+        /// it outright, an enemy shell needs two, minigun bullets several.
+        /// Baked in at spawn.
+        barrel_max_health: f32 = 18.0 in 1.0 ..= 500.0 @ Spawn;
+        /// Odds a projectile flies over a barrel instead of hitting it.
+        barrel_pass_over_chance: f64 = 0.08 in 0.0 ..= 1.0;
+        /// Odds a shell or bullet ricochets off a barrel instead of hitting
+        /// it (plasma never ricochets).
+        barrel_deflect_chance: f64 = 0.1 in 0.0 ..= 1.0;
+        /// Delay between chain-reaction links: a barrel caught in another
+        /// blast is armed for about this long before it goes off itself
+        /// (half of it at the blast's centre, two and a half times at its edge),
+        /// so a cluster cascades outward instead of vanishing in one frame.
+        barrel_fuse_seconds: f32 = 0.18 in 0.0 ..= 2.0;
+        /// Blast radius (px) of a detonating barrel: everything inside takes
+        /// damage with linear falloff, and other barrels inside always chain.
+        barrel_blast_radius: f32 = 96.0 in 0.0 ..= 600.0;
+        /// Blast damage at the centre, rolled per victim; falls off linearly
+        /// to zero at the radius. Hurts everyone: player, enemies, frogs,
+        /// walls and props alike.
+        barrel_blast_damage_min: f32 = 15.0 in 0.0 ..= 100.0;
+        /// Upper end of the blast damage roll.
+        barrel_blast_damage_max: f32 = 30.0 in 0.0 ..= 100.0;
+        /// Outward shove a barrel blast gives a tank at its centre (px/s,
+        /// mass-normalised like a wreck's knockback).
+        barrel_blast_knockback_speed: f32 = 140.0 in 0.0 ..= 500.0;
+        /// Damage per second a tank pushing into a barrel deals it - so
+        /// ramming one sets it off in a fraction of a second.
+        barrel_ram_damage_per_second: f32 = 40.0 in 0.0 ..= 500.0;
+        /// Odds a hit on a pristine fence destroys it outright; otherwise it
+        /// drops to its damaged keyframe and the next hit finishes it.
+        fence_one_shot_chance: f64 = 0.7 in 0.0 ..= 1.0;
+        /// Seconds a tank has to push into a fence before it gives way.
+        fence_ram_seconds: f32 = 0.15 in 0.05 ..= 5.0;
+        /// Playback rate of the barrel blast sprite animation (12 frames).
+        blast_anim_fps: f32 = 18.0 in 4.0 ..= 60.0;
+        /// On-screen scale of the 64px blast frames (2.0 = 128px wide).
+        blast_anim_scale: f32 = 2.0 in 0.5 ..= 4.0;
+        /// How long the additive light bloom under a blast lasts.
+        blast_glow_seconds: f32 = 0.25 in 0.0 ..= 2.0;
+        /// Radius (px) of that bloom at its largest.
+        blast_glow_radius: f32 = 90.0 in 0.0 ..= 400.0;
+        /// Peak opacity of the bloom.
+        blast_glow_strength: f32 = 0.8 in 0.0 ..= 1.0;
+        /// Peak opacity of the whole-screen flash a blast starts with.
+        blast_screen_flash_alpha: f32 = 0.3 in 0.0 ..= 1.0;
+        /// How long that screen flash takes to fade.
+        blast_screen_flash_seconds: f32 = 0.06 in 0.0 ..= 0.5;
+        /// Opacity of the pulsing glow on a barrel whose fuse is lit.
+        barrel_fuse_glow_strength: f32 = 0.6 in 0.0 ..= 1.0;
+        /// Opacity of the burn mark a blast leaves on the ground.
+        scorch_opacity: f32 = 0.75 in 0.0 ..= 1.0;
+        /// Seconds a fresh scorch mark takes to fade in under the fireball.
+        scorch_fade_in_seconds: f32 = 0.25 in 0.0 ..= 2.0;
+        /// On-screen scale of the 64px scorch decal cells.
+        scorch_scale: f32 = 2.0 in 0.5 ..= 4.0;
+    }
+
     group tank_models {
         /// Chassis mass multiplier, from the 7 handling-weight classes
         /// (narrow 12x18: scout/wraith; compact 14x16: flak/glacier; std

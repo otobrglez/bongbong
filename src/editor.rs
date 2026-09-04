@@ -41,6 +41,8 @@ use crate::{
 /// asset" section).
 pub struct EditorTextures<'a> {
     pub obstacles: &'a Texture2D,
+    /// The props sheet (`obstacle::Sheet::Props`).
+    pub props: &'a Texture2D,
     pub ground: &'a Texture2D,
     pub frog_idle: &'a Texture2D,
     pub pickup_health: &'a Texture2D,
@@ -59,6 +61,9 @@ pub struct EditorTextures<'a> {
 #[derive(Clone, Copy, PartialEq)]
 enum Tool {
     Wall(Material),
+    /// A destructible prop (`Material::Sandbag`/`Barrel`/`Fence`) - any
+    /// number, variant rolled per tile when the round spawns.
+    Prop(Material),
     Road,
     Frog,
     Start,
@@ -72,11 +77,14 @@ enum Tool {
     Eraser,
 }
 
-const TOOLS: [Tool; 17] = [
+const TOOLS: [Tool; 20] = [
     Tool::Wall(Material::Brick),
     Tool::Wall(Material::Iron),
     Tool::Wall(Material::Wood),
     Tool::Wall(Material::Glass),
+    Tool::Prop(Material::Sandbag),
+    Tool::Prop(Material::Barrel),
+    Tool::Prop(Material::Fence),
     Tool::Road,
     Tool::Frog,
     Tool::Start,
@@ -411,6 +419,10 @@ impl MapEditor {
     fn place(&mut self, col: i32, row: i32, width: f32, height: f32) {
         match self.active_tool {
             Tool::Wall(material) => self.map.set_cell(col, row, CellObject::Wall { material }),
+            Tool::Prop(material) => {
+                let cell = CellObject::prop(material).expect("Tool::Prop only carries prop materials");
+                self.map.set_cell(col, row, cell)
+            }
             Tool::Road => self.map.set_cell(col, row, CellObject::Road),
             Tool::Frog => {
                 if let Some((oc, or)) = self.map.frog_cell() {
@@ -460,9 +472,10 @@ impl MapEditor {
             let dest = Rectangle::new(pos.x, pos.y, size, size);
             let origin = Vector2::new(size / 2.0, size / 2.0);
             match *obj {
-                CellObject::Wall { material } => {
-                    let src = obstacle::icon_source_rec(material);
-                    d.draw_texture_pro(textures.obstacles, src, dest, origin, 0.0, Color::WHITE);
+                CellObject::Wall { .. } | CellObject::Sandbag | CellObject::Barrel | CellObject::Fence => {
+                    let material = obj.material().expect("solid cells have a material");
+                    let (sheet, src) = obstacle::icon_source_rec(material);
+                    d.draw_texture_pro(sheet_texture(textures, sheet), src, dest, origin, 0.0, Color::WHITE);
                 }
                 CellObject::Road => {} // already painted into `self.ground`
                 CellObject::Frog => {
@@ -666,9 +679,9 @@ fn draw_panel(d: &mut impl RaylibDraw, rect: Rectangle) {
 fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, tool: Tool, rect: Rectangle) {
     let dest = Rectangle::new(rect.x + 4.0, rect.y + 4.0, rect.width - 8.0, rect.height - 8.0);
     match tool {
-        Tool::Wall(material) => {
-            let src = obstacle::icon_source_rec(material);
-            d.draw_texture_pro(textures.obstacles, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+        Tool::Wall(material) | Tool::Prop(material) => {
+            let (sheet, src) = obstacle::icon_source_rec(material);
+            d.draw_texture_pro(sheet_texture(textures, sheet), src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
         Tool::Road => {
             d.draw_rectangle_rounded(dest, 0.15, EDITOR_PANEL_SEGMENTS, Color::new(150, 111, 74, 255));
@@ -714,6 +727,14 @@ fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, tool: Tool
                 Color::WHITE,
             );
         }
+    }
+}
+
+/// The atlas a material's icon comes from.
+fn sheet_texture<'a>(textures: &EditorTextures<'a>, sheet: obstacle::Sheet) -> &'a Texture2D {
+    match sheet {
+        obstacle::Sheet::Walls => textures.obstacles,
+        obstacle::Sheet::Props => textures.props,
     }
 }
 
@@ -796,6 +817,9 @@ mod editor_tests {
         map.set_cell(0, 11, CellObject::Gate);
         map.set_cell(39, 11, CellObject::Gate);
         map.set_cell(20, 11, CellObject::Wall { material: Material::Brick });
+        map.set_cell(21, 11, CellObject::Sandbag);
+        map.set_cell(22, 11, CellObject::Barrel);
+        map.set_cell(23, 11, CellObject::Fence);
 
         let dir = std::env::temp_dir().join(format!("bongbong-editor-test-{}", std::process::id()));
         let path = dir.join("round-trip.toml");
@@ -811,6 +835,7 @@ mod editor_tests {
         assert_eq!(back.start_cell(), Some((30, 11)));
         assert_eq!(back.frog_cell(), Some((35, 11)));
         assert_eq!(back.cells.len(), map.cells.len());
+        assert_eq!(back.cell(22, 11).and_then(|c| c.material()), Some(Material::Barrel));
     }
 
     #[test]
@@ -824,11 +849,11 @@ mod editor_tests {
         assert_eq!(gate_inward(at(20, 11), w, h), None);
     }
 
-    /// Seventeen icons must still fit inside the default battlefield width.
+    /// Twenty icons must still fit inside the default battlefield width.
     #[test]
     fn palette_fits_the_default_battlefield_width() {
         let panel = MapEditor::palette_panel_rect(DEFAULT_SCREEN_WIDTH as f32, DEFAULT_SCREEN_HEIGHT as f32);
         assert!(panel.x >= 0.0 && panel.x + panel.width <= DEFAULT_SCREEN_WIDTH as f32);
-        assert_eq!(TOOLS.len(), 17);
+        assert_eq!(TOOLS.len(), 20);
     }
 }

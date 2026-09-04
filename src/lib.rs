@@ -406,6 +406,33 @@ pub const OBSTACLE_GRID_SIZE: f32 = OBSTACLE_TEXTURE_SIZE * OBSTACLE_SCALE;
 // type.
 pub const OBSTACLE_CLEAR: f32 = 90.0;
 
+// Props: the three discrete destructible items (obstacle::Material::{Sandbag,
+// Barrel, Fence}) share the obstacle grid, hull and draw path but draw from
+// props_sheet.png, a 128x288 sheet (4 cols x 9 rows of 32x32 cells) - see
+// docs/PROPS_SPEC.md:
+//   rows 0-2 Sandbag (cols 0-2): 3 bag arrangements x intact/torn/collapsed.
+//   rows 3-4 Barrel  (cols 0-3): 2 drum liveries x intact/dented/critical,
+//            col 3 = lit fuse (drawn while Obstacle::fuse is armed).
+//   rows 5-8 Fence   (cols 0-1): wooden H/V, wire H/V - a fence variant owns
+//            two rows (row = base + variant*2 + axis) and the renderer picks
+//            the axis from the tile's fence neighbours (obstacle::fence_axis).
+// Cells outside a material's valid column range are empty - never sampled.
+pub const PROPS_COLUMNS: i32 = 4;
+pub const PROPS_ROWS: i32 = 9;
+pub const PROPS_BARREL_LIT_COL: i32 = 3;
+// barrel_explosion.png: 768x128, two rows of 64x64 cells. Row 0 is the
+// one-shot blast animation (12 frames, col * BARREL_EXPLOSION_TEXTURE_SIZE,
+// like the frog filmstrips), drawn at `blast_anim_scale`; row 1 holds
+// SCORCH_VARIANTS ground-decal cells a blast leaves behind. See
+// docs/PROPS_SPEC.md and blast.rs.
+pub const BARREL_EXPLOSION_TEXTURE_SIZE: f32 = 64.0;
+pub const BARREL_EXPLOSION_FRAMES: i32 = 12;
+pub const SCORCH_ROW: i32 = 1;
+pub const SCORCH_VARIANTS: i32 = 3;
+// Oldest scorch marks are dropped past this many, so a long round with many
+// barrels doesn't accumulate an unbounded decal list.
+pub const SCORCH_MAX: usize = 64;
+
 // Ground/terrain layer (grass base, road painted under every static
 // obstacle tile and every cell a map explicitly marks as road) - see
 // ground.rs for the placement/autotile logic, docs/GROUND_SPEC.md for the
@@ -632,6 +659,7 @@ pub fn parse_seed(s: &str) -> Result<u64, String> {
 
 pub mod ai;
 pub mod battlefield;
+pub mod blast;
 pub mod bt;
 pub mod bullet;
 #[cfg(feature = "dev-tools")]

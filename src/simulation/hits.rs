@@ -133,10 +133,12 @@ impl Terrain {
     /// `line_of_sight` for a shot aimed *at* the frog `target`: that frog's
     /// own box is not an obstruction (a segment ending at its centre always
     /// enters it), every other frog and tile still is. `None` ignores
-    /// nothing - the plain `line_of_sight`.
+    /// nothing - the plain `line_of_sight`. Tiles that don't block sight
+    /// (sandbags, fences - `Material::blocks_sight`) are looked over.
     pub fn line_of_sight_to_frog(&self, from: Position, to: Position, target: Option<Entity>) -> bool {
         self.obstacles
             .iter()
+            .filter(|b| b.material.blocks_sight())
             .all(|b| segment_hits_aabb(from, to, b.center, b.half).is_none())
             && self
                 .frogs
@@ -154,7 +156,7 @@ impl Terrain {
     pub fn line_of_fire_to_frog(&self, from: Position, to: Position, target: Option<Entity>) -> bool {
         self.obstacles
             .iter()
-            .filter(|b| b.material == Material::Iron)
+            .filter(|b| b.material.is_permanent())
             .all(|b| segment_hits_aabb(from, to, b.center, b.half).is_none())
             && self
                 .frogs
@@ -179,6 +181,23 @@ impl Terrain {
         p0: Position,
         p1: Position,
         half_extent: f32,
+    ) -> Option<(ShellTarget, f32)> {
+        self.sweep_ignoring(world, player, shooter, p0, p1, half_extent, &[])
+    }
+
+    /// `sweep` with the obstacle tiles in `ignore` left out - the ones a
+    /// projectile already rolled a pass-over on (`Projectile::passed_over`),
+    /// so it keeps flying past them to whatever is behind.
+    #[allow(clippy::too_many_arguments)]
+    pub fn sweep_ignoring(
+        &self,
+        world: &hecs::World,
+        player: Entity,
+        shooter: Owner,
+        p0: Position,
+        p1: Position,
+        half_extent: f32,
+        ignore: &[Entity],
     ) -> Option<(ShellTarget, f32)> {
         let pad = Position::new(half_extent, half_extent);
         let mut best: Option<(f32, u8, ShellTarget)> = None;
@@ -206,6 +225,9 @@ impl Terrain {
         }
 
         for b in &self.obstacles {
+            if ignore.contains(&b.entity) {
+                continue;
+            }
             consider_hit(&mut best, segment_hits_aabb(p0, p1, b.center, b.half + pad), 3, ShellTarget::Obstacle(b.entity));
         }
 

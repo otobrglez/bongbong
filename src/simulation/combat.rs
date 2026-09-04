@@ -3,6 +3,7 @@
 //! the frog's evasive hop.
 
 use crate::tuning::tuning;
+use hecs::Entity;
 use rand::RngExt;
 use rand::rngs::SmallRng;
 use sola_raylib::core::math::Vector2;
@@ -22,7 +23,41 @@ use crate::{
 };
 
 use super::hits::ShellTarget;
+use super::props::DamageCause;
 use super::{with_frog_mut, Event, Frame, Game, HitTarget};
+
+/// One explosion's numbers - a tank wreck's or a barrel's - so
+/// `explosion_hit` serves both.
+pub(super) struct BlastParams {
+    pub radius: f32,
+    pub damage: (f32, f32),
+    pub knockback: f32,
+}
+
+impl BlastParams {
+    pub fn tank_wreck() -> Self {
+        BlastParams {
+            radius: tuning().explosion_radius,
+            damage: (tuning().explosion_damage_min, tuning().explosion_damage_max),
+            knockback: tuning().explosion_knockback_speed,
+        }
+    }
+
+    pub fn barrel() -> Self {
+        BlastParams {
+            radius: tuning().barrel_blast_radius,
+            damage: (tuning().barrel_blast_damage_min, tuning().barrel_blast_damage_max),
+            knockback: tuning().barrel_blast_knockback_speed,
+        }
+    }
+
+    /// Centre damage before falloff. Tolerates a live-tuned inverted
+    /// range (min >= max) by returning `min` instead of panicking.
+    pub fn roll_damage(&self, rng: &mut SmallRng) -> f32 {
+        let (min, max) = self.damage;
+        if max > min { rng.random_range(min..max) } else { min }
+    }
+}
 
 /// What a hit does beyond damage: an optional shove (unit travel direction,
 /// speed in px/s) for a surviving tank, and whether the frog tries to hop
@@ -112,12 +147,12 @@ impl Game {
                 }
             }
             ShellTarget::Obstacle(entity) => {
-                let mut q = self.world.query_one::<&mut Obstacle>(entity);
-                if let Ok(obstacle) = q.get() {
-                    let d = f.rng.random_range(dmg.0..dmg.1);
-                    obstacle.damage(d);
-                    f.events.push(Event::Hit { target: HitTarget::Obstacle, damage: d, killed: obstacle.destroyed, x: at.x, y: at.y });
-                }
+                let d = f.rng.random_range(dmg.0..dmg.1);
+                // The hit is recorded ahead of whatever the damage causes
+                // (a destroyed tile, a blast), since it happened first.
+                let mark = f.events.len();
+                let killed = self.damage_obstacle(f, entity, d, DamageCause::Shot);
+                f.events.insert(mark, Event::Hit { target: HitTarget::Obstacle, damage: d, killed, x: at.x, y: at.y });
             }
             ShellTarget::Wall => {
                 f.events.push(Event::Hit { target: HitTarget::Wall, damage: 0.0, killed: false, x: at.x, y: at.y });
@@ -126,24 +161,39 @@ impl Game {
     }
 
     /// A tank's death: an outward shove that fades linearly to nothing at
-    /// EXPLOSION_RADIUS, reaching every live tank regardless of side, plus
-    /// a chip of damage only to the side opposing whoever died. Obstacles
-    /// in range crack too (no side, no knockback). The frog is deliberately
+    /// `explosion_radius`, reaching every live tank regardless of side,
+    /// plus a chip of damage only to the side opposing whoever died.
+    /// Obstacles in range crack too (no side, no knockback) - a barrel in
+    /// range goes off (`Game::damage_obstacle`). The frog is deliberately
     /// immune - it is a loss condition, so splash damage would be a real
     /// balance change rather than a detail. A chip that finishes off a
     /// tank pushes it onto `f.kills`, so it gets its own blast in turn.
     pub(super) fn apply_explosion(&mut self, f: &mut Frame, center: Position, victim_was_enemy: bool) {
+        let params = BlastParams::tank_wreck();
         let player = self.player.expect("player entity spawned in init");
         {
             let mut q = self.world.query_one::<&mut Tank>(player);
             let tank = q.get().expect("player entity always has a Tank");
-            explosion_hit(tank, center, victim_was_enemy, false, &mut self.physics, &mut f.rng, &mut f.kills);
+            explosion_hit(tank, center, victim_was_enemy, false, &mut self.physics, &mut f.rng, &mut f.kills, &params);
         }
         for tank in self.world.query::<&mut Tank>().with::<&Ai>().iter() {
-            explosion_hit(tank, center, !victim_was_enemy, true, &mut self.physics, &mut f.rng, &mut f.kills);
+            explosion_hit(tank, center, !victim_was_enemy, true, &mut self.physics, &mut f.rng, &mut f.kills, &params);
         }
-        for obstacle in self.world.query::<&mut Obstacle>().iter() {
-            explosion_hit_obstacle(obstacle, center, &mut f.rng);
+        // Collect first: `damage_obstacle` needs the world free. Same
+        // per-obstacle draw order as iterating directly.
+        let hits: Vec<(Entity, f32)> = self
+            .world
+            .query::<(Entity, &Obstacle)>()
+            .iter()
+            .filter(|(_, o)| !o.destroyed)
+            .filter_map(|(e, o)| {
+                let dist = o.position.distance_to(center);
+                (dist <= params.radius).then(|| (e, 1.0 - dist / params.radius))
+            })
+            .collect();
+        for (entity, falloff) in hits {
+            let amount = params.roll_damage(&mut f.rng) * falloff;
+            self.damage_obstacle(f, entity, amount, DamageCause::Blast(falloff));
         }
     }
 }
@@ -215,11 +265,13 @@ pub(super) fn ram(
     Some(dmg)
 }
 
-/// One tank's share of a nearby explosion (see `Game::apply_explosion`):
-/// a shove that fades linearly with distance and, only when `damage` is
-/// true, a chip of damage scaled the same way. No-op on a wreck or a tank
-/// outside EXPLOSION_RADIUS. `is_enemy` tags a resulting kill.
-fn explosion_hit(
+/// One tank's share of a nearby explosion (see `Game::apply_explosion` and
+/// `Game::apply_blast`): a shove that fades linearly with distance and,
+/// only when `damage` is true, a chip of damage scaled the same way. No-op
+/// on a wreck or a tank outside `params.radius`. `is_enemy` tags a
+/// resulting kill.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn explosion_hit(
     tank: &mut Tank,
     center: Position,
     damage: bool,
@@ -227,6 +279,7 @@ fn explosion_hit(
     physics: &mut Physics,
     rng: &mut SmallRng,
     kills: &mut Vec<(Position, bool, usize)>,
+    params: &BlastParams,
 ) {
     if tank.is_wreck() {
         return;
@@ -234,13 +287,13 @@ fn explosion_hit(
     let dx = tank.position.x - center.x;
     let dy = tank.position.y - center.y;
     let dist = (dx * dx + dy * dy).sqrt();
-    if dist > tuning().explosion_radius {
+    if dist > params.radius {
         return;
     }
-    let falloff = 1.0 - dist / tuning().explosion_radius;
+    let falloff = 1.0 - dist / params.radius;
 
     if damage {
-        let dmg = rng.random_range(tuning().explosion_damage_min..tuning().explosion_damage_max) * falloff;
+        let dmg = params.roll_damage(rng) * falloff;
         tank.take_damage(dmg, MAX_DAMAGE);
         tank.mark_hit();
         if tank.is_wreck() {
@@ -252,7 +305,7 @@ fn explosion_hit(
     // The push is tuned against the chassis-free baseline mass (scale
     // squared), so a heavy chassis resists it and a light one flies.
     let reference_mass = tank.scale * tank.scale;
-    let push = (tuning().explosion_knockback_speed * falloff * reference_mass / tank.mass()).min(tuning().knockback_max_speed);
+    let push = (params.knockback * falloff * reference_mass / tank.mass()).min(tuning().knockback_max_speed);
     let axis = if dist > 0.001 {
         Vector2::new(dx / dist, dy / dist)
     } else {
@@ -260,21 +313,6 @@ fn explosion_hit(
         Vector2::new(1.0, 0.0)
     };
     knockback(tank, physics, axis, push);
-}
-
-/// An obstacle's share of a nearby explosion: the same linear-falloff
-/// damage as `explosion_hit`, no knockback (static body). A tile this
-/// destroys is swept up by `Game::cleanup_done` like any other.
-fn explosion_hit_obstacle(obstacle: &mut Obstacle, center: Position, rng: &mut SmallRng) {
-    if obstacle.destroyed {
-        return;
-    }
-    let dist = obstacle.position.distance_to(center);
-    if dist > tuning().explosion_radius {
-        return;
-    }
-    let falloff = 1.0 - dist / tuning().explosion_radius;
-    obstacle.damage(rng.random_range(tuning().explosion_damage_min..tuning().explosion_damage_max) * falloff);
 }
 
 /// A landing spot for the frog's evasive hop, roughly `distance` px away

@@ -27,7 +27,7 @@ use hecs::Entity;
 use crate::frog::{Frog, Side};
 use crate::level::{Mission, SpawnKind};
 use crate::map::{self, CellObject};
-use crate::obstacle::{Material, Obstacle};
+use crate::obstacle::Obstacle;
 use crate::pathfind::Grid;
 use crate::simulation::Game;
 use crate::tank::Tank;
@@ -283,7 +283,7 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
         game.world
             .query::<&Obstacle>()
             .iter()
-            .filter(|o| o.material == Material::Iron)
+            .filter(|o| o.material.is_permanent())
             .map(|o| (o.position, o.hull_size() * 0.5))
             .chain(game.world.query::<&Frog>().iter().map(|fr| {
                 (fr.position, FROG_COLLIDER_HALF_EXTENT.0.max(FROG_COLLIDER_HALF_EXTENT.1))
@@ -1364,6 +1364,12 @@ mod map_lint_tests {
         let f = lint_path("maps/test/u-trap.toml").expect("fixture loads");
         dump("u-trap", &f);
         assert!(errors(&f).is_empty(), "the trap pocket is open and reachable");
+
+        // The props playground is sparse on purpose: every prop is a
+        // plain solid tile to the linter, and nothing is sealed off.
+        let f = lint_path("maps/test/props.toml").expect("fixture loads");
+        dump("props", &f);
+        assert!(errors(&f).is_empty(), "props is an open playground");
     }
 
     /// maps/missions/ fixtures are clean starting points for one mission/

@@ -23,12 +23,16 @@ mod combat;
 pub mod debug;
 mod engage;
 mod hits;
+mod props;
+#[cfg(test)]
+mod props_tests;
 mod waves;
 mod weapons;
 
 pub use waves::{RollIn, WaveStatus};
 use waves::WaveState;
 
+use crate::blast::{BlastFx, Scorch};
 use crate::tuning::tuning;
 use std::collections::{HashMap, HashSet};
 
@@ -45,7 +49,7 @@ use crate::frog::{Frog, Side};
 use crate::laser::{LaserBeam, LaserVariant};
 use crate::level::{LevelOverrides, Mission, SpawnPlan};
 use crate::map::{self, CellObject, MapFile};
-use crate::obstacle::Obstacle;
+use crate::obstacle::{Material, Obstacle};
 use crate::pathfind::Grid;
 use crate::physics::Physics;
 use crate::pickup::{Pickup, PickupKind};
@@ -63,6 +67,7 @@ use crate::{
     OBSTACLE_HULL_FRACTION,
     OBSTACLE_SCALE,
     OBSTACLE_TEXTURE_SIZE,
+    SCORCH_MAX,
     PATHFIND_CELL_SIZE,
     PHYSICS_FIXED_DT,
     PHYSICS_MAX_CATCHUP_SECONDS,
@@ -154,6 +159,12 @@ pub enum Event {
     /// A wave round removed the wreck in `slot` after
     /// `wave_wreck_despawn_seconds`.
     WreckRemoved { slot: usize },
+    /// A destructible tile (wall or prop) died at (`x`, `y`), whatever
+    /// destroyed it.
+    ObstacleDestroyed { material: Material, x: f32, y: f32 },
+    /// A barrel detonated at (`x`, `y`); `chained` when another blast's
+    /// fuse set it off rather than a shot or a ram.
+    Blast { x: f32, y: f32, chained: bool },
     // --- AI decisions, recorded only while `Game::trace_ai` is set: each
     // is a transition the enemy phase observed by comparing an enemy's
     // `AiSnapshot` before and after its `think`, so `ai.rs` stays
@@ -307,6 +318,10 @@ pub struct Game {
     pub mission: Mission,
     /// How enemies arrive this round - resolved by `init` like `mission`.
     pub spawn_plan: SpawnPlan,
+    /// How many enemies the band plan placed at init. Zero is a sandbox
+    /// round (`tanks = 0` / `--enemies 0`): nothing to wreck, so it never
+    /// ends by wreck count - only by the player's or the frog's death.
+    pub(crate) band_enemy_count: usize,
     /// The wave scheduler (`waves.rs`): idle under the band plan apart
     /// from handing out owner slots.
     wave: WaveState,
@@ -355,6 +370,12 @@ pub struct Game {
     pub(crate) muzzle_flashes: Vec<Shockwave>,
     /// Impact ripples where projectiles landed, oldest first.
     pub(crate) impact_flashes: Vec<Shockwave>,
+    /// Barrel blasts still playing their fireball animation, oldest first
+    /// (see `blast.rs`).
+    pub(crate) blast_fx: Vec<BlastFx>,
+    /// Burn marks left by barrel blasts this round, oldest first, capped at
+    /// `SCORCH_MAX`.
+    pub(crate) scorches: Vec<Scorch>,
     /// Laser beams still in their short display window, oldest first.
     pub(crate) laser_beams: Vec<LaserBeam>,
     /// Frozen simulation plus a "PAUSED" overlay. Cleared by `init`.
@@ -430,6 +451,12 @@ struct Frame {
     terrain: Terrain,
     /// Tanks destroyed this frame: (position, victim was an enemy, owner slot).
     kills: Vec<(Position, bool, usize)>,
+    /// Barrels detonated this frame, resolved by `explosions` alongside
+    /// `kills` as one worklist (a blast that sets off another barrel or
+    /// kills a tank appends to it).
+    pending_blasts: Vec<Position>,
+    blast_fx: Vec<BlastFx>,
+    scorches: Vec<Scorch>,
     pending_shells: Vec<Shell>,
     pending_plasmas: Vec<Plasma>,
     pending_bullets: Vec<Bullet>,
@@ -452,6 +479,9 @@ impl Frame {
             rng,
             terrain,
             kills: Vec::new(),
+            pending_blasts: Vec::new(),
+            blast_fx: Vec::new(),
+            scorches: Vec::new(),
             pending_shells: Vec::new(),
             pending_plasmas: Vec::new(),
             pending_bullets: Vec::new(),
@@ -493,6 +523,8 @@ impl Game {
         self.shock = None;
         self.muzzle_flashes.clear();
         self.impact_flashes.clear();
+        self.blast_fx.clear();
+        self.scorches.clear();
         self.laser_beams.clear();
         self.frame = 0;
         self.last_engage.clear();
@@ -544,6 +576,7 @@ impl Game {
         let obstacle_half_extent = OBSTACLE_TEXTURE_SIZE * OBSTACLE_SCALE * OBSTACLE_HULL_FRACTION * 0.5;
         let map_spawn = battlefield::spawn_from_map(&mut self.physics, &mut self.world, &mut rng, &self.map, obstacle_half_extent);
         let obstacle_positions = map_spawn.obstacle_positions;
+        let wall_positions = map_spawn.wall_positions;
         let map_road_cells = map_spawn.road_cells;
         let map_frog_pos = map_spawn.frog_pos;
         self.map_pickup_slots = map_spawn.pickup_slots;
@@ -561,11 +594,12 @@ impl Game {
             SpawnPlan::Band { count } => count
                 .or(self.map.tanks.map(|n| n as usize))
                 .unwrap_or_else(|| rng.random_range(tuning().enemy_count_min..=tuning().enemy_count_max))
-                // Free-form user input: 0 would be an instantly won round
-                // restarting forever, and the cap keeps live slots small.
-                .clamp(1, 31),
+                // Free-form user input: the cap keeps live slots small; 0
+                // is a sandbox round (see `band_enemy_count`).
+                .min(31),
             SpawnPlan::Waves { .. } => 0,
         };
+        self.band_enemy_count = enemy_count;
         self.wave = WaveState::new(enemy_owner_slot(enemy_count));
 
         // Terrain legality is the nav grid's `usable` test (see
@@ -700,8 +734,9 @@ impl Game {
             }
         }
 
-        // --- Ground: road under every wall tile and explicit road cell ---
-        let mut road_cells = obstacle_positions;
+        // --- Ground: road under every wall tile and explicit road cell
+        // (props stand on plain ground) ---
+        let mut road_cells = wall_positions;
         road_cells.extend(map_road_cells);
         self.ground = crate::ground::build(width, height, rng.random(), &road_cells);
 
@@ -797,22 +832,27 @@ impl Game {
             self.resolve_lasers(&mut f);
             self.step_world(&mut f, true);
             self.sync_tanks_and_ram(&mut f);
+            self.ram_props(&mut f);
             self.shell_vs_shell(&mut f);
             self.resolve_projectiles::<Shell>(&mut f, true);
             self.resolve_projectiles::<Bullet>(&mut f, true);
             self.resolve_projectiles::<Plasma>(&mut f, true);
-            self.explosions(&mut f);
+            self.tick_fuses(&mut f);
+            self.explosions(&mut f, true);
             self.despawn_wrecks(&mut f);
             self.cleanup_done();
             self.check_round_end(&mut f);
         } else {
             // Round over: the scene keeps animating (wrecks burn, in-flight
-            // shots land without dealing damage) while the restart counts
-            // down. Physics doesn't step, so nothing drifts.
+            // shots land without dealing damage, a barrel cascade finishes
+            // without hurting anyone) while the restart counts down.
+            // Physics doesn't step, so nothing drifts.
             self.step_world(&mut f, false);
             self.resolve_projectiles::<Shell>(&mut f, false);
             self.resolve_projectiles::<Bullet>(&mut f, false);
             self.resolve_projectiles::<Plasma>(&mut f, false);
+            self.tick_fuses(&mut f);
+            self.explosions(&mut f, false);
             self.cleanup_done();
             self.restart_timer -= dt;
             if self.restart_timer <= 0.0 {
@@ -828,6 +868,12 @@ impl Game {
     fn finish_frame(&mut self, f: Frame) {
         self.muzzle_flashes.extend(f.muzzle_flashes);
         self.impact_flashes.extend(f.impact_flashes);
+        self.blast_fx.extend(f.blast_fx);
+        self.scorches.extend(f.scorches);
+        if self.scorches.len() > SCORCH_MAX {
+            let excess = self.scorches.len() - SCORCH_MAX;
+            self.scorches.drain(..excess);
+        }
         if f.shock.is_some() {
             self.shock = f.shock;
         }
@@ -852,6 +898,13 @@ impl Game {
             flash.time += dt;
             flash.time < tuning().impact_flash_duration
         });
+        self.blast_fx.retain_mut(|blast| {
+            blast.time += dt;
+            !blast.done()
+        });
+        for scorch in &mut self.scorches {
+            scorch.age += dt;
+        }
         self.laser_beams.retain_mut(|beam| !beam.tick(dt));
     }
 
@@ -1453,7 +1506,30 @@ impl Game {
             })
             .collect();
         for Flight { entity, prev, pos, vel, owner, dmg } in flying {
-            let Some((target, t)) = f.terrain.sweep(&self.world, player, owner, prev, pos, P::hit_half_extent()) else {
+            // Sweep, and re-sweep past any prop tile the projectile rolls a
+            // pass-over on (`Material::pass_over_chance`) - remembered on
+            // the projectile, since a segment ending inside the tile would
+            // otherwise re-roll it next frame. Bounded by the props along
+            // the segment. A zero chance draws no RNG.
+            let mut ignored: Vec<Entity> = {
+                let mut q = self.world.query_one::<&P>(entity);
+                q.get().expect("projectile collected this frame still exists").passed_over().to_vec()
+            };
+            let hit = loop {
+                let swept = f.terrain.sweep_ignoring(&self.world, player, owner, prev, pos, P::hit_half_extent(), &ignored);
+                let Some((target, t)) = swept else { break None };
+                if let ShellTarget::Obstacle(e) = target {
+                    let chance = f.terrain.obstacle(e).map_or(0.0, |b| b.material.pass_over_chance());
+                    if chance > 0.0 && f.rng.random_bool(chance) {
+                        ignored.push(e);
+                        let mut q = self.world.query_one::<&mut P>(entity);
+                        q.get().expect("projectile collected this frame still exists").note_passed_over(e);
+                        continue;
+                    }
+                }
+                break Some((target, t));
+            };
+            let Some((target, t)) = hit else {
                 continue;
             };
             let hit_pos = prev + (pos - prev) * t;
@@ -1477,7 +1553,17 @@ impl Game {
                 let mut q = self.world.query_one::<&mut P>(entity);
                 let p = q.get().expect("projectile collected this frame still exists");
                 match target {
-                    ShellTarget::Obstacle(e) => f.terrain.obstacle(e).is_some_and(|b| p.try_ricochet(b)),
+                    ShellTarget::Obstacle(e) => f.terrain.obstacle(e).is_some_and(|b| {
+                        // The projectile's own rule (shells off Iron), or a
+                        // barrel's chance deflection. Zero chance draws no RNG.
+                        p.try_ricochet(b) || {
+                            let chance = b.material.deflect_chance();
+                            P::can_bounce() && chance > 0.0 && f.rng.random_bool(chance) && {
+                                p.reflect_off(b);
+                                true
+                            }
+                        }
+                    }),
                     _ => false,
                 }
             };
@@ -1503,19 +1589,29 @@ impl Game {
         }
     }
 
-    /// Every tank killed this frame gets a shockwave and an explosion; a
-    /// splash that kills another tank is appended and handled in turn.
-    /// Processed in kill order, so the last ring shown is the most recent
-    /// kill's. Terminates: a tank can only ever be pushed once (every push
-    /// is gated by its own transition into a wreck).
-    fn explosions(&mut self, f: &mut Frame) {
-        let mut i = 0;
-        while i < f.kills.len() {
-            let (center, victim_was_enemy, slot) = f.kills[i];
-            i += 1;
-            f.events.push(Event::Wreck { slot, x: center.x, y: center.y });
-            f.shock = Some(Shockwave { center, time: 0.0 });
-            self.apply_explosion(f, center, victim_was_enemy);
+    /// Every tank killed this frame gets a shockwave and an explosion, and
+    /// every barrel detonated this frame its blast; a splash that kills
+    /// another tank, or a blast that finishes a barrel's fuse elsewhere, is
+    /// appended and handled in turn. Processed in order, so the last ring
+    /// shown is the most recent one's. Terminates: a tank can only ever be
+    /// pushed once (every push is gated by its own transition into a wreck)
+    /// and a barrel dies once. `live` is false on the end screen, where
+    /// blasts play out without damage (no kills happen there).
+    fn explosions(&mut self, f: &mut Frame, live: bool) {
+        let (mut i, mut j) = (0, 0);
+        while i < f.kills.len() || j < f.pending_blasts.len() {
+            while i < f.kills.len() {
+                let (center, victim_was_enemy, slot) = f.kills[i];
+                i += 1;
+                f.events.push(Event::Wreck { slot, x: center.x, y: center.y });
+                f.shock = Some(Shockwave { center, time: 0.0 });
+                self.apply_explosion(f, center, victim_was_enemy);
+            }
+            if j < f.pending_blasts.len() {
+                let center = f.pending_blasts[j];
+                j += 1;
+                self.apply_blast(f, center, live);
+            }
         }
     }
 
@@ -1562,9 +1658,12 @@ impl Game {
             self.end_round(f, Outcome::Lost);
             return;
         }
+        // A band round with no enemies at all (a sandbox) has nothing to
+        // win by wrecking; it runs until the player or the frog dies.
+        let sandbox = matches!(self.spawn_plan, SpawnPlan::Band { .. }) && self.band_enemy_count == 0;
         let won = match self.mission {
             Mission::Hunt => frog_dead(self.enemy_frog),
-            Mission::Protect | Mission::Destroy => self.spawn_plan_finished() && self.all_enemies_wrecked(),
+            Mission::Protect | Mission::Destroy => !sandbox && self.spawn_plan_finished() && self.all_enemies_wrecked(),
         };
         if won {
             self.end_round(f, Outcome::Won);
@@ -2380,6 +2479,22 @@ mod mechanics_tests {
         game.debug_kill(slot).unwrap();
         step(&mut game, Input::default());
         assert_eq!(game.outcome(), Outcome::Won);
+    }
+
+    /// `tanks = 0` is a sandbox: no enemy ever spawns and the round does
+    /// not end just because there is nobody to wreck.
+    #[test]
+    fn a_round_with_no_enemies_is_a_sandbox_that_never_ends_on_its_own() {
+        let mut game = Game::default();
+        game.seed_override = Some(7);
+        game.level_overrides.mission = Some(Mission::Destroy);
+        game.map = MapFile::from_toml_str("version = 1\ntanks = 0\ncells.\"20,11\" = { kind = \"start\" }\n").expect("parses");
+        game.init(W, H);
+        assert_eq!(game.world.query::<&Tank>().with::<&Ai>().iter().count(), 0);
+        for _ in 0..600 {
+            step(&mut game, Input::default());
+        }
+        assert_eq!(game.outcome(), Outcome::Playing, "an empty round must not end by wreck count");
     }
 
     #[test]

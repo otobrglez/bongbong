@@ -81,6 +81,10 @@ pub struct Bullet {
     /// Same role as `Shell::prev_position` - the start of this frame's
     /// swept hit segment, written by the simulation.
     pub prev_position: Position,
+    /// Obstacle tiles this projectile already rolled a pass-over on (a
+    /// sandbag it sailed over) - skipped by every later hit sweep, since a
+    /// segment ending inside a tile would otherwise re-roll it next frame.
+    pub passed_over: Vec<hecs::Entity>,
 }
 
 impl Bullet {
@@ -112,6 +116,7 @@ impl Bullet {
             shooter_row: tank.row,
             shadow_offset: 0.0,
             prev_position: position,
+            passed_over: Vec::new(),
         }
     }
 

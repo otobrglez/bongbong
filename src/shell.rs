@@ -122,6 +122,10 @@ pub struct Shell {
     /// Iron obstacle before detonating on one instead. Battlefield walls
     /// and every other target detonate it on first contact regardless.
     pub bounces_left: u32,
+    /// Obstacle tiles this projectile already rolled a pass-over on (a
+    /// sandbag it sailed over) - skipped by every later hit sweep, since a
+    /// segment ending inside a tile would otherwise re-roll it next frame.
+    pub passed_over: Vec<hecs::Entity>,
 }
 
 impl Shell {
@@ -172,6 +176,7 @@ impl Shell {
             shadow_offset: 0.0,
             prev_position: position,
             bounces_left: tuning().shell_ricochet_bounces,
+            passed_over: Vec::new(),
         }
     }
 

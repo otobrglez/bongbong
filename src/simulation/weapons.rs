@@ -5,12 +5,12 @@
 //! projectile types that lets one hit-resolution loop serve them all.
 
 use crate::tuning::tuning;
+use hecs::Entity;
 use rand::RngExt;
 use sola_raylib::core::math::Vector2;
 
 use crate::bullet::{Bullet, BulletState};
 use crate::laser::LaserVariant;
-use crate::obstacle::Material;
 use crate::physics::Physics;
 use crate::plasma::{Plasma, PlasmaState};
 use crate::shell::{Owner, Shell, ShellState};
@@ -268,10 +268,23 @@ pub(super) trait Projectile: hecs::Component {
     fn knockback_speed() -> Option<f32>;
     /// Whether a surviving frog tries to hop away from this hit.
     fn frog_hops() -> bool;
-    /// Bounce off `hit` instead of detonating, if this projectile can.
+    /// Bounce off `hit` instead of detonating, if this projectile can by
+    /// its own rules (shells off Iron). A barrel's chance deflection goes
+    /// through `can_bounce`/`reflect_off` instead.
     fn try_ricochet(&mut self, _hit: &TerrainBox) -> bool {
         false
     }
+    /// Whether this kind can ricochet off a barrel at all - plasma never
+    /// bounces, it is a bolt of energy.
+    fn can_bounce() -> bool;
+    /// Reflect off the face of `hit` that was struck and rewind to the
+    /// pre-motion position so next frame starts clear of the tile - the
+    /// geometry of a ricochet, with no gate of its own.
+    fn reflect_off(&mut self, hit: &TerrainBox);
+    /// Obstacle tiles this projectile rolled a pass-over on - the sweep
+    /// skips them for the rest of its flight.
+    fn passed_over(&self) -> &[Entity];
+    fn note_passed_over(&mut self, entity: Entity);
     /// Bounce off a shielded tank centred at `center`: leave along
     /// `deflected_velocity`, rewind to the pre-motion position so next
     /// frame starts clear of the tank, and become `new_owner`'s projectile
@@ -315,6 +328,23 @@ macro_rules! deflect_impl {
             self.position = self.prev_position;
             self.owner = new_owner;
         }
+        fn reflect_off(&mut self, hit: &TerrainBox) {
+            let (reflect_x, reflect_y) = obstacle_reflect_axis(self.prev_position, hit);
+            if reflect_x {
+                self.velocity.x = -self.velocity.x;
+            }
+            if reflect_y {
+                self.velocity.y = -self.velocity.y;
+            }
+            self.rotation = self.velocity.x.atan2(-self.velocity.y).to_degrees();
+            self.position = self.prev_position;
+        }
+        fn passed_over(&self) -> &[Entity] {
+            &self.passed_over
+        }
+        fn note_passed_over(&mut self, entity: Entity) {
+            self.passed_over.push(entity);
+        }
     };
 }
 
@@ -348,21 +378,14 @@ impl Projectile for Shell {
     /// reflect on the face that was struck and rewind to the pre-motion
     /// position so next frame starts clear of the tile.
     fn try_ricochet(&mut self, hit: &TerrainBox) -> bool {
-        if self.bounces_left == 0 || hit.material != Material::Iron {
+        if self.bounces_left == 0 || !hit.material.is_permanent() {
             return false;
         }
-        let (reflect_x, reflect_y) = obstacle_reflect_axis(self.prev_position, hit);
         self.bounces_left -= 1;
-        if reflect_x {
-            self.velocity.x = -self.velocity.x;
-        }
-        if reflect_y {
-            self.velocity.y = -self.velocity.y;
-        }
-        self.rotation = self.velocity.x.atan2(-self.velocity.y).to_degrees();
-        self.position = self.prev_position;
+        self.reflect_off(hit);
         true
     }
+    fn can_bounce() -> bool { true }
 }
 
 impl Projectile for Bullet {
@@ -387,6 +410,7 @@ impl Projectile for Bullet {
     /// No hop per bullet: several rounds in a third of a second would make
     /// the frog flail rather than dodge.
     fn frog_hops() -> bool { false }
+    fn can_bounce() -> bool { true }
     deflect_impl!();
 }
 
@@ -409,6 +433,8 @@ impl Projectile for Plasma {
     }
     fn knockback_speed() -> Option<f32> { Some(tuning().plasma_impact_knockback_speed) }
     fn frog_hops() -> bool { true }
+    /// A bolt never ricochets (see docs/PLASMA_SPEC.md).
+    fn can_bounce() -> bool { false }
     deflect_impl!();
 }
 

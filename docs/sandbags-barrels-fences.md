@@ -37,3 +37,31 @@ This is requirement document to add three new items to the game.
 - All of them should be destructable
 - There should be some knobs that can be tuned later on as well
 - Create also a test map with these elements that can be used for testing 
+## Mechanics as built (2026-09)
+
+All three are `obstacle::Material` variants (`Sandbag`, `Barrel`, `Fence`)
+placed as `kind = "sandbag" | "barrel" | "fence"` cells; the variant is
+rolled per tile at spawn. Rules live in `simulation/props.rs`; art in
+`static/props_sheet.png` / `static/barrel_explosion.png` (docs/PROPS_SPEC.md);
+knobs in `tuning.rs`'s `group props`. Test map: `maps/test/props.toml`.
+
+- **Sandbags**: a shot passes over at `sandbag_pass_over_chance` (0.35) odds,
+  rolled per projectile per tile, else hits (`sandbag_max_health` 45 over
+  three stages). A tank pushing into one collapses it after
+  `sandbag_ram_seconds` (0.4). Don't block line of sight.
+- **Barrels**: `barrel_max_health` 18; a lethal hit or a ram
+  (`barrel_ram_damage_per_second` 40) detonates it at once. The blast
+  (`barrel_blast_radius` 96, `barrel_blast_damage_min/max` 15/30 with
+  linear falloff, `barrel_blast_knockback_speed` 140) hurts everyone — both
+  sides, frogs, walls and props — and puts every barrel in range on a
+  fuse of about `barrel_fuse_seconds` (0.18; shorter near the centre,
+  longer at the edge), so a cluster cascades outward. Shots fly over
+  at `barrel_pass_over_chance` (0.08) and shells/bullets ricochet at
+  `barrel_deflect_chance` (0.1). Visuals: fireball sprite, additive bloom,
+  screen flash, the shockwave ripple and camera shake, and a scorch mark.
+- **Fences**: a hit on a pristine fence destroys it at
+  `fence_one_shot_chance` (0.7) odds, else it goes to its damaged keyframe
+  and the next hit finishes it; rammed through in `fence_ram_seconds`
+  (0.15). Don't block line of sight.
+- Events: `obstacle_destroyed { material, x, y }` for any tile death and
+  `blast { x, y, chained }` for a detonation.

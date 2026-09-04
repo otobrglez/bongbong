@@ -278,13 +278,17 @@ pub fn relocate_unusable_spawns(physics: &mut Physics, world: &mut hecs::World, 
 /// a random round already does, rather than duplicating any of it here. See
 /// docs/map-editor-design.md.
 pub struct MapSpawn {
-    /// World position of every wall tile the map placed - already spawned
-    /// as live `Obstacle` entities by the time this returns. `Game::init`
-    /// folds these into its own `obstacle_positions` *before* rolling enemy
-    /// spawn points, so the existing enemy-placement clearance check (which
-    /// already tests against `obstacle_positions`) makes enemies avoid a
-    /// map's walls for free, with no separate map-aware check needed.
+    /// World position of every solid tile the map placed - walls and props,
+    /// already spawned as live `Obstacle` entities by the time this
+    /// returns. `Game::init` folds these into its own `obstacle_positions`
+    /// *before* rolling enemy spawn points, so the existing enemy-placement
+    /// clearance check (which already tests against `obstacle_positions`)
+    /// makes enemies avoid a map's terrain for free, with no separate
+    /// map-aware check needed.
     pub obstacle_positions: Vec<Position>,
+    /// The wall tiles only (a subset of `obstacle_positions`): road is
+    /// painted under these; props stand on whatever ground is there.
+    pub wall_positions: Vec<Position>,
     /// World position of the map's `enemy_frog` cell, if any (Hunt mission).
     pub enemy_frog_pos: Option<Position>,
     /// World position of every cell the map explicitly marked as road (not
@@ -316,7 +320,10 @@ pub struct MapSpawn {
 /// the whole map (`Material::variants`) - a consistent-build convention, one
 /// roll per material rather than per tile, so a map's walls of the same
 /// material don't visually mismatch each other. `Wood`'s `flammable` still
-/// rolls per tile, same as everywhere else it's used.
+/// rolls per tile, same as everywhere else it's used. Props (sandbag,
+/// barrel, fence) roll their variant per tile instead, at the tile's turn
+/// in the sorted cell walk, so a line of sandbags varies and a map without
+/// props draws exactly the RNG it always did.
 pub fn spawn_from_map(
     physics: &mut Physics,
     world: &mut hecs::World,
@@ -329,18 +336,20 @@ pub fn spawn_from_map(
         .map(|&m| (m, rng.random_range(0..m.variants())))
         .collect();
 
-    // Every wall cell the map defines, in the same `(col, row)` grid space
-    // `iter_cells` already yields - so `tile_hull_half_extent` can widen a
-    // hand-placed tile's collider to meet a hand-placed neighbor's, closing
-    // the same seam a procedurally-scattered structure's tiles get closed
-    // for (see that function's doc comment).
-    let wall_cells: HashSet<(i32, i32)> = map
+    // Every solid cell the map defines (walls and props), in the same
+    // `(col, row)` grid space `iter_cells` already yields - so
+    // `tile_hull_half_extent` can widen a hand-placed tile's collider to
+    // meet a hand-placed neighbor's, closing the seam between them (see
+    // that function's doc comment). Props widen like walls so a line of
+    // sandbags has no gap a shell could thread.
+    let solid_cells: HashSet<(i32, i32)> = map
         .iter_cells()
-        .filter(|(_, _, obj)| matches!(obj, CellObject::Wall { .. }))
+        .filter(|(_, _, obj)| obj.is_solid())
         .map(|(col, row, _)| (col, row))
         .collect();
 
     let mut obstacle_positions = Vec::new();
+    let mut wall_positions = Vec::new();
     let mut road_cells = Vec::new();
     let mut frog_pos = None;
     let mut enemy_frog_pos = None;
@@ -351,28 +360,25 @@ pub fn spawn_from_map(
         match *obj {
             CellObject::Wall { material } => {
                 let variant = material_variant[&material];
-                let max_health = material.max_health();
                 let flammable =
                     material == Material::Wood && rng.random_bool(tuning().wood_flammable_chance);
                 let body = physics.spawn_static(
                     pos,
-                    tile_hull_half_extent(&wall_cells, col, row, obstacle_half_extent),
+                    tile_hull_half_extent(&solid_cells, col, row, obstacle_half_extent),
                 );
                 obstacle_positions.push(pos);
-                world.spawn((Obstacle {
-                    material,
-                    variant,
-                    position: pos,
-                    health: max_health,
-                    max_health,
-                    flammable,
-                    burning: false,
-                    burn_frame: 0,
-                    burn_frame_timer: 0.0,
-                    burn_elapsed: 0.0,
-                    body,
-                    destroyed: false,
-                },));
+                wall_positions.push(pos);
+                world.spawn((Obstacle::new(material, variant, pos, flammable, body),));
+            }
+            CellObject::Sandbag | CellObject::Barrel | CellObject::Fence => {
+                let material = obj.material().expect("prop cells spawn a material");
+                let variant = rng.random_range(0..material.variants());
+                let body = physics.spawn_static(
+                    pos,
+                    tile_hull_half_extent(&solid_cells, col, row, obstacle_half_extent),
+                );
+                obstacle_positions.push(pos);
+                world.spawn((Obstacle::new(material, variant, pos, false, body),));
             }
             CellObject::Road => road_cells.push(pos),
             CellObject::Frog => frog_pos = Some(pos),
@@ -389,7 +395,7 @@ pub fn spawn_from_map(
         }
     }
 
-    MapSpawn { obstacle_positions, road_cells, frog_pos, enemy_frog_pos, pickup_slots }
+    MapSpawn { obstacle_positions, wall_positions, road_cells, frog_pos, enemy_frog_pos, pickup_slots }
 }
 
 /// One entry lane for a wave tank (docs/maps-to-levels.md "Gates and

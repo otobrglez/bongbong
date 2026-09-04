@@ -146,6 +146,9 @@ object, left to right:
 | Iron wall | `Obstacle` material `Iron` | " |
 | Wood wall | `Obstacle` material `Wood` | " |
 | Glass wall | `Obstacle` material `Glass` | called out separately in the requirements, but it's just the fourth `obstacle::Material` — same placement code path as the other three |
+| Sandbag | a `Sandbag` cell (`kind = "sandbag"`) | a destructible prop (docs/sandbags-barrels-fences.md): spawns an `Obstacle` of material `Sandbag`, variant rolled per tile at spawn (no variant picker - three arrangements). Icon from `props_sheet.png` |
+| Barrel | a `Barrel` cell (`kind = "barrel"`) | " - explodes and chains; two liveries |
+| Fence | a `Fence` cell (`kind = "fence"`) | " - two styles; the game draws it along whichever axis has fence neighbours |
 | Road | `ground::GroundGrid` cell → `Road` | see "Road & autotiling" below |
 | Frog | single `Frog` placement | see "Frog: singleton enforcement" below |
 | Tank (start point) | single `Start` placement | player spawn position - see "Later change #2" above; singleton, same move-on-click behavior as Frog |
@@ -346,7 +349,7 @@ pickup = "ammo"
   written — empty/grass cells have no entry, so a mostly-empty map stays a
   small file.
 - `kind` is one of `"wall" | "road" | "frog" | "start" | "enemy_frog" |
-  "gate" | "pickup"`; `material` is present only when `kind = "wall"` (one
+  "gate" | "pickup" | "sandbag" | "barrel" | "fence"`; `material` is present only when `kind = "wall"` (one
   of `"brick" | "iron" | "wood" | "glass"`); `pickup` is present only when
   `kind = "pickup"` (one of `"health" | "ammo" | "laser" | "minigun" |
   "plasma" | "speedup" | "shield"`).

@@ -1,0 +1,36 @@
+# Sandbox: the player's tank alone on open ground with a few brick
+# structures to drive around and shoot - no enemies, no frog, no pickups.
+# `tanks = 0` keeps the round from ending by wreck count (there is nobody
+# to wreck), so it runs until the player dies or restarts; the Destroy
+# mission spawns no frog. Hand-authored: an editor re-save would drop
+# these comments.
+
+version = 1
+tanks = 0
+mission.kind = "destroy"
+spawn.kind = "band"
+
+cells."20,11" = { kind = "start" }
+
+# An L in the upper left.
+cells."13,6" = { kind = "wall", material = "brick" }
+cells."14,6" = { kind = "wall", material = "brick" }
+cells."15,6" = { kind = "wall", material = "brick" }
+cells."13,7" = { kind = "wall", material = "brick" }
+cells."13,8" = { kind = "wall", material = "brick" }
+
+# A 2x2 block in the upper right.
+cells."26,7" = { kind = "wall", material = "brick" }
+cells."27,7" = { kind = "wall", material = "brick" }
+cells."26,8" = { kind = "wall", material = "brick" }
+cells."27,8" = { kind = "wall", material = "brick" }
+
+# A short wall in the lower half.
+cells."17,15" = { kind = "wall", material = "brick" }
+cells."18,15" = { kind = "wall", material = "brick" }
+cells."19,15" = { kind = "wall", material = "brick" }
+cells."20,15" = { kind = "wall", material = "brick" }
+
+# Two lone bricks.
+cells."25,13" = { kind = "wall", material = "brick" }
+cells."10,13" = { kind = "wall", material = "brick" }

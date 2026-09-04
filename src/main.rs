@@ -22,7 +22,8 @@ struct Args {
     /// Override the number of enemies spawned this round. Takes precedence
     /// over the loaded map's own `tanks` default (see `-m`/`--map` below and
     /// `map::MapFile::tanks`); with neither given, falls back to a random
-    /// count between ENEMY_COUNT_MIN and ENEMY_COUNT_MAX (see lib.rs).
+    /// count between `enemy_count_min` and `enemy_count_max`. 0 is a
+    /// sandbox round: nobody to fight, and it never ends by wreck count.
     #[arg(short = 'e', long = "enemies")]
     enemies: Option<usize>,
 
@@ -275,6 +276,12 @@ fn main() {
     let obstacles_texture = rl
         .load_texture(&thread, "static/walls_sheet.png")
         .expect("failed loading obstacles texture");
+    let props_texture = rl
+        .load_texture(&thread, "static/props_sheet.png")
+        .expect("failed loading props texture");
+    let barrel_explosion_texture = rl
+        .load_texture(&thread, "static/barrel_explosion.png")
+        .expect("failed loading barrel explosion texture");
     let ground_texture = rl
         .load_texture(&thread, "static/punyworld/punyworld-overworld-tileset.png")
         .expect("failed loading ground texture");
@@ -351,6 +358,7 @@ fn main() {
                 height,
                 &bongbong::editor::EditorTextures {
                     obstacles: &obstacles_texture,
+                    props: &props_texture,
                     ground: &ground_texture,
                     // Editor palette icon: just the first colour variant's
                     // idle frame - a fixed representative sprite, since the
@@ -580,6 +588,8 @@ fn main() {
                 damage: &damage_texture,
                 tracks: &tracks_texture,
                 obstacles: &obstacles_texture,
+                props: &props_texture,
+                barrel_explosion: &barrel_explosion_texture,
                 ground: &ground_texture,
                 health_bar: &health_bar_texture,
                 frog_variants: &frog_textures,

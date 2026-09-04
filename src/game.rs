@@ -12,7 +12,9 @@ use crate::bullet::{Bullet, BulletState, draw_bullet, draw_bullet_shadow};
 use crate::damage_stage::draw_damage;
 use crate::frog::{Frog, FrogVariantTextures, draw_frog, draw_frog_ring};
 use crate::laser::draw_laser_beam;
-use crate::obstacle::{Obstacle, draw_obstacle, draw_obstacle_shadow};
+use crate::blast::{draw_blast, draw_blast_glow, draw_fuse_glow, draw_scorch};
+use crate::obstacle::{Material, Obstacle, ObstacleTextures, draw_obstacle, draw_obstacle_shadow, fence_axis};
+use std::collections::HashSet;
 use crate::pickup::{Pickup, PickupKind, draw_pickup};
 use crate::plasma::{Plasma, PlasmaState, draw_plasma, draw_plasma_shadow};
 use crate::shell::{Shell, ShellState, draw_shell, draw_shell_shadow};
@@ -60,6 +62,10 @@ pub struct Textures<'a> {
     pub damage: &'a Texture2D,
     pub tracks: &'a Texture2D,
     pub obstacles: &'a Texture2D,
+    /// The props sheet (sandbags, barrels, fences) - see `obstacle::Sheet`.
+    pub props: &'a Texture2D,
+    /// The barrel blast animation and scorch decals - see `blast.rs`.
+    pub barrel_explosion: &'a Texture2D,
     pub ground: &'a Texture2D,
     pub health_bar: &'a Texture2D,
     /// One `FrogVariantTextures` per `frog::FROG_VARIANT_DIRS` entry, in the
@@ -239,12 +245,36 @@ impl Game {
                 draw_track(&mut d, textures.tracks, track);
             }
 
-            for obstacle in self.world.query::<&Obstacle>().iter() {
-                if self.shadows_enabled {
-                    draw_obstacle_shadow(&mut d, textures.obstacles, obstacle);
-                }
-                draw_obstacle(&mut d, textures.obstacles, obstacle);
+            // Burn marks under everything that stands, so a barrel that
+            // survived a neighbour's blast sits on the mark it left.
+            for scorch in &self.scorches {
+                draw_scorch(&mut d, textures.barrel_explosion, scorch);
             }
+
+            let obstacle_textures = ObstacleTextures { walls: textures.obstacles, props: textures.props };
+            let fences: HashSet<(i32, i32)> = self
+                .world
+                .query::<&Obstacle>()
+                .iter()
+                .filter(|o| o.material == Material::Fence)
+                .map(|o| o.cell())
+                .collect();
+            for obstacle in self.world.query::<&Obstacle>().iter() {
+                let axis = fence_axis(obstacle, &fences);
+                if self.shadows_enabled {
+                    draw_obstacle_shadow(&mut d, &obstacle_textures, obstacle, axis);
+                }
+                draw_obstacle(&mut d, &obstacle_textures, obstacle, axis);
+            }
+            // A barrel whose fuse is lit pulses (additive, so it reads as
+            // light on the drum rather than a disc over it).
+            d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+                for obstacle in self.world.query::<&Obstacle>().iter() {
+                    if obstacle.fuse.is_some() {
+                        draw_fuse_glow(&mut bd, obstacle.position, self.time);
+                    }
+                }
+            });
 
             for pickup in self.world.query::<&Pickup>().iter() {
                 let texture = match pickup.kind {
@@ -328,6 +358,19 @@ impl Game {
 
             for beam in &self.laser_beams {
                 draw_laser_beam(&mut d, beam);
+            }
+
+            // Barrel blasts last, so the fireball covers tanks and shots:
+            // the additive bloom first, then the sprite frames oldest
+            // first (a chained blast's flash lands on top of the earlier
+            // fireball and reads as a second detonation).
+            d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+                for blast in &self.blast_fx {
+                    draw_blast_glow(&mut bd, blast);
+                }
+            });
+            for blast in &self.blast_fx {
+                draw_blast(&mut d, textures.barrel_explosion, blast);
             }
         });
 
@@ -470,6 +513,18 @@ impl Game {
                         Color::WHITE,
                     );
                 });
+            }
+
+            // A barrel blast opens with a brief whole-screen flash - the
+            // youngest blast drives it. After the ripple quads, which
+            // re-blit patches of the un-flashed scene and would otherwise
+            // punch darker squares through it.
+            if let Some(blast) = self.blast_fx.iter().min_by(|a, b| a.time.total_cmp(&b.time)) {
+                let seconds = tuning().blast_screen_flash_seconds;
+                if seconds > 0.0 && blast.time < seconds {
+                    let a = (255.0 * tuning().blast_screen_flash_alpha * (1.0 - blast.time / seconds)) as u8;
+                    d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(255, 240, 200, a));
+                }
             }
 
             // Debug overlays (dev builds only): the inspect layer's

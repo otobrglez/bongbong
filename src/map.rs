@@ -51,6 +51,41 @@ pub enum CellObject {
     /// any gate cells uses only those; otherwise gates are scanned from the
     /// wall layout each wave.
     Gate,
+    /// The three destructible props (docs/sandbags-barrels-fences.md): each
+    /// spawns an `Obstacle` of the matching `Material`, variant rolled per
+    /// tile at spawn.
+    Sandbag,
+    Barrel,
+    Fence,
+}
+
+impl CellObject {
+    /// The obstacle material this cell spawns, if it spawns a solid tile.
+    pub fn material(&self) -> Option<Material> {
+        match self {
+            CellObject::Wall { material } => Some(*material),
+            CellObject::Sandbag => Some(Material::Sandbag),
+            CellObject::Barrel => Some(Material::Barrel),
+            CellObject::Fence => Some(Material::Fence),
+            _ => None,
+        }
+    }
+
+    /// Spawns a solid tile a tank can't stand on (a wall or a prop).
+    pub fn is_solid(&self) -> bool {
+        self.material().is_some()
+    }
+
+    /// The cell that places a prop of `material` (`None` for wall
+    /// materials, which are `Wall { material }`).
+    pub fn prop(material: Material) -> Option<CellObject> {
+        match material {
+            Material::Sandbag => Some(CellObject::Sandbag),
+            Material::Barrel => Some(CellObject::Barrel),
+            Material::Fence => Some(CellObject::Fence),
+            _ => None,
+        }
+    }
 }
 
 /// A saved battlefield layout. Keys are `"<col>,<row>"` grid-cell strings
@@ -62,7 +97,8 @@ pub struct MapFile {
     #[serde(default)]
     pub cells: HashMap<String, CellObject>,
     /// Default number of enemy tanks to spawn on this map, unless overridden
-    /// at runtime by `-e`/`--enemies` (see `main.rs`). `None` (the default -
+    /// at runtime by `-e`/`--enemies` (see `main.rs`). `Some(0)` is a
+    /// sandbox: no enemies, and the round never ends by wreck count. `None` (the default -
     /// absent from a map's TOML, `#[serde(default)]` so older map files
     /// still parse) means "no map-level default", in which case `Game::init`
     /// falls back to its usual random `ENEMY_COUNT_MIN..=ENEMY_COUNT_MAX`
@@ -266,9 +302,10 @@ impl MapFile {
     /// against.
     const NEAREST_FREE_CELL_MAX_RADIUS: i32 = 64;
 
-    /// `(col, row)` if it holds a `Wall`, else the nearest cell to it (by
-    /// expanding ring, closest first) that isn't - only walls block a tank
-    /// spawn; road/pickup/frog cells are fine to spawn on top of. Used as
+    /// `(col, row)` if it holds nothing solid, else the nearest cell to it
+    /// (by expanding ring, closest first) that doesn't - only walls and
+    /// props block a tank spawn; road/pickup/frog cells are fine to spawn
+    /// on top of. Used as
     /// the fallback player-start position when a map places no `Start` cell
     /// (`Game::init`), so the player never spawns wedged inside a wall a
     /// hand-authored map happened to place at/near the exact center.
@@ -276,7 +313,7 @@ impl MapFile {
     /// `NEAREST_FREE_CELL_MAX_RADIUS` rings - an occasional wall-embedded
     /// spawn on a pathological map beats an unbounded search.
     pub fn nearest_free_cell(&self, col: i32, row: i32) -> (i32, i32) {
-        let is_wall = |c: i32, r: i32| matches!(self.cell(c, r), Some(CellObject::Wall { .. }));
+        let is_wall = |c: i32, r: i32| self.cell(c, r).is_some_and(CellObject::is_solid);
         if !is_wall(col, row) {
             return (col, row);
         }
@@ -379,6 +416,32 @@ cells."39,11" = { kind = "gate" }
         assert_eq!(back.spawn, map.spawn);
         assert_eq!(back.enemy_frog_cell(), map.enemy_frog_cell());
         assert_eq!(back.gate_cells(), map.gate_cells());
+    }
+
+    #[test]
+    fn prop_cells_round_trip_and_count_as_solid() {
+        let text = r#"
+version = 1
+cells."4,4" = { kind = "sandbag" }
+cells."5,4" = { kind = "barrel" }
+cells."6,4" = { kind = "fence" }
+cells."7,4" = { kind = "road" }
+"#;
+        let map = MapFile::from_toml_str(text).unwrap();
+        assert_eq!(map.cell(4, 4).and_then(|c| c.material()), Some(Material::Sandbag));
+        assert_eq!(map.cell(5, 4).and_then(|c| c.material()), Some(Material::Barrel));
+        assert_eq!(map.cell(6, 4).and_then(|c| c.material()), Some(Material::Fence));
+        assert!(map.cell(7, 4).is_some_and(|c| !c.is_solid()), "road is not solid");
+        assert_ne!(map.nearest_free_cell(5, 4), (5, 4), "a barrel cell blocks a spawn");
+        assert_eq!(map.nearest_free_cell(7, 4), (7, 4));
+        let back = MapFile::from_toml_str(&map.to_toml_string().unwrap()).unwrap();
+        for (col, row, cell) in map.iter_cells() {
+            assert!(back.cell(col, row) == Some(cell), "cell {col},{row} changed");
+        }
+        for m in [Material::Sandbag, Material::Barrel, Material::Fence] {
+            assert_eq!(CellObject::prop(m).and_then(|c| c.material()), Some(m));
+        }
+        assert!(CellObject::prop(Material::Brick).is_none());
     }
 
     #[test]
