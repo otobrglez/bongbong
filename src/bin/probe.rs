@@ -26,7 +26,7 @@
 //! command - see the "Capturing gameplay anomalies" section of CLAUDE.md.
 
 use bongbong::tuning::tuning;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::File;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -35,6 +35,7 @@ use std::process::ExitCode;
 use bongbong::Position;
 use bongbong::ai::Intent;
 use bongbong::map::MapFile;
+use bongbong::level::SpawnKind;
 use bongbong::simulation::{Game, Input, Outcome, TankSnapshot};
 use bongbong::tank::Dir;
 use bongbong::{
@@ -42,7 +43,8 @@ use bongbong::{
     DEFAULT_SCREEN_WIDTH,
     PATHFIND_CELL_SIZE,
 };
-use clap::{Parser, ValueEnum};
+use clap::error::ErrorKind;
+use clap::{CommandFactory, Parser, ValueEnum};
 use rand::RngExt;
 
 /// Same `-m`/`--map` fallback the real game applies (main.rs) - the
@@ -297,7 +299,9 @@ struct Args {
     #[arg(long, value_enum, default_value_t = Scenario::Afk)]
     scenario: Scenario,
 
-    /// How many enemies to spawn (default: same random range as the real game).
+    /// How many enemies to spawn under the band plan (default: same random
+    /// range as the real game). Rejected when the run resolves to waves,
+    /// where each wave is sized by --wave-size/--wave-growth instead.
     #[arg(short = 'e', long)]
     enemies: Option<usize>,
 
@@ -458,18 +462,15 @@ fn log_frame(game: &Game, frame: u32) {
         frame as f32 * DT,
         outcome_str(game.outcome())
     );
-    let mut enemy_index = 0;
     for tank in game.tank_snapshots() {
-        let label = if tank.is_player {
-            "PLAYER ".to_string()
-        } else {
-            let label = format!("ENEMY#{enemy_index}");
-            enemy_index += 1;
-            label
-        };
+        let label = if tank.is_player { "PLAYER ".to_string() } else { enemy_label(tank.slot) };
         let speed = (tank.velocity.x * tank.velocity.x + tank.velocity.y * tank.velocity.y).sqrt();
+        // A wave tank still rolling in sits outside the battlefield with a
+        // kinematic velocity; the marker says so rather than leaving it to
+        // be read off the out-of-bounds position.
+        let entering = if tank.entering { " entering=true" } else { "" };
         println!(
-            "  {label} pos=({:6.1},{:6.1}) vel=({:6.1},{:6.1}) speed={:6.1} rot={:5.0} dmg={:5.1}/100 ammo={:2} plasma={:2} minigun={:3} laser={:2} shield={:4.1} wreck={}",
+            "  {label} pos=({:6.1},{:6.1}) vel=({:6.1},{:6.1}) speed={:6.1} rot={:5.0} dmg={:5.1}/100 ammo={:2} plasma={:2} minigun={:3} laser={:2} shield={:4.1} wreck={}{entering}",
             tank.position.x, tank.position.y, tank.velocity.x, tank.velocity.y, speed, tank.rotation, tank.damage, tank.shells_ammo, tank.plasma_ammo, tank.minigun_ammo, tank.laser_charges, tank.shield_timer, tank.is_wreck,
         );
     }
@@ -540,13 +541,20 @@ impl AnomalyTotals {
 }
 
 /// Per-enemy-tank state carried across frames within one round, for the
-/// anomaly checks in `AnomalyTracker::check`. Indexed in lockstep with
-/// `Game::tank_snapshots()`'s iteration order, which is stable for the
-/// whole round: tanks are never despawned (a wreck stays in `world`, just
-/// inert - see simulation.rs), only shells/obstacles are, so the same slot
-/// is always the same tank.
+/// anomaly checks in `check_anomalies`. Keyed by owner slot
+/// (`TankSnapshot::slot`, never reused within a round), created the first
+/// frame the tank is on the field with a body (`!entering`): a band tank
+/// at frame 0, a wave tank the frame it arrives through its gate. Every
+/// from-spawn measure (stale-start, the never-arrived route budget, spin
+/// chains) counts from `entered_frame`/`spawn_pos`, so a wave tank is
+/// judged from its arrival, not from the round's start. A despawned wreck
+/// simply stops appearing in snapshots; its track stays for the
+/// end-of-round report.
 struct TankTrack {
     label: String,
+    // Frame this tank was first seen on the field, and where: the frame
+    // and position every from-spawn window is measured from.
+    entered_frame: u32,
     spawn_pos: Position,
     // Farthest the tank has been from `spawn_pos` so far (stale-start).
     max_spawn_dist: f32,
@@ -614,12 +622,12 @@ struct TankTrack {
     // counterpart.
     total_path_len: f32,
     // --- navigation e2e (path stretch / never-arrived) ---
-    // Shortest-route length from this tank's spawn to the player's
-    // round-start position, in nav-grid cells (`Game::nav_path_cells`) -
-    // `None` means no route existed at spawn, which excludes the tank
-    // from the never-arrived check entirely - and the ideal traversal
-    // time that route costs at this tank's own rolled top speed. Both
-    // filled once by `run_round` right after init.
+    // Shortest-route length from `spawn_pos` to where the player stood on
+    // `entered_frame`, in nav-grid cells (`Game::nav_path_cells`) - `None`
+    // means no route existed then, which excludes the tank from the
+    // never-arrived check entirely - and the ideal traversal time that
+    // route costs at this tank's own rolled top speed. Both filled once,
+    // when the track is created.
     path_cells: Option<u32>,
     ideal_seconds: f32,
     // First simulated second this tank came within ENEMY_ATTACK_RANGE of
@@ -659,12 +667,25 @@ impl TankTrack {
 }
 
 impl TankTrack {
-    fn new(label: String, spawn_pos: Position, initial_rotation: f32) -> Self {
+    /// A fresh track for the tank `snapshot` describes, first seen on the
+    /// field at `frame`. The navigation baseline (`path_cells`,
+    /// `ideal_seconds`) is the route from where it stands to where the
+    /// player stands right now, so a wave tank's budget starts at its
+    /// gate. `nav_path_cells` builds a fresh grid per call - cheap once
+    /// per tank, which is all this is.
+    fn new(game: &Game, snapshot: &TankSnapshot, player_pos: Position, frame: u32) -> Self {
         let mut heading_history = VecDeque::with_capacity(3);
-        heading_history.push_back(initial_rotation);
+        heading_history.push_back(snapshot.rotation);
+        let path_cells = game.nav_path_cells(snapshot.position, player_pos, WIDTH, HEIGHT);
+        // top_speed is a real rolled speed (150-220px/s range), never
+        // zero - the .max(1.0) only guards a hypothetical future
+        // zero-speed chassis from poisoning the metric with an infinity.
+        let ideal_seconds = path_cells
+            .map_or(0.0, |cells| cells as f32 * PATHFIND_CELL_SIZE / snapshot.top_speed.max(1.0));
         Self {
-            label,
-            spawn_pos,
+            label: enemy_label(snapshot.slot),
+            entered_frame: frame,
+            spawn_pos: snapshot.position,
             max_spawn_dist: 0.0,
             stall_frames: 0,
             border_frames: 0,
@@ -677,10 +698,10 @@ impl TankTrack {
             heading_history,
             recent_flips: VecDeque::new(),
             spin_flagged: false,
-            last_heading: initial_rotation,
+            last_heading: snapshot.rotation,
             spin_sum: 0.0,
-            spin_start_frame: 0,
-            spin_start_pos: spawn_pos,
+            spin_start_frame: frame,
+            spin_start_pos: snapshot.position,
             churn_flagged: false,
             trail: VecDeque::with_capacity(CHURN_WINDOW_FRAMES as usize + 1),
             trail_path_len: 0.0,
@@ -696,8 +717,8 @@ impl TankTrack {
             total_bumps: 0,
             grind_seconds: 0.0,
             total_path_len: 0.0,
-            path_cells: None,
-            ideal_seconds: 0.0,
+            path_cells,
+            ideal_seconds,
             time_to_engage: None,
         }
     }
@@ -745,31 +766,38 @@ fn report(
     heat.push((kind.to_string(), pos));
 }
 
-/// Display label for the tank at `index` of a `tank_snapshots()` slice -
-/// "PLAYER", or "ENEMY#k" numbering the non-player tanks in snapshot
-/// order, matching `build_tracks`/`log_frame`'s numbering exactly (the
-/// snapshot order is stable for the whole round - see `TankTrack`).
-fn tank_label(snapshots: &[TankSnapshot], index: usize) -> String {
-    if snapshots[index].is_player {
-        "PLAYER".to_string()
-    } else {
-        let ordinal = snapshots[..index].iter().filter(|t| !t.is_player).count();
-        format!("ENEMY#{ordinal}")
-    }
+/// Display label for the enemy in owner slot `slot`: "ENEMY#k" with k the
+/// enemy ordinal `slot - 1` (owner slots count enemies from 1 and are
+/// never reused, so a wave tank arriving later gets a fresh number; the
+/// dev server's tools name the same tank by its raw slot, one higher).
+/// Shared by `log_frame`, `TankTrack` and every ANOMALY line, so the
+/// three always agree.
+fn enemy_label(slot: usize) -> String {
+    format!("ENEMY#{}", slot - 1)
+}
+
+/// Display label for any tank: "PLAYER", or `enemy_label`.
+fn tank_label(tank: &TankSnapshot) -> String {
+    if tank.is_player { "PLAYER".to_string() } else { enemy_label(tank.slot) }
 }
 
 /// Runs this frame's standing checks: first the frame invariants over
-/// *every* tank (player and wrecks included - see the INVARIANT_* consts),
-/// then the behavior checks over enemies. Behavior checks stay scoped to
-/// enemies only - the player's movement is fully explained by the scripted
-/// `Scenario` already (e.g. `Afk` deliberately never moves), so checking it
-/// would just be re-detecting the script, not a real anomaly. Skips checks
-/// entirely once the round has ended (`Outcome != Playing`): a tank sitting
-/// still on the win/lose screen isn't a bug (and post-round frames aren't
-/// simulated anyway - `update` early-returns into its end-screen branch).
+/// *every* tank on the field (player and wrecks included - see the
+/// INVARIANT_* consts), then the behavior checks over enemies. Behavior
+/// checks stay scoped to enemies only - the player's movement is fully
+/// explained by the scripted `Scenario` already (e.g. `Afk` deliberately
+/// never moves), so checking it would just be re-detecting the script, not
+/// a real anomaly. A wave tank still rolling in (`TankSnapshot::entering`)
+/// is skipped by every check, invariants included: it sits outside the
+/// bounds by construction, has no physics body and is not in the fight;
+/// it gets its `TankTrack` the first frame it is on the field. Skips
+/// checks entirely once the round has ended (`Outcome != Playing`): a tank
+/// sitting still on the win/lose screen isn't a bug (and post-round frames
+/// aren't simulated anyway - `update` early-returns into its end-screen
+/// branch).
 fn check_anomalies(
-    tracks: &mut [TankTrack],
-    invariant_flagged: &mut [bool],
+    tracks: &mut BTreeMap<usize, TankTrack>,
+    invariant_flagged: &mut BTreeSet<usize>,
     game: &Game,
     round: u32,
     frame: u32,
@@ -781,12 +809,25 @@ fn check_anomalies(
     }
     let seed = game.round_seed();
     let snapshots = game.tank_snapshots();
+    let player_snap = snapshots
+        .iter()
+        .find(|t| t.is_player)
+        .expect("snapshots always include the player");
 
-    // --- Frame invariants: physics sanity for every tank, wrecks included
-    // (a wreck keeps its physics body, so a solver blow-up can fling it
-    // just the same). One-shot per tank per round, like every other kind.
-    for (i, tank) in snapshots.iter().enumerate() {
-        if invariant_flagged[i] {
+    // Every enemy on the field gets a track the first frame it is seen
+    // there - band tanks at frame 0, wave tanks the frame they arrive.
+    for tank in &snapshots {
+        if !tank.is_player && !tank.entering && !tracks.contains_key(&tank.slot) {
+            tracks.insert(tank.slot, TankTrack::new(game, tank, player_snap.position, frame));
+        }
+    }
+
+    // --- Frame invariants: physics sanity for every tank on the field,
+    // wrecks included (a wreck keeps its physics body, so a solver blow-up
+    // can fling it just the same). One-shot per tank per round, like
+    // every other kind.
+    for tank in &snapshots {
+        if tank.entering || invariant_flagged.contains(&tank.slot) {
             continue;
         }
         let pos = tank.position;
@@ -814,39 +855,32 @@ fn check_anomalies(
             round,
             seed,
             frame,
-            &tank_label(&snapshots, i),
+            &tank_label(tank),
             "invariant",
             &violation,
             pos,
         );
-        invariant_flagged[i] = true;
+        invariant_flagged.insert(tank.slot);
         totals.invariant += 1;
     }
 
-    // Live (non-wreck) enemy positions, indexed in lockstep with `tracks` -
-    // built up front so the clustering check below can look at every other
-    // enemy's position, not just the one `TankTrack` the main loop happens
-    // to be on.
-    let live_positions: Vec<Option<Position>> = snapshots
+    // Live (on the field, non-wreck) enemies by slot - built up front so
+    // the clustering check below can look at every other enemy's
+    // position, not just the one `TankTrack` the main loop happens to be
+    // on.
+    let live_positions: Vec<(usize, Position)> = snapshots
         .iter()
-        .filter(|t| !t.is_player)
-        .map(|t| (!t.is_wreck).then_some(t.position))
+        .filter(|t| !t.is_player && !t.entering && !t.is_wreck)
+        .map(|t| (t.slot, t.position))
         .collect();
-    let player_snap = snapshots
-        .iter()
-        .find(|t| t.is_player)
-        .expect("snapshots always include the player");
-    let mut enemy_index = 0;
     for tank in &snapshots {
-        if tank.is_player {
+        if tank.is_player || tank.entering || tank.is_wreck {
             continue;
         }
-        let track = &mut tracks[enemy_index];
-        let my_index = enemy_index;
-        enemy_index += 1;
-        if tank.is_wreck {
-            continue;
-        }
+        let track = tracks.get_mut(&tank.slot).expect("every enemy on the field has a track");
+        // Frames since this tank came onto the field: the from-spawn
+        // windows below count from here, not from the round's frame 0.
+        let age = frame - track.entered_frame;
         let pos = tank.position;
         let speed = (tank.velocity.x * tank.velocity.x + tank.velocity.y * tank.velocity.y).sqrt();
         // The commanded counterpart (see TankSnapshot::commanded_velocity):
@@ -882,11 +916,12 @@ fn check_anomalies(
         track.prev_ammo = Some(ammo);
         let holding = track.deliberate_hold(frame, tank, player_snap);
 
-        // Stale-start: never got clear of spawn within STALE_START_FRAMES.
-        if frame <= STALE_START_FRAMES {
+        // Stale-start: never got clear of spawn within STALE_START_FRAMES
+        // of coming onto the field.
+        if age <= STALE_START_FRAMES {
             track.max_spawn_dist = track.max_spawn_dist.max(pos.distance_to(track.spawn_pos));
         }
-        if !track.stale_flagged && frame == STALE_START_FRAMES && !holding {
+        if !track.stale_flagged && age == STALE_START_FRAMES && !holding {
             if track.max_spawn_dist < STALE_START_EPS {
                 report(
                     heat,
@@ -906,7 +941,7 @@ fn check_anomalies(
         // Mid-round stall: near-zero speed for a sustained window, checked
         // only after the stale-start window so the two don't double-report
         // the same "never moved" tank.
-        if frame > STALE_START_FRAMES {
+        if age > STALE_START_FRAMES {
             if speed < STALL_SPEED_EPS && !holding {
                 track.stall_frames += 1;
             } else {
@@ -1172,10 +1207,7 @@ fn check_anomalies(
         // CLUSTER_RADIUS of this one right now.
         let nearby = live_positions
             .iter()
-            .enumerate()
-            .filter(|&(i, other)| {
-                i != my_index && other.is_some_and(|p| p.distance_to(pos) <= CLUSTER_RADIUS)
-            })
+            .filter(|&&(slot, other)| slot != tank.slot && other.distance_to(pos) <= CLUSTER_RADIUS)
             .count();
         if nearby + 1 >= CLUSTER_MIN_GROUP {
             track.cluster_frames += 1;
@@ -1201,23 +1233,12 @@ fn check_anomalies(
     }
 }
 
-fn build_tracks(game: &Game) -> Vec<TankTrack> {
-    let mut enemy_index = 0;
-    game.tank_snapshots()
-        .into_iter()
-        .filter(|t| !t.is_player)
-        .map(|t| {
-            let label = format!("ENEMY#{enemy_index}");
-            enemy_index += 1;
-            TankTrack::new(label, t.position, t.rotation)
-        })
-        .collect()
-}
-
 /// Per-enemy end-of-round metrics for one `--json-out` record, read off
 /// the same `TankTrack` state the anomaly checks maintained all round.
 struct TankReport {
     label: String,
+    /// Frame the tank came onto the field (0 for a band tank).
+    entered_frame: u32,
     time_to_engage: Option<f32>,
     /// `time_to_engage / ideal_seconds` - `None` when there was no route,
     /// no engagement, or the tank spawned essentially in range (ideal ~ 0,
@@ -1274,42 +1295,12 @@ fn run_round(
     };
     game.init(WIDTH, HEIGHT);
 
-    let mut tracks = build_tracks(&game);
-    // One flag slot per tank (player included, unlike `tracks`) for the
-    // one-shot frame-invariant checks - same stable snapshot-order
-    // indexing convention as `TankTrack`.
-    let mut invariant_flagged = vec![false; game.tank_snapshots().len()];
+    // Both keyed by owner slot and filled as tanks come onto the field
+    // (`check_anomalies`): every enemy's `TankTrack`, and the one-shot
+    // frame-invariant flag per tank (player included, unlike `tracks`).
+    let mut tracks: BTreeMap<usize, TankTrack> = BTreeMap::new();
+    let mut invariant_flagged: BTreeSet<usize> = BTreeSet::new();
     let mut totals = AnomalyTotals::default();
-
-    // Frame-0 navigation baseline for the path-stretch metric (see
-    // NAV_GRACE_SECONDS's comment): each enemy's shortest-route length to
-    // where the player starts, and the ideal seconds that route costs at
-    // the tank's own rolled top speed. Once per round - `nav_path_cells`
-    // builds a fresh grid per call, cheap here, waste per frame.
-    {
-        let snapshots = game.tank_snapshots();
-        let player_pos = snapshots
-            .iter()
-            .find(|t| t.is_player)
-            .expect("snapshots always include the player")
-            .position;
-        let mut enemy_index = 0;
-        for tank in &snapshots {
-            if tank.is_player {
-                continue;
-            }
-            let track = &mut tracks[enemy_index];
-            enemy_index += 1;
-            track.path_cells = game.nav_path_cells(tank.position, player_pos, WIDTH, HEIGHT);
-            if let Some(cells) = track.path_cells {
-                // top_speed is a real rolled speed (150-220px/s range),
-                // never zero - the .max(1.0) only guards a hypothetical
-                // future zero-speed chassis from poisoning the metric
-                // with an infinity.
-                track.ideal_seconds = cells as f32 * PATHFIND_CELL_SIZE / tank.top_speed.max(1.0);
-            }
-        }
-    }
 
     if trace {
         log_frame(&game, 0);
@@ -1343,19 +1334,19 @@ fn run_round(
     // check_anomalies' still-Playing gate on purpose - "never arrived" is
     // only decidable once no more arriving can happen. The per-enemy
     // stretch table prints in trace mode either way: the distribution is
-    // the real navigation-health signal, the anomaly just its tail.
-    let elapsed = frames_run as f32 * DT;
+    // the real navigation-health signal, the anomaly just its tail. Walks
+    // the tracks (slot order), not the snapshots: a despawned wreck has no
+    // snapshot any more but still gets its report line, and a wave tank
+    // still rolling in at the end has no track and is not judged. Each
+    // tank's elapsed time counts from its own arrival.
     let snapshots = game.tank_snapshots();
     let mut reports: Vec<TankReport> = Vec::with_capacity(tracks.len());
-    let mut enemy_index = 0;
-    for tank in &snapshots {
-        if tank.is_player {
-            continue;
-        }
-        let track = &tracks[enemy_index];
-        enemy_index += 1;
+    for (&slot, track) in &tracks {
+        let snapshot = snapshots.iter().find(|t| t.slot == slot);
+        let elapsed = frames_run.saturating_sub(track.entered_frame) as f32 * DT;
         reports.push(TankReport {
             label: track.label.clone(),
+            entered_frame: track.entered_frame,
             time_to_engage: track.time_to_engage,
             stretch: match (track.path_cells, track.time_to_engage) {
                 (Some(_), Some(t)) if track.ideal_seconds > 0.05 => {
@@ -1391,8 +1382,12 @@ fn run_round(
         let (Some(cells), None) = (track.path_cells, track.time_to_engage) else {
             continue;
         };
+        // A tank with no snapshot left is a despawned wreck: not alive.
+        let Some(tank) = snapshot.filter(|t| !t.is_wreck) else {
+            continue;
+        };
         let budget = NAV_GRACE_SECONDS + NAV_STRETCH_MAX * track.ideal_seconds;
-        if !tank.is_wreck && elapsed > budget {
+        if elapsed > budget {
             report(
                 heat,
                 round,
@@ -1474,7 +1469,7 @@ fn json_round_line(args: &Args, round: u32, seed: u64, result: &RoundResult, tun
         .iter()
         .map(|t| {
             format!(
-                "{{\"label\":\"{}\",\"time_to_engage\":{},\"stretch\":{},\"path_cells\":{},\"contact_events\":{},\"grind_seconds\":{:.2},\"distance_travelled\":{:.1}}}",
+                "{{\"label\":\"{}\",\"time_to_engage\":{},\"stretch\":{},\"path_cells\":{},\"contact_events\":{},\"grind_seconds\":{:.2},\"distance_travelled\":{:.1},\"entered_frame\":{}}}",
                 json_escape(&t.label),
                 opt_f32(t.time_to_engage),
                 opt_f32(t.stretch),
@@ -1482,6 +1477,7 @@ fn json_round_line(args: &Args, round: u32, seed: u64, result: &RoundResult, tun
                 t.contact_events,
                 t.grind_seconds,
                 t.distance_travelled,
+                t.entered_frame,
             )
         })
         .collect::<Vec<_>>()
@@ -1559,9 +1555,30 @@ fn check_budgets(budgets: &[Budget], totals: &AnomalyTotals) -> bool {
     exceeded
 }
 
+/// The spawn plan the run resolves to, CLI over map - the same precedence
+/// `LevelOverrides::resolve_spawn` applies, decided up front so the
+/// `--enemies` conflict below fails before any round runs.
+fn spawn_kind(args: &Args) -> SpawnKind {
+    args.spawn
+        .or_else(|| args.map.as_ref().map(|m| m.map.spawn.kind))
+        .unwrap_or_else(|| default_map().spawn.kind)
+}
+
 fn main() -> ExitCode {
     let args = Args::parse();
     let sweep = args.rounds > 1;
+
+    // `--enemies` is a band-plan count; under waves it would be silently
+    // ignored (each wave is sized by --wave-size/--wave-growth), which is
+    // exactly the kind of quietly-wrong sweep a hard error prevents.
+    if args.enemies.is_some() && spawn_kind(&args) == SpawnKind::Waves {
+        Args::command()
+            .error(
+                ErrorKind::ArgumentConflict,
+                "--enemies only applies to the band spawn plan; this run resolves to waves (--spawn waves, or the map's spawn.kind) - size the waves with --wave-size/--wave-growth instead",
+            )
+            .exit();
+    }
 
     // The whole run's base seed: `--seed` when given, one entropy draw
     // otherwise - either way it's printed in the header, so *every* run is
@@ -1599,9 +1616,11 @@ fn main() -> ExitCode {
     println!(
         "probe: scenario={} enemies={} mission={} spawn={} frames={} rounds={} seed=0x{base_seed:016x} map={} tuning={}",
         scenario_str(args.scenario),
-        args.enemies
-            .map(|n| n.to_string())
-            .unwrap_or_else(|| "random".to_string()),
+        match (args.enemies, spawn_kind(&args)) {
+            (_, SpawnKind::Waves) => "waves".to_string(),
+            (Some(n), _) => n.to_string(),
+            (None, _) => "random".to_string(),
+        },
         args.mission.map_or("map", |m| m.name()),
         args.spawn.map_or("map", |s| s.name()),
         args.frames,

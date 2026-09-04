@@ -24,7 +24,7 @@ use std::fmt;
 
 use hecs::Entity;
 
-use crate::frog::Frog;
+use crate::frog::{Frog, Side};
 use crate::level::{Mission, SpawnKind};
 use crate::map::{self, CellObject};
 use crate::obstacle::{Material, Obstacle};
@@ -111,6 +111,11 @@ pub enum LintKind {
     /// `wave_gate_inward_cells` cells toward the interior) is not entirely
     /// `Grid::usable` - a tank would arrive on a cell it cannot leave.
     GateBlocked,
+    /// A waves-plan map with no `gate` cell whose intact terrain offers
+    /// the automatic edge scan (`battlefield::gate_candidates`) no lane
+    /// either: every wave would fall back to the spawn band, so nothing
+    /// ever rolls in.
+    WavesNoGates,
     /// A Hunt map with no `enemy_frog` cell: the round falls back to a
     /// procedural spot in the enemy spawn band.
     HuntMissingEnemyFrog,
@@ -132,6 +137,7 @@ impl LintKind {
             LintKind::NarrowCorridor => "narrow-corridor",
             LintKind::GateNotOnEdge => "gate-not-on-edge",
             LintKind::GateBlocked => "gate-blocked",
+            LintKind::WavesNoGates => "waves-no-gates",
             LintKind::HuntMissingEnemyFrog => "hunt-missing-enemy-frog",
             LintKind::EnemyFrogUnreachable => "enemy-frog-unreachable",
         }
@@ -300,6 +306,7 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
     check_reachability(game, &cells, &breach_cells, frog_pos, &mut findings);
     check_enemy_frog(game, &cells, &mut findings);
     check_gates(game, &grid, &mut findings);
+    check_wave_gates(game, &grid, width, height, player_pos, &mut findings);
     check_disconnected_regions(&cells, &mut findings);
     check_boxed_in(&grid, &cells, &mut findings);
     // Only the band plan places enemies in the border band at init; a
@@ -359,14 +366,17 @@ fn check_enemy_frog(game: &Game, cells: &Cells, findings: &mut Vec<LintFinding>)
 
 /// Explicit `gate` cells (docs/maps-to-levels.md "Gates and roll-in"):
 /// each must sit on a nav-grid edge cell - col 0, the last col, row 0 or
-/// the last row of `grid` - and its lane inward (the gate cell itself plus
-/// `wave_gate_inward_cells` cells toward the interior, straight in from
-/// that edge; a corner uses its horizontal edge) must be entirely
-/// `Grid::usable`, the same predicate the roll-in target cell is held to.
+/// the last row of `grid` - and its lane inward must be entirely
+/// `Grid::usable`. The lane is exactly what `battlefield::gate_candidates`
+/// walks: `wave_gate_inward_cells` cells counting the gate cell itself
+/// (so the innermost, where the body spawns, is `inward - 1` cells in),
+/// straight in from that edge, a corner taking its side edge - the same
+/// rule `gates_from_cells` applies when the round turns these cells into
+/// lanes, so a gate this check passes is one the game will use.
 fn check_gates(game: &Game, grid: &Grid, findings: &mut Vec<LintFinding>) {
     let (cols, rows, cell) = grid.dims();
     let (cols, rows) = (cols as isize, rows as isize);
-    let inward_cells = tuning().wave_gate_inward_cells as isize;
+    let inward_cells = (tuning().wave_gate_inward_cells as isize).max(1);
     let center = |c: isize, r: isize| Position::new((c as f32 + 0.5) * cell, (r as f32 + 0.5) * cell);
     for (col, row) in game.map.gate_cells() {
         let pos = map::cell_to_world(col, row);
@@ -391,7 +401,7 @@ fn check_gates(game: &Game, grid: &Grid, findings: &mut Vec<LintFinding>) {
             });
             continue;
         };
-        let blocked = (0..=inward_cells)
+        let blocked = (0..inward_cells)
             .map(|k| (gc + k * inward.0, gr + k * inward.1))
             .find(|&(c, r)| c < 0 || r < 0 || c >= cols || r >= rows || !grid.usable(center(c, r)));
         if let Some((c, r)) = blocked {
@@ -399,11 +409,47 @@ fn check_gates(game: &Game, grid: &Grid, findings: &mut Vec<LintFinding>) {
                 severity: LintSeverity::Error,
                 kind: LintKind::GateBlocked,
                 message: format!(
-                    "gate at map cell ({col},{row}) = ({:.0},{:.0}) needs nav-grid cells ({gc},{gr}) and {inward_cells} inward all usable, but ({c},{r}) is not",
+                    "gate at map cell ({col},{row}) = ({:.0},{:.0}) needs its {inward_cells}-cell lane from nav-grid cell ({gc},{gr}) inward all usable, but ({c},{r}) is not",
                     pos.x, pos.y
                 ),
             });
         }
+    }
+}
+
+/// A waves-plan map has to offer somewhere to roll in from. With explicit
+/// `gate` cells that is `check_gates`' business; without any, the round
+/// scans the intact nav grid's edges (`battlefield::gate_candidates`,
+/// the same call, same `waves` knobs, avoiding the player start and the
+/// player's frog by `wave_gate_min_player_dist`) and, finding no lane,
+/// silently drops every wave into the spawn band instead - an error,
+/// since the map then never plays as authored. Other plans are not
+/// judged: a band map needs no gate.
+fn check_wave_gates(
+    game: &Game,
+    grid: &Grid,
+    width: f32,
+    height: f32,
+    player_pos: Position,
+    findings: &mut Vec<LintFinding>,
+) {
+    if game.map.spawn.kind != SpawnKind::Waves || !game.map.gate_cells().is_empty() {
+        return;
+    }
+    let (inward, min_dist) = {
+        let t = tuning();
+        (t.wave_gate_inward_cells, t.wave_gate_min_player_dist)
+    };
+    let mut avoid = vec![player_pos];
+    avoid.extend(game.world.query::<&Frog>().iter().filter(|fr| fr.side == Side::Player).map(|fr| fr.position));
+    if battlefield::gate_candidates(grid, width, height, &avoid, min_dist, inward).is_empty() {
+        findings.push(LintFinding {
+            severity: LintSeverity::Error,
+            kind: LintKind::WavesNoGates,
+            message: format!(
+                "waves plan with no gate cells, and no edge lane ({inward} usable nav cells straight in, at least {min_dist:.0}px from the player start and frog) for the automatic scan to use: every wave would fall back to the spawn band"
+            ),
+        });
     }
 }
 
@@ -805,12 +851,18 @@ mod map_lint_tests {
     /// seed matters for maps that leave frog/start placement to `init`'s
     /// (seeded) fallback rolls: same seed, same layout, same findings.
     fn lint_map(map: MapFile) -> Vec<LintFinding> {
+        lint(&init_game(map), W, H)
+    }
+
+    /// The seeded headless round `lint_map` lints, for tests that also
+    /// want to ask the game itself what it makes of the map.
+    fn init_game(map: MapFile) -> Game {
         let mut game = Game::default();
         game.seed_override = Some(0xB0B5);
         game.enemy_count_override = Some(4);
         game.map = map;
         game.init(W, H);
-        lint(&game, W, H)
+        game
     }
 
     fn wall(map: &mut MapFile, col: i32, row: i32) {
@@ -1090,6 +1142,87 @@ mod map_lint_tests {
         assert!(!has(&findings, LintKind::GateNotOnEdge));
     }
 
+    /// The linter's gate verdict and the round's own lane construction
+    /// (`battlefield::gates_from_cells`, which applies `gate_candidates`'
+    /// lane rule to explicit cells) agree cell for cell: every gate the
+    /// linter passes is one the game rolls tanks through, and a gate it
+    /// flags is one the game drops.
+    #[test]
+    fn lint_clean_gates_are_the_gates_the_round_uses() {
+        let inward = tuning().wave_gate_inward_cells;
+
+        let mut map = base_map();
+        gate(&mut map, 0, 11);
+        gate(&mut map, 39, 11);
+        gate(&mut map, 20, 0);
+        gate(&mut map, 20, 22);
+        let cells = map.gate_cells();
+        let game = init_game(map);
+        let findings = lint(&game, W, H);
+        assert!(!has(&findings, LintKind::GateBlocked));
+        let used = battlefield::gates_from_cells(&game.nav_grid(W, H), W, H, &cells, inward);
+        assert_eq!(used.len(), 4, "four lint-clean gates are four lanes the round uses");
+
+        let mut map = base_map();
+        gate(&mut map, 0, 11);
+        for col in 2..=4 {
+            for row in 9..=13 {
+                wall(&mut map, col, row);
+            }
+        }
+        let cells = map.gate_cells();
+        let game = init_game(map);
+        let findings = lint(&game, W, H);
+        assert!(has(&findings, LintKind::GateBlocked));
+        let used = battlefield::gates_from_cells(&game.nav_grid(W, H), W, H, &cells, inward);
+        assert!(used.is_empty(), "a gate the linter flags as blocked is one the round drops");
+    }
+
+    /// An iron ring one map cell in from every edge blocks every edge
+    /// lane the automatic gate scan could offer: under the waves plan,
+    /// with no explicit gate, that is `WavesNoGates`; the same ring under
+    /// the band plan needs no gate and is not judged.
+    #[test]
+    fn walled_in_waves_map_without_gates_is_an_error() {
+        fn ringed(kind: SpawnKind) -> MapFile {
+            let mut map = base_map();
+            map.spawn.kind = kind;
+            // Map cells run 0..=39 across and 0..=22 down on the default
+            // battlefield; the ring sits on 1/38 and 1/21.
+            for col in 1..=38 {
+                wall(&mut map, col, 1);
+                wall(&mut map, col, 21);
+            }
+            for row in 1..=21 {
+                wall(&mut map, 1, row);
+                wall(&mut map, 38, row);
+            }
+            map
+        }
+        let findings = lint_map(ringed(SpawnKind::Waves));
+        dump("ringed, waves", &findings);
+        assert!(
+            findings.iter().any(|f| f.kind == LintKind::WavesNoGates && f.severity == LintSeverity::Error),
+            "a waves map the scan finds no lane on is an Error"
+        );
+
+        let findings = lint_map(ringed(SpawnKind::Band));
+        dump("ringed, band", &findings);
+        assert!(!has(&findings, LintKind::WavesNoGates), "a band map is never judged on gates");
+    }
+
+    /// A waves map with no gate cells but open edges is fine: the
+    /// automatic scan finds lanes, so the map plays as authored.
+    #[test]
+    fn open_waves_map_without_gates_is_clean() {
+        let mut map = base_map();
+        map.spawn.kind = SpawnKind::Waves;
+        let findings = lint_map(map);
+        dump("open, waves", &findings);
+        assert!(!has(&findings, LintKind::WavesNoGates));
+        assert!(errors(&findings).is_empty(), "an open waves map with no gate cells is fully legal");
+    }
+
     #[test]
     fn hunt_map_without_an_enemy_frog_warns() {
         let mut map = base_map();
@@ -1247,6 +1380,7 @@ mod map_lint_tests {
         dump("waves-basic", &f);
         assert!(errors(&f).is_empty(), "waves-basic must be fully legal");
         assert!(!has(&f, LintKind::SpawnBandTooTight), "a waves plan is never judged on band capacity");
+        assert!(!has(&f, LintKind::WavesNoGates), "waves-basic places its gates explicitly");
     }
 
     /// Everything else under maps/ is scratch: lint-and-print only

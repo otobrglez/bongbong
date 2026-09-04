@@ -1626,6 +1626,7 @@ impl Game {
                 // velocity stands in and it touches nothing.
                 let contact = tank.body.map(|b| self.physics.contact_stats(b)).unwrap_or_default();
                 TankSnapshot {
+                    slot: tank.owner_slot,
                     is_player: entity == player,
                     entering: tank.body.is_none(),
                     position: tank.position,
@@ -1651,6 +1652,10 @@ impl Game {
 /// Read-only summary of one tank, from `Game::tank_snapshots`. A
 /// non-player tank is always an enemy.
 pub struct TankSnapshot {
+    /// `Tank::owner_slot`: 0 is the player, enemies count from 1. Slots
+    /// are never reused, so this identifies a tank for the whole round
+    /// even after a wreck despawns or a wave tank arrives.
+    pub slot: usize,
     pub is_player: bool,
     /// A wave tank still rolling in from outside the battlefield: no
     /// physics body yet, not part of the fight.
