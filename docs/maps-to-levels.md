@@ -1,6 +1,6 @@
 # Maps to levels: missions, enemy spawn plans, waves
 
-Status: **being implemented** (interviewed and decided 2026-09-04;
+Status: **implemented 2026-09-04** (interviewed and decided the same day;
 the "Decisions" section records what was chosen and why). Phases below are
 ordered so every phase leaves the game playable and `cargo test --lib`
 green.
@@ -338,6 +338,22 @@ end-to-end through the MCP tools: `restart {mission:"hunt",
 spawn:"waves", intro:true}` → `screenshot` shows the banner → `step` past it
 → `events` show `wave_started`/`tank_entered` → `screenshot` shows a tank
 rolling in through an edge gate.
+
+## Deviations from the plan (as built)
+
+- A wave tank carries no `Ai` until it arrives (`simulation/waves.rs`), so
+  every `.with::<&Ai>()` query excludes entering tanks without per-site
+  edits; its role is rolled on arrival.
+- `battlefield::gate_candidates` also takes the battlefield size and rejects
+  lanes whose centre line runs inside the boundary walls (the nav grid does
+  not mark them).
+- Guards hold an annulus, not a disc: `guard_keep_off_px` (new knob) keeps
+  them out of their own frog's bite/hop range.
+- The hunt fixture's enemy band puts hunters next to the player's frog, so
+  an idle player loses within seconds; balance is a follow-up.
+- `just probe-fixtures` ceilings were re-baselined once: the Protect
+  hunter roll shifts every seeded stream (verified identical with the
+  share zeroed).
 
 ## Out of scope
 
