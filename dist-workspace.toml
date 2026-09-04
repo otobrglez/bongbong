@@ -23,6 +23,16 @@ include = ["static"]
 # runtime requirement vs. today's dev builds.
 msvc-crt-static = false
 
+# Which binaries go into each archive. Only `bongbong` and `probe`: `bbmcp`
+# is a `required-features = ["dev-tools"]` bin, so a release build (no
+# features) never produces it, and without this list dist fails the build
+# looking for it ("failed to find bin bbmcp").
+[dist.binaries]
+aarch64-apple-darwin = ["bongbong", "probe"]
+x86_64-apple-darwin = ["bongbong", "probe"]
+x86_64-unknown-linux-gnu = ["bongbong", "probe"]
+x86_64-pc-windows-msvc = ["bongbong", "probe"]
+
 # raylib (via sola-raylib -> raylib-sys) needs X11/OpenGL/audio/input dev
 # headers to build on Linux; macOS and Windows runners need nothing extra
 # (Xcode/MSVC already have what's required). Same package list as
