@@ -4,12 +4,23 @@ BongBong is a simplistic and entertaining modern tank shooter game.
 
 The main goal of this project is to build a fun, entertaining game with retro graphics and an illusion of modern physics, while paying respect to old-school tank games.
 
+Play it live @ [bongbong.io](https://bongbong.io) or [subscribe and follow the progress via the blog](https://blog.bongbong.io).
 
 ## Development
 
 ```bash
 # Use devenv (Nix)
-cargo watch -x "run"
+cargo watch -x "run -- -e 12 --map=maps/default.toml"
+
+# Pick the player's chassis (otherwise the map's own `tank = "..."`, the
+# `player_tank` tuning knob, or a random roll decides it)
+cargo run -- --tank titan
+
+# Map editor
+cargo run --features map-editor -- --editor --map=maps/default.toml
+
+# Preview web
+just build-web-dev && just preview-web
 ```
 
 ## Dependencies
@@ -21,7 +32,7 @@ cargo watch -x "run"
 
 ## Collaboration
 
-Please feel free to reach out and/or interact with me if you have any ideas or whatever. ;\)
+Please feel free to reach out or interact with me if you have any ideas or anything else. ;\)
 
 \- Oto Brglez
 

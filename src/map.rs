@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use crate::level::{MissionConfig, SpawnConfig};
 use crate::obstacle::Material;
 use crate::pickup::PickupKind;
+use crate::tank::TankKind;
 use crate::{OBSTACLE_GRID_SIZE, Position};
 
 /// Current on-disk schema version - bump only on an incompatible format
@@ -68,6 +69,15 @@ pub struct MapFile {
     /// roll, same as today.
     #[serde(default)]
     pub tanks: Option<u32>,
+    /// The chassis the player spawns in on this map (TOML: a top-level
+    /// `tank = "titan"`, spelled exactly like `--tank`'s own values - see
+    /// `tank::TankKind`). `None` (the default - absent from a map's TOML,
+    /// `#[serde(default)]` so older map files still parse) means "no
+    /// map-level preference", leaving the player's chassis to the
+    /// `player_tank` tuning knob or, failing that, `Game::init`'s random
+    /// roll. `--tank` on the command line outranks this.
+    #[serde(default)]
+    pub tank: Option<TankKind>,
     /// The `[mission]` table - what ends the round (docs/maps-to-levels.md).
     /// Absent means Protect.
     #[serde(default)]
@@ -116,6 +126,7 @@ impl MapFile {
             version: CURRENT_VERSION,
             cells: HashMap::new(),
             tanks: None,
+            tank: None,
             mission: MissionConfig::default(),
             spawn: SpawnConfig::default(),
             name: None,

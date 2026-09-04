@@ -319,6 +319,15 @@ tunables! {
         /// than a minigun. 0.5 means the two split the non-laser half evenly
         /// (laser 50%, plasma 25%, minigun 25% overall).
         enemy_special_weapon_plasma_share: f32 = 0.5 in 0.0 ..= 1.0 @ Restart;
+        /// Which chassis the player spawns in, as a row index into
+        /// `scifi_tanks_sheet.png`: 0 scout, 1 assault, 2 breaker,
+        /// 3 longbow, 4 flak, 5 wraith, 6 warden, 7 ravager, 8 glacier,
+        /// 9 obelisk, 10 titan, 11 leviathan (`TANK_NAMES` order). -1, the
+        /// default, means "unset" - the chassis then comes from the loaded
+        /// map's own `tank` key, or a random roll if the map sets none.
+        /// `--tank` on the command line outranks this knob; nothing else
+        /// does, so dragging this is how a browser round picks a chassis.
+        player_tank: i32 = (-1) in -1 ..= 11 @ Restart;
         /// When the round ends (player destroyed, or all enemies destroyed)
         /// the result is shown for this long, then the game restarts.
         restart_delay: f32 = 3.0 in 0.0 ..= 30.0;

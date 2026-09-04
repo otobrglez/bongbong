@@ -215,6 +215,20 @@ a UI concern.
 `default` value alongside the `ParamMeta` fields so the panel can reset a
 row without a second call.
 
+**Picking one variant, not tuning all of them: a scalar row with an "unset"
+sentinel.** `player_tank` (group `round`) is the first knob whose value *is*
+a variant rather than a number per variant: it's an `i32` row over
+`-1 ..= 11`, where `0..=11` is a `TANK_NAMES` row index and `-1` means
+"unset", deferring to the loaded map's `tank` key and then to `Game::init`'s
+random roll (`--tank` outranks the knob either way - see
+`simulation::resolve_player_row`). A label set is deliberately *not* used:
+`labels` marks a row as an array whose elements are addressed
+`name.<label>`, which is the opposite shape - twelve values, one per chassis
+- so the panel renders `player_tank` as an integer slider and the doc
+comment carries the row->name legend. The sentinel lives in the range rather
+than in a second "enabled" bool so the whole choice stays one JSON key, one
+slider, and one `tunables!` row.
+
 ## 4. Runtime storage and the read path
 
 ```rust

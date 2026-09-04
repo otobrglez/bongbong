@@ -52,7 +52,7 @@ use crate::pickup::{Pickup, PickupKind};
 use crate::plasma::{Plasma, PlasmaVariant};
 use crate::shell::{Owner, Shell, ShellState};
 use crate::shockwave::Shockwave;
-use crate::tank::{ActiveWeapon, Dir, Tank};
+use crate::tank::{ActiveWeapon, Dir, Tank, TankKind};
 use crate::track::Track;
 use crate::{
     DAMAGE_VARIANTS,
@@ -262,6 +262,30 @@ const TANK_SPRITE_ORDER: [i32; 12] = [1, 0, 4, 2, 7, 3, 9, 5, 10, 6, 8, 11];
 
 /// How long the mission banner fades once the opening freeze ends.
 pub const INTRO_FADE_SECONDS: f32 = 0.6;
+
+/// Which chassis row the player spawns in, most specific source first:
+/// `--tank` (`Game::player_row_override`), then the `player_tank` tuning
+/// knob when it isn't the -1 "unset" default, then the loaded map's own
+/// `tank` key, and finally `random` - the round RNG's `0..TANK_VARIANTS`
+/// roll, which is only drawn when nothing above set a chassis, so a map or
+/// knob choice doesn't shift the seeded RNG stream.
+///
+/// The knob sits under `--tank` because a flag is typed for one specific
+/// run, and over the map because a live drag has to beat a file to be worth
+/// dragging - the web build, which has no command line at all, is the
+/// panel's home. Whichever source wins is clamped to a real row: every
+/// transport already range-checks the knob through `Tuning::set`, and the
+/// clamp is the cheap guarantee that nothing here can index the sprite
+/// sheet's row tables out of bounds.
+fn resolve_player_row(cli: Option<i32>, knob: i32, map: Option<TankKind>, random: impl FnOnce() -> i32) -> i32 {
+    let chosen = cli
+        .or_else(|| (knob >= 0).then_some(knob))
+        .or_else(|| map.map(TankKind::row));
+    match chosen {
+        Some(row) => row.clamp(0, TANK_VARIANTS - 1),
+        None => random(),
+    }
+}
 
 #[derive(Default)]
 pub struct Game {
@@ -485,9 +509,9 @@ impl Game {
         battlefield::spawn_walls(&mut self.physics, width, height);
 
         // --- Player ---
-        let row = self
-            .player_row_override
-            .unwrap_or_else(|| rng.random_range(0..TANK_VARIANTS));
+        let row = resolve_player_row(self.player_row_override, tuning().player_tank, self.map.tank, || {
+            rng.random_range(0..TANK_VARIANTS)
+        });
         // The map's start cell, else the nearest non-wall cell to the
         // center so a wall at the center doesn't spawn the player inside it.
         let start_cell = self.map.start_cell().unwrap_or_else(|| {
@@ -1614,6 +1638,15 @@ impl Game {
         &self.events
     }
 
+    /// The chassis the player is driving this round, whichever of the four
+    /// sources `resolve_player_row` picked it from. `None` only before the
+    /// first `init`.
+    pub fn player_chassis(&self) -> Option<TankKind> {
+        let player = self.player?;
+        let mut q = self.world.query_one::<&Tank>(player);
+        TankKind::from_row(q.get().ok()?.row)
+    }
+
     /// Every tank's externally visible state, for headless inspection
     /// (`src/bin/probe.rs`, the tests below) without touching `world`.
     pub fn tank_snapshots(&self) -> Vec<TankSnapshot> {
@@ -2131,6 +2164,62 @@ mod spawn_tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod player_chassis_tests {
+    use super::*;
+
+    /// The player's chassis has four possible sources; this is the order
+    /// they win in, and the RNG is only touched when all three explicit
+    /// ones are silent (a map or knob choice must not shift the seeded
+    /// stream every later spawn draws from).
+    #[test]
+    fn chassis_source_precedence() {
+        let random = || 3;
+
+        // Nothing set: the round rolls one.
+        assert_eq!(resolve_player_row(None, -1, None, random), 3);
+
+        // The map's own chassis, when it names one.
+        assert_eq!(resolve_player_row(None, -1, Some(TankKind::Titan), random), 10);
+
+        // The `player_tank` knob outranks the map...
+        assert_eq!(resolve_player_row(None, 0, Some(TankKind::Titan), random), 0);
+
+        // ...and `--tank` outranks both.
+        assert_eq!(resolve_player_row(Some(5), 0, Some(TankKind::Titan), random), 5);
+
+        // A row from outside the sheet can never reach the sprite tables.
+        assert_eq!(resolve_player_row(Some(99), -1, None, random), TANK_VARIANTS - 1);
+        assert_eq!(resolve_player_row(None, 99, None, random), TANK_VARIANTS - 1);
+    }
+
+    /// A `tank = "titan"` line in a map's TOML is what the player actually
+    /// spawns in, and `--tank` (`player_row_override`) still overrides it -
+    /// the same map, the same seed, two different chassis.
+    #[test]
+    fn map_tank_key_spawns_that_chassis() {
+        const MAP: &str = r#"
+version = 1
+tanks = 1
+tank = "titan"
+cells."20,11" = { kind = "start" }
+"#;
+        let spawn_row = |cli: Option<i32>| {
+            let mut game = Game::default();
+            game.enemy_count_override = Some(1);
+            game.seed_override = Some(11);
+            game.player_row_override = cli;
+            game.map = MapFile::from_toml_str(MAP).expect("test map parses");
+            game.init(1280.0, 720.0);
+            let player = game.player.expect("player entity spawned in init");
+            let mut q = game.world.query_one::<&Tank>(player);
+            q.get().expect("player has a Tank").row
+        };
+        assert_eq!(spawn_row(None), TankKind::Titan.row());
+        assert_eq!(spawn_row(Some(TankKind::Scout.row())), TankKind::Scout.row());
     }
 }
 
