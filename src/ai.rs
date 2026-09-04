@@ -154,20 +154,33 @@ pub struct Ai {
     /// was progress in the direction that was asked for. See
     /// `stuck_timer`.
     last_move_dir: Option<Dir>,
+    /// Where this tank stood at the previous tick - the baseline the next
+    /// tick's displacement is measured from. `None` before the first tick.
+    last_position: Option<Position>,
+    /// Displacement per second along the commanded heading, smoothed over
+    /// `stuck_progress_window_seconds` (an exponential average). `None`
+    /// while the tank is deliberately holding position or has no
+    /// displacement to judge yet. The smoothing is what makes the stuck
+    /// clock immune to a single-frame twitch: two tanks pressed together
+    /// creep a fraction of a pixel a frame and occasionally get shoved a
+    /// pixel or two by the contact solver, and an unsmoothed check reset
+    /// on every such frame, so the pair sat jammed for good.
+    progress_avg: Option<f32>,
     /// Seconds this tank has been asked to move (see `last_move_dir`)
-    /// while its real physics velocity shows no progress *along that
-    /// heading* - ticked in `think`, using the real, physics-derived
-    /// velocity passed in from `simulation.rs` (never read directly from
-    /// `Physics` here - see this module's AI-decoupling convention).
-    /// Progress is the velocity's component along the commanded heading,
-    /// not its magnitude: a tank wedged in a jam of other tanks can be
-    /// carried sideways at near full speed while getting nowhere it was
-    /// told to go, and a speed check reads that as "moving fine". Once
-    /// this crosses STUCK_ESCAPE_SECONDS, `steer` forces an escape and
-    /// resets it to zero. Catches everything the obstacle-ahead override
-    /// in `steer` can't: a bad commitment call it didn't foresee, a jam
-    /// against other tanks, or a layout with no path around an obstacle
-    /// cluster at all.
+    /// while `progress_avg` stays under `stuck_speed_eps` - ticked in
+    /// `think` from the tank's own displacement, never from a physics
+    /// velocity: the contact solver hands a tank pushing against another
+    /// body a velocity along its heading every frame without it going
+    /// anywhere, which is exactly the case this clock exists to catch.
+    /// Progress is the displacement's component along the commanded
+    /// heading, not its magnitude: a tank wedged in a jam of other tanks
+    /// can be carried sideways at near full speed while getting nowhere it
+    /// was told to go, and a speed check reads that as "moving fine".
+    /// Once this crosses `stuck_escape_seconds`, `steer` forces an escape
+    /// and resets it to zero. Catches everything the obstacle-ahead
+    /// override in `steer` can't: a bad commitment call it didn't foresee,
+    /// a jam against other tanks, or a layout with no path around an
+    /// obstacle cluster at all.
     stuck_timer: f32,
     /// Seconds remaining since this tank last took a hit - see
     /// `notify_hit`/`ENEMY_HIT_ALERT_SECONDS`. `build`'s Chase condition
@@ -226,6 +239,9 @@ pub struct AiSnapshot {
     pub fire_timer: f32,
     pub wander_pocketed: bool,
     pub last_move_dir: Option<&'static str>,
+    /// Smoothed displacement per second along the commanded heading
+    /// (`Ai::progress_avg`); `None` while holding position.
+    pub progress_px_s: Option<f32>,
     pub last_action: Option<&'static str>,
     pub wall_ahead_timer: f32,
     /// Direction of the breach in progress.
@@ -254,6 +270,8 @@ impl Default for Ai {
             snipe_cooldown: 0.0,
             retreating: false,
             last_move_dir: None,
+            last_position: None,
+            progress_avg: None,
             stuck_timer: 0.0,
             hit_alert_timer: 0.0,
             wander_pocketed: false,
@@ -278,14 +296,10 @@ impl Ai {
     /// predictive collision avoidance; `my_index` is this enemy's slot within it,
     /// so it can skip itself. The order matches how the game builds the slice.
     /// `grid` is this frame's obstacle occupancy grid (see `pathfind::Grid`),
-    /// used by `steer` to route around static obstacles. `real_velocity`
-    /// is this tank's actual physics velocity this frame
-    /// (`Physics::velocity`, read back in `simulation.rs` - the one place
-    /// this module gets to see anything physics-derived, kept as a plain
-    /// vector rather than reaching into `Physics` itself, per this
-    /// module's snapshot-only convention), used to detect a tank that's
-    /// been commanded to move but isn't getting anywhere along that
-    /// heading - see `stuck_timer`.
+    /// used by `steer` to route around static obstacles. Progress toward a
+    /// commanded heading is judged from `me.position` against the position
+    /// seen at the previous tick (`last_position`) - what the tank actually
+    /// displaced, never a physics velocity - see `stuck_timer`.
     /// `alert` is this frame's shared "last known player position" (see
     /// `simulation.rs`'s `Game::alert_position`) - `Some` while any enemy on
     /// the field currently has the player within `ENEMY_VIEW_RANGE` (or did
@@ -346,7 +360,6 @@ impl Ai {
         width: f32,
         height: f32,
         dt: f32,
-        real_velocity: Position,
         movers: &[Mover],
         my_index: usize,
         grid: &Grid,
@@ -368,19 +381,37 @@ impl Ai {
             self.dodge_dir = None;
         }
         // Was asked to move last tick and made no headway in that
-        // direction: another dt of stuck evidence. Only the velocity
+        // direction: another dt of stuck evidence. Only the displacement
         // component along the commanded heading counts - being shoved
-        // sideways or backwards by other tanks is not progress. Wasn't
-        // asked to move (or did make headway) resets the count -
+        // sideways or backwards by other tanks is not progress - and it is
+        // smoothed over `stuck_progress_window_seconds` so one twitchy
+        // frame cannot clear the clock. Wasn't asked to move resets it -
         // deliberately holding position to aim/wait isn't stuck. See
         // `steer_toward`'s escape.
-        let progress = self
-            .last_move_dir
-            .map(|dir| real_velocity.x * dir.vec().x + real_velocity.y * dir.vec().y);
-        if progress.is_some_and(|p| p < tuning().stuck_speed_eps) {
-            self.stuck_timer += dt;
-        } else {
-            self.stuck_timer = 0.0;
+        let moved = self.last_position.map(|p| Position::new(me.position.x - p.x, me.position.y - p.y));
+        self.last_position = Some(me.position);
+        match (self.last_move_dir, moved) {
+            (Some(dir), Some(moved)) => {
+                let progress = (moved.x * dir.vec().x + moved.y * dir.vec().y) / dt.max(f32::EPSILON);
+                let k = (dt / tuning().stuck_progress_window_seconds).clamp(0.0, 1.0);
+                let avg = match self.progress_avg {
+                    Some(avg) => avg + (progress - avg) * k,
+                    None => progress,
+                };
+                self.progress_avg = Some(avg);
+                if avg < tuning().stuck_speed_eps {
+                    self.stuck_timer += dt;
+                } else {
+                    self.stuck_timer = 0.0;
+                }
+            }
+            // Commanded, but no baseline to measure against yet (first
+            // tick): no evidence either way.
+            (Some(_), None) => {}
+            (None, _) => {
+                self.stuck_timer = 0.0;
+                self.progress_avg = None;
+            }
         }
         // Breach evidence: still commanding movement into a tile that a
         // shell could remove. Iron never counts.
@@ -446,6 +477,7 @@ impl Ai {
             fire_timer: self.fire_timer,
             wander_pocketed: self.wander_pocketed,
             last_move_dir: self.last_move_dir.map(Dir::name),
+            progress_px_s: self.progress_avg,
             last_action: self.last_action,
             wall_ahead_timer: self.wall_ahead_timer,
             breaching: self.breach.map(|b| b.dir.name()),
@@ -1802,7 +1834,6 @@ mod role_tests {
             1280.0,
             720.0,
             1.0 / 60.0,
-            Position::new(0.0, 0.0),
             &movers,
             1,
             &grid,
@@ -1913,18 +1944,19 @@ mod stuck_tests {
     use super::*;
     use rand::SeedableRng;
 
-    /// One `think` tick for an enemy at `me` with the player far off its
-    /// firing axes (so the tree wants to move, not hold and aim), reporting
-    /// `real_velocity` as what physics actually did last frame.
-    fn tick(ai: &mut Ai, real_velocity: Position, dt: f32) -> Intent {
+    const DT: f32 = 1.0 / 60.0;
+
+    /// One `think` tick for an enemy standing at `me` with the player far
+    /// off its firing axes (so the tree wants to move, not hold and aim).
+    fn tick(ai: &mut Ai, me_pos: Position) -> Intent {
         let mut me = Tank::default();
-        me.position = Position::new(600.0, 300.0);
+        me.position = me_pos;
         let mut player = Tank::default();
         player.position = Position::new(200.0, 600.0);
         let grid = Grid::build(1280.0, 720.0, 48.0, 0.0, std::iter::empty());
         let movers = [
             Mover { position: player.position, velocity: Vector2::new(0.0, 0.0), radius: 20.0 },
-            Mover { position: me.position, velocity: real_velocity, radius: 20.0 },
+            Mover { position: me.position, velocity: Vector2::new(0.0, 0.0), radius: 20.0 },
         ];
         let mut rng = SmallRng::seed_from_u64(7);
         ai.think(
@@ -1934,8 +1966,7 @@ mod stuck_tests {
             None,
             1280.0,
             720.0,
-            dt,
-            real_velocity,
+            DT,
             &movers,
             1,
             &grid,
@@ -1949,43 +1980,72 @@ mod stuck_tests {
         )
     }
 
-    /// Feed `frames` ticks of `real_velocity` while the tank is on record
-    /// as having been told to drive `commanded` every tick.
-    fn drive(ai: &mut Ai, commanded: Dir, real_velocity: Position, frames: u32) -> Intent {
+    /// Move the tank at `velocity` (px/s) for `frames` ticks while it is
+    /// on record as having been told to drive `commanded` every tick -
+    /// what physics did versus what the AI asked for.
+    fn drive(ai: &mut Ai, pos: &mut Position, commanded: Dir, velocity: Position, frames: u32) -> Intent {
         let mut intent = Intent::default();
         for _ in 0..frames {
+            pos.x += velocity.x * DT;
+            pos.y += velocity.y * DT;
             ai.last_move_dir = Some(commanded);
             ai.committed_dir = Some(commanded);
-            intent = tick(ai, real_velocity, 1.0 / 60.0);
+            intent = tick(ai, *pos);
         }
         intent
     }
 
-    #[test]
-    fn only_progress_along_the_commanded_heading_resets_the_stuck_clock() {
+    /// A tank that has stood on `pos` for one tick, so the next tick has a
+    /// displacement to judge.
+    fn settled() -> (Ai, Position) {
         let mut ai = Ai::default();
+        let pos = Position::new(600.0, 300.0);
+        ai.last_move_dir = None;
+        tick(&mut ai, pos);
+        (ai, pos)
+    }
+
+    #[test]
+    fn only_sustained_progress_along_the_commanded_heading_resets_the_stuck_clock() {
+        let (mut ai, mut pos) = settled();
         // Told to go Down, carried East at speed by a jam: no progress.
-        drive(&mut ai, Dir::Down, Position::new(100.0, 0.0), 12);
+        drive(&mut ai, &mut pos, Dir::Down, Position::new(100.0, 0.0), 12);
         assert!(ai.stuck_timer > 0.15, "sideways drift counted as movement: {}", ai.stuck_timer);
-        // Actually driving Down clears it at once.
-        drive(&mut ai, Dir::Down, Position::new(0.0, 100.0), 1);
+        // Actually driving Down clears it within a few frames.
+        drive(&mut ai, &mut pos, Dir::Down, Position::new(0.0, 100.0), 6);
         assert_eq!(ai.stuck_timer, 0.0);
         // Shoved backwards is no better than standing still.
-        drive(&mut ai, Dir::Down, Position::new(0.0, -100.0), 12);
+        drive(&mut ai, &mut pos, Dir::Down, Position::new(0.0, -100.0), 12);
         assert!(ai.stuck_timer > 0.15);
         // Deliberately holding position is not stuck, whatever physics says.
         ai.last_move_dir = None;
-        tick(&mut ai, Position::new(0.0, 0.0), 1.0 / 60.0);
+        tick(&mut ai, pos);
         assert_eq!(ai.stuck_timer, 0.0);
+        assert_eq!(ai.snapshot().progress_px_s, None);
+    }
+
+    #[test]
+    fn a_single_frame_twitch_does_not_clear_the_stuck_clock() {
+        let (mut ai, mut pos) = settled();
+        // Pressed against another body: a fraction of a pixel a frame.
+        drive(&mut ai, &mut pos, Dir::Down, Position::new(0.0, 2.0), 20);
+        let before = ai.stuck_timer;
+        assert!(before > 0.3, "creeping at 2 px/s counted as progress: {before}");
+        // The contact solver shoves it two pixels in one frame (120 px/s
+        // for that frame alone), then it is pinned again.
+        drive(&mut ai, &mut pos, Dir::Down, Position::new(0.0, 120.0), 1);
+        assert!(ai.stuck_timer > before, "one fast frame cleared the clock");
+        drive(&mut ai, &mut pos, Dir::Down, Position::new(0.0, 2.0), 20);
+        assert!(ai.stuck_timer > before + 0.3);
     }
 
     #[test]
     fn a_tank_carried_sideways_long_enough_escapes_perpendicular() {
-        let mut ai = Ai::default();
+        let (mut ai, mut pos) = settled();
         let budget = (tuning().stuck_escape_seconds * 60.0) as u32 + 3;
         let mut escaped = None;
         for frame in 1..=budget {
-            let intent = drive(&mut ai, Dir::Down, Position::new(100.0, 0.0), 1);
+            let intent = drive(&mut ai, &mut pos, Dir::Down, Position::new(100.0, 0.0), 1);
             let dir = intent.move_dir.expect("still trying to move");
             if dir != Dir::Down {
                 escaped = Some((frame, dir));
@@ -1998,6 +2058,7 @@ mod stuck_tests {
             frame as f32 / 60.0 >= tuning().stuck_escape_seconds,
             "escaped after {frame} frames, before stuck_escape_seconds elapsed"
         );
-        assert_eq!(ai.stuck_timer, 0.0, "the escape spends the stuck evidence");
+        assert_eq!(ai.stuck_timer, 0.0, "the escape resets the clock");
+        assert_eq!(ai.escapes, 1);
     }
 }

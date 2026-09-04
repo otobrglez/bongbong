@@ -774,13 +774,19 @@ tunables! {
         /// coarse grid's routed direction flip-flops every frame near a
         /// corner (found via the probe's `--rounds` sweep).
         ai_obstacle_override_hold_seconds: f32 = 0.1 in 0.0 ..= 2.0;
-        /// Stuck-escape: a tank commanded to move whose real physics
-        /// velocity, projected onto the commanded heading, stays under
-        /// this (px/s) - sideways drift in a jam is not progress ...
+        /// Stuck-escape: a tank commanded to move whose displacement per
+        /// second along the commanded heading (smoothed, see below) stays
+        /// under this - sideways drift in a jam is not progress ...
         stuck_speed_eps: f32 = 8.0 in 0.0 ..= 100.0;
         /// ... for this many seconds running is treated as genuinely stuck,
         /// and `Ai::steer` forces a hard perpendicular-turn reset.
         stuck_escape_seconds: f32 = 0.75 in 0.05 ..= 10.0;
+        /// Time constant of the progress average the stuck check reads:
+        /// long enough that a one-frame shove from the contact solver (two
+        /// tanks pressed together twitch a pixel or two now and then)
+        /// cannot clear the clock, short enough that a tank that really
+        /// gets going clears it within a few frames.
+        stuck_progress_window_seconds: f32 = 0.5 in 0.02 ..= 3.0;
         /// Breach: a tank that has commanded movement straight into a
         /// destructible tile for this long stops and shoots it down
         /// instead of staying wedged (`ai::Brain::wants_breach`).

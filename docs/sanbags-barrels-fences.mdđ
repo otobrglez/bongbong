@@ -1,0 +1,39 @@
+# Sanbags, oil barrels and fences
+
+This is requirement document to add three new items to the game.
+
+## Visuals
+
+- All three items need to be portrayed from the top. That is the perspective of the game. They could be slightly tilted so that they have some shape to it.
+
+## Mechanics
+
+- All three itemss should be placed on the map, same as with walls and other elements that the game supports.
+
+## Sandbags
+- Tanks can shoot over them as well as at them. Come up with some ration of wht passes over and what does not.
+- They are destroyed if tank rams into them
+- Visually there should be three different kinds of similar bags in different arrangements, but they should also have each 3 different states based on level damage.
+- The idea of sandbag is more to slow down progress but be destroyable.
+
+## Oil barrels
+- Barrel should also be placed on the map
+- Barrel should be such that once it is damaged enough it explodes.
+- When barrel explodes it impacts close by barrels that should also explode (Doom like)
+- Sometimes bullets bounce away (in small percentage) and some times bullets fly over them in also small percantage. But i a lot of cases they explode spectaculary
+- There should be 2 variations of barrel
+- Figure out how to create interesting visual for the explosion
+- This is now and important and interesting part of the game. So make it spectaculat. especially around explosion and impact on the environment.
+
+## Fences
+- Have 2 variations of fences.
+- In 70% of cases shooting at it destroys them. In other cases they get easily destoryed. 
+- Visually also have keyframes for damaged state
+
+## Acceptance criteria
+
+- In map editor user should be able to place these elements on a map
+- They should all have colors in similar style/guidience then the rest of the game
+- All of them should be destructable
+- There should be some knobs that can be tuned later on as well
+- Create also a test map with these elements that can be used for testing 

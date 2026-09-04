@@ -1194,12 +1194,6 @@ impl Game {
                     .obstacle_ahead(tank.position, d.vec(), reach, breach_pad)
                     .map(|(material, burning)| WallAhead { material, burning })
             });
-            // Real physics velocity, so the AI's stuck check can tell
-            // "commanded to move" from "actually got somewhere that way".
-            let real_velocity = tank
-                .body
-                .map(|handle| self.physics.velocity(handle))
-                .unwrap_or_default();
             let engage_target = self.last_engage.target(entity);
             let (mut target, mut hunting) = target_of(ai);
             // A hunter that cannot route to the frog and holds no slot on
@@ -1243,7 +1237,6 @@ impl Game {
                     f.width,
                     f.height,
                     f.dt,
-                    real_velocity,
                     &movers,
                     my_index,
                     &grid,
@@ -2430,6 +2423,109 @@ mod mechanics_tests {
         assert_eq!(enemies.len(), 1, "one-enemy round");
         let mut q = game.world.query_one::<&mut Ai>(enemies[0]);
         q.get().expect("enemy has an Ai").role = role;
+    }
+
+    /// Give the enemy in owner slot `slot` `role` directly (see
+    /// `set_enemy_role`).
+    fn set_role_of(game: &mut Game, slot: usize, role: Role) {
+        let entity = game
+            .world
+            .query::<(Entity, &Tank)>()
+            .with::<&Ai>()
+            .iter()
+            .find(|(_, t)| t.owner_slot == slot)
+            .map(|(e, _)| e)
+            .expect("enemy in that slot");
+        let mut q = game.world.query_one::<&mut Ai>(entity);
+        q.get().expect("enemy has an Ai").role = role;
+    }
+
+    fn position_of(game: &Game, slot: usize) -> Position {
+        game.tank_snapshots().into_iter().find(|t| t.slot == slot).expect("tank in slot").position
+    }
+
+    /// A 112 px wide vertical iron corridor (two nav cells): the player at
+    /// its top, the frog at its bottom - the default map's lane beside the
+    /// player start, where two enemies heading opposite ways jammed.
+    const CORRIDOR_MAP: &str = r#"
+version = 1
+tanks = 2
+cells."14,1" = { kind = "start" }
+cells."14,22" = { kind = "frog" }
+cells."14,20" = { kind = "pickup", pickup = "ammo" }
+cells."11,2" = { kind = "wall", material = "iron" }
+cells."11,3" = { kind = "wall", material = "iron" }
+cells."11,4" = { kind = "wall", material = "iron" }
+cells."11,5" = { kind = "wall", material = "iron" }
+cells."11,6" = { kind = "wall", material = "iron" }
+cells."11,7" = { kind = "wall", material = "iron" }
+cells."11,8" = { kind = "wall", material = "iron" }
+cells."11,9" = { kind = "wall", material = "iron" }
+cells."11,10" = { kind = "wall", material = "iron" }
+cells."11,11" = { kind = "wall", material = "iron" }
+cells."11,12" = { kind = "wall", material = "iron" }
+cells."11,13" = { kind = "wall", material = "iron" }
+cells."11,14" = { kind = "wall", material = "iron" }
+cells."11,15" = { kind = "wall", material = "iron" }
+cells."11,16" = { kind = "wall", material = "iron" }
+cells."11,17" = { kind = "wall", material = "iron" }
+cells."11,18" = { kind = "wall", material = "iron" }
+cells."11,19" = { kind = "wall", material = "iron" }
+cells."11,20" = { kind = "wall", material = "iron" }
+cells."16,2" = { kind = "wall", material = "iron" }
+cells."16,3" = { kind = "wall", material = "iron" }
+cells."16,4" = { kind = "wall", material = "iron" }
+cells."16,5" = { kind = "wall", material = "iron" }
+cells."16,6" = { kind = "wall", material = "iron" }
+cells."16,7" = { kind = "wall", material = "iron" }
+cells."16,8" = { kind = "wall", material = "iron" }
+cells."16,9" = { kind = "wall", material = "iron" }
+cells."16,10" = { kind = "wall", material = "iron" }
+cells."16,11" = { kind = "wall", material = "iron" }
+cells."16,12" = { kind = "wall", material = "iron" }
+cells."16,13" = { kind = "wall", material = "iron" }
+cells."16,14" = { kind = "wall", material = "iron" }
+cells."16,15" = { kind = "wall", material = "iron" }
+cells."16,16" = { kind = "wall", material = "iron" }
+cells."16,17" = { kind = "wall", material = "iron" }
+cells."16,18" = { kind = "wall", material = "iron" }
+cells."16,19" = { kind = "wall", material = "iron" }
+cells."16,20" = { kind = "wall", material = "iron" }
+"#;
+
+    /// Two enemies pressed corner to corner in the corridor, one heading
+    /// up to the player and one down to the ammo, half a hull apart in x
+    /// so each blocks the other's lane. Neither is moving, but the contact
+    /// solver keeps handing each a burst of velocity along its heading;
+    /// the stuck escape must still fire and one of them must step aside.
+    #[test]
+    fn two_enemies_jammed_corner_to_corner_in_a_corridor_break_free() {
+        let mut game = game_on(CORRIDOR_MAP, 2, Some(0));
+        set_role_of(&mut game, 1, Role::Player);
+        set_role_of(&mut game, 2, Role::Player);
+        // Player at the very top, out of attack range, so the lower enemy
+        // chases up the lane; the upper one is out of shells and retreats
+        // down it to the ammo at the bottom. Hulls overlap by half a width.
+        game.debug_teleport(0, Position::new(448.0, 24.0), Some(180.0)).expect("player");
+        game.debug_set_tank(2, &crate::simulation::debug::TankPatch { shells_ammo: Some(0), ..Default::default() })
+            .expect("slot 2");
+        let a = Position::new(456.0, 402.0);
+        let b = Position::new(440.0, 366.0);
+        game.debug_teleport(1, a, Some(0.0)).expect("slot 1");
+        game.debug_teleport(2, b, Some(180.0)).expect("slot 2");
+        let mut freed_at = None;
+        for frame in 1..=(4 * 60) {
+            step(&mut game, Input::default());
+            let (pa, pb) = (position_of(&game, 1), position_of(&game, 2));
+            // Someone stepped aside or got past: the pair is no longer
+            // sitting on its starting spots.
+            if pa.distance_to(a) > 30.0 || pb.distance_to(b) > 30.0 {
+                freed_at = Some(frame);
+                break;
+            }
+        }
+        let frame = freed_at.expect("the two enemies never broke out of the jam within 4 s");
+        assert!(frame as f32 / 60.0 < 3.0, "took {frame} frames to break the jam");
     }
 
     fn frog_position(game: &Game, frog: Option<Entity>) -> Position {
