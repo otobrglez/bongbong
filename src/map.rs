@@ -338,8 +338,15 @@ mod toml_tests {
             assert!(back.cells.get(key) == Some(cell), "cell {key} changed");
         }
         assert_eq!(back.name, None, "name is not part of the file");
-        assert_eq!(back.mission, MissionConfig::default(), "no [mission] table means protect");
-        assert_eq!(back.spawn, SpawnConfig::default(), "no [spawn] table means the band plan");
+        assert_eq!(back.mission, map.mission, "the mission table changed");
+        assert_eq!(back.spawn, map.spawn, "the spawn table changed");
+    }
+
+    #[test]
+    fn missing_level_tables_mean_protect_and_band() {
+        let map = MapFile::from_toml_str("version = 1\n").unwrap();
+        assert_eq!(map.mission, MissionConfig::default());
+        assert_eq!(map.spawn, SpawnConfig::default());
     }
 
     #[test]

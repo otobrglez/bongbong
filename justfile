@@ -6,10 +6,11 @@ watch:
 # seeded rounds (the base seed prints in the header, so any flagged round
 # is replayable) plus per-kind anomaly heatmaps. See
 # docs/gameplay-verification-design.md and CLAUDE.md's probe bullets.
+# Pinned to a Protect band round: the shipped map's own level tables may
+# say otherwise (the probe refuses --enemies under a waves plan).
 probe-sweep:
-    cargo run --bin probe -- --scenario afk --enemies 4 --frames 1800 --rounds 30 --heatmap
+    cargo run --bin probe -- --scenario afk --mission protect --spawn band --enemies 4 --frames 1800 --rounds 30 --heatmap
 
-# Sweep every maps/test/ adversarial fixture at a pinned seed and hold it
 # Waves spawn plan health check: the maps/missions/ waves fixture, Destroy
 # mission (no frog, so an AFK player only loses to gunfire), 30 seeded
 # rounds. Rolling-in tanks are exempt from the anomaly checks until they
@@ -17,6 +18,7 @@ probe-sweep:
 probe-waves:
     cargo run --bin probe -- --map maps/missions/waves-basic.toml --scenario afk --frames 3600 --rounds 30 --seed 2000 --heatmap
 
+# Sweep every maps/test/ adversarial fixture at a pinned seed and hold it
 # to the recorded baseline: each ceiling is the observed maximum across all
 # six fixtures - deterministic under the pinned seed, so any exceedance is
 # a real behavior change, not noise. After a deliberate AI/map/tuning

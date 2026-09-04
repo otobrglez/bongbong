@@ -987,9 +987,14 @@ mod tests {
     const W: f32 = 1280.0;
     const H: f32 = 720.0;
 
+    /// A four-enemy Protect band round on the shipped map. The level is
+    /// pinned here because these tests measure the dev server, not
+    /// whatever mission/spawn plan `maps/default.toml` currently ships.
     fn game(seed: u64) -> Game {
         let mut game = Game::default();
         game.enemy_count_override = Some(4);
+        game.level_overrides.mission = Some(crate::level::Mission::Protect);
+        game.level_overrides.spawn = Some(crate::level::SpawnKind::Band);
         game.seed_override = Some(seed);
         game.map = MapFile::from_toml_str(include_str!("../maps/default.toml")).expect("embedded default map parses");
         game.init(W, H);

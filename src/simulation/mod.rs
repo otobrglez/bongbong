@@ -2146,6 +2146,9 @@ mod spawn_tests {
         for seed in 1..=40u64 {
             let mut game = Game::default();
             game.enemy_count_override = Some(8);
+            // Band placement is what this test audits, whatever the shipped
+            // map's own spawn plan is.
+            game.level_overrides.spawn = Some(crate::level::SpawnKind::Band);
             game.seed_override = Some(seed);
             game.map = MapFile::from_toml_str(include_str!("../../maps/default.toml")).expect("embedded default map parses");
             game.init(1280.0, 720.0);
@@ -2240,6 +2243,7 @@ mod determinism_tests {
             game.level_overrides.waves = Some(3);
             game.level_overrides.wave_size = Some(2);
         } else {
+            game.level_overrides.spawn = Some(crate::level::SpawnKind::Band);
             game.enemy_count_override = Some(4);
         }
         game.map = MapFile::from_toml_str(include_str!("../../maps/default.toml")).expect("embedded default map parses");
