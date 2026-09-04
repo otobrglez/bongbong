@@ -127,12 +127,21 @@ impl Terrain {
     /// a dense map). Blind to tanks (`ai::Brain::friendly_blocks_shot`'s
     /// job) and to the boundary walls (both endpoints are always interior).
     pub fn line_of_sight(&self, from: Position, to: Position) -> bool {
+        self.line_of_sight_to_frog(from, to, None)
+    }
+
+    /// `line_of_sight` for a shot aimed *at* the frog `target`: that frog's
+    /// own box is not an obstruction (a segment ending at its centre always
+    /// enters it), every other frog and tile still is. `None` ignores
+    /// nothing - the plain `line_of_sight`.
+    pub fn line_of_sight_to_frog(&self, from: Position, to: Position, target: Option<Entity>) -> bool {
         self.obstacles
             .iter()
             .all(|b| segment_hits_aabb(from, to, b.center, b.half).is_none())
             && self
                 .frogs
                 .iter()
+                .filter(|&&(e, _)| Some(e) != target)
                 .all(|&(_, p)| segment_hits_aabb(from, to, p, frog_half()).is_none())
     }
 

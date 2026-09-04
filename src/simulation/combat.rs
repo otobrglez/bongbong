@@ -45,8 +45,9 @@ impl Game {
     /// Apply one resolved projectile/beam hit to `target`: roll damage in
     /// `dmg`, then per target kind - a tank is marked hit, either killed
     /// (recorded in `f.kills` for its shockwave/explosion) or shoved; an
-    /// enemy that survives is told it was shot (`Ai::notify_hit`); the frog
-    /// takes damage and either dies (shockwave) or hops away; an obstacle
+    /// enemy that survives is told it was shot (`Ai::notify_hit`); a frog
+    /// (either side - any shot damages any frog) takes damage and either
+    /// dies (shockwave) or hops away; an obstacle
     /// takes damage; a wall absorbs the shot. Wrecks and dead frogs ignore
     /// further hits. `at` is the impact point, recorded in the `Event::Hit`
     /// every landed hit appends.
@@ -95,7 +96,8 @@ impl Game {
                     } else {
                         let d = f.rng.random_range(dmg.0..dmg.1);
                         frog.damage(d);
-                        f.events.push(Event::Hit { target: HitTarget::Frog, damage: d, killed: frog.is_dead(), x: at.x, y: at.y });
+                        let target = HitTarget::Frog { side: frog.side };
+                        f.events.push(Event::Hit { target, damage: d, killed: frog.is_dead(), x: at.x, y: at.y });
                         (frog.is_dead(), frog.position, frog.can_hop(), frog.hop_distance())
                     }
                 };

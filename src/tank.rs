@@ -994,6 +994,22 @@ pub enum RingStyle {
 /// `draw_player_ring` are the two callers; they share every number here so
 /// the two rings read as the same object in different colours.
 pub fn draw_ground_ring(d: &mut impl RaylibDraw, tank: &Tank, time: f32, style: RingStyle, fade: f32) {
+    draw_ground_ring_at(d, tank.ring_position, tank.size(), tank.anim_phase(), time, style, fade);
+}
+
+/// `draw_ground_ring` for anything that is not a tank - a frog's side
+/// marker (`frog::draw_frog_ring`): the same ring at `center`, sized from
+/// `size` (the sprite's on-screen side length) exactly as a tank's is from
+/// `Tank::size`, with `phase` offsetting the rainbow's breathing.
+pub fn draw_ground_ring_at(
+    d: &mut impl RaylibDraw,
+    center: Position,
+    size: f32,
+    phase: f32,
+    time: f32,
+    style: RingStyle,
+    fade: f32,
+) {
     if fade <= 0.0 {
         return;
     }
@@ -1002,12 +1018,11 @@ pub fn draw_ground_ring(d: &mut impl RaylibDraw, tank: &Tank, time: f32, style: 
     // sine's midpoint as fixed values and reads the same size/opacity on
     // average as the shield ring.
     let pulse = match style {
-        RingStyle::Rainbow { .. } => ((time + tank.anim_phase()) * std::f32::consts::TAU * 1.5).sin() * 0.5 + 0.5,
+        RingStyle::Rainbow { .. } => ((time + phase) * std::f32::consts::TAU * 1.5).sin() * 0.5 + 0.5,
         RingStyle::Solid(_) => 0.5,
     };
-    let radius = tank.size() * tuning().shield_glow_radius_factor * (0.94 + 0.06 * pulse);
+    let radius = size * tuning().shield_glow_radius_factor * (0.94 + 0.06 * pulse);
     let thickness = radius * 0.22;
-    let center = tank.ring_position;
     let with_alpha = |c: Color, alpha: f32| Color::new(c.r, c.g, c.b, (alpha * fade).clamp(0.0, 255.0) as u8);
     let (disc_alpha, band_alpha) = match style {
         RingStyle::Rainbow { .. } => (22.0 + 10.0 * pulse, 95.0 + 30.0 * pulse),

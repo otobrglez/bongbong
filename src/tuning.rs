@@ -338,6 +338,10 @@ tunables! {
         /// A guard engages the player only while the player is within this
         /// many px of the enemy frog, and wanders inside it otherwise.
         guard_leash_px: f32 = 260.0 in 50.0 ..= 1000.0;
+        /// A guard's beat keeps at least this far from its own frog -
+        /// outside the frog's bite and hop ranges, so it neither gets
+        /// bitten by it nor chases it around the map.
+        guard_keep_off_px: f32 = 130.0 in 0.0 ..= 500.0;
         /// Procedural enemy-frog placement (a hunt map without an
         /// `enemy_frog` cell): at least this far from the player's frog.
         enemy_frog_spawn_min_dist: f32 = 400.0 in 0.0 ..= 1500.0 @ Restart;

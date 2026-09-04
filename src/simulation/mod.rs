@@ -34,10 +34,10 @@ use rand::{RngExt, SeedableRng};
 use serde::{Deserialize, Serialize};
 use sola_raylib::core::math::Vector2;
 
-use crate::ai::{Ai, AiSnapshot, Intent, Mover, WallAhead};
+use crate::ai::{Ai, AiSnapshot, Intent, Mover, Role, WallAhead};
 use crate::battlefield;
 use crate::bullet::Bullet;
-use crate::frog::Frog;
+use crate::frog::{Frog, Side};
 use crate::laser::{LaserBeam, LaserVariant};
 use crate::level::{LevelOverrides, Mission, SpawnPlan};
 use crate::map::{self, CellObject, MapFile};
@@ -139,8 +139,8 @@ pub enum Event {
     Deflected { slot: usize, x: f32, y: f32 },
     /// Two opposing shells met mid-air and cancelled at (`x`, `y`).
     ShellsCollided { x: f32, y: f32 },
-    /// The frog bit the tank in `slot`.
-    FrogBite { slot: usize, damage: f32, killed: bool },
+    /// The `side` frog bit the tank in `slot`.
+    FrogBite { side: Side, slot: usize, damage: f32, killed: bool },
     // --- AI decisions, recorded only while `Game::trace_ai` is set: each
     // is a transition the enemy phase observed by comparing an enemy's
     // `AiSnapshot` before and after its `think`, so `ai.rs` stays
@@ -148,7 +148,8 @@ pub enum Event {
     /// The behaviour tree settled on a different action than last frame.
     AiAction { slot: usize, from: Option<&'static str>, to: Option<&'static str> },
     /// The engagement ring gave `slot` a different slot index (see
-    /// `engage::EngageSlot::index`; `None` = steering at the player).
+    /// `engage::EngageSlot::index`; `None` = steering at its target - the
+    /// player, or a hunter's frog - directly).
     EngageSlot { slot: usize, from: Option<u8>, to: Option<u8> },
     /// The stuck escape fired (`escapes` so far this round).
     StuckEscape { slot: usize, escapes: u32 },
@@ -167,7 +168,7 @@ pub enum Event {
 pub enum HitTarget {
     Player,
     Enemy { slot: usize },
-    Frog,
+    Frog { side: Side },
     Obstacle,
     Wall,
 }
@@ -301,8 +302,12 @@ pub struct Game {
     /// `alert_timer` runs out - see `ai::Ai::think`'s `alert` parameter.
     alert_position: Option<Position>,
     alert_timer: f32,
-    /// Engagement-slot assignment with per-tank memory - see `engage`.
+    /// Engagement-slot assignment with per-tank memory - see `engage`. The
+    /// ring around the player.
     engage: EngageRing,
+    /// The second ring, around the player's frog: what hunters with a live
+    /// quarry compete on (`enemy_phase`).
+    engage_frog: EngageRing,
     /// The screen-distortion ring from the most recent kill (tank or
     /// frog), while it plays. Driven into the shockwave shader by `render`.
     pub(crate) shock: Option<Shockwave>,
@@ -442,6 +447,7 @@ impl Game {
         self.alert_position = None;
         self.alert_timer = 0.0;
         self.engage.clear();
+        self.engage_frog.clear();
         self.pickup_respawn_timer = tuning().pickup_respawn_seconds;
         self.player_fire_held_last_frame = false;
         self.shock = None;
@@ -602,9 +608,13 @@ impl Game {
                 enemy.shield_timer = tuning().shield_duration_seconds;
             }
             roll_track_distortion(&mut enemy, &mut rng);
+            // Last of the per-enemy rolls, and skipped outright at a zero
+            // share, so a mission without hunters draws exactly what a
+            // Destroy round does.
+            let role = roll_role(self.mission, &mut rng);
             enemy.body = Some(self.physics.spawn_tank(pos, enemy.move_half_extents(false), enemy.mass()));
             enemy_positions.push(pos);
-            self.world.spawn((enemy, Ai::default()));
+            self.world.spawn((enemy, Ai::with_role(role)));
         }
 
         // Several individually-fine wall placements can still seal an
@@ -644,26 +654,40 @@ impl Game {
         });
         let frog_variant = rng.random_range(0..crate::frog::FROG_VARIANT_DIRS.len() as i32);
         if self.mission.has_player_frog() {
-            let frog_body = self.physics.spawn_static(
-                frog_pos,
-                Position::new(FROG_COLLIDER_HALF_EXTENT.0, FROG_COLLIDER_HALF_EXTENT.1),
-            );
-            self.frog = Some(self.world.spawn((Frog {
-                position: frog_pos,
-                health: tuning().frog_max_health,
-                max_health: tuning().frog_max_health,
-                variant: frog_variant,
-                body: frog_body,
-                hurt_timer: 0.0,
-                hit_flash_timer: 0.0,
-                hop_timer: 0.0,
-                hop_start: frog_pos,
-                hop_end: frog_pos,
-                hop_cooldown: 0.0,
-                attack_timer: 0.0,
-                attack_cooldown: 0.0,
-                death_elapsed: None,
-            },)));
+            self.frog = Some(self.spawn_frog(Side::Player, frog_pos, frog_variant));
+        }
+
+        // --- Enemy frog (Hunt only) ---
+        // A map-placed `enemy_frog` cell wins; otherwise roll a spot in the
+        // enemy spawn band, well away from the player's frog and clear of
+        // every tank and wall like the player frog's fallback. Draws RNG
+        // only in a mission that has one, so every other mission's stream
+        // is unchanged by this block.
+        if self.mission.has_enemy_frog() {
+            let min_dist = tuning().enemy_frog_spawn_min_dist;
+            let pos = map_spawn.enemy_frog_pos.unwrap_or_else(|| {
+                battlefield::sample_clear_position(&mut rng, width, height, margin_min, |pos| {
+                    let border_dist = pos.x.min(width - pos.x).min(pos.y).min(height - pos.y);
+                    border_dist <= margin_max
+                        && pos.distance_to(frog_pos) >= min_dist
+                        && pos.distance_to(center) >= clear
+                        && spawn_grid.usable(pos)
+                        && enemy_positions.iter().all(|&p| pos.distance_to(p) >= enemy_clear)
+                        && obstacle_positions.iter().all(|&p| pos.distance_to(p) >= frog_clear)
+                })
+                .unwrap_or_else(|| {
+                    let sample = Position::new(
+                        rng.random_range(margin_min..(width - margin_min)),
+                        rng.random_range(margin_min..(height - margin_min)),
+                    );
+                    let mut avoid = enemy_positions.clone();
+                    avoid.push(center);
+                    avoid.push(frog_pos);
+                    spawn_grid.nearest_open(sample, &avoid, enemy_clear)
+                })
+            });
+            let variant = rng.random_range(0..crate::frog::FROG_VARIANT_DIRS.len() as i32);
+            self.enemy_frog = Some(self.spawn_frog(Side::Enemy, pos, variant));
         }
 
         // --- Pickups: every map slot spawns immediately ---
@@ -692,6 +716,31 @@ impl Game {
             mission: self.mission,
             spawn: self.spawn_plan.kind(),
         });
+    }
+
+    /// Put a fresh, full-health frog of `side` at `pos` with its static
+    /// collider, returning its entity.
+    fn spawn_frog(&mut self, side: Side, pos: Position, variant: i32) -> Entity {
+        let body = self
+            .physics
+            .spawn_static(pos, Position::new(FROG_COLLIDER_HALF_EXTENT.0, FROG_COLLIDER_HALF_EXTENT.1));
+        self.world.spawn((Frog {
+            side,
+            position: pos,
+            health: tuning().frog_max_health,
+            max_health: tuning().frog_max_health,
+            variant,
+            body,
+            hurt_timer: 0.0,
+            hit_flash_timer: 0.0,
+            hop_timer: 0.0,
+            hop_start: pos,
+            hop_end: pos,
+            hop_cooldown: 0.0,
+            attack_timer: 0.0,
+            attack_cooldown: 0.0,
+            death_elapsed: None,
+        },))
     }
 
     /// Step the simulation one frame: `input` is this frame's player input,
@@ -830,16 +879,23 @@ impl Game {
         self.tracks.retain_mut(|t| !t.tick(dt));
     }
 
-    /// The frog bites the single nearest live tank within its attack range
-    /// (either side; never the killing blow on the player - it is a hazard,
-    /// not a fair fight) and, independently, hops away from the nearest
-    /// tank within its wider avoid range. Each on its own cooldown.
+    /// Each frog on the field (the player's, then the enemy's) bites the
+    /// single nearest live tank within its attack range (either side; never
+    /// the killing blow on the player - it is a hazard, not a fair fight)
+    /// and, independently, hops away from the nearest tank within its wider
+    /// avoid range. Each on its own cooldown.
     fn frog_phase(&mut self, f: &mut Frame) {
+        for frog_entity in [self.frog, self.enemy_frog].into_iter().flatten() {
+            self.frog_reflexes(f, frog_entity);
+        }
+    }
+
+    /// One frog's bite and hop for this frame - see `frog_phase`.
+    fn frog_reflexes(&mut self, f: &mut Frame, frog_entity: Entity) {
         let player = self.player.expect("player entity spawned in init");
-        let Some(frog_entity) = self.frog else { return };
-        let (can_attack, can_hop, frog_pos, attack_range, avoid_range, hop_distance) =
+        let (side, can_attack, can_hop, frog_pos, attack_range, avoid_range, hop_distance) =
             with_frog(&self.world, frog_entity, |fr| {
-                (fr.can_attack(), fr.can_hop(), fr.position, fr.attack_range(), fr.avoid_range(), fr.hop_distance())
+                (fr.side, fr.can_attack(), fr.can_hop(), fr.position, fr.attack_range(), fr.avoid_range(), fr.hop_distance())
             });
         let nearest: Option<(Entity, Position, f32)> = self
             .world
@@ -860,7 +916,7 @@ impl Game {
                 tank.mark_hit();
                 (tank.is_wreck(), tank.position, tank.owner_slot)
             };
-            f.events.push(Event::FrogBite { slot: victim_slot, damage: dmg, killed: became_wreck });
+            f.events.push(Event::FrogBite { side, slot: victim_slot, damage: dmg, killed: became_wreck });
             if became_wreck {
                 f.kills.push((victim_pos, target != player, victim_slot));
             }
@@ -1018,41 +1074,79 @@ impl Game {
             f.events.push(Event::Alert { on: alert.is_some(), x: p.x, y: p.y });
         }
 
+        // Role targets: hunters fight the player's frog while it lives
+        // (`quarry`), guards hold a leash around their own (`home`); both
+        // are `None` once that frog is dead or absent, and the role then
+        // behaves as `Role::Player`.
+        let live_frog = |frog: Option<Entity>| {
+            frog.and_then(|e| with_frog(&self.world, e, |fr| (!fr.is_dead()).then_some((e, fr.position))))
+        };
+        let quarry = live_frog(self.frog);
+        let home = live_frog(self.enemy_frog).map(|(_, p)| p);
+        let target_of = |ai: &Ai| match (ai.role, quarry) {
+            (Role::Hunter, Some((frog, pos))) => (pos, Some(frog)),
+            _ => (player_pos, None),
+        };
+        let guard_holds =
+            |ai: &Ai| ai.role == Role::Guard && home.is_some_and(|h| player_pos.distance_to(h) > tuning().guard_leash_px);
+
         // Engagement slots go to tanks that are really fighting: not
         // wrecked, fleeing or retreating, and either within view range or
         // hit-alerted (`engage_status`). Merely alert-following tanks still
         // far out don't claim one - that held approaching packs in loose
         // formation through the same bottleneck (measured via the probe's
         // clustering anomaly); steering at the raw alert point is fine for
-        // them.
+        // them. Hunters with a live quarry compete on the second ring, the
+        // one around the frog; everyone else on the ring around the player.
         let mut report = EngageReport::default();
         let mut engaged: Vec<(Entity, Position)> = Vec::new();
+        let mut engaged_frog: Vec<(Entity, Position)> = Vec::new();
         for (entity, tank, ai) in self.world.query::<(Entity, &Tank, &Ai)>().iter() {
-            let status = engage_status(tank, ai, player_pos);
+            let (target, hunting) = target_of(ai);
+            let status = if guard_holds(ai) { EngageStatus::OutOfRange } else { engage_status(tank, ai, target) };
             report.tanks.push(EngageTank::new(entity, tank.owner_slot, status));
             if status == EngageStatus::Engaged {
-                engaged.push((entity, tank.position));
+                if hunting.is_some() {
+                    engaged_frog.push((entity, tank.position));
+                } else {
+                    engaged.push((entity, tank.position));
+                }
             }
         }
         report.tanks.sort_by_key(|t| t.owner);
         // Sorted by entity so the greedy claim order is stable frame to frame.
         engaged.sort_by_key(|(e, _)| *e);
+        engaged_frog.sort_by_key(|(e, _)| *e);
+        let reachable = |a: Position, b: Position| components.connected(&grid, a, b);
+        // One worst-case tank clear of the wall, plus a little.
+        let margin = battlefield::max_tank_avoidance_radius() + 8.0;
         if engaged.len() >= 2 {
-            let reachable = |a: Position, b: Position| components.connected(&grid, a, b);
             let line_of_sight = |a: Position, b: Position| f.terrain.line_of_sight(a, b);
             self.engage.assign(
                 &engaged,
-                &EngageCtx {
-                    player_pos,
-                    width: f.width,
-                    height: f.height,
-                    // One worst-case tank clear of the wall, plus a little.
-                    margin: battlefield::max_tank_avoidance_radius() + 8.0,
-                    reachable: &reachable,
-                    line_of_sight: &line_of_sight,
-                },
+                &EngageCtx { target_pos: player_pos, width: f.width, height: f.height, margin, reachable: &reachable, line_of_sight: &line_of_sight },
                 &mut report,
             );
+        }
+        if let (true, Some((frog, frog_pos))) = (engaged_frog.len() >= 2, quarry) {
+            // The frog ring's own report: its slot table is not kept (the
+            // snapshot shows the player ring's), its per-tank outcomes are
+            // merged into the one report every reader consults.
+            let line_of_sight = |a: Position, b: Position| f.terrain.line_of_sight_to_frog(a, b, Some(frog));
+            let mut frog_report = EngageReport {
+                tanks: report.tanks.iter().filter(|t| engaged_frog.iter().any(|(e, _)| *e == t.entity)).copied().collect(),
+                ..Default::default()
+            };
+            self.engage_frog.assign(
+                &engaged_frog,
+                &EngageCtx { target_pos: frog_pos, width: f.width, height: f.height, margin, reachable: &reachable, line_of_sight: &line_of_sight },
+                &mut frog_report,
+            );
+            for t in frog_report.tanks {
+                if let Some(slot) = report.tanks.iter_mut().find(|r| r.entity == t.entity) {
+                    *slot = t;
+                }
+            }
         }
         let prev = std::mem::replace(&mut self.last_engage, report);
         if self.trace_ai {
@@ -1092,7 +1186,17 @@ impl Game {
                 .map(|handle| self.physics.velocity(handle))
                 .unwrap_or_default();
             let engage_target = self.last_engage.target(entity);
-            let line_of_sight = f.terrain.line_of_sight(tank.position, player_pos);
+            let (target, hunting) = target_of(ai);
+            let frog_target = match ai.role {
+                Role::Hunter => hunting.map(|_| target),
+                Role::Guard => home,
+                Role::Player => None,
+            };
+            let player_line_of_sight = f.terrain.line_of_sight(tank.position, player_pos);
+            let line_of_sight = match hunting {
+                Some(frog) => f.terrain.line_of_sight_to_frog(tank.position, target, Some(frog)),
+                None => player_line_of_sight,
+            };
             let before = self.trace_ai.then(|| ai.snapshot());
             // The player lives in a different archetype (no `Ai`), so this
             // shared read never aliases the exclusive borrow above.
@@ -1100,6 +1204,8 @@ impl Game {
                 ai.think(
                     tank,
                     player_tank,
+                    target,
+                    frog_target,
                     f.width,
                     f.height,
                     f.dt,
@@ -1112,6 +1218,7 @@ impl Game {
                     engage_target,
                     &pickups,
                     line_of_sight,
+                    player_line_of_sight,
                     walls_ahead,
                 )
             });
@@ -1814,6 +1921,24 @@ fn roll_track_distortion(tank: &mut Tank, rng: &mut SmallRng) {
     tank.track_scale_jitter = rng.random_range((1.0 - tuning().track_scale_jitter)..(1.0 + tuning().track_scale_jitter));
 }
 
+/// Roll one spawning enemy's `Role` for `mission` (docs/maps-to-levels.md
+/// "AI roles"): Protect rolls hunters at `enemy_hunter_share_protect`
+/// (the rest fight the player), Hunt at `enemy_hunter_share_hunt` (the rest
+/// guard the enemy frog), Destroy has nothing to hunt or guard. A share of
+/// zero draws nothing, so it leaves the round's RNG stream untouched.
+fn roll_role(mission: Mission, rng: &mut SmallRng) -> Role {
+    let mut rolls = |share: f32| share > 0.0 && rng.random_range(0.0..1.0) < share;
+    match mission {
+        Mission::Protect => {
+            if rolls(tuning().enemy_hunter_share_protect) { Role::Hunter } else { Role::Player }
+        }
+        Mission::Hunt => {
+            if rolls(tuning().enemy_hunter_share_hunt) { Role::Hunter } else { Role::Guard }
+        }
+        Mission::Destroy => Role::Player,
+    }
+}
+
 /// Roll a tank's wrecked-hull variant the first frame it is a wreck; a
 /// no-op every other frame. Uses the round stream, never `rand::rng()`.
 fn roll_wreck_col(tank: &mut Tank, rng: &mut SmallRng) {
@@ -1874,15 +1999,16 @@ fn lay_tracks(tracks: &mut Vec<Track>, tank: &mut Tank, before: Position) {
 }
 
 /// Whether an enemy competes for an engagement slot this frame, and if
-/// not, why - the exclusions win over the range test.
-fn engage_status(tank: &Tank, ai: &Ai, player_pos: Position) -> EngageStatus {
+/// not, why - the exclusions win over the range test. `target` is what
+/// the enemy fights (the player, or a hunter's frog).
+fn engage_status(tank: &Tank, ai: &Ai, target: Position) -> EngageStatus {
     if tank.is_wreck() {
         EngageStatus::Wreck
     } else if tank.damage >= tuning().enemy_flee_damage {
         EngageStatus::Fleeing
     } else if tank.active_weapon() == ActiveWeapon::Shell && ai.is_retreating() {
         EngageStatus::Retreating
-    } else if tank.position.distance_to(player_pos) <= tuning().enemy_view_range || ai.is_hit_alerted() {
+    } else if tank.position.distance_to(target) <= tuning().enemy_view_range || ai.is_hit_alerted() {
         EngageStatus::Engaged
     } else {
         EngageStatus::OutOfRange
@@ -1974,13 +2100,14 @@ mod spawn_tests {
 mod determinism_tests {
     use super::*;
 
-    /// Run one seeded round headlessly for `frames` frames of AFK input at
-    /// the probe's fixed timestep, sampling `tank_snapshots` every
-    /// `sample_every` frames (plus frame 0).
-    fn run_sampled(seed: u64, frames: u32, sample_every: u32) -> Vec<Vec<TankSnapshot>> {
+    /// Run one seeded round of `mission` headlessly for `frames` frames of
+    /// AFK input at the probe's fixed timestep, sampling `tank_snapshots`
+    /// every `sample_every` frames (plus frame 0).
+    fn run_sampled(seed: u64, mission: Mission, frames: u32, sample_every: u32) -> Vec<Vec<TankSnapshot>> {
         let mut game = Game::default();
         game.enemy_count_override = Some(4);
         game.seed_override = Some(seed);
+        game.level_overrides.mission = Some(mission);
         game.map = MapFile::from_toml_str(include_str!("../../maps/default.toml")).expect("embedded default map parses");
         game.init(1280.0, 720.0);
         let mut samples = vec![game.tank_snapshots()];
@@ -2015,12 +2142,14 @@ mod determinism_tests {
 
     /// Two full runs of the same seed must agree bit-for-bit. 600 frames
     /// of an AFK round crosses spawn, patrol, alert sharing, engagement
-    /// and firing, so every RNG consumer gets exercised.
+    /// and firing, so every RNG consumer gets exercised. The Hunt seed adds
+    /// the procedural enemy-frog placement, the role rolls, hunters on the
+    /// frog ring and guards on their leash.
     #[test]
     fn same_seed_replays_bit_identical() {
-        for seed in [0xB0B5_u64, 0xC0FFEE_u64] {
-            let a = run_sampled(seed, 600, 60);
-            let b = run_sampled(seed, 600, 60);
+        for (seed, mission) in [(0xB0B5_u64, Mission::Protect), (0xC0FFEE_u64, Mission::Protect), (0xF406_u64, Mission::Hunt)] {
+            let a = run_sampled(seed, mission, 600, 60);
+            let b = run_sampled(seed, mission, 600, 60);
             assert_eq!(a.len(), b.len(), "seed {seed:#x}: sample counts differ");
             for (i, (sa, sb)) in a.iter().zip(&b).enumerate() {
                 assert_eq!(sa.len(), sb.len(), "seed {seed:#x}, sample {i}: tank counts differ");
@@ -2103,6 +2232,190 @@ mod mechanics_tests {
 
     fn player_ammo(game: &Game) -> i32 {
         game.tank_snapshots().iter().find(|t| t.is_player).expect("player").shells_ammo
+    }
+
+    /// Give the single enemy of a one-enemy round `role` - set directly on
+    /// its `Ai`, not rolled, so the test never depends on the share knobs.
+    fn set_enemy_role(game: &mut Game, role: Role) {
+        let enemies: Vec<Entity> = game.world.query::<(Entity, &Ai)>().iter().map(|(e, _)| e).collect();
+        assert_eq!(enemies.len(), 1, "one-enemy round");
+        let mut q = game.world.query_one::<&mut Ai>(enemies[0]);
+        q.get().expect("enemy has an Ai").role = role;
+    }
+
+    fn frog_position(game: &Game, frog: Option<Entity>) -> Position {
+        with_frog(&game.world, frog.expect("frog on the field"), |fr| fr.position)
+    }
+
+    fn enemy_position(game: &Game) -> Position {
+        game.tank_snapshots().into_iter().find(|t| !t.is_player).expect("enemy").position
+    }
+
+    /// The player in the top-left corner, its frog two cells over, the
+    /// enemy frog in the far bottom-right: a hunter has a long, clear run
+    /// to the player's frog and a guard's beat is far from the player.
+    const CORNERS_MAP: &str = r#"
+version = 1
+tanks = 1
+cells."3,3" = { kind = "start" }
+cells."36,20" = { kind = "frog" }
+cells."36,3" = { kind = "enemy_frog" }
+"#;
+
+    #[test]
+    fn a_hunter_drives_to_the_players_frog() {
+        let mut game = game_on(CORNERS_MAP, 1, Some(0));
+        set_enemy_role(&mut game, Role::Hunter);
+        let frog = frog_position(&game, game.frog);
+        // Far left on the frog's row: a straight eastward run along y=656
+        // that never lines up on the player in the corner.
+        game.debug_teleport(1, Position::new(200.0, frog.y), Some(90.0)).expect("enemy in slot 1");
+        let attack_range = tuning().enemy_attack_range;
+        let mut last = enemy_position(&game).distance_to(frog);
+        assert!(last > 900.0, "starts {last} px from the frog");
+        let mut arrived = false;
+        for second in 1..=8 {
+            for _ in 0..60 {
+                step(&mut game, Input::default());
+            }
+            let now = enemy_position(&game).distance_to(frog_position(&game, game.frog));
+            if now <= attack_range {
+                arrived = true;
+                break;
+            }
+            assert!(now < last - 60.0, "second {second}: {last:.0} -> {now:.0} px, not closing on the frog");
+            last = now;
+        }
+        assert!(arrived, "never reached attack range of the frog ({last:.0} px)");
+        assert_eq!(game.outcome(), Outcome::Playing);
+    }
+
+    #[test]
+    fn a_hunter_in_range_with_line_of_sight_shoots_the_player() {
+        let mut game = game_on(OPEN_MAP, 1, Some(0));
+        set_enemy_role(&mut game, Role::Hunter);
+        let player = player_snapshot(&game).position;
+        // Straight above the player, half an attack range away, facing it;
+        // the frog is off in the bottom-right.
+        game.debug_teleport(1, Position::new(player.x, player.y - tuning().enemy_attack_range * 0.5), Some(180.0))
+            .expect("enemy in slot 1");
+        let (mut fired, mut hit_player) = (false, false);
+        for _ in 0..300 {
+            step(&mut game, Input::default());
+            for e in game.events() {
+                match e {
+                    Event::Fired { slot: 1, .. } => fired = true,
+                    Event::Hit { target: HitTarget::Player, .. } => hit_player = true,
+                    _ => {}
+                }
+            }
+            if hit_player {
+                break;
+            }
+        }
+        assert!(fired && hit_player, "fired: {fired}, hit the player: {hit_player}");
+        assert!(player_snapshot(&game).damage > 0.0);
+    }
+
+    #[test]
+    fn a_guard_never_leaves_its_leash() {
+        let mut game = Game::default();
+        game.enemy_count_override = Some(1);
+        game.seed_override = Some(7);
+        game.player_row_override = Some(0);
+        game.level_overrides.mission = Some(Mission::Hunt);
+        game.map = MapFile::from_toml_str(CORNERS_MAP).expect("test map parses");
+        game.init(W, H);
+        assert_eq!(game.mission, Mission::Hunt);
+        set_enemy_role(&mut game, Role::Guard);
+        let home = frog_position(&game, game.enemy_frog);
+        assert_eq!(home, map::cell_to_world(36, 3), "the map's enemy_frog cell places the enemy frog");
+        let leash = tuning().guard_leash_px;
+        assert!(player_snapshot(&game).position.distance_to(home) > leash * 2.0, "the player starts far from the beat");
+        game.debug_teleport(1, Position::new(home.x - 150.0, home.y), Some(270.0)).expect("enemy in slot 1");
+        // Slack: waypoints stay inside the leash but the hull turns around
+        // a little past one, and the frog hops away from any tank that
+        // comes close - its own guard included - which moves the anchor by
+        // a hop before the guard turns back.
+        let hull = Tank::default().size();
+        let hop = with_frog(&game.world, game.enemy_frog.unwrap(), Frog::hop_distance);
+        let (mut outside, mut moved) = (0, 0.0);
+        let mut prev = enemy_position(&game);
+        for frame in 0..900 {
+            step(&mut game, Input::default());
+            let pos = enemy_position(&game);
+            let dist = pos.distance_to(frog_position(&game, game.enemy_frog));
+            assert!(dist <= leash + hull + hop, "frame {frame}: guard {dist:.0} px from its frog (leash {leash})");
+            outside += (dist > leash + hull) as u32;
+            moved += pos.distance_to(prev);
+            prev = pos;
+        }
+        assert!(outside < 90, "outside the leash on {outside} of 900 frames: not turning back");
+        assert!(moved > 200.0, "the guard wanders its beat rather than parking (moved {moved:.0} px)");
+        assert_eq!(game.outcome(), Outcome::Playing);
+    }
+
+    #[test]
+    fn a_hunt_round_is_won_when_the_enemy_frog_dies_and_lost_when_the_players_does() {
+        let mut game = Game::default();
+        game.enemy_count_override = Some(1);
+        game.seed_override = Some(7);
+        game.level_overrides.mission = Some(Mission::Hunt);
+        game.map = MapFile::from_toml_str(CORNERS_MAP).expect("test map parses");
+        game.init(W, H);
+        assert_eq!(game.world.query::<&Frog>().iter().count(), 2);
+        let sides: Vec<Side> = [game.frog, game.enemy_frog]
+            .into_iter()
+            .map(|e| with_frog(&game.world, e.expect("both frogs"), |fr| fr.side))
+            .collect();
+        assert_eq!(sides, [Side::Player, Side::Enemy]);
+
+        with_frog_mut(&game.world, game.enemy_frog.unwrap(), |fr| fr.damage(fr.max_health));
+        step(&mut game, Input::default());
+        assert_eq!(game.outcome(), Outcome::Won, "the enemy frog's death wins the hunt");
+        assert!(game.events().iter().any(|e| matches!(e, Event::RoundEnded { outcome: Outcome::Won })));
+
+        game.init(W, H);
+        assert_eq!(game.outcome(), Outcome::Playing);
+        with_frog_mut(&game.world, game.frog.unwrap(), |fr| fr.damage(fr.max_health));
+        step(&mut game, Input::default());
+        assert_eq!(game.outcome(), Outcome::Lost, "the player's frog's death loses the hunt");
+    }
+
+    #[test]
+    fn a_hunt_map_without_an_enemy_frog_cell_places_one_in_the_band() {
+        let mut game = Game::default();
+        game.enemy_count_override = Some(2);
+        game.seed_override = Some(11);
+        game.level_overrides.mission = Some(Mission::Hunt);
+        game.map = MapFile::from_toml_str(OPEN_MAP).expect("test map parses");
+        game.init(W, H);
+        let home = frog_position(&game, game.enemy_frog);
+        let frog = frog_position(&game, game.frog);
+        assert!(home.distance_to(frog) >= tuning().enemy_frog_spawn_min_dist, "{home:?} is too close to {frog:?}");
+        let border = home.x.min(W - home.x).min(home.y).min(H - home.y);
+        assert!(border <= W.min(H) * tuning().enemy_spawn_margin_max, "{home:?} is outside the spawn band");
+        for t in game.tank_snapshots() {
+            assert!(t.position.distance_to(home) > Tank::default().size(), "{:?} spawned on the enemy frog", t.position);
+        }
+    }
+
+    /// The role roll is skipped entirely at a zero share, so a Destroy
+    /// round and a Protect round with no hunters draw the same stream and
+    /// only differ by the frog; every enemy of a Destroy round fights the
+    /// player.
+    #[test]
+    fn destroy_rolls_no_roles_and_hunt_rolls_hunters_or_guards() {
+        let mut game = Game::default();
+        game.enemy_count_override = Some(6);
+        game.seed_override = Some(3);
+        game.level_overrides.mission = Some(Mission::Destroy);
+        game.map = MapFile::from_toml_str(OPEN_MAP).expect("test map parses");
+        game.init(W, H);
+        assert!(game.world.query::<&Ai>().iter().all(|ai| ai.role == Role::Player));
+        game.level_overrides.mission = Some(Mission::Hunt);
+        game.init(W, H);
+        assert!(game.world.query::<&Ai>().iter().all(|ai| ai.role != Role::Player));
     }
 
     /// The player starts inside a sealed Iron ring with an ammo crate one
