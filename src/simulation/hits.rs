@@ -145,6 +145,24 @@ impl Terrain {
                 .all(|&(_, p)| segment_hits_aabb(from, to, p, frog_half()).is_none())
     }
 
+    /// `line_of_sight_to_frog` for a hunter deciding whether a shot at the
+    /// frog `target` is worth taking: destructible tiles in the way do not
+    /// count, since shells that stop short knock them down and open the
+    /// line - only Iron (never destroyed) and other frogs obstruct. This
+    /// is what lets a hunter shoot its way into a brick bunker instead of
+    /// circling it for a line of sight that never comes.
+    pub fn line_of_fire_to_frog(&self, from: Position, to: Position, target: Option<Entity>) -> bool {
+        self.obstacles
+            .iter()
+            .filter(|b| b.material == Material::Iron)
+            .all(|b| segment_hits_aabb(from, to, b.center, b.half).is_none())
+            && self
+                .frogs
+                .iter()
+                .filter(|&&(e, _)| Some(e) != target)
+                .all(|&(_, p)| segment_hits_aabb(from, to, p, frog_half()).is_none())
+    }
+
     /// The first thing the segment `p0..p1`, inflated by `half_extent` per
     /// side, hits. Every candidate box - the player's hull and turret, each
     /// enemy's hull and turret, the frog, every obstacle tile, the four

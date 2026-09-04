@@ -354,6 +354,10 @@ tunables! {
         /// Procedural enemy-frog placement (a hunt map without an
         /// `enemy_frog` cell): at least this far from the player's frog.
         enemy_frog_spawn_min_dist: f32 = 400.0 in 0.0 ..= 1500.0 @ Restart;
+        /// After a hunter's opportunistic shot at the player it goes back
+        /// to the frog for at least this long before it may snipe again,
+        /// so a player parked on its firing axis can't hold it forever.
+        hunter_snipe_cooldown_seconds: f32 = 5.0 in 0.0 ..= 60.0;
     }
 
     group waves {

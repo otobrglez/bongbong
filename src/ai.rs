@@ -138,6 +138,10 @@ pub struct Ai {
     /// commits for a short window instead of being re-decided every frame.
     dodge_dir: Option<Dir>,
     dodge_timer: f32,
+    /// Seconds until a hunter may take another opportunistic shot at the
+    /// player - set by `act_snipe` when it fires, so one snipe never
+    /// becomes a standing duel that forgets the frog.
+    snipe_cooldown: f32,
     /// True while backing off to recharge ammo. Latched between
     /// ENEMY_AMMO_LOW and ENEMY_AMMO_RESUME (see `wants_retreat`) so the tank
     /// doesn't flicker into and out of Attack every frame near either
@@ -214,6 +218,7 @@ pub struct AiSnapshot {
     pub dir_hold: f32,
     pub dodge_dir: Option<&'static str>,
     pub dodge_timer: f32,
+    pub snipe_cooldown: f32,
     pub retreating: bool,
     pub stuck_timer: f32,
     pub hit_alert_timer: f32,
@@ -246,6 +251,7 @@ impl Default for Ai {
             aim_settle: 0.0,
             dodge_dir: None,
             dodge_timer: 0.0,
+            snipe_cooldown: 0.0,
             retreating: false,
             last_move_dir: None,
             stuck_timer: 0.0,
@@ -311,7 +317,10 @@ impl Ai {
     /// shots on denser maps and left engaged enemies unable to ever find a
     /// firing solution. Gates `act_attack`'s fire decision so an enemy
     /// aligned through a wall it can't destroy (or with a frog in the way)
-    /// doesn't just fire into it forever. `player_line_of_sight` is the
+    /// doesn't just fire into it forever. For a hunter it is the line of
+    /// *fire* to the frog instead (`hits::Terrain::line_of_fire_to_frog`):
+    /// only iron or another frog blocks it, so a walled-in frog is shot at
+    /// through its destructible walls until they fall. `player_line_of_sight` is the
     /// same test toward the player, for a hunter's opportunistic shot
     /// (`build`'s snipe tier); identical to `line_of_sight` whenever the
     /// player *is* the target.
@@ -354,6 +363,7 @@ impl Ai {
         self.hit_alert_timer = (self.hit_alert_timer - dt).max(0.0);
         self.dir_hold += dt;
         self.dodge_timer = (self.dodge_timer - dt).max(0.0);
+        self.snipe_cooldown = (self.snipe_cooldown - dt).max(0.0);
         if self.dodge_timer <= 0.0 {
             self.dodge_dir = None;
         }
@@ -428,6 +438,7 @@ impl Ai {
             dir_hold: self.dir_hold,
             dodge_dir: self.dodge_dir.map(Dir::name),
             dodge_timer: self.dodge_timer,
+            snipe_cooldown: self.snipe_cooldown,
             retreating: self.retreating,
             stuck_timer: self.stuck_timer,
             hit_alert_timer: self.hit_alert_timer,
@@ -1114,9 +1125,10 @@ impl Brain<'_> {
     /// Whether a hunter can take the opportunistic shot at the player this
     /// tick: the player is alive, within attack range, in clear sight and
     /// already lined up on one of this tank's firing axes - so no
-    /// repositioning away from the frog is ever spent on it.
+    /// repositioning away from the frog is ever spent on it - and the last
+    /// snipe's `hunter_snipe_cooldown_seconds` have passed.
     fn can_snipe_player(&self) -> bool {
-        if !self.hunting_frog() || !self.player_alive() || !self.player_line_of_sight {
+        if !self.hunting_frog() || !self.player_alive() || !self.player_line_of_sight || self.ai.snipe_cooldown > 0.0 {
             return false;
         }
         if self.dist_to_player() > tuning().enemy_attack_range {
@@ -1645,6 +1657,9 @@ fn act_snipe(b: &mut Brain) -> Status {
     let (fire_dir, _, _) = b.aim_alignment_at(b.player.position);
     let range = b.dist_to_player();
     b.hold_and_fire(fire_dir, range);
+    if b.intent.fire {
+        b.ai.snipe_cooldown = tuning().hunter_snipe_cooldown_seconds;
+    }
     Status::Success
 }
 
@@ -1832,6 +1847,7 @@ mod role_tests {
         let frog = Position::new(1100.0, 300.0);
         // The player sits straight below, well inside attack range.
         let player = Position::new(600.0, 300.0 + tuning().enemy_attack_range * 0.5);
+        // Snipe holds and settles its aim until the shot goes off.
         let settle = (tuning().enemy_aim_settle * 60.0) as u32 + 2;
         let mut fired = false;
         for _ in 0..settle + 60 {
@@ -1839,9 +1855,22 @@ mod role_tests {
             assert_eq!(ai.snapshot().last_action, Some("snipe"));
             assert_eq!(intent.move_dir, None, "a snipe holds position");
             assert_eq!(intent.face, Some(Dir::Down));
-            fired |= intent.fire;
+            if intent.fire {
+                fired = true;
+                break;
+            }
         }
         assert!(fired, "never fired at the player");
+        // One shot is the opportunity: still lined up, the hunter goes
+        // back to the frog until the snipe cooldown has run out.
+        assert!(ai.snapshot().snipe_cooldown > 0.0, "the shot starts the cooldown");
+        tick(&mut ai, me, player, frog, Some(frog));
+        assert_eq!(ai.snapshot().last_action, Some("chase"), "back to the frog after the shot");
+        let cooldown = (tuning().hunter_snipe_cooldown_seconds * 60.0) as u32 + 2;
+        for _ in 0..cooldown {
+            tick(&mut ai, me, player, frog, Some(frog));
+        }
+        assert_eq!(ai.snapshot().last_action, Some("snipe"), "may snipe again once the cooldown is over");
         // Off-axis, the same player in range is ignored for the frog.
         let mut ai = Ai::with_role(Role::Hunter);
         let player = Position::new(700.0, 450.0);

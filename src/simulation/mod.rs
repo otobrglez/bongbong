@@ -1131,11 +1131,23 @@ impl Game {
                 &mut report,
             );
         }
-        if let (true, Some((frog, frog_pos))) = (engaged_frog.len() >= 2, quarry) {
+        // Whether a hunter can drive straight at the frog: a route to the
+        // frog's own cell exists (open ground). Without one (a bunker, the
+        // frog plugging a corridor) steering at the frog only jitters, so
+        // such a hunter needs a ring slot even when it is the only one -
+        // unlike the player ring, which a lone attacker never needs.
+        let direct_route = |pos: Position, frog_pos: Position| grid.same_cell(pos, frog_pos) || grid.next_step(pos, frog_pos).is_some();
+        let frog_ring_wanted = match quarry {
+            Some((_, frog_pos)) => engaged_frog.len() >= 2 || engaged_frog.iter().any(|&(_, pos)| !direct_route(pos, frog_pos)),
+            None => false,
+        };
+        if let (true, Some((frog, frog_pos))) = (frog_ring_wanted, quarry) {
             // The frog ring's own report: its slot table is not kept (the
             // snapshot shows the player ring's), its per-tank outcomes are
             // merged into the one report every reader consults.
-            let line_of_sight = |a: Position, b: Position| f.terrain.line_of_sight_to_frog(a, b, Some(frog));
+            // Line of *fire*, not sight: a slot behind a brick wall of the
+            // frog's bunker is a slot worth holding, the shells open it.
+            let line_of_sight = |a: Position, b: Position| f.terrain.line_of_fire_to_frog(a, b, Some(frog));
             let mut frog_report = EngageReport {
                 tanks: report.tanks.iter().filter(|t| engaged_frog.iter().any(|(e, _)| *e == t.entity)).copied().collect(),
                 ..Default::default()
@@ -1189,15 +1201,34 @@ impl Game {
                 .map(|handle| self.physics.velocity(handle))
                 .unwrap_or_default();
             let engage_target = self.last_engage.target(entity);
-            let (target, hunting) = target_of(ai);
+            let (mut target, mut hunting) = target_of(ai);
+            // A hunter that cannot route to the frog and holds no slot on
+            // its ring (every slot rejected: off the map, unreachable from
+            // its half of the field, or iron in the way) has no way at the
+            // frog this frame unless it already stands in range with a line
+            // of fire. It fights the player like everyone else instead -
+            // breaching walls on the way as any tank does - and is back on
+            // the frog the frame a slot opens up.
+            if let Some(frog) = hunting {
+                let no_slot = self.last_engage.slot_of(entity).is_none() && engage_target.is_none();
+                let can_shoot_from_here = tank.position.distance_to(target) <= tuning().enemy_attack_range
+                    && f.terrain.line_of_fire_to_frog(tank.position, target, Some(frog));
+                if no_slot && !direct_route(tank.position, target) && !can_shoot_from_here {
+                    target = player_pos;
+                    hunting = None;
+                }
+            }
             let frog_target = match ai.role {
                 Role::Hunter => hunting.map(|_| target),
                 Role::Guard => home,
                 Role::Player => None,
             };
             let player_line_of_sight = f.terrain.line_of_sight(tank.position, player_pos);
+            // A hunter's fire gate is line of *fire* to the frog: only iron
+            // or another frog blocks it, so a walled-in frog gets shot at
+            // through its destructible walls until they are gone.
             let line_of_sight = match hunting {
-                Some(frog) => f.terrain.line_of_sight_to_frog(tank.position, target, Some(frog)),
+                Some(frog) => f.terrain.line_of_fire_to_frog(tank.position, target, Some(frog)),
                 None => player_line_of_sight,
             };
             let before = self.trace_ai.then(|| ai.snapshot());
@@ -2446,6 +2477,61 @@ cells."36,3" = { kind = "enemy_frog" }
         }
         assert!(arrived, "never reached attack range of the frog ({last:.0} px)");
         assert_eq!(game.outcome(), Outcome::Playing);
+    }
+
+    /// The frog inside a bunker like the default map's: brick above and
+    /// below, iron on both sides, one open cell around it. No line of
+    /// sight exists from anywhere; the only way in is through the brick.
+    const BUNKER_MAP: &str = r#"
+version = 1
+tanks = 1
+cells."3,3" = { kind = "start" }
+cells."20,12" = { kind = "frog" }
+cells."18,10" = { kind = "wall", material = "brick" }
+cells."19,10" = { kind = "wall", material = "brick" }
+cells."20,10" = { kind = "wall", material = "brick" }
+cells."21,10" = { kind = "wall", material = "brick" }
+cells."22,10" = { kind = "wall", material = "brick" }
+cells."18,11" = { kind = "wall", material = "iron" }
+cells."18,12" = { kind = "wall", material = "iron" }
+cells."18,13" = { kind = "wall", material = "iron" }
+cells."22,11" = { kind = "wall", material = "iron" }
+cells."22,12" = { kind = "wall", material = "iron" }
+cells."22,13" = { kind = "wall", material = "iron" }
+cells."18,14" = { kind = "wall", material = "brick" }
+cells."19,14" = { kind = "wall", material = "brick" }
+cells."20,14" = { kind = "wall", material = "brick" }
+cells."21,14" = { kind = "wall", material = "brick" }
+cells."22,14" = { kind = "wall", material = "brick" }
+"#;
+
+
+
+    #[test]
+    fn a_hunter_shoots_its_way_into_the_frogs_bunker() {
+        let mut game = game_on(BUNKER_MAP, 1, Some(0));
+        set_enemy_role(&mut game, Role::Hunter);
+        let frog = frog_position(&game, game.frog);
+        // Straight above the bunker, facing down, inside attack range: the
+        // brick roof is all that stands between the hunter and the frog.
+        game.debug_teleport(1, Position::new(frog.x, frog.y - tuning().enemy_attack_range * 0.8), Some(180.0))
+            .expect("enemy in slot 1");
+        let (mut broke_a_tile, mut hit_the_frog) = (false, false);
+        for _ in 0..(20 * 60) {
+            step(&mut game, Input::default());
+            for event in game.events() {
+                match event {
+                    Event::Hit { target: HitTarget::Obstacle, .. } => broke_a_tile = true,
+                    Event::Hit { target: HitTarget::Frog { side: Side::Player }, .. } => hit_the_frog = true,
+                    _ => {}
+                }
+            }
+            if hit_the_frog {
+                break;
+            }
+        }
+        assert!(broke_a_tile, "the hunter never fired at the bunker's brick");
+        assert!(hit_the_frog, "the hunter never got a shell through to the frog");
     }
 
     #[test]

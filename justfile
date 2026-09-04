@@ -26,17 +26,24 @@ probe-waves:
 # consciously - never bump a ceiling just to go green. Zero-ceilings
 # (stale-start, stall, wall-grind, bump-rate, low-progress, never-arrived,
 # invariant) are kinds no fixture currently produces at all.
-# Re-measured 2026-09-04 after the Protect mission's hunter roll
-# (`enemy_hunter_share_protect`, one RNG draw per enemy in `Game::init`)
-# shifted every stream; with the share zeroed the previous totals come
-# back exactly, so the differences are the stream, not the hunters. The
-# maxima are the maze (churn=7, clustering=9, spin=1) and border-stuck=1
-# (the maze at seed 0x3ea and pockets at 0x3eb, one each - both plain
-# player-role tanks: one wedging at the map corner for ~1.5 s while routing
-# around the maze's edge, one holding an aligned firing line on the player
-# 26 px from the bottom wall). See docs/gameplay-verification-design.md.
+# Re-measured 2026-09-04, twice. First after the Protect mission's hunter
+# roll (`enemy_hunter_share_protect`, one RNG draw per enemy in
+# `Game::init`) shifted every stream: with the share zeroed the previous
+# totals came back exactly, so those differences were the stream, not the
+# hunters. Then after hunters learned to shoot through destructible walls
+# (line of fire), got a snipe cooldown and a ring slot even when alone:
+# jitter 2 -> 6 and churn 7 -> 10. frog-block carries the jitter=6 (and
+# churn=3, clustering=4) and every one of them is a hunter - the totals are
+# 0/0/4 with the share zeroed; traced frame by frame they are the normal
+# diagonal-slot approach (right/down legs each held the full commitment
+# hold) plus the turn to snipe the player and back, not a stall or a
+# spin. maze holds churn=10 and clustering=8 at this seed; border-stuck=1
+# is the maze at seed 0x3ea and pockets at 0x3eb (plain player-role
+# tanks: one wedging at the map corner for ~1.5 s while routing around
+# the maze's edge, one holding an aligned firing line on the player 26 px
+# from the bottom wall). See docs/gameplay-verification-design.md.
 probe-fixtures:
-    for m in maps/test/*.toml; do cargo run --bin probe -- --map $m --frames 1800 --rounds 10 --seed 1000 --budget stale-start=0 --budget stall=0 --budget border-stuck=1 --budget jitter=2 --budget spin=1 --budget churn=7 --budget clustering=9 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=0 --budget invariant=0 || exit 1; done
+    for m in maps/test/*.toml; do cargo run --bin probe -- --map $m --frames 1800 --rounds 10 --seed 1000 --budget stale-start=0 --budget stall=0 --budget border-stuck=1 --budget jitter=6 --budget spin=1 --budget churn=10 --budget clustering=9 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=0 --budget invariant=0 || exit 1; done
 
 run:
     cargo run

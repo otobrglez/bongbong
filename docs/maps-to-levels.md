@@ -351,9 +351,23 @@ rolling in through an edge gate.
   them out of their own frog's bite/hop range.
 - The hunt fixture's enemy band puts hunters next to the player's frog, so
   an idle player loses within seconds; balance is a follow-up.
-- `just probe-fixtures` ceilings were re-baselined once: the Protect
+- `just probe-fixtures` ceilings were re-baselined twice: the Protect
   hunter roll shifts every seeded stream (verified identical with the
-  share zeroed).
+  share zeroed), and the hunter fixes below add movement the probe's
+  jitter/churn kinds count.
+- **Hunters versus a walled-in frog** (found on the default map, whose frog
+  sits in a brick-and-iron bunker): a hunter's fire gate and its ring's
+  slot test are the line of *fire* to the frog (`Terrain::line_of_fire_to_frog`:
+  only iron and other frogs obstruct), so it shoots the destructible walls
+  down instead of waiting for a line of sight that never comes; the
+  opportunistic snipe at the player has a cooldown
+  (`hunter_snipe_cooldown_seconds`) so an aligned player can't hold a
+  hunter forever; the frog ring is built even for a lone hunter when it has
+  no route to the frog's own cell; and a hunter without a direct route that
+  holds no tenable slot (every slot off the map, unreachable from its half
+  of the field or behind iron) fights the player instead until one opens.
+  The default map's bunker also grew a 3x2 interior with an empty row above
+  its roof.
 
 ## Out of scope
 
