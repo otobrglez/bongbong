@@ -440,6 +440,7 @@ impl Game {
                     draw_tank_inspect(&mut d, tank, None);
                 });
             }
+            self.draw_debug_overlays(&mut d, screen_width as f32, screen_height as f32);
 
             // HUD and the end-of-round banner draw undistorted, on top of the
             // (possibly rippling) scene.
@@ -660,6 +661,99 @@ fn draw_tank_inspect(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>) {
             FONT_SIZE,
             Color::LIME,
         );
+    }
+}
+
+impl Game {
+    /// The dev server's overlays (`Game::debug_overlays`, docs/dev-server-design.md),
+    /// screen space and post-composite like the inspect block: blocked nav
+    /// cells, each enemy's AI memory, projectile hit boxes, engagement
+    /// targets, pickup collect radii. Each layer costs nothing while off.
+    fn draw_debug_overlays(&self, d: &mut impl RaylibDraw, width: f32, height: f32) {
+        let ov = self.debug_overlays;
+        if ov.nav_grid {
+            let grid = self.nav_grid(width, height);
+            let (cols, rows, cell) = grid.dims();
+            let size = cell.round() as i32;
+            for row in 0..rows {
+                for col in 0..cols {
+                    if grid.is_blocked(col, row) {
+                        let x = (col as f32 * cell).round() as i32;
+                        let y = (row as f32 * cell).round() as i32;
+                        d.draw_rectangle(x, y, size, size, Color::new(255, 40, 40, 60));
+                        d.draw_rectangle_lines(x, y, size, size, Color::new(255, 40, 40, 110));
+                    }
+                }
+            }
+        }
+        if ov.pickups {
+            let radius = tuning().pickup_collect_radius;
+            for pickup in self.world.query::<&Pickup>().iter() {
+                d.draw_circle_lines(pickup.position.x as i32, pickup.position.y as i32, radius, Color::GOLD);
+            }
+        }
+        if ov.projectiles {
+            let mut boxes: Vec<(Vector2, Vector2, f32)> = Vec::new();
+            for s in self.world.query::<&Shell>().iter() {
+                boxes.push((s.position, s.velocity, tuning().shell_hit_half_extent));
+            }
+            for p in self.world.query::<&Plasma>().iter() {
+                boxes.push((p.position, p.velocity, tuning().plasma_hit_half_extent));
+            }
+            for b in self.world.query::<&Bullet>().iter() {
+                boxes.push((b.position, b.velocity, tuning().minigun_bullet_hit_half_extent));
+            }
+            for (pos, vel, half) in boxes {
+                let size = (half * 2.0).round().max(2.0) as i32;
+                d.draw_rectangle_lines((pos.x - half).round() as i32, (pos.y - half).round() as i32, size, size, Color::MAGENTA);
+                // A tenth of a second of travel.
+                d.draw_line(
+                    pos.x as i32,
+                    pos.y as i32,
+                    (pos.x + vel.x * 0.1) as i32,
+                    (pos.y + vel.y * 0.1) as i32,
+                    Color::new(255, 0, 255, 160),
+                );
+            }
+        }
+        if ov.ai || ov.engage {
+            for (entity, tank, ai) in self.world.query::<(hecs::Entity, &Tank, &Ai)>().iter() {
+                if tank.is_wreck() {
+                    continue;
+                }
+                let (x, y) = (tank.position.x as i32, tank.position.y as i32);
+                if ov.ai {
+                    let s = ai.snapshot();
+                    // (0, 0) is "never picked one": a tank straight into a
+                    // fight has no patrol waypoint to show.
+                    if s.waypoint_x != 0.0 || s.waypoint_y != 0.0 {
+                        d.draw_line(x, y, s.waypoint_x as i32, s.waypoint_y as i32, Color::new(80, 200, 255, 140));
+                        d.draw_circle_lines(s.waypoint_x as i32, s.waypoint_y as i32, 5.0, Color::new(80, 200, 255, 200));
+                    }
+                    if let Some(dir) = s.committed_dir.and_then(Dir::parse) {
+                        let v = dir.vec();
+                        let (ex, ey) = (tank.position.x + v.x * 40.0, tank.position.y + v.y * 40.0);
+                        d.draw_line(x, y, ex as i32, ey as i32, Color::ORANGE);
+                        d.draw_circle(ex as i32, ey as i32, 3.0, Color::ORANGE);
+                    }
+                    let label = format!(
+                        "{} {}{}",
+                        s.last_action.unwrap_or("-"),
+                        s.committed_dir.unwrap_or("-"),
+                        if s.stuck_timer > 0.0 { format!(" stuck {:.1}s", s.stuck_timer) } else { String::new() }
+                    );
+                    let ty = (tank.position.y + tank.hull_size() * 0.5 + 2.0) as i32;
+                    d.draw_rectangle(x - 2, ty, label.len() as i32 * 7 + 4, 14, Color::new(0, 0, 0, 150));
+                    d.draw_text(&label, x, ty + 1, 12, Color::new(80, 200, 255, 255));
+                }
+                if ov.engage && let Some(target) = self.last_engage_targets.get(&entity) {
+                    let (tx, ty) = (target.x as i32, target.y as i32);
+                    d.draw_line(x, y, tx, ty, Color::SKYBLUE);
+                    d.draw_line(tx - 5, ty - 5, tx + 5, ty + 5, Color::SKYBLUE);
+                    d.draw_line(tx - 5, ty + 5, tx + 5, ty - 5, Color::SKYBLUE);
+                }
+            }
+        }
     }
 }
 

@@ -20,6 +20,7 @@
 //! `determinism_tests` replays a seed twice and bit-compares.
 
 mod combat;
+pub mod debug;
 mod engage;
 mod hits;
 mod weapons;
@@ -30,9 +31,10 @@ use std::collections::{HashMap, HashSet};
 use hecs::Entity;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
+use serde::{Deserialize, Serialize};
 use sola_raylib::core::math::Vector2;
 
-use crate::ai::{Ai, Intent, Mover};
+use crate::ai::{Ai, Intent, Mover, WallAhead};
 use crate::battlefield;
 use crate::bullet::Bullet;
 use crate::frog::Frog;
@@ -45,7 +47,7 @@ use crate::pickup::{Pickup, PickupKind};
 use crate::plasma::{Plasma, PlasmaVariant};
 use crate::shell::{Owner, Shell, ShellState};
 use crate::shockwave::Shockwave;
-use crate::tank::{ActiveWeapon, Tank};
+use crate::tank::{ActiveWeapon, Dir, Tank};
 use crate::track::Track;
 use crate::{
     DAMAGE_VARIANTS,
@@ -99,7 +101,8 @@ fn enemy_owner_slot(n: usize) -> usize {
 }
 
 /// How the current round is going.
-#[derive(Clone, Copy, PartialEq, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Default, Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Outcome {
     #[default]
     Playing,
@@ -107,6 +110,62 @@ pub enum Outcome {
     Won,
     /// The player is a wreck, or the frog died.
     Lost,
+}
+
+/// One thing that happened during a frame, for tooling (the dev server's
+/// event feed, headless tests): appended by the phase that caused it and
+/// readable through `Game::events` until the next `update` clears it.
+/// Recording never consumes RNG, so it is free for replay determinism.
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub enum Event {
+    RoundStarted { seed: u64, enemies: usize },
+    RoundEnded { outcome: Outcome },
+    /// A trigger pull that launched something. A twin barrel's queued
+    /// second shot and a burst's later bullets are part of the same pull.
+    Fired { slot: usize, weapon: &'static str },
+    /// A projectile or beam landed on `target` at (`x`, `y`).
+    Hit { target: HitTarget, damage: f32, killed: bool, x: f32, y: f32 },
+    /// A tank became a wreck (any cause) at (`x`, `y`).
+    Wreck { slot: usize, x: f32, y: f32 },
+    /// Player/enemy ram contact dealt `damage` to both sides.
+    Ram { enemy_slot: usize, damage: f32 },
+    PickupCollected { slot: usize, kind: PickupKind },
+    PickupRespawned { kind: PickupKind, x: f32, y: f32 },
+    /// A projectile bounced off `slot`'s rainbow shield at (`x`, `y`).
+    Deflected { slot: usize, x: f32, y: f32 },
+    /// Two opposing shells met mid-air and cancelled at (`x`, `y`).
+    ShellsCollided { x: f32, y: f32 },
+    /// The frog bit the tank in `slot`.
+    FrogBite { slot: usize, damage: f32, killed: bool },
+}
+
+/// What an `Event::Hit` landed on.
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(tag = "what", rename_all = "snake_case")]
+pub enum HitTarget {
+    Player,
+    Enemy { slot: usize },
+    Frog,
+    Obstacle,
+    Wall,
+}
+
+/// Debug overlay switches `render` reads (see `game.rs`), set by the dev
+/// server's `overlays` tool. Survive restarts; all off by default.
+#[derive(Clone, Copy, Default, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Overlays {
+    /// Blocked nav-grid cells.
+    pub nav_grid: bool,
+    /// Each enemy's waypoint, committed heading and last behaviour-tree action.
+    pub ai: bool,
+    /// Projectile hit boxes and velocity vectors.
+    pub projectiles: bool,
+    /// Engagement-ring targets.
+    pub engage: bool,
+    /// Pickup collection radii.
+    pub pickups: bool,
 }
 
 /// scifi_tanks_sheet.png has 12 row-variants, one archetype per row (see
@@ -198,6 +257,19 @@ pub struct Game {
     map_pickup_slots: Vec<(Position, PickupKind)>,
     /// Last frame's raw fire-key state, for edge-detecting a fresh press.
     player_fire_held_last_frame: bool,
+    /// `update` calls this round (paused frames included); reset by `init`.
+    pub(crate) frame: u64,
+    /// What happened during the most recent `update` - see `Event`.
+    pub(crate) events: Vec<Event>,
+    /// The engagement-slot targets handed out by the last enemy phase, kept
+    /// for the `engage` overlay and the debug snapshot.
+    pub(crate) last_engage_targets: HashMap<Entity, Position>,
+    /// Owner slots the dev server asked to kill; applied by
+    /// `apply_debug_kills` at the top of the next playing frame, so the
+    /// kill runs through the normal explosion/round-end path.
+    pub(crate) debug_kills: Vec<usize>,
+    /// Debug overlay switches for `render`.
+    pub debug_overlays: Overlays,
 }
 
 /// Per-frame scratch state threaded through `Game::update`'s phases: the
@@ -212,8 +284,8 @@ struct Frame {
     height: f32,
     rng: SmallRng,
     terrain: Terrain,
-    /// Tanks destroyed this frame: (position, victim was an enemy).
-    kills: Vec<(Position, bool)>,
+    /// Tanks destroyed this frame: (position, victim was an enemy, owner slot).
+    kills: Vec<(Position, bool, usize)>,
     pending_shells: Vec<Shell>,
     pending_plasmas: Vec<Plasma>,
     pending_bullets: Vec<Bullet>,
@@ -223,6 +295,8 @@ struct Frame {
     shock: Option<Shockwave>,
     /// Whether at least one fixed physics step ran this frame.
     physics_stepped: bool,
+    /// Events this frame's phases recorded; merged onto `Game::events`.
+    events: Vec<Event>,
 }
 
 impl Frame {
@@ -242,6 +316,7 @@ impl Frame {
             impact_flashes: Vec::new(),
             shock: None,
             physics_stepped: false,
+            events: Vec::new(),
         }
     }
 }
@@ -274,6 +349,9 @@ impl Game {
         self.muzzle_flashes.clear();
         self.impact_flashes.clear();
         self.laser_beams.clear();
+        self.frame = 0;
+        self.last_engage_targets.clear();
+        self.debug_kills.clear();
 
         self.physics = Physics::new();
         self.physics_accumulator = 0.0;
@@ -494,12 +572,17 @@ impl Game {
         self.ground = crate::ground::build(width, height, rng.random(), &road_cells);
 
         self.rng = Some(rng);
+        // Not cleared here: a restart mid-`update` (R key, round end) still
+        // reports what that frame did before the new round's start.
+        self.events.push(Event::RoundStarted { seed, enemies: enemy_count });
     }
 
     /// Step the simulation one frame: `input` is this frame's player input,
     /// `dt` its elapsed seconds, `width`/`height` the battlefield size.
     pub fn update(&mut self, input: Input, dt: f32, width: f32, height: f32) {
         debug_assert!(self.rng.is_some(), "Game::rng missing at update entry - init has not run");
+        self.frame += 1;
+        self.events.clear();
         if input.pause_pressed {
             self.paused = !self.paused;
         }
@@ -526,6 +609,7 @@ impl Game {
         let mut f = Frame::new(dt, width, height, rng, terrain);
 
         if self.outcome == Outcome::Playing {
+            self.apply_debug_kills(&mut f);
             self.frog_phase(&mut f);
             self.pickup_phase(&mut f);
             self.player_phase(input, &mut f);
@@ -540,7 +624,7 @@ impl Game {
             self.resolve_projectiles::<Plasma>(&mut f, true);
             self.explosions(&mut f);
             self.cleanup_done();
-            self.check_round_end();
+            self.check_round_end(&mut f);
         } else {
             // Round over: the scene keeps animating (wrecks burn, in-flight
             // shots land without dealing damage) while the restart counts
@@ -560,13 +644,14 @@ impl Game {
         self.finish_frame(f);
     }
 
-    /// Append the frame's effects and put the RNG back.
+    /// Append the frame's effects and events and put the RNG back.
     fn finish_frame(&mut self, f: Frame) {
         self.muzzle_flashes.extend(f.muzzle_flashes);
         self.impact_flashes.extend(f.impact_flashes);
         if f.shock.is_some() {
             self.shock = f.shock;
         }
+        self.events.extend(f.events);
         self.rng = Some(f.rng);
     }
 
@@ -638,15 +723,16 @@ impl Game {
         if can_attack && dist <= attack_range {
             let dmg = f.rng.random_range(tuning().frog_attack_damage_min..tuning().frog_attack_damage_max);
             let cap = if target == player { MAX_DAMAGE - 1.0 } else { MAX_DAMAGE };
-            let (became_wreck, victim_pos) = {
+            let (became_wreck, victim_pos, victim_slot) = {
                 let mut q = self.world.query_one::<&mut Tank>(target);
                 let tank = q.get().expect("attack target always has a Tank");
                 tank.take_damage(dmg, cap);
                 tank.mark_hit();
-                (tank.is_wreck(), tank.position)
+                (tank.is_wreck(), tank.position, tank.owner_slot)
             };
+            f.events.push(Event::FrogBite { slot: victim_slot, damage: dmg, killed: became_wreck });
             if became_wreck {
-                f.kills.push((victim_pos, target != player));
+                f.kills.push((victim_pos, target != player, victim_slot));
             }
             with_frog_mut(&self.world, frog_entity, |fr| fr.start_attack());
         }
@@ -683,7 +769,7 @@ impl Game {
             })
             .collect();
         for (pickup_entity, tank_entity, kind) in collected {
-            {
+            let slot = {
                 let mut q = self.world.query_one::<&mut Tank>(tank_entity);
                 let tank = q.get().expect("collector entity always has a Tank");
                 // A weapon pickup queues that weapon (FIFO, see
@@ -724,14 +810,20 @@ impl Game {
                         tank.shield_timer = tuning().shield_duration_seconds;
                     }
                 }
-            }
+                tank.owner_slot
+            };
+            f.events.push(Event::PickupCollected { slot, kind });
             self.world.despawn(pickup_entity).ok();
         }
 
         if slot_backed_count(&self.world, &self.map_pickup_slots) < self.map_pickup_slots.len() {
             self.pickup_respawn_timer -= f.dt;
             if self.pickup_respawn_timer <= 0.0 {
-                respawn_from_slots(&mut self.world, &self.map, &self.map_pickup_slots, f.width, f.height, &mut f.rng);
+                let respawned =
+                    respawn_from_slots(&mut self.world, &self.map, &self.map_pickup_slots, f.width, f.height, &mut f.rng);
+                if let Some((pos, kind)) = respawned {
+                    f.events.push(Event::PickupRespawned { kind, x: pos.x, y: pos.y });
+                }
                 self.pickup_respawn_timer = tuning().pickup_respawn_seconds;
             }
         } else {
@@ -827,6 +919,7 @@ impl Game {
         } else {
             HashMap::new()
         };
+        self.last_engage_targets = engage_targets.clone();
 
         let pickups: Vec<(PickupKind, Position)> = self
             .world
@@ -835,8 +928,19 @@ impl Game {
             .map(|p| (p.kind, p.position))
             .collect();
 
+        // Breach perception: what a shell fired each way would hit within
+        // a tile of the hull - see `Ai::think`'s `walls_ahead`.
+        let breach_pad = tuning().shell_hit_half_extent;
+        let breach_reach_extra = tuning().enemy_breach_reach_px;
+
         for (entity, tank, ai) in self.world.query::<(Entity, &mut Tank, &mut Ai)>().iter() {
             let my_index = enemy_indices[&entity];
+            let reach = tank.hull_size() * 0.5 + breach_reach_extra;
+            let walls_ahead = Dir::ALL.map(|d| {
+                f.terrain
+                    .obstacle_ahead(tank.position, d.vec(), reach, breach_pad)
+                    .map(|(material, burning)| WallAhead { material, burning })
+            });
             // Real physics velocity, so the AI's stuck check can tell
             // "commanded to move" from "actually got somewhere that way".
             let real_velocity = tank
@@ -863,6 +967,7 @@ impl Game {
                     engage_target,
                     &pickups,
                     line_of_sight,
+                    walls_ahead,
                 )
             });
             drive_tank(&mut self.physics, tank, intent, f.dt);
@@ -907,7 +1012,7 @@ impl Game {
             f.impact_flashes.push(Shockwave { center: hit_pos, time: 0.0 });
             // No knockback and no frog hop: an instant beam isn't something
             // to be shoved by or to dodge.
-            self.apply_hit(f, target, laser_damage_range(&shot), HitEffects::none());
+            self.apply_hit(f, target, hit_pos, laser_damage_range(&shot), HitEffects::none());
         }
     }
 
@@ -970,9 +1075,12 @@ impl Game {
                 with_tank(&self.world, player, |p| tanks_touching(&self.physics, e, p))
             });
             if touching {
-                with_two_tanks_mut(&mut self.world, enemy, player, |e, p| {
-                    ram(e, true, p, false, &mut self.physics, &mut f.rng, &mut f.kills);
+                let rammed = with_two_tanks_mut(&mut self.world, enemy, player, |e, p| {
+                    ram(e, true, p, false, &mut self.physics, &mut f.rng, &mut f.kills).map(|damage| (e.owner_slot, damage))
                 });
+                if let Some((enemy_slot, damage)) = rammed {
+                    f.events.push(Event::Ram { enemy_slot, damage });
+                }
             }
             if f.physics_stepped {
                 with_tank_mut(&self.world, enemy, |t| lay_tracks(&mut self.tracks, t, before));
@@ -1026,6 +1134,7 @@ impl Game {
         }
         for (e1, e2, midpoint) in collisions {
             f.impact_flashes.push(Shockwave { center: midpoint, time: 0.0 });
+            f.events.push(Event::ShellsCollided { x: midpoint.x, y: midpoint.y });
             for e in [e1, e2] {
                 let mut q = self.world.query_one::<&mut Shell>(e);
                 q.get().expect("shell collected this frame still exists").detonate();
@@ -1079,6 +1188,7 @@ impl Game {
             if let Some((center, new_owner)) = shield {
                 let mut q = self.world.query_one::<&mut P>(entity);
                 q.get().expect("projectile collected this frame still exists").deflect(center, new_owner);
+                f.events.push(Event::Deflected { slot: new_owner.slot(), x: hit_pos.x, y: hit_pos.y });
                 continue;
             }
             let bounced = {
@@ -1107,7 +1217,7 @@ impl Game {
                 knockback: P::knockback_speed().map(|speed| (dir, speed)),
                 frog_hop: P::frog_hops().then_some(vel),
             };
-            self.apply_hit(f, target, dmg, effects);
+            self.apply_hit(f, target, hit_pos, dmg, effects);
         }
     }
 
@@ -1119,8 +1229,9 @@ impl Game {
     fn explosions(&mut self, f: &mut Frame) {
         let mut i = 0;
         while i < f.kills.len() {
-            let (center, victim_was_enemy) = f.kills[i];
+            let (center, victim_was_enemy, slot) = f.kills[i];
             i += 1;
+            f.events.push(Event::Wreck { slot, x: center.x, y: center.y });
             f.shock = Some(Shockwave { center, time: 0.0 });
             self.apply_explosion(f, center, victim_was_enemy);
         }
@@ -1160,19 +1271,20 @@ impl Game {
 
     /// Losing (player or frog dead) takes precedence over winning when
     /// both happen on the same frame.
-    fn check_round_end(&mut self) {
+    fn check_round_end(&mut self, f: &mut Frame) {
         let player = self.player.expect("player entity spawned in init");
         let frog = self.frog.expect("frog entity spawned in init");
         if with_tank(&self.world, player, |t| t.is_wreck()) || with_frog(&self.world, frog, Frog::is_dead) {
-            self.end_round(Outcome::Lost);
+            self.end_round(f, Outcome::Lost);
         } else if self.world.query::<&Tank>().with::<&Ai>().iter().all(|t| t.is_wreck()) {
-            self.end_round(Outcome::Won);
+            self.end_round(f, Outcome::Won);
         }
     }
 
-    fn end_round(&mut self, outcome: Outcome) {
+    fn end_round(&mut self, f: &mut Frame, outcome: Outcome) {
         self.outcome = outcome;
         self.restart_timer = tuning().restart_delay;
+        f.events.push(Event::RoundEnded { outcome });
     }
 
     /// Every tank's motion for the AI's predictive avoidance: slot 0 is the
@@ -1234,6 +1346,17 @@ impl Game {
 
     pub fn outcome(&self) -> Outcome {
         self.outcome
+    }
+
+    /// `update` calls so far this round (see the `frame` field).
+    pub fn frame(&self) -> u64 {
+        self.frame
+    }
+
+    /// Everything the most recent `update` recorded - see `Event`. Empty
+    /// on a paused frame; holds `RoundStarted` right after `init`.
+    pub fn events(&self) -> &[Event] {
+        &self.events
     }
 
     /// Every tank's externally visible state, for headless inspection
@@ -1396,7 +1519,7 @@ fn respawn_from_slots(
     width: f32,
     height: f32,
     rng: &mut SmallRng,
-) {
+) -> Option<(Position, PickupKind)> {
     let occupied: Vec<Position> = world.query::<&Pickup>().iter().map(|p| p.position).collect();
     let free: Vec<(Position, PickupKind)> = slots
         .iter()
@@ -1404,13 +1527,14 @@ fn respawn_from_slots(
         .filter(|&(pos, _)| occupied.iter().all(|&p| p.distance_to(pos) > 0.5))
         .collect();
     if free.is_empty() {
-        return;
+        return None;
     }
     let (pos, kind) = free[rng.random_range(0..free.len())];
     spawn_pickup_at(world, pos, kind);
     if kind == PickupKind::Health {
         maybe_spawn_bonus_shield(world, map, pos, width, height, rng);
     }
+    Some((pos, kind))
 }
 
 /// Roll SHIELD_NEAR_HEALTH_CHANCE for the health slot just (re)spawned at
@@ -1773,6 +1897,86 @@ cells."30,20" = { kind = "frog" }
             step(&mut game, Input::default());
         }
         player_ammo(&game)
+    }
+
+    /// `Game::events` reports a collected pickup and a trigger pull on the
+    /// frame they happen, and nothing on a frame where nothing happened.
+    #[test]
+    fn events_record_pickups_and_shots_on_their_frame() {
+        let mut game = game_on(SEALED_CRATE_MAP, 1, Some(0));
+        assert!(matches!(game.events(), [Event::RoundStarted { enemies: 1, .. }]));
+        step(&mut game, Input::default());
+        let collected = game.events().iter().any(|e| matches!(e, Event::PickupCollected { slot: 0, kind: PickupKind::Ammo }));
+        assert!(collected, "{:?}", game.events());
+        step(&mut game, Input::default());
+        assert!(game.events().is_empty(), "{:?}", game.events());
+
+        let mut game = game_on(OPEN_MAP, 1, Some(0));
+        let fire = Input {
+            player_intent: Intent { fire: true, ..Intent::default() },
+            ..Input::default()
+        };
+        step(&mut game, fire);
+        assert!(
+            game.events().iter().any(|e| matches!(e, Event::Fired { slot: 0, weapon: "shell" })),
+            "{:?}",
+            game.events()
+        );
+    }
+
+    /// An enemy shut inside a brick box with the player out of its line of
+    /// fire has no route anywhere; it shoots the brick down and leaves
+    /// (see `ai::Brain::wants_breach`).
+    const BRICK_BOX_MAP: &str = r#"
+version = 1
+tanks = 1
+cells."8,8" = { kind = "wall", material = "brick" }
+cells."9,8" = { kind = "wall", material = "brick" }
+cells."10,8" = { kind = "wall", material = "brick" }
+cells."11,8" = { kind = "wall", material = "brick" }
+cells."12,8" = { kind = "wall", material = "brick" }
+cells."8,9" = { kind = "wall", material = "brick" }
+cells."12,9" = { kind = "wall", material = "brick" }
+cells."8,10" = { kind = "wall", material = "brick" }
+cells."12,10" = { kind = "wall", material = "brick" }
+cells."8,11" = { kind = "wall", material = "brick" }
+cells."12,11" = { kind = "wall", material = "brick" }
+cells."8,12" = { kind = "wall", material = "brick" }
+cells."9,12" = { kind = "wall", material = "brick" }
+cells."10,12" = { kind = "wall", material = "brick" }
+cells."11,12" = { kind = "wall", material = "brick" }
+cells."12,12" = { kind = "wall", material = "brick" }
+cells."24,14" = { kind = "start" }
+cells."30,20" = { kind = "frog" }
+"#;
+
+    #[test]
+    fn a_walled_in_enemy_shoots_its_way_out() {
+        let mut game = game_on(BRICK_BOX_MAP, 1, Some(0));
+        let center = map::cell_to_world(10, 10);
+        game.debug_teleport(1, center, Some(180.0)).expect("enemy in slot 1");
+        let (mut fired, mut broke) = (0, false);
+        for _ in 0..900 {
+            step(&mut game, Input::default());
+            for e in game.events() {
+                match e {
+                    Event::Fired { slot: 1, .. } => fired += 1,
+                    Event::Hit { target: HitTarget::Obstacle, killed: true, .. } => broke = true,
+                    _ => {}
+                }
+            }
+            if broke {
+                break;
+            }
+        }
+        assert!(fired >= 1 && broke, "fired {fired} shots, broke a tile: {broke}");
+        for _ in 0..600 {
+            step(&mut game, Input::default());
+        }
+        let enemy = game.tank_snapshots().into_iter().find(|t| !t.is_player).expect("enemy");
+        let out = (enemy.position.x - center.x).abs() > OBSTACLE_GRID_SIZE * 1.5
+            || (enemy.position.y - center.y).abs() > OBSTACLE_GRID_SIZE * 1.5;
+        assert!(out, "enemy still inside the box at ({:.0},{:.0})", enemy.position.x, enemy.position.y);
     }
 
     #[test]

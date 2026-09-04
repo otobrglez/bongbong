@@ -380,7 +380,7 @@ Same `tuning.rs` core, different writer:
    the JSON contract in §5 is designed so this is purely additive.
 
 *[impl]* Items 1 and 2 landed (`--tuning` on both binaries; the game polls
-the file's mtime every 30 frames). Item 3 is still open.
+the file's mtime every 30 frames). Item 3 landed as the dev server (docs/dev-server-design.md): `tuning_get`/`tuning_set`/`tuning_reset`/`tuning_schema` are four of its tools, over the same `submit_json`/`apply_pending` staging, plus the live-stats half (`status`, `snapshot`, `events`) - a separate `--tuning-port` never happened.
 
 ## 9. Determinism, the probe, and "applies"
 

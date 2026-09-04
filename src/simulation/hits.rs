@@ -41,6 +41,8 @@ pub(crate) struct TerrainBox {
     /// the tile's physics collider has.
     pub half: Position,
     pub material: Material,
+    /// Wood already alight: still solid, but further damage is a no-op.
+    pub burning: bool,
 }
 
 /// Static terrain snapshot for one frame - see the module doc. Built once
@@ -77,6 +79,7 @@ impl Terrain {
                     center: o.position,
                     half: battlefield::tile_hull_half_extent(&cells, gx, gy, o.hull_size() * 0.5),
                     material: o.material,
+                    burning: o.burning,
                 }
             })
             .collect();
@@ -90,6 +93,20 @@ impl Terrain {
             frogs,
             walls: battlefield::wall_rects(width, height),
         }
+    }
+
+    /// The nearest obstacle tile a shot fired from `from` along `dir` (a
+    /// unit vector) would strike within `reach` px, and whether it is
+    /// already burning - the AI's breach perception (`ai::WallAhead`).
+    /// `pad` is the shot's half-extent, as in `sweep`.
+    pub fn obstacle_ahead(&self, from: Position, dir: Position, reach: f32, pad: f32) -> Option<(Material, bool)> {
+        let to = Position::new(from.x + dir.x * reach, from.y + dir.y * reach);
+        let pad = Position::new(pad, pad);
+        self.obstacles
+            .iter()
+            .filter_map(|b| segment_hits_aabb(from, to, b.center, b.half + pad).map(|t| (t, b)))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, b)| (b.material, b.burning))
     }
 
     /// The hit box of one obstacle entity, if it is in this snapshot.
@@ -312,6 +329,7 @@ mod shell_sweep_tests {
             center: Position::new(0.0, 0.0),
             half: Position::new(16.0, 12.0),
             material: Material::Iron,
+            burning: false,
         };
         // Approaching from the left: clearly outside on X, inside on Y.
         assert_eq!(obstacle_reflect_axis(Position::new(-30.0, 2.0), &hit), (true, false));

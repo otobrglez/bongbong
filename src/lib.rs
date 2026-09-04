@@ -619,6 +619,8 @@ pub mod bullet;
 #[cfg(feature = "dev-tools")]
 pub mod capi;
 pub mod damage_stage;
+#[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+pub mod devserver;
 #[cfg(feature = "map-editor")]
 pub mod editor;
 pub mod frog;

@@ -1,9 +1,11 @@
 use crate::tuning::tuning;
+use serde::Serialize;
 use rand::RngExt;
 use rand::rngs::SmallRng;
 use sola_raylib::prelude::Vector2;
 
 use crate::bt::{Node, Status, action, condition, selector, sequence};
+use crate::obstacle::Material;
 use crate::pathfind::Grid;
 use crate::pickup::PickupKind;
 use crate::tank::{ActiveWeapon, Dir, Tank};
@@ -42,6 +44,24 @@ pub struct Intent {
     /// can be thrown off-aim. Zero means fire straight down the barrel. Used by the
     /// enemy AI to model point-blank misfires.
     pub fire_aim_offset: f32,
+}
+
+/// What stands directly ahead of a tank in one direction - the tile a shot
+/// fired that way would hit within breach reach (see `Ai::think`'s
+/// `walls_ahead` and `Brain::wants_breach`).
+#[derive(Clone, Copy, Debug)]
+pub struct WallAhead {
+    pub material: Material,
+    /// Wood already alight: solid, but shooting it does nothing.
+    pub burning: bool,
+}
+
+/// A latched decision to shoot through the tile in `dir` (see
+/// `Brain::wants_breach`); `timer` is the seconds left before giving up.
+#[derive(Clone, Copy)]
+struct Breach {
+    dir: Dir,
+    timer: f32,
 }
 
 /// Persistent per-enemy memory that survives across frames. Kept separate from
@@ -114,6 +134,43 @@ pub struct Ai {
     /// lapping a tight box at full speed, one fresh unreachable waypoint
     /// per frame.
     wander_pocketed: bool,
+    /// The behaviour-tree action the last `think` settled on (see
+    /// `bt::Node::tick_traced`) and the intent it produced - inspection
+    /// only, nothing in `think` reads them back.
+    last_action: Option<&'static str>,
+    last_intent: Intent,
+    /// Seconds running that the tank has commanded movement straight into
+    /// a destructible tile (`walls_ahead` in its `last_move_dir`) - the
+    /// trigger for a breach. Velocity-independent on purpose: a tank
+    /// scraping sideways along a wall it keeps driving at counts.
+    wall_ahead_timer: f32,
+    /// The breach in progress, if any - see `Brain::wants_breach`.
+    breach: Option<Breach>,
+}
+
+/// Read-only view of an `Ai`'s memory for tooling (`Ai::snapshot`).
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct AiSnapshot {
+    pub waypoint_x: f32,
+    pub waypoint_y: f32,
+    pub committed_dir: Option<&'static str>,
+    pub dir_hold: f32,
+    pub dodge_dir: Option<&'static str>,
+    pub dodge_timer: f32,
+    pub retreating: bool,
+    pub stuck_timer: f32,
+    pub hit_alert_timer: f32,
+    pub aim_settle: f32,
+    pub fire_timer: f32,
+    pub wander_pocketed: bool,
+    pub last_move_dir: Option<&'static str>,
+    pub last_action: Option<&'static str>,
+    pub wall_ahead_timer: f32,
+    /// Direction of the breach in progress.
+    pub breaching: Option<&'static str>,
+    pub intent_move: Option<&'static str>,
+    pub intent_face: Option<&'static str>,
+    pub intent_fire: bool,
 }
 
 impl Default for Ai {
@@ -132,6 +189,10 @@ impl Default for Ai {
             stuck_timer: 0.0,
             hit_alert_timer: 0.0,
             wander_pocketed: false,
+            last_action: None,
+            last_intent: Intent::default(),
+            wall_ahead_timer: 0.0,
+            breach: None,
         }
     }
 }
@@ -182,6 +243,10 @@ impl Ai {
     /// firing solution. Gates `act_attack`'s fire decision so an enemy
     /// aligned through a wall it can't destroy (or with the frog in the way)
     /// doesn't just fire into it forever.
+    /// `walls_ahead` is, per `Dir` (indexed by `Dir::index`), the tile a
+    /// shot fired that way would hit within breach reach
+    /// (`Terrain::obstacle_ahead`), so a tank wedged against a brick can
+    /// decide to shoot it down - see `Brain::wants_breach`.
     #[allow(clippy::too_many_arguments)] // perception is passed by value, not bundled
     pub fn think(
         &mut self,
@@ -199,6 +264,7 @@ impl Ai {
         engage_target: Option<Position>,
         pickups: &[(PickupKind, Position)],
         line_of_sight: bool,
+        walls_ahead: [Option<WallAhead>; 4],
     ) -> Intent {
         self.fire_timer = (self.fire_timer - dt).max(0.0);
         self.retarget_timer = (self.retarget_timer - dt).max(0.0);
@@ -223,6 +289,20 @@ impl Ai {
         } else {
             self.stuck_timer = 0.0;
         }
+        // Breach evidence: still commanding movement into a tile that a
+        // shell could remove. Iron never counts.
+        let into_wall = self
+            .last_move_dir
+            .and_then(|d| walls_ahead[d.index()])
+            .is_some_and(|w| w.material != Material::Iron);
+        if into_wall {
+            self.wall_ahead_timer += dt;
+        } else {
+            self.wall_ahead_timer = 0.0;
+        }
+        if let Some(breach) = &mut self.breach {
+            breach.timer -= dt;
+        }
 
         let mut bb = Brain {
             me,
@@ -240,11 +320,41 @@ impl Ai {
             engage_target,
             pickups,
             line_of_sight,
+            walls_ahead,
         };
-        build().tick(&mut bb);
+        let mut last_action = None;
+        build().tick_traced(&mut bb, &mut last_action);
         let intent = bb.intent;
         self.last_move_dir = intent.move_dir;
+        self.last_action = last_action;
+        self.last_intent = intent;
         intent
+    }
+
+    /// This tank's AI memory as plain values - for the dev server's
+    /// snapshot and overlays.
+    pub fn snapshot(&self) -> AiSnapshot {
+        AiSnapshot {
+            waypoint_x: self.waypoint.x,
+            waypoint_y: self.waypoint.y,
+            committed_dir: self.committed_dir.map(Dir::name),
+            dir_hold: self.dir_hold,
+            dodge_dir: self.dodge_dir.map(Dir::name),
+            dodge_timer: self.dodge_timer,
+            retreating: self.retreating,
+            stuck_timer: self.stuck_timer,
+            hit_alert_timer: self.hit_alert_timer,
+            aim_settle: self.aim_settle,
+            fire_timer: self.fire_timer,
+            wander_pocketed: self.wander_pocketed,
+            last_move_dir: self.last_move_dir.map(Dir::name),
+            last_action: self.last_action,
+            wall_ahead_timer: self.wall_ahead_timer,
+            breaching: self.breach.map(|b| b.dir.name()),
+            intent_move: self.last_intent.move_dir.map(Dir::name),
+            intent_face: self.last_intent.face.map(Dir::name),
+            intent_fire: self.last_intent.fire,
+        }
     }
 
     /// Called from `simulation.rs`'s shell-hit resolution whenever a shell
@@ -822,6 +932,9 @@ struct Brain<'a> {
     /// Whether this tank's straight line to the player is currently clear
     /// of terrain - see `think`'s `line_of_sight` parameter.
     line_of_sight: bool,
+    /// The tile directly ahead in each direction - see `think`'s
+    /// `walls_ahead` parameter.
+    walls_ahead: [Option<WallAhead>; 4],
 }
 
 impl Brain<'_> {
@@ -951,6 +1064,40 @@ impl Brain<'_> {
     }
 
 
+    /// Whether to shoot through the tile ahead instead of steering around
+    /// it. Latched into `Ai::breach` once the tank has spent
+    /// `enemy_breach_after_seconds` driving into a destructible tile, and
+    /// kept while that tile still stands, the give-up timer runs, and the
+    /// tank can afford it: damage at or under `enemy_breach_max_damage`
+    /// and, on shells, `enemy_breach_min_shells` in the rack (a special
+    /// weapon spends no shells, so it always qualifies). Iron is never
+    /// breached. The moment the tile is gone the latch clears and normal
+    /// steering finds the fresh gap.
+    fn wants_breach(&mut self) -> bool {
+        let t = tuning();
+        let can_afford = self.me.damage <= t.enemy_breach_max_damage
+            && (self.me.active_weapon() != ActiveWeapon::Shell || self.me.shells_ammo >= t.enemy_breach_min_shells);
+        let walls = self.walls_ahead;
+        let wall_in = |dir: Dir| walls[dir.index()].filter(|w| w.material != Material::Iron);
+        if let Some(breach) = self.ai.breach {
+            if can_afford && breach.timer > 0.0 && wall_in(breach.dir).is_some() {
+                return true;
+            }
+            self.ai.breach = None;
+            return false;
+        }
+        if !can_afford || self.ai.wall_ahead_timer < t.enemy_breach_after_seconds {
+            return false;
+        }
+        let Some(dir) = self.ai.last_move_dir else { return false };
+        if wall_in(dir).is_none() {
+            return false;
+        }
+        self.ai.breach = Some(Breach { dir, timer: t.enemy_breach_give_up_seconds });
+        self.ai.wall_ahead_timer = 0.0;
+        true
+    }
+
     /// True if another enemy sits roughly on `fire_dir`'s line, closer than
     /// `max_forward` (normally the distance to the player) - i.e. firing
     /// straight down that axis right now would hit a teammate before the
@@ -1000,13 +1147,21 @@ fn build<'a>() -> Node<Brain<'a>> {
         // 1. Wrecks are inert.
         sequence(vec![
             condition(|b: &mut Brain| b.me.is_wreck()),
-            action(|_b: &mut Brain| Status::Success),
+            action("wreck", |_b: &mut Brain| Status::Success),
         ]),
         // 2. Flee when badly damaged and the player is still a threat.
         // Takes priority over the ammo-based retreat below: survival first.
         sequence(vec![
             condition(|b: &mut Brain| b.me.damage >= tuning().enemy_flee_damage && b.player_alive()),
-            action(act_flee),
+            action("flee", act_flee),
+        ]),
+        // 2.5. Wedged against a tile a shell can remove: stop and shoot it
+        // down rather than scrape along it - only while healthy and
+        // stocked, see `Brain::wants_breach`. Above retreat/attack so a
+        // tank that got stuck on its way to either finishes the job.
+        sequence(vec![
+            condition(|b: &mut Brain| b.wants_breach()),
+            action("breach", act_breach),
         ]),
         // 3. Low on shells: back off and hold fire until recharged - unless
         // a queued special weapon still has ammo, since firing that costs
@@ -1022,12 +1177,12 @@ fn build<'a>() -> Node<Brain<'a>> {
                     && b.me.active_weapon() == ActiveWeapon::Shell
                     && b.ai.wants_retreat(b.me.shells_ammo)
             }),
-            action(act_retreat),
+            action("retreat", act_retreat),
         ]),
         // 4. Attack when the player is alive and within attack range.
         sequence(vec![
             condition(|b: &mut Brain| b.player_alive() && b.dist_to_player() <= tuning().enemy_attack_range),
-            action(act_attack),
+            action("attack", act_attack),
         ]),
         // 5. Chase when the player is alive and either within view range or
         // this tank has recently taken a hit - see `Ai::notify_hit`/
@@ -1038,7 +1193,7 @@ fn build<'a>() -> Node<Brain<'a>> {
                 b.player_alive()
                     && (b.dist_to_player() <= tuning().enemy_view_range || b.ai.hit_alert_timer > 0.0)
             }),
-            action(act_chase),
+            action("chase", act_chase),
         ]),
         // 5.5. Opportunistically go collect a live Laser pickup when out of
         // charges - reached only once nothing higher-priority (fleeing,
@@ -1055,7 +1210,7 @@ fn build<'a>() -> Node<Brain<'a>> {
             condition(|b: &mut Brain| {
                 b.me.laser_charges <= 0 && b.pickups.iter().any(|(k, _)| *k == PickupKind::Laser)
             }),
-            action(act_seek_laser),
+            action("seek_laser", act_seek_laser),
         ]),
         // 5.6. Same idea for a live Plasma pickup - queueing it behind
         // whatever is currently live is a pure gain (see tier 5.5's
@@ -1065,7 +1220,7 @@ fn build<'a>() -> Node<Brain<'a>> {
                 b.me.plasma_ammo <= 0
                     && b.pickups.iter().any(|(k, _)| *k == PickupKind::Plasma)
             }),
-            action(act_seek_plasma),
+            action("seek_plasma", act_seek_plasma),
         ]),
         // 5.7. Same idea for a live Minigun pickup, last of the weapon
         // tiers (see tier 5.5's comment on ordering).
@@ -1074,7 +1229,7 @@ fn build<'a>() -> Node<Brain<'a>> {
                 b.me.minigun_ammo <= 0
                     && b.pickups.iter().any(|(k, _)| *k == PickupKind::Minigun)
             }),
-            action(act_seek_minigun),
+            action("seek_minigun", act_seek_minigun),
         ]),
         // 5.8. Same idea for a live SpeedUp pickup, reached whenever this
         // tank isn't currently boosted - unlike the weapon tiers above, this
@@ -1085,7 +1240,7 @@ fn build<'a>() -> Node<Brain<'a>> {
                 b.me.speed_boost_timer <= 0.0
                     && b.pickups.iter().any(|(k, _)| *k == PickupKind::SpeedUp)
             }),
-            action(act_seek_speedup),
+            action("seek_speedup", act_seek_speedup),
         ]),
         // 5.9. And for a live rainbow shield, whenever this tank isn't
         // already shielded - a full heal plus invulnerability is worth the
@@ -1094,10 +1249,10 @@ fn build<'a>() -> Node<Brain<'a>> {
             condition(|b: &mut Brain| {
                 b.me.shield_timer <= 0.0 && b.pickups.iter().any(|(k, _)| *k == PickupKind::Shield)
             }),
-            action(act_seek_shield),
+            action("seek_shield", act_seek_shield),
         ]),
         // 6. Fallback: patrol.
-        action(act_patrol),
+        action("patrol", act_patrol),
     ])
 }
 
@@ -1256,6 +1411,24 @@ fn act_attack(b: &mut Brain) -> Status {
     Status::Success
 }
 
+/// Hold position facing the tile ahead and shoot it down (see
+/// `Brain::wants_breach`). A burning wood tile is waited out, not shot:
+/// damage is a no-op until it chars away. Paced by `fire_timer` at
+/// `enemy_breach_fire_interval`, and held while a teammate is in front.
+fn act_breach(b: &mut Brain) -> Status {
+    let Some(breach) = b.ai.breach else { return Status::Failure };
+    b.reset_aim();
+    b.intent.face = Some(breach.dir);
+    b.ai.commit(breach.dir);
+    let burning = b.walls_ahead[breach.dir.index()].is_some_and(|w| w.burning);
+    let reach = b.me.hull_size() * 0.5 + tuning().enemy_breach_reach_px;
+    if !burning && b.ai.fire_timer <= 0.0 && !b.friendly_blocks_shot(breach.dir, reach) {
+        b.ai.fire_timer = tuning().enemy_breach_fire_interval;
+        b.intent.fire = true;
+    }
+    Status::Success
+}
+
 /// Close in on the player along a committed cardinal heading - toward this
 /// tank's engagement-ring slot, not the player's exact position, so a group
 /// of chasers spreads out instead of converging on the same point. See
@@ -1357,6 +1530,7 @@ mod stuck_tests {
             None,
             &[],
             false,
+            [None; 4],
         )
     }
 

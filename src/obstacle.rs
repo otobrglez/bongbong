@@ -13,7 +13,7 @@ use crate::{
 /// Which of the four materials a static battlefield wall is built from - see
 /// walls_sheet.png / docs/WALLS_SPEC.md for the sheet layout each one draws
 /// from.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Material {
     Brick,

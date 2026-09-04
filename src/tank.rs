@@ -28,7 +28,7 @@ use crate::{
 
 /// The four movement/facing directions. rotation 0 == up, clockwise positive,
 /// matching the sprite orientation and shell-spawn math.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Dir {
     Up,
     Down,
@@ -37,6 +37,19 @@ pub enum Dir {
 }
 
 impl Dir {
+    /// All four, in `index` order.
+    pub const ALL: [Dir; 4] = [Dir::Up, Dir::Down, Dir::Left, Dir::Right];
+
+    /// Position in `ALL`, for per-direction tables.
+    pub fn index(self) -> usize {
+        match self {
+            Dir::Up => 0,
+            Dir::Down => 1,
+            Dir::Left => 2,
+            Dir::Right => 3,
+        }
+    }
+
     /// Hull rotation in degrees for this direction.
     pub fn rotation(self) -> f32 {
         match self {
@@ -54,6 +67,27 @@ impl Dir {
             Dir::Down => Vector2::new(0.0, 1.0),
             Dir::Left => Vector2::new(-1.0, 0.0),
             Dir::Right => Vector2::new(1.0, 0.0),
+        }
+    }
+
+    /// Lower-case name, the form `parse` accepts back (tooling/JSON).
+    pub fn name(self) -> &'static str {
+        match self {
+            Dir::Up => "up",
+            Dir::Down => "down",
+            Dir::Left => "left",
+            Dir::Right => "right",
+        }
+    }
+
+    /// Inverse of `name` (case-insensitive); `None` for anything else.
+    pub fn parse(s: &str) -> Option<Dir> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "up" => Some(Dir::Up),
+            "down" => Some(Dir::Down),
+            "left" => Some(Dir::Left),
+            "right" => Some(Dir::Right),
+            _ => None,
         }
     }
 
@@ -126,6 +160,18 @@ pub enum ActiveWeapon {
     Plasma,
     Minigun,
     Shell,
+}
+
+impl ActiveWeapon {
+    /// Lower-case name for tooling/JSON (`Event::Fired`, the dev server).
+    pub fn name(self) -> &'static str {
+        match self {
+            ActiveWeapon::Laser => "laser",
+            ActiveWeapon::Plasma => "plasma",
+            ActiveWeapon::Minigun => "minigun",
+            ActiveWeapon::Shell => "shell",
+        }
+    }
 }
 
 pub struct Tank {

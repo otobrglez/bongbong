@@ -125,6 +125,20 @@ struct Args {
     /// malformed edit later is reported on stderr and ignored.
     #[arg(long = "tuning")]
     tuning: Option<std::path::PathBuf>,
+
+    /// Port for the local dev server the `bbmcp` MCP adapter drives
+    /// (lockstep stepping, snapshots, screenshots, scenario setup - see
+    /// docs/dev-server-design.md). Only in `--features dev-tools` native
+    /// builds; a port already in use is reported and the game runs without
+    /// the server. Falls back to `BONGBONG_DEV_PORT`, then 4747.
+    #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+    #[arg(long = "dev-port")]
+    dev_port: Option<u16>,
+
+    /// Run without the dev server even though it is compiled in.
+    #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+    #[arg(long = "no-dev-server")]
+    no_dev_server: bool,
 }
 
 fn parse_map(s: &str) -> Result<bongbong::map::MapFile, String> {
@@ -426,16 +440,46 @@ fn main() {
     game.map = args.map.unwrap_or_else(default_map);
     game.init(screen_width as f32, screen_height as f32);
 
+    // The dev server is serviced at the frame boundary below, like the
+    // tuning transports; failing to bind is a warning, not a fatal error.
+    #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+    let mut dev: Option<bongbong::devserver::DevServer> = if args.no_dev_server {
+        None
+    } else {
+        let port = args
+            .dev_port
+            .or_else(|| std::env::var("BONGBONG_DEV_PORT").ok()?.parse().ok())
+            .unwrap_or(bongbong::devserver::DEFAULT_PORT);
+        match bongbong::devserver::DevServer::start(port) {
+            Ok(server) => {
+                eprintln!("[dev] listening on 127.0.0.1:{} (bbmcp / just mcp-call)", server.port());
+                Some(server)
+            }
+            Err(e) => {
+                eprintln!("[dev] could not bind 127.0.0.1:{port}: {e} - running without the dev server");
+                None
+            }
+        }
+    };
+
     // game_loop::run drives a plain `while !window_should_close()` loop on
     // native, and hands this closure to emscripten's main loop on web - same
     // source for both, and no -sASYNCIFY=1 needed to keep the browser tab
     // responsive (see .cargo/config.toml).
     game_loop::run(rl, thread, 120, move |rl, thread| {
-        // Frame boundary: land any tuning edits staged since last frame
-        // (dev panel via capi.rs, or the `--tuning` file watch) before the
-        // simulation reads the table, so a frame never sees two values of
-        // one knob. The ripple shaders cache their knobs as uniforms, so
-        // re-upload those only when something actually changed.
+        let (width, height) = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
+        // Frame boundary, first: dev-server requests (state reads and
+        // writes, tuning patches, an armed step or screenshot), so anything
+        // they stage lands in this same frame.
+        #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+        if let Some(dev) = &mut dev {
+            dev.before_frame(&mut game, width, height);
+        }
+        // Then land any tuning edits staged since last frame (dev panel
+        // via capi.rs, the `--tuning` file watch, or the dev server)
+        // before the simulation reads the table, so a frame never sees two
+        // values of one knob. The ripple shaders cache their knobs as
+        // uniforms, so re-upload those only when something actually changed.
         if let Some(watch) = &mut tuning_watch {
             watch.poll();
         }
@@ -488,10 +532,31 @@ fn main() {
             toggle_shadows_pressed: rl.is_key_pressed(KeyboardKey::KEY_L),
             toggle_inspect_pressed: rl.is_key_pressed(KeyboardKey::KEY_I),
         };
+        // Injected input (the dev server's `input` tool) replaces the
+        // keyboard's intent for as many frames as it asked.
+        #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+        let input = match &mut dev {
+            Some(dev) => dev.shape_input(input),
+            None => input,
+        };
         let dt = rl.get_frame_time();
-        let (width, height) = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
 
-        game.update(input, dt, width, height);
+        // With the dev server attached it owns the advance: real-time
+        // updates normally, lockstep `step`s at the fixed timestep when
+        // asked, nothing at all while frozen.
+        #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+        let advanced = match &mut dev {
+            Some(dev) => {
+                dev.advance(&mut game, input, dt, width, height);
+                true
+            }
+            None => false,
+        };
+        #[cfg(not(all(feature = "dev-tools", not(target_os = "emscripten"))))]
+        let advanced = false;
+        if !advanced {
+            game.update(input, dt, width, height);
+        }
         game.render(
             rl,
             thread,
@@ -522,5 +587,10 @@ fn main() {
                 minigun_mount: &minigun_mount_texture,
             },
         );
+        // A pending screenshot reads the frame just presented.
+        #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+        if let Some(dev) = &mut dev {
+            dev.after_render(rl, thread, &scene_target, &game);
+        }
     });
 }

@@ -708,6 +708,23 @@ tunables! {
         /// ... for this many seconds running is treated as genuinely stuck,
         /// and `Ai::steer` forces a hard perpendicular-turn reset.
         stuck_escape_seconds: f32 = 0.75 in 0.05 ..= 10.0;
+        /// Breach: a tank that has commanded movement straight into a
+        /// destructible tile for this long stops and shoots it down
+        /// instead of staying wedged (`ai::Brain::wants_breach`).
+        enemy_breach_after_seconds: f32 = 0.5 in 0.05 ..= 5.0;
+        /// A breach is abandoned after this long without the tile falling.
+        enemy_breach_give_up_seconds: f32 = 5.0 in 0.5 ..= 30.0;
+        /// A shell-armed tank only breaches with at least this many shells
+        /// left, so it still has a fight in it afterwards ...
+        enemy_breach_min_shells: i32 = 4 in 0 ..= 100;
+        /// ... and with damage at or under this (0 pristine, 100 wreck).
+        enemy_breach_max_damage: f32 = 60.0 in 0.0 ..= 100.0;
+        /// Seconds between breach shots - quicker than the combat cadence,
+        /// a wall doesn't shoot back.
+        enemy_breach_fire_interval: f32 = 0.45 in 0.05 ..= 5.0;
+        /// How far past its own hull a tank looks for the tile it is
+        /// driving into (px): about one tile.
+        enemy_breach_reach_px: f32 = 40.0 in 4.0 ..= 300.0;
     }
 
     group engage {
@@ -786,7 +803,7 @@ tunables! {
         /// tough: glass snaps almost immediately, wood breaks easily, brick
         /// holds longer, iron the longest of all on top of being permanent.
         /// Baked into each wall's health when the map is spawned.
-        wall_max_health: [f32; 4] = [20.0, 220.0, 10.0, 2.0] in 1.0 ..= 1000.0 labels MATERIAL_NAMES @ Spawn;
+        wall_max_health: [f32; 4] = [20.0, 220.0, 8.0, 2.0] in 1.0 ..= 1000.0 labels MATERIAL_NAMES @ Spawn;
         /// Fraction of spawned Wood obstacles that catch fire when destroyed
         /// instead of breaking outright (`Obstacle::flammable`, rolled once
         /// at spawn).
@@ -795,7 +812,7 @@ tunables! {
         wood_burn_frame_seconds: f32 = 0.395 in 0.01 ..= 2.0;
         /// Total time a Wood obstacle spends burning before charring and
         /// being removed.
-        wood_burn_seconds: f32 = 2.5 in 0.1 ..= 30.0;
+        wood_burn_seconds: f32 = 1.0 in 0.1 ..= 30.0;
     }
 
     group tank_models {

@@ -80,3 +80,23 @@ serve-web-dev: build-web-dev
 preview-web:
     test -f site/dist/index.html || { echo "[preview-web] nothing built yet - run just build-web or just build-web-dev first" >&2; exit 1; }
     cd site && yarn preview --port ${PORT:=4321}
+
+# Native dev-tools build with the embedded dev server listening on
+# 127.0.0.1:4747 (docs/dev-server-design.md): what the `bongbong` MCP
+# server in .mcp.json talks to, so Claude Code (or `just mcp-call`) can
+# step, inspect and screenshot the running game. Extra args pass through
+# (`just run-dev --seed 0xB0B5 --enemies 4`).
+run-dev *ARGS:
+    cargo run --features dev-tools -- {{ARGS}}
+
+# `watch` with the dev server: rebuild and relaunch on every source change.
+# The MCP adapter reconnects per call, so a relaunch only costs the
+# in-flight request.
+watch-dev:
+    cargo watch -x "run --features dev-tools"
+
+# Call one dev-server tool from the shell, e.g.
+# `just mcp-call step '{"frames":120,"move_dir":"up"}'` or `just mcp-call nav_grid`.
+# Same tools the MCP server exposes (src/devserver.rs's TOOLS).
+mcp-call TOOL ARGS='{}':
+    cargo run -q --features dev-tools --bin bbmcp -- call {{TOOL}} '{{ARGS}}'

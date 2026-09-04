@@ -22,7 +22,7 @@ use crate::{
 };
 
 use super::hits::ShellTarget;
-use super::{with_frog_mut, Frame, Game};
+use super::{with_frog_mut, Event, Frame, Game, HitTarget};
 
 /// What a hit does beyond damage: an optional shove (unit travel direction,
 /// speed in px/s) for a surviving tank, and whether the frog tries to hop
@@ -48,8 +48,9 @@ impl Game {
     /// enemy that survives is told it was shot (`Ai::notify_hit`); the frog
     /// takes damage and either dies (shockwave) or hops away; an obstacle
     /// takes damage; a wall absorbs the shot. Wrecks and dead frogs ignore
-    /// further hits.
-    pub(super) fn apply_hit(&mut self, f: &mut Frame, target: ShellTarget, dmg: (f32, f32), effects: HitEffects) {
+    /// further hits. `at` is the impact point, recorded in the `Event::Hit`
+    /// every landed hit appends.
+    pub(super) fn apply_hit(&mut self, f: &mut Frame, target: ShellTarget, at: Position, dmg: (f32, f32), effects: HitEffects) {
         let player = self.player.expect("player entity spawned in init");
         match target {
             ShellTarget::PlayerTank | ShellTarget::EnemyTank(_) => {
@@ -66,8 +67,11 @@ impl Game {
                         let d = f.rng.random_range(dmg.0..dmg.1);
                         tank.take_damage(d, MAX_DAMAGE);
                         tank.mark_hit();
-                        if tank.is_wreck() {
-                            f.kills.push((tank.position, is_enemy));
+                        let killed = tank.is_wreck();
+                        let hit_target = if is_enemy { HitTarget::Enemy { slot: tank.owner_slot } } else { HitTarget::Player };
+                        f.events.push(Event::Hit { target: hit_target, damage: d, killed, x: at.x, y: at.y });
+                        if killed {
+                            f.kills.push((tank.position, is_enemy, tank.owner_slot));
                             false
                         } else {
                             if let Some((dir, speed)) = effects.knockback {
@@ -89,7 +93,9 @@ impl Game {
                     if frog.is_dead() {
                         (true, frog.position, false, 0.0)
                     } else {
-                        frog.damage(f.rng.random_range(dmg.0..dmg.1));
+                        let d = f.rng.random_range(dmg.0..dmg.1);
+                        frog.damage(d);
+                        f.events.push(Event::Hit { target: HitTarget::Frog, damage: d, killed: frog.is_dead(), x: at.x, y: at.y });
                         (frog.is_dead(), frog.position, frog.can_hop(), frog.hop_distance())
                     }
                 };
@@ -106,10 +112,14 @@ impl Game {
             ShellTarget::Obstacle(entity) => {
                 let mut q = self.world.query_one::<&mut Obstacle>(entity);
                 if let Ok(obstacle) = q.get() {
-                    obstacle.damage(f.rng.random_range(dmg.0..dmg.1));
+                    let d = f.rng.random_range(dmg.0..dmg.1);
+                    obstacle.damage(d);
+                    f.events.push(Event::Hit { target: HitTarget::Obstacle, damage: d, killed: obstacle.destroyed, x: at.x, y: at.y });
                 }
             }
-            ShellTarget::Wall => {}
+            ShellTarget::Wall => {
+                f.events.push(Event::Hit { target: HitTarget::Wall, damage: 0.0, killed: false, x: at.x, y: at.y });
+            }
         }
     }
 
@@ -151,7 +161,8 @@ fn knockback(tank: &Tank, physics: &mut Physics, dir: Vector2, speed: f32) {
 /// means no exchange at all - a burning hulk neither deals nor takes ram
 /// damage. Only ever called for player-vs-enemy contact: enemies bumping
 /// each other are separated by the physics solver without damage. A tank
-/// this kills is recorded in `kills`, tagged with its side.
+/// this kills is recorded in `kills`, tagged with its side and owner slot.
+/// Returns the damage dealt, or `None` when nothing was exchanged.
 pub(super) fn ram(
     a: &mut Tank,
     a_is_enemy: bool,
@@ -159,10 +170,10 @@ pub(super) fn ram(
     b_is_enemy: bool,
     physics: &mut Physics,
     rng: &mut SmallRng,
-    kills: &mut Vec<(Position, bool)>,
-) {
+    kills: &mut Vec<(Position, bool, usize)>,
+) -> Option<f32> {
     if a.is_wreck() || b.is_wreck() || a.ram_cooldown > 0.0 || b.ram_cooldown > 0.0 {
-        return;
+        return None;
     }
     let dmg = rng.random_range(tuning().ram_damage_min..tuning().ram_damage_max);
     a.take_damage(dmg, MAX_DAMAGE);
@@ -172,17 +183,17 @@ pub(super) fn ram(
     a.ram_cooldown = tuning().ram_damage_cooldown;
     b.ram_cooldown = tuning().ram_damage_cooldown;
     if a.is_wreck() {
-        kills.push((a.position, a_is_enemy));
+        kills.push((a.position, a_is_enemy, a.owner_slot));
     }
     if b.is_wreck() {
-        kills.push((b.position, b_is_enemy));
+        kills.push((b.position, b_is_enemy, b.owner_slot));
     }
 
     let dx = a.position.x - b.position.x;
     let dy = a.position.y - b.position.y;
     let dist = (dx * dx + dy * dy).sqrt();
     if dist <= 0.001 {
-        return;
+        return Some(dmg);
     }
     let axis = Vector2::new(dx / dist, dy / dist);
     let rel_x = a.velocity.x - b.velocity.x;
@@ -199,6 +210,7 @@ pub(super) fn ram(
         let b_push = (push * 2.0 * a.mass() / total_mass).min(tuning().knockback_max_speed);
         knockback(b, physics, Vector2::new(-axis.x, -axis.y), b_push);
     }
+    Some(dmg)
 }
 
 /// One tank's share of a nearby explosion (see `Game::apply_explosion`):
@@ -212,7 +224,7 @@ fn explosion_hit(
     is_enemy: bool,
     physics: &mut Physics,
     rng: &mut SmallRng,
-    kills: &mut Vec<(Position, bool)>,
+    kills: &mut Vec<(Position, bool, usize)>,
 ) {
     if tank.is_wreck() {
         return;
@@ -230,7 +242,7 @@ fn explosion_hit(
         tank.take_damage(dmg, MAX_DAMAGE);
         tank.mark_hit();
         if tank.is_wreck() {
-            kills.push((tank.position, is_enemy));
+            kills.push((tank.position, is_enemy, tank.owner_slot));
             return;
         }
     }
