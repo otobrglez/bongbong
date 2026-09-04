@@ -67,6 +67,23 @@ editor UI (no button/field for it) - a designer sets it by hand-editing the
 saved TOML's `tanks = N` line, the same way `version` itself is never
 edited through the UI either.
 
+**Later change #3: a map-level player chassis.** `MapFile` also has a
+`tank: Option<TankKind>` field (TOML: a top-level `tank = "titan"` alongside
+`version`/`tanks`, not a cell), naming the chassis the player drives on this
+map - a corridor map can hand the player a scout, a wide-open one a titan,
+without anyone remembering a `--tank` flag. The names are
+`tank::TankKind`'s, the single list the CLI's `--tank`, the map key and
+`tuning::TANK_NAMES` all spell a chassis from. Precedence in `Game::init`
+(`simulation::resolve_player_row`, unit-tested in `player_chassis_tests`):
+`--tank` wins outright, then the `player_tank` tuning knob when it isn't its
+-1 "unset" default, then `map.tank`, then the existing random
+`0..TANK_VARIANTS` roll - which is only *drawn* in that last case, so
+choosing a chassis never shifts the seeded RNG stream every later spawn draw
+comes out of. `#[serde(default)]` again keeps older map files parsing
+unchanged, and like `tanks` it's a hand-edited TOML line rather than an
+editor control (the editor preserves whatever the loaded map had when it
+saves).
+
 ## Goals
 
 - Let a developer hand-author a battlefield layout — walls (per material),

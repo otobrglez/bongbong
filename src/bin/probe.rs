@@ -36,7 +36,7 @@ use bongbong::Position;
 use bongbong::ai::Intent;
 use bongbong::map::MapFile;
 use bongbong::simulation::{Game, Input, Outcome, TankSnapshot};
-use bongbong::tank::Dir;
+use bongbong::tank::{Dir, TankKind};
 use bongbong::{
     DEFAULT_SCREEN_HEIGHT,
     DEFAULT_SCREEN_WIDTH,
@@ -300,6 +300,15 @@ struct Args {
     /// How many enemies to spawn (default: same random range as the real game).
     #[arg(short = 'e', long)]
     enemies: Option<usize>,
+
+    /// Force the player's chassis instead of leaving it to the map's own
+    /// `tank` key, the `player_tank` tuning knob, or a random roll - same
+    /// precedence and same names as the game binary's `--tank`. Pin it when
+    /// a sweep is measuring one chassis (a titan's mass and damage make a
+    /// very different round from a scout's), or to reproduce a windowed run
+    /// that used the flag.
+    #[arg(long = "tank", value_enum)]
+    tank: Option<TankKind>,
 
     /// Maximum frames to simulate per round before giving up (default: 3600 = 60s at 60fps).
     #[arg(long, default_value_t = 3600)]
@@ -1224,12 +1233,22 @@ fn run_round(
 ) -> RoundResult {
     let mut game = Game::default();
     game.enemy_count_override = args.enemies;
+    game.player_row_override = args.tank.map(TankKind::row);
     game.seed_override = Some(seed);
     game.map = match &args.map {
         Some(named) => named.map.clone(),
         None => default_map(),
     };
     game.init(WIDTH, HEIGHT);
+    if trace {
+        // Which chassis actually won the `--tank` / `player_tank` knob /
+        // map `tank` / random race - the header line can only echo the
+        // flag, and a titan plays nothing like a scout.
+        println!(
+            "player chassis={}",
+            game.player_chassis().map(TankKind::name).unwrap_or("?")
+        );
+    }
 
     let mut tracks = build_tracks(&game);
     // One flag slot per tank (player included, unlike `tracks`) for the
@@ -1545,11 +1564,14 @@ fn main() -> ExitCode {
     });
 
     println!(
-        "probe: scenario={} enemies={} frames={} rounds={} seed=0x{base_seed:016x} map={} tuning={}",
+        "probe: scenario={} enemies={} tank={} frames={} rounds={} seed=0x{base_seed:016x} map={} tuning={}",
         scenario_str(args.scenario),
         args.enemies
             .map(|n| n.to_string())
             .unwrap_or_else(|| "random".to_string()),
+        args.tank
+            .map(|t| t.name().to_string())
+            .unwrap_or_else(|| "map/random".to_string()),
         args.frames,
         args.rounds,
         map_display(&args),

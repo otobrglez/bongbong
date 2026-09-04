@@ -1,5 +1,7 @@
 use crate::tuning::tuning;
+use clap::ValueEnum;
 use rapier2d::prelude::RigidBodyHandle;
+use serde::{Deserialize, Serialize};
 use sola_raylib::prelude::*;
 
 use crate::laser::LaserVariant;
@@ -68,6 +70,69 @@ impl Dir {
         } else {
             Dir::Up
         }
+    }
+}
+
+/// The twelve chassis rows of `scifi_tanks_sheet.png`, by name and in row
+/// order (see docs/SPRITESHEET_SPEC.md §4) - the same order as
+/// `tuning::TANK_NAMES` and every `TANK_*_BY_ROW` table in `lib.rs`, which
+/// `chassis_name_order` locks in. Lets a chassis be named rather than
+/// addressed by row index: `--tank titan` on either binary, a map's
+/// `tank = "titan"` key (`map::MapFile::tank`), and the `player_tank`
+/// tuning knob all resolve through here to a `row`.
+///
+/// `ValueEnum` renders each variant as its lowercase name on the CLI
+/// (`Titan` -> `titan`), so the list doubles as `--help`'s own reference,
+/// and serde reads/writes that same spelling in a map's TOML.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum TankKind {
+    Scout,
+    Assault,
+    Breaker,
+    Longbow,
+    Flak,
+    Wraith,
+    Warden,
+    Ravager,
+    Glacier,
+    Obelisk,
+    Titan,
+    Leviathan,
+}
+
+impl TankKind {
+    /// Every chassis, in row order - `ALL[i].row() == i as i32`.
+    pub const ALL: [TankKind; 12] = [
+        TankKind::Scout,
+        TankKind::Assault,
+        TankKind::Breaker,
+        TankKind::Longbow,
+        TankKind::Flak,
+        TankKind::Wraith,
+        TankKind::Warden,
+        TankKind::Ravager,
+        TankKind::Glacier,
+        TankKind::Obelisk,
+        TankKind::Titan,
+        TankKind::Leviathan,
+    ];
+
+    /// This chassis's row index into `scifi_tanks_sheet.png` - the variant's
+    /// own declaration position, which is the sheet's row order.
+    pub fn row(self) -> i32 {
+        self as i32
+    }
+
+    /// The chassis drawn from `row`, or `None` for a row outside the sheet.
+    pub fn from_row(row: i32) -> Option<TankKind> {
+        usize::try_from(row).ok().and_then(|i| Self::ALL.get(i).copied())
+    }
+
+    /// This chassis's lowercase name - the spelling `--tank`, a map's
+    /// `tank` key and the dev panel's tank tables all use.
+    pub fn name(self) -> &'static str {
+        crate::tuning::TANK_NAMES[self.row() as usize]
     }
 }
 
@@ -1100,5 +1165,39 @@ mod shield_tests {
         assert!(!tank.is_wreck());
         tank.take_damage(1000.0, MAX_DAMAGE);
         assert!(tank.is_wreck());
+    }
+}
+
+#[cfg(test)]
+mod chassis_tests {
+    use super::*;
+    use crate::tuning::TANK_NAMES;
+
+    /// `TankKind`'s declaration order *is* the sprite sheet's row order, and
+    /// its names are `tuning::TANK_NAMES` - `row()`/`name()` and every
+    /// `[_; 12]` tuning row indexed by `Tank::row` silently disagree the
+    /// moment one list is reordered or renamed without the other.
+    #[test]
+    fn chassis_name_order() {
+        assert_eq!(TankKind::ALL.len(), TANK_NAMES.len());
+        for (i, kind) in TankKind::ALL.iter().enumerate() {
+            assert_eq!(kind.row(), i as i32);
+            assert_eq!(kind.name(), TANK_NAMES[i]);
+            assert_eq!(TankKind::from_row(i as i32), Some(*kind));
+        }
+        assert_eq!(TankKind::from_row(-1), None);
+        assert_eq!(TankKind::from_row(TANK_NAMES.len() as i32), None);
+    }
+
+    /// A map's `tank = "titan"` key and `--tank titan` spell a chassis the
+    /// same way - serde's lowercase rename and `ValueEnum`'s.
+    #[test]
+    fn serde_spelling_is_the_cli_spelling() {
+        for kind in TankKind::ALL {
+            let json = serde_json::to_string(&kind).expect("serializes");
+            assert_eq!(json, format!("\"{}\"", kind.name()));
+            let back: TankKind = serde_json::from_str(&json).expect("round-trips");
+            assert_eq!(back, kind);
+        }
     }
 }
