@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::level::{MissionConfig, SpawnConfig};
 use crate::obstacle::Material;
 use crate::pickup::PickupKind;
 use crate::{OBSTACLE_GRID_SIZE, Position};
@@ -41,6 +42,14 @@ pub enum CellObject {
     Frog,
     Start,
     Pickup { pickup: PickupKind },
+    /// The enemy side's frog (Hunt mission) - singleton like `Frog`.
+    /// Ignored by missions without an enemy frog.
+    #[serde(rename = "enemy_frog")]
+    EnemyFrog,
+    /// A wave roll-in gate: must sit on a nav-grid edge cell. A map with
+    /// any gate cells uses only those; otherwise gates are scanned from the
+    /// wall layout each wave.
+    Gate,
 }
 
 /// A saved battlefield layout. Keys are `"<col>,<row>"` grid-cell strings
@@ -49,6 +58,7 @@ pub enum CellObject {
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct MapFile {
     pub version: u32,
+    #[serde(default)]
     pub cells: HashMap<String, CellObject>,
     /// Default number of enemy tanks to spawn on this map, unless overridden
     /// at runtime by `-e`/`--enemies` (see `main.rs`). `None` (the default -
@@ -58,6 +68,14 @@ pub struct MapFile {
     /// roll, same as today.
     #[serde(default)]
     pub tanks: Option<u32>,
+    /// The `[mission]` table - what ends the round (docs/maps-to-levels.md).
+    /// Absent means Protect.
+    #[serde(default)]
+    pub mission: MissionConfig,
+    /// The `[spawn]` table - how enemies arrive. Absent means the band
+    /// plan (`tanks` / `--enemies` / a random roll).
+    #[serde(default)]
+    pub spawn: SpawnConfig,
     /// Where this map came from, for display only: the file stem when
     /// `load` read it, `"default"` for the embedded map, `None` for text
     /// handed over directly (the dev server's inline `map_toml`). Never
@@ -94,7 +112,14 @@ pub fn world_to_cell(pos: Position) -> (i32, i32) {
 
 impl MapFile {
     pub fn new() -> Self {
-        MapFile { version: CURRENT_VERSION, cells: HashMap::new(), tanks: None, name: None }
+        MapFile {
+            version: CURRENT_VERSION,
+            cells: HashMap::new(),
+            tanks: None,
+            mission: MissionConfig::default(),
+            spawn: SpawnConfig::default(),
+            name: None,
+        }
     }
 
     pub fn load(path: &Path) -> Result<Self, String> {
@@ -206,6 +231,22 @@ impl MapFile {
             .map(|(col, row, _)| (col, row))
     }
 
+    /// The map's one enemy-frog cell (Hunt mission), if it placed one -
+    /// same singleton convention as `frog_cell`.
+    pub fn enemy_frog_cell(&self) -> Option<(i32, i32)> {
+        self.iter_cells()
+            .find(|(_, _, obj)| matches!(obj, CellObject::EnemyFrog))
+            .map(|(col, row, _)| (col, row))
+    }
+
+    /// Every explicit wave gate cell, in `iter_cells` order.
+    pub fn gate_cells(&self) -> Vec<(i32, i32)> {
+        self.iter_cells()
+            .filter(|(_, _, obj)| matches!(obj, CellObject::Gate))
+            .map(|(col, row, _)| (col, row))
+            .collect()
+    }
+
     /// Cap on how far `nearest_free_cell` will spiral out looking for an
     /// unwalled cell - 64 cells (2048px at `OBSTACLE_GRID_SIZE`) comfortably
     /// covers the default 1280x720 battlefield (40x22.5 cells) from any
@@ -286,6 +327,40 @@ mod toml_tests {
             assert!(back.cells.get(key) == Some(cell), "cell {key} changed");
         }
         assert_eq!(back.name, None, "name is not part of the file");
+        assert_eq!(back.mission, MissionConfig::default(), "no [mission] table means protect");
+        assert_eq!(back.spawn, SpawnConfig::default(), "no [spawn] table means the band plan");
+    }
+
+    #[test]
+    fn level_tables_and_new_cell_kinds_round_trip() {
+        use crate::level::{Mission, SpawnKind, Tier};
+        // Dotted keys, the form the fixtures use: a `[mission]`/`[spawn]`
+        // table header would swallow every `cells.` line after it.
+        let text = r#"
+version = 1
+tanks = 6
+mission.kind = "hunt"
+spawn.kind = "waves"
+spawn.waves = 4
+spawn.size = 2
+spawn.tier_start = "light"
+spawn.tier_end = "heavy"
+cells."3,5" = { kind = "enemy_frog" }
+cells."0,11" = { kind = "gate" }
+cells."39,11" = { kind = "gate" }
+"#;
+        let map = MapFile::from_toml_str(text).unwrap();
+        assert_eq!(map.mission.kind, Mission::Hunt);
+        assert_eq!(map.spawn.kind, SpawnKind::Waves);
+        assert_eq!((map.spawn.waves, map.spawn.size, map.spawn.growth), (Some(4), Some(2), None));
+        assert_eq!((map.spawn.tier_start, map.spawn.tier_end), (Some(Tier::Light), Some(Tier::Heavy)));
+        assert_eq!(map.enemy_frog_cell(), Some((3, 5)));
+        assert_eq!(map.gate_cells(), vec![(0, 11), (39, 11)]);
+        let back = MapFile::from_toml_str(&map.to_toml_string().unwrap()).unwrap();
+        assert_eq!(back.mission, map.mission);
+        assert_eq!(back.spawn, map.spawn);
+        assert_eq!(back.enemy_frog_cell(), map.enemy_frog_cell());
+        assert_eq!(back.gate_cells(), map.gate_cells());
     }
 
     #[test]

@@ -301,6 +301,36 @@ struct Args {
     #[arg(short = 'e', long)]
     enemies: Option<usize>,
 
+    /// Override the map's mission: protect, hunt or destroy (see
+    /// docs/maps-to-levels.md). Note a hunt round against an AFK player is
+    /// expected to be lost quickly.
+    #[arg(long, value_enum)]
+    mission: Option<bongbong::level::Mission>,
+
+    /// Override the map's spawn plan: band or waves.
+    #[arg(long, value_enum)]
+    spawn: Option<bongbong::level::SpawnKind>,
+
+    /// Waves plan: number of waves.
+    #[arg(long)]
+    waves: Option<u32>,
+
+    /// Waves plan: tanks in the first wave.
+    #[arg(long)]
+    wave_size: Option<u32>,
+
+    /// Waves plan: tanks added per wave.
+    #[arg(long)]
+    wave_growth: Option<u32>,
+
+    /// Waves plan: chassis tier of the first wave.
+    #[arg(long, value_enum)]
+    tier_start: Option<bongbong::level::Tier>,
+
+    /// Waves plan: chassis tier of the last wave.
+    #[arg(long, value_enum)]
+    tier_end: Option<bongbong::level::Tier>,
+
     /// Maximum frames to simulate per round before giving up (default: 3600 = 60s at 60fps).
     #[arg(long, default_value_t = 3600)]
     frames: u32,
@@ -1224,6 +1254,15 @@ fn run_round(
 ) -> RoundResult {
     let mut game = Game::default();
     game.enemy_count_override = args.enemies;
+    game.level_overrides = bongbong::level::LevelOverrides {
+        mission: args.mission,
+        spawn: args.spawn,
+        waves: args.waves,
+        wave_size: args.wave_size,
+        wave_growth: args.wave_growth,
+        tier_start: args.tier_start,
+        tier_end: args.tier_end,
+    };
     game.seed_override = Some(seed);
     game.map = match &args.map {
         Some(named) => named.map.clone(),

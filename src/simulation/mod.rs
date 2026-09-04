@@ -39,6 +39,7 @@ use crate::battlefield;
 use crate::bullet::Bullet;
 use crate::frog::Frog;
 use crate::laser::{LaserBeam, LaserVariant};
+use crate::level::{LevelOverrides, Mission, SpawnPlan};
 use crate::map::{self, CellObject, MapFile};
 use crate::obstacle::Obstacle;
 use crate::pathfind::Grid;
@@ -121,7 +122,7 @@ pub enum Outcome {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
-    RoundStarted { seed: u64, enemies: usize },
+    RoundStarted { seed: u64, enemies: usize, mission: Mission, spawn: crate::level::SpawnKind },
     RoundEnded { outcome: Outcome },
     /// A trigger pull that launched something. A twin barrel's queued
     /// second shot and a burst's later bullets are part of the same pull.
@@ -245,6 +246,9 @@ const TANK_VARIANTS: i32 = 12;
 /// are on the field.
 const TANK_SPRITE_ORDER: [i32; 12] = [1, 0, 4, 2, 7, 3, 9, 5, 10, 6, 8, 11];
 
+/// How long the mission banner fades once the opening freeze ends.
+pub const INTRO_FADE_SECONDS: f32 = 0.6;
+
 #[derive(Default)]
 pub struct Game {
     /// Every entity: tanks (a `Tank`; enemies also carry an `Ai`, which is
@@ -255,8 +259,28 @@ pub struct Game {
     /// The player's entity. `None` only before the first `init`; every
     /// method treats it as `Some` once a round is running.
     pub(crate) player: Option<Entity>,
-    /// The protect-objective frog's entity - same convention as `player`.
+    /// The player's frog - `None` in a mission without one (`Destroy`),
+    /// and before the first `init`.
     pub(crate) frog: Option<Entity>,
+    /// The enemy side's frog (`Hunt` mission only), else `None`.
+    pub(crate) enemy_frog: Option<Entity>,
+    /// What ends this round - resolved by `init` from `level_overrides`
+    /// and the map's `[mission]` table (docs/maps-to-levels.md).
+    pub mission: Mission,
+    /// How enemies arrive this round - resolved by `init` like `mission`.
+    pub spawn_plan: SpawnPlan,
+    /// Seconds the round stays frozen behind the opening mission banner.
+    /// `update` ticks nothing else while it is positive; a move or fire
+    /// input ends it early.
+    pub(crate) intro_timer: f32,
+    /// Seconds left of the banner's fade-out once the freeze ended; purely
+    /// visual (`render`).
+    pub(crate) intro_fade: f32,
+    /// Whether `init` starts the round behind the mission banner. On for
+    /// the windowed game; off for headless callers (probe, tests, the dev
+    /// server's `restart` unless asked), whose frame counts must not
+    /// include a frozen intro.
+    pub show_intro: bool,
     /// Counts down only while fewer pickups are live than the map has
     /// slots; held at PICKUP_RESPAWN_SECONDS while the field is full, so
     /// the first respawn after a collection waits the full delay.
@@ -301,6 +325,9 @@ pub struct Game {
     /// default or a random roll. Set before the first `init`; persists
     /// across restarts.
     pub enemy_count_override: Option<usize>,
+    /// `--mission`/`--spawn`/wave flags: per-run overrides of the map's
+    /// level tables. Same lifetime as `enemy_count_override`.
+    pub level_overrides: LevelOverrides,
     /// `--tank`: pins the player's chassis row. Same lifetime as
     /// `enemy_count_override`.
     pub player_row_override: Option<i32>,
@@ -424,6 +451,12 @@ impl Game {
         self.frame = 0;
         self.last_engage.clear();
         self.debug_kills.clear();
+        self.frog = None;
+        self.enemy_frog = None;
+        self.mission = self.level_overrides.resolve_mission(&self.map.mission);
+        self.spawn_plan = self.level_overrides.resolve_spawn(&self.map.spawn, self.enemy_count_override);
+        self.intro_timer = if self.show_intro { tuning().mission_banner_seconds } else { 0.0 };
+        self.intro_fade = 0.0;
 
         self.physics = Physics::new();
         self.physics_accumulator = 0.0;
@@ -475,16 +508,18 @@ impl Game {
         let short_side = width.min(height);
         let margin_min = short_side * tuning().enemy_spawn_margin_min;
         let margin_max = short_side * tuning().enemy_spawn_margin_max;
-        // `--enemies` wins, then the map's `tanks`, then a random roll.
-        let enemy_count = self.enemy_count_override.unwrap_or_else(|| {
-            self.map
-                .tanks
-                .map(|n| n as usize)
+        // Band plan: `--enemies` wins, then the map's `tanks`, then a random
+        // roll. A waves plan places nobody now - its scheduler rolls tanks
+        // in through the gates once the intro ends.
+        let enemy_count = match self.spawn_plan {
+            SpawnPlan::Band { count } => count
+                .or(self.map.tanks.map(|n| n as usize))
                 .unwrap_or_else(|| rng.random_range(tuning().enemy_count_min..=tuning().enemy_count_max))
-        });
-        // Both overrides are free-form user input: 0 would be an instantly
-        // won round restarting forever, and the cap keeps owner slots small.
-        let enemy_count = enemy_count.clamp(1, 31);
+                // Free-form user input: 0 would be an instantly won round
+                // restarting forever, and the cap keeps live slots small.
+                .clamp(1, 31),
+            SpawnPlan::Waves { .. } => 0,
+        };
 
         // Terrain legality is the nav grid's `usable` test (see
         // `battlefield::enemy_spawn_legal`); the frog is not down yet, so
@@ -588,6 +623,8 @@ impl Game {
         // --- Frog (protect-objective) ---
         // A map-placed frog cell wins outright; otherwise roll a spot near
         // the player's spawn so defending both is the same early fight.
+        // The placement roll runs even in a frog-less mission so the RNG
+        // stream, hence every later spawn, matches across missions.
         let frog_clear = FROG_COLLIDER_HALF_EXTENT.0.max(FROG_COLLIDER_HALF_EXTENT.1) + OBSTACLE_CLEAR;
         let frog_pos = map_frog_pos.unwrap_or_else(|| {
             battlefield::sample_clear_position(&mut rng, width, height, margin_min, |pos| {
@@ -605,26 +642,29 @@ impl Game {
                 spawn_grid.nearest_open(sample, &avoid, enemy_clear)
             })
         });
-        let frog_body = self.physics.spawn_static(
-            frog_pos,
-            Position::new(FROG_COLLIDER_HALF_EXTENT.0, FROG_COLLIDER_HALF_EXTENT.1),
-        );
-        self.frog = Some(self.world.spawn((Frog {
-            position: frog_pos,
-            health: tuning().frog_max_health,
-            max_health: tuning().frog_max_health,
-            variant: rng.random_range(0..crate::frog::FROG_VARIANT_DIRS.len() as i32),
-            body: frog_body,
-            hurt_timer: 0.0,
-            hit_flash_timer: 0.0,
-            hop_timer: 0.0,
-            hop_start: frog_pos,
-            hop_end: frog_pos,
-            hop_cooldown: 0.0,
-            attack_timer: 0.0,
-            attack_cooldown: 0.0,
-            death_elapsed: None,
-        },)));
+        let frog_variant = rng.random_range(0..crate::frog::FROG_VARIANT_DIRS.len() as i32);
+        if self.mission.has_player_frog() {
+            let frog_body = self.physics.spawn_static(
+                frog_pos,
+                Position::new(FROG_COLLIDER_HALF_EXTENT.0, FROG_COLLIDER_HALF_EXTENT.1),
+            );
+            self.frog = Some(self.world.spawn((Frog {
+                position: frog_pos,
+                health: tuning().frog_max_health,
+                max_health: tuning().frog_max_health,
+                variant: frog_variant,
+                body: frog_body,
+                hurt_timer: 0.0,
+                hit_flash_timer: 0.0,
+                hop_timer: 0.0,
+                hop_start: frog_pos,
+                hop_end: frog_pos,
+                hop_cooldown: 0.0,
+                attack_timer: 0.0,
+                attack_cooldown: 0.0,
+                death_elapsed: None,
+            },)));
+        }
 
         // --- Pickups: every map slot spawns immediately ---
         for &(pos, kind) in &self.map_pickup_slots {
@@ -646,7 +686,12 @@ impl Game {
         self.rng = Some(rng);
         // Not cleared here: a restart mid-`update` (R key, round end) still
         // reports what that frame did before the new round's start.
-        self.events.push(Event::RoundStarted { seed, enemies: enemy_count });
+        self.events.push(Event::RoundStarted {
+            seed,
+            enemies: enemy_count,
+            mission: self.mission,
+            spawn: self.spawn_plan.kind(),
+        });
     }
 
     /// Step the simulation one frame: `input` is this frame's player input,
@@ -672,6 +717,19 @@ impl Game {
         if self.paused {
             return;
         }
+        // Opening mission banner: the world stays exactly as `init` left
+        // it (no timers, no RNG) until the banner runs out or the player
+        // moves/fires. Effects still animate so the screen isn't dead.
+        if self.intro_timer > 0.0 {
+            self.tick_effects(dt);
+            let skip = input.player_intent.move_dir.is_some() || input.player_intent.fire;
+            self.intro_timer = if skip { 0.0 } else { (self.intro_timer - dt).max(0.0) };
+            if self.intro_timer <= 0.0 {
+                self.intro_fade = INTRO_FADE_SECONDS;
+            }
+            return;
+        }
+        self.intro_fade = (self.intro_fade - dt).max(0.0);
 
         self.tick_effects(dt);
         let mut rng = self.rng.take().expect("rng seeded in init");
@@ -778,7 +836,7 @@ impl Game {
     /// tank within its wider avoid range. Each on its own cooldown.
     fn frog_phase(&mut self, f: &mut Frame) {
         let player = self.player.expect("player entity spawned in init");
-        let frog_entity = self.frog.expect("frog entity spawned in init");
+        let Some(frog_entity) = self.frog else { return };
         let (can_attack, can_hop, frog_pos, attack_range, avoid_range, hop_distance) =
             with_frog(&self.world, frog_entity, |fr| {
                 (fr.can_attack(), fr.can_hop(), fr.position, fr.attack_range(), fr.avoid_range(), fr.hop_distance())
@@ -1359,16 +1417,39 @@ impl Game {
         }
     }
 
-    /// Losing (player or frog dead) takes precedence over winning when
-    /// both happen on the same frame.
+    /// Per-mission end rules (docs/maps-to-levels.md). Losing (player or
+    /// the player's frog dead) takes precedence over winning when both
+    /// happen on the same frame.
     fn check_round_end(&mut self, f: &mut Frame) {
         let player = self.player.expect("player entity spawned in init");
-        let frog = self.frog.expect("frog entity spawned in init");
-        if with_tank(&self.world, player, |t| t.is_wreck()) || with_frog(&self.world, frog, Frog::is_dead) {
+        let player_dead = with_tank(&self.world, player, |t| t.is_wreck());
+        let frog_dead = |frog: Option<Entity>| frog.is_some_and(|e| with_frog(&self.world, e, Frog::is_dead));
+        if player_dead || frog_dead(self.frog) {
             self.end_round(f, Outcome::Lost);
-        } else if self.world.query::<&Tank>().with::<&Ai>().iter().all(|t| t.is_wreck()) {
+            return;
+        }
+        let won = match self.mission {
+            Mission::Hunt => frog_dead(self.enemy_frog),
+            Mission::Protect | Mission::Destroy => self.spawn_plan_finished() && self.all_enemies_wrecked(),
+        };
+        if won {
             self.end_round(f, Outcome::Won);
         }
+    }
+
+    /// No enemy is still to come: every wave has rolled in and nobody is
+    /// still entering. Always true under the band plan.
+    fn spawn_plan_finished(&self) -> bool {
+        match self.spawn_plan {
+            SpawnPlan::Band { .. } => true,
+            // Filled in by the wave scheduler; until then a waves round
+            // never ends by wreck count.
+            SpawnPlan::Waves { .. } => false,
+        }
+    }
+
+    fn all_enemies_wrecked(&self) -> bool {
+        self.world.query::<&Tank>().with::<&Ai>().iter().all(|t| t.is_wreck())
     }
 
     fn end_round(&mut self, f: &mut Frame, outcome: Outcome) {
@@ -1970,6 +2051,54 @@ mod mechanics_tests {
 
     fn step(game: &mut Game, input: Input) {
         game.update(input, 1.0 / 60.0, W, H);
+    }
+
+    #[test]
+    fn a_destroy_round_has_no_frog_and_ends_on_the_last_wreck() {
+        let mut game = Game::default();
+        game.enemy_count_override = Some(1);
+        game.seed_override = Some(7);
+        game.level_overrides.mission = Some(Mission::Destroy);
+        game.map = MapFile::from_toml_str(OPEN_MAP).expect("test map parses");
+        game.init(W, H);
+        assert_eq!(game.mission, Mission::Destroy);
+        assert!(game.frog.is_none() && game.enemy_frog.is_none());
+        assert_eq!(game.world.query::<&Frog>().iter().count(), 0);
+        assert!(matches!(game.events(), [Event::RoundStarted { mission: Mission::Destroy, .. }]));
+        let slot = game.world.query::<&Tank>().with::<&Ai>().iter().map(|t| t.owner_slot).next().unwrap();
+        game.debug_kill(slot).unwrap();
+        step(&mut game, Input::default());
+        assert_eq!(game.outcome(), Outcome::Won);
+    }
+
+    #[test]
+    fn the_intro_freezes_the_round_and_any_input_skips_it() {
+        let mut game = Game::default();
+        game.enemy_count_override = Some(1);
+        game.seed_override = Some(7);
+        game.show_intro = true;
+        game.map = MapFile::from_toml_str(OPEN_MAP).expect("test map parses");
+        game.init(W, H);
+        let expected = (tuning().mission_banner_seconds * 60.0).round() as u32;
+        let mut frozen = 0;
+        while game.intro_timer > 0.0 {
+            step(&mut game, Input::default());
+            assert_eq!(game.time, 0.0, "the world does not advance behind the banner");
+            frozen += 1;
+            assert!(frozen <= expected + 1, "the intro never ended");
+        }
+        assert!(frozen >= expected - 1, "froze only {frozen} frames, expected about {expected}");
+        step(&mut game, Input::default());
+        assert!(game.time > 0.0, "play resumes once the banner runs out");
+
+        game.init(W, H);
+        assert!(game.intro_timer > 0.0);
+        let mut input = Input::default();
+        input.player_intent.fire = true;
+        step(&mut game, input);
+        assert_eq!(game.intro_timer, 0.0, "fire skips the intro");
+        step(&mut game, Input::default());
+        assert!(game.time > 0.0);
     }
 
     fn player_ammo(game: &Game) -> i32 {

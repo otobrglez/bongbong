@@ -324,6 +324,62 @@ tunables! {
         restart_delay: f32 = 3.0 in 0.0 ..= 30.0;
     }
 
+    group mission {
+        /// How long the round stays frozen behind the opening mission
+        /// banner ("PROTECT THE FROG!") before play starts. Any move or
+        /// fire input skips it. Headless callers start with the intro off.
+        mission_banner_seconds: f32 = 2.0 in 0.0 ..= 10.0;
+        /// Protect mission: odds each enemy is rolled a hunter that drives
+        /// at and shoots the frog rather than the player.
+        enemy_hunter_share_protect: f32 = 0.25 in 0.0 ..= 1.0 @ Spawn;
+        /// Hunt mission: odds each enemy is a hunter; the rest guard the
+        /// enemy frog.
+        enemy_hunter_share_hunt: f32 = 0.6 in 0.0 ..= 1.0 @ Spawn;
+        /// A guard engages the player only while the player is within this
+        /// many px of the enemy frog, and wanders inside it otherwise.
+        guard_leash_px: f32 = 260.0 in 50.0 ..= 1000.0;
+        /// Procedural enemy-frog placement (a hunt map without an
+        /// `enemy_frog` cell): at least this far from the player's frog.
+        enemy_frog_spawn_min_dist: f32 = 400.0 in 0.0 ..= 1500.0 @ Restart;
+    }
+
+    group waves {
+        /// Defaults for a waves spawn plan whose map/CLI leave them unset:
+        /// number of waves, first-wave size, tanks added per wave.
+        wave_count_default: usize = 5 in 1 ..= 50 @ Restart;
+        wave_size_default: usize = 3 in 1 ..= 31 @ Restart;
+        wave_growth_default: usize = 1 in 0 ..= 10 @ Restart;
+        /// Breather between a wave being cleared (or timing out) and the
+        /// next one rolling in; the "WAVE N" banner shows meanwhile.
+        wave_gap_seconds: f32 = 4.0 in 0.0 ..= 60.0;
+        /// A wave that is not cleared within this long is joined by the
+        /// next one anyway.
+        wave_timeout_seconds: f32 = 60.0 in 1.0 ..= 600.0;
+        /// The next wave is called once this many enemies (or fewer) are
+        /// still alive.
+        wave_next_when_alive: usize = 0 in 0 ..= 30;
+        /// Seconds between two tanks of the same wave starting their
+        /// roll-in, so they never overlap in one gate lane.
+        wave_stagger_seconds: f32 = 0.8 in 0.0 ..= 10.0;
+        /// Roll-in speed as a factor of the tank's normal driving speed.
+        wave_rollin_speed_factor: f32 = 0.8 in 0.1 ..= 3.0;
+        /// An edge nav cell is a gate only if this many cells inward are
+        /// all open.
+        wave_gate_inward_cells: usize = 3 in 1 ..= 10;
+        /// Gates closer than this (px) to the player or the player's frog
+        /// are skipped.
+        wave_gate_min_player_dist: f32 = 300.0 in 0.0 ..= 1500.0;
+        /// Odds a wave tank is drawn one tier below the wave's tier, for
+        /// variety.
+        wave_tier_mix: f32 = 0.25 in 0.0 ..= 1.0;
+        /// Wave rounds only: a wreck fades out and is removed this long
+        /// after the kill, keeping the field passable. 0 keeps wrecks.
+        wave_wreck_despawn_seconds: f32 = 20.0 in 0.0 ..= 300.0;
+        /// Cap on live enemies at once; a wave that would exceed it queues
+        /// its surplus until slots free up.
+        wave_max_alive: usize = 31 in 1 ..= 31;
+    }
+
     group movement {
         /// Player top speed (px/s). Tank driving is 4-direction movement
         /// with real inertia, modeled like a tracked vehicle rather than a

@@ -34,6 +34,7 @@ use crate::simulation::debug::{CLUSTER_RADIUS_PX, Detail, TankPatch, TrackRow};
 use crate::simulation::{Event, Game, Input, Overlays};
 use crate::tank::Dir;
 use crate::tuning;
+use crate::level::{Mission, SpawnKind, Tier};
 use crate::{PHYSICS_FIXED_DT, Position, parse_seed};
 
 /// Port the game listens on unless `--dev-port`/`BONGBONG_DEV_PORT` says
@@ -110,8 +111,8 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "restart",
-        description: "Start a fresh round, frozen in lockstep (call `resume` to let it run in real time). Optional seed (number or 0x-hex string; pinned for later restarts too), enemy count, player chassis row (0-11), and the map: `map` (a path to a TOML under maps/) or `map_toml` (the map's TOML text inline - see `map_get` for the format; the round keeps its current map when neither is given). Same seed + same steps replays bit-for-bit.",
-        schema: r#"{"type":"object","properties":{"seed":{"type":["integer","string"]},"enemies":{"type":"integer","minimum":1,"maximum":31},"tank_row":{"type":"integer","minimum":0,"maximum":11},"map":{"type":"string","description":"Path to a map .toml, relative to the game's working directory"},"map_toml":{"type":"string","description":"Map TOML text, e.g. `version = 1\ntanks = 4\ncells.\"20,8\" = { kind = \"wall\", material = \"iron\" }`"}}}"#,
+        description: "Start a fresh round, frozen in lockstep (call `resume` to let it run in real time). Optional seed (number or 0x-hex string; pinned for later restarts too), enemy count, player chassis row (0-11), the map: `map` (a path to a TOML under maps/) or `map_toml` (the map's TOML text inline - see `map_get` for the format; the round keeps its current map when neither is given), and the level: `mission` (protect|hunt|destroy), `spawn` (band|waves) with `waves`/`wave_size`/`wave_growth`/`tier_start`/`tier_end` (light|medium|heavy|super) - each pinned for later restarts too, overriding the map's own [mission]/[spawn] tables. `intro: true` starts the round frozen behind the mission banner (off by default so `step` counts play frames). Same seed + same steps replays bit-for-bit.",
+        schema: r#"{"type":"object","properties":{"seed":{"type":["integer","string"]},"enemies":{"type":"integer","minimum":1,"maximum":31},"tank_row":{"type":"integer","minimum":0,"maximum":11},"map":{"type":"string","description":"Path to a map .toml, relative to the game's working directory"},"map_toml":{"type":"string","description":"Map TOML text, e.g. `version = 1\ntanks = 4\ncells.\"20,8\" = { kind = \"wall\", material = \"iron\" }`"},"mission":{"type":"string","enum":["protect","hunt","destroy"]},"spawn":{"type":"string","enum":["band","waves"]},"waves":{"type":"integer","minimum":1},"wave_size":{"type":"integer","minimum":1},"wave_growth":{"type":"integer","minimum":0},"tier_start":{"type":"string","enum":["light","medium","heavy","super"]},"tier_end":{"type":"string","enum":["light","medium","heavy","super"]},"intro":{"type":"boolean"}}}"#,
     },
     ToolSpec {
         name: "map_get",
@@ -556,6 +557,9 @@ impl DevServer {
             "frame": snap.frame,
             "time": snap.time,
             "outcome": snap.outcome,
+            "mission": game.mission.name(),
+            "spawn": game.spawn_plan,
+            "intro_seconds_left": game.intro_timer,
             "paused": snap.paused,
             "lockstep": self.lockstep,
             "step_pending": self.pending_step.is_some(),
@@ -740,6 +744,44 @@ impl DevServer {
         if let Some(row) = params.get("tank_row") {
             game.player_row_override = Some(row.as_i64().ok_or("tank_row must be an integer")? as i32);
         }
+        let enum_param = |key: &str| -> Result<Option<String>, String> {
+            match params.get(key) {
+                None | Some(Value::Null) => Ok(None),
+                Some(Value::String(s)) => Ok(Some(s.clone())),
+                Some(other) => Err(format!("{key} must be a string, got {other}")),
+            }
+        };
+        let u32_param = |key: &str| -> Result<Option<u32>, String> {
+            match params.get(key) {
+                None | Some(Value::Null) => Ok(None),
+                Some(v) => v.as_u64().map(|n| Some(n as u32)).ok_or_else(|| format!("{key} must be a non-negative integer")),
+            }
+        };
+        use clap::ValueEnum;
+        if let Some(m) = enum_param("mission")? {
+            game.level_overrides.mission = Some(Mission::from_str(&m, true).map_err(|e| format!("mission: {e}"))?);
+        }
+        if let Some(k) = enum_param("spawn")? {
+            game.level_overrides.spawn = Some(SpawnKind::from_str(&k, true).map_err(|e| format!("spawn: {e}"))?);
+        }
+        if let Some(t) = enum_param("tier_start")? {
+            game.level_overrides.tier_start = Some(Tier::from_str(&t, true).map_err(|e| format!("tier_start: {e}"))?);
+        }
+        if let Some(t) = enum_param("tier_end")? {
+            game.level_overrides.tier_end = Some(Tier::from_str(&t, true).map_err(|e| format!("tier_end: {e}"))?);
+        }
+        if let Some(n) = u32_param("waves")? {
+            game.level_overrides.waves = Some(n);
+        }
+        if let Some(n) = u32_param("wave_size")? {
+            game.level_overrides.wave_size = Some(n);
+        }
+        if let Some(n) = u32_param("wave_growth")? {
+            game.level_overrides.wave_growth = Some(n);
+        }
+        // Headless default: no frozen intro, so `step` counts are play
+        // frames. Ask for it to screenshot the banner.
+        game.show_intro = params.get("intro").and_then(Value::as_bool).unwrap_or(false);
         let map_path = params.get("map").filter(|v| !v.is_null());
         let map_toml = params.get("map_toml").filter(|v| !v.is_null());
         match (map_path, map_toml) {

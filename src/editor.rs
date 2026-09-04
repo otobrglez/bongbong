@@ -456,6 +456,17 @@ impl MapEditor {
                     let src = crate::tank::icon_source_rec();
                     d.draw_texture_pro(textures.tanks, src, dest, origin, 0.0, Color::WHITE);
                 }
+                CellObject::EnemyFrog => {
+                    let src = Rectangle::new(0.0, 0.0, crate::FROG_TEXTURE_SIZE, crate::FROG_TEXTURE_SIZE);
+                    d.draw_texture_pro(textures.frog_idle, src, dest, origin, 0.0, Color::new(255, 120, 120, 255));
+                }
+                CellObject::Gate => {
+                    d.draw_rectangle_lines_ex(
+                        Rectangle::new(pos.x - size / 2.0, pos.y - size / 2.0, size, size),
+                        2.0,
+                        Color::ORANGE,
+                    );
+                }
                 CellObject::Pickup { pickup } => {
                     let texture = match pickup {
                         PickupKind::Health => textures.pickup_health,

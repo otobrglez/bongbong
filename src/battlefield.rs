@@ -285,6 +285,8 @@ pub struct MapSpawn {
     /// already tests against `obstacle_positions`) makes enemies avoid a
     /// map's walls for free, with no separate map-aware check needed.
     pub obstacle_positions: Vec<Position>,
+    /// World position of the map's `enemy_frog` cell, if any (Hunt mission).
+    pub enemy_frog_pos: Option<Position>,
     /// World position of every cell the map explicitly marked as road (not
     /// including the "road under every wall tile" `Game::init` already
     /// paints for free from `obstacle_positions` - this is only the
@@ -341,6 +343,7 @@ pub fn spawn_from_map(
     let mut obstacle_positions = Vec::new();
     let mut road_cells = Vec::new();
     let mut frog_pos = None;
+    let mut enemy_frog_pos = None;
     let mut pickup_slots = Vec::new();
 
     for (col, row, obj) in map.iter_cells() {
@@ -379,10 +382,14 @@ pub fn spawn_from_map(
             // here needs to track it.
             CellObject::Start => {}
             CellObject::Pickup { pickup } => pickup_slots.push((pos, pickup)),
+            CellObject::EnemyFrog => enemy_frog_pos = Some(pos),
+            // Gates are read straight from `MapFile::gate_cells` by the
+            // wave scheduler; nothing is spawned for them.
+            CellObject::Gate => {}
         }
     }
 
-    MapSpawn { obstacle_positions, road_cells, frog_pos, pickup_slots }
+    MapSpawn { obstacle_positions, road_cells, frog_pos, enemy_frog_pos, pickup_slots }
 }
 
 #[cfg(test)]

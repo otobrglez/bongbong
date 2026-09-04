@@ -68,6 +68,39 @@ struct Args {
     #[arg(short = 'e', long = "enemies")]
     enemies: Option<usize>,
 
+    /// Override the map's mission (what ends the round): protect (keep the
+    /// frog alive, wreck every enemy), hunt (kill the enemy frog first) or
+    /// destroy (no frog, wreck every enemy). See docs/maps-to-levels.md.
+    #[arg(long = "mission", value_enum)]
+    mission: Option<bongbong::level::Mission>,
+
+    /// Override the map's spawn plan: band (everyone placed at once, the
+    /// default) or waves (enemies roll in through edge gates wave after
+    /// wave; see --waves/--wave-size/--wave-growth/--tier-start/--tier-end).
+    #[arg(long = "spawn", value_enum)]
+    spawn: Option<bongbong::level::SpawnKind>,
+
+    /// Waves plan: number of waves.
+    #[arg(long = "waves")]
+    waves: Option<u32>,
+
+    /// Waves plan: tanks in the first wave.
+    #[arg(long = "wave-size")]
+    wave_size: Option<u32>,
+
+    /// Waves plan: tanks added per wave.
+    #[arg(long = "wave-growth")]
+    wave_growth: Option<u32>,
+
+    /// Waves plan: chassis tier of the first wave (light, medium, heavy,
+    /// super).
+    #[arg(long = "tier-start", value_enum)]
+    tier_start: Option<bongbong::level::Tier>,
+
+    /// Waves plan: chassis tier of the last wave.
+    #[arg(long = "tier-end", value_enum)]
+    tier_end: Option<bongbong::level::Tier>,
+
     /// Force the player's tank to a specific chassis instead of a random one
     /// each round (default: random, matching today's behavior) - e.g.
     /// `--tank titan` for the twin-barrel super-heavy, without restarting
@@ -436,6 +469,16 @@ fn main() {
 
     let mut game = Game::default();
     game.enemy_count_override = args.enemies;
+    game.level_overrides = bongbong::level::LevelOverrides {
+        mission: args.mission,
+        spawn: args.spawn,
+        waves: args.waves,
+        wave_size: args.wave_size,
+        wave_growth: args.wave_growth,
+        tier_start: args.tier_start,
+        tier_end: args.tier_end,
+    };
+    game.show_intro = true;
     game.player_row_override = args.tank.map(TankKind::row);
     game.shadows_enabled = !args.no_shadows;
     game.seed_override = args.seed;

@@ -176,6 +176,24 @@ pub const TANK_TURRET_BBOX_BY_ROW: [(f32, f32, f32, f32); 12] = [
 // meaningfully heavier (sluggish to accelerate, more perpendicular drift
 // through a turn, and shove lighter tanks further than they get shoved back
 // in a ram).
+// Chassis power tier per sprite row (`Tank::row`), for wave composition
+// (docs/maps-to-levels.md): the four rungs of the wave ladder, grouped by
+// the same role hints the mass/damage tables use - narrow/compact rows are
+// light, std medium, long/wide heavy, the two super-heavies super.
+pub const TANK_TIER_BY_ROW: [level::Tier; 12] = [
+    level::Tier::Light,  // scout
+    level::Tier::Medium, // assault
+    level::Tier::Heavy,  // breaker
+    level::Tier::Heavy,  // longbow
+    level::Tier::Light,  // flak
+    level::Tier::Light,  // wraith
+    level::Tier::Medium, // warden
+    level::Tier::Heavy,  // ravager
+    level::Tier::Light,  // glacier
+    level::Tier::Heavy,  // obelisk
+    level::Tier::Super,  // titan
+    level::Tier::Super,  // leviathan
+];
 // Per-chassis shell damage multiplier, applied on top of
 // PLAYER_DAMAGE_MIN/MAX or ENEMY_DAMAGE_MIN/MAX depending on who fired (see
 // `Shell::shooter_row`/its use in `Game::update`'s hit-resolution). Same 7
@@ -627,6 +645,7 @@ pub mod frog;
 pub mod game;
 pub mod ground;
 pub mod laser;
+pub mod level;
 pub mod map;
 pub mod maplint;
 pub mod obstacle;

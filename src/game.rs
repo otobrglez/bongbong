@@ -183,6 +183,21 @@ impl Game {
             Outcome::Won => Some(("YOU WIN", Color::DARKGREEN)),
             Outcome::Lost => Some(("YOU LOSE", Color::MAROON)),
         };
+        // Opening mission banner: solid while the round is frozen behind
+        // it, then fading over INTRO_FADE_SECONDS once play starts.
+        let intro = {
+            let alpha = if self.intro_timer > 0.0 {
+                1.0
+            } else {
+                (self.intro_fade / crate::simulation::INTRO_FADE_SECONDS).clamp(0.0, 1.0)
+            };
+            (alpha > 0.0).then(|| {
+                let text = self.mission.banner();
+                let size = 72;
+                let w = rl.measure_text(text, size);
+                (text, size, w, alpha)
+            })
+        };
         let banner = banner.map(|(text, color)| {
             let title_size = 72;
             let title_w = rl.measure_text(text, title_size);
@@ -230,15 +245,13 @@ impl Game {
                 draw_pickup(&mut d, texture, pickup);
             }
 
-            crate::simulation::with_frog(
-                &self.world,
-                self.frog.expect("frog entity spawned in init"),
-                |frog| {
+            for frog_entity in [self.frog, self.enemy_frog].into_iter().flatten() {
+                crate::simulation::with_frog(&self.world, frog_entity, |frog| {
                     let variant = &textures.frog_variants[frog.variant as usize];
                     draw_frog(&mut d, &variant.as_frog_textures(), frog, self.time);
                     draw_frog_health_bar(&mut d, textures.health_bar, frog);
-                },
-            );
+                });
+            }
 
             for tank in self.world.query::<&Tank>().with::<&Ai>().iter() {
                 draw_tank_shield(&mut d, tank, self.time);
@@ -551,6 +564,14 @@ impl Game {
                     *color,
                 );
                 d.draw_text(sub, cx - sub_w / 2, cy + 20, *sub_size, Color::RAYWHITE);
+            }
+
+            // Mission banner: big white text over a dim overlay that both
+            // fade together once the round unfreezes.
+            if let Some((text, size, w, alpha)) = intro {
+                let a = |max: f32| (max * alpha) as u8;
+                d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(0, 0, 0, a(120.0)));
+                d.draw_text(text, screen_width / 2 - w / 2, screen_height / 2 - size / 2, size, Color::new(255, 255, 255, a(255.0)));
             }
 
             // Paused overlay draws over everything else, including the
