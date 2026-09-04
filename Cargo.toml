@@ -1,5 +1,5 @@
 [package]
-version = "0.0.16"
+version = "0.0.17"
 name = "bongbong"
 edition = "2024"
 default-run = "bongbong"
@@ -32,3 +32,12 @@ dev-tools = []
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+# The MCP adapter for the dev server (src/devserver.rs,
+# docs/dev-server-design.md). Gated on `dev-tools` so a plain build - and
+# a cargo-dist release archive, which builds without features - never
+# carries it. `probe` stays auto-discovered as before.
+[[bin]]
+name = "bbmcp"
+path = "src/bin/bbmcp.rs"
+required-features = ["dev-tools"]

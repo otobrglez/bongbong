@@ -24,17 +24,26 @@ pub enum Node<B> {
     Sequence(Vec<Node<B>>),
     /// Leaf test: Success if the predicate holds, else Failure.
     Condition(fn(&mut B) -> bool),
-    /// Leaf action: returns its own Status (Success/Running/Failure).
-    Action(fn(&mut B) -> Status),
+    /// Leaf action: returns its own Status (Success/Running/Failure). The
+    /// name is what `tick_traced` reports, so a tick can be read back.
+    Action(&'static str, fn(&mut B) -> Status),
 }
 
 impl<B> Node<B> {
     /// Tick this node against the blackboard, returning its status.
     pub fn tick(&self, bb: &mut B) -> Status {
+        let mut last = None;
+        self.tick_traced(bb, &mut last)
+    }
+
+    /// `tick`, also recording in `last_action` the name of the last
+    /// `Action` leaf that returned Success or Running - "what the tree
+    /// decided this tick" for inspection tools.
+    pub fn tick_traced(&self, bb: &mut B, last_action: &mut Option<&'static str>) -> Status {
         match self {
             Node::Selector(children) => {
                 for child in children {
-                    match child.tick(bb) {
+                    match child.tick_traced(bb, last_action) {
                         Status::Failure => continue,
                         other => return other, // Success or Running short-circuits
                     }
@@ -43,7 +52,7 @@ impl<B> Node<B> {
             }
             Node::Sequence(children) => {
                 for child in children {
-                    match child.tick(bb) {
+                    match child.tick_traced(bb, last_action) {
                         Status::Success => continue,
                         other => return other, // Failure or Running short-circuits
                     }
@@ -57,7 +66,13 @@ impl<B> Node<B> {
                     Status::Failure
                 }
             }
-            Node::Action(act) => act(bb),
+            Node::Action(name, act) => {
+                let status = act(bb);
+                if status != Status::Failure {
+                    *last_action = Some(name);
+                }
+                status
+            }
         }
     }
 }
@@ -72,6 +87,6 @@ pub fn sequence<B>(children: Vec<Node<B>>) -> Node<B> {
 pub fn condition<B>(pred: fn(&mut B) -> bool) -> Node<B> {
     Node::Condition(pred)
 }
-pub fn action<B>(act: fn(&mut B) -> Status) -> Node<B> {
-    Node::Action(act)
+pub fn action<B>(name: &'static str, act: fn(&mut B) -> Status) -> Node<B> {
+    Node::Action(name, act)
 }

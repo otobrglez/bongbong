@@ -1,0 +1,55 @@
+# maps/missions/ fixture - a clean starting point for one mission/spawn
+# combination; see docs/maps-to-levels.md. Hand-authored: re-saving from
+# the map editor would drop these comments. The level tables are written
+# as dotted keys on purpose - a `[mission]`/`[spawn]` table header would
+# swallow every `cells.` line after it.
+#
+# hunt-basic: Hunt mission on the band plan, four tanks. The player starts
+# on the right (col 27) with its frog (col 36) behind a brick screen at
+# col 30; the enemy frog sits far left (col 4) behind its own brick screen
+# at col 8.
+# Two iron wall segments at col 20 (rows 4-7 and 15-18) leave a seven-cell
+# central gap (rows 8-14) and two-nav-cell lanes along the top and bottom
+# edges, so both sides round something on the way to the other's frog
+# without any single-cell corridor. A contested health pack sits in the
+# gap, ammo in each open quarter.
+
+version = 1
+tanks = 4
+mission.kind = "hunt"
+spawn.kind = "band"
+
+cells."27,11" = { kind = "start" }
+cells."36,11" = { kind = "frog" }
+cells."4,11" = { kind = "enemy_frog" }
+
+cells."8,8" = { kind = "wall", material = "brick" }
+cells."8,9" = { kind = "wall", material = "brick" }
+cells."8,10" = { kind = "wall", material = "brick" }
+cells."8,11" = { kind = "wall", material = "brick" }
+cells."8,12" = { kind = "wall", material = "brick" }
+cells."8,13" = { kind = "wall", material = "brick" }
+cells."8,14" = { kind = "wall", material = "brick" }
+
+cells."20,4" = { kind = "wall", material = "iron" }
+cells."20,5" = { kind = "wall", material = "iron" }
+cells."20,6" = { kind = "wall", material = "iron" }
+cells."20,7" = { kind = "wall", material = "iron" }
+cells."20,15" = { kind = "wall", material = "iron" }
+cells."20,16" = { kind = "wall", material = "iron" }
+cells."20,17" = { kind = "wall", material = "iron" }
+cells."20,18" = { kind = "wall", material = "iron" }
+
+cells."30,8" = { kind = "wall", material = "brick" }
+cells."30,9" = { kind = "wall", material = "brick" }
+cells."30,10" = { kind = "wall", material = "brick" }
+cells."30,11" = { kind = "wall", material = "brick" }
+cells."30,12" = { kind = "wall", material = "brick" }
+cells."30,13" = { kind = "wall", material = "brick" }
+cells."30,14" = { kind = "wall", material = "brick" }
+
+cells."20,11" = { kind = "pickup", pickup = "health" }
+cells."14,4" = { kind = "pickup", pickup = "ammo" }
+cells."14,18" = { kind = "pickup", pickup = "ammo" }
+cells."26,4" = { kind = "pickup", pickup = "ammo" }
+cells."26,18" = { kind = "pickup", pickup = "ammo" }

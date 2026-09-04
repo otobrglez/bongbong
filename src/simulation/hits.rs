@@ -41,6 +41,8 @@ pub(crate) struct TerrainBox {
     /// the tile's physics collider has.
     pub half: Position,
     pub material: Material,
+    /// Wood already alight: still solid, but further damage is a no-op.
+    pub burning: bool,
 }
 
 /// Static terrain snapshot for one frame - see the module doc. Built once
@@ -77,6 +79,7 @@ impl Terrain {
                     center: o.position,
                     half: battlefield::tile_hull_half_extent(&cells, gx, gy, o.hull_size() * 0.5),
                     material: o.material,
+                    burning: o.burning,
                 }
             })
             .collect();
@@ -90,6 +93,20 @@ impl Terrain {
             frogs,
             walls: battlefield::wall_rects(width, height),
         }
+    }
+
+    /// The nearest obstacle tile a shot fired from `from` along `dir` (a
+    /// unit vector) would strike within `reach` px, and whether it is
+    /// already burning - the AI's breach perception (`ai::WallAhead`).
+    /// `pad` is the shot's half-extent, as in `sweep`.
+    pub fn obstacle_ahead(&self, from: Position, dir: Position, reach: f32, pad: f32) -> Option<(Material, bool)> {
+        let to = Position::new(from.x + dir.x * reach, from.y + dir.y * reach);
+        let pad = Position::new(pad, pad);
+        self.obstacles
+            .iter()
+            .filter_map(|b| segment_hits_aabb(from, to, b.center, b.half + pad).map(|t| (t, b)))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, b)| (b.material, b.burning))
     }
 
     /// The hit box of one obstacle entity, if it is in this snapshot.
@@ -110,12 +127,41 @@ impl Terrain {
     /// a dense map). Blind to tanks (`ai::Brain::friendly_blocks_shot`'s
     /// job) and to the boundary walls (both endpoints are always interior).
     pub fn line_of_sight(&self, from: Position, to: Position) -> bool {
+        self.line_of_sight_to_frog(from, to, None)
+    }
+
+    /// `line_of_sight` for a shot aimed *at* the frog `target`: that frog's
+    /// own box is not an obstruction (a segment ending at its centre always
+    /// enters it), every other frog and tile still is. `None` ignores
+    /// nothing - the plain `line_of_sight`. Tiles that don't block sight
+    /// (sandbags, fences - `Material::blocks_sight`) are looked over.
+    pub fn line_of_sight_to_frog(&self, from: Position, to: Position, target: Option<Entity>) -> bool {
         self.obstacles
             .iter()
+            .filter(|b| b.material.blocks_sight())
             .all(|b| segment_hits_aabb(from, to, b.center, b.half).is_none())
             && self
                 .frogs
                 .iter()
+                .filter(|&&(e, _)| Some(e) != target)
+                .all(|&(_, p)| segment_hits_aabb(from, to, p, frog_half()).is_none())
+    }
+
+    /// `line_of_sight_to_frog` for a hunter deciding whether a shot at the
+    /// frog `target` is worth taking: destructible tiles in the way do not
+    /// count, since shells that stop short knock them down and open the
+    /// line - only Iron (never destroyed) and other frogs obstruct. This
+    /// is what lets a hunter shoot its way into a brick bunker instead of
+    /// circling it for a line of sight that never comes.
+    pub fn line_of_fire_to_frog(&self, from: Position, to: Position, target: Option<Entity>) -> bool {
+        self.obstacles
+            .iter()
+            .filter(|b| b.material.is_permanent())
+            .all(|b| segment_hits_aabb(from, to, b.center, b.half).is_none())
+            && self
+                .frogs
+                .iter()
+                .filter(|&&(e, _)| Some(e) != target)
                 .all(|&(_, p)| segment_hits_aabb(from, to, p, frog_half()).is_none())
     }
 
@@ -135,6 +181,23 @@ impl Terrain {
         p0: Position,
         p1: Position,
         half_extent: f32,
+    ) -> Option<(ShellTarget, f32)> {
+        self.sweep_ignoring(world, player, shooter, p0, p1, half_extent, &[])
+    }
+
+    /// `sweep` with the obstacle tiles in `ignore` left out - the ones a
+    /// projectile already rolled a pass-over on (`Projectile::passed_over`),
+    /// so it keeps flying past them to whatever is behind.
+    #[allow(clippy::too_many_arguments)]
+    pub fn sweep_ignoring(
+        &self,
+        world: &hecs::World,
+        player: Entity,
+        shooter: Owner,
+        p0: Position,
+        p1: Position,
+        half_extent: f32,
+        ignore: &[Entity],
     ) -> Option<(ShellTarget, f32)> {
         let pad = Position::new(half_extent, half_extent);
         let mut best: Option<(f32, u8, ShellTarget)> = None;
@@ -162,6 +225,9 @@ impl Terrain {
         }
 
         for b in &self.obstacles {
+            if ignore.contains(&b.entity) {
+                continue;
+            }
             consider_hit(&mut best, segment_hits_aabb(p0, p1, b.center, b.half + pad), 3, ShellTarget::Obstacle(b.entity));
         }
 
@@ -312,6 +378,7 @@ mod shell_sweep_tests {
             center: Position::new(0.0, 0.0),
             half: Position::new(16.0, 12.0),
             material: Material::Iron,
+            burning: false,
         };
         // Approaching from the left: clearly outside on X, inside on Y.
         assert_eq!(obstacle_reflect_axis(Position::new(-30.0, 2.0), &hit), (true, false));

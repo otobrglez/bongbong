@@ -22,9 +22,43 @@ struct Args {
     /// Override the number of enemies spawned this round. Takes precedence
     /// over the loaded map's own `tanks` default (see `-m`/`--map` below and
     /// `map::MapFile::tanks`); with neither given, falls back to a random
-    /// count between ENEMY_COUNT_MIN and ENEMY_COUNT_MAX (see lib.rs).
+    /// count between `enemy_count_min` and `enemy_count_max`. 0 is a
+    /// sandbox round: nobody to fight, and it never ends by wreck count.
     #[arg(short = 'e', long = "enemies")]
     enemies: Option<usize>,
+
+    /// Override the map's mission (what ends the round): protect (keep the
+    /// frog alive, wreck every enemy), hunt (kill the enemy frog first) or
+    /// destroy (no frog, wreck every enemy). See docs/maps-to-levels.md.
+    #[arg(long = "mission", value_enum)]
+    mission: Option<bongbong::level::Mission>,
+
+    /// Override the map's spawn plan: band (everyone placed at once, the
+    /// default) or waves (enemies roll in through edge gates wave after
+    /// wave; see --waves/--wave-size/--wave-growth/--tier-start/--tier-end).
+    #[arg(long = "spawn", value_enum)]
+    spawn: Option<bongbong::level::SpawnKind>,
+
+    /// Waves plan: number of waves.
+    #[arg(long = "waves")]
+    waves: Option<u32>,
+
+    /// Waves plan: tanks in the first wave.
+    #[arg(long = "wave-size")]
+    wave_size: Option<u32>,
+
+    /// Waves plan: tanks added per wave.
+    #[arg(long = "wave-growth")]
+    wave_growth: Option<u32>,
+
+    /// Waves plan: chassis tier of the first wave (light, medium, heavy,
+    /// super).
+    #[arg(long = "tier-start", value_enum)]
+    tier_start: Option<bongbong::level::Tier>,
+
+    /// Waves plan: chassis tier of the last wave.
+    #[arg(long = "tier-end", value_enum)]
+    tier_end: Option<bongbong::level::Tier>,
 
     /// Force the player's tank to a specific chassis - e.g. `--tank titan`
     /// for the twin-barrel super-heavy, without restarting until it happens
@@ -85,6 +119,20 @@ struct Args {
     /// malformed edit later is reported on stderr and ignored.
     #[arg(long = "tuning")]
     tuning: Option<std::path::PathBuf>,
+
+    /// Port for the local dev server the `bbmcp` MCP adapter drives
+    /// (lockstep stepping, snapshots, screenshots, scenario setup - see
+    /// docs/dev-server-design.md). Only in `--features dev-tools` native
+    /// builds; a port already in use is reported and the game runs without
+    /// the server. Falls back to `BONGBONG_DEV_PORT`, then 4747.
+    #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+    #[arg(long = "dev-port")]
+    dev_port: Option<u16>,
+
+    /// Run without the dev server even though it is compiled in.
+    #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+    #[arg(long = "no-dev-server")]
+    no_dev_server: bool,
 }
 
 fn parse_map(s: &str) -> Result<bongbong::map::MapFile, String> {
@@ -104,8 +152,10 @@ fn parse_map(s: &str) -> Result<bongbong::map::MapFile, String> {
 /// dev, since `include_str!` makes rustc treat it as a compile input and
 /// trigger a rebuild.
 fn default_map() -> bongbong::map::MapFile {
-    bongbong::map::MapFile::from_toml_str(include_str!("../maps/default.toml"))
-        .expect("failed parsing the embedded default map")
+    let mut map = bongbong::map::MapFile::from_toml_str(include_str!("../maps/default.toml"))
+        .expect("failed parsing the embedded default map");
+    map.name = Some("default".to_string());
+    map
 }
 
 /// Parses a `WxH` string (e.g. `1920x1080`) into a `(width, height)` pair,
@@ -226,6 +276,12 @@ fn main() {
     let obstacles_texture = rl
         .load_texture(&thread, "static/walls_sheet.png")
         .expect("failed loading obstacles texture");
+    let props_texture = rl
+        .load_texture(&thread, "static/props_sheet.png")
+        .expect("failed loading props texture");
+    let barrel_explosion_texture = rl
+        .load_texture(&thread, "static/barrel_explosion.png")
+        .expect("failed loading barrel explosion texture");
     let ground_texture = rl
         .load_texture(&thread, "static/punyworld/punyworld-overworld-tileset.png")
         .expect("failed loading ground texture");
@@ -302,6 +358,7 @@ fn main() {
                 height,
                 &bongbong::editor::EditorTextures {
                     obstacles: &obstacles_texture,
+                    props: &props_texture,
                     ground: &ground_texture,
                     // Editor palette icon: just the first colour variant's
                     // idle frame - a fixed representative sprite, since the
@@ -380,22 +437,62 @@ fn main() {
 
     let mut game = Game::default();
     game.enemy_count_override = args.enemies;
+    game.level_overrides = bongbong::level::LevelOverrides {
+        mission: args.mission,
+        spawn: args.spawn,
+        waves: args.waves,
+        wave_size: args.wave_size,
+        wave_growth: args.wave_growth,
+        tier_start: args.tier_start,
+        tier_end: args.tier_end,
+    };
+    game.show_intro = true;
     game.player_row_override = args.tank.map(TankKind::row);
     game.shadows_enabled = !args.no_shadows;
     game.seed_override = args.seed;
     game.map = args.map.unwrap_or_else(default_map);
     game.init(screen_width as f32, screen_height as f32);
 
+    // The dev server is serviced at the frame boundary below, like the
+    // tuning transports; failing to bind is a warning, not a fatal error.
+    #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+    let mut dev: Option<bongbong::devserver::DevServer> = if args.no_dev_server {
+        None
+    } else {
+        let port = args
+            .dev_port
+            .or_else(|| std::env::var("BONGBONG_DEV_PORT").ok()?.parse().ok())
+            .unwrap_or(bongbong::devserver::DEFAULT_PORT);
+        match bongbong::devserver::DevServer::start(port) {
+            Ok(server) => {
+                eprintln!("[dev] listening on 127.0.0.1:{} (bbmcp / just mcp-call)", server.port());
+                Some(server)
+            }
+            Err(e) => {
+                eprintln!("[dev] could not bind 127.0.0.1:{port}: {e} - running without the dev server");
+                None
+            }
+        }
+    };
+
     // game_loop::run drives a plain `while !window_should_close()` loop on
     // native, and hands this closure to emscripten's main loop on web - same
     // source for both, and no -sASYNCIFY=1 needed to keep the browser tab
     // responsive (see .cargo/config.toml).
     game_loop::run(rl, thread, 120, move |rl, thread| {
-        // Frame boundary: land any tuning edits staged since last frame
-        // (dev panel via capi.rs, or the `--tuning` file watch) before the
-        // simulation reads the table, so a frame never sees two values of
-        // one knob. The ripple shaders cache their knobs as uniforms, so
-        // re-upload those only when something actually changed.
+        let (width, height) = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
+        // Frame boundary, first: dev-server requests (state reads and
+        // writes, tuning patches, an armed step or screenshot), so anything
+        // they stage lands in this same frame.
+        #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+        if let Some(dev) = &mut dev {
+            dev.before_frame(&mut game, width, height);
+        }
+        // Then land any tuning edits staged since last frame (dev panel
+        // via capi.rs, the `--tuning` file watch, or the dev server)
+        // before the simulation reads the table, so a frame never sees two
+        // values of one knob. The ripple shaders cache their knobs as
+        // uniforms, so re-upload those only when something actually changed.
         if let Some(watch) = &mut tuning_watch {
             watch.poll();
         }
@@ -446,12 +543,34 @@ fn main() {
             // exists.
             restart_pressed: rl.is_key_pressed(KeyboardKey::KEY_R) || tuning::take_restart_request(),
             toggle_shadows_pressed: rl.is_key_pressed(KeyboardKey::KEY_L),
-            toggle_inspect_pressed: rl.is_key_pressed(KeyboardKey::KEY_I),
+            // The I key is inert in a release build: overlays are dev-only.
+            cycle_overlays_pressed: cfg!(feature = "dev-tools") && rl.is_key_pressed(KeyboardKey::KEY_I),
+        };
+        // Injected input (the dev server's `input` tool) replaces the
+        // keyboard's intent for as many frames as it asked.
+        #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+        let input = match &mut dev {
+            Some(dev) => dev.shape_input(input),
+            None => input,
         };
         let dt = rl.get_frame_time();
-        let (width, height) = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
 
-        game.update(input, dt, width, height);
+        // With the dev server attached it owns the advance: real-time
+        // updates normally, lockstep `step`s at the fixed timestep when
+        // asked, nothing at all while frozen.
+        #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+        let advanced = match &mut dev {
+            Some(dev) => {
+                dev.advance(&mut game, input, dt, width, height);
+                true
+            }
+            None => false,
+        };
+        #[cfg(not(all(feature = "dev-tools", not(target_os = "emscripten"))))]
+        let advanced = false;
+        if !advanced {
+            game.update(input, dt, width, height);
+        }
         game.render(
             rl,
             thread,
@@ -469,6 +588,8 @@ fn main() {
                 damage: &damage_texture,
                 tracks: &tracks_texture,
                 obstacles: &obstacles_texture,
+                props: &props_texture,
+                barrel_explosion: &barrel_explosion_texture,
                 ground: &ground_texture,
                 health_bar: &health_bar_texture,
                 frog_variants: &frog_textures,
@@ -482,5 +603,10 @@ fn main() {
                 minigun_mount: &minigun_mount_texture,
             },
         );
+        // A pending screenshot reads the frame just presented.
+        #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+        if let Some(dev) = &mut dev {
+            dev.after_render(rl, thread, &scene_target, &game);
+        }
     });
 }

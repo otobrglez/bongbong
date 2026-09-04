@@ -11,7 +11,7 @@ use sola_raylib::prelude::*;
 use crate::{PICKUP_SCALE, PICKUP_TEXTURE_SIZE, Position};
 
 /// Which effect a pickup has when collected - see `simulation::collect_pickups`.
-#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PickupKind {
     Health,

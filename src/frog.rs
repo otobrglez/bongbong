@@ -1,20 +1,22 @@
-//! ToxicFrog: the player's protect-objective. No independent AI/decision-
-//! making of its own (unlike `ai::Ai`, it never chooses a target or plans a
-//! route) - just two reflexes, both driven from `simulation.rs`, the one
-//! place that already has the world/physics access either needs: it tries
-//! to hop away (`Frog::start_hop`, landing chosen by
-//! `simulation::frog_hop_target`) whenever a shell hits it and survives -
-//! a real animated leap, `position` interpolated from `hop_start` to
-//! `hop_end` over FROG_HOP_SECONDS by `tick`, not a teleport, with
-//! `Game::update` keeping the physics body in lockstep every frame so it
-//! stays collidable throughout - and it bites (`Frog::start_attack`)
-//! whichever tank - either side - is nearest once one gets within
-//! `Frog::attack_range`. If its `health` reaches zero the round ends in a
-//! loss (`Game::update`), the same severity as the player's own tank being
-//! destroyed.
+//! ToxicFrog: a side's objective (`Side`) - the player's frog is what a
+//! Protect/Hunt round defends, the enemy frog what a Hunt round attacks
+//! (docs/maps-to-levels.md). No independent AI/decision-making of its own
+//! (unlike `ai::Ai`, it never chooses a target or plans a route) - just two
+//! reflexes, both driven from `simulation.rs`, the one place that already
+//! has the world/physics access either needs: it tries to hop away
+//! (`Frog::start_hop`, landing chosen by `simulation::frog_hop_target`)
+//! whenever a shell hits it and survives - a real animated leap,
+//! `position` interpolated from `hop_start` to `hop_end` over
+//! FROG_HOP_SECONDS by `tick`, not a teleport, with `Game::update` keeping
+//! the physics body in lockstep every frame so it stays collidable
+//! throughout - and it bites (`Frog::start_attack`) whichever tank - either
+//! side - is nearest once one gets within `Frog::attack_range`. Any shot
+//! damages any frog. The player's frog reaching zero `health` ends the
+//! round in a loss, the enemy frog's in a win (`Game::check_round_end`).
 
 use crate::tuning::tuning;
 use rapier2d::prelude::RigidBodyHandle;
+use serde::{Deserialize, Serialize};
 use sola_raylib::prelude::*;
 
 use crate::{
@@ -36,7 +38,27 @@ use crate::{
     Position,
 };
 
+/// Whose objective a frog is. Tells the two frogs of a Hunt round apart
+/// (round-end rule, ground-ring colour, hunter targeting); the frog itself
+/// behaves identically on either side.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Side {
+    Player,
+    Enemy,
+}
+
+impl Side {
+    pub fn name(self) -> &'static str {
+        match self {
+            Side::Player => "player",
+            Side::Enemy => "enemy",
+        }
+    }
+}
+
 pub struct Frog {
+    pub side: Side,
     pub position: Position,
     pub health: f32,
     pub max_health: f32,
@@ -308,6 +330,23 @@ impl FrogVariantTextures {
             explosion: &self.explosion,
         }
     }
+}
+
+/// Draw the frog's side marker: the shared ground ring
+/// (`tank::draw_ground_ring_at`, the player tank's own marker in the same
+/// size class) under the sprite, white for the player's frog and red for
+/// the enemy's, at `player_ring_opacity`. Gone once the frog is dead - the
+/// explosion crater has no side. Call before `draw_frog`.
+pub fn draw_frog_ring(d: &mut impl RaylibDraw, frog: &Frog, time: f32) {
+    if frog.is_dead() {
+        return;
+    }
+    let alpha = (tuning().player_ring_opacity * 255.0).round().clamp(0.0, 255.0) as u8;
+    let color = match frog.side {
+        Side::Player => Color::new(255, 255, 255, alpha),
+        Side::Enemy => Color::new(230, 40, 40, alpha),
+    };
+    crate::tank::draw_ground_ring_at(d, frog.position, frog.size(), 0.0, time, crate::tank::RingStyle::Solid(color), 1.0);
 }
 
 /// Draw the frog: whichever of `textures`' five clips `Frog::anim` picks

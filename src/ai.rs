@@ -1,9 +1,11 @@
 use crate::tuning::tuning;
+use serde::{Deserialize, Serialize};
 use rand::RngExt;
 use rand::rngs::SmallRng;
 use sola_raylib::prelude::Vector2;
 
 use crate::bt::{Node, Status, action, condition, selector, sequence};
+use crate::obstacle::Material;
 use crate::pathfind::Grid;
 use crate::pickup::PickupKind;
 use crate::tank::{ActiveWeapon, Dir, Tank};
@@ -44,10 +46,79 @@ pub struct Intent {
     pub fire_aim_offset: f32,
 }
 
+/// What stands directly ahead of a tank in one direction - the tile a shot
+/// fired that way would hit within breach reach (see `Ai::think`'s
+/// `walls_ahead` and `Brain::wants_breach`).
+#[derive(Clone, Copy, Debug)]
+pub struct WallAhead {
+    pub material: Material,
+    /// Wood already alight: solid, but shooting it does nothing.
+    pub burning: bool,
+}
+
+/// A latched decision to shoot through the tile in `dir` (see
+/// `Brain::wants_breach`); `timer` is the seconds left before giving up.
+#[derive(Clone, Copy)]
+struct Breach {
+    dir: Dir,
+    timer: f32,
+}
+
+/// A guard's beat (see `Role::Guard`): the annulus `keep_off..=radius`
+/// around `anchor`, its own frog. The inner radius keeps the guard out of
+/// the frog's bite and hop ranges - the frog is a solid body that snaps at
+/// and hops away from any tank, its guard included.
+#[derive(Clone, Copy, Debug)]
+struct Leash {
+    anchor: Position,
+    radius: f32,
+    keep_off: f32,
+}
+
+impl Leash {
+    fn contains(&self, p: Position) -> bool {
+        let d = p.distance_to(self.anchor);
+        d >= self.keep_off && d <= self.radius
+    }
+}
+
+/// What an enemy is for this round - rolled once at spawn by `Game::init`
+/// from the mission's hunter share (docs/maps-to-levels.md "AI roles").
+/// `think`'s `target`/`frog_target` parameters are what the simulation
+/// resolves from the role each frame; the tree reads the role itself only
+/// for the two role-specific tiers (`build`'s snipe and guard).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    /// Fights the player: the engagement ring is around the player.
+    #[default]
+    Player,
+    /// Drives at and shoots the player's frog through a second ring around
+    /// it; shoots the player only when already lined up within attack
+    /// range. Behaves as `Player` once that frog is dead.
+    Hunter,
+    /// Stays within `guard_leash_px` of its own frog: engages the player
+    /// like `Player` while the player is inside that leash, otherwise
+    /// wanders inside it and heads back whenever it finds itself outside.
+    Guard,
+}
+
+impl Role {
+    pub fn name(self) -> &'static str {
+        match self {
+            Role::Player => "player",
+            Role::Hunter => "hunter",
+            Role::Guard => "guard",
+        }
+    }
+}
+
 /// Persistent per-enemy memory that survives across frames. Kept separate from
 /// the transient perception so the behavior tree can read state and remember
 /// decisions (committed heading, timers) between ticks.
 pub struct Ai {
+    /// What this enemy is for - see `Role`. Set at spawn, never changes.
+    pub role: Role,
     /// Roaming target used while patrolling.
     waypoint: Position,
     /// Seconds until we pick a fresh patrol waypoint (avoids per-frame jitter).
@@ -67,6 +138,10 @@ pub struct Ai {
     /// commits for a short window instead of being re-decided every frame.
     dodge_dir: Option<Dir>,
     dodge_timer: f32,
+    /// Seconds until a hunter may take another opportunistic shot at the
+    /// player - set by `act_snipe` when it fires, so one snipe never
+    /// becomes a standing duel that forgets the frog.
+    snipe_cooldown: f32,
     /// True while backing off to recharge ammo. Latched between
     /// ENEMY_AMMO_LOW and ENEMY_AMMO_RESUME (see `wants_retreat`) so the tank
     /// doesn't flicker into and out of Attack every frame near either
@@ -79,20 +154,33 @@ pub struct Ai {
     /// was progress in the direction that was asked for. See
     /// `stuck_timer`.
     last_move_dir: Option<Dir>,
+    /// Where this tank stood at the previous tick - the baseline the next
+    /// tick's displacement is measured from. `None` before the first tick.
+    last_position: Option<Position>,
+    /// Displacement per second along the commanded heading, smoothed over
+    /// `stuck_progress_window_seconds` (an exponential average). `None`
+    /// while the tank is deliberately holding position or has no
+    /// displacement to judge yet. The smoothing is what makes the stuck
+    /// clock immune to a single-frame twitch: two tanks pressed together
+    /// creep a fraction of a pixel a frame and occasionally get shoved a
+    /// pixel or two by the contact solver, and an unsmoothed check reset
+    /// on every such frame, so the pair sat jammed for good.
+    progress_avg: Option<f32>,
     /// Seconds this tank has been asked to move (see `last_move_dir`)
-    /// while its real physics velocity shows no progress *along that
-    /// heading* - ticked in `think`, using the real, physics-derived
-    /// velocity passed in from `simulation.rs` (never read directly from
-    /// `Physics` here - see this module's AI-decoupling convention).
-    /// Progress is the velocity's component along the commanded heading,
-    /// not its magnitude: a tank wedged in a jam of other tanks can be
-    /// carried sideways at near full speed while getting nowhere it was
-    /// told to go, and a speed check reads that as "moving fine". Once
-    /// this crosses STUCK_ESCAPE_SECONDS, `steer` forces an escape and
-    /// resets it to zero. Catches everything the obstacle-ahead override
-    /// in `steer` can't: a bad commitment call it didn't foresee, a jam
-    /// against other tanks, or a layout with no path around an obstacle
-    /// cluster at all.
+    /// while `progress_avg` stays under `stuck_speed_eps` - ticked in
+    /// `think` from the tank's own displacement, never from a physics
+    /// velocity: the contact solver hands a tank pushing against another
+    /// body a velocity along its heading every frame without it going
+    /// anywhere, which is exactly the case this clock exists to catch.
+    /// Progress is the displacement's component along the commanded
+    /// heading, not its magnitude: a tank wedged in a jam of other tanks
+    /// can be carried sideways at near full speed while getting nowhere it
+    /// was told to go, and a speed check reads that as "moving fine".
+    /// Once this crosses `stuck_escape_seconds`, `steer` forces an escape
+    /// and resets it to zero. Catches everything the obstacle-ahead
+    /// override in `steer` can't: a bad commitment call it didn't foresee,
+    /// a jam against other tanks, or a layout with no path around an
+    /// obstacle cluster at all.
     stuck_timer: f32,
     /// Seconds remaining since this tank last took a hit - see
     /// `notify_hit`/`ENEMY_HIT_ALERT_SECONDS`. `build`'s Chase condition
@@ -114,11 +202,63 @@ pub struct Ai {
     /// lapping a tight box at full speed, one fresh unreachable waypoint
     /// per frame.
     wander_pocketed: bool,
+    /// The behaviour-tree action the last `think` settled on (see
+    /// `bt::Node::tick_traced`) and the intent it produced - inspection
+    /// only, nothing in `think` reads them back.
+    last_action: Option<&'static str>,
+    last_intent: Intent,
+    /// Seconds running that the tank has commanded movement straight into
+    /// a destructible tile (`walls_ahead` in its `last_move_dir`) - the
+    /// trigger for a breach. Velocity-independent on purpose: a tank
+    /// scraping sideways along a wall it keeps driving at counts.
+    wall_ahead_timer: f32,
+    /// The breach in progress, if any - see `Brain::wants_breach`.
+    breach: Option<Breach>,
+    /// Stuck escapes fired this round (see `stuck_timer`) - a counter
+    /// rather than a flag so tooling can see an escape that fired and
+    /// reset within one frame.
+    escapes: u32,
+}
+
+/// Read-only view of an `Ai`'s memory for tooling (`Ai::snapshot`).
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct AiSnapshot {
+    /// `Role::name`.
+    pub role: &'static str,
+    pub waypoint_x: f32,
+    pub waypoint_y: f32,
+    pub committed_dir: Option<&'static str>,
+    pub dir_hold: f32,
+    pub dodge_dir: Option<&'static str>,
+    pub dodge_timer: f32,
+    pub snipe_cooldown: f32,
+    pub retreating: bool,
+    pub stuck_timer: f32,
+    pub hit_alert_timer: f32,
+    pub aim_settle: f32,
+    pub fire_timer: f32,
+    pub wander_pocketed: bool,
+    pub last_move_dir: Option<&'static str>,
+    /// Smoothed displacement per second along the commanded heading
+    /// (`Ai::progress_avg`); `None` while holding position.
+    pub progress_px_s: Option<f32>,
+    pub last_action: Option<&'static str>,
+    pub wall_ahead_timer: f32,
+    /// Direction of the breach in progress.
+    pub breaching: Option<&'static str>,
+    pub intent_move: Option<&'static str>,
+    pub intent_face: Option<&'static str>,
+    pub intent_fire: bool,
+    pub retarget_timer: f32,
+    /// Seconds left before the breach in progress is given up.
+    pub breach_timer: Option<f32>,
+    pub escapes: u32,
 }
 
 impl Default for Ai {
     fn default() -> Self {
         Self {
+            role: Role::Player,
             waypoint: Position::default(),
             retarget_timer: 0.0,
             fire_timer: tuning().enemy_fire_interval,
@@ -127,30 +267,39 @@ impl Default for Ai {
             aim_settle: 0.0,
             dodge_dir: None,
             dodge_timer: 0.0,
+            snipe_cooldown: 0.0,
             retreating: false,
             last_move_dir: None,
+            last_position: None,
+            progress_avg: None,
             stuck_timer: 0.0,
             hit_alert_timer: 0.0,
             wander_pocketed: false,
+            last_action: None,
+            last_intent: Intent::default(),
+            wall_ahead_timer: 0.0,
+            breach: None,
+            escapes: 0,
         }
     }
 }
 
 impl Ai {
+    /// A fresh memory for an enemy spawning with `role`.
+    pub fn with_role(role: Role) -> Self {
+        Ai { role, ..Ai::default() }
+    }
+
     /// Decide this enemy's intent for the frame by ticking the behavior tree.
     /// `rng` is threaded in so patrol wandering is varied; timers advance by `dt`.
     /// `movers` is a snapshot of every live tank (player + all enemies) used for
     /// predictive collision avoidance; `my_index` is this enemy's slot within it,
     /// so it can skip itself. The order matches how the game builds the slice.
     /// `grid` is this frame's obstacle occupancy grid (see `pathfind::Grid`),
-    /// used by `steer` to route around static obstacles. `real_velocity`
-    /// is this tank's actual physics velocity this frame
-    /// (`Physics::velocity`, read back in `simulation.rs` - the one place
-    /// this module gets to see anything physics-derived, kept as a plain
-    /// vector rather than reaching into `Physics` itself, per this
-    /// module's snapshot-only convention), used to detect a tank that's
-    /// been commanded to move but isn't getting anywhere along that
-    /// heading - see `stuck_timer`.
+    /// used by `steer` to route around static obstacles. Progress toward a
+    /// commanded heading is judged from `me.position` against the position
+    /// seen at the previous tick (`last_position`) - what the tank actually
+    /// displaced, never a physics velocity - see `stuck_timer`.
     /// `alert` is this frame's shared "last known player position" (see
     /// `simulation.rs`'s `Game::alert_position`) - `Some` while any enemy on
     /// the field currently has the player within `ENEMY_VIEW_RANGE` (or did
@@ -171,26 +320,46 @@ impl Ai {
     /// battlefield this frame (kind + position) - see `Brain::nearest_pickup`,
     /// used by `act_flee`/`act_retreat` so a hurting or ammo-starved tank
     /// heads for a pickup instead of just running blind.
-    /// `line_of_sight` is whether this tank's straight line to the player is
-    /// currently unobstructed by terrain (any obstacle, or the frog) -
-    /// computed in `simulation` (see `hits::Terrain::line_of_sight`) against the
-    /// real, un-margined obstacle geometry a shot would actually resolve
-    /// against, deliberately *not* `pathfind::Grid`: that grid's clearance
-    /// margin is sized for a tank's own hull to route through gaps, not for
-    /// a shell's, so reusing it here rejected plenty of geometrically clear
+    /// `line_of_sight` is whether this tank's straight line to `target` is
+    /// currently unobstructed by terrain (any obstacle, or a frog other than
+    /// the target itself) - computed in `simulation` (see
+    /// `hits::Terrain::line_of_sight`) against the real, un-margined
+    /// obstacle geometry a shot would actually resolve against,
+    /// deliberately *not* `pathfind::Grid`: that grid's clearance margin is
+    /// sized for a tank's own hull to route through gaps, not for a
+    /// shell's, so reusing it here rejected plenty of geometrically clear
     /// shots on denser maps and left engaged enemies unable to ever find a
     /// firing solution. Gates `act_attack`'s fire decision so an enemy
-    /// aligned through a wall it can't destroy (or with the frog in the way)
-    /// doesn't just fire into it forever.
+    /// aligned through a wall it can't destroy (or with a frog in the way)
+    /// doesn't just fire into it forever. For a hunter it is the line of
+    /// *fire* to the frog instead (`hits::Terrain::line_of_fire_to_frog`):
+    /// only iron or another frog blocks it, so a walled-in frog is shot at
+    /// through its destructible walls until they fall. `player_line_of_sight` is the
+    /// same test toward the player, for a hunter's opportunistic shot
+    /// (`build`'s snipe tier); identical to `line_of_sight` whenever the
+    /// player *is* the target.
+    /// `target` is the point this tank fights - the player's position, or
+    /// for a `Role::Hunter` the player's frog while it lives - the thing
+    /// `act_chase`/`act_attack` close on and aim at. `frog_target` is the
+    /// frog this role is anchored to, while it lives: a hunter's quarry
+    /// (the player's frog, so `Some` means `target` is that frog; `None`
+    /// once it is dead, and the hunter fights the player like everyone
+    /// else) or a guard's own frog (the leash anchor). `None` for
+    /// `Role::Player`.
+    /// `walls_ahead` is, per `Dir` (indexed by `Dir::index`), the tile a
+    /// shot fired that way would hit within breach reach
+    /// (`Terrain::obstacle_ahead`), so a tank wedged against a brick can
+    /// decide to shoot it down - see `Brain::wants_breach`.
     #[allow(clippy::too_many_arguments)] // perception is passed by value, not bundled
     pub fn think(
         &mut self,
         me: &Tank,
         player: &Tank,
+        target: Position,
+        frog_target: Option<Position>,
         width: f32,
         height: f32,
         dt: f32,
-        real_velocity: Position,
         movers: &[Mover],
         my_index: usize,
         grid: &Grid,
@@ -199,34 +368,71 @@ impl Ai {
         engage_target: Option<Position>,
         pickups: &[(PickupKind, Position)],
         line_of_sight: bool,
+        player_line_of_sight: bool,
+        walls_ahead: [Option<WallAhead>; 4],
     ) -> Intent {
         self.fire_timer = (self.fire_timer - dt).max(0.0);
         self.retarget_timer = (self.retarget_timer - dt).max(0.0);
         self.hit_alert_timer = (self.hit_alert_timer - dt).max(0.0);
         self.dir_hold += dt;
         self.dodge_timer = (self.dodge_timer - dt).max(0.0);
+        self.snipe_cooldown = (self.snipe_cooldown - dt).max(0.0);
         if self.dodge_timer <= 0.0 {
             self.dodge_dir = None;
         }
         // Was asked to move last tick and made no headway in that
-        // direction: another dt of stuck evidence. Only the velocity
+        // direction: another dt of stuck evidence. Only the displacement
         // component along the commanded heading counts - being shoved
-        // sideways or backwards by other tanks is not progress. Wasn't
-        // asked to move (or did make headway) resets the count -
+        // sideways or backwards by other tanks is not progress - and it is
+        // smoothed over `stuck_progress_window_seconds` so one twitchy
+        // frame cannot clear the clock. Wasn't asked to move resets it -
         // deliberately holding position to aim/wait isn't stuck. See
         // `steer_toward`'s escape.
-        let progress = self
+        let moved = self.last_position.map(|p| Position::new(me.position.x - p.x, me.position.y - p.y));
+        self.last_position = Some(me.position);
+        match (self.last_move_dir, moved) {
+            (Some(dir), Some(moved)) => {
+                let progress = (moved.x * dir.vec().x + moved.y * dir.vec().y) / dt.max(f32::EPSILON);
+                let k = (dt / tuning().stuck_progress_window_seconds).clamp(0.0, 1.0);
+                let avg = match self.progress_avg {
+                    Some(avg) => avg + (progress - avg) * k,
+                    None => progress,
+                };
+                self.progress_avg = Some(avg);
+                if avg < tuning().stuck_speed_eps {
+                    self.stuck_timer += dt;
+                } else {
+                    self.stuck_timer = 0.0;
+                }
+            }
+            // Commanded, but no baseline to measure against yet (first
+            // tick): no evidence either way.
+            (Some(_), None) => {}
+            (None, _) => {
+                self.stuck_timer = 0.0;
+                self.progress_avg = None;
+            }
+        }
+        // Breach evidence: still commanding movement into a tile that a
+        // shell could remove. Iron never counts.
+        let into_wall = self
             .last_move_dir
-            .map(|dir| real_velocity.x * dir.vec().x + real_velocity.y * dir.vec().y);
-        if progress.is_some_and(|p| p < tuning().stuck_speed_eps) {
-            self.stuck_timer += dt;
+            .and_then(|d| walls_ahead[d.index()])
+            .is_some_and(|w| w.material != Material::Iron);
+        if into_wall {
+            self.wall_ahead_timer += dt;
         } else {
-            self.stuck_timer = 0.0;
+            self.wall_ahead_timer = 0.0;
+        }
+        if let Some(breach) = &mut self.breach {
+            breach.timer -= dt;
         }
 
         let mut bb = Brain {
             me,
             player,
+            target,
+            frog_target,
             width,
             height,
             dt,
@@ -240,11 +446,48 @@ impl Ai {
             engage_target,
             pickups,
             line_of_sight,
+            player_line_of_sight,
+            walls_ahead,
         };
-        build().tick(&mut bb);
+        let mut last_action = None;
+        build().tick_traced(&mut bb, &mut last_action);
         let intent = bb.intent;
         self.last_move_dir = intent.move_dir;
+        self.last_action = last_action;
+        self.last_intent = intent;
         intent
+    }
+
+    /// This tank's AI memory as plain values - for the dev server's
+    /// snapshot and overlays.
+    pub fn snapshot(&self) -> AiSnapshot {
+        AiSnapshot {
+            role: self.role.name(),
+            waypoint_x: self.waypoint.x,
+            waypoint_y: self.waypoint.y,
+            committed_dir: self.committed_dir.map(Dir::name),
+            dir_hold: self.dir_hold,
+            dodge_dir: self.dodge_dir.map(Dir::name),
+            dodge_timer: self.dodge_timer,
+            snipe_cooldown: self.snipe_cooldown,
+            retreating: self.retreating,
+            stuck_timer: self.stuck_timer,
+            hit_alert_timer: self.hit_alert_timer,
+            aim_settle: self.aim_settle,
+            fire_timer: self.fire_timer,
+            wander_pocketed: self.wander_pocketed,
+            last_move_dir: self.last_move_dir.map(Dir::name),
+            progress_px_s: self.progress_avg,
+            last_action: self.last_action,
+            wall_ahead_timer: self.wall_ahead_timer,
+            breaching: self.breach.map(|b| b.dir.name()),
+            intent_move: self.last_intent.move_dir.map(Dir::name),
+            intent_face: self.last_intent.face.map(Dir::name),
+            intent_fire: self.last_intent.fire,
+            retarget_timer: self.retarget_timer,
+            breach_timer: self.breach.map(|b| b.timer),
+            escapes: self.escapes,
+        }
     }
 
     /// Called from `simulation.rs`'s shell-hit resolution whenever a shell
@@ -316,7 +559,7 @@ impl Ai {
     ) -> Dir {
         let path = grid.next_step(from, target);
         if path.is_none() && !grid.same_cell(from, target) {
-            return self.wander(from, bounds, half, margin, ctx, grid, rng);
+            return self.wander(from, bounds, half, margin, None, ctx, grid, rng);
         }
         self.steer_toward(from, path, target, bounds, half, ctx, grid)
     }
@@ -344,6 +587,12 @@ impl Ai {
     /// picking again next frame (not gated behind the timer, unlike the
     /// "reached"/"timer expired" cases) converges within a handful of
     /// frames given how much of the battlefield is normally open ground.
+    ///
+    /// `leash` confines the waypoint to a guard's beat around its frog (see
+    /// `Leash`): candidates are sampled from the beat's bounding box
+    /// (clipped to the margin) and kept only inside the annulus, and a
+    /// waypoint that falls outside it - left over from an unleashed wander,
+    /// or overtaken by a frog hop - is resampled at once.
     #[allow(clippy::too_many_arguments)] // perception is passed by value, not bundled
     fn wander(
         &mut self,
@@ -351,6 +600,7 @@ impl Ai {
         bounds: (f32, f32),
         half: f32,
         margin: f32,
+        leash: Option<Leash>,
         ctx: AvoidCtx,
         grid: &Grid,
         rng: &mut SmallRng,
@@ -358,6 +608,20 @@ impl Ai {
         let (width, height) = bounds;
         let reachable =
             |wp: Position| grid.next_step(from, wp).is_some() || grid.same_cell(from, wp);
+        // The sampling box: the whole margin-inset battlefield, or the
+        // beat's bounding box clipped to it (never empty - a beat pressed
+        // against the edge still yields a sliver).
+        let (x_range, y_range) = match leash {
+            None => (margin..(width - margin), margin..(height - margin)),
+            Some(Leash { anchor, radius, .. }) => {
+                let x0 = (anchor.x - radius).max(margin);
+                let y0 = (anchor.y - radius).max(margin);
+                let x1 = (anchor.x + radius).min(width - margin).max(x0 + 1.0);
+                let y1 = (anchor.y + radius).min(height - margin).max(y0 + 1.0);
+                (x0..x1, y0..y1)
+            }
+        };
+        let inside_leash = |p: Position| leash.is_none_or(|l| l.contains(p));
         // Only resample early over unreachability if a *different* waypoint
         // could plausibly do better. When `from` itself is boxed in (see
         // `Grid::boxed_in`), every candidate fails identically no matter
@@ -375,6 +639,7 @@ impl Ai {
         // different scale - see the field's own doc comment.
         if self.retarget_timer <= 0.0
             || from.distance_to(self.waypoint) < margin
+            || !inside_leash(self.waypoint)
             || (!stuck_here && !self.wander_pocketed && !reachable(self.waypoint))
         {
             // Roll WANDER_SPREAD_CANDIDATES points and keep whichever is
@@ -395,11 +660,10 @@ impl Ai {
             let mut best: Option<(Position, f32)> = None;
             for _ in 0..tuning().wander_spread_candidates {
                 let candidate = Position::new(
-                    rng.random_range(margin..(width - margin)),
-                    rng.random_range(margin..(height - margin)),
+                    rng.random_range(x_range.clone()),
+                    rng.random_range(y_range.clone()),
                 );
-                if !(grid.next_step(from, candidate).is_some() || grid.same_cell(from, candidate))
-                {
+                if !inside_leash(candidate) || !reachable(candidate) {
                     continue;
                 }
                 let spread = ctx
@@ -419,10 +683,7 @@ impl Ai {
             // cadence would just spin the tank - see `wander_pocketed`.
             self.wander_pocketed = best.is_none();
             self.waypoint = best.map(|(candidate, _)| candidate).unwrap_or_else(|| {
-                Position::new(
-                    rng.random_range(margin..(width - margin)),
-                    rng.random_range(margin..(height - margin)),
-                )
+                Position::new(rng.random_range(x_range.clone()), rng.random_range(y_range.clone()))
             });
             self.retarget_timer = tuning().enemy_retarget_seconds;
         }
@@ -484,6 +745,7 @@ impl Ai {
             // and straight back out as the last resort - a tank pinned in a
             // corner has nowhere else to go.
             self.stuck_timer = 0.0;
+            self.escapes += 1;
             let failing = self.committed_dir.unwrap_or(fresh);
             let left = ctx.my_index.is_multiple_of(2);
             let blocked =
@@ -793,6 +1055,10 @@ struct AvoidCtx<'a> {
 struct Brain<'a> {
     me: &'a Tank,
     player: &'a Tank,
+    /// What this tank fights - see `think`'s `target` parameter.
+    target: Position,
+    /// The frog this role is anchored to - see `think`'s `frog_target`.
+    frog_target: Option<Position>,
     width: f32,
     height: f32,
     dt: f32,
@@ -819,9 +1085,15 @@ struct Brain<'a> {
     /// Every currently-live pickup on the battlefield - see `think`'s
     /// `pickups` parameter and `nearest_pickup`.
     pickups: &'a [(PickupKind, Position)],
-    /// Whether this tank's straight line to the player is currently clear
+    /// Whether this tank's straight line to `target` is currently clear
     /// of terrain - see `think`'s `line_of_sight` parameter.
     line_of_sight: bool,
+    /// The same test toward the player - see `think`'s
+    /// `player_line_of_sight` parameter.
+    player_line_of_sight: bool,
+    /// The tile directly ahead in each direction - see `think`'s
+    /// `walls_ahead` parameter.
+    walls_ahead: [Option<WallAhead>; 4],
 }
 
 impl Brain<'_> {
@@ -829,18 +1101,73 @@ impl Brain<'_> {
         self.me.position.distance_to(self.player.position)
     }
 
-    /// Where to steer when closing in on/repositioning around the player -
+    fn dist_to_target(&self) -> f32 {
+        self.me.position.distance_to(self.target)
+    }
+
+    /// Where to steer when closing in on/repositioning around the target -
     /// this tank's engagement-ring slot if it has one, otherwise the
-    /// player's exact position. Used by `act_chase` and `act_attack`'s
+    /// target's exact position. Used by `act_chase` and `act_attack`'s
     /// reposition branch; firing/aim (`aim_alignment`) always targets the
-    /// real player regardless, so spreading out changes where a tank walks,
+    /// real target regardless, so spreading out changes where a tank walks,
     /// never what it shoots at.
     fn engage_point(&self) -> Position {
-        self.engage_target.unwrap_or(self.player.position)
+        self.engage_target.unwrap_or(self.target)
     }
 
     fn player_alive(&self) -> bool {
         !self.player.is_wreck()
+    }
+
+    /// Whether `target` is still worth fighting: a hunter's frog while it
+    /// lives (`frog_target` is `Some`), otherwise the player.
+    fn target_alive(&self) -> bool {
+        self.hunting_frog() || self.player_alive()
+    }
+
+    /// True while this tank is a hunter whose quarry is alive - i.e. while
+    /// `target` is the player's frog rather than the player.
+    fn hunting_frog(&self) -> bool {
+        self.ai.role == Role::Hunter && self.frog_target.is_some()
+    }
+
+    /// The guard's beat around its own frog for a guard whose frog is
+    /// alive, `None` for every other role. The outer radius is
+    /// `guard_leash_px` less a hull, so a waypoint on the rim never carries
+    /// the hull over the line; the inner one `guard_keep_off_px`, capped
+    /// so the annulus never closes.
+    fn leash(&self) -> Option<Leash> {
+        if self.ai.role != Role::Guard {
+            return None;
+        }
+        let anchor = self.frog_target?;
+        let radius = (tuning().guard_leash_px - self.me.size()).max(self.me.size());
+        let keep_off = tuning().guard_keep_off_px.min(radius * 0.75);
+        Some(Leash { anchor, radius, keep_off })
+    }
+
+    /// Whether a guard should hold its beat rather than fight: the player
+    /// is dead or outside `guard_leash_px` of its frog.
+    fn guard_holds(&self) -> bool {
+        self.leash().is_some_and(|l| {
+            !self.player_alive() || self.player.position.distance_to(l.anchor) > tuning().guard_leash_px
+        })
+    }
+
+    /// Whether a hunter can take the opportunistic shot at the player this
+    /// tick: the player is alive, within attack range, in clear sight and
+    /// already lined up on one of this tank's firing axes - so no
+    /// repositioning away from the frog is ever spent on it - and the last
+    /// snipe's `hunter_snipe_cooldown_seconds` have passed.
+    fn can_snipe_player(&self) -> bool {
+        if !self.hunting_frog() || !self.player_alive() || !self.player_line_of_sight || self.ai.snipe_cooldown > 0.0 {
+            return false;
+        }
+        if self.dist_to_player() > tuning().enemy_attack_range {
+            return false;
+        }
+        let (_, off_axis, in_front) = self.aim_alignment_at(self.player.position);
+        off_axis <= tuning().enemy_fire_align_px && in_front
     }
 
     /// This tank's own position to the nearest currently-live pickup of
@@ -936,23 +1263,112 @@ impl Brain<'_> {
             (self.width, self.height),
             radius,
             self.me.size(),
+            None,
             ctx,
             self.grid,
             self.rng,
         )
     }
 
-    /// Perpendicular offset of the player from the firing axis toward them, and
-    /// whether the player is actually in front (positive along the fire dir).
+    /// `wander` confined to `leash` - a guard's beat.
+    fn wander_within(&mut self, leash: Leash) -> Dir {
+        let radius = self.me.avoidance_radius();
+        let ctx = AvoidCtx {
+            movers: self.movers,
+            my_index: self.my_index,
+            radius,
+            speed: self.me.effective_speed(),
+        };
+        self.ai.wander(
+            self.me.position,
+            (self.width, self.height),
+            radius,
+            self.me.size(),
+            Some(leash),
+            ctx,
+            self.grid,
+            self.rng,
+        )
+    }
+
+    /// Perpendicular offset of the target from the firing axis toward it,
+    /// and whether the target is actually in front (positive along the
+    /// fire dir).
     fn aim_alignment(&self) -> (Dir, f32, bool) {
-        let dir = Dir::toward(self.me.position, self.player.position);
-        let (off_axis, forward) = axis_offsets(self.me.position, self.player.position, dir);
+        self.aim_alignment_at(self.target)
+    }
+
+    /// `aim_alignment` toward an arbitrary point.
+    fn aim_alignment_at(&self, at: Position) -> (Dir, f32, bool) {
+        let dir = Dir::toward(self.me.position, at);
+        let (off_axis, forward) = axis_offsets(self.me.position, at, dir);
         (dir, off_axis, forward > 0.0)
     }
 
+    /// Hold position facing `fire_dir` and, once the aim has settled for
+    /// `enemy_aim_settle` and the fire timer allows, shoot at the point
+    /// `range` px ahead - the aligned half of `act_attack`, shared with the
+    /// hunter's snipe. Holds fire (mostly) when a teammate is in the way.
+    fn hold_and_fire(&mut self, fire_dir: Dir, range: f32) {
+        self.ai.aim_settle += self.dt;
+        self.intent.face = Some(fire_dir);
+        // Keep the committed heading in sync so leaving Attack doesn't snap.
+        self.ai.commit(fire_dir);
+
+        if self.ai.aim_settle >= tuning().enemy_aim_settle && self.ai.fire_timer <= 0.0 {
+            let blocked = self.friendly_blocks_shot(fire_dir, range);
+            let hold_fire =
+                blocked && self.rng.random_range(0.0..1.0) < tuning().enemy_friendly_fire_hold_chance;
+            // Whether it fires or holds, this firing opportunity is spent -
+            // otherwise a held shot would just re-roll every frame at ~60Hz
+            // and fire almost immediately anyway, defeating the hold chance.
+            // The interval itself scales with ammo: fuller magazine, faster
+            // follow-up shot (see Brain::fire_interval).
+            self.ai.fire_timer = self.fire_interval();
+            if !hold_fire {
+                self.intent.fire = true;
+                self.intent.fire_aim_offset = self.roll_misfire(range);
+            }
+        }
+    }
+
+
+    /// Whether to shoot through the tile ahead instead of steering around
+    /// it. Latched into `Ai::breach` once the tank has spent
+    /// `enemy_breach_after_seconds` driving into a destructible tile, and
+    /// kept while that tile still stands, the give-up timer runs, and the
+    /// tank can afford it: damage at or under `enemy_breach_max_damage`
+    /// and, on shells, `enemy_breach_min_shells` in the rack (a special
+    /// weapon spends no shells, so it always qualifies). Iron is never
+    /// breached. The moment the tile is gone the latch clears and normal
+    /// steering finds the fresh gap.
+    fn wants_breach(&mut self) -> bool {
+        let t = tuning();
+        let can_afford = self.me.damage <= t.enemy_breach_max_damage
+            && (self.me.active_weapon() != ActiveWeapon::Shell || self.me.shells_ammo >= t.enemy_breach_min_shells);
+        let walls = self.walls_ahead;
+        let wall_in = |dir: Dir| walls[dir.index()].filter(|w| w.material != Material::Iron);
+        if let Some(breach) = self.ai.breach {
+            if can_afford && breach.timer > 0.0 && wall_in(breach.dir).is_some() {
+                return true;
+            }
+            self.ai.breach = None;
+            return false;
+        }
+        if !can_afford || self.ai.wall_ahead_timer < t.enemy_breach_after_seconds {
+            return false;
+        }
+        let Some(dir) = self.ai.last_move_dir else { return false };
+        if wall_in(dir).is_none() {
+            return false;
+        }
+        self.ai.breach = Some(Breach { dir, timer: t.enemy_breach_give_up_seconds });
+        self.ai.wall_ahead_timer = 0.0;
+        true
+    }
 
     /// True if another enemy sits roughly on `fire_dir`'s line, closer than
-    /// `max_forward` (normally the distance to the player) - i.e. firing
+    /// `max_forward` (normally the distance to the target) - i.e. firing
     /// straight down that axis right now would hit a teammate before the
     /// shot ever reached its intended target. Checked against `movers`
     /// (skipping slot 0, the player, and this tank's own slot) since that's
@@ -990,23 +1406,35 @@ fn axis_offsets(from: Position, to: Position, dir: Dir) -> (f32, f32) {
 ///   1. Dead? do nothing.
 ///   2. Flee when badly hurt.
 ///   3. Retreat to recharge when ammo is low.
-///   4. Attack when in range (aim, settle, fire; else close in).
-///   5. Chase when the player is visible.
+///   3.5. A hunter lined up on the player in range: snipe (hold, fire).
+///   3.6. A guard whose player is outside the leash: hold the beat.
+///   4. Attack when the target is in range (aim, settle, fire; else close in).
+///   5. Chase when the target is visible.
 ///   6. Patrol otherwise.
 ///
+/// "Target" is the player for `Role::Player`/`Role::Guard` and the
+/// player's frog for a `Role::Hunter` while it lives (`think`'s `target`).
 /// The tree is rebuilt each tick (cheap: a handful of enum nodes) for clarity.
 fn build<'a>() -> Node<Brain<'a>> {
     selector(vec![
         // 1. Wrecks are inert.
         sequence(vec![
             condition(|b: &mut Brain| b.me.is_wreck()),
-            action(|_b: &mut Brain| Status::Success),
+            action("wreck", |_b: &mut Brain| Status::Success),
         ]),
         // 2. Flee when badly damaged and the player is still a threat.
         // Takes priority over the ammo-based retreat below: survival first.
         sequence(vec![
             condition(|b: &mut Brain| b.me.damage >= tuning().enemy_flee_damage && b.player_alive()),
-            action(act_flee),
+            action("flee", act_flee),
+        ]),
+        // 2.5. Wedged against a tile a shell can remove: stop and shoot it
+        // down rather than scrape along it - only while healthy and
+        // stocked, see `Brain::wants_breach`. Above retreat/attack so a
+        // tank that got stuck on its way to either finishes the job.
+        sequence(vec![
+            condition(|b: &mut Brain| b.wants_breach()),
+            action("breach", act_breach),
         ]),
         // 3. Low on shells: back off and hold fire until recharged - unless
         // a queued special weapon still has ammo, since firing that costs
@@ -1022,23 +1450,40 @@ fn build<'a>() -> Node<Brain<'a>> {
                     && b.me.active_weapon() == ActiveWeapon::Shell
                     && b.ai.wants_retreat(b.me.shells_ammo)
             }),
-            action(act_retreat),
+            action("retreat", act_retreat),
         ]),
-        // 4. Attack when the player is alive and within attack range.
+        // 3.5. A hunter that happens to be lined up on the player within
+        // attack range shoots the player this tick instead of the frog - an
+        // opportunity taken, never a detour (see `Brain::can_snipe_player`).
         sequence(vec![
-            condition(|b: &mut Brain| b.player_alive() && b.dist_to_player() <= tuning().enemy_attack_range),
-            action(act_attack),
+            condition(|b: &mut Brain| b.can_snipe_player()),
+            action("snipe", act_snipe),
         ]),
-        // 5. Chase when the player is alive and either within view range or
+        // 3.6. A guard whose player is nowhere near its frog stays on its
+        // beat instead of chasing - see `Role::Guard`.
+        sequence(vec![
+            condition(|b: &mut Brain| b.guard_holds()),
+            action("guard", act_guard),
+        ]),
+        // 4. Attack when the target is alive and within attack range.
+        sequence(vec![
+            condition(|b: &mut Brain| b.target_alive() && b.dist_to_target() <= tuning().enemy_attack_range),
+            action("attack", act_attack),
+        ]),
+        // 5. Chase when the target is alive and either within view range or
         // this tank has recently taken a hit - see `Ai::notify_hit`/
         // `ENEMY_HIT_ALERT_SECONDS`'s own doc comment: a shot landing from
-        // outside normal awareness range shouldn't just be shrugged off.
+        // outside normal awareness range shouldn't just be shrugged off. A
+        // hunter's frog is an objective, not a sighting: it is chased from
+        // anywhere on the map.
         sequence(vec![
             condition(|b: &mut Brain| {
-                b.player_alive()
-                    && (b.dist_to_player() <= tuning().enemy_view_range || b.ai.hit_alert_timer > 0.0)
+                b.target_alive()
+                    && (b.hunting_frog()
+                        || b.dist_to_target() <= tuning().enemy_view_range
+                        || b.ai.hit_alert_timer > 0.0)
             }),
-            action(act_chase),
+            action("chase", act_chase),
         ]),
         // 5.5. Opportunistically go collect a live Laser pickup when out of
         // charges - reached only once nothing higher-priority (fleeing,
@@ -1055,7 +1500,7 @@ fn build<'a>() -> Node<Brain<'a>> {
             condition(|b: &mut Brain| {
                 b.me.laser_charges <= 0 && b.pickups.iter().any(|(k, _)| *k == PickupKind::Laser)
             }),
-            action(act_seek_laser),
+            action("seek_laser", act_seek_laser),
         ]),
         // 5.6. Same idea for a live Plasma pickup - queueing it behind
         // whatever is currently live is a pure gain (see tier 5.5's
@@ -1065,7 +1510,7 @@ fn build<'a>() -> Node<Brain<'a>> {
                 b.me.plasma_ammo <= 0
                     && b.pickups.iter().any(|(k, _)| *k == PickupKind::Plasma)
             }),
-            action(act_seek_plasma),
+            action("seek_plasma", act_seek_plasma),
         ]),
         // 5.7. Same idea for a live Minigun pickup, last of the weapon
         // tiers (see tier 5.5's comment on ordering).
@@ -1074,7 +1519,7 @@ fn build<'a>() -> Node<Brain<'a>> {
                 b.me.minigun_ammo <= 0
                     && b.pickups.iter().any(|(k, _)| *k == PickupKind::Minigun)
             }),
-            action(act_seek_minigun),
+            action("seek_minigun", act_seek_minigun),
         ]),
         // 5.8. Same idea for a live SpeedUp pickup, reached whenever this
         // tank isn't currently boosted - unlike the weapon tiers above, this
@@ -1085,7 +1530,7 @@ fn build<'a>() -> Node<Brain<'a>> {
                 b.me.speed_boost_timer <= 0.0
                     && b.pickups.iter().any(|(k, _)| *k == PickupKind::SpeedUp)
             }),
-            action(act_seek_speedup),
+            action("seek_speedup", act_seek_speedup),
         ]),
         // 5.9. And for a live rainbow shield, whenever this tank isn't
         // already shielded - a full heal plus invulnerability is worth the
@@ -1094,10 +1539,10 @@ fn build<'a>() -> Node<Brain<'a>> {
             condition(|b: &mut Brain| {
                 b.me.shield_timer <= 0.0 && b.pickups.iter().any(|(k, _)| *k == PickupKind::Shield)
             }),
-            action(act_seek_shield),
+            action("seek_shield", act_seek_shield),
         ]),
         // 6. Fallback: patrol.
-        action(act_patrol),
+        action("patrol", act_patrol),
     ])
 }
 
@@ -1213,7 +1658,7 @@ fn act_seek_shield(b: &mut Brain) -> Status {
     Status::Success
 }
 
-/// Hold near the player and shoot when lined up on a cardinal axis. The tank
+/// Hold near the target and shoot when lined up on a cardinal axis. The tank
 /// only fires after staying aligned for ENEMY_AIM_SETTLE, and stops to aim.
 fn act_attack(b: &mut Brain) -> Status {
     let (fire_dir, off_axis, in_front) = b.aim_alignment();
@@ -1225,29 +1670,11 @@ fn act_attack(b: &mut Brain) -> Status {
 
     if aligned {
         // Line up: face the fire direction and hold position while settling.
-        b.ai.aim_settle += b.dt;
-        b.intent.face = Some(fire_dir);
-        // Keep the committed heading in sync so leaving Attack doesn't snap.
-        b.ai.commit(fire_dir);
-
-        if b.ai.aim_settle >= tuning().enemy_aim_settle && b.ai.fire_timer <= 0.0 {
-            let blocked = b.friendly_blocks_shot(fire_dir, b.dist_to_player());
-            let hold_fire =
-                blocked && b.rng.random_range(0.0..1.0) < tuning().enemy_friendly_fire_hold_chance;
-            // Whether it fires or holds, this firing opportunity is spent -
-            // otherwise a held shot would just re-roll every frame at ~60Hz
-            // and fire almost immediately anyway, defeating the hold chance.
-            // The interval itself scales with ammo: fuller magazine, faster
-            // follow-up shot (see Brain::fire_interval).
-            b.ai.fire_timer = b.fire_interval();
-            if !hold_fire {
-                b.intent.fire = true;
-                b.intent.fire_aim_offset = b.roll_misfire();
-            }
-        }
+        let range = b.dist_to_target();
+        b.hold_and_fire(fire_dir, range);
     } else {
         // Not lined up: reposition toward this tank's engagement-ring slot
-        // (with commitment) rather than the player's exact position, so a
+        // (with commitment) rather than the target's exact position, so a
         // group of attackers spreads out instead of piling onto the same
         // point - see `Brain::engage_point`.
         b.reset_aim();
@@ -1256,8 +1683,65 @@ fn act_attack(b: &mut Brain) -> Status {
     Status::Success
 }
 
-/// Close in on the player along a committed cardinal heading - toward this
-/// tank's engagement-ring slot, not the player's exact position, so a group
+/// A hunter's opportunistic shot at the player: already lined up (see
+/// `Brain::can_snipe_player`), so just hold and fire down that axis.
+fn act_snipe(b: &mut Brain) -> Status {
+    let (fire_dir, _, _) = b.aim_alignment_at(b.player.position);
+    let range = b.dist_to_player();
+    b.hold_and_fire(fire_dir, range);
+    if b.intent.fire {
+        b.ai.snipe_cooldown = tuning().hunter_snipe_cooldown_seconds;
+    }
+    Status::Success
+}
+
+/// A guard's beat while the player is away from its frog (see
+/// `Brain::guard_holds`): head back to the beat when outside it, otherwise
+/// wander within it.
+fn act_guard(b: &mut Brain) -> Status {
+    let Some(leash) = b.leash() else { return Status::Failure };
+    b.reset_aim();
+    let me = b.me.position;
+    if me.distance_to(leash.anchor) > leash.radius {
+        // Aim for the beat's inner rim on the line back to the frog, not
+        // the frog itself: it is a solid body in a blocked nav cell, so a
+        // route *to* it never exists. A committed heading still pointing
+        // away from home is dropped so the turn happens now - the
+        // hold/margin gate is blind to a straight reversal by design, and
+        // out here the only right answer is to go back.
+        let away = Vector2::new(me.x - leash.anchor.x, me.y - leash.anchor.y);
+        let len = (away.x * away.x + away.y * away.y).sqrt().max(1.0);
+        let rim = Position::new(leash.anchor.x + away.x / len * leash.keep_off, leash.anchor.y + away.y / len * leash.keep_off);
+        if b.ai.committed_dir.is_some_and(|d| d.vec().x * away.x + d.vec().y * away.y > 0.0) {
+            b.ai.committed_dir = None;
+        }
+        b.intent.move_dir = Some(b.steer(rim));
+    } else {
+        b.intent.move_dir = Some(b.wander_within(leash));
+    }
+    Status::Success
+}
+
+/// Hold position facing the tile ahead and shoot it down (see
+/// `Brain::wants_breach`). A burning wood tile is waited out, not shot:
+/// damage is a no-op until it chars away. Paced by `fire_timer` at
+/// `enemy_breach_fire_interval`, and held while a teammate is in front.
+fn act_breach(b: &mut Brain) -> Status {
+    let Some(breach) = b.ai.breach else { return Status::Failure };
+    b.reset_aim();
+    b.intent.face = Some(breach.dir);
+    b.ai.commit(breach.dir);
+    let burning = b.walls_ahead[breach.dir.index()].is_some_and(|w| w.burning);
+    let reach = b.me.hull_size() * 0.5 + tuning().enemy_breach_reach_px;
+    if !burning && b.ai.fire_timer <= 0.0 && !b.friendly_blocks_shot(breach.dir, reach) {
+        b.ai.fire_timer = tuning().enemy_breach_fire_interval;
+        b.intent.fire = true;
+    }
+    Status::Success
+}
+
+/// Close in on the target along a committed cardinal heading - toward this
+/// tank's engagement-ring slot, not the target's exact position, so a group
 /// of chasers spreads out instead of converging on the same point. See
 /// `Brain::engage_point`.
 fn act_chase(b: &mut Brain) -> Status {
@@ -1296,12 +1780,12 @@ impl Brain<'_> {
         self.ai.aim_settle = 0.0;
     }
 
-    /// Decide whether this shot misfires because the player is dangerously close,
-    /// returning the angular deflection (degrees, signed) to add to the shot. The
-    /// closer the player, the likelier the miss; zero means a clean shot. Beyond
-    /// ENEMY_MISFIRE_RANGE the enemy always fires straight.
-    fn roll_misfire(&mut self) -> f32 {
-        let dist = self.dist_to_player();
+    /// Decide whether this shot misfires because what it is aimed at is
+    /// dangerously close (`dist` px away), returning the angular deflection
+    /// (degrees, signed) to add to the shot. The closer, the likelier the
+    /// miss; zero means a clean shot. Beyond ENEMY_MISFIRE_RANGE the enemy
+    /// always fires straight.
+    fn roll_misfire(&mut self, dist: f32) -> f32 {
         if dist >= tuning().enemy_misfire_range {
             return 0.0;
         }
@@ -1324,31 +1808,165 @@ impl Brain<'_> {
 }
 
 #[cfg(test)]
+mod role_tests {
+    use super::*;
+    use rand::SeedableRng;
+
+    /// One open-field `think` tick for an enemy of `role` at `me`, the
+    /// player at `player`, fighting `target` (see `Ai::think`), with a
+    /// clear line of sight everywhere.
+    fn tick(ai: &mut Ai, me: Position, player: Position, target: Position, frog_target: Option<Position>) -> Intent {
+        let mut me_tank = Tank::default();
+        me_tank.position = me;
+        let mut player_tank = Tank::default();
+        player_tank.position = player;
+        let grid = Grid::build(1280.0, 720.0, 48.0, 0.0, std::iter::empty());
+        let movers = [
+            Mover { position: player, velocity: Vector2::new(0.0, 0.0), radius: 20.0 },
+            Mover { position: me, velocity: Vector2::new(0.0, 0.0), radius: 20.0 },
+        ];
+        let mut rng = SmallRng::seed_from_u64(7);
+        ai.think(
+            &me_tank,
+            &player_tank,
+            target,
+            frog_target,
+            1280.0,
+            720.0,
+            1.0 / 60.0,
+            &movers,
+            1,
+            &grid,
+            &mut rng,
+            None,
+            None,
+            &[],
+            true,
+            true,
+            [None; 4],
+        )
+    }
+
+    #[test]
+    fn a_hunter_closes_on_its_frog_and_reverts_to_the_player_without_one() {
+        let mut ai = Ai::with_role(Role::Hunter);
+        assert_eq!(ai.snapshot().role, "hunter");
+        let me = Position::new(600.0, 300.0);
+        let player = Position::new(200.0, 600.0);
+        let frog = Position::new(1100.0, 300.0);
+        // Quarry alive: the frog is the target, so the tank heads east
+        // toward it rather than south-west toward the player.
+        let intent = tick(&mut ai, me, player, frog, Some(frog));
+        assert_eq!(intent.move_dir, Some(Dir::Right), "{:?}", ai.snapshot().last_action);
+        assert_eq!(ai.snapshot().last_action, Some("chase"));
+        // Quarry dead: the simulation hands it the player as target and
+        // no frog, and it chases the player like any other enemy.
+        let mut ai = Ai::with_role(Role::Hunter);
+        let intent = tick(&mut ai, me, player, player, None);
+        assert!(
+            matches!(intent.move_dir, Some(Dir::Left | Dir::Down)),
+            "heads south-west toward the player, got {:?}",
+            intent.move_dir.map(Dir::name)
+        );
+        assert_eq!(ai.snapshot().last_action, Some("chase"));
+    }
+
+    #[test]
+    fn a_hunter_lined_up_on_the_player_in_range_snipes_instead() {
+        let mut ai = Ai::with_role(Role::Hunter);
+        let me = Position::new(600.0, 300.0);
+        let frog = Position::new(1100.0, 300.0);
+        // The player sits straight below, well inside attack range.
+        let player = Position::new(600.0, 300.0 + tuning().enemy_attack_range * 0.5);
+        // Snipe holds and settles its aim until the shot goes off.
+        let settle = (tuning().enemy_aim_settle * 60.0) as u32 + 2;
+        let mut fired = false;
+        for _ in 0..settle + 60 {
+            let intent = tick(&mut ai, me, player, frog, Some(frog));
+            assert_eq!(ai.snapshot().last_action, Some("snipe"));
+            assert_eq!(intent.move_dir, None, "a snipe holds position");
+            assert_eq!(intent.face, Some(Dir::Down));
+            if intent.fire {
+                fired = true;
+                break;
+            }
+        }
+        assert!(fired, "never fired at the player");
+        // One shot is the opportunity: still lined up, the hunter goes
+        // back to the frog until the snipe cooldown has run out.
+        assert!(ai.snapshot().snipe_cooldown > 0.0, "the shot starts the cooldown");
+        tick(&mut ai, me, player, frog, Some(frog));
+        assert_eq!(ai.snapshot().last_action, Some("chase"), "back to the frog after the shot");
+        let cooldown = (tuning().hunter_snipe_cooldown_seconds * 60.0) as u32 + 2;
+        for _ in 0..cooldown {
+            tick(&mut ai, me, player, frog, Some(frog));
+        }
+        assert_eq!(ai.snapshot().last_action, Some("snipe"), "may snipe again once the cooldown is over");
+        // Off-axis, the same player in range is ignored for the frog.
+        let mut ai = Ai::with_role(Role::Hunter);
+        let player = Position::new(700.0, 450.0);
+        tick(&mut ai, me, player, frog, Some(frog));
+        assert_eq!(ai.snapshot().last_action, Some("chase"));
+    }
+
+    #[test]
+    fn a_guard_holds_its_beat_until_the_player_comes_close() {
+        let frog = Position::new(1100.0, 300.0);
+        let leash = tuning().guard_leash_px;
+        // Player far from the frog, guard outside the leash: head home.
+        let mut ai = Ai::with_role(Role::Guard);
+        let intent = tick(&mut ai, Position::new(600.0, 300.0), Position::new(200.0, 600.0), Position::new(200.0, 600.0), Some(frog));
+        assert_eq!(ai.snapshot().last_action, Some("guard"));
+        assert_eq!(intent.move_dir, Some(Dir::Right));
+        // Guard inside the leash: wanders, but only to waypoints on its
+        // beat - inside the leash and clear of the frog's bite range.
+        let mut ai = Ai::with_role(Role::Guard);
+        let keep_off = tuning().guard_keep_off_px;
+        for _ in 0..600 {
+            let intent = tick(&mut ai, Position::new(1000.0, 300.0), Position::new(200.0, 600.0), Position::new(200.0, 600.0), Some(frog));
+            assert_eq!(ai.snapshot().last_action, Some("guard"));
+            assert!(intent.move_dir.is_some());
+            let s = ai.snapshot();
+            let wp = Position::new(s.waypoint_x, s.waypoint_y);
+            let d = wp.distance_to(frog);
+            assert!(d <= leash && d >= keep_off.min(leash * 0.5), "waypoint {wp:?} is {d} px from the frog");
+        }
+        // Player inside the leash: fights like everyone else.
+        let mut ai = Ai::with_role(Role::Guard);
+        let player = Position::new(frog.x - leash * 0.5, frog.y);
+        tick(&mut ai, Position::new(400.0, 300.0), player, player, Some(frog));
+        assert_eq!(ai.snapshot().last_action, Some("chase"));
+    }
+}
+
+#[cfg(test)]
 mod stuck_tests {
     use super::*;
     use rand::SeedableRng;
 
-    /// One `think` tick for an enemy at `me` with the player far off its
-    /// firing axes (so the tree wants to move, not hold and aim), reporting
-    /// `real_velocity` as what physics actually did last frame.
-    fn tick(ai: &mut Ai, real_velocity: Position, dt: f32) -> Intent {
+    const DT: f32 = 1.0 / 60.0;
+
+    /// One `think` tick for an enemy standing at `me` with the player far
+    /// off its firing axes (so the tree wants to move, not hold and aim).
+    fn tick(ai: &mut Ai, me_pos: Position) -> Intent {
         let mut me = Tank::default();
-        me.position = Position::new(600.0, 300.0);
+        me.position = me_pos;
         let mut player = Tank::default();
         player.position = Position::new(200.0, 600.0);
         let grid = Grid::build(1280.0, 720.0, 48.0, 0.0, std::iter::empty());
         let movers = [
             Mover { position: player.position, velocity: Vector2::new(0.0, 0.0), radius: 20.0 },
-            Mover { position: me.position, velocity: real_velocity, radius: 20.0 },
+            Mover { position: me.position, velocity: Vector2::new(0.0, 0.0), radius: 20.0 },
         ];
         let mut rng = SmallRng::seed_from_u64(7);
         ai.think(
             &me,
             &player,
+            player.position,
+            None,
             1280.0,
             720.0,
-            dt,
-            real_velocity,
+            DT,
             &movers,
             1,
             &grid,
@@ -1357,46 +1975,77 @@ mod stuck_tests {
             None,
             &[],
             false,
+            false,
+            [None; 4],
         )
     }
 
-    /// Feed `frames` ticks of `real_velocity` while the tank is on record
-    /// as having been told to drive `commanded` every tick.
-    fn drive(ai: &mut Ai, commanded: Dir, real_velocity: Position, frames: u32) -> Intent {
+    /// Move the tank at `velocity` (px/s) for `frames` ticks while it is
+    /// on record as having been told to drive `commanded` every tick -
+    /// what physics did versus what the AI asked for.
+    fn drive(ai: &mut Ai, pos: &mut Position, commanded: Dir, velocity: Position, frames: u32) -> Intent {
         let mut intent = Intent::default();
         for _ in 0..frames {
+            pos.x += velocity.x * DT;
+            pos.y += velocity.y * DT;
             ai.last_move_dir = Some(commanded);
             ai.committed_dir = Some(commanded);
-            intent = tick(ai, real_velocity, 1.0 / 60.0);
+            intent = tick(ai, *pos);
         }
         intent
     }
 
-    #[test]
-    fn only_progress_along_the_commanded_heading_resets_the_stuck_clock() {
+    /// A tank that has stood on `pos` for one tick, so the next tick has a
+    /// displacement to judge.
+    fn settled() -> (Ai, Position) {
         let mut ai = Ai::default();
+        let pos = Position::new(600.0, 300.0);
+        ai.last_move_dir = None;
+        tick(&mut ai, pos);
+        (ai, pos)
+    }
+
+    #[test]
+    fn only_sustained_progress_along_the_commanded_heading_resets_the_stuck_clock() {
+        let (mut ai, mut pos) = settled();
         // Told to go Down, carried East at speed by a jam: no progress.
-        drive(&mut ai, Dir::Down, Position::new(100.0, 0.0), 12);
+        drive(&mut ai, &mut pos, Dir::Down, Position::new(100.0, 0.0), 12);
         assert!(ai.stuck_timer > 0.15, "sideways drift counted as movement: {}", ai.stuck_timer);
-        // Actually driving Down clears it at once.
-        drive(&mut ai, Dir::Down, Position::new(0.0, 100.0), 1);
+        // Actually driving Down clears it within a few frames.
+        drive(&mut ai, &mut pos, Dir::Down, Position::new(0.0, 100.0), 6);
         assert_eq!(ai.stuck_timer, 0.0);
         // Shoved backwards is no better than standing still.
-        drive(&mut ai, Dir::Down, Position::new(0.0, -100.0), 12);
+        drive(&mut ai, &mut pos, Dir::Down, Position::new(0.0, -100.0), 12);
         assert!(ai.stuck_timer > 0.15);
         // Deliberately holding position is not stuck, whatever physics says.
         ai.last_move_dir = None;
-        tick(&mut ai, Position::new(0.0, 0.0), 1.0 / 60.0);
+        tick(&mut ai, pos);
         assert_eq!(ai.stuck_timer, 0.0);
+        assert_eq!(ai.snapshot().progress_px_s, None);
+    }
+
+    #[test]
+    fn a_single_frame_twitch_does_not_clear_the_stuck_clock() {
+        let (mut ai, mut pos) = settled();
+        // Pressed against another body: a fraction of a pixel a frame.
+        drive(&mut ai, &mut pos, Dir::Down, Position::new(0.0, 2.0), 20);
+        let before = ai.stuck_timer;
+        assert!(before > 0.3, "creeping at 2 px/s counted as progress: {before}");
+        // The contact solver shoves it two pixels in one frame (120 px/s
+        // for that frame alone), then it is pinned again.
+        drive(&mut ai, &mut pos, Dir::Down, Position::new(0.0, 120.0), 1);
+        assert!(ai.stuck_timer > before, "one fast frame cleared the clock");
+        drive(&mut ai, &mut pos, Dir::Down, Position::new(0.0, 2.0), 20);
+        assert!(ai.stuck_timer > before + 0.3);
     }
 
     #[test]
     fn a_tank_carried_sideways_long_enough_escapes_perpendicular() {
-        let mut ai = Ai::default();
+        let (mut ai, mut pos) = settled();
         let budget = (tuning().stuck_escape_seconds * 60.0) as u32 + 3;
         let mut escaped = None;
         for frame in 1..=budget {
-            let intent = drive(&mut ai, Dir::Down, Position::new(100.0, 0.0), 1);
+            let intent = drive(&mut ai, &mut pos, Dir::Down, Position::new(100.0, 0.0), 1);
             let dir = intent.move_dir.expect("still trying to move");
             if dir != Dir::Down {
                 escaped = Some((frame, dir));
@@ -1409,6 +2058,7 @@ mod stuck_tests {
             frame as f32 / 60.0 >= tuning().stuck_escape_seconds,
             "escaped after {frame} frames, before stuck_escape_seconds elapsed"
         );
-        assert_eq!(ai.stuck_timer, 0.0, "the escape spends the stuck evidence");
+        assert_eq!(ai.stuck_timer, 0.0, "the escape resets the clock");
+        assert_eq!(ai.escapes, 1);
     }
 }

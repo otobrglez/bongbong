@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::level::{MissionConfig, SpawnConfig};
 use crate::obstacle::Material;
 use crate::pickup::PickupKind;
 use crate::tank::TankKind;
@@ -42,6 +43,49 @@ pub enum CellObject {
     Frog,
     Start,
     Pickup { pickup: PickupKind },
+    /// The enemy side's frog (Hunt mission) - singleton like `Frog`.
+    /// Ignored by missions without an enemy frog.
+    #[serde(rename = "enemy_frog")]
+    EnemyFrog,
+    /// A wave roll-in gate: must sit on a nav-grid edge cell. A map with
+    /// any gate cells uses only those; otherwise gates are scanned from the
+    /// wall layout each wave.
+    Gate,
+    /// The three destructible props (docs/sandbags-barrels-fences.md): each
+    /// spawns an `Obstacle` of the matching `Material`, variant rolled per
+    /// tile at spawn.
+    Sandbag,
+    Barrel,
+    Fence,
+}
+
+impl CellObject {
+    /// The obstacle material this cell spawns, if it spawns a solid tile.
+    pub fn material(&self) -> Option<Material> {
+        match self {
+            CellObject::Wall { material } => Some(*material),
+            CellObject::Sandbag => Some(Material::Sandbag),
+            CellObject::Barrel => Some(Material::Barrel),
+            CellObject::Fence => Some(Material::Fence),
+            _ => None,
+        }
+    }
+
+    /// Spawns a solid tile a tank can't stand on (a wall or a prop).
+    pub fn is_solid(&self) -> bool {
+        self.material().is_some()
+    }
+
+    /// The cell that places a prop of `material` (`None` for wall
+    /// materials, which are `Wall { material }`).
+    pub fn prop(material: Material) -> Option<CellObject> {
+        match material {
+            Material::Sandbag => Some(CellObject::Sandbag),
+            Material::Barrel => Some(CellObject::Barrel),
+            Material::Fence => Some(CellObject::Fence),
+            _ => None,
+        }
+    }
 }
 
 /// A saved battlefield layout. Keys are `"<col>,<row>"` grid-cell strings
@@ -50,9 +94,11 @@ pub enum CellObject {
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct MapFile {
     pub version: u32,
+    #[serde(default)]
     pub cells: HashMap<String, CellObject>,
     /// Default number of enemy tanks to spawn on this map, unless overridden
-    /// at runtime by `-e`/`--enemies` (see `main.rs`). `None` (the default -
+    /// at runtime by `-e`/`--enemies` (see `main.rs`). `Some(0)` is a
+    /// sandbox: no enemies, and the round never ends by wreck count. `None` (the default -
     /// absent from a map's TOML, `#[serde(default)]` so older map files
     /// still parse) means "no map-level default", in which case `Game::init`
     /// falls back to its usual random `ENEMY_COUNT_MIN..=ENEMY_COUNT_MAX`
@@ -68,6 +114,20 @@ pub struct MapFile {
     /// roll. `--tank` on the command line outranks this.
     #[serde(default)]
     pub tank: Option<TankKind>,
+    /// The `[mission]` table - what ends the round (docs/maps-to-levels.md).
+    /// Absent means Protect.
+    #[serde(default)]
+    pub mission: MissionConfig,
+    /// The `[spawn]` table - how enemies arrive. Absent means the band
+    /// plan (`tanks` / `--enemies` / a random roll).
+    #[serde(default)]
+    pub spawn: SpawnConfig,
+    /// Where this map came from, for display only: the file stem when
+    /// `load` read it, `"default"` for the embedded map, `None` for text
+    /// handed over directly (the dev server's inline `map_toml`). Never
+    /// written to disk.
+    #[serde(skip)]
+    pub name: Option<String>,
 }
 
 fn cell_key(col: i32, row: i32) -> String {
@@ -98,13 +158,23 @@ pub fn world_to_cell(pos: Position) -> (i32, i32) {
 
 impl MapFile {
     pub fn new() -> Self {
-        MapFile { version: CURRENT_VERSION, cells: HashMap::new(), tanks: None, tank: None }
+        MapFile {
+            version: CURRENT_VERSION,
+            cells: HashMap::new(),
+            tanks: None,
+            tank: None,
+            mission: MissionConfig::default(),
+            spawn: SpawnConfig::default(),
+            name: None,
+        }
     }
 
     pub fn load(path: &Path) -> Result<Self, String> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| format!("reading map {}: {e}", path.display()))?;
-        Self::from_toml_str(&text).map_err(|e| format!("parsing map {}: {e}", path.display()))
+        let mut map = Self::from_toml_str(&text).map_err(|e| format!("parsing map {}: {e}", path.display()))?;
+        map.name = path.file_stem().map(|s| s.to_string_lossy().into_owned());
+        Ok(map)
     }
 
     /// Parse already-in-memory TOML text rather than reading it from a path -
@@ -135,8 +205,14 @@ impl MapFile {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("creating {}: {e}", parent.display()))?;
         }
-        let text = toml::to_string_pretty(self).map_err(|e| format!("serializing map: {e}"))?;
+        let text = self.to_toml_string()?;
         std::fs::write(path, text).map_err(|e| format!("writing {}: {e}", path.display()))
+    }
+
+    /// The map as TOML text, in the shape `save` writes (one table per
+    /// cell) - what `from_toml_str` parses back.
+    pub fn to_toml_string(&self) -> Result<String, String> {
+        toml::to_string_pretty(self).map_err(|e| format!("serializing map: {e}"))
     }
 
     pub fn cell(&self, col: i32, row: i32) -> Option<&CellObject> {
@@ -202,6 +278,22 @@ impl MapFile {
             .map(|(col, row, _)| (col, row))
     }
 
+    /// The map's one enemy-frog cell (Hunt mission), if it placed one -
+    /// same singleton convention as `frog_cell`.
+    pub fn enemy_frog_cell(&self) -> Option<(i32, i32)> {
+        self.iter_cells()
+            .find(|(_, _, obj)| matches!(obj, CellObject::EnemyFrog))
+            .map(|(col, row, _)| (col, row))
+    }
+
+    /// Every explicit wave gate cell, in `iter_cells` order.
+    pub fn gate_cells(&self) -> Vec<(i32, i32)> {
+        self.iter_cells()
+            .filter(|(_, _, obj)| matches!(obj, CellObject::Gate))
+            .map(|(col, row, _)| (col, row))
+            .collect()
+    }
+
     /// Cap on how far `nearest_free_cell` will spiral out looking for an
     /// unwalled cell - 64 cells (2048px at `OBSTACLE_GRID_SIZE`) comfortably
     /// covers the default 1280x720 battlefield (40x22.5 cells) from any
@@ -210,9 +302,10 @@ impl MapFile {
     /// against.
     const NEAREST_FREE_CELL_MAX_RADIUS: i32 = 64;
 
-    /// `(col, row)` if it holds a `Wall`, else the nearest cell to it (by
-    /// expanding ring, closest first) that isn't - only walls block a tank
-    /// spawn; road/pickup/frog cells are fine to spawn on top of. Used as
+    /// `(col, row)` if it holds nothing solid, else the nearest cell to it
+    /// (by expanding ring, closest first) that doesn't - only walls and
+    /// props block a tank spawn; road/pickup/frog cells are fine to spawn
+    /// on top of. Used as
     /// the fallback player-start position when a map places no `Start` cell
     /// (`Game::init`), so the player never spawns wedged inside a wall a
     /// hand-authored map happened to place at/near the exact center.
@@ -220,7 +313,7 @@ impl MapFile {
     /// `NEAREST_FREE_CELL_MAX_RADIUS` rings - an occasional wall-embedded
     /// spawn on a pathological map beats an unbounded search.
     pub fn nearest_free_cell(&self, col: i32, row: i32) -> (i32, i32) {
-        let is_wall = |c: i32, r: i32| matches!(self.cell(c, r), Some(CellObject::Wall { .. }));
+        let is_wall = |c: i32, r: i32| self.cell(c, r).is_some_and(CellObject::is_solid);
         if !is_wall(col, row) {
             return (col, row);
         }
@@ -265,4 +358,96 @@ pub fn list_maps() -> Vec<String> {
         .collect();
     names.sort();
     names
+}
+
+#[cfg(test)]
+mod toml_tests {
+    use super::*;
+
+    #[test]
+    fn toml_string_round_trips_the_default_map() {
+        let map = MapFile::from_toml_str(include_str!("../maps/default.toml")).unwrap();
+        let back = MapFile::from_toml_str(&map.to_toml_string().unwrap()).unwrap();
+        assert_eq!(back.version, map.version);
+        assert_eq!(back.tanks, map.tanks);
+        assert_eq!(back.cells.len(), map.cells.len());
+        for (key, cell) in &map.cells {
+            assert!(back.cells.get(key) == Some(cell), "cell {key} changed");
+        }
+        assert_eq!(back.name, None, "name is not part of the file");
+        assert_eq!(back.mission, map.mission, "the mission table changed");
+        assert_eq!(back.spawn, map.spawn, "the spawn table changed");
+    }
+
+    #[test]
+    fn missing_level_tables_mean_protect_and_band() {
+        let map = MapFile::from_toml_str("version = 1\n").unwrap();
+        assert_eq!(map.mission, MissionConfig::default());
+        assert_eq!(map.spawn, SpawnConfig::default());
+    }
+
+    #[test]
+    fn level_tables_and_new_cell_kinds_round_trip() {
+        use crate::level::{Mission, SpawnKind, Tier};
+        // Dotted keys, the form the fixtures use: a `[mission]`/`[spawn]`
+        // table header would swallow every `cells.` line after it.
+        let text = r#"
+version = 1
+tanks = 6
+mission.kind = "hunt"
+spawn.kind = "waves"
+spawn.waves = 4
+spawn.size = 2
+spawn.tier_start = "light"
+spawn.tier_end = "heavy"
+cells."3,5" = { kind = "enemy_frog" }
+cells."0,11" = { kind = "gate" }
+cells."39,11" = { kind = "gate" }
+"#;
+        let map = MapFile::from_toml_str(text).unwrap();
+        assert_eq!(map.mission.kind, Mission::Hunt);
+        assert_eq!(map.spawn.kind, SpawnKind::Waves);
+        assert_eq!((map.spawn.waves, map.spawn.size, map.spawn.growth), (Some(4), Some(2), None));
+        assert_eq!((map.spawn.tier_start, map.spawn.tier_end), (Some(Tier::Light), Some(Tier::Heavy)));
+        assert_eq!(map.enemy_frog_cell(), Some((3, 5)));
+        assert_eq!(map.gate_cells(), vec![(0, 11), (39, 11)]);
+        let back = MapFile::from_toml_str(&map.to_toml_string().unwrap()).unwrap();
+        assert_eq!(back.mission, map.mission);
+        assert_eq!(back.spawn, map.spawn);
+        assert_eq!(back.enemy_frog_cell(), map.enemy_frog_cell());
+        assert_eq!(back.gate_cells(), map.gate_cells());
+    }
+
+    #[test]
+    fn prop_cells_round_trip_and_count_as_solid() {
+        let text = r#"
+version = 1
+cells."4,4" = { kind = "sandbag" }
+cells."5,4" = { kind = "barrel" }
+cells."6,4" = { kind = "fence" }
+cells."7,4" = { kind = "road" }
+"#;
+        let map = MapFile::from_toml_str(text).unwrap();
+        assert_eq!(map.cell(4, 4).and_then(|c| c.material()), Some(Material::Sandbag));
+        assert_eq!(map.cell(5, 4).and_then(|c| c.material()), Some(Material::Barrel));
+        assert_eq!(map.cell(6, 4).and_then(|c| c.material()), Some(Material::Fence));
+        assert!(map.cell(7, 4).is_some_and(|c| !c.is_solid()), "road is not solid");
+        assert_ne!(map.nearest_free_cell(5, 4), (5, 4), "a barrel cell blocks a spawn");
+        assert_eq!(map.nearest_free_cell(7, 4), (7, 4));
+        let back = MapFile::from_toml_str(&map.to_toml_string().unwrap()).unwrap();
+        for (col, row, cell) in map.iter_cells() {
+            assert!(back.cell(col, row) == Some(cell), "cell {col},{row} changed");
+        }
+        for m in [Material::Sandbag, Material::Barrel, Material::Fence] {
+            assert_eq!(CellObject::prop(m).and_then(|c| c.material()), Some(m));
+        }
+        assert!(CellObject::prop(Material::Brick).is_none());
+    }
+
+    #[test]
+    fn load_names_the_map_after_its_file() {
+        let map = MapFile::load(Path::new("maps/test/choke.toml")).unwrap();
+        assert_eq!(map.name.as_deref(), Some("choke"));
+        assert_eq!(map.tanks, Some(4));
+    }
 }

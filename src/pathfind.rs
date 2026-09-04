@@ -139,6 +139,29 @@ impl Grid {
         self.blocked[cell.1 * self.cols + cell.0]
     }
 
+    /// (columns, rows, cell size in px) - for tooling that draws or prints
+    /// the grid.
+    pub fn dims(&self) -> (usize, usize, f32) {
+        (self.cols, self.rows, self.cell_size)
+    }
+
+    /// Whether cell (`col`, `row`) is blocked; anything off the grid is.
+    pub fn is_blocked(&self, col: usize, row: usize) -> bool {
+        col >= self.cols || row >= self.rows || self.blocked_at((col, row))
+    }
+
+    /// One line per row, top row first: `#` blocked, `.` open.
+    pub fn ascii(&self) -> String {
+        let mut out = String::with_capacity((self.cols + 1) * self.rows);
+        for row in 0..self.rows {
+            for col in 0..self.cols {
+                out.push(if self.blocked_at((col, row)) { '#' } else { '.' });
+            }
+            out.push('\n');
+        }
+        out
+    }
+
     /// True if `from` and `to` already fall in the same grid cell - the
     /// other reason `next_step` returns `None` besides genuine
     /// unreachability (see that method's `start == goal` check). Lets a
@@ -677,5 +700,27 @@ mod component_tests {
         let far = Position::new(20.0, 20.0);
         assert!(grid.next_step(inside, far).is_some());
         assert!(comps.connected(&grid, inside, far));
+    }
+}
+
+#[cfg(test)]
+mod dims_tests {
+    use super::*;
+
+    /// The battlefield at PATHFIND_CELL_SIZE is 27x15 cells (ceil), and a
+    /// single obstacle shows up as exactly its blocked cell in `ascii`.
+    #[test]
+    fn dims_and_ascii_match_the_built_grid() {
+        let open = Grid::build(1280.0, 720.0, 48.0, 0.0, std::iter::empty());
+        assert_eq!(open.dims(), (27, 15, 48.0));
+        let text = open.ascii();
+        assert_eq!(text.lines().count(), 15);
+        assert!(text.lines().all(|l| l.len() == 27 && l.chars().all(|c| c == '.')));
+
+        let one = Grid::build(1280.0, 720.0, 48.0, 0.0, std::iter::once((Position::new(72.0, 72.0), 8.0)));
+        assert!(one.is_blocked(1, 1));
+        assert!(!one.is_blocked(0, 0));
+        assert!(one.is_blocked(27, 0), "off-grid counts as blocked");
+        assert_eq!(one.ascii().lines().nth(1).unwrap(), ".#.........................");
     }
 }

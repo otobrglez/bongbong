@@ -1,0 +1,57 @@
+# maps/test/ fixture - the destructible props playground (sandbags, barrels,
+# fences: docs/sandbags-barrels-fences.md). Not an adversarial layout like
+# its neighbours, but swept by `just probe-fixtures` all the same so a prop
+# rule can never quietly break the AI. Hand-authored: re-saving from the
+# map editor would drop these comments.
+#
+# props: a sandbag line (row 8) and a fence line (row 14) the player can
+# shoot over / at / ram from the start cell; a 2x2 barrel cluster (cols
+# 20-21, rows 10-11) and a 3-in-a-row chain (cols 8-10, row 16) for chain
+# reactions; a lone barrel (24,6); a vertical sandbag run (col 6) and a
+# vertical fence run (col 26) so the axis pick has both cases; two brick
+# tiles (row 11) for comparison. Lanes stay at least 3 cells wide and the
+# spawn band is clear, so the AI is never forced through a prop.
+
+version = 1
+tanks = 4
+
+cells."30,11" = { kind = "start" }
+cells."34,11" = { kind = "frog" }
+
+cells."12,8" = { kind = "sandbag" }
+cells."13,8" = { kind = "sandbag" }
+cells."14,8" = { kind = "sandbag" }
+cells."15,8" = { kind = "sandbag" }
+cells."16,8" = { kind = "sandbag" }
+cells."17,8" = { kind = "sandbag" }
+
+cells."12,14" = { kind = "fence" }
+cells."13,14" = { kind = "fence" }
+cells."14,14" = { kind = "fence" }
+cells."15,14" = { kind = "fence" }
+cells."16,14" = { kind = "fence" }
+cells."17,14" = { kind = "fence" }
+
+cells."20,10" = { kind = "barrel" }
+cells."21,10" = { kind = "barrel" }
+cells."20,11" = { kind = "barrel" }
+cells."21,11" = { kind = "barrel" }
+
+cells."8,16" = { kind = "barrel" }
+cells."9,16" = { kind = "barrel" }
+cells."10,16" = { kind = "barrel" }
+
+cells."24,6" = { kind = "barrel" }
+
+cells."6,4" = { kind = "sandbag" }
+cells."6,5" = { kind = "sandbag" }
+cells."6,6" = { kind = "sandbag" }
+cells."6,7" = { kind = "sandbag" }
+
+cells."26,15" = { kind = "fence" }
+cells."26,16" = { kind = "fence" }
+cells."26,17" = { kind = "fence" }
+cells."26,18" = { kind = "fence" }
+
+cells."14,11" = { kind = "wall", material = "brick" }
+cells."15,11" = { kind = "wall", material = "brick" }

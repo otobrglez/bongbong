@@ -10,16 +10,23 @@ use sola_raylib::prelude::*;
 use crate::ai::Ai;
 use crate::bullet::{Bullet, BulletState, draw_bullet, draw_bullet_shadow};
 use crate::damage_stage::draw_damage;
-use crate::frog::{Frog, FrogVariantTextures, draw_frog};
+use crate::frog::{Frog, FrogVariantTextures, draw_frog, draw_frog_ring};
 use crate::laser::draw_laser_beam;
-use crate::obstacle::{Obstacle, draw_obstacle, draw_obstacle_shadow};
+use crate::blast::{draw_blast, draw_blast_glow, draw_fuse_glow, draw_scorch};
+use crate::obstacle::{Material, Obstacle, ObstacleTextures, draw_obstacle, draw_obstacle_shadow, fence_axis};
+use std::collections::HashSet;
 use crate::pickup::{Pickup, PickupKind, draw_pickup};
 use crate::plasma::{Plasma, PlasmaState, draw_plasma, draw_plasma_shadow};
 use crate::shell::{Shell, ShellState, draw_shell, draw_shell_shadow};
 use crate::shockwave::{RippleFx, screen_to_ripple_uv};
 use crate::simulation::{Game, Outcome};
+#[cfg(feature = "dev-tools")]
+use crate::simulation::Overlays;
+#[cfg(feature = "dev-tools")]
+use crate::tank::Dir;
 use crate::tank::{
-    ActiveWeapon, Dir, Tank, draw_minigun_mount, draw_minigun_mount_shadow, draw_tank, draw_tank_shadow, draw_tank_shield,
+    ActiveWeapon, Tank, draw_minigun_mount, draw_minigun_mount_shadow, draw_player_ring, draw_tank, draw_tank_shadow,
+    draw_tank_shield,
 };
 use crate::track::draw_track;
 use crate::{
@@ -55,6 +62,10 @@ pub struct Textures<'a> {
     pub damage: &'a Texture2D,
     pub tracks: &'a Texture2D,
     pub obstacles: &'a Texture2D,
+    /// The props sheet (sandbags, barrels, fences) - see `obstacle::Sheet`.
+    pub props: &'a Texture2D,
+    /// The barrel blast animation and scorch decals - see `blast.rs`.
+    pub barrel_explosion: &'a Texture2D,
     pub ground: &'a Texture2D,
     pub health_bar: &'a Texture2D,
     /// One `FrogVariantTextures` per `frog::FROG_VARIANT_DIRS` entry, in the
@@ -178,6 +189,35 @@ impl Game {
             Outcome::Won => Some(("YOU WIN", Color::DARKGREEN)),
             Outcome::Lost => Some(("YOU LOSE", Color::MAROON)),
         };
+        // Opening mission banner: solid while the round is frozen behind
+        // it, then fading over INTRO_FADE_SECONDS once play starts.
+        let intro = {
+            let alpha = if self.intro_timer > 0.0 {
+                1.0
+            } else {
+                (self.intro_fade / crate::simulation::INTRO_FADE_SECONDS).clamp(0.0, 1.0)
+            };
+            (alpha > 0.0).then(|| {
+                let text = self.mission.banner();
+                let size = 72;
+                let w = rl.measure_text(text, size);
+                (text, size, w, alpha)
+            })
+        };
+        // Wave rounds: the wave counter and live-enemy count on the right
+        // of the HUD line, and the `WAVE N` banner during the breather
+        // before a wave - smaller than the mission banner, no dim overlay,
+        // and never over the end-of-round banner.
+        let hud_wave = self.wave_status().map(|w| {
+            let text = format!("WAVE {}/{}   ENEMIES {}", w.index, w.total, w.alive);
+            let w_px = rl.measure_text(&text, HUD_FONT_SIZE);
+            (text, w_px)
+        });
+        let wave_banner = self.wave_banner().filter(|_| self.outcome == Outcome::Playing).map(|text| {
+            let size = 48;
+            let w = rl.measure_text(&text, size);
+            (text, size, w)
+        });
         let banner = banner.map(|(text, color)| {
             let title_size = 72;
             let title_w = rl.measure_text(text, title_size);
@@ -205,12 +245,36 @@ impl Game {
                 draw_track(&mut d, textures.tracks, track);
             }
 
-            for obstacle in self.world.query::<&Obstacle>().iter() {
-                if self.shadows_enabled {
-                    draw_obstacle_shadow(&mut d, textures.obstacles, obstacle);
-                }
-                draw_obstacle(&mut d, textures.obstacles, obstacle);
+            // Burn marks under everything that stands, so a barrel that
+            // survived a neighbour's blast sits on the mark it left.
+            for scorch in &self.scorches {
+                draw_scorch(&mut d, textures.barrel_explosion, scorch);
             }
+
+            let obstacle_textures = ObstacleTextures { walls: textures.obstacles, props: textures.props };
+            let fences: HashSet<(i32, i32)> = self
+                .world
+                .query::<&Obstacle>()
+                .iter()
+                .filter(|o| o.material == Material::Fence)
+                .map(|o| o.cell())
+                .collect();
+            for obstacle in self.world.query::<&Obstacle>().iter() {
+                let axis = fence_axis(obstacle, &fences);
+                if self.shadows_enabled {
+                    draw_obstacle_shadow(&mut d, &obstacle_textures, obstacle, axis);
+                }
+                draw_obstacle(&mut d, &obstacle_textures, obstacle, axis);
+            }
+            // A barrel whose fuse is lit pulses (additive, so it reads as
+            // light on the drum rather than a disc over it).
+            d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+                for obstacle in self.world.query::<&Obstacle>().iter() {
+                    if obstacle.fuse.is_some() {
+                        draw_fuse_glow(&mut bd, obstacle.position, self.time);
+                    }
+                }
+            });
 
             for pickup in self.world.query::<&Pickup>().iter() {
                 let texture = match pickup.kind {
@@ -225,15 +289,14 @@ impl Game {
                 draw_pickup(&mut d, texture, pickup);
             }
 
-            crate::simulation::with_frog(
-                &self.world,
-                self.frog.expect("frog entity spawned in init"),
-                |frog| {
+            for frog_entity in [self.frog, self.enemy_frog].into_iter().flatten() {
+                crate::simulation::with_frog(&self.world, frog_entity, |frog| {
                     let variant = &textures.frog_variants[frog.variant as usize];
+                    draw_frog_ring(&mut d, frog, self.time);
                     draw_frog(&mut d, &variant.as_frog_textures(), frog, self.time);
                     draw_frog_health_bar(&mut d, textures.health_bar, frog);
-                },
-            );
+                });
+            }
 
             for tank in self.world.query::<&Tank>().with::<&Ai>().iter() {
                 draw_tank_shield(&mut d, tank, self.time);
@@ -247,7 +310,20 @@ impl Game {
                 draw_tank_overhead_health(&mut d, textures.health_bar, tank);
             }
 
+            // Wave tanks still rolling in: drawn like any enemy (partly
+            // off-screen by construction), no health bar yet.
+            for (tank, _) in self.world.query::<(&Tank, &crate::simulation::RollIn)>().iter() {
+                draw_tank_shield(&mut d, tank, self.time);
+                if self.shadows_enabled {
+                    draw_tank_shadow(&mut d, textures.tanks, tank);
+                    draw_minigun_mount_shadow(&mut d, textures.minigun_mount, tank);
+                }
+                draw_tank(&mut d, textures.tanks, tank);
+                draw_minigun_mount(&mut d, textures.minigun_mount, tank);
+            }
+
             crate::simulation::with_tank(&self.world, player, |tank| {
+                draw_player_ring(&mut d, tank, self.time);
                 draw_tank_shield(&mut d, tank, self.time);
                 if self.shadows_enabled {
                     draw_tank_shadow(&mut d, textures.tanks, tank);
@@ -282,6 +358,19 @@ impl Game {
 
             for beam in &self.laser_beams {
                 draw_laser_beam(&mut d, beam);
+            }
+
+            // Barrel blasts last, so the fireball covers tanks and shots:
+            // the additive bloom first, then the sprite frames oldest
+            // first (a chained blast's flash lands on top of the earlier
+            // fireball and reads as a second detonation).
+            d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+                for blast in &self.blast_fx {
+                    draw_blast_glow(&mut bd, blast);
+                }
+            });
+            for blast in &self.blast_fx {
+                draw_blast(&mut d, textures.barrel_explosion, blast);
             }
         });
 
@@ -426,19 +515,67 @@ impl Game {
                 });
             }
 
-            // Debug inspect overlay: hitbox/collider outlines plus a stat
-            // readout for every tank. Drawn here (screen space, post-composite) rather
-            // than into scene_target, so it's never warped by an in-flight
-            // shockwave and always renders crisp - tank.position is already
-            // screen pixels (no camera transform), so the two spaces line up
-            // 1:1 with no extra math.
-            if self.inspect_enabled {
-                for (tank, ai) in self.world.query::<(&Tank, &Ai)>().iter() {
-                    draw_tank_inspect(&mut d, tank, Some(ai));
+            // A barrel blast opens with a brief whole-screen flash - the
+            // youngest blast drives it. After the ripple quads, which
+            // re-blit patches of the un-flashed scene and would otherwise
+            // punch darker squares through it.
+            if let Some(blast) = self.blast_fx.iter().min_by(|a, b| a.time.total_cmp(&b.time)) {
+                let seconds = tuning().blast_screen_flash_seconds;
+                if seconds > 0.0 && blast.time < seconds {
+                    let a = (255.0 * tuning().blast_screen_flash_alpha * (1.0 - blast.time / seconds)) as u8;
+                    d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(255, 240, 200, a));
                 }
-                crate::simulation::with_tank(&self.world, player, |tank| {
-                    draw_tank_inspect(&mut d, tank, None);
-                });
+            }
+
+            // Debug overlays (dev builds only): the inspect layer's
+            // hitbox/collider outlines plus a stat readout for every tank,
+            // then the dev server's other layers. Drawn here (screen space,
+            // post-composite) rather than into scene_target, so they're
+            // never warped by an in-flight shockwave and always render
+            // crisp - tank.position is already screen pixels (no camera
+            // transform), so the two spaces line up 1:1 with no extra math.
+            #[cfg(feature = "dev-tools")]
+            {
+                if self.debug_overlays.inspect {
+                    for (tank, ai) in self.world.query::<(&Tank, &Ai)>().iter() {
+                        draw_tank_inspect(&mut d, tank, Some(ai));
+                    }
+                    crate::simulation::with_tank(&self.world, player, |tank| {
+                        draw_tank_inspect(&mut d, tank, None);
+                    });
+                }
+                self.draw_debug_overlays(&mut d, screen_width as f32, screen_height as f32);
+                // Which preset is live, one line under the top-left HUD row,
+                // so the I key's cycling is visible without counting layers.
+                if self.debug_overlays.any() {
+                    let preset = if self.debug_overlays == Overlays::INSPECT {
+                        "inspect"
+                    } else if self.debug_overlays == Overlays::ALL {
+                        "all"
+                    } else {
+                        "custom"
+                    };
+                    let label = format!("DEV overlays: {preset} (I cycles)");
+                    const LABEL_FONT_SIZE: i32 = if HUD_FONT_SIZE / 2 < 14 { HUD_FONT_SIZE / 2 } else { 14 };
+                    let label_y = HUD_MARGIN + HUD_FONT_SIZE + 6;
+                    // Same 8px/char width estimate as `draw_tank_inspect`'s
+                    // stat panel - no font handle inside the draw closure.
+                    let label_w = label.len() as i32 * 8 + 8;
+                    d.draw_rectangle(
+                        HUD_MARGIN - 4,
+                        label_y - 2,
+                        label_w,
+                        LABEL_FONT_SIZE + 4,
+                        Color::new(0, 0, 0, 150),
+                    );
+                    d.draw_text(
+                        &label,
+                        HUD_MARGIN,
+                        label_y,
+                        LABEL_FONT_SIZE,
+                        Color::new(80, 200, 255, 255),
+                    );
+                }
             }
 
             // HUD and the end-of-round banner draw undistorted, on top of the
@@ -486,6 +623,9 @@ impl Game {
                 0.0,
                 Color::WHITE,
             );
+            if let Some((text, w)) = &hud_wave {
+                d.draw_text(text, screen_width - HUD_MARGIN - w, hud_y, HUD_FONT_SIZE, Color::WHITE);
+            }
             // Mirrors the top-left HUD's HUD_MARGIN inset, so both corners
             // sit the same distance from their edges.
             d.draw_text(
@@ -511,6 +651,17 @@ impl Game {
                 d.draw_text(sub, cx - sub_w / 2, cy + 20, *sub_size, Color::RAYWHITE);
             }
 
+            // Mission banner: big white text over a dim overlay that both
+            // fade together once the round unfreezes.
+            if let Some((text, size, w, alpha)) = intro {
+                let a = |max: f32| (max * alpha) as u8;
+                d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(0, 0, 0, a(120.0)));
+                d.draw_text(text, screen_width / 2 - w / 2, screen_height / 2 - size / 2, size, Color::new(255, 255, 255, a(255.0)));
+            }
+            if let Some((text, size, w)) = &wave_banner {
+                d.draw_text(text, screen_width / 2 - w / 2, screen_height / 2 - size / 2, *size, Color::RAYWHITE);
+            }
+
             // Paused overlay draws over everything else, including the
             // end-of-round banner (its countdown is frozen too).
             if self.paused {
@@ -530,10 +681,10 @@ impl Game {
     }
 }
 
-/// Debug inspect-mode overlay for one tank: its hull damage box, its
+/// The inspect overlay for one tank (dev builds only - `Overlays::inspect`,
+/// part of the presets the I key cycles): its hull damage box, its
 /// turret+barrel damage box, and its (smaller, corner-rounded) movement
-/// collider (see `Game::inspect_enabled`, toggled by the "I" key), plus a
-/// small stat block - ammo, health, current speed and velocity for every
+/// collider, plus a small stat block - ammo, health, current speed and velocity for every
 /// tank, and additionally (`ai: Some`, i.e. this isn't the player) whether
 /// it's currently retreating to recharge and its fire cooldown, pulled
 /// straight from its `Ai` - the same state `ai.rs`'s
@@ -558,6 +709,7 @@ impl Game {
 ///   forgiving driving, shrink it if sprites start visibly clipping into
 ///   walls. The stat block's MOVE line prints its current world-px size
 ///   and corner radius for the same purpose.
+#[cfg(feature = "dev-tools")]
 fn draw_tank_inspect(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>) {
     // Same "which axis is the long one" check as `Tank::avoidance_radius` -
     // tanks only ever face one of the four `Dir::rotation()` values, so an
@@ -660,6 +812,101 @@ fn draw_tank_inspect(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>) {
             FONT_SIZE,
             Color::LIME,
         );
+    }
+}
+
+#[cfg(feature = "dev-tools")]
+impl Game {
+    /// The debug overlay layers beyond inspect (`Game::debug_overlays`,
+    /// docs/dev-server-design.md; dev builds only), screen space and
+    /// post-composite like the inspect block: blocked nav cells, each
+    /// enemy's AI memory, projectile hit boxes, engagement targets, pickup
+    /// collect radii. Each layer costs nothing while off.
+    fn draw_debug_overlays(&self, d: &mut impl RaylibDraw, width: f32, height: f32) {
+        let ov = self.debug_overlays;
+        if ov.nav_grid {
+            let grid = self.nav_grid(width, height);
+            let (cols, rows, cell) = grid.dims();
+            let size = cell.round() as i32;
+            for row in 0..rows {
+                for col in 0..cols {
+                    if grid.is_blocked(col, row) {
+                        let x = (col as f32 * cell).round() as i32;
+                        let y = (row as f32 * cell).round() as i32;
+                        d.draw_rectangle(x, y, size, size, Color::new(255, 40, 40, 60));
+                        d.draw_rectangle_lines(x, y, size, size, Color::new(255, 40, 40, 110));
+                    }
+                }
+            }
+        }
+        if ov.pickups {
+            let radius = tuning().pickup_collect_radius;
+            for pickup in self.world.query::<&Pickup>().iter() {
+                d.draw_circle_lines(pickup.position.x as i32, pickup.position.y as i32, radius, Color::GOLD);
+            }
+        }
+        if ov.projectiles {
+            let mut boxes: Vec<(Vector2, Vector2, f32)> = Vec::new();
+            for s in self.world.query::<&Shell>().iter() {
+                boxes.push((s.position, s.velocity, tuning().shell_hit_half_extent));
+            }
+            for p in self.world.query::<&Plasma>().iter() {
+                boxes.push((p.position, p.velocity, tuning().plasma_hit_half_extent));
+            }
+            for b in self.world.query::<&Bullet>().iter() {
+                boxes.push((b.position, b.velocity, tuning().minigun_bullet_hit_half_extent));
+            }
+            for (pos, vel, half) in boxes {
+                let size = (half * 2.0).round().max(2.0) as i32;
+                d.draw_rectangle_lines((pos.x - half).round() as i32, (pos.y - half).round() as i32, size, size, Color::MAGENTA);
+                // A tenth of a second of travel.
+                d.draw_line(
+                    pos.x as i32,
+                    pos.y as i32,
+                    (pos.x + vel.x * 0.1) as i32,
+                    (pos.y + vel.y * 0.1) as i32,
+                    Color::new(255, 0, 255, 160),
+                );
+            }
+        }
+        if ov.ai || ov.engage {
+            for (entity, tank, ai) in self.world.query::<(hecs::Entity, &Tank, &Ai)>().iter() {
+                if tank.is_wreck() {
+                    continue;
+                }
+                let (x, y) = (tank.position.x as i32, tank.position.y as i32);
+                if ov.ai {
+                    let s = ai.snapshot();
+                    // (0, 0) is "never picked one": a tank straight into a
+                    // fight has no patrol waypoint to show.
+                    if s.waypoint_x != 0.0 || s.waypoint_y != 0.0 {
+                        d.draw_line(x, y, s.waypoint_x as i32, s.waypoint_y as i32, Color::new(80, 200, 255, 140));
+                        d.draw_circle_lines(s.waypoint_x as i32, s.waypoint_y as i32, 5.0, Color::new(80, 200, 255, 200));
+                    }
+                    if let Some(dir) = s.committed_dir.and_then(Dir::parse) {
+                        let v = dir.vec();
+                        let (ex, ey) = (tank.position.x + v.x * 40.0, tank.position.y + v.y * 40.0);
+                        d.draw_line(x, y, ex as i32, ey as i32, Color::ORANGE);
+                        d.draw_circle(ex as i32, ey as i32, 3.0, Color::ORANGE);
+                    }
+                    let label = format!(
+                        "{} {}{}",
+                        s.last_action.unwrap_or("-"),
+                        s.committed_dir.unwrap_or("-"),
+                        if s.stuck_timer > 0.0 { format!(" stuck {:.1}s", s.stuck_timer) } else { String::new() }
+                    );
+                    let ty = (tank.position.y + tank.hull_size() * 0.5 + 2.0) as i32;
+                    d.draw_rectangle(x - 2, ty, label.len() as i32 * 7 + 4, 14, Color::new(0, 0, 0, 150));
+                    d.draw_text(&label, x, ty + 1, 12, Color::new(80, 200, 255, 255));
+                }
+                if ov.engage && let Some(target) = self.last_engage.target(entity) {
+                    let (tx, ty) = (target.x as i32, target.y as i32);
+                    d.draw_line(x, y, tx, ty, Color::SKYBLUE);
+                    d.draw_line(tx - 5, ty - 5, tx + 5, ty + 5, Color::SKYBLUE);
+                    d.draw_line(tx - 5, ty + 5, tx + 5, ty - 5, Color::SKYBLUE);
+                }
+            }
+        }
     }
 }
 

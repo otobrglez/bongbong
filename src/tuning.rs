@@ -333,6 +333,70 @@ tunables! {
         restart_delay: f32 = 3.0 in 0.0 ..= 30.0;
     }
 
+    group mission {
+        /// How long the round stays frozen behind the opening mission
+        /// banner ("PROTECT THE FROG!") before play starts. Any move or
+        /// fire input skips it. Headless callers start with the intro off.
+        mission_banner_seconds: f32 = 2.0 in 0.0 ..= 10.0;
+        /// Protect mission: odds each enemy is rolled a hunter that drives
+        /// at and shoots the frog rather than the player.
+        enemy_hunter_share_protect: f32 = 0.25 in 0.0 ..= 1.0 @ Spawn;
+        /// Hunt mission: odds each enemy is a hunter; the rest guard the
+        /// enemy frog.
+        enemy_hunter_share_hunt: f32 = 0.6 in 0.0 ..= 1.0 @ Spawn;
+        /// A guard engages the player only while the player is within this
+        /// many px of the enemy frog, and wanders inside it otherwise.
+        guard_leash_px: f32 = 260.0 in 50.0 ..= 1000.0;
+        /// A guard's beat keeps at least this far from its own frog -
+        /// outside the frog's bite and hop ranges, so it neither gets
+        /// bitten by it nor chases it around the map.
+        guard_keep_off_px: f32 = 130.0 in 0.0 ..= 500.0;
+        /// Procedural enemy-frog placement (a hunt map without an
+        /// `enemy_frog` cell): at least this far from the player's frog.
+        enemy_frog_spawn_min_dist: f32 = 400.0 in 0.0 ..= 1500.0 @ Restart;
+        /// After a hunter's opportunistic shot at the player it goes back
+        /// to the frog for at least this long before it may snipe again,
+        /// so a player parked on its firing axis can't hold it forever.
+        hunter_snipe_cooldown_seconds: f32 = 5.0 in 0.0 ..= 60.0;
+    }
+
+    group waves {
+        /// Defaults for a waves spawn plan whose map/CLI leave them unset:
+        /// number of waves, first-wave size, tanks added per wave.
+        wave_count_default: usize = 5 in 1 ..= 50 @ Restart;
+        wave_size_default: usize = 3 in 1 ..= 31 @ Restart;
+        wave_growth_default: usize = 1 in 0 ..= 10 @ Restart;
+        /// Breather between a wave being cleared (or timing out) and the
+        /// next one rolling in; the "WAVE N" banner shows meanwhile.
+        wave_gap_seconds: f32 = 4.0 in 0.0 ..= 60.0;
+        /// A wave that is not cleared within this long is joined by the
+        /// next one anyway.
+        wave_timeout_seconds: f32 = 60.0 in 1.0 ..= 600.0;
+        /// The next wave is called once this many enemies (or fewer) are
+        /// still alive.
+        wave_next_when_alive: usize = 0 in 0 ..= 30;
+        /// Seconds between two tanks of the same wave starting their
+        /// roll-in, so they never overlap in one gate lane.
+        wave_stagger_seconds: f32 = 0.8 in 0.0 ..= 10.0;
+        /// Roll-in speed as a factor of the tank's normal driving speed.
+        wave_rollin_speed_factor: f32 = 0.8 in 0.1 ..= 3.0;
+        /// An edge nav cell is a gate only if this many cells inward are
+        /// all open.
+        wave_gate_inward_cells: usize = 3 in 1 ..= 10;
+        /// Gates closer than this (px) to the player or the player's frog
+        /// are skipped.
+        wave_gate_min_player_dist: f32 = 300.0 in 0.0 ..= 1500.0;
+        /// Odds a wave tank is drawn one tier below the wave's tier, for
+        /// variety.
+        wave_tier_mix: f32 = 0.25 in 0.0 ..= 1.0;
+        /// Wave rounds only: a wreck fades out and is removed this long
+        /// after the kill, keeping the field passable. 0 keeps wrecks.
+        wave_wreck_despawn_seconds: f32 = 20.0 in 0.0 ..= 300.0;
+        /// Cap on live enemies at once; a wave that would exceed it queues
+        /// its surplus until slots free up.
+        wave_max_alive: usize = 31 in 1 ..= 31;
+    }
+
     group movement {
         /// Player top speed (px/s). Tank driving is 4-direction movement
         /// with real inertia, modeled like a tracked vehicle rather than a
@@ -710,13 +774,36 @@ tunables! {
         /// coarse grid's routed direction flip-flops every frame near a
         /// corner (found via the probe's `--rounds` sweep).
         ai_obstacle_override_hold_seconds: f32 = 0.1 in 0.0 ..= 2.0;
-        /// Stuck-escape: a tank commanded to move whose real physics
-        /// velocity, projected onto the commanded heading, stays under
-        /// this (px/s) - sideways drift in a jam is not progress ...
+        /// Stuck-escape: a tank commanded to move whose displacement per
+        /// second along the commanded heading (smoothed, see below) stays
+        /// under this - sideways drift in a jam is not progress ...
         stuck_speed_eps: f32 = 8.0 in 0.0 ..= 100.0;
         /// ... for this many seconds running is treated as genuinely stuck,
         /// and `Ai::steer` forces a hard perpendicular-turn reset.
         stuck_escape_seconds: f32 = 0.75 in 0.05 ..= 10.0;
+        /// Time constant of the progress average the stuck check reads:
+        /// long enough that a one-frame shove from the contact solver (two
+        /// tanks pressed together twitch a pixel or two now and then)
+        /// cannot clear the clock, short enough that a tank that really
+        /// gets going clears it within a few frames.
+        stuck_progress_window_seconds: f32 = 0.5 in 0.02 ..= 3.0;
+        /// Breach: a tank that has commanded movement straight into a
+        /// destructible tile for this long stops and shoots it down
+        /// instead of staying wedged (`ai::Brain::wants_breach`).
+        enemy_breach_after_seconds: f32 = 0.5 in 0.05 ..= 5.0;
+        /// A breach is abandoned after this long without the tile falling.
+        enemy_breach_give_up_seconds: f32 = 5.0 in 0.5 ..= 30.0;
+        /// A shell-armed tank only breaches with at least this many shells
+        /// left, so it still has a fight in it afterwards ...
+        enemy_breach_min_shells: i32 = 4 in 0 ..= 100;
+        /// ... and with damage at or under this (0 pristine, 100 wreck).
+        enemy_breach_max_damage: f32 = 60.0 in 0.0 ..= 100.0;
+        /// Seconds between breach shots - quicker than the combat cadence,
+        /// a wall doesn't shoot back.
+        enemy_breach_fire_interval: f32 = 0.45 in 0.05 ..= 5.0;
+        /// How far past its own hull a tank looks for the tile it is
+        /// driving into (px): about one tile.
+        enemy_breach_reach_px: f32 = 40.0 in 4.0 ..= 300.0;
     }
 
     group engage {
@@ -795,7 +882,7 @@ tunables! {
         /// tough: glass snaps almost immediately, wood breaks easily, brick
         /// holds longer, iron the longest of all on top of being permanent.
         /// Baked into each wall's health when the map is spawned.
-        wall_max_health: [f32; 4] = [20.0, 220.0, 10.0, 2.0] in 1.0 ..= 1000.0 labels MATERIAL_NAMES @ Spawn;
+        wall_max_health: [f32; 4] = [20.0, 220.0, 8.0, 2.0] in 1.0 ..= 1000.0 labels MATERIAL_NAMES @ Spawn;
         /// Fraction of spawned Wood obstacles that catch fire when destroyed
         /// instead of breaking outright (`Obstacle::flammable`, rolled once
         /// at spawn).
@@ -804,7 +891,76 @@ tunables! {
         wood_burn_frame_seconds: f32 = 0.395 in 0.01 ..= 2.0;
         /// Total time a Wood obstacle spends burning before charring and
         /// being removed.
-        wood_burn_seconds: f32 = 2.5 in 0.1 ..= 30.0;
+        wood_burn_seconds: f32 = 1.0 in 0.1 ..= 30.0;
+    }
+
+    group props {
+        /// Sandbag toughness: hp absorbed over its three visible stages
+        /// (intact, torn, collapsed) before it flattens. Baked in at spawn.
+        sandbag_max_health: f32 = 45.0 in 1.0 ..= 500.0 @ Spawn;
+        /// Odds a shell, bullet or plasma bolt sails over a sandbag tile
+        /// instead of hitting it, rolled per projectile per tile.
+        sandbag_pass_over_chance: f64 = 0.35 in 0.0 ..= 1.0;
+        /// Seconds a tank has to keep pushing into a sandbag before it
+        /// collapses. Kept under `enemy_breach_after_seconds` so an AI that
+        /// drives into one pushes through instead of stopping to shoot it.
+        sandbag_ram_seconds: f32 = 0.4 in 0.05 ..= 5.0;
+        /// Barrel toughness before it detonates: a player shell usually pops
+        /// it outright, an enemy shell needs two, minigun bullets several.
+        /// Baked in at spawn.
+        barrel_max_health: f32 = 18.0 in 1.0 ..= 500.0 @ Spawn;
+        /// Odds a projectile flies over a barrel instead of hitting it.
+        barrel_pass_over_chance: f64 = 0.08 in 0.0 ..= 1.0;
+        /// Odds a shell or bullet ricochets off a barrel instead of hitting
+        /// it (plasma never ricochets).
+        barrel_deflect_chance: f64 = 0.1 in 0.0 ..= 1.0;
+        /// Delay between chain-reaction links: a barrel caught in another
+        /// blast is armed for about this long before it goes off itself
+        /// (half of it at the blast's centre, two and a half times at its edge),
+        /// so a cluster cascades outward instead of vanishing in one frame.
+        barrel_fuse_seconds: f32 = 0.18 in 0.0 ..= 2.0;
+        /// Blast radius (px) of a detonating barrel: everything inside takes
+        /// damage with linear falloff, and other barrels inside always chain.
+        barrel_blast_radius: f32 = 96.0 in 0.0 ..= 600.0;
+        /// Blast damage at the centre, rolled per victim; falls off linearly
+        /// to zero at the radius. Hurts everyone: player, enemies, frogs,
+        /// walls and props alike.
+        barrel_blast_damage_min: f32 = 15.0 in 0.0 ..= 100.0;
+        /// Upper end of the blast damage roll.
+        barrel_blast_damage_max: f32 = 30.0 in 0.0 ..= 100.0;
+        /// Outward shove a barrel blast gives a tank at its centre (px/s,
+        /// mass-normalised like a wreck's knockback).
+        barrel_blast_knockback_speed: f32 = 140.0 in 0.0 ..= 500.0;
+        /// Damage per second a tank pushing into a barrel deals it - so
+        /// ramming one sets it off in a fraction of a second.
+        barrel_ram_damage_per_second: f32 = 40.0 in 0.0 ..= 500.0;
+        /// Odds a hit on a pristine fence destroys it outright; otherwise it
+        /// drops to its damaged keyframe and the next hit finishes it.
+        fence_one_shot_chance: f64 = 0.7 in 0.0 ..= 1.0;
+        /// Seconds a tank has to push into a fence before it gives way.
+        fence_ram_seconds: f32 = 0.15 in 0.05 ..= 5.0;
+        /// Playback rate of the barrel blast sprite animation (12 frames).
+        blast_anim_fps: f32 = 18.0 in 4.0 ..= 60.0;
+        /// On-screen scale of the 64px blast frames (2.0 = 128px wide).
+        blast_anim_scale: f32 = 2.0 in 0.5 ..= 4.0;
+        /// How long the additive light bloom under a blast lasts.
+        blast_glow_seconds: f32 = 0.25 in 0.0 ..= 2.0;
+        /// Radius (px) of that bloom at its largest.
+        blast_glow_radius: f32 = 90.0 in 0.0 ..= 400.0;
+        /// Peak opacity of the bloom.
+        blast_glow_strength: f32 = 0.8 in 0.0 ..= 1.0;
+        /// Peak opacity of the whole-screen flash a blast starts with.
+        blast_screen_flash_alpha: f32 = 0.3 in 0.0 ..= 1.0;
+        /// How long that screen flash takes to fade.
+        blast_screen_flash_seconds: f32 = 0.06 in 0.0 ..= 0.5;
+        /// Opacity of the pulsing glow on a barrel whose fuse is lit.
+        barrel_fuse_glow_strength: f32 = 0.6 in 0.0 ..= 1.0;
+        /// Opacity of the burn mark a blast leaves on the ground.
+        scorch_opacity: f32 = 0.75 in 0.0 ..= 1.0;
+        /// Seconds a fresh scorch mark takes to fade in under the fireball.
+        scorch_fade_in_seconds: f32 = 0.25 in 0.0 ..= 2.0;
+        /// On-screen scale of the 64px scorch decal cells.
+        scorch_scale: f32 = 2.0 in 0.5 ..= 4.0;
     }
 
     group tank_models {
@@ -864,6 +1020,25 @@ tunables! {
         /// The ring fades out over this many final seconds of the shield so
         /// the wearer can see it about to drop.
         shield_glow_fade_seconds: f32 = 2.0 in 0.0 ..= 10.0;
+        /// A tank's ground ring (`Tank::ring_position`: the shield ring and
+        /// the player's white marker) follows the hull as a damped spring.
+        /// This is its natural frequency: how briskly it accelerates after
+        /// a hull that left it behind - lower is sleepier and trails further
+        /// at speed, higher hugs the hull. 0 pins it to the hull.
+        tank_ring_spring_hz: f32 = 2.4 in 0.0 ..= 10.0;
+        /// Hard cap (px) on how far the ring may trail behind the hull, so
+        /// it stays tucked under the tank at any speed; the spring still
+        /// sets how it moves inside that leash.
+        tank_ring_max_trail_px: f32 = 12.0 in 0.0 ..= 64.0;
+        /// Opacity of the player's white ground ring: high enough to read
+        /// as white rather than grass-tinted grey, with a little ground
+        /// showing through. The shield ring's own translucency is fixed in
+        /// `draw_ground_ring`.
+        player_ring_opacity: f32 = 0.8 in 0.0 ..= 1.0;
+        /// The ring spring's damping ratio: below 1 it overshoots a touch
+        /// and settles with a wobble when the tank stops, 1 is the fastest
+        /// settle with no overshoot, above 1 is sluggish.
+        tank_ring_damping: f32 = 0.7 in 0.05 ..= 3.0;
         /// Shell shadow distance, rolled once per shell at fire time within
         /// this range - the separation is what reads as "airborne", and
         /// different shells reading as flying at different heights beats

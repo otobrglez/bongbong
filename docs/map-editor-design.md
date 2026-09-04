@@ -146,9 +146,14 @@ object, left to right:
 | Iron wall | `Obstacle` material `Iron` | " |
 | Wood wall | `Obstacle` material `Wood` | " |
 | Glass wall | `Obstacle` material `Glass` | called out separately in the requirements, but it's just the fourth `obstacle::Material` — same placement code path as the other three |
+| Sandbag | a `Sandbag` cell (`kind = "sandbag"`) | a destructible prop (docs/sandbags-barrels-fences.md): spawns an `Obstacle` of material `Sandbag`, variant rolled per tile at spawn (no variant picker - three arrangements). Icon from `props_sheet.png` |
+| Barrel | a `Barrel` cell (`kind = "barrel"`) | " - explodes and chains; two liveries |
+| Fence | a `Fence` cell (`kind = "fence"`) | " - two styles; the game draws it along whichever axis has fence neighbours |
 | Road | `ground::GroundGrid` cell → `Road` | see "Road & autotiling" below |
 | Frog | single `Frog` placement | see "Frog: singleton enforcement" below |
 | Tank (start point) | single `Start` placement | player spawn position - see "Later change #2" above; singleton, same move-on-click behavior as Frog |
+| Enemy frog | single `EnemyFrog` placement (`kind = "enemy_frog"`) | the Hunt mission's target (docs/maps-to-levels.md); singleton, same move-on-click behavior as Frog; drawn as the frog idle sprite over a red ground ring, the same marker the game draws under it. Ignored by missions without an enemy frog |
+| Gate | a `Gate` cell (`kind = "gate"`) | a wave roll-in gate; any number. Meant for nav-grid edge cells (col 0, last col, row 0, last row of the `PATHFIND_CELL_SIZE` grid), where it's drawn as an orange chevron pointing inward; anywhere else it's a plain orange square and the linter's `gate-not-on-edge` flags it. A map with any gate cells uses only those; one with none has its gates scanned from the wall layout each wave |
 | Health pickup | a `Pickup` spawn slot, kind `Health` | see "Pickups: fixed spawn slots" below |
 | Ammo pickup | a `Pickup` spawn slot, kind `Ammo` | " |
 | Laser pickup | a `Pickup` spawn slot, kind `Laser` | " |
@@ -343,13 +348,44 @@ pickup = "ammo"
   matches the preview already shown and approved). Only occupied cells are
   written — empty/grass cells have no entry, so a mostly-empty map stays a
   small file.
-- `kind` is one of `"wall" | "road" | "frog" | "pickup"`; `material` is
-  present only when `kind = "wall"` (one of
-  `"brick" | "iron" | "wood" | "glass"`); `pickup` is present only when
-  `kind = "pickup"` (one of `"health" | "ammo"`).
+- `kind` is one of `"wall" | "road" | "frog" | "start" | "enemy_frog" |
+  "gate" | "pickup" | "sandbag" | "barrel" | "fence"`; `material` is present only when `kind = "wall"` (one
+  of `"brick" | "iron" | "wood" | "glass"`); `pickup` is present only when
+  `kind = "pickup"` (one of `"health" | "ammo" | "laser" | "minigun" |
+  "plasma" | "speedup" | "shield"`).
 - `version` is a plain integer, bumped only if the schema changes
   incompatibly later — read defensively (reject/warn on an unknown future
   version rather than guessing).
+
+### Level tables
+
+Besides its cells a map can state what kind of *level* it is
+(docs/maps-to-levels.md): two small optional tables, `mission` and
+`spawn`, both `#[serde(default)]` so every map without them plays as
+today (Protect mission, band plan).
+
+- `mission.kind` — `"protect"` (default), `"hunt"` (the enemies' frog is
+  the target; place it with an `enemy_frog` cell, or the round picks a
+  procedural spot and the linter warns `hunt-missing-enemy-frog`) or
+  `"destroy"` (no frog at all).
+- `spawn.kind` — `"band"` (default: `tanks`/`--enemies` tanks placed in
+  the border band at init) or `"waves"`; with waves, `spawn.waves`,
+  `spawn.size`, `spawn.growth`, `spawn.tier_start` and `spawn.tier_end`
+  (`"light" | "medium" | "heavy" | "super"`) shape the plan, each falling
+  back to the `waves` tuning group when absent. Enemies roll in through
+  `gate` cells when the map places any, otherwise through edge cells found
+  by scanning the wall layout each wave.
+
+**Write them as dotted keys** (`mission.kind = "hunt"`, `spawn.kind =
+"waves"`, `spawn.waves = 4`, ...) when hand-editing: a `[mission]` or
+`[spawn]` table header swallows every `cells."c,r" = ...` line after it
+into that table, and the map silently loses those cells. The editor's own
+Save emits the tables after `cells`, so an editor-saved file is safe
+either way. The editor has no UI for these tables; it preserves whatever
+the loaded file said (Save writes the loaded `MapFile` back), so set them
+by hand-editing the TOML - the same way `tanks = N` is set.
+`maps/missions/hunt-basic.toml` and `maps/missions/waves-basic.toml` are
+hand-authored examples of each, lint-clean by construction.
 
 Rust side, in a new `src/map.rs`:
 
