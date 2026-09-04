@@ -120,13 +120,13 @@ after_render        pending screenshot captured (one frame after arming: the rea
 
 | tool | params | reply |
 |---|---|---|
-| `status` | - | seed, frame, time, outcome, paused, lockstep, tank counts, overlay flags, `map` (name/cells/tanks), history depth |
+| `status` | - | seed, frame, time, outcome, `mission`, `spawn` (the resolved plan), `intro_seconds_left`, paused, lockstep, tank counts, overlay flags, `map` (name/cells/tanks), history depth |
 | `snapshot` | `detail: compact\|full` | tanks (slot, chassis, x/y, velocity, damage/hp, ammo, weapon, shield, boost, `nearest_ally_px`; `full` adds `ai`), projectiles (cap 64), pickups, frog, `engage` (per enemy: status `engaged\|wreck\|fleeing\|retreating\|out_of_range`, `ring` slot index or null, target x/y, `sticky`; `full` adds the rejection tally and the 16-slot table), `clusters` (live enemies within 90 px, as slot groups) |
 | `events` | `since`, `limit`, `kinds`, `exclude` | ring of `{seq, frame, event, ...}` (cap 4096); `kinds`/`exclude` filter by event name |
 | `step` | `frames`, `move_dir`, `face`, `fire`, `fire_every`, `snapshot`, `detail`, `kinds`, `exclude` | frame, time, outcome, restarted, events of the step (filtered like `events`), snapshot |
 | `input` | `move_dir`, `face`, `fire`, `frames`, `cycle_overlays` | override the keyboard for N real-time frames; `cycle_overlays: true` presses the I key once |
 | `pause` / `resume` | - | status |
-| `restart` | `seed`, `enemies`, `tank_row`, `map` (path) or `map_toml` (inline TOML) | status; neither map param keeps the current map |
+| `restart` | `seed`, `enemies`, `tank_row`, `map` (path) or `map_toml` (inline TOML), `mission` (protect\|hunt\|destroy), `spawn` (band\|waves) with `waves`/`wave_size`/`wave_growth`/`tier_start`/`tier_end`, `intro` (start frozen behind the mission banner; default false) | status; neither map param keeps the current map; level params override the map's own tables and stay pinned |
 | `map_get` | - | the current map: name, cells, tanks, `toml` (edit and hand back via `restart {map_toml}`) |
 | `history` | `slot`, `last` (600), `every` (10) | sampled per-tank rows (frame, x/y, action, ring, stuck, touching) over the last N frames plus per-tank aggregates: frames, distance, net, cluster_frames, stuck_frames, no_ring_frames, touching_frames |
 | `screenshot` | `scale` (0.5), `source: screen\|scene`, `overlays` | PNG (base64) + path under `target/devshots/` |

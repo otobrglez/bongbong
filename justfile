@@ -26,6 +26,13 @@ probe-sweep:
 # rainbow-shield spawn rolls (one RNG draw per tank in `Game::init`) shifted
 # every stream; measured identical with the shield knobs zeroed, so it is
 # the stream, not the shield. See docs/gameplay-verification-design.md.
+# Waves spawn plan health check: the maps/missions/ waves fixture, Destroy
+# mission (no frog, so an AFK player only loses to gunfire), 30 seeded
+# rounds. Rolling-in tanks are exempt from the anomaly checks until they
+# arrive. See docs/maps-to-levels.md.
+probe-waves:
+    cargo run --bin probe -- --map maps/missions/waves-basic.toml --scenario afk --frames 3600 --rounds 30 --seed 2000 --heatmap
+
 probe-fixtures:
     for m in maps/test/*.toml; do cargo run --bin probe -- --map $m --frames 1800 --rounds 10 --seed 1000 --budget stale-start=0 --budget stall=0 --budget border-stuck=0 --budget jitter=5 --budget spin=3 --budget churn=14 --budget clustering=17 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=2 --budget never-arrived=0 --budget invariant=0 || exit 1; done
 

@@ -1236,6 +1236,10 @@ struct RoundResult {
     frames_run: u32,
     outcome: Outcome,
     tanks: Vec<TankReport>,
+    /// The level the round resolved to (CLI over map): what `Game::init`
+    /// reported, so a JSONL record names the rules it played under.
+    mission: bongbong::level::Mission,
+    spawn: bongbong::level::SpawnKind,
 }
 
 /// Runs one round to completion (or the frame limit). `trace` controls
@@ -1406,7 +1410,14 @@ fn run_round(
         }
     }
 
-    RoundResult { totals, frames_run, outcome: game.outcome(), tanks: reports }
+    RoundResult {
+        totals,
+        frames_run,
+        outcome: game.outcome(),
+        tanks: reports,
+        mission: game.mission,
+        spawn: game.spawn_plan.kind(),
+    }
 }
 
 /// The header/JSONL name for the scenario - one place, so the two can't
@@ -1476,8 +1487,10 @@ fn json_round_line(args: &Args, round: u32, seed: u64, result: &RoundResult, tun
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\"v\":1,\"round\":{round},\"seed\":\"0x{seed:016x}\",\"tuning\":{tuning_diff},\"map\":\"{}\",\"scenario\":\"{}\",\"enemies\":{},\"frames_run\":{},\"outcome\":\"{}\",\"anomalies\":{{{anomalies}}},\"tanks\":[{tanks}]}}",
+        "{{\"v\":1,\"round\":{round},\"seed\":\"0x{seed:016x}\",\"tuning\":{tuning_diff},\"map\":\"{}\",\"mission\":\"{}\",\"spawn\":\"{}\",\"scenario\":\"{}\",\"enemies\":{},\"frames_run\":{},\"outcome\":\"{}\",\"anomalies\":{{{anomalies}}},\"tanks\":[{tanks}]}}",
         json_escape(map_display(args)),
+        result.mission.name(),
+        result.spawn.name(),
         scenario_str(args.scenario),
         result.tanks.len(),
         result.frames_run,
@@ -1584,11 +1597,13 @@ fn main() -> ExitCode {
     });
 
     println!(
-        "probe: scenario={} enemies={} frames={} rounds={} seed=0x{base_seed:016x} map={} tuning={}",
+        "probe: scenario={} enemies={} mission={} spawn={} frames={} rounds={} seed=0x{base_seed:016x} map={} tuning={}",
         scenario_str(args.scenario),
         args.enemies
             .map(|n| n.to_string())
             .unwrap_or_else(|| "random".to_string()),
+        args.mission.map_or("map", |m| m.name()),
+        args.spawn.map_or("map", |s| s.name()),
         args.frames,
         args.rounds,
         map_display(&args),

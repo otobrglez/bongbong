@@ -1,6 +1,6 @@
 # Maps to levels: missions, enemy spawn plans, waves
 
-Status: **plan, ready to implement** (interviewed and decided 2026-09-04;
+Status: **being implemented** (interviewed and decided 2026-09-04;
 the "Decisions" section records what was chosen and why). Phases below are
 ordered so every phase leaves the game playable and `cargo test --lib`
 green.
@@ -146,7 +146,11 @@ cells."0,11" = { kind = "gate" }         # waves: optional, edge cells only
 ```
 
 Both tables are `#[serde(default)]`, so every existing map parses unchanged
-as Protect + Band. `MapFile` gains `mission: MissionConfig` and
+as Protect + Band. **Write them as dotted keys** (`mission.kind = "hunt"`,
+`spawn.kind = "waves"`, `spawn.waves = 5`, ...) rather than `[mission]` /
+`[spawn]` headers: a table header swallows every `cells."c,r" = ...` line
+after it. `MapFile::to_toml_string` emits the tables after `cells`, so
+editor-saved files are fine either way. `MapFile` gains `mission: MissionConfig` and
 `spawn: SpawnConfig` (plain serde structs with the defaults above; the
 `SpawnPlan` enum is resolved in `Game::init` after CLI precedence), plus
 `enemy_frog_cell()` and `gate_cells()`. The editor round-trips the new
