@@ -1,4 +1,11 @@
 version = 1
+mission.kind = "destroy"
+spawn.kind = "waves"
+spawn.waves = 4
+spawn.size = 2
+spawn.growth = 1
+spawn.tier_start = "light"
+spawn.tier_end = "super"
 
 [cells."30,7"]
 kind = "wall"
