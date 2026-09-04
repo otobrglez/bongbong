@@ -252,6 +252,15 @@ impl Game {
         if gates.is_empty() {
             gates = battlefield::gate_candidates(&grid, f.width, f.height, &avoid, min_dist, inward);
         }
+        // Prefer lanes that lead to the fight: a lane open on its own can
+        // still end in a pocket walled off from the player (the default
+        // map's gated strips). Only when no lane connects is any lane used.
+        let components = grid.components();
+        let connected: Vec<Gate> =
+            gates.iter().copied().filter(|g| components.connected(&grid, g.inside, avoid[0])).collect();
+        if !connected.is_empty() {
+            gates = connected;
+        }
         if gates.is_empty() {
             self.spawn_in_band(f, row);
             return true;
