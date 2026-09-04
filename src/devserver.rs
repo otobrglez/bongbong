@@ -81,12 +81,12 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "snapshot",
-        description: "World state as JSON: every tank (position, velocity, damage/hp, ammo, weapon, shield/boost, nearest_ally_px), projectiles, pickups, frog, `engage` (the engagement ring: per enemy its status - engaged/wreck/fleeing/retreating/out_of_range - the ring slot it holds and its target point; an engaged enemy with ring=null steers at the player directly, the pile-up case) and `clusters` (groups of live enemies within 90 px of each other). detail=full adds each enemy's AI memory (waypoint, committed heading, last behaviour-tree action, stuck timer, intent), the per-enemy slot rejection tally (claimed/off_map/unreachable/no_los) and the 16-slot table (point, line of sight, who holds it).",
+        description: "World state as JSON: every tank (position, velocity, damage/hp, ammo, weapon, shield/boost, nearest_ally_px; enemies also `role` - player/hunter/guard), projectiles, pickups, `frogs` (a list with `side` player/enemy: the player's frog first, then the enemy frog in a hunt round), `engage` (the engagement rings: per enemy its status - engaged/wreck/fleeing/retreating/out_of_range - the ring slot it holds and its target point, on the ring around the player or, for a hunter, the one around the player's frog; an engaged enemy with ring=null steers at its target directly, the pile-up case) and `clusters` (groups of live enemies within 90 px of each other). detail=full adds each enemy's AI memory (role, waypoint, committed heading, last behaviour-tree action, stuck timer, intent), the per-enemy slot rejection tally (claimed/off_map/unreachable/no_los) and the player ring's 16-slot table (point, line of sight, who holds it).",
         schema: r#"{"type":"object","properties":{"detail":{"type":"string","enum":["compact","full"],"default":"compact"}}}"#,
     },
     ToolSpec {
         name: "events",
-        description: "Gameplay events recorded since `since` (a seq number; 0 = everything kept, up to 4096): fired, hit, wreck, ram, deflected (off a shield), shells_collided, frog_bite, pickup_collected, pickup_respawned, round_started, round_ended, plus AI decisions - ai_action (behaviour-tree action changed), engage_slot (ring slot changed; null = steering at the player), stuck_escape, breach (dir, or null when it ends), retreat (on/off), alert (shared last-known player position on/off). Each carries the frame it happened on. `kinds` keeps only those event names, `exclude` drops them.",
+        description: "Gameplay events recorded since `since` (a seq number; 0 = everything kept, up to 4096): fired, hit, wreck, ram, deflected (off a shield), shells_collided, frog_bite (with the biting frog's side), pickup_collected, pickup_respawned, round_started, round_ended, plus AI decisions - ai_action (behaviour-tree action changed), engage_slot (ring slot changed; null = steering at its target - the player, or a hunter's frog - directly), stuck_escape, breach (dir, or null when it ends), retreat (on/off), alert (shared last-known player position on/off). Each carries the frame it happened on. `kinds` keeps only those event names, `exclude` drops them.",
         schema: r#"{"type":"object","properties":{"since":{"type":"integer","default":0,"description":"Return events with seq > since"},"limit":{"type":"integer","default":200},"kinds":{"type":"array","items":{"type":"string"},"description":"Only these event names"},"exclude":{"type":"array","items":{"type":"string"},"description":"Drop these event names"}}}"#,
     },
     ToolSpec {
@@ -156,8 +156,8 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "spawn_enemy",
-        description: "Add an enemy at (x, y) with an optional chassis row (0-11). Draws from the round RNG, so the round stops being the seeded replay afterwards. Returns the new slot.",
-        schema: r#"{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"row":{"type":"integer","minimum":0,"maximum":11}},"required":["x","y"]}"#,
+        description: "Add an enemy at (x, y) with an optional chassis row (0-11) and AI role (player - fights the player, the default; hunter - drives at and shoots the player's frog; guard - stays leashed to the enemy frog). Draws from the round RNG, so the round stops being the seeded replay afterwards. Returns the new slot.",
+        schema: r#"{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"row":{"type":"integer","minimum":0,"maximum":11},"role":{"type":"string","enum":["player","hunter","guard"]}},"required":["x","y"]}"#,
     },
     ToolSpec {
         name: "tuning_get",
@@ -693,7 +693,15 @@ impl DevServer {
             "spawn_enemy" => match (f32_param(&params, "x"), f32_param(&params, "y")) {
                 (Some(x), Some(y)) => {
                     let row = params.get("row").and_then(Value::as_i64).map(|r| r as i32);
-                    game.debug_spawn_enemy(Position::new(x, y), row).map(|slot| json!({ "slot": slot }))
+                    let role = match params.get("role") {
+                        None | Some(Value::Null) => Ok(None),
+                        Some(v) => serde_json::from_value::<crate::ai::Role>(v.clone())
+                            .map(Some)
+                            .map_err(|_| format!("role: expected player, hunter or guard, got {v}")),
+                    };
+                    role.and_then(|role| {
+                        game.debug_spawn_enemy(Position::new(x, y), row, role).map(|slot| json!({ "slot": slot }))
+                    })
                 }
                 _ => Err("x and y are required".to_string()),
             },
@@ -1231,7 +1239,9 @@ cells."20,8" = { kind = "wall", material = "iron" }
         let snap = rx.recv().unwrap().unwrap();
         assert_eq!(snap["tanks"][0]["x"], 160.0, "{}", snap["tanks"][0]);
         assert_eq!(snap["tanks"][0]["y"], 160.0);
-        assert_eq!(snap["frog"]["x"], 960.0, "{}", snap["frog"]);
+        assert_eq!(snap["frogs"][0]["x"], 960.0, "{}", snap["frogs"]);
+        assert_eq!(snap["frogs"][0]["side"], "player");
+        assert_eq!(snap["frogs"].as_array().map(Vec::len), Some(1), "a protect round has one frog");
         assert_eq!(snap["obstacles_alive"], 1);
         // A bad map is an error and leaves the round alone.
         let bad = r#"version = 1

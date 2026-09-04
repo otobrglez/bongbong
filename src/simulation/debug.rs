@@ -10,9 +10,9 @@ use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use sola_raylib::core::math::Vector2;
 
-use crate::ai::{Ai, AiSnapshot};
+use crate::ai::{Ai, AiSnapshot, Role};
 use crate::bullet::{Bullet, BulletState};
-use crate::frog::Frog;
+use crate::frog::{Frog, Side};
 use crate::obstacle::Obstacle;
 use crate::pickup::{Pickup, PickupKind};
 use crate::plasma::{Plasma, PlasmaState};
@@ -63,9 +63,13 @@ pub struct DebugSnapshot {
     pub projectiles: Vec<ProjectileDebug>,
     pub projectiles_total: usize,
     pub pickups: Vec<PickupDebug>,
-    pub frog: Option<FrogDebug>,
+    /// Every frog on the field: the player's first, then the enemy's
+    /// (Hunt); empty in a Destroy round.
+    pub frogs: Vec<FrogDebug>,
     pub obstacles_alive: usize,
     /// What the last enemy phase's engagement-slot assignment decided.
+    /// Per-tank entries cover both rings (player and hunted frog); the slot
+    /// table is the player ring's.
     pub engage: EngageSnapshot,
     /// Groups of two or more live enemies transitively within
     /// `CLUSTER_RADIUS_PX` of each other, as owner slots.
@@ -77,6 +81,9 @@ pub struct TankDebug {
     /// `Tank::owner_slot`: 0 is the player, enemies count from 1.
     pub slot: usize,
     pub is_player: bool,
+    /// `ai::Role::name` - enemies only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<&'static str>,
     pub row: i32,
     pub chassis: &'static str,
     pub x: f32,
@@ -130,6 +137,7 @@ pub struct PickupDebug {
 
 #[derive(Serialize, Debug)]
 pub struct FrogDebug {
+    pub side: Side,
     pub x: f32,
     pub y: f32,
     pub health: f32,
@@ -317,6 +325,7 @@ impl Game {
                 TankDebug {
                     slot: tank.owner_slot,
                     is_player: tank.owner_slot == PLAYER_OWNER_SLOT,
+                    role: ai.map(|a| a.role.name()),
                     row: tank.row,
                     chassis: TANK_NAMES[tank.row as usize],
                     x: r1(tank.position.x),
@@ -389,16 +398,21 @@ impl Game {
             .collect();
         pickups.sort_by(|a, b| (a.x, a.y).partial_cmp(&(b.x, b.y)).unwrap_or(std::cmp::Ordering::Equal));
 
-        let frog = self.frog.map(|entity| {
-            with_frog(&self.world, entity, |fr| FrogDebug {
-                x: r1(fr.position.x),
-                y: r1(fr.position.y),
-                health: r1(fr.health),
-                max_health: fr.max_health,
-                dead: fr.is_dead(),
-                hopping: fr.hop_timer > 0.0,
+        let frogs = [self.frog, self.enemy_frog]
+            .into_iter()
+            .flatten()
+            .map(|entity| {
+                with_frog(&self.world, entity, |fr| FrogDebug {
+                    side: fr.side,
+                    x: r1(fr.position.x),
+                    y: r1(fr.position.y),
+                    health: r1(fr.health),
+                    max_health: fr.max_health,
+                    dead: fr.is_dead(),
+                    hopping: fr.hop_timer > 0.0,
+                })
             })
-        });
+            .collect();
 
         let report = &self.last_engage;
         let owner_of = |entity: hecs::Entity| report.tanks.iter().find(|t| t.entity == entity).map(|t| t.owner);
@@ -452,7 +466,7 @@ impl Game {
             projectiles,
             projectiles_total,
             pickups,
-            frog,
+            frogs,
             obstacles_alive: self.world.query::<&Obstacle>().iter().filter(|o| !o.destroyed).count(),
             engage,
             clusters: clusters(&live_enemies, CLUSTER_RADIUS_PX),
@@ -596,8 +610,9 @@ impl Game {
     /// the same per-tank rolls `init` makes (damage variant, speed spread,
     /// track wobble) - **these draw from the round RNG**, so the round is
     /// no longer the seeded replay afterwards. `row` picks the chassis
-    /// (0..12, default from the spawn order). Returns the new slot.
-    pub fn debug_spawn_enemy(&mut self, pos: Position, row: Option<i32>) -> Result<usize, String> {
+    /// (0..12, default from the spawn order); `role` its AI role (default
+    /// `Role::Player`, never rolled). Returns the new slot.
+    pub fn debug_spawn_enemy(&mut self, pos: Position, row: Option<i32>, role: Option<Role>) -> Result<usize, String> {
         let rng = self.rng.as_mut().ok_or_else(|| "spawn_enemy only works between frames".to_string())?;
         let max_slot = self.world.query::<&Tank>().iter().map(|t| t.owner_slot).max().unwrap_or(PLAYER_OWNER_SLOT);
         let slot = max_slot + 1;
@@ -621,13 +636,14 @@ impl Game {
         };
         roll_track_distortion(&mut enemy, rng);
         enemy.body = Some(self.physics.spawn_tank(pos, enemy.move_half_extents(false), enemy.mass()));
-        self.world.spawn((enemy, Ai::default()));
+        self.world.spawn((enemy, Ai::with_role(role.unwrap_or_default())));
         Ok(slot)
     }
 
     /// The nav grid as text, top row first: `#` blocked, `.` open, then
     /// what stands on each cell - `P` player, a digit or `E` for an enemy's
-    /// slot, `x` a wreck, `F` the frog, `*` a pickup. Later markers win.
+    /// slot, `x` a wreck, `F` the player's frog, `G` the enemy frog, `*` a
+    /// pickup. Later markers win.
     pub fn nav_grid_ascii(&self, width: f32, height: f32) -> String {
         let grid = self.nav_grid(width, height);
         let (cols, rows, cell) = grid.dims();
@@ -647,7 +663,7 @@ impl Game {
             mark(p.position, '*');
         }
         for fr in self.world.query::<&Frog>().iter() {
-            mark(fr.position, 'F');
+            mark(fr.position, if fr.side == Side::Player { 'F' } else { 'G' });
         }
         let mut tanks: Vec<(usize, Position, bool)> =
             self.world.query::<&Tank>().iter().map(|t| (t.owner_slot, t.position, t.is_wreck())).collect();
@@ -669,7 +685,7 @@ impl Game {
             out.extend(row);
             out.push('\n');
         }
-        out.push_str(&format!("{cols}x{rows} cells of {cell}px; # blocked . open P player 1-9/E enemy x wreck F frog * pickup\n"));
+        out.push_str(&format!("{cols}x{rows} cells of {cell}px; # blocked . open P player 1-9/E enemy x wreck F frog G enemy frog * pickup\n"));
         out
     }
 }

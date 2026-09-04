@@ -1,6 +1,8 @@
 //! Engagement slots: every enemy actually attacking claims a distinct point
-//! near the player instead of converging on the same spot. Four cardinal
-//! axes through the player, each with two lateral firing slots at
+//! near its target instead of converging on the same spot. The target is
+//! the player (`Game::engage`) or, for hunters, the player's frog
+//! (`Game::engage_frog`) - one ring each, same geometry. Four cardinal
+//! axes through the target, each with two lateral firing slots at
 //! ENGAGE_RING_RADIUS (rank 0, both within ENEMY_FIRE_ALIGN_PX of the axis
 //! so either can fire) and two reserve slots at ENGAGE_RESERVE_RADIUS (rank
 //! 1, beyond attack range so a reserve tank neither fires nor blocks a
@@ -134,7 +136,8 @@ impl EngageReport {
 
 /// Everything `EngageRing::assign` needs about this frame.
 pub(super) struct EngageCtx<'a> {
-    pub player_pos: Position,
+    /// What the ring is built around: the player, or a hunted frog.
+    pub target_pos: Position,
     pub width: f32,
     pub height: f32,
     /// Keep every slot at least this far from the battlefield edge.
@@ -190,7 +193,7 @@ impl EngageRing {
         }
         let mut claimed = [false; SLOT_COUNT];
         for &(entity, my_pos) in engaged {
-            let to_me = (my_pos.x - ctx.player_pos.x, my_pos.y - ctx.player_pos.y);
+            let to_me = (my_pos.x - ctx.target_pos.x, my_pos.y - ctx.target_pos.y);
             let bearing_len = (to_me.0 * to_me.0 + to_me.1 * to_me.1).sqrt().max(1.0);
             let bearing = (to_me.0 / bearing_len, to_me.1 / bearing_len);
             let mut axis_order = [0usize, 1, 2, 3];
@@ -220,7 +223,7 @@ impl EngageRing {
                     rejected.unreachable += 1;
                     return None;
                 }
-                let los = *slots[i].line_of_sight.get_or_insert_with(|| (ctx.line_of_sight)(candidate, ctx.player_pos));
+                let los = *slots[i].line_of_sight.get_or_insert_with(|| (ctx.line_of_sight)(candidate, ctx.target_pos));
                 if !los {
                     rejected.no_los += 1;
                     return None;
@@ -272,7 +275,7 @@ fn engage_point(ctx: &EngageCtx, slot: EngageSlot) -> Option<Position> {
     let dir = DIRS[slot.axis as usize];
     let perp = perp_of(dir);
     let lateral = slot.side as f32 * tuning().engage_lateral_offset;
-    let (px, py, m) = (ctx.player_pos.x, ctx.player_pos.y, ctx.margin);
+    let (px, py, m) = (ctx.target_pos.x, ctx.target_pos.y, ctx.margin);
     // The lateral coordinate is independent of the forward distance: if
     // it's already against a wall no clamping can save this slot.
     let lat_x = px + perp.0 * lateral;
@@ -340,7 +343,7 @@ mod tests {
     fn opposite_tanks_get_distinct_slots_on_their_own_axes() {
         let (player, w, h, margin) = open_field();
         let yes = |_: Position, _: Position| true;
-        let ctx = EngageCtx { player_pos: player, width: w, height: h, margin, reachable: &yes, line_of_sight: &yes };
+        let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, reachable: &yes, line_of_sight: &yes };
         let mut ring = EngageRing::default();
         let west = (entity(1), Position::new(200.0, 360.0));
         let east = (entity(2), Position::new(1100.0, 360.0));
@@ -362,7 +365,7 @@ mod tests {
     fn a_held_slot_is_kept_while_it_stays_valid() {
         let (player, w, h, margin) = open_field();
         let yes = |_: Position, _: Position| true;
-        let ctx = EngageCtx { player_pos: player, width: w, height: h, margin, reachable: &yes, line_of_sight: &yes };
+        let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, reachable: &yes, line_of_sight: &yes };
         let mut ring = EngageRing::default();
         let tank = entity(7);
         let first = assign(&mut ring, &[(tank, Position::new(200.0, 300.0))], &ctx);
@@ -379,7 +382,7 @@ mod tests {
         let (player, w, h, margin) = open_field();
         let yes = |_: Position, _: Position| true;
         let no = |_: Position, _: Position| false;
-        let ctx = EngageCtx { player_pos: player, width: w, height: h, margin, reachable: &no, line_of_sight: &yes };
+        let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, reachable: &no, line_of_sight: &yes };
         let mut ring = EngageRing::default();
         let report = assign(&mut ring, &[(entity(1), Position::new(200.0, 360.0))], &ctx);
         assert!(report.target(entity(1)).is_none());
@@ -394,7 +397,7 @@ mod tests {
         let (_, w, h, margin) = open_field();
         let yes = |_: Position, _: Position| true;
         let player = Position::new(60.0, 60.0);
-        let ctx = EngageCtx { player_pos: player, width: w, height: h, margin, reachable: &yes, line_of_sight: &yes };
+        let ctx = EngageCtx { target_pos: player, width: w, height: h, margin, reachable: &yes, line_of_sight: &yes };
         let mut ring = EngageRing::default();
         // From the north-west the tank tries the up and left axes first -
         // both fall outside the battlefield here.

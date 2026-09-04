@@ -10,7 +10,7 @@ use sola_raylib::prelude::*;
 use crate::ai::Ai;
 use crate::bullet::{Bullet, BulletState, draw_bullet, draw_bullet_shadow};
 use crate::damage_stage::draw_damage;
-use crate::frog::{Frog, FrogVariantTextures, draw_frog};
+use crate::frog::{Frog, FrogVariantTextures, draw_frog, draw_frog_ring};
 use crate::laser::draw_laser_beam;
 use crate::obstacle::{Obstacle, draw_obstacle, draw_obstacle_shadow};
 use crate::pickup::{Pickup, PickupKind, draw_pickup};
@@ -248,6 +248,7 @@ impl Game {
             for frog_entity in [self.frog, self.enemy_frog].into_iter().flatten() {
                 crate::simulation::with_frog(&self.world, frog_entity, |frog| {
                     let variant = &textures.frog_variants[frog.variant as usize];
+                    draw_frog_ring(&mut d, frog, self.time);
                     draw_frog(&mut d, &variant.as_frog_textures(), frog, self.time);
                     draw_frog_health_bar(&mut d, textures.health_bar, frog);
                 });
