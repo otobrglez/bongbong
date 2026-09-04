@@ -198,6 +198,20 @@ impl Game {
                 (text, size, w, alpha)
             })
         };
+        // Wave rounds: the wave counter and live-enemy count on the right
+        // of the HUD line, and the `WAVE N` banner during the breather
+        // before a wave - smaller than the mission banner, no dim overlay,
+        // and never over the end-of-round banner.
+        let hud_wave = self.wave_status().map(|w| {
+            let text = format!("WAVE {}/{}   ENEMIES {}", w.index, w.total, w.alive);
+            let w_px = rl.measure_text(&text, HUD_FONT_SIZE);
+            (text, w_px)
+        });
+        let wave_banner = self.wave_banner().filter(|_| self.outcome == Outcome::Playing).map(|text| {
+            let size = 48;
+            let w = rl.measure_text(&text, size);
+            (text, size, w)
+        });
         let banner = banner.map(|(text, color)| {
             let title_size = 72;
             let title_w = rl.measure_text(text, title_size);
@@ -263,6 +277,18 @@ impl Game {
                 draw_minigun_mount(&mut d, textures.minigun_mount, tank);
                 draw_damage(&mut d, textures.damage, tank, self.time);
                 draw_tank_overhead_health(&mut d, textures.health_bar, tank);
+            }
+
+            // Wave tanks still rolling in: drawn like any enemy (partly
+            // off-screen by construction), no health bar yet.
+            for (tank, _) in self.world.query::<(&Tank, &crate::simulation::RollIn)>().iter() {
+                draw_tank_shield(&mut d, tank, self.time);
+                if self.shadows_enabled {
+                    draw_tank_shadow(&mut d, textures.tanks, tank);
+                    draw_minigun_mount_shadow(&mut d, textures.minigun_mount, tank);
+                }
+                draw_tank(&mut d, textures.tanks, tank);
+                draw_minigun_mount(&mut d, textures.minigun_mount, tank);
             }
 
             crate::simulation::with_tank(&self.world, player, |tank| {
@@ -541,6 +567,9 @@ impl Game {
                 0.0,
                 Color::WHITE,
             );
+            if let Some((text, w)) = &hud_wave {
+                d.draw_text(text, screen_width - HUD_MARGIN - w, hud_y, HUD_FONT_SIZE, Color::WHITE);
+            }
             // Mirrors the top-left HUD's HUD_MARGIN inset, so both corners
             // sit the same distance from their edges.
             d.draw_text(
@@ -572,6 +601,9 @@ impl Game {
                 let a = |max: f32| (max * alpha) as u8;
                 d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(0, 0, 0, a(120.0)));
                 d.draw_text(text, screen_width / 2 - w / 2, screen_height / 2 - size / 2, size, Color::new(255, 255, 255, a(255.0)));
+            }
+            if let Some((text, size, w)) = &wave_banner {
+                d.draw_text(text, screen_width / 2 - w / 2, screen_height / 2 - size / 2, *size, Color::RAYWHITE);
             }
 
             // Paused overlay draws over everything else, including the

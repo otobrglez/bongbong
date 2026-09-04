@@ -559,6 +559,7 @@ impl DevServer {
             "outcome": snap.outcome,
             "mission": game.mission.name(),
             "spawn": game.spawn_plan,
+            "wave": game.wave_status(),
             "intro_seconds_left": game.intro_timer,
             "paused": snap.paused,
             "lockstep": self.lockstep,

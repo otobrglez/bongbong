@@ -23,7 +23,11 @@ mod combat;
 pub mod debug;
 mod engage;
 mod hits;
+mod waves;
 mod weapons;
+
+pub use waves::{RollIn, WaveStatus};
+use waves::WaveState;
 
 use crate::tuning::tuning;
 use std::collections::{HashMap, HashSet};
@@ -141,6 +145,15 @@ pub enum Event {
     ShellsCollided { x: f32, y: f32 },
     /// The frog bit the tank in `slot`.
     FrogBite { slot: usize, damage: f32, killed: bool },
+    /// The wave scheduler called wave `wave` (1-based): `size` tanks of
+    /// `tier` queued to roll in.
+    WaveStarted { wave: u32, size: u32, tier: crate::level::Tier },
+    /// A wave tank in `slot` finished rolling in: it now has a body and an
+    /// `Ai`, and counts as an enemy on the field.
+    TankEntered { slot: usize },
+    /// A wave round removed the wreck in `slot` after
+    /// `wave_wreck_despawn_seconds`.
+    WreckRemoved { slot: usize },
     // --- AI decisions, recorded only while `Game::trace_ai` is set: each
     // is a transition the enemy phase observed by comparing an enemy's
     // `AiSnapshot` before and after its `think`, so `ai.rs` stays
@@ -269,6 +282,9 @@ pub struct Game {
     pub mission: Mission,
     /// How enemies arrive this round - resolved by `init` like `mission`.
     pub spawn_plan: SpawnPlan,
+    /// The wave scheduler (`waves.rs`): idle under the band plan apart
+    /// from handing out owner slots.
+    wave: WaveState,
     /// Seconds the round stays frozen behind the opening mission banner.
     /// `update` ticks nothing else while it is positive; a move or fire
     /// input ends it early.
@@ -520,6 +536,7 @@ impl Game {
                 .clamp(1, 31),
             SpawnPlan::Waves { .. } => 0,
         };
+        self.wave = WaveState::new(enemy_owner_slot(enemy_count));
 
         // Terrain legality is the nav grid's `usable` test (see
         // `battlefield::enemy_spawn_legal`); the frog is not down yet, so
@@ -558,50 +575,7 @@ impl Game {
                 spawn_grid.nearest_open(sample, &avoid, enemy_clear)
             });
             let erow = TANK_SPRITE_ORDER[enemy_positions.len() % TANK_SPRITE_ORDER.len()];
-            // Per-enemy speed within +/- ENEMY_SPEED_VARIANCE, so they don't
-            // move in lockstep.
-            let factor = 1.0 + rng.random_range(-tuning().enemy_speed_variance..tuning().enemy_speed_variance);
-            let owner_slot = enemy_owner_slot(enemy_positions.len());
-            let mut enemy = Tank {
-                row: erow,
-                shell_variant: TANK_SHELL_VARIANT_BY_ROW[erow as usize],
-                damage_variant: rng.random_range(0..DAMAGE_VARIANTS),
-                position: pos,
-                rotation: 180.0, // facing down, toward the player's start
-                speed_scale: factor,
-                owner_slot,
-                ..Tank::default()
-            };
-            // Some enemies start armed with exactly one pickup's worth of a
-            // special weapon (see ENEMY_SPECIAL_WEAPON_CHANCE).
-            if rng.random_range(0.0..1.0) < tuning().enemy_special_weapon_chance {
-                if rng.random_range(0.0..1.0) < tuning().enemy_special_weapon_laser_share {
-                    enemy.enqueue_weapon(ActiveWeapon::Laser);
-                    enemy.laser_charges += tuning().laser_charges_per_pickup;
-                    enemy.laser_variant = if rng.random_range(0.0..1.0) < tuning().laser_blue_pickup_chance {
-                        LaserVariant::Blue
-                    } else {
-                        LaserVariant::Red
-                    };
-                } else if rng.random_range(0.0..1.0) < tuning().enemy_special_weapon_plasma_share {
-                    enemy.enqueue_weapon(ActiveWeapon::Plasma);
-                    enemy.plasma_ammo += tuning().plasma_ammo_per_pickup;
-                    enemy.plasma_variant = if rng.random_range(0.0..1.0) < tuning().plasma_purple_pickup_chance {
-                        PlasmaVariant::Purple
-                    } else {
-                        PlasmaVariant::Teal
-                    };
-                } else {
-                    enemy.enqueue_weapon(ActiveWeapon::Minigun);
-                    enemy.minigun_ammo += tuning().minigun_ammo_per_pickup;
-                }
-            }
-            // A few start the round already shielded (SPAWN_SHIELD_CHANCE,
-            // same roll the player gets above).
-            if rng.random_range(0.0..1.0) < tuning().spawn_shield_chance {
-                enemy.shield_timer = tuning().shield_duration_seconds;
-            }
-            roll_track_distortion(&mut enemy, &mut rng);
+            let mut enemy = roll_enemy_tank(&mut rng, erow, pos, enemy_owner_slot(enemy_positions.len()));
             enemy.body = Some(self.physics.spawn_tank(pos, enemy.move_half_extents(false), enemy.mass()));
             enemy_positions.push(pos);
             self.world.spawn((enemy, Ai::default()));
@@ -743,7 +717,9 @@ impl Game {
             self.frog_phase(&mut f);
             self.pickup_phase(&mut f);
             self.player_phase(input, &mut f);
+            self.rollin_phase(&mut f);
             self.enemy_phase(&mut f);
+            self.wave_phase(&mut f);
             self.spawn_pending(&mut f);
             self.resolve_lasers(&mut f);
             self.step_world(&mut f, true);
@@ -753,6 +729,7 @@ impl Game {
             self.resolve_projectiles::<Bullet>(&mut f, true);
             self.resolve_projectiles::<Plasma>(&mut f, true);
             self.explosions(&mut f);
+            self.despawn_wrecks(&mut f);
             self.cleanup_done();
             self.check_round_end(&mut f);
         } else {
@@ -844,6 +821,7 @@ impl Game {
         let nearest: Option<(Entity, Position, f32)> = self
             .world
             .query::<(Entity, &Tank)>()
+            .without::<&RollIn>()
             .iter()
             .filter(|(_, t)| !t.is_wreck())
             .map(|(e, t)| (e, t.position, t.position.distance_to(frog_pos)))
@@ -883,6 +861,7 @@ impl Game {
         let living_tanks: Vec<(Entity, Position)> = self
             .world
             .query::<(Entity, &Tank)>()
+            .without::<&RollIn>()
             .iter()
             .filter(|(_, t)| !t.is_wreck())
             .map(|(e, t)| (e, t.position))
@@ -1442,9 +1421,7 @@ impl Game {
     fn spawn_plan_finished(&self) -> bool {
         match self.spawn_plan {
             SpawnPlan::Band { .. } => true,
-            // Filled in by the wave scheduler; until then a waves round
-            // never ends by wreck count.
-            SpawnPlan::Waves { .. } => false,
+            SpawnPlan::Waves { .. } => self.waves_finished(),
         }
     }
 
@@ -1538,13 +1515,15 @@ impl Game {
             .query::<(Entity, &Tank)>()
             .iter()
             .map(|(entity, tank)| {
-                let body = tank.body.expect("tank should always have a physics body once spawned");
-                let contact = self.physics.contact_stats(body);
+                // A tank still rolling in has no body: its kinematic
+                // velocity stands in and it touches nothing.
+                let contact = tank.body.map(|b| self.physics.contact_stats(b)).unwrap_or_default();
                 TankSnapshot {
                     is_player: entity == player,
+                    entering: tank.body.is_none(),
                     position: tank.position,
                     rotation: tank.rotation,
-                    velocity: self.physics.velocity(body),
+                    velocity: tank.body.map(|b| self.physics.velocity(b)).unwrap_or(tank.velocity),
                     commanded_velocity: tank.velocity,
                     top_speed: tank.base_speed(),
                     damage: tank.damage,
@@ -1566,6 +1545,9 @@ impl Game {
 /// non-player tank is always an enemy.
 pub struct TankSnapshot {
     pub is_player: bool,
+    /// A wave tank still rolling in from outside the battlefield: no
+    /// physics body yet, not part of the fight.
+    pub entering: bool,
     pub position: Position,
     pub rotation: f32,
     /// Real physics velocity read back from the body.
@@ -1647,8 +1629,10 @@ fn drive_tank(physics: &mut Physics, tank: &mut Tank, intent: Intent, dt: f32) {
     physics.apply_impulse(handle, Position::new(delta.x * tank.mass(), delta.y * tank.mass()));
 }
 
+/// Read a tank's position back from its body; a tank still rolling in has
+/// none and keeps the position `rollin_phase` gave it.
 fn sync_tank_from_physics(physics: &Physics, tank: &mut Tank) {
-    let handle = tank.body.expect("tank should always have a physics body once spawned");
+    let Some(handle) = tank.body else { return };
     tank.position = physics.position(handle);
 }
 
@@ -1800,6 +1784,55 @@ fn with_two_tanks_mut<R>(world: &mut hecs::World, a: Entity, b: Entity, f: impl 
         ta.expect("entity should have a Tank component"),
         tb.expect("entity should have a Tank component"),
     )
+}
+
+/// Build one enemy tank of chassis `row` at `pos` in owner slot `slot`,
+/// facing down, with every per-tank spawn roll in this order: speed
+/// spread (`enemy_speed_variance`), damage variant, a possible special
+/// weapon (`enemy_special_weapon_chance`, one pickup's worth), a possible
+/// starting shield (`spawn_shield_chance`, the player's roll too) and
+/// track wobble. Shared by the band placement in `init` and the wave
+/// scheduler, so a wave tank is kitted exactly like a band tank. No
+/// physics body: the caller spawns one when the tank is on the field.
+fn roll_enemy_tank(rng: &mut SmallRng, row: i32, pos: Position, slot: usize) -> Tank {
+    let factor = 1.0 + rng.random_range(-tuning().enemy_speed_variance..tuning().enemy_speed_variance);
+    let mut enemy = Tank {
+        row,
+        shell_variant: TANK_SHELL_VARIANT_BY_ROW[row as usize],
+        damage_variant: rng.random_range(0..DAMAGE_VARIANTS),
+        position: pos,
+        rotation: 180.0,
+        speed_scale: factor,
+        owner_slot: slot,
+        ..Tank::default()
+    };
+    if rng.random_range(0.0..1.0) < tuning().enemy_special_weapon_chance {
+        if rng.random_range(0.0..1.0) < tuning().enemy_special_weapon_laser_share {
+            enemy.enqueue_weapon(ActiveWeapon::Laser);
+            enemy.laser_charges += tuning().laser_charges_per_pickup;
+            enemy.laser_variant = if rng.random_range(0.0..1.0) < tuning().laser_blue_pickup_chance {
+                LaserVariant::Blue
+            } else {
+                LaserVariant::Red
+            };
+        } else if rng.random_range(0.0..1.0) < tuning().enemy_special_weapon_plasma_share {
+            enemy.enqueue_weapon(ActiveWeapon::Plasma);
+            enemy.plasma_ammo += tuning().plasma_ammo_per_pickup;
+            enemy.plasma_variant = if rng.random_range(0.0..1.0) < tuning().plasma_purple_pickup_chance {
+                PlasmaVariant::Purple
+            } else {
+                PlasmaVariant::Teal
+            };
+        } else {
+            enemy.enqueue_weapon(ActiveWeapon::Minigun);
+            enemy.minigun_ammo += tuning().minigun_ammo_per_pickup;
+        }
+    }
+    if rng.random_range(0.0..1.0) < tuning().spawn_shield_chance {
+        enemy.shield_timer = tuning().shield_duration_seconds;
+    }
+    roll_track_distortion(&mut enemy, rng);
+    enemy
 }
 
 /// Roll a tank's per-tank track-distortion parameters (see

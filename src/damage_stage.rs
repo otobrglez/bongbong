@@ -97,5 +97,5 @@ pub fn draw_damage(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank, ti
     let size = tank.size();
     let dest = Rectangle::new(tank.position.x, tank.position.y, size, size);
     let origin = Vector2::new(size / 2.0, size / 2.0);
-    d.draw_texture_pro(texture, src, dest, origin, 0.0, Color::WHITE);
+    d.draw_texture_pro(texture, src, dest, origin, 0.0, tank.tint());
 }

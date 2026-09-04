@@ -77,6 +77,9 @@ pub struct TankDebug {
     /// `Tank::owner_slot`: 0 is the player, enemies count from 1.
     pub slot: usize,
     pub is_player: bool,
+    /// A wave tank still rolling in from outside the battlefield (no
+    /// body, no `Ai`, not in the fight yet).
+    pub entering: bool,
     pub row: i32,
     pub chassis: &'static str,
     pub x: f32,
@@ -302,8 +305,9 @@ impl Game {
             .query::<(&Tank, Option<&Ai>)>()
             .iter()
             .map(|(tank, ai)| {
-                let body = tank.body.expect("tank should always have a physics body once spawned");
-                let vel = self.physics.velocity(body);
+                // A tank still rolling in has no body: its kinematic
+                // velocity stands in and it touches nothing.
+                let vel = tank.body.map(|b| self.physics.velocity(b)).unwrap_or(tank.velocity);
                 let nearest_ally_px = (ai.is_some() && !tank.is_wreck())
                     .then(|| {
                         live_enemies
@@ -317,6 +321,7 @@ impl Game {
                 TankDebug {
                     slot: tank.owner_slot,
                     is_player: tank.owner_slot == PLAYER_OWNER_SLOT,
+                    entering: tank.body.is_none(),
                     row: tank.row,
                     chassis: TANK_NAMES[tank.row as usize],
                     x: r1(tank.position.x),
@@ -337,7 +342,7 @@ impl Game {
                     shield: r1(tank.shield_timer),
                     boost: r1(tank.speed_boost_timer),
                     nearest_ally_px,
-                    touching_static: full.then(|| self.physics.contact_stats(body).touching_static),
+                    touching_static: full.then(|| tank.body.is_some_and(|b| self.physics.contact_stats(b).touching_static)),
                     ai: if full { ai.map(Ai::snapshot) } else { None },
                 }
             })
@@ -465,9 +470,10 @@ impl Game {
             .world
             .query::<(Entity, &Tank, Option<&Ai>)>()
             .iter()
-            .filter(|(_, t, _)| !t.is_wreck())
+            // A tank still rolling in has no body and is not tracked yet.
+            .filter(|(_, t, _)| !t.is_wreck() && t.body.is_some())
             .map(|(entity, tank, ai)| {
-                let body = tank.body.expect("tank should always have a physics body once spawned");
+                let body = tank.body.expect("filtered to tanks with a body");
                 let ai = ai.map(Ai::snapshot);
                 TrackRow {
                     slot: tank.owner_slot,
@@ -500,6 +506,9 @@ impl Game {
     /// changed, the same way `drive_tank` does on a turn.
     pub fn debug_teleport(&mut self, slot: usize, pos: Position, rotation: Option<f32>) -> Result<(), String> {
         let entity = self.tank_entity_by_slot(slot).ok_or_else(|| format!("no tank in slot {slot}"))?;
+        if self.is_entering(entity) {
+            return Err(format!("slot {slot} is still rolling in"));
+        }
         let (body, half_extents) = {
             let mut q = self.world.query_one::<&mut Tank>(entity);
             let tank = q.get().map_err(|e| e.to_string())?;
@@ -569,6 +578,9 @@ impl Game {
         if with_tank(&self.world, entity, Tank::is_wreck) {
             return Err(format!("slot {slot} is already a wreck"));
         }
+        if self.is_entering(entity) {
+            return Err(format!("slot {slot} is still rolling in"));
+        }
         if !self.debug_kills.contains(&slot) {
             self.debug_kills.push(slot);
         }
@@ -598,9 +610,14 @@ impl Game {
     /// no longer the seeded replay afterwards. `row` picks the chassis
     /// (0..12, default from the spawn order). Returns the new slot.
     pub fn debug_spawn_enemy(&mut self, pos: Position, row: Option<i32>) -> Result<usize, String> {
-        let rng = self.rng.as_mut().ok_or_else(|| "spawn_enemy only works between frames".to_string())?;
+        if self.rng.is_none() {
+            return Err("spawn_enemy only works between frames".to_string());
+        }
         let max_slot = self.world.query::<&Tank>().iter().map(|t| t.owner_slot).max().unwrap_or(PLAYER_OWNER_SLOT);
-        let slot = max_slot + 1;
+        // Slots are monotonic: never below one on the field, never one a
+        // despawned wreck held.
+        self.reserve_slots_above(max_slot);
+        let slot = self.take_slot();
         if slot > enemy_owner_slot(30) {
             return Err("owner slots are full (31 enemies)".to_string());
         }
@@ -608,6 +625,7 @@ impl Game {
         if !(0..TANK_VARIANTS).contains(&row) {
             return Err(format!("row {row} is outside 0..{TANK_VARIANTS}"));
         }
+        let rng = self.rng.as_mut().expect("checked above");
         let factor = 1.0 + rng.random_range(-tuning().enemy_speed_variance..tuning().enemy_speed_variance);
         let mut enemy = Tank {
             row,
