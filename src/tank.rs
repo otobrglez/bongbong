@@ -372,6 +372,12 @@ pub struct Tank {
     /// Seconds spent as a wreck. Once it exceeds WRECK_BURN_SECONDS the fire
     /// dies out and the tank becomes a static charred "dead" hulk.
     pub wreck_timer: f32,
+    /// Wave rounds only: seconds until this wreck is removed from the field
+    /// (`wave_wreck_despawn_seconds`, armed by `Game::despawn_wrecks` the
+    /// frame the tank becomes a wreck). `None` for a live tank and in band
+    /// rounds, where wrecks stay for the whole round. The last second is
+    /// the fade `alpha` reports.
+    pub despawn_timer: Option<f32>,
     /// Distance travelled (pixels) since the last track mark was dropped.
     pub track_accum: f32,
     /// Number of track marks this tank has laid this round - the phase input
@@ -446,6 +452,7 @@ impl Default for Tank {
             ram_cooldown: 0.0,
             hit_flash_timer: 0.0,
             wreck_timer: 0.0,
+            despawn_timer: None,
             track_accum: 0.0,
             track_mark_count: 0,
             track_wobble_amp: 0.0,
@@ -530,6 +537,18 @@ impl Tank {
     /// True once a wreck has finished burning and settled into a dead hulk.
     pub fn is_dead(&self) -> bool {
         self.is_wreck() && self.wreck_timer >= tuning().wreck_burn_seconds
+    }
+
+    /// Draw opacity, 0..=1: fully opaque except over the last second of a
+    /// wreck's `despawn_timer`, which fades it out before it is removed.
+    pub fn alpha(&self) -> f32 {
+        self.despawn_timer.map_or(1.0, |t| t.clamp(0.0, 1.0))
+    }
+
+    /// White scaled by `alpha` - the tint every layer of the tank's sprite
+    /// draws with, so a fading wreck fades as one.
+    pub fn tint(&self) -> Color {
+        Color::new(255, 255, 255, (255.0 * self.alpha()).round() as u8)
     }
 
     /// Which atlas column to draw this tank's hull from - a four-tier
@@ -954,14 +973,15 @@ pub fn draw_tank(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank) {
     let dest = Rectangle::new(tank.position.x, tank.position.y, size, size);
     let origin = draw_pivot(size);
 
-    d.draw_texture_pro(texture, hull_src, dest, origin, tank.visual_rotation, Color::WHITE);
+    let tint = tank.tint();
+    d.draw_texture_pro(texture, hull_src, dest, origin, tank.visual_rotation, tint);
     d.draw_texture_pro(
         texture,
         turret_src,
         dest,
         origin,
         tank.turret_visual_rotation,
-        Color::WHITE,
+        tint,
     );
 }
 
@@ -1104,7 +1124,7 @@ pub fn draw_tank_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tan
         size,
     );
     let origin = draw_pivot(size);
-    let shadow = Color::new(0, 0, 0, (255.0 * tuning().tank_shadow_opacity) as u8);
+    let shadow = Color::new(0, 0, 0, (255.0 * tuning().tank_shadow_opacity * tank.alpha()) as u8);
 
     d.draw_texture_pro(texture, hull_src, dest, origin, tank.visual_rotation, shadow);
     d.draw_texture_pro(
@@ -1197,7 +1217,7 @@ pub fn draw_minigun_mount_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, t
         size,
     );
     let origin = draw_pivot(size);
-    let shadow = Color::new(0, 0, 0, (255.0 * tuning().tank_shadow_opacity) as u8);
+    let shadow = Color::new(0, 0, 0, (255.0 * tuning().tank_shadow_opacity * tank.alpha()) as u8);
     d.draw_texture_pro(texture, src, dest, origin, tank.turret_visual_rotation, shadow);
 }
 

@@ -23,7 +23,11 @@ mod combat;
 pub mod debug;
 mod engage;
 mod hits;
+mod waves;
 mod weapons;
+
+pub use waves::{RollIn, WaveStatus};
+use waves::WaveState;
 
 use crate::tuning::tuning;
 use std::collections::{HashMap, HashSet};
@@ -141,6 +145,15 @@ pub enum Event {
     ShellsCollided { x: f32, y: f32 },
     /// The `side` frog bit the tank in `slot`.
     FrogBite { side: Side, slot: usize, damage: f32, killed: bool },
+    /// The wave scheduler called wave `wave` (1-based): `size` tanks of
+    /// `tier` queued to roll in.
+    WaveStarted { wave: u32, size: u32, tier: crate::level::Tier },
+    /// A wave tank in `slot` finished rolling in: it now has a body and an
+    /// `Ai`, and counts as an enemy on the field.
+    TankEntered { slot: usize },
+    /// A wave round removed the wreck in `slot` after
+    /// `wave_wreck_despawn_seconds`.
+    WreckRemoved { slot: usize },
     // --- AI decisions, recorded only while `Game::trace_ai` is set: each
     // is a transition the enemy phase observed by comparing an enemy's
     // `AiSnapshot` before and after its `think`, so `ai.rs` stays
@@ -270,6 +283,9 @@ pub struct Game {
     pub mission: Mission,
     /// How enemies arrive this round - resolved by `init` like `mission`.
     pub spawn_plan: SpawnPlan,
+    /// The wave scheduler (`waves.rs`): idle under the band plan apart
+    /// from handing out owner slots.
+    wave: WaveState,
     /// Seconds the round stays frozen behind the opening mission banner.
     /// `update` ticks nothing else while it is positive; a move or fire
     /// input ends it early.
@@ -526,6 +542,7 @@ impl Game {
                 .clamp(1, 31),
             SpawnPlan::Waves { .. } => 0,
         };
+        self.wave = WaveState::new(enemy_owner_slot(enemy_count));
 
         // Terrain legality is the nav grid's `usable` test (see
         // `battlefield::enemy_spawn_legal`); the frog is not down yet, so
@@ -564,50 +581,7 @@ impl Game {
                 spawn_grid.nearest_open(sample, &avoid, enemy_clear)
             });
             let erow = TANK_SPRITE_ORDER[enemy_positions.len() % TANK_SPRITE_ORDER.len()];
-            // Per-enemy speed within +/- ENEMY_SPEED_VARIANCE, so they don't
-            // move in lockstep.
-            let factor = 1.0 + rng.random_range(-tuning().enemy_speed_variance..tuning().enemy_speed_variance);
-            let owner_slot = enemy_owner_slot(enemy_positions.len());
-            let mut enemy = Tank {
-                row: erow,
-                shell_variant: TANK_SHELL_VARIANT_BY_ROW[erow as usize],
-                damage_variant: rng.random_range(0..DAMAGE_VARIANTS),
-                position: pos,
-                rotation: 180.0, // facing down, toward the player's start
-                speed_scale: factor,
-                owner_slot,
-                ..Tank::default()
-            };
-            // Some enemies start armed with exactly one pickup's worth of a
-            // special weapon (see ENEMY_SPECIAL_WEAPON_CHANCE).
-            if rng.random_range(0.0..1.0) < tuning().enemy_special_weapon_chance {
-                if rng.random_range(0.0..1.0) < tuning().enemy_special_weapon_laser_share {
-                    enemy.enqueue_weapon(ActiveWeapon::Laser);
-                    enemy.laser_charges += tuning().laser_charges_per_pickup;
-                    enemy.laser_variant = if rng.random_range(0.0..1.0) < tuning().laser_blue_pickup_chance {
-                        LaserVariant::Blue
-                    } else {
-                        LaserVariant::Red
-                    };
-                } else if rng.random_range(0.0..1.0) < tuning().enemy_special_weapon_plasma_share {
-                    enemy.enqueue_weapon(ActiveWeapon::Plasma);
-                    enemy.plasma_ammo += tuning().plasma_ammo_per_pickup;
-                    enemy.plasma_variant = if rng.random_range(0.0..1.0) < tuning().plasma_purple_pickup_chance {
-                        PlasmaVariant::Purple
-                    } else {
-                        PlasmaVariant::Teal
-                    };
-                } else {
-                    enemy.enqueue_weapon(ActiveWeapon::Minigun);
-                    enemy.minigun_ammo += tuning().minigun_ammo_per_pickup;
-                }
-            }
-            // A few start the round already shielded (SPAWN_SHIELD_CHANCE,
-            // same roll the player gets above).
-            if rng.random_range(0.0..1.0) < tuning().spawn_shield_chance {
-                enemy.shield_timer = tuning().shield_duration_seconds;
-            }
-            roll_track_distortion(&mut enemy, &mut rng);
+            let mut enemy = roll_enemy_tank(&mut rng, erow, pos, enemy_owner_slot(enemy_positions.len()));
             // Last of the per-enemy rolls, and skipped outright at a zero
             // share, so a mission without hunters draws exactly what a
             // Destroy round does.
@@ -792,7 +766,9 @@ impl Game {
             self.frog_phase(&mut f);
             self.pickup_phase(&mut f);
             self.player_phase(input, &mut f);
+            self.rollin_phase(&mut f);
             self.enemy_phase(&mut f);
+            self.wave_phase(&mut f);
             self.spawn_pending(&mut f);
             self.resolve_lasers(&mut f);
             self.step_world(&mut f, true);
@@ -802,6 +778,7 @@ impl Game {
             self.resolve_projectiles::<Bullet>(&mut f, true);
             self.resolve_projectiles::<Plasma>(&mut f, true);
             self.explosions(&mut f);
+            self.despawn_wrecks(&mut f);
             self.cleanup_done();
             self.check_round_end(&mut f);
         } else {
@@ -900,6 +877,7 @@ impl Game {
         let nearest: Option<(Entity, Position, f32)> = self
             .world
             .query::<(Entity, &Tank)>()
+            .without::<&RollIn>()
             .iter()
             .filter(|(_, t)| !t.is_wreck())
             .map(|(e, t)| (e, t.position, t.position.distance_to(frog_pos)))
@@ -939,6 +917,7 @@ impl Game {
         let living_tanks: Vec<(Entity, Position)> = self
             .world
             .query::<(Entity, &Tank)>()
+            .without::<&RollIn>()
             .iter()
             .filter(|(_, t)| !t.is_wreck())
             .map(|(e, t)| (e, t.position))
@@ -1549,9 +1528,7 @@ impl Game {
     fn spawn_plan_finished(&self) -> bool {
         match self.spawn_plan {
             SpawnPlan::Band { .. } => true,
-            // Filled in by the wave scheduler; until then a waves round
-            // never ends by wreck count.
-            SpawnPlan::Waves { .. } => false,
+            SpawnPlan::Waves { .. } => self.waves_finished(),
         }
     }
 
@@ -1645,13 +1622,15 @@ impl Game {
             .query::<(Entity, &Tank)>()
             .iter()
             .map(|(entity, tank)| {
-                let body = tank.body.expect("tank should always have a physics body once spawned");
-                let contact = self.physics.contact_stats(body);
+                // A tank still rolling in has no body: its kinematic
+                // velocity stands in and it touches nothing.
+                let contact = tank.body.map(|b| self.physics.contact_stats(b)).unwrap_or_default();
                 TankSnapshot {
                     is_player: entity == player,
+                    entering: tank.body.is_none(),
                     position: tank.position,
                     rotation: tank.rotation,
-                    velocity: self.physics.velocity(body),
+                    velocity: tank.body.map(|b| self.physics.velocity(b)).unwrap_or(tank.velocity),
                     commanded_velocity: tank.velocity,
                     top_speed: tank.base_speed(),
                     damage: tank.damage,
@@ -1673,6 +1652,9 @@ impl Game {
 /// non-player tank is always an enemy.
 pub struct TankSnapshot {
     pub is_player: bool,
+    /// A wave tank still rolling in from outside the battlefield: no
+    /// physics body yet, not part of the fight.
+    pub entering: bool,
     pub position: Position,
     pub rotation: f32,
     /// Real physics velocity read back from the body.
@@ -1754,8 +1736,10 @@ fn drive_tank(physics: &mut Physics, tank: &mut Tank, intent: Intent, dt: f32) {
     physics.apply_impulse(handle, Position::new(delta.x * tank.mass(), delta.y * tank.mass()));
 }
 
+/// Read a tank's position back from its body; a tank still rolling in has
+/// none and keeps the position `rollin_phase` gave it.
 fn sync_tank_from_physics(physics: &Physics, tank: &mut Tank) {
-    let handle = tank.body.expect("tank should always have a physics body once spawned");
+    let Some(handle) = tank.body else { return };
     tank.position = physics.position(handle);
 }
 
@@ -1907,6 +1891,55 @@ fn with_two_tanks_mut<R>(world: &mut hecs::World, a: Entity, b: Entity, f: impl 
         ta.expect("entity should have a Tank component"),
         tb.expect("entity should have a Tank component"),
     )
+}
+
+/// Build one enemy tank of chassis `row` at `pos` in owner slot `slot`,
+/// facing down, with every per-tank spawn roll in this order: speed
+/// spread (`enemy_speed_variance`), damage variant, a possible special
+/// weapon (`enemy_special_weapon_chance`, one pickup's worth), a possible
+/// starting shield (`spawn_shield_chance`, the player's roll too) and
+/// track wobble. Shared by the band placement in `init` and the wave
+/// scheduler, so a wave tank is kitted exactly like a band tank. No
+/// physics body: the caller spawns one when the tank is on the field.
+fn roll_enemy_tank(rng: &mut SmallRng, row: i32, pos: Position, slot: usize) -> Tank {
+    let factor = 1.0 + rng.random_range(-tuning().enemy_speed_variance..tuning().enemy_speed_variance);
+    let mut enemy = Tank {
+        row,
+        shell_variant: TANK_SHELL_VARIANT_BY_ROW[row as usize],
+        damage_variant: rng.random_range(0..DAMAGE_VARIANTS),
+        position: pos,
+        rotation: 180.0,
+        speed_scale: factor,
+        owner_slot: slot,
+        ..Tank::default()
+    };
+    if rng.random_range(0.0..1.0) < tuning().enemy_special_weapon_chance {
+        if rng.random_range(0.0..1.0) < tuning().enemy_special_weapon_laser_share {
+            enemy.enqueue_weapon(ActiveWeapon::Laser);
+            enemy.laser_charges += tuning().laser_charges_per_pickup;
+            enemy.laser_variant = if rng.random_range(0.0..1.0) < tuning().laser_blue_pickup_chance {
+                LaserVariant::Blue
+            } else {
+                LaserVariant::Red
+            };
+        } else if rng.random_range(0.0..1.0) < tuning().enemy_special_weapon_plasma_share {
+            enemy.enqueue_weapon(ActiveWeapon::Plasma);
+            enemy.plasma_ammo += tuning().plasma_ammo_per_pickup;
+            enemy.plasma_variant = if rng.random_range(0.0..1.0) < tuning().plasma_purple_pickup_chance {
+                PlasmaVariant::Purple
+            } else {
+                PlasmaVariant::Teal
+            };
+        } else {
+            enemy.enqueue_weapon(ActiveWeapon::Minigun);
+            enemy.minigun_ammo += tuning().minigun_ammo_per_pickup;
+        }
+    }
+    if rng.random_range(0.0..1.0) < tuning().spawn_shield_chance {
+        enemy.shield_timer = tuning().shield_duration_seconds;
+    }
+    roll_track_distortion(&mut enemy, rng);
+    enemy
 }
 
 /// Roll a tank's per-tank track-distortion parameters (see
@@ -2102,12 +2135,19 @@ mod determinism_tests {
 
     /// Run one seeded round of `mission` headlessly for `frames` frames of
     /// AFK input at the probe's fixed timestep, sampling `tank_snapshots`
-    /// every `sample_every` frames (plus frame 0).
-    fn run_sampled(seed: u64, mission: Mission, frames: u32, sample_every: u32) -> Vec<Vec<TankSnapshot>> {
+    /// every `sample_every` frames (plus frame 0). `waves` runs it under a
+    /// three-wave plan instead of the band.
+    fn run_sampled(seed: u64, mission: Mission, frames: u32, sample_every: u32, waves: bool) -> Vec<Vec<TankSnapshot>> {
         let mut game = Game::default();
-        game.enemy_count_override = Some(4);
         game.seed_override = Some(seed);
         game.level_overrides.mission = Some(mission);
+        if waves {
+            game.level_overrides.spawn = Some(crate::level::SpawnKind::Waves);
+            game.level_overrides.waves = Some(3);
+            game.level_overrides.wave_size = Some(2);
+        } else {
+            game.enemy_count_override = Some(4);
+        }
         game.map = MapFile::from_toml_str(include_str!("../../maps/default.toml")).expect("embedded default map parses");
         game.init(1280.0, 720.0);
         let mut samples = vec![game.tank_snapshots()];
@@ -2121,9 +2161,10 @@ mod determinism_tests {
     }
 
     /// Bit-comparable form (`to_bits`), so a mismatch is unambiguous.
-    fn key(s: &TankSnapshot) -> (bool, [u32; 7], i32, i32, i32, bool) {
+    fn key(s: &TankSnapshot) -> (bool, bool, [u32; 7], i32, i32, i32, bool) {
         (
             s.is_player,
+            s.entering,
             [
                 s.position.x.to_bits(),
                 s.position.y.to_bits(),
@@ -2148,9 +2189,28 @@ mod determinism_tests {
     #[test]
     fn same_seed_replays_bit_identical() {
         for (seed, mission) in [(0xB0B5_u64, Mission::Protect), (0xC0FFEE_u64, Mission::Protect), (0xF406_u64, Mission::Hunt)] {
-            let a = run_sampled(seed, mission, 600, 60);
-            let b = run_sampled(seed, mission, 600, 60);
+            let a = run_sampled(seed, mission, 600, 60, false);
+            let b = run_sampled(seed, mission, 600, 60, false);
             assert_eq!(a.len(), b.len(), "seed {seed:#x}: sample counts differ");
+            for (i, (sa, sb)) in a.iter().zip(&b).enumerate() {
+                assert_eq!(sa.len(), sb.len(), "seed {seed:#x}, sample {i}: tank counts differ");
+                for (t, (ta, tb)) in sa.iter().zip(sb).enumerate() {
+                    assert_eq!(key(ta), key(tb), "seed {seed:#x}, sample {i}, tank {t}: state diverged");
+                }
+            }
+        }
+    }
+
+    /// A waves round replays too: gate draws, tier/chassis rolls, the
+    /// per-tank spawn rolls and the roll-in all sit on the round stream.
+    /// 900 frames covers wave 1 rolling in and engaging.
+    #[test]
+    fn same_seed_replays_a_waves_round_bit_identical() {
+        for seed in [0xB0B5_u64, 0xC0FFEE_u64] {
+            let a = run_sampled(seed, Mission::Destroy, 900, 60, true);
+            let b = run_sampled(seed, Mission::Destroy, 900, 60, true);
+            assert_eq!(a.len(), b.len(), "seed {seed:#x}: sample counts differ");
+            assert!(a.last().unwrap().len() > 1, "seed {seed:#x}: wave 1 never arrived");
             for (i, (sa, sb)) in a.iter().zip(&b).enumerate() {
                 assert_eq!(sa.len(), sb.len(), "seed {seed:#x}, sample {i}: tank counts differ");
                 for (t, (ta, tb)) in sa.iter().zip(sb).enumerate() {
@@ -2724,5 +2784,231 @@ cells."30,20" = { kind = "frog" }
         let mut occupied = open_neighbours.clone();
         occupied.push(slot);
         assert_eq!(bonus_shield_cell(&map, slot, &occupied, W, H, &mut rng), None);
+    }
+
+    // --- Waves spawn plan (docs/maps-to-levels.md, `waves.rs`) ---
+
+    use crate::level::{SpawnKind, Tier};
+    use crate::TANK_TIER_BY_ROW;
+
+    /// A Destroy round on the open map under a waves plan, with the player
+    /// shielded for the whole round so the enemies can never end it and the
+    /// scheduler's own timing is all that decides what happens.
+    fn waves_game(waves: u32, size: u32) -> Game {
+        let mut game = Game::default();
+        game.seed_override = Some(7);
+        game.player_row_override = Some(0);
+        game.level_overrides.mission = Some(Mission::Destroy);
+        game.level_overrides.spawn = Some(SpawnKind::Waves);
+        game.level_overrides.waves = Some(waves);
+        game.level_overrides.wave_size = Some(size);
+        game.level_overrides.wave_growth = Some(0);
+        game.map = MapFile::from_toml_str(OPEN_MAP).expect("test map parses");
+        game.init(W, H);
+        let player = game.player.expect("player");
+        with_tank_mut(&game.world, player, |t| t.shield_timer = 1.0e9);
+        game
+    }
+
+    fn wave_started(game: &Game) -> Option<u32> {
+        game.events().iter().find_map(|e| match e {
+            Event::WaveStarted { wave, .. } => Some(*wave),
+            _ => None,
+        })
+    }
+
+    fn tank_entered(game: &Game) -> Vec<usize> {
+        game.events()
+            .iter()
+            .filter_map(|e| match e {
+                Event::TankEntered { slot } => Some(*slot),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Step until a tank enters (at most `limit` frames); the slot.
+    fn step_until_entered(game: &mut Game, limit: u32) -> usize {
+        for _ in 0..limit {
+            step(game, Input::default());
+            if let Some(&slot) = tank_entered(game).first() {
+                return slot;
+            }
+        }
+        panic!("no tank entered within {limit} frames");
+    }
+
+    #[test]
+    fn a_waves_round_places_nobody_at_init_and_calls_wave_one_on_the_first_frame() {
+        let mut game = waves_game(2, 1);
+        assert_eq!(game.tank_snapshots().len(), 1, "only the player at init");
+        assert!(matches!(game.events(), [Event::RoundStarted { enemies: 0, spawn: SpawnKind::Waves, .. }]));
+        assert_eq!(game.outcome(), Outcome::Playing, "no instant win with nobody on the field");
+        step(&mut game, Input::default());
+        assert_eq!(wave_started(&game), Some(1), "{:?}", game.events());
+        let status = game.wave_status().expect("a waves round reports its status");
+        assert_eq!((status.index, status.total, status.alive), (1, 2, 1));
+    }
+
+    #[test]
+    fn a_rolling_in_tank_has_no_body_until_it_arrives_on_a_usable_cell() {
+        let mut game = waves_game(1, 1);
+        step(&mut game, Input::default());
+        let entering = game.tank_snapshots().into_iter().find(|t| !t.is_player).expect("wave tank spawned");
+        assert!(entering.entering);
+        let p = entering.position;
+        assert!(p.x < 0.0 || p.x > W || p.y < 0.0 || p.y > H, "starts outside the field: ({:.0},{:.0})", p.x, p.y);
+        let slot = step_until_entered(&mut game, 600);
+        let entity = game.tank_entity_by_slot(slot).expect("entered tank");
+        assert!(!game.is_entering(entity));
+        let arrived = game.tank_snapshots().into_iter().find(|t| !t.is_player).expect("wave tank");
+        assert!(!arrived.entering);
+        let p = arrived.position;
+        assert!(p.x > 0.0 && p.x < W && p.y > 0.0 && p.y < H, "arrived inside: ({:.0},{:.0})", p.x, p.y);
+        assert!(game.nav_grid(W, H).usable(p), "arrived on a usable nav cell");
+        assert!(with_tank(&game.world, entity, |t| t.body.is_some()), "has its physics body now");
+        assert!(game.world.get::<&Ai>(entity).is_ok(), "and its Ai");
+    }
+
+    #[test]
+    fn wave_two_spawns_only_after_wave_one_is_cleared() {
+        let mut game = waves_game(2, 1);
+        let slot = step_until_entered(&mut game, 600);
+        for _ in 0..600 {
+            step(&mut game, Input::default());
+            assert_ne!(wave_started(&game), Some(2), "wave 2 must wait for wave 1 to be cleared");
+        }
+        game.debug_kill(slot).unwrap();
+        step(&mut game, Input::default());
+        assert!(game.events().iter().any(|e| matches!(e, Event::Wreck { .. })));
+        assert_eq!(game.outcome(), Outcome::Playing, "a wave is still to come");
+        let gap_frames = (tuning().wave_gap_seconds * 60.0) as u32;
+        let mut called_at = None;
+        for frame in 1..=gap_frames + 5 {
+            step(&mut game, Input::default());
+            if wave_started(&game) == Some(2) {
+                called_at = Some(frame);
+                break;
+            }
+        }
+        let called_at = called_at.expect("wave 2 called after the breather");
+        assert!(called_at >= gap_frames - 1, "called at frame {called_at}, before the {gap_frames}-frame gap");
+        assert!(game.wave_banner().is_none(), "the banner goes with the gap");
+    }
+
+    #[test]
+    fn the_next_wave_joins_after_the_timeout_with_one_still_alive() {
+        let mut game = waves_game(2, 1);
+        step_until_entered(&mut game, 600);
+        let timeout_frames = (tuning().wave_timeout_seconds * 60.0) as u32;
+        let gap_frames = (tuning().wave_gap_seconds * 60.0) as u32;
+        let mut called_at = None;
+        for frame in 1..=timeout_frames + gap_frames + 10 {
+            step(&mut game, Input::default());
+            if wave_started(&game) == Some(2) {
+                called_at = Some(frame);
+                break;
+            }
+        }
+        let called_at = called_at.expect("wave 2 joins after the timeout");
+        assert!(called_at >= timeout_frames, "called at frame {called_at}, before the {timeout_frames}-frame timeout");
+        assert_eq!(game.wave_status().unwrap().alive, 2, "wave 1's tank is still alive alongside wave 2's");
+    }
+
+    #[test]
+    fn the_live_cap_holds_with_an_oversized_wave() {
+        let cap = tuning().wave_max_alive;
+        let mut game = waves_game(1, cap as u32 + 4);
+        let frames = ((cap as f32 + 4.0) * tuning().wave_stagger_seconds * 60.0) as u32 + 300;
+        // The surplus only leaves the queue as kills free slots (the
+        // shielded player bounces shells back), so the claim is the
+        // invariant plus the cap actually binding with tanks still queued.
+        let mut queued_at_cap = false;
+        for _ in 0..frames {
+            step(&mut game, Input::default());
+            let status = game.wave_status().unwrap();
+            assert!(status.alive <= cap, "{} live enemies over the cap of {cap}", status.alive);
+            queued_at_cap |= status.alive == cap && status.pending > 0;
+        }
+        assert!(queued_at_cap, "the cap never held tanks back");
+        assert_eq!(game.outcome(), Outcome::Playing);
+    }
+
+    #[test]
+    fn a_wreck_despawns_after_the_knob_in_a_wave_round() {
+        let mut game = waves_game(2, 1);
+        let slot = step_until_entered(&mut game, 600);
+        game.debug_kill(slot).unwrap();
+        step(&mut game, Input::default());
+        let despawn_frames = (tuning().wave_wreck_despawn_seconds * 60.0) as u32;
+        let mut removed_at = None;
+        for frame in 1..=despawn_frames + 5 {
+            step(&mut game, Input::default());
+            if game.events().iter().any(|e| matches!(e, Event::WreckRemoved { slot: s } if *s == slot)) {
+                removed_at = Some(frame);
+                break;
+            }
+            let entity = game.tank_entity_by_slot(slot).expect("wreck still on the field");
+            if frame + 65 < despawn_frames {
+                assert_eq!(with_tank(&game.world, entity, Tank::alpha), 1.0, "opaque until the last second");
+            }
+        }
+        let removed_at = removed_at.expect("the wreck was removed");
+        assert!(removed_at >= despawn_frames - 1, "removed at frame {removed_at}, before {despawn_frames}");
+        assert!(game.tank_entity_by_slot(slot).is_none());
+        assert!(game.wave_status().unwrap().index >= 2, "wave 2 came meanwhile, so slot {slot} was never reused");
+        assert!(game.tank_snapshots().iter().all(|t| t.is_player || !t.is_wreck));
+    }
+
+    #[test]
+    fn wrecks_stay_for_the_whole_round_under_the_band_plan() {
+        let mut game = game_on(OPEN_MAP, 2, Some(0));
+        let slot = game.tank_snapshots().len() - 1;
+        game.debug_kill(slot).unwrap();
+        for _ in 0..((tuning().wave_wreck_despawn_seconds * 60.0) as u32 + 60) {
+            step(&mut game, Input::default());
+            assert!(!game.events().iter().any(|e| matches!(e, Event::WreckRemoved { .. })));
+        }
+        assert!(game.tank_entity_by_slot(slot).is_some(), "the wreck is still there");
+    }
+
+    #[test]
+    fn every_tank_of_a_wave_is_in_its_tier_or_one_lower() {
+        let mut game = waves_game(4, 2);
+        game.level_overrides.wave_growth = Some(1);
+        game.level_overrides.tier_start = Some(Tier::Light);
+        game.level_overrides.tier_end = Some(Tier::Super);
+        game.init(W, H);
+        let player = game.player.expect("player");
+        with_tank_mut(&game.world, player, |t| t.shield_timer = 1.0e9);
+        let plan = game.spawn_plan;
+        let mut wave = 0u32;
+        let mut seen = 0;
+        // Kill each tank the frame it enters, so waves follow each other
+        // on the cleared-wave rule alone.
+        for _ in 0..6000 {
+            step(&mut game, Input::default());
+            if let Some(w) = wave_started(&game) {
+                wave = w;
+            }
+            for slot in tank_entered(&game) {
+                let entity = game.tank_entity_by_slot(slot).expect("entered");
+                let row = with_tank(&game.world, entity, |t| t.row);
+                let tier = plan.wave_tier(wave - 1);
+                let allowed = [tier, Tier::from_index(tier.index().saturating_sub(1))];
+                assert!(
+                    allowed.contains(&TANK_TIER_BY_ROW[row as usize]),
+                    "wave {wave} ({tier:?}) brought row {row} ({:?})",
+                    TANK_TIER_BY_ROW[row as usize]
+                );
+                seen += 1;
+                game.debug_kill(slot).unwrap();
+            }
+            if game.outcome() != Outcome::Playing {
+                break;
+            }
+        }
+        assert_eq!(seen, 2 + 3 + 4 + 5, "every tank of every wave entered");
+        assert_eq!(game.outcome(), Outcome::Won, "the round ends once the last wave is wrecked");
     }
 }

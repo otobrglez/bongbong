@@ -559,6 +559,7 @@ impl DevServer {
             "outcome": snap.outcome,
             "mission": game.mission.name(),
             "spawn": game.spawn_plan,
+            "wave": game.wave_status(),
             "intro_seconds_left": game.intro_timer,
             "paused": snap.paused,
             "lockstep": self.lockstep,
@@ -1252,6 +1253,39 @@ cells."1,1" = { kind = "wall" }"#;
         let rx = call(&tx, "restart", json!({ "map_toml": INLINE_MAP, "map": "maps/default.toml" }));
         server.before_frame(&mut game, W, H);
         assert!(rx.recv().unwrap().is_err(), "map and map_toml together");
+    }
+
+    /// A waves restart reports the scheduler in `status.wave`, and the
+    /// snapshot flags a tank still rolling in.
+    #[test]
+    fn a_waves_restart_reports_wave_status_and_entering_tanks() {
+        let (mut server, tx) = DevServer::headless();
+        let mut game = game(15);
+        let rx = call(&tx, "restart", json!({ "spawn": "waves", "waves": 3, "wave_size": 2, "seed": 5 }));
+        server.before_frame(&mut game, W, H);
+        let status = rx.recv().unwrap().unwrap();
+        assert_eq!(status["tanks"], 1, "nobody but the player at init: {status}");
+        assert_eq!(status["wave"]["total"], 3, "{status}");
+        assert_eq!(status["wave"]["index"], 0);
+        let rx = call(&tx, "step", json!({ "frames": 1, "snapshot": true }));
+        server.before_frame(&mut game, W, H);
+        server.advance(&mut game, Input::default(), 0.016, W, H);
+        let stepped = rx.recv().unwrap().unwrap();
+        let tanks = stepped["snapshot"]["tanks"].as_array().unwrap();
+        assert_eq!(tanks.len(), 2, "wave 1's first tank is rolling in: {stepped}");
+        assert_eq!(tanks[1]["entering"], true);
+        assert_eq!(tanks[0]["entering"], false);
+        let rx = call(&tx, "status", json!({}));
+        server.before_frame(&mut game, W, H);
+        let status = rx.recv().unwrap().unwrap();
+        assert_eq!(status["wave"]["index"], 1, "{status}");
+        assert_eq!(status["wave"]["alive"], 1);
+        assert_eq!(status["wave"]["pending"], 1);
+        // A band round has no wave block.
+        let rx = call(&tx, "restart", json!({ "spawn": "band", "enemies": 2 }));
+        server.before_frame(&mut game, W, H);
+        let status = rx.recv().unwrap().unwrap();
+        assert!(status["wave"].is_null(), "{status}");
     }
 
     #[test]
