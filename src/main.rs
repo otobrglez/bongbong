@@ -4,56 +4,14 @@ use bongbong::game::{Effects, Textures};
 use bongbong::shockwave::{RippleFx, RippleTuning};
 use bongbong::simulation::{Game, Input};
 use bongbong::tuning;
-use bongbong::tank::Dir;
+use bongbong::tank::{Dir, TankKind};
 use bongbong::{
     DEFAULT_SCREEN_HEIGHT,
     DEFAULT_SCREEN_WIDTH,
 };
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use sola_raylib::core::game_loop;
 use sola_raylib::prelude::KeyboardKey;
-
-/// The 12 chassis rows in scifi_tanks_sheet.png, by name - see
-/// docs/SPRITESHEET_SPEC.md §4 and the TANK_CHASSIS_*_BY_ROW tables in
-/// lib.rs for the same row order. Lets `--tank` name a chassis instead of
-/// remembering its row index. `ValueEnum` renders each variant as its
-/// lowercase name for the CLI (e.g. `Titan` -> `titan`), so this list also
-/// doubles as `--help`'s own reference.
-#[derive(Clone, Copy, ValueEnum)]
-enum TankKind {
-    Scout,
-    Assault,
-    Breaker,
-    Longbow,
-    Flak,
-    Wraith,
-    Warden,
-    Ravager,
-    Glacier,
-    Obelisk,
-    Titan,
-    Leviathan,
-}
-
-impl TankKind {
-    /// This chassis's row index into scifi_tanks_sheet.png (0..TANK_VARIANTS).
-    fn row(self) -> i32 {
-        match self {
-            TankKind::Scout => 0,
-            TankKind::Assault => 1,
-            TankKind::Breaker => 2,
-            TankKind::Longbow => 3,
-            TankKind::Flak => 4,
-            TankKind::Wraith => 5,
-            TankKind::Warden => 6,
-            TankKind::Ravager => 7,
-            TankKind::Glacier => 8,
-            TankKind::Obelisk => 9,
-            TankKind::Titan => 10,
-            TankKind::Leviathan => 11,
-        }
-    }
-}
 
 /// Command-line flags for bongbong's native binary. All optional - with none
 /// given, behavior matches today's defaults exactly (random enemy count,
@@ -68,10 +26,12 @@ struct Args {
     #[arg(short = 'e', long = "enemies")]
     enemies: Option<usize>,
 
-    /// Force the player's tank to a specific chassis instead of a random one
-    /// each round (default: random, matching today's behavior) - e.g.
-    /// `--tank titan` for the twin-barrel super-heavy, without restarting
-    /// until it happens to roll. Persists across in-game restarts (R key).
+    /// Force the player's tank to a specific chassis - e.g. `--tank titan`
+    /// for the twin-barrel super-heavy, without restarting until it happens
+    /// to roll. Outranks every other way a chassis gets picked: the
+    /// `player_tank` tuning knob, then the loaded map's own `tank` key, then
+    /// (with none of the three set) a random roll each round. Persists
+    /// across in-game restarts (R key).
     #[arg(long = "tank", value_enum)]
     tank: Option<TankKind>,
 

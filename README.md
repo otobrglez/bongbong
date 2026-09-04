@@ -12,6 +12,10 @@ Play it live @ [bongbong.io](https://bongbong.io) or [subscribe and follow the p
 # Use devenv (Nix)
 cargo watch -x "run -- -e 12 --map=maps/default.toml"
 
+# Pick the player's chassis (otherwise the map's own `tank = "..."`, the
+# `player_tank` tuning knob, or a random roll decides it)
+cargo run -- --tank titan
+
 # Map editor
 cargo run --features map-editor -- --editor --map=maps/default.toml
 
