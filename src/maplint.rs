@@ -25,6 +25,7 @@ use std::fmt;
 use hecs::Entity;
 
 use crate::frog::Frog;
+use crate::level::{Mission, SpawnKind};
 use crate::map::{self, CellObject};
 use crate::obstacle::{Material, Obstacle};
 use crate::pathfind::Grid;
@@ -102,6 +103,20 @@ pub enum LintKind {
     PlannerPhysicsMismatch,
     /// A single-cell-wide passage (§3.2.5) - legal but scrape-prone.
     NarrowCorridor,
+    /// A `gate` cell that is not on a nav-grid edge cell - a wave tank
+    /// rolls in from outside the boundary, so an interior gate has no
+    /// outside to come from.
+    GateNotOnEdge,
+    /// An edge `gate` whose lane inward (the gate cell plus
+    /// `wave_gate_inward_cells` cells toward the interior) is not entirely
+    /// `Grid::usable` - a tank would arrive on a cell it cannot leave.
+    GateBlocked,
+    /// A Hunt map with no `enemy_frog` cell: the round falls back to a
+    /// procedural spot in the enemy spawn band.
+    HuntMissingEnemyFrog,
+    /// The `enemy_frog` cell can't be approached from the playfield under
+    /// the same reach rule as the player's frog.
+    EnemyFrogUnreachable,
 }
 
 impl LintKind {
@@ -115,6 +130,10 @@ impl LintKind {
             LintKind::SpawnBandTooTight => "spawn-band-too-tight",
             LintKind::PlannerPhysicsMismatch => "planner-physics-mismatch",
             LintKind::NarrowCorridor => "narrow-corridor",
+            LintKind::GateNotOnEdge => "gate-not-on-edge",
+            LintKind::GateBlocked => "gate-blocked",
+            LintKind::HuntMissingEnemyFrog => "hunt-missing-enemy-frog",
+            LintKind::EnemyFrogUnreachable => "enemy-frog-unreachable",
         }
     }
 }
@@ -279,22 +298,113 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
 
     let mut findings = Vec::new();
     check_reachability(game, &cells, &breach_cells, frog_pos, &mut findings);
+    check_enemy_frog(game, &cells, &mut findings);
+    check_gates(game, &grid, &mut findings);
     check_disconnected_regions(&cells, &mut findings);
     check_boxed_in(&grid, &cells, &mut findings);
-    check_spawn_band(
-        game,
-        &cells,
-        width,
-        height,
-        player_pos,
-        player_size,
-        &grid,
-        &obstacle_positions,
-        &mut findings,
-    );
+    // Only the band plan places enemies in the border band at init; a
+    // waves plan rolls them in through gates, so band capacity is moot.
+    if game.map.spawn.kind == SpawnKind::Band {
+        check_spawn_band(
+            game,
+            &cells,
+            width,
+            height,
+            player_pos,
+            player_size,
+            &grid,
+            &obstacle_positions,
+            &mut findings,
+        );
+    }
     check_planner_physics(&cells, &physics_boxes(&obstacle_positions, frog_pos), &mut findings);
     check_narrow_corridors(&cells, &mut findings);
     findings
+}
+
+/// The Hunt mission's target: a Hunt map without an `enemy_frog` cell
+/// plays on a procedural spot in the enemy spawn band (a warning - the
+/// author most likely meant to place one), and a placed cell must be
+/// approachable from the playfield under the player frog's own reach rule
+/// (`check_reachability`), whatever the map's mission - an error, since
+/// hunters could never get to it. Read from the map cell rather than the
+/// world so the check holds for every mission the map might be run under.
+fn check_enemy_frog(game: &Game, cells: &Cells, findings: &mut Vec<LintFinding>) {
+    let map = &game.map;
+    let Some((col, row)) = map.enemy_frog_cell() else {
+        if map.mission.kind == Mission::Hunt {
+            findings.push(LintFinding {
+                severity: LintSeverity::Warning,
+                kind: LintKind::HuntMissingEnemyFrog,
+                message: "hunt mission with no enemy_frog cell - the round falls back to a procedural spot in the enemy spawn band".to_string(),
+            });
+        }
+        return;
+    };
+    let pos = map::cell_to_world(col, row);
+    let reach = FROG_COLLIDER_HALF_EXTENT.0.max(FROG_COLLIDER_HALF_EXTENT.1)
+        + battlefield::max_tank_avoidance_radius()
+        + APPROACH_SLACK;
+    if !point_reachable(cells, pos, reach) {
+        findings.push(LintFinding {
+            severity: LintSeverity::Error,
+            kind: LintKind::EnemyFrogUnreachable,
+            message: format!(
+                "enemy_frog at map cell ({col},{row}) = ({:.0},{:.0}) has no playfield cell within {reach:.0}px - hunters can never reach it",
+                pos.x, pos.y
+            ),
+        });
+    }
+}
+
+/// Explicit `gate` cells (docs/maps-to-levels.md "Gates and roll-in"):
+/// each must sit on a nav-grid edge cell - col 0, the last col, row 0 or
+/// the last row of `grid` - and its lane inward (the gate cell itself plus
+/// `wave_gate_inward_cells` cells toward the interior, straight in from
+/// that edge; a corner uses its horizontal edge) must be entirely
+/// `Grid::usable`, the same predicate the roll-in target cell is held to.
+fn check_gates(game: &Game, grid: &Grid, findings: &mut Vec<LintFinding>) {
+    let (cols, rows, cell) = grid.dims();
+    let (cols, rows) = (cols as isize, rows as isize);
+    let inward_cells = tuning().wave_gate_inward_cells as isize;
+    let center = |c: isize, r: isize| Position::new((c as f32 + 0.5) * cell, (r as f32 + 0.5) * cell);
+    for (col, row) in game.map.gate_cells() {
+        let pos = map::cell_to_world(col, row);
+        let gc = ((pos.x / cell) as isize).clamp(0, cols - 1);
+        let gr = ((pos.y / cell) as isize).clamp(0, rows - 1);
+        let inward = if gc == 0 {
+            (1, 0)
+        } else if gc == cols - 1 {
+            (-1, 0)
+        } else if gr == 0 {
+            (0, 1)
+        } else if gr == rows - 1 {
+            (0, -1)
+        } else {
+            findings.push(LintFinding {
+                severity: LintSeverity::Error,
+                kind: LintKind::GateNotOnEdge,
+                message: format!(
+                    "gate at map cell ({col},{row}) = ({:.0},{:.0}) is nav-grid cell ({gc},{gr}), not on an edge of the {cols}x{rows} grid",
+                    pos.x, pos.y
+                ),
+            });
+            continue;
+        };
+        let blocked = (0..=inward_cells)
+            .map(|k| (gc + k * inward.0, gr + k * inward.1))
+            .find(|&(c, r)| c < 0 || r < 0 || c >= cols || r >= rows || !grid.usable(center(c, r)));
+        if let Some((c, r)) = blocked {
+            findings.push(LintFinding {
+                severity: LintSeverity::Error,
+                kind: LintKind::GateBlocked,
+                message: format!(
+                    "gate at map cell ({col},{row}) = ({:.0},{:.0}) needs nav-grid cells ({gc},{gr}) and {inward_cells} inward all usable, but ({c},{r}) is not",
+                    pos.x, pos.y
+                ),
+            });
+        }
+    }
 }
 
 /// BFS the open region reachable from `seed`, marking `playfield`. The
@@ -926,6 +1036,126 @@ mod map_lint_tests {
         );
     }
 
+    // --- level cells: gates and the enemy frog ---
+
+    fn gate(map: &mut MapFile, col: i32, row: i32) {
+        map.set_cell(col, row, CellObject::Gate);
+    }
+
+    /// Map cells 0/39 (x = 0/1248) and rows 0/22 (y = 0/704) land on the
+    /// nav grid's first/last column and row on the default battlefield.
+    #[test]
+    fn edge_gates_with_open_lanes_are_clean() {
+        let mut map = base_map();
+        gate(&mut map, 0, 11);
+        gate(&mut map, 39, 11);
+        gate(&mut map, 20, 0);
+        gate(&mut map, 20, 22);
+        let findings = lint_map(map);
+        dump("edge gates", &findings);
+        assert!(!has(&findings, LintKind::GateNotOnEdge));
+        assert!(!has(&findings, LintKind::GateBlocked));
+        assert!(errors(&findings).is_empty(), "four edge gates on an open map are fully legal");
+    }
+
+    #[test]
+    fn interior_gate_is_not_on_an_edge() {
+        let mut map = base_map();
+        gate(&mut map, 20, 11);
+        let findings = lint_map(map);
+        dump("interior gate", &findings);
+        assert!(
+            findings.iter().any(|f| f.kind == LintKind::GateNotOnEdge && f.severity == LintSeverity::Error),
+            "a gate in the middle of the field is an Error"
+        );
+        assert!(!has(&findings, LintKind::GateBlocked), "an interior gate has no lane to judge");
+    }
+
+    #[test]
+    fn walled_lane_behind_an_edge_gate_is_blocked() {
+        let mut map = base_map();
+        gate(&mut map, 0, 11);
+        // An iron slab across the lane one nav cell in from the left edge.
+        for col in 2..=4 {
+            for row in 9..=13 {
+                wall(&mut map, col, row);
+            }
+        }
+        let findings = lint_map(map);
+        dump("blocked gate", &findings);
+        assert!(
+            findings.iter().any(|f| f.kind == LintKind::GateBlocked && f.severity == LintSeverity::Error),
+            "a gate whose lane inward is walled is an Error"
+        );
+        assert!(!has(&findings, LintKind::GateNotOnEdge));
+    }
+
+    #[test]
+    fn hunt_map_without_an_enemy_frog_warns() {
+        let mut map = base_map();
+        map.mission.kind = Mission::Hunt;
+        let findings = lint_map(map);
+        dump("hunt, no enemy frog", &findings);
+        assert!(
+            findings.iter().any(|f| f.kind == LintKind::HuntMissingEnemyFrog && f.severity == LintSeverity::Warning),
+            "a hunt map with no enemy_frog cell is a Warning"
+        );
+
+        let mut map = base_map();
+        map.mission.kind = Mission::Hunt;
+        map.set_cell(7, 4, CellObject::EnemyFrog);
+        let findings = lint_map(map);
+        dump("hunt, enemy frog placed", &findings);
+        assert!(!has(&findings, LintKind::HuntMissingEnemyFrog));
+        assert!(!has(&findings, LintKind::EnemyFrogUnreachable));
+        assert!(errors(&findings).is_empty());
+    }
+
+    #[test]
+    fn protect_map_without_an_enemy_frog_is_fine() {
+        let findings = lint_map(base_map());
+        assert!(!has(&findings, LintKind::HuntMissingEnemyFrog), "only Hunt needs an enemy frog");
+    }
+
+    /// The enemy frog in the same iron vault `sealed_frog_is_unreachable`
+    /// buries the player's frog in - same reach rule, same verdict.
+    #[test]
+    fn sealed_enemy_frog_is_unreachable() {
+        let mut map = MapFile::new();
+        map.set_cell(27, 11, CellObject::Start);
+        map.set_cell(30, 5, CellObject::Frog);
+        map.mission.kind = Mission::Hunt;
+        sealed_vault(&mut map);
+        map.set_cell(16, 11, CellObject::EnemyFrog);
+        let findings = lint_map(map);
+        dump("sealed enemy frog", &findings);
+        assert!(
+            findings.iter().any(|f| f.kind == LintKind::EnemyFrogUnreachable && f.severity == LintSeverity::Error),
+            "a vaulted enemy frog is an Error"
+        );
+        assert!(!has(&findings, LintKind::HuntMissingEnemyFrog));
+    }
+
+    /// The same carpeted band as `walled_band_has_no_spawn_capacity`, on a
+    /// waves plan: nobody spawns in the band, so its capacity is not judged.
+    #[test]
+    fn waves_plan_skips_the_spawn_band_check() {
+        let mut map = base_map();
+        map.tanks = Some(10);
+        map.spawn.kind = SpawnKind::Waves;
+        for col in 5..=35 {
+            wall(&mut map, col, 7);
+            wall(&mut map, col, 15);
+        }
+        for row in 8..=14 {
+            wall(&mut map, 5, row);
+            wall(&mut map, 35, row);
+        }
+        let findings = lint_map(map);
+        dump("walled band, waves", &findings);
+        assert!(!has(&findings, LintKind::SpawnBandTooTight));
+    }
+
     // --- on-disk maps ---
 
     fn lint_path(path: &str) -> Result<Vec<LintFinding>, String> {
@@ -1001,6 +1231,22 @@ mod map_lint_tests {
         let f = lint_path("maps/test/u-trap.toml").expect("fixture loads");
         dump("u-trap", &f);
         assert!(errors(&f).is_empty(), "the trap pocket is open and reachable");
+    }
+
+    /// maps/missions/ fixtures are clean starting points for one mission/
+    /// spawn combination each, not provocations: no errors, and each one's
+    /// level cells lint as intended (see their headers).
+    #[test]
+    fn mission_fixtures_lint_clean() {
+        let f = lint_path("maps/missions/hunt-basic.toml").expect("fixture loads");
+        dump("hunt-basic", &f);
+        assert!(errors(&f).is_empty(), "hunt-basic must be fully legal");
+        assert!(!has(&f, LintKind::HuntMissingEnemyFrog), "hunt-basic places its enemy frog");
+
+        let f = lint_path("maps/missions/waves-basic.toml").expect("fixture loads");
+        dump("waves-basic", &f);
+        assert!(errors(&f).is_empty(), "waves-basic must be fully legal");
+        assert!(!has(&f, LintKind::SpawnBandTooTight), "a waves plan is never judged on band capacity");
     }
 
     /// Everything else under maps/ is scratch: lint-and-print only

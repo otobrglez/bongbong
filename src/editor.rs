@@ -1,6 +1,8 @@
 //! Dev-only battlefield map editor (see docs/map-editor-design.md): click a
-//! grid cell to place/erase a wall/road/frog/pickup object, then Save the
-//! result under `maps/` as a `map::MapFile`. Presentation-layer only, same
+//! grid cell to place/erase a wall/road/frog/start/enemy-frog/gate/pickup
+//! object, then Save the result under `maps/` as a `map::MapFile`. The
+//! map's `mission`/`spawn` level tables have no UI; they ride along
+//! untouched because Save writes the loaded `MapFile` itself. Presentation-layer only, same
 //! category as `game.rs` - never touches physics/AI/hecs, and drives its
 //! own render loop from `main.rs` in place of `simulation::Game`'s whenever
 //! the editor is active. Gated entirely behind the `map-editor` Cargo
@@ -29,6 +31,7 @@ use crate::{
     EDITOR_PANEL_SHADOW_OPACITY,
     EDITOR_TOOLBAR_MARGIN,
     OBSTACLE_GRID_SIZE,
+    PATHFIND_CELL_SIZE,
     Position,
 };
 
@@ -59,11 +62,17 @@ enum Tool {
     Road,
     Frog,
     Start,
+    /// The Hunt mission's enemy frog - singleton, moved on placement like
+    /// `Frog`.
+    EnemyFrog,
+    /// A wave roll-in gate - any number, meant for nav-grid edge cells (the
+    /// linter's `gate-not-on-edge` catches one placed elsewhere).
+    Gate,
     Pickup(PickupKind),
     Eraser,
 }
 
-const TOOLS: [Tool; 15] = [
+const TOOLS: [Tool; 17] = [
     Tool::Wall(Material::Brick),
     Tool::Wall(Material::Iron),
     Tool::Wall(Material::Wood),
@@ -71,6 +80,8 @@ const TOOLS: [Tool; 15] = [
     Tool::Road,
     Tool::Frog,
     Tool::Start,
+    Tool::EnemyFrog,
+    Tool::Gate,
     Tool::Pickup(PickupKind::Health),
     Tool::Pickup(PickupKind::Ammo),
     Tool::Pickup(PickupKind::Laser),
@@ -391,11 +402,12 @@ impl MapEditor {
     }
 
     /// Place (or move/erase) whatever `active_tool` does at grid cell
-    /// `(col, row)`. Every tool but Frog/Eraser just overwrites the cell -
-    /// placing a wall where a pickup was, say, simply replaces it, same
-    /// "one object per cell" model the map format itself has. Frog moves
-    /// its one existing placement (docs/map-editor-design.md's "Frog:
-    /// singleton enforcement"); Eraser clears the cell outright.
+    /// `(col, row)`. Most tools just overwrite the cell - placing a wall
+    /// where a pickup was, say, simply replaces it, same "one object per
+    /// cell" model the map format itself has. The singletons (Frog, Start,
+    /// EnemyFrog) move their one existing placement instead
+    /// (docs/map-editor-design.md's "Frog: singleton enforcement"); Eraser
+    /// clears the cell outright.
     fn place(&mut self, col: i32, row: i32, width: f32, height: f32) {
         match self.active_tool {
             Tool::Wall(material) => self.map.set_cell(col, row, CellObject::Wall { material }),
@@ -407,13 +419,18 @@ impl MapEditor {
                 self.map.set_cell(col, row, CellObject::Frog);
             }
             Tool::Start => {
-                // Singleton, same "move it" convention as Frog above -
-                // there can only be one player start point.
                 if let Some((oc, or)) = self.map.start_cell() {
                     self.map.clear_cell(oc, or);
                 }
                 self.map.set_cell(col, row, CellObject::Start);
             }
+            Tool::EnemyFrog => {
+                if let Some((oc, or)) = self.map.enemy_frog_cell() {
+                    self.map.clear_cell(oc, or);
+                }
+                self.map.set_cell(col, row, CellObject::EnemyFrog);
+            }
+            Tool::Gate => self.map.set_cell(col, row, CellObject::Gate),
             Tool::Pickup(pickup) => self.map.set_cell(col, row, CellObject::Pickup { pickup }),
             Tool::Eraser => self.map.clear_cell(col, row),
         }
@@ -457,16 +474,18 @@ impl MapEditor {
                     d.draw_texture_pro(textures.tanks, src, dest, origin, 0.0, Color::WHITE);
                 }
                 CellObject::EnemyFrog => {
+                    draw_enemy_ring(&mut d, pos, size / 2.0);
                     let src = Rectangle::new(0.0, 0.0, crate::FROG_TEXTURE_SIZE, crate::FROG_TEXTURE_SIZE);
-                    d.draw_texture_pro(textures.frog_idle, src, dest, origin, 0.0, Color::new(255, 120, 120, 255));
+                    d.draw_texture_pro(textures.frog_idle, src, dest, origin, 0.0, Color::WHITE);
                 }
-                CellObject::Gate => {
-                    d.draw_rectangle_lines_ex(
+                CellObject::Gate => match gate_inward(pos, width, height) {
+                    Some(inward) => draw_gate_chevron(&mut d, pos, size, inward),
+                    None => d.draw_rectangle_lines_ex(
                         Rectangle::new(pos.x - size / 2.0, pos.y - size / 2.0, size, size),
                         2.0,
-                        Color::ORANGE,
-                    );
-                }
+                        GATE_COLOR,
+                    ),
+                },
                 CellObject::Pickup { pickup } => {
                     let texture = match pickup {
                         PickupKind::Health => textures.pickup_health,
@@ -525,6 +544,14 @@ impl MapEditor {
                 );
             }
             if tool == Tool::Start && self.map.start_cell().is_some() {
+                d.draw_circle(
+                    (rect.x + rect.width - 6.0) as i32,
+                    (rect.y + 6.0) as i32,
+                    5.0,
+                    Color::LIME,
+                );
+            }
+            if tool == Tool::EnemyFrog && self.map.enemy_frog_cell().is_some() {
                 d.draw_circle(
                     (rect.x + rect.width - 6.0) as i32,
                     (rect.y + 6.0) as i32,
@@ -654,6 +681,16 @@ fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, tool: Tool
             let src = crate::tank::icon_source_rec();
             d.draw_texture_pro(textures.tanks, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
+        Tool::EnemyFrog => {
+            let center = Position::new(dest.x + dest.width / 2.0, dest.y + dest.height / 2.0);
+            draw_enemy_ring(d, center, dest.width / 2.0);
+            let src = Rectangle::new(0.0, 0.0, crate::FROG_TEXTURE_SIZE, crate::FROG_TEXTURE_SIZE);
+            d.draw_texture_pro(textures.frog_idle, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+        }
+        Tool::Gate => {
+            let center = Position::new(dest.x + dest.width / 2.0, dest.y + dest.height / 2.0);
+            draw_gate_chevron(d, center, dest.width, Position::new(1.0, 0.0));
+        }
         Tool::Pickup(pickup) => {
             let texture = match pickup {
                 PickupKind::Health => textures.pickup_health,
@@ -677,5 +714,121 @@ fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, tool: Tool
                 Color::WHITE,
             );
         }
+    }
+}
+
+/// The enemy side's marker colour - the red ground ring the game draws
+/// under the enemy frog, so an `enemy_frog` cell reads the same in the
+/// editor as in a round.
+const ENEMY_RING_COLOR: Color = Color::new(230, 60, 60, 220);
+
+const GATE_COLOR: Color = Color::ORANGE;
+
+/// A flat red ring of radius `radius` centred on `center`, drawn under
+/// whatever sits on the cell.
+fn draw_enemy_ring(d: &mut impl RaylibDraw, center: Position, radius: f32) {
+    d.draw_ring(center, radius * 0.75, radius, 0.0, 360.0, 24, ENEMY_RING_COLOR);
+    d.draw_circle_v(center, radius * 0.75, Color::new(230, 60, 60, 50));
+}
+
+/// An orange chevron of overall size `size` at `center`, its point aimed
+/// along `inward` (a unit axis vector) - the direction a tank rolling in
+/// through the gate travels.
+fn draw_gate_chevron(d: &mut impl RaylibDraw, center: Position, size: f32, inward: Position) {
+    let half = size / 2.0 - 3.0;
+    // Perpendicular to `inward`, for the chevron's two wings.
+    let side = Position::new(-inward.y, inward.x);
+    let tip = center + inward * half;
+    let tail = center - inward * (half * 0.4);
+    let wing_a = tail + side * half;
+    let wing_b = tail - side * half;
+    // Two wings plus a stem so the arrow still reads at 32px.
+    d.draw_line_ex(wing_a, tip, 3.0, GATE_COLOR);
+    d.draw_line_ex(wing_b, tip, 3.0, GATE_COLOR);
+    d.draw_line_ex(center - inward * half, tip, 3.0, GATE_COLOR);
+}
+
+/// The inward direction of a gate placed at world position `pos`, or
+/// `None` when that position is not on a nav-grid edge cell (col 0, the
+/// last col, row 0 or the last row of the `PATHFIND_CELL_SIZE` grid a
+/// `width` x `height` battlefield gets - the same cell arithmetic as
+/// `pathfind::Grid::build`). A corner reports its horizontal edge.
+fn gate_inward(pos: Position, width: f32, height: f32) -> Option<Position> {
+    let cols = ((width / PATHFIND_CELL_SIZE).ceil() as i32).max(1);
+    let rows = ((height / PATHFIND_CELL_SIZE).ceil() as i32).max(1);
+    let col = ((pos.x / PATHFIND_CELL_SIZE) as i32).clamp(0, cols - 1);
+    let row = ((pos.y / PATHFIND_CELL_SIZE) as i32).clamp(0, rows - 1);
+    if col == 0 {
+        Some(Position::new(1.0, 0.0))
+    } else if col == cols - 1 {
+        Some(Position::new(-1.0, 0.0))
+    } else if row == 0 {
+        Some(Position::new(0.0, 1.0))
+    } else if row == rows - 1 {
+        Some(Position::new(0.0, -1.0))
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod editor_tests {
+    use super::*;
+    use crate::level::{Mission, SpawnKind, Tier};
+    use crate::{DEFAULT_SCREEN_HEIGHT, DEFAULT_SCREEN_WIDTH};
+
+    /// Save writes the loaded `MapFile` as-is, so a map's level tables and
+    /// the two level cell kinds survive an editor session untouched.
+    #[test]
+    fn save_and_load_keep_level_tables_and_level_cells() {
+        let mut map = MapFile::new();
+        map.tanks = Some(5);
+        map.mission.kind = Mission::Hunt;
+        map.spawn.kind = SpawnKind::Waves;
+        map.spawn.waves = Some(3);
+        map.spawn.size = Some(2);
+        map.spawn.growth = Some(1);
+        map.spawn.tier_start = Some(Tier::Light);
+        map.spawn.tier_end = Some(Tier::Heavy);
+        map.set_cell(30, 11, CellObject::Start);
+        map.set_cell(35, 11, CellObject::Frog);
+        map.set_cell(5, 11, CellObject::EnemyFrog);
+        map.set_cell(0, 11, CellObject::Gate);
+        map.set_cell(39, 11, CellObject::Gate);
+        map.set_cell(20, 11, CellObject::Wall { material: Material::Brick });
+
+        let dir = std::env::temp_dir().join(format!("bongbong-editor-test-{}", std::process::id()));
+        let path = dir.join("round-trip.toml");
+        map.save(&path).expect("save");
+        let back = MapFile::load(&path).expect("load");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(back.tanks, Some(5));
+        assert_eq!(back.mission, map.mission);
+        assert_eq!(back.spawn, map.spawn);
+        assert_eq!(back.enemy_frog_cell(), Some((5, 11)));
+        assert_eq!(back.gate_cells(), vec![(0, 11), (39, 11)]);
+        assert_eq!(back.start_cell(), Some((30, 11)));
+        assert_eq!(back.frog_cell(), Some((35, 11)));
+        assert_eq!(back.cells.len(), map.cells.len());
+    }
+
+    #[test]
+    fn gate_chevrons_point_inward_only_on_edge_cells() {
+        let (w, h) = (DEFAULT_SCREEN_WIDTH as f32, DEFAULT_SCREEN_HEIGHT as f32);
+        let at = |col: i32, row: i32| map::cell_to_world(col, row);
+        assert_eq!(gate_inward(at(0, 11), w, h), Some(Position::new(1.0, 0.0)));
+        assert_eq!(gate_inward(at(39, 11), w, h), Some(Position::new(-1.0, 0.0)));
+        assert_eq!(gate_inward(at(20, 0), w, h), Some(Position::new(0.0, 1.0)));
+        assert_eq!(gate_inward(at(20, 22), w, h), Some(Position::new(0.0, -1.0)));
+        assert_eq!(gate_inward(at(20, 11), w, h), None);
+    }
+
+    /// Seventeen icons must still fit inside the default battlefield width.
+    #[test]
+    fn palette_fits_the_default_battlefield_width() {
+        let panel = MapEditor::palette_panel_rect(DEFAULT_SCREEN_WIDTH as f32, DEFAULT_SCREEN_HEIGHT as f32);
+        assert!(panel.x >= 0.0 && panel.x + panel.width <= DEFAULT_SCREEN_WIDTH as f32);
+        assert_eq!(TOOLS.len(), 17);
     }
 }
