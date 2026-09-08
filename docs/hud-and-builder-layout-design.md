@@ -4,7 +4,11 @@ Status: proposal, nothing implemented. Sketches where the player's
 inventory readout (health, shells, weapon queue, wave, objective) lives so
 it never covers the battlefield, and reserves the same space for the map
 builder once it is fused into the game instead of being the separate
-`--editor` driver it is today (docs/map-editor-design.md).
+`--editor` driver it is today (docs/map-editor-design.md). Two layouts are
+worked out to the pixel: **a 32 px top bar** (variant A, the current
+favourite: the window stays 1280 wide) and **a 160 px right sidebar**
+(variant B, roomier for the builder). Everything from "Mode switch" on is
+shared.
 
 ## Where things are today
 
@@ -40,7 +44,64 @@ So the panel is added **outside** the field and the **window grows**:
 window = field + sidebar. `--resolution` keeps meaning the field (that is
 what the probe shares with the game via `DEFAULT_SCREEN_WIDTH/HEIGHT`).
 
-## Layout: a right-hand sidebar
+## Variant A: a 32 px top bar
+
+```
+ ┌──────────────────────────────────────────────────────────────────────┐
+ │PROTECT·WAVE 2/5  ENEMIES ▮▮▮▮▯▯▯  ♥ 100  ▬ 12  [L 3][P 6][M --]  SPD ▬ SHD ▬ FROG ▬  [BUILD]│ 32
+ ├──────────────────────────────────────────────────────────────────────┤
+ │                                                                      │
+ │                  battlefield 1280 x 720, origin (0, 32)               │
+ │                                                                      │
+ └──────────────────────────────────────────────────────────────────────┘
+```
+
+- **Height 32 px = one cell.** Window **1280x752**, which still fits a
+  1366x768 laptop and changes only the height of the web canvas. The
+  height is a dial, but the art fixes the sensible stops: pickup icons are
+  32x32 at scale 1 (`PICKUP_SCALE`), the heart glyph 44x14 at scale 2, and
+  the raylib default font runs ~11 px per character at 20 px. At 32 the
+  icons sit full-bleed (the bar reads as a tab strip) with 20 px text; at
+  24 everything must drop to half scale (16 px icons, 14 px text), which
+  is legible but no longer the 2 px-block look the rest of the game keeps;
+  at 40 the icons get a 4 px inset and the current 26 px HUD font fits.
+- **Play mode, one row, fixed slots** so numbers never shift (left to
+  right): mission + wave (~250 px at 20 px), `ENEMIES` pips (12x10, ten
+  max then `+N`), heart + HP, shell + count, three weapon slots of ~80 px
+  (32 px icon + count, the active one outlined in its accent), three thin
+  bars with 11 px labels (`SPD`, `SHD`, `FROG`), and the `BUILD` toggle at
+  the right end. About 1200 of 1280 px. The version string moves into the
+  window title (`BongBong! v0.0.9`); the dev-only `DEV overlays:` label and
+  the multi-line inspect readout stay where they are today, over the field.
+- **Build mode, same row, menus instead of a palette.** 20 tools do not
+  fit inline next to the file actions, so the bar carries **category
+  buttons** that open a dropdown over the field: `WALL` (brick/iron/wood/
+  glass), `PROP` (sandbag/barrel/fence), `GROUND` (road, gate), `ACTOR`
+  (frog, enemy frog, start), `PICKUP` (the seven kinds). Each button shows
+  its category's *current* tool as its 32 px icon plus the tool name in
+  11 px, so the active brush is always visible without opening anything;
+  clicking the button selects that tool, clicking its caret opens the
+  list, and the mouse wheel over a button cycles inside the category.
+  Right-click erases (the eraser keeps a small button too). Left of the
+  categories: `FILE ▾` (New/Save/Load/Close) and `MAP ▾` (the `tanks`/
+  `tank`/`mission`/`spawn` steppers, in a dropdown panel). Right of them:
+  map name with a dirty mark, the hovered cell and what is under it, and
+  `PLAY` in the same right-end slot `BUILD` occupies in play mode. About
+  950 of 1280 px, so there is slack for an undo button or a tool hotkey
+  strip later.
+- A dropdown covers field cells only while it is open; it closes on pick,
+  `Esc`, or a click anywhere else, and that click does *not* place a tile.
+- Two other ways to squeeze the builder into one row, both worse: one big
+  `TOOLS ▾` grid popup (every brush change is two clicks, and the bar no
+  longer shows what is selected per category), or a second row that slides
+  down in build mode (covers the top cell row exactly while it is being
+  edited, or forces a window resize on mode switch).
+- What the bar gives up against the sidebar: enemy pips have less room,
+  build mode needs a click or a wheel to change category, and the map
+  settings live behind a menu instead of always on screen. Those costs
+  land on the dev-only builder; the player only gains 32 px of height.
+
+## Variant B: a right-hand sidebar
 
 ```
  ┌────────────────────────────────────────────────────┬──────────┐
@@ -155,21 +216,37 @@ Small, and almost all presentation-side:
 
 | Where | Change |
 | --- | --- |
-| `lib.rs` | `SIDEBAR_WIDTH: i32 = 160` (5 x `OBSTACLE_GRID_SIZE`) and a `Layout { field: Rectangle, sidebar: Rectangle }` with `Layout::for_field(w, h)`. Layout, not a knob - it belongs here, not in `tuning.rs`. `DEFAULT_SCREEN_WIDTH/HEIGHT` keep their value and become the default *field* size. |
-| `main.rs` | Window = `field + SIDEBAR_WIDTH`. `Game::init`/`update`, `RippleFx::load`, `ground::build`, `scene_target` all get the **field** size - no simulation change. The `Driver` switch and Build-mode mouse handling live here. |
+| `lib.rs` | `HUD_BAR_HEIGHT: i32 = 32` (variant A) or `SIDEBAR_WIDTH: i32 = 160` (variant B) and a `Layout { field: Rectangle, panel: Rectangle }` with `Layout::for_field(w, h)`; the field origin is `(0, 32)` for the bar and `(0, 0)` for the sidebar, and nothing else cares which. Layout, not a knob - it belongs here, not in `tuning.rs`. `DEFAULT_SCREEN_WIDTH/HEIGHT` keep their value and become the default *field* size. |
+| `main.rs` | Window = field + panel. `Game::init`/`update`, `RippleFx::load`, `ground::build`, `scene_target` all get the **field** size - no simulation change. The `Driver` switch, Build-mode mouse handling and (variant A) the open-dropdown state live here or in `editor.rs`. |
 | `game.rs::render` | `scene_target` is already a separate render texture blitted with `blit_offset` (camera shake); add `layout.field` origin to that offset. `screen_to_ripple_uv` uses field dims. The post-composite pass (debug overlays, banners, flash) draws field-relative: a `Camera2D` with `offset = field origin`, or the origin added to the few `draw_rectangle(0, 0, w, h)` calls. The HUD text block moves out. |
-| `hud.rs` (new) | `HudModel` (plain numbers gathered from `Game`) and `draw_sidebar(d, layout.sidebar, &HudModel, &HudTextures)`. `HUD_*` constants and `hud_number_color` move here. |
-| `editor.rs` | Chrome rects take `&Layout`: `toolbar_button_rect(layout, i)` (2x2), `palette_icon_rect(layout, i)` (3 columns), `point_on_ui = layout.sidebar.contains(mouse)`, cursor cell from `mouse - field origin`. Hamburger removed. Map settings steppers are new. |
-| `site/src/pages/index.astro` | Canvas `min(100vw, 1440px)`; the tuning panel is unaffected. |
+| `hud.rs` (new) | `HudModel` (plain numbers gathered from `Game`) and `draw_panel(d, layout.panel, &HudModel, &HudTextures)` - a row of fixed slots for the bar, a stack for the sidebar. `HUD_*` constants and `hud_number_color` move here. |
+| `editor.rs` | Chrome rects take `&Layout`; `point_on_ui = layout.panel.contains(mouse) || open dropdown contains(mouse)`; cursor cell from `mouse - field origin`. Hamburger removed. Variant A adds the category/`FILE`/`MAP` dropdowns (the palette icons and their hit-testing already exist, they are re-laid out into lists); variant B re-lays the palette out as 3 columns. Map settings steppers are new either way. |
+| `site/src/pages/index.astro` | Canvas `min(100vh, 752px)` tall (A) or `min(100vw, 1440px)` wide (B); the tuning panel is unaffected. |
 | `devserver.rs` screenshots | `after_render` reads the presented frame; a screenshot now includes the sidebar, which is what a QA eye wants. `Layout` gives it the field rect if a tool ever needs to crop. |
 
 Everything under `simulation/`, `battlefield.rs`, `map.rs`, `maplint.rs`,
 `pathfind.rs` and both probes stay untouched: the field is still 1280x720
 with its origin at (0,0).
 
+## Choosing between A and B
+
+| | A: 32 px top bar | B: 160 px sidebar |
+| --- | --- | --- |
+| Window | 1280x752, fits 1366x768 | 1440x720, does not |
+| Web canvas | height changes only | width changes, page centring shifts |
+| Play readouts | one row, fixed slots, icon + count | stacked, room for labels and 31 pips |
+| Builder tools | category dropdowns, wheel to cycle | all 20 visible, one click each |
+| Map settings | behind `MAP ▾` | always visible |
+| Dev inspect readout | stays over the field | in the panel footer |
+| Feel | arcade status strip | Battle City sidebar |
+
+Take A unless the builder's click count turns out to hurt in practice; the
+`Layout` seam is the same either way, so switching later is a `hud.rs` and
+`editor.rs` re-layout, not a re-plumb.
+
 ## Small screens
 
-1440x720 does not fit a 1366x768 laptop. Two answers, in order:
+Variant B's 1440x720 does not fit a 1366x768 laptop. Two answers, in order:
 
 1. `--resolution 1120x630` (35 x ~19.7 cells) already works today and
    would keep working; maps simply have less room.
@@ -182,10 +259,10 @@ with its origin at (0,0).
 
 ## Alternatives considered
 
-- **Bottom bar** (window 1280x844): the 20-icon palette fits in one row
-  but the toolbar and settings need a second, the HUD becomes one long
-  line again, and a 16:9 field over a 124 px band is an awkward 1.52
-  window. Workable, just worse for the vertical readouts.
+- **A band with the palette laid out inline** (window 1280x844 at the
+  bottom, or the same on top): the 20 icons need a whole row on their
+  own, so the toolbar and settings need a second one and the band grows
+  to 124 px. Menus (variant A) are what keep a band at one cell.
 - **Shrink the field** to 40x20 cells with an 80 px band: breaks
   `default.toml` rows 20-22, every seeded baseline and the lint fixtures.
 - **Keep overlays**, only tidier: still covers cells, still blocks clicks
