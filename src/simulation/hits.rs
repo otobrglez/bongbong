@@ -202,16 +202,24 @@ impl Terrain {
         let pad = Position::new(half_extent, half_extent);
         let mut best: Option<(f32, u8, ShellTarget)> = None;
 
-        let (player_owner, hull, turret) = with_tank(world, player, |t| {
-            (t.owner(), t.hull_bbox_world(), t.turret_bbox_world())
+        // Wrecks are see-through to gunfire. A hulk kept its full hull and
+        // turret boxes here while `combat::apply_hit` threw the damage
+        // away, so it was a free bullet sponge: a shot into it was
+        // consumed for nothing, and the AI could not see the cover it was
+        // getting either (`Terrain::line_of_sight` ignores tanks entirely,
+        // and `ai::Brain::friendly_blocks_shot` skips wrecks). Blocking
+        // shots that nobody can reason about is the worst of both, so they
+        // pass through.
+        let (player_owner, player_wrecked, hull, turret) = with_tank(world, player, |t| {
+            (t.owner(), t.is_wreck(), t.hull_bbox_world(), t.turret_bbox_world())
         });
-        if player_owner != shooter {
+        if player_owner != shooter && !player_wrecked {
             consider_hit(&mut best, segment_hits_aabb(p0, p1, hull.0, hull.1 + pad), 0, ShellTarget::PlayerTank);
             consider_hit(&mut best, segment_hits_aabb(p0, p1, turret.0, turret.1 + pad), 0, ShellTarget::PlayerTank);
         }
 
         for (entity, tank) in world.query::<(Entity, &Tank)>().with::<&Ai>().iter() {
-            if tank.owner() == shooter {
+            if tank.owner() == shooter || tank.is_wreck() {
                 continue;
             }
             let (hc, hh) = tank.hull_bbox_world();

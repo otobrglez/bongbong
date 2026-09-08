@@ -215,6 +215,18 @@ fn knockback(tank: &Tank, physics: &mut Physics, dir: Vector2, speed: f32) {
 /// each other are separated by the physics solver without damage. A tank
 /// this kills is recorded in `kills`, tagged with its side and owner slot.
 /// Returns the damage dealt, or `None` when nothing was exchanged.
+/// A tank's actual body velocity, or zero if it has no body yet (a wave
+/// tank still rolling in through a gate).
+fn physics_velocity(physics: &Physics, tank: &Tank) -> Vector2 {
+    match tank.body {
+        Some(body) => {
+            let v = physics.velocity(body);
+            Vector2::new(v.x, v.y)
+        }
+        None => Vector2::new(0.0, 0.0),
+    }
+}
+
 pub(super) fn ram(
     a: &mut Tank,
     a_is_enemy: bool,
@@ -248,9 +260,16 @@ pub(super) fn ram(
         return Some(dmg);
     }
     let axis = Vector2::new(dx / dist, dy / dist);
-    let rel_x = a.velocity.x - b.velocity.x;
-    let rel_y = a.velocity.y - b.velocity.y;
-    let impact_speed = (rel_x * rel_x + rel_y * rel_y).sqrt();
+    // Real closing speed off the bodies, not the commanded `Tank::velocity`.
+    // The commanded value is a fixed-magnitude cardinal vector, so it says
+    // "both are driving" rather than "how hard they hit": a tank shoved
+    // backwards into another by a blast read as not closing at all, and one
+    // grinding into a wall read as travelling at full speed. Only the
+    // component along the contact axis counts - two tanks sliding past each
+    // other are not colliding.
+    let (av, bv) = (physics_velocity(physics, a), physics_velocity(physics, b));
+    let closing = (av.x - bv.x) * -axis.x + (av.y - bv.y) * -axis.y;
+    let impact_speed = closing.max(0.0);
     let push = (impact_speed * tuning().knockback_strength).min(tuning().knockback_max_speed);
     let total_mass = a.mass() + b.mass();
     // A tank this very hit just killed stays put, like any wreck.

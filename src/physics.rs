@@ -163,6 +163,39 @@ impl Physics {
         body.set_linvel(Vector::new(0.0, 0.0), true);
     }
 
+    /// Settle a tank that has just become a wreck: heavy linear and
+    /// angular damping, and more surface friction.
+    ///
+    /// A wreck keeps its full-mass dynamic body but stops being driven, and
+    /// nothing in the world sets damping (rapier's default is zero), so a
+    /// shoved hulk used to slide until something else stopped it - braked
+    /// only by contact friction, never coming to rest by design. Damping is
+    /// what makes a burnt-out tank behave like several tonnes of dead metal
+    /// instead of an air-hockey puck.
+    ///
+    /// Applied on the one frame a tank becomes a wreck (see
+    /// `simulation::roll_wreck_col`), because a wreck is created by damage
+    /// mid-round rather than spawned as one, so `RigidBodyBuilder`'s
+    /// damping is not available to us.
+    pub fn settle_wreck(&mut self, handle: RigidBodyHandle, damping: f32, friction: f32) {
+        let collider = self.collider_of(handle);
+        {
+            let body = self
+                .world
+                .bodies
+                .get_mut(handle)
+                .expect("tank physics body handle should always be valid");
+            body.set_linear_damping(damping);
+            body.set_angular_damping(damping);
+        }
+        let collider = self
+            .world
+            .colliders
+            .get_mut(collider)
+            .expect("collider handle should always be valid");
+        collider.set_friction(friction);
+    }
+
     /// Remove a body (and any colliders attached to it) from the world -
     /// used once an obstacle is destroyed (see `Game::update`).
     pub fn remove_body(&mut self, handle: RigidBodyHandle) {

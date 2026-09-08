@@ -479,3 +479,114 @@ fn overlapping_shocks_are_capped_and_keep_the_hardest_hit() {
     assert_eq!(game.shocks.len(), SHOCK_MAX, "never more than the shader can take");
     assert!(game.shocks.iter().all(|s| s.strength == SHOCK_KILL), "and they are all real kills");
 }
+
+#[test]
+fn a_shoved_wreck_settles_instead_of_sliding_forever() {
+    // A wreck keeps its full-mass dynamic body but stops being driven, and
+    // nothing in the world sets damping, so a shove used to send it gliding
+    // until it hit something. It should now travel a little and come to
+    // rest.
+    //
+    // Three enemies, not one: killing the only enemy wins the round, and
+    // the end screen deliberately stops stepping physics - the wreck would
+    // simply be frozen, which looks like "settled" for all the wrong
+    // reasons.
+    let mut game = Game::default();
+    game.enemy_count_override = Some(3);
+    game.seed_override = Some(4);
+    game.player_row_override = Some(0);
+    game.map = MapFile::from_toml_str(&map_with("")).expect("test map parses");
+    game.init(W, H);
+    game.debug_teleport(1, Position::new(640.0, 360.0), Some(0.0)).unwrap();
+    game.debug_kill(1).expect("enemy in slot 1 dies");
+    step(&mut game, Input::default());
+    step(&mut game, Input::default());
+    assert_eq!(game.outcome(), Outcome::Playing, "the round is still running");
+
+    let body = {
+        let mut q = game.world.query::<&Tank>();
+        q.iter()
+            .find(|t| t.is_wreck())
+            .and_then(|t| t.body)
+            .expect("the wreck is still in the world with its body")
+    };
+    game.physics.apply_impulse(body, Position::new(4000.0, 0.0));
+    let launched = game.physics.velocity(body).length();
+    assert!(launched > 100.0, "the shove actually landed ({launched} px/s)");
+    for _ in 0..240 {
+        step(&mut game, Input::default());
+    }
+    let speed = game.physics.velocity(body).length();
+    assert!(speed < 3.0, "the wreck should have come to rest, but is at {speed} px/s");
+}
+
+#[test]
+fn a_wreck_does_not_absorb_shells() {
+    // A wreck kept its full hull and turret boxes in the hit sweep while
+    // `apply_hit` discarded the damage, so a shot into one was consumed for
+    // nothing - and the AI could not see the cover it was getting either.
+    // Shots pass through instead.
+    //
+    // Three enemies again: killing the last one ends the round, and the end
+    // screen stops the player firing at all.
+    let map = map_with("cells.\"20,8\" = { kind = \"wall\", material = \"glass\" }\n");
+    let mut game = Game::default();
+    game.enemy_count_override = Some(3);
+    game.seed_override = Some(6);
+    game.player_row_override = Some(0);
+    game.map = MapFile::from_toml_str(&map).expect("test map parses");
+    game.init(W, H);
+    game.debug_teleport(0, cell_to_world(20, 15), Some(0.0)).unwrap();
+    // The spare two go into the iron box in the far corner, out of the way.
+    for slot in [2, 3] {
+        let _ = game.debug_teleport(slot, cell_to_world(ENEMY_CELL.0, ENEMY_CELL.1), Some(0.0));
+    }
+    // Park a wreck squarely between the player and the glass.
+    game.debug_teleport(1, cell_to_world(20, 11), Some(0.0)).unwrap();
+    game.debug_kill(1).expect("enemy in slot 1 dies");
+    step(&mut game, Input::default());
+    step(&mut game, Input::default());
+    assert_eq!(game.outcome(), Outcome::Playing, "the round is still running");
+    assert!(
+        game.world.query::<&Tank>().iter().any(|t| t.is_wreck()),
+        "there is a wreck in the line of fire"
+    );
+
+    let events = shoot(&mut game, 90);
+    let hit_rows: Vec<i32> = obstacle_hits(&events).into_iter().map(|(row, _)| row).collect();
+    assert!(
+        hit_rows.contains(&8),
+        "the shell reached the glass behind the wreck; obstacle hits were {hit_rows:?}"
+    );
+}
+
+#[test]
+fn two_enemies_ram_each_other() {
+    // Enemy-vs-enemy contact used to be the one collision in the game that
+    // did nothing: no damage, no event, no feedback, so a pileup looked
+    // like ghosts overlapping.
+    let mut game = Game::default();
+    game.enemy_count_override = Some(3);
+    game.seed_override = Some(11);
+    game.player_row_override = Some(0);
+    game.map = MapFile::from_toml_str(&map_with("")).expect("test map parses");
+    game.init(W, H);
+    // Two enemies nose to nose, the third parked out of the way.
+    let _ = game.debug_teleport(3, cell_to_world(ENEMY_CELL.0, ENEMY_CELL.1), Some(0.0));
+    game.debug_teleport(1, Position::new(624.0, 360.0), Some(90.0)).unwrap();
+    game.debug_teleport(2, Position::new(640.0, 360.0), Some(270.0)).unwrap();
+
+    let mut rams = Vec::new();
+    for _ in 0..120 {
+        step(&mut game, Input::default());
+        rams.extend(game.events().iter().filter_map(|e| match e {
+            Event::Ram { enemy_slot, other_slot: Some(other), damage } => Some((*enemy_slot, *other, *damage)),
+            _ => None,
+        }));
+    }
+    assert!(!rams.is_empty(), "two enemies shoved together traded ram damage");
+    assert!(
+        rams.iter().all(|(a, b, d)| *a != *b && *d > 0.0),
+        "each ram names both parties and deals damage: {rams:?}"
+    );
+}

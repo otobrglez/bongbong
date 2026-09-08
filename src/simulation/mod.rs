@@ -69,6 +69,7 @@ use crate::{
     OBSTACLE_SCALE,
     OBSTACLE_TEXTURE_SIZE,
     DECAL_MAX,
+    TANK_TEXTURE_SIZE,
     SHOCK_MAX,
     RUBBLE_ROW_TANK,
     SCORCH_MAX,
@@ -144,8 +145,10 @@ pub enum Event {
     Hit { target: HitTarget, damage: f32, killed: bool, x: f32, y: f32 },
     /// A tank became a wreck (any cause) at (`x`, `y`).
     Wreck { slot: usize, x: f32, y: f32 },
-    /// Player/enemy ram contact dealt `damage` to both sides.
-    Ram { enemy_slot: usize, damage: f32 },
+    /// Ram contact dealt `damage` to both sides. `other_slot` is `None`
+    /// when the other party is the player, which is the only pairing this
+    /// event used to be able to describe.
+    Ram { enemy_slot: usize, damage: f32, other_slot: Option<usize> },
     PickupCollected { slot: usize, kind: PickupKind },
     PickupRespawned { kind: PickupKind, x: f32, y: f32 },
     /// A projectile bounced off `slot`'s rainbow shield at (`x`, `y`).
@@ -973,7 +976,13 @@ impl Game {
             tank.shield_timer = (tank.shield_timer - dt).max(0.0);
             tank.tick_wreck(dt);
             tank.tick_minigun_spin(dt);
-            roll_wreck_col(tank, rng);
+            if roll_wreck_col(tank, rng) {
+                // The frame a tank becomes a wreck: stop it behaving like
+                // an air-hockey puck. See `Physics::settle_wreck`.
+                if let Some(body) = tank.body {
+                    self.physics.settle_wreck(body, tuning().wreck_linear_damping, tuning().wreck_friction);
+                }
+            }
         }
         for frog in self.world.query::<&mut Frog>().iter() {
             frog.tick(dt);
@@ -1467,11 +1476,62 @@ impl Game {
                     ram(e, true, p, false, &mut self.physics, &mut f.rng, &mut f.kills).map(|damage| (e.owner_slot, damage))
                 });
                 if let Some((enemy_slot, damage)) = rammed {
-                    f.events.push(Event::Ram { enemy_slot, damage });
+                    f.events.push(Event::Ram { enemy_slot, damage, other_slot: None });
                 }
             }
             if f.physics_stepped {
                 with_tank_mut(&self.world, enemy, |t| lay_tracks(&mut self.tracks, t, before));
+            }
+        }
+        self.ram_enemy_pairs(f);
+    }
+
+    /// Enemies ram each other too, not just the player.
+    ///
+    /// This used to be deliberately absent, which meant a six-tank pileup
+    /// produced no damage, no event and no feedback at all - the one
+    /// collision in the game that did nothing.
+    ///
+    /// Two things matter here. `ram` draws from the round RNG, so the pair
+    /// order has to be fixed: the list is sorted by owner slot and walked
+    /// as `i < j`, never in ECS iteration order. And it is O(n^2) in live
+    /// enemies, so a cheap distance test comes before the narrow-phase
+    /// query, the same way `ram_props` culls.
+    fn ram_enemy_pairs(&mut self, f: &mut Frame) {
+        let mut enemies: Vec<(Entity, usize, Position)> = self
+            .world
+            .query::<(Entity, &Tank)>()
+            .with::<&Ai>()
+            .iter()
+            .filter(|(_, t)| !t.is_wreck())
+            .map(|(e, t)| (e, t.owner_slot, t.position))
+            .collect();
+        enemies.sort_by_key(|(_, slot, _)| *slot);
+
+        // Two tanks can only touch if their centres are within a hull
+        // diagonal of each other; anything further apart cannot be in
+        // contact and is not worth a narrow-phase query.
+        let reach = TANK_TEXTURE_SIZE * 2.0;
+        for i in 0..enemies.len() {
+            for j in (i + 1)..enemies.len() {
+                let (a, _, a_pos) = enemies[i];
+                let (b, _, b_pos) = enemies[j];
+                if a_pos.distance_to(b_pos) > reach {
+                    continue;
+                }
+                let touching = with_tank(&self.world, a, |x| {
+                    with_tank(&self.world, b, |y| tanks_touching(&self.physics, x, y))
+                });
+                if !touching {
+                    continue;
+                }
+                let rammed = with_two_tanks_mut(&mut self.world, a, b, |x, y| {
+                    ram(x, true, y, true, &mut self.physics, &mut f.rng, &mut f.kills)
+                        .map(|damage| (x.owner_slot, y.owner_slot, damage))
+                });
+                if let Some((slot, other, damage)) = rammed {
+                    f.events.push(Event::Ram { enemy_slot: slot, damage, other_slot: Some(other) });
+                }
             }
         }
     }
@@ -2306,10 +2366,16 @@ fn roll_role(mission: Mission, rng: &mut SmallRng) -> Role {
 
 /// Roll a tank's wrecked-hull variant the first frame it is a wreck; a
 /// no-op every other frame. Uses the round stream, never `rand::rng()`.
-fn roll_wreck_col(tank: &mut Tank, rng: &mut SmallRng) {
+/// Returns true on that one frame, which is also the moment the body's
+/// damping and friction have to change (`Physics::settle_wreck`) - a wreck
+/// is made by damage mid-round, not spawned as one, so there is no builder
+/// to set them on.
+fn roll_wreck_col(tank: &mut Tank, rng: &mut SmallRng) -> bool {
     if tank.is_wreck() && tank.wreck_col.is_none() {
         tank.wreck_col = Some(TANK_WRECK_COLS[rng.random_range(0..TANK_WRECK_COLS.len())]);
+        return true;
     }
+    false
 }
 
 /// Lay tread marks along the distance a tank travelled this frame, one per
@@ -3487,17 +3553,31 @@ cells."30,20" = { kind = "frog" }
         let cap = tuning().wave_max_alive;
         let mut game = waves_game(1, cap as u32 + 4);
         let frames = ((cap as f32 + 4.0) * tuning().wave_stagger_seconds * 60.0) as u32 + 300;
-        // The surplus only leaves the queue as kills free slots (the
-        // shielded player bounces shells back), so the claim is the
-        // invariant plus the cap actually binding with tanks still queued.
-        let mut queued_at_cap = false;
+        // The hard claim is the invariant: however oversized the wave, the
+        // field never holds more than `wave_max_alive` at once.
+        //
+        // The surplus leaves the queue only as slots free up, and since
+        // enemies ram each other (`ram_enemy_pairs`) a maximal pile now
+        // grinds itself down: attrition settles the field a few tanks below
+        // the cap rather than pinning it there, so "alive == cap while
+        // tanks are still queued" no longer happens and is the wrong thing
+        // to assert. What keeps this honest instead is that the field got
+        // genuinely crowded while the queue was still full - if the wave
+        // never built up, the invariant would hold vacuously.
+        let (mut max_alive, mut max_pending) = (0, 0);
+        let mut crowded_with_queue = false;
         for _ in 0..frames {
             step(&mut game, Input::default());
             let status = game.wave_status().unwrap();
             assert!(status.alive <= cap, "{} live enemies over the cap of {cap}", status.alive);
-            queued_at_cap |= status.alive == cap && status.pending > 0;
+            max_alive = max_alive.max(status.alive);
+            max_pending = max_pending.max(status.pending);
+            crowded_with_queue |= status.alive * 4 >= cap * 3 && status.pending > 0;
         }
-        assert!(queued_at_cap, "the cap never held tanks back");
+        assert!(
+            crowded_with_queue,
+            "the wave never built up: max alive {max_alive} of {cap}, max pending {max_pending}"
+        );
         assert_eq!(game.outcome(), Outcome::Playing);
     }
 

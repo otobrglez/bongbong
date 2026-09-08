@@ -693,6 +693,16 @@ tunables! {
         /// A wreck burns for this long, then settles into a static charred
         /// hulk.
         wreck_burn_seconds: f32 = 4.0 in 0.0 ..= 30.0;
+        /// Linear and angular damping applied to a tank's body the frame it
+        /// becomes a wreck. Nothing else in the world sets damping (rapier
+        /// defaults to none) and a wreck stops being driven, so a shoved
+        /// hulk used to slide until something stopped it. This is what
+        /// makes a shove move it a little and then let it rest.
+        wreck_linear_damping: f32 = 4.0 in 0.0 ..= 30.0;
+        /// Surface friction on a wreck, against rapier's 0.5 default: a
+        /// live tank shunting one should bleed energy rather than skid off
+        /// it.
+        wreck_friction: f32 = 0.95 in 0.0 ..= 2.0;
     }
 
     group ai {
