@@ -33,6 +33,7 @@ pub use waves::{RollIn, WaveStatus};
 use waves::WaveState;
 
 use crate::blast::{BlastFx, Scorch};
+use crate::decal::Decal;
 use crate::tuning::tuning;
 use std::collections::{HashMap, HashSet};
 
@@ -67,6 +68,9 @@ use crate::{
     OBSTACLE_HULL_FRACTION,
     OBSTACLE_SCALE,
     OBSTACLE_TEXTURE_SIZE,
+    DECAL_MAX,
+    SHOCK_MAX,
+    RUBBLE_ROW_TANK,
     SCORCH_MAX,
     PATHFIND_CELL_SIZE,
     PHYSICS_FIXED_DT,
@@ -165,6 +169,15 @@ pub enum Event {
     /// A barrel detonated at (`x`, `y`); `chained` when another blast's
     /// fuse set it off rather than a shot or a ram.
     Blast { x: f32, y: f32, chained: bool },
+    /// A delayed secondary pop from a wreck's ammo cooking off. Purely
+    /// cosmetic - it deals no damage - but recorded so tooling and the
+    /// presentation layer can see it.
+    CookOff { x: f32, y: f32 },
+    /// Rapier quarantined `bodies` bodies and `colliders` colliders on one
+    /// fixed step because their state went non-finite (see
+    /// `Physics::quarantined`). A solver blow-up, never normal play - the
+    /// probe counts it as an `invariant` anomaly.
+    PhysicsQuarantine { bodies: usize, colliders: usize },
     // --- AI decisions, recorded only while `Game::trace_ai` is set: each
     // is a transition the enemy phase observed by comparing an enemy's
     // `AiSnapshot` before and after its `think`, so `ai.rs` stays
@@ -363,9 +376,12 @@ pub struct Game {
     /// The second ring, around the player's frog: what hunters with a live
     /// quarry compete on (`enemy_phase`).
     engage_frog: EngageRing,
-    /// The screen-distortion ring from the most recent kill (tank or
-    /// frog), while it plays. Driven into the shockwave shader by `render`.
-    pub(crate) shock: Option<Shockwave>,
+    /// Kill/blast ripples currently playing, at most `SHOCK_MAX`. A list
+    /// rather than one slot: a chained barrel cascade sets off one per
+    /// link, and last-write-wins used to mean the tank explosion that
+    /// started it simply vanished. They resolve together in a single blit
+    /// (see `static/shockwave.fs`).
+    pub(crate) shocks: Vec<Shockwave>,
     /// Heat-haze ripples at recently fired muzzles, oldest first.
     pub(crate) muzzle_flashes: Vec<Shockwave>,
     /// Impact ripples where projectiles landed, oldest first.
@@ -376,6 +392,12 @@ pub struct Game {
     /// Burn marks left by barrel blasts this round, oldest first, capped at
     /// `SCORCH_MAX`.
     pub(crate) scorches: Vec<Scorch>,
+    /// Rubble left where a wall tile died this round, oldest first, capped
+    /// at `DECAL_MAX` (see `decal.rs`).
+    pub(crate) decals: Vec<Decal>,
+    /// Queued ammo cook-offs from tanks that have died: where each pops and
+    /// how long until it does. Purely cosmetic (see `tick_cookoffs`).
+    pub(crate) cookoffs: Vec<(Position, f32)>,
     /// Laser beams still in their short display window, oldest first.
     pub(crate) laser_beams: Vec<LaserBeam>,
     /// Frozen simulation plus a "PAUSED" overlay. Cleared by `init`.
@@ -457,13 +479,14 @@ struct Frame {
     pending_blasts: Vec<Position>,
     blast_fx: Vec<BlastFx>,
     scorches: Vec<Scorch>,
+    decals: Vec<Decal>,
     pending_shells: Vec<Shell>,
     pending_plasmas: Vec<Plasma>,
     pending_bullets: Vec<Bullet>,
     pending_lasers: Vec<PendingLaserShot>,
     muzzle_flashes: Vec<Shockwave>,
     impact_flashes: Vec<Shockwave>,
-    shock: Option<Shockwave>,
+    shocks: Vec<Shockwave>,
     /// Whether at least one fixed physics step ran this frame.
     physics_stepped: bool,
     /// Events this frame's phases recorded; merged onto `Game::events`.
@@ -482,18 +505,30 @@ impl Frame {
             pending_blasts: Vec::new(),
             blast_fx: Vec::new(),
             scorches: Vec::new(),
+            decals: Vec::new(),
             pending_shells: Vec::new(),
             pending_plasmas: Vec::new(),
             pending_bullets: Vec::new(),
             pending_lasers: Vec::new(),
             muzzle_flashes: Vec::new(),
             impact_flashes: Vec::new(),
-            shock: None,
+            shocks: Vec::new(),
             physics_stepped: false,
             events: Vec::new(),
         }
     }
 }
+
+// How hard each thing that shakes the screen shakes it, relative to a tank
+// dying. These are ratios between events rather than feel knobs - the
+// overall amount is `camera_shake_magnitude` and `shockwave_strength` in
+// tuning.rs - so they live here next to the code that decides which is
+// which, and a designer turns the whole set up or down with one knob.
+pub(crate) const SHOCK_KILL: f32 = 1.0;
+pub(crate) const SHOCK_BARREL: f32 = 0.7;
+pub(crate) const SHOCK_FROG: f32 = 0.6;
+/// Ammo cooking off inside a wreck: felt, but nowhere near a real kill.
+pub(crate) const SHOCK_COOKOFF: f32 = 0.25;
 
 impl Game {
     /// Set up a fresh round: player, map terrain, enemies, frog, pickups,
@@ -520,11 +555,13 @@ impl Game {
         self.engage_frog.clear();
         self.pickup_respawn_timer = tuning().pickup_respawn_seconds;
         self.player_fire_held_last_frame = false;
-        self.shock = None;
+        self.shocks.clear();
         self.muzzle_flashes.clear();
         self.impact_flashes.clear();
         self.blast_fx.clear();
         self.scorches.clear();
+        self.decals.clear();
+        self.cookoffs.clear();
         self.laser_beams.clear();
         self.frame = 0;
         self.last_engage.clear();
@@ -837,6 +874,8 @@ impl Game {
             self.resolve_projectiles::<Shell>(&mut f, true);
             self.resolve_projectiles::<Bullet>(&mut f, true);
             self.resolve_projectiles::<Plasma>(&mut f, true);
+            self.tick_cookoffs(&mut f);
+            self.tick_burns(&mut f);
             self.tick_fuses(&mut f);
             self.explosions(&mut f, true);
             self.despawn_wrecks(&mut f);
@@ -851,6 +890,8 @@ impl Game {
             self.resolve_projectiles::<Shell>(&mut f, false);
             self.resolve_projectiles::<Bullet>(&mut f, false);
             self.resolve_projectiles::<Plasma>(&mut f, false);
+            self.tick_cookoffs(&mut f);
+            self.tick_burns(&mut f);
             self.tick_fuses(&mut f);
             self.explosions(&mut f, false);
             self.cleanup_done();
@@ -874,8 +915,18 @@ impl Game {
             let excess = self.scorches.len() - SCORCH_MAX;
             self.scorches.drain(..excess);
         }
-        if f.shock.is_some() {
-            self.shock = f.shock;
+        self.decals.extend(f.decals);
+        if self.decals.len() > DECAL_MAX {
+            let excess = self.decals.len() - DECAL_MAX;
+            self.decals.drain(..excess);
+        }
+        self.shocks.extend(f.shocks);
+        if self.shocks.len() > SHOCK_MAX {
+            // Evict by punch left, not by age: a cascade's little fuse pops
+            // arrive after the tank explosion that set them off, and
+            // oldest-first would throw away the one that matters.
+            self.shocks.sort_by(|a, b| b.remaining().total_cmp(&a.remaining()));
+            self.shocks.truncate(SHOCK_MAX);
         }
         self.events.extend(f.events);
         self.rng = Some(f.rng);
@@ -884,12 +935,10 @@ impl Game {
     /// Age the shader effects (shockwave, muzzle/impact flashes, laser
     /// beams) - runs even on the end screen so nothing freezes mid-fade.
     fn tick_effects(&mut self, dt: f32) {
-        if let Some(shock) = &mut self.shock {
+        self.shocks.retain_mut(|shock| {
             shock.time += dt;
-            if shock.time >= tuning().shockwave_duration {
-                self.shock = None;
-            }
-        }
+            shock.time < tuning().shockwave_duration
+        });
         self.muzzle_flashes.retain_mut(|flash| {
             flash.time += dt;
             flash.time < tuning().muzzle_flash_duration
@@ -902,6 +951,9 @@ impl Game {
             blast.time += dt;
             !blast.done()
         });
+        for decal in &mut self.decals {
+            decal.age += dt;
+        }
         for scorch in &mut self.scorches {
             scorch.age += dt;
         }
@@ -922,9 +974,6 @@ impl Game {
             tank.tick_wreck(dt);
             tank.tick_minigun_spin(dt);
             roll_wreck_col(tank, rng);
-        }
-        for obstacle in self.world.query::<&mut Obstacle>().iter() {
-            obstacle.tick_burn(dt);
         }
         for frog in self.world.query::<&mut Frog>().iter() {
             frog.tick(dt);
@@ -1341,10 +1390,10 @@ impl Game {
                 Some((target, t)) => (shot.start + (shot.end - shot.start) * t, Some(target)),
                 None => (shot.end, None),
             };
-            f.muzzle_flashes.push(Shockwave { center: shot.start, time: 0.0 });
+            f.muzzle_flashes.push(Shockwave::new(shot.start));
             self.laser_beams.push(LaserBeam::new(shot.start, hit_pos, shot.variant));
             let Some(target) = target else { continue };
-            f.impact_flashes.push(Shockwave { center: hit_pos, time: 0.0 });
+            f.impact_flashes.push(Shockwave::new(hit_pos));
             // No knockback and no frog hop: an instant beam isn't something
             // to be shoved by or to dodge.
             self.apply_hit(f, target, hit_pos, laser_damage_range(&shot), HitEffects::none());
@@ -1367,6 +1416,10 @@ impl Game {
             self.advance_projectiles::<Plasma>(PHYSICS_FIXED_DT);
             if step_physics {
                 self.physics.step();
+                let (bodies, colliders) = self.physics.quarantined();
+                if bodies > 0 || colliders > 0 {
+                    f.events.push(Event::PhysicsQuarantine { bodies, colliders });
+                }
             }
             self.physics_accumulator -= PHYSICS_FIXED_DT;
             f.physics_stepped = true;
@@ -1468,7 +1521,7 @@ impl Game {
             }
         }
         for (e1, e2, midpoint) in collisions {
-            f.impact_flashes.push(Shockwave { center: midpoint, time: 0.0 });
+            f.impact_flashes.push(Shockwave::new(midpoint));
             f.events.push(Event::ShellsCollided { x: midpoint.x, y: midpoint.y });
             for e in [e1, e2] {
                 let mut q = self.world.query_one::<&mut Shell>(e);
@@ -1533,7 +1586,7 @@ impl Game {
                 continue;
             };
             let hit_pos = prev + (pos - prev) * t;
-            f.impact_flashes.push(Shockwave { center: hit_pos, time: 0.0 });
+            f.impact_flashes.push(Shockwave::new(hit_pos));
             // A shielded tank bounces the projectile away instead of taking
             // the hit - see `Projectile::deflect`. No damage, no knockback,
             // no hit flash on the tank; the impact flash above still shows
@@ -1597,6 +1650,86 @@ impl Game {
     /// pushed once (every push is gated by its own transition into a wreck)
     /// and a barrel dies once. `live` is false on the end screen, where
     /// blasts play out without damage (no kills happen there).
+    /// Everything a dying tank throws off. A barrel used to be the more
+    /// dramatic death of the two - it got a fireball, a screen flash and a
+    /// scorch while a tank got only the shockwave - so a kill now lays down
+    /// the same three, plus its own wreckage and a set of delayed pops.
+    ///
+    /// Draws no RNG: the parts' landing spots, cells and arcs all come out
+    /// of `blast::seed_at` salted per piece, so a spectacular death cannot
+    /// shift a seeded replay.
+    fn wreck_fx(&mut self, f: &mut Frame, center: Position) {
+        f.blast_fx.push(BlastFx::new(center));
+        f.impact_flashes.push(Shockwave::new(center));
+        f.scorches.push(Scorch::new(center));
+        self.scorch_tracks(center);
+
+        let throw = tuning().wreck_part_throw_px;
+        for i in 0..tuning().wreck_parts.max(0) as u32 {
+            // Fan the pieces around the hull by hashed angle and distance
+            // rather than a fixed rosette, so two wrecks never scatter the
+            // same way.
+            let h = crate::blast::seed_at(center, 40 + i * 5);
+            let angle = (h % 3600) as f32 / 3600.0 * std::f32::consts::TAU;
+            let dist = throw * (0.35 + 0.65 * ((h >> 12) % 100) as f32 / 100.0);
+            let to = Position::new(center.x + angle.cos() * dist, center.y + angle.sin() * dist);
+            f.decals.push(Decal::thrown(RUBBLE_ROW_TANK, center, to, 40 + i * 5));
+        }
+
+        // Ammo cooking off: a few small pops after the fact, spread over
+        // `cookoff_window_seconds`. Queued rather than fired now, and
+        // ticked by `tick_cookoffs`.
+        let count = tuning().cookoff_count.max(0) as u32;
+        let window = tuning().cookoff_window_seconds;
+        for i in 0..count {
+            let h = crate::blast::seed_at(center, 90 + i * 7);
+            let delay = window * (0.15 + 0.85 * (h % 1000) as f32 / 1000.0);
+            let off = ((h >> 10) % 21) as f32 - 10.0;
+            let off2 = ((h >> 16) % 21) as f32 - 10.0;
+            self.cookoffs.push((Position::new(center.x + off, center.y + off2), delay));
+        }
+    }
+
+    /// Burn a wreck's last few tread marks into the ground. Walks back
+    /// from the newest mark rather than scanning the whole list, and stops
+    /// after `wreck_track_marks`, so the cost is bounded by the number of
+    /// marks burnt and not by how long the round has been running.
+    fn scorch_tracks(&mut self, center: Position) {
+        let reach = crate::TANK_TEXTURE_SIZE;
+        let mut left = tuning().wreck_track_marks.max(0);
+        for track in self.tracks.iter_mut().rev() {
+            if left == 0 {
+                break;
+            }
+            if track.position.distance_to(center) <= reach {
+                track.scorched = true;
+                left -= 1;
+            }
+        }
+    }
+
+    /// Count down the queued cook-off pops and fire the ones that are due.
+    /// Cosmetic only - a secondary never damages anything, because a kill
+    /// has already resolved its blast and a second helping of splash would
+    /// be a real balance change rather than a detail.
+    fn tick_cookoffs(&mut self, f: &mut Frame) {
+        let mut popped = Vec::new();
+        self.cookoffs.retain_mut(|(pos, t)| {
+            *t -= f.dt;
+            if *t > 0.0 {
+                return true;
+            }
+            popped.push(*pos);
+            false
+        });
+        for center in popped {
+            f.blast_fx.push(BlastFx::small(center));
+            f.impact_flashes.push(Shockwave::new(center));
+            f.shocks.push(Shockwave::scaled(center, SHOCK_COOKOFF));
+            f.events.push(Event::CookOff { x: center.x, y: center.y });
+        }
+    }
+
     fn explosions(&mut self, f: &mut Frame, live: bool) {
         let (mut i, mut j) = (0, 0);
         while i < f.kills.len() || j < f.pending_blasts.len() {
@@ -1604,7 +1737,8 @@ impl Game {
                 let (center, victim_was_enemy, slot) = f.kills[i];
                 i += 1;
                 f.events.push(Event::Wreck { slot, x: center.x, y: center.y });
-                f.shock = Some(Shockwave { center, time: 0.0 });
+                f.shocks.push(Shockwave::scaled(center, SHOCK_KILL));
+                self.wreck_fx(f, center);
                 self.apply_explosion(f, center, victim_was_enemy);
             }
             if j < f.pending_blasts.len() {
@@ -1772,6 +1906,43 @@ impl Game {
 
     /// Every tank's externally visible state, for headless inspection
     /// (`src/bin/probe.rs`, the tests below) without touching `world`.
+    /// Every tile currently on fire, with how long it has been burning.
+    /// One of three read-only views the presentation particle layer
+    /// samples each frame (see `fx::Fx::sample_world`): these are *states*
+    /// rather than events - a tile burns for a second and a half, it does
+    /// not burn at an instant - so there is nothing in the event log to
+    /// drive them from.
+    pub fn burning_tiles(&self) -> Vec<(Position, f32)> {
+        self.world
+            .query::<&Obstacle>()
+            .iter()
+            .filter(|o| o.burning && !o.destroyed)
+            .map(|o| (o.position, o.burn_elapsed))
+            .collect()
+    }
+
+    /// Every wreck still inside its `wreck_burn_seconds` window, with the
+    /// time it has been burning.
+    pub fn burning_wrecks(&self) -> Vec<(Position, f32)> {
+        self.world
+            .query::<&Tank>()
+            .iter()
+            .filter(|t| t.is_wreck() && !t.is_dead())
+            .map(|t| (t.position, t.wreck_timer))
+            .collect()
+    }
+
+    /// Every prop currently being ground down under a tank's tracks, with
+    /// how far into its collapse it is.
+    pub fn ramming_tiles(&self) -> Vec<(Position, f32)> {
+        self.world
+            .query::<&Obstacle>()
+            .iter()
+            .filter(|o| o.ram_timer > 0.0 && !o.destroyed)
+            .map(|o| (o.position, o.ram_timer))
+            .collect()
+    }
+
     pub fn tank_snapshots(&self) -> Vec<TankSnapshot> {
         let player = self.player.expect("player entity spawned in init");
         self.world
@@ -2187,6 +2358,7 @@ fn lay_tracks(tracks: &mut Vec<Track>, tank: &mut Tank, before: Position) {
             scale,
             max_opacity,
             age: 0.0,
+            scorched: false,
         });
         tank.track_mark_count += 1;
     }

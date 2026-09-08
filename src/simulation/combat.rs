@@ -24,7 +24,7 @@ use crate::{
 
 use super::hits::ShellTarget;
 use super::props::DamageCause;
-use super::{with_frog_mut, Event, Frame, Game, HitTarget};
+use super::{SHOCK_FROG, with_frog_mut, Event, Frame, Game, HitTarget};
 
 /// One explosion's numbers - a tank wreck's or a barrel's - so
 /// `explosion_hit` serves both.
@@ -137,7 +137,7 @@ impl Game {
                     }
                 };
                 if dead {
-                    f.shock = Some(Shockwave { center: pos, time: 0.0 });
+                    f.shocks.push(Shockwave::scaled(pos, SHOCK_FROG));
                 } else if let (true, Some(away)) = (can_hop, effects.frog_hop) {
                     let obstacles = f.terrain.obstacle_centers();
                     let landing = frog_hop_target(&mut f.rng, pos, away, hop_distance, &obstacles, f.width, f.height);

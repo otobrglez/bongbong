@@ -6,6 +6,13 @@ use std::collections::HashSet;
 
 use crate::{
     OBSTACLE_GRID_SIZE,
+    RUBBLE_ROW_BARREL,
+    RUBBLE_ROW_BRICK,
+    RUBBLE_ROW_FENCE,
+    RUBBLE_ROW_GLASS,
+    RUBBLE_ROW_SANDBAG,
+    RUBBLE_ROW_WOOD,
+    RUBBLE_ROW_WOOD_CHARRED,
     OBSTACLE_HULL_FRACTION,
     OBSTACLE_SCALE,
     OBSTACLE_TEXTURE_SIZE,
@@ -55,7 +62,7 @@ impl Material {
 
     /// First row in this material's own sheet (see `sheet`) its variants
     /// start at.
-    fn row_base(self) -> i32 {
+    pub(crate) fn row_base(self) -> i32 {
         match self {
             Material::Brick => 0,
             Material::Iron => 4,
@@ -113,6 +120,24 @@ impl Material {
             Material::Sandbag => 3,
             Material::Barrel => 3,
             Material::Fence => 2,
+        }
+    }
+
+    /// The rubble row on `walls_sheet.png` this material leaves on the
+    /// ground when it dies, if any (`decal::Decal`, `RUBBLE_ROW_*`).
+    /// `charred` picks wood's burnt-out ash over its splintered boards.
+    ///
+    /// `None` only for Iron, which never dies. Every rubble row lives on
+    /// the walls sheet, the props' included - see `RUBBLE_ROW_SANDBAG`.
+    pub fn rubble_row(self, charred: bool) -> Option<i32> {
+        match self {
+            Material::Brick => Some(RUBBLE_ROW_BRICK),
+            Material::Wood => Some(if charred { RUBBLE_ROW_WOOD_CHARRED } else { RUBBLE_ROW_WOOD }),
+            Material::Glass => Some(RUBBLE_ROW_GLASS),
+            Material::Sandbag => Some(RUBBLE_ROW_SANDBAG),
+            Material::Barrel => Some(RUBBLE_ROW_BARREL),
+            Material::Fence => Some(RUBBLE_ROW_FENCE),
+            Material::Iron => None,
         }
     }
 
@@ -396,7 +421,7 @@ fn source_rec(row: i32, col: i32) -> Rectangle {
     )
 }
 
-fn texture_for<'a>(textures: &ObstacleTextures<'a>, material: Material) -> &'a Texture2D {
+pub(crate) fn texture_for<'a>(textures: &ObstacleTextures<'a>, material: Material) -> &'a Texture2D {
     match material.sheet() {
         Sheet::Walls => textures.walls,
         Sheet::Props => textures.props,

@@ -20,10 +20,35 @@ use crate::{
 /// A cosmetic seed for the blast at `center`: picks flips, rotations and
 /// the scorch variant. Hashed from the position rather than rolled.
 pub fn seed_for(center: Position) -> u32 {
-    (center.x as i32 as u32)
+    seed_at(center, 0)
+}
+
+/// `seed_for` with a salt, so several cosmetic choices made at one
+/// position get independent seeds without any of them drawing RNG - a
+/// dying tile picks its rubble variant, its mirror and its quarter-turn
+/// from three different salts at the same centre.
+pub fn seed_at(center: Position, salt: u32) -> u32 {
+    let h = (center.x as i32 as u32)
         .wrapping_mul(73_856_093)
+        .wrapping_add(salt.wrapping_mul(83_492_791))
         .wrapping_add(1)
-        ^ (center.y as i32 as u32).wrapping_mul(19_349_663)
+        ^ (center.y as i32 as u32).wrapping_mul(19_349_663);
+    avalanche(h)
+}
+
+/// Spread a hash's entropy over all 32 bits. Everything here sits on a
+/// 32px grid, so both coordinates are multiples of 32 and the products
+/// above have five zero low bits - which is exactly where callers look
+/// when they take `seed & 1` for a mirror or `seed % N` for a variant.
+/// Without this every grid-aligned decal in a round picked the same
+/// mirror, the same quarter-turn and the same cell.
+fn avalanche(mut h: u32) -> u32 {
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x7feb_352d);
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x846c_a68b);
+    h ^= h >> 16;
+    h
 }
 
 /// One in-flight barrel detonation sprite, oldest first in `Game::blast_fx`.
@@ -32,11 +57,21 @@ pub struct BlastFx {
     /// Seconds since it went off.
     pub time: f32,
     pub seed: u32,
+    /// Multiplier on `blast_anim_scale` and the glow radius - 1.0 for a
+    /// barrel or a dying tank, smaller for a cook-off secondary.
+    pub scale: f32,
 }
 
 impl BlastFx {
     pub fn new(center: Position) -> Self {
-        BlastFx { center, time: 0.0, seed: seed_for(center) }
+        BlastFx { center, time: 0.0, seed: seed_for(center), scale: 1.0 }
+    }
+
+    /// A scaled-down fireball for a wreck's ammo cooking off: the same
+    /// animation, drawn smaller so a secondary reads as a pop rather than
+    /// as a second tank dying.
+    pub fn small(center: Position) -> Self {
+        BlastFx { center, time: 0.0, seed: seed_for(center), scale: tuning().cookoff_blast_scale }
     }
 
     /// The frame to show now, clamped so a live change to `blast_anim_fps`
@@ -71,7 +106,7 @@ pub fn draw_blast(d: &mut impl RaylibDraw, texture: &Texture2D, b: &BlastFx) {
     let cell = BARREL_EXPLOSION_TEXTURE_SIZE;
     let flip = if b.seed & 1 != 0 { -1.0 } else { 1.0 };
     let src = Rectangle::new(b.frame() as f32 * cell, 0.0, cell * flip, cell);
-    let size = cell * tuning().blast_anim_scale;
+    let size = cell * tuning().blast_anim_scale * b.scale;
     let dest = Rectangle::new(b.center.x, b.center.y, size, size);
     d.draw_texture_pro(texture, src, dest, Vector2::new(size / 2.0, size / 2.0), 0.0, Color::WHITE);
 }
@@ -85,18 +120,58 @@ pub fn draw_blast_glow(d: &mut impl RaylibDraw, b: &BlastFx) {
         return;
     }
     let k = 1.0 - b.time / seconds;
-    let r = tuning().blast_glow_radius * (0.6 + 0.8 * (1.0 - k));
+    let r = tuning().blast_glow_radius * b.scale * (0.6 + 0.8 * (1.0 - k));
     let a = (255.0 * tuning().blast_glow_strength * k) as u8;
-    d.draw_circle_v(b.center, r, Color::new(255, 150, 60, a));
-    d.draw_circle_v(b.center, r * 0.45, Color::new(255, 230, 170, a));
+    pixel_disc(d, b.center, r, Color::new(255, 150, 60, a));
+    pixel_disc(d, b.center, r * 0.45, Color::new(255, 230, 170, a));
 }
+
+/// A filled disc built out of whole `GLOW_BLOCK` blocks, one scanline of
+/// blocks at a time.
+///
+/// Every sprite in the game lands on a 2-screen-pixel block (tanks draw a
+/// 32px tile at scale 2; the wall sheet bakes the same chunkiness in), so
+/// a smooth `draw_circle_v` here reads as a different, softer game layered
+/// over this one - and the blast glow is the largest thing on screen when
+/// it plays. Stepping the edge is the whole point: the visible staircase
+/// is what makes it look drawn.
+pub fn pixel_disc(d: &mut impl RaylibDraw, center: Position, radius: f32, color: Color) {
+    if radius < GLOW_BLOCK {
+        return;
+    }
+    // Snap the centre too, so a disc does not shimmer between block
+    // alignments as whatever it is attached to moves.
+    let cx = (center.x / GLOW_BLOCK).round() * GLOW_BLOCK;
+    let cy = (center.y / GLOW_BLOCK).round() * GLOW_BLOCK;
+    let rows = (radius / GLOW_BLOCK).floor() as i32;
+    for row in -rows..=rows {
+        let dy = row as f32 * GLOW_BLOCK;
+        let half = (radius * radius - dy * dy).max(0.0).sqrt();
+        let cols = (half / GLOW_BLOCK).floor() as i32;
+        if cols <= 0 {
+            continue;
+        }
+        let w = (cols * 2 + 1) as f32 * GLOW_BLOCK;
+        d.draw_rectangle(
+            (cx - cols as f32 * GLOW_BLOCK - GLOW_BLOCK / 2.0) as i32,
+            (cy + dy - GLOW_BLOCK / 2.0) as i32,
+            w as i32,
+            GLOW_BLOCK as i32,
+            color,
+        );
+    }
+}
+
+/// The block size every glow here quantises to - the same 2 screen pixels
+/// one source pixel of every sprite in the game covers.
+const GLOW_BLOCK: f32 = 2.0;
 
 /// The pulsing glow on a barrel whose fuse is lit (additive, like the
 /// bloom). `time` is the round clock, only used to phase the pulse.
 pub fn draw_fuse_glow(d: &mut impl RaylibDraw, center: Position, time: f32) {
     let pulse = 0.5 + 0.5 * (time * 50.0).sin();
     let a = (255.0 * tuning().barrel_fuse_glow_strength * pulse) as u8;
-    d.draw_circle_v(center, 22.0, Color::new(255, 120, 40, a));
+    pixel_disc(d, center, 22.0, Color::new(255, 120, 40, a));
 }
 
 /// The scorch decal, variant/mirror/quarter-turn picked by the seed (90

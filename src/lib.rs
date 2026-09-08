@@ -433,6 +433,42 @@ pub const SCORCH_VARIANTS: i32 = 3;
 // barrels doesn't accumulate an unbounded decal list.
 pub const SCORCH_MAX: usize = 64;
 
+// Same ring-buffer cap for the rubble a destroyed tile leaves behind
+// (`decal::Decal`). Higher than SCORCH_MAX because every wall death makes
+// one, not just the explosive ones, and a long round can level a fortress.
+pub const DECAL_MAX: usize = 256;
+
+// How many shockwaves can be live at once. This is the shock shader's
+// uniform-array length (static/shockwave.fs and its web port), i.e. layout
+// rather than a feel knob, which is why it lives here and not in tuning.rs.
+// Four is enough for a tank dying inside a barrel cascade; past that the
+// weakest are dropped (`Shockwave::remaining`).
+pub const SHOCK_MAX: usize = 4;
+
+// Rubble rows on walls_sheet.png, after every material's own block so
+// nothing above needs renumbering (docs/WALLS_SPEC.md). One row per kind
+// of leftover, RUBBLE_VARIANTS columns each, coverage ramping from a few
+// scattered chips at column 0 to a dense pile at the last - so a levelled
+// wall gets sparse and heavy patches instead of one repeated texture.
+// `Material::rubble_row` maps a material onto these; with `draw_decal`'s
+// mirror and quarter-turn that is 8 x 8 apparent forms per material.
+pub const RUBBLE_VARIANTS: i32 = 8;
+pub const RUBBLE_ROW_BRICK: i32 = 14;
+pub const RUBBLE_ROW_WOOD: i32 = 15;
+pub const RUBBLE_ROW_WOOD_CHARRED: i32 = 16;
+pub const RUBBLE_ROW_GLASS: i32 = 17;
+// The props leave rubble on the *walls* sheet too, not on their own: the
+// rubble block is one contiguous thing and props_sheet.png has neither the
+// spare columns nor a reason to grow. `decal::draw_decal` therefore always
+// samples `ObstacleTextures::walls`, whatever material died.
+pub const RUBBLE_ROW_SANDBAG: i32 = 18;
+pub const RUBBLE_ROW_BARREL: i32 = 19;
+pub const RUBBLE_ROW_FENCE: i32 = 20;
+// Blown-off tank parts. Not reachable through `Material::rubble_row` -
+// a tank is not an obstacle - so `simulation::Game::wreck_fx` names this
+// row directly.
+pub const RUBBLE_ROW_TANK: i32 = 21;
+
 // Ground/terrain layer (grass base, road painted under every static
 // obstacle tile and every cell a map explicitly marks as road) - see
 // ground.rs for the placement/autotile logic, docs/GROUND_SPEC.md for the
@@ -665,11 +701,13 @@ pub mod bullet;
 #[cfg(feature = "dev-tools")]
 pub mod capi;
 pub mod damage_stage;
+pub mod decal;
 #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
 pub mod devserver;
 #[cfg(feature = "map-editor")]
 pub mod editor;
 pub mod frog;
+pub mod fx;
 pub mod game;
 pub mod ground;
 pub mod laser;

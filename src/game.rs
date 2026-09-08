@@ -13,6 +13,7 @@ use crate::damage_stage::draw_damage;
 use crate::frog::{Frog, FrogVariantTextures, draw_frog, draw_frog_ring};
 use crate::laser::draw_laser_beam;
 use crate::blast::{draw_blast, draw_blast_glow, draw_fuse_glow, draw_scorch};
+use crate::decal::{draw_decal, draw_decal_shadow};
 use crate::obstacle::{Material, Obstacle, ObstacleTextures, draw_obstacle, draw_obstacle_shadow, fence_axis};
 use std::collections::HashSet;
 use crate::pickup::{Pickup, PickupKind, draw_pickup};
@@ -30,6 +31,7 @@ use crate::tank::{
 };
 use crate::track::draw_track;
 use crate::{
+    SHOCK_MAX,
     HEALTH_BAR_CELL_SIZE,
     HEALTH_BAR_COLUMNS,
     HEALTH_BAR_HUD_SCALE,
@@ -90,6 +92,10 @@ pub struct Effects<'a> {
     pub shock: &'a mut RippleFx,
     pub muzzle: &'a mut RippleFx,
     pub impact: &'a mut RippleFx,
+    /// The short-lived particle layer. Owned by `main.rs`, not by `Game`
+    /// (see `fx.rs`), and read-only here - `render` never mutates it, the
+    /// same contract it has with `Game`.
+    pub fx: &'a crate::fx::Fx,
 }
 
 impl Game {
@@ -104,6 +110,10 @@ impl Game {
     ) {
         let screen_width = rl.get_screen_width();
         let screen_height = rl.get_screen_height();
+        // Must be read off the handle out here: the draw closures below
+        // borrow it, and the dev label needs the number.
+        #[cfg(feature = "dev-tools")]
+        let frame_ms = rl.get_frame_time() * 1000.0;
         let player = self.player.expect("player entity spawned in init");
 
         // Precompute the bottom-right version/build HUD (text width must be
@@ -252,6 +262,14 @@ impl Game {
             }
 
             let obstacle_textures = ObstacleTextures { walls: textures.obstacles, props: textures.props };
+            // Rubble from tiles that died this round: above the burn marks
+            // (a barrel that took a wall with it scorched the ground first)
+            // but under everything that still stands, so a wall built over
+            // old rubble still reads as solid.
+            for decal in self.decals.iter().filter(|dc| dc.landed()) {
+                draw_decal(&mut d, &obstacle_textures, decal);
+            }
+
             let fences: HashSet<(i32, i32)> = self
                 .world
                 .query::<&Obstacle>()
@@ -372,20 +390,44 @@ impl Game {
             for blast in &self.blast_fx {
                 draw_blast(&mut d, textures.barrel_explosion, blast);
             }
+
+            // Parts still in the air, last of all: a chunk of hull thrown
+            // off a wreck passes over tanks and shells, not under them.
+            // Their shadows go down first so no piece is drawn over
+            // another's shadow.
+            let obstacle_textures = ObstacleTextures { walls: textures.obstacles, props: textures.props };
+            if self.shadows_enabled {
+                for decal in self.decals.iter().filter(|dc| !dc.landed()) {
+                    draw_decal_shadow(&mut d, decal);
+                }
+            }
+            for decal in self.decals.iter().filter(|dc| !dc.landed()) {
+                draw_decal(&mut d, &obstacle_textures, decal);
+            }
+
+            // Sparks, chips, dust and smoke over the top of everything in
+            // the scene, but still inside pass 1 so an in-flight shockwave
+            // warps them and the camera shake carries them along.
+            effects.fx.draw(&mut d);
         });
 
         // If a shockwave is playing, push its current center/time to the shader
         // before the blit below samples through it.
-        if let Some(shock) = &self.shock {
-            let uv = screen_to_ripple_uv(shock.center, screen_width as f32, screen_height as f32);
-            effects
-                .shock
-                .shader
-                .set_shader_value(effects.shock.center_loc, uv);
-            effects
-                .shock
-                .shader
-                .set_shader_value(effects.shock.time_loc, shock.time);
+        // Every live ripple goes up as one set of arrays and resolves in a
+        // single blit below - see static/shockwave.fs for why N passes
+        // would be both wrong and slower. Unused slots carry gain 0.
+        if !self.shocks.is_empty() {
+            let mut centers = [Vector2::new(0.0, 0.0); SHOCK_MAX];
+            let mut times = [0.0f32; SHOCK_MAX];
+            let mut gains = [0.0f32; SHOCK_MAX];
+            for (i, shock) in self.shocks.iter().take(SHOCK_MAX).enumerate() {
+                centers[i] = screen_to_ripple_uv(shock.center, screen_width as f32, screen_height as f32);
+                times[i] = shock.time;
+                gains[i] = shock.strength;
+            }
+            effects.shock.shader.set_shader_value_v(effects.shock.centers_loc, &centers);
+            effects.shock.shader.set_shader_value_v(effects.shock.times_loc, &times);
+            effects.shock.shader.set_shader_value_v(effects.shock.gains_loc, &gains);
         }
 
         // The render texture is stored upside-down relative to the screen; a
@@ -409,21 +451,43 @@ impl Game {
         // Muzzle/impact flash quads and the HUD deliberately aren't shifted:
         // they're either their own small on-screen quad or meant to stay put.
         let mut blit_offset = Vector2::new(0.0, 0.0);
-        if let Some(shock) = &self.shock {
-            let decay = (1.0 - shock.time / tuning().camera_shake_duration).max(0.0);
-            if decay > 0.0 {
-                let t = shock.time * tuning().camera_shake_frequency;
-                blit_offset = Vector2::new(
-                    t.sin() * tuning().camera_shake_magnitude * decay,
-                    (t * 1.3 + 1.7).sin() * tuning().camera_shake_magnitude * decay,
-                );
+        for shock in &self.shocks {
+            let decay = (1.0f32 - shock.time / tuning().camera_shake_duration).max(0.0);
+            if decay <= 0.0 {
+                continue;
             }
+            let mag = tuning().camera_shake_magnitude * shock.strength * decay;
+            // Phase each one off its own position hash so several
+            // overlapping shakes interfere instead of beating in lockstep
+            // and doubling cleanly. Still a pure draw pass, still no rng -
+            // see the comment above.
+            let phase = (crate::blast::seed_for(shock.center) % 628) as f32 * 0.01;
+            let t = shock.time * tuning().camera_shake_frequency + phase;
+            blit_offset.x += t.sin() * mag;
+            blit_offset.y += (t * 1.3 + 1.7).sin() * mag;
         }
+        // Without a ceiling, three kills at once throw the composited scene
+        // far enough off that the screen edge shows through as black.
+        let cap = tuning().camera_shake_magnitude * tuning().camera_shake_max_stack;
+        let len = (blit_offset.x * blit_offset.x + blit_offset.y * blit_offset.y).sqrt();
+        if len > cap && len > 0.0 {
+            blit_offset.x *= cap / len;
+            blit_offset.y *= cap / len;
+        }
+        // Snap the shake to whole 2px blocks. This offset moves the entire
+        // composited scene, so at a fractional value every pixel in the
+        // game samples between texels for the duration of the shake and
+        // the whole screen shimmers - the same defect a sub-pixel particle
+        // has, at the scale of everything at once. Blocks keep the art
+        // crisp and make the shake read as a hard jolt rather than a
+        // wobble.
+        blit_offset.x = (blit_offset.x / 2.0).round() * 2.0;
+        blit_offset.y = (blit_offset.y / 2.0).round() * 2.0;
 
         rl.draw(thread, |mut d| {
             d.clear_background(Color::BLACK);
 
-            if self.shock.is_some() {
+            if !self.shocks.is_empty() {
                 d.draw_shader_mode(&mut effects.shock.shader, |mut sd| {
                     sd.draw_texture_rec(&*scene_target, source, blit_offset, Color::WHITE);
                 });
@@ -555,7 +619,15 @@ impl Game {
                     } else {
                         "custom"
                     };
-                    let label = format!("DEV overlays: {preset} (I cycles)");
+                    // Frame time and live particle count ride the same
+                    // label: the FX budget has to hold on the wasm build,
+                    // and without a number on screen that is an assertion
+                    // nobody can check while playing.
+                    let label = format!(
+                        "DEV overlays: {preset} (I cycles)  |  {:.1} ms  {} fx",
+                        frame_ms,
+                        effects.fx.live(),
+                    );
                     const LABEL_FONT_SIZE: i32 = if HUD_FONT_SIZE / 2 < 14 { HUD_FONT_SIZE / 2 } else { 14 };
                     let label_y = HUD_MARGIN + HUD_FONT_SIZE + 6;
                     // Same 8px/char width estimate as `draw_tank_inspect`'s

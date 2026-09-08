@@ -9,6 +9,7 @@ use rapier2d::prelude::RigidBodyHandle;
 
 use crate::ai::Ai;
 use crate::blast::{BlastFx, Scorch};
+use crate::decal::Decal;
 use crate::frog::Frog;
 use crate::obstacle::{Material, Obstacle};
 use crate::shockwave::Shockwave;
@@ -16,7 +17,22 @@ use crate::tank::Tank;
 use crate::{OBSTACLE_GRID_SIZE, Position};
 
 use super::combat::{explosion_hit, BlastParams};
-use super::{Event, Frame, Game};
+use super::{Event, Frame, Game, SHOCK_BARREL, SHOCK_FROG};
+
+/// Everything `obstacle_died` needs to know about a tile that just died.
+/// Bundled rather than passed loose because each death path has the whole
+/// `&mut Obstacle` in hand and can fill it in one go, and because a
+/// death now carries more than a position: `charred` picks which rubble
+/// a burnt-out plank leaves.
+pub(super) struct DeadTile {
+    pub material: Material,
+    pub position: Position,
+    /// Another blast set this one off, rather than a shot or a ram.
+    pub chained: bool,
+    /// Wood only: it burnt out rather than snapping, so it leaves the
+    /// charred cell instead of the destroyed one.
+    pub charred: bool,
+}
 
 /// What is damaging an obstacle - the fence and barrel rules differ by it.
 /// `Blast` carries the linear falloff at the victim (1 at the centre, 0 at
@@ -73,15 +89,25 @@ impl Game {
             (o.material, o.position, died)
         };
         if died {
-            self.obstacle_died(f, material, pos, false);
+            self.obstacle_died(f, DeadTile { material, position: pos, chained: false, charred: false });
         }
         died
     }
 
-    /// Record an obstacle's death; an explosive one queues its blast for
-    /// `explosions` to resolve this frame.
-    fn obstacle_died(&mut self, f: &mut Frame, material: Material, pos: Position, chained: bool) {
+    /// Record an obstacle's death and leave its rubble behind; an
+    /// explosive one queues its blast for `explosions` to resolve this
+    /// frame. Every tile death in the game funnels through here - a shot,
+    /// a ram, a blast, a lit fuse and a burnt-out plank all arrive at this
+    /// one place - so it is the only spot that has to know what a dead
+    /// tile leaves on the ground.
+    fn obstacle_died(&mut self, f: &mut Frame, tile: DeadTile) {
+        let DeadTile { material, position: pos, chained, charred } = tile;
         f.events.push(Event::ObstacleDestroyed { material, x: pos.x, y: pos.y });
+        // Materials with no terminal sheet cell (Iron, and the props)
+        // leave nothing here; props get purpose-drawn wreckage instead.
+        if let Some(decal) = Decal::new(material, pos, charred) {
+            f.decals.push(decal);
+        }
         if material.is_explosive() {
             f.events.push(Event::Blast { x: pos.x, y: pos.y, chained });
             f.pending_blasts.push(pos);
@@ -122,7 +148,7 @@ impl Game {
                 }
             }
             for pos in dead_frogs {
-                f.shock = Some(Shockwave { center: pos, time: 0.0 });
+                f.shocks.push(Shockwave::scaled(pos, SHOCK_FROG));
             }
             // Collect first: `damage_obstacle` needs the world free.
             let hits: Vec<(Entity, Material, f32)> = self
@@ -141,8 +167,8 @@ impl Game {
                 self.damage_obstacle(f, entity, amount, DamageCause::Blast(falloff));
             }
         }
-        f.shock = Some(Shockwave { center, time: 0.0 });
-        f.impact_flashes.push(Shockwave { center, time: 0.0 });
+        f.shocks.push(Shockwave::scaled(center, SHOCK_BARREL));
+        f.impact_flashes.push(Shockwave::new(center));
         f.blast_fx.push(BlastFx::new(center));
         f.scorches.push(Scorch::new(center));
     }
@@ -150,6 +176,29 @@ impl Game {
     /// Count every lit fuse down; a barrel whose fuse runs out dies and
     /// queues its own blast (`chained`), which `explosions` resolves this
     /// same frame so the cascade keeps going.
+    /// Advance every burning wood tile's fire and report the ones that
+    /// finish charring. Wood is the only material with a death that does
+    /// not go through `damage_obstacle`: `Obstacle::tick_burn` sets
+    /// `destroyed` itself once `wood_burn_seconds` are up. Routing that
+    /// through `obstacle_died` is what makes a burnt-out tile announce
+    /// itself like every other tile death - without it `cleanup_done`
+    /// simply despawned it and nothing downstream (the event log, the
+    /// dev server, debris) ever heard. Collects first, exactly like
+    /// `tick_fuses`, because `obstacle_died` needs the world free.
+    pub(super) fn tick_burns(&mut self, f: &mut Frame) {
+        let mut charred = Vec::new();
+        for o in self.world.query::<&mut Obstacle>().iter() {
+            let was_destroyed = o.destroyed;
+            o.tick_burn(f.dt);
+            if o.destroyed && !was_destroyed {
+                charred.push((o.material, o.position));
+            }
+        }
+        for (material, position) in charred {
+            self.obstacle_died(f, DeadTile { material, position, chained: false, charred: true });
+        }
+    }
+
     pub(super) fn tick_fuses(&mut self, f: &mut Frame) {
         let mut popped = Vec::new();
         for o in self.world.query::<&mut Obstacle>().iter() {
@@ -160,8 +209,8 @@ impl Game {
                 popped.push((o.material, o.position));
             }
         }
-        for (material, pos) in popped {
-            self.obstacle_died(f, material, pos, true);
+        for (material, position) in popped {
+            self.obstacle_died(f, DeadTile { material, position, chained: true, charred: false });
         }
     }
 

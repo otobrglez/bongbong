@@ -328,3 +328,154 @@ fn a_map_without_props_spawns_the_same_round_it_always_did() {
     };
     assert!(run(21) == run(21));
 }
+
+#[test]
+fn a_wood_tile_that_burns_out_reports_its_destruction() {
+    // Wood is the one material with two death paths: `damage_obstacle` kills
+    // it outright when it is not flammable, and `Obstacle::tick_burn` chars
+    // it out after `wood_burn_seconds` when it is. Both have to announce the
+    // death, or the one material that dies by fire is also the one that
+    // silently leaves nothing behind for the debris to hang off.
+    // `wood_flammable_chance` is rolled at spawn and tests cannot touch the
+    // tuning table, so sweep seeds and assert only on the rounds that
+    // actually caught fire.
+    let map = map_with("cells.\"20,11\" = { kind = \"wall\", material = \"wood\" }\n");
+    let mut burned = 0;
+    for seed in 1..=20u64 {
+        let mut game = game_on(&map, seed);
+        game.debug_teleport(0, cell_to_world(20, 15), Some(0.0)).unwrap();
+        step(&mut game, fire());
+        // Watch the whole burn through, frame by frame: the tile is
+        // despawned the frame it chars out, so a settle loop longer than
+        // `wood_burn_seconds` would find nothing left to inspect.
+        let mut lit = false;
+        let mut reported = false;
+        for _ in 0..300 {
+            step(&mut game, Input::default());
+            lit |= game.world.query::<&Obstacle>().iter().any(|o: &Obstacle| o.burning);
+            reported |= game
+                .events()
+                .iter()
+                .any(|e| matches!(e, Event::ObstacleDestroyed { material: Material::Wood, .. }));
+        }
+        if !lit {
+            continue; // not flammable this seed: it died outright
+        }
+        burned += 1;
+        assert!(reported, "seed {seed}: a wood tile burnt out without an ObstacleDestroyed event");
+    }
+    assert!(burned > 0, "no seed lit a wood tile - the test proved nothing");
+}
+
+#[test]
+fn a_destroyed_wall_leaves_rubble_where_it_stood() {
+    // Brick, wood and glass each have a terminal sheet cell that is never
+    // drawn while the tile is alive, so a dead tile leaves it behind at no
+    // art cost.
+    for material in [Material::Brick, Material::Glass] {
+        let kind = if material == Material::Brick { "brick" } else { "glass" };
+        let map = map_with(&format!("cells.\"20,11\" = {{ kind = \"wall\", material = \"{kind}\" }}\n"));
+        let mut game = game_on(&map, 1);
+        game.debug_teleport(0, cell_to_world(20, 15), Some(0.0)).unwrap();
+        for _ in 0..8 {
+            if alive_obstacles(&game) == 8 {
+                break;
+            }
+            shoot(&mut game, 90);
+        }
+        assert_eq!(alive_obstacles(&game), 8, "{material:?} tile never died");
+        assert_eq!(game.decals.len(), 1, "{material:?} left exactly one piece of rubble");
+        let decal = &game.decals[0];
+        assert_eq!(Some(decal.row), material.rubble_row(false), "the rubble remembers what died");
+        assert_eq!(decal.center, cell_to_world(20, 11), "rubble sits where the tile stood");
+        assert!((0..crate::RUBBLE_VARIANTS).contains(&decal.col), "picks one of the row's variants");
+    }
+
+    // Every destructible material leaves something; Iron is the one that
+    // never dies, so it is the only one with no rubble row at all.
+    for material in [Material::Sandbag, Material::Barrel, Material::Fence] {
+        assert!(material.rubble_row(false).is_some(), "{material:?} leaves rubble too");
+    }
+    assert!(Material::Iron.rubble_row(false).is_none(), "iron never dies, so it never leaves rubble");
+}
+
+#[test]
+fn rubble_varies_from_tile_to_tile() {
+    // The whole point of the rubble rows is that a levelled wall does not
+    // read as a grid of clones, so neighbouring tiles must not all land on
+    // the same cell and orientation. Both are position-hashed, so this is
+    // a property of the hash rather than of any round - check a wall-sized
+    // run of cells directly.
+    use crate::decal::Decal;
+    let forms: std::collections::HashSet<(i32, u32)> = (0..24)
+        .map(|i| {
+            let d = Decal::new(Material::Brick, cell_to_world(5 + i % 12, 5 + i / 12), false).expect("brick leaves rubble");
+            (d.col, d.seed % 8)
+        })
+        .collect();
+    assert!(forms.len() >= 12, "24 adjacent tiles produced only {} distinct rubble forms", forms.len());
+}
+
+#[test]
+fn a_dying_tank_throws_wreckage_and_cooks_off() {
+    // A barrel used to be the more dramatic of the two deaths: it got a
+    // fireball, a screen flash and a scorch while a dying tank got only the
+    // shockwave. A kill now lays down all three plus its own thrown parts
+    // and a set of delayed pops.
+    let mut game = game_on(&map_with(""), 5);
+    let scorches_before = game.scorches.len();
+    game.debug_kill(1).expect("enemy in slot 1 dies");
+    step(&mut game, Input::default());
+
+    assert!(!game.blast_fx.is_empty(), "a dying tank throws a fireball");
+    assert!(game.scorches.len() > scorches_before, "and leaves a scorch under the hull");
+    assert!(!game.impact_flashes.is_empty(), "and flashes");
+    assert_eq!(game.decals.len(), tuning().wreck_parts as usize, "and throws its parts");
+    assert!(game.decals.iter().all(|d| !d.landed()), "which are still in the air the frame it dies");
+    assert_eq!(game.cookoffs.len(), tuning().cookoff_count as usize, "with its ammo queued to cook off");
+
+    // The parts land where they were always going to land, and only then
+    // settle onto the ground.
+    let targets: Vec<Position> = game.decals.iter().map(|d| d.center).collect();
+    for _ in 0..90 {
+        step(&mut game, Input::default());
+    }
+    assert!(game.decals.iter().all(|d| d.landed()), "the parts settle");
+    assert_eq!(game.decals.iter().map(|d| d.center).collect::<Vec<_>>(), targets, "landing spots never moved");
+    assert!(
+        game.events().iter().any(|e| matches!(e, Event::CookOff { .. }))
+            || game.cookoffs.len() < tuning().cookoff_count as usize,
+        "the secondaries fire after the kill"
+    );
+}
+
+#[test]
+fn overlapping_shocks_are_capped_and_keep_the_hardest_hit() {
+    // `Game::shock` used to be one slot, last-write-wins, so a chained
+    // barrel cascade showed a single ripple and a tank dying inside it
+    // simply vanished. Several now play at once, capped at the shader's
+    // array length, and eviction sorts on `remaining` - strength faded by
+    // age - so it is the weakest that go rather than the oldest. Evicting
+    // by age would throw away the kill that set the cascade off.
+    let kill = Shockwave::scaled(Position::new(0.0, 0.0), SHOCK_KILL);
+    let pop = Shockwave::scaled(Position::new(0.0, 0.0), SHOCK_COOKOFF);
+    assert!(kill.remaining() > pop.remaining(), "a kill outranks a cook-off pop");
+    let mut spent = Shockwave::scaled(Position::new(0.0, 0.0), SHOCK_KILL);
+    spent.time = tuning().shockwave_duration;
+    assert_eq!(spent.remaining(), 0.0, "and a finished one outranks nothing");
+
+    // More simultaneous kills than the shader has slots for.
+    let map = map_with("");
+    let mut game = Game::default();
+    game.enemy_count_override = Some(SHOCK_MAX + 3);
+    game.seed_override = Some(9);
+    game.player_row_override = Some(0);
+    game.map = MapFile::from_toml_str(&map).expect("test map parses");
+    game.init(W, H);
+    for slot in 1..=SHOCK_MAX + 3 {
+        let _ = game.debug_kill(slot);
+    }
+    step(&mut game, Input::default());
+    assert_eq!(game.shocks.len(), SHOCK_MAX, "never more than the shader can take");
+    assert!(game.shocks.iter().all(|s| s.strength == SHOCK_KILL), "and they are all real kills");
+}

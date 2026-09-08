@@ -419,6 +419,18 @@ fn main() {
             duration: tuning().impact_flash_duration,
         },
     );
+    // The short-lived particle layer lives here rather than on `Game`:
+    // it is presentation only, so nothing in the simulation can see it and
+    // it is free to use `rand::rng()` (see fx.rs). The web build starts at
+    // a lower density - wasm is the tighter budget and a dense wave is
+    // where that shows.
+    let mut fx = bongbong::fx::Fx::default();
+    if cfg!(target_os = "emscripten") {
+        // A literal patch of one known knob: it cannot fail, and there is
+        // nothing sensible to do at startup if it somehow did.
+        let _ = tuning::submit_json(r#"{"fx_density": 0.5}"#);
+    }
+
     let mut scene_target = rl
         .load_render_texture(&thread, screen_width as u32, screen_height as u32)
         .expect("failed creating scene render texture");
@@ -571,6 +583,11 @@ fn main() {
         if !advanced {
             game.update(input, dt, width, height);
         }
+        // Between the update and the draw: the particle layer reads the
+        // frame's events and the world it just produced, then ages what is
+        // already in flight. Deliberately not inside `Game` - see fx.rs.
+        fx.observe(&game, dt);
+        fx.tick(dt);
         game.render(
             rl,
             thread,
@@ -579,6 +596,7 @@ fn main() {
                 shock: &mut shock_fx,
                 muzzle: &mut muzzle_fx,
                 impact: &mut impact_fx,
+                fx: &fx,
             },
             &Textures {
                 tanks: &tanks_texture,

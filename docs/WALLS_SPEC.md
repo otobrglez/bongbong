@@ -9,12 +9,29 @@ All destructible obstacles in one sheet. Unlike the tank and shell sheets, these
 | Property | Value |
 |---|---|
 | Filename | `walls_sheet.png` |
-| Dimensions | 256 × 448 px |
-| Grid | 8 columns × 14 rows |
+| Dimensions | 256 × 704 px |
+| Grid | 8 columns × 22 rows |
 | Cell size | 32 × 32 px (uniform, no padding) |
 | Format | PNG, RGBA, straight (non-premultiplied) alpha |
 
 Slice with `x = col * 32`, `y = row * 32`. Use **nearest-neighbour / point filtering**, no mipmaps, no compression.
+
+### Effective resolution: 16 × 16 per tile
+
+Cells are 32 × 32 px but the art is authored on a **2-px block grid**, so a
+tile carries 16 × 16 *design* pixels. That is deliberate: tanks draw a 32-px
+tile at `Tank::scale = 2.0` while obstacles draw theirs at
+`OBSTACLE_SCALE = 1.0`, so baking a 2× chunkiness into the art is what makes
+the two read at the same density without touching `OBSTACLE_GRID_SIZE`
+(which collider, pathfinding-cell and map-coordinate code all assume equals
+`OBSTACLE_TEXTURE_SIZE`).
+
+`gen_walls.py` enforces the grid at the source: every primitive writes a
+whole 2 × 2 block (`px()`/`GRID`), so the `pixelate()` pass at the end is a
+no-op that only confirms the invariant. **Design for 16 × 16.** A one-pixel
+feature at 32-px coordinates is half a design pixel and will either be
+rounded onto its block or merge with its neighbour — see the brick mortar
+note in §3 for what that costs when the geometry ignores it.
 
 ### Tiling contract
 
@@ -37,12 +54,48 @@ Column count varies by material. **Cells outside a material's range are empty** 
 | 4–7 | **Iron** | 0–3 | intact + 3 damage |
 | 8–11 | **Wood** | 0–7 | intact + 2 damage + destroyed + 3 burning + charred |
 | 12–13 | **Glass** | 0–3 | intact + 3 shatter |
+| 14 | **Rubble — brick** | 0–7 | 8 scatter variants, sparse → dense |
+| 15 | **Rubble — wood** | 0–7 | splintered boards, 8 variants |
+| 16 | **Rubble — wood, charred** | 0–7 | ash and embers, 8 variants |
+| 17 | **Rubble — glass** | 0–7 | shards, 8 variants |
+| 18 | **Rubble — sandbag** | 0–7 | spilled fill and torn hessian, 8 variants |
+| 19 | **Rubble — barrel** | 0–7 | twisted metal and burnt scrap, 8 variants |
+| 20 | **Rubble — fence** | 0–7 | snapped pickets and loose wire, 8 variants |
+| 21 | **Rubble — tank** | 0–7 | blown-off hull plate and track links, 8 variants |
 
 ```
 row_base:  brick = 0,  iron = 4,  wood = 8,  glass = 12
 row = row_base + variant_index
 col = state
+
+rubble:    row = Material::rubble_row(charred)   (RUBBLE_ROW_* in lib.rs)
+           col = position hash % RUBBLE_VARIANTS
 ```
+
+### Rubble rows (14–17)
+
+The one block here that is **not** full-bleed and **not** tiling: rubble is
+scattered debris over transparent ground, drawn by `decal::draw_decal` where
+a tile died. Iron is the only material with no row — it never dies.
+
+Row 21 is not reachable through `Material::rubble_row` at all — a tank is
+not an obstacle — so `simulation::Game::wreck_fx` names `RUBBLE_ROW_TANK`
+directly and throws several pieces of it out from the hull.
+
+**The props' rubble lives here too, not on `props_sheet.png`.** The rubble
+block is one contiguous thing and the props sheet has neither spare columns
+nor a reason to grow, so `draw_decal` always samples the walls atlas
+whatever material died.
+
+Two things stop a levelled wall reading as a grid of clones: eight distinct
+cells per row, picked per tile from a position hash, and the mirror plus
+quarter-turn `draw_decal` applies — 8 × 8 apparent forms per material.
+**Coverage ramps across the columns**, from a few scattered chips at column 0
+to a dense pile at column 7, so a large destroyed area gets sparse and heavy
+patches rather than one uniform texture.
+
+Appended after every material block deliberately: adding rows at the end
+renumbers nothing above, so `row_base` stays valid everywhere.
 
 ---
 
@@ -62,10 +115,16 @@ This is the same STONE family as `IRONS` below (`#7E7E7E`), brick just uses the 
 
 | Row | Type | Brick | Period | Pattern |
 |---|---|---|---|---|
-| 0 | `running` | 7 × 3 | 8 × 4 | Running bond |
-| 1 | `block` | 15 × 7 | 16 × 8 | Running bond, large blocks |
-| 2 | `long` | 15 × 3 | 16 × 4 | Long stretcher course |
-| 3 | `stacked` | 7 × 7 | 8 × 8 | Stack bond (aligned grid) |
+| 0 | `running` | 14 × 6 | 16 × 8 | Running bond |
+| 1 | `block` | 14 × 14 | 16 × 16 | Running bond, large blocks |
+| 2 | `long` | 30 × 6 | 32 × 8 | Long stretcher course |
+| 3 | `stacked` | 6 × 6 | 8 × 8 | Stack bond (aligned grid) |
+
+Sizes are in sheet pixels; the effective art grid is 2 px (see §1), so a
+`running` brick is 7 × 3 *design* pixels over a 1-px mortar joint. Every
+period is a multiple of 2×GRID and the joint is exactly one design pixel —
+a 4-px course (the pre-2026-09 `running`/`long` bond) puts the face and the
+seam in the same block, and the bond collapses into flat banding.
 
 | Col | State |
 |---|---|
@@ -89,9 +148,16 @@ All four share one Puny Palette steel tone, `#7E7E7E` (true neutral `STONE_DK`; 
 | Row | Type | Surface | Period |
 |---|---|---|---|
 | 4 | `riveted` | Flat plate, rivets on a 16 px lattice | 16 × 16 |
-| 5 | `corrugated` | Vertical ribbing | 4 × — |
-| 6 | `banded` | Horizontal reinforcing bands with rivets | 8 × 16 |
+| 5 | `corrugated` | Vertical ribbing, one lit + one shadowed design px per rib | 4 × — |
+| 6 | `banded` | Horizontal reinforcing bands (3 design px: lit / mid / shadowed) with rivets on the mid row | 8 × 16 |
 | 7 | `tread` | Diamond tread plate | 8 × 8 |
+
+A rivet is **two design pixels** — lit top-left, shadowed bottom-right, i.e.
+`GRID` apart, not 1 px apart. Anything drawn 1 px from its own highlight
+shares a block with it and simply overwrites it (see §1): before 2026-09 the
+rivets rendered as flat dark dots and `corrugated` rendered as a completely
+flat plate, because each treatment's highlight was being written into the
+same block as the line beside it.
 
 | Col | State | Rust patches |
 |---|---|---|

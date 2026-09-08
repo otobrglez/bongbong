@@ -36,7 +36,7 @@ use bongbong::Position;
 use bongbong::ai::Intent;
 use bongbong::map::MapFile;
 use bongbong::level::SpawnKind;
-use bongbong::simulation::{Game, Input, Outcome, TankSnapshot};
+use bongbong::simulation::{Event, Game, Input, Outcome, TankSnapshot};
 use bongbong::tank::{Dir, TankKind};
 use bongbong::{
     DEFAULT_SCREEN_HEIGHT,
@@ -258,6 +258,10 @@ const NAV_STRETCH_MAX: f32 = 4.0;
 // legitimate ram/explosion knockback spike.
 const INVARIANT_POS_MARGIN: f32 = 50.0; // px outside the walls' inner faces
 const INVARIANT_SPEED_MAX: f32 = 800.0; // px/s
+/// Stands in for a slot in the one-shot `invariant` flag set for the
+/// world-level rapier-quarantine check, which belongs to no tank. No owner
+/// slot can ever reach this value.
+const QUARANTINE_FLAG: usize = usize::MAX;
 
 #[derive(Clone, Copy, ValueEnum)]
 enum Scenario {
@@ -775,6 +779,17 @@ fn report(
     heat.push((kind.to_string(), pos));
 }
 
+/// Report an anomaly the world as a whole tripped rather than one tank at
+/// one place. Prints the same greppable ANOMALY line (with an empty
+/// `pos=`) but pushes nothing onto the heatmap, which buckets by position
+/// and has nowhere to put a world-level event.
+fn report_global(round: u32, seed: u64, frame: u32, kind: &str, detail: &str) {
+    println!(
+        "ANOMALY round={round} seed=0x{seed:016x} frame={frame:5} t={:6.2}s kind={kind:<12} tank=WORLD  pos=(     -,     -) {detail}",
+        frame as f32 * DT,
+    );
+}
+
 /// Display label for the enemy in owner slot `slot`: "ENEMY#k" with k the
 /// enemy ordinal `slot - 1` (owner slots count enemies from 1 and are
 /// never reused, so a wave tank arriving later gets a fresh number; the
@@ -828,6 +843,30 @@ fn check_anomalies(
     for tank in &snapshots {
         if !tank.is_player && !tank.entering && !tracks.contains_key(&tank.slot) {
             tracks.insert(tank.slot, TankTrack::new(game, tank, player_snap.position, frame));
+        }
+    }
+
+    // Rapier's own NaN quarantine (see `Physics::quarantined`) is the
+    // authoritative version of the per-tank check below: it fires inside
+    // the step that produced the non-finite state, and covers the wall,
+    // obstacle and frog bodies no tank snapshot ever shows. One-shot per
+    // round like every other kind, keyed by QUARANTINE_FLAG since it
+    // belongs to no slot.
+    if !invariant_flagged.contains(&QUARANTINE_FLAG) {
+        let (bodies, colliders) = game.events().iter().fold((0, 0), |(b, c), e| match e {
+            Event::PhysicsQuarantine { bodies, colliders } => (b + bodies, c + colliders),
+            _ => (b, c),
+        });
+        if bodies > 0 || colliders > 0 {
+            report_global(
+                round,
+                seed,
+                frame,
+                "invariant",
+                &format!("rapier quarantined {bodies} bodies / {colliders} colliders (non-finite state)"),
+            );
+            invariant_flagged.insert(QUARANTINE_FLAG);
+            totals.invariant += 1;
         }
     }
 

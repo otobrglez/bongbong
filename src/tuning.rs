@@ -294,8 +294,8 @@ tunables! {
     group round {
         /// Number of enemy tanks is randomized within this range each round
         /// (overridden by `--enemies`/the map's own `tanks` count).
-        enemy_count_min: usize = 3 in 0 ..= 30 @ Restart;
-        enemy_count_max: usize = 10 in 0 ..= 30 @ Restart;
+        enemy_count_min: usize = 4 in 0 ..= 30 @ Restart;
+        enemy_count_max: usize = 7 in 0 ..= 30 @ Restart;
         /// Enemies spawn in a band that's between these fractions of the
         /// shorter screen dimension away from the nearest edge of the
         /// battlefield - close enough to feel like they're closing in from
@@ -486,7 +486,7 @@ tunables! {
         /// Shell ammo: a tank holds up to this many shells (its magazine at
         /// spawn, and the passive-recharge cap) - a pickup is the only way
         /// past it.
-        max_shells: i32 = 12 in 1 ..= 100 @ Spawn;
+        max_shells: i32 = 20 in 1 ..= 100 @ Spawn;
         /// Recharge one shell every this many seconds while below
         /// `max_shells`.
         shell_recharge_seconds: f32 = 2.0 in 0.05 ..= 30.0;
@@ -961,6 +961,78 @@ tunables! {
         scorch_fade_in_seconds: f32 = 0.25 in 0.0 ..= 2.0;
         /// On-screen scale of the 64px scorch decal cells.
         scorch_scale: f32 = 2.0 in 0.5 ..= 4.0;
+        /// Opacity of the rubble a destroyed wall tile leaves behind
+        /// (`decal::Decal`). Below the tile it replaces, so a levelled
+        /// wall reads as ground the tank can drive over rather than as a
+        /// wall that stopped being solid.
+        decal_opacity: f32 = 0.45 in 0.0 ..= 1.0;
+        /// Seconds fresh rubble takes to fade in, so a tile doesn't snap
+        /// straight from standing to wreckage.
+        decal_fade_in_seconds: f32 = 0.18 in 0.0 ..= 2.0;
+        /// Seconds a blown-off part spends in the air before settling into
+        /// the landing spot the simulation already picked for it.
+        debris_flight_seconds: f32 = 0.5 in 0.05 ..= 3.0;
+        /// Peak height (px) of that arc, varied per piece by its position
+        /// hash. Not real height - the game is top-down, so this is a draw
+        /// offset plus a shrinking shadow.
+        debris_arc_height: f32 = 40.0 in 0.0 ..= 200.0;
+        /// Parts a dying tank throws, and how far they scatter.
+        wreck_parts: i32 = 7 in 0 ..= 32;
+        wreck_part_throw_px: f32 = 64.0 in 0.0 ..= 400.0;
+        /// Delayed secondary pops after a tank dies (ammo cooking off):
+        /// how many, spread over how long, and how big each fireball is
+        /// next to the main one.
+        cookoff_count: i32 = 3 in 0 ..= 12;
+        cookoff_window_seconds: f32 = 1.6 in 0.1 ..= 10.0;
+        cookoff_blast_scale: f32 = 0.55 in 0.1 ..= 2.0;
+        /// A dying tank burns its last tread marks into the ground: this
+        /// many of them stop fading and darken by this multiple, so the
+        /// kill site stays readable after the wreck is cleared.
+        wreck_track_marks: i32 = 10 in 0 ..= 64;
+        wreck_track_darken: f32 = 1.8 in 1.0 ..= 4.0;
+
+        // --- the short-lived particle layer (fx.rs) ---
+        /// Global multiplier on every particle count. `main.rs` starts the
+        /// web build lower: the wasm target is the tighter budget, and a
+        /// dense wave is where that shows.
+        fx_density: f32 = 1.0 in 0.0 ..= 3.0;
+        /// Hard cap on live particles; oldest are evicted first so a big
+        /// burst eats into old smoke rather than into itself.
+        fx_max_particles: i32 = 900 in 0 ..= 8000;
+        /// Downward acceleration on a chip's fake height, px/s^2.
+        debris_gravity: f32 = 900.0 in 0.0 ..= 4000.0;
+        /// Per-second rate at which a particle bleeds ground speed
+        /// (exponential, so it is frame-rate independent).
+        debris_air_drag: f32 = 2.4 in 0.0 ..= 20.0;
+        /// Fraction of vertical speed a chip keeps per ground bounce.
+        debris_bounce: f32 = 0.35 in 0.0 ..= 1.0;
+        spark_lifetime: f32 = 0.4 in 0.05 ..= 5.0;
+        chip_lifetime: f32 = 1.1 in 0.05 ..= 5.0;
+        dust_lifetime: f32 = 0.8 in 0.05 ..= 5.0;
+        smoke_lifetime: f32 = 2.2 in 0.05 ..= 20.0;
+        ember_lifetime: f32 = 0.9 in 0.05 ..= 10.0;
+        /// Upward drift of smoke and embers, and how fast a smoke puff
+        /// grows as it rises.
+        smoke_rise_speed: f32 = 26.0 in 0.0 ..= 200.0;
+        /// How fast a smoke puff grows, px/s. Rendered in whole 2px
+        /// blocks, so this reads as a few discrete steps up rather than a
+        /// smooth swell.
+        smoke_growth: f32 = 4.0 in 0.0 ..= 100.0;
+        smoke_opacity: f32 = 0.4 in 0.0 ..= 1.0;
+        /// Particles a destroyed tile throws; glass and sandbag add to it.
+        tile_burst_particles: i32 = 12 in 0 ..= 120;
+        /// Sparks a dying tank throws.
+        wreck_burst_particles: i32 = 26 in 0 ..= 200;
+        /// Embers and smoke a burning wood tile gives off per second.
+        wood_ember_rate: f32 = 20.0 in 0.0 ..= 200.0;
+        wood_smoke_rate: f32 = 5.0 in 0.0 ..= 100.0;
+        /// The sustained column off a wreck that is still burning, per
+        /// second, for as long as `wreck_burn_seconds` lasts.
+        wreck_flame_rate: f32 = 18.0 in 0.0 ..= 200.0;
+        wreck_smoke_rate: f32 = 10.0 in 0.0 ..= 100.0;
+        /// Dust kicked up per second while a tank grinds a prop under its
+        /// tracks - the one part of `ram_props` that was visually silent.
+        ram_dust_rate: f32 = 14.0 in 0.0 ..= 100.0;
     }
 
     group tank_models {
@@ -1108,6 +1180,11 @@ tunables! {
         /// than the shockwave so it reads as one punchy hit), px offset at
         /// full strength, and radians/sec of the wobble.
         camera_shake_duration: f32 = 0.3 in 0.0 ..= 3.0;
+        /// Ceiling on the summed camera shake when several ripples overlap,
+        /// as a multiple of `camera_shake_magnitude`. Without it three
+        /// simultaneous kills throw the scene far enough that the screen
+        /// edge shows through as black.
+        camera_shake_max_stack: f32 = 1.8 in 1.0 ..= 5.0;
         camera_shake_magnitude: f32 = 10.0 in 0.0 ..= 100.0;
         camera_shake_frequency: f32 = 40.0 in 1.0 ..= 200.0;
         /// Muzzle-flash heat haze (muzzle_flash.fs): a one-sided outward

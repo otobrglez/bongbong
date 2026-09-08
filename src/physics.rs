@@ -67,6 +67,21 @@ impl Physics {
         self.world.step();
     }
 
+    /// How many bodies and colliders rapier quarantined during the last
+    /// `step` (see rapier's `Quarantine`): anything whose pose, velocity or
+    /// geometry went non-finite is rolled back to its last valid pose and
+    /// disabled, rather than spreading NaN through the rest of the world.
+    /// Non-zero means the solver blew up - it is not a state any healthy
+    /// round reaches, so `simulation::step_world` turns it straight into an
+    /// `Event::PhysicsQuarantine` for the probe's `invariant` anomaly and
+    /// the dev server to surface. Counts rather than handles: the caller
+    /// already knows which tank is broken from its own snapshot, and this
+    /// also covers the wall/obstacle/frog bodies nothing else inspects.
+    pub fn quarantined(&self) -> (usize, usize) {
+        let q = self.world.quarantine();
+        (q.bodies().len(), q.colliders().len())
+    }
+
     /// Spawn a static, fixed-body cuboid collider: the battlefield boundary
     /// (see `battlefield::spawn_walls`) and in-arena obstacles (see
     /// `obstacle::Obstacle`) both reuse this exact same shape - the only
