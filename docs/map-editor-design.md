@@ -480,6 +480,10 @@ positional value; implemented as two plain flags instead, since clap's
 "flag with an optional trailing value" pattern needs more ceremony than
 just reusing `--map`.)
 
+(Superseded by docs/hud-and-builder-layout-design.md, which moves this
+entry point into a right-hand sidebar shared with the HUD and drops the
+hamburger; the paragraph below is the original sketch.)
+
 The second entry point is a small **hamburger icon (☰), top-left corner**,
 drawn over the normal game HUD whenever the game is running with the
 `map-editor` feature enabled (same gate as `--editor` — see "Dev-only
