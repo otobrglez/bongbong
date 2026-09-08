@@ -120,6 +120,11 @@ lists under the bar.
 
 ## Touch controls
 
+(The stick-and-fire-zone scheme below is one of two; docs/tap-orders-
+design.md explores tap-to-move and tap-to-attack, which needs no reserved
+zones and lets the touch layout be the desktop bar. The two coexist: a
+tap is an order, a drag is the stick.)
+
 The simulation's input model is already touch-shaped: movement is four
 directions, constant speed, no momentum, snap-on-press and stop-on-release
 (`Intent::move_dir`), and fire is a raw held state (`Intent::fire`, edge-
