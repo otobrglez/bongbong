@@ -1,5 +1,28 @@
 version = 1
 
+tank = "assault"
+
+[mission]
+kind = "protect"
+
+[spawn]
+## kind = "band"
+## tier_start = "light"
+kind = "waves"
+waves = 4
+size = 2
+growth = 1
+tier_start = "light"
+tier_end = "super"
+
+# spawn.kind = "waves"
+# spawn.waves = 4
+# spawn.size = 2
+# spawn.growth = 1
+# spawn.tier_start = "light"
+# spawn.tier_end = "super"
+
+
 [cells."36,2"]
 kind = "wall"
 material = "brick"
@@ -1943,10 +1966,3 @@ kind = "barrel"
 [cells."19,16"]
 kind = "pickup"
 pickup = "ammo"
-
-[mission]
-kind = "protect"
-
-[spawn]
-kind = "band"
-tier_start = "light"

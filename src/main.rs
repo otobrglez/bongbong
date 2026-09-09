@@ -394,7 +394,7 @@ fn main() {
         RippleTuning {
             speed: tuning().shockwave_speed,
             width: tuning().shockwave_width,
-            strength: tuning().shockwave_strength,
+            strength: tuning().shockwave_strength * tuning().screen_fx_intensity,
             duration: tuning().shockwave_duration,
         },
     );
@@ -536,7 +536,7 @@ fn main() {
             shock_fx.set_tuning(RippleTuning {
                 speed: t.shockwave_speed,
                 width: t.shockwave_width,
-                strength: t.shockwave_strength,
+                strength: t.shockwave_strength * t.screen_fx_intensity,
                 duration: t.shockwave_duration,
             });
             muzzle_fx.set_tuning(RippleTuning {

@@ -181,6 +181,7 @@ impl Game {
         f.shocks.push(Shockwave::scaled(center, SHOCK_BARREL));
         f.impact_flashes.push(Shockwave::new(center));
         f.blast_fx.push(BlastFx::new(center));
+        self.flash_screen();
         f.scorches.push(Scorch::new(center));
     }
 

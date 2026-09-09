@@ -60,18 +60,27 @@ pub struct BlastFx {
     /// Multiplier on `blast_anim_scale` and the glow radius - 1.0 for a
     /// barrel or a dying tank, smaller for a cook-off secondary.
     pub scale: f32,
+    /// A cook-off pop rather than a kill or a barrel: local only, so it
+    /// gets no screen-level effect (see `Game::tick_cookoffs`).
+    pub secondary: bool,
 }
 
 impl BlastFx {
     pub fn new(center: Position) -> Self {
-        BlastFx { center, time: 0.0, seed: seed_for(center), scale: 1.0 }
+        BlastFx { center, time: 0.0, seed: seed_for(center), scale: 1.0, secondary: false }
     }
 
     /// A scaled-down fireball for a wreck's ammo cooking off: the same
     /// animation, drawn smaller so a secondary reads as a pop rather than
     /// as a second tank dying.
     pub fn small(center: Position) -> Self {
-        BlastFx { center, time: 0.0, seed: seed_for(center), scale: tuning().cookoff_blast_scale }
+        BlastFx {
+            center,
+            time: 0.0,
+            seed: seed_for(center),
+            scale: tuning().cookoff_blast_scale,
+            secondary: true,
+        }
     }
 
     /// The frame to show now, clamped so a live change to `blast_anim_fps`

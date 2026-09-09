@@ -924,3 +924,59 @@ fn conceals_is_a_cell_query() {
     );
     assert!(!crate::grass::conceals(&[], cell), "a map with no grass conceals nothing");
 }
+
+#[test]
+fn screen_flashes_are_spaced_out_and_cookoffs_stay_local() {
+    // The whole-screen flash is the harshest thing a kill does, so it is
+    // explicit state with a minimum gap: a multi-kill or a barrel chain
+    // flashes once rather than strobing. A cook-off is a local pop and
+    // never flashes the screen or punches an impact quad.
+    let map = map_with("");
+    let mut game = Game::default();
+    game.enemy_count_override = Some(3);
+    game.seed_override = Some(9);
+    game.player_row_override = Some(0);
+    game.map = MapFile::from_toml_str(&map).expect("test map parses");
+    game.init(W, H);
+    assert!(game.screen_flash.is_none(), "nothing flashes at the start of a round");
+
+    game.debug_kill(1).expect("enemy in slot 1 dies");
+    step(&mut game, Input::default());
+    let first = game.screen_flash.expect("a kill flashes the screen");
+    game.debug_kill(2).expect("enemy in slot 2 dies");
+    step(&mut game, Input::default());
+    let second = game.screen_flash.expect("the first flash is still fading");
+    assert!(second > first, "a second kill inside the gap does not restart the flash");
+
+    let gap_frames = (tuning().blast_screen_flash_min_gap_seconds * 60.0).ceil() as usize + 1;
+    for _ in 0..gap_frames {
+        step(&mut game, Input::default());
+    }
+    assert!(game.screen_flash.is_none(), "the flash has faded out");
+    game.debug_kill(3).expect("enemy in slot 3 dies");
+    step(&mut game, Input::default());
+    assert!(game.screen_flash.is_some(), "a kill after the gap flashes again");
+    assert!(!game.cookoffs.is_empty(), "with its ammo queued to cook off");
+
+    // Let the kill's own flash and impact quad run out, then watch the
+    // cook-offs pop: none of them may bring either back.
+    for _ in 0..12 {
+        step(&mut game, Input::default());
+    }
+    assert!(game.impact_flashes.is_empty() && game.screen_flash.is_none(), "the kill's own effects are over");
+    let mut saw_cookoff = false;
+    let mut frames = 0;
+    while !game.cookoffs.is_empty() {
+        step(&mut game, Input::default());
+        frames += 1;
+        assert!(frames < 60 * 12, "cook-offs finish within the window");
+        saw_cookoff |= game.events().iter().any(|e| matches!(e, Event::CookOff { .. }));
+        assert!(game.screen_flash.is_none(), "a cook-off never flashes the screen");
+        assert!(game.impact_flashes.is_empty(), "or punches an impact quad");
+        assert!(
+            game.blast_fx.iter().filter(|b| b.time <= 1.0 / 60.0 + 1e-4).all(|b| b.secondary),
+            "any fireball a cook-off starts is a secondary"
+        );
+    }
+    assert!(saw_cookoff, "the secondaries fired");
+}

@@ -578,12 +578,16 @@ impl Game {
         // Muzzle/impact flash quads and the HUD deliberately aren't shifted:
         // they're either their own small on-screen quad or meant to stay put.
         let mut blit_offset = Vector2::new(0.0, 0.0);
+        // `screen_fx_intensity` scales every whole-screen effect together;
+        // folding it into the magnitude here keeps the stack cap below
+        // proportional.
+        let shake_magnitude = tuning().camera_shake_magnitude * tuning().screen_fx_intensity;
         for shock in &self.shocks {
             let decay = (1.0f32 - shock.time / tuning().camera_shake_duration).max(0.0);
             if decay <= 0.0 {
                 continue;
             }
-            let mag = tuning().camera_shake_magnitude * shock.strength * decay;
+            let mag = shake_magnitude * shock.strength * decay;
             // Phase each one off its own position hash so several
             // overlapping shakes interfere instead of beating in lockstep
             // and doubling cleanly. Still a pure draw pass, still no rng -
@@ -595,7 +599,7 @@ impl Game {
         }
         // Without a ceiling, three kills at once throw the composited scene
         // far enough off that the screen edge shows through as black.
-        let cap = tuning().camera_shake_magnitude * tuning().camera_shake_max_stack;
+        let cap = shake_magnitude * tuning().camera_shake_max_stack;
         let len = (blit_offset.x * blit_offset.x + blit_offset.y * blit_offset.y).sqrt();
         if len > cap && len > 0.0 {
             blit_offset.x *= cap / len;
@@ -706,14 +710,16 @@ impl Game {
                 });
             }
 
-            // A barrel blast opens with a brief whole-screen flash - the
-            // youngest blast drives it. After the ripple quads, which
-            // re-blit patches of the un-flashed scene and would otherwise
-            // punch darker squares through it.
-            if let Some(blast) = self.blast_fx.iter().min_by(|a, b| a.time.total_cmp(&b.time)) {
+            // A kill or a barrel blast opens with a brief whole-screen
+            // flash (`Game::screen_flash`, started and spaced out by
+            // `Game::flash_screen`). After the ripple quads, which re-blit
+            // patches of the un-flashed scene and would otherwise punch
+            // darker squares through it.
+            if let Some(age) = self.screen_flash {
                 let seconds = tuning().blast_screen_flash_seconds;
-                if seconds > 0.0 && blast.time < seconds {
-                    let a = (255.0 * tuning().blast_screen_flash_alpha * (1.0 - blast.time / seconds)) as u8;
+                if seconds > 0.0 && age < seconds {
+                    let peak = tuning().blast_screen_flash_alpha * tuning().screen_fx_intensity;
+                    let a = (255.0 * peak.clamp(0.0, 1.0) * (1.0 - age / seconds)) as u8;
                     d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(255, 240, 200, a));
                 }
             }

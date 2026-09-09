@@ -1071,17 +1071,20 @@ tunables! {
         /// Playback rate of the barrel blast sprite animation (12 frames).
         blast_anim_fps: f32 = 18.0 in 4.0 ..= 60.0;
         /// On-screen scale of the 64px blast frames (2.0 = 128px wide).
-        blast_anim_scale: f32 = 2.0 in 0.5 ..= 4.0;
+        blast_anim_scale: f32 = 1.75 in 0.5 ..= 4.0;
         /// How long the additive light bloom under a blast lasts.
         blast_glow_seconds: f32 = 0.25 in 0.0 ..= 2.0;
         /// Radius (px) of that bloom at its largest.
-        blast_glow_radius: f32 = 90.0 in 0.0 ..= 400.0;
+        blast_glow_radius: f32 = 64.0 in 0.0 ..= 400.0;
         /// Peak opacity of the bloom.
-        blast_glow_strength: f32 = 0.8 in 0.0 ..= 1.0;
+        blast_glow_strength: f32 = 0.45 in 0.0 ..= 1.0;
         /// Peak opacity of the whole-screen flash a blast starts with.
-        blast_screen_flash_alpha: f32 = 0.3 in 0.0 ..= 1.0;
+        blast_screen_flash_alpha: f32 = 0.12 in 0.0 ..= 1.0;
         /// How long that screen flash takes to fade.
         blast_screen_flash_seconds: f32 = 0.06 in 0.0 ..= 0.5;
+        /// Minimum spacing between two whole-screen flashes, so a barrel
+        /// chain or a multi-kill reads as one flash rather than a strobe.
+        blast_screen_flash_min_gap_seconds: f32 = 0.35 in 0.0 ..= 2.0;
         /// Opacity of the pulsing glow on a barrel whose fuse is lit.
         barrel_fuse_glow_strength: f32 = 0.6 in 0.0 ..= 1.0;
         /// Opacity of the burn mark a blast leaves on the ground.
@@ -1106,14 +1109,14 @@ tunables! {
         /// offset plus a shrinking shadow.
         debris_arc_height: f32 = 40.0 in 0.0 ..= 200.0;
         /// Parts a dying tank throws, and how far they scatter.
-        wreck_parts: i32 = 7 in 0 ..= 32;
+        wreck_parts: i32 = 5 in 0 ..= 32;
         wreck_part_throw_px: f32 = 64.0 in 0.0 ..= 400.0;
         /// Delayed secondary pops after a tank dies (ammo cooking off):
         /// how many, spread over how long, and how big each fireball is
         /// next to the main one.
-        cookoff_count: i32 = 3 in 0 ..= 12;
+        cookoff_count: i32 = 2 in 0 ..= 12;
         cookoff_window_seconds: f32 = 1.6 in 0.1 ..= 10.0;
-        cookoff_blast_scale: f32 = 0.55 in 0.1 ..= 2.0;
+        cookoff_blast_scale: f32 = 0.45 in 0.1 ..= 2.0;
         /// A dying tank burns its last tread marks into the ground: this
         /// many of them stop fading and darken by this multiple, so the
         /// kill site stays readable after the wreck is cleared.
@@ -1155,13 +1158,13 @@ tunables! {
         /// Particles a destroyed tile throws; glass and sandbag add to it.
         tile_burst_particles: i32 = 12 in 0 ..= 120;
         /// Sparks a dying tank throws.
-        wreck_burst_particles: i32 = 26 in 0 ..= 200;
+        wreck_burst_particles: i32 = 16 in 0 ..= 200;
         /// Embers and smoke a burning wood tile gives off per second.
         wood_ember_rate: f32 = 20.0 in 0.0 ..= 200.0;
         wood_smoke_rate: f32 = 5.0 in 0.0 ..= 100.0;
         /// The sustained column off a wreck that is still burning, per
         /// second, for as long as `wreck_burn_seconds` lasts.
-        wreck_flame_rate: f32 = 18.0 in 0.0 ..= 200.0;
+        wreck_flame_rate: f32 = 12.0 in 0.0 ..= 200.0;
         wreck_smoke_rate: f32 = 10.0 in 0.0 ..= 100.0;
         /// Contact feedback. `max_impulse` is the solver's own measure of
         /// how hard a contact is, so these are thresholds on that rather
@@ -1390,25 +1393,31 @@ tunables! {
     }
 
     group fx {
+        /// One multiplier on every effect that touches the whole screen -
+        /// the kill flash, the shockwave ripple's bend and the camera
+        /// shake - so a calmer or reduced-flash mode is one slider. 0
+        /// leaves only the local fireball, glow, impact quad and
+        /// particles, which deliberately stay out of it.
+        screen_fx_intensity: f32 = 1.0 in 0.0 ..= 2.0;
         /// Kill shockwave (shockwave.fs): seconds the effect plays before
         /// clearing.
-        shockwave_duration: f32 = 1.18 in 0.05 ..= 5.0;
+        shockwave_duration: f32 = 0.7 in 0.05 ..= 5.0;
         /// Ring growth speed, UV units/sec.
         shockwave_speed: f32 = 0.56 in 0.0 ..= 5.0;
         /// Thickness of the distorted band, UV units.
-        shockwave_width: f32 = 0.13 in 0.0 ..= 1.0;
+        shockwave_width: f32 = 0.08 in 0.0 ..= 1.0;
         /// How hard the ring bends the image, UV units.
-        shockwave_strength: f32 = 0.102 in 0.0 ..= 0.5;
+        shockwave_strength: f32 = 0.045 in 0.0 ..= 0.5;
         /// Camera shake on the same kill trigger: duration (much shorter
         /// than the shockwave so it reads as one punchy hit), px offset at
         /// full strength, and radians/sec of the wobble.
-        camera_shake_duration: f32 = 0.3 in 0.0 ..= 3.0;
+        camera_shake_duration: f32 = 0.22 in 0.0 ..= 3.0;
         /// Ceiling on the summed camera shake when several ripples overlap,
         /// as a multiple of `camera_shake_magnitude`. Without it three
         /// simultaneous kills throw the scene far enough that the screen
         /// edge shows through as black.
-        camera_shake_max_stack: f32 = 1.8 in 1.0 ..= 5.0;
-        camera_shake_magnitude: f32 = 10.0 in 0.0 ..= 100.0;
+        camera_shake_max_stack: f32 = 1.5 in 1.0 ..= 5.0;
+        camera_shake_magnitude: f32 = 6.0 in 0.0 ..= 100.0;
         camera_shake_frequency: f32 = 40.0 in 1.0 ..= 200.0;
         /// Muzzle-flash heat haze (muzzle_flash.fs): a one-sided outward
         /// puff at the barrel. Hits full strength at the leading edge, so
@@ -1426,7 +1435,7 @@ tunables! {
         impact_flash_duration: f32 = 0.14 in 0.01 ..= 2.0;
         impact_flash_speed: f32 = 1.1 in 0.0 ..= 5.0;
         impact_flash_width: f32 = 0.02 in 0.0 ..= 0.5;
-        impact_flash_strength: f32 = 0.025 in 0.0 ..= 0.5;
+        impact_flash_strength: f32 = 0.018 in 0.0 ..= 0.5;
         /// Half-extent (px) of the impact flash's quad; at 720px tall the
         /// punch reaches ~125px, so 70 visibly clipped it.
         impact_flash_quad_radius: f32 = 130.0 in 10.0 ..= 500.0;

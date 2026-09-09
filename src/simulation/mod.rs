@@ -432,6 +432,15 @@ pub struct Game {
     /// Queued ammo cook-offs from tanks that have died: where each pops and
     /// how long until it does. Purely cosmetic (see `tick_cookoffs`).
     pub(crate) cookoffs: Vec<(Position, f32)>,
+    /// The whole-screen flash a kill or a barrel opens with: its age in
+    /// seconds while one is playing (`game.rs` fades it out over
+    /// `blast_screen_flash_seconds`). Explicit state rather than derived
+    /// from `blast_fx`, so a cook-off never drives it and `flash_screen`
+    /// can space flashes out.
+    pub(crate) screen_flash: Option<f32>,
+    /// Seconds until the next whole-screen flash is allowed
+    /// (`blast_screen_flash_min_gap_seconds`).
+    pub(crate) screen_flash_cooldown: f32,
     /// Laser beams still in their short display window, oldest first.
     pub(crate) laser_beams: Vec<LaserBeam>,
     /// Frozen simulation plus a "PAUSED" overlay. Cleared by `init`.
@@ -561,8 +570,10 @@ impl Frame {
 pub(crate) const SHOCK_KILL: f32 = 1.0;
 pub(crate) const SHOCK_BARREL: f32 = 0.7;
 pub(crate) const SHOCK_FROG: f32 = 0.6;
-/// Ammo cooking off inside a wreck: felt, but nowhere near a real kill.
-pub(crate) const SHOCK_COOKOFF: f32 = 0.25;
+/// Ammo cooking off inside a wreck: a faint local ring, and too weak to
+/// move the camera once the shake snaps to 2px blocks - a cook-off is a
+/// pop next to the hulk, not another explosion.
+pub(crate) const SHOCK_COOKOFF: f32 = 0.1;
 
 impl Game {
     /// Set up a fresh round: player, map terrain, enemies, frog, pickups,
@@ -596,6 +607,8 @@ impl Game {
         self.scorches.clear();
         self.decals.clear();
         self.cookoffs.clear();
+        self.screen_flash = None;
+        self.screen_flash_cooldown = 0.0;
         self.grass_cells.clear();
         self.grass.clear();
         self.orders.clear();
@@ -1018,6 +1031,13 @@ impl Game {
             blast.time += dt;
             !blast.done()
         });
+        if let Some(age) = &mut self.screen_flash {
+            *age += dt;
+            if *age >= tuning().blast_screen_flash_seconds {
+                self.screen_flash = None;
+            }
+        }
+        self.screen_flash_cooldown = (self.screen_flash_cooldown - dt).max(0.0);
         for decal in &mut self.decals {
             decal.age += dt;
         }
@@ -1813,10 +1833,9 @@ impl Game {
     /// pushed once (every push is gated by its own transition into a wreck)
     /// and a barrel dies once. `live` is false on the end screen, where
     /// blasts play out without damage (no kills happen there).
-    /// Everything a dying tank throws off. A barrel used to be the more
-    /// dramatic death of the two - it got a fireball, a screen flash and a
-    /// scorch while a tank got only the shockwave - so a kill now lays down
-    /// the same three, plus its own wreckage and a set of delayed pops.
+    /// Everything a dying tank throws off: the same fireball, screen flash
+    /// and scorch a barrel gets, plus its own wreckage and a set of
+    /// delayed pops.
     ///
     /// Draws no RNG: the parts' landing spots, cells and arcs all come out
     /// of `blast::seed_at` salted per piece, so a spectacular death cannot
@@ -1824,6 +1843,7 @@ impl Game {
     fn wreck_fx(&mut self, f: &mut Frame, center: Position) {
         f.blast_fx.push(BlastFx::new(center));
         f.impact_flashes.push(Shockwave::new(center));
+        self.flash_screen();
         f.scorches.push(Scorch::new(center));
         self.scorch_tracks(center);
 
@@ -1871,10 +1891,24 @@ impl Game {
         }
     }
 
+    /// Start the whole-screen flash a kill or a barrel opens with, unless
+    /// one played within `blast_screen_flash_min_gap_seconds`: a barrel
+    /// chain or a multi-kill reads as one flash rather than a strobe.
+    /// Cook-offs never call this.
+    pub(crate) fn flash_screen(&mut self) {
+        if self.screen_flash_cooldown > 0.0 {
+            return;
+        }
+        self.screen_flash = Some(0.0);
+        self.screen_flash_cooldown = tuning().blast_screen_flash_min_gap_seconds;
+    }
+
     /// Count down the queued cook-off pops and fire the ones that are due.
     /// Cosmetic only - a secondary never damages anything, because a kill
     /// has already resolved its blast and a second helping of splash would
-    /// be a real balance change rather than a detail.
+    /// be a real balance change rather than a detail. It is also local:
+    /// a small fireball, a faint ripple and sparks, with none of the
+    /// screen-level effects (flash, impact quad, shake) a real kill has.
     fn tick_cookoffs(&mut self, f: &mut Frame) {
         let mut popped = Vec::new();
         self.cookoffs.retain_mut(|(pos, t)| {
@@ -1887,7 +1921,6 @@ impl Game {
         });
         for center in popped {
             f.blast_fx.push(BlastFx::small(center));
-            f.impact_flashes.push(Shockwave::new(center));
             f.shocks.push(Shockwave::scaled(center, SHOCK_COOKOFF));
             f.events.push(Event::CookOff { x: center.x, y: center.y });
         }
