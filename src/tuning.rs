@@ -1251,7 +1251,7 @@ tunables! {
         // --- the ground layer's baked shading (ground.rs) ---
         /// How much darker a cell right beside a wall is, 0-1. Walls stand
         /// *on* the floor, and without this they read as pasted onto it.
-        ground_wall_shade: f32 = 0.22 in 0.0 ..= 1.0 @ Restart;
+        ground_wall_shade: f32 = 0.11 in 0.0 ..= 1.0 @ Restart;
         /// How far that shadow reaches, in cells. Cost is quadratic in this
         /// (a box search per cell) but it runs once per round, not per
         /// frame.
