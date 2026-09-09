@@ -1165,11 +1165,34 @@ tunables! {
         /// Ambient sway: how far a tip travels, and how fast.
         grass_sway_px: f32 = 2.0 in 0.0 ..= 20.0;
         grass_sway_speed: f32 = 1.6 in 0.0 ..= 20.0;
-        /// How close a tank has to be to push grass aside, and how hard.
-        /// Not in the reference gif - grass there does not react at all -
-        /// so this is the first thing to turn down if it reads as noisy.
+        /// The wake: how close a tank has to be to shove grass aside, and
+        /// how hard at the centre. Grass *ahead* of a moving tank is pushed
+        /// harder than grass behind it, so a hull drives a bow wave rather
+        /// than a symmetric ring (`grass::tick`). Not in the reference gif -
+        /// grass there does not react at all - so this is the first thing to
+        /// turn down if it reads as noisy.
         grass_part_radius: f32 = 46.0 in 0.0 ..= 300.0;
         grass_part_px: f32 = 9.0 in 0.0 ..= 60.0;
+        /// How far *past the hull* a tank flattens grass. Measured from the
+        /// hull box, not from the tank's centre - a radial falloff from the
+        /// centre leaves the grass under the tracks standing, because the
+        /// hull is wider than any radius small enough to look right. So
+        /// this is the margin around the footprint, and
+        /// `grass_part_radius` is the wider ring that only bends.
+        grass_crush_radius: f32 = 16.0 in 0.0 ..= 200.0;
+        /// How long flattened grass takes to stand back up. This is the
+        /// whole trail effect - a tank leaves a matted path that closes
+        /// behind it, the same shape `track.rs` gives a tread mark. Short
+        /// values read as grass springing back instantly and lose the path.
+        grass_crush_recover_seconds: f32 = 3.5 in 0.1 ..= 30.0;
+        /// How far a fully flattened tuft is squashed toward its own root.
+        /// Never 1.0: a tuft that disappears entirely reads as a hole in
+        /// the field rather than as matted grass.
+        grass_crush_flatten: f32 = 0.78 in 0.0 ..= 0.95;
+        /// Leaf specks a tank kicks up per second per grass cell it is
+        /// crossing (`fx.rs`, scaled by `fx_density` like every other
+        /// emitter). Zero turns the rustle off.
+        grass_rustle_rate: f32 = 14.0 in 0.0 ..= 120.0;
 
         // --- the ground layer's baked shading (ground.rs) ---
         /// How much darker a cell right beside a wall is, 0-1. Walls stand

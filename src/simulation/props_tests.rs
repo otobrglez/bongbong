@@ -827,6 +827,47 @@ fn tall_grass_hides_the_player_from_enemy_fire() {
     );
 }
 
+/// The precondition `game.rs`'s back-to-front pass relies on: it merges the
+/// tufts against the y-sorted units in one walk, which is only correct if
+/// `Game::grass` is already in root order.
+#[test]
+fn grass_is_sorted_by_where_each_tuft_is_rooted() {
+    let map = map_with("cells.\"20,11\" = { kind = \"tall_grass\" }\ncells.\"20,9\" = { kind = \"tall_grass\" }\ncells.\"20,13\" = { kind = \"tall_grass\" }\n");
+    let game = game_on(&map, 1);
+    assert!(game.grass.len() >= 3, "the map's cells scattered some tufts");
+    assert!(
+        game.grass.windows(2).all(|w| w[0].base.y <= w[1].base.y),
+        "tufts are not in root order: {:?}",
+        game.grass.iter().map(|t| t.base.y).collect::<Vec<_>>()
+    );
+}
+
+/// The trail: grass flattens under a hull and takes `grass_crush_recover_
+/// seconds` to stand back up, so a tank leaves a matted path behind it.
+#[test]
+fn grass_flattens_under_a_tank_and_stands_back_up() {
+    let map = map_with("cells.\"20,11\" = { kind = \"tall_grass\" }\n");
+    let mut game = game_on(&map, 1);
+    let crush = |g: &Game| g.grass.iter().fold(0.0f32, |m, t| m.max(t.crush));
+    assert_eq!(crush(&game), 0.0, "nothing has driven through it yet");
+
+    game.debug_teleport(0, cell_to_world(20, 11), Some(0.0)).unwrap();
+    step(&mut game, Input::default());
+    let flattened = crush(&game);
+    assert!(flattened > 0.5, "a hull parked on the cell should mat it down, got {flattened}");
+
+    // Drive off and give it time to recover. Well clear of the cell so the
+    // crush radius no longer reaches it.
+    game.debug_teleport(0, cell_to_world(20, 18), Some(0.0)).unwrap();
+    step(&mut game, Input::default());
+    let just_left = crush(&game);
+    assert!(just_left > 0.4, "grass should still be flat the frame after the tank leaves, got {just_left}");
+    for _ in 0..(60.0 * 5.0) as usize {
+        step(&mut game, Input::default());
+    }
+    assert_eq!(crush(&game), 0.0, "five seconds is past the recovery, it should be standing again");
+}
+
 #[test]
 fn conceals_is_a_cell_query() {
     // Cover is a property of the ground a tank stands on. Testing against

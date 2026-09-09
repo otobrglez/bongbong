@@ -634,11 +634,17 @@ impl Game {
         // Tall grass: whole cells from the map, each scattering a handful
         // of tufts. Hashed from position, so this draws no round RNG.
         self.grass_cells = map_spawn.grass_cells.clone();
+        // Sorted by where each tuft is *rooted*, once and for all: tufts
+        // never move, and `game.rs` merges them against the tanks in this
+        // order every frame to get the depth right (a tuft rooted behind a
+        // tank has to be drawn behind it). Sorting here keeps the per-frame
+        // cost a merge walk instead of a sort of several hundred sprites.
         self.grass = self
             .grass_cells
             .iter()
             .flat_map(|c| crate::grass::tufts_for_cell(*c))
             .collect();
+        self.grass.sort_by(|a, b| a.base.y.total_cmp(&b.base.y));
         let obstacle_positions = map_spawn.obstacle_positions;
         let wall_positions = map_spawn.wall_positions;
         let map_road_cells = map_spawn.road_cells;
@@ -907,6 +913,7 @@ impl Game {
             self.tick_cookoffs(&mut f);
             self.tick_burns(&mut f);
             self.tick_fuses(&mut f);
+            self.tick_grass(&mut f);
             self.explosions(&mut f, true);
             self.despawn_wrecks(&mut f);
             self.cleanup_done();
@@ -923,6 +930,7 @@ impl Game {
             self.tick_cookoffs(&mut f);
             self.tick_burns(&mut f);
             self.tick_fuses(&mut f);
+            self.tick_grass(&mut f);
             self.explosions(&mut f, false);
             self.cleanup_done();
             self.restart_timer -= dt;
@@ -2047,6 +2055,60 @@ impl Game {
 
     /// Every tank's externally visible state, for headless inspection
     /// (`src/bin/probe.rs`, the tests below) without touching `world`.
+    /// Flatten the grass under every live hull and let the rest stand back
+    /// up (`grass::tick`).
+    ///
+    /// A simulation phase rather than a draw-time effect because the
+    /// recovery has to be frame-rate independent - the trail behind a tank
+    /// is a length, and it would change with the frame rate if it were
+    /// integrated in `render`. Cosmetic all the same: nothing reads `crush`
+    /// but the renderer, and the phase draws no RNG, so a seeded replay is
+    /// bit-identical with or without it.
+    ///
+    /// Velocity comes from the *body*, not `Tank::velocity`, which is the
+    /// commanded cardinal vector and reads as zero the instant the driver
+    /// lets go while the hull is still rolling.
+    fn tick_grass(&mut self, f: &mut Frame) {
+        if self.grass.is_empty() {
+            return;
+        }
+        let movers: Vec<crate::grass::Mover> = self
+            .world
+            .query::<&Tank>()
+            .iter()
+            .filter(|t| !t.is_wreck())
+            .map(|t| crate::grass::Mover {
+                position: t.position,
+                velocity: t.body.map(|b| self.physics.velocity(b)).unwrap_or(t.velocity),
+                half: t.hull_size() * 0.5,
+            })
+            .collect();
+        crate::grass::tick(&mut self.grass, &movers, f.dt);
+    }
+
+    /// The tall-grass cells a live tank is currently moving through - the
+    /// source `fx.rs` samples for the leaf specks a hull kicks up. A parked
+    /// tank rustles nothing.
+    pub fn grass_disturbed(&self) -> Vec<Position> {
+        let reach = OBSTACLE_GRID_SIZE * 0.5 + tuning().grass_crush_radius * 0.5;
+        let movers: Vec<Position> = self
+            .world
+            .query::<&Tank>()
+            .iter()
+            .filter(|t| !t.is_wreck())
+            .filter(|t| t.body.is_some_and(|b| {
+                let v = self.physics.velocity(b);
+                v.x * v.x + v.y * v.y > 400.0
+            }))
+            .map(|t| t.position)
+            .collect();
+        self.grass_cells
+            .iter()
+            .copied()
+            .filter(|c| movers.iter().any(|m| (m.x - c.x).abs() < reach && (m.y - c.y).abs() < reach))
+            .collect()
+    }
+
     /// Every tile currently on fire, with how long it has been burning.
     /// One of three read-only views the presentation particle layer
     /// samples each frame (see `fx::Fx::sample_world`): these are *states*

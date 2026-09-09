@@ -7,7 +7,6 @@
 use crate::tuning::tuning;
 use sola_raylib::prelude::*;
 
-use crate::ai::Ai;
 use crate::bullet::{Bullet, BulletState, draw_bullet, draw_bullet_shadow};
 use crate::damage_stage::draw_damage;
 use crate::frog::{FrogVariantTextures, draw_frog, draw_frog_ring};
@@ -15,6 +14,8 @@ use crate::laser::draw_laser_beam;
 use crate::blast::{draw_blast, draw_blast_glow, draw_fuse_glow, draw_scorch};
 use crate::decal::{draw_decal, draw_decal_shadow};
 use crate::obstacle::{draw_obstacle_cap, draw_tree, draw_tree_shadow, tree_lean, Material, Obstacle, ObstacleTextures, draw_obstacle, draw_obstacle_shadow, fence_axis};
+use crate::ai::Ai;
+use hecs::Entity;
 use std::collections::HashSet;
 use crate::pickup::{Pickup, PickupKind, draw_pickup};
 use crate::plasma::{Plasma, PlasmaState, draw_plasma, draw_plasma_shadow};
@@ -80,6 +81,51 @@ pub struct Textures<'a> {
     pub grass: &'a Texture2D,
     /// static/trees_sheet.png - the two tree species (docs/TREES_SPEC.md).
     pub trees: &'a Texture2D,
+}
+
+/// Which ring and readout a tank draws with. The three cases used to be
+/// three near-identical loops in `render`; they collapsed into one when the
+/// tanks had to be sorted against the grass.
+#[derive(Clone, Copy, PartialEq)]
+enum TankRole {
+    Player,
+    Enemy,
+    /// A wave tank still rolling in: partly off-screen by construction, and
+    /// with no health ring or damage overlay until it arrives.
+    RollIn,
+}
+
+/// One thing standing on the battlefield, for `render`'s back-to-front
+/// pass. Trees are deliberately not in here - see that pass.
+enum Standing<'a> {
+    Tank(&'a Tank, TankRole),
+    Frog(Entity),
+}
+
+/// A tank and everything drawn on it, in the order the layers stack.
+fn draw_one_tank(
+    d: &mut impl RaylibDraw,
+    textures: &Textures,
+    tank: &Tank,
+    role: TankRole,
+    time: f32,
+    shadows: bool,
+) {
+    match role {
+        TankRole::Player => draw_player_ring(d, tank, time),
+        TankRole::Enemy => draw_enemy_ring(d, tank, time),
+        TankRole::RollIn => {}
+    }
+    draw_tank_shield(d, tank, time);
+    if shadows {
+        draw_tank_shadow(d, textures.tanks, tank);
+        draw_minigun_mount_shadow(d, textures.minigun_mount, tank);
+    }
+    draw_tank(d, textures.tanks, tank);
+    draw_minigun_mount(d, textures.minigun_mount, tank);
+    if role != TankRole::RollIn {
+        draw_damage(d, textures.damage, tank, time);
+    }
 }
 
 /// The ripple post-effects `Game::render` drives, bundled into one param for the
@@ -306,66 +352,79 @@ impl Game {
                 draw_pickup(&mut d, texture, pickup);
             }
 
-            for frog_entity in [self.frog, self.enemy_frog].into_iter().flatten() {
-                crate::simulation::with_frog(&self.world, frog_entity, |frog| {
-                    let variant = &textures.frog_variants[frog.variant as usize];
-                    draw_frog_ring(&mut d, frog, self.time);
-                    draw_frog(&mut d, &variant.as_frog_textures(), frog, self.time);
-                });
-            }
-
-            for tank in self.world.query::<&Tank>().with::<&Ai>().iter() {
-                draw_enemy_ring(&mut d, tank, self.time);
-                draw_tank_shield(&mut d, tank, self.time);
-                if self.shadows_enabled {
-                    draw_tank_shadow(&mut d, textures.tanks, tank);
-                    draw_minigun_mount_shadow(&mut d, textures.minigun_mount, tank);
-                }
-                draw_tank(&mut d, textures.tanks, tank);
-                draw_minigun_mount(&mut d, textures.minigun_mount, tank);
-                draw_damage(&mut d, textures.damage, tank, self.time);
-            }
-
-            // Wave tanks still rolling in: drawn like any enemy (partly
-            // off-screen by construction), no health ring yet.
-            for (tank, _) in self.world.query::<(&Tank, &crate::simulation::RollIn)>().iter() {
-                draw_tank_shield(&mut d, tank, self.time);
-                if self.shadows_enabled {
-                    draw_tank_shadow(&mut d, textures.tanks, tank);
-                    draw_minigun_mount_shadow(&mut d, textures.minigun_mount, tank);
-                }
-                draw_tank(&mut d, textures.tanks, tank);
-                draw_minigun_mount(&mut d, textures.minigun_mount, tank);
-            }
-
-            crate::simulation::with_tank(&self.world, player, |tank| {
-                draw_player_ring(&mut d, tank, self.time);
-                draw_tank_shield(&mut d, tank, self.time);
-                if self.shadows_enabled {
-                    draw_tank_shadow(&mut d, textures.tanks, tank);
-                    draw_minigun_mount_shadow(&mut d, textures.minigun_mount, tank);
-                }
-                draw_tank(&mut d, textures.tanks, tank);
-                draw_minigun_mount(&mut d, textures.minigun_mount, tank);
-                draw_damage(&mut d, textures.damage, tank, self.time);
-            });
-
-            // Vegetation: over the tanks and under the projectiles.
+            // Everything standing on the ground - tanks, frogs and grass -
+            // drawn back to front by where it *meets* the ground.
             //
-            // Over the tanks is the whole mechanic for grass: the reference
-            // achieves its hiding effect with nothing but draw order - the
-            // unit is never made transparent, it is simply drawn behind
-            // whichever tufts it overlaps. Trees ride along for the same
-            // reason at a larger scale, so a tank pressed against a trunk
-            // has the canopy overhanging it rather than sitting on top of
-            // it. Under the projectiles either way, so you can still see
+            // Grass has to be interleaved rather than drawn on top of the
+            // lot: a tuft rooted behind a tank should be hidden by it, and
+            // drawing all grass last is exactly what made a tank look
+            // buried in grass that grows well past it. `Game::grass` is
+            // already sorted by root (see `Game::init`), so this is a merge
+            // walk, not a sort of several hundred sprites.
+            //
+            // Trees are the deliberate exception and still come after all
+            // of this: a crown is *above* tank height, so it overhangs a
+            // hull whichever side of the trunk that hull is on. You drive
+            // under a tree and through grass.
+            let rollins: HashSet<Entity> = {
+                let mut q = self.world.query::<(Entity, &crate::simulation::RollIn)>();
+                let set = q.iter().map(|(e, _)| e).collect();
+                set
+            };
+            let mut tank_query = self.world.query::<(Entity, &Tank)>();
+            let mut standing: Vec<(f32, Standing)> = tank_query
+                .iter()
+                .map(|(entity, tank)| {
+                    let role = if entity == player {
+                        TankRole::Player
+                    } else if rollins.contains(&entity) {
+                        TankRole::RollIn
+                    } else {
+                        TankRole::Enemy
+                    };
+                    (tank.position.y, Standing::Tank(tank, role))
+                })
+                .collect();
+            for frog_entity in [self.frog, self.enemy_frog].into_iter().flatten() {
+                let y = crate::simulation::with_frog(&self.world, frog_entity, |frog| frog.position.y);
+                standing.push((y, Standing::Frog(frog_entity)));
+            }
+            standing.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+            let mut next_tuft = 0usize;
+            let grass_up_to = |d: &mut _, upto: f32, from: usize| {
+                let mut i = from;
+                while i < self.grass.len() && self.grass[i].base.y <= upto {
+                    crate::grass::draw_tuft(d, textures.grass, &self.grass[i], self.time);
+                    i += 1;
+                }
+                i
+            };
+            for (key, item) in &standing {
+                next_tuft = grass_up_to(&mut d, *key, next_tuft);
+                match item {
+                    Standing::Tank(tank, role) => {
+                        draw_one_tank(&mut d, textures, tank, *role, self.time, self.shadows_enabled)
+                    }
+                    Standing::Frog(entity) => {
+                        crate::simulation::with_frog(&self.world, *entity, |frog| {
+                            let variant = &textures.frog_variants[frog.variant as usize];
+                            draw_frog_ring(&mut d, frog, self.time);
+                            draw_frog(&mut d, &variant.as_frog_textures(), frog, self.time);
+                        });
+                    }
+                }
+            }
+            grass_up_to(&mut d, f32::INFINITY, next_tuft);
+
+            // Trees, over everything on the ground and under the
+            // projectiles: a crown sits above tank height, so it overhangs
+            // a hull on either side of the trunk, and you can still see
             // your own shots leave the cover you are firing from.
             //
-            // Trees sort back to front: their 48px sprites overlap on a
-            // 32px grid, and without an order the crowns of a grove pop in
-            // and out of each other as the query happens to iterate.
-            // Every live hull, shared by both: grass parts around one and a
-            // tree bends away from one shouldering it over.
+            // Sorted back to front among themselves: their 48px sprites
+            // overlap on a 32px grid, and without an order the crowns of a
+            // grove pop in and out of each other as the query iterates.
             let movers: Vec<crate::Position> = self
                 .world
                 .query::<&Tank>()
@@ -373,7 +432,6 @@ impl Game {
                 .filter(|t| !t.is_dead())
                 .map(|t| t.position)
                 .collect();
-
             let mut tree_query = self.world.query::<&Obstacle>();
             let mut trees: Vec<&Obstacle> = tree_query.iter().filter(|o| o.material.is_tree()).collect();
             trees.sort_by(|a, b| a.position.y.total_cmp(&b.position.y));
@@ -383,10 +441,6 @@ impl Game {
                     draw_tree_shadow(&mut d, &obstacle_textures, tree, lean, self.time);
                 }
                 draw_tree(&mut d, &obstacle_textures, tree, lean, self.time);
-            }
-
-            for tuft in &self.grass {
-                crate::grass::draw_tuft(&mut d, textures.grass, tuft, self.time, &movers);
             }
 
             for shell in self.world.query::<&Shell>().iter() {

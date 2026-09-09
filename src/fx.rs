@@ -278,6 +278,18 @@ impl Fx {
                 self.burst(pos, ParticleKind::Smoke, 1, 14.0, &[SMOKE_T]);
             }
         }
+        // Leaves kicked up by a hull crossing tall grass. The only
+        // emitter whose source is not something on fire or in contact -
+        // `grass_disturbed` reports the cells a *moving* tank is in, so a
+        // parked one rustles nothing.
+        let rustle = tuning().grass_rustle_rate;
+        if rustle > 0.0 {
+            for pos in game.grass_disturbed() {
+                if self.due(crate::blast::seed_at(pos, 3), rustle * tuning().fx_density, dt) {
+                    self.burst(pos, ParticleKind::Dust, 1, 34.0, &[LEAF_L, LEAF_M, LEAF_D]);
+                }
+            }
+        }
         // Impacts and scrapes. `max_impulse` is the solver's own measure of
         // how hard the contact is, so a gentle nudge against a wall stays
         // silent and a real slam throws sparks - the threshold is what
