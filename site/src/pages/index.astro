@@ -147,6 +147,26 @@
             &:hover, &:focus-visible { color: #fff; background: rgba(46, 46, 46, 0.95); }
           }
 
+          /* Shown only when the CSS fallback was all we could manage and the
+             page is not already running standalone - see the toggle script. */
+          .fullscreen-hint {
+            position: absolute;
+            bottom: 8px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 2;
+            max-width: min(90%, 460px);
+            margin: 0;
+            padding: 6px 10px;
+            border-radius: 3px;
+            background: rgba(46, 46, 46, 0.85);
+            color: #ddd;
+            text-align: center;
+            font-size: $font-size;
+
+            strong { color: #fff; }
+          }
+
           .instructions {
             text-align: center;
             font-size: $font-size;
@@ -313,6 +333,10 @@
         <a class="subscribe-link" href="/subscribe">Subscribe for updates.</a>
         <button class="fullscreen-toggle" id="fullscreen-toggle" type="button"
                 title="Play full screen">&#9974; Full screen</button>
+        <p class="fullscreen-hint" id="fullscreen-hint" hidden>
+            This browser will not let a page hide its address bar. For a
+            chrome-free window, use <strong>Share &rarr; Add to Home Screen</strong>&nbsp;and launch it from there.
+        </p>
         <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
         <div class="instructions">
             <p>Use arrow keys to move the tank. <kbd>Space</kbd> to fire and <kbd>r</kbd> to restart the game.</p>
@@ -678,49 +702,79 @@
     })();
 </script>
 <script is:inline>
-    // Full-screen toggle. Two mechanisms because there is no one that works
-    // everywhere: `requestFullscreen` on desktop, Android and iPadOS, and a
-    // CSS `.immersive` class for Safari on iPhone, which has no element
-    // Fullscreen API at all (only <video> can go fullscreen there). The
-    // class reclaims the page furniture and the address bar's worth of
-    // space, which is most of what a phone has to give.
+    // Full-screen toggle.
+    //
+    // Three outcomes, because no single mechanism works everywhere:
+    //
+    //   1. `requestFullscreen` - desktop, Android, iPadOS. Real full screen:
+    //      the browser's own chrome goes away.
+    //   2. The `.immersive` class - Safari on iPhone, which has no element
+    //      Fullscreen API at all (only <video> can go fullscreen there).
+    //      This takes the whole viewport but *cannot* hide Safari's URL bar;
+    //      no page can. It is a platform restriction, not a bug.
+    //   3. Add to Home Screen - the only way to get a chrome-free window on
+    //      an iPhone. `apple-mobile-web-app-capable` in the head makes the
+    //      launched app run standalone, so the hint below points at it
+    //      whenever we had to settle for (2).
     (function () {
         var game = document.querySelector(".game");
         var canvas = document.getElementById("canvas");
         var button = document.getElementById("fullscreen-toggle");
+        var hint = document.getElementById("fullscreen-hint");
         if (!game || !button) return;
         var request = game.requestFullscreen || game.webkitRequestFullscreen;
         var exit = document.exitFullscreen || document.webkitExitFullscreen;
+        var standalone = window.navigator.standalone === true
+            || (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
 
+        function real() {
+            return !!(document.fullscreenElement || document.webkitFullscreenElement);
+        }
         function active() {
-            return !!(document.fullscreenElement || document.webkitFullscreenElement)
-                || game.classList.contains("immersive");
+            return real() || game.classList.contains("immersive");
         }
         function label() {
             button.innerHTML = active() ? "&#9974; Exit full screen" : "&#9974; Full screen";
+            if (hint) {
+                // Only worth saying when we settled for the CSS fallback and
+                // there is actually somewhere better to go.
+                hint.hidden = !(active() && !real() && !standalone);
+            }
+        }
+        function fallback() {
+            game.classList.add("immersive");
+            label();
+        }
+        function enter() {
+            if (!request) return fallback();
+            var p;
+            try {
+                p = request.call(game);
+            } catch (e) {
+                return fallback();
+            }
+            // Old WebKit's prefixed version returns undefined rather than a
+            // promise, so `.then` on it would throw and abort the whole
+            // handler - leaving neither real full screen nor the fallback.
+            if (p && typeof p.then === "function") {
+                p.then(label, fallback);
+            } else {
+                setTimeout(function () { if (real()) label(); else fallback(); }, 120);
+            }
         }
         button.addEventListener("click", function (e) {
             // Never let the toggle double as a game tap.
             e.preventDefault();
             e.stopPropagation();
             if (active()) {
-                if (document.fullscreenElement || document.webkitFullscreenElement) {
-                    exit.call(document);
+                if (real()) {
+                    try { exit.call(document); } catch (err) { /* already out */ }
                 }
                 game.classList.remove("immersive");
-            } else if (request) {
-                // The rejection is async, so the label has to be refreshed
-                // from inside the handlers rather than straight after -
-                // otherwise the fallback lands after the button has already
-                // been relabelled from the old state.
-                request.call(game).then(label, function () {
-                    game.classList.add("immersive");
-                    label();
-                });
+                label();
             } else {
-                game.classList.add("immersive");
+                enter();
             }
-            label();
             if (canvas) canvas.focus();
         });
         document.addEventListener("fullscreenchange", label);
