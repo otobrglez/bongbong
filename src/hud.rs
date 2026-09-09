@@ -22,6 +22,25 @@ use crate::{Rect, MAX_DAMAGE, PICKUP_TEXTURE_SIZE, SHELL_TEXTURE_SIZE};
 pub const HUD_TEXT_SIZE: i32 = 18;
 /// The small labels over the timed-buff bars (`SPEED`/`SHIELD`/`FROG`).
 pub const HUD_LABEL_SIZE: i32 = 10;
+/// The version line near the field's bottom-right corner.
+pub const HUD_VERSION_TEXT_SIZE: i32 = 20;
+/// How far the version line's right end sits in from the field's right
+/// edge: clear of the web page's `Full screen` button, which occupies the
+/// corner itself (about 90 px wide, 10 px in), plus a gap.
+pub const HUD_VERSION_RIGHT_INSET: i32 = 120;
+/// How far the version line's bottom sits up from the field's bottom
+/// edge: chosen so its glyphs sit level with the page's `Full screen`
+/// button (a ~22 px box ending 10 px up).
+pub const HUD_VERSION_BOTTOM_INSET: i32 = 11;
+/// The version line's colour: white at 70%, a step below the HUD's
+/// readouts so it never competes with the round.
+pub const HUD_VERSION_COLOR: Color = Color::new(255, 255, 255, 179);
+
+/// The build stamp drawn in the field's bottom-right corner, e.g.
+/// `v0.0.19 @otobrglez`.
+pub fn version_line() -> String {
+    format!("v{} @otobrglez", env!("CARGO_PKG_VERSION"))
+}
 
 /// Accent colours for the three special weapons: their count in the bar
 /// always, their slot's outline while that weapon is the live one.
@@ -29,9 +48,12 @@ pub const HUD_LASER_COLOR: Color = Color::new(255, 60, 160, 255);
 pub const HUD_PLASMA_COLOR: Color = Color::new(60, 220, 200, 255);
 pub const HUD_MINIGUN_COLOR: Color = Color::new(190, 205, 215, 255);
 
-const BAR_FILL: Color = Color::new(12, 12, 14, 255);
-const TEXT: Color = Color::WHITE;
-const DIM: Color = Color::new(110, 110, 118, 255);
+/// The bar's fill - the same `#151515` the web page is set in, so the bar
+/// and the page read as one surface around the field. The editor's bar
+/// shares these.
+pub const BAR_FILL: Color = Color::new(21, 21, 21, 255);
+pub const TEXT: Color = Color::WHITE;
+pub const DIM: Color = Color::new(110, 110, 118, 255);
 const HEART: Color = Color::new(230, 60, 70, 255);
 const SPEED_COLOR: Color = Color::new(255, 210, 60, 255);
 const SHIELD_COLOR: Color = Color::new(170, 120, 255, 255);
@@ -160,7 +182,7 @@ pub fn hud_number_color(current: f32, max: f32) -> Color {
     } else if frac < tuning().hud_warn_threshold {
         Color::ORANGE
     } else {
-        Color::WHITE
+        TEXT
     }
 }
 

@@ -613,8 +613,8 @@ pub const GROUND_SCALE: f32 = 2.0;
 pub const GROUND_WORLD_TILE: f32 = GROUND_TEXTURE_SIZE * GROUND_SCALE; // = OBSTACLE_GRID_SIZE
 
 // Inset of the dev-only overlay label from the field's top-left corner
-// (`game.rs`). The player's readouts themselves live in the HUD bar above
-// the field (`hud.rs`), so this is the one thing still drawn in a corner.
+// (`game.rs`); the version line has its own insets in `hud.rs`. The
+// player's readouts themselves live in the HUD bar above the field.
 pub const HUD_MARGIN: i32 = 20;
 
 // ToxicFrog (src/frog.rs): the player's protect-objective - a static NPC

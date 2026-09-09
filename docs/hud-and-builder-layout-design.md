@@ -3,7 +3,8 @@
 Status: variant A's play mode is implemented (2026-09): `Layout` and
 `HUD_BAR_HEIGHT` in `lib.rs`, the bar in `hud.rs`, the field offset in
 `game.rs`/`main.rs`, the editor's toolbar in the bar (its palette still
-floats over the field), the web canvas at 1280x752. Still open: the
+floats over the field), the web canvas at 1280x752; the version line stays bottom-right of the
+field rather than moving into the title alone. Still open: the
 build-mode dropdowns, the map settings steppers and the in-game
 `Driver { Play, Build }` switch. Sketches where the player's
 inventory readout (health, shells, weapon queue, wave, objective) lives so

@@ -12,7 +12,7 @@ use rand::RngExt;
 use sola_raylib::prelude::*;
 
 use crate::ground::{self, GroundGrid};
-use crate::hud::HUD_TEXT_SIZE;
+use crate::hud::{BAR_FILL, DIM, HUD_TEXT_SIZE, TEXT};
 use crate::map::{self, CellObject, MapFile};
 use crate::obstacle::{self, Material};
 use crate::pickup::PickupKind;
@@ -718,7 +718,7 @@ impl MapEditor {
     fn draw_bar(&self, d: &mut impl RaylibDraw, layout: &Layout, field_mouse: Vector2) {
         let panel = layout.panel;
         let (px, py, pw, ph) = (panel.x as i32, panel.y as i32, panel.w as i32, panel.h as i32);
-        d.draw_rectangle(px, py, pw, ph, Color::new(12, 12, 14, 255));
+        d.draw_rectangle(px, py, pw, ph, BAR_FILL);
         let text_y = py + (ph - HUD_TEXT_SIZE) / 2;
 
         d.draw_text("BUILD", px + 8, text_y, HUD_TEXT_SIZE, Color::new(255, 200, 80, 255));
@@ -727,7 +727,7 @@ impl MapEditor {
             self.current_name.as_deref().unwrap_or("untitled"),
             if self.dirty { " *" } else { "" }
         );
-        d.draw_text(&name, px + 96, text_y, HUD_TEXT_SIZE, Color::WHITE);
+        d.draw_text(&name, px + 96, text_y, HUD_TEXT_SIZE, TEXT);
 
         let (width, height) = (layout.field.w, layout.field.h);
         if field_mouse.x >= 0.0 && field_mouse.x <= width && field_mouse.y >= 0.0 && field_mouse.y <= height {
@@ -737,13 +737,13 @@ impl MapEditor {
                 .cell(col, row)
                 .map(|obj| format!("{obj:?}"))
                 .unwrap_or_default();
-            d.draw_text(&format!("{col},{row}  {under}"), px + 400, text_y, HUD_TEXT_SIZE, Color::new(110, 110, 118, 255));
+            d.draw_text(&format!("{col},{row}  {under}"), px + 400, text_y, HUD_TEXT_SIZE, DIM);
         }
 
         for (i, &label) in Self::TOOLBAR_LABELS.iter().enumerate() {
             let rect = Self::toolbar_button_rect(layout, i);
             d.draw_rectangle_rounded_lines_ex(rect, 0.2, EDITOR_PANEL_SEGMENTS, 1.0, Color::new(255, 255, 255, 60));
-            d.draw_text(label, (rect.x + 8.0) as i32, (rect.y + 4.0) as i32, 16, Color::WHITE);
+            d.draw_text(label, (rect.x + 8.0) as i32, (rect.y + 4.0) as i32, 16, TEXT);
         }
     }
 }

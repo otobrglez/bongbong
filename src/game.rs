@@ -22,7 +22,10 @@ use crate::marker::{draw_destination, draw_target_brackets};
 use crate::pickup::{Pickup, PickupKind, draw_pickup};
 use crate::plasma::{Plasma, PlasmaState, draw_plasma, draw_plasma_shadow};
 use crate::shell::{Shell, ShellState, draw_shell, draw_shell_shadow};
-use crate::hud::{draw_bar, HudModel};
+use crate::hud::{
+    draw_bar, version_line, HudModel, HUD_VERSION_BOTTOM_INSET, HUD_VERSION_COLOR, HUD_VERSION_RIGHT_INSET,
+    HUD_VERSION_TEXT_SIZE,
+};
 use crate::shockwave::{RippleFx, screen_to_ripple_uv};
 use crate::simulation::{Game, Outcome};
 #[cfg(feature = "dev-tools")]
@@ -165,6 +168,10 @@ impl Game {
         let player = self.player.expect("player entity spawned in init");
 
         let hud = HudModel::gather(self);
+        // The build stamp, bottom-right of the field (text width must be
+        // measured on the RaylibHandle, outside the draw closure).
+        let version = version_line();
+        let version_w = rl.measure_text(&version, HUD_VERSION_TEXT_SIZE);
 
         // Precompute the centered end-of-round banner (text width must be
         // measured on the RaylibHandle, outside the draw closure).
@@ -718,6 +725,16 @@ impl Game {
                         );
                     }
                 }
+
+                // The build stamp along the field's bottom edge, left of
+                // the corner the web page's Full screen button sits in.
+                d.draw_text(
+                    &version,
+                    screen_width - HUD_VERSION_RIGHT_INSET - version_w,
+                    screen_height - HUD_VERSION_BOTTOM_INSET - HUD_VERSION_TEXT_SIZE,
+                    HUD_VERSION_TEXT_SIZE,
+                    HUD_VERSION_COLOR,
+                );
 
                 // End-of-round banner over a dimming overlay.
                 if let Some((title, color, title_size, title_w, sub, sub_size, sub_w)) = &banner {

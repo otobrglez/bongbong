@@ -20,14 +20,16 @@
       html, body {
         margin: 0;
         min-height: 100%;
-        background-color: #2e2e2e;
+        /* The same #151515 the game's HUD bar is filled with, so the bar
+           and the page read as one surface around the field. */
+        background-color: #151515;
         color: $font-color;
         font-family: sans-serif;
         font-size: $font-size;
       }
 
       a {
-        color:#888;
+        color: #888;
       }
 
       .wrapper {
@@ -53,12 +55,20 @@
              HUD bar, 1280x752 (`HUD_BAR_HEIGHT` in src/lib.rs). */
           --canvas-w: min(100vw, 1280px, calc((100vh - 90px) * 1280 / 752));
 
-          /* Sits in the canvas's top-right corner: the canvas is centered in
-             .game, so its right edge is half the leftover width in from ours. */
-          .subscribe-link {
+          /* The two overlay controls sit on the canvas's *bottom* corners,
+             off the HUD bar along its top. The canvas is centred in .game
+             and is its first block, so a corner is half the leftover width
+             in from ours and the canvas's own height (its width at 752/1280)
+             down; `translateY(-100%)` hangs the control up from that line so
+             its height never needs to be known. */
+          .subscribe-link, .fullscreen-toggle {
             position: absolute;
-            top: 8px;
-            right: calc((100% - var(--canvas-w)) / 2 + 10px);
+            top: calc(var(--canvas-w) * 752 / 1280 - 10px);
+            transform: translateY(-100%);
+          }
+
+          .subscribe-link {
+            left: calc((100% - var(--canvas-w)) / 2 + 10px);
             z-index: 1;
             padding: 3px 8px;
             border-radius: 3px;
@@ -198,6 +208,11 @@
 
             --canvas-w: min(100vw, 1280px, calc(100vh * 1280 / 752));
             .instructions, .tuning { display: none; }
+            /* The canvas is centred vertically here, so its bottom edge is
+               the middle of the box plus half its height. */
+            .subscribe-link, .fullscreen-toggle {
+              top: calc(50% + var(--canvas-w) * 752 / 2560 - 10px);
+            }
           }
 
           /* Same treatment for real fullscreen, where the .game element is
@@ -208,14 +223,13 @@
 
             --canvas-w: min(100vw, 1280px, calc(100vh * 1280 / 752));
             .instructions, .tuning { display: none; }
+            .subscribe-link, .fullscreen-toggle {
+              top: calc(50% + var(--canvas-w) * 752 / 2560 - 10px);
+            }
           }
 
-          /* Top *right*, under the subscribe link: the game's HUD bar runs
-             along the top, but its right end is the one slot it leaves
-             empty, so this is the corner nothing fights over. */
+          /* Bottom *right*, opposite the subscribe link. */
           .fullscreen-toggle {
-            position: absolute;
-            top: 34px;
             right: calc((100% - var(--canvas-w)) / 2 + 10px);
             z-index: 2;
             padding: 3px 9px;
