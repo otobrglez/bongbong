@@ -28,7 +28,7 @@ use crate::simulation::Overlays;
 use crate::tank::Dir;
 use crate::tank::{
     ActiveWeapon, Tank, draw_enemy_ring, draw_minigun_mount, draw_minigun_mount_shadow, draw_player_ring, draw_tank,
-    draw_tank_shadow, draw_tank_shield,
+    draw_order_ring, draw_tank_shadow, draw_tank_shield,
 };
 use crate::track::draw_track;
 use crate::{
@@ -110,6 +110,7 @@ fn draw_one_tank(
     role: TankRole,
     time: f32,
     shadows: bool,
+    order: Option<bool>,
 ) {
     match role {
         TankRole::Player => draw_player_ring(d, tank, time),
@@ -125,6 +126,14 @@ fn draw_one_tank(
     draw_minigun_mount(d, textures.minigun_mount, tank);
     if role != TankRole::RollIn {
         draw_damage(d, textures.damage, tank, time);
+    }
+    // The order marker goes *over* the hull, unlike every other ring here.
+    // Nested inside the health donut it is smaller than the tank sprite, so
+    // drawn as a ground decal it is simply invisible - the donut only reads
+    // at all because it is wide enough to clear the hull's corners and
+    // because `ring_position` trails behind the tank when it moves.
+    if let Some(engage) = order {
+        draw_order_ring(d, tank, time, engage);
     }
 }
 
@@ -404,7 +413,7 @@ impl Game {
                 next_tuft = grass_up_to(&mut d, *key, next_tuft);
                 match item {
                     Standing::Tank(tank, role) => {
-                        draw_one_tank(&mut d, textures, tank, *role, self.time, self.shadows_enabled)
+                        draw_one_tank(&mut d, textures, tank, *role, self.time, self.shadows_enabled, self.orders.ring_engage())
                     }
                     Standing::Frog(entity) => {
                         crate::simulation::with_frog(&self.world, *entity, |frog| {
@@ -971,6 +980,42 @@ impl Game {
     /// collect radii. Each layer costs nothing while off.
     fn draw_debug_overlays(&self, d: &mut impl RaylibDraw, width: f32, height: f32) {
         let ov = self.debug_overlays;
+        if ov.orders {
+            // The tap order, laid out end to end: where the tank is going,
+            // how close it has to get to shoot, and how wide the axis it has
+            // to stand on is. The corridor is the one worth watching - it is
+            // 24px against a target that can cross 109px while a shell is in
+            // flight, which is why the assist holds fire rather than
+            // spending a shell it cannot land (see simulation::orders).
+            let grid = self.nav_grid(width, height);
+            let route = self.order_route(&grid, 48);
+            let me = crate::simulation::with_tank(&self.world, self.player.expect("player"), |t| t.position);
+            let mut prev = me;
+            for step in &route {
+                d.draw_line_ex(prev, *step, 2.0, Color::new(120, 200, 255, 160));
+                d.draw_circle_v(*step, 2.5, Color::new(120, 200, 255, 200));
+                prev = *step;
+            }
+            if let Some(o) = self.player_order() {
+                let at = crate::Position::new(o.x, o.y);
+                let t = tuning();
+                d.draw_circle_lines(me.x as i32, me.y as i32, t.enemy_attack_range, Color::new(255, 140, 60, 70));
+                if o.kind == "engage" {
+                    let w = t.enemy_fire_align_px;
+                    let band = Color::new(255, 140, 60, 45);
+                    d.draw_rectangle_rec(Rectangle::new(at.x - w, 0.0, w * 2.0, height), band);
+                    d.draw_rectangle_rec(Rectangle::new(0.0, at.y - w, width, w * 2.0), band);
+                    d.draw_circle_lines(at.x as i32, at.y as i32, 18.0, Color::new(255, 90, 40, 220));
+                }
+                d.draw_text(
+                    &format!("order: {} -> ({:.0}, {:.0})", o.kind, o.x, o.y),
+                    (prev.x + 20.0) as i32,
+                    (prev.y - 34.0) as i32,
+                    14,
+                    Color::new(255, 200, 140, 220),
+                );
+            }
+        }
         if ov.nav_grid {
             let grid = self.nav_grid(width, height);
             let (cols, rows, cell) = grid.dims();

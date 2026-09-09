@@ -492,6 +492,11 @@ fn main() {
         }
     };
 
+    // A held finger is reported as a touch-point *count*, not as a press, so
+    // the press edge has to be found here - one tap must produce exactly one
+    // order (see `Input::tap`).
+    let mut touch_held_last_frame = false;
+
     // game_loop::run drives a plain `while !window_should_close()` loop on
     // native, and hands this closure to emscripten's main loop on web - same
     // source for both, and no -sASYNCIFY=1 needed to keep the browser tab
@@ -552,8 +557,24 @@ fn main() {
         // shells, full-auto while a laser is charged) is `Game::update`'s
         // call, not this closure's; see `Input::player_intent`'s doc comment.
         player_intent.fire = rl.is_key_down(KeyboardKey::KEY_SPACE);
+        // Tap-to-command (docs/tap-navigation.md). The scene blits 1:1 -
+        // `game.rs` draws the render target with `draw_texture_rec`, whose
+        // only offset is the camera shake - so a window position *is* a
+        // world position, give or take a couple of 2px blocks during an
+        // explosion. Touch is edge-detected by hand because raylib reports a
+        // held finger as a point count, not a press.
+        let touching = rl.get_touch_point_count() > 0;
+        let tap = if rl.is_mouse_button_pressed(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_LEFT) {
+            Some(rl.get_mouse_position())
+        } else if touching && !touch_held_last_frame {
+            Some(rl.get_touch_position(0))
+        } else {
+            None
+        };
+        touch_held_last_frame = touching;
         let input = Input {
             player_intent,
+            tap,
             pause_pressed: rl.is_key_pressed(KeyboardKey::KEY_P),
             // The dev panel's "Restart round" button lands here too, as if
             // R had been pressed - the simulation never learns a browser

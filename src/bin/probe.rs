@@ -454,6 +454,9 @@ fn input_for_frame(scenario: Scenario, frame: u32) -> Input {
     }
     Input {
         player_intent,
+        // The probe scripts intents, not taps; a scenario that wants to
+        // exercise tap orders sets this itself.
+        tap: None,
         pause_pressed: false,
         restart_pressed: false,
         toggle_shadows_pressed: false,

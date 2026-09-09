@@ -369,6 +369,7 @@ impl Ai {
         pickups: &[(PickupKind, Position)],
         line_of_sight: bool,
         player_line_of_sight: bool,
+        target_concealed: bool,
         walls_ahead: [Option<WallAhead>; 4],
     ) -> Intent {
         self.fire_timer = (self.fire_timer - dt).max(0.0);
@@ -447,6 +448,7 @@ impl Ai {
             pickups,
             line_of_sight,
             player_line_of_sight,
+            target_concealed,
             walls_ahead,
         };
         let mut last_action = None;
@@ -1091,6 +1093,13 @@ struct Brain<'a> {
     /// The same test toward the player - see `think`'s
     /// `player_line_of_sight` parameter.
     player_line_of_sight: bool,
+    /// Whether the target is hidden from *this* tank by tall grass
+    /// (`Terrain::conceals` plus `grass_reveal_range`). Separate from
+    /// `line_of_sight` on purpose: that one also counts walls, and a tank
+    /// that stopped chasing whenever a wall came between it and the player
+    /// would never path around anything. This one only ever means "lost in
+    /// cover", so it can gate the chase tier without touching navigation.
+    target_concealed: bool,
     /// The tile directly ahead in each direction - see `think`'s
     /// `walls_ahead` parameter.
     walls_ahead: [Option<WallAhead>; 4],
@@ -1391,7 +1400,7 @@ impl Brain<'_> {
 /// Perpendicular and forward distance of `to` from `from` along the cardinal
 /// axis `dir` points along - shared by aim alignment (target: the player) and
 /// friendly-fire avoidance (target: another enemy), so both read the same way.
-fn axis_offsets(from: Position, to: Position, dir: Dir) -> (f32, f32) {
+pub(crate) fn axis_offsets(from: Position, to: Position, dir: Dir) -> (f32, f32) {
     let dx = to.x - from.x;
     let dy = to.y - from.y;
     match dir {
@@ -1467,7 +1476,17 @@ fn build<'a>() -> Node<Brain<'a>> {
         ]),
         // 4. Attack when the target is alive and within attack range.
         sequence(vec![
-            condition(|b: &mut Brain| b.target_alive() && b.dist_to_target() <= tuning().enemy_attack_range),
+            condition(|b: &mut Brain| {
+                b.target_alive()
+                    && b.dist_to_target() <= tuning().enemy_attack_range
+                    // Concealment has to break this tier as well as the
+                    // chase below it, or a lost player is still walked at:
+                    // `act_attack`'s unaligned branch repositions toward the
+                    // target, so a tank that cannot shoot still closes until
+                    // it is near enough to see through the grass. A hunter
+                    // is aiming at the frog, not the player, so it is exempt.
+                    && (b.hunting_frog() || !b.target_concealed || b.ai.hit_alert_timer > 0.0)
+            }),
             action("attack", act_attack),
         ]),
         // 5. Chase when the target is alive and either within view range or
@@ -1480,7 +1499,14 @@ fn build<'a>() -> Node<Brain<'a>> {
             condition(|b: &mut Brain| {
                 b.target_alive()
                     && (b.hunting_frog()
-                        || b.dist_to_target() <= tuning().enemy_view_range
+                        // Concealment breaks the chase, which is what makes
+                        // hiding mean anything: without it the tier below
+                        // (patrol, which follows the shared alert) is never
+                        // reached and every enemy inside view range walks
+                        // straight to a player it cannot see. A tank that
+                        // took a hit keeps coming regardless - it knows
+                        // something is there.
+                        || (b.dist_to_target() <= tuning().enemy_view_range && !b.target_concealed)
                         || b.ai.hit_alert_timer > 0.0)
             }),
             action("chase", act_chase),
@@ -1843,6 +1869,7 @@ mod role_tests {
             &[],
             true,
             true,
+            false,
             [None; 4],
         )
     }
@@ -1974,6 +2001,7 @@ mod stuck_tests {
             None,
             None,
             &[],
+            false,
             false,
             false,
             [None; 4],

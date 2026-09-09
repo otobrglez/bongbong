@@ -1146,6 +1146,35 @@ pub enum RingStyle {
     Gauge { frac: f32, ramp: HealthRamp, base: Color },
 }
 
+/// The tap-order marker: a thin ring nested inside the player's health
+/// donut, present only while a standing order is running
+/// (docs/tap-navigation.md). Cool for a move, hot for an engagement.
+///
+/// No new `RingStyle` for this - `draw_ground_ring_at` derives its radius
+/// from the `size` it is handed, so a scaled call lands concentrically
+/// inside the donut's own inner disc for free. Keeping the feedback on the
+/// tank rather than as a pip out on the field is deliberate: it cannot
+/// clutter a 1280x720 arcade screen, because it is inside a ring that is
+/// already there.
+pub fn draw_order_ring(d: &mut impl RaylibDraw, tank: &Tank, time: f32, engage: bool) {
+    let colour = if engage { ORDER_ENGAGE_COLOR } else { ORDER_MOVE_COLOR };
+    draw_ground_ring_at(
+        d,
+        tank.ring_position,
+        tank.size() * tuning().order_ring_scale,
+        tank.anim_phase(),
+        time,
+        RingStyle::Solid(colour),
+        1.0,
+    );
+}
+
+/// Order-marker colours: a cool tone for "go here", a hot one for "kill
+/// that". Deliberately readable rather than palette-snapped - like the
+/// pickup icons, a marker has to be found at a glance against terrain.
+const ORDER_MOVE_COLOR: Color = Color::new(150, 215, 255, 210);
+const ORDER_ENGAGE_COLOR: Color = Color::new(255, 150, 60, 225);
+
 /// Draw one translucent ground ring under a tank: a band of radius
 /// `Tank::size() * shield_glow_radius_factor` (breathing gently around it
 /// for the rainbow style, fixed for a solid one) plus a faint disc inside,

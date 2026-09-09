@@ -100,6 +100,11 @@ pub const TOOLS: &[ToolSpec] = &[
         schema: r#"{"type":"object","properties":{"move_dir":{"type":"string","enum":["up","down","left","right"]},"face":{"type":"string","enum":["up","down","left","right"]},"fire":{"type":"boolean"},"frames":{"type":"integer","default":1},"cycle_overlays":{"type":"boolean","default":false}}}"#,
     },
     ToolSpec {
+        name: "tap",
+        description: "Tap (or click) the battlefield at (x, y) in screen pixels, as a touch player would - the player tank takes a standing order from it: drive there, or close on and engage whatever is under the point (an enemy tank, the enemy frog, or a destructible tile). The order survives until the target dies, the destination is reached, the route turns out not to exist, or a movement key/`input` cancels it. `snapshot` and `status` report it back as `player_order`.",
+        schema: r#"{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"]}"#,
+    },
+    ToolSpec {
         name: "pause",
         description: "Enter lockstep: the game stops advancing (no PAUSED overlay, so screenshots stay clean) until `step` or `resume`.",
         schema: NO_PARAMS,
@@ -127,12 +132,12 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "screenshot",
         description: "Capture the current frame (the state after the latest step) as a PNG: returned inline and saved under target/devshots/. scale 0.5 (default) halves it; use 1.0 to read overlay text. Optionally set overlay flags in the same call (same as the `overlays` tool). source=scene skips the HUD and overlays.",
-        schema: r#"{"type":"object","properties":{"scale":{"type":"number","default":0.5,"minimum":0.1,"maximum":1},"source":{"type":"string","enum":["screen","scene"],"default":"screen"},"overlays":{"type":"object","properties":{"nav_grid":{"type":"boolean"},"ai":{"type":"boolean"},"projectiles":{"type":"boolean"},"engage":{"type":"boolean"},"pickups":{"type":"boolean"},"inspect":{"type":"boolean"}}}}}"#,
+        schema: r#"{"type":"object","properties":{"scale":{"type":"number","default":0.5,"minimum":0.1,"maximum":1},"source":{"type":"string","enum":["screen","scene"],"default":"screen"},"overlays":{"type":"object","properties":{"nav_grid":{"type":"boolean"},"ai":{"type":"boolean"},"projectiles":{"type":"boolean"},"engage":{"type":"boolean"},"pickups":{"type":"boolean"},"inspect":{"type":"boolean"},"orders":{"type":"boolean"}}}}}"#,
     },
     ToolSpec {
         name: "overlays",
-        description: "Set persistent debug overlays drawn on top of the game (visible to the human too), one flag at a time: nav_grid (blocked pathfinding cells), ai (each enemy's waypoint, heading, last behaviour-tree action), projectiles (hit boxes + velocity), engage (engagement-ring targets), pickups (collect radius), inspect (tank hitboxes + stat readout). Omitted flags keep their value; replies with the current flags. The I key in the game window cycles presets instead (off -> inspect -> all); `input {cycle_overlays: true}` presses it.",
-        schema: r#"{"type":"object","properties":{"nav_grid":{"type":"boolean"},"ai":{"type":"boolean"},"projectiles":{"type":"boolean"},"engage":{"type":"boolean"},"pickups":{"type":"boolean"},"inspect":{"type":"boolean"}}}"#,
+        description: "Set persistent debug overlays drawn on top of the game (visible to the human too), one flag at a time: nav_grid (blocked pathfinding cells), ai (each enemy's waypoint, heading, last behaviour-tree action), projectiles (hit boxes + velocity), engage (engagement-ring targets), pickups (collect radius), inspect (tank hitboxes + stat readout), orders (the player's tap order: its route, the attack ring, the alignment corridor and the order state). Omitted flags keep their value; replies with the current flags. The I key in the game window cycles presets instead (off -> inspect -> all); `input {cycle_overlays: true}` presses it.",
+        schema: r#"{"type":"object","properties":{"nav_grid":{"type":"boolean"},"ai":{"type":"boolean"},"projectiles":{"type":"boolean"},"engage":{"type":"boolean"},"pickups":{"type":"boolean"},"inspect":{"type":"boolean"},"orders":{"type":"boolean"}}}"#,
     },
     ToolSpec {
         name: "nav_grid",
@@ -282,6 +287,9 @@ pub struct DevServer {
     /// An `input {cycle_overlays}` request waiting to press the I key on
     /// the next frame's input.
     cycle_overlays_pending: bool,
+    /// A tap queued by the `tap` tool, delivered on the next frame's
+    /// `Input` and then cleared - one request, one press.
+    pending_tap: Option<Position>,
     pending_shot: Option<PendingShot>,
     events: VecDeque<EventRecord>,
     next_seq: u64,
@@ -325,6 +333,7 @@ impl DevServer {
             pending_step: None,
             injected: None,
             cycle_overlays_pending: false,
+            pending_tap: None,
             pending_shot: None,
             events: VecDeque::with_capacity(EVENT_RING),
             next_seq: 1,
@@ -379,7 +388,14 @@ impl DevServer {
                     player_intent.fire = player_intent.fire && i % n == 0;
                 }
                 let before = game.frame();
-                game.update(Input { player_intent, ..Input::default() }, PHYSICS_FIXED_DT, width, height);
+                // A queued tap lands on the first frame of the step and
+                // only that one - one request, one press, exactly like a
+                // real click. It has to be delivered *here* rather than in
+                // `shape_input`: while the game is frozen in lockstep no
+                // update runs at all, so a tap consumed at input-gathering
+                // time would simply be thrown away.
+                let tap = (i == 0).then(|| self.pending_tap.take()).flatten();
+                game.update(Input { player_intent, tap, ..Input::default() }, PHYSICS_FIXED_DT, width, height);
                 if game.frame() != before + 1 {
                     step.restarted = true;
                 }
@@ -399,7 +415,8 @@ impl DevServer {
                 "snapshot": snapshot,
             })));
         } else if !self.lockstep {
-            game.update(input, real_dt, width, height);
+            let tap = self.pending_tap.take().or(input.tap);
+            game.update(Input { tap, ..input }, real_dt, width, height);
             self.drain_events(game, None);
             self.record_history(game);
         }
@@ -569,6 +586,7 @@ impl DevServer {
             "width": width,
             "height": height,
             "overlays": overlays_json(game),
+            "player_order": game.player_order(),
             "map": map_json(&game.map),
             "events_kept": self.events.len(),
             "next_event_seq": self.next_seq,
@@ -623,6 +641,16 @@ impl DevServer {
                 }
                 (Err(e), _) | (_, Err(e)) => Err(e),
             },
+            "tap" => {
+                let (x, y) = (params.get("x").and_then(Value::as_f64), params.get("y").and_then(Value::as_f64));
+                match (x, y) {
+                    (Some(x), Some(y)) => {
+                        self.pending_tap = Some(Position::new(x as f32, y as f32));
+                        Ok(json!({ "tap": { "x": x, "y": y } }))
+                    }
+                    _ => Err("tap needs numeric x and y".to_string()),
+                }
+            }
             "pause" => {
                 self.lockstep = true;
                 Ok(self.status(game, width, height))
@@ -906,6 +934,9 @@ fn apply_overlays(game: &mut Game, flags: &Value) {
     }
     if let Some(b) = flag("engage") {
         o.engage = b;
+    }
+    if let Some(b) = flag("orders") {
+        o.orders = b;
     }
     if let Some(b) = flag("pickups") {
         o.pickups = b;

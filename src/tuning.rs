@@ -986,6 +986,26 @@ tunables! {
         /// gives slowly at first and then goes - without it a rammed tree
         /// stands bolt upright until it simply vanishes.
         tree_lean_px: f32 = 22.0 in 0.0 ..= 80.0;
+        /// How close a Move order has to get before it counts as arrived
+        /// and the order ends. Roughly a tank's own width, so the tank stops
+        /// *at* the tap rather than grinding into the exact pixel.
+        order_arrive_px: f32 = 26.0 in 1.0 ..= 200.0;
+        /// Radius of the tap-order marker as a fraction of the ring the
+        /// health donut is drawn at. Must stay under 0.78 - that is where
+        /// the donut's own inner disc begins (`radius - thickness` in
+        /// `draw_ground_ring_at`) - or the marker sits on top of the gauge
+        /// instead of nested inside it.
+        order_ring_scale: f32 = 0.62 in 0.1 ..= 0.78;
+        /// Extra off-axis slack before an already-aligned tap order counts
+        /// as having lost its firing line. The alignment test is hysteretic
+        /// - it takes a wider miss to lose alignment than to gain it - or a
+        /// target hovering on the `enemy_fire_align_px` boundary makes the
+        /// tank stutter between holding its aim and sidestepping.
+        order_align_hysteresis_px: f32 = 14.0 in 0.0 ..= 200.0;
+        /// How long a tap order holds a chosen heading before it may switch,
+        /// the player-side twin of `ai_dir_hold_seconds`: without it a
+        /// diagonal route makes the tank alternate directions every frame.
+        order_dir_hold_seconds: f32 = 0.3 in 0.0 ..= 5.0;
         /// Odds a tree is the kind that catches fire when it dies instead
         /// of simply falling, rolled once per tile at spawn. Zero draws no
         /// RNG at all, so a treeless map replays unchanged. Burn timing is

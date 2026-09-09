@@ -774,23 +774,31 @@ fn destroying_a_tile_re_exposes_its_neighbours() {
 
 }
 
+/// Grass hides you *from the AI*, not just from its trigger.
+///
+/// Concealment gates four things - the shared alert, the attack tier, the
+/// chase tier and ram damage - because any one left open ends with the pack
+/// standing on top of a player it cannot see: `act_attack`'s unaligned
+/// branch repositions toward the target, so gating only the shot still
+/// walks them in.
+///
+/// **The player is pinned each frame, and that is not a cheat.** Without it
+/// the test measures knockback, not concealment: an idle player takes a hit,
+/// gets shoved out of a 32px cell, and is then shot in the open. Measured on
+/// the previous version of this test, the player was actually concealed for
+/// 73 of 900 frames while claiming to be hiding, and even a 5x5 patch only
+/// got that to 132. Pinning isolates the AI's decision, which is the thing
+/// this change is about.
 #[test]
-fn tall_grass_hides_the_player_from_enemy_fire() {
-    // Concealment is a property of the *target's* cell, not of the ray: an
-    // enemy with a clear line to a player standing in grass cannot take the
-    // shot. It deliberately does not stop them approaching - see the
-    // comment in `enemy_phase`.
-    //
-    // Measured as projectile hits *on the player*, not as shots fired and
-    // not as damage taken. Shots fired is wrong because a hunter-role enemy
-    // is aiming at the *frog* - it firing is correct and says nothing about
-    // whether the player is hidden. Total damage is wrong because with
-    // fewer shots the round draws fewer RNG values, so the two runs diverge
-    // into different trajectories and their damage is not comparable; the
-    // grass run measured *higher* total damage while taking a ninth of the
-    // hits, all of it from a ram.
+fn tall_grass_hides_the_player_from_the_ai() {
+    let mut cells = String::new();
+    for c in 19..=21 {
+        for r in 10..=12 {
+            cells.push_str(&format!("cells.\"{c},{r}\" = {{ kind = \"tall_grass\" }}\n"));
+        }
+    }
     let open = map_with("");
-    let grassy = map_with("cells.\"20,11\" = { kind = \"tall_grass\" }\n");
+    let grassy = map_with(&cells);
 
     let hits_taken = |map: &str| {
         let mut game = Game::default();
@@ -799,37 +807,67 @@ fn tall_grass_hides_the_player_from_enemy_fire() {
         game.player_row_override = Some(0);
         game.map = MapFile::from_toml_str(map).expect("test map parses");
         game.init(W, H);
-        game.debug_teleport(0, cell_to_world(20, 11), Some(0.0)).unwrap();
+        let cell = cell_to_world(20, 11);
         for (i, slot) in [1, 2, 3].iter().enumerate() {
             let _ = game.debug_teleport(*slot, cell_to_world(18 + i as i32 * 2, 5), Some(180.0));
         }
-        let (mut shot, mut rammed) = (0, 0);
+        let mut hits = 0;
         for _ in 0..900 {
+            game.debug_teleport(0, cell, Some(0.0)).expect("player holds its ground");
             step(&mut game, Input::default());
-            for e in game.events() {
-                match e {
-                    Event::Hit { target: HitTarget::Player, .. } => shot += 1,
-                    Event::Ram { other_slot: None, .. } => rammed += 1,
-                    _ => {}
-                }
-            }
+            hits += game
+                .events()
+                .iter()
+                .filter(|e| matches!(e, Event::Hit { target: HitTarget::Player, .. }))
+                .count();
         }
-        let _ = rammed;
-        shot
+        hits
     };
 
-    let in_the_open = hits_taken(&open);
-    let in_the_grass = hits_taken(&grassy);
-    assert!(in_the_open >= 5, "the player is shot up standing in the open ({in_the_open} hits)");
-    assert!(
-        in_the_grass * 4 < in_the_open,
-        "and is barely hit standing in tall grass (open {in_the_open}, grass {in_the_grass})"
-    );
+    let open_hits = hits_taken(&open);
+    let grass_hits = hits_taken(&grassy);
+    assert!(open_hits >= 5, "the control has to actually be dangerous, got {open_hits}");
+    assert_eq!(grass_hits, 0, "a player who never leaves cover is never hit (open {open_hits})");
 }
 
-/// The precondition `game.rs`'s back-to-front pass relies on: it merges the
-/// tufts against the y-sorted units in one walk, which is only correct if
-/// `Game::grass` is already in root order.
+/// The cost of the mechanic: cover hides you until you use it. A tank the
+/// player shoots is `hit_alert`ed, and that exempts it from every
+/// concealment gate - it knows something is in there.
+#[test]
+fn shooting_from_cover_gives_the_player_away() {
+    let mut cells = String::new();
+    for c in 19..=21 {
+        for r in 10..=12 {
+            cells.push_str(&format!("cells.\"{c},{r}\" = {{ kind = \"tall_grass\" }}\n"));
+        }
+    }
+    let mut game = game_on(&map_with(&cells), 5);
+    let cell = cell_to_world(20, 11);
+    game.debug_teleport(0, cell, Some(0.0)).unwrap();
+    // One enemy straight up the axis, well inside attack range.
+    game.debug_teleport(1, cell_to_world(20, 6), Some(180.0)).unwrap();
+
+    // Fire and watch for return fire in the *same* loop: `hit_alert_timer`
+    // runs out after `enemy_hit_alert_seconds`, so checking in a second pass
+    // after the shooting stops just measures the alert expiring.
+    let (mut landed, mut shot_back) = (false, false);
+    for frame in 0..1200 {
+        game.debug_teleport(0, cell, Some(0.0)).unwrap();
+        // Tap the trigger periodically; shells are edge-triggered.
+        let firing = frame % 40 == 0;
+        step(&mut game, if firing { fire() } else { Input::default() });
+        for e in game.events() {
+            match e {
+                Event::Hit { target: HitTarget::Enemy { .. }, .. } => landed = true,
+                Event::Hit { target: HitTarget::Player, .. } => shot_back = true,
+                _ => {}
+            }
+        }
+    }
+    assert!(landed, "the player firing from cover has to be able to land a hit at all");
+    assert!(shot_back, "an enemy the player shot from cover shoots back into it");
+}
+
 #[test]
 fn grass_is_sorted_by_where_each_tuft_is_rooted() {
     let map = map_with("cells.\"20,11\" = { kind = \"tall_grass\" }\ncells.\"20,9\" = { kind = \"tall_grass\" }\ncells.\"20,13\" = { kind = \"tall_grass\" }\n");

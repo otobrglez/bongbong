@@ -23,12 +23,16 @@ mod combat;
 pub mod debug;
 mod engage;
 mod hits;
+mod orders;
 mod props;
 #[cfg(test)]
 mod props_tests;
+#[cfg(test)]
+mod tap_tests;
 mod waves;
 mod weapons;
 
+pub use orders::{Order, OrderReadout, OrderTarget, PlayerOrders};
 pub use waves::{RollIn, WaveStatus};
 use waves::WaveState;
 
@@ -101,6 +105,14 @@ pub struct Input {
     /// laser or minigun is full-auto while held; shells and plasma need a
     /// fresh press), since that depends on the player's current weapon.
     pub player_intent: Intent,
+    /// Where the player tapped or clicked this frame, in world pixels, on
+    /// the frame the press happened - `None` on every other frame.
+    ///
+    /// It rides in `Input` rather than being read inside `Game` because a
+    /// round has to replay bit-for-bit from `(seed, inputs)`: reading the
+    /// mouse from the simulation would put a value in the stream that no
+    /// replay or probe run could reproduce. See `simulation::orders`.
+    pub tap: Option<Position>,
     pub pause_pressed: bool,
     pub restart_pressed: bool,
     pub toggle_shadows_pressed: bool,
@@ -236,6 +248,9 @@ pub struct Overlays {
     pub engage: bool,
     /// Pickup collection radii.
     pub pickups: bool,
+    /// The player's tap order: the route to it, the attack ring, the
+    /// alignment corridor and the order state (docs/tap-navigation.md).
+    pub orders: bool,
 }
 
 impl Overlays {
@@ -247,6 +262,7 @@ impl Overlays {
         projectiles: false,
         engage: false,
         pickups: false,
+        orders: false,
     };
     /// Only the inspect layer.
     pub const INSPECT: Overlays = Overlays {
@@ -261,6 +277,7 @@ impl Overlays {
         projectiles: true,
         engage: true,
         pickups: true,
+        orders: true,
     };
 
     /// Whether any layer is on.
@@ -409,6 +426,9 @@ pub struct Game {
     /// The tufts those cells scatter, built once per round. Purely drawn -
     /// see `grass.rs` for why this is not an `Obstacle`.
     pub(crate) grass: Vec<crate::grass::GrassTuft>,
+    /// The player's standing tap order and the memory driving it
+    /// (`simulation::orders`). Cleared by `init` and by any arrow key.
+    pub(crate) orders: PlayerOrders,
     /// Queued ammo cook-offs from tanks that have died: where each pops and
     /// how long until it does. Purely cosmetic (see `tick_cookoffs`).
     pub(crate) cookoffs: Vec<(Position, f32)>,
@@ -578,6 +598,7 @@ impl Game {
         self.cookoffs.clear();
         self.grass_cells.clear();
         self.grass.clear();
+        self.orders.clear();
         self.laser_beams.clear();
         self.frame = 0;
         self.last_engage.clear();
@@ -891,15 +912,19 @@ impl Game {
         self.time += dt;
         self.tick_timers(dt, &mut rng);
         let terrain = Terrain::build(&self.world, width, height, &self.grass_cells);
+        // One nav grid for the whole frame, passed to the phases that need
+        // it rather than parked on `Frame` - a borrow living there would
+        // alias every `&mut Frame` the other phases take.
+        let grid = self.nav_grid(width, height);
         let mut f = Frame::new(dt, width, height, rng, terrain);
 
         if self.outcome == Outcome::Playing {
             self.apply_debug_kills(&mut f);
             self.frog_phase(&mut f);
             self.pickup_phase(&mut f);
-            self.player_phase(input, &mut f);
+            self.player_phase(input, &mut f, &grid);
             self.rollin_phase(&mut f);
-            self.enemy_phase(&mut f);
+            self.enemy_phase(&mut f, &grid);
             self.wave_phase(&mut f);
             self.spawn_pending(&mut f);
             self.resolve_lasers(&mut f);
@@ -1169,9 +1194,21 @@ impl Game {
     /// Drive the player from this frame's input and handle its fire key.
     /// The player is never a wreck here: becoming one ends the round, and
     /// the round-over path never reaches this phase.
-    fn player_phase(&mut self, input: Input, f: &mut Frame) {
+    fn player_phase(&mut self, input: Input, f: &mut Frame, grid: &Grid) {
         let player = self.player.expect("player entity spawned in init");
-        let intent = input.player_intent;
+        // Keys always win. Any commanded move drops the standing order
+        // before anything else looks at it, so the keyboard and the assist
+        // are never both writing the same frame (docs/tap-navigation.md).
+        if input.player_intent.move_dir.is_some() {
+            self.orders.clear();
+        }
+        if let Some(at) = input.tap {
+            self.orders.clear();
+            self.orders.current = self.resolve_tap(at, grid);
+        }
+        // A live order writes the intent in the raw one's place; when it
+        // finishes it clears itself and the tank coasts.
+        let intent = self.order_intent(f, grid).unwrap_or(input.player_intent);
         let mut q = self.world.query_one::<&mut Tank>(player);
         let tank = q.get().expect("player entity always has a Tank");
 
@@ -1194,20 +1231,23 @@ impl Game {
 
     /// Every enemy perceives (motion snapshot, nav grid, shared alert,
     /// engagement slot, pickups, line of sight), thinks, drives and fires.
-    fn enemy_phase(&mut self, f: &mut Frame) {
+    fn enemy_phase(&mut self, f: &mut Frame, grid: &Grid) {
         let player = self.player.expect("player entity spawned in init");
         let (movers, enemy_indices) = self.motion_snapshot();
-        let grid = self.nav_grid(f.width, f.height);
         let components = grid.components();
         let player_pos = movers[0].position;
 
         // Shared aggression: any enemy seeing the player refreshes the
         // group's last-known position, so the rest converge instead of
-        // patrolling blind.
+        // patrolling blind - and, since concealment gates this too, a player
+        // who stays hidden is genuinely *lost* once `enemy_alert_hold_seconds`
+        // runs out, rather than merely un-shootable.
         let alert_before = self.alert_position.filter(|_| self.alert_timer > 0.0);
-        let any_enemy_sees_player = movers[1..]
-            .iter()
-            .any(|m| m.position.distance_to(player_pos) <= tuning().enemy_view_range);
+        let concealed = f.terrain.conceals(player_pos);
+        let any_enemy_sees_player = !concealed
+            && movers[1..]
+                .iter()
+                .any(|m| m.position.distance_to(player_pos) <= tuning().enemy_view_range);
         if any_enemy_sees_player {
             self.alert_position = Some(player_pos);
             self.alert_timer = tuning().enemy_alert_hold_seconds;
@@ -1363,21 +1403,24 @@ impl Game {
                 Role::Guard => home,
                 Role::Player => None,
             };
-            // Concealment: a player sitting in tall grass cannot be fired
-            // at. Applied to the *target*, not to the ray - grass hides
-            // what is in it rather than blocking sight through it (see
-            // `Terrain::conceals`).
+            // Concealment: a player sitting in tall grass is lost, not
+            // merely un-shootable. Applied to the *target*, not to the ray -
+            // grass hides what is in it rather than blocking sight through
+            // it (see `Terrain::conceals`) - and it gates the shared alert
+            // above, the attack and chase tiers in `ai::build`, and ram
+            // damage in `sync_tanks_and_ram`. All four, because any one left
+            // open lets an enemy walk to a player it cannot see: the attack
+            // tier's unaligned branch repositions toward the target, so
+            // gating only the shot still ends with the pack on top of you.
             //
-            // This gates firing only. Enemies still converge on a hidden
-            // player, because the group alert above is a pure distance test
-            // with no line-of-sight check at all - so "nobody can see the
-            // player" is not a state this AI can currently reach. Gating
-            // that too is what would make concealment read fully, and is
-            // also what re-opens the pile-up and clustering behaviour the
-            // engagement ring was tuned to solve. Deliberately out of scope:
-            // do not "fix" this by gating `any_enemy_sees_player` without
-            // re-baselining `just probe-fixtures`.
-            let player_hidden = f.terrain.conceals(player_pos);
+            // **Except a tank you just shot.** `hit_alert_timer` is the
+            // exemption, and it is the whole cost of the mechanic: cover
+            // hides you until you use it, and then the tank you hit comes
+            // looking. It is also what a range-based reveal was tried for
+            // and failed to be - revealing at 96px handed enemies
+            // point-blank shots that never miss, and measured *worse* for
+            // the player than standing in the open.
+            let player_hidden = concealed && !ai.is_hit_alerted();
             let player_line_of_sight = !player_hidden && f.terrain.line_of_sight(tank.position, player_pos);
             // A hunter's fire gate is line of *fire* to the frog: only iron
             // or another frog blocks it, so a walled-in frog gets shot at
@@ -1410,6 +1453,7 @@ impl Game {
                     &pickups,
                     line_of_sight,
                     player_line_of_sight,
+                    player_hidden,
                     walls_ahead,
                 )
             });
@@ -1524,7 +1568,10 @@ impl Game {
             let touching = with_tank(&self.world, enemy, |e| {
                 with_tank(&self.world, player, |p| tanks_touching(&self.physics, e, p))
             });
-            if touching {
+            // A tank that has lost the player in grass does not get to ram
+            // them either: without this, hiding traded gunfire for melee and
+            // the melee hurt more.
+            if touching && !f.terrain.conceals(with_tank(&self.world, player, |t| t.position)) {
                 let rammed = with_two_tanks_mut(&mut self.world, enemy, player, |e, p| {
                     ram(e, true, p, false, &mut self.physics, &mut f.rng, &mut f.kills).map(|damage| (e.owner_slot, damage))
                 });
