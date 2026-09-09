@@ -14,7 +14,7 @@ use crate::frog::{Frog, FrogVariantTextures, draw_frog, draw_frog_ring};
 use crate::laser::draw_laser_beam;
 use crate::blast::{draw_blast, draw_blast_glow, draw_fuse_glow, draw_scorch};
 use crate::decal::{draw_decal, draw_decal_shadow};
-use crate::obstacle::{Material, Obstacle, ObstacleTextures, draw_obstacle, draw_obstacle_shadow, fence_axis};
+use crate::obstacle::{draw_obstacle_cap, Material, Obstacle, ObstacleTextures, draw_obstacle, draw_obstacle_shadow, fence_axis};
 use std::collections::HashSet;
 use crate::pickup::{Pickup, PickupKind, draw_pickup};
 use crate::plasma::{Plasma, PlasmaState, draw_plasma, draw_plasma_shadow};
@@ -283,6 +283,9 @@ impl Game {
                     draw_obstacle_shadow(&mut d, &obstacle_textures, obstacle, axis);
                 }
                 draw_obstacle(&mut d, &obstacle_textures, obstacle, axis);
+                // Lighting along whichever faces face open ground, so a run
+                // of tiles reads as one structure rather than as a grid.
+                draw_obstacle_cap(&mut d, &obstacle_textures, obstacle);
             }
             // A barrel whose fuse is lit pulses (additive, so it reads as
             // light on the drum rather than a disc over it).

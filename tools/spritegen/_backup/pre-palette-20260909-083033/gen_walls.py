@@ -3,10 +3,7 @@ import os, random, math, sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from punypalette import (
-    PUNY_PALETTE_ALL,
     STONE_DARKEST, STONE_DK, STONE_LT, STONE_MD, STONE_PALE,
-    STONE_HI, STONE_MID, STONE_MDK, STONE_SHADE,
-    RUST_DK as RUST_DEEP, RUST_MD as RUST_MID, WOOD_ASH, BLUE_PALE,
     RED_DARKEST,
     SAND_DK, SAND_LT, SAND_MD, SAND_PALE,
     WOOD_DARKEST, WOOD_DEEPER, WOOD_DK, WOOD_LT, WOOD_MD, WOOD_PALE,
@@ -38,16 +35,11 @@ GL_L = (0x27, 0xD8, 0xC5, 255)
 
 
 def mul(c, f):
-    # Scale, then snap back onto the palette -- see gen_tanks.py's mul().
-    # This sheet is the one that uses the extended set (punypalette.py's
-    # PUNY_EXTRA): the greys it shades masonry and steel with are exactly
-    # where the sampled ramp has no intermediate steps. Every other
-    # generator keeps the base set, so their output is untouched.
+    # Scale, then snap back onto the 64-colour set -- see gen_tanks.py's mul().
     return snap((max(0, min(255, int(c[0] * f))),
                  max(0, min(255, int(c[1] * f))),
                  max(0, min(255, int(c[2] * f))),
-                 c[3] if len(c) > 3 else 255),
-                PUNY_PALETTE_ALL)
+                 c[3] if len(c) > 3 else 255))
 
 
 def blank():
@@ -127,15 +119,9 @@ def crack(img, x0, y0, x1, y1, c, rng, jitter=1):
            y0 + (y1 - y0) * t + rng.randint(-jitter, jitter), c)
 
 
-def inner_shadow(img, f=0.72):
+def inner_shadow(img, f=0.52):
     """Darken material pixels that border a hole -- gives depth without an
     outline. Cell edges are NOT treated as holes, so tiles stay seamless.
-
-    The factor is gentle now that the greys have intermediate steps: at
-    0.52 a STONE_DK edge snapped straight to STONE_DARKEST, a 71-value
-    cliff, so a damaged edge read as a hole with a black liner rather than
-    as depth. With STONE_MDK and STONE_SHADE in between it can actually
-    land on a shade.
 
     Works a whole block at a time (see GRID): shading only the pixels that
     literally touch the hole would leave half of each block undarkened, and
@@ -216,7 +202,7 @@ def declutter(img, min_size=4):
 # Puny World's art, and looked exactly as uncanny as that mismatch implies.
 # Pale stone (the same family IRONS below draws from, just its lighter step)
 # is correct for both channels at once.
-BRICK_MORTAR = STONE_MDK + (255,)
+BRICK_MORTAR = STONE_DK + (255,)
 # Every period is a multiple of 2*GRID and the mortar gap brick_cells
 # leaves is GRID wide, so a course is (ph/GRID - 1) design pixels of brick
 # face over exactly one of mortar. A 4-px course (3 px face + a 1 px seam)
@@ -315,12 +301,8 @@ def draw_brick(v, decay, seed):
     for (c, tone) in zip(cells, tones):
         x0, y0, x1, y1 = c
         rect(img, x0, y0, x1, y1, mul(base, tone))
-        # Mortar depth: a lit lip along the top of every brick and a
-        # shadowed one along the bottom. With STONE_HI and STONE_MID in the
-        # ramp these now land on distinct steps instead of snapping back
-        # onto the face tone, which is what makes courses read as courses.
-        rect(img, x0, y0, x1, y0, mul(base, tone * 1.16))
-        rect(img, x0, y1, x1, y1, mul(base, tone * 0.80))
+        rect(img, x0, y0, x1, y0, mul(base, tone * 1.10))
+        rect(img, x0, y1, x1, y1, mul(base, tone * 0.86))
         stipple_cell(img, x0, y0, x1, y1, base, tone, rng)
     brick_ticks(img, cells, rng)
 
@@ -448,15 +430,6 @@ def draw_iron(v, dmg, seed):
               rng.uniform(1.0, 2.0), RUST_D, rng, 3)
     for _ in range(specks(n_fleck)):
         px(img, rng.randint(0, 31), rng.randint(0, 31), RUST_L)
-    # Rust runs *downward* from a rivet or a seam. Direction is what
-    # separates "rusty" from "randomly speckled", and it costs three or
-    # four pixels: scattered splats alone never read as weathering.
-    for _ in range(specks(n_rust * 2)):
-        rx = rng.randrange(0, S, GRID)
-        ry = rng.randrange(0, S - 8, GRID)
-        run = rng.choice([4, 6, 8])
-        rect(img, rx, ry, rx, ry + run, RUST_MID + (255,))
-        px(img, rx, ry, RUST_DEEP + (255,))
 
     if dmg > 0:
         for _ in range(dmg * 3):
@@ -583,12 +556,6 @@ def draw_wood(v, state, seed):
                         clear(img, 31 - cut, band, 31, band + 7)
         for _ in range(specks(10)):
             px(img, rng.randint(0, 31), rng.randint(0, 31), mul(base, 0.70))
-        # Weathering: timber greys before it breaks, and WOOD_ASH is the
-        # step between the wood ramp and the stone one that lets it.
-        for _ in range(specks(6)):
-            wx = rng.randrange(0, S, GRID)
-            wy = rng.randrange(0, S, GRID)
-            rect(img, wx, wy, wx + rng.choice([2, 4]), wy, WOOD_ASH + (255,))
         declutter(img, 5)
         inner_shadow(img)
         return img
@@ -686,15 +653,6 @@ def draw_glass(v, state, seed):
             for k in range(0, 18, GRID):
                 px(img, sx + k, sy + k, (GL_L[0], GL_L[1], GL_L[2], 185))
                 px(img, sx + k + GRID, sy + k, (GL_L[0], GL_L[1], GL_L[2], 115))
-
-    # Specular: a short bright dash with a white head, upper-left of each
-    # pane. Four pixels, and the single most "drawn" detail on the sheet -
-    # glass without a highlight reads as tinted air.
-    for sy in range(0, S, 16):
-        for sx in range(0, S, 16):
-            px(img, sx + 3, sy + 3, BLUE_PALE + (235,))
-            px(img, sx + 5, sy + 3, BLUE_PALE + (200,))
-            px(img, sx + 3, sy + 5, STONE_PALE + (245,))
 
     def draw_mesh():
         for g in range(0, S, 8):
@@ -963,62 +921,7 @@ def draw_rubble_tank(variant, seed):
     return img
 
 
-# ======================================================================
-# EDGE CAPS -- what makes a wall run read as a structure, not a grid
-# ======================================================================
-# One overlay per neighbour combination, drawn *on top* of whatever tile a
-# cell already shows. A cap is only the lighting along the faces that are
-# exposed to open ground: lit along the top, shadowed along the bottom,
-# half-shaded at the sides. Everything else in the cell is transparent, so
-# this composites over any material, any damage stage and any variant
-# without multiplying the sheet by all of them - which is what a
-# base-tile + damage-overlay rewrite would have cost.
-#
-# Column is a 4-bit neighbour mask, bit3=N bit2=E bit1=S bit0=W, 1 meaning
-# "a solid wall tile is there". Deliberately the same bit order ground.rs
-# already uses for ROAD_EDGE, so whoever reads one autotiler can read the
-# other. The Rust side computes a full 8-bit mask and looks it up through a
-# 256-entry table (see `obstacle::BLOB_TILE`), so widening this to the
-# 47-tile blob set later means adding columns and changing that table's
-# values - no restructuring.
-EDGE_MASKS = 16
-
-
-def draw_edge_cap(base, mask):
-    """The lighting overlay for one neighbour combination."""
-    img = blank()
-    n, e, s_, w = mask & 8, mask & 4, mask & 2, mask & 1
-    # 1.15 rather than a harder push: on stone that lands on STONE_HI,
-    # one of the interpolated in-between steps, instead of snapping all the
-    # way to near-white. A lit edge should read as catching the light, not
-    # as an outline drawn around the wall.
-    lit = mul(base, 1.15)
-    shade = mul(base, 0.75)
-    side = mul(base, 0.90)
-    # A face with no neighbour is exposed and gets its edge drawn. One
-    # design pixel - at 16x16 an edge any thicker eats the material.
-    if not n:
-        rect(img, 0, 0, S - 1, GRID - 1, lit)
-    if not s_:
-        rect(img, 0, S - GRID, S - 1, S - 1, shade)
-    if not w:
-        rect(img, 0, 0, GRID - 1, S - 1, side)
-    if not e:
-        rect(img, S - GRID, 0, S - 1, S - 1, side)
-    # Where two exposed faces meet, the corner takes the stronger of the
-    # two so a lit top still reads as the top at the corner.
-    if not n and not w:
-        rect(img, 0, 0, GRID - 1, GRID - 1, lit)
-    if not n and not e:
-        rect(img, S - GRID, 0, S - 1, GRID - 1, lit)
-    if not s_ and not w:
-        rect(img, 0, S - GRID, GRID - 1, S - 1, shade)
-    if not s_ and not e:
-        rect(img, S - GRID, S - GRID, S - 1, S - 1, shade)
-    return img
-
-
-COLS, ROWS = 16, 26
+COLS, ROWS = 8, 22
 sheet = Image.new('RGBA', (S * COLS, S * ROWS), (0, 0, 0, 0))
 
 
@@ -1051,13 +954,6 @@ for c in range(RUBBLE_VARIANTS):
     place(draw_rubble_barrel(c, 1000 + c * 7), c, 19)
     place(draw_rubble_fence(c, 1100 + c * 7), c, 20)
     place(draw_rubble_tank(c, 1200 + c * 7), c, 21)
-
-# Edge-cap rows, one per wall material, column = 4-bit neighbour mask.
-# Glass has no 'base' key (it is drawn from GL_*), so its cap is keyed off
-# the pane tone directly.
-for m, mat_base in enumerate([BRICKS[0]['base'], IRONS[0]['base'], WOODS[0]['base'], GL_M]):
-    for mask in range(EDGE_MASKS):
-        place(draw_edge_cap(mat_base, mask), mask, 22 + m)
 
 # Chunky-pixelate the finished sheet to match the tanks' own look: tanks
 # draw a 32x32 source tile at Tank::scale=2.0 (tank.rs), so every source

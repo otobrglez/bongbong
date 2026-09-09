@@ -177,6 +177,53 @@ Genuine white (`#FFFFFF`) *is* in the palette, unlike every other colour —
 not sampled, just the literal brightest value, used sparingly for spark
 cores/highlights.
 
+## The wall-detail extension (2026-09)
+
+Puny World is a **16px-prop** tileset. Its ramps carry enough steps to tint a
+barrel, not to *shade* masonry — and the greys are the thinnest of all:
+
+- between `STONE_LT #C1C1C1` and `STONE_MD #9E9E96` there is no true mid step;
+- `STONE_DK #7E7E7E` to `STONE_DARKEST #373737` is a **71-value cliff**, which
+  `gen_walls.py`'s `inner_shadow` used to jump straight across — so a damaged
+  edge read as a hole with a black liner rather than as depth.
+
+Eight colours were added, each **interpolated between two already-sampled
+neighbours in the same family**, with the greys forced to exact neutral. The
+hue is still the tileset's; only the spacing is ours. Re-sampling the pack
+would not help: the colours simply are not in it.
+
+| Name | Hex | Derived from | Role |
+|---|---|---|---|
+| `STONE_HI` | `#DADADA` | mid(`STONE_PALE`, `STONE_LT`) | brick's lit top lip |
+| `STONE_MID` | `#B0B0B0` | mid(`STONE_LT`, `STONE_MD`), neutralised | brick face midtone — the step that did not exist |
+| `STONE_MDK` | `#8E8E8E` | mid(`STONE_MD`, `STONE_DK`), neutralised | mortar joint |
+| `STONE_SHADE` | `#5A5A5A` | mid(`STONE_DK`, `STONE_DARKEST`) | the cliff filler; `inner_shadow` can now land on a shade |
+| `RUST_MD` | `#8D4A25` | mid(`WOOD_DK`, `RED_DK`) | rust runs, clearly not wood |
+| `RUST_DK` | `#59341F` | mid(`RED_DARKEST`, `WOOD_DEEPER`) | rust pitting core |
+| `WOOD_ASH` | `#73624D` | mid(`WOOD_DEEPER`, `STONE_DK`) | weathered/greyed timber |
+| `BLUE_PALE` | `#93ECE2` | mid(`BLUE_BRIGHT`, `WHITE`) | glass specular |
+
+**Additive and opt-in.** `snap()` is called by every generator, so folding
+these into `PUNY_PALETTE` would silently re-quantise tanks, shells and props
+the next time anyone regenerated them. Instead `PUNY_EXTRA` /
+`PUNY_PALETTE_ALL` sit alongside, `nearest`/`snap` take a defaulted `palette`
+argument, and **only `gen_walls.py` passes the extended set**. The proof is
+mechanical: regenerating tanks, shells, bullets, the minigun mount, props,
+the barrel explosion and plasma into a scratch directory produces files
+byte-identical to `static/`.
+
+`_cache` is keyed by palette identity as well as colour — one shared dict
+would let whichever generator ran first decide the answer for the other.
+
+### The de-green rule, stated correctly
+
+None of the eight belongs to the `GREEN_*` family. Note the rule is **family
+membership**, not "green is not the largest channel": the pack's own
+`BLUE_BRIGHT #27D8C5` and `TEAL_BRIGHT #00D097` are both numerically
+green-dominant cyans, and `BLUE_PALE` is one too. A channel test would reject
+them and the water they came from. This was caught by writing the channel
+test first and watching it fail on a colour that was fine.
+
 ## Verifying
 
 Every sheet should have **zero** off-palette opaque/semi-transparent pixels.
@@ -194,6 +241,28 @@ img = Image.open('static/scifi_tanks_sheet.png').convert('RGBA')
 off = sum(1 for (r, g, b, a) in img.getdata() if a != 0 and (r, g, b) not in palset)
 print('off-palette pixels:', off)   # should be 0
 ```
+
+**In practice, run `just check-sheets`** (`tools/check_sheets.py`) rather than
+the snippet above — it does this for every generated sheet and adds the
+de-green check, and it is what CI-style review should call. Two rules, and
+together they are *stronger* than the single check they replaced:
+
+- every generated sheet is fully on `PUNY_PALETTE`, **except
+  `walls_sheet.png`, which is checked against `PUNY_PALETTE_ALL`**. So an
+  extended colour appearing in any other sheet is itself a failure — it means
+  someone passed the wrong palette to `snap()`.
+- the three sheets drawn *over* the ground layer (walls, props,
+  barrel_explosion) must contain **no `GREEN_*` pixel at all**, because a
+  green pixel there reads as terrain showing through. Scoped from
+  measurement, not assumption: `scifi_tanks_sheet.png` has 2711 green pixels
+  (a green chassis is a real colour choice) and `plasma.png`/`health_bar.png`
+  are deliberately off-palette, so none of those are checked.
+
+This has already caught a real defect: darkening a sand tone with `mul()` for
+a chunk's bottom edge snapped it into the green family, putting green pixels
+on an object. **Shade with an explicit adjacent palette step, never a
+computed multiple** — `snap()` is nearest-Euclidean over the whole set and
+will happily cross families.
 
 One thing this caught during the *first* (R64) recolor:
 `Image.paste(cell, box, cell)` — passing an RGBA image as its own mask —

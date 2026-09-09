@@ -148,11 +148,17 @@ impl Game {
             }
             ShellTarget::Obstacle(entity) => {
                 let d = f.rng.random_range(dmg.0..dmg.1);
+                // Read the material before the damage lands: a killing blow
+                // despawns the tile, and the event has to say what it was.
+                let material = {
+                    let mut q = self.world.query_one::<&Obstacle>(entity);
+                    q.get().expect("a resolved obstacle hit names a live Obstacle").material
+                };
                 // The hit is recorded ahead of whatever the damage causes
                 // (a destroyed tile, a blast), since it happened first.
                 let mark = f.events.len();
                 let killed = self.damage_obstacle(f, entity, d, DamageCause::Shot);
-                f.events.insert(mark, Event::Hit { target: HitTarget::Obstacle, damage: d, killed, x: at.x, y: at.y });
+                f.events.insert(mark, Event::Hit { target: HitTarget::Obstacle { material }, damage: d, killed, x: at.x, y: at.y });
             }
             ShellTarget::Wall => {
                 f.events.push(Event::Hit { target: HitTarget::Wall, damage: 0.0, killed: false, x: at.x, y: at.y });

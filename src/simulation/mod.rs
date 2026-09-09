@@ -50,7 +50,7 @@ use crate::frog::{Frog, Side};
 use crate::laser::{LaserBeam, LaserVariant};
 use crate::level::{LevelOverrides, Mission, SpawnPlan};
 use crate::map::{self, CellObject, MapFile};
-use crate::obstacle::{Material, Obstacle};
+use crate::obstacle::{Material, Obstacle, neighbour_mask};
 use crate::pathfind::Grid;
 use crate::physics::Physics;
 use crate::pickup::{Pickup, PickupKind};
@@ -209,7 +209,11 @@ pub enum HitTarget {
     Player,
     Enemy { slot: usize },
     Frog { side: Side },
-    Obstacle,
+    /// A destructible tile. Carries its material because the presentation
+    /// layer has to know what a shot just knocked a chip off: masonry,
+    /// glass and timber throw very different debris, and `Event::Hit` is
+    /// the only signal a *non-destroying* hit produces.
+    Obstacle { material: Material },
     Wall,
 }
 
@@ -615,6 +619,9 @@ impl Game {
         // Before enemies, so their clearance check below sees every wall.
         let obstacle_half_extent = OBSTACLE_TEXTURE_SIZE * OBSTACLE_SCALE * OBSTACLE_HULL_FRACTION * 0.5;
         let map_spawn = battlefield::spawn_from_map(&mut self.physics, &mut self.world, &mut rng, &self.map, obstacle_half_extent);
+        // The layout is final now, so every wall tile can work out which of
+        // its faces are exposed. Only ever recomputed again on destruction.
+        self.refresh_edge_masks();
         let obstacle_positions = map_spawn.obstacle_positions;
         let wall_positions = map_spawn.wall_positions;
         let map_road_cells = map_spawn.road_cells;
@@ -1822,9 +1829,45 @@ impl Game {
             .filter(|(_, o)| o.destroyed)
             .map(|(e, o)| (e, o.body))
             .collect();
+        let removed = !destroyed.is_empty();
         for (entity, body) in destroyed {
             self.physics.remove_body(body);
             self.world.despawn(entity).ok();
+        }
+        if removed {
+            // A wall run just lost a tile, so its neighbours have newly
+            // exposed faces to cap.
+            self.refresh_edge_masks();
+        }
+    }
+
+    /// Recompute every wall tile's cached edge mask.
+    ///
+    /// Called once after the battlefield is laid out and again whenever a
+    /// tile is destroyed, which is the only way a wall layout ever changes
+    /// - tiles are never added mid-round. That is why the mask is cached on
+    /// `Obstacle` at all: `fence_axis` rebuilds its neighbour set every
+    /// frame inside `render`, and doing that for several hundred wall tiles
+    /// would be per-frame work for something that changes a handful of
+    /// times a round.
+    ///
+    /// Rebuilds all of them rather than patching the dead tile's eight
+    /// neighbours: destruction is rare, the pass is one HashSet build plus
+    /// a few lookups per tile, and a full rebuild cannot drift out of sync
+    /// the way an incremental update can.
+    fn refresh_edge_masks(&mut self) {
+        let cells: HashSet<(i32, i32)> = self
+            .world
+            .query::<&Obstacle>()
+            .iter()
+            .filter(|o| !o.destroyed && !o.material.is_prop())
+            .map(|o| o.cell())
+            .collect();
+        for o in self.world.query::<&mut Obstacle>().iter() {
+            if o.material.is_prop() {
+                continue;
+            }
+            o.edge_mask = neighbour_mask(o.cell(), &cells);
         }
     }
 
@@ -1989,6 +2032,30 @@ impl Game {
             .iter()
             .filter(|t| t.is_wreck() && !t.is_dead())
             .map(|t| (t.position, t.wreck_timer))
+            .collect()
+    }
+
+    /// Every tank contact hard enough to be worth showing, as
+    /// `(where, how hard, was it another tank)`.
+    ///
+    /// `Physics::contact_stats` has computed this every frame since the
+    /// probe's anomaly work and **nothing in the game has ever read it** -
+    /// so driving into a wall, shunting a wreck and grinding through a
+    /// six-tank pileup all produced no feedback whatsoever. A contact is a
+    /// *state*, not an event (a tank scrapes along a wall for a second, it
+    /// does not scrape at an instant), so this is sampled by the
+    /// presentation layer rather than pushed as an event - which also means
+    /// no new RNG and no simulation change at all.
+    pub fn contacts(&self) -> Vec<(Position, f32, bool)> {
+        self.world
+            .query::<&Tank>()
+            .iter()
+            .filter(|t| !t.is_dead())
+            .filter_map(|t| {
+                let stats = self.physics.contact_stats(t.body?);
+                let at = stats.contact?;
+                (stats.max_impulse > 0.0).then_some((at, stats.max_impulse, stats.touching_tank))
+            })
             .collect()
     }
 
@@ -2970,7 +3037,7 @@ cells."22,14" = { kind = "wall", material = "brick" }
             step(&mut game, Input::default());
             for event in game.events() {
                 match event {
-                    Event::Hit { target: HitTarget::Obstacle, .. } => broke_a_tile = true,
+                    Event::Hit { target: HitTarget::Obstacle { .. }, .. } => broke_a_tile = true,
                     Event::Hit { target: HitTarget::Frog { side: Side::Player }, .. } => hit_the_frog = true,
                     _ => {}
                 }
@@ -3242,7 +3309,7 @@ cells."30,20" = { kind = "frog" }
             for e in game.events() {
                 match e {
                     Event::Fired { slot: 1, .. } => fired += 1,
-                    Event::Hit { target: HitTarget::Obstacle, killed: true, .. } => broke = true,
+                    Event::Hit { target: HitTarget::Obstacle { .. }, killed: true, .. } => broke = true,
                     _ => {}
                 }
             }

@@ -21,7 +21,7 @@ use rand::RngExt;
 use sola_raylib::prelude::*;
 
 use crate::obstacle::Material;
-use crate::simulation::{Event, Game};
+use crate::simulation::{Event, Game, HitTarget};
 use crate::tuning::tuning;
 use crate::Position;
 
@@ -168,6 +168,33 @@ impl Fx {
         }
     }
 
+    /// A shot that chipped a tile without killing it: a small spray of the
+    /// material, scaled well under `tile_death`'s burst so a wall being
+    /// worn down still reads as less than a wall coming apart.
+    fn tile_chip(&mut self, material: Material, at: Position) {
+        let n = self.count(tuning().tile_chip_particles);
+        match material {
+            Material::Glass => {
+                self.burst(at, ParticleKind::Chip, n, 120.0, &[GLASS_L, GLASS_M, WHITE_T]);
+                self.burst(at, ParticleKind::Spark, self.count(1), 90.0, &[WHITE_T]);
+            }
+            Material::Iron => {
+                // Steel does not chip - it throws sparks.
+                self.burst(at, ParticleKind::Spark, n, 140.0, &[FIRE_T, WHITE_T]);
+            }
+            Material::Wood | Material::Fence => {
+                self.burst(at, ParticleKind::Chip, n, 80.0, &[WOOD_L, WOOD_M, WOOD_D]);
+            }
+            Material::Sandbag => {
+                self.burst(at, ParticleKind::Dust, n, 45.0, &[SAND_L, SAND_M]);
+            }
+            _ => {
+                self.burst(at, ParticleKind::Chip, n, 85.0, &[STONE_LT, STONE_MD, STONE_DK]);
+                self.burst(at, ParticleKind::Dust, self.count(2), 35.0, &[DUST_T]);
+            }
+        }
+    }
+
     fn wreck(&mut self, at: Position) {
         self.burst(at, ParticleKind::Spark, self.count(tuning().wreck_burst_particles), 200.0, &[FIRE_T, EMBER_T, WHITE_T]);
         self.burst(at, ParticleKind::Chip, self.count(10), 120.0, &[STONE_DK, STONE_MD]);
@@ -198,6 +225,12 @@ impl Fx {
                 match *e {
                     Event::RoundStarted { .. } => self.clear(),
                     Event::ObstacleDestroyed { material, x, y } => self.tile_death(material, Position::new(x, y)),
+                    // A hit the tile *survived*. Without this, a wall only
+                    // ever throws anything on the shot that finishes it,
+                    // and every shot before that lands silently.
+                    Event::Hit { target: HitTarget::Obstacle { material }, killed: false, x, y, .. } => {
+                        self.tile_chip(material, Position::new(x, y))
+                    }
                     Event::Wreck { x, y, .. } => self.wreck(Position::new(x, y)),
                     Event::Blast { x, y, chained } => self.blast(Position::new(x, y), chained),
                     Event::CookOff { x, y } => {
@@ -235,6 +268,34 @@ impl Fx {
                 self.burst(pos, ParticleKind::Smoke, 1, 14.0, &[SMOKE_T]);
             }
         }
+        // Impacts and scrapes. `max_impulse` is the solver's own measure of
+        // how hard the contact is, so a gentle nudge against a wall stays
+        // silent and a real slam throws sparks - the threshold is what
+        // separates the two rather than any guess about speed.
+        let (floor, spark_at) = (tuning().contact_fx_min_impulse, tuning().contact_fx_spark_impulse);
+        for (at, impulse, on_tank) in game.contacts() {
+            if impulse < floor {
+                continue;
+            }
+            let key = crate::blast::seed_at(at, 4);
+            let hard = impulse >= spark_at;
+            // Rate scales with how hard it is, so a scrape trickles and a
+            // slam sprays.
+            let rate = tuning().contact_fx_rate * (impulse / spark_at).clamp(0.3, 2.5);
+            if !self.due(key, rate * tuning().fx_density, dt) {
+                continue;
+            }
+            if hard && on_tank {
+                // Steel on steel.
+                self.burst(at, ParticleKind::Spark, 2, 90.0, &[FIRE_T, WHITE_T]);
+            } else if hard {
+                self.burst(at, ParticleKind::Spark, 1, 70.0, &[FIRE_T, WHITE_T]);
+                self.burst(at, ParticleKind::Dust, 1, 30.0, &[DUST_T]);
+            } else {
+                self.burst(at, ParticleKind::Dust, 1, 25.0, &[DUST_T]);
+            }
+        }
+
         // Grinding a prop under the tracks used to be completely silent.
         for (pos, _t) in game.ramming_tiles() {
             let key = crate::blast::seed_at(pos, 3);

@@ -1029,6 +1029,10 @@ tunables! {
         /// smooth swell.
         smoke_growth: f32 = 4.0 in 0.0 ..= 100.0;
         smoke_opacity: f32 = 0.4 in 0.0 ..= 1.0;
+        /// Particles a shot knocks off a tile it hits but does not kill.
+        /// Well under `tile_burst_particles`: a wall being worn down should
+        /// read as less than a wall coming apart.
+        tile_chip_particles: i32 = 5 in 0 ..= 60;
         /// Particles a destroyed tile throws; glass and sandbag add to it.
         tile_burst_particles: i32 = 12 in 0 ..= 120;
         /// Sparks a dying tank throws.
@@ -1040,6 +1044,14 @@ tunables! {
         /// second, for as long as `wreck_burn_seconds` lasts.
         wreck_flame_rate: f32 = 18.0 in 0.0 ..= 200.0;
         wreck_smoke_rate: f32 = 10.0 in 0.0 ..= 100.0;
+        /// Contact feedback. `max_impulse` is the solver's own measure of
+        /// how hard a contact is, so these are thresholds on that rather
+        /// than on speed: below the first, a contact is a nudge and stays
+        /// silent; at the second it is a real slam and throws sparks.
+        contact_fx_min_impulse: f32 = 8.0 in 0.0 ..= 500.0;
+        contact_fx_spark_impulse: f32 = 40.0 in 0.1 ..= 1000.0;
+        /// Base emission rate while in contact, scaled by how hard it is.
+        contact_fx_rate: f32 = 12.0 in 0.0 ..= 100.0;
         /// Dust kicked up per second while a tank grinds a prop under its
         /// tracks - the one part of `ram_props` that was visually silent.
         ram_dust_rate: f32 = 14.0 in 0.0 ..= 100.0;

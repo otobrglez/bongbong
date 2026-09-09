@@ -7,6 +7,13 @@ Two checks, both of which have caught real defects:
    how a generator quietly stops matching the ground layer everything else
    was recoloured to fit (docs/PALETTE.md).
 
+   `walls_sheet.png` is checked against the **extended** set instead
+   (`PUNY_PALETTE_ALL`): it is the one sheet that shades masonry and steel,
+   which is exactly where the sampled ramp has no intermediate steps. That
+   makes this check *stronger*, not weaker - an extended colour turning up
+   in any other sheet means someone passed the wrong palette to `snap()`,
+   and it fails here.
+
 2. **No green on anything that sits on the grass.** Walls, props and the
    blast/rubble sheet are drawn *on top of* the ground layer, so a green
    pixel there reads as terrain showing through - the olive look the
@@ -49,10 +56,15 @@ ON_PALETTE = [
 NO_GREEN = ['walls_sheet.png', 'props_sheet.png', 'barrel_explosion.png']
 
 PALETTE = {tuple(c) for c in pp.PUNY_PALETTE}
+PALETTE_ALL = {tuple(c) for c in pp.PUNY_PALETTE_ALL}
 GREENS = {tuple(getattr(pp, n)) for n in dir(pp) if n.startswith('GREEN_')}
+
+# The only sheet allowed the wall-detail extension (punypalette.PUNY_EXTRA).
+EXTENDED = {'walls_sheet.png'}
 
 
 def scan(name):
+    allowed = PALETTE_ALL if name in EXTENDED else PALETTE
     img = Image.open(os.path.join(STATIC, name)).convert('RGBA')
     off = green = 0
     for y in range(img.height):
@@ -60,7 +72,7 @@ def scan(name):
             r, g, b, a = img.getpixel((x, y))
             if not a:
                 continue
-            if (r, g, b) not in PALETTE:
+            if (r, g, b) not in allowed:
                 off += 1
             if (r, g, b) in GREENS:
                 green += 1
@@ -71,7 +83,7 @@ def main():
     failures = []
     for name in ON_PALETTE:
         off, green = scan(name)
-        checks = [f'off-palette={off}']
+        checks = [f'off-palette={off}' + (' (extended set)' if name in EXTENDED else '')]
         if off:
             failures.append(f'{name}: {off} off-palette pixels')
         if name in NO_GREEN:

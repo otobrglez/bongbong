@@ -83,6 +83,23 @@ impl Physics {
     }
 
     /// Spawn a static, fixed-body cuboid collider: the battlefield boundary
+    ///
+    /// The frog uses this too, and is then teleported with `set_position`
+    /// every frame. That looks wrong - a moving body "should" be
+    /// `KinematicPositionBased` so the solver pushes contacts aside rather
+    /// than letting depenetration fling them out - and it was **tried and
+    /// measured worse**: `maps/test/frog-block.toml`, the fixture built for
+    /// exactly this failure class, went from 0 to 10 `clustering` and 0 to
+    /// 2 `low-progress` anomalies, breaching its pinned budgets, while the
+    /// default-map sweep did not move at all.
+    ///
+    /// The reason is that a frog *hops*: its position jumps discretely
+    /// rather than travelling. A kinematic body asked to be somewhere far
+    /// away by the next step drags whatever is in between along with it, so
+    /// a hopping frog started shoving tanks across the map. For a discretely
+    /// teleporting entity, "fixed body, relocated" is the more faithful
+    /// model, not the lazier one. Re-measure with `just probe-fixtures`
+    /// before revisiting.
     /// (see `battlefield::spawn_walls`) and in-arena obstacles (see
     /// `obstacle::Obstacle`) both reuse this exact same shape - the only
     /// difference is whether the caller ever calls `remove_body` on the
@@ -90,6 +107,22 @@ impl Physics {
     /// `center` and `half_extents` are in the same pixel space as
     /// `Tank`/`Shell` positions; rapier does no unit conversion here (1
     /// physics unit == 1px).
+    /// Every static keeps rapier's default friction (0.5) and restitution
+    /// (0.0).
+    ///
+    /// Per-material surfaces were tried and **measured worse**, twice, so
+    /// this deliberately takes no friction parameter. Grippier materials
+    /// (sandbags 0.9, brick 0.6) more than doubled the probe's `wall-grind`
+    /// count and multiplied `spin` by seven over 30 seeded rounds; a
+    /// second attempt running only in the slick direction (glass 0.25,
+    /// iron 0.3) came out inside the noise on one seed and slightly worse
+    /// on another. The reason is structural rather than a bad choice of
+    /// numbers: `TANK_MOVE_CORNER_RADIUS` exists so a tank *slides* past
+    /// wall-tile seams instead of snagging on them, and surface friction is
+    /// the force that fights exactly that. Differentiating how walls feel
+    /// wants a different mechanism - contact FX, or ram behaviour - not
+    /// collider friction. Re-measure with `just probe-sweep --seed <n>`
+    /// before trying again.
     pub fn spawn_static(&mut self, center: Position, half_extents: Position) -> RigidBodyHandle {
         let (handle, _) = self.world.insert(
             RigidBodyBuilder::fixed().translation(to_vector(center)),
@@ -303,7 +336,23 @@ impl Physics {
             }
             for manifold in &pair.manifolds {
                 for point in &manifold.points {
-                    stats.max_impulse = stats.max_impulse.max(point.data.impulse);
+                    if point.data.impulse <= stats.max_impulse {
+                        continue;
+                    }
+                    stats.max_impulse = point.data.impulse;
+                    // Where the hardest contact actually is, in world
+                    // space. Without it a consumer can only guess - and
+                    // putting a shower of sparks at a tank's centre rather
+                    // than at the corner that struck the wall is exactly
+                    // the sort of thing that reads as wrong without anyone
+                    // being able to say why.
+                    let local = if pair.collider1 == hull { point.local_p1 } else { point.local_p2 };
+                    let owner = if pair.collider1 == hull { pair.collider1 } else { pair.collider2 };
+                    stats.contact = self
+                        .world
+                        .colliders
+                        .get(owner)
+                        .map(|c| { let p = c.position() * local; Position::new(p.x, p.y) });
                 }
             }
         }
@@ -325,6 +374,8 @@ pub struct ContactStats {
     /// Strongest per-contact-point normal impulse the solver applied this
     /// step across those contacts; 0.0 when nothing is actively touching.
     pub max_impulse: f32,
+    /// World-space position of that strongest contact, when there is one.
+    pub contact: Option<Position>,
 }
 
 impl Default for Physics {

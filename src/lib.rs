@@ -469,6 +469,14 @@ pub const RUBBLE_ROW_FENCE: i32 = 20;
 // row directly.
 pub const RUBBLE_ROW_TANK: i32 = 21;
 
+// Edge-cap overlay rows, one per wall material in `MATERIALS` order
+// (brick, iron, wood, glass), column = the neighbour mask. Drawn *over* a
+// tile, so one row composites with every damage stage and variant that
+// material has - which is why this is an overlay rather than a base-tile
+// plus damage-overlay rewrite of the whole sheet.
+pub const EDGE_CAP_ROW_BASE: i32 = 22;
+pub const EDGE_CAP_COLUMNS: i32 = 16;
+
 // Ground/terrain layer (grass base, road painted under every static
 // obstacle tile and every cell a map explicitly marks as road) - see
 // ground.rs for the placement/autotile logic, docs/GROUND_SPEC.md for the

@@ -5,6 +5,7 @@ use sola_raylib::prelude::*;
 use std::collections::HashSet;
 
 use crate::{
+    EDGE_CAP_ROW_BASE,
     OBSTACLE_GRID_SIZE,
     RUBBLE_ROW_BARREL,
     RUBBLE_ROW_BRICK,
@@ -252,6 +253,11 @@ pub struct Obstacle {
     /// (`Game::ram_props`); decays while nothing pushes. Collapses at
     /// `Material::ram_seconds`.
     pub ram_timer: f32,
+    /// Cached 8-bit neighbour mask, for the edge-cap overlay. Wall layouts
+    /// only ever lose tiles, never gain them, so this is filled once at
+    /// spawn and refreshed when something is destroyed - never rebuilt per
+    /// frame the way `fence_axis` does it.
+    pub edge_mask: u8,
     /// This obstacle's rapier fixed-body collider, spawned alongside it.
     /// Unlike a tank's `body`, this is never `None` - an obstacle always has
     /// its physics body for its whole life, right up until `Game::update`
@@ -283,6 +289,7 @@ impl Obstacle {
             burn_elapsed: 0.0,
             fuse: None,
             ram_timer: 0.0,
+            edge_mask: 0,
             body,
             destroyed: false,
         }
@@ -437,6 +444,75 @@ pub fn draw_obstacle(d: &mut impl RaylibDraw, textures: &ObstacleTextures, obsta
     let dest = Rectangle::new(obstacle.position.x, obstacle.position.y, size, size);
     let origin = Vector2::new(size / 2.0, size / 2.0);
     d.draw_texture_pro(texture_for(textures, obstacle.material), src, dest, origin, 0.0, Color::WHITE);
+}
+
+/// Which of a cell's 16 neighbour combinations to draw a cap for.
+///
+/// The Rust side computes a full **8-bit** mask (N NE E SE S SW W NW, with
+/// a diagonal only counting when both its adjacent orthogonals are set -
+/// the standard blob rule) and looks it up here. Today every entry is a
+/// 4-bit value in `0..=15`, i.e. the diagonals are ignored, because at
+/// 16x16 design pixels the only thing the extra 31 blob tiles buy is an
+/// inner-corner notch one or two design pixels wide - and these maps are
+/// hand-authored rectangles and L-corners where diagonal-only adjacency
+/// barely occurs.
+///
+/// Keeping the 8-bit mask and this table is what makes that decision
+/// cheap to revisit: widening to the full 47-tile set means adding columns
+/// to the sheet and changing these values, with no other code moving.
+static BLOB_TILE: [u8; 256] = {
+    let mut table = [0u8; 256];
+    let mut m = 0usize;
+    while m < 256 {
+        // bit3=N bit2=E bit1=S bit0=W, the same order ground.rs's
+        // ROAD_EDGE uses, so the two autotilers read alike.
+        let n = (m & 0b0000_0001) != 0;
+        let e = (m & 0b0000_0100) != 0;
+        let s = (m & 0b0001_0000) != 0;
+        let w = (m & 0b0100_0000) != 0;
+        table[m] = ((n as u8) << 3) | ((e as u8) << 2) | ((s as u8) << 1) | (w as u8);
+        m += 1;
+    }
+    table
+};
+
+/// The 8-bit neighbour mask for `cell` against a set of solid wall cells.
+/// Bit order N NE E SE S SW W NW; a diagonal is only set when both of its
+/// adjacent orthogonals are, which is what collapses 256 combinations to
+/// the blob set's 47.
+pub fn neighbour_mask(cell: (i32, i32), cells: &HashSet<(i32, i32)>) -> u8 {
+    let (c, r) = cell;
+    let at = |dc: i32, dr: i32| cells.contains(&(c + dc, r + dr));
+    let (n, e, s, w) = (at(0, -1), at(1, 0), at(0, 1), at(-1, 0));
+    let mut mask = 0u8;
+    if n { mask |= 0b0000_0001 }
+    if n && e && at(1, -1) { mask |= 0b0000_0010 }
+    if e { mask |= 0b0000_0100 }
+    if s && e && at(1, 1) { mask |= 0b0000_1000 }
+    if s { mask |= 0b0001_0000 }
+    if s && w && at(-1, 1) { mask |= 0b0010_0000 }
+    if w { mask |= 0b0100_0000 }
+    if n && w && at(-1, -1) { mask |= 0b1000_0000 }
+    mask
+}
+
+/// Draw the edge-cap overlay for a wall tile: the lighting along whichever
+/// faces are exposed to open ground. Composites over the tile already
+/// drawn, so it works for every damage stage and variant. Props get none -
+/// a sandbag or a fence is a discrete object, not part of a run.
+pub fn draw_obstacle_cap(d: &mut impl RaylibDraw, textures: &ObstacleTextures, obstacle: &Obstacle) {
+    if obstacle.material.is_prop() {
+        return;
+    }
+    let Some(row_offset) = MATERIALS.iter().position(|m| *m == obstacle.material) else {
+        return;
+    };
+    let col = BLOB_TILE[obstacle.edge_mask as usize] as i32;
+    let src = source_rec(EDGE_CAP_ROW_BASE + row_offset as i32, col);
+    let size = obstacle.size();
+    let dest = Rectangle::new(obstacle.position.x, obstacle.position.y, size, size);
+    let origin = Vector2::new(size / 2.0, size / 2.0);
+    d.draw_texture_pro(textures.walls, src, dest, origin, 0.0, Color::WHITE);
 }
 
 /// Draw this obstacle's drop shadow - see `tank::draw_tank_shadow` /

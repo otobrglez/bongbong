@@ -79,7 +79,7 @@ fn obstacle_hits(events: &[Event]) -> Vec<(i32, bool)> {
     events
         .iter()
         .filter_map(|e| match e {
-            Event::Hit { target: HitTarget::Obstacle, killed, y, .. } => Some((hit_row(*y), *killed)),
+            Event::Hit { target: HitTarget::Obstacle { .. }, killed, y, .. } => Some((hit_row(*y), *killed)),
             _ => None,
         })
         .collect()
@@ -589,4 +589,81 @@ fn two_enemies_ram_each_other() {
         rams.iter().all(|(a, b, d)| *a != *b && *d > 0.0),
         "each ram names both parties and deals damage: {rams:?}"
     );
+}
+
+#[test]
+fn wall_tiles_know_which_faces_are_exposed() {
+    // The edge cap is what makes a run of tiles read as one structure. Its
+    // mask is cached at spawn and refreshed only on destruction, so both
+    // ends of that have to be right.
+    use crate::obstacle::neighbour_mask;
+    use std::collections::HashSet;
+
+    // A 3x1 horizontal run: the middle has neighbours east and west, the
+    // ends have one each.
+    let run: HashSet<(i32, i32)> = [(10, 5), (11, 5), (12, 5)].into_iter().collect();
+    let (e, w) = (0b0000_0100u8, 0b0100_0000u8);
+    assert_eq!(neighbour_mask((11, 5), &run), e | w, "the middle is capped top and bottom only");
+    assert_eq!(neighbour_mask((10, 5), &run), e, "the west end is exposed on three sides");
+    assert_eq!(neighbour_mask((12, 5), &run), w, "and the east end likewise");
+    assert_eq!(neighbour_mask((50, 50), &run), 0, "an isolated tile is exposed all round");
+
+    // A diagonal bit only counts when both its adjacent orthogonals do -
+    // the rule that collapses 256 combinations to the blob set's 47.
+    let corner: HashSet<(i32, i32)> = [(0, 0), (1, 0), (0, 1), (1, 1)].into_iter().collect();
+    let mask = neighbour_mask((0, 0), &corner);
+    assert_eq!(mask & 0b0000_0100, 0b0000_0100, "east neighbour");
+    assert_eq!(mask & 0b0001_0000, 0b0001_0000, "south neighbour");
+    assert_eq!(mask & 0b0000_1000, 0b0000_1000, "and the SE diagonal, since both orthogonals are set");
+    let only_diagonal: HashSet<(i32, i32)> = [(0, 0), (1, 1)].into_iter().collect();
+    assert_eq!(neighbour_mask((0, 0), &only_diagonal), 0, "a diagonal alone never counts");
+}
+
+#[test]
+fn destroying_a_tile_re_exposes_its_neighbours() {
+    // Masks are cached, so the refresh on destruction is the part that can
+    // silently rot: a wall would keep drawing an interior face where a hole
+    // has just opened.
+    let map = map_with(
+        "cells.\"20,10\" = { kind = \"wall\", material = \"glass\" }\n\
+         cells.\"20,11\" = { kind = \"wall\", material = \"glass\" }\n\
+         cells.\"20,12\" = { kind = \"wall\", material = \"glass\" }\n",
+    );
+    let mut game = Game::default();
+    game.enemy_count_override = Some(3);
+    game.seed_override = Some(2);
+    game.player_row_override = Some(0);
+    game.map = MapFile::from_toml_str(&map).expect("test map parses");
+    game.init(W, H);
+    for slot in [1, 2, 3] {
+        let _ = game.debug_teleport(slot, cell_to_world(ENEMY_CELL.0, ENEMY_CELL.1), Some(0.0));
+    }
+    game.debug_teleport(0, cell_to_world(20, 15), Some(0.0)).unwrap();
+
+    let mask_of = |g: &Game, cell: (i32, i32)| {
+        g.world.query::<&Obstacle>().iter().find(|o| o.cell() == cell).map(|o| o.edge_mask)
+    };
+    // The player is south of the column, so the tile it knocks out first is
+    // the *nearest* one, (20,12) - and the neighbour that gains an exposed
+    // face is the one behind it.
+    let south_bit = 0b0001_0000u8;
+    assert_eq!(
+        mask_of(&game, (20, 11)).expect("middle tile is standing") & south_bit,
+        south_bit,
+        "it starts with a wall to its south"
+    );
+
+    for _ in 0..8 {
+        if mask_of(&game, (20, 12)).is_none() {
+            break;
+        }
+        shoot(&mut game, 90);
+    }
+    assert!(mask_of(&game, (20, 12)).is_none(), "the near tile is gone");
+    assert_eq!(
+        mask_of(&game, (20, 11)).expect("the middle tile is still standing") & south_bit,
+        0,
+        "its south face is exposed now and gets capped"
+    );
+
 }

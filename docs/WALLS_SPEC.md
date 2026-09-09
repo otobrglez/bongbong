@@ -9,12 +9,20 @@ All destructible obstacles in one sheet. Unlike the tank and shell sheets, these
 | Property | Value |
 |---|---|
 | Filename | `walls_sheet.png` |
-| Dimensions | 256 × 704 px |
-| Grid | 8 columns × 22 rows |
+| Dimensions | 512 × 832 px |
+| Grid | 16 columns × 26 rows |
 | Cell size | 32 × 32 px (uniform, no padding) |
 | Format | PNG, RGBA, straight (non-premultiplied) alpha |
 
 Slice with `x = col * 32`, `y = row * 32`. Use **nearest-neighbour / point filtering**, no mipmaps, no compression.
+
+### Palette
+
+This sheet uses the **extended** palette (`punypalette.PUNY_PALETTE_ALL` — the
+sampled set plus eight interpolated in-between steps, see docs/PALETTE.md).
+It is the only sheet that does: shading masonry and steel is exactly where
+the sampled ramp runs out of steps. Every other generator keeps the base set,
+and `just check-sheets` fails if an extended colour turns up in one of them.
 
 ### Effective resolution: 16 × 16 per tile
 
@@ -62,6 +70,7 @@ Column count varies by material. **Cells outside a material's range are empty** 
 | 19 | **Rubble — barrel** | 0–7 | twisted metal and burnt scrap, 8 variants |
 | 20 | **Rubble — fence** | 0–7 | snapped pickets and loose wire, 8 variants |
 | 21 | **Rubble — tank** | 0–7 | blown-off hull plate and track links, 8 variants |
+| 22–25 | **Edge caps** | 0–15 | brick / iron / wood / glass, column = 4-bit neighbour mask |
 
 ```
 row_base:  brick = 0,  iron = 4,  wood = 8,  glass = 12
@@ -96,6 +105,37 @@ patches rather than one uniform texture.
 
 Appended after every material block deliberately: adding rows at the end
 renumbers nothing above, so `row_base` stays valid everywhere.
+
+### Edge caps (rows 22–25)
+
+An **overlay**, drawn on top of whatever tile a cell already shows: only the
+lighting along the faces exposed to open ground — lit along the top,
+shadowed along the bottom, half-shaded at the sides, with corners taking the
+stronger of the two. Everything else in the cell is transparent.
+
+That is why this is a separate overlay rather than a base-tile + damage-
+overlay rewrite of the sheet: one row per material composites with *every*
+damage stage and variant that material has, instead of multiplying the sheet
+by all of them.
+
+Column is a 4-bit mask, `bit3=N bit2=E bit1=S bit0=W`, 1 meaning a solid wall
+tile is there — deliberately the same bit order `ground.rs`'s `ROAD_EDGE`
+uses, so whoever can read one autotiler can read the other. Props get no cap:
+a sandbag or a fence is a discrete object, not part of a run.
+
+The Rust side computes a full **8-bit** mask (`obstacle::neighbour_mask`,
+diagonals counting only when both adjacent orthogonals are set) and looks it
+up through `BLOB_TILE: [u8; 256]`, whose entries are currently all `0..=15`.
+Widening to the full 47-tile blob set later means adding columns here and
+changing that table's values — nothing else moves. It is deliberately not
+done: at 16×16 design pixels the only thing the extra 31 tiles buy is an
+inner-corner notch one or two design pixels wide, and these maps are
+hand-authored rectangles and L-corners where diagonal-only adjacency barely
+occurs.
+
+The mask is cached on `Obstacle` and refreshed only when a tile is
+destroyed (`Game::refresh_edge_masks`) — wall layouts only ever lose tiles,
+never gain them.
 
 ---
 
