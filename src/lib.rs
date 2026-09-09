@@ -329,6 +329,85 @@ pub const TRACK_TEXTURE_SIZE: f32 = 32.0;
 pub const DEFAULT_SCREEN_WIDTH: i32 = 1280;
 pub const DEFAULT_SCREEN_HEIGHT: i32 = 720;
 
+// The HUD bar above the battlefield (docs/hud-and-builder-layout-design.md,
+// variant A): one obstacle cell tall, so the pickup icons sit in it
+// full-bleed and the window stays 1280 wide. The battlefield keeps its own
+// size - every seeded baseline, lint count and map assumes 1280x720 - and
+// the window grows by this much instead. Layout, not a knob: the dev panel
+// has no business resizing the window.
+pub const HUD_BAR_HEIGHT: i32 = 32;
+
+/// An axis-aligned window rectangle in pixels, the one shape `Layout`
+/// hands around. Not raylib's `Rectangle` so the probe and the tests can
+/// use it without a draw handle in sight.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+impl Rect {
+    pub const fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
+        Rect { x, y, w, h }
+    }
+
+    pub fn contains(&self, p: Vector2) -> bool {
+        p.x >= self.x && p.x < self.x + self.w && p.y >= self.y && p.y < self.y + self.h
+    }
+}
+
+/// Where the battlefield and the HUD panel sit inside the window. The
+/// simulation, the physics, the maps and the probe only ever see the
+/// *field* size with its origin at (0, 0); `main.rs` opens a window of
+/// `window_size` and `game.rs`/`editor.rs` shift their drawing and their
+/// mouse reads by `field.x`/`field.y`. Nothing else cares where the panel
+/// went, which is what makes switching to a sidebar later a re-layout of
+/// `hud.rs` rather than a re-plumb.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Layout {
+    pub field: Rect,
+    pub panel: Rect,
+}
+
+impl Layout {
+    /// The layout for a battlefield of `width` x `height`: the bar on top,
+    /// the field below it, origin `(0, HUD_BAR_HEIGHT)`.
+    pub fn for_field(width: f32, height: f32) -> Self {
+        let bar = HUD_BAR_HEIGHT as f32;
+        Layout {
+            field: Rect::new(0.0, bar, width, height),
+            panel: Rect::new(0.0, 0.0, width, bar),
+        }
+    }
+
+    /// The inverse: the layout a window of this size holds, so a frame
+    /// can read the live window size back off the handle the way it
+    /// always did and still get the same field the round was built on.
+    pub fn for_window(width: f32, height: f32) -> Self {
+        Self::for_field(width, (height - HUD_BAR_HEIGHT as f32).max(0.0))
+    }
+
+    /// The window size that holds this layout, for `init_window`.
+    pub fn window_size(&self) -> (i32, i32) {
+        (self.field.w.max(self.panel.w).round() as i32, (self.field.h + self.panel.h).round() as i32)
+    }
+
+    /// Where the field's (0, 0) lands in the window.
+    pub fn field_origin(&self) -> Vector2 {
+        Vector2::new(self.field.x, self.field.y)
+    }
+
+    /// A window position as a field position - what the simulation and the
+    /// editor's grid want. Outside the field the result is out of range
+    /// rather than clamped, so a click on the bar is not a click on the
+    /// top row of cells.
+    pub fn to_field(&self, window: Vector2) -> Vector2 {
+        Vector2::new(window.x - self.field.x, window.y - self.field.y)
+    }
+}
+
 // Physics world: rapier2d integration (see docs/physics-engine-design.md).
 // The battlefield boundary is 4 static wall colliders whose inner faces sit
 // exactly at the screen edges, matching the old hand-rolled clamp bound;
@@ -533,15 +612,9 @@ pub const GROUND_TEXTURE_SIZE: f32 = 16.0; // native tile size in the source she
 pub const GROUND_SCALE: f32 = 2.0;
 pub const GROUND_WORLD_TILE: f32 = GROUND_TEXTURE_SIZE * GROUND_SCALE; // = OBSTACLE_GRID_SIZE
 
-// HUD font sizes (Game::render): the SHELLS/HP line reads as the "primary"
-// readout so it's drawn 10% bigger than the base 24px; the version/build
-// line is secondary, drawn 10% smaller.
-pub const HUD_FONT_SIZE: i32 = 26; // 24 * 1.1, rounded
-pub const HUD_VERSION_FONT_SIZE: i32 = 22; // 24 * 0.9, rounded
-
-// Shared screen-edge inset for both HUD corners: the SHELLS/HP line's
-// top-left origin and the version line's bottom-right origin, so the two
-// sit the same distance from their respective edges.
+// Inset of the dev-only overlay label from the field's top-left corner
+// (`game.rs`). The player's readouts themselves live in the HUD bar above
+// the field (`hud.rs`), so this is the one thing still drawn in a corner.
 pub const HUD_MARGIN: i32 = 20;
 
 // ToxicFrog (src/frog.rs): the player's protect-objective - a static NPC
@@ -686,11 +759,9 @@ pub const EDITOR_PALETTE_BOTTOM_MARGIN: f32 = 16.0;
 // never flush against the screen edge - see `MapEditor::palette_columns`,
 // which uses it to decide how many icons fit across.
 pub const EDITOR_PALETTE_SIDE_MARGIN: f32 = 16.0;
-/// Fixed margin from the top-right corner for the Save/Load/Close toolbar,
-/// and from the top-left corner for the hamburger toggle button.
+/// Margin from the field's edges for the editor's status line and the
+/// gap between the New/Save/Load/Close buttons in the HUD bar.
 pub const EDITOR_TOOLBAR_MARGIN: f32 = 16.0;
-/// Side length of the top-left hamburger/back toggle button.
-pub const EDITOR_HAMBURGER_SIZE: f32 = 40.0;
 
 /// Parse a round-seed CLI value: plain decimal, or hex with a `0x`/`0X`
 /// prefix - shared by both binaries' `--seed` flags (main.rs and
@@ -728,6 +799,7 @@ pub mod fx;
 pub mod grass;
 pub mod game;
 pub mod ground;
+pub mod hud;
 pub mod laser;
 pub mod level;
 pub mod map;

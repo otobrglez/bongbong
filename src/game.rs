@@ -14,6 +14,7 @@ use crate::laser::draw_laser_beam;
 use crate::blast::{draw_blast, draw_blast_glow, draw_fuse_glow, draw_scorch};
 use crate::decal::{draw_decal, draw_decal_shadow};
 use crate::obstacle::{draw_obstacle_cap, draw_tree, draw_tree_shadow, tree_lean, Material, Obstacle, ObstacleTextures, draw_obstacle, draw_obstacle_shadow, fence_axis};
+#[cfg(feature = "dev-tools")]
 use crate::ai::Ai;
 use hecs::Entity;
 use std::collections::HashSet;
@@ -21,33 +22,23 @@ use crate::marker::{draw_destination, draw_target_brackets};
 use crate::pickup::{Pickup, PickupKind, draw_pickup};
 use crate::plasma::{Plasma, PlasmaState, draw_plasma, draw_plasma_shadow};
 use crate::shell::{Shell, ShellState, draw_shell, draw_shell_shadow};
+use crate::hud::{draw_bar, HudModel};
 use crate::shockwave::{RippleFx, screen_to_ripple_uv};
 use crate::simulation::{Game, Outcome};
 #[cfg(feature = "dev-tools")]
 use crate::simulation::Overlays;
 #[cfg(feature = "dev-tools")]
 use crate::tank::Dir;
+#[cfg(feature = "dev-tools")]
+use crate::tank::ActiveWeapon;
 use crate::tank::{
-    ActiveWeapon, Tank, draw_enemy_ring, draw_minigun_mount, draw_minigun_mount_shadow, draw_player_ring, draw_tank,
+    Tank, draw_enemy_ring, draw_minigun_mount, draw_minigun_mount_shadow, draw_player_ring, draw_tank,
     draw_order_ring, draw_tank_shadow, draw_tank_shield, ORDER_ENGAGE_COLOR, ORDER_MOVE_COLOR,
 };
 use crate::track::draw_track;
-use crate::{
-    SHOCK_MAX,
-    HUD_FONT_SIZE,
-    HUD_MARGIN,
-    HUD_VERSION_FONT_SIZE,
-    MAX_DAMAGE,
-};
-
-/// Accent colors for the HUD's special-weapon ammo counts - one per
-/// `ActiveWeapon` special, shared between each weapon's count number
-/// (always) and its label (only while that weapon is the live one - see
-/// the HUD block in `render`). Presentation-only, so they live here rather
-/// than in `lib.rs`'s gameplay tuning.
-const HUD_LASER_COLOR: Color = Color::new(255, 60, 160, 255);
-const HUD_PLASMA_COLOR: Color = Color::new(60, 220, 200, 255);
-const HUD_MINIGUN_COLOR: Color = Color::new(190, 205, 215, 255);
+use crate::{Layout, SHOCK_MAX};
+#[cfg(feature = "dev-tools")]
+use crate::{HUD_MARGIN, MAX_DAMAGE};
 
 /// The sprite atlases `Game::render` draws from, bundled into one param instead
 /// of four so the signature doesn't grow with every new texture.
@@ -151,7 +142,11 @@ pub struct Effects<'a> {
 }
 
 impl Game {
-    /// Draw the whole scene for this frame.
+    /// Draw the whole scene for this frame: the battlefield into
+    /// `scene_target` and then onto the window at `layout.field`, the HUD
+    /// bar into `layout.panel`. Everything field-relative in the second
+    /// pass goes through a `Camera2D` whose offset is the field origin, so
+    /// the simulation's screen-pixel positions stay usable as they are.
     pub fn render(
         &self,
         rl: &mut RaylibHandle,
@@ -159,86 +154,17 @@ impl Game {
         scene_target: &mut RenderTexture2D,
         effects: &mut Effects,
         textures: &Textures,
+        layout: &Layout,
     ) {
-        let screen_width = rl.get_screen_width();
-        let screen_height = rl.get_screen_height();
+        let screen_width = layout.field.w.round() as i32;
+        let screen_height = layout.field.h.round() as i32;
         // Must be read off the handle out here: the draw closures below
         // borrow it, and the dev label needs the number.
         #[cfg(feature = "dev-tools")]
         let frame_ms = rl.get_frame_time() * 1000.0;
         let player = self.player.expect("player entity spawned in init");
 
-        // Precompute the bottom-right version/build HUD (text width must be
-        // measured on the RaylibHandle, outside the draw closure).
-        let version_hud = format!("v{} {}", env!("CARGO_PKG_VERSION"), "@otobrglez");
-        let version_hud_w = rl.measure_text(&version_hud, HUD_VERSION_FONT_SIZE);
-
-        // Precompute the SHELLS/HP HUD as separate runs so each number can
-        // carry its own color (hud_number_color) while the labels stay
-        // neutral - raylib's draw_text is single-color per call, so the line
-        // is drawn as four adjacent segments rather than one string. Widths
-        // measured here for the same reason as version_hud_w above.
-        let (hp, shells, laser_charges, plasma_ammo, minigun_ammo, active_weapon) =
-            crate::simulation::with_tank(&self.world, player, |t| {
-                (
-                    (MAX_DAMAGE - t.damage).max(0.0).round() as i32,
-                    t.shells_ammo,
-                    t.laser_charges,
-                    t.plasma_ammo,
-                    t.minigun_ammo,
-                    t.active_weapon(),
-                )
-            });
-        let shells_color = hud_number_color(shells as f32, tuning().max_shells as f32);
-        let hp_color = hud_number_color(hp as f32, MAX_DAMAGE);
-        // The live weapon's label carries a ">" marker (and, for a special,
-        // its own accent color instead of neutral white) - with the FIFO
-        // weapon queue (see `Tank::weapon_queue`), several stocked weapons
-        // can show at once and the counts alone no longer say which one
-        // the trigger actually fires.
-        let hud_shells_label = if active_weapon == ActiveWeapon::Shell {
-            ">SHELLS: "
-        } else {
-            "SHELLS: "
-        };
-        let hud_shells_num = format!("{shells}");
-        let hud_mid = "   HP: ";
-        let hud_hp_num = format!("{hp}");
-        let hud_shells_label_w = rl.measure_text(hud_shells_label, HUD_FONT_SIZE);
-        let hud_shells_num_w = rl.measure_text(&hud_shells_num, HUD_FONT_SIZE);
-        let hud_mid_w = rl.measure_text(hud_mid, HUD_FONT_SIZE);
-        let hud_hp_num_w = rl.measure_text(&hud_hp_num, HUD_FONT_SIZE);
-        // Only shown while charged (see Tank::laser_charges) - most rounds
-        // never pick one up, so this stays out of the way otherwise.
-        let hud_laser = (laser_charges > 0).then(|| {
-            let active = active_weapon == ActiveWeapon::Laser;
-            let label = if active { "   >LASER: " } else { "   LASER: " };
-            let num = format!("{laser_charges}");
-            let label_w = rl.measure_text(label, HUD_FONT_SIZE);
-            let num_w = rl.measure_text(&num, HUD_FONT_SIZE);
-            let label_color = if active { HUD_LASER_COLOR } else { Color::WHITE };
-            (label, num, label_w, num_w, label_color)
-        });
-        // Same idea as hud_laser above, for plasma ammo.
-        let hud_plasma = (plasma_ammo > 0).then(|| {
-            let active = active_weapon == ActiveWeapon::Plasma;
-            let label = if active { "   >PLASMA: " } else { "   PLASMA: " };
-            let num = format!("{plasma_ammo}");
-            let label_w = rl.measure_text(label, HUD_FONT_SIZE);
-            let num_w = rl.measure_text(&num, HUD_FONT_SIZE);
-            let label_color = if active { HUD_PLASMA_COLOR } else { Color::WHITE };
-            (label, num, label_w, num_w, label_color)
-        });
-        // Same idea as hud_laser above, for minigun ammo.
-        let hud_minigun = (minigun_ammo > 0).then(|| {
-            let active = active_weapon == ActiveWeapon::Minigun;
-            let label = if active { "   >MINIGUN: " } else { "   MINIGUN: " };
-            let num = format!("{minigun_ammo}");
-            let label_w = rl.measure_text(label, HUD_FONT_SIZE);
-            let num_w = rl.measure_text(&num, HUD_FONT_SIZE);
-            let label_color = if active { HUD_MINIGUN_COLOR } else { Color::WHITE };
-            (label, num, label_w, num_w, label_color)
-        });
+        let hud = HudModel::gather(self);
 
         // Precompute the centered end-of-round banner (text width must be
         // measured on the RaylibHandle, outside the draw closure).
@@ -262,15 +188,9 @@ impl Game {
                 (text, size, w, alpha)
             })
         };
-        // Wave rounds: the wave counter and live-enemy count on the right
-        // of the HUD line, and the `WAVE N` banner during the breather
-        // before a wave - smaller than the mission banner, no dim overlay,
-        // and never over the end-of-round banner.
-        let hud_wave = self.wave_status().map(|w| {
-            let text = format!("WAVE {}/{}   ENEMIES {}", w.index, w.total, w.alive);
-            let w_px = rl.measure_text(&text, HUD_FONT_SIZE);
-            (text, w_px)
-        });
+        // Wave rounds: the `WAVE N` banner during the breather before a
+        // wave - smaller than the mission banner, no dim overlay, and never
+        // over the end-of-round banner. The counter itself is in the bar.
         let wave_banner = self.wave_banner().filter(|_| self.outcome == Outcome::Playing).map(|text| {
             let size = 48;
             let w = rl.measure_text(&text, size);
@@ -287,6 +207,7 @@ impl Game {
             let sub_w = rl.measure_text(&sub, sub_size);
             (text, color, title_size, title_w, sub, sub_size, sub_w)
         });
+        let paused_w = rl.measure_text("PAUSED", 72);
 
         // Pass 1: draw the world (tracks, tanks, shells) into an offscreen
         // render texture, so a shockwave can distort the finished frame as a
@@ -577,6 +498,7 @@ impl Game {
         // module's own doc comment), not the place to reach for an rng.
         // Muzzle/impact flash quads and the HUD deliberately aren't shifted:
         // they're either their own small on-screen quad or meant to stay put.
+        // The field origin is added on top: the scene lands below the bar.
         let mut blit_offset = Vector2::new(0.0, 0.0);
         // `screen_fx_intensity` scales every whole-screen effect together;
         // folding it into the magnitude here keeps the stack cap below
@@ -615,258 +537,232 @@ impl Game {
         blit_offset.x = (blit_offset.x / 2.0).round() * 2.0;
         blit_offset.y = (blit_offset.y / 2.0).round() * 2.0;
 
+        let origin = layout.field_origin();
+        let blit_at = Vector2::new(blit_offset.x + origin.x, blit_offset.y + origin.y);
+        let field_camera = Camera2D {
+            offset: origin,
+            target: Vector2::new(0.0, 0.0),
+            rotation: 0.0,
+            zoom: 1.0,
+        };
+
         rl.draw(thread, |mut d| {
             d.clear_background(Color::BLACK);
 
             if !self.shocks.is_empty() {
                 d.draw_shader_mode(&mut effects.shock.shader, |mut sd| {
-                    sd.draw_texture_rec(&*scene_target, source, blit_offset, Color::WHITE);
+                    sd.draw_texture_rec(&*scene_target, source, blit_at, Color::WHITE);
                 });
             } else {
-                d.draw_texture_rec(&*scene_target, source, blit_offset, Color::WHITE);
+                d.draw_texture_rec(&*scene_target, source, blit_at, Color::WHITE);
             }
 
-            // Layer each muzzle flash's tiny heat-haze ripple on top, one small
-            // quad at a time: source and dest are the same on-screen patch (just
-            // re-sampling that bit of the already-composited scene through the
-            // ripple shader), so this reads as a localized wobble rather than
-            // redistorting the whole frame.
-            for flash in &self.muzzle_flashes {
-                let uv =
-                    screen_to_ripple_uv(flash.center, screen_width as f32, screen_height as f32);
-                effects
-                    .muzzle
-                    .shader
-                    .set_shader_value(effects.muzzle.center_loc, uv);
-                effects
-                    .muzzle
-                    .shader
-                    .set_shader_value(effects.muzzle.time_loc, flash.time);
+            // Everything from here to the bar is field-relative: the flash
+            // quads, the overlays, the banners and the dims all centre on
+            // and cover the field, never the bar.
+            d.draw_mode2D(field_camera, |mut d, _| {
+                // Layer each muzzle flash's tiny heat-haze ripple on top, one small
+                // quad at a time: source and dest are the same on-screen patch (just
+                // re-sampling that bit of the already-composited scene through the
+                // ripple shader), so this reads as a localized wobble rather than
+                // redistorting the whole frame.
+                for flash in &self.muzzle_flashes {
+                    let uv =
+                        screen_to_ripple_uv(flash.center, screen_width as f32, screen_height as f32);
+                    effects
+                        .muzzle
+                        .shader
+                        .set_shader_value(effects.muzzle.center_loc, uv);
+                    effects
+                        .muzzle
+                        .shader
+                        .set_shader_value(effects.muzzle.time_loc, flash.time);
 
-                let r = tuning().muzzle_flash_quad_radius;
-                let flash_source = Rectangle {
-                    x: flash.center.x - r,
-                    y: (screen_height as f32 - flash.center.y) - r,
-                    width: r * 2.0,
-                    height: -(r * 2.0),
-                };
-                let flash_dest = Rectangle {
-                    x: flash.center.x,
-                    y: flash.center.y,
-                    width: r * 2.0,
-                    height: r * 2.0,
-                };
-                let origin = Vector2::new(r, r);
+                    let r = tuning().muzzle_flash_quad_radius;
+                    let flash_source = Rectangle {
+                        x: flash.center.x - r,
+                        y: (screen_height as f32 - flash.center.y) - r,
+                        width: r * 2.0,
+                        height: -(r * 2.0),
+                    };
+                    let flash_dest = Rectangle {
+                        x: flash.center.x,
+                        y: flash.center.y,
+                        width: r * 2.0,
+                        height: r * 2.0,
+                    };
+                    let origin = Vector2::new(r, r);
 
-                d.draw_shader_mode(&mut effects.muzzle.shader, |mut sd| {
-                    sd.draw_texture_pro(
-                        &*scene_target,
-                        flash_source,
-                        flash_dest,
-                        origin,
-                        0.0,
-                        Color::WHITE,
-                    );
-                });
-            }
-
-            // Same treatment for every in-flight shell-impact flash.
-            for flash in &self.impact_flashes {
-                let uv =
-                    screen_to_ripple_uv(flash.center, screen_width as f32, screen_height as f32);
-                effects
-                    .impact
-                    .shader
-                    .set_shader_value(effects.impact.center_loc, uv);
-                effects
-                    .impact
-                    .shader
-                    .set_shader_value(effects.impact.time_loc, flash.time);
-
-                let r = tuning().impact_flash_quad_radius;
-                let flash_source = Rectangle {
-                    x: flash.center.x - r,
-                    y: (screen_height as f32 - flash.center.y) - r,
-                    width: r * 2.0,
-                    height: -(r * 2.0),
-                };
-                let flash_dest = Rectangle {
-                    x: flash.center.x,
-                    y: flash.center.y,
-                    width: r * 2.0,
-                    height: r * 2.0,
-                };
-                let origin = Vector2::new(r, r);
-
-                d.draw_shader_mode(&mut effects.impact.shader, |mut sd| {
-                    sd.draw_texture_pro(
-                        &*scene_target,
-                        flash_source,
-                        flash_dest,
-                        origin,
-                        0.0,
-                        Color::WHITE,
-                    );
-                });
-            }
-
-            // A kill or a barrel blast opens with a brief whole-screen
-            // flash (`Game::screen_flash`, started and spaced out by
-            // `Game::flash_screen`). After the ripple quads, which re-blit
-            // patches of the un-flashed scene and would otherwise punch
-            // darker squares through it.
-            if let Some(age) = self.screen_flash {
-                let seconds = tuning().blast_screen_flash_seconds;
-                if seconds > 0.0 && age < seconds {
-                    let peak = tuning().blast_screen_flash_alpha * tuning().screen_fx_intensity;
-                    let a = (255.0 * peak.clamp(0.0, 1.0) * (1.0 - age / seconds)) as u8;
-                    d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(255, 240, 200, a));
-                }
-            }
-
-            // Debug overlays (dev builds only): the inspect layer's
-            // hitbox/collider outlines plus a stat readout for every tank,
-            // then the dev server's other layers. Drawn here (screen space,
-            // post-composite) rather than into scene_target, so they're
-            // never warped by an in-flight shockwave and always render
-            // crisp - tank.position is already screen pixels (no camera
-            // transform), so the two spaces line up 1:1 with no extra math.
-            #[cfg(feature = "dev-tools")]
-            {
-                if self.debug_overlays.inspect {
-                    for (tank, ai) in self.world.query::<(&Tank, &Ai)>().iter() {
-                        draw_tank_inspect(&mut d, tank, Some(ai));
-                    }
-                    crate::simulation::with_tank(&self.world, player, |tank| {
-                        draw_tank_inspect(&mut d, tank, None);
+                    d.draw_shader_mode(&mut effects.muzzle.shader, |mut sd| {
+                        sd.draw_texture_pro(
+                            &*scene_target,
+                            flash_source,
+                            flash_dest,
+                            origin,
+                            0.0,
+                            Color::WHITE,
+                        );
                     });
                 }
-                self.draw_debug_overlays(&mut d, screen_width as f32, screen_height as f32);
-                // Which preset is live, one line under the top-left HUD row,
-                // so the I key's cycling is visible without counting layers.
-                if self.debug_overlays.any() {
-                    let preset = if self.debug_overlays == Overlays::INSPECT {
-                        "inspect"
-                    } else if self.debug_overlays == Overlays::ALL {
-                        "all"
-                    } else {
-                        "custom"
+
+                // Same treatment for every in-flight shell-impact flash.
+                for flash in &self.impact_flashes {
+                    let uv =
+                        screen_to_ripple_uv(flash.center, screen_width as f32, screen_height as f32);
+                    effects
+                        .impact
+                        .shader
+                        .set_shader_value(effects.impact.center_loc, uv);
+                    effects
+                        .impact
+                        .shader
+                        .set_shader_value(effects.impact.time_loc, flash.time);
+
+                    let r = tuning().impact_flash_quad_radius;
+                    let flash_source = Rectangle {
+                        x: flash.center.x - r,
+                        y: (screen_height as f32 - flash.center.y) - r,
+                        width: r * 2.0,
+                        height: -(r * 2.0),
                     };
-                    // Frame time and live particle count ride the same
-                    // label: the FX budget has to hold on the wasm build,
-                    // and without a number on screen that is an assertion
-                    // nobody can check while playing.
-                    let label = format!(
-                        "DEV overlays: {preset} (I cycles)  |  {:.1} ms  {} fx",
-                        frame_ms,
-                        effects.fx.live(),
-                    );
-                    const LABEL_FONT_SIZE: i32 = if HUD_FONT_SIZE / 2 < 14 { HUD_FONT_SIZE / 2 } else { 14 };
-                    let label_y = HUD_MARGIN + HUD_FONT_SIZE + 6;
-                    // Same 8px/char width estimate as `draw_tank_inspect`'s
-                    // stat panel - no font handle inside the draw closure.
-                    let label_w = label.len() as i32 * 8 + 8;
-                    d.draw_rectangle(
-                        HUD_MARGIN - 4,
-                        label_y - 2,
-                        label_w,
-                        LABEL_FONT_SIZE + 4,
-                        Color::new(0, 0, 0, 150),
-                    );
+                    let flash_dest = Rectangle {
+                        x: flash.center.x,
+                        y: flash.center.y,
+                        width: r * 2.0,
+                        height: r * 2.0,
+                    };
+                    let origin = Vector2::new(r, r);
+
+                    d.draw_shader_mode(&mut effects.impact.shader, |mut sd| {
+                        sd.draw_texture_pro(
+                            &*scene_target,
+                            flash_source,
+                            flash_dest,
+                            origin,
+                            0.0,
+                            Color::WHITE,
+                        );
+                    });
+                }
+
+                // A kill or a barrel blast opens with a brief whole-screen
+                // flash (`Game::screen_flash`, started and spaced out by
+                // `Game::flash_screen`). After the ripple quads, which re-blit
+                // patches of the un-flashed scene and would otherwise punch
+                // darker squares through it.
+                if let Some(age) = self.screen_flash {
+                    let seconds = tuning().blast_screen_flash_seconds;
+                    if seconds > 0.0 && age < seconds {
+                        let peak = tuning().blast_screen_flash_alpha * tuning().screen_fx_intensity;
+                        let a = (255.0 * peak.clamp(0.0, 1.0) * (1.0 - age / seconds)) as u8;
+                        d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(255, 240, 200, a));
+                    }
+                }
+
+                // Debug overlays (dev builds only): the inspect layer's
+                // hitbox/collider outlines plus a stat readout for every tank,
+                // then the dev server's other layers. Drawn here (screen space,
+                // post-composite) rather than into scene_target, so they're
+                // never warped by an in-flight shockwave and always render
+                // crisp - tank.position is already screen pixels (no camera
+                // transform), so the two spaces line up 1:1 with no extra math.
+                #[cfg(feature = "dev-tools")]
+                {
+                    if self.debug_overlays.inspect {
+                        for (tank, ai) in self.world.query::<(&Tank, &Ai)>().iter() {
+                            draw_tank_inspect(&mut d, tank, Some(ai));
+                        }
+                        crate::simulation::with_tank(&self.world, player, |tank| {
+                            draw_tank_inspect(&mut d, tank, None);
+                        });
+                    }
+                    self.draw_debug_overlays(&mut d, screen_width as f32, screen_height as f32);
+                    // Which preset is live, in the field's top-left corner (the
+                    // player's readouts are in the bar, so this corner is free),
+                    // so the I key's cycling is visible without counting layers.
+                    if self.debug_overlays.any() {
+                        let preset = if self.debug_overlays == Overlays::INSPECT {
+                            "inspect"
+                        } else if self.debug_overlays == Overlays::ALL {
+                            "all"
+                        } else {
+                            "custom"
+                        };
+                        // Frame time and live particle count ride the same
+                        // label: the FX budget has to hold on the wasm build,
+                        // and without a number on screen that is an assertion
+                        // nobody can check while playing.
+                        let label = format!(
+                            "DEV overlays: {preset} (I cycles)  |  {:.1} ms  {} fx",
+                            frame_ms,
+                            effects.fx.live(),
+                        );
+                        const LABEL_FONT_SIZE: i32 = 14;
+                        let label_y = HUD_MARGIN;
+                        // Same 8px/char width estimate as `draw_tank_inspect`'s
+                        // stat panel - no font handle inside the draw closure.
+                        let label_w = label.len() as i32 * 8 + 8;
+                        d.draw_rectangle(
+                            HUD_MARGIN - 4,
+                            label_y - 2,
+                            label_w,
+                            LABEL_FONT_SIZE + 4,
+                            Color::new(0, 0, 0, 150),
+                        );
+                        d.draw_text(
+                            &label,
+                            HUD_MARGIN,
+                            label_y,
+                            LABEL_FONT_SIZE,
+                            Color::new(80, 200, 255, 255),
+                        );
+                    }
+                }
+
+                // End-of-round banner over a dimming overlay.
+                if let Some((title, color, title_size, title_w, sub, sub_size, sub_w)) = &banner {
+                    d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(0, 0, 0, 120));
+                    let cx = screen_width / 2;
+                    let cy = screen_height / 2;
                     d.draw_text(
-                        &label,
-                        HUD_MARGIN,
-                        label_y,
-                        LABEL_FONT_SIZE,
-                        Color::new(80, 200, 255, 255),
+                        title,
+                        cx - title_w / 2,
+                        cy - title_size,
+                        *title_size,
+                        *color,
+                    );
+                    d.draw_text(sub, cx - sub_w / 2, cy + 20, *sub_size, Color::RAYWHITE);
+                }
+
+                // Mission banner: big white text over a dim overlay that both
+                // fade together once the round unfreezes.
+                if let Some((text, size, w, alpha)) = intro {
+                    let a = |max: f32| (max * alpha) as u8;
+                    d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(0, 0, 0, a(120.0)));
+                    d.draw_text(text, screen_width / 2 - w / 2, screen_height / 2 - size / 2, size, Color::new(255, 255, 255, a(255.0)));
+                }
+                if let Some((text, size, w)) = &wave_banner {
+                    d.draw_text(text, screen_width / 2 - w / 2, screen_height / 2 - size / 2, *size, Color::RAYWHITE);
+                }
+
+                // Paused overlay draws over everything else, including the
+                // end-of-round banner (its countdown is frozen too).
+                if self.paused {
+                    d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(0, 0, 0, 120));
+                    let title_size = 72;
+                    d.draw_text(
+                        "PAUSED",
+                        screen_width / 2 - paused_w / 2,
+                        screen_height / 2 - title_size / 2,
+                        title_size,
+                        Color::RAYWHITE,
                     );
                 }
-            }
+            });
 
-            // HUD and the end-of-round banner draw undistorted, on top of the
-            // (possibly rippling) scene.
-            let hud_y = HUD_MARGIN;
-            let mut hud_x = HUD_MARGIN;
-            d.draw_text(hud_shells_label, hud_x, hud_y, HUD_FONT_SIZE, Color::WHITE);
-            hud_x += hud_shells_label_w;
-            d.draw_text(&hud_shells_num, hud_x, hud_y, HUD_FONT_SIZE, shells_color);
-            hud_x += hud_shells_num_w;
-            d.draw_text(hud_mid, hud_x, hud_y, HUD_FONT_SIZE, Color::WHITE);
-            hud_x += hud_mid_w;
-            d.draw_text(&hud_hp_num, hud_x, hud_y, HUD_FONT_SIZE, hp_color);
-            hud_x += hud_hp_num_w;
-            if let Some((label, num, label_w, num_w, label_color)) = &hud_laser {
-                d.draw_text(label, hud_x, hud_y, HUD_FONT_SIZE, *label_color);
-                hud_x += label_w;
-                d.draw_text(num, hud_x, hud_y, HUD_FONT_SIZE, HUD_LASER_COLOR);
-                hud_x += num_w;
-            }
-            if let Some((label, num, label_w, num_w, label_color)) = &hud_plasma {
-                d.draw_text(label, hud_x, hud_y, HUD_FONT_SIZE, *label_color);
-                hud_x += label_w;
-                d.draw_text(num, hud_x, hud_y, HUD_FONT_SIZE, HUD_PLASMA_COLOR);
-                hud_x += num_w;
-            }
-            if let Some((label, num, label_w, _, label_color)) = &hud_minigun {
-                d.draw_text(label, hud_x, hud_y, HUD_FONT_SIZE, *label_color);
-                hud_x += label_w;
-                // The line's last segment: nothing advances past it.
-                d.draw_text(num, hud_x, hud_y, HUD_FONT_SIZE, HUD_MINIGUN_COLOR);
-            }
-            if let Some((text, w)) = &hud_wave {
-                d.draw_text(text, screen_width - HUD_MARGIN - w, hud_y, HUD_FONT_SIZE, Color::WHITE);
-            }
-            // Mirrors the top-left HUD's HUD_MARGIN inset, so both corners
-            // sit the same distance from their edges.
-            d.draw_text(
-                &version_hud,
-                screen_width - HUD_MARGIN - version_hud_w,
-                screen_height - HUD_MARGIN - HUD_VERSION_FONT_SIZE,
-                HUD_VERSION_FONT_SIZE,
-                Color::WHITE,
-            );
-
-            // End-of-round banner over a dimming overlay.
-            if let Some((title, color, title_size, title_w, sub, sub_size, sub_w)) = &banner {
-                d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(0, 0, 0, 120));
-                let cx = screen_width / 2;
-                let cy = screen_height / 2;
-                d.draw_text(
-                    title,
-                    cx - title_w / 2,
-                    cy - title_size,
-                    *title_size,
-                    *color,
-                );
-                d.draw_text(sub, cx - sub_w / 2, cy + 20, *sub_size, Color::RAYWHITE);
-            }
-
-            // Mission banner: big white text over a dim overlay that both
-            // fade together once the round unfreezes.
-            if let Some((text, size, w, alpha)) = intro {
-                let a = |max: f32| (max * alpha) as u8;
-                d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(0, 0, 0, a(120.0)));
-                d.draw_text(text, screen_width / 2 - w / 2, screen_height / 2 - size / 2, size, Color::new(255, 255, 255, a(255.0)));
-            }
-            if let Some((text, size, w)) = &wave_banner {
-                d.draw_text(text, screen_width / 2 - w / 2, screen_height / 2 - size / 2, *size, Color::RAYWHITE);
-            }
-
-            // Paused overlay draws over everything else, including the
-            // end-of-round banner (its countdown is frozen too).
-            if self.paused {
-                d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(0, 0, 0, 120));
-                let title = "PAUSED";
-                let title_size = 72;
-                let title_w = d.measure_text(title, title_size);
-                d.draw_text(
-                    title,
-                    screen_width / 2 - title_w / 2,
-                    screen_height / 2 - title_size / 2,
-                    title_size,
-                    Color::RAYWHITE,
-                );
-            }
+            // The HUD bar, in window space, over anything the field pass
+            // might have put on its edge.
+            draw_bar(&mut d, layout.panel, &hud, textures);
         });
     }
 }
@@ -1133,20 +1029,5 @@ impl Game {
                 }
             }
         }
-    }
-}
-
-/// Color for a HUD number (SHELLS or HP) given its current value and max -
-/// default gray above HUD_WARN_THRESHOLD, orange between the warn and
-/// critical thresholds, red below. Shared by both since they're the same
-/// current/max shape, just different units.
-fn hud_number_color(current: f32, max: f32) -> Color {
-    let frac = if max > 0.0 { current / max } else { 0.0 };
-    if frac < tuning().hud_critical_threshold {
-        Color::RED
-    } else if frac < tuning().hud_warn_threshold {
-        Color::ORANGE
-    } else {
-        Color::WHITE
     }
 }

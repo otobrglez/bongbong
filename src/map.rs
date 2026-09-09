@@ -35,7 +35,7 @@ pub const CURRENT_VERSION: u32 = 1;
 /// property of the TOML shape itself (e.g. `kind = "wall"` with no
 /// `material` key fails to parse) rather than something callers have to
 /// double-check.
-#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum CellObject {
     Wall { material: Material },

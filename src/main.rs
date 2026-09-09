@@ -8,6 +8,7 @@ use bongbong::tank::{Dir, TankKind};
 use bongbong::{
     DEFAULT_SCREEN_HEIGHT,
     DEFAULT_SCREEN_WIDTH,
+    Layout,
 };
 use clap::Parser;
 use sola_raylib::core::game_loop;
@@ -69,7 +70,7 @@ struct Args {
     #[arg(long = "tank", value_enum)]
     tank: Option<TankKind>,
 
-    /// Override the window size, e.g. `--resolution 1920x1080` (default:
+    /// Override the battlefield size, e.g. `--resolution 1920x1080` (default:
     /// 1280x720).
     #[arg(long = "resolution", value_parser = parse_resolution)]
     resolution: Option<(i32, i32)>,
@@ -243,13 +244,18 @@ fn main() {
     bongbong::capi::keep_alive();
 
     let args = Args::parse();
+    // `--resolution` is the *battlefield*; the window is the field plus
+    // the HUD bar above it (docs/hud-and-builder-layout-design.md). The
+    // simulation, the physics, the maps and the probe only ever see the
+    // field.
     let (screen_width, screen_height) = args
         .resolution
         .unwrap_or((DEFAULT_SCREEN_WIDTH, DEFAULT_SCREEN_HEIGHT));
+    let (window_width, window_height) = Layout::for_field(screen_width as f32, screen_height as f32).window_size();
 
     let (mut rl, thread) = sola_raylib::init()
-        .size(screen_width, screen_height)
-        .title("BongBong!")
+        .size(window_width, window_height)
+        .title(&format!("BongBong! v{}", env!("CARGO_PKG_VERSION")))
         .build();
 
     let tanks_texture = rl
@@ -350,15 +356,14 @@ fn main() {
     if args.editor {
         let mut editor = bongbong::editor::MapEditor::new(args.map, screen_width as f32, screen_height as f32);
         game_loop::run(rl, thread, 60, move |rl, thread| {
-            let (width, height) = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
-            if let bongbong::editor::EditorAction::Close = editor.update(rl, width, height) {
+            let layout = Layout::for_window(rl.get_screen_width() as f32, rl.get_screen_height() as f32);
+            if let bongbong::editor::EditorAction::Close = editor.update(rl, &layout) {
                 rl.request_quit();
             }
             editor.render(
                 rl,
                 thread,
-                width,
-                height,
+                &layout,
                 &bongbong::editor::EditorTextures {
                     obstacles: &obstacles_texture,
                     props: &props_texture,
@@ -515,7 +520,8 @@ fn main() {
     // display also throws half the work away.
     let target_fps = if cfg!(target_os = "emscripten") { 0 } else { 120 };
     game_loop::run(rl, thread, target_fps, move |rl, thread| {
-        let (width, height) = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
+        let layout = Layout::for_window(rl.get_screen_width() as f32, rl.get_screen_height() as f32);
+        let (width, height) = (layout.field.w, layout.field.h);
         // Frame boundary, first: dev-server requests (state reads and
         // writes, tuning patches, an armed step or screenshot), so anything
         // they stage lands in this same frame.
@@ -570,12 +576,13 @@ fn main() {
         // shells, full-auto while a laser is charged) is `Game::update`'s
         // call, not this closure's; see `Input::player_intent`'s doc comment.
         player_intent.fire = rl.is_key_down(KeyboardKey::KEY_SPACE);
-        // Tap-to-command (docs/tap-navigation.md). The scene blits 1:1 -
-        // `game.rs` draws the render target with `draw_texture_rec`, whose
-        // only offset is the camera shake - so a window position *is* a
-        // world position, give or take a couple of 2px blocks during an
-        // explosion. Touch is edge-detected by hand because raylib reports a
-        // held finger as a point count, not a press.
+        // Tap-to-command (docs/tap-navigation.md). The scene blits 1:1 at
+        // the field origin - `game.rs` draws the render target with
+        // `draw_texture_rec`, whose only other offset is the camera shake -
+        // so a window position less the origin *is* a world position, give
+        // or take a couple of 2px blocks during an explosion. A tap on the
+        // HUD bar is not an order. Touch is edge-detected by hand because
+        // raylib reports a held finger as a point count, not a press.
         let touching = rl.get_touch_point_count() > 0;
         let tap = if rl.is_mouse_button_pressed(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_LEFT) {
             Some(rl.get_mouse_position())
@@ -585,6 +592,7 @@ fn main() {
             None
         };
         touch_held_last_frame = touching;
+        let tap = tap.filter(|p| layout.field.contains(*p)).map(|p| layout.to_field(p));
         let input = Input {
             player_intent,
             tap,
@@ -660,6 +668,7 @@ fn main() {
                 grass: &grass_texture,
                 trees: &trees_texture,
             },
+            &layout,
         );
         // A pending screenshot reads the frame just presented.
         #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]

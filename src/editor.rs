@@ -12,11 +12,11 @@ use rand::RngExt;
 use sola_raylib::prelude::*;
 
 use crate::ground::{self, GroundGrid};
+use crate::hud::HUD_TEXT_SIZE;
 use crate::map::{self, CellObject, MapFile};
 use crate::obstacle::{self, Material};
 use crate::pickup::PickupKind;
 use crate::{
-    EDITOR_HAMBURGER_SIZE,
     EDITOR_ICON_GAP,
     EDITOR_ICON_SIZE,
     EDITOR_PALETTE_BOTTOM_MARGIN,
@@ -31,6 +31,7 @@ use crate::{
     EDITOR_PANEL_SHADOW_OFFSET,
     EDITOR_PANEL_SHADOW_OPACITY,
     EDITOR_TOOLBAR_MARGIN,
+    Layout,
     OBSTACLE_GRID_SIZE,
     PATHFIND_CELL_SIZE,
     Position,
@@ -124,11 +125,10 @@ enum Popup {
 /// everything else the editor handles internally.
 pub enum EditorAction {
     None,
-    /// The user hit Close (or the top-left back icon). What that means is
-    /// the caller's call: exit the process if the editor was launched via
-    /// `--editor`, or switch the driver back to `Game` if it was entered
-    /// mid-game via the hamburger button - see docs/map-editor-design.md's
-    /// "Entering the editor" section.
+    /// The user hit Close. What that means is the caller's call: exit the
+    /// process if the editor was launched via `--editor`, or switch the
+    /// driver back to `Game` once the builder is fused into the game - see
+    /// docs/hud-and-builder-layout-design.md's "Mode switch".
     Close,
 }
 
@@ -147,9 +147,11 @@ pub struct MapEditor {
     /// any - prefills Save's filename prompt so re-saving the map you just
     /// loaded doesn't require retyping its name.
     current_name: Option<String>,
-    /// Last click was consumed by the popup this frame, so the same click
-    /// doesn't also fall through to the palette/grid below it.
+    /// One-line feedback (saved/loaded/error) shown at the field's bottom.
     status: Option<String>,
+    /// The map has edits that are not on disk - the `*` after its name in
+    /// the bar. Set by every cell edit, cleared by New, Save and Load.
+    dirty: bool,
     /// Grid cell painted/erased by the current mouse-down drag, if any -
     /// lets `update` place continuously as the drag crosses into a new
     /// cell (not just on the initial click) while still only placing once
@@ -161,8 +163,8 @@ pub struct MapEditor {
 
 impl MapEditor {
     /// `initial` seeds the canvas - `Some` when entering with a map already
-    /// loaded (`--editor maps/foo.toml`, or the in-game hamburger button
-    /// when a map is currently active), `None` for a blank canvas.
+    /// loaded (`--editor maps/foo.toml`), `None` for a blank canvas.
+    /// `width` x `height` is the battlefield, not the window.
     pub fn new(initial: Option<MapFile>, width: f32, height: f32) -> Self {
         let map = initial.unwrap_or_else(MapFile::new);
         let mut editor = MapEditor {
@@ -173,6 +175,7 @@ impl MapEditor {
             popup: None,
             current_name: None,
             status: None,
+            dirty: false,
             drag_cell: None,
         };
         editor.rebuild_ground(width, height);
@@ -205,26 +208,19 @@ impl MapEditor {
         self.ground = ground::build(width, height, self.ground_seed, &road_cells, &wall_cells);
     }
 
-    fn hamburger_rect() -> Rectangle {
-        Rectangle::new(EDITOR_TOOLBAR_MARGIN, EDITOR_TOOLBAR_MARGIN, EDITOR_HAMBURGER_SIZE, EDITOR_HAMBURGER_SIZE)
-    }
-
-    const TOOLBAR_BTN_W: f32 = 72.0;
-    const TOOLBAR_BTN_H: f32 = 40.0;
+    const TOOLBAR_BTN_W: f32 = 64.0;
+    const TOOLBAR_BTN_H: f32 = 24.0;
     const TOOLBAR_LABELS: [&'static str; 4] = ["New", "Save", "Load", "Close"];
 
-    fn toolbar_panel_rect(width: f32) -> Rectangle {
-        let n = Self::TOOLBAR_LABELS.len() as f32;
-        let w = EDITOR_PANEL_PADDING * 2.0 + n * Self::TOOLBAR_BTN_W + (n - 1.0) * EDITOR_ICON_GAP;
-        let h = EDITOR_PANEL_PADDING * 2.0 + Self::TOOLBAR_BTN_H;
-        Rectangle::new(width - EDITOR_TOOLBAR_MARGIN - w, EDITOR_TOOLBAR_MARGIN, w, h)
-    }
-
-    fn toolbar_button_rect(width: f32, index: usize) -> Rectangle {
-        let panel = Self::toolbar_panel_rect(width);
+    /// The New/Save/Load/Close buttons, right-aligned in the HUD bar
+    /// (window space), so the field below is all cells.
+    fn toolbar_button_rect(layout: &Layout, index: usize) -> Rectangle {
+        let n = Self::TOOLBAR_LABELS.len();
+        let panel = layout.panel;
+        let from_right = (n - index) as f32 * Self::TOOLBAR_BTN_W + (n - 1 - index) as f32 * EDITOR_ICON_GAP;
         Rectangle::new(
-            panel.x + EDITOR_PANEL_PADDING + index as f32 * (Self::TOOLBAR_BTN_W + EDITOR_ICON_GAP),
-            panel.y + EDITOR_PANEL_PADDING,
+            panel.x + panel.w - EDITOR_TOOLBAR_MARGIN - from_right,
+            panel.y + (panel.h - Self::TOOLBAR_BTN_H) / 2.0,
             Self::TOOLBAR_BTN_W,
             Self::TOOLBAR_BTN_H,
         )
@@ -267,26 +263,28 @@ impl MapEditor {
         )
     }
 
-    /// Whether `point` lands on any of the editor's own UI chrome (the
-    /// hamburger icon, the Save/Load/Close toolbar, or the object palette) -
+    /// Whether a window position lands on the editor's own UI chrome (the
+    /// HUD bar with its toolbar, or the object palette over the field) -
     /// used to keep a click on those from also placing/erasing whatever
     /// battlefield cell happens to be behind them.
-    fn point_on_ui(point: Vector2, width: f32, height: f32) -> bool {
-        Self::hamburger_rect().check_collision_point_rec(point)
-            || Self::toolbar_panel_rect(width).check_collision_point_rec(point)
-            || Self::palette_panel_rect(width, height).check_collision_point_rec(point)
+    fn point_on_ui(point: Vector2, layout: &Layout) -> bool {
+        layout.panel.contains(point)
+            || Self::palette_panel_rect(layout.field.w, layout.field.h).check_collision_point_rec(layout.to_field(point))
     }
 
     /// Advance one frame: handle whatever popup is open, or (with none
-    /// open) a click on the hamburger/toolbar/palette, or a grid
-    /// placement/erase. Returns `EditorAction::Close` the frame Close (or
-    /// the back icon) is clicked - the caller decides what that means.
-    pub fn update(&mut self, rl: &mut RaylibHandle, width: f32, height: f32) -> EditorAction {
-        if let Some(action) = self.update_popup(rl, width, height) {
+    /// open) a click on the toolbar/palette, or a grid placement/erase.
+    /// Returns `EditorAction::Close` the frame Close is clicked - the
+    /// caller decides what that means.
+    pub fn update(&mut self, rl: &mut RaylibHandle, layout: &Layout) -> EditorAction {
+        let (width, height) = (layout.field.w, layout.field.h);
+        if let Some(action) = self.update_popup(rl, layout) {
             return action;
         }
 
+        // Chrome is hit-tested in window space, the grid in field space.
         let mouse = rl.get_mouse_position();
+        let field_mouse = layout.to_field(mouse);
         let held = rl.is_mouse_button_down(MouseButton::MOUSE_BUTTON_LEFT);
         if !held {
             // Cleared on release (not just left alone) so the *next* press
@@ -297,21 +295,18 @@ impl MapEditor {
             return EditorAction::None;
         }
 
-        // UI (hamburger/toolbar/palette) only reacts to the initial click of
-        // a press, never every frame a drag happens to stay over it -
+        // UI (toolbar/palette) only reacts to the initial click of a
+        // press, never every frame a drag happens to stay over it -
         // otherwise holding the mouse down on, say, Close would fire it
         // every single frame instead of once.
         if rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT) {
-            if Self::hamburger_rect().check_collision_point_rec(mouse) {
-                return EditorAction::Close;
-            }
-
             for (i, &label) in Self::TOOLBAR_LABELS.iter().enumerate() {
-                if Self::toolbar_button_rect(width, i).check_collision_point_rec(mouse) {
+                if Self::toolbar_button_rect(layout, i).check_collision_point_rec(mouse) {
                     match label {
                         "New" => {
                             self.map = MapFile::new();
                             self.current_name = None;
+                            self.dirty = false;
                             self.rebuild_ground(width, height);
                         }
                         "Save" => {
@@ -328,7 +323,7 @@ impl MapEditor {
             }
 
             for (i, &tool) in TOOLS.iter().enumerate() {
-                if Self::palette_icon_rect(width, height, i).check_collision_point_rec(mouse) {
+                if Self::palette_icon_rect(width, height, i).check_collision_point_rec(field_mouse) {
                     self.active_tool = tool;
                     return EditorAction::None;
                 }
@@ -348,13 +343,13 @@ impl MapEditor {
         // palette background near the bottom of the screen, which can
         // overlap real battlefield cells) would otherwise fall through to
         // placing/erasing underneath it - `point_on_ui` catches that.
-        if !Self::point_on_ui(mouse, width, height)
-            && mouse.x >= 0.0
-            && mouse.x <= width
-            && mouse.y >= 0.0
-            && mouse.y <= height
+        if !Self::point_on_ui(mouse, layout)
+            && field_mouse.x >= 0.0
+            && field_mouse.x <= width
+            && field_mouse.y >= 0.0
+            && field_mouse.y <= height
         {
-            let cell = map::world_to_cell(mouse);
+            let cell = map::world_to_cell(field_mouse);
             if self.drag_cell != Some(cell) {
                 self.drag_cell = Some(cell);
                 self.place(cell.0, cell.1, width, height);
@@ -369,7 +364,8 @@ impl MapEditor {
     /// once the popup itself has nothing left to do this frame (which is
     /// every frame it's open), keeping the same `EditorAction` shape as
     /// `update`'s main branch.
-    fn update_popup(&mut self, rl: &mut RaylibHandle, width: f32, height: f32) -> Option<EditorAction> {
+    fn update_popup(&mut self, rl: &mut RaylibHandle, layout: &Layout) -> Option<EditorAction> {
+        let (width, height) = (layout.field.w, layout.field.h);
         // Take the popup out of `self` entirely (rather than matching on
         // `&mut self.popup` in place) so the arms below can freely touch
         // other `self` fields (`self.map`, `self.rebuild_ground(...)`)
@@ -398,12 +394,15 @@ impl MapEditor {
                         Err(e) => e,
                     });
                     self.current_name = Some(name.clone());
+                    self.dirty = false;
                     keep_open = false;
                 }
             }
             Popup::Load { names } => {
                 if rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT) {
-                    let mouse = rl.get_mouse_position();
+                    // The popup is drawn over the field, so it is hit in
+                    // field space.
+                    let mouse = layout.to_field(rl.get_mouse_position());
                     let panel = Self::load_panel_rect(width, height, names.len());
                     let clicked = names.iter().enumerate().find_map(|(i, name)| {
                         Self::load_row_rect(&panel, i)
@@ -417,6 +416,7 @@ impl MapEditor {
                                 self.map = map;
                                 self.current_name = Some(name.clone());
                                 self.status = Some(format!("loaded {name}.toml"));
+                                self.dirty = false;
                                 self.rebuild_ground(width, height);
                             }
                             Err(e) => self.status = Some(e),
@@ -487,24 +487,36 @@ impl MapEditor {
             Tool::TallGrass => self.map.set_cell(col, row, CellObject::TallGrass),
             Tool::Eraser => self.map.clear_cell(col, row),
         }
+        self.dirty = true;
         self.rebuild_ground(width, height);
     }
 
     /// Draw the whole editor: ground, placed objects, hover highlight, then
-    /// UI chrome on top (hamburger, toolbar, palette, any open popup).
+    /// UI chrome on top: the palette and any open popup over the field,
+    /// the toolbar, map name and cursor cell in the HUD bar. The field is
+    /// drawn through a `Camera2D` at the field origin, so every cell
+    /// position stays the world position the map format uses.
     pub fn render(
         &self,
         rl: &mut RaylibHandle,
         thread: &RaylibThread,
-        width: f32,
-        height: f32,
+        layout: &Layout,
         textures: &EditorTextures,
     ) {
-        let mouse = rl.get_mouse_position();
+        let (width, height) = (layout.field.w, layout.field.h);
+        let window_mouse = rl.get_mouse_position();
+        let mouse = layout.to_field(window_mouse);
         let (render_width, render_height) = (rl.get_render_width(), rl.get_render_height());
+        let camera = Camera2D {
+            offset: layout.field_origin(),
+            target: Vector2::new(0.0, 0.0),
+            rotation: 0.0,
+            zoom: 1.0,
+        };
         let mut d = rl.begin_drawing(thread);
         d.clear_background(Color::new(30, 30, 34, 255));
 
+        d.draw_mode2D(camera, |mut d, _| {
         ground::draw(&mut d, textures.ground, &self.ground);
 
         for (col, row, obj) in self.map.iter_cells() {
@@ -599,17 +611,6 @@ impl MapEditor {
             );
         }
 
-        draw_panel(&mut d, Self::hamburger_rect());
-        d.draw_text("=", (Self::hamburger_rect().x + 14.0) as i32, (Self::hamburger_rect().y + 8.0) as i32, 22, Color::WHITE);
-
-        let toolbar_panel = Self::toolbar_panel_rect(width);
-        draw_panel(&mut d, toolbar_panel);
-        for (i, &label) in Self::TOOLBAR_LABELS.iter().enumerate() {
-            let rect = Self::toolbar_button_rect(width, i);
-            d.draw_rectangle_rounded_lines_ex(rect, 0.2, EDITOR_PANEL_SEGMENTS, 1.0, Color::new(255, 255, 255, 60));
-            d.draw_text(label, (rect.x + 10.0) as i32, (rect.y + 11.0) as i32, 16, Color::WHITE);
-        }
-
         let palette_panel = Self::palette_panel_rect(width, height);
         draw_panel(&mut d, palette_panel);
         for (i, &tool) in TOOLS.iter().enumerate() {
@@ -689,24 +690,61 @@ impl MapEditor {
             d.draw_text(status, EDITOR_TOOLBAR_MARGIN as i32, (height - 22.0) as i32, 14, Color::LIGHTGRAY);
         }
 
-        // Temporary diagnostic for the "clicks on tools don't register"
-        // report - shows exactly what raylib thinks the mouse position and
+        // Diagnostic for the "clicks on tools don't register" report -
+        // shows exactly what raylib thinks the mouse position and
         // screen/render sizes are, so a HiDPI screen-vs-render mismatch (the
         // classic cause of "visually-correct but click-position-wrong" UI)
-        // is a glance away instead of a guess. Remove once that's resolved.
+        // is a glance away instead of a guess.
         let debug = format!(
-            "mouse=({:.0},{:.0}) screen={}x{} render={}x{} on_hamburger={} on_toolbar={} on_palette={}",
+            "mouse=({:.0},{:.0}) field={}x{} render={}x{} on_bar={} on_palette={}",
             mouse.x,
             mouse.y,
             width as i32,
             height as i32,
             render_width,
             render_height,
-            Self::hamburger_rect().check_collision_point_rec(mouse),
-            Self::toolbar_panel_rect(width).check_collision_point_rec(mouse),
+            layout.panel.contains(window_mouse),
             Self::palette_panel_rect(width, height).check_collision_point_rec(mouse),
         );
         d.draw_text(&debug, EDITOR_TOOLBAR_MARGIN as i32, (height - 44.0) as i32, 14, Color::YELLOW);
+        });
+
+        self.draw_bar(&mut d, layout, mouse);
+    }
+
+    /// The HUD bar in build mode: the map's name (with a `*` while it has
+    /// unsaved edits), the hovered cell and what is in it, and the
+    /// New/Save/Load/Close buttons at the right end.
+    fn draw_bar(&self, d: &mut impl RaylibDraw, layout: &Layout, field_mouse: Vector2) {
+        let panel = layout.panel;
+        let (px, py, pw, ph) = (panel.x as i32, panel.y as i32, panel.w as i32, panel.h as i32);
+        d.draw_rectangle(px, py, pw, ph, Color::new(12, 12, 14, 255));
+        let text_y = py + (ph - HUD_TEXT_SIZE) / 2;
+
+        d.draw_text("BUILD", px + 8, text_y, HUD_TEXT_SIZE, Color::new(255, 200, 80, 255));
+        let name = format!(
+            "{}{}",
+            self.current_name.as_deref().unwrap_or("untitled"),
+            if self.dirty { " *" } else { "" }
+        );
+        d.draw_text(&name, px + 96, text_y, HUD_TEXT_SIZE, Color::WHITE);
+
+        let (width, height) = (layout.field.w, layout.field.h);
+        if field_mouse.x >= 0.0 && field_mouse.x <= width && field_mouse.y >= 0.0 && field_mouse.y <= height {
+            let (col, row) = map::world_to_cell(field_mouse);
+            let under = self
+                .map
+                .cell(col, row)
+                .map(|obj| format!("{obj:?}"))
+                .unwrap_or_default();
+            d.draw_text(&format!("{col},{row}  {under}"), px + 400, text_y, HUD_TEXT_SIZE, Color::new(110, 110, 118, 255));
+        }
+
+        for (i, &label) in Self::TOOLBAR_LABELS.iter().enumerate() {
+            let rect = Self::toolbar_button_rect(layout, i);
+            d.draw_rectangle_rounded_lines_ex(rect, 0.2, EDITOR_PANEL_SEGMENTS, 1.0, Color::new(255, 255, 255, 60));
+            d.draw_text(label, (rect.x + 8.0) as i32, (rect.y + 4.0) as i32, 16, Color::WHITE);
+        }
     }
 }
 

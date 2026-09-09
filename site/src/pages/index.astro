@@ -48,8 +48,10 @@
           position: relative;
           /* One source of truth for the canvas width: the overlay controls
              have to sit on the canvas's own edges, and the canvas is
-             centred, so they all need the same expression. */
-          --canvas-w: min(100vw, 1280px, calc((100vh - 90px) * 16 / 9));
+             centred, so they all need the same expression. The shape is
+             the render target's own: a 1280x720 battlefield under a 32 px
+             HUD bar, 1280x752 (`HUD_BAR_HEIGHT` in src/lib.rs). */
+          --canvas-w: min(100vw, 1280px, calc((100vh - 90px) * 1280 / 752));
 
           /* Sits in the canvas's top-right corner: the canvas is centered in
              .game, so its right edge is half the leftover width in from ours. */
@@ -73,15 +75,15 @@
           }
 
           /* Covers exactly the canvas's own box - same centred width and
-             16:9 as the canvas itself, so the panel is the picture that has
-             not arrived yet rather than a banner above it. */
+             shape as the canvas itself, so the panel is the picture that
+             has not arrived yet rather than a banner above it. */
           .loading {
             position: absolute;
             top: 0;
             left: 50%;
             transform: translateX(-50%);
             width: var(--canvas-w);
-            aspect-ratio: 16 / 9;
+            aspect-ratio: 1280 / 752;
             z-index: 2;
             display: flex;
             flex-direction: column;
@@ -153,8 +155,9 @@
 
           canvas {
             display: block;
-            /* The box has to keep the render target's own 16:9, not just be
-               capped on each axis independently.
+            /* The box has to keep the render target's own shape (1280x752,
+               the field plus the HUD bar), not just be capped on each axis
+               independently.
 
                `object-fit: contain` does letterbox a canvas whose box is a
                different shape - verified in the browser - and raylib maps a
@@ -163,10 +166,11 @@
                So a 390x720 box on a phone would put the picture in a ~219px
                band with ~250px bars, while taps were still measured against
                the full 720: every tap landed in the wrong place vertically.
-               Sizing the box 16:9 means the bitmap always fills it exactly
-               and raylib's normalisation is right by construction. */
+               Sizing the box to the bitmap's own shape means it always
+               fills the box exactly and raylib's normalisation is right by
+               construction. */
             width: var(--canvas-w);
-            aspect-ratio: 16 / 9;
+            aspect-ratio: 1280 / 752;
             height: auto;
             outline: none;
             /* A tap-to-move game cannot let the browser claim drags for
@@ -192,7 +196,7 @@
             padding: env(safe-area-inset-top) env(safe-area-inset-right)
                      env(safe-area-inset-bottom) env(safe-area-inset-left);
 
-            --canvas-w: min(100vw, 1280px, calc(100vh * 16 / 9));
+            --canvas-w: min(100vw, 1280px, calc(100vh * 1280 / 752));
             .instructions, .tuning { display: none; }
           }
 
@@ -202,13 +206,13 @@
             justify-content: center;
             background: #000;
 
-            --canvas-w: min(100vw, 1280px, calc(100vh * 16 / 9));
+            --canvas-w: min(100vw, 1280px, calc(100vh * 1280 / 752));
             .instructions, .tuning { display: none; }
           }
 
-          /* Top *right*, under the subscribe link: the game draws its own
-             SHELLS/HP readout in the top-left corner and the version in the
-             bottom-right, so this is the one corner nothing fights over. */
+          /* Top *right*, under the subscribe link: the game's HUD bar runs
+             along the top, but its right end is the one slot it leaves
+             empty, so this is the corner nothing fights over. */
           .fullscreen-toggle {
             position: absolute;
             top: 34px;
