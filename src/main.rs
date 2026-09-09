@@ -501,7 +501,20 @@ fn main() {
     // native, and hands this closure to emscripten's main loop on web - same
     // source for both, and no -sASYNCIFY=1 needed to keep the browser tab
     // responsive (see .cargo/config.toml).
-    game_loop::run(rl, thread, 120, move |rl, thread| {
+    //
+    // **The fps argument means something different on each side.** On native
+    // it is `SetTargetFPS`, a cap. On web it picks the main loop's *driver*:
+    // `emscripten_set_main_loop_arg` takes any `fps > 0` as a request for
+    // `EM_TIMING_SETTIMEOUT` at `1000/fps` ms, and only `0` selects
+    // `EM_TIMING_RAF` (emscripten's `libeventloop.js`, `setMainLoop`). A
+    // timer is not synced to the display refresh, so a finished frame waits
+    // an arbitrary slice of a refresh interval before it is shown - which
+    // the player feels as lag between a tap and the tank answering it - the
+    // phase drifts, which reads as judder, and browsers throttle timers
+    // harder than rAF, phones most of all. Rendering 120 ticks/s to a 60 Hz
+    // display also throws half the work away.
+    let target_fps = if cfg!(target_os = "emscripten") { 0 } else { 120 };
+    game_loop::run(rl, thread, target_fps, move |rl, thread| {
         let (width, height) = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
         // Frame boundary, first: dev-server requests (state reads and
         // writes, tuning patches, an armed step or screenshot), so anything
