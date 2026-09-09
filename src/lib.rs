@@ -731,6 +731,7 @@ pub mod ground;
 pub mod laser;
 pub mod level;
 pub mod map;
+pub mod marker;
 pub mod maplint;
 pub mod obstacle;
 pub mod pathfind;

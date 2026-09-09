@@ -42,7 +42,7 @@ use hecs::Entity;
 use sola_raylib::prelude::Vector2;
 
 use super::{Game, Frame, with_frog, with_tank};
-use crate::ai::{Intent, axis_offsets};
+use crate::ai::{Intent, axis_offsets, opposite, perpendicular};
 use crate::obstacle::Obstacle;
 use crate::pickup::Pickup;
 use crate::pathfind::{Components, Grid};
@@ -79,7 +79,6 @@ pub enum Order {
 
 /// The order plus the small amount of memory driving it needs. Kept on
 /// `Game` so it is part of the simulation state a replay reproduces.
-#[derive(Default)]
 pub struct PlayerOrders {
     pub current: Option<Order>,
     /// Seconds the aim has been settled on this axis, gating the shot the
@@ -94,6 +93,45 @@ pub struct PlayerOrders {
     /// Same idea as `Ai`'s `committed_dir`/`dir_hold`.
     committed: Option<Dir>,
     dir_hold: f32,
+    /// Where the tank was last frame and how far it got since, measured
+    /// once per frame in `order_intent` so every branch sees the same
+    /// number - the aligned and creep branches never reach `commit_dir`,
+    /// and reading a stale `last_pos` from them made both the stuck escape
+    /// and the give-up below fire on invented displacements.
+    ///
+    /// Displacement, never a physics velocity: a tank pressed against
+    /// something is handed a velocity along its heading every frame without
+    /// going anywhere.
+    last_pos: Option<Position>,
+    moved: f32,
+    stuck_timer: f32,
+    /// The closest to a firing line this engagement has managed, how far
+    /// the tank has driven since it last got any closer, and how long that
+    /// has been going on. An engagement that neither improves its aim nor
+    /// covers any ground has stopped working - see `drive_engage`.
+    best_off_axis: f32,
+    give_up_travel: f32,
+    give_up: f32,
+}
+
+impl Default for PlayerOrders {
+    fn default() -> Self {
+        Self {
+            current: None,
+            aim_settle: 0.0,
+            aligned: false,
+            committed: None,
+            dir_hold: 0.0,
+            last_pos: None,
+            moved: 0.0,
+            stuck_timer: 0.0,
+            // No firing line has been managed yet, so anything counts as an
+            // improvement on it.
+            best_off_axis: f32::MAX,
+            give_up_travel: 0.0,
+            give_up: 0.0,
+        }
+    }
 }
 
 impl PlayerOrders {
@@ -194,6 +232,8 @@ impl Game {
             self.orders.clear();
             return None;
         }
+        self.orders.moved = self.orders.last_pos.map_or(0.0, |p| p.distance_to(me.position));
+        self.orders.last_pos = Some(me.position);
         match order {
             Order::Move { to } => self.drive_move(f, grid, me.position, to),
             Order::Engage { target, .. } => self.drive_engage(f, grid, comps, me.position, target),
@@ -223,7 +263,7 @@ impl Game {
         // nothing at all until this aimed at the reachable cell beside it.
         let goal = grid.nearest_reachable(at, from, comps).unwrap_or(at);
         match grid.next_step(from, goal) {
-            Some(step) => Some(Intent { move_dir: Some(self.commit_dir(f, from, step)), ..Intent::default() }),
+            Some(step) => Some(Intent { move_dir: Some(self.commit_dir(f, grid, from, step)), ..Intent::default() }),
             // In the pickup's own cell but not yet inside
             // `pickup_collect_radius`: close the last few px straight at it.
             None if grid.same_cell(from, at) => {
@@ -245,7 +285,7 @@ impl Game {
             return None;
         }
         match grid.next_step(from, to) {
-            Some(step) => Some(Intent { move_dir: Some(self.commit_dir(f, from, step)), ..Intent::default() }),
+            Some(step) => Some(Intent { move_dir: Some(self.commit_dir(f, grid, from, step)), ..Intent::default() }),
             // `next_step` conflates "arrived" and "no route" into `None`,
             // and the same-cell case is already handled above - so this is
             // genuinely unreachable. End the order rather than spin.
@@ -274,7 +314,7 @@ impl Game {
             // why tapping most solid tiles used to do nothing.
             let approach = grid.nearest_reachable(state.position, from, comps).unwrap_or(state.position);
             return match grid.next_step(from, approach) {
-                Some(step) => Some(Intent { move_dir: Some(self.commit_dir(f, from, step)), ..Intent::default() }),
+                Some(step) => self.drive(f, grid, from, step),
                 None => {
                     self.orders.clear();
                     None
@@ -284,18 +324,21 @@ impl Game {
 
         let dir = Dir::toward(from, state.position);
         let (off_axis, forward) = axis_offsets(from, state.position, dir);
+        let window = hit_window(&state, dir);
         // Hysteresis: it takes a wider miss to lose alignment than to gain
         // it, so a target sitting on the boundary cannot make the tank
         // stutter between holding and sidestepping.
-        let gain = t.enemy_fire_align_px;
-        let lose = gain + t.order_align_hysteresis_px;
-        let aligned = forward > 0.0 && off_axis <= if self.orders.aligned { lose } else { gain };
+        let lose = window + t.order_align_hysteresis_px;
+        let aligned = forward > 0.0 && off_axis <= if self.orders.aligned { lose } else { window };
         self.orders.aligned = aligned;
 
         if aligned && self.terrain_sees(f, from, near_side(from, &state)) {
+            self.orders.give_up = 0.0;
+            self.orders.give_up_travel = 0.0;
+            self.orders.best_off_axis = f32::MAX;
             self.orders.aim_settle += f.dt;
             let mut intent = Intent { face: Some(dir), ..Intent::default() };
-            if self.orders.aim_settle >= t.enemy_aim_settle && self.can_land(range, off_axis, state.velocity, dir) {
+            if self.orders.aim_settle >= t.enemy_aim_settle && can_land(range, off_axis, state.velocity, dir, window) {
                 intent.fire = true;
                 // Release the trigger by resetting the settle timer. Shells
                 // and plasma are edge-triggered in `player_phase` - a held
@@ -309,15 +352,85 @@ impl Game {
         }
 
         self.orders.aim_settle = 0.0;
-        let stand = firing_spot(from, &state);
-        match grid.next_step(from, stand) {
-            Some(step) => Some(Intent { move_dir: Some(self.commit_dir(f, from, step)), ..Intent::default() }),
-            // No route to the firing spot but the target is in range - fall
-            // back to closing straight on it, which is what the AI does when
-            // its slot is untenable.
-            None => grid
-                .next_step(from, state.position)
-                .map(|step| Intent { move_dir: Some(self.commit_dir(f, from, step)), ..Intent::default() }),
+        // Give up on an engagement that is neither improving its aim nor
+        // going anywhere - a target with no reachable firing line at all,
+        // which used to mean grinding into a wall for as long as the player
+        // let it.
+        //
+        // Both halves are load-bearing, and each was measured. A plain "no
+        // shot in N seconds" clock cost a quarter of the kills, because an
+        // engagement that still needs a long sidestep is working fine. Aim
+        // progress alone is not enough either: chasing a live enemy across
+        // open ground, `off_axis` swings around with the target and
+        // regularly fails to beat its own best for seconds at a time while
+        // the tank is very much still in the fight. Only a tank that has
+        // stopped closing *and* stopped moving has actually given up.
+        self.orders.give_up_travel += self.orders.moved;
+        if off_axis < self.orders.best_off_axis - 1.0 {
+            self.orders.best_off_axis = off_axis;
+        }
+        if off_axis <= self.orders.best_off_axis || self.orders.give_up_travel >= t.order_engage_give_up_px {
+            self.orders.give_up = 0.0;
+            self.orders.give_up_travel = 0.0;
+        } else {
+            self.orders.give_up += f.dt;
+            if self.orders.give_up >= t.order_engage_give_up_seconds {
+                self.orders.clear();
+                return None;
+            }
+        }
+
+        // Sidestep onto a firing line. Of the two axes, take the first one
+        // that is actually *standable* - `next_step`'s A* treats its goal
+        // cell as open whether or not it is, so aiming at a firing spot
+        // buried in a wall produced a route that ended by driving into the
+        // wall and staying there.
+        let stand = firing_spots(from, &state)
+            .into_iter()
+            .find(|&spot| grid.usable(spot) && comps.connected(grid, from, spot));
+
+        match stand {
+            // The sidestep is inside the tank's own nav cell. The grid
+            // cannot express it - `next_step` returns `None` for a goal in
+            // the start cell - so this is where the last few px of
+            // alignment have to come from, driven straight rather than
+            // through the router. Without it the tank fell through to
+            // "close on the target" and charged instead of lining up,
+            // which is why a tapped enemy was shot at from a diagonal.
+            Some(spot) if grid.same_cell(from, spot) => {
+                let creep = Dir::toward(from, spot);
+                // Half the window is a deadzone: the tank decelerates on a
+                // curve, so releasing exactly on the line overshoots it.
+                // Stopping short leaves it inside the window with the
+                // remaining drift still heading the right way.
+                if off_axis <= window * 0.5 || grid.blocked_ahead(from, creep.vec()) {
+                    Some(Intent { face: Some(dir), ..Intent::default() })
+                } else {
+                    Some(Intent { move_dir: Some(creep), ..Intent::default() })
+                }
+            }
+            Some(spot) => match grid.next_step(from, spot) {
+                Some(step) => self.drive(f, grid, from, step),
+                None => self.close_on(f, grid, from, state.position),
+            },
+            // Neither firing line is reachable - close on the target, which
+            // is what the AI does when its slot is untenable.
+            None => self.close_on(f, grid, from, state.position),
+        }
+    }
+
+    /// Drive one committed step toward `step`, the shape every movement
+    /// branch above ends in.
+    fn drive(&mut self, f: &mut Frame, grid: &Grid, from: Position, step: Position) -> Option<Intent> {
+        Some(Intent { move_dir: Some(self.commit_dir(f, grid, from, step)), ..Intent::default() })
+    }
+
+    fn close_on(&mut self, f: &mut Frame, grid: &Grid, from: Position, target: Position) -> Option<Intent> {
+        match grid.next_step(from, target) {
+            Some(step) => self.drive(f, grid, from, step),
+            // Already in the target's cell and still not aligned: nudge
+            // straight at it rather than standing still.
+            None => Some(Intent { move_dir: Some(Dir::toward(from, target)), ..Intent::default() }),
         }
     }
 
@@ -329,18 +442,6 @@ impl Game {
     /// one of twenty shells on something geometrically impossible, so this
     /// holds fire instead - the tank keeps its aim and shoots the moment the
     /// geometry works.
-    fn can_land(&self, range: f32, off_axis: f32, target_vel: Position, dir: Dir) -> bool {
-        let speed = tuning().shell_speed.max(1.0);
-        let flight = range / speed;
-        // Only the component across the firing axis matters; closing or
-        // opening along it just changes where on the line the shell lands.
-        let across = match dir {
-            Dir::Up | Dir::Down => target_vel.x,
-            Dir::Left | Dir::Right => target_vel.y,
-        };
-        off_axis + (across * flight).abs() <= tuning().enemy_fire_align_px
-    }
-
     fn terrain_sees(&self, f: &Frame, from: Position, to: Position) -> bool {
         f.terrain.line_of_sight(from, to)
     }
@@ -356,7 +457,13 @@ impl Game {
                     return None;
                 }
                 let velocity = tank.body.map(|b| self.physics.velocity(b)).unwrap_or(tank.velocity);
-                return Some(TargetState { position: tank.position, velocity, half: tank.hull_size() * 0.5 });
+                // The real per-row damage box the projectile sweep checks,
+                // oriented the way the tank is currently facing - not the
+                // `hull_size` average, which is up to 8px out on either
+                // axis and so lets the fire gate approve shots that sail
+                // past the hull.
+                let (hx, hy) = tank.hull_half_extents(tank.facing_along_x());
+                return Some(TargetState { position: tank.position, velocity, half_x: hx, half_y: hy });
             }
         }
         {
@@ -365,33 +472,84 @@ impl Game {
                 return (!frog.is_dead()).then_some(TargetState {
                     position: frog.position,
                     velocity: Position::new(0.0, 0.0),
-                    half: crate::FROG_COLLIDER_HALF_EXTENT.0.max(crate::FROG_COLLIDER_HALF_EXTENT.1),
+                    half_x: crate::FROG_COLLIDER_HALF_EXTENT.0,
+                    half_y: crate::FROG_COLLIDER_HALF_EXTENT.1,
                 });
             }
         }
         {
             let mut q = self.world.query_one::<&Obstacle>(target);
             if let Ok(o) = q.get() {
+                let half = o.hull_size() * 0.5;
                 return (!o.destroyed).then_some(TargetState {
                     position: o.position,
                     velocity: Position::new(0.0, 0.0),
-                    half: o.hull_size() * 0.5,
+                    half_x: half,
+                    half_y: half,
                 });
             }
         }
         None
     }
 
-    /// Keep a heading for `order_dir_hold_seconds` before switching, unless
-    /// the fresh one is clearly better - the same commitment `Ai::steer`
-    /// uses, and for the same reason: without it a diagonal route makes the
-    /// tank alternate every frame.
-    fn commit_dir(&mut self, f: &mut Frame, from: Position, step: Position) -> Dir {
-        let fresh = Dir::toward(from, step);
+    /// Pick the heading to drive this frame, with the two safety nets
+    /// `Ai::steer` has and the first cut of this did not.
+    ///
+    /// Direction commitment on its own (hold a heading for
+    /// `order_dir_hold_seconds` so a diagonal route does not make the tank
+    /// alternate every frame) has one bad failure: a held heading that
+    /// walks into a doorway jamb keeps walking into it. So:
+    ///
+    /// - **Obstacle ahead** drops the commitment early. Continuing into a
+    ///   cell the grid already calls blocked is a hard geometric fact, not
+    ///   the wobbling-route case the hold exists to filter.
+    /// - **Stuck escape** catches what that cannot: commanded to move,
+    ///   going nowhere for `stuck_escape_seconds` (wedged on a corner the
+    ///   coarse grid thinks is clear). Turn away from whatever heading has
+    ///   been failing - a perpendicular, then the other, then back out.
+    ///
+    /// Both are safety nets and are worth having, but neither was the cause
+    /// of the "the tank will not go down a corridor" report they were built
+    /// for: adding them moved arrivals on the shipped map from 72% to 74%
+    /// and left the 280 px misses exactly where they were. Tracing one
+    /// showed the tank driving into a wall and grinding there for twenty
+    /// seconds under an *engagement* - `next_step`'s A* treats its goal cell
+    /// as open whether or not it is, so a firing spot buried inside a
+    /// structure produced a perfectly good route that ended in the
+    /// structure. `drive_engage` picking a firing spot it can actually
+    /// stand on is what fixed that; see the `firing_spots` call there.
+    fn commit_dir(&mut self, f: &mut Frame, grid: &Grid, from: Position, step: Position) -> Dir {
         let t = tuning();
+        let fresh = Dir::toward(from, step);
+        let blocked = |d: Dir| grid.blocked_ahead(from, d.vec());
+
+        if self.orders.moved < t.stuck_speed_eps * f.dt {
+            self.orders.stuck_timer += f.dt;
+        } else {
+            self.orders.stuck_timer = 0.0;
+        }
+
+        if self.orders.stuck_timer >= t.stuck_escape_seconds {
+            self.orders.stuck_timer = 0.0;
+            let failing = self.orders.committed.unwrap_or(fresh);
+            let out = [perpendicular(failing, true), perpendicular(failing, false), opposite(failing)]
+                .into_iter()
+                .find(|&d| !blocked(d))
+                .unwrap_or(fresh);
+            self.orders.committed = Some(out);
+            self.orders.dir_hold = 0.0;
+            return out;
+        }
+
         self.orders.dir_hold += f.dt;
         match self.orders.committed {
-            Some(held) if self.orders.dir_hold < t.order_dir_hold_seconds && held != fresh => held,
+            Some(held)
+                if held != fresh
+                    && self.orders.dir_hold < t.order_dir_hold_seconds
+                    && !blocked(held) =>
+            {
+                held
+            }
             _ => {
                 if self.orders.committed != Some(fresh) {
                     self.orders.dir_hold = 0.0;
@@ -411,11 +569,86 @@ struct MeSnapshot {
 struct TargetState {
     position: Position,
     velocity: Position,
-    /// Half the target's own footprint. Needed because a *solid* target
-    /// blocks the very ray aimed at it: `Terrain::line_of_sight` to a
-    /// barrel's centre is always false, since the barrel is in the way of
-    /// itself. Sighting stops just short of it instead.
-    half: f32,
+    /// Half the target's footprint on each axis, in world px. Per-axis
+    /// rather than one radius because tanks are appreciably longer than
+    /// they are wide (a `scout` is 28x38), so how much of it a shot has to
+    /// hit depends on which way the shot is travelling - see
+    /// `half_across`.
+    half_x: f32,
+    half_y: f32,
+}
+
+impl TargetState {
+    /// Half the target's width *across* a shot travelling along `dir` -
+    /// i.e. how far off the target's centre line a shell may pass and
+    /// still strike it. This is the number the fire gate is actually
+    /// about; `enemy_fire_align_px` is a heading tolerance, which is a
+    /// different quantity that happens to share units.
+    fn half_across(&self, dir: Dir) -> f32 {
+        match dir {
+            Dir::Up | Dir::Down => self.half_x,
+            Dir::Left | Dir::Right => self.half_y,
+        }
+    }
+
+    /// The radius sighting has to stop short of. A *solid* target blocks
+    /// the very ray aimed at it: `Terrain::line_of_sight` to a barrel's
+    /// centre is always false, since the barrel is in the way of itself.
+    fn sight_half(&self) -> f32 {
+        self.half_x.max(self.half_y)
+    }
+}
+
+/// How far off the target's centre line this shot may pass and still hit,
+/// in world px: the target's own half-width *across* the shot, less
+/// `order_align_margin_px` for the shell's girth, floored so a very narrow
+/// target still gets shot at rather than stared at.
+///
+/// **This is a hit test, not a heading tolerance**, and the difference is
+/// the whole point. The gate used to be `enemy_fire_align_px` - 24 px flat,
+/// borrowed from the AI, where it is fine because an enemy closes to
+/// point-blank and gets many shots. As a *player* fire gate it approves
+/// shots that cannot land. Chassis are 28-56 px wide, so half of one is
+/// 14-28 px: lined up at the old window's edge, a shot at a `scout` passed
+/// 24 px off a hull with 14 px of half-width and sailed by. Measured over a
+/// spread of bearings, the twin-barrel rows landed 47% and 46% of their
+/// shells; sizing the window to the target takes them to 63% and 56%, and
+/// the single-barrel row - which was already inside its own window most of
+/// the time - stays where it was at 88%.
+///
+/// **The shooter's barrel offset is deliberately not charged against this**,
+/// though it is real: a twin-barrel hull fires from barrels 6-10 px either
+/// side of its centre line, so its outboard shell is that much further out
+/// than this window admits. Subtracting it was tried and measured worse.
+/// Both shells land only within `half - lateral` of dead centre, which for
+/// a `titan` shooting a `scout` is +/-4 px - a window so tight the tank
+/// almost never took the shot at all (a quarter as many shells fired, and
+/// 38% of those landing, because anything that tight is at the mercy of the
+/// target's own movement). Firing a volley where one shell hits and the
+/// other misses beats standing there holding a perfect firing line that
+/// never arrives.
+fn hit_window(state: &TargetState, dir: Dir) -> f32 {
+    let t = tuning();
+    (state.half_across(dir) - t.order_align_margin_px).max(t.order_align_min_px)
+}
+
+/// Whether a shot fired now can still be inside `window` when it arrives.
+///
+/// A shell is in flight for `range / shell_speed`; a target crossing the
+/// firing line keeps moving for all of it. Taking the shot anyway spends
+/// one of twenty shells on something geometrically impossible, so this
+/// holds fire instead - the tank keeps its aim and shoots the moment the
+/// geometry works.
+fn can_land(range: f32, off_axis: f32, target_vel: Position, dir: Dir, window: f32) -> bool {
+    let speed = tuning().shell_speed.max(1.0);
+    let flight = range / speed;
+    // Only the component across the firing axis matters; closing or
+    // opening along it just changes where on the line the shell lands.
+    let across = match dir {
+        Dir::Up | Dir::Down => target_vel.x,
+        Dir::Left | Dir::Right => target_vel.y,
+    };
+    off_axis + (across * flight).abs() <= window
 }
 
 /// The point to shoot from: a **sidestep** onto one of the target's two
@@ -431,7 +664,9 @@ struct TargetState {
 /// line a target is running on stays lined up for its whole flight; one
 /// fired across that line has to beat the drift, and at any real range it
 /// cannot (see the module comment).
-fn firing_spot(from: Position, state: &TargetState) -> Position {
+/// Both spots, preferred first - the caller takes the first one it can
+/// actually stand on, because the preferred axis is regularly a wall.
+fn firing_spots(from: Position, state: &TargetState) -> [Position; 2] {
     let (vx, vy) = (state.velocity.x.abs(), state.velocity.y.abs());
     let vertical = if vx.max(vy) > 12.0 {
         // Moving: stand on the axis it is moving along.
@@ -440,11 +675,13 @@ fn firing_spot(from: Position, state: &TargetState) -> Position {
         // Still: take whichever axis needs the shorter sidestep.
         (from.x - state.position.x).abs() < (from.y - state.position.y).abs()
     };
-    if vertical {
-        Position::new(state.position.x, from.y)
-    } else {
-        Position::new(from.x, state.position.y)
-    }
+    // Shooting up or down the target's column means matching its x; along
+    // its row means matching its y. Either way the standoff is unchanged -
+    // the shortest path onto a firing line is sideways onto it, not out to
+    // some canonical radius.
+    let column = Position::new(state.position.x, from.y);
+    let row = Position::new(from.x, state.position.y);
+    if vertical { [column, row] } else { [row, column] }
 }
 
 /// The point on the near face of the target, along the line from `from` -
@@ -452,10 +689,10 @@ fn firing_spot(from: Position, state: &TargetState) -> Position {
 fn near_side(from: Position, state: &TargetState) -> Position {
     let (dx, dy) = (state.position.x - from.x, state.position.y - from.y);
     let d = (dx * dx + dy * dy).sqrt();
-    if d <= state.half + 1.0 {
+    if d <= state.sight_half() + 1.0 {
         return from;
     }
-    let back = state.half + 2.0;
+    let back = state.sight_half() + 2.0;
     Position::new(state.position.x - dx / d * back, state.position.y - dy / d * back)
 }
 
@@ -471,6 +708,10 @@ pub struct OrderReadout {
     pub target: Option<OrderTarget>,
     pub x: f32,
     pub y: f32,
+    /// Half the marked thing's on-screen footprint, so the selection
+    /// brackets frame a titan and a health pack alike without either
+    /// knowing about the other. Zero for a move, which marks a point.
+    pub half: f32,
 }
 
 impl Game {
@@ -478,15 +719,22 @@ impl Game {
     pub fn player_order(&self) -> Option<OrderReadout> {
         let order = self.orders.current?;
         Some(match order {
-            Order::Move { to } => OrderReadout { kind: "move", target: None, x: to.x, y: to.y },
+            Order::Move { to } => OrderReadout { kind: "move", target: None, x: to.x, y: to.y, half: 0.0 },
             Order::Engage { target, kind } => {
-                let at = self.target_state(target).map(|s| s.position).unwrap_or(Vector2::new(0.0, 0.0));
-                OrderReadout { kind: "engage", target: Some(kind), x: at.x, y: at.y }
+                let state = self.target_state(target);
+                let at = state.as_ref().map(|s| s.position).unwrap_or(Vector2::new(0.0, 0.0));
+                // The wider of the two halves: the bracket frames the whole
+                // silhouette rather than cutting the long axis off.
+                let half = state.as_ref().map(|s| s.half_x.max(s.half_y)).unwrap_or(0.0);
+                OrderReadout { kind: "engage", target: Some(kind), x: at.x, y: at.y, half }
             }
             Order::Collect { pickup } => {
                 let mut q = self.world.query_one::<&Pickup>(pickup);
-                let at = q.get().map(|p| p.position).unwrap_or(Vector2::new(0.0, 0.0));
-                OrderReadout { kind: "collect", target: Some(OrderTarget::Pickup), x: at.x, y: at.y }
+                let (at, half) = q
+                    .get()
+                    .map(|p| (p.position, p.size() * 0.5))
+                    .unwrap_or((Vector2::new(0.0, 0.0), 0.0));
+                OrderReadout { kind: "collect", target: Some(OrderTarget::Pickup), x: at.x, y: at.y, half }
             }
         })
     }

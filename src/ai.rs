@@ -1002,7 +1002,7 @@ impl Dir {
 
 /// The perpendicular of `dir`, turning left (counter-clockwise) or right. Used to
 /// pick a sidestep heading for collision avoidance.
-fn perpendicular(dir: Dir, left: bool) -> Dir {
+pub(crate) fn perpendicular(dir: Dir, left: bool) -> Dir {
     match (dir, left) {
         (Dir::Up, true) => Dir::Left,
         (Dir::Up, false) => Dir::Right,
@@ -1017,7 +1017,7 @@ fn perpendicular(dir: Dir, left: bool) -> Dir {
 
 /// The reverse of `dir` - the heading a stuck tank backs out along once
 /// both perpendiculars are blocked.
-fn opposite(dir: Dir) -> Dir {
+pub(crate) fn opposite(dir: Dir) -> Dir {
     match dir {
         Dir::Up => Dir::Down,
         Dir::Down => Dir::Up,

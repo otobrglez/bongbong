@@ -17,6 +17,7 @@ use crate::obstacle::{draw_obstacle_cap, draw_tree, draw_tree_shadow, tree_lean,
 use crate::ai::Ai;
 use hecs::Entity;
 use std::collections::HashSet;
+use crate::marker::{draw_destination, draw_target_brackets};
 use crate::pickup::{Pickup, PickupKind, draw_pickup};
 use crate::plasma::{Plasma, PlasmaState, draw_plasma, draw_plasma_shadow};
 use crate::shell::{Shell, ShellState, draw_shell, draw_shell_shadow};
@@ -28,7 +29,7 @@ use crate::simulation::Overlays;
 use crate::tank::Dir;
 use crate::tank::{
     ActiveWeapon, Tank, draw_enemy_ring, draw_minigun_mount, draw_minigun_mount_shadow, draw_player_ring, draw_tank,
-    draw_order_ring, draw_tank_shadow, draw_tank_shield,
+    draw_order_ring, draw_tank_shadow, draw_tank_shield, ORDER_ENGAGE_COLOR, ORDER_MOVE_COLOR,
 };
 use crate::track::draw_track;
 use crate::{
@@ -348,6 +349,16 @@ impl Game {
                 }
             });
 
+            // Where the tap sent the tank, drawn on the ground *under*
+            // everything that stands on it - a destination is a place, and
+            // a mark that floated over the hulls in front of it would read
+            // as an object instead.
+            if let Some(order) = self.player_order() {
+                if order.kind == "move" {
+                    draw_destination(&mut d, Vector2::new(order.x, order.y), self.time, ORDER_MOVE_COLOR);
+                }
+            }
+
             for pickup in self.world.query::<&Pickup>().iter() {
                 let texture = match pickup.kind {
                     PickupKind::Health => textures.pickup_health,
@@ -471,6 +482,23 @@ impl Game {
                     draw_bullet_shadow(&mut d, textures.minigun_bullets, bullet);
                 }
                 draw_bullet(&mut d, textures.minigun_bullets, bullet);
+            }
+
+            // Selection brackets over the thing that was tapped. After
+            // the standing pass so a bracket is never buried under the hull
+            // it belongs to, before the projectiles so shots still pass in
+            // front of it.
+            if let Some(order) = self.player_order() {
+                if order.half > 0.0 {
+                    let hot = order.kind == "engage";
+                    draw_target_brackets(
+                        &mut d,
+                        Vector2::new(order.x, order.y),
+                        order.half,
+                        self.time,
+                        if hot { ORDER_ENGAGE_COLOR } else { ORDER_MOVE_COLOR },
+                    );
+                }
             }
 
             for beam in &self.laser_beams {

@@ -1172,8 +1172,8 @@ pub fn draw_order_ring(d: &mut impl RaylibDraw, tank: &Tank, time: f32, engage: 
 /// Order-marker colours: a cool tone for "go here", a hot one for "kill
 /// that". Deliberately readable rather than palette-snapped - like the
 /// pickup icons, a marker has to be found at a glance against terrain.
-const ORDER_MOVE_COLOR: Color = Color::new(150, 215, 255, 210);
-const ORDER_ENGAGE_COLOR: Color = Color::new(255, 150, 60, 225);
+pub const ORDER_MOVE_COLOR: Color = Color::new(150, 225, 255, 255);
+pub const ORDER_ENGAGE_COLOR: Color = Color::new(255, 160, 60, 255);
 
 /// Draw one translucent ground ring under a tank: a band of radius
 /// `Tank::size() * shield_glow_radius_factor` (breathing gently around it

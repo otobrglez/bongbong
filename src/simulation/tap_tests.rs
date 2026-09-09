@@ -338,3 +338,142 @@ fn a_tap_on_a_pickup_goes_and_collects_it() {
     });
     assert!(collected, "the order drives onto the pickup and takes it");
 }
+
+/// The fire gate is a *hit* test, not a heading tolerance - see
+/// `orders::hit_window`. This is the measurement that says so: park an
+/// enemy at a spread of bearings, tap it, and count how many of the shells
+/// that go out actually land.
+///
+/// The number this replaced was 24 px of flat `enemy_fire_align_px` for
+/// every chassis against every target, which put half a twin-barrel hull's
+/// shells past the target: measured at 51% for an `assault` and 50% for a
+/// `titan`, against 79% for the single-barrel `scout` that has no barrel
+/// offset to spend. Sizing the window to the target and charging the
+/// shooter's barrel offset against it took the two twin-barrel rows to 66%
+/// and 69% while spending barely half the ammunition per kill.
+///
+/// The frog is walled into a corner here so the round cannot end out from
+/// under the measurement - a hunter that shoots it wins the round, and the
+/// restart that follows resets the very orders under test.
+#[test]
+fn a_tapped_enemy_is_shot_at_from_a_line_that_can_hit_it() {
+    let mut protected = String::new();
+    for (c, r) in [(1, 1), (2, 1), (3, 1), (1, 2), (3, 2), (1, 3), (2, 3), (3, 3)] {
+        protected.push_str(&format!("cells.\"{c},{r}\" = {{ kind = \"wall\", material = \"iron\" }}\n"));
+    }
+    let map = map_with(&protected);
+
+    // One single-barrel chassis and the two extremes of the twin-barrel
+    // ones, since the barrel offset is exactly what the old flat window
+    // could not account for.
+    let mut rates = Vec::new();
+    for row in [0i32, 1, 10] {
+        let (mut fired, mut landed) = (0, 0);
+        for (dc, dr) in [(0i32, -7i32), (1, -7), (2, -6), (3, -5), (5, -4), (6, -2), (7, 0),
+                         (6, 2), (5, 4), (3, 5), (2, 6), (1, 7), (0, 7), (-3, -5), (-6, -2), (-5, 4)] {
+            let mut game = Game::default();
+            game.enemy_count_override = Some(1);
+            game.seed_override = Some(3);
+            game.player_row_override = Some(row);
+            game.map = MapFile::from_toml_str(&map).expect("test map parses");
+            game.init(W, H);
+            game.debug_teleport(0, cell_to_world(20, 14), Some(0.0)).unwrap();
+            let enemy = cell_to_world(20 + dc, 14 + dr);
+            game.debug_teleport(1, enemy, Some(180.0)).unwrap();
+            step(&mut game, tap(enemy));
+            if game.player_order().map(|o| o.kind) != Some("engage") {
+                continue;
+            }
+            let (mut shots, mut hits) = (0, 0);
+            for _ in 0..900 {
+                step(&mut game, Input::default());
+                let mut over = false;
+                for e in game.events() {
+                    match e {
+                        Event::Fired { slot: 0, .. } => shots += 1,
+                        Event::Hit { target: HitTarget::Enemy { .. }, .. } => hits += 1,
+                        Event::RoundEnded { .. } => over = true,
+                        _ => {}
+                    }
+                }
+                if over {
+                    break;
+                }
+            }
+            // A twin-barrel chassis puts two shells downrange per shot.
+            let barrels = if tuning().tank_barrel_lateral_offset[row as usize] > 0.0 { 2 } else { 1 };
+            fired += shots * barrels;
+            landed += hits;
+        }
+        assert!(fired >= 40, "chassis row {row} took {fired} shots - too few to measure, and a gate the tank cannot satisfy is its own bug");
+        let rate = 100.0 * landed as f32 / fired as f32;
+        println!("MEASURED row {row}: {landed}/{fired} = {rate:.0}%");
+        rates.push((row, landed, fired, rate));
+    }
+    for (row, landed, fired, rate) in rates {
+        assert!(
+            rate >= 55.0,
+            "chassis row {row} landed {landed} of {fired} shells ({rate:.0}%); \
+             the flat-window version managed 47-50% on the twin-barrel rows \
+             and that is the bug this guards"
+        );
+    }
+}
+
+/// The corridor complaint, as a number: tap every reachable cell on a map
+/// from the player's start and count how many move orders actually get
+/// there.
+///
+/// It is worth knowing how this measurement was got wrong first, because
+/// the wrong version sent two rounds of work at the wrong bug. Counting
+/// *every* order rather than only the moves read 72% on the shipped map,
+/// with misses up to 280 px - but an engagement drives to a firing spot,
+/// not to the tap, so most of those "misses" were tanks correctly standing
+/// somewhere else. Restricted to the orders that really are meant to arrive
+/// somewhere, the same sweep reads 99-100%, and the real defect the 280 px
+/// came from turned out to be an engagement grinding into a wall (see
+/// `orders::commit_dir`).
+#[test]
+fn move_orders_arrive_even_through_corridors() {
+    for name in ["maps/test/maze.toml", "maps/test/tight-corridors.toml", "maps/default.toml"] {
+        let mut game = Game::default();
+        game.enemy_count_override = Some(0);
+        game.seed_override = Some(5);
+        game.map = MapFile::from_toml_str(&std::fs::read_to_string(name).expect("fixture")).expect("parses");
+        game.init(W, H);
+        let start = player_at(&game);
+        let grid = game.nav_grid(W, H);
+        let comps = grid.components();
+        let (mut tried, mut arrived) = (0, 0);
+        for gx in (2..38).step_by(3) {
+            for gy in (2..21).step_by(3) {
+                let goal = cell_to_world(gx, gy);
+                let Some(reach) = grid.nearest_reachable(goal, start, &comps) else { continue };
+                // Short hops say nothing about routing.
+                if start.distance_to(reach) < 120.0 {
+                    continue;
+                }
+                game.debug_teleport(0, start, Some(0.0)).unwrap();
+                game.orders.clear();
+                step(&mut game, tap(goal));
+                if game.player_order().map(|o| o.kind) != Some("move") {
+                    continue;
+                }
+                tried += 1;
+                for _ in 0..1200 {
+                    step(&mut game, Input::default());
+                    if !game.orders.is_active() {
+                        break;
+                    }
+                }
+                // Within a tank's own length of the goal counts as arrived.
+                if player_at(&game).distance_to(reach) <= 48.0 {
+                    arrived += 1;
+                }
+            }
+        }
+        assert!(tried >= 20, "{name}: only {tried} move orders sampled");
+        let rate = 100.0 * arrived as f32 / tried as f32;
+        assert!(rate >= 95.0, "{name}: only {arrived} of {tried} move orders arrived ({rate:.0}%)");
+    }
+}

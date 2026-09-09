@@ -999,9 +999,43 @@ tunables! {
         /// Extra off-axis slack before an already-aligned tap order counts
         /// as having lost its firing line. The alignment test is hysteretic
         /// - it takes a wider miss to lose alignment than to gain it - or a
-        /// target hovering on the `enemy_fire_align_px` boundary makes the
-        /// tank stutter between holding its aim and sidestepping.
-        order_align_hysteresis_px: f32 = 14.0 in 0.0 ..= 200.0;
+        /// target hovering on the window boundary makes the tank stutter
+        /// between holding its aim and sidestepping.
+        order_align_hysteresis_px: f32 = 6.0 in 0.0 ..= 200.0;
+        /// Safety margin taken off the target's own half-width when working
+        /// out how far off-axis a shot may be and still land. Covers the
+        /// shell's own girth and a frame of drift, so a shot allowed at the
+        /// very edge of the window still strikes hull rather than grazing
+        /// past it. See `orders::hit_window`.
+        order_align_margin_px: f32 = 5.0 in 0.0 ..= 60.0;
+        /// Floor under that window. A target narrower than the margin (or a
+        /// chassis whose barrels are further apart than the target is wide)
+        /// would otherwise compute a negative window and never fire at all;
+        /// better to take a low-odds shot than to stand there.
+        order_align_min_px: f32 = 4.0 in 0.5 ..= 60.0;
+        /// How long a tap engagement may be commanded to move without
+        /// getting anywhere *and* without managing a shot before it gives
+        /// up and clears. A target behind a wall with no reachable firing
+        /// line is a real outcome; grinding into the wall until the player
+        /// taps somewhere else is not.
+        order_engage_give_up_seconds: f32 = 4.0 in 0.5 ..= 60.0;
+        /// How far the tank may drive inside that window and still count as
+        /// having given up. Covering ground means the engagement is being
+        /// worked, however badly the aim happens to be going; a wedged tank
+        /// covers none. Roughly one nav cell.
+        order_engage_give_up_px: f32 = 48.0 in 1.0 ..= 500.0;
+        /// Reach of the destination diamond the tap marker draws on the
+        /// ground, and the cap on a target bracket's arm length. Big enough
+        /// to find on a phone without covering the tile it marks.
+        order_marker_size_px: f32 = 22.0 in 2.0 ..= 80.0;
+        /// How far a target's corner brackets sit outside its own
+        /// silhouette, so the mark frames the thing rather than covering
+        /// it.
+        order_bracket_gap_px: f32 = 8.0 in 0.0 ..= 60.0;
+        /// Period of the tap markers' breathing. One shared clock, so the
+        /// destination diamond and the target brackets pulse together
+        /// instead of beating against each other.
+        order_marker_pulse_seconds: f32 = 1.1 in 0.1 ..= 10.0;
         /// How long a tap order holds a chosen heading before it may switch,
         /// the player-side twin of `ai_dir_hold_seconds`: without it a
         /// diagonal route makes the tank alternate directions every frame.
