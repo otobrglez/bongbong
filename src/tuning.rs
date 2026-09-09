@@ -1040,6 +1040,29 @@ tunables! {
         /// the player-side twin of `ai_dir_hold_seconds`: without it a
         /// diagonal route makes the tank alternate directions every frame.
         order_dir_hold_seconds: f32 = 0.3 in 0.0 ..= 5.0;
+        /// Clear gap (px, hull surface to hull surface) a tank tries to keep
+        /// from whatever is directly in front of it. Inside this it stops
+        /// driving rather than pressing on, so tanks converging on the same
+        /// place pull up short instead of slamming into each other and into
+        /// the player. Separate from `avoid_margin`, which feeds the
+        /// *predictive sidestep* (`Ai::avoid_collisions`) and is about
+        /// paths that will cross later; this one is about the tank already
+        /// in the way now.
+        enemy_separation_px: f32 = 12.0 in 0.0 ..= 200.0;
+        /// How long a tank will sit yielding before it gives up and drives
+        /// on anyway. Without a ceiling two tanks nose to nose both brake
+        /// and neither ever moves again - the stuck escape cannot save them
+        /// either, because it only counts tanks that were *commanded* to
+        /// move. Past this the brake releases and behaviour is exactly what
+        /// it was before, so the worst case is a visible pause rather than
+        /// a freeze.
+        ///
+        /// The timer runs for as long as the way ahead stays blocked and
+        /// resets only when it clears, so a tank holds *once* and then
+        /// drives on. Decaying it while still blocked instead makes the
+        /// tank brake, release, fall back under the ceiling and brake
+        /// again - a permanent half-speed shuffle rather than a yield.
+        enemy_yield_seconds: f32 = 0.5 in 0.0 ..= 20.0;
         /// Odds a tree is the kind that catches fire when it dies instead
         /// of simply falling, rolled once per tile at spawn. Zero draws no
         /// RNG at all, so a treeless map replays unchanged. Burn timing is
