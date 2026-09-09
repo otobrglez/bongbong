@@ -17,7 +17,7 @@ use crate::obstacle::Obstacle;
 use crate::pickup::{Pickup, PickupKind};
 use crate::plasma::{Plasma, PlasmaState};
 use crate::shell::{Shell, ShellState};
-use crate::tank::{ActiveWeapon, Tank};
+use crate::tank::{ActiveWeapon, Tank, enemy_health_ring_visibility, player_health_ring_visibility};
 use crate::tuning::{TANK_NAMES, tuning};
 use crate::{DAMAGE_VARIANTS, MAX_DAMAGE, Position, TANK_SHELL_VARIANT_BY_ROW};
 
@@ -110,6 +110,10 @@ pub struct TankDebug {
     pub weapon: &'static str,
     pub shield: f32,
     pub boost: f32,
+    /// The health ring's opacity factor, 0..=1
+    /// (`tank::player_health_ring_visibility`/`enemy_health_ring_visibility`):
+    /// 0 while rolling in, for a wreck, or under a full shield.
+    pub ring: f32,
     /// Distance to the closest other live enemy; live enemies only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nearest_ally_px: Option<f32>,
@@ -350,6 +354,13 @@ impl Game {
                     weapon: tank.active_weapon().name(),
                     shield: r1(tank.shield_timer),
                     boost: r1(tank.speed_boost_timer),
+                    ring: r1(if tank.body.is_none() {
+                        0.0
+                    } else if tank.owner_slot == PLAYER_OWNER_SLOT {
+                        player_health_ring_visibility(tank)
+                    } else {
+                        enemy_health_ring_visibility(tank)
+                    }),
                     nearest_ally_px,
                     touching_static: full.then(|| tank.body.is_some_and(|b| self.physics.contact_stats(b).touching_static)),
                     ai: if full { ai.map(Ai::snapshot) } else { None },

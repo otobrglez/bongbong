@@ -154,10 +154,18 @@ RUST_MD = (0x8D, 0x4A, 0x25)        # mid(WOOD_DK, RED_DK)
 RUST_DK = (0x59, 0x34, 0x1F)        # mid(RED_DARKEST, WOOD_DEEPER)
 WOOD_ASH = (0x73, 0x62, 0x4D)       # mid(WOOD_DEEPER, STONE_DK)
 BLUE_PALE = (0x93, 0xEC, 0xE2)      # mid(BLUE_BRIGHT, WHITE)
+# Vegetation shade. GREEN_DARKEST #1C4C33 to GREEN_DK #5F914B is a 70-value
+# jump with nothing between, so a grass blade built from the pack's greens
+# reads as a solid dark block with light specks floating over it rather than
+# as blades. This is the one step that connects them - and it is genuinely
+# darker than the *retinted* live ground (#619541), which GREEN_DK is not,
+# so a clump reads against the field it grows out of.
+GREEN_SHADE = (0x3D, 0x6E, 0x3F)    # mid(GREEN_DARKEST, GREEN_DK)
 
 PUNY_EXTRA = [
     STONE_HI, STONE_MID, STONE_MDK, STONE_SHADE,
     RUST_MD, RUST_DK, WOOD_ASH, BLUE_PALE,
+    GREEN_SHADE,
 ]
 
 PUNY_PALETTE_ALL = PUNY_PALETTE + PUNY_EXTRA

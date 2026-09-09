@@ -165,6 +165,13 @@ impl Fx {
                 self.burst(at, ParticleKind::Spark, self.count(10), 170.0, &[FIRE_T, EMBER_T]);
                 self.burst(at, ParticleKind::Smoke, self.count(5), 30.0, &[SMOKE_T]);
             }
+            Material::Tree | Material::Pine => {
+                // A tree coming down is mostly leaves - slow, drifting, and
+                // far more of them than a wall throws chips - over a much
+                // smaller spray of the timber underneath.
+                self.burst(at, ParticleKind::Dust, self.count(tuning().tile_burst_particles + 8), 45.0, &[LEAF_L, LEAF_M, LEAF_D]);
+                self.burst(at, ParticleKind::Chip, self.count(5), 95.0, &[WOOD_M, WOOD_D]);
+            }
         }
     }
 
@@ -187,6 +194,9 @@ impl Fx {
             }
             Material::Sandbag => {
                 self.burst(at, ParticleKind::Dust, n, 45.0, &[SAND_L, SAND_M]);
+            }
+            Material::Tree | Material::Pine => {
+                self.burst(at, ParticleKind::Dust, n, 55.0, &[LEAF_L, LEAF_M, LEAF_D]);
             }
             _ => {
                 self.burst(at, ParticleKind::Chip, n, 85.0, &[STONE_LT, STONE_MD, STONE_DK]);
@@ -459,6 +469,12 @@ const DEEP_T: Color = Color::new(0x81, 0x2F, 0x27, 255);
 const EMBER_T: Color = Color::new(0xE4, 0x42, 0x19, 255);
 const FIRE_T: Color = Color::new(0xEE, 0xA3, 0x43, 255);
 const WHITE_T: Color = Color::new(0xFF, 0xFF, 0xFF, 255);
+// Foliage. The one place particles are allowed green - it is the same
+// exemption trees_sheet.png/nature_sheet.png take (`just check-sheets`):
+// manufactured objects are never green, vegetation is.
+const LEAF_L: Color = Color::new(0x7C, 0x98, 0x3C, 255);
+const LEAF_M: Color = Color::new(0x5F, 0x91, 0x4B, 255);
+const LEAF_D: Color = Color::new(0x1C, 0x4C, 0x33, 255);
 
 #[cfg(test)]
 mod fx_tests {

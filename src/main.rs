@@ -264,6 +264,12 @@ fn main() {
     let minigun_bullets_texture = rl
         .load_texture(&thread, "static/minigun_bullets.png")
         .expect("failed loading minigun bullets texture");
+    let grass_texture = rl
+        .load_texture(&thread, "static/nature_sheet.png")
+        .expect("failed loading grass texture");
+    let trees_texture = rl
+        .load_texture(&thread, "static/trees_sheet.png")
+        .expect("failed loading trees texture");
     let minigun_mount_texture = rl
         .load_texture(&thread, "static/minigun_mount.png")
         .expect("failed loading minigun mount texture");
@@ -285,9 +291,6 @@ fn main() {
     let ground_texture = rl
         .load_texture(&thread, "static/punyworld/punyworld-overworld-tileset.png")
         .expect("failed loading ground texture");
-    let health_bar_texture = rl
-        .load_texture(&thread, "static/health_bar.png")
-        .expect("failed loading health bar texture");
     // One full clip set per colour variant (see `frog::FROG_VARIANT_DIRS`) -
     // `Frog::variant` (rolled per round in `Game::init`) picks which one
     // `game.rs::render` draws from. Loaded up front like every other
@@ -360,6 +363,8 @@ fn main() {
                     obstacles: &obstacles_texture,
                     props: &props_texture,
                     ground: &ground_texture,
+                    grass: &grass_texture,
+                    trees: &trees_texture,
                     // Editor palette icon: just the first colour variant's
                     // idle frame - a fixed representative sprite, since the
                     // editor places a frog *cell*, not a rolled colour (that
@@ -609,7 +614,6 @@ fn main() {
                 props: &props_texture,
                 barrel_explosion: &barrel_explosion_texture,
                 ground: &ground_texture,
-                health_bar: &health_bar_texture,
                 frog_variants: &frog_textures,
                 pickup_health: &pickup_health_texture,
                 pickup_ammo: &pickup_ammo_texture,
@@ -619,6 +623,8 @@ fn main() {
                 pickup_speedup: &pickup_speedup_texture,
                 pickup_shield: &pickup_shield_texture,
                 minigun_mount: &minigun_mount_texture,
+                grass: &grass_texture,
+                trees: &trees_texture,
             },
         );
         // A pending screenshot reads the frame just presented.

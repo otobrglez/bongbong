@@ -233,9 +233,9 @@ frame, so a seeded round replays bit-for-bit including waves.
   overlay while `intro_timer > 0`, then a 0.5 s alpha fade. Same code
   path draws `WAVE N` (with `FINAL WAVE` on the last) during the wave gap,
   smaller and without the overlay.
-- Enemy frog: `draw_ground_ring` in red under the hull (`RingStyle::Enemy`);
-  player frog gets the same ring in white. Both frogs' overhead health bars
-  unchanged.
+- Enemy frog: `draw_frog_ring` draws its ground ring as a health gauge
+  (`RingStyle::Gauge`) in the all-red ramp; the player's frog gets the same
+  gauge in the white ramp. The ring is each frog's health readout.
 - HUD: `WAVE i/N` and live-enemy count on the right of the existing HUD line
   in wave rounds; `MISSION: …` is not shown (the banner covers it).
 - Rolling-in tanks are drawn as normal tanks (they are partly off-screen by

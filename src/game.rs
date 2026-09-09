@@ -10,11 +10,11 @@ use sola_raylib::prelude::*;
 use crate::ai::Ai;
 use crate::bullet::{Bullet, BulletState, draw_bullet, draw_bullet_shadow};
 use crate::damage_stage::draw_damage;
-use crate::frog::{Frog, FrogVariantTextures, draw_frog, draw_frog_ring};
+use crate::frog::{FrogVariantTextures, draw_frog, draw_frog_ring};
 use crate::laser::draw_laser_beam;
 use crate::blast::{draw_blast, draw_blast_glow, draw_fuse_glow, draw_scorch};
 use crate::decal::{draw_decal, draw_decal_shadow};
-use crate::obstacle::{draw_obstacle_cap, Material, Obstacle, ObstacleTextures, draw_obstacle, draw_obstacle_shadow, fence_axis};
+use crate::obstacle::{draw_obstacle_cap, draw_tree, draw_tree_shadow, tree_lean, Material, Obstacle, ObstacleTextures, draw_obstacle, draw_obstacle_shadow, fence_axis};
 use std::collections::HashSet;
 use crate::pickup::{Pickup, PickupKind, draw_pickup};
 use crate::plasma::{Plasma, PlasmaState, draw_plasma, draw_plasma_shadow};
@@ -26,19 +26,12 @@ use crate::simulation::Overlays;
 #[cfg(feature = "dev-tools")]
 use crate::tank::Dir;
 use crate::tank::{
-    ActiveWeapon, Tank, draw_minigun_mount, draw_minigun_mount_shadow, draw_player_ring, draw_tank, draw_tank_shadow,
-    draw_tank_shield,
+    ActiveWeapon, Tank, draw_enemy_ring, draw_minigun_mount, draw_minigun_mount_shadow, draw_player_ring, draw_tank,
+    draw_tank_shadow, draw_tank_shield,
 };
 use crate::track::draw_track;
 use crate::{
     SHOCK_MAX,
-    HEALTH_BAR_CELL_SIZE,
-    HEALTH_BAR_COLUMNS,
-    HEALTH_BAR_HUD_SCALE,
-    HEALTH_BAR_ICON_OFFSET,
-    HEALTH_BAR_ICON_SIZE,
-    HEALTH_BAR_OVERHEAD_GAP,
-    HEALTH_BAR_VARIANTS,
     HUD_FONT_SIZE,
     HUD_MARGIN,
     HUD_VERSION_FONT_SIZE,
@@ -69,7 +62,6 @@ pub struct Textures<'a> {
     /// The barrel blast animation and scorch decals - see `blast.rs`.
     pub barrel_explosion: &'a Texture2D,
     pub ground: &'a Texture2D,
-    pub health_bar: &'a Texture2D,
     /// One `FrogVariantTextures` per `frog::FROG_VARIANT_DIRS` entry, in the
     /// same order - `render` indexes into this by `Frog::variant`.
     pub frog_variants: &'a [FrogVariantTextures],
@@ -84,6 +76,10 @@ pub struct Textures<'a> {
     /// holds minigun ammo - see `tank::draw_minigun_mount`. One shared
     /// texture for every chassis (unlike `tanks` above), not a sheet.
     pub minigun_mount: &'a Texture2D,
+    /// static/nature_sheet.png - tall grass (grass.rs).
+    pub grass: &'a Texture2D,
+    /// static/trees_sheet.png - the two tree species (docs/TREES_SPEC.md).
+    pub trees: &'a Texture2D,
 }
 
 /// The ripple post-effects `Game::render` drives, bundled into one param for the
@@ -188,10 +184,6 @@ impl Game {
             (label, num, label_w, num_w, label_color)
         });
 
-        // health_bar.png source rect for the player's current HP fraction -
-        // see health_bar_frame's own doc comment for the frame thresholds.
-        let health_bar_source = health_bar_source_rect(health_bar_frame(hp as f32 / MAX_DAMAGE));
-
         // Precompute the centered end-of-round banner (text width must be
         // measured on the RaylibHandle, outside the draw closure).
         let banner = match self.outcome {
@@ -249,6 +241,7 @@ impl Game {
             // Ground first - the floor everything else sits on. See
             // ground.rs / docs/GROUND_SPEC.md.
             crate::ground::draw(&mut d, textures.ground, &self.ground);
+            crate::ground::draw_edge_shade(&mut d, screen_width, screen_height);
 
             // Tread marks go down first so tanks and everything else draw on top.
             for track in &self.tracks {
@@ -261,7 +254,7 @@ impl Game {
                 draw_scorch(&mut d, textures.barrel_explosion, scorch);
             }
 
-            let obstacle_textures = ObstacleTextures { walls: textures.obstacles, props: textures.props };
+            let obstacle_textures = ObstacleTextures { walls: textures.obstacles, props: textures.props, trees: textures.trees };
             // Rubble from tiles that died this round: above the burn marks
             // (a barrel that took a wall with it scorched the ground first)
             // but under everything that still stands, so a wall built over
@@ -277,7 +270,10 @@ impl Game {
                 .filter(|o| o.material == Material::Fence)
                 .map(|o| o.cell())
                 .collect();
-            for obstacle in self.world.query::<&Obstacle>().iter() {
+            // Trees are held back to the vegetation pass further down -
+            // their canopies are bigger than their cell and belong over the
+            // tanks, not under them.
+            for obstacle in self.world.query::<&Obstacle>().iter().filter(|o| !o.material.is_tree()) {
                 let axis = fence_axis(obstacle, &fences);
                 if self.shadows_enabled {
                     draw_obstacle_shadow(&mut d, &obstacle_textures, obstacle, axis);
@@ -315,11 +311,11 @@ impl Game {
                     let variant = &textures.frog_variants[frog.variant as usize];
                     draw_frog_ring(&mut d, frog, self.time);
                     draw_frog(&mut d, &variant.as_frog_textures(), frog, self.time);
-                    draw_frog_health_bar(&mut d, textures.health_bar, frog);
                 });
             }
 
             for tank in self.world.query::<&Tank>().with::<&Ai>().iter() {
+                draw_enemy_ring(&mut d, tank, self.time);
                 draw_tank_shield(&mut d, tank, self.time);
                 if self.shadows_enabled {
                     draw_tank_shadow(&mut d, textures.tanks, tank);
@@ -328,11 +324,10 @@ impl Game {
                 draw_tank(&mut d, textures.tanks, tank);
                 draw_minigun_mount(&mut d, textures.minigun_mount, tank);
                 draw_damage(&mut d, textures.damage, tank, self.time);
-                draw_tank_overhead_health(&mut d, textures.health_bar, tank);
             }
 
             // Wave tanks still rolling in: drawn like any enemy (partly
-            // off-screen by construction), no health bar yet.
+            // off-screen by construction), no health ring yet.
             for (tank, _) in self.world.query::<(&Tank, &crate::simulation::RollIn)>().iter() {
                 draw_tank_shield(&mut d, tank, self.time);
                 if self.shadows_enabled {
@@ -353,8 +348,46 @@ impl Game {
                 draw_tank(&mut d, textures.tanks, tank);
                 draw_minigun_mount(&mut d, textures.minigun_mount, tank);
                 draw_damage(&mut d, textures.damage, tank, self.time);
-                draw_tank_overhead_health(&mut d, textures.health_bar, tank);
             });
+
+            // Vegetation: over the tanks and under the projectiles.
+            //
+            // Over the tanks is the whole mechanic for grass: the reference
+            // achieves its hiding effect with nothing but draw order - the
+            // unit is never made transparent, it is simply drawn behind
+            // whichever tufts it overlaps. Trees ride along for the same
+            // reason at a larger scale, so a tank pressed against a trunk
+            // has the canopy overhanging it rather than sitting on top of
+            // it. Under the projectiles either way, so you can still see
+            // your own shots leave the cover you are firing from.
+            //
+            // Trees sort back to front: their 48px sprites overlap on a
+            // 32px grid, and without an order the crowns of a grove pop in
+            // and out of each other as the query happens to iterate.
+            // Every live hull, shared by both: grass parts around one and a
+            // tree bends away from one shouldering it over.
+            let movers: Vec<crate::Position> = self
+                .world
+                .query::<&Tank>()
+                .iter()
+                .filter(|t| !t.is_dead())
+                .map(|t| t.position)
+                .collect();
+
+            let mut tree_query = self.world.query::<&Obstacle>();
+            let mut trees: Vec<&Obstacle> = tree_query.iter().filter(|o| o.material.is_tree()).collect();
+            trees.sort_by(|a, b| a.position.y.total_cmp(&b.position.y));
+            for tree in &trees {
+                let lean = tree_lean(tree, &movers);
+                if self.shadows_enabled {
+                    draw_tree_shadow(&mut d, &obstacle_textures, tree, lean, self.time);
+                }
+                draw_tree(&mut d, &obstacle_textures, tree, lean, self.time);
+            }
+
+            for tuft in &self.grass {
+                crate::grass::draw_tuft(&mut d, textures.grass, tuft, self.time, &movers);
+            }
 
             for shell in self.world.query::<&Shell>().iter() {
                 if self.shadows_enabled && shell.state == ShellState::Flying {
@@ -398,7 +431,7 @@ impl Game {
             // off a wreck passes over tanks and shells, not under them.
             // Their shadows go down first so no piece is drawn over
             // another's shadow.
-            let obstacle_textures = ObstacleTextures { walls: textures.obstacles, props: textures.props };
+            let obstacle_textures = ObstacleTextures { walls: textures.obstacles, props: textures.props, trees: textures.trees };
             if self.shadows_enabled {
                 for decal in self.decals.iter().filter(|dc| !dc.landed()) {
                     draw_decal_shadow(&mut d, decal);
@@ -677,27 +710,12 @@ impl Game {
                 d.draw_text(num, hud_x, hud_y, HUD_FONT_SIZE, HUD_PLASMA_COLOR);
                 hud_x += num_w;
             }
-            if let Some((label, num, label_w, num_w, label_color)) = &hud_minigun {
+            if let Some((label, num, label_w, _, label_color)) = &hud_minigun {
                 d.draw_text(label, hud_x, hud_y, HUD_FONT_SIZE, *label_color);
                 hud_x += label_w;
+                // The line's last segment: nothing advances past it.
                 d.draw_text(num, hud_x, hud_y, HUD_FONT_SIZE, HUD_MINIGUN_COLOR);
-                hud_x += num_w;
             }
-            hud_x += 12;
-            let health_bar_dest_h = HEALTH_BAR_ICON_SIZE.1 * HEALTH_BAR_HUD_SCALE;
-            d.draw_texture_pro(
-                textures.health_bar,
-                health_bar_source,
-                Rectangle::new(
-                    hud_x as f32,
-                    hud_y as f32 + (HUD_FONT_SIZE as f32 - health_bar_dest_h) / 2.0,
-                    HEALTH_BAR_ICON_SIZE.0 * HEALTH_BAR_HUD_SCALE,
-                    health_bar_dest_h,
-                ),
-                Vector2::zero(),
-                0.0,
-                Color::WHITE,
-            );
             if let Some((text, w)) = &hud_wave {
                 d.draw_text(text, screen_width - HUD_MARGIN - w, hud_y, HUD_FONT_SIZE, Color::WHITE);
             }
@@ -998,107 +1016,4 @@ fn hud_number_color(current: f32, max: f32) -> Color {
     } else {
         Color::WHITE
     }
-}
-
-/// Which of health_bar.png's HEALTH_BAR_VARIANTS frames (0 = full 4/4 pips,
-/// HEALTH_BAR_VARIANTS-1 = empty 0/4) represents an HP fraction. Quarter
-/// thresholds so each frame's pip count matches its fraction range exactly
-/// (frame 1 = "3/4 pips" covers the range where 3/4 is the closest reading);
-/// only true 0 HP shows fully empty, matching how HUD_CRITICAL_THRESHOLD
-/// etc. only flag real trouble rather than every routine dip.
-fn health_bar_frame(frac: f32) -> i32 {
-    if frac > 0.75 {
-        0
-    } else if frac > 0.50 {
-        1
-    } else if frac > 0.25 {
-        2
-    } else if frac > 0.0 {
-        3
-    } else {
-        4
-    }
-    .min(HEALTH_BAR_VARIANTS - 1)
-}
-
-/// Source rect in health_bar.png for a given frame index (see
-/// health_bar_frame) - the sheet is HEALTH_BAR_COLUMNS-wide, HEALTH_BAR_CELL_SIZE
-/// per cell, with the actual icon glyph living at a fixed sub-rect
-/// (HEALTH_BAR_ICON_OFFSET/HEALTH_BAR_ICON_SIZE) inside each cell.
-fn health_bar_source_rect(frame: i32) -> Rectangle {
-    let col = frame % HEALTH_BAR_COLUMNS;
-    let row = frame / HEALTH_BAR_COLUMNS;
-    Rectangle::new(
-        col as f32 * HEALTH_BAR_CELL_SIZE + HEALTH_BAR_ICON_OFFSET.0,
-        row as f32 * HEALTH_BAR_CELL_SIZE + HEALTH_BAR_ICON_OFFSET.1,
-        HEALTH_BAR_ICON_SIZE.0,
-        HEALTH_BAR_ICON_SIZE.1,
-    )
-}
-
-/// Draw a tank's overhead health bar - only while `hit_flash_timer` is
-/// running (see `Tank::mark_hit`) and the tank isn't a wreck (past caring
-/// about its own HP). Centered under the tank's sprite, same pixel scale as
-/// the HUD copy (HEALTH_BAR_HUD_SCALE), fading out over the trailing
-/// HEALTH_BAR_OVERHEAD_FADE_SECONDS of its window instead of popping off.
-fn draw_tank_overhead_health(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank) {
-    if tank.is_wreck() || tank.hit_flash_timer <= 0.0 {
-        return;
-    }
-    let frac = ((MAX_DAMAGE - tank.damage) / MAX_DAMAGE).clamp(0.0, 1.0);
-    let source = health_bar_source_rect(health_bar_frame(frac));
-    let w = HEALTH_BAR_ICON_SIZE.0 * HEALTH_BAR_HUD_SCALE;
-    let h = HEALTH_BAR_ICON_SIZE.1 * HEALTH_BAR_HUD_SCALE;
-    let dest = Rectangle::new(
-        tank.position.x - w / 2.0,
-        tank.position.y + tank.size() * 0.5 + HEALTH_BAR_OVERHEAD_GAP,
-        w,
-        h,
-    );
-    let alpha = if tank.hit_flash_timer > tuning().health_bar_overhead_fade_seconds {
-        255
-    } else {
-        (255.0 * (tank.hit_flash_timer / tuning().health_bar_overhead_fade_seconds)).round() as u8
-    };
-    d.draw_texture_pro(
-        texture,
-        source,
-        dest,
-        Vector2::zero(),
-        0.0,
-        Color::new(255, 255, 255, alpha),
-    );
-}
-
-/// Draw the frog's overhead health bar - same "only while `hit_flash_timer`
-/// is running, fading out over the trailing HEALTH_BAR_OVERHEAD_FADE_SECONDS"
-/// convention as `draw_tank_overhead_health`, just keyed off `Frog::is_dead`
-/// instead of `Tank::is_wreck`.
-fn draw_frog_health_bar(d: &mut impl RaylibDraw, texture: &Texture2D, frog: &Frog) {
-    if frog.is_dead() || frog.hit_flash_timer <= 0.0 {
-        return;
-    }
-    let frac = (frog.health / frog.max_health).clamp(0.0, 1.0);
-    let source = health_bar_source_rect(health_bar_frame(frac));
-    let w = HEALTH_BAR_ICON_SIZE.0 * HEALTH_BAR_HUD_SCALE;
-    let h = HEALTH_BAR_ICON_SIZE.1 * HEALTH_BAR_HUD_SCALE;
-    let dest = Rectangle::new(
-        frog.position.x - w / 2.0,
-        frog.position.y + frog.size() * 0.5 + HEALTH_BAR_OVERHEAD_GAP,
-        w,
-        h,
-    );
-    let alpha = if frog.hit_flash_timer > tuning().health_bar_overhead_fade_seconds {
-        255
-    } else {
-        (255.0 * (frog.hit_flash_timer / tuning().health_bar_overhead_fade_seconds)).round() as u8
-    };
-    d.draw_texture_pro(
-        texture,
-        source,
-        dest,
-        Vector2::zero(),
-        0.0,
-        Color::new(255, 255, 255, alpha),
-    );
 }

@@ -485,6 +485,45 @@ pub const EDGE_CAP_COLUMNS: i32 = 16;
 // deliberately NOT on the Resurrect 64 palette every other sheet uses (see
 // docs/PALETTE.md and static/punyworld/SOURCE.md), a documented exception
 // rather than an oversight.
+// Tall grass (grass.rs, static/nature_sheet.png): 32px source cells drawn
+// at `grass_scale`. Authored at 32 rather than the ground's 16 because a
+// tuft has to reach a good part of a tank's 64px height to occlude it -
+// at 16px it would be knee-high and hide nothing.
+pub const GRASS_TEXTURE_SIZE: f32 = 32.0;
+pub const GRASS_SPECIES: i32 = 3;
+pub const GRASS_VARIANTS: i32 = 8;
+
+// Trees (obstacle.rs, static/trees_sheet.png, docs/TREES_SPEC.md): 48px
+// source cells drawn at OBSTACLE_SCALE like every other obstacle, so one
+// source pixel is still one screen pixel and the art's own 2x blocks still
+// read as 2 screen px. The *cell* is bigger because a tree is bigger than a
+// wall tile, not because its pixels are: a tree still occupies exactly one
+// 32px grid cell (`Obstacle::size`, and so the collider, the nav grid and
+// the map format), and the extra 8px on each side is canopy overhanging its
+// neighbours - which is what stops a grove reading as a tiled grid.
+pub const TREE_TEXTURE_SIZE: f32 = 48.0;
+// Rows: 4 broadleaf variants, then 4 conifer, then the two rubble rows.
+//
+// Columns hold every damage stage once per *dapple frame* - a tree's whole
+// idle animation is those frames cycling (`obstacle::tree_col`), the same
+// canopy with a few patches of leaf one rung lighter and drifting between
+// frames. Nothing about a tree moves; only where the light falls does. The
+// column is `frame * TREE_STAGES + stage`, then the never-drawn stump, then
+// the 3-frame burn loop.
+pub const TREE_ROW_BROADLEAF: i32 = 0;
+pub const TREE_ROW_CONIFER: i32 = 4;
+pub const TREE_VARIANTS: i32 = 4;
+pub const TREE_STAGES: i32 = 3;
+pub const TREE_SHIMMER_FRAMES: i32 = 4;
+pub const TREE_STUMP_COL: i32 = TREE_STAGES * TREE_SHIMMER_FRAMES;
+pub const TREE_BURN_COL: i32 = TREE_STUMP_COL + 1;
+// Tree rubble lives on the trees sheet rather than with the rest of the
+// rubble block: it is the one leftover that is green, and walls_sheet.png
+// is under the no-green guard (`just check-sheets`). `Decal` therefore
+// carries the sheet its row belongs to.
+pub const RUBBLE_ROW_TREE: i32 = 8;
+pub const RUBBLE_ROW_TREE_CHARRED: i32 = 9;
+
 pub const GROUND_TEXTURE_SIZE: f32 = 16.0; // native tile size in the source sheet
 // 2x, not OBSTACLE_SCALE-style 1.0 - the source art is 16px/tile, and
 // GROUND_WORLD_TILE below needs to land on OBSTACLE_GRID_SIZE (32px) so the
@@ -505,40 +544,6 @@ pub const HUD_VERSION_FONT_SIZE: i32 = 22; // 24 * 0.9, rounded
 // sit the same distance from their respective edges.
 pub const HUD_MARGIN: i32 = 20;
 
-// health_bar.png is a hand-authored (not tools/spritegen-generated) 96x64
-// sheet: a 3x2 grid of 32x32 cells, five used left-to-right/top-to-bottom
-// (the sixth, bottom-right cell is unused/fully transparent). Each cell
-// holds one small heart+4-pip icon at a fixed offset, depleting one pip per
-// cell: index 0 = 4/4 pips (full) through index 4 = 0/4 pips (empty). Colors
-// were remapped from the source PNG's supplied saturated red onto
-// punypalette's RED_DK to match the rest of the game's palette (see
-// docs/PALETTE.md) - see static/_original/health_bar.png for the pristine
-// pre-recolor copy.
-pub const HEALTH_BAR_CELL_SIZE: f32 = 32.0;
-pub const HEALTH_BAR_VARIANTS: i32 = 5;
-// The icon within each 32x32 cell doesn't fill it - it's a tight 22x7 glyph
-// at this offset, so drawing crops to just the glyph rather than the cell.
-pub const HEALTH_BAR_ICON_OFFSET: (f32, f32) = (5.0, 7.0);
-pub const HEALTH_BAR_ICON_SIZE: (f32, f32) = (22.0, 7.0);
-// Columns per row in the sheet (see the layout comment above) - used to turn
-// a linear frame index into a (col, row) cell position.
-pub const HEALTH_BAR_COLUMNS: i32 = 3;
-// On-screen scale for the HUD readout - deliberately matches Tank::scale
-// (2.0) so the health bar's pixels read at the same on-screen size as every
-// other sprite (tanks, walls_sheet.png's PIXELATE_FACTOR) rather than
-// looking chunkier or finer than the rest of the game.
-pub const HEALTH_BAR_HUD_SCALE: f32 = 2.0;
-
-// Overhead health bar (Game::render, drawn under a tank rather than in the
-// HUD corner): shown for HEALTH_BAR_OVERHEAD_SECONDS after `Tank::mark_hit`
-// fires, so a tank that's just been shot/rammed/caught in a blast briefly
-// reads its HP at a glance without needing the player's own HUD line.
-// Matches ENEMY_RETARGET_SECONDS's "a few seconds" ballpark rather than a
-// fresh guess. Fades out (alpha ramp) over the trailing
-// HEALTH_BAR_OVERHEAD_FADE_SECONDS instead of popping off abruptly.
-// Gap in px between a tank's sprite bottom edge and the bar drawn under it.
-pub const HEALTH_BAR_OVERHEAD_GAP: f32 = 4.0;
-
 // ToxicFrog (src/frog.rs): the player's protect-objective - a static NPC
 // that ends the round in a loss the instant its health reaches zero, same
 // severity as the player's own tank being destroyed. See
@@ -547,9 +552,9 @@ pub const HEALTH_BAR_OVERHEAD_GAP: f32 = 4.0;
 // animation PNGs is a plain 48x48-cell filmstrip, no slicing math beyond
 // `col * FROG_TEXTURE_SIZE`.
 pub const FROG_TEXTURE_SIZE: f32 = 48.0;
-// On-screen scale - deliberately matches Tank::scale/HEALTH_BAR_HUD_SCALE
-// (2.0) for the same reason both of those do: consistent on-screen pixel
-// density across every sprite in the game. The frog's actual content is a
+// On-screen scale - deliberately matches Tank::scale (2.0) for the same
+// reason: consistent on-screen pixel density across every sprite in the
+// game. The frog's actual content is a
 // small glyph within the 48x48 cell (see docs/FROG_SPEC.md), so this reads
 // as a modest, tank-sized presence on the field, not an oversized 96px prop.
 pub const FROG_SCALE: f32 = 2.0;
@@ -677,6 +682,10 @@ pub const EDITOR_PANEL_FILL_OPACITY: f32 = 0.85;
 /// Fixed gap between the bottom-center object palette and the bottom of the
 /// screen.
 pub const EDITOR_PALETTE_BOTTOM_MARGIN: f32 = 16.0;
+// Clear space kept at each side of the palette panel, so a wrapped row is
+// never flush against the screen edge - see `MapEditor::palette_columns`,
+// which uses it to decide how many icons fit across.
+pub const EDITOR_PALETTE_SIDE_MARGIN: f32 = 16.0;
 /// Fixed margin from the top-right corner for the Save/Load/Close toolbar,
 /// and from the top-left corner for the hamburger toggle button.
 pub const EDITOR_TOOLBAR_MARGIN: f32 = 16.0;
@@ -716,6 +725,7 @@ pub mod devserver;
 pub mod editor;
 pub mod frog;
 pub mod fx;
+pub mod grass;
 pub mod game;
 pub mod ground;
 pub mod laser;

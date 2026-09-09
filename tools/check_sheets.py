@@ -21,9 +21,12 @@ Two checks, both of which have caught real defects:
    tank chassis is a real colour choice, so `scifi_tanks_sheet.png` is not
    checked, and `damage.png` carries a green tint of its own.
 
-`plasma.png` and `health_bar.png` are deliberately off-palette (a glowing
-bolt and a HUD element, neither of which sits in the terrain), so neither
-is listed here.
+   `nature_sheet.png` and `trees_sheet.png` are the deliberate exceptions,
+   and they are what the rule always meant: **manufactured objects are
+   never green; vegetation is.** Grass that cannot be green is not grass.
+
+`plasma.png` is deliberately off-palette (a glowing bolt that does not sit
+in the terrain), so it is not listed here.
 
 Run: `just check-sheets` (or `python3 tools/check_sheets.py`). Exits 1 on
 any violation and names the offending sheet.
@@ -42,6 +45,8 @@ STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static'
 # Generated sheets whose every opaque pixel must be on the palette.
 ON_PALETTE = [
     'walls_sheet.png',
+    'nature_sheet.png',
+    'trees_sheet.png',
     'props_sheet.png',
     'barrel_explosion.png',
     'scifi_tanks_sheet.png',
@@ -59,8 +64,10 @@ PALETTE = {tuple(c) for c in pp.PUNY_PALETTE}
 PALETTE_ALL = {tuple(c) for c in pp.PUNY_PALETTE_ALL}
 GREENS = {tuple(getattr(pp, n)) for n in dir(pp) if n.startswith('GREEN_')}
 
-# The only sheet allowed the wall-detail extension (punypalette.PUNY_EXTRA).
-EXTENDED = {'walls_sheet.png'}
+# Sheets allowed the palette extension (punypalette.PUNY_EXTRA): the walls
+# sheet for its stone/rust steps, the vegetation sheets for GREEN_SHADE
+# (and, on trees, WOOD_ASH for burnt-out foliage).
+EXTENDED = {'walls_sheet.png', 'nature_sheet.png', 'trees_sheet.png'}
 
 
 def scan(name):

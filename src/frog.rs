@@ -14,6 +14,7 @@
 //! damages any frog. The player's frog reaching zero `health` ends the
 //! round in a loss, the enemy frog's in a win (`Game::check_round_end`).
 
+use crate::tank::{HealthRamp, RingStyle, draw_ground_ring_at, with_opacity};
 use crate::tuning::tuning;
 use rapier2d::prelude::RigidBodyHandle;
 use serde::{Deserialize, Serialize};
@@ -77,16 +78,6 @@ pub struct Frog {
     /// hit - set by `damage`, ticked down by `tick`. Purely a one-shot
     /// reaction animation; drives *only* which sprite frame is drawn.
     pub hurt_timer: f32,
-    /// Seconds remaining to show this frog's overhead health bar
-    /// (`Game::render`) - same "only visible for a few seconds after a
-    /// hit, then fades" convention as `Tank::hit_flash_timer`/`mark_hit`,
-    /// reusing the same HEALTH_BAR_OVERHEAD_SECONDS/
-    /// HEALTH_BAR_OVERHEAD_FADE_SECONDS constants. Kept separate from
-    /// `hurt_timer` since the two run on different durations (the Hurt
-    /// sprite flicker is much shorter than the bar's visible window) and
-    /// answer different questions - "which sprite frame" vs. "is the bar
-    /// showing".
-    pub hit_flash_timer: f32,
     /// Seconds remaining in an in-flight hop - set to FROG_HOP_SECONDS by
     /// `start_hop`, ticked down by `tick`. While this is positive,
     /// `position` is being actively interpolated from `hop_start` to
@@ -134,14 +125,20 @@ pub enum FrogAnim {
 
 impl Frog {
     /// Side length of this frog's sprite on screen, matching `Tank::size`/
-    /// `Obstacle::size` - used to place its overhead health bar
-    /// (`Game::render`) the same "half the sprite height, plus a gap" way.
+    /// `Obstacle::size` - what sizes its ground ring (`draw_frog_ring`)
+    /// exactly as a tank's sizes the tank's.
     pub fn size(&self) -> f32 {
         FROG_TEXTURE_SIZE * FROG_SCALE
     }
 
     pub fn is_dead(&self) -> bool {
         self.death_elapsed.is_some()
+    }
+
+    /// Remaining health as a fraction of `max_health`, 1 to 0 - what the
+    /// frog's ring gauge reads.
+    pub fn health_fraction(&self) -> f32 {
+        if self.max_health > 0.0 { (self.health / self.max_health).clamp(0.0, 1.0) } else { 0.0 }
     }
 
     /// How far (px) a single hop covers - see FROG_HOP_DISTANCE_FACTOR's
@@ -187,7 +184,6 @@ impl Frog {
         }
         self.health = (self.health - amount).max(0.0);
         self.hurt_timer = FROG_HURT_SECONDS;
-        self.hit_flash_timer = tuning().health_bar_overhead_seconds;
         if self.health <= 0.0 {
             self.death_elapsed = Some(0.0);
         }
@@ -228,7 +224,6 @@ impl Frog {
     /// authored in game code, not by rapier's own integration.
     pub fn tick(&mut self, dt: f32) {
         self.hurt_timer = (self.hurt_timer - dt).max(0.0);
-        self.hit_flash_timer = (self.hit_flash_timer - dt).max(0.0);
         if self.hop_timer > 0.0 {
             self.hop_timer = (self.hop_timer - dt).max(0.0);
             let frac = (1.0 - self.hop_timer / FROG_HOP_SECONDS).clamp(0.0, 1.0);
@@ -332,21 +327,25 @@ impl FrogVariantTextures {
     }
 }
 
-/// Draw the frog's side marker: the shared ground ring
-/// (`tank::draw_ground_ring_at`, the player tank's own marker in the same
-/// size class) under the sprite, white for the player's frog and red for
-/// the enemy's, at `player_ring_opacity`. Gone once the frog is dead - the
+/// Draw the frog's side marker as its health gauge: the shared ground ring
+/// (`tank::draw_ground_ring_at`, the player tank's own ring in the same
+/// size class) under the sprite, its filled arc the remaining health - in
+/// the white ramp for the player's frog, the all-red ramp for the enemy's -
+/// and the rest of the circle the side's colour dimmed to
+/// `health_ring_base_opacity`, so the ring stays a full marker whose side
+/// reads at any health. On while the frog lives; gone once it is dead - the
 /// explosion crater has no side. Call before `draw_frog`.
 pub fn draw_frog_ring(d: &mut impl RaylibDraw, frog: &Frog, time: f32) {
     if frog.is_dead() {
         return;
     }
-    let alpha = (tuning().player_ring_opacity * 255.0).round().clamp(0.0, 255.0) as u8;
-    let color = match frog.side {
-        Side::Player => Color::new(255, 255, 255, alpha),
-        Side::Enemy => Color::new(230, 40, 40, alpha),
+    let ramp = match frog.side {
+        Side::Player => HealthRamp::White,
+        Side::Enemy => HealthRamp::Red,
     };
-    crate::tank::draw_ground_ring_at(d, frog.position, frog.size(), 0.0, time, crate::tank::RingStyle::Solid(color), 1.0);
+    let base = with_opacity(ramp.base(), tuning().player_ring_opacity * tuning().health_ring_base_opacity);
+    let style = RingStyle::Gauge { frac: frog.health_fraction(), ramp, base };
+    draw_ground_ring_at(d, frog.position, frog.size(), 0.0, time, style, 1.0);
 }
 
 /// Draw the frog: whichever of `textures`' five clips `Frog::anim` picks

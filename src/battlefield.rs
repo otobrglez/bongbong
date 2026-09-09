@@ -14,7 +14,6 @@
 //! deciding which world-space positions get a wall, and spawning the
 //! physics bodies/ECS entities for them.
 
-use crate::tuning::tuning;
 use std::collections::{HashMap, HashSet};
 
 use rand::RngExt;
@@ -146,6 +145,29 @@ pub(crate) fn tile_hull_half_extent(cells: &HashSet<(i32, i32)>, gx: i32, gy: i3
         if has_x_neighbor { full } else { base },
         if has_y_neighbor { full } else { base },
     )
+}
+
+/// The collider half-extent a tile of `material` actually gets.
+///
+/// Seam-closing is a property of *structures*: a run of wall or prop tiles
+/// has to present one unbroken face, or a shell threads the gap between two
+/// of them (see `tile_hull_half_extent`). A tree is not part of a run - it
+/// is a trunk with a canopy hanging over its neighbours - so it neither
+/// widens nor is widened against, and every `cells` set handed to this
+/// leaves trees out for the same reason. Physics and the projectile hit
+/// test both go through here, so the two can never disagree about where a
+/// tree's edges are.
+pub(crate) fn tile_half_extent(
+    material: Material,
+    cells: &HashSet<(i32, i32)>,
+    gx: i32,
+    gy: i32,
+    base: f32,
+) -> Position {
+    if material.is_tree() {
+        return Position::new(base, base);
+    }
+    tile_hull_half_extent(cells, gx, gy, base)
 }
 
 /// Grid cell of a tile already placed at `pos` (a `Position` that's always
@@ -306,6 +328,10 @@ pub struct MapSpawn {
     /// the round simply has none, there's no random fallback any more (see
     /// "Pickups: fixed spawn slots" in docs/map-editor-design.md).
     pub pickup_slots: Vec<(Position, PickupKind)>,
+    /// Every cell the map marked as tall grass. Not spawned as entities
+    /// here - `Game::init` turns each into a scatter of `grass::GrassTuft`,
+    /// which is presentation plus a concealment query, not an `Obstacle`.
+    pub grass_cells: Vec<Position>,
 }
 
 /// Spawn every cell `map` defines as a live entity - walls as `Obstacle`s
@@ -336,21 +362,27 @@ pub fn spawn_from_map(
         .map(|&m| (m, rng.random_range(0..m.variants())))
         .collect();
 
-    // Every solid cell the map defines (walls and props), in the same
-    // `(col, row)` grid space `iter_cells` already yields - so
+    // Every solid cell the map defines that is part of a *structure*, in
+    // the same `(col, row)` grid space `iter_cells` already yields - so
     // `tile_hull_half_extent` can widen a hand-placed tile's collider to
     // meet a hand-placed neighbor's, closing the seam between them (see
     // that function's doc comment). Props widen like walls so a line of
     // sandbags has no gap a shell could thread.
+    //
+    // Trees are deliberately excluded, so a grove never fuses into one
+    // slab: two trees standing next to each other are two trunks with a
+    // gap between them, and a shot threading that gap is the right
+    // outcome, not a seam bug.
     let solid_cells: HashSet<(i32, i32)> = map
         .iter_cells()
-        .filter(|(_, _, obj)| obj.is_solid())
+        .filter(|(_, _, obj)| obj.is_solid() && !obj.material().is_some_and(Material::is_tree))
         .map(|(col, row, _)| (col, row))
         .collect();
 
     let mut obstacle_positions = Vec::new();
     let mut wall_positions = Vec::new();
     let mut road_cells = Vec::new();
+    let mut grass_cells = Vec::new();
     let mut frog_pos = None;
     let mut enemy_frog_pos = None;
     let mut pickup_slots = Vec::new();
@@ -360,27 +392,36 @@ pub fn spawn_from_map(
         match *obj {
             CellObject::Wall { material } => {
                 let variant = material_variant[&material];
-                let flammable =
-                    material == Material::Wood && rng.random_bool(tuning().wood_flammable_chance);
+                let chance = material.flammable_chance();
+                let flammable = chance > 0.0 && rng.random_bool(chance);
                 let body = physics.spawn_static(
                     pos,
-                    tile_hull_half_extent(&solid_cells, col, row, obstacle_half_extent),
+                    tile_half_extent(material, &solid_cells, col, row, obstacle_half_extent),
                 );
                 obstacle_positions.push(pos);
                 wall_positions.push(pos);
                 world.spawn((Obstacle::new(material, variant, pos, flammable, body),));
             }
-            CellObject::Sandbag | CellObject::Barrel | CellObject::Fence => {
-                let material = obj.material().expect("prop cells spawn a material");
+            CellObject::Sandbag
+            | CellObject::Barrel
+            | CellObject::Fence
+            | CellObject::Tree
+            | CellObject::Pine => {
+                let material = obj.material().expect("prop and tree cells spawn a material");
                 let variant = rng.random_range(0..material.variants());
+                // Zero chance draws no RNG, so a map with no trees replays
+                // exactly as it did before they existed.
+                let chance = material.flammable_chance();
+                let flammable = chance > 0.0 && rng.random_bool(chance);
                 let body = physics.spawn_static(
                     pos,
-                    tile_hull_half_extent(&solid_cells, col, row, obstacle_half_extent),
+                    tile_half_extent(material, &solid_cells, col, row, obstacle_half_extent),
                 );
                 obstacle_positions.push(pos);
-                world.spawn((Obstacle::new(material, variant, pos, false, body),));
+                world.spawn((Obstacle::new(material, variant, pos, flammable, body),));
             }
             CellObject::Road => road_cells.push(pos),
+            CellObject::TallGrass => grass_cells.push(pos),
             CellObject::Frog => frog_pos = Some(pos),
             // The player's start position is read directly from
             // `self.map.start_cell()` in `Game::init`, before this function
@@ -395,7 +436,7 @@ pub fn spawn_from_map(
         }
     }
 
-    MapSpawn { obstacle_positions, wall_positions, road_cells, frog_pos, enemy_frog_pos, pickup_slots }
+    MapSpawn { obstacle_positions, wall_positions, road_cells, frog_pos, enemy_frog_pos, pickup_slots, grass_cells }
 }
 
 /// One entry lane for a wave tank (docs/maps-to-levels.md "Gates and
@@ -603,6 +644,27 @@ mod gate_tests {
 #[cfg(test)]
 mod tile_seam_tests {
     use super::*;
+
+    #[test]
+    fn trees_never_seam_close_with_anything() {
+        // Two trees side by side, and a tree next to a wall: neither widens.
+        // A grove is trunks with gaps between them, not a slab.
+        let cells: HashSet<(i32, i32)> = [(6, 5)].into_iter().collect();
+        assert_eq!(
+            tile_half_extent(Material::Tree, &cells, 5, 5, 12.0),
+            Position::new(12.0, 12.0),
+        );
+        assert_eq!(
+            tile_half_extent(Material::Pine, &cells, 5, 5, 12.0),
+            Position::new(12.0, 12.0),
+        );
+        // A prop in the same spot does widen - that is the behaviour trees
+        // are the exception to, so it has to still be there.
+        assert_eq!(
+            tile_half_extent(Material::Sandbag, &cells, 5, 5, 12.0),
+            Position::new(OBSTACLE_GRID_SIZE * 0.5, 12.0),
+        );
+    }
 
     #[test]
     fn lone_tile_keeps_the_normal_shrunk_half_extent() {

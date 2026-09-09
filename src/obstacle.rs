@@ -7,6 +7,8 @@ use std::collections::HashSet;
 use crate::{
     EDGE_CAP_ROW_BASE,
     OBSTACLE_GRID_SIZE,
+    RUBBLE_ROW_TREE,
+    RUBBLE_ROW_TREE_CHARRED,
     RUBBLE_ROW_BARREL,
     RUBBLE_ROW_BRICK,
     RUBBLE_ROW_FENCE,
@@ -19,15 +21,29 @@ use crate::{
     OBSTACLE_TEXTURE_SIZE,
     PROPS_BARREL_LIT_COL,
     Position,
+    TREE_BURN_COL,
+    TREE_ROW_BROADLEAF,
+    TREE_SHIMMER_FRAMES,
+    TREE_STAGES,
+    TREE_ROW_CONIFER,
+    TREE_TEXTURE_SIZE,
+    TREE_VARIANTS,
 };
 
 /// What a static battlefield obstacle is: one of the four wall materials
-/// (walls_sheet.png / docs/WALLS_SPEC.md) or one of the three discrete props
-/// (props_sheet.png / docs/PROPS_SPEC.md). Props are obstacles too - same
+/// (walls_sheet.png / docs/WALLS_SPEC.md), one of the three discrete props
+/// (props_sheet.png / docs/PROPS_SPEC.md), or one of the two tree species
+/// (trees_sheet.png / docs/TREES_SPEC.md). All of them are obstacles - same
 /// physics body, same grid cell, same hit sweep - but each has its own
-/// rules (shots pass over sandbags, barrels explode, fences snap) that the
-/// predicates below express, so the rest of the code asks "does this block
-/// sight?" rather than matching on the variant.
+/// rules (shots pass over sandbags, barrels explode, fences snap, trees
+/// burn and can be flattened) that the predicates below express, so the
+/// rest of the code asks "does this block sight?" rather than matching on
+/// the variant.
+///
+/// **Order is load-bearing at the top of the list only.** `max_health`
+/// indexes `tuning().wall_max_health`, a `[f32; 4]`, by `self as usize`, so
+/// the four wall materials must stay the first four; everything after them
+/// has a scalar knob of its own and is safe to append to.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Material {
@@ -38,6 +54,11 @@ pub enum Material {
     Sandbag,
     Barrel,
     Fence,
+    /// A broad, bushy deciduous crown.
+    Tree,
+    /// A conifer - spikier and darker, so the two read apart by silhouette
+    /// before colour.
+    Pine,
 }
 
 /// The four wall materials, in walls_sheet.png row order - `spawn_from_map`
@@ -51,12 +72,26 @@ pub const MATERIALS: [Material; 4] = [Material::Brick, Material::Iron, Material:
 pub enum Sheet {
     Walls,
     Props,
+    Trees,
+}
+
+impl Sheet {
+    /// Source cell size in this atlas. Walls and props share the obstacle
+    /// grid's own 32px; trees are drawn from 48px cells so a canopy can
+    /// overhang the cell its trunk stands in (see `TREE_TEXTURE_SIZE`).
+    pub fn cell(self) -> f32 {
+        match self {
+            Sheet::Trees => TREE_TEXTURE_SIZE,
+            _ => OBSTACLE_TEXTURE_SIZE,
+        }
+    }
 }
 
 impl Material {
     pub fn sheet(self) -> Sheet {
         match self {
             Material::Sandbag | Material::Barrel | Material::Fence => Sheet::Props,
+            Material::Tree | Material::Pine => Sheet::Trees,
             _ => Sheet::Walls,
         }
     }
@@ -72,6 +107,8 @@ impl Material {
             Material::Sandbag => 0,
             Material::Barrel => 3,
             Material::Fence => 5,
+            Material::Tree => TREE_ROW_BROADLEAF,
+            Material::Pine => TREE_ROW_CONIFER,
         }
     }
 
@@ -84,6 +121,7 @@ impl Material {
             Material::Glass => 2,
             Material::Sandbag => 3,
             Material::Barrel | Material::Fence => 2,
+            Material::Tree | Material::Pine => TREE_VARIANTS,
             _ => 4,
         }
     }
@@ -101,6 +139,8 @@ impl Material {
             Material::Sandbag => tuning().sandbag_max_health,
             Material::Barrel => tuning().barrel_max_health,
             Material::Fence => 2.0,
+            Material::Tree => tuning().tree_max_health,
+            Material::Pine => tuning().pine_max_health,
         }
     }
 
@@ -121,23 +161,33 @@ impl Material {
             Material::Sandbag => 3,
             Material::Barrel => 3,
             Material::Fence => 2,
+            Material::Tree | Material::Pine => 3,
         }
     }
 
-    /// The rubble row on `walls_sheet.png` this material leaves on the
-    /// ground when it dies, if any (`decal::Decal`, `RUBBLE_ROW_*`).
-    /// `charred` picks wood's burnt-out ash over its splintered boards.
+    /// Which atlas and row of rubble this material leaves on the ground
+    /// when it dies, if any (`decal::Decal`, `RUBBLE_ROW_*`). `charred`
+    /// picks a burnt-out variant over the intact one where there is one.
     ///
-    /// `None` only for Iron, which never dies. Every rubble row lives on
-    /// the walls sheet, the props' included - see `RUBBLE_ROW_SANDBAG`.
-    pub fn rubble_row(self, charred: bool) -> Option<i32> {
+    /// `None` only for Iron, which never dies. Everything on the walls and
+    /// props sheets leaves its rubble on the *walls* sheet (see
+    /// `RUBBLE_ROW_SANDBAG`); trees are the exception, because leaf litter
+    /// is green and the walls sheet is under the no-green guard.
+    pub fn rubble_row(self, charred: bool) -> Option<(Sheet, i32)> {
         match self {
-            Material::Brick => Some(RUBBLE_ROW_BRICK),
-            Material::Wood => Some(if charred { RUBBLE_ROW_WOOD_CHARRED } else { RUBBLE_ROW_WOOD }),
-            Material::Glass => Some(RUBBLE_ROW_GLASS),
-            Material::Sandbag => Some(RUBBLE_ROW_SANDBAG),
-            Material::Barrel => Some(RUBBLE_ROW_BARREL),
-            Material::Fence => Some(RUBBLE_ROW_FENCE),
+            Material::Brick => Some((Sheet::Walls, RUBBLE_ROW_BRICK)),
+            Material::Wood => Some((
+                Sheet::Walls,
+                if charred { RUBBLE_ROW_WOOD_CHARRED } else { RUBBLE_ROW_WOOD },
+            )),
+            Material::Glass => Some((Sheet::Walls, RUBBLE_ROW_GLASS)),
+            Material::Sandbag => Some((Sheet::Walls, RUBBLE_ROW_SANDBAG)),
+            Material::Barrel => Some((Sheet::Walls, RUBBLE_ROW_BARREL)),
+            Material::Fence => Some((Sheet::Walls, RUBBLE_ROW_FENCE)),
+            Material::Tree | Material::Pine => Some((
+                Sheet::Trees,
+                if charred { RUBBLE_ROW_TREE_CHARRED } else { RUBBLE_ROW_TREE },
+            )),
             Material::Iron => None,
         }
     }
@@ -145,6 +195,30 @@ impl Material {
     /// A discrete prop (sandbag, barrel, fence) rather than a wall tile.
     pub fn is_prop(self) -> bool {
         self.sheet() == Sheet::Props
+    }
+
+    /// Vegetation: bigger than its cell, never part of a wall run, and the
+    /// one solid thing a map places that is *supposed* to be green.
+    pub fn is_tree(self) -> bool {
+        self.sheet() == Sheet::Trees
+    }
+
+    /// One of the four wall materials - the only ones that autotile into
+    /// runs, so the only ones with an edge cap and a `MATERIALS` slot.
+    pub fn is_wall(self) -> bool {
+        self.sheet() == Sheet::Walls
+    }
+
+    /// Odds an instance of this material is the kind that catches fire when
+    /// it dies rather than breaking outright, rolled once per tile at spawn
+    /// (`Obstacle::flammable`). Zero draws no RNG, so a map with neither
+    /// wood nor trees replays exactly as before either existed.
+    pub fn flammable_chance(self) -> f64 {
+        match self {
+            Material::Wood => tuning().wood_flammable_chance,
+            Material::Tree | Material::Pine => tuning().tree_flammable_chance,
+            _ => 0.0,
+        }
     }
 
     /// Can never be destroyed - the only material that permanently shapes
@@ -186,6 +260,7 @@ impl Material {
         match self {
             Material::Sandbag => Some(tuning().sandbag_ram_seconds),
             Material::Fence => Some(tuning().fence_ram_seconds),
+            Material::Tree | Material::Pine => Some(tuning().tree_ram_seconds),
             _ => None,
         }
     }
@@ -205,11 +280,12 @@ pub enum FenceAxis {
     Vertical = 1,
 }
 
-/// The two obstacle atlases, bundled so a draw call can pick by
+/// The three obstacle atlases, bundled so a draw call can pick by
 /// `Material::sheet` without the caller matching on the material.
 pub struct ObstacleTextures<'a> {
     pub walls: &'a Texture2D,
     pub props: &'a Texture2D,
+    pub trees: &'a Texture2D,
 }
 
 /// A static battlefield obstacle: blocks tank movement like a wall (reusing
@@ -225,23 +301,25 @@ pub struct Obstacle {
     pub position: Position,
     pub health: f32,
     pub max_health: f32,
-    /// Wood only (ignored for every other material): whether this instance
+    /// Wood and trees (always false elsewhere): whether this instance
     /// catches fire when destroyed instead of breaking outright - rolled
-    /// once at spawn (`wood_flammable_chance`), per docs/WALLS_SPEC.md's
-    /// framing of "breaks easily" vs "catches fire" as gameplay data layered
-    /// on shared art, not a separate art asset.
+    /// once at spawn from `Material::flammable_chance`, per
+    /// docs/WALLS_SPEC.md's framing of "breaks easily" vs "catches fire" as
+    /// gameplay data layered on shared art, not a separate art asset.
     pub flammable: bool,
-    /// Wood only: true from the moment flammable Wood's health hits zero
-    /// until it finishes charring (see `tick_burn`) - during this window
-    /// `damage` is a no-op (already on fire) and `col` shows the 3-frame
-    /// burn loop instead of a damage stage.
+    /// True from the moment a flammable tile's health hits zero until it
+    /// finishes charring (see `tick_burn`) - during this window `damage`
+    /// is a no-op (already on fire) and `col` shows the 3-frame burn loop
+    /// instead of a damage stage.
     pub burning: bool,
-    /// Wood only: which of the burn loop's 3 frames (cols 4-6) is showing.
+    /// Which of the burn loop's 3 frames (cols 4-6) is showing.
     pub burn_frame: i32,
-    /// Wood only: seconds since `burn_frame` last advanced.
+    /// Seconds since `burn_frame` last advanced.
     pub burn_frame_timer: f32,
-    /// Wood only: total seconds spent burning so far - once this passes
+    /// Total seconds spent burning so far - once this passes
     /// `wood_burn_seconds`, `tick_burn` chars it out (`destroyed = true`).
+    /// Trees share wood's burn timing: it is one fire, and splitting the
+    /// knob would only be worth it if they were meant to burn differently.
     pub burn_elapsed: f32,
     /// Barrel only: seconds until this barrel detonates, armed when a
     /// neighbouring blast reached it (`Game::apply_blast`) so a chain
@@ -295,10 +373,19 @@ impl Obstacle {
         }
     }
 
-    /// Side length of this obstacle on screen (square sprite), matching
-    /// `Tank::size`.
+    /// Side length of the *cell* this obstacle occupies - its collider,
+    /// its nav-grid footprint, its place in the map. One grid cell for
+    /// everything, trees included.
     pub fn size(&self) -> f32 {
         OBSTACLE_TEXTURE_SIZE * OBSTACLE_SCALE
+    }
+
+    /// Side length of the drawn sprite, which is `size()` for everything
+    /// but a tree: a tree's 48px cell overhangs its 32px footprint by 8px
+    /// on each side, so canopies interlock instead of tiling. Never use
+    /// this for physics or grid maths - that is what `size()` is for.
+    pub fn sprite_size(&self) -> f32 {
+        self.material.sheet().cell() * OBSTACLE_SCALE
     }
 
     /// Collision footprint side length - see OBSTACLE_HULL_FRACTION, same
@@ -335,6 +422,13 @@ impl Obstacle {
         if self.fuse.is_some() {
             return PROPS_BARREL_LIT_COL;
         }
+        self.damage_stage()
+    }
+
+    /// Which of `Material::visible_stages` this obstacle's health puts it
+    /// in. Split out of `col` because trees lay their stages out
+    /// differently (see `tree_col`) but derive them the same way.
+    pub(crate) fn damage_stage(&self) -> i32 {
         let stages = self.material.visible_stages();
         let frac = (self.health / self.max_health).clamp(0.0, 1.0);
         let stage = ((1.0 - frac) * stages as f32) as i32;
@@ -348,7 +442,7 @@ impl Obstacle {
     /// re-triggering on every subsequent frame a shell happens to overlap
     /// the wreckage. Iron drains health cosmetically (plateaus its rust
     /// stage, see `Material::max_health`) but never returns `true`.
-    /// Flammable Wood returns `false` the frame it ignites too - it only
+    /// A flammable tile returns `false` the frame it ignites too - it only
     /// actually dies once `tick_burn` finishes charring it. Callers on the
     /// simulation path go through `Game::damage_obstacle`, which layers the
     /// fence and barrel rules on top of this.
@@ -363,7 +457,7 @@ impl Obstacle {
         if self.material == Material::Iron {
             return false;
         }
-        if self.material == Material::Wood && self.flammable {
+        if self.flammable {
             self.burning = true;
             return false;
         }
@@ -371,8 +465,8 @@ impl Obstacle {
         true
     }
 
-    /// Advance flammable Wood's burn loop - a no-op for every other
-    /// material/state. Cosmetic only (see docs/WALLS_SPEC.md's fire
+    /// Advance a burning tile's fire - a no-op for anything not alight.
+    /// Cosmetic only (see docs/WALLS_SPEC.md's fire
     /// section): cycles `burn_frame` through the sheet's 3-frame flicker
     /// loop on `wood_burn_frame_seconds`, and once `burn_elapsed` passes
     /// `wood_burn_seconds`, chars it out (`destroyed = true`) so it's
@@ -414,24 +508,22 @@ pub fn fence_axis(obstacle: &Obstacle, fences: &HashSet<(i32, i32)>) -> FenceAxi
 /// needing a live `Obstacle` instance.
 #[cfg(feature = "map-editor")]
 pub fn icon_source_rec(material: Material) -> (Sheet, Rectangle) {
-    (material.sheet(), source_rec(material.row_base(), 0))
+    let sheet = material.sheet();
+    (sheet, source_rec(sheet, material.row_base(), 0))
 }
 
-/// Source rectangle for the obstacle at (row, col) inside either atlas -
-/// both use the same 32px cells.
-fn source_rec(row: i32, col: i32) -> Rectangle {
-    Rectangle::new(
-        col as f32 * OBSTACLE_TEXTURE_SIZE,
-        row as f32 * OBSTACLE_TEXTURE_SIZE,
-        OBSTACLE_TEXTURE_SIZE,
-        OBSTACLE_TEXTURE_SIZE,
-    )
+/// Source rectangle for the cell at (row, col) inside `sheet` - the atlases
+/// differ only in cell size (`Sheet::cell`).
+fn source_rec(sheet: Sheet, row: i32, col: i32) -> Rectangle {
+    let cell = sheet.cell();
+    Rectangle::new(col as f32 * cell, row as f32 * cell, cell, cell)
 }
 
-pub(crate) fn texture_for<'a>(textures: &ObstacleTextures<'a>, material: Material) -> &'a Texture2D {
-    match material.sheet() {
+pub(crate) fn texture_for<'a>(textures: &ObstacleTextures<'a>, sheet: Sheet) -> &'a Texture2D {
+    match sheet {
         Sheet::Walls => textures.walls,
         Sheet::Props => textures.props,
+        Sheet::Trees => textures.trees,
     }
 }
 
@@ -439,11 +531,12 @@ pub(crate) fn texture_for<'a>(textures: &ObstacleTextures<'a>, material: Materia
 /// Obstacles never rotate (unlike tanks/shells), so this skips the
 /// rotation param `draw_tank` needs; `axis` only matters for fences.
 pub fn draw_obstacle(d: &mut impl RaylibDraw, textures: &ObstacleTextures, obstacle: &Obstacle, axis: FenceAxis) {
-    let src = source_rec(obstacle.row(axis), obstacle.col());
-    let size = obstacle.size();
+    let sheet = obstacle.material.sheet();
+    let src = source_rec(sheet, obstacle.row(axis), obstacle.col());
+    let size = obstacle.sprite_size();
     let dest = Rectangle::new(obstacle.position.x, obstacle.position.y, size, size);
     let origin = Vector2::new(size / 2.0, size / 2.0);
-    d.draw_texture_pro(texture_for(textures, obstacle.material), src, dest, origin, 0.0, Color::WHITE);
+    d.draw_texture_pro(texture_for(textures, sheet), src, dest, origin, 0.0, Color::WHITE);
 }
 
 /// Which of a cell's 16 neighbour combinations to draw a cap for.
@@ -498,28 +591,186 @@ pub fn neighbour_mask(cell: (i32, i32), cells: &HashSet<(i32, i32)>) -> u8 {
 
 /// Draw the edge-cap overlay for a wall tile: the lighting along whichever
 /// faces are exposed to open ground. Composites over the tile already
-/// drawn, so it works for every damage stage and variant. Props get none -
-/// a sandbag or a fence is a discrete object, not part of a run.
+/// drawn, so it works for every damage stage and variant. Only walls get
+/// one - a sandbag, a fence or a tree is a discrete object, not part of a
+/// run.
 pub fn draw_obstacle_cap(d: &mut impl RaylibDraw, textures: &ObstacleTextures, obstacle: &Obstacle) {
-    if obstacle.material.is_prop() {
+    if !obstacle.material.is_wall() {
         return;
     }
     let Some(row_offset) = MATERIALS.iter().position(|m| *m == obstacle.material) else {
         return;
     };
     let col = BLOB_TILE[obstacle.edge_mask as usize] as i32;
-    let src = source_rec(EDGE_CAP_ROW_BASE + row_offset as i32, col);
+    let src = source_rec(Sheet::Walls, EDGE_CAP_ROW_BASE + row_offset as i32, col);
     let size = obstacle.size();
     let dest = Rectangle::new(obstacle.position.x, obstacle.position.y, size, size);
     let origin = Vector2::new(size / 2.0, size / 2.0);
     d.draw_texture_pro(textures.walls, src, dest, origin, 0.0, Color::WHITE);
 }
 
+/// How far this tree's crown is leaning right now, in world px, and which
+/// way. Positive is to the right; `tree_blit` turns it into the bend.
+///
+/// **Only ever non-zero while something is pushing the tree over.** A tree
+/// does not sway in the wind here: an ambient bend was built and rejected -
+/// what works on a blade of grass reads as wrong on a crown, because a
+/// trunk is stiff and the eye knows it. A tree's idle life is the dapple
+/// frames on the sheet instead (`tree_col`), where the light moves and the
+/// geometry does not.
+///
+/// What is left is the lean under a ram. `ram_timer` is already exactly
+/// "how long something has been leaning on this", so the bend grows with
+/// its square and the tree is well over by the time it goes - the
+/// alternative, a tree standing bolt upright until it vanishes, is what
+/// made ramming one read as nothing happening. Direction comes from the
+/// nearest live tank, which while `ram_timer` is running is the one doing
+/// the pushing (nothing else can accumulate it).
+pub fn tree_lean(obstacle: &Obstacle, movers: &[Position]) -> f32 {
+    let t = tuning();
+    let seed = crate::blast::seed_at(obstacle.position, 41);
+    let mut lean = 0.0;
+
+    let limit = obstacle.material.ram_seconds().unwrap_or(0.0);
+    if obstacle.ram_timer > 0.0 && limit > 0.0 {
+        let push = (obstacle.ram_timer / limit).clamp(0.0, 1.0);
+        if let Some(m) = movers
+            .iter()
+            .min_by(|a, b| a.distance_to(obstacle.position).total_cmp(&b.distance_to(obstacle.position)))
+        {
+            let dx = obstacle.position.x - m.x;
+            let dy = obstacle.position.y - m.y;
+            let d = (dx * dx + dy * dy).sqrt();
+            // A tank pushing straight along the trunk's axis has no
+            // sideways component to give, and a tree shoved from directly
+            // below still has to visibly give way - so fall back to a side
+            // picked from the tree's own hash, which holds still for the
+            // whole push.
+            let away = if d > 0.001 && dx.abs() > 0.5 {
+                dx / d
+            } else if seed & 1 == 0 {
+                1.0
+            } else {
+                -1.0
+            };
+            lean += away * t.tree_lean_px * push * push;
+        }
+    }
+    lean
+}
+
+/// Which sheet column a tree draws from right now - **the whole of a
+/// tree's idle animation.**
+///
+/// Every damage stage exists in `TREE_SHIMMER_FRAMES` copies that differ
+/// only in where a few patches of canopy step one rung up the foliage
+/// ramp, so cycling them is light moving through the leaves with nothing
+/// moving. `tree_dapple_seconds` sets the rate and the tree's own position
+/// hash sets its phase, so a wood shimmers out of step with itself rather
+/// than blinking as one.
+pub fn tree_col(obstacle: &Obstacle, time: f32) -> i32 {
+    if obstacle.burning {
+        return TREE_BURN_COL + obstacle.burn_frame;
+    }
+    let seed = crate::blast::seed_at(obstacle.position, 41);
+    let step = (time / tuning().tree_dapple_seconds.max(0.05)) as i64;
+    let frame = (step + (seed % TREE_SHIMMER_FRAMES as u32) as i64).rem_euclid(TREE_SHIMMER_FRAMES as i64);
+    frame as i32 * TREE_STAGES + obstacle.damage_stage()
+}
+
+/// Draw a tree. Split from `draw_obstacle` because a tree has its own
+/// column layout (`tree_col`) and because it is the one thing on the
+/// battlefield that can bend.
+pub fn draw_tree(d: &mut impl RaylibDraw, textures: &ObstacleTextures, obstacle: &Obstacle, lean: f32, time: f32) {
+    let sheet = obstacle.material.sheet();
+    let src = source_rec(sheet, obstacle.row(FenceAxis::Horizontal), tree_col(obstacle, time));
+    let size = obstacle.sprite_size();
+    tree_blit(d, texture_for(textures, sheet), src, obstacle.position, size, lean, Color::WHITE);
+}
+
+/// The same lean applied to the drop shadow, so a bending crown does not
+/// slide out of its own shadow. Must be called before `draw_tree`.
+pub fn draw_tree_shadow(d: &mut impl RaylibDraw, textures: &ObstacleTextures, obstacle: &Obstacle, lean: f32, time: f32) {
+    let sheet = obstacle.material.sheet();
+    let src = source_rec(sheet, obstacle.row(FenceAxis::Horizontal), tree_col(obstacle, time));
+    let size = obstacle.sprite_size();
+    let at = Position::new(
+        obstacle.position.x + tuning().shadow_dir_x * tuning().obstacle_shadow_offset,
+        obstacle.position.y + tuning().shadow_dir_y * tuning().obstacle_shadow_offset,
+    );
+    let shadow = Color::new(0, 0, 0, (255.0 * tuning().obstacle_shadow_opacity) as u8);
+    tree_blit(d, texture_for(textures, sheet), src, at, size, lean, shadow);
+}
+
+/// How many horizontal slices a leaning tree is drawn in.
+///
+/// Eight over 48px is a 6px band - fine enough that the bend reads as a
+/// curve rather than as two halves sliding, coarse enough that a wood
+/// costs eight blits a tree instead of one.
+const TREE_SWAY_BANDS: i32 = 8;
+
+/// One leaning blit, as a stack of horizontal bands each shifted sideways
+/// by a whole 2px block. `lean` is zero for a tree nothing is pushing, and
+/// then this is a single ordinary quad.
+///
+/// **Not a rotation.** Rotating the sprite about its base is what grass
+/// does and what this was first; on a crown it resamples the interior
+/// every frame, and measured against a static capture the whole inside of
+/// every canopy churned, not just its outline. Bands translate rigidly
+/// instead, so nothing inside a band can crawl, and snapping the shift to
+/// `2.0` keeps every pixel on the same block grid the rest of the game
+/// draws on (the rule `fx.rs` and the camera shake already follow).
+///
+/// The shift ramps as the *square* of the height up the sprite, so the
+/// trunk holds still and the crown is what gives way.
+fn tree_blit(
+    d: &mut impl RaylibDraw,
+    texture: &Texture2D,
+    src: Rectangle,
+    center: Position,
+    size: f32,
+    lean: f32,
+    tint: Color,
+) {
+    let band = size / TREE_SWAY_BANDS as f32;
+    let (left, top) = (center.x - size / 2.0, center.y - size / 2.0);
+    let shift = |i: i32| {
+        let up = 1.0 - (i as f32 * band + band * 0.5) / size;
+        (lean * up * up / FX_BLOCK).round() * FX_BLOCK
+    };
+    // Neighbouring bands usually land on the same block, so a lean that
+    // steps 4-2-0 down the sprite costs three blits, not eight. Runs are
+    // emitted as one quad each; a still tree is a single quad again.
+    let mut start = 0;
+    while start < TREE_SWAY_BANDS {
+        let dx = shift(start);
+        let mut end = start + 1;
+        while end < TREE_SWAY_BANDS && shift(end) == dx {
+            end += 1;
+        }
+        let (y, h) = (start as f32 * band, (end - start) as f32 * band);
+        d.draw_texture_pro(
+            texture,
+            Rectangle::new(src.x, src.y + y, src.width, h),
+            Rectangle::new(left + dx, top + y, size, h),
+            Vector2::zero(),
+            0.0,
+            tint,
+        );
+        start = end;
+    }
+}
+
+/// The screen-pixel block every sprite in the game lands on - see
+/// `fx::FX_GRID`, which snaps particles to the same one.
+const FX_BLOCK: f32 = 2.0;
+
 /// Draw this obstacle's drop shadow - see `tank::draw_tank_shadow` /
 /// docs/sprite-shadows-design.md. Must be called before `draw_obstacle`.
 pub fn draw_obstacle_shadow(d: &mut impl RaylibDraw, textures: &ObstacleTextures, obstacle: &Obstacle, axis: FenceAxis) {
-    let src = source_rec(obstacle.row(axis), obstacle.col());
-    let size = obstacle.size();
+    let sheet = obstacle.material.sheet();
+    let src = source_rec(sheet, obstacle.row(axis), obstacle.col());
+    let size = obstacle.sprite_size();
     let dest = Rectangle::new(
         obstacle.position.x + tuning().shadow_dir_x * tuning().obstacle_shadow_offset,
         obstacle.position.y + tuning().shadow_dir_y * tuning().obstacle_shadow_offset,
@@ -528,5 +779,5 @@ pub fn draw_obstacle_shadow(d: &mut impl RaylibDraw, textures: &ObstacleTextures
     );
     let origin = Vector2::new(size / 2.0, size / 2.0);
     let shadow = Color::new(0, 0, 0, (255.0 * tuning().obstacle_shadow_opacity) as u8);
-    d.draw_texture_pro(texture_for(textures, obstacle.material), src, dest, origin, 0.0, shadow);
+    d.draw_texture_pro(texture_for(textures, sheet), src, dest, origin, 0.0, shadow);
 }

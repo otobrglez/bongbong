@@ -402,6 +402,13 @@ pub struct Game {
     /// Rubble left where a wall tile died this round, oldest first, capped
     /// at `DECAL_MAX` (see `decal.rs`).
     pub(crate) decals: Vec<Decal>,
+    /// Cells the map marked as tall grass. The concealment query
+    /// (`grass::conceals`) runs against these, not against the drawn tufts:
+    /// cover is a property of the ground, not of which way the wind blew.
+    pub(crate) grass_cells: Vec<Position>,
+    /// The tufts those cells scatter, built once per round. Purely drawn -
+    /// see `grass.rs` for why this is not an `Obstacle`.
+    pub(crate) grass: Vec<crate::grass::GrassTuft>,
     /// Queued ammo cook-offs from tanks that have died: where each pops and
     /// how long until it does. Purely cosmetic (see `tick_cookoffs`).
     pub(crate) cookoffs: Vec<(Position, f32)>,
@@ -569,6 +576,8 @@ impl Game {
         self.scorches.clear();
         self.decals.clear();
         self.cookoffs.clear();
+        self.grass_cells.clear();
+        self.grass.clear();
         self.laser_beams.clear();
         self.frame = 0;
         self.last_engage.clear();
@@ -622,6 +631,14 @@ impl Game {
         // The layout is final now, so every wall tile can work out which of
         // its faces are exposed. Only ever recomputed again on destruction.
         self.refresh_edge_masks();
+        // Tall grass: whole cells from the map, each scattering a handful
+        // of tufts. Hashed from position, so this draws no round RNG.
+        self.grass_cells = map_spawn.grass_cells.clone();
+        self.grass = self
+            .grass_cells
+            .iter()
+            .flat_map(|c| crate::grass::tufts_for_cell(*c))
+            .collect();
         let obstacle_positions = map_spawn.obstacle_positions;
         let wall_positions = map_spawn.wall_positions;
         let map_road_cells = map_spawn.road_cells;
@@ -783,9 +800,13 @@ impl Game {
 
         // --- Ground: road under every wall tile and explicit road cell
         // (props stand on plain ground) ---
-        let mut road_cells = wall_positions;
+        let mut road_cells = wall_positions.clone();
         road_cells.extend(map_road_cells);
-        self.ground = crate::ground::build(width, height, rng.random(), &road_cells);
+        // Wall cells go in twice on purpose: folded into the road set they
+        // paint dirt underfoot, and passed separately they cast the baked
+        // shading that makes a wall look like it is standing on the floor
+        // rather than pasted onto it.
+        self.ground = crate::ground::build(width, height, rng.random(), &road_cells, &wall_positions);
 
         self.rng = Some(rng);
         // Not cleared here: a restart mid-`update` (R key, round end) still
@@ -812,7 +833,6 @@ impl Game {
             variant,
             body,
             hurt_timer: 0.0,
-            hit_flash_timer: 0.0,
             hop_timer: 0.0,
             hop_start: pos,
             hop_end: pos,
@@ -864,7 +884,7 @@ impl Game {
         let mut rng = self.rng.take().expect("rng seeded in init");
         self.time += dt;
         self.tick_timers(dt, &mut rng);
-        let terrain = Terrain::build(&self.world, width, height);
+        let terrain = Terrain::build(&self.world, width, height, &self.grass_cells);
         let mut f = Frame::new(dt, width, height, rng, terrain);
 
         if self.outcome == Outcome::Playing {
@@ -1335,10 +1355,28 @@ impl Game {
                 Role::Guard => home,
                 Role::Player => None,
             };
-            let player_line_of_sight = f.terrain.line_of_sight(tank.position, player_pos);
+            // Concealment: a player sitting in tall grass cannot be fired
+            // at. Applied to the *target*, not to the ray - grass hides
+            // what is in it rather than blocking sight through it (see
+            // `Terrain::conceals`).
+            //
+            // This gates firing only. Enemies still converge on a hidden
+            // player, because the group alert above is a pure distance test
+            // with no line-of-sight check at all - so "nobody can see the
+            // player" is not a state this AI can currently reach. Gating
+            // that too is what would make concealment read fully, and is
+            // also what re-opens the pile-up and clustering behaviour the
+            // engagement ring was tuned to solve. Deliberately out of scope:
+            // do not "fix" this by gating `any_enemy_sees_player` without
+            // re-baselining `just probe-fixtures`.
+            let player_hidden = f.terrain.conceals(player_pos);
+            let player_line_of_sight = !player_hidden && f.terrain.line_of_sight(tank.position, player_pos);
             // A hunter's fire gate is line of *fire* to the frog: only iron
             // or another frog blocks it, so a walled-in frog gets shot at
-            // through its destructible walls until they are gone.
+            // through its destructible walls until they are gone. Note it
+            // filters on `is_permanent`, not `blocks_sight`, so concealment
+            // has to be applied here separately or a hunter would keep
+            // shooting a target the rest of the AI has lost.
             let line_of_sight = match hunting {
                 Some(frog) => f.terrain.line_of_fire_to_frog(tank.position, target, Some(frog)),
                 None => player_line_of_sight,
@@ -1860,11 +1898,11 @@ impl Game {
             .world
             .query::<&Obstacle>()
             .iter()
-            .filter(|o| !o.destroyed && !o.material.is_prop())
+            .filter(|o| !o.destroyed && o.material.is_wall())
             .map(|o| o.cell())
             .collect();
         for o in self.world.query::<&mut Obstacle>().iter() {
-            if o.material.is_prop() {
+            if !o.material.is_wall() {
                 continue;
             }
             o.edge_mask = neighbour_mask(o.cell(), &cells);

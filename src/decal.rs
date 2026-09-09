@@ -9,7 +9,10 @@
 //! seeded replay.
 //!
 //! The art is the dedicated rubble block at the bottom of
-//! `walls_sheet.png` (`RUBBLE_ROW_*`): one row per kind of leftover,
+//! `walls_sheet.png` (`RUBBLE_ROW_*`), plus the two tree rows on
+//! `trees_sheet.png` - leaf litter is green, and the walls sheet is under
+//! the no-green guard, so a decal carries the atlas its row is in. One row
+//! per kind of leftover,
 //! `RUBBLE_VARIANTS` columns each, coverage ramping from a few scattered
 //! chips to a dense pile. The variant is picked per tile from the position
 //! hash, and `draw_decal` then mirrors and quarter-turns it, so one
@@ -18,12 +21,15 @@
 
 use sola_raylib::prelude::*;
 
-use crate::obstacle::{Material, ObstacleTextures};
+use crate::obstacle::{Material, ObstacleTextures, Sheet, texture_for};
 use crate::tuning::tuning;
 use crate::{OBSTACLE_TEXTURE_SIZE, Position, RUBBLE_VARIANTS};
 
 /// One leftover on the ground, oldest first in `Game::decals`.
 pub struct Decal {
+    /// Which atlas `row` is in. Everything but tree litter is on the walls
+    /// sheet, which is why `at` defaults to it.
+    pub sheet: Sheet,
     /// The rubble row, frozen at death so a later change to
     /// `Material::rubble_row` cannot repaint rubble already on the ground.
     /// Also the only thing drawing needs, which is why no material is
@@ -58,7 +64,10 @@ impl Decal {
     /// material with no rubble row. Drops in place - a wall does not throw
     /// its own bricks anywhere.
     pub fn new(material: Material, center: Position, charred: bool) -> Option<Self> {
-        Some(Self::at(material.rubble_row(charred)?, center, 0))
+        let (sheet, row) = material.rubble_row(charred)?;
+        let mut d = Self::at(row, center, 0);
+        d.sheet = sheet;
+        Some(d)
     }
 
     /// A piece thrown from `from` and landing at `to`: same record, but it
@@ -80,7 +89,7 @@ impl Decal {
         // Salted separately from the mirror/rotation seed so two pieces
         // that happen to share a variant still differ in orientation.
         let col = (crate::blast::seed_at(center, 11 + salt * 3) % RUBBLE_VARIANTS as u32) as i32;
-        Decal { row, col, center, origin: center, arc: 0.0, seed, age: 0.0, blocks: false }
+        Decal { sheet: Sheet::Walls, row, col, center, origin: center, arc: 0.0, seed, age: 0.0, blocks: false }
     }
 
     /// How far through its throw it is, 1.0 once it has settled.
@@ -136,7 +145,7 @@ pub fn draw_decal_shadow(d: &mut impl RaylibDraw, decal: &Decal) {
 }
 
 pub fn draw_decal(d: &mut impl RaylibDraw, textures: &ObstacleTextures, decal: &Decal) {
-    let cell = OBSTACLE_TEXTURE_SIZE;
+    let cell = decal.sheet.cell();
     let flip = if decal.seed & 1 != 0 { -1.0 } else { 1.0 };
     let src = Rectangle::new(decal.col as f32 * cell, decal.row as f32 * cell, cell * flip, cell);
     let size = cell * crate::OBSTACLE_SCALE;
@@ -153,8 +162,5 @@ pub fn draw_decal(d: &mut impl RaylibDraw, textures: &ObstacleTextures, decal: &
     let tint = Color::new(255, 255, 255, (255.0 * opacity) as u8);
     let at = decal.draw_pos();
     let dest = Rectangle::new(at.x, at.y, size, size);
-    // Always the walls sheet: every rubble row lives there, the props'
-    // included, so a decal never needs to know which atlas its material
-    // is normally drawn from.
-    d.draw_texture_pro(textures.walls, src, dest, Vector2::new(size / 2.0, size / 2.0), rotation, tint);
+    d.draw_texture_pro(texture_for(textures, decal.sheet), src, dest, Vector2::new(size / 2.0, size / 2.0), rotation, tint);
 }

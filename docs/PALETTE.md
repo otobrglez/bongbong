@@ -255,8 +255,8 @@ together they are *stronger* than the single check they replaced:
   barrel_explosion) must contain **no `GREEN_*` pixel at all**, because a
   green pixel there reads as terrain showing through. Scoped from
   measurement, not assumption: `scifi_tanks_sheet.png` has 2711 green pixels
-  (a green chassis is a real colour choice) and `plasma.png`/`health_bar.png`
-  are deliberately off-palette, so none of those are checked.
+  (a green chassis is a real colour choice) and `plasma.png` is deliberately
+  off-palette, so neither of those is checked.
 
 This has already caught a real defect: darkening a sand tone with `mul()` for
 a chunk's bottom edge snapped it into the green family, putting green pixels

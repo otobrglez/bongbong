@@ -949,6 +949,48 @@ tunables! {
         fence_one_shot_chance: f64 = 0.7 in 0.0 ..= 1.0;
         /// Seconds a tank has to push into a fence before it gives way.
         fence_ram_seconds: f32 = 0.15 in 0.05 ..= 5.0;
+        /// Broadleaf toughness: hp absorbed over its three visible stages
+        /// (full crown, thinning, nearly bare) before it comes down.
+        ///
+        /// **Deliberately brittle, in the fence bracket rather than the
+        /// wall bracket.** Set from the *weakest* chassis: a player shell
+        /// rolls `player_damage_min..max` scaled by `tank_damage_factor`,
+        /// so a scout does 7.5-22.5 and clears 12 about 70% of the time -
+        /// the same one-shot rate `fence_one_shot_chance` gives a fence,
+        /// arrived at through damage instead of a coin flip. Heavier
+        /// chassis fell one every time, a minigun burst still has to chew
+        /// through it, and a barrel blast still takes a whole stand down.
+        /// Baked in at spawn.
+        tree_max_health: f32 = 12.0 in 1.0 ..= 500.0 @ Spawn;
+        /// Conifer toughness. Slimmer than a broadleaf, so a little less.
+        pine_max_health: f32 = 9.0 in 1.0 ..= 500.0 @ Spawn;
+        /// Seconds a tank has to keep pushing into a tree before it goes
+        /// over. Just past a sandbag's, so a tank drives through a stand
+        /// rather than shouldering each trunk down, and well short of
+        /// `enemy_breach_after_seconds` so an AI that drives into one
+        /// pushes through instead of stopping to shoot it.
+        tree_ram_seconds: f32 = 0.5 in 0.05 ..= 10.0;
+        /// Seconds each of a tree's dapple frames holds.
+        ///
+        /// This is a tree's entire idle animation: the frames are the same
+        /// canopy with a few patches of leaf one rung lighter, drifting
+        /// between frames, so light moves through the crown and the crown
+        /// itself does not. An ambient *bend* was built first and rejected -
+        /// what looks alive on a blade of grass looks wrong on a trunk. Each
+        /// tree takes its phase from a hash of its position, so a wood
+        /// shimmers out of step with itself rather than blinking as one
+        /// (`obstacle::tree_col`).
+        tree_dapple_seconds: f32 = 0.9 in 0.05 ..= 10.0;
+        /// How far a tree bends away from a tank shouldering it over, at
+        /// the moment it goes. Scales with `ram_timer` squared, so the tree
+        /// gives slowly at first and then goes - without it a rammed tree
+        /// stands bolt upright until it simply vanishes.
+        tree_lean_px: f32 = 22.0 in 0.0 ..= 80.0;
+        /// Odds a tree is the kind that catches fire when it dies instead
+        /// of simply falling, rolled once per tile at spawn. Zero draws no
+        /// RNG at all, so a treeless map replays unchanged. Burn timing is
+        /// shared with wood (`wood_burn_seconds`): it is one fire.
+        tree_flammable_chance: f64 = 0.55 in 0.0 ..= 1.0 @ Spawn;
         /// Playback rate of the barrel blast sprite animation (12 frames).
         blast_anim_fps: f32 = 18.0 in 4.0 ..= 60.0;
         /// On-screen scale of the 64px blast frames (2.0 = 128px wide).
@@ -1094,6 +1136,55 @@ tunables! {
     }
 
     group cosmetics {
+        // --- tall grass (grass.rs) ---
+        /// Tufts scattered per tall-grass cell.
+        ///
+        /// Several rather than one because the occlusion has to be
+        /// *partial* - the reference gif never hides a unit completely,
+        /// it walks between discrete tufts, covering at worst ~44% of it.
+        /// This knob and the tuft height in `gen_grass.py` are the same
+        /// trade-off from two directions, so both were measured against a
+        /// parked tank rather than guessed:
+        ///
+        /// | tufts/cell | tank occluded |
+        /// |---|---|
+        /// | 2 | 56% |
+        /// | 3 | 71% |
+        /// | 4 | 83% |
+        ///
+        /// 2 sits closest to the reference while still reading as a field.
+        /// Above 3 a tank vanishes outright, which breaks the player's
+        /// ability to find their own hull - see docs/GROUND_SPEC.md.
+        grass_tufts_per_cell: i32 = 2 in 0 ..= 24 @ Restart;
+        /// On-screen scale of the 32px tuft cells. 2.0 puts one *sheet*
+        /// pixel on a 2x2 screen block, the density everything else uses -
+        /// which is why `gen_grass.py` authors one design pixel per sheet
+        /// pixel rather than on the walls sheet's 2px block grid. Stacking
+        /// the two made grass twice as chunky as the world around it.
+        grass_scale: f32 = 2.0 in 0.5 ..= 4.0;
+        /// Ambient sway: how far a tip travels, and how fast.
+        grass_sway_px: f32 = 2.0 in 0.0 ..= 20.0;
+        grass_sway_speed: f32 = 1.6 in 0.0 ..= 20.0;
+        /// How close a tank has to be to push grass aside, and how hard.
+        /// Not in the reference gif - grass there does not react at all -
+        /// so this is the first thing to turn down if it reads as noisy.
+        grass_part_radius: f32 = 46.0 in 0.0 ..= 300.0;
+        grass_part_px: f32 = 9.0 in 0.0 ..= 60.0;
+
+        // --- the ground layer's baked shading (ground.rs) ---
+        /// How much darker a cell right beside a wall is, 0-1. Walls stand
+        /// *on* the floor, and without this they read as pasted onto it.
+        ground_wall_shade: f32 = 0.22 in 0.0 ..= 1.0 @ Restart;
+        /// How far that shadow reaches, in cells. Cost is quadratic in this
+        /// (a box search per cell) but it runs once per round, not per
+        /// frame.
+        ground_wall_shade_cells: i32 = 2 in 0 ..= 8 @ Restart;
+        /// Vignette darkness at the very screen edge, 0-1. Drawn as four
+        /// per-pixel gradient bands (`ground::draw_edge_shade`), not as a
+        /// cell tint - see that function for why.
+        ground_edge_shade: f32 = 0.22 in 0.0 ..= 1.0;
+        /// How far that vignette reaches inward, in screen px.
+        ground_edge_shade_px: f32 = 90.0 in 0.0 ..= 600.0;
         /// World px of travel between hull tread-animation frame advances
         /// (independent of the ground-decal spacing below).
         tank_hull_track_frame_distance: f32 = 8.0 in 1.0 ..= 64.0;
@@ -1105,9 +1196,9 @@ tunables! {
         /// Tank shadow distance (px) - grounded, stays tight to the hull.
         tank_shadow_offset: f32 = 3.0 in 0.0 ..= 20.0;
         tank_shadow_opacity: f32 = 0.486 in 0.0 ..= 1.0;
-        /// Rainbow shield ring radius as a multiple of `Tank::size()`. Drawn
-        /// under the tank and its shadow, so only what reaches past the
-        /// hull shows.
+        /// Ground ring radius as a multiple of `Tank::size()`: the marker,
+        /// health and shield rings all share it. Drawn under the tank and
+        /// its shadow, so only what reaches past the hull shows.
         shield_glow_radius_factor: f32 = 0.385 in 0.1 ..= 2.0;
         /// How many full rainbow hue cycles the shield ring makes per second.
         shield_glow_hue_hz: f32 = 0.4 in 0.0 ..= 5.0;
@@ -1175,11 +1266,21 @@ tunables! {
         /// lays, so a trail reads as one coherent tank-specific tread
         /// pattern instead of per-mark noise.
         track_scale_jitter: f32 = 0.15 in 0.0 ..= 1.0;
-        /// Overhead health bar: shown under a tank for this long after it's
-        /// hit ...
-        health_bar_overhead_seconds: f32 = 3.0 in 0.0 ..= 20.0;
-        /// ... fading out over the trailing this-many seconds.
-        health_bar_overhead_fade_seconds: f32 = 0.6 in 0.0 ..= 5.0;
+        /// Enemy health ring: after a hit an enemy's ground ring shows its
+        /// health for this many seconds ...
+        health_ring_hit_seconds: f32 = 3.0 in 0.0 ..= 20.0;
+        /// ... fading out over the trailing this-many seconds of that window.
+        health_ring_hit_fade_seconds: f32 = 0.6 in 0.0 ..= 5.0;
+        /// An enemy's health ring stays on, hit or not, once its remaining
+        /// health is at or below this fraction.
+        enemy_health_ring_below: f32 = 0.5 in 0.0 ..= 1.0;
+        /// The missing part of a white or red health ring (the player's
+        /// tank, both frogs) is still drawn, at `player_ring_opacity` times
+        /// this, so the marker stays a full circle.
+        health_ring_base_opacity: f32 = 0.35 in 0.0 ..= 1.0;
+        /// Opacity of the dark band over the missing part of an enemy
+        /// tank's health ring.
+        health_ring_gap_opacity: f32 = 0.45 in 0.0 ..= 1.0;
         /// HUD numbers (SHELLS/HP) turn orange below this fraction of max
         /// ...
         hud_warn_threshold: f32 = 0.34 in 0.0 ..= 1.0;

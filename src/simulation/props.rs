@@ -55,7 +55,9 @@ impl Game {
     /// times at its edge, so a cluster cascades outward rather than going
     /// off all at once - while
     /// a direct hit or a ram pops it right away through the plain health
-    /// path; everything else is `Obstacle::damage`. Returns `true` the
+    /// path; a tree pushed over by a tank dies outright instead of taking
+    /// its flammable fork, since a hull is not something that sets a tree
+    /// alight; everything else is `Obstacle::damage`. Returns `true` the
     /// frame the obstacle dies.
     pub(super) fn damage_obstacle(&mut self, f: &mut Frame, entity: Entity, amount: f32, cause: DamageCause) -> bool {
         let (material, pos, died) = {
@@ -84,6 +86,15 @@ impl Game {
                     }
                     _ => o.damage(amount),
                 },
+                // A tree shouldered over by a tank goes over, it does not
+                // catch fire: fire comes from what is burning at the muzzle
+                // end, and a hull pushing a trunk has none. Ignition stays
+                // on the shot and blast paths.
+                m if m.is_tree() && cause == DamageCause::Ram => {
+                    o.health = 0.0;
+                    o.destroyed = true;
+                    true
+                }
                 _ => o.damage(amount),
             };
             (o.material, o.position, died)
@@ -214,8 +225,9 @@ impl Game {
         }
     }
 
-    /// Tanks pushing into props. A live tank with a body and a commanded
-    /// move counts as a pusher; a prop it is in narrow-phase contact with
+    /// Tanks pushing into props and trees. A live tank with a body and a
+    /// commanded move counts as a pusher; a tile it is in narrow-phase
+    /// contact with
     /// (`Physics::touching`, the same contact state the ram check between
     /// tanks reads) accumulates `ram_timer` and collapses at its
     /// `Material::ram_seconds` - a sandbag slows the tank for a moment,
@@ -236,7 +248,12 @@ impl Game {
         let mut collapsed = Vec::new();
         let mut barrel_hits = Vec::new();
         for (entity, o) in self.world.query::<(Entity, &mut Obstacle)>().iter() {
-            if !o.material.is_prop() || o.destroyed || o.fuse.is_some() {
+            if o.destroyed || o.fuse.is_some() {
+                continue;
+            }
+            // Only what ramming can actually do something to: a prop that
+            // collapses, a tree that goes over, or a barrel that pops.
+            if o.material.ram_seconds().is_none() && !o.material.is_explosive() {
                 continue;
             }
             let pushed = pushers

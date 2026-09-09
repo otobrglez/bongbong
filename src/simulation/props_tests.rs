@@ -285,7 +285,7 @@ cells."10,14" = { kind = "wall", material = "brick" }
 "#,
     );
     let game = game_on(&map, 1);
-    let terrain = Terrain::build(&game.world, W, H);
+    let terrain = Terrain::build(&game.world, W, H, &game.grass_cells);
     let across = |row: i32| terrain.line_of_sight(cell_to_world(7, row), cell_to_world(13, row));
     assert!(across(5), "a sandbag is knee-high");
     assert!(across(8), "a fence is see-through");
@@ -386,17 +386,123 @@ fn a_destroyed_wall_leaves_rubble_where_it_stood() {
         assert_eq!(alive_obstacles(&game), 8, "{material:?} tile never died");
         assert_eq!(game.decals.len(), 1, "{material:?} left exactly one piece of rubble");
         let decal = &game.decals[0];
-        assert_eq!(Some(decal.row), material.rubble_row(false), "the rubble remembers what died");
+        assert_eq!(Some((decal.sheet, decal.row)), material.rubble_row(false), "the rubble remembers what died");
         assert_eq!(decal.center, cell_to_world(20, 11), "rubble sits where the tile stood");
         assert!((0..crate::RUBBLE_VARIANTS).contains(&decal.col), "picks one of the row's variants");
     }
 
     // Every destructible material leaves something; Iron is the one that
     // never dies, so it is the only one with no rubble row at all.
-    for material in [Material::Sandbag, Material::Barrel, Material::Fence] {
+    for material in [Material::Sandbag, Material::Barrel, Material::Fence, Material::Tree, Material::Pine] {
         assert!(material.rubble_row(false).is_some(), "{material:?} leaves rubble too");
     }
     assert!(Material::Iron.rubble_row(false).is_none(), "iron never dies, so it never leaves rubble");
+}
+
+/// The trap `Material`'s doc comment warns about: `max_health` indexes a
+/// `[f32; 4]` by `self as usize` for the four wall materials, so inserting a
+/// new variant among them is a silent out-of-bounds read rather than a
+/// compile error. Appending is safe; this asks every variant for its health
+/// so a wrong insertion panics here instead of in a round.
+#[test]
+fn every_material_reports_a_sane_max_health() {
+    use crate::obstacle::Sheet;
+    for material in [
+        Material::Brick, Material::Iron, Material::Wood, Material::Glass,
+        Material::Sandbag, Material::Barrel, Material::Fence,
+        Material::Tree, Material::Pine,
+    ] {
+        let hp = material.max_health();
+        assert!(hp.is_finite() && hp > 0.0, "{material:?} max_health {hp}");
+        assert!(material.variants() > 0, "{material:?} has no cosmetic variants");
+    }
+    // The wall block must stay first, because that is what the array index
+    // means. `MATERIALS` is the list the edge-cap rows are keyed by.
+    for (i, material) in crate::obstacle::MATERIALS.iter().enumerate() {
+        assert_eq!(*material as usize, i, "{material:?} moved out of the wall block");
+        assert!(material.is_wall());
+    }
+    assert!(Material::Tree.is_tree() && Material::Pine.is_tree());
+    assert!(!Material::Tree.is_prop() && !Material::Tree.is_wall());
+    assert_eq!(Material::Tree.sheet(), Sheet::Trees);
+    assert_eq!(Sheet::Trees.cell(), crate::TREE_TEXTURE_SIZE);
+}
+
+#[test]
+fn a_tree_shot_down_leaves_litter_from_its_own_sheet() {
+    use crate::obstacle::Sheet;
+    // Both species, and over several seeds because a tree rolls flammable
+    // at spawn: one that catches fire dies through `tick_burns` (charred)
+    // and one that does not dies through `damage_obstacle`. Either way it
+    // must announce itself and leave litter.
+    for (kind, material) in [("tree", Material::Tree), ("pine", Material::Pine)] {
+        let map = map_with(&format!("cells.\"20,11\" = {{ kind = \"{kind}\" }}\n"));
+        let mut charred_seen = 0;
+        for seed in 1..=6u64 {
+            let mut game = game_on(&map, seed);
+            game.debug_teleport(0, cell_to_world(20, 15), Some(0.0)).unwrap();
+            for _ in 0..14 {
+                if alive_obstacles(&game) == 8 {
+                    break;
+                }
+                shoot(&mut game, 90);
+            }
+            assert_eq!(alive_obstacles(&game), 8, "seed {seed}: the {kind} never came down");
+            assert_eq!(game.decals.len(), 1, "seed {seed}: one piece of litter");
+            let decal = &game.decals[0];
+            assert_eq!(decal.sheet, Sheet::Trees, "leaf litter is green, so it is not on the walls sheet");
+            if Some((decal.sheet, decal.row)) == material.rubble_row(true) {
+                charred_seen += 1;
+            } else {
+                assert_eq!(Some((decal.sheet, decal.row)), material.rubble_row(false));
+            }
+            assert_eq!(decal.center, cell_to_world(20, 11));
+        }
+        assert!(charred_seen > 0, "{kind}: no seed rolled a tree that burned out");
+    }
+}
+
+#[test]
+fn a_tank_drives_through_a_tree_about_as_fast_as_through_a_sandbag() {
+    // The player starts one cell south of the tile and drives north into
+    // it. Trees sit in the brittle bracket with the props, not the wall
+    // bracket: pushing one over takes a beat longer than a sandbag and
+    // nothing like a stalled advance.
+    let frames_for = |kind: &str, material: Material| {
+        let map = map_with(&format!("cells.\"20,11\" = {{ kind = \"{kind}\" }}\n"));
+        let mut game = game_on(&map, 1);
+        game.debug_teleport(0, cell_to_world(20, 12), Some(0.0)).unwrap();
+        destroyed_frame(&mut game, drive(Dir::Up), material, 900)
+            .unwrap_or_else(|| panic!("{kind} survived a tank pushing into it for 15 seconds"))
+    };
+    let fence = frames_for("fence", Material::Fence);
+    let sandbag = frames_for("sandbag", Material::Sandbag);
+    let tree = frames_for("tree", Material::Tree);
+    assert!(fence <= sandbag && sandbag <= tree, "fence {fence}, sandbag {sandbag}, tree {tree}");
+    assert!(tree < sandbag * 3, "a tree should not read as a wall to drive at: tree {tree}, sandbag {sandbag}");
+}
+
+#[test]
+fn one_shell_usually_fells_a_tree() {
+    // The brittleness claim, on the *weakest* chassis (row 0, damage
+    // factor 0.75) - anything heavier fells one every time. Over seeds
+    // because a shell's damage is a roll, and because a tree that rolled
+    // flammable dies a second later through `tick_burns` rather than on
+    // the hit itself.
+    for (kind, material) in [("tree", Material::Tree), ("pine", Material::Pine)] {
+        let map = map_with(&format!("cells.\"20,11\" = {{ kind = \"{kind}\" }}\n"));
+        let mut felled = 0;
+        for seed in 1..=20u64 {
+            let mut game = game_on(&map, seed);
+            game.debug_teleport(0, cell_to_world(20, 15), Some(0.0)).unwrap();
+            // One trigger pull, then long enough for a burning tree to char.
+            let events = shoot(&mut game, 150);
+            if events.iter().any(|e| matches!(e, Event::ObstacleDestroyed { material: m, .. } if *m == material)) {
+                felled += 1;
+            }
+        }
+        assert!(felled >= 12, "{kind}: only {felled}/20 single shells brought it down");
+    }
 }
 
 #[test]
@@ -666,4 +772,76 @@ fn destroying_a_tile_re_exposes_its_neighbours() {
         "its south face is exposed now and gets capped"
     );
 
+}
+
+#[test]
+fn tall_grass_hides_the_player_from_enemy_fire() {
+    // Concealment is a property of the *target's* cell, not of the ray: an
+    // enemy with a clear line to a player standing in grass cannot take the
+    // shot. It deliberately does not stop them approaching - see the
+    // comment in `enemy_phase`.
+    //
+    // Measured as projectile hits *on the player*, not as shots fired and
+    // not as damage taken. Shots fired is wrong because a hunter-role enemy
+    // is aiming at the *frog* - it firing is correct and says nothing about
+    // whether the player is hidden. Total damage is wrong because with
+    // fewer shots the round draws fewer RNG values, so the two runs diverge
+    // into different trajectories and their damage is not comparable; the
+    // grass run measured *higher* total damage while taking a ninth of the
+    // hits, all of it from a ram.
+    let open = map_with("");
+    let grassy = map_with("cells.\"20,11\" = { kind = \"tall_grass\" }\n");
+
+    let hits_taken = |map: &str| {
+        let mut game = Game::default();
+        game.enemy_count_override = Some(3);
+        game.seed_override = Some(3);
+        game.player_row_override = Some(0);
+        game.map = MapFile::from_toml_str(map).expect("test map parses");
+        game.init(W, H);
+        game.debug_teleport(0, cell_to_world(20, 11), Some(0.0)).unwrap();
+        for (i, slot) in [1, 2, 3].iter().enumerate() {
+            let _ = game.debug_teleport(*slot, cell_to_world(18 + i as i32 * 2, 5), Some(180.0));
+        }
+        let (mut shot, mut rammed) = (0, 0);
+        for _ in 0..900 {
+            step(&mut game, Input::default());
+            for e in game.events() {
+                match e {
+                    Event::Hit { target: HitTarget::Player, .. } => shot += 1,
+                    Event::Ram { other_slot: None, .. } => rammed += 1,
+                    _ => {}
+                }
+            }
+        }
+        let _ = rammed;
+        shot
+    };
+
+    let in_the_open = hits_taken(&open);
+    let in_the_grass = hits_taken(&grassy);
+    assert!(in_the_open >= 5, "the player is shot up standing in the open ({in_the_open} hits)");
+    assert!(
+        in_the_grass * 4 < in_the_open,
+        "and is barely hit standing in tall grass (open {in_the_open}, grass {in_the_grass})"
+    );
+}
+
+#[test]
+fn conceals_is_a_cell_query() {
+    // Cover is a property of the ground a tank stands on. Testing against
+    // the drawn tufts instead would make being hidden depend on which way
+    // the wind was blowing.
+    let cell = cell_to_world(10, 7);
+    assert!(crate::grass::conceals(&[cell], cell), "dead centre of the cell");
+    let half = crate::OBSTACLE_GRID_SIZE / 2.0;
+    assert!(
+        crate::grass::conceals(&[cell], Position::new(cell.x + half - 1.0, cell.y - half + 1.0)),
+        "just inside a corner"
+    );
+    assert!(
+        !crate::grass::conceals(&[cell], Position::new(cell.x + half + 2.0, cell.y)),
+        "just outside the edge"
+    );
+    assert!(!crate::grass::conceals(&[], cell), "a map with no grass conceals nothing");
 }

@@ -111,6 +111,37 @@ a fortress glyph's interior is a solid multi-cell block (mask 1111/32,
 
 ---
 
+## 4. Shading
+
+The ground carries two shading cues, both added 2026-09. They are separate
+mechanisms on purpose, and the reason is worth keeping.
+
+**Wall ambient occlusion — a per-cell tint, baked in `build`.** Cells within
+`ground_wall_shade_cells` of a wall darken by up to `ground_wall_shade`, on a
+smoothstepped *euclidean* falloff (a Chebyshev/box distance gives square
+iso-contours, which show up as rectangular banding). Stored in
+`GroundGrid::tints` and applied by `draw` in place of `Color::WHITE`, so it
+costs no extra draw calls. Baked rather than per-frame because `draw` already
+issues one call per cell over the whole screen, and the field never changes
+during a round — obstacles are only ever removed.
+
+**Screen-edge vignette — four per-pixel gradient bands, `draw_edge_shade`.**
+Drawn immediately after `draw`, so it shades the floor only; tanks and walls
+stand in front of it. `ground_edge_shade` sets the darkness at the very edge
+and `ground_edge_shade_px` how far it reaches inward.
+
+> **Why the vignette is not a cell tint.** It was, first. A tint is flat
+> across a whole 32×32 cell, so on flat-coloured grass any gradient built
+> that way stair-steps at every cell boundary regardless of how smooth the
+> underlying field is. Near a wall that is fine — the steps land *on the wall
+> grid* and read as the edge of a shadow — but out in the open there is
+> nothing for them to align with and it reads as banding. Gradient bands
+> interpolate per pixel and have no such problem. If you ever want a radial
+> vignette rather than four bands, it needs a texture or a shader, not a
+> finer grid.
+
+---
+
 ## 5. Placement (`ground::build`, called from `Game::init`)
 
 Unlike the first version, placement isn't random at all — every road cell

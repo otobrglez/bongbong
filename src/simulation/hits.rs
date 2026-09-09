@@ -52,6 +52,10 @@ pub(crate) struct Terrain {
     obstacles: Vec<TerrainBox>,
     frogs: Vec<(Entity, Position)>,
     walls: [(Position, Position); 4],
+    /// Centres of the map's tall-grass cells (`grass.rs`). Not obstacles:
+    /// they block nothing and are not in the nav grid - they only answer
+    /// `conceals`.
+    grass: Vec<Position>,
 }
 
 fn frog_half() -> Position {
@@ -61,11 +65,14 @@ fn frog_half() -> Position {
 impl Terrain {
     /// Snapshot the world's static terrain. Tiles already flagged
     /// `destroyed` (removed at the end of this frame) are left out.
-    pub fn build(world: &hecs::World, width: f32, height: f32) -> Self {
+    pub fn build(world: &hecs::World, width: f32, height: f32, grass: &[Position]) -> Self {
+        // Trees are left out: they do not seam-close, here or in physics
+        // (`battlefield::tile_half_extent`), so they must not appear as a
+        // neighbour that closes somebody else's seam either.
         let cells: HashSet<(i32, i32)> = world
             .query::<&Obstacle>()
             .iter()
-            .filter(|o| !o.destroyed)
+            .filter(|o| !o.destroyed && !o.material.is_tree())
             .map(|o| battlefield::pos_to_cell(o.position))
             .collect();
         let obstacles = world
@@ -77,7 +84,7 @@ impl Terrain {
                 TerrainBox {
                     entity,
                     center: o.position,
-                    half: battlefield::tile_hull_half_extent(&cells, gx, gy, o.hull_size() * 0.5),
+                    half: battlefield::tile_half_extent(o.material, &cells, gx, gy, o.hull_size() * 0.5),
                     material: o.material,
                     burning: o.burning,
                 }
@@ -92,7 +99,22 @@ impl Terrain {
             obstacles,
             frogs,
             walls: battlefield::wall_rects(width, height),
+            grass: grass.to_vec(),
         }
+    }
+
+    /// Is `p` standing in tall grass?
+    ///
+    /// A point query against the grass *cells*, not against the drawn
+    /// tufts: cover is a property of the ground a tank is on, and testing
+    /// the sprites would make being hidden depend on which way the wind
+    /// happened to be blowing. Deliberately not part of `line_of_sight` -
+    /// grass hides what is *in* it, it does not block sight *through* it.
+    /// A field that blocked sight would cut the map in half for the AI,
+    /// which is exactly what the probe's `never-arrived` detector exists to
+    /// catch.
+    pub fn conceals(&self, p: Position) -> bool {
+        crate::grass::conceals(&self.grass, p)
     }
 
     /// The nearest obstacle tile a shot fired from `from` along `dir` (a

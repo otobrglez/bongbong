@@ -121,7 +121,7 @@ after_render        pending screenshot captured (one frame after arming: the rea
 | tool | params | reply |
 |---|---|---|
 | `status` | - | seed, frame, time, outcome, `mission`, `spawn` (the resolved plan), `intro_seconds_left`, paused, lockstep, tank counts, overlay flags, `map` (name/cells/tanks), history depth |
-| `snapshot` | `detail: compact\|full` | tanks (slot, chassis, x/y, velocity, damage/hp, ammo, weapon, shield, boost, `nearest_ally_px`; `full` adds `ai`), projectiles (cap 64), pickups, frog, `engage` (per enemy: status `engaged\|wreck\|fleeing\|retreating\|out_of_range`, `ring` slot index or null, target x/y, `sticky`; `full` adds the rejection tally and the 16-slot table), `clusters` (live enemies within 90 px, as slot groups) |
+| `snapshot` | `detail: compact\|full` | tanks (slot, chassis, x/y, velocity, damage/hp, ammo, weapon, shield, boost, `ring` (the health ring's opacity, 0..1), `nearest_ally_px`; `full` adds `ai`), projectiles (cap 64), pickups, frog, `engage` (per enemy: status `engaged\|wreck\|fleeing\|retreating\|out_of_range`, `ring` slot index or null, target x/y, `sticky`; `full` adds the rejection tally and the 16-slot table), `clusters` (live enemies within 90 px, as slot groups) |
 | `events` | `since`, `limit`, `kinds`, `exclude` | ring of `{seq, frame, event, ...}` (cap 4096); `kinds`/`exclude` filter by event name |
 | `step` | `frames`, `move_dir`, `face`, `fire`, `fire_every`, `snapshot`, `detail`, `kinds`, `exclude` | frame, time, outcome, restarted, events of the step (filtered like `events`), snapshot |
 | `input` | `move_dir`, `face`, `fire`, `frames`, `cycle_overlays` | override the keyboard for N real-time frames; `cycle_overlays: true` presses the I key once |

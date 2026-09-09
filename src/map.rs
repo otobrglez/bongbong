@@ -57,6 +57,18 @@ pub enum CellObject {
     Sandbag,
     Barrel,
     Fence,
+    /// The two tree species (docs/TREES_SPEC.md). Solid like a prop, but
+    /// drawn from 48px cells so the canopy overhangs the cell it stands
+    /// in; both burn, and a tank can flatten one by driving at it.
+    Tree,
+    Pine,
+    /// Tall grass: cover a tank can sit in. Deliberately **not** solid and
+    /// deliberately not an `Obstacle` - `Game::nav_grid` feeds every
+    /// obstacle into pathfinding with no material filter, so anything that
+    /// is one is impassable to the AI and a wall to `maplint`. Grass you
+    /// drive through has to be its own light entity (see `grass.rs`).
+    #[serde(rename = "tall_grass")]
+    TallGrass,
 }
 
 impl CellObject {
@@ -67,6 +79,8 @@ impl CellObject {
             CellObject::Sandbag => Some(Material::Sandbag),
             CellObject::Barrel => Some(Material::Barrel),
             CellObject::Fence => Some(Material::Fence),
+            CellObject::Tree => Some(Material::Tree),
+            CellObject::Pine => Some(Material::Pine),
             _ => None,
         }
     }
@@ -76,13 +90,15 @@ impl CellObject {
         self.material().is_some()
     }
 
-    /// The cell that places a prop of `material` (`None` for wall
-    /// materials, which are `Wall { material }`).
+    /// The cell that places a standalone solid of `material` - a prop or a
+    /// tree (`None` for wall materials, which are `Wall { material }`).
     pub fn prop(material: Material) -> Option<CellObject> {
         match material {
             Material::Sandbag => Some(CellObject::Sandbag),
             Material::Barrel => Some(CellObject::Barrel),
             Material::Fence => Some(CellObject::Fence),
+            Material::Tree => Some(CellObject::Tree),
+            Material::Pine => Some(CellObject::Pine),
             _ => None,
         }
     }

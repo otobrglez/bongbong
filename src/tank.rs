@@ -426,13 +426,13 @@ pub struct Tank {
     pub fire_cooldown: f32,
     /// Seconds remaining before this tank can take ramming damage again.
     pub ram_cooldown: f32,
-    /// Seconds remaining to show this tank's overhead health bar (see
-    /// `Game::render`) - reset to HEALTH_BAR_OVERHEAD_SECONDS by `mark_hit`
-    /// whenever this tank takes damage (shell, ram, or explosion splash),
-    /// ticked down every frame alongside `fire_cooldown`/`ram_cooldown`
-    /// (`Game::update`), and faded out over the last
-    /// HEALTH_BAR_OVERHEAD_FADE_SECONDS of that window rather than
-    /// vanishing abruptly.
+    /// Seconds left in this tank's hit window: reset to
+    /// `health_ring_hit_seconds` by `mark_hit` whenever it takes damage
+    /// (shell, ram, explosion splash, frog bite), ticked down every frame
+    /// alongside `fire_cooldown`/`ram_cooldown` (`Game::update`). An enemy's
+    /// health ring shows while it runs, fading over the last
+    /// `health_ring_hit_fade_seconds` (`enemy_health_ring_visibility`); the
+    /// player's ring is always on, so for the player this is bookkeeping.
     pub hit_flash_timer: f32,
     /// Seconds spent as a wreck. Once it exceeds WRECK_BURN_SECONDS the fire
     /// dies out and the tank becomes a static charred "dead" hulk.
@@ -543,9 +543,24 @@ impl Tank {
         self.damage >= MAX_DAMAGE
     }
 
+    /// Remaining health as a fraction of `MAX_DAMAGE`, 1 pristine to 0
+    /// wrecked - the one fraction the health ring and the debug snapshot
+    /// read.
+    pub fn health_fraction(&self) -> f32 {
+        (1.0 - self.damage / MAX_DAMAGE).clamp(0.0, 1.0)
+    }
+
     /// True while a rainbow shield is active (see `shield_timer`).
     pub fn is_shielded(&self) -> bool {
         self.shield_timer > 0.0
+    }
+
+    /// How much of a shield's run is left, 0..=1: `shield_timer` over
+    /// `shield_duration_seconds` (what a pickup or a spawn roll sets it to),
+    /// clamped so a timer pushed past the knob still reads as full.
+    pub fn shield_charge(&self) -> f32 {
+        let duration = tuning().shield_duration_seconds;
+        if duration > 0.0 { (self.shield_timer / duration).clamp(0.0, 1.0) } else { 0.0 }
     }
 
     /// The one way damage lands on a tank: adds `amount`, capped at `cap`
@@ -926,10 +941,10 @@ impl Tank {
     }
 
     /// Reset `hit_flash_timer` to full - call whenever this tank takes
-    /// damage (shell, ram, or explosion splash) so its overhead health bar
-    /// shows/refreshes for another HEALTH_BAR_OVERHEAD_SECONDS.
+    /// damage (shell, ram, explosion splash, frog bite) so an enemy's health
+    /// ring shows/refreshes for another `health_ring_hit_seconds`.
     pub fn mark_hit(&mut self) {
-        self.hit_flash_timer = tuning().health_bar_overhead_seconds;
+        self.hit_flash_timer = tuning().health_ring_hit_seconds;
     }
 
     /// Decide this tank's rotation and commanded velocity for one frame.
@@ -1050,22 +1065,85 @@ pub fn draw_tank(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank) {
     );
 }
 
-/// How a tank's ground ring is coloured - the one thing that differs between
-/// the rainbow shield ring and the player's plain white marker. Size,
-/// thickness, breathing, translucency and placement are all shared in
-/// `draw_ground_ring`.
+// Puny Palette entries (tools/punypalette.py) the health gauge draws with -
+// literals rather than a sheet sample, like `fx.rs`'s particle tints, since
+// a ring is drawn, not blitted.
+const GOLD_BRIGHT: Color = Color::new(0xEE, 0xA3, 0x43, 255);
+const RED_BRIGHT: Color = Color::new(0xFF, 0x42, 0x1A, 255);
+const RED_MD: Color = Color::new(0xE4, 0x42, 0x19, 255);
+const RED_DEEP: Color = Color::new(0x9C, 0x35, 0x27, 255);
+const RED_DK: Color = Color::new(0x81, 0x2F, 0x27, 255);
+const RED_DARKEST: Color = Color::new(0x4A, 0x22, 0x21, 255);
+const BLACK: Color = Color::new(0x25, 0x25, 0x25, 255);
+
+/// Where a health gauge's filled arc starts, in raylib degrees: 12 o'clock.
+/// raylib measures from +x and, on a y-down screen, increasing angles run
+/// clockwise, so -90 is straight up and `start + sweep` walks clockwise
+/// round the ring.
+const HEALTH_RING_START_DEG: f32 = -90.0;
+
+/// The four-colour ramp a health gauge steps through, one colour per quarter
+/// of health (`health_ring_step`): brightest above three quarters, darkest at
+/// a quarter or less. Stepped rather than blended so the ring reads as drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HealthRamp {
+    /// White, gold, bright red, deep red: tanks and the player's frog.
+    White,
+    /// Bright red down to the darkest red: the enemy frog, whose ring is red
+    /// at any health so its side still reads.
+    Red,
+}
+
+impl HealthRamp {
+    const WHITE_STEPS: [Color; 4] = [Color::WHITE, GOLD_BRIGHT, RED_BRIGHT, RED_DEEP];
+    const RED_STEPS: [Color; 4] = [RED_BRIGHT, RED_DEEP, RED_DK, RED_DARKEST];
+
+    /// The step colour for `frac` remaining health.
+    pub fn color(self, frac: f32) -> Color {
+        let steps = match self {
+            Self::White => Self::WHITE_STEPS,
+            Self::Red => Self::RED_STEPS,
+        };
+        steps[health_ring_step(frac)]
+    }
+
+    /// The ramp's marker colour - what the missing part of a ring that stays
+    /// a full circle is drawn in, dimmed: white, or the enemy frog's red.
+    pub fn base(self) -> Color {
+        match self {
+            Self::White => Color::WHITE,
+            Self::Red => RED_MD,
+        }
+    }
+}
+
+/// How a ground ring is coloured - the one thing that differs between the
+/// rainbow shield ring, a plain marker and a health gauge. Size, thickness,
+/// breathing, translucency and placement are all shared in
+/// `draw_ground_ring_at`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RingStyle {
     /// Six 60-degree arcs one hue step apart, all cycling through the
-    /// rainbow starting from this hue (degrees), with the arcs rotating
+    /// rainbow starting from `base_hue` (degrees), with the arcs rotating
     /// along with it so the bands visibly travel around the ring; the
-    /// inner disc takes the leading hue.
-    Rainbow { base_hue: f32 },
+    /// inner disc takes the leading hue. A gauge like `Gauge`: `charge` is
+    /// the shield time left (0..=1) and the bands fill that fraction of the
+    /// circle from 12 o'clock clockwise, the rest drawn in `base` (its own
+    /// alpha is its opacity), so the shield can be seen running down.
+    Rainbow { base_hue: f32, charge: f32, base: Color },
     /// One flat colour for both the ring and its inner disc. The colour's
     /// own alpha is the band's opacity (the inner disc takes a quarter of
     /// it) - the shield's translucency is far too faint for a plain colour
     /// to read as itself over grass, so a solid ring chooses its own.
     Solid(Color),
+    /// A health gauge: the band is a donut whose filled arc starts at 12
+    /// o'clock and runs clockwise for `frac` of the circle, in `ramp`'s step
+    /// colour at `player_ring_opacity`; the rest of the circle is drawn in
+    /// `base`, whose own alpha is its opacity, so a marker ring stays a full
+    /// circle while reading as a gauge (and an enemy's gap can be a dark
+    /// band instead). The inner disc takes the step colour at a quarter of
+    /// the band's opacity, as `Solid` does.
+    Gauge { frac: f32, ramp: HealthRamp, base: Color },
 }
 
 /// Draw one translucent ground ring under a tank: a band of radius
@@ -1075,9 +1153,9 @@ pub enum RingStyle {
 /// Called before `draw_tank_shadow`, so it is a ground decal under the whole
 /// tank - the sprite stays crisp and only the part reaching past the hull
 /// shows. Centered on `Tank::ring_position`, the eased follower of the hull,
-/// not the rear-shifted `draw_pivot`. `draw_tank_shield` and
-/// `draw_player_ring` are the two callers; they share every number here so
-/// the two rings read as the same object in different colours.
+/// not the rear-shifted `draw_pivot`. `draw_tank_shield`, `draw_player_ring`
+/// and `draw_enemy_ring` all come through here, so the shield ring and the
+/// health gauges read as the same object in different colours.
 pub fn draw_ground_ring(d: &mut impl RaylibDraw, tank: &Tank, time: f32, style: RingStyle, fade: f32) {
     draw_ground_ring_at(d, tank.ring_position, tank.size(), tank.anim_phase(), time, style, fade);
 }
@@ -1099,12 +1177,12 @@ pub fn draw_ground_ring_at(
         return;
     }
     // Only the rainbow breathes (radius and alpha ride a slow sine); a solid
-    // ring is deliberately static - a plain, steady marker - so it uses the
-    // sine's midpoint as fixed values and reads the same size/opacity on
-    // average as the shield ring.
+    // ring or a gauge is deliberately static - a plain, steady marker - so
+    // it uses the sine's midpoint as fixed values and reads the same
+    // size/opacity on average as the shield ring.
     let pulse = match style {
         RingStyle::Rainbow { .. } => ((time + phase) * std::f32::consts::TAU * 1.5).sin() * 0.5 + 0.5,
-        RingStyle::Solid(_) => 0.5,
+        RingStyle::Solid(_) | RingStyle::Gauge { .. } => 0.5,
     };
     let radius = size * tuning().shield_glow_radius_factor * (0.94 + 0.06 * pulse);
     let thickness = radius * 0.22;
@@ -1112,24 +1190,62 @@ pub fn draw_ground_ring_at(
     let (disc_alpha, band_alpha) = match style {
         RingStyle::Rainbow { .. } => (22.0 + 10.0 * pulse, 95.0 + 30.0 * pulse),
         RingStyle::Solid(color) => (color.a as f32 * 0.25, color.a as f32),
+        RingStyle::Gauge { .. } => {
+            let band = tuning().player_ring_opacity * 255.0;
+            (band * 0.25, band)
+        }
     };
 
     match style {
-        RingStyle::Rainbow { base_hue } => {
+        RingStyle::Rainbow { base_hue, charge, base } => {
             let fill = Color::color_from_hsv(base_hue, 0.6, 1.0);
             d.draw_circle_v(center, radius - thickness, with_alpha(fill, disc_alpha));
+            let sweep = health_ring_sweep(charge);
+            if sweep < 360.0 {
+                let gap = with_alpha(base, base.a as f32);
+                let segments = health_ring_segments(360.0 - sweep);
+                let end = HEALTH_RING_START_DEG + sweep;
+                d.draw_ring(center, radius - thickness, radius, end, HEALTH_RING_START_DEG + 360.0, segments, gap);
+            }
             const ARCS: i32 = 6;
             let step = 360.0 / ARCS as f32;
             for i in 0..ARCS {
                 let hue = (base_hue + i as f32 * step).rem_euclid(360.0);
-                let start = i as f32 * step - base_hue;
                 let color = with_alpha(Color::color_from_hsv(hue, 0.85, 1.0), band_alpha);
-                d.draw_ring(center, radius - thickness, radius, start, start + step, 12, color);
+                // Where this band starts, measured from 12 o'clock clockwise;
+                // the bands travel round the ring with the hue.
+                let from = (i as f32 * step - base_hue - HEALTH_RING_START_DEG).rem_euclid(360.0);
+                for (a, b) in arc_pieces(from, step, sweep) {
+                    if b > a {
+                        let segments = health_ring_segments(b - a);
+                        let (start, end) = (HEALTH_RING_START_DEG + a, HEALTH_RING_START_DEG + b);
+                        d.draw_ring(center, radius - thickness, radius, start, end, segments, color);
+                    }
+                }
             }
         }
         RingStyle::Solid(color) => {
             d.draw_circle_v(center, radius - thickness, with_alpha(color, disc_alpha));
             d.draw_ring(center, radius - thickness, radius, 0.0, 360.0, 48, with_alpha(color, band_alpha));
+        }
+        RingStyle::Gauge { frac, ramp, base } => {
+            let fill = ramp.color(frac);
+            d.draw_circle_v(center, radius - thickness, with_alpha(fill, disc_alpha));
+            let sweep = health_ring_sweep(frac);
+            let end = HEALTH_RING_START_DEG + sweep;
+            // The missing part first and the health arc over it, so the
+            // arc's end cap wins at the seam. raylib draws nothing for a
+            // zero-width arc but mirrors a reversed one, hence the guards.
+            if sweep < 360.0 {
+                let gap = with_alpha(base, base.a as f32);
+                let segments = health_ring_segments(360.0 - sweep);
+                d.draw_ring(center, radius - thickness, radius, end, HEALTH_RING_START_DEG + 360.0, segments, gap);
+            }
+            if sweep > 0.0 {
+                let arc = with_alpha(fill, band_alpha);
+                let segments = health_ring_segments(sweep);
+                d.draw_ring(center, radius - thickness, radius, HEALTH_RING_START_DEG, end, segments, arc);
+            }
         }
     }
 }
@@ -1137,7 +1253,8 @@ pub fn draw_ground_ring_at(
 /// How far into its final fade-out a tank's shield is: 1 while it has more
 /// than `shield_glow_fade_seconds` left, falling to 0 as it expires, 0 when
 /// there is no shield at all. Drives the shield ring's opacity and, inverted,
-/// the player marker's, so the two cross-fade instead of stacking.
+/// the health ring's (`player_health_ring_visibility`,
+/// `enemy_health_ring_visibility`), so the two cross-fade instead of stacking.
 fn shield_visibility(tank: &Tank) -> f32 {
     if !tank.is_shielded() {
         return 0.0;
@@ -1146,29 +1263,120 @@ fn shield_visibility(tank: &Tank) -> f32 {
     if fade_seconds > 0.0 { (tank.shield_timer / fade_seconds).min(1.0) } else { 1.0 }
 }
 
+/// The visible pieces of a ring band that starts `from` degrees past 12
+/// o'clock and runs `len` degrees clockwise, inside a gauge window of
+/// `sweep` degrees from 12 o'clock: the band may wrap past 12 o'clock, so
+/// the second piece is the wrapped remainder. Pieces with `b <= a` are
+/// empty. Degrees are measured from 12 o'clock, not raylib's +x.
+pub fn arc_pieces(from: f32, len: f32, sweep: f32) -> [(f32, f32); 2] {
+    let end = from + len;
+    [(from, end.min(360.0).min(sweep)), (0.0, (end - 360.0).min(sweep))]
+}
+
 /// Draw the rainbow shield ring while `Tank::shield_timer` is running: a
 /// `RingStyle::Rainbow` ground ring whose hue cycles at `shield_glow_hue_hz`
 /// (offset by `anim_phase` so neighbouring tanks don't cycle in lockstep),
-/// fading out over the final `shield_glow_fade_seconds`.
+/// its bands covering the fraction of shield time left
+/// (`Tank::shield_charge`) from 12 o'clock clockwise and the rest drawn as
+/// the tank's health ring draws its missing part - dimmed white for the
+/// player, a dark band for an enemy - so it visibly runs down; fading out
+/// over the final `shield_glow_fade_seconds`.
 pub fn draw_tank_shield(d: &mut impl RaylibDraw, tank: &Tank, time: f32) {
     if tank.is_wreck() {
         return;
     }
     let base_hue = (time * tuning().shield_glow_hue_hz * 360.0 + tank.anim_phase() * 360.0).rem_euclid(360.0);
-    draw_ground_ring(d, tank, time, RingStyle::Rainbow { base_hue }, shield_visibility(tank));
+    let base = match tank.owner() {
+        Owner::Player => with_opacity(Color::WHITE, tuning().player_ring_opacity * tuning().health_ring_base_opacity),
+        Owner::Enemy(_) => with_opacity(BLACK, tuning().health_ring_gap_opacity),
+    };
+    let style = RingStyle::Rainbow { base_hue, charge: tank.shield_charge(), base };
+    draw_ground_ring(d, tank, time, style, shield_visibility(tank));
 }
 
-/// Draw the player's white marker ring: the same ground ring as the shield
-/// (same radius and thickness, minus the breathing), `RingStyle::Solid`
-/// white at `player_ring_opacity`, so the player's own tank is always the
-/// one with a steady halo. Yields to the shield ring while one is up - it fades back in
-/// as the shield fades out - and disappears with the wreck.
-pub fn draw_player_ring(d: &mut impl RaylibDraw, tank: &Tank, time: f32) {
-    if tank.is_wreck() {
-        return;
+/// Which ramp step `frac` (remaining health, 0..=1) falls in: 0 above three
+/// quarters, 1 above half, 2 above a quarter, 3 at or below.
+pub fn health_ring_step(frac: f32) -> usize {
+    if frac > 0.75 {
+        0
+    } else if frac > 0.5 {
+        1
+    } else if frac > 0.25 {
+        2
+    } else {
+        3
     }
-    let white = Color::new(255, 255, 255, (tuning().player_ring_opacity * 255.0).round().clamp(0.0, 255.0) as u8);
-    draw_ground_ring(d, tank, time, RingStyle::Solid(white), 1.0 - shield_visibility(tank));
+}
+
+/// Degrees of ring the filled arc covers for `frac` remaining health.
+pub fn health_ring_sweep(frac: f32) -> f32 {
+    360.0 * frac.clamp(0.0, 1.0)
+}
+
+/// Segments for a `sweep`-degree arc at the full ring's density (48 for the
+/// whole circle, 7.5 degrees each), at least one. Never below raylib's own
+/// one-per-quadrant floor, so the count is never overridden.
+fn health_ring_segments(sweep: f32) -> i32 {
+    ((48.0 * sweep / 360.0).ceil() as i32).max(1)
+}
+
+/// `color` at `opacity` (0..=1).
+pub fn with_opacity(color: Color, opacity: f32) -> Color {
+    Color::new(color.r, color.g, color.b, (opacity * 255.0).round().clamp(0.0, 255.0) as u8)
+}
+
+/// How much of the hit window `Tank::mark_hit` opened is still showing: 1
+/// while more than `health_ring_hit_fade_seconds` of it remain, then down
+/// to 0 as the window closes.
+fn hit_ring_visibility(tank: &Tank) -> f32 {
+    if tank.hit_flash_timer <= 0.0 {
+        return 0.0;
+    }
+    let fade = tuning().health_ring_hit_fade_seconds;
+    if fade > 0.0 { (tank.hit_flash_timer / fade).min(1.0) } else { 1.0 }
+}
+
+/// Opacity factor (0..=1) of the player's health ring: always on, yielding
+/// to the shield ring as that fades in and out; 0 for a wreck.
+pub fn player_health_ring_visibility(tank: &Tank) -> f32 {
+    if tank.is_wreck() { 0.0 } else { 1.0 - shield_visibility(tank) }
+}
+
+/// Opacity factor (0..=1) of an enemy tank's health ring: on for
+/// `health_ring_hit_seconds` after a hit, fading over the last
+/// `health_ring_hit_fade_seconds`, or for as long as its remaining health is
+/// at or below `enemy_health_ring_below`; yields to the shield ring like the
+/// player's; 0 for a wreck.
+pub fn enemy_health_ring_visibility(tank: &Tank) -> f32 {
+    if tank.is_wreck() {
+        return 0.0;
+    }
+    let low = if tank.health_fraction() <= tuning().enemy_health_ring_below { 1.0 } else { 0.0 };
+    hit_ring_visibility(tank).max(low) * (1.0 - shield_visibility(tank))
+}
+
+/// Draw the player's marker ring as its health gauge: the same ground ring
+/// as the shield (same radius and thickness, minus the breathing), the
+/// remaining-health arc in `HealthRamp::White`'s step colour at
+/// `player_ring_opacity` and the rest of the circle still white but dimmed
+/// to `health_ring_base_opacity` of that, so the player's own tank always
+/// has a steady full halo that also reads its health. Yields to the shield
+/// ring while one is up and disappears with the wreck
+/// (`player_health_ring_visibility`).
+pub fn draw_player_ring(d: &mut impl RaylibDraw, tank: &Tank, time: f32) {
+    let base = with_opacity(HealthRamp::White.base(), tuning().player_ring_opacity * tuning().health_ring_base_opacity);
+    let style = RingStyle::Gauge { frac: tank.health_fraction(), ramp: HealthRamp::White, base };
+    draw_ground_ring(d, tank, time, style, player_health_ring_visibility(tank));
+}
+
+/// Draw an enemy's health ring: the player's gauge with its missing part a
+/// dark band at `health_ring_gap_opacity` instead of dimmed white, so even a
+/// nearly full enemy ring never passes for the player's marker. Shown per
+/// `enemy_health_ring_visibility` - after a hit, or for good once low.
+pub fn draw_enemy_ring(d: &mut impl RaylibDraw, tank: &Tank, time: f32) {
+    let base = with_opacity(BLACK, tuning().health_ring_gap_opacity);
+    let style = RingStyle::Gauge { frac: tank.health_fraction(), ramp: HealthRamp::White, base };
+    draw_ground_ring(d, tank, time, style, enemy_health_ring_visibility(tank));
 }
 
 /// Draw this tank's drop shadow: the same two layers (each at its own eased
@@ -1373,6 +1581,156 @@ mod shield_tests {
         assert!(!tank.is_wreck());
         tank.take_damage(1000.0, MAX_DAMAGE);
         assert!(tank.is_wreck());
+    }
+}
+
+#[cfg(test)]
+mod shield_ring_tests {
+    use super::*;
+
+    #[test]
+    fn shield_charge_is_the_fraction_of_the_duration_left() {
+        let duration = tuning().shield_duration_seconds;
+        let with = |shield_timer: f32| Tank { shield_timer, ..Tank::default() }.shield_charge();
+        assert_eq!(with(duration), 1.0);
+        assert!((with(duration / 4.0) - 0.25).abs() < 1e-5);
+        assert_eq!(with(duration * 3.0), 1.0, "a timer pushed past the knob still reads as full");
+        assert_eq!(with(0.0), 0.0);
+    }
+
+    /// Degrees a band's pieces cover once empty pieces are dropped.
+    fn covered(pieces: [(f32, f32); 2]) -> f32 {
+        pieces.iter().map(|&(a, b)| (b - a).max(0.0)).sum()
+    }
+
+    #[test]
+    fn a_band_inside_a_full_window_is_drawn_whole() {
+        let pieces = arc_pieces(30.0, 60.0, 360.0);
+        assert_eq!(pieces[0], (30.0, 90.0));
+        assert!(pieces[1].1 <= pieces[1].0, "nothing wrapped");
+        assert_eq!(covered(pieces), 60.0);
+    }
+
+    #[test]
+    fn a_band_straddling_twelve_o_clock_splits_and_still_covers_its_length() {
+        let pieces = arc_pieces(330.0, 60.0, 360.0);
+        assert_eq!(pieces[0], (330.0, 360.0));
+        assert_eq!(pieces[1], (0.0, 30.0));
+        assert_eq!(covered(pieces), 60.0);
+    }
+
+    #[test]
+    fn bands_are_clipped_to_the_charge_window() {
+        // Window of 45 degrees: a band starting at 30 keeps 15 of them ...
+        assert_eq!(covered(arc_pieces(30.0, 60.0, 45.0)), 15.0);
+        // ... a band past the window shows nothing ...
+        assert_eq!(covered(arc_pieces(90.0, 60.0, 45.0)), 0.0);
+        // ... and a wrapped band keeps only its wrapped start.
+        assert_eq!(arc_pieces(330.0, 60.0, 20.0)[1], (0.0, 20.0));
+        assert_eq!(covered(arc_pieces(330.0, 60.0, 20.0)), 20.0);
+        // An empty window draws nothing at all.
+        assert_eq!(covered(arc_pieces(0.0, 60.0, 0.0)), 0.0);
+    }
+
+    #[test]
+    fn six_bands_cover_exactly_the_window() {
+        for sweep in [0.0, 45.0, 180.0, 270.0, 360.0] {
+            for base_hue in [0.0, 17.0, 200.0, 359.0] {
+                let total: f32 = (0..6)
+                    .map(|i| {
+                        let from = (i as f32 * 60.0 - base_hue - HEALTH_RING_START_DEG).rem_euclid(360.0);
+                        covered(arc_pieces(from, 60.0, sweep))
+                    })
+                    .sum();
+                assert!((total - sweep).abs() < 1e-3, "sweep {sweep} hue {base_hue}: covered {total}");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod health_ring_tests {
+    use super::*;
+
+    fn enemy(damage: f32, hit_flash_timer: f32) -> Tank {
+        Tank { owner_slot: 1, damage, hit_flash_timer, ..Tank::default() }
+    }
+
+    #[test]
+    fn ramp_steps_by_quarter() {
+        assert_eq!(health_ring_step(1.0), 0);
+        assert_eq!(health_ring_step(0.76), 0);
+        assert_eq!(health_ring_step(0.75), 1);
+        assert_eq!(health_ring_step(0.51), 1);
+        assert_eq!(health_ring_step(0.5), 2);
+        assert_eq!(health_ring_step(0.26), 2);
+        assert_eq!(health_ring_step(0.25), 3);
+        assert_eq!(health_ring_step(0.0), 3);
+    }
+
+    #[test]
+    fn sweep_is_proportional_and_clamped() {
+        assert_eq!(health_ring_sweep(1.0), 360.0);
+        assert!((health_ring_sweep(0.4) - 144.0).abs() < 1e-3);
+        assert_eq!(health_ring_sweep(0.0), 0.0);
+        assert_eq!(health_ring_sweep(1.5), 360.0);
+        assert_eq!(health_ring_sweep(-1.0), 0.0);
+    }
+
+    #[test]
+    fn segments_keep_the_full_ring_density() {
+        assert_eq!(health_ring_segments(360.0), 48);
+        for sweep in [1.0, 7.5, 90.0, 144.0] {
+            let segments = health_ring_segments(sweep);
+            assert!(segments >= 1);
+            assert!(segments >= (sweep / 90.0).ceil() as i32, "raylib's per-quadrant floor at {sweep} deg");
+        }
+    }
+
+    #[test]
+    fn health_fraction_counts_down_from_pristine() {
+        assert_eq!(Tank::default().health_fraction(), 1.0);
+        assert!((Tank { damage: 60.0, ..Tank::default() }.health_fraction() - 0.4).abs() < 1e-5);
+        assert_eq!(Tank { damage: MAX_DAMAGE + 50.0, ..Tank::default() }.health_fraction(), 0.0);
+    }
+
+    #[test]
+    fn enemy_ring_shows_for_the_hit_window_then_fades() {
+        let (window, fade) = {
+            let t = tuning();
+            (t.health_ring_hit_seconds, t.health_ring_hit_fade_seconds)
+        };
+        assert_eq!(enemy_health_ring_visibility(&enemy(10.0, window)), 1.0);
+        assert!((enemy_health_ring_visibility(&enemy(10.0, fade / 2.0)) - 0.5).abs() < 1e-5);
+        assert_eq!(enemy_health_ring_visibility(&enemy(10.0, 0.0)), 0.0);
+    }
+
+    #[test]
+    fn enemy_ring_stays_on_once_low_whatever_the_timer() {
+        let low_damage = (1.0 - tuning().enemy_health_ring_below) * MAX_DAMAGE;
+        assert_eq!(enemy_health_ring_visibility(&enemy(low_damage, 0.0)), 1.0);
+        assert_eq!(enemy_health_ring_visibility(&enemy(low_damage - 1.0, 0.0)), 0.0);
+    }
+
+    #[test]
+    fn no_ring_on_a_wreck() {
+        assert_eq!(enemy_health_ring_visibility(&enemy(MAX_DAMAGE, 3.0)), 0.0);
+        assert_eq!(player_health_ring_visibility(&Tank { damage: MAX_DAMAGE, ..Tank::default() }), 0.0);
+    }
+
+    #[test]
+    fn rings_yield_to_the_shield() {
+        let fade = tuning().shield_glow_fade_seconds;
+        assert_eq!(enemy_health_ring_visibility(&Tank { shield_timer: fade * 2.0, ..enemy(60.0, 3.0) }), 0.0);
+        assert_eq!(player_health_ring_visibility(&Tank { shield_timer: fade * 2.0, ..Tank::default() }), 0.0);
+        let dropping = Tank { shield_timer: fade / 2.0, ..Tank::default() };
+        assert!((player_health_ring_visibility(&dropping) - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn player_ring_is_always_on_until_the_wreck() {
+        assert_eq!(player_health_ring_visibility(&Tank::default()), 1.0);
+        assert_eq!(player_health_ring_visibility(&Tank { damage: 99.0, ..Tank::default() }), 1.0);
     }
 }
 

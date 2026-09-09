@@ -20,6 +20,7 @@ use crate::{
     EDITOR_ICON_GAP,
     EDITOR_ICON_SIZE,
     EDITOR_PALETTE_BOTTOM_MARGIN,
+    EDITOR_PALETTE_SIDE_MARGIN,
     EDITOR_PANEL_BORDER_OPACITY,
     EDITOR_PANEL_BORDER_THICKNESS,
     EDITOR_PANEL_FILL,
@@ -44,6 +45,8 @@ pub struct EditorTextures<'a> {
     /// The props sheet (`obstacle::Sheet::Props`).
     pub props: &'a Texture2D,
     pub ground: &'a Texture2D,
+    /// static/nature_sheet.png - tall grass (`grass.rs`).
+    pub grass: &'a Texture2D,
     pub frog_idle: &'a Texture2D,
     pub pickup_health: &'a Texture2D,
     pub pickup_ammo: &'a Texture2D,
@@ -54,6 +57,7 @@ pub struct EditorTextures<'a> {
     pub pickup_shield: &'a Texture2D,
     pub eraser: &'a Texture2D,
     pub tanks: &'a Texture2D,
+    pub trees: &'a Texture2D,
 }
 
 /// One palette tool - what a grid click currently does. Order here is the
@@ -61,8 +65,10 @@ pub struct EditorTextures<'a> {
 #[derive(Clone, Copy, PartialEq)]
 enum Tool {
     Wall(Material),
-    /// A destructible prop (`Material::Sandbag`/`Barrel`/`Fence`) - any
-    /// number, variant rolled per tile when the round spawns.
+    /// A destructible standalone solid: one of the three props
+    /// (`Material::Sandbag`/`Barrel`/`Fence`) or one of the two tree
+    /// species (`Material::Tree`/`Pine`). Any number, variant rolled per
+    /// tile when the round spawns.
     Prop(Material),
     Road,
     Frog,
@@ -74,10 +80,13 @@ enum Tool {
     /// linter's `gate-not-on-edge` catches one placed elsewhere).
     Gate,
     Pickup(PickupKind),
+    /// Tall grass: cover, not terrain. Any number of cells; not solid, so
+    /// it never blocks movement or pathfinding (see `grass.rs`).
+    TallGrass,
     Eraser,
 }
 
-const TOOLS: [Tool; 20] = [
+const TOOLS: [Tool; 23] = [
     Tool::Wall(Material::Brick),
     Tool::Wall(Material::Iron),
     Tool::Wall(Material::Wood),
@@ -85,6 +94,8 @@ const TOOLS: [Tool; 20] = [
     Tool::Prop(Material::Sandbag),
     Tool::Prop(Material::Barrel),
     Tool::Prop(Material::Fence),
+    Tool::Prop(Material::Tree),
+    Tool::Prop(Material::Pine),
     Tool::Road,
     Tool::Frog,
     Tool::Start,
@@ -97,6 +108,7 @@ const TOOLS: [Tool; 20] = [
     Tool::Pickup(PickupKind::Plasma),
     Tool::Pickup(PickupKind::SpeedUp),
     Tool::Pickup(PickupKind::Shield),
+    Tool::TallGrass,
     Tool::Eraser,
 ];
 
@@ -182,7 +194,15 @@ impl MapEditor {
             .filter(|(_, _, obj)| matches!(obj, CellObject::Wall { .. } | CellObject::Road))
             .map(|(col, row, _)| map::cell_to_world(col, row))
             .collect();
-        self.ground = ground::build(width, height, self.ground_seed, &road_cells);
+        // Walls separately as well, for the baked shading around them - the
+        // editor should show the floor the way the game will.
+        let wall_cells: Vec<Position> = self
+            .map
+            .iter_cells()
+            .filter(|(_, _, obj)| matches!(obj, CellObject::Wall { .. }))
+            .map(|(col, row, _)| map::cell_to_world(col, row))
+            .collect();
+        self.ground = ground::build(width, height, self.ground_seed, &road_cells, &wall_cells);
     }
 
     fn hamburger_rect() -> Rectangle {
@@ -210,18 +230,38 @@ impl MapEditor {
         )
     }
 
+    /// How many icons the palette puts in a row.
+    ///
+    /// One row for as long as one row fits the screen; past that it wraps
+    /// into the fewest rows that do fit, balanced so the last row is not a
+    /// lone straggler. The screen width is the real constraint here - the
+    /// panel is centred, so an icon that does not fit is an icon that is
+    /// half off the display and cannot be clicked.
+    fn palette_columns(width: f32) -> usize {
+        let n = TOOLS.len();
+        let usable = width - EDITOR_PALETTE_SIDE_MARGIN * 2.0 - EDITOR_PANEL_PADDING * 2.0 + EDITOR_ICON_GAP;
+        let per_row = (usable / (EDITOR_ICON_SIZE + EDITOR_ICON_GAP)).floor().max(1.0) as usize;
+        if per_row >= n {
+            return n;
+        }
+        n.div_ceil(n.div_ceil(per_row))
+    }
+
     fn palette_panel_rect(width: f32, height: f32) -> Rectangle {
         let n = TOOLS.len() as f32;
-        let w = EDITOR_PANEL_PADDING * 2.0 + n * EDITOR_ICON_SIZE + (n - 1.0) * EDITOR_ICON_GAP;
-        let h = EDITOR_PANEL_PADDING * 2.0 + EDITOR_ICON_SIZE;
+        let cols = Self::palette_columns(width) as f32;
+        let rows = (n / cols).ceil();
+        let w = EDITOR_PANEL_PADDING * 2.0 + cols * EDITOR_ICON_SIZE + (cols - 1.0) * EDITOR_ICON_GAP;
+        let h = EDITOR_PANEL_PADDING * 2.0 + rows * EDITOR_ICON_SIZE + (rows - 1.0) * EDITOR_ICON_GAP;
         Rectangle::new((width - w) / 2.0, height - EDITOR_PALETTE_BOTTOM_MARGIN - h, w, h)
     }
 
     fn palette_icon_rect(width: f32, height: f32, index: usize) -> Rectangle {
         let panel = Self::palette_panel_rect(width, height);
+        let cols = Self::palette_columns(width);
         Rectangle::new(
-            panel.x + EDITOR_PANEL_PADDING + index as f32 * (EDITOR_ICON_SIZE + EDITOR_ICON_GAP),
-            panel.y + EDITOR_PANEL_PADDING,
+            panel.x + EDITOR_PANEL_PADDING + (index % cols) as f32 * (EDITOR_ICON_SIZE + EDITOR_ICON_GAP),
+            panel.y + EDITOR_PANEL_PADDING + (index / cols) as f32 * (EDITOR_ICON_SIZE + EDITOR_ICON_GAP),
             EDITOR_ICON_SIZE,
             EDITOR_ICON_SIZE,
         )
@@ -420,7 +460,7 @@ impl MapEditor {
         match self.active_tool {
             Tool::Wall(material) => self.map.set_cell(col, row, CellObject::Wall { material }),
             Tool::Prop(material) => {
-                let cell = CellObject::prop(material).expect("Tool::Prop only carries prop materials");
+                let cell = CellObject::prop(material).expect("Tool::Prop only carries prop and tree materials");
                 self.map.set_cell(col, row, cell)
             }
             Tool::Road => self.map.set_cell(col, row, CellObject::Road),
@@ -444,6 +484,7 @@ impl MapEditor {
             }
             Tool::Gate => self.map.set_cell(col, row, CellObject::Gate),
             Tool::Pickup(pickup) => self.map.set_cell(col, row, CellObject::Pickup { pickup }),
+            Tool::TallGrass => self.map.set_cell(col, row, CellObject::TallGrass),
             Tool::Eraser => self.map.clear_cell(col, row),
         }
         self.rebuild_ground(width, height);
@@ -477,7 +518,36 @@ impl MapEditor {
                     let (sheet, src) = obstacle::icon_source_rec(material);
                     d.draw_texture_pro(sheet_texture(textures, sheet), src, dest, origin, 0.0, Color::WHITE);
                 }
+                CellObject::Tree | CellObject::Pine => {
+                    // Drawn at the sprite's own 48px, not the 32px cell, so
+                    // the editor shows the canopy overhang a round will
+                    // actually draw - a grove looks the same here as there.
+                    let material = obj.material().expect("tree cells have a material");
+                    let (sheet, src) = obstacle::icon_source_rec(material);
+                    let big = crate::TREE_TEXTURE_SIZE;
+                    let dest = Rectangle::new(pos.x, pos.y, big, big);
+                    let origin = Vector2::new(big / 2.0, big / 2.0);
+                    d.draw_texture_pro(sheet_texture(textures, sheet), src, dest, origin, 0.0, Color::WHITE);
+                }
                 CellObject::Road => {} // already painted into `self.ground`
+                CellObject::TallGrass => {
+                    // The round scatters several hashed tufts per cell; the
+                    // editor draws one centred, which is enough to see the
+                    // cell is grassed without pretending to preview the
+                    // exact scatter.
+                    let cell = crate::GRASS_TEXTURE_SIZE;
+                    let src = Rectangle::new(0.0, 0.0, cell, cell);
+                    let scale = cell * crate::tuning::tuning().grass_scale;
+                    let at = Rectangle::new(pos.x, pos.y + size / 2.0, scale, scale);
+                    d.draw_texture_pro(
+                        textures.grass,
+                        src,
+                        at,
+                        Vector2::new(scale / 2.0, scale),
+                        0.0,
+                        Color::WHITE,
+                    );
+                }
                 CellObject::Frog => {
                     let src = Rectangle::new(0.0, 0.0, crate::FROG_TEXTURE_SIZE, crate::FROG_TEXTURE_SIZE);
                     d.draw_texture_pro(textures.frog_idle, src, dest, origin, 0.0, Color::WHITE);
@@ -704,6 +774,15 @@ fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, tool: Tool
             let center = Position::new(dest.x + dest.width / 2.0, dest.y + dest.height / 2.0);
             draw_gate_chevron(d, center, dest.width, Position::new(1.0, 0.0));
         }
+        Tool::TallGrass => {
+            // One tuft from the nature sheet, drawn on a patch of the
+            // ground green so the icon reads as grass-on-grass rather than
+            // as a few loose pixels on the panel.
+            d.draw_rectangle_rounded(dest, 0.15, EDITOR_PANEL_SEGMENTS, Color::new(97, 149, 65, 255));
+            let cell = crate::GRASS_TEXTURE_SIZE;
+            let src = Rectangle::new(0.0, 0.0, cell, cell);
+            d.draw_texture_pro(textures.grass, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+        }
         Tool::Pickup(pickup) => {
             let texture = match pickup {
                 PickupKind::Health => textures.pickup_health,
@@ -735,6 +814,7 @@ fn sheet_texture<'a>(textures: &EditorTextures<'a>, sheet: obstacle::Sheet) -> &
     match sheet {
         obstacle::Sheet::Walls => textures.obstacles,
         obstacle::Sheet::Props => textures.props,
+        obstacle::Sheet::Trees => textures.trees,
     }
 }
 
@@ -849,11 +929,25 @@ mod editor_tests {
         assert_eq!(gate_inward(at(20, 11), w, h), None);
     }
 
-    /// Twenty icons must still fit inside the default battlefield width.
+    /// Every icon must fit inside the default battlefield width and be
+    /// reachable by a click.
+    ///
+    /// The palette wraps now (`palette_columns`), so growing the tool list
+    /// can no longer push icons off the screen - but it can quietly turn
+    /// the palette into a wall of rows over the battlefield. The row-count
+    /// assertion is the canary: three rows is the point to rethink the
+    /// layout rather than let it keep growing.
     #[test]
     fn palette_fits_the_default_battlefield_width() {
-        let panel = MapEditor::palette_panel_rect(DEFAULT_SCREEN_WIDTH as f32, DEFAULT_SCREEN_HEIGHT as f32);
-        assert!(panel.x >= 0.0 && panel.x + panel.width <= DEFAULT_SCREEN_WIDTH as f32);
-        assert_eq!(TOOLS.len(), 20);
+        let (w, h) = (DEFAULT_SCREEN_WIDTH as f32, DEFAULT_SCREEN_HEIGHT as f32);
+        let panel = MapEditor::palette_panel_rect(w, h);
+        assert!(panel.x >= 0.0 && panel.x + panel.width <= w);
+        let cols = MapEditor::palette_columns(w);
+        assert!(TOOLS.len().div_ceil(cols) <= 2, "palette wrapped past two rows");
+        for i in 0..TOOLS.len() {
+            let icon = MapEditor::palette_icon_rect(w, h, i);
+            assert!(icon.x >= panel.x && icon.x + icon.width <= panel.x + panel.width);
+            assert!(icon.y >= panel.y && icon.y + icon.height <= panel.y + panel.height);
+        }
     }
 }
