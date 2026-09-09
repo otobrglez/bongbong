@@ -6,7 +6,12 @@
     <meta charset="utf-8"/>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
     <link rel="icon" href="/favicon.ico"/>
-    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <!-- viewport-fit=cover so the immersive mode can reach under a notch;
+         no user scaling because pinch-zoom fights tap-to-move. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no"/>
+    <meta name="mobile-web-app-capable" content="yes"/>
+    <meta name="apple-mobile-web-app-capable" content="yes"/>
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
     <title>BongBong!</title>
     <style lang="scss">
       $font-size: 10pt;
@@ -41,13 +46,17 @@
 
         .game {
           position: relative;
+          /* One source of truth for the canvas width: the overlay controls
+             have to sit on the canvas's own edges, and the canvas is
+             centred, so they all need the same expression. */
+          --canvas-w: min(100vw, 1280px, calc((100vh - 90px) * 16 / 9));
 
           /* Sits in the canvas's top-right corner: the canvas is centered in
              .game, so its right edge is half the leftover width in from ours. */
           .subscribe-link {
             position: absolute;
             top: 8px;
-            right: calc((100% - min(100vw, 1280px)) / 2 + 10px);
+            right: calc((100% - var(--canvas-w)) / 2 + 10px);
             z-index: 1;
             padding: 3px 8px;
             border-radius: 3px;
@@ -65,15 +74,77 @@
 
           canvas {
             display: block;
-            width: min(100vw, 1280px);
-            height: min(100vh, 720px);
-            object-fit: contain;
+            /* The box has to keep the render target's own 16:9, not just be
+               capped on each axis independently.
+
+               `object-fit: contain` does letterbox a canvas whose box is a
+               different shape - verified in the browser - and raylib maps a
+               touch by dividing by the CSS *box*, not by the letterboxed
+               band inside it (see rcore_web.c's EmscriptenTouchCallback).
+               So a 390x720 box on a phone would put the picture in a ~219px
+               band with ~250px bars, while taps were still measured against
+               the full 720: every tap landed in the wrong place vertically.
+               Sizing the box 16:9 means the bitmap always fills it exactly
+               and raylib's normalisation is right by construction. */
+            width: var(--canvas-w);
+            aspect-ratio: 16 / 9;
+            height: auto;
             outline: none;
+            /* A tap-to-move game cannot let the browser claim drags for
+               scrolling or pinch-zoom. */
+            touch-action: none;
             -webkit-tap-highlight-color: transparent;
             -webkit-user-select: none;
             -moz-user-select: none;
             user-select: none;
             image-rendering: pixelated;
+          }
+
+          /* Immersive mode. `requestFullscreen` covers desktop, Android and
+             iPadOS; Safari on iPhone has no element Fullscreen API at all,
+             so the same button falls back to this class, which reclaims
+             everything except the browser's own chrome. */
+          &.immersive {
+            position: fixed;
+            inset: 0;
+            z-index: 100;
+            justify-content: center;
+            background: #000;
+            padding: env(safe-area-inset-top) env(safe-area-inset-right)
+                     env(safe-area-inset-bottom) env(safe-area-inset-left);
+
+            --canvas-w: min(100vw, 1280px, calc(100vh * 16 / 9));
+            .instructions, .tuning { display: none; }
+          }
+
+          /* Same treatment for real fullscreen, where the .game element is
+             the fullscreen root. */
+          &:fullscreen {
+            justify-content: center;
+            background: #000;
+
+            --canvas-w: min(100vw, 1280px, calc(100vh * 16 / 9));
+            .instructions, .tuning { display: none; }
+          }
+
+          /* Top *right*, under the subscribe link: the game draws its own
+             SHELLS/HP readout in the top-left corner and the version in the
+             bottom-right, so this is the one corner nothing fights over. */
+          .fullscreen-toggle {
+            position: absolute;
+            top: 34px;
+            right: calc((100% - var(--canvas-w)) / 2 + 10px);
+            z-index: 2;
+            padding: 3px 9px;
+            border-radius: 3px;
+            border: 0;
+            background: rgba(46, 46, 46, 0.75);
+            color: #ddd;
+            font-family: sans-serif;
+            font-size: $font-size;
+            cursor: pointer;
+
+            &:hover, &:focus-visible { color: #fff; background: rgba(46, 46, 46, 0.95); }
           }
 
           .instructions {
@@ -240,6 +311,8 @@
 <div class="wrapper">
     <div class="game">
         <a class="subscribe-link" href="/subscribe">Subscribe for updates.</a>
+        <button class="fullscreen-toggle" id="fullscreen-toggle" type="button"
+                title="Play full screen">&#9974; Full screen</button>
         <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
         <div class="instructions">
             <p>Use arrow keys to move the tank. <kbd>Space</kbd> to fire and <kbd>r</kbd> to restart the game.</p>
@@ -602,6 +675,57 @@
             if (previous) previous();
             try { init(); } catch (e) { console.error("tuning panel:", e); }
         };
+    })();
+</script>
+<script is:inline>
+    // Full-screen toggle. Two mechanisms because there is no one that works
+    // everywhere: `requestFullscreen` on desktop, Android and iPadOS, and a
+    // CSS `.immersive` class for Safari on iPhone, which has no element
+    // Fullscreen API at all (only <video> can go fullscreen there). The
+    // class reclaims the page furniture and the address bar's worth of
+    // space, which is most of what a phone has to give.
+    (function () {
+        var game = document.querySelector(".game");
+        var canvas = document.getElementById("canvas");
+        var button = document.getElementById("fullscreen-toggle");
+        if (!game || !button) return;
+        var request = game.requestFullscreen || game.webkitRequestFullscreen;
+        var exit = document.exitFullscreen || document.webkitExitFullscreen;
+
+        function active() {
+            return !!(document.fullscreenElement || document.webkitFullscreenElement)
+                || game.classList.contains("immersive");
+        }
+        function label() {
+            button.innerHTML = active() ? "&#9974; Exit full screen" : "&#9974; Full screen";
+        }
+        button.addEventListener("click", function (e) {
+            // Never let the toggle double as a game tap.
+            e.preventDefault();
+            e.stopPropagation();
+            if (active()) {
+                if (document.fullscreenElement || document.webkitFullscreenElement) {
+                    exit.call(document);
+                }
+                game.classList.remove("immersive");
+            } else if (request) {
+                // The rejection is async, so the label has to be refreshed
+                // from inside the handlers rather than straight after -
+                // otherwise the fallback lands after the button has already
+                // been relabelled from the old state.
+                request.call(game).then(label, function () {
+                    game.classList.add("immersive");
+                    label();
+                });
+            } else {
+                game.classList.add("immersive");
+            }
+            label();
+            if (canvas) canvas.focus();
+        });
+        document.addEventListener("fullscreenchange", label);
+        document.addEventListener("webkitfullscreenchange", label);
+        label();
     })();
 </script>
 <script is:inline src="/game/bongbong.js"></script>
