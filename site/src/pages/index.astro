@@ -226,26 +226,6 @@
             &:hover, &:focus-visible { color: #fff; background: rgba(46, 46, 46, 0.95); }
           }
 
-          /* Shown only when the CSS fallback was all we could manage and the
-             page is not already running standalone - see the toggle script. */
-          .fullscreen-hint {
-            position: absolute;
-            bottom: 8px;
-            left: 50%;
-            transform: translateX(-50%);
-            z-index: 2;
-            max-width: min(90%, 460px);
-            margin: 0;
-            padding: 6px 10px;
-            border-radius: 3px;
-            background: rgba(46, 46, 46, 0.85);
-            color: #ddd;
-            text-align: center;
-            font-size: $font-size;
-
-            strong { color: #fff; }
-          }
-
           .instructions {
             text-align: center;
             font-size: $font-size;
@@ -412,10 +392,6 @@
         <a class="subscribe-link" href="/subscribe">Subscribe for updates.</a>
         <button class="fullscreen-toggle" id="fullscreen-toggle" type="button"
                 title="Play full screen">&#9974; Full screen</button>
-        <p class="fullscreen-hint" id="fullscreen-hint" hidden>
-            This browser will not let a page hide its address bar. For a
-            chrome-free window, use <strong>Share &rarr; Add to Home Screen</strong>&nbsp;and launch it from there.
-        </p>
         <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
         <!-- Shown from the very first byte of HTML and torn down by the
              loader script below. The wasm and its preloaded `static/` data
@@ -863,19 +839,17 @@
     //      This takes the whole viewport but *cannot* hide Safari's URL bar;
     //      no page can. It is a platform restriction, not a bug.
     //   3. Add to Home Screen - the only way to get a chrome-free window on
-    //      an iPhone. `apple-mobile-web-app-capable` in the head makes the
-    //      launched app run standalone, so the hint below points at it
-    //      whenever we had to settle for (2).
+    //      an iPhone; `apple-mobile-web-app-capable` in the head makes the
+    //      launched app run standalone. Deliberately not advertised on the
+    //      page: it is a wall of text over the game explaining a platform
+    //      limitation the player cannot do anything about mid-round.
     (function () {
         var game = document.querySelector(".game");
         var canvas = document.getElementById("canvas");
         var button = document.getElementById("fullscreen-toggle");
-        var hint = document.getElementById("fullscreen-hint");
         if (!game || !button) return;
         var request = game.requestFullscreen || game.webkitRequestFullscreen;
         var exit = document.exitFullscreen || document.webkitExitFullscreen;
-        var standalone = window.navigator.standalone === true
-            || (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
 
         function real() {
             return !!(document.fullscreenElement || document.webkitFullscreenElement);
@@ -885,11 +859,6 @@
         }
         function label() {
             button.innerHTML = active() ? "&#9974; Exit full screen" : "&#9974; Full screen";
-            if (hint) {
-                // Only worth saying when we settled for the CSS fallback and
-                // there is actually somewhere better to go.
-                hint.hidden = !(active() && !real() && !standalone);
-            }
         }
         function fallback() {
             game.classList.add("immersive");
