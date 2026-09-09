@@ -242,3 +242,99 @@ fn the_order_ring_tracks_whether_an_order_is_running() {
     step(&mut game, tap(enemy));
     assert_eq!(game.orders.ring_engage(), Some(true), "an engagement shows the hot ring");
 }
+
+/// **Most taps have to do something.** This is the regression test for the
+/// bug that shipped in the first cut: `resolve_tap` snapped a move to the
+/// nearest *usable* cell rather than the nearest *reachable* one, so on the
+/// shipped map 81% of taps on open ground produced no route and the tank
+/// simply stood there. A player on a touchscreen has no other way to move.
+///
+/// Measured statically - resolve every cell of `maps/default.toml` and ask
+/// whether the order is actionable - because stepping the game between taps
+/// lets enemies move and pickups get collected, which makes the number
+/// drift by twenty points depending on iteration order.
+#[test]
+fn almost_every_tap_on_the_shipped_map_produces_an_actionable_order() {
+    let mut game = Game::default();
+    game.enemy_count_override = Some(4);
+    game.seed_override = Some(99);
+    let text = std::fs::read_to_string("maps/default.toml").expect("the shipped map");
+    let map = MapFile::from_toml_str(&text).expect("it parses");
+    let solid: std::collections::HashSet<(i32, i32)> =
+        map.iter_cells().filter(|(_, _, o)| o.is_solid()).map(|(c, r, _)| (c, r)).collect();
+    game.map = map;
+    game.init(W, H);
+    let me = player_at(&game);
+    let grid = game.nav_grid(W, H);
+    let comps = grid.components();
+    let arrive = tuning().order_arrive_px;
+
+    let mut counts = [[0usize; 2]; 2]; // [is_solid][actionable]
+    for gx in 1..40 {
+        for gy in 1..22 {
+            let at = cell_to_world(gx, gy);
+            let actionable = match game.resolve_tap(at, &grid, &comps) {
+                None => false,
+                // A move is actionable unless we are already standing there.
+                Some(Order::Move { to }) => me.distance_to(to) > arrive,
+                // Engage and Collect both approach best-effort, so they are
+                // actionable whenever they resolve at all.
+                Some(_) => true,
+            };
+            counts[solid.contains(&(gx, gy)) as usize][actionable as usize] += 1;
+        }
+    }
+    let pct = |c: [usize; 2]| 100.0 * c[1] as f32 / (c[0] + c[1]).max(1) as f32;
+    let (open, solid_pct) = (pct(counts[0]), pct(counts[1]));
+    println!("open {open:.0}% actionable, solid {solid_pct:.0}%");
+    assert!(open >= 90.0, "only {open:.0}% of taps on open ground do anything (was 19% before the fix)");
+    assert!(solid_pct >= 70.0, "only {solid_pct:.0}% of taps on solid tiles do anything (was 31% before the fix)");
+}
+
+/// "Move in that direction", which is what a tap across an impassable
+/// barrier has to mean. Requiring a route to the exact point made such a
+/// tap do nothing at all; it now heads for the closest reachable point on
+/// this side, which is the same gesture from the player's end.
+#[test]
+fn a_tap_behind_an_impassable_wall_still_moves_you_toward_it() {
+    let mut wall = String::new();
+    for r in 1..22 {
+        wall.push_str(&format!("cells.\"24,{r}\" = {{ kind = \"wall\", material = \"iron\" }}\n"));
+    }
+    let mut game = game_on(&map_with(&wall), 12);
+    let start = cell_to_world(10, 11);
+    let beyond = cell_to_world(34, 11); // the far side of an unbroken iron wall
+    game.debug_teleport(0, start, Some(0.0)).unwrap();
+    step(&mut game, tap(beyond));
+    assert!(game.orders.is_active(), "the tap is not simply discarded");
+
+    for _ in 0..900 {
+        step(&mut game, Input::default());
+        if !game.orders.is_active() {
+            break;
+        }
+    }
+    let ended = player_at(&game);
+    assert!(
+        ended.x > start.x + 100.0,
+        "drove toward the tap rather than standing still (x {:.0} -> {:.0})",
+        start.x,
+        ended.x
+    );
+}
+
+#[test]
+fn a_tap_on_a_pickup_goes_and_collects_it() {
+    let mut game = game_on(&map_with("cells.\"14,11\" = { kind = \"pickup\", pickup = \"ammo\" }\n"), 13);
+    game.debug_teleport(0, cell_to_world(8, 11), Some(0.0)).unwrap();
+    step(&mut game, tap(cell_to_world(14, 11)));
+    assert_eq!(game.player_order().map(|o| o.kind), Some("collect"), "a tap on a pickup is its own kind of order");
+
+    let collected = (0..900).any(|_| {
+        step(&mut game, Input::default());
+        game.events()
+            .iter()
+            .any(|e| matches!(e, Event::PickupCollected { slot: 0, .. }))
+    });
+    assert!(collected, "the order drives onto the pickup and takes it");
+}

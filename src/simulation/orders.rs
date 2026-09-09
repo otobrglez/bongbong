@@ -44,7 +44,8 @@ use sola_raylib::prelude::Vector2;
 use super::{Game, Frame, with_frog, with_tank};
 use crate::ai::{Intent, axis_offsets};
 use crate::obstacle::Obstacle;
-use crate::pathfind::Grid;
+use crate::pickup::Pickup;
+use crate::pathfind::{Components, Grid};
 use crate::tank::{Dir, Tank};
 use crate::tuning::tuning;
 use crate::frog::Frog;
@@ -59,6 +60,7 @@ pub enum OrderTarget {
     Tank,
     Frog,
     Tile,
+    Pickup,
 }
 
 /// The player's standing order.
@@ -68,6 +70,11 @@ pub enum Order {
     Move { to: Position },
     /// Close on something and shoot it until it is gone.
     Engage { target: Entity, kind: OrderTarget },
+    /// Drive onto a pickup and take it. Separate from `Move` because the
+    /// end condition is the pickup being *gone*, not the tank arriving:
+    /// collection is a proximity test (`pickup_collect_radius`) that a
+    /// move order's own arrival slop could stop just short of.
+    Collect { pickup: Entity },
 }
 
 /// The order plus the small amount of memory driving it needs. Kept on
@@ -103,7 +110,7 @@ impl PlayerOrders {
     pub fn ring_engage(&self) -> Option<bool> {
         match self.current {
             None => None,
-            Some(Order::Move { .. }) => Some(false),
+            Some(Order::Move { .. }) | Some(Order::Collect { .. }) => Some(false),
             Some(Order::Engage { .. }) => Some(true),
         }
     }
@@ -113,8 +120,9 @@ impl Game {
     /// Turn a tap into an order. Anything shootable under the point becomes
     /// `Engage`; everything else is a `Move` to the nearest cell a tank can
     /// actually stand in.
-    pub(super) fn resolve_tap(&self, at: Position, grid: &Grid) -> Option<Order> {
+    pub(super) fn resolve_tap(&self, at: Position, grid: &Grid, comps: &Components) -> Option<Order> {
         let player = self.player?;
+        let me = with_tank(&self.world, player, |t| t.position);
         // A live enemy hull first: the most likely thing anyone is aiming
         // at, and the only one worth a generous hit box.
         let on_tank = self
@@ -138,6 +146,19 @@ impl Game {
                 return Some(Order::Engage { target: frog, kind: OrderTarget::Frog });
             }
         }
+        // A pickup: an explicit "go and get that" order. It cannot just
+        // fall out as a `Move` - the move would snap to the nearest
+        // *reachable cell*, which is routinely the cell next door, and the
+        // tank would park beside the health pack without ever touching it.
+        let on_pickup = self
+            .world
+            .query::<(Entity, &Pickup)>()
+            .iter()
+            .find(|(_, p)| within(at, p.position, p.size() * 0.5))
+            .map(|(e, _)| e);
+        if let Some(pickup) = on_pickup {
+            return Some(Order::Collect { pickup });
+        }
         // A destructible tile: tap a barrel to pop it, a wall or a tree to
         // breach it. Iron never dies, so tapping it is a move order and the
         // tank paths up beside it instead of grinding away at it forever.
@@ -151,13 +172,18 @@ impl Game {
         if let Some(target) = on_tile {
             return Some(Order::Engage { target, kind: OrderTarget::Tile });
         }
-        Some(Order::Move { to: grid.nearest_open(at, &[], 0.0) })
+        // Best effort, not all-or-nothing: head for the closest point to
+        // the tap that is actually reachable from here. A strict "route to
+        // the exact spot or nothing" left 81% of taps on open ground doing
+        // nothing at all on the shipped map, because `nearest_open` happily
+        // snaps into a pocket with no route to it.
+        grid.nearest_reachable(at, me, comps).map(|to| Order::Move { to })
     }
 
     /// The `Intent` the standing order wants this frame, or `None` when
     /// there is no order (or it just finished, in which case it is cleared
     /// here and the player coasts).
-    pub(super) fn order_intent(&mut self, f: &mut Frame, grid: &Grid) -> Option<Intent> {
+    pub(super) fn order_intent(&mut self, f: &mut Frame, grid: &Grid, comps: &Components) -> Option<Intent> {
         let player = self.player?;
         let order = self.orders.current?;
         let me = with_tank(&self.world, player, |t| MeSnapshot {
@@ -170,7 +196,46 @@ impl Game {
         }
         match order {
             Order::Move { to } => self.drive_move(f, grid, me.position, to),
-            Order::Engage { target, .. } => self.drive_engage(f, grid, me.position, target),
+            Order::Engage { target, .. } => self.drive_engage(f, grid, comps, me.position, target),
+            Order::Collect { pickup } => self.drive_collect(f, grid, comps, me.position, pickup),
+        }
+    }
+
+    /// Drive onto a pickup. Ends when the pickup is gone - collected by
+    /// this tank, taken by someone else, or despawned - rather than on
+    /// arrival, so the order cannot finish a few px short of the
+    /// `pickup_collect_radius` that actually picks it up.
+    fn drive_collect(&mut self, f: &mut Frame, grid: &Grid, comps: &Components, from: Position, pickup: Entity) -> Option<Intent> {
+        let at = {
+            let mut q = self.world.query_one::<&Pickup>(pickup);
+            match q.get() {
+                Ok(p) => p.position,
+                Err(_) => {
+                    self.orders.clear();
+                    return None;
+                }
+            }
+        };
+        // Best effort again, and this is the case that needed it most: a
+        // pickup tucked against a wall sits in a nav-blocked cell, so
+        // pathing to the pickup's own position finds no route and the order
+        // died on its first frame. Every tap on a health or ammo pack did
+        // nothing at all until this aimed at the reachable cell beside it.
+        let goal = grid.nearest_reachable(at, from, comps).unwrap_or(at);
+        match grid.next_step(from, goal) {
+            Some(step) => Some(Intent { move_dir: Some(self.commit_dir(f, from, step)), ..Intent::default() }),
+            // In the pickup's own cell but not yet inside
+            // `pickup_collect_radius`: close the last few px straight at it.
+            None if grid.same_cell(from, at) => {
+                Some(Intent { move_dir: Some(Dir::toward(from, at)), ..Intent::default() })
+            }
+            // Standing at the closest reachable point and the pickup is
+            // still there - it is walled off (the map linter calls these
+            // `gated-pickup`). Stop rather than grind.
+            None => {
+                self.orders.clear();
+                None
+            }
         }
     }
 
@@ -191,7 +256,7 @@ impl Game {
         }
     }
 
-    fn drive_engage(&mut self, f: &mut Frame, grid: &Grid, from: Position, target: Entity) -> Option<Intent> {
+    fn drive_engage(&mut self, f: &mut Frame, grid: &Grid, comps: &Components, from: Position, target: Entity) -> Option<Intent> {
         let Some(state) = self.target_state(target) else {
             self.orders.clear();
             return None;
@@ -202,7 +267,13 @@ impl Game {
             // Too far to shoot: just close the distance.
             self.orders.aim_settle = 0.0;
             self.orders.aligned = false;
-            return match grid.next_step(from, state.position) {
+            // Best effort, as with a move: a wall buried inside a structure
+            // has no route *to* it, but you do not need one - you need to
+            // get within `enemy_attack_range` and shoot. Pathing to the
+            // target's own cell instead simply cleared the order, which is
+            // why tapping most solid tiles used to do nothing.
+            let approach = grid.nearest_reachable(state.position, from, comps).unwrap_or(state.position);
+            return match grid.next_step(from, approach) {
                 Some(step) => Some(Intent { move_dir: Some(self.commit_dir(f, from, step)), ..Intent::default() }),
                 None => {
                     self.orders.clear();
@@ -412,6 +483,11 @@ impl Game {
                 let at = self.target_state(target).map(|s| s.position).unwrap_or(Vector2::new(0.0, 0.0));
                 OrderReadout { kind: "engage", target: Some(kind), x: at.x, y: at.y }
             }
+            Order::Collect { pickup } => {
+                let mut q = self.world.query_one::<&Pickup>(pickup);
+                let at = q.get().map(|p| p.position).unwrap_or(Vector2::new(0.0, 0.0));
+                OrderReadout { kind: "collect", target: Some(OrderTarget::Pickup), x: at.x, y: at.y }
+            }
         })
     }
 }
@@ -433,6 +509,13 @@ impl Game {
                 Some(s) => s.position,
                 None => return Vec::new(),
             },
+            Order::Collect { pickup } => {
+                let mut q = self.world.query_one::<&Pickup>(pickup);
+                match q.get() {
+                    Ok(p) => p.position,
+                    Err(_) => return Vec::new(),
+                }
+            }
         };
         let mut at = with_tank(&self.world, player, |t| t.position);
         let mut route = Vec::new();

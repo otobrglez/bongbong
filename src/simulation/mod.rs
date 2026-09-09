@@ -55,7 +55,7 @@ use crate::laser::{LaserBeam, LaserVariant};
 use crate::level::{LevelOverrides, Mission, SpawnPlan};
 use crate::map::{self, CellObject, MapFile};
 use crate::obstacle::{Material, Obstacle, neighbour_mask};
-use crate::pathfind::Grid;
+use crate::pathfind::{Components, Grid};
 use crate::physics::Physics;
 use crate::pickup::{Pickup, PickupKind};
 use crate::plasma::{Plasma, PlasmaVariant};
@@ -916,15 +916,19 @@ impl Game {
         // it rather than parked on `Frame` - a borrow living there would
         // alias every `&mut Frame` the other phases take.
         let grid = self.nav_grid(width, height);
+        // One flood fill for the frame too: the player's tap orders need
+        // reachability to pick a best-effort goal, and `enemy_phase` needs
+        // it for slot validation.
+        let components = grid.components();
         let mut f = Frame::new(dt, width, height, rng, terrain);
 
         if self.outcome == Outcome::Playing {
             self.apply_debug_kills(&mut f);
             self.frog_phase(&mut f);
             self.pickup_phase(&mut f);
-            self.player_phase(input, &mut f, &grid);
+            self.player_phase(input, &mut f, &grid, &components);
             self.rollin_phase(&mut f);
-            self.enemy_phase(&mut f, &grid);
+            self.enemy_phase(&mut f, &grid, &components);
             self.wave_phase(&mut f);
             self.spawn_pending(&mut f);
             self.resolve_lasers(&mut f);
@@ -1194,7 +1198,7 @@ impl Game {
     /// Drive the player from this frame's input and handle its fire key.
     /// The player is never a wreck here: becoming one ends the round, and
     /// the round-over path never reaches this phase.
-    fn player_phase(&mut self, input: Input, f: &mut Frame, grid: &Grid) {
+    fn player_phase(&mut self, input: Input, f: &mut Frame, grid: &Grid, components: &Components) {
         let player = self.player.expect("player entity spawned in init");
         // Keys always win. Any commanded move drops the standing order
         // before anything else looks at it, so the keyboard and the assist
@@ -1204,11 +1208,11 @@ impl Game {
         }
         if let Some(at) = input.tap {
             self.orders.clear();
-            self.orders.current = self.resolve_tap(at, grid);
+            self.orders.current = self.resolve_tap(at, grid, components);
         }
         // A live order writes the intent in the raw one's place; when it
         // finishes it clears itself and the tank coasts.
-        let intent = self.order_intent(f, grid).unwrap_or(input.player_intent);
+        let intent = self.order_intent(f, grid, components).unwrap_or(input.player_intent);
         let mut q = self.world.query_one::<&mut Tank>(player);
         let tank = q.get().expect("player entity always has a Tank");
 
@@ -1231,10 +1235,9 @@ impl Game {
 
     /// Every enemy perceives (motion snapshot, nav grid, shared alert,
     /// engagement slot, pickups, line of sight), thinks, drives and fires.
-    fn enemy_phase(&mut self, f: &mut Frame, grid: &Grid) {
+    fn enemy_phase(&mut self, f: &mut Frame, grid: &Grid, components: &Components) {
         let player = self.player.expect("player entity spawned in init");
         let (movers, enemy_indices) = self.motion_snapshot();
-        let components = grid.components();
         let player_pos = movers[0].position;
 
         // Shared aggression: any enemy seeing the player refreshes the
