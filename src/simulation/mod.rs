@@ -29,6 +29,8 @@ mod props;
 mod props_tests;
 #[cfg(test)]
 mod tap_tests;
+#[cfg(test)]
+mod two_player_tests;
 mod waves;
 mod weapons;
 
@@ -100,11 +102,16 @@ use weapons::{dispatch_fire, laser_damage_range, tick_queued_shots, PendingLaser
 /// toggles `Intent` has no use for.
 #[derive(Default, Clone, Copy)]
 pub struct Input {
-    /// Raw movement/fire command. `fire` is "is the fire key held this
-    /// frame", not edge-detected: `update` decides whether that fires (a
-    /// laser or minigun is full-auto while held; shells and plasma need a
-    /// fresh press), since that depends on the player's current weapon.
+    /// Player 1's raw movement/fire command. `fire` is "is the fire key
+    /// held this frame", not edge-detected: `update` decides whether that
+    /// fires (a laser or minigun is full-auto while held; shells and plasma
+    /// need a fresh press), since that depends on the player's current
+    /// weapon.
     pub player_intent: Intent,
+    /// Player 2's command, the same shape. Read only in a two-player round
+    /// (`Game::players`); the default is "no input", so single-player
+    /// callers never fill it.
+    pub player2_intent: Intent,
     /// Where the player tapped or clicked this frame, in world pixels, on
     /// the frame the press happened - `None` on every other frame.
     ///
@@ -122,12 +129,36 @@ pub struct Input {
     pub cycle_overlays_pressed: bool,
 }
 
-/// The player tank's owner slot (`Tank::owner_slot`); enemies take `n + 1`.
-pub(crate) const PLAYER_OWNER_SLOT: usize = 0;
-
-fn enemy_owner_slot(n: usize) -> usize {
-    n + 1
+/// How many humans drive a tank this round - a session setting, chosen
+/// from the HUD's players dialog or `--players`, kept across restarts
+/// like `Game::player_row_override`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlayerCount {
+    #[default]
+    One,
+    Two,
 }
+
+impl PlayerCount {
+    pub fn count(self) -> usize {
+        match self {
+            PlayerCount::One => 1,
+            PlayerCount::Two => 2,
+        }
+    }
+
+    pub fn from_count(n: usize) -> Option<PlayerCount> {
+        match n {
+            1 => Some(PlayerCount::One),
+            2 => Some(PlayerCount::Two),
+            _ => None,
+        }
+    }
+}
+
+/// Player 1's owner slot (`Tank::owner_slot`). Player 2, when there is
+/// one, takes 1; the enemies count up from `Game::first_enemy_slot`.
+pub(crate) const PLAYER_OWNER_SLOT: usize = 0;
 
 /// How the current round is going.
 #[derive(Clone, Copy, PartialEq, Default, Debug, Serialize)]
@@ -137,7 +168,7 @@ pub enum Outcome {
     Playing,
     /// Every enemy is a wreck.
     Won,
-    /// The player is a wreck, or the frog died.
+    /// Every player tank is a wreck, or the frog died.
     Lost,
 }
 
@@ -157,10 +188,10 @@ pub enum Event {
     Hit { target: HitTarget, damage: f32, killed: bool, x: f32, y: f32 },
     /// A tank became a wreck (any cause) at (`x`, `y`).
     Wreck { slot: usize, x: f32, y: f32 },
-    /// Ram contact dealt `damage` to both sides. `other_slot` is `None`
-    /// when the other party is the player, which is the only pairing this
-    /// event used to be able to describe.
-    Ram { enemy_slot: usize, damage: f32, other_slot: Option<usize> },
+    /// Ram contact between the tanks in `slot` and `other_slot` dealt
+    /// `damage` to both: an enemy and a player, two enemies, or the two
+    /// players. The lower-numbered party is always `slot`.
+    Ram { slot: usize, other_slot: usize, damage: f32 },
     PickupCollected { slot: usize, kind: PickupKind },
     PickupRespawned { kind: PickupKind, x: f32, y: f32 },
     /// A projectile bounced off `slot`'s rainbow shield at (`x`, `y`).
@@ -212,13 +243,17 @@ pub enum Event {
     /// The shared last-known player position appeared or expired; `x`/`y`
     /// is the position (the last known one when `on` is false).
     Alert { on: bool, x: f32, y: f32 },
+    /// Two-player rounds: the enemy in `slot` switched to fighting
+    /// `player` (`Ai::target_player`).
+    Retarget { slot: usize, player: u8 },
 }
 
 /// What an `Event::Hit` landed on.
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(tag = "what", rename_all = "snake_case")]
 pub enum HitTarget {
-    Player,
+    /// Human player `player` (0 or 1).
+    Player { player: u8 },
     Enemy { slot: usize },
     Frog { side: Side },
     /// A destructible tile. Carries its material because the presentation
@@ -342,9 +377,14 @@ pub struct Game {
     /// `Obstacle`s, `Pickup`s and in-flight `Shell`/`Bullet`/`Plasma`
     /// projectiles. `pub(crate)` so `render` and the map linter can read it.
     pub(crate) world: hecs::World,
-    /// The player's entity. `None` only before the first `init`; every
+    /// Player 1's entity. `None` only before the first `init`; every
     /// method treats it as `Some` once a round is running.
     pub(crate) player: Option<Entity>,
+    /// Player 2's entity in a two-player round (`players`), `None` in a
+    /// single-player one. Spawned into the same archetype as player 1 - a
+    /// `Tank` and nothing else - so every query that tells enemies apart by
+    /// their `Ai` sees both players the same way.
+    pub(crate) player2: Option<Entity>,
     /// The player's frog - `None` in a mission without one (`Destroy`),
     /// and before the first `init`.
     pub(crate) frog: Option<Entity>,
@@ -394,9 +434,10 @@ pub struct Game {
     /// `alert_timer` runs out - see `ai::Ai::think`'s `alert` parameter.
     alert_position: Option<Position>,
     alert_timer: f32,
-    /// Engagement-slot assignment with per-tank memory - see `engage`. The
-    /// ring around the player.
-    engage: EngageRing,
+    /// Engagement-slot assignment with per-tank memory - see `engage`. One
+    /// ring per player, indexed like `players`; the second is only ever
+    /// filled in a two-player round.
+    engage: [EngageRing; 2],
     /// The second ring, around the player's frog: what hunters with a live
     /// quarry compete on (`enemy_phase`).
     engage_frog: EngageRing,
@@ -462,6 +503,11 @@ pub struct Game {
     /// `--tank`: pins the player's chassis row. Same lifetime as
     /// `enemy_count_override`.
     pub player_row_override: Option<i32>,
+    /// `--tank2`: player 2's chassis, over the map's `tank2` key.
+    pub player2_row_override: Option<i32>,
+    /// One or two human players. Set before `init` and kept across
+    /// restarts; `init` spawns player 2 only under `Two`.
+    pub players: PlayerCount,
     /// `--seed`: pins the round seed, so every restart replays the
     /// identical round - the repro loop for a round the probe flagged.
     pub seed_override: Option<u64>,
@@ -478,8 +524,9 @@ pub struct Game {
     /// This round's pickup slots from the map's `Pickup` cells; `update`
     /// tops the field back up from these same slots.
     map_pickup_slots: Vec<(Position, PickupKind)>,
-    /// Last frame's raw fire-key state, for edge-detecting a fresh press.
-    player_fire_held_last_frame: bool,
+    /// Last frame's raw fire-key state per player, for edge-detecting a
+    /// fresh press.
+    player_fire_held_last_frame: [bool; 2],
     /// `update` calls this round (paused frames included); reset by `init`.
     pub(crate) frame: u64,
     /// What happened during the most recent `update` - see `Event`.
@@ -514,8 +561,8 @@ struct Frame {
     height: f32,
     rng: SmallRng,
     terrain: Terrain,
-    /// Tanks destroyed this frame: (position, victim was an enemy, owner slot).
-    kills: Vec<(Position, bool, usize)>,
+    /// Tanks destroyed this frame: (position, who the victim was).
+    kills: Vec<(Position, Owner)>,
     /// Barrels detonated this frame, resolved by `explosions` alongside
     /// `kills` as one worklist (a blast that sets off another barrel or
     /// kills a tank appends to it).
@@ -596,10 +643,12 @@ impl Game {
         self.paused = false;
         self.alert_position = None;
         self.alert_timer = 0.0;
-        self.engage.clear();
+        for ring in &mut self.engage {
+            ring.clear();
+        }
         self.engage_frog.clear();
         self.pickup_respawn_timer = tuning().pickup_respawn_seconds;
-        self.player_fire_held_last_frame = false;
+        self.player_fire_held_last_frame = [false; 2];
         self.shocks.clear();
         self.muzzle_flashes.clear();
         self.impact_flashes.clear();
@@ -616,6 +665,7 @@ impl Game {
         self.frame = 0;
         self.last_engage.clear();
         self.debug_kills.clear();
+        self.player2 = None;
         self.frog = None;
         self.enemy_frog = None;
         self.mission = self.level_overrides.resolve_mission(&self.map.mission);
@@ -642,7 +692,7 @@ impl Game {
             shell_variant: TANK_SHELL_VARIANT_BY_ROW[row as usize],
             damage_variant: rng.random_range(0..DAMAGE_VARIANTS),
             position: map::cell_to_world(start_cell.0, start_cell.1),
-            owner_slot: PLAYER_OWNER_SLOT,
+            owner: Owner::Player(0),
             ..Tank::default()
         };
         if rng.random_range(0.0..1.0) < tuning().spawn_shield_chance {
@@ -704,13 +754,55 @@ impl Game {
             SpawnPlan::Waves { .. } => 0,
         };
         self.band_enemy_count = enemy_count;
-        self.wave = WaveState::new(enemy_owner_slot(enemy_count));
+        self.wave = WaveState::new(self.first_enemy_slot() + enemy_count);
 
         // Terrain legality is the nav grid's `usable` test (see
         // `battlefield::enemy_spawn_legal`); the frog is not down yet, so
         // this grid is walls only - the same grid `relocate_unusable_spawns`
         // audits against below.
         let spawn_grid = self.nav_grid(width, height);
+
+        // --- Player 2 (two-player rounds only) ---
+        // Every draw here sits inside the `Two` branch, after the terrain
+        // and before the enemies, so a single-player round's RNG stream is
+        // exactly what it was without this block. Same rolls as player 1,
+        // in the same order.
+        let center2 = if self.players == PlayerCount::Two {
+            let row2 = resolve_player_row(self.player2_row_override, -1, self.map.tank2, || {
+                rng.random_range(0..TANK_VARIANTS)
+            });
+            // The map's `start2` cell (nudged off a solid tile); otherwise
+            // the nearest usable nav cell to player 1 that keeps a clear
+            // tank's width from it - never player 1's own cell, never a wall.
+            let position = self
+                .map
+                .start2_cell()
+                .map(|(col, row)| {
+                    let (col, row) = self.map.nearest_free_cell(col, row);
+                    map::cell_to_world(col, row)
+                })
+                .filter(|p| p.distance_to(center) >= clear)
+                .unwrap_or_else(|| spawn_grid.nearest_open(center, &[center], clear));
+            let mut tank = Tank {
+                row: row2,
+                shell_variant: TANK_SHELL_VARIANT_BY_ROW[row2 as usize],
+                damage_variant: rng.random_range(0..DAMAGE_VARIANTS),
+                position,
+                owner: Owner::Player(1),
+                ..Tank::default()
+            };
+            if rng.random_range(0.0..1.0) < tuning().spawn_shield_chance {
+                tank.shield_timer = tuning().shield_duration_seconds;
+            }
+            roll_track_distortion(&mut tank, &mut rng);
+            tank.body = Some(self.physics.spawn_tank(tank.position, tank.move_half_extents(false), tank.mass()));
+            self.player2 = Some(self.world.spawn((tank,)));
+            Some(position)
+        } else {
+            None
+        };
+        let clear_of_player2 = |pos: Position| center2.is_none_or(|c| pos.distance_to(c) >= clear);
+
         let mut enemy_positions: Vec<Position> = Vec::with_capacity(enemy_count);
         while enemy_positions.len() < enemy_count {
             let legal = |pos: Position| {
@@ -724,7 +816,7 @@ impl Game {
                     clear,
                     &spawn_grid,
                     &obstacle_positions,
-                )
+                ) && clear_of_player2(pos)
             };
             let pos = battlefield::sample_clear_position(&mut rng, width, height, margin_min, |pos| {
                 legal(pos) && enemy_positions.iter().all(|&p| pos.distance_to(p) >= enemy_clear)
@@ -740,10 +832,11 @@ impl Game {
                 );
                 let mut avoid = enemy_positions.clone();
                 avoid.push(center);
+                avoid.extend(center2);
                 spawn_grid.nearest_open(sample, &avoid, enemy_clear)
             });
             let erow = TANK_SPRITE_ORDER[enemy_positions.len() % TANK_SPRITE_ORDER.len()];
-            let mut enemy = roll_enemy_tank(&mut rng, erow, pos, enemy_owner_slot(enemy_positions.len()));
+            let mut enemy = roll_enemy_tank(&mut rng, erow, pos, self.first_enemy_slot() + enemy_positions.len());
             // Last of the per-enemy rolls, and skipped outright at a zero
             // share, so a mission without hunters draws exactly what a
             // Destroy round does.
@@ -776,6 +869,7 @@ impl Game {
             battlefield::sample_clear_position(&mut rng, width, height, margin_min, |pos| {
                 let dist = pos.distance_to(center);
                 (tuning().frog_spawn_min_dist..=tuning().frog_spawn_max_dist).contains(&dist)
+                    && clear_of_player2(pos)
                     && enemy_positions.iter().all(|&p| pos.distance_to(p) >= enemy_clear)
                     && obstacle_positions.iter().all(|&p| pos.distance_to(p) >= frog_clear)
             })
@@ -785,6 +879,7 @@ impl Game {
                 let sample = Position::new(width * 0.5, height * 0.5);
                 let mut avoid = enemy_positions.clone();
                 avoid.push(center);
+                avoid.extend(center2);
                 spawn_grid.nearest_open(sample, &avoid, enemy_clear)
             })
         });
@@ -807,6 +902,7 @@ impl Game {
                     border_dist <= margin_max
                         && pos.distance_to(frog_pos) >= min_dist
                         && pos.distance_to(center) >= clear
+                        && clear_of_player2(pos)
                         && spawn_grid.usable(pos)
                         && enemy_positions.iter().all(|&p| pos.distance_to(p) >= enemy_clear)
                         && obstacle_positions.iter().all(|&p| pos.distance_to(p) >= frog_clear)
@@ -818,6 +914,7 @@ impl Game {
                     );
                     let mut avoid = enemy_positions.clone();
                     avoid.push(center);
+                    avoid.extend(center2);
                     avoid.push(frog_pos);
                     spawn_grid.nearest_open(sample, &avoid, enemy_clear)
                 })
@@ -911,7 +1008,10 @@ impl Game {
         // moves/fires. Effects still animate so the screen isn't dead.
         if self.intro_timer > 0.0 {
             self.tick_effects(dt);
-            let skip = input.player_intent.move_dir.is_some() || input.player_intent.fire;
+            let skip = input.player_intent.move_dir.is_some()
+                || input.player_intent.fire
+                || input.player2_intent.move_dir.is_some()
+                || input.player2_intent.fire;
             self.intro_timer = if skip { 0.0 } else { (self.intro_timer - dt).max(0.0) };
             if self.intro_timer <= 0.0 {
                 self.intro_fade = INTRO_FADE_SECONDS;
@@ -1088,7 +1188,6 @@ impl Game {
 
     /// One frog's bite and hop for this frame - see `frog_phase`.
     fn frog_reflexes(&mut self, f: &mut Frame, frog_entity: Entity) {
-        let player = self.player.expect("player entity spawned in init");
         let (side, can_attack, can_hop, frog_pos, attack_range, avoid_range, hop_distance) =
             with_frog(&self.world, frog_entity, |fr| {
                 (fr.side, fr.can_attack(), fr.can_hop(), fr.position, fr.attack_range(), fr.avoid_range(), fr.hop_distance())
@@ -1105,17 +1204,18 @@ impl Game {
 
         if can_attack && dist <= attack_range {
             let dmg = f.rng.random_range(tuning().frog_attack_damage_min..tuning().frog_attack_damage_max);
-            let cap = if target == player { MAX_DAMAGE - 1.0 } else { MAX_DAMAGE };
-            let (became_wreck, victim_pos, victim_slot) = {
+            // A bite never finishes a player off, whichever player it is.
+            let cap = if self.is_player(target) { MAX_DAMAGE - 1.0 } else { MAX_DAMAGE };
+            let (became_wreck, victim_pos, victim) = {
                 let mut q = self.world.query_one::<&mut Tank>(target);
                 let tank = q.get().expect("attack target always has a Tank");
                 tank.take_damage(dmg, cap);
                 tank.mark_hit();
-                (tank.is_wreck(), tank.position, tank.owner_slot)
+                (tank.is_wreck(), tank.position, tank.owner())
             };
-            f.events.push(Event::FrogBite { side, slot: victim_slot, damage: dmg, killed: became_wreck });
+            f.events.push(Event::FrogBite { side, slot: victim.slot(), damage: dmg, killed: became_wreck });
             if became_wreck {
-                f.kills.push((victim_pos, target != player, victim_slot));
+                f.kills.push((victim_pos, victim));
             }
             with_frog_mut(&self.world, frog_entity, |fr| fr.start_attack());
         }
@@ -1194,7 +1294,7 @@ impl Game {
                         tank.shield_timer = tuning().shield_duration_seconds;
                     }
                 }
-                tank.owner_slot
+                tank.owner_slot()
             };
             f.events.push(Event::PickupCollected { slot, kind });
             self.world.despawn(pickup_entity).ok();
@@ -1215,64 +1315,138 @@ impl Game {
         }
     }
 
-    /// Drive the player from this frame's input and handle its fire key.
-    /// The player is never a wreck here: becoming one ends the round, and
-    /// the round-over path never reaches this phase.
+    /// Drive each player from this frame's input and handle their fire
+    /// keys. Tap orders serve player 1 in a single-player round only: with
+    /// two players the tap is never read and the order state stays clear,
+    /// so the keyboard is the whole interface (docs/two-players.md).
     fn player_phase(&mut self, input: Input, f: &mut Frame, grid: &Grid, components: &Components) {
         let player = self.player.expect("player entity spawned in init");
-        // Keys always win. Any commanded move drops the standing order
-        // before anything else looks at it, so the keyboard and the assist
-        // are never both writing the same frame (docs/tap-navigation.md).
-        if input.player_intent.move_dir.is_some() {
-            self.orders.clear();
+        let intent = if self.players == PlayerCount::One {
+            // Keys always win. Any commanded move drops the standing order
+            // before anything else looks at it, so the keyboard and the
+            // assist are never both writing the same frame
+            // (docs/tap-navigation.md).
+            if input.player_intent.move_dir.is_some() {
+                self.orders.clear();
+            }
+            if let Some(at) = input.tap {
+                self.orders.clear();
+                self.orders.current = self.resolve_tap(at, grid, components);
+            }
+            // A live order writes the intent in the raw one's place; when
+            // it finishes it clears itself and the tank coasts.
+            self.order_intent(f, grid, components).unwrap_or(input.player_intent)
+        } else {
+            input.player_intent
+        };
+        self.drive_player(f, 0, player, intent);
+        if let Some(player2) = self.player2 {
+            self.drive_player(f, 1, player2, input.player2_intent);
         }
-        if let Some(at) = input.tap {
-            self.orders.clear();
-            self.orders.current = self.resolve_tap(at, grid, components);
-        }
-        // A live order writes the intent in the raw one's place; when it
-        // finishes it clears itself and the tank coasts.
-        let intent = self.order_intent(f, grid, components).unwrap_or(input.player_intent);
-        let mut q = self.world.query_one::<&mut Tank>(player);
+    }
+
+    /// One player's tank for one frame: drive it, tick its queued shots and
+    /// fire on its own key. A wreck is left alone - in a two-player round
+    /// a dead player's hulk outlives the round, and driving it would keep
+    /// shoving a corpse around.
+    fn drive_player(&mut self, f: &mut Frame, index: usize, entity: Entity, intent: Intent) {
+        let owner = Owner::Player(index as u8);
+        let mut q = self.world.query_one::<&mut Tank>(entity);
         let tank = q.get().expect("player entity always has a Tank");
+        if tank.is_wreck() {
+            return;
+        }
 
         drive_tank(&mut self.physics, tank, intent, f.dt);
-        tick_queued_shots(&mut self.physics, f, tank, Owner::Player);
+        tick_queued_shots(&mut self.physics, f, tank, owner);
 
         // A laser or minigun is full-auto while the key is held (still
         // paced by `fire_cooldown`); shells and plasma fire once per
         // physical press, so a held key can never re-arm them.
-        let fire_pressed = intent.fire && !self.player_fire_held_last_frame;
-        self.player_fire_held_last_frame = intent.fire;
+        let fire_pressed = intent.fire && !self.player_fire_held_last_frame[index];
+        self.player_fire_held_last_frame[index] = intent.fire;
         let should_fire = match tank.active_weapon() {
             ActiveWeapon::Laser | ActiveWeapon::Minigun => intent.fire,
             ActiveWeapon::Plasma | ActiveWeapon::Shell => fire_pressed,
         };
         if should_fire && tank.fire_cooldown <= 0.0 {
-            dispatch_fire(&mut self.physics, f, tank, Owner::Player, 0.0);
+            dispatch_fire(&mut self.physics, f, tank, owner, 0.0);
         }
     }
 
     /// Every enemy perceives (motion snapshot, nav grid, shared alert,
     /// engagement slot, pickups, line of sight), thinks, drives and fires.
+    /// With two players each enemy first picks which one it is fighting
+    /// (`Ai::target_player`): the nearer live, visible one, switching only
+    /// past `enemy_target_switch_margin_px` so a pair at equal range does
+    /// not flip the pack every frame. Everything downstream - the ring it
+    /// competes on, its line of sight, what `think` is handed as "the
+    /// player" - keys off that choice.
     fn enemy_phase(&mut self, f: &mut Frame, grid: &Grid, components: &Components) {
-        let player = self.player.expect("player entity spawned in init");
         let (movers, enemy_indices) = self.motion_snapshot();
-        let player_pos = movers[0].position;
+        // Every player as the enemies see it this frame; index = player.
+        struct PlayerView {
+            entity: Entity,
+            pos: Position,
+            wreck: bool,
+            concealed: bool,
+        }
+        let players: Vec<PlayerView> = self
+            .players()
+            .into_iter()
+            .flatten()
+            .map(|entity| {
+                let (pos, wreck) = with_tank(&self.world, entity, |t| (t.position, t.is_wreck()));
+                PlayerView { entity, pos, wreck, concealed: f.terrain.conceals(pos) }
+            })
+            .collect();
 
-        // Shared aggression: any enemy seeing the player refreshes the
-        // group's last-known position, so the rest converge instead of
-        // patrolling blind - and, since concealment gates this too, a player
-        // who stays hidden is genuinely *lost* once `enemy_alert_hold_seconds`
+        // Retarget pass, two-player rounds only (a single-player round
+        // never runs it, so its stream is untouched). A wreck is never a
+        // target - every enemy would otherwise stand over a hulk while the
+        // other player fought on - and a concealed player is one only for
+        // a tank they just shot, the same exemption the attack gates use.
+        if players.len() >= 2 {
+            let margin = tuning().enemy_target_switch_margin_px;
+            for (tank, ai) in self.world.query::<(&Tank, &mut Ai)>().iter() {
+                let eligible = |p: &PlayerView| !p.wreck && (!p.concealed || ai.is_hit_alerted());
+                let current = ai.target_player() as usize;
+                let other = 1 - current;
+                let (pc, po) = (&players[current], &players[other]);
+                let switch = if !eligible(pc) {
+                    eligible(po)
+                } else {
+                    eligible(po) && tank.position.distance_to(po.pos) + margin < tank.position.distance_to(pc.pos)
+                };
+                if switch {
+                    ai.set_target_player(other as u8);
+                    if self.trace_ai {
+                        f.events.push(Event::Retarget { slot: tank.owner_slot(), player: other as u8 });
+                    }
+                }
+            }
+        }
+        let target_pos_of = |ai: &Ai| players[ai.target_player() as usize].pos;
+
+        // Shared aggression: any enemy seeing a player refreshes the
+        // group's last-known position (the nearest sighting when both
+        // players are seen), so the rest converge instead of patrolling
+        // blind - and, since concealment gates this too, a player who
+        // stays hidden is genuinely *lost* once `enemy_alert_hold_seconds`
         // runs out, rather than merely un-shootable.
         let alert_before = self.alert_position.filter(|_| self.alert_timer > 0.0);
-        let concealed = f.terrain.conceals(player_pos);
-        let any_enemy_sees_player = !concealed
-            && movers[1..]
-                .iter()
-                .any(|m| m.position.distance_to(player_pos) <= tuning().enemy_view_range);
-        if any_enemy_sees_player {
-            self.alert_position = Some(player_pos);
+        let view_range = tuning().enemy_view_range;
+        let mut seen: Option<(f32, Position)> = None;
+        for p in players.iter().filter(|p| !p.concealed && !p.wreck) {
+            for m in &movers[players.len()..] {
+                let d = m.position.distance_to(p.pos);
+                if d <= view_range && seen.is_none_or(|(best, _)| d < best) {
+                    seen = Some((d, p.pos));
+                }
+            }
+        }
+        if let Some((_, pos)) = seen {
+            self.alert_position = Some(pos);
             self.alert_timer = tuning().enemy_alert_hold_seconds;
         } else {
             self.alert_timer = (self.alert_timer - f.dt).max(0.0);
@@ -1282,7 +1456,7 @@ impl Game {
         }
         let alert = self.alert_position.filter(|_| self.alert_timer > 0.0);
         if self.trace_ai && alert_before.is_some() != alert.is_some() {
-            let p = alert.or(alert_before).unwrap_or(player_pos);
+            let p = alert.or(alert_before).unwrap_or(players[0].pos);
             f.events.push(Event::Alert { on: alert.is_some(), x: p.x, y: p.y });
         }
 
@@ -1297,10 +1471,11 @@ impl Game {
         let home = live_frog(self.enemy_frog).map(|(_, p)| p);
         let target_of = |ai: &Ai| match (ai.role, quarry) {
             (Role::Hunter, Some((frog, pos))) => (pos, Some(frog)),
-            _ => (player_pos, None),
+            _ => (target_pos_of(ai), None),
         };
-        let guard_holds =
-            |ai: &Ai| ai.role == Role::Guard && home.is_some_and(|h| player_pos.distance_to(h) > tuning().guard_leash_px);
+        let guard_holds = |ai: &Ai| {
+            ai.role == Role::Guard && home.is_some_and(|h| target_pos_of(ai).distance_to(h) > tuning().guard_leash_px)
+        };
 
         // Engagement slots go to tanks that are really fighting: not
         // wrecked, fleeing or retreating, and either within view range or
@@ -1308,37 +1483,59 @@ impl Game {
         // far out don't claim one - that held approaching packs in loose
         // formation through the same bottleneck (measured via the probe's
         // clustering anomaly); steering at the raw alert point is fine for
-        // them. Hunters with a live quarry compete on the second ring, the
-        // one around the frog; everyone else on the ring around the player.
+        // them. Hunters with a live quarry compete on the frog's ring;
+        // everyone else on the ring around the player it is fighting - one
+        // ring per player, the second only ever populated with two.
         let mut report = EngageReport::default();
-        let mut engaged: Vec<(Entity, Position)> = Vec::new();
+        let mut engaged: [Vec<(Entity, Position)>; 2] = [Vec::new(), Vec::new()];
         let mut engaged_frog: Vec<(Entity, Position)> = Vec::new();
         for (entity, tank, ai) in self.world.query::<(Entity, &Tank, &Ai)>().iter() {
             let (target, hunting) = target_of(ai);
             let status = if guard_holds(ai) { EngageStatus::OutOfRange } else { engage_status(tank, ai, target) };
-            report.tanks.push(EngageTank::new(entity, tank.owner_slot, status));
+            report.tanks.push(EngageTank::new(entity, tank.owner_slot(), status));
             if status == EngageStatus::Engaged {
                 if hunting.is_some() {
                     engaged_frog.push((entity, tank.position));
                 } else {
-                    engaged.push((entity, tank.position));
+                    engaged[ai.target_player() as usize].push((entity, tank.position));
                 }
             }
         }
         report.tanks.sort_by_key(|t| t.owner);
         // Sorted by entity so the greedy claim order is stable frame to frame.
-        engaged.sort_by_key(|(e, _)| *e);
+        for ring in &mut engaged {
+            ring.sort_by_key(|(e, _)| *e);
+        }
         engaged_frog.sort_by_key(|(e, _)| *e);
         let reachable = |a: Position, b: Position| components.connected(&grid, a, b);
         // One worst-case tank clear of the wall, plus a little.
         let margin = battlefield::max_tank_avoidance_radius() + 8.0;
-        if engaged.len() >= 2 {
-            let line_of_sight = |a: Position, b: Position| f.terrain.line_of_sight(a, b);
-            self.engage.assign(
-                &engaged,
-                &EngageCtx { target_pos: player_pos, width: f.width, height: f.height, margin, reachable: &reachable, line_of_sight: &line_of_sight },
+        let line_of_sight = |a: Position, b: Position| f.terrain.line_of_sight(a, b);
+        if engaged[0].len() >= 2 {
+            self.engage[0].assign(
+                &engaged[0],
+                &EngageCtx { target_pos: players[0].pos, width: f.width, height: f.height, margin, reachable: &reachable, line_of_sight: &line_of_sight },
                 &mut report,
             );
+        }
+        if engaged[1].len() >= 2 {
+            // Player 2's ring keeps no slot table either (the snapshot
+            // shows player 1's); its per-tank outcomes are merged into the
+            // one report, the way the frog ring's are below.
+            let mut report2 = EngageReport {
+                tanks: report.tanks.iter().filter(|t| engaged[1].iter().any(|(e, _)| *e == t.entity)).copied().collect(),
+                ..Default::default()
+            };
+            self.engage[1].assign(
+                &engaged[1],
+                &EngageCtx { target_pos: players[1].pos, width: f.width, height: f.height, margin, reachable: &reachable, line_of_sight: &line_of_sight },
+                &mut report2,
+            );
+            for t in report2.tanks {
+                if let Some(slot) = report.tanks.iter_mut().find(|r| r.entity == t.entity) {
+                    *slot = t;
+                }
+            }
         }
         // Whether a hunter can drive straight at the frog: a route to the
         // frog's own cell exists (open ground). Without one (a bunker, the
@@ -1417,7 +1614,7 @@ impl Game {
                 let can_shoot_from_here = tank.position.distance_to(target) <= tuning().enemy_attack_range
                     && f.terrain.line_of_fire_to_frog(tank.position, target, Some(frog));
                 if no_slot && !direct_route(tank.position, target) && !can_shoot_from_here {
-                    target = player_pos;
+                    target = target_pos_of(ai);
                     hunting = None;
                 }
             }
@@ -1443,8 +1640,9 @@ impl Game {
             // and failed to be - revealing at 96px handed enemies
             // point-blank shots that never miss, and measured *worse* for
             // the player than standing in the open.
-            let player_hidden = concealed && !ai.is_hit_alerted();
-            let player_line_of_sight = !player_hidden && f.terrain.line_of_sight(tank.position, player_pos);
+            let fighting = &players[ai.target_player() as usize];
+            let player_hidden = fighting.concealed && !ai.is_hit_alerted();
+            let player_line_of_sight = !player_hidden && f.terrain.line_of_sight(tank.position, fighting.pos);
             // A hunter's fire gate is line of *fire* to the frog: only iron
             // or another frog blocks it, so a walled-in frog gets shot at
             // through its destructible walls until they are gone. Note it
@@ -1456,9 +1654,10 @@ impl Game {
                 None => player_line_of_sight,
             };
             let before = self.trace_ai.then(|| ai.snapshot());
-            // The player lives in a different archetype (no `Ai`), so this
-            // shared read never aliases the exclusive borrow above.
-            let intent = with_tank(&self.world, player, |player_tank| {
+            // A player lives in a different archetype (no `Ai`), so this
+            // shared read never aliases the exclusive borrow above. `think`
+            // is handed the player this tank is fighting as "the player".
+            let intent = with_tank(&self.world, fighting.entity, |player_tank| {
                 ai.think(
                     tank,
                     player_tank,
@@ -1481,7 +1680,7 @@ impl Game {
                 )
             });
             if let Some(before) = before {
-                ai_transition_events(&mut f.events, tank.owner_slot, &before, &ai.snapshot());
+                ai_transition_events(&mut f.events, tank.owner_slot(), &before, &ai.snapshot());
             }
             drive_tank(&mut self.physics, tank, intent, f.dt);
             let owner = tank.owner();
@@ -1511,10 +1710,10 @@ impl Game {
     /// Lasers have no travel time: each queued beam is swept over its whole
     /// length right now, drawn up to where it stopped, and applied.
     fn resolve_lasers(&mut self, f: &mut Frame) {
-        let player = self.player.expect("player entity spawned in init");
+        let players = self.players();
         let shots = std::mem::take(&mut f.pending_lasers);
         for shot in shots {
-            let hit = f.terrain.sweep(&self.world, player, shot.owner, shot.start, shot.end, laser_beam_half_width());
+            let hit = f.terrain.sweep(&self.world, players, shot.owner, shot.start, shot.end, laser_beam_half_width());
             let (hit_pos, target) = match hit {
                 Some((target, t)) => (shot.start + (shot.end - shot.start) * t, Some(target)),
                 None => (shot.end, None),
@@ -1525,7 +1724,7 @@ impl Game {
             f.impact_flashes.push(Shockwave::new(hit_pos));
             // No knockback and no frog hop: an instant beam isn't something
             // to be shoved by or to dodge.
-            self.apply_hit(f, target, hit_pos, laser_damage_range(&shot), HitEffects::none());
+            self.apply_hit(f, target, hit_pos, laser_damage_range(&shot), HitEffects::none(), shot.owner);
         }
     }
 
@@ -1569,11 +1768,16 @@ impl Game {
 
     /// Read tank positions back from physics, lay tread marks on frames the
     /// physics actually stepped, and resolve ram damage for every enemy
-    /// touching the player (`ram` gates on both cooldowns, so the player
-    /// takes at most one ram hit per frame).
+    /// touching a player (`ram` gates on both cooldowns, so a player takes
+    /// at most one ram hit per frame), then for the two players against
+    /// each other, then enemy against enemy.
     fn sync_tanks_and_ram(&mut self, f: &mut Frame) {
-        let player = self.player.expect("player entity spawned in init");
-        let player_before = with_tank(&self.world, player, |t| t.position);
+        let players: Vec<(Entity, Position)> = self
+            .players()
+            .into_iter()
+            .flatten()
+            .map(|p| (p, with_tank(&self.world, p, |t| t.position)))
+            .collect();
         let enemies_before: Vec<(Entity, Position)> = self
             .world
             .query::<(Entity, &Tank)>()
@@ -1585,25 +1789,44 @@ impl Game {
             sync_tank_from_physics(&self.physics, tank);
         }
         if f.physics_stepped {
-            with_tank_mut(&self.world, player, |t| lay_tracks(&mut self.tracks, t, player_before));
+            for &(player, before) in &players {
+                with_tank_mut(&self.world, player, |t| lay_tracks(&mut self.tracks, t, before));
+            }
         }
         for (enemy, before) in enemies_before {
-            let touching = with_tank(&self.world, enemy, |e| {
-                with_tank(&self.world, player, |p| tanks_touching(&self.physics, e, p))
-            });
-            // A tank that has lost the player in grass does not get to ram
-            // them either: without this, hiding traded gunfire for melee and
-            // the melee hurt more.
-            if touching && !f.terrain.conceals(with_tank(&self.world, player, |t| t.position)) {
-                let rammed = with_two_tanks_mut(&mut self.world, enemy, player, |e, p| {
-                    ram(e, true, p, false, &mut self.physics, &mut f.rng, &mut f.kills).map(|damage| (e.owner_slot, damage))
+            for &(player, _) in &players {
+                let (touching, concealed) = with_tank(&self.world, enemy, |e| {
+                    with_tank(&self.world, player, |p| (tanks_touching(&self.physics, e, p), f.terrain.conceals(p.position)))
                 });
-                if let Some((enemy_slot, damage)) = rammed {
-                    f.events.push(Event::Ram { enemy_slot, damage, other_slot: None });
+                // A tank that has lost the player in grass does not get to
+                // ram them either: without this, hiding traded gunfire for
+                // melee and the melee hurt more.
+                if touching && !concealed {
+                    let rammed = with_two_tanks_mut(&mut self.world, enemy, player, |e, p| {
+                        ram(e, p, &mut self.physics, &mut f.rng, &mut f.kills, 1.0)
+                            .map(|damage| (p.owner_slot(), e.owner_slot(), damage))
+                    });
+                    if let Some((slot, other_slot, damage)) = rammed {
+                        f.events.push(Event::Ram { slot, other_slot, damage });
+                    }
                 }
             }
             if f.physics_stepped {
                 with_tank_mut(&self.world, enemy, |t| lay_tracks(&mut self.tracks, t, before));
+            }
+        }
+        // The two players: friendly fire, at the same factor a shell gets.
+        if let [(p1, _), (p2, _)] = players[..] {
+            let touching = with_tank(&self.world, p1, |a| with_tank(&self.world, p2, |b| tanks_touching(&self.physics, a, b)));
+            if touching {
+                let factor = tuning().friendly_fire_damage_factor;
+                let rammed = with_two_tanks_mut(&mut self.world, p1, p2, |a, b| {
+                    ram(a, b, &mut self.physics, &mut f.rng, &mut f.kills, factor)
+                        .map(|damage| (a.owner_slot(), b.owner_slot(), damage))
+                });
+                if let Some((slot, other_slot, damage)) = rammed {
+                    f.events.push(Event::Ram { slot, other_slot, damage });
+                }
             }
         }
         self.ram_enemy_pairs(f);
@@ -1627,7 +1850,7 @@ impl Game {
             .with::<&Ai>()
             .iter()
             .filter(|(_, t)| !t.is_wreck())
-            .map(|(e, t)| (e, t.owner_slot, t.position))
+            .map(|(e, t)| (e, t.owner_slot(), t.position))
             .collect();
         enemies.sort_by_key(|(_, slot, _)| *slot);
 
@@ -1649,11 +1872,11 @@ impl Game {
                     continue;
                 }
                 let rammed = with_two_tanks_mut(&mut self.world, a, b, |x, y| {
-                    ram(x, true, y, true, &mut self.physics, &mut f.rng, &mut f.kills)
-                        .map(|damage| (x.owner_slot, y.owner_slot, damage))
+                    ram(x, y, &mut self.physics, &mut f.rng, &mut f.kills, 1.0)
+                        .map(|damage| (x.owner_slot(), y.owner_slot(), damage))
                 });
-                if let Some((slot, other, damage)) = rammed {
-                    f.events.push(Event::Ram { enemy_slot: slot, damage, other_slot: Some(other) });
+                if let Some((slot, other_slot, damage)) = rammed {
+                    f.events.push(Event::Ram { slot, other_slot, damage });
                 }
             }
         }
@@ -1718,7 +1941,7 @@ impl Game {
     /// point, ricochet if it can (shells off Iron), otherwise detonate at
     /// that point and - when `live` - apply damage/knockback/frog hop.
     fn resolve_projectiles<P: Projectile>(&mut self, f: &mut Frame, live: bool) {
-        let player = self.player.expect("player entity spawned in init");
+        let players = self.players();
         struct Flight {
             entity: Entity,
             prev: Position,
@@ -1752,7 +1975,7 @@ impl Game {
                 q.get().expect("projectile collected this frame still exists").passed_over().to_vec()
             };
             let hit = loop {
-                let swept = f.terrain.sweep_ignoring(&self.world, player, owner, prev, pos, P::hit_half_extent(), &ignored);
+                let swept = f.terrain.sweep_ignoring(&self.world, players, owner, prev, pos, P::hit_half_extent(), &ignored);
                 let Some((target, t)) = swept else { break None };
                 if let ShellTarget::Obstacle(e) = target {
                     let chance = f.terrain.obstacle(e).map_or(0.0, |b| b.material.pass_over_chance());
@@ -1775,8 +1998,7 @@ impl Game {
             // no hit flash on the tank; the impact flash above still shows
             // where the shield was struck.
             let shield = match target {
-                ShellTarget::PlayerTank => shield_deflector(&self.world, player),
-                ShellTarget::EnemyTank(e) => shield_deflector(&self.world, e),
+                ShellTarget::Tank(e) => shield_deflector(&self.world, e),
                 _ => None,
             };
             if let Some((center, new_owner)) = shield {
@@ -1821,7 +2043,7 @@ impl Game {
                 knockback: P::knockback_speed().map(|speed| (dir, speed)),
                 frog_hop: P::frog_hops().then_some(vel),
             };
-            self.apply_hit(f, target, hit_pos, dmg, effects);
+            self.apply_hit(f, target, hit_pos, dmg, effects, owner);
         }
     }
 
@@ -1930,12 +2152,12 @@ impl Game {
         let (mut i, mut j) = (0, 0);
         while i < f.kills.len() || j < f.pending_blasts.len() {
             while i < f.kills.len() {
-                let (center, victim_was_enemy, slot) = f.kills[i];
+                let (center, victim) = f.kills[i];
                 i += 1;
-                f.events.push(Event::Wreck { slot, x: center.x, y: center.y });
+                f.events.push(Event::Wreck { slot: victim.slot(), x: center.x, y: center.y });
                 f.shocks.push(Shockwave::scaled(center, SHOCK_KILL));
                 self.wreck_fx(f, center);
-                self.apply_explosion(f, center, victim_was_enemy);
+                self.apply_explosion(f, center, victim);
             }
             if j < f.pending_blasts.len() {
                 let center = f.pending_blasts[j];
@@ -2017,10 +2239,15 @@ impl Game {
     /// the player's frog dead) takes precedence over winning when both
     /// happen on the same frame.
     fn check_round_end(&mut self, f: &mut Frame) {
-        let player = self.player.expect("player entity spawned in init");
-        let player_dead = with_tank(&self.world, player, |t| t.is_wreck());
+        // Lost once every human tank is a wreck - the one player's in a
+        // single-player round, both in a two-player one - or the frog dies.
+        let players_dead = self
+            .players()
+            .into_iter()
+            .flatten()
+            .all(|e| with_tank(&self.world, e, |t| t.is_wreck()));
         let frog_dead = |frog: Option<Entity>| frog.is_some_and(|e| with_frog(&self.world, e, Frog::is_dead));
-        if player_dead || frog_dead(self.frog) {
+        if players_dead || frog_dead(self.frog) {
             self.end_round(f, Outcome::Lost);
             return;
         }
@@ -2055,20 +2282,23 @@ impl Game {
         f.events.push(Event::RoundEnded { outcome });
     }
 
-    /// Every tank's motion for the AI's predictive avoidance: slot 0 is the
-    /// player, then the enemies, plus a map from enemy entity to slot (a
-    /// later query over the same archetype has no guaranteed iteration
-    /// order). Wrecks are included at zero velocity so tanks steer around
-    /// them as fixed obstacles.
+    /// Every tank's motion for the AI's predictive avoidance: the players
+    /// first, in index order (so index `i` is player `i`), then the
+    /// enemies, plus a map from enemy entity to index (a later query over
+    /// the same archetype has no guaranteed iteration order). Wrecks are
+    /// included at zero velocity so tanks steer around them as fixed
+    /// obstacles.
     fn motion_snapshot(&self) -> (Vec<Mover>, HashMap<Entity, usize>) {
         let to_mover = |t: &Tank| Mover {
             position: t.position,
             velocity: if t.is_wreck() { Position::new(0.0, 0.0) } else { t.velocity },
             radius: t.avoidance_radius(),
+            is_player: t.is_player(),
         };
-        let player = self.player.expect("player entity spawned in init");
         let mut movers = Vec::new();
-        with_tank(&self.world, player, |t| movers.push(to_mover(t)));
+        for player in self.players().into_iter().flatten() {
+            with_tank(&self.world, player, |t| movers.push(to_mover(t)));
+        }
         let mut enemy_indices = HashMap::new();
         for (entity, tank) in self.world.query::<(Entity, &Tank)>().with::<&Ai>().iter() {
             enemy_indices.insert(entity, movers.len());
@@ -2131,8 +2361,17 @@ impl Game {
     /// sources `resolve_player_row` picked it from. `None` only before the
     /// first `init`.
     pub fn player_chassis(&self) -> Option<TankKind> {
-        let player = self.player?;
-        let mut q = self.world.query_one::<&Tank>(player);
+        self.chassis_of(self.player?)
+    }
+
+    /// Player 2's chassis this round; `None` in a single-player round or
+    /// before the first `init`.
+    pub fn player2_chassis(&self) -> Option<TankKind> {
+        self.chassis_of(self.player2?)
+    }
+
+    fn chassis_of(&self, entity: Entity) -> Option<TankKind> {
+        let mut q = self.world.query_one::<&Tank>(entity);
         TankKind::from_row(q.get().ok()?.row)
     }
 
@@ -2254,7 +2493,6 @@ impl Game {
     }
 
     pub fn tank_snapshots(&self) -> Vec<TankSnapshot> {
-        let player = self.player.expect("player entity spawned in init");
         self.world
             .query::<(Entity, &Tank)>()
             .iter()
@@ -2263,8 +2501,9 @@ impl Game {
                 // velocity stands in and it touches nothing.
                 let contact = tank.body.map(|b| self.physics.contact_stats(b)).unwrap_or_default();
                 TankSnapshot {
-                    slot: tank.owner_slot,
-                    is_player: entity == player,
+                    slot: tank.owner_slot(),
+                    is_player: tank.is_player(),
+                    player: self.player_index(entity),
                     entering: tank.body.is_none(),
                     position: tank.position,
                     rotation: tank.rotation,
@@ -2289,11 +2528,15 @@ impl Game {
 /// Read-only summary of one tank, from `Game::tank_snapshots`. A
 /// non-player tank is always an enemy.
 pub struct TankSnapshot {
-    /// `Tank::owner_slot`: 0 is the player, enemies count from 1. Slots
-    /// are never reused, so this identifies a tank for the whole round
-    /// even after a wreck despawns or a wave tank arrives.
+    /// `Tank::owner_slot`: the players first (0, and 1 in a two-player
+    /// round), then the enemies. Slots are never reused, so this
+    /// identifies a tank for the whole round even after a wreck despawns
+    /// or a wave tank arrives.
     pub slot: usize,
+    /// A human player's tank, either of them.
     pub is_player: bool,
+    /// Which human player (0 or 1), `None` for an enemy.
+    pub player: Option<u8>,
     /// A wave tank still rolling in from outside the battlefield: no
     /// physics body yet, not part of the fight.
     pub entering: bool,
@@ -2506,6 +2749,38 @@ fn bonus_shield_cell(
 /// `World::query_one`, so it can run inside another query's iteration as
 /// long as the two never touch the same entity. `pub(crate)`: `render`
 /// uses it too.
+impl Game {
+    /// The player entities in index order: player 1, then player 2 in a
+    /// two-player round (`None` otherwise). Every loop that has to treat
+    /// the players before the enemies walks this, so their RNG draws keep
+    /// a fixed order.
+    pub(crate) fn players(&self) -> [Option<Entity>; 2] {
+        [self.player, self.player2]
+    }
+
+    /// Which human player `entity` is (0 or 1), or `None` for anything else.
+    pub(crate) fn player_index(&self, entity: Entity) -> Option<u8> {
+        if Some(entity) == self.player {
+            Some(0)
+        } else if Some(entity) == self.player2 {
+            Some(1)
+        } else {
+            None
+        }
+    }
+
+    /// True for either player's tank.
+    pub(crate) fn is_player(&self, entity: Entity) -> bool {
+        self.player_index(entity).is_some()
+    }
+
+    /// The first owner slot an enemy can take: the players sit below it.
+    /// 1 in a single-player round, 2 with two players.
+    pub fn first_enemy_slot(&self) -> usize {
+        self.players.count()
+    }
+}
+
 pub(crate) fn with_tank<R>(world: &hecs::World, entity: Entity, f: impl FnOnce(&Tank) -> R) -> R {
     let mut q = world.query_one::<&Tank>(entity);
     f(q.get().expect("entity should have a Tank component"))
@@ -2552,7 +2827,7 @@ fn roll_enemy_tank(rng: &mut SmallRng, row: i32, pos: Position, slot: usize) -> 
         position: pos,
         rotation: 180.0,
         speed_scale: factor,
-        owner_slot: slot,
+        owner: Owner::Enemy(slot),
         ..Tank::default()
     };
     if rng.random_range(0.0..1.0) < tuning().enemy_special_weapon_chance {
@@ -2963,7 +3238,7 @@ mod mechanics_tests {
         assert!(game.frog.is_none() && game.enemy_frog.is_none());
         assert_eq!(game.world.query::<&Frog>().iter().count(), 0);
         assert!(matches!(game.events(), [Event::RoundStarted { mission: Mission::Destroy, .. }]));
-        let slot = game.world.query::<&Tank>().with::<&Ai>().iter().map(|t| t.owner_slot).next().unwrap();
+        let slot = game.world.query::<&Tank>().with::<&Ai>().iter().map(|t| t.owner_slot()).next().unwrap();
         game.debug_kill(slot).unwrap();
         step(&mut game, Input::default());
         assert_eq!(game.outcome(), Outcome::Won);
@@ -3036,7 +3311,7 @@ mod mechanics_tests {
             .query::<(Entity, &Tank)>()
             .with::<&Ai>()
             .iter()
-            .find(|(_, t)| t.owner_slot == slot)
+            .find(|(_, t)| t.owner_slot() == slot)
             .map(|(e, _)| e)
             .expect("enemy in that slot");
         let mut q = game.world.query_one::<&mut Ai>(entity);
@@ -3248,7 +3523,7 @@ cells."22,14" = { kind = "wall", material = "brick" }
             for e in game.events() {
                 match e {
                     Event::Fired { slot: 1, .. } => fired = true,
-                    Event::Hit { target: HitTarget::Player, .. } => hit_player = true,
+                    Event::Hit { target: HitTarget::Player { .. }, .. } => hit_player = true,
                     _ => {}
                 }
             }
@@ -3618,12 +3893,12 @@ cells."30,20" = { kind = "frog" }
             (tank.position, tank.row)
         };
         let shooter = Tank { row, position: Position::new(pos.x, pos.y - above), rotation: 180.0, ..Tank::default() };
-        let shell = Shell::spawn(&shooter, Owner::Enemy(0), 0.0, 0.0);
+        let shell = Shell::spawn(&shooter, Owner::Enemy(1), 0.0, 0.0);
         game.world.spawn((shell,));
         let mut deflected = false;
         for _ in 0..frames {
             step(&mut game, Input::default());
-            deflected |= game.world.query::<&Shell>().iter().any(|s| s.owner == Owner::Player && s.velocity.y < 0.0);
+            deflected |= game.world.query::<&Shell>().iter().any(|s| s.owner == Owner::Player(0) && s.velocity.y < 0.0);
         }
         (deflected, player_snapshot(&game).damage)
     }

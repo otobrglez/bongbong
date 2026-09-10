@@ -196,8 +196,8 @@ is the first in each list, and the active brush at entry is `WALL / brick`.
 - Closes on pick, `Esc`, or a press anywhere else. **That press is
   consumed**: it neither places a cell nor selects another tool, so a tap
   to dismiss a menu on a phone cannot paint through it.
-- The singleton badge (a dot on the icon when a frog/start/enemy frog is
-  already placed) moves from the old palette to the dropdown row and to the
+- The singleton badge (a dot on the icon when a frog/start/start2/enemy
+  frog is already placed) moves from the old palette to the dropdown row and to the
   category button when that tool is current.
 
 ### Files
@@ -220,7 +220,8 @@ is the first in each list, and the active brush at entry is `WALL / brick`.
 
 - A press on the field places the active tool at the cell under it; a drag
   paints every new cell it crosses, once per cell (today's `drag_cell`
-  rule). Singletons (start, frog, enemy frog) move rather than duplicate.
+  rule). Singletons (start, start2, frog, enemy frog) move rather than
+  duplicate, each independently.
 - **Toggle erase.** With a brush selected, a press on a cell that already
   holds *exactly that object* (same kind, same material or pickup) clears
   it instead. The decision is made **on the first cell of a press** and

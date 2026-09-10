@@ -41,7 +41,14 @@ pub enum CellObject {
     Wall { material: Material },
     Road,
     Frog,
+    /// Player 1's start - singleton like `Frog`. A map without one spawns
+    /// player 1 at the nearest free cell to the centre.
     Start,
+    /// Player 2's start in a two-player round - singleton like `Start`.
+    /// Ignored in a single-player round; a map without one places player
+    /// 2 beside player 1 (`Game::init`).
+    #[serde(rename = "start2")]
+    Start2,
     Pickup { pickup: PickupKind },
     /// The enemy side's frog (Hunt mission) - singleton like `Frog`.
     /// Ignored by missions without an enemy frog.
@@ -130,6 +137,11 @@ pub struct MapFile {
     /// roll. `--tank` on the command line outranks this.
     #[serde(default)]
     pub tank: Option<TankKind>,
+    /// Player 2's chassis in a two-player round (TOML: a top-level
+    /// `tank2 = "scout"`), the same way `tank` names player 1's. `None`
+    /// means a random roll; `--tank2` outranks it.
+    #[serde(default)]
+    pub tank2: Option<TankKind>,
     /// The `[mission]` table - what ends the round (docs/maps-to-levels.md).
     /// Absent means Protect.
     #[serde(default)]
@@ -179,6 +191,7 @@ impl MapFile {
             cells: HashMap::new(),
             tanks: None,
             tank: None,
+            tank2: None,
             mission: MissionConfig::default(),
             spawn: SpawnConfig::default(),
             name: None,
@@ -291,6 +304,15 @@ impl MapFile {
     pub fn start_cell(&self) -> Option<(i32, i32)> {
         self.iter_cells()
             .find(|(_, _, obj)| matches!(obj, CellObject::Start))
+            .map(|(col, row, _)| (col, row))
+    }
+
+    /// The map's one player-2 start cell, if it placed one - same
+    /// singleton convention as `start_cell`. Read only in a two-player
+    /// round.
+    pub fn start2_cell(&self) -> Option<(i32, i32)> {
+        self.iter_cells()
+            .find(|(_, _, obj)| matches!(obj, CellObject::Start2))
             .map(|(col, row, _)| (col, row))
     }
 
@@ -489,11 +511,19 @@ spawn.waves = 4
 spawn.size = 2
 spawn.tier_start = "light"
 spawn.tier_end = "heavy"
+tank2 = "titan"
 cells."3,5" = { kind = "enemy_frog" }
+cells."4,5" = { kind = "start2" }
 cells."0,11" = { kind = "gate" }
 cells."39,11" = { kind = "gate" }
 "#;
         let map = MapFile::from_toml_str(text).unwrap();
+        assert_eq!(map.tank2, Some(TankKind::Titan));
+        assert_eq!(map.start2_cell(), Some((4, 5)));
+        assert_eq!(map.start_cell(), None);
+        assert!(map.cell(4, 5).is_some_and(|c| !c.is_solid()));
+        // An older file without the key still parses, with no preference.
+        assert_eq!(MapFile::from_toml_str("version = 1\n").unwrap().tank2, None);
         assert_eq!(map.mission.kind, Mission::Hunt);
         assert_eq!(map.spawn.kind, SpawnKind::Waves);
         assert_eq!((map.spawn.waves, map.spawn.size, map.spawn.growth), (Some(4), Some(2), None));
@@ -505,6 +535,8 @@ cells."39,11" = { kind = "gate" }
         assert_eq!(back.spawn, map.spawn);
         assert_eq!(back.enemy_frog_cell(), map.enemy_frog_cell());
         assert_eq!(back.gate_cells(), map.gate_cells());
+        assert_eq!(back.start2_cell(), Some((4, 5)));
+        assert_eq!(back.tank2, Some(TankKind::Titan));
     }
 
     #[test]

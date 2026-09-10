@@ -2,10 +2,10 @@ use bongbong::tuning::tuning;
 use bongbong::ai::Intent;
 use bongbong::editor::{BuilderInput, CliOverrides, EditorTextures};
 use bongbong::game::{Effects, Textures};
-use bongbong::hud::{leave_dialog_rects, mode_button_rect};
+use bongbong::hud::{leave_dialog_rects, mode_button_rect, players_button_rect, players_dialog_rects};
 use bongbong::mode::{Driver, Session};
 use bongbong::shockwave::{RippleFx, RippleTuning};
-use bongbong::simulation::{Game, Input};
+use bongbong::simulation::{Game, Input, PlayerCount};
 use bongbong::tuning;
 use bongbong::tank::{Dir, TankKind};
 use bongbong::{
@@ -15,7 +15,68 @@ use bongbong::{
 };
 use clap::Parser;
 use sola_raylib::core::game_loop;
-use sola_raylib::prelude::KeyboardKey;
+use sola_raylib::prelude::{KeyboardKey, RaylibHandle};
+
+/// This frame's raw movement/fire commands for both players, from the
+/// keyboard. `fire` is the raw held state - whether it actually fires
+/// (edge-triggered for shells, full-auto while a laser is charged) is
+/// `Game::update`'s call, not this function's; see `Input::player_intent`.
+/// Single player: arrows + Space, player 2 idle. Two players: player 1 on
+/// the arrows + Right Shift (Space is not read), player 2 on WASD + Left
+/// Shift (docs/two-players.md).
+fn gather_intents(rl: &RaylibHandle, players: PlayerCount) -> (Intent, Intent) {
+    let dir = |up: KeyboardKey, down: KeyboardKey, left: KeyboardKey, right: KeyboardKey| {
+        if rl.is_key_down(up) {
+            Some(Dir::Up)
+        } else if rl.is_key_down(down) {
+            Some(Dir::Down)
+        } else if rl.is_key_down(left) {
+            Some(Dir::Left)
+        } else if rl.is_key_down(right) {
+            Some(Dir::Right)
+        } else {
+            None
+        }
+    };
+    let arrows = dir(KeyboardKey::KEY_UP, KeyboardKey::KEY_DOWN, KeyboardKey::KEY_LEFT, KeyboardKey::KEY_RIGHT);
+    match players {
+        PlayerCount::One => (
+            Intent { move_dir: arrows, fire: rl.is_key_down(KeyboardKey::KEY_SPACE), ..Intent::default() },
+            Intent::default(),
+        ),
+        PlayerCount::Two => {
+            let (left_shift, right_shift) = shift_state(rl);
+            let wasd = dir(KeyboardKey::KEY_W, KeyboardKey::KEY_S, KeyboardKey::KEY_A, KeyboardKey::KEY_D);
+            (
+                Intent { move_dir: arrows, fire: right_shift, ..Intent::default() },
+                Intent { move_dir: wasd, fire: left_shift, ..Intent::default() },
+            )
+        }
+    }
+}
+
+/// Whether the left and right Shift keys are held. Native reads raylib's
+/// two keys. On the web emscripten's GLFW layer reports the DOM Shift key
+/// as `GLFW_KEY_LEFT_SHIFT` whichever side was pressed (`libglfw.js` maps
+/// keyCode 0x10 to the left key and never looks at `event.location`), so
+/// Right Shift would never reach the game and player 1 could not fire:
+/// the page keeps `window.bbShift` (bit 1 = ShiftLeft, bit 2 = ShiftRight,
+/// from `keydown`/`keyup` on `event.code`) and this reads it once a frame.
+#[cfg(target_os = "emscripten")]
+fn shift_state(_rl: &RaylibHandle) -> (bool, bool) {
+    unsafe extern "C" {
+        fn emscripten_run_script_int(script: *const std::os::raw::c_char) -> std::os::raw::c_int;
+    }
+    // SAFETY: a NUL-terminated literal, evaluated synchronously by the
+    // emscripten runtime; the value is a plain int.
+    let mask = unsafe { emscripten_run_script_int(c"(window.bbShift|0)".as_ptr()) };
+    (mask & 1 != 0, mask & 2 != 0)
+}
+
+#[cfg(not(target_os = "emscripten"))]
+fn shift_state(rl: &RaylibHandle) -> (bool, bool) {
+    (rl.is_key_down(KeyboardKey::KEY_LEFT_SHIFT), rl.is_key_down(KeyboardKey::KEY_RIGHT_SHIFT))
+}
 
 /// Command-line flags for bongbong's native binary. All optional - with none
 /// given, behavior matches today's defaults exactly (random enemy count,
@@ -72,6 +133,19 @@ struct Args {
     /// across in-game restarts (R key).
     #[arg(long = "tank", value_enum)]
     tank: Option<TankKind>,
+
+    /// Two-player mode: pin player 2's chassis, over the loaded map's own
+    /// `tank2` key (else a random roll each round). Persists across
+    /// restarts like `--tank`.
+    #[arg(long = "tank2", value_enum)]
+    tank2: Option<TankKind>,
+
+    /// Start the session in single (1) or two-player (2) mode - the
+    /// players button in the HUD bar switches later (docs/two-players.md).
+    /// Two players: player 1 on the arrows + Right Shift, player 2 on WASD
+    /// + Left Shift; single: arrows + Space. Kept across restarts.
+    #[arg(long = "players", default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=2))]
+    players: u8,
 
     /// Override the battlefield size, e.g. `--resolution 1920x1080` (default:
     /// 1280x720).
@@ -430,6 +504,8 @@ fn main() {
     };
     game.show_intro = true;
     game.player_row_override = args.tank.map(TankKind::row);
+    game.player2_row_override = args.tank2.map(TankKind::row);
+    game.players = PlayerCount::from_count(args.players as usize).expect("clap limits --players to 1 or 2");
     game.shadows_enabled = !args.no_shadows;
     game.seed_override = args.seed;
     game.map = args.map.unwrap_or_else(default_map);
@@ -441,6 +517,7 @@ fn main() {
     session.builder.cli_overrides = CliOverrides {
         tanks: args.enemies.is_some(),
         tank: args.tank.is_some(),
+        tank2: args.tank2.is_some(),
         mission: args.mission.is_some(),
         spawn: args.spawn.is_some(),
         waves: args.waves.is_some(),
@@ -556,11 +633,38 @@ fn main() {
 
         match session.mode() {
             Driver::Play => {
-                // The BUILD button and the leave dialog come first: a press
-                // on either is never a tank order. Nothing here touches the
-                // simulation - a frozen round is one whose `update` is not
-                // called (see `Session::playing`).
-                if session.dialog {
+                // The two buttons and the two dialogs come first: a press
+                // on any of them is never a tank order. Nothing here
+                // touches the simulation - a frozen round is one whose
+                // `update` is not called (see `Session::playing`).
+                if session.players_dialog {
+                    let rects = players_dialog_rects(layout.field);
+                    let field_p = layout.to_field(pointer);
+                    if pressed {
+                        if rects.one.check_collision_point_rec(field_p) {
+                            session.answer_players(PlayerCount::One, width, height);
+                        } else if rects.two.check_collision_point_rec(field_p) {
+                            session.answer_players(PlayerCount::Two, width, height);
+                        } else if !rects.panel.check_collision_point_rec(field_p) {
+                            session.close_players_dialog();
+                        }
+                    }
+                    if rl.is_key_pressed(KeyboardKey::KEY_ONE) {
+                        session.answer_players(PlayerCount::One, width, height);
+                    } else if rl.is_key_pressed(KeyboardKey::KEY_TWO) {
+                        session.answer_players(PlayerCount::Two, width, height);
+                    } else if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
+                        // Enter is the action, as it is "leave" in the other
+                        // dialog: the point of opening this one is to switch.
+                        let other = match session.game.players {
+                            PlayerCount::One => PlayerCount::Two,
+                            PlayerCount::Two => PlayerCount::One,
+                        };
+                        session.answer_players(other, width, height);
+                    } else if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) || tab {
+                        session.close_players_dialog();
+                    }
+                } else if session.dialog {
                     let rects = leave_dialog_rects(layout.field);
                     let field_p = layout.to_field(pointer);
                     if pressed {
@@ -579,6 +683,8 @@ fn main() {
                     }
                 } else if tab || (pressed && mode_button_rect(layout.panel).check_collision_point_rec(pointer)) {
                     session.press_build();
+                } else if pressed && players_button_rect(layout.panel).check_collision_point_rec(pointer) {
+                    session.press_players();
                 }
             }
             Driver::Build => {
@@ -647,31 +753,21 @@ fn main() {
         // itself decides what to do with it (e.g. whether a wreck can move),
         // so nothing simulation-related needs to know a `RaylibHandle`
         // exists. See simulation.rs's module doc comment.
-        let mut player_intent = Intent::default();
-        if rl.is_key_down(KeyboardKey::KEY_UP) {
-            player_intent.move_dir = Some(Dir::Up);
-        } else if rl.is_key_down(KeyboardKey::KEY_DOWN) {
-            player_intent.move_dir = Some(Dir::Down);
-        } else if rl.is_key_down(KeyboardKey::KEY_LEFT) {
-            player_intent.move_dir = Some(Dir::Left);
-        } else if rl.is_key_down(KeyboardKey::KEY_RIGHT) {
-            player_intent.move_dir = Some(Dir::Right);
-        }
-        // Raw held-state - whether this actually fires (edge-triggered for
-        // shells, full-auto while a laser is charged) is `Game::update`'s
-        // call, not this closure's; see `Input::player_intent`'s doc comment.
-        player_intent.fire = rl.is_key_down(KeyboardKey::KEY_SPACE);
+        let (player_intent, player2_intent) = gather_intents(rl, session.game.players);
         // Tap-to-command (docs/tap-navigation.md). The scene blits 1:1 at
         // the field origin - `game.rs` draws the render target with
         // `draw_texture_rec`, whose only other offset is the camera shake -
         // so a window position less the origin *is* a world position, give
         // or take a couple of 2px blocks during an explosion. A tap on the
-        // HUD bar is not an order, and neither is a tap while the leave
-        // dialog is up.
-        let tap = (pressed && !session.dialog).then_some(pointer);
+        // HUD bar is not an order, and neither is a tap while a dialog is
+        // up or in a two-player round, where the keyboard is the whole
+        // interface (the simulation ignores it there too).
+        let tap_allowed = !session.dialog && !session.players_dialog && session.game.players == PlayerCount::One;
+        let tap = (pressed && tap_allowed).then_some(pointer);
         let tap = tap.filter(|p| layout.field.contains(*p)).map(|p| layout.to_field(p));
         let input = Input {
             player_intent,
+            player2_intent,
             tap,
             pause_pressed: rl.is_key_pressed(KeyboardKey::KEY_P),
             // The dev panel's "Restart round" button lands here too, as if

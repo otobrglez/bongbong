@@ -25,8 +25,8 @@ use super::with_tank;
 /// (see `Game::apply_hit`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ShellTarget {
-    PlayerTank,
-    EnemyTank(Entity),
+    /// Any tank, a player's or an enemy's; `Tank::owner` says whose.
+    Tank(Entity),
     Frog(Entity),
     Obstacle(Entity),
     Wall,
@@ -188,23 +188,25 @@ impl Terrain {
     }
 
     /// The first thing the segment `p0..p1`, inflated by `half_extent` per
-    /// side, hits. Every candidate box - the player's hull and turret, each
-    /// enemy's hull and turret, the frog, every obstacle tile, the four
-    /// walls - is scored by its entry time and the nearest wins, so a long
-    /// segment can never skip what it would really have struck first.
-    /// Exact ties go player > enemies > frog > obstacles > walls. The
-    /// shooter's own boxes are skipped. Returns the target plus `t` in
-    /// `0..=1` along `p0..p1` (so a beam can be clipped to where it hit).
+    /// side, hits. Every candidate box - each player's hull and turret,
+    /// each enemy's hull and turret, the frog, every obstacle tile, the
+    /// four walls - is scored by its entry time and the nearest wins, so a
+    /// long segment can never skip what it would really have struck first.
+    /// Exact ties go players > enemies > frog > obstacles > walls. The
+    /// shooter's own boxes are skipped. `players` is `Game::players` - the
+    /// player entities in index order, `None` where there is no such
+    /// player. Returns the target plus `t` in `0..=1` along `p0..p1` (so a
+    /// beam can be clipped to where it hit).
     pub fn sweep(
         &self,
         world: &hecs::World,
-        player: Entity,
+        players: [Option<Entity>; 2],
         shooter: Owner,
         p0: Position,
         p1: Position,
         half_extent: f32,
     ) -> Option<(ShellTarget, f32)> {
-        self.sweep_ignoring(world, player, shooter, p0, p1, half_extent, &[])
+        self.sweep_ignoring(world, players, shooter, p0, p1, half_extent, &[])
     }
 
     /// `sweep` with the obstacle tiles in `ignore` left out - the ones a
@@ -214,7 +216,7 @@ impl Terrain {
     pub fn sweep_ignoring(
         &self,
         world: &hecs::World,
-        player: Entity,
+        players: [Option<Entity>; 2],
         shooter: Owner,
         p0: Position,
         p1: Position,
@@ -232,12 +234,14 @@ impl Terrain {
         // and `ai::Brain::friendly_blocks_shot` skips wrecks). Blocking
         // shots that nobody can reason about is the worst of both, so they
         // pass through.
-        let (player_owner, player_wrecked, hull, turret) = with_tank(world, player, |t| {
-            (t.owner(), t.is_wreck(), t.hull_bbox_world(), t.turret_bbox_world())
-        });
-        if player_owner != shooter && !player_wrecked {
-            consider_hit(&mut best, segment_hits_aabb(p0, p1, hull.0, hull.1 + pad), 0, ShellTarget::PlayerTank);
-            consider_hit(&mut best, segment_hits_aabb(p0, p1, turret.0, turret.1 + pad), 0, ShellTarget::PlayerTank);
+        for player in players.into_iter().flatten() {
+            let (owner, wrecked, hull, turret) = with_tank(world, player, |t| {
+                (t.owner(), t.is_wreck(), t.hull_bbox_world(), t.turret_bbox_world())
+            });
+            if owner != shooter && !wrecked {
+                consider_hit(&mut best, segment_hits_aabb(p0, p1, hull.0, hull.1 + pad), 0, ShellTarget::Tank(player));
+                consider_hit(&mut best, segment_hits_aabb(p0, p1, turret.0, turret.1 + pad), 0, ShellTarget::Tank(player));
+            }
         }
 
         for (entity, tank) in world.query::<(Entity, &Tank)>().with::<&Ai>().iter() {
@@ -245,9 +249,9 @@ impl Terrain {
                 continue;
             }
             let (hc, hh) = tank.hull_bbox_world();
-            consider_hit(&mut best, segment_hits_aabb(p0, p1, hc, hh + pad), 1, ShellTarget::EnemyTank(entity));
+            consider_hit(&mut best, segment_hits_aabb(p0, p1, hc, hh + pad), 1, ShellTarget::Tank(entity));
             let (tc, th) = tank.turret_bbox_world();
-            consider_hit(&mut best, segment_hits_aabb(p0, p1, tc, th + pad), 1, ShellTarget::EnemyTank(entity));
+            consider_hit(&mut best, segment_hits_aabb(p0, p1, tc, th + pad), 1, ShellTarget::Tank(entity));
         }
 
         for &(entity, pos) in &self.frogs {
@@ -397,8 +401,8 @@ mod shell_sweep_tests {
     fn consider_hit_breaks_an_exact_tie_by_rank() {
         let mut best = None;
         consider_hit(&mut best, Some(0.5), 3, ShellTarget::Obstacle(Entity::DANGLING));
-        consider_hit(&mut best, Some(0.5), 1, ShellTarget::EnemyTank(Entity::DANGLING));
-        assert!(matches!(best, Some((_, 1, ShellTarget::EnemyTank(_)))));
+        consider_hit(&mut best, Some(0.5), 1, ShellTarget::Tank(Entity::DANGLING));
+        assert!(matches!(best, Some((_, 1, ShellTarget::Tank(_)))));
     }
 
     #[test]

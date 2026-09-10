@@ -424,6 +424,7 @@
         <div class="instructions">
             <p>Use arrow keys to move the tank. <kbd>Space</kbd> to fire and <kbd>r</kbd> to restart the game.</p>
             <p>Or tap: tap the ground to drive there, tap an enemy to close on it and open fire. Any arrow key takes back control.</p>
+            <p>Two players: the tank button in the bar (beside <kbd>BUILD</kbd>) switches modes. Player 1 drives with the arrows and fires with <kbd>Right Shift</kbd>; player 2 drives with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> and fires with <kbd>Left Shift</kbd>. Keyboard only; taps are off.</p>
         </div>
         <details class="tuning" id="tuning" hidden>
             <summary>Tuning <span class="badge">dev build</span></summary>
@@ -543,7 +544,25 @@
             if (gameKeys.has(e.code)) e.preventDefault();
         },
         {passive: false},
-    );</script>
+    );
+    // Which Shift key is held, for two-player mode. Emscripten's GLFW
+    // layer reports the DOM Shift key as the *left* Shift whichever side
+    // was pressed (it maps keyCode 0x10 and never reads event.code), so
+    // the game cannot tell player 1's Right Shift from player 2's Left
+    // Shift through raylib. It reads this bitmask once a frame instead
+    // (bit 1 = ShiftLeft, bit 2 = ShiftRight; see main.rs's shift_state).
+    // Cleared on blur so a Shift held while the tab loses focus does not
+    // stick.
+    window.bbShift = 0;
+    window.addEventListener("keydown", function (e) {
+        if (e.code === "ShiftLeft") window.bbShift |= 1;
+        else if (e.code === "ShiftRight") window.bbShift |= 2;
+    });
+    window.addEventListener("keyup", function (e) {
+        if (e.code === "ShiftLeft") window.bbShift &= ~1;
+        else if (e.code === "ShiftRight") window.bbShift &= ~2;
+    });
+    window.addEventListener("blur", function () { window.bbShift = 0; });</script>
 <script is:inline>
     // Runtime tuning panel - see docs/runtime-tuning-design.md §7. Renders
     // itself entirely from the schema the wasm exports (bb_tuning_schema_json),

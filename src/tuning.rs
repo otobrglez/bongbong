@@ -668,6 +668,10 @@ tunables! {
         /// Ramming: after taking collision damage a tank is immune for this
         /// long, so continuous touching doesn't drain damage every frame.
         ram_damage_cooldown: f32 = 0.5 in 0.0 ..= 5.0;
+        /// Two-player rounds: what one player's shell, beam, bullet or ram
+        /// deals to the other player, as a factor of the normal roll. 1 is
+        /// full friendly fire, 0 makes teammates harmless to each other.
+        friendly_fire_damage_factor: f32 = 1.0 in 0.0 ..= 2.0;
         /// Damage both tanks take from one ram contact, rolled uniformly in
         /// this range (`simulation::combat::ram`). Wrecks neither deal nor
         /// take it.
@@ -710,6 +714,11 @@ tunables! {
         /// that value enemies never noticed the player past roughly half the
         /// window and read as passive.
         enemy_view_range: f32 = 800.0 in 50.0 ..= 3000.0;
+        /// Two-player rounds: an enemy switches to the other player only
+        /// once that player is this many px nearer than its current target
+        /// - hysteresis, so two players at equal range do not flip the pack
+        /// between them every frame.
+        enemy_target_switch_margin_px: f32 = 96.0 in 0.0 ..= 400.0;
         /// Stop and fight within this distance (px). The engagement ring and
         /// retreat range are factors of this - see the `engage` group.
         enemy_attack_range: f32 = 340.0 in 50.0 ..= 2000.0;

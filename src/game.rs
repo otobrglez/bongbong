@@ -23,8 +23,8 @@ use crate::pickup::{Pickup, PickupKind, draw_pickup};
 use crate::plasma::{Plasma, PlasmaState, draw_plasma, draw_plasma_shadow};
 use crate::shell::{Shell, ShellState, draw_shell, draw_shell_shadow};
 use crate::hud::{
-    draw_bar, draw_leave_dialog, draw_mode_button, version_line, HudModel, PlayChrome, BUILD_COLOR,
-    HUD_VERSION_BOTTOM_INSET, HUD_VERSION_COLOR, HUD_VERSION_RIGHT_INSET, HUD_VERSION_TEXT_SIZE,
+    draw_bar, draw_leave_dialog, draw_mode_button, draw_players_button, draw_players_dialog, version_line, HudModel,
+    PlayChrome, BUILD_COLOR, HUD_VERSION_BOTTOM_INSET, HUD_VERSION_COLOR, HUD_VERSION_RIGHT_INSET, HUD_VERSION_TEXT_SIZE,
 };
 use crate::shockwave::{RippleFx, screen_to_ripple_uv};
 use crate::simulation::{Game, Outcome};
@@ -84,6 +84,8 @@ pub struct Textures<'a> {
 #[derive(Clone, Copy, PartialEq)]
 enum TankRole {
     Player,
+    /// The second human tank of a two-player round: its own blue ring.
+    Player2,
     Enemy,
     /// A wave tank still rolling in: partly off-screen by construction, and
     /// with no health ring or damage overlay until it arrives.
@@ -109,6 +111,7 @@ fn draw_one_tank(
 ) {
     match role {
         TankRole::Player => draw_player_ring(d, tank, time),
+        TankRole::Player2 => crate::tank::draw_player2_ring(d, tank, time),
         TankRole::Enemy => draw_enemy_ring(d, tank, time),
         TankRole::RollIn => {}
     }
@@ -326,6 +329,8 @@ impl Game {
                 .map(|(entity, tank)| {
                     let role = if entity == player {
                         TankRole::Player
+                    } else if Some(entity) == self.player2 {
+                        TankRole::Player2
                     } else if rollins.contains(&entity) {
                         TankRole::RollIn
                     } else {
@@ -781,15 +786,22 @@ impl Game {
                 // section 6): the same dim as PAUSED, the dialog on top.
                 // The round is frozen by `main.rs` not calling `update`,
                 // so nothing here is simulation state.
-                if chrome.leave_dialog {
+                if chrome.leave_dialog || chrome.players_dialog {
                     d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(0, 0, 0, 120));
+                }
+                if chrome.leave_dialog {
                     draw_leave_dialog(&mut d, layout.field);
+                } else if chrome.players_dialog {
+                    draw_players_dialog(&mut d, layout.field, self.players);
                 }
             });
 
             // The HUD bar, in window space, over anything the field pass
             // might have put on its edge.
             draw_bar(&mut d, layout.panel, &hud, textures);
+            if chrome.players_button {
+                draw_players_button(&mut d, layout.panel, self.players, chrome.players_dialog);
+            }
             if chrome.build_button {
                 draw_mode_button(&mut d, layout.panel, "BUILD", BUILD_COLOR);
             }

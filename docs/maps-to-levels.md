@@ -41,12 +41,15 @@ pub enum Mission { Protect, Hunt, Destroy }   // default: Protect
 
 | Mission | Frogs spawned | Lose when | Win when | Banner |
 |---|---|---|---|---|
-| Protect | player frog | player wreck or player frog dead | all enemies wrecked and spawn plan finished | `PROTECT THE FROG!` |
-| Hunt | player frog + enemy frog | player wreck or player frog dead | enemy frog dead | `HUNT THE FROG!` |
-| Destroy | none | player wreck | all enemies wrecked and spawn plan finished | `DESTROY!` |
+| Protect | player frog | every player tank wrecked, or player frog dead | all enemies wrecked and spawn plan finished | `PROTECT THE FROG!` |
+| Hunt | player frog + enemy frog | every player tank wrecked, or player frog dead | enemy frog dead | `HUNT THE FROG!` |
+| Destroy | none | every player tank wrecked | all enemies wrecked and spawn plan finished | `DESTROY!` |
 
 "Spawn plan finished" = no wave pending and no tank still rolling in. Losing
-takes precedence over winning on the same frame (as today).
+takes precedence over winning on the same frame (as today). "Every player
+tank" is the one player in a single-player round and both in a two-player
+one (docs/two-players.md): one wreck of two keeps the round going, its hulk
+stays on the field and its keys do nothing.
 
 ### Spawn plan
 

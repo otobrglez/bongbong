@@ -348,6 +348,23 @@ struct Args {
     #[arg(long = "tank", value_enum)]
     tank: Option<TankKind>,
 
+    /// Two-player rounds (docs/two-players.md): run the round with two
+    /// human tanks, player 2 driven by `--p2-scenario`. Slot 1 is player
+    /// 2 and enemies count from 2; anomaly checks measure each enemy
+    /// against the nearest live player, which is what the AI targets.
+    #[arg(long = "players", default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=2))]
+    players: u8,
+
+    /// Two-player rounds: pin player 2's chassis (over the map's `tank2`
+    /// key, else a random roll), like `--tank` for player 1.
+    #[arg(long = "tank2", value_enum)]
+    tank2: Option<TankKind>,
+
+    /// Two-player rounds: player 2's scripted scenario (default: the same
+    /// as `--scenario`; `afk` parks it).
+    #[arg(long = "p2-scenario", value_enum)]
+    p2_scenario: Option<Scenario>,
+
     /// Maximum frames to simulate per round before giving up (default: 3600 = 60s at 60fps).
     #[arg(long, default_value_t = 3600)]
     frames: u32,
@@ -430,7 +447,28 @@ struct Args {
     heatmap: bool,
 }
 
-fn input_for_frame(scenario: Scenario, frame: u32) -> Input {
+/// Both players' input for `frame`: player 1 on `--scenario`, player 2 on
+/// `--p2-scenario` (idle in a single-player round).
+fn input_for_frame(args: &Args, frame: u32) -> Input {
+    let player2_intent = if args.players == 2 {
+        intent_for_frame(args.p2_scenario.unwrap_or(args.scenario), frame)
+    } else {
+        Intent::default()
+    };
+    Input {
+        player_intent: intent_for_frame(args.scenario, frame),
+        player2_intent,
+        // The probe scripts intents, not taps; a scenario that wants to
+        // exercise tap orders sets this itself.
+        tap: None,
+        pause_pressed: false,
+        restart_pressed: false,
+        toggle_shadows_pressed: false,
+        cycle_overlays_pressed: false,
+    }
+}
+
+fn intent_for_frame(scenario: Scenario, frame: u32) -> Intent {
     let mut player_intent = Intent::default();
     match scenario {
         Scenario::Afk => {}
@@ -452,16 +490,7 @@ fn input_for_frame(scenario: Scenario, frame: u32) -> Input {
             });
         }
     }
-    Input {
-        player_intent,
-        // The probe scripts intents, not taps; a scenario that wants to
-        // exercise tap orders sets this itself.
-        tap: None,
-        pause_pressed: false,
-        restart_pressed: false,
-        toggle_shadows_pressed: false,
-        cycle_overlays_pressed: false,
-    }
+    player_intent
 }
 
 fn outcome_str(outcome: Outcome) -> &'static str {
@@ -479,7 +508,7 @@ fn log_frame(game: &Game, frame: u32) {
         outcome_str(game.outcome())
     );
     for tank in game.tank_snapshots() {
-        let label = if tank.is_player { "PLAYER ".to_string() } else { enemy_label(tank.slot) };
+        let label = format!("{:<7}", tank_label(&tank, game.first_enemy_slot()));
         let speed = (tank.velocity.x * tank.velocity.x + tank.velocity.y * tank.velocity.y).sqrt();
         // A wave tank still rolling in sits outside the battlefield with a
         // kinematic velocity; the marker says so rather than leaving it to
@@ -699,7 +728,7 @@ impl TankTrack {
         let ideal_seconds = path_cells
             .map_or(0.0, |cells| cells as f32 * PATHFIND_CELL_SIZE / snapshot.top_speed.max(1.0));
         Self {
-            label: enemy_label(snapshot.slot),
+            label: enemy_label(snapshot.slot, game.first_enemy_slot()),
             entered_frame: frame,
             spawn_pos: snapshot.position,
             max_spawn_dist: 0.0,
@@ -794,18 +823,23 @@ fn report_global(round: u32, seed: u64, frame: u32, kind: &str, detail: &str) {
 }
 
 /// Display label for the enemy in owner slot `slot`: "ENEMY#k" with k the
-/// enemy ordinal `slot - 1` (owner slots count enemies from 1 and are
+/// enemy ordinal `slot - first_enemy` (owner slots count enemies from the
+/// first slot after the players - 1, or 2 with two players - and are
 /// never reused, so a wave tank arriving later gets a fresh number; the
-/// dev server's tools name the same tank by its raw slot, one higher).
-/// Shared by `log_frame`, `TankTrack` and every ANOMALY line, so the
-/// three always agree.
-fn enemy_label(slot: usize) -> String {
-    format!("ENEMY#{}", slot - 1)
+/// dev server's tools name the same tank by its raw slot).
+fn enemy_label(slot: usize, first_enemy: usize) -> String {
+    format!("ENEMY#{}", slot.saturating_sub(first_enemy))
 }
 
-/// Display label for any tank: "PLAYER", or `enemy_label`.
-fn tank_label(tank: &TankSnapshot) -> String {
-    if tank.is_player { "PLAYER".to_string() } else { enemy_label(tank.slot) }
+/// Display label for any tank: "PLAYER" (or "PLAYER1"/"PLAYER2" in a
+/// two-player round), or `enemy_label`. `first_enemy` is
+/// `Game::first_enemy_slot`.
+fn tank_label(tank: &TankSnapshot, first_enemy: usize) -> String {
+    match tank.player {
+        Some(_) if first_enemy == 1 => "PLAYER".to_string(),
+        Some(i) => format!("PLAYER{}", i + 1),
+        None => enemy_label(tank.slot, first_enemy),
+    }
 }
 
 /// Runs this frame's standing checks: first the frame invariants over
@@ -836,16 +870,25 @@ fn check_anomalies(
     }
     let seed = game.round_seed();
     let snapshots = game.tank_snapshots();
-    let player_snap = snapshots
-        .iter()
-        .find(|t| t.is_player)
-        .expect("snapshots always include the player");
+    let players: Vec<&TankSnapshot> = snapshots.iter().filter(|t| t.is_player).collect();
+    assert!(!players.is_empty(), "snapshots always include a player");
+    // The player an enemy is measured against: the nearest live one, as
+    // the AI targets (a lone player, or both wrecks, falls back to any).
+    let nearest_player = |pos: Position| -> &TankSnapshot {
+        players
+            .iter()
+            .filter(|p| !p.is_wreck)
+            .min_by(|a, b| a.position.distance_to(pos).total_cmp(&b.position.distance_to(pos)))
+            .copied()
+            .unwrap_or(players[0])
+    };
 
     // Every enemy on the field gets a track the first frame it is seen
     // there - band tanks at frame 0, wave tanks the frame they arrive.
     for tank in &snapshots {
         if !tank.is_player && !tank.entering && !tracks.contains_key(&tank.slot) {
-            tracks.insert(tank.slot, TankTrack::new(game, tank, player_snap.position, frame));
+            let player_pos = nearest_player(tank.position).position;
+            tracks.insert(tank.slot, TankTrack::new(game, tank, player_pos, frame));
         }
     }
 
@@ -906,7 +949,7 @@ fn check_anomalies(
             round,
             seed,
             frame,
-            &tank_label(tank),
+            &tank_label(tank, game.first_enemy_slot()),
             "invariant",
             &violation,
             pos,
@@ -929,6 +972,7 @@ fn check_anomalies(
             continue;
         }
         let track = tracks.get_mut(&tank.slot).expect("every enemy on the field has a track");
+        let player_snap = nearest_player(tank.position);
         // Frames since this tank came onto the field: the from-spawn
         // windows below count from here, not from the round's frame 0.
         let age = frame - track.entered_frame;
@@ -1340,6 +1384,8 @@ fn run_round(
         tier_end: args.tier_end,
     };
     game.player_row_override = args.tank.map(TankKind::row);
+    game.player2_row_override = args.tank2.map(TankKind::row);
+    game.players = bongbong::simulation::PlayerCount::from_count(args.players as usize).expect("clap limits --players to 1 or 2");
     game.seed_override = Some(seed);
     game.map = match &args.map {
         Some(named) => named.map.clone(),
@@ -1354,6 +1400,9 @@ fn run_round(
             "player chassis={}",
             game.player_chassis().map(TankKind::name).unwrap_or("?")
         );
+        if let Some(kind) = game.player2_chassis() {
+            println!("player 2 chassis={}", kind.name());
+        }
     }
 
     // Both keyed by owner slot and filled as tanks come onto the field
@@ -1370,7 +1419,7 @@ fn run_round(
 
     let mut frames_run = args.frames;
     for frame in 1..=args.frames {
-        let input = input_for_frame(args.scenario, frame);
+        let input = input_for_frame(args, frame);
         game.update(input, DT, WIDTH, HEIGHT);
         check_anomalies(&mut tracks, &mut invariant_flagged, &game, round, frame, &mut totals, heat);
 
@@ -1544,11 +1593,12 @@ fn json_round_line(args: &Args, round: u32, seed: u64, result: &RoundResult, tun
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\"v\":1,\"round\":{round},\"seed\":\"0x{seed:016x}\",\"tuning\":{tuning_diff},\"map\":\"{}\",\"mission\":\"{}\",\"spawn\":\"{}\",\"scenario\":\"{}\",\"enemies\":{},\"frames_run\":{},\"outcome\":\"{}\",\"anomalies\":{{{anomalies}}},\"tanks\":[{tanks}]}}",
+        "{{\"v\":1,\"round\":{round},\"seed\":\"0x{seed:016x}\",\"tuning\":{tuning_diff},\"map\":\"{}\",\"mission\":\"{}\",\"spawn\":\"{}\",\"scenario\":\"{}\",\"players\":{},\"enemies\":{},\"frames_run\":{},\"outcome\":\"{}\",\"anomalies\":{{{anomalies}}},\"tanks\":[{tanks}]}}",
         json_escape(map_display(args)),
         result.mission.name(),
         result.spawn.name(),
         scenario_str(args.scenario),
+        args.players,
         result.tanks.len(),
         result.frames_run,
         outcome_str(result.outcome),

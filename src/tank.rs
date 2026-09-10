@@ -475,10 +475,12 @@ pub struct Tank {
     /// This tank's rapier rigid body, once spawned into the physics world
     /// (see `Game::init`/`physics::Physics::spawn_tank`).
     pub body: Option<RigidBodyHandle>,
-    /// This tank's owner slot, set once at spawn (`Game::init`): 0 for the
-    /// player, `n` for the nth enemy spawned. Identifies the tank as a
-    /// projectile owner (`owner()`) so a shot never hits its own shooter.
-    pub owner_slot: usize,
+    /// Who this tank is, set once at spawn (`Game::init`): `Owner::Player(i)`
+    /// for human player `i`, `Owner::Enemy(slot)` for an enemy. Identifies
+    /// the tank as a projectile owner so a shot never hits its own shooter,
+    /// and decides the side it fights on. See `owner_slot` for the
+    /// numbering the tools and events use.
+    pub owner: Owner,
 }
 
 impl Default for Tank {
@@ -527,7 +529,7 @@ impl Default for Tank {
             velocity: Vector2::new(0.0, 0.0),
             body: None,
 
-            owner_slot: 0,
+            owner: Owner::Player(0),
         }
     }
 }
@@ -576,14 +578,23 @@ impl Tank {
         self.damage = (self.damage + amount).min(cap);
     }
 
-    /// Who this tank is as a projectile owner - the inverse of
-    /// `Owner::slot`.
+    /// Who this tank is as a projectile owner.
     pub fn owner(&self) -> Owner {
-        if self.owner_slot == 0 {
-            Owner::Player
-        } else {
-            Owner::Enemy(self.owner_slot - 1)
-        }
+        self.owner
+    }
+
+    /// This tank's owner slot, the number events, snapshots and the dev
+    /// tools address it by: players first (`0` for player 1, `1` for
+    /// player 2 in a two-player round), then the enemies, counting up from
+    /// the first free number - `1` in a single-player round, `2` with two
+    /// players (`Game::first_enemy_slot`). Unique for the round.
+    pub fn owner_slot(&self) -> usize {
+        self.owner.slot()
+    }
+
+    /// A human player, whichever one.
+    pub fn is_player(&self) -> bool {
+        self.owner.is_player()
     }
 
     /// How much damage has hurt this tank's mobility, from 1.0 (pristine) down
@@ -610,7 +621,7 @@ impl Tank {
     /// player/enemy base knob times `speed_scale`.
     pub fn base_speed(&self) -> f32 {
         let t = tuning();
-        let base = if self.owner_slot == 0 { t.tank_speed } else { t.enemy_speed };
+        let base = if self.owner.is_player() { t.tank_speed } else { t.enemy_speed };
         base * self.speed_scale
     }
 
@@ -1075,6 +1086,12 @@ const RED_DEEP: Color = Color::new(0x9C, 0x35, 0x27, 255);
 const RED_DK: Color = Color::new(0x81, 0x2F, 0x27, 255);
 const RED_DARKEST: Color = Color::new(0x4A, 0x22, 0x21, 255);
 const BLACK: Color = Color::new(0x25, 0x25, 0x25, 255);
+const BLUE_BRIGHT: Color = Color::new(0x27, 0xD8, 0xC5, 255);
+/// Player 2's ground ring: the palette's mid blue, blue-dominant so it
+/// stays clear of the grass and of the enemy red. White is player 1, and
+/// the editor's `start2` icon and the HUD reuse this so the three read
+/// as one identity.
+pub const PLAYER2_RING_COLOR: Color = Color::new(0x04, 0xA0, 0xB4, 255);
 
 /// Where a health gauge's filled arc starts, in raylib degrees: 12 o'clock.
 /// raylib measures from +x and, on a y-down screen, increasing angles run
@@ -1092,27 +1109,35 @@ pub enum HealthRamp {
     /// Bright red down to the darkest red: the enemy frog, whose ring is red
     /// at any health so its side still reads.
     Red,
+    /// Bright blue, mid blue, then the same gold and red as `White`: player
+    /// 2, blue while healthy so the two players tell apart at a glance, the
+    /// last two steps the shared danger colours.
+    Blue,
 }
 
 impl HealthRamp {
     const WHITE_STEPS: [Color; 4] = [Color::WHITE, GOLD_BRIGHT, RED_BRIGHT, RED_DEEP];
     const RED_STEPS: [Color; 4] = [RED_BRIGHT, RED_DEEP, RED_DK, RED_DARKEST];
+    const BLUE_STEPS: [Color; 4] = [BLUE_BRIGHT, PLAYER2_RING_COLOR, GOLD_BRIGHT, RED_BRIGHT];
 
     /// The step colour for `frac` remaining health.
     pub fn color(self, frac: f32) -> Color {
         let steps = match self {
             Self::White => Self::WHITE_STEPS,
             Self::Red => Self::RED_STEPS,
+            Self::Blue => Self::BLUE_STEPS,
         };
         steps[health_ring_step(frac)]
     }
 
     /// The ramp's marker colour - what the missing part of a ring that stays
-    /// a full circle is drawn in, dimmed: white, or the enemy frog's red.
+    /// a full circle is drawn in, dimmed: white, the enemy frog's red, or
+    /// player 2's blue.
     pub fn base(self) -> Color {
         match self {
             Self::White => Color::WHITE,
             Self::Red => RED_MD,
+            Self::Blue => PLAYER2_RING_COLOR,
         }
     }
 }
@@ -1316,7 +1341,7 @@ pub fn draw_tank_shield(d: &mut impl RaylibDraw, tank: &Tank, time: f32) {
     }
     let base_hue = (time * tuning().shield_glow_hue_hz * 360.0 + tank.anim_phase() * 360.0).rem_euclid(360.0);
     let base = match tank.owner() {
-        Owner::Player => with_opacity(Color::WHITE, tuning().player_ring_opacity * tuning().health_ring_base_opacity),
+        Owner::Player(_) => with_opacity(Color::WHITE, tuning().player_ring_opacity * tuning().health_ring_base_opacity),
         Owner::Enemy(_) => with_opacity(BLACK, tuning().health_ring_gap_opacity),
     };
     let style = RingStyle::Rainbow { base_hue, charge: tank.shield_charge(), base };
@@ -1395,6 +1420,15 @@ pub fn enemy_health_ring_visibility(tank: &Tank) -> f32 {
 pub fn draw_player_ring(d: &mut impl RaylibDraw, tank: &Tank, time: f32) {
     let base = with_opacity(HealthRamp::White.base(), tuning().player_ring_opacity * tuning().health_ring_base_opacity);
     let style = RingStyle::Gauge { frac: tank.health_fraction(), ramp: HealthRamp::White, base };
+    draw_ground_ring(d, tank, time, style, player_health_ring_visibility(tank));
+}
+
+/// Player 2's marker: `draw_player_ring` in `HealthRamp::Blue`, the dimmed
+/// remainder in the same blue, so the second human tank carries its own
+/// always-on halo in its own colour.
+pub fn draw_player2_ring(d: &mut impl RaylibDraw, tank: &Tank, time: f32) {
+    let base = with_opacity(HealthRamp::Blue.base(), tuning().player_ring_opacity * tuning().health_ring_base_opacity);
+    let style = RingStyle::Gauge { frac: tank.health_fraction(), ramp: HealthRamp::Blue, base };
     draw_ground_ring(d, tank, time, style, player_health_ring_visibility(tank));
 }
 
@@ -1682,7 +1716,7 @@ mod health_ring_tests {
     use super::*;
 
     fn enemy(damage: f32, hit_flash_timer: f32) -> Tank {
-        Tank { owner_slot: 1, damage, hit_flash_timer, ..Tank::default() }
+        Tank { owner: Owner::Enemy(1), damage, hit_flash_timer, ..Tank::default() }
     }
 
     #[test]

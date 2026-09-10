@@ -30,11 +30,11 @@ use sola_raylib::prelude::{RaylibHandle, RaylibTexture2D, RaylibThread, RenderTe
 
 use crate::ai::Intent;
 use crate::editor::{BuilderInput, Category, CellChange, MapEditor, Tool, parse_mission, parse_spawn, parse_tank, parse_tier};
-use crate::hud::{leave_dialog_rects, mode_button_rect};
+use crate::hud::{leave_dialog_rects, mode_button_rect, players_button_rect, players_dialog_rects};
 use crate::map::MapFile;
 use crate::mode::{Driver, Session};
 use crate::simulation::debug::{CLUSTER_RADIUS_PX, Detail, TankPatch, TrackRow};
-use crate::simulation::{Event, Game, Input, Overlays};
+use crate::simulation::{Event, Game, Input, Overlays, PlayerCount};
 use crate::tank::{Dir, TankKind};
 use crate::tuning;
 use crate::level::{Mission, SpawnKind, Tier};
@@ -71,11 +71,11 @@ const CLICK_DRAG_STEP_PX: f32 = 8.0;
 /// the builder has frozen.
 pub const GAME_ONLY_TOOLS: &[&str] = &[
     "snapshot", "events", "step", "input", "tap", "pause", "resume", "history", "nav_grid", "teleport",
-    "set_tank", "kill", "spawn_enemy",
+    "set_tank", "kill", "spawn_enemy", "players",
 ];
 
 /// The `key` tool's key names.
-const KEY_NAMES: &[&str] = &["tab", "escape", "enter", "undo", "redo", "backspace"];
+const KEY_NAMES: &[&str] = &["tab", "escape", "enter", "undo", "redo", "backspace", "1", "2"];
 
 /// One tool: its wire/MCP name, the description the model reads, and its
 /// input JSON schema (an `object` schema, as a string so this table can be
@@ -103,22 +103,22 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "events",
-        description: "Gameplay events recorded since `since` (a seq number; 0 = everything kept, up to 4096): fired, hit, wreck, ram, deflected (off a shield), shells_collided, frog_bite (with the biting frog's side), pickup_collected, pickup_respawned, round_started, round_ended, plus AI decisions - ai_action (behaviour-tree action changed), engage_slot (ring slot changed; null = steering at its target - the player, or a hunter's frog - directly), stuck_escape, breach (dir, or null when it ends), retreat (on/off), alert (shared last-known player position on/off). Each carries the frame it happened on. `kinds` keeps only those event names, `exclude` drops them.",
+        description: "Gameplay events recorded since `since` (a seq number; 0 = everything kept, up to 4096): fired, hit, wreck, ram, deflected (off a shield), shells_collided, frog_bite (with the biting frog's side), pickup_collected, pickup_respawned, round_started, round_ended, plus AI decisions - ai_action (behaviour-tree action changed), engage_slot (ring slot changed; null = steering at its target - the player, or a hunter's frog - directly), stuck_escape, breach (dir, or null when it ends), retreat (on/off), alert (shared last-known player position on/off), retarget (two-player rounds: the enemy switched to fighting `player` 0 or 1). Each carries the frame it happened on. `kinds` keeps only those event names, `exclude` drops them.",
         schema: r#"{"type":"object","properties":{"since":{"type":"integer","default":0,"description":"Return events with seq > since"},"limit":{"type":"integer","default":200},"kinds":{"type":"array","items":{"type":"string"},"description":"Only these event names"},"exclude":{"type":"array","items":{"type":"string"},"description":"Drop these event names"}}}"#,
     },
     ToolSpec {
         name: "step",
-        description: "Freeze the game in lockstep and advance exactly `frames` simulation frames at the fixed 1/60 s timestep (all in one rendered frame, so it is fast and deterministic). Optional player input is held for those frames; shells/plasma fire once per press, so set fire_every=N to tap the trigger every N frames instead of holding it. Replies with the events of the step (first 256; `kinds`/`exclude` filter by event name, see `events`) and, by default, a compact snapshot. Use `resume` to let the game run in real time again.",
-        schema: r#"{"type":"object","properties":{"frames":{"type":"integer","default":1,"minimum":1,"maximum":100000},"move_dir":{"type":"string","enum":["up","down","left","right"]},"face":{"type":"string","enum":["up","down","left","right"]},"fire":{"type":"boolean"},"fire_every":{"type":"integer","minimum":1,"description":"With fire=true: press the trigger on frames 0, N, 2N... and release in between"},"snapshot":{"type":"boolean","default":true},"detail":{"type":"string","enum":["compact","full"],"default":"compact"},"kinds":{"type":"array","items":{"type":"string"}},"exclude":{"type":"array","items":{"type":"string"}}}}"#,
+        description: "Freeze the game in lockstep and advance exactly `frames` simulation frames at the fixed 1/60 s timestep (all in one rendered frame, so it is fast and deterministic). Optional player input is held for those frames (`move_dir`/`face`/`fire` for player 1, `p2_move_dir`/`p2_face`/`p2_fire` for player 2 in a two-player round); shells/plasma fire once per press, so set fire_every=N to tap the trigger every N frames instead of holding it. Replies with the events of the step (first 256; `kinds`/`exclude` filter by event name, see `events`) and, by default, a compact snapshot. Use `resume` to let the game run in real time again.",
+        schema: r#"{"type":"object","properties":{"frames":{"type":"integer","default":1,"minimum":1,"maximum":100000},"move_dir":{"type":"string","enum":["up","down","left","right"]},"face":{"type":"string","enum":["up","down","left","right"]},"fire":{"type":"boolean"},"p2_move_dir":{"type":"string","enum":["up","down","left","right"]},"p2_face":{"type":"string","enum":["up","down","left","right"]},"p2_fire":{"type":"boolean"},"fire_every":{"type":"integer","minimum":1,"description":"With fire=true: press the trigger on frames 0, N, 2N... and release in between (both players)"},"snapshot":{"type":"boolean","default":true},"detail":{"type":"string","enum":["compact","full"],"default":"compact"},"kinds":{"type":"array","items":{"type":"string"}},"exclude":{"type":"array","items":{"type":"string"}}}}"#,
     },
     ToolSpec {
         name: "input",
-        description: "Override the player's input for the next `frames` real-time frames (keyboard is ignored meanwhile). Works while the game runs; in lockstep prefer step's own input fields. `cycle_overlays: true` presses the I key once: cycles the overlay presets off -> inspect -> all -> off (with no move_dir/face/fire it leaves the keyboard alone).",
-        schema: r#"{"type":"object","properties":{"move_dir":{"type":"string","enum":["up","down","left","right"]},"face":{"type":"string","enum":["up","down","left","right"]},"fire":{"type":"boolean"},"frames":{"type":"integer","default":1},"cycle_overlays":{"type":"boolean","default":false}}}"#,
+        description: "Override a player's input for the next `frames` real-time frames (keyboard is ignored meanwhile): `move_dir`/`face`/`fire` for player 1, `p2_move_dir`/`p2_face`/`p2_fire` for player 2 in a two-player round. Works while the game runs; in lockstep prefer step's own input fields. `cycle_overlays: true` presses the I key once: cycles the overlay presets off -> inspect -> all -> off (with no move_dir/face/fire it leaves the keyboard alone).",
+        schema: r#"{"type":"object","properties":{"move_dir":{"type":"string","enum":["up","down","left","right"]},"face":{"type":"string","enum":["up","down","left","right"]},"fire":{"type":"boolean"},"p2_move_dir":{"type":"string","enum":["up","down","left","right"]},"p2_face":{"type":"string","enum":["up","down","left","right"]},"p2_fire":{"type":"boolean"},"frames":{"type":"integer","default":1},"cycle_overlays":{"type":"boolean","default":false}}}"#,
     },
     ToolSpec {
         name: "tap",
-        description: "Tap (or click) the battlefield at (x, y) in screen pixels, as a touch player would - the player tank takes a standing order from it: drive there, or close on and engage whatever is under the point (an enemy tank, the enemy frog, or a destructible tile). The order survives until the target dies, the destination is reached, the route turns out not to exist, or a movement key/`input` cancels it. `snapshot` and `status` report it back as `player_order`.",
+        description: "Tap (or click) the battlefield at (x, y) in screen pixels, as a touch player would - the player tank takes a standing order from it: drive there, or close on and engage whatever is under the point (an enemy tank, the enemy frog, or a destructible tile). The order survives until the target dies, the destination is reached, the route turns out not to exist, or a movement key/`input` cancels it. `snapshot` and `status` report it back as `player_order`. Refused in a two-player round, where taps are off (the keyboard is the whole interface).",
         schema: r#"{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"]}"#,
     },
     ToolSpec {
@@ -133,12 +133,12 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "restart",
-        description: "Start a fresh round, frozen in lockstep (call `resume` to let it run in real time). Optional seed (number or 0x-hex string; pinned for later restarts too), enemy count, player chassis row (0-11), the map: `map` (a path to a TOML under maps/) or `map_toml` (the map's TOML text inline - see `map_get` for the format; the round keeps its current map when neither is given), and the level: `mission` (protect|hunt|destroy), `spawn` (band|waves) with `waves`/`wave_size`/`wave_growth`/`tier_start`/`tier_end` (light|medium|heavy|super) - each pinned for later restarts too, overriding the map's own [mission]/[spawn] tables. `intro: true` starts the round frozen behind the mission banner (off by default so `step` counts play frames). Same seed + same steps replays bit-for-bit.",
-        schema: r#"{"type":"object","properties":{"seed":{"type":["integer","string"]},"enemies":{"type":"integer","minimum":0,"maximum":31,"description":"Band plan enemy count; 0 is a sandbox round that never ends by wreck count"},"tank_row":{"type":"integer","minimum":0,"maximum":11},"map":{"type":"string","description":"Path to a map .toml, relative to the game's working directory"},"map_toml":{"type":"string","description":"Map TOML text, e.g. `version = 1\ntanks = 4\ncells.\"20,8\" = { kind = \"wall\", material = \"iron\" }`"},"mission":{"type":"string","enum":["protect","hunt","destroy"]},"spawn":{"type":"string","enum":["band","waves"]},"waves":{"type":"integer","minimum":1},"wave_size":{"type":"integer","minimum":1},"wave_growth":{"type":"integer","minimum":0},"tier_start":{"type":"string","enum":["light","medium","heavy","super"]},"tier_end":{"type":"string","enum":["light","medium","heavy","super"]},"intro":{"type":"boolean"}}}"#,
+        description: "Start a fresh round, frozen in lockstep (call `resume` to let it run in real time). Optional seed (number or 0x-hex string; pinned for later restarts too), enemy count, player chassis row (0-11), `players` (1 or 2 - the session's player count, kept for later restarts; `tank2_row` pins player 2's chassis), the map: `map` (a path to a TOML under maps/) or `map_toml` (the map's TOML text inline - see `map_get` for the format; the round keeps its current map when neither is given), and the level: `mission` (protect|hunt|destroy), `spawn` (band|waves) with `waves`/`wave_size`/`wave_growth`/`tier_start`/`tier_end` (light|medium|heavy|super) - each pinned for later restarts too, overriding the map's own [mission]/[spawn] tables. `intro: true` starts the round frozen behind the mission banner (off by default so `step` counts play frames). Same seed + same steps replays bit-for-bit.",
+        schema: r#"{"type":"object","properties":{"seed":{"type":["integer","string"]},"enemies":{"type":"integer","minimum":0,"maximum":31,"description":"Band plan enemy count; 0 is a sandbox round that never ends by wreck count"},"tank_row":{"type":"integer","minimum":0,"maximum":11},"players":{"type":"integer","minimum":1,"maximum":2},"tank2_row":{"type":"integer","minimum":0,"maximum":11},"map":{"type":"string","description":"Path to a map .toml, relative to the game's working directory"},"map_toml":{"type":"string","description":"Map TOML text, e.g. `version = 1\ntanks = 4\ncells.\"20,8\" = { kind = \"wall\", material = \"iron\" }`"},"mission":{"type":"string","enum":["protect","hunt","destroy"]},"spawn":{"type":"string","enum":["band","waves"]},"waves":{"type":"integer","minimum":1},"wave_size":{"type":"integer","minimum":1},"wave_growth":{"type":"integer","minimum":0},"tier_start":{"type":"string","enum":["light","medium","heavy","super"]},"tier_end":{"type":"string","enum":["light","medium","heavy","super"]},"intro":{"type":"boolean"}}}"#,
     },
     ToolSpec {
         name: "map_get",
-        description: "The current map as TOML text (plus name, cell count, default tank count) - edit it and hand it back through `restart {map_toml}`. Format: `version = 1`, optional `tanks = N` (default enemy count), and one `cells.\"col,row\"` entry per occupied 32 px grid cell (40 columns x 23 rows at 1280x720, col/row from 0 at the top-left): `{ kind = \"wall\", material = \"brick\"|\"iron\"|\"wood\"|\"glass\" }`, `{ kind = \"sandbag\" }` / `{ kind = \"barrel\" }` / `{ kind = \"fence\" }` (destructible props: shots sometimes pass over sandbags, barrels explode and chain, fences snap; tanks ram all three), `{ kind = \"tree\" }` / `{ kind = \"pine\" }` (destructible trees, solid like a prop but drawn larger than their cell; they often catch fire when killed and a tank can flatten one by driving into it), `{ kind = \"tall_grass\" }` (not solid - cover a tank hides in, enemies cannot shoot what is standing in it), `{ kind = \"road\" }`, `{ kind = \"frog\" }` (one), `{ kind = \"start\" }` (the player, one), `{ kind = \"pickup\", pickup = \"health\"|\"ammo\"|\"laser\"|\"minigun\"|\"plasma\"|\"speedup\"|\"shield\" }`. Iron is indestructible, the rest can be shot away. Border walls and enemy spawns are added by the game on top.",
+        description: "The current map as TOML text (plus name, cell count, default tank count) - edit it and hand it back through `restart {map_toml}`. Format: `version = 1`, optional `tanks = N` (default enemy count), optional `tank = \"titan\"` / `tank2 = \"scout\"` (the players' chassis), and one `cells.\"col,row\"` entry per occupied 32 px grid cell (40 columns x 23 rows at 1280x720, col/row from 0 at the top-left): `{ kind = \"wall\", material = \"brick\"|\"iron\"|\"wood\"|\"glass\" }`, `{ kind = \"sandbag\" }` / `{ kind = \"barrel\" }` / `{ kind = \"fence\" }` (destructible props: shots sometimes pass over sandbags, barrels explode and chain, fences snap; tanks ram all three), `{ kind = \"tree\" }` / `{ kind = \"pine\" }` (destructible trees, solid like a prop but drawn larger than their cell; they often catch fire when killed and a tank can flatten one by driving into it), `{ kind = \"tall_grass\" }` (not solid - cover a tank hides in, enemies cannot shoot what is standing in it), `{ kind = \"road\" }`, `{ kind = \"frog\" }` (one), `{ kind = \"start\" }` (player 1, one), `{ kind = \"start2\" }` (player 2 in a two-player round, one, optional - placed beside player 1 when absent), `{ kind = \"pickup\", pickup = \"health\"|\"ammo\"|\"laser\"|\"minigun\"|\"plasma\"|\"speedup\"|\"shield\" }`. Iron is indestructible, the rest can be shot away. Border walls and enemy spawns are added by the game on top.",
         schema: NO_PARAMS,
     },
     ToolSpec {
@@ -213,18 +213,23 @@ pub const TOOLS: &[ToolSpec] = &[
         schema: r#"{"type":"object","properties":{"answer":{"type":"string","enum":["leave","stay"],"description":"Answer the open leave dialog instead of pressing the button"}}}"#,
     },
     ToolSpec {
+        name: "players",
+        description: "The players button in play mode (docs/two-players.md). Without `count`: press it - opens the 'How many players?' dialog (the round is frozen until it is answered) or closes an open one. With `count` (1 or 2): answer it - a different count restarts the round at once in that mode, frozen in lockstep like `restart`; the current count just closes the dialog. The count sticks for the session (later `restart`s, PLAY from the builder). Two players: slot 1 is player 2 and enemies count from 2; `step`/`input` take `p2_*` fields for it; `tap` is refused. Replies like `mode`.",
+        schema: r#"{"type":"object","properties":{"count":{"type":"integer","minimum":1,"maximum":2,"description":"Answer the dialog with this player count"}}}"#,
+    },
+    ToolSpec {
         name: "play",
         description: "Press PLAY in build mode: the builder's (edited) map becomes the round's map and a fresh round starts, frozen in lockstep like `restart` (so `step` counts play frames; `resume` for real time). A seed pinned by an earlier `restart` stays pinned. `intro: true` starts the round frozen behind the mission banner. Fails in play mode - `restart` starts a round there. Replies with `status`.",
         schema: r#"{"type":"object","properties":{"intro":{"type":"boolean","default":false}}}"#,
     },
     ToolSpec {
         name: "builder_tool",
-        description: "Select the builder's brush by name - brick, iron, wood, glass (WALL); sandbag, barrel, fence, tree, pine (PROP); road, tall_grass, gate (GROUND); start, frog, enemy_frog (ACTOR); health, ammo, laser, minigun, plasma, speedup, shield (PICKUP); or eraser - through the category's own selection path, so the bar's category button updates as well. Without `tool`, only reports the active tool and every category's current tool and list.",
+        description: "Select the builder's brush by name - brick, iron, wood, glass (WALL); sandbag, barrel, fence, tree, pine (PROP); road, tall_grass, gate (GROUND); start, start2 (player 2's start), frog, enemy_frog (ACTOR); health, ammo, laser, minigun, plasma, speedup, shield (PICKUP); or eraser - through the category's own selection path, so the bar's category button updates as well. Without `tool`, only reports the active tool and every category's current tool and list.",
         schema: r#"{"type":"object","properties":{"tool":{"type":"string","description":"A tool name (see the description) or eraser"}}}"#,
     },
     ToolSpec {
         name: "builder_paint",
-        description: "One stroke on the builder's canvas: a press on cells[0], a drag through the rest, a release - so the toggle-erase rule (a press on a cell that already holds exactly the brush's object erases it, and paint-or-erase is decided on the first cell for the whole stroke), singleton moves (start/frog/enemy_frog) and one-undo-step-per-stroke apply exactly as for a mouse. Cells are [col, row] on the 32 px grid (40 x 23 at 1280x720, from the top-left). `tool` selects a brush first (see `builder_tool`); `button: right` erases whatever the brush. Replies with every changed cell's object before and after (in the map's own shape, null = empty) and the undo depth.",
+        description: "One stroke on the builder's canvas: a press on cells[0], a drag through the rest, a release - so the toggle-erase rule (a press on a cell that already holds exactly the brush's object erases it, and paint-or-erase is decided on the first cell for the whole stroke), singleton moves (start/start2/frog/enemy_frog) and one-undo-step-per-stroke apply exactly as for a mouse. Cells are [col, row] on the 32 px grid (40 x 23 at 1280x720, from the top-left). `tool` selects a brush first (see `builder_tool`); `button: right` erases whatever the brush. Replies with every changed cell's object before and after (in the map's own shape, null = empty) and the undo depth.",
         schema: r#"{"type":"object","properties":{"cells":{"type":"array","items":{"type":"array","items":{"type":"integer"},"minItems":2,"maxItems":2},"minItems":1,"description":"[[col, row], ...] in stroke order"},"tool":{"type":"string"},"button":{"type":"string","enum":["left","right"],"default":"left"}},"required":["cells"]}"#,
     },
     ToolSpec {
@@ -239,8 +244,8 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "builder_settings",
-        description: "The builder's MAP settings - the map file's own level keys: tanks (enemy count 0-31), tank (the player's chassis name), mission (protect|hunt|destroy), spawn (band|waves), waves (1-20), wave_size (1-31), wave_growth (0-10), tier_start/tier_end (light|medium|heavy|super). A field left out is untouched; a field set to null goes back to auto (unset: the game's own roll or the `waves` tuning group; mission/spawn back to protect/band). Each changed field is one undo step, in the order listed. `reset: true` then reverts cells and settings to the baseline (one undoable step). Replies with the current values (null = auto) and `cli_overrides`: which of them a command-line flag (-e, --tank, --mission, ...) or an earlier `restart` parameter overrides at PLAY, so the map's value is not what the round will use.",
-        schema: r#"{"type":"object","properties":{"tanks":{"type":["integer","null"],"minimum":0,"maximum":31},"tank":{"type":["string","null"],"description":"A chassis name, e.g. titan"},"mission":{"type":["string","null"],"enum":["protect","hunt","destroy",null]},"spawn":{"type":["string","null"],"enum":["band","waves",null]},"waves":{"type":["integer","null"],"minimum":1,"maximum":20},"wave_size":{"type":["integer","null"],"minimum":1,"maximum":31},"wave_growth":{"type":["integer","null"],"minimum":0,"maximum":10},"tier_start":{"type":["string","null"],"enum":["light","medium","heavy","super",null]},"tier_end":{"type":["string","null"],"enum":["light","medium","heavy","super",null]},"reset":{"type":"boolean","default":false,"description":"Revert cells and settings to the baseline"}}}"#,
+        description: "The builder's MAP settings - the map file's own level keys: tanks (enemy count 0-31), tank (player 1's chassis name), tank2 (player 2's, two-player rounds), mission (protect|hunt|destroy), spawn (band|waves), waves (1-20), wave_size (1-31), wave_growth (0-10), tier_start/tier_end (light|medium|heavy|super). A field left out is untouched; a field set to null goes back to auto (unset: the game's own roll or the `waves` tuning group; mission/spawn back to protect/band). Each changed field is one undo step, in the order listed. `reset: true` then reverts cells and settings to the baseline (one undoable step). Replies with the current values (null = auto) and `cli_overrides`: which of them a command-line flag (-e, --tank, --mission, ...) or an earlier `restart` parameter overrides at PLAY, so the map's value is not what the round will use.",
+        schema: r#"{"type":"object","properties":{"tanks":{"type":["integer","null"],"minimum":0,"maximum":31},"tank":{"type":["string","null"],"description":"A chassis name, e.g. titan"},"tank2":{"type":["string","null"],"description":"Player 2's chassis name"},"mission":{"type":["string","null"],"enum":["protect","hunt","destroy",null]},"spawn":{"type":["string","null"],"enum":["band","waves",null]},"waves":{"type":["integer","null"],"minimum":1,"maximum":20},"wave_size":{"type":["integer","null"],"minimum":1,"maximum":31},"wave_growth":{"type":["integer","null"],"minimum":0,"maximum":10},"tier_start":{"type":["string","null"],"enum":["light","medium","heavy","super",null]},"tier_end":{"type":["string","null"],"enum":["light","medium","heavy","super",null]},"reset":{"type":"boolean","default":false,"description":"Revert cells and settings to the baseline"}}}"#,
     },
     ToolSpec {
         name: "builder_map",
@@ -259,13 +264,13 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "click",
-        description: "A raw press at a window position (pixels, the 32 px HUD bar included: the field starts at y = 32), in either mode, on the same hit-tests a mouse or a finger uses: in play mode the BUILD button (right end of the bar), the leave dialog's buttons (a press outside the dialog keeps playing) or, with the left button on the field, a `tap` order; in build mode the bar's buttons (PLAY starts the round like `play`), a dropdown row, a settings stepper or a field cell. With `drag_to`, a press, a straight drag to that point and a release, crossing every cell on the way. Replies like `mode` plus `tap` when one was queued. This tests the UI; `build`/`play`/`builder_*` address the model directly.",
+        description: "A raw press at a window position (pixels, the 32 px HUD bar included: the field starts at y = 32), in either mode, on the same hit-tests a mouse or a finger uses: in play mode the BUILD button (right end of the bar), the players button beside it, either dialog's buttons (a press outside a dialog closes it) or, with the left button on the field in a single-player round, a `tap` order; in build mode the bar's buttons (PLAY starts the round like `play`), a dropdown row, a settings stepper or a field cell. With `drag_to`, a press, a straight drag to that point and a release, crossing every cell on the way. Replies like `mode` plus `tap` when one was queued. This tests the UI; `build`/`play`/`builder_*` address the model directly.",
         schema: r#"{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"button":{"type":"string","enum":["left","right"],"default":"left"},"drag_to":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2,"description":"[x, y] to drag to before releasing"}},"required":["x","y"]}"#,
     },
     ToolSpec {
         name: "key",
-        description: "Press one key for one frame: tab (BUILD/PLAY - in play mode it opens the leave dialog, or closes an open one; in build mode it starts the round like `play`), escape (keep playing / close a popup), enter (leave the round / confirm a popup), undo, redo (Ctrl+Z / Ctrl+Y in the builder), backspace; `text` types characters into an open builder prompt. Replies like `mode`.",
-        schema: r#"{"type":"object","properties":{"key":{"type":"string","enum":["tab","escape","enter","undo","redo","backspace"]},"text":{"type":"string","description":"Characters to type this frame (build mode)"}}}"#,
+        description: "Press one key for one frame: tab (BUILD/PLAY - in play mode it opens the leave dialog, or closes an open one; in build mode it starts the round like `play`), escape (keep playing / close a dialog or popup), enter (leave the round; in the players dialog, switch to the other count; confirm a popup), 1 / 2 (answer the players dialog), undo, redo (Ctrl+Z / Ctrl+Y in the builder), backspace; `text` types characters into an open builder prompt. Replies like `mode`.",
+        schema: r#"{"type":"object","properties":{"key":{"type":"string","enum":["tab","escape","enter","undo","redo","backspace","1","2"]},"text":{"type":"string","description":"Characters to type this frame (build mode)"}}}"#,
     },
 ];
 
@@ -334,6 +339,8 @@ struct TrackStats {
 struct PendingStep {
     remaining: u64,
     intent: Option<Intent>,
+    /// Player 2's held intent (`p2_*`), two-player rounds.
+    intent2: Option<Intent>,
     /// Tap the trigger every this many frames instead of holding it.
     fire_every: Option<u64>,
     want_snapshot: bool,
@@ -367,6 +374,8 @@ pub struct DevServer {
     pending_step: Option<PendingStep>,
     /// Player intent to substitute for the keyboard, and frames left.
     injected: Option<(Intent, u32)>,
+    /// The same for player 2 (`input {p2_*}`).
+    injected2: Option<(Intent, u32)>,
     /// An `input {cycle_overlays}` request waiting to press the I key on
     /// the next frame's input.
     cycle_overlays_pending: bool,
@@ -415,6 +424,7 @@ impl DevServer {
             lockstep: false,
             pending_step: None,
             injected: None,
+            injected2: None,
             cycle_overlays_pending: false,
             pending_tap: None,
             pending_shot: None,
@@ -454,6 +464,10 @@ impl DevServer {
             self.injected = (left > 1).then_some((intent, left - 1));
             input.player_intent = intent;
         }
+        if let Some((intent, left)) = self.injected2 {
+            self.injected2 = (left > 1).then_some((intent, left - 1));
+            input.player2_intent = intent;
+        }
         if std::mem::take(&mut self.cycle_overlays_pending) {
             input.cycle_overlays_pressed = true;
         }
@@ -467,8 +481,10 @@ impl DevServer {
         if let Some(mut step) = self.pending_step.take() {
             for i in 0..step.remaining {
                 let mut player_intent = step.intent.unwrap_or(input.player_intent);
+                let mut player2_intent = step.intent2.unwrap_or(input.player2_intent);
                 if let Some(n) = step.fire_every {
                     player_intent.fire = player_intent.fire && i % n == 0;
+                    player2_intent.fire = player2_intent.fire && i % n == 0;
                 }
                 let before = game.frame();
                 // A queued tap lands on the first frame of the step and
@@ -477,8 +493,9 @@ impl DevServer {
                 // `shape_input`: while the game is frozen in lockstep no
                 // update runs at all, so a tap consumed at input-gathering
                 // time would simply be thrown away.
-                let tap = (i == 0).then(|| self.pending_tap.take()).flatten();
-                game.update(Input { player_intent, tap, ..Input::default() }, PHYSICS_FIXED_DT, width, height);
+                // A two-player round takes no taps; one left queued is dropped.
+                let tap = (i == 0).then(|| self.pending_tap.take()).flatten().filter(|_| game.players == PlayerCount::One);
+                game.update(Input { player_intent, player2_intent, tap, ..Input::default() }, PHYSICS_FIXED_DT, width, height);
                 if game.frame() != before + 1 {
                     step.restarted = true;
                 }
@@ -498,7 +515,7 @@ impl DevServer {
                 "snapshot": snapshot,
             })));
         } else if !self.lockstep {
-            let tap = self.pending_tap.take().or(input.tap);
+            let tap = self.pending_tap.take().or(input.tap).filter(|_| game.players == PlayerCount::One);
             game.update(Input { tap, ..input }, real_dt, width, height);
             self.drain_events(game, None);
             self.record_history(game);
@@ -671,9 +688,11 @@ impl DevServer {
             "height": height,
             "overlays": overlays_json(game),
             "player_order": game.player_order(),
+            "players": game.players.count(),
             "map": map_json(&game.map),
             "mode": session.mode().name(),
             "dialog_open": session.dialog,
+            "players_dialog_open": session.players_dialog,
             "builder": { "dirty": session.builder.dirty(), "tool": session.builder.tool().name() },
             "events_kept": self.events.len(),
             "next_event_seq": self.next_seq,
@@ -710,12 +729,14 @@ impl DevServer {
                 if self.pending_step.is_some() {
                     Err("a step is already in progress".to_string())
                 } else {
-                    match (frames_param(&params, 1), parse_intent(&params), detail_param(&params), event_filter(&params)) {
-                        (Ok(remaining), Ok(intent), Ok(detail), Ok(filter)) => {
+                    let intents = parse_intent(&params, "").and_then(|p1| parse_intent(&params, "p2_").map(|p2| (p1, p2)));
+                    match (frames_param(&params, 1), intents, detail_param(&params), event_filter(&params)) {
+                        (Ok(remaining), Ok((intent, intent2)), Ok(detail), Ok(filter)) => {
                             self.lockstep = true;
                             self.pending_step = Some(PendingStep {
                                 remaining,
                                 intent,
+                                intent2,
                                 fire_every: params.get("fire_every").and_then(Value::as_u64).filter(|&n| n >= 1),
                                 want_snapshot: params.get("snapshot").and_then(Value::as_bool).unwrap_or(true),
                                 detail,
@@ -730,19 +751,25 @@ impl DevServer {
                     }
                 }
             }
-            "input" => match (parse_intent(&params), frames_param(&params, 1)) {
-                (Ok(intent), Ok(frames)) => {
+            "input" => match (parse_intent(&params, ""), parse_intent(&params, "p2_"), frames_param(&params, 1)) {
+                (Ok(intent), Ok(intent2), Ok(frames)) => {
                     if let Some(intent) = intent {
                         self.injected = Some((intent, frames.min(u32::MAX as u64) as u32));
+                    }
+                    if let Some(intent) = intent2 {
+                        self.injected2 = Some((intent, frames.min(u32::MAX as u64) as u32));
                     }
                     self.cycle_overlays_pending = params.get("cycle_overlays").and_then(Value::as_bool).unwrap_or(false);
                     Ok(json!({ "frames": frames, "cycle_overlays": self.cycle_overlays_pending }))
                 }
-                (Err(e), _) | (_, Err(e)) => Err(e),
+                (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => Err(e),
             },
             "tap" => {
                 let (x, y) = (params.get("x").and_then(Value::as_f64), params.get("y").and_then(Value::as_f64));
                 match (x, y) {
+                    _ if game.players == PlayerCount::Two => {
+                        Err("tap orders are off in a two-player round (players: 2); drive with step/input p2_* fields".to_string())
+                    }
                     (Some(x), Some(y)) => {
                         self.pending_tap = Some(Position::new(x as f32, y as f32));
                         Ok(json!({ "tap": { "x": x, "y": y } }))
@@ -871,6 +898,15 @@ impl DevServer {
         if let Some(row) = params.get("tank_row") {
             game.player_row_override = Some(row.as_i64().ok_or("tank_row must be an integer")? as i32);
         }
+        if let Some(row) = params.get("tank2_row") {
+            game.player2_row_override = Some(row.as_i64().ok_or("tank2_row must be an integer")? as i32);
+        }
+        if let Some(n) = params.get("players") {
+            game.players = n
+                .as_u64()
+                .and_then(|n| PlayerCount::from_count(n as usize))
+                .ok_or_else(|| format!("players must be 1 or 2, got {n}"))?;
+        }
         let enum_param = |key: &str| -> Result<Option<String>, String> {
             match params.get(key) {
                 None | Some(Value::Null) => Ok(None),
@@ -916,6 +952,7 @@ impl DevServer {
         }
         session.driver = Driver::Play;
         session.dialog = false;
+        session.players_dialog = false;
         session.game.init(width, height);
         self.round_started(session);
         Ok(self.status(session, width, height))
@@ -971,6 +1008,26 @@ impl DevServer {
                     Ok(mode_json(session))
                 }
                 Some(other) => Err(format!("answer must be leave|stay, got {other}")),
+            },
+            "players" => match params.get("count") {
+                None | Some(Value::Null) => {
+                    session.press_players();
+                    Ok(mode_json(session))
+                }
+                Some(v) => match v.as_u64().and_then(|n| PlayerCount::from_count(n as usize)) {
+                    Some(count) => {
+                        let before = session.game.players;
+                        if !session.players_dialog {
+                            session.press_players();
+                        }
+                        session.answer_players(count, width, height);
+                        if session.game.players != before {
+                            self.round_started(session);
+                        }
+                        Ok(mode_json(session))
+                    }
+                    None => Err(format!("count must be 1 or 2, got {v}")),
+                },
             },
             "play" => {
                 if session.mode() == Driver::Play {
@@ -1083,10 +1140,25 @@ impl DevServer {
         let mut tap = None;
         match session.mode() {
             Driver::Play => {
-                // The same order as `main.rs`: the dialog eats every press
-                // while it is up, the BUILD button is never an order, and
-                // only a left press on the field is a tap.
-                if session.dialog {
+                // The same order as `main.rs`: an open dialog eats every
+                // press while it is up, the two buttons are never an
+                // order, and only a left press on the field in a
+                // single-player round is a tap.
+                if session.players_dialog {
+                    let rects = players_dialog_rects(layout.field);
+                    let p = layout.to_field(point);
+                    let before = session.game.players;
+                    if rects.one.check_collision_point_rec(p) {
+                        session.answer_players(PlayerCount::One, layout.field.w, layout.field.h);
+                    } else if rects.two.check_collision_point_rec(p) {
+                        session.answer_players(PlayerCount::Two, layout.field.w, layout.field.h);
+                    } else if !rects.panel.check_collision_point_rec(p) {
+                        session.close_players_dialog();
+                    }
+                    if session.game.players != before {
+                        self.round_started(session);
+                    }
+                } else if session.dialog {
                     let rects = leave_dialog_rects(layout.field);
                     let p = layout.to_field(point);
                     if rects.leave.check_collision_point_rec(p) {
@@ -1096,7 +1168,9 @@ impl DevServer {
                     }
                 } else if mode_button_rect(layout.panel).check_collision_point_rec(point) {
                     session.press_build();
-                } else if !right && layout.field.contains(point) {
+                } else if players_button_rect(layout.panel).check_collision_point_rec(point) {
+                    session.press_players();
+                } else if !right && layout.field.contains(point) && session.game.players == PlayerCount::One {
                     let p = layout.to_field(point);
                     self.pending_tap = Some(p);
                     tap = Some(p);
@@ -1152,6 +1226,30 @@ impl DevServer {
             return Err(format!("key needs `key` ({}) or `text`", KEY_NAMES.join("|")));
         }
         match session.mode() {
+            Driver::Play if session.players_dialog => {
+                let (w, h) = (layout.field.w, layout.field.h);
+                let before = session.game.players;
+                match key {
+                    Some("1") => {
+                        session.answer_players(PlayerCount::One, w, h);
+                    }
+                    Some("2") => {
+                        session.answer_players(PlayerCount::Two, w, h);
+                    }
+                    Some("enter") => {
+                        let other = match before {
+                            PlayerCount::One => PlayerCount::Two,
+                            PlayerCount::Two => PlayerCount::One,
+                        };
+                        session.answer_players(other, w, h);
+                    }
+                    Some("escape") | Some("tab") => session.close_players_dialog(),
+                    _ => {}
+                }
+                if session.game.players != before {
+                    self.round_started(session);
+                }
+            }
             Driver::Play => match key {
                 Some("tab") => {
                     if session.dialog {
@@ -1166,7 +1264,7 @@ impl DevServer {
                 Some("enter") => {
                     session.answer_dialog(true);
                 }
-                // undo/redo/backspace and typed text mean nothing in play.
+                // undo/redo/backspace, 1/2 and typed text mean nothing in play.
                 _ => {}
             },
             Driver::Build => {
@@ -1199,6 +1297,8 @@ fn mode_json(session: &Session) -> Value {
     json!({
         "mode": session.mode().name(),
         "dialog_open": session.dialog,
+        "players_dialog_open": session.players_dialog,
+        "players": session.game.players.count(),
         "dirty": b.dirty(),
         "map_name": b.name(),
         "tool": b.tool().name(),
@@ -1287,6 +1387,11 @@ fn builder_settings(session: &mut Session, params: &Value, width: f32, height: f
         b.apply_settings(s);
         s = b.settings();
     }
+    if let Some(v) = str_field(params, "tank2")? {
+        s.tank2 = v.map(|n| parse_or("tank2", &n, parse_tank, &tanks)).transpose()?;
+        b.apply_settings(s);
+        s = b.settings();
+    }
     if let Some(v) = str_field(params, "mission")? {
         s.mission = v.map(|n| parse_or("mission", &n, parse_mission, MISSIONS)).transpose()?.unwrap_or_default();
         b.apply_settings(s);
@@ -1336,6 +1441,7 @@ fn settings_json(session: &Session) -> Value {
     json!({
         "tanks": s.tanks,
         "tank": s.tank.map(TankKind::name),
+        "tank2": s.tank2.map(TankKind::name),
         "mission": s.mission.name(),
         "spawn": s.spawn.name(),
         "waves": s.waves,
@@ -1346,6 +1452,7 @@ fn settings_json(session: &Session) -> Value {
         "cli_overrides": {
             "tanks": g.enemy_count_override.is_some(),
             "tank": g.player_row_override.is_some(),
+            "tank2": g.player2_row_override.is_some(),
             "mission": g.level_overrides.mission.is_some(),
             "spawn": g.level_overrides.spawn.is_some(),
             "waves": g.level_overrides.waves.is_some(),
@@ -1572,16 +1679,20 @@ fn f32_param(params: &Value, key: &str) -> Option<f32> {
 
 /// `move_dir`/`face`/`fire` from `params`: `None` when none is given (the
 /// keyboard stays in charge), an error for an unknown direction.
-fn parse_intent(params: &Value) -> Result<Option<Intent>, String> {
+/// One player's intent from `move_dir`/`face`/`fire` under `prefix` (`""`
+/// for player 1, `"p2_"` for player 2); `None` when none of the three is
+/// present, so the keyboard keeps that player.
+fn parse_intent(params: &Value, prefix: &str) -> Result<Option<Intent>, String> {
     let dir = |key: &str| -> Result<Option<Dir>, String> {
-        match params.get(key).and_then(Value::as_str) {
+        let key = format!("{prefix}{key}");
+        match params.get(&key).and_then(Value::as_str) {
             None => Ok(None),
             Some(s) => Dir::parse(s).map(Some).ok_or_else(|| format!("{key} must be up|down|left|right, got {s:?}")),
         }
     };
     let move_dir = dir("move_dir")?;
     let face = dir("face")?;
-    let fire = params.get("fire").and_then(Value::as_bool);
+    let fire = params.get(format!("{prefix}fire")).and_then(Value::as_bool);
     if move_dir.is_none() && face.is_none() && fire.is_none() {
         return Ok(None);
     }
@@ -1678,6 +1789,87 @@ mod tests {
         assert_eq!(status["tanks"], 5);
         assert_eq!(status["outcome"], "playing");
         assert_eq!(status["lockstep"], false);
+        assert_eq!(status["players"], 1);
+        assert_eq!(status["players_dialog_open"], false);
+    }
+
+    /// The players tool and the button/keys behind it: the dialog freezes
+    /// the round, a new count restarts in that mode with player 2 in slot
+    /// 1, `step` drives player 2 through `p2_*`, `tap` is refused, and
+    /// `restart {players: 1}` goes back.
+    #[test]
+    fn players_tool_switches_mode_and_the_button_opens_the_dialog() {
+        let (mut server, tx) = DevServer::headless();
+        let mut s = game(41);
+        let layout = Layout::for_field(W, H);
+        // The button opens it and the round freezes; a press outside closes it.
+        let m = ask(&mut server, &tx, &mut s, "players", json!({})).unwrap();
+        assert_eq!(m["players_dialog_open"], true, "{m}");
+        assert!(!s.playing());
+        let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": 10.0, "y": 100.0 })).unwrap();
+        assert_eq!(m["players_dialog_open"], false, "{m}");
+        assert!(m["tap"].is_null(), "a press that closes the dialog is not a tap");
+        let b = players_button_rect(layout.panel);
+        let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": b.x + b.width / 2.0, "y": b.y + b.height / 2.0 })).unwrap();
+        assert_eq!(m["players_dialog_open"], true, "{m}");
+        let m = ask(&mut server, &tx, &mut s, "key", json!({ "key": "escape" })).unwrap();
+        assert_eq!(m["players_dialog_open"], false);
+        // Answering with two restarts in two-player mode, frozen in lockstep.
+        let m = ask(&mut server, &tx, &mut s, "players", json!({ "count": 2 })).unwrap();
+        assert_eq!(m["players"], 2, "{m}");
+        assert_eq!(m["players_dialog_open"], false);
+        assert!(server.lockstep());
+        assert!(s.playing());
+        assert_eq!(s.game.frame(), 0);
+        assert!(s.game.player2.is_some());
+        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert_eq!(st["players"], 2);
+        assert_eq!(st["enemies_alive"], 4, "both players excluded from the enemy count");
+        let snap = ask(&mut server, &tx, &mut s, "snapshot", json!({})).unwrap();
+        let tanks = snap["tanks"].as_array().unwrap();
+        assert_eq!(tanks[0]["player"], 0);
+        assert_eq!(tanks[1]["player"], 1);
+        assert_eq!(tanks[1]["slot"], 1);
+        assert_eq!(tanks[2]["slot"], 2, "enemies count from 2");
+        assert!(tanks[2]["player"].is_null());
+        // The same count again: no restart.
+        for _ in 0..3 {
+            let rx = call(&tx, "step", json!({ "frames": 1, "snapshot": false }));
+            server.before_frame(&mut s, W, H);
+            server.advance(&mut s.game, Input::default(), 0.016, W, H);
+            rx.recv().unwrap().unwrap();
+        }
+        ask(&mut server, &tx, &mut s, "players", json!({ "count": 2 })).unwrap();
+        assert_eq!(s.game.frame(), 3);
+        // Taps are off; `p2_*` drives player 2 and nobody else.
+        let err = ask(&mut server, &tx, &mut s, "tap", json!({ "x": 100.0, "y": 100.0 })).unwrap_err();
+        assert!(err.contains("two-player"), "{err}");
+        let before: Vec<_> = s.game.tank_snapshots().into_iter().filter(|t| t.is_player).map(|t| (t.player, t.position)).collect();
+        let rx = call(&tx, "step", json!({ "frames": 30, "p2_move_dir": "down", "snapshot": false }));
+        server.before_frame(&mut s, W, H);
+        server.advance(&mut s.game, Input::default(), 0.016, W, H);
+        rx.recv().unwrap().unwrap();
+        let after: Vec<_> = s.game.tank_snapshots().into_iter().filter(|t| t.is_player).map(|t| (t.player, t.position)).collect();
+        assert!((after[0].1.y - before[0].1.y).abs() < 1.0, "player 1 stayed put");
+        assert!(after[1].1.y > before[1].1.y + 20.0, "player 2 drove down");
+        // The keys answer the dialog; Enter means the other count.
+        ask(&mut server, &tx, &mut s, "players", json!({})).unwrap();
+        let m = ask(&mut server, &tx, &mut s, "key", json!({ "key": "enter" })).unwrap();
+        assert_eq!(m["players"], 1, "{m}");
+        assert!(s.game.player2.is_none());
+        ask(&mut server, &tx, &mut s, "players", json!({})).unwrap();
+        let m = ask(&mut server, &tx, &mut s, "key", json!({ "key": "2" })).unwrap();
+        assert_eq!(m["players"], 2, "{m}");
+        assert!(ask(&mut server, &tx, &mut s, "players", json!({ "count": 3 })).is_err());
+        // restart takes the count too, and clears an open dialog.
+        ask(&mut server, &tx, &mut s, "players", json!({})).unwrap();
+        let st = ask(&mut server, &tx, &mut s, "restart", json!({ "players": 1, "seed": 3 })).unwrap();
+        assert_eq!(st["players"], 1, "{st}");
+        assert_eq!(st["players_dialog_open"], false);
+        assert!(s.game.player2.is_none());
+        // Refused in build mode, like the other game-only tools.
+        enter_build(&mut server, &tx, &mut s);
+        assert!(ask(&mut server, &tx, &mut s, "players", json!({ "count": 2 })).is_err());
     }
 
     #[test]
@@ -2177,10 +2369,15 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!(r["cli_overrides"]["tank"], false);
         assert_eq!(r["cli_overrides"]["waves"], false);
         assert_eq!(s.builder.history().undo_depth(), 2, "one step per changed field");
-        let r = ask(&mut server, &tx, &mut s, "builder_settings", json!({ "tanks": null, "tank": "titan", "tier_start": "heavy" })).unwrap();
+        let r = ask(&mut server, &tx, &mut s, "builder_settings", json!({ "tanks": null, "tank": "titan", "tank2": "scout", "tier_start": "heavy" })).unwrap();
         assert!(r["tanks"].is_null(), "{r}");
         assert_eq!(r["tank"], "titan");
+        assert_eq!(r["tank2"], "scout");
+        assert_eq!(r["cli_overrides"]["tank2"], false);
         assert_eq!(r["tier_start"], "heavy");
+        let m = ask(&mut server, &tx, &mut s, "builder_map", json!({})).unwrap();
+        assert!(m["toml"].as_str().unwrap().contains("tank2 = \"scout\""), "{m}");
+        assert!(m["diff"]["settings"].as_array().unwrap().iter().any(|f| f == "tank2"), "{m}");
         assert_eq!(r["mission"], "hunt", "an absent field is untouched");
         let err = ask(&mut server, &tx, &mut s, "builder_settings", json!({ "mission": "conquer" })).unwrap_err();
         assert!(err.contains("protect") && err.contains("destroy"), "{err}");
@@ -2192,7 +2389,7 @@ cells."1,1" = { kind = "wall" }"#;
         // Reset reverts everything, as one undoable step.
         let m = ask(&mut server, &tx, &mut s, "builder_map", json!({})).unwrap();
         assert_eq!(m["dirty"], true);
-        assert_eq!(m["diff"]["settings"], json!(["tank", "tier_start"]), "{}", m["diff"]);
+        assert_eq!(m["diff"]["settings"], json!(["tank", "tank2", "tier_start"]), "{}", m["diff"]);
         let r = ask(&mut server, &tx, &mut s, "builder_settings", json!({ "reset": true })).unwrap();
         let baseline = crate::editor::MapSettings::of(s.builder.baseline());
         assert_eq!(r["tank"], json!(baseline.tank.map(TankKind::name)), "{r}");

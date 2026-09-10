@@ -47,6 +47,16 @@ expanding-ring search (by grid cell, only `Wall` cells block it) that snaps
 to the nearest non-wall cell rather than always the literal center point,
 so a map with a wall placed at/near center doesn't spawn the player wedged
 inside it.
+**Two-player rounds (docs/two-players.md)** add a second start,
+`CellObject::Start2` (`kind = "start2"`, editor tool `start2`, label "p2
+start", the same tank icon over a blue ring), a singleton independent of
+`Start`, plus a `tank2 = "..."` key for player 2's chassis (the MAP panel's
+`TANK 2` row, `--tank2` on the CLI). Both are read only in a two-player
+round. A map without a `start2` places player 2 at the nearest open nav
+cell to player 1 that keeps two tank widths from it; a `start2` painted
+inside that clearance is ignored the same way (the linter's
+`players-too-close` warning says so). A map with no `start` at all is a
+`no-start` linter warning.
 `battlefield::spawn_from_map`'s own per-cell match still has to handle the
 `CellObject::Start` variant (the match is exhaustive) but does nothing with
 it there - it exists purely as saved position data, not something that
@@ -152,7 +162,8 @@ object, left to right:
 | Fence | a `Fence` cell (`kind = "fence"`) | " - two styles; the game draws it along whichever axis has fence neighbours |
 | Road | `ground::GroundGrid` cell → `Road` | see "Road & autotiling" below |
 | Frog | single `Frog` placement | see "Frog: singleton enforcement" below |
-| Tank (start point) | single `Start` placement | player spawn position - see "Later change #2" above; singleton, same move-on-click behavior as Frog |
+| Tank (start point) | single `Start` placement | player 1's spawn position - see "Later change #2" above; singleton, same move-on-click behavior as Frog |
+| Tank (player 2 start) | single `Start2` placement | player 2's spawn in a two-player round (docs/two-players.md); singleton, independent of `Start`; the same tank icon over player 2's blue ring |
 | Enemy frog | single `EnemyFrog` placement (`kind = "enemy_frog"`) | the Hunt mission's target (docs/maps-to-levels.md); singleton, same move-on-click behavior as Frog; drawn as the frog idle sprite over a red ground ring, the same marker the game draws under it. Ignored by missions without an enemy frog |
 | Gate | a `Gate` cell (`kind = "gate"`) | a wave roll-in gate; any number. Meant for nav-grid edge cells (col 0, last col, row 0, last row of the `PATHFIND_CELL_SIZE` grid), where it's drawn as an orange chevron pointing inward; anywhere else it's a plain orange square and the linter's `gate-not-on-edge` flags it. A map with any gate cells uses only those; one with none has its gates scanned from the wall layout each wave |
 | Health pickup | a `Pickup` spawn slot, kind `Health` | see "Pickups: fixed spawn slots" below |
@@ -245,7 +256,9 @@ random layout.
 
 ### Frog: singleton enforcement
 
-Only one frog may exist on a map, since killing it ends the round. The
+Only one frog may exist on a map, since killing it ends the round (the
+same rule serves the enemy frog and the two player starts - four
+singletons, each moved independently of the others). The
 Frog tool doesn't refuse a second click — it *moves* the frog: clicking a
 new cell while a frog is already placed clears the old cell and places the
 frog at the new one, so there's always at most one and the user never

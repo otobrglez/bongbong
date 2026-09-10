@@ -15,9 +15,10 @@ use crate::{
 };
 
 /// A read-only snapshot of one tank's motion for collision prediction. The game
-/// builds a slice of these (all live tanks: player + enemies) each frame and hands
-/// it to every enemy's `think`, so an enemy can predict closest approach to the
-/// others without borrowing the mutable tank list.
+/// builds a slice of these (all live tanks: the players first, then the
+/// enemies) each frame and hands it to every enemy's `think`, so an enemy
+/// can predict closest approach to the others without borrowing the
+/// mutable tank list.
 #[derive(Clone, Copy)]
 pub struct Mover {
     pub position: Position,
@@ -26,6 +27,8 @@ pub struct Mover {
     /// bounding-circle radius of the tank's real, per-row physics footprint
     /// at its current facing, not a flat approximation).
     pub radius: f32,
+    /// A human player's tank - never a friendly to an enemy.
+    pub is_player: bool,
 }
 
 /// What a driver (player or AI) wants to do this frame. The physics layer turns
@@ -222,6 +225,12 @@ pub struct Ai {
     /// rather than a flag so tooling can see an escape that fired and
     /// reset within one frame.
     escapes: u32,
+    /// Which human player this tank is fighting (0 or 1): the target of
+    /// its `Role::Player` behaviour and the ring it competes on. Always 0
+    /// in a single-player round; in a two-player round `enemy_phase`
+    /// retargets it to the nearer live, visible player past
+    /// `enemy_target_switch_margin_px`.
+    target_player: u8,
 }
 
 /// Read-only view of an `Ai`'s memory for tooling (`Ai::snapshot`).
@@ -258,6 +267,8 @@ pub struct AiSnapshot {
     /// Seconds left before the breach in progress is given up.
     pub breach_timer: Option<f32>,
     pub escapes: u32,
+    /// `Ai::target_player`.
+    pub target_player: u8,
 }
 
 impl Default for Ai {
@@ -286,6 +297,7 @@ impl Default for Ai {
             wall_ahead_timer: 0.0,
             breach: None,
             escapes: 0,
+            target_player: 0,
         }
     }
 }
@@ -535,7 +547,18 @@ impl Ai {
             retarget_timer: self.retarget_timer,
             breach_timer: self.breach.map(|b| b.timer),
             escapes: self.escapes,
+            target_player: self.target_player,
         }
+    }
+
+    /// Which human player this tank is fighting - see the field.
+    pub fn target_player(&self) -> u8 {
+        self.target_player
+    }
+
+    /// Point this tank at the other player (`enemy_phase`'s retarget pass).
+    pub(crate) fn set_target_player(&mut self, player: u8) {
+        self.target_player = player;
     }
 
     /// Called from `simulation.rs`'s shell-hit resolution whenever a shell
@@ -1434,7 +1457,7 @@ impl Brain<'_> {
     /// shoot through a friendly.
     fn friendly_blocks_shot(&self, fire_dir: Dir, max_forward: f32) -> bool {
         self.movers.iter().enumerate().any(|(i, mover)| {
-            if i == 0 || i == self.my_index {
+            if mover.is_player || i == self.my_index {
                 return false;
             }
             let (off_axis, forward) = axis_offsets(self.me.position, mover.position, fire_dir);
@@ -1937,8 +1960,8 @@ mod role_tests {
         player_tank.position = player;
         let grid = Grid::build(1280.0, 720.0, 48.0, 0.0, std::iter::empty());
         let movers = [
-            Mover { position: player, velocity: Vector2::new(0.0, 0.0), radius: 20.0 },
-            Mover { position: me, velocity: Vector2::new(0.0, 0.0), radius: 20.0 },
+            Mover { position: player, velocity: Vector2::new(0.0, 0.0), radius: 20.0, is_player: true },
+            Mover { position: me, velocity: Vector2::new(0.0, 0.0), radius: 20.0, is_player: false },
         ];
         let mut rng = SmallRng::seed_from_u64(7);
         ai.think(
@@ -2071,8 +2094,8 @@ mod stuck_tests {
         player.position = Position::new(200.0, 600.0);
         let grid = Grid::build(1280.0, 720.0, 48.0, 0.0, std::iter::empty());
         let movers = [
-            Mover { position: player.position, velocity: Vector2::new(0.0, 0.0), radius: 20.0 },
-            Mover { position: me.position, velocity: Vector2::new(0.0, 0.0), radius: 20.0 },
+            Mover { position: player.position, velocity: Vector2::new(0.0, 0.0), radius: 20.0, is_player: true },
+            Mover { position: me.position, velocity: Vector2::new(0.0, 0.0), radius: 20.0, is_player: false },
         ];
         let mut rng = SmallRng::seed_from_u64(7);
         ai.think(
@@ -2209,11 +2232,11 @@ mod separation_tests {
             for _ in 0..1200 {
                 game.update(Input::default(), 1.0 / 60.0, W, H);
                 for e in game.events() {
-                    if let Event::Ram { other_slot, .. } = e {
-                        if other_slot.is_some() {
-                            pair += 1
-                        } else {
+                    if let Event::Ram { slot, other_slot, .. } = e {
+                        if *slot == 0 || *other_slot == 0 {
                             into_player += 1
+                        } else {
+                            pair += 1
                         }
                     }
                 }

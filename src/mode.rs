@@ -1,15 +1,16 @@
 //! The game's two modes and the switch between them
 //! (docs/game-editor-fusion.md, section 5): `Session` owns the `Game`, the
 //! `MapEditor` and which of the two is live, plus the "leave this round?"
-//! question in between. Both the window (`main.rs`) and the dev server go
-//! through the methods here, so a tool and a click are the same path. No
-//! `RaylibHandle` anywhere in this file: drawing stays in `game.rs`,
-//! `hud.rs` and `editor.rs`.
+//! question in between and the "how many players?" one (docs/two-players.md).
+//! Both the window (`main.rs`) and the dev server go through the methods
+//! here, so a tool and a click are the same path. No `RaylibHandle`
+//! anywhere in this file: drawing stays in `game.rs`, `hud.rs` and
+//! `editor.rs`.
 
 use crate::editor::{BuilderInput, EditorAction, MapEditor};
 use crate::hud::PlayChrome;
 use crate::map::MapFile;
-use crate::simulation::{Game, Outcome};
+use crate::simulation::{Game, Outcome, PlayerCount};
 use crate::Layout;
 
 /// Which mode the window is in.
@@ -38,6 +39,11 @@ pub struct Session {
     /// round is frozen because `advance` is not called - no simulation
     /// pause flag is touched.
     pub dialog: bool,
+    /// The players dialog (`1 PLAYER` / `2 PLAYERS`) is open, play mode
+    /// only; the round is frozen the same way. Never open together with
+    /// `dialog`. The chosen count itself lives on `Game::players`, which
+    /// every restart keeps, so it is the session's setting.
+    pub players_dialog: bool,
 }
 
 /// A session reads as its round: the dev server, its tests and `main.rs`
@@ -59,7 +65,7 @@ impl Session {
     /// `game` must be initialised; the builder is seeded from its map.
     pub fn new(game: Game, width: f32, height: f32) -> Self {
         let builder = MapEditor::new(game.map.clone(), width, height);
-        Session { driver: Driver::Play, game, builder, dialog: false }
+        Session { driver: Driver::Play, game, builder, dialog: false, players_dialog: false }
     }
 
     pub fn mode(&self) -> Driver {
@@ -69,7 +75,7 @@ impl Session {
     /// Whether `Game::update` should run this frame: play mode with no
     /// question pending.
     pub fn playing(&self) -> bool {
-        self.driver == Driver::Play && !self.dialog
+        self.driver == Driver::Play && !self.dialog && !self.players_dialog
     }
 
     /// A round the player could still lose by leaving: anything but the
@@ -83,7 +89,10 @@ impl Session {
     /// a no-op. Returns the mode afterwards.
     pub fn press_build(&mut self) -> Driver {
         if self.driver == Driver::Play {
-            if self.dialog {
+            if self.players_dialog {
+                // A press anywhere else closes the players question.
+                self.players_dialog = false;
+            } else if self.dialog {
                 // Pressing the button again while asked is "keep playing".
                 self.dialog = false;
             } else if self.round_in_progress() {
@@ -108,7 +117,38 @@ impl Session {
 
     fn enter_build(&mut self) {
         self.dialog = false;
+        self.players_dialog = false;
         self.driver = Driver::Build;
+    }
+
+    /// The players button in the bar: open the players dialog, or close it
+    /// if it is already up. Play mode only, and a no-op while the leave
+    /// dialog is asking - one question at a time. Works on the end screen
+    /// too (the restart countdown waits). Returns whether it is open.
+    pub fn press_players(&mut self) -> bool {
+        if self.driver == Driver::Play && !self.dialog {
+            self.players_dialog = !self.players_dialog;
+        }
+        self.players_dialog
+    }
+
+    pub fn close_players_dialog(&mut self) {
+        self.players_dialog = false;
+    }
+
+    /// Answer the players dialog: a different count restarts the round at
+    /// once in that mode (the same path as the R key - a `--seed` stays
+    /// pinned, the banner shows), the current count just closes it. A
+    /// no-op when it is not open. Returns the count afterwards.
+    pub fn answer_players(&mut self, count: PlayerCount, width: f32, height: f32) -> PlayerCount {
+        if self.players_dialog {
+            self.players_dialog = false;
+            if count != self.game.players {
+                self.game.players = count;
+                self.game.init(width, height);
+            }
+        }
+        self.game.players
     }
 
     /// `PLAY` from the builder: the edited map becomes the round's map and
@@ -122,6 +162,7 @@ impl Session {
             self.game.init(width, height);
             self.driver = Driver::Play;
             self.dialog = false;
+            self.players_dialog = false;
         }
         self.driver
     }
@@ -157,7 +198,7 @@ impl Session {
 
     /// What `Game::render` should draw around the field this frame.
     pub fn play_chrome(&self) -> PlayChrome {
-        PlayChrome { build_button: true, leave_dialog: self.dialog }
+        PlayChrome { build_button: true, players_button: true, leave_dialog: self.dialog, players_dialog: self.players_dialog }
     }
 }
 
@@ -261,6 +302,70 @@ mod session_tests {
             assert_eq!(s.builder.open_menu(), None);
             assert_eq!(s.toggle(W, H), Driver::Play);
         }
+    }
+
+    #[test]
+    fn the_players_dialog_freezes_the_round_and_yields_to_the_leave_dialog() {
+        let mut s = session();
+        assert!(s.press_players());
+        assert!(s.players_dialog && !s.playing());
+        // The BUILD button while it asks just closes it.
+        assert_eq!(s.press_build(), Driver::Play);
+        assert!(!s.players_dialog && !s.dialog && s.playing());
+        // Pressed again: a toggle.
+        assert!(s.press_players());
+        assert!(!s.press_players());
+        assert!(s.playing());
+        // One question at a time: the leave dialog blocks the players button.
+        s.press_build();
+        assert!(s.dialog);
+        assert!(!s.press_players());
+        assert!(s.dialog && !s.players_dialog);
+        s.answer_dialog(false);
+        // In build mode the button does nothing.
+        s.press_build();
+        s.answer_dialog(true);
+        assert!(!s.press_players());
+    }
+
+    #[test]
+    fn answering_with_the_other_mode_restarts_in_it_and_the_same_mode_just_closes() {
+        let mut s = session();
+        for _ in 0..5 {
+            s.game.update(crate::simulation::Input::default(), crate::PHYSICS_FIXED_DT, W, H);
+        }
+        assert_eq!(s.game.players, PlayerCount::One);
+        assert!(s.game.player2.is_none());
+        // Closed: answering is a no-op.
+        assert_eq!(s.answer_players(PlayerCount::Two, W, H), PlayerCount::One);
+        assert!(s.game.player2.is_none());
+
+        s.press_players();
+        assert_eq!(s.answer_players(PlayerCount::Two, W, H), PlayerCount::Two);
+        assert!(!s.players_dialog && s.playing());
+        assert_eq!(s.game.frame(), 0, "a new round started");
+        assert!(s.game.player2.is_some());
+        for _ in 0..5 {
+            s.game.update(crate::simulation::Input::default(), crate::PHYSICS_FIXED_DT, W, H);
+        }
+        // The same count: closes without a restart.
+        s.press_players();
+        assert_eq!(s.answer_players(PlayerCount::Two, W, H), PlayerCount::Two);
+        assert_eq!(s.game.frame(), 5);
+        assert!(!s.players_dialog);
+        // The mode sticks: an R restart and a BUILD -> PLAY round trip keep it.
+        s.game.update(crate::simulation::Input { restart_pressed: true, ..Default::default() }, crate::PHYSICS_FIXED_DT, W, H);
+        assert_eq!(s.game.players, PlayerCount::Two);
+        assert!(s.game.player2.is_some());
+        s.press_build();
+        s.answer_dialog(true);
+        s.play(W, H);
+        assert_eq!(s.game.players, PlayerCount::Two);
+        assert!(s.game.player2.is_some());
+        // And back to one.
+        s.press_players();
+        assert_eq!(s.answer_players(PlayerCount::One, W, H), PlayerCount::One);
+        assert!(s.game.player2.is_none());
     }
 
     #[test]

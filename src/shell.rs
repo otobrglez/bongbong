@@ -54,28 +54,34 @@ impl ShellState {
 }
 
 /// Who fired a projectile: damage/kill attribution, same-side checks, and
-/// shooter self-exclusion in the hit test. `Enemy(n)` is the nth enemy
-/// spawned this round (`Tank::owner_slot - 1`, see `Tank::owner`).
+/// shooter self-exclusion in the hit test. `Player(i)` is human player `i`
+/// (0 or 1); `Enemy(slot)` carries the tank's owner slot directly - see
+/// `Tank::owner_slot` for the numbering.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Owner {
-    Player,
+    Player(u8),
     Enemy(usize),
 }
 
 impl Owner {
-    /// The owner slot this maps to (`Tank::owner_slot`): 0 for the player,
-    /// `n + 1` for `Enemy(n)`.
+    /// The owner slot this maps to (`Tank::owner_slot`): a player's index,
+    /// an enemy's slot as stored.
     pub fn slot(self) -> usize {
         match self {
-            Owner::Player => 0,
-            Owner::Enemy(n) => n + 1,
+            Owner::Player(i) => i as usize,
+            Owner::Enemy(slot) => slot,
         }
     }
 
+    /// A human player, whichever one.
+    pub fn is_player(self) -> bool {
+        matches!(self, Owner::Player(_))
+    }
+
     /// True if both owners fight on the same side - every enemy counts as
-    /// friendly to every other enemy, never to the player.
+    /// friendly to every other enemy, and both players to each other.
     pub fn same_side(self, other: Owner) -> bool {
-        matches!((self, other), (Owner::Player, Owner::Player) | (Owner::Enemy(_), Owner::Enemy(_)))
+        matches!((self, other), (Owner::Player(_), Owner::Player(_)) | (Owner::Enemy(_), Owner::Enemy(_)))
     }
 }
 

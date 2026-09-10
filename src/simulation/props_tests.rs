@@ -686,7 +686,7 @@ fn two_enemies_ram_each_other() {
     for _ in 0..120 {
         step(&mut game, Input::default());
         rams.extend(game.events().iter().filter_map(|e| match e {
-            Event::Ram { enemy_slot, other_slot: Some(other), damage } => Some((*enemy_slot, *other, *damage)),
+            Event::Ram { slot, other_slot, damage } if *slot != 0 => Some((*slot, *other_slot, *damage)),
             _ => None,
         }));
     }
@@ -818,7 +818,7 @@ fn tall_grass_hides_the_player_from_the_ai() {
             hits += game
                 .events()
                 .iter()
-                .filter(|e| matches!(e, Event::Hit { target: HitTarget::Player, .. }))
+                .filter(|e| matches!(e, Event::Hit { target: HitTarget::Player { .. }, .. }))
                 .count();
         }
         hits
@@ -859,7 +859,7 @@ fn shooting_from_cover_gives_the_player_away() {
         for e in game.events() {
             match e {
                 Event::Hit { target: HitTarget::Enemy { .. }, .. } => landed = true,
-                Event::Hit { target: HitTarget::Player, .. } => shot_back = true,
+                Event::Hit { target: HitTarget::Player { .. }, .. } => shot_back = true,
                 _ => {}
             }
         }

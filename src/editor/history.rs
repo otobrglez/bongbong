@@ -19,6 +19,8 @@ pub const UNDO_DEPTH: usize = 200;
 pub struct MapSettings {
     pub tanks: Option<u32>,
     pub tank: Option<TankKind>,
+    /// Player 2's chassis in a two-player round (`MapFile::tank2`).
+    pub tank2: Option<TankKind>,
     pub mission: Mission,
     pub spawn: SpawnKind,
     pub waves: Option<u32>,
@@ -33,6 +35,7 @@ impl MapSettings {
         MapSettings {
             tanks: map.tanks,
             tank: map.tank,
+            tank2: map.tank2,
             mission: map.mission.kind,
             spawn: map.spawn.kind,
             waves: map.spawn.waves,
@@ -46,6 +49,7 @@ impl MapSettings {
     pub fn write_to(&self, map: &mut MapFile) {
         map.tanks = self.tanks;
         map.tank = self.tank;
+        map.tank2 = self.tank2;
         map.mission.kind = self.mission;
         map.spawn.kind = self.spawn;
         map.spawn.waves = self.waves;
@@ -64,6 +68,9 @@ impl MapSettings {
         }
         if self.tank != other.tank {
             out.push("tank");
+        }
+        if self.tank2 != other.tank2 {
+            out.push("tank2");
         }
         if self.mission != other.mission {
             out.push("mission");

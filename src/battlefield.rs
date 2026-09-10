@@ -427,7 +427,7 @@ pub fn spawn_from_map(
             // `self.map.start_cell()` in `Game::init`, before this function
             // runs (the player is spawned before map terrain is) - nothing
             // here needs to track it.
-            CellObject::Start => {}
+            CellObject::Start | CellObject::Start2 => {}
             CellObject::Pickup { pickup } => pickup_slots.push((pos, pickup)),
             CellObject::EnemyFrog => enemy_frog_pos = Some(pos),
             // Gates are read straight from `MapFile::gate_cells` by the

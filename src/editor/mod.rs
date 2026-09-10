@@ -164,7 +164,11 @@ pub enum Tool {
     Prop(Material),
     Road,
     Frog,
+    /// Player 1's start - singleton, moved on placement like `Frog`.
     Start,
+    /// Player 2's start (two-player rounds, docs/two-players.md) -
+    /// singleton like `Start`, independent of it.
+    Start2,
     /// The Hunt mission's enemy frog - singleton, moved on placement like
     /// `Frog`.
     EnemyFrog,
@@ -180,7 +184,7 @@ pub enum Tool {
 
 /// Every brush, in bar order: the categories one after another, the
 /// eraser last.
-pub const TOOLS: [Tool; 23] = [
+pub const TOOLS: [Tool; 24] = [
     Tool::Wall(Material::Brick),
     Tool::Wall(Material::Iron),
     Tool::Wall(Material::Wood),
@@ -194,6 +198,7 @@ pub const TOOLS: [Tool; 23] = [
     Tool::TallGrass,
     Tool::Gate,
     Tool::Start,
+    Tool::Start2,
     Tool::Frog,
     Tool::EnemyFrog,
     Tool::Pickup(PickupKind::Health),
@@ -225,6 +230,7 @@ impl Tool {
             Tool::TallGrass => "tall_grass",
             Tool::Gate => "gate",
             Tool::Start => "start",
+            Tool::Start2 => "start2",
             Tool::Frog => "frog",
             Tool::EnemyFrog => "enemy_frog",
             Tool::Pickup(PickupKind::Health) => "health",
@@ -248,7 +254,7 @@ impl Tool {
             Tool::Wall(_) => Some(Category::Wall),
             Tool::Prop(_) => Some(Category::Prop),
             Tool::Road | Tool::TallGrass | Tool::Gate => Some(Category::Ground),
-            Tool::Start | Tool::Frog | Tool::EnemyFrog => Some(Category::Actor),
+            Tool::Start | Tool::Start2 | Tool::Frog | Tool::EnemyFrog => Some(Category::Actor),
             Tool::Pickup(_) => Some(Category::Pickup),
             Tool::Eraser => None,
         }
@@ -262,6 +268,7 @@ impl Tool {
             Tool::Road => Some(CellObject::Road),
             Tool::Frog => Some(CellObject::Frog),
             Tool::Start => Some(CellObject::Start),
+            Tool::Start2 => Some(CellObject::Start2),
             Tool::EnemyFrog => Some(CellObject::EnemyFrog),
             Tool::Gate => Some(CellObject::Gate),
             Tool::Pickup(pickup) => Some(CellObject::Pickup { pickup }),
@@ -273,7 +280,7 @@ impl Tool {
     /// A brush that keeps at most one of its object on the map and moves
     /// it on placement.
     pub fn is_singleton(self) -> bool {
-        matches!(self, Tool::Frog | Tool::Start | Tool::EnemyFrog)
+        matches!(self, Tool::Frog | Tool::Start | Tool::Start2 | Tool::EnemyFrog)
     }
 }
 
@@ -380,6 +387,7 @@ struct Stroke {
 pub struct CliOverrides {
     pub tanks: bool,
     pub tank: bool,
+    pub tank2: bool,
     pub mission: bool,
     pub spawn: bool,
     pub waves: bool,
@@ -626,6 +634,7 @@ impl MapEditor {
                 let old = match self.active_tool {
                     Tool::Frog => self.map.frog_cell(),
                     Tool::Start => self.map.start_cell(),
+                    Tool::Start2 => self.map.start2_cell(),
                     Tool::EnemyFrog => self.map.enemy_frog_cell(),
                     _ => None,
                 };
@@ -1161,6 +1170,7 @@ impl MapEditor {
         match row {
             SettingsRow::Tanks => s.tanks = step_option_number(s.tanks, forward, 0, cap),
             SettingsRow::Tank => s.tank = step_option_choice(s.tank, &TankKind::ALL, forward),
+            SettingsRow::Tank2 => s.tank2 = step_option_choice(s.tank2, &TankKind::ALL, forward),
             SettingsRow::Mission => s.mission = step_choice(s.mission, &MISSIONS, forward),
             SettingsRow::Spawn => s.spawn = step_choice(s.spawn, &[SpawnKind::Band, SpawnKind::Waves], forward),
             SettingsRow::Waves => s.waves = step_option_number(s.waves, forward, 1, 20),
@@ -1234,6 +1244,11 @@ impl MapEditor {
                         let src = crate::tank::icon_source_rec();
                         d.draw_texture_pro(textures.tanks, src, dest, origin, 0.0, Color::WHITE);
                     }
+                    CellObject::Start2 => {
+                        draw_player2_ring(&mut d, pos, size / 2.0);
+                        let src = crate::tank::icon_source_rec();
+                        d.draw_texture_pro(textures.tanks, src, dest, origin, 0.0, Color::WHITE);
+                    }
                     CellObject::EnemyFrog => {
                         draw_enemy_ring(&mut d, pos, size / 2.0);
                         let src = Rectangle::new(0.0, 0.0, crate::FROG_TEXTURE_SIZE, crate::FROG_TEXTURE_SIZE);
@@ -1302,6 +1317,7 @@ impl MapEditor {
         match tool {
             Tool::Frog => self.map.frog_cell().is_some(),
             Tool::Start => self.map.start_cell().is_some(),
+            Tool::Start2 => self.map.start2_cell().is_some(),
             Tool::EnemyFrog => self.map.enemy_frog_cell().is_some(),
             _ => false,
         }
@@ -1483,6 +1499,8 @@ enum BarButton {
 enum SettingsRow {
     Tanks,
     Tank,
+    /// Player 2's chassis (`MapFile::tank2`), read only in a two-player round.
+    Tank2,
     Mission,
     Spawn,
     Waves,
@@ -1493,9 +1511,10 @@ enum SettingsRow {
     Reset,
 }
 
-const SETTINGS_ROWS: [SettingsRow; 10] = [
+const SETTINGS_ROWS: [SettingsRow; 11] = [
     SettingsRow::Tanks,
     SettingsRow::Tank,
+    SettingsRow::Tank2,
     SettingsRow::Mission,
     SettingsRow::Spawn,
     SettingsRow::Waves,
@@ -1513,6 +1532,7 @@ impl SettingsRow {
         match self {
             SettingsRow::Tanks => "TANKS",
             SettingsRow::Tank => "TANK",
+            SettingsRow::Tank2 => "TANK 2",
             SettingsRow::Mission => "MISSION",
             SettingsRow::Spawn => "SPAWN",
             SettingsRow::Waves => "WAVES",
@@ -1540,6 +1560,7 @@ impl SettingsRow {
         match self {
             SettingsRow::Tanks => auto_or(s.tanks, |n| n.to_string()),
             SettingsRow::Tank => auto_or(s.tank, |k| k.name().to_string()),
+            SettingsRow::Tank2 => auto_or(s.tank2, |k| k.name().to_string()),
             SettingsRow::Mission => s.mission.name().to_string(),
             SettingsRow::Spawn => s.spawn.name().to_string(),
             SettingsRow::Waves => auto_or(s.waves, |n| n.to_string()),
@@ -1556,6 +1577,7 @@ impl SettingsRow {
         match self {
             SettingsRow::Tanks => o.tanks,
             SettingsRow::Tank => o.tank,
+            SettingsRow::Tank2 => o.tank2,
             SettingsRow::Mission => o.mission,
             SettingsRow::Spawn => o.spawn,
             SettingsRow::Waves => o.waves,
@@ -1625,6 +1647,8 @@ fn fit_text(text: &str, width: f32, size: i32) -> String {
 fn label(tool: Tool) -> &'static str {
     match tool {
         Tool::TallGrass => "tall grass",
+        Tool::Start => "p1 start",
+        Tool::Start2 => "p2 start",
         Tool::EnemyFrog => "enemy frog",
         Tool::Pickup(PickupKind::SpeedUp) => "speed-up",
         other => other.name(),
@@ -1769,6 +1793,12 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, tool: 
             let src = crate::tank::icon_source_rec();
             d.draw_texture_pro(textures.tanks, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
+        Tool::Start2 => {
+            let center = Position::new(dest.x + dest.width / 2.0, dest.y + dest.height / 2.0);
+            draw_player2_ring(d, center, dest.width / 2.0);
+            let src = crate::tank::icon_source_rec();
+            d.draw_texture_pro(textures.tanks, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+        }
         Tool::EnemyFrog => {
             let center = Position::new(dest.x + dest.width / 2.0, dest.y + dest.height / 2.0);
             draw_enemy_ring(d, center, dest.width / 2.0);
@@ -1824,6 +1854,14 @@ const GATE_COLOR: Color = Color::ORANGE;
 fn draw_enemy_ring(d: &mut impl RaylibDraw, center: Position, radius: f32) {
     d.draw_ring(center, radius * 0.75, radius, 0.0, 360.0, 24, ENEMY_RING_COLOR);
     d.draw_circle_v(center, radius * 0.75, Color::new(230, 60, 60, 50));
+}
+
+/// Player 2's blue ring, the same shape as the enemy frog's red one, so a
+/// `start2` cell reads as "a tank, the blue one" next to player 1's.
+fn draw_player2_ring(d: &mut impl RaylibDraw, center: Position, radius: f32) {
+    let c = crate::tank::PLAYER2_RING_COLOR;
+    d.draw_ring(center, radius * 0.75, radius, 0.0, 360.0, 24, Color::new(c.r, c.g, c.b, 220));
+    d.draw_circle_v(center, radius * 0.75, Color::new(c.r, c.g, c.b, 50));
 }
 
 /// An orange chevron of overall size `size` at `center`, its point aimed
@@ -1921,7 +1959,9 @@ mod editor_tests {
         map.spawn.growth = Some(1);
         map.spawn.tier_start = Some(Tier::Light);
         map.spawn.tier_end = Some(Tier::Heavy);
+        map.tank2 = Some(TankKind::Scout);
         map.set_cell(30, 11, CellObject::Start);
+        map.set_cell(32, 11, CellObject::Start2);
         map.set_cell(35, 11, CellObject::Frog);
         map.set_cell(5, 11, CellObject::EnemyFrog);
         map.set_cell(0, 11, CellObject::Gate);
@@ -1943,6 +1983,8 @@ mod editor_tests {
         assert_eq!(back.enemy_frog_cell(), Some((5, 11)));
         assert_eq!(back.gate_cells(), vec![(0, 11), (39, 11)]);
         assert_eq!(back.start_cell(), Some((30, 11)));
+        assert_eq!(back.start2_cell(), Some((32, 11)));
+        assert_eq!(back.tank2, Some(TankKind::Scout));
         assert_eq!(back.frog_cell(), Some((35, 11)));
         assert_eq!(back.cells.len(), map.cells.len());
         assert_eq!(back.cell(22, 11).and_then(|c| c.material()), Some(Material::Barrel));
@@ -1967,6 +2009,39 @@ mod editor_tests {
         }
         let per_category: usize = Category::ALL.iter().map(|c| c.tools().count()).sum();
         assert_eq!(per_category + 1, TOOLS.len(), "every tool but the eraser is in a category");
+    }
+
+    /// The two start brushes are singletons independently of each other:
+    /// moving one leaves the other, and painting one over the other's
+    /// cell replaces it (the badge follows).
+    #[test]
+    fn both_start_brushes_are_independent_singletons() {
+        let mut ed = MapEditor::new(MapFile::new(), W, H);
+        ed.select_tool(Tool::Start);
+        ed.stroke(&[(3, 3)], false, W, H);
+        ed.select_tool(Tool::Start2);
+        ed.stroke(&[(4, 4)], false, W, H);
+        assert!(ed.singleton_placed(Tool::Start) && ed.singleton_placed(Tool::Start2));
+        assert_eq!(ed.map().start_cell(), Some((3, 3)));
+        assert_eq!(ed.map().start2_cell(), Some((4, 4)));
+        let depth = ed.history().undo_depth();
+        // A move: the old cell cleared, the new one placed, player 1 untouched.
+        ed.stroke(&[(6, 6)], false, W, H);
+        assert_eq!(ed.map().start2_cell(), Some((6, 6)));
+        assert_eq!(ed.map().cell(4, 4), None);
+        assert_eq!(ed.map().start_cell(), Some((3, 3)));
+        assert_eq!(ed.history().undo_depth(), depth + 1);
+        ed.undo(W, H);
+        assert_eq!(ed.map().start2_cell(), Some((4, 4)));
+        // Player 1's brush over player 2's cell replaces it.
+        ed.select_tool(Tool::Start);
+        ed.stroke(&[(4, 4)], false, W, H);
+        assert_eq!(ed.map().start_cell(), Some((4, 4)));
+        assert_eq!(ed.map().start2_cell(), None);
+        assert!(!ed.singleton_placed(Tool::Start2));
+        assert_eq!(Tool::parse("start2"), Some(Tool::Start2));
+        assert_eq!(cell_label(&CellObject::Start2), "start2");
+        assert_eq!(cell_label(&CellObject::Start), "start");
     }
 
     #[test]
@@ -2256,6 +2331,10 @@ mod editor_tests {
         assert_eq!(ed.settings().tank, None);
         click(&mut ed, &layout, dec(SettingsRow::Tank));
         assert_eq!(ed.settings().tank, Some(TankKind::ALL[TankKind::ALL.len() - 1]), "wraps");
+        click(&mut ed, &layout, inc(SettingsRow::Tank2));
+        assert_eq!(ed.settings().tank2, Some(TankKind::ALL[0]));
+        click(&mut ed, &layout, dec(SettingsRow::Tank2));
+        assert_eq!(ed.settings().tank2, None);
         click(&mut ed, &layout, inc(SettingsRow::TierStart));
         assert_eq!(ed.settings().tier_start, Some(Tier::Light));
         click(&mut ed, &layout, inc(SettingsRow::Mission));

@@ -135,14 +135,15 @@ impl Game {
     pub(super) fn apply_blast(&mut self, f: &mut Frame, center: Position, live: bool) {
         if live {
             let params = BlastParams::barrel();
-            let player = self.player.expect("player entity spawned in init");
-            {
+            // Players first, in index order, then the enemies - the same
+            // draw order as a wreck's blast (`Game::apply_explosion`).
+            for player in self.players().into_iter().flatten() {
                 let mut q = self.world.query_one::<&mut Tank>(player);
                 let tank = q.get().expect("player entity always has a Tank");
-                explosion_hit(tank, center, true, false, &mut self.physics, &mut f.rng, &mut f.kills, &params);
+                explosion_hit(tank, center, true, &mut self.physics, &mut f.rng, &mut f.kills, &params);
             }
             for tank in self.world.query::<&mut Tank>().with::<&Ai>().iter() {
-                explosion_hit(tank, center, true, true, &mut self.physics, &mut f.rng, &mut f.kills, &params);
+                explosion_hit(tank, center, true, &mut self.physics, &mut f.rng, &mut f.kills, &params);
             }
             let mut dead_frogs = Vec::new();
             for frog in self.world.query::<&mut Frog>().iter() {
