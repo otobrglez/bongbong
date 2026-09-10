@@ -78,7 +78,8 @@ The game
   picks them by `cfg(target_os)`.
 - Assets load by CWD-relative path (`static/...`); the default map is
   compiled in with `include_str!`. No audio. No threads, sockets or file
-  writes outside the `dev-tools` and `map-editor` features.
+  writes outside the `dev-tools` feature (the map builder ships in every
+  build, but its one file write - the dev `SAVE` - is `dev-tools`-only).
 - `sola_raylib::game_loop::run` has two branches: a blocking native loop
   and an emscripten callback loop. Nothing for iOS.
 
@@ -305,7 +306,7 @@ under SDL3 with no game code change. Not needed today.
   runs `cargo build --target ...`, `Info.plist`, `AppIcon` catalog, launch
   screen storyboard, `PrivacyInfo.xcprivacy` (SDL3 ships one for its own
   API use), `LSApplicationCategoryType` games.
-- Build without `dev-tools` and `map-editor`, as production web does.
+- Build without `dev-tools`, as production web does.
 - TestFlight internal, then external for a few weeks, then App Store
   Connect metadata, screenshots per device class, age rating, export
   compliance.

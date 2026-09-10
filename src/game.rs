@@ -23,8 +23,8 @@ use crate::pickup::{Pickup, PickupKind, draw_pickup};
 use crate::plasma::{Plasma, PlasmaState, draw_plasma, draw_plasma_shadow};
 use crate::shell::{Shell, ShellState, draw_shell, draw_shell_shadow};
 use crate::hud::{
-    draw_bar, version_line, HudModel, HUD_VERSION_BOTTOM_INSET, HUD_VERSION_COLOR, HUD_VERSION_RIGHT_INSET,
-    HUD_VERSION_TEXT_SIZE,
+    draw_bar, draw_leave_dialog, draw_mode_button, version_line, HudModel, PlayChrome, BUILD_COLOR,
+    HUD_VERSION_BOTTOM_INSET, HUD_VERSION_COLOR, HUD_VERSION_RIGHT_INSET, HUD_VERSION_TEXT_SIZE,
 };
 use crate::shockwave::{RippleFx, screen_to_ripple_uv};
 use crate::simulation::{Game, Outcome};
@@ -158,6 +158,7 @@ impl Game {
         effects: &mut Effects,
         textures: &Textures,
         layout: &Layout,
+        chrome: &PlayChrome,
     ) {
         let screen_width = layout.field.w.round() as i32;
         let screen_height = layout.field.h.round() as i32;
@@ -775,11 +776,23 @@ impl Game {
                         Color::RAYWHITE,
                     );
                 }
+
+                // The leave-round question (docs/game-editor-fusion.md
+                // section 6): the same dim as PAUSED, the dialog on top.
+                // The round is frozen by `main.rs` not calling `update`,
+                // so nothing here is simulation state.
+                if chrome.leave_dialog {
+                    d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(0, 0, 0, 120));
+                    draw_leave_dialog(&mut d, layout.field);
+                }
             });
 
             // The HUD bar, in window space, over anything the field pass
             // might have put on its edge.
             draw_bar(&mut d, layout.panel, &hud, textures);
+            if chrome.build_button {
+                draw_mode_button(&mut d, layout.panel, "BUILD", BUILD_COLOR);
+            }
         });
     }
 }

@@ -727,12 +727,6 @@ pub const PLASMA_TEXTURE_SIZE: f32 = 32.0;
 // tuning, reduced 20% after it read too big on screen.
 pub const PLASMA_SCALE: f32 = 2.08;
 
-/// Side length of one palette/toolbar icon button, in pixels.
-pub const EDITOR_ICON_SIZE: f32 = 48.0;
-/// Gap between adjacent icon buttons within a panel, in pixels.
-pub const EDITOR_ICON_GAP: f32 = 8.0;
-/// Padding between a panel's edge and the icons/controls inside it.
-pub const EDITOR_PANEL_PADDING: f32 = 10.0;
 /// Corner roundness passed to `draw_rectangle_rounded` (raylib's 0..1
 /// fraction of the shorter side, not a pixel radius) - small on purpose, a
 /// gentle curve rather than a pill shape.
@@ -752,15 +746,19 @@ pub const EDITOR_PANEL_BORDER_OPACITY: f32 = 0.6;
 /// them) and its opacity.
 pub const EDITOR_PANEL_FILL: (u8, u8, u8) = (20, 20, 24);
 pub const EDITOR_PANEL_FILL_OPACITY: f32 = 0.85;
-/// Fixed gap between the bottom-center object palette and the bottom of the
-/// screen.
-pub const EDITOR_PALETTE_BOTTOM_MARGIN: f32 = 16.0;
-// Clear space kept at each side of the palette panel, so a wrapped row is
-// never flush against the screen edge - see `MapEditor::palette_columns`,
-// which uses it to decide how many icons fit across.
-pub const EDITOR_PALETTE_SIDE_MARGIN: f32 = 16.0;
-/// Margin from the field's edges for the editor's status line and the
-/// gap between the New/Save/Load/Close buttons in the HUD bar.
+/// The build bar's popups (docs/game-editor-fusion.md sections 7 and 9):
+/// a dropdown row and a settings row are one finger-sized 48 px tall, a
+/// category's list is 200 px wide, the MAP settings panel 340 px.
+pub const EDITOR_DROPDOWN_ROW_H: f32 = 48.0;
+pub const EDITOR_DROPDOWN_W: f32 = 200.0;
+pub const EDITOR_SETTINGS_W: f32 = 340.0;
+/// The settings panel's `<`/`>` buttons, square and finger-sized.
+pub const EDITOR_STEPPER_SIZE: f32 = 48.0;
+/// How far a bar button's hit rect reaches above and below its drawn
+/// box (docs/game-editor-fusion.md section 10): the bar is 32 px tall
+/// and about 21 CSS px on a phone, so a slightly low tap still lands.
+pub const EDITOR_BAR_HIT_SLACK: f32 = 8.0;
+/// Margin from the field's edges for the editor's status line.
 pub const EDITOR_TOOLBAR_MARGIN: f32 = 16.0;
 
 /// Parse a round-seed CLI value: plain decimal, or hex with a `0x`/`0X`
@@ -792,7 +790,6 @@ pub mod damage_stage;
 pub mod decal;
 #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
 pub mod devserver;
-#[cfg(feature = "map-editor")]
 pub mod editor;
 pub mod frog;
 pub mod fx;
@@ -803,6 +800,7 @@ pub mod hud;
 pub mod laser;
 pub mod level;
 pub mod map;
+pub mod mode;
 pub mod marker;
 pub mod maplint;
 pub mod obstacle;

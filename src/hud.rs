@@ -306,6 +306,92 @@ fn draw_heart(d: &mut impl RaylibDraw, x: i32, y: i32) {
     }
 }
 
+/// The mode button's slot at the bar's right end: `BUILD` in play mode,
+/// `PLAY` in build mode (docs/game-editor-fusion.md, sections 6 and 7).
+/// Full bar height, so a finger has the most to aim at.
+pub const MODE_BUTTON_W: f32 = 72.0;
+pub const MODE_BUTTON_RIGHT_INSET: f32 = 8.0;
+
+/// Where the mode button sits in `panel` (window space). Shared by the
+/// play bar, the build bar and every hit-test, so a tool's `click` and a
+/// finger agree on it.
+pub fn mode_button_rect(panel: Rect) -> Rectangle {
+    Rectangle::new(panel.x + panel.w - MODE_BUTTON_RIGHT_INSET - MODE_BUTTON_W, panel.y, MODE_BUTTON_W, panel.h)
+}
+
+/// The mode button: an outlined slot with its label centred, in `color`.
+pub fn draw_mode_button(d: &mut impl RaylibDraw, panel: Rect, label: &str, color: Color) {
+    let r = mode_button_rect(panel);
+    d.draw_rectangle_lines_ex(Rectangle::new(r.x, r.y + 2.0, r.width, r.height - 4.0), 2.0, color);
+    // The default font runs ~11 px per character at 18 px.
+    let text_w = label.len() as i32 * 11;
+    d.draw_text(label, (r.x + (r.width - text_w as f32) / 2.0) as i32, (r.y + (r.height - HUD_TEXT_SIZE as f32) / 2.0) as i32, HUD_TEXT_SIZE, color);
+}
+
+/// The builder's amber, the colour the play bar's `BUILD` button and the
+/// build bar's `PLAY` button share.
+pub const BUILD_COLOR: Color = Color::new(255, 200, 80, 255);
+
+/// The leave-round dialog's geometry, in field space: the panel and its
+/// two buttons (`LEAVE ROUND`, `KEEP PLAYING`), each at least 48 px tall
+/// and 160 px wide so a finger cannot miss.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LeaveDialogRects {
+    pub panel: Rectangle,
+    pub leave: Rectangle,
+    pub stay: Rectangle,
+}
+
+pub const DIALOG_W: f32 = 440.0;
+pub const DIALOG_H: f32 = 170.0;
+pub const DIALOG_BUTTON_W: f32 = 176.0;
+pub const DIALOG_BUTTON_H: f32 = 48.0;
+
+pub fn leave_dialog_rects(field: Rect) -> LeaveDialogRects {
+    let x = (field.w - DIALOG_W) / 2.0;
+    let y = (field.h - DIALOG_H) / 2.0;
+    let panel = Rectangle::new(x, y, DIALOG_W, DIALOG_H);
+    let by = y + DIALOG_H - 16.0 - DIALOG_BUTTON_H;
+    let gap = 16.0;
+    let bx = x + (DIALOG_W - 2.0 * DIALOG_BUTTON_W - gap) / 2.0;
+    LeaveDialogRects {
+        panel,
+        leave: Rectangle::new(bx, by, DIALOG_BUTTON_W, DIALOG_BUTTON_H),
+        stay: Rectangle::new(bx + DIALOG_BUTTON_W + gap, by, DIALOG_BUTTON_W, DIALOG_BUTTON_H),
+    }
+}
+
+/// Draw the leave-round dialog over the (already dimmed) field. Field
+/// space: call inside the field camera.
+pub fn draw_leave_dialog(d: &mut impl RaylibDraw, field: Rect) {
+    let r = leave_dialog_rects(field);
+    let shadow = Rectangle::new(r.panel.x + 4.0, r.panel.y + 4.0, r.panel.width, r.panel.height);
+    d.draw_rectangle_rounded(shadow, 0.08, 8, Color::new(0, 0, 0, 90));
+    d.draw_rectangle_rounded(r.panel, 0.08, 8, Color::new(20, 20, 24, 240));
+    d.draw_rectangle_rounded_lines_ex(r.panel, 0.08, 8, 1.5, Color::new(0, 0, 0, 150));
+    let title = "Leave this round?";
+    let title_size = 28;
+    let title_w = title.len() as i32 * 15;
+    d.draw_text(title, (r.panel.x + (DIALOG_W - title_w as f32) / 2.0) as i32, (r.panel.y + 22.0) as i32, title_size, TEXT);
+    let sub = "Your progress is lost. The map is kept.";
+    let sub_w = sub.len() as i32 * 9;
+    d.draw_text(sub, (r.panel.x + (DIALOG_W - sub_w as f32) / 2.0) as i32, (r.panel.y + 62.0) as i32, 16, DIM);
+    for (rect, label, color) in [(r.leave, "LEAVE ROUND", BUILD_COLOR), (r.stay, "KEEP PLAYING", TEXT)] {
+        d.draw_rectangle_rounded_lines_ex(rect, 0.2, 8, 2.0, color);
+        let w = label.len() as i32 * 11;
+        d.draw_text(label, (rect.x + (rect.width - w as f32) / 2.0) as i32, (rect.y + (rect.height - HUD_TEXT_SIZE as f32) / 2.0) as i32, HUD_TEXT_SIZE, color);
+    }
+}
+
+/// What play-mode chrome `Game::render` draws besides the readouts: the
+/// `BUILD` button in the bar and, while the player is being asked, the
+/// leave-round dialog over a dimmed field.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PlayChrome {
+    pub build_button: bool,
+    pub leave_dialog: bool,
+}
+
 #[cfg(test)]
 mod hud_tests {
     use super::*;
@@ -331,5 +417,20 @@ mod hud_tests {
         assert!(SLOT_WEAPONS + 3 * WEAPON_SLOT_W <= SLOT_BARS);
         assert!(BAR_W <= BAR_SLOT_W);
         assert!(SLOT_BARS + 3 * BAR_SLOT_W <= crate::DEFAULT_SCREEN_WIDTH);
+        let button = mode_button_rect(Rect::new(0.0, 0.0, crate::DEFAULT_SCREEN_WIDTH as f32, crate::HUD_BAR_HEIGHT as f32));
+        assert!((SLOT_BARS + 3 * BAR_SLOT_W) as f32 <= button.x, "bars run into the BUILD button");
+    }
+
+    #[test]
+    fn the_leave_dialog_buttons_are_finger_sized_and_inside_the_field() {
+        let field = Rect::new(0.0, 32.0, crate::DEFAULT_SCREEN_WIDTH as f32, crate::DEFAULT_SCREEN_HEIGHT as f32);
+        let r = leave_dialog_rects(field);
+        for b in [r.leave, r.stay] {
+            assert!(b.width >= 160.0 && b.height >= 48.0);
+            assert!(b.x >= r.panel.x && b.x + b.width <= r.panel.x + r.panel.width);
+            assert!(b.y >= r.panel.y && b.y + b.height <= r.panel.y + r.panel.height);
+        }
+        assert!(r.leave.x + r.leave.width + 16.0 <= r.stay.x);
+        assert!(r.panel.x >= 0.0 && r.panel.x + r.panel.width <= field.w);
     }
 }

@@ -107,7 +107,7 @@ impl CellObject {
 /// A saved battlefield layout. Keys are `"<col>,<row>"` grid-cell strings
 /// (TOML tables require string keys) - only occupied cells are stored, so a
 /// mostly-empty map stays a small file.
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MapFile {
     pub version: u32,
     #[serde(default)]
@@ -360,10 +360,69 @@ pub fn maps_dir() -> PathBuf {
     PathBuf::from("maps")
 }
 
-/// Every `.toml` file under `maps_dir()`, by file stem, sorted - used by the
-/// editor's Load panel. An unreadable/missing directory just yields an
-/// empty list rather than an error (nothing to load yet is a normal state,
-/// not a failure).
+/// The maps compiled into the binary, by name: the default battlefield and
+/// the two mission fixtures. They are what the web build can offer its
+/// Load list, since nothing outside `static/` ships in the wasm, and they
+/// stand in on native for a checkout without a `maps/` directory.
+pub const SHIPPED_MAPS: &[(&str, &str)] = &[
+    ("default", include_str!("../maps/default.toml")),
+    ("hunt-basic", include_str!("../maps/missions/hunt-basic.toml")),
+    ("waves-basic", include_str!("../maps/missions/waves-basic.toml")),
+];
+
+/// Whether this build can write a map to disk: native yes, web no (its
+/// edits live in memory for the session - docs/game-editor-fusion.md).
+pub const fn saving_available() -> bool {
+    !cfg!(target_os = "emscripten")
+}
+
+/// One map the builder's Load list can offer.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct MapEntry {
+    pub name: String,
+    /// A file under `maps_dir()` (native); otherwise one of `SHIPPED_MAPS`.
+    pub on_disk: bool,
+}
+
+/// Every map the builder can load, sorted by name: the files under
+/// `maps_dir()` on native, plus the shipped maps not shadowed by a file of
+/// the same name. The web build lists only the shipped ones.
+pub fn available_maps() -> Vec<MapEntry> {
+    let mut entries: Vec<MapEntry> = if saving_available() {
+        list_maps().into_iter().map(|name| MapEntry { name, on_disk: true }).collect()
+    } else {
+        Vec::new()
+    };
+    for (name, _) in SHIPPED_MAPS {
+        if !entries.iter().any(|e| e.name == *name) {
+            entries.push(MapEntry { name: (*name).to_string(), on_disk: false });
+        }
+    }
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    entries
+}
+
+/// Open a map by its Load-list name: the file under `maps_dir()` when
+/// there is one (native), else the shipped map of that name. The result
+/// carries `name` for display.
+pub fn open_map(name: &str) -> Result<MapFile, String> {
+    let path = maps_dir().join(format!("{name}.toml"));
+    if saving_available() && path.is_file() {
+        return MapFile::load(&path);
+    }
+    let (_, text) = SHIPPED_MAPS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .ok_or_else(|| format!("no map named {name:?}"))?;
+    let mut map = MapFile::from_toml_str(text).map_err(|e| format!("parsing shipped map {name}: {e}"))?;
+    map.name = Some(name.to_string());
+    Ok(map)
+}
+
+/// Every `.toml` file under `maps_dir()`, by file stem, sorted - the
+/// on-disk half of `available_maps`. An unreadable/missing directory just
+/// yields an empty list rather than an error (nothing to load yet is a
+/// normal state, not a failure).
 pub fn list_maps() -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(maps_dir())
         .into_iter()
@@ -379,6 +438,20 @@ pub fn list_maps() -> Vec<String> {
 #[cfg(test)]
 mod toml_tests {
     use super::*;
+
+    #[test]
+    fn shipped_maps_parse_and_open_by_name() {
+        for (name, _) in SHIPPED_MAPS {
+            let map = open_map(name).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(map.name.as_deref(), Some(*name));
+            assert!(!map.cells.is_empty());
+        }
+        assert!(open_map("no-such-map").is_err());
+        let entries = available_maps();
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"default"));
+        assert!(names.windows(2).all(|w| w[0] < w[1]), "sorted and unique");
+    }
 
     #[test]
     fn toml_string_round_trips_the_default_map() {

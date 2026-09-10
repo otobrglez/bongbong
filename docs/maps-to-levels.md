@@ -263,10 +263,10 @@ frame, so a seeded round replays bit-for-bit including waves.
   candidates), `hunt-missing-enemy-frog` (warning: fallback used),
   `enemy-frog-unreachable` (error: not in the player start's component).
   The spawn-band capacity check runs only for the Band plan.
-- **Editor** (`editor.rs`): two new tools, `EnemyFrog` (singleton, frog idle
+- **Editor** (`editor/`): two new tools, `EnemyFrog` (singleton, frog idle
   sprite with a red ring) and `Gate` (multi-place, drawn as an arrow chevron
-  on the edge). Mission/spawn tables stay TOML-only for now; the editor
-  preserves them on save. docs/map-editor-design.md's cell table gets the
+  on the edge). The mission/spawn tables are edited from the builder's MAP
+  panel (docs/game-editor-fusion.md section 9) and preserved on save. docs/map-editor-design.md's cell table gets the
   two rows.
 - **Docs**: CLAUDE.md module map (map.rs, simulation, ai.rs, game.rs,
   probe/devserver bullets), dev-server-design.md tool list.

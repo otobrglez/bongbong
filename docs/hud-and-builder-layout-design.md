@@ -4,13 +4,15 @@ Status: variant A's play mode is implemented (2026-09): `Layout` and
 `HUD_BAR_HEIGHT` in `lib.rs`, the bar in `hud.rs`, the field offset in
 `game.rs`/`main.rs`, the editor's toolbar in the bar (its palette still
 floats over the field), the web canvas at 1280x752; the version line stays bottom-right of the
-field rather than moving into the title alone. Still open: the
-build-mode dropdowns, the map settings steppers and the in-game
-`Driver { Play, Build }` switch. Sketches where the player's
+field rather than moving into the title alone. The build-mode half - the
+dropdowns, the map settings steppers and the in-game `Driver { Play,
+Build }` switch - is specified in docs/game-editor-fusion.md, which
+supersedes the build-mode parts of this doc. Sketches where the player's
 inventory readout (health, shells, weapon queue, wave, objective) lives so
 it never covers the battlefield, and reserves the same space for the map
 builder once it is fused into the game instead of being the separate
-`--editor` driver it is today (docs/map-editor-design.md). Two layouts are
+`--editor` driver it was when this was written (docs/map-editor-design.md;
+the fusion has since landed per docs/game-editor-fusion.md). Two layouts are
 worked out to the pixel: **a 32 px top bar** (variant A, the current
 favourite: the window stays 1280 wide) and **a 160 px right sidebar**
 (variant B, roomier for the builder). Everything from "Mode switch" on is
@@ -31,7 +33,9 @@ shared.
   Load/Close` top-right and a 20-icon palette bottom-centre that is 1132 px
   wide and hides the bottom two rows of cells (`MapEditor::point_on_ui`
   refuses clicks there). Its palette floats over the very rows the default
-  map uses.
+  map uses. *(Status: no longer true - the builder's toolbar lives in the
+  bar as category dropdowns and nothing floats over the field except an
+  open popup; docs/game-editor-fusion.md section 7.)*
 - The web page (`site/src/pages/index.astro`) sizes the canvas to
   `min(100vw, 1280px) x min(100vh, 720px)`; the tuning panel sits below it.
 
@@ -215,6 +219,12 @@ authorable in-game.
 - Gating is unchanged: everything build-side is `#[cfg(feature =
   "map-editor")]`; a release build has the sidebar with the HUD only and
   no toggle. `--editor` still works and simply starts in Build.
+  *(Status: superseded by docs/game-editor-fusion.md - the `map-editor`
+  feature is gone, the builder and the `BUILD` button ship in every build,
+  the switch lives in `mode::Session` rather than `main.rs`, and there is
+  no "resume the paused round" path: confirming `BUILD` gives the round up
+  and `PLAY` always starts a fresh one. The Variant B mentions of
+  "map-editor builds only" above are stale for the same reason.)*
 
 ## Code seams
 
@@ -226,7 +236,7 @@ Small, and almost all presentation-side:
 | `main.rs` | Window = field + panel. `Game::init`/`update`, `RippleFx::load`, `ground::build`, `scene_target` all get the **field** size - no simulation change. The `Driver` switch, Build-mode mouse handling and (variant A) the open-dropdown state live here or in `editor.rs`. |
 | `game.rs::render` | `scene_target` is already a separate render texture blitted with `blit_offset` (camera shake); add `layout.field` origin to that offset. `screen_to_ripple_uv` uses field dims. The post-composite pass (debug overlays, banners, flash) draws field-relative: a `Camera2D` with `offset = field origin`, or the origin added to the few `draw_rectangle(0, 0, w, h)` calls. The HUD text block moves out. |
 | `hud.rs` (new) | `HudModel` (plain numbers gathered from `Game`) and `draw_panel(d, layout.panel, &HudModel, &HudTextures)` - a row of fixed slots for the bar, a stack for the sidebar. `HUD_*` constants and `hud_number_color` move here. |
-| `editor.rs` | Chrome rects take `&Layout`; `point_on_ui = layout.panel.contains(mouse) || open dropdown contains(mouse)`; cursor cell from `mouse - field origin`. Hamburger removed. Variant A adds the category/`FILE`/`MAP` dropdowns (the palette icons and their hit-testing already exist, they are re-laid out into lists); variant B re-lays the palette out as 3 columns. Map settings steppers are new either way. |
+| `editor.rs` | Chrome rects take `&Layout`; `point_on_ui = layout.panel.contains(mouse) || open dropdown contains(mouse)`; cursor cell from `mouse - field origin`. Hamburger removed. Variant A adds the category/`FILE`/`MAP` dropdowns (the palette icons and their hit-testing already exist, they are re-laid out into lists); variant B re-lays the palette out as 3 columns. Map settings steppers are new either way. *(Built as `src/editor/` per docs/game-editor-fusion.md section 13: category dropdowns and the MAP panel, no `FILE` menu, input as a `BuilderInput`.)* |
 | `site/src/pages/index.astro` | Canvas `min(100vh, 752px)` tall (A) or `min(100vw, 1440px)` wide (B); the tuning panel is unaffected. |
 | `devserver.rs` screenshots | `after_render` reads the presented frame; a screenshot now includes the sidebar, which is what a QA eye wants. `Layout` gives it the field rect if a tool ever needs to crop. |
 

@@ -506,7 +506,6 @@ pub fn fence_axis(obstacle: &Obstacle, fences: &HashSet<(i32, i32)>) -> FenceAxi
 /// (variant 0, undamaged) tile - used by the map editor's toolbar
 /// (`editor.rs`) to draw a representative icon for each material without
 /// needing a live `Obstacle` instance.
-#[cfg(feature = "map-editor")]
 pub fn icon_source_rec(material: Material) -> (Sheet, Rectangle) {
     let sheet = material.sheet();
     (sheet, source_rec(sheet, material.row_base(), 0))

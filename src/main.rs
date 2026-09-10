@@ -1,6 +1,9 @@
 use bongbong::tuning::tuning;
 use bongbong::ai::Intent;
+use bongbong::editor::{BuilderInput, CliOverrides, EditorTextures};
 use bongbong::game::{Effects, Textures};
+use bongbong::hud::{leave_dialog_rects, mode_button_rect};
+use bongbong::mode::{Driver, Session};
 use bongbong::shockwave::{RippleFx, RippleTuning};
 use bongbong::simulation::{Game, Input};
 use bongbong::tuning;
@@ -85,17 +88,14 @@ struct Args {
     /// enemy spawns stay procedural on top of the map's terrain. Loaded (and
     /// validated) eagerly at CLI-parse time, so a missing/malformed map file
     /// fails fast with a clear error instead of silently falling back to
-    /// random. With `--editor` (map-editor builds only), this instead
-    /// pre-loads the named map into the editor's canvas.
+    /// random. With `--editor` the builder opens on this map.
     #[arg(short = 'm', long = "map", value_parser = parse_map)]
     map: Option<bongbong::map::MapFile>,
 
-    /// Open the dev-only battlefield map editor instead of starting a round
-    /// - see docs/map-editor-design.md. Combine with `--map` to edit an
-    /// existing map rather than starting from a blank canvas. Only exists in
-    /// builds compiled with `--features map-editor`; never present in a
-    /// release build.
-    #[cfg(feature = "map-editor")]
+    /// Start in Build mode - the map builder - instead of playing
+    /// (docs/game-editor-fusion.md). The round is set up as usual, so
+    /// `PLAY` starts it on the map as edited; `--map` picks the map to
+    /// edit.
     #[arg(long = "editor")]
     editor: bool,
 
@@ -257,6 +257,10 @@ fn main() {
         .size(window_width, window_height)
         .title(&format!("BongBong! v{}", env!("CARGO_PKG_VERSION")))
         .build();
+    // raylib closes the window on Esc by default; here Esc keeps playing
+    // in the leave dialog and dismisses a builder menu, so it must never
+    // reach `window_should_close`.
+    rl.set_exit_key(None);
 
     let tanks_texture = rl
         .load_texture(&thread, "static/scifi_tanks_sheet.png")
@@ -342,53 +346,9 @@ fn main() {
     let pickup_shield_texture = rl
         .load_texture(&thread, "static/pickups/shield.png")
         .expect("failed loading shield pickup texture");
-    #[cfg(feature = "map-editor")]
     let eraser_texture = rl
         .load_texture(&thread, "static/ui/eraser.png")
         .expect("failed loading eraser texture");
-
-    // `--editor`: skip `Game`/`simulation::Input` entirely and drive
-    // `MapEditor`'s own update/render loop instead - same window, same
-    // already-loaded textures, different top-level driver. See
-    // docs/map-editor-design.md's "Entering the editor" section. Only
-    // compiled into `map-editor`-feature builds.
-    #[cfg(feature = "map-editor")]
-    if args.editor {
-        let mut editor = bongbong::editor::MapEditor::new(args.map, screen_width as f32, screen_height as f32);
-        game_loop::run(rl, thread, 60, move |rl, thread| {
-            let layout = Layout::for_window(rl.get_screen_width() as f32, rl.get_screen_height() as f32);
-            if let bongbong::editor::EditorAction::Close = editor.update(rl, &layout) {
-                rl.request_quit();
-            }
-            editor.render(
-                rl,
-                thread,
-                &layout,
-                &bongbong::editor::EditorTextures {
-                    obstacles: &obstacles_texture,
-                    props: &props_texture,
-                    ground: &ground_texture,
-                    grass: &grass_texture,
-                    trees: &trees_texture,
-                    // Editor palette icon: just the first colour variant's
-                    // idle frame - a fixed representative sprite, since the
-                    // editor places a frog *cell*, not a rolled colour (that
-                    // roll only happens per-round, in `Game::init`).
-                    frog_idle: &frog_textures[0].idle,
-                    pickup_health: &pickup_health_texture,
-                    pickup_ammo: &pickup_ammo_texture,
-                    pickup_laser: &pickup_laser_texture,
-                    pickup_minigun: &pickup_minigun_texture,
-                    pickup_plasma: &pickup_plasma_texture,
-                    pickup_speedup: &pickup_speedup_texture,
-                    pickup_shield: &pickup_shield_texture,
-                    eraser: &eraser_texture,
-                    tanks: &tanks_texture,
-                },
-            );
-        });
-        return;
-    }
 
     let mut shock_fx = RippleFx::load(
         &mut rl,
@@ -475,6 +435,24 @@ fn main() {
     game.map = args.map.unwrap_or_else(default_map);
     game.init(screen_width as f32, screen_height as f32);
 
+    // The two modes (docs/game-editor-fusion.md): the round and the map
+    // builder, whichever is live. `--editor` starts on the builder.
+    let mut session = Session::new(game, screen_width as f32, screen_height as f32);
+    session.builder.cli_overrides = CliOverrides {
+        tanks: args.enemies.is_some(),
+        tank: args.tank.is_some(),
+        mission: args.mission.is_some(),
+        spawn: args.spawn.is_some(),
+        waves: args.waves.is_some(),
+        wave_size: args.wave_size.is_some(),
+        wave_growth: args.wave_growth.is_some(),
+        tier_start: args.tier_start.is_some(),
+        tier_end: args.tier_end.is_some(),
+    };
+    if args.editor {
+        session.driver = Driver::Build;
+    }
+
     // The dev server is serviced at the frame boundary below, like the
     // tuning transports; failing to bind is a warning, not a fatal error.
     #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
@@ -527,7 +505,7 @@ fn main() {
         // they stage lands in this same frame.
         #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
         if let Some(dev) = &mut dev {
-            dev.before_frame(&mut game, width, height);
+            dev.before_frame(&mut session, width, height);
         }
         // Then land any tuning edits staged since last frame (dev panel
         // via capi.rs, the `--tuning` file watch, or the dev server)
@@ -558,6 +536,113 @@ fn main() {
                 duration: t.impact_flash_duration,
             });
         }
+        // Raw pointer state, shared by both modes. Touch is edge-detected
+        // by hand because raylib reports a held finger as a point count,
+        // not a press.
+        let touching = rl.get_touch_point_count() > 0;
+        let touch_pressed = touching && !touch_held_last_frame;
+        touch_held_last_frame = touching;
+        let mouse_pressed = rl.is_mouse_button_pressed(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_LEFT);
+        let mouse_held = rl.is_mouse_button_down(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_LEFT);
+        let pointer = if touching { rl.get_touch_position(0) } else { rl.get_mouse_position() };
+        let pressed = mouse_pressed || touch_pressed;
+        let held = mouse_held || touching;
+        let tab = rl.is_key_pressed(KeyboardKey::KEY_TAB);
+        let ctrl = rl.is_key_down(KeyboardKey::KEY_LEFT_CONTROL)
+            || rl.is_key_down(KeyboardKey::KEY_RIGHT_CONTROL)
+            || rl.is_key_down(KeyboardKey::KEY_LEFT_SUPER)
+            || rl.is_key_down(KeyboardKey::KEY_RIGHT_SUPER);
+        let dt = rl.get_frame_time();
+
+        match session.mode() {
+            Driver::Play => {
+                // The BUILD button and the leave dialog come first: a press
+                // on either is never a tank order. Nothing here touches the
+                // simulation - a frozen round is one whose `update` is not
+                // called (see `Session::playing`).
+                if session.dialog {
+                    let rects = leave_dialog_rects(layout.field);
+                    let field_p = layout.to_field(pointer);
+                    if pressed {
+                        if rects.leave.check_collision_point_rec(field_p) {
+                            session.answer_dialog(true);
+                        } else if rects.stay.check_collision_point_rec(field_p)
+                            || !rects.panel.check_collision_point_rec(field_p)
+                        {
+                            session.answer_dialog(false);
+                        }
+                    }
+                    if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
+                        session.answer_dialog(true);
+                    } else if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) || tab {
+                        session.answer_dialog(false);
+                    }
+                } else if tab || (pressed && mode_button_rect(layout.panel).check_collision_point_rec(pointer)) {
+                    session.press_build();
+                }
+            }
+            Driver::Build => {
+                let mut typed = String::new();
+                while let Some(c) = rl.get_char_pressed() {
+                    typed.push(c);
+                }
+                let input = BuilderInput {
+                    pointer: Some(pointer),
+                    pressed,
+                    held,
+                    right_pressed: rl.is_mouse_button_pressed(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_RIGHT),
+                    right_held: rl.is_mouse_button_down(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_RIGHT),
+                    wheel: rl.get_mouse_wheel_move(),
+                    escape: rl.is_key_pressed(KeyboardKey::KEY_ESCAPE),
+                    enter: rl.is_key_pressed(KeyboardKey::KEY_ENTER),
+                    backspace: rl.is_key_pressed(KeyboardKey::KEY_BACKSPACE),
+                    undo: ctrl && rl.is_key_pressed(KeyboardKey::KEY_Z),
+                    redo: ctrl && rl.is_key_pressed(KeyboardKey::KEY_Y),
+                    typed,
+                };
+                if tab {
+                    session.toggle(width, height);
+                } else {
+                    session.update_builder(&input, &layout);
+                }
+            }
+        }
+
+        if session.mode() == Driver::Build {
+            session.builder.render(
+                rl,
+                thread,
+                &layout,
+                &EditorTextures {
+                    obstacles: &obstacles_texture,
+                    props: &props_texture,
+                    ground: &ground_texture,
+                    grass: &grass_texture,
+                    trees: &trees_texture,
+                    // Palette icon: the first colour variant's idle frame -
+                    // a fixed representative sprite, since the builder
+                    // places a frog *cell*, not a rolled colour.
+                    frog_idle: &frog_textures[0].idle,
+                    pickup_health: &pickup_health_texture,
+                    pickup_ammo: &pickup_ammo_texture,
+                    pickup_laser: &pickup_laser_texture,
+                    pickup_minigun: &pickup_minigun_texture,
+                    pickup_plasma: &pickup_plasma_texture,
+                    pickup_speedup: &pickup_speedup_texture,
+                    pickup_shield: &pickup_shield_texture,
+                    eraser: &eraser_texture,
+                    tanks: &tanks_texture,
+                },
+            );
+            // The presented frame is the builder; a pending `screenshot`
+            // reads it from the screen here, or the client waits forever.
+            #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+            if let Some(dev) = &mut dev {
+                dev.after_render(rl, thread, &scene_target, &session.game);
+            }
+            return;
+        }
+
         // Gather this frame's raw input into a plain `Input` - `Game::update`
         // itself decides what to do with it (e.g. whether a wreck can move),
         // so nothing simulation-related needs to know a `RaylibHandle`
@@ -581,17 +666,9 @@ fn main() {
         // `draw_texture_rec`, whose only other offset is the camera shake -
         // so a window position less the origin *is* a world position, give
         // or take a couple of 2px blocks during an explosion. A tap on the
-        // HUD bar is not an order. Touch is edge-detected by hand because
-        // raylib reports a held finger as a point count, not a press.
-        let touching = rl.get_touch_point_count() > 0;
-        let tap = if rl.is_mouse_button_pressed(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_LEFT) {
-            Some(rl.get_mouse_position())
-        } else if touching && !touch_held_last_frame {
-            Some(rl.get_touch_position(0))
-        } else {
-            None
-        };
-        touch_held_last_frame = touching;
+        // HUD bar is not an order, and neither is a tap while the leave
+        // dialog is up.
+        let tap = (pressed && !session.dialog).then_some(pointer);
         let tap = tap.filter(|p| layout.field.contains(*p)).map(|p| layout.to_field(p));
         let input = Input {
             player_intent,
@@ -612,28 +689,31 @@ fn main() {
             Some(dev) => dev.shape_input(input),
             None => input,
         };
-        let dt = rl.get_frame_time();
 
         // With the dev server attached it owns the advance: real-time
         // updates normally, lockstep `step`s at the fixed timestep when
-        // asked, nothing at all while frozen.
-        #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
-        let advanced = match &mut dev {
-            Some(dev) => {
-                dev.advance(&mut game, input, dt, width, height);
-                true
+        // asked, nothing at all while frozen. While the leave dialog is up
+        // nobody advances.
+        if session.playing() {
+            #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+            let advanced = match &mut dev {
+                Some(dev) => {
+                    dev.advance(&mut session.game, input, dt, width, height);
+                    true
+                }
+                None => false,
+            };
+            #[cfg(not(all(feature = "dev-tools", not(target_os = "emscripten"))))]
+            let advanced = false;
+            if !advanced {
+                session.game.update(input, dt, width, height);
             }
-            None => false,
-        };
-        #[cfg(not(all(feature = "dev-tools", not(target_os = "emscripten"))))]
-        let advanced = false;
-        if !advanced {
-            game.update(input, dt, width, height);
         }
+        let game = &session.game;
         // Between the update and the draw: the particle layer reads the
         // frame's events and the world it just produced, then ages what is
         // already in flight. Deliberately not inside `Game` - see fx.rs.
-        fx.observe(&game, dt);
+        fx.observe(game, dt);
         fx.tick(dt);
         game.render(
             rl,
@@ -669,11 +749,12 @@ fn main() {
                 trees: &trees_texture,
             },
             &layout,
+            &session.play_chrome(),
         );
         // A pending screenshot reads the frame just presented.
         #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
         if let Some(dev) = &mut dev {
-            dev.after_render(rl, thread, &scene_target, &game);
+            dev.after_render(rl, thread, &scene_target, &session.game);
         }
     });
 }
