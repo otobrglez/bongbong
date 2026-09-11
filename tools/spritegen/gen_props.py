@@ -3,7 +3,7 @@ oil barrels, fences) that share the 32px obstacle grid with walls but are
 discrete objects rather than tiling wall tiles. See docs/PROPS_SPEC.md for
 the full sheet map and docs/sandbags-barrels-fences.md for the feature.
 
-Layout: 128x288, 4 cols x 9 rows of 32x32 cells.
+Layout: 128x320, 4 cols x 10 rows of 32x32 cells.
     rows 0-2  Sandbag  cols 0-2: straight row / staggered wall / heaped pile
                                  x intact/torn/collapsed
     rows 3-4  Barrel   cols 0-3: two drum liveries x intact/dented/critical,
@@ -11,6 +11,10 @@ Layout: 128x288, 4 cols x 9 rows of 32x32 cells.
     rows 5-8  Fence    cols 0-1: wooden H, wooden V, wire H, wire V x
                                  intact/damaged (a fence variant owns two
                                  rows; the game picks H/V from neighbours)
+    row 9     Oil      cols 0-3: four puddle variants of the oil-trail
+                                 ground cell (map `kind = "oil"`) - not an
+                                 obstacle, drawn under everything, picked
+                                 by position hash (obstacle::draw_oil_cell)
 Cells outside those ranges are blank and never sampled.
 
 Every cell is drawn on a 16x16 "macro pixel" canvas and upscaled 2x with
@@ -38,7 +42,7 @@ from punypalette import (BLACK, WHITE, STONE_PALE, STONE_LT, STONE_MD, STONE_DK,
 
 S = 16            # macro canvas: one drawn pixel = a 2x2 block in the 32px cell
 CELL = 32
-COLS, ROWS = 4, 9
+COLS, ROWS = 4, 10
 OUT = os.environ.get('SPRITE_OUT', 'assets/sprites')
 os.makedirs(OUT, exist_ok=True)
 
@@ -364,6 +368,25 @@ def transpose(img):
     return img.transpose(Image.TRANSPOSE)
 
 
+# ---------------------------------------------------------------- oil trail
+def draw_oil(variant, rng):
+    """A puddle of oil on the ground: a dark, lopsided blot with a rim of
+    specks and one sheen pixel, the same palette the barrels' puddles use
+    so a trail reads as what leaked out of them. Spreads edge to edge so
+    a run of cells joins up."""
+    img = blank()
+    for _ in range(4 + variant):
+        cx, cy = rng.uniform(4, 11), rng.uniform(5, 11)
+        ellipse(img, cx, cy, rng.uniform(3.5, 6.0), rng.uniform(2.0, 3.5), PUDDLE)
+    # Reach the left and right edges so neighbouring cells connect.
+    ellipse(img, 1.0, 8.0 + rng.randint(-1, 1), 3.0, 2.2, PUDDLE)
+    ellipse(img, 14.5, 8.0 + rng.randint(-1, 1), 3.0, 2.2, PUDDLE)
+    for _ in range(5):
+        px(img, rng.randint(1, 14), rng.randint(4, 12), PUDDLE_SPECK)
+    px(img, rng.randint(5, 10), rng.randint(6, 9), SHEEN)
+    return img
+
+
 # ---------------------------------------------------------------- sheet
 def seed(row, col):
     return random.Random(500 + row * 31 + col * 7)
@@ -379,6 +402,7 @@ ROW_DRAWERS = [
     (6, lambda c: transpose(draw_wood_fence(c, seed(5, c))) if c < 2 else None),
     (7, lambda c: draw_wire_fence(c, seed(7, c)) if c < 2 else None),
     (8, lambda c: transpose(draw_wire_fence(c, seed(7, c))) if c < 2 else None),
+    (9, lambda c: draw_oil(c, seed(9, c))),
 ]
 
 sheet = Image.new('RGBA', (CELL * COLS, CELL * ROWS), (0, 0, 0, 0))

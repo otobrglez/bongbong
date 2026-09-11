@@ -332,6 +332,10 @@ pub struct MapSpawn {
     /// here - `Game::init` turns each into a scatter of `grass::GrassTuft`,
     /// which is presentation plus a concealment query, not an `Obstacle`.
     pub grass_cells: Vec<Position>,
+    /// Every cell the map marked as an oil trail, as grid cells: not
+    /// solid, nothing spawned - `Game::init` keeps them as the set a fire
+    /// can run along (`Game::oil_cells`).
+    pub oil_cells: Vec<(i32, i32)>,
 }
 
 /// Spawn every cell `map` defines as a live entity - walls as `Obstacle`s
@@ -383,6 +387,7 @@ pub fn spawn_from_map(
     let mut wall_positions = Vec::new();
     let mut road_cells = Vec::new();
     let mut grass_cells = Vec::new();
+    let mut oil_cells = Vec::new();
     let mut frog_pos = None;
     let mut enemy_frog_pos = None;
     let mut pickup_slots = Vec::new();
@@ -403,12 +408,17 @@ pub fn spawn_from_map(
                 world.spawn((Obstacle::new(material, variant, pos, flammable, body),));
             }
             CellObject::Sandbag
-            | CellObject::Barrel
+            | CellObject::Barrel { .. }
             | CellObject::Fence
             | CellObject::Tree
             | CellObject::Pine => {
                 let material = obj.material().expect("prop and tree cells spawn a material");
-                let variant = rng.random_range(0..material.variants());
+                // The roll is always drawn, even for a barrel whose drum
+                // the map pins: skipping it would shift every RNG draw
+                // after it, and a map that adds one typed drum could never
+                // be compared against its untyped self.
+                let rolled = rng.random_range(0..material.variants());
+                let variant = obj.drum().map_or(rolled, |d| d as i32);
                 // Zero chance draws no RNG, so a map with no trees replays
                 // exactly as it did before they existed.
                 let chance = material.flammable_chance();
@@ -422,6 +432,7 @@ pub fn spawn_from_map(
             }
             CellObject::Road => road_cells.push(pos),
             CellObject::TallGrass => grass_cells.push(pos),
+            CellObject::Oil => oil_cells.push((col, row)),
             CellObject::Frog => frog_pos = Some(pos),
             // The player's start position is read directly from
             // `self.map.start_cell()` in `Game::init`, before this function
@@ -436,7 +447,7 @@ pub fn spawn_from_map(
         }
     }
 
-    MapSpawn { obstacle_positions, wall_positions, road_cells, frog_pos, enemy_frog_pos, pickup_slots, grass_cells }
+    MapSpawn { obstacle_positions, wall_positions, road_cells, frog_pos, enemy_frog_pos, pickup_slots, grass_cells, oil_cells }
 }
 
 /// One entry lane for a wave tank (docs/maps-to-levels.md "Gates and

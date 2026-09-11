@@ -1,8 +1,13 @@
 # Oil barrel explosions: more variety
 
-Status: research and proposals, 2026-09. Nothing here is built. A live
-sketch of every proposal in section 4 (canvas, palette-true, hash-seeded)
-is the "Barrel Blast Lab" artifact linked from the session that wrote this. Written
+Status: proposals, 2026-09, **built the same month** - everything in
+section 4 except B3 (the water drum) ships: A1-A7, B1, B2, B4, B5, C1-C4
+and D. The as-built summary is in docs/sandbags-barrels-fences.md, the
+sheet layout in docs/PROPS_SPEC.md, the rules in `simulation/props.rs`
+and the tests in `simulation/props_tests.rs`. Section 7 (the other
+effect surfaces) is still proposals. A live sketch of every proposal
+(canvas, palette-true, hash-seeded) is the "Barrel Blast Lab" artifact
+linked from the session that wrote this. Written
 against `simulation/props.rs`, `blast.rs`, `fx.rs`, `combat.rs`,
 `tools/spritegen/gen_barrel_explosion.py` and the `group props` rows of
 `tuning.rs`; docs/sandbags-barrels-fences.md is the original PRD and

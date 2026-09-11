@@ -6,11 +6,16 @@
 #
 # props: a sandbag line (row 8) and a fence line (row 14) the player can
 # shoot over / at / ram from the start cell; a 2x2 barrel cluster (cols
-# 20-21, rows 10-11) and a 3-in-a-row chain (cols 8-10, row 16) for chain
-# reactions; a lone barrel (24,6); a vertical sandbag run (col 6) and a
-# vertical fence run (col 26) so the axis pick has both cases; two brick
-# tiles (row 11) for comparison. Lanes stay at least 3 cells wide and the
-# spawn band is clear, so the AI is never forced through a prop.
+# 20-21, rows 10-11: two pinned oil drums and two pinned fuel drums, so a
+# chain there launches - docs/barrel-explosion-variety.md B2) and a
+# 3-in-a-row chain of rolled barrels (cols 8-10, row 16) for chain
+# reactions; a lone fuel drum (24,6) at the end of an oil trail (row 6,
+# cols 18-23) that starts beside a lone oil drum (17,6) - one shot at the
+# oil drum and the fire runs the trail to the fuel drum; a vertical
+# sandbag run (col 6) and a vertical fence run (col 26) so the axis pick
+# has both cases; two brick tiles (row 11) for comparison. Lanes stay at
+# least 3 cells wide and the spawn band is clear, so the AI is never
+# forced through a prop.
 
 version = 1
 tanks = 4
@@ -32,16 +37,23 @@ cells."15,14" = { kind = "fence" }
 cells."16,14" = { kind = "fence" }
 cells."17,14" = { kind = "fence" }
 
-cells."20,10" = { kind = "barrel" }
-cells."21,10" = { kind = "barrel" }
-cells."20,11" = { kind = "barrel" }
-cells."21,11" = { kind = "barrel" }
+cells."20,10" = { kind = "barrel", drum = "oil" }
+cells."21,10" = { kind = "barrel", drum = "fuel" }
+cells."20,11" = { kind = "barrel", drum = "fuel" }
+cells."21,11" = { kind = "barrel", drum = "oil" }
 
 cells."8,16" = { kind = "barrel" }
 cells."9,16" = { kind = "barrel" }
 cells."10,16" = { kind = "barrel" }
 
-cells."24,6" = { kind = "barrel" }
+cells."17,6" = { kind = "barrel", drum = "oil" }
+cells."18,6" = { kind = "oil" }
+cells."19,6" = { kind = "oil" }
+cells."20,6" = { kind = "oil" }
+cells."21,6" = { kind = "oil" }
+cells."22,6" = { kind = "oil" }
+cells."23,6" = { kind = "oil" }
+cells."24,6" = { kind = "barrel", drum = "fuel" }
 
 cells."6,4" = { kind = "sandbag" }
 cells."6,5" = { kind = "sandbag" }

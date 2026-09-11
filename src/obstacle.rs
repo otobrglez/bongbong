@@ -20,6 +20,8 @@ use crate::{
     OBSTACLE_SCALE,
     OBSTACLE_TEXTURE_SIZE,
     PROPS_BARREL_LIT_COL,
+    PROPS_OIL_ROW,
+    PROPS_OIL_VARIANTS,
     Position,
     TREE_BURN_COL,
     TREE_ROW_BROADLEAF,
@@ -271,6 +273,70 @@ impl Material {
     }
 }
 
+/// The two kinds of oil barrel, which are also its two liveries on
+/// `props_sheet.png` (`Obstacle::variant` for a barrel *is* its drum):
+/// the red drum with a band is oil and leaves a burning pool, the grey
+/// drum with the hazard rim is fuel and goes off harder, launching when a
+/// neighbouring blast sets it off. A map may pin one (`kind = "barrel",
+/// drum = "oil"`) or leave the roll to spawn.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Drum {
+    Oil = 0,
+    Fuel = 1,
+}
+
+impl Drum {
+    pub const ALL: [Drum; 2] = [Drum::Oil, Drum::Fuel];
+
+    pub fn from_variant(variant: i32) -> Drum {
+        if variant == 1 { Drum::Fuel } else { Drum::Oil }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Drum::Oil => "oil",
+            Drum::Fuel => "fuel",
+        }
+    }
+
+    /// How this kind's fuse compares to `barrel_fuse_seconds`: oil
+    /// smoulders, fuel cracks first.
+    pub fn fuse_factor(self) -> f32 {
+        match self {
+            Drum::Oil => tuning().oil_fuse_factor,
+            Drum::Fuel => tuning().fuel_fuse_factor,
+        }
+    }
+}
+
+/// A barrel's lit fuse: how long is left, how long it was, and what lit
+/// it. `from` is the blast or fire that reached it - `None` never happens
+/// today, but a fuse the *cause* of which is unknown is what the field
+/// would mean - and is what a chained blast leans away from and a fuel
+/// drum launches away from.
+#[derive(Clone, Copy, Debug)]
+pub struct Fuse {
+    pub left: f32,
+    pub total: f32,
+    pub from: Option<Position>,
+}
+
+impl Fuse {
+    /// How long this fuse has been burning relative to the shortest one a
+    /// blast hands out, 0 at the centre of the blast that lit it to 1 at
+    /// its edge. A chained blast grows with it: a drum that smouldered
+    /// goes up bigger than one that went at once.
+    pub fn smoulder(&self) -> f32 {
+        let shortest = tuning().barrel_fuse_seconds * 0.5;
+        let longest = tuning().barrel_fuse_seconds * 2.5;
+        if longest <= shortest {
+            return 0.0;
+        }
+        ((self.total - shortest) / (longest - shortest)).clamp(0.0, 1.0)
+    }
+}
+
 /// Which way a fence tile runs - decided at draw time from its fence
 /// neighbours (`fence_axis`), since obstacles never rotate and the map only
 /// stores the cell.
@@ -321,12 +387,16 @@ pub struct Obstacle {
     /// Trees share wood's burn timing: it is one fire, and splitting the
     /// knob would only be worth it if they were meant to burn differently.
     pub burn_elapsed: f32,
-    /// Barrel only: seconds until this barrel detonates, armed when a
-    /// neighbouring blast reached it (`Game::apply_blast`) so a chain
-    /// reaction cascades visibly instead of going off all at once. While
-    /// armed the barrel is inert to further damage, like burning Wood, and
-    /// draws its lit-fuse column.
-    pub fuse: Option<f32>,
+    /// Barrel only: the lit fuse, armed when a neighbouring blast or a
+    /// burning cell reached it (`Game::apply_blast`, `tick_fires`) so a
+    /// chain reaction cascades visibly instead of going off all at once.
+    /// While armed the barrel is inert to further damage, like burning
+    /// Wood, and draws its lit-fuse column.
+    pub fuse: Option<Fuse>,
+    /// Walls only: which faces (N E S W as bits 0..3) a blast has hit,
+    /// drawn blackened over the edge cap so a corridor a cascade ran down
+    /// carries the mark. Never cleared - soot does not wash off mid-round.
+    pub scorched: u8,
     /// Sandbag/Fence only: seconds a tank has been pushing into this tile
     /// (`Game::ram_props`); decays while nothing pushes. Collapses at
     /// `Material::ram_seconds`.
@@ -366,11 +436,33 @@ impl Obstacle {
             burn_frame_timer: 0.0,
             burn_elapsed: 0.0,
             fuse: None,
+            scorched: 0,
             ram_timer: 0.0,
             edge_mask: 0,
             body,
             destroyed: false,
         }
+    }
+
+    /// Which kind of drum a barrel is; `None` for anything else.
+    pub fn drum(&self) -> Option<Drum> {
+        (self.material == Material::Barrel).then(|| Drum::from_variant(self.variant))
+    }
+
+    /// Sideways draw offset (px) of a drum whose fuse is lit: it rocks at
+    /// 12 Hz, a whole 2px block either way, phased by its position hash so
+    /// a cluster does not rock in unison. Zero for anything unlit.
+    pub fn fuse_rock(&self, time: f32) -> f32 {
+        if self.fuse.is_none() {
+            return 0.0;
+        }
+        let amp = tuning().barrel_fuse_rock_px;
+        if amp <= 0.0 {
+            return 0.0;
+        }
+        let phase = (crate::blast::seed_at(self.position, 5) % 100) as f32 / 100.0 * std::f32::consts::TAU;
+        let wave = (time * 12.0 * std::f32::consts::TAU + phase).sin();
+        ((wave * amp) / 2.0).round() * 2.0
     }
 
     /// Side length of the *cell* this obstacle occupies - its collider,
@@ -518,6 +610,53 @@ fn source_rec(sheet: Sheet, row: i32, col: i32) -> Rectangle {
     Rectangle::new(col as f32 * cell, row as f32 * cell, cell, cell)
 }
 
+/// Source rectangle for a drum kind's pristine cell, for the builder's
+/// icons and canvas (a pinned drum is drawn as what it will be).
+pub fn drum_source_rec(drum: Drum) -> Rectangle {
+    source_rec(Sheet::Props, Material::Barrel.row_base() + drum as i32, 0)
+}
+
+/// Source rectangle for an oil-trail ground cell (`PROPS_OIL_ROW`), the
+/// variant picked from the cell's position hash.
+pub fn oil_source_rec(center: Position) -> Rectangle {
+    let variant = (crate::blast::seed_at(center, 8) % PROPS_OIL_VARIANTS as u32) as i32;
+    source_rec(Sheet::Props, PROPS_OIL_ROW, variant)
+}
+
+/// An unlit oil-trail cell: a dark puddle on the ground, drawn under
+/// everything that stands. Not an obstacle, so it never goes through
+/// `draw_obstacle`.
+pub fn draw_oil_cell(d: &mut impl RaylibDraw, textures: &ObstacleTextures, center: Position) {
+    let src = oil_source_rec(center);
+    let size = OBSTACLE_TEXTURE_SIZE * OBSTACLE_SCALE;
+    let dest = Rectangle::new(center.x, center.y, size, size);
+    d.draw_texture_pro(textures.props, src, dest, Vector2::new(size / 2.0, size / 2.0), 0.0, Color::WHITE);
+}
+
+/// A launched fuel drum in the air (`simulation::FlyingDrum`): the intact
+/// drum sprite tumbling in quarter-turns along its arc, over a shadow
+/// that shrinks as it rises - the same trick a thrown decal uses.
+pub fn draw_flying_drum(
+    d: &mut impl RaylibDraw,
+    textures: &ObstacleTextures,
+    drum: &crate::simulation::FlyingDrum,
+    shadows: bool,
+) {
+    let size = OBSTACLE_TEXTURE_SIZE * OBSTACLE_SCALE;
+    if shadows {
+        let ground = drum.ground_pos();
+        let lift = (drum.height() / (tuning().debris_arc_height * 1.4).max(1e-3)).clamp(0.0, 1.0);
+        let r = size * 0.3 * (1.0 - 0.45 * lift);
+        let a = (255.0 * tuning().obstacle_shadow_opacity * (1.0 - 0.4 * lift)) as u8;
+        d.draw_circle_v(ground, r, Color::new(0, 0, 0, a));
+    }
+    let src = source_rec(Sheet::Props, Material::Barrel.row_base() + drum.variant, 0);
+    let at = drum.draw_pos();
+    let dest = Rectangle::new(at.x, at.y, size, size);
+    let rotation = ((drum.flight() * 6.0) as i32 % 4) as f32 * 90.0;
+    d.draw_texture_pro(textures.props, src, dest, Vector2::new(size / 2.0, size / 2.0), rotation, Color::WHITE);
+}
+
 pub(crate) fn texture_for<'a>(textures: &ObstacleTextures<'a>, sheet: Sheet) -> &'a Texture2D {
     match sheet {
         Sheet::Walls => textures.walls,
@@ -529,11 +668,11 @@ pub(crate) fn texture_for<'a>(textures: &ObstacleTextures<'a>, sheet: Sheet) -> 
 /// Draw a single obstacle sprite from its atlas at its center position.
 /// Obstacles never rotate (unlike tanks/shells), so this skips the
 /// rotation param `draw_tank` needs; `axis` only matters for fences.
-pub fn draw_obstacle(d: &mut impl RaylibDraw, textures: &ObstacleTextures, obstacle: &Obstacle, axis: FenceAxis) {
+pub fn draw_obstacle(d: &mut impl RaylibDraw, textures: &ObstacleTextures, obstacle: &Obstacle, axis: FenceAxis, time: f32) {
     let sheet = obstacle.material.sheet();
     let src = source_rec(sheet, obstacle.row(axis), obstacle.col());
     let size = obstacle.sprite_size();
-    let dest = Rectangle::new(obstacle.position.x, obstacle.position.y, size, size);
+    let dest = Rectangle::new(obstacle.position.x + obstacle.fuse_rock(time), obstacle.position.y, size, size);
     let origin = Vector2::new(size / 2.0, size / 2.0);
     d.draw_texture_pro(texture_for(textures, sheet), src, dest, origin, 0.0, Color::WHITE);
 }
@@ -606,6 +745,54 @@ pub fn draw_obstacle_cap(d: &mut impl RaylibDraw, textures: &ObstacleTextures, o
     let dest = Rectangle::new(obstacle.position.x, obstacle.position.y, size, size);
     let origin = Vector2::new(size / 2.0, size / 2.0);
     d.draw_texture_pro(textures.walls, src, dest, origin, 0.0, Color::WHITE);
+    draw_scorched_faces(d, obstacle);
+}
+
+/// Soot on the faces a blast hit (`Obstacle::scorched`): a dark band two
+/// blocks deep along each marked face, drawn over the cap. A band rather
+/// than a sheet row because it composites with every material, stage and
+/// variant the same way the cap itself does.
+fn draw_scorched_faces(d: &mut impl RaylibDraw, obstacle: &Obstacle) {
+    if obstacle.scorched == 0 {
+        return;
+    }
+    let size = obstacle.size();
+    let (left, top) = (obstacle.position.x - size / 2.0, obstacle.position.y - size / 2.0);
+    let band = FX_BLOCK * 2.0;
+    let soot = Color::new(20, 20, 20, 190);
+    let faces = obstacle.scorched;
+    if faces & SCORCH_N != 0 {
+        d.draw_rectangle(left as i32, top as i32, size as i32, band as i32, soot);
+    }
+    if faces & SCORCH_E != 0 {
+        d.draw_rectangle((left + size - band) as i32, top as i32, band as i32, size as i32, soot);
+    }
+    if faces & SCORCH_S != 0 {
+        d.draw_rectangle(left as i32, (top + size - band) as i32, size as i32, band as i32, soot);
+    }
+    if faces & SCORCH_W != 0 {
+        d.draw_rectangle(left as i32, top as i32, band as i32, size as i32, soot);
+    }
+}
+
+/// `Obstacle::scorched` bits, one per face.
+pub const SCORCH_N: u8 = 1;
+pub const SCORCH_E: u8 = 2;
+pub const SCORCH_S: u8 = 4;
+pub const SCORCH_W: u8 = 8;
+
+/// Which face of the tile at `tile` looks toward `from`: the one a blast
+/// there blackens.
+pub fn face_toward(tile: Position, from: Position) -> u8 {
+    let dx = from.x - tile.x;
+    let dy = from.y - tile.y;
+    if dx.abs() >= dy.abs() {
+        if dx >= 0.0 { SCORCH_E } else { SCORCH_W }
+    } else if dy >= 0.0 {
+        SCORCH_S
+    } else {
+        SCORCH_N
+    }
 }
 
 /// How far this tree's crown is leaning right now, in world px, and which

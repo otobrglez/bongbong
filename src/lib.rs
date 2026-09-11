@@ -487,7 +487,7 @@ pub const OBSTACLE_CLEAR: f32 = 90.0;
 
 // Props: the three discrete destructible items (obstacle::Material::{Sandbag,
 // Barrel, Fence}) share the obstacle grid, hull and draw path but draw from
-// props_sheet.png, a 128x288 sheet (4 cols x 9 rows of 32x32 cells) - see
+// props_sheet.png, a 128x320 sheet (4 cols x 10 rows of 32x32 cells) - see
 // docs/PROPS_SPEC.md:
 //   rows 0-2 Sandbag (cols 0-2): 3 bag arrangements x intact/torn/collapsed.
 //   rows 3-4 Barrel  (cols 0-3): 2 drum liveries x intact/dented/critical,
@@ -496,18 +496,38 @@ pub const OBSTACLE_CLEAR: f32 = 90.0;
 //            two rows (row = base + variant*2 + axis) and the renderer picks
 //            the axis from the tile's fence neighbours (obstacle::fence_axis).
 // Cells outside a material's valid column range are empty - never sampled.
+//   row 9    Oil trail (cols 0-3): four puddle variants of the ground cell
+//            a fire runs along (map `kind = "oil"`, not an obstacle - drawn
+//            by `obstacle::draw_oil_cell` straight from the sheet).
 pub const PROPS_COLUMNS: i32 = 4;
-pub const PROPS_ROWS: i32 = 9;
+pub const PROPS_ROWS: i32 = 10;
 pub const PROPS_BARREL_LIT_COL: i32 = 3;
-// barrel_explosion.png: 768x128, two rows of 64x64 cells. Row 0 is the
+pub const PROPS_OIL_ROW: i32 = 9;
+pub const PROPS_OIL_VARIANTS: i32 = 4;
+// Ground-fire loop on barrel_explosion.png row 1: three frames after the
+// scorch cells, drawn at scale 2 over a burning cell (a pool or a trail).
+pub const FIRE_LOOP_COL: i32 = 6;
+pub const FIRE_LOOP_FRAMES: i32 = 3;
+// barrel_explosion.png: 768x320, five rows of 64x64 cells. Row 0 is the
 // one-shot blast animation (12 frames, col * BARREL_EXPLOSION_TEXTURE_SIZE,
 // like the frog filmstrips), drawn at `blast_anim_scale`; row 1 holds
-// SCORCH_VARIANTS ground-decal cells a blast leaves behind. See
+// SCORCH_VARIANTS ground-decal cells a blast leaves behind plus the
+// directional streak at SCORCH_STREAK_COL; rows 2-4 are three more
+// fireball shapes (a tall column, a flat splash, a double core) the blast
+// picks between by its position hash (`blast::BlastFx::row`). See
 // docs/PROPS_SPEC.md and blast.rs.
 pub const BARREL_EXPLOSION_TEXTURE_SIZE: f32 = 64.0;
 pub const BARREL_EXPLOSION_FRAMES: i32 = 12;
 pub const SCORCH_ROW: i32 = 1;
-pub const SCORCH_VARIANTS: i32 = 3;
+pub const SCORCH_VARIANTS: i32 = 5;
+pub const SCORCH_STREAK_COL: i32 = 5;
+/// The fireball rows, in the order `BlastFx::row` hashes over them: the
+/// original mushroom, then the tall, flat and double shapes.
+pub const BLAST_SHAPE_ROWS: [i32; 4] = [0, 2, 3, 4];
+pub const BLAST_ROW_MUSHROOM: i32 = 0;
+pub const BLAST_ROW_TALL: i32 = 2;
+pub const BLAST_ROW_FLAT: i32 = 3;
+pub const BLAST_ROW_DOUBLE: i32 = 4;
 // Oldest scorch marks are dropped past this many, so a long round with many
 // barrels doesn't accumulate an unbounded decal list.
 pub const SCORCH_MAX: usize = 64;

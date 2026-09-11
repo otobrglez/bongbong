@@ -169,6 +169,21 @@ pub fn tick(tufts: &mut [GrassTuft], movers: &[Mover], dt: f32) {
     }
 }
 
+/// Flatten every tuft within `radius` of `center` at once - a blast's
+/// pressure wave, using the same `crush` a hull drives so the ring
+/// recovers over `grass_crush_recover_seconds` like a tank's trail. Pure
+/// in its inputs, no RNG.
+pub fn flatten(tufts: &mut [GrassTuft], center: Position, radius: f32) {
+    if radius <= 0.0 {
+        return;
+    }
+    for tuft in tufts.iter_mut() {
+        if tuft.base.distance_to(center) <= radius {
+            tuft.crush = 1.0;
+        }
+    }
+}
+
 /// How far this tuft's tip leans right now, in world px: ambient wind plus
 /// whatever `tick` last recorded. Matted grass barely waves, so the wind is
 /// scaled down by the crush.

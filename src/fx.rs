@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use rand::RngExt;
 use sola_raylib::prelude::*;
 
-use crate::obstacle::Material;
+use crate::obstacle::{Drum, Material};
 use crate::simulation::{Event, Game, HitTarget};
 use crate::tuning::tuning;
 use crate::Position;
@@ -211,13 +211,22 @@ impl Fx {
         self.burst(at, ParticleKind::Smoke, self.count(8), 40.0, &[SMOKE_T]);
     }
 
-    fn blast(&mut self, at: Position, chained: bool) {
+    fn blast(&mut self, at: Position, chained: bool, drum: Drum) {
         // A cascade fires one of these per link, so a chained pop is
         // deliberately smaller - otherwise a barrel row saturates the cap
         // and the later blasts evict the earlier ones' particles.
         let scale = if chained { 0.5 } else { 1.0 };
-        self.burst(at, ParticleKind::Spark, self.count((18.0 * scale) as i32), 210.0, &[FIRE_T, EMBER_T]);
-        self.burst(at, ParticleKind::Smoke, self.count((7.0 * scale) as i32), 35.0, &[SMOKE_T]);
+        match drum {
+            Drum::Oil => {
+                self.burst(at, ParticleKind::Spark, self.count((18.0 * scale) as i32), 210.0, &[FIRE_T, EMBER_T]);
+                self.burst(at, ParticleKind::Smoke, self.count((7.0 * scale) as i32), 35.0, &[SMOKE_T]);
+            }
+            // Fuel: whiter, faster, and hardly any smoke - it burns clean.
+            Drum::Fuel => {
+                self.burst(at, ParticleKind::Spark, self.count((22.0 * scale) as i32), 260.0, &[WHITE_T, FIRE_T]);
+                self.burst(at, ParticleKind::Smoke, self.count((3.0 * scale) as i32), 40.0, &[SMOKE_T]);
+            }
+        }
     }
 
     // ---- the two halves of a frame -------------------------------------
@@ -242,7 +251,17 @@ impl Fx {
                         self.tile_chip(material, Position::new(x, y))
                     }
                     Event::Wreck { x, y, .. } => self.wreck(Position::new(x, y)),
-                    Event::Blast { x, y, chained } => self.blast(Position::new(x, y), chained),
+                    Event::Blast { x, y, chained, drum } => self.blast(Position::new(x, y), chained, drum),
+                    // A fuel drum leaving the ground: a spit of sparks and
+                    // a puff where it stood.
+                    Event::DrumLaunched { x, y, .. } => {
+                        self.burst(Position::new(x, y), ParticleKind::Spark, self.count(8), 90.0, &[WHITE_T, FIRE_T]);
+                        self.burst(Position::new(x, y), ParticleKind::Smoke, self.count(3), 20.0, &[SMOKE_T]);
+                    }
+                    // Ground catching: a flare of embers as the fire takes.
+                    Event::FireStarted { x, y, .. } => {
+                        self.burst(Position::new(x, y), ParticleKind::Ember, self.count(5), 40.0, &[FIRE_T, EMBER_T]);
+                    }
                     Event::CookOff { x, y } => {
                         self.burst(Position::new(x, y), ParticleKind::Spark, self.count(8), 120.0, &[FIRE_T, EMBER_T]);
                     }
@@ -266,6 +285,30 @@ impl Fx {
             }
             if self.due(key ^ 0x9e37, smoke_rate * tuning().fx_density, dt) {
                 self.burst(pos, ParticleKind::Smoke, 1, 12.0, &[SMOKE_T]);
+            }
+        }
+        // Burning ground - a pool or a lit trail - throws what a burning
+        // plank does, dying down over its last moments.
+        for (pos, left, _total) in game.burning_cells() {
+            let key = crate::blast::seed_at(pos, 6);
+            let dying = (left / 0.6).clamp(0.2, 1.0);
+            if self.due(key, ember_rate * dying * tuning().fx_density, dt) {
+                self.burst(pos, ParticleKind::Ember, 1, 24.0, &[EMBER_T, FIRE_T]);
+            }
+            if self.due(key ^ 0x2b7e, smoke_rate * dying * tuning().fx_density, dt) {
+                self.burst(pos, ParticleKind::Smoke, 1, 12.0, &[SMOKE_T]);
+            }
+        }
+        // A drum with its fuse lit spits sparks from the bung: the tell
+        // that it is about to go, next to the lit lid and the rocking.
+        let spark_rate = tuning().barrel_fuse_spark_rate;
+        if spark_rate > 0.0 {
+            for pos in game.fused_barrels() {
+                let key = crate::blast::seed_at(pos, 7);
+                if self.due(key, spark_rate * tuning().fx_density, dt) {
+                    let bung = Position::new(pos.x + 4.0, pos.y - 8.0);
+                    self.burst(bung, ParticleKind::Spark, 1, 45.0, &[FIRE_T, WHITE_T]);
+                }
             }
         }
         let (flame_rate, wsmoke_rate) = (tuning().wreck_flame_rate, tuning().wreck_smoke_rate);

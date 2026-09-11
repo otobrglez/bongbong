@@ -92,6 +92,16 @@ impl Decal {
         Decal { sheet: Sheet::Walls, row, col, center, origin: center, arc: 0.0, seed, age: 0.0, blocks: false }
     }
 
+    /// Pick a landed piece up and throw it again, to `to`: it takes off
+    /// from where it lay with a fresh arc, and lands where the caller
+    /// (the simulation) says - a blast rearranging the rubble around it.
+    pub fn rethrow(&mut self, to: Position) {
+        self.origin = self.center;
+        self.center = to;
+        self.age = 0.0;
+        self.arc = tuning().debris_arc_height * (0.5 + 0.6 * (((self.seed >> 4) % 100) as f32 / 100.0));
+    }
+
     /// How far through its throw it is, 1.0 once it has settled.
     pub fn flight(&self) -> f32 {
         if self.arc <= 0.0 {

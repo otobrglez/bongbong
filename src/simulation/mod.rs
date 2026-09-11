@@ -24,6 +24,7 @@ pub mod debug;
 mod engage;
 mod hits;
 mod props;
+pub use props::{FlyingDrum, GroundFire};
 #[cfg(test)]
 mod props_tests;
 #[cfg(test)]
@@ -52,7 +53,7 @@ use crate::frog::{Frog, Side};
 use crate::laser::{LaserBeam, LaserVariant};
 use crate::level::{LevelOverrides, Mission, SpawnPlan};
 use crate::map::{self, CellObject, MapFile};
-use crate::obstacle::{Material, Obstacle, neighbour_mask};
+use crate::obstacle::{Drum, Material, Obstacle, neighbour_mask};
 use crate::pathfind::{Components, Grid};
 use crate::physics::Physics;
 use crate::pickup::{Pickup, PickupKind};
@@ -201,8 +202,15 @@ pub enum Event {
     /// destroyed it.
     ObstacleDestroyed { material: Material, x: f32, y: f32 },
     /// A barrel detonated at (`x`, `y`); `chained` when another blast's
-    /// fuse set it off rather than a shot or a ram.
-    Blast { x: f32, y: f32, chained: bool },
+    /// fuse (or a fire) set it off rather than a shot or a ram; `drum`
+    /// says which kind went off.
+    Blast { x: f32, y: f32, chained: bool, drum: Drum },
+    /// A fuel drum set off by another blast launched from (`x`, `y`)
+    /// toward (`to_x`, `to_y`), where it will detonate when it lands.
+    DrumLaunched { x: f32, y: f32, to_x: f32, to_y: f32 },
+    /// A ground cell centred on (`x`, `y`) caught fire: an oil drum's
+    /// pool (`pool`) or a lit trail cell.
+    FireStarted { x: f32, y: f32, pool: bool },
     /// A delayed secondary pop from a wreck's ammo cooking off. Purely
     /// cosmetic - it deals no damage - but recorded so tooling and the
     /// presentation layer can see it.
@@ -450,9 +458,21 @@ pub struct Game {
     /// The tufts those cells scatter, built once per round. Purely drawn -
     /// see `grass.rs` for why this is not an `Obstacle`.
     pub(crate) grass: Vec<crate::grass::GrassTuft>,
-    /// Queued ammo cook-offs from tanks that have died: where each pops and
-    /// how long until it does. Purely cosmetic (see `tick_cookoffs`).
+    /// Queued ammo cook-offs from tanks that have died (and barrels that
+    /// have blown): where each pops and how long until it does. Purely
+    /// cosmetic (see `tick_cookoffs`).
     pub(crate) cookoffs: Vec<(Position, f32)>,
+    /// Ground cells on fire - an oil drum's pool, a lit trail - with the
+    /// time each has left (`props::tick_fires`). Simulation state: they
+    /// hurt what drives over them, light what stands beside them and
+    /// block the nav grid while they burn.
+    pub(crate) fires: Vec<GroundFire>,
+    /// The map's oil-trail cells that have not burnt yet, as grid cells
+    /// (`CellObject::Oil`). Not solid, no nav effect until lit.
+    pub(crate) oil_cells: HashSet<(i32, i32)>,
+    /// Fuel drums in the air, launched by another blast and about to
+    /// detonate where they land (`props::tick_launches`).
+    pub(crate) flying_drums: Vec<FlyingDrum>,
     /// The whole-screen flash a kill or a barrel opens with: its age in
     /// seconds while one is playing (`game.rs` fades it out over
     /// `blast_screen_flash_seconds`). Explicit state rather than derived
@@ -546,7 +566,7 @@ struct Frame {
     /// Barrels detonated this frame, resolved by `explosions` alongside
     /// `kills` as one worklist (a blast that sets off another barrel or
     /// kills a tank appends to it).
-    pending_blasts: Vec<Position>,
+    pending_blasts: Vec<props::PendingBlast>,
     blast_fx: Vec<BlastFx>,
     scorches: Vec<Scorch>,
     decals: Vec<Decal>,
@@ -596,6 +616,8 @@ impl Frame {
 // which, and a designer turns the whole set up or down with one knob.
 pub(crate) const SHOCK_KILL: f32 = 1.0;
 pub(crate) const SHOCK_BARREL: f32 = 0.7;
+/// A fuel drum: harder than oil, still short of a tank dying.
+pub(crate) const SHOCK_FUEL: f32 = 0.9;
 pub(crate) const SHOCK_FROG: f32 = 0.6;
 /// Ammo cooking off inside a wreck: a faint local ring, and too weak to
 /// move the camera once the shake snaps to 2px blocks - a cook-off is a
@@ -636,6 +658,9 @@ impl Game {
         self.scorches.clear();
         self.decals.clear();
         self.cookoffs.clear();
+        self.fires.clear();
+        self.oil_cells.clear();
+        self.flying_drums.clear();
         self.screen_flash = None;
         self.screen_flash_cooldown = 0.0;
         self.grass_cells.clear();
@@ -697,6 +722,7 @@ impl Game {
         // Tall grass: whole cells from the map, each scattering a handful
         // of tufts. Hashed from position, so this draws no round RNG.
         self.grass_cells = map_spawn.grass_cells.clone();
+        self.oil_cells = map_spawn.oil_cells.iter().copied().collect();
         // Sorted by where each tuft is *rooted*, once and for all: tufts
         // never move, and `game.rs` merges them against the tanks in this
         // order every frame to get the depth right (a tuft rooted behind a
@@ -1032,7 +1058,9 @@ impl Game {
             self.resolve_projectiles::<Plasma>(&mut f, true);
             self.tick_cookoffs(&mut f);
             self.tick_burns(&mut f);
+            self.tick_fires(&mut f, true);
             self.tick_fuses(&mut f);
+            self.tick_launches(&mut f);
             self.tick_grass(&mut f);
             self.explosions(&mut f, true);
             self.despawn_wrecks(&mut f);
@@ -1049,7 +1077,9 @@ impl Game {
             self.resolve_projectiles::<Plasma>(&mut f, false);
             self.tick_cookoffs(&mut f);
             self.tick_burns(&mut f);
+            self.tick_fires(&mut f, false);
             self.tick_fuses(&mut f);
+            self.tick_launches(&mut f);
             self.tick_grass(&mut f);
             self.explosions(&mut f, false);
             self.cleanup_done();
@@ -2000,6 +2030,7 @@ impl Game {
             let effects = HitEffects {
                 knockback: P::knockback_speed().map(|speed| (dir, speed)),
                 frog_hop: P::frog_hops().then_some(vel),
+                travel: Some(dir),
             };
             self.apply_hit(f, target, hit_pos, dmg, effects, owner);
         }
@@ -2118,9 +2149,9 @@ impl Game {
                 self.apply_explosion(f, center, victim);
             }
             if j < f.pending_blasts.len() {
-                let center = f.pending_blasts[j];
+                let blast = f.pending_blasts[j];
                 j += 1;
-                self.apply_blast(f, center, live);
+                self.apply_blast(f, blast, live);
             }
         }
     }
@@ -2283,7 +2314,12 @@ impl Game {
                 .map(|o| (o.position, o.hull_size() * 0.5))
                 .chain(self.world.query::<&Frog>().iter().map(|fr| {
                     (fr.position, FROG_COLLIDER_HALF_EXTENT.0.max(FROG_COLLIDER_HALF_EXTENT.1))
-                })),
+                }))
+                // A burning cell is a wall for as long as it burns: the AI
+                // routes around a pool rather than through it. A tiny
+                // half-extent, so only the margin decides how wide the
+                // detour is.
+                .chain(self.fires.iter().map(|fire| (fire.position(), 1.0))),
         )
     }
 

@@ -11,9 +11,9 @@ use crate::bullet::{Bullet, BulletState, draw_bullet, draw_bullet_shadow};
 use crate::damage_stage::draw_damage;
 use crate::frog::{FrogVariantTextures, draw_frog, draw_frog_ring};
 use crate::laser::draw_laser_beam;
-use crate::blast::{draw_blast, draw_blast_glow, draw_fuse_glow, draw_scorch};
+use crate::blast::{draw_blast, draw_blast_glow, draw_fire_glow, draw_fuse_glow, draw_ground_fire, draw_scorch};
 use crate::decal::{draw_decal, draw_decal_shadow};
-use crate::obstacle::{draw_obstacle_cap, draw_tree, draw_tree_shadow, tree_lean, Material, Obstacle, ObstacleTextures, draw_obstacle, draw_obstacle_shadow, fence_axis};
+use crate::obstacle::{draw_flying_drum, draw_obstacle_cap, draw_oil_cell, draw_tree, draw_tree_shadow, tree_lean, Material, Obstacle, ObstacleTextures, draw_obstacle, draw_obstacle_shadow, fence_axis};
 #[cfg(feature = "dev-tools")]
 use crate::ai::Ai;
 use hecs::Entity;
@@ -240,6 +240,16 @@ impl Game {
             for decal in self.decals.iter().filter(|dc| dc.landed()) {
                 draw_decal(&mut d, &obstacle_textures, decal);
             }
+            // Unlit oil trails: puddles on the ground, under everything.
+            for &(col, row) in &self.oil_cells {
+                draw_oil_cell(&mut d, &obstacle_textures, crate::map::cell_to_world(col, row));
+            }
+            // Burning ground cells: the flames over the ground, under the
+            // tiles beside them (a burning doorway's walls still stand
+            // over the fire) and under whatever drives through them.
+            for (at, left, total) in self.burning_cells() {
+                draw_ground_fire(&mut d, textures.barrel_explosion, at, self.time, left, total);
+            }
 
             let fences: HashSet<(i32, i32)> = self
                 .world
@@ -256,7 +266,7 @@ impl Game {
                 if self.shadows_enabled {
                     draw_obstacle_shadow(&mut d, &obstacle_textures, obstacle, axis);
                 }
-                draw_obstacle(&mut d, &obstacle_textures, obstacle, axis);
+                draw_obstacle(&mut d, &obstacle_textures, obstacle, axis, self.time);
                 // Lighting along whichever faces face open ground, so a run
                 // of tiles reads as one structure rather than as a grid.
                 draw_obstacle_cap(&mut d, &obstacle_textures, obstacle);
@@ -268,6 +278,9 @@ impl Game {
                     if obstacle.fuse.is_some() {
                         draw_fuse_glow(&mut bd, obstacle.position, self.time);
                     }
+                }
+                for (at, left, _total) in self.burning_cells() {
+                    draw_fire_glow(&mut bd, at, self.time, left);
                 }
             });
 
@@ -427,6 +440,11 @@ impl Game {
             }
             for decal in self.decals.iter().filter(|dc| !dc.landed()) {
                 draw_decal(&mut d, &obstacle_textures, decal);
+            }
+            // Launched fuel drums, tumbling over the lot on their way to
+            // where they go off.
+            for drum in &self.flying_drums {
+                draw_flying_drum(&mut d, &obstacle_textures, drum, self.shadows_enabled);
             }
 
             // Sparks, chips, dust and smoke over the top of everything in

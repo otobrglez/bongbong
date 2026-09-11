@@ -26,7 +26,7 @@ use crate::ground::{self, GroundGrid};
 use crate::hud::{mode_button_rect, BAR_FILL, DIM, HUD_LABEL_SIZE, HUD_TEXT_SIZE, TEXT};
 use crate::level::{Mission, SpawnKind, Tier};
 use crate::map::{self, CellObject, MapEntry, MapFile};
-use crate::obstacle::{self, Material};
+use crate::obstacle::{self, Drum, Material};
 use crate::pickup::PickupKind;
 use crate::tank::TankKind;
 use crate::{
@@ -162,6 +162,15 @@ pub enum Tool {
     /// species (`Material::Tree`/`Pine`). Any number, variant rolled per
     /// tile when the round spawns.
     Prop(Material),
+    /// A barrel of a pinned kind (`obstacle::Drum`): the red oil drum
+    /// that leaves a burning pool, or the grey fuel drum that goes off
+    /// harder and launches when chained. `Prop(Material::Barrel)` stays
+    /// the roll-at-spawn barrel.
+    Drum(Drum),
+    /// An oil trail cell: not solid, a fuse the author draws on the
+    /// ground - a blast or a burning neighbour lights it and the fire runs
+    /// along it (docs/barrel-explosion-variety.md section D).
+    OilTrail,
     Road,
     Frog,
     /// Player 1's start - singleton, moved on placement like `Frog`.
@@ -184,18 +193,21 @@ pub enum Tool {
 
 /// Every brush, in bar order: the categories one after another, the
 /// eraser last.
-pub const TOOLS: [Tool; 24] = [
+pub const TOOLS: [Tool; 27] = [
     Tool::Wall(Material::Brick),
     Tool::Wall(Material::Iron),
     Tool::Wall(Material::Wood),
     Tool::Wall(Material::Glass),
     Tool::Prop(Material::Sandbag),
     Tool::Prop(Material::Barrel),
+    Tool::Drum(Drum::Oil),
+    Tool::Drum(Drum::Fuel),
     Tool::Prop(Material::Fence),
     Tool::Prop(Material::Tree),
     Tool::Prop(Material::Pine),
     Tool::Road,
     Tool::TallGrass,
+    Tool::OilTrail,
     Tool::Gate,
     Tool::Start,
     Tool::Start2,
@@ -226,6 +238,9 @@ impl Tool {
             Tool::Prop(Material::Tree) => "tree",
             Tool::Prop(Material::Pine) => "pine",
             Tool::Prop(_) => "prop",
+            Tool::Drum(Drum::Oil) => "oil_drum",
+            Tool::Drum(Drum::Fuel) => "fuel_drum",
+            Tool::OilTrail => "oil_trail",
             Tool::Road => "road",
             Tool::TallGrass => "tall_grass",
             Tool::Gate => "gate",
@@ -252,8 +267,8 @@ impl Tool {
     pub fn category(self) -> Option<Category> {
         match self {
             Tool::Wall(_) => Some(Category::Wall),
-            Tool::Prop(_) => Some(Category::Prop),
-            Tool::Road | Tool::TallGrass | Tool::Gate => Some(Category::Ground),
+            Tool::Prop(_) | Tool::Drum(_) => Some(Category::Prop),
+            Tool::Road | Tool::TallGrass | Tool::OilTrail | Tool::Gate => Some(Category::Ground),
             Tool::Start | Tool::Start2 | Tool::Frog | Tool::EnemyFrog => Some(Category::Actor),
             Tool::Pickup(_) => Some(Category::Pickup),
             Tool::Eraser => None,
@@ -265,6 +280,8 @@ impl Tool {
         match self {
             Tool::Wall(material) => Some(CellObject::Wall { material }),
             Tool::Prop(material) => CellObject::prop(material),
+            Tool::Drum(drum) => Some(CellObject::Barrel { drum: Some(drum) }),
+            Tool::OilTrail => Some(CellObject::Oil),
             Tool::Road => Some(CellObject::Road),
             Tool::Frog => Some(CellObject::Frog),
             Tool::Start => Some(CellObject::Start),
@@ -1210,10 +1227,18 @@ impl MapEditor {
                 let dest = Rectangle::new(pos.x, pos.y, size, size);
                 let origin = Vector2::new(size / 2.0, size / 2.0);
                 match *obj {
-                    CellObject::Wall { .. } | CellObject::Sandbag | CellObject::Barrel | CellObject::Fence => {
+                    CellObject::Barrel { drum: Some(drum) } => {
+                        let src = obstacle::drum_source_rec(drum);
+                        d.draw_texture_pro(textures.props, src, dest, origin, 0.0, Color::WHITE);
+                    }
+                    CellObject::Wall { .. } | CellObject::Sandbag | CellObject::Barrel { .. } | CellObject::Fence => {
                         let material = obj.material().expect("solid cells have a material");
                         let (sheet, src) = obstacle::icon_source_rec(material);
                         d.draw_texture_pro(sheet_texture(textures, sheet), src, dest, origin, 0.0, Color::WHITE);
+                    }
+                    CellObject::Oil => {
+                        let src = obstacle::oil_source_rec(pos);
+                        d.draw_texture_pro(textures.props, src, dest, origin, 0.0, Color::WHITE);
                     }
                     CellObject::Tree | CellObject::Pine => {
                         // Drawn at the sprite's own 48px, not the 32px cell,
@@ -1647,6 +1672,9 @@ fn fit_text(text: &str, width: f32, size: i32) -> String {
 fn label(tool: Tool) -> &'static str {
     match tool {
         Tool::TallGrass => "tall grass",
+        Tool::Drum(Drum::Oil) => "oil drum",
+        Tool::Drum(Drum::Fuel) => "fuel drum",
+        Tool::OilTrail => "oil trail",
         Tool::Start => "p1 start",
         Tool::Start2 => "p2 start",
         Tool::EnemyFrog => "enemy frog",
@@ -1660,6 +1688,9 @@ fn label(tool: Tool) -> &'static str {
 fn short_label(tool: Tool) -> &'static str {
     match tool {
         Tool::TallGrass => "grass",
+        Tool::Drum(Drum::Oil) => "oil",
+        Tool::Drum(Drum::Fuel) => "fuel",
+        Tool::OilTrail => "oil",
         Tool::EnemyFrog => "e.frog",
         other => other.name(),
     }
@@ -1781,6 +1812,15 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, tool: 
         Tool::Wall(material) | Tool::Prop(material) => {
             let (sheet, src) = obstacle::icon_source_rec(material);
             d.draw_texture_pro(sheet_texture(textures, sheet), src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+        }
+        Tool::Drum(drum) => {
+            let src = obstacle::drum_source_rec(drum);
+            d.draw_texture_pro(textures.props, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+        }
+        Tool::OilTrail => {
+            d.draw_rectangle_rounded(dest, 0.15, EDITOR_PANEL_SEGMENTS, Color::new(97, 149, 65, 255));
+            let src = obstacle::oil_source_rec(Position::new(0.0, 0.0));
+            d.draw_texture_pro(textures.props, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
         Tool::Road => {
             d.draw_rectangle_rounded(dest, 0.15, EDITOR_PANEL_SEGMENTS, Color::new(150, 111, 74, 255));
@@ -1968,7 +2008,7 @@ mod editor_tests {
         map.set_cell(39, 11, CellObject::Gate);
         map.set_cell(20, 11, CellObject::Wall { material: Material::Brick });
         map.set_cell(21, 11, CellObject::Sandbag);
-        map.set_cell(22, 11, CellObject::Barrel);
+        map.set_cell(22, 11, CellObject::Barrel { drum: None });
         map.set_cell(23, 11, CellObject::Fence);
 
         let dir = std::env::temp_dir().join(format!("bongbong-editor-test-{}", std::process::id()));

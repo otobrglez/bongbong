@@ -44,11 +44,21 @@ impl BlastParams {
         }
     }
 
+    /// The red oil drum's blast.
     pub fn barrel() -> Self {
         BlastParams {
             radius: tuning().barrel_blast_radius,
             damage: (tuning().barrel_blast_damage_min, tuning().barrel_blast_damage_max),
             knockback: tuning().barrel_blast_knockback_speed,
+        }
+    }
+
+    /// The grey fuel drum's: bigger, sharper, shorter.
+    pub fn fuel() -> Self {
+        BlastParams {
+            radius: tuning().fuel_blast_radius,
+            damage: (tuning().fuel_blast_damage_min, tuning().fuel_blast_damage_max),
+            knockback: tuning().fuel_blast_knockback_speed,
         }
     }
 
@@ -66,6 +76,10 @@ impl BlastParams {
 pub(super) struct HitEffects {
     pub knockback: Option<(Vector2, f32)>,
     pub frog_hop: Option<Vector2>,
+    /// The projectile's unit travel direction, whatever it hit: a barrel
+    /// it pops leans its fire this way (`BlastShape::Shot`). `None` for a
+    /// beam, which has no travel to speak of.
+    pub travel: Option<Vector2>,
 }
 
 impl HitEffects {
@@ -73,6 +87,7 @@ impl HitEffects {
         HitEffects {
             knockback: None,
             frog_hop: None,
+            travel: None,
         }
     }
 }
@@ -173,7 +188,7 @@ impl Game {
                 // The hit is recorded ahead of whatever the damage causes
                 // (a destroyed tile, a blast), since it happened first.
                 let mark = f.events.len();
-                let killed = self.damage_obstacle(f, entity, d, DamageCause::Shot);
+                let killed = self.damage_obstacle(f, entity, d, DamageCause::Shot { dir: effects.travel });
                 f.events.insert(mark, Event::Hit { target: HitTarget::Obstacle { material }, damage: d, killed, x: at.x, y: at.y });
             }
             ShellTarget::Wall => {
@@ -218,7 +233,7 @@ impl Game {
             .collect();
         for (entity, falloff) in hits {
             let amount = params.roll_damage(&mut f.rng) * falloff;
-            self.damage_obstacle(f, entity, amount, DamageCause::Blast(falloff));
+            self.damage_obstacle(f, entity, amount, DamageCause::Blast { falloff, from: center });
         }
     }
 }

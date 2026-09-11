@@ -200,11 +200,14 @@ fn a_shot_barrel_detonates_and_hurts_the_shooter_in_range() {
 #[test]
 fn barrels_chain_react_on_a_fuse() {
     // (23,11) is out of the first barrel's radius but inside the second's.
+    // Pinned to oil drums: a chained *fuel* drum launches instead of
+    // popping in place (`a_chained_fuel_drum_launches_and_goes_off_where_it_lands`),
+    // which is a different chain.
     let map = map_with(
         r#"
-cells."20,10" = { kind = "barrel" }
-cells."21,10" = { kind = "barrel" }
-cells."23,11" = { kind = "barrel" }
+cells."20,10" = { kind = "barrel", drum = "oil" }
+cells."21,10" = { kind = "barrel", drum = "oil" }
+cells."23,11" = { kind = "barrel", drum = "oil" }
 "#,
     );
     let mut game = game_on(&map, 11);
@@ -229,8 +232,9 @@ cells."23,11" = { kind = "barrel" }
     }
     assert_eq!(log.len(), 3, "three blasts: {log:?}");
     assert!(!log[0].1 && log[1].1 && log[2].1, "the first is the shot, the rest chained: {log:?}");
-    // A fuse runs up to 2.5x `barrel_fuse_seconds` at the blast's edge.
-    let fuse_frames = (tuning().barrel_fuse_seconds * 2.5 * 60.0).ceil() as usize + 1;
+    // A fuse runs up to 2.5x `barrel_fuse_seconds` at the blast's edge,
+    // times the oil drum's own smoulder factor.
+    let fuse_frames = (tuning().barrel_fuse_seconds * 2.5 * tuning().oil_fuse_factor * 60.0).ceil() as usize + 1;
     assert!(log[1].0 > log[0].0 && log[1].0 <= log[0].0 + fuse_frames, "the second waits out its fuse: {log:?}");
     assert!(log[2].0 > log[1].0 && log[2].0 <= log[1].0 + fuse_frames, "the third only chains off the second: {log:?}");
     assert_eq!(game.world.query::<&Obstacle>().iter().filter(|o| o.material == Material::Barrel).count(), 0);
@@ -255,13 +259,14 @@ fn ramming_a_barrel_sets_it_off() {
 
 #[test]
 fn a_wrecks_splash_sets_off_a_barrel_next_to_it() {
-    // The enemy's iron box with one ring tile swapped for a barrel.
-    let mut map = map_with("cells.\"36,20\" = { kind = \"barrel\" }\n");
+    // The enemy's iron box with one ring tile swapped for a barrel - an
+    // oil drum, so it pops where it stands rather than launching.
+    let mut map = map_with("cells.\"36,20\" = { kind = \"barrel\", drum = \"oil\" }\n");
     map = map.replace("cells.\"36,20\" = { kind = \"wall\", material = \"iron\" }\n", "");
     let mut game = game_on(&map, 4);
     game.debug_kill(1).expect("enemy in slot 1");
     let mut saw = Vec::new();
-    for _ in 0..30 {
+    for _ in 0..90 {
         step(&mut game, Input::default());
         for e in game.events() {
             match e {
@@ -979,4 +984,366 @@ fn screen_flashes_are_spaced_out_and_cookoffs_stay_local() {
         );
     }
     assert!(saw_cookoff, "the secondaries fired");
+}
+
+// ---- docs/barrel-explosion-variety.md: the variety tiers -----------------
+
+/// A round on `map` at `seed` with the enemy boxed away, the player parked
+/// at `at` facing up.
+fn game_at(map: &str, seed: u64, at: (i32, i32)) -> Game {
+    let mut game = game_on(map, seed);
+    game.debug_teleport(0, cell_to_world(at.0, at.1), Some(0.0)).unwrap();
+    game
+}
+
+/// Fire until the first `Blast` event (a shell can pass over or deflect,
+/// and a light chassis may need two), returning the frame it fired on
+/// and leaving the game on that frame.
+fn shoot_until_blast(game: &mut Game, max_frames: usize) -> Option<usize> {
+    let mut frame = 0;
+    while frame < max_frames {
+        step(game, fire());
+        frame += 1;
+        if game.events().iter().any(|e| matches!(e, Event::Blast { .. })) {
+            return Some(frame);
+        }
+        for _ in 0..44 {
+            step(game, Input::default());
+            frame += 1;
+            if game.events().iter().any(|e| matches!(e, Event::Blast { .. })) {
+                return Some(frame);
+            }
+        }
+    }
+    None
+}
+
+#[test]
+fn a_shot_barrels_blast_leans_downrange_and_streaks_its_scorch() {
+    // A5 and C1: the projectile's travel is known at the moment the drum
+    // dies, so the fireball is offset along it and the scorch gets the
+    // streak cell. The player fires straight up, so the lean is upward.
+    let map = map_with("cells.\"20,10\" = { kind = \"barrel\", drum = \"oil\" }\n");
+    let mut game = game_at(&map, 3, (20, 14));
+    assert!(shoot_until_blast(&mut game, 300).is_some(), "the drum pops");
+    let fx = game.blast_fx.last().expect("the fireball is playing");
+    assert!(fx.offset.y < 0.0 && fx.offset.x == 0.0, "leaning up, the way the shell flew: {:?}", fx.offset);
+    assert_eq!(fx.row, crate::BLAST_ROW_FLAT.max(fx.row), "a shot picks the flat or the double row");
+    assert!(fx.row == crate::BLAST_ROW_FLAT || fx.row == crate::BLAST_ROW_DOUBLE);
+    let scorch = game.scorches.last().expect("and a scorch");
+    let streak = scorch.streak.expect("with a streak");
+    assert!(streak.y < 0.0, "pointing downrange");
+    assert_eq!(scorch.scale, 1.0, "an oil drum's mark is the reference size");
+}
+
+#[test]
+fn a_barrel_blast_throws_parts_queues_pops_and_rearranges_the_ground() {
+    // A3, A4, A7 and C2 in one blast: the drum's parts fly to hashed
+    // landing spots, secondaries are queued (this seed's position hashes
+    // to at least one), rubble already lying inside the radius is picked
+    // up again, tall grass in the radius lies flat, and the tread marks
+    // under it stop fading.
+    let map = map_with(
+        r#"
+cells."20,10" = { kind = "barrel", drum = "oil" }
+cells."21,10" = { kind = "wall", material = "glass" }
+cells."19,11" = { kind = "tall_grass" }
+"#,
+    );
+    let mut game = game_at(&map, 6, (20, 14));
+    // A tread mark beside the drum. Its age starts negative so it cannot
+    // fade out (`track_lifetime` is under a second) before the shells
+    // that pop the drum have landed: only the burn-in rule is under test.
+    game.tracks.push(crate::track::Track {
+        position: Position::new(cell_to_world(20, 10).x + 12.0, cell_to_world(20, 10).y + 20.0),
+        rotation: 0.0,
+        scale: 2.0,
+        max_opacity: 0.5,
+        age: -10.0,
+        scorched: false,
+    });
+    let tracks_scorched_before = game.tracks.iter().filter(|t| t.scorched).count();
+    // Shatter the glass first so its rubble is on the ground before the
+    // blast (a shot straight up hits the drum, so aim at the glass from
+    // its own column).
+    game.debug_teleport(0, cell_to_world(21, 14), Some(0.0)).unwrap();
+    for _ in 0..8 {
+        if destroyed_frame(&mut game, fire(), Material::Glass, 90).is_some() {
+            break;
+        }
+    }
+    for _ in 0..60 {
+        step(&mut game, Input::default());
+    }
+    let rubble_before = game.decals.len();
+    assert!(rubble_before > 0 && game.decals.iter().all(|d| d.landed()), "glass rubble has settled");
+    game.debug_teleport(0, cell_to_world(20, 14), Some(0.0)).unwrap();
+    assert!(shoot_until_blast(&mut game, 300).is_some(), "the drum pops");
+
+    let parts = tuning().barrel_parts as usize;
+    let airborne = game.decals.iter().filter(|d| !d.landed()).count();
+    assert!(airborne >= parts, "the drum's parts are in the air ({airborne} airborne, {parts} thrown)");
+    assert!(airborne > parts, "and some of the glass rubble went up with them");
+    assert!(game.decals.len() >= rubble_before + parts, "nothing that was lying there vanished");
+    let flat: Vec<&crate::grass::GrassTuft> = game.grass.iter().filter(|g| g.crush >= 1.0).collect();
+    assert!(!flat.is_empty(), "grass inside the blast lies flat");
+    assert!(game.tracks.iter().filter(|t| t.scorched).count() > tracks_scorched_before, "tread marks under the blast are burnt in");
+    // The cook-off count is hashed from the position: this position
+    // gives at least one, and every one of them fires later.
+    let queued = game.cookoffs.len();
+    assert!(queued >= 1 && queued <= tuning().barrel_cookoff_max as usize, "pops queued: {queued}");
+    let mut popped = 0;
+    for _ in 0..150 {
+        step(&mut game, Input::default());
+        popped += game.events().iter().filter(|e| matches!(e, Event::CookOff { .. })).count();
+    }
+    assert_eq!(popped, queued, "every queued pop fires");
+    assert!(game.decals.iter().all(|d| d.landed()), "and everything thrown has landed");
+}
+
+#[test]
+fn an_oil_drum_leaves_a_pool_that_burns_hurts_and_spreads() {
+    // B1: the blast lights the centre cell and its four neighbours for
+    // `oil_pool_seconds`; a tank parked in it loses health at
+    // `oil_pool_damage_per_second`; a flammable wood tile beside the pool
+    // catches; the fire blocks the nav grid while it burns; and when it
+    // goes out the cells are used up.
+    let map = map_with(
+        r#"
+cells."20,8" = { kind = "barrel", drum = "oil" }
+cells."22,8" = { kind = "wall", material = "wood" }
+"#,
+    );
+    let mut game = game_at(&map, 21, (20, 13));
+    assert!(shoot_until_blast(&mut game, 300).is_some(), "the drum pops");
+    let cells = game.burning_cells();
+    assert_eq!(cells.len(), 5, "a plus of fire: {cells:?}");
+    let centre = cell_to_world(20, 8);
+    assert!(cells.iter().any(|(p, _, _)| *p == centre), "centred on the drum");
+    let plus = [(21, 8), (19, 8), (20, 9), (20, 7)];
+    for (c, r) in plus {
+        assert!(cells.iter().any(|(p, _, _)| *p == cell_to_world(c, r)), "({c},{r}) burns");
+    }
+    assert!(!game.nav_grid(W, H).usable(centre), "the AI treats the fire as a wall");
+    assert!(game.events().iter().filter(|e| matches!(e, Event::FireStarted { pool: true, .. })).count() == 5);
+
+    // Park the player in the fire.
+    let before = player_damage(&game);
+    game.debug_teleport(0, cell_to_world(20, 9), Some(0.0)).unwrap();
+    for _ in 0..60 {
+        step(&mut game, Input::default());
+    }
+    let burn = player_damage(&game) - before;
+    let expected = tuning().oil_pool_damage_per_second;
+    assert!(burn > expected * 0.8 && burn < expected * 1.3, "a second in the pool costs about {expected}: {burn}");
+
+    // The wood beside the pool is alight (it was rolled flammable at this
+    // seed, or it would simply stand - either way it is not untouched).
+    let wood_burning = game.world.query::<&Obstacle>().iter().any(|o| o.material == Material::Wood && (o.burning || o.destroyed));
+    let wood_gone = game.world.query::<&Obstacle>().iter().all(|o| o.material != Material::Wood);
+    assert!(wood_burning || wood_gone, "the wood beside the fire caught");
+
+    // Out of the fire and wait for it to go out.
+    game.debug_teleport(0, cell_to_world(20, 15), Some(0.0)).unwrap();
+    let frames = (tuning().oil_pool_seconds * 60.0) as usize + 10;
+    for _ in 0..frames {
+        step(&mut game, Input::default());
+    }
+    assert!(game.burning_cells().is_empty(), "the pool burns out");
+    assert!(game.nav_grid(W, H).usable(cell_to_world(20, 9)), "and the ground is open again");
+}
+
+#[test]
+fn a_chained_fuel_drum_launches_and_goes_off_where_it_lands() {
+    // B2: a fuel drum set off by another blast flies two or three cells
+    // away from the source and detonates there - a second, chained blast
+    // at the landing spot, never inside a solid tile or off the field.
+    let map = map_with(
+        r#"
+cells."20,8" = { kind = "barrel", drum = "oil" }
+cells."22,8" = { kind = "barrel", drum = "fuel" }
+"#,
+    );
+    let mut game = game_at(&map, 13, (20, 13));
+    assert!(shoot_until_blast(&mut game, 300).is_some(), "the oil drum pops");
+    let mut launched = None;
+    let mut landing_blast = None;
+    for frame in 0..200 {
+        step(&mut game, Input::default());
+        for e in game.events() {
+            match *e {
+                Event::DrumLaunched { x, y, to_x, to_y } => launched = Some((frame, x, y, to_x, to_y)),
+                Event::Blast { chained: true, drum: crate::obstacle::Drum::Fuel, x, y } => landing_blast = Some((frame, x, y)),
+                _ => {}
+            }
+        }
+        if landing_blast.is_some() {
+            break;
+        }
+    }
+    let (lf, x, y, tx, ty) = launched.expect("the fuel drum launched");
+    assert_eq!((x, y), (cell_to_world(22, 8).x, cell_to_world(22, 8).y), "from where it stood");
+    let cells = Position::new(tx, ty).distance_to(Position::new(x, y)) / crate::OBSTACLE_GRID_SIZE;
+    let (lo, hi) = (tuning().fuel_launch_cells_min as f32, tuning().fuel_launch_cells_max as f32);
+    assert!(cells >= lo - 0.01 && cells <= hi + 0.01, "{cells} cells away, wanted {lo}..={hi}");
+    assert!(tx > x, "away from the oil drum, which was to its left");
+    let (bf, bx, by) = landing_blast.expect("and went off where it landed");
+    assert_eq!((bx, by), (tx, ty));
+    let flight = (tuning().debris_flight_seconds * 60.0) as usize;
+    assert!(bf >= lf + flight - 1 && bf <= lf + flight + 2, "after its flight: launched {lf}, blast {bf}");
+    assert!(game.fused_barrels().is_empty() && game.flying_drums.is_empty());
+    let fx = game.blast_fx.last().expect("the landing fireball");
+    assert_eq!(fx.kind, crate::blast::BlastKind::Fuel);
+    assert!(game.scorches.last().unwrap().scale > 1.0, "a fuel drum's scorch is bigger");
+}
+
+#[test]
+fn a_shot_fuel_drum_pops_in_place_with_a_bigger_blast() {
+    // Shot rather than chained, a fuel drum just goes - harder than oil.
+    let map = map_with("cells.\"20,10\" = { kind = \"barrel\", drum = \"fuel\" }\n");
+    // Three cells off: inside a fuel drum's radius, at the edge of oil's.
+    let mut game = game_at(&map, 5, (20, 13));
+    assert!(shoot_until_blast(&mut game, 300).is_some());
+    assert!(game.events().iter().any(|e| matches!(e, Event::Blast { chained: false, drum: crate::obstacle::Drum::Fuel, .. })));
+    assert!(!game.events().iter().any(|e| matches!(e, Event::DrumLaunched { .. })), "no launch without a source blast");
+    assert!(game.burning_cells().is_empty(), "and no pool - fuel burns clean");
+    assert!(game.shocks.iter().any(|s| s.strength == SHOCK_FUEL), "a harder shake than an oil drum");
+    assert!(player_damage(&game) > 0.0, "the player, three cells away, is well inside the bigger radius");
+}
+
+#[test]
+fn a_lit_oil_trail_carries_the_fire_to_the_drum_at_its_end() {
+    // D: a trail of oil cells from a drum to a second drum well outside
+    // the first's radius. Popping the first lights the trail's near end;
+    // the fire runs along it one cell per `1/oil_trail_cells_per_second`
+    // and puts the far drum on a fuse when it arrives.
+    let mut extra = String::from("cells.\"12,6\" = { kind = \"barrel\", drum = \"oil\" }\n");
+    for c in 13..=24 {
+        extra.push_str(&format!("cells.\"{c},6\" = {{ kind = \"oil\" }}\n"));
+    }
+    extra.push_str("cells.\"25,6\" = { kind = \"barrel\", drum = \"oil\" }\n");
+    let map = map_with(&extra);
+    let mut game = game_at(&map, 17, (12, 11));
+    assert_eq!(game.oil_cells.len(), 12, "the trail is on the map");
+    assert!(game.nav_grid(W, H).usable(cell_to_world(18, 6)), "an unlit trail is open ground");
+    assert!(shoot_until_blast(&mut game, 300).is_some(), "the near drum pops");
+    let mut lit: Vec<(usize, f32)> = Vec::new();
+    let mut far_blast = None;
+    for frame in 0..600 {
+        step(&mut game, Input::default());
+        for e in game.events() {
+            match *e {
+                Event::FireStarted { x, pool: false, .. } => lit.push((frame, x)),
+                Event::Blast { chained: true, x, .. } if x == cell_to_world(25, 6).x => far_blast = Some(frame),
+                _ => {}
+            }
+        }
+        if far_blast.is_some() {
+            break;
+        }
+    }
+    assert!(far_blast.is_some(), "the far drum went off: {lit:?}");
+    // The blast itself lit the three cells inside its radius on the frame
+    // it went off (consumed above); the rest arrive one at a time.
+    assert!(lit.len() >= 8, "the trail lit cell by cell: {lit:?}");
+    // Monotonic along the trail, one step apart.
+    let step_frames = (60.0 / tuning().oil_trail_cells_per_second).round() as usize;
+    for w in lit.windows(2) {
+        let ((f0, x0), (f1, x1)) = (w[0], w[1]);
+        if x1 > x0 {
+            assert!(f1 >= f0 && f1 <= f0 + step_frames + 2, "one cell per step: {lit:?}");
+        }
+    }
+    assert!(game.oil_cells.len() < 12, "burnt cells are used up");
+}
+
+#[test]
+fn a_wall_facing_a_blast_is_blackened_on_that_face() {
+    // C3: the face of a surviving tile that looked at the blast carries
+    // soot; the far faces do not.
+    let map = map_with(
+        r#"
+cells."20,10" = { kind = "barrel", drum = "oil" }
+cells."22,10" = { kind = "wall", material = "iron" }
+"#,
+    );
+    let mut game = game_at(&map, 9, (20, 14));
+    assert!(shoot_until_blast(&mut game, 300).is_some());
+    let iron = game.world.query::<&Obstacle>().iter().find(|o| o.material == Material::Iron && o.cell() == (22, 10)).map(|o| o.scorched).expect("the iron stands");
+    assert_eq!(iron, crate::obstacle::SCORCH_W, "sooted on the face toward the drum only: {iron:#b}");
+}
+
+#[test]
+fn a_fused_drum_rocks_and_a_pinned_drum_keeps_the_roll() {
+    // A6: the rock is a whole-block sideways offset that is zero for a
+    // drum with no fuse. B4: pinning a drum kind on the map must not
+    // change the RNG stream after it, so a typed map spawns the same
+    // enemies as its untyped self.
+    let typed = map_with(
+        r#"
+cells."10,4" = { kind = "barrel", drum = "fuel" }
+cells."11,4" = { kind = "barrel" }
+"#,
+    );
+    let bare = map_with(
+        r#"
+cells."10,4" = { kind = "barrel" }
+cells."11,4" = { kind = "barrel" }
+"#,
+    );
+    let mut a = Game::default();
+    a.enemy_count_override = Some(3);
+    a.seed_override = Some(31);
+    a.map = MapFile::from_toml_str(&typed).unwrap();
+    a.init(W, H);
+    let mut b = Game::default();
+    b.enemy_count_override = Some(3);
+    b.seed_override = Some(31);
+    b.map = MapFile::from_toml_str(&bare).unwrap();
+    b.init(W, H);
+    let spots = |g: &Game| g.tank_snapshots().iter().map(|t| (t.position.x, t.position.y, t.rotation)).collect::<Vec<_>>();
+    assert_eq!(spots(&a), spots(&b), "the pinned drum consumed the same roll");
+    let drum = a.world.query::<&Obstacle>().iter().find(|o| o.cell() == (10, 4)).map(|o| o.drum()).unwrap();
+    assert_eq!(drum, Some(crate::obstacle::Drum::Fuel));
+    let o = a.world.query::<&Obstacle>().iter().find(|o| o.cell() == (10, 4)).map(|o| o.fuse_rock(0.3)).unwrap();
+    assert_eq!(o, 0.0, "an unlit drum stands still");
+    let mut lit = Obstacle::new(Material::Barrel, 0, cell_to_world(10, 4), false, rapier2d::prelude::RigidBodyHandle::invalid());
+    lit.fuse = Some(crate::obstacle::Fuse { left: 0.2, total: 0.2, from: None });
+    let rocks: Vec<f32> = (0..20).map(|i| lit.fuse_rock(i as f32 / 60.0)).collect();
+    assert!(rocks.iter().any(|r| *r != 0.0), "a lit one rocks: {rocks:?}");
+    assert!(rocks.iter().all(|r| r.abs() <= tuning().barrel_fuse_rock_px && (*r / 2.0).fract() == 0.0), "in whole blocks");
+}
+
+#[test]
+fn every_blast_shape_and_jitter_comes_from_the_position_hash() {
+    // A1 and A2: two drums at different cells pick different rows, turns
+    // or rates; the same cell always picks the same. No RNG is involved,
+    // which `a_map_without_props_spawns_the_same_round_it_always_did`
+    // guards from the other side.
+    use crate::blast::{BlastFx, BlastKind, BlastShape};
+    let a = BlastFx::shaped(cell_to_world(10, 10), BlastKind::Oil, BlastShape::Plain);
+    let b = BlastFx::shaped(cell_to_world(10, 10), BlastKind::Oil, BlastShape::Plain);
+    assert!((a.row, a.turn, a.fps_scale, a.scale) == (b.row, b.turn, b.fps_scale, b.scale));
+    let picks: std::collections::HashSet<(i32, i32)> = (0..40)
+        .map(|c| {
+            let fx = BlastFx::shaped(cell_to_world(c, 5), BlastKind::Oil, BlastShape::Plain);
+            (fx.row, fx.turn)
+        })
+        .collect();
+    assert!(picks.len() >= 8, "40 drums in a row use at least 8 row/turn combinations: {picks:?}");
+    let rates: std::collections::HashSet<i32> =
+        (0..40).map(|c| (BlastFx::shaped(cell_to_world(c, 5), BlastKind::Oil, BlastShape::Plain).fps_scale * 100.0) as i32).collect();
+    assert!(rates.len() >= 6, "and step through their frames at different rates: {rates:?}");
+    for c in 0..40 {
+        let fx = BlastFx::shaped(cell_to_world(c, 5), BlastKind::Oil, BlastShape::Plain);
+        assert!(crate::BLAST_SHAPE_ROWS.contains(&fx.row));
+        assert!((0..4).contains(&fx.turn));
+        assert!(fx.fps_scale >= 1.0 - tuning().barrel_fps_jitter - 1e-5 && fx.fps_scale <= 1.0 + tuning().barrel_fps_jitter + 1e-5);
+    }
+    // A ram is always the column; a fuel drum is always the column and bigger.
+    assert_eq!(BlastFx::shaped(cell_to_world(3, 3), BlastKind::Oil, BlastShape::Ram).row, crate::BLAST_ROW_TALL);
+    let oil = BlastFx::shaped(cell_to_world(3, 3), BlastKind::Oil, BlastShape::Plain);
+    let fuel = BlastFx::shaped(cell_to_world(3, 3), BlastKind::Fuel, BlastShape::Plain);
+    assert_eq!(fuel.row, crate::BLAST_ROW_TALL);
+    assert!(fuel.scale > oil.scale && fuel.fps() > oil.fps());
 }
