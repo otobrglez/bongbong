@@ -1,0 +1,95 @@
+# maps/phone/ - battlefield maps sized for a phone screen
+# (docs/fullscreen-resolution-research.md, "map sizes"). 24x14 cells =
+# 768x448 world px; the game has no map size field yet, so play it with
+# `cargo run -- --map maps/phone/crossroads.toml --resolution 768x448`.
+# Hand-authored: re-saving from the map editor would drop these comments.
+#
+# crossroads: an open Protect arena. A road ring around the frog with the
+# player beside it, wood screens on both flanks, glass/iron caps top and
+# bottom, barrels in the corners. Every corridor is at least three cells.
+
+version = 1
+tanks = 5
+mission.kind = "protect"
+spawn.kind = "band"
+
+cells."5,1" = { kind = "wall", material = "brick" }
+cells."6,1" = { kind = "wall", material = "brick" }
+cells."16,1" = { kind = "wall", material = "brick" }
+cells."17,1" = { kind = "wall", material = "brick" }
+cells."2,2" = { kind = "barrel" }
+cells."5,2" = { kind = "wall", material = "brick" }
+cells."6,2" = { kind = "wall", material = "brick" }
+cells."9,2" = { kind = "wall", material = "glass" }
+cells."10,2" = { kind = "wall", material = "glass" }
+cells."12,2" = { kind = "wall", material = "glass" }
+cells."13,2" = { kind = "wall", material = "glass" }
+cells."16,2" = { kind = "wall", material = "brick" }
+cells."17,2" = { kind = "wall", material = "brick" }
+cells."20,2" = { kind = "barrel" }
+cells."5,3" = { kind = "wall", material = "brick" }
+cells."10,3" = { kind = "wall", material = "iron" }
+cells."12,3" = { kind = "wall", material = "iron" }
+cells."17,3" = { kind = "wall", material = "brick" }
+cells."2,4" = { kind = "sandbag" }
+cells."3,4" = { kind = "sandbag" }
+cells."9,4" = { kind = "road" }
+cells."10,4" = { kind = "road" }
+cells."11,4" = { kind = "road" }
+cells."12,4" = { kind = "road" }
+cells."13,4" = { kind = "road" }
+cells."19,4" = { kind = "sandbag" }
+cells."20,4" = { kind = "sandbag" }
+cells."4,5" = { kind = "wall", material = "wood" }
+cells."5,5" = { kind = "wall", material = "wood" }
+cells."9,5" = { kind = "road" }
+cells."13,5" = { kind = "road" }
+cells."17,5" = { kind = "wall", material = "wood" }
+cells."18,5" = { kind = "wall", material = "wood" }
+cells."1,6" = { kind = "pickup", pickup = "health" }
+cells."4,6" = { kind = "wall", material = "wood" }
+cells."9,6" = { kind = "road" }
+cells."11,6" = { kind = "frog" }
+cells."13,6" = { kind = "road" }
+cells."18,6" = { kind = "wall", material = "wood" }
+cells."21,6" = { kind = "pickup", pickup = "ammo" }
+cells."4,7" = { kind = "wall", material = "wood" }
+cells."7,7" = { kind = "start" }
+cells."9,7" = { kind = "road" }
+cells."13,7" = { kind = "road" }
+cells."18,7" = { kind = "wall", material = "wood" }
+cells."4,8" = { kind = "wall", material = "wood" }
+cells."5,8" = { kind = "wall", material = "wood" }
+cells."9,8" = { kind = "road" }
+cells."13,8" = { kind = "road" }
+cells."17,8" = { kind = "wall", material = "wood" }
+cells."18,8" = { kind = "wall", material = "wood" }
+cells."2,9" = { kind = "sandbag" }
+cells."3,9" = { kind = "sandbag" }
+cells."9,9" = { kind = "road" }
+cells."10,9" = { kind = "road" }
+cells."11,9" = { kind = "road" }
+cells."12,9" = { kind = "road" }
+cells."13,9" = { kind = "road" }
+cells."19,9" = { kind = "sandbag" }
+cells."20,9" = { kind = "sandbag" }
+cells."5,10" = { kind = "wall", material = "brick" }
+cells."10,10" = { kind = "wall", material = "iron" }
+cells."12,10" = { kind = "wall", material = "iron" }
+cells."17,10" = { kind = "wall", material = "brick" }
+cells."2,11" = { kind = "barrel" }
+cells."5,11" = { kind = "wall", material = "brick" }
+cells."6,11" = { kind = "wall", material = "brick" }
+cells."9,11" = { kind = "wall", material = "glass" }
+cells."10,11" = { kind = "wall", material = "glass" }
+cells."12,11" = { kind = "wall", material = "glass" }
+cells."13,11" = { kind = "wall", material = "glass" }
+cells."16,11" = { kind = "wall", material = "brick" }
+cells."17,11" = { kind = "wall", material = "brick" }
+cells."20,11" = { kind = "barrel" }
+cells."5,12" = { kind = "wall", material = "brick" }
+cells."6,12" = { kind = "wall", material = "brick" }
+cells."16,12" = { kind = "wall", material = "brick" }
+cells."17,12" = { kind = "wall", material = "brick" }
+cells."6,13" = { kind = "pickup", pickup = "minigun" }
+cells."16,13" = { kind = "pickup", pickup = "plasma" }

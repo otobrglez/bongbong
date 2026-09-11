@@ -1,0 +1,112 @@
+# maps/phone/ - battlefield maps sized for a phone screen
+# (docs/fullscreen-resolution-research.md, "map sizes"). 24x14 cells =
+# 768x448 world px; the game has no map size field yet, so play it with
+# `cargo run -- --map maps/phone/bunker.toml --resolution 768x448`.
+# Hand-authored: re-saving from the map editor would drop these comments.
+#
+# bunker: a dense Protect map on the waves plan. The frog sits in a brick
+# bunker on the left with one iron door cell; the enemy side mirrors it
+# with barrels inside. Waves roll in through the right edge and the top
+# and bottom gates at col 9.
+
+version = 1
+mission.kind = "protect"
+spawn.kind = "waves"
+spawn.waves = 4
+spawn.size = 2
+spawn.growth = 1
+
+cells."9,0" = { kind = "gate" }
+cells."2,1" = { kind = "wall", material = "brick" }
+cells."3,1" = { kind = "wall", material = "brick" }
+cells."4,1" = { kind = "wall", material = "brick" }
+cells."5,1" = { kind = "wall", material = "brick" }
+cells."6,1" = { kind = "wall", material = "brick" }
+cells."7,1" = { kind = "wall", material = "brick" }
+cells."12,1" = { kind = "wall", material = "brick" }
+cells."13,1" = { kind = "wall", material = "brick" }
+cells."18,1" = { kind = "wall", material = "brick" }
+cells."19,1" = { kind = "wall", material = "brick" }
+cells."20,1" = { kind = "wall", material = "brick" }
+cells."21,1" = { kind = "wall", material = "brick" }
+cells."22,1" = { kind = "wall", material = "brick" }
+cells."2,2" = { kind = "wall", material = "brick" }
+cells."7,2" = { kind = "wall", material = "brick" }
+cells."12,2" = { kind = "wall", material = "brick" }
+cells."13,2" = { kind = "wall", material = "brick" }
+cells."18,2" = { kind = "wall", material = "brick" }
+cells."22,2" = { kind = "wall", material = "brick" }
+cells."2,3" = { kind = "wall", material = "brick" }
+cells."4,3" = { kind = "frog" }
+cells."7,3" = { kind = "wall", material = "iron" }
+cells."12,3" = { kind = "barrel" }
+cells."13,3" = { kind = "barrel" }
+cells."18,3" = { kind = "wall", material = "brick" }
+cells."20,3" = { kind = "barrel" }
+cells."22,3" = { kind = "wall", material = "brick" }
+cells."2,4" = { kind = "wall", material = "brick" }
+cells."7,4" = { kind = "wall", material = "brick" }
+cells."18,4" = { kind = "wall", material = "brick" }
+cells."22,4" = { kind = "wall", material = "brick" }
+cells."2,5" = { kind = "wall", material = "brick" }
+cells."3,5" = { kind = "wall", material = "brick" }
+cells."5,5" = { kind = "wall", material = "brick" }
+cells."6,5" = { kind = "wall", material = "brick" }
+cells."7,5" = { kind = "wall", material = "brick" }
+cells."11,5" = { kind = "sandbag" }
+cells."12,5" = { kind = "sandbag" }
+cells."13,5" = { kind = "sandbag" }
+cells."14,5" = { kind = "sandbag" }
+cells."18,5" = { kind = "wall", material = "brick" }
+cells."19,5" = { kind = "wall", material = "brick" }
+cells."21,5" = { kind = "wall", material = "brick" }
+cells."22,5" = { kind = "wall", material = "brick" }
+cells."4,7" = { kind = "start" }
+cells."12,7" = { kind = "wall", material = "iron" }
+cells."13,7" = { kind = "wall", material = "iron" }
+cells."24,7" = { kind = "gate" }
+cells."2,9" = { kind = "wall", material = "brick" }
+cells."3,9" = { kind = "wall", material = "brick" }
+cells."5,9" = { kind = "wall", material = "brick" }
+cells."6,9" = { kind = "wall", material = "brick" }
+cells."7,9" = { kind = "wall", material = "brick" }
+cells."11,9" = { kind = "sandbag" }
+cells."12,9" = { kind = "sandbag" }
+cells."13,9" = { kind = "sandbag" }
+cells."14,9" = { kind = "sandbag" }
+cells."18,9" = { kind = "wall", material = "brick" }
+cells."19,9" = { kind = "wall", material = "brick" }
+cells."21,9" = { kind = "wall", material = "brick" }
+cells."22,9" = { kind = "wall", material = "brick" }
+cells."2,10" = { kind = "wall", material = "brick" }
+cells."7,10" = { kind = "wall", material = "brick" }
+cells."18,10" = { kind = "wall", material = "brick" }
+cells."22,10" = { kind = "wall", material = "brick" }
+cells."2,11" = { kind = "wall", material = "brick" }
+cells."4,11" = { kind = "pickup", pickup = "health" }
+cells."7,11" = { kind = "wall", material = "iron" }
+cells."12,11" = { kind = "barrel" }
+cells."13,11" = { kind = "barrel" }
+cells."18,11" = { kind = "wall", material = "brick" }
+cells."20,11" = { kind = "barrel" }
+cells."22,11" = { kind = "wall", material = "brick" }
+cells."2,12" = { kind = "wall", material = "brick" }
+cells."7,12" = { kind = "wall", material = "brick" }
+cells."12,12" = { kind = "wall", material = "brick" }
+cells."13,12" = { kind = "wall", material = "brick" }
+cells."18,12" = { kind = "wall", material = "brick" }
+cells."22,12" = { kind = "wall", material = "brick" }
+cells."2,13" = { kind = "wall", material = "brick" }
+cells."3,13" = { kind = "wall", material = "brick" }
+cells."4,13" = { kind = "wall", material = "brick" }
+cells."5,13" = { kind = "wall", material = "brick" }
+cells."6,13" = { kind = "wall", material = "brick" }
+cells."7,13" = { kind = "wall", material = "brick" }
+cells."12,13" = { kind = "wall", material = "brick" }
+cells."13,13" = { kind = "wall", material = "brick" }
+cells."18,13" = { kind = "wall", material = "brick" }
+cells."19,13" = { kind = "wall", material = "brick" }
+cells."20,13" = { kind = "wall", material = "brick" }
+cells."21,13" = { kind = "wall", material = "brick" }
+cells."22,13" = { kind = "wall", material = "brick" }
+cells."9,14" = { kind = "gate" }
