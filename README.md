@@ -16,8 +16,8 @@ cargo watch -x "run -- -e 12 --map=maps/default.toml"
 # `player_tank` tuning knob, or a random roll decides it)
 cargo run -- --tank titan
 
-# Map editor
-cargo run --features map-editor -- --editor --map=maps/default.toml
+# Start in the map builder (BUILD/PLAY in the bar switch modes in any run)
+cargo run -- --editor --map=maps/default.toml
 
 # Preview web
 just build-web-dev && just preview-web

@@ -94,7 +94,7 @@ fn apply_recoil(physics: &mut Physics, tank: &Tank, velocity: Vector2, speed: f3
 fn fire_shell(physics: &mut Physics, f: &mut Frame, tank: &Tank, owner: Owner, aim_offset: f32, lateral_offset: f32) {
     let mut shell = Shell::spawn(tank, owner, aim_offset, lateral_offset);
     shell.shadow_offset = f.rng.random_range(tuning().shell_shadow_offset_min..tuning().shell_shadow_offset_max);
-    f.muzzle_flashes.push(Shockwave { center: shell.position, time: 0.0 });
+    f.muzzle_flashes.push(Shockwave::new(shell.position));
     apply_recoil(physics, tank, shell.velocity, tuning().shell_recoil_speed, tuning().shell_recoil_max_speed);
     f.pending_shells.push(shell);
 }
@@ -103,7 +103,7 @@ fn fire_shell(physics: &mut Physics, f: &mut Frame, tank: &Tank, owner: Owner, a
 fn fire_plasma(physics: &mut Physics, f: &mut Frame, tank: &Tank, owner: Owner, aim_offset: f32, lateral_offset: f32) {
     let mut plasma = Plasma::spawn(tank, owner, tank.plasma_variant, aim_offset, lateral_offset);
     plasma.shadow_offset = f.rng.random_range(tuning().plasma_shadow_offset_min..tuning().plasma_shadow_offset_max);
-    f.muzzle_flashes.push(Shockwave { center: plasma.position, time: 0.0 });
+    f.muzzle_flashes.push(Shockwave::new(plasma.position));
     apply_recoil(physics, tank, plasma.velocity, tuning().plasma_recoil_speed, tuning().plasma_recoil_max_speed);
     f.pending_plasmas.push(plasma);
 }
@@ -196,14 +196,14 @@ pub(super) fn dispatch_fire(physics: &mut Physics, f: &mut Frame, tank: &mut Tan
             tank.laser_charges -= 1;
             tank.fire_cooldown = tuning().player_fire_interval;
             f.pending_lasers.push(laser_shot(tank, owner, aim_offset, tank.laser_variant));
-            f.events.push(Event::Fired { slot: tank.owner_slot, weapon: ActiveWeapon::Laser.name() });
+            f.events.push(Event::Fired { slot: tank.owner_slot(), weapon: ActiveWeapon::Laser.name() });
         }
         ActiveWeapon::Minigun => {
             if tank.minigun_ammo > 0 {
-                f.events.push(Event::Fired { slot: tank.owner_slot, weapon: ActiveWeapon::Minigun.name() });
+                f.events.push(Event::Fired { slot: tank.owner_slot(), weapon: ActiveWeapon::Minigun.name() });
                 tank.minigun_ammo -= 1;
                 let muzzle = fire_bullet(physics, f, tank, owner, aim_offset);
-                f.muzzle_flashes.push(Shockwave { center: muzzle, time: 0.0 });
+                f.muzzle_flashes.push(Shockwave::new(muzzle));
                 if tuning().minigun_burst_size > 1 {
                     tank.minigun_burst = Some(MinigunBurst {
                         bullets_remaining: tuning().minigun_burst_size - 1,
@@ -216,7 +216,7 @@ pub(super) fn dispatch_fire(physics: &mut Physics, f: &mut Frame, tank: &mut Tan
         }
         ActiveWeapon::Plasma => {
             if tank.plasma_ammo >= ammo_cost {
-                f.events.push(Event::Fired { slot: tank.owner_slot, weapon: ActiveWeapon::Plasma.name() });
+                f.events.push(Event::Fired { slot: tank.owner_slot(), weapon: ActiveWeapon::Plasma.name() });
                 tank.plasma_ammo -= ammo_cost;
                 tank.fire_cooldown = tuning().player_fire_interval;
                 fire_plasma(physics, f, tank, owner, aim_offset, -lateral);
@@ -231,7 +231,7 @@ pub(super) fn dispatch_fire(physics: &mut Physics, f: &mut Frame, tank: &mut Tan
         }
         ActiveWeapon::Shell => {
             if tank.shells_ammo >= ammo_cost {
-                f.events.push(Event::Fired { slot: tank.owner_slot, weapon: ActiveWeapon::Shell.name() });
+                f.events.push(Event::Fired { slot: tank.owner_slot(), weapon: ActiveWeapon::Shell.name() });
                 tank.shells_ammo -= ammo_cost;
                 tank.fire_cooldown = tuning().player_fire_interval;
                 fire_shell(physics, f, tank, owner, aim_offset, -lateral);
@@ -350,7 +350,7 @@ macro_rules! deflect_impl {
 
 fn side_damage(owner: Owner, shooter_row: i32) -> (f32, f32) {
     let (min, max) = match owner {
-        Owner::Player => (tuning().player_damage_min, tuning().player_damage_max),
+        Owner::Player(_) => (tuning().player_damage_min, tuning().player_damage_max),
         Owner::Enemy(_) => (tuning().enemy_damage_min, tuning().enemy_damage_max),
     };
     let factor = tuning().tank_damage_factor[shooter_row as usize];

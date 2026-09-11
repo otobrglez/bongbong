@@ -25,8 +25,8 @@ use super::with_tank;
 /// (see `Game::apply_hit`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ShellTarget {
-    PlayerTank,
-    EnemyTank(Entity),
+    /// Any tank, a player's or an enemy's; `Tank::owner` says whose.
+    Tank(Entity),
     Frog(Entity),
     Obstacle(Entity),
     Wall,
@@ -52,6 +52,10 @@ pub(crate) struct Terrain {
     obstacles: Vec<TerrainBox>,
     frogs: Vec<(Entity, Position)>,
     walls: [(Position, Position); 4],
+    /// Centres of the map's tall-grass cells (`grass.rs`). Not obstacles:
+    /// they block nothing and are not in the nav grid - they only answer
+    /// `conceals`.
+    grass: Vec<Position>,
 }
 
 fn frog_half() -> Position {
@@ -61,11 +65,14 @@ fn frog_half() -> Position {
 impl Terrain {
     /// Snapshot the world's static terrain. Tiles already flagged
     /// `destroyed` (removed at the end of this frame) are left out.
-    pub fn build(world: &hecs::World, width: f32, height: f32) -> Self {
+    pub fn build(world: &hecs::World, width: f32, height: f32, grass: &[Position]) -> Self {
+        // Trees are left out: they do not seam-close, here or in physics
+        // (`battlefield::tile_half_extent`), so they must not appear as a
+        // neighbour that closes somebody else's seam either.
         let cells: HashSet<(i32, i32)> = world
             .query::<&Obstacle>()
             .iter()
-            .filter(|o| !o.destroyed)
+            .filter(|o| !o.destroyed && !o.material.is_tree())
             .map(|o| battlefield::pos_to_cell(o.position))
             .collect();
         let obstacles = world
@@ -77,7 +84,7 @@ impl Terrain {
                 TerrainBox {
                     entity,
                     center: o.position,
-                    half: battlefield::tile_hull_half_extent(&cells, gx, gy, o.hull_size() * 0.5),
+                    half: battlefield::tile_half_extent(o.material, &cells, gx, gy, o.hull_size() * 0.5),
                     material: o.material,
                     burning: o.burning,
                 }
@@ -92,7 +99,22 @@ impl Terrain {
             obstacles,
             frogs,
             walls: battlefield::wall_rects(width, height),
+            grass: grass.to_vec(),
         }
+    }
+
+    /// Is `p` standing in tall grass?
+    ///
+    /// A point query against the grass *cells*, not against the drawn
+    /// tufts: cover is a property of the ground a tank is on, and testing
+    /// the sprites would make being hidden depend on which way the wind
+    /// happened to be blowing. Deliberately not part of `line_of_sight` -
+    /// grass hides what is *in* it, it does not block sight *through* it.
+    /// A field that blocked sight would cut the map in half for the AI,
+    /// which is exactly what the probe's `never-arrived` detector exists to
+    /// catch.
+    pub fn conceals(&self, p: Position) -> bool {
+        crate::grass::conceals(&self.grass, p)
     }
 
     /// The nearest obstacle tile a shot fired from `from` along `dir` (a
@@ -166,23 +188,25 @@ impl Terrain {
     }
 
     /// The first thing the segment `p0..p1`, inflated by `half_extent` per
-    /// side, hits. Every candidate box - the player's hull and turret, each
-    /// enemy's hull and turret, the frog, every obstacle tile, the four
-    /// walls - is scored by its entry time and the nearest wins, so a long
-    /// segment can never skip what it would really have struck first.
-    /// Exact ties go player > enemies > frog > obstacles > walls. The
-    /// shooter's own boxes are skipped. Returns the target plus `t` in
-    /// `0..=1` along `p0..p1` (so a beam can be clipped to where it hit).
+    /// side, hits. Every candidate box - each player's hull and turret,
+    /// each enemy's hull and turret, the frog, every obstacle tile, the
+    /// four walls - is scored by its entry time and the nearest wins, so a
+    /// long segment can never skip what it would really have struck first.
+    /// Exact ties go players > enemies > frog > obstacles > walls. The
+    /// shooter's own boxes are skipped. `players` is `Game::players` - the
+    /// player entities in index order, `None` where there is no such
+    /// player. Returns the target plus `t` in `0..=1` along `p0..p1` (so a
+    /// beam can be clipped to where it hit).
     pub fn sweep(
         &self,
         world: &hecs::World,
-        player: Entity,
+        players: [Option<Entity>; 2],
         shooter: Owner,
         p0: Position,
         p1: Position,
         half_extent: f32,
     ) -> Option<(ShellTarget, f32)> {
-        self.sweep_ignoring(world, player, shooter, p0, p1, half_extent, &[])
+        self.sweep_ignoring(world, players, shooter, p0, p1, half_extent, &[])
     }
 
     /// `sweep` with the obstacle tiles in `ignore` left out - the ones a
@@ -192,7 +216,7 @@ impl Terrain {
     pub fn sweep_ignoring(
         &self,
         world: &hecs::World,
-        player: Entity,
+        players: [Option<Entity>; 2],
         shooter: Owner,
         p0: Position,
         p1: Position,
@@ -202,22 +226,32 @@ impl Terrain {
         let pad = Position::new(half_extent, half_extent);
         let mut best: Option<(f32, u8, ShellTarget)> = None;
 
-        let (player_owner, hull, turret) = with_tank(world, player, |t| {
-            (t.owner(), t.hull_bbox_world(), t.turret_bbox_world())
-        });
-        if player_owner != shooter {
-            consider_hit(&mut best, segment_hits_aabb(p0, p1, hull.0, hull.1 + pad), 0, ShellTarget::PlayerTank);
-            consider_hit(&mut best, segment_hits_aabb(p0, p1, turret.0, turret.1 + pad), 0, ShellTarget::PlayerTank);
+        // Wrecks are see-through to gunfire. A hulk kept its full hull and
+        // turret boxes here while `combat::apply_hit` threw the damage
+        // away, so it was a free bullet sponge: a shot into it was
+        // consumed for nothing, and the AI could not see the cover it was
+        // getting either (`Terrain::line_of_sight` ignores tanks entirely,
+        // and `ai::Brain::friendly_blocks_shot` skips wrecks). Blocking
+        // shots that nobody can reason about is the worst of both, so they
+        // pass through.
+        for player in players.into_iter().flatten() {
+            let (owner, wrecked, hull, turret) = with_tank(world, player, |t| {
+                (t.owner(), t.is_wreck(), t.hull_bbox_world(), t.turret_bbox_world())
+            });
+            if owner != shooter && !wrecked {
+                consider_hit(&mut best, segment_hits_aabb(p0, p1, hull.0, hull.1 + pad), 0, ShellTarget::Tank(player));
+                consider_hit(&mut best, segment_hits_aabb(p0, p1, turret.0, turret.1 + pad), 0, ShellTarget::Tank(player));
+            }
         }
 
         for (entity, tank) in world.query::<(Entity, &Tank)>().with::<&Ai>().iter() {
-            if tank.owner() == shooter {
+            if tank.owner() == shooter || tank.is_wreck() {
                 continue;
             }
             let (hc, hh) = tank.hull_bbox_world();
-            consider_hit(&mut best, segment_hits_aabb(p0, p1, hc, hh + pad), 1, ShellTarget::EnemyTank(entity));
+            consider_hit(&mut best, segment_hits_aabb(p0, p1, hc, hh + pad), 1, ShellTarget::Tank(entity));
             let (tc, th) = tank.turret_bbox_world();
-            consider_hit(&mut best, segment_hits_aabb(p0, p1, tc, th + pad), 1, ShellTarget::EnemyTank(entity));
+            consider_hit(&mut best, segment_hits_aabb(p0, p1, tc, th + pad), 1, ShellTarget::Tank(entity));
         }
 
         for &(entity, pos) in &self.frogs {
@@ -367,8 +401,8 @@ mod shell_sweep_tests {
     fn consider_hit_breaks_an_exact_tie_by_rank() {
         let mut best = None;
         consider_hit(&mut best, Some(0.5), 3, ShellTarget::Obstacle(Entity::DANGLING));
-        consider_hit(&mut best, Some(0.5), 1, ShellTarget::EnemyTank(Entity::DANGLING));
-        assert!(matches!(best, Some((_, 1, ShellTarget::EnemyTank(_)))));
+        consider_hit(&mut best, Some(0.5), 1, ShellTarget::Tank(Entity::DANGLING));
+        assert!(matches!(best, Some((_, 1, ShellTarget::Tank(_)))));
     }
 
     #[test]

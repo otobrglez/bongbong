@@ -9,6 +9,7 @@ use rapier2d::prelude::RigidBodyHandle;
 
 use crate::ai::Ai;
 use crate::blast::{BlastFx, Scorch};
+use crate::decal::Decal;
 use crate::frog::Frog;
 use crate::obstacle::{Material, Obstacle};
 use crate::shockwave::Shockwave;
@@ -16,7 +17,22 @@ use crate::tank::Tank;
 use crate::{OBSTACLE_GRID_SIZE, Position};
 
 use super::combat::{explosion_hit, BlastParams};
-use super::{Event, Frame, Game};
+use super::{Event, Frame, Game, SHOCK_BARREL, SHOCK_FROG};
+
+/// Everything `obstacle_died` needs to know about a tile that just died.
+/// Bundled rather than passed loose because each death path has the whole
+/// `&mut Obstacle` in hand and can fill it in one go, and because a
+/// death now carries more than a position: `charred` picks which rubble
+/// a burnt-out plank leaves.
+pub(super) struct DeadTile {
+    pub material: Material,
+    pub position: Position,
+    /// Another blast set this one off, rather than a shot or a ram.
+    pub chained: bool,
+    /// Wood only: it burnt out rather than snapping, so it leaves the
+    /// charred cell instead of the destroyed one.
+    pub charred: bool,
+}
 
 /// What is damaging an obstacle - the fence and barrel rules differ by it.
 /// `Blast` carries the linear falloff at the victim (1 at the centre, 0 at
@@ -39,7 +55,9 @@ impl Game {
     /// times at its edge, so a cluster cascades outward rather than going
     /// off all at once - while
     /// a direct hit or a ram pops it right away through the plain health
-    /// path; everything else is `Obstacle::damage`. Returns `true` the
+    /// path; a tree pushed over by a tank dies outright instead of taking
+    /// its flammable fork, since a hull is not something that sets a tree
+    /// alight; everything else is `Obstacle::damage`. Returns `true` the
     /// frame the obstacle dies.
     pub(super) fn damage_obstacle(&mut self, f: &mut Frame, entity: Entity, amount: f32, cause: DamageCause) -> bool {
         let (material, pos, died) = {
@@ -68,20 +86,39 @@ impl Game {
                     }
                     _ => o.damage(amount),
                 },
+                // A tree shouldered over by a tank goes over, it does not
+                // catch fire: fire comes from what is burning at the muzzle
+                // end, and a hull pushing a trunk has none. Ignition stays
+                // on the shot and blast paths.
+                m if m.is_tree() && cause == DamageCause::Ram => {
+                    o.health = 0.0;
+                    o.destroyed = true;
+                    true
+                }
                 _ => o.damage(amount),
             };
             (o.material, o.position, died)
         };
         if died {
-            self.obstacle_died(f, material, pos, false);
+            self.obstacle_died(f, DeadTile { material, position: pos, chained: false, charred: false });
         }
         died
     }
 
-    /// Record an obstacle's death; an explosive one queues its blast for
-    /// `explosions` to resolve this frame.
-    fn obstacle_died(&mut self, f: &mut Frame, material: Material, pos: Position, chained: bool) {
+    /// Record an obstacle's death and leave its rubble behind; an
+    /// explosive one queues its blast for `explosions` to resolve this
+    /// frame. Every tile death in the game funnels through here - a shot,
+    /// a ram, a blast, a lit fuse and a burnt-out plank all arrive at this
+    /// one place - so it is the only spot that has to know what a dead
+    /// tile leaves on the ground.
+    fn obstacle_died(&mut self, f: &mut Frame, tile: DeadTile) {
+        let DeadTile { material, position: pos, chained, charred } = tile;
         f.events.push(Event::ObstacleDestroyed { material, x: pos.x, y: pos.y });
+        // Materials with no terminal sheet cell (Iron, and the props)
+        // leave nothing here; props get purpose-drawn wreckage instead.
+        if let Some(decal) = Decal::new(material, pos, charred) {
+            f.decals.push(decal);
+        }
         if material.is_explosive() {
             f.events.push(Event::Blast { x: pos.x, y: pos.y, chained });
             f.pending_blasts.push(pos);
@@ -98,14 +135,15 @@ impl Game {
     pub(super) fn apply_blast(&mut self, f: &mut Frame, center: Position, live: bool) {
         if live {
             let params = BlastParams::barrel();
-            let player = self.player.expect("player entity spawned in init");
-            {
+            // Players first, in index order, then the enemies - the same
+            // draw order as a wreck's blast (`Game::apply_explosion`).
+            for player in self.players().into_iter().flatten() {
                 let mut q = self.world.query_one::<&mut Tank>(player);
                 let tank = q.get().expect("player entity always has a Tank");
-                explosion_hit(tank, center, true, false, &mut self.physics, &mut f.rng, &mut f.kills, &params);
+                explosion_hit(tank, center, true, &mut self.physics, &mut f.rng, &mut f.kills, &params);
             }
             for tank in self.world.query::<&mut Tank>().with::<&Ai>().iter() {
-                explosion_hit(tank, center, true, true, &mut self.physics, &mut f.rng, &mut f.kills, &params);
+                explosion_hit(tank, center, true, &mut self.physics, &mut f.rng, &mut f.kills, &params);
             }
             let mut dead_frogs = Vec::new();
             for frog in self.world.query::<&mut Frog>().iter() {
@@ -122,7 +160,7 @@ impl Game {
                 }
             }
             for pos in dead_frogs {
-                f.shock = Some(Shockwave { center: pos, time: 0.0 });
+                f.shocks.push(Shockwave::scaled(pos, SHOCK_FROG));
             }
             // Collect first: `damage_obstacle` needs the world free.
             let hits: Vec<(Entity, Material, f32)> = self
@@ -141,15 +179,39 @@ impl Game {
                 self.damage_obstacle(f, entity, amount, DamageCause::Blast(falloff));
             }
         }
-        f.shock = Some(Shockwave { center, time: 0.0 });
-        f.impact_flashes.push(Shockwave { center, time: 0.0 });
+        f.shocks.push(Shockwave::scaled(center, SHOCK_BARREL));
+        f.impact_flashes.push(Shockwave::new(center));
         f.blast_fx.push(BlastFx::new(center));
+        self.flash_screen();
         f.scorches.push(Scorch::new(center));
     }
 
     /// Count every lit fuse down; a barrel whose fuse runs out dies and
     /// queues its own blast (`chained`), which `explosions` resolves this
     /// same frame so the cascade keeps going.
+    /// Advance every burning wood tile's fire and report the ones that
+    /// finish charring. Wood is the only material with a death that does
+    /// not go through `damage_obstacle`: `Obstacle::tick_burn` sets
+    /// `destroyed` itself once `wood_burn_seconds` are up. Routing that
+    /// through `obstacle_died` is what makes a burnt-out tile announce
+    /// itself like every other tile death - without it `cleanup_done`
+    /// simply despawned it and nothing downstream (the event log, the
+    /// dev server, debris) ever heard. Collects first, exactly like
+    /// `tick_fuses`, because `obstacle_died` needs the world free.
+    pub(super) fn tick_burns(&mut self, f: &mut Frame) {
+        let mut charred = Vec::new();
+        for o in self.world.query::<&mut Obstacle>().iter() {
+            let was_destroyed = o.destroyed;
+            o.tick_burn(f.dt);
+            if o.destroyed && !was_destroyed {
+                charred.push((o.material, o.position));
+            }
+        }
+        for (material, position) in charred {
+            self.obstacle_died(f, DeadTile { material, position, chained: false, charred: true });
+        }
+    }
+
     pub(super) fn tick_fuses(&mut self, f: &mut Frame) {
         let mut popped = Vec::new();
         for o in self.world.query::<&mut Obstacle>().iter() {
@@ -160,13 +222,14 @@ impl Game {
                 popped.push((o.material, o.position));
             }
         }
-        for (material, pos) in popped {
-            self.obstacle_died(f, material, pos, true);
+        for (material, position) in popped {
+            self.obstacle_died(f, DeadTile { material, position, chained: true, charred: false });
         }
     }
 
-    /// Tanks pushing into props. A live tank with a body and a commanded
-    /// move counts as a pusher; a prop it is in narrow-phase contact with
+    /// Tanks pushing into props and trees. A live tank with a body and a
+    /// commanded move counts as a pusher; a tile it is in narrow-phase
+    /// contact with
     /// (`Physics::touching`, the same contact state the ram check between
     /// tanks reads) accumulates `ram_timer` and collapses at its
     /// `Material::ram_seconds` - a sandbag slows the tank for a moment,
@@ -187,7 +250,12 @@ impl Game {
         let mut collapsed = Vec::new();
         let mut barrel_hits = Vec::new();
         for (entity, o) in self.world.query::<(Entity, &mut Obstacle)>().iter() {
-            if !o.material.is_prop() || o.destroyed || o.fuse.is_some() {
+            if o.destroyed || o.fuse.is_some() {
+                continue;
+            }
+            // Only what ramming can actually do something to: a prop that
+            // collapses, a tree that goes over, or a barrel that pops.
+            if o.material.ram_seconds().is_none() && !o.material.is_explosive() {
                 continue;
             }
             let pushed = pushers

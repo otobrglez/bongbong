@@ -1,22 +1,18 @@
 # Battlefield / map builder — design doc
 
-Status: implemented, except the in-game hamburger entry point (see
-"Entering the editor" below). `map.rs` (format), `battlefield::spawn_from_map`,
+Status: implemented, except the in-game entry point (see "Entering the
+editor" below) - that, and the editor's fusion into the game as a Build
+mode, is specified in docs/game-editor-fusion.md. `map.rs` (format), `battlefield::spawn_from_map`,
 the `simulation::Game::init`/`update` wiring (walls/road/frog/pickup slots),
-`editor.rs` (the `--editor` standalone tool, palette/toolbar/save/load), the
-`map-editor` Cargo feature, and `static/ui/eraser.png` are all in place and
-building clean (`cargo check --features map-editor`, `cargo check` without
-it). The hamburger toggle for entering the editor *from a running round* is
-not wired up: `game.rs::render` currently draws the entire frame into an
-offscreen `RenderTexture2D` with no call back to the real window surface
-visible in the working tree at the time this was built (that pipeline was
-mid-edit by unrelated in-progress work), so there was no safe place to hang
-a second on-screen draw call without either fighting that WIP or risking a
-double-present/flicker bug. Once that rendering pipeline settles, wiring the
-hamburger in is a small addition (an overlay hook or icon draw call inside
-whatever `game.rs::render`'s final on-screen pass turns out to be) - the
-`--editor` standalone path already proves out the rest (`MapEditor`, its
-input handling, panel chrome) independent of that.
+`src/editor/` (`MapEditor`) and `static/ui/eraser.png` are all in place.
+The editor is no longer a standalone `--editor` driver behind a Cargo
+feature: it is the game's Build mode (`src/mode.rs`, `src/editor/`),
+compiled into every build, entered from the play bar's `BUILD` button and
+left through `PLAY`, per docs/game-editor-fusion.md. The sections below
+that describe the floating bottom palette, the hamburger, the
+New/Save/Load/Close toolbar and the `map-editor` feature gate are the
+original design and are superseded by that PRD; the data model, the cell
+table, the file format and the game wiring still hold.
 
 **Later change (past the original scope below): maps are no longer
 optional.** The procedural "HELLO"-fortress player enclosure and the random
@@ -51,6 +47,16 @@ expanding-ring search (by grid cell, only `Wall` cells block it) that snaps
 to the nearest non-wall cell rather than always the literal center point,
 so a map with a wall placed at/near center doesn't spawn the player wedged
 inside it.
+**Two-player rounds (docs/two-players.md)** add a second start,
+`CellObject::Start2` (`kind = "start2"`, editor tool `start2`, label "p2
+start", the same tank icon over a blue ring), a singleton independent of
+`Start`, plus a `tank2 = "..."` key for player 2's chassis (the MAP panel's
+`TANK 2` row, `--tank2` on the CLI). Both are read only in a two-player
+round. A map without a `start2` places player 2 at the nearest open nav
+cell to player 1 that keeps two tank widths from it; a `start2` painted
+inside that clearance is ignored the same way (the linter's
+`players-too-close` warning says so). A map with no `start` at all is a
+`no-start` linter warning.
 `battlefield::spawn_from_map`'s own per-cell match still has to handle the
 `CellObject::Start` variant (the match is exhaustive) but does nothing with
 it there - it exists purely as saved position data, not something that
@@ -136,6 +142,11 @@ snaps every obstacle to the grid today.
 
 ## Placeable objects & toolbar
 
+*Status: the floating bottom-centre palette described here is gone. The
+same tools now sit in the 32 px HUD bar as five category dropdowns
+(WALL / PROP / GROUND / ACTOR / PICKUP) plus an eraser button - see
+docs/game-editor-fusion.md section 7. The object table is still current.*
+
 Bottom-center palette (horizontally centered as one panel, anchored a
 small fixed margin above the bottom edge — not full-width), one icon per
 object, left to right:
@@ -151,7 +162,8 @@ object, left to right:
 | Fence | a `Fence` cell (`kind = "fence"`) | " - two styles; the game draws it along whichever axis has fence neighbours |
 | Road | `ground::GroundGrid` cell → `Road` | see "Road & autotiling" below |
 | Frog | single `Frog` placement | see "Frog: singleton enforcement" below |
-| Tank (start point) | single `Start` placement | player spawn position - see "Later change #2" above; singleton, same move-on-click behavior as Frog |
+| Tank (start point) | single `Start` placement | player 1's spawn position - see "Later change #2" above; singleton, same move-on-click behavior as Frog |
+| Tank (player 2 start) | single `Start2` placement | player 2's spawn in a two-player round (docs/two-players.md); singleton, independent of `Start`; the same tank icon over player 2's blue ring |
 | Enemy frog | single `EnemyFrog` placement (`kind = "enemy_frog"`) | the Hunt mission's target (docs/maps-to-levels.md); singleton, same move-on-click behavior as Frog; drawn as the frog idle sprite over a red ground ring, the same marker the game draws under it. Ignored by missions without an enemy frog |
 | Gate | a `Gate` cell (`kind = "gate"`) | a wave roll-in gate; any number. Meant for nav-grid edge cells (col 0, last col, row 0, last row of the `PATHFIND_CELL_SIZE` grid), where it's drawn as an orange chevron pointing inward; anywhere else it's a plain orange square and the linter's `gate-not-on-edge` flags it. A map with any gate cells uses only those; one with none has its gates scanned from the wall layout each wave |
 | Health pickup | a `Pickup` spawn slot, kind `Health` | see "Pickups: fixed spawn slots" below |
@@ -199,6 +211,10 @@ popups) for visual consistency — one small `draw_panel(rect, ...)` helper
 in `editor.rs` used by every panel in the editor rather than one-off
 drawing code per toolbar.
 
+*Status: `draw_panel` survives and now draws the category dropdowns, the
+MAP settings panel and the dev Save prompt (docs/game-editor-fusion.md
+section 7); the top-right toolbar it was written for is gone.*
+
 ### Eraser icon
 
 `bongbong-assets/craftpix-net-741764-free-skill-32x32-icons-for-cyberpunk-game/1 Icons/4/Skillicon4_06.png`
@@ -221,6 +237,10 @@ Loaded once alongside the other textures, only when the editor is
 compiled/entered (see "Dev-only gating" below) so the normal game binary
 doesn't pay for a texture it never draws.
 
+*Status: the builder now ships in every build, so `eraser.png` loads
+unconditionally with the rest of `static/` (docs/game-editor-fusion.md
+section 5).*
+
 ### Road & autotiling
 
 `ground::GroundGrid` already computes its Wang-autotile road/grass
@@ -236,7 +256,9 @@ random layout.
 
 ### Frog: singleton enforcement
 
-Only one frog may exist on a map, since killing it ends the round. The
+Only one frog may exist on a map, since killing it ends the round (the
+same rule serves the enemy frog and the two player starts - four
+singletons, each moved independently of the others). The
 Frog tool doesn't refuse a second click — it *moves* the frog: clicking a
 new cell while a frog is already placed clears the old cell and places the
 frog at the new one, so there's always at most one and the user never
@@ -284,6 +306,13 @@ there's no undo to fall back on if a click was a misclick, so the cost of
 a wrong erase is "click the tool again," not data loss).
 
 ## Toolbar: save / load / close
+
+*Status: superseded by docs/game-editor-fusion.md. There is no Load, New
+or Close: the builder edits the map the program started with and `PLAY`
+starts a round on it; the only Save is the dev `SAVE` button in
+`dev-tools` native builds, which still writes `maps/<name>.toml` through
+the filename prompt described here. Player persistence is that PRD's
+section 12.*
 
 Separate row from the object palette — top-right corner of the screen, three
 buttons:
@@ -462,6 +491,12 @@ random ones do — no special-casing needed there.
 
 ### Entering the editor (`--editor [path]`, or in-game via a hamburger button)
 
+*Status: superseded by docs/game-editor-fusion.md sections 5 and 6. The
+in-game entry is the play bar's `BUILD` button (or `Tab`) through the
+"Leave this round?" dialog, owned by `mode::Session`; `--editor` still
+works and means "start in Build". Nothing is seeded from live entities -
+the builder edits `Game::map`, the authored map.*
+
 Two entry points into the same `MapEditor` driver:
 
 ```rust
@@ -479,6 +514,10 @@ of this doc sketched `--editor [MAP]` as one combined flag with an optional
 positional value; implemented as two plain flags instead, since clap's
 "flag with an optional trailing value" pattern needs more ceremony than
 just reusing `--map`.)
+
+(Superseded by docs/hud-and-builder-layout-design.md, which moves this
+entry point into a right-hand sidebar shared with the HUD and drops the
+hamburger; the paragraph below is the original sketch.)
 
 The second entry point is a small **hamburger icon (☰), top-left corner**,
 drawn over the normal game HUD whenever the game is running with the
@@ -506,6 +545,11 @@ category as `game.rs`, and never needs a physics/AI tick since nothing in
 it moves.
 
 ### Dev-only gating
+
+*Status: superseded. The `map-editor` feature was removed; the builder
+compiles into every build, players included, and only the dev `SAVE`
+button is gated (on `dev-tools`, native) - docs/game-editor-fusion.md
+section 2.*
 
 Ship `--editor` behind a Cargo feature, `map-editor`, off by default:
 

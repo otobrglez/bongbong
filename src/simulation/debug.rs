@@ -16,14 +16,15 @@ use crate::frog::{Frog, Side};
 use crate::obstacle::Obstacle;
 use crate::pickup::{Pickup, PickupKind};
 use crate::plasma::{Plasma, PlasmaState};
+use crate::shell::Owner;
 use crate::shell::{Shell, ShellState};
-use crate::tank::{ActiveWeapon, Tank};
+use crate::tank::{ActiveWeapon, Tank, enemy_health_ring_visibility, player_health_ring_visibility};
 use crate::tuning::{TANK_NAMES, tuning};
 use crate::{DAMAGE_VARIANTS, MAX_DAMAGE, Position, TANK_SHELL_VARIANT_BY_ROW};
 
 use super::engage::{EngageStatus, Rejections};
 use super::{
-    Frame, Game, Outcome, PLAYER_OWNER_SLOT, TANK_SPRITE_ORDER, TANK_VARIANTS, enemy_owner_slot, roll_track_distortion,
+    Frame, Game, Outcome, PLAYER_OWNER_SLOT, TANK_SPRITE_ORDER, TANK_VARIANTS, roll_track_distortion,
     with_frog, with_tank,
 };
 
@@ -78,9 +79,14 @@ pub struct DebugSnapshot {
 
 #[derive(Serialize, Debug)]
 pub struct TankDebug {
-    /// `Tank::owner_slot`: 0 is the player, enemies count from 1.
+    /// `Tank::owner_slot`: the players first (0, and 1 in a two-player
+    /// round), then the enemies.
     pub slot: usize,
+    /// A human player's tank, either of them.
     pub is_player: bool,
+    /// Which human player (0 or 1); absent for an enemy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub player: Option<u8>,
     /// `ai::Role::name` - enemies only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<&'static str>,
@@ -110,6 +116,10 @@ pub struct TankDebug {
     pub weapon: &'static str,
     pub shield: f32,
     pub boost: f32,
+    /// The health ring's opacity factor, 0..=1
+    /// (`tank::player_health_ring_visibility`/`enemy_health_ring_visibility`):
+    /// 0 while rolling in, for a wreck, or under a full shield.
+    pub ring: f32,
     /// Distance to the closest other live enemy; live enemies only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nearest_ally_px: Option<f32>,
@@ -306,13 +316,13 @@ impl Game {
             .query::<(&Tank, &Ai)>()
             .iter()
             .filter(|(t, _)| !t.is_wreck())
-            .map(|(t, _)| (t.owner_slot, t.position))
+            .map(|(t, _)| (t.owner_slot(), t.position))
             .collect();
         let mut tanks: Vec<TankDebug> = self
             .world
-            .query::<(&Tank, Option<&Ai>)>()
+            .query::<(Entity, &Tank, Option<&Ai>)>()
             .iter()
-            .map(|(tank, ai)| {
+            .map(|(entity, tank, ai)| {
                 // A tank still rolling in has no body: its kinematic
                 // velocity stands in and it touches nothing.
                 let vel = tank.body.map(|b| self.physics.velocity(b)).unwrap_or(tank.velocity);
@@ -320,15 +330,16 @@ impl Game {
                     .then(|| {
                         live_enemies
                             .iter()
-                            .filter(|(slot, _)| *slot != tank.owner_slot)
+                            .filter(|(slot, _)| *slot != tank.owner_slot())
                             .map(|(_, p)| p.distance_to(tank.position))
                             .fold(f32::INFINITY, f32::min)
                     })
                     .filter(|d| d.is_finite())
                     .map(r1);
                 TankDebug {
-                    slot: tank.owner_slot,
-                    is_player: tank.owner_slot == PLAYER_OWNER_SLOT,
+                    slot: tank.owner_slot(),
+                    is_player: tank.is_player(),
+                    player: self.player_index(entity),
                     role: ai.map(|a| a.role.name()),
                     entering: tank.body.is_none(),
                     row: tank.row,
@@ -350,6 +361,13 @@ impl Game {
                     weapon: tank.active_weapon().name(),
                     shield: r1(tank.shield_timer),
                     boost: r1(tank.speed_boost_timer),
+                    ring: r1(if tank.body.is_none() {
+                        0.0
+                    } else if tank.is_player() {
+                        player_health_ring_visibility(tank)
+                    } else {
+                        enemy_health_ring_visibility(tank)
+                    }),
                     nearest_ally_px,
                     touching_static: full.then(|| tank.body.is_some_and(|b| self.physics.contact_stats(b).touching_static)),
                     ai: if full { ai.map(Ai::snapshot) } else { None },
@@ -490,7 +508,7 @@ impl Game {
                 let body = tank.body.expect("filtered to tanks with a body");
                 let ai = ai.map(Ai::snapshot);
                 TrackRow {
-                    slot: tank.owner_slot,
+                    slot: tank.owner_slot(),
                     x: r1(tank.position.x),
                     y: r1(tank.position.y),
                     action: ai.and_then(|a| a.last_action),
@@ -509,7 +527,7 @@ impl Game {
         self.world
             .query::<(Entity, &Tank)>()
             .iter()
-            .find(|(_, t)| t.owner_slot == slot)
+            .find(|(_, t)| t.owner_slot() == slot)
             .map(|(e, _)| e)
     }
 
@@ -614,7 +632,7 @@ impl Game {
             tank.shield_timer = 0.0;
             tank.take_damage(MAX_DAMAGE, MAX_DAMAGE);
             tank.mark_hit();
-            f.kills.push((tank.position, slot != PLAYER_OWNER_SLOT, slot));
+            f.kills.push((tank.position, tank.owner()));
         }
     }
 
@@ -628,15 +646,16 @@ impl Game {
         if self.rng.is_none() {
             return Err("spawn_enemy only works between frames".to_string());
         }
-        let max_slot = self.world.query::<&Tank>().iter().map(|t| t.owner_slot).max().unwrap_or(PLAYER_OWNER_SLOT);
+        let max_slot = self.world.query::<&Tank>().iter().map(|t| t.owner_slot()).max().unwrap_or(PLAYER_OWNER_SLOT);
         // Slots are monotonic: never below one on the field, never one a
         // despawned wreck held.
         self.reserve_slots_above(max_slot);
         let slot = self.take_slot();
-        if slot > enemy_owner_slot(30) {
+        let first = self.first_enemy_slot();
+        if slot >= first + 31 {
             return Err("owner slots are full (31 enemies)".to_string());
         }
-        let row = row.unwrap_or(TANK_SPRITE_ORDER[(slot - 1) % TANK_SPRITE_ORDER.len()]);
+        let row = row.unwrap_or(TANK_SPRITE_ORDER[(slot - first) % TANK_SPRITE_ORDER.len()]);
         if !(0..TANK_VARIANTS).contains(&row) {
             return Err(format!("row {row} is outside 0..{TANK_VARIANTS}"));
         }
@@ -649,7 +668,7 @@ impl Game {
             position: pos,
             rotation: 180.0,
             speed_scale: factor,
-            owner_slot: slot,
+            owner: Owner::Enemy(slot),
             ..Tank::default()
         };
         roll_track_distortion(&mut enemy, rng);
@@ -683,18 +702,16 @@ impl Game {
         for fr in self.world.query::<&Frog>().iter() {
             mark(fr.position, if fr.side == Side::Player { 'F' } else { 'G' });
         }
-        let mut tanks: Vec<(usize, Position, bool)> =
-            self.world.query::<&Tank>().iter().map(|t| (t.owner_slot, t.position, t.is_wreck())).collect();
-        tanks.sort_by_key(|t| std::cmp::Reverse(t.0));
-        for (slot, pos, wreck) in tanks {
-            let ch = if wreck {
-                'x'
-            } else if slot == PLAYER_OWNER_SLOT {
-                'P'
-            } else if slot < 10 {
-                char::from(b'0' + slot as u8)
-            } else {
-                'E'
+        let mut tanks: Vec<(Owner, Position, bool)> =
+            self.world.query::<&Tank>().iter().map(|t| (t.owner(), t.position, t.is_wreck())).collect();
+        tanks.sort_by_key(|t| std::cmp::Reverse(t.0.slot()));
+        for (owner, pos, wreck) in tanks {
+            let ch = match owner {
+                _ if wreck => 'x',
+                Owner::Player(0) => 'P',
+                Owner::Player(_) => 'Q',
+                Owner::Enemy(slot) if slot < 10 => char::from(b'0' + slot as u8),
+                Owner::Enemy(_) => 'E',
             };
             mark(pos, ch);
         }
@@ -703,7 +720,7 @@ impl Game {
             out.extend(row);
             out.push('\n');
         }
-        out.push_str(&format!("{cols}x{rows} cells of {cell}px; # blocked . open P player 1-9/E enemy x wreck F frog G enemy frog * pickup\n"));
+        out.push_str(&format!("{cols}x{rows} cells of {cell}px; # blocked . open P player 1 Q player 2 1-9/E enemy x wreck F frog G enemy frog * pickup\n"));
         out
     }
 }

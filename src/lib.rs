@@ -329,6 +329,85 @@ pub const TRACK_TEXTURE_SIZE: f32 = 32.0;
 pub const DEFAULT_SCREEN_WIDTH: i32 = 1280;
 pub const DEFAULT_SCREEN_HEIGHT: i32 = 720;
 
+// The HUD bar above the battlefield (docs/hud-and-builder-layout-design.md,
+// variant A): one obstacle cell tall, so the pickup icons sit in it
+// full-bleed and the window stays 1280 wide. The battlefield keeps its own
+// size - every seeded baseline, lint count and map assumes 1280x720 - and
+// the window grows by this much instead. Layout, not a knob: the dev panel
+// has no business resizing the window.
+pub const HUD_BAR_HEIGHT: i32 = 32;
+
+/// An axis-aligned window rectangle in pixels, the one shape `Layout`
+/// hands around. Not raylib's `Rectangle` so the probe and the tests can
+/// use it without a draw handle in sight.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+impl Rect {
+    pub const fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
+        Rect { x, y, w, h }
+    }
+
+    pub fn contains(&self, p: Vector2) -> bool {
+        p.x >= self.x && p.x < self.x + self.w && p.y >= self.y && p.y < self.y + self.h
+    }
+}
+
+/// Where the battlefield and the HUD panel sit inside the window. The
+/// simulation, the physics, the maps and the probe only ever see the
+/// *field* size with its origin at (0, 0); `main.rs` opens a window of
+/// `window_size` and `game.rs`/`editor.rs` shift their drawing and their
+/// mouse reads by `field.x`/`field.y`. Nothing else cares where the panel
+/// went, which is what makes switching to a sidebar later a re-layout of
+/// `hud.rs` rather than a re-plumb.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Layout {
+    pub field: Rect,
+    pub panel: Rect,
+}
+
+impl Layout {
+    /// The layout for a battlefield of `width` x `height`: the bar on top,
+    /// the field below it, origin `(0, HUD_BAR_HEIGHT)`.
+    pub fn for_field(width: f32, height: f32) -> Self {
+        let bar = HUD_BAR_HEIGHT as f32;
+        Layout {
+            field: Rect::new(0.0, bar, width, height),
+            panel: Rect::new(0.0, 0.0, width, bar),
+        }
+    }
+
+    /// The inverse: the layout a window of this size holds, so a frame
+    /// can read the live window size back off the handle the way it
+    /// always did and still get the same field the round was built on.
+    pub fn for_window(width: f32, height: f32) -> Self {
+        Self::for_field(width, (height - HUD_BAR_HEIGHT as f32).max(0.0))
+    }
+
+    /// The window size that holds this layout, for `init_window`.
+    pub fn window_size(&self) -> (i32, i32) {
+        (self.field.w.max(self.panel.w).round() as i32, (self.field.h + self.panel.h).round() as i32)
+    }
+
+    /// Where the field's (0, 0) lands in the window.
+    pub fn field_origin(&self) -> Vector2 {
+        Vector2::new(self.field.x, self.field.y)
+    }
+
+    /// A window position as a field position - what the simulation and the
+    /// editor's grid want. Outside the field the result is out of range
+    /// rather than clamped, so a click on the bar is not a click on the
+    /// top row of cells.
+    pub fn to_field(&self, window: Vector2) -> Vector2 {
+        Vector2::new(window.x - self.field.x, window.y - self.field.y)
+    }
+}
+
 // Physics world: rapier2d integration (see docs/physics-engine-design.md).
 // The battlefield boundary is 4 static wall colliders whose inner faces sit
 // exactly at the screen edges, matching the old hand-rolled clamp bound;
@@ -433,6 +512,50 @@ pub const SCORCH_VARIANTS: i32 = 3;
 // barrels doesn't accumulate an unbounded decal list.
 pub const SCORCH_MAX: usize = 64;
 
+// Same ring-buffer cap for the rubble a destroyed tile leaves behind
+// (`decal::Decal`). Higher than SCORCH_MAX because every wall death makes
+// one, not just the explosive ones, and a long round can level a fortress.
+pub const DECAL_MAX: usize = 256;
+
+// How many shockwaves can be live at once. This is the shock shader's
+// uniform-array length (static/shockwave.fs and its web port), i.e. layout
+// rather than a feel knob, which is why it lives here and not in tuning.rs.
+// Four is enough for a tank dying inside a barrel cascade; past that the
+// weakest are dropped (`Shockwave::remaining`).
+pub const SHOCK_MAX: usize = 4;
+
+// Rubble rows on walls_sheet.png, after every material's own block so
+// nothing above needs renumbering (docs/WALLS_SPEC.md). One row per kind
+// of leftover, RUBBLE_VARIANTS columns each, coverage ramping from a few
+// scattered chips at column 0 to a dense pile at the last - so a levelled
+// wall gets sparse and heavy patches instead of one repeated texture.
+// `Material::rubble_row` maps a material onto these; with `draw_decal`'s
+// mirror and quarter-turn that is 8 x 8 apparent forms per material.
+pub const RUBBLE_VARIANTS: i32 = 8;
+pub const RUBBLE_ROW_BRICK: i32 = 14;
+pub const RUBBLE_ROW_WOOD: i32 = 15;
+pub const RUBBLE_ROW_WOOD_CHARRED: i32 = 16;
+pub const RUBBLE_ROW_GLASS: i32 = 17;
+// The props leave rubble on the *walls* sheet too, not on their own: the
+// rubble block is one contiguous thing and props_sheet.png has neither the
+// spare columns nor a reason to grow. `decal::draw_decal` therefore always
+// samples `ObstacleTextures::walls`, whatever material died.
+pub const RUBBLE_ROW_SANDBAG: i32 = 18;
+pub const RUBBLE_ROW_BARREL: i32 = 19;
+pub const RUBBLE_ROW_FENCE: i32 = 20;
+// Blown-off tank parts. Not reachable through `Material::rubble_row` -
+// a tank is not an obstacle - so `simulation::Game::wreck_fx` names this
+// row directly.
+pub const RUBBLE_ROW_TANK: i32 = 21;
+
+// Edge-cap overlay rows, one per wall material in `MATERIALS` order
+// (brick, iron, wood, glass), column = the neighbour mask. Drawn *over* a
+// tile, so one row composites with every damage stage and variant that
+// material has - which is why this is an overlay rather than a base-tile
+// plus damage-overlay rewrite of the whole sheet.
+pub const EDGE_CAP_ROW_BASE: i32 = 22;
+pub const EDGE_CAP_COLUMNS: i32 = 16;
+
 // Ground/terrain layer (grass base, road painted under every static
 // obstacle tile and every cell a map explicitly marks as road) - see
 // ground.rs for the placement/autotile logic, docs/GROUND_SPEC.md for the
@@ -441,6 +564,45 @@ pub const SCORCH_MAX: usize = 64;
 // deliberately NOT on the Resurrect 64 palette every other sheet uses (see
 // docs/PALETTE.md and static/punyworld/SOURCE.md), a documented exception
 // rather than an oversight.
+// Tall grass (grass.rs, static/nature_sheet.png): 32px source cells drawn
+// at `grass_scale`. Authored at 32 rather than the ground's 16 because a
+// tuft has to reach a good part of a tank's 64px height to occlude it -
+// at 16px it would be knee-high and hide nothing.
+pub const GRASS_TEXTURE_SIZE: f32 = 32.0;
+pub const GRASS_SPECIES: i32 = 3;
+pub const GRASS_VARIANTS: i32 = 8;
+
+// Trees (obstacle.rs, static/trees_sheet.png, docs/TREES_SPEC.md): 48px
+// source cells drawn at OBSTACLE_SCALE like every other obstacle, so one
+// source pixel is still one screen pixel and the art's own 2x blocks still
+// read as 2 screen px. The *cell* is bigger because a tree is bigger than a
+// wall tile, not because its pixels are: a tree still occupies exactly one
+// 32px grid cell (`Obstacle::size`, and so the collider, the nav grid and
+// the map format), and the extra 8px on each side is canopy overhanging its
+// neighbours - which is what stops a grove reading as a tiled grid.
+pub const TREE_TEXTURE_SIZE: f32 = 48.0;
+// Rows: 4 broadleaf variants, then 4 conifer, then the two rubble rows.
+//
+// Columns hold every damage stage once per *dapple frame* - a tree's whole
+// idle animation is those frames cycling (`obstacle::tree_col`), the same
+// canopy with a few patches of leaf one rung lighter and drifting between
+// frames. Nothing about a tree moves; only where the light falls does. The
+// column is `frame * TREE_STAGES + stage`, then the never-drawn stump, then
+// the 3-frame burn loop.
+pub const TREE_ROW_BROADLEAF: i32 = 0;
+pub const TREE_ROW_CONIFER: i32 = 4;
+pub const TREE_VARIANTS: i32 = 4;
+pub const TREE_STAGES: i32 = 3;
+pub const TREE_SHIMMER_FRAMES: i32 = 4;
+pub const TREE_STUMP_COL: i32 = TREE_STAGES * TREE_SHIMMER_FRAMES;
+pub const TREE_BURN_COL: i32 = TREE_STUMP_COL + 1;
+// Tree rubble lives on the trees sheet rather than with the rest of the
+// rubble block: it is the one leftover that is green, and walls_sheet.png
+// is under the no-green guard (`just check-sheets`). `Decal` therefore
+// carries the sheet its row belongs to.
+pub const RUBBLE_ROW_TREE: i32 = 8;
+pub const RUBBLE_ROW_TREE_CHARRED: i32 = 9;
+
 pub const GROUND_TEXTURE_SIZE: f32 = 16.0; // native tile size in the source sheet
 // 2x, not OBSTACLE_SCALE-style 1.0 - the source art is 16px/tile, and
 // GROUND_WORLD_TILE below needs to land on OBSTACLE_GRID_SIZE (32px) so the
@@ -450,50 +612,10 @@ pub const GROUND_TEXTURE_SIZE: f32 = 16.0; // native tile size in the source she
 pub const GROUND_SCALE: f32 = 2.0;
 pub const GROUND_WORLD_TILE: f32 = GROUND_TEXTURE_SIZE * GROUND_SCALE; // = OBSTACLE_GRID_SIZE
 
-// HUD font sizes (Game::render): the SHELLS/HP line reads as the "primary"
-// readout so it's drawn 10% bigger than the base 24px; the version/build
-// line is secondary, drawn 10% smaller.
-pub const HUD_FONT_SIZE: i32 = 26; // 24 * 1.1, rounded
-pub const HUD_VERSION_FONT_SIZE: i32 = 22; // 24 * 0.9, rounded
-
-// Shared screen-edge inset for both HUD corners: the SHELLS/HP line's
-// top-left origin and the version line's bottom-right origin, so the two
-// sit the same distance from their respective edges.
+// Inset of the dev-only overlay label from the field's top-left corner
+// (`game.rs`); the version line has its own insets in `hud.rs`. The
+// player's readouts themselves live in the HUD bar above the field.
 pub const HUD_MARGIN: i32 = 20;
-
-// health_bar.png is a hand-authored (not tools/spritegen-generated) 96x64
-// sheet: a 3x2 grid of 32x32 cells, five used left-to-right/top-to-bottom
-// (the sixth, bottom-right cell is unused/fully transparent). Each cell
-// holds one small heart+4-pip icon at a fixed offset, depleting one pip per
-// cell: index 0 = 4/4 pips (full) through index 4 = 0/4 pips (empty). Colors
-// were remapped from the source PNG's supplied saturated red onto
-// punypalette's RED_DK to match the rest of the game's palette (see
-// docs/PALETTE.md) - see static/_original/health_bar.png for the pristine
-// pre-recolor copy.
-pub const HEALTH_BAR_CELL_SIZE: f32 = 32.0;
-pub const HEALTH_BAR_VARIANTS: i32 = 5;
-// The icon within each 32x32 cell doesn't fill it - it's a tight 22x7 glyph
-// at this offset, so drawing crops to just the glyph rather than the cell.
-pub const HEALTH_BAR_ICON_OFFSET: (f32, f32) = (5.0, 7.0);
-pub const HEALTH_BAR_ICON_SIZE: (f32, f32) = (22.0, 7.0);
-// Columns per row in the sheet (see the layout comment above) - used to turn
-// a linear frame index into a (col, row) cell position.
-pub const HEALTH_BAR_COLUMNS: i32 = 3;
-// On-screen scale for the HUD readout - deliberately matches Tank::scale
-// (2.0) so the health bar's pixels read at the same on-screen size as every
-// other sprite (tanks, walls_sheet.png's PIXELATE_FACTOR) rather than
-// looking chunkier or finer than the rest of the game.
-pub const HEALTH_BAR_HUD_SCALE: f32 = 2.0;
-
-// Overhead health bar (Game::render, drawn under a tank rather than in the
-// HUD corner): shown for HEALTH_BAR_OVERHEAD_SECONDS after `Tank::mark_hit`
-// fires, so a tank that's just been shot/rammed/caught in a blast briefly
-// reads its HP at a glance without needing the player's own HUD line.
-// Matches ENEMY_RETARGET_SECONDS's "a few seconds" ballpark rather than a
-// fresh guess. Fades out (alpha ramp) over the trailing
-// HEALTH_BAR_OVERHEAD_FADE_SECONDS instead of popping off abruptly.
-// Gap in px between a tank's sprite bottom edge and the bar drawn under it.
-pub const HEALTH_BAR_OVERHEAD_GAP: f32 = 4.0;
 
 // ToxicFrog (src/frog.rs): the player's protect-objective - a static NPC
 // that ends the round in a loss the instant its health reaches zero, same
@@ -503,9 +625,9 @@ pub const HEALTH_BAR_OVERHEAD_GAP: f32 = 4.0;
 // animation PNGs is a plain 48x48-cell filmstrip, no slicing math beyond
 // `col * FROG_TEXTURE_SIZE`.
 pub const FROG_TEXTURE_SIZE: f32 = 48.0;
-// On-screen scale - deliberately matches Tank::scale/HEALTH_BAR_HUD_SCALE
-// (2.0) for the same reason both of those do: consistent on-screen pixel
-// density across every sprite in the game. The frog's actual content is a
+// On-screen scale - deliberately matches Tank::scale (2.0) for the same
+// reason: consistent on-screen pixel density across every sprite in the
+// game. The frog's actual content is a
 // small glyph within the 48x48 cell (see docs/FROG_SPEC.md), so this reads
 // as a modest, tank-sized presence on the field, not an oversized 96px prop.
 pub const FROG_SCALE: f32 = 2.0;
@@ -605,12 +727,6 @@ pub const PLASMA_TEXTURE_SIZE: f32 = 32.0;
 // tuning, reduced 20% after it read too big on screen.
 pub const PLASMA_SCALE: f32 = 2.08;
 
-/// Side length of one palette/toolbar icon button, in pixels.
-pub const EDITOR_ICON_SIZE: f32 = 48.0;
-/// Gap between adjacent icon buttons within a panel, in pixels.
-pub const EDITOR_ICON_GAP: f32 = 8.0;
-/// Padding between a panel's edge and the icons/controls inside it.
-pub const EDITOR_PANEL_PADDING: f32 = 10.0;
 /// Corner roundness passed to `draw_rectangle_rounded` (raylib's 0..1
 /// fraction of the shorter side, not a pixel radius) - small on purpose, a
 /// gentle curve rather than a pill shape.
@@ -630,14 +746,20 @@ pub const EDITOR_PANEL_BORDER_OPACITY: f32 = 0.6;
 /// them) and its opacity.
 pub const EDITOR_PANEL_FILL: (u8, u8, u8) = (20, 20, 24);
 pub const EDITOR_PANEL_FILL_OPACITY: f32 = 0.85;
-/// Fixed gap between the bottom-center object palette and the bottom of the
-/// screen.
-pub const EDITOR_PALETTE_BOTTOM_MARGIN: f32 = 16.0;
-/// Fixed margin from the top-right corner for the Save/Load/Close toolbar,
-/// and from the top-left corner for the hamburger toggle button.
+/// The build bar's popups (docs/game-editor-fusion.md sections 7 and 9):
+/// a dropdown row and a settings row are one finger-sized 48 px tall, a
+/// category's list is 200 px wide, the MAP settings panel 340 px.
+pub const EDITOR_DROPDOWN_ROW_H: f32 = 48.0;
+pub const EDITOR_DROPDOWN_W: f32 = 200.0;
+pub const EDITOR_SETTINGS_W: f32 = 340.0;
+/// The settings panel's `<`/`>` buttons, square and finger-sized.
+pub const EDITOR_STEPPER_SIZE: f32 = 48.0;
+/// How far a bar button's hit rect reaches above and below its drawn
+/// box (docs/game-editor-fusion.md section 10): the bar is 32 px tall
+/// and about 21 CSS px on a phone, so a slightly low tap still lands.
+pub const EDITOR_BAR_HIT_SLACK: f32 = 8.0;
+/// Margin from the field's edges for the editor's status line.
 pub const EDITOR_TOOLBAR_MARGIN: f32 = 16.0;
-/// Side length of the top-left hamburger/back toggle button.
-pub const EDITOR_HAMBURGER_SIZE: f32 = 40.0;
 
 /// Parse a round-seed CLI value: plain decimal, or hex with a `0x`/`0X`
 /// prefix - shared by both binaries' `--seed` flags (main.rs and
@@ -665,16 +787,21 @@ pub mod bullet;
 #[cfg(feature = "dev-tools")]
 pub mod capi;
 pub mod damage_stage;
+pub mod decal;
 #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
 pub mod devserver;
-#[cfg(feature = "map-editor")]
 pub mod editor;
 pub mod frog;
+pub mod fx;
+pub mod grass;
 pub mod game;
 pub mod ground;
+pub mod hud;
 pub mod laser;
 pub mod level;
 pub mod map;
+pub mod mode;
+pub mod marker;
 pub mod maplint;
 pub mod obstacle;
 pub mod pathfind;

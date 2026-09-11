@@ -13,6 +13,31 @@ pub struct Shockwave {
     pub center: Position,
     /// Seconds since the ripple was triggered.
     pub time: f32,
+    /// How hard this one hits, as a multiple of `shockwave_strength` and
+    /// `camera_shake_magnitude`. 1.0 is a tank dying; a fence collapsing
+    /// has no business shaking the screen as hard as that.
+    pub strength: f32,
+}
+
+impl Shockwave {
+    /// A ripple at full strength.
+    pub fn new(center: Position) -> Self {
+        Shockwave { center, time: 0.0, strength: 1.0 }
+    }
+
+    /// A ripple scaled against a tank kill, which is the 1.0 reference.
+    pub fn scaled(center: Position, strength: f32) -> Self {
+        Shockwave { center, time: 0.0, strength }
+    }
+
+    /// Punch left in it: strength faded by how much of its life is gone.
+    /// `Game::finish_frame` evicts by this rather than by age, so a barrel
+    /// cascade's little fuse pops cannot shove out the tank explosion that
+    /// set them off.
+    pub fn remaining(&self) -> f32 {
+        let left = 1.0 - (self.time / crate::tuning::tuning().shockwave_duration).clamp(0.0, 1.0);
+        self.strength * left
+    }
 }
 
 /// The GPU side of a ripple effect: `static/shockwave.fs` compiled with its
@@ -25,6 +50,15 @@ pub struct RippleFx {
     pub shader: Shader,
     pub center_loc: i32,
     pub time_loc: i32,
+    /// Array uniforms, used only by the whole-screen shock instance: it is
+    /// the one effect that can have several live at once, and they have to
+    /// resolve in a single pass. Layering N blits would re-distort the
+    /// previous pass's output instead of summing displacements, and would
+    /// cost N full-screen samples; the shader accumulates offsets and
+    /// samples exactly once (see static/shockwave.fs).
+    pub centers_loc: i32,
+    pub times_loc: i32,
+    pub gains_loc: i32,
     speed_loc: i32,
     width_loc: i32,
     strength_loc: i32,
@@ -63,6 +97,12 @@ impl RippleFx {
 
         let center_loc = shader.get_shader_location("center");
         let time_loc = shader.get_shader_location("time");
+        // Resolve as "name[0]": GLSL array uniforms are reported that way
+        // by some drivers and as the bare name by others, so ask for the
+        // indexed form, which both accept.
+        let centers_loc = shader.get_shader_location("centers[0]");
+        let times_loc = shader.get_shader_location("times[0]");
+        let gains_loc = shader.get_shader_location("gains[0]");
         let resolution_loc = shader.get_shader_location("resolution");
         let speed_loc = shader.get_shader_location("speed");
         let width_loc = shader.get_shader_location("width");
@@ -82,6 +122,9 @@ impl RippleFx {
             shader,
             center_loc,
             time_loc,
+            centers_loc,
+            times_loc,
+            gains_loc,
             speed_loc,
             width_loc,
             strength_loc,

@@ -134,7 +134,7 @@ impl Game {
             if dist <= step || dist <= f32::EPSILON {
                 tank.position = roll.to;
                 tank.velocity = Vector2::new(0.0, 0.0);
-                arrived.push((entity, tank.owner_slot));
+                arrived.push((entity, tank.owner_slot()));
             } else {
                 let (ux, uy) = (dx / dist, dy / dist);
                 tank.position = Position::new(before.x + ux * step, before.y + uy * step);
@@ -233,8 +233,14 @@ impl Game {
             let t = tuning();
             (t.wave_gate_inward_cells, t.wave_gate_min_player_dist)
         };
-        let player = self.player.expect("player entity spawned in init");
-        let mut avoid = vec![with_tank(&self.world, player, |t| t.position)];
+        // Both players when there are two; `avoid[0]` stays player 1, the
+        // one the connectivity preference below routes to.
+        let mut avoid: Vec<Position> = self
+            .players()
+            .into_iter()
+            .flatten()
+            .map(|p| with_tank(&self.world, p, |t| t.position))
+            .collect();
         if let Some(frog) = self.frog {
             avoid.push(with_frog(&self.world, frog, |fr| fr.position));
         }
@@ -309,6 +315,7 @@ impl Game {
         };
         let player = self.player.expect("player entity spawned in init");
         let player_pos = with_tank(&self.world, player, |t| t.position);
+        let player2_pos = self.player2.map(|p| with_tank(&self.world, p, |t| t.position));
         let size = Tank::default().size();
         let (clear, enemy_clear) = (size * 2.0, size * 1.5);
         let grid = self.nav_grid(f.width, f.height);
@@ -317,6 +324,7 @@ impl Game {
         let others: Vec<Position> = self.world.query::<&Tank>().iter().map(|t| t.position).collect();
         let pos = battlefield::sample_clear_position(&mut f.rng, f.width, f.height, margin_min, |pos| {
             battlefield::enemy_spawn_legal(pos, f.width, f.height, margin_min, margin_max, player_pos, clear, &grid, &walls)
+                && player2_pos.is_none_or(|p| pos.distance_to(p) >= clear)
                 && others.iter().all(|&p| pos.distance_to(p) >= enemy_clear)
         })
         .unwrap_or_else(|| {
@@ -373,7 +381,7 @@ impl Game {
             };
             tank.despawn_timer = Some(left);
             if left <= 0.0 {
-                gone.push((entity, tank.owner_slot));
+                gone.push((entity, tank.owner_slot()));
             }
         }
         for (entity, slot) in gone {

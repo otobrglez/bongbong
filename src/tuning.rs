@@ -294,8 +294,8 @@ tunables! {
     group round {
         /// Number of enemy tanks is randomized within this range each round
         /// (overridden by `--enemies`/the map's own `tanks` count).
-        enemy_count_min: usize = 3 in 0 ..= 30 @ Restart;
-        enemy_count_max: usize = 10 in 0 ..= 30 @ Restart;
+        enemy_count_min: usize = 4 in 0 ..= 30 @ Restart;
+        enemy_count_max: usize = 7 in 0 ..= 30 @ Restart;
         /// Enemies spawn in a band that's between these fractions of the
         /// shorter screen dimension away from the nearest edge of the
         /// battlefield - close enough to feel like they're closing in from
@@ -486,7 +486,7 @@ tunables! {
         /// Shell ammo: a tank holds up to this many shells (its magazine at
         /// spawn, and the passive-recharge cap) - a pickup is the only way
         /// past it.
-        max_shells: i32 = 12 in 1 ..= 100 @ Spawn;
+        max_shells: i32 = 20 in 1 ..= 100 @ Spawn;
         /// Recharge one shell every this many seconds while below
         /// `max_shells`.
         shell_recharge_seconds: f32 = 2.0 in 0.05 ..= 30.0;
@@ -668,6 +668,10 @@ tunables! {
         /// Ramming: after taking collision damage a tank is immune for this
         /// long, so continuous touching doesn't drain damage every frame.
         ram_damage_cooldown: f32 = 0.5 in 0.0 ..= 5.0;
+        /// Two-player rounds: what one player's shell, beam, bullet or ram
+        /// deals to the other player, as a factor of the normal roll. 1 is
+        /// full friendly fire, 0 makes teammates harmless to each other.
+        friendly_fire_damage_factor: f32 = 1.0 in 0.0 ..= 2.0;
         /// Damage both tanks take from one ram contact, rolled uniformly in
         /// this range (`simulation::combat::ram`). Wrecks neither deal nor
         /// take it.
@@ -693,6 +697,16 @@ tunables! {
         /// A wreck burns for this long, then settles into a static charred
         /// hulk.
         wreck_burn_seconds: f32 = 4.0 in 0.0 ..= 30.0;
+        /// Linear and angular damping applied to a tank's body the frame it
+        /// becomes a wreck. Nothing else in the world sets damping (rapier
+        /// defaults to none) and a wreck stops being driven, so a shoved
+        /// hulk used to slide until something stopped it. This is what
+        /// makes a shove move it a little and then let it rest.
+        wreck_linear_damping: f32 = 4.0 in 0.0 ..= 30.0;
+        /// Surface friction on a wreck, against rapier's 0.5 default: a
+        /// live tank shunting one should bleed energy rather than skid off
+        /// it.
+        wreck_friction: f32 = 0.95 in 0.0 ..= 2.0;
     }
 
     group ai {
@@ -700,6 +714,11 @@ tunables! {
         /// that value enemies never noticed the player past roughly half the
         /// window and read as passive.
         enemy_view_range: f32 = 800.0 in 50.0 ..= 3000.0;
+        /// Two-player rounds: an enemy switches to the other player only
+        /// once that player is this many px nearer than its current target
+        /// - hysteresis, so two players at equal range do not flip the pack
+        /// between them every frame.
+        enemy_target_switch_margin_px: f32 = 96.0 in 0.0 ..= 400.0;
         /// Stop and fight within this distance (px). The engagement ring and
         /// retreat range are factors of this - see the `engage` group.
         enemy_attack_range: f32 = 340.0 in 50.0 ..= 2000.0;
@@ -939,20 +958,142 @@ tunables! {
         fence_one_shot_chance: f64 = 0.7 in 0.0 ..= 1.0;
         /// Seconds a tank has to push into a fence before it gives way.
         fence_ram_seconds: f32 = 0.15 in 0.05 ..= 5.0;
+        /// Broadleaf toughness: hp absorbed over its three visible stages
+        /// (full crown, thinning, nearly bare) before it comes down.
+        ///
+        /// **Deliberately brittle, in the fence bracket rather than the
+        /// wall bracket.** Set from the *weakest* chassis: a player shell
+        /// rolls `player_damage_min..max` scaled by `tank_damage_factor`,
+        /// so a scout does 7.5-22.5 and clears 12 about 70% of the time -
+        /// the same one-shot rate `fence_one_shot_chance` gives a fence,
+        /// arrived at through damage instead of a coin flip. Heavier
+        /// chassis fell one every time, a minigun burst still has to chew
+        /// through it, and a barrel blast still takes a whole stand down.
+        /// Baked in at spawn.
+        tree_max_health: f32 = 12.0 in 1.0 ..= 500.0 @ Spawn;
+        /// Conifer toughness. Slimmer than a broadleaf, so a little less.
+        pine_max_health: f32 = 9.0 in 1.0 ..= 500.0 @ Spawn;
+        /// Seconds a tank has to keep pushing into a tree before it goes
+        /// over. Just past a sandbag's, so a tank drives through a stand
+        /// rather than shouldering each trunk down, and well short of
+        /// `enemy_breach_after_seconds` so an AI that drives into one
+        /// pushes through instead of stopping to shoot it.
+        tree_ram_seconds: f32 = 0.5 in 0.05 ..= 10.0;
+        /// Seconds each of a tree's dapple frames holds.
+        ///
+        /// This is a tree's entire idle animation: the frames are the same
+        /// canopy with a few patches of leaf one rung lighter, drifting
+        /// between frames, so light moves through the crown and the crown
+        /// itself does not. An ambient *bend* was built first and rejected -
+        /// what looks alive on a blade of grass looks wrong on a trunk. Each
+        /// tree takes its phase from a hash of its position, so a wood
+        /// shimmers out of step with itself rather than blinking as one
+        /// (`obstacle::tree_col`).
+        tree_dapple_seconds: f32 = 0.9 in 0.05 ..= 10.0;
+        /// How far a tree bends away from a tank shouldering it over, at
+        /// the moment it goes. Scales with `ram_timer` squared, so the tree
+        /// gives slowly at first and then goes - without it a rammed tree
+        /// stands bolt upright until it simply vanishes.
+        tree_lean_px: f32 = 22.0 in 0.0 ..= 80.0;
+        /// How close a Move order has to get before it counts as arrived
+        /// and the order ends. Roughly a tank's own width, so the tank stops
+        /// *at* the tap rather than grinding into the exact pixel.
+        order_arrive_px: f32 = 26.0 in 1.0 ..= 200.0;
+        /// Radius of the tap-order marker as a fraction of the ring the
+        /// health donut is drawn at. Must stay under 0.78 - that is where
+        /// the donut's own inner disc begins (`radius - thickness` in
+        /// `draw_ground_ring_at`) - or the marker sits on top of the gauge
+        /// instead of nested inside it.
+        order_ring_scale: f32 = 0.62 in 0.1 ..= 0.78;
+        /// Extra off-axis slack before an already-aligned tap order counts
+        /// as having lost its firing line. The alignment test is hysteretic
+        /// - it takes a wider miss to lose alignment than to gain it - or a
+        /// target hovering on the window boundary makes the tank stutter
+        /// between holding its aim and sidestepping.
+        order_align_hysteresis_px: f32 = 6.0 in 0.0 ..= 200.0;
+        /// Safety margin taken off the target's own half-width when working
+        /// out how far off-axis a shot may be and still land. Covers the
+        /// shell's own girth and a frame of drift, so a shot allowed at the
+        /// very edge of the window still strikes hull rather than grazing
+        /// past it. See `orders::hit_window`.
+        order_align_margin_px: f32 = 5.0 in 0.0 ..= 60.0;
+        /// Floor under that window. A target narrower than the margin (or a
+        /// chassis whose barrels are further apart than the target is wide)
+        /// would otherwise compute a negative window and never fire at all;
+        /// better to take a low-odds shot than to stand there.
+        order_align_min_px: f32 = 4.0 in 0.5 ..= 60.0;
+        /// How long a tap engagement may be commanded to move without
+        /// getting anywhere *and* without managing a shot before it gives
+        /// up and clears. A target behind a wall with no reachable firing
+        /// line is a real outcome; grinding into the wall until the player
+        /// taps somewhere else is not.
+        order_engage_give_up_seconds: f32 = 4.0 in 0.5 ..= 60.0;
+        /// How far the tank may drive inside that window and still count as
+        /// having given up. Covering ground means the engagement is being
+        /// worked, however badly the aim happens to be going; a wedged tank
+        /// covers none. Roughly one nav cell.
+        order_engage_give_up_px: f32 = 48.0 in 1.0 ..= 500.0;
+        /// Reach of the destination diamond the tap marker draws on the
+        /// ground, and the cap on a target bracket's arm length. Big enough
+        /// to find on a phone without covering the tile it marks.
+        order_marker_size_px: f32 = 22.0 in 2.0 ..= 80.0;
+        /// How far a target's corner brackets sit outside its own
+        /// silhouette, so the mark frames the thing rather than covering
+        /// it.
+        order_bracket_gap_px: f32 = 8.0 in 0.0 ..= 60.0;
+        /// Period of the tap markers' breathing. One shared clock, so the
+        /// destination diamond and the target brackets pulse together
+        /// instead of beating against each other.
+        order_marker_pulse_seconds: f32 = 1.1 in 0.1 ..= 10.0;
+        /// How long a tap order holds a chosen heading before it may switch,
+        /// the player-side twin of `ai_dir_hold_seconds`: without it a
+        /// diagonal route makes the tank alternate directions every frame.
+        order_dir_hold_seconds: f32 = 0.3 in 0.0 ..= 5.0;
+        /// Clear gap (px, hull surface to hull surface) a tank tries to keep
+        /// from whatever is directly in front of it. Inside this it stops
+        /// driving rather than pressing on, so tanks converging on the same
+        /// place pull up short instead of slamming into each other and into
+        /// the player. Separate from `avoid_margin`, which feeds the
+        /// *predictive sidestep* (`Ai::avoid_collisions`) and is about
+        /// paths that will cross later; this one is about the tank already
+        /// in the way now.
+        enemy_separation_px: f32 = 12.0 in 0.0 ..= 200.0;
+        /// How long a tank will sit yielding before it gives up and drives
+        /// on anyway. Without a ceiling two tanks nose to nose both brake
+        /// and neither ever moves again - the stuck escape cannot save them
+        /// either, because it only counts tanks that were *commanded* to
+        /// move. Past this the brake releases and behaviour is exactly what
+        /// it was before, so the worst case is a visible pause rather than
+        /// a freeze.
+        ///
+        /// The timer runs for as long as the way ahead stays blocked and
+        /// resets only when it clears, so a tank holds *once* and then
+        /// drives on. Decaying it while still blocked instead makes the
+        /// tank brake, release, fall back under the ceiling and brake
+        /// again - a permanent half-speed shuffle rather than a yield.
+        enemy_yield_seconds: f32 = 0.5 in 0.0 ..= 20.0;
+        /// Odds a tree is the kind that catches fire when it dies instead
+        /// of simply falling, rolled once per tile at spawn. Zero draws no
+        /// RNG at all, so a treeless map replays unchanged. Burn timing is
+        /// shared with wood (`wood_burn_seconds`): it is one fire.
+        tree_flammable_chance: f64 = 0.55 in 0.0 ..= 1.0 @ Spawn;
         /// Playback rate of the barrel blast sprite animation (12 frames).
         blast_anim_fps: f32 = 18.0 in 4.0 ..= 60.0;
         /// On-screen scale of the 64px blast frames (2.0 = 128px wide).
-        blast_anim_scale: f32 = 2.0 in 0.5 ..= 4.0;
+        blast_anim_scale: f32 = 1.75 in 0.5 ..= 4.0;
         /// How long the additive light bloom under a blast lasts.
         blast_glow_seconds: f32 = 0.25 in 0.0 ..= 2.0;
         /// Radius (px) of that bloom at its largest.
-        blast_glow_radius: f32 = 90.0 in 0.0 ..= 400.0;
+        blast_glow_radius: f32 = 64.0 in 0.0 ..= 400.0;
         /// Peak opacity of the bloom.
-        blast_glow_strength: f32 = 0.8 in 0.0 ..= 1.0;
+        blast_glow_strength: f32 = 0.45 in 0.0 ..= 1.0;
         /// Peak opacity of the whole-screen flash a blast starts with.
-        blast_screen_flash_alpha: f32 = 0.3 in 0.0 ..= 1.0;
+        blast_screen_flash_alpha: f32 = 0.12 in 0.0 ..= 1.0;
         /// How long that screen flash takes to fade.
         blast_screen_flash_seconds: f32 = 0.06 in 0.0 ..= 0.5;
+        /// Minimum spacing between two whole-screen flashes, so a barrel
+        /// chain or a multi-kill reads as one flash rather than a strobe.
+        blast_screen_flash_min_gap_seconds: f32 = 0.35 in 0.0 ..= 2.0;
         /// Opacity of the pulsing glow on a barrel whose fuse is lit.
         barrel_fuse_glow_strength: f32 = 0.6 in 0.0 ..= 1.0;
         /// Opacity of the burn mark a blast leaves on the ground.
@@ -961,6 +1102,90 @@ tunables! {
         scorch_fade_in_seconds: f32 = 0.25 in 0.0 ..= 2.0;
         /// On-screen scale of the 64px scorch decal cells.
         scorch_scale: f32 = 2.0 in 0.5 ..= 4.0;
+        /// Opacity of the rubble a destroyed wall tile leaves behind
+        /// (`decal::Decal`). Below the tile it replaces, so a levelled
+        /// wall reads as ground the tank can drive over rather than as a
+        /// wall that stopped being solid.
+        decal_opacity: f32 = 0.45 in 0.0 ..= 1.0;
+        /// Seconds fresh rubble takes to fade in, so a tile doesn't snap
+        /// straight from standing to wreckage.
+        decal_fade_in_seconds: f32 = 0.18 in 0.0 ..= 2.0;
+        /// Seconds a blown-off part spends in the air before settling into
+        /// the landing spot the simulation already picked for it.
+        debris_flight_seconds: f32 = 0.5 in 0.05 ..= 3.0;
+        /// Peak height (px) of that arc, varied per piece by its position
+        /// hash. Not real height - the game is top-down, so this is a draw
+        /// offset plus a shrinking shadow.
+        debris_arc_height: f32 = 40.0 in 0.0 ..= 200.0;
+        /// Parts a dying tank throws, and how far they scatter.
+        wreck_parts: i32 = 5 in 0 ..= 32;
+        wreck_part_throw_px: f32 = 64.0 in 0.0 ..= 400.0;
+        /// Delayed secondary pops after a tank dies (ammo cooking off):
+        /// how many, spread over how long, and how big each fireball is
+        /// next to the main one.
+        cookoff_count: i32 = 2 in 0 ..= 12;
+        cookoff_window_seconds: f32 = 1.6 in 0.1 ..= 10.0;
+        cookoff_blast_scale: f32 = 0.45 in 0.1 ..= 2.0;
+        /// A dying tank burns its last tread marks into the ground: this
+        /// many of them stop fading and darken by this multiple, so the
+        /// kill site stays readable after the wreck is cleared.
+        wreck_track_marks: i32 = 10 in 0 ..= 64;
+        wreck_track_darken: f32 = 1.8 in 1.0 ..= 4.0;
+
+        // --- the short-lived particle layer (fx.rs) ---
+        /// Global multiplier on every particle count. `main.rs` starts the
+        /// web build lower: the wasm target is the tighter budget, and a
+        /// dense wave is where that shows.
+        fx_density: f32 = 1.0 in 0.0 ..= 3.0;
+        /// Hard cap on live particles; oldest are evicted first so a big
+        /// burst eats into old smoke rather than into itself.
+        fx_max_particles: i32 = 900 in 0 ..= 8000;
+        /// Downward acceleration on a chip's fake height, px/s^2.
+        debris_gravity: f32 = 900.0 in 0.0 ..= 4000.0;
+        /// Per-second rate at which a particle bleeds ground speed
+        /// (exponential, so it is frame-rate independent).
+        debris_air_drag: f32 = 2.4 in 0.0 ..= 20.0;
+        /// Fraction of vertical speed a chip keeps per ground bounce.
+        debris_bounce: f32 = 0.35 in 0.0 ..= 1.0;
+        spark_lifetime: f32 = 0.4 in 0.05 ..= 5.0;
+        chip_lifetime: f32 = 1.1 in 0.05 ..= 5.0;
+        dust_lifetime: f32 = 0.8 in 0.05 ..= 5.0;
+        smoke_lifetime: f32 = 2.2 in 0.05 ..= 20.0;
+        ember_lifetime: f32 = 0.9 in 0.05 ..= 10.0;
+        /// Upward drift of smoke and embers, and how fast a smoke puff
+        /// grows as it rises.
+        smoke_rise_speed: f32 = 26.0 in 0.0 ..= 200.0;
+        /// How fast a smoke puff grows, px/s. Rendered in whole 2px
+        /// blocks, so this reads as a few discrete steps up rather than a
+        /// smooth swell.
+        smoke_growth: f32 = 4.0 in 0.0 ..= 100.0;
+        smoke_opacity: f32 = 0.4 in 0.0 ..= 1.0;
+        /// Particles a shot knocks off a tile it hits but does not kill.
+        /// Well under `tile_burst_particles`: a wall being worn down should
+        /// read as less than a wall coming apart.
+        tile_chip_particles: i32 = 5 in 0 ..= 60;
+        /// Particles a destroyed tile throws; glass and sandbag add to it.
+        tile_burst_particles: i32 = 12 in 0 ..= 120;
+        /// Sparks a dying tank throws.
+        wreck_burst_particles: i32 = 16 in 0 ..= 200;
+        /// Embers and smoke a burning wood tile gives off per second.
+        wood_ember_rate: f32 = 20.0 in 0.0 ..= 200.0;
+        wood_smoke_rate: f32 = 5.0 in 0.0 ..= 100.0;
+        /// The sustained column off a wreck that is still burning, per
+        /// second, for as long as `wreck_burn_seconds` lasts.
+        wreck_flame_rate: f32 = 12.0 in 0.0 ..= 200.0;
+        wreck_smoke_rate: f32 = 10.0 in 0.0 ..= 100.0;
+        /// Contact feedback. `max_impulse` is the solver's own measure of
+        /// how hard a contact is, so these are thresholds on that rather
+        /// than on speed: below the first, a contact is a nudge and stays
+        /// silent; at the second it is a real slam and throws sparks.
+        contact_fx_min_impulse: f32 = 8.0 in 0.0 ..= 500.0;
+        contact_fx_spark_impulse: f32 = 40.0 in 0.1 ..= 1000.0;
+        /// Base emission rate while in contact, scaled by how hard it is.
+        contact_fx_rate: f32 = 12.0 in 0.0 ..= 100.0;
+        /// Dust kicked up per second while a tank grinds a prop under its
+        /// tracks - the one part of `ram_props` that was visually silent.
+        ram_dust_rate: f32 = 14.0 in 0.0 ..= 100.0;
     }
 
     group tank_models {
@@ -1000,6 +1225,78 @@ tunables! {
     }
 
     group cosmetics {
+        // --- tall grass (grass.rs) ---
+        /// Tufts scattered per tall-grass cell.
+        ///
+        /// Several rather than one because the occlusion has to be
+        /// *partial* - the reference gif never hides a unit completely,
+        /// it walks between discrete tufts, covering at worst ~44% of it.
+        /// This knob and the tuft height in `gen_grass.py` are the same
+        /// trade-off from two directions, so both were measured against a
+        /// parked tank rather than guessed:
+        ///
+        /// | tufts/cell | tank occluded |
+        /// |---|---|
+        /// | 2 | 56% |
+        /// | 3 | 71% |
+        /// | 4 | 83% |
+        ///
+        /// 2 sits closest to the reference while still reading as a field.
+        /// Above 3 a tank vanishes outright, which breaks the player's
+        /// ability to find their own hull - see docs/GROUND_SPEC.md.
+        grass_tufts_per_cell: i32 = 2 in 0 ..= 24 @ Restart;
+        /// On-screen scale of the 32px tuft cells. 2.0 puts one *sheet*
+        /// pixel on a 2x2 screen block, the density everything else uses -
+        /// which is why `gen_grass.py` authors one design pixel per sheet
+        /// pixel rather than on the walls sheet's 2px block grid. Stacking
+        /// the two made grass twice as chunky as the world around it.
+        grass_scale: f32 = 2.0 in 0.5 ..= 4.0;
+        /// Ambient sway: how far a tip travels, and how fast.
+        grass_sway_px: f32 = 2.0 in 0.0 ..= 20.0;
+        grass_sway_speed: f32 = 1.6 in 0.0 ..= 20.0;
+        /// The wake: how close a tank has to be to shove grass aside, and
+        /// how hard at the centre. Grass *ahead* of a moving tank is pushed
+        /// harder than grass behind it, so a hull drives a bow wave rather
+        /// than a symmetric ring (`grass::tick`). Not in the reference gif -
+        /// grass there does not react at all - so this is the first thing to
+        /// turn down if it reads as noisy.
+        grass_part_radius: f32 = 46.0 in 0.0 ..= 300.0;
+        grass_part_px: f32 = 9.0 in 0.0 ..= 60.0;
+        /// How far *past the hull* a tank flattens grass. Measured from the
+        /// hull box, not from the tank's centre - a radial falloff from the
+        /// centre leaves the grass under the tracks standing, because the
+        /// hull is wider than any radius small enough to look right. So
+        /// this is the margin around the footprint, and
+        /// `grass_part_radius` is the wider ring that only bends.
+        grass_crush_radius: f32 = 16.0 in 0.0 ..= 200.0;
+        /// How long flattened grass takes to stand back up. This is the
+        /// whole trail effect - a tank leaves a matted path that closes
+        /// behind it, the same shape `track.rs` gives a tread mark. Short
+        /// values read as grass springing back instantly and lose the path.
+        grass_crush_recover_seconds: f32 = 3.5 in 0.1 ..= 30.0;
+        /// How far a fully flattened tuft is squashed toward its own root.
+        /// Never 1.0: a tuft that disappears entirely reads as a hole in
+        /// the field rather than as matted grass.
+        grass_crush_flatten: f32 = 0.78 in 0.0 ..= 0.95;
+        /// Leaf specks a tank kicks up per second per grass cell it is
+        /// crossing (`fx.rs`, scaled by `fx_density` like every other
+        /// emitter). Zero turns the rustle off.
+        grass_rustle_rate: f32 = 14.0 in 0.0 ..= 120.0;
+
+        // --- the ground layer's baked shading (ground.rs) ---
+        /// How much darker a cell right beside a wall is, 0-1. Walls stand
+        /// *on* the floor, and without this they read as pasted onto it.
+        ground_wall_shade: f32 = 0.11 in 0.0 ..= 1.0 @ Restart;
+        /// How far that shadow reaches, in cells. Cost is quadratic in this
+        /// (a box search per cell) but it runs once per round, not per
+        /// frame.
+        ground_wall_shade_cells: i32 = 2 in 0 ..= 8 @ Restart;
+        /// Vignette darkness at the very screen edge, 0-1. Drawn as four
+        /// per-pixel gradient bands (`ground::draw_edge_shade`), not as a
+        /// cell tint - see that function for why.
+        ground_edge_shade: f32 = 0.22 in 0.0 ..= 1.0;
+        /// How far that vignette reaches inward, in screen px.
+        ground_edge_shade_px: f32 = 90.0 in 0.0 ..= 600.0;
         /// World px of travel between hull tread-animation frame advances
         /// (independent of the ground-decal spacing below).
         tank_hull_track_frame_distance: f32 = 8.0 in 1.0 ..= 64.0;
@@ -1011,9 +1308,9 @@ tunables! {
         /// Tank shadow distance (px) - grounded, stays tight to the hull.
         tank_shadow_offset: f32 = 3.0 in 0.0 ..= 20.0;
         tank_shadow_opacity: f32 = 0.486 in 0.0 ..= 1.0;
-        /// Rainbow shield ring radius as a multiple of `Tank::size()`. Drawn
-        /// under the tank and its shadow, so only what reaches past the
-        /// hull shows.
+        /// Ground ring radius as a multiple of `Tank::size()`: the marker,
+        /// health and shield rings all share it. Drawn under the tank and
+        /// its shadow, so only what reaches past the hull shows.
         shield_glow_radius_factor: f32 = 0.385 in 0.1 ..= 2.0;
         /// How many full rainbow hue cycles the shield ring makes per second.
         shield_glow_hue_hz: f32 = 0.4 in 0.0 ..= 5.0;
@@ -1081,11 +1378,21 @@ tunables! {
         /// lays, so a trail reads as one coherent tank-specific tread
         /// pattern instead of per-mark noise.
         track_scale_jitter: f32 = 0.15 in 0.0 ..= 1.0;
-        /// Overhead health bar: shown under a tank for this long after it's
-        /// hit ...
-        health_bar_overhead_seconds: f32 = 3.0 in 0.0 ..= 20.0;
-        /// ... fading out over the trailing this-many seconds.
-        health_bar_overhead_fade_seconds: f32 = 0.6 in 0.0 ..= 5.0;
+        /// Enemy health ring: after a hit an enemy's ground ring shows its
+        /// health for this many seconds ...
+        health_ring_hit_seconds: f32 = 3.0 in 0.0 ..= 20.0;
+        /// ... fading out over the trailing this-many seconds of that window.
+        health_ring_hit_fade_seconds: f32 = 0.6 in 0.0 ..= 5.0;
+        /// An enemy's health ring stays on, hit or not, once its remaining
+        /// health is at or below this fraction.
+        enemy_health_ring_below: f32 = 0.5 in 0.0 ..= 1.0;
+        /// The missing part of a white or red health ring (the player's
+        /// tank, both frogs) is still drawn, at `player_ring_opacity` times
+        /// this, so the marker stays a full circle.
+        health_ring_base_opacity: f32 = 0.35 in 0.0 ..= 1.0;
+        /// Opacity of the dark band over the missing part of an enemy
+        /// tank's health ring.
+        health_ring_gap_opacity: f32 = 0.45 in 0.0 ..= 1.0;
         /// HUD numbers (SHELLS/HP) turn orange below this fraction of max
         /// ...
         hud_warn_threshold: f32 = 0.34 in 0.0 ..= 1.0;
@@ -1095,20 +1402,31 @@ tunables! {
     }
 
     group fx {
+        /// One multiplier on every effect that touches the whole screen -
+        /// the kill flash, the shockwave ripple's bend and the camera
+        /// shake - so a calmer or reduced-flash mode is one slider. 0
+        /// leaves only the local fireball, glow, impact quad and
+        /// particles, which deliberately stay out of it.
+        screen_fx_intensity: f32 = 1.0 in 0.0 ..= 2.0;
         /// Kill shockwave (shockwave.fs): seconds the effect plays before
         /// clearing.
-        shockwave_duration: f32 = 1.18 in 0.05 ..= 5.0;
+        shockwave_duration: f32 = 0.7 in 0.05 ..= 5.0;
         /// Ring growth speed, UV units/sec.
         shockwave_speed: f32 = 0.56 in 0.0 ..= 5.0;
         /// Thickness of the distorted band, UV units.
-        shockwave_width: f32 = 0.13 in 0.0 ..= 1.0;
+        shockwave_width: f32 = 0.08 in 0.0 ..= 1.0;
         /// How hard the ring bends the image, UV units.
-        shockwave_strength: f32 = 0.102 in 0.0 ..= 0.5;
+        shockwave_strength: f32 = 0.045 in 0.0 ..= 0.5;
         /// Camera shake on the same kill trigger: duration (much shorter
         /// than the shockwave so it reads as one punchy hit), px offset at
         /// full strength, and radians/sec of the wobble.
-        camera_shake_duration: f32 = 0.3 in 0.0 ..= 3.0;
-        camera_shake_magnitude: f32 = 10.0 in 0.0 ..= 100.0;
+        camera_shake_duration: f32 = 0.22 in 0.0 ..= 3.0;
+        /// Ceiling on the summed camera shake when several ripples overlap,
+        /// as a multiple of `camera_shake_magnitude`. Without it three
+        /// simultaneous kills throw the scene far enough that the screen
+        /// edge shows through as black.
+        camera_shake_max_stack: f32 = 1.5 in 1.0 ..= 5.0;
+        camera_shake_magnitude: f32 = 6.0 in 0.0 ..= 100.0;
         camera_shake_frequency: f32 = 40.0 in 1.0 ..= 200.0;
         /// Muzzle-flash heat haze (muzzle_flash.fs): a one-sided outward
         /// puff at the barrel. Hits full strength at the leading edge, so
@@ -1126,7 +1444,7 @@ tunables! {
         impact_flash_duration: f32 = 0.14 in 0.01 ..= 2.0;
         impact_flash_speed: f32 = 1.1 in 0.0 ..= 5.0;
         impact_flash_width: f32 = 0.02 in 0.0 ..= 0.5;
-        impact_flash_strength: f32 = 0.025 in 0.0 ..= 0.5;
+        impact_flash_strength: f32 = 0.018 in 0.0 ..= 0.5;
         /// Half-extent (px) of the impact flash's quad; at 720px tall the
         /// punch reaches ~125px, so 70 visibly clipped it.
         impact_flash_quad_radius: f32 = 130.0 in 10.0 ..= 500.0;

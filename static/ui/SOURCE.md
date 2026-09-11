@@ -10,7 +10,8 @@ part of the `tools/spritegen/` pipeline" treatment as `static/punyworld/`.
 - License terms: <https://craftpix.net/file-licenses/> (per the pack's own
   `License.txt`) — check those terms before any redistribution beyond local
   development.
-- Only ever loaded by the map editor (`src/editor.rs`), which only compiles
-  into `--features map-editor` builds — never bundled into a release build.
-  See docs/map-editor-design.md's "Eraser icon" section.
+- Only ever drawn by the map builder (`src/editor/`), which is part of every
+  build now that the builder is a mode of the game (docs/game-editor-fusion.md);
+  bundled with the rest of `static/`. See docs/map-editor-design.md's
+  "Eraser icon" section for its origin.
 - 32×32 px, used as-is (no recolor/retint pass, unlike `punyworld`'s).

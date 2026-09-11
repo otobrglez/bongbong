@@ -370,8 +370,9 @@ them from both main.rs and the probe (replacing probe's own duplicate
 
 ### 2.2 The fixture corpus: `maps/test/`
 
-Hand-authored in the existing editor (`cargo run --features map-editor --
---editor`), committed, one map per known failure *class* — each is a trap
+Hand-authored in the in-game map builder (`just run-editor`, i.e.
+`cargo run --features dev-tools -- --editor`, the build with the dev
+`SAVE` button), committed, one map per known failure *class* — each is a trap
 built from a bug we've already fixed once, so regressions walk straight
 into it:
 

@@ -33,6 +33,7 @@
 
 use sola_raylib::prelude::*;
 
+use crate::tuning::tuning;
 use crate::{GROUND_WORLD_TILE, Position};
 
 /// Columns in punyworld-overworld-tileset.png (432px / 16px).
@@ -59,7 +60,10 @@ const GRASS_FILL: &[i32] = &[0, 1, 2, 27, 28, 29, 54, 55, 56];
 /// tile (32) reads fine standing alone too. Indexed by a 4-bit mask,
 /// bit3=N bit2=E bit1=S bit0=W (1=road neighbour).
 const ROAD_EDGE: [i32; 16] = [
-    32, // 0000 isolated
+    84, // 0000 isolated - a rounded dirt blob, fully ringed by grass.
+        // Not part of the source wangset (an edge wangtile with zero
+        // connections cannot be expressed), which is why it was previously
+        // the crossroads tile standing in.
     87, // 0001 W
     3,  // 0010 S
     6,  // 0011 S+W
@@ -86,6 +90,15 @@ pub struct GroundGrid {
     pub cols: usize,
     pub rows: usize,
     tiles: Vec<i32>,
+    /// Per-cell tint, resolved once in `build` alongside the tile id.
+    ///
+    /// Baked rather than computed per frame on purpose: `draw` already
+    /// issues one call per cell over the whole screen and is the single
+    /// largest draw cost in the game, so shading has to be free at draw
+    /// time. It also never changes during a round - obstacles are only
+    /// ever removed, and a hole in a wall letting a little more light onto
+    /// the floor is not worth rebuilding the grid for.
+    tints: Vec<Color>,
 }
 
 impl GroundGrid {
@@ -138,7 +151,7 @@ fn grass_variant(seed: u64, x: i32, y: i32) -> i32 {
 /// every real caller's positions are already clamped inside the
 /// battlefield, but not asserted here) is silently ignored rather than
 /// panicking.
-pub fn build(width: f32, height: f32, seed: u64, road_cells: &[Position]) -> GroundGrid {
+pub fn build(width: f32, height: f32, seed: u64, road_cells: &[Position], wall_cells: &[Position]) -> GroundGrid {
     // +1 over the plain `ceil(width / T)` cell count: since cells are
     // centered rather than top-left-aligned (see module doc comment), the
     // last cell's own right/bottom half-tile can fall short of `width`/
@@ -182,7 +195,90 @@ pub fn build(width: f32, height: f32, seed: u64, road_cells: &[Position]) -> Gro
         }
     }
 
-    GroundGrid { cols, rows, tiles }
+    // --- shade: darken toward walls and toward the screen edge ---
+    //
+    // Walls sit *on* the ground, so the cells around them read as being in
+    // their shadow; without it a wall looks pasted on rather than standing
+    // on the floor.
+    //
+    // A per-cell tint is only defensible because these steps land *on the
+    // wall grid*, where a boundary reads as the edge of a shadow. The
+    // screen-edge vignette was tried the same way and had to be pulled: a
+    // flat tint per 32px cell over flat-coloured grass stair-steps no
+    // matter how smooth the underlying field is, and out in the open there
+    // is no wall for the steps to align with, so it read as banding. It is
+    // a smooth per-pixel gradient in `draw_edge_shade` instead.
+    let mut walls = vec![false; cols * rows];
+    for pos in wall_cells {
+        let gx = (pos.x / GROUND_WORLD_TILE).round() as i32;
+        let gy = (pos.y / GROUND_WORLD_TILE).round() as i32;
+        if gx >= 0 && gy >= 0 && (gx as usize) < cols && (gy as usize) < rows {
+            walls[gy as usize * cols + gx as usize] = true;
+        }
+    }
+    let t = tuning();
+    let near = t.ground_wall_shade;
+    let reach = t.ground_wall_shade_cells.max(0) as i32;
+    let mut tints = vec![Color::WHITE; cols * rows];
+    for y in 0..rows as i32 {
+        for x in 0..cols as i32 {
+            // Euclidean, not Chebyshev: a box distance gives square
+            // iso-contours, and since the tint is per 32px cell those show
+            // up as visible rectangular bands rather than as a shadow.
+            let mut nearest = f32::MAX;
+            for dy in -reach..=reach {
+                for dx in -reach..=reach {
+                    let (nx, ny) = (x + dx, y + dy);
+                    if nx < 0 || ny < 0 || nx as usize >= cols || ny as usize >= rows {
+                        continue;
+                    }
+                    if walls[ny as usize * cols + nx as usize] {
+                        let d = ((dx * dx + dy * dy) as f32).sqrt();
+                        nearest = nearest.min(d);
+                    }
+                }
+            }
+            // 1.0 right beside a wall, easing to 0 at `reach`. Smoothstep
+            // rather than linear so the falloff has no hard outer edge.
+            let wall_k = if nearest == f32::MAX || reach == 0 {
+                0.0
+            } else {
+                let u = (1.0 - nearest / (reach as f32 + 1.0)).clamp(0.0, 1.0);
+                u * u * (3.0 - 2.0 * u)
+            };
+            let shade = (1.0 - wall_k * near).clamp(0.0, 1.0);
+            let v = (255.0 * shade) as u8;
+            tints[y as usize * cols + x as usize] = Color::new(v, v, v, 255);
+        }
+    }
+
+    GroundGrid { cols, rows, tiles, tints }
+}
+
+/// Darken the ground toward the screen edges, pulling the eye to the middle
+/// of the battlefield and buying back a little of the value range a screen
+/// full of grass spends.
+///
+/// Four gradient bands rather than a per-cell tint: the tint is flat across
+/// a whole 32px cell, so over open grass a gradient built that way
+/// stair-steps visibly. These interpolate per pixel. Drawn straight after
+/// the ground so it shades the floor only - tanks and walls stand in front
+/// of it, not under it.
+pub fn draw_edge_shade(d: &mut impl RaylibDraw, width: i32, height: i32) {
+    let strength = tuning().ground_edge_shade;
+    if strength <= 0.0 {
+        return;
+    }
+    let a = (255.0 * strength).clamp(0.0, 255.0) as u8;
+    let dark = Color::new(0, 0, 0, a);
+    let clear = Color::new(0, 0, 0, 0);
+    let band = (tuning().ground_edge_shade_px).max(1.0) as i32;
+    // `_v` runs top->bottom and `_h` runs left->right, so the far edges
+    // pass the colours the other way round.
+    d.draw_rectangle_gradient_v(0, 0, width, band, dark, clear);
+    d.draw_rectangle_gradient_v(0, height - band, width, band, clear, dark);
+    d.draw_rectangle_gradient_h(0, 0, band, height, dark, clear);
+    d.draw_rectangle_gradient_h(width - band, 0, band, height, clear, dark);
 }
 
 fn source_rec(tile_id: i32) -> Rectangle {
@@ -211,7 +307,7 @@ pub fn draw(d: &mut impl RaylibDraw, texture: &Texture2D, grid: &GroundGrid) {
             };
             let src = source_rec(grid.tiles[i]);
             let dest = Rectangle::new(x as f32 * GROUND_WORLD_TILE, y as f32 * GROUND_WORLD_TILE, size, size);
-            d.draw_texture_pro(texture, src, dest, origin, 0.0, Color::WHITE);
+            d.draw_texture_pro(texture, src, dest, origin, 0.0, grid.tints[i]);
         }
     }
 }

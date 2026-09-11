@@ -15,9 +15,10 @@ use crate::{
 };
 
 /// A read-only snapshot of one tank's motion for collision prediction. The game
-/// builds a slice of these (all live tanks: player + enemies) each frame and hands
-/// it to every enemy's `think`, so an enemy can predict closest approach to the
-/// others without borrowing the mutable tank list.
+/// builds a slice of these (all live tanks: the players first, then the
+/// enemies) each frame and hands it to every enemy's `think`, so an enemy
+/// can predict closest approach to the others without borrowing the
+/// mutable tank list.
 #[derive(Clone, Copy)]
 pub struct Mover {
     pub position: Position,
@@ -26,6 +27,8 @@ pub struct Mover {
     /// bounding-circle radius of the tank's real, per-row physics footprint
     /// at its current facing, not a flat approximation).
     pub radius: f32,
+    /// A human player's tank - never a friendly to an enemy.
+    pub is_player: bool,
 }
 
 /// What a driver (player or AI) wants to do this frame. The physics layer turns
@@ -138,6 +141,10 @@ pub struct Ai {
     /// commits for a short window instead of being re-decided every frame.
     dodge_dir: Option<Dir>,
     dodge_timer: f32,
+    /// How long this tank has been holding back for something directly in
+    /// front of it (`crowded_ahead`). Bounded by `enemy_yield_seconds` -
+    /// see that knob for why a brake without a ceiling deadlocks.
+    yield_timer: f32,
     /// Seconds until a hunter may take another opportunistic shot at the
     /// player - set by `act_snipe` when it fires, so one snipe never
     /// becomes a standing duel that forgets the frog.
@@ -218,6 +225,12 @@ pub struct Ai {
     /// rather than a flag so tooling can see an escape that fired and
     /// reset within one frame.
     escapes: u32,
+    /// Which human player this tank is fighting (0 or 1): the target of
+    /// its `Role::Player` behaviour and the ring it competes on. Always 0
+    /// in a single-player round; in a two-player round `enemy_phase`
+    /// retargets it to the nearer live, visible player past
+    /// `enemy_target_switch_margin_px`.
+    target_player: u8,
 }
 
 /// Read-only view of an `Ai`'s memory for tooling (`Ai::snapshot`).
@@ -231,6 +244,7 @@ pub struct AiSnapshot {
     pub dir_hold: f32,
     pub dodge_dir: Option<&'static str>,
     pub dodge_timer: f32,
+    pub yield_timer: f32,
     pub snipe_cooldown: f32,
     pub retreating: bool,
     pub stuck_timer: f32,
@@ -253,6 +267,8 @@ pub struct AiSnapshot {
     /// Seconds left before the breach in progress is given up.
     pub breach_timer: Option<f32>,
     pub escapes: u32,
+    /// `Ai::target_player`.
+    pub target_player: u8,
 }
 
 impl Default for Ai {
@@ -267,6 +283,7 @@ impl Default for Ai {
             aim_settle: 0.0,
             dodge_dir: None,
             dodge_timer: 0.0,
+            yield_timer: 0.0,
             snipe_cooldown: 0.0,
             retreating: false,
             last_move_dir: None,
@@ -280,6 +297,7 @@ impl Default for Ai {
             wall_ahead_timer: 0.0,
             breach: None,
             escapes: 0,
+            target_player: 0,
         }
     }
 }
@@ -369,6 +387,7 @@ impl Ai {
         pickups: &[(PickupKind, Position)],
         line_of_sight: bool,
         player_line_of_sight: bool,
+        target_concealed: bool,
         walls_ahead: [Option<WallAhead>; 4],
     ) -> Intent {
         self.fire_timer = (self.fire_timer - dt).max(0.0);
@@ -447,11 +466,51 @@ impl Ai {
             pickups,
             line_of_sight,
             player_line_of_sight,
+            target_concealed,
             walls_ahead,
         };
         let mut last_action = None;
         build().tick_traced(&mut bb, &mut last_action);
-        let intent = bb.intent;
+        let mut intent = bb.intent;
+
+        // Personal space, applied to whatever the tree decided: pull up
+        // short of the tank in front instead of driving through it. One
+        // place rather than inside each behaviour, because every one of
+        // them - attack, chase, patrol, wander, hunter, guard - converges
+        // on the same few places and slams the same way.
+        //
+        // This is deliberately a *brake*, not another sidestep.
+        // `avoid_collisions` already dodges paths that are going to cross,
+        // and it explicitly stops caring once two tanks are inside
+        // `avoid_margin` of each other - which is exactly the regime that
+        // produces the slam. Stopping is also what a driver would do.
+        //
+        // `face` is kept so a tank holding station still aims and shoots;
+        // only the driving stops.
+        //
+        // The timer keeps counting for as long as the way ahead stays
+        // blocked and resets only when it clears, so a tank holds *once*
+        // for `enemy_yield_seconds` and then drives on. Decaying it while
+        // still blocked instead - the obvious first cut - makes the tank
+        // brake, release, fall back under the ceiling and brake again: a
+        // permanent half-speed shuffle rather than a yield, which left two
+        // enemies jammed corner to corner in a corridor taking far longer
+        // to work free (`mechanics_tests`).
+        if let Some(dir) = intent.move_dir {
+            if crowded_ahead(me.position, dir, movers, my_index) {
+                self.yield_timer += dt;
+                if self.yield_timer <= tuning().enemy_yield_seconds {
+                    intent.move_dir = None;
+                    intent.face = intent.face.or(Some(dir));
+                }
+            } else {
+                self.yield_timer = 0.0;
+            }
+        } else {
+            self.yield_timer = 0.0;
+        }
+
+        let intent = intent;
         self.last_move_dir = intent.move_dir;
         self.last_action = last_action;
         self.last_intent = intent;
@@ -469,6 +528,7 @@ impl Ai {
             dir_hold: self.dir_hold,
             dodge_dir: self.dodge_dir.map(Dir::name),
             dodge_timer: self.dodge_timer,
+            yield_timer: self.yield_timer,
             snipe_cooldown: self.snipe_cooldown,
             retreating: self.retreating,
             stuck_timer: self.stuck_timer,
@@ -487,7 +547,18 @@ impl Ai {
             retarget_timer: self.retarget_timer,
             breach_timer: self.breach.map(|b| b.timer),
             escapes: self.escapes,
+            target_player: self.target_player,
         }
+    }
+
+    /// Which human player this tank is fighting - see the field.
+    pub fn target_player(&self) -> u8 {
+        self.target_player
+    }
+
+    /// Point this tank at the other player (`enemy_phase`'s retarget pass).
+    pub(crate) fn set_target_player(&mut self, player: u8) {
+        self.target_player = player;
     }
 
     /// Called from `simulation.rs`'s shell-hit resolution whenever a shell
@@ -1000,7 +1071,7 @@ impl Dir {
 
 /// The perpendicular of `dir`, turning left (counter-clockwise) or right. Used to
 /// pick a sidestep heading for collision avoidance.
-fn perpendicular(dir: Dir, left: bool) -> Dir {
+pub(crate) fn perpendicular(dir: Dir, left: bool) -> Dir {
     match (dir, left) {
         (Dir::Up, true) => Dir::Left,
         (Dir::Up, false) => Dir::Right,
@@ -1015,7 +1086,7 @@ fn perpendicular(dir: Dir, left: bool) -> Dir {
 
 /// The reverse of `dir` - the heading a stuck tank backs out along once
 /// both perpendiculars are blocked.
-fn opposite(dir: Dir) -> Dir {
+pub(crate) fn opposite(dir: Dir) -> Dir {
     match dir {
         Dir::Up => Dir::Down,
         Dir::Down => Dir::Up,
@@ -1091,6 +1162,13 @@ struct Brain<'a> {
     /// The same test toward the player - see `think`'s
     /// `player_line_of_sight` parameter.
     player_line_of_sight: bool,
+    /// Whether the target is hidden from *this* tank by tall grass
+    /// (`Terrain::conceals` plus `grass_reveal_range`). Separate from
+    /// `line_of_sight` on purpose: that one also counts walls, and a tank
+    /// that stopped chasing whenever a wall came between it and the player
+    /// would never path around anything. This one only ever means "lost in
+    /// cover", so it can gate the chase tier without touching navigation.
+    target_concealed: bool,
     /// The tile directly ahead in each direction - see `think`'s
     /// `walls_ahead` parameter.
     walls_ahead: [Option<WallAhead>; 4],
@@ -1379,7 +1457,7 @@ impl Brain<'_> {
     /// shoot through a friendly.
     fn friendly_blocks_shot(&self, fire_dir: Dir, max_forward: f32) -> bool {
         self.movers.iter().enumerate().any(|(i, mover)| {
-            if i == 0 || i == self.my_index {
+            if mover.is_player || i == self.my_index {
                 return false;
             }
             let (off_axis, forward) = axis_offsets(self.me.position, mover.position, fire_dir);
@@ -1391,7 +1469,50 @@ impl Brain<'_> {
 /// Perpendicular and forward distance of `to` from `from` along the cardinal
 /// axis `dir` points along - shared by aim alignment (target: the player) and
 /// friendly-fire avoidance (target: another enemy), so both read the same way.
-fn axis_offsets(from: Position, to: Position, dir: Dir) -> (f32, f32) {
+/// Is something close enough *directly in front* that driving on would
+/// slam into it?
+///
+/// Measured hull surface to hull surface (`Mover::radius` is the real
+/// per-row footprint at the tank's current facing), against
+/// `enemy_separation_px`.
+///
+/// Three conditions, and each one is load-bearing:
+///
+/// - **Ahead**, by the sign of the dot product with the heading. A tank
+///   beside or behind is not in the way, and braking for one would have a
+///   pair that is merely passing each other stop dead.
+/// - **In the lane**, by perpendicular distance: only something the hull
+///   would actually meet counts, not a tank sliding past a hull's width to
+///   the side.
+/// - **Inside the gap**, surface to surface, so a `titan` keeps the same
+///   clear air as a `scout` rather than the same centre distance.
+///
+/// The player is in `movers` too and is treated no differently - the ask
+/// was for tanks to stop short of the player as well, and an enemy that
+/// noses up to the hull and holds reads far better than one that grinds
+/// into it.
+fn crowded_ahead(from: Position, dir: Dir, movers: &[Mover], my_index: usize) -> bool {
+    let gap_wanted = tuning().enemy_separation_px;
+    let Some(me) = movers.get(my_index) else { return false };
+    let step = dir.vec();
+    movers.iter().enumerate().any(|(i, other)| {
+        if i == my_index {
+            return false;
+        }
+        let (dx, dy) = (other.position.x - from.x, other.position.y - from.y);
+        if dx * step.x + dy * step.y <= 0.0 {
+            return false;
+        }
+        // `step` is a unit cardinal, so the 2D cross product is the
+        // perpendicular distance outright.
+        if (dx * step.y - dy * step.x).abs() > me.radius + other.radius {
+            return false;
+        }
+        (dx * dx + dy * dy).sqrt() - me.radius - other.radius <= gap_wanted
+    })
+}
+
+pub(crate) fn axis_offsets(from: Position, to: Position, dir: Dir) -> (f32, f32) {
     let dx = to.x - from.x;
     let dy = to.y - from.y;
     match dir {
@@ -1467,7 +1588,17 @@ fn build<'a>() -> Node<Brain<'a>> {
         ]),
         // 4. Attack when the target is alive and within attack range.
         sequence(vec![
-            condition(|b: &mut Brain| b.target_alive() && b.dist_to_target() <= tuning().enemy_attack_range),
+            condition(|b: &mut Brain| {
+                b.target_alive()
+                    && b.dist_to_target() <= tuning().enemy_attack_range
+                    // Concealment has to break this tier as well as the
+                    // chase below it, or a lost player is still walked at:
+                    // `act_attack`'s unaligned branch repositions toward the
+                    // target, so a tank that cannot shoot still closes until
+                    // it is near enough to see through the grass. A hunter
+                    // is aiming at the frog, not the player, so it is exempt.
+                    && (b.hunting_frog() || !b.target_concealed || b.ai.hit_alert_timer > 0.0)
+            }),
             action("attack", act_attack),
         ]),
         // 5. Chase when the target is alive and either within view range or
@@ -1480,7 +1611,14 @@ fn build<'a>() -> Node<Brain<'a>> {
             condition(|b: &mut Brain| {
                 b.target_alive()
                     && (b.hunting_frog()
-                        || b.dist_to_target() <= tuning().enemy_view_range
+                        // Concealment breaks the chase, which is what makes
+                        // hiding mean anything: without it the tier below
+                        // (patrol, which follows the shared alert) is never
+                        // reached and every enemy inside view range walks
+                        // straight to a player it cannot see. A tank that
+                        // took a hit keeps coming regardless - it knows
+                        // something is there.
+                        || (b.dist_to_target() <= tuning().enemy_view_range && !b.target_concealed)
                         || b.ai.hit_alert_timer > 0.0)
             }),
             action("chase", act_chase),
@@ -1822,8 +1960,8 @@ mod role_tests {
         player_tank.position = player;
         let grid = Grid::build(1280.0, 720.0, 48.0, 0.0, std::iter::empty());
         let movers = [
-            Mover { position: player, velocity: Vector2::new(0.0, 0.0), radius: 20.0 },
-            Mover { position: me, velocity: Vector2::new(0.0, 0.0), radius: 20.0 },
+            Mover { position: player, velocity: Vector2::new(0.0, 0.0), radius: 20.0, is_player: true },
+            Mover { position: me, velocity: Vector2::new(0.0, 0.0), radius: 20.0, is_player: false },
         ];
         let mut rng = SmallRng::seed_from_u64(7);
         ai.think(
@@ -1843,6 +1981,7 @@ mod role_tests {
             &[],
             true,
             true,
+            false,
             [None; 4],
         )
     }
@@ -1955,8 +2094,8 @@ mod stuck_tests {
         player.position = Position::new(200.0, 600.0);
         let grid = Grid::build(1280.0, 720.0, 48.0, 0.0, std::iter::empty());
         let movers = [
-            Mover { position: player.position, velocity: Vector2::new(0.0, 0.0), radius: 20.0 },
-            Mover { position: me.position, velocity: Vector2::new(0.0, 0.0), radius: 20.0 },
+            Mover { position: player.position, velocity: Vector2::new(0.0, 0.0), radius: 20.0, is_player: true },
+            Mover { position: me.position, velocity: Vector2::new(0.0, 0.0), radius: 20.0, is_player: false },
         ];
         let mut rng = SmallRng::seed_from_u64(7);
         ai.think(
@@ -1974,6 +2113,7 @@ mod stuck_tests {
             None,
             None,
             &[],
+            false,
             false,
             false,
             [None; 4],
@@ -2060,5 +2200,53 @@ mod stuck_tests {
         );
         assert_eq!(ai.stuck_timer, 0.0, "the escape resets the clock");
         assert_eq!(ai.escapes, 1);
+    }
+}
+
+#[cfg(test)]
+mod separation_tests {
+    use crate::map::MapFile;
+    use crate::simulation::{Event, Game, Input};
+
+    const W: f32 = 1280.0;
+    const H: f32 = 720.0;
+
+    /// Enemies keep a car's length rather than driving through each other
+    /// and through the player (`crowded_ahead`, `enemy_separation_px`).
+    ///
+    /// A bare map with the player parked in the open, because the shipped
+    /// map's tall grass gates ram damage on concealment and so never
+    /// exercises the player case at all. Measured over the same 8 seeds
+    /// with the brake disabled: 36 enemy-vs-enemy rams, 17 into the player,
+    /// 204 total damage. The brake takes that to 16 / 0 / 67.
+    #[test]
+    fn enemies_pull_up_short_instead_of_ramming() {
+        let map = "version = 1\ntanks = 5\ncells.\"2,2\" = { kind = \"frog\" }\ncells.\"20,11\" = { kind = \"start\" }\n";
+        let (mut pair, mut into_player) = (0, 0);
+        for seed in 0..4u64 {
+            let mut game = Game::default();
+            game.enemy_count_override = Some(5);
+            game.seed_override = Some(77 + seed);
+            game.map = MapFile::from_toml_str(map).expect("test map parses");
+            game.init(W, H);
+            for _ in 0..1200 {
+                game.update(Input::default(), 1.0 / 60.0, W, H);
+                for e in game.events() {
+                    if let Event::Ram { slot, other_slot, .. } = e {
+                        if *slot == 0 || *other_slot == 0 {
+                            into_player += 1
+                        } else {
+                            pair += 1
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            into_player <= 2,
+            "enemies rammed the parked player {into_player} times; without the brake this measured 17 \
+             over twice the frames, and the point of the brake is that they stop short"
+        );
+        assert!(pair <= 12, "enemies rammed each other {pair} times; the un-braked baseline was 36 over twice the frames");
     }
 }
