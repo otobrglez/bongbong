@@ -22,9 +22,12 @@
 mod combat;
 pub mod debug;
 mod engage;
+mod flame;
 mod hits;
 mod props;
 pub use props::{FlyingDrum, GroundFire};
+#[cfg(test)]
+mod flame_tests;
 #[cfg(test)]
 mod props_tests;
 #[cfg(test)]
@@ -33,12 +36,13 @@ mod waves;
 mod weapons;
 
 pub use waves::{RollIn, WaveStatus};
+pub use weapons::FlameJet;
 use waves::WaveState;
 
 use crate::blast::{BlastFx, Scorch};
 use crate::decal::Decal;
 use crate::tuning::tuning;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use hecs::Entity;
 use rand::rngs::SmallRng;
@@ -89,7 +93,7 @@ use crate::{
 use combat::{frog_hop_target, ram, HitEffects};
 use engage::{EngageCtx, EngageReport, EngageRing, EngageStatus, EngageTank};
 use hits::{ShellTarget, Terrain};
-use weapons::{dispatch_fire, laser_damage_range, tick_queued_shots, PendingLaserShot, Projectile, laser_beam_half_width};
+use weapons::{dispatch_fire, dispatch_fire_from, laser_damage_range, tick_queued_shots, PendingLaserShot, Projectile, laser_beam_half_width};
 
 /// One frame's player input, gathered by the caller (`main.rs` reading a
 /// live `RaylibHandle`, or a scripted probe) - the entire interface
@@ -211,6 +215,11 @@ pub enum Event {
     /// A ground cell centred on (`x`, `y`) caught fire: an oil drum's
     /// pool (`pool`) or a lit trail cell.
     FireStarted { x: f32, y: f32, pool: bool },
+    /// The flamethrower's stream lit something at (`x`, `y`) after
+    /// `flame_ignite_seconds` of exposure (`what`: `ground`, `oil`,
+    /// `wood`, `tree`, `drum`), or collapsed a prop under sustained heat
+    /// (`sandbag`, `fence`).
+    Ignited { x: f32, y: f32, what: &'static str },
     /// A delayed secondary pop from a wreck's ammo cooking off. Purely
     /// cosmetic - it deals no damage - but recorded so tooling and the
     /// presentation layer can see it.
@@ -484,6 +493,18 @@ pub struct Game {
     pub(crate) screen_flash_cooldown: f32,
     /// Laser beams still in their short display window, oldest first.
     pub(crate) laser_beams: Vec<LaserBeam>,
+    /// The flame jets resolved this frame, reach capped by terrain -
+    /// what `fx.rs` draws the stream from (`Game::flames`). Replaced
+    /// every frame, empty when nobody is firing.
+    pub(crate) flame_jets: Vec<FlameJet>,
+    /// Flame exposure per ground cell, in seconds (`flame.rs`): grows
+    /// under a stream, fades at `flame_heat_decay`, and a cell leaves the
+    /// map the moment it lights or cools to nothing. Ordered so the
+    /// ignition order is fixed frame to frame.
+    pub(crate) heat: BTreeMap<(i32, i32), f32>,
+    /// Tanks and frogs a stream touched last frame, sorted - the first
+    /// frame of contact during a hold is what `Event::Hit` records.
+    pub(crate) flame_contacts: Vec<Entity>,
     /// Frozen simulation plus a "PAUSED" overlay. Cleared by `init`.
     pub(crate) paused: bool,
     /// Drop shadows on/off (toggle key, and `--no-shadows` at startup).
@@ -574,6 +595,9 @@ struct Frame {
     pending_plasmas: Vec<Plasma>,
     pending_bullets: Vec<Bullet>,
     pending_lasers: Vec<PendingLaserShot>,
+    /// Flame jets emitted this frame, one per firing nozzle
+    /// (`resolve_flames` takes them).
+    flame_jets: Vec<FlameJet>,
     muzzle_flashes: Vec<Shockwave>,
     impact_flashes: Vec<Shockwave>,
     shocks: Vec<Shockwave>,
@@ -600,6 +624,7 @@ impl Frame {
             pending_plasmas: Vec::new(),
             pending_bullets: Vec::new(),
             pending_lasers: Vec::new(),
+            flame_jets: Vec::new(),
             muzzle_flashes: Vec::new(),
             impact_flashes: Vec::new(),
             shocks: Vec::new(),
@@ -666,6 +691,9 @@ impl Game {
         self.grass_cells.clear();
         self.grass.clear();
         self.laser_beams.clear();
+        self.flame_jets.clear();
+        self.heat.clear();
+        self.flame_contacts.clear();
         self.frame = 0;
         self.last_engage.clear();
         self.debug_kills.clear();
@@ -1049,6 +1077,7 @@ impl Game {
             self.wave_phase(&mut f);
             self.spawn_pending(&mut f);
             self.resolve_lasers(&mut f);
+            self.resolve_flames(&mut f);
             self.step_world(&mut f, true);
             self.sync_tanks_and_ram(&mut f);
             self.ram_props(&mut f);
@@ -1166,6 +1195,7 @@ impl Game {
             tank.hit_flash_timer = (tank.hit_flash_timer - dt).max(0.0);
             tank.speed_boost_timer = (tank.speed_boost_timer - dt).max(0.0);
             tank.shield_timer = (tank.shield_timer - dt).max(0.0);
+            tank.burn_timer = (tank.burn_timer - dt).max(0.0);
             tank.tick_wreck(dt);
             tank.tick_minigun_spin(dt);
             if roll_wreck_col(tank, rng) {
@@ -1256,6 +1286,9 @@ impl Game {
             .filter_map(|(pickup_entity, pickup)| {
                 living_tanks
                     .iter()
+                    // The flamethrower is player-only: an enemy drives
+                    // over the fuel tank as if it were not there.
+                    .filter(|&&(e, _)| pickup.kind != PickupKind::Flamethrower || self.is_player(e))
                     .find(|(_, pos)| pos.distance_to(pickup.position) <= tuning().pickup_collect_radius)
                     .map(|&(tank_entity, _)| (pickup_entity, tank_entity, pickup.kind))
             })
@@ -1283,6 +1316,11 @@ impl Game {
                     PickupKind::Minigun => {
                         tank.enqueue_weapon(ActiveWeapon::Minigun);
                         tank.minigun_ammo += tuning().minigun_ammo_per_pickup;
+                    }
+                    // Fuel in seconds; a second tank stacks.
+                    PickupKind::Flamethrower => {
+                        tank.enqueue_weapon(ActiveWeapon::Flamethrower);
+                        tank.flame_fuel += tuning().flame_fuel_per_pickup;
                     }
                     PickupKind::Plasma => {
                         tank.enqueue_weapon(ActiveWeapon::Plasma);
@@ -1350,14 +1388,24 @@ impl Game {
 
         // A laser or minigun is full-auto while the key is held (still
         // paced by `fire_cooldown`); shells and plasma fire once per
-        // physical press, so a held key can never re-arm them.
+        // physical press, so a held key can never re-arm them. The
+        // flamethrower is a stream: every held frame emits, with no
+        // cooldown between frames at all.
         let fire_pressed = intent.fire && !self.player_fire_held_last_frame[index];
         self.player_fire_held_last_frame[index] = intent.fire;
-        let should_fire = match tank.active_weapon() {
-            ActiveWeapon::Laser | ActiveWeapon::Minigun => intent.fire,
+        let weapon = tank.active_weapon();
+        let should_fire = match weapon {
+            ActiveWeapon::Laser | ActiveWeapon::Minigun | ActiveWeapon::Flamethrower => intent.fire,
             ActiveWeapon::Plasma | ActiveWeapon::Shell => fire_pressed,
         };
-        if should_fire && tank.fire_cooldown <= 0.0 {
+        if weapon == ActiveWeapon::Flamethrower {
+            if should_fire {
+                dispatch_fire_from(&mut self.physics, f, tank, owner, 0.0, Some(entity));
+            } else {
+                tank.flame_held = false;
+            }
+        } else if should_fire && tank.fire_cooldown <= 0.0 {
+            tank.flame_held = false;
             dispatch_fire(&mut self.physics, f, tank, owner, 0.0);
         }
     }
@@ -2509,6 +2557,8 @@ impl Game {
                     minigun_ammo: tank.minigun_ammo,
                     plasma_ammo: tank.plasma_ammo,
                     laser_charges: tank.laser_charges,
+                    flame_fuel: tank.flame_fuel,
+                    burn_timer: tank.burn_timer,
                     shield_timer: tank.shield_timer,
                     touching_static: contact.touching_static,
                     contact_impulse: contact.max_impulse,
@@ -2549,6 +2599,10 @@ pub struct TankSnapshot {
     pub minigun_ammo: i32,
     pub plasma_ammo: i32,
     pub laser_charges: i32,
+    /// Flamethrower fuel left, in seconds of burn.
+    pub flame_fuel: f32,
+    /// Seconds of flame afterburn left on the hull (0 = not burning).
+    pub burn_timer: f32,
     /// Seconds of rainbow shield left (0 = unshielded).
     pub shield_timer: f32,
     /// The hull has an active contact with static terrain right now.

@@ -53,6 +53,9 @@ pub(super) enum DamageCause {
     Shot { dir: Option<Vector2> },
     Ram,
     Blast { falloff: f32, from: Position },
+    /// Sustained flame exposure (`flame.rs`): a sandbag or fence that
+    /// took its full heat collapses outright, no roll.
+    Fire,
 }
 
 /// A barrel detonation waiting for `explosions` to resolve it this frame.
@@ -160,6 +163,13 @@ impl Game {
                 return false;
             }
             let died = match o.material {
+                // Heat is not a blow: a bag or a fence that has taken its
+                // whole exposure simply goes, no one-shot roll.
+                Material::Sandbag | Material::Fence if cause == DamageCause::Fire => {
+                    o.health = 0.0;
+                    o.destroyed = true;
+                    true
+                }
                 Material::Fence => {
                     let pristine = o.health >= o.max_health;
                     if pristine && !f.rng.random_bool(tuning().fence_one_shot_chance) {
@@ -197,6 +207,7 @@ impl Game {
                 DamageCause::Shot { dir: None } => BlastShape::Plain,
                 DamageCause::Ram => BlastShape::Ram,
                 DamageCause::Blast { .. } => BlastShape::Plain,
+                DamageCause::Fire => BlastShape::Fire,
             };
             self.obstacle_died(f, DeadTile { material, variant, position: pos, chained: false, charred: false, shape });
         }
@@ -423,7 +434,7 @@ impl Game {
     /// Set a ground cell on fire for `seconds`, unless it already is. A
     /// pool cell burns where the drum stood; a trail cell also carries the
     /// fire on to its oil neighbours one step later.
-    fn light_cell(&mut self, f: &mut Frame, cell: (i32, i32), seconds: f32, pool: bool) {
+    pub(super) fn light_cell(&mut self, f: &mut Frame, cell: (i32, i32), seconds: f32, pool: bool) {
         if self.fires.iter().any(|fire| fire.cell == cell) {
             return;
         }
@@ -467,6 +478,19 @@ impl Game {
         }
 
         let burning: Vec<(i32, i32)> = self.fires.iter().filter(|fire| fire.left > 0.0).map(|fire| fire.cell).collect();
+        // Grass in a burning cell chars, whatever lit it: the tufts stay
+        // as stubs for the round and the cell stops concealing at once.
+        if !self.grass_cells.is_empty() {
+            let before = self.grass_cells.len();
+            self.grass_cells.retain(|c| !burning.contains(&cell_of(*c)));
+            if self.grass_cells.len() != before {
+                for tuft in self.grass.iter_mut() {
+                    if !tuft.burnt && burning.contains(&cell_of(tuft.base)) {
+                        tuft.burnt = true;
+                    }
+                }
+            }
+        }
         if live {
             // A hull over a burning cell burns: players first, in index
             // order, then enemies, like every other blast walk - no RNG,
@@ -767,7 +791,7 @@ impl Game {
 /// (distance in a blast, `fire_fuse_factor` from a fire) times the drum's
 /// own (`Drum::fuse_factor`). Zeroes its health so it draws as critical
 /// under the lit column, and remembers what lit it.
-fn arm_fuse(o: &mut Obstacle, factor: f32, from: Position) {
+pub(super) fn arm_fuse(o: &mut Obstacle, factor: f32, from: Position) {
     let drum = Drum::from_variant(o.variant);
     let total = tuning().barrel_fuse_seconds * factor * drum.fuse_factor();
     o.health = 0.0;

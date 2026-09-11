@@ -113,6 +113,10 @@ pub struct TankDebug {
     pub minigun: i32,
     pub plasma: i32,
     pub laser: i32,
+    /// Flamethrower fuel, seconds.
+    pub flame_fuel: f32,
+    /// Seconds of flame afterburn left on the hull.
+    pub burning: f32,
     pub weapon: &'static str,
     pub shield: f32,
     pub boost: f32,
@@ -226,6 +230,8 @@ pub struct TankPatch {
     pub minigun_ammo: Option<i32>,
     pub plasma_ammo: Option<i32>,
     pub laser_charges: Option<i32>,
+    /// Flamethrower fuel, in seconds.
+    pub flame_fuel: Option<f32>,
     pub shield_timer: Option<f32>,
     pub speed_boost_timer: Option<f32>,
 }
@@ -358,6 +364,8 @@ impl Game {
                     minigun: tank.minigun_ammo,
                     plasma: tank.plasma_ammo,
                     laser: tank.laser_charges,
+                    flame_fuel: r1(tank.flame_fuel),
+                    burning: r1(tank.burn_timer),
                     weapon: tank.active_weapon().name(),
                     shield: r1(tank.shield_timer),
                     boost: r1(tank.speed_boost_timer),
@@ -591,6 +599,12 @@ impl Game {
             tank.laser_charges = n.max(0);
             if n > 0 {
                 tank.enqueue_weapon(ActiveWeapon::Laser);
+            }
+        }
+        if let Some(s) = patch.flame_fuel {
+            tank.flame_fuel = s.max(0.0);
+            if s > 0.0 {
+                tank.enqueue_weapon(ActiveWeapon::Flamethrower);
             }
         }
         if let Some(t) = patch.shield_timer {

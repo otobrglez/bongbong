@@ -48,6 +48,13 @@ pub enum PickupKind {
     /// next to a Health slot with SHIELD_NEAR_HEALTH_CHANCE odds each time
     /// that slot is (re)spawned - see `simulation::maybe_spawn_bonus_shield`.
     Shield,
+    /// The flamethrower (docs/flamethrower-prd.md): grants
+    /// `flame_fuel_per_pickup` seconds of fuel and queues the weapon (FIFO
+    /// like the others). While live and fuelled, holding fire pours a
+    /// short cone of flame that burns tanks, lights the ground and sets
+    /// the map's own props alight. Player-only: an enemy driving over one
+    /// leaves it where it is.
+    Flamethrower,
 }
 
 pub struct Pickup {

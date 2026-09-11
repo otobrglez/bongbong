@@ -31,6 +31,14 @@ snapped, loud/high-contrast treatment. A filled lightning-bolt polygon
 universal "speed boost" symbol, distinct from the other three's beam/
 sparks/orb. Regenerate with `python3 tools/gen_speedup_pickup.py`.
 
+`flamethrower.png` is likewise not from the pack - generated from scratch by
+`tools/gen_flamethrower_pickup.py`, same raw-PNG-bytes/no-Pillow convention
+and the same loud/high-contrast treatment. A dark fuel drum with a short
+steel nozzle spitting a tongue of flame to the right - white-hot at the
+nozzle through orange (the HUD's `HUD_FLAME_COLOR`) to red at the tip, the
+same ramp the in-game stream's particles use. Regenerate with
+`python3 tools/gen_flamethrower_pickup.py`.
+
 `shield.png` is derived from `health.png` below: `tools/gen_shield_pickup.py`
 reads the health pack and sweeps its red through the rainbow (diagonally,
 red top-left to violet bottom-right), leaving the white cross, dark outline

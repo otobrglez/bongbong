@@ -49,6 +49,30 @@ pub(super) struct PendingLaserShot {
 
 /// Damage range of one laser shot: LASER_DAMAGE_MIN..MAX scaled by the
 /// shooter's chassis class and the beam variant.
+/// One frame of the flamethrower's stream (docs/flamethrower-prd.md):
+/// the muzzle, the unit facing and the nominal reach. `Game::resolve_flames`
+/// caps the reach at the first solid tile and applies the cone.
+#[derive(Clone, Copy, Debug)]
+pub struct FlameJet {
+    pub origin: Position,
+    pub dir: Vector2,
+    pub range: f32,
+    /// Effective reach after `resolve_flames` capped it at the first
+    /// solid tile; equal to `range` until then.
+    pub reach: f32,
+    pub owner: Owner,
+    pub shooter: Entity,
+}
+
+pub(super) fn flame_jet(tank: &Tank, owner: Owner, shooter: Entity) -> FlameJet {
+    let rot = tank.rotation.to_radians();
+    let dir = Vector2::new(rot.sin(), -rot.cos());
+    let muzzle = tuning().tank_muzzle_forward_offset[tank.row as usize] * tank.scale;
+    let origin = Position::new(tank.position.x + dir.x * muzzle, tank.position.y + dir.y * muzzle);
+    let range = tuning().flame_range;
+    FlameJet { origin, dir, range, reach: range, owner, shooter }
+}
+
 pub(super) fn laser_damage_range(shot: &PendingLaserShot) -> (f32, f32) {
     let factor = tuning().tank_damage_factor[shot.shooter_row as usize] * shot.variant.damage_factor();
     (tuning().laser_damage_min * factor, tuning().laser_damage_max * factor)
@@ -189,9 +213,41 @@ pub(super) fn tick_queued_shots(physics: &mut Physics, f: &mut Frame, tank: &mut
 /// the right one TANK_TWIN_SHOT_DELAY_SECONDS later, costing 2 ammo. A
 /// weapon short of the ammo it needs simply does nothing.
 pub(super) fn dispatch_fire(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, owner: Owner, aim_offset: f32) {
+    dispatch_fire_from(physics, f, tank, owner, aim_offset, None);
+}
+
+/// `dispatch_fire` for a tank whose entity is known, which the
+/// flamethrower needs (its cone must skip the shooter). Every other
+/// weapon ignores `shooter`.
+pub(super) fn dispatch_fire_from(
+    physics: &mut Physics,
+    f: &mut Frame,
+    tank: &mut Tank,
+    owner: Owner,
+    aim_offset: f32,
+    shooter: Option<Entity>,
+) {
     let lateral = tuning().tank_barrel_lateral_offset[tank.row as usize];
     let ammo_cost = if lateral > 0.0 { 2 } else { 1 };
     match tank.active_weapon() {
+        ActiveWeapon::Flamethrower => {
+            // Continuous, not paced: one jet per held frame, `dt` of fuel
+            // each. `Fired` is recorded once per hold, not per frame.
+            let Some(shooter) = shooter else { return };
+            if tank.flame_fuel <= 0.0 {
+                return;
+            }
+            if !tank.flame_held {
+                tank.flame_held = true;
+                f.events.push(Event::Fired { slot: tank.owner_slot(), weapon: ActiveWeapon::Flamethrower.name() });
+            }
+            tank.flame_fuel = (tank.flame_fuel - f.dt).max(0.0);
+            if tank.flame_fuel <= 0.0 {
+                // Dry: the next press starts a new hold.
+                tank.flame_held = false;
+            }
+            f.flame_jets.push(flame_jet(tank, owner, shooter));
+        }
         ActiveWeapon::Laser => {
             tank.laser_charges -= 1;
             tank.fire_cooldown = tuning().player_fire_interval;

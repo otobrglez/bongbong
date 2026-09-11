@@ -393,6 +393,12 @@ pub struct Obstacle {
     /// While armed the barrel is inert to further damage, like burning
     /// Wood, and draws its lit-fuse column.
     pub fuse: Option<Fuse>,
+    /// Seconds of flame exposure (`Game::resolve_flames`), fading at
+    /// `flame_heat_decay` when the stream is elsewhere. What catches, and
+    /// when, is read off this: wood and drums at `flame_ignite_seconds`,
+    /// a sandbag at `flame_sandbag_seconds`, a fence at
+    /// `flame_fence_seconds`.
+    pub heat: f32,
     /// Walls only: which faces (N E S W as bits 0..3) a blast has hit,
     /// drawn blackened over the edge cap so a corridor a cascade ran down
     /// carries the mark. Never cleared - soot does not wash off mid-round.
@@ -436,6 +442,7 @@ impl Obstacle {
             burn_frame_timer: 0.0,
             burn_elapsed: 0.0,
             fuse: None,
+            heat: 0.0,
             scorched: 0,
             ram_timer: 0.0,
             edge_mask: 0,

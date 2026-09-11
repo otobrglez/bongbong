@@ -2,7 +2,9 @@
 
 Status: agreed with the author 2026-09 (the interview answers are in section
 2), mechanics sketched in the "Flame Lab" artifact from the session that
-wrote this, implementation following on the same branch. Builds on the
+wrote this, **implemented on the same branch** (`simulation/flame.rs`, tests
+in `simulation/flame_tests.rs`). Section 14 lists where the build departs
+from the text below. Builds on the
 ground-fire system the barrel work added (docs/barrel-explosion-variety.md
 section B1, `simulation/props.rs`'s `tick_fires`), which is what makes a
 flamethrower that burns the *environment* a weapon rather than a particle
@@ -85,8 +87,8 @@ against them. It is also the first weapon that can hurt its user.
   cone resets the timer rather than stacking it. A tank killed by
   afterburn goes on `Frame::kills` and explodes like any other kill.
 - **Frogs.** Either frog inside the cone takes
-  `flame_frog_damage_per_second` (10); it hops the way a shell makes it
-  hop, once per its own cooldown.
+  `flame_frog_damage_per_second` (10). It does not hop: a hop's landing
+  spot is an RNG draw, and the weapon draws none (section 14).
 - **The shooter.** Never damaged by its own stream. It *is* damaged by the
   ground fire the stream leaves, like everyone else (section 7).
 - **Events.** `Event::Fired { weapon: "flamethrower" }` once per press, not
@@ -252,6 +254,39 @@ Two choices made without asking, easy to change:
   difference between a flamethrower and a paint roller.
 - **Fuel shown as seconds**, not a percentage bar: it sits in the weapon
   slot beside the laser's charges and reads the same way.
+
+## 14. As built
+
+Where the implementation departs from the sections above, and why:
+
+- **Afterburn does not run while the stream is still on the hull.** The
+  cone charges `flame_damage_per_second`; the afterburn's lower rate
+  applies only on frames the stream is elsewhere, so the two never stack
+  and a held stream deals exactly its rate.
+- **Frogs are damaged, not hopped** (section 4). The shell's hop draws the
+  landing spot from the round RNG; keeping the flamethrower RNG-free was
+  worth more than the hop.
+- **The shooter's own cells never heat.** "A quarter cell past the
+  muzzle" was not enough: `tick_fires` burns a hull whose box *touches* a
+  burning cell, so a stream that lit the cell in front of the tracks lit
+  the shooter. The rule is now the same box test in reverse - a cell the
+  shooter's hull is over or touching is skipped - and the strip starts one
+  cell out. Driving forward into it still costs health (test 10).
+- **Hull slack.** A tank counts as in the cone when its centre is within a
+  quarter hull of it, not exactly inside: a jet that visibly washes over a
+  flank and does nothing read as a miss.
+- **The dry tank is not the end of the hold.** Fuel running out mid-hold
+  releases `flame_held`, so the next press with a fresh tank logs a new
+  `Fired`.
+- **Cone width fills from the start.** The particles are seeded across
+  the cone's width along its whole length (`fx::Fx::flame_mote`), at
+  `flame_particle_rate` 240 rather than 90 - at 90 the stream read as a
+  dotted line.
+- **HUD, two players.** The fourth slot fits by setting the two-player
+  weapon pairs in the 10 px font (`hud::CHAR_W_SMALL`); the single-player
+  bar shifts the heart, HP and shells left instead.
+- The builder's short label for the pickup is `flame` (the cursor readout
+  has no room for `flamethrower`); the tool's name stays `flamethrower`.
 
 ## 13. Phases
 

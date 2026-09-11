@@ -224,6 +224,7 @@ pub enum ActiveWeapon {
     Laser,
     Plasma,
     Minigun,
+    Flamethrower,
     Shell,
 }
 
@@ -234,6 +235,7 @@ impl ActiveWeapon {
             ActiveWeapon::Laser => "laser",
             ActiveWeapon::Plasma => "plasma",
             ActiveWeapon::Minigun => "minigun",
+            ActiveWeapon::Flamethrower => "flamethrower",
             ActiveWeapon::Shell => "shell",
         }
     }
@@ -389,6 +391,17 @@ pub struct Tank {
     /// `PLASMA_PURPLE_PICKUP_CHANCE`), meaningless while `plasma_ammo == 0`.
     /// Same mechanism as `laser_variant`.
     pub plasma_variant: PlasmaVariant,
+    /// Flamethrower fuel in seconds of burn (`pickup::PickupKind::
+    /// Flamethrower`, docs/flamethrower-prd.md). Pickup-only; drained by
+    /// `dt` every frame the trigger is held with the flamethrower live.
+    pub flame_fuel: f32,
+    /// True while the trigger has been held on the flamethrower since the
+    /// last frame it was not: `Event::Fired` is recorded once per hold.
+    pub flame_held: bool,
+    /// Seconds this tank keeps burning after a flame stream touched it
+    /// (`flame_afterburn_seconds`); `flame_afterburn_dps` a second while
+    /// positive. Set, never added to, so re-contact resets it.
+    pub burn_timer: f32,
     /// FIFO queue of this tank's collected special weapons. The inventory
     /// rule: the weapon at the front keeps firing until its own ammo runs
     /// dry - a fresh pickup never interrupts it, it lines up *behind* (see
@@ -507,6 +520,9 @@ impl Default for Tank {
             damage: 0.0,
             shells_ammo: tuning().max_shells,
             laser_charges: 0,
+            flame_fuel: 0.0,
+            flame_held: false,
+            burn_timer: 0.0,
             laser_variant: LaserVariant::Red,
             minigun_ammo: 0,
             plasma_ammo: 0,
@@ -702,8 +718,16 @@ impl Tank {
             ActiveWeapon::Laser => self.laser_charges,
             ActiveWeapon::Plasma => self.plasma_ammo,
             ActiveWeapon::Minigun => self.minigun_ammo,
+            // Whole seconds, rounded up: the last fraction still fires.
+            ActiveWeapon::Flamethrower => self.flame_fuel.ceil().max(0.0) as i32,
             ActiveWeapon::Shell => self.shells_ammo,
         }
+    }
+
+    /// The flamethrower's slot readout: fuel in whole seconds, rounded
+    /// up, 0 when dry.
+    pub fn flame_fuel_seconds(&self) -> i32 {
+        self.weapon_ammo(ActiveWeapon::Flamethrower)
     }
 
     /// Register a collected special-weapon pickup in `weapon_queue` (see

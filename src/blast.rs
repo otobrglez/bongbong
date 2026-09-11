@@ -311,6 +311,26 @@ pub fn pixel_disc(d: &mut impl RaylibDraw, center: Position, radius: f32, color:
 /// one source pixel of every sprite in the game covers.
 const GLOW_BLOCK: f32 = 2.0;
 
+/// The flamethrower's nozzle glow while it fires (additive): a hot disc
+/// at the muzzle and a fainter, larger one part way down the stream,
+/// both flickering off the round clock. The stream itself is particles
+/// (`fx.rs`); this is the light they throw on the ground.
+pub fn draw_flame_glow(d: &mut impl RaylibDraw, origin: Position, dir: sola_raylib::core::math::Vector2, reach: f32, time: f32) {
+    let flicker = 0.75 + 0.25 * (time * 47.0).sin();
+    pixel_disc(d, origin, 10.0, Color::new(255, 200, 90, (150.0 * flicker) as u8));
+    let mid = Position::new(origin.x + dir.x * reach * 0.4, origin.y + dir.y * reach * 0.4);
+    pixel_disc(d, mid, (reach * 0.22).max(6.0), Color::new(255, 120, 40, (70.0 * flicker) as u8));
+}
+
+/// The glow on a hull the flamethrower set alight (additive): a flickering
+/// disc that shrinks as the afterburn runs out, `left` seconds to go.
+pub fn draw_burning_hull_glow(d: &mut impl RaylibDraw, center: Position, time: f32, left: f32) {
+    let phase = (seed_at(center, 29) % 100) as f32 / 100.0 * std::f32::consts::TAU;
+    let flicker = 0.7 + 0.3 * (time * 37.0 + phase).sin();
+    let dying = (left / tuning().flame_afterburn_seconds.max(0.1)).clamp(0.2, 1.0);
+    pixel_disc(d, center, 12.0 + 8.0 * dying, Color::new(255, 130, 40, (110.0 * flicker * dying) as u8));
+}
+
 /// The pulsing glow on a barrel whose fuse is lit (additive, like the
 /// bloom). `time` is the round clock, only used to phase the pulse.
 pub fn draw_fuse_glow(d: &mut impl RaylibDraw, center: Position, time: f32) {

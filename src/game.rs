@@ -11,7 +11,7 @@ use crate::bullet::{Bullet, BulletState, draw_bullet, draw_bullet_shadow};
 use crate::damage_stage::draw_damage;
 use crate::frog::{FrogVariantTextures, draw_frog, draw_frog_ring};
 use crate::laser::draw_laser_beam;
-use crate::blast::{draw_blast, draw_blast_glow, draw_fire_glow, draw_fuse_glow, draw_ground_fire, draw_scorch};
+use crate::blast::{draw_blast, draw_blast_glow, draw_burning_hull_glow, draw_fire_glow, draw_flame_glow, draw_fuse_glow, draw_ground_fire, draw_scorch};
 use crate::decal::{draw_decal, draw_decal_shadow};
 use crate::obstacle::{draw_flying_drum, draw_obstacle_cap, draw_oil_cell, draw_tree, draw_tree_shadow, tree_lean, Material, Obstacle, ObstacleTextures, draw_obstacle, draw_obstacle_shadow, fence_axis};
 #[cfg(feature = "dev-tools")]
@@ -67,6 +67,7 @@ pub struct Textures<'a> {
     pub pickup_plasma: &'a Texture2D,
     pub pickup_speedup: &'a Texture2D,
     pub pickup_shield: &'a Texture2D,
+    pub pickup_flamethrower: &'a Texture2D,
     /// The minigun barrel-cluster overlay drawn on a tank's turret while it
     /// holds minigun ammo - see `tank::draw_minigun_mount`. One shared
     /// texture for every chassis (unlike `tanks` above), not a sheet.
@@ -282,6 +283,16 @@ impl Game {
                 for (at, left, _total) in self.burning_cells() {
                     draw_fire_glow(&mut bd, at, self.time, left);
                 }
+                // The flamethrower's nozzle while it fires: a hot disc at
+                // the muzzle and a fainter one a third of the way out.
+                for jet in self.flames() {
+                    draw_flame_glow(&mut bd, jet.origin, jet.dir, jet.reach, self.time);
+                }
+                // A hull with afterburn on it glows under its embers, so
+                // the state reads between particles too.
+                for (at, left) in self.burning_tanks() {
+                    draw_burning_hull_glow(&mut bd, at, self.time, left);
+                }
             });
 
             for pickup in self.world.query::<&Pickup>().iter() {
@@ -293,6 +304,7 @@ impl Game {
                     PickupKind::Plasma => textures.pickup_plasma,
                     PickupKind::SpeedUp => textures.pickup_speedup,
                     PickupKind::Shield => textures.pickup_shield,
+                    PickupKind::Flamethrower => textures.pickup_flamethrower,
                 };
                 draw_pickup(&mut d, texture, pickup);
             }
@@ -876,6 +888,7 @@ fn draw_tank_inspect(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>) {
         ActiveWeapon::Laser => ("LASER", tank.laser_charges),
         ActiveWeapon::Plasma => ("PLASMA", tank.plasma_ammo),
         ActiveWeapon::Minigun => ("MINIGUN", tank.minigun_ammo),
+        ActiveWeapon::Flamethrower => ("FLAME", tank.flame_fuel_seconds()),
         ActiveWeapon::Shell => ("SHELL", tank.shells_ammo),
     };
     let mut lines = vec![

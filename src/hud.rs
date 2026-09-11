@@ -53,6 +53,8 @@ pub fn version_line() -> String {
 pub const HUD_LASER_COLOR: Color = Color::new(255, 60, 160, 255);
 pub const HUD_PLASMA_COLOR: Color = Color::new(60, 220, 200, 255);
 pub const HUD_MINIGUN_COLOR: Color = Color::new(190, 205, 215, 255);
+/// The flamethrower's accent: fuel-orange, the fire ramp's middle.
+pub const HUD_FLAME_COLOR: Color = Color::new(255, 140, 40, 255);
 
 /// The bar's fill - the same `#151515` the web page is set in, so the bar
 /// and the page read as one surface around the field. The editor's bar
@@ -78,6 +80,9 @@ const BAR2_GAP: i32 = 1;
 /// Approximate default-font advance per character at `HUD_TEXT_SIZE`; the
 /// pairs are laid out in cells of this width.
 const CHAR_W: i32 = 12;
+/// The small readout font (the two-player weapon pairs) and its cell.
+const HUD_SMALL_TEXT_SIZE: i32 = 10;
+const CHAR_W_SMALL: i32 = 7;
 
 /// The slot origins one table of readouts is laid out from. One table per
 /// player count: the pairs of a two-player round need wider HP, shell and
@@ -103,17 +108,19 @@ struct Slots {
 const SLOTS_ONE: Slots = Slots {
     enemies: 272,
     enemy_count: 364,
-    heart: 570,
-    hp: 592,
-    shell: 640,
-    shells: 674,
-    weapons: 724,
+    heart: 494,
+    hp: 516,
+    shell: 564,
+    shells: 598,
+    weapons: 648,
     weapon_slot_w: 80,
     bars: 968,
     hp_w: 3 * CHAR_W,
     count_w: 3 * CHAR_W,
 };
 
+/// Two players: the weapon pairs are set in the small font
+/// (`CHAR_W_SMALL`) so four slots still end before the gauges.
 const SLOTS_TWO: Slots = Slots {
     enemies: 256,
     enemy_count: 344,
@@ -122,13 +129,24 @@ const SLOTS_TWO: Slots = Slots {
     shell: 524,
     shells: 560,
     weapons: 628,
-    weapon_slot_w: 104,
+    weapon_slot_w: 84,
     bars: 968,
     hp_w: 7 * CHAR_W,
-    count_w: 5 * CHAR_W,
+    count_w: 5 * CHAR_W_SMALL,
 };
 
+/// Weapon slots, in bar order. Four of them: laser, plasma, minigun,
+/// flamethrower.
+pub const WEAPON_SLOTS: usize = 4;
+
 impl Slots {
+    /// Width of the shells readout: `20|20` in the full font with two
+    /// players (the weapon pairs use `count_w`, in the small font).
+    #[cfg_attr(not(test), allow(dead_code))]
+    const fn shells_pair_w(&self) -> i32 {
+        5 * CHAR_W
+    }
+
     fn for_players(players: PlayerCount) -> &'static Slots {
         match players {
             PlayerCount::One => &SLOTS_ONE,
@@ -156,7 +174,7 @@ pub struct PlayerHud {
     pub shells_color: Color,
     /// The trigger fires plain shells right now.
     pub shells_active: bool,
-    pub weapons: [WeaponSlot; 3],
+    pub weapons: [WeaponSlot; WEAPON_SLOTS],
     /// Fraction of a speed boost left, 0 when none is running.
     pub speed: f32,
     /// Fraction of a shield left, 0 when none is running.
@@ -173,7 +191,7 @@ impl PlayerHud {
             shells: 0,
             shells_color: hud_number_color(0.0, tuning().max_shells as f32),
             shells_active: false,
-            weapons: [slot(ActiveWeapon::Laser), slot(ActiveWeapon::Plasma), slot(ActiveWeapon::Minigun)],
+            weapons: [slot(ActiveWeapon::Laser), slot(ActiveWeapon::Plasma), slot(ActiveWeapon::Minigun), slot(ActiveWeapon::Flamethrower)],
             speed: 0.0,
             shield: 0.0,
         }
@@ -202,6 +220,8 @@ impl PlayerHud {
                     WeaponSlot { weapon: ActiveWeapon::Laser, count: tank.laser_charges, active: active == ActiveWeapon::Laser },
                     WeaponSlot { weapon: ActiveWeapon::Plasma, count: tank.plasma_ammo, active: active == ActiveWeapon::Plasma },
                     WeaponSlot { weapon: ActiveWeapon::Minigun, count: tank.minigun_ammo, active: active == ActiveWeapon::Minigun },
+                    // Fuel in whole seconds, rounded up.
+                    WeaponSlot { weapon: ActiveWeapon::Flamethrower, count: tank.flame_fuel_seconds(), active: active == ActiveWeapon::Flamethrower },
                 ],
                 speed: boost,
                 shield: tank.shield_charge(),
@@ -279,6 +299,7 @@ pub fn weapon_color(weapon: ActiveWeapon) -> Color {
         ActiveWeapon::Laser => HUD_LASER_COLOR,
         ActiveWeapon::Plasma => HUD_PLASMA_COLOR,
         ActiveWeapon::Minigun => HUD_MINIGUN_COLOR,
+        ActiveWeapon::Flamethrower => HUD_FLAME_COLOR,
         ActiveWeapon::Shell => TEXT,
     }
 }
@@ -333,13 +354,14 @@ pub fn draw_bar(d: &mut impl RaylibDraw, panel: Rect, model: &HudModel, textures
         }
     }
 
-    for i in 0..3 {
+    for i in 0..WEAPON_SLOTS {
         let slot = model.p1.weapons[i];
         let x = px + s.weapons + i as i32 * s.weapon_slot_w;
         let texture = match slot.weapon {
             ActiveWeapon::Laser => textures.pickup_laser,
             ActiveWeapon::Plasma => textures.pickup_plasma,
             ActiveWeapon::Minigun => textures.pickup_minigun,
+            ActiveWeapon::Flamethrower => textures.pickup_flamethrower,
             ActiveWeapon::Shell => textures.shells,
         };
         let stocked = slot.count > 0 || p2.is_some_and(|p| p.weapons[i].count > 0);
@@ -364,10 +386,12 @@ pub fn draw_bar(d: &mut impl RaylibDraw, panel: Rect, model: &HudModel, textures
                 }
             }
             Some(p2) => {
+                // The small font: four pairs have to fit before the gauges.
                 let (a, ac) = count_of(slot);
                 let (b, bc) = count_of(p2.weapons[i]);
-                draw_pair(d, count_x, text_y, 2, (&a, ac), (&b, bc));
-                draw_pair_underlines(d, count_x, py, ph, 2, slot.active, p2.weapons[i].active, weapon_color(slot.weapon));
+                let small_y = py + (ph - HUD_SMALL_TEXT_SIZE) / 2;
+                draw_pair_sized(d, count_x, small_y, 2, (&a, ac), (&b, bc), HUD_SMALL_TEXT_SIZE, CHAR_W_SMALL);
+                draw_pair_underlines_sized(d, count_x, py, ph, 2, slot.active, p2.weapons[i].active, weapon_color(slot.weapon), CHAR_W_SMALL);
             }
         }
     }
@@ -410,23 +434,35 @@ fn draw_gauge(d: &mut impl RaylibDraw, x: i32, y: i32, h: i32, frac: f32, color:
 /// right-aligned to the dim separator in a cell `digits` wide, the right
 /// one after it. Each side in its own colour.
 fn draw_pair(d: &mut impl RaylibDraw, x: i32, text_y: i32, digits: i32, left: (&str, Color), right: (&str, Color)) {
-    let sep_x = x + digits * CHAR_W;
-    let left_x = sep_x - left.0.len() as i32 * CHAR_W;
-    d.draw_text(left.0, left_x, text_y, HUD_TEXT_SIZE, left.1);
-    d.draw_text("|", sep_x + 2, text_y, HUD_TEXT_SIZE, DIM);
-    d.draw_text(right.0, sep_x + CHAR_W, text_y, HUD_TEXT_SIZE, right.1);
+    draw_pair_sized(d, x, text_y, digits, left, right, HUD_TEXT_SIZE, CHAR_W);
+}
+
+/// `draw_pair` at an explicit font size and cell width - the weapon
+/// pairs use the small font so four slots fit.
+#[allow(clippy::too_many_arguments)]
+fn draw_pair_sized(d: &mut impl RaylibDraw, x: i32, text_y: i32, digits: i32, left: (&str, Color), right: (&str, Color), size: i32, ch: i32) {
+    let sep_x = x + digits * ch;
+    let left_x = sep_x - left.0.len() as i32 * ch;
+    d.draw_text(left.0, left_x, text_y, size, left.1);
+    d.draw_text("|", sep_x + 2, text_y, size, DIM);
+    d.draw_text(right.0, sep_x + ch, text_y, size, right.1);
 }
 
 /// The two-player stand-in for `active_outline`: a 2 px underline under
 /// whichever side of a pair is what that player's trigger fires.
 fn draw_pair_underlines(d: &mut impl RaylibDraw, x: i32, y: i32, h: i32, digits: i32, left: bool, right: bool, color: Color) {
-    let w = digits * CHAR_W - 2;
+    draw_pair_underlines_sized(d, x, y, h, digits, left, right, color, CHAR_W);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_pair_underlines_sized(d: &mut impl RaylibDraw, x: i32, y: i32, h: i32, digits: i32, left: bool, right: bool, color: Color, ch: i32) {
+    let w = digits * ch - 2;
     let uy = y + h - 4;
     if left {
         d.draw_rectangle(x, uy, w, 2, color);
     }
     if right {
-        d.draw_rectangle(x + (digits + 1) * CHAR_W, uy, w, 2, color);
+        d.draw_rectangle(x + (digits + 1) * ch, uy, w, 2, color);
     }
 }
 
@@ -659,15 +695,18 @@ mod hud_tests {
             assert!(s.shell + SHELL_TEXTURE_SIZE as i32 <= s.shells, "{name}");
             assert!(s.shells + s.count_w <= s.weapons, "{name}: shells run into the weapons");
             assert!(PICKUP_TEXTURE_SIZE as i32 + 4 + s.count_w <= s.weapon_slot_w, "{name}: a weapon count overflows its slot");
-            assert!(s.weapons + 3 * s.weapon_slot_w <= s.bars, "{name}");
+            assert!(s.weapons + WEAPON_SLOTS as i32 * s.weapon_slot_w <= s.bars, "{name}: four weapon slots run into the gauges");
             assert!(BAR_W <= BAR_SLOT_W);
             assert!(s.bars + 3 * BAR_SLOT_W <= crate::DEFAULT_SCREEN_WIDTH);
             let button = players_button_rect(default_panel());
             assert!((s.bars + 3 * BAR_SLOT_W) as f32 <= button.x, "{name}: bars run into the players button");
         }
-        // The pairs fit their cells: three digits a side for HP, two elsewhere.
+        // The pairs fit their cells: three digits a side for HP, two for
+        // the shells, two in the small font for each weapon.
         assert!(3 * CHAR_W + CHAR_W + 3 * CHAR_W <= SLOTS_TWO.hp_w);
-        assert!(2 * CHAR_W + CHAR_W + 2 * CHAR_W <= SLOTS_TWO.count_w);
+        assert!(2 * CHAR_W + CHAR_W + 2 * CHAR_W <= SLOTS_TWO.shells_pair_w());
+        assert!(2 * CHAR_W_SMALL + CHAR_W_SMALL + 2 * CHAR_W_SMALL <= SLOTS_TWO.count_w);
+        assert!(SLOTS_TWO.shells + SLOTS_TWO.shells_pair_w() <= SLOTS_TWO.weapons, "two: the shells pair runs into the weapons");
     }
 
     #[test]

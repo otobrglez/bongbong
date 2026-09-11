@@ -111,6 +111,46 @@ impl Fx {
 
     // ---- emitters ------------------------------------------------------
 
+    /// One mote of the flamethrower's stream: thrown from the nozzle down
+    /// the cone at a speed that carries it to the cone's reach within its
+    /// life, fanned across the half angle, in the fire ramp - white-hot
+    /// near the nozzle, ember-red further out. `along` is where on the
+    /// stream it starts (0 at the nozzle, 1 at the reach): motes seeded
+    /// along the length keep the cone full from the first frame, instead
+    /// of a stream that visibly "arrives".
+    fn flame_mote(&mut self, jet: &crate::simulation::FlameJet, along: f32) {
+        let mut rng = rand::rng();
+        let half = tuning().flame_half_angle_deg.to_radians();
+        let a = jet.dir.y.atan2(jet.dir.x) + rng.random_range(-half..half);
+        // Reach the end of the cone in about a third of a second.
+        let speed = (jet.reach / 0.3) * rng.random_range(0.6..1.1);
+        let start = jet.reach * along;
+        // Seeded across the cone's width at its start point, not only on
+        // the centre line, so the body of the stream is filled rather
+        // than a dotted line that fans out late.
+        let half_w = start * half.tan();
+        let side = rng.random_range(-half_w..=half_w.max(0.01));
+        let pos = Position::new(
+            jet.origin.x + jet.dir.x * start - jet.dir.y * side,
+            jet.origin.y + jet.dir.y * start + jet.dir.x * side,
+        );
+        let life = ((jet.reach - start) / speed).max(0.05) * rng.random_range(0.8..1.2);
+        let tint = if along < 0.15 { WHITE_T } else if along < 0.55 { FIRE_T } else { EMBER_T };
+        self.push(Particle {
+            pos,
+            vel: Vector2::new(a.cos() * speed, a.sin() * speed),
+            z: 0.0,
+            vz: 0.0,
+            age: 0.0,
+            life,
+            // Two blocks through the body of the stream, one at the
+            // white-hot root where it is narrowest.
+            size: if along < 0.15 { FX_GRID } else { FX_GRID * 2.0 },
+            tint,
+            kind: ParticleKind::Ember,
+        });
+    }
+
     fn burst(&mut self, at: Position, kind: ParticleKind, n: i32, speed: f32, tints: &[Color]) {
         let mut rng = rand::rng();
         for _ in 0..n.max(0) {
@@ -258,6 +298,10 @@ impl Fx {
                         self.burst(Position::new(x, y), ParticleKind::Spark, self.count(8), 90.0, &[WHITE_T, FIRE_T]);
                         self.burst(Position::new(x, y), ParticleKind::Smoke, self.count(3), 20.0, &[SMOKE_T]);
                     }
+                    // Something the flamethrower lit or collapsed.
+                    Event::Ignited { x, y, .. } => {
+                        self.burst(Position::new(x, y), ParticleKind::Spark, self.count(6), 70.0, &[FIRE_T, WHITE_T]);
+                    }
                     // Ground catching: a flare of embers as the fire takes.
                     Event::FireStarted { x, y, .. } => {
                         self.burst(Position::new(x, y), ParticleKind::Ember, self.count(5), 40.0, &[FIRE_T, EMBER_T]);
@@ -311,7 +355,39 @@ impl Fx {
                 }
             }
         }
+        // The flamethrower's stream. Rate-limited per nozzle like every
+        // other emitter, but a stream at 90 motes a second owes more than
+        // one per frame, so it drains its accumulator rather than taking
+        // one; capped so a hitch cannot dump a second's worth at once.
+        let stream_rate = tuning().flame_particle_rate * tuning().fx_density;
+        if stream_rate > 0.0 {
+            for (i, jet) in game.flames().iter().enumerate() {
+                let key = 0xF1A3_0000 ^ i as u32;
+                let mut n = 0;
+                while n < 16 && self.due(key, stream_rate, dt) {
+                    let along = rand::rng().random_range(0.0..0.8);
+                    self.flame_mote(jet, along);
+                    n += 1;
+                }
+                // Smoke off the far end, where the fire has burnt out.
+                if self.due(key ^ 0x5a5a, stream_rate * 0.12, dt) {
+                    let end = Position::new(jet.origin.x + jet.dir.x * jet.reach, jet.origin.y + jet.dir.y * jet.reach);
+                    self.burst(end, ParticleKind::Smoke, 1, 16.0, &[SMOKE_T]);
+                }
+            }
+        }
+        // A hull with afterburn on it burns like a wreck does, until the
+        // timer runs out.
         let (flame_rate, wsmoke_rate) = (tuning().wreck_flame_rate, tuning().wreck_smoke_rate);
+        for (pos, _left) in game.burning_tanks() {
+            let key = crate::blast::seed_at(pos, 8);
+            if self.due(key, flame_rate * tuning().fx_density, dt) {
+                self.burst(pos, ParticleKind::Ember, 1, 30.0, &[FIRE_T, EMBER_T]);
+            }
+            if self.due(key ^ 0x7c3d, wsmoke_rate * 0.6 * tuning().fx_density, dt) {
+                self.burst(pos, ParticleKind::Smoke, 1, 14.0, &[SMOKE_T]);
+            }
+        }
         for (pos, _left) in game.burning_wrecks() {
             let key = crate::blast::seed_at(pos, 2);
             if self.due(key, flame_rate * tuning().fx_density, dt) {

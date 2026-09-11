@@ -67,6 +67,11 @@ pub struct GrassTuft {
     /// Sideways shove from a passing hull, in px of travel at the tip.
     /// Signed; positive is to the right. Added to the ambient sway.
     pub push: f32,
+    /// Charred by a burning cell (`Game::tick_fires`): drawn as a stub for
+    /// the rest of the round, never standing back up. The cell it grew in
+    /// leaves `Game::grass_cells` at the same moment, so it no longer
+    /// conceals.
+    pub burnt: bool,
 }
 
 /// A tank as the grass sees it. Velocity is the *body's*, not
@@ -102,6 +107,7 @@ pub fn tufts_for_cell(center: Position) -> Vec<GrassTuft> {
                 seed: h,
                 crush: 0.0,
                 push: 0.0,
+                burnt: false,
             }
         })
         .collect()
@@ -199,6 +205,15 @@ fn bend(tuft: &GrassTuft, time: f32) -> f32 {
 pub fn draw_tuft(d: &mut impl RaylibDraw, texture: &Texture2D, tuft: &GrassTuft, time: f32) {
     let cell = GRASS_TEXTURE_SIZE;
     let t = tuning();
+    if tuft.burnt {
+        // A charred stub: two blocks of ash where the tuft stood. Not
+        // nothing - a burnt meadow should read as burnt, not as mown.
+        let x = (tuft.base.x / 2.0).floor() as i32 * 2;
+        let y = (tuft.base.y / 2.0).floor() as i32 * 2;
+        d.draw_rectangle(x - 2, y - 4, 2, 4, Color::new(0x37, 0x37, 0x37, 255));
+        d.draw_rectangle(x, y - 2, 2, 2, Color::new(0x25, 0x25, 0x25, 255));
+        return;
+    }
     let size = cell * t.grass_scale;
     let flip = if tuft.seed & 1 != 0 { -1.0 } else { 1.0 };
     let src = Rectangle::new(tuft.col as f32 * cell, tuft.row as f32 * cell, cell * flip, cell);
