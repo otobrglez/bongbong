@@ -31,7 +31,7 @@ mod native {
     const SERVER_NAME: &str = "bongbong";
     const INSTRUCTIONS: &str = "Tools drive the bongbong game running with `just run-dev` (native, --features dev-tools). \
 `step` freezes the game in lockstep and advances it deterministically at 1/60 s per frame; `resume` lets it run in real time. \
-`screenshot` returns the last rendered frame (the state after the latest step). Owner slots: 0 = player, enemies from 1. \
+`screenshot` returns the last rendered frame (the state after the latest step). Owner slots: 0 = player, enemies from 1; in a two-player round (`players {count: 2}`) slot 1 is player 2 and enemies count from 2. \
 Positions are screen pixels, 1280x720 by default, y down, rotation 0 = up.";
 
     pub fn main() {

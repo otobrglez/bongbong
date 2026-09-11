@@ -6,7 +6,12 @@
     <meta charset="utf-8"/>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
     <link rel="icon" href="/favicon.ico"/>
-    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <!-- viewport-fit=cover so the immersive mode can reach under a notch;
+         no user scaling because pinch-zoom fights tap-to-move. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no"/>
+    <meta name="mobile-web-app-capable" content="yes"/>
+    <meta name="apple-mobile-web-app-capable" content="yes"/>
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
     <title>BongBong!</title>
     <style lang="scss">
       $font-size: 10pt;
@@ -15,14 +20,16 @@
       html, body {
         margin: 0;
         min-height: 100%;
-        background-color: #2e2e2e;
+        /* The same #151515 the game's HUD bar is filled with, so the bar
+           and the page read as one surface around the field. */
+        background-color: #151515;
         color: $font-color;
         font-family: sans-serif;
         font-size: $font-size;
       }
 
       a {
-        color:#888;
+        color: #888;
       }
 
       .wrapper {
@@ -41,13 +48,27 @@
 
         .game {
           position: relative;
+          /* One source of truth for the canvas width: the overlay controls
+             have to sit on the canvas's own edges, and the canvas is
+             centred, so they all need the same expression. The shape is
+             the render target's own: a 1280x720 battlefield under a 32 px
+             HUD bar, 1280x752 (`HUD_BAR_HEIGHT` in src/lib.rs). */
+          --canvas-w: min(100vw, 1280px, calc((100vh - 90px) * 1280 / 752));
 
-          /* Sits in the canvas's top-right corner: the canvas is centered in
-             .game, so its right edge is half the leftover width in from ours. */
-          .subscribe-link {
+          /* The two overlay controls sit on the canvas's *bottom* corners,
+             off the HUD bar along its top. The canvas is centred in .game
+             and is its first block, so a corner is half the leftover width
+             in from ours and the canvas's own height (its width at 752/1280)
+             down; `translateY(-100%)` hangs the control up from that line so
+             its height never needs to be known. */
+          .subscribe-link, .fullscreen-toggle {
             position: absolute;
-            top: 8px;
-            right: calc((100% - min(100vw, 1280px)) / 2 + 10px);
+            top: calc(var(--canvas-w) * 752 / 1280 - 10px);
+            transform: translateY(-100%);
+          }
+
+          .subscribe-link {
+            left: calc((100% - var(--canvas-w)) / 2 + 10px);
             z-index: 1;
             padding: 3px 8px;
             border-radius: 3px;
@@ -63,17 +84,164 @@
             }
           }
 
+          /* Covers exactly the canvas's own box - same centred width and
+             shape as the canvas itself, so the panel is the picture that
+             has not arrived yet rather than a banner above it. */
+          .loading {
+            position: absolute;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: var(--canvas-w);
+            aspect-ratio: 1280 / 752;
+            z-index: 2;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            background: #1b2118;
+            color: #cfe0c4;
+            font-size: $font-size;
+            text-align: center;
+            /* Faded out rather than cut, so a fast connection does not
+               produce a one-frame flash of panel. */
+            transition: opacity 260ms ease;
+
+            &[hidden] {
+              display: none !important;
+            }
+
+            &.done {
+              opacity: 0;
+              pointer-events: none;
+            }
+          }
+
+          .loading-title {
+            margin: 0;
+            font-size: calc($font-size * 1.6);
+            letter-spacing: 0.08em;
+          }
+
+          .loading-track {
+            width: min(240px, 50%);
+            height: 6px;
+            border-radius: 3px;
+            background: rgba(255, 255, 255, 0.12);
+            overflow: hidden;
+          }
+
+          /* Width is set by the loader once Emscripten reports byte counts;
+             until then it runs an indeterminate sweep, because a bar frozen
+             at 0% reads as stalled. */
+          .loading-bar {
+            width: 30%;
+            height: 100%;
+            border-radius: 3px;
+            background: #8fd07a;
+            animation: loading-sweep 1.4s ease-in-out infinite;
+          }
+
+          .loading-bar.measured {
+            animation: none;
+            transition: width 200ms ease;
+          }
+
+          .loading-note {
+            margin: 0;
+            opacity: 0.7;
+          }
+
+          @keyframes loading-sweep {
+            0%   { margin-left: -30%; }
+            100% { margin-left: 100%; }
+          }
+
+          @media (prefers-reduced-motion: reduce) {
+            .loading { transition: none; }
+            .loading-bar { animation: none; }
+          }
+
           canvas {
             display: block;
-            width: min(100vw, 1280px);
-            height: min(100vh, 720px);
-            object-fit: contain;
+            /* The box has to keep the render target's own shape (1280x752,
+               the field plus the HUD bar), not just be capped on each axis
+               independently.
+
+               `object-fit: contain` does letterbox a canvas whose box is a
+               different shape - verified in the browser - and raylib maps a
+               touch by dividing by the CSS *box*, not by the letterboxed
+               band inside it (see rcore_web.c's EmscriptenTouchCallback).
+               So a 390x720 box on a phone would put the picture in a ~219px
+               band with ~250px bars, while taps were still measured against
+               the full 720: every tap landed in the wrong place vertically.
+               Sizing the box to the bitmap's own shape means it always
+               fills the box exactly and raylib's normalisation is right by
+               construction. */
+            width: var(--canvas-w);
+            aspect-ratio: 1280 / 752;
+            height: auto;
             outline: none;
+            /* A tap-to-move game cannot let the browser claim drags for
+               scrolling or pinch-zoom. */
+            touch-action: none;
             -webkit-tap-highlight-color: transparent;
             -webkit-user-select: none;
             -moz-user-select: none;
             user-select: none;
             image-rendering: pixelated;
+          }
+
+          /* Immersive mode. `requestFullscreen` covers desktop, Android and
+             iPadOS; Safari on iPhone has no element Fullscreen API at all,
+             so the same button falls back to this class, which reclaims
+             everything except the browser's own chrome. */
+          &.immersive {
+            position: fixed;
+            inset: 0;
+            z-index: 100;
+            justify-content: center;
+            background: #000;
+            padding: env(safe-area-inset-top) env(safe-area-inset-right)
+                     env(safe-area-inset-bottom) env(safe-area-inset-left);
+
+            --canvas-w: min(100vw, 1280px, calc(100vh * 1280 / 752));
+            .instructions, .tuning { display: none; }
+            /* The canvas is centred vertically here, so its bottom edge is
+               the middle of the box plus half its height. */
+            .subscribe-link, .fullscreen-toggle {
+              top: calc(50% + var(--canvas-w) * 752 / 2560 - 10px);
+            }
+          }
+
+          /* Same treatment for real fullscreen, where the .game element is
+             the fullscreen root. */
+          &:fullscreen {
+            justify-content: center;
+            background: #000;
+
+            --canvas-w: min(100vw, 1280px, calc(100vh * 1280 / 752));
+            .instructions, .tuning { display: none; }
+            .subscribe-link, .fullscreen-toggle {
+              top: calc(50% + var(--canvas-w) * 752 / 2560 - 10px);
+            }
+          }
+
+          /* Bottom *right*, opposite the subscribe link. */
+          .fullscreen-toggle {
+            right: calc((100% - var(--canvas-w)) / 2 + 10px);
+            z-index: 2;
+            padding: 3px 9px;
+            border-radius: 3px;
+            border: 0;
+            background: rgba(46, 46, 46, 0.75);
+            color: #ddd;
+            font-family: sans-serif;
+            font-size: $font-size;
+            cursor: pointer;
+
+            &:hover, &:focus-visible { color: #fff; background: rgba(46, 46, 46, 0.95); }
           }
 
           .instructions {
@@ -240,9 +408,23 @@
 <div class="wrapper">
     <div class="game">
         <a class="subscribe-link" href="/subscribe">Subscribe for updates.</a>
+        <button class="fullscreen-toggle" id="fullscreen-toggle" type="button"
+                title="Play full screen">&#9974; Full screen</button>
         <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+        <!-- Shown from the very first byte of HTML and torn down by the
+             loader script below. The wasm and its preloaded `static/` data
+             are a several-megabyte download, and until they land the canvas
+             is an unexplained black rectangle - which reads as a broken
+             page, not a loading one. -->
+        <div class="loading" id="loading" role="status" aria-live="polite">
+            <p class="loading-title">Loading&hellip;</p>
+            <div class="loading-track"><div class="loading-bar" id="loading-bar"></div></div>
+            <p class="loading-note" id="loading-note">Fetching the game</p>
+        </div>
         <div class="instructions">
             <p>Use arrow keys to move the tank. <kbd>Space</kbd> to fire and <kbd>r</kbd> to restart the game.</p>
+            <p>Or tap: tap the ground to drive there, tap an enemy to close on it and open fire. Any arrow key takes back control.</p>
+            <p>Two players: the tank button in the bar (beside <kbd>BUILD</kbd>) switches modes. Player 1 drives with the arrows and fires with <kbd>Right Shift</kbd>; player 2 drives with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> and fires with <kbd>Left Shift</kbd>. Keyboard only; taps are off.</p>
         </div>
         <details class="tuning" id="tuning" hidden>
             <summary>Tuning <span class="badge">dev build</span></summary>
@@ -272,11 +454,72 @@
 
 
 <script is:inline>
+    // The loading panel, driven by Emscripten's own progress reporting.
+    //
+    // Two hooks, because they cover different halves of the wait and either
+    // one alone leaves a silent stretch. `setStatus` carries the byte
+    // counts while `bongbong.data` streams in ("Downloading data... (a/b)");
+    // `monitorRunDependencies` counts the preload work that follows, which
+    // reports no bytes at all. Neither fires for the wasm fetch/compile
+    // itself, which is why the bar starts as an indeterminate sweep rather
+    // than at zero.
+    var loadingPanel = (function () {
+        var panel = document.getElementById("loading");
+        var bar = document.getElementById("loading-bar");
+        var note = document.getElementById("loading-note");
+        var finished = false;
+        var progressRe = /([\d.]+)\s*\/\s*([\d.]+)/;
+
+        function say(text) {
+            if (finished || !note) return;
+            var m = text && text.match(progressRe);
+            if (m && bar) {
+                var done = parseFloat(m[1]);
+                var total = parseFloat(m[2]);
+                if (total > 0) {
+                    bar.classList.add("measured");
+                    bar.style.width = Math.max(3, Math.min(100, (done / total) * 100)) + "%";
+                }
+            }
+            // Emscripten's own wording is developer-facing; keep the panel's
+            // note to the one thing a player cares about.
+            note.textContent = text ? "Fetching the game" : "Starting";
+        }
+
+        function done() {
+            if (finished || !panel) return;
+            finished = true;
+            if (bar) {
+                bar.classList.add("measured");
+                bar.style.width = "100%";
+            }
+            panel.classList.add("done");
+            // Match the CSS fade, then take it out of the layout entirely so
+            // it can never eat a tap meant for the canvas.
+            window.setTimeout(function () { panel.hidden = true; }, 300);
+        }
+
+        return {say: say, done: done};
+    })();
+
     var Module = {
         canvas: document.getElementById("canvas"),
         locateFile: (path) => "/game/" + path,
         print: (t) => console.log(t),
         printErr: (t) => console.error(t),
+        setStatus: (t) => loadingPanel.say(t),
+        monitorRunDependencies: function (left) {
+            Module.totalDependencies = Math.max(Module.totalDependencies || 0, left);
+            loadingPanel.say(left ? "Preparing (" + (Module.totalDependencies - left) + "/" + Module.totalDependencies + ")" : "");
+        },
+        onRuntimeInitialized: function () {
+            // The runtime is up but nothing has been drawn yet; wait for the
+            // frame after the next one so the panel lifts on a picture
+            // rather than on the black canvas underneath it.
+            window.requestAnimationFrame(function () {
+                window.requestAnimationFrame(loadingPanel.done);
+            });
+        },
     };
     window.addEventListener(
         "click",
@@ -301,7 +544,25 @@
             if (gameKeys.has(e.code)) e.preventDefault();
         },
         {passive: false},
-    );</script>
+    );
+    // Which Shift key is held, for two-player mode. Emscripten's GLFW
+    // layer reports the DOM Shift key as the *left* Shift whichever side
+    // was pressed (it maps keyCode 0x10 and never reads event.code), so
+    // the game cannot tell player 1's Right Shift from player 2's Left
+    // Shift through raylib. It reads this bitmask once a frame instead
+    // (bit 1 = ShiftLeft, bit 2 = ShiftRight; see main.rs's shift_state).
+    // Cleared on blur so a Shift held while the tab loses focus does not
+    // stick.
+    window.bbShift = 0;
+    window.addEventListener("keydown", function (e) {
+        if (e.code === "ShiftLeft") window.bbShift |= 1;
+        else if (e.code === "ShiftRight") window.bbShift |= 2;
+    });
+    window.addEventListener("keyup", function (e) {
+        if (e.code === "ShiftLeft") window.bbShift &= ~1;
+        else if (e.code === "ShiftRight") window.bbShift &= ~2;
+    });
+    window.addEventListener("blur", function () { window.bbShift = 0; });</script>
 <script is:inline>
     // Runtime tuning panel - see docs/runtime-tuning-design.md §7. Renders
     // itself entirely from the schema the wasm exports (bb_tuning_schema_json),
@@ -601,6 +862,80 @@
             if (previous) previous();
             try { init(); } catch (e) { console.error("tuning panel:", e); }
         };
+    })();
+</script>
+<script is:inline>
+    // Full-screen toggle.
+    //
+    // Three outcomes, because no single mechanism works everywhere:
+    //
+    //   1. `requestFullscreen` - desktop, Android, iPadOS. Real full screen:
+    //      the browser's own chrome goes away.
+    //   2. The `.immersive` class - Safari on iPhone, which has no element
+    //      Fullscreen API at all (only <video> can go fullscreen there).
+    //      This takes the whole viewport but *cannot* hide Safari's URL bar;
+    //      no page can. It is a platform restriction, not a bug.
+    //   3. Add to Home Screen - the only way to get a chrome-free window on
+    //      an iPhone; `apple-mobile-web-app-capable` in the head makes the
+    //      launched app run standalone. Deliberately not advertised on the
+    //      page: it is a wall of text over the game explaining a platform
+    //      limitation the player cannot do anything about mid-round.
+    (function () {
+        var game = document.querySelector(".game");
+        var canvas = document.getElementById("canvas");
+        var button = document.getElementById("fullscreen-toggle");
+        if (!game || !button) return;
+        var request = game.requestFullscreen || game.webkitRequestFullscreen;
+        var exit = document.exitFullscreen || document.webkitExitFullscreen;
+
+        function real() {
+            return !!(document.fullscreenElement || document.webkitFullscreenElement);
+        }
+        function active() {
+            return real() || game.classList.contains("immersive");
+        }
+        function label() {
+            button.innerHTML = active() ? "&#9974; Exit full screen" : "&#9974; Full screen";
+        }
+        function fallback() {
+            game.classList.add("immersive");
+            label();
+        }
+        function enter() {
+            if (!request) return fallback();
+            var p;
+            try {
+                p = request.call(game);
+            } catch (e) {
+                return fallback();
+            }
+            // Old WebKit's prefixed version returns undefined rather than a
+            // promise, so `.then` on it would throw and abort the whole
+            // handler - leaving neither real full screen nor the fallback.
+            if (p && typeof p.then === "function") {
+                p.then(label, fallback);
+            } else {
+                setTimeout(function () { if (real()) label(); else fallback(); }, 120);
+            }
+        }
+        button.addEventListener("click", function (e) {
+            // Never let the toggle double as a game tap.
+            e.preventDefault();
+            e.stopPropagation();
+            if (active()) {
+                if (real()) {
+                    try { exit.call(document); } catch (err) { /* already out */ }
+                }
+                game.classList.remove("immersive");
+                label();
+            } else {
+                enter();
+            }
+            if (canvas) canvas.focus();
+        });
+        document.addEventListener("fullscreenchange", label);
+        document.addEventListener("webkitfullscreenchange", label);
+        label();
     })();
 </script>
 <script is:inline src="/game/bongbong.js"></script>

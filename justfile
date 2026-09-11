@@ -48,6 +48,12 @@ probe-fixtures:
 run:
     cargo run
 
+# Palette guards on the generated sheets: every opaque pixel on the Puny
+# Palette, and no green on anything drawn over the ground layer (walls,
+# props, blasts) - see tools/check_sheets.py and docs/PALETTE.md.
+check-sheets:
+    nix-shell -p "python3.withPackages (ps: [ps.pillow])" --run "python3 tools/check_sheets.py"
+
 # One-time: install the emsdk toolchain (pinned version, see
 # tools/setup_emscripten.sh) and the site/'s JS dependencies (Astro).
 # The wasm32-unknown-emscripten rustup target and node/yarn are already
@@ -104,6 +110,14 @@ preview-web:
 # (`just run-dev --seed 0xB0B5 --enemies 4`).
 run-dev *ARGS:
     cargo run --features dev-tools -- {{ARGS}}
+
+# The same dev-tools build started in Build mode - the in-game map builder
+# (docs/game-editor-fusion.md), with the dev server attached so the
+# `builder_*` tools can drive it. `--editor` works in every build, and any
+# native build loads and saves maps/*.toml through FILE. Extra args pass
+# through (`just run-editor --map maps/test/maze.toml`).
+run-editor *ARGS:
+    cargo run --features dev-tools -- --editor {{ARGS}}
 
 # `watch` with the dev server: rebuild and relaunch on every source change.
 # The MCP adapter reconnects per call, so a relaunch only costs the

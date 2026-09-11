@@ -30,11 +30,12 @@ name: PR Preview
 # deploy for same-repo branches. That's the intended security posture — do
 # NOT switch this to `pull_request_target` to "fix" fork previews (it would
 # hand untrusted PR code the Cloudflare token).
+# No `branches` filter: a PR stacked on another feature branch gets a
+# preview too. Workers are named per PR number and torn down per PR, so
+# stacked PRs cannot collide.
 on:
   pull_request:
     types: [opened, synchronize, reopened, closed]
-    branches:
-      - master
 
 # One group per PR: a new push cancels the superseded build, and a close
 # event cancels any in-flight build so teardown can't race a deploy that

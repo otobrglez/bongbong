@@ -41,12 +41,15 @@ pub enum Mission { Protect, Hunt, Destroy }   // default: Protect
 
 | Mission | Frogs spawned | Lose when | Win when | Banner |
 |---|---|---|---|---|
-| Protect | player frog | player wreck or player frog dead | all enemies wrecked and spawn plan finished | `PROTECT THE FROG!` |
-| Hunt | player frog + enemy frog | player wreck or player frog dead | enemy frog dead | `HUNT THE FROG!` |
-| Destroy | none | player wreck | all enemies wrecked and spawn plan finished | `DESTROY!` |
+| Protect | player frog | every player tank wrecked, or player frog dead | all enemies wrecked and spawn plan finished | `PROTECT THE FROG!` |
+| Hunt | player frog + enemy frog | every player tank wrecked, or player frog dead | enemy frog dead | `HUNT THE FROG!` |
+| Destroy | none | every player tank wrecked | all enemies wrecked and spawn plan finished | `DESTROY!` |
 
 "Spawn plan finished" = no wave pending and no tank still rolling in. Losing
-takes precedence over winning on the same frame (as today).
+takes precedence over winning on the same frame (as today). "Every player
+tank" is the one player in a single-player round and both in a two-player
+one (docs/two-players.md): one wreck of two keeps the round going, its hulk
+stays on the field and its keys do nothing.
 
 ### Spawn plan
 
@@ -233,9 +236,9 @@ frame, so a seeded round replays bit-for-bit including waves.
   overlay while `intro_timer > 0`, then a 0.5 s alpha fade. Same code
   path draws `WAVE N` (with `FINAL WAVE` on the last) during the wave gap,
   smaller and without the overlay.
-- Enemy frog: `draw_ground_ring` in red under the hull (`RingStyle::Enemy`);
-  player frog gets the same ring in white. Both frogs' overhead health bars
-  unchanged.
+- Enemy frog: `draw_frog_ring` draws its ground ring as a health gauge
+  (`RingStyle::Gauge`) in the all-red ramp; the player's frog gets the same
+  gauge in the white ramp. The ring is each frog's health readout.
 - HUD: `WAVE i/N` and live-enemy count on the right of the existing HUD line
   in wave rounds; `MISSION: …` is not shown (the banner covers it).
 - Rolling-in tanks are drawn as normal tanks (they are partly off-screen by
@@ -263,10 +266,10 @@ frame, so a seeded round replays bit-for-bit including waves.
   candidates), `hunt-missing-enemy-frog` (warning: fallback used),
   `enemy-frog-unreachable` (error: not in the player start's component).
   The spawn-band capacity check runs only for the Band plan.
-- **Editor** (`editor.rs`): two new tools, `EnemyFrog` (singleton, frog idle
+- **Editor** (`editor/`): two new tools, `EnemyFrog` (singleton, frog idle
   sprite with a red ring) and `Gate` (multi-place, drawn as an arrow chevron
-  on the edge). Mission/spawn tables stay TOML-only for now; the editor
-  preserves them on save. docs/map-editor-design.md's cell table gets the
+  on the edge). The mission/spawn tables are edited from the builder's MAP
+  panel (docs/game-editor-fusion.md section 9) and preserved on save. docs/map-editor-design.md's cell table gets the
   two rows.
 - **Docs**: CLAUDE.md module map (map.rs, simulation, ai.rs, game.rs,
   probe/devserver bullets), dev-server-design.md tool list.

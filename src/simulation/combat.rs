@@ -12,6 +12,7 @@ use crate::ai::Ai;
 use crate::frog::Frog;
 use crate::obstacle::Obstacle;
 use crate::physics::Physics;
+use crate::shell::Owner;
 use crate::shockwave::Shockwave;
 use crate::tank::Tank;
 use crate::{
@@ -24,7 +25,7 @@ use crate::{
 
 use super::hits::ShellTarget;
 use super::props::DamageCause;
-use super::{with_frog_mut, Event, Frame, Game, HitTarget};
+use super::{SHOCK_FROG, with_frog_mut, Event, Frame, Game, HitTarget};
 
 /// One explosion's numbers - a tank wreck's or a barrel's - so
 /// `explosion_hit` serves both.
@@ -85,29 +86,41 @@ impl Game {
     /// dies (shockwave) or hops away; an obstacle
     /// takes damage; a wall absorbs the shot. Wrecks and dead frogs ignore
     /// further hits. `at` is the impact point, recorded in the `Event::Hit`
-    /// every landed hit appends.
-    pub(super) fn apply_hit(&mut self, f: &mut Frame, target: ShellTarget, at: Position, dmg: (f32, f32), effects: HitEffects) {
-        let player = self.player.expect("player entity spawned in init");
+    /// every landed hit appends. `shooter` is who fired: a player hitting
+    /// the other player deals `friendly_fire_damage_factor` of the roll.
+    pub(super) fn apply_hit(
+        &mut self,
+        f: &mut Frame,
+        target: ShellTarget,
+        at: Position,
+        dmg: (f32, f32),
+        effects: HitEffects,
+        shooter: Owner,
+    ) {
         match target {
-            ShellTarget::PlayerTank | ShellTarget::EnemyTank(_) => {
-                let (entity, is_enemy) = match target {
-                    ShellTarget::EnemyTank(e) => (e, true),
-                    _ => (player, false),
-                };
+            ShellTarget::Tank(entity) => {
                 let survived = {
                     let mut q = self.world.query_one::<&mut Tank>(entity);
                     let tank = q.get().expect("hit target always has a Tank");
                     if tank.is_wreck() {
                         false
                     } else {
-                        let d = f.rng.random_range(dmg.0..dmg.1);
+                        // Scaled after the roll, so the RNG draw count never
+                        // depends on who shot whom.
+                        let mut d = f.rng.random_range(dmg.0..dmg.1);
+                        if shooter.is_player() && tank.owner().is_player() {
+                            d *= tuning().friendly_fire_damage_factor;
+                        }
                         tank.take_damage(d, MAX_DAMAGE);
                         tank.mark_hit();
                         let killed = tank.is_wreck();
-                        let hit_target = if is_enemy { HitTarget::Enemy { slot: tank.owner_slot } } else { HitTarget::Player };
+                        let hit_target = match tank.owner() {
+                            Owner::Player(player) => HitTarget::Player { player },
+                            Owner::Enemy(slot) => HitTarget::Enemy { slot },
+                        };
                         f.events.push(Event::Hit { target: hit_target, damage: d, killed, x: at.x, y: at.y });
                         if killed {
-                            f.kills.push((tank.position, is_enemy, tank.owner_slot));
+                            f.kills.push((tank.position, tank.owner()));
                             false
                         } else {
                             if let Some((dir, speed)) = effects.knockback {
@@ -117,9 +130,12 @@ impl Game {
                         }
                     }
                 };
-                if survived && is_enemy {
+                if survived {
+                    // A player carries no `Ai`, so this is a no-op for one.
                     let mut q = self.world.query_one::<&mut Ai>(entity);
-                    q.get().expect("enemy tanks always have an Ai").notify_hit();
+                    if let Ok(ai) = q.get() {
+                        ai.notify_hit();
+                    }
                 }
             }
             ShellTarget::Frog(entity) => {
@@ -137,7 +153,7 @@ impl Game {
                     }
                 };
                 if dead {
-                    f.shock = Some(Shockwave { center: pos, time: 0.0 });
+                    f.shocks.push(Shockwave::scaled(pos, SHOCK_FROG));
                 } else if let (true, Some(away)) = (can_hop, effects.frog_hop) {
                     let obstacles = f.terrain.obstacle_centers();
                     let landing = frog_hop_target(&mut f.rng, pos, away, hop_distance, &obstacles, f.width, f.height);
@@ -148,11 +164,17 @@ impl Game {
             }
             ShellTarget::Obstacle(entity) => {
                 let d = f.rng.random_range(dmg.0..dmg.1);
+                // Read the material before the damage lands: a killing blow
+                // despawns the tile, and the event has to say what it was.
+                let material = {
+                    let mut q = self.world.query_one::<&Obstacle>(entity);
+                    q.get().expect("a resolved obstacle hit names a live Obstacle").material
+                };
                 // The hit is recorded ahead of whatever the damage causes
                 // (a destroyed tile, a blast), since it happened first.
                 let mark = f.events.len();
                 let killed = self.damage_obstacle(f, entity, d, DamageCause::Shot);
-                f.events.insert(mark, Event::Hit { target: HitTarget::Obstacle, damage: d, killed, x: at.x, y: at.y });
+                f.events.insert(mark, Event::Hit { target: HitTarget::Obstacle { material }, damage: d, killed, x: at.x, y: at.y });
             }
             ShellTarget::Wall => {
                 f.events.push(Event::Hit { target: HitTarget::Wall, damage: 0.0, killed: false, x: at.x, y: at.y });
@@ -168,16 +190,19 @@ impl Game {
     /// immune - it is a loss condition, so splash damage would be a real
     /// balance change rather than a detail. A chip that finishes off a
     /// tank pushes it onto `f.kills`, so it gets its own blast in turn.
-    pub(super) fn apply_explosion(&mut self, f: &mut Frame, center: Position, victim_was_enemy: bool) {
+    pub(super) fn apply_explosion(&mut self, f: &mut Frame, center: Position, victim: Owner) {
         let params = BlastParams::tank_wreck();
-        let player = self.player.expect("player entity spawned in init");
-        {
+        // Players first, in index order, then the enemies: each tank's
+        // damage roll is one RNG draw, so this order is part of the replay.
+        for player in self.players().into_iter().flatten() {
             let mut q = self.world.query_one::<&mut Tank>(player);
             let tank = q.get().expect("player entity always has a Tank");
-            explosion_hit(tank, center, victim_was_enemy, false, &mut self.physics, &mut f.rng, &mut f.kills, &params);
+            let chips = !victim.same_side(tank.owner());
+            explosion_hit(tank, center, chips, &mut self.physics, &mut f.rng, &mut f.kills, &params);
         }
         for tank in self.world.query::<&mut Tank>().with::<&Ai>().iter() {
-            explosion_hit(tank, center, !victim_was_enemy, true, &mut self.physics, &mut f.rng, &mut f.kills, &params);
+            let chips = !victim.same_side(tank.owner());
+            explosion_hit(tank, center, chips, &mut self.physics, &mut f.rng, &mut f.kills, &params);
         }
         // Collect first: `damage_obstacle` needs the world free. Same
         // per-obstacle draw order as iterating directly.
@@ -211,23 +236,37 @@ fn knockback(tank: &Tank, physics: &mut Physics, dir: Vector2, speed: f32) {
 /// the line between their centers, harder the faster they were closing,
 /// split by mass so the lighter one flies further. A wreck on either side
 /// means no exchange at all - a burning hulk neither deals nor takes ram
-/// damage. Only ever called for player-vs-enemy contact: enemies bumping
-/// each other are separated by the physics solver without damage. A tank
-/// this kills is recorded in `kills`, tagged with its side and owner slot.
-/// Returns the damage dealt, or `None` when nothing was exchanged.
+/// damage. Called for every touching pair: each enemy against each player,
+/// enemy against enemy, and the two players against each other. The roll
+/// is scaled by `damage_scale` after it is drawn (1 for opposing sides,
+/// `friendly_fire_damage_factor` for the two players). A tank this kills
+/// is recorded in `kills` with its owner. Returns the damage dealt, or
+/// `None` when nothing was exchanged.
+///
+/// `physics_velocity`: a tank's actual body velocity, or zero if it has no
+/// body yet (a wave tank still rolling in through a gate).
+fn physics_velocity(physics: &Physics, tank: &Tank) -> Vector2 {
+    match tank.body {
+        Some(body) => {
+            let v = physics.velocity(body);
+            Vector2::new(v.x, v.y)
+        }
+        None => Vector2::new(0.0, 0.0),
+    }
+}
+
 pub(super) fn ram(
     a: &mut Tank,
-    a_is_enemy: bool,
     b: &mut Tank,
-    b_is_enemy: bool,
     physics: &mut Physics,
     rng: &mut SmallRng,
-    kills: &mut Vec<(Position, bool, usize)>,
+    kills: &mut Vec<(Position, Owner)>,
+    damage_scale: f32,
 ) -> Option<f32> {
     if a.is_wreck() || b.is_wreck() || a.ram_cooldown > 0.0 || b.ram_cooldown > 0.0 {
         return None;
     }
-    let dmg = rng.random_range(tuning().ram_damage_min..tuning().ram_damage_max);
+    let dmg = rng.random_range(tuning().ram_damage_min..tuning().ram_damage_max) * damage_scale;
     a.take_damage(dmg, MAX_DAMAGE);
     b.take_damage(dmg, MAX_DAMAGE);
     a.mark_hit();
@@ -235,10 +274,10 @@ pub(super) fn ram(
     a.ram_cooldown = tuning().ram_damage_cooldown;
     b.ram_cooldown = tuning().ram_damage_cooldown;
     if a.is_wreck() {
-        kills.push((a.position, a_is_enemy, a.owner_slot));
+        kills.push((a.position, a.owner()));
     }
     if b.is_wreck() {
-        kills.push((b.position, b_is_enemy, b.owner_slot));
+        kills.push((b.position, b.owner()));
     }
 
     let dx = a.position.x - b.position.x;
@@ -248,9 +287,16 @@ pub(super) fn ram(
         return Some(dmg);
     }
     let axis = Vector2::new(dx / dist, dy / dist);
-    let rel_x = a.velocity.x - b.velocity.x;
-    let rel_y = a.velocity.y - b.velocity.y;
-    let impact_speed = (rel_x * rel_x + rel_y * rel_y).sqrt();
+    // Real closing speed off the bodies, not the commanded `Tank::velocity`.
+    // The commanded value is a fixed-magnitude cardinal vector, so it says
+    // "both are driving" rather than "how hard they hit": a tank shoved
+    // backwards into another by a blast read as not closing at all, and one
+    // grinding into a wall read as travelling at full speed. Only the
+    // component along the contact axis counts - two tanks sliding past each
+    // other are not colliding.
+    let (av, bv) = (physics_velocity(physics, a), physics_velocity(physics, b));
+    let closing = (av.x - bv.x) * -axis.x + (av.y - bv.y) * -axis.y;
+    let impact_speed = closing.max(0.0);
     let push = (impact_speed * tuning().knockback_strength).min(tuning().knockback_max_speed);
     let total_mass = a.mass() + b.mass();
     // A tank this very hit just killed stays put, like any wreck.
@@ -268,17 +314,15 @@ pub(super) fn ram(
 /// One tank's share of a nearby explosion (see `Game::apply_explosion` and
 /// `Game::apply_blast`): a shove that fades linearly with distance and,
 /// only when `damage` is true, a chip of damage scaled the same way. No-op
-/// on a wreck or a tank outside `params.radius`. `is_enemy` tags a
-/// resulting kill.
-#[allow(clippy::too_many_arguments)]
+/// on a wreck or a tank outside `params.radius`. A resulting kill is
+/// recorded with the tank's owner.
 pub(super) fn explosion_hit(
     tank: &mut Tank,
     center: Position,
     damage: bool,
-    is_enemy: bool,
     physics: &mut Physics,
     rng: &mut SmallRng,
-    kills: &mut Vec<(Position, bool, usize)>,
+    kills: &mut Vec<(Position, Owner)>,
     params: &BlastParams,
 ) {
     if tank.is_wreck() {
@@ -297,7 +341,7 @@ pub(super) fn explosion_hit(
         tank.take_damage(dmg, MAX_DAMAGE);
         tank.mark_hit();
         if tank.is_wreck() {
-            kills.push((tank.position, is_enemy, tank.owner_slot));
+            kills.push((tank.position, tank.owner()));
             return;
         }
     }
@@ -375,7 +419,7 @@ mod ram_tests {
         let mut live = tank_at(130.0, 10.0, &mut physics);
         let mut rng = SmallRng::seed_from_u64(1);
         let mut kills = Vec::new();
-        ram(&mut wreck, true, &mut live, false, &mut physics, &mut rng, &mut kills);
+        ram(&mut wreck, &mut live, &mut physics, &mut rng, &mut kills, 1.0);
         assert_eq!(live.damage, 10.0);
         assert_eq!(live.ram_cooldown, 0.0);
         assert!(kills.is_empty());
@@ -388,12 +432,12 @@ mod ram_tests {
         let mut b = tank_at(130.0, 0.0, &mut physics);
         let mut rng = SmallRng::seed_from_u64(1);
         let mut kills = Vec::new();
-        ram(&mut a, true, &mut b, false, &mut physics, &mut rng, &mut kills);
+        ram(&mut a, &mut b, &mut physics, &mut rng, &mut kills, 1.0);
         assert!(a.damage >= tuning().ram_damage_min && a.damage < tuning().ram_damage_max);
         assert_eq!(a.damage, b.damage);
         assert_eq!(a.ram_cooldown, tuning().ram_damage_cooldown);
         let before = b.damage;
-        ram(&mut a, true, &mut b, false, &mut physics, &mut rng, &mut kills);
+        ram(&mut a, &mut b, &mut physics, &mut rng, &mut kills, 1.0);
         assert_eq!(b.damage, before, "second contact inside the cooldown must not re-damage");
     }
 }

@@ -19,6 +19,10 @@ pub struct Track {
     pub max_opacity: f32,
     /// Seconds since the mark was laid; drives the fade-out.
     pub age: f32,
+    /// Burnt into the ground by a tank dying on top of it: darker, and it
+    /// never fades. The kill site stays legible for the rest of the round,
+    /// after the wreck itself has been cleared away by a wave.
+    pub scorched: bool,
 }
 
 impl Track {
@@ -26,12 +30,15 @@ impl Track {
     /// dropped.
     pub fn tick(&mut self, dt: f32) -> bool {
         self.age += dt;
-        self.age >= tuning().track_lifetime
+        !self.scorched && self.age >= tuning().track_lifetime
     }
 
     /// Remaining opacity, fading linearly from `max_opacity` (fresh) to 0.0
     /// (gone) so marks stay faint even when brand new.
     fn opacity(&self) -> f32 {
+        if self.scorched {
+            return (self.max_opacity * tuning().wreck_track_darken).clamp(0.0, 1.0);
+        }
         (1.0 - self.age / tuning().track_lifetime).clamp(0.0, 1.0) * self.max_opacity
     }
 }

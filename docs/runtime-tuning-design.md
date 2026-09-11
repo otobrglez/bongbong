@@ -321,8 +321,8 @@ between two frames lands together. Restart is an `AtomicBool`.
 - **String ownership**: returned pointers point into a thread-local
   `CString` scratch buffer that stays valid until the next `bb_*` call. No
   `free` dance across the boundary; this is a dev tool, one call at a time.
-- **Feature-gated**: `dev-tools = []` in `Cargo.toml`, same convention as
-  `map-editor`. Release/production builds do not export anything. The
+- **Feature-gated**: `dev-tools = []` in `Cargo.toml`, an off-by-default
+  feature. Release/production builds do not export anything. The
   *read* side (`tuning.rs`, `tuning()`) is always compiled, it is just the
   defaults with no writer in a release build.
 - **Emscripten export**: a `#[no_mangle]` function in a bin crate is dead-

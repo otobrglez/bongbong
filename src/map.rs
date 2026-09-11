@@ -35,13 +35,20 @@ pub const CURRENT_VERSION: u32 = 1;
 /// property of the TOML shape itself (e.g. `kind = "wall"` with no
 /// `material` key fails to parse) rather than something callers have to
 /// double-check.
-#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum CellObject {
     Wall { material: Material },
     Road,
     Frog,
+    /// Player 1's start - singleton like `Frog`. A map without one spawns
+    /// player 1 at the nearest free cell to the centre.
     Start,
+    /// Player 2's start in a two-player round - singleton like `Start`.
+    /// Ignored in a single-player round; a map without one places player
+    /// 2 beside player 1 (`Game::init`).
+    #[serde(rename = "start2")]
+    Start2,
     Pickup { pickup: PickupKind },
     /// The enemy side's frog (Hunt mission) - singleton like `Frog`.
     /// Ignored by missions without an enemy frog.
@@ -57,6 +64,18 @@ pub enum CellObject {
     Sandbag,
     Barrel,
     Fence,
+    /// The two tree species (docs/TREES_SPEC.md). Solid like a prop, but
+    /// drawn from 48px cells so the canopy overhangs the cell it stands
+    /// in; both burn, and a tank can flatten one by driving at it.
+    Tree,
+    Pine,
+    /// Tall grass: cover a tank can sit in. Deliberately **not** solid and
+    /// deliberately not an `Obstacle` - `Game::nav_grid` feeds every
+    /// obstacle into pathfinding with no material filter, so anything that
+    /// is one is impassable to the AI and a wall to `maplint`. Grass you
+    /// drive through has to be its own light entity (see `grass.rs`).
+    #[serde(rename = "tall_grass")]
+    TallGrass,
 }
 
 impl CellObject {
@@ -67,6 +86,8 @@ impl CellObject {
             CellObject::Sandbag => Some(Material::Sandbag),
             CellObject::Barrel => Some(Material::Barrel),
             CellObject::Fence => Some(Material::Fence),
+            CellObject::Tree => Some(Material::Tree),
+            CellObject::Pine => Some(Material::Pine),
             _ => None,
         }
     }
@@ -76,13 +97,15 @@ impl CellObject {
         self.material().is_some()
     }
 
-    /// The cell that places a prop of `material` (`None` for wall
-    /// materials, which are `Wall { material }`).
+    /// The cell that places a standalone solid of `material` - a prop or a
+    /// tree (`None` for wall materials, which are `Wall { material }`).
     pub fn prop(material: Material) -> Option<CellObject> {
         match material {
             Material::Sandbag => Some(CellObject::Sandbag),
             Material::Barrel => Some(CellObject::Barrel),
             Material::Fence => Some(CellObject::Fence),
+            Material::Tree => Some(CellObject::Tree),
+            Material::Pine => Some(CellObject::Pine),
             _ => None,
         }
     }
@@ -91,7 +114,7 @@ impl CellObject {
 /// A saved battlefield layout. Keys are `"<col>,<row>"` grid-cell strings
 /// (TOML tables require string keys) - only occupied cells are stored, so a
 /// mostly-empty map stays a small file.
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MapFile {
     pub version: u32,
     #[serde(default)]
@@ -114,6 +137,11 @@ pub struct MapFile {
     /// roll. `--tank` on the command line outranks this.
     #[serde(default)]
     pub tank: Option<TankKind>,
+    /// Player 2's chassis in a two-player round (TOML: a top-level
+    /// `tank2 = "scout"`), the same way `tank` names player 1's. `None`
+    /// means a random roll; `--tank2` outranks it.
+    #[serde(default)]
+    pub tank2: Option<TankKind>,
     /// The `[mission]` table - what ends the round (docs/maps-to-levels.md).
     /// Absent means Protect.
     #[serde(default)]
@@ -163,6 +191,7 @@ impl MapFile {
             cells: HashMap::new(),
             tanks: None,
             tank: None,
+            tank2: None,
             mission: MissionConfig::default(),
             spawn: SpawnConfig::default(),
             name: None,
@@ -278,6 +307,15 @@ impl MapFile {
             .map(|(col, row, _)| (col, row))
     }
 
+    /// The map's one player-2 start cell, if it placed one - same
+    /// singleton convention as `start_cell`. Read only in a two-player
+    /// round.
+    pub fn start2_cell(&self) -> Option<(i32, i32)> {
+        self.iter_cells()
+            .find(|(_, _, obj)| matches!(obj, CellObject::Start2))
+            .map(|(col, row, _)| (col, row))
+    }
+
     /// The map's one enemy-frog cell (Hunt mission), if it placed one -
     /// same singleton convention as `frog_cell`.
     pub fn enemy_frog_cell(&self) -> Option<(i32, i32)> {
@@ -344,10 +382,69 @@ pub fn maps_dir() -> PathBuf {
     PathBuf::from("maps")
 }
 
-/// Every `.toml` file under `maps_dir()`, by file stem, sorted - used by the
-/// editor's Load panel. An unreadable/missing directory just yields an
-/// empty list rather than an error (nothing to load yet is a normal state,
-/// not a failure).
+/// The maps compiled into the binary, by name: the default battlefield and
+/// the two mission fixtures. They are what the web build can offer its
+/// Load list, since nothing outside `static/` ships in the wasm, and they
+/// stand in on native for a checkout without a `maps/` directory.
+pub const SHIPPED_MAPS: &[(&str, &str)] = &[
+    ("default", include_str!("../maps/default.toml")),
+    ("hunt-basic", include_str!("../maps/missions/hunt-basic.toml")),
+    ("waves-basic", include_str!("../maps/missions/waves-basic.toml")),
+];
+
+/// Whether this build can write a map to disk: native yes, web no (its
+/// edits live in memory for the session - docs/game-editor-fusion.md).
+pub const fn saving_available() -> bool {
+    !cfg!(target_os = "emscripten")
+}
+
+/// One map the builder's Load list can offer.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct MapEntry {
+    pub name: String,
+    /// A file under `maps_dir()` (native); otherwise one of `SHIPPED_MAPS`.
+    pub on_disk: bool,
+}
+
+/// Every map the builder can load, sorted by name: the files under
+/// `maps_dir()` on native, plus the shipped maps not shadowed by a file of
+/// the same name. The web build lists only the shipped ones.
+pub fn available_maps() -> Vec<MapEntry> {
+    let mut entries: Vec<MapEntry> = if saving_available() {
+        list_maps().into_iter().map(|name| MapEntry { name, on_disk: true }).collect()
+    } else {
+        Vec::new()
+    };
+    for (name, _) in SHIPPED_MAPS {
+        if !entries.iter().any(|e| e.name == *name) {
+            entries.push(MapEntry { name: (*name).to_string(), on_disk: false });
+        }
+    }
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    entries
+}
+
+/// Open a map by its Load-list name: the file under `maps_dir()` when
+/// there is one (native), else the shipped map of that name. The result
+/// carries `name` for display.
+pub fn open_map(name: &str) -> Result<MapFile, String> {
+    let path = maps_dir().join(format!("{name}.toml"));
+    if saving_available() && path.is_file() {
+        return MapFile::load(&path);
+    }
+    let (_, text) = SHIPPED_MAPS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .ok_or_else(|| format!("no map named {name:?}"))?;
+    let mut map = MapFile::from_toml_str(text).map_err(|e| format!("parsing shipped map {name}: {e}"))?;
+    map.name = Some(name.to_string());
+    Ok(map)
+}
+
+/// Every `.toml` file under `maps_dir()`, by file stem, sorted - the
+/// on-disk half of `available_maps`. An unreadable/missing directory just
+/// yields an empty list rather than an error (nothing to load yet is a
+/// normal state, not a failure).
 pub fn list_maps() -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(maps_dir())
         .into_iter()
@@ -363,6 +460,20 @@ pub fn list_maps() -> Vec<String> {
 #[cfg(test)]
 mod toml_tests {
     use super::*;
+
+    #[test]
+    fn shipped_maps_parse_and_open_by_name() {
+        for (name, _) in SHIPPED_MAPS {
+            let map = open_map(name).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(map.name.as_deref(), Some(*name));
+            assert!(!map.cells.is_empty());
+        }
+        assert!(open_map("no-such-map").is_err());
+        let entries = available_maps();
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"default"));
+        assert!(names.windows(2).all(|w| w[0] < w[1]), "sorted and unique");
+    }
 
     #[test]
     fn toml_string_round_trips_the_default_map() {
@@ -400,11 +511,19 @@ spawn.waves = 4
 spawn.size = 2
 spawn.tier_start = "light"
 spawn.tier_end = "heavy"
+tank2 = "titan"
 cells."3,5" = { kind = "enemy_frog" }
+cells."4,5" = { kind = "start2" }
 cells."0,11" = { kind = "gate" }
 cells."39,11" = { kind = "gate" }
 "#;
         let map = MapFile::from_toml_str(text).unwrap();
+        assert_eq!(map.tank2, Some(TankKind::Titan));
+        assert_eq!(map.start2_cell(), Some((4, 5)));
+        assert_eq!(map.start_cell(), None);
+        assert!(map.cell(4, 5).is_some_and(|c| !c.is_solid()));
+        // An older file without the key still parses, with no preference.
+        assert_eq!(MapFile::from_toml_str("version = 1\n").unwrap().tank2, None);
         assert_eq!(map.mission.kind, Mission::Hunt);
         assert_eq!(map.spawn.kind, SpawnKind::Waves);
         assert_eq!((map.spawn.waves, map.spawn.size, map.spawn.growth), (Some(4), Some(2), None));
@@ -416,6 +535,8 @@ cells."39,11" = { kind = "gate" }
         assert_eq!(back.spawn, map.spawn);
         assert_eq!(back.enemy_frog_cell(), map.enemy_frog_cell());
         assert_eq!(back.gate_cells(), map.gate_cells());
+        assert_eq!(back.start2_cell(), Some((4, 5)));
+        assert_eq!(back.tank2, Some(TankKind::Titan));
     }
 
     #[test]

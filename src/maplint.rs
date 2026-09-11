@@ -122,6 +122,17 @@ pub enum LintKind {
     /// The `enemy_frog` cell can't be approached from the playfield under
     /// the same reach rule as the player's frog.
     EnemyFrogUnreachable,
+    /// No `start` cell: player 1 spawns at the nearest free cell to the
+    /// centre, wherever that is on this map.
+    NoStart,
+    /// Two-player rounds: player 2's spawn (the `start2` cell, or the
+    /// fallback beside player 1) is not in the playfield, so the two
+    /// players start in separate regions.
+    Player2Unreachable,
+    /// Two-player rounds: the `start2` cell sits inside the clearance
+    /// `Game::init` keeps between the two players, so the game ignores it
+    /// and places player 2 at the nearest open cell instead.
+    PlayersTooClose,
 }
 
 impl LintKind {
@@ -140,6 +151,9 @@ impl LintKind {
             LintKind::WavesNoGates => "waves-no-gates",
             LintKind::HuntMissingEnemyFrog => "hunt-missing-enemy-frog",
             LintKind::EnemyFrogUnreachable => "enemy-frog-unreachable",
+            LintKind::NoStart => "no-start",
+            LintKind::Player2Unreachable => "player2-unreachable",
+            LintKind::PlayersTooClose => "players-too-close",
         }
     }
 }
@@ -266,6 +280,18 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
             .expect("player tank exists after init")
     };
 
+    // Player 2, in a two-player round: the same read-back, so the lint
+    // sees the fallback placement `init` really made.
+    let player2 = game.player2.map(|entity| {
+        let mut query = game.world.query::<(Entity, &Tank)>();
+        query
+            .iter()
+            .find(|(e, _)| *e == entity)
+            .map(|(_, tank)| (tank.position, tank.size()))
+            .expect("player 2 tank exists after init")
+    });
+    let player_positions: Vec<Position> = std::iter::once(player_pos).chain(player2.map(|(p, _)| p)).collect();
+
     let mut cells = Cells { cols, rows, open, playfield: vec![false; cols * rows] };
     let start_cell = cells.cell_of(player_pos);
     flood(&mut cells, start_cell);
@@ -303,10 +329,11 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
     let frog_pos = game.world.query::<&Frog>().iter().next().map(|f| f.position);
 
     let mut findings = Vec::new();
+    check_players(game, &cells, player_pos, player_size, player2, &mut findings);
     check_reachability(game, &cells, &breach_cells, frog_pos, &mut findings);
     check_enemy_frog(game, &cells, &mut findings);
     check_gates(game, &grid, &mut findings);
-    check_wave_gates(game, &grid, width, height, player_pos, &mut findings);
+    check_wave_gates(game, &grid, width, height, &player_positions, &mut findings);
     check_disconnected_regions(&cells, &mut findings);
     check_boxed_in(&grid, &cells, &mut findings);
     // Only the band plan places enemies in the border band at init; a
@@ -317,7 +344,7 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
             &cells,
             width,
             height,
-            player_pos,
+            &player_positions,
             player_size,
             &grid,
             &obstacle_positions,
@@ -327,6 +354,57 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
     check_planner_physics(&cells, &physics_boxes(&obstacle_positions, frog_pos), &mut findings);
     check_narrow_corridors(&cells, &mut findings);
     findings
+}
+
+/// The players' starts: a map with no `start` cell is a warning (the
+/// game copes, but the author most likely meant to place one); in a
+/// two-player round player 2's spawn has to share player 1's playfield,
+/// and the two spawns have to leave a tank's width between them.
+fn check_players(
+    game: &Game,
+    cells: &Cells,
+    player_pos: Position,
+    player_size: f32,
+    player2: Option<(Position, f32)>,
+    findings: &mut Vec<LintFinding>,
+) {
+    if game.map.start_cell().is_none() {
+        findings.push(LintFinding {
+            severity: LintSeverity::Warning,
+            kind: LintKind::NoStart,
+            message: format!(
+                "no `start` cell: player 1 spawns at the nearest free cell to the centre, ({:.0},{:.0})",
+                player_pos.x, player_pos.y
+            ),
+        });
+    }
+    let Some((pos2, _)) = player2 else { return };
+    let (col, row) = cells.cell_of(pos2);
+    if !cells.in_playfield(col, row) {
+        findings.push(LintFinding {
+            severity: LintSeverity::Error,
+            kind: LintKind::Player2Unreachable,
+            message: format!(
+                "player 2 spawns at ({:.0},{:.0}) - nav cell ({col},{row}) - outside player 1's playfield: the two players start in separate regions",
+                pos2.x, pos2.y
+            ),
+        });
+    }
+    // The same clearance `Game::init` demands of a `start2` cell before
+    // it honours it (`tank.size() * 2.0`), measured on the map's cells.
+    if let (Some(s1), Some(s2)) = (game.map.start_cell(), game.map.start2_cell()) {
+        let clear = player_size * 2.0;
+        let gap = map::cell_to_world(s2.0, s2.1).distance_to(map::cell_to_world(s1.0, s1.1));
+        if gap < clear {
+            findings.push(LintFinding {
+                severity: LintSeverity::Warning,
+                kind: LintKind::PlayersTooClose,
+                message: format!(
+                    "the start2 cell is {gap:.0}px from the start cell, inside the {clear:.0}px clearance the game keeps between the players: it is ignored and player 2 is placed at the nearest open cell beside player 1 instead"
+                ),
+            });
+        }
+    }
 }
 
 /// The Hunt mission's target: a Hunt map without an `enemy_frog` cell
@@ -430,7 +508,7 @@ fn check_wave_gates(
     grid: &Grid,
     width: f32,
     height: f32,
-    player_pos: Position,
+    player_positions: &[Position],
     findings: &mut Vec<LintFinding>,
 ) {
     if game.map.spawn.kind != SpawnKind::Waves || !game.map.gate_cells().is_empty() {
@@ -440,7 +518,7 @@ fn check_wave_gates(
         let t = tuning();
         (t.wave_gate_inward_cells, t.wave_gate_min_player_dist)
     };
-    let mut avoid = vec![player_pos];
+    let mut avoid = player_positions.to_vec();
     avoid.extend(game.world.query::<&Frog>().iter().filter(|fr| fr.side == Side::Player).map(|fr| fr.position));
     if battlefield::gate_candidates(grid, width, height, &avoid, min_dist, inward).is_empty() {
         findings.push(LintFinding {
@@ -637,7 +715,7 @@ fn check_spawn_band(
     cells: &Cells,
     width: f32,
     height: f32,
-    player_pos: Position,
+    player_positions: &[Position],
     player_size: f32,
     grid: &Grid,
     obstacle_positions: &[Position],
@@ -655,24 +733,29 @@ fn check_spawn_band(
                 continue;
             }
             let p = cells.center(col, row);
-            if battlefield::enemy_spawn_legal(
-                p,
-                width,
-                height,
-                margin_min,
-                margin_max,
-                player_pos,
-                clear,
-                grid,
-                obstacle_positions,
-            ) {
+            // Legal against every player: `Game::init` keeps enemies
+            // `clear` from each of them.
+            let legal = player_positions.iter().all(|&player_pos| {
+                battlefield::enemy_spawn_legal(
+                    p,
+                    width,
+                    height,
+                    margin_min,
+                    margin_max,
+                    player_pos,
+                    clear,
+                    grid,
+                    obstacle_positions,
+                )
+            });
+            if legal {
                 capacity += 1;
             }
         }
     }
 
     // Same 1..=31 clamp `Game::init` applies to a map's `tanks` count (31
-    // = the rapier collision-group bit budget - see `enemy_owner_slot`).
+    // = the cap on live enemies, `wave_max_alive`).
     let required = game
         .map
         .tanks
@@ -850,8 +933,17 @@ mod map_lint_tests {
     /// Headless seeded round on `map`, linted - the §3.1 setup. The fixed
     /// seed matters for maps that leave frog/start placement to `init`'s
     /// (seeded) fallback rolls: same seed, same layout, same findings.
+    /// Two passes: the single-player round for every check, then a
+    /// two-player round for the player-2 checks only (the terrain is the
+    /// same, so its other findings would only be duplicates).
     fn lint_map(map: MapFile) -> Vec<LintFinding> {
-        lint(&init_game(map), W, H)
+        let mut findings = lint(&init_game(map.clone()), W, H);
+        findings.extend(
+            lint(&init_game_two(map), W, H)
+                .into_iter()
+                .filter(|f| matches!(f.kind, LintKind::Player2Unreachable | LintKind::PlayersTooClose)),
+        );
+        findings
     }
 
     /// The seeded headless round `lint_map` lints, for tests that also
@@ -860,6 +952,17 @@ mod map_lint_tests {
         let mut game = Game::default();
         game.seed_override = Some(0xB0B5);
         game.enemy_count_override = Some(4);
+        game.map = map;
+        game.init(W, H);
+        game
+    }
+
+    /// The same round with two players, for the player-2 checks.
+    fn init_game_two(map: MapFile) -> Game {
+        let mut game = Game::default();
+        game.seed_override = Some(0xB0B5);
+        game.enemy_count_override = Some(4);
+        game.players = crate::simulation::PlayerCount::Two;
         game.map = map;
         game.init(W, H);
         game
@@ -916,6 +1019,40 @@ mod map_lint_tests {
 
     fn has(findings: &[LintFinding], kind: LintKind) -> bool {
         findings.iter().any(|f| f.kind == kind)
+    }
+
+    /// The two-player checks: a `start2` sealed off from `start` is an
+    /// error, one painted right beside it a warning, a map with no start
+    /// at all a warning whose fallback pair still shares a playfield.
+    #[test]
+    fn player_two_start_is_linted_against_player_one() {
+        let mut map = base_map();
+        map.set_cell(3, 3, CellObject::Start2);
+        for (c, r) in [(2, 2), (3, 2), (4, 2), (2, 3), (4, 3), (2, 4), (3, 4), (4, 4)] {
+            wall(&mut map, c, r);
+        }
+        let f = lint_map(map);
+        dump("sealed start2", &f);
+        assert!(has(&f, LintKind::Player2Unreachable));
+        assert!(!has(&f, LintKind::PlayersTooClose));
+        assert!(!has(&f, LintKind::NoStart));
+
+        let mut map = base_map();
+        map.set_cell(28, 11, CellObject::Start2);
+        let f = lint_map(map);
+        dump("adjacent start2", &f);
+        assert!(has(&f, LintKind::PlayersTooClose));
+        assert!(!has(&f, LintKind::Player2Unreachable));
+        assert!(errors(&f).is_empty(), "too close is advisory");
+
+        let mut map = MapFile::new();
+        map.set_cell(7, 12, CellObject::Frog);
+        let f = lint_map(map);
+        dump("no start", &f);
+        assert!(has(&f, LintKind::NoStart));
+        assert!(!has(&f, LintKind::Player2Unreachable), "the fallback beside player 1 shares its playfield");
+        assert!(!has(&f, LintKind::PlayersTooClose));
+        assert!(errors(&f).is_empty());
     }
 
     fn errors(findings: &[LintFinding]) -> Vec<&LintFinding> {

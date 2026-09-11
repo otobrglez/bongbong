@@ -119,29 +119,83 @@ PUNY_PALETTE = [
     GOLD_BRIGHT, GOLD_MD, GOLD_PALE,
 ]
 
+# ---------------------------------------------------------------------
+# The wall-detail extension (2026-09)
+# ---------------------------------------------------------------------
+# Puny World is a 16px-prop tileset: its ramps carry enough steps to tint a
+# barrel, not to *shade* masonry. The greys are the thin ones - between
+# STONE_LT #C1C1C1 and STONE_MD #9E9E96 there is no true mid step at all,
+# and STONE_DK #7E7E7E to STONE_DARKEST #373737 is a 71-value cliff that
+# `inner_shadow` used to jump straight across, which is why a damaged edge
+# read as a hole with a black liner rather than as depth.
+#
+# These are *interpolated between two already-sampled neighbours in the same
+# family*, then (for the greys) forced to exact neutral. The hue is still
+# the tileset's; only the spacing is ours. Re-sampling the pack would not
+# help - the colours simply are not in it.
+#
+# Additive and opt-in on purpose. `snap()` is used by every generator, so
+# folding these into PUNY_PALETTE would silently re-quantise tanks, shells
+# and props the next time anyone regenerated them. Only gen_walls.py passes
+# PUNY_PALETTE_ALL.
+#
+# De-green invariant: none of these belongs to the GREEN_* family. Note the
+# rule is *family membership*, not "green is not the largest channel" - the
+# pack's own BLUE_BRIGHT #27D8C5 and TEAL_BRIGHT #00D097 are both
+# numerically green-dominant cyans, and BLUE_PALE below is one too. A
+# channel test would reject them and the water they came from. `just
+# check-sheets` enforces the membership form on every sheet drawn over the
+# ground layer; see docs/PALETTE.md.
+STONE_HI = (0xDA, 0xDA, 0xDA)       # mid(STONE_PALE, STONE_LT)
+STONE_MID = (0xB0, 0xB0, 0xB0)      # mid(STONE_LT, STONE_MD), neutralised
+STONE_MDK = (0x8E, 0x8E, 0x8E)      # mid(STONE_MD, STONE_DK), neutralised
+STONE_SHADE = (0x5A, 0x5A, 0x5A)    # mid(STONE_DK, STONE_DARKEST)
+RUST_MD = (0x8D, 0x4A, 0x25)        # mid(WOOD_DK, RED_DK)
+RUST_DK = (0x59, 0x34, 0x1F)        # mid(RED_DARKEST, WOOD_DEEPER)
+WOOD_ASH = (0x73, 0x62, 0x4D)       # mid(WOOD_DEEPER, STONE_DK)
+BLUE_PALE = (0x93, 0xEC, 0xE2)      # mid(BLUE_BRIGHT, WHITE)
+# Vegetation shade. GREEN_DARKEST #1C4C33 to GREEN_DK #5F914B is a 70-value
+# jump with nothing between, so a grass blade built from the pack's greens
+# reads as a solid dark block with light specks floating over it rather than
+# as blades. This is the one step that connects them - and it is genuinely
+# darker than the *retinted* live ground (#619541), which GREEN_DK is not,
+# so a clump reads against the field it grows out of.
+GREEN_SHADE = (0x3D, 0x6E, 0x3F)    # mid(GREEN_DARKEST, GREEN_DK)
+
+PUNY_EXTRA = [
+    STONE_HI, STONE_MID, STONE_MDK, STONE_SHADE,
+    RUST_MD, RUST_DK, WOOD_ASH, BLUE_PALE,
+    GREEN_SHADE,
+]
+
+PUNY_PALETTE_ALL = PUNY_PALETTE + PUNY_EXTRA
+
+# Keyed by palette identity as well as colour: one shared dict would let
+# whichever generator ran first decide the answer for the other.
 _cache = {}
 
 
-def nearest(rgb):
-    """Nearest PUNY_PALETTE colour to an arbitrary (r, g, b[, a]) tuple, by
+def nearest(rgb, palette=PUNY_PALETTE):
+    """Nearest colour in `palette` to an arbitrary (r, g, b[, a]) tuple, by
     squared Euclidean RGB distance. Alpha (if present) passes through
-    unchanged."""
-    key = (rgb[0], rgb[1], rgb[2])
+    unchanged. Defaults to the base set, so every existing caller is
+    unaffected."""
+    key = (id(palette), rgb[0], rgb[1], rgb[2])
     hit = _cache.get(key)
     if hit is not None:
         return hit
-    best, best_d = PUNY_PALETTE[0], None
-    for cand in PUNY_PALETTE:
-        d = (cand[0] - key[0]) ** 2 + (cand[1] - key[1]) ** 2 + (cand[2] - key[2]) ** 2
+    best, best_d = palette[0], None
+    for cand in palette:
+        d = (cand[0] - key[1]) ** 2 + (cand[1] - key[2]) ** 2 + (cand[2] - key[3]) ** 2
         if best_d is None or d < best_d:
             best, best_d = cand, d
     _cache[key] = best
     return best
 
 
-def snap(rgba):
-    """Snap a colour to its nearest PUNY_PALETTE match, preserving alpha (or
+def snap(rgba, palette=PUNY_PALETTE):
+    """Snap a colour to its nearest match in `palette`, preserving alpha (or
     defaulting to opaque for a bare 3-tuple)."""
-    r, g, b = nearest(rgba)
+    r, g, b = nearest(rgba, palette)
     a = rgba[3] if len(rgba) > 3 else 255
     return (r, g, b, a)
