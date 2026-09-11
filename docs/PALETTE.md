@@ -224,6 +224,28 @@ green-dominant cyans, and `BLUE_PALE` is one too. A channel test would reject
 them and the water they came from. This was caught by writing the channel
 test first and watching it fail on a colour that was fine.
 
+## The team family (2026-09)
+
+The player tanks are recoloured copies of the enemy chassis
+(docs/player-indicator-improvements.md), and the identity colour has to
+be one no enemy hull, wall, prop or ground tile shows. The Puny Palette
+cannot supply it: every one of its families is already some chassis's
+body or accent, and the eight base colours no tank uses sit within 13-38
+RGB units of one that does. `tools/punypalette.py`'s `TEAM_P1` (sky blue,
+`#484A77` / `#4D65B4` / `#4D9BE6` / `#8FD3FF`) and `TEAM_P2` (hot pink,
+`#831C5D` / `#C32454` / `#F04F78` / `#ED8099`) are Resurrect 64's own blue
+and magenta ramps - the three hue regions nothing on screen occupies are
+true blue, violet and magenta - chosen on a side-by-side of the real
+sheet recoloured in the browser. They are deliberately off the Puny set,
+the same exemption the pickup icons and `plasma.png` have: an identity
+has to be loud against the terrain, not sit in it. `PUNY_TEAM` is not part
+of `PUNY_PALETTE` or `PUNY_EXTRA` (so `snap()` never lands on it), and
+`gen_tanks.py` walks the team ramp *by role* while a player block is
+drawn instead of calling `snap()`, which would throw a darkened pink onto
+roof-tile red. `check_sheets.py` admits the family on rows 12-35 of the
+tank sheet only; a team colour in the enemy block, or anywhere else, is a
+failure.
+
 ## Verifying
 
 Every sheet should have **zero** off-palette opaque/semi-transparent pixels.

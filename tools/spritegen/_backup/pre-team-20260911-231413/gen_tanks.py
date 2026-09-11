@@ -2,7 +2,7 @@ from PIL import Image
 import os, random, sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from punypalette import BLACK, STONE_DK, STONE_MD, STONE_LT, TEAM_P1, TEAM_P2, snap
+from punypalette import BLACK, STONE_DK, STONE_MD, STONE_LT, snap
 
 S = 32
 # Near-black tone sampled from the Puny World tileset's own shadow pixels
@@ -11,43 +11,12 @@ OUTLINE = BLACK + (255,)
 OUT = os.environ.get('SPRITE_OUT', 'assets/sprites')
 os.makedirs(OUT, exist_ok=True)
 
-# The team ramp (dk, md, base, lt) a player row is being drawn with, or
-# None for an enemy row. A team colour is off the Puny Palette on purpose
-# (docs/player-indicator-improvements.md), so `snap()` would throw every
-# shade of it back onto the nearest terrain colour - a darkened hot pink
-# lands on roof-tile red, a darkened sky blue on water cyan - and the hull
-# would come out mostly enemy-coloured. While a team row is drawn, every
-# shading primitive that would snap a *team* colour walks the team ramp by
-# role instead; anything else (gunmetal, char, embers) shades exactly as an
-# enemy row does, so the enemy block stays byte-identical.
-TEAM = None
-
-
-def team_index(c):
-    if TEAM is None:
-        return None
-    rgb = tuple(c[:3])
-    for i, step in enumerate(TEAM):
-        if step == rgb:
-            return i
-    return None
-
-
-def team_step(i):
-    return TEAM[max(0, min(len(TEAM) - 1, i))] + (255,)
-
 
 def blank():
     return Image.new('RGBA', (S, S), (0, 0, 0, 0))
 
 
 def mul(c, f):
-    i = team_index(c)
-    if i is not None:
-        # One ramp step lighter for a highlight, one darker for a mid shade,
-        # two for a deep one - the same roles the factors play below.
-        j = i + 1 if f >= 1.1 else i if f >= 0.82 else i - 1 if f >= 0.6 else i - 2
-        return team_step(j)
     # Scale, then snap back onto the 64-colour set -- without this, darkening/
     # lightening a palette colour by an arbitrary factor drifts it off-palette.
     return snap((max(0, min(255, int(c[0] * f))),
@@ -331,11 +300,6 @@ DEBRIS = STONE_DK + (255,)   # torn/shredded metal (lighter than a hole)
 
 
 def scorch(c, f=0.45):
-    i = team_index(c)
-    if i is not None:
-        # Charred paint stays in the team's family: one step darker for a
-        # scuff, two for a burn, so a player's wreck is still their colour.
-        return team_step(i - (1 if f >= 0.7 else 2))
     return snap((int(c[0] * f + BURN[0] * (1 - f)),
                  int(c[1] * f + BURN[1] * (1 - f)),
                  int(c[2] * f + BURN[2] * (1 - f)), 255))
@@ -629,58 +593,40 @@ COL_ORDER = ['hull0', 'turret', 'hull1', 'hull2', 'hull3', 'brk_turret',
              'light', 'disabled', 'wreckA', 'wreckB', 'wreckC', 'wreckD', 'marks']
 COLS = len(COL_ORDER)
 
-# ---- rows: three blocks of the same roster ----
-# Block 0 is the enemy roster exactly as before. Blocks 1 and 2 are the
-# same twelve chassis as player 1 and player 2: body ramp and accent
-# swapped for the team ramp, everything else (outline, gunmetal, char,
-# embers, track marks) identical. The engine picks the block from the
-# tank's owner (`TANK_ROWS_PER_TEAM` in lib.rs); the per-chassis tables
-# stay twelve wide because the chassis is the row *within* a block.
-TEAMS = [('enemy', None), ('p1', TEAM_P1), ('p2', TEAM_P2)]
+sheet = Image.new('RGBA', (S * COLS, S * len(TANKS)), (0, 0, 0, 0))
 
-sheet = Image.new('RGBA', (S * COLS, S * len(TANKS) * len(TEAMS)), (0, 0, 0, 0))
+for i, spec in enumerate(TANKS):
+    cells = {
+        'hull0': draw_hull(spec, 0),
+        'hull1': draw_hull(spec, 1),
+        'hull2': draw_hull(spec, 2),
+        'hull3': draw_hull(spec, 3),
+        'turret': draw_turret(spec),
+        'brk_turret': draw_broken_turret(spec, 1000 + i),
+        'light': draw_damaged_hull(spec, 2000 + i, 'light'),
+        'disabled': draw_damaged_hull(spec, 3000 + i, 'disabled'),
+        'wreckA': draw_damaged_hull(spec, 4000 + i, 'wreckA'),
+        'wreckB': draw_damaged_hull(spec, 5000 + i, 'wreckB'),
+        'wreckC': draw_damaged_hull(spec, 6000 + i, 'wreckC'),
+        'wreckD': draw_damaged_hull(spec, 7000 + i, 'wreckD'),
+        'marks': draw_tracks(spec),
+    }
+    for col, key in enumerate(COL_ORDER):
+        sheet.paste(cells[key], (col * S, i * S))   # direct copy: preserves exact RGBA
+        # (no mask arg -- passing cells[key] as its own mask would alpha-
+        # composite semi-transparent pixels against the sheet's transparent
+        # background, drifting the trackmarks decal's colour off-palette)
 
-for block, (team_name, ramp) in enumerate(TEAMS):
-    TEAM = ramp
-    for i, base_spec in enumerate(TANKS):
-        spec = base_spec if ramp is None else dict(base_spec, body=ramp[2], accent=ramp[3])
-        row = block * len(TANKS) + i
-        # Damage seeds are per chassis, not per row, so a player's wreck has
-        # the same holes and torn edges as the enemy version of the hull.
-        cells = {
-            'hull0': draw_hull(spec, 0),
-            'hull1': draw_hull(spec, 1),
-            'hull2': draw_hull(spec, 2),
-            'hull3': draw_hull(spec, 3),
-            'turret': draw_turret(spec),
-            'brk_turret': draw_broken_turret(spec, 1000 + i),
-            'light': draw_damaged_hull(spec, 2000 + i, 'light'),
-            'disabled': draw_damaged_hull(spec, 3000 + i, 'disabled'),
-            'wreckA': draw_damaged_hull(spec, 4000 + i, 'wreckA'),
-            'wreckB': draw_damaged_hull(spec, 5000 + i, 'wreckB'),
-            'wreckC': draw_damaged_hull(spec, 6000 + i, 'wreckC'),
-            'wreckD': draw_damaged_hull(spec, 7000 + i, 'wreckD'),
-            'marks': draw_tracks(spec),
-        }
-        for col, key in enumerate(COL_ORDER):
-            sheet.paste(cells[key], (col * S, row * S))   # direct copy: preserves exact RGBA
-            # (no mask arg -- passing cells[key] as its own mask would alpha-
-            # composite semi-transparent pixels against the sheet's transparent
-            # background, drifting the trackmarks decal's colour off-palette)
-
-        if ramp is not None:
-            continue
-        n = spec['name']
-        fnames = {'hull0': 'hull', 'turret': 'turret', 'brk_turret': 'turret_broken',
-                  'light': 'hull_damaged_light', 'disabled': 'hull_damaged_disabled',
-                  'wreckA': 'hull_wreck_a', 'wreckB': 'hull_wreck_b',
-                  'wreckC': 'hull_wreck_c', 'wreckD': 'hull_wreck_d',
-                  'marks': 'trackmarks'}
-        for key, suffix in fnames.items():
-            cells[key].save(f'{OUT}/scifi_{n}_{suffix}.png')
-TEAM = None
+    n = spec['name']
+    fnames = {'hull0': 'hull', 'turret': 'turret', 'brk_turret': 'turret_broken',
+              'light': 'hull_damaged_light', 'disabled': 'hull_damaged_disabled',
+              'wreckA': 'hull_wreck_a', 'wreckB': 'hull_wreck_b',
+              'wreckC': 'hull_wreck_c', 'wreckD': 'hull_wreck_d',
+              'marks': 'trackmarks'}
+    for key, suffix in fnames.items():
+        cells[key].save(f'{OUT}/scifi_{n}_{suffix}.png')
 
 sheet.save(f'{OUT}/scifi_tanks_sheet.png')
 
 sc = 5
-print('sheet', sheet.size, f'{COLS} cols x {len(TANKS)} rows x {len(TEAMS)} teams')
+print('sheet', sheet.size, f'{COLS} cols x {len(TANKS)} rows')

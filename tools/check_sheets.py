@@ -62,7 +62,16 @@ NO_GREEN = ['walls_sheet.png', 'props_sheet.png', 'barrel_explosion.png']
 
 PALETTE = {tuple(c) for c in pp.PUNY_PALETTE}
 PALETTE_ALL = {tuple(c) for c in pp.PUNY_PALETTE_ALL}
+TEAM = {tuple(c) for c in pp.PUNY_TEAM}
 GREENS = {tuple(getattr(pp, n)) for n in dir(pp) if n.startswith('GREEN_')}
+
+# The tank sheet is three blocks of the same roster (enemy, player 1,
+# player 2 - docs/SPRITESHEET_SPEC.md); the player blocks alone may use the
+# off-palette team family, and the enemy block must not, so a generator
+# slip that tints an enemy row fails here rather than shipping.
+TANK_SHEET = 'scifi_tanks_sheet.png'
+TANK_ROWS_PER_TEAM = 12
+TANK_CELL = 32
 
 # Sheets allowed the palette extension (punypalette.PUNY_EXTRA): the walls
 # sheet for its stone/rust steps, the vegetation sheets for GREEN_SHADE
@@ -75,11 +84,14 @@ def scan(name):
     img = Image.open(os.path.join(STATIC, name)).convert('RGBA')
     off = green = 0
     for y in range(img.height):
+        row_allowed = allowed
+        if name == TANK_SHEET and y >= TANK_ROWS_PER_TEAM * TANK_CELL:
+            row_allowed = PALETTE | TEAM
         for x in range(img.width):
             r, g, b, a = img.getpixel((x, y))
             if not a:
                 continue
-            if (r, g, b) not in allowed:
+            if (r, g, b) not in row_allowed:
                 off += 1
             if (r, g, b) in GREENS:
                 green += 1

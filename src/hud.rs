@@ -20,7 +20,7 @@ use sola_raylib::prelude::*;
 use crate::ai::Ai;
 use crate::game::Textures;
 use crate::simulation::{with_frog, with_tank, Game, PlayerCount};
-use crate::tank::{ActiveWeapon, Tank, PLAYER2_RING_COLOR};
+use crate::tank::{ActiveWeapon, Tank, TEAM_COLORS};
 use crate::tuning::tuning;
 use crate::{Rect, MAX_DAMAGE, PICKUP_TEXTURE_SIZE, SHELL_TEXTURE_SIZE};
 
@@ -77,7 +77,7 @@ const BAR2_H: i32 = 6;
 const BAR2_GAP: i32 = 1;
 /// Approximate default-font advance per character at `HUD_TEXT_SIZE`; the
 /// pairs are laid out in cells of this width.
-const CHAR_W: i32 = 12;
+pub const CHAR_W: i32 = 12;
 
 /// The slot origins one table of readouts is laid out from. One table per
 /// player count: the pairs of a two-player round need wider HP, shell and
@@ -312,7 +312,7 @@ pub fn draw_bar(d: &mut impl RaylibDraw, panel: Rect, model: &HudModel, textures
     draw_heart(d, px + s.heart, py + (ph - 12) / 2);
     match p2 {
         None => d.draw_text(&format!("{}", model.p1.hp), px + s.hp, text_y, HUD_TEXT_SIZE, model.p1.hp_color),
-        Some(p2) => draw_pair(d, px + s.hp, text_y, 3, (&format!("{}", model.p1.hp), model.p1.hp_color), (&format!("{}", p2.hp), p2.hp_color)),
+        Some(p2) => draw_pair(d, px + s.hp, text_y, 3, (&format!("{}", model.p1.hp), team_tinted(model.p1.hp_color, 0)), (&format!("{}", p2.hp), team_tinted(p2.hp_color, 1))),
     }
 
     // The shell sprite's in-flight frame, identical on every row of the
@@ -328,8 +328,8 @@ pub fn draw_bar(d: &mut impl RaylibDraw, panel: Rect, model: &HudModel, textures
             d.draw_text(&format!("{}", model.p1.shells), px + s.shells, text_y, HUD_TEXT_SIZE, model.p1.shells_color);
         }
         Some(p2) => {
-            draw_pair(d, px + s.shells, text_y, 2, (&format!("{}", model.p1.shells), model.p1.shells_color), (&format!("{}", p2.shells), p2.shells_color));
-            draw_pair_underlines(d, px + s.shells, py, ph, 2, model.p1.shells_active, p2.shells_active, TEXT);
+            draw_pair(d, px + s.shells, text_y, 2, (&format!("{}", model.p1.shells), team_tinted(model.p1.shells_color, 0)), (&format!("{}", p2.shells), team_tinted(p2.shells_color, 1)));
+            draw_pair_underlines(d, px + s.shells, py, ph, 2, model.p1.shells_active, p2.shells_active);
         }
     }
 
@@ -367,7 +367,7 @@ pub fn draw_bar(d: &mut impl RaylibDraw, panel: Rect, model: &HudModel, textures
                 let (a, ac) = count_of(slot);
                 let (b, bc) = count_of(p2.weapons[i]);
                 draw_pair(d, count_x, text_y, 2, (&a, ac), (&b, bc));
-                draw_pair_underlines(d, count_x, py, ph, 2, slot.active, p2.weapons[i].active, weapon_color(slot.weapon));
+                draw_pair_underlines(d, count_x, py, ph, 2, slot.active, p2.weapons[i].active);
             }
         }
     }
@@ -418,16 +418,25 @@ fn draw_pair(d: &mut impl RaylibDraw, x: i32, text_y: i32, digits: i32, left: (&
 }
 
 /// The two-player stand-in for `active_outline`: a 2 px underline under
-/// whichever side of a pair is what that player's trigger fires.
-fn draw_pair_underlines(d: &mut impl RaylibDraw, x: i32, y: i32, h: i32, digits: i32, left: bool, right: bool, color: Color) {
+/// whichever side of a pair is what that player's trigger fires, in that
+/// player's team colour.
+fn draw_pair_underlines(d: &mut impl RaylibDraw, x: i32, y: i32, h: i32, digits: i32, left: bool, right: bool) {
     let w = digits * CHAR_W - 2;
     let uy = y + h - 4;
     if left {
-        d.draw_rectangle(x, uy, w, 2, color);
+        d.draw_rectangle(x, uy, w, 2, TEAM_COLORS[0]);
     }
     if right {
-        d.draw_rectangle(x + (digits + 1) * CHAR_W, uy, w, 2, color);
+        d.draw_rectangle(x + (digits + 1) * CHAR_W, uy, w, 2, TEAM_COLORS[1]);
     }
+}
+
+/// A two-player readout colour: `hud_number_color`'s plain white becomes
+/// the player's team colour, so each side of a `60|70` pair is its
+/// player's, while the warning and critical colours still win.
+fn team_tinted(color: Color, player: usize) -> Color {
+    let plain = color.r == TEXT.r && color.g == TEXT.g && color.b == TEXT.b && color.a == TEXT.a;
+    if plain { TEAM_COLORS[player & 1] } else { color }
 }
 
 /// The outline marking which slot the trigger fires: 2 px, inset one
@@ -468,7 +477,7 @@ fn draw_tank_glyph(d: &mut impl RaylibDraw, x: i32, y: i32, color: Color) {
 }
 
 /// The players button, left of the mode button: one tank glyph in single
-/// player, two (white, then player 2's blue) in a two-player round. Full
+/// player, two in a two-player round, each in its player's team colour. Full
 /// bar height like the mode button. Opens the players dialog
 /// (`Session::press_players`).
 pub const PLAYERS_BUTTON_W: f32 = 48.0;
@@ -491,12 +500,12 @@ pub fn draw_players_button(d: &mut impl RaylibDraw, panel: Rect, players: Player
     let glyph = 14;
     let gy = (r.y + (r.height - glyph as f32) / 2.0) as i32;
     match players {
-        PlayerCount::One => draw_tank_glyph(d, (r.x + (r.width - glyph as f32) / 2.0) as i32, gy, TEXT),
+        PlayerCount::One => draw_tank_glyph(d, (r.x + (r.width - glyph as f32) / 2.0) as i32, gy, TEAM_COLORS[0]),
         PlayerCount::Two => {
             let gap = 6;
             let x = (r.x + (r.width - (2 * glyph + gap) as f32) / 2.0) as i32;
-            draw_tank_glyph(d, x, gy, TEXT);
-            draw_tank_glyph(d, x + glyph + gap, gy, PLAYER2_RING_COLOR);
+            draw_tank_glyph(d, x, gy, TEAM_COLORS[0]);
+            draw_tank_glyph(d, x + glyph + gap, gy, TEAM_COLORS[1]);
         }
     }
 }
