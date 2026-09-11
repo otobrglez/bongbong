@@ -554,7 +554,7 @@ fn main() {
 
     // A held finger is reported as a touch-point *count*, not as a press, so
     // the press edge has to be found here - one tap must produce exactly one
-    // order (see `Input::tap`).
+    // builder stroke or button press.
     let mut touch_held_last_frame = false;
 
     // game_loop::run drives a plain `while !window_should_close()` loop on
@@ -754,21 +754,9 @@ fn main() {
         // so nothing simulation-related needs to know a `RaylibHandle`
         // exists. See simulation.rs's module doc comment.
         let (player_intent, player2_intent) = gather_intents(rl, session.game.players);
-        // Tap-to-command (docs/tap-navigation.md). The scene blits 1:1 at
-        // the field origin - `game.rs` draws the render target with
-        // `draw_texture_rec`, whose only other offset is the camera shake -
-        // so a window position less the origin *is* a world position, give
-        // or take a couple of 2px blocks during an explosion. A tap on the
-        // HUD bar is not an order, and neither is a tap while a dialog is
-        // up or in a two-player round, where the keyboard is the whole
-        // interface (the simulation ignores it there too).
-        let tap_allowed = !session.dialog && !session.players_dialog && session.game.players == PlayerCount::One;
-        let tap = (pressed && tap_allowed).then_some(pointer);
-        let tap = tap.filter(|p| layout.field.contains(*p)).map(|p| layout.to_field(p));
         let input = Input {
             player_intent,
             player2_intent,
-            tap,
             pause_pressed: rl.is_key_pressed(KeyboardKey::KEY_P),
             // The dev panel's "Restart round" button lands here too, as if
             // R had been pressed - the simulation never learns a browser

@@ -23,18 +23,14 @@ mod combat;
 pub mod debug;
 mod engage;
 mod hits;
-mod orders;
 mod props;
 #[cfg(test)]
 mod props_tests;
-#[cfg(test)]
-mod tap_tests;
 #[cfg(test)]
 mod two_player_tests;
 mod waves;
 mod weapons;
 
-pub use orders::{Order, OrderReadout, OrderTarget, PlayerOrders};
 pub use waves::{RollIn, WaveStatus};
 use waves::WaveState;
 
@@ -112,14 +108,6 @@ pub struct Input {
     /// (`Game::players`); the default is "no input", so single-player
     /// callers never fill it.
     pub player2_intent: Intent,
-    /// Where the player tapped or clicked this frame, in world pixels, on
-    /// the frame the press happened - `None` on every other frame.
-    ///
-    /// It rides in `Input` rather than being read inside `Game` because a
-    /// round has to replay bit-for-bit from `(seed, inputs)`: reading the
-    /// mouse from the simulation would put a value in the stream that no
-    /// replay or probe run could reproduce. See `simulation::orders`.
-    pub tap: Option<Position>,
     pub pause_pressed: bool,
     pub restart_pressed: bool,
     pub toggle_shadows_pressed: bool,
@@ -283,9 +271,6 @@ pub struct Overlays {
     pub engage: bool,
     /// Pickup collection radii.
     pub pickups: bool,
-    /// The player's tap order: the route to it, the attack ring, the
-    /// alignment corridor and the order state (docs/tap-navigation.md).
-    pub orders: bool,
 }
 
 impl Overlays {
@@ -297,7 +282,6 @@ impl Overlays {
         projectiles: false,
         engage: false,
         pickups: false,
-        orders: false,
     };
     /// Only the inspect layer.
     pub const INSPECT: Overlays = Overlays {
@@ -312,7 +296,6 @@ impl Overlays {
         projectiles: true,
         engage: true,
         pickups: true,
-        orders: true,
     };
 
     /// Whether any layer is on.
@@ -467,9 +450,6 @@ pub struct Game {
     /// The tufts those cells scatter, built once per round. Purely drawn -
     /// see `grass.rs` for why this is not an `Obstacle`.
     pub(crate) grass: Vec<crate::grass::GrassTuft>,
-    /// The player's standing tap order and the memory driving it
-    /// (`simulation::orders`). Cleared by `init` and by any arrow key.
-    pub(crate) orders: PlayerOrders,
     /// Queued ammo cook-offs from tanks that have died: where each pops and
     /// how long until it does. Purely cosmetic (see `tick_cookoffs`).
     pub(crate) cookoffs: Vec<(Position, f32)>,
@@ -660,7 +640,6 @@ impl Game {
         self.screen_flash_cooldown = 0.0;
         self.grass_cells.clear();
         self.grass.clear();
-        self.orders.clear();
         self.laser_beams.clear();
         self.frame = 0;
         self.last_engage.clear();
@@ -1029,9 +1008,8 @@ impl Game {
         // it rather than parked on `Frame` - a borrow living there would
         // alias every `&mut Frame` the other phases take.
         let grid = self.nav_grid(width, height);
-        // One flood fill for the frame too: the player's tap orders need
-        // reachability to pick a best-effort goal, and `enemy_phase` needs
-        // it for slot validation.
+        // One flood fill for the frame too: `enemy_phase` needs it for
+        // slot validation.
         let components = grid.components();
         let mut f = Frame::new(dt, width, height, rng, terrain);
 
@@ -1039,7 +1017,7 @@ impl Game {
             self.apply_debug_kills(&mut f);
             self.frog_phase(&mut f);
             self.pickup_phase(&mut f);
-            self.player_phase(input, &mut f, &grid, &components);
+            self.player_phase(input, &mut f);
             self.rollin_phase(&mut f);
             self.enemy_phase(&mut f, &grid, &components);
             self.wave_phase(&mut f);
@@ -1316,30 +1294,10 @@ impl Game {
     }
 
     /// Drive each player from this frame's input and handle their fire
-    /// keys. Tap orders serve player 1 in a single-player round only: with
-    /// two players the tap is never read and the order state stays clear,
-    /// so the keyboard is the whole interface (docs/two-players.md).
-    fn player_phase(&mut self, input: Input, f: &mut Frame, grid: &Grid, components: &Components) {
+    /// keys (docs/two-players.md).
+    fn player_phase(&mut self, input: Input, f: &mut Frame) {
         let player = self.player.expect("player entity spawned in init");
-        let intent = if self.players == PlayerCount::One {
-            // Keys always win. Any commanded move drops the standing order
-            // before anything else looks at it, so the keyboard and the
-            // assist are never both writing the same frame
-            // (docs/tap-navigation.md).
-            if input.player_intent.move_dir.is_some() {
-                self.orders.clear();
-            }
-            if let Some(at) = input.tap {
-                self.orders.clear();
-                self.orders.current = self.resolve_tap(at, grid, components);
-            }
-            // A live order writes the intent in the raw one's place; when
-            // it finishes it clears itself and the tank coasts.
-            self.order_intent(f, grid, components).unwrap_or(input.player_intent)
-        } else {
-            input.player_intent
-        };
-        self.drive_player(f, 0, player, intent);
+        self.drive_player(f, 0, player, input.player_intent);
         if let Some(player2) = self.player2 {
             self.drive_player(f, 1, player2, input.player2_intent);
         }

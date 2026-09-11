@@ -45,8 +45,6 @@ In two player mode HUD labels should start to look like: "60 | 70". Where 60 is 
   the current count just closes it. The dialog works on the end screen too.
 - **Keys.** Single: arrows + Space, as before. Two players: player 1 on the
   arrows + Right Shift (Space is not read), player 2 on WASD + Left Shift.
-  Taps are ignored in a two-player round - the keyboard is the whole
-  interface - so the tap-order state stays clear.
 - **Identity.** A tank stores its `Owner` (`Player(0|1)` or `Enemy(slot)`).
   Slot numbering: players first (0, and 1 with two players), enemies from
   `Game::first_enemy_slot` (1 or 2). Single-player rounds are byte-for-byte
@@ -73,7 +71,7 @@ In two player mode HUD labels should start to look like: "60 | 70". Where 60 is 
   outline. A dead player shows zeros. Player 2's ground ring is the
   palette's mid blue with a blue health ramp.
 - **Tools.** `restart {players, tank2_row}`, `players {count}`, `step`/`input`
-  `p2_*` fields, `tap` refused in two-player rounds, `builder_settings
+  `p2_*` fields, `builder_settings
   {tank2}`, the `start2` brush, `key 1|2`; the probe's `--players`,
   `--tank2`, `--p2-scenario`, anomaly checks against the nearest live
   player. The linter adds `no-start`, `player2-unreachable` (error) and

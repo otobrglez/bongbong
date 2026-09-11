@@ -70,7 +70,7 @@ const CLICK_DRAG_STEP_PX: f32 = 8.0;
 /// (docs/game-editor-fusion.md section 11) rather than touching a round
 /// the builder has frozen.
 pub const GAME_ONLY_TOOLS: &[&str] = &[
-    "snapshot", "events", "step", "input", "tap", "pause", "resume", "history", "nav_grid", "teleport",
+    "snapshot", "events", "step", "input", "pause", "resume", "history", "nav_grid", "teleport",
     "set_tank", "kill", "spawn_enemy", "players",
 ];
 
@@ -117,11 +117,6 @@ pub const TOOLS: &[ToolSpec] = &[
         schema: r#"{"type":"object","properties":{"move_dir":{"type":"string","enum":["up","down","left","right"]},"face":{"type":"string","enum":["up","down","left","right"]},"fire":{"type":"boolean"},"p2_move_dir":{"type":"string","enum":["up","down","left","right"]},"p2_face":{"type":"string","enum":["up","down","left","right"]},"p2_fire":{"type":"boolean"},"frames":{"type":"integer","default":1},"cycle_overlays":{"type":"boolean","default":false}}}"#,
     },
     ToolSpec {
-        name: "tap",
-        description: "Tap (or click) the battlefield at (x, y) in screen pixels, as a touch player would - the player tank takes a standing order from it: drive there, or close on and engage whatever is under the point (an enemy tank, the enemy frog, or a destructible tile). The order survives until the target dies, the destination is reached, the route turns out not to exist, or a movement key/`input` cancels it. `snapshot` and `status` report it back as `player_order`. Refused in a two-player round, where taps are off (the keyboard is the whole interface).",
-        schema: r#"{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"]}"#,
-    },
-    ToolSpec {
         name: "pause",
         description: "Enter lockstep: the game stops advancing (no PAUSED overlay, so screenshots stay clean) until `step` or `resume`.",
         schema: NO_PARAMS,
@@ -153,8 +148,8 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "overlays",
-        description: "Set persistent debug overlays drawn on top of the game (visible to the human too), one flag at a time: nav_grid (blocked pathfinding cells), ai (each enemy's waypoint, heading, last behaviour-tree action), projectiles (hit boxes + velocity), engage (engagement-ring targets), pickups (collect radius), inspect (tank hitboxes + stat readout), orders (the player's tap order: its route, the attack ring, the alignment corridor and the order state). Omitted flags keep their value; replies with the current flags. The I key in the game window cycles presets instead (off -> inspect -> all); `input {cycle_overlays: true}` presses it.",
-        schema: r#"{"type":"object","properties":{"nav_grid":{"type":"boolean"},"ai":{"type":"boolean"},"projectiles":{"type":"boolean"},"engage":{"type":"boolean"},"pickups":{"type":"boolean"},"inspect":{"type":"boolean"},"orders":{"type":"boolean"}}}"#,
+        description: "Set persistent debug overlays drawn on top of the game (visible to the human too), one flag at a time: nav_grid (blocked pathfinding cells), ai (each enemy's waypoint, heading, last behaviour-tree action), projectiles (hit boxes + velocity), engage (engagement-ring targets), pickups (collect radius), inspect (tank hitboxes + stat readout). Omitted flags keep their value; replies with the current flags. The I key in the game window cycles presets instead (off -> inspect -> all); `input {cycle_overlays: true}` presses it.",
+        schema: r#"{"type":"object","properties":{"nav_grid":{"type":"boolean"},"ai":{"type":"boolean"},"projectiles":{"type":"boolean"},"engage":{"type":"boolean"},"pickups":{"type":"boolean"},"inspect":{"type":"boolean"}}}"#,
     },
     ToolSpec {
         name: "nav_grid",
@@ -264,7 +259,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "click",
-        description: "A raw press at a window position (pixels, the 32 px HUD bar included: the field starts at y = 32), in either mode, on the same hit-tests a mouse or a finger uses: in play mode the BUILD button (right end of the bar), the players button beside it, either dialog's buttons (a press outside a dialog closes it) or, with the left button on the field in a single-player round, a `tap` order; in build mode the bar's buttons (PLAY starts the round like `play`), a dropdown row, a settings stepper or a field cell. With `drag_to`, a press, a straight drag to that point and a release, crossing every cell on the way. Replies like `mode` plus `tap` when one was queued. This tests the UI; `build`/`play`/`builder_*` address the model directly.",
+        description: "A raw press at a window position (pixels, the 32 px HUD bar included: the field starts at y = 32), in either mode, on the same hit-tests a mouse or a finger uses: in play mode the BUILD button (right end of the bar), the players button beside it, either dialog's buttons (a press outside a dialog closes it) - a press on the field itself does nothing in play mode; in build mode the bar's buttons (PLAY starts the round like `play`), a dropdown row, a settings stepper or a field cell. With `drag_to`, a press, a straight drag to that point and a release, crossing every cell on the way. Replies like `mode`. This tests the UI; `build`/`play`/`builder_*` address the model directly.",
         schema: r#"{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"button":{"type":"string","enum":["left","right"],"default":"left"},"drag_to":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2,"description":"[x, y] to drag to before releasing"}},"required":["x","y"]}"#,
     },
     ToolSpec {
@@ -379,9 +374,6 @@ pub struct DevServer {
     /// An `input {cycle_overlays}` request waiting to press the I key on
     /// the next frame's input.
     cycle_overlays_pending: bool,
-    /// A tap queued by the `tap` tool, delivered on the next frame's
-    /// `Input` and then cleared - one request, one press.
-    pending_tap: Option<Position>,
     pending_shot: Option<PendingShot>,
     events: VecDeque<EventRecord>,
     next_seq: u64,
@@ -426,7 +418,6 @@ impl DevServer {
             injected: None,
             injected2: None,
             cycle_overlays_pending: false,
-            pending_tap: None,
             pending_shot: None,
             events: VecDeque::with_capacity(EVENT_RING),
             next_seq: 1,
@@ -487,15 +478,7 @@ impl DevServer {
                     player2_intent.fire = player2_intent.fire && i % n == 0;
                 }
                 let before = game.frame();
-                // A queued tap lands on the first frame of the step and
-                // only that one - one request, one press, exactly like a
-                // real click. It has to be delivered *here* rather than in
-                // `shape_input`: while the game is frozen in lockstep no
-                // update runs at all, so a tap consumed at input-gathering
-                // time would simply be thrown away.
-                // A two-player round takes no taps; one left queued is dropped.
-                let tap = (i == 0).then(|| self.pending_tap.take()).flatten().filter(|_| game.players == PlayerCount::One);
-                game.update(Input { player_intent, player2_intent, tap, ..Input::default() }, PHYSICS_FIXED_DT, width, height);
+                game.update(Input { player_intent, player2_intent, ..Input::default() }, PHYSICS_FIXED_DT, width, height);
                 if game.frame() != before + 1 {
                     step.restarted = true;
                 }
@@ -515,8 +498,7 @@ impl DevServer {
                 "snapshot": snapshot,
             })));
         } else if !self.lockstep {
-            let tap = self.pending_tap.take().or(input.tap).filter(|_| game.players == PlayerCount::One);
-            game.update(Input { tap, ..input }, real_dt, width, height);
+            game.update(input, real_dt, width, height);
             self.drain_events(game, None);
             self.record_history(game);
         }
@@ -687,7 +669,6 @@ impl DevServer {
             "width": width,
             "height": height,
             "overlays": overlays_json(game),
-            "player_order": game.player_order(),
             "players": game.players.count(),
             "map": map_json(&game.map),
             "mode": session.mode().name(),
@@ -764,19 +745,6 @@ impl DevServer {
                 }
                 (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => Err(e),
             },
-            "tap" => {
-                let (x, y) = (params.get("x").and_then(Value::as_f64), params.get("y").and_then(Value::as_f64));
-                match (x, y) {
-                    _ if game.players == PlayerCount::Two => {
-                        Err("tap orders are off in a two-player round (players: 2); drive with step/input p2_* fields".to_string())
-                    }
-                    (Some(x), Some(y)) => {
-                        self.pending_tap = Some(Position::new(x as f32, y as f32));
-                        Ok(json!({ "tap": { "x": x, "y": y } }))
-                    }
-                    _ => Err("tap needs numeric x and y".to_string()),
-                }
-            }
             "screenshot" => {
                 if self.pending_shot.is_some() {
                     Err("a screenshot is already pending".to_string())
@@ -1137,13 +1105,10 @@ impl DevServer {
             },
         };
         let point = Position::new(x, y);
-        let mut tap = None;
         match session.mode() {
             Driver::Play => {
                 // The same order as `main.rs`: an open dialog eats every
-                // press while it is up, the two buttons are never an
-                // order, and only a left press on the field in a
-                // single-player round is a tap.
+                // press while it is up, then the two bar buttons.
                 if session.players_dialog {
                     let rects = players_dialog_rects(layout.field);
                     let p = layout.to_field(point);
@@ -1170,10 +1135,6 @@ impl DevServer {
                     session.press_build();
                 } else if players_button_rect(layout.panel).check_collision_point_rec(point) {
                     session.press_players();
-                } else if !right && layout.field.contains(point) && session.game.players == PlayerCount::One {
-                    let p = layout.to_field(point);
-                    self.pending_tap = Some(p);
-                    tap = Some(p);
                 }
             }
             Driver::Build => {
@@ -1203,9 +1164,7 @@ impl DevServer {
                 }
             }
         }
-        let mut v = mode_json(session);
-        v["tap"] = json!(tap.map(|p| json!({ "x": p.x, "y": p.y })));
-        Ok(v)
+        Ok(mode_json(session))
     }
 
     /// `key`: one key for one frame, or typed text, through the same
@@ -1637,9 +1596,6 @@ fn apply_overlays(game: &mut Game, flags: &Value) {
     if let Some(b) = flag("engage") {
         o.engage = b;
     }
-    if let Some(b) = flag("orders") {
-        o.orders = b;
-    }
     if let Some(b) = flag("pickups") {
         o.pickups = b;
     }
@@ -1795,8 +1751,8 @@ mod tests {
 
     /// The players tool and the button/keys behind it: the dialog freezes
     /// the round, a new count restarts in that mode with player 2 in slot
-    /// 1, `step` drives player 2 through `p2_*`, `tap` is refused, and
-    /// `restart {players: 1}` goes back.
+    /// 1, `step` drives player 2 through `p2_*`, and `restart {players: 1}`
+    /// goes back.
     #[test]
     fn players_tool_switches_mode_and_the_button_opens_the_dialog() {
         let (mut server, tx) = DevServer::headless();
@@ -1808,7 +1764,6 @@ mod tests {
         assert!(!s.playing());
         let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": 10.0, "y": 100.0 })).unwrap();
         assert_eq!(m["players_dialog_open"], false, "{m}");
-        assert!(m["tap"].is_null(), "a press that closes the dialog is not a tap");
         let b = players_button_rect(layout.panel);
         let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": b.x + b.width / 2.0, "y": b.y + b.height / 2.0 })).unwrap();
         assert_eq!(m["players_dialog_open"], true, "{m}");
@@ -1841,9 +1796,7 @@ mod tests {
         }
         ask(&mut server, &tx, &mut s, "players", json!({ "count": 2 })).unwrap();
         assert_eq!(s.game.frame(), 3);
-        // Taps are off; `p2_*` drives player 2 and nobody else.
-        let err = ask(&mut server, &tx, &mut s, "tap", json!({ "x": 100.0, "y": 100.0 })).unwrap_err();
-        assert!(err.contains("two-player"), "{err}");
+        // `p2_*` drives player 2 and nobody else.
         let before: Vec<_> = s.game.tank_snapshots().into_iter().filter(|t| t.is_player).map(|t| (t.player, t.position)).collect();
         let rx = call(&tx, "step", json!({ "frames": 30, "p2_move_dir": "down", "snapshot": false }));
         server.before_frame(&mut s, W, H);
@@ -2477,13 +2430,9 @@ cells."1,1" = { kind = "wall" }"#;
         let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": bx, "y": by })).unwrap();
         assert_eq!(m["dialog_open"], true, "{m}");
         assert_eq!(m["mode"], "play");
-        assert!(m["tap"].is_null());
-        // A press outside the dialog keeps playing; a field click while it
-        // is up is never a tap.
+        // A press outside the dialog keeps playing.
         let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": 10.0, "y": 100.0 })).unwrap();
         assert_eq!(m["dialog_open"], false);
-        assert!(m["tap"].is_null());
-        assert!(server.pending_tap.is_none());
         // Tab opens it; Escape closes it; Enter leaves.
         let m = ask(&mut server, &tx, &mut s, "key", json!({ "key": "tab" })).unwrap();
         assert_eq!(m["dialog_open"], true, "{m}");
@@ -2491,16 +2440,11 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!(m["dialog_open"], false);
         assert!(ask(&mut server, &tx, &mut s, "key", json!({ "key": "f1" })).is_err());
         assert!(ask(&mut server, &tx, &mut s, "key", json!({})).is_err());
-        // A left click on the field in play mode is a tap, delivered on
-        // the next simulated frame (the field starts under the bar).
+        // A left click on the field in play mode is not an order; the
+        // round is untouched by it.
         let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": 640.0, "y": 32.0 + 400.0 })).unwrap();
-        assert_eq!(m["tap"]["x"], 640.0, "{m}");
-        assert_eq!(m["tap"]["y"], 400.0);
-        let step = call(&tx, "step", json!({ "frames": 1, "snapshot": false }));
-        server.before_frame(&mut s, W, H);
-        server.advance(&mut s.game, Input::default(), 0.016, W, H);
-        step.recv().unwrap().unwrap();
-        assert!(s.game.player_order().is_some(), "the tap became an order");
+        assert_eq!(m["mode"], "play", "{m}");
+        assert_eq!(m["dialog_open"], false);
         // The dialog's own buttons.
         ask(&mut server, &tx, &mut s, "key", json!({ "key": "tab" })).unwrap();
         let rects = leave_dialog_rects(layout.field);

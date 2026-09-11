@@ -11,8 +11,7 @@ Related: docs/map-editor-design.md (the editor's data model, palette and
 file format), docs/hud-and-builder-layout-design.md (the bar, the field
 origin, the `Driver` sketch), docs/mobile-and-scaling-design.md (why the
 bar is small on a phone and what would fix it), docs/maps-to-levels.md
-(the `mission`/`spawn` tables the settings menu edits), docs/tap-navigation.md
-(the touch input the builder shares a canvas with).
+(the `mission`/`spawn` tables the settings menu edits).
 
 ## 1. Summary
 
@@ -273,8 +272,7 @@ started the program with `-e 8` understands why TANKS is not honoured.
 
 - raylib maps a touch to the mouse position and a tap to a press, so
   placement, drags and the bar's hit-testing need no second input path;
-  the play-mode tap filter (`Layout::to_field`, bar taps are not orders)
-  already exists and the builder mirrors it.
+  `Layout::to_field` maps a window press into the field for both modes.
 - Targets: everything a finger chooses **on the field** is 48 px or more
   (dropdown rows, stepper buttons, dialog buttons). The bar buttons are
   32 px tall in canvas pixels and about 21 CSS px on a phone; that is
@@ -330,7 +328,7 @@ mode transitions can be unit-tested headlessly through
 Existing tools in Build mode: `screenshot` and `overlays` work (the
 presented frame is the builder); `status` and `mode` always answer;
 `map_get` answers with the round's map; `tuning_*` work; `step`, `input`,
-`tap`, `teleport`, `set_tank`, `kill`, `spawn_enemy`, `pause`, `resume`,
+`teleport`, `set_tank`, `kill`, `spawn_enemy`, `pause`, `resume`,
 `snapshot`, `events`, `history` and `nav_grid` return an `isError` result
 naming `play` rather than touching a frozen game. `restart` switches to
 Play first, and with `map`/`map_toml` replaces the builder's map and
