@@ -171,11 +171,11 @@ its methods (`press_build`, `answer_dialog`, `play`, `replace_map`,
 | `builder_map` | `name`, `map_toml` or `map` | without any: the builder's map as `toml`, `name`, `dirty`, `diff` (added/removed/changed cells, changed settings); with one: loads it (a Load-list name, inline TOML, or a path) into the canvas as one undo step and the new baseline - the round keeps its map until `play`. `map_get` keeps answering with the round's map |
 | `builder_files` | | what FILE > LOAD offers: every loadable map (`on_disk` for `maps/*.toml`, else shipped in the binary) and `can_save` (native only) |
 | `builder_save` | `name?` | FILE > SAVE / SAVE AS: writes `maps/<name>.toml` (defaults to the map's name), makes it the baseline; replies like `builder_map` |
-| `click` | `x`, `y`, `button`, `drag_to` | a raw press at a window position on the same hit-tests the mouse gets: in play, the BUILD button, the players button beside it, either dialog's buttons (outside a panel closes it) or a field `tap` (single-player rounds only); in build, the bar's buttons (PLAY starts the round), a dropdown row, a stepper, a field cell; `drag_to` drags in 8 px steps and releases. Replies like `mode` plus `tap` |
+| `click` | `x`, `y`, `button`, `drag_to` | a raw press at a window position on the same hit-tests the mouse gets: in play, the BUILD button, the players button beside it, either dialog's buttons (outside a panel closes it); in build, the bar's buttons (PLAY starts the round), a dropdown row, a stepper, a field cell; `drag_to` drags in 8 px steps and releases. Replies like `mode` |
 | `key` | `key` (tab\|escape\|enter\|undo\|redo\|backspace\|1\|2), `text` | one key for one frame: in play, Tab opens/closes the leave dialog, Esc keeps playing / closes the players dialog, Enter leaves (or, in the players dialog, switches to the other count), 1/2 answer the players dialog; in build, Tab is PLAY and the rest go through `BuilderInput` (`text` types into an open prompt). Replies like `mode` |
 
 **The refusal rule.** In build mode the tools that read or drive the
-round - `GAME_ONLY_TOOLS`: `snapshot`, `events`, `step`, `input`, `tap`,
+round - `GAME_ONLY_TOOLS`: `snapshot`, `events`, `step`, `input`,
 `pause`, `resume`, `history`, `nav_grid`, `teleport`, `set_tank`, `kill`,
 `spawn_enemy` - return an error naming `play` rather than touching a frozen
 game. Everything else works in both modes: `status`, `mode`, `screenshot`

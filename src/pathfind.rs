@@ -290,45 +290,6 @@ impl Grid {
         from
     }
 
-    /// The point closest to `near` that something standing at `from` can
-    /// actually **reach**.
-    ///
-    /// `nearest_open` is not enough on its own: it returns the nearest
-    /// *usable* cell, which on a real map is very often in a pocket the
-    /// caller cannot get to, and the route then fails. Measured on the
-    /// shipped default map, snapping a tap that way left **81% of taps on
-    /// open ground** producing no route at all - the tank simply did
-    /// nothing. This walks outward from `near` and takes the first cell
-    /// that is both usable and in `from`'s own component, so a tap behind a
-    /// wall becomes "get as close to it as you can from this side" instead
-    /// of nothing.
-    ///
-    /// `None` only when `from` itself is somewhere with no usable cell in
-    /// its component at all.
-    pub fn nearest_reachable(&self, near: Position, from: Position, comps: &Components) -> Option<Position> {
-        let start = self.cell_of(near);
-        let idx = |c: (usize, usize)| c.1 * self.cols + c.0;
-        let mut visited = vec![false; self.cols * self.rows];
-        visited[idx(start)] = true;
-        let mut queue = VecDeque::new();
-        queue.push_back(start);
-        while let Some(cell) = queue.pop_front() {
-            if self.usable_cell(cell) {
-                let center = self.center_of(cell);
-                if comps.connected(self, from, center) {
-                    return Some(center);
-                }
-            }
-            for next in self.neighbors(cell) {
-                if !visited[idx(next)] {
-                    visited[idx(next)] = true;
-                    queue.push_back(next);
-                }
-            }
-        }
-        None
-    }
-
     /// Label every open cell with its connected component (4-neighbour
     /// flood fill) so `Components::connected` answers "does a route exist
     /// between these two points" in O(1) - the same answer `next_step`

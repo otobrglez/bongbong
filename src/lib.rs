@@ -801,7 +801,6 @@ pub mod laser;
 pub mod level;
 pub mod map;
 pub mod mode;
-pub mod marker;
 pub mod maplint;
 pub mod obstacle;
 pub mod pathfind;
