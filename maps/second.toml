@@ -1,0 +1,15 @@
+version = 1
+tank = "assault"
+
+[mission]
+kind = "protect"
+
+[spawn]
+kind = "waves"
+waves = 4
+size = 2
+growth = 1
+tier_start = "light"
+tier_end = "super"
+
+

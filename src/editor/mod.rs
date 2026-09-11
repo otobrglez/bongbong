@@ -1269,12 +1269,13 @@ impl MapEditor {
                         d.draw_texture_pro(textures.frog_idle, src, dest, origin, 0.0, Color::WHITE);
                     }
                     CellObject::Start => {
-                        let src = crate::tank::icon_source_rec();
+                        draw_player_ring(&mut d, pos, size / 2.0, 0);
+                        let src = crate::tank::icon_source_rec(0);
                         d.draw_texture_pro(textures.tanks, src, dest, origin, 0.0, Color::WHITE);
                     }
                     CellObject::Start2 => {
-                        draw_player2_ring(&mut d, pos, size / 2.0);
-                        let src = crate::tank::icon_source_rec();
+                        draw_player_ring(&mut d, pos, size / 2.0, 1);
+                        let src = crate::tank::icon_source_rec(1);
                         d.draw_texture_pro(textures.tanks, src, dest, origin, 0.0, Color::WHITE);
                     }
                     CellObject::EnemyFrog => {
@@ -1836,13 +1837,15 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, tool: 
             d.draw_texture_pro(textures.frog_idle, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
         Tool::Start => {
-            let src = crate::tank::icon_source_rec();
+            let center = Position::new(dest.x + dest.width / 2.0, dest.y + dest.height / 2.0);
+            draw_player_ring(d, center, dest.width / 2.0, 0);
+            let src = crate::tank::icon_source_rec(0);
             d.draw_texture_pro(textures.tanks, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
         Tool::Start2 => {
             let center = Position::new(dest.x + dest.width / 2.0, dest.y + dest.height / 2.0);
-            draw_player2_ring(d, center, dest.width / 2.0);
-            let src = crate::tank::icon_source_rec();
+            draw_player_ring(d, center, dest.width / 2.0, 1);
+            let src = crate::tank::icon_source_rec(1);
             d.draw_texture_pro(textures.tanks, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
         Tool::EnemyFrog => {
@@ -1902,10 +1905,11 @@ fn draw_enemy_ring(d: &mut impl RaylibDraw, center: Position, radius: f32) {
     d.draw_circle_v(center, radius * 0.75, Color::new(230, 60, 60, 50));
 }
 
-/// Player 2's blue ring, the same shape as the enemy frog's red one, so a
-/// `start2` cell reads as "a tank, the blue one" next to player 1's.
-fn draw_player2_ring(d: &mut impl RaylibDraw, center: Position, radius: f32) {
-    let c = crate::tank::PLAYER2_RING_COLOR;
+/// A player's team-coloured ring, the same shape as the enemy frog's red
+/// one, under the start markers: a `start` cell reads as "a tank, the blue
+/// one" and `start2` as the pink one, the colours the tanks will be.
+fn draw_player_ring(d: &mut impl RaylibDraw, center: Position, radius: f32, player: usize) {
+    let c = crate::tank::TEAM_COLORS[player & 1];
     d.draw_ring(center, radius * 0.75, radius, 0.0, 360.0, 24, Color::new(c.r, c.g, c.b, 220));
     d.draw_circle_v(center, radius * 0.75, Color::new(c.r, c.g, c.b, 50));
 }

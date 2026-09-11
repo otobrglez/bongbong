@@ -31,6 +31,13 @@ pub type Position = Vector2;
 // turret visibly leads the hull into a turn instead of the two rotating in
 // lockstep.
 pub const TANK_TEXTURE_SIZE: f32 = 32.0;
+/// The tank sheet is three blocks of the same twelve-chassis roster
+/// stacked vertically (docs/SPRITESHEET_SPEC.md): the enemy art, then the
+/// same hulls recoloured for player 1 and for player 2
+/// (docs/player-indicator-improvements.md). `Tank::row` is always the
+/// chassis (0..12, what every per-chassis table is indexed by) and
+/// `Tank::sheet_row` adds this many rows per block for the tank's team.
+pub const TANK_ROWS_PER_TEAM: i32 = 12;
 pub const TANK_HULL_COL: i32 = 0;
 pub const TANK_TURRET_COL: i32 = 1;
 // Hull tread-animation loop, in atlas-column order - see

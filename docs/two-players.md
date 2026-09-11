@@ -68,8 +68,9 @@ In two player mode HUD labels should start to look like: "60 | 70". Where 60 is 
 - **HUD.** A second slot table: HP, shells and the weapon counts read
   `60|70` (player 1 left), SPEED and SHIELD stack into two thin bars, the
   live weapon is an underline under that player's side instead of a slot
-  outline. A dead player shows zeros. Player 2's ground ring is the
-  palette's mid blue with a blue health ramp.
+  outline. A dead player shows zeros. Each player's hull, ground ring and
+  HUD side are in that player's team colour - sky blue for player 1, hot
+  pink for player 2 (docs/player-indicator-improvements.md).
 - **Tools.** `restart {players, tank2_row}`, `players {count}`, `step`/`input`
   `p2_*` fields, `builder_settings
   {tank2}`, the `start2` brush, `key 1|2`; the probe's `--players`,

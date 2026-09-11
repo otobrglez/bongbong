@@ -1387,6 +1387,19 @@ tunables! {
         /// showing through. The shield ring's own translucency is fixed in
         /// `draw_ground_ring`.
         player_ring_opacity: f32 = 0.8 in 0.0 ..= 1.0;
+        /// Every tank ring (marker, health gauge and shield, player and
+        /// enemy alike) is this much larger in radius than the
+        /// `shield_glow_radius_factor` ring the frogs use, at the same band
+        /// thickness, so a halo shows past every hull - the super-heavies
+        /// hide the unscaled ring entirely.
+        tank_ring_radius_scale: f32 = 1.1 in 0.5 ..= 2.0;
+        /// For this long after a round becomes playable (after the mission
+        /// banner, or at once without one) each player tank pulses a
+        /// team-coloured ripple ring and shows its `P1`/`P2` label, so you
+        /// find yourself in a crowd. 0 disables the cue.
+        player_locate_seconds: f32 = 2.0 in 0.0 ..= 10.0;
+        /// Pulses per second of the locate ripple.
+        player_locate_pulse_hz: f32 = 2.0 in 0.2 ..= 8.0;
         /// The ring spring's damping ratio: below 1 it overshoots a touch
         /// and settles with a wobble when the tank stops, 1 is the fastest
         /// settle with no overshoot, above 1 is sluggish.
