@@ -7,7 +7,7 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
     <link rel="icon" href="/favicon.ico"/>
     <!-- viewport-fit=cover so the immersive mode can reach under a notch;
-         no user scaling because pinch-zoom fights tap-to-move. -->
+         no user scaling because pinch-zoom fights the builder's touch painting. -->
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no"/>
     <meta name="mobile-web-app-capable" content="yes"/>
     <meta name="apple-mobile-web-app-capable" content="yes"/>
@@ -183,8 +183,8 @@
             aspect-ratio: 1280 / 752;
             height: auto;
             outline: none;
-            /* A tap-to-move game cannot let the browser claim drags for
-               scrolling or pinch-zoom. */
+            /* The builder paints by dragging, so the browser must not claim
+               drags for scrolling or pinch-zoom. */
             touch-action: none;
             -webkit-tap-highlight-color: transparent;
             -webkit-user-select: none;
@@ -422,9 +422,8 @@
             <p class="loading-note" id="loading-note">Fetching the game</p>
         </div>
         <div class="instructions">
-            <p>Use arrow keys to move the tank. <kbd>Space</kbd> to fire and <kbd>r</kbd> to restart the game.</p>
-            <p>Or tap: tap the ground to drive there, tap an enemy to close on it and open fire. Any arrow key takes back control.</p>
-            <p>Two players: the tank button in the bar (beside <kbd>BUILD</kbd>) switches modes. Player 1 drives with the arrows and fires with <kbd>Right Shift</kbd>; player 2 drives with <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> and fires with <kbd>Left Shift</kbd>. Keyboard only; taps are off.</p>
+            <p>Arrows to drive, <kbd>Space</kbd> to fire, <kbd>r</kbd> to restart.</p>
+            <p>Two players: press the tank button in the bar. Arrows + <kbd>Right Shift</kbd> for player 1, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> + <kbd>Left Shift</kbd> for player 2.</p>
         </div>
         <details class="tuning" id="tuning" hidden>
             <summary>Tuning <span class="badge">dev build</span></summary>
