@@ -119,6 +119,7 @@ landscape map fills a portrait screen (section 4, option D).
 | iPhone 15 landscape | 40x22.5 / 1280x720 (today) | 0.55 | 5.8 mm | 153 pt wide strip |
 | iPhone 15 landscape | 24x14 / 768x448 | 0.88 | 9.3 mm | 178 pt |
 | iPhone 15 landscape | 20x12 / 640x384 | 1.02 | 10.8 mm | 197 pt |
+| iPhone 15 either, phone-aspect map | 26x12 / 832x384 | 1.02 | 10.8 mm | none |
 | iPad 10.9" landscape (1180x820) | 40x22.5 (today) | 0.92 | 11.2 mm | 156 pt tall |
 | iPad 10.9" landscape | 24x14 | 1.54 | 18.7 mm | 132 pt |
 | MacBook 14" (1512x982) | 40x22.5 (today) | 1.18 | 15.1 mm | 132 pt tall |
@@ -144,6 +145,10 @@ Readings:
 - A **square map** (22x22 shown) fits both orientations identically and
   needs no rotation at all. It is the Battle City answer (below); the price
   is a lot of wasted screen on desktop monitors.
+- A **phone-aspect map** (26x12, the phone's own 19.5:9) fills the screen
+  with no bars at all and gets the same 10.8 mm as 20x12. It only makes
+  sense once the controls need no strip of their own, which is what the
+  invisible touch scheme in section 4 buys.
 
 ## 3. The concept toolbox
 
@@ -330,16 +335,63 @@ Summary:
 | F. Bigger sprites | gameplay change | gameplay change | reject |
 | G. Camera | violates constraint | | reject |
 | H. Borderless fullscreen | | yes | do, inside B |
+| I. Touch: visible D-pad + fire in the strip | needs a strip | n/a | do as an option |
+| J. Touch: invisible floating joystick + tap-to-fire | no strip, phone-aspect maps reach 10.8 mm with no bars | n/a | do, the default scheme |
 
-Plus the thing the question did not ask but the phone needs: touch input.
-The movement model is 4-direction with instant stop, which is the one case
-where a **virtual 4-way D-pad** is strictly better than an analog stick.
-Left thumb: a four-quadrant pad (or swipe-direction on the left half);
-right thumb: a fire button (Space semantics: held for the laser and
-minigun, edge for shells, exactly what `Input::player_intent.fire` already
-carries). Both live in the letterbox strip that options B and D free up. All
-of it is `main.rs` work: `Game::update` already takes a plain `Input`, so
-the simulation never learns a touch screen exists.
+### Touch input: two schemes
+
+The phone needs touch input before any of the above matters. The movement
+model is 4-direction with instant stop and `Input::player_intent.fire` is a
+plain held flag (edge for shells, held for laser and minigun), so both
+schemes below reduce to producing one `Input` per frame in `main.rs`; the
+simulation never learns a touch screen exists.
+
+**I. Visible controls in the strip.** A four-key D-pad under the left thumb
+and a fire button under the right, drawn into the letterbox strip that
+options B and D free up. Discoverable, never covers the arena, and the
+4-way pad matches the movement model exactly. It needs the strip, which
+ties the map's aspect to "not the phone's": the strip has to stay.
+
+**J. Invisible controls: floating joystick under the right thumb,
+tap-to-fire under the left.** No drawn controls at rest. The first touch on
+the right half sets the joystick's origin where the thumb landed; dragging
+from there picks the direction (dominant axis, snapped to 4-way, a dead
+zone of about 12 pt so a resting thumb does not creep); lifting stops the
+tank, which is the instant-stop model already. A tap anywhere on the left
+half fires, a held touch there holds fire. A faint stick and knob fade in
+only while the thumb is down (Brawl Stars, Vampire Survivors, Archero use
+this "dynamic joystick"; the mapping of which thumb does what is a
+handedness setting, with the user's proposal of right-thumb steering as one
+of the two presets).
+
+What J changes in the analysis:
+
+- **The strip is no longer needed.** A phone map can be authored at the
+  phone's own aspect (26x12 cells for 19.5:9) and fill the screen with no
+  bars, 10.8 mm tanks, either orientation via rotation. That is the best
+  number on the table, and it is only reachable with J.
+- **Thumbs cover the arena.** This is the cost the constraint makes
+  explicit: a thumb pad is about 18 to 20 mm across, so each thumb hides
+  roughly a 2 to 3 tank-wide patch of the bottom third while steering. The
+  usual mitigations apply: the joystick origin can float anywhere so the
+  player picks an empty patch; the arena's bottom rows are the player's
+  own side on a Protect map; the HUD goes in whatever bar remains (the
+  153 pt strip in the rotated 1280x720 case) or in the top corners, never
+  under the thumbs.
+- **Discoverability.** Nothing on screen says "touch here". A one-time
+  hint on the first round (two ghost circles with "steer" and "fire") and
+  the fade-in feedback on touch cover it; every dynamic-joystick game does
+  the same.
+- **Precision.** For a 4-way snap game a joystick is slightly worse than a
+  D-pad at diagonal-ish drags (the dominant axis flips near 45 degrees).
+  A hysteresis band of about 15 degrees around the diagonals keeps the
+  current direction until the drag clearly commits to the other axis;
+  the same idea as `ai.rs`'s direction-commitment gate, applied to a thumb.
+
+Both schemes are the same `main.rs` work behind one `TouchScheme` setting;
+J is the default because it unlocks the full-screen phone map, I stays as
+the accessible option and for tablets, where thumbs do not reach the
+middle anyway.
 
 ## 5. Platform notes
 
@@ -428,9 +480,11 @@ they pay off:
 
 1. `100dvh`, `viewport-fit=cover`, safe-area padding, `touch-action: none`.
 2. Portrait rotation of the scene (needs the engine letterbox).
-3. Virtual D-pad and fire button in the freed strip.
+3. Touch input: the invisible floating joystick and tap-to-fire (scheme J),
+   with the visible strip pad (scheme I) as a setting.
 4. DPR-correct canvas size so the pixel art is crisp.
-5. A phone-sized map set so tanks reach 9 to 11 mm.
+5. A phone-sized map set so tanks reach 9 to 11 mm; with scheme J the
+   maps can be phone-aspect and fill the screen.
 6. A web app manifest so Add to Home Screen gives a full-screen standalone
    window with no Safari chrome.
 
@@ -482,16 +536,23 @@ byte-identical throughout (the world stays 1280x720 for the default map).
   `display: standalone`, `orientation: any`.
 
 **Step 5: touch input in `main.rs`.**
-- 4-way D-pad + fire button rendered in the letterbox strip (screen space,
-  after the blit), read through `get_touch_point_count`/`get_touch_position`
-  mapped by `View`; produces the same `Input` the keyboard does. A mouse
-  fallback makes it testable on desktop and through the dev server's
-  `input` tool.
+- A `TouchScheme` setting with two implementations behind one function
+  that turns this frame's touch points (`get_touch_point_count`/
+  `get_touch_position`, mapped through `View`) into the same `Input` the
+  keyboard produces. Default: the floating joystick (origin at the first
+  touch on the steering half, dominant-axis 4-way snap with a dead zone and
+  a diagonal hysteresis band, release = stop) plus tap/hold-to-fire on the
+  other half, with a swap for handedness; a stick and knob drawn at low
+  alpha only while touched, and a first-round hint. Option: the visible
+  D-pad and fire button drawn in the letterbox strip after the blit. A
+  mouse fallback makes both testable on desktop and through the dev
+  server's `input` tool.
 
 **Step 6: phone-sized maps.**
-- Author two or three maps at about 24x14 cells with the editor (which
-  needs the `size` field from step 1 to show the right canvas), lint them,
-  add fixtures. Decide selection policy (section 7).
+- Author two or three maps at about 24x14 cells, and at least one at the
+  phone's own aspect (26x12) for the invisible-controls layout, with the
+  editor (which needs the `size` field from step 1 to show the right
+  canvas), lint them, add fixtures. Decide selection policy (section 7).
 
 Everything in steps 2 to 5 is presentation and input; `simulation/` does not
 change and the determinism tests, probe baselines and fixture budgets stay
@@ -518,3 +579,11 @@ valid, which is the main reason to do it in this order.
 - **Fullscreen on iPhone without Add to Home Screen** is not achievable in
   Safari; is the manifest route acceptable as "the" iPhone experience, or
   is the in-tab layout the target?
+- **Which thumb steers by default?** The user's proposal is right-thumb
+  joystick, left-thumb fire; most dynamic-joystick games ship the mirror
+  image. Both are one setting; the question is only the default, and it
+  should be settled with a real phone in hand.
+- **How much thumb occlusion is acceptable?** With the invisible scheme
+  the thumbs cover part of the arena while steering. If playtests show the
+  bottom rows matter too much, the fallback is scheme I's strip, or a map
+  design that keeps the bottom band as the player's own side.
