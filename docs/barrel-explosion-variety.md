@@ -1,6 +1,8 @@
 # Oil barrel explosions: more variety
 
-Status: research and proposals, 2026-09. Nothing here is built. Written
+Status: research and proposals, 2026-09. Nothing here is built. A live
+sketch of every proposal in section 4 (canvas, palette-true, hash-seeded)
+is the "Barrel Blast Lab" artifact linked from the session that wrote this. Written
 against `simulation/props.rs`, `blast.rs`, `fx.rs`, `combat.rs`,
 `tools/spritegen/gen_barrel_explosion.py` and the `group props` rows of
 `tuning.rs`; docs/sandbags-barrels-fences.md is the original PRD and
@@ -18,6 +20,7 @@ Contents
    - D. Oil trails: the chain reaction as a map-building tool
 5. Recommended order
 6. How to verify each step
+7. Where else the same treatment pays off
 
 ## 1. What a barrel does today
 
@@ -442,6 +445,90 @@ Skip, or defer with a reason:
 - **Feel:** every new number is a `tunables!` row, so the web PR preview's
   tuning panel is the playtest surface; `Copy as Rust` brings the QA'd
   values back into `tuning.rs`.
+
+## 7. Where else the same treatment pays off
+
+A pass through `fx.rs`, `game.rs`, the projectile modules and the event
+log, looking for the moments that share the barrel's machinery. The
+structural finding first: `Fx::observe` consumes 6 of the 27 `Event`
+variants (`RoundStarted`, `ObstacleDestroyed`, the surviving-obstacle
+`Hit`, `Wreck`, `Blast`, `CookOff`); the rest fall into the `_ => {}` arm.
+Thirteen of the ignored ones are real gameplay moments that already carry
+a position, so a particle response for each is an arm in `fx.rs` and no
+simulation change at all. The `strength` field on `impact_flashes` and
+`muzzle_flashes` is never read either: only `shocks` uses `gains`, so every
+impact quad and every muzzle shimmer is the same size and force whatever
+fired or was hit.
+
+Ordered by cost. *Free* means an `fx.rs` arm or a field that exists;
+*cheap* means a sheet row or a hashed cosmetic; *gameplay* means a
+play-test and possibly a baseline.
+
+- **Shells hitting a tank** (free). `Event::Hit { Player | Enemy }` carries
+  damage, killed and the hit point and is dropped; a tank gets the generic
+  130 px heat quad and its health ring blinks on. A shell chipping a fence
+  throws more than a shell hitting steel. Add a directional spall burst
+  scaled by damage (the `tile_chip` pattern), one frame of white hull tint
+  (`Tank::tint` is only a despawn fade today), and lean the burst away
+  from the shooter so the hit side reads.
+- **Shell-vs-shell cancel** (free). `Event::ShellsCollided` is ignored; the
+  rarest moment in the game reads like a wall hit. A double white spark
+  burst plus a `SHOCK_COOKOFF`-strength ripple. Only `Shell` is queried for
+  cancels; plasma and bullets never meet.
+- **Ricochets and barrel deflections** (free). The impact quad fires and
+  the shell flies on in its plain frame. A directional spray along the
+  reflected normal from a new `Event::Ricochet { x, y, nx, ny }`, a
+  brighter sprite on the last bounce (`bounces_left` is on the shell), a
+  hashed scuff decal on the iron.
+- **Muzzle flash** (cheap). `muzzle_flash.fs` is a displacement only, no
+  light; shell, plasma and laser push an identical `Shockwave::new`; the
+  minigun's Muzzle state lasts one frame. An additive `pixel_disc` bloom
+  at the tip per weapon colour (the same call `draw_blast_glow` makes), a
+  smoke puff for heavy chassis, and the unused `strength` field to grade
+  them.
+- **A tank dying** (cheap). `wreck_fx` draws the barrel's fireball sprite
+  verbatim, and `Fx::wreck` throws stone-coloured chips from the wall
+  palette. Once A1 makes sheet rows cheap: a hull-shaped row with the
+  turret as a thrown `Decal` that stays, chips in the chassis accent, and
+  a burn-out transition (the embers stop the instant `wreck_burn_seconds`
+  ends).
+- **Frog bite, hop and death** (free). Bite: a filmstrip frame and nothing
+  on the victim. Hop: no dust, no landing puff, no shadow (the frog is the
+  one standing thing with none). Death: a 0.6 ripple, no screen flash,
+  though it ends the round. A victim burst and short shake on
+  `FrogBite`, dust and grass crush on landing with a height-scaled shadow
+  like thrown debris, and on death the flash, a toxic-green scorch and
+  lingering smoke sampled like a burning wreck.
+- **Pickups** (free). A static unrotated blit; collection vanishes with no
+  feedback (`PickupCollected` ignored); respawn pops in; the speed boost
+  has no visual beyond moving faster. A collect burst in the accent
+  colour, a hashed 2 px bob and a ground ring, and for the boost a doubled
+  track density plus a dust wake, all fields that exist.
+- **Laser** (cheap). Two alpha-faded lines; the hit reuses the warm-orange
+  impact quad even for the blue variant; no mark where the beam ends. A
+  thin streak decal at the end point, a core that narrows over
+  `laser_beam_display_seconds`, and the impact quad tinted by variant.
+- **Shield deflections** (free). `Event::Deflected` is ignored and the
+  stolen shell flies on unchanged. A rainbow burst at the contact point,
+  a brief brightening of the ring, and the shell tinted to the shield's
+  hue for its flight.
+- **Ramming** (free). Contact sparks come from rate-limited impulse
+  sampling and can miss the damage moment; `Event::Ram` is dropped. A
+  burst on the event scaled by damage, and the one-frame hull flash A5's
+  ram lurch wants.
+- **Boundary wall hits** (free). No particles at all; `impact.fs` was
+  patched to stay visible on bright ground instead. The brick `tile_chip`
+  arm from `Event::Hit { Wall }`, and a scuff decal.
+- **Wave roll-in and round end** (cheap). A wave tank enters with no dust;
+  the WAVE banner has no motion; the round end dims the field and does
+  nothing to the world. Gate dust from `TankEntered`; a last `SHOCK_KILL`
+  ripple centred on the deciding event, then a slow desaturation.
+- **Ripple, shake and flash as a set** (gameplay, for the play-test rather
+  than the simulation). Four events push a ripple (kill 1.0, barrel 0.7,
+  frog 0.6, cook-off 0.1) and two flash the screen; a player taking a
+  heavy hit never shakes the camera. A 0.2 shake on a heavy hit to the
+  player gated by damage, and per-kind drum strength (`SHOCK_FUEL`) once
+  B2 lands.
 
 Sources consulted for section 2: the Doom Wiki's barrel entry
 (doomwiki.org/wiki/Barrel), the ZDoom `ExplosiveBarrel` class notes, Aidan
