@@ -294,7 +294,7 @@ material = "brick"
 
 [cells."17,16"]
 kind = "pickup"
-pickup = "plasma"
+pickup = "flamethrower"
 
 [cells."19,11"]
 kind = "wall"
@@ -394,7 +394,7 @@ kind = "tall_grass"
 
 [cells."3,19"]
 kind = "pickup"
-pickup = "laser"
+pickup = "flamethrower"
 
 [cells."28,18"]
 kind = "tall_grass"
@@ -487,7 +487,7 @@ material = "glass"
 
 [cells."27,3"]
 kind = "pickup"
-pickup = "laser"
+pickup = "flamethrower"
 
 [cells."18,11"]
 kind = "wall"

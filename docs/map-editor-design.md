@@ -158,7 +158,9 @@ object, left to right:
 | Wood wall | `Obstacle` material `Wood` | " |
 | Glass wall | `Obstacle` material `Glass` | called out separately in the requirements, but it's just the fourth `obstacle::Material` — same placement code path as the other three |
 | Sandbag | a `Sandbag` cell (`kind = "sandbag"`) | a destructible prop (docs/sandbags-barrels-fences.md): spawns an `Obstacle` of material `Sandbag`, variant rolled per tile at spawn (no variant picker - three arrangements). Icon from `props_sheet.png` |
-| Barrel | a `Barrel` cell (`kind = "barrel"`) | " - explodes and chains; two liveries |
+| Barrel | a `Barrel` cell (`kind = "barrel"`) | " - explodes and chains; the two liveries are the two drum kinds, rolled per tile |
+| Oil drum / Fuel drum | a `Barrel` cell with `drum = "oil"` / `"fuel"` | the same prop with its kind pinned (docs/barrel-explosion-variety.md): oil leaves a burning pool, fuel goes off harder and launches when chained. Icons are the two liveries |
+| Oil trail | an `Oil` cell (`kind = "oil"`) | GROUND category: not solid, no nav effect until lit; a blast or a burning neighbour sets it going and the fire runs along it cell by cell to any drum at the end. Icon from `props_sheet.png` row 9 |
 | Fence | a `Fence` cell (`kind = "fence"`) | " - two styles; the game draws it along whichever axis has fence neighbours |
 | Road | `ground::GroundGrid` cell → `Road` | see "Road & autotiling" below |
 | Frog | single `Frog` placement | see "Frog: singleton enforcement" below |
@@ -378,10 +380,12 @@ pickup = "ammo"
   written — empty/grass cells have no entry, so a mostly-empty map stays a
   small file.
 - `kind` is one of `"wall" | "road" | "frog" | "start" | "enemy_frog" |
-  "gate" | "pickup" | "sandbag" | "barrel" | "fence"`; `material` is present only when `kind = "wall"` (one
+  "gate" | "pickup" | "sandbag" | "barrel" | "fence" | "oil"`; `material` is present only when `kind = "wall"` (one
   of `"brick" | "iron" | "wood" | "glass"`); `pickup` is present only when
   `kind = "pickup"` (one of `"health" | "ammo" | "laser" | "minigun" |
-  "plasma" | "speedup" | "shield"`).
+  "plasma" | "speedup" | "shield"`); `drum` is optional and only on
+  `kind = "barrel"` (`"oil" | "fuel"`; absent, the kind is rolled at
+  spawn and the file reads as it did before the key existed).
 - `version` is a plain integer, bumped only if the schema changes
   incompatibly later — read defensively (reject/warn on an unknown future
   version rather than guessing).

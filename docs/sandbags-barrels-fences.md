@@ -55,13 +55,30 @@ knobs in `tuning.rs`'s `group props`. Test map: `maps/test/props.toml`.
   linear falloff, `barrel_blast_knockback_speed` 140) hurts everyone — both
   sides, frogs, walls and props — and puts every barrel in range on a
   fuse of about `barrel_fuse_seconds` (0.18; shorter near the centre,
-  longer at the edge), so a cluster cascades outward. Shots fly over
-  at `barrel_pass_over_chance` (0.08) and shells/bullets ricochet at
-  `barrel_deflect_chance` (0.1). Visuals: fireball sprite, additive bloom,
-  screen flash, the shockwave ripple and camera shake, and a scorch mark.
+  longer at the edge, then times the drum's own factor), so a cluster
+  cascades outward. Shots fly over at `barrel_pass_over_chance` (0.08) and
+  shells/bullets ricochet at `barrel_deflect_chance` (0.1). Visuals:
+  fireball sprite, additive bloom, screen flash, the shockwave ripple and
+  camera shake, and a scorch mark. **The two liveries are two kinds**
+  (docs/barrel-explosion-variety.md, 2026-09): the red *oil* drum
+  smoulders on a fuse (`oil_fuse_factor` 3) and leaves a burning pool
+  (`oil_pool_*`); the grey *fuel* drum cracks first (`fuel_fuse_factor`
+  0.5), blasts harder (`fuel_blast_*`) and, when another blast sets it
+  off, launches two or three cells and detonates where it lands
+  (`fuel_launch_*`). A map pins a kind with `drum = "oil" | "fuel"`.
+  Every blast varies by position hash (four fireball sheets, quarter-turns,
+  fps and size jitter), by cause (a shot leans the fire downrange and
+  streaks the scorch, a ram lurches the hull and goes up as a column, a
+  chained drum leans away from what lit it and grows with how long it
+  smouldered), throws drum parts, queues cook-off pops, flattens grass,
+  burns tread marks in, re-throws rubble already in the radius and soots
+  the wall faces that looked at it. `kind = "oil"` ground cells are
+  trails a fire runs along (`oil_trail_*`) to whatever drum is at the end.
 - **Fences**: a hit on a pristine fence destroys it at
   `fence_one_shot_chance` (0.7) odds, else it goes to its damaged keyframe
   and the next hit finishes it; rammed through in `fence_ram_seconds`
   (0.15). Don't block line of sight.
-- Events: `obstacle_destroyed { material, x, y }` for any tile death and
-  `blast { x, y, chained }` for a detonation.
+- Events: `obstacle_destroyed { material, x, y }` for any tile death,
+  `blast { x, y, chained, drum }` for a detonation, `drum_launched { x, y,
+  to_x, to_y }` for a fuel drum leaving the ground, and `fire_started { x,
+  y, pool }` for a ground cell catching.

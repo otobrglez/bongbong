@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::level::{MissionConfig, SpawnConfig};
-use crate::obstacle::Material;
+use crate::obstacle::{Drum, Material};
 use crate::pickup::PickupKind;
 use crate::tank::TankKind;
 use crate::{OBSTACLE_GRID_SIZE, Position};
@@ -62,8 +62,22 @@ pub enum CellObject {
     /// spawns an `Obstacle` of the matching `Material`, variant rolled per
     /// tile at spawn.
     Sandbag,
-    Barrel,
+    /// An oil barrel. `drum` pins its kind (`drum = "oil"` leaves a
+    /// burning pool, `drum = "fuel"` goes off harder and launches when
+    /// chained - `obstacle::Drum`); absent, the kind is rolled per tile at
+    /// spawn like the other props' variants, and a file without the key
+    /// reads exactly as it did before the key existed.
+    Barrel {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        drum: Option<Drum>,
+    },
     Fence,
+    /// An oil trail: a ground cell that is *not* solid and has no nav
+    /// effect until a blast or a burning neighbour lights it, after which
+    /// the fire runs along it cell by cell (`oil_trail_cells_per_second`),
+    /// hurting whatever drives over it and setting off any drum it reaches.
+    /// The author's fuse (docs/barrel-explosion-variety.md section D).
+    Oil,
     /// The two tree species (docs/TREES_SPEC.md). Solid like a prop, but
     /// drawn from 48px cells so the canopy overhangs the cell it stands
     /// in; both burn, and a tank can flatten one by driving at it.
@@ -84,10 +98,18 @@ impl CellObject {
         match self {
             CellObject::Wall { material } => Some(*material),
             CellObject::Sandbag => Some(Material::Sandbag),
-            CellObject::Barrel => Some(Material::Barrel),
+            CellObject::Barrel { .. } => Some(Material::Barrel),
             CellObject::Fence => Some(Material::Fence),
             CellObject::Tree => Some(Material::Tree),
             CellObject::Pine => Some(Material::Pine),
+            _ => None,
+        }
+    }
+
+    /// The drum kind a barrel cell pins, if it is a barrel and pins one.
+    pub fn drum(&self) -> Option<Drum> {
+        match self {
+            CellObject::Barrel { drum } => *drum,
             _ => None,
         }
     }
@@ -102,7 +124,7 @@ impl CellObject {
     pub fn prop(material: Material) -> Option<CellObject> {
         match material {
             Material::Sandbag => Some(CellObject::Sandbag),
-            Material::Barrel => Some(CellObject::Barrel),
+            Material::Barrel => Some(CellObject::Barrel { drum: None }),
             Material::Fence => Some(CellObject::Fence),
             Material::Tree => Some(CellObject::Tree),
             Material::Pine => Some(CellObject::Pine),

@@ -34,7 +34,7 @@
 use sola_raylib::prelude::*;
 
 use crate::tuning::tuning;
-use crate::{GROUND_WORLD_TILE, Position};
+use crate::{GROUND_WORLD_TILE, OBSTACLE_GRID_SIZE, Position};
 
 /// Columns in punyworld-overworld-tileset.png (432px / 16px).
 const TILESET_COLS: i32 = 27;
@@ -102,6 +102,31 @@ pub struct GroundGrid {
 }
 
 impl GroundGrid {
+    /// Darken the cell under `pos` by `factor` for the rest of the round:
+    /// the crater tone a burnt-out pool leaves. The one thing that changes
+    /// a tint after `build`, and it only ever darkens - so the AO bake's
+    /// "never changes" reasoning holds for everything else.
+    pub fn darken_cell(&mut self, pos: Position, factor: f32) {
+        // A 32px obstacle cell spans three of the 16px ground tiles on
+        // each axis (the middle one whole, the two beside it by half), so
+        // the crater is the 3x3 block around the cell's centre - a little
+        // wider than the cell, which is what a burn edge looks like.
+        let half = OBSTACLE_GRID_SIZE / 2.0;
+        let k = factor.clamp(0.0, 1.0);
+        let x0 = ((pos.x - half) / GROUND_WORLD_TILE).round() as i32;
+        let x1 = ((pos.x + half) / GROUND_WORLD_TILE).round() as i32;
+        let y0 = ((pos.y - half) / GROUND_WORLD_TILE).round() as i32;
+        let y1 = ((pos.y + half) / GROUND_WORLD_TILE).round() as i32;
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                if let Some(i) = self.idx(x, y) {
+                    let c = self.tints[i];
+                    self.tints[i] = Color::new((c.r as f32 * k) as u8, (c.g as f32 * k) as u8, (c.b as f32 * k) as u8, c.a);
+                }
+            }
+        }
+    }
+
     fn idx(&self, x: i32, y: i32) -> Option<usize> {
         if x < 0 || y < 0 || x as usize >= self.cols || y as usize >= self.rows {
             None

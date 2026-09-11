@@ -17,8 +17,8 @@ nix-shell -p "python3.withPackages (ps: [ps.pillow])" \
 
 | File | Size | Grid | Drawn at |
 |---|---|---|---|
-| `props_sheet.png` | 128x288 | 4 cols x 9 rows of 32x32 | `OBSTACLE_SCALE` (1:1, like walls) |
-| `barrel_explosion.png` | 768x128 | 12 cols x 2 rows of 64x64 | `blast_anim_scale` / `scorch_scale` (2.0 default) |
+| `props_sheet.png` | 128x320 | 4 cols x 10 rows of 32x32 | `OBSTACLE_SCALE` (1:1, like walls) |
+| `barrel_explosion.png` | 768x320 | 12 cols x 5 rows of 64x64 | `blast_anim_scale` / `scorch_scale` (2.0 default) |
 
 RGBA, no padding, nearest-neighbour sampling. Slice `x = col*cell, y =
 row*cell`. Every non-transparent pixel is on the Puny Palette
@@ -43,8 +43,16 @@ variant`, except fences: `row_base + variant*2 + axis`.
 | 3–4 | Barrel | 3 | rusty red drum with band / grey drum with hazard rim and teal bung | 0–3 | intact, dented (dents, rust, small puddle), critical (big puddle, cracked lid, hot rim), **col 3 = lit fuse** |
 | 5–6 | Fence, wooden | 5 | horizontal (row 5), vertical (row 6) | 0–1 | intact, damaged (two pickets gone, one leaning, broken rail, splinters) |
 | 7–8 | Fence, wire | 5 | horizontal (row 7), vertical (row 8) | 0–1 | intact, damaged (a hole torn in the mesh, loose wire ends) |
+| 9 | Oil trail (`PROPS_OIL_ROW`) | – | four puddle variants, picked by position hash | 0–3 | not an obstacle: the `kind = "oil"` ground cell a fire runs along (`obstacle::draw_oil_cell`), drawn under everything that stands |
 
-14 of 36 cells are blank; never sample them. The terminal state (flattened
+14 of 40 cells are blank; never sample them.
+
+**The two barrel liveries are the two drum kinds** (`obstacle::Drum`,
+docs/barrel-explosion-variety.md section B): row 3, the red drum, is oil
+and leaves a burning pool; row 4, the grey hazard drum, is fuel, goes off
+harder and launches when another blast sets it off. `Obstacle::variant`
+for a barrel *is* its drum; a map pins one with `kind = "barrel", drum =
+"oil" | "fuel"` and otherwise the roll at spawn decides. The terminal state (flattened
 sandbag, detonated barrel, fence stubs) is never drawn — an obstacle is
 despawned the frame it dies, same as walls.
 
@@ -75,9 +83,20 @@ baked into the art.
 
 ## 3. Sheet map — `barrel_explosion.png`
 
-Row 0, cols 0–11: the one-shot blast, played at `blast_anim_fps` (18 by
-default, 0.67 s), clamped to the last frame, removed when done
-(`blast::BlastFx`).
+Rows 0, 2, 3 and 4, cols 0–11: the one-shot blast in four shapes
+(`BLAST_SHAPE_ROWS`), played at `blast_anim_fps` times a per-blast hashed
+jitter (`barrel_fps_jitter`), clamped to the last frame, removed when done
+(`blast::BlastFx`). Row 0 is the mushroom described below; row 2 is the
+*tall* blast (a narrow column that rises fast), row 3 the *flat* one (a
+wide, low splash with little smoke) and row 4 the *double* (two cores, the
+second a frame behind). Which row a blast uses is hashed from its position
+unless its cause picks one: a shot takes the flat or the double and leans
+the sprite downrange, a ram or a fire takes the column, a fuel drum always
+takes the column and draws bigger (`blast::BlastShape`). The fire frames
+(0–3) are also quarter-turned per blast; the smoke frames keep their rise
+and only take the mirror. All three new rows are drawn by the row-0 code
+stretched through a shape table (sx, sy, rise, smoke, twin) in
+`gen_barrel_explosion.py`, so the row-0 art is byte-identical to before.
 
 | Frame | Content |
 |---|---|
@@ -95,12 +114,21 @@ by its `seed` (a hash of its position) so two chained blasts don't look
 cloned; drawn oldest first, a chained blast's flash lands on the earlier
 fireball and reads as a second detonation.
 
-Row 1, cols 0–2: three scorch decals (`SCORCH_VARIANTS`) — a lumpy black
-blot, a darker ring of lumps, ten radial streaks, a lighter crater floor
-and a few embers. Picked, mirrored and quarter-turned by the seed, drawn
-under obstacles at `scorch_opacity`, fading in over
-`scorch_fade_in_seconds`, kept for the round (oldest dropped past
-`SCORCH_MAX`). Cols 3–11 of row 1 are blank.
+Row 1, cols 0–4: five scorch decals (`SCORCH_VARIANTS`) — three lumpy
+black blots with a darker ring of lumps, ten radial streaks, a lighter
+crater floor and a few embers, then two lopsided oil splatters with drips.
+Picked, mirrored and quarter-turned by the seed, drawn under obstacles at
+`scorch_opacity` times the drum's scale (`scorch_fuel_scale` for a fuel
+drum), fading in over `scorch_fade_in_seconds`, kept for the round (oldest
+dropped past `SCORCH_MAX`). Col 5 (`SCORCH_STREAK_COL`) is the directional
+streak a *shot's* blast draws over its blot, pointing right on the sheet
+and quarter-turned toward the shot's travel. Cols 6–8 (`FIRE_LOOP_COL`,
+`FIRE_LOOP_FRAMES`) are the three-frame ground-fire loop a burning cell
+draws (`blast::draw_ground_fire`): a low bed of fire in the lower half of
+the cell with tongues rising out of it, shown at scale 2 centred a little
+above the 32 px ground cell so the flames rise past it, cycling at the
+wood burn cadence with a hashed phase and fading over the last part of the
+burn. Cols 9–11 of row 1 are blank.
 
 ## 4. Integration (Rust)
 
@@ -115,15 +143,20 @@ Obstacle::col()              // burning → fire loop; fuse armed → PROPS_BARR
 draw_obstacle(d, &ObstacleTextures { walls, props }, obstacle, fence_axis(obstacle, &fence_cells))
 
 // blast.rs
-BlastFx::frame()             // (time * blast_anim_fps) clamped to 0..BARREL_EXPLOSION_FRAMES-1
-draw_blast / draw_blast_glow / draw_fuse_glow / draw_scorch
+BlastFx::shaped(center, kind, shape)  // row/turn/fps/scale hashed, then shaped by the cause
+BlastFx::frame()             // (time * fps()) clamped to 0..BARREL_EXPLOSION_FRAMES-1
+draw_blast / draw_blast_glow / draw_fuse_glow / draw_fire_glow / draw_ground_fire / draw_scorch
+// obstacle.rs
+Obstacle::drum() / Obstacle::fuse_rock(time) / draw_oil_cell / draw_flying_drum
 ```
 
 Layout constants live in `lib.rs` next to the obstacle block
-(`PROPS_COLUMNS`, `PROPS_ROWS`, `PROPS_BARREL_LIT_COL`,
-`BARREL_EXPLOSION_TEXTURE_SIZE`, `BARREL_EXPLOSION_FRAMES`, `SCORCH_ROW`,
-`SCORCH_VARIANTS`, `SCORCH_MAX`); the feel numbers (fps, scales, glow,
-flash, scorch opacity) are `group props` rows in `tuning.rs`.
+(`PROPS_COLUMNS`, `PROPS_ROWS`, `PROPS_BARREL_LIT_COL`, `PROPS_OIL_ROW`,
+`PROPS_OIL_VARIANTS`, `BARREL_EXPLOSION_TEXTURE_SIZE`,
+`BARREL_EXPLOSION_FRAMES`, `BLAST_SHAPE_ROWS`, `SCORCH_ROW`,
+`SCORCH_VARIANTS`, `SCORCH_STREAK_COL`, `FIRE_LOOP_COL`, `SCORCH_MAX`);
+the feel numbers (fps, scales, jitter, glow, flash, scorch opacity, the
+pool, the launch, the fuel blast) are `group props` rows in `tuning.rs`.
 
 ## 5. Palette
 
@@ -150,3 +183,6 @@ adjacent steps.
   arrangement look identical.
 - Barrel damage stages mostly show under minigun fire; a player shell
   usually pops an intact barrel outright (`barrel_max_health`).
+- The ground-fire loop is one set of three frames for every burning cell;
+  the hashed phase and mirror are what keep a lit trail from blinking in
+  unison.

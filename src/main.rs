@@ -420,6 +420,9 @@ fn main() {
     let pickup_shield_texture = rl
         .load_texture(&thread, "static/pickups/shield.png")
         .expect("failed loading shield pickup texture");
+    let pickup_flamethrower_texture = rl
+        .load_texture(&thread, "static/pickups/flamethrower.png")
+        .expect("failed loading flamethrower pickup texture");
     let eraser_texture = rl
         .load_texture(&thread, "static/ui/eraser.png")
         .expect("failed loading eraser texture");
@@ -736,6 +739,7 @@ fn main() {
                     pickup_plasma: &pickup_plasma_texture,
                     pickup_speedup: &pickup_speedup_texture,
                     pickup_shield: &pickup_shield_texture,
+                    pickup_flamethrower: &pickup_flamethrower_texture,
                     eraser: &eraser_texture,
                     tanks: &tanks_texture,
                 },
@@ -828,6 +832,7 @@ fn main() {
                 pickup_plasma: &pickup_plasma_texture,
                 pickup_speedup: &pickup_speedup_texture,
                 pickup_shield: &pickup_shield_texture,
+                pickup_flamethrower: &pickup_flamethrower_texture,
                 minigun_mount: &minigun_mount_texture,
                 grass: &grass_texture,
                 trees: &trees_texture,

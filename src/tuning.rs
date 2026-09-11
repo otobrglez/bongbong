@@ -631,6 +631,42 @@ tunables! {
         plasma_flying_cycle_fps: f32 = 10.0 in 0.5 ..= 60.0;
     }
 
+    group flamethrower {
+        /// Seconds of burn one flamethrower pickup grants; a second pickup
+        /// stacks. The weapon is stocked while any fuel is left, and the
+        /// HUD shows whole seconds.
+        flame_fuel_per_pickup: f32 = 9.0 in 0.5 ..= 60.0;
+        /// Length of the cone (px) from the muzzle; a solid tile on the
+        /// centre line caps it for that frame.
+        flame_range: f32 = 164.0 in 16.0 ..= 400.0;
+        /// Half angle of the cone, degrees.
+        flame_half_angle_deg: f32 = 21.4 in 2.0 ..= 45.0;
+        /// Damage per second to a tank inside the cone (a fixed rate, no
+        /// roll - the flamethrower draws no RNG).
+        flame_damage_per_second: f32 = 20.0 in 0.0 ..= 200.0;
+        /// How long a tank keeps burning after the stream touched it, and
+        /// what that costs per second. Re-contact resets the timer.
+        flame_afterburn_seconds: f32 = 2.75 in 0.0 ..= 20.0;
+        flame_afterburn_dps: f32 = 4.0 in 0.0 ..= 100.0;
+        /// Damage per second to a frog inside the cone.
+        flame_frog_damage_per_second: f32 = 10.0 in 0.0 ..= 100.0;
+        /// Seconds of exposure a ground cell or a tile needs before it
+        /// catches: a quick sweep scorches, a held stream lights.
+        flame_ignite_seconds: f32 = 0.35 in 0.0 ..= 5.0;
+        /// How fast exposure fades (per second) once the stream moves off.
+        flame_heat_decay: f32 = 1.0 in 0.0 ..= 10.0;
+        /// How long a ground cell the stream lit burns (as a pool cell).
+        flame_ground_seconds: f32 = 2.0 in 0.1 ..= 30.0;
+        /// Exposure that collapses a sandbag, and that snaps a fence.
+        flame_sandbag_seconds: f32 = 1.7 in 0.1 ..= 30.0;
+        flame_fence_seconds: f32 = 1.2 in 0.1 ..= 30.0;
+        /// Stream particles a second (cosmetic).
+        flame_particle_rate: f32 = 436.0 in 0.0 ..= 900.0;
+        /// A muzzle heat shimmer is pushed every this many frames while the
+        /// trigger is held, so the ripple list is not flooded.
+        flame_shimmer_every_frames: i32 = 11 in 1 ..= 60;
+    }
+
     group pickups {
         /// Seconds after a pickup is collected before a fresh one spawns at
         /// a random empty map slot - keeps the field topped up.
@@ -953,6 +989,79 @@ tunables! {
         /// Damage per second a tank pushing into a barrel deals it - so
         /// ramming one sets it off in a fraction of a second.
         barrel_ram_damage_per_second: f32 = 40.0 in 0.0 ..= 500.0;
+        /// Extra shove the blast gives a tank that set a barrel off by
+        /// driving into it, as a multiple of the ordinary knockback: the
+        /// hull is sitting on the drum, so it should visibly lurch.
+        barrel_ram_kick_factor: f32 = 2.2 in 1.0 ..= 6.0;
+        /// Per-blast playback jitter on `blast_anim_fps`, as a fraction
+        /// either way, hashed from the blast position: two adjacent
+        /// blasts then never step through the same frames in lockstep,
+        /// which is the biggest "cloned" tell a cascade has.
+        barrel_fps_jitter: f32 = 0.15 in 0.0 ..= 0.5;
+        /// Per-blast size jitter on `blast_anim_scale`, same idea.
+        barrel_scale_jitter: f32 = 0.1 in 0.0 ..= 0.5;
+        /// Most delayed secondary pops a barrel blast queues (the same
+        /// cook-offs a wreck gets); the count is hashed per blast from
+        /// 0 to this, so a third of drums get none.
+        barrel_cookoff_max: i32 = 2 in 0 ..= 8;
+        /// Drum parts (a lid and staves) a blast throws in arcs to hashed
+        /// landing spots. Zero leaves one static rubble decal in place
+        /// instead.
+        barrel_parts: i32 = 3 in 0 ..= 12;
+        /// How far those parts scatter (px).
+        barrel_part_throw_px: f32 = 60.0 in 0.0 ..= 300.0;
+        /// Fraction of the blast radius inside which tall grass is
+        /// flattened (the same `crush` a hull drives).
+        blast_grass_flatten: f32 = 0.6 in 0.0 ..= 1.5;
+        /// Most landed rubble pieces one blast picks up and throws again
+        /// (the scene reacts to a second blast in the same place).
+        blast_rethrow_max: i32 = 8 in 0 ..= 32;
+        /// Sideways rock (px, whole 2px blocks) of a drum whose fuse is
+        /// lit; 0 keeps it still.
+        barrel_fuse_rock_px: f32 = 2.0 in 0.0 ..= 8.0;
+        /// Sparks a second thrown from the bung of a fused drum.
+        barrel_fuse_spark_rate: f32 = 14.0 in 0.0 ..= 60.0;
+        /// Fuse length multiplier for the red oil drum: it smoulders, so
+        /// the lit lid, the rocking and the sparks get time to read.
+        oil_fuse_factor: f32 = 3.0 in 0.1 ..= 10.0;
+        /// Fuse length multiplier for the grey fuel drum: it cracks first.
+        fuel_fuse_factor: f32 = 0.5 in 0.1 ..= 10.0;
+        /// Cells around an oil drum's blast that burn afterwards: 0 for
+        /// none, 1 for the centre plus its four neighbours.
+        oil_pool_radius_cells: i32 = 1 in 0 ..= 3;
+        /// How long the pool burns.
+        oil_pool_seconds: f32 = 4.0 in 0.1 ..= 30.0;
+        /// Damage per second to a tank whose hull is over a burning cell.
+        oil_pool_damage_per_second: f32 = 6.0 in 0.0 ..= 100.0;
+        /// Odds an oil drum leaves a pool at all. 1.0 and 0.0 draw no RNG.
+        oil_pool_chance: f64 = 1.0 in 0.0 ..= 1.0;
+        /// How fast a lit oil trail (`kind = "oil"` cells) runs along its
+        /// length, in cells per second.
+        oil_trail_cells_per_second: f32 = 6.0 in 0.5 ..= 30.0;
+        /// How long one trail cell burns once the fire reaches it.
+        oil_trail_burn_seconds: f32 = 2.5 in 0.1 ..= 30.0;
+        /// Fuse a drum sitting in a burning cell gets, as a multiple of
+        /// `barrel_fuse_seconds` (before the drum's own kind factor).
+        fire_fuse_factor: f32 = 2.0 in 0.1 ..= 10.0;
+        /// How much darker the ground under a burnt-out pool cell stays
+        /// for the round (a multiplier on the cell's tint).
+        ground_burn_darken: f32 = 0.8 in 0.3 ..= 1.0;
+        /// The grey fuel drum's blast: bigger, sharper and shorter than
+        /// the oil drum's, with no pool.
+        fuel_blast_radius: f32 = 128.0 in 0.0 ..= 600.0;
+        fuel_blast_damage_min: f32 = 20.0 in 0.0 ..= 100.0;
+        fuel_blast_damage_max: f32 = 40.0 in 0.0 ..= 100.0;
+        fuel_blast_knockback_speed: f32 = 220.0 in 0.0 ..= 500.0;
+        /// Odds a fuel drum set off by *another blast* launches - flies
+        /// two or three cells away from the source and detonates where it
+        /// lands - instead of popping in place. 1.0 and 0.0 draw no RNG.
+        fuel_launch_chance: f64 = 1.0 in 0.0 ..= 1.0;
+        /// Shortest and longest launch, in cells; the length is hashed
+        /// per drum between the two.
+        fuel_launch_cells_min: i32 = 2 in 1 ..= 8;
+        fuel_launch_cells_max: i32 = 3 in 1 ..= 8;
+        /// Scale of the scorch a fuel drum leaves, next to an oil drum's 1.
+        scorch_fuel_scale: f32 = 1.3 in 0.5 ..= 3.0;
         /// Odds a hit on a pristine fence destroys it outright; otherwise it
         /// drops to its damaged keyframe and the next hit finishes it.
         fence_one_shot_chance: f64 = 0.7 in 0.0 ..= 1.0;

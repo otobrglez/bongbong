@@ -117,6 +117,17 @@ impl Terrain {
         crate::grass::conceals(&self.grass, p)
     }
 
+    /// The entry fraction (0..1) of the first solid tile along the
+    /// segment `p0..p1`, if any - what caps a flame stream's reach. Every
+    /// tile counts, sandbags and fences included: a stream does not sail
+    /// over a knee-high wall the way a shell can.
+    pub fn first_solid_along(&self, p0: Position, p1: Position) -> Option<f32> {
+        self.obstacles
+            .iter()
+            .filter_map(|b| segment_hits_aabb(p0, p1, b.center, b.half))
+            .min_by(|a, b| a.total_cmp(b))
+    }
+
     /// The nearest obstacle tile a shot fired from `from` along `dir` (a
     /// unit vector) would strike within `reach` px, and whether it is
     /// already burning - the AI's breach perception (`ai::WallAhead`).
