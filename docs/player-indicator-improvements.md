@@ -93,11 +93,13 @@ Enemies may still roll the player's chassis and player 2 may roll player
   place of today's white/gold/red (`HealthRamp::Blue` becomes the P1 ramp,
   a `Pink` ramp is added, `White` is no longer used by a player). The
   missing arc is the dimmed team colour, as today.
-- The player rings grow **10 % in radius with the same band thickness**:
-  a new `player_ring_radius_scale` knob (1.1) on top of the shared
+- Every tank ring grows **10 % in radius with the same band thickness**:
+  a new `tank_ring_radius_scale` knob (1.1) on top of the shared
   `shield_glow_radius_factor`, the band staying `0.385 * size * 0.22` px
-  (`draw_ground_ring_scaled`). The player's shield ring uses the same
-  scale so the cross-fade stays concentric; enemy rings are unchanged.
+  (`draw_ground_ring_scaled`). Marker, gauge and shield rings all use it,
+  players and enemies alike, so the cross-fade stays concentric and an
+  enemy's hit ring sits at the same radius as the player's marker; the
+  frogs' rings keep the unscaled radius.
 - The enemy ring stops sharing player 1's ramp: it draws with
   `HealthRamp::Red`, the enemy frog's ramp, so red-on-hit reads hostile.
 - `PLAYER2_RING_COLOR` is replaced by `tank::TEAM_COLORS: [Color; 2]`

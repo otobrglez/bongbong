@@ -1278,12 +1278,12 @@ tunables! {
         /// showing through. The shield ring's own translucency is fixed in
         /// `draw_ground_ring`.
         player_ring_opacity: f32 = 0.8 in 0.0 ..= 1.0;
-        /// The player rings (marker and shield) are this much larger in
-        /// radius than the shared `shield_glow_radius_factor` ring, at the
-        /// same band thickness, so a halo shows past every hull - the
-        /// super-heavies hide the standard ring entirely. Enemy rings stay
-        /// at 1.
-        player_ring_radius_scale: f32 = 1.1 in 0.5 ..= 2.0;
+        /// Every tank ring (marker, health gauge and shield, player and
+        /// enemy alike) is this much larger in radius than the
+        /// `shield_glow_radius_factor` ring the frogs use, at the same band
+        /// thickness, so a halo shows past every hull - the super-heavies
+        /// hide the unscaled ring entirely.
+        tank_ring_radius_scale: f32 = 1.1 in 0.5 ..= 2.0;
         /// For this long after a round becomes playable (after the mission
         /// banner, or at once without one) each player tank pulses a
         /// team-coloured ripple ring and shows its `P1`/`P2` label, so you

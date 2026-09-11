@@ -1225,10 +1225,11 @@ pub fn draw_ground_ring(d: &mut impl RaylibDraw, tank: &Tank, time: f32, style: 
     draw_ground_ring_scaled(d, tank.ring_position, tank.size(), tank.anim_phase(), time, style, fade, ring_scale(tank));
 }
 
-/// How much larger than the shared ring a tank's rings are drawn: the
-/// players' `player_ring_radius_scale`, 1 for an enemy.
-fn ring_scale(tank: &Tank) -> f32 {
-    if tank.is_player() { tuning().player_ring_radius_scale } else { 1.0 }
+/// How much larger than the shared ring every tank's rings are drawn,
+/// `tank_ring_radius_scale` - the same for players and enemies, so a hit
+/// enemy's gauge sits at the radius the player's marker does.
+fn ring_scale(_tank: &Tank) -> f32 {
+    tuning().tank_ring_radius_scale
 }
 
 /// `draw_ground_ring` for anything that is not a tank - a frog's side
@@ -1249,7 +1250,7 @@ pub fn draw_ground_ring_at(
 
 /// `draw_ground_ring_at` with the radius scaled by `radius_scale` at the
 /// *unscaled* band thickness, so a larger ring is a wider halo, not a
-/// fatter one (the players' rings, `player_ring_radius_scale`).
+/// fatter one (every tank's rings, `tank_ring_radius_scale`).
 #[allow(clippy::too_many_arguments)]
 pub fn draw_ground_ring_scaled(
     d: &mut impl RaylibDraw,
@@ -1445,7 +1446,7 @@ pub fn enemy_health_ring_visibility(tank: &Tank) -> f32 {
 }
 
 /// Draw a player's marker ring as its health gauge: the same ground ring
-/// as the shield (same thickness, `player_ring_radius_scale` wider, minus
+/// as the shield (same thickness, `tank_ring_radius_scale` wider, minus
 /// the breathing), the remaining-health arc in the player's team ramp
 /// (`HealthRamp::player`) at `player_ring_opacity` and the rest of the
 /// circle in the team colour dimmed to `health_ring_base_opacity` of that,
