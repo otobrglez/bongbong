@@ -1,0 +1,83 @@
+# maps/crossplay/ - size studies for the shared cross-play battlefield
+# (docs/fullscreen-resolution-research.md, "one world per match"; the
+# recommended standard is arena.toml's 28x14). 26x12 cells =
+# 832x384 world px, the phone's own 19.5:9 aspect, meant for the
+# invisible-controls layout where the arena fills the screen; play it with
+# `cargo run -- --map maps/crossplay/strip.toml --resolution 832x384`.
+# Hand-authored: re-saving from the map editor would drop these comments.
+#
+# strip: a wide, low Protect arena. Brick brackets on both ends, iron
+# pillars and a sandbag line across the middle, fences and barrels in the
+# corners, a small road square at the centre.
+
+version = 1
+tanks = 4
+mission.kind = "protect"
+spawn.kind = "band"
+
+cells."2,1" = { kind = "barrel" }
+cells."5,1" = { kind = "wall", material = "brick" }
+cells."6,1" = { kind = "wall", material = "brick" }
+cells."7,1" = { kind = "wall", material = "brick" }
+cells."8,1" = { kind = "wall", material = "brick" }
+cells."16,1" = { kind = "wall", material = "brick" }
+cells."17,1" = { kind = "wall", material = "brick" }
+cells."18,1" = { kind = "wall", material = "brick" }
+cells."19,1" = { kind = "wall", material = "brick" }
+cells."22,1" = { kind = "barrel" }
+cells."5,2" = { kind = "wall", material = "brick" }
+cells."20,2" = { kind = "wall", material = "brick" }
+cells."2,3" = { kind = "fence" }
+cells."3,3" = { kind = "fence" }
+cells."5,3" = { kind = "wall", material = "brick" }
+cells."8,3" = { kind = "wall", material = "iron" }
+cells."9,3" = { kind = "wall", material = "iron" }
+cells."12,3" = { kind = "sandbag" }
+cells."13,3" = { kind = "sandbag" }
+cells."16,3" = { kind = "wall", material = "iron" }
+cells."17,3" = { kind = "wall", material = "iron" }
+cells."20,3" = { kind = "wall", material = "brick" }
+cells."22,3" = { kind = "fence" }
+cells."23,3" = { kind = "fence" }
+cells."1,5" = { kind = "pickup", pickup = "health" }
+cells."4,5" = { kind = "start" }
+cells."6,5" = { kind = "frog" }
+cells."11,5" = { kind = "road" }
+cells."12,5" = { kind = "road" }
+cells."13,5" = { kind = "road" }
+cells."14,5" = { kind = "road" }
+cells."15,5" = { kind = "road" }
+cells."20,5" = { kind = "pickup", pickup = "ammo" }
+cells."11,6" = { kind = "road" }
+cells."15,6" = { kind = "road" }
+cells."2,7" = { kind = "fence" }
+cells."3,7" = { kind = "fence" }
+cells."5,7" = { kind = "wall", material = "brick" }
+cells."8,7" = { kind = "wall", material = "iron" }
+cells."9,7" = { kind = "wall", material = "iron" }
+cells."11,7" = { kind = "road" }
+cells."12,7" = { kind = "road" }
+cells."13,7" = { kind = "road" }
+cells."14,7" = { kind = "road" }
+cells."17,7" = { kind = "wall", material = "iron" }
+cells."18,7" = { kind = "wall", material = "iron" }
+cells."20,7" = { kind = "wall", material = "brick" }
+cells."22,7" = { kind = "fence" }
+cells."23,7" = { kind = "fence" }
+cells."5,8" = { kind = "wall", material = "brick" }
+cells."10,8" = { kind = "wall", material = "glass" }
+cells."12,8" = { kind = "wall", material = "glass" }
+cells."14,8" = { kind = "wall", material = "glass" }
+cells."20,8" = { kind = "wall", material = "brick" }
+cells."5,9" = { kind = "wall", material = "brick" }
+cells."6,9" = { kind = "wall", material = "brick" }
+cells."7,9" = { kind = "wall", material = "brick" }
+cells."8,9" = { kind = "wall", material = "brick" }
+cells."12,9" = { kind = "pickup", pickup = "minigun" }
+cells."16,9" = { kind = "wall", material = "brick" }
+cells."17,9" = { kind = "wall", material = "brick" }
+cells."18,9" = { kind = "wall", material = "brick" }
+cells."19,9" = { kind = "wall", material = "brick" }
+cells."2,10" = { kind = "barrel" }
+cells."17,10" = { kind = "pickup", pickup = "plasma" }
+cells."22,10" = { kind = "barrel" }
