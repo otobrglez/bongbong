@@ -635,18 +635,18 @@ tunables! {
         /// Seconds of burn one flamethrower pickup grants; a second pickup
         /// stacks. The weapon is stocked while any fuel is left, and the
         /// HUD shows whole seconds.
-        flame_fuel_per_pickup: f32 = 6.0 in 0.5 ..= 60.0;
+        flame_fuel_per_pickup: f32 = 9.0 in 0.5 ..= 60.0;
         /// Length of the cone (px) from the muzzle; a solid tile on the
         /// centre line caps it for that frame.
-        flame_range: f32 = 88.0 in 16.0 ..= 400.0;
+        flame_range: f32 = 164.0 in 16.0 ..= 400.0;
         /// Half angle of the cone, degrees.
-        flame_half_angle_deg: f32 = 14.0 in 2.0 ..= 45.0;
+        flame_half_angle_deg: f32 = 21.4 in 2.0 ..= 45.0;
         /// Damage per second to a tank inside the cone (a fixed rate, no
         /// roll - the flamethrower draws no RNG).
         flame_damage_per_second: f32 = 20.0 in 0.0 ..= 200.0;
         /// How long a tank keeps burning after the stream touched it, and
         /// what that costs per second. Re-contact resets the timer.
-        flame_afterburn_seconds: f32 = 2.0 in 0.0 ..= 20.0;
+        flame_afterburn_seconds: f32 = 2.75 in 0.0 ..= 20.0;
         flame_afterburn_dps: f32 = 4.0 in 0.0 ..= 100.0;
         /// Damage per second to a frog inside the cone.
         flame_frog_damage_per_second: f32 = 10.0 in 0.0 ..= 100.0;
@@ -658,13 +658,13 @@ tunables! {
         /// How long a ground cell the stream lit burns (as a pool cell).
         flame_ground_seconds: f32 = 2.0 in 0.1 ..= 30.0;
         /// Exposure that collapses a sandbag, and that snaps a fence.
-        flame_sandbag_seconds: f32 = 3.0 in 0.1 ..= 30.0;
+        flame_sandbag_seconds: f32 = 1.7 in 0.1 ..= 30.0;
         flame_fence_seconds: f32 = 1.2 in 0.1 ..= 30.0;
         /// Stream particles a second (cosmetic).
-        flame_particle_rate: f32 = 240.0 in 0.0 ..= 900.0;
+        flame_particle_rate: f32 = 436.0 in 0.0 ..= 900.0;
         /// A muzzle heat shimmer is pushed every this many frames while the
         /// trigger is held, so the ripple list is not flooded.
-        flame_shimmer_every_frames: i32 = 6 in 1 ..= 60;
+        flame_shimmer_every_frames: i32 = 11 in 1 ..= 60;
     }
 
     group pickups {

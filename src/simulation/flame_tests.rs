@@ -184,7 +184,8 @@ fn the_cone_reaches_what_is_ahead_and_nothing_else() {
     assert_eq!(behind, 0.0, "behind the nozzle");
     let (beside, _) = run("", (17, 13));
     assert_eq!(beside, 0.0, "beside the cone");
-    let (far, _) = run("", (20, 9));
+    // Cell 6 is 288 px from the hull, past the 164 px reach from the muzzle.
+    let (far, _) = run("", (20, 6));
     assert_eq!(far, 0.0, "past the range");
     let (walled, _) = run("cells.\"20,12\" = { kind = \"wall\", material = \"iron\" }\n", (20, 10));
     assert_eq!(walled, 0.0, "past a wall");

@@ -54,7 +54,7 @@ against them. It is also the first weapon that can hurt its user.
   `enqueue_weapon` like the other three, so the FIFO rule holds: a pickup
   collected while the minigun is live waits its turn.
 - **Fuel.** `Tank::flame_fuel: f32`, seconds of burn. A pickup adds
-  `flame_fuel_per_pickup` (6 s); a second pickup stacks. The weapon counts
+  `flame_fuel_per_pickup` (9 s); a second pickup stacks. The weapon counts
   as stocked while `flame_fuel > 0` (`weapon_ammo` reports the fuel
   rounded up, so the last fraction of a second still fires).
 - **Trigger.** Full-auto while held, like the laser and minigun, but with
@@ -63,8 +63,8 @@ against them. It is also the first weapon that can hurt its user.
   twin-barrel chassis has one nozzle; the flamethrower ignores
   `tank_barrel_lateral_offset`.
 - **The cone.** From the muzzle (the shell's own spawn point), along the
-  facing, `flame_range` (88 px, two and three-quarter cells) long, half
-  angle `flame_half_angle_deg` (14 degrees, about 22 px each side at the
+  facing, `flame_range` (164 px, five cells) long, half
+  angle `flame_half_angle_deg` (21.4 degrees, about 64 px each side at the
   end). The centre line is swept through `Terrain::sweep` like a laser
   beam, and the first solid tile it meets caps the effective range for that
   frame - a stream does not pass through a wall, though it does reach the
@@ -82,7 +82,7 @@ against them. It is also the first weapon that can hurt its user.
   `notify_hit`, which alerts it exactly as a shell would. Damage is a
   fixed rate, not a roll: **the flamethrower draws no RNG at all.**
 - **Afterburn.** Contact sets `Tank::burn_timer` to
-  `flame_afterburn_seconds` (2.0). While it runs the tank takes
+  `flame_afterburn_seconds` (2.75). While it runs the tank takes
   `flame_afterburn_dps` (4) per second and draws burning. Re-entering the
   cone resets the timer rather than stacking it. A tank killed by
   afterburn goes on `Frame::kills` and explodes like any other kill.
@@ -117,7 +117,7 @@ ground and in `Obstacle::heat` for tiles, both cleared by `init`.
 | Wood tile, tree | Ignites at the threshold whatever its `flammable` roll: `health = 0, burning = true`, then the ordinary burn-out. A flamethrower is the one thing that lights a plank that was rolled to break. | `Obstacle::tick_burn` |
 | Oil trail cell | Lights at the threshold; the fire runs the trail. | `light_cell`, trail spread |
 | Barrel (either drum) | Fused at the threshold with `fire_fuse_factor` and the drum's own factor, `from` = the muzzle, so a chained fuel drum launches *away from the shooter*. | `arm_fuse` |
-| Sandbag | Takes heat until `flame_sandbag_seconds` (3.0) and collapses through `damage_obstacle` with a new `DamageCause::Fire`. | existing death path |
+| Sandbag | Takes heat until `flame_sandbag_seconds` (1.7) and collapses through `damage_obstacle` with a new `DamageCause::Fire`. | existing death path |
 | Fence | Same, at `flame_fence_seconds` (1.2): a fence burns faster than a bag of sand. | existing death path |
 | Brick, glass | Never destroyed by fire. The face toward the muzzle is sooted (`scorched`) on first contact. | `face_toward`, the soot bands |
 | Iron | Sooted like brick. | |
@@ -163,7 +163,7 @@ All of it exists already and is reused as is:
   particle spawn spans the *effective* range - a stream on a wall stops
   at the wall.
 - **Muzzle.** An additive `pixel_disc` glow at the nozzle while firing and
-  a muzzle-flash shimmer pushed every `flame_shimmer_every_frames` (6)
+  a muzzle-flash shimmer pushed every `flame_shimmer_every_frames` (11)
   frames, not every frame, so the ripple list does not flood.
 - **A burning tank** draws embers and smoke sampled from
   `Game::burning_tanks()` (tanks with `burn_timer > 0`) the way a burning
@@ -195,20 +195,20 @@ One new `tunables!` group, `flamethrower`:
 
 | Knob | Default | Meaning |
 |---|---|---|
-| `flame_fuel_per_pickup` | 6.0 s | fuel a pickup grants; stacks |
-| `flame_range` | 88 px | cone length from the muzzle |
-| `flame_half_angle_deg` | 14 | cone half angle |
+| `flame_fuel_per_pickup` | 9.0 s | fuel a pickup grants; stacks |
+| `flame_range` | 164 px | cone length from the muzzle |
+| `flame_half_angle_deg` | 21.4 | cone half angle |
 | `flame_damage_per_second` | 20 | to a tank inside the cone |
-| `flame_afterburn_seconds` | 2.0 | how long a touched tank keeps burning |
+| `flame_afterburn_seconds` | 2.75 | how long a touched tank keeps burning |
 | `flame_afterburn_dps` | 4 | damage per second while it burns |
 | `flame_frog_damage_per_second` | 10 | to a frog inside the cone |
 | `flame_ignite_seconds` | 0.35 | exposure before a cell or tile catches |
 | `flame_heat_decay` | 1.0 /s | how fast unheated exposure fades |
 | `flame_ground_seconds` | 2.0 | how long a lit ground cell burns |
-| `flame_sandbag_seconds` | 3.0 | exposure that collapses a sandbag |
+| `flame_sandbag_seconds` | 1.7 | exposure that collapses a sandbag |
 | `flame_fence_seconds` | 1.2 | exposure that snaps a fence |
-| `flame_particle_rate` | 90 /s | stream particles (cosmetic) |
-| `flame_shimmer_every_frames` | 6 | muzzle ripple cadence (cosmetic) |
+| `flame_particle_rate` | 436 /s | stream particles (cosmetic) |
+| `flame_shimmer_every_frames` | 11 | muzzle ripple cadence (cosmetic) |
 
 ## 11. Tests
 
@@ -279,9 +279,12 @@ Where the implementation departs from the sections above, and why:
   releases `flame_held`, so the next press with a fresh tank logs a new
   `Fired`.
 - **Cone width fills from the start.** The particles are seeded across
-  the cone's width along its whole length (`fx::Fx::flame_mote`), at
-  `flame_particle_rate` 240 rather than 90 - at 90 the stream read as a
-  dotted line.
+  the cone's width along its whole length (`fx::Fx::flame_mote`); at the
+  first default of 90 a second the stream read as a dotted line.
+- **The defaults were re-tuned by the author in the panel** after the
+  first play-test: fuel 9 s, range 164 px at a 21.4 degree half angle,
+  afterburn 2.75 s, sandbag 1.7 s, 436 particles a second, a shimmer
+  every 11 frames. The knob table in section 10 carries the live values.
 - **HUD, two players.** The fourth slot fits by setting the two-player
   weapon pairs in the 10 px font (`hud::CHAR_W_SMALL`); the single-player
   bar shifts the heart, HP and shells left instead.
