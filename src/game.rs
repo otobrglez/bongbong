@@ -34,8 +34,8 @@ use crate::tank::Dir;
 #[cfg(feature = "dev-tools")]
 use crate::tank::ActiveWeapon;
 use crate::tank::{
-    Tank, draw_enemy_ring, draw_minigun_mount, draw_minigun_mount_shadow, draw_player_ring, draw_tank,
-    draw_tank_shadow, draw_tank_shield,
+    Tank, draw_enemy_ring, draw_minigun_mount, draw_minigun_mount_shadow, draw_player_label, draw_player_locate,
+    draw_player_ring, draw_tank, draw_tank_shadow, draw_tank_shield,
 };
 use crate::track::draw_track;
 use crate::{Layout, SHOCK_MAX};
@@ -108,8 +108,12 @@ fn draw_one_tank(
     shadows: bool,
 ) {
     match role {
-        TankRole::Player => draw_player_ring(d, tank, time),
-        TankRole::Player2 => crate::tank::draw_player2_ring(d, tank, time),
+        TankRole::Player | TankRole::Player2 => {
+            // The locate ripple under the marker so the steady ring stays
+            // legible over the swelling one.
+            draw_player_locate(d, tank, time, time);
+            draw_player_ring(d, tank, time);
+        }
         TankRole::Enemy => draw_enemy_ring(d, tank, time),
         TankRole::RollIn => {}
     }
@@ -375,6 +379,14 @@ impl Game {
                     draw_tree_shadow(&mut d, &obstacle_textures, tree, lean, self.time);
                 }
                 draw_tree(&mut d, &obstacle_textures, tree, lean, self.time);
+            }
+
+            // The locate cue's P1/P2 labels, over the grass, the crowd and
+            // the trees - the point is to be found under all of it.
+            for (_, item) in &standing {
+                if let Standing::Tank(tank, TankRole::Player | TankRole::Player2) = item {
+                    draw_player_label(&mut d, tank, self.time);
+                }
             }
 
             for shell in self.world.query::<&Shell>().iter() {

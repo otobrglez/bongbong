@@ -125,6 +125,12 @@ pub enum LintKind {
     /// No `start` cell: player 1 spawns at the nearest free cell to the
     /// centre, wherever that is on this map.
     NoStart,
+    /// Player 1's start is not in the playfield. A warning when
+    /// destructible terrain (fences, barrels, brick) is all that pens it
+    /// in - the player shoots or rams a way out, a legitimate "break out
+    /// of the garage" opening - and an error when permanent walls seal it
+    /// for good.
+    StartPenned,
     /// Two-player rounds: player 2's spawn (the `start2` cell, or the
     /// fallback beside player 1) is not in the playfield, so the two
     /// players start in separate regions.
@@ -152,6 +158,7 @@ impl LintKind {
             LintKind::HuntMissingEnemyFrog => "hunt-missing-enemy-frog",
             LintKind::EnemyFrogUnreachable => "enemy-frog-unreachable",
             LintKind::NoStart => "no-start",
+            LintKind::StartPenned => "start-penned",
             LintKind::Player2Unreachable => "player2-unreachable",
             LintKind::PlayersTooClose => "players-too-close",
         }
@@ -188,6 +195,17 @@ struct Cells {
 impl Cells {
     fn idx(&self, col: usize, row: usize) -> usize {
         row * self.cols + col
+    }
+
+    /// Whether `cell` is in the playfield or shares an edge with a cell
+    /// that is - a start or spawn inside an obstacle's conservative
+    /// margin is still part of the field it sits on the edge of.
+    fn touches_playfield(&self, cell: (usize, usize)) -> bool {
+        let (col, row) = (cell.0 as i32, cell.1 as i32);
+        [(0i32, 0i32), (0, -1), (0, 1), (-1, 0), (1, 0)].iter().any(|(dc, dr)| {
+            let (c, r) = (col + dc, row + dr);
+            c >= 0 && r >= 0 && (c as usize) < self.cols && (r as usize) < self.rows && self.in_playfield(c as usize, r as usize)
+        })
     }
 
     /// World-space center of a cell - same `(i + 0.5) * cell_size`
@@ -264,12 +282,9 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
         }
     }
 
-    // The player's actual spawned position seeds the playfield flood fill
-    // - `init` already resolved the map's `Start` cell (or the
-    // center-fallback), so reading it back means zero duplicated spawn
-    // logic. Its cell counts as playfield even if blocked (a start inside
-    // an obstacle's conservative margin is legal - `next_step` treats
-    // start/goal cells as open for exactly the same reason).
+    // The player's actual spawned position: `init` already resolved the
+    // map's `Start` cell (or the center-fallback), so reading it back
+    // means zero duplicated spawn logic.
     let player_entity = game.player.expect("lint runs on an initialized game");
     let (player_pos, player_size) = {
         let mut query = game.world.query::<(Entity, &Tank)>();
@@ -292,9 +307,21 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
     });
     let player_positions: Vec<Position> = std::iter::once(player_pos).chain(player2.map(|(p, _)| p)).collect();
 
+    // The playfield is the largest open region of intact terrain - the
+    // battlefield the AI roams, whichever cell the author put the start
+    // on. The start joins it when its cell is in it or beside it (a start
+    // inside an obstacle's conservative margin is legal - `next_step`
+    // treats start/goal cells as open for exactly the same reason);
+    // otherwise the start is penned off and `check_players` says so,
+    // rather than the whole map reading as unreachable from a pen.
     let mut cells = Cells { cols, rows, open, playfield: vec![false; cols * rows] };
     let start_cell = cells.cell_of(player_pos);
-    flood(&mut cells, start_cell);
+    let seed = largest_component_seed(&cells).unwrap_or(start_cell);
+    flood(&mut cells, seed);
+    let start_in_playfield = cells.touches_playfield(start_cell);
+    if start_in_playfield {
+        flood(&mut cells, start_cell);
+    }
 
     // The same playfield once every destructible wall is gone: only Iron
     // (never destroyed - see `obstacle::Material`) and the frog still
@@ -322,14 +349,17 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
         }
     }
     let mut breach_cells = Cells { cols, rows, open: breach_open, playfield: vec![false; cols * rows] };
+    flood(&mut breach_cells, seed);
+    let start_breachable = breach_cells.touches_playfield(start_cell);
     flood(&mut breach_cells, start_cell);
+    let start = StartStatus { in_playfield: start_in_playfield, breachable: start_breachable };
 
     let obstacle_positions: Vec<Position> =
         game.world.query::<&Obstacle>().iter().map(|o| o.position).collect();
     let frog_pos = game.world.query::<&Frog>().iter().next().map(|f| f.position);
 
     let mut findings = Vec::new();
-    check_players(game, &cells, player_pos, player_size, player2, &mut findings);
+    check_players(game, &cells, start, player_pos, player_size, player2, &mut findings);
     check_reachability(game, &cells, &breach_cells, frog_pos, &mut findings);
     check_enemy_frog(game, &cells, &mut findings);
     check_gates(game, &grid, &mut findings);
@@ -356,13 +386,24 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
     findings
 }
 
+/// Where player 1's start sits relative to the playfield (see `lint`).
+#[derive(Clone, Copy)]
+struct StartStatus {
+    in_playfield: bool,
+    /// Whether shooting every destructible tile away connects it.
+    breachable: bool,
+}
+
 /// The players' starts: a map with no `start` cell is a warning (the
-/// game copes, but the author most likely meant to place one); in a
-/// two-player round player 2's spawn has to share player 1's playfield,
-/// and the two spawns have to leave a tank's width between them.
+/// game copes, but the author most likely meant to place one); a start
+/// outside the playfield is `StartPenned`, a warning while the pen is
+/// destructible and an error once it is permanent; in a two-player round
+/// player 2's spawn has to share the playfield, and the two spawns have
+/// to leave a tank's width between them.
 fn check_players(
     game: &Game,
     cells: &Cells,
+    start: StartStatus,
     player_pos: Position,
     player_size: f32,
     player2: Option<(Position, f32)>,
@@ -378,14 +419,30 @@ fn check_players(
             ),
         });
     }
+    if !start.in_playfield {
+        let (col, row) = cells.cell_of(player_pos);
+        let (severity, how) = if start.breachable {
+            (LintSeverity::Warning, "penned in by destructible terrain - the player has to shoot or ram a way out")
+        } else {
+            (LintSeverity::Error, "sealed off by permanent walls - the player can never leave")
+        };
+        findings.push(LintFinding {
+            severity,
+            kind: LintKind::StartPenned,
+            message: format!(
+                "player 1 starts at ({:.0},{:.0}) - nav cell ({col},{row}) - outside the playfield, {how}",
+                player_pos.x, player_pos.y
+            ),
+        });
+    }
     let Some((pos2, _)) = player2 else { return };
     let (col, row) = cells.cell_of(pos2);
-    if !cells.in_playfield(col, row) {
+    if !cells.touches_playfield((col, row)) {
         findings.push(LintFinding {
             severity: LintSeverity::Error,
             kind: LintKind::Player2Unreachable,
             message: format!(
-                "player 2 spawns at ({:.0},{:.0}) - nav cell ({col},{row}) - outside player 1's playfield: the two players start in separate regions",
+                "player 2 spawns at ({:.0},{:.0}) - nav cell ({col},{row}) - outside the playfield: the two players start in separate regions",
                 pos2.x, pos2.y
             ),
         });
@@ -533,6 +590,38 @@ fn check_wave_gates(
 
 /// BFS the open region reachable from `seed`, marking `playfield`. The
 /// seed cell is always included (see the start-cell note in `lint`).
+/// A cell of the largest open component (ties: the first found scanning
+/// row-major, so the result is deterministic), or `None` on a map with
+/// no open cell at all.
+fn largest_component_seed(cells: &Cells) -> Option<(usize, usize)> {
+    let mut seen = vec![false; cells.cols * cells.rows];
+    let mut best: Option<((usize, usize), usize)> = None;
+    for row in 0..cells.rows {
+        for col in 0..cells.cols {
+            if seen[cells.idx(col, row)] || !cells.is_open(col as isize, row as isize) {
+                continue;
+            }
+            let mut size = 0;
+            let mut queue = VecDeque::from([(col, row)]);
+            seen[cells.idx(col, row)] = true;
+            while let Some((c, r)) = queue.pop_front() {
+                size += 1;
+                for (dc, dr) in [(0i32, -1i32), (0, 1), (-1, 0), (1, 0)] {
+                    let (nc, nr) = (c as i32 + dc, r as i32 + dr);
+                    if cells.is_open(nc as isize, nr as isize) && !seen[nr as usize * cells.cols + nc as usize] {
+                        seen[nr as usize * cells.cols + nc as usize] = true;
+                        queue.push_back((nc as usize, nr as usize));
+                    }
+                }
+            }
+            if best.is_none_or(|(_, b)| size > b) {
+                best = Some(((col, row), size));
+            }
+        }
+    }
+    best.map(|(seed, _)| seed)
+}
+
 fn flood(cells: &mut Cells, seed: (usize, usize)) {
     let mut queue = VecDeque::new();
     cells.playfield[seed.1 * cells.cols + seed.0] = true;
@@ -1116,6 +1205,46 @@ mod map_lint_tests {
         dump("brick vault pickup", &findings);
         assert!(has(&findings, LintKind::GatedPickup));
         assert!(!has(&findings, LintKind::UnreachablePickup));
+    }
+
+    /// A start walled off from the field does not make the field
+    /// unreachable: the playfield is the largest open region, and the
+    /// start itself is what gets reported - a warning behind fences the
+    /// player can ram or shoot through, an error behind iron.
+    #[test]
+    fn penned_start_is_reported_not_the_whole_map() {
+        let mut map = base_map();
+        // A fence pen around the start at (27,11), one cell of slack.
+        for c in 25..=29 {
+            map.set_cell(c, 9, CellObject::Fence);
+            map.set_cell(c, 13, CellObject::Fence);
+        }
+        for r in 9..=13 {
+            map.set_cell(25, r, CellObject::Fence);
+            map.set_cell(29, r, CellObject::Fence);
+        }
+        let findings = lint_map(map.clone());
+        dump("fenced start", &findings);
+        assert!(!has(&findings, LintKind::UnreachableFrog), "the frog is on the open field");
+        let penned: Vec<_> = findings.iter().filter(|f| f.kind == LintKind::StartPenned).collect();
+        assert_eq!(penned.len(), 1);
+        assert_eq!(penned[0].severity, LintSeverity::Warning);
+
+        // The same pen in iron seals the player in for good.
+        for c in 25..=29 {
+            wall(&mut map, c, 9);
+            wall(&mut map, c, 13);
+        }
+        for r in 9..=13 {
+            wall(&mut map, 25, r);
+            wall(&mut map, 29, r);
+        }
+        let findings = lint_map(map);
+        dump("iron-sealed start", &findings);
+        assert!(!has(&findings, LintKind::UnreachableFrog));
+        let penned: Vec<_> = findings.iter().filter(|f| f.kind == LintKind::StartPenned).collect();
+        assert_eq!(penned.len(), 1);
+        assert_eq!(penned[0].severity, LintSeverity::Error);
     }
 
     #[test]

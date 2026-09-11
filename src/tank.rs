@@ -22,6 +22,7 @@ use crate::{
     TANK_HULL_TRACK_COLS,
     TANK_MOVE_BBOX_FRACTION,
     TANK_PIVOT_REAR_FRACTION,
+    TANK_ROWS_PER_TEAM,
     TANK_TEXTURE_SIZE,
     TANK_TURRET_BBOX_BY_ROW,
     TANK_TURRET_COL,
@@ -597,6 +598,21 @@ impl Tank {
         self.owner.is_player()
     }
 
+    /// Which player this is, 0 or 1, if a player at all.
+    pub fn player_index(&self) -> Option<u8> {
+        match self.owner {
+            Owner::Player(i) => Some(i),
+            Owner::Enemy(_) => None,
+        }
+    }
+
+    /// The row of the sprite sheet this tank draws from: its chassis row
+    /// inside the block for its team - the enemy block first, then player
+    /// 1's and player 2's recoloured copies (`TANK_ROWS_PER_TEAM`).
+    pub fn sheet_row(&self) -> i32 {
+        self.row + sheet_block(self.player_index()) * TANK_ROWS_PER_TEAM
+    }
+
     /// How much damage has hurt this tank's mobility, from 1.0 (pristine) down
     /// to DAMAGE_SPEED_FLOOR (about to wreck). Holds close to 1.0 through
     /// light and moderate damage, then falls off harder as damage nears the
@@ -1028,12 +1044,22 @@ fn draw_pivot(size: f32) -> Vector2 {
     Vector2::new(size / 2.0, size / 2.0 + size * TANK_PIVOT_REAR_FRACTION)
 }
 
+/// Which block of the sheet a tank draws from: 0 for an enemy, 1 and 2 for
+/// the two players' recoloured copies.
+fn sheet_block(player: Option<u8>) -> i32 {
+    match player {
+        None => 0,
+        Some(i) => 1 + i as i32,
+    }
+}
+
 /// Source rectangle for a fixed representative tank sprite - the Scout
-/// chassis's idle hull frame (row 0, col 0) - used by the map editor's
-/// start-point palette icon and placed-cell marker, which need one fixed
-/// tank sprite rather than any particular round's rolled chassis.
-pub fn icon_source_rec() -> Rectangle {
-    source_rec(0, 0)
+/// chassis's idle hull frame (col 0) in `player`'s team colour - used by
+/// the map editor's start-point palette icons and placed-cell markers,
+/// which need one fixed tank sprite rather than any particular round's
+/// rolled chassis, in the colour that tank will actually be.
+pub fn icon_source_rec(player: u8) -> Rectangle {
+    source_rec(sheet_block(Some(player)) * TANK_ROWS_PER_TEAM, 0)
 }
 
 /// Source rectangle for the tank at (row, col) inside the atlas.
@@ -1055,8 +1081,8 @@ fn source_rec(row: i32, col: i32) -> Rectangle {
 /// chases the tank's commanded `rotation`, not an independent aim target, but
 /// it does so faster than the hull so it visibly leads a turn.
 pub fn draw_tank(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank) {
-    let hull_src = source_rec(tank.row, tank.hull_col());
-    let turret_src = source_rec(tank.row, tank.turret_col());
+    let hull_src = source_rec(tank.sheet_row(), tank.hull_col());
+    let turret_src = source_rec(tank.sheet_row(), tank.turret_col());
     let size = tank.size();
 
     // dest is placed at the tank's position; origin is the rear-shifted
@@ -1086,12 +1112,17 @@ const RED_DEEP: Color = Color::new(0x9C, 0x35, 0x27, 255);
 const RED_DK: Color = Color::new(0x81, 0x2F, 0x27, 255);
 const RED_DARKEST: Color = Color::new(0x4A, 0x22, 0x21, 255);
 const BLACK: Color = Color::new(0x25, 0x25, 0x25, 255);
-const BLUE_BRIGHT: Color = Color::new(0x27, 0xD8, 0xC5, 255);
-/// Player 2's ground ring: the palette's mid blue, blue-dominant so it
-/// stays clear of the grass and of the enemy red. White is player 1, and
-/// the editor's `start2` icon and the HUD reuse this so the three read
-/// as one identity.
-pub const PLAYER2_RING_COLOR: Color = Color::new(0x04, 0xA0, 0xB4, 255);
+/// The two players' identity colours (docs/player-indicator-improvements.md):
+/// player 1 sky blue, player 2 hot pink - the base step of the team ramp
+/// the sheet's player blocks are painted in, deliberately off the Puny
+/// Palette because every one of its hue families is already an enemy
+/// hull. The hull, the ground ring, the HUD readouts and button, the
+/// editor's start markers and the round-start locate cue all draw from
+/// this one pair so the three surfaces read as one identity.
+pub const TEAM_COLORS: [Color; 2] = [Color::new(0x4D, 0x9B, 0xE6, 255), Color::new(0xF0, 0x4F, 0x78, 255)];
+/// The light step of each team ramp: the sheet's accent, and the ring's
+/// full-health colour so a healthy ring reads brighter than the hull.
+const TEAM_LIGHT: [Color; 2] = [Color::new(0x8F, 0xD3, 0xFF, 255), Color::new(0xED, 0x80, 0x99, 255)];
 
 /// Where a health gauge's filled arc starts, in raylib degrees: 12 o'clock.
 /// raylib measures from +x and, on a y-down screen, increasing angles run
@@ -1109,16 +1140,23 @@ pub enum HealthRamp {
     /// Bright red down to the darkest red: the enemy frog, whose ring is red
     /// at any health so its side still reads.
     Red,
-    /// Bright blue, mid blue, then the same gold and red as `White`: player
-    /// 2, blue while healthy so the two players tell apart at a glance, the
-    /// last two steps the shared danger colours.
+    /// Player 1: the team's light and base blues while healthy, then the
+    /// same gold and bright red as `White` for the shared danger steps.
     Blue,
+    /// Player 2: the same shape in the team's pinks.
+    Pink,
 }
 
 impl HealthRamp {
     const WHITE_STEPS: [Color; 4] = [Color::WHITE, GOLD_BRIGHT, RED_BRIGHT, RED_DEEP];
     const RED_STEPS: [Color; 4] = [RED_BRIGHT, RED_DEEP, RED_DK, RED_DARKEST];
-    const BLUE_STEPS: [Color; 4] = [BLUE_BRIGHT, PLAYER2_RING_COLOR, GOLD_BRIGHT, RED_BRIGHT];
+    const BLUE_STEPS: [Color; 4] = [TEAM_LIGHT[0], TEAM_COLORS[0], GOLD_BRIGHT, RED_BRIGHT];
+    const PINK_STEPS: [Color; 4] = [TEAM_LIGHT[1], TEAM_COLORS[1], GOLD_BRIGHT, RED_BRIGHT];
+
+    /// The ramp for player `index` (0 or 1).
+    pub fn player(index: u8) -> Self {
+        if index == 0 { Self::Blue } else { Self::Pink }
+    }
 
     /// The step colour for `frac` remaining health.
     pub fn color(self, frac: f32) -> Color {
@@ -1126,18 +1164,20 @@ impl HealthRamp {
             Self::White => Self::WHITE_STEPS,
             Self::Red => Self::RED_STEPS,
             Self::Blue => Self::BLUE_STEPS,
+            Self::Pink => Self::PINK_STEPS,
         };
         steps[health_ring_step(frac)]
     }
 
     /// The ramp's marker colour - what the missing part of a ring that stays
-    /// a full circle is drawn in, dimmed: white, the enemy frog's red, or
-    /// player 2's blue.
+    /// a full circle is drawn in, dimmed: white, the enemy frog's red, or a
+    /// player's team colour.
     pub fn base(self) -> Color {
         match self {
             Self::White => Color::WHITE,
             Self::Red => RED_MD,
-            Self::Blue => PLAYER2_RING_COLOR,
+            Self::Blue => TEAM_COLORS[0],
+            Self::Pink => TEAM_COLORS[1],
         }
     }
 }
@@ -1182,7 +1222,14 @@ pub enum RingStyle {
 /// and `draw_enemy_ring` all come through here, so the shield ring and the
 /// health gauges read as the same object in different colours.
 pub fn draw_ground_ring(d: &mut impl RaylibDraw, tank: &Tank, time: f32, style: RingStyle, fade: f32) {
-    draw_ground_ring_at(d, tank.ring_position, tank.size(), tank.anim_phase(), time, style, fade);
+    draw_ground_ring_scaled(d, tank.ring_position, tank.size(), tank.anim_phase(), time, style, fade, ring_scale(tank));
+}
+
+/// How much larger than the shared ring every tank's rings are drawn,
+/// `tank_ring_radius_scale` - the same for players and enemies, so a hit
+/// enemy's gauge sits at the radius the player's marker does.
+fn ring_scale(_tank: &Tank) -> f32 {
+    tuning().tank_ring_radius_scale
 }
 
 /// `draw_ground_ring` for anything that is not a tank - a frog's side
@@ -1198,6 +1245,23 @@ pub fn draw_ground_ring_at(
     style: RingStyle,
     fade: f32,
 ) {
+    draw_ground_ring_scaled(d, center, size, phase, time, style, fade, 1.0);
+}
+
+/// `draw_ground_ring_at` with the radius scaled by `radius_scale` at the
+/// *unscaled* band thickness, so a larger ring is a wider halo, not a
+/// fatter one (every tank's rings, `tank_ring_radius_scale`).
+#[allow(clippy::too_many_arguments)]
+pub fn draw_ground_ring_scaled(
+    d: &mut impl RaylibDraw,
+    center: Position,
+    size: f32,
+    phase: f32,
+    time: f32,
+    style: RingStyle,
+    fade: f32,
+    radius_scale: f32,
+) {
     if fade <= 0.0 {
         return;
     }
@@ -1209,8 +1273,9 @@ pub fn draw_ground_ring_at(
         RingStyle::Rainbow { .. } => ((time + phase) * std::f32::consts::TAU * 1.5).sin() * 0.5 + 0.5,
         RingStyle::Solid(_) | RingStyle::Gauge { .. } => 0.5,
     };
-    let radius = size * tuning().shield_glow_radius_factor * (0.94 + 0.06 * pulse);
-    let thickness = radius * 0.22;
+    let base_radius = size * tuning().shield_glow_radius_factor * (0.94 + 0.06 * pulse);
+    let radius = base_radius * radius_scale;
+    let thickness = base_radius * 0.22;
     let with_alpha = |c: Color, alpha: f32| Color::new(c.r, c.g, c.b, (alpha * fade).clamp(0.0, 255.0) as u8);
     let (disc_alpha, band_alpha) = match style {
         RingStyle::Rainbow { .. } => (22.0 + 10.0 * pulse, 95.0 + 30.0 * pulse),
@@ -1312,7 +1377,7 @@ pub fn draw_tank_shield(d: &mut impl RaylibDraw, tank: &Tank, time: f32) {
     }
     let base_hue = (time * tuning().shield_glow_hue_hz * 360.0 + tank.anim_phase() * 360.0).rem_euclid(360.0);
     let base = match tank.owner() {
-        Owner::Player(_) => with_opacity(Color::WHITE, tuning().player_ring_opacity * tuning().health_ring_base_opacity),
+        Owner::Player(i) => with_opacity(TEAM_COLORS[i as usize & 1], tuning().player_ring_opacity * tuning().health_ring_base_opacity),
         Owner::Enemy(_) => with_opacity(BLACK, tuning().health_ring_gap_opacity),
     };
     let style = RingStyle::Rainbow { base_hue, charge: tank.shield_charge(), base };
@@ -1380,37 +1445,74 @@ pub fn enemy_health_ring_visibility(tank: &Tank) -> f32 {
     hit_ring_visibility(tank).max(low) * (1.0 - shield_visibility(tank))
 }
 
-/// Draw the player's marker ring as its health gauge: the same ground ring
-/// as the shield (same radius and thickness, minus the breathing), the
-/// remaining-health arc in `HealthRamp::White`'s step colour at
-/// `player_ring_opacity` and the rest of the circle still white but dimmed
-/// to `health_ring_base_opacity` of that, so the player's own tank always
-/// has a steady full halo that also reads its health. Yields to the shield
-/// ring while one is up and disappears with the wreck
-/// (`player_health_ring_visibility`).
+/// Draw a player's marker ring as its health gauge: the same ground ring
+/// as the shield (same thickness, `tank_ring_radius_scale` wider, minus
+/// the breathing), the remaining-health arc in the player's team ramp
+/// (`HealthRamp::player`) at `player_ring_opacity` and the rest of the
+/// circle in the team colour dimmed to `health_ring_base_opacity` of that,
+/// so each human tank always has a steady full halo in its own colour that
+/// also reads its health. Yields to the shield ring while one is up and
+/// disappears with the wreck (`player_health_ring_visibility`). An enemy
+/// handed to this draws as player 1.
 pub fn draw_player_ring(d: &mut impl RaylibDraw, tank: &Tank, time: f32) {
-    let base = with_opacity(HealthRamp::White.base(), tuning().player_ring_opacity * tuning().health_ring_base_opacity);
-    let style = RingStyle::Gauge { frac: tank.health_fraction(), ramp: HealthRamp::White, base };
+    let ramp = HealthRamp::player(tank.player_index().unwrap_or(0));
+    let base = with_opacity(ramp.base(), tuning().player_ring_opacity * tuning().health_ring_base_opacity);
+    let style = RingStyle::Gauge { frac: tank.health_fraction(), ramp, base };
     draw_ground_ring(d, tank, time, style, player_health_ring_visibility(tank));
 }
 
-/// Player 2's marker: `draw_player_ring` in `HealthRamp::Blue`, the dimmed
-/// remainder in the same blue, so the second human tank carries its own
-/// always-on halo in its own colour.
-pub fn draw_player2_ring(d: &mut impl RaylibDraw, tank: &Tank, time: f32) {
-    let base = with_opacity(HealthRamp::Blue.base(), tuning().player_ring_opacity * tuning().health_ring_base_opacity);
-    let style = RingStyle::Gauge { frac: tank.health_fraction(), ramp: HealthRamp::Blue, base };
-    draw_ground_ring(d, tank, time, style, player_health_ring_visibility(tank));
-}
-
-/// Draw an enemy's health ring: the player's gauge with its missing part a
-/// dark band at `health_ring_gap_opacity` instead of dimmed white, so even a
-/// nearly full enemy ring never passes for the player's marker. Shown per
-/// `enemy_health_ring_visibility` - after a hit, or for good once low.
+/// Draw an enemy's health ring: the same gauge in the enemy frog's all-red
+/// ramp, its missing part a dark band at `health_ring_gap_opacity`, so a
+/// just-hit enemy at full health reads hostile rather than borrowing a
+/// player's colour. Shown per `enemy_health_ring_visibility` - after a
+/// hit, or for good once low.
 pub fn draw_enemy_ring(d: &mut impl RaylibDraw, tank: &Tank, time: f32) {
     let base = with_opacity(BLACK, tuning().health_ring_gap_opacity);
-    let style = RingStyle::Gauge { frac: tank.health_fraction(), ramp: HealthRamp::White, base };
+    let style = RingStyle::Gauge { frac: tank.health_fraction(), ramp: HealthRamp::Red, base };
     draw_ground_ring(d, tank, time, style, enemy_health_ring_visibility(tank));
+}
+
+/// The round-start locate cue's ripple: for `player_locate_seconds` after
+/// the round became playable (`elapsed`, which is `Game::time` - it does
+/// not run behind the mission banner) a team-coloured ring swells from the
+/// player's own ring out to 1.6x its radius and fades as it goes,
+/// `player_locate_pulse_hz` times a second. Drawn under the hull like the
+/// other rings; `draw_player_label` is the cue's other half. Nothing for a
+/// wreck, an enemy, or once the window has passed.
+pub fn draw_player_locate(d: &mut impl RaylibDraw, tank: &Tank, time: f32, elapsed: f32) {
+    let Some(index) = tank.player_index() else { return };
+    if tank.is_wreck() || !player_locate_active(elapsed) {
+        return;
+    }
+    let phase = (elapsed * tuning().player_locate_pulse_hz).fract();
+    let color = with_opacity(TEAM_COLORS[index as usize & 1], (1.0 - phase) * tuning().player_ring_opacity);
+    let scale = ring_scale(tank) * (1.0 + 0.6 * phase);
+    draw_ground_ring_scaled(d, tank.ring_position, tank.size(), tank.anim_phase(), time, RingStyle::Solid(color), 1.0, scale);
+}
+
+/// Whether the locate cue is still showing `elapsed` seconds into play.
+pub fn player_locate_active(elapsed: f32) -> bool {
+    elapsed < tuning().player_locate_seconds
+}
+
+/// The locate cue's label, `P1`/`P2` in the team colour just above the
+/// hull, drawn over everything so a crowd cannot cover it. Same window as
+/// `draw_player_locate`.
+pub fn draw_player_label(d: &mut impl RaylibDraw, tank: &Tank, elapsed: f32) {
+    let Some(index) = tank.player_index() else { return };
+    if tank.is_wreck() || !player_locate_active(elapsed) {
+        return;
+    }
+    let text = if index == 0 { "P1" } else { "P2" };
+    let size = crate::hud::HUD_TEXT_SIZE;
+    // The HUD's fixed cell width for this size; measuring needs the handle,
+    // which nothing in a draw pass has.
+    let w = text.len() as i32 * crate::hud::CHAR_W;
+    let x = (tank.position.x - w as f32 / 2.0).round() as i32;
+    let y = (tank.position.y - tank.size() / 2.0 - size as f32 - 4.0).round() as i32;
+    let color = TEAM_COLORS[index as usize & 1];
+    d.draw_text(text, x + 1, y + 1, size, BLACK);
+    d.draw_text(text, x, y, size, color);
 }
 
 /// Draw this tank's drop shadow: the same two layers (each at its own eased
@@ -1420,8 +1522,8 @@ pub fn draw_enemy_ring(d: &mut impl RaylibDraw, tank: &Tank, time: f32) {
 /// wreck/dead special-casing needed - a burnt-out hulk is still a solid
 /// object sitting on the ground.
 pub fn draw_tank_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank) {
-    let hull_src = source_rec(tank.row, tank.hull_col());
-    let turret_src = source_rec(tank.row, tank.turret_col());
+    let hull_src = source_rec(tank.sheet_row(), tank.hull_col());
+    let turret_src = source_rec(tank.sheet_row(), tank.turret_col());
     let size = tank.size();
 
     let dest = Rectangle::new(
@@ -1859,6 +1961,21 @@ mod chassis_tests {
         }
         assert_eq!(TankKind::from_row(-1), None);
         assert_eq!(TankKind::from_row(TANK_NAMES.len() as i32), None);
+    }
+
+    /// The sheet row is the chassis inside the owner's team block: enemies
+    /// draw the first block, the players the recoloured copies after it,
+    /// and the chassis row itself never moves (every per-chassis table is
+    /// indexed by it).
+    #[test]
+    fn sheet_row_is_the_chassis_in_the_owners_block() {
+        let tank = |owner, row| Tank { owner, row, ..Tank::default() };
+        assert_eq!(tank(Owner::Enemy(3), 5).sheet_row(), 5);
+        assert_eq!(tank(Owner::Player(0), 5).sheet_row(), 5 + TANK_ROWS_PER_TEAM);
+        assert_eq!(tank(Owner::Player(1), 5).sheet_row(), 5 + 2 * TANK_ROWS_PER_TEAM);
+        assert_eq!(tank(Owner::Player(1), 11).row, 11);
+        assert_eq!(icon_source_rec(0).y, (TANK_ROWS_PER_TEAM as f32) * TANK_TEXTURE_SIZE);
+        assert_eq!(icon_source_rec(1).y, (2 * TANK_ROWS_PER_TEAM) as f32 * TANK_TEXTURE_SIZE);
     }
 
     /// A map's `tank = "titan"` key and `--tank titan` spell a chassis the

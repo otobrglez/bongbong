@@ -476,10 +476,13 @@ Vec<LintFinding>` (`pub` so a later probe `--lint` flag can call it across
 the bin/lib boundary), `LintFinding` an enum with severity (`Error` /
 `Warning` / `Info`) and `Display`:
 
-1. **Connectivity** (flood fill over open cells): the component containing
-   the player start cell (or the center-fallback cell when the map places
-   no `Start`) is the *playfield*. `Error` if the frog cell or any pickup
-   slot's cell is outside it; `Warning` for any other open component of
+1. **Connectivity** (flood fill over open cells): the largest open
+   component of intact terrain is the *playfield* - the battlefield the AI
+   roams, whichever cell the author put the start on. The start joins it
+   when its cell is in or beside it; a start outside it is `start-penned`,
+   a `Warning` while destructible terrain is all that pens it (the player
+   shoots or rams out) and an `Error` behind permanent walls. `Error` if
+   the frog cell or any pickup slot's cell is outside the playfield; `Warning` for any other open component of
    ≥ 4 cells (likely authoring mistake; smaller enclosed slivers are
    `Info` — sometimes decorative).
 2. **No boxed-in open cells**: `Error` for any open cell where

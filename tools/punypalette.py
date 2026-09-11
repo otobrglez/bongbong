@@ -170,6 +170,28 @@ PUNY_EXTRA = [
 
 PUNY_PALETTE_ALL = PUNY_PALETTE + PUNY_EXTRA
 
+# ---------------------------------------------------------------------
+# The team family (2026-09): the two player identities
+# ---------------------------------------------------------------------
+# The player tanks are recoloured copies of the enemy chassis
+# (docs/player-indicator-improvements.md), and the identity colour has to
+# be one no enemy hull, wall, prop or ground tile ever shows. The Puny
+# Palette cannot supply that: every one of its families is already some
+# chassis's body or accent, and the handful of base colours no tank uses
+# sit within 13-38 RGB units of one that does. These two ramps are
+# Resurrect 64's own blue and magenta steps - the three hue regions nothing
+# on screen occupies are true blue, violet and magenta - and they are
+# deliberately *off* the Puny set, the same exemption the pickup icons and
+# plasma.png have: an identity has to be loud against the terrain, not sit
+# in it. Each is (dk, md, base, lt); the base is the hull body, the light
+# step the accent. Never folded into PUNY_PALETTE or PUNY_EXTRA - snap()
+# must keep quantising everything else onto the terrain's set - and
+# check_sheets.py admits them on the tank sheet's player rows only.
+TEAM_P1 = ((0x48, 0x4A, 0x77), (0x4D, 0x65, 0xB4), (0x4D, 0x9B, 0xE6), (0x8F, 0xD3, 0xFF))
+TEAM_P2 = ((0x83, 0x1C, 0x5D), (0xC3, 0x24, 0x54), (0xF0, 0x4F, 0x78), (0xED, 0x80, 0x99))
+
+PUNY_TEAM = [c for ramp in (TEAM_P1, TEAM_P2) for c in ramp]
+
 # Keyed by palette identity as well as colour: one shared dict would let
 # whichever generator ran first decide the answer for the other.
 _cache = {}

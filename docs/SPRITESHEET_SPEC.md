@@ -9,8 +9,8 @@ This document describes `scifi_tanks_sheet.png` for engine integration. It is wr
 | Property | Value |
 |---|---|
 | Filename | `scifi_tanks_sheet.png` |
-| Dimensions | 416 × 384 px |
-| Grid | 13 columns × 12 rows |
+| Dimensions | 416 × 1152 px |
+| Grid | 13 columns × 36 rows: three 12-row **team blocks** (rows 0–11 enemy, 12–23 player 1, 24–35 player 2) of the same roster |
 | Cell size | 32 × 32 px (uniform, no padding, no margin, no gutters) |
 | Format | PNG, RGBA, straight (non-premultiplied) alpha |
 | Background | Fully transparent (alpha = 0) |
@@ -65,6 +65,8 @@ Columns 8–11 are four **interchangeable** destroyed variants of equal severity
 ## 4. Row roster
 
 12 tanks. Rows 0–9 are standard chassis; rows 10–11 are **super-heavy** chassis, roughly 21% larger in linear dimension than the standard baseline (about 34% larger than the current standard tanks).
+
+**Team blocks.** The twelve rows below are the *enemy* block. The sheet repeats them twice more, in the same order, as the two players' tanks (docs/player-indicator-improvements.md): rows 12–23 are every chassis with its body ramp and accent replaced by player 1's sky-blue ramp (`#484A77` / `#4D65B4` / `#4D9BE6` / `#8FD3FF`, dark to light), rows 24–35 by player 2's hot-pink ramp (`#831C5D` / `#C32454` / `#F04F78` / `#ED8099`). Outline, gunmetal barrels, char, embers and the track-marks decal are identical across blocks, and the damage seeds are per chassis, so a player's wreck has the same holes as the enemy version. The engine indexes the block from the tank's owner (`TANK_ROWS_PER_TEAM` in `lib.rs`, `Tank::sheet_row`); every per-chassis table stays 12 wide. The team ramps are Resurrect 64 steps, deliberately *off* the Puny Palette (`tools/punypalette.py`'s `PUNY_TEAM`, admitted by `tools/check_sheets.py` on rows 12–35 of this sheet only), because every Puny hue family is already an enemy hull.
 
 Body/accent are curated picks from the Puny Palette (see `tools/punypalette.py`, `docs/PALETTE.md`) — colours sampled directly from the third-party Puny World ground-layer tileset, not an abstract pixel-art palette. Every pixel in the sheet, including every shading step `gen_tanks.py` derives from these two colours, snaps onto that same set. This is the second recolor pass for this roster: an earlier one used [Resurrect 64](https://lospec.com/palette-list/resurrect-64) (see `tools/spritegen/_backup/pre-punypalette-*/gen_tanks.py`) and looked great in isolation, but once the ground layer shipped (`docs/GROUND_SPEC.md`) those candy-vivid R64 colours read as neon plastic next to Puny World's much softer terrain — see `docs/PALETTE.md`'s "why the palette changed a second time" for the full reasoning. Puny World's own art has no purple/violet anywhere in it; `wraith` was reassigned from a purple accent to a hue family the source art actually has.
 
