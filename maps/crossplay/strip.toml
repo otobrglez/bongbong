@@ -1,8 +1,9 @@
-# maps/phone/ - battlefield maps sized for a phone screen
-# (docs/fullscreen-resolution-research.md, "map sizes"). 26x12 cells =
+# maps/crossplay/ - size studies for the shared cross-play battlefield
+# (docs/fullscreen-resolution-research.md, "one world per match"; the
+# recommended standard is arena.toml's 28x14). 26x12 cells =
 # 832x384 world px, the phone's own 19.5:9 aspect, meant for the
 # invisible-controls layout where the arena fills the screen; play it with
-# `cargo run -- --map maps/phone/strip.toml --resolution 832x384`.
+# `cargo run -- --map maps/crossplay/strip.toml --resolution 832x384`.
 # Hand-authored: re-saving from the map editor would drop these comments.
 #
 # strip: a wide, low Protect arena. Brick brackets on both ends, iron

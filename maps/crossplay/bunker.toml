@@ -1,7 +1,8 @@
-# maps/phone/ - battlefield maps sized for a phone screen
-# (docs/fullscreen-resolution-research.md, "map sizes"). 24x14 cells =
+# maps/crossplay/ - size studies for the shared cross-play battlefield
+# (docs/fullscreen-resolution-research.md, "one world per match"; the
+# recommended standard is arena.toml's 28x14). 24x14 cells =
 # 768x448 world px; the game has no map size field yet, so play it with
-# `cargo run -- --map maps/phone/bunker.toml --resolution 768x448`.
+# `cargo run -- --map maps/crossplay/bunker.toml --resolution 768x448`.
 # Hand-authored: re-saving from the map editor would drop these comments.
 #
 # bunker: a dense Protect map on the waves plan. The frog sits in a brick
