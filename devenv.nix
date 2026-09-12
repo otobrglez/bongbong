@@ -39,7 +39,12 @@ in {
     # wasm32-unknown-emscripten: the web build target. Emscripten itself is
     # not a nix package here - see tools/setup_emscripten.sh (pinned emsdk
     # version, documented in CLAUDE.md's web build section).
-    targets = [ "wasm32-unknown-emscripten" ];
+    # aarch64-apple-ios / -sim: the iOS port (docs/ios-native-port-prd.md).
+    # Only the Rust std for those targets comes from nix; the SDK, linker and
+    # simulators come from /Applications/Xcode.app, which the devenv shell
+    # hides behind DEVELOPER_DIR/SDKROOT - iOS builds set DEVELOPER_DIR back
+    # to Xcode's, see the PRD.
+    targets = [ "wasm32-unknown-emscripten" "aarch64-apple-ios" "aarch64-apple-ios-sim" ];
   };
 
   languages.javascript = {

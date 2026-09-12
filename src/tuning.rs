@@ -328,6 +328,11 @@ tunables! {
         /// `--tank` on the command line outranks this knob; nothing else
         /// does, so dragging this is how a browser round picks a chassis.
         player_tank: i32 = (-1) in -1 ..= 11 @ Restart;
+        /// Which half of the field steers on a touch screen (touch.rs): 1
+        /// puts the floating stick under the first touch on the right
+        /// half and fires on a tap on the left, 0 mirrors it for a
+        /// left-handed player. Keyboard input is unaffected.
+        touch_steer_side: i32 = 1 in 0 ..= 1;
         /// When the round ends (player destroyed, or all enemies destroyed)
         /// the result is shown for this long, then the game restarts.
         restart_delay: f32 = 3.0 in 0.0 ..= 30.0;
@@ -353,7 +358,7 @@ tunables! {
         guard_keep_off_px: f32 = 130.0 in 0.0 ..= 500.0;
         /// Procedural enemy-frog placement (a hunt map without an
         /// `enemy_frog` cell): at least this far from the player's frog.
-        enemy_frog_spawn_min_dist: f32 = 400.0 in 0.0 ..= 1500.0 @ Restart;
+        enemy_frog_spawn_min_dist: f32 = 270.0 in 0.0 ..= 1500.0 @ Restart;
         /// After a hunter's opportunistic shot at the player it goes back
         /// to the frog for at least this long before it may snipe again,
         /// so a player parked on its firing axis can't hold it forever.

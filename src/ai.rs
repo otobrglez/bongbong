@@ -2070,7 +2070,8 @@ mod role_tests {
             let d = wp.distance_to(frog);
             assert!(d <= leash && d >= keep_off.min(leash * 0.5), "waypoint {wp:?} is {d} px from the frog");
         }
-        // Player inside the leash: fights like everyone else.
+        // Player inside the leash (and in the guard's view): fights like
+        // everyone else.
         let mut ai = Ai::with_role(Role::Guard);
         let player = Position::new(frog.x - leash * 0.5, frog.y);
         tick(&mut ai, Position::new(400.0, 300.0), player, player, Some(frog));

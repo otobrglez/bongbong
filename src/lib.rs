@@ -327,14 +327,24 @@ pub const PATHFIND_CELL_SIZE: f32 = 48.0; // px per grid cell
 // travels, and each mark fades out over TRACK_LIFETIME seconds.
 pub const TRACK_TEXTURE_SIZE: f32 = 32.0;
 
-// Default window (and battlefield) size, shared by the game binary and the
-// headless probe (src/bin/probe.rs) so the battlefield the probe sweeps is
-// byte-for-byte the one the real game opens with - moved here from a
-// main.rs-private static exactly so the two can't drift (a bin can't
-// import from another bin). `--resolution` (main.rs) still overrides at
-// runtime; the probe always runs at this default.
-pub const DEFAULT_SCREEN_WIDTH: i32 = 1280;
-pub const DEFAULT_SCREEN_HEIGHT: i32 = 720;
+// The default battlefield: 30 x 15 cells, the cross-play standard
+// (docs/fullscreen-resolution-research.md): a landscape phone shows it at
+// an 8 mm tank, a monitor gets thin bars above and below. A map names its
+// own `size`; this is what a map without one gets, and what the headless
+// probe and the linter run when a map says nothing. The window is a
+// separate matter (`view::View`): the field is drawn into whatever the
+// window is, letterboxed, so a fixed world size never means a fixed
+// window.
+pub const DEFAULT_SCREEN_WIDTH: i32 = 960;
+pub const DEFAULT_SCREEN_HEIGHT: i32 = 480;
+
+/// A platform with no desktop window and no writable working directory:
+/// the web build and iOS. The window is the screen (no resize, no
+/// high-DPI request, no fullscreen toggle), the shaders are the GLSL ES
+/// 100 ports in `static/web/`, maps are not saved, and the particle
+/// budget starts lower. `main.rs` and `map.rs` branch on this rather than
+/// on the two target names.
+pub const EMBEDDED: bool = cfg!(any(target_os = "emscripten", target_os = "ios"));
 
 // The HUD bar above the battlefield (docs/hud-and-builder-layout-design.md,
 // variant A): one obstacle cell tall, so the pickup icons sit in it
@@ -838,5 +848,7 @@ pub mod shell;
 pub mod shockwave;
 pub mod simulation;
 pub mod tank;
+pub mod touch;
 pub mod track;
 pub mod tuning;
+pub mod view;

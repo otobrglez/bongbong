@@ -130,3 +130,61 @@ watch-dev:
 # Same tools the MCP server exposes (src/devserver.rs's TOOLS).
 mcp-call TOOL ARGS='{}':
     cargo run -q --features dev-tools --bin bbmcp -- call {{TOOL}} '{{ARGS}}'
+
+# --- iOS simulator (docs/ios-native-port-prd.md, CLAUDE.md's iOS section) ---
+# Every recipe runs through tools/ios/env.sh: Xcode as DEVELOPER_DIR (the
+# devenv shell points it at nix's apple-sdk), one deployment target, the
+# library prefix build.rs links from, and bindgen's simulator sysroot.
+
+# One-time: SDL3 (static) and raylib (SDL backend, OpenGL ES 2.0) for the
+# simulator into ~/.local/share/bongbong-ios/sim (tools/setup_ios.sh,
+# pinned SDL tag).
+ios-setup:
+    ./tools/setup_ios.sh
+
+# Gate 0: an SDL3 + GL ES 2 glDrawElements program in the simulator
+# (tools/ios/smoke.c). Apple Silicon simulators have had a crash in that
+# call; rerun after every Xcode or runtime update. Pass = "SMOKE OK".
+ios-smoke:
+    ./tools/ios/smoke.sh
+
+# Build the game for the simulator (plain build, no dev-tools) and stage
+# target/ios-sim/BongBong.app. Extra args go to cargo (`--release`).
+build-ios-sim *ARGS:
+    bash -c 'set -e; source tools/ios/env.sh; cargo build --target aarch64-apple-ios-sim --bin bongbong {{ARGS}}'
+    bash -c 'set -e; source tools/ios/env.sh; ./tools/ios/bundle.sh debug'
+
+# Build, boot the simulator (BONGBONG_IOS_DEVICE, default "iPhone 17"),
+# install the bundle and launch it with the console attached (Ctrl-C
+# detaches; the app keeps running). Rotate the simulator to landscape with
+# Cmd+Left if it comes up portrait.
+run-ios-sim *ARGS: (build-ios-sim ARGS)
+    bash -c 'set -e; source tools/ios/env.sh; \
+        xcrun simctl boot "$IOS_DEVICE" >/dev/null 2>&1 || true; open -a Simulator; \
+        xcrun simctl install booted target/ios-sim/BongBong.app; \
+        xcrun simctl launch --console-pty --terminate-running-process booted com.otobrglez.bongbong'
+
+# Screenshot the booted simulator (default target/ios-sim/shot.png).
+ios-screenshot OUT="target/ios-sim/shot.png":
+    bash -c 'source tools/ios/env.sh; xcrun simctl io booted screenshot {{OUT}}'
+
+# --- iPhone (device) ---
+# One-time: the device slice of SDL3 + raylib into ~/.local/share/bongbong-ios/ios.
+ios-setup-device:
+    SLICE=ios ./tools/setup_ios.sh
+
+# Build for the phone and stage target/ios-device/BongBong.app (unsigned).
+build-ios-device *ARGS:
+    bash -c 'set -e; export IOS_SLICE=ios; source tools/ios/env.sh; cargo build --target aarch64-apple-ios --bin bongbong {{ARGS}}'
+    bash -c 'set -e; export IOS_SLICE=ios; source tools/ios/env.sh; ./tools/ios/bundle.sh debug'
+
+# Build, sign for the connected iPhone (tools/ios/sign.sh: Xcode's automatic
+# signing on the placeholder project mints the certificate and profile), then
+# install and launch it. The phone must be unlocked, trusted and in Developer
+# Mode; the first run also needs the app allowed under Settings > General >
+# VPN & Device Management.
+run-ios-device *ARGS: (build-ios-device ARGS)
+    ./tools/ios/sign.sh
+    bash -c 'set -e; export IOS_SLICE=ios; source tools/ios/env.sh; UDID=$(cat target/ios-device/udid); \
+        xcrun devicectl device install app --device "$UDID" target/ios-device/BongBong.app; \
+        xcrun devicectl device process launch --console --device "$UDID" com.otobrglez.bongbong'

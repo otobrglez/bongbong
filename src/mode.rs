@@ -63,8 +63,10 @@ impl std::ops::DerefMut for Session {
 
 impl Session {
     /// `game` must be initialised; the builder is seeded from its map.
-    pub fn new(game: Game, width: f32, height: f32) -> Self {
-        let builder = MapEditor::new(game.map.clone(), width, height);
+    /// The field size is always the map's (`MapFile::field_size`), so a
+    /// round and the builder's canvas never need to be told it.
+    pub fn new(game: Game) -> Self {
+        let builder = MapEditor::new(game.map.clone());
         Session { driver: Driver::Play, game, builder, dialog: false, players_dialog: false }
     }
 
@@ -140,11 +142,12 @@ impl Session {
     /// once in that mode (the same path as the R key - a `--seed` stays
     /// pinned, the banner shows), the current count just closes it. A
     /// no-op when it is not open. Returns the count afterwards.
-    pub fn answer_players(&mut self, count: PlayerCount, width: f32, height: f32) -> PlayerCount {
+    pub fn answer_players(&mut self, count: PlayerCount) -> PlayerCount {
         if self.players_dialog {
             self.players_dialog = false;
             if count != self.game.players {
                 self.game.players = count;
+                let (width, height) = self.game.map.field_size();
                 self.game.init(width, height);
             }
         }
@@ -154,11 +157,12 @@ impl Session {
     /// `PLAY` from the builder: the edited map becomes the round's map and
     /// a fresh round starts (a `--seed` stays pinned, the mission banner
     /// shows as on any restart). A no-op in play mode.
-    pub fn play(&mut self, width: f32, height: f32) -> Driver {
+    pub fn play(&mut self) -> Driver {
         if self.driver == Driver::Build {
             // A menu left open would still be there on the next BUILD.
             self.builder.close_popup();
             self.game.map = self.builder.map().clone();
+            let (width, height) = self.game.map.field_size();
             self.game.init(width, height);
             self.driver = Driver::Play;
             self.dialog = false;
@@ -170,20 +174,20 @@ impl Session {
     /// The `Tab` key: `press_build` in play mode, `play` in build mode -
     /// except while the builder's Save prompt is taking text, when a key
     /// is a character and not a command.
-    pub fn toggle(&mut self, width: f32, height: f32) -> Driver {
+    pub fn toggle(&mut self) -> Driver {
         match self.driver {
             Driver::Play => self.press_build(),
             Driver::Build if self.builder.text_entry_open() => self.driver,
-            Driver::Build => self.play(width, height),
+            Driver::Build => self.play(),
         }
     }
 
     /// Replace the session's map wholesale - the dev server's `restart`
     /// with a `map`/`map_toml`: the game's map for the round it is about
     /// to start, and the builder's canvas and baseline.
-    pub fn replace_map(&mut self, map: MapFile, width: f32, height: f32) {
+    pub fn replace_map(&mut self, map: MapFile) {
         self.game.map = map.clone();
-        self.builder.load(map, width, height);
+        self.builder.load(map);
     }
 
     /// One frame of the builder, in build mode: `PLAY` starts the round.
@@ -192,7 +196,17 @@ impl Session {
             return;
         }
         if let EditorAction::Play = self.builder.update(input, layout) {
-            self.play(layout.field.w, layout.field.h);
+            self.play();
+        }
+    }
+
+    /// The field the live mode is showing: the round's map in play mode,
+    /// the builder's canvas in build mode (a map loaded into the builder
+    /// may be a different size until PLAY makes it the round's).
+    pub fn field_size(&self) -> (f32, f32) {
+        match self.driver {
+            Driver::Play => self.game.map.field_size(),
+            Driver::Build => self.builder.map().field_size(),
         }
     }
 
@@ -218,7 +232,7 @@ mod session_tests {
         game.seed_override = Some(7);
         game.map = MapFile::from_toml_str(include_str!("../maps/default.toml")).expect("default map parses");
         game.init(W, H);
-        Session::new(game, W, H)
+        Session::new(game)
     }
 
     #[test]
@@ -232,7 +246,7 @@ mod session_tests {
         assert_eq!(s.answer_dialog(true), Driver::Build);
         assert!(!s.playing());
         // Back in play on the end screen: no question.
-        s.play(W, H);
+        s.play();
         s.game.debug_kill(0).expect("player slot exists");
         s.game.update(crate::simulation::Input::default(), crate::PHYSICS_FIXED_DT, W, H);
         assert_ne!(s.game.outcome(), Outcome::Playing);
@@ -247,9 +261,9 @@ mod session_tests {
         s.answer_dialog(true);
         s.builder.select_tool(Tool::Wall(Material::Iron));
         let cell = (20, 11);
-        s.builder.stroke(&[cell], false, W, H);
+        s.builder.stroke(&[cell], false);
         assert!(s.builder.dirty());
-        assert_eq!(s.play(W, H), Driver::Play);
+        assert_eq!(s.play(), Driver::Play);
         let at = crate::map::cell_to_world(cell.0, cell.1);
         let iron_there = s
             .game
@@ -276,31 +290,35 @@ mod session_tests {
         s.answer_dialog(true);
         let layout = Layout::for_field(W, H);
         // The MAP button, from the bar's fixed slots.
-        let map_button = sola_raylib::prelude::Vector2::new(layout.panel.x + 980.0, layout.panel.y + 16.0);
+        let map_button = {
+            let r = crate::editor::MapEditor::map_rect(&layout);
+            sola_raylib::prelude::Vector2::new(r.x + r.width / 2.0, r.y + r.height / 2.0)
+        };
         let press = BuilderInput { pointer: Some(map_button), pressed: true, held: true, ..Default::default() };
         s.update_builder(&press, &layout);
         assert_eq!(s.builder.open_menu(), Some("map"));
-        assert_eq!(s.toggle(W, H), Driver::Play);
+        assert_eq!(s.toggle(), Driver::Play);
         s.press_build();
         s.answer_dialog(true);
         assert_eq!(s.builder.open_menu(), None, "the settings panel stayed open across PLAY");
 
         // The Save-as prompt (FILE > SAVE AS...) takes text: Tab is a
         // character there, not PLAY.
-        let file_button = sola_raylib::prelude::Vector2::new(layout.panel.x + 900.0, layout.panel.y + 16.0);
+        let file_rect = crate::editor::MapEditor::file_rect(&layout);
+        let file_button = sola_raylib::prelude::Vector2::new(file_rect.x + file_rect.width / 2.0, file_rect.y + file_rect.height / 2.0);
         let press = BuilderInput { pointer: Some(file_button), pressed: true, held: true, ..Default::default() };
         s.update_builder(&press, &layout);
         assert_eq!(s.builder.open_menu(), Some("file"));
         if crate::map::saving_available() {
             // The third row of the menu is SAVE AS.
-            let save_as = sola_raylib::prelude::Vector2::new(layout.panel.x + 900.0, layout.panel.y + 32.0 + 2.5 * 48.0);
+            let save_as = sola_raylib::prelude::Vector2::new(file_rect.x + 8.0, layout.panel.y + 32.0 + 2.5 * 48.0);
             let press = BuilderInput { pointer: Some(save_as), pressed: true, held: true, ..Default::default() };
             s.update_builder(&press, &layout);
             assert_eq!(s.builder.open_menu(), Some("save"));
-            assert_eq!(s.toggle(W, H), Driver::Build, "Tab in the Save prompt started a round");
+            assert_eq!(s.toggle(), Driver::Build, "Tab in the Save prompt started a round");
             s.update_builder(&BuilderInput { escape: true, ..Default::default() }, &layout);
             assert_eq!(s.builder.open_menu(), None);
-            assert_eq!(s.toggle(W, H), Driver::Play);
+            assert_eq!(s.toggle(), Driver::Play);
         }
     }
 
@@ -337,11 +355,11 @@ mod session_tests {
         assert_eq!(s.game.players, PlayerCount::One);
         assert!(s.game.player2.is_none());
         // Closed: answering is a no-op.
-        assert_eq!(s.answer_players(PlayerCount::Two, W, H), PlayerCount::One);
+        assert_eq!(s.answer_players(PlayerCount::Two), PlayerCount::One);
         assert!(s.game.player2.is_none());
 
         s.press_players();
-        assert_eq!(s.answer_players(PlayerCount::Two, W, H), PlayerCount::Two);
+        assert_eq!(s.answer_players(PlayerCount::Two), PlayerCount::Two);
         assert!(!s.players_dialog && s.playing());
         assert_eq!(s.game.frame(), 0, "a new round started");
         assert!(s.game.player2.is_some());
@@ -350,7 +368,7 @@ mod session_tests {
         }
         // The same count: closes without a restart.
         s.press_players();
-        assert_eq!(s.answer_players(PlayerCount::Two, W, H), PlayerCount::Two);
+        assert_eq!(s.answer_players(PlayerCount::Two), PlayerCount::Two);
         assert_eq!(s.game.frame(), 5);
         assert!(!s.players_dialog);
         // The mode sticks: an R restart and a BUILD -> PLAY round trip keep it.
@@ -359,12 +377,12 @@ mod session_tests {
         assert!(s.game.player2.is_some());
         s.press_build();
         s.answer_dialog(true);
-        s.play(W, H);
+        s.play();
         assert_eq!(s.game.players, PlayerCount::Two);
         assert!(s.game.player2.is_some());
         // And back to one.
         s.press_players();
-        assert_eq!(s.answer_players(PlayerCount::One, W, H), PlayerCount::One);
+        assert_eq!(s.answer_players(PlayerCount::One), PlayerCount::One);
         assert!(s.game.player2.is_none());
     }
 
@@ -373,7 +391,7 @@ mod session_tests {
         let mut s = session();
         let mut map = MapFile::new();
         map.set_cell(3, 3, CellObject::Gate);
-        s.replace_map(map, W, H);
+        s.replace_map(map);
         assert_eq!(s.game.map.cell(3, 3), Some(&CellObject::Gate));
         assert_eq!(s.builder.map().cell(3, 3), Some(&CellObject::Gate));
         assert!(!s.builder.dirty());

@@ -32,7 +32,7 @@ mod native {
     const INSTRUCTIONS: &str = "Tools drive the bongbong game running with `just run-dev` (native, --features dev-tools). \
 `step` freezes the game in lockstep and advances it deterministically at 1/60 s per frame; `resume` lets it run in real time. \
 `screenshot` returns the last rendered frame (the state after the latest step). Owner slots: 0 = player, enemies from 1; in a two-player round (`players {count: 2}`) slot 1 is player 2 and enemies count from 2. \
-Positions are screen pixels, 1280x720 by default, y down, rotation 0 = up.";
+Positions are field pixels (the map's own `size` in 32 px cells; the shipped default is 30 x 15 = 960x480), y down, rotation 0 = up.";
 
     pub fn main() {
         let args: Vec<String> = std::env::args().skip(1).collect();

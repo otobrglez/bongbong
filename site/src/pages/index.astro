@@ -51,9 +51,13 @@
           /* One source of truth for the canvas width: the overlay controls
              have to sit on the canvas's own edges, and the canvas is
              centred, so they all need the same expression. The shape is
-             the render target's own: a 1280x720 battlefield under a 32 px
-             HUD bar, 1280x752 (`HUD_BAR_HEIGHT` in src/lib.rs). */
-          --canvas-w: min(100vw, 1280px, calc((100vh - 90px) * 1280 / 752));
+             the render target's own, the field under the 32 px HUD bar
+             (`--bitmap-w`/`--bitmap-h` below). */
+          /* The bitmap's size, `Layout::for_field(DEFAULT_SCREEN_*)` in
+             src/lib.rs: a 960x480 field under the 32 px bar. */
+          --bitmap-w: 960;
+          --bitmap-h: 512;
+          --canvas-w: min(100vw, 1280px, calc((100vh - 90px) * var(--bitmap-w) / var(--bitmap-h)));
 
           /* The two overlay controls sit on the canvas's *bottom* corners,
              off the HUD bar along its top. The canvas is centred in .game
@@ -63,7 +67,7 @@
              its height never needs to be known. */
           .subscribe-link, .fullscreen-toggle {
             position: absolute;
-            top: calc(var(--canvas-w) * 752 / 1280 - 10px);
+            top: calc(var(--canvas-w) * var(--bitmap-h) / var(--bitmap-w) - 10px);
             transform: translateY(-100%);
           }
 
@@ -93,7 +97,7 @@
             left: 50%;
             transform: translateX(-50%);
             width: var(--canvas-w);
-            aspect-ratio: 1280 / 752;
+            aspect-ratio: var(--bitmap-w) / var(--bitmap-h);
             z-index: 2;
             display: flex;
             flex-direction: column;
@@ -165,7 +169,7 @@
 
           canvas {
             display: block;
-            /* The box has to keep the render target's own shape (1280x752,
+            /* The box has to keep the render target's own shape (the bitmap,
                the field plus the HUD bar), not just be capped on each axis
                independently.
 
@@ -180,7 +184,7 @@
                fills the box exactly and raylib's normalisation is right by
                construction. */
             width: var(--canvas-w);
-            aspect-ratio: 1280 / 752;
+            aspect-ratio: var(--bitmap-w) / var(--bitmap-h);
             height: auto;
             outline: none;
             /* The builder paints by dragging, so the browser must not claim
@@ -206,12 +210,12 @@
             padding: env(safe-area-inset-top) env(safe-area-inset-right)
                      env(safe-area-inset-bottom) env(safe-area-inset-left);
 
-            --canvas-w: min(100vw, 1280px, calc(100vh * 1280 / 752));
+            --canvas-w: min(100vw, 1280px, calc(100vh * var(--bitmap-w) / var(--bitmap-h)));
             .instructions, .tuning { display: none; }
             /* The canvas is centred vertically here, so its bottom edge is
                the middle of the box plus half its height. */
             .subscribe-link, .fullscreen-toggle {
-              top: calc(50% + var(--canvas-w) * 752 / 2560 - 10px);
+              top: calc(50% + var(--canvas-w) * var(--bitmap-h) / var(--bitmap-w) / 2 - 10px);
             }
           }
 
@@ -221,10 +225,10 @@
             justify-content: center;
             background: #000;
 
-            --canvas-w: min(100vw, 1280px, calc(100vh * 1280 / 752));
+            --canvas-w: min(100vw, 1280px, calc(100vh * var(--bitmap-w) / var(--bitmap-h)));
             .instructions, .tuning { display: none; }
             .subscribe-link, .fullscreen-toggle {
-              top: calc(50% + var(--canvas-w) * 752 / 2560 - 10px);
+              top: calc(50% + var(--canvas-w) * var(--bitmap-h) / var(--bitmap-w) / 2 - 10px);
             }
           }
 

@@ -26,6 +26,7 @@ use crate::hud::{
     PlayChrome, BUILD_COLOR, HUD_VERSION_BOTTOM_INSET, HUD_VERSION_COLOR, HUD_VERSION_RIGHT_INSET, HUD_VERSION_TEXT_SIZE,
 };
 use crate::shockwave::{RippleFx, screen_to_ripple_uv};
+use crate::view::View;
 use crate::simulation::{Game, Outcome};
 #[cfg(feature = "dev-tools")]
 use crate::simulation::Overlays;
@@ -140,19 +141,30 @@ pub struct Effects<'a> {
     /// (see `fx.rs`), and read-only here - `render` never mutates it, the
     /// same contract it has with `Game`.
     pub fx: &'a crate::fx::Fx,
+    /// The touch scheme's feedback (`touch.rs`), drawn over the field in
+    /// bitmap space when a keyboard-less device is playing; `None` draws
+    /// nothing. The `bool` is whether the stick lives on the right half.
+    pub touch: Option<(&'a crate::touch::TouchScheme, bool)>,
 }
 
 impl Game {
     /// Draw the whole scene for this frame: the battlefield into
-    /// `scene_target` and then onto the window at `layout.field`, the HUD
-    /// bar into `layout.panel`. Everything field-relative in the second
-    /// pass goes through a `Camera2D` whose offset is the field origin, so
-    /// the simulation's screen-pixel positions stay usable as they are.
+    /// `scene_target`, then that plus the HUD bar into `composite` - the
+    /// bitmap, `layout.window_size()` in size, the field at `layout.field`
+    /// and the bar in `layout.panel` - and finally the bitmap onto the
+    /// window through `view` (`view::present`), scaled and centred so the
+    /// whole battlefield is on screen whatever the window is. Everything
+    /// field-relative in the second pass goes through a `Camera2D` whose
+    /// offset is the field origin, so the simulation's pixel positions
+    /// stay usable as they are.
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &self,
         rl: &mut RaylibHandle,
         thread: &RaylibThread,
         scene_target: &mut RenderTexture2D,
+        composite: &mut RenderTexture2D,
+        view: &View,
         effects: &mut Effects,
         textures: &Textures,
         layout: &Layout,
@@ -564,7 +576,7 @@ impl Game {
             zoom: 1.0,
         };
 
-        rl.draw(thread, |mut d| {
+        rl.draw_texture_mode(thread, composite, |mut d| {
             d.clear_background(Color::BLACK);
 
             if !self.shocks.is_empty() {
@@ -810,7 +822,13 @@ impl Game {
             if chrome.build_button {
                 draw_mode_button(&mut d, layout.panel, "BUILD", BUILD_COLOR);
             }
+            // The touch scheme's stick, ripples and hint: over everything,
+            // in bitmap space, so they sit where the thumbs are.
+            if let Some((touch, steer_right)) = effects.touch {
+                touch.draw(&mut d, layout, steer_right);
+            }
         });
+        crate::view::present(rl, thread, composite, view);
     }
 }
 

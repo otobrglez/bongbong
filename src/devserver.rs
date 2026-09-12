@@ -133,7 +133,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "map_get",
-        description: "The current map as TOML text (plus name, cell count, default tank count) - edit it and hand it back through `restart {map_toml}`. Format: `version = 1`, optional `tanks = N` (default enemy count), optional `tank = \"titan\"` / `tank2 = \"scout\"` (the players' chassis), and one `cells.\"col,row\"` entry per occupied 32 px grid cell (40 columns x 23 rows at 1280x720, col/row from 0 at the top-left): `{ kind = \"wall\", material = \"brick\"|\"iron\"|\"wood\"|\"glass\" }`, `{ kind = \"sandbag\" }` / `{ kind = \"barrel\" }` / `{ kind = \"fence\" }` (destructible props: shots sometimes pass over sandbags, barrels explode and chain, fences snap; tanks ram all three), `{ kind = \"barrel\", drum = \"oil\"|\"fuel\" }` (a pinned drum kind: oil leaves a burning pool, fuel goes off harder and launches when another blast sets it off; without `drum` the kind is rolled), `{ kind = \"oil\" }` (an oil trail cell: not solid, a fuse on the ground - a blast or a burning neighbour lights it and the fire runs along it, setting off any drum it reaches), `{ kind = \"tree\" }` / `{ kind = \"pine\" }` (destructible trees, solid like a prop but drawn larger than their cell; they often catch fire when killed and a tank can flatten one by driving into it), `{ kind = \"tall_grass\" }` (not solid - cover a tank hides in, enemies cannot shoot what is standing in it), `{ kind = \"road\" }`, `{ kind = \"frog\" }` (one), `{ kind = \"start\" }` (player 1, one), `{ kind = \"start2\" }` (player 2 in a two-player round, one, optional - placed beside player 1 when absent), `{ kind = \"pickup\", pickup = \"health\"|\"ammo\"|\"laser\"|\"minigun\"|\"plasma\"|\"speedup\"|\"shield\"|\"flamethrower\" }` (the flamethrower is player-only: enemies drive over its fuel tank). Iron is indestructible, the rest can be shot away. Border walls and enemy spawns are added by the game on top.",
+        description: "The current map as TOML text (plus name, cell count, default tank count) - edit it and hand it back through `restart {map_toml}`. Format: `version = 1`, optional `tanks = N` (default enemy count), optional `tank = \"titan\"` / `tank2 = \"scout\"` (the players' chassis), and one `cells.\"col,row\"` entry per occupied 32 px grid cell (col/row from 0 at the top-left; the field is the map's optional `size = [cols, rows]`, 30 x 15 = 960x480 when absent): `{ kind = \"wall\", material = \"brick\"|\"iron\"|\"wood\"|\"glass\" }`, `{ kind = \"sandbag\" }` / `{ kind = \"barrel\" }` / `{ kind = \"fence\" }` (destructible props: shots sometimes pass over sandbags, barrels explode and chain, fences snap; tanks ram all three), `{ kind = \"barrel\", drum = \"oil\"|\"fuel\" }` (a pinned drum kind: oil leaves a burning pool, fuel goes off harder and launches when another blast sets it off; without `drum` the kind is rolled), `{ kind = \"oil\" }` (an oil trail cell: not solid, a fuse on the ground - a blast or a burning neighbour lights it and the fire runs along it, setting off any drum it reaches), `{ kind = \"tree\" }` / `{ kind = \"pine\" }` (destructible trees, solid like a prop but drawn larger than their cell; they often catch fire when killed and a tank can flatten one by driving into it), `{ kind = \"tall_grass\" }` (not solid - cover a tank hides in, enemies cannot shoot what is standing in it), `{ kind = \"road\" }`, `{ kind = \"frog\" }` (one), `{ kind = \"start\" }` (player 1, one), `{ kind = \"start2\" }` (player 2 in a two-player round, one, optional - placed beside player 1 when absent), `{ kind = \"pickup\", pickup = \"health\"|\"ammo\"|\"laser\"|\"minigun\"|\"plasma\"|\"speedup\"|\"shield\"|\"flamethrower\" }` (the flamethrower is player-only: enemies drive over its fuel tank). Iron is indestructible, the rest can be shot away. Border walls and enemy spawns are added by the game on top.",
         schema: NO_PARAMS,
     },
     ToolSpec {
@@ -224,7 +224,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "builder_paint",
-        description: "One stroke on the builder's canvas: a press on cells[0], a drag through the rest, a release - so the toggle-erase rule (a press on a cell that already holds exactly the brush's object erases it, and paint-or-erase is decided on the first cell for the whole stroke), singleton moves (start/start2/frog/enemy_frog) and one-undo-step-per-stroke apply exactly as for a mouse. Cells are [col, row] on the 32 px grid (40 x 23 at 1280x720, from the top-left). `tool` selects a brush first (see `builder_tool`); `button: right` erases whatever the brush. Replies with every changed cell's object before and after (in the map's own shape, null = empty) and the undo depth.",
+        description: "One stroke on the builder's canvas: a press on cells[0], a drag through the rest, a release - so the toggle-erase rule (a press on a cell that already holds exactly the brush's object erases it, and paint-or-erase is decided on the first cell for the whole stroke), singleton moves (start/start2/frog/enemy_frog) and one-undo-step-per-stroke apply exactly as for a mouse. Cells are [col, row] on the 32 px grid (the map's `size`, 30 x 15 when absent, from the top-left). `tool` selects a brush first (see `builder_tool`); `button: right` erases whatever the brush. Replies with every changed cell's object before and after (in the map's own shape, null = empty) and the undo depth.",
         schema: r#"{"type":"object","properties":{"cells":{"type":"array","items":{"type":"array","items":{"type":"integer"},"minItems":2,"maxItems":2},"minItems":1,"description":"[[col, row], ...] in stroke order"},"tool":{"type":"string"},"button":{"type":"string","enum":["left","right"],"default":"left"}},"required":["cells"]}"#,
     },
     ToolSpec {
@@ -852,7 +852,7 @@ impl DevServer {
         let _ = reply.send(result);
     }
 
-    fn restart(&mut self, session: &mut Session, params: &Value, width: f32, height: f32) -> Result<Value, String> {
+    fn restart(&mut self, session: &mut Session, params: &Value) -> Result<Value, String> {
         let game = &mut session.game;
         match params.get("seed") {
             None | Some(Value::Null) => {}
@@ -916,11 +916,13 @@ impl DevServer {
         // A restart is a play-mode thing: a builder session ends here, and
         // a new map replaces the builder's canvas as well as the round's.
         if let Some(map) = map_param(params)? {
-            session.replace_map(map, width, height);
+            session.replace_map(map);
         }
         session.driver = Driver::Play;
         session.dialog = false;
         session.players_dialog = false;
+        // The field is the map's, which a new map may have just changed.
+        let (width, height) = session.game.map.field_size();
         session.game.init(width, height);
         self.round_started(session);
         Ok(self.status(session, width, height))
@@ -960,7 +962,7 @@ impl DevServer {
                 session.game.paused = false;
                 Ok(self.status(session, width, height))
             }
-            "restart" => self.restart(session, params, width, height),
+            "restart" => self.restart(session, params),
             "mode" => Ok(mode_json(session)),
             "build" => match params.get("answer") {
                 None | Some(Value::Null) => {
@@ -988,7 +990,7 @@ impl DevServer {
                         if !session.players_dialog {
                             session.press_players();
                         }
-                        session.answer_players(count, width, height);
+                        session.answer_players(count);
                         if session.game.players != before {
                             self.round_started(session);
                         }
@@ -1002,7 +1004,7 @@ impl DevServer {
                     Err("already in play mode: `restart` starts a fresh round here, `build` enters the builder".to_string())
                 } else {
                     session.game.show_intro = params.get("intro").and_then(Value::as_bool).unwrap_or(false);
-                    session.play(width, height);
+                    session.play();
                     self.round_started(session);
                     Ok(self.status(session, width, height))
                 }
@@ -1018,7 +1020,7 @@ impl DevServer {
                     if let Some(tool) = tool {
                         session.builder.select_tool(tool);
                     }
-                    let changes = session.builder.stroke(&cells, right, width, height);
+                    let changes = session.builder.stroke(&cells, right);
                     Ok(json!({
                         "changes": changes_json(&changes),
                         "undo_depth": session.builder.history().undo_depth(),
@@ -1031,7 +1033,7 @@ impl DevServer {
                 let mut done = 0;
                 let mut last = None;
                 for _ in 0..steps {
-                    let step = if undo { session.builder.undo(width, height) } else { session.builder.redo(width, height) };
+                    let step = if undo { session.builder.undo() } else { session.builder.redo() };
                     match step {
                         Some(step) => {
                             done += 1;
@@ -1049,7 +1051,7 @@ impl DevServer {
                 v[if undo { "undone" } else { "redone" }] = json!(done);
                 v
             }),
-            "builder_settings" => builder_settings(session, params, width, height),
+            "builder_settings" => builder_settings(session, params),
             "builder_map" => {
                 let by_name = match params.get("name") {
                     None | Some(Value::Null) => Ok(None),
@@ -1061,12 +1063,12 @@ impl DevServer {
                         if params.get("map").is_some() || params.get("map_toml").is_some() {
                             return Err("give one of name, map or map_toml".to_string());
                         }
-                        session.builder.load_named(&name, width, height)?;
+                        session.builder.load_named(&name)?;
                         builder_map_json(&session.builder)
                     }
                     None => map_param(params).and_then(|map| {
                         if let Some(map) = map {
-                            session.builder.load(map, width, height);
+                            session.builder.load(map);
                         }
                         builder_map_json(&session.builder)
                     }),
@@ -1114,9 +1116,9 @@ impl DevServer {
                     let p = layout.to_field(point);
                     let before = session.game.players;
                     if rects.one.check_collision_point_rec(p) {
-                        session.answer_players(PlayerCount::One, layout.field.w, layout.field.h);
+                        session.answer_players(PlayerCount::One);
                     } else if rects.two.check_collision_point_rec(p) {
-                        session.answer_players(PlayerCount::Two, layout.field.w, layout.field.h);
+                        session.answer_players(PlayerCount::Two);
                     } else if !rects.panel.check_collision_point_rec(p) {
                         session.close_players_dialog();
                     }
@@ -1186,21 +1188,20 @@ impl DevServer {
         }
         match session.mode() {
             Driver::Play if session.players_dialog => {
-                let (w, h) = (layout.field.w, layout.field.h);
                 let before = session.game.players;
                 match key {
                     Some("1") => {
-                        session.answer_players(PlayerCount::One, w, h);
+                        session.answer_players(PlayerCount::One);
                     }
                     Some("2") => {
-                        session.answer_players(PlayerCount::Two, w, h);
+                        session.answer_players(PlayerCount::Two);
                     }
                     Some("enter") => {
                         let other = match before {
                             PlayerCount::One => PlayerCount::Two,
                             PlayerCount::Two => PlayerCount::One,
                         };
-                        session.answer_players(other, w, h);
+                        session.answer_players(other);
                     }
                     Some("escape") | Some("tab") => session.close_players_dialog(),
                     _ => {}
@@ -1228,7 +1229,7 @@ impl DevServer {
             },
             Driver::Build => {
                 if key == Some("tab") {
-                    session.toggle(layout.field.w, layout.field.h);
+                    session.toggle();
                     if session.mode() == Driver::Play {
                         self.round_started(session);
                     }
@@ -1304,7 +1305,7 @@ fn builder_map_json(b: &MapEditor) -> Result<Value, String> {
 
 /// `builder_settings`: apply each given field as its own undo step, in
 /// field order, then an optional reset; reply with the current values.
-fn builder_settings(session: &mut Session, params: &Value, width: f32, height: f32) -> Result<Value, String> {
+fn builder_settings(session: &mut Session, params: &Value) -> Result<Value, String> {
     /// `None` = absent (untouched), `Some(None)` = null (auto), `Some(Some)` = a value.
     fn u32_field(params: &Value, key: &str) -> Result<Option<Option<u32>>, String> {
         match params.get(key) {
@@ -1386,7 +1387,7 @@ fn builder_settings(session: &mut Session, params: &Value, width: f32, height: f
         b.apply_settings(s);
     }
     if params.get("reset").and_then(Value::as_bool).unwrap_or(false) {
-        b.reset(width, height);
+        b.reset();
     }
     Ok(settings_json(session))
 }
@@ -1691,7 +1692,7 @@ mod tests {
         game.seed_override = Some(seed);
         game.map = MapFile::from_toml_str(include_str!("../maps/default.toml")).expect("embedded default map parses");
         game.init(W, H);
-        Session::new(game, W, H)
+        Session::new(game)
     }
 
     /// Queue `method` on a headless server and return its reply receiver.

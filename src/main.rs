@@ -8,9 +8,9 @@ use bongbong::shockwave::{RippleFx, RippleTuning};
 use bongbong::simulation::{Game, Input, PlayerCount};
 use bongbong::tuning;
 use bongbong::tank::{Dir, TankKind};
+use bongbong::touch::TouchPoint;
+use bongbong::view::View;
 use bongbong::{
-    DEFAULT_SCREEN_HEIGHT,
-    DEFAULT_SCREEN_WIDTH,
     Layout,
 };
 use clap::Parser;
@@ -140,10 +140,26 @@ struct Args {
     #[arg(long = "players", default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=2))]
     players: u8,
 
-    /// Override the battlefield size, e.g. `--resolution 1920x1080` (default:
-    /// 1280x720).
+    /// The window's initial size, e.g. `--resolution 1920x1080` (default:
+    /// the map's own bitmap, the field plus the HUD bar). The battlefield
+    /// itself is the map's `size` and every player in a match shares it;
+    /// the window only decides how large it is drawn, letterboxed so the
+    /// whole field is always on screen (view.rs). Resizable afterwards;
+    /// F11 toggles borderless full screen.
     #[arg(long = "resolution", value_parser = parse_resolution)]
     resolution: Option<(i32, i32)>,
+
+    /// Start in borderless full screen on the current monitor (F11
+    /// toggles it back).
+    #[arg(long = "fullscreen")]
+    fullscreen: bool,
+
+    /// Development aid: the left mouse button acts as a touch point, so
+    /// the touch scheme (touch.rs: joystick on one half, tap-to-fire on
+    /// the other) can be tried on a desktop. Off, the mouse keeps to the
+    /// bar's buttons, the dialogs and the builder.
+    #[arg(long = "touch-from-mouse")]
+    touch_from_mouse: bool,
 
     /// Disable tank/shell drop shadows (on by default). Can also be toggled
     /// at runtime with the L key - see docs/sprite-shadows-design.md.
@@ -248,16 +264,13 @@ fn parse_resolution(s: &str) -> Result<(i32, i32), String> {
     Ok((width, height))
 }
 
-// raylib's PLATFORM_WEB build defaults to OpenGL ES2, which only accepts
-// GLSL ES 100 shaders - desktop's `#version 330` files won't compile there.
-// static/web/ holds GLSL ES 100 ports of the same effects (see CLAUDE.md).
-#[cfg(target_os = "emscripten")]
+// raylib's PLATFORM_WEB build defaults to OpenGL ES2, and the iOS build is
+// raylib on its SDL backend with the ES 2.0 renderer (tools/setup_ios.sh);
+// both only accept GLSL ES 100 shaders - desktop's `#version 330` files
+// won't compile there. static/web/ holds GLSL ES 100 ports of the same
+// effects (see CLAUDE.md).
 fn shader_path(name: &str) -> String {
-    format!("static/web/{name}")
-}
-#[cfg(not(target_os = "emscripten"))]
-fn shader_path(name: &str) -> String {
-    format!("static/{name}")
+    if bongbong::EMBEDDED { format!("static/web/{name}") } else { format!("static/{name}") }
 }
 
 
@@ -302,7 +315,65 @@ impl TuningWatch {
     }
 }
 
+/// The three ripple post-effects at one field size (their UV maths is in
+/// field pixels, so a field of another size needs them reloaded).
+fn load_ripples(rl: &mut RaylibHandle, thread: &sola_raylib::prelude::RaylibThread, width: i32, height: i32) -> (RippleFx, RippleFx, RippleFx) {
+    let shock = RippleFx::load(
+        rl,
+        thread,
+        &shader_path("shockwave.fs"),
+        width,
+        height,
+        RippleTuning {
+            speed: tuning().shockwave_speed,
+            width: tuning().shockwave_width,
+            strength: tuning().shockwave_strength * tuning().screen_fx_intensity,
+            duration: tuning().shockwave_duration,
+        },
+    );
+    let muzzle = RippleFx::load(
+        rl,
+        thread,
+        &shader_path("muzzle_flash.fs"),
+        width,
+        height,
+        RippleTuning {
+            speed: tuning().muzzle_flash_speed,
+            width: tuning().muzzle_flash_width,
+            strength: tuning().muzzle_flash_strength,
+            duration: tuning().muzzle_flash_duration,
+        },
+    );
+    let impact = RippleFx::load(
+        rl,
+        thread,
+        &shader_path("impact.fs"),
+        width,
+        height,
+        RippleTuning {
+            speed: tuning().impact_flash_speed,
+            width: tuning().impact_flash_width,
+            strength: tuning().impact_flash_strength,
+            duration: tuning().impact_flash_duration,
+        },
+    );
+    (shock, muzzle, impact)
+}
+
 fn main() {
+    #[cfg(not(target_os = "ios"))]
+    run(Args::parse());
+    // iOS: UIKit owns the process. SDL starts the application and calls
+    // back into `ios::app_main`, which runs the game with default options
+    // from inside the app bundle.
+    #[cfg(target_os = "ios")]
+    ios::main();
+}
+
+/// The whole game, from window to loop, for one set of options. `main`
+/// fills them from the command line on desktop; the iOS entry runs them
+/// with the defaults.
+fn run(args: Args) {
     // Keep the `dev-tools` C API (src/capi.rs) linked into this binary: an
     // `extern "C"` function nobody here references is fair game for the
     // linker to drop before emcc's EXPORTED_FUNCTIONS (build.rs) can export
@@ -310,20 +381,50 @@ fn main() {
     #[cfg(feature = "dev-tools")]
     bongbong::capi::keep_alive();
 
-    let args = Args::parse();
-    // `--resolution` is the *battlefield*; the window is the field plus
-    // the HUD bar above it (docs/hud-and-builder-layout-design.md). The
-    // simulation, the physics, the maps and the probe only ever see the
-    // field.
-    let (screen_width, screen_height) = args
-        .resolution
-        .unwrap_or((DEFAULT_SCREEN_WIDTH, DEFAULT_SCREEN_HEIGHT));
-    let (window_width, window_height) = Layout::for_field(screen_width as f32, screen_height as f32).window_size();
+    // The battlefield is the map's (`MapFile::field_size`); the bitmap the
+    // game draws is that field plus the HUD bar above it
+    // (docs/hud-and-builder-layout-design.md), and the window is whatever
+    // the player makes it - the bitmap is fitted into it by `view::View`.
+    // The simulation, the physics, the maps and the probe only ever see
+    // the field.
+    let map = args.map.clone().unwrap_or_else(default_map);
+    let (screen_width, screen_height) = {
+        let (w, h) = map.field_size();
+        (w.round() as i32, h.round() as i32)
+    };
+    let bitmap = Layout::for_field(screen_width as f32, screen_height as f32).window_size();
+    // iOS: the window is the screen, and raylib's SDL backend sizes its
+    // render target from the size InitWindow is asked for (it never reads
+    // the window back), so the screen's point size has to go in here.
+    #[cfg(target_os = "ios")]
+    let (window_width, window_height) = ios::screen_size_points().unwrap_or(bitmap);
+    #[cfg(not(target_os = "ios"))]
+    let (window_width, window_height) = args.resolution.unwrap_or(bitmap);
 
-    let (mut rl, thread) = sola_raylib::init()
-        .size(window_width, window_height)
-        .title(&format!("BongBong! v{}", env!("CARGO_PKG_VERSION")))
-        .build();
+    let mut builder = sola_raylib::init();
+    builder.size(window_width, window_height).title(&format!("BongBong! v{}", env!("CARGO_PKG_VERSION")));
+    // On the web the canvas box keeps the bitmap's own shape (see
+    // index.astro) and raylib maps a touch against that box, so the
+    // canvas must stay the bitmap's size: a resizable web window would
+    // follow the tab instead. On iOS the SDL backend draws a 1x
+    // framebuffer whatever the flags say, so high DPI must not be asked
+    // for (the viewport would cover a corner of a 3x drawable). Native
+    // windows resize freely and draw at the panel's real density.
+    if !bongbong::EMBEDDED {
+        builder.resizable().highdpi();
+    }
+    #[cfg(target_os = "ios")]
+    builder.fullscreen();
+    let (mut rl, thread) = builder.build();
+    #[cfg(target_os = "ios")]
+    ios::route_default_framebuffer(&mut rl);
+    if !bongbong::EMBEDDED {
+        // Half the bitmap is the smallest window that still reads.
+        rl.set_window_min_size(bitmap.0 / 2, bitmap.1 / 2);
+        if args.fullscreen {
+            rl.toggle_borderless_windowed();
+        }
+    }
     // raylib closes the window on Esc by default; here Esc keeps playing
     // in the leave dialog and dismisses a builder menu, so it must never
     // reach `window_should_close`.
@@ -420,52 +521,14 @@ fn main() {
         .load_texture(&thread, "static/ui/eraser.png")
         .expect("failed loading eraser texture");
 
-    let mut shock_fx = RippleFx::load(
-        &mut rl,
-        &thread,
-        &shader_path("shockwave.fs"),
-        screen_width,
-        screen_height,
-        RippleTuning {
-            speed: tuning().shockwave_speed,
-            width: tuning().shockwave_width,
-            strength: tuning().shockwave_strength * tuning().screen_fx_intensity,
-            duration: tuning().shockwave_duration,
-        },
-    );
-    let mut muzzle_fx = RippleFx::load(
-        &mut rl,
-        &thread,
-        &shader_path("muzzle_flash.fs"),
-        screen_width,
-        screen_height,
-        RippleTuning {
-            speed: tuning().muzzle_flash_speed,
-            width: tuning().muzzle_flash_width,
-            strength: tuning().muzzle_flash_strength,
-            duration: tuning().muzzle_flash_duration,
-        },
-    );
-    let mut impact_fx = RippleFx::load(
-        &mut rl,
-        &thread,
-        &shader_path("impact.fs"),
-        screen_width,
-        screen_height,
-        RippleTuning {
-            speed: tuning().impact_flash_speed,
-            width: tuning().impact_flash_width,
-            strength: tuning().impact_flash_strength,
-            duration: tuning().impact_flash_duration,
-        },
-    );
+    let (mut shock_fx, mut muzzle_fx, mut impact_fx) = load_ripples(&mut rl, &thread, screen_width, screen_height);
     // The short-lived particle layer lives here rather than on `Game`:
     // it is presentation only, so nothing in the simulation can see it and
     // it is free to use `rand::rng()` (see fx.rs). The web build starts at
     // a lower density - wasm is the tighter budget and a dense wave is
     // where that shows.
     let mut fx = bongbong::fx::Fx::default();
-    if cfg!(target_os = "emscripten") {
+    if bongbong::EMBEDDED {
         // A literal patch of one known knob: it cannot fail, and there is
         // nothing sensible to do at startup if it somehow did.
         let _ = tuning::submit_json(r#"{"fx_density": 0.5}"#);
@@ -474,6 +537,16 @@ fn main() {
     let mut scene_target = rl
         .load_render_texture(&thread, screen_width as u32, screen_height as u32)
         .expect("failed creating scene render texture");
+    // The composited bitmap - the field plus the bar - that `view::present`
+    // fits into the window. Both targets are re-created when the field
+    // changes size (a dev-server `restart` on a map of another size, or
+    // the builder loading one).
+    let mut composite = rl
+        .load_render_texture(&thread, bitmap.0 as u32, bitmap.1 as u32)
+        .expect("failed creating composite render texture");
+    let mut target_field = (screen_width as f32, screen_height as f32);
+    let mut touch = bongbong::touch::TouchScheme::default();
+    let touch_from_mouse = args.touch_from_mouse;
 
     if let Some(path) = &args.tuning {
         match tuning::submit_file(path) {
@@ -504,12 +577,12 @@ fn main() {
     game.players = PlayerCount::from_count(args.players as usize).expect("clap limits --players to 1 or 2");
     game.shadows_enabled = !args.no_shadows;
     game.seed_override = args.seed;
-    game.map = args.map.unwrap_or_else(default_map);
+    game.map = map;
     game.init(screen_width as f32, screen_height as f32);
 
     // The two modes (docs/game-editor-fusion.md): the round and the map
     // builder, whichever is live. `--editor` starts on the builder.
-    let mut session = Session::new(game, screen_width as f32, screen_height as f32);
+    let mut session = Session::new(game);
     session.builder.cli_overrides = CliOverrides {
         tanks: args.enemies.is_some(),
         tank: args.tank.is_some(),
@@ -569,16 +642,48 @@ fn main() {
     // phase drifts, which reads as judder, and browsers throttle timers
     // harder than rAF, phones most of all. Rendering 120 ticks/s to a 60 Hz
     // display also throws half the work away.
-    let target_fps = if cfg!(target_os = "emscripten") { 0 } else { 120 };
+    // iOS is a plain blocking loop (SDL pumps UIKit's run loop from inside
+    // event polling); the simulator ignores the GL swap interval, so a 60
+    // cap is what keeps the loop from spinning - a phone's display link
+    // paces it anyway.
+    let target_fps = if cfg!(target_os = "emscripten") { 0 } else if cfg!(target_os = "ios") { 60 } else { 120 };
     game_loop::run(rl, thread, target_fps, move |rl, thread| {
-        let layout = Layout::for_window(rl.get_screen_width() as f32, rl.get_screen_height() as f32);
-        let (width, height) = (layout.field.w, layout.field.h);
         // Frame boundary, first: dev-server requests (state reads and
         // writes, tuning patches, an armed step or screenshot), so anything
         // they stage lands in this same frame.
         #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
         if let Some(dev) = &mut dev {
+            let (width, height) = session.field_size();
             dev.before_frame(&mut session, width, height);
+        }
+        // The field is the live mode's map's (a `restart` above may have
+        // just swapped it); the bitmap is the field plus the bar, and the
+        // view fits that bitmap into whatever the window is right now.
+        let (width, height) = session.field_size();
+        let layout = Layout::for_field(width, height);
+        if (width, height) != target_field {
+            let bitmap = layout.window_size();
+            scene_target = rl
+                .load_render_texture(thread, width as u32, height as u32)
+                .expect("failed re-creating scene render texture");
+            composite = rl
+                .load_render_texture(thread, bitmap.0 as u32, bitmap.1 as u32)
+                .expect("failed re-creating composite render texture");
+            let (s, m, i) = load_ripples(rl, thread, width as i32, height as i32);
+            shock_fx = s;
+            muzzle_fx = m;
+            impact_fx = i;
+            target_field = (width, height);
+        }
+        let view = View::fit(
+            {
+                let (w, h) = layout.window_size();
+                (w as f32, h as f32)
+            },
+            (rl.get_screen_width() as f32, rl.get_screen_height() as f32),
+        );
+        if !bongbong::EMBEDDED && rl.is_key_pressed(KeyboardKey::KEY_F11) {
+            rl.toggle_borderless_windowed();
         }
         // Then land any tuning edits staged since last frame (dev panel
         // via capi.rs, the `--tuning` file watch, or the dev server)
@@ -617,7 +722,19 @@ fn main() {
         touch_held_last_frame = touching;
         let mouse_pressed = rl.is_mouse_button_pressed(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_LEFT);
         let mouse_held = rl.is_mouse_button_down(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_LEFT);
-        let pointer = if touching { rl.get_touch_position(0) } else { rl.get_mouse_position() };
+        // Every pointer is read in bitmap pixels: the bar, the dialogs and
+        // the builder hit-test there and never learn what the window is.
+        let pointer = view.to_bitmap(if touching { rl.get_touch_position(0) } else { rl.get_mouse_position() });
+        // This frame's touch points for the touch scheme, ids included so
+        // a stick follows its own finger. `--touch-from-mouse` stands a
+        // held left button in for one.
+        let mut touch_points: Vec<TouchPoint> = (0..rl.get_touch_point_count())
+            .map(|i| TouchPoint { id: rl.get_touch_point_id(i), pos: view.to_bitmap(rl.get_touch_position(i)) })
+            .collect();
+        if touch_from_mouse && mouse_held && touch_points.is_empty() {
+            touch_points.push(TouchPoint { id: -1, pos: view.to_bitmap(rl.get_mouse_position()) });
+        }
+        let steer_right = tuning().touch_steer_side != 0;
         let pressed = mouse_pressed || touch_pressed;
         let held = mouse_held || touching;
         let tab = rl.is_key_pressed(KeyboardKey::KEY_TAB);
@@ -638,17 +755,17 @@ fn main() {
                     let field_p = layout.to_field(pointer);
                     if pressed {
                         if rects.one.check_collision_point_rec(field_p) {
-                            session.answer_players(PlayerCount::One, width, height);
+                            session.answer_players(PlayerCount::One);
                         } else if rects.two.check_collision_point_rec(field_p) {
-                            session.answer_players(PlayerCount::Two, width, height);
+                            session.answer_players(PlayerCount::Two);
                         } else if !rects.panel.check_collision_point_rec(field_p) {
                             session.close_players_dialog();
                         }
                     }
                     if rl.is_key_pressed(KeyboardKey::KEY_ONE) {
-                        session.answer_players(PlayerCount::One, width, height);
+                        session.answer_players(PlayerCount::One);
                     } else if rl.is_key_pressed(KeyboardKey::KEY_TWO) {
-                        session.answer_players(PlayerCount::Two, width, height);
+                        session.answer_players(PlayerCount::Two);
                     } else if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
                         // Enter is the action, as it is "leave" in the other
                         // dialog: the point of opening this one is to switch.
@@ -656,7 +773,7 @@ fn main() {
                             PlayerCount::One => PlayerCount::Two,
                             PlayerCount::Two => PlayerCount::One,
                         };
-                        session.answer_players(other, width, height);
+                        session.answer_players(other);
                     } else if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) || tab {
                         session.close_players_dialog();
                     }
@@ -703,7 +820,7 @@ fn main() {
                     typed,
                 };
                 if tab {
-                    session.toggle(width, height);
+                    session.toggle();
                 } else {
                     session.update_builder(&input, &layout);
                 }
@@ -711,9 +828,15 @@ fn main() {
         }
 
         if session.mode() == Driver::Build {
+            // Nothing is steering while the builder is up, but the scheme
+            // still sees the frame so a finger lifted here is not a stick
+            // still held when play resumes.
+            touch.update(&touch_points, &layout, steer_right, dt);
             session.builder.render(
                 rl,
                 thread,
+                &mut composite,
+                &view,
                 &layout,
                 &EditorTextures {
                     obstacles: &obstacles_texture,
@@ -750,7 +873,14 @@ fn main() {
         // itself decides what to do with it (e.g. whether a wreck can move),
         // so nothing simulation-related needs to know a `RaylibHandle`
         // exists. See simulation.rs's module doc comment.
-        let (player_intent, player2_intent) = gather_intents(rl, session.game.players);
+        let (mut player_intent, player2_intent) = gather_intents(rl, session.game.players);
+        // A touch screen drives player 1 through the same intent the
+        // keyboard does; a held key still wins the direction, a tap or a
+        // key both fire. Fed every frame, dialog or not, so a lifted
+        // finger is never a stick still held.
+        let touch_intent = touch.update(&touch_points, &layout, steer_right, dt);
+        player_intent.move_dir = player_intent.move_dir.or(touch_intent.move_dir);
+        player_intent.fire = player_intent.fire || touch_intent.fire;
         let input = Input {
             player_intent,
             player2_intent,
@@ -800,11 +930,14 @@ fn main() {
             rl,
             thread,
             &mut scene_target,
+            &mut composite,
+            &view,
             &mut Effects {
                 shock: &mut shock_fx,
                 muzzle: &mut muzzle_fx,
                 impact: &mut impact_fx,
                 fx: &fx,
+                touch: Some((&touch, steer_right)),
             },
             &Textures {
                 tanks: &tanks_texture,
@@ -839,4 +972,153 @@ fn main() {
             dev.after_render(rl, thread, &scene_target, &session.game);
         }
     });
+}
+
+/// The iOS entry (docs/ios-native-port-prd.md): the game is raylib on its
+/// SDL3 backend, and on iOS SDL has to start the application itself -
+/// `SDL_RunApp` runs UIApplicationMain and calls `app_main` from the app
+/// delegate once the app has launched. Everything here is plain SDL3 ABI,
+/// declared by hand because sola-raylib does not bind SDL.
+#[cfg(target_os = "ios")]
+mod ios {
+    use clap::Parser as _;
+    use std::ffi::{c_char, c_int, c_void};
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::OnceLock;
+
+    #[repr(C)]
+    struct SdlRect {
+        x: c_int,
+        y: c_int,
+        w: c_int,
+        h: c_int,
+    }
+
+    const SDL_INIT_VIDEO: u32 = 0x20;
+
+    type BindFn = unsafe extern "C" fn(target: u32, id: u32);
+
+    unsafe extern "C" {
+        fn SDL_RunApp(
+            argc: c_int,
+            argv: *mut *mut c_char,
+            main_fn: extern "C" fn(c_int, *mut *mut c_char) -> c_int,
+            reserved: *mut c_void,
+        ) -> c_int;
+        fn SDL_Init(flags: u32) -> bool;
+        fn SDL_GetPrimaryDisplay() -> u32;
+        fn SDL_GetDisplayBounds(display: u32, rect: *mut SdlRect) -> bool;
+        fn SDL_GetWindowProperties(window: *mut c_void) -> u32;
+        fn SDL_GetNumberProperty(props: u32, name: *const c_char, default: i64) -> i64;
+        /// glad's entries for glBindFramebuffer/glBindRenderbuffer inside
+        /// libraylib.a: raylib was built with glad loading GL ES through
+        /// SDL_GL_GetProcAddress, so every rlgl GL call goes through a
+        /// table of writable pointers.
+        static mut glad_glBindFramebuffer: Option<BindFn>;
+        static mut glad_glBindRenderbuffer: Option<BindFn>;
+    }
+
+    static REAL_BIND_FRAMEBUFFER: OnceLock<BindFn> = OnceLock::new();
+    static REAL_BIND_RENDERBUFFER: OnceLock<BindFn> = OnceLock::new();
+    static SCREEN_FRAMEBUFFER: AtomicU32 = AtomicU32::new(0);
+    static SCREEN_RENDERBUFFER: AtomicU32 = AtomicU32::new(0);
+
+    unsafe extern "C" fn bind_framebuffer_routed(target: u32, id: u32) {
+        let id = if id == 0 { SCREEN_FRAMEBUFFER.load(Ordering::Relaxed) } else { id };
+        if let Some(real) = REAL_BIND_FRAMEBUFFER.get() {
+            // SAFETY: the pointer glad loaded; same signature.
+            unsafe { real(target, id) }
+        }
+    }
+
+    unsafe extern "C" fn bind_renderbuffer_routed(target: u32, id: u32) {
+        let id = if id == 0 { SCREEN_RENDERBUFFER.load(Ordering::Relaxed) } else { id };
+        if let Some(real) = REAL_BIND_RENDERBUFFER.get() {
+            // SAFETY: as above.
+            unsafe { real(target, id) }
+        }
+    }
+
+    /// On iOS there is no window-system framebuffer: SDL draws the window
+    /// through a framebuffer object and a renderbuffer of its own, and
+    /// "object 0" is nothing. rlgl binds framebuffer 0 to get back to the
+    /// screen after every render-texture pass, and renderbuffer 0 after
+    /// building a render texture's depth buffer - and SDL's swap presents
+    /// whichever renderbuffer is bound, so after the first render texture
+    /// every frame would be drawn into the void and the swap would fail
+    /// with GL_INVALID_OPERATION. Route both 0s to SDL's objects by
+    /// wrapping glad's pointers, once the window (and with it SDL's
+    /// objects) exists.
+    pub fn route_default_framebuffer(rl: &mut sola_raylib::RaylibHandle) {
+        const GL_FRAMEBUFFER: u32 = 0x8D40;
+        const GL_RENDERBUFFER: u32 = 0x8D41;
+        // SAFETY: main thread, right after InitWindow; the glad table is
+        // loaded and nothing else writes it.
+        unsafe {
+            let props = SDL_GetWindowProperties(rl.get_window_handle());
+            let fbo = SDL_GetNumberProperty(props, c"SDL.window.uikit.opengl.framebuffer".as_ptr(), 0);
+            let rbo = SDL_GetNumberProperty(props, c"SDL.window.uikit.opengl.renderbuffer".as_ptr(), 0);
+            if fbo <= 0 || rbo <= 0 {
+                eprintln!("bongbong: SDL reports no iOS framebuffer/renderbuffer; drawing to object 0");
+                return;
+            }
+            SCREEN_FRAMEBUFFER.store(fbo as u32, Ordering::Relaxed);
+            SCREEN_RENDERBUFFER.store(rbo as u32, Ordering::Relaxed);
+            let fb_slot = &raw mut glad_glBindFramebuffer;
+            if let Some(real) = (*fb_slot).take() {
+                let _ = REAL_BIND_FRAMEBUFFER.set(real);
+                *fb_slot = Some(bind_framebuffer_routed);
+                real(GL_FRAMEBUFFER, fbo as u32);
+            }
+            let rb_slot = &raw mut glad_glBindRenderbuffer;
+            if let Some(real) = (*rb_slot).take() {
+                let _ = REAL_BIND_RENDERBUFFER.set(real);
+                *rb_slot = Some(bind_renderbuffer_routed);
+                real(GL_RENDERBUFFER, rbo as u32);
+            }
+        }
+    }
+
+    pub fn main() -> ! {
+        // SAFETY: called once, on the main thread, before any other SDL use.
+        let code = unsafe { SDL_RunApp(0, std::ptr::null_mut(), app_main, std::ptr::null_mut()) };
+        std::process::exit(code)
+    }
+
+    extern "C" fn app_main(_argc: c_int, _argv: *mut *mut c_char) -> c_int {
+        // The bundle is flat (BongBong.app/{bongbong, static/, maps/} -
+        // tools/ios/bundle.sh), so with the bundle as the working directory
+        // every `static/...` and `maps/...` path resolves as on desktop.
+        if let Some(dir) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|d| d.to_path_buf())) {
+            if let Err(e) = std::env::set_current_dir(&dir) {
+                eprintln!("bongbong: cannot enter the app bundle {}: {e}", dir.display());
+            }
+        }
+        super::run(super::Args::parse_from(["bongbong"]));
+        0
+    }
+
+    /// The screen in points, landscape, read from SDL before raylib's
+    /// InitWindow: the SDL backend never re-reads the window size, so the
+    /// size InitWindow is asked for is the one it renders at. `SDL_Init` is
+    /// reference-counted, so raylib's own call just bumps the count.
+    pub fn screen_size_points() -> Option<(i32, i32)> {
+        // SAFETY: plain SDL calls on the main thread; the rect is ours.
+        unsafe {
+            if !SDL_Init(SDL_INIT_VIDEO) {
+                return None;
+            }
+            let display = SDL_GetPrimaryDisplay();
+            if display == 0 {
+                return None;
+            }
+            let mut rect = SdlRect { x: 0, y: 0, w: 0, h: 0 };
+            if !SDL_GetDisplayBounds(display, &mut rect) || rect.w <= 0 || rect.h <= 0 {
+                return None;
+            }
+            // The app is landscape-only (Info.plist); this early the display
+            // may still report portrait bounds, so orient by hand.
+            Some((rect.w.max(rect.h), rect.w.min(rect.h)))
+        }
+    }
 }

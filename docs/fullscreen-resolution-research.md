@@ -440,3 +440,31 @@ unchanged except that the view letterboxes the whole bitmap (bar included)
 and the web canvas's `aspect-ratio` follows the new size (896 / 480). The
 companion plan page renders the arena on each screen class with the bar
 and the touch layout.
+
+## Implementation status (2026-09, branch claude/screen-scaling-crossplay)
+
+- **Field size from the map.** `MapFile::size = [cols, rows]`
+  (`field_size()`); the shipped default is 30 x 15 (960 x 480,
+  `DEFAULT_SCREEN_WIDTH/HEIGHT`), every older map carries
+  `size = [40, 22.5]`, the old default is `maps/classic.toml`. The session,
+  the builder, the dev server, the probe and the linter all take the field
+  from the map; `--resolution` is the window.
+- **The view.** `view.rs`: the bitmap (field plus bar) is composited into
+  one render texture and `View::fit` puts it on the window at one uniform
+  scale, centred, letterboxed; every pointer goes back through
+  `View::to_bitmap`. Native windows are resizable and HiDPI, F11 toggles
+  borderless full screen, `--fullscreen` starts there. The web canvas keeps
+  the bitmap's shape from two CSS custom properties, so the view is the
+  identity there and raylib's touch mapping stays right.
+- **Touch.** `touch.rs`: the floating joystick on one half of the field
+  (`touch_steer_side`, right by default), tap or hold to fire on the other,
+  dead zone and diagonal hysteresis, feedback only while touched, a
+  first-touch hint. Only real touch points drive it; `--touch-from-mouse`
+  is the desktop stand-in for development.
+- **The bars at 960 px.** The play HUD and the builder bar were re-laid
+  out (see docs/hud-and-builder-layout-design.md's revised rule).
+- **Knobs.** Only `enemy_frog_spawn_min_dist` (400 to 270) scaled with the
+  field; the AI's ranges are tank-scale and every fixture baseline held
+  (`just probe-fixtures` green, fixtures keep their 40 x 22.5 world).
+- Chosen: 15 rows (8.1 mm on an iPhone 15). Open: integer snap, the bar's
+  drawn scale on very large monitors.

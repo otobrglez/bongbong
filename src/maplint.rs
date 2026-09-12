@@ -987,10 +987,18 @@ mod map_lint_tests {
     use crate::map::MapFile;
     use crate::obstacle::Material;
     use crate::pickup::PickupKind;
-    use crate::{DEFAULT_SCREEN_HEIGHT, DEFAULT_SCREEN_WIDTH};
+    
+    // The synthetic maps below are drawn on the 40 x 22.5 field the
+    // checks were written against; `wide()` pins that size on them so the
+    // standard field's own size (`DEFAULT_SCREEN_*`) is not what they get.
+    const W: f32 = 1280.0;
+    const H: f32 = 720.0;
 
-    const W: f32 = DEFAULT_SCREEN_WIDTH as f32;
-    const H: f32 = DEFAULT_SCREEN_HEIGHT as f32;
+    fn wide() -> MapFile {
+        let mut map = MapFile::new();
+        map.size = Some((40.0, 22.5));
+        map
+    }
 
     /// Maps the game actually ships/loads by default - gated by
     /// `supported_maps_no_new_errors` against `KNOWN_ERROR_BUDGET` below.
@@ -1026,9 +1034,10 @@ mod map_lint_tests {
     /// two-player round for the player-2 checks only (the terrain is the
     /// same, so its other findings would only be duplicates).
     fn lint_map(map: MapFile) -> Vec<LintFinding> {
-        let mut findings = lint(&init_game(map.clone()), W, H);
+        let (w, h) = map.field_size();
+        let mut findings = lint(&init_game(map.clone()), w, h);
         findings.extend(
-            lint(&init_game_two(map), W, H)
+            lint(&init_game_two(map), w, h)
                 .into_iter()
                 .filter(|f| matches!(f.kind, LintKind::Player2Unreachable | LintKind::PlayersTooClose)),
         );
@@ -1041,8 +1050,9 @@ mod map_lint_tests {
         let mut game = Game::default();
         game.seed_override = Some(0xB0B5);
         game.enemy_count_override = Some(4);
+        let (w, h) = map.field_size();
         game.map = map;
-        game.init(W, H);
+        game.init(w, h);
         game
     }
 
@@ -1052,8 +1062,9 @@ mod map_lint_tests {
         game.seed_override = Some(0xB0B5);
         game.enemy_count_override = Some(4);
         game.players = crate::simulation::PlayerCount::Two;
+        let (w, h) = map.field_size();
         game.map = map;
-        game.init(W, H);
+        game.init(w, h);
         game
     }
 
@@ -1100,7 +1111,7 @@ mod map_lint_tests {
     }
 
     fn base_map() -> MapFile {
-        let mut map = MapFile::new();
+        let mut map = wide();
         map.set_cell(27, 11, CellObject::Start);
         map.set_cell(7, 12, CellObject::Frog);
         map
@@ -1134,7 +1145,7 @@ mod map_lint_tests {
         assert!(!has(&f, LintKind::Player2Unreachable));
         assert!(errors(&f).is_empty(), "too close is advisory");
 
-        let mut map = MapFile::new();
+        let mut map = wide();
         map.set_cell(7, 12, CellObject::Frog);
         let f = lint_map(map);
         dump("no start", &f);
@@ -1249,7 +1260,7 @@ mod map_lint_tests {
 
     #[test]
     fn sealed_frog_is_unreachable() {
-        let mut map = MapFile::new();
+        let mut map = wide();
         map.set_cell(27, 11, CellObject::Start);
         sealed_vault(&mut map);
         // One cell further in than the pickup test's slot: the frog's
@@ -1265,7 +1276,7 @@ mod map_lint_tests {
 
     #[test]
     fn split_field_flags_disconnected_region() {
-        let mut map = MapFile::new();
+        let mut map = wide();
         map.set_cell(28, 11, CellObject::Start);
         map.set_cell(30, 5, CellObject::Frog);
         for row in 1..=21 {
@@ -1306,7 +1317,7 @@ mod map_lint_tests {
 
     #[test]
     fn single_cell_lane_flags_narrow_corridor() {
-        let mut map = MapFile::new();
+        let mut map = wide();
         map.set_cell(20, 11, CellObject::Start); // inside the lane
         map.set_cell(20, 19, CellObject::Frog);
         for col in 10..=30 {
@@ -1520,7 +1531,7 @@ mod map_lint_tests {
     /// buries the player's frog in - same reach rule, same verdict.
     #[test]
     fn sealed_enemy_frog_is_unreachable() {
-        let mut map = MapFile::new();
+        let mut map = wide();
         map.set_cell(27, 11, CellObject::Start);
         map.set_cell(30, 5, CellObject::Frog);
         map.mission.kind = Mission::Hunt;

@@ -15,9 +15,16 @@
 //! emcc's default list, which is just `_main`. The bb_* names must match
 //! `capi::EXPORTS` (a unit test there checks this file mentions each one).
 
+//!
+//! On iOS targets it also links the prebuilt raylib + SDL3 slice from
+//! tools/setup_ios.sh (see `ios_link`).
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     let target = std::env::var("TARGET").unwrap_or_default();
+    if target.contains("apple-ios") {
+        ios_link();
+    }
     let dev_tools = std::env::var_os("CARGO_FEATURE_DEV_TOOLS").is_some();
     if dev_tools && target == "wasm32-unknown-emscripten" {
         let exports = [
@@ -36,4 +43,61 @@ fn main() {
             exports.join(",")
         );
     }
+}
+
+/// iOS: link the raylib (SDL backend, OpenGL ES 2.0) and static SDL3 slice
+/// that tools/setup_ios.sh installs under `$BONGBONG_IOS_LIBS` (default
+/// ~/.local/share/bongbong-ios/sim). sola-raylib is built with `nobuild`
+/// for iOS (Cargo.toml), so nothing else emits a raylib link line. The
+/// frameworks come from SDL's own pkg-config file rather than a copied
+/// list, so an SDL upgrade cannot leave them stale. Lives here rather than
+/// in .cargo/config.toml because the prefix needs `$HOME`, the framework
+/// list is read from a file, and the link args stay scoped to this package.
+fn ios_link() {
+    use std::path::PathBuf;
+    println!("cargo:rerun-if-env-changed=BONGBONG_IOS_LIBS");
+    let prefix = std::env::var_os("BONGBONG_IOS_LIBS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let data = std::env::var_os("XDG_DATA_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").expect("HOME")).join(".local/share"));
+            data.join("bongbong-ios/sim")
+        });
+    let lib = prefix.join("lib");
+    let pc_path = lib.join("pkgconfig/sdl3.pc");
+    println!("cargo:rerun-if-changed={}", pc_path.display());
+    let pc = std::fs::read_to_string(&pc_path).unwrap_or_else(|e| {
+        panic!(
+            "{}: {e}\nthe iOS simulator libraries are missing - run `just ios-setup` (tools/setup_ios.sh)",
+            pc_path.display()
+        )
+    });
+    println!("cargo:rustc-link-search=native={}", lib.display());
+    println!("cargo:rustc-link-lib=static=raylib");
+    println!("cargo:rustc-link-lib=static=SDL3");
+    // "Libs: -L${libdir} -lSDL3 -Wl,-framework,UIKit -Wl,-weak_framework,CoreHaptics ..."
+    for line in pc.lines().filter(|l| l.starts_with("Libs:") || l.starts_with("Libs.private:")) {
+        let mut tokens = line.split_once(':').map(|(_, rest)| rest).unwrap_or("").split_whitespace();
+        while let Some(token) = tokens.next() {
+            if let Some(fw) = token.strip_prefix("-Wl,-framework,") {
+                println!("cargo:rustc-link-lib=framework={fw}");
+            } else if let Some(fw) = token.strip_prefix("-Wl,-weak_framework,") {
+                println!("cargo:rustc-link-arg-bins=-Wl,-weak_framework,{fw}");
+            } else if token == "-framework" {
+                if let Some(fw) = tokens.next() {
+                    println!("cargo:rustc-link-lib=framework={fw}");
+                }
+            } else if let Some(name) = token.strip_prefix("-l") {
+                if name != "SDL3" {
+                    println!("cargo:rustc-link-lib={name}");
+                }
+            }
+        }
+    }
+    // raylib's own GL calls (through glad) resolve against OpenGLES.framework.
+    println!("cargo:rustc-link-lib=framework=OpenGLES");
+    // Static SDL3 carries Objective-C categories; without -ObjC the linker
+    // drops the archive members that only define them.
+    println!("cargo:rustc-link-arg-bins=-ObjC");
 }
