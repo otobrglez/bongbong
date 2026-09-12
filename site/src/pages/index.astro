@@ -423,7 +423,7 @@
         </div>
         <div class="instructions">
             <p>Arrows to drive, <kbd>Space</kbd> to fire, <kbd>r</kbd> to restart.</p>
-            <p>Two players: press the tank button in the bar. Arrows + <kbd>Right Shift</kbd> for player 1, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> + <kbd>Left Shift</kbd> for player 2.</p>
+            <p>Two players: press the tank button in the bar. Arrows + <kbd>Space</kbd> for player 1, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> + <kbd>Left Shift</kbd> for player 2.</p>
         </div>
         <details class="tuning" id="tuning" hidden>
             <summary>Tuning <span class="badge">dev build</span></summary>
@@ -544,22 +544,19 @@
         },
         {passive: false},
     );
-    // Which Shift key is held, for two-player mode. Emscripten's GLFW
-    // layer reports the DOM Shift key as the *left* Shift whichever side
-    // was pressed (it maps keyCode 0x10 and never reads event.code), so
-    // the game cannot tell player 1's Right Shift from player 2's Left
-    // Shift through raylib. It reads this bitmask once a frame instead
-    // (bit 1 = ShiftLeft, bit 2 = ShiftRight; see main.rs's shift_state).
-    // Cleared on blur so a Shift held while the tab loses focus does not
-    // stick.
+    // Whether the left Shift key - player 2's fire key - is held. Emscripten's
+    // GLFW layer reports the DOM Shift key as the *left* Shift whichever
+    // side was pressed (it maps keyCode 0x10 and never reads event.code), so
+    // through raylib a Right Shift would fire player 2's tank on the web
+    // only. The game reads this flag once a frame instead (bit 1 =
+    // ShiftLeft; see main.rs's left_shift_down). Cleared on blur so a Shift
+    // held while the tab loses focus does not stick.
     window.bbShift = 0;
     window.addEventListener("keydown", function (e) {
         if (e.code === "ShiftLeft") window.bbShift |= 1;
-        else if (e.code === "ShiftRight") window.bbShift |= 2;
     });
     window.addEventListener("keyup", function (e) {
         if (e.code === "ShiftLeft") window.bbShift &= ~1;
-        else if (e.code === "ShiftRight") window.bbShift &= ~2;
     });
     window.addEventListener("blur", function () { window.bbShift = 0; });</script>
 <script is:inline>

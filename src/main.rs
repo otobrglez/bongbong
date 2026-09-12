@@ -21,9 +21,8 @@ use sola_raylib::prelude::{KeyboardKey, RaylibHandle};
 /// keyboard. `fire` is the raw held state - whether it actually fires
 /// (edge-triggered for shells, full-auto while a laser is charged) is
 /// `Game::update`'s call, not this function's; see `Input::player_intent`.
-/// Single player: arrows + Space, player 2 idle. Two players: player 1 on
-/// the arrows + Right Shift (Space is not read), player 2 on WASD + Left
-/// Shift (docs/two-players.md).
+/// Player 1 is always the arrows + Space; with two players, player 2 is
+/// WASD + Left Shift, otherwise idle (docs/two-players.md).
 fn gather_intents(rl: &RaylibHandle, players: PlayerCount) -> (Intent, Intent) {
     let dir = |up: KeyboardKey, down: KeyboardKey, left: KeyboardKey, right: KeyboardKey| {
         if rl.is_key_down(up) {
@@ -39,43 +38,37 @@ fn gather_intents(rl: &RaylibHandle, players: PlayerCount) -> (Intent, Intent) {
         }
     };
     let arrows = dir(KeyboardKey::KEY_UP, KeyboardKey::KEY_DOWN, KeyboardKey::KEY_LEFT, KeyboardKey::KEY_RIGHT);
+    let player1 = Intent { move_dir: arrows, fire: rl.is_key_down(KeyboardKey::KEY_SPACE), ..Intent::default() };
     match players {
-        PlayerCount::One => (
-            Intent { move_dir: arrows, fire: rl.is_key_down(KeyboardKey::KEY_SPACE), ..Intent::default() },
-            Intent::default(),
-        ),
+        PlayerCount::One => (player1, Intent::default()),
         PlayerCount::Two => {
-            let (left_shift, right_shift) = shift_state(rl);
             let wasd = dir(KeyboardKey::KEY_W, KeyboardKey::KEY_S, KeyboardKey::KEY_A, KeyboardKey::KEY_D);
-            (
-                Intent { move_dir: arrows, fire: right_shift, ..Intent::default() },
-                Intent { move_dir: wasd, fire: left_shift, ..Intent::default() },
-            )
+            (player1, Intent { move_dir: wasd, fire: left_shift_down(rl), ..Intent::default() })
         }
     }
 }
 
-/// Whether the left and right Shift keys are held. Native reads raylib's
-/// two keys. On the web emscripten's GLFW layer reports the DOM Shift key
-/// as `GLFW_KEY_LEFT_SHIFT` whichever side was pressed (`libglfw.js` maps
-/// keyCode 0x10 to the left key and never looks at `event.location`), so
-/// Right Shift would never reach the game and player 1 could not fire:
-/// the page keeps `window.bbShift` (bit 1 = ShiftLeft, bit 2 = ShiftRight,
-/// from `keydown`/`keyup` on `event.code`) and this reads it once a frame.
+/// Whether the left Shift key - player 2's fire key - is held. Native reads
+/// raylib's key. On the web emscripten's GLFW layer reports the DOM Shift
+/// key as `GLFW_KEY_LEFT_SHIFT` whichever side was pressed (`libglfw.js`
+/// maps keyCode 0x10 to the left key and never looks at `event.location`),
+/// so Right Shift would fire player 2's tank too: the page keeps
+/// `window.bbShift` (bit 1 = ShiftLeft, from `keydown`/`keyup` on
+/// `event.code`) and this reads it once a frame instead.
 #[cfg(target_os = "emscripten")]
-fn shift_state(_rl: &RaylibHandle) -> (bool, bool) {
+fn left_shift_down(_rl: &RaylibHandle) -> bool {
     unsafe extern "C" {
         fn emscripten_run_script_int(script: *const std::os::raw::c_char) -> std::os::raw::c_int;
     }
     // SAFETY: a NUL-terminated literal, evaluated synchronously by the
     // emscripten runtime; the value is a plain int.
     let mask = unsafe { emscripten_run_script_int(c"(window.bbShift|0)".as_ptr()) };
-    (mask & 1 != 0, mask & 2 != 0)
+    mask & 1 != 0
 }
 
 #[cfg(not(target_os = "emscripten"))]
-fn shift_state(rl: &RaylibHandle) -> (bool, bool) {
-    (rl.is_key_down(KeyboardKey::KEY_LEFT_SHIFT), rl.is_key_down(KeyboardKey::KEY_RIGHT_SHIFT))
+fn left_shift_down(rl: &RaylibHandle) -> bool {
+    rl.is_key_down(KeyboardKey::KEY_LEFT_SHIFT)
 }
 
 /// Command-line flags for bongbong's native binary. All optional - with none
@@ -142,8 +135,8 @@ struct Args {
 
     /// Start the session in single (1) or two-player (2) mode - the
     /// players button in the HUD bar switches later (docs/two-players.md).
-    /// Two players: player 1 on the arrows + Right Shift, player 2 on WASD
-    /// + Left Shift; single: arrows + Space. Kept across restarts.
+    /// Player 1 is always the arrows + Space; two players adds player 2 on
+    /// WASD + Left Shift. Kept across restarts.
     #[arg(long = "players", default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=2))]
     players: u8,
 

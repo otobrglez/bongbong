@@ -652,7 +652,7 @@ fn draw_dialog_button(d: &mut impl RaylibDraw, rect: Rectangle, label: &str, col
 /// space, like `draw_leave_dialog`.
 pub fn draw_players_dialog(d: &mut impl RaylibDraw, field: Rect, players: PlayerCount) {
     let r = players_dialog_rects(field);
-    draw_dialog_panel(d, r.panel, "How many players?", "P1 arrows + R.Shift    P2 WASD + L.Shift");
+    draw_dialog_panel(d, r.panel, "How many players?", "P1 arrows + Space    P2 WASD + L.Shift");
     let live_fill = Some(Color::new(255, 255, 255, 40));
     let one_live = players == PlayerCount::One;
     draw_dialog_button(d, r.one, "1 PLAYER", if one_live { TEXT } else { BUILD_COLOR }, one_live.then_some(live_fill).flatten());
