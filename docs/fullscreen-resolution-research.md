@@ -403,3 +403,40 @@ the above: both clients run the deterministic simulation from a shared
   most dynamic-joystick games ship the mirror. One setting either way.
 - **Integer snap by default?** Measure the shimmer on a real phone at DPR
   3 after the DPR fix.
+
+## Revision 3: the HUD bar is part of the bitmap
+
+Master now renders the field plus a 32 px HUD bar above it as one bitmap
+(`Layout::for_field`, the web canvas locked to that shape with
+`aspect-ratio: 1280 / 752` because raylib maps touches against the canvas
+box). What gets letterboxed onto a screen is therefore `cols x 32` wide and
+`rows x 32 + 32` tall, and the bar scales with the field. Redone with that
+shape, for a phone in landscape steering with an invisible joystick on the
+right and tapping to fire on the left (so nothing is reserved for
+controls):
+
+| Field | Bitmap | Shape | iPhone 15 | Pixel 8 | iPhone SE | iPad 10.9" | iPad Pro | MacBook 14" | 24" 1080p | 27" 1440p | min used |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 40 x 22.5 (today) | 1280 x 752 | 1.70 | 5.5 mm, 79% | 5.5, 77% | 5.0, 96% | 11.2, 85% | 13.3, 78% | 15.1, 90% | 25.4, 96% | 28.6, 96% | 77% |
+| 32 x 16 | 1024 x 544 | 1.88 | 7.6, 87% | 7.6, 85% | 6.5, 94% | 14.0, 76% | 16.6, 71% | 18.9, 82% | 33.1, 94% | 37.3, 94% | 71% |
+| 30 x 15 | 960 x 512 | 1.88 | 8.1, 86% | 8.1, 84% | 6.9, 95% | 14.9, 77% | 17.7, 71% | 20.2, 82% | 35.3, 95% | 39.8, 95% | 71% |
+| 30 x 14 | 960 x 480 | 2.00 | 8.6, 92% | 8.6, 90% | 6.9, 89% | 14.9, 72% | 17.7, 67% | 20.2, 77% | 35.3, 89% | 39.8, 89% | 67% |
+| **28 x 14** | **896 x 480** | **1.87** | **8.6, 86%** | **8.6, 84%** | **7.4, 95%** | **16.0, 77%** | **18.9, 71%** | **21.6, 82%** | **37.9, 95%** | **42.6, 95%** | **71%** |
+| 26 x 13 | 832 x 448 | 1.86 | 9.3, 86% | 9.2, 84% | 8.0, 96% | 17.2, 77% | 20.4, 72% | 23.3, 83% | 40.8, 96% | 45.9, 96% | 72% |
+| 26 x 12 | 832 x 416 | 2.00 | 10.0, 92% | 10.0, 90% | 8.0, 89% | 17.2, 72% | 20.4, 67% | 23.3, 77% | 40.8, 89% | 45.9, 89% | 67% |
+
+Tank in mm at the device's fit scale; "used" is bitmap area over screen
+area. Two families: 2:1 fields fill a phone to 92% but drop tablets to 72%
+and monitors to 89%; fields of about 1.87:1 give 86 / 77 / 95, the best
+minimum. Rows set the tank size, columns only spend the phone's side bars.
+Under 14 rows the AI's ring and retreat range have nowhere to go.
+
+**Recommendation stands at 28 x 14** (896 x 448 field, 896 x 480 bitmap).
+On an iPhone 15 the fit scale is 0.82: an 8.6 mm tank, 59 pt side bars
+that match the safe-area inset so the dynamic island never touches the
+field, a 26 pt bar with 14.7 pt text, no separate UI scale needed. 30 x 15
+is the same family at 8.1 mm if more room is wanted. Section 9's steps are
+unchanged except that the view letterboxes the whole bitmap (bar included)
+and the web canvas's `aspect-ratio` follows the new size (896 / 480). The
+companion plan page renders the arena on each screen class with the bar
+and the touch layout.
