@@ -12,7 +12,7 @@ that will ask if you want to play in different modes.
 ## Player modes
 
 - Single player. Same gameplay as we have now. Space is for fire.
-- Two players. Player one fires with right shift key not space key.
+- Two players. Player one keeps Space for fire; player two fires with Left Shift.
 
 ## Two players mode
 
@@ -30,7 +30,7 @@ In two player mode HUD labels should start to look like: "60 | 70". Where 60 is 
 
 ## Keyboard mapping
 
-- P1 arrows + Right Shift; 
+- P1 arrows + Space;
 - P2 WASD + Left Shift;
 
 ## Decisions (2026-09-10, as built)
@@ -43,8 +43,10 @@ In two player mode HUD labels should start to look like: "60 | 70". Where 60 is 
   players?" dialog, styled like "Leave this round?". Picking the other
   count restarts the round at once in that mode (a `--seed` stays pinned);
   the current count just closes it. The dialog works on the end screen too.
-- **Keys.** Single: arrows + Space, as before. Two players: player 1 on the
-  arrows + Right Shift (Space is not read), player 2 on WASD + Left Shift.
+- **Keys.** Player 1 is always the arrows + Space, single or two players.
+  Two players adds player 2 on WASD + Left Shift. (Player 1 first fired
+  with Right Shift in two-player mode; changed to Space on 2026-09-12 so
+  the arrow-key player's fire key never moves.)
 - **Identity.** A tank stores its `Owner` (`Player(0|1)` or `Enemy(slot)`).
   Slot numbering: players first (0, and 1 with two players), enemies from
   `Game::first_enemy_slot` (1 or 2). Single-player rounds are byte-for-byte
@@ -78,7 +80,8 @@ In two player mode HUD labels should start to look like: "60 | 70". Where 60 is 
   player. The linter adds `no-start`, `player2-unreachable` (error) and
   `players-too-close` (warning).
 - **Web.** Emscripten's GLFW layer reports the DOM Shift key as Left Shift
-  whichever side was pressed, so the page keeps a `window.bbShift` bitmask
+  whichever side was pressed, which would let Right Shift fire player 2 on
+  the web only, so the page keeps a `window.bbShift` flag for the left key
   from `event.code` and the game reads it once a frame; native reads
-  raylib's two keys.
+  raylib's Left Shift.
 
