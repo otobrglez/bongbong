@@ -64,21 +64,27 @@
           --canvas-max-w: calc(var(--bitmap-w) * 1.5px);
           --canvas-w: min(100vw, var(--canvas-max-w), calc((100vh - 90px) * var(--bitmap-w) / var(--bitmap-h)));
 
-          /* The two overlay controls sit on the canvas's *bottom* corners,
-             off the HUD bar along its top. The canvas is centred in .game
-             and is its first block, so a corner is half the leftover width
-             in from ours and the canvas's own height (its width at 752/1280)
-             down; `translateY(-100%)` hangs the control up from that line so
-             its height never needs to be known. */
-          .subscribe-link, .fullscreen-toggle {
+          /* The two overlay controls sit together in the canvas's
+             *bottom-left* corner, off the HUD bar along its top: Full screen
+             first, the subscribe link beside it, one row. The canvas is
+             centred in .game and is its first block, so the corner is half
+             the leftover width in from ours and the canvas's own height
+             (its width at the bitmap's shape) down; `translateY(-100%)`
+             hangs the row up from that line so its height never needs to
+             be known. The game keeps its version stamp in the opposite
+             corner (src/hud.rs `HUD_VERSION_*_INSET`). */
+          .overlay-controls {
             position: absolute;
+            left: calc((100% - var(--canvas-w)) / 2 + 10px);
             top: calc(var(--canvas-w) * var(--bitmap-h) / var(--bitmap-w) - 10px);
             transform: translateY(-100%);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            z-index: 2;
           }
 
           .subscribe-link {
-            left: calc((100% - var(--canvas-w)) / 2 + 10px);
-            z-index: 1;
             padding: 3px 8px;
             border-radius: 3px;
             background: rgba(46, 46, 46, 0.75);
@@ -219,7 +225,7 @@
             .instructions, .tuning { display: none; }
             /* The canvas is centred vertically here, so its bottom edge is
                the middle of the box plus half its height. */
-            .subscribe-link, .fullscreen-toggle {
+            .overlay-controls {
               top: calc(50% + var(--canvas-w) * var(--bitmap-h) / var(--bitmap-w) / 2 - 10px);
             }
           }
@@ -232,15 +238,12 @@
 
             --canvas-w: min(100vw, var(--canvas-max-w), calc(100vh * var(--bitmap-w) / var(--bitmap-h)));
             .instructions, .tuning { display: none; }
-            .subscribe-link, .fullscreen-toggle {
+            .overlay-controls {
               top: calc(50% + var(--canvas-w) * var(--bitmap-h) / var(--bitmap-w) / 2 - 10px);
             }
           }
 
-          /* Bottom *right*, opposite the subscribe link. */
           .fullscreen-toggle {
-            right: calc((100% - var(--canvas-w)) / 2 + 10px);
-            z-index: 2;
             padding: 3px 9px;
             border-radius: 3px;
             border: 0;
@@ -416,9 +419,11 @@
 
 <div class="wrapper">
     <div class="game">
-        <a class="subscribe-link" href="/subscribe">Subscribe for updates.</a>
-        <button class="fullscreen-toggle" id="fullscreen-toggle" type="button"
-                title="Play full screen">&#9974; Full screen</button>
+        <div class="overlay-controls">
+            <button class="fullscreen-toggle" id="fullscreen-toggle" type="button"
+                    title="Play full screen">&#9974; Full screen</button>
+            <a class="subscribe-link" href="/subscribe">Subscribe for updates.</a>
+        </div>
         <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
         <!-- Shown from the very first byte of HTML and torn down by the
              loader script below. The wasm and its preloaded `static/` data

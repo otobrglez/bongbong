@@ -340,17 +340,17 @@ pub const DEFAULT_SCREEN_WIDTH: i32 = 1088;
 pub const DEFAULT_SCREEN_HEIGHT: i32 = 544;
 
 /// A platform with no desktop window and no writable working directory:
-/// the web build and iOS. The window is the screen (no resize, no
-/// high-DPI request, no fullscreen toggle), the shaders are the GLSL ES
-/// 100 ports in `static/web/`, maps are not saved, and the particle
-/// budget starts lower. `main.rs` and `map.rs` branch on this rather than
-/// on the two target names.
-pub const EMBEDDED: bool = cfg!(any(target_os = "emscripten", target_os = "ios"));
+/// the web build, iOS and Android. The window is the screen (no resize,
+/// no high-DPI request, no fullscreen toggle), the shaders are the GLSL
+/// ES 100 ports in `static/web/`, maps are not saved, and the particle
+/// budget starts lower. `app.rs` and `map.rs` branch on this rather than
+/// on the target names.
+pub const EMBEDDED: bool = cfg!(any(target_os = "emscripten", target_os = "ios", target_os = "android"));
 
-/// Whether the player has a keyboard: everything but iOS. Where there is
-/// none, the bar carries a RESTART button in place of the R key, and the
-/// two-player mode is not offered.
-pub const KEYBOARD_AVAILABLE: bool = !cfg!(target_os = "ios");
+/// Whether the player has a keyboard: everything but the phones (iOS,
+/// Android). Where there is none, the bar carries a RESTART button in
+/// place of the R key, and the two-player mode is not offered.
+pub const KEYBOARD_AVAILABLE: bool = !cfg!(any(target_os = "ios", target_os = "android"));
 
 /// Whether the two-player mode (docs/two-players.md) is offered: two
 /// players share one keyboard, so it follows `KEYBOARD_AVAILABLE` - on iOS
@@ -865,3 +865,4 @@ pub mod touch;
 pub mod track;
 pub mod tuning;
 pub mod view;
+pub mod app;

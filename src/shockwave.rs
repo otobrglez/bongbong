@@ -91,9 +91,25 @@ impl RippleFx {
         screen_height: i32,
         tuning: RippleTuning,
     ) -> Self {
+        #[cfg(not(target_os = "android"))]
         let mut shader = rl
             .load_shader(thread, None, Some(shader_path))
             .expect("failed loading ripple shader");
+        // Android keeps its assets inside the APK, where raylib's own
+        // loaders see them but the wrapper's `load_shader` does not (it
+        // checks the path with `std::fs` first); the three ripple shaders
+        // are small, so the GLSL ES 100 ports travel in the binary instead.
+        #[cfg(target_os = "android")]
+        let mut shader = {
+            let source = match shader_path.rsplit('/').next() {
+                Some("shockwave.fs") => include_str!("../static/web/shockwave.fs"),
+                Some("muzzle_flash.fs") => include_str!("../static/web/muzzle_flash.fs"),
+                Some("impact.fs") => include_str!("../static/web/impact.fs"),
+                other => panic!("no embedded ripple shader for {other:?}"),
+            };
+            rl.load_shader_from_memory(thread, None, Some(source))
+                .expect("failed compiling the embedded ripple shader")
+        };
 
         let center_loc = shader.get_shader_location("center");
         let time_loc = shader.get_shader_location("time");

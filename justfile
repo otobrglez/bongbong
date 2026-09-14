@@ -188,3 +188,43 @@ run-ios-device *ARGS: (build-ios-device ARGS)
     bash -c 'set -e; export IOS_SLICE=ios; source tools/ios/env.sh; UDID=$(cat target/ios-device/udid); \
         xcrun devicectl device install app --device "$UDID" target/ios-device/BongBong.app; \
         xcrun devicectl device process launch --console --device "$UDID" com.otobrglez.bongbong'
+
+# --- Android (docs/android-port-prd.md, CLAUDE.md's Android section) ---
+# Every recipe sources tools/android/env.sh: the SDK, NDK and JDK paths,
+# the API pins, the prebuilt raylib prefix and the NDK compiler for cargo.
+
+# One-time: command-line tools, NDK, platform, arm64 system image, the
+# `bongbong` AVD, and raylib built for Android (tools/setup_android.sh).
+android-setup:
+    ./tools/setup_android.sh
+
+# Gate 0: raylib's Android platform in a NativeActivity (tools/android/smoke.c)
+# on the AVD - proves toolchain, packaging, GL ES 2, assets and touch before
+# any Rust. Pass = "SMOKE OK" on screen, a non-zero asset size and touch lines in logcat.
+android-smoke:
+    ./tools/android/smoke.sh
+
+# Build libbongbong_android.so (a plain cargo build for aarch64-linux-android;
+# tools/android/env.sh points cargo, cc-rs and bindgen at the NDK) and stage
+# target/android/BongBong.apk (tools/android/package.sh: assets/static, the
+# .so, debug signature).
+build-android *ARGS:
+    bash -c 'set -e; source tools/android/env.sh; cargo build --release --target aarch64-linux-android -p bongbong-android {{ARGS}}; \
+        tools/android/package.sh target/aarch64-linux-android/release/libbongbong_android.so bongbong_android com.otobrglez.bongbong BongBong target/android/BongBong.apk static/ "" bongbong_on_create'
+
+# Build, boot the AVD if needed, install and launch the game, then follow logcat (Ctrl-C detaches).
+run-android *ARGS: (build-android ARGS)
+    bash -c 'set -e; source tools/android/env.sh; tools/android/emulator.sh; \
+        adb install -r target/android/BongBong.apk; adb logcat -c || true; \
+        adb shell am start -n com.otobrglez.bongbong/android.app.NativeActivity; \
+        adb logcat -s raylib:V bongbong:V'
+
+# Screenshot the running emulator (default target/android/shot.png).
+android-screenshot OUT="target/android/shot.png":
+    bash -c 'source tools/android/env.sh; adb exec-out screencap -p > {{OUT}} && echo {{OUT}}'
+
+# Inject a tap (`just android-tap 600 400`) or a swipe (`just android-swipe 1800 600 1800 300`) in screen pixels.
+android-tap X Y:
+    bash -c 'source tools/android/env.sh; adb shell input tap {{X}} {{Y}}'
+android-swipe X1 Y1 X2 Y2 MS="300":
+    bash -c 'source tools/android/env.sh; adb shell input swipe {{X1}} {{Y1}} {{X2}} {{Y2}} {{MS}}'

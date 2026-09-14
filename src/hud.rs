@@ -28,15 +28,16 @@ use crate::{Rect, MAX_DAMAGE, PICKUP_TEXTURE_SIZE, SHELL_TEXTURE_SIZE};
 pub const HUD_TEXT_SIZE: i32 = 18;
 /// The small labels over the timed-buff bars (`SPEED`/`SHIELD`/`FROG`).
 pub const HUD_LABEL_SIZE: i32 = 10;
-/// The version line near the field's bottom-right corner.
-pub const HUD_VERSION_TEXT_SIZE: i32 = 20;
+/// The version line near the field's bottom-right corner, in the size of
+/// the bar's small labels (`SPEED`/`SHIELD`/`FROG`).
+pub const HUD_VERSION_TEXT_SIZE: i32 = HUD_LABEL_SIZE;
 /// How far the version line's right end sits in from the field's right
-/// edge: clear of the web page's `Full screen` button, which occupies the
-/// corner itself (about 90 px wide, 10 px in), plus a gap.
-pub const HUD_VERSION_RIGHT_INSET: i32 = 120;
+/// edge - the same as its bottom inset, so it sits square in the corner.
+/// The web page's overlay controls live in the opposite, bottom-left
+/// corner (site/src/pages/index.astro `.overlay-controls`).
+pub const HUD_VERSION_RIGHT_INSET: i32 = 11;
 /// How far the version line's bottom sits up from the field's bottom
-/// edge: chosen so its glyphs sit level with the page's `Full screen`
-/// button (a ~22 px box ending 10 px up).
+/// edge.
 pub const HUD_VERSION_BOTTOM_INSET: i32 = 11;
 /// The version line's colour: white at 70%, a step below the HUD's
 /// readouts so it never competes with the round.

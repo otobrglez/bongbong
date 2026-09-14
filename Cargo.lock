@@ -129,6 +129,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "bongbong-android"
+version = "0.0.23"
+dependencies = [
+ "bongbong",
+]
+
+[[package]]
 name = "bytemuck"
 version = "1.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

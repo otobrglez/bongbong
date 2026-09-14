@@ -24,6 +24,21 @@ toml = "1"
 [target.'cfg(target_os = "ios")'.dependencies]
 sola-raylib = { version = "6.3.0", features = ["nobuild", "sdl"] }
 
+# Android (docs/android-port-prd.md, CLAUDE.md's Android section): raylib's
+# own Android platform, prebuilt by tools/setup_android.sh and linked by
+# android/build.rs. `nobuild` skips the crate's Android cmake branch, which
+# mis-parses the API level from the target triple and emits none of the
+# link args raylib needs; no `sdl` here, raylib drives the NativeActivity
+# itself.
+[target.'cfg(target_os = "android")'.dependencies]
+sola-raylib = { version = "6.3.0", features = ["nobuild"] }
+
+# The Android shared library lives in its own crate (android/) so the
+# desktop builds never link a cdylib; the root package stays the default
+# member, so `cargo build`/`test`/`watch` here are unchanged.
+[workspace]
+members = ["android"]
+
 [features]
 # Dev/QA-only runtime tuning surface (docs/runtime-tuning-design.md): the
 # `extern "C"` API in src/capi.rs that the web page's tuning panel drives,

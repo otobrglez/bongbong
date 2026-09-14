@@ -44,7 +44,9 @@ in {
     # simulators come from /Applications/Xcode.app, which the devenv shell
     # hides behind DEVELOPER_DIR/SDKROOT - iOS builds set DEVELOPER_DIR back
     # to Xcode's, see the PRD.
-    targets = [ "wasm32-unknown-emscripten" "aarch64-apple-ios" "aarch64-apple-ios-sim" ];
+    # aarch64-linux-android: the Android port (docs/android-port-prd.md);
+    # the NDK, SDK and emulator come from tools/setup_android.sh.
+    targets = [ "wasm32-unknown-emscripten" "aarch64-apple-ios" "aarch64-apple-ios-sim" "aarch64-linux-android" ];
   };
 
   languages.javascript = {

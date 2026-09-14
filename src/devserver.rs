@@ -612,13 +612,21 @@ impl DevServer {
         }
         let png = image.export_image_to_memory(".png").map_err(|e| e.to_string())?;
         self.shot_seq += 1;
-        let dir = Path::new(SHOT_DIR);
-        fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        let path = dir.join(format!("{:05}-f{}.png", self.shot_seq, game.frame()));
-        fs::write(&path, &png).map_err(|e| format!("{}: {e}", path.display()))?;
+        // The file is a convenience for the desktop; a phone's working
+        // directory is not writable (and the caller could not read the
+        // file anyway), so there the PNG travels in the reply alone.
+        let path = if crate::EMBEDDED {
+            None
+        } else {
+            let dir = Path::new(SHOT_DIR);
+            fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            let path = dir.join(format!("{:05}-f{}.png", self.shot_seq, game.frame()));
+            fs::write(&path, &png).map_err(|e| format!("{}: {e}", path.display()))?;
+            Some(path.display().to_string())
+        };
         Ok(json!({
             "frame": game.frame(),
-            "path": path.display().to_string(),
+            "path": path,
             "width": image.width(),
             "height": image.height(),
             "bytes": png.len(),
