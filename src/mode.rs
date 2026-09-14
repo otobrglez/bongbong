@@ -126,9 +126,10 @@ impl Session {
     /// The players button in the bar: open the players dialog, or close it
     /// if it is already up. Play mode only, and a no-op while the leave
     /// dialog is asking - one question at a time. Works on the end screen
-    /// too (the restart countdown waits). Returns whether it is open.
+    /// too (the restart countdown waits). Returns whether it is open. Never
+    /// opens where two players are not offered (`TWO_PLAYERS_AVAILABLE`).
     pub fn press_players(&mut self) -> bool {
-        if self.driver == Driver::Play && !self.dialog {
+        if crate::TWO_PLAYERS_AVAILABLE && self.driver == Driver::Play && !self.dialog {
             self.players_dialog = !self.players_dialog;
         }
         self.players_dialog
@@ -212,7 +213,13 @@ impl Session {
 
     /// What `Game::render` should draw around the field this frame.
     pub fn play_chrome(&self) -> PlayChrome {
-        PlayChrome { build_button: true, players_button: true, leave_dialog: self.dialog, players_dialog: self.players_dialog }
+        PlayChrome {
+            build_button: true,
+            players_button: crate::TWO_PLAYERS_AVAILABLE,
+            restart_button: !crate::KEYBOARD_AVAILABLE,
+            leave_dialog: self.dialog,
+            players_dialog: self.players_dialog,
+        }
     }
 }
 

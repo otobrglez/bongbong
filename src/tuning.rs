@@ -1284,6 +1284,24 @@ tunables! {
         track_weight_opacity: [f32; 12] = [0.70, 1.00, 1.20, 1.10, 0.82, 0.70, 1.00, 1.20, 0.82, 1.10, 1.50, 1.35] in 0.0 ..= 3.0 labels TANK_NAMES;
     }
 
+    group view {
+        /// The most the field is scaled up on screen (view.rs). The map is
+        /// the same for every player in a match and always fully visible,
+        /// so a big screen would otherwise blow it up - 2x on a 1080p
+        /// monitor, a 35 mm tank - while a phone sees it at 8 mm; the cap
+        /// draws it at this scale at most and fills the rest of the window
+        /// with the bar's colour. 1.0 is the classic desktop look (a 64 px
+        /// tank), 1.5 about the old window on a laptop. 0 turns the cap
+        /// off. A phone is never affected: its fit is below any cap. Also
+        /// `--zoom`. Live.
+        view_max_scale: f32 = 1.5 in 0.0 ..= 8.0;
+        /// Floor the cap to a half step (1.0, 1.5, 2.0 ...) so every art
+        /// pixel is a whole number of screen pixels. Off: the pixel art may
+        /// shimmer slightly at a fractional scale, which a static floor
+        /// mostly hides.
+        view_scale_snap: i32 = 0 in 0 ..= 1;
+    }
+
     group cosmetics {
         // --- tall grass (grass.rs) ---
         /// Tufts scattered per tall-grass cell.

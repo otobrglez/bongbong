@@ -2,14 +2,14 @@ use bongbong::tuning::tuning;
 use bongbong::ai::Intent;
 use bongbong::editor::{BuilderInput, CliOverrides, EditorTextures};
 use bongbong::game::{Effects, Textures};
-use bongbong::hud::{leave_dialog_rects, mode_button_rect, players_button_rect, players_dialog_rects};
+use bongbong::hud::{leave_dialog_rects, mode_button_rect, players_button_rect, players_dialog_rects, restart_button_rect, BAR_FILL};
 use bongbong::mode::{Driver, Session};
 use bongbong::shockwave::{RippleFx, RippleTuning};
 use bongbong::simulation::{Game, Input, PlayerCount};
 use bongbong::tuning;
 use bongbong::tank::{Dir, TankKind};
 use bongbong::touch::TouchPoint;
-use bongbong::view::View;
+use bongbong::view::{ScaleCap, View};
 use bongbong::{
     Layout,
 };
@@ -153,6 +153,12 @@ struct Args {
     /// toggles it back).
     #[arg(long = "fullscreen")]
     fullscreen: bool,
+
+    /// The most the field is scaled up on a big screen (the
+    /// `view_max_scale` knob): 1 is the classic 64 px tank, 1.5 the
+    /// default, 0 fills the window whatever its size.
+    #[arg(long = "zoom")]
+    zoom: Option<f32>,
 
     /// Development aid: the left mouse button acts as a touch point, so
     /// the touch scheme (touch.rs: joystick on one half, tap-to-fire on
@@ -397,27 +403,51 @@ fn run(args: Args) {
     // render target from the size InitWindow is asked for (it never reads
     // the window back), so the screen's point size has to go in here.
     #[cfg(target_os = "ios")]
-    let (window_width, window_height) = ios::screen_size_points().unwrap_or(bitmap);
+    let (window_width, window_height) = {
+        ios::set_hints();
+        ios::screen_size_points().unwrap_or(bitmap)
+    };
+    // A desktop window opens at the size it will play at: the bitmap at
+    // the scale cap (1.5x the standard field), clamped to the monitor.
     #[cfg(not(target_os = "ios"))]
-    let (window_width, window_height) = args.resolution.unwrap_or(bitmap);
+    let (window_width, window_height) = args.resolution.unwrap_or_else(|| {
+        if bongbong::EMBEDDED {
+            return bitmap;
+        }
+        let zoom = args.zoom.unwrap_or(tuning().view_max_scale);
+        let open_at = if zoom > 0.0 { zoom.min(1.5).max(1.0) } else { 1.5 };
+        let monitor = sola_raylib::core::window::get_current_monitor();
+        let (mw, mh) = (sola_raylib::core::window::get_monitor_width(monitor), sola_raylib::core::window::get_monitor_height(monitor));
+        let w = ((bitmap.0 as f32) * open_at).round() as i32;
+        let h = ((bitmap.1 as f32) * open_at).round() as i32;
+        if mw > 0 && mh > 0 && (w > mw - 80 || h > mh - 120) {
+            bitmap
+        } else {
+            (w, h)
+        }
+    });
 
     let mut builder = sola_raylib::init();
     builder.size(window_width, window_height).title(&format!("BongBong! v{}", env!("CARGO_PKG_VERSION")));
     // On the web the canvas box keeps the bitmap's own shape (see
     // index.astro) and raylib maps a touch against that box, so the
     // canvas must stay the bitmap's size: a resizable web window would
-    // follow the tab instead. On iOS the SDL backend draws a 1x
-    // framebuffer whatever the flags say, so high DPI must not be asked
-    // for (the viewport would cover a corner of a 3x drawable). Native
-    // windows resize freely and draw at the panel's real density.
+    // follow the tab instead. On iOS the window is the screen, drawn at
+    // the panel's full density (the raylib build carries
+    // tools/ios/raylib-sdl-highdpi.patch for that; screen coordinates,
+    // touch included, stay in points). Native windows resize freely and
+    // draw at the panel's real density.
     if !bongbong::EMBEDDED {
         builder.resizable().highdpi();
     }
     #[cfg(target_os = "ios")]
-    builder.fullscreen();
+    builder.fullscreen().highdpi().vsync();
     let (mut rl, thread) = builder.build();
     #[cfg(target_os = "ios")]
-    ios::route_default_framebuffer(&mut rl);
+    {
+        ios::route_default_framebuffer(&mut rl);
+        ios::log_screen_geometry(&mut rl);
+    }
     if !bongbong::EMBEDDED {
         // Half the bitmap is the smallest window that still reads.
         rl.set_window_min_size(bitmap.0 / 2, bitmap.1 / 2);
@@ -528,6 +558,12 @@ fn run(args: Args) {
     // a lower density - wasm is the tighter budget and a dense wave is
     // where that shows.
     let mut fx = bongbong::fx::Fx::default();
+    // iOS dev-tools builds report frame time to the console every few
+    // seconds: the phone has no keyboard for the overlay cycle and its dev
+    // server is not reachable from the Mac, so the console is the one
+    // channel that says whether the frame budget holds on real hardware.
+    #[cfg(all(feature = "dev-tools", target_os = "ios"))]
+    let mut ios_frame_stats = ios::FrameStats::default();
     if bongbong::EMBEDDED {
         // A literal patch of one known knob: it cannot fail, and there is
         // nothing sensible to do at startup if it somehow did.
@@ -548,6 +584,12 @@ fn run(args: Args) {
     let mut touch = bongbong::touch::TouchScheme::default();
     let touch_from_mouse = args.touch_from_mouse;
 
+    // `--zoom` is the `view_max_scale` knob, staged like a `--tuning`
+    // patch so the dev panel shows the value in force.
+    if let Some(zoom) = args.zoom {
+        let _ = tuning::submit_json(&format!(r#"{{"view_max_scale": {}}}"#, zoom.clamp(0.0, 8.0)));
+        tuning::apply_pending();
+    }
     if let Some(path) = &args.tuning {
         match tuning::submit_file(path) {
             Ok(n) => eprintln!("[tuning] loaded {n} knob(s) from {}", path.display()),
@@ -643,10 +685,18 @@ fn run(args: Args) {
     // harder than rAF, phones most of all. Rendering 120 ticks/s to a 60 Hz
     // display also throws half the work away.
     // iOS is a plain blocking loop (SDL pumps UIKit's run loop from inside
-    // event polling); the simulator ignores the GL swap interval, so a 60
-    // cap is what keeps the loop from spinning - a phone's display link
-    // paces it anyway.
-    let target_fps = if cfg!(target_os = "emscripten") { 0 } else if cfg!(target_os = "ios") { 60 } else { 120 };
+    // event polling). A phone's display paces the swap at exactly the
+    // refresh rate (measured 16.67 ms on an iPhone 14 with no cap, against
+    // 17.1 ms and a little jitter with raylib's 60 cap), so the device runs
+    // uncapped; the simulator ignores the swap interval and would spin, so
+    // it keeps the cap.
+    let target_fps = if cfg!(target_os = "emscripten") {
+        0
+    } else if cfg!(target_os = "ios") {
+        if cfg!(target_abi = "sim") { 60 } else { 0 }
+    } else {
+        120
+    };
     game_loop::run(rl, thread, target_fps, move |rl, thread| {
         // Frame boundary, first: dev-server requests (state reads and
         // writes, tuning patches, an armed step or screenshot), so anything
@@ -675,12 +725,21 @@ fn run(args: Args) {
             impact_fx = i;
             target_field = (width, height);
         }
-        let view = View::fit(
+        // The cap is a desktop matter: an embedded build (web, iOS) draws
+        // the bitmap into a canvas or screen that is never larger than it.
+        let cap = if bongbong::EMBEDDED {
+            None
+        } else {
+            let t = tuning();
+            (t.view_max_scale > 0.0).then(|| ScaleCap { max_scale: t.view_max_scale, snap_half: t.view_scale_snap != 0 })
+        };
+        let view = View::fit_capped(
             {
                 let (w, h) = layout.window_size();
                 (w as f32, h as f32)
             },
             (rl.get_screen_width() as f32, rl.get_screen_height() as f32),
+            cap,
         );
         if !bongbong::EMBEDDED && rl.is_key_pressed(KeyboardKey::KEY_F11) {
             rl.toggle_borderless_windowed();
@@ -743,6 +802,8 @@ fn run(args: Args) {
             || rl.is_key_down(KeyboardKey::KEY_LEFT_SUPER)
             || rl.is_key_down(KeyboardKey::KEY_RIGHT_SUPER);
         let dt = rl.get_frame_time();
+        #[cfg(all(feature = "dev-tools", target_os = "ios"))]
+        ios_frame_stats.sample(dt, rl.get_time(), rl.get_fps(), fx.live());
 
         match session.mode() {
             Driver::Play => {
@@ -796,8 +857,19 @@ fn run(args: Args) {
                     }
                 } else if tab || (pressed && mode_button_rect(layout.panel).check_collision_point_rec(pointer)) {
                     session.press_build();
-                } else if pressed && players_button_rect(layout.panel).check_collision_point_rec(pointer) {
+                } else if bongbong::TWO_PLAYERS_AVAILABLE
+                    && pressed
+                    && players_button_rect(layout.panel).check_collision_point_rec(pointer)
+                {
                     session.press_players();
+                } else if !bongbong::KEYBOARD_AVAILABLE
+                    && pressed
+                    && restart_button_rect(layout.panel).check_collision_point_rec(pointer)
+                {
+                    // The RESTART button stands in for the R key: staged the
+                    // way the dev panel's button is, it becomes this frame's
+                    // `Input::restart_pressed`.
+                    tuning::request_restart();
                 }
             }
             Driver::Build => {
@@ -837,6 +909,7 @@ fn run(args: Args) {
                 thread,
                 &mut composite,
                 &view,
+                BAR_FILL,
                 &layout,
                 &EditorTextures {
                     obstacles: &obstacles_texture,
@@ -932,6 +1005,7 @@ fn run(args: Args) {
             &mut scene_target,
             &mut composite,
             &view,
+            BAR_FILL,
             &mut Effects {
                 shock: &mut shock_fx,
                 muzzle: &mut muzzle_fx,
@@ -1010,6 +1084,9 @@ mod ios {
         fn SDL_GetDisplayBounds(display: u32, rect: *mut SdlRect) -> bool;
         fn SDL_GetWindowProperties(window: *mut c_void) -> u32;
         fn SDL_GetNumberProperty(props: u32, name: *const c_char, default: i64) -> i64;
+        fn SDL_SetHint(name: *const c_char, value: *const c_char) -> bool;
+        fn SDL_GetWindowSafeArea(window: *mut c_void, rect: *mut SdlRect) -> bool;
+        fn SDL_GetWindowSizeInPixels(window: *mut c_void, w: *mut c_int, h: *mut c_int) -> bool;
         /// glad's entries for glBindFramebuffer/glBindRenderbuffer inside
         /// libraylib.a: raylib was built with glad loading GL ES through
         /// SDL_GL_GetProcAddress, so every rlgl GL call goes through a
@@ -1096,6 +1173,75 @@ mod ios {
         }
         super::run(super::Args::parse_from(["bongbong"]));
         0
+    }
+
+    /// SDL hints that have to be set before the window exists. The home
+    /// indicator: "2" dims it and defers the system edge gestures, so a
+    /// thumb sliding along the bottom of the field steers the tank instead
+    /// of opening the app switcher; the first swipe only brings the
+    /// indicator back, the second one leaves the game.
+    pub fn set_hints() {
+        // SAFETY: plain SDL calls with static C strings.
+        unsafe {
+            SDL_SetHint(c"SDL_IOS_HIDE_HOME_INDICATOR".as_ptr(), c"2".as_ptr());
+        }
+    }
+
+    /// One log line with the window in points, the drawable in pixels and
+    /// the safe area (the notch or Dynamic Island and the home indicator
+    /// cut into it), so a console capture shows what the phone drew into.
+    pub fn log_screen_geometry(rl: &mut sola_raylib::RaylibHandle) {
+        // SAFETY: main thread, after InitWindow; the out-parameters are ours.
+        unsafe {
+            let window = rl.get_window_handle();
+            let (mut pw, mut ph) = (0, 0);
+            SDL_GetWindowSizeInPixels(window, &mut pw, &mut ph);
+            let mut safe = SdlRect { x: 0, y: 0, w: 0, h: 0 };
+            SDL_GetWindowSafeArea(window, &mut safe);
+            eprintln!(
+                "bongbong: iOS window {}x{} pt, drawable {}x{} px, safe area {}x{} at ({}, {})",
+                rl.get_screen_width(),
+                rl.get_screen_height(),
+                pw,
+                ph,
+                safe.w,
+                safe.h,
+                safe.x,
+                safe.y
+            );
+        }
+    }
+
+    /// Frame-time sampling for the console, dev-tools builds only.
+    #[cfg(feature = "dev-tools")]
+    #[derive(Default)]
+    pub struct FrameStats {
+        sum: f32,
+        max: f32,
+        frames: u32,
+        last_report: f64,
+    }
+
+    #[cfg(feature = "dev-tools")]
+    impl FrameStats {
+        const REPORT_EVERY_SECONDS: f64 = 5.0;
+
+        pub fn sample(&mut self, dt: f32, now: f64, fps: u32, live_fx: usize) {
+            self.sum += dt;
+            self.max = self.max.max(dt);
+            self.frames += 1;
+            if now - self.last_report >= Self::REPORT_EVERY_SECONDS && self.frames > 0 {
+                eprintln!(
+                    "bongbong: iOS frame avg {:.2} ms, max {:.2} ms, {} fps, {} fx over {} frames",
+                    self.sum / self.frames as f32 * 1000.0,
+                    self.max * 1000.0,
+                    fps,
+                    live_fx,
+                    self.frames
+                );
+                *self = Self { last_report: now, ..Self::default() };
+            }
+        }
     }
 
     /// The screen in points, landscape, read from SDL before raylib's

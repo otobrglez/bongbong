@@ -210,7 +210,28 @@ What differs from the plan in sections 6 and 7:
 - The screen size in points is read from SDL before `InitWindow`
   (`SDL_GetDisplayBounds`), because the SDL backend renders at the size
   it was asked for and never re-reads the window; `view::View` then
-  letterboxes the 960 x 512 bitmap into 874 x 402 with 60 pt bars.
+  letterboxes the bitmap (1088 x 576 since the field moved to 34 x 17)
+  into 874 x 402 points at about 0.7x, with 57 pt bars at the sides.
+- **High-pixel-density drawable** (2026-09-14): the SDL backend had no
+  notion of a drawable bigger than the window, so the phone rendered at
+  point resolution and iOS upscaled it 3x. `tools/ios/raylib-sdl-highdpi.patch`
+  (applied by the setup script on a copy of the vendored tree) sets the
+  render size from `SDL_GetWindowSizeInPixels` (falling back to screen
+  times the display's pixel density, since right after creation SDL can
+  still report the logical size on a phone) and makes rcore.c's
+  `SetupViewport` project in logical units over the drawable. The first
+  attempt used raylib's `screenScale` matrix instead, the GLFW backend's
+  mechanism, and drew the HUD bar 3x: `EndMode2D` re-applies that matrix
+  even inside a render texture, so everything drawn after the field's
+  camera block was scaled. The iPhone 17 simulator renders 2622 x 1206 px
+  behind an 874 x 402 pt window, the iPhone 14 2532 x 1170 px behind
+  844 x 390; touch stays in points.
+- Safe area and the home indicator: `SDL_IOS_HIDE_HOME_INDICATOR` = "2"
+  dims the indicator and defers the bottom-edge gesture; the field's side
+  bars already cover the island zone (safe area 750 x 382 at x = 62 on the
+  iPhone 17 simulator), so no layout change was needed.
+- Frame time on hardware: a dev-tools iOS build logs avg/max frame time,
+  fps and live particles every five seconds (`ios::FrameStats`).
 
 Reproducing T5 and T6 (paths under the session scratch directory are
 disposable; only the commands matter):

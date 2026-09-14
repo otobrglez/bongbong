@@ -327,16 +327,17 @@ pub const PATHFIND_CELL_SIZE: f32 = 48.0; // px per grid cell
 // travels, and each mark fades out over TRACK_LIFETIME seconds.
 pub const TRACK_TEXTURE_SIZE: f32 = 32.0;
 
-// The default battlefield: 30 x 15 cells, the cross-play standard
-// (docs/fullscreen-resolution-research.md): a landscape phone shows it at
-// an 8 mm tank, a monitor gets thin bars above and below. A map names its
+// The default battlefield: 34 x 17 cells, the cross-play standard
+// (docs/fullscreen-resolution-research.md): the largest field a landscape
+// phone still shows at a 7 mm tank (Apple's 44 pt touch target), and on
+// a desktop under the 1.5x view cap two thirds of a 1080p screen. A map names its
 // own `size`; this is what a map without one gets, and what the headless
 // probe and the linter run when a map says nothing. The window is a
 // separate matter (`view::View`): the field is drawn into whatever the
 // window is, letterboxed, so a fixed world size never means a fixed
 // window.
-pub const DEFAULT_SCREEN_WIDTH: i32 = 960;
-pub const DEFAULT_SCREEN_HEIGHT: i32 = 480;
+pub const DEFAULT_SCREEN_WIDTH: i32 = 1088;
+pub const DEFAULT_SCREEN_HEIGHT: i32 = 544;
 
 /// A platform with no desktop window and no writable working directory:
 /// the web build and iOS. The window is the screen (no resize, no
@@ -345,6 +346,18 @@ pub const DEFAULT_SCREEN_HEIGHT: i32 = 480;
 /// budget starts lower. `main.rs` and `map.rs` branch on this rather than
 /// on the two target names.
 pub const EMBEDDED: bool = cfg!(any(target_os = "emscripten", target_os = "ios"));
+
+/// Whether the player has a keyboard: everything but iOS. Where there is
+/// none, the bar carries a RESTART button in place of the R key, and the
+/// two-player mode is not offered.
+pub const KEYBOARD_AVAILABLE: bool = !cfg!(target_os = "ios");
+
+/// Whether the two-player mode (docs/two-players.md) is offered: two
+/// players share one keyboard, so it follows `KEYBOARD_AVAILABLE` - on iOS
+/// the bar shows no players button and the session never opens the players
+/// dialog. The count itself, `Game::players`, still exists there - the
+/// dev tools may set it - but no player-facing path reaches it.
+pub const TWO_PLAYERS_AVAILABLE: bool = KEYBOARD_AVAILABLE;
 
 // The HUD bar above the battlefield (docs/hud-and-builder-layout-design.md,
 // variant A): one obstacle cell tall, so the pickup icons sit in it

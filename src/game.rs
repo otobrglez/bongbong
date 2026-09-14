@@ -22,7 +22,7 @@ use crate::pickup::{Pickup, PickupKind, draw_pickup};
 use crate::plasma::{Plasma, PlasmaState, draw_plasma, draw_plasma_shadow};
 use crate::shell::{Shell, ShellState, draw_shell, draw_shell_shadow};
 use crate::hud::{
-    draw_bar, draw_leave_dialog, draw_mode_button, draw_players_button, draw_players_dialog, version_line, HudModel,
+    draw_bar, draw_leave_dialog, draw_mode_button, draw_players_button, draw_players_dialog, draw_restart_button, version_line, HudModel,
     PlayChrome, BUILD_COLOR, HUD_VERSION_BOTTOM_INSET, HUD_VERSION_COLOR, HUD_VERSION_RIGHT_INSET, HUD_VERSION_TEXT_SIZE,
 };
 use crate::shockwave::{RippleFx, screen_to_ripple_uv};
@@ -165,6 +165,7 @@ impl Game {
         scene_target: &mut RenderTexture2D,
         composite: &mut RenderTexture2D,
         view: &View,
+        backdrop: Color,
         effects: &mut Effects,
         textures: &Textures,
         layout: &Layout,
@@ -819,6 +820,9 @@ impl Game {
             if chrome.players_button {
                 draw_players_button(&mut d, layout.panel, self.players, chrome.players_dialog);
             }
+            if chrome.restart_button {
+                draw_restart_button(&mut d, layout.panel);
+            }
             if chrome.build_button {
                 draw_mode_button(&mut d, layout.panel, "BUILD", BUILD_COLOR);
             }
@@ -828,7 +832,7 @@ impl Game {
                 touch.draw(&mut d, layout, steer_right);
             }
         });
-        crate::view::present(rl, thread, composite, view);
+        crate::view::present(rl, thread, composite, view, backdrop);
     }
 }
 

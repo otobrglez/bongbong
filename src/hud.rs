@@ -566,6 +566,39 @@ pub fn draw_players_button(d: &mut impl RaylibDraw, panel: Rect, players: Player
 /// `PLAY` in build mode (docs/game-editor-fusion.md, sections 6 and 7).
 /// Full bar height, so a finger has the most to aim at.
 pub const MODE_BUTTON_W: f32 = 72.0;
+
+/// Where the RESTART button sits: the players button's slot, which is free
+/// exactly where this button is drawn (no keyboard means no R key and no
+/// second player - `KEYBOARD_AVAILABLE`), so nothing else in the bar moves.
+pub fn restart_button_rect(panel: Rect) -> Rectangle {
+    players_button_rect(panel)
+}
+
+/// The RESTART button: the bar's frame around a circular arrow, the one
+/// restart glyph a phone player reads without a label, in the bar's text
+/// colour so it is neither the builder's amber nor a weapon accent. The
+/// press is `tuning::request_restart`, the same path as the dev panel's
+/// button, and lands as `Input::restart_pressed` like the R key.
+pub fn draw_restart_button(d: &mut impl RaylibDraw, panel: Rect) {
+    let r = restart_button_rect(panel);
+    d.draw_rectangle_lines_ex(Rectangle::new(r.x, r.y + 2.0, r.width, r.height - 4.0), 2.0, TEXT);
+    let center = Vector2::new(r.x + r.width / 2.0, r.y + r.height / 2.0);
+    // Three quarters of a ring, the gap at the right, an arrowhead on the
+    // end that points on around the circle.
+    let (inner, outer) = (6.0, 10.0);
+    let (start, end) = (45.0, 315.0);
+    d.draw_ring(center, inner, outer, start, end, 24, TEXT);
+    let rad = (end as f32).to_radians();
+    let mid = (inner + outer) / 2.0;
+    let tip_at = Vector2::new(center.x + mid * rad.cos(), center.y + mid * rad.sin());
+    let tangent = Vector2::new(-rad.sin(), rad.cos());
+    let radial = Vector2::new(rad.cos(), rad.sin());
+    let tip = Vector2::new(tip_at.x + tangent.x * 6.0, tip_at.y + tangent.y * 6.0);
+    let a = Vector2::new(tip_at.x + radial.x * 5.0, tip_at.y + radial.y * 5.0);
+    let b = Vector2::new(tip_at.x - radial.x * 5.0, tip_at.y - radial.y * 5.0);
+    d.draw_triangle(a, b, tip, TEXT);
+    d.draw_triangle(tip, b, a, TEXT);
+}
 pub const MODE_BUTTON_RIGHT_INSET: f32 = 8.0;
 
 /// Where the mode button sits in `panel` (window space). Shared by the
@@ -689,6 +722,9 @@ pub fn draw_leave_dialog(d: &mut impl RaylibDraw, field: Rect) {
 pub struct PlayChrome {
     pub build_button: bool,
     pub players_button: bool,
+    /// The RESTART button in the players button's slot, where there is no
+    /// keyboard for the R key (`KEYBOARD_AVAILABLE`).
+    pub restart_button: bool,
     pub leave_dialog: bool,
     pub players_dialog: bool,
 }

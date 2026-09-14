@@ -466,5 +466,51 @@ and the touch layout.
 - **Knobs.** Only `enemy_frog_spawn_min_dist` (400 to 270) scaled with the
   field; the AI's ranges are tank-scale and every fixture baseline held
   (`just probe-fixtures` green, fixtures keep their 40 x 22.5 world).
-- Chosen: 15 rows (8.1 mm on an iPhone 15). Open: integer snap, the bar's
-  drawn scale on very large monitors.
+- Chosen: 15 rows at first (8.1 mm on an iPhone 15), then 34 x 17, see
+  below. Open: integer snap, the bar's drawn scale on very large monitors.
+
+### The desktop cap (2026-09-14)
+
+With the field fitted to the whole window, a desktop blew the shared
+30 x 15 world up: 1.57x in fullscreen on a MacBook 14" (a 20 mm tank),
+2.0x on a 1080p monitor (35 mm), 2.67x on a 27" 1440p (40 mm) - "too big",
+where the pre-view desktop drew the bitmap at 1x (a 64 px tank). Doubling
+the grid would fix the desktop and drop the phone to 4 mm: with one shared,
+fully visible map the two sizes move together. So the desktop *presents*
+the same map smaller instead, as every board-shaped cross-play game does:
+`View::fit_capped` never scales past `view_max_scale` (1.5 by default,
+`--zoom`, live in the panel; 1.0 is the classic look), and the margins are
+filled in the bar's colour behind a one-pixel frame. The phone is never
+affected, its fit is below any cap. On a MacBook 1.5x is only a little
+smaller than the fit; the knob is the dial. The follow-up that spends the
+freed width is a right-hand HUD sidebar (docs/hud-and-builder-layout-
+design.md, Variant B).
+
+| Screen | Fit | Capped 1.5x | Tank | Field share of screen |
+|---|---|---|---|---|
+| iPhone 15 | 0.77x | 0.77x | 8.1 mm | 86% |
+| iPad 10.9" | 1.23x | 1.23x | 14.9 mm | 77% |
+| MacBook 14" fullscreen | 1.57x | 1.5x | 19 mm | 76% |
+| 24" 1080p fullscreen | 2.0x | 1.5x | 26 mm | 53% |
+| 27" 1440p fullscreen | 2.67x | 1.5x | 22 mm | 33% |
+
+### The standard grows to 34 x 17 (2026-09-14)
+
+With the desktop capped, more battlefield became the ask on both sides.
+Rows set the phone's tank and columns spend the phone's side margin (the
+one that hides the dynamic island), so the room is small: 34 x 17 is the
+largest field that keeps the iPhone tank at the 44 pt touch target
+(7.2 mm), keeps 55 pt side margins, and gives 28% more area. On a desktop
+under the 1.5x cap the field grows from half of a 1080p screen to two
+thirds; on a MacBook 14" the cap no longer binds (the fit is 1.39x) and
+the field covers 82% of the screen. 36 x 18 (6.8 mm) and 40 x 20 (6.2 mm)
+head back toward the classic map's "very small" phone tanks. The default
+map was re-authored at 34 x 17 (same layout idea, a thirteen-cell bunker);
+every other map keeps its declared size.
+
+| Grid | Area | iPhone 15 tank | MacBook 14" | 24" 1080p | 27" 1440p |
+|---|---|---|---|---|---|
+| 30 x 15 | - | 8.1 mm | 1.5x, 74% | 1.5x, 53% | 1.5x, 30% |
+| **34 x 17** | **+28%** | **7.2 mm** | **1.39x, 82%** | **1.5x, 68%** | **1.5x, 38%** |
+| 36 x 18 | +44% | 6.8 mm | 1.31x, 81% | 1.5x, 76% | 1.5x, 43% |
+| 40 x 20 | +77% | 6.2 mm | 1.18x, 81% | 1.5x, 93% | 1.5x, 52% |

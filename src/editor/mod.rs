@@ -1231,6 +1231,7 @@ impl MapEditor {
         thread: &RaylibThread,
         composite: &mut RenderTexture2D,
         view: &crate::view::View,
+        backdrop: Color,
         layout: &Layout,
         textures: &EditorTextures,
     ) {
@@ -1372,7 +1373,7 @@ impl MapEditor {
             }
         }
         });
-        crate::view::present(rl, thread, composite, view);
+        crate::view::present(rl, thread, composite, view, backdrop);
     }
 
     /// Whether the singleton `tool` already has its object on the map -

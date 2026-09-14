@@ -1,0 +1,62 @@
+--- a/src/platforms/rcore_desktop_sdl.c
++++ b/src/platforms/rcore_desktop_sdl.c
+@@ -2068,6 +2068,37 @@
+         CORE.Window.currentFbo.width = CORE.Window.render.width;
+         CORE.Window.currentFbo.height = CORE.Window.render.height;
+ 
++#if defined(USING_VERSION_SDL3)
++        // bongbong: with SDL_WINDOW_HIGH_PIXEL_DENSITY the drawable is bigger
++        // than the window's logical size (3x on an iPhone). Render into the
++        // whole drawable; SetupViewport (rcore.c, patched alongside) keeps
++        // the projection in logical units, so screen-space drawing, mouse
++        // and touch stay in points. Not screenScale: EndMode2D re-applies
++        // that matrix even inside a render texture, which drew everything
++        // after a camera block at 3x.
++        if (FLAG_IS_SET(CORE.Window.flags, FLAG_WINDOW_HIGHDPI))
++        {
++            int fbWidth = 0, fbHeight = 0;
++            SDL_GetWindowSizeInPixels(platform.window, &fbWidth, &fbHeight);
++            // Right after creation SDL can still report the logical size here
++            // (seen on an iPhone: 844x390 for a 2532x1170 drawable, while a
++            // later query returns the pixels); the display mode's pixel
++            // density is known from the start, so size from it in that case.
++            if ((fbWidth <= CORE.Window.screen.width) && (displayMode.pixel_density > 1.0f))
++            {
++                fbWidth = (int)(CORE.Window.screen.width*displayMode.pixel_density);
++                fbHeight = (int)(CORE.Window.screen.height*displayMode.pixel_density);
++            }
++            if ((fbWidth > 0) && (fbHeight > 0))
++            {
++                CORE.Window.render.width = fbWidth;
++                CORE.Window.render.height = fbHeight;
++                CORE.Window.currentFbo.width = fbWidth;
++                CORE.Window.currentFbo.height = fbHeight;
++            }
++        }
++#endif
++
+         TRACELOG(LOG_INFO, "DISPLAY: Device initialized successfully %s",
+             FLAG_IS_SET(CORE.Window.flags, FLAG_WINDOW_HIGHDPI)? "(HighDPI)" : "");
+         TRACELOG(LOG_INFO, "    > Display size: %i x %i", CORE.Window.display.width, CORE.Window.display.height);
+--- a/src/rcore.c
++++ b/src/rcore.c
+@@ -4257,7 +4257,18 @@
+ 
+     // Set orthographic projection to current framebuffer size
+     // NOTE: Configured top-left corner as (0, 0)
+-    rlOrtho(0, CORE.Window.render.width, CORE.Window.render.height, 0, 0.0f, 1.0f);
++    // bongbong: on a high-pixel-density window (iOS, the SDL backend)
++    // render is the drawable in pixels while screen is the logical size,
++    // so the projection covers the drawable in logical units: screen-space
++    // drawing, mouse and touch all stay in points. Identity everywhere else.
++    if (FLAG_IS_SET(CORE.Window.flags, FLAG_WINDOW_HIGHDPI) && (CORE.Window.screen.width > 0) && (CORE.Window.screen.height > 0) &&
++        (CORE.Window.render.width != CORE.Window.screen.width))
++    {
++        float scaleX = (float)CORE.Window.render.width/(float)CORE.Window.screen.width;
++        float scaleY = (float)CORE.Window.render.height/(float)CORE.Window.screen.height;
++        rlOrtho(0, CORE.Window.render.width/scaleX, CORE.Window.render.height/scaleY, 0, 0.0f, 1.0f);
++    }
++    else rlOrtho(0, CORE.Window.render.width, CORE.Window.render.height, 0, 0.0f, 1.0f);
+ 
+     rlMatrixMode(RL_MODELVIEW);         // Switch back to modelview matrix
+     rlLoadIdentity();                   // Reset current matrix (modelview)

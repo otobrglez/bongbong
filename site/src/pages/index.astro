@@ -54,10 +54,15 @@
              the render target's own, the field under the 32 px HUD bar
              (`--bitmap-w`/`--bitmap-h` below). */
           /* The bitmap's size, `Layout::for_field(DEFAULT_SCREEN_*)` in
-             src/lib.rs: a 960x480 field under the 32 px bar. */
-          --bitmap-w: 960;
-          --bitmap-h: 512;
-          --canvas-w: min(100vw, 1280px, calc((100vh - 90px) * var(--bitmap-w) / var(--bitmap-h)));
+             src/lib.rs: a 1088x544 field under the 32 px bar. */
+          --bitmap-w: 1088;
+          --bitmap-h: 576;
+          /* The most the bitmap is scaled up on a big screen: 1.5x, the
+             same cap the native build's `view_max_scale` knob applies
+             (src/view.rs) - the map is shared with phone players and
+             would otherwise be blown up on a monitor. */
+          --canvas-max-w: calc(var(--bitmap-w) * 1.5px);
+          --canvas-w: min(100vw, var(--canvas-max-w), calc((100vh - 90px) * var(--bitmap-w) / var(--bitmap-h)));
 
           /* The two overlay controls sit on the canvas's *bottom* corners,
              off the HUD bar along its top. The canvas is centred in .game
@@ -206,11 +211,11 @@
             inset: 0;
             z-index: 100;
             justify-content: center;
-            background: #000;
+            background: #151515;
             padding: env(safe-area-inset-top) env(safe-area-inset-right)
                      env(safe-area-inset-bottom) env(safe-area-inset-left);
 
-            --canvas-w: min(100vw, 1280px, calc(100vh * var(--bitmap-w) / var(--bitmap-h)));
+            --canvas-w: min(100vw, var(--canvas-max-w), calc(100vh * var(--bitmap-w) / var(--bitmap-h)));
             .instructions, .tuning { display: none; }
             /* The canvas is centred vertically here, so its bottom edge is
                the middle of the box plus half its height. */
@@ -223,9 +228,9 @@
              the fullscreen root. */
           &:fullscreen {
             justify-content: center;
-            background: #000;
+            background: #151515;
 
-            --canvas-w: min(100vw, 1280px, calc(100vh * var(--bitmap-w) / var(--bitmap-h)));
+            --canvas-w: min(100vw, var(--canvas-max-w), calc(100vh * var(--bitmap-w) / var(--bitmap-h)));
             .instructions, .tuning { display: none; }
             .subscribe-link, .fullscreen-toggle {
               top: calc(50% + var(--canvas-w) * var(--bitmap-h) / var(--bitmap-w) / 2 - 10px);
