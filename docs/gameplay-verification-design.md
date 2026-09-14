@@ -407,6 +407,7 @@ ends, drove its single open grid row, and finished an AFK player at frame
 - Fixtures were emitted by a one-off generator script (scratchpad-only,
   not committed) rather than clicked out in the editor — the k≥6
   corridor-clearance arithmetic was much safer done programmatically.
+  (That k≥6 rule is retired as of 2026-09-14 — see §3's landed notes.)
   The files are inline-table TOML with explanatory `#` header comments;
   an editor re-save would drop those comments, so edit fixtures by hand
   (or regenerate), don't round-trip them through the editor.
@@ -554,6 +555,20 @@ demanded — and that choice immediately paid off, twice:
   48px-alignment-dependent; choke/tight-corridors/frog-block lanes are
   now two cells wide, so `NarrowCorridor` rightly stays silent for them
   and their provocations are recorded as behavioral).
+
+  **Superseded 2026-09-14.** The "3–4 is 48px-alignment-dependent" line
+  was the bug, not a constraint: `PATHFIND_CELL_SIZE` was 48px over a
+  32px map grid, so rasterization had a phase repeating every
+  `lcm(32,48)/32 = 3` map rows and the *same* corridor routed or was
+  sealed depending only on which row its author put it on. With the cell
+  size equal to the map grid and the clearance margin a box half-extent
+  rather than a bounding circle, routability is a function of width
+  alone: **2 free map cells (64px) and up are passable at every row, 1
+  is not** — see `maplint`'s
+  `corridor_routability_depends_on_width_alone_not_on_which_row_it_sits`,
+  which asserts the whole width × phase table, and
+  `maps/test/corridors/` for the worked fixtures. The k≥6 authoring rule
+  is retired; corridors may be cut as narrow as two cells.
 - **Day-one real findings in the shipped map.** `default.toml` carries a
   strip of pickups along its top edge that no playfield cell comes
   within approach reach of, and — the big one — a border band with
@@ -690,6 +705,31 @@ burn-down list as its lint debt. Two small deviations: `touching_tank`
 exists in `ContactStats` but isn't yet a snapshot field (ready for future
 ram/pile-up metrics); the windowed wedge-the-player check was superseded
 by that seeded specimen.
+
+**Landed 2026-09-14 — `touching_tank` is a snapshot field now.** The enemy
+command & control work (docs/enemy-command-and-control-prd.md) needed the
+pile-up metrics this note parked, so `touching_tank` now reaches
+`TankSnapshot`, `TrackRow` (and the dev server's `history` as
+`tank_touching_frames`) and `TankDebug`. Two anomaly kinds ride on it —
+`tank-grind` and `pile-up`, both zero-ceilinged — and the probe reads
+`Game::events()` for the first time to tally `Event::Ram` into
+`enemy-pair`/`into-player` counts, printed beside the totals and carried in
+`--json-out` alongside a per-tank `tank_contact_seconds`.
+
+Measured on the tree of that date (nav-grid and frog changes in, neither on
+master), `--seed 1000`: both new kinds read **0 across all seven fixtures and
+the default map's 30 rounds**, while the ram tally reads 175 enemy-pair rams
+on the default map and 8-32 per fixture. So the contact *jams* the kinds were
+written for are not currently occurring; what is occurring is a great deal of
+brief contact, which is what the ram tally and `tank_contact_seconds` measure.
+Worth knowing before attributing a future improvement to either kind.
+
+The ram tally is deliberately **not** budgeted. A ram is not a failure, and
+once C2 can order one, a budget on it would be a budget on the feature. Ram
+counts also saturate: `combat::ram` sets `ram_damage_cooldown` on *both*
+participants and refuses while either is live, so in a three-tank jam one ram
+suppresses the other two pairings for half a second. `tank_contact_seconds`
+does not saturate and is the honest jam measure.
 
 ---
 

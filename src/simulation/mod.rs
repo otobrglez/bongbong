@@ -20,6 +20,8 @@
 //! `determinism_tests` replays a seed twice and bit-compares.
 
 mod combat;
+mod command;
+mod comms;
 pub mod debug;
 mod engage;
 mod flame;
@@ -53,7 +55,7 @@ use sola_raylib::core::math::Vector2;
 use crate::ai::{Ai, AiSnapshot, Intent, Mover, Role, WallAhead};
 use crate::battlefield;
 use crate::bullet::Bullet;
-use crate::frog::{Frog, Side};
+use crate::frog::{Facing, Frog, Side};
 use crate::laser::{LaserBeam, LaserVariant};
 use crate::level::{LevelOverrides, Mission, SpawnPlan};
 use crate::map::{self, CellObject, MapFile};
@@ -181,18 +183,34 @@ pub enum Event {
     Hit { target: HitTarget, damage: f32, killed: bool, x: f32, y: f32 },
     /// A tank became a wreck (any cause) at (`x`, `y`).
     Wreck { slot: usize, x: f32, y: f32 },
-    /// Ram contact between the tanks in `slot` and `other_slot` dealt
-    /// `damage` to both: an enemy and a player, two enemies, or the two
-    /// players. The lower-numbered party is always `slot`.
+    /// Ram contact between the tanks in `slot` and `other_slot`: an enemy and
+    /// a player, two enemies, or the two players. The lower-numbered party is
+    /// always `slot`.
+    ///
+    /// `damage` is the **roll**, not necessarily what landed. Both parties are
+    /// put through `Tank::take_damage`, so a shielded one absorbs its share
+    /// into `shield_hp` and its hull takes nothing. One `f32` cannot express
+    /// two different applied amounts, and the two parties genuinely can differ
+    /// now that the shield is a pool, so this reports the shared input rather
+    /// than pretending to report an outcome. Sum it for "how hard the pack is
+    /// shoving itself", never for "damage dealt".
     Ram { slot: usize, other_slot: usize, damage: f32 },
     PickupCollected { slot: usize, kind: PickupKind },
     PickupRespawned { kind: PickupKind, x: f32, y: f32 },
     /// A projectile bounced off `slot`'s rainbow shield at (`x`, `y`).
     Deflected { slot: usize, x: f32, y: f32 },
+    /// `slot`'s rainbow shield ran out of charge and shattered at
+    /// (`x`, `y`) - the frame it crossed zero, emitted once.
+    ShieldBroken { slot: usize, x: f32, y: f32 },
     /// Two opposing shells met mid-air and cancelled at (`x`, `y`).
     ShellsCollided { x: f32, y: f32 },
     /// The `side` frog bit the tank in `slot`.
     FrogBite { side: Side, slot: usize, damage: f32, killed: bool },
+    /// The tank in `slot` collected a frog health pack and healed the
+    /// `side` frog by `amount`, at the frog's own position (`x`, `y`) -
+    /// which is nowhere near the pickup, so `fx.rs` needs the coordinates
+    /// rather than deriving them from the collector.
+    FrogHealed { side: Side, slot: usize, amount: f32, x: f32, y: f32 },
     /// The wave scheduler called wave `wave` (1-based): `size` tanks of
     /// `tier` queued to roll in.
     WaveStarted { wave: u32, size: u32, tier: crate::level::Tier },
@@ -556,6 +574,11 @@ pub struct Game {
     /// enemy's status, slot and target, the slot table), kept for the
     /// `engage` overlay, the debug snapshot and the AI event diff.
     pub(crate) last_engage: EngageReport,
+    /// The enemy command & control layer
+    /// (docs/enemy-command-and-control-prd.md): sees every enemy's intent for
+    /// the frame before any of them moves. Issues nothing until its producers
+    /// land; `c2_enabled` is the switch.
+    commander: command::Commander,
     /// Owner slots the dev server asked to kill; applied by
     /// `apply_debug_kills` at the top of the next playing frame, so the
     /// kill runs through the normal explosion/round-end path.
@@ -648,6 +671,11 @@ pub(crate) const SHOCK_FROG: f32 = 0.6;
 /// move the camera once the shake snaps to 2px blocks - a cook-off is a
 /// pop next to the hulk, not another explosion.
 pub(crate) const SHOCK_COOKOFF: f32 = 0.1;
+/// A rainbow shield shattering. Between a cook-off and a barrel: it is a
+/// real event the whole field should feel, but it kills nobody, so it stays
+/// well under a tank dying. Deliberately no `flash_screen` - the whole-screen
+/// flash is reserved for kills and barrels.
+pub(crate) const SHOCK_SHIELD_BREAK: f32 = 0.45;
 
 impl Game {
     /// Set up a fresh round: player, map terrain, enemies, frog, pickups,
@@ -674,6 +702,7 @@ impl Game {
             ring.clear();
         }
         self.engage_frog.clear();
+        self.commander.clear();
         self.pickup_respawn_timer = tuning().pickup_respawn_seconds;
         self.player_fire_held_last_frame = [false; 2];
         self.shocks.clear();
@@ -728,7 +757,7 @@ impl Game {
             ..Tank::default()
         };
         if rng.random_range(0.0..1.0) < tuning().spawn_shield_chance {
-            tank.shield_timer = tuning().shield_duration_seconds;
+            tank.shield_hp = tuning().shield_capacity;
         }
         roll_track_distortion(&mut tank, &mut rng);
         // Spawn facing up (rotation 0): the Y-axis collider orientation.
@@ -825,7 +854,7 @@ impl Game {
                 ..Tank::default()
             };
             if rng.random_range(0.0..1.0) < tuning().spawn_shield_chance {
-                tank.shield_timer = tuning().shield_duration_seconds;
+                tank.shield_hp = tuning().shield_capacity;
             }
             roll_track_distortion(&mut tank, &mut rng);
             tank.body = Some(self.physics.spawn_tank(tank.position, tank.move_half_extents(false), tank.mass()));
@@ -964,7 +993,10 @@ impl Game {
         // can't land on a slot that hasn't spawned yet.
         for &(pos, kind) in &self.map_pickup_slots {
             if kind == PickupKind::Health {
-                maybe_spawn_bonus_shield(&mut self.world, &self.map, pos, width, height, &mut rng);
+                // The frog was created at full health a few lines up, so
+                // no frog pack is ever rolled here and round setup draws
+                // the RNG it always drew.
+                maybe_spawn_health_slot_bonuses(&mut self.world, &self.map, pos, width, height, false, &mut rng);
             }
         }
 
@@ -1009,6 +1041,7 @@ impl Game {
             hop_cooldown: 0.0,
             attack_timer: 0.0,
             attack_cooldown: 0.0,
+            facing: Facing::Right,
             death_elapsed: None,
         },))
     }
@@ -1091,6 +1124,7 @@ impl Game {
             self.tick_fuses(&mut f);
             self.tick_launches(&mut f);
             self.tick_grass(&mut f);
+            self.drain_shield_breaks(&mut f);
             self.explosions(&mut f, true);
             self.despawn_wrecks(&mut f);
             self.cleanup_done();
@@ -1194,7 +1228,7 @@ impl Game {
             tank.ram_cooldown = (tank.ram_cooldown - dt).max(0.0);
             tank.hit_flash_timer = (tank.hit_flash_timer - dt).max(0.0);
             tank.speed_boost_timer = (tank.speed_boost_timer - dt).max(0.0);
-            tank.shield_timer = (tank.shield_timer - dt).max(0.0);
+            tank.tick_shield(dt);
             tank.burn_timer = (tank.burn_timer - dt).max(0.0);
             tank.tick_wreck(dt);
             tank.tick_minigun_spin(dt);
@@ -1214,10 +1248,10 @@ impl Game {
     }
 
     /// Each frog on the field (the player's, then the enemy's) bites the
-    /// single nearest live tank within its attack range (either side; never
-    /// the killing blow on the player - it is a hazard, not a fair fight)
-    /// and, independently, hops away from the nearest tank within its wider
-    /// avoid range. Each on its own cooldown.
+    /// single nearest live *hostile* tank within its attack range (never the
+    /// killing blow on a player - it is a hazard, not a fair fight) and,
+    /// independently, hops away from the nearest tank of any side within its
+    /// wider avoid range. Each on its own cooldown.
     fn frog_phase(&mut self, f: &mut Frame) {
         for frog_entity in [self.frog, self.enemy_frog].into_iter().flatten() {
             self.frog_reflexes(f, frog_entity);
@@ -1225,22 +1259,36 @@ impl Game {
     }
 
     /// One frog's bite and hop for this frame - see `frog_phase`.
+    ///
+    /// The two reflexes pick their own tank: the bite only ever lands on the
+    /// other side (`Side::bites` - your own frog is an objective to defend,
+    /// not a hazard to park away from), while the hop is indiscriminate, so
+    /// a frog still shies away from the tanks that guard it.
+    ///
+    /// Both set the frog's `facing`, and the hop runs second so it wins a
+    /// frame that does both - which is right, because `Frog::anim` draws the
+    /// hop clip over the attack clip on exactly those frames.
     fn frog_reflexes(&mut self, f: &mut Frame, frog_entity: Entity) {
         let (side, can_attack, can_hop, frog_pos, attack_range, avoid_range, hop_distance) =
             with_frog(&self.world, frog_entity, |fr| {
                 (fr.side, fr.can_attack(), fr.can_hop(), fr.position, fr.attack_range(), fr.avoid_range(), fr.hop_distance())
             });
-        let nearest: Option<(Entity, Position, f32)> = self
+        let live: Vec<(Entity, Position, f32, Owner)> = self
             .world
             .query::<(Entity, &Tank)>()
             .without::<&RollIn>()
             .iter()
             .filter(|(_, t)| !t.is_wreck())
-            .map(|(e, t)| (e, t.position, t.position.distance_to(frog_pos)))
-            .min_by(|a, b| a.2.total_cmp(&b.2));
-        let Some((target, tank_pos, dist)) = nearest else { return };
+            .map(|(e, t)| (e, t.position, t.position.distance_to(frog_pos), t.owner()))
+            .collect();
+        let by_distance = |a: &(Entity, Position, f32, Owner), b: &(Entity, Position, f32, Owner)| a.2.total_cmp(&b.2);
+        let nearest_foe = live.iter().filter(|(.., owner)| side.bites(*owner)).min_by(|a, b| by_distance(a, b)).copied();
+        let nearest_any = live.iter().min_by(|a, b| by_distance(a, b)).copied();
 
-        if can_attack && dist <= attack_range {
+        if can_attack
+            && let Some((target, target_pos, dist, _)) = nearest_foe
+            && dist <= attack_range
+        {
             let dmg = f.rng.random_range(tuning().frog_attack_damage_min..tuning().frog_attack_damage_max);
             // A bite never finishes a player off, whichever player it is.
             let cap = if self.is_player(target) { MAX_DAMAGE - 1.0 } else { MAX_DAMAGE };
@@ -1255,13 +1303,15 @@ impl Game {
             if became_wreck {
                 f.kills.push((victim_pos, victim));
             }
-            with_frog_mut(&self.world, frog_entity, |fr| fr.start_attack());
+            with_frog_mut(&self.world, frog_entity, |fr| fr.start_attack(target_pos));
         }
 
-        if can_hop && dist <= avoid_range {
+        if can_hop
+            && let Some((_, tank_pos, dist, _)) = nearest_any
+            && dist <= avoid_range
+        {
             let away = Vector2::new(frog_pos.x - tank_pos.x, frog_pos.y - tank_pos.y);
-            let obstacles = f.terrain.obstacle_centers();
-            if let Some(new_pos) = frog_hop_target(&mut f.rng, frog_pos, away, hop_distance, &obstacles, f.width, f.height) {
+            if let Some(new_pos) = frog_hop_target(&mut f.rng, frog_pos, away, hop_distance, &f.terrain, f.width, f.height) {
                 with_frog_mut(&self.world, frog_entity, |fr| fr.start_hop(new_pos));
             }
         }
@@ -1270,6 +1320,19 @@ impl Game {
     /// Pickups: any live tank within PICKUP_COLLECT_RADIUS collects (pure
     /// proximity, no physics), then the field is topped back up to the
     /// map's slot count after PICKUP_RESPAWN_SECONDS.
+    /// Whether the player's frog is hurt enough to be worth dropping a
+    /// bonus frog health pack for - the gate on that roll, checked before
+    /// any RNG is drawn (docs/frog-health-pack-prd.md section 6). Only the
+    /// player's frog counts: the bonus exists to give the player a way back
+    /// from a hurt objective, and the packs are neutral once on the ground,
+    /// so a Hunt round's enemy frog is welcome to whatever the player
+    /// leaves behind but never summons one.
+    fn frog_wants_a_pack(&self) -> bool {
+        self.frog.is_some_and(|e| {
+            with_frog(&self.world, e, |f| !f.is_dead() && f.health_fraction() < tuning().frog_pack_bonus_below)
+        })
+    }
+
     fn pickup_phase(&mut self, f: &mut Frame) {
         let living_tanks: Vec<(Entity, Position)> = self
             .world
@@ -1279,6 +1342,13 @@ impl Game {
             .filter(|(_, t)| !t.is_wreck())
             .map(|(e, t)| (e, t.position))
             .collect();
+        // A frog pack is left where it is for a tank whose own frog is
+        // alive and already at full health - the one rule deciding who
+        // collects one (docs/frog-health-pack-prd.md). A side whose frog is
+        // absent or dead still collects, and wastes it.
+        let player_frog_full = self.frog.is_some_and(|e| with_frog(&self.world, e, Frog::at_full_health));
+        let enemy_frog_full = self.enemy_frog.is_some_and(|e| with_frog(&self.world, e, Frog::at_full_health));
+        let own_frog_full = |e: Entity| if self.is_player(e) { player_frog_full } else { enemy_frog_full };
         let collected: Vec<(Entity, Entity, PickupKind)> = self
             .world
             .query::<(Entity, &Pickup)>()
@@ -1286,9 +1356,19 @@ impl Game {
             .filter_map(|(pickup_entity, pickup)| {
                 living_tanks
                     .iter()
-                    // The flamethrower is player-only: an enemy drives
-                    // over the fuel tank as if it were not there.
-                    .filter(|&&(e, _)| pickup.kind != PickupKind::Flamethrower || self.is_player(e))
+                    // An enemy only takes what it would actually use: at
+                    // full health it drives over a health pack, with a full
+                    // magazine over a crate, already stocked over a weapon.
+                    // A pack that strips the field of everything the player
+                    // needed, while gaining nothing itself, reads as spite
+                    // rather than intelligence - see `Tank::wants_pickup`,
+                    // which is the same predicate the behaviour tree's
+                    // `seek_*` tiers gate on, so a tank can never drive to
+                    // something it then refuses to pick up. Players always
+                    // collect; taking what you do not strictly need is the
+                    // player's call to make.
+                    .filter(|&&(e, _)| with_tank(&self.world, e, |t| t.wants_pickup(pickup.kind)))
+                    .filter(|&&(e, _)| pickup.kind != PickupKind::FrogHealth || !own_frog_full(e))
                     .find(|(_, pos)| pos.distance_to(pickup.position) <= tuning().pickup_collect_radius)
                     .map(|&(tank_entity, _)| (pickup_entity, tank_entity, pickup.kind))
             })
@@ -1337,11 +1417,28 @@ impl Game {
                     // plus a refreshed, never stacked, invulnerability window.
                     PickupKind::Shield => {
                         tank.damage = 0.0;
-                        tank.shield_timer = tuning().shield_duration_seconds;
+                        tank.shield_hp = tuning().shield_capacity;
                     }
+                    // Nothing on the tank: the frog pack heals a frog, and
+                    // the frog can't be touched while this `&mut Tank`
+                    // borrow is live - see just below.
+                    PickupKind::FrogHealth => {}
                 }
                 tank.owner_slot()
             };
+            if kind == PickupKind::FrogHealth {
+                let frog = if self.is_player(tank_entity) { self.frog } else { self.enemy_frog };
+                if let Some(frog) = frog {
+                    let (side, amount, pos) = with_frog_mut(&self.world, frog, |f| {
+                        let before = f.health;
+                        f.heal(f.max_health * tuning().frog_pack_heal_fraction);
+                        (f.side, f.health - before, f.position)
+                    });
+                    if amount > 0.0 {
+                        f.events.push(Event::FrogHealed { side, slot, amount, x: pos.x, y: pos.y });
+                    }
+                }
+            }
             f.events.push(Event::PickupCollected { slot, kind });
             self.world.despawn(pickup_entity).ok();
         }
@@ -1349,8 +1446,16 @@ impl Game {
         if slot_backed_count(&self.world, &self.map_pickup_slots) < self.map_pickup_slots.len() {
             self.pickup_respawn_timer -= f.dt;
             if self.pickup_respawn_timer <= 0.0 {
-                let respawned =
-                    respawn_from_slots(&mut self.world, &self.map, &self.map_pickup_slots, f.width, f.height, &mut f.rng);
+                let frog_hurt = self.frog_wants_a_pack();
+                let respawned = respawn_from_slots(
+                    &mut self.world,
+                    &self.map,
+                    &self.map_pickup_slots,
+                    f.width,
+                    f.height,
+                    frog_hurt,
+                    &mut f.rng,
+                );
                 if let Some((pos, kind)) = respawned {
                     f.events.push(Event::PickupRespawned { kind, x: pos.x, y: pos.y });
                 }
@@ -1545,7 +1650,7 @@ impl Game {
         engaged_frog.sort_by_key(|(e, _)| *e);
         let reachable = |a: Position, b: Position| components.connected(&grid, a, b);
         // One worst-case tank clear of the wall, plus a little.
-        let margin = battlefield::max_tank_avoidance_radius() + 8.0;
+        let margin = battlefield::max_tank_clearance_half_extent() + 8.0;
         let line_of_sight = |a: Position, b: Position| f.terrain.line_of_sight(a, b);
         if engaged[0].len() >= 2 {
             self.engage[0].assign(
@@ -1628,6 +1733,9 @@ impl Game {
         let breach_pad = tuning().shell_hit_half_extent;
         let breach_reach_extra = tuning().enemy_breach_reach_px;
 
+        // --- collect pass: perception, `think`, aim and fire, exactly as
+        // before. Only the impulse is deferred. ---
+        let mut pending: Vec<Pending> = Vec::new();
         for (entity, tank, ai) in self.world.query::<(Entity, &mut Tank, &mut Ai)>().iter() {
             let my_index = enemy_indices[&entity];
             let reach = tank.hull_size() * 0.5 + breach_reach_extra;
@@ -1689,6 +1797,11 @@ impl Game {
                 Some(frog) => f.terrain.line_of_fire_to_frog(tank.position, target, Some(frog)),
                 None => player_line_of_sight,
             };
+            // Captured before anything this frame touches them, for the
+            // deferred `drive_tank_with` below - see its doc comment.
+            let handle = tank.body.expect("a live enemy always has a body here");
+            let current = self.physics.velocity(handle);
+            let facing_before = tank.rotation;
             let before = self.trace_ai.then(|| ai.snapshot());
             // A player lives in a different archetype (no `Ai`), so this
             // shared read never aliases the exclusive borrow above. `think`
@@ -1718,7 +1831,10 @@ impl Game {
             if let Some(before) = before {
                 ai_transition_events(&mut f.events, tank.owner_slot(), &before, &ai.snapshot());
             }
-            drive_tank(&mut self.physics, tank, intent, f.dt);
+            // Aim now, drive later. `tank.control` sets the hull rotation
+            // a shot flies along, so it has to happen before the shot; the
+            // impulse is the only part that waits for the commander.
+            tank.control(intent.move_dir, intent.face);
             let owner = tank.owner();
             tick_queued_shots(&mut self.physics, f, tank, owner);
             // The AI paces itself with its own fire timer; `fire_cooldown`
@@ -1726,6 +1842,64 @@ impl Game {
             if intent.fire && tank.fire_cooldown <= 0.0 {
                 dispatch_fire(&mut self.physics, f, tank, owner, intent.fire_aim_offset);
             }
+            pending.push(Pending { entity, slot: tank.owner_slot(), intent, current, facing_before });
+        }
+
+        // --- command pass: no world, no RNG (see `simulation::command`) ---
+        // Producers land here. Until they do the commander observes and
+        // issues nothing, which is the state the rollout's byte-identical
+        // checkpoints are verified in.
+        let units: Vec<command::UnitView> = pending
+            .iter()
+            .map(|p| {
+                let (position, velocity, radius, speed, wreck) = with_tank(&self.world, p.entity, |t| {
+                    (
+                        t.position,
+                        self.physics.velocity(t.body.expect("a live enemy has a body")),
+                        t.avoidance_radius(),
+                        t.effective_speed(),
+                        t.is_wreck(),
+                    )
+                });
+                command::UnitView {
+                    unit: comms::Unit::Enemy(p.slot),
+                    slot: p.slot,
+                    position,
+                    velocity,
+                    radius,
+                    speed,
+                    intent: p.intent,
+                    wreck,
+                    ring_rank: self.last_engage.slot_of(p.entity).map(|s| s.rank),
+                }
+            })
+            .collect();
+        // `plan` requires its input sorted by owner slot - the caller's
+        // contract, as `EngageRing::assign` documents, and what makes its
+        // greedy passes deterministic. The collect pass walks raw ECS order,
+        // so sort a copy here rather than reordering `pending`, which must
+        // keep the order the firing RNG was drawn in.
+        let mut sorted = units;
+        sorted.sort_by_key(|u| u.slot);
+        self.commander.plan(&sorted, &command::CommandCtx {
+            dt: f.dt,
+            blocked: &|from, dir| grid.blocked_ahead(from, dir.vec()),
+        });
+
+        // --- apply pass: the impulse, in the order the collect pass ran ---
+        // Walks `pending` rather than re-running the query. Two reasons, and
+        // both are load-bearing: `motion_snapshot`'s doc comment records that
+        // "a later query over the same archetype has no guaranteed iteration
+        // order", and `tick_queued_shots`/`dispatch_fire` above draw from the
+        // round RNG, so the order tanks are processed in is part of the
+        // seeded stream. Replaying the captured order keeps it exactly what
+        // it was before the split; sorting here would look tidier and would
+        // shift every existing replay.
+        for p in &pending {
+            let intent = self.commander.apply(p.slot, p.intent);
+            with_tank_mut(&self.world, p.entity, |tank| {
+                drive_tank_with(&mut self.physics, tank, intent, f.dt, p.current, p.facing_before);
+            });
         }
     }
 
@@ -2033,11 +2207,24 @@ impl Game {
             // the hit - see `Projectile::deflect`. No damage, no knockback,
             // no hit flash on the tank; the impact flash above still shows
             // where the shield was struck.
+            //
+            // This is the shield's *other* spending seam. A projectile never
+            // reaches `Tank::take_damage`, so the charge has to come off
+            // here, and it costs `shield_deflect_cost_factor` times the
+            // shot's own mid-range damage rather than 1x: bouncing a shell
+            // back under your ownership is the strongest thing a shield
+            // does, so it should also be the fastest way to spend one.
+            // `dmg` is the projectile's `damage_range()` (tuning only), so
+            // this draws no RNG and the seeded replay stream is untouched.
             let shield = match target {
-                ShellTarget::Tank(e) => shield_deflector(&self.world, e),
+                ShellTarget::Tank(e) => shield_deflector(&self.world, e).map(|(c, o)| (e, c, o)),
                 _ => None,
             };
-            if let Some((center, new_owner)) = shield {
+            if let Some((shielded, center, new_owner)) = shield {
+                let cost = (dmg.0 + dmg.1) * 0.5 * tuning().shield_deflect_cost_factor;
+                // The break itself is latched on the tank and announced by
+                // `drain_shield_breaks`, along with every other seam's.
+                with_tank_mut(&self.world, shielded, |t| t.spend_shield(cost));
                 let mut q = self.world.query_one::<&mut P>(entity);
                 q.get().expect("projectile collected this frame still exists").deflect(center, new_owner);
                 f.events.push(Event::Deflected { slot: new_owner.slot(), x: hit_pos.x, y: hit_pos.y });
@@ -2350,16 +2537,48 @@ impl Game {
     /// drift. The margin is the worst-case tank in the roster, so no route
     /// is too narrow for a titan. The frog is included: it is a solid
     /// static body that blocks movement exactly like a tile and can move.
+    /// The battlefield's own boundary needs no entry here - `Grid::build`
+    /// insets its outer edge by the same margin.
+    ///
+    /// Tiles are taken at the *seam-closed* extent
+    /// (`battlefield::tile_half_extent`, the same one `hits::Terrain` and
+    /// the physics colliders use), reduced to the larger axis because
+    /// `Grid::build` carries one scalar per obstacle. The plain
+    /// `hull_size() * 0.5` this used to pass is 12px against a run's real
+    /// 16px, i.e. the planner modelling walls as *smaller* than the solver
+    /// does - the exact direction of error `maplint::check_planner_physics`
+    /// exists to catch, which only stayed silent because the old 48px cell
+    /// pitch happened to skip the band where it would have fired.
     pub(crate) fn nav_grid(&self, width: f32, height: f32) -> Grid {
+        // Trees are left out of the seam-close set for the same reason
+        // `hits::Terrain::build` leaves them out: they never close a seam,
+        // here or in physics, so they must not close anybody else's.
+        let seam_cells: HashSet<(i32, i32)> = self
+            .world
+            .query::<&Obstacle>()
+            .iter()
+            .filter(|o| !o.material.is_tree())
+            .map(|o| battlefield::pos_to_cell(o.position))
+            .collect();
         Grid::build(
             width,
             height,
             PATHFIND_CELL_SIZE,
-            battlefield::max_tank_avoidance_radius(),
+            battlefield::max_tank_clearance_half_extent(),
             self.world
                 .query::<&Obstacle>()
                 .iter()
-                .map(|o| (o.position, o.hull_size() * 0.5))
+                .map(|o| {
+                    let (gx, gy) = battlefield::pos_to_cell(o.position);
+                    let half = battlefield::tile_half_extent(
+                        o.material,
+                        &seam_cells,
+                        gx,
+                        gy,
+                        o.hull_size() * 0.5,
+                    );
+                    (o.position, half.x.max(half.y))
+                })
                 .chain(self.world.query::<&Frog>().iter().map(|fr| {
                     (fr.position, FROG_COLLIDER_HALF_EXTENT.0.max(FROG_COLLIDER_HALF_EXTENT.1))
                 }))
@@ -2550,7 +2769,15 @@ impl Game {
                     position: tank.position,
                     rotation: tank.rotation,
                     velocity: tank.body.map(|b| self.physics.velocity(b)).unwrap_or(tank.velocity),
-                    commanded_velocity: tank.velocity,
+                    // Scaled by the throttle: `Tank::velocity` is the
+                    // unthrottled cardinal (the AI's avoidance reads it),
+                    // but what was actually *asked* of the body is that
+                    // times the throttle, and this field is the probe's
+                    // intent-vs-outcome signal.
+                    commanded_velocity: Position::new(
+                        tank.velocity.x * tank.throttle,
+                        tank.velocity.y * tank.throttle,
+                    ),
                     top_speed: tank.base_speed(),
                     damage: tank.damage,
                     shells_ammo: tank.shells_ammo,
@@ -2559,8 +2786,10 @@ impl Game {
                     laser_charges: tank.laser_charges,
                     flame_fuel: tank.flame_fuel,
                     burn_timer: tank.burn_timer,
-                    shield_timer: tank.shield_timer,
+                    shield_hp: tank.shield_hp,
+                    shield_recharge_delay: tank.shield_recharge_delay,
                     touching_static: contact.touching_static,
+                    touching_tank: contact.touching_tank,
                     contact_impulse: contact.max_impulse,
                     is_wreck: tank.is_wreck(),
                 }
@@ -2603,10 +2832,25 @@ pub struct TankSnapshot {
     pub flame_fuel: f32,
     /// Seconds of flame afterburn left on the hull (0 = not burning).
     pub burn_timer: f32,
-    /// Seconds of rainbow shield left (0 = unshielded).
-    pub shield_timer: f32,
+    /// Rainbow-shield absorption left, in damage points (0 = unshielded).
+    /// Not seconds - the shield is a pool, see `Tank::shield_hp`.
+    pub shield_hp: f32,
+    /// Seconds before that shield starts refilling. Carried because it is
+    /// live simulation state that decides future `shield_hp`, so a replay
+    /// that diverged only here would otherwise look identical for up to
+    /// `shield_recharge_delay_seconds` of frames.
+    pub shield_recharge_delay: f32,
     /// The hull has an active contact with static terrain right now.
     pub touching_static: bool,
+    /// The hull has an active contact with *another tank* right now.
+    /// Computed by `Physics::contact_stats` since the contact work landed and
+    /// surfaced here for the enemy command & control work
+    /// (docs/enemy-command-and-control-prd.md section 10): it is the only
+    /// signal that tells a three-tank jam apart from a two-tank bump, because
+    /// `Event::Ram` saturates - one ram sets the cooldown on *both*
+    /// participants, so it caps at roughly one event per tank per
+    /// `ram_damage_cooldown` however many neighbours it is grinding against.
+    pub touching_tank: bool,
     /// Strongest solver contact impulse on the hull this step.
     pub contact_impulse: f32,
     pub is_wreck: bool,
@@ -2622,10 +2866,48 @@ pub struct TankSnapshot {
 /// whether or not a key is held, since tracks resist sliding all the time.
 /// When the facing crosses between the X and Y axes the (non-rotating)
 /// collider is reoriented. Shared by the player and every enemy.
+/// What `enemy_phase`'s collect pass parks for its apply pass: one tank's
+/// decided intent, plus the two values `drive_tank_with` needs as they stood
+/// before this frame touched them. Kept in the collect pass's own iteration
+/// order, which is the order the firing RNG was drawn in.
+struct Pending {
+    entity: Entity,
+    slot: usize,
+    intent: Intent,
+    current: Position,
+    facing_before: f32,
+}
+
 fn drive_tank(physics: &mut Physics, tank: &mut Tank, intent: Intent, dt: f32) {
     let handle = tank.body.expect("tank should always have a physics body once spawned");
-    let current = physics.velocity(handle);
-    let facing_before = tank.rotation;
+    drive_tank_with(physics, tank, intent, dt, physics.velocity(handle), tank.rotation)
+}
+
+/// `drive_tank`, given the body velocity and hull facing as they stood
+/// *before anything this frame touched them*.
+///
+/// The split exists because `enemy_phase` aims and fires in its collect pass
+/// but defers the impulse to its apply pass, so that the enemy command &
+/// control layer can see every intent before any tank moves
+/// (docs/enemy-command-and-control-prd.md section 4). By the apply pass both
+/// values `drive_tank` reads at its top have been disturbed: `current` has
+/// picked up the recoil impulse of a shot fired in between (rapier mutates
+/// `linvel` immediately), and `facing_before` has already been snapped by the
+/// collect pass's own `tank.control`, which would silently defeat the
+/// `resize_collider` check below. Capturing both in the collect pass and
+/// passing them here is what makes the deferred drive bit-identical to an
+/// undeferred one.
+///
+/// Every other caller goes through `drive_tank` and reads them itself.
+fn drive_tank_with(
+    physics: &mut Physics,
+    tank: &mut Tank,
+    intent: Intent,
+    dt: f32,
+    current: Position,
+    facing_before: f32,
+) {
+    let handle = tank.body.expect("tank should always have a physics body once spawned");
 
     tank.control(intent.move_dir, intent.face);
     tank.ease_visual_rotation(dt);
@@ -2637,11 +2919,21 @@ fn drive_tank(physics: &mut Physics, tank: &mut Tank, intent: Intent, dt: f32) {
         physics.resize_collider(physics.collider_of(handle), tank.move_half_extents(tank.facing_along_x()));
     }
 
+    // The commanded top speed, eased off by whatever `intent.slow` asks for
+    // (docs/enemy-command-and-control-prd.md section 5). Scaling the *target*
+    // and not the delta makes this a lower top speed rather than a lazier
+    // accelerator, and it gives a full stop for free at `slow == 1.0`: the
+    // target goes to zero, `speeding_up` is false, and the tank falls onto
+    // the existing decel curve instead of needing a separate brake path.
+    // Nothing but `simulation::command` ever sets it; the player and every
+    // `Ai` leave it at 0, so `scale` is 1.0 and this is a no-op multiply.
     let along_x = tank.facing_along_x();
+    let scale = intent.speed_scale();
+    tank.throttle = scale;
     let (current_on, target_on, current_off) = if along_x {
-        (current.x, target.x, current.y)
+        (current.x, target.x * scale, current.y)
     } else {
-        (current.y, target.y, current.x)
+        (current.y, target.y * scale, current.x)
     };
 
     let want_on = target_on - current_on;
@@ -2689,6 +2981,44 @@ fn spawn_pickup_at(world: &mut hecs::World, pos: Position, kind: PickupKind) {
     world.spawn((Pickup { kind, position: pos },));
 }
 
+impl Game {
+    /// Announce every shield that shattered this frame: one
+    /// `Event::ShieldBroken` and one `SHOCK_SHIELD_BREAK` ripple per tank,
+    /// then clear the latch.
+    ///
+    /// One drain rather than an emit at each seam. A shield is spent in
+    /// eight places - `Tank::take_damage` covers ram (both tanks), blasts,
+    /// the flame cone and its afterburn, oil fire and the frog, and the
+    /// projectile deflect in `resolve_projectiles` covers the rest - and
+    /// `take_damage` has no `Frame` to push onto, so asking each caller to
+    /// notice the edge itself is how six of the eight ended up silent.
+    /// Walks players in index order then enemies, matching every other
+    /// ordered walk in this file so the event order is fixed.
+    ///
+    /// Only called on the live branch of `update`: an in-flight shell that
+    /// lands on the end screen still spends a shield (it is the same hit
+    /// loop) but must not shake the camera over the Won/Lost banner.
+    fn drain_shield_breaks(&mut self, f: &mut Frame) {
+        let mut broken: Vec<(usize, Position)> = Vec::new();
+        for player in self.players().into_iter().flatten() {
+            with_tank_mut(&self.world, player, |t| {
+                if std::mem::take(&mut t.shield_broke) {
+                    broken.push((t.owner_slot(), t.position));
+                }
+            });
+        }
+        for tank in self.world.query_mut::<&mut Tank>().with::<&Ai>() {
+            if std::mem::take(&mut tank.shield_broke) {
+                broken.push((tank.owner_slot(), tank.position));
+            }
+        }
+        for (slot, at) in broken {
+            f.events.push(Event::ShieldBroken { slot, x: at.x, y: at.y });
+            f.shocks.push(Shockwave::scaled(at, SHOCK_SHIELD_BREAK));
+        }
+    }
+}
+
 /// If the tank at `entity` is holding a live rainbow shield, its centre and
 /// owner - what a projectile that strikes it bounces off and becomes.
 fn shield_deflector(world: &hecs::World, entity: Entity) -> Option<(Position, Owner)> {
@@ -2706,14 +3036,15 @@ fn slot_backed_count(world: &hecs::World, slots: &[(Position, PickupKind)]) -> u
 }
 
 /// Top up one pickup at a uniformly random slot not currently occupied,
-/// with a bonus shield roll if that slot is a health pack. A no-op if every
-/// slot is full.
+/// with the health slot's bonus rolls if that slot is a health pack
+/// (`frog_hurt` is the frog pack's gate). A no-op if every slot is full.
 fn respawn_from_slots(
     world: &mut hecs::World,
     map: &MapFile,
     slots: &[(Position, PickupKind)],
     width: f32,
     height: f32,
+    frog_hurt: bool,
     rng: &mut SmallRng,
 ) -> Option<(Position, PickupKind)> {
     let occupied: Vec<Position> = world.query::<&Pickup>().iter().map(|p| p.position).collect();
@@ -2728,19 +3059,48 @@ fn respawn_from_slots(
     let (pos, kind) = free[rng.random_range(0..free.len())];
     spawn_pickup_at(world, pos, kind);
     if kind == PickupKind::Health {
-        maybe_spawn_bonus_shield(world, map, pos, width, height, rng);
+        maybe_spawn_health_slot_bonuses(world, map, pos, width, height, frog_hurt, rng);
     }
     Some((pos, kind))
 }
 
-/// Roll SHIELD_NEAR_HEALTH_CHANCE for the health slot just (re)spawned at
-/// `slot` and, on success, drop a `PickupKind::Shield` in a free cell next
-/// to it. Skipped while a shield already sits beside this slot, so repeated
-/// health respawns can't pile them up.
-fn maybe_spawn_bonus_shield(
+/// The un-slotted bonuses that ride along with a Health slot just
+/// (re)spawned at `slot`: the rainbow shield always, and a frog health pack
+/// only while `frog_hurt`.
+///
+/// The frog pack's gate is checked *before* its roll, never after, and that
+/// ordering is load-bearing (docs/frog-health-pack-prd.md section 6): a
+/// round whose frog is never hurt - `Game::init`'s own spawn pass included,
+/// where the frog has just been created at full health - draws exactly the
+/// RNG it drew before the pack existed, so every such seeded replay is
+/// unchanged. `occupied` is recomputed per roll inside `maybe_spawn_bonus`,
+/// so the two bonuses can never land on the same neighbour.
+fn maybe_spawn_health_slot_bonuses(
     world: &mut hecs::World,
     map: &MapFile,
     slot: Position,
+    width: f32,
+    height: f32,
+    frog_hurt: bool,
+    rng: &mut SmallRng,
+) {
+    maybe_spawn_bonus(world, map, slot, PickupKind::Shield, tuning().shield_near_health_chance, width, height, rng);
+    if frog_hurt {
+        let chance = tuning().frog_pack_near_health_chance;
+        maybe_spawn_bonus(world, map, slot, PickupKind::FrogHealth, chance, width, height, rng);
+    }
+}
+
+/// Roll `chance` for the health slot just (re)spawned at `slot` and, on
+/// success, drop a `kind` pickup in a free cell next to it. Skipped while
+/// one of that kind already sits beside this slot, so repeated health
+/// respawns can't pile them up.
+fn maybe_spawn_bonus(
+    world: &mut hecs::World,
+    map: &MapFile,
+    slot: Position,
+    kind: PickupKind,
+    chance: f32,
     width: f32,
     height: f32,
     rng: &mut SmallRng,
@@ -2749,12 +3109,12 @@ fn maybe_spawn_bonus_shield(
     let already_there = world
         .query::<&Pickup>()
         .iter()
-        .any(|p| p.kind == PickupKind::Shield && p.position.distance_to(slot) <= OBSTACLE_GRID_SIZE * 1.5);
-    if already_there || rng.random_range(0.0..1.0) >= tuning().shield_near_health_chance {
+        .any(|p| p.kind == kind && p.position.distance_to(slot) <= OBSTACLE_GRID_SIZE * 1.5);
+    if already_there || rng.random_range(0.0..1.0) >= chance {
         return;
     }
-    if let Some(pos) = bonus_shield_cell(map, slot, &occupied, width, height, rng) {
-        spawn_pickup_at(world, pos, PickupKind::Shield);
+    if let Some(pos) = bonus_pickup_cell(map, slot, &occupied, width, height, rng) {
+        spawn_pickup_at(world, pos, kind);
     }
 }
 
@@ -2765,7 +3125,7 @@ fn maybe_spawn_bonus_shield(
 /// live pickup already on it. Map walls are checked rather than the live
 /// obstacle set: a shot-away wall's cell stays off limits, which is
 /// conservative but keeps this independent of the physics world.
-fn bonus_shield_cell(
+fn bonus_pickup_cell(
     map: &MapFile,
     slot: Position,
     occupied: &[Position],
@@ -2901,7 +3261,7 @@ fn roll_enemy_tank(rng: &mut SmallRng, row: i32, pos: Position, slot: usize) -> 
         }
     }
     if rng.random_range(0.0..1.0) < tuning().spawn_shield_chance {
-        enemy.shield_timer = tuning().shield_duration_seconds;
+        enemy.shield_hp = tuning().shield_capacity;
     }
     roll_track_distortion(&mut enemy, rng);
     enemy
@@ -3193,7 +3553,7 @@ mod determinism_tests {
     }
 
     /// Bit-comparable form (`to_bits`), so a mismatch is unambiguous.
-    fn key(s: &TankSnapshot) -> (bool, bool, [u32; 7], i32, i32, i32, bool) {
+    fn key(s: &TankSnapshot) -> (bool, bool, [u32; 8], i32, i32, i32, bool) {
         (
             s.is_player,
             s.entering,
@@ -3204,7 +3564,8 @@ mod determinism_tests {
                 s.velocity.y.to_bits(),
                 s.rotation.to_bits(),
                 s.damage.to_bits(),
-                s.shield_timer.to_bits(),
+                s.shield_hp.to_bits(),
+                s.shield_recharge_delay.to_bits(),
             ],
             s.shells_ammo,
             s.minigun_ammo,
@@ -3666,6 +4027,231 @@ cells."22,14" = { kind = "wall", material = "brick" }
         }
     }
 
+    fn hunt_game() -> Game {
+        let mut game = Game::default();
+        game.enemy_count_override = Some(1);
+        game.seed_override = Some(7);
+        game.player_row_override = Some(0);
+        game.level_overrides.mission = Some(Mission::Hunt);
+        game.map = MapFile::from_toml_str(CORNERS_MAP).expect("test map parses");
+        game.init(W, H);
+        game
+    }
+
+    fn enemy_slot(game: &Game) -> usize {
+        game.world.query::<&Tank>().with::<&Ai>().iter().map(|t| t.owner_slot()).next().expect("one enemy")
+    }
+
+    /// Park `slot`'s tank beside `frog`, well inside its bite range. Called
+    /// every frame, since the frog hops away from any tank that crowds it -
+    /// its own side's included.
+    fn park_beside(game: &mut Game, slot: usize, frog: Option<Entity>) {
+        let (pos, range) = with_frog(&game.world, frog.expect("frog on the field"), |fr| (fr.position, fr.attack_range()));
+        let spot = Position::new(pos.x + range * 0.5, pos.y);
+        assert!(spot.distance_to(pos) < range, "the test parks the tank outside bite range");
+        game.debug_teleport(slot, spot, Some(0.0)).expect("tank in slot");
+    }
+
+    fn bites_while_parked(game: &mut Game, slot: usize, frog: Option<Entity>, frames: u32) -> Vec<(Side, usize)> {
+        let mut seen = Vec::new();
+        for _ in 0..frames {
+            park_beside(game, slot, frog);
+            step(game, Input::default());
+            seen.extend(game.events().iter().filter_map(|e| match e {
+                Event::FrogBite { side, slot, .. } => Some((*side, *slot)),
+                _ => None,
+            }));
+        }
+        seen
+    }
+
+    /// A frog is its side's objective, not a hazard to it: neither frog
+    /// ever bites a tank of its own side, however long one sits on it.
+    #[test]
+    fn a_frog_never_bites_its_own_side() {
+        let mut game = hunt_game();
+        let (player_frog, enemy_frog) = (game.frog, game.enemy_frog);
+        let enemy = enemy_slot(&game);
+        for frame in 0..300 {
+            park_beside(&mut game, 0, player_frog);
+            park_beside(&mut game, enemy, enemy_frog);
+            step(&mut game, Input::default());
+            let bite = game.events().iter().find(|e| matches!(e, Event::FrogBite { .. }));
+            assert!(bite.is_none(), "frame {frame}: a frog bit its own side: {bite:?}");
+        }
+    }
+
+    /// A 384 px corridor between two long walls four cells apart, the frog
+    /// parked in the middle of it: open ground in every direction along
+    /// the corridor, with terrain close by on two sides. A landing test
+    /// measured from the tiles' centres rather than their hulls rejects
+    /// the whole corridor and the frog never hops at all.
+    const HOP_CORRIDOR_MAP: &str = r#"
+version = 1
+tanks = 0
+cells."5,11" = { kind = "start" }
+cells."20,11" = { kind = "frog" }
+"#;
+
+    fn hop_corridor_map() -> String {
+        let mut text = String::from(HOP_CORRIDOR_MAP);
+        for col in 14..=26 {
+            for row in [9, 13] {
+                text.push_str(&format!("cells.\"{col},{row}\" = {{ kind = \"wall\", material = \"brick\" }}\n"));
+            }
+        }
+        text
+    }
+
+    /// Every wall/prop tile's centre and hull half-extents, for asserting
+    /// the frog never lands inside one.
+    fn tile_boxes(game: &Game) -> Vec<(Position, f32)> {
+        game.world.query::<&Obstacle>().iter().map(|o| (o.position, o.hull_size() * 0.5)).collect()
+    }
+
+    /// Crowd the frog from the west and let it run: it hops clear rather
+    /// than sitting there taking it, even with terrain a couple of cells
+    /// away on both sides.
+    #[test]
+    fn a_crowded_frog_hops_clear_of_the_tank_in_built_up_terrain() {
+        let mut game = game_on(&hop_corridor_map(), 0, Some(0));
+        let frog = game.frog.expect("the map places a frog");
+        let (start, avoid, hop) = with_frog(&game.world, frog, |fr| (fr.position, fr.avoid_range(), fr.hop_distance()));
+        let boxes = tile_boxes(&game);
+        let frog_half = (FROG_COLLIDER_HALF_EXTENT.0, FROG_COLLIDER_HALF_EXTENT.1);
+        for frame in 0..180 {
+            // Follow it west of wherever it has got to, just inside the
+            // avoid ring and outside its bite range.
+            let pos = with_frog(&game.world, frog, |fr| fr.position);
+            game.debug_teleport(0, Position::new(pos.x - avoid * 0.9, pos.y), Some(0.0)).expect("player slot");
+            step(&mut game, Input::default());
+            let pos = with_frog(&game.world, frog, |fr| fr.position);
+            let inside = boxes.iter().find(|(c, h)| {
+                (pos.x - c.x).abs() < h + frog_half.0 && (pos.y - c.y).abs() < h + frog_half.1
+            });
+            assert!(inside.is_none(), "frame {frame}: the frog landed inside the tile at {inside:?}");
+        }
+        let moved = with_frog(&game.world, frog, |fr| fr.position).distance_to(start);
+        assert!(moved > hop, "the crowded frog moved {moved:.0} px in 3 s - a single hop is {hop:.0} px");
+    }
+
+    /// The frog runs *from* the tank: crowded from one side for long
+    /// enough, it ends up further away than the tank ever let it be, not
+    /// hopping into it.
+    #[test]
+    fn a_frogs_hops_carry_it_away_from_what_crowds_it() {
+        let mut game = game_on(&hop_corridor_map(), 0, Some(0));
+        let frog = game.frog.expect("the map places a frog");
+        let (start, avoid) = with_frog(&game.world, frog, |fr| (fr.position, fr.avoid_range()));
+        // The tank sits still this time, west of the frog: every hop has
+        // to take the frog further east than the last.
+        let post = Position::new(start.x - avoid * 0.9, start.y);
+        let mut nearest = f32::MAX;
+        for _ in 0..300 {
+            game.debug_teleport(0, post, Some(0.0)).expect("player slot");
+            step(&mut game, Input::default());
+            let pos = with_frog(&game.world, frog, |fr| fr.position);
+            nearest = nearest.min(pos.distance_to(post));
+        }
+        let pos = with_frog(&game.world, frog, |fr| fr.position);
+        assert!(pos.distance_to(post) > avoid, "the frog stayed inside the avoid ring: {pos:?} vs {post:?}");
+        assert!(nearest >= avoid * 0.85, "a hop carried the frog to {nearest:.0} px of the tank, closer than it started");
+    }
+
+    /// The art is authored facing right and mirrored for the other way
+    /// (`frog::Facing`), so a hop has to turn the frog or it moonwalks.
+    #[test]
+    fn a_frog_faces_the_way_it_hops() {
+        for (from_east, want) in [(true, Facing::Left), (false, Facing::Right)] {
+            let mut game = game_on(&hop_corridor_map(), 0, Some(0));
+            let frog = game.frog.expect("the map places a frog");
+            let avoid = with_frog(&game.world, frog, |fr| fr.avoid_range());
+            // Start it facing the wrong way, so passing means a hop turned
+            // it rather than that it was already right.
+            let wrong = if want == Facing::Left { Facing::Right } else { Facing::Left };
+            with_frog_mut(&game.world, frog, |fr| fr.facing = wrong);
+            for _ in 0..300 {
+                let pos = with_frog(&game.world, frog, |fr| fr.position);
+                let side = if from_east { avoid * 0.9 } else { -avoid * 0.9 };
+                game.debug_teleport(0, Position::new(pos.x + side, pos.y), Some(0.0)).expect("player slot");
+                step(&mut game, Input::default());
+            }
+            let facing = with_frog(&game.world, frog, |fr| fr.facing);
+            let side = if from_east { "east" } else { "west" };
+            assert_eq!(facing, want, "crowded from the {side}, the frog ended up facing {facing:?}");
+        }
+    }
+
+    /// The attack clip lashes its tongue to the side the frog faces, so a
+    /// bite turns it toward the tank. Checked only on frames where the bite
+    /// is what gets drawn: a hop outranks it in `Frog::anim`, and on a frame
+    /// that does both the frog rightly faces the way it leapt.
+    #[test]
+    fn a_frog_faces_the_tank_it_bites() {
+        let mut game = hunt_game();
+        let enemy_frog = game.enemy_frog.expect("Hunt places an enemy frog");
+        with_frog_mut(&game.world, enemy_frog, |fr| fr.facing = Facing::Right);
+        let mut checked = false;
+        for _ in 0..300 {
+            let (pos, range) = with_frog(&game.world, enemy_frog, |fr| (fr.position, fr.attack_range()));
+            // Player 1 parked to the frog's *west*, inside its bite range.
+            game.debug_teleport(0, Position::new(pos.x - range * 0.5, pos.y), Some(0.0)).expect("player slot");
+            step(&mut game, Input::default());
+            let bit = game.events().iter().any(|e| matches!(e, Event::FrogBite { side: Side::Enemy, .. }));
+            let (facing, hopping) = with_frog(&game.world, enemy_frog, |fr| (fr.facing, fr.hop_timer > 0.0));
+            if bit && !hopping {
+                assert_eq!(facing, Facing::Left, "the tongue lashed away from the tank it bit");
+                checked = true;
+                break;
+            }
+        }
+        assert!(checked, "the enemy frog never bit the player parked beside it");
+    }
+
+    /// Walled in on every side, there is nowhere to land and the frog
+    /// simply stays put - the search reports no spot rather than dropping
+    /// it into a tile.
+    #[test]
+    fn a_boxed_in_frog_stays_put() {
+        let mut text = String::from("version = 1\ntanks = 0\ncells.\"5,11\" = { kind = \"start\" }\ncells.\"20,11\" = { kind = \"frog\" }\n");
+        for col in 18..=22 {
+            for row in 9..=13 {
+                if (col, row) != (20, 11) {
+                    text.push_str(&format!("cells.\"{col},{row}\" = {{ kind = \"wall\", material = \"iron\" }}\n"));
+                }
+            }
+        }
+        let mut game = game_on(&text, 0, Some(0));
+        let frog = game.frog.expect("the map places a frog");
+        let (start, avoid) = with_frog(&game.world, frog, |fr| (fr.position, fr.avoid_range()));
+        for _ in 0..120 {
+            game.debug_teleport(0, Position::new(start.x - avoid * 0.9, start.y), Some(0.0)).expect("player slot");
+            step(&mut game, Input::default());
+        }
+        let pos = with_frog(&game.world, frog, |fr| fr.position);
+        assert_eq!((pos.x, pos.y), (start.x, start.y), "a boxed-in frog hopped into the walls around it");
+    }
+
+    /// The other side is still fair game, on both sides - the bite reflex
+    /// is gated on who the tank belongs to, not switched off.
+    #[test]
+    fn a_frog_bites_the_other_side() {
+        let mut game = hunt_game();
+        let (player_frog, enemy_frog) = (game.frog, game.enemy_frog);
+        let enemy = enemy_slot(&game);
+        let bites = bites_while_parked(&mut game, enemy, player_frog, 120);
+        assert!(
+            bites.iter().any(|&(side, slot)| side == Side::Player && slot == enemy),
+            "the player's frog never bit the enemy parked on it: {bites:?}"
+        );
+        let bites = bites_while_parked(&mut game, 0, enemy_frog, 120);
+        assert!(
+            bites.iter().any(|&(side, slot)| side == Side::Enemy && slot == 0),
+            "the enemy frog never bit the player parked on it: {bites:?}"
+        );
+        assert!(player_snapshot(&game).damage > 0.0, "the enemy frog's bites did no damage");
+    }
+
     /// The role roll is skipped entirely at a zero share, so a Destroy
     /// round and a Protect round with no hunters draw the same stream and
     /// only differ by the frog; every enemy of a Destroy round fights the
@@ -3739,6 +4325,272 @@ tanks = 1
 cells."20,11" = { kind = "start" }
 cells."30,20" = { kind = "frog" }
 "#;
+
+    /// Enemies only take what they would actually use. A pack that hoovers
+    /// up every crate it drives past strips the field of what the player
+    /// needed and gains nothing itself - see `Tank::wants_pickup`.
+    #[test]
+    fn an_enemy_leaves_behind_what_it_does_not_need() {
+        const MAP: &str = r#"
+version = 1
+tanks = 1
+cells."10,10" = { kind = "start" }
+cells."11,10" = { kind = "pickup", pickup = "health" }
+cells."30,20" = { kind = "frog" }
+"#;
+        let mut game = game_on(MAP, 1, Some(0));
+        // Park the player far away so only the enemy can reach the pack.
+        game.debug_teleport(0, map::cell_to_world(30, 5), None).expect("the player exists");
+        let enemy = game.world.query::<&Tank>().with::<&Ai>().iter().map(|t| t.owner_slot()).next().unwrap();
+        // Undamaged: it has no use for a health pack.
+        let entity = game.tank_entity_by_slot(enemy).expect("the enemy exists");
+        with_tank_mut(&game.world, entity, |t| t.damage = 0.0);
+        game.debug_teleport(enemy, map::cell_to_world(11, 10), None).expect("the enemy exists");
+        step(&mut game, Input::default());
+        assert_eq!(
+            health_on_field(&game),
+            1,
+            "a healthy enemy must drive over a health pack and leave it for the player"
+        );
+
+        // Hurt: now it wants it, and the same drive-over collects.
+        with_tank_mut(&game.world, entity, |t| t.damage = 40.0);
+        game.debug_teleport(enemy, map::cell_to_world(11, 10), None).expect("the enemy exists");
+        step(&mut game, Input::default());
+        assert_eq!(health_on_field(&game), 0, "a hurt enemy still takes it");
+    }
+
+    /// The player is deliberately exempt: taking something you do not
+    /// strictly need is a decision the person at the controls gets to make.
+    #[test]
+    fn a_player_still_collects_what_it_does_not_need() {
+        const MAP: &str = r#"
+version = 1
+tanks = 0
+cells."10,10" = { kind = "start" }
+cells."11,10" = { kind = "pickup", pickup = "health" }
+cells."30,20" = { kind = "frog" }
+"#;
+        let mut game = game_on(MAP, 0, Some(0));
+        let player = game.player.expect("a player exists");
+        with_tank_mut(&game.world, player, |t| t.damage = 0.0);
+        step(&mut game, Input::default());
+        assert_eq!(health_on_field(&game), 0, "an undamaged player still collects");
+    }
+
+    // --- The frog health pack (docs/frog-health-pack-prd.md) ---
+
+    /// The player starts one cell from a frog pack, so the collect test is
+    /// one `step`. The frog is far enough away that nothing else reaches
+    /// it. `tanks = 1` so there is an enemy to teleport onto the pack.
+    const FROG_PACK_MAP: &str = r#"
+version = 1
+tanks = 1
+cells."10,10" = { kind = "start" }
+cells."11,10" = { kind = "pickup", pickup = "frog_health" }
+cells."30,20" = { kind = "frog" }
+"#;
+
+    /// Same, as a Hunt round: the enemy has a frog of its own to heal.
+    const FROG_PACK_HUNT_MAP: &str = r#"
+version = 1
+tanks = 1
+mission.kind = "hunt"
+cells."10,10" = { kind = "start" }
+cells."11,10" = { kind = "pickup", pickup = "frog_health" }
+cells."30,20" = { kind = "frog" }
+cells."4,4" = { kind = "enemy_frog" }
+"#;
+
+    fn hurt_frog(game: &Game, entity: Entity, amount: f32) {
+        with_frog_mut(&game.world, entity, |f| f.damage(amount));
+    }
+
+    fn frog_health(game: &Game, entity: Entity) -> f32 {
+        with_frog(&game.world, entity, |f| f.health)
+    }
+
+    /// Health packs specifically. A Health slot also rolls a bonus shield
+    /// (`maybe_spawn_health_slot_bonuses`), so counting every live pickup
+    /// would count that too.
+    fn health_on_field(game: &Game) -> usize {
+        game.world.query::<&Pickup>().iter().filter(|p| p.kind == PickupKind::Health).count()
+    }
+
+    fn packs_on_field(game: &Game) -> usize {
+        game.world.query::<&Pickup>().iter().filter(|p| p.kind == PickupKind::FrogHealth).count()
+    }
+
+    /// Drive `slot`'s tank onto the pack's cell and advance one frame.
+    fn collect_with(game: &mut Game, slot: usize) {
+        game.debug_teleport(slot, map::cell_to_world(11, 10), None).expect("slot exists");
+        step(game, Input::default());
+    }
+
+    #[test]
+    fn a_frog_pack_restores_the_players_hurt_frog_to_full() {
+        let mut game = game_on(FROG_PACK_MAP, 1, Some(0));
+        let frog = game.frog.expect("a Protect round has a frog");
+        // Init already collected nothing: the frog is pristine, so the
+        // pack must still be there.
+        assert_eq!(packs_on_field(&game), 1);
+        hurt_frog(&game, frog, 25.0);
+        let hurt = frog_health(&game, frog);
+        assert!(hurt < tuning().frog_max_health);
+        step(&mut game, Input::default());
+        assert_eq!(frog_health(&game, frog), tuning().frog_max_health, "one pack is a full heal");
+        assert_eq!(packs_on_field(&game), 0, "the pack was consumed");
+        assert!(
+            game.events()
+                .iter()
+                .any(|e| matches!(e, Event::PickupCollected { slot: 0, kind: PickupKind::FrogHealth })),
+            "{:?}",
+            game.events()
+        );
+        let healed = game
+            .events()
+            .iter()
+            .find_map(|e| match e {
+                Event::FrogHealed { side, amount, .. } => Some((*side, *amount)),
+                _ => None,
+            })
+            .expect("a heal reports itself");
+        assert_eq!(healed.0, Side::Player);
+        assert!((healed.1 - (tuning().frog_max_health - hurt)).abs() < 0.01, "{healed:?}");
+    }
+
+    #[test]
+    fn a_frog_pack_is_left_on_the_field_while_the_frog_is_at_full_health() {
+        let mut game = game_on(FROG_PACK_MAP, 1, Some(0));
+        for _ in 0..30 {
+            step(&mut game, Input::default());
+        }
+        assert_eq!(packs_on_field(&game), 1, "a pristine frog does not spend the pack");
+        assert!(!game.events().iter().any(|e| matches!(e, Event::PickupCollected { .. })));
+    }
+
+    /// The pack is the frog's, not the collector's: a tank at full health
+    /// still picks one up for a hurt frog, and takes nothing from it.
+    #[test]
+    fn a_frog_pack_heals_the_frog_and_never_the_tank_that_took_it() {
+        let mut game = game_on(FROG_PACK_MAP, 1, Some(0));
+        let frog = game.frog.expect("a Protect round has a frog");
+        hurt_frog(&game, frog, 25.0);
+        let player = game.player.expect("a player exists");
+        with_tank_mut(&game.world, player, |t| t.damage = 30.0);
+        step(&mut game, Input::default());
+        assert_eq!(frog_health(&game, frog), tuning().frog_max_health);
+        assert_eq!(with_tank(&game.world, player, |t| t.damage), 30.0, "the tank's own health is untouched");
+    }
+
+    /// Protect gives the enemies no frog, so an enemy that drives over a
+    /// pack consumes it for nothing - the denial pressure that makes the
+    /// pack worth racing for.
+    #[test]
+    fn an_enemy_with_no_frog_of_its_own_wastes_the_pack() {
+        let mut game = game_on(FROG_PACK_MAP, 1, Some(0));
+        let frog = game.frog.expect("a Protect round has a frog");
+        hurt_frog(&game, frog, 25.0);
+        let hurt = frog_health(&game, frog);
+        // Park the player far away so only the enemy can reach the pack.
+        game.debug_teleport(0, map::cell_to_world(30, 5), None).expect("the player exists");
+        let enemy = game.world.query::<&Tank>().with::<&Ai>().iter().map(|t| t.owner_slot()).next().unwrap();
+        collect_with(&mut game, enemy);
+        assert_eq!(packs_on_field(&game), 0, "the enemy took it");
+        assert_eq!(frog_health(&game, frog), hurt, "and healed nothing");
+        assert!(!game.events().iter().any(|e| matches!(e, Event::FrogHealed { .. })));
+    }
+
+    /// Hunt gives both sides a frog, and each heals only its own.
+    #[test]
+    fn an_enemy_in_a_hunt_round_heals_the_enemy_frog_and_not_the_players() {
+        let mut game = game_on(FROG_PACK_HUNT_MAP, 1, Some(0));
+        let frog = game.frog.expect("Hunt has a player frog");
+        let enemy_frog = game.enemy_frog.expect("Hunt has an enemy frog");
+        hurt_frog(&game, frog, 25.0);
+        hurt_frog(&game, enemy_frog, 25.0);
+        let player_hurt = frog_health(&game, frog);
+        game.debug_teleport(0, map::cell_to_world(30, 5), None).expect("the player exists");
+        let enemy = game.world.query::<&Tank>().with::<&Ai>().iter().map(|t| t.owner_slot()).next().unwrap();
+        collect_with(&mut game, enemy);
+        assert_eq!(frog_health(&game, enemy_frog), tuning().frog_max_health, "the enemy healed its own frog");
+        assert_eq!(frog_health(&game, frog), player_hurt, "and left the player's alone");
+        assert!(
+            game.events().iter().any(|e| matches!(e, Event::FrogHealed { side: Side::Enemy, .. })),
+            "{:?}",
+            game.events()
+        );
+    }
+
+    #[test]
+    fn a_frog_pack_does_not_revive_a_dead_frog() {
+        let mut game = game_on(FROG_PACK_MAP, 1, Some(0));
+        let frog = game.frog.expect("a Protect round has a frog");
+        hurt_frog(&game, frog, tuning().frog_max_health);
+        assert!(with_frog(&game.world, frog, Frog::is_dead));
+        step(&mut game, Input::default());
+        assert_eq!(frog_health(&game, frog), 0.0, "a dead frog stays dead");
+        assert!(with_frog(&game.world, frog, Frog::is_dead));
+        // A dead frog is not "full": the pack is taken like any other side
+        // with nothing to heal, and wasted.
+        assert_eq!(packs_on_field(&game), 0);
+        assert!(!game.events().iter().any(|e| matches!(e, Event::FrogHealed { .. })));
+    }
+
+    /// The bonus drop: a hurt frog can put a pack beside a respawning
+    /// health slot, a pristine one never does. The player is parked next
+    /// to the health slot so it is collected and respawns over and over,
+    /// giving the roll many chances.
+    #[test]
+    fn the_bonus_pack_rolls_only_while_the_frog_is_hurt() {
+        const MAP: &str = r#"
+version = 1
+tanks = 0
+cells."10,10" = { kind = "start" }
+cells."11,10" = { kind = "pickup", pickup = "health" }
+cells."30,20" = { kind = "frog" }
+"#;
+        let frames = (tuning().pickup_respawn_seconds * 60.0) as u32 * 8 + 120;
+
+        let mut hurt = game_on(MAP, 0, Some(0));
+        let frog = hurt.frog.expect("a Protect round has a frog");
+        let mut saw_pack = false;
+        for _ in 0..frames {
+            // Held hurt on purpose: a pack the player picks up would
+            // otherwise close the gate after the very first drop.
+            with_frog_mut(&hurt.world, frog, |f| f.health = f.max_health * 0.5);
+            step(&mut hurt, Input::default());
+            saw_pack |= packs_on_field(&hurt) > 0;
+        }
+        assert!(saw_pack, "a hurt frog eventually draws a bonus pack");
+
+        let mut pristine = game_on(MAP, 0, Some(0));
+        for _ in 0..frames {
+            step(&mut pristine, Input::default());
+            assert_eq!(packs_on_field(&pristine), 0, "a pristine frog never gets one");
+        }
+    }
+
+    /// The gate sits *before* the roll, which is what keeps every round
+    /// whose frog is never hurt byte-identical to the same seed before
+    /// this pickup existed (docs/frog-health-pack-prd.md section 6). Tested
+    /// as it is stated: a pristine frog's health slot must leave the RNG
+    /// exactly where the shield's own roll alone leaves it.
+    #[test]
+    fn a_pristine_frogs_health_slot_draws_no_more_rng_than_the_shield_roll_alone() {
+        let map = MapFile::from_toml_str("version = 1\ncells.\"10,10\" = { kind = \"start\" }\n").expect("parses");
+        let slot = map::cell_to_world(11, 10);
+        let (mut with_gate, mut shield_only) = (SmallRng::seed_from_u64(99), SmallRng::seed_from_u64(99));
+        let (mut wa, mut wb) = (hecs::World::new(), hecs::World::new());
+        maybe_spawn_health_slot_bonuses(&mut wa, &map, slot, W, H, false, &mut with_gate);
+        let chance = tuning().shield_near_health_chance;
+        maybe_spawn_bonus(&mut wb, &map, slot, PickupKind::Shield, chance, W, H, &mut shield_only);
+        assert_eq!(
+            with_gate.random::<u64>(),
+            shield_only.random::<u64>(),
+            "a pristine frog must add no draw of its own"
+        );
+    }
 
     fn fire_once(row: i32) -> i32 {
         let mut game = game_on(OPEN_MAP, 1, Some(row));
@@ -3885,46 +4737,79 @@ cells."30,20" = { kind = "frog" }
     }
 
     #[test]
-    fn a_shield_pickup_heals_to_full_and_protects_for_its_duration() {
+    fn a_shield_pickup_heals_to_full_and_absorbs_until_it_is_spent() {
         let mut game = game_on(SEALED_SHIELD_MAP, 1, Some(0));
         let player = game.player.expect("player");
         {
             let mut q = game.world.query_one::<&mut Tank>(player);
             let tank = q.get().expect("player tank");
             tank.damage = 50.0;
-            tank.shield_timer = 0.0;
+            tank.shield_hp = 0.0;
         }
         step(&mut game, Input::default());
         let snap = player_snapshot(&game);
         assert_eq!(snap.damage, 0.0, "the shield pickup is a full heal");
-        let duration = tuning().shield_duration_seconds;
-        assert!(
-            (snap.shield_timer - duration).abs() <= 1.0 / 60.0 + 1e-4,
-            "timer set to tuning().shield_duration_seconds, got {}",
-            snap.shield_timer
-        );
-        // Damage applied through the one damage path is swallowed while
-        // the timer runs...
-        {
-            let mut q = game.world.query_one::<&mut Tank>(player);
-            let tank = q.get().expect("player tank");
-            tank.take_damage(30.0, MAX_DAMAGE);
-            assert_eq!(tank.damage, 0.0);
-        }
-        // ...and the timer counts down to exactly zero and stays there. The
-        // slot is cleared first so the crate can't respawn into the sealed
-        // ring and refresh the timer mid-countdown.
+        let capacity = tuning().shield_capacity;
+        assert_eq!(snap.shield_hp, capacity, "pool filled to tuning().shield_capacity");
+        // Damage through the absorb seam comes off the shield, not the hull,
+        // and reports that nothing landed. The slot is cleared first so the
+        // crate can't respawn into the sealed ring and refill mid-test.
         game.map_pickup_slots.clear();
-        for _ in 0..((duration * 60.0) as u32 + 5) {
-            step(&mut game, Input::default());
-        }
-        assert_eq!(player_snapshot(&game).shield_timer, 0.0);
         {
             let mut q = game.world.query_one::<&mut Tank>(player);
             let tank = q.get().expect("player tank");
-            tank.take_damage(30.0, MAX_DAMAGE);
-            assert_eq!(tank.damage, 30.0, "unshielded again once the timer runs out");
+            assert_eq!(tank.take_damage(30.0, MAX_DAMAGE), 0.0, "an absorbed hit lands nothing");
+            assert_eq!(tank.damage, 0.0);
+            assert_eq!(tank.shield_hp, capacity - 30.0, "the shield paid for it");
         }
+        // Spending the rest shatters it, and the hull is exposed again.
+        {
+            let mut q = game.world.query_one::<&mut Tank>(player);
+            let tank = q.get().expect("player tank");
+            assert!(tank.spend_shield(capacity), "the blow that empties the pool shatters it");
+            assert!(!tank.is_shielded());
+            assert_eq!(tank.take_damage(30.0, MAX_DAMAGE), 30.0);
+            assert_eq!(tank.damage, 30.0, "unshielded again once the pool is spent");
+        }
+    }
+
+    /// The pool is what ends a shield, and an oversized hit is absorbed in
+    /// full rather than bleeding through to the hull.
+    #[test]
+    fn an_oversized_hit_is_absorbed_whole_and_then_shatters_the_shield() {
+        let mut tank = Tank { shield_hp: 10.0, ..Tank::default() };
+        assert_eq!(tank.take_damage(500.0, MAX_DAMAGE), 0.0, "no bleed-through");
+        assert_eq!(tank.damage, 0.0);
+        assert!(!tank.is_shielded(), "and the shield is gone");
+        assert_eq!(tank.shield_hp, 0.0, "never negative");
+    }
+
+    /// A damaged shield refills once it is left alone; a shattered one does
+    /// not come back, which is what keeps recharge from making shields
+    /// permanent. Also pins that a tank hit this frame cannot regen this
+    /// frame - `tick_timers` runs before every hit phase.
+    #[test]
+    fn a_live_shield_recharges_out_of_contact_but_a_broken_one_stays_broken() {
+        let capacity = tuning().shield_capacity;
+        let delay = tuning().shield_recharge_delay_seconds;
+        let dt = 1.0 / 60.0;
+
+        let mut hurt = Tank { shield_hp: capacity * 0.5, ..Tank::default() };
+        hurt.spend_shield(1.0);
+        let after_hit = hurt.shield_hp;
+        hurt.tick_shield(dt);
+        assert_eq!(hurt.shield_hp, after_hit, "no regen on the frame it was struck");
+        for _ in 0..((delay * 60.0) as u32 + 1) {
+            hurt.tick_shield(dt);
+        }
+        hurt.tick_shield(dt);
+        assert!(hurt.shield_hp > after_hit, "it refills once the delay lapses");
+
+        let mut broken = Tank { shield_hp: 0.0, ..Tank::default() };
+        for _ in 0..600 {
+            broken.tick_shield(dt);
+        }
+        assert_eq!(broken.shield_hp, 0.0, "a shattered shield never returns on its own");
     }
 
     /// Drop an enemy-owned shell `above` px above the player, flying
@@ -3937,7 +4822,7 @@ cells."30,20" = { kind = "frog" }
         let (pos, row) = {
             let mut q = game.world.query_one::<&mut Tank>(player);
             let tank = q.get().expect("player tank");
-            tank.shield_timer = if shielded { 100.0 } else { 0.0 };
+            tank.shield_hp = if shielded { tuning().shield_capacity } else { 0.0 };
             (tank.position, tank.row)
         };
         let shooter = Tank { row, position: Position::new(pos.x, pos.y - above), rotation: 180.0, ..Tank::default() };
@@ -3963,6 +4848,70 @@ cells."30,20" = { kind = "frog" }
         assert!(damage > 0.0, "unshielded control: the shell hits");
     }
 
+    /// Deflecting a shot costs the shield more than absorbing the same
+    /// damage would - `shield_deflect_cost_factor`. This is what makes
+    /// shooting a shielded tank the fastest way to strip it, and the whole
+    /// reason the deflect is a decision rather than a pure punish.
+    #[test]
+    fn deflecting_a_shell_costs_the_shield_more_than_absorbing_it_would() {
+        let mut game = game_on(OPEN_MAP, 0, Some(0));
+        let player = game.player.expect("player");
+        let capacity = tuning().shield_capacity;
+        let (pos, row) = {
+            let mut q = game.world.query_one::<&mut Tank>(player);
+            let tank = q.get().expect("player tank");
+            tank.shield_hp = capacity;
+            (tank.position, tank.row)
+        };
+        let shooter = Tank { row, position: Position::new(pos.x, pos.y - 160.0), rotation: 180.0, ..Tank::default() };
+        game.world.spawn((Shell::spawn(&shooter, Owner::Enemy(1), 0.0, 0.0),));
+        for _ in 0..240 {
+            step(&mut game, Input::default());
+        }
+        let spent = capacity - player_snapshot(&game).shield_hp;
+        assert!(spent > 0.0, "the deflected shell came off the shield");
+
+        // The same shell's own worst-case roll, absorbed instead.
+        let worst_absorb = tuning().enemy_damage_max * tuning().tank_damage_factor[row as usize];
+        assert!(
+            spent > worst_absorb,
+            "a deflect ({spent}) must cost more than absorbing even the top of the shell's roll ({worst_absorb})",
+        );
+    }
+
+    /// The headline rule: a shield is a pool, so enough fire ends it. Fired
+    /// through the real projectile path rather than by calling
+    /// `spend_shield`, so the deflect seam is what is under test.
+    #[test]
+    fn sustained_fire_breaks_a_shield_and_says_so() {
+        let mut game = game_on(OPEN_MAP, 0, Some(0));
+        let player = game.player.expect("player");
+        let (pos, row) = {
+            let mut q = game.world.query_one::<&mut Tank>(player);
+            let tank = q.get().expect("player tank");
+            tank.shield_hp = tuning().shield_capacity;
+            // Out of the way of the recharge, which would otherwise refill
+            // between volleys and make this a test of nothing.
+            tank.shield_recharge_delay = 1.0e9;
+            (tank.position, tank.row)
+        };
+        let shooter = Tank { row, position: Position::new(pos.x, pos.y - 160.0), rotation: 180.0, ..Tank::default() };
+        let mut broke = false;
+        for _ in 0..40 {
+            game.world.spawn((Shell::spawn(&shooter, Owner::Enemy(1), 0.0, 0.0),));
+            for _ in 0..30 {
+                step(&mut game, Input::default());
+                broke |= game.events().iter().any(|e| matches!(e, Event::ShieldBroken { .. }));
+            }
+            if broke {
+                break;
+            }
+        }
+        assert!(broke, "enough shells must shatter a shield and emit ShieldBroken");
+        let snap = player_snapshot(&game);
+        assert_eq!(snap.shield_hp, 0.0, "and the pool is empty afterwards");
+    }
+
     #[test]
     fn a_bonus_shield_lands_on_a_free_neighbouring_cell() {
         let map = MapFile::from_toml_str(OPEN_MAP).expect("map parses");
@@ -3970,7 +4919,7 @@ cells."30,20" = { kind = "frog" }
         let mut rng = SmallRng::seed_from_u64(3);
         // The slot itself is occupied by its health pack; every neighbour is
         // free and inside the field.
-        let pos = bonus_shield_cell(&map, slot, &[slot], W, H, &mut rng).expect("an open map has a free neighbour");
+        let pos = bonus_pickup_cell(&map, slot, &[slot], W, H, &mut rng).expect("an open map has a free neighbour");
         let (c, r) = map::world_to_cell(pos);
         assert!((c - 20).abs() <= 1 && (r - 11).abs() <= 1 && (c, r) != (20, 11), "adjacent, not the slot: {c},{r}");
         assert!(matches!(map.cell(c, r), None | Some(CellObject::Road)));
@@ -3989,7 +4938,7 @@ cells."30,20" = { kind = "frog" }
             .collect();
         let mut occupied = open_neighbours.clone();
         occupied.push(slot);
-        assert_eq!(bonus_shield_cell(&map, slot, &occupied, W, H, &mut rng), None);
+        assert_eq!(bonus_pickup_cell(&map, slot, &occupied, W, H, &mut rng), None);
     }
 
     // --- Waves spawn plan (docs/maps-to-levels.md, `waves.rs`) ---
@@ -4012,7 +4961,7 @@ cells."30,20" = { kind = "frog" }
         game.map = MapFile::from_toml_str(OPEN_MAP).expect("test map parses");
         game.init(W, H);
         let player = game.player.expect("player");
-        with_tank_mut(&game.world, player, |t| t.shield_timer = 1.0e9);
+        with_tank_mut(&game.world, player, |t| t.shield_hp = 1.0e9);
         game
     }
 
@@ -4106,6 +5055,16 @@ cells."30,20" = { kind = "frog" }
     fn the_next_wave_joins_after_the_timeout_with_one_still_alive() {
         let mut game = waves_game(2, 1);
         step_until_entered(&mut game, 600);
+        // Shield wave 1's tank the way `waves_game` already shields the
+        // player: this test is about wave *pacing*, and it needs that tank
+        // alive until the timeout. On an open map the tank drives at the
+        // player and rams it, and ram damage is mutual - so without this it
+        // eventually kills itself against the invulnerable player, live
+        // enemies hit `wave_next_when_alive`, and wave 2 arrives on the
+        // cleared-the-wave path well before the timeout it is meant to test.
+        for tank in game.world.query_mut::<&mut Tank>().with::<&Ai>() {
+            tank.shield_hp = 1.0e9;
+        }
         let timeout_frames = (tuning().wave_timeout_seconds * 60.0) as u32;
         let gap_frames = (tuning().wave_gap_seconds * 60.0) as u32;
         let mut called_at = None;
@@ -4200,7 +5159,7 @@ cells."30,20" = { kind = "frog" }
         game.level_overrides.tier_end = Some(Tier::Super);
         game.init(W, H);
         let player = game.player.expect("player");
-        with_tank_mut(&game.world, player, |t| t.shield_timer = 1.0e9);
+        with_tank_mut(&game.world, player, |t| t.shield_hp = 1.0e9);
         let plan = game.spawn_plan;
         let mut wave = 0u32;
         let mut seen = 0;
@@ -4232,3 +5191,5 @@ cells."30,20" = { kind = "frog" }
         assert_eq!(game.outcome(), Outcome::Won, "the round ends once the last wave is wrecked");
     }
 }
+
+

@@ -43,12 +43,12 @@ Decisions from the 2026-09-09 interview, then what the code does.
   at or below `enemy_health_ring_below` (0.5). Hidden under a full shield, for a
   wreck, and for a wave tank still rolling in.
 - **Shield ring** (`tank::draw_tank_shield`): the rainbow ring is a gauge of the
-  shield time left (`Tank::shield_charge`, the timer over `shield_duration_seconds`):
+  shield charge left (`Tank::shield_charge`, the pool over `shield_capacity`):
   same radius as the marker ring, the rainbow bands cover that fraction of the
   circle from 12 o'clock clockwise, and the rest is drawn as the tank's health
   ring draws its missing part (dimmed white for the player, the dark band for an
   enemy). It still cross-fades into the health ring over its last
-  `shield_glow_fade_seconds`.
+  `shield_glow_fade_fraction` of its charge.
 - **Frogs** (`frog::draw_frog_ring`): always on while alive; the player's frog uses
   the white ramp on dimmed white, the enemy frog the red ramp on dimmed RED_MD
   `#E44219`. `Frog::hit_flash_timer` is gone; nothing was left for it to time.

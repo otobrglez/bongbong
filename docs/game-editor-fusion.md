@@ -175,10 +175,10 @@ Categories and their tools, in list order:
 | Category | Tools (23 with the eraser) |
 | --- | --- |
 | WALL | brick, iron, wood, glass |
-| PROP | sandbag, barrel, fence, tree, pine |
-| GROUND | road, tall grass, gate |
-| ACTOR | start, frog, enemy frog |
-| PICKUP | health, ammo, laser, minigun, plasma, speed-up, shield |
+| PROP | sandbag, barrel, oil drum, fuel drum, fence, tree, pine |
+| GROUND | road, tall grass, oil trail, gate |
+| ACTOR | p1 start, p2 start, frog, enemy frog |
+| PICKUP | health, ammo, laser, minigun, plasma, speed-up, shield, flamethrower, frog pack |
 
 Each category remembers its current tool for the session; the initial tool
 is the first in each list, and the active brush at entry is `WALL / brick`.

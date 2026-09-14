@@ -140,7 +140,7 @@ construction; every request still lands in `before_frame`.
 | `overlays` | `nav_grid`, `ai`, `projectiles`, `engage`, `pickups`, `inspect` (individual flags; the I key cycles presets off -> inspect -> all) | current flags |
 | `nav_grid` | - | ASCII grid with tanks/frog/pickups marked |
 | `teleport` | `slot`, `x`, `y`, `facing` | - |
-| `set_tank` | `slot`, `damage`, `*_ammo`, `laser_charges`, `shield_timer`, `speed_boost_timer` | the tank |
+| `set_tank` | `slot`, `damage`, `*_ammo`, `laser_charges`, `shield_hp`, `speed_boost_timer` | the tank |
 | `kill` | `slot` | applied on the next simulated frame through the normal kill path |
 | `spawn_enemy` | `x`, `y`, `row` | new slot |
 | `tuning_get` / `tuning_set` / `tuning_reset` / `tuning_schema` | `diff_only` / `patch` / - / `group`, `name_contains` | see docs/runtime-tuning-design.md |

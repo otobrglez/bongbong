@@ -43,6 +43,40 @@ start/end. Ground-level straight-line motion only (no fake screen-space
 arc/height) - this is a top-down game with no Z axis to arc through, and
 `hop.png`'s own squash/stretch frames already carry the "hop" feel.
 
+## Facing
+
+**The art is authored facing right.** There is one filmstrip per clip - no
+left-facing variant, in any of the six colour folders - and the tell is
+`attack.png`, whose tongue lashes out to **+x** on frames 3-5 (the content
+bbox grows from x 11..31 to x 11..47). The idle/hop/hurt body leans the same
+way, more subtly.
+
+`frog::Facing` (`Right`/`Left`) is therefore a *draw-time mirror*, and
+`frog::mirror` is the only place it is applied: it returns the sign to
+multiply the source rectangle's width by - raylib's mirror idiom, shared
+with `blast::draw_blast`, `decal::draw_decal` and `grass::draw_tuft` - plus
+a destination offset.
+
+That offset is not slack. The body's alpha bbox is **x 11..31, centre 21.0**
+on every non-tongue frame of every clip in every variant, while the 48 px
+cell's own centre is 23.5, so the body sits 2.5 design px left of the axis a
+mirror reflects about. A bare width flip slides it 5 design px - **10 screen
+px at `FROG_SCALE`** - to the right, and the frog would jump sideways every
+time it turned around. `FROG_SPRITE_BODY_CENTER_X` (`lib.rs`) records the
+measurement and `mirror` hands the shift back, so `Facing::Right` draws
+byte-identically to an unmirrored draw and `Facing::Left` is its mirror
+*in place*.
+
+The facing **persists**: `Frog::facing` is set by `start_hop` from where the
+leap lands (not from the away direction - `combat::frog_hop_target` can angle
+a hop up to a quarter turn off it, and the sprite has to match what the frog
+visibly does) and by `start_attack` from where the victim is, then kept until
+one of those changes it. A hop with less than `FROG_FACING_DEADBAND_PX` of
+horizontal travel leaves it alone: the hop fan reaches a quarter turn either
+way, so a dead-vertical leap is a real case whose sign would be float noise.
+On a frame that both bites and hops the hop wins, matching `Frog::anim`'s
+Hop-over-Attack priority. Nothing in `simulation/` reads `facing`.
+
 ## Not used
 
 None — all five animations in the PurpleWhite variant are wired in.

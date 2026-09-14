@@ -4,16 +4,23 @@
 //! (unlike `ai::Ai`, it never chooses a target or plans a route) - just two
 //! reflexes, both driven from `simulation.rs`, the one place that already
 //! has the world/physics access either needs: it tries to hop away
-//! (`Frog::start_hop`, landing chosen by `simulation::frog_hop_target`)
-//! whenever a shell hits it and survives - a real animated leap,
-//! `position` interpolated from `hop_start` to `hop_end` over
-//! FROG_HOP_SECONDS by `tick`, not a teleport, with `Game::update` keeping
-//! the physics body in lockstep every frame so it stays collidable
-//! throughout - and it bites (`Frog::start_attack`) whichever tank - either
-//! side - is nearest once one gets within `Frog::attack_range`. Any shot
-//! damages any frog. The player's frog reaching zero `health` ends the
-//! round in a loss, the enemy frog's in a win (`Game::check_round_end`).
+//! (`Frog::start_hop`, landing chosen by `combat::frog_hop_target`, which
+//! shortens and angles the leap until it finds ground the frog's hull
+//! actually fits on rather than giving up near terrain) whenever a shell
+//! hits it and survives, or whenever a tank comes inside
+//! `Frog::avoid_range` - a real animated leap, `position` interpolated
+//! from `hop_start` to `hop_end` over FROG_HOP_SECONDS by `tick`, not a
+//! teleport, with `Game::update` keeping the physics body in lockstep
+//! every frame so it stays collidable throughout - and it bites
+//! (`Frog::start_attack`) the nearest tank of the *other* side
+//! (`Side::bites`) once one gets within `Frog::attack_range`. It hops away
+//! from any tank, its own side included; it only ever bites a hostile one,
+//! so a frog is never a hazard to the side whose objective it is. Any shot
+//! damages any frog. The player's frog reaching zero `health`
+//! ends the round in a loss, the enemy frog's in a win
+//! (`Game::check_round_end`).
 
+use crate::shell::Owner;
 use crate::tank::{HealthRamp, RingStyle, draw_ground_ring_at, with_opacity};
 use crate::tuning::tuning;
 use rapier2d::prelude::RigidBodyHandle;
@@ -26,6 +33,7 @@ use crate::{
     FROG_ATTACK_SECONDS,
     FROG_EXPLOSION_FPS,
     FROG_EXPLOSION_FRAMES,
+    FROG_FACING_DEADBAND_PX,
     FROG_HOP_FPS,
     FROG_HOP_FRAMES,
     FROG_HOP_SECONDS,
@@ -35,6 +43,7 @@ use crate::{
     FROG_IDLE_FPS,
     FROG_IDLE_FRAMES,
     FROG_SCALE,
+    FROG_SPRITE_BODY_CENTER_X,
     FROG_TEXTURE_SIZE,
     Position,
 };
@@ -56,6 +65,75 @@ impl Side {
             Side::Enemy => "enemy",
         }
     }
+
+    /// Whether a frog on this side bites `owner`'s tank: only ever the
+    /// other side's. Your own frog is an objective to defend, not a hazard
+    /// to park away from, and an enemy frog must not chew through the pack
+    /// guarding it. The hop is deliberately *not* gated on this (see
+    /// `Game::frog_reflexes`): the frog stays skittish of every tank.
+    pub fn bites(self, owner: Owner) -> bool {
+        match self {
+            Side::Player => !owner.is_player(),
+            Side::Enemy => owner.is_player(),
+        }
+    }
+}
+
+/// Which way a frog's art faces. The pack is authored facing right (see
+/// FROG_SPRITE_BODY_CENTER_X), so `Left` is the mirrored draw and there is
+/// no second set of sprites - `mirror` is the one place that flip lives.
+///
+/// Kept on `Frog` rather than derived per frame so it *persists*: a frog
+/// that hopped west goes on facing west while it idles there, instead of
+/// snapping back to the authored orientation the moment it lands.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Facing {
+    Right,
+    Left,
+}
+
+impl Facing {
+    pub fn name(self) -> &'static str {
+        match self {
+            Facing::Right => "right",
+            Facing::Left => "left",
+        }
+    }
+
+    /// The facing `dx` px of horizontal travel implies, or `None` when that
+    /// is too close to vertical to mean anything (FROG_FACING_DEADBAND_PX).
+    pub fn from_dx(dx: f32) -> Option<Facing> {
+        if dx.abs() < FROG_FACING_DEADBAND_PX {
+            None
+        } else if dx < 0.0 {
+            Some(Facing::Left)
+        } else {
+            Some(Facing::Right)
+        }
+    }
+}
+
+/// How `facing` is drawn: the sign to multiply the source rectangle's width
+/// by - raylib's mirror idiom, as in `blast::draw_blast` - and the screen-px
+/// offset that keeps the mirrored body over the same patch of ground.
+///
+/// The offset is not cosmetic slack: the body sits 2.5 design px left of the
+/// cell centre it would be mirrored about (FROG_SPRITE_BODY_CENTER_X), so
+/// without it a frog jumps 10 screen px sideways every time its facing
+/// flips. `Right` is the identity, so a right-facing frog draws exactly as
+/// it always has.
+pub fn mirror(facing: Facing) -> (f32, f32) {
+    match facing {
+        Facing::Right => (1.0, 0.0),
+        Facing::Left => (-1.0, -2.0 * (cell_center_x() - FROG_SPRITE_BODY_CENTER_X) * FROG_SCALE),
+    }
+}
+
+/// The x a mirrored source rectangle reflects about: the centre of the
+/// cell's pixel columns, 0..=47, not its width.
+fn cell_center_x() -> f32 {
+    (FROG_TEXTURE_SIZE - 1.0) / 2.0
 }
 
 pub struct Frog {
@@ -105,6 +183,11 @@ pub struct Frog {
     /// against a tank that lingers in range the same way a tank's own
     /// `fire_cooldown` paces its shots.
     pub attack_cooldown: f32,
+    /// Which way this frog is drawn (see `Facing`). Set by `start_hop` from
+    /// where the leap lands and by `start_attack` from where the victim is,
+    /// and kept until one of those changes it. Purely a draw-time choice -
+    /// nothing in `simulation/` reads it.
+    pub facing: Facing,
     /// Seconds elapsed since `health` first reached zero - `None` while
     /// still alive. Set once by `damage` and never cleared; drives the
     /// Explosion sequence (see `anim`), which holds on its last frame
@@ -189,12 +272,48 @@ impl Frog {
         }
     }
 
+    /// Restore health, clamped at `max_health`. A no-op once dead, the same
+    /// convention `damage` follows: a frog health pack
+    /// (`pickup::PickupKind::FrogHealth`) cannot revive one, and there is no
+    /// case where it would matter - the player's frog dying ends the round
+    /// on the same frame it happens.
+    pub fn heal(&mut self, amount: f32) {
+        if self.is_dead() {
+            return;
+        }
+        self.health = (self.health + amount).min(self.max_health);
+    }
+
+    /// Alive and undamaged. This is the one state in which a frog health
+    /// pack is left on the ground rather than collected, so it is the
+    /// whole of that pickup's collect rule (`simulation::pickup_phase`): a
+    /// *dead* frog is deliberately not "full", and a pack driven over
+    /// after one dies is consumed for nothing like any other side with no
+    /// frog to heal.
+    pub fn at_full_health(&self) -> bool {
+        !self.is_dead() && self.health >= self.max_health
+    }
+
+    /// Turn to face `x`, unless it is so nearly straight above or below
+    /// that the direction means nothing - then the current facing stands
+    /// rather than flipping on the sign of a near-zero number.
+    fn face_toward(&mut self, x: f32) {
+        if let Some(facing) = Facing::from_dx(x - self.position.x) {
+            self.facing = facing;
+        }
+    }
+
     /// Begin an animated hop toward a landing spot that's already been
     /// found valid (see `simulation::frog_hop_target`) - `position` doesn't
     /// jump to `target` here, `tick` carries it there smoothly over the
     /// next FROG_HOP_SECONDS, in step with the Hop clip/cooldown this also
     /// starts.
     pub fn start_hop(&mut self, target: Position) {
+        // Where the leap *lands*, not the direction it fled: the landing
+        // search angles a hop up to a quarter turn off the away direction
+        // (`combat::frog_hop_target`), and the sprite has to match what the
+        // frog visibly does.
+        self.face_toward(target.x);
         self.hop_start = self.position;
         self.hop_end = target;
         self.hop_timer = FROG_HOP_SECONDS;
@@ -205,7 +324,10 @@ impl Frog {
     /// clip/cooldown. The caller (`Game::update`) is responsible for
     /// actually applying damage to the target; this only tracks the frog's
     /// own reaction/pacing state.
-    pub fn start_attack(&mut self) {
+    pub fn start_attack(&mut self, victim: Position) {
+        // The attack clip lashes its tongue toward the side it faces, so a
+        // bite has to turn the frog or the tongue misses the tank.
+        self.face_toward(victim.x);
         self.attack_timer = FROG_ATTACK_SECONDS;
         self.attack_cooldown = tuning().frog_attack_cooldown_seconds;
     }
@@ -351,7 +473,9 @@ pub fn draw_frog_ring(d: &mut impl RaylibDraw, frog: &Frog, time: f32) {
 /// Draw the frog: whichever of `textures`' five clips `Frog::anim` picks
 /// for this frame, centered at its position. Never rotates (it's not a
 /// tank), so this skips the rotation param `draw_tank` needs - same as
-/// `draw_obstacle`.
+/// `draw_obstacle`. It does *mirror*: the art is authored facing right, and
+/// `mirror` turns `Frog::facing` into the source rectangle's width sign
+/// plus the destination offset that keeps the body over the same ground.
 pub fn draw_frog(d: &mut impl RaylibDraw, textures: &FrogTextures, frog: &Frog, t: f32) {
     let (anim, frame) = frog.anim(t);
     let texture = match anim {
@@ -361,14 +485,112 @@ pub fn draw_frog(d: &mut impl RaylibDraw, textures: &FrogTextures, frog: &Frog, 
         FrogAnim::Attack => textures.attack,
         FrogAnim::Explosion => textures.explosion,
     };
+    let (flip, offset) = mirror(frog.facing);
     let src = Rectangle::new(
         frame as f32 * FROG_TEXTURE_SIZE,
         0.0,
-        FROG_TEXTURE_SIZE,
+        FROG_TEXTURE_SIZE * flip,
         FROG_TEXTURE_SIZE,
     );
     let size = frog.size();
-    let dest = Rectangle::new(frog.position.x, frog.position.y, size, size);
+    let dest = Rectangle::new(frog.position.x + offset, frog.position.y, size, size);
     let origin = Vector2::new(size / 2.0, size / 2.0);
     d.draw_texture_pro(texture, src, dest, origin, 0.0, Color::WHITE);
+}
+
+#[cfg(test)]
+mod facing_tests {
+    use super::*;
+
+    fn frog_at(x: f32) -> Frog {
+        Frog {
+            side: Side::Player,
+            position: Position::new(x, 300.0),
+            health: 100.0,
+            max_health: 100.0,
+            variant: 0,
+            body: RigidBodyHandle::invalid(),
+            hurt_timer: 0.0,
+            hop_timer: 0.0,
+            hop_start: Position::new(x, 300.0),
+            hop_end: Position::new(x, 300.0),
+            hop_cooldown: 0.0,
+            attack_timer: 0.0,
+            attack_cooldown: 0.0,
+            facing: Facing::Right,
+            death_elapsed: None,
+        }
+    }
+
+    /// Where the frog's *body* lands on screen for a given facing: the
+    /// drawn cell's left edge plus the body's own column, mirrored or not.
+    /// The whole point of `mirror`'s offset is that this does not move.
+    fn body_center_on_screen(frog: &Frog) -> f32 {
+        let (flip, offset) = mirror(frog.facing);
+        let col = if flip < 0.0 {
+            (FROG_TEXTURE_SIZE - 1.0) - FROG_SPRITE_BODY_CENTER_X
+        } else {
+            FROG_SPRITE_BODY_CENTER_X
+        };
+        frog.position.x + offset + (col - cell_center_x()) * FROG_SCALE
+    }
+
+    #[test]
+    fn a_hop_faces_the_way_it_lands() {
+        let mut frog = frog_at(500.0);
+        frog.start_hop(Position::new(400.0, 300.0));
+        assert_eq!(frog.facing, Facing::Left, "a hop west faces west");
+
+        let mut frog = frog_at(500.0);
+        frog.facing = Facing::Left;
+        frog.start_hop(Position::new(600.0, 300.0));
+        assert_eq!(frog.facing, Facing::Right, "a hop east faces east");
+    }
+
+    /// The hop fan reaches a quarter turn either way, so a dead-vertical
+    /// leap is a real case - and its sign is float noise, not a direction.
+    #[test]
+    fn a_vertical_hop_keeps_the_facing_it_had() {
+        for facing in [Facing::Left, Facing::Right] {
+            let mut frog = frog_at(500.0);
+            frog.facing = facing;
+            frog.start_hop(Position::new(500.0 + FROG_FACING_DEADBAND_PX * 0.5, 380.0));
+            assert_eq!(frog.facing, facing, "a near-vertical hop turned the frog");
+        }
+    }
+
+    #[test]
+    fn a_bite_faces_the_tank_it_bites() {
+        let mut frog = frog_at(500.0);
+        frog.start_attack(Position::new(440.0, 300.0));
+        assert_eq!(frog.facing, Facing::Left, "the tongue has to lash at the tank");
+        assert!(frog.attack_timer > 0.0, "the clip still starts");
+
+        frog.start_attack(Position::new(560.0, 300.0));
+        assert_eq!(frog.facing, Facing::Right);
+    }
+
+    /// `Right` is the identity, so every existing frog draws exactly as it
+    /// always has.
+    #[test]
+    fn facing_right_draws_unchanged() {
+        assert_eq!(mirror(Facing::Right), (1.0, 0.0));
+    }
+
+    /// The offset is load-bearing, not slack: the body sits off the cell's
+    /// centre, so a bare width flip would slide the frog sideways every
+    /// time it turned around.
+    #[test]
+    fn mirroring_keeps_the_body_on_the_same_ground() {
+        let (flip, offset) = mirror(Facing::Left);
+        assert!(flip < 0.0, "Left is the mirrored draw");
+        assert!(offset != 0.0, "a bare flip would move the body off its own position");
+
+        let mut right = frog_at(500.0);
+        right.facing = Facing::Right;
+        let mut left = frog_at(500.0);
+        left.facing = Facing::Left;
+        let (a, b) = (body_center_on_screen(&right), body_center_on_screen(&left));
+        assert!((a - b).abs() < 0.001, "the body moved {} px when the frog turned around", (a - b).abs());
+    }
 }

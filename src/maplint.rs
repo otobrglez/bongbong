@@ -43,14 +43,17 @@ use crate::{
 
 /// How far past a target point's own footprint a tank must be able to
 /// stand for that point to count as reachable (see `point_reachable`):
-/// two nav-grid cells of slack on top of the worst-case tank radius (and,
-/// for the frog, its own collider half-extent). Generous on purpose - a
-/// target squeezed against a wall still has its nearest open cell within
-/// roughly one cell of its footprint, so only genuine sealing (a closed
-/// ring, a walled-off pocket) can fail it; a tighter radius would start
-/// flagging legal snug placements whose exact distance depends on how
-/// the 48px grid happens to align with the map's 32px tiles.
-const APPROACH_SLACK: f32 = 2.0 * PATHFIND_CELL_SIZE;
+/// 96px of slack on top of the worst-case tank half-extent (and, for the
+/// frog, its own collider half-extent). Generous on purpose - a target
+/// squeezed against a wall still has its nearest open cell within roughly
+/// one cell of its footprint, so only genuine sealing (a closed ring, a
+/// walled-off pocket) can fail it.
+///
+/// A fixed px distance rather than a multiple of `PATHFIND_CELL_SIZE`:
+/// what counts as "approachable" is a property of the map, so it must not
+/// shift because the router's cell size was retuned. It was
+/// `2.0 * PATHFIND_CELL_SIZE` while that was 48px, hence 96.
+const APPROACH_SLACK: f32 = 96.0;
 
 /// Open components smaller than this many cells are reported as `Info`
 /// (sometimes decorative slivers); at or above it they're a `Warning`
@@ -332,7 +335,7 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
         width,
         height,
         PATHFIND_CELL_SIZE,
-        battlefield::max_tank_avoidance_radius(),
+        battlefield::max_tank_clearance_half_extent(),
         game.world
             .query::<&Obstacle>()
             .iter()
@@ -362,7 +365,7 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
     check_players(game, &cells, start, player_pos, player_size, player2, &mut findings);
     check_reachability(game, &cells, &breach_cells, frog_pos, &mut findings);
     check_enemy_frog(game, &cells, &mut findings);
-    check_gates(game, &grid, &mut findings);
+    check_gates(game, &grid, width, height, &mut findings);
     check_wave_gates(game, &grid, width, height, &player_positions, &mut findings);
     check_disconnected_regions(&cells, &mut findings);
     check_boxed_in(&grid, &cells, &mut findings);
@@ -485,7 +488,7 @@ fn check_enemy_frog(game: &Game, cells: &Cells, findings: &mut Vec<LintFinding>)
     };
     let pos = map::cell_to_world(col, row);
     let reach = FROG_COLLIDER_HALF_EXTENT.0.max(FROG_COLLIDER_HALF_EXTENT.1)
-        + battlefield::max_tank_avoidance_radius()
+        + battlefield::max_tank_clearance_half_extent()
         + APPROACH_SLACK;
     if !point_reachable(cells, pos, reach) {
         findings.push(LintFinding {
@@ -508,8 +511,9 @@ fn check_enemy_frog(game: &Game, cells: &Cells, findings: &mut Vec<LintFinding>)
 /// straight in from that edge, a corner taking its side edge - the same
 /// rule `gates_from_cells` applies when the round turns these cells into
 /// lanes, so a gate this check passes is one the game will use.
-fn check_gates(game: &Game, grid: &Grid, findings: &mut Vec<LintFinding>) {
+fn check_gates(game: &Game, grid: &Grid, width: f32, height: f32, findings: &mut Vec<LintFinding>) {
     let (cols, rows, cell) = grid.dims();
+    let (ucols, urows) = (cols, rows);
     let (cols, rows) = (cols as isize, rows as isize);
     let inward_cells = (tuning().wave_gate_inward_cells as isize).max(1);
     let center = |c: isize, r: isize| Position::new((c as f32 + 0.5) * cell, (r as f32 + 0.5) * cell);
@@ -536,7 +540,18 @@ fn check_gates(game: &Game, grid: &Grid, findings: &mut Vec<LintFinding>) {
             });
             continue;
         };
-        let blocked = (0..inward_cells)
+        // Start past the cells the boundary clearance margin blocks, the
+        // same offset `battlefield::gate_candidates` applies when it builds
+        // the round's real lanes - a lane cell no tank can stand in is not
+        // part of the lane, and walking from the literal edge cell would
+        // report every gate on every map as blocked.
+        let (along, span, near) = if inward.0 != 0 {
+            (ucols, width, inward.0 > 0)
+        } else {
+            (urows, height, inward.1 > 0)
+        };
+        let start = battlefield::boundary_lane_inset(cell, along, span, near) as isize;
+        let blocked = (start..start + inward_cells)
             .map(|k| (gc + k * inward.0, gr + k * inward.1))
             .find(|&(c, r)| c < 0 || r < 0 || c >= cols || r >= rows || !grid.usable(center(c, r)));
         if let Some((c, r)) = blocked {
@@ -658,7 +673,7 @@ fn check_reachability(
     frog_pos: Option<Position>,
     findings: &mut Vec<LintFinding>,
 ) {
-    let tank_radius = battlefield::max_tank_avoidance_radius();
+    let tank_radius = battlefield::max_tank_clearance_half_extent();
     if let Some(frog) = frog_pos {
         let frog_reach =
             FROG_COLLIDER_HALF_EXTENT.0.max(FROG_COLLIDER_HALF_EXTENT.1) + tank_radius + APPROACH_SLACK;
@@ -916,7 +931,7 @@ fn check_planner_physics(
     boxes: &[(Position, Position)],
     findings: &mut Vec<LintFinding>,
 ) {
-    let tank_half = battlefield::max_tank_avoidance_radius();
+    let tank_half = battlefield::max_tank_clearance_half_extent();
     for row in 0..cells.rows {
         for col in 0..cells.cols {
             if !cells.is_open(col as isize, row as isize) {
@@ -1077,36 +1092,45 @@ mod map_lint_tests {
     /// in maps/test/pockets.toml's own header).
     /// A closed wall ring whose interior is exactly ONE open nav-grid cell
     /// (every neighbor blocked - the `boxed_in` pathology). Sized against
-    /// `Grid::build`'s center-inside-reach blocking rule: walls at cols
-    /// 14/18 put the open x-band at (492, 532), containing only the col-10
-    /// center x=504; rows 8/12 likewise leave only the row-6 center y=312.
-    /// A wider ring (e.g. the 14..20 x 8..14 one this test originally
-    /// used) yields a 2x2 open interior instead, where no cell is boxed -
-    /// each has an open neighbor - and only `DisconnectedRegion` fires.
+    /// `Grid::build`'s center-inside-reach blocking rule. A wall tile's
+    /// centre sits on a nav-cell boundary (both grids have the same 32px
+    /// pitch, anchored half a cell apart), so each wall row/column blocks
+    /// the two nav cells either side of it: walls three map cells apart
+    /// leave exactly one open nav cell between them. Hence 14/17 and 8/11.
+    /// A wider ring yields a 2x2 open interior instead, where no cell is
+    /// boxed - each has an open neighbor - and only `DisconnectedRegion`
+    /// fires.
     fn sealed_ring(map: &mut MapFile) {
-        for row in 8..=12 {
+        for row in 8..=11 {
             wall(map, 14, row);
-            wall(map, 18, row);
+            wall(map, 17, row);
         }
-        for col in 14..=18 {
+        for col in 14..=17 {
             wall(map, col, 8);
-            wall(map, col, 12);
+            wall(map, col, 11);
         }
     }
 
-    /// A wider closed ring (2x2 open interior, so nothing in it is
-    /// boxed-in) for burying a frog/pickup deep enough that no playfield
-    /// cell center lies within their approach reach (~128px pickups,
-    /// ~150px frog) - `sealed_ring`'s single-cell interior sits only
-    /// ~136px from the nearest playfield center, inside the frog's reach.
+    /// A much wider closed ring, for burying a frog/pickup deep enough that
+    /// no playfield cell center lies within their approach reach
+    /// (`APPROACH_SLACK` plus the tank half-extent and, for the frog, its
+    /// own collider - ~143px). Nothing in this interior is boxed-in, which
+    /// is `sealed_ring`'s job instead.
+    ///
+    /// Sized from the far side of the wall, not the near one: the ring
+    /// blocks the two nav cells either side of each wall line, so with
+    /// walls on cols 12/22 the nearest *playfield* cell centre is col 10's
+    /// x=336, and a centred occupant at col 17 (x=544) sits 208px from it.
+    /// The 14..20 ring this used to be left that gap at ~112px, well inside
+    /// the reach, so the burial stopped registering as unreachable at all.
     fn sealed_vault(map: &mut MapFile) {
-        for row in 8..=14 {
-            wall(map, 14, row);
-            wall(map, 20, row);
+        for row in 6..=16 {
+            wall(map, 12, row);
+            wall(map, 22, row);
         }
-        for col in 14..=20 {
-            wall(map, col, 8);
-            wall(map, col, 14);
+        for col in 12..=22 {
+            wall(map, col, 6);
+            wall(map, col, 16);
         }
     }
 
@@ -1279,7 +1303,11 @@ mod map_lint_tests {
         let mut map = wide();
         map.set_cell(28, 11, CellObject::Start);
         map.set_cell(30, 5, CellObject::Frog);
-        for row in 1..=21 {
+        // Every row, edge to edge. It used to stop at 1..=21 and lean on
+        // the clearance margin to seal the last cell at each end, which is
+        // not what this test is about and made it sensitive to the margin's
+        // exact value.
+        for row in 0..=22 {
             wall(&mut map, 20, row); // full-height wall, no gap
         }
         let findings = lint_map(map);
@@ -1318,11 +1346,13 @@ mod map_lint_tests {
     #[test]
     fn single_cell_lane_flags_narrow_corridor() {
         let mut map = wide();
-        map.set_cell(20, 11, CellObject::Start); // inside the lane
+        map.set_cell(20, 9, CellObject::Start); // inside the lane
         map.set_cell(20, 19, CellObject::Frog);
+        // Three map rows apart, which is what leaves exactly one open nav
+        // row between them - see `sealed_ring` for the arithmetic.
         for col in 10..=30 {
             wall(&mut map, col, 8);
-            wall(&mut map, col, 14);
+            wall(&mut map, col, 11);
         }
         let findings = lint_map(map);
         dump("lane", &findings);
@@ -1360,7 +1390,7 @@ mod map_lint_tests {
             "with no margin, cells beside the obstacle are open yet a tank there overlaps it"
         );
         assert!(
-            lint_against(battlefield::max_tank_avoidance_radius()).is_empty(),
+            lint_against(battlefield::max_tank_clearance_half_extent()).is_empty(),
             "the real margin keeps every open cell clear of every collider"
         );
     }
@@ -1566,10 +1596,126 @@ mod map_lint_tests {
         assert!(!has(&findings, LintKind::SpawnBandTooTight));
     }
 
+    // --- corridor width vs. nav-grid routability ---
+
+    /// A full-height iron divider down `col` with one horizontal slot
+    /// `free` map cells tall whose topmost open row is `slot_top` - the
+    /// `maps/test/choke.toml` shape reduced to two variables. `base_map`'s
+    /// start (27,11) sits right of the divider and its frog (7,12) left, so
+    /// neither ever plugs the slot.
+    fn divider_map(col: i32, slot_top: i32, free: i32) -> MapFile {
+        let mut map = base_map();
+        for row in 0..=22 {
+            if row < slot_top || row >= slot_top + free {
+                wall(&mut map, col, row);
+            }
+        }
+        map
+    }
+
+    /// Whether the AI's own nav grid can route across `divider_map`'s
+    /// divider - asked through `Game::nav_path_cells`, i.e. the exact grid
+    /// `Game::nav_grid` hands `Ai::steer` every frame, so this cannot
+    /// disagree with what the AI sees.
+    fn crosses(col: i32, slot_top: i32, free: i32) -> bool {
+        let map = divider_map(col, slot_top, free);
+        let (w, h) = map.field_size();
+        let game = init_game(map);
+        let mid = (slot_top as f32 + free as f32 / 2.0) * crate::OBSTACLE_GRID_SIZE;
+        let left = Position::new((col - 6) as f32 * crate::OBSTACLE_GRID_SIZE, mid);
+        let right = Position::new((col + 6) as f32 * crate::OBSTACLE_GRID_SIZE, mid);
+        game.nav_path_cells(left, right, w, h).is_some()
+    }
+
+    /// The physically drivable width, for the two tests below to measure
+    /// the grid against: the widest movement collider any chassis presents
+    /// at any cardinal facing (`2 * max_tank_clearance_half_extent`), which
+    /// is what actually has to fit between two wall faces.
+    fn widest_hull_px() -> f32 {
+        2.0 * battlefield::max_tank_clearance_half_extent()
+    }
+
+    /// A slot's width is the only thing that may decide whether the AI can
+    /// use it. It used not to be: nav cells were 48px over a 32px map grid,
+    /// so rasterization had a phase that repeated every `lcm(32,48)/32` = 3
+    /// map rows, and the same 3-cell slot routed at two rows out of three
+    /// and was sealed at the third - identical geometry, different answer,
+    /// depending only on where the author happened to put it.
+    #[test]
+    fn corridor_routability_depends_on_width_alone_not_on_which_row_it_sits() {
+        for free in 1..=5 {
+            let answers: Vec<bool> = (0..3).map(|phase| crosses(20, 8 + phase, free)).collect();
+            println!(
+                "corridor free={free} cells ({}px) -> routable by row-phase {:?}",
+                free * crate::OBSTACLE_GRID_SIZE as i32,
+                answers
+            );
+            assert!(
+                answers.iter().all(|&a| a == answers[0]),
+                "a {free}-cell slot routes at some rows and not others ({answers:?}) - \
+                 nav-grid rasterization must not have a phase relative to the map grid",
+            );
+        }
+    }
+
+    /// Where the width threshold actually sits, and that it is justified by
+    /// geometry rather than by rasterization luck. A two-cell slot is 64px
+    /// of free floor and the widest hull in the roster is 50.4px, so the AI
+    /// must be willing to drive it; a one-cell slot is 32px and only the
+    /// two smallest chassis would fit, so sealing it is correct for a grid
+    /// that carries one shared margin.
+    ///
+    /// Recovering the one-cell case means per-tank clearance (a scout
+    /// routing where a leviathan cannot), which this grid deliberately does
+    /// not do - see `max_tank_clearance_half_extent`.
+    #[test]
+    fn a_two_cell_corridor_is_drivable_and_the_grid_agrees() {
+        assert!(
+            widest_hull_px() < 2.0 * crate::OBSTACLE_GRID_SIZE,
+            "a two-cell slot must physically fit every chassis for this test to mean anything",
+        );
+        assert!(
+            widest_hull_px() > crate::OBSTACLE_GRID_SIZE,
+            "a one-cell slot must NOT fit every chassis, or sealing it would be wrong",
+        );
+        for phase in 0..3 {
+            assert!(crosses(20, 8 + phase, 2), "a 64px slot fits every hull and must route");
+            assert!(!crosses(20, 8 + phase, 1), "a 32px slot fits almost nothing and must not route");
+        }
+    }
+
     // --- on-disk maps ---
 
     fn lint_path(path: &str) -> Result<Vec<LintFinding>, String> {
         MapFile::load(std::path::Path::new(path)).map(lint_map)
+    }
+
+    /// The `maps/test/corridors/` fixtures exist to be looked at - in the
+    /// game with `nav_grid`, or under the probe - so this only pins that
+    /// each one still says what its header says, i.e. that the divider is
+    /// crossable at exactly the widths the headers claim. They live in a
+    /// subdirectory because `just probe-fixtures` globs `maps/test/*.toml`
+    /// and these are shaped to be pathological, not to hold a budget.
+    #[test]
+    fn corridor_fixtures_cross_at_the_widths_their_headers_claim() {
+        for (name, crossable) in [
+            ("slot-1", false),
+            ("slot-2", true),
+            ("slot-3-row8", true),
+            ("slot-3-row9", true),
+        ] {
+            let path = format!("maps/test/corridors/{name}.toml");
+            let map = MapFile::load(std::path::Path::new(&path)).expect("fixture loads");
+            let (w, h) = map.field_size();
+            let game = init_game(map);
+            let left = Position::new(14.0 * crate::OBSTACLE_GRID_SIZE, 11.0 * crate::OBSTACLE_GRID_SIZE);
+            let right = Position::new(26.0 * crate::OBSTACLE_GRID_SIZE, 11.0 * crate::OBSTACLE_GRID_SIZE);
+            assert_eq!(
+                game.nav_path_cells(left, right, w, h).is_some(),
+                crossable,
+                "{name} stopped matching its own header",
+            );
+        }
     }
 
     #[test]

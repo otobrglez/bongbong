@@ -46,7 +46,7 @@ fn game_on(map: &str, enemies: usize, players: PlayerCount, seed: u64) -> Game {
     // Nothing here is about the spawn shield.
     for entity in game.players().into_iter().flatten() {
         let mut q = game.world.query_one::<&mut Tank>(entity);
-        q.get().expect("player tank").shield_timer = 0.0;
+        q.get().expect("player tank").shield_hp = 0.0;
     }
     game
 }
@@ -248,23 +248,30 @@ fn a_missing_start2_places_player_two_beside_player_one_without_overlap() {
     }
 }
 
+/// A frog only ever bites the other side, so it takes a Hunt round's
+/// *enemy* frog to bite a player at all - and the bite still never lands
+/// the killing blow, on either player.
 #[test]
 fn a_frog_bite_never_kills_either_player() {
-    let mut game = boxed_game(17);
+    let map = map_with("mission.kind = \"hunt\"\ncells.\"30,4\" = { kind = \"enemy_frog\" }\n");
+    let mut game = game_on(&map, 1, PlayerCount::Two, 17);
+    game.debug_teleport(2, cell_to_world(37, 20), Some(0.0)).expect("enemy in slot 2");
+    let enemy_frog = game.enemy_frog.expect("the hunt map places an enemy frog");
     let player2 = game.player2.expect("player 2");
     {
         let mut q = game.world.query_one::<&mut Tank>(player2);
         q.get().expect("player 2 tank").damage = MAX_DAMAGE - 0.5;
     }
-    let frog = cell_to_world(2, 2);
-    game.debug_teleport(1, Position::new(frog.x + 40.0, frog.y), Some(0.0)).expect("player 2 slot");
     let mut bites = 0;
     for _ in 0..300 {
+        // Follow the frog: it hops away from whatever crowds it.
+        let (pos, range) = with_frog(&game.world, enemy_frog, |fr| (fr.position, fr.attack_range()));
+        game.debug_teleport(1, Position::new(pos.x + range * 0.5, pos.y), Some(0.0)).expect("player 2 slot");
         step(&mut game, Input::default());
         bites += game.events().iter().filter(|e| matches!(e, Event::FrogBite { slot: 1, .. })).count();
         assert!(!snapshot_of(&game, 1).is_wreck, "a bite finished player 2 off");
     }
-    assert!(bites > 0, "the frog never bit player 2 parked beside it");
+    assert!(bites > 0, "the enemy frog never bit player 2 parked beside it");
     assert_eq!(game.outcome(), Outcome::Playing);
 }
 

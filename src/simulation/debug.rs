@@ -12,7 +12,7 @@ use sola_raylib::core::math::Vector2;
 
 use crate::ai::{Ai, AiSnapshot, Role};
 use crate::bullet::{Bullet, BulletState};
-use crate::frog::{Frog, Side};
+use crate::frog::{Facing, Frog, Side};
 use crate::obstacle::Obstacle;
 use crate::pickup::{Pickup, PickupKind};
 use crate::plasma::{Plasma, PlasmaState};
@@ -118,6 +118,8 @@ pub struct TankDebug {
     /// Seconds of flame afterburn left on the hull.
     pub burning: f32,
     pub weapon: &'static str,
+    /// Rainbow-shield absorption left, in damage points - `Tank::shield_hp`,
+    /// not seconds. Ranges over `shield_capacity`, not a duration.
     pub shield: f32,
     pub boost: f32,
     /// The health ring's opacity factor, 0..=1
@@ -129,6 +131,8 @@ pub struct TankDebug {
     pub nearest_ally_px: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub touching_static: Option<bool>,
+    /// In hull contact with another tank (Full detail only).
+    pub touching_tank: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ai: Option<AiSnapshot>,
 }
@@ -161,6 +165,10 @@ pub struct FrogDebug {
     pub max_health: f32,
     pub dead: bool,
     pub hopping: bool,
+    /// Which way the sprite is drawn (`frog::Facing`) - the art is authored
+    /// facing right and mirrored for the other way, so this is the one
+    /// readout that says whether a hop or a bite reads correctly.
+    pub facing: Facing,
 }
 
 #[derive(Serialize, Debug)]
@@ -219,9 +227,21 @@ pub struct TrackRow {
     pub ring: Option<u8>,
     pub stuck: bool,
     pub touching_static: bool,
+    /// In hull contact with another tank - the live counterpart of the
+    /// probe's `pile-up`/`tank-grind` checks, and the one field that
+    /// distinguishes a jam from a bump (see
+    /// docs/enemy-command-and-control-prd.md section 10).
+    pub touching_tank: bool,
 }
 
 /// Fields `Game::debug_set_tank` overwrites; anything left `None` is untouched.
+///
+/// Note `serde(default)` means an unknown key parses and is ignored, so a
+/// renamed field silently does nothing over the wire. The dev server's
+/// `set_tank` arm rejects the one rename that has happened
+/// (`shield_timer` -> `shield_hp`) by name for that reason; `slot` rides in
+/// the same object and is read separately, so `deny_unknown_fields` is not
+/// an option here.
 #[derive(Default, Deserialize, Debug)]
 #[serde(default)]
 pub struct TankPatch {
@@ -232,7 +252,8 @@ pub struct TankPatch {
     pub laser_charges: Option<i32>,
     /// Flamethrower fuel, in seconds.
     pub flame_fuel: Option<f32>,
-    pub shield_timer: Option<f32>,
+    /// Shield absorption left, in damage points (`Tank::shield_hp`).
+    pub shield_hp: Option<f32>,
     pub speed_boost_timer: Option<f32>,
 }
 
@@ -367,7 +388,7 @@ impl Game {
                     flame_fuel: r1(tank.flame_fuel),
                     burning: r1(tank.burn_timer),
                     weapon: tank.active_weapon().name(),
-                    shield: r1(tank.shield_timer),
+                    shield: r1(tank.shield_hp),
                     boost: r1(tank.speed_boost_timer),
                     ring: r1(if tank.body.is_none() {
                         0.0
@@ -378,6 +399,7 @@ impl Game {
                     }),
                     nearest_ally_px,
                     touching_static: full.then(|| tank.body.is_some_and(|b| self.physics.contact_stats(b).touching_static)),
+                    touching_tank: full.then(|| tank.body.is_some_and(|b| self.physics.contact_stats(b).touching_tank)),
                     ai: if full { ai.map(Ai::snapshot) } else { None },
                 }
             })
@@ -441,6 +463,7 @@ impl Game {
                     max_health: fr.max_health,
                     dead: fr.is_dead(),
                     hopping: fr.hop_timer > 0.0,
+                    facing: fr.facing,
                 })
             })
             .collect();
@@ -514,6 +537,7 @@ impl Game {
             .filter(|(_, t, _)| !t.is_wreck() && t.body.is_some())
             .map(|(entity, tank, ai)| {
                 let body = tank.body.expect("filtered to tanks with a body");
+                let contact = self.physics.contact_stats(body);
                 let ai = ai.map(Ai::snapshot);
                 TrackRow {
                     slot: tank.owner_slot(),
@@ -522,7 +546,8 @@ impl Game {
                     action: ai.and_then(|a| a.last_action),
                     ring: self.last_engage.slot_of(entity).map(|s| s.index() as u8),
                     stuck: ai.is_some_and(|a| a.stuck_timer > 0.0),
-                    touching_static: self.physics.contact_stats(body).touching_static,
+                    touching_static: contact.touching_static,
+                    touching_tank: contact.touching_tank,
                 }
             })
             .collect();
@@ -607,8 +632,8 @@ impl Game {
                 tank.enqueue_weapon(ActiveWeapon::Flamethrower);
             }
         }
-        if let Some(t) = patch.shield_timer {
-            tank.shield_timer = t.max(0.0);
+        if let Some(t) = patch.shield_hp {
+            tank.shield_hp = t.max(0.0);
         }
         if let Some(t) = patch.speed_boost_timer {
             tank.speed_boost_timer = t.max(0.0);
@@ -643,7 +668,7 @@ impl Game {
                 continue;
             }
             // A shield would absorb the blow.
-            tank.shield_timer = 0.0;
+            tank.shield_hp = 0.0;
             tank.take_damage(MAX_DAMAGE, MAX_DAMAGE);
             tank.mark_hit();
             f.kills.push((tank.position, tank.owner()));

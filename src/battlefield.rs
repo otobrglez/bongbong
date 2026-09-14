@@ -82,7 +82,7 @@ pub fn sample_clear_position(
 /// nearest edge, at least `player_clear` from the player's start, in a
 /// `Grid::usable` cell of `grid` (the nav grid built from the round's
 /// walls, so the tank can be routed out of it), and with a worst-case
-/// tank's box (`max_tank_avoidance_radius` per side) clear of every wall
+/// tank's box (`max_tank_clearance_half_extent` per side) clear of every wall
 /// tile in `wall_positions` (each taken at a full half-cell, the widest
 /// seam-closed collider a tile can have). The usable-cell term alone is
 /// not enough for that last guarantee: the grid pads walls from the
@@ -104,7 +104,7 @@ pub fn enemy_spawn_legal(
 ) -> bool {
     let in_domain = pos.x >= margin_min && pos.x <= width - margin_min && pos.y >= margin_min && pos.y <= height - margin_min;
     let border_dist = pos.x.min(width - pos.x).min(pos.y).min(height - pos.y);
-    let separation = OBSTACLE_GRID_SIZE * 0.5 + max_tank_avoidance_radius();
+    let separation = OBSTACLE_GRID_SIZE * 0.5 + max_tank_clearance_half_extent();
     in_domain
         && border_dist <= margin_max
         && pos.distance_to(player_pos) >= player_clear
@@ -206,19 +206,33 @@ pub fn spawn_walls(physics: &mut Physics, width: f32, height: f32) {
     }
 }
 
-/// The largest `Tank::avoidance_radius` reachable by *any* row in
-/// TANK_HULL_BBOX_BY_ROW, in either cardinal orientation (a row's own bbox is
-/// asymmetric, so facing sideways can give a bigger radius than facing up) -
-/// used as the pathfinding grid's obstacle-clearance margin (see its call site in
-/// `Game::update`) so a route never opens a gap too narrow for the biggest
-/// tank that might need it (titan/leviathan, currently). Applies the same
-/// TANK_MOVE_BBOX_FRACTION shrink `Tank::move_half_extents` does, mirroring
-/// `avoidance_radius`'s own movement-box basis - keep the two formulas in
-/// lockstep, or the grid's notion of "fits" drifts from what the physics
-/// bodies actually block on. Folds over only 12 rows x 2 orientations, so
-/// recomputing this fresh each frame (rather than caching) is well within
-/// the same "cheap enough" budget the grid rebuild itself already accepts.
-pub fn max_tank_avoidance_radius() -> f32 {
+/// The clearance every static-terrain margin in the game is sized against:
+/// the half-extent of the tightest axis-aligned box that contains *any*
+/// chassis in TANK_HULL_BBOX_BY_ROW at *any* cardinal facing, using the same
+/// TANK_MOVE_BBOX_FRACTION shrink `Tank::move_half_extents` does (the box the
+/// physics body actually blocks with; its corner rounding only ever cuts
+/// inside that box, so this never under-estimates).
+///
+/// A box half-extent, not a bounding *circle*: every consumer - the nav
+/// grid's per-axis `reach` (`Game::nav_grid`), `enemy_spawn_legal`'s
+/// `separation`, the linter's planner-vs-physics and spawn-band checks - is
+/// an axis-aligned box test, and movement is 4-directional with the hull
+/// snapped to face its travel direction, so what has to fit between two wall
+/// faces is a half-width, never a diagonal. This used to return
+/// `hypot(hx, hy)` borrowed from `Tank::avoidance_radius`, which charged
+/// every margin the leviathan's 32.05px diagonal where 25.2px is the real
+/// worst case - enough, at the nav grid's rasterization, to seal corridors
+/// two map cells wide that every chassis physically fits through.
+///
+/// `Tank::avoidance_radius` deliberately stays the bounding circle and is
+/// *not* kept in lockstep with this: it feeds `AvoidCtx`'s closest-approach
+/// prediction between two moving tanks, where relative motion is not
+/// axis-aligned and a circle is the right shape.
+///
+/// Folds over only 12 rows x 2 orientations, so recomputing this fresh each
+/// frame (rather than caching) is well within the same "cheap enough" budget
+/// the grid rebuild itself already accepts.
+pub fn max_tank_clearance_half_extent() -> f32 {
     let scale = Tank::default().scale;
     TANK_HULL_BBOX_BY_ROW
         .iter()
@@ -228,7 +242,7 @@ pub fn max_tank_avoidance_radius() -> f32 {
                 w * 0.5 * scale * TANK_MOVE_BBOX_FRACTION,
                 h * 0.5 * scale * TANK_MOVE_BBOX_FRACTION,
             );
-            (hx * hx + hy * hy).sqrt()
+            hx.max(hy)
         })
         .fold(0.0, f32::max)
 }
@@ -256,7 +270,7 @@ pub fn relocate_unusable_spawns(physics: &mut Physics, world: &mut hecs::World, 
         width,
         height,
         PATHFIND_CELL_SIZE,
-        max_tank_avoidance_radius(),
+        max_tank_clearance_half_extent(),
         world
             .query::<&Obstacle>()
             .iter()
@@ -481,31 +495,64 @@ impl Gate {
     }
 }
 
+/// How many cells in from one edge of an axis the boundary clearance margin
+/// blocks, i.e. where a roll-in lane may start. `near` picks which end:
+/// true for the low-index edge (Up/Left), false for the high-index one
+/// (Down/Right), which may also carry the grid's overhang past `span`.
+///
+/// The one definition of this offset. `Grid::build` blocks a cell whose
+/// centre is within the margin of the boundary; `gate_candidates` and the
+/// map linter's `check_gates` both have to start their lanes past exactly
+/// those cells, and re-deriving it in each place is how a planner and its
+/// linter drift apart.
+pub(crate) fn boundary_lane_inset(cell: f32, along: usize, span: f32, near: bool) -> usize {
+    let clear = max_tank_clearance_half_extent();
+    (0..along)
+        .position(|k| {
+            let idx = if near { k } else { along - 1 - k };
+            let centre = (idx as f32 + 0.5) * cell;
+            centre >= clear && span - centre >= clear
+        })
+        .unwrap_or(along)
+}
+
 /// Every gate the live nav grid offers, sorted by edge (`Dir::ALL` order),
-/// then column, then row. A lane is an edge cell plus the next `inward - 1`
-/// cells toward the interior, all `Grid::usable`, whose centre line keeps
-/// a worst-case tank (`max_tank_avoidance_radius`) clear of the two
-/// boundary walls it runs between - the grid itself does not mark the
-/// boundary, so the first and last columns/rows would otherwise pass as
-/// lanes that put a tank half inside a wall. `width`/`height` are the real
-/// battlefield size (the grid's last column may overhang it). A gate whose
-/// `inside` point is closer than `min_dist` to any `avoid` position (the
-/// player, the player's frog) is left out.
+/// then column, then row. A lane is the outermost cell a tank can actually
+/// stand in plus the next `inward - 1` cells toward the interior, all
+/// `Grid::usable`, whose centre line keeps a worst-case tank
+/// (`max_tank_clearance_half_extent`) clear of the two boundary walls it
+/// runs between. `width`/`height` are the real battlefield size (the grid's
+/// last column may overhang it). A gate whose `inside` point is closer than
+/// `min_dist` to any `avoid` position (the player, the player's frog) is
+/// left out.
+///
+/// "Outermost a tank can stand in", not "outermost", on both axes: the grid
+/// blocks every cell whose centre is within the clearance margin of the
+/// boundary, so the first cell or two of a naive lane are exactly the cells
+/// that would put a tank half inside a wall. Across the lane that has
+/// always been checked here explicitly (`lane_centre` against `clear`);
+/// along it, the same margin is now skipped by `lane_start`. A roll-in
+/// tank has no body until it arrives (see `waves::RollIn`), so it may
+/// *travel* over those cells - it just must not be handed one as the cell
+/// it arrives at.
 pub fn gate_candidates(grid: &Grid, width: f32, height: f32, avoid: &[Position], min_dist: f32, inward: usize) -> Vec<Gate> {
     let (cols, rows, cell) = grid.dims();
     let inward = inward.max(1);
-    let clear = max_tank_avoidance_radius();
+    let clear = max_tank_clearance_half_extent();
     let tank_len = Tank::default().size();
     let centre = |i: usize| (i as f32 + 0.5) * cell;
     let mut gates = Vec::new();
     for edge in Dir::ALL {
         // Cell counts across the edge and along the lane, and the real
         // extent across (the boundary walls the lane runs between).
-        let (across, along, span) = match edge {
-            Dir::Up | Dir::Down => (cols, rows, width),
-            Dir::Left | Dir::Right => (rows, cols, height),
+        // `span` is the field's extent *across* the lane (what `lane_centre`
+        // is checked against); `span_along` is its extent along the lane.
+        let (across, along, span, span_along) = match edge {
+            Dir::Up | Dir::Down => (cols, rows, width, height),
+            Dir::Left | Dir::Right => (rows, cols, height, width),
         };
-        if inward > along {
+        let lane_start = boundary_lane_inset(cell, along, span_along, matches!(edge, Dir::Up | Dir::Left));
+        if lane_start + inward > along {
             continue;
         }
         for a in 0..across {
@@ -513,8 +560,9 @@ pub fn gate_candidates(grid: &Grid, width: f32, height: f32, avoid: &[Position],
             if lane_centre < clear || span - lane_centre < clear {
                 continue;
             }
-            // Lane cell `k` steps in from the edge.
+            // Lane cell `k` steps in from the lane's outermost usable cell.
             let lane_cell = |k: usize| -> (usize, usize) {
+                let k = k + lane_start;
                 let depth = match edge {
                     Dir::Up | Dir::Left => k,
                     Dir::Down | Dir::Right => along - 1 - k,
@@ -597,7 +645,7 @@ mod gate_tests {
     use super::*;
 
     /// A 6x6 grid of 100px cells (lane centres 50px+ from the boundary,
-    /// past `max_tank_avoidance_radius`) with one wall tile at (2,1),
+    /// past `max_tank_clearance_half_extent`) with one wall tile at (2,1),
     /// which blocks the lane down from the top edge's column 2.
     fn grid() -> Grid {
         Grid::build(600.0, 600.0, 100.0, 0.0, [(Position::new(250.0, 150.0), 20.0)].into_iter())

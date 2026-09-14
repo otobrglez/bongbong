@@ -16,14 +16,13 @@ use crate::shell::Owner;
 use crate::shockwave::Shockwave;
 use crate::tank::Tank;
 use crate::{
-    FROG_COLLIDER_HALF_EXTENT,
     FROG_HOP_ANGLE_FAN_DEG,
+    FROG_HOP_DISTANCE_STEPS,
     MAX_DAMAGE,
-    OBSTACLE_CLEAR,
     Position,
 };
 
-use super::hits::ShellTarget;
+use super::hits::{ShellTarget, Terrain};
 use super::props::DamageCause;
 use super::{SHOCK_FROG, with_frog_mut, Event, Frame, Game, HitTarget};
 
@@ -126,14 +125,20 @@ impl Game {
                         if shooter.is_player() && tank.owner().is_player() {
                             d *= tuning().friendly_fire_damage_factor;
                         }
-                        tank.take_damage(d, MAX_DAMAGE);
+                        // A shield takes the hit instead and `landed` is 0,
+                        // which is what the event reports: a beam stopped by
+                        // a shield used to log the full roll as damage that
+                        // never touched the hull, the one place the feed
+                        // lied. `take_damage` spends the shield either way,
+                        // so ask it whether that was the shattering blow.
+                        let landed = tank.take_damage(d, MAX_DAMAGE);
                         tank.mark_hit();
                         let killed = tank.is_wreck();
                         let hit_target = match tank.owner() {
                             Owner::Player(player) => HitTarget::Player { player },
                             Owner::Enemy(slot) => HitTarget::Enemy { slot },
                         };
-                        f.events.push(Event::Hit { target: hit_target, damage: d, killed, x: at.x, y: at.y });
+                        f.events.push(Event::Hit { target: hit_target, damage: landed, killed, x: at.x, y: at.y });
                         if killed {
                             f.kills.push((tank.position, tank.owner()));
                             false
@@ -170,8 +175,7 @@ impl Game {
                 if dead {
                     f.shocks.push(Shockwave::scaled(pos, SHOCK_FROG));
                 } else if let (true, Some(away)) = (can_hop, effects.frog_hop) {
-                    let obstacles = f.terrain.obstacle_centers();
-                    let landing = frog_hop_target(&mut f.rng, pos, away, hop_distance, &obstacles, f.width, f.height);
+                    let landing = frog_hop_target(&mut f.rng, pos, away, hop_distance, &f.terrain, f.width, f.height);
                     if let Some(new_pos) = landing {
                         with_frog_mut(&self.world, entity, |fr| fr.start_hop(new_pos));
                     }
@@ -374,39 +378,44 @@ pub(super) fn explosion_hit(
     knockback(tank, physics, axis, push);
 }
 
-/// A landing spot for the frog's evasive hop, roughly `distance` px away
-/// continuing along `away_dir` (only its angle matters): the ideal angle
-/// plus a little jitter first, then FROG_HOP_ANGLE_FAN_DEG's offsets in
-/// turn, taking the first candidate inside the battlefield
-/// (FROG_HOP_BOUNDS_MARGIN) and clear of every obstacle. `None` when every
-/// candidate is blocked - the hop is best-effort and the frog stays put.
+/// A landing spot for the frog's evasive hop, up to `distance` px away
+/// along `away_dir` (only its angle matters).
+///
+/// The search is a ladder, widest leap first: for each length in
+/// FROG_HOP_DISTANCE_STEPS, every offset in FROG_HOP_ANGLE_FAN_DEG off the
+/// ideal dead-away angle (plus a little jitter so hops don't all look
+/// mechanically identical), taking the first candidate inside the
+/// battlefield (`frog_hop_bounds_margin`) that the frog's own hull fits at
+/// (`Terrain::frog_fits`). So a cornered frog shortens and angles its hop
+/// rather than sitting still, and the fan stops at a quarter turn either
+/// way - past that a "hop away" would carry it back toward the threat.
+/// `None` only when the frog really is boxed in; the hop is best-effort.
 pub(super) fn frog_hop_target(
     rng: &mut SmallRng,
     frog_pos: Position,
     away_dir: Vector2,
     distance: f32,
-    obstacle_positions: &[Position],
+    terrain: &Terrain,
     width: f32,
     height: f32,
 ) -> Option<Position> {
-    let clear = FROG_COLLIDER_HALF_EXTENT.0.max(FROG_COLLIDER_HALF_EXTENT.1) + OBSTACLE_CLEAR;
     let jitter = rng
         .random_range(-tuning().frog_hop_angle_jitter_deg..tuning().frog_hop_angle_jitter_deg)
         .to_radians();
     let base_angle = away_dir.y.atan2(away_dir.x) + jitter;
-    for offset_deg in FROG_HOP_ANGLE_FAN_DEG {
-        let angle = base_angle + offset_deg.to_radians();
-        let candidate = Position::new(
-            frog_pos.x + angle.cos() * distance,
-            frog_pos.y + angle.sin() * distance,
-        );
-        let in_bounds = candidate.x >= tuning().frog_hop_bounds_margin
-            && candidate.x <= width - tuning().frog_hop_bounds_margin
-            && candidate.y >= tuning().frog_hop_bounds_margin
-            && candidate.y <= height - tuning().frog_hop_bounds_margin;
-        let clear_of_obstacles = obstacle_positions.iter().all(|&p| candidate.distance_to(p) >= clear);
-        if in_bounds && clear_of_obstacles {
-            return Some(candidate);
+    let margin = tuning().frog_hop_bounds_margin;
+    for step in FROG_HOP_DISTANCE_STEPS {
+        for offset_deg in FROG_HOP_ANGLE_FAN_DEG {
+            let angle = base_angle + offset_deg.to_radians();
+            let reach = distance * step;
+            let candidate = Position::new(frog_pos.x + angle.cos() * reach, frog_pos.y + angle.sin() * reach);
+            let in_bounds = candidate.x >= margin
+                && candidate.x <= width - margin
+                && candidate.y >= margin
+                && candidate.y <= height - margin;
+            if in_bounds && terrain.frog_fits(candidate) {
+                return Some(candidate);
+            }
         }
     }
     None

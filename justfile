@@ -25,7 +25,17 @@ probe-waves:
 # change shifts the numbers: rerun, read the new totals, and re-baseline
 # consciously - never bump a ceiling just to go green. Zero-ceilings
 # (stale-start, stall, wall-grind, bump-rate, low-progress, never-arrived,
-# invariant) are kinds no fixture currently produces at all.
+# invariant, tank-grind, pile-up) are kinds no fixture currently produces at
+# all.
+# tank-grind and pile-up joined that list 2026-09-14 with the enemy command
+# & control instrumentation (docs/enemy-command-and-control-prd.md). They are
+# the first two kinds that measure a tank against *another tank* rather than
+# against the map, and both read 0 across the corpus and the default map at
+# the time they were added - so they are regression insurance, not a
+# currently-failing gate. The number that work actually has to move is the
+# ram tally the sweep now prints beside the totals, which is not budgeted:
+# a ram is not a failure, and once C2 can order one, budgeting it would
+# budget the feature.
 # Re-measured 2026-09-04, twice. First after the Protect mission's hunter
 # roll (`enemy_hunter_share_protect`, one RNG draw per enemy in
 # `Game::init`) shifted every stream: with the share zeroed the previous
@@ -43,7 +53,7 @@ probe-waves:
 # the maze's edge, one holding an aligned firing line on the player 26 px
 # from the bottom wall). See docs/gameplay-verification-design.md.
 probe-fixtures:
-    for m in maps/test/*.toml; do cargo run --bin probe -- --map $m --frames 1800 --rounds 10 --seed 1000 --budget stale-start=0 --budget stall=0 --budget border-stuck=1 --budget jitter=6 --budget spin=1 --budget churn=10 --budget clustering=9 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=0 --budget invariant=0 || exit 1; done
+    for m in maps/test/*.toml; do cargo run --bin probe -- --map $m --frames 1800 --rounds 10 --seed 1000 --budget stale-start=0 --budget stall=0 --budget border-stuck=1 --budget jitter=6 --budget spin=1 --budget churn=10 --budget clustering=9 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=0 || exit 1; done
 
 run:
     cargo run

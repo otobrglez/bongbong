@@ -121,6 +121,7 @@ pub struct EditorTextures<'a> {
     pub pickup_speedup: &'a Texture2D,
     pub pickup_shield: &'a Texture2D,
     pub pickup_flamethrower: &'a Texture2D,
+    pub pickup_frog_health: &'a Texture2D,
     pub eraser: &'a Texture2D,
     pub tanks: &'a Texture2D,
     pub trees: &'a Texture2D,
@@ -195,7 +196,7 @@ pub enum Tool {
 
 /// Every brush, in bar order: the categories one after another, the
 /// eraser last.
-pub const TOOLS: [Tool; 28] = [
+pub const TOOLS: [Tool; 29] = [
     Tool::Wall(Material::Brick),
     Tool::Wall(Material::Iron),
     Tool::Wall(Material::Wood),
@@ -223,6 +224,7 @@ pub const TOOLS: [Tool; 28] = [
     Tool::Pickup(PickupKind::SpeedUp),
     Tool::Pickup(PickupKind::Shield),
     Tool::Pickup(PickupKind::Flamethrower),
+    Tool::Pickup(PickupKind::FrogHealth),
     Tool::Eraser,
 ];
 
@@ -259,6 +261,7 @@ impl Tool {
             Tool::Pickup(PickupKind::SpeedUp) => "speedup",
             Tool::Pickup(PickupKind::Shield) => "shield",
             Tool::Pickup(PickupKind::Flamethrower) => "flamethrower",
+            Tool::Pickup(PickupKind::FrogHealth) => "frog_health",
             Tool::Eraser => "eraser",
         }
     }
@@ -1713,6 +1716,7 @@ fn label(tool: Tool) -> &'static str {
         Tool::EnemyFrog => "enemy frog",
         Tool::Pickup(PickupKind::SpeedUp) => "speed-up",
         Tool::Pickup(PickupKind::Flamethrower) => "flamethrower",
+        Tool::Pickup(PickupKind::FrogHealth) => "frog pack",
         other => other.name(),
     }
 }
@@ -1727,6 +1731,7 @@ fn short_label(tool: Tool) -> &'static str {
         Tool::OilTrail => "oil",
         Tool::EnemyFrog => "e.frog",
         Tool::Pickup(PickupKind::Flamethrower) => "flame",
+        Tool::Pickup(PickupKind::FrogHealth) => "frog+",
         other => other.name(),
     }
 }
@@ -1801,6 +1806,7 @@ fn pickup_texture<'a>(textures: &EditorTextures<'a>, pickup: PickupKind) -> &'a 
         PickupKind::SpeedUp => textures.pickup_speedup,
         PickupKind::Shield => textures.pickup_shield,
         PickupKind::Flamethrower => textures.pickup_flamethrower,
+        PickupKind::FrogHealth => textures.pickup_frog_health,
     }
 }
 
