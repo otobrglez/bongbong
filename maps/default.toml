@@ -242,10 +242,6 @@ kind = "road"
 kind = "wall"
 material = "glass"
 
-[cells."22,2"]
-kind = "wall"
-material = "brick"
-
 [cells."10,11"]
 kind = "wall"
 material = "iron"
