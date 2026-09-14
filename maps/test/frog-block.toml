@@ -9,6 +9,7 @@
 # frog inside the corridor means the grid no longer knows it.
 
 version = 1
+size = [40, 22.5]
 tanks = 4
 
 cells."17,8" = { kind = "wall", material = "iron" }

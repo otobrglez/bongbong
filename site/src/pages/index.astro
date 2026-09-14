@@ -32,6 +32,46 @@
         color: #888;
       }
 
+      /* The rotate card: a phone or tablet held upright cannot show the
+         whole battlefield at a playable size (the field is 2:1), so
+         touch devices in portrait get this over everything, including
+         the immersive and fullscreen modes. Only touch devices: a
+         narrow desktop window is not a phone. The game keeps running
+         underneath - a match cannot wait for one player's phone. */
+      .rotate-card {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 200;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        padding: 24px;
+        background: #1b2118;
+        color: #cfe0c4;
+        font-size: 18px;
+        text-align: center;
+
+        svg { width: 72px; height: 72px; }
+        p { margin: 0; max-width: 24ch; }
+        .rotate-note { font-size: 14px; color: #8fa583; }
+      }
+
+      @media (orientation: portrait) and (pointer: coarse) {
+        .rotate-card { display: flex; }
+      }
+
+      @media (prefers-reduced-motion: no-preference) {
+        .rotate-card svg { animation: rotate-hint 2.4s ease-in-out infinite; }
+      }
+
+      @keyframes rotate-hint {
+        0%, 20% { transform: rotate(0deg); }
+        50%, 70% { transform: rotate(-90deg); }
+        100% { transform: rotate(0deg); }
+      }
+
       .wrapper {
         display: flex;
         flex-direction: column;
@@ -51,25 +91,40 @@
           /* One source of truth for the canvas width: the overlay controls
              have to sit on the canvas's own edges, and the canvas is
              centred, so they all need the same expression. The shape is
-             the render target's own: a 1280x720 battlefield under a 32 px
-             HUD bar, 1280x752 (`HUD_BAR_HEIGHT` in src/lib.rs). */
-          --canvas-w: min(100vw, 1280px, calc((100vh - 90px) * 1280 / 752));
+             the render target's own, the field under the 32 px HUD bar
+             (`--bitmap-w`/`--bitmap-h` below). */
+          /* The bitmap's size, `Layout::for_field(DEFAULT_SCREEN_*)` in
+             src/lib.rs: a 1088x544 field under the 32 px bar. */
+          --bitmap-w: 1088;
+          --bitmap-h: 576;
+          /* The most the bitmap is scaled up on a big screen: 1.5x, the
+             same cap the native build's `view_max_scale` knob applies
+             (src/view.rs) - the map is shared with phone players and
+             would otherwise be blown up on a monitor. */
+          --canvas-max-w: calc(var(--bitmap-w) * 1.5px);
+          --canvas-w: min(100vw, var(--canvas-max-w), calc((100vh - 90px) * var(--bitmap-w) / var(--bitmap-h)));
 
-          /* The two overlay controls sit on the canvas's *bottom* corners,
-             off the HUD bar along its top. The canvas is centred in .game
-             and is its first block, so a corner is half the leftover width
-             in from ours and the canvas's own height (its width at 752/1280)
-             down; `translateY(-100%)` hangs the control up from that line so
-             its height never needs to be known. */
-          .subscribe-link, .fullscreen-toggle {
+          /* The two overlay controls sit together in the canvas's
+             *bottom-left* corner, off the HUD bar along its top: Full screen
+             first, the subscribe link beside it, one row. The canvas is
+             centred in .game and is its first block, so the corner is half
+             the leftover width in from ours and the canvas's own height
+             (its width at the bitmap's shape) down; `translateY(-100%)`
+             hangs the row up from that line so its height never needs to
+             be known. The game keeps its version stamp in the opposite
+             corner (src/hud.rs `HUD_VERSION_*_INSET`). */
+          .overlay-controls {
             position: absolute;
-            top: calc(var(--canvas-w) * 752 / 1280 - 10px);
+            left: calc((100% - var(--canvas-w)) / 2 + 10px);
+            top: calc(var(--canvas-w) * var(--bitmap-h) / var(--bitmap-w) - 10px);
             transform: translateY(-100%);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            z-index: 2;
           }
 
           .subscribe-link {
-            left: calc((100% - var(--canvas-w)) / 2 + 10px);
-            z-index: 1;
             padding: 3px 8px;
             border-radius: 3px;
             background: rgba(46, 46, 46, 0.75);
@@ -93,7 +148,7 @@
             left: 50%;
             transform: translateX(-50%);
             width: var(--canvas-w);
-            aspect-ratio: 1280 / 752;
+            aspect-ratio: var(--bitmap-w) / var(--bitmap-h);
             z-index: 2;
             display: flex;
             flex-direction: column;
@@ -165,7 +220,7 @@
 
           canvas {
             display: block;
-            /* The box has to keep the render target's own shape (1280x752,
+            /* The box has to keep the render target's own shape (the bitmap,
                the field plus the HUD bar), not just be capped on each axis
                independently.
 
@@ -180,7 +235,7 @@
                fills the box exactly and raylib's normalisation is right by
                construction. */
             width: var(--canvas-w);
-            aspect-ratio: 1280 / 752;
+            aspect-ratio: var(--bitmap-w) / var(--bitmap-h);
             height: auto;
             outline: none;
             /* The builder paints by dragging, so the browser must not claim
@@ -202,16 +257,16 @@
             inset: 0;
             z-index: 100;
             justify-content: center;
-            background: #000;
+            background: #151515;
             padding: env(safe-area-inset-top) env(safe-area-inset-right)
                      env(safe-area-inset-bottom) env(safe-area-inset-left);
 
-            --canvas-w: min(100vw, 1280px, calc(100vh * 1280 / 752));
+            --canvas-w: min(100vw, var(--canvas-max-w), calc(100vh * var(--bitmap-w) / var(--bitmap-h)));
             .instructions, .tuning { display: none; }
             /* The canvas is centred vertically here, so its bottom edge is
                the middle of the box plus half its height. */
-            .subscribe-link, .fullscreen-toggle {
-              top: calc(50% + var(--canvas-w) * 752 / 2560 - 10px);
+            .overlay-controls {
+              top: calc(50% + var(--canvas-w) * var(--bitmap-h) / var(--bitmap-w) / 2 - 10px);
             }
           }
 
@@ -219,19 +274,16 @@
              the fullscreen root. */
           &:fullscreen {
             justify-content: center;
-            background: #000;
+            background: #151515;
 
-            --canvas-w: min(100vw, 1280px, calc(100vh * 1280 / 752));
+            --canvas-w: min(100vw, var(--canvas-max-w), calc(100vh * var(--bitmap-w) / var(--bitmap-h)));
             .instructions, .tuning { display: none; }
-            .subscribe-link, .fullscreen-toggle {
-              top: calc(50% + var(--canvas-w) * 752 / 2560 - 10px);
+            .overlay-controls {
+              top: calc(50% + var(--canvas-w) * var(--bitmap-h) / var(--bitmap-w) / 2 - 10px);
             }
           }
 
-          /* Bottom *right*, opposite the subscribe link. */
           .fullscreen-toggle {
-            right: calc((100% - var(--canvas-w)) / 2 + 10px);
-            z-index: 2;
             padding: 3px 9px;
             border-radius: 3px;
             border: 0;
@@ -404,12 +456,22 @@
     </style>
 </head>
 <body>
+<div class="rotate-card" id="rotate-card" role="status" aria-live="polite">
+    <svg viewBox="0 0 64 64" aria-hidden="true" fill="none" stroke="#cfe0c4" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="20" y="6" width="24" height="52" rx="4"/>
+        <line x1="28" y1="50" x2="36" y2="50"/>
+    </svg>
+    <p>Rotate your phone to landscape to see the whole battlefield.</p>
+    <p class="rotate-note">The game keeps running while you turn it.</p>
+</div>
 
 <div class="wrapper">
     <div class="game">
-        <a class="subscribe-link" href="/subscribe">Subscribe for updates.</a>
-        <button class="fullscreen-toggle" id="fullscreen-toggle" type="button"
-                title="Play full screen">&#9974; Full screen</button>
+        <div class="overlay-controls">
+            <button class="fullscreen-toggle" id="fullscreen-toggle" type="button"
+                    title="Play full screen">&#9974; Full screen</button>
+            <a class="subscribe-link" href="/subscribe">Subscribe for updates.</a>
+        </div>
         <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
         <!-- Shown from the very first byte of HTML and torn down by the
              loader script below. The wasm and its preloaded `static/` data

@@ -1,5 +1,5 @@
 [package]
-version = "0.0.23"
+version = "0.0.24"
 name = "bongbong"
 edition = "2024"
 default-run = "bongbong"
@@ -14,6 +14,30 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1"
 sola-raylib = { version = "6.3.0" }
 toml = "1"
+
+# iOS (docs/ios-native-port-prd.md, CLAUDE.md's iOS section): raylib (SDL
+# backend, OpenGL ES 2.0) and a static SDL3 are prebuilt for the simulator
+# by tools/setup_ios.sh and linked by build.rs. `nobuild` skips the crate's
+# own cmake/link step, which would treat iOS as macOS and ask for the Cocoa
+# and OpenGL frameworks; `sdl` drops its GLFW gamepad declaration. Edition
+# 2024 (resolver 3) scopes these features to iOS targets only.
+[target.'cfg(target_os = "ios")'.dependencies]
+sola-raylib = { version = "6.3.0", features = ["nobuild", "sdl"] }
+
+# Android (docs/android-port-prd.md, CLAUDE.md's Android section): raylib's
+# own Android platform, prebuilt by tools/setup_android.sh and linked by
+# android/build.rs. `nobuild` skips the crate's Android cmake branch, which
+# mis-parses the API level from the target triple and emits none of the
+# link args raylib needs; no `sdl` here, raylib drives the NativeActivity
+# itself.
+[target.'cfg(target_os = "android")'.dependencies]
+sola-raylib = { version = "6.3.0", features = ["nobuild"] }
+
+# The Android shared library lives in its own crate (android/) so the
+# desktop builds never link a cdylib; the root package stays the default
+# member, so `cargo build`/`test`/`watch` here are unchanged.
+[workspace]
+members = ["android"]
 
 [features]
 # Dev/QA-only runtime tuning surface (docs/runtime-tuning-design.md): the

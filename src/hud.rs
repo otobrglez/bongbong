@@ -28,15 +28,16 @@ use crate::{Rect, MAX_DAMAGE, PICKUP_TEXTURE_SIZE, SHELL_TEXTURE_SIZE};
 pub const HUD_TEXT_SIZE: i32 = 18;
 /// The small labels over the timed-buff bars (`SPEED`/`SHIELD`/`FROG`).
 pub const HUD_LABEL_SIZE: i32 = 10;
-/// The version line near the field's bottom-right corner.
-pub const HUD_VERSION_TEXT_SIZE: i32 = 20;
+/// The version line near the field's bottom-right corner, in the size of
+/// the bar's small labels (`SPEED`/`SHIELD`/`FROG`).
+pub const HUD_VERSION_TEXT_SIZE: i32 = HUD_LABEL_SIZE;
 /// How far the version line's right end sits in from the field's right
-/// edge: clear of the web page's `Full screen` button, which occupies the
-/// corner itself (about 90 px wide, 10 px in), plus a gap.
-pub const HUD_VERSION_RIGHT_INSET: i32 = 120;
+/// edge - the same as its bottom inset, so it sits square in the corner.
+/// The web page's overlay controls live in the opposite, bottom-left
+/// corner (site/src/pages/index.astro `.overlay-controls`).
+pub const HUD_VERSION_RIGHT_INSET: i32 = 11;
 /// How far the version line's bottom sits up from the field's bottom
-/// edge: chosen so its glyphs sit level with the page's `Full screen`
-/// button (a ~22 px box ending 10 px up).
+/// edge.
 pub const HUD_VERSION_BOTTOM_INSET: i32 = 11;
 /// The version line's colour: white at 70%, a step below the HUD's
 /// readouts so it never competes with the round.
@@ -70,8 +71,8 @@ const FROG_COLOR: Color = Color::new(120, 220, 90, 255);
 // Slot origins along the bar, left to right. Fixed so a wave count or an
 // ammo number changing width never nudges what sits after it.
 const SLOT_TITLE: i32 = 8;
-const BAR_SLOT_W: i32 = 56;
-const BAR_W: i32 = 48;
+const BAR_SLOT_W: i32 = 40;
+const BAR_W: i32 = 36;
 const BAR_H: i32 = 8;
 /// The two stacked bars of a two-player round: each this tall, one block
 /// apart, the pair ending where the single bar does.
@@ -106,32 +107,33 @@ struct Slots {
 }
 
 const SLOTS_ONE: Slots = Slots {
-    enemies: 272,
-    enemy_count: 364,
-    heart: 494,
-    hp: 516,
-    shell: 564,
-    shells: 598,
-    weapons: 648,
-    weapon_slot_w: 80,
-    bars: 968,
+    enemies: 176,
+    enemy_count: 204,
+    heart: 276,
+    hp: 292,
+    shell: 332,
+    shells: 368,
+    weapons: 408,
+    weapon_slot_w: 72,
+    bars: 700,
     hp_w: 3 * CHAR_W,
     count_w: 3 * CHAR_W,
 };
 
-/// Two players: the weapon pairs are set in the small font
-/// (`CHAR_W_SMALL`) so four slots still end before the gauges.
+/// Two players: every pair - HP, shells and the four weapons - is set in
+/// the small font (`CHAR_W_SMALL`) so the whole row still ends before the
+/// gauges on the 960 px bar.
 const SLOTS_TWO: Slots = Slots {
-    enemies: 256,
-    enemy_count: 344,
-    heart: 416,
-    hp: 434,
-    shell: 524,
-    shells: 560,
-    weapons: 628,
-    weapon_slot_w: 84,
-    bars: 968,
-    hp_w: 7 * CHAR_W,
+    enemies: 176,
+    enemy_count: 204,
+    heart: 272,
+    hp: 288,
+    shell: 340,
+    shells: 374,
+    weapons: 412,
+    weapon_slot_w: 72,
+    bars: 704,
+    hp_w: 7 * CHAR_W_SMALL,
     count_w: 5 * CHAR_W_SMALL,
 };
 
@@ -144,7 +146,7 @@ impl Slots {
     /// players (the weapon pairs use `count_w`, in the small font).
     #[cfg_attr(not(test), allow(dead_code))]
     const fn shells_pair_w(&self) -> i32 {
-        5 * CHAR_W
+        5 * CHAR_W_SMALL
     }
 
     fn for_players(players: PlayerCount) -> &'static Slots {
@@ -257,7 +259,7 @@ impl HudModel {
         let mut title = game.mission.name().to_ascii_uppercase();
         let wave = game.wave_status();
         if let Some(w) = &wave {
-            title.push_str(&format!("   WAVE {}/{}", w.index, w.total));
+            title.push_str(&format!(" {}/{}", w.index, w.total));
         }
         // Live enemies: the ones on the field with a mind of their own. A
         // wave tank still rolling in has no `Ai` yet and counts as pending.
@@ -321,7 +323,9 @@ pub fn draw_bar(d: &mut impl RaylibDraw, panel: Rect, model: &HudModel, textures
 
     d.draw_text(&model.title, px + SLOT_TITLE, text_y, HUD_TEXT_SIZE, TEXT);
 
-    d.draw_text("ENEMIES", px + s.enemies, text_y, HUD_TEXT_SIZE, DIM);
+    // A tank glyph stands for "enemies": the word does not fit the 960 px
+    // bar beside everything else, and the count next to a tank reads.
+    draw_tank_glyph(d, px + s.enemies, py + (ph - TANK_GLYPH_H) / 2, DIM);
     let alive = format!("{}", model.enemies_alive);
     d.draw_text(&alive, px + s.enemy_count, text_y, HUD_TEXT_SIZE, TEXT);
     if model.enemies_pending > 0 {
@@ -333,7 +337,10 @@ pub fn draw_bar(d: &mut impl RaylibDraw, panel: Rect, model: &HudModel, textures
     draw_heart(d, px + s.heart, py + (ph - 12) / 2);
     match p2 {
         None => d.draw_text(&format!("{}", model.p1.hp), px + s.hp, text_y, HUD_TEXT_SIZE, model.p1.hp_color),
-        Some(p2) => draw_pair(d, px + s.hp, text_y, 3, (&format!("{}", model.p1.hp), team_tinted(model.p1.hp_color, 0)), (&format!("{}", p2.hp), team_tinted(p2.hp_color, 1))),
+        Some(p2) => {
+            let small_y = py + (ph - HUD_SMALL_TEXT_SIZE) / 2;
+            draw_pair_sized(d, px + s.hp, small_y, 3, (&format!("{}", model.p1.hp), team_tinted(model.p1.hp_color, 0)), (&format!("{}", p2.hp), team_tinted(p2.hp_color, 1)), HUD_SMALL_TEXT_SIZE, CHAR_W_SMALL);
+        }
     }
 
     // The shell sprite's in-flight frame, identical on every row of the
@@ -349,8 +356,9 @@ pub fn draw_bar(d: &mut impl RaylibDraw, panel: Rect, model: &HudModel, textures
             d.draw_text(&format!("{}", model.p1.shells), px + s.shells, text_y, HUD_TEXT_SIZE, model.p1.shells_color);
         }
         Some(p2) => {
-            draw_pair(d, px + s.shells, text_y, 2, (&format!("{}", model.p1.shells), team_tinted(model.p1.shells_color, 0)), (&format!("{}", p2.shells), team_tinted(p2.shells_color, 1)));
-            draw_pair_underlines(d, px + s.shells, py, ph, 2, model.p1.shells_active, p2.shells_active);
+            let small_y = py + (ph - HUD_SMALL_TEXT_SIZE) / 2;
+            draw_pair_sized(d, px + s.shells, small_y, 2, (&format!("{}", model.p1.shells), team_tinted(model.p1.shells_color, 0)), (&format!("{}", p2.shells), team_tinted(p2.shells_color, 1)), HUD_SMALL_TEXT_SIZE, CHAR_W_SMALL);
+            draw_pair_underlines_sized(d, px + s.shells, py, ph, 2, model.p1.shells_active, p2.shells_active, CHAR_W_SMALL);
         }
     }
 
@@ -430,6 +438,7 @@ fn draw_gauge(d: &mut impl RaylibDraw, x: i32, y: i32, h: i32, frac: f32, color:
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 /// A two-player readout, `left|right`, in `CHAR_W` cells: the left number
 /// right-aligned to the dim separator in a cell `digits` wide, the right
 /// one after it. Each side in its own colour.
@@ -448,6 +457,7 @@ fn draw_pair_sized(d: &mut impl RaylibDraw, x: i32, text_y: i32, digits: i32, le
     d.draw_text(right.0, sep_x + ch, text_y, size, right.1);
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 /// The two-player stand-in for `active_outline`: a 2 px underline under
 /// whichever side of a pair is what that player's trigger fires, in that
 /// player's team colour.
@@ -500,9 +510,14 @@ fn draw_heart(d: &mut impl RaylibDraw, x: i32, y: i32) {
     }
 }
 
+/// The tank glyph's footprint: 7 x 7 blocks of 2 px.
+#[cfg_attr(not(test), allow(dead_code))]
+const TANK_GLYPH_W: i32 = 14;
+const TANK_GLYPH_H: i32 = 14;
+
 /// A pixel tank seen from above, 7x7 blocks of 2 px (14x14): tracks down
 /// both sides, the hull between, the barrel up. The players button shows
-/// one or two of these.
+/// one or two of these, the play bar one for the enemy count.
 fn draw_tank_glyph(d: &mut impl RaylibDraw, x: i32, y: i32, color: Color) {
     const ROWS: [&str; 7] = ["...#...", "...#...", "#.###.#", "#.###.#", "#.###.#", "#.###.#", "#.....#"];
     for (row, line) in ROWS.iter().enumerate() {
@@ -552,6 +567,39 @@ pub fn draw_players_button(d: &mut impl RaylibDraw, panel: Rect, players: Player
 /// `PLAY` in build mode (docs/game-editor-fusion.md, sections 6 and 7).
 /// Full bar height, so a finger has the most to aim at.
 pub const MODE_BUTTON_W: f32 = 72.0;
+
+/// Where the RESTART button sits: the players button's slot, which is free
+/// exactly where this button is drawn (no keyboard means no R key and no
+/// second player - `KEYBOARD_AVAILABLE`), so nothing else in the bar moves.
+pub fn restart_button_rect(panel: Rect) -> Rectangle {
+    players_button_rect(panel)
+}
+
+/// The RESTART button: the bar's frame around a circular arrow, the one
+/// restart glyph a phone player reads without a label, in the bar's text
+/// colour so it is neither the builder's amber nor a weapon accent. The
+/// press is `tuning::request_restart`, the same path as the dev panel's
+/// button, and lands as `Input::restart_pressed` like the R key.
+pub fn draw_restart_button(d: &mut impl RaylibDraw, panel: Rect) {
+    let r = restart_button_rect(panel);
+    d.draw_rectangle_lines_ex(Rectangle::new(r.x, r.y + 2.0, r.width, r.height - 4.0), 2.0, TEXT);
+    let center = Vector2::new(r.x + r.width / 2.0, r.y + r.height / 2.0);
+    // Three quarters of a ring, the gap at the right, an arrowhead on the
+    // end that points on around the circle.
+    let (inner, outer) = (6.0, 10.0);
+    let (start, end) = (45.0, 315.0);
+    d.draw_ring(center, inner, outer, start, end, 24, TEXT);
+    let rad = (end as f32).to_radians();
+    let mid = (inner + outer) / 2.0;
+    let tip_at = Vector2::new(center.x + mid * rad.cos(), center.y + mid * rad.sin());
+    let tangent = Vector2::new(-rad.sin(), rad.cos());
+    let radial = Vector2::new(rad.cos(), rad.sin());
+    let tip = Vector2::new(tip_at.x + tangent.x * 6.0, tip_at.y + tangent.y * 6.0);
+    let a = Vector2::new(tip_at.x + radial.x * 5.0, tip_at.y + radial.y * 5.0);
+    let b = Vector2::new(tip_at.x - radial.x * 5.0, tip_at.y - radial.y * 5.0);
+    d.draw_triangle(a, b, tip, TEXT);
+    d.draw_triangle(tip, b, a, TEXT);
+}
 pub const MODE_BUTTON_RIGHT_INSET: f32 = 8.0;
 
 /// Where the mode button sits in `panel` (window space). Shared by the
@@ -675,6 +723,9 @@ pub fn draw_leave_dialog(d: &mut impl RaylibDraw, field: Rect) {
 pub struct PlayChrome {
     pub build_button: bool,
     pub players_button: bool,
+    /// The RESTART button in the players button's slot, where there is no
+    /// keyboard for the R key (`KEYBOARD_AVAILABLE`).
+    pub restart_button: bool,
     pub leave_dialog: bool,
     pub players_dialog: bool,
 }
@@ -695,9 +746,9 @@ mod hud_tests {
     fn slots_fit_the_default_bar_without_overlapping() {
         let ch = CHAR_W;
         for (name, s) in [("one", &SLOTS_ONE), ("two", &SLOTS_TWO)] {
-            let title_end = SLOT_TITLE + "DESTROY   WAVE 12/12".len() as i32 * ch;
-            assert!(title_end <= s.enemies, "{name}: title runs into ENEMIES");
-            let enemies_end = s.enemies + "ENEMIES".len() as i32 * ch;
+            let title_end = SLOT_TITLE + "DESTROY 12/12".len() as i32 * ch;
+            assert!(title_end <= s.enemies, "{name}: title runs into the enemies glyph");
+            let enemies_end = s.enemies + TANK_GLYPH_W;
             assert!(enemies_end <= s.enemy_count, "{name}");
             let count_end = s.enemy_count + 2 * ch + 6 + 3 * ch;
             assert!(count_end <= s.heart, "{name}");
@@ -714,8 +765,8 @@ mod hud_tests {
         }
         // The pairs fit their cells: three digits a side for HP, two for
         // the shells, two in the small font for each weapon.
-        assert!(3 * CHAR_W + CHAR_W + 3 * CHAR_W <= SLOTS_TWO.hp_w);
-        assert!(2 * CHAR_W + CHAR_W + 2 * CHAR_W <= SLOTS_TWO.shells_pair_w());
+        assert!(3 * CHAR_W_SMALL + CHAR_W_SMALL + 3 * CHAR_W_SMALL <= SLOTS_TWO.hp_w);
+        assert!(2 * CHAR_W_SMALL + CHAR_W_SMALL + 2 * CHAR_W_SMALL <= SLOTS_TWO.shells_pair_w());
         assert!(2 * CHAR_W_SMALL + CHAR_W_SMALL + 2 * CHAR_W_SMALL <= SLOTS_TWO.count_w);
         assert!(SLOTS_TWO.shells + SLOTS_TWO.shells_pair_w() <= SLOTS_TWO.weapons, "two: the shells pair runs into the weapons");
     }

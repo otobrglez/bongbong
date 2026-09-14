@@ -146,7 +146,7 @@ construction; every request still lands in `before_frame`.
 | `tuning_get` / `tuning_set` / `tuning_reset` / `tuning_schema` | `diff_only` / `patch` / - / `group`, `name_contains` | see docs/runtime-tuning-design.md |
 
 Slots are `Tank::owner_slot`: 0 = player, enemies from 1. Positions are
-screen pixels (1280x720 by default), y down, rotation 0 = up.
+field pixels (the map's `size`; the shipped default is 1088x544), y down, rotation 0 = up.
 
 ### 4.1 The two modes and the map builder
 
@@ -155,7 +155,7 @@ The game has a play mode and a build mode in one window
 `MapEditor` and the switch, and both the window and these tools go through
 its methods (`press_build`, `answer_dialog`, `play`, `replace_map`,
 `update_builder`), so a tool and a click are the same path. Field cells are
-`[col, row]` on the 32 px grid (40 x 23 at 1280x720); window positions for
+`[col, row]` on the 32 px grid (the map's `size`, 34 x 17 by default); window positions for
 `click` include the 32 px HUD bar, so the field starts at y = 32.
 
 | tool | params | does |

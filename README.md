@@ -6,22 +6,31 @@ The main goal of this project is to build a fun, entertaining game with retro gr
 
 Play it live @ [bongbong.io](https://bongbong.io) or [subscribe and follow the progress via the blog](https://blog.bongbong.io).
 
-## Development
+## Build and run
+
+Everything runs from inside the devenv (Nix) shell. `just --list` has the rest.
+
+| Where | One-time setup | Build and run |
+| --- | --- | --- |
+| Desktop | - | `just run` (or `just watch`, `just run-dev` with the dev server) |
+| Web | `just setup-web` | `just build-web` then `just serve-web` |
+| iOS simulator | `just ios-setup` | `just run-ios-sim` |
+| iPhone | `just ios-setup-device` (plus an Apple ID in Xcode) | `just run-ios-device` |
+| Android emulator / phone | `just android-setup` | `just run-android` |
 
 ```bash
-# Use devenv (Nix)
-cargo watch -x "run -- -e 12 --map=maps/default.toml"
-
-# Pick the player's chassis (otherwise the map's own `tank = "..."`, the
-# `player_tank` tuning knob, or a random roll decides it)
-cargo run -- --tank titan
-
-# Start in the map builder (BUILD/PLAY in the bar switch modes in any run)
-cargo run -- --editor --map=maps/default.toml
-
-# Preview web
-just build-web-dev && just preview-web
+# Options work the same on every desktop run
+cargo run -- -e 12 --map=maps/default.toml   # 12 enemies on a map
+cargo run -- --tank titan                    # pick the player's chassis
+cargo run -- --editor                        # start in the map builder (BUILD/PLAY switch anytime)
 ```
+
+The phone lanes are documented in `CLAUDE.md` (the "iOS simulator build" and
+"Android build" sections) and in `docs/ios-native-port-prd.md` /
+`docs/android-port-prd.md`. `just ios-smoke` and `just android-smoke` are the
+graphics checks to run after an Xcode or SDK update; `just ios-screenshot`,
+`just android-screenshot` and `just android-tap` / `android-swipe` drive a
+running build from the shell.
 
 ## Dependencies
 

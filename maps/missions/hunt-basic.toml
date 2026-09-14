@@ -15,6 +15,7 @@
 # gap, ammo in each open quarter.
 
 version = 1
+size = [40, 22.5]
 tanks = 4
 mission.kind = "hunt"
 spawn.kind = "band"

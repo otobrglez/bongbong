@@ -39,6 +39,22 @@ shared.
 - The web page (`site/src/pages/index.astro`) sizes the canvas to
   `min(100vw, 1280px) x min(100vh, 720px)`; the tuning panel sits below it.
 
+## The one rule, revised (2026-09): the field is the map's, the window is anyone's
+
+The rule below held until the cross-play work (docs/fullscreen-resolution-
+research.md): a map now names its own `size` (34 x 17 cells, 1088 x 544, is
+the shipped default; the old 40 x 22.5 map is `maps/classic.toml` and every
+older map carries `size = [40, 22.5]`), and the bitmap - the field under
+this bar - is fitted into whatever the window is by `view::View`, so
+nothing about the window ever reaches the simulation. The bar was re-laid
+out for a field no wider than 960 px (the standard is 1088): the mission word plus the wave counter, a tank
+glyph for the enemy count, 72 px weapon slots, 40 px gauges; in build mode
+the five category buttons are icon-plus-caret, the MAP panel is two
+columns, the Load list shows eight rows and the cursor readout is the
+field's status line. The paragraphs below describe the 1280 x 720 layout
+they were written for; the slot arithmetic is now in `hud.rs`/`editor/mod.rs`
+and pinned by their tests.
+
 ## The one rule: the battlefield's size is frozen
 
 Every seeded baseline in the repo assumes a 1280x720 field: the probe

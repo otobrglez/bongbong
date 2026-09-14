@@ -403,3 +403,114 @@ the above: both clients run the deterministic simulation from a shared
   most dynamic-joystick games ship the mirror. One setting either way.
 - **Integer snap by default?** Measure the shimmer on a real phone at DPR
   3 after the DPR fix.
+
+## Revision 3: the HUD bar is part of the bitmap
+
+Master now renders the field plus a 32 px HUD bar above it as one bitmap
+(`Layout::for_field`, the web canvas locked to that shape with
+`aspect-ratio: 1280 / 752` because raylib maps touches against the canvas
+box). What gets letterboxed onto a screen is therefore `cols x 32` wide and
+`rows x 32 + 32` tall, and the bar scales with the field. Redone with that
+shape, for a phone in landscape steering with an invisible joystick on the
+right and tapping to fire on the left (so nothing is reserved for
+controls):
+
+| Field | Bitmap | Shape | iPhone 15 | Pixel 8 | iPhone SE | iPad 10.9" | iPad Pro | MacBook 14" | 24" 1080p | 27" 1440p | min used |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 40 x 22.5 (today) | 1280 x 752 | 1.70 | 5.5 mm, 79% | 5.5, 77% | 5.0, 96% | 11.2, 85% | 13.3, 78% | 15.1, 90% | 25.4, 96% | 28.6, 96% | 77% |
+| 32 x 16 | 1024 x 544 | 1.88 | 7.6, 87% | 7.6, 85% | 6.5, 94% | 14.0, 76% | 16.6, 71% | 18.9, 82% | 33.1, 94% | 37.3, 94% | 71% |
+| 30 x 15 | 960 x 512 | 1.88 | 8.1, 86% | 8.1, 84% | 6.9, 95% | 14.9, 77% | 17.7, 71% | 20.2, 82% | 35.3, 95% | 39.8, 95% | 71% |
+| 30 x 14 | 960 x 480 | 2.00 | 8.6, 92% | 8.6, 90% | 6.9, 89% | 14.9, 72% | 17.7, 67% | 20.2, 77% | 35.3, 89% | 39.8, 89% | 67% |
+| **28 x 14** | **896 x 480** | **1.87** | **8.6, 86%** | **8.6, 84%** | **7.4, 95%** | **16.0, 77%** | **18.9, 71%** | **21.6, 82%** | **37.9, 95%** | **42.6, 95%** | **71%** |
+| 26 x 13 | 832 x 448 | 1.86 | 9.3, 86% | 9.2, 84% | 8.0, 96% | 17.2, 77% | 20.4, 72% | 23.3, 83% | 40.8, 96% | 45.9, 96% | 72% |
+| 26 x 12 | 832 x 416 | 2.00 | 10.0, 92% | 10.0, 90% | 8.0, 89% | 17.2, 72% | 20.4, 67% | 23.3, 77% | 40.8, 89% | 45.9, 89% | 67% |
+
+Tank in mm at the device's fit scale; "used" is bitmap area over screen
+area. Two families: 2:1 fields fill a phone to 92% but drop tablets to 72%
+and monitors to 89%; fields of about 1.87:1 give 86 / 77 / 95, the best
+minimum. Rows set the tank size, columns only spend the phone's side bars.
+Under 14 rows the AI's ring and retreat range have nowhere to go.
+
+**Recommendation stands at 28 x 14** (896 x 448 field, 896 x 480 bitmap).
+On an iPhone 15 the fit scale is 0.82: an 8.6 mm tank, 59 pt side bars
+that match the safe-area inset so the dynamic island never touches the
+field, a 26 pt bar with 14.7 pt text, no separate UI scale needed. 30 x 15
+is the same family at 8.1 mm if more room is wanted. Section 9's steps are
+unchanged except that the view letterboxes the whole bitmap (bar included)
+and the web canvas's `aspect-ratio` follows the new size (896 / 480). The
+companion plan page renders the arena on each screen class with the bar
+and the touch layout.
+
+## Implementation status (2026-09, branch claude/screen-scaling-crossplay)
+
+- **Field size from the map.** `MapFile::size = [cols, rows]`
+  (`field_size()`); the shipped default is 30 x 15 (960 x 480,
+  `DEFAULT_SCREEN_WIDTH/HEIGHT`), every older map carries
+  `size = [40, 22.5]`, the old default is `maps/classic.toml`. The session,
+  the builder, the dev server, the probe and the linter all take the field
+  from the map; `--resolution` is the window.
+- **The view.** `view.rs`: the bitmap (field plus bar) is composited into
+  one render texture and `View::fit` puts it on the window at one uniform
+  scale, centred, letterboxed; every pointer goes back through
+  `View::to_bitmap`. Native windows are resizable and HiDPI, F11 toggles
+  borderless full screen, `--fullscreen` starts there. The web canvas keeps
+  the bitmap's shape from two CSS custom properties, so the view is the
+  identity there and raylib's touch mapping stays right.
+- **Touch.** `touch.rs`: the floating joystick on one half of the field
+  (`touch_steer_side`, right by default), tap or hold to fire on the other,
+  dead zone and diagonal hysteresis, feedback only while touched, a
+  first-touch hint. Only real touch points drive it; `--touch-from-mouse`
+  is the desktop stand-in for development.
+- **The bars at 960 px.** The play HUD and the builder bar were re-laid
+  out (see docs/hud-and-builder-layout-design.md's revised rule).
+- **Knobs.** Only `enemy_frog_spawn_min_dist` (400 to 270) scaled with the
+  field; the AI's ranges are tank-scale and every fixture baseline held
+  (`just probe-fixtures` green, fixtures keep their 40 x 22.5 world).
+- Chosen: 15 rows at first (8.1 mm on an iPhone 15), then 34 x 17, see
+  below. Open: integer snap, the bar's drawn scale on very large monitors.
+
+### The desktop cap (2026-09-14)
+
+With the field fitted to the whole window, a desktop blew the shared
+30 x 15 world up: 1.57x in fullscreen on a MacBook 14" (a 20 mm tank),
+2.0x on a 1080p monitor (35 mm), 2.67x on a 27" 1440p (40 mm) - "too big",
+where the pre-view desktop drew the bitmap at 1x (a 64 px tank). Doubling
+the grid would fix the desktop and drop the phone to 4 mm: with one shared,
+fully visible map the two sizes move together. So the desktop *presents*
+the same map smaller instead, as every board-shaped cross-play game does:
+`View::fit_capped` never scales past `view_max_scale` (1.5 by default,
+`--zoom`, live in the panel; 1.0 is the classic look), and the margins are
+filled in the bar's colour behind a one-pixel frame. The phone is never
+affected, its fit is below any cap. On a MacBook 1.5x is only a little
+smaller than the fit; the knob is the dial. The follow-up that spends the
+freed width is a right-hand HUD sidebar (docs/hud-and-builder-layout-
+design.md, Variant B).
+
+| Screen | Fit | Capped 1.5x | Tank | Field share of screen |
+|---|---|---|---|---|
+| iPhone 15 | 0.77x | 0.77x | 8.1 mm | 86% |
+| iPad 10.9" | 1.23x | 1.23x | 14.9 mm | 77% |
+| MacBook 14" fullscreen | 1.57x | 1.5x | 19 mm | 76% |
+| 24" 1080p fullscreen | 2.0x | 1.5x | 26 mm | 53% |
+| 27" 1440p fullscreen | 2.67x | 1.5x | 22 mm | 33% |
+
+### The standard grows to 34 x 17 (2026-09-14)
+
+With the desktop capped, more battlefield became the ask on both sides.
+Rows set the phone's tank and columns spend the phone's side margin (the
+one that hides the dynamic island), so the room is small: 34 x 17 is the
+largest field that keeps the iPhone tank at the 44 pt touch target
+(7.2 mm), keeps 55 pt side margins, and gives 28% more area. On a desktop
+under the 1.5x cap the field grows from half of a 1080p screen to two
+thirds; on a MacBook 14" the cap no longer binds (the fit is 1.39x) and
+the field covers 82% of the screen. 36 x 18 (6.8 mm) and 40 x 20 (6.2 mm)
+head back toward the classic map's "very small" phone tanks. The default
+map was re-authored at 34 x 17 (same layout idea, a thirteen-cell bunker);
+every other map keeps its declared size.
+
+| Grid | Area | iPhone 15 tank | MacBook 14" | 24" 1080p | 27" 1440p |
+|---|---|---|---|---|---|
+| 30 x 15 | - | 8.1 mm | 1.5x, 74% | 1.5x, 53% | 1.5x, 30% |
+| **34 x 17** | **+28%** | **7.2 mm** | **1.39x, 82%** | **1.5x, 68%** | **1.5x, 38%** |
+| 36 x 18 | +44% | 6.8 mm | 1.31x, 81% | 1.5x, 76% | 1.5x, 43% |
+| 40 x 20 | +77% | 6.2 mm | 1.18x, 81% | 1.5x, 93% | 1.5x, 52% |

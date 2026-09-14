@@ -172,6 +172,15 @@ pub struct MapFile {
     /// plan (`tanks` / `--enemies` / a random roll).
     #[serde(default)]
     pub spawn: SpawnConfig,
+    /// The battlefield's size in cells, `size = [cols, rows]` (TOML: a
+    /// top-level array; rows may be fractional, the shipped 40 x 22.5 is
+    /// `[40, 22.5]`). This is the *field* - the world the simulation runs
+    /// in, the walls' inner faces, the ground - and every player in a
+    /// match shares it; the window and the screen only decide how large it
+    /// is drawn (`view::View`). `None` means `DEFAULT_SCREEN_WIDTH` x
+    /// `DEFAULT_SCREEN_HEIGHT`, so older files parse unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<(f32, f32)>,
     /// Where this map came from, for display only: the file stem when
     /// `load` read it, `"default"` for the embedded map, `None` for text
     /// handed over directly (the dev server's inline `map_toml`). Never
@@ -216,7 +225,17 @@ impl MapFile {
             tank2: None,
             mission: MissionConfig::default(),
             spawn: SpawnConfig::default(),
+            size: None,
             name: None,
+        }
+    }
+
+    /// The battlefield size in world pixels this map asks for: `size`
+    /// times the cell, or the default field when the map names none.
+    pub fn field_size(&self) -> (f32, f32) {
+        match self.size {
+            Some((cols, rows)) if cols > 0.0 && rows > 0.0 => (cols * OBSTACLE_GRID_SIZE, rows * OBSTACLE_GRID_SIZE),
+            _ => (crate::DEFAULT_SCREEN_WIDTH as f32, crate::DEFAULT_SCREEN_HEIGHT as f32),
         }
     }
 
@@ -414,10 +433,11 @@ pub const SHIPPED_MAPS: &[(&str, &str)] = &[
     ("waves-basic", include_str!("../maps/missions/waves-basic.toml")),
 ];
 
-/// Whether this build can write a map to disk: native yes, web no (its
-/// edits live in memory for the session - docs/game-editor-fusion.md).
+/// Whether this build can write a map to disk: native yes; web and iOS no
+/// (their edits live in memory for the session - docs/game-editor-fusion.md;
+/// an app bundle is read-only).
 pub const fn saving_available() -> bool {
-    !cfg!(target_os = "emscripten")
+    !crate::EMBEDDED
 }
 
 /// One map the builder's Load list can offer.
@@ -559,6 +579,24 @@ cells."39,11" = { kind = "gate" }
         assert_eq!(back.gate_cells(), map.gate_cells());
         assert_eq!(back.start2_cell(), Some((4, 5)));
         assert_eq!(back.tank2, Some(TankKind::Titan));
+    }
+
+    #[test]
+    fn a_maps_size_is_its_field_and_round_trips() {
+        let text = "version = 1\nsize = [40, 22.5]\ncells.\"3,3\" = { kind = \"start\" }\n";
+        let map = MapFile::from_toml_str(text).unwrap();
+        assert_eq!(map.size, Some((40.0, 22.5)));
+        assert_eq!(map.field_size(), (1280.0, 720.0));
+        let back = MapFile::from_toml_str(&map.to_toml_string().unwrap()).unwrap();
+        assert_eq!(back.size, map.size, "size did not survive the TOML round trip");
+        // No size means the standard field, and a size never serialises as an
+        // empty key.
+        let bare = MapFile::from_toml_str("version = 1\n").unwrap();
+        assert_eq!(bare.size, None);
+        assert_eq!(bare.field_size(), (crate::DEFAULT_SCREEN_WIDTH as f32, crate::DEFAULT_SCREEN_HEIGHT as f32));
+        assert!(!bare.to_toml_string().unwrap().contains("size"));
+        let ints = MapFile::from_toml_str("version = 1\nsize = [30, 15]\n").unwrap();
+        assert_eq!(ints.field_size(), (960.0, 480.0));
     }
 
     #[test]

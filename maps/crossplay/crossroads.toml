@@ -1,7 +1,7 @@
 # maps/crossplay/ - size studies for the shared cross-play battlefield
 # (docs/fullscreen-resolution-research.md, "one world per match"; the
 # recommended standard is arena.toml's 28x14). 24x14 cells =
-# 768x448 world px; the game has no map size field yet, so play it with
+# 768x448 world px; the field is the map's own `size`; play it with
 # `cargo run -- --map maps/crossplay/crossroads.toml --resolution 768x448`.
 # Hand-authored: re-saving from the map editor would drop these comments.
 #
@@ -10,6 +10,7 @@
 # bottom, barrels in the corners. Every corridor is at least three cells.
 
 version = 1
+size = [24, 14]
 tanks = 5
 mission.kind = "protect"
 spawn.kind = "band"

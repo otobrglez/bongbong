@@ -62,28 +62,29 @@ pub const BUILD_ACCENT: Color = crate::hud::BUILD_COLOR;
 // they do not overlap and all end before the SAVE/PLAY buttons.
 const SLOT_BUILD: f32 = 8.0;
 const SLOT_NAME: f32 = 72.0;
-const NAME_W: f32 = 160.0;
-const SLOT_CATEGORIES: f32 = 240.0;
-const CATEGORY_W: f32 = 100.0;
-const SLOT_ERASE: f32 = 748.0;
-const SLOT_UNDO: f32 = 796.0;
-const SLOT_REDO: f32 = 840.0;
+const NAME_W: f32 = 152.0;
+const SLOT_CATEGORIES: f32 = 232.0;
+/// A category button is its current tool's icon and a caret, no text:
+/// the standard 960 px bar has no room for five labelled buttons, so the
+/// names live in the dropdown and the active tool's in the field's
+/// status line.
+const CATEGORY_W: f32 = 52.0;
+const SLOT_ERASE: f32 = 500.0;
+const SLOT_UNDO: f32 = 548.0;
+const SLOT_REDO: f32 = 596.0;
 const SMALL_BUTTON_W: f32 = 40.0;
-const SLOT_FILE: f32 = 888.0;
-const SLOT_MAP: f32 = 960.0;
+const SLOT_FILE: f32 = 644.0;
+const SLOT_MAP: f32 = 716.0;
 /// FILE and MAP share a width.
 const MAP_BUTTON_W: f32 = 64.0;
-const SLOT_CURSOR: f32 = 1032.0;
-/// The cursor readout's budget: `col,row` plus the longest short label.
-const CURSOR_W: f32 = 160.0;
-/// How many rows the Load list shows at once; the wheel scrolls the rest.
-const LOAD_VISIBLE_ROWS: usize = 12;
+/// How many rows the Load list shows at once (eight fit the 480 px
+/// standard field); the wheel scrolls the rest.
+const LOAD_VISIBLE_ROWS: usize = 8;
 const LOAD_PANEL_W: f32 = 360.0;
 /// The gap a button's drawn box keeps from the slot after it, so two
 /// adjacent outlines never touch.
 const BUTTON_GAP: f32 = 8.0;
 /// The category button's text column, right of its full-bleed icon.
-const CATEGORY_TEXT_X: i32 = 36;
 /// The category caret's left edge: flush with the button's drawn box,
 /// two blocks in from the active outline, so the 10 px name (`GROUND`
 /// is the widest) ends clear of it.
@@ -444,9 +445,9 @@ pub struct MapEditor {
 
 impl MapEditor {
     /// Seed the canvas from `map` - the map the current round was built
-    /// from, which becomes the baseline. `width` x `height` is the
-    /// battlefield, not the window.
-    pub fn new(map: MapFile, width: f32, height: f32) -> Self {
+    /// from, which becomes the baseline. The canvas is the map's own field
+    /// (`MapFile::field_size`), never the window.
+    pub fn new(map: MapFile) -> Self {
         let current = [
             Tool::Wall(Material::Brick),
             Tool::Prop(Material::Sandbag),
@@ -468,7 +469,7 @@ impl MapEditor {
             pointer: None,
             cli_overrides: CliOverrides::default(),
         };
-        editor.rebuild_ground(width, height);
+        editor.rebuild_ground();
         editor
     }
 
@@ -531,17 +532,17 @@ impl MapEditor {
         &self.history
     }
 
-    pub fn undo(&mut self, width: f32, height: f32) -> Option<EditStep> {
+    pub fn undo(&mut self) -> Option<EditStep> {
         self.finish_stroke();
         let step = self.history.undo(&mut self.map)?;
-        self.rebuild_ground(width, height);
+        self.rebuild_ground();
         Some(step)
     }
 
-    pub fn redo(&mut self, width: f32, height: f32) -> Option<EditStep> {
+    pub fn redo(&mut self) -> Option<EditStep> {
         self.finish_stroke();
         let step = self.history.redo(&mut self.map)?;
-        self.rebuild_ground(width, height);
+        self.rebuild_ground();
         Some(step)
     }
 
@@ -568,17 +569,17 @@ impl MapEditor {
 
     /// Replace the canvas with `map` and make it the new baseline, as one
     /// undo step - the dev server's `builder_map {map_toml}`.
-    pub fn load(&mut self, map: MapFile, width: f32, height: f32) {
+    pub fn load(&mut self, map: MapFile) {
         self.finish_stroke();
         let before = self.map.clone();
         self.map = map;
         self.baseline = self.map.clone();
         self.history.push(EditStep::Map { before: Box::new(before), after: Box::new(self.map.clone()) });
-        self.rebuild_ground(width, height);
+        self.rebuild_ground();
     }
 
     /// Revert cells and settings to the baseline, as one undo step.
-    pub fn reset(&mut self, width: f32, height: f32) {
+    pub fn reset(&mut self) {
         self.finish_stroke();
         if !self.dirty() {
             return;
@@ -588,19 +589,19 @@ impl MapEditor {
         self.map = self.baseline.clone();
         self.map.name = name;
         self.history.push(EditStep::Map { before: Box::new(before), after: Box::new(self.map.clone()) });
-        self.rebuild_ground(width, height);
+        self.rebuild_ground();
     }
 
     /// One whole stroke at once: a press on `cells[0]`, a drag through the
     /// rest, a release. `right` is the secondary button (always erase).
     /// Replies with what changed. The tools' entry point; the UI drives
     /// `begin_stroke`/`stroke_to`/`finish_stroke` frame by frame instead.
-    pub fn stroke(&mut self, cells: &[(i32, i32)], right: bool, width: f32, height: f32) -> Vec<CellChange> {
+    pub fn stroke(&mut self, cells: &[(i32, i32)], right: bool) -> Vec<CellChange> {
         let Some(&first) = cells.first() else { return Vec::new() };
         self.finish_stroke();
-        self.begin_stroke(first, right, width, height);
+        self.begin_stroke(first, right);
         for &cell in &cells[1..] {
-            self.stroke_to(cell, width, height);
+            self.stroke_to(cell);
         }
         self.finish_stroke_changes()
     }
@@ -608,22 +609,22 @@ impl MapEditor {
     /// The first cell of a press: decides paint or erase for the whole
     /// stroke. Erase when the secondary button is down, the eraser is the
     /// brush, or the cell already holds exactly the brush's object.
-    fn begin_stroke(&mut self, cell: (i32, i32), right: bool, width: f32, height: f32) {
+    fn begin_stroke(&mut self, cell: (i32, i32), right: bool) {
         let erase = right
             || self.active_tool == Tool::Eraser
             || self.active_tool.object().is_some_and(|obj| self.map.cell(cell.0, cell.1) == Some(&obj));
         self.stroke = Some(Stroke { erase, last_cell: cell, changes: Vec::new() });
-        self.paint(cell, width, height);
+        self.paint(cell);
     }
 
     /// The drag crossed into `cell` (or stayed on the last one, a no-op).
-    fn stroke_to(&mut self, cell: (i32, i32), width: f32, height: f32) {
+    fn stroke_to(&mut self, cell: (i32, i32)) {
         let Some(stroke) = &mut self.stroke else { return };
         if stroke.last_cell == cell {
             return;
         }
         stroke.last_cell = cell;
-        self.paint(cell, width, height);
+        self.paint(cell);
     }
 
     fn finish_stroke(&mut self) {
@@ -640,7 +641,7 @@ impl MapEditor {
     }
 
     /// Apply the stroke's mode to one cell and record what changed.
-    fn paint(&mut self, (col, row): (i32, i32), width: f32, height: f32) {
+    fn paint(&mut self, (col, row): (i32, i32)) {
         let erase = self.stroke.as_ref().is_some_and(|s| s.erase);
         let mut changes = Vec::new();
         let before = self.map.cell(col, row).copied();
@@ -674,7 +675,7 @@ impl MapEditor {
         if let Some(stroke) = &mut self.stroke {
             stroke.changes.extend(changes);
         }
-        self.rebuild_ground(width, height);
+        self.rebuild_ground();
     }
 
     /// Recompute the decorative ground layer from the map's current wall +
@@ -682,7 +683,8 @@ impl MapEditor {
     /// same as a live round (`Game::init`'s "road_cells = obstacle_positions
     /// + explicit road cells" convention), plus every cell explicitly
     /// placed with the Road tool. Called after every cell edit.
-    fn rebuild_ground(&mut self, width: f32, height: f32) {
+    fn rebuild_ground(&mut self) {
+        let (width, height) = self.map.field_size();
         let road_cells: Vec<Position> = self
             .map
             .iter_cells()
@@ -727,9 +729,9 @@ impl MapEditor {
 
     /// Load a map from the Load list (`map::open_map`) into the canvas as
     /// one undo step and the new baseline.
-    pub fn load_named(&mut self, name: &str, width: f32, height: f32) -> Result<(), String> {
+    pub fn load_named(&mut self, name: &str) -> Result<(), String> {
         let map = map::open_map(name)?;
-        self.load(map, width, height);
+        self.load(map);
         self.status = Some(format!("loaded {name}"));
         Ok(())
     }
@@ -790,11 +792,11 @@ impl MapEditor {
         Self::bar_button(layout.panel, SLOT_REDO, SMALL_BUTTON_W)
     }
 
-    fn map_rect(layout: &Layout) -> Rectangle {
+    pub(crate) fn map_rect(layout: &Layout) -> Rectangle {
         Self::bar_button(layout.panel, SLOT_MAP, MAP_BUTTON_W)
     }
 
-    fn file_rect(layout: &Layout) -> Rectangle {
+    pub(crate) fn file_rect(layout: &Layout) -> Rectangle {
         Self::bar_button(layout.panel, SLOT_FILE, MAP_BUTTON_W)
     }
 
@@ -812,8 +814,8 @@ impl MapEditor {
         for category in Category::ALL {
             let rect = Self::category_rect(layout, category);
             if on(rect) {
-                // The icon half selects, the name/caret half opens the list.
-                return Some(if point.x < rect.x + rect.width / 2.0 {
+                // The icon selects, the caret beside it opens the list.
+                return Some(if point.x < rect.x + ICON_PX {
                     BarButton::CategoryIcon(category)
                 } else {
                     BarButton::CategoryMenu(category)
@@ -849,23 +851,35 @@ impl MapEditor {
         Rectangle::new(list.x, list.y + index as f32 * EDITOR_DROPDOWN_ROW_H, list.width, EDITOR_DROPDOWN_ROW_H)
     }
 
-    /// The MAP settings panel: below the MAP button, over the field.
+    /// Rows per column of the settings panel: two columns, because eleven
+    /// 48 px rows are taller than the 480 px standard field.
+    const SETTINGS_ROWS_PER_COLUMN: usize = SETTINGS_ROWS.len().div_ceil(2);
+
+    /// The MAP settings panel: below the MAP button, over the field, two
+    /// columns of rows.
     fn settings_rect(layout: &Layout) -> Rectangle {
         let button = Self::map_rect(layout);
+        let width = 2.0 * EDITOR_SETTINGS_W;
         // Anchored to its button but never past the field's right edge:
         // MAP sits close to the end of the bar, so the panel slides left.
         let right = layout.field.x + layout.field.w;
         Rectangle::new(
-            button.x.min(right - EDITOR_SETTINGS_W),
+            button.x.min(right - width).max(layout.field.x),
             layout.panel.y + layout.panel.h,
-            EDITOR_SETTINGS_W,
-            SETTINGS_ROWS.len() as f32 * EDITOR_DROPDOWN_ROW_H,
+            width,
+            Self::SETTINGS_ROWS_PER_COLUMN as f32 * EDITOR_DROPDOWN_ROW_H,
         )
     }
 
     fn settings_row_rect(layout: &Layout, index: usize) -> Rectangle {
         let panel = Self::settings_rect(layout);
-        Rectangle::new(panel.x, panel.y + index as f32 * EDITOR_DROPDOWN_ROW_H, panel.width, EDITOR_DROPDOWN_ROW_H)
+        let (column, row) = (index / Self::SETTINGS_ROWS_PER_COLUMN, index % Self::SETTINGS_ROWS_PER_COLUMN);
+        Rectangle::new(
+            panel.x + column as f32 * EDITOR_SETTINGS_W,
+            panel.y + row as f32 * EDITOR_DROPDOWN_ROW_H,
+            EDITOR_SETTINGS_W,
+            EDITOR_DROPDOWN_ROW_H,
+        )
     }
 
     /// A settings row's `<` button.
@@ -964,10 +978,10 @@ impl MapEditor {
         // Save prompt is taking text.
         if !matches!(self.popup, Some(Popup::Save { .. })) {
             if input.undo {
-                self.undo(width, height);
+                self.undo();
             }
             if input.redo {
-                self.redo(width, height);
+                self.redo();
             }
         }
         if self.popup.is_some() {
@@ -1003,7 +1017,7 @@ impl MapEditor {
         if input.pressed {
             if let Some(button) = Self::bar_button_at(pointer, layout) {
                 self.finish_stroke();
-                return self.press_bar_button(button, width, height);
+                return self.press_bar_button(button);
             }
         }
 
@@ -1020,16 +1034,16 @@ impl MapEditor {
             let cell = map::world_to_cell(field_pointer);
             if input.pressed || input.right_pressed {
                 self.finish_stroke();
-                self.begin_stroke(cell, input.right_held && !input.held, width, height);
+                self.begin_stroke(cell, input.right_held && !input.held);
             } else if self.stroke.is_some() {
-                self.stroke_to(cell, width, height);
+                self.stroke_to(cell);
             }
         }
         EditorAction::None
     }
 
     /// What a press on a bar button does.
-    fn press_bar_button(&mut self, button: BarButton, width: f32, height: f32) -> EditorAction {
+    fn press_bar_button(&mut self, button: BarButton) -> EditorAction {
         match button {
             BarButton::Play => return EditorAction::Play,
             BarButton::File => self.popup = Some(Popup::File),
@@ -1037,10 +1051,10 @@ impl MapEditor {
             BarButton::CategoryMenu(category) => self.popup = Some(Popup::Dropdown(category)),
             BarButton::Erase => self.select_tool(Tool::Eraser),
             BarButton::Undo => {
-                self.undo(width, height);
+                self.undo();
             }
             BarButton::Redo => {
-                self.redo(width, height);
+                self.redo();
             }
             BarButton::Map => self.popup = Some(Popup::Settings),
         }
@@ -1055,7 +1069,6 @@ impl MapEditor {
         if input.escape {
             return;
         }
-        let (width, height) = (layout.field.w, layout.field.h);
         let pressed = input.pressed || input.right_pressed;
         match popup {
             Popup::Save { mut name } => {
@@ -1125,7 +1138,7 @@ impl MapEditor {
                         .find(|&(i, _)| Self::load_row_rect(panel, i).check_collision_point_rec(pointer))
                         .map(|(_, e)| e.name.clone());
                     if let Some(name) = picked {
-                        if let Err(e) = self.load_named(&name, width, height) {
+                        if let Err(e) = self.load_named(&name) {
                             self.status = Some(e);
                         }
                         return;
@@ -1167,7 +1180,7 @@ impl MapEditor {
                         }
                         if *row == SettingsRow::Reset {
                             if Self::settings_reset_rect(rect).check_collision_point_rec(pointer) {
-                                self.reset(width, height);
+                                self.reset();
                             }
                         } else if Self::settings_dec_rect(rect).check_collision_point_rec(pointer) {
                             self.step_setting(*row, false);
@@ -1209,7 +1222,19 @@ impl MapEditor {
     /// through a `Camera2D` at the field origin (so every cell position
     /// stays the world position the map format uses), then the bar and
     /// any open popup in window space on top.
-    pub fn render(&self, rl: &mut RaylibHandle, thread: &RaylibThread, layout: &Layout, textures: &EditorTextures) {
+    /// Draw the builder into `composite` (the bitmap: the bar over the
+    /// field, `layout.window_size()` in size) and put that on the window
+    /// through `view`, exactly as `Game::render` does for a round.
+    pub fn render(
+        &self,
+        rl: &mut RaylibHandle,
+        thread: &RaylibThread,
+        composite: &mut RenderTexture2D,
+        view: &crate::view::View,
+        backdrop: Color,
+        layout: &Layout,
+        textures: &EditorTextures,
+    ) {
         let (width, height) = (layout.field.w, layout.field.h);
         let cursor = self.cursor_cell(layout);
         let camera = Camera2D {
@@ -1218,7 +1243,7 @@ impl MapEditor {
             rotation: 0.0,
             zoom: 1.0,
         };
-        let mut d = rl.begin_drawing(thread);
+        rl.draw_texture_mode(thread, composite, |mut d| {
         d.clear_background(Color::new(30, 30, 34, 255));
 
         d.draw_mode2D(camera, |mut d, _| {
@@ -1312,9 +1337,18 @@ impl MapEditor {
                 );
             }
 
-            if let Some(status) = &self.status {
-                d.draw_text(status, EDITOR_TOOLBAR_MARGIN as i32, (height - 22.0) as i32, 14, Color::LIGHTGRAY);
+            // The status line, bottom-left of the field: the active tool,
+            // the cell under the pointer (or the last tapped one), and any
+            // message.
+            let mut line = format!("{}: {}", self.active_category().map(|c| c.label()).unwrap_or("TOOL"), short_label(self.active_tool));
+            if let Some((col, row)) = cursor {
+                let under = self.map.cell(col, row).map(cell_label).unwrap_or("");
+                line.push_str(&format!("   {col},{row} {under}"));
             }
+            if let Some(status) = &self.status {
+                line.push_str(&format!("   {status}"));
+            }
+            d.draw_text(&line, EDITOR_TOOLBAR_MARGIN as i32, (height - 22.0) as i32, 14, Color::LIGHTGRAY);
         });
 
         self.draw_bar(&mut d, layout, textures, cursor);
@@ -1338,6 +1372,8 @@ impl MapEditor {
                 );
             }
         }
+        });
+        crate::view::present(rl, thread, composite, view, backdrop);
     }
 
     /// Whether the singleton `tool` already has its object on the map -
@@ -1385,12 +1421,7 @@ impl MapEditor {
         draw_menu_button(d, Self::file_rect(layout), "FILE", file_open);
         draw_menu_button(d, Self::map_rect(layout), "MAP", matches!(self.popup, Some(Popup::Settings)));
 
-        if let Some((col, row)) = cursor {
-            let under = self.map.cell(col, row).map(cell_label).unwrap_or("");
-            let readout = fit_text(&format!("{col},{row} {under}"), CURSOR_W, HUD_TEXT_SIZE);
-            d.draw_text(&readout, px + SLOT_CURSOR as i32, text_y, HUD_TEXT_SIZE, DIM);
-        }
-
+        let _ = cursor; // the readout is the field's status line, see `render`
         crate::hud::draw_mode_button(d, panel, "PLAY", BUILD_ACCENT);
     }
 
@@ -1427,9 +1458,9 @@ impl MapEditor {
     }
 
     /// One category button: the current tool's icon full-bleed at the
-    /// left, the category's name and a caret on the top line, the tool's
-    /// name on the bottom line, outlined in the accent while the active
-    /// brush is one of its tools.
+    /// left and a caret beside it, outlined in the accent while the
+    /// active brush is one of its tools. The tool's name is in the
+    /// field's status line.
     fn draw_category_button(&self, d: &mut impl RaylibDraw, layout: &Layout, textures: &EditorTextures, category: Category) {
         let rect = Self::category_rect(layout, category);
         let tool = self.current_tool(category);
@@ -1440,9 +1471,7 @@ impl MapEditor {
         }
         let open = matches!(self.popup, Some(Popup::Dropdown(c)) if c == category);
         let label_color = if open { BUILD_ACCENT } else { DIM };
-        d.draw_text(category.label(), x + CATEGORY_TEXT_X, y + 5, HUD_LABEL_SIZE, label_color);
-        draw_caret(d, x + CATEGORY_CARET_X, y + 7, label_color);
-        d.draw_text(short_label(tool), x + CATEGORY_TEXT_X, y + 17, HUD_LABEL_SIZE, TEXT);
+        draw_caret(d, x + CATEGORY_CARET_X, y + (h - CARET_W) / 2, label_color);
         if self.active_category() == Some(category) {
             active_outline(d, x, y, (CATEGORY_W - BUTTON_GAP) as i32, h, BUILD_ACCENT);
         }
@@ -2066,26 +2095,26 @@ mod editor_tests {
     /// cell replaces it (the badge follows).
     #[test]
     fn both_start_brushes_are_independent_singletons() {
-        let mut ed = MapEditor::new(MapFile::new(), W, H);
+        let mut ed = MapEditor::new(MapFile::new());
         ed.select_tool(Tool::Start);
-        ed.stroke(&[(3, 3)], false, W, H);
+        ed.stroke(&[(3, 3)], false);
         ed.select_tool(Tool::Start2);
-        ed.stroke(&[(4, 4)], false, W, H);
+        ed.stroke(&[(4, 4)], false);
         assert!(ed.singleton_placed(Tool::Start) && ed.singleton_placed(Tool::Start2));
         assert_eq!(ed.map().start_cell(), Some((3, 3)));
         assert_eq!(ed.map().start2_cell(), Some((4, 4)));
         let depth = ed.history().undo_depth();
         // A move: the old cell cleared, the new one placed, player 1 untouched.
-        ed.stroke(&[(6, 6)], false, W, H);
+        ed.stroke(&[(6, 6)], false);
         assert_eq!(ed.map().start2_cell(), Some((6, 6)));
         assert_eq!(ed.map().cell(4, 4), None);
         assert_eq!(ed.map().start_cell(), Some((3, 3)));
         assert_eq!(ed.history().undo_depth(), depth + 1);
-        ed.undo(W, H);
+        ed.undo();
         assert_eq!(ed.map().start2_cell(), Some((4, 4)));
         // Player 1's brush over player 2's cell replaces it.
         ed.select_tool(Tool::Start);
-        ed.stroke(&[(4, 4)], false, W, H);
+        ed.stroke(&[(4, 4)], false);
         assert_eq!(ed.map().start_cell(), Some((4, 4)));
         assert_eq!(ed.map().start2_cell(), None);
         assert!(!ed.singleton_placed(Tool::Start2));
@@ -2096,51 +2125,51 @@ mod editor_tests {
 
     #[test]
     fn a_stroke_paints_once_per_cell_and_toggle_erases_on_its_first_cell() {
-        let mut ed = MapEditor::new(MapFile::new(), W, H);
+        let mut ed = MapEditor::new(MapFile::new());
         ed.select_tool(Tool::Wall(Material::Brick));
-        let changes = ed.stroke(&[(10, 5), (11, 5), (11, 5), (12, 5)], false, W, H);
+        let changes = ed.stroke(&[(10, 5), (11, 5), (11, 5), (12, 5)], false);
         assert_eq!(changes.len(), 3);
         assert_eq!(ed.map().cell(11, 5), Some(&brick()));
         assert_eq!(ed.history().undo_depth(), 1);
 
         // A press on a cell holding exactly the brush's object clears it,
         // and the drag keeps clearing - never paints - past empty cells.
-        let changes = ed.stroke(&[(11, 5), (12, 5), (13, 5)], false, W, H);
+        let changes = ed.stroke(&[(11, 5), (12, 5), (13, 5)], false);
         assert_eq!(changes.len(), 2);
         assert_eq!(ed.map().cell(11, 5), None);
         assert_eq!(ed.map().cell(13, 5), None);
 
         // A press on an empty cell paints, and painting over a brick with
         // a brick is a no-op inside the same stroke.
-        ed.stroke(&[(13, 5), (10, 5)], false, W, H);
+        ed.stroke(&[(13, 5), (10, 5)], false);
         assert_eq!(ed.map().cell(13, 5), Some(&brick()));
         assert_eq!(ed.map().cell(10, 5), Some(&brick()));
 
         // A different material overwrites rather than toggles.
         ed.select_tool(Tool::Wall(Material::Iron));
-        ed.stroke(&[(10, 5)], false, W, H);
+        ed.stroke(&[(10, 5)], false);
         assert_eq!(ed.map().cell(10, 5), Some(&CellObject::Wall { material: Material::Iron }));
 
         // The secondary button erases whatever the brush.
-        ed.stroke(&[(10, 5)], true, W, H);
+        ed.stroke(&[(10, 5)], true);
         assert_eq!(ed.map().cell(10, 5), None);
         assert!(ed.dirty());
     }
 
     #[test]
     fn singletons_move_and_undo_restores_the_old_cell() {
-        let mut ed = MapEditor::new(MapFile::new(), W, H);
+        let mut ed = MapEditor::new(MapFile::new());
         ed.select_tool(Tool::Frog);
-        ed.stroke(&[(3, 3)], false, W, H);
-        let changes = ed.stroke(&[(6, 6)], false, W, H);
+        ed.stroke(&[(3, 3)], false);
+        let changes = ed.stroke(&[(6, 6)], false);
         assert_eq!(changes.len(), 2, "a move is a clear and a placement");
         assert_eq!(ed.map().frog_cell(), Some((6, 6)));
-        ed.undo(W, H);
+        ed.undo();
         assert_eq!(ed.map().frog_cell(), Some((3, 3)));
-        ed.redo(W, H);
+        ed.redo();
         assert_eq!(ed.map().frog_cell(), Some((6, 6)));
         // Tapping the frog with the frog tool removes it.
-        ed.stroke(&[(6, 6)], false, W, H);
+        ed.stroke(&[(6, 6)], false);
         assert_eq!(ed.map().frog_cell(), None);
         assert!(ed.singleton_placed(Tool::Frog) == false);
     }
@@ -2150,7 +2179,7 @@ mod editor_tests {
         let mut base = MapFile::new();
         base.set_cell(1, 1, brick());
         base.name = Some("arena".into());
-        let mut ed = MapEditor::new(base.clone(), W, H);
+        let mut ed = MapEditor::new(base.clone());
         assert!(!ed.dirty());
         let mut s = ed.settings();
         s.tanks = Some(99);
@@ -2162,27 +2191,27 @@ mod editor_tests {
         assert_eq!(ed.history().undo_depth(), 1, "a no-op change records nothing");
 
         ed.select_tool(Tool::Road);
-        ed.stroke(&[(2, 2)], false, W, H);
+        ed.stroke(&[(2, 2)], false);
         assert_eq!(ed.diff().added, 1);
-        ed.reset(W, H);
+        ed.reset();
         assert!(!ed.dirty());
         assert_eq!(ed.name(), "arena");
-        ed.undo(W, H);
+        ed.undo();
         assert!(ed.dirty());
 
         let mut other = MapFile::new();
         other.set_cell(5, 5, CellObject::Gate);
-        ed.load(other, W, H);
+        ed.load(other);
         assert!(!ed.dirty(), "a load is the new baseline");
         assert_eq!(ed.map().cell(5, 5), Some(&CellObject::Gate));
-        ed.undo(W, H);
+        ed.undo();
         assert_eq!(ed.map().cell(2, 2), Some(&CellObject::Road));
     }
 
     #[test]
     fn update_from_input_strokes_on_press_and_hold_and_ends_on_release() {
         let layout = Layout::for_field(W, H);
-        let mut ed = MapEditor::new(MapFile::new(), W, H);
+        let mut ed = MapEditor::new(MapFile::new());
         let at = |col: i32, row: i32| {
             let p = map::cell_to_world(col, row);
             Vector2::new(p.x + layout.field.x, p.y + layout.field.y)
@@ -2233,36 +2262,24 @@ mod editor_tests {
         assert!(SLOT_UNDO + SMALL_BUTTON_W <= SLOT_REDO);
         assert!(SLOT_REDO + SMALL_BUTTON_W <= SLOT_FILE);
         assert!(SLOT_FILE + MAP_BUTTON_W <= SLOT_MAP);
-        assert!(SLOT_MAP + MAP_BUTTON_W <= SLOT_CURSOR);
-        // The readout's worst case: two-digit coordinates and the longest
-        // short label of any placeable object.
-        let longest = TOOLS.iter().map(|t| short_label(*t).len()).max().unwrap();
-        let readout = format!("{},{} {}", 39, 22, "x".repeat(longest));
-        assert!(readout.len() as f32 * ch <= CURSOR_W, "cursor readout {readout:?} is wider than its slot");
         let layout = Layout::for_field(W, H);
         let play = mode_button_rect(layout.panel);
-        assert!(SLOT_CURSOR + CURSOR_W <= play.x, "cursor readout runs into PLAY");
+        assert!(SLOT_MAP + MAP_BUTTON_W <= play.x, "MAP runs into PLAY");
         // The FILE menu and the Load list fit the field.
         let menu = MapEditor::file_menu_rect(&layout);
         assert!(menu.y + menu.height <= layout.field.y + layout.field.h);
         let list = MapEditor::load_panel_rect(&layout, 40);
         assert!(list.y >= layout.field.y && list.y + list.height <= layout.field.y + layout.field.h);
-        // The category name and the longest short tool name fit the 10 px
-        // lines beside the icon: the name ends a gap short of the caret,
-        // the tool name short of the outline. The default font advances
-        // about 6.5 px per character at 10 px.
-        let small = 6.5;
-        let name_end = CATEGORY_TEXT_X as f32 + "GROUND".len() as f32 * small;
-        assert!(name_end + 4.0 <= CATEGORY_CARET_X as f32, "GROUND runs into its caret");
+        // The caret sits clear of the icon and inside the button's box.
+        assert!(CATEGORY_CARET_X as f32 >= ICON_PX, "the caret overlaps the icon");
         assert!(CATEGORY_CARET_X + CARET_W <= (CATEGORY_W - BUTTON_GAP) as i32, "caret leaves the button");
-        let text_room = CATEGORY_W - BUTTON_GAP - CATEGORY_TEXT_X as f32;
-        assert!(longest as f32 * small <= text_room);
     }
 
     #[test]
     fn every_bar_button_hit_rect_reaches_into_the_field_gutter() {
         let layout = Layout::for_field(W, H);
-        let below = |r: Rectangle| Vector2::new(r.x + r.width / 2.0, r.y + r.height + EDITOR_BAR_HIT_SLACK - 1.0);
+        // Under the caret end of a category button, under the middle of any other.
+        let below = |r: Rectangle| Vector2::new(r.x + r.width - 8.0, r.y + r.height + EDITOR_BAR_HIT_SLACK - 1.0);
         assert_eq!(
             MapEditor::bar_button_at(below(MapEditor::category_rect(&layout, Category::Wall)), &layout),
             Some(BarButton::CategoryMenu(Category::Wall))
@@ -2304,7 +2321,7 @@ mod editor_tests {
     #[test]
     fn a_category_button_selects_on_its_icon_half_and_opens_its_list_on_its_caret_half() {
         let layout = Layout::for_field(W, H);
-        let mut ed = MapEditor::new(MapFile::new(), W, H);
+        let mut ed = MapEditor::new(MapFile::new());
         let prop = MapEditor::category_rect(&layout, Category::Prop);
         // The caret half opens the dropdown and selects nothing yet.
         click(&mut ed, &layout, Vector2::new(prop.x + prop.width - 10.0, prop.y + 16.0));
@@ -2333,27 +2350,28 @@ mod editor_tests {
     #[test]
     fn a_press_outside_an_open_dropdown_closes_it_and_does_not_paint() {
         let layout = Layout::for_field(W, H);
-        let mut ed = MapEditor::new(MapFile::new(), W, H);
+        let mut ed = MapEditor::new(MapFile::new());
         let wall = MapEditor::category_rect(&layout, Category::Wall);
-        click(&mut ed, &layout, Vector2::new(wall.x + 80.0, wall.y + 16.0));
+        let caret = Vector2::new(wall.x + wall.width - 10.0, wall.y + 16.0);
+        click(&mut ed, &layout, caret);
         assert_eq!(ed.open_menu(), Some("wall"));
-        let p = map::cell_to_world(30, 15);
+        let p = map::cell_to_world(20, 10);
         let on_cell = Vector2::new(p.x + layout.field.x, p.y + layout.field.y);
         click(&mut ed, &layout, on_cell);
         assert_eq!(ed.open_menu(), None);
         assert!(ed.map().cells.is_empty(), "the dismissing press painted through the menu");
         // Esc closes too, and the next press on the same cell paints.
-        click(&mut ed, &layout, Vector2::new(wall.x + 80.0, wall.y + 16.0));
+        click(&mut ed, &layout, caret);
         ed.update(&BuilderInput { escape: true, ..Default::default() }, &layout);
         assert_eq!(ed.open_menu(), None);
         click(&mut ed, &layout, on_cell);
-        assert_eq!(ed.map().cell(30, 15), Some(&brick()));
+        assert_eq!(ed.map().cell(20, 10), Some(&brick()));
     }
 
     #[test]
     fn the_map_panel_steps_values_and_never_paints_through() {
         let layout = Layout::for_field(W, H);
-        let mut ed = MapEditor::new(MapFile::new(), W, H);
+        let mut ed = MapEditor::new(MapFile::new());
         click(&mut ed, &layout, center(MapEditor::map_rect(&layout)));
         assert_eq!(ed.open_menu(), Some("map"));
         let row = |r: SettingsRow| {
@@ -2419,7 +2437,7 @@ mod editor_tests {
     #[test]
     fn the_wheel_over_a_category_button_cycles_its_tool() {
         let layout = Layout::for_field(W, H);
-        let mut ed = MapEditor::new(MapFile::new(), W, H);
+        let mut ed = MapEditor::new(MapFile::new());
         let wall = center(MapEditor::category_rect(&layout, Category::Wall));
         ed.update(&BuilderInput { pointer: Some(wall), wheel: -1.0, ..Default::default() }, &layout);
         assert_eq!(ed.tool(), Tool::Wall(Material::Iron));
@@ -2436,13 +2454,13 @@ mod editor_tests {
     #[test]
     fn opening_one_popup_closes_the_other_and_save_reports_itself() {
         let layout = Layout::for_field(W, H);
-        let mut ed = MapEditor::new(MapFile::new(), W, H);
+        let mut ed = MapEditor::new(MapFile::new());
         click(&mut ed, &layout, center(MapEditor::map_rect(&layout)));
         assert_eq!(ed.open_menu(), Some("map"));
         // A press on the ACTOR caret while the panel is open only closes
         // the panel; the next one opens the list.
         let actor = MapEditor::category_rect(&layout, Category::Actor);
-        let caret = Vector2::new(actor.x + 80.0, actor.y + 16.0);
+        let caret = Vector2::new(actor.x + actor.width - 10.0, actor.y + 16.0);
         click(&mut ed, &layout, caret);
         assert_eq!(ed.open_menu(), None);
         click(&mut ed, &layout, caret);
@@ -2475,7 +2493,7 @@ mod file_tests {
     #[test]
     fn file_menu_load_list_loads_a_shipped_map_by_name() {
         let layout = Layout::for_field(W, H);
-        let mut ed = MapEditor::new(MapFile::new(), W, H);
+        let mut ed = MapEditor::new(MapFile::new());
         press(&mut ed, &layout, center(MapEditor::file_rect(&layout)));
         assert_eq!(ed.open_menu(), Some("file"));
         press(&mut ed, &layout, center(MapEditor::file_row_rect(&layout, 0)));
@@ -2513,15 +2531,15 @@ mod file_tests {
     /// name and, where saving exists, round-trips a file and clears dirty.
     #[test]
     fn load_named_and_save_report_errors_and_round_trip() {
-        let mut ed = MapEditor::new(MapFile::new(), W, H);
-        assert!(ed.load_named("no-such-map", W, H).is_err());
+        let mut ed = MapEditor::new(MapFile::new());
+        assert!(ed.load_named("no-such-map").is_err());
         assert!(ed.save(Some("bad name/with slash")).is_err());
         assert!(ed.save(None).is_err(), "an unnamed map needs SAVE AS");
         if !map::saving_available() {
             return;
         }
         ed.select_tool(Tool::Wall(Material::Glass));
-        ed.stroke(&[(7, 7)], false, W, H);
+        ed.stroke(&[(7, 7)], false);
         assert!(ed.dirty());
         let name = format!("zz-editor-test-{}", std::process::id());
         let path = map::maps_dir().join(format!("{name}.toml"));

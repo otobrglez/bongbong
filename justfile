@@ -130,3 +130,101 @@ watch-dev:
 # Same tools the MCP server exposes (src/devserver.rs's TOOLS).
 mcp-call TOOL ARGS='{}':
     cargo run -q --features dev-tools --bin bbmcp -- call {{TOOL}} '{{ARGS}}'
+
+# --- iOS simulator (docs/ios-native-port-prd.md, CLAUDE.md's iOS section) ---
+# Every recipe runs through tools/ios/env.sh: Xcode as DEVELOPER_DIR (the
+# devenv shell points it at nix's apple-sdk), one deployment target, the
+# library prefix build.rs links from, and bindgen's simulator sysroot.
+
+# One-time: SDL3 (static) and raylib (SDL backend, OpenGL ES 2.0) for the
+# simulator into ~/.local/share/bongbong-ios/sim (tools/setup_ios.sh,
+# pinned SDL tag).
+ios-setup:
+    ./tools/setup_ios.sh
+
+# Gate 0: an SDL3 + GL ES 2 glDrawElements program in the simulator
+# (tools/ios/smoke.c). Apple Silicon simulators have had a crash in that
+# call; rerun after every Xcode or runtime update. Pass = "SMOKE OK".
+ios-smoke:
+    ./tools/ios/smoke.sh
+
+# Build the game for the simulator (plain build, no dev-tools) and stage
+# target/ios-sim/BongBong.app. Extra args go to cargo (`--release`).
+build-ios-sim *ARGS:
+    bash -c 'set -e; source tools/ios/env.sh; cargo build --target aarch64-apple-ios-sim --bin bongbong {{ARGS}}'
+    bash -c 'set -e; source tools/ios/env.sh; ./tools/ios/bundle.sh debug'
+
+# Build, boot the simulator (BONGBONG_IOS_DEVICE, default "iPhone 17"),
+# install the bundle and launch it with the console attached (Ctrl-C
+# detaches; the app keeps running). Rotate the simulator to landscape with
+# Cmd+Left if it comes up portrait.
+run-ios-sim *ARGS: (build-ios-sim ARGS)
+    bash -c 'set -e; source tools/ios/env.sh; \
+        xcrun simctl boot "$IOS_DEVICE" >/dev/null 2>&1 || true; open -a Simulator; \
+        xcrun simctl install booted target/ios-sim/BongBong.app; \
+        xcrun simctl launch --console-pty --terminate-running-process booted com.otobrglez.bongbong'
+
+# Screenshot the booted simulator (default target/ios-sim/shot.png).
+ios-screenshot OUT="target/ios-sim/shot.png":
+    bash -c 'source tools/ios/env.sh; xcrun simctl io booted screenshot {{OUT}}'
+
+# --- iPhone (device) ---
+# One-time: the device slice of SDL3 + raylib into ~/.local/share/bongbong-ios/ios.
+ios-setup-device:
+    SLICE=ios ./tools/setup_ios.sh
+
+# Build for the phone and stage target/ios-device/BongBong.app (unsigned).
+build-ios-device *ARGS:
+    bash -c 'set -e; export IOS_SLICE=ios; source tools/ios/env.sh; cargo build --target aarch64-apple-ios --bin bongbong {{ARGS}}'
+    bash -c 'set -e; export IOS_SLICE=ios; source tools/ios/env.sh; ./tools/ios/bundle.sh debug'
+
+# Build, sign for the connected iPhone (tools/ios/sign.sh: Xcode's automatic
+# signing on the placeholder project mints the certificate and profile), then
+# install and launch it. The phone must be unlocked, trusted and in Developer
+# Mode; the first run also needs the app allowed under Settings > General >
+# VPN & Device Management.
+run-ios-device *ARGS: (build-ios-device ARGS)
+    ./tools/ios/sign.sh
+    bash -c 'set -e; export IOS_SLICE=ios; source tools/ios/env.sh; UDID=$(cat target/ios-device/udid); \
+        xcrun devicectl device install app --device "$UDID" target/ios-device/BongBong.app; \
+        xcrun devicectl device process launch --console --device "$UDID" com.otobrglez.bongbong'
+
+# --- Android (docs/android-port-prd.md, CLAUDE.md's Android section) ---
+# Every recipe sources tools/android/env.sh: the SDK, NDK and JDK paths,
+# the API pins, the prebuilt raylib prefix and the NDK compiler for cargo.
+
+# One-time: command-line tools, NDK, platform, arm64 system image, the
+# `bongbong` AVD, and raylib built for Android (tools/setup_android.sh).
+android-setup:
+    ./tools/setup_android.sh
+
+# Gate 0: raylib's Android platform in a NativeActivity (tools/android/smoke.c)
+# on the AVD - proves toolchain, packaging, GL ES 2, assets and touch before
+# any Rust. Pass = "SMOKE OK" on screen, a non-zero asset size and touch lines in logcat.
+android-smoke:
+    ./tools/android/smoke.sh
+
+# Build libbongbong_android.so (a plain cargo build for aarch64-linux-android;
+# tools/android/env.sh points cargo, cc-rs and bindgen at the NDK) and stage
+# target/android/BongBong.apk (tools/android/package.sh: assets/static, the
+# .so, debug signature).
+build-android *ARGS:
+    bash -c 'set -e; source tools/android/env.sh; cargo build --release --target aarch64-linux-android -p bongbong-android {{ARGS}}; \
+        tools/android/package.sh target/aarch64-linux-android/release/libbongbong_android.so bongbong_android com.otobrglez.bongbong BongBong target/android/BongBong.apk static/ "" bongbong_on_create'
+
+# Build, boot the AVD if needed, install and launch the game, then follow logcat (Ctrl-C detaches).
+run-android *ARGS: (build-android ARGS)
+    bash -c 'set -e; source tools/android/env.sh; tools/android/emulator.sh; \
+        adb install -r target/android/BongBong.apk; adb logcat -c || true; \
+        adb shell am start -n com.otobrglez.bongbong/android.app.NativeActivity; \
+        adb logcat -s raylib:V bongbong:V'
+
+# Screenshot the running emulator (default target/android/shot.png).
+android-screenshot OUT="target/android/shot.png":
+    bash -c 'source tools/android/env.sh; adb exec-out screencap -p > {{OUT}} && echo {{OUT}}'
+
+# Inject a tap (`just android-tap 600 400`) or a swipe (`just android-swipe 1800 600 1800 300`) in screen pixels.
+android-tap X Y:
+    bash -c 'source tools/android/env.sh; adb shell input tap {{X}} {{Y}}'
+android-swipe X1 Y1 X2 Y2 MS="300":
+    bash -c 'source tools/android/env.sh; adb shell input swipe {{X1}} {{Y1}} {{X2}} {{Y2}} {{MS}}'

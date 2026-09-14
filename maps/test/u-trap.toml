@@ -8,6 +8,7 @@
 # around (stuck-escape / committed-heading override territory).
 
 version = 1
+size = [40, 22.5]
 tanks = 4
 
 cells."16,6" = { kind = "wall", material = "iron" }

@@ -125,15 +125,37 @@ sola-raylib (the wrapper this game uses, developed alongside it at
 
 This Mac (where the port would be built)
 
-- macOS 15.6.1. **No Xcode**: `xcode-select -p` points at the nix
-  `apple-sdk-14.4`, `xcodebuild` is missing, `xcrun --sdk iphoneos` finds no
-  SDK, and there are no simulator runtimes.
-- Rust 1.97.1 comes from nix through devenv, with **no rustup** and only
-  the `wasm32-unknown-emscripten` extra target. The iOS standard library is
-  not installed, so `cargo build --target aarch64-apple-ios` cannot even
-  start.
-- cmake 4.3.4 is present; the nixpkgs pin has no `sdl3` package (SDL2 is
-  there). SDL3 was built from source for the tests below.
+State on 2026-09-09, when this document was written: no Xcode, no iOS
+SDK, no simulator runtime, no iOS Rust standard library. Brought up on
+2026-09-12 and the simulator build landed on 2026-09-13; the state now:
+
+- macOS 15.6.1 with **Xcode 26.3 (17C529)** at `/Applications/Xcode.app`,
+  Command Line Tools 26.3, the iOS 26.2 device and simulator SDKs, and the
+  **iOS 26.3.1 simulator runtime** (`xcodebuild -downloadPlatform iOS`,
+  8.4 GB) with Xcode's default device set (iPhone 17 family, iPads).
+- Rust 1.97.1 from nix through devenv, no rustup; `devenv.nix` lists
+  `aarch64-apple-ios` and `aarch64-apple-ios-sim` next to the wasm target.
+- **The devenv shell hides Xcode.** It exports `DEVELOPER_DIR` and
+  `SDKROOT` pointing at nix's `apple-sdk-14.4`; `tools/ios/env.sh` (sourced
+  by every `ios-*` just recipe) points `DEVELOPER_DIR` at Xcode, unsets
+  `SDKROOT`, sets the one deployment target (15.0) and bindgen's simulator
+  sysroot. `.cargo/config.toml` links both iOS targets with Apple's clang.
+- **The simulator build works** (`just ios-setup`, `just ios-smoke`,
+  `just run-ios-sim`; CLAUDE.md's "iOS simulator build" section is the
+  reference): SDL3 `release-3.4.16` static and raylib 6.0 (`PLATFORM=SDL`,
+  `OPENGL_VERSION="ES 2.0"`, `-DMA_NO_COREAUDIO`) for the simulator slice,
+  the game linked through `nobuild` + `build.rs`, a hand-made bundle with
+  no Xcode project and no signing, driven by `simctl`. The GL ES 2 smoke
+  test passes on the 26.3.1 runtime (no `glDrawElements` crash), and the
+  game renders a full round at 874 x 402 points on an iPhone 17 simulator,
+  letterboxed by `view::View`.
+- Still missing: a **code-signing identity** (`security find-identity -v
+  -p codesigning` lists none) - sign into Xcode with the Apple ID and add
+  an Apple Development certificate under Manage Certificates; needed only
+  for the device, not the simulator. The paired iPhone 14 ("zam") shows in
+  `devicectl list devices`.
+- cmake 4.3.4 is present; SDL3 has no nix package, so `tools/setup_ios.sh`
+  builds it from source.
 
 ## 4. Tests run on 2026-09-09 and what they prove
 
@@ -147,10 +169,69 @@ This Mac (where the port would be built)
 | T6 | Link and run the whole game against the SDL3-backed raylib: `cargo build --features sola-raylib/nobuild,dev-tools` with the link line in `RUSTFLAGS`, separate target dir | Links (1763 SDL symbols, 0 GLFW); runs with `--dev-port 4748`; a 240-frame round with firing renders every layer (ground, grass, trees, tanks, rings, plasma bursts, frog, HUD) and emits fired/hit/obstacle-destroyed events | The game's rendering, render texture, shader passes and dev server all work on raylib's SDL3 backend, the backend iOS uses; the `nobuild` link path works as designed |
 | T7 | Research (sources in section 11) | Rust iOS targets are Tier 2 with std; OpenGL ES still works on iOS 26.x with no announced removal; SDL3 documents its iOS entry point, animation callback and lifecycle events; Apple guideline 4.7 is about non-embedded software and does not apply to a native game; Xcode 26 needs macOS 15.6+, Xcode 26.4 needs macOS 26.2; GitHub `macos-26` runners with Xcode 26 are generally available | The route has no platform-policy blocker and CI is possible on hosted runners |
 
-Not tested, because it needs Xcode and a device: the cross-compile and link
-for `aarch64-apple-ios` and `-sim`, a simulator boot, a device run, OpenGL
-ES 2 at runtime on iOS, touch mapping, performance and thermals,
-backgrounding. These are exactly Phase 0 and Phase 1.
+Not tested on 2026-09-09, because it needed Xcode: the cross-compile and
+link, a simulator boot, OpenGL ES 2 at runtime. Done on 2026-09-13 for the
+simulator (section 4.1). Still untested: a device run, touch on a real
+screen, performance and thermals, backgrounding.
+
+### 4.1 As built for the simulator (2026-09-13)
+
+What differs from the plan in sections 6 and 7:
+
+- **No Xcode project, no `app.rs`, no `xcodegen`.** The bundle is staged
+  by `tools/ios/bundle.sh` from an `Info.plist` template and installed
+  with `simctl`; `main.rs` split into `main` and `run(args)` and gained a
+  `mod ios` (about 120 lines) instead of a new module. An Xcode project
+  arrives with the device build, for signing.
+- **No `SDL_SetiOSAnimationCallback`, no event watch.** The blocking loop
+  works on iOS because SDL pumps UIKit's run loop from event polling.
+  Backgrounding parks raylib in `SDL_WaitEvent`; lifecycle handling is
+  the next milestone.
+- **The one piece of platform glue nobody planned for**: iOS has no
+  window-system framebuffer. SDL draws through a framebuffer object and a
+  renderbuffer of its own, rlgl binds framebuffer 0 after every render
+  texture pass and renderbuffer 0 after creating a depth buffer, and
+  SDL's swap presents whichever renderbuffer is bound - so the first
+  render texture turned every following frame black and the swap failed
+  with `GL_INVALID_OPERATION`. `ios::route_default_framebuffer` wraps
+  glad's `glBindFramebuffer`/`glBindRenderbuffer` pointers and maps 0 to
+  SDL's objects (window properties `SDL.window.uikit.opengl.*`). Found by
+  probing one GL call at a time in the simulator.
+- **raudio**: miniaudio's CoreAudio backend includes AVFoundation's
+  Objective-C header from a C file on iOS. Built with `-DMA_NO_COREAUDIO`
+  (null audio backend) since the game has no audio; audio later means
+  compiling `raudio.c` as Objective-C.
+- **Frame pacing**: the simulator ignores the GL swap interval, so iOS
+  uses `target_fps` 60 rather than vsync; its GL ES is Apple's software
+  renderer, so simulator frame times say nothing about a phone.
+- `sola-raylib` is used unmodified: the `nobuild` + `sdl` features for
+  `cfg(target_os = "ios")` in `Cargo.toml` and a `build.rs` link block
+  that reads the framework list from SDL's installed `sdl3.pc`.
+- The screen size in points is read from SDL before `InitWindow`
+  (`SDL_GetDisplayBounds`), because the SDL backend renders at the size
+  it was asked for and never re-reads the window; `view::View` then
+  letterboxes the bitmap (1088 x 576 since the field moved to 34 x 17)
+  into 874 x 402 points at about 0.7x, with 57 pt bars at the sides.
+- **High-pixel-density drawable** (2026-09-14): the SDL backend had no
+  notion of a drawable bigger than the window, so the phone rendered at
+  point resolution and iOS upscaled it 3x. `tools/ios/raylib-sdl-highdpi.patch`
+  (applied by the setup script on a copy of the vendored tree) sets the
+  render size from `SDL_GetWindowSizeInPixels` (falling back to screen
+  times the display's pixel density, since right after creation SDL can
+  still report the logical size on a phone) and makes rcore.c's
+  `SetupViewport` project in logical units over the drawable. The first
+  attempt used raylib's `screenScale` matrix instead, the GLFW backend's
+  mechanism, and drew the HUD bar 3x: `EndMode2D` re-applies that matrix
+  even inside a render texture, so everything drawn after the field's
+  camera block was scaled. The iPhone 17 simulator renders 2622 x 1206 px
+  behind an 874 x 402 pt window, the iPhone 14 2532 x 1170 px behind
+  844 x 390; touch stays in points.
+- Safe area and the home indicator: `SDL_IOS_HIDE_HOME_INDICATOR` = "2"
+  dims the indicator and defers the bottom-edge gesture; the field's side
+  bars already cover the island zone (safe area 750 x 382 at x = 62 on the
+  iPhone 17 simulator), so no layout change was needed.
+- Frame time on hardware: a dev-tools iOS build logs avg/max frame time,
+  fps and live particles every five seconds (`ios::FrameStats`).
 
 Reproducing T5 and T6 (paths under the session scratch directory are
 disposable; only the commands matter):

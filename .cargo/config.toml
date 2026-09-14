@@ -31,6 +31,20 @@ rustflags = [
     "-C", "link-arg=-sASYNCIFY=1",
 ]
 
+# iOS (docs/ios-native-port-prd.md). Same nix trap as emscripten: the shell's
+# `cc` is nix's host-wrapped clang, which injects a macOS sysroot and links
+# an iOS binary against MacOSX.sdk (the simulator target fails outright, the
+# device target links with "built for macOS" warnings). Link with Apple's
+# clang shim instead, which picks the iPhoneOS/iPhoneSimulator SDK from the
+# `-target` triple rustc passes. Build with
+# DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer and SDKROOT unset,
+# since devenv exports both pointing at the nix apple-sdk.
+[target.aarch64-apple-ios]
+linker = "/usr/bin/clang"
+
+[target.aarch64-apple-ios-sim]
+linker = "/usr/bin/clang"
+
 [env]
 # devenv/nix's C toolchain sets a global CC pointing at a host-wrapped clang
 # (which injects Darwin/hardening flags like -fzero-call-used-regs that
@@ -41,3 +55,11 @@ rustflags = [
 CC_wasm32_unknown_emscripten = "emcc"
 CXX_wasm32_unknown_emscripten = "em++"
 AR_wasm32_unknown_emscripten = "emar"
+# Same for the iOS targets, so cc-rs (raylib-sys's C build) uses Xcode's
+# clang rather than the nix wrapper.
+CC_aarch64_apple_ios = "/usr/bin/clang"
+CXX_aarch64_apple_ios = "/usr/bin/clang++"
+AR_aarch64_apple_ios = "/usr/bin/ar"
+CC_aarch64_apple_ios_sim = "/usr/bin/clang"
+CXX_aarch64_apple_ios_sim = "/usr/bin/clang++"
+AR_aarch64_apple_ios_sim = "/usr/bin/ar"

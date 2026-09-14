@@ -328,6 +328,11 @@ tunables! {
         /// `--tank` on the command line outranks this knob; nothing else
         /// does, so dragging this is how a browser round picks a chassis.
         player_tank: i32 = (-1) in -1 ..= 11 @ Restart;
+        /// Which half of the field steers on a touch screen (touch.rs): 1
+        /// puts the floating stick under the first touch on the right
+        /// half and fires on a tap on the left, 0 mirrors it for a
+        /// left-handed player. Keyboard input is unaffected.
+        touch_steer_side: i32 = 1 in 0 ..= 1;
         /// When the round ends (player destroyed, or all enemies destroyed)
         /// the result is shown for this long, then the game restarts.
         restart_delay: f32 = 3.0 in 0.0 ..= 30.0;
@@ -353,7 +358,7 @@ tunables! {
         guard_keep_off_px: f32 = 130.0 in 0.0 ..= 500.0;
         /// Procedural enemy-frog placement (a hunt map without an
         /// `enemy_frog` cell): at least this far from the player's frog.
-        enemy_frog_spawn_min_dist: f32 = 400.0 in 0.0 ..= 1500.0 @ Restart;
+        enemy_frog_spawn_min_dist: f32 = 270.0 in 0.0 ..= 1500.0 @ Restart;
         /// After a hunter's opportunistic shot at the player it goes back
         /// to the frog for at least this long before it may snipe again,
         /// so a player parked on its firing axis can't hold it forever.
@@ -1277,6 +1282,24 @@ tunables! {
         /// Per-chassis tread-mark opacity multiplier on `track_max_opacity`
         /// - a heavier chassis presses a darker mark, not just a bigger one.
         track_weight_opacity: [f32; 12] = [0.70, 1.00, 1.20, 1.10, 0.82, 0.70, 1.00, 1.20, 0.82, 1.10, 1.50, 1.35] in 0.0 ..= 3.0 labels TANK_NAMES;
+    }
+
+    group view {
+        /// The most the field is scaled up on screen (view.rs). The map is
+        /// the same for every player in a match and always fully visible,
+        /// so a big screen would otherwise blow it up - 2x on a 1080p
+        /// monitor, a 35 mm tank - while a phone sees it at 8 mm; the cap
+        /// draws it at this scale at most and fills the rest of the window
+        /// with the bar's colour. 1.0 is the classic desktop look (a 64 px
+        /// tank), 1.5 about the old window on a laptop. 0 turns the cap
+        /// off. A phone is never affected: its fit is below any cap. Also
+        /// `--zoom`. Live.
+        view_max_scale: f32 = 1.5 in 0.0 ..= 8.0;
+        /// Floor the cap to a half step (1.0, 1.5, 2.0 ...) so every art
+        /// pixel is a whole number of screen pixels. Off: the pixel art may
+        /// shimmer slightly at a fractional scale, which a static floor
+        /// mostly hides.
+        view_scale_snap: i32 = 0 in 0 ..= 1;
     }
 
     group cosmetics {

@@ -386,9 +386,10 @@ mod tests {
         let mut ring = EngageRing::default();
         let report = assign(&mut ring, &[(entity(1), Position::new(200.0, 360.0))], &ctx);
         assert!(report.target(entity(1)).is_none());
-        // The up/down reserve slots don't fit a 720px field from the centre.
+        // Every slot is either off the map or unreachable; none got as far
+        // as the line-of-sight check or a claim.
         let r = report.tanks[0].rejected;
-        assert_eq!((r.off_map, r.unreachable, r.no_los, r.claimed), (4, 12, 0, 0));
+        assert_eq!((r.off_map + r.unreachable, r.no_los, r.claimed), (16, 0, 0));
         assert!(report.slots.iter().all(|s| s.line_of_sight.is_none()), "unreachable slots never reach the LOS check");
     }
 

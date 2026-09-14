@@ -103,8 +103,18 @@ fn parse_budget(s: &str) -> Result<Budget, String> {
 // game's own default window size (lib.rs) so the two can't drift; the
 // probe deliberately has no `--resolution` counterpart (one canonical size
 // keeps sweep numbers comparable across runs).
-const WIDTH: f32 = DEFAULT_SCREEN_WIDTH as f32;
-const HEIGHT: f32 = DEFAULT_SCREEN_HEIGHT as f32;
+/// The battlefield the run is on - the loaded map's `field_size`, set
+/// once in `main` before any round starts. The anomaly checks measure
+/// borders and bounds against it.
+static FIELD: std::sync::OnceLock<(f32, f32)> = std::sync::OnceLock::new();
+
+fn field_width() -> f32 {
+    FIELD.get().map(|f| f.0).unwrap_or(DEFAULT_SCREEN_WIDTH as f32)
+}
+
+fn field_height() -> f32 {
+    FIELD.get().map(|f| f.1).unwrap_or(DEFAULT_SCREEN_HEIGHT as f32)
+}
 const DT: f32 = 1.0 / 60.0;
 /// See `Scenario::Brake`'s doc comment for why this is short.
 const BRAKE_HOLD_FRAMES: u32 = 18;
@@ -252,7 +262,7 @@ const NAV_STRETCH_MAX: f32 = 4.0;
 // included - unlike the behavior checks, a physics blow-up on the player
 // isn't explained by the scripted Scenario. Bounds are generous on purpose
 // so legitimate gameplay can never trip them: the position margin sits
-// outside the walls' inner faces (0/WIDTH/0/HEIGHT, see spawn_walls) but
+// outside the walls' inner faces (0/width/0/height, see spawn_walls) but
 // inside their WALL_THICKNESS-padded outer extent, and the speed cap is
 // well above TANK_SPEED (220px/s) times SPEED_BOOST_MULTIPLIER plus any
 // legitimate ram/explosion knockback spike.
@@ -718,7 +728,7 @@ impl TankTrack {
     fn new(game: &Game, snapshot: &TankSnapshot, player_pos: Position, frame: u32) -> Self {
         let mut heading_history = VecDeque::with_capacity(3);
         heading_history.push_back(snapshot.rotation);
-        let path_cells = game.nav_path_cells(snapshot.position, player_pos, WIDTH, HEIGHT);
+        let path_cells = game.nav_path_cells(snapshot.position, player_pos, field_width(), field_height());
         // top_speed is a real rolled speed (150-220px/s range), never
         // zero - the .max(1.0) only guards a hypothetical future
         // zero-speed chassis from poisoning the metric with an infinity.
@@ -927,9 +937,9 @@ fn check_anomalies(
             pos.x.is_finite() && pos.y.is_finite() && vel.x.is_finite() && vel.y.is_finite();
         let speed = (vel.x * vel.x + vel.y * vel.y).sqrt();
         let in_bounds = pos.x >= -INVARIANT_POS_MARGIN
-            && pos.x <= WIDTH + INVARIANT_POS_MARGIN
+            && pos.x <= field_width() + INVARIANT_POS_MARGIN
             && pos.y >= -INVARIANT_POS_MARGIN
-            && pos.y <= HEIGHT + INVARIANT_POS_MARGIN;
+            && pos.y <= field_height() + INVARIANT_POS_MARGIN;
         // Ordered so a NaN reports as itself rather than as a bounds/speed
         // trip (every comparison involving a NaN is false).
         let violation = if !finite {
@@ -1056,7 +1066,7 @@ fn check_anomalies(
         }
 
         // Border-stuck: hugging one of the four battlefield walls.
-        let dist_to_border = pos.x.min(WIDTH - pos.x).min(pos.y).min(HEIGHT - pos.y);
+        let dist_to_border = pos.x.min(field_width() - pos.x).min(pos.y).min(field_height() - pos.y);
         if dist_to_border <= BORDER_MARGIN {
             track.border_frames += 1;
         } else {
@@ -1384,11 +1394,13 @@ fn run_round(
     game.player2_row_override = args.tank2.map(TankKind::row);
     game.players = bongbong::simulation::PlayerCount::from_count(args.players as usize).expect("clap limits --players to 1 or 2");
     game.seed_override = Some(seed);
+    // The field is the map's; every anomaly bound below reads it.
     game.map = match &args.map {
         Some(named) => named.map.clone(),
         None => default_map(),
     };
-    game.init(WIDTH, HEIGHT);
+    let _ = FIELD.set(game.map.field_size());
+    game.init(field_width(), field_height());
     if trace {
         // Which chassis actually won the `--tank` / `player_tank` knob /
         // map `tank` / random race - the header line can only echo the
@@ -1417,7 +1429,7 @@ fn run_round(
     let mut frames_run = args.frames;
     for frame in 1..=args.frames {
         let input = input_for_frame(args, frame);
-        game.update(input, DT, WIDTH, HEIGHT);
+        game.update(input, DT, field_width(), field_height());
         check_anomalies(&mut tracks, &mut invariant_flagged, &game, round, frame, &mut totals, heat);
 
         if trace && frame % args.log_every == 0 {
@@ -1612,8 +1624,8 @@ fn print_heatmaps(args: &Args, heat: &[(String, Position)]) {
         println!("probe: heatmap: no anomalies to map");
         return;
     }
-    let cols = (WIDTH / PATHFIND_CELL_SIZE).ceil() as usize;
-    let rows = (HEIGHT / PATHFIND_CELL_SIZE).ceil() as usize;
+    let cols = (field_width() / PATHFIND_CELL_SIZE).ceil() as usize;
+    let rows = (field_height() / PATHFIND_CELL_SIZE).ceil() as usize;
     for kind in ANOMALY_KINDS {
         let hits: Vec<Position> =
             heat.iter().filter(|(k, _)| k == kind).map(|&(_, p)| p).collect();

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Template for the hand-made APK (tools/android/package.sh fills the
+     __PLACEHOLDERS__). A NativeActivity with no Java code: raylib's
+     android_main runs the game from lib__LIB_NAME__.so. configChanges keeps
+     the activity alive across rotation (raylib's config-change handling is a
+     stub); the theme removes the title and status bars. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="__PACKAGE__"
+    android:versionCode="__VERSION_CODE__"
+    android:versionName="__VERSION_NAME__">
+    <uses-sdk android:minSdkVersion="__MIN_SDK__" android:targetSdkVersion="__TARGET_SDK__" />
+    <uses-feature android:glEsVersion="0x00020000" android:required="true" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="true" />
+__PERMISSIONS__
+    <application
+        android:label="__NAME__"
+        android:hasCode="false"
+        android:allowBackup="false"
+        android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+        <activity
+            android:name="android.app.NativeActivity"
+            android:label="__NAME__"
+            android:exported="true"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|keyboardHidden|screenSize|screenLayout|uiMode"
+            android:launchMode="singleTask"
+            android:clearTaskOnLaunch="true">
+            <meta-data android:name="android.app.lib_name" android:value="__LIB_NAME__" />
+__FUNC_NAME__
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

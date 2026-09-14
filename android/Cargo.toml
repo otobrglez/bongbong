@@ -1,0 +1,19 @@
+[package]
+name = "bongbong-android"
+version = "0.0.23"
+edition = "2024"
+publish = false
+description = "The Android shared library: raylib's android_main calls the exported main, which runs bongbong::app"
+
+# One shared object, libbongbong_android.so, loaded by android.app.NativeActivity
+# (tools/android/AndroidManifest.xml names it). The exported `main` has to
+# live in this crate's own objects: an rlib-side #[no_mangle] would be an
+# unreferenced archive member the linker drops.
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+bongbong = { path = ".." }
+
+[package.metadata.dist]
+dist = false
