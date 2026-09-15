@@ -188,16 +188,23 @@ build-ios-device *ARGS:
     bash -c 'set -e; export IOS_SLICE=ios; source tools/ios/env.sh; cargo build --target aarch64-apple-ios --bin bongbong {{ARGS}}'
     bash -c 'set -e; export IOS_SLICE=ios; source tools/ios/env.sh; ./tools/ios/bundle.sh debug'
 
-# Build, sign for the connected iPhone (tools/ios/sign.sh: Xcode's automatic
-# signing on the placeholder project mints the certificate and profile), then
-# install and launch it. The phone must be unlocked, trusted and in Developer
-# Mode; the first run also needs the app allowed under Settings > General >
-# VPN & Device Management.
+# Build, then tools/ios/deploy.sh: sign for the wired iPhone (tools/ios/sign.sh:
+# Xcode's automatic signing on the placeholder project mints the certificate
+# and profile), install, launch with the console attached and verify the
+# round came up (raylib's window, the render targets, the process still
+# alive - "DEPLOY OK"). Refusals name the fix: pairing (Trust), Developer
+# Mode, or the first run's profile trust under Settings > General > VPN &
+# Device Management. Ctrl-C quits the app too; `deploy.sh --no-console`
+# detaches instead. Extra args go to cargo (`--features dev-tools` for the
+# frame-time log and the dev server, reachable from the Mac through
+# `iproxy 4747:4747`).
 run-ios-device *ARGS: (build-ios-device ARGS)
-    ./tools/ios/sign.sh
-    bash -c 'set -e; export IOS_SLICE=ios; source tools/ios/env.sh; UDID=$(cat target/ios-device/udid); \
-        xcrun devicectl device install app --device "$UDID" target/ios-device/BongBong.app; \
-        xcrun devicectl device process launch --console --device "$UDID" com.otobrglez.bongbong'
+    ./tools/ios/deploy.sh iPhone
+
+# The same for the wired iPad (the phone, even when paired over Wi-Fi, is
+# never picked). BONGBONG_IOS_UDID pins a device explicitly.
+run-ios-ipad *ARGS: (build-ios-device ARGS)
+    ./tools/ios/deploy.sh iPad
 
 # --- Android (docs/android-port-prd.md, CLAUDE.md's Android section) ---
 # Every recipe sources tools/android/env.sh: the SDK, NDK and JDK paths,

@@ -24,7 +24,9 @@ TEAM="${BONGBONG_IOS_TEAM:-PFET672VQB}"
 UDID="${BONGBONG_IOS_UDID:-$(xcrun devicectl list devices --json-output /tmp/bb-devices.json >/dev/null 2>&1; python3 -c '
 import json,sys
 d=json.load(open("/tmp/bb-devices.json"))
-for dev in d["result"]["devices"]:
+devs=d["result"]["devices"]
+# A wired device first: a phone paired over Wi-Fi must not take a deploy meant for the iPad on the cable.
+for dev in sorted(devs, key=lambda x: x.get("connectionProperties",{}).get("transportType") != "wired"):
     if dev.get("connectionProperties",{}).get("transportType") not in (None,"None"):
         print(dev["hardwareProperties"]["udid"]); break
 ')}"
@@ -33,6 +35,9 @@ echo "[sign-ios] device $UDID"
 mkdir -p target/ios-device && printf '%s' "$UDID" > target/ios-device/udid
 
 DD=target/ios-device/sign-derived
+# A failed Xcode build must not fall through to the stub of an earlier run,
+# whose profile may list another device.
+rm -rf "$DD/Build/Products"
 # A clean environment: the devenv shell exports CC/CXX/LD for nix's
 # toolchain and xcodebuild treats those as build-setting overrides (its
 # link step then runs `ld` with clang flags and fails).
@@ -47,6 +52,8 @@ STUB=$(ls -d "$DD"/Build/Products/Debug-iphoneos/BongBongSign.app 2>/dev/null | 
 IDENTITY=$(security find-identity -v -p codesigning | sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p' | head -1)
 [[ -n "$IDENTITY" ]] || { echo "[sign-ios] no Apple Development identity in the keychain" >&2; exit 1; }
 cp "$STUB/embedded.mobileprovision" "$APP/embedded.mobileprovision"
+security cms -D -i "$APP/embedded.mobileprovision" 2>/dev/null | grep -q "$UDID" \
+    || { echo "[sign-ios] the profile Xcode minted does not list $UDID (is the device unlocked and in Developer Mode?)" >&2; exit 1; }
 ENT=target/ios-device/entitlements.plist
 codesign -d --entitlements :- "$STUB" > "$ENT" 2>/dev/null
 plutil -lint "$ENT" >/dev/null
