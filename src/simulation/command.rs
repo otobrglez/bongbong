@@ -57,9 +57,15 @@ pub(crate) struct UnitView {
     /// Hull bounding-circle radius at the current facing
     /// (`Tank::avoidance_radius`).
     pub radius: f32,
-    /// Top speed the tank would reach if driven flat out right now.
+    /// Top speed the tank would reach if driven flat out right now. Filled
+    /// by the collect pass; the deconflictor predicts from real velocity,
+    /// so only a producer that plans ahead reads it.
+    #[allow(dead_code)]
     pub speed: f32,
     /// What the behaviour tree decided this frame, before the commander.
+    /// Filled by the collect pass for the goal producers, which do not
+    /// exist yet (Phase 1 of docs/enemy-command-and-control-prd.md builds the deconflictor only).
+    #[allow(dead_code)]
     pub intent: Intent,
     /// True for a wreck: still a solid obstacle, but it is not going
     /// anywhere and cannot be given an order.
@@ -77,7 +83,10 @@ pub(crate) struct UnitView {
 pub(crate) struct CommandCtx<'a> {
     pub dt: f32,
     /// Would a tank at this position driving this cardinal walk into terrain?
-    /// Backed by the frame's `pathfind::Grid::blocked_ahead`.
+    /// Backed by the frame's `pathfind::Grid::blocked_ahead`. The sidestep
+    /// producer (`Order::Nudge`) is what reads it; today's deconflictor only
+    /// brakes.
+    #[allow(dead_code)]
     pub blocked: &'a dyn Fn(Position, Dir) -> bool,
 }
 

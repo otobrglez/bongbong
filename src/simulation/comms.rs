@@ -38,7 +38,11 @@ use crate::tank::Dir;
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Serialize)]
 #[serde(tag = "side", rename_all = "snake_case")]
 pub(crate) enum Unit {
-    /// A human player, 0 or 1.
+    /// A human player, 0 or 1. The collect pass feeds the commander enemies
+    /// only for now (Phase 1 of docs/enemy-command-and-control-prd.md builds the deconflictor only), so
+    /// nothing builds one outside the tests; the right-of-way rules already
+    /// read it.
+    #[allow(dead_code)]
     Player(u8),
     /// An enemy, by `Tank::owner_slot`.
     Enemy(usize),
@@ -98,6 +102,7 @@ pub(crate) struct Claim {
 /// digested form.
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(tag = "signal", rename_all = "snake_case")]
+#[allow(dead_code)] // no unit reports one yet - the Phase 2 producers do (see the PRD)
 pub(crate) enum Signal {
     /// A unit can see a player right now.
     Spotted { by: Unit, player: u8, x: f32, y: f32 },
@@ -128,19 +133,25 @@ pub(crate) enum Order {
     /// shoots.
     Hold,
     /// Drive this cardinal instead of the one the tree picked.
+    #[allow(dead_code)] // applied by `Commander::apply`, issued by no producer yet
     Nudge { dir: Dir },
     /// Contact damage against `victim` is authorised - and the deconflictor
     /// leaves this pair alone rather than preventing the very ram that was
     /// ordered.
+    #[allow(dead_code)] // applied by `Commander::apply`, issued by no producer yet
     Ram { victim: Unit },
     // --- goal: read by the next frame's `think` ---
     /// Walk at this point instead of the engagement-ring slot.
+    #[allow(dead_code)] // applied by `Commander::apply`, issued by no producer yet
     Goto { x: f32, y: f32 },
     /// Go and collect this.
+    #[allow(dead_code)] // applied by `Commander::apply`, issued by no producer yet
     Fetch { what: PickupKey },
     /// Concentrate on this player.
+    #[allow(dead_code)] // applied by `Commander::apply`, issued by no producer yet
     Focus { player: u8 },
     /// Do not fire this frame.
+    #[allow(dead_code)] // applied by `Commander::apply`, issued by no producer yet
     HoldFire,
 }
 

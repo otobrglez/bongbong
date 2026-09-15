@@ -1,7 +1,8 @@
 //! Build script: on the web target, with the `dev-tools` feature on, tell
 //! emcc to export the tuning C API (src/capi.rs) from the `bongbong` wasm
-//! binary so the page's tuning panel can `Module.ccall` it. Without the
-//! feature nothing is added and the link is byte-for-byte what it was.
+//! binary so the page's tuning panel can `Module.ccall` it, and to link
+//! binaryen's stack-overflow check (see `main`). Without the feature
+//! nothing is added and the link is byte-for-byte what it was.
 //!
 //! Lives here rather than in `.cargo/config.toml`'s static rustflags
 //! because the export list has to be conditional on a cargo feature (the
@@ -42,6 +43,15 @@ fn main() {
             "cargo:rustc-link-arg-bin=bongbong=-sEXPORTED_FUNCTIONS={}",
             exports.join(",")
         );
+        // A stack overflow is silent in a plain web build: the shadow stack
+        // sits just above the static data, so it corrupts whatever lives
+        // there (stb_image's tables are the first casualty, and the game then
+        // fails somewhere unrelated, e.g. "Failed to load image data" on a
+        // valid PNG). Binaryen's check makes every frame allocation abort
+        // with the stack limits instead - worth its compare-per-call on the
+        // QA surface, since PR previews are dev-tools builds. The stack's
+        // size itself is `-sSTACK_SIZE` in .cargo/config.toml.
+        println!("cargo:rustc-link-arg-bin=bongbong=-sSTACK_OVERFLOW_CHECK=2");
     }
 }
 

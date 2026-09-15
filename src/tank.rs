@@ -65,6 +65,17 @@ impl Dir {
         }
     }
 
+    /// Inverse of `rotation`: the direction a hull angle in degrees faces,
+    /// any full turns folded away; `None` for an angle that is not one of
+    /// the four (within a degree), which a `Tank::rotation` never is.
+    pub fn from_rotation(deg: f32) -> Option<Dir> {
+        let deg = deg.rem_euclid(360.0);
+        Dir::ALL.into_iter().find(|d| {
+            let diff = (deg - d.rotation()).abs();
+            diff < 1.0 || diff > 359.0
+        })
+    }
+
     /// Unit movement vector (screen space: +x right, +y down).
     pub fn vec(self) -> Vector2 {
         match self {

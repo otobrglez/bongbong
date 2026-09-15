@@ -145,7 +145,9 @@ pub enum LintKind {
 }
 
 impl LintKind {
-    fn tag(self) -> &'static str {
+    /// The kebab-case name the lint's output and the dev server's `lint`
+    /// tool use.
+    pub(crate) fn tag(self) -> &'static str {
         match self {
             LintKind::UnreachableFrog => "unreachable-frog",
             LintKind::UnreachablePickup => "unreachable-pickup",

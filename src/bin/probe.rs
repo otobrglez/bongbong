@@ -36,6 +36,7 @@ use bongbong::Position;
 use bongbong::ai::Intent;
 use bongbong::map::MapFile;
 use bongbong::level::SpawnKind;
+use bongbong::simulation::debug::{JITTER_WINDOW_FRAMES, SPIN_FULL_CIRCLE_DEG, SPIN_NET_MAX, SPIN_WINDOW_FRAMES, signed_quarter_turn};
 use bongbong::simulation::{Event, Game, Input, Outcome, TankSnapshot};
 use bongbong::tank::{Dir, TankKind};
 use bongbong::{
@@ -153,28 +154,13 @@ const FIRED_RECENTLY_FRAMES: u32 = STALL_FRAMES_THRESHOLD;
 // flagged as stuck against the border.
 const BORDER_MARGIN: f32 = 40.0; // px
 const BORDER_FRAMES_THRESHOLD: u32 = 90; // 1.5s
-// Facing jitter: an A -> B -> A heading flip-flop ("committed_dir"/
-// "dir_hold" in ai.rs exist specifically to prevent this near 45-degree
-// diagonals) counted within a trailing window; JITTER_THRESHOLD flips
-// inside JITTER_WINDOW_FRAMES flags it.
-const JITTER_WINDOW_FRAMES: u32 = 120; // 2s
+// Facing jitter (A -> B -> A heading flip-flops within
+// `JITTER_WINDOW_FRAMES`) and spin (a full same-direction circle inside
+// `SPIN_WINDOW_FRAMES` with under `SPIN_NET_MAX` of drift): the rules and
+// their windows live in `simulation::debug`, shared with the dev server's
+// live turn counters so both measure a round the same way. JITTER_THRESHOLD
+// flips inside the window flags a tank.
 const JITTER_THRESHOLD: u32 = 4;
-// Spin: a full circle of *same-direction* quarter-turns (U->R->D->L->U or
-// the mirror) completed inside the window while going nowhere - the "tank
-// spins in place" failure the jitter check is structurally blind to (a
-// rotational cycle contains no A,B,A triple). The visible symptom in the
-// windowed game is the hull/turret perpetually turning: both visual eases
-// (TANK_VISUAL_TURN_SPEED_DEG / TANK_TURRET_VISUAL_TURN_SPEED_DEG) only
-// ever chase `Tank::rotation`, so a spinning sprite always means the
-// sim-side heading itself is cycling - which is what's watched here.
-// Legit navigation can't trip it: rounding even the smallest obstacle
-// block takes a ~430px loop (>2s at ENEMY_SPEED), so completing 360 inside
-// the window with under SPIN_NET_MAX of net drift means the turns came
-// from re-decisions, not a path. A 180 reversal breaks the chain (that's
-// jitter/churn territory, not rotation).
-const SPIN_WINDOW_FRAMES: u32 = 120; // 2s
-const SPIN_FULL_CIRCLE_DEG: f32 = 360.0;
-const SPIN_NET_MAX: f32 = 60.0; // px of net drift allowed over the circle
 // Churn: lots of driving, no progress - net displacement over a trailing
 // window stays under CHURN_NET_MAX despite CHURN_MIN_PATH of actual path
 // traveled ("dancing"/back-and-forth). The complement of `stall` (which
@@ -835,22 +821,6 @@ impl TankTrack {
             ideal_seconds,
             time_to_engage: None,
         }
-    }
-}
-
-/// The signed quarter-turn from heading `old` to heading `new` (both always
-/// exactly one of 0/90/180/270 - see `Dir::rotation`): `Some(90.0)` for a
-/// clockwise turn, `Some(-90.0)` for counter-clockwise, `None` for a 180
-/// reversal (which breaks a rotational chain rather than extending it -
-/// see SPIN_WINDOW_FRAMES's comment).
-fn signed_quarter_turn(old: f32, new: f32) -> Option<f32> {
-    let delta = (new - old).rem_euclid(360.0);
-    if (delta - 90.0).abs() < 1.0 {
-        Some(90.0)
-    } else if (delta - 270.0).abs() < 1.0 {
-        Some(-90.0)
-    } else {
-        None
     }
 }
 

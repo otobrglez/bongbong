@@ -18,10 +18,11 @@ use crate::pickup::{Pickup, PickupKind};
 use crate::plasma::{Plasma, PlasmaState};
 use crate::shell::Owner;
 use crate::shell::{Shell, ShellState};
-use crate::tank::{ActiveWeapon, Tank, enemy_health_ring_visibility, player_health_ring_visibility};
+use crate::tank::{ActiveWeapon, Dir, Tank, enemy_health_ring_visibility, player_health_ring_visibility};
 use crate::tuning::{TANK_NAMES, tuning};
 use crate::{DAMAGE_VARIANTS, MAX_DAMAGE, Position, TANK_SHELL_VARIANT_BY_ROW};
 
+use super::command::CommandReport;
 use super::engage::{EngageStatus, Rejections};
 use super::{
     Frame, Game, Outcome, PLAYER_OWNER_SLOT, TANK_SPRITE_ORDER, TANK_VARIANTS, roll_track_distortion,
@@ -75,6 +76,12 @@ pub struct DebugSnapshot {
     /// Groups of two or more live enemies transitively within
     /// `CLUSTER_RADIUS_PX` of each other, as owner slots.
     pub clusters: Vec<Vec<usize>>,
+    /// What the command layer decided in the last enemy phase (`Full` only):
+    /// the orders by slot, why conflicts went unmitigated, the blackboard.
+    /// `enabled` is false while `c2_enabled` is off, and nothing else in it
+    /// is meaningful then.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) command: Option<CommandReport>,
 }
 
 #[derive(Serialize, Debug)]
@@ -97,10 +104,30 @@ pub struct TankDebug {
     pub chassis: &'static str,
     pub x: f32,
     pub y: f32,
+    /// The 32 px grid cell under the hull's centre (`map::world_to_cell`).
+    pub cell: [i32; 2],
+    /// The hull's heading, the sim-side angle every decision keys off.
     pub rotation: f32,
+    /// `rotation` as a direction name (`up`/`right`/`down`/`left`).
+    pub facing: Option<&'static str>,
+    /// The two sprite angles, each easing toward `rotation` at its own
+    /// rate (`Tank::visual_rotation`, `Tank::turret_visual_rotation`): what
+    /// is actually on screen. A turret sweeping while `rotation` sits still
+    /// is impossible; a turret sweeping while `rotation` cycles is a spin.
+    pub hull: f32,
+    pub turret: f32,
     /// Real physics velocity.
     pub vx: f32,
     pub vy: f32,
+    /// `|(vx, vy)|`, px/s.
+    pub speed: f32,
+    /// The direction the hull is actually moving (0 = up, clockwise), or
+    /// `None` below 1 px/s. Differs from `rotation` when a tank is being
+    /// carried sideways by a jam or a blast.
+    pub heading: Option<f32>,
+    /// Distance to the nearest live player - what the AI targets; enemies only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dist_to_player: Option<f32>,
     /// Commanded velocity (`Tank::velocity`), `Full` only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cvx: Option<f32>,
@@ -221,8 +248,15 @@ pub struct EngageSlotDebug {
 #[derive(Clone, Serialize, Debug)]
 pub struct TrackRow {
     pub slot: usize,
+    /// A human player's tank - the aggregates that mean "an enemy" skip
+    /// these (slot 1 is player 2 in a two-player round, not an enemy).
+    pub is_player: bool,
     pub x: f32,
     pub y: f32,
+    /// `Tank::rotation`, the sim-side heading.
+    pub rotation: f32,
+    /// `Tank::turret_visual_rotation`, the angle the turret is drawn at.
+    pub turret: f32,
     pub action: Option<&'static str>,
     pub ring: Option<u8>,
     pub stuck: bool,
@@ -261,8 +295,61 @@ pub struct TankPatch {
 /// have hundreds in flight).
 const PROJECTILE_CAP: usize = 64;
 
-fn r1(v: f32) -> f32 {
+/// One decimal: the precision every snapshot number is reported at.
+pub(crate) fn r1(v: f32) -> f32 {
     (v * 10.0).round() / 10.0
+}
+
+// --- The heading-rotation rules the probe's `spin`/`jitter` anomalies and
+// the dev server's live turn counters share (docs/dev-server-design.md,
+// "Debugging spinning tanks"). One definition, so a live count and a
+// probe count of the same round agree.
+
+/// Facing jitter: an A -> B -> A heading flip-flop (`committed_dir`/
+/// `dir_hold` in ai.rs exist specifically to prevent this near 45-degree
+/// diagonals) counted within this trailing window.
+pub const JITTER_WINDOW_FRAMES: u32 = 120; // 2s
+/// Spin: a full circle of *same-direction* quarter-turns (U->R->D->L->U or
+/// the mirror) completed inside this window while going nowhere - the
+/// "tank spins in place" failure the jitter check is structurally blind
+/// to (a rotational cycle contains no A,B,A triple). The visible symptom
+/// in the windowed game is the hull/turret perpetually turning: both
+/// visual eases (`tank_visual_turn_speed_deg`/
+/// `tank_turret_visual_turn_speed_deg`) only ever chase `Tank::rotation`,
+/// so a spinning sprite always means the sim-side heading itself is
+/// cycling - which is what is watched here. Legit navigation can't trip
+/// it: rounding even the smallest obstacle block takes a ~430px loop (>2s
+/// at enemy speed), so completing 360 inside the window with under
+/// `SPIN_NET_MAX` of net drift means the turns came from re-decisions, not
+/// a path. A 180 reversal breaks the chain (that's jitter/churn territory,
+/// not rotation).
+pub const SPIN_WINDOW_FRAMES: u32 = 120; // 2s
+pub const SPIN_FULL_CIRCLE_DEG: f32 = 360.0;
+/// Net drift in px allowed over the circle.
+pub const SPIN_NET_MAX: f32 = 60.0;
+
+/// The signed quarter-turn from heading `old` to heading `new` (both always
+/// exactly one of 0/90/180/270 - see `Dir::rotation`): `Some(90.0)` for a
+/// clockwise turn, `Some(-90.0)` for counter-clockwise, `None` for a 180
+/// reversal (which breaks a rotational chain rather than extending it -
+/// see `SPIN_WINDOW_FRAMES`).
+pub fn signed_quarter_turn(old: f32, new: f32) -> Option<f32> {
+    let delta = (new - old).rem_euclid(360.0);
+    if (delta - 90.0).abs() < 1.0 {
+        Some(90.0)
+    } else if (delta - 270.0).abs() < 1.0 {
+        Some(-90.0)
+    } else {
+        None
+    }
+}
+
+/// The direction of a screen-space velocity in the game's heading
+/// convention (0 = up, 90 = right, clockwise), `None` when it is too slow
+/// to have one.
+fn heading_of(v: Position) -> Option<f32> {
+    const MIN_SPEED: f32 = 1.0;
+    (v.length() >= MIN_SPEED).then(|| r1(v.x.atan2(-v.y).to_degrees().rem_euclid(360.0)))
 }
 
 /// Groups of two or more tanks transitively within `radius` of each other
@@ -345,6 +432,14 @@ impl Game {
             .filter(|(t, _)| !t.is_wreck())
             .map(|(t, _)| (t.owner_slot(), t.position))
             .collect();
+        let live_players: Vec<Position> = self
+            .players()
+            .into_iter()
+            .flatten()
+            .filter_map(|e| self.world.get::<&Tank>(e).ok())
+            .filter(|t| !t.is_wreck())
+            .map(|t| t.position)
+            .collect();
         let mut tanks: Vec<TankDebug> = self
             .world
             .query::<(Entity, &Tank, Option<&Ai>)>()
@@ -363,6 +458,11 @@ impl Game {
                     })
                     .filter(|d| d.is_finite())
                     .map(r1);
+                let dist_to_player = (ai.is_some() && !tank.is_wreck())
+                    .then(|| live_players.iter().map(|p| p.distance_to(tank.position)).fold(f32::INFINITY, f32::min))
+                    .filter(|d| d.is_finite())
+                    .map(r1);
+                let cell = crate::map::world_to_cell(tank.position);
                 TankDebug {
                     slot: tank.owner_slot(),
                     is_player: tank.is_player(),
@@ -373,9 +473,16 @@ impl Game {
                     chassis: TANK_NAMES[tank.row as usize],
                     x: r1(tank.position.x),
                     y: r1(tank.position.y),
+                    cell: [cell.0, cell.1],
                     rotation: tank.rotation,
+                    facing: Dir::from_rotation(tank.rotation).map(Dir::name),
+                    hull: r1(tank.visual_rotation),
+                    turret: r1(tank.turret_visual_rotation),
                     vx: r1(vel.x),
                     vy: r1(vel.y),
+                    speed: r1(vel.length()),
+                    heading: heading_of(vel),
+                    dist_to_player,
                     cvx: full.then(|| r1(tank.velocity.x)),
                     cvy: full.then(|| r1(tank.velocity.y)),
                     damage: r1(tank.damage),
@@ -524,6 +631,7 @@ impl Game {
             obstacles_alive: self.world.query::<&Obstacle>().iter().filter(|o| !o.destroyed).count(),
             engage,
             clusters: clusters(&live_enemies, CLUSTER_RADIUS_PX),
+            command: full.then(|| self.commander.report().clone()),
         }
     }
 
@@ -541,8 +649,11 @@ impl Game {
                 let ai = ai.map(Ai::snapshot);
                 TrackRow {
                     slot: tank.owner_slot(),
+                    is_player: tank.is_player(),
                     x: r1(tank.position.x),
                     y: r1(tank.position.y),
+                    rotation: tank.rotation,
+                    turret: r1(tank.turret_visual_rotation),
                     action: ai.and_then(|a| a.last_action),
                     ring: self.last_engage.slot_of(entity).map(|s| s.index() as u8),
                     stuck: ai.is_some_and(|a| a.stuck_timer > 0.0),
