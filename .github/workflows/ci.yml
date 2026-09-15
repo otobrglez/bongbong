@@ -66,5 +66,5 @@ jobs:
               --budget stale-start=0 --budget stall=0 --budget border-stuck=1 \
               --budget jitter=6 --budget spin=1 --budget churn=10 --budget clustering=9 \
               --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 \
-              --budget never-arrived=0 --budget invariant=0 || exit 1
+              --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=0 || exit 1
           done

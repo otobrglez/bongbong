@@ -147,10 +147,20 @@ impl Terrain {
         self.obstacles.iter().find(|b| b.entity == entity)
     }
 
-    /// Every obstacle tile's center - clearance checks for the frog's hop
-    /// landing spot (see `combat::frog_hop_target`).
-    pub fn obstacle_centers(&self) -> Vec<Position> {
-        self.obstacles.iter().map(|b| b.center).collect()
+    /// Whether a frog-sized box centred on `p` clears every obstacle tile -
+    /// the landing test for the evasive hop (`combat::frog_hop_target`).
+    ///
+    /// A box-vs-box test against the tiles' own hulls, not a radius from
+    /// their centres: a tile is 32 px across and the frog 44 x 32, so the
+    /// contact distance is ~38 px. A radial cordon any wider than that
+    /// spreads over whole cells of open ground and, on a map with any real
+    /// amount of terrain on it, leaves a crowded frog with nowhere at all
+    /// to land - which reads as the hop being broken rather than tight.
+    pub fn frog_fits(&self, p: Position) -> bool {
+        let half = frog_half();
+        !self.obstacles.iter().any(|b| {
+            (p.x - b.center.x).abs() < b.half.x + half.x && (p.y - b.center.y).abs() < b.half.y + half.y
+        })
     }
 
     /// Whether a zero-width line from `from` to `to` clears every obstacle

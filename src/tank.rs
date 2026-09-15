@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use sola_raylib::prelude::*;
 
 use crate::laser::LaserVariant;
+use crate::pickup::PickupKind;
 use crate::plasma::PlasmaVariant;
 use crate::shell::Owner;
 use crate::{
@@ -31,7 +32,8 @@ use crate::{
 
 /// The four movement/facing directions. rotation 0 == up, clockwise positive,
 /// matching the sprite orientation and shell-spawn math.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Dir {
     Up,
     Down,
@@ -61,6 +63,17 @@ impl Dir {
             Dir::Down => 180.0,
             Dir::Left => 270.0,
         }
+    }
+
+    /// Inverse of `rotation`: the direction a hull angle in degrees faces,
+    /// any full turns folded away; `None` for an angle that is not one of
+    /// the four (within a degree), which a `Tank::rotation` never is.
+    pub fn from_rotation(deg: f32) -> Option<Dir> {
+        let deg = deg.rem_euclid(360.0);
+        Dir::ALL.into_iter().find(|d| {
+            let diff = (deg - d.rotation()).abs();
+            diff < 1.0 || diff > 359.0
+        })
     }
 
     /// Unit movement vector (screen space: +x right, +y down).
@@ -426,11 +439,44 @@ pub struct Tank {
     /// pickup refreshes the duration instead of stacking with an
     /// already-active boost - see `PickupKind::SpeedUp`'s doc comment.
     pub speed_boost_timer: f32,
-    /// Seconds remaining on a `pickup::PickupKind::Shield` - while positive
-    /// `take_damage` is a no-op and `draw_tank_shield` draws the rainbow
-    /// ring. Set (not added to) on pickup, same refresh-not-stack rule as
+    /// Absorption left in a `pickup::PickupKind::Shield` - a pool of damage
+    /// points, not a clock. While positive `take_damage` spends this instead
+    /// of health and `draw_tank_shield` draws the rainbow ring; at zero the
+    /// shield shatters and does not come back until another pickup. Set (not
+    /// added to) on pickup, same refill-not-stack rule as
     /// `speed_boost_timer`.
-    pub shield_timer: f32,
+    ///
+    /// Projectiles never reach `take_damage` - they bounce off in
+    /// `Game::resolve_projectiles` and are charged `shield_deflect_cost_factor`
+    /// times their own damage there, so both seams spend this field.
+    /// The fraction of its commanded speed this tank was last actually
+    /// driven at - `Intent::speed_scale()`, recorded by `Game::drive_tank`.
+    ///
+    /// Exists so `TankSnapshot::commanded_velocity` can report what was
+    /// really asked of the tank. `Tank::velocity` stays the *unthrottled*
+    /// cardinal on purpose, because `motion_snapshot` feeds it to the AI's
+    /// own predictive avoidance and the throttle is not the AI's business;
+    /// but the probe windows commanded-vs-achieved for `low-progress` and
+    /// `wall-grind`, and a full-magnitude command against a deliberately
+    /// throttled body is a false positive on a zero-ceiling kind.
+    pub throttle: f32,
+    pub shield_hp: f32,
+    /// Seconds left before a live shield starts refilling. Reset to
+    /// `shield_recharge_delay_seconds` every time the shield absorbs
+    /// anything, so only a tank that breaks contact recovers - see
+    /// `Game::tick_timers`.
+    pub shield_recharge_delay: f32,
+    /// Set by `spend_shield` on the frame the shield shatters, drained and
+    /// cleared by `Game::drain_shield_breaks` at the end of the frame's
+    /// damage phases.
+    ///
+    /// A flag rather than a return value the callers act on, because the
+    /// shield is spent at eight different seams - ram (both tanks), blasts,
+    /// the flame cone, its afterburn, oil fire, the frog and the projectile
+    /// deflect - and `take_damage` has no `Frame` to push an event onto.
+    /// Latching here means every one of them announces the break, instead of
+    /// the two that happened to be written to.
+    pub shield_broke: bool,
     /// Seconds accumulated toward recharging the next shell.
     pub recharge_timer: f32,
     /// Seconds remaining before this tank may fire again (player only - see
@@ -530,7 +576,10 @@ impl Default for Tank {
             plasma_variant: PlasmaVariant::Teal,
             weapon_queue: Vec::new(),
             speed_boost_timer: 0.0,
-            shield_timer: 0.0,
+            throttle: 1.0,
+            shield_hp: 0.0,
+            shield_recharge_delay: 0.0,
+            shield_broke: false,
             recharge_timer: 0.0,
             fire_cooldown: 0.0,
             ram_cooldown: 0.0,
@@ -569,30 +618,105 @@ impl Tank {
         (1.0 - self.damage / MAX_DAMAGE).clamp(0.0, 1.0)
     }
 
-    /// True while a rainbow shield is active (see `shield_timer`).
-    pub fn is_shielded(&self) -> bool {
-        self.shield_timer > 0.0
-    }
-
-    /// How much of a shield's run is left, 0..=1: `shield_timer` over
-    /// `shield_duration_seconds` (what a pickup or a spawn roll sets it to),
-    /// clamped so a timer pushed past the knob still reads as full.
-    pub fn shield_charge(&self) -> f32 {
-        let duration = tuning().shield_duration_seconds;
-        if duration > 0.0 { (self.shield_timer / duration).clamp(0.0, 1.0) } else { 0.0 }
-    }
-
-    /// The one way damage lands on a tank: adds `amount`, capped at `cap`
-    /// (MAX_DAMAGE, or one below it for the player's frog bites). A no-op
-    /// while shielded - the shield absorbs every source, shells, bullets,
-    /// plasma, laser, ram, explosions and the frog alike. Callers keep their
-    /// hit flash/knockback/alert side effects, so a blocked shot still
-    /// visibly lands; only the health change is swallowed.
-    pub fn take_damage(&mut self, amount: f32, cap: f32) {
-        if self.is_shielded() {
-            return;
+    /// True while a rainbow shield is active (see `shield_hp`).
+    /// Whether collecting `kind` would actually do this tank any good.
+    ///
+    /// **Enemies only take what they need.** A pack of enemies that hoovers
+    /// up every crate it drives past - at full health, with a full magazine,
+    /// already stocked with the weapon - strips the field of everything the
+    /// player was going to use, for no benefit to itself. It reads as spite
+    /// rather than as intelligence, and it is not a difficulty knob: it takes
+    /// resources away from the player without giving the enemy anything, so
+    /// the only thing it tunes is how annoying the round is.
+    ///
+    /// A **player** always collects. Choosing to take something you do not
+    /// strictly need - denying it to the other side, topping up before a
+    /// push, grabbing a shield you will want in ten seconds - is a decision
+    /// the person at the controls is entitled to make. The asymmetry is the
+    /// point.
+    ///
+    /// This is deliberately the *same* predicate the behaviour tree's
+    /// `seek_*` tiers gate on (`ai::build`, tiers 5.5-5.9), and they call it
+    /// rather than repeating the conditions. If collection were ever stricter
+    /// than seeking, a tank would drive to a pickup it then refused to take
+    /// and sit on top of it forever - so the two agreeing is a correctness
+    /// requirement, not tidiness.
+    pub fn wants_pickup(&self, kind: PickupKind) -> bool {
+        if self.is_player() {
+            return true;
         }
+        match kind {
+            PickupKind::Health => self.damage > 0.0,
+            PickupKind::Ammo => self.shells_ammo < tuning().max_shells,
+            PickupKind::Laser => self.laser_charges <= 0,
+            PickupKind::Plasma => self.plasma_ammo <= 0,
+            PickupKind::Minigun => self.minigun_ammo <= 0,
+            PickupKind::SpeedUp => self.speed_boost_timer <= 0.0,
+            PickupKind::Shield => self.shield_hp <= 0.0,
+            // Player-only: the fuel tank does nothing for an enemy at all.
+            PickupKind::Flamethrower => false,
+            // Decided by the frog's own state, not the tank's - see
+            // `Game::pickup_phase` and docs/frog-health-pack-prd.md.
+            PickupKind::FrogHealth => true,
+        }
+    }
+
+    pub fn is_shielded(&self) -> bool {
+        self.shield_hp > 0.0
+    }
+
+    /// How much of a shield is left, 0..=1: `shield_hp` over
+    /// `shield_capacity` (what a pickup or a spawn roll sets it to), clamped
+    /// so a pool pushed past the knob still reads as full. The HUD gauge
+    /// (`hud::PlayerHud`) and the rainbow ring sweep (`draw_tank_shield`)
+    /// both read this and neither cares that it now measures absorption
+    /// rather than seconds.
+    pub fn shield_charge(&self) -> f32 {
+        let capacity = tuning().shield_capacity;
+        if capacity > 0.0 { (self.shield_hp / capacity).clamp(0.0, 1.0) } else { 0.0 }
+    }
+
+    /// Spend `amount` of shield on a hit the shield is taking instead of the
+    /// hull, and report whether that shattered it (true on the one frame the
+    /// pool crosses zero, never again - the edge-trigger shape
+    /// `Obstacle::damage` uses). A hit bigger than what is left is absorbed
+    /// in full rather than bleeding through, so the last point of shield is
+    /// worth having. Resets the recharge delay either way.
+    pub fn spend_shield(&mut self, amount: f32) -> bool {
+        if !self.is_shielded() {
+            return false;
+        }
+        self.shield_recharge_delay = tuning().shield_recharge_delay_seconds;
+        self.shield_hp -= amount.max(0.0);
+        if self.shield_hp > 0.0 {
+            return false;
+        }
+        self.shield_hp = 0.0;
+        self.shield_broke = true;
+        true
+    }
+
+    /// The one way damage lands on a tank's *hull*: adds `amount`, capped at
+    /// `cap` (MAX_DAMAGE, or one below it for the player's frog bites), and
+    /// returns how much actually landed. Callers keep their hit
+    /// flash/knockback/alert side effects either way, so an absorbed hit
+    /// still visibly lands.
+    ///
+    /// A live shield takes the hit instead and returns 0: this is the absorb
+    /// seam for ram, explosions, flame and its afterburn, oil fire, the frog
+    /// and the laser. It is **not** the only seam - shells, bullets and
+    /// plasma bounce off in `Game::resolve_projectiles` and never arrive
+    /// here, so they are charged to `shield_hp` there instead. Anything that
+    /// needs "did the shield just shatter" should call `spend_shield`
+    /// directly; this reports only what the hull took.
+    pub fn take_damage(&mut self, amount: f32, cap: f32) -> f32 {
+        if self.is_shielded() {
+            self.spend_shield(amount);
+            return 0.0;
+        }
+        let before = self.damage;
         self.damage = (self.damage + amount).min(cap);
+        self.damage - before
     }
 
     /// Who this tank is as a projectile owner.
@@ -947,7 +1071,7 @@ impl Tank {
     /// ramming through) dislodged them. Tracking the movement box rather
     /// than the full damage box also means the shrink
     /// (TANK_MOVE_BBOX_FRACTION) automatically buys the pathfinder tighter
-    /// clearance margins - see `battlefield::max_tank_avoidance_radius`.
+    /// clearance margins - see `battlefield::max_tank_clearance_half_extent`.
     pub fn avoidance_radius(&self) -> f32 {
         let (hx, hy) = self.move_half_extents(self.facing_along_x());
         (hx * hx + hy * hy).sqrt()
@@ -966,6 +1090,35 @@ impl Tank {
     /// tanks further than they get shoved back).
     pub fn mass(&self) -> f32 {
         self.scale * self.scale * tuning().tank_mass_factor[self.row as usize]
+    }
+
+    /// Advance a live shield: run down the post-hit delay, then refill
+    /// toward `shield_capacity`. Only a shield that still has charge
+    /// recharges - once it shatters it is gone until another pickup, which
+    /// is what keeps a rechargeable shield from being a permanent one.
+    ///
+    /// Called from `Game::tick_timers`, which runs before any hit phase in
+    /// the frame, so a tank hit this frame has its delay reset *after* this
+    /// frame's refill was considered and cannot regen on the same frame it
+    /// was struck - no extra guard needed.
+    pub fn tick_shield(&mut self, dt: f32) {
+        if !self.is_shielded() {
+            self.shield_recharge_delay = 0.0;
+            return;
+        }
+        self.shield_recharge_delay = (self.shield_recharge_delay - dt).max(0.0);
+        if self.shield_recharge_delay > 0.0 {
+            return;
+        }
+        // Never *reduce* the pool: `shield_charge` already clamps its
+        // report to 1, so a pool deliberately set past the knob (the
+        // immortality fixtures, a tuning experiment) stays where it was put
+        // rather than being pulled down to capacity on the first refill.
+        let capacity = tuning().shield_capacity;
+        if self.shield_hp >= capacity {
+            return;
+        }
+        self.shield_hp = (self.shield_hp + tuning().shield_recharge_per_second * dt).min(capacity);
     }
 
     /// Recharge ammo over time toward MAX_SHELLS, one shell per interval.
@@ -1364,17 +1517,19 @@ pub fn draw_ground_ring_scaled(
     }
 }
 
-/// How far into its final fade-out a tank's shield is: 1 while it has more
-/// than `shield_glow_fade_seconds` left, falling to 0 as it expires, 0 when
-/// there is no shield at all. Drives the shield ring's opacity and, inverted,
-/// the health ring's (`player_health_ring_visibility`,
-/// `enemy_health_ring_visibility`), so the two cross-fade instead of stacking.
+/// How far into its final fade-out a tank's shield is: 1 while it holds more
+/// than `shield_glow_fade_fraction` of its charge, falling to 0 as the last
+/// of it is spent, 0 when there is no shield at all. Drives the shield ring's
+/// opacity and, inverted, the health ring's
+/// (`player_health_ring_visibility`, `enemy_health_ring_visibility`), so the
+/// two cross-fade instead of stacking - a shield about to shatter shows the
+/// hull it was hiding.
 fn shield_visibility(tank: &Tank) -> f32 {
     if !tank.is_shielded() {
         return 0.0;
     }
-    let fade_seconds = tuning().shield_glow_fade_seconds;
-    if fade_seconds > 0.0 { (tank.shield_timer / fade_seconds).min(1.0) } else { 1.0 }
+    let fade_fraction = tuning().shield_glow_fade_fraction;
+    if fade_fraction > 0.0 { (tank.shield_charge() / fade_fraction).min(1.0) } else { 1.0 }
 }
 
 /// The visible pieces of a ring band that starts `from` degrees past 12
@@ -1387,14 +1542,14 @@ pub fn arc_pieces(from: f32, len: f32, sweep: f32) -> [(f32, f32); 2] {
     [(from, end.min(360.0).min(sweep)), (0.0, (end - 360.0).min(sweep))]
 }
 
-/// Draw the rainbow shield ring while `Tank::shield_timer` is running: a
+/// Draw the rainbow shield ring while `Tank::shield_hp` lasts: a
 /// `RingStyle::Rainbow` ground ring whose hue cycles at `shield_glow_hue_hz`
 /// (offset by `anim_phase` so neighbouring tanks don't cycle in lockstep),
 /// its bands covering the fraction of shield time left
 /// (`Tank::shield_charge`) from 12 o'clock clockwise and the rest drawn as
 /// the tank's health ring draws its missing part - dimmed white for the
 /// player, a dark band for an enemy - so it visibly runs down; fading out
-/// over the final `shield_glow_fade_seconds`.
+/// below `shield_glow_fade_fraction` of its charge.
 pub fn draw_tank_shield(d: &mut impl RaylibDraw, tank: &Tank, time: f32) {
     if tank.is_wreck() {
         return;
@@ -1725,7 +1880,7 @@ mod shield_tests {
 
     #[test]
     fn a_shielded_tank_takes_no_damage() {
-        let mut tank = Tank { damage: 10.0, shield_timer: 1.0, ..Tank::default() };
+        let mut tank = Tank { damage: 10.0, shield_hp: 1.0, ..Tank::default() };
         tank.take_damage(30.0, MAX_DAMAGE);
         assert_eq!(tank.damage, 10.0, "shield absorbs the whole hit");
         assert!(!tank.is_wreck());
@@ -1733,7 +1888,7 @@ mod shield_tests {
 
     #[test]
     fn damage_lands_and_caps_once_the_shield_is_gone() {
-        let mut tank = Tank { damage: 10.0, shield_timer: 0.0, ..Tank::default() };
+        let mut tank = Tank { damage: 10.0, shield_hp: 0.0, ..Tank::default() };
         tank.take_damage(30.0, MAX_DAMAGE);
         assert_eq!(tank.damage, 40.0);
         tank.take_damage(1000.0, MAX_DAMAGE - 1.0);
@@ -1749,12 +1904,12 @@ mod shield_ring_tests {
     use super::*;
 
     #[test]
-    fn shield_charge_is_the_fraction_of_the_duration_left() {
-        let duration = tuning().shield_duration_seconds;
-        let with = |shield_timer: f32| Tank { shield_timer, ..Tank::default() }.shield_charge();
-        assert_eq!(with(duration), 1.0);
-        assert!((with(duration / 4.0) - 0.25).abs() < 1e-5);
-        assert_eq!(with(duration * 3.0), 1.0, "a timer pushed past the knob still reads as full");
+    fn shield_charge_is_the_fraction_of_the_pool_left() {
+        let capacity = tuning().shield_capacity;
+        let with = |shield_hp: f32| Tank { shield_hp, ..Tank::default() }.shield_charge();
+        assert_eq!(with(capacity), 1.0);
+        assert!((with(capacity / 4.0) - 0.25).abs() < 1e-5);
+        assert_eq!(with(capacity * 3.0), 1.0, "a pool pushed past the knob still reads as full");
         assert_eq!(with(0.0), 0.0);
     }
 
@@ -1880,10 +2035,15 @@ mod health_ring_tests {
 
     #[test]
     fn rings_yield_to_the_shield() {
-        let fade = tuning().shield_glow_fade_seconds;
-        assert_eq!(enemy_health_ring_visibility(&Tank { shield_timer: fade * 2.0, ..enemy(60.0, 3.0) }), 0.0);
-        assert_eq!(player_health_ring_visibility(&Tank { shield_timer: fade * 2.0, ..Tank::default() }), 0.0);
-        let dropping = Tank { shield_timer: fade / 2.0, ..Tank::default() };
+        // The fade is a fraction of charge now, not a countdown: a healthy
+        // shield hides the health ring entirely, and one down to half its
+        // fade threshold shows the hull half way back through.
+        let capacity = tuning().shield_capacity;
+        let fade = tuning().shield_glow_fade_fraction;
+        let full = capacity * fade * 2.0;
+        assert_eq!(enemy_health_ring_visibility(&Tank { shield_hp: full, ..enemy(60.0, 3.0) }), 0.0);
+        assert_eq!(player_health_ring_visibility(&Tank { shield_hp: full, ..Tank::default() }), 0.0);
+        let dropping = Tank { shield_hp: capacity * fade / 2.0, ..Tank::default() };
         assert!((player_health_ring_visibility(&dropping) - 0.5).abs() < 1e-5);
     }
 

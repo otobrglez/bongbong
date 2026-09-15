@@ -31,7 +31,12 @@ Claude Code ──stdio JSON-RPC (MCP)──> bbmcp (src/bin/bbmcp.rs)
   the two is live), so the mode switch and the builder are tools too
   (section 4.1); `advance`/`after_render` still take the bare `Game`.
 - `src/bin/bbmcp.rs` - MCP over stdio (`initialize`, `ping`, `tools/list`,
-  `tools/call`); each call is one request line to the game. Also
+  `tools/call`); each call is one request line to the game. `tools/list`
+  carries each tool's MCP annotations from `ToolSpec::read_only`/
+  `destructive` (`readOnlyHint`, `destructiveHint` - emitted explicitly
+  because the MCP default for destructive is *true*). The per-line
+  handling is `handle_line`, unit-tested with a stubbed game
+  (`cargo test --features dev-tools --bin bbmcp`). Also
   `bbmcp call <tool> [json]` for the shell (`just mcp-call`).
 - `src/simulation/debug.rs` - the read/mutate surface on `Game` the server
   uses: `debug_snapshot`, `debug_teleport`, `debug_set_tank`, `debug_kill`,
@@ -127,20 +132,22 @@ construction; every request still lands in `before_frame`.
 
 | tool | params | reply |
 |---|---|---|
-| `status` | - | seed, frame, time, outcome, `mission`, `spawn` (the resolved plan), `intro_seconds_left`, paused, lockstep, tank counts, overlay flags, `map` (name/cells/tanks), `mode` (play\|build), `dialog_open`, `builder` (dirty, tool), history depth |
-| `snapshot` | `detail: compact\|full` | tanks (slot, chassis, x/y, velocity, damage/hp, ammo, weapon, shield, boost, `ring` (the health ring's opacity, 0..1), `nearest_ally_px`; `full` adds `ai`), projectiles (cap 64), pickups, frog, `engage` (per enemy: status `engaged\|wreck\|fleeing\|retreating\|out_of_range`, `ring` slot index or null, target x/y, `sticky`; `full` adds the rejection tally and the 16-slot table), `clusters` (live enemies within 90 px, as slot groups) |
+| `status` | - | seed, frame, time, outcome, `mission`, `spawn` (the resolved plan), `intro_seconds_left`, paused, lockstep, tank counts, overlay flags, `map` (name/cells/tanks), `mode` (play\|build), `dialog_open`, `builder` (dirty, tool), history depth, `turns` (turns/u_turns/reversals/spins summed over the live tanks - see "Debugging spinning tanks") |
+| `snapshot` | `detail: compact\|full` | tanks (slot, chassis, x/y and the grid `cell`, `rotation` with `facing` as a name, the drawn `hull`/`turret` angles, real velocity with `speed` and `heading` - the direction it is actually moving, null when still - damage/hp, ammo, weapon, shield, boost, `ring` (the health ring's opacity, 0..1), `nearest_ally_px`, enemies' `dist_to_player`; `full` adds `ai`), projectiles (cap 64), pickups, frog, `engage` (per enemy: status `engaged\|wreck\|fleeing\|retreating\|out_of_range`, `ring` slot index or null, target x/y, `sticky`; `full` adds the rejection tally and the 16-slot table), `clusters` (live enemies within 90 px, as slot groups) |
 | `events` | `since`, `limit`, `kinds`, `exclude` | ring of `{seq, frame, event, ...}` (cap 4096); `kinds`/`exclude` filter by event name |
 | `step` | `frames`, `move_dir`, `face`, `fire`, `p2_move_dir`, `p2_face`, `p2_fire` (player 2, two-player rounds), `fire_every`, `snapshot`, `detail`, `kinds`, `exclude` | frame, time, outcome, restarted, events of the step (filtered like `events`), snapshot |
 | `input` | `move_dir`, `face`, `fire`, `p2_move_dir`, `p2_face`, `p2_fire`, `frames`, `cycle_overlays` | override the keyboard for N real-time frames; `cycle_overlays: true` presses the I key once |
 | `pause` / `resume` | - | status |
-| `restart` | `seed`, `enemies`, `tank_row`, `players` (1\|2, kept for later restarts), `tank2_row`, `map` (path) or `map_toml` (inline TOML), `mission` (protect\|hunt\|destroy), `spawn` (band\|waves) with `waves`/`wave_size`/`wave_growth`/`tier_start`/`tier_end`, `intro` (start frozen behind the mission banner; default false) | status; neither map param keeps the current map; level params override the map's own tables and stay pinned. Always returns to play mode; a new map replaces the builder's canvas and baseline too |
+| `restart` | `seed`, `enemies`, `tank` (a chassis name) or `tank_row`, `players` (1\|2, kept for later restarts), `tank2` or `tank2_row`, `map` (path) or `map_toml` (inline TOML), `mission` (protect\|hunt\|destroy), `spawn` (band\|waves) with `waves`/`wave_size`/`wave_growth`/`tier_start`/`tier_end`, `intro` (start frozen behind the mission banner; default false) | status; neither map param keeps the current map; level params override the map's own tables and stay pinned. Always returns to play mode; a new map replaces the builder's canvas and baseline too |
 | `map_get` | - | the current map: name, cells, tanks, `toml` (edit and hand back via `restart {map_toml}`) |
-| `history` | `slot`, `last` (600), `every` (10) | sampled per-tank rows (frame, x/y, action, ring, stuck, touching) over the last N frames plus per-tank aggregates: frames, distance, net, cluster_frames, stuck_frames, no_ring_frames, touching_frames |
+| `lint` | `source: builder\|round` (default: the live mode's) | `maplint::lint` over the builder's canvas or the round's map, each set up as a fresh headless round with the session's seed, player count and overrides: `errors`/`warnings`/`infos` and `findings` `{severity, kind, message}`. Works in both modes. The spawn-band check reads the map's own `spawn` table, not a `restart {spawn}` override |
+| `terrain` | `only: all\|damaged\|burning\|fused`, `materials` | every live tile by `cell` (material, hp/max_hp, and when set drum, burning/burn_elapsed, fuse, heat, scorched, ram_timer), capped at 800 (`truncated`, `total` is the live count), plus `fires`, `fused`, `flames`, `burning_tanks`/`burning_wrecks` and the burning-tile/flying-drum/oil/grass/heated-cell counts |
+| `history` | `slot`, `last` (600), `every` (10) | sampled per-tank rows (frame, x/y, rotation, turret, action, ring, stuck, touching, is_player) over the last N frames plus per-tank aggregates: frames, distance, net, cluster_frames, stuck_frames, no_ring_frames, touching_frames, tank_touching_frames, and `round` - the turn counters since the round began (turns, u_turns, reversals, spins, max_spin_deg, turret_deg, last_turn_frame) |
 | `screenshot` | `scale` (0.5), `source: screen\|scene`, `overlays` | PNG (base64) + path under `target/devshots/` |
 | `overlays` | `nav_grid`, `ai`, `projectiles`, `engage`, `pickups`, `inspect` (individual flags; the I key cycles presets off -> inspect -> all) | current flags |
 | `nav_grid` | - | ASCII grid with tanks/frog/pickups marked |
 | `teleport` | `slot`, `x`, `y`, `facing` | - |
-| `set_tank` | `slot`, `damage`, `*_ammo`, `laser_charges`, `shield_timer`, `speed_boost_timer` | the tank |
+| `set_tank` | `slot`, `damage`, `*_ammo`, `laser_charges`, `shield_hp`, `speed_boost_timer` | the tank |
 | `kill` | `slot` | applied on the next simulated frame through the normal kill path |
 | `spawn_enemy` | `x`, `y`, `row` | new slot |
 | `tuning_get` / `tuning_set` / `tuning_reset` / `tuning_schema` | `diff_only` / `patch` / - / `group`, `name_contains` | see docs/runtime-tuning-design.md |
@@ -176,11 +183,12 @@ its methods (`press_build`, `answer_dialog`, `play`, `replace_map`,
 
 **The refusal rule.** In build mode the tools that read or drive the
 round - `GAME_ONLY_TOOLS`: `snapshot`, `events`, `step`, `input`,
-`pause`, `resume`, `history`, `nav_grid`, `teleport`, `set_tank`, `kill`,
-`spawn_enemy` - return an error naming `play` rather than touching a frozen
-game. Everything else works in both modes: `status`, `mode`, `screenshot`
-and `overlays` (the presented frame is the builder), `map_get` (the round's
-map), the `tuning_*` tools, `restart` (returns to play, and with a map
+`pause`, `resume`, `history`, `nav_grid`, `terrain`, `teleport`,
+`set_tank`, `kill`, `spawn_enemy`, `players` - return an error naming
+`play` rather than touching a frozen game. Everything else works in both
+modes: `status`, `mode`, `screenshot` and `overlays` (the presented frame
+is the builder), `map_get` (the round's map), `lint` (the canvas by
+default here), the `tuning_*` tools, `restart` (returns to play, and with a map
 replaces the builder's canvas as well), and all the builder tools (the
 canvas is only *shown* in build mode). A `play`, or a `click`/`key {tab}`
 that presses PLAY, does what `restart` does afterwards: banks the
@@ -232,6 +240,27 @@ show the decisions in between. Those events are diffs of each enemy's
 (the server sets it in `before_frame`; the simulation never reads it), so
 tests and the probe see the same event log as before.
 
+### Debugging spinning tanks
+
+A turret sweeping round and round in the window always means
+`Tank::rotation` itself is cycling: both sprite angles (`visual_rotation`,
+`turret_visual_rotation`) only ever ease toward it. The server therefore
+counts turns from the heading in every `TrackRow` it records
+(`TurnStats` in `devserver.rs`, per slot, for the whole round): `turns`
+(heading changes), `u_turns` (180 flips), `reversals` (A -> B -> A inside
+`JITTER_WINDOW_FRAMES` - the probe's jitter unit), `spins` (a full
+same-direction circle of quarter-turns inside `SPIN_WINDOW_FRAMES` with
+under `SPIN_NET_MAX` px of drift - the probe's `spin` anomaly, once per
+circle), `max_spin_deg` (how far the longest chain got), `turret_deg` (the
+turret sprite's total sweep, the thing actually seen) and
+`last_turn_frame`. The rule and its thresholds are `simulation::debug`'s
+`signed_quarter_turn`/`SPIN_*`/`JITTER_WINDOW_FRAMES`, which the probe
+imports too, so a live count and a probe count of the same seeded round
+agree. `status.turns` sums them over the live tanks (a non-zero `spins` is
+the cheap flag), `history {slot}` names the tank and shows `rotation` per
+sampled row, and `snapshot` shows `rotation`, `facing`, the drawn
+`hull`/`turret` angles and the real `heading` side by side.
+
 ## 5. Using it from Claude Code
 
 1. `just run-dev` (or `just watch-dev`) - the game prints
@@ -251,11 +280,16 @@ lock while `cargo watch` is compiling; `./target/debug/bbmcp` works as the
 
 `cargo test --lib --features dev-tools`: `devserver::tests` drive a headless
 `DevServer` through its request channel (status shape, `step` equals manual
-fixed-dt updates bit-for-bit, teleport/kill/spawn/set_tank, nav grid and
-full/compact snapshot shape and size budgets, seeded restart replay, an
-inline `map_toml` restart and `map_get` round trip, `history` rows and
-aggregates, `events`/`step` kind filters, tuning errors, base64 vectors,
-every tool schema is an object schema, and the mode/builder tools: `build`
+fixed-dt updates bit-for-bit, teleport/kill/spawn/set_tank, the snapshot's
+cell/facing/speed/heading fields, nav grid and full/compact snapshot shape
+and size budgets, seeded restart replay, `restart` by chassis name with the
+schema's enum pinned to `TankKind::ALL`, an inline `map_toml` restart and
+`map_get` round trip, `history` rows and aggregates with player 2 counted
+as a player, the turn counters (a driven square is one spin, a
+back-and-forth is reversals), `lint` on the round and on a sealed canvas,
+`terrain`'s tiles, filters and game-only refusal, `events`/`step` kind
+filters, tuning errors, base64 vectors, every tool schema is an object
+schema with consistent annotations, and the mode/builder tools: `build`
 asks mid-round and skips the dialog on the end screen, the game-only
 refusal in build mode and the tools that must still answer, a stroke's
 toggle-erase with undo/redo, settings `null` = auto and `cli_overrides`,

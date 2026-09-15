@@ -12,7 +12,9 @@
 # central gap (rows 8-14) and two-nav-cell lanes along the top and bottom
 # edges, so both sides round something on the way to the other's frog
 # without any single-cell corridor. A contested health pack sits in the
-# gap, ammo in each open quarter.
+# gap, ammo in each open quarter, and a frog health pack in each of the
+# outer lanes - either side can take one, and it only heals the frog of
+# whoever picks it up (docs/frog-health-pack-prd.md).
 
 version = 1
 size = [40, 22.5]
@@ -54,3 +56,5 @@ cells."14,4" = { kind = "pickup", pickup = "ammo" }
 cells."14,18" = { kind = "pickup", pickup = "ammo" }
 cells."26,4" = { kind = "pickup", pickup = "ammo" }
 cells."26,18" = { kind = "pickup", pickup = "ammo" }
+cells."20,2" = { kind = "pickup", pickup = "frog_health" }
+cells."20,20" = { kind = "pickup", pickup = "frog_health" }

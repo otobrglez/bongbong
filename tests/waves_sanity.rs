@@ -1,9 +1,12 @@
 //! Headless end-to-end run of a waves round on the shipped map through
 //! the public API only: every wave called, tanks rolling in through
 //! gates, wrecks despawning, and the round ending Won once the last wave
-//! is wrecked. The player is shielded for the whole round (its shield
-//! bounces shells back at the shooters), so an AFK round plays through
-//! instead of ending Lost within seconds.
+//! is wrecked. The player is given a shield pool far past `shield_capacity`
+//! for the whole round (its shield bounces shells back at the shooters), so
+//! an AFK round plays through instead of ending Lost within seconds. A
+//! shield is a finite pool of absorption now, so "immortal" means an
+//! absurdly large one rather than a long clock - `Tank::tick_shield`
+//! deliberately never pulls an over-full pool back down to capacity.
 
 use bongbong::level::{Mission, SpawnKind};
 use bongbong::map::MapFile;
@@ -21,7 +24,7 @@ fn run(seed: u64, shielded: bool) -> (Game, usize, usize, usize) {
     game.map = MapFile::from_toml_str(include_str!("../maps/default.toml")).expect("default map parses");
     game.init(w, h);
     if shielded {
-        game.debug_set_tank(0, &TankPatch { shield_timer: Some(1.0e9), ..TankPatch::default() }).unwrap();
+        game.debug_set_tank(0, &TankPatch { shield_hp: Some(1.0e9), ..TankPatch::default() }).unwrap();
     }
     let (mut waves, mut entered, mut removed) = (0, 0, 0);
     // Three waves' worth of `wave_timeout_seconds` plus their gaps.

@@ -29,6 +29,15 @@ rustflags = [
     # try letting `Game::init`'s spawn-placement loop (and anything else
     # synchronous) yield mid-frame instead of relying on it staying bounded.
     "-C", "link-arg=-sASYNCIFY=1",
+    # The wasm shadow stack. emscripten's default is 64 KB, which `app::run`
+    # (a ~20 KB frame: every texture handle, the session and the loop closure
+    # are its locals) plus raylib's PNG decoder already exceed. An overflow
+    # is silent in a release build - the stack sits just above the static
+    # data, so it corrupts stb_image's tables and the only symptom is
+    # "IMAGE: Failed to load image data" on a valid PNG. 4 MB is what native
+    # threads get. dev-tools builds add -sSTACK_OVERFLOW_CHECK=2 (build.rs),
+    # which turns an overflow into an abort that names the stack limits.
+    "-C", "link-arg=-sSTACK_SIZE=4194304",
 ]
 
 # iOS (docs/ios-native-port-prd.md). Same nix trap as emscripten: the shell's

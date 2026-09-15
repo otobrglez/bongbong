@@ -320,7 +320,20 @@ pub const MAX_DAMAGE: f32 = 100.0;
 // naive straight-line heading for the grid's first step toward the target.
 // Rebuilt fresh every frame in Game::update (obstacles are few and the grid
 // is small, so this is cheap enough not to need caching/invalidation).
-pub const PATHFIND_CELL_SIZE: f32 = 48.0; // px per grid cell
+//
+// **Must stay equal to OBSTACLE_GRID_SIZE.** `Grid::build` blocks a cell by
+// whether its *center* clears every obstacle, so the nav grid only sees a
+// corridor that happens to contain cell centers. Any other value gives that
+// rasterization a phase against the map grid, repeating every
+// `lcm(cell, OBSTACLE_GRID_SIZE)` px, and a corridor's routability then
+// depends on which row its author put it on rather than on how wide it is:
+// at the old 48px, the same 3-cell corridor routed at two map rows out of
+// three and was sealed at the third, and a 2-cell corridor never routed at
+// all despite fitting every chassis with room to spare (locked in by
+// maplint's `corridor_routability_depends_on_width_alone_not_on_which_row_it_sits`).
+// Equal cell sizes make one map cell one nav cell, so "3 cells wide" means
+// the same thing to the author and to the router.
+pub const PATHFIND_CELL_SIZE: f32 = OBSTACLE_GRID_SIZE; // px per grid cell
 
 // Track marks: tracks.png is a single 32x32 tile of two tread ladders (matching
 // the tank sprite orientation). A tank drops a mark every TRACK_SPACING pixels it
@@ -721,12 +734,41 @@ pub const FROG_COLLIDER_HALF_EXTENT: (f32, f32) = (22.0, 16.0);
 // Debounce so a rapid volley of hits doesn't trigger a hop every single
 // frame one lands - roughly one hop per FROG_HOP_COOLDOWN_SECONDS even
 // under sustained fire.
-// `simulation::frog_hop_target`'s search: tries the ideal dead-away-from-
-// the-shot angle first (plus a little random jitter so hops don't all look
-// mechanically identical), then this fan of offsets from it, so a frog
-// backed into a corner/wall still has a shot at finding *some* clear
-// landing spot rather than never hopping at all near terrain.
-pub const FROG_HOP_ANGLE_FAN_DEG: [f32; 5] = [0.0, 25.0, -25.0, 50.0, -50.0];
+// `simulation::frog_hop_target`'s search shape - where it looks for a
+// landing spot, not how far a hop carries (that is the
+// `frog_hop_distance_factor` knob). It tries the ideal dead-away-from-the-
+// threat angle first (plus a little random jitter so hops don't all look
+// mechanically identical), then this fan of offsets from it, and for each
+// angle in turn the lengths in FROG_HOP_DISTANCE_STEPS.
+//
+// The fan stops at a quarter turn either way on purpose: past 90 degrees a
+// "hop away" carries the frog back toward whatever it is fleeing. Within
+// that it is deliberately dense, because terrain is what a cornered frog
+// has to thread its way out of.
+pub const FROG_HOP_ANGLE_FAN_DEG: [f32; 13] =
+    [0.0, 15.0, -15.0, 30.0, -30.0, 45.0, -45.0, 60.0, -60.0, 75.0, -75.0, 90.0, -90.0];
+// Fractions of the full hop distance the search tries, longest first: a
+// short scramble out of a gap between two tiles beats standing still, and
+// a frog against a wall has nothing else left.
+pub const FROG_HOP_DISTANCE_STEPS: [f32; 3] = [1.0, 0.7, 0.45];
+// The pack is authored facing *right*: on every non-tongue frame of every
+// clip, in all six colour variants, the body's alpha bbox is x 11..31, and
+// the attack clip's tongue lashes out to +x (the bbox grows to x 11..47 on
+// frames 3-5). `frog::Facing::Left` is therefore drawn mirrored - there is
+// no left-facing art and no generator to make any, the pack is copied in
+// unmodified (static/toxic_frog/SOURCE.md).
+//
+// The body's centre, 21.0, is 2.5 design px *left* of the 48 px cell's own
+// centre of 23.5, so mirroring the cell about that centre slides the body 5
+// design px right - 10 screen px at FROG_SCALE. `frog::mirror` hands that
+// back as a destination offset, so a mirrored frog sits exactly where an
+// unmirrored one does instead of jumping sideways when its facing flips.
+pub const FROG_SPRITE_BODY_CENTER_X: f32 = 21.0;
+// A hop with less horizontal travel than this reads as vertical, and the
+// frog keeps whatever facing it had. The hop fan reaches a quarter turn
+// either way (FROG_HOP_ANGLE_FAN_DEG), so a dead-vertical leap is a real
+// case, and the sign of its near-zero dx would otherwise be float noise.
+pub const FROG_FACING_DEADBAND_PX: f32 = 4.0;
 
 // Health/ammo pickups (pickup.rs): spawn only at the map's own `Pickup`
 // cells (see `map::CellObject::Pickup`, `battlefield::spawn_from_map`) - the

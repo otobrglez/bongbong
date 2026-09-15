@@ -1,5 +1,5 @@
 [package]
-version = "0.0.24"
+version = "0.0.25"
 name = "bongbong"
 edition = "2024"
 default-run = "bongbong"
@@ -40,12 +40,14 @@ sola-raylib = { version = "6.3.0", features = ["nobuild"] }
 members = ["android"]
 
 [features]
-# Dev/QA-only runtime tuning surface (docs/runtime-tuning-design.md): the
-# `extern "C"` API in src/capi.rs that the web page's tuning panel drives,
-# exported from the wasm binary via build.rs. Off by default so a release
-# build carries no writer for the tuning table (the table itself -
-# src/tuning.rs - is always compiled; only the ways to change it at runtime
-# are gated). Enable with `--features dev-tools` (`just build-web-dev`).
+# Dev/QA-only tooling: the embedded dev server (src/devserver.rs, native)
+# with its `bbmcp` MCP adapter and the debug overlays, and the `extern "C"`
+# tuning API in src/capi.rs that the web page's tuning panel drives
+# (docs/dev-server-design.md, docs/runtime-tuning-design.md). Off by default
+# so a release build carries no writer for the tuning table and no debug
+# socket (the table itself - src/tuning.rs - is always compiled; only the
+# ways to drive it at runtime are gated). Enable with `--features dev-tools`
+# (`just run-dev`, `just build-web-dev`).
 dev-tools = []
 
 # The profile that 'dist' will build with

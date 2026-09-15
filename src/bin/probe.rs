@@ -36,6 +36,7 @@ use bongbong::Position;
 use bongbong::ai::Intent;
 use bongbong::map::MapFile;
 use bongbong::level::SpawnKind;
+use bongbong::simulation::debug::{JITTER_WINDOW_FRAMES, SPIN_FULL_CIRCLE_DEG, SPIN_NET_MAX, SPIN_WINDOW_FRAMES, signed_quarter_turn};
 use bongbong::simulation::{Event, Game, Input, Outcome, TankSnapshot};
 use bongbong::tank::{Dir, TankKind};
 use bongbong::{
@@ -153,28 +154,13 @@ const FIRED_RECENTLY_FRAMES: u32 = STALL_FRAMES_THRESHOLD;
 // flagged as stuck against the border.
 const BORDER_MARGIN: f32 = 40.0; // px
 const BORDER_FRAMES_THRESHOLD: u32 = 90; // 1.5s
-// Facing jitter: an A -> B -> A heading flip-flop ("committed_dir"/
-// "dir_hold" in ai.rs exist specifically to prevent this near 45-degree
-// diagonals) counted within a trailing window; JITTER_THRESHOLD flips
-// inside JITTER_WINDOW_FRAMES flags it.
-const JITTER_WINDOW_FRAMES: u32 = 120; // 2s
+// Facing jitter (A -> B -> A heading flip-flops within
+// `JITTER_WINDOW_FRAMES`) and spin (a full same-direction circle inside
+// `SPIN_WINDOW_FRAMES` with under `SPIN_NET_MAX` of drift): the rules and
+// their windows live in `simulation::debug`, shared with the dev server's
+// live turn counters so both measure a round the same way. JITTER_THRESHOLD
+// flips inside the window flags a tank.
 const JITTER_THRESHOLD: u32 = 4;
-// Spin: a full circle of *same-direction* quarter-turns (U->R->D->L->U or
-// the mirror) completed inside the window while going nowhere - the "tank
-// spins in place" failure the jitter check is structurally blind to (a
-// rotational cycle contains no A,B,A triple). The visible symptom in the
-// windowed game is the hull/turret perpetually turning: both visual eases
-// (TANK_VISUAL_TURN_SPEED_DEG / TANK_TURRET_VISUAL_TURN_SPEED_DEG) only
-// ever chase `Tank::rotation`, so a spinning sprite always means the
-// sim-side heading itself is cycling - which is what's watched here.
-// Legit navigation can't trip it: rounding even the smallest obstacle
-// block takes a ~430px loop (>2s at ENEMY_SPEED), so completing 360 inside
-// the window with under SPIN_NET_MAX of net drift means the turns came
-// from re-decisions, not a path. A 180 reversal breaks the chain (that's
-// jitter/churn territory, not rotation).
-const SPIN_WINDOW_FRAMES: u32 = 120; // 2s
-const SPIN_FULL_CIRCLE_DEG: f32 = 360.0;
-const SPIN_NET_MAX: f32 = 60.0; // px of net drift allowed over the circle
 // Churn: lots of driving, no progress - net displacement over a trailing
 // window stays under CHURN_NET_MAX despite CHURN_MIN_PATH of actual path
 // traveled ("dancing"/back-and-forth). The complement of `stall` (which
@@ -237,6 +223,36 @@ const PROGRESS_ACHIEVED_FRACTION: f32 = 0.3; // real < this * commanded
 const CLUSTER_RADIUS: f32 = bongbong::simulation::debug::CLUSTER_RADIUS_PX; // px between tank centers, shared with the live snapshot
 const CLUSTER_MIN_GROUP: usize = 3; // this many mutually-close enemies counts as a cluster
 const CLUSTER_FRAMES_THRESHOLD: u32 = 180; // 3s, matching STALL_FRAMES_THRESHOLD's window
+// --- Tank-on-tank contact (docs/enemy-command-and-control-prd.md §10) ---
+// Every kind above measures a tank against the *map*. These two measure it
+// against another tank, which nothing did before: `bump-rate` and
+// `wall-grind` read `touching_static` (walls, tiles, the frog), and
+// `Event::Ram` - the only other signal - saturates, because one ram sets
+// `ram_damage_cooldown` on *both* participants, so a tank in a pile-up
+// reports at most one event per 0.5s however many neighbours it grinds
+// against. Contact frames do not saturate: they grow with both the duration
+// of a jam and the number of tanks in it.
+//
+// Tank-grind: the `wall-grind` shape against another hull - commanded to
+// move, in tank contact, and going nowhere. Shares GRIND_CMD_EPS and
+// GRIND_FRAMES deliberately: same failure, different obstacle. The speed
+// floor is *not* zero, because "pressed together and creeping" is the
+// failure being caught; the fast-sliding-jam variant (the 2026-09-04
+// specimen, which slid at up to 100px/s) already trips `border-stuck` and
+// `churn`.
+const TANK_GRIND_SPEED_EPS: f32 = 30.0; // px/s real speed; 3.75x STUCK_SPEED_EPS, ~19% of enemy_speed
+// Pile-up: three hulls actually in contact, sustained. Distinct from
+// `clustering`, which is about *spacing* at CLUSTER_RADIUS (90px) and fires
+// on tanks that never touch. PILEUP_RADIUS sits below CLUSTER_RADIUS on
+// purpose so the two kinds can never be the same reading counted twice:
+// 72px is just above two titan avoidance radii summed (63.8px), i.e. "these
+// three are on top of each other", where 90px is "these three are close".
+// PILEUP_FRAMES is a third of CLUSTER_FRAMES_THRESHOLD because contact is a
+// harder fact than proximity - it needs less dwell to be believed - and 1s
+// is still 60x a single frame of solver noise.
+const PILEUP_RADIUS: f32 = 72.0;
+const PILEUP_MIN_GROUP: usize = 3;
+const PILEUP_FRAMES: u32 = 60; // 1s
 // --- Navigation e2e: path-stretch (docs/gameplay-verification-design.md §5.2) ---
 // never-arrived: a live enemy that had a route to the player at round
 // start (Game::nav_path_cells - the same nav grid + A* the AI steers by)
@@ -522,8 +538,8 @@ fn log_frame(game: &Game, frame: u32) {
         // be read off the out-of-bounds position.
         let entering = if tank.entering { " entering=true" } else { "" };
         println!(
-            "  {label} pos=({:6.1},{:6.1}) vel=({:6.1},{:6.1}) speed={:6.1} rot={:5.0} dmg={:5.1}/100 ammo={:2} plasma={:2} minigun={:3} laser={:2} fuel={:4.1} burn={:3.1} shield={:4.1} wreck={}{entering}",
-            tank.position.x, tank.position.y, tank.velocity.x, tank.velocity.y, speed, tank.rotation, tank.damage, tank.shells_ammo, tank.plasma_ammo, tank.minigun_ammo, tank.laser_charges, tank.flame_fuel, tank.burn_timer, tank.shield_timer, tank.is_wreck,
+            "  {label} pos=({:6.1},{:6.1}) vel=({:6.1},{:6.1}) speed={:6.1} rot={:5.0} dmg={:5.1}/100 ammo={:2} plasma={:2} minigun={:3} laser={:2} fuel={:4.1} burn={:3.1} shield={:5.1} wreck={}{entering}",
+            tank.position.x, tank.position.y, tank.velocity.x, tank.velocity.y, speed, tank.rotation, tank.damage, tank.shells_ammo, tank.plasma_ammo, tank.minigun_ammo, tank.laser_charges, tank.flame_fuel, tank.burn_timer, tank.shield_hp, tank.is_wreck,
         );
     }
 }
@@ -542,6 +558,8 @@ struct AnomalyTotals {
     low_progress: u32,
     never_arrived: u32,
     invariant: u32,
+    tank_grind: u32,
+    pile_up: u32,
 }
 
 /// Canonical anomaly-kind tags in reporting order - exactly the strings
@@ -550,7 +568,7 @@ struct AnomalyTotals {
 /// (tags with `-` swapped for `_`), and the `--heatmap` per-kind ordering:
 /// a new kind added here and in `AnomalyTotals::count` reaches all three
 /// automatically.
-const ANOMALY_KINDS: [&str; 12] = [
+const ANOMALY_KINDS: [&str; 14] = [
     "stale-start",
     "stall",
     "border-stuck",
@@ -563,7 +581,20 @@ const ANOMALY_KINDS: [&str; 12] = [
     "low-progress",
     "never-arrived",
     "invariant",
+    "tank-grind",
+    "pile-up",
 ];
+
+/// `kind=count` for every kind in `ANOMALY_KINDS`, in reporting order - the
+/// summary lines' single source of truth, so a new kind reaches them the way
+/// it already reaches `--budget`, `--json-out` and `--heatmap`.
+fn totals_line(t: &AnomalyTotals) -> String {
+    ANOMALY_KINDS
+        .iter()
+        .map(|kind| format!("{kind}={}", t.count(kind)))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
 
 impl AnomalyTotals {
     fn total(&self) -> u32 {
@@ -587,6 +618,8 @@ impl AnomalyTotals {
             "low-progress" => self.low_progress,
             "never-arrived" => self.never_arrived,
             "invariant" => self.invariant,
+            "tank-grind" => self.tank_grind,
+            "pile-up" => self.pile_up,
             _ => unreachable!("unknown anomaly kind '{kind}' - not in ANOMALY_KINDS"),
         }
     }
@@ -661,6 +694,11 @@ struct TankTrack {
     bump_flagged: bool,
     progress_frames: u32,
     progress_flagged: bool,
+    // --- tank-on-tank contact (tank-grind / pile-up) ---
+    tank_grind_frames: u32,
+    tank_grind_flagged: bool,
+    pileup_frames: u32,
+    pileup_flagged: bool,
     // --- round-total accumulators for --json-out (probe-side only: the
     // sim deliberately reports instantaneous facts, never accumulators -
     // see TankSnapshot's doc comments) ---
@@ -670,6 +708,11 @@ struct TankTrack {
     // Seconds spent being driven against static terrain (the same
     // condition `grind_frames` counts, summed over the round).
     grind_seconds: f32,
+    // Frames spent in hull contact with another tank, whatever the cause.
+    // Unlike a ram count this does not saturate - see the ram-cooldown note
+    // on the tank-grind consts - so it is the honest measure of how much
+    // time the pack spends shoving itself.
+    tank_contact_frames: u32,
     // Full path length driven this round - `trail_path_len`'s unwindowed
     // counterpart.
     total_path_len: f32,
@@ -761,6 +804,11 @@ impl TankTrack {
             last_fire_frame: None,
             grind_frames: 0,
             grind_flagged: false,
+            tank_grind_frames: 0,
+            tank_grind_flagged: false,
+            pileup_frames: 0,
+            pileup_flagged: false,
+            tank_contact_frames: 0,
             was_touching: false,
             recent_bumps: VecDeque::new(),
             bump_flagged: false,
@@ -773,22 +821,6 @@ impl TankTrack {
             ideal_seconds,
             time_to_engage: None,
         }
-    }
-}
-
-/// The signed quarter-turn from heading `old` to heading `new` (both always
-/// exactly one of 0/90/180/270 - see `Dir::rotation`): `Some(90.0)` for a
-/// clockwise turn, `Some(-90.0)` for counter-clockwise, `None` for a 180
-/// reversal (which breaks a rotational chain rather than extending it -
-/// see SPIN_WINDOW_FRAMES's comment).
-fn signed_quarter_turn(old: f32, new: f32) -> Option<f32> {
-    let delta = (new - old).rem_euclid(360.0);
-    if (delta - 90.0).abs() < 1.0 {
-        Some(90.0)
-    } else if (delta - 270.0).abs() < 1.0 {
-        Some(-90.0)
-    } else {
-        None
     }
 }
 
@@ -1305,6 +1337,63 @@ fn check_anomalies(
             totals.low_progress += 1;
         }
 
+        // Tank-grind: `wall-grind`'s shape against another hull - commanded
+        // to move, in tank contact, and not actually going anywhere. The
+        // one check that can see a jam the stuck escape cannot, because
+        // every tank in a sliding pile-up *is* moving.
+        if tank.touching_tank {
+            track.tank_contact_frames += 1;
+        }
+        if tank.touching_tank && cmd_speed > GRIND_CMD_EPS && speed < TANK_GRIND_SPEED_EPS {
+            track.tank_grind_frames += 1;
+        } else {
+            track.tank_grind_frames = 0;
+        }
+        if !track.tank_grind_flagged && track.tank_grind_frames >= GRIND_FRAMES {
+            report(
+                heat,
+                round,
+                seed,
+                frame,
+                &track.label,
+                "tank-grind",
+                &format!(
+                    "pressed against another tank for {GRIND_FRAMES} frames (speed {speed:.0} of commanded {cmd_speed:.0}px/s, impulse {:.0})",
+                    tank.contact_impulse,
+                ),
+                pos,
+            );
+            track.tank_grind_flagged = true;
+            totals.tank_grind += 1;
+        }
+
+        // Pile-up: in contact, with PILEUP_MIN_GROUP - 1 other live enemies
+        // inside PILEUP_RADIUS, sustained. Contact is what separates this
+        // from `clustering`, which fires on tanks that are merely close.
+        let piled = live_positions
+            .iter()
+            .filter(|&&(slot, other)| slot != tank.slot && other.distance_to(pos) <= PILEUP_RADIUS)
+            .count();
+        if tank.touching_tank && piled + 1 >= PILEUP_MIN_GROUP {
+            track.pileup_frames += 1;
+        } else {
+            track.pileup_frames = 0;
+        }
+        if !track.pileup_flagged && track.pileup_frames >= PILEUP_FRAMES {
+            report(
+                heat,
+                round,
+                seed,
+                frame,
+                &track.label,
+                "pile-up",
+                &format!("touching, with {piled} other live enemies inside {PILEUP_RADIUS:.0}px, for {PILEUP_FRAMES} frames"),
+                pos,
+            );
+            track.pileup_flagged = true;
+            totals.pile_up += 1;
+        }
+
         // Clustering: how many other live enemies are mutually within
         // CLUSTER_RADIUS of this one right now.
         let nearby = live_positions
@@ -1349,13 +1438,43 @@ struct TankReport {
     path_cells: Option<u32>,
     contact_events: u32,
     grind_seconds: f32,
+    /// Seconds spent in hull contact with another tank. Does not saturate
+    /// the way a ram count does, so this is the honest per-tank measure of
+    /// time spent shoving (docs/enemy-command-and-control-prd.md §10).
+    tank_contact_seconds: f32,
     distance_travelled: f32,
 }
 
 /// Everything one round produces, for `main` to fold into the sweep
 /// totals, the `--json-out` record, and the `--budget` verdict.
+/// `Event::Ram` counts for one round. The probe reads `Game::events()` for
+/// this and nothing else; every other signal it has comes from
+/// `tank_snapshots()`. Note these **saturate**: `combat::ram` sets
+/// `ram_damage_cooldown` on *both* participants and refuses while either is
+/// live, so one ram in a pile-up suppresses every other ram involving either
+/// tank for half a second. A good measure of distinct impacts, a poor one of
+/// how jammed the pack is - `TankReport::tank_contact_seconds` is the
+/// counterpart that does not saturate.
+#[derive(Default, Clone, Copy)]
+struct RamTally {
+    /// Both parties are enemies.
+    pair: u32,
+    /// One party is a player.
+    into_player: u32,
+    /// Total damage *rolled* across every ram. Not damage dealt: a shielded
+    /// party absorbs its share into `shield_hp` and its hull takes none of
+    /// it, and `Event::Ram` carries one roll for two parties. Read it as how
+    /// hard the pack is shoving itself, not as harm done.
+    rolled_damage: f32,
+}
+
 struct RoundResult {
     totals: AnomalyTotals,
+    /// This round's ram tally, split by who was involved. Counters, not
+    /// budgeted anomalies: a ram is not a failure, and once C2 can order
+    /// one, budgeting it would budget the feature
+    /// (docs/enemy-command-and-control-prd.md section 10).
+    rams: RamTally,
     frames_run: u32,
     outcome: Outcome,
     tanks: Vec<TankReport>,
@@ -1420,6 +1539,8 @@ fn run_round(
     let mut tracks: BTreeMap<usize, TankTrack> = BTreeMap::new();
     let mut invariant_flagged: BTreeSet<usize> = BTreeSet::new();
     let mut totals = AnomalyTotals::default();
+    let mut rams = RamTally::default();
+    let first_enemy = game.first_enemy_slot();
 
     if trace {
         log_frame(&game, 0);
@@ -1430,6 +1551,19 @@ fn run_round(
     for frame in 1..=args.frames {
         let input = input_for_frame(args, frame);
         game.update(input, DT, field_width(), field_height());
+        // The one place the probe reads the event log: ram damage is
+        // invisible to `tank_snapshots`, which reports health but never who
+        // took it off. Costs nothing - recording an event draws no RNG.
+        for event in game.events() {
+            if let Event::Ram { slot, other_slot, damage } = event {
+                if *slot >= first_enemy && *other_slot >= first_enemy {
+                    rams.pair += 1;
+                } else {
+                    rams.into_player += 1;
+                }
+                rams.rolled_damage += damage;
+            }
+        }
         check_anomalies(&mut tracks, &mut invariant_flagged, &game, round, frame, &mut totals, heat);
 
         if trace && frame % args.log_every == 0 {
@@ -1476,6 +1610,7 @@ fn run_round(
             path_cells: track.path_cells,
             contact_events: track.total_bumps,
             grind_seconds: track.grind_seconds,
+            tank_contact_seconds: track.tank_contact_frames as f32 * DT,
             distance_travelled: track.total_path_len,
         });
         if trace {
@@ -1526,6 +1661,7 @@ fn run_round(
 
     RoundResult {
         totals,
+        rams,
         frames_run,
         outcome: game.outcome(),
         tanks: reports,
@@ -1588,13 +1724,14 @@ fn json_round_line(args: &Args, round: u32, seed: u64, result: &RoundResult, tun
         .iter()
         .map(|t| {
             format!(
-                "{{\"label\":\"{}\",\"time_to_engage\":{},\"stretch\":{},\"path_cells\":{},\"contact_events\":{},\"grind_seconds\":{:.2},\"distance_travelled\":{:.1},\"entered_frame\":{}}}",
+                "{{\"label\":\"{}\",\"time_to_engage\":{},\"stretch\":{},\"path_cells\":{},\"contact_events\":{},\"grind_seconds\":{:.2},\"tank_contact_seconds\":{:.2},\"distance_travelled\":{:.1},\"entered_frame\":{}}}",
                 json_escape(&t.label),
                 opt_f32(t.time_to_engage),
                 opt_f32(t.stretch),
                 t.path_cells.map_or("null".to_string(), |v| v.to_string()),
                 t.contact_events,
                 t.grind_seconds,
+                t.tank_contact_seconds,
                 t.distance_travelled,
                 t.entered_frame,
             )
@@ -1602,7 +1739,7 @@ fn json_round_line(args: &Args, round: u32, seed: u64, result: &RoundResult, tun
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{{\"v\":1,\"round\":{round},\"seed\":\"0x{seed:016x}\",\"tuning\":{tuning_diff},\"map\":\"{}\",\"mission\":\"{}\",\"spawn\":\"{}\",\"scenario\":\"{}\",\"players\":{},\"enemies\":{},\"frames_run\":{},\"outcome\":\"{}\",\"anomalies\":{{{anomalies}}},\"tanks\":[{tanks}]}}",
+        "{{\"v\":1,\"round\":{round},\"seed\":\"0x{seed:016x}\",\"tuning\":{tuning_diff},\"map\":\"{}\",\"mission\":\"{}\",\"spawn\":\"{}\",\"scenario\":\"{}\",\"players\":{},\"enemies\":{},\"frames_run\":{},\"outcome\":\"{}\",\"anomalies\":{{{anomalies}}},\"rams\":{{\"pair\":{},\"into_player\":{},\"rolled_damage\":{:.1}}},\"tanks\":[{tanks}]}}",
         json_escape(map_display(args)),
         result.mission.name(),
         result.spawn.name(),
@@ -1611,6 +1748,9 @@ fn json_round_line(args: &Args, round: u32, seed: u64, result: &RoundResult, tun
         result.tanks.len(),
         result.frames_run,
         outcome_str(result.outcome),
+        result.rams.pair,
+        result.rams.into_player,
+        result.rams.rolled_damage,
     )
 }
 
@@ -1753,6 +1893,7 @@ fn main() -> ExitCode {
     );
 
     let mut grand_total = AnomalyTotals::default();
+    let mut grand_rams = RamTally::default();
     // Every flagged round's (round, seed), for the end-of-sweep replay
     // recap - the per-round lines above it scroll away on a big sweep.
     let mut flagged: Vec<(u32, u64)> = Vec::new();
@@ -1767,24 +1908,16 @@ fn main() -> ExitCode {
                 .unwrap_or_else(|e| panic!("writing --json-out: {e}"));
         }
         let totals = result.totals;
+        grand_rams.pair += result.rams.pair;
+        grand_rams.into_player += result.rams.into_player;
+        grand_rams.rolled_damage += result.rams.rolled_damage;
         if sweep {
             if totals.total() > 0 {
                 flagged.push((round, seed));
                 println!(
-                    "round={round} seed=0x{seed:016x} anomalies={} (stale-start={} stall={} border-stuck={} jitter={} spin={} churn={} clustering={} wall-grind={} bump-rate={} low-progress={} never-arrived={} invariant={})",
+                    "round={round} seed=0x{seed:016x} anomalies={} ({})",
                     totals.total(),
-                    totals.stale_start,
-                    totals.stall,
-                    totals.border_stuck,
-                    totals.jitter,
-                    totals.spin,
-                    totals.churn,
-                    totals.clustering,
-                    totals.wall_grind,
-                    totals.bump_rate,
-                    totals.low_progress,
-                    totals.never_arrived,
-                    totals.invariant,
+                    totals_line(&totals),
                 );
             }
             grand_total.stale_start += totals.stale_start;
@@ -1806,21 +1939,19 @@ fn main() -> ExitCode {
 
     if sweep {
         println!(
-            "probe: {}/{} rounds flagged - totals: stale-start={} stall={} border-stuck={} jitter={} spin={} churn={} clustering={} wall-grind={} bump-rate={} low-progress={} never-arrived={} invariant={}",
+            "probe: {}/{} rounds flagged - totals: {}",
             flagged.len(),
             args.rounds,
-            grand_total.stale_start,
-            grand_total.stall,
-            grand_total.border_stuck,
-            grand_total.jitter,
-            grand_total.spin,
-            grand_total.churn,
-            grand_total.clustering,
-            grand_total.wall_grind,
-            grand_total.bump_rate,
-            grand_total.low_progress,
-            grand_total.never_arrived,
-            grand_total.invariant,
+            totals_line(&grand_total),
+        );
+        // Rams are reported beside the anomalies but are deliberately not
+        // one: a ram is not a failure, and budgeting it would budget the
+        // thing ordered rams are meant to produce. `enemy-pair` is the
+        // number the command & control work has to move
+        // (docs/enemy-command-and-control-prd.md section 10).
+        println!(
+            "probe: rams: enemy-pair={} into-player={} rolled-damage={:.0}",
+            grand_rams.pair, grand_rams.into_player, grand_rams.rolled_damage,
         );
         if !flagged.is_empty() {
             let recap = flagged

@@ -438,15 +438,9 @@ fn draw_gauge(d: &mut impl RaylibDraw, x: i32, y: i32, h: i32, frac: f32, color:
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-/// A two-player readout, `left|right`, in `CHAR_W` cells: the left number
-/// right-aligned to the dim separator in a cell `digits` wide, the right
-/// one after it. Each side in its own colour.
-fn draw_pair(d: &mut impl RaylibDraw, x: i32, text_y: i32, digits: i32, left: (&str, Color), right: (&str, Color)) {
-    draw_pair_sized(d, x, text_y, digits, left, right, HUD_TEXT_SIZE, CHAR_W);
-}
-
-/// `draw_pair` at an explicit font size and cell width - the weapon
+/// A two-player readout, `left|right`: the left number right-aligned to
+/// the dim separator in a cell `digits` wide, the right one after it, each
+/// side in its own colour, at an explicit font size and cell width - the weapon
 /// pairs use the small font so four slots fit.
 #[allow(clippy::too_many_arguments)]
 fn draw_pair_sized(d: &mut impl RaylibDraw, x: i32, text_y: i32, digits: i32, left: (&str, Color), right: (&str, Color), size: i32, ch: i32) {
@@ -457,15 +451,9 @@ fn draw_pair_sized(d: &mut impl RaylibDraw, x: i32, text_y: i32, digits: i32, le
     d.draw_text(right.0, sep_x + ch, text_y, size, right.1);
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 /// The two-player stand-in for `active_outline`: a 2 px underline under
 /// whichever side of a pair is what that player's trigger fires, in that
-/// player's team colour.
-fn draw_pair_underlines(d: &mut impl RaylibDraw, x: i32, y: i32, h: i32, digits: i32, left: bool, right: bool) {
-    draw_pair_underlines_sized(d, x, y, h, digits, left, right, CHAR_W);
-}
-
-/// `draw_pair_underlines` at an explicit cell width, for the small-font
+/// player's team colour, at an explicit cell width - for the small-font
 /// weapon pairs.
 #[allow(clippy::too_many_arguments)]
 fn draw_pair_underlines_sized(d: &mut impl RaylibDraw, x: i32, y: i32, h: i32, digits: i32, left: bool, right: bool, ch: i32) {

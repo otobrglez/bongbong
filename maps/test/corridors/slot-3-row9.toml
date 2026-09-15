@@ -1,0 +1,49 @@
+# maps/test/corridors/ fixture - a single east-west iron divider at col 20
+# with one horizontal slot through it, so corridor width is the only
+# variable. Hand-authored: re-saving from the map editor would drop these
+# comments.
+#
+# Geometry, for editing these by hand: a wall tile's centre sits at
+# (col*32, row*32), and the nav grid's cells are the same 32px pitch
+# anchored half a cell away, so each wall row blocks the two nav rows
+# either side of it. A slot of k free map rows therefore leaves k-1 open
+# nav rows, and needs k >= 2 to leave any at all.
+#
+# slot-3-row9: a three-map-cell (96px) slot with its top row at 9. The
+# pair with slot-3-row8 is the regression: identical geometry one row
+# apart. Under the old 48px nav grid this one routed and slot-3-row8 did
+# not, because rasterization had a phase against the 32px map grid that
+# repeated every three rows.
+
+
+version = 1
+size = [40, 22.5]
+tanks = 4
+mission.kind = "protect"
+spawn.kind = "band"
+
+# player right of the divider, frog left, so neither ever plugs the slot
+cells."30,11" = { kind = "start" }
+cells."8,11" = { kind = "frog" }
+
+# the divider: col 20, every row but the slot (9..11)
+cells."20,0" = { kind = "wall", material = "iron" }
+cells."20,1" = { kind = "wall", material = "iron" }
+cells."20,2" = { kind = "wall", material = "iron" }
+cells."20,3" = { kind = "wall", material = "iron" }
+cells."20,4" = { kind = "wall", material = "iron" }
+cells."20,5" = { kind = "wall", material = "iron" }
+cells."20,6" = { kind = "wall", material = "iron" }
+cells."20,7" = { kind = "wall", material = "iron" }
+cells."20,8" = { kind = "wall", material = "iron" }
+cells."20,12" = { kind = "wall", material = "iron" }
+cells."20,13" = { kind = "wall", material = "iron" }
+cells."20,14" = { kind = "wall", material = "iron" }
+cells."20,15" = { kind = "wall", material = "iron" }
+cells."20,16" = { kind = "wall", material = "iron" }
+cells."20,17" = { kind = "wall", material = "iron" }
+cells."20,18" = { kind = "wall", material = "iron" }
+cells."20,19" = { kind = "wall", material = "iron" }
+cells."20,20" = { kind = "wall", material = "iron" }
+cells."20,21" = { kind = "wall", material = "iron" }
+cells."20,22" = { kind = "wall", material = "iron" }

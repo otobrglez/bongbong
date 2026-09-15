@@ -306,8 +306,32 @@ impl Fx {
                     Event::FireStarted { x, y, .. } => {
                         self.burst(Position::new(x, y), ParticleKind::Ember, self.count(5), 40.0, &[FIRE_T, EMBER_T]);
                     }
+                    // A frog health pack collected: a lift of green
+                    // sparks off the frog itself, which is wherever it
+                    // happens to be standing and not where the pack was.
+                    Event::FrogHealed { x, y, .. } => {
+                        self.burst(Position::new(x, y), ParticleKind::Spark, self.count(10), 60.0, &[HEAL_T, WHITE_T]);
+                        self.burst(Position::new(x, y), ParticleKind::Ember, self.count(4), 26.0, &[HEAL_T]);
+                    }
                     Event::CookOff { x, y } => {
                         self.burst(Position::new(x, y), ParticleKind::Spark, self.count(8), 120.0, &[FIRE_T, EMBER_T]);
+                    }
+                    // A shot turned away by a rainbow shield: a small, cold
+                    // scatter at the point of contact. Deliberately slight -
+                    // this fires on every deflected shot, and the impact
+                    // flash the hit loop already pushes is doing most of the
+                    // work.
+                    Event::Deflected { x, y, .. } => {
+                        self.burst(Position::new(x, y), ParticleKind::Spark, self.count(4), 90.0, &[SHIELD_T, WHITE_T]);
+                    }
+                    // The shield itself giving way: a full ring of sparks
+                    // off the hull plus a little smoke, so the moment reads
+                    // as the shield going rather than another hit landing.
+                    // The camera shake rides `SHOCK_SHIELD_BREAK`, pushed in
+                    // `simulation/`.
+                    Event::ShieldBroken { x, y, .. } => {
+                        self.burst(Position::new(x, y), ParticleKind::Spark, self.count(16), 150.0, &[SHIELD_T, WHITE_T]);
+                        self.burst(Position::new(x, y), ParticleKind::Smoke, self.count(5), 34.0, &[SMOKE_T]);
                     }
                     _ => {}
                 }
@@ -606,6 +630,14 @@ const WHITE_T: Color = Color::new(0xFF, 0xFF, 0xFF, 255);
 const LEAF_L: Color = Color::new(0x7C, 0x98, 0x3C, 255);
 const LEAF_M: Color = Color::new(0x5F, 0x91, 0x4B, 255);
 const LEAF_D: Color = Color::new(0x1C, 0x4C, 0x33, 255);
+// The frog health pack's burst. Green under the same exemption - the frog
+// is the one living thing on the field, and `hud::FROG_COLOR` is what the
+// bar already reads it in.
+const HEAL_T: Color = Color::new(0x78, 0xDC, 0x5A, 255);
+/// Rainbow-shield violet, matching `hud::SHIELD_COLOR` so a deflection and
+/// the HUD gauge read as the same mechanic. Off the Puny Palette on purpose,
+/// like the shield ring itself.
+const SHIELD_T: Color = Color::new(0xAA, 0x78, 0xFF, 255);
 
 #[cfg(test)]
 mod fx_tests {

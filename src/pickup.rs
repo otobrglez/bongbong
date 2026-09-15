@@ -11,7 +11,7 @@ use sola_raylib::prelude::*;
 use crate::{PICKUP_SCALE, PICKUP_TEXTURE_SIZE, Position};
 
 /// Which effect a pickup has when collected - see `simulation::collect_pickups`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PickupKind {
     Health,
@@ -40,13 +40,26 @@ pub enum PickupKind {
     /// one while already boosted refreshes the timer rather than stacking
     /// it, so a tank is only ever under one speed boost at a time.
     SpeedUp,
-    /// Rainbow shield: heals the collector to full and sets
-    /// `tank::Tank::shield_timer` to SHIELD_DURATION_SECONDS - while
-    /// positive the tank takes no damage from anything (`Tank::take_damage`).
-    /// Refreshes rather than stacks, like `SpeedUp`. Never a map slot of its
-    /// own in the shipped maps: it appears as an un-slotted bonus dropped
-    /// next to a Health slot with SHIELD_NEAR_HEALTH_CHANCE odds each time
-    /// that slot is (re)spawned - see `simulation::maybe_spawn_bonus_shield`.
+    /// Rainbow shield: heals the collector to full and fills
+    /// `tank::Tank::shield_hp` to `shield_capacity`. Refills rather than
+    /// stacks, like `SpeedUp`.
+    ///
+    /// The shield is a **pool of absorption, not an invulnerability
+    /// window**: it soaks damage until spent and then shatters
+    /// (`Event::ShieldBroken`), so concentrated fire is what ends it and
+    /// breaking contact is what preserves it (`Tank::tick_shield` refills a
+    /// live shield after `shield_recharge_delay_seconds`; a shattered one
+    /// never returns on its own). It is spent at two seams, because a
+    /// projectile never reaches `Tank::take_damage`: that function is the
+    /// absorb path for ram, blasts, flame, the frog and the laser, while
+    /// shells, bullets and plasma bounce off in
+    /// `Game::resolve_projectiles` and are charged
+    /// `shield_deflect_cost_factor` times their own damage there.
+    ///
+    /// Usually an un-slotted bonus dropped next to a Health slot with
+    /// `shield_near_health_chance` odds each time that slot is (re)spawned
+    /// (`simulation::maybe_spawn_health_slot_bonuses`), though a map may
+    /// also place one as a slot of its own.
     Shield,
     /// The flamethrower (docs/flamethrower-prd.md): grants
     /// `flame_fuel_per_pickup` seconds of fuel and queues the weapon (FIFO
@@ -55,6 +68,21 @@ pub enum PickupKind {
     /// the map's own props alight. Player-only: an enemy driving over one
     /// leaves it where it is.
     Flamethrower,
+    /// The frog health pack (docs/frog-health-pack-prd.md): heals the
+    /// collector's *own* frog - `Game::frog` for a player,
+    /// `Game::enemy_frog` for an enemy in a Hunt round - by
+    /// `frog_pack_heal_fraction` of its max health, which is a full heal by
+    /// default. The frog is otherwise the one thing in the game that only
+    /// ever gets worse.
+    ///
+    /// One rule decides who collects it: **a tank collects a frog pack
+    /// unless its own side's frog is alive and already at full health.** So
+    /// a pack is left alone rather than wasted on a pristine frog, and a
+    /// side with no frog at all (an enemy in Protect) consumes it for
+    /// nothing, which is the denial pressure that makes it worth racing
+    /// for.
+    #[serde(rename = "frog_health")]
+    FrogHealth,
 }
 
 pub struct Pickup {

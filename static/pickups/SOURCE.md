@@ -48,6 +48,18 @@ Pillow convention as the generators above, plus a minimal PNG decoder for
 the source. Being a recolour of the pack's art, it inherits `health.png`'s
 provenance and terms. Regenerate with `python3 tools/gen_shield_pickup.py`.
 
+`frog_health.png` is derived from `health.png` the same way:
+`tools/gen_frog_health_pickup.py` rotates every saturated pixel of the box
+103 degrees around the colour wheel - to hue 106, the hue of the HUD's
+`FROG_COLOR` - with saturation and value left alone, so the outline,
+highlights and shading survive intact; it then paints the white cross out
+and stamps a 12x12 top-down frog in the cross's own off-white, eyes in the
+box's darkest tone. The job is that it reads as "a health pack, but for the
+frog" at 32px (docs/frog-health-pack-prd.md section 7). Same
+raw-PNG-bytes/no-Pillow convention and the same minimal decoder as the
+shield, and it inherits `health.png`'s provenance and terms for the same
+reason. Regenerate with `python3 tools/gen_frog_health_pickup.py`.
+
 `health.png` and `ammo.png` are `health-red 32px.png` and
 `ammo-pistol 32px.png` from the third-party "2D Health & Ammo Pickups v6.2"
 pack (`bongbong-assets/2D Health & Ammo Pickups v6.2/32px/`), copied in

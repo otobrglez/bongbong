@@ -310,8 +310,8 @@ tunables! {
         /// a round, not an exact headcount.
         enemy_special_weapon_chance: f32 = 0.268 in 0.0 ..= 1.0 @ Restart;
         /// Odds any tank (the player included) starts the round already
-        /// under a rainbow shield (`Tank::shield_timer` set to
-        /// `shield_duration_seconds`). Rolled independently per tank.
+        /// under a rainbow shield (`Tank::shield_hp` set to
+        /// `shield_capacity`). Rolled independently per tank.
         spawn_shield_chance: f32 = 0.05 in 0.0 ..= 1.0 @ Restart;
         /// Of an enemy that rolls a special weapon, the odds it's a laser.
         enemy_special_weapon_laser_share: f32 = 0.5 in 0.0 ..= 1.0 @ Restart;
@@ -353,8 +353,8 @@ tunables! {
         /// many px of the enemy frog, and wanders inside it otherwise.
         guard_leash_px: f32 = 260.0 in 50.0 ..= 1000.0;
         /// A guard's beat keeps at least this far from its own frog -
-        /// outside the frog's bite and hop ranges, so it neither gets
-        /// bitten by it nor chases it around the map.
+        /// outside the frog's hop range, so it doesn't shove the thing it
+        /// is guarding around the map. (Its own frog never bites it.)
         guard_keep_off_px: f32 = 130.0 in 0.0 ..= 500.0;
         /// Procedural enemy-frog placement (a hunt map without an
         /// `enemy_frog` cell): at least this far from the player's frog.
@@ -694,15 +694,52 @@ tunables! {
         /// under one boost at a time.
         speed_boost_duration_seconds: f32 = 12.0 in 0.0 ..= 120.0;
         /// Rainbow shield: collecting one heals the tank to full and *sets*
-        /// `Tank::shield_timer` to this (a second one refreshes it rather
-        /// than stacking). While positive the tank takes no damage from any
-        /// source - see `Tank::take_damage`.
-        shield_duration_seconds: f32 = 30.0 in 0.0 ..= 120.0;
+        /// `Tank::shield_hp` to this (a second one refills it rather than
+        /// stacking). The shield is a pool of absorption, not a clock - it
+        /// soaks damage until spent and then shatters, so concentrated fire
+        /// is what ends it. `MAX_DAMAGE` is 100, so the default is worth two
+        /// hulls. See `Tank::take_damage` for the absorb path and
+        /// `Game::resolve_projectiles` for the deflect one.
+        shield_capacity: f32 = 200.0 in 0.0 ..= 1000.0;
+        /// What a *deflected* projectile costs the shield, as a multiple of
+        /// the shot's own mid-range damage - shells, bullets and plasma
+        /// bounce off (`Event::Deflected`) rather than landing, and pay this
+        /// instead. Above 1 on purpose: shooting a shielded tank is then the
+        /// fastest way to strip it *and* the most dangerous, since the shot
+        /// comes back under the shielded tank's ownership. At 1 it would be
+        /// strictly worse than any other damage source and nobody would
+        /// ever shoot.
+        shield_deflect_cost_factor: f32 = 2.0 in 0.0 ..= 10.0;
+        /// How long a shield must go without absorbing anything before it
+        /// starts refilling - the window that makes breaking contact worth
+        /// something.
+        shield_recharge_delay_seconds: f32 = 4.0 in 0.0 ..= 60.0;
+        /// Refill rate once `shield_recharge_delay_seconds` has elapsed.
+        /// Only a *live* shield recharges: once it shatters it is gone until
+        /// another pickup, which is what stops this making shields
+        /// permanent.
+        shield_recharge_per_second: f32 = 20.0 in 0.0 ..= 200.0;
         /// Odds that a rainbow shield pickup is dropped in a free cell next
         /// to a Health slot each time that slot is spawned or respawned.
         /// The shield is an un-slotted bonus: it never respawns on its own,
         /// only ever alongside a health pack.
         shield_near_health_chance: f32 = 0.2 in 0.0 ..= 1.0;
+        /// Frog health pack (docs/frog-health-pack-prd.md): the fraction of
+        /// `frog_max_health` one pack restores to the collector's own frog.
+        /// 1 is the agreed full heal; lower it to make the frog a running
+        /// cost rather than something one detour resets.
+        frog_pack_heal_fraction: f32 = 1.0 in 0.0 ..= 1.0;
+        /// Odds that a frog health pack is dropped in a free cell next to a
+        /// Health slot each time that slot is spawned or respawned - the
+        /// same un-slotted bonus mechanism the rainbow shield uses, with
+        /// one extra gate: it is only rolled while the frog is hurt (see
+        /// `frog_pack_bonus_below`), so a round whose frog is never touched
+        /// draws exactly the RNG it drew before this pickup existed. 0
+        /// turns the bonus off and leaves only the map's own slots.
+        frog_pack_near_health_chance: f32 = 0.35 in 0.0 ..= 1.0;
+        /// How hurt the frog has to be before that bonus rolls at all, as a
+        /// fraction of its max health.
+        frog_pack_bonus_below: f32 = 0.75 in 0.0 ..= 1.0;
     }
 
     group combat {
@@ -866,6 +903,74 @@ tunables! {
         enemy_breach_reach_px: f32 = 40.0 in 4.0 ..= 300.0;
     }
 
+    group command {
+        /// The switch on the enemy command & control layer
+        /// (docs/enemy-command-and-control-prd.md). False is a **total**
+        /// no-op: the commander is not consulted, no intent is rewritten and
+        /// no order is issued - not a mitigation of strength zero. That is
+        /// what lets a build with C2 off reproduce a pre-C2 round bit for
+        /// bit, which is the A/B this whole feature is measured by, and it is
+        /// why this is a bool rather than a strength.
+        ///
+        /// Safe to flip mid-round: tuning writes are staged and applied at
+        /// the frame boundary. Reachable from the dev panel, `--tuning`,
+        /// `--no-c2` and the dev-build key toggle.
+        /// **Off by default, deliberately, and not because it does not
+        /// work.** As measured (docs/enemy-command-and-control-prd.md
+        /// section 10) the arbiter is a large win in open ground - 21
+        /// enemy-vs-enemy rams down to 6 on a bare map over 16 seeds - and
+        /// roughly neutral on the cluttered shipped map, where it trades a
+        /// 15% cut in enemy-vs-enemy ramming for three regressions it has no
+        /// answer for yet: more rams into the *player* (enemies that stop
+        /// shoving each other arrive at you more successfully), and a
+        /// handful of `stall`/`low-progress` flags where a yielding tank
+        /// waits out a jam it used to barge through.
+        ///
+        /// Flipping this default is Phase 3's job: the ram authorisation
+        /// gate is what addresses player rams, and it is meaningless to
+        /// judge the arbiter's effect on them until that exists. Until then
+        /// the shipped game is unchanged and this is the switch to play
+        /// with - `--no-c2`, the dev-build key, the tuning panel, or
+        /// `tuning_set` over MCP.
+        c2_enabled: bool = false in 0 ..= 1;
+        /// Seconds ahead the commander predicts hull contact. Deliberately
+        /// shorter than `avoid_lookahead` (0.8) so the two layers own
+        /// disjoint time bands: the AI's predictive sidestep has already had
+        /// its chance to solve a crossing, and this is the late window where
+        /// it has either declined or failed.
+        c2_horizon_seconds: f32 = 0.5 in 0.0 ..= 3.0;
+        /// Clearance beyond the two hull radii (px) that counts as contact.
+        /// Under `avoid_margin` (12) on purpose - `Ai::avoid_collisions`
+        /// *skips* every pair already inside that, so triggering below it is
+        /// what keeps the two from arguing over the same tanks.
+        c2_contact_margin_px: f32 = 6.0 in 0.0 ..= 60.0;
+        /// Centre-distance cull (px) before the pair test. The O(n^2) scan's
+        /// only optimisation, and with at most 33 movers its only needed one.
+        c2_watch_px: f32 = 200.0 in 50.0 ..= 1000.0;
+        /// Real closing speed (px/s) below which a pair is resting against
+        /// each other rather than colliding - the stuck escape's business,
+        /// not the commander's. Above solver jitter and above
+        /// `stuck_speed_eps`.
+        c2_min_closing_px: f32 = 20.0 in 0.0 ..= 200.0;
+        /// Slowest a throttled tank is driven, as a fraction of its speed.
+        /// Above zero on purpose: a throttled tank is still *commanded* to
+        /// move, so `Ai`'s stuck clock keeps running underneath and
+        /// `stuck_escape_seconds` stays armed - which a full brake
+        /// (`move_dir = None`) resets every frame, and which is why
+        /// `enemy_yield_seconds` has to be capped at all.
+        c2_throttle_floor: f32 = 0.35 in 0.0 ..= 1.0;
+        /// Speed quantisation (px/s) in the right-of-way comparator, so a
+        /// priority flip needs a real difference rather than float noise.
+        c2_speed_bucket_px: f32 = 40.0 in 1.0 ..= 200.0;
+        /// Ceiling on one yield. Past it the tank drives on regardless, the
+        /// same safety valve `enemy_yield_seconds` provides one level down:
+        /// without a ceiling a pair that cannot resolve would hold forever.
+        c2_yield_hold_seconds: f32 = 1.5 in 0.0 ..= 10.0;
+        /// How long a pair must stay in conflict before the commander
+        /// escalates from easing off to stopping.
+        c2_escalate_seconds: f32 = 0.5 in 0.0 ..= 5.0;
+    }
+
     group engage {
         /// Engagement ring radius as a fraction of `enemy_attack_range`
         /// (`Tuning::engage_ring_radius`): each engaged enemy claims a
@@ -922,16 +1027,18 @@ tunables! {
         /// Hop landing spots must stay this far (px) inside the battlefield
         /// edge.
         frog_hop_bounds_margin: f32 = 40.0 in 0.0 ..= 200.0;
-        /// Bite any tank - either side - within this factor of the frog's
-        /// size.
+        /// Bite a tank of the *other* side within this factor of the
+        /// frog's size (`frog::Side::bites`: a frog never bites the side
+        /// whose objective it is).
         frog_attack_range_factor: f32 = 0.9 in 0.0 ..= 5.0;
         frog_attack_cooldown_seconds: f32 = 1.5 in 0.0 ..= 10.0;
         frog_attack_damage_min: f32 = 4.0 in 0.0 ..= 100.0;
         frog_attack_damage_max: f32 = 10.0 in 0.0 ..= 100.0;
-        /// Personal space: hop away from the nearest tank once one gets
-        /// within this factor of the frog's size - larger than the bite
-        /// range ("keep your distance" rather than "retaliate"), well inside
-        /// the hop distance so a single hop reliably clears it.
+        /// Personal space: hop away from the nearest tank of *either* side
+        /// once one gets within this factor of the frog's size - larger
+        /// than the bite range ("keep your distance" rather than
+        /// "retaliate"), well inside the hop distance so a single hop
+        /// reliably clears it.
         frog_avoid_range_factor: f32 = 1.2 in 0.0 ..= 5.0;
     }
 
@@ -1392,9 +1499,11 @@ tunables! {
         shield_glow_radius_factor: f32 = 0.385 in 0.1 ..= 2.0;
         /// How many full rainbow hue cycles the shield ring makes per second.
         shield_glow_hue_hz: f32 = 0.4 in 0.0 ..= 5.0;
-        /// The ring fades out over this many final seconds of the shield so
-        /// the wearer can see it about to drop.
-        shield_glow_fade_seconds: f32 = 2.0 in 0.0 ..= 10.0;
+        /// The shield ring fades out below this fraction of charge, so the
+        /// wearer can see it about to shatter and the health ring underneath
+        /// cross-fades back in. A fraction rather than a countdown because
+        /// the shield has no clock - what is running out is absorption.
+        shield_glow_fade_fraction: f32 = 0.15 in 0.0 ..= 1.0;
         /// A tank's ground ring (`Tank::ring_position`: the shield ring and
         /// the player's white marker) follows the hull as a damped spring.
         /// This is its natural frequency: how briskly it accelerates after

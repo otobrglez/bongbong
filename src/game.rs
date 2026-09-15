@@ -69,6 +69,7 @@ pub struct Textures<'a> {
     pub pickup_speedup: &'a Texture2D,
     pub pickup_shield: &'a Texture2D,
     pub pickup_flamethrower: &'a Texture2D,
+    pub pickup_frog_health: &'a Texture2D,
     /// The minigun barrel-cluster overlay drawn on a tank's turret while it
     /// holds minigun ammo - see `tank::draw_minigun_mount`. One shared
     /// texture for every chassis (unlike `tanks` above), not a sheet.
@@ -322,6 +323,7 @@ impl Game {
                     PickupKind::SpeedUp => textures.pickup_speedup,
                     PickupKind::Shield => textures.pickup_shield,
                     PickupKind::Flamethrower => textures.pickup_flamethrower,
+                    PickupKind::FrogHealth => textures.pickup_frog_health,
                 };
                 draw_pickup(&mut d, texture, pickup);
             }

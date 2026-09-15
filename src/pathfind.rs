@@ -55,6 +55,16 @@ impl Grid {
     /// `half_extent + margin` of its own center (in both axes) - `margin`
     /// should be a tank's worst-case half-hull, so pathfinding never
     /// routes through a gap too narrow for a tank to actually fit through.
+    /// The area's own outer boundary is solid on the same terms: a cell
+    /// whose centre is within `margin` of it is blocked.
+    ///
+    /// `cell_size` must match the pitch of whatever grid the obstacles are
+    /// placed on (in this game, `PATHFIND_CELL_SIZE == OBSTACLE_GRID_SIZE`).
+    /// Because occupancy is decided at cell *centers*, a mismatched pitch
+    /// gives the rasterization a phase that repeats every `lcm` of the two,
+    /// and whether a corridor survives it then depends on where its author
+    /// happened to put it rather than on how wide it is - see
+    /// `PATHFIND_CELL_SIZE`'s own comment for the measured damage.
     ///
     /// Cell-center occupancy, not any-overlap, on purpose: `next_step`
     /// steers tanks *at cell centers* (`center_of`), so "can a tank's
@@ -82,6 +92,33 @@ impl Grid {
         let cols = ((width / cell_size).ceil() as usize).max(1);
         let rows = ((height / cell_size).ceil() as usize).max(1);
         let mut blocked = vec![false; cols * rows];
+
+        // The area's own boundary is solid, and gets the same `margin`
+        // every obstacle does: a tank's centre can no more sit `margin`
+        // inside the edge than `margin` inside a wall tile. `neighbors`
+        // and `blocked_ahead` already refuse to leave the grid, but that
+        // alone made the boundary a wall with *zero* clearance - the
+        // outermost lane of cells was reported open, so the router offered
+        // routes whose centre line runs inside the boundary's collider,
+        // which `ai.rs`'s own `heads_into_wall` then refused. Measured on
+        // the maps/test fixtures at a cell size equal to the map grid:
+        // without this the probe's border-stuck count went 1 -> 12 and
+        // wall-grind 0 -> 10 over the same 70 rounds.
+        //
+        // This also covers the overhang when the area is not a whole number
+        // of cells: those centres are past the edge outright.
+        //
+        // `battlefield::gate_candidates` insets its roll-in lanes by the
+        // same margin, since a lane cell no tank can stand in is not part
+        // of the lane.
+        for row in 0..rows {
+            for col in 0..cols {
+                let (cx, cy) = ((col as f32 + 0.5) * cell_size, (row as f32 + 0.5) * cell_size);
+                if cx < margin || cx > width - margin || cy < margin || cy > height - margin {
+                    blocked[row * cols + col] = true;
+                }
+            }
+        }
 
         for (center, half_extent) in obstacles {
             let reach = half_extent + margin;
@@ -169,9 +206,9 @@ impl Grid {
     /// route" apart from "no path exists at all" - `next_step`'s `None`
     /// alone conflates the two, and callers that treat every `None` as
     /// "unreachable" would otherwise misfire constantly at close range
-    /// (found via the probe harness: at PATHFIND_CELL_SIZE=48px, closing in
-    /// for an attack routinely puts the two tanks in the same cell well
-    /// before they're actually touching).
+    /// (found via the probe harness: closing in for an attack routinely
+    /// puts the two tanks in the same cell well before they're actually
+    /// touching).
     pub fn same_cell(&self, from: Position, to: Position) -> bool {
         self.cell_of(from) == self.cell_of(to)
     }
@@ -707,8 +744,11 @@ mod component_tests {
 mod dims_tests {
     use super::*;
 
-    /// The battlefield at PATHFIND_CELL_SIZE is 27x15 cells (ceil), and a
-    /// single obstacle shows up as exactly its blocked cell in `ascii`.
+    /// A grid's dims are the ceil of its size in cells, and a single
+    /// obstacle shows up as exactly its blocked cell in `ascii`. Built at
+    /// an explicit 48px cell with a zero margin rather than through
+    /// `PATHFIND_CELL_SIZE`, so it pins `build`'s arithmetic and not the
+    /// game's current choice of cell size.
     #[test]
     fn dims_and_ascii_match_the_built_grid() {
         let open = Grid::build(1280.0, 720.0, 48.0, 0.0, std::iter::empty());

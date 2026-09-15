@@ -6,8 +6,6 @@
     <meta charset="utf-8"/>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
     <link rel="icon" href="/favicon.ico"/>
-    <!-- viewport-fit=cover so the immersive mode can reach under a notch;
-         no user scaling because pinch-zoom fights the builder's touch painting. -->
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no"/>
     <meta name="mobile-web-app-capable" content="yes"/>
     <meta name="apple-mobile-web-app-capable" content="yes"/>
@@ -20,8 +18,6 @@
       html, body {
         margin: 0;
         min-height: 100%;
-        /* The same #151515 the game's HUD bar is filled with, so the bar
-           and the page read as one surface around the field. */
         background-color: #151515;
         color: $font-color;
         font-family: sans-serif;
@@ -30,46 +26,6 @@
 
       a {
         color: #888;
-      }
-
-      /* The rotate card: a phone or tablet held upright cannot show the
-         whole battlefield at a playable size (the field is 2:1), so
-         touch devices in portrait get this over everything, including
-         the immersive and fullscreen modes. Only touch devices: a
-         narrow desktop window is not a phone. The game keeps running
-         underneath - a match cannot wait for one player's phone. */
-      .rotate-card {
-        display: none;
-        position: fixed;
-        inset: 0;
-        z-index: 200;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        gap: 14px;
-        padding: 24px;
-        background: #1b2118;
-        color: #cfe0c4;
-        font-size: 18px;
-        text-align: center;
-
-        svg { width: 72px; height: 72px; }
-        p { margin: 0; max-width: 24ch; }
-        .rotate-note { font-size: 14px; color: #8fa583; }
-      }
-
-      @media (orientation: portrait) and (pointer: coarse) {
-        .rotate-card { display: flex; }
-      }
-
-      @media (prefers-reduced-motion: no-preference) {
-        .rotate-card svg { animation: rotate-hint 2.4s ease-in-out infinite; }
-      }
-
-      @keyframes rotate-hint {
-        0%, 20% { transform: rotate(0deg); }
-        50%, 70% { transform: rotate(-90deg); }
-        100% { transform: rotate(0deg); }
       }
 
       .wrapper {
@@ -146,7 +102,7 @@
             position: absolute;
             top: 0;
             left: 50%;
-            transform: translateX(-50%);
+            transform: translatex(-50%);
             width: var(--canvas-w);
             aspect-ratio: var(--bitmap-w) / var(--bitmap-h);
             z-index: 2;
@@ -456,15 +412,6 @@
     </style>
 </head>
 <body>
-<div class="rotate-card" id="rotate-card" role="status" aria-live="polite">
-    <svg viewBox="0 0 64 64" aria-hidden="true" fill="none" stroke="#cfe0c4" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="20" y="6" width="24" height="52" rx="4"/>
-        <line x1="28" y1="50" x2="36" y2="50"/>
-    </svg>
-    <p>Rotate your phone to landscape to see the whole battlefield.</p>
-    <p class="rotate-note">The game keeps running while you turn it.</p>
-</div>
-
 <div class="wrapper">
     <div class="game">
         <div class="overlay-controls">
@@ -485,7 +432,7 @@
         </div>
         <div class="instructions">
             <p>Arrows to drive, <kbd>Space</kbd> to fire, <kbd>r</kbd> to restart.</p>
-            <p>Two players: press the tank button in the bar. Arrows + <kbd>Space</kbd> for player 1, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> + <kbd>Left Shift</kbd> for player 2.</p>
+            <p>Two players: Arrows + <kbd>Space</kbd> for player 1, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> + <kbd>Left Shift</kbd> for player 2.</p>
         </div>
         <details class="tuning" id="tuning" hidden>
             <summary>Tuning <span class="badge">dev build</span></summary>

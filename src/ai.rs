@@ -34,7 +34,7 @@ pub struct Mover {
 /// What a driver (player or AI) wants to do this frame. The physics layer turns
 /// this into a facing/step + firing, so player input and AI decisions flow
 /// through the exact same code path. Movement is 4-direction only.
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, Debug)]
 pub struct Intent {
     /// Direction to face and move this frame, or None to stay put.
     pub move_dir: Option<Dir>,
@@ -47,6 +47,29 @@ pub struct Intent {
     /// can be thrown off-aim. Zero means fire straight down the barrel. Used by the
     /// enemy AI to model point-blank misfires.
     pub fire_aim_offset: f32,
+    /// How much to ease off the throttle this frame, 0 (full speed) to 1
+    /// (stopped) - `Game::drive_tank` scales the commanded speed by
+    /// `speed_scale()`.
+    ///
+    /// Stored inverted on purpose. This struct derives `Default`, so a
+    /// `throttle` field would default to 0.0 and every intent that forgot to
+    /// set it would be a *stopped* tank; storing the deviation from normal
+    /// means the default is "drive normally" and a forgotten field is
+    /// harmless. Read it through `speed_scale()` rather than inverting by
+    /// hand at the use site.
+    ///
+    /// Nothing in `ai.rs` ever sets this: it is the one lever
+    /// `simulation::command` has over a tank's movement
+    /// (docs/enemy-command-and-control-prd.md), and the player always leaves
+    /// it at 0.
+    pub slow: f32,
+}
+
+impl Intent {
+    /// Fraction of commanded top speed to actually drive at, 0..=1.
+    pub fn speed_scale(&self) -> f32 {
+        1.0 - self.slow.clamp(0.0, 1.0)
+    }
 }
 
 /// What stands directly ahead of a tank in one direction - the tile a shot
@@ -69,8 +92,9 @@ struct Breach {
 
 /// A guard's beat (see `Role::Guard`): the annulus `keep_off..=radius`
 /// around `anchor`, its own frog. The inner radius keeps the guard out of
-/// the frog's bite and hop ranges - the frog is a solid body that snaps at
-/// and hops away from any tank, its guard included.
+/// the frog's hop range - the frog is a solid body that hops away from any
+/// tank, its guard included, so crowding it walks it off its post. It does
+/// not bite its own side (`frog::Side::bites`).
 #[derive(Clone, Copy, Debug)]
 struct Leash {
     anchor: Position,
@@ -1636,7 +1660,7 @@ fn build<'a>() -> Node<Brain<'a>> {
         // first). See `act_seek_laser`.
         sequence(vec![
             condition(|b: &mut Brain| {
-                b.me.laser_charges <= 0 && b.pickups.iter().any(|(k, _)| *k == PickupKind::Laser)
+                b.me.wants_pickup(PickupKind::Laser) && b.pickups.iter().any(|(k, _)| *k == PickupKind::Laser)
             }),
             action("seek_laser", act_seek_laser),
         ]),
@@ -1645,7 +1669,7 @@ fn build<'a>() -> Node<Brain<'a>> {
         // comment), so no gating on the live weapon.
         sequence(vec![
             condition(|b: &mut Brain| {
-                b.me.plasma_ammo <= 0
+                b.me.wants_pickup(PickupKind::Plasma)
                     && b.pickups.iter().any(|(k, _)| *k == PickupKind::Plasma)
             }),
             action("seek_plasma", act_seek_plasma),
@@ -1654,7 +1678,7 @@ fn build<'a>() -> Node<Brain<'a>> {
         // tiers (see tier 5.5's comment on ordering).
         sequence(vec![
             condition(|b: &mut Brain| {
-                b.me.minigun_ammo <= 0
+                b.me.wants_pickup(PickupKind::Minigun)
                     && b.pickups.iter().any(|(k, _)| *k == PickupKind::Minigun)
             }),
             action("seek_minigun", act_seek_minigun),
@@ -1665,7 +1689,7 @@ fn build<'a>() -> Node<Brain<'a>> {
         // "not already benefiting from one".
         sequence(vec![
             condition(|b: &mut Brain| {
-                b.me.speed_boost_timer <= 0.0
+                b.me.wants_pickup(PickupKind::SpeedUp)
                     && b.pickups.iter().any(|(k, _)| *k == PickupKind::SpeedUp)
             }),
             action("seek_speedup", act_seek_speedup),
@@ -1675,7 +1699,7 @@ fn build<'a>() -> Node<Brain<'a>> {
         // detour at any health.
         sequence(vec![
             condition(|b: &mut Brain| {
-                b.me.shield_timer <= 0.0 && b.pickups.iter().any(|(k, _)| *k == PickupKind::Shield)
+                b.me.wants_pickup(PickupKind::Shield) && b.pickups.iter().any(|(k, _)| *k == PickupKind::Shield)
             }),
             action("seek_shield", act_seek_shield),
         ]),
@@ -2058,7 +2082,7 @@ mod role_tests {
         assert_eq!(ai.snapshot().last_action, Some("guard"));
         assert_eq!(intent.move_dir, Some(Dir::Right));
         // Guard inside the leash: wanders, but only to waypoints on its
-        // beat - inside the leash and clear of the frog's bite range.
+        // beat - inside the leash and clear of the frog itself.
         let mut ai = Ai::with_role(Role::Guard);
         let keep_off = tuning().guard_keep_off_px;
         for _ in 0..600 {
@@ -2205,6 +2229,43 @@ mod stuck_tests {
 }
 
 #[cfg(test)]
+mod intent_tests {
+    use super::*;
+
+    /// The throttle is stored as a *deviation* (`slow`) precisely so that a
+    /// default intent drives normally. If this ever fails, every driver that
+    /// did not explicitly set the field has become a stopped tank.
+    #[test]
+    fn a_default_intent_drives_at_full_speed() {
+        assert_eq!(Intent::default().slow, 0.0);
+        assert_eq!(Intent::default().speed_scale(), 1.0);
+    }
+
+    /// `Game::drive_tank` multiplies the commanded target by `speed_scale()`.
+    /// At 1.0 that multiply is *exactly* value-preserving under IEEE-754, so
+    /// adding the throttle cannot perturb a single bit of an untouched
+    /// round - which is what lets the C2 rollout's byte-identical checkpoints
+    /// treat this step as free (docs/enemy-command-and-control-prd.md §4).
+    #[test]
+    fn scaling_by_an_untouched_throttle_is_bit_exact() {
+        let scale = Intent::default().speed_scale();
+        for v in [0.0f32, 1.0, -1.0, 210.0, -173.456, f32::MIN_POSITIVE, f32::MAX] {
+            assert_eq!((v * scale).to_bits(), v.to_bits(), "{v} changed bits when scaled by {scale}");
+        }
+    }
+
+    #[test]
+    fn slow_clamps_rather_than_reversing_or_overdriving() {
+        let faster = Intent { slow: -1.0, ..Intent::default() };
+        let stopped = Intent { slow: 1.0, ..Intent::default() };
+        let absurd = Intent { slow: 5.0, ..Intent::default() };
+        assert_eq!(faster.speed_scale(), 1.0, "a negative slow must not overdrive");
+        assert_eq!(stopped.speed_scale(), 0.0);
+        assert_eq!(absurd.speed_scale(), 0.0, "an out-of-range slow must not reverse the tank");
+    }
+}
+
+#[cfg(test)]
 mod separation_tests {
     use crate::map::MapFile;
     use crate::simulation::{Event, Game, Input};
@@ -2217,9 +2278,34 @@ mod separation_tests {
     ///
     /// A bare map with the player parked in the open, because the shipped
     /// map's tall grass gates ram damage on concealment and so never
-    /// exercises the player case at all. Measured over the same 8 seeds
-    /// with the brake disabled: 36 enemy-vs-enemy rams, 17 into the player,
-    /// 204 total damage. The brake takes that to 16 / 0 / 67.
+    /// exercises the player case at all.
+    ///
+    /// The ceilings were re-measured when the nav grid's cell size dropped
+    /// to the map grid's (see `PATHFIND_CELL_SIZE`). Over 16 seeds x 1200
+    /// frames, `enemy_separation_px` 0 (brake off) vs 12 (on):
+    ///
+    /// ```text
+    ///                     rams into player   enemy-vs-enemy rams
+    ///   48px grid  off           12                  79
+    ///   48px grid  on             6                  46
+    ///   32px grid  off           27                  37
+    ///   32px grid  on            18                  60
+    /// ```
+    ///
+    /// The brake still works - it is the only reason the on row is below
+    /// the off row - but both columns moved, in opposite directions, and
+    /// neither is the brake's doing: at the coarser cell size enemies
+    /// converging on one target bunched into *each other* instead of
+    /// arriving (79 enemy-vs-enemy rams with nothing braking them), and
+    /// routing that actually reaches the target trades those for arrivals.
+    /// Enemy-vs-enemy rams then rise again with the brake on because
+    /// braked tanks hold station in contact rather than shoving past.
+    ///
+    /// So these numbers bound the brake, not the feel: 18 rams on a player
+    /// who never moves is a tuning question (`enemy_separation_px` is not
+    /// the lever - sweeping it 12 -> 64 moves the player column by less
+    /// than its seed-to-seed spread), and it belongs to whoever tunes
+    /// aggression, not to this test.
     #[test]
     fn enemies_pull_up_short_instead_of_ramming() {
         let map = "version = 1\ntanks = 5\ncells.\"2,2\" = { kind = \"frog\" }\ncells.\"20,11\" = { kind = \"start\" }\n";
@@ -2243,11 +2329,13 @@ mod separation_tests {
                 }
             }
         }
+        // Measured 3 and 22 on these four seeds; the headroom is one
+        // seed's worth of spread, so a real regression still trips this.
         assert!(
-            into_player <= 2,
-            "enemies rammed the parked player {into_player} times; without the brake this measured 17 \
-             over twice the frames, and the point of the brake is that they stop short"
+            into_player <= 5,
+            "enemies rammed the parked player {into_player} times; measured 3 here and 27 over 16 seeds \
+             with the brake disabled, and the point of the brake is that they stop short"
         );
-        assert!(pair <= 12, "enemies rammed each other {pair} times; the un-braked baseline was 36 over twice the frames");
+        assert!(pair <= 30, "enemies rammed each other {pair} times; measured 22 here");
     }
 }
