@@ -1,0 +1,1121 @@
+version = 1
+tank = "assault"
+size = [
+    34.0,
+    17.0,
+]
+
+[cells."18,15"]
+kind = "wall"
+material = "brick"
+
+[cells."1,15"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."14,1"]
+kind = "barrel"
+
+[cells."15,12"]
+kind = "start2"
+
+[cells."25,11"]
+kind = "wall"
+material = "glass"
+
+[cells."14,10"]
+kind = "wall"
+material = "brick"
+
+[cells."20,15"]
+kind = "wall"
+material = "brick"
+
+[cells."30,15"]
+kind = "tall_grass"
+
+[cells."3,9"]
+kind = "tall_grass"
+
+[cells."14,4"]
+kind = "wall"
+material = "iron"
+
+[cells."23,12"]
+kind = "tall_grass"
+
+[cells."25,16"]
+kind = "road"
+
+[cells."12,2"]
+kind = "wall"
+material = "brick"
+
+[cells."12,15"]
+kind = "wall"
+material = "brick"
+
+[cells."28,4"]
+kind = "road"
+
+[cells."19,9"]
+kind = "pickup"
+pickup = "minigun"
+
+[cells."9,14"]
+kind = "barrel"
+drum = "fuel"
+
+[cells."24,15"]
+kind = "wall"
+material = "brick"
+
+[cells."15,10"]
+kind = "wall"
+material = "brick"
+
+[cells."28,10"]
+kind = "road"
+
+[cells."29,4"]
+kind = "road"
+
+[cells."34,0"]
+kind = "road"
+
+[cells."17,13"]
+kind = "frog"
+
+[cells."20,1"]
+kind = "barrel"
+
+[cells."33,7"]
+kind = "barrel"
+
+[cells."17,9"]
+kind = "pickup"
+pickup = "speedup"
+
+[cells."9,16"]
+kind = "road"
+
+[cells."5,5"]
+kind = "road"
+
+[cells."6,4"]
+kind = "road"
+
+[cells."6,5"]
+kind = "road"
+
+[cells."33,11"]
+kind = "wall"
+material = "brick"
+
+[cells."14,12"]
+kind = "tall_grass"
+
+[cells."21,1"]
+kind = "barrel"
+
+[cells."19,8"]
+kind = "pickup"
+pickup = "minigun"
+
+[cells."21,10"]
+kind = "wall"
+material = "brick"
+
+[cells."32,13"]
+kind = "barrel"
+drum = "fuel"
+
+[cells."31,11"]
+kind = "fence"
+
+[cells."7,10"]
+kind = "sandbag"
+
+[cells."16,6"]
+kind = "tall_grass"
+
+[cells."28,14"]
+kind = "road"
+
+[cells."22,16"]
+kind = "road"
+
+[cells."32,2"]
+kind = "wall"
+material = "brick"
+
+[cells."29,7"]
+kind = "road"
+
+[cells."18,4"]
+kind = "wall"
+material = "iron"
+
+[cells."18,14"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."27,11"]
+kind = "wall"
+material = "glass"
+
+[cells."8,14"]
+kind = "tall_grass"
+
+[cells."15,4"]
+kind = "wall"
+material = "iron"
+
+[cells."34,2"]
+kind = "road"
+
+[cells."20,10"]
+kind = "wall"
+material = "brick"
+
+[cells."20,2"]
+kind = "pickup"
+pickup = "plasma"
+
+[cells."26,2"]
+kind = "road"
+
+[cells."24,14"]
+kind = "wall"
+material = "brick"
+
+[cells."6,10"]
+kind = "road"
+
+[cells."3,1"]
+kind = "wall"
+material = "brick"
+
+[cells."8,12"]
+kind = "wall"
+material = "glass"
+
+[cells."25,1"]
+kind = "wall"
+material = "glass"
+
+[cells."23,1"]
+kind = "barrel"
+drum = "oil"
+
+[cells."23,10"]
+kind = "tall_grass"
+
+[cells."33,9"]
+kind = "wall"
+material = "iron"
+
+[cells."26,12"]
+kind = "wall"
+material = "glass"
+
+[cells."19,3"]
+kind = "tree"
+
+[cells."32,8"]
+kind = "road"
+
+[cells."1,4"]
+kind = "wall"
+material = "brick"
+
+[cells."34,8"]
+kind = "road"
+
+[cells."5,13"]
+kind = "road"
+
+[cells."5,4"]
+kind = "road"
+
+[cells."6,11"]
+kind = "wall"
+material = "glass"
+
+[cells."10,11"]
+kind = "wall"
+material = "iron"
+
+[cells."24,12"]
+kind = "wall"
+material = "brick"
+
+[cells."28,15"]
+kind = "road"
+
+[cells."26,16"]
+kind = "road"
+
+[cells."27,1"]
+kind = "wall"
+material = "brick"
+
+[cells."15,8"]
+kind = "pickup"
+pickup = "laser"
+
+[cells."32,4"]
+kind = "wall"
+material = "brick"
+
+[cells."27,13"]
+kind = "tall_grass"
+
+[cells."2,1"]
+kind = "wall"
+material = "brick"
+
+[cells."17,8"]
+kind = "pickup"
+pickup = "speedup"
+
+[cells."3,3"]
+kind = "wall"
+material = "brick"
+
+[cells."33,4"]
+kind = "wall"
+material = "brick"
+
+[cells."32,3"]
+kind = "wall"
+material = "brick"
+
+[cells."23,14"]
+kind = "pickup"
+pickup = "health"
+
+[cells."10,16"]
+kind = "road"
+
+[cells."15,15"]
+kind = "wall"
+material = "brick"
+
+[cells."25,7"]
+kind = "pickup"
+pickup = "health"
+
+[cells."12,1"]
+kind = "wall"
+material = "brick"
+
+[cells."4,3"]
+kind = "tall_grass"
+
+[cells."18,6"]
+kind = "tall_grass"
+
+[cells."31,1"]
+kind = "wall"
+material = "brick"
+
+[cells."33,16"]
+kind = "pickup"
+pickup = "health"
+
+[cells."29,2"]
+kind = "wall"
+material = "brick"
+
+[cells."28,2"]
+kind = "wall"
+material = "brick"
+
+[cells."22,1"]
+kind = "barrel"
+drum = "fuel"
+
+[cells."3,13"]
+kind = "tall_grass"
+
+[cells."10,10"]
+kind = "fence"
+
+[cells."3,4"]
+kind = "wall"
+material = "brick"
+
+[cells."4,10"]
+kind = "sandbag"
+
+[cells."33,2"]
+kind = "wall"
+material = "brick"
+
+[cells."16,4"]
+kind = "wall"
+material = "iron"
+
+[cells."5,7"]
+kind = "road"
+
+[cells."5,2"]
+kind = "wall"
+material = "brick"
+
+[cells."14,9"]
+kind = "pickup"
+pickup = "laser"
+
+[cells."4,1"]
+kind = "wall"
+material = "iron"
+
+[cells."33,8"]
+kind = "road"
+
+[cells."11,2"]
+kind = "pickup"
+pickup = "flamethrower"
+
+[cells."29,5"]
+kind = "road"
+
+[cells."32,1"]
+kind = "wall"
+material = "brick"
+
+[cells."5,10"]
+kind = "road"
+
+[cells."16,10"]
+kind = "wall"
+material = "brick"
+
+[cells."21,15"]
+kind = "wall"
+material = "brick"
+
+[cells."17,14"]
+kind = "pickup"
+pickup = "shield"
+
+[cells."18,5"]
+kind = "wall"
+material = "wood"
+
+[cells."26,11"]
+kind = "wall"
+material = "glass"
+
+[cells."19,12"]
+kind = "start"
+
+[cells."24,2"]
+kind = "wall"
+material = "brick"
+
+[cells."26,0"]
+kind = "road"
+
+[cells."17,1"]
+kind = "pickup"
+pickup = "health"
+
+[cells."32,15"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."24,13"]
+kind = "wall"
+material = "brick"
+
+[cells."2,4"]
+kind = "wall"
+material = "brick"
+
+[cells."22,12"]
+kind = "tall_grass"
+
+[cells."13,15"]
+kind = "wall"
+material = "brick"
+
+[cells."15,11"]
+kind = "tall_grass"
+
+[cells."24,1"]
+kind = "wall"
+material = "glass"
+
+[cells."8,13"]
+kind = "tall_grass"
+
+[cells."1,12"]
+kind = "wall"
+material = "brick"
+
+[cells."18,16"]
+kind = "road"
+
+[cells."16,11"]
+kind = "tall_grass"
+
+[cells."1,1"]
+kind = "wall"
+material = "brick"
+
+[cells."15,5"]
+kind = "wall"
+material = "wood"
+
+[cells."24,11"]
+kind = "wall"
+material = "iron"
+
+[cells."7,5"]
+kind = "pine"
+
+[cells."11,15"]
+kind = "wall"
+material = "brick"
+
+[cells."1,3"]
+kind = "wall"
+material = "brick"
+
+[cells."34,6"]
+kind = "road"
+
+[cells."25,12"]
+kind = "wall"
+material = "glass"
+
+[cells."28,1"]
+kind = "wall"
+material = "brick"
+
+[cells."23,15"]
+kind = "wall"
+material = "brick"
+
+[cells."8,1"]
+kind = "fence"
+
+[cells."1,11"]
+kind = "wall"
+material = "brick"
+
+[cells."12,16"]
+kind = "road"
+
+[cells."14,11"]
+kind = "tall_grass"
+
+[cells."29,11"]
+kind = "fence"
+
+[cells."20,4"]
+kind = "wall"
+material = "iron"
+
+[cells."2,15"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."23,11"]
+kind = "tall_grass"
+
+[cells."30,14"]
+kind = "tall_grass"
+
+[cells."12,14"]
+kind = "pickup"
+pickup = "health"
+
+[cells."1,14"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."13,16"]
+kind = "road"
+
+[cells."3,2"]
+kind = "wall"
+material = "brick"
+
+[cells."10,2"]
+kind = "pickup"
+pickup = "flamethrower"
+
+[cells."27,15"]
+kind = "road"
+
+[cells."32,11"]
+kind = "wall"
+material = "brick"
+
+[cells."27,16"]
+kind = "road"
+
+[cells."31,9"]
+kind = "road"
+
+[cells."26,3"]
+kind = "road"
+
+[cells."26,5"]
+kind = "pine"
+
+[cells."2,10"]
+kind = "wall"
+material = "brick"
+
+[cells."15,6"]
+kind = "tall_grass"
+
+[cells."7,16"]
+kind = "road"
+
+[cells."22,15"]
+kind = "wall"
+material = "brick"
+
+[cells."10,13"]
+kind = "wall"
+material = "brick"
+
+[cells."27,2"]
+kind = "wall"
+material = "brick"
+
+[cells."29,8"]
+kind = "road"
+
+[cells."19,15"]
+kind = "wall"
+material = "brick"
+
+[cells."7,11"]
+kind = "wall"
+material = "glass"
+
+[cells."11,16"]
+kind = "road"
+
+[cells."9,10"]
+kind = "sandbag"
+
+[cells."31,2"]
+kind = "wall"
+material = "brick"
+
+[cells."30,11"]
+kind = "fence"
+
+[cells."29,6"]
+kind = "road"
+
+[cells."8,11"]
+kind = "wall"
+material = "glass"
+
+[cells."5,15"]
+kind = "road"
+
+[cells."30,9"]
+kind = "road"
+
+[cells."9,1"]
+kind = "fence"
+
+[cells."29,10"]
+kind = "road"
+
+[cells."1,8"]
+kind = "barrel"
+
+[cells."27,4"]
+kind = "road"
+
+[cells."3,11"]
+kind = "tall_grass"
+
+[cells."34,7"]
+kind = "road"
+
+[cells."22,14"]
+kind = "tall_grass"
+
+[cells."19,14"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."9,13"]
+kind = "barrel"
+drum = "fuel"
+
+[cells."9,12"]
+kind = "wall"
+material = "glass"
+
+[cells."33,10"]
+kind = "wall"
+material = "brick"
+
+[cells."21,14"]
+kind = "tall_grass"
+
+[cells."16,5"]
+kind = "wall"
+material = "wood"
+
+[cells."29,9"]
+kind = "road"
+
+[cells."34,5"]
+kind = "road"
+
+[cells."15,3"]
+kind = "tree"
+
+[cells."16,3"]
+kind = "tree"
+
+[cells."3,5"]
+kind = "tall_grass"
+
+[cells."14,15"]
+kind = "wall"
+material = "brick"
+
+[cells."23,16"]
+kind = "road"
+
+[cells."3,15"]
+kind = "tall_grass"
+
+[cells."1,7"]
+kind = "barrel"
+
+[cells."2,3"]
+kind = "wall"
+material = "brick"
+
+[cells."1,6"]
+kind = "barrel"
+
+[cells."18,10"]
+kind = "wall"
+material = "brick"
+
+[cells."26,4"]
+kind = "road"
+
+[cells."3,12"]
+kind = "tall_grass"
+
+[cells."32,5"]
+kind = "barrel"
+drum = "fuel"
+
+[cells."13,10"]
+kind = "wall"
+material = "brick"
+
+[cells."32,14"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."6,1"]
+kind = "wall"
+material = "brick"
+
+[cells."4,14"]
+kind = "tall_grass"
+
+[cells."17,11"]
+kind = "tall_grass"
+
+[cells."3,10"]
+kind = "tall_grass"
+
+[cells."30,1"]
+kind = "fence"
+
+[cells."33,14"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."21,16"]
+kind = "road"
+
+[cells."19,5"]
+kind = "wall"
+material = "wood"
+
+[cells."20,16"]
+kind = "road"
+
+[cells."8,10"]
+kind = "sandbag"
+
+[cells."4,4"]
+kind = "tall_grass"
+
+[cells."5,1"]
+kind = "wall"
+material = "brick"
+
+[cells."28,12"]
+kind = "road"
+
+[cells."8,16"]
+kind = "road"
+
+[cells."23,2"]
+kind = "wall"
+material = "brick"
+
+[cells."29,1"]
+kind = "wall"
+material = "brick"
+
+[cells."32,10"]
+kind = "wall"
+material = "brick"
+
+[cells."33,15"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."28,13"]
+kind = "road"
+
+[cells."8,5"]
+kind = "pine"
+
+[cells."13,2"]
+kind = "barrel"
+
+[cells."19,10"]
+kind = "wall"
+material = "brick"
+
+[cells."7,13"]
+kind = "tall_grass"
+
+[cells."15,2"]
+kind = "pickup"
+pickup = "plasma"
+
+[cells."4,5"]
+kind = "tall_grass"
+
+[cells."19,4"]
+kind = "wall"
+material = "iron"
+
+[cells."4,15"]
+kind = "tall_grass"
+
+[cells."19,16"]
+kind = "road"
+
+[cells."9,11"]
+kind = "wall"
+material = "glass"
+
+[cells."16,16"]
+kind = "road"
+
+[cells."20,5"]
+kind = "wall"
+material = "wood"
+
+[cells."32,9"]
+kind = "road"
+
+[cells."26,1"]
+kind = "road"
+
+[cells."2,11"]
+kind = "wall"
+material = "brick"
+
+[cells."32,12"]
+kind = "wall"
+material = "brick"
+
+[cells."5,14"]
+kind = "road"
+
+[cells."5,9"]
+kind = "road"
+
+[cells."17,10"]
+kind = "wall"
+material = "brick"
+
+[cells."25,13"]
+kind = "pickup"
+pickup = "shield"
+
+[cells."11,14"]
+kind = "pickup"
+pickup = "health"
+
+[cells."5,8"]
+kind = "road"
+
+[cells."7,14"]
+kind = "tall_grass"
+
+[cells."15,9"]
+kind = "pickup"
+pickup = "laser"
+
+[cells."19,2"]
+kind = "pickup"
+pickup = "plasma"
+
+[cells."24,10"]
+kind = "fence"
+
+[cells."19,6"]
+kind = "tall_grass"
+
+[cells."11,1"]
+kind = "wall"
+material = "brick"
+
+[cells."10,12"]
+kind = "wall"
+material = "brick"
+
+[cells."26,13"]
+kind = "tall_grass"
+
+[cells."22,10"]
+kind = "tall_grass"
+
+[cells."6,15"]
+kind = "road"
+
+[cells."3,14"]
+kind = "tall_grass"
+
+[cells."7,2"]
+kind = "wall"
+material = "brick"
+
+[cells."15,14"]
+kind = "pickup"
+pickup = "minigun"
+
+[cells."31,4"]
+kind = "wall"
+material = "brick"
+
+[cells."15,16"]
+kind = "road"
+
+[cells."17,15"]
+kind = "wall"
+material = "brick"
+
+[cells."27,5"]
+kind = "pine"
+
+[cells."6,2"]
+kind = "wall"
+material = "brick"
+
+[cells."33,1"]
+kind = "wall"
+material = "brick"
+
+[cells."34,3"]
+kind = "road"
+
+[cells."31,3"]
+kind = "wall"
+material = "brick"
+
+[cells."2,14"]
+kind = "pickup"
+pickup = "ammo"
+
+[cells."5,11"]
+kind = "road"
+
+[cells."1,10"]
+kind = "wall"
+material = "brick"
+
+[cells."14,5"]
+kind = "wall"
+material = "wood"
+
+[cells."2,12"]
+kind = "wall"
+material = "brick"
+
+[cells."20,9"]
+kind = "pickup"
+pickup = "minigun"
+
+[cells."6,16"]
+kind = "road"
+
+[cells."28,11"]
+kind = "road"
+
+[cells."31,5"]
+kind = "barrel"
+drum = "fuel"
+
+[cells."33,13"]
+kind = "barrel"
+drum = "fuel"
+
+[cells."14,8"]
+kind = "pickup"
+pickup = "laser"
+
+[cells."33,3"]
+kind = "wall"
+material = "brick"
+
+[cells."1,2"]
+kind = "wall"
+material = "brick"
+
+[cells."16,15"]
+kind = "wall"
+material = "brick"
+
+[cells."31,15"]
+kind = "tall_grass"
+
+[cells."1,5"]
+kind = "tall_grass"
+
+[cells."10,14"]
+kind = "wall"
+material = "brick"
+
+[cells."34,1"]
+kind = "road"
+
+[cells."17,4"]
+kind = "fence"
+
+[cells."26,14"]
+kind = "tall_grass"
+
+[cells."14,2"]
+kind = "pickup"
+pickup = "plasma"
+
+[cells."10,1"]
+kind = "wall"
+material = "brick"
+
+[cells."33,5"]
+kind = "wall"
+material = "iron"
+
+[cells."16,14"]
+kind = "pickup"
+pickup = "minigun"
+
+[cells."10,15"]
+kind = "wall"
+material = "brick"
+
+[cells."5,12"]
+kind = "road"
+
+[cells."9,7"]
+kind = "pickup"
+pickup = "health"
+
+[cells."24,16"]
+kind = "road"
+
+[cells."34,4"]
+kind = "road"
+
+[cells."2,2"]
+kind = "wall"
+material = "brick"
+
+[cells."27,14"]
+kind = "tall_grass"
+
+[cells."33,12"]
+kind = "wall"
+material = "brick"
+
+[cells."5,6"]
+kind = "road"
+
+[cells."17,16"]
+kind = "road"
+
+[cells."22,13"]
+kind = "tall_grass"
+
+[cells."20,8"]
+kind = "pickup"
+pickup = "minigun"
+
+[cells."7,1"]
+kind = "wall"
+material = "brick"
+
+[cells."17,2"]
+kind = "pickup"
+pickup = "health"
+
+[cells."33,6"]
+kind = "barrel"
+
+[cells."2,9"]
+kind = "tall_grass"
+
+[cells."18,3"]
+kind = "tree"
+
+[cells."13,1"]
+kind = "barrel"
+
+[cells."14,16"]
+kind = "road"
+
+[cells."2,5"]
+kind = "tall_grass"
+
+[cells."31,14"]
+kind = "tall_grass"
+
+[mission]
+kind = "protect"
+
+[spawn]
+kind = "waves"
+waves = 4
+size = 2
+growth = 1
+tier_start = "light"
+tier_end = "super"
+
+[cells."6,8"]
+kind = "pickup"
+pickup = "frog_health"
+
+[cells."27,10"]
+kind = "pickup"
+pickup = "frog_health"
