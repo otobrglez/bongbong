@@ -2,8 +2,11 @@
 
 The Astro site that ships the wasm build of BongBong at bongbong.io.
 
-Astro owns the page shell (`src/pages/index.astro`), styling, and any
-marketing content. It does **not** build the game itself - `public/game/`
+Astro owns the page shell (`src/pages/index.astro`), styling, the page's
+own JavaScript (`src/scripts/`, entry `main.ts`: the Emscripten `Module`
+setup, the loading panel, input shims, the full-screen toggle and the
+dev-build tuning panel - bundled and minified by Astro, never inline) and
+any marketing content. It does **not** build the game itself - `public/game/`
 holds `bongbong.{wasm,js,data}`, copied in from a Rust/Emscripten build
 (`../target/wasm32-unknown-emscripten/release/`) by `just build-web` in the
 repo root *before* `yarn build` runs. Those files are gitignored and must
@@ -14,11 +17,13 @@ does both steps.
 Astro/Vite never processes `public/game/*`: it's copied byte-for-byte into
 `dist/`, which is required since Emscripten's glue JS looks up the
 `.wasm`/`.data` files by a fixed relative filename baked in at compile
-time - hashed asset names would break it. Minification of that glue JS and
-the wasm binary itself happens during the Rust build (Cargo's release
-profile forwards `-O3` to `emcc`, which runs Binaryen's `wasm-opt` and
-Emscripten's own JS minifier) - Astro/Vite only minifies its own build
-output (this page's markup/CSS/scripts).
+time - hashed asset names would break it. The glue is a classic script
+that reads the global `Module` as it runs, so `index.astro` loads it with
+`defer`, after the page's own module script that defines `window.Module`.
+Minification of that glue JS and the wasm binary itself happens during the
+Rust build (Cargo's release profile forwards `-O3` to `emcc`, which runs
+Binaryen's `wasm-opt` and Emscripten's own JS minifier) - Astro/Vite only
+minifies its own build output (this page's markup, CSS and `src/scripts/`).
 
 ## Commands
 
