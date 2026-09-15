@@ -6,8 +6,6 @@
     <meta charset="utf-8"/>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
     <link rel="icon" href="/favicon.ico"/>
-    <!-- viewport-fit=cover so the immersive mode can reach under a notch;
-         no user scaling because pinch-zoom fights the builder's touch painting. -->
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no"/>
     <meta name="mobile-web-app-capable" content="yes"/>
     <meta name="apple-mobile-web-app-capable" content="yes"/>
@@ -20,8 +18,6 @@
       html, body {
         margin: 0;
         min-height: 100%;
-        /* The same #151515 the game's HUD bar is filled with, so the bar
-           and the page read as one surface around the field. */
         background-color: #151515;
         color: $font-color;
         font-family: sans-serif;
@@ -106,7 +102,7 @@
             position: absolute;
             top: 0;
             left: 50%;
-            transform: translateX(-50%);
+            transform: translatex(-50%);
             width: var(--canvas-w);
             aspect-ratio: var(--bitmap-w) / var(--bitmap-h);
             z-index: 2;
@@ -436,7 +432,7 @@
         </div>
         <div class="instructions">
             <p>Arrows to drive, <kbd>Space</kbd> to fire, <kbd>r</kbd> to restart.</p>
-            <p>Two players: press the tank button in the bar. Arrows + <kbd>Space</kbd> for player 1, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> + <kbd>Left Shift</kbd> for player 2.</p>
+            <p>Two players: Arrows + <kbd>Space</kbd> for player 1, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> + <kbd>Left Shift</kbd> for player 2.</p>
         </div>
         <details class="tuning" id="tuning" hidden>
             <summary>Tuning <span class="badge">dev build</span></summary>
