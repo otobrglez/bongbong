@@ -1427,6 +1427,9 @@ pickup = "ammo"
 [cells."24,12"]
 kind = "road"
 
+[cells."16,12"]
+kind = "start2"
+
 [mission]
 kind = "protect"
 
