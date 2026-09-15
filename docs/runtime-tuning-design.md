@@ -347,7 +347,7 @@ static (a `*const ()` table isn't `Sync`). `build.rs` uses
 a bare `cargo build --target wasm32-unknown-emscripten`) isn't asked to
 export symbols it never references.
 
-## 7. Web panel (Astro, `site/src/pages/index.astro`)
+## 7. Web panel (Astro, `site/src/scripts/tuning-panel.ts`)
 
 Under the canvas, a `<details>` "Tuning" panel, rendered entirely from the
 schema at runtime (no generated HTML, so a new row in `tunables!` shows up

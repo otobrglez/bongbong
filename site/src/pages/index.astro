@@ -165,13 +165,21 @@
           }
 
           @keyframes loading-sweep {
-            0%   { margin-left: -30%; }
-            100% { margin-left: 100%; }
+            0% {
+              margin-left: -30%;
+            }
+            100% {
+              margin-left: 100%;
+            }
           }
 
           @media (prefers-reduced-motion: reduce) {
-            .loading { transition: none; }
-            .loading-bar { animation: none; }
+            .loading {
+              transition: none;
+            }
+            .loading-bar {
+              animation: none;
+            }
           }
 
           canvas {
@@ -214,11 +222,14 @@
             z-index: 100;
             justify-content: center;
             background: #151515;
-            padding: env(safe-area-inset-top) env(safe-area-inset-right)
-                     env(safe-area-inset-bottom) env(safe-area-inset-left);
+            padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 
             --canvas-w: min(100vw, var(--canvas-max-w), calc(100vh * var(--bitmap-w) / var(--bitmap-h)));
-            .instructions, .tuning { display: none; }
+
+            .instructions, .tuning {
+              display: none;
+            }
+
             /* The canvas is centred vertically here, so its bottom edge is
                the middle of the box plus half its height. */
             .overlay-controls {
@@ -233,7 +244,11 @@
             background: #151515;
 
             --canvas-w: min(100vw, var(--canvas-max-w), calc(100vh * var(--bitmap-w) / var(--bitmap-h)));
-            .instructions, .tuning { display: none; }
+
+            .instructions, .tuning {
+              display: none;
+            }
+
             .overlay-controls {
               top: calc(50% + var(--canvas-w) * var(--bitmap-h) / var(--bitmap-w) / 2 - 10px);
             }
@@ -249,7 +264,10 @@
             font-size: $font-size;
             cursor: pointer;
 
-            &:hover, &:focus-visible { color: #fff; background: rgba(46, 46, 46, 0.95); }
+            &:hover, &:focus-visible {
+              color: #fff;
+              background: rgba(46, 46, 46, 0.95);
+            }
           }
 
           .instructions {
@@ -339,9 +357,19 @@
           border-radius: 3px;
           padding: 3px 8px;
         }
-        button { cursor: pointer; }
-        button:hover { background: #3e3e3e; }
-        button.reset { padding: 1px 5px; color: #999; }
+
+        button {
+          cursor: pointer;
+        }
+
+        button:hover {
+          background: #3e3e3e;
+        }
+
+        button.reset {
+          padding: 1px 5px;
+          color: #999;
+        }
 
         .status {
           margin-left: auto;
@@ -351,9 +379,14 @@
           text-overflow: ellipsis;
           max-width: 40%;
         }
-        .status.error { color: #e88; }
 
-        .scroll { overflow-x: auto; }
+        .status.error {
+          color: #e88;
+        }
+
+        .scroll {
+          overflow-x: auto;
+        }
 
         table {
           border-collapse: collapse;
@@ -367,12 +400,38 @@
             white-space: nowrap;
             vertical-align: middle;
           }
-          th { color: #999; font-weight: normal; }
-          td.name { color: #e0e0e0; cursor: help; }
-          td.name.changed { color: #f5c76a; }
-          td.ctl { width: 260px; }
-          td.val { width: 80px; text-align: right; font-variant-numeric: tabular-nums; }
-          td.def { width: 70px; text-align: right; color: #777; font-variant-numeric: tabular-nums; }
+
+          th {
+            color: #999;
+            font-weight: normal;
+          }
+
+          td.name {
+            color: #e0e0e0;
+            cursor: help;
+          }
+
+          td.name.changed {
+            color: #f5c76a;
+          }
+
+          td.ctl {
+            width: 260px;
+          }
+
+          td.val {
+            width: 80px;
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+          }
+
+          td.def {
+            width: 70px;
+            text-align: right;
+            color: #777;
+            font-variant-numeric: tabular-nums;
+          }
+
           td.badge span {
             padding: 0 5px;
             border-radius: 3px;
@@ -381,7 +440,12 @@
             font-size: 9px;
             text-transform: uppercase;
           }
-          input[type="range"] { width: 160px; vertical-align: middle; }
+
+          input[type="range"] {
+            width: 160px;
+            vertical-align: middle;
+          }
+
           input[type="number"] {
             width: 84px;
             font: inherit;
@@ -392,7 +456,10 @@
             padding: 1px 4px;
             text-align: right;
           }
-          input[type="number"].changed { color: #f5c76a; }
+
+          input[type="number"].changed {
+            color: #f5c76a;
+          }
         }
 
         h4 {
@@ -405,8 +472,15 @@
           display: none;
           gap: 6px;
           margin: 0 0 8px;
-          &.open { display: flex; }
-          textarea { flex: 1; min-height: 60px; }
+
+          &.open {
+            display: flex;
+          }
+
+          textarea {
+            flex: 1;
+            min-height: 60px;
+          }
         }
       }
     </style>
@@ -416,33 +490,39 @@
     <div class="game">
         <div class="overlay-controls">
             <button class="fullscreen-toggle" id="fullscreen-toggle" type="button"
-                    title="Play full screen">&#9974; Full screen</button>
+                    title="Play full screen">&#9974; Full screen
+            </button>
             <a class="subscribe-link" href="/subscribe">Subscribe for updates.</a>
         </div>
-        <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
-        <!-- Shown from the very first byte of HTML and torn down by the
-             loader script below. The wasm and its preloaded `static/` data
-             are a several-megabyte download, and until they land the canvas
-             is an unexplained black rectangle - which reads as a broken
-             page, not a loading one. -->
+        <canvas id="canvas" tabindex="-1"></canvas>
         <div class="loading" id="loading" role="status" aria-live="polite">
             <p class="loading-title">Loading&hellip;</p>
-            <div class="loading-track"><div class="loading-bar" id="loading-bar"></div></div>
+            <div class="loading-track">
+                <div class="loading-bar" id="loading-bar"></div>
+            </div>
             <p class="loading-note" id="loading-note">Fetching the game</p>
         </div>
         <div class="instructions">
             <p>Arrows to drive, <kbd>Space</kbd> to fire, <kbd>r</kbd> to restart.</p>
-            <p>Two players: Arrows + <kbd>Space</kbd> for player 1, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> + <kbd>Left Shift</kbd> for player 2.</p>
+            <p>Two players: Arrows + <kbd>Space</kbd> for player 1, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> +
+                <kbd>Left Shift</kbd> for player 2.</p>
         </div>
         <details class="tuning" id="tuning" hidden>
             <summary>Tuning <span class="badge">dev build</span></summary>
             <div class="toolbar">
                 <input type="search" id="tun-filter" placeholder="filter knobs…" autocomplete="off"/>
-                <button id="tun-restart" title="Restart the round (same as R) so a tuned set plays out from a fresh spawn">Restart round</button>
+                <button id="tun-restart"
+                        title="Restart the round (same as R) so a tuned set plays out from a fresh spawn">Restart round
+                </button>
                 <button id="tun-reset" title="Every knob back to its default">Reset all</button>
-                <button id="tun-copy-json" title="Copy only the knobs that differ from default, as JSON (paste into --tuning file or Import)">Copy JSON</button>
+                <button id="tun-copy-json"
+                        title="Copy only the knobs that differ from default, as JSON (paste into --tuning file or Import)">
+                    Copy JSON
+                </button>
                 <button id="tun-import" title="Paste a JSON patch to apply">Import…</button>
-                <button id="tun-copy-rust" title="Copy the changed knobs as tunables! rows for src/tuning.rs">Copy as Rust</button>
+                <button id="tun-copy-rust" title="Copy the changed knobs as tunables! rows for src/tuning.rs">Copy as
+                    Rust
+                </button>
                 <span class="status" id="tun-status"></span>
             </div>
             <div class="import" id="tun-import-box">
@@ -459,490 +539,7 @@
         </div>
     </div>
 </div>
-
-
-<script is:inline>
-    // The loading panel, driven by Emscripten's own progress reporting.
-    //
-    // Two hooks, because they cover different halves of the wait and either
-    // one alone leaves a silent stretch. `setStatus` carries the byte
-    // counts while `bongbong.data` streams in ("Downloading data... (a/b)");
-    // `monitorRunDependencies` counts the preload work that follows, which
-    // reports no bytes at all. Neither fires for the wasm fetch/compile
-    // itself, which is why the bar starts as an indeterminate sweep rather
-    // than at zero.
-    var loadingPanel = (function () {
-        var panel = document.getElementById("loading");
-        var bar = document.getElementById("loading-bar");
-        var note = document.getElementById("loading-note");
-        var finished = false;
-        var progressRe = /([\d.]+)\s*\/\s*([\d.]+)/;
-
-        function say(text) {
-            if (finished || !note) return;
-            var m = text && text.match(progressRe);
-            if (m && bar) {
-                var done = parseFloat(m[1]);
-                var total = parseFloat(m[2]);
-                if (total > 0) {
-                    bar.classList.add("measured");
-                    bar.style.width = Math.max(3, Math.min(100, (done / total) * 100)) + "%";
-                }
-            }
-            // Emscripten's own wording is developer-facing; keep the panel's
-            // note to the one thing a player cares about.
-            note.textContent = text ? "Fetching the game" : "Starting";
-        }
-
-        function done() {
-            if (finished || !panel) return;
-            finished = true;
-            if (bar) {
-                bar.classList.add("measured");
-                bar.style.width = "100%";
-            }
-            panel.classList.add("done");
-            // Match the CSS fade, then take it out of the layout entirely so
-            // it can never eat a tap meant for the canvas.
-            window.setTimeout(function () { panel.hidden = true; }, 300);
-        }
-
-        return {say: say, done: done};
-    })();
-
-    var Module = {
-        canvas: document.getElementById("canvas"),
-        locateFile: (path) => "/game/" + path,
-        print: (t) => console.log(t),
-        printErr: (t) => console.error(t),
-        setStatus: (t) => loadingPanel.say(t),
-        monitorRunDependencies: function (left) {
-            Module.totalDependencies = Math.max(Module.totalDependencies || 0, left);
-            loadingPanel.say(left ? "Preparing (" + (Module.totalDependencies - left) + "/" + Module.totalDependencies + ")" : "");
-        },
-        onRuntimeInitialized: function () {
-            // The runtime is up but nothing has been drawn yet; wait for the
-            // frame after the next one so the panel lifts on a picture
-            // rather than on the black canvas underneath it.
-            window.requestAnimationFrame(function () {
-                window.requestAnimationFrame(loadingPanel.done);
-            });
-        },
-    };
-    window.addEventListener(
-        "click",
-        function () {
-            const Ctx = window.AudioContext || window.webkitAudioContext;
-            if (!Ctx) return;
-            [Ctx, Module && Module.audioContext].forEach(function (ctx) {
-                if (ctx && ctx.state === "suspended") ctx.resume();
-            });
-        },
-        {once: true},
-    );
-    // Arrow keys and Space are game controls, but browsers also bind them to
-    // page scrolling by default - on viewports too short to fit the whole
-    // layout, that scroll becomes visible and fights the tank's movement.
-    var gameKeys = new Set([
-        "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space",
-    ]);
-    window.addEventListener(
-        "keydown",
-        function (e) {
-            if (gameKeys.has(e.code)) e.preventDefault();
-        },
-        {passive: false},
-    );
-    // Whether the left Shift key - player 2's fire key - is held. Emscripten's
-    // GLFW layer reports the DOM Shift key as the *left* Shift whichever
-    // side was pressed (it maps keyCode 0x10 and never reads event.code), so
-    // through raylib a Right Shift would fire player 2's tank on the web
-    // only. The game reads this flag once a frame instead (bit 1 =
-    // ShiftLeft; see main.rs's left_shift_down). Cleared on blur so a Shift
-    // held while the tab loses focus does not stick.
-    window.bbShift = 0;
-    window.addEventListener("keydown", function (e) {
-        if (e.code === "ShiftLeft") window.bbShift |= 1;
-    });
-    window.addEventListener("keyup", function (e) {
-        if (e.code === "ShiftLeft") window.bbShift &= ~1;
-    });
-    window.addEventListener("blur", function () { window.bbShift = 0; });</script>
-<script is:inline>
-    // Runtime tuning panel - see docs/runtime-tuning-design.md §7. Renders
-    // itself entirely from the schema the wasm exports (bb_tuning_schema_json),
-    // so a new row in src/tuning.rs's tunables! table shows up here with no
-    // site change. Every edit is a JSON patch pushed through
-    // bb_tuning_apply_json and lands at the game's next frame boundary. The
-    // changed set persists in localStorage and is re-applied on reload.
-    (function () {
-        var STORAGE_KEY = "bongbong.tuning.diff";
-        var TAB_KEY = "bongbong.tuning.tab";
-        var panel = document.getElementById("tuning");
-        var $ = function (id) { return document.getElementById(id); };
-        var schema = [], byName = {}, values = {}, defaults = {};
-        var activeTab = null, filter = "";
-
-        function api(name, ret, argTypes, args) {
-            return Module.ccall(name, ret, argTypes || [], args || []);
-        }
-        function status(text, isError) {
-            var el = $("tun-status");
-            el.textContent = text;
-            el.className = "status" + (isError ? " error" : "");
-        }
-        function store(key, value) {
-            try { localStorage.setItem(key, value); } catch (e) { /* private mode etc. */ }
-        }
-        function load(key) {
-            try { return localStorage.getItem(key); } catch (e) { return null; }
-        }
-        function isInt(row) { return row.kind === "i32" || row.kind === "u32" || row.kind === "usize"; }
-        function fmt(v, row) {
-            if (row.kind === "bool") return v ? "true" : "false";
-            if (isInt(row)) return String(Math.round(v));
-            var s = Number(v).toPrecision(5);
-            return String(Number(s));
-        }
-        function niceStep(row) {
-            if (isInt(row) || row.kind === "bool") return 1;
-            var raw = (row.max - row.min) / 500;
-            if (raw <= 0) return 0.01;
-            var pow = Math.pow(10, Math.floor(Math.log10(raw)));
-            var m = raw / pow;
-            return (m < 1.5 ? 1 : m < 3.5 ? 2 : m < 7.5 ? 5 : 10) * pow;
-        }
-        function sameValue(a, b) {
-            if (Array.isArray(a)) return a.every(function (x, i) { return x === b[i]; });
-            return a === b;
-        }
-        function diff() {
-            var out = {};
-            schema.forEach(function (row) {
-                if (!sameValue(values[row.name], defaults[row.name])) out[row.name] = values[row.name];
-            });
-            return out;
-        }
-        function persist() {
-            var d = diff();
-            if (Object.keys(d).length) store(STORAGE_KEY, JSON.stringify(d));
-            else store(STORAGE_KEY, "");
-        }
-        // Push a patch to the game; on success mirror it into `values`.
-        function apply(patch, note) {
-            var rc = api("bb_tuning_apply_json", "number", ["string"], [JSON.stringify(patch)]);
-            if (rc < 0) {
-                status(api("bb_last_error", "string"), true);
-                return false;
-            }
-            Object.keys(patch).forEach(function (key) {
-                var dot = key.indexOf(".");
-                if (dot < 0) { values[key] = patch[key]; return; }
-                var name = key.slice(0, dot), elem = key.slice(dot + 1);
-                var row = byName[name];
-                var i = row.labels.indexOf(elem);
-                if (i < 0) i = parseInt(elem, 10);
-                values[name][i] = patch[key];
-            });
-            persist();
-            status(note || ("applied " + rc + " knob" + (rc === 1 ? "" : "s")));
-            return true;
-        }
-
-        // ---- rendering -------------------------------------------------
-        function badge(row) {
-            return row.applies === "live" ? "" : "<span title=\"takes effect on " + row.applies + "\">" + row.applies + "</span>";
-        }
-        function tooltip(row) {
-            return (row.doc || "").trim() + "\n\nrange " + row.min + " ..= " + row.max + ", default " + JSON.stringify(row.default);
-        }
-        function scalarControl(key, row, value) {
-            var step = niceStep(row);
-            if (row.kind === "bool") {
-                return "<input type=\"checkbox\" data-key=\"" + key + "\"" + (value ? " checked" : "") + "/>";
-            }
-            return "<input type=\"range\" data-key=\"" + key + "\" min=\"" + row.min + "\" max=\"" + row.max +
-                "\" step=\"" + step + "\" value=\"" + value + "\"/>";
-        }
-        function numberBox(key, row, value, changed) {
-            return "<input type=\"number\" data-key=\"" + key + "\" min=\"" + row.min + "\" max=\"" + row.max +
-                "\" step=\"" + (isInt(row) ? 1 : "any") + "\" value=\"" + fmt(value, row) + "\"" +
-                (changed ? " class=\"changed\"" : "") + "/>";
-        }
-        function renderScalars(rows) {
-            if (!rows.length) return "";
-            var h = "<table><thead><tr><th>knob</th><th></th><th>value</th><th>default</th><th></th><th></th></tr></thead><tbody>";
-            rows.forEach(function (row) {
-                var v = values[row.name], changed = v !== defaults[row.name];
-                h += "<tr><td class=\"name" + (changed ? " changed" : "") + "\" title=\"" + escapeAttr(tooltip(row)) + "\">" + row.name + "</td>" +
-                    "<td class=\"ctl\">" + scalarControl(row.name, row, v) + "</td>" +
-                    "<td class=\"val\">" + numberBox(row.name, row, v, changed) + "</td>" +
-                    "<td class=\"def\">" + fmt(row.default, row) + "</td>" +
-                    "<td class=\"badge\">" + badge(row) + "</td>" +
-                    "<td><button class=\"reset\" data-reset=\"" + row.name + "\" title=\"back to default\">&#x21ba;</button></td></tr>";
-            });
-            return h + "</tbody></table>";
-        }
-        // Array rows sharing one label set pivot into a grid: one line per
-        // label (a tank model, a wall material), one column per knob.
-        function renderMatrix(rows) {
-            var labels = rows[0].labels;
-            var h = "<table><thead><tr><th></th>";
-            rows.forEach(function (row) {
-                h += "<th title=\"" + escapeAttr(tooltip(row)) + "\">" + row.name + " " + badge(row) +
-                    " <button class=\"reset\" data-reset=\"" + row.name + "\" title=\"whole column back to default\">&#x21ba;</button></th>";
-            });
-            h += "</tr></thead><tbody>";
-            labels.forEach(function (label, i) {
-                h += "<tr><td class=\"name\">" + label + "</td>";
-                rows.forEach(function (row) {
-                    var v = values[row.name][i], changed = v !== defaults[row.name][i];
-                    h += "<td>" + numberBox(row.name + "." + label, row, v, changed) + "</td>";
-                });
-                h += "</tr>";
-            });
-            return h + "</tbody></table>";
-        }
-        function escapeAttr(s) {
-            return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
-        }
-        function render() {
-            var groups = [];
-            schema.forEach(function (row) { if (groups.indexOf(row.group) < 0) groups.push(row.group); });
-            if (!activeTab || groups.indexOf(activeTab) < 0) activeTab = groups[0];
-            var tabs = $("tun-tabs");
-            tabs.innerHTML = groups.map(function (g) {
-                return "<button data-tab=\"" + g + "\" aria-selected=\"" + (g === activeTab && !filter) + "\">" + g + "</button>";
-            }).join("");
-            var rows = schema.filter(function (row) {
-                return filter ? row.name.indexOf(filter) >= 0 : row.group === activeTab;
-            });
-            var scalars = rows.filter(function (r) { return !r.labels.length; });
-            var matrices = {};
-            rows.filter(function (r) { return r.labels.length; }).forEach(function (r) {
-                var sig = r.labels.join(",");
-                (matrices[sig] = matrices[sig] || []).push(r);
-            });
-            var h = renderScalars(scalars);
-            Object.keys(matrices).forEach(function (sig) {
-                h += "<h4>" + matrices[sig][0].labels.length + " × " + matrices[sig].length + " (per " +
-                    (matrices[sig][0].labels.length === 12 ? "tank model" : "variant") + ")</h4>" + renderMatrix(matrices[sig]);
-            });
-            if (!rows.length) h = "<p>no knob matches \"" + escapeAttr(filter) + "\"</p>";
-            $("tun-body").innerHTML = h;
-        }
-
-        // ---- events ----------------------------------------------------
-        var pending = {}, timer = null;
-        function queue(key, value) {
-            pending[key] = value;
-            clearTimeout(timer);
-            timer = setTimeout(function () {
-                var patch = pending; pending = {};
-                apply(patch);
-                // keep the paired inputs (slider / number box) in sync
-                Object.keys(patch).forEach(function (k) {
-                    document.querySelectorAll("[data-key=\"" + k + "\"]").forEach(function (el) {
-                        if (el.type === "checkbox") el.checked = !!patch[k];
-                        else if (document.activeElement !== el) el.value = el.type === "number" ? fmt(patch[k], rowFor(k)) : patch[k];
-                    });
-                });
-                markChanged();
-            }, 60);
-        }
-        function rowFor(key) { return byName[key.split(".")[0]]; }
-        function markChanged() {
-            document.querySelectorAll("#tun-body td.name[title]").forEach(function (td) {
-                var row = byName[td.textContent];
-                if (row) td.classList.toggle("changed", !sameValue(values[row.name], defaults[row.name]));
-            });
-            document.querySelectorAll("#tun-body input[type=number]").forEach(function (el) {
-                var key = el.dataset.key, row = rowFor(key), dot = key.indexOf(".");
-                var v, d;
-                if (dot < 0) { v = values[key]; d = defaults[key]; }
-                else { var i = row.labels.indexOf(key.slice(dot + 1)); v = values[row.name][i]; d = defaults[row.name][i]; }
-                el.classList.toggle("changed", v !== d);
-            });
-        }
-        function readInput(el) {
-            var row = rowFor(el.dataset.key);
-            if (el.type === "checkbox") return el.checked;
-            var v = parseFloat(el.value);
-            if (!isFinite(v)) return null;
-            if (isInt(row)) v = Math.round(v);
-            return Math.min(row.max, Math.max(row.min, v));
-        }
-        $("tun-body").addEventListener("input", function (e) {
-            var el = e.target;
-            if (!el.dataset || !el.dataset.key) return;
-            if (el.type === "number" && e.type === "input") return; // wait for change on typed values
-            var v = readInput(el);
-            if (v !== null) queue(el.dataset.key, v);
-        });
-        $("tun-body").addEventListener("change", function (e) {
-            var el = e.target;
-            if (!el.dataset || !el.dataset.key || el.type !== "number") return;
-            var v = readInput(el);
-            if (v !== null) queue(el.dataset.key, v);
-        });
-        $("tun-body").addEventListener("click", function (e) {
-            var name = e.target.dataset && e.target.dataset.reset;
-            if (!name) return;
-            var patch = {}; patch[name] = defaults[name];
-            if (apply(patch, name + " reset")) render();
-        });
-        $("tun-tabs").addEventListener("click", function (e) {
-            var tab = e.target.dataset && e.target.dataset.tab;
-            if (!tab) return;
-            activeTab = tab; filter = ""; $("tun-filter").value = "";
-            store(TAB_KEY, tab);
-            render();
-        });
-        $("tun-filter").addEventListener("input", function (e) {
-            filter = e.target.value.trim().toLowerCase();
-            render();
-        });
-        $("tun-reset").addEventListener("click", function () {
-            api("bb_tuning_reset", null);
-            schema.forEach(function (row) {
-                values[row.name] = Array.isArray(defaults[row.name]) ? defaults[row.name].slice() : defaults[row.name];
-            });
-            persist();
-            status("all knobs reset");
-            render();
-        });
-        $("tun-restart").addEventListener("click", function () {
-            api("bb_game_restart", null);
-            status("round restarted");
-            document.getElementById("canvas").focus();
-        });
-        function copy(text, note) {
-            if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(text).then(function () { status(note); }, function () {
-                    $("tun-import-text").value = text; $("tun-import-box").classList.add("open"); status("clipboard blocked - copy from the box");
-                });
-            } else {
-                $("tun-import-text").value = text; $("tun-import-box").classList.add("open"); status("copy from the box");
-            }
-        }
-        $("tun-copy-json").addEventListener("click", function () {
-            copy(JSON.stringify(diff(), null, 2), "changed knobs copied as JSON");
-        });
-        $("tun-copy-rust").addEventListener("click", function () {
-            // Read from the game rather than recomputing: the Rust rendering
-            // (types, ranges, labels, applies markers) lives there.
-            var rust = api("bb_tuning_diff_rust", "string");
-            copy(rust || "// nothing differs from the defaults\n", "changed knobs copied as tunables! rows");
-        });
-        $("tun-import").addEventListener("click", function () {
-            $("tun-import-box").classList.toggle("open");
-        });
-        $("tun-import-apply").addEventListener("click", function () {
-            var patch;
-            try { patch = JSON.parse($("tun-import-text").value); } catch (e) { status("not valid JSON: " + e.message, true); return; }
-            if (!patch || typeof patch !== "object" || Array.isArray(patch)) { status("expected a JSON object", true); return; }
-            if (apply(patch, "imported " + Object.keys(patch).length + " knob(s)")) render();
-        });
-
-        // ---- bring-up ---------------------------------------------------
-        function init() {
-            if (typeof Module._bb_tuning_schema_json !== "function") return; // production wasm: no panel
-            schema = JSON.parse(api("bb_tuning_schema_json", "string"));
-            values = JSON.parse(api("bb_tuning_current_json", "string"));
-            schema.forEach(function (row) { byName[row.name] = row; defaults[row.name] = row.default; });
-            activeTab = load(TAB_KEY);
-            var saved = load(STORAGE_KEY);
-            if (saved) {
-                try {
-                    var patch = JSON.parse(saved);
-                    if (apply(patch, "restored " + Object.keys(patch).length + " saved knob(s)")) { /* values updated */ }
-                    else { store(STORAGE_KEY, ""); }
-                } catch (e) { store(STORAGE_KEY, ""); }
-            }
-            panel.hidden = false;
-            render();
-        }
-        var previous = Module.onRuntimeInitialized;
-        Module.onRuntimeInitialized = function () {
-            if (previous) previous();
-            try { init(); } catch (e) { console.error("tuning panel:", e); }
-        };
-    })();
-</script>
-<script is:inline>
-    // Full-screen toggle.
-    //
-    // Three outcomes, because no single mechanism works everywhere:
-    //
-    //   1. `requestFullscreen` - desktop, Android, iPadOS. Real full screen:
-    //      the browser's own chrome goes away.
-    //   2. The `.immersive` class - Safari on iPhone, which has no element
-    //      Fullscreen API at all (only <video> can go fullscreen there).
-    //      This takes the whole viewport but *cannot* hide Safari's URL bar;
-    //      no page can. It is a platform restriction, not a bug.
-    //   3. Add to Home Screen - the only way to get a chrome-free window on
-    //      an iPhone; `apple-mobile-web-app-capable` in the head makes the
-    //      launched app run standalone. Deliberately not advertised on the
-    //      page: it is a wall of text over the game explaining a platform
-    //      limitation the player cannot do anything about mid-round.
-    (function () {
-        var game = document.querySelector(".game");
-        var canvas = document.getElementById("canvas");
-        var button = document.getElementById("fullscreen-toggle");
-        if (!game || !button) return;
-        var request = game.requestFullscreen || game.webkitRequestFullscreen;
-        var exit = document.exitFullscreen || document.webkitExitFullscreen;
-
-        function real() {
-            return !!(document.fullscreenElement || document.webkitFullscreenElement);
-        }
-        function active() {
-            return real() || game.classList.contains("immersive");
-        }
-        function label() {
-            button.innerHTML = active() ? "&#9974; Exit full screen" : "&#9974; Full screen";
-        }
-        function fallback() {
-            game.classList.add("immersive");
-            label();
-        }
-        function enter() {
-            if (!request) return fallback();
-            var p;
-            try {
-                p = request.call(game);
-            } catch (e) {
-                return fallback();
-            }
-            // Old WebKit's prefixed version returns undefined rather than a
-            // promise, so `.then` on it would throw and abort the whole
-            // handler - leaving neither real full screen nor the fallback.
-            if (p && typeof p.then === "function") {
-                p.then(label, fallback);
-            } else {
-                setTimeout(function () { if (real()) label(); else fallback(); }, 120);
-            }
-        }
-        button.addEventListener("click", function (e) {
-            // Never let the toggle double as a game tap.
-            e.preventDefault();
-            e.stopPropagation();
-            if (active()) {
-                if (real()) {
-                    try { exit.call(document); } catch (err) { /* already out */ }
-                }
-                game.classList.remove("immersive");
-                label();
-            } else {
-                enter();
-            }
-            if (canvas) canvas.focus();
-        });
-        document.addEventListener("fullscreenchange", label);
-        document.addEventListener("webkitfullscreenchange", label);
-        label();
-    })();
-</script>
-<script is:inline src="/game/bongbong.js"></script>
+<script src="../scripts/main.ts"></script>
+<script is:inline defer src="/game/bongbong.js"></script>
 </body>
 </html>
