@@ -6,7 +6,7 @@
 //! and the tests below run headlessly.
 
 use crate::level::{Mission, SpawnKind, Tier};
-use crate::map::{CellObject, MapFile};
+use crate::map::{CellObject, MapFile, Theme};
 use crate::tank::TankKind;
 
 /// How many steps the stack keeps. Past this the oldest step is dropped;
@@ -28,6 +28,8 @@ pub struct MapSettings {
     pub growth: Option<u32>,
     pub tier_start: Option<Tier>,
     pub tier_end: Option<Tier>,
+    /// The look (`MapFile::theme`).
+    pub theme: Theme,
 }
 
 impl MapSettings {
@@ -43,6 +45,7 @@ impl MapSettings {
             growth: map.spawn.growth,
             tier_start: map.spawn.tier_start,
             tier_end: map.spawn.tier_end,
+            theme: map.theme,
         }
     }
 
@@ -57,6 +60,7 @@ impl MapSettings {
         map.spawn.growth = self.growth;
         map.spawn.tier_start = self.tier_start;
         map.spawn.tier_end = self.tier_end;
+        map.theme = self.theme;
     }
 
     /// The names of the fields that differ between two settings, in field

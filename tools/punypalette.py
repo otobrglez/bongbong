@@ -158,8 +158,9 @@ BLUE_PALE = (0x93, 0xEC, 0xE2)      # mid(BLUE_BRIGHT, WHITE)
 # jump with nothing between, so a grass blade built from the pack's greens
 # reads as a solid dark block with light specks floating over it rather than
 # as blades. This is the one step that connects them - and it is genuinely
-# darker than the *retinted* live ground (#619541), which GREEN_DK is not,
-# so a clump reads against the field it grows out of.
+# darker than the grass theme's retinted ground (#619541), which GREEN_DK
+# is not, so a clump reads against the field it grows out of. The desert
+# theme's sagebrush uses it as the leaf speckle over a grey body.
 GREEN_SHADE = (0x3D, 0x6E, 0x3F)    # mid(GREEN_DARKEST, GREEN_DK)
 
 PUNY_EXTRA = [

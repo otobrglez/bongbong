@@ -119,8 +119,10 @@ merged into one giant khaki moat spanning the whole "BONG!" word. Fixed by:
    live PNG): a smooth hue-based HSV curve pushes grass toward the pack's
    *own* deeper tree-canopy green (`#85A643` → `#619541`, next to its
    `#5E914B` foliage) and mutes dirt toward earth-tan (`#C4B253` →
-   `#B1A567`); wood/red/teal/water/greys untouched. Details in
-   `docs/GROUND_SPEC.md` §1.
+   `#B1A567`); wood/red/teal/water/greys untouched. That curve is the
+   script's `grass` theme; a map's `theme` key can pick `desert` instead
+   (pale dust, packed-earth roads, its own tileset file). Details in
+   `docs/GROUND_SPEC.md` §1 and `docs/desert-theme.md`.
 2. **Dropping the fortress dirt ring** (`FORTRESS_ROAD_SURROUND` 1 → 0) —
    dirt now shows only inside the `B`/`O` courtyards and under wall tiles.
 

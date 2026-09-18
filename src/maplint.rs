@@ -1020,7 +1020,7 @@ mod map_lint_tests {
     /// Maps the game actually ships/loads by default - gated by
     /// `supported_maps_no_new_errors` against `KNOWN_ERROR_BUDGET` below.
     /// Grow this list as maps graduate from scratch to shipped.
-    const SUPPORTED_MAPS: &[&str] = &["maps/default.toml"];
+    const SUPPORTED_MAPS: &[&str] = &["maps/default.toml", "maps/default-desert.toml"];
 
     /// Real, recorded map debt in the supported maps: `Error` *kinds* the
     /// linter is right about but that predate it (found the day it landed
@@ -1042,7 +1042,7 @@ mod map_lint_tests {
     /// predicate - so every enemy spawn on this map degrades to
     /// `sample_clear_position`'s attempt-cap fallback (a very plausible
     /// source of this map's recorded stale-start/stall anomaly baseline).
-    const KNOWN_ERROR_KINDS: &[(&str, &[LintKind])] = &[("maps/default.toml", &[])];
+    const KNOWN_ERROR_KINDS: &[(&str, &[LintKind])] = &[("maps/default.toml", &[]), ("maps/default-desert.toml", &[])];
 
     /// Headless seeded round on `map`, linted - the §3.1 setup. The fixed
     /// seed matters for maps that leave frog/start placement to `init`'s

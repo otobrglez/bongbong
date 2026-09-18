@@ -389,6 +389,12 @@ pickup = "ammo"
 - `version` is a plain integer, bumped only if the schema changes
   incompatibly later — read defensively (reject/warn on an unknown future
   version rather than guessing).
+- `theme` is an optional top-level `"grass" | "desert"` (`map::Theme`):
+  the look the map is drawn in — its ground tileset, its tall-grass sheet
+  and whether the floor carries sand drifts. Presentation only; absent
+  means `grass`, and grass is not written back. The MAP panel's THEME row
+  edits it, and `builder_settings {theme}` on the dev server. See
+  `docs/desert-theme.md`.
 
 ### Level tables
 

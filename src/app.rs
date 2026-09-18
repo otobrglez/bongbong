@@ -485,9 +485,25 @@ pub fn run(args: Args) {
     let minigun_bullets_texture = rl
         .load_texture(&thread, "static/minigun_bullets.png")
         .expect("failed loading minigun bullets texture");
-    let grass_texture = rl
-        .load_texture(&thread, "static/nature_sheet.png")
-        .expect("failed loading grass texture");
+    // One ground tileset and one tall-grass sheet per `map::Theme`, all
+    // loaded up front and indexed by `Theme::ALL` position: the pair the
+    // frame draws with is the live map's, so a builder THEME change or a
+    // restart on another map switches at once with no reload.
+    let ground_textures: Vec<sola_raylib::prelude::Texture2D> = crate::map::Theme::ALL
+        .iter()
+        .map(|t| {
+            rl.load_texture(&thread, t.ground_texture_path())
+                .unwrap_or_else(|e| panic!("failed loading {} ground texture: {e}", t.name()))
+        })
+        .collect();
+    let grass_textures: Vec<sola_raylib::prelude::Texture2D> = crate::map::Theme::ALL
+        .iter()
+        .map(|t| {
+            rl.load_texture(&thread, t.grass_texture_path())
+                .unwrap_or_else(|e| panic!("failed loading {} grass texture: {e}", t.name()))
+        })
+        .collect();
+    let theme_index = |t: crate::map::Theme| crate::map::Theme::ALL.iter().position(|x| *x == t).expect("every theme is in ALL");
     let trees_texture = rl
         .load_texture(&thread, "static/trees_sheet.png")
         .expect("failed loading trees texture");
@@ -509,9 +525,6 @@ pub fn run(args: Args) {
     let barrel_explosion_texture = rl
         .load_texture(&thread, "static/barrel_explosion.png")
         .expect("failed loading barrel explosion texture");
-    let ground_texture = rl
-        .load_texture(&thread, "static/punyworld/punyworld-overworld-tileset.png")
-        .expect("failed loading ground texture");
     // One full clip set per colour variant (see `frog::FROG_VARIANT_DIRS`) -
     // `Frog::variant` (rolled per round in `Game::init`) picks which one
     // `game.rs::render` draws from. Loaded up front like every other
@@ -941,8 +954,8 @@ pub fn run(args: Args) {
                 &EditorTextures {
                     obstacles: &obstacles_texture,
                     props: &props_texture,
-                    ground: &ground_texture,
-                    grass: &grass_texture,
+                    ground: &ground_textures[theme_index(session.builder.map().theme)],
+                    grass: &grass_textures[theme_index(session.builder.map().theme)],
                     trees: &trees_texture,
                     // Palette icon: the first colour variant's idle frame -
                     // a fixed representative sprite, since the builder
@@ -1051,7 +1064,7 @@ pub fn run(args: Args) {
                 obstacles: &obstacles_texture,
                 props: &props_texture,
                 barrel_explosion: &barrel_explosion_texture,
-                ground: &ground_texture,
+                ground: &ground_textures[theme_index(session.game.map.theme)],
                 frog_variants: &frog_textures,
                 pickup_health: &pickup_health_texture,
                 pickup_ammo: &pickup_ammo_texture,
@@ -1063,7 +1076,7 @@ pub fn run(args: Args) {
                 pickup_flamethrower: &pickup_flamethrower_texture,
                 pickup_frog_health: &pickup_frog_health_texture,
                 minigun_mount: &minigun_mount_texture,
-                grass: &grass_texture,
+                grass: &grass_textures[theme_index(session.game.map.theme)],
                 trees: &trees_texture,
             },
             &layout,

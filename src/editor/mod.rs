@@ -25,7 +25,7 @@ use sola_raylib::prelude::*;
 use crate::ground::{self, GroundGrid};
 use crate::hud::{mode_button_rect, BAR_FILL, DIM, HUD_LABEL_SIZE, HUD_TEXT_SIZE, TEXT};
 use crate::level::{Mission, SpawnKind, Tier};
-use crate::map::{self, CellObject, MapEntry, MapFile};
+use crate::map::{self, CellObject, MapEntry, MapFile, Theme};
 use crate::obstacle::{self, Drum, Material};
 use crate::pickup::PickupKind;
 use crate::tank::TankKind;
@@ -109,8 +109,11 @@ pub struct EditorTextures<'a> {
     pub obstacles: &'a Texture2D,
     /// The props sheet (`obstacle::Sheet::Props`).
     pub props: &'a Texture2D,
+    /// The ground tileset of the canvas map's theme
+    /// (`Theme::ground_texture_path`) - `app.rs` picks it per frame.
     pub ground: &'a Texture2D,
-    /// static/nature_sheet.png - tall grass (`grass.rs`).
+    /// The tall-grass sheet of the canvas map's theme
+    /// (`Theme::grass_texture_path`).
     pub grass: &'a Texture2D,
     pub frog_idle: &'a Texture2D,
     pub pickup_health: &'a Texture2D,
@@ -568,6 +571,9 @@ impl MapEditor {
         self.finish_stroke();
         after.write_to(&mut self.map);
         self.history.push(EditStep::Settings { before, after });
+        if after.theme != before.theme {
+            self.rebuild_ground();
+        }
     }
 
     /// Replace the canvas with `map` and make it the new baseline, as one
@@ -700,7 +706,7 @@ impl MapEditor {
             .filter(|(_, _, obj)| matches!(obj, CellObject::Wall { .. }))
             .map(|(col, row, _)| map::cell_to_world(col, row))
             .collect();
-        self.ground = ground::build(width, height, self.ground_seed, &road_cells, &wall_cells);
+        self.ground = ground::build(width, height, self.ground_seed, &road_cells, &wall_cells, self.map.theme.drifts());
     }
 
     // ----- the chrome -----
@@ -1214,6 +1220,7 @@ impl MapEditor {
             SettingsRow::Growth => s.growth = step_option_number(s.growth, forward, 0, 10),
             SettingsRow::TierStart => s.tier_start = step_option_choice(s.tier_start, &Tier::ALL, forward),
             SettingsRow::TierEnd => s.tier_end = step_option_choice(s.tier_end, &Tier::ALL, forward),
+            SettingsRow::Theme => s.theme = step_choice(s.theme, &Theme::ALL, forward),
             SettingsRow::Reset => return,
         }
         self.apply_settings(s);
@@ -1410,7 +1417,7 @@ impl MapEditor {
         }
 
         let erase = Self::erase_rect(layout);
-        draw_tool_icon(d, textures, Tool::Eraser, Rectangle::new(erase.x + 4.0, erase.y, ICON_PX, ICON_PX));
+        draw_tool_icon(d, textures, self.map.theme, Tool::Eraser, Rectangle::new(erase.x + 4.0, erase.y, ICON_PX, ICON_PX));
         if self.active_tool == Tool::Eraser {
             active_outline(d, erase.x as i32, py, (SMALL_BUTTON_W - 4.0) as i32, ph, BUILD_ACCENT);
         }
@@ -1468,7 +1475,7 @@ impl MapEditor {
         let rect = Self::category_rect(layout, category);
         let tool = self.current_tool(category);
         let (x, y, h) = (rect.x as i32, rect.y as i32, rect.height as i32);
-        draw_tool_icon(d, textures, tool, Rectangle::new(rect.x, rect.y, ICON_PX, ICON_PX));
+        draw_tool_icon(d, textures, self.map.theme, tool, Rectangle::new(rect.x, rect.y, ICON_PX, ICON_PX));
         if self.singleton_placed(tool) {
             draw_badge(d, rect.x + ICON_PX, rect.y);
         }
@@ -1492,7 +1499,7 @@ impl MapEditor {
             }
             // A 40 px rect: the icon's own 4 px inset makes it 32 px at 8.
             let icon = Rectangle::new(row.x + 4.0, row.y + 4.0, ICON_PX + 8.0, ICON_PX + 8.0);
-            draw_tool_icon(d, textures, tool, icon);
+            draw_tool_icon(d, textures, self.map.theme, tool, icon);
             if self.singleton_placed(tool) {
                 draw_badge(d, icon.x + icon.width - 4.0, icon.y + 4.0);
             }
@@ -1569,10 +1576,12 @@ enum SettingsRow {
     Growth,
     TierStart,
     TierEnd,
+    /// The look (`MapFile::theme`): the canvas redraws in it at once.
+    Theme,
     Reset,
 }
 
-const SETTINGS_ROWS: [SettingsRow; 11] = [
+const SETTINGS_ROWS: [SettingsRow; 12] = [
     SettingsRow::Tanks,
     SettingsRow::Tank,
     SettingsRow::Tank2,
@@ -1583,6 +1592,7 @@ const SETTINGS_ROWS: [SettingsRow; 11] = [
     SettingsRow::Growth,
     SettingsRow::TierStart,
     SettingsRow::TierEnd,
+    SettingsRow::Theme,
     SettingsRow::Reset,
 ];
 
@@ -1601,6 +1611,7 @@ impl SettingsRow {
             SettingsRow::Growth => "GROWTH",
             SettingsRow::TierStart => "TIER START",
             SettingsRow::TierEnd => "TIER END",
+            SettingsRow::Theme => "THEME",
             SettingsRow::Reset => "RESET MAP",
         }
     }
@@ -1629,6 +1640,7 @@ impl SettingsRow {
             SettingsRow::Growth => auto_or(s.growth, |n| n.to_string()),
             SettingsRow::TierStart => auto_or(s.tier_start, |t| t.name().to_string()),
             SettingsRow::TierEnd => auto_or(s.tier_end, |t| t.name().to_string()),
+            SettingsRow::Theme => s.theme.name().to_string(),
             SettingsRow::Reset => String::new(),
         }
     }
@@ -1646,6 +1658,8 @@ impl SettingsRow {
             SettingsRow::Growth => o.wave_growth,
             SettingsRow::TierStart => o.tier_start,
             SettingsRow::TierEnd => o.tier_end,
+            // No CLI flag names a theme: the map is the only source.
+            SettingsRow::Theme => false,
             SettingsRow::Reset => false,
         }
     }
@@ -1848,7 +1862,7 @@ pub fn draw_panel(d: &mut impl RaylibDraw, rect: Rectangle) {
 }
 
 /// A tool's icon inside `rect` (4 px inset).
-pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, tool: Tool, rect: Rectangle) {
+pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme: Theme, tool: Tool, rect: Rectangle) {
     let dest = Rectangle::new(rect.x + 4.0, rect.y + 4.0, rect.width - 8.0, rect.height - 8.0);
     match tool {
         Tool::Wall(material) | Tool::Prop(material) => {
@@ -1894,9 +1908,11 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, tool: 
             draw_gate_chevron(d, center, dest.width, Position::new(1.0, 0.0));
         }
         Tool::TallGrass => {
-            // One tuft from the nature sheet on a patch of ground green, so
-            // the icon reads as grass-on-grass rather than loose pixels.
-            d.draw_rectangle_rounded(dest, 0.15, EDITOR_PANEL_SEGMENTS, Color::new(97, 149, 65, 255));
+            // One tuft from the nature sheet on a patch of the theme's
+            // floor, so the icon reads as grass-on-ground rather than
+            // loose pixels.
+            let (r, g, b) = theme.floor_color();
+            d.draw_rectangle_rounded(dest, 0.15, EDITOR_PANEL_SEGMENTS, Color::new(r, g, b, 255));
             let cell = crate::GRASS_TEXTURE_SIZE;
             let src = Rectangle::new(0.0, 0.0, cell, cell);
             d.draw_texture_pro(textures.grass, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
@@ -2411,6 +2427,12 @@ mod editor_tests {
         assert_eq!(ed.settings().tank2, None);
         click(&mut ed, &layout, inc(SettingsRow::TierStart));
         assert_eq!(ed.settings().tier_start, Some(Tier::Light));
+        // THEME cycles the list; the ground is rebuilt in the new theme.
+        click(&mut ed, &layout, inc(SettingsRow::Theme));
+        assert_eq!(ed.settings().theme, Theme::Desert);
+        assert_eq!(ed.map().theme, Theme::Desert);
+        click(&mut ed, &layout, inc(SettingsRow::Theme));
+        assert_eq!(ed.settings().theme, Theme::Grass, "wraps");
         click(&mut ed, &layout, inc(SettingsRow::Mission));
         assert_eq!(ed.settings().mission, Mission::Hunt);
         click(&mut ed, &layout, inc(SettingsRow::Spawn));

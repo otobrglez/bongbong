@@ -21,7 +21,7 @@ Two checks, both of which have caught real defects:
    tank chassis is a real colour choice, so `scifi_tanks_sheet.png` is not
    checked, and `damage.png` carries a green tint of its own.
 
-   `nature_sheet.png` and `trees_sheet.png` are the deliberate exceptions,
+   `nature_sheet.png`, `nature_sheet_desert.png` and `trees_sheet.png` are the deliberate exceptions,
    and they are what the rule always meant: **manufactured objects are
    never green; vegetation is.** Grass that cannot be green is not grass.
 
@@ -46,6 +46,7 @@ STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static'
 ON_PALETTE = [
     'walls_sheet.png',
     'nature_sheet.png',
+    'nature_sheet_desert.png',
     'trees_sheet.png',
     'props_sheet.png',
     'barrel_explosion.png',
@@ -76,7 +77,7 @@ TANK_CELL = 32
 # Sheets allowed the palette extension (punypalette.PUNY_EXTRA): the walls
 # sheet for its stone/rust steps, the vegetation sheets for GREEN_SHADE
 # (and, on trees, WOOD_ASH for burnt-out foliage).
-EXTENDED = {'walls_sheet.png', 'nature_sheet.png', 'trees_sheet.png'}
+EXTENDED = {'walls_sheet.png', 'nature_sheet.png', 'nature_sheet_desert.png', 'trees_sheet.png'}
 
 
 def scan(name):

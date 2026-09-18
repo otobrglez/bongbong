@@ -30,23 +30,43 @@ pre-built autotile data, used as-is.
 overworld tileset (432×1040, 16×16 tiles, 27 columns), third-party,
 confirmed usable by the project owner.
 
-**The live PNG is a retinted copy since the de-green pass (2026-08).** The
-pack's own grass fill (`#85A643`, hue ~80°) is a yellow-green and its
-dirt-path tiles (`#C4B253`, hue ~50°) bright yellow-khaki — with the ground
-covering most of the screen, the whole game read yellow/green even after
-the sprite sheets were de-olived (see `docs/PALETTE.md`, "The de-green
-pass"). `tools/retint_ground.py` applies a smooth piecewise-linear HSV
-curve: grass hues shift toward the pack's *own* deeper tree-canopy green
-(`#85A643` → `#619541`, landing next to its `#5E914B` foliage), dirt is
-desaturated/darkened toward earth-tan (`#C4B253` → `#B1A567`), and
-everything outside hue 40–110° (wood, red/teal roofs, water, greys) is
-untouched. The script always reads the pristine original preserved at
-`static/punyworld/_original/punyworld-overworld-tileset.png` and writes the
-live path, so it's idempotent — tweak its `CURVE` control points and rerun
-to iterate; never hand-edit the live PNG or overwrite `_original/`. The
-same pass also set `battlefield.rs`'s `FORTRESS_ROAD_SURROUND` to 0 (see
-§5 and that constant's doc comment) so the fortress no longer sits in a
-merged dirt moat.
+**The live PNGs are retinted copies, one per theme.** The pack's own
+grass fill (`#85A643`, hue ~80°) is a yellow-green and its dirt-path tiles
+(`#C4B253`, hue ~50°) bright yellow-khaki. `tools/retint_ground.py` always
+reads the pristine original preserved at
+`static/punyworld/_original/punyworld-overworld-tileset.png` and writes one
+live file per `map::Theme` (`Theme::ground_texture_path`), so it's
+idempotent — tweak a theme and rerun to iterate; never hand-edit a live PNG
+or overwrite `_original/`. A map picks its theme with a top-level `theme`
+key (docs/desert-theme.md), and `app.rs` draws with that theme's tileset
+and its matching tall-grass sheet from `tools/spritegen/gen_grass.py`:
+
+- **`desert`** (`punyworld-overworld-tileset-desert.png`): the grass fill becomes pale, pebbly dust
+  (`#85A643` → `#CCB385`, its speck tones kept a step lighter and darker so
+  they read as grains and pebbles), the dirt paths a darker packed-earth
+  road (`#C4B253` → `#A08058`), and the pack's sand a slightly darker,
+  smoother hardpan (`#C9B266` → `#C2A87D`) that `ground.rs` drifts over the
+  open floor in soft patches (§8). The colours the game actually draws go
+  through an exact table rather than the hue curve, because the pack's
+  sand and dirt sit four hue degrees apart and *share* their grass-edge
+  dither pixels — a curve cannot send one dark and the other light without
+  tearing every dither. The dithers land between the dust and the hardpan,
+  which also puts them between the dust and the road.
+- **`grass`** (`punyworld-overworld-tileset.png`, the default theme): the de-green pass. A smooth piecewise-linear HSV curve
+  shifts grass hues toward the pack's *own* deeper tree-canopy green
+  (`#85A643` → `#619541`, landing next to its `#5E914B` foliage),
+  desaturates and darkens dirt toward earth-tan (`#C4B253` → `#B1A567`),
+  and leaves everything outside hue 40–110° (wood, red/teal roofs, water,
+  greys) untouched. With the ground covering most of the screen, the
+  pack's own tones read yellow/green even after the sprite sheets were
+  de-olived (see `docs/PALETTE.md`, "The de-green pass"); the same pass
+  set `battlefield.rs`'s `FORTRESS_ROAD_SURROUND` to 0 (see §5 and that
+  constant's doc comment) so the fortress no longer sits in a merged dirt
+  moat.
+
+`ground.rs` names its materials after the pack's wangset colours (grass,
+sand, dirt paths), not after what a theme paints them as — the only thing
+it takes from the theme is whether to drift the sand (`Theme::drifts`).
 
 See `static/punyworld/SOURCE.md` for
 the full provenance note, including: no license file was bundled with it,
@@ -85,10 +105,11 @@ approximation needed anywhere — every case `ground::build` can produce has
 exact source art.
 
 The `overworld` (type `corner`) wangset — grass/dirt/sand/cliff/trees/
-river/3×seawater — is *not* used: this version has no dirt patches, so
-grass cells only ever need the plain "every corner grass" fill variants
-(`ground::GRASS_FILL`), not the corner autotile. See §7 if a future pass
-wants dirt patches back.
+river/3×seawater — supplies the **sand-against-grass corner set** the drift
+patches use (§8, `ground::SAND_CORNER`): all 14 mixed-corner tiles plus the
+flat sand fill, so every patch edge is hand-painted. Its other materials
+are unused; grass cells outside a patch take the plain "every corner grass"
+fill variants (`ground::GRASS_FILL`).
 
 ---
 
@@ -221,18 +242,13 @@ half-tile overhang past `width`/`height` that centering introduces (see
 
 ## 7. Extension notes
 
-- **Dirt patches / a random wandering road** (the first version's
-  behavior) could come back as an *additional* source feeding into the
-  same `road_cells`/material-grid mechanism §5 now uses, rather than a
-  full revert — nothing about the object-driven placement conflicts with
-  also rolling some independent random patches, if that texture is wanted
-  again. The removed `Material::Dirt`/`ground::DIRT_CORNER` corner-autotile
-  table (grass/dirt Wang corners, extracted from the `overworld` wangset)
-  would need restoring first — see this doc's git history for the exact
-  table.
+- **A random wandering road** (the first version's behavior) could come
+  back as an *additional* source feeding into the same
+  `road_cells`/material-grid mechanism §5 now uses, rather than a full
+  revert — nothing about the object-driven placement conflicts with it.
 - **More materials**: the pack's `overworld` wangset has full corner data
-  for `sand`(3) and `cliff`(4) against grass too, plus `river`/3×`seawater`
-  for water — same extraction method as the removed dirt table (a short
+  for `dirt`(2) and `cliff`(4) against grass too, plus `river`/3×`seawater`
+  for water — same extraction method as the sand table in §8 (a short
   Python script over the `.tsx`, not hand-transcription).
 - **Gameplay effects** (road = speed bonus?) would read
   `ground::GroundGrid` at the tank's position — nothing in `ground.rs`
@@ -241,3 +257,44 @@ half-tile overhang past `width`/`height` that centering introduces (see
   addition (map world position → grid cell → re-derive `Material` from the
   tile id, or just store `Material` alongside the tile id in `GroundGrid`
   instead of discarding it after resolve).
+
+---
+
+## 8. Drift patches (`ground::SAND_CORNER`, `ground_drift_*`)
+
+A flat fill with sparse specks reads as a painted floor once it is dust
+rather than grass, so the desert theme adds one more decorative layer:
+soft patches of the pack's **sand** tiles — the smoother, slightly darker
+hardpan under the desert retint — laid over the open floor.
+
+- **Corner autotile, not per-cell noise.** Sand is decided at the grid
+  *vertices*: a vertex is sand where a smooth value noise
+  (`ground::drift_noise`, hashed lattice points every `ground_drift_scale`
+  cells, smoothstep-blended) exceeds `1 - ground_drift_cover`. Each grass
+  cell then takes the tile whose four corners match
+  (`SAND_CORNER[TL<<3 | TR<<2 | BR<<1 | BL]`), so every edge is one of the
+  pack's 14 hand-painted rounded transitions and a patch is a blob a few
+  cells across, never a checkerboard.
+- **Never beside a road.** A vertex touching a road cell is forced to
+  grass: the road tiles carry the plain fill's dithered edge baked in, and
+  a road through a patch would show a fringe of the wrong tone along it.
+  Walls stand on road cells, so built-up areas are plain dust and the
+  patches live in the open, which is where they read.
+- **Keyed like `grass_variant`**, by `seed` and the lattice coordinates
+  alone — the editor's fixed-seed rebuilds keep every patch in place across
+  edits, and a round's floor replays from its seed.
+- Only on a theme whose `map::Theme::drifts` says so (`build`'s `drifts`
+  argument): on the grass retint the sand is a khaki that would bring back
+  the dirt patches the object-driven placement replaced.
+  `ground_drift_cover` 0 turns the layer off on the desert too.
+
+Extraction: the mask → tile table came from the `overworld` wangset's
+corner wangids, `[N, NE, E, SE, S, SW, W, NW]` with grass = 1 and sand = 3,
+reading the corner slots 7/1/3/5 as TL/TR/BR/BL:
+
+| mask (TL TR BR BL) | tile | mask | tile | mask | tile | mask | tile |
+|---|---|---|---|---|---|---|---|
+| 0001 | 24 | 0101 | 80 | 1001 | 51 | 1101 | 53 |
+| 0010 | 22 | 0110 | 49 | 1010 | 79 | 1110 | 52 |
+| 0011 | 23 | 0111 | 25 | 1011 | 26 | 1111 | 50 |
+| 0100 | 76 | 1000 | 78 | 1100 | 77 | 0000 | `GRASS_FILL` |
