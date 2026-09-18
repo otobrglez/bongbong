@@ -14,7 +14,7 @@ use crate::ai::Ai;
 use crate::blast::{BlastFx, BlastKind, BlastShape, Lean, Scorch};
 use crate::decal::Decal;
 use crate::frog::Frog;
-use crate::map::cell_to_world;
+use crate::map::{cell_to_world, world_to_cell};
 use crate::obstacle::{face_toward, Drum, Fuse, Material, Obstacle};
 use crate::shockwave::Shockwave;
 use crate::tank::Tank;
@@ -784,6 +784,56 @@ impl Game {
             .filter(|o| o.fuse.is_some() && !o.destroyed)
             .map(|o| o.position)
             .collect()
+    }
+
+    /// Every live explosive tile (a barrel, fused or not), for tools that
+    /// hit-test a pointer against them.
+    pub fn barrels(&self) -> Vec<Position> {
+        self.world
+            .query::<&Obstacle>()
+            .iter()
+            .filter(|o| o.material.is_explosive() && !o.destroyed)
+            .map(|o| o.position)
+            .collect()
+    }
+
+    /// Ask for the barrel in the cell under `at` to go off on the next
+    /// playing frame, as if a shell had hit it: its blast, chain fuses and
+    /// decals all run through the normal path. Errors when the cell holds
+    /// no live barrel.
+    pub fn debug_detonate(&mut self, at: Position) -> Result<(), String> {
+        let cell = world_to_cell(at);
+        let found = self
+            .world
+            .query::<&Obstacle>()
+            .iter()
+            .any(|o| o.material.is_explosive() && !o.destroyed && o.cell() == cell);
+        if !found {
+            return Err(format!("no barrel at cell {cell:?}"));
+        }
+        let pos = cell_to_world(cell.0, cell.1);
+        if !self.debug_detonations.contains(&pos) {
+            self.debug_detonations.push(pos);
+        }
+        Ok(())
+    }
+
+    /// Drain `debug_detonations`: each queued cell's barrel takes a fatal
+    /// direct hit. A barrel already fused or gone is skipped by
+    /// `damage_obstacle` itself.
+    pub(super) fn apply_debug_detonations(&mut self, f: &mut Frame) {
+        for pos in std::mem::take(&mut self.debug_detonations) {
+            let cell = world_to_cell(pos);
+            let entity = self
+                .world
+                .query::<(Entity, &Obstacle)>()
+                .iter()
+                .find(|(_, o)| o.material.is_explosive() && !o.destroyed && o.cell() == cell)
+                .map(|(e, _)| e);
+            if let Some(entity) = entity {
+                self.damage_obstacle(f, entity, f32::MAX, DamageCause::Shot { dir: None });
+            }
+        }
     }
 }
 

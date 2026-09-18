@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#fff"/></marker></defs>
+<rect width="1920" height="1080" fill="#000"/>
+<rect x="60" y="380" width="300" height="170" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="210.0" y="420.45" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="26" font-weight="700" text-anchor="middle" dominant-baseline="middle">Rust source</text>
+<text x="210.0" y="450.15" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="22" font-weight="400" text-anchor="middle" dominant-baseline="middle">src/  edition 2024</text>
+<text x="210.0" y="479.84999999999997" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="22" font-weight="400" text-anchor="middle" dominant-baseline="middle">sola-raylib · rapier2d · hecs</text>
+<text x="210.0" y="509.54999999999995" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="22" font-weight="400" text-anchor="middle" dominant-baseline="middle">static/ assets · maps/</text>
+<rect x="60" y="590" width="300" height="110" rx="10" fill="none" stroke="#fff" stroke-width="2.5" stroke-dasharray="10 8"/>
+<text x="210.0" y="630.15" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="22" font-weight="400" text-anchor="middle" dominant-baseline="middle">one build.rs picks the</text>
+<text x="210.0" y="659.85" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="22" font-weight="400" text-anchor="middle" dominant-baseline="middle">link flags per target</text>
+<line x1="360" y1="465" x2="450" y2="465" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="450" y="385" width="262" height="160" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="581.0" y="424.5" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="24" font-weight="700" text-anchor="middle" dominant-baseline="middle">LLVM</text>
+<text x="581.0" y="451.5" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="20" font-weight="400" text-anchor="middle" dominant-baseline="middle">rustc frontend →</text>
+<text x="581.0" y="478.5" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="20" font-weight="400" text-anchor="middle" dominant-baseline="middle">LLVM IR → machine code</text>
+<text x="581.0" y="505.5" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="20" font-weight="400" text-anchor="middle" dominant-baseline="middle">for the target triple</text>
+<line x1="712" y1="465" x2="740" y2="465" stroke="#fff" stroke-width="2.5"/>
+<line x1="740" y1="245.0" x2="740" y2="905.0" stroke="#fff" stroke-width="2.5"/>
+<text x="786" y="164" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="20" font-weight="700" text-anchor="start" dominant-baseline="middle">DESKTOP</text>
+<line x1="740" y1="245.0" x2="786" y2="245.0" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="786" y="180" width="262" height="130" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="917.0" y="232.85" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">x86_64 / aarch64</text>
+<text x="917.0" y="257.15" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">macOS · Linux · Windows</text>
+<line x1="1048" y1="245.0" x2="1070" y2="245.0" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="1070" y="180" width="262" height="130" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="1201.0" y="232.85" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">cmake builds raylib (GLFW),</text>
+<text x="1201.0" y="257.15" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">cc links the binary</text>
+<line x1="1332" y1="245.0" x2="1354" y2="245.0" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="1354" y="180" width="262" height="130" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="1485.0" y="232.85" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">bongbong binary</text>
+<text x="1485.0" y="257.15" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">+ static/ beside it</text>
+<line x1="1616" y1="245.0" x2="1638" y2="245.0" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="1638" y="180" width="262" height="130" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="1769.0" y="232.85" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">cargo-dist archives</text>
+<text x="1769.0" y="257.15" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">→ GitHub Releases</text>
+<text x="786" y="384" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="20" font-weight="700" text-anchor="start" dominant-baseline="middle">WEB</text>
+<line x1="740" y1="465.0" x2="786" y2="465.0" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="786" y="400" width="262" height="130" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="917.0" y="465.0" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">wasm32-unknown-emscripten</text>
+<line x1="1048" y1="465.0" x2="1070" y2="465.0" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="1070" y="400" width="262" height="130" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="1201.0" y="440.7" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">emcc (pinned emsdk) links</text>
+<text x="1201.0" y="465.0" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">raylib PLATFORM=Web,</text>
+<text x="1201.0" y="489.3" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">--preload-file static/</text>
+<line x1="1332" y1="465.0" x2="1354" y2="465.0" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="1354" y="400" width="262" height="130" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="1485.0" y="452.85" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">.wasm + .js glue + .data</text>
+<text x="1485.0" y="477.15000000000003" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">GLSL ES 100 shaders</text>
+<line x1="1616" y1="465.0" x2="1638" y2="465.0" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="1638" y="400" width="262" height="130" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="1769.0" y="440.7" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">Astro site →</text>
+<text x="1769.0" y="465.0" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">Cloudflare Workers</text>
+<text x="1769.0" y="489.3" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">bongbong.io</text>
+<text x="786" y="604" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="20" font-weight="700" text-anchor="start" dominant-baseline="middle">iOS</text>
+<line x1="740" y1="685.0" x2="786" y2="685.0" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="786" y="620" width="262" height="130" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="917.0" y="685.0" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">aarch64-apple-ios / -sim</text>
+<line x1="1048" y1="685.0" x2="1070" y2="685.0" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="1070" y="620" width="262" height="130" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="1201.0" y="660.7" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">clang links prebuilt raylib</text>
+<text x="1201.0" y="685.0" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">(SDL3 backend, GL ES 2)</text>
+<text x="1201.0" y="709.3" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">+ libSDL3.a + frameworks</text>
+<line x1="1332" y1="685.0" x2="1354" y2="685.0" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="1354" y="620" width="262" height="130" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="1485.0" y="660.7" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">bundle.sh → BongBong.app</text>
+<text x="1485.0" y="685.0" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">Info.plist · static/ · maps/</text>
+<text x="1485.0" y="709.3" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">no Xcode project</text>
+<line x1="1616" y1="685.0" x2="1638" y2="685.0" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="1638" y="620" width="262" height="130" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="1769.0" y="672.85" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">Xcode automatic signing</text>
+<text x="1769.0" y="697.15" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">→ devicectl / Simulator</text>
+<text x="786" y="824" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="20" font-weight="700" text-anchor="start" dominant-baseline="middle">ANDROID</text>
+<line x1="740" y1="905.0" x2="786" y2="905.0" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="786" y="840" width="262" height="130" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="917.0" y="892.85" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">aarch64-linux-android</text>
+<text x="917.0" y="917.15" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">cdylib crate android/</text>
+<line x1="1048" y1="905.0" x2="1070" y2="905.0" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="1070" y="840" width="262" height="130" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="1201.0" y="880.7" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">NDK clang links prebuilt</text>
+<text x="1201.0" y="905.0" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">raylib (NativeActivity)</text>
+<text x="1201.0" y="929.3" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">+ EGL · GLESv2, --wrap=fopen</text>
+<line x1="1332" y1="905.0" x2="1354" y2="905.0" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="1354" y="840" width="262" height="130" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="1485.0" y="880.7" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">libbongbong_android.so</text>
+<text x="1485.0" y="905.0" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">+ assets → aapt2 + apksigner</text>
+<text x="1485.0" y="929.3" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">→ APK, no Java</text>
+<line x1="1616" y1="905.0" x2="1638" y2="905.0" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="1638" y="840" width="262" height="130" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="1769.0" y="892.85" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">adb install</text>
+<text x="1769.0" y="917.15" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">→ device / AVD</text>
+</svg>

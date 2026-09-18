@@ -20,6 +20,7 @@
 //! ends the round in a loss, the enemy frog's in a win
 //! (`Game::check_round_end`).
 
+use crate::canvas::{Canvas, Sheet};
 use crate::shell::Owner;
 use crate::tank::{HealthRamp, RingStyle, draw_ground_ring_at, with_opacity};
 use crate::tuning::tuning;
@@ -197,7 +198,9 @@ pub struct Frog {
 }
 
 /// Which of the five filmstrips (see docs/FROG_SPEC.md) `anim` picked for
-/// this frame, plus which frame within it.
+/// this frame, plus which frame within it. Also the clip half of
+/// `canvas::Sheet::Frog`, hence the ordering derives.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum FrogAnim {
     Idle,
     Hurt,
@@ -411,23 +414,10 @@ pub const FROG_VARIANT_DIRS: [&str; 6] = [
     "purple_blue",
 ];
 
-/// The five animation filmstrips `draw_frog` picks from (see
-/// docs/FROG_SPEC.md), bundled into one param the same way `game::Textures`
-/// bundles the rest of the game's atlases - so `draw_frog`'s signature
-/// doesn't grow every time another clip gets wired in.
-pub struct FrogTextures<'a> {
-    pub idle: &'a Texture2D,
-    pub hurt: &'a Texture2D,
-    pub hop: &'a Texture2D,
-    pub attack: &'a Texture2D,
-    pub explosion: &'a Texture2D,
-}
-
-/// One colour variant's full set of five clips, owned rather than borrowed
-/// (unlike `FrogTextures`) - `main.rs` loads one of these per
-/// `FROG_VARIANT_DIRS` entry and keeps the whole set alive for the game's
-/// lifetime; `game::Textures::frog_variants` then hands `render` a slice of
-/// them to index into by `Frog::variant` each frame.
+/// One colour variant's full set of five clips (see docs/FROG_SPEC.md) -
+/// `app.rs` loads one of these per `FROG_VARIANT_DIRS` entry and keeps the
+/// whole set alive for the game's lifetime; `game::Textures::frog_variants`
+/// then resolves `canvas::Sheet::Frog { variant, clip }` through `clip`.
 pub struct FrogVariantTextures {
     pub idle: Texture2D,
     pub hurt: Texture2D,
@@ -437,14 +427,14 @@ pub struct FrogVariantTextures {
 }
 
 impl FrogVariantTextures {
-    /// Borrow this variant's five clips as a `FrogTextures` for `draw_frog`.
-    pub fn as_frog_textures(&self) -> FrogTextures<'_> {
-        FrogTextures {
-            idle: &self.idle,
-            hurt: &self.hurt,
-            hop: &self.hop,
-            attack: &self.attack,
-            explosion: &self.explosion,
+    /// The filmstrip for one clip.
+    pub fn clip(&self, clip: FrogAnim) -> &Texture2D {
+        match clip {
+            FrogAnim::Idle => &self.idle,
+            FrogAnim::Hurt => &self.hurt,
+            FrogAnim::Hop => &self.hop,
+            FrogAnim::Attack => &self.attack,
+            FrogAnim::Explosion => &self.explosion,
         }
     }
 }
@@ -457,7 +447,7 @@ impl FrogVariantTextures {
 /// `health_ring_base_opacity`, so the ring stays a full marker whose side
 /// reads at any health. On while the frog lives; gone once it is dead - the
 /// explosion crater has no side. Call before `draw_frog`.
-pub fn draw_frog_ring(d: &mut impl RaylibDraw, frog: &Frog, time: f32) {
+pub fn draw_frog_ring(c: &mut impl Canvas, frog: &Frog, time: f32) {
     if frog.is_dead() {
         return;
     }
@@ -467,24 +457,18 @@ pub fn draw_frog_ring(d: &mut impl RaylibDraw, frog: &Frog, time: f32) {
     };
     let base = with_opacity(ramp.base(), tuning().player_ring_opacity * tuning().health_ring_base_opacity);
     let style = RingStyle::Gauge { frac: frog.health_fraction(), ramp, base };
-    draw_ground_ring_at(d, frog.position, frog.size(), 0.0, time, style, 1.0);
+    draw_ground_ring_at(c, frog.position, frog.size(), 0.0, time, style, 1.0);
 }
 
-/// Draw the frog: whichever of `textures`' five clips `Frog::anim` picks
-/// for this frame, centered at its position. Never rotates (it's not a
+/// Draw the frog: whichever of its variant's five clips `Frog::anim` picks
+/// for this frame (`Sheet::Frog`), centered at its position. Never rotates (it's not a
 /// tank), so this skips the rotation param `draw_tank` needs - same as
 /// `draw_obstacle`. It does *mirror*: the art is authored facing right, and
 /// `mirror` turns `Frog::facing` into the source rectangle's width sign
 /// plus the destination offset that keeps the body over the same ground.
-pub fn draw_frog(d: &mut impl RaylibDraw, textures: &FrogTextures, frog: &Frog, t: f32) {
+pub fn draw_frog(c: &mut impl Canvas, frog: &Frog, t: f32) {
     let (anim, frame) = frog.anim(t);
-    let texture = match anim {
-        FrogAnim::Idle => textures.idle,
-        FrogAnim::Hurt => textures.hurt,
-        FrogAnim::Hop => textures.hop,
-        FrogAnim::Attack => textures.attack,
-        FrogAnim::Explosion => textures.explosion,
-    };
+    let sheet = Sheet::Frog { variant: frog.variant as u8, clip: anim };
     let (flip, offset) = mirror(frog.facing);
     let src = Rectangle::new(
         frame as f32 * FROG_TEXTURE_SIZE,
@@ -495,7 +479,7 @@ pub fn draw_frog(d: &mut impl RaylibDraw, textures: &FrogTextures, frog: &Frog, 
     let size = frog.size();
     let dest = Rectangle::new(frog.position.x + offset, frog.position.y, size, size);
     let origin = Vector2::new(size / 2.0, size / 2.0);
-    d.draw_texture_pro(texture, src, dest, origin, 0.0, Color::WHITE);
+    c.blit(sheet, src, dest, origin, 0.0, Color::WHITE);
 }
 
 #[cfg(test)]

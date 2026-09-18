@@ -37,7 +37,7 @@ sola-raylib = { version = "6.3.0", features = ["nobuild"] }
 # desktop builds never link a cdylib; the root package stays the default
 # member, so `cargo build`/`test`/`watch` here are unchanged.
 [workspace]
-members = ["android"]
+members = ["android", "ntk"]
 
 [features]
 # Dev/QA-only tooling: the embedded dev server (src/devserver.rs, native)

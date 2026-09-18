@@ -13,6 +13,7 @@
 //! goes up as a column, a chained drum leans away from the blast that lit
 //! it and grows with how long it smouldered.
 
+use crate::canvas::{Canvas, Sheet};
 use crate::tuning::tuning;
 use sola_raylib::prelude::*;
 
@@ -378,7 +379,7 @@ pub fn draw_ground_fire(d: &mut impl RaylibDraw, texture: &Texture2D, center: Po
 /// `scorch_fade_in_seconds` so it appears under the fireball, not before.
 /// A shot's scorch also gets the streak cell, turned to the nearest
 /// quarter toward the shot.
-pub fn draw_scorch(d: &mut impl RaylibDraw, texture: &Texture2D, s: &Scorch) {
+pub fn draw_scorch(c: &mut impl Canvas, s: &Scorch) {
     let cell = BARREL_EXPLOSION_TEXTURE_SIZE;
     let variant = (s.seed % SCORCH_VARIANTS as u32) as f32;
     let flip = if s.seed & 4 != 0 { -1.0 } else { 1.0 };
@@ -388,13 +389,13 @@ pub fn draw_scorch(d: &mut impl RaylibDraw, texture: &Texture2D, s: &Scorch) {
     let fade = (s.age / tuning().scorch_fade_in_seconds.max(1e-3)).clamp(0.0, 1.0);
     let tint = Color::new(255, 255, 255, (255.0 * tuning().scorch_opacity * fade) as u8);
     let dest = Rectangle::new(s.center.x, s.center.y, size, size);
-    d.draw_texture_pro(texture, src, dest, Vector2::new(size / 2.0, size / 2.0), rotation, tint);
+    c.blit(Sheet::BarrelExplosion, src, dest, Vector2::new(size / 2.0, size / 2.0), rotation, tint);
     if let Some(dir) = s.streak {
         // The streak cell points right; turn it to the quarter nearest
         // the shot's travel.
         let angle = dir.y.atan2(dir.x).to_degrees();
         let quarter = ((angle / 90.0).round() * 90.0).rem_euclid(360.0);
         let src = Rectangle::new(SCORCH_STREAK_COL as f32 * cell, SCORCH_ROW as f32 * cell, cell, cell);
-        d.draw_texture_pro(texture, src, dest, Vector2::new(size / 2.0, size / 2.0), quarter, tint);
+        c.blit(Sheet::BarrelExplosion, src, dest, Vector2::new(size / 2.0, size / 2.0), quarter, tint);
     }
 }

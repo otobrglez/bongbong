@@ -1,9 +1,17 @@
 version = 1
 tank = "scout"
-size = [
-    34.0,
-    17.0,
-]
+size = [34.0, 17.0, ]
+
+[mission]
+kind = "protect"
+
+[spawn]
+kind = "waves"
+waves = 4
+size = 4
+growth = 2
+tier_start = "light"
+tier_end = "super"
 
 [cells."12,6"]
 kind = "tall_grass"
@@ -1429,14 +1437,3 @@ kind = "road"
 
 [cells."16,12"]
 kind = "start2"
-
-[mission]
-kind = "protect"
-
-[spawn]
-kind = "waves"
-waves = 4
-size = 4
-growth = 2
-tier_start = "light"
-tier_end = "super"
