@@ -427,7 +427,11 @@ impl Canvas for CpuCanvas {
         }
         // The quad's corners in canvas space: `dest.x/y` plus the origin-
         // relative corner rotated by `rotation` (raylib's own construction).
-        let (sin, cos) = rotation.to_radians().sin_cos();
+        // `trig::sin_cos`, not libm's: an ulp of platform difference here
+        // moves a nearest-neighbour sample across a pixel boundary, and
+        // the pinned thumbnail hashes have to agree between a Mac and the
+        // Linux CI runner.
+        let (sin, cos) = crate::trig::sin_cos(rotation.to_radians());
         let corners = [(-origin.x, -origin.y), (dest.width - origin.x, -origin.y), (-origin.x, dest.height - origin.y), (dest.width - origin.x, dest.height - origin.y)];
         let (mut min_x, mut min_y, mut max_x, mut max_y) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
         for (dx, dy) in corners {
@@ -556,7 +560,7 @@ impl Canvas for CpuCanvas {
                     continue;
                 }
                 if !full {
-                    let angle = dy.atan2(dx).to_degrees();
+                    let angle = crate::trig::atan2(dy, dx).to_degrees();
                     let rel = (angle - start).rem_euclid(360.0);
                     if rel > sweep {
                         continue;

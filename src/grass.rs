@@ -198,7 +198,9 @@ fn bend(tuft: &GrassTuft, time: f32) -> f32 {
     let t = tuning();
     // Per-tuft phase, so a field ripples rather than swaying as one sheet.
     let phase = (tuft.seed % 628) as f32 * 0.01;
-    let wind = (time * t.grass_sway_speed + phase).sin() * t.grass_sway_px;
+    // `trig`, not libm: the CPU thumbnail of a grassy map is pinned by
+    // hash and has to come out the same on every platform.
+    let wind = crate::trig::sin(time * t.grass_sway_speed + phase) * t.grass_sway_px;
     wind * (1.0 - tuft.crush) + tuft.push
 }
 
@@ -226,7 +228,7 @@ pub fn draw_tuft(c: &mut impl Canvas, tuft: &GrassTuft, time: f32) {
     // Rotating about the base is what makes the tip move and the root stay
     // put; raylib rotates about `origin`, so the origin sits at the bottom
     // centre of the sprite.
-    let rotation = bend(tuft, time).atan2(size).to_degrees();
+    let rotation = crate::trig::atan2(bend(tuft, time), size).to_degrees();
     let dest = Rectangle::new(tuft.base.x, tuft.base.y, size, height);
     let origin = Vector2::new(size / 2.0, height);
     c.blit(Sheet::Grass, src, dest, origin, rotation, Color::WHITE);
