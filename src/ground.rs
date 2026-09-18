@@ -41,6 +41,7 @@
 
 use sola_raylib::prelude::*;
 
+use crate::canvas::{Canvas, Sheet};
 use crate::tuning::tuning;
 use crate::{GROUND_WORLD_TILE, OBSTACLE_GRID_SIZE, Position};
 
@@ -376,7 +377,7 @@ pub fn build(width: f32, height: f32, seed: u64, road_cells: &[Position], wall_c
 /// stair-steps visibly. These interpolate per pixel. Drawn straight after
 /// the ground so it shades the floor only - tanks and walls stand in front
 /// of it, not under it.
-pub fn draw_edge_shade(d: &mut impl RaylibDraw, width: i32, height: i32) {
+pub fn draw_edge_shade(c: &mut impl Canvas, width: i32, height: i32) {
     let strength = tuning().ground_edge_shade;
     if strength <= 0.0 {
         return;
@@ -387,10 +388,10 @@ pub fn draw_edge_shade(d: &mut impl RaylibDraw, width: i32, height: i32) {
     let band = (tuning().ground_edge_shade_px).max(1.0) as i32;
     // `_v` runs top->bottom and `_h` runs left->right, so the far edges
     // pass the colours the other way round.
-    d.draw_rectangle_gradient_v(0, 0, width, band, dark, clear);
-    d.draw_rectangle_gradient_v(0, height - band, width, band, clear, dark);
-    d.draw_rectangle_gradient_h(0, 0, band, height, dark, clear);
-    d.draw_rectangle_gradient_h(width - band, 0, band, height, clear, dark);
+    c.gradient_v(0, 0, width, band, dark, clear);
+    c.gradient_v(0, height - band, width, band, clear, dark);
+    c.gradient_h(0, 0, band, height, dark, clear);
+    c.gradient_h(width - band, 0, band, height, clear, dark);
 }
 
 fn source_rec(tile_id: i32) -> Rectangle {
@@ -409,7 +410,7 @@ fn source_rec(tile_id: i32) -> Rectangle {
 /// module doc comment for why centered rather than top-left-aligned. No
 /// rotation, no shadow (ground is the floor everything else sits on) -
 /// drawn first, before tread marks/obstacles/tanks.
-pub fn draw(d: &mut impl RaylibDraw, texture: &Texture2D, grid: &GroundGrid) {
+pub fn draw(c: &mut impl Canvas, grid: &GroundGrid) {
     let size = GROUND_WORLD_TILE;
     let origin = Vector2::new(size / 2.0, size / 2.0);
     for y in 0..grid.rows {
@@ -419,7 +420,7 @@ pub fn draw(d: &mut impl RaylibDraw, texture: &Texture2D, grid: &GroundGrid) {
             };
             let src = source_rec(grid.tiles[i]);
             let dest = Rectangle::new(x as f32 * GROUND_WORLD_TILE, y as f32 * GROUND_WORLD_TILE, size, size);
-            d.draw_texture_pro(texture, src, dest, origin, 0.0, grid.tints[i]);
+            c.blit(Sheet::Ground, src, dest, origin, 0.0, grid.tints[i]);
         }
     }
 }

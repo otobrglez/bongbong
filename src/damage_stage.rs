@@ -1,5 +1,6 @@
 use sola_raylib::prelude::*;
 
+use crate::canvas::{Canvas, Sheet};
 use crate::tank::Tank;
 use crate::{DAMAGE_TEXTURE_SIZE, MAX_DAMAGE};
 
@@ -80,7 +81,7 @@ fn source_rec(col: i32, row: i32) -> Rectangle {
 /// axis-aligned (smoke/fire rise upward regardless of the tank's facing) and
 /// animates by cycling its stage's frames over `time`, with a per-tank phase
 /// offset so multiple burning tanks don't animate in lockstep.
-pub fn draw_damage(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank, time: f32) {
+pub fn draw_damage(c: &mut impl Canvas, tank: &Tank, time: f32) {
     // A burnt-out wreck (Tank::is_dead) shows no overlay at all - the wreck
     // hull/turret art in the tank atlas itself (see Tank::hull_col/
     // turret_col) already reads as "dead," so no fire/smoke frame is drawn
@@ -97,5 +98,5 @@ pub fn draw_damage(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank, ti
     let size = tank.size();
     let dest = Rectangle::new(tank.position.x, tank.position.y, size, size);
     let origin = Vector2::new(size / 2.0, size / 2.0);
-    d.draw_texture_pro(texture, src, dest, origin, 0.0, tank.tint());
+    c.blit(Sheet::Damage, src, dest, origin, 0.0, tank.tint());
 }

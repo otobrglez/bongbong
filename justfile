@@ -58,6 +58,26 @@ probe-fixtures:
 run:
     cargo run
 
+# Map thumbnails (docs/mapshot-prd.md): every map under maps/ rendered to a
+# field-only PNG of its first frame, into target/thumbnails/ with the same
+# relative paths. The CPU renderer needs no window, so this also runs on a
+# server with no display; `mapshot --help` lists the knobs (--scale, --seed,
+# --players, --tank, --no-tanks, --plain).
+thumbnails:
+    cargo run --bin mapshot -- --out-dir target/thumbnails maps
+
+# The same batch through the game's own renderer in a hidden window - the
+# cross-check that the CPU output is what the game draws.
+thumbnails-gpu:
+    cargo run --bin mapshot -- --renderer gpu --out-dir target/thumbnails-gpu maps
+
+# GPU against CPU on the shipped maps: renders each both ways and prints the
+# mean channel difference and the share of pixels off; exits 1 beyond the
+# tolerance in thumbnail.rs. Opens a hidden window, hence a recipe rather
+# than a `cargo test` case (macOS creates windows on the main thread only).
+mapshot-compare:
+    cargo run --bin mapshot -- --check --out-dir target/thumbnails-check maps/default.toml maps/missions maps/test/props.toml
+
 # Palette guards on the generated sheets: every opaque pixel on the Puny
 # Palette, and no green on anything drawn over the ground layer (walls,
 # props, blasts) - see tools/check_sheets.py and docs/PALETTE.md.
@@ -245,3 +265,8 @@ android-tap X Y:
     bash -c 'source tools/android/env.sh; adb shell input tap {{X}} {{Y}}'
 android-swipe X1 Y1 X2 Y2 MS="300":
     bash -c 'source tools/android/env.sh; adb shell input swipe {{X1}} {{Y1}} {{X2}} {{Y2}} {{MS}}'
+
+# Conference demos (ntk/): isolated raylib-with-Rust examples, one file per
+# demo under ntk/src/bin/. `just ntk 01_hello`.
+ntk NAME *ARGS:
+    cargo run -p ntk-demos --bin {{NAME}} -- {{ARGS}}

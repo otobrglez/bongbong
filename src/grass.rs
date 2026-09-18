@@ -48,6 +48,7 @@
 
 use sola_raylib::prelude::*;
 
+use crate::canvas::{Canvas, Sheet};
 use crate::tuning::tuning;
 use crate::{GRASS_SPECIES, GRASS_TEXTURE_SIZE, GRASS_VARIANTS, OBSTACLE_GRID_SIZE, Position};
 
@@ -202,7 +203,7 @@ fn bend(tuft: &GrassTuft, time: f32) -> f32 {
 }
 
 /// Draw one tuft, leaning and squashed by however flat it is lying.
-pub fn draw_tuft(d: &mut impl RaylibDraw, texture: &Texture2D, tuft: &GrassTuft, time: f32) {
+pub fn draw_tuft(c: &mut impl Canvas, tuft: &GrassTuft, time: f32) {
     let cell = GRASS_TEXTURE_SIZE;
     let t = tuning();
     if tuft.burnt {
@@ -210,8 +211,8 @@ pub fn draw_tuft(d: &mut impl RaylibDraw, texture: &Texture2D, tuft: &GrassTuft,
         // nothing - a burnt meadow should read as burnt, not as mown.
         let x = (tuft.base.x / 2.0).floor() as i32 * 2;
         let y = (tuft.base.y / 2.0).floor() as i32 * 2;
-        d.draw_rectangle(x - 2, y - 4, 2, 4, Color::new(0x37, 0x37, 0x37, 255));
-        d.draw_rectangle(x, y - 2, 2, 2, Color::new(0x25, 0x25, 0x25, 255));
+        c.fill_rect(x - 2, y - 4, 2, 4, Color::new(0x37, 0x37, 0x37, 255));
+        c.fill_rect(x, y - 2, 2, 2, Color::new(0x25, 0x25, 0x25, 255));
         return;
     }
     let size = cell * t.grass_scale;
@@ -228,5 +229,5 @@ pub fn draw_tuft(d: &mut impl RaylibDraw, texture: &Texture2D, tuft: &GrassTuft,
     let rotation = bend(tuft, time).atan2(size).to_degrees();
     let dest = Rectangle::new(tuft.base.x, tuft.base.y, size, height);
     let origin = Vector2::new(size / 2.0, height);
-    d.draw_texture_pro(texture, src, dest, origin, rotation, Color::WHITE);
+    c.blit(Sheet::Grass, src, dest, origin, rotation, Color::WHITE);
 }

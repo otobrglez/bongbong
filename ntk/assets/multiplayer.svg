@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#fff"/></marker></defs>
+<rect width="1920" height="1080" fill="#000"/>
+<rect x="60" y="100" width="330" height="130" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="225.0" y="126.525" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="23" font-weight="700" text-anchor="middle" dominant-baseline="middle">shared crate</text>
+<text x="225.0" y="152.175" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="19" font-weight="400" text-anchor="middle" dominant-baseline="middle">simulation/ (Game::update)</text>
+<text x="225.0" y="177.82500000000002" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="19" font-weight="400" text-anchor="middle" dominant-baseline="middle">map · tuning · protocol</text>
+<text x="225.0" y="203.47500000000002" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="19" font-weight="400" text-anchor="middle" dominant-baseline="middle">no raylib, no sockets</text>
+<rect x="60" y="260" width="330" height="110" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="225.0" y="289.35" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="23" font-weight="700" text-anchor="middle" dominant-baseline="middle">client crate</text>
+<text x="225.0" y="315.0" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="19" font-weight="400" text-anchor="middle" dominant-baseline="middle">raylib render + input</text>
+<text x="225.0" y="340.65" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="19" font-weight="400" text-anchor="middle" dominant-baseline="middle">builder, HUD, touch</text>
+<rect x="60" y="400" width="330" height="110" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="225.0" y="429.35" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="23" font-weight="700" text-anchor="middle" dominant-baseline="middle">server crate</text>
+<text x="225.0" y="455.0" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="19" font-weight="400" text-anchor="middle" dominant-baseline="middle">headless, tokio</text>
+<text x="225.0" y="480.65" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="19" font-weight="400" text-anchor="middle" dominant-baseline="middle">WebSocket rooms, lobby</text>
+<line x1="225" y1="230" x2="225" y2="260" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<line x1="40" y1="165" x2="60" y2="165" stroke="#fff" stroke-width="2.5"/>
+<line x1="40" y1="165" x2="40" y2="455" stroke="#fff" stroke-width="2.5"/>
+<line x1="40" y1="455" x2="60" y2="455" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<line x1="390" y1="315" x2="470" y2="315" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<line x1="390" y1="455" x2="470" y2="455" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="470" y="300" width="200" height="200" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="570.0" y="359.5" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="24" font-weight="700" text-anchor="middle" dominant-baseline="middle">LLVM</text>
+<text x="570.0" y="386.5" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="20" font-weight="400" text-anchor="middle" dominant-baseline="middle">rustc →</text>
+<text x="570.0" y="413.5" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="20" font-weight="400" text-anchor="middle" dominant-baseline="middle">LLVM →</text>
+<text x="570.0" y="440.5" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="20" font-weight="400" text-anchor="middle" dominant-baseline="middle">machine code</text>
+<line x1="670" y1="400" x2="740" y2="400" stroke="#fff" stroke-width="2.5"/>
+<line x1="740" y1="185.0" x2="740" y2="445.0" stroke="#fff" stroke-width="2.5"/>
+<text x="786" y="104" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="20" font-weight="700" text-anchor="start" dominant-baseline="middle">CLIENT</text>
+<line x1="740" y1="185.0" x2="786" y2="185.0" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="786" y="120" width="262" height="130" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="917.0" y="172.85" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">4 target triples:</text>
+<text x="917.0" y="197.15" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">desktop · wasm · iOS · Android</text>
+<line x1="1048" y1="185.0" x2="1070" y2="185.0" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="1070" y="120" width="262" height="130" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="1201.0" y="172.85" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">the four pipelines</text>
+<text x="1201.0" y="197.15" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">of the previous sketch</text>
+<line x1="1332" y1="185.0" x2="1354" y2="185.0" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="1354" y="120" width="262" height="130" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="1485.0" y="172.85" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">binary · .wasm · .app · .apk</text>
+<text x="1485.0" y="197.15" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">+ static/ assets</text>
+<line x1="1616" y1="185.0" x2="1638" y2="185.0" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="1638" y="120" width="262" height="130" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="1769.0" y="172.85" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">players</text>
+<text x="1769.0" y="197.15" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">(releases, bongbong.io, stores)</text>
+<text x="786" y="364" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="20" font-weight="700" text-anchor="start" dominant-baseline="middle">SERVER</text>
+<line x1="740" y1="445.0" x2="786" y2="445.0" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="786" y="380" width="262" height="130" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="917.0" y="432.85" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">x86_64-unknown-linux-musl</text>
+<text x="917.0" y="457.15000000000003" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">no raylib, no GPU</text>
+<line x1="1048" y1="445.0" x2="1070" y2="445.0" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="1070" y="380" width="262" height="130" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="1201.0" y="420.7" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">static binary →</text>
+<text x="1201.0" y="445.0" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">FROM scratch image</text>
+<text x="1201.0" y="469.3" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">(docker build)</text>
+<line x1="1332" y1="445.0" x2="1354" y2="445.0" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="1354" y="380" width="262" height="130" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="1485.0" y="420.7" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">container registry →</text>
+<text x="1485.0" y="445.0" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">orchestrator (k8s / Fly.io)</text>
+<text x="1485.0" y="469.3" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">N replicas</text>
+<line x1="1616" y1="445.0" x2="1638" y2="445.0" stroke="#fff" stroke-width="2.5" marker-end="url(#a)"/>
+<rect x="1638" y="380" width="262" height="130" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="1769.0" y="432.85" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">wss:// endpoint</text>
+<text x="1769.0" y="457.15000000000003" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">TLS at the edge</text>
+<rect x="60" y="620" width="1840" height="400" rx="14" fill="none" stroke="#fff" stroke-width="2" stroke-dasharray="12 10"/>
+<rect x="80" y="606" width="111" height="28" fill="#000"/>
+<text x="90" y="620" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="20" font-weight="700" text-anchor="start" dominant-baseline="middle">RUNTIME</text>
+<rect x="100" y="660" width="340" height="74" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="270.0" y="685.525" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="17" font-weight="700" text-anchor="middle" dominant-baseline="middle">Desktop</text>
+<text x="270.0" y="708.475" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="17" font-weight="400" text-anchor="middle" dominant-baseline="middle">same Game::update, renders</text>
+<line x1="440" y1="697" x2="470" y2="697" stroke="#fff" stroke-width="2.5"/>
+<rect x="100" y="744" width="340" height="74" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="270.0" y="769.525" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="17" font-weight="700" text-anchor="middle" dominant-baseline="middle">Browser (wasm)</text>
+<text x="270.0" y="792.475" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="17" font-weight="400" text-anchor="middle" dominant-baseline="middle">same Game::update, renders</text>
+<line x1="440" y1="781" x2="470" y2="781" stroke="#fff" stroke-width="2.5"/>
+<rect x="100" y="828" width="340" height="74" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="270.0" y="853.525" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="17" font-weight="700" text-anchor="middle" dominant-baseline="middle">iPhone</text>
+<text x="270.0" y="876.475" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="17" font-weight="400" text-anchor="middle" dominant-baseline="middle">same Game::update, renders</text>
+<line x1="440" y1="865" x2="470" y2="865" stroke="#fff" stroke-width="2.5"/>
+<rect x="100" y="912" width="340" height="74" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="270.0" y="937.525" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="17" font-weight="700" text-anchor="middle" dominant-baseline="middle">Android</text>
+<text x="270.0" y="960.475" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="17" font-weight="400" text-anchor="middle" dominant-baseline="middle">same Game::update, renders</text>
+<line x1="440" y1="949" x2="470" y2="949" stroke="#fff" stroke-width="2.5"/>
+<line x1="470" y1="697" x2="470" y2="949" stroke="#fff" stroke-width="2.5"/>
+<line x1="470" y1="819" x2="700" y2="819" stroke="#fff" stroke-width="2.5" marker-end="url(#a)" marker-start="url(#a)"/>
+<text x="585" y="790" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="700" text-anchor="middle" dominant-baseline="middle">WebSocket</text>
+<text x="585" y="848" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">wss://</text>
+<rect x="700" y="660" width="420" height="100" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="910.0" y="697.85" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">↑ per-frame Input intents,</text>
+<text x="910.0" y="722.15" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">join / ready / map choice</text>
+<rect x="700" y="880" width="420" height="100" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="910.0" y="917.85" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">↓ seed + everyone's inputs per tick,</text>
+<text x="910.0" y="942.15" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">state hash, snapshot for late join</text>
+<line x1="910" y1="760" x2="910" y2="880" stroke="#fff" stroke-width="2.5"/>
+<rect x="1160" y="660" width="700" height="320" rx="10" fill="none" stroke="#fff" stroke-width="2.5"/>
+<text x="1510.0" y="747.1" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="22" font-weight="700" text-anchor="middle" dominant-baseline="middle">server container</text>
+<text x="1510.0" y="771.4" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">one room = one seeded Game, stepped in lockstep</text>
+<text x="1510.0" y="795.6999999999999" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">at PHYSICS_FIXED_DT; inputs collected per tick,</text>
+<text x="1510.0" y="819.9999999999999" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">relayed to every client; the authoritative state</text>
+<text x="1510.0" y="844.2999999999998" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">hash detects a desync; snapshots resync a client</text>
+<text x="1510.0" y="868.5999999999998" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle"></text>
+<text x="1510.0" y="892.8999999999997" fill="#fff" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="18" font-weight="400" text-anchor="middle" dominant-baseline="middle">lobby / matchmaking · rooms per container replica</text>
+<line x1="1120" y1="819" x2="1160" y2="819" stroke="#fff" stroke-width="2.5" marker-end="url(#a)" marker-start="url(#a)"/>
+</svg>

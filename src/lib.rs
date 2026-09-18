@@ -602,7 +602,7 @@ pub const RUBBLE_ROW_GLASS: i32 = 17;
 // The props leave rubble on the *walls* sheet too, not on their own: the
 // rubble block is one contiguous thing and props_sheet.png has neither the
 // spare columns nor a reason to grow. `decal::draw_decal` therefore always
-// samples `ObstacleTextures::walls`, whatever material died.
+// samples `Sheet::Walls`, whatever material died.
 pub const RUBBLE_ROW_SANDBAG: i32 = 18;
 pub const RUBBLE_ROW_BARREL: i32 = 19;
 pub const RUBBLE_ROW_FENCE: i32 = 20;
@@ -876,6 +876,7 @@ pub mod battlefield;
 pub mod blast;
 pub mod bt;
 pub mod bullet;
+pub mod canvas;
 #[cfg(feature = "dev-tools")]
 pub mod capi;
 pub mod damage_stage;
@@ -903,6 +904,7 @@ pub mod shell;
 pub mod shockwave;
 pub mod simulation;
 pub mod tank;
+pub mod thumbnail;
 pub mod touch;
 pub mod track;
 pub mod tuning;

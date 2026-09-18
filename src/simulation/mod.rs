@@ -583,6 +583,17 @@ pub struct Game {
     /// `apply_debug_kills` at the top of the next playing frame, so the
     /// kill runs through the normal explosion/round-end path.
     pub(crate) debug_kills: Vec<usize>,
+    /// Barrel positions a tool asked to set off (`debug_detonate`); drained
+    /// by `apply_debug_detonations` at the top of the next playing frame so
+    /// the blast runs through `damage_obstacle` like a direct hit would.
+    pub(crate) debug_detonations: Vec<Position>,
+    /// `render` skips the ground tileset and its edge vignette and leaves
+    /// the field flat white; everything on the ground (decals, scorches,
+    /// fires) still draws. For demos that want the effects on a blank sheet.
+    pub plain_canvas: bool,
+    /// `render` draws no player tank, ring or label. The tank still exists
+    /// and simulates; only its presentation is skipped.
+    pub hide_players: bool,
     /// Debug overlay switches `render` reads (dev builds only - see
     /// `game.rs`), set by the dev server's `overlays` tool or cycled by the
     /// I key. Survive restarts; all off by default.
@@ -726,6 +737,7 @@ impl Game {
         self.frame = 0;
         self.last_engage.clear();
         self.debug_kills.clear();
+        self.debug_detonations.clear();
         self.player2 = None;
         self.frog = None;
         self.enemy_frog = None;
@@ -1102,6 +1114,7 @@ impl Game {
 
         if self.outcome == Outcome::Playing {
             self.apply_debug_kills(&mut f);
+            self.apply_debug_detonations(&mut f);
             self.frog_phase(&mut f);
             self.pickup_phase(&mut f);
             self.player_phase(input, &mut f);

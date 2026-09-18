@@ -22,6 +22,8 @@ pub mod history;
 use rand::RngExt;
 use sola_raylib::prelude::*;
 
+use crate::canvas::{GpuCanvas, Sheet, Sheets};
+use crate::frog::FrogAnim;
 use crate::ground::{self, GroundGrid};
 use crate::hud::{mode_button_rect, BAR_FILL, DIM, HUD_LABEL_SIZE, HUD_TEXT_SIZE, TEXT};
 use crate::level::{Mission, SpawnKind, Tier};
@@ -128,6 +130,36 @@ pub struct EditorTextures<'a> {
     pub eraser: &'a Texture2D,
     pub tanks: &'a Texture2D,
     pub trees: &'a Texture2D,
+}
+
+/// The builder's `Sheet` lookup, for the `ground::draw` it shares with the
+/// game. It holds the sheets a map can show at rest; a sheet only a live
+/// round draws from (damage, tracks, blasts, the frog's other clips) is a
+/// programming error here.
+impl Sheets for EditorTextures<'_> {
+    fn texture(&self, sheet: Sheet) -> &Texture2D {
+        match sheet {
+            Sheet::Ground => self.ground,
+            Sheet::Walls => self.obstacles,
+            Sheet::Props => self.props,
+            Sheet::Trees => self.trees,
+            Sheet::Grass => self.grass,
+            Sheet::Tanks => self.tanks,
+            Sheet::Frog { clip: FrogAnim::Idle, .. } => self.frog_idle,
+            Sheet::Pickup(PickupKind::Health) => self.pickup_health,
+            Sheet::Pickup(PickupKind::Ammo) => self.pickup_ammo,
+            Sheet::Pickup(PickupKind::Laser) => self.pickup_laser,
+            Sheet::Pickup(PickupKind::Minigun) => self.pickup_minigun,
+            Sheet::Pickup(PickupKind::Plasma) => self.pickup_plasma,
+            Sheet::Pickup(PickupKind::SpeedUp) => self.pickup_speedup,
+            Sheet::Pickup(PickupKind::Shield) => self.pickup_shield,
+            Sheet::Pickup(PickupKind::Flamethrower) => self.pickup_flamethrower,
+            Sheet::Pickup(PickupKind::FrogHealth) => self.pickup_frog_health,
+            Sheet::Damage | Sheet::MinigunMount | Sheet::Tracks | Sheet::BarrelExplosion | Sheet::Frog { .. } => {
+                panic!("the builder has no {sheet:?} sheet")
+            }
+        }
+    }
 }
 
 /// One frame of raw builder input, in **window** pixels (the bar
@@ -447,6 +479,9 @@ pub struct MapEditor {
     /// screen keeps showing the last tapped cell.
     pointer: Option<Vector2>,
     pub cli_overrides: CliOverrides,
+    /// `render` draws a flat white field instead of the ground tileset -
+    /// the builder-side twin of `Game::plain_canvas`.
+    pub plain_canvas: bool,
 }
 
 impl MapEditor {
@@ -468,6 +503,7 @@ impl MapEditor {
             active_tool: current[0],
             ground: GroundGrid::default(),
             ground_seed: rand::rng().random(),
+            plain_canvas: false,
             popup: None,
             status: None,
             stroke: None,
@@ -1257,7 +1293,11 @@ impl MapEditor {
         d.clear_background(Color::new(30, 30, 34, 255));
 
         d.draw_mode2D(camera, |mut d, _| {
-            ground::draw(&mut d, textures.ground, &self.ground);
+            if self.plain_canvas {
+                d.draw_rectangle(0, 0, width as i32, height as i32, Color::WHITE);
+            } else {
+                ground::draw(&mut GpuCanvas::new(&mut d, textures), &self.ground);
+            }
 
             for (col, row, obj) in self.map.iter_cells() {
                 let pos = map::cell_to_world(col, row);
@@ -1941,6 +1981,7 @@ fn sheet_texture<'a>(textures: &EditorTextures<'a>, sheet: obstacle::Sheet) -> &
         obstacle::Sheet::Walls => textures.obstacles,
         obstacle::Sheet::Props => textures.props,
         obstacle::Sheet::Trees => textures.trees,
+        other => panic!("a map cell never draws from {other:?}"),
     }
 }
 

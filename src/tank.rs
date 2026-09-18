@@ -4,6 +4,7 @@ use rapier2d::prelude::RigidBodyHandle;
 use serde::{Deserialize, Serialize};
 use sola_raylib::prelude::*;
 
+use crate::canvas::{Canvas, Sheet};
 use crate::laser::LaserVariant;
 use crate::pickup::PickupKind;
 use crate::plasma::PlasmaVariant;
@@ -1257,7 +1258,7 @@ fn source_rec(row: i32, col: i32) -> Rectangle {
 /// hull, `turret_visual_rotation` for the turret) - the turret still just
 /// chases the tank's commanded `rotation`, not an independent aim target, but
 /// it does so faster than the hull so it visibly leads a turn.
-pub fn draw_tank(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank) {
+pub fn draw_tank(c: &mut impl Canvas, tank: &Tank) {
     let hull_src = source_rec(tank.sheet_row(), tank.hull_col());
     let turret_src = source_rec(tank.sheet_row(), tank.turret_col());
     let size = tank.size();
@@ -1268,9 +1269,9 @@ pub fn draw_tank(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank) {
     let origin = draw_pivot(size);
 
     let tint = tank.tint();
-    d.draw_texture_pro(texture, hull_src, dest, origin, tank.visual_rotation, tint);
-    d.draw_texture_pro(
-        texture,
+    c.blit(Sheet::Tanks, hull_src, dest, origin, tank.visual_rotation, tint);
+    c.blit(
+        Sheet::Tanks,
         turret_src,
         dest,
         origin,
@@ -1398,8 +1399,8 @@ pub enum RingStyle {
 /// not the rear-shifted `draw_pivot`. `draw_tank_shield`, `draw_player_ring`
 /// and `draw_enemy_ring` all come through here, so the shield ring and the
 /// health gauges read as the same object in different colours.
-pub fn draw_ground_ring(d: &mut impl RaylibDraw, tank: &Tank, time: f32, style: RingStyle, fade: f32) {
-    draw_ground_ring_scaled(d, tank.ring_position, tank.size(), tank.anim_phase(), time, style, fade, ring_scale(tank));
+pub fn draw_ground_ring(c: &mut impl Canvas, tank: &Tank, time: f32, style: RingStyle, fade: f32) {
+    draw_ground_ring_scaled(c, tank.ring_position, tank.size(), tank.anim_phase(), time, style, fade, ring_scale(tank));
 }
 
 /// How much larger than the shared ring every tank's rings are drawn,
@@ -1414,7 +1415,7 @@ fn ring_scale(_tank: &Tank) -> f32 {
 /// `size` (the sprite's on-screen side length) exactly as a tank's is from
 /// `Tank::size`, with `phase` offsetting the rainbow's breathing.
 pub fn draw_ground_ring_at(
-    d: &mut impl RaylibDraw,
+    c: &mut impl Canvas,
     center: Position,
     size: f32,
     phase: f32,
@@ -1422,7 +1423,7 @@ pub fn draw_ground_ring_at(
     style: RingStyle,
     fade: f32,
 ) {
-    draw_ground_ring_scaled(d, center, size, phase, time, style, fade, 1.0);
+    draw_ground_ring_scaled(c, center, size, phase, time, style, fade, 1.0);
 }
 
 /// `draw_ground_ring_at` with the radius scaled by `radius_scale` at the
@@ -1430,7 +1431,7 @@ pub fn draw_ground_ring_at(
 /// fatter one (every tank's rings, `tank_ring_radius_scale`).
 #[allow(clippy::too_many_arguments)]
 pub fn draw_ground_ring_scaled(
-    d: &mut impl RaylibDraw,
+    c: &mut impl Canvas,
     center: Position,
     size: f32,
     phase: f32,
@@ -1466,13 +1467,13 @@ pub fn draw_ground_ring_scaled(
     match style {
         RingStyle::Rainbow { base_hue, charge, base } => {
             let fill = Color::color_from_hsv(base_hue, 0.6, 1.0);
-            d.draw_circle_v(center, radius - thickness, with_alpha(fill, disc_alpha));
+            c.disc(center, radius - thickness, with_alpha(fill, disc_alpha));
             let sweep = health_ring_sweep(charge);
             if sweep < 360.0 {
                 let gap = with_alpha(base, base.a as f32);
                 let segments = health_ring_segments(360.0 - sweep);
                 let end = HEALTH_RING_START_DEG + sweep;
-                d.draw_ring(center, radius - thickness, radius, end, HEALTH_RING_START_DEG + 360.0, segments, gap);
+                c.ring(center, radius - thickness, radius, end, HEALTH_RING_START_DEG + 360.0, segments, gap);
             }
             const ARCS: i32 = 6;
             let step = 360.0 / ARCS as f32;
@@ -1486,18 +1487,18 @@ pub fn draw_ground_ring_scaled(
                     if b > a {
                         let segments = health_ring_segments(b - a);
                         let (start, end) = (HEALTH_RING_START_DEG + a, HEALTH_RING_START_DEG + b);
-                        d.draw_ring(center, radius - thickness, radius, start, end, segments, color);
+                        c.ring(center, radius - thickness, radius, start, end, segments, color);
                     }
                 }
             }
         }
         RingStyle::Solid(color) => {
-            d.draw_circle_v(center, radius - thickness, with_alpha(color, disc_alpha));
-            d.draw_ring(center, radius - thickness, radius, 0.0, 360.0, 48, with_alpha(color, band_alpha));
+            c.disc(center, radius - thickness, with_alpha(color, disc_alpha));
+            c.ring(center, radius - thickness, radius, 0.0, 360.0, 48, with_alpha(color, band_alpha));
         }
         RingStyle::Gauge { frac, ramp, base } => {
             let fill = ramp.color(frac);
-            d.draw_circle_v(center, radius - thickness, with_alpha(fill, disc_alpha));
+            c.disc(center, radius - thickness, with_alpha(fill, disc_alpha));
             let sweep = health_ring_sweep(frac);
             let end = HEALTH_RING_START_DEG + sweep;
             // The missing part first and the health arc over it, so the
@@ -1506,12 +1507,12 @@ pub fn draw_ground_ring_scaled(
             if sweep < 360.0 {
                 let gap = with_alpha(base, base.a as f32);
                 let segments = health_ring_segments(360.0 - sweep);
-                d.draw_ring(center, radius - thickness, radius, end, HEALTH_RING_START_DEG + 360.0, segments, gap);
+                c.ring(center, radius - thickness, radius, end, HEALTH_RING_START_DEG + 360.0, segments, gap);
             }
             if sweep > 0.0 {
                 let arc = with_alpha(fill, band_alpha);
                 let segments = health_ring_segments(sweep);
-                d.draw_ring(center, radius - thickness, radius, HEALTH_RING_START_DEG, end, segments, arc);
+                c.ring(center, radius - thickness, radius, HEALTH_RING_START_DEG, end, segments, arc);
             }
         }
     }
@@ -1550,7 +1551,7 @@ pub fn arc_pieces(from: f32, len: f32, sweep: f32) -> [(f32, f32); 2] {
 /// the tank's health ring draws its missing part - dimmed white for the
 /// player, a dark band for an enemy - so it visibly runs down; fading out
 /// below `shield_glow_fade_fraction` of its charge.
-pub fn draw_tank_shield(d: &mut impl RaylibDraw, tank: &Tank, time: f32) {
+pub fn draw_tank_shield(c: &mut impl Canvas, tank: &Tank, time: f32) {
     if tank.is_wreck() {
         return;
     }
@@ -1560,7 +1561,7 @@ pub fn draw_tank_shield(d: &mut impl RaylibDraw, tank: &Tank, time: f32) {
         Owner::Enemy(_) => with_opacity(BLACK, tuning().health_ring_gap_opacity),
     };
     let style = RingStyle::Rainbow { base_hue, charge: tank.shield_charge(), base };
-    draw_ground_ring(d, tank, time, style, shield_visibility(tank));
+    draw_ground_ring(c, tank, time, style, shield_visibility(tank));
 }
 
 /// Which ramp step `frac` (remaining health, 0..=1) falls in: 0 above three
@@ -1633,11 +1634,11 @@ pub fn enemy_health_ring_visibility(tank: &Tank) -> f32 {
 /// also reads its health. Yields to the shield ring while one is up and
 /// disappears with the wreck (`player_health_ring_visibility`). An enemy
 /// handed to this draws as player 1.
-pub fn draw_player_ring(d: &mut impl RaylibDraw, tank: &Tank, time: f32) {
+pub fn draw_player_ring(c: &mut impl Canvas, tank: &Tank, time: f32) {
     let ramp = HealthRamp::player(tank.player_index().unwrap_or(0));
     let base = with_opacity(ramp.base(), tuning().player_ring_opacity * tuning().health_ring_base_opacity);
     let style = RingStyle::Gauge { frac: tank.health_fraction(), ramp, base };
-    draw_ground_ring(d, tank, time, style, player_health_ring_visibility(tank));
+    draw_ground_ring(c, tank, time, style, player_health_ring_visibility(tank));
 }
 
 /// Draw an enemy's health ring: the same gauge in the enemy frog's all-red
@@ -1645,10 +1646,10 @@ pub fn draw_player_ring(d: &mut impl RaylibDraw, tank: &Tank, time: f32) {
 /// just-hit enemy at full health reads hostile rather than borrowing a
 /// player's colour. Shown per `enemy_health_ring_visibility` - after a
 /// hit, or for good once low.
-pub fn draw_enemy_ring(d: &mut impl RaylibDraw, tank: &Tank, time: f32) {
+pub fn draw_enemy_ring(c: &mut impl Canvas, tank: &Tank, time: f32) {
     let base = with_opacity(BLACK, tuning().health_ring_gap_opacity);
     let style = RingStyle::Gauge { frac: tank.health_fraction(), ramp: HealthRamp::Red, base };
-    draw_ground_ring(d, tank, time, style, enemy_health_ring_visibility(tank));
+    draw_ground_ring(c, tank, time, style, enemy_health_ring_visibility(tank));
 }
 
 /// The round-start locate cue's ripple: for `player_locate_seconds` after
@@ -1658,7 +1659,7 @@ pub fn draw_enemy_ring(d: &mut impl RaylibDraw, tank: &Tank, time: f32) {
 /// `player_locate_pulse_hz` times a second. Drawn under the hull like the
 /// other rings; `draw_player_label` is the cue's other half. Nothing for a
 /// wreck, an enemy, or once the window has passed.
-pub fn draw_player_locate(d: &mut impl RaylibDraw, tank: &Tank, time: f32, elapsed: f32) {
+pub fn draw_player_locate(c: &mut impl Canvas, tank: &Tank, time: f32, elapsed: f32) {
     let Some(index) = tank.player_index() else { return };
     if tank.is_wreck() || !player_locate_active(elapsed) {
         return;
@@ -1666,7 +1667,7 @@ pub fn draw_player_locate(d: &mut impl RaylibDraw, tank: &Tank, time: f32, elaps
     let phase = (elapsed * tuning().player_locate_pulse_hz).fract();
     let color = with_opacity(TEAM_COLORS[index as usize & 1], (1.0 - phase) * tuning().player_ring_opacity);
     let scale = ring_scale(tank) * (1.0 + 0.6 * phase);
-    draw_ground_ring_scaled(d, tank.ring_position, tank.size(), tank.anim_phase(), time, RingStyle::Solid(color), 1.0, scale);
+    draw_ground_ring_scaled(c, tank.ring_position, tank.size(), tank.anim_phase(), time, RingStyle::Solid(color), 1.0, scale);
 }
 
 /// Whether the locate cue is still showing `elapsed` seconds into play.
@@ -1700,7 +1701,7 @@ pub fn draw_player_label(d: &mut impl RaylibDraw, tank: &Tank, elapsed: f32) {
 /// *before* `draw_tank` so the real sprite draws on top of its own shadow. No
 /// wreck/dead special-casing needed - a burnt-out hulk is still a solid
 /// object sitting on the ground.
-pub fn draw_tank_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank) {
+pub fn draw_tank_shadow(c: &mut impl Canvas, tank: &Tank) {
     let hull_src = source_rec(tank.sheet_row(), tank.hull_col());
     let turret_src = source_rec(tank.sheet_row(), tank.turret_col());
     let size = tank.size();
@@ -1714,9 +1715,9 @@ pub fn draw_tank_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tan
     let origin = draw_pivot(size);
     let shadow = Color::new(0, 0, 0, (255.0 * tuning().tank_shadow_opacity * tank.alpha()) as u8);
 
-    d.draw_texture_pro(texture, hull_src, dest, origin, tank.visual_rotation, shadow);
-    d.draw_texture_pro(
-        texture,
+    c.blit(Sheet::Tanks, hull_src, dest, origin, tank.visual_rotation, shadow);
+    c.blit(
+        Sheet::Tanks,
         turret_src,
         dest,
         origin,
@@ -1765,7 +1766,7 @@ pub fn draw_tank_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tan
 /// (not indexed by chassis row) layered on the tank's own `scale` - the
 /// mount is deliberately the same size on every chassis, a fixed piece of
 /// hardware rather than something that scales with the tank it's bolted to.
-pub fn draw_minigun_mount(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank) {
+pub fn draw_minigun_mount(c: &mut impl Canvas, tank: &Tank) {
     if tank.minigun_ammo <= 0 || tank.is_wreck() {
         return;
     }
@@ -1778,7 +1779,7 @@ pub fn draw_minigun_mount(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &T
     let size = MINIGUN_MOUNT_TEXTURE_SIZE * tank.scale * MINIGUN_MOUNT_SCALE;
     let dest = Rectangle::new(tank.position.x, tank.position.y, size, size);
     let origin = draw_pivot(size);
-    d.draw_texture_pro(texture, src, dest, origin, tank.turret_visual_rotation, Color::WHITE);
+    c.blit(Sheet::MinigunMount, src, dest, origin, tank.turret_visual_rotation, Color::WHITE);
 }
 
 /// Shadow pass for `draw_minigun_mount` - same tint/offset convention as
@@ -1787,7 +1788,7 @@ pub fn draw_minigun_mount(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &T
 /// at the exact same height/offset as the turret's own shadow. Call before
 /// `draw_minigun_mount` (and after `draw_tank_shadow`), same ordering rule
 /// as every other shadow pass.
-pub fn draw_minigun_mount_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, tank: &Tank) {
+pub fn draw_minigun_mount_shadow(c: &mut impl Canvas, tank: &Tank) {
     if tank.minigun_ammo <= 0 || tank.is_wreck() {
         return;
     }
@@ -1806,7 +1807,7 @@ pub fn draw_minigun_mount_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, t
     );
     let origin = draw_pivot(size);
     let shadow = Color::new(0, 0, 0, (255.0 * tuning().tank_shadow_opacity * tank.alpha()) as u8);
-    d.draw_texture_pro(texture, src, dest, origin, tank.turret_visual_rotation, shadow);
+    c.blit(Sheet::MinigunMount, src, dest, origin, tank.turret_visual_rotation, shadow);
 }
 
 // The FIFO weapon-inventory rule (`weapon_queue`/`active_weapon`/

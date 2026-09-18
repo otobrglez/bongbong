@@ -1347,3 +1347,43 @@ fn every_blast_shape_and_jitter_comes_from_the_position_hash() {
     assert_eq!(fuel.row, crate::BLAST_ROW_TALL);
     assert!(fuel.scale > oil.scale && fuel.fps() > oil.fps());
 }
+
+#[test]
+fn debug_detonate_sets_a_barrel_off_like_a_direct_hit() {
+    // Two oil drums side by side: the asked-for one goes up on the next
+    // frame as an unchained blast, its neighbour chains off it on a fuse.
+    let map = map_with(
+        r#"
+cells."20,10" = { kind = "barrel", drum = "oil" }
+cells."21,10" = { kind = "barrel", drum = "oil" }
+"#,
+    );
+    let mut game = game_on(&map, 3);
+    assert_eq!(game.barrels().len(), 2);
+    assert!(game.debug_detonate(cell_to_world(25, 5)).is_err(), "an empty cell is an error");
+
+    // A point anywhere inside the cell resolves to that barrel.
+    let inside = cell_to_world(20, 10) + Vector2::new(7.0, -5.0);
+    game.debug_detonate(inside).expect("a live barrel");
+    step(&mut game, Input::default());
+    let blasts: Vec<(i32, bool)> =
+        game.events().iter().filter_map(|e| if let Event::Blast { x, chained, .. } = e { Some((*x as i32, *chained)) } else { None }).collect();
+    assert_eq!(blasts, vec![(20 * 32, false)], "the clicked drum goes off at once, unchained: {blasts:?}");
+    assert_eq!(game.barrels().len(), 1);
+
+    // The survivor now carries a lit fuse; asking for it again is refused
+    // by `damage_obstacle` and it still goes off on its own clock.
+    assert_eq!(game.fused_barrels().len(), 1);
+    game.debug_detonate(cell_to_world(21, 10)).expect("still a live barrel");
+    let fuse_frames = (tuning().barrel_fuse_seconds * 2.5 * tuning().oil_fuse_factor * 60.0).ceil() as usize + 1;
+    let mut chained_at = None;
+    for frame in 1..=fuse_frames {
+        step(&mut game, Input::default());
+        if game.events().iter().any(|e| matches!(e, Event::Blast { chained: true, .. })) {
+            chained_at = Some(frame);
+            break;
+        }
+    }
+    assert!(chained_at.is_some(), "the neighbour chains within its fuse");
+    assert!(game.barrels().is_empty());
+}
