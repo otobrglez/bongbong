@@ -421,7 +421,7 @@ impl Fx {
                 self.burst(pos, ParticleKind::Smoke, 1, 14.0, &[SMOKE_T]);
             }
         }
-        // Leaves kicked up by a hull crossing tall grass. The only
+        // Straw kicked up by a hull crossing tall grass. The only
         // emitter whose source is not something on fire or in contact -
         // `grass_disturbed` reports the cells a *moving* tank is in, so a
         // parked one rustles nothing.
@@ -429,7 +429,7 @@ impl Fx {
         if rustle > 0.0 {
             for pos in game.grass_disturbed() {
                 if self.due(crate::blast::seed_at(pos, 3), rustle * tuning().fx_density, dt) {
-                    self.burst(pos, ParticleKind::Dust, 1, 34.0, &[LEAF_L, LEAF_M, LEAF_D]);
+                    self.burst(pos, ParticleKind::Dust, 1, 34.0, &[STRAW_L, STRAW_M, STRAW_D]);
                 }
             }
         }
@@ -630,6 +630,12 @@ const WHITE_T: Color = Color::new(0xFF, 0xFF, 0xFF, 255);
 const LEAF_L: Color = Color::new(0x7C, 0x98, 0x3C, 255);
 const LEAF_M: Color = Color::new(0x5F, 0x91, 0x4B, 255);
 const LEAF_D: Color = Color::new(0x1C, 0x4C, 0x33, 255);
+// Dry grass. What a hull kicks out of a desert tuft is straw, not leaf:
+// the SAND_* steps gen_grass.py builds a blade's tip, lit side and body
+// from, so the flecks are the tuft's own colours leaving it.
+const STRAW_L: Color = Color::new(0xD2, 0xBA, 0x6B, 255);
+const STRAW_M: Color = Color::new(0xB7, 0xA2, 0x48, 255);
+const STRAW_D: Color = Color::new(0x67, 0x51, 0x2A, 255);
 // The frog health pack's burst. Green under the same exemption - the frog
 // is the one living thing on the field, and `hud::FROG_COLOR` is what the
 // bar already reads it in.

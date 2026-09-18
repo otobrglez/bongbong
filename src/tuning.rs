@@ -1463,7 +1463,7 @@ tunables! {
         /// Never 1.0: a tuft that disappears entirely reads as a hole in
         /// the field rather than as matted grass.
         grass_crush_flatten: f32 = 0.78 in 0.0 ..= 0.95;
-        /// Leaf specks a tank kicks up per second per grass cell it is
+        /// Straw specks a tank kicks up per second per grass cell it is
         /// crossing (`fx.rs`, scaled by `fx_density` like every other
         /// emitter). Zero turns the rustle off.
         grass_rustle_rate: f32 = 14.0 in 0.0 ..= 120.0;
@@ -1482,6 +1482,17 @@ tunables! {
         ground_edge_shade: f32 = 0.22 in 0.0 ..= 1.0;
         /// How far that vignette reaches inward, in screen px.
         ground_edge_shade_px: f32 = 90.0 in 0.0 ..= 600.0;
+        /// How much of the open floor the soft sand patches cover, 0-1:
+        /// the pack's sand tiles (hardpan under the desert retint) laid
+        /// where a hashed value noise at the cell corners crosses this
+        /// coverage, and resolved through the pack's own corner autotile
+        /// so every edge is hand-painted (`ground::SAND_CORNER`). Never
+        /// beside a road cell. 0 turns them off - the plain fill the
+        /// meadow theme wants.
+        ground_drift_cover: f32 = 0.32 in 0.0 ..= 1.0 @ Restart;
+        /// The patches' scale: the noise lattice pitch in cells. Larger
+        /// means fewer, bigger drifts.
+        ground_drift_scale: f32 = 5.0 in 1.0 ..= 20.0 @ Restart;
         /// World px of travel between hull tread-animation frame advances
         /// (independent of the ground-decal spacing below).
         tank_hull_track_frame_distance: f32 = 8.0 in 1.0 ..= 64.0;

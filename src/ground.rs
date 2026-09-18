@@ -1,10 +1,18 @@
-//! Procedurally-placed ground/terrain layer: a grass base with road painted
-//! at specific cells - under every static obstacle/wall tile, and inside the
-//! player fortress's `B`/`O` glyphs - drawn from the third-party Puny World
-//! tileset (`static/punyworld/punyworld-overworld-tileset.png` - see
+//! Procedurally-placed ground/terrain layer: the pack's grass-fill tiles as
+//! the base, soft patches of its sand tiles drifted over the open floor, and
+//! road painted at specific cells - under every static obstacle/wall tile,
+//! and inside the player fortress's `B`/`O` glyphs - drawn from the
+//! third-party Puny World tileset
+//! (`static/punyworld/punyworld-overworld-tileset.png` - see
 //! `static/punyworld/SOURCE.md` for provenance and `docs/GROUND_SPEC.md` for
 //! the full design writeup, including why this sheet is deliberately not on
 //! the Resurrect 64 palette everything else uses).
+//!
+//! The materials are named after the pack's own wangset colours - grass,
+//! sand, dirt paths - not after what they look like on screen: the live PNG
+//! is a *retinted* copy (`tools/retint_ground.py`), and under the desert
+//! theme the "grass" is pale dust, the "sand" a smoother hardpan and the
+//! dirt a packed-earth road. Nothing here knows which theme is live.
 //!
 //! Purely decorative: no physics body, no gameplay effect. `build` runs
 //! once per round (from `simulation::Game::init`, after every obstacle for
@@ -13,8 +21,8 @@
 //! one per `GROUND_WORLD_TILE` grid cell - so `draw` is just an index
 //! lookup and a blit per cell, no per-frame autotile work.
 //!
-//! The autotile tables below (`GRASS_FILL`, `ROAD_EDGE`) are extracted from
-//! the source pack's own Tiled wangset data
+//! The autotile tables below (`GRASS_FILL`, `SAND_CORNER`, `ROAD_EDGE`) are
+//! extracted from the source pack's own Tiled wangset data
 //! (`static/punyworld/punyworld-overworld-tiles.tsx`), not invented here -
 //! see docs/GROUND_SPEC.md for exactly how each entry was derived and for
 //! the wangset's own documentation of the tile grid.
@@ -50,6 +58,33 @@ enum Material {
 /// flat grass with no autotile meaning, picked at random per cell purely to
 /// avoid a visibly repeating texture.
 const GRASS_FILL: &[i32] = &[0, 1, 2, 27, 28, 29, 54, 55, 56];
+
+/// The pack's sand against its grass, a Wang **corner** autotile: which of
+/// a cell's four corners sit on sand decides the tile, so sand is laid at
+/// the grid *vertices* (`drift_vertex` in `build`) and every cell between
+/// two kinds of vertex gets a hand-painted rounded edge. Indexed by a 4-bit
+/// mask, bit3=TL bit2=TR bit1=BR bit0=BL (1 = sand). Mask 0 is not a sand
+/// tile at all - a `GRASS_FILL` variant - so the entry is a placeholder
+/// `build` never reads. Extracted from the `overworld` wangset the same way
+/// `ROAD_EDGE` was (docs/GROUND_SPEC.md).
+const SAND_CORNER: [i32; 16] = [
+    -1, // 0000 no sand: `GRASS_FILL`
+    24, // 0001 BL
+    22, // 0010 BR
+    23, // 0011 BR+BL (bottom edge)
+    76, // 0100 TR
+    80, // 0101 TR+BL (diagonal)
+    49, // 0110 TR+BR (right edge)
+    25, // 0111 all but TL
+    78, // 1000 TL
+    51, // 1001 TL+BL (left edge)
+    79, // 1010 TL+BR (diagonal)
+    26, // 1011 all but TR
+    77, // 1100 TL+TR (top edge)
+    53, // 1101 all but BR
+    52, // 1110 all but BL
+    50, // 1111 flat sand
+];
 
 /// Road (the source pack's "dirt-paths") Wang **edge** autotile - 15 of the
 /// 16 possible N/E/S/W neighbour combinations have their own tile; the
@@ -162,10 +197,38 @@ fn grass_variant(seed: u64, x: i32, y: i32) -> i32 {
     GRASS_FILL[(h as usize) % GRASS_FILL.len()]
 }
 
-/// Roll this round's ground layout: grass everywhere, then road painted at
-/// exactly `road_cells` (world positions - typically every static obstacle
-/// tile's own position plus the player fortress's `B`/`O` interior cells,
-/// see `Game::init`) and nowhere else. `width`/`height` are the same
+/// Smooth value noise in `0..1` at grid vertex `(vx, vy)`: hashed lattice
+/// points every `period` vertices, smoothstep-blended between them. Keyed
+/// the same way as `grass_variant` - by `seed` and the lattice coordinates
+/// alone - so the editor's rebuilds keep every patch where it was and a
+/// round replays its floor from its seed. Thresholded by `build` into the
+/// sand drifts; the blend is what makes them soft blobs a few cells across
+/// rather than per-cell noise.
+fn drift_noise(seed: u64, vx: i32, vy: i32, period: f32) -> f32 {
+    let lattice = |ix: i32, iy: i32| -> f32 {
+        let mut h = seed ^ 0xD1B5_4A32_D192_ED03;
+        h ^= (ix as i64 as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        h ^= (iy as i64 as u64).wrapping_mul(0x94D0_49BB_1331_11EB);
+        h ^= h >> 31;
+        h = h.wrapping_mul(0xFF51_AFD7_ED55_8CCD);
+        h ^= h >> 29;
+        (h >> 40) as f32 / (1u64 << 24) as f32
+    };
+    let smooth = |u: f32| u * u * (3.0 - 2.0 * u);
+    let (fx, fy) = (vx as f32 / period, vy as f32 / period);
+    let (ix, iy) = (fx.floor(), fy.floor());
+    let (tx, ty) = (smooth(fx - ix), smooth(fy - iy));
+    let (ix, iy) = (ix as i32, iy as i32);
+    let top = lattice(ix, iy) * (1.0 - tx) + lattice(ix + 1, iy) * tx;
+    let bottom = lattice(ix, iy + 1) * (1.0 - tx) + lattice(ix + 1, iy + 1) * tx;
+    top * (1.0 - ty) + bottom * ty
+}
+
+/// Roll this round's ground layout: grass everywhere, sand drifted over it
+/// in soft patches (`ground_drift_cover` of the open floor, none touching a
+/// road cell), then road painted at exactly `road_cells` (world positions -
+/// typically every static obstacle tile's own position plus the player
+/// fortress's `B`/`O` interior cells, see `Game::init`) and nowhere else. `width`/`height` are the same
 /// playable-area extents `Game::init` already threads through everything
 /// else (`battlefield::spawn_walls`, enemy/obstacle placement). `seed`
 /// drives every grass cell's cosmetic tile pick (`grass_variant`) - pass a
@@ -200,12 +263,36 @@ pub fn build(width: f32, height: f32, seed: u64, road_cells: &[Position], wall_c
         }
     }
 
+    // --- drifts: sand at the grid vertices, resolved per cell through the
+    // corner autotile below ---
+    //
+    // A vertex touching a road cell never drifts: the road tiles carry the
+    // plain fill's dithered edge baked in, so a road running through a
+    // patch would show a fringe of the wrong tone along it. The patches
+    // live in the open instead, which is also where they read.
+    let t = tuning();
+    let cover = t.ground_drift_cover.clamp(0.0, 1.0);
+    let period = t.ground_drift_scale.max(1.0);
+    let drift_vertex = |m: &[Material], vx: i32, vy: i32| -> bool {
+        if cover <= 0.0 {
+            return false;
+        }
+        let beside_road = [(vx - 1, vy - 1), (vx, vy - 1), (vx - 1, vy), (vx, vy)]
+            .iter()
+            .any(|&(cx, cy)| at(m, cx, cy) == Material::Road);
+        !beside_road && drift_noise(seed, vx, vy, period) > 1.0 - cover
+    };
+
     // --- resolve: pick the exact source tile for every cell ---
     let mut tiles = vec![0i32; cols * rows];
     for y in 0..rows as i32 {
         for x in 0..cols as i32 {
             let tile = match at(&material, x, y) {
-                Material::Grass => grass_variant(seed, x, y),
+                Material::Grass => {
+                    let corner = |vx: i32, vy: i32| drift_vertex(&material, vx, vy) as usize;
+                    let mask = (corner(x, y) << 3) | (corner(x + 1, y) << 2) | (corner(x + 1, y + 1) << 1) | corner(x, y + 1);
+                    if mask == 0 { grass_variant(seed, x, y) } else { SAND_CORNER[mask] }
+                }
                 Material::Road => {
                     let is_road = |dx: i32, dy: i32| at(&material, x + dx, y + dy) == Material::Road;
                     let n = is_road(0, -1);
@@ -241,7 +328,6 @@ pub fn build(width: f32, height: f32, seed: u64, road_cells: &[Position], wall_c
             walls[gy as usize * cols + gx as usize] = true;
         }
     }
-    let t = tuning();
     let near = t.ground_wall_shade;
     let reach = t.ground_wall_shade_cells.max(0) as i32;
     let mut tints = vec![Color::WHITE; cols * rows];
