@@ -1,0 +1,221 @@
+# ai-whispering-woods - a stealth field for one or two players. Hand-authored (generated
+# from an ASCII layout): re-saving from the map editor would drop these
+# comments.
+# 
+# Protect on the band plan, six tanks, the player in a wraith and player
+# two in a scout (`start2` painted beside the road). A dirt road runs down
+# the middle; everything else is tall grass in big drifts and 2x2 groves of
+# trees and pines. Concealment is a cell test (`Terrain::conceals`): a tank
+# sitting in the grass is not seen, not chased and not rammed until it
+# fires or gets hit, so the frog beside the road can be defended from
+# ambush rather than from a wall. Frog health on both flanks, health top
+# left, ammo in two corners, a speed-up and a shield bottom right.
+
+version = 1
+tank = "wraith"
+tank2 = "scout"
+tanks = 6
+mission.kind = "protect"
+spawn.kind = "band"
+
+cells."2,0" = { kind = "tall_grass" }
+cells."3,0" = { kind = "tall_grass" }
+cells."4,0" = { kind = "tall_grass" }
+cells."5,0" = { kind = "tall_grass" }
+cells."12,0" = { kind = "tree" }
+cells."13,0" = { kind = "pine" }
+cells."22,0" = { kind = "tall_grass" }
+cells."23,0" = { kind = "tall_grass" }
+cells."24,0" = { kind = "tall_grass" }
+cells."25,0" = { kind = "tall_grass" }
+cells."29,0" = { kind = "pine" }
+cells."30,0" = { kind = "tree" }
+cells."1,1" = { kind = "tall_grass" }
+cells."2,1" = { kind = "tall_grass" }
+cells."3,1" = { kind = "tall_grass" }
+cells."4,1" = { kind = "tall_grass" }
+cells."5,1" = { kind = "tall_grass" }
+cells."6,1" = { kind = "tall_grass" }
+cells."12,1" = { kind = "pine" }
+cells."13,1" = { kind = "tree" }
+cells."21,1" = { kind = "tall_grass" }
+cells."22,1" = { kind = "tall_grass" }
+cells."23,1" = { kind = "tall_grass" }
+cells."24,1" = { kind = "tall_grass" }
+cells."25,1" = { kind = "tall_grass" }
+cells."26,1" = { kind = "tall_grass" }
+cells."29,1" = { kind = "tree" }
+cells."30,1" = { kind = "pine" }
+cells."1,2" = { kind = "tall_grass" }
+cells."2,2" = { kind = "tall_grass" }
+cells."3,2" = { kind = "tall_grass" }
+cells."4,2" = { kind = "tall_grass" }
+cells."5,2" = { kind = "tall_grass" }
+cells."6,2" = { kind = "tall_grass" }
+cells."17,2" = { kind = "road" }
+cells."18,2" = { kind = "road" }
+cells."21,2" = { kind = "tall_grass" }
+cells."22,2" = { kind = "tall_grass" }
+cells."23,2" = { kind = "tall_grass" }
+cells."24,2" = { kind = "tall_grass" }
+cells."25,2" = { kind = "tall_grass" }
+cells."26,2" = { kind = "tall_grass" }
+cells."2,3" = { kind = "tall_grass" }
+cells."3,3" = { kind = "tall_grass" }
+cells."4,3" = { kind = "tall_grass" }
+cells."5,3" = { kind = "tall_grass" }
+cells."9,3" = { kind = "pickup", pickup = "health" }
+cells."17,3" = { kind = "road" }
+cells."18,3" = { kind = "road" }
+cells."22,3" = { kind = "tall_grass" }
+cells."23,3" = { kind = "tall_grass" }
+cells."24,3" = { kind = "tall_grass" }
+cells."25,3" = { kind = "tall_grass" }
+cells."31,3" = { kind = "pickup", pickup = "ammo" }
+cells."17,4" = { kind = "road" }
+cells."18,4" = { kind = "road" }
+cells."2,5" = { kind = "tree" }
+cells."3,5" = { kind = "pine" }
+cells."9,5" = { kind = "tall_grass" }
+cells."10,5" = { kind = "tall_grass" }
+cells."11,5" = { kind = "tall_grass" }
+cells."12,5" = { kind = "tall_grass" }
+cells."17,5" = { kind = "road" }
+cells."18,5" = { kind = "road" }
+cells."22,5" = { kind = "tall_grass" }
+cells."23,5" = { kind = "tall_grass" }
+cells."24,5" = { kind = "tall_grass" }
+cells."25,5" = { kind = "tall_grass" }
+cells."26,5" = { kind = "tall_grass" }
+cells."29,5" = { kind = "tree" }
+cells."30,5" = { kind = "tree" }
+cells."2,6" = { kind = "pine" }
+cells."3,6" = { kind = "tree" }
+cells."8,6" = { kind = "tall_grass" }
+cells."9,6" = { kind = "tall_grass" }
+cells."10,6" = { kind = "tall_grass" }
+cells."11,6" = { kind = "tall_grass" }
+cells."12,6" = { kind = "tall_grass" }
+cells."13,6" = { kind = "tall_grass" }
+cells."17,6" = { kind = "road" }
+cells."18,6" = { kind = "road" }
+cells."21,6" = { kind = "tall_grass" }
+cells."22,6" = { kind = "tall_grass" }
+cells."23,6" = { kind = "tall_grass" }
+cells."24,6" = { kind = "tall_grass" }
+cells."25,6" = { kind = "tall_grass" }
+cells."26,6" = { kind = "tall_grass" }
+cells."27,6" = { kind = "tall_grass" }
+cells."30,6" = { kind = "tree" }
+cells."8,7" = { kind = "tall_grass" }
+cells."9,7" = { kind = "tall_grass" }
+cells."10,7" = { kind = "tall_grass" }
+cells."11,7" = { kind = "tall_grass" }
+cells."12,7" = { kind = "tall_grass" }
+cells."13,7" = { kind = "tall_grass" }
+cells."17,7" = { kind = "road" }
+cells."18,7" = { kind = "road" }
+cells."22,7" = { kind = "tall_grass" }
+cells."23,7" = { kind = "tall_grass" }
+cells."24,7" = { kind = "tall_grass" }
+cells."25,7" = { kind = "tall_grass" }
+cells."26,7" = { kind = "tall_grass" }
+cells."3,8" = { kind = "pickup", pickup = "frog_health" }
+cells."9,8" = { kind = "tall_grass" }
+cells."10,8" = { kind = "tall_grass" }
+cells."11,8" = { kind = "tall_grass" }
+cells."12,8" = { kind = "tall_grass" }
+cells."15,8" = { kind = "frog" }
+cells."17,8" = { kind = "road" }
+cells."18,8" = { kind = "road" }
+cells."20,8" = { kind = "start" }
+cells."23,8" = { kind = "tall_grass" }
+cells."24,8" = { kind = "tall_grass" }
+cells."25,8" = { kind = "tall_grass" }
+cells."30,8" = { kind = "pickup", pickup = "frog_health" }
+cells."17,9" = { kind = "road" }
+cells."18,9" = { kind = "road" }
+cells."2,10" = { kind = "tall_grass" }
+cells."3,10" = { kind = "tall_grass" }
+cells."4,10" = { kind = "tall_grass" }
+cells."5,10" = { kind = "tall_grass" }
+cells."6,10" = { kind = "tall_grass" }
+cells."14,10" = { kind = "tall_grass" }
+cells."15,10" = { kind = "tall_grass" }
+cells."16,10" = { kind = "tall_grass" }
+cells."17,10" = { kind = "road" }
+cells."18,10" = { kind = "road" }
+cells."19,10" = { kind = "tall_grass" }
+cells."20,10" = { kind = "tall_grass" }
+cells."21,10" = { kind = "tall_grass" }
+cells."25,10" = { kind = "start2" }
+cells."28,10" = { kind = "tall_grass" }
+cells."29,10" = { kind = "tall_grass" }
+cells."30,10" = { kind = "tall_grass" }
+cells."31,10" = { kind = "tall_grass" }
+cells."1,11" = { kind = "tall_grass" }
+cells."2,11" = { kind = "tall_grass" }
+cells."3,11" = { kind = "tall_grass" }
+cells."4,11" = { kind = "tall_grass" }
+cells."5,11" = { kind = "tall_grass" }
+cells."6,11" = { kind = "tall_grass" }
+cells."7,11" = { kind = "tall_grass" }
+cells."10,11" = { kind = "tree" }
+cells."11,11" = { kind = "pine" }
+cells."13,11" = { kind = "tall_grass" }
+cells."14,11" = { kind = "tall_grass" }
+cells."15,11" = { kind = "tall_grass" }
+cells."16,11" = { kind = "tall_grass" }
+cells."17,11" = { kind = "road" }
+cells."18,11" = { kind = "road" }
+cells."19,11" = { kind = "tall_grass" }
+cells."20,11" = { kind = "tall_grass" }
+cells."21,11" = { kind = "tall_grass" }
+cells."22,11" = { kind = "tall_grass" }
+cells."24,11" = { kind = "pine" }
+cells."25,11" = { kind = "tree" }
+cells."27,11" = { kind = "tall_grass" }
+cells."28,11" = { kind = "tall_grass" }
+cells."29,11" = { kind = "tall_grass" }
+cells."30,11" = { kind = "tall_grass" }
+cells."31,11" = { kind = "tall_grass" }
+cells."32,11" = { kind = "tall_grass" }
+cells."1,12" = { kind = "tall_grass" }
+cells."2,12" = { kind = "tall_grass" }
+cells."3,12" = { kind = "tall_grass" }
+cells."4,12" = { kind = "tall_grass" }
+cells."5,12" = { kind = "tall_grass" }
+cells."6,12" = { kind = "tall_grass" }
+cells."7,12" = { kind = "tall_grass" }
+cells."10,12" = { kind = "pine" }
+cells."11,12" = { kind = "tree" }
+cells."14,12" = { kind = "tall_grass" }
+cells."15,12" = { kind = "tall_grass" }
+cells."16,12" = { kind = "tall_grass" }
+cells."17,12" = { kind = "road" }
+cells."18,12" = { kind = "road" }
+cells."19,12" = { kind = "tall_grass" }
+cells."20,12" = { kind = "tall_grass" }
+cells."21,12" = { kind = "tall_grass" }
+cells."24,12" = { kind = "tree" }
+cells."25,12" = { kind = "pine" }
+cells."28,12" = { kind = "tall_grass" }
+cells."29,12" = { kind = "tall_grass" }
+cells."30,12" = { kind = "tall_grass" }
+cells."31,12" = { kind = "tall_grass" }
+cells."2,13" = { kind = "tall_grass" }
+cells."3,13" = { kind = "tall_grass" }
+cells."4,13" = { kind = "tall_grass" }
+cells."5,13" = { kind = "tall_grass" }
+cells."6,13" = { kind = "tall_grass" }
+cells."17,13" = { kind = "road" }
+cells."18,13" = { kind = "road" }
+cells."17,14" = { kind = "road" }
+cells."18,14" = { kind = "road" }
+cells."28,14" = { kind = "pickup", pickup = "speedup" }
+cells."5,15" = { kind = "pickup", pickup = "ammo" }
+cells."17,15" = { kind = "road" }
+cells."18,15" = { kind = "road" }
+cells."29,15" = { kind = "pickup", pickup = "shield" }
+cells."17,16" = { kind = "road" }
+cells."18,16" = { kind = "road" }

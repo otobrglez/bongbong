@@ -1,0 +1,98 @@
+# ai-portal-heist - two bunkers, four portals, one gamble. Hand-authored (generated
+# from an ASCII layout): re-saving from the map editor would drop these
+# comments. Level tables as dotted keys on purpose.
+# 
+# Hunt on the band plan, five tanks, the player in a longbow. The player's
+# frog sits in an iron bunker bottom-left, the enemy frog in one top-right,
+# each with a five-cell door. Four portals (docs/teleporting.md) - one
+# beside each bunker door and two in the open middle - share one network,
+# and where a tank comes out is random: a hop from the middle may drop you
+# at the enemy's door or straight back at your own. Sandbags cover each
+# door from the outside, tall grass and trees break the long sight lines a
+# longbow loves. Frog health on each side of the middle, laser top-left,
+# health and ammo in the open.
+
+version = 1
+theme = "desert"
+tank = "longbow"
+tanks = 5
+mission.kind = "hunt"
+spawn.kind = "band"
+
+cells."3,1" = { kind = "pickup", pickup = "laser" }
+cells."22,1" = { kind = "wall", material = "iron" }
+cells."23,1" = { kind = "wall", material = "iron" }
+cells."24,1" = { kind = "wall", material = "iron" }
+cells."25,1" = { kind = "wall", material = "iron" }
+cells."26,1" = { kind = "wall", material = "iron" }
+cells."27,1" = { kind = "wall", material = "iron" }
+cells."28,1" = { kind = "wall", material = "iron" }
+cells."29,1" = { kind = "wall", material = "iron" }
+cells."30,1" = { kind = "wall", material = "iron" }
+cells."31,1" = { kind = "wall", material = "iron" }
+cells."32,1" = { kind = "wall", material = "iron" }
+cells."22,2" = { kind = "wall", material = "iron" }
+cells."32,2" = { kind = "wall", material = "iron" }
+cells."9,3" = { kind = "tall_grass" }
+cells."10,3" = { kind = "tall_grass" }
+cells."14,3" = { kind = "tree" }
+cells."22,3" = { kind = "wall", material = "iron" }
+cells."27,3" = { kind = "enemy_frog" }
+cells."32,3" = { kind = "wall", material = "iron" }
+cells."9,4" = { kind = "tall_grass" }
+cells."10,4" = { kind = "tall_grass" }
+cells."22,4" = { kind = "wall", material = "iron" }
+cells."32,4" = { kind = "wall", material = "iron" }
+cells."22,5" = { kind = "wall", material = "iron" }
+cells."32,5" = { kind = "wall", material = "iron" }
+cells."6,6" = { kind = "tree" }
+cells."22,6" = { kind = "wall", material = "iron" }
+cells."23,6" = { kind = "wall", material = "iron" }
+cells."24,6" = { kind = "wall", material = "iron" }
+cells."30,6" = { kind = "wall", material = "iron" }
+cells."31,6" = { kind = "wall", material = "iron" }
+cells."32,6" = { kind = "wall", material = "iron" }
+cells."10,7" = { kind = "portal" }
+cells."17,7" = { kind = "portal" }
+cells."4,8" = { kind = "start" }
+cells."25,8" = { kind = "sandbag" }
+cells."31,8" = { kind = "sandbag" }
+cells."18,9" = { kind = "pickup", pickup = "health" }
+cells."27,9" = { kind = "portal" }
+cells."3,10" = { kind = "tall_grass" }
+cells."4,10" = { kind = "tall_grass" }
+cells."25,10" = { kind = "tall_grass" }
+cells."26,10" = { kind = "tall_grass" }
+cells."1,11" = { kind = "wall", material = "iron" }
+cells."2,11" = { kind = "wall", material = "iron" }
+cells."3,11" = { kind = "wall", material = "iron" }
+cells."9,11" = { kind = "wall", material = "iron" }
+cells."10,11" = { kind = "wall", material = "iron" }
+cells."11,11" = { kind = "wall", material = "iron" }
+cells."17,11" = { kind = "pickup", pickup = "ammo" }
+cells."25,11" = { kind = "tall_grass" }
+cells."26,11" = { kind = "tall_grass" }
+cells."30,11" = { kind = "tree" }
+cells."1,12" = { kind = "wall", material = "iron" }
+cells."11,12" = { kind = "wall", material = "iron" }
+cells."18,12" = { kind = "pickup", pickup = "frog_health" }
+cells."1,13" = { kind = "wall", material = "iron" }
+cells."6,13" = { kind = "frog" }
+cells."11,13" = { kind = "wall", material = "iron" }
+cells."24,13" = { kind = "pine" }
+cells."1,14" = { kind = "wall", material = "iron" }
+cells."11,14" = { kind = "wall", material = "iron" }
+cells."28,14" = { kind = "portal" }
+cells."1,15" = { kind = "wall", material = "iron" }
+cells."11,15" = { kind = "wall", material = "iron" }
+cells."1,16" = { kind = "wall", material = "iron" }
+cells."2,16" = { kind = "wall", material = "iron" }
+cells."3,16" = { kind = "wall", material = "iron" }
+cells."4,16" = { kind = "wall", material = "iron" }
+cells."5,16" = { kind = "wall", material = "iron" }
+cells."6,16" = { kind = "wall", material = "iron" }
+cells."7,16" = { kind = "wall", material = "iron" }
+cells."8,16" = { kind = "wall", material = "iron" }
+cells."9,16" = { kind = "wall", material = "iron" }
+cells."10,16" = { kind = "wall", material = "iron" }
+cells."11,16" = { kind = "wall", material = "iron" }
