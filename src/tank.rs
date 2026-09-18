@@ -417,6 +417,10 @@ pub struct Tank {
     /// (`flame_afterburn_seconds`); `flame_afterburn_dps` a second while
     /// positive. Set, never added to, so re-contact resets it.
     pub burn_timer: f32,
+    /// Seconds of wet tread marks left after wading (docs/water.md):
+    /// refreshed every frame the hull is in water, counted down by
+    /// `tick_timers`, read by `lay_tracks`.
+    pub wet_timer: f32,
     /// FIFO queue of this tank's collected special weapons. The inventory
     /// rule: the weapon at the front keeps firing until its own ammo runs
     /// dry - a fresh pickup never interrupts it, it lines up *behind* (see
@@ -576,6 +580,7 @@ impl Default for Tank {
             flame_fuel: 0.0,
             flame_held: false,
             burn_timer: 0.0,
+            wet_timer: 0.0,
             laser_variant: LaserVariant::Red,
             minigun_ammo: 0,
             plasma_ammo: 0,

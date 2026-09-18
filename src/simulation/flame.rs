@@ -201,6 +201,11 @@ impl Game {
                 if tank.is_wreck() || tank.burn_timer <= 0.0 {
                     continue;
                 }
+                // Wading puts the fire out (docs/water.md).
+                if self.water.depth_at(tank.position) != crate::ground::Depth::Dry {
+                    tank.burn_timer = 0.0;
+                    continue;
+                }
                 tank.take_damage(t.flame_afterburn_dps * f.dt, MAX_DAMAGE);
                 if tank.is_wreck() {
                     f.kills.push((tank.position, tank.owner()));
@@ -231,6 +236,10 @@ impl Game {
             self.world.query::<&Obstacle>().iter().filter(|o| !o.destroyed).map(|o| o.cell()).collect();
         for cell in &heated {
             if solid.contains(cell) {
+                continue;
+            }
+            // Water takes no heat (docs/water.md).
+            if self.water.depth_at(cell_to_world(cell.0, cell.1)) != crate::ground::Depth::Dry {
                 continue;
             }
             *self.heat.entry(*cell).or_insert(0.0) += f.dt;

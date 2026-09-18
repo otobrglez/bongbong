@@ -56,6 +56,10 @@ pub(crate) struct Terrain {
     /// they block nothing and are not in the nav grid - they only answer
     /// `conceals`.
     grass: Vec<Position>,
+    /// The map's water (docs/water.md), for the frog's hop. Not an
+    /// obstacle here: deep water stops hulls through its physics
+    /// colliders and never a shot, so `sweep` must not see it.
+    water: crate::ground::WaterLayout,
 }
 
 fn frog_half() -> Position {
@@ -65,7 +69,7 @@ fn frog_half() -> Position {
 impl Terrain {
     /// Snapshot the world's static terrain. Tiles already flagged
     /// `destroyed` (removed at the end of this frame) are left out.
-    pub fn build(world: &hecs::World, width: f32, height: f32, grass: &[Position]) -> Self {
+    pub fn build(world: &hecs::World, width: f32, height: f32, grass: &[Position], water: &crate::ground::WaterLayout) -> Self {
         // Trees are left out: they do not seam-close, here or in physics
         // (`battlefield::tile_half_extent`), so they must not appear as a
         // neighbour that closes somebody else's seam either.
@@ -100,6 +104,7 @@ impl Terrain {
             frogs,
             walls: battlefield::wall_rects(width, height),
             grass: grass.to_vec(),
+            water: water.clone(),
         }
     }
 
@@ -115,6 +120,11 @@ impl Terrain {
     /// catch.
     pub fn conceals(&self, p: Position) -> bool {
         crate::grass::conceals(&self.grass, p)
+    }
+
+    /// The water under `p` (docs/water.md).
+    pub fn depth_at(&self, p: Position) -> crate::ground::Depth {
+        self.water.depth_at(p)
     }
 
     /// The entry fraction (0..1) of the first solid tile along the

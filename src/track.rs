@@ -24,6 +24,10 @@ pub struct Track {
     /// never fades. The kill site stays legible for the rest of the round,
     /// after the wreck itself has been cleared away by a wave.
     pub scorched: bool,
+    /// Laid by a hull that waded out of water within
+    /// `water_wet_track_seconds`: darker, and it fades over that time
+    /// rather than `track_lifetime`.
+    pub wet: bool,
 }
 
 impl Track {
@@ -31,7 +35,11 @@ impl Track {
     /// dropped.
     pub fn tick(&mut self, dt: f32) -> bool {
         self.age += dt;
-        !self.scorched && self.age >= tuning().track_lifetime
+        !self.scorched && self.age >= self.lifetime()
+    }
+
+    fn lifetime(&self) -> f32 {
+        if self.wet { tuning().water_wet_track_seconds.max(0.05) } else { tuning().track_lifetime }
     }
 
     /// Remaining opacity, fading linearly from `max_opacity` (fresh) to 0.0
@@ -40,7 +48,8 @@ impl Track {
         if self.scorched {
             return (self.max_opacity * tuning().wreck_track_darken).clamp(0.0, 1.0);
         }
-        (1.0 - self.age / tuning().track_lifetime).clamp(0.0, 1.0) * self.max_opacity
+        let darken = if self.wet { tuning().water_wet_track_darken } else { 1.0 };
+        ((1.0 - self.age / self.lifetime()).clamp(0.0, 1.0) * self.max_opacity * darken).clamp(0.0, 1.0)
     }
 }
 

@@ -1,6 +1,6 @@
 //! The battlefield map builder (docs/game-editor-fusion.md): the Build
 //! mode of the game. Click or tap a grid cell to place/erase a
-//! wall/prop/road/grass/gate/actor/pickup cell of the map the round was
+//! wall/prop/road/water/grass/gate/actor/pickup cell of the map the round was
 //! built from, change the map's level keys, then `PLAY` a fresh round on
 //! it. Presentation-layer only, same category as `game.rs` - never
 //! touches physics/AI/hecs. `mode::Session` owns one next to the `Game`
@@ -214,6 +214,9 @@ pub enum Tool {
     /// along it (docs/barrel-explosion-variety.md section D).
     OilTrail,
     Road,
+    /// Water: ground like road, shaped by the cells around it into a
+    /// river (a line one cell wide) or a lake (a block) - `ground::build`.
+    Water,
     Frog,
     /// Player 1's start - singleton, moved on placement like `Frog`.
     Start,
@@ -239,7 +242,7 @@ pub enum Tool {
 
 /// Every brush, in bar order: the categories one after another, the
 /// eraser last.
-pub const TOOLS: [Tool; 30] = [
+pub const TOOLS: [Tool; 31] = [
     Tool::Wall(Material::Brick),
     Tool::Wall(Material::Iron),
     Tool::Wall(Material::Wood),
@@ -252,6 +255,7 @@ pub const TOOLS: [Tool; 30] = [
     Tool::Prop(Material::Tree),
     Tool::Prop(Material::Pine),
     Tool::Road,
+    Tool::Water,
     Tool::TallGrass,
     Tool::OilTrail,
     Tool::Gate,
@@ -291,6 +295,7 @@ impl Tool {
             Tool::Drum(Drum::Fuel) => "fuel_drum",
             Tool::OilTrail => "oil_trail",
             Tool::Road => "road",
+            Tool::Water => "water",
             Tool::TallGrass => "tall_grass",
             Tool::Gate => "gate",
             Tool::Portal => "portal",
@@ -320,7 +325,7 @@ impl Tool {
         match self {
             Tool::Wall(_) => Some(Category::Wall),
             Tool::Prop(_) | Tool::Drum(_) => Some(Category::Prop),
-            Tool::Road | Tool::TallGrass | Tool::OilTrail | Tool::Gate | Tool::Portal => Some(Category::Ground),
+            Tool::Road | Tool::Water | Tool::TallGrass | Tool::OilTrail | Tool::Gate | Tool::Portal => Some(Category::Ground),
             Tool::Start | Tool::Start2 | Tool::Frog | Tool::EnemyFrog => Some(Category::Actor),
             Tool::Pickup(_) => Some(Category::Pickup),
             Tool::Eraser => None,
@@ -335,6 +340,7 @@ impl Tool {
             Tool::Drum(drum) => Some(CellObject::Barrel { drum: Some(drum) }),
             Tool::OilTrail => Some(CellObject::Oil),
             Tool::Road => Some(CellObject::Road),
+            Tool::Water => Some(CellObject::Water),
             Tool::Frog => Some(CellObject::Frog),
             Tool::Start => Some(CellObject::Start),
             Tool::Start2 => Some(CellObject::Start2),
@@ -734,26 +740,21 @@ impl MapEditor {
         self.rebuild_ground();
     }
 
-    /// Recompute the decorative ground layer from the map's current wall +
-    /// road cells - every wall cell paints road under itself automatically,
-    /// same as a live round (`Game::init`'s "road_cells = obstacle_positions
-    /// + explicit road cells" convention), plus every cell explicitly
-    /// placed with the Road tool. Called after every cell edit.
+    /// Recompute the decorative ground layer from the map's current wall,
+    /// road and water cells - every wall cell paints road under itself
+    /// automatically, same as a live round (`Game::init`'s "road_cells =
+    /// obstacle_positions + explicit road cells" convention), plus every
+    /// cell explicitly placed with the Road tool, and water at every cell
+    /// placed with the Water tool. Called after every cell edit.
     fn rebuild_ground(&mut self) {
         let (width, height) = self.map.field_size();
-        let road_cells: Vec<Position> = self
-            .map
-            .iter_cells()
-            .filter(|(_, _, obj)| matches!(obj, CellObject::Wall { .. } | CellObject::Road))
-            .map(|(col, row, _)| map::cell_to_world(col, row))
-            .collect();
-        let wall_cells: Vec<Position> = self
-            .map
-            .iter_cells()
-            .filter(|(_, _, obj)| matches!(obj, CellObject::Wall { .. }))
-            .map(|(col, row, _)| map::cell_to_world(col, row))
-            .collect();
-        self.ground = ground::build(width, height, self.ground_seed, &road_cells, &wall_cells, self.map.theme.drifts());
+        let cells_of = |pick: fn(&CellObject) -> bool| -> Vec<Position> {
+            self.map.iter_cells().filter(|(_, _, obj)| pick(obj)).map(|(col, row, _)| map::cell_to_world(col, row)).collect()
+        };
+        let road_cells = cells_of(|obj| matches!(obj, CellObject::Wall { .. } | CellObject::Road));
+        let water_cells = cells_of(|obj| matches!(obj, CellObject::Water));
+        let wall_cells = cells_of(|obj| matches!(obj, CellObject::Wall { .. }));
+        self.ground = ground::build(width, height, self.ground_seed, &road_cells, &water_cells, &wall_cells, self.map.theme.drifts());
     }
 
     // ----- the chrome -----
@@ -1294,10 +1295,10 @@ impl MapEditor {
     ) {
         let (width, height) = (layout.field.w, layout.field.h);
         let cursor = self.cursor_cell(layout);
-        // A clock read, not an input: the builder has no round clock and
-        // this is the one raylib call it makes past drawing, so a placed
-        // portal turns here too.
-        let portal_clock = rl.get_time() as f32;
+        // A clock read, not an input: the builder has no round clock, and
+        // the wall clock animates the water and turns a placed portal so
+        // the author sees what a round will show.
+        let time = rl.get_time() as f32;
         let camera = Camera2D {
             offset: layout.field_origin(),
             target: Vector2::new(0.0, 0.0),
@@ -1311,7 +1312,7 @@ impl MapEditor {
             if self.plain_canvas {
                 d.draw_rectangle(0, 0, width as i32, height as i32, Color::WHITE);
             } else {
-                ground::draw(&mut GpuCanvas::new(&mut d, textures), &self.ground);
+                ground::draw(&mut GpuCanvas::new(&mut d, textures), &self.ground, time);
             }
 
             // Portals first, under every other cell: three cells of art on
@@ -1319,13 +1320,13 @@ impl MapEditor {
             // drawn in the loop would cover a wall placed above it. Ghosted
             // while the network is inactive (fewer than two), with the
             // anchor outlined like a gate off its edge - placed, not
-            // usable. `portal_clock` is the only clock the builder has.
+            // usable. `time` is the wall clock above.
             let portals = self.map.portal_cells();
             let active = portals.len() >= 2;
             let tint = if active { Color::WHITE } else { Color::new(255, 255, 255, 110) };
             for &(col, row) in &portals {
                 let pos = map::cell_to_world(col, row);
-                draw_portal(&mut GpuCanvas::new(&mut d, textures), pos, portal_clock, tint);
+                draw_portal(&mut GpuCanvas::new(&mut d, textures), pos, time, tint);
                 if !active {
                     let size = OBSTACLE_GRID_SIZE;
                     d.draw_rectangle_lines_ex(Rectangle::new(pos.x - size / 2.0, pos.y - size / 2.0, size, size), 2.0, GATE_COLOR);
@@ -1361,7 +1362,7 @@ impl MapEditor {
                         let origin = Vector2::new(big / 2.0, big / 2.0);
                         d.draw_texture_pro(sheet_texture(textures, sheet), src, dest, origin, 0.0, Color::WHITE);
                     }
-                    CellObject::Road => {} // already painted into `self.ground`
+                    CellObject::Road | CellObject::Water => {} // already painted into `self.ground`
                     CellObject::TallGrass => {
                         // The round scatters several hashed tufts per cell;
                         // one centred tuft is enough to show the cell is
@@ -1956,6 +1957,10 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme:
         Tool::Road => {
             d.draw_rectangle_rounded(dest, 0.15, EDITOR_PANEL_SEGMENTS, Color::new(150, 111, 74, 255));
         }
+        Tool::Water => {
+            // The pack's flat water, straight off the theme's tileset.
+            d.draw_texture_pro(textures.ground, ground::water_icon_source_rec(), dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+        }
         Tool::Frog => {
             let src = Rectangle::new(0.0, 0.0, crate::FROG_TEXTURE_SIZE, crate::FROG_TEXTURE_SIZE);
             d.draw_texture_pro(textures.frog_idle, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
@@ -2331,6 +2336,34 @@ mod editor_tests {
         assert_eq!(ed.map().cell(5, 5), Some(&CellObject::Gate));
         ed.undo();
         assert_eq!(ed.map().cell(2, 2), Some(&CellObject::Road));
+    }
+
+    #[test]
+    fn the_water_brush_paints_ground_and_toggle_erases_like_road() {
+        let mut ed = MapEditor::new(MapFile::new());
+        assert_eq!(Tool::parse("water"), Some(Tool::Water));
+        assert_eq!(Tool::Water.category(), Some(Category::Ground));
+        assert!(!Tool::Water.is_singleton());
+        ed.select_tool(Tool::Water);
+        assert_eq!(ed.current_tool(Category::Ground), Tool::Water, "the category remembers it");
+        ed.stroke(&[(3, 3), (3, 4), (3, 5)], false);
+        for row in 3..=5 {
+            assert_eq!(ed.map().cell(3, row), Some(&CellObject::Water));
+        }
+        assert!(!ed.map().cell(3, 4).unwrap().is_solid(), "water is ground");
+        assert_eq!(ed.diff().added, 3);
+        // A stroke starting on water erases, like road.
+        ed.stroke(&[(3, 4), (3, 5), (3, 6)], false);
+        assert_eq!(ed.map().cell(3, 3), Some(&CellObject::Water));
+        assert_eq!(ed.map().cell(3, 4), None);
+        assert_eq!(ed.map().cell(3, 5), None);
+        assert_eq!(ed.map().cell(3, 6), None, "an erase stroke never paints");
+        ed.undo();
+        assert_eq!(ed.map().cell(3, 5), Some(&CellObject::Water), "one undo step per stroke");
+        // Round trip through the file format.
+        let text = ed.map().to_toml_string().unwrap();
+        assert!(text.contains("kind = \"water\""), "{text}");
+        assert_eq!(MapFile::from_toml_str(&text).unwrap().cell(3, 3), Some(&CellObject::Water));
     }
 
     #[test]

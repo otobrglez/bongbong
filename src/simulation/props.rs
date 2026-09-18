@@ -364,7 +364,9 @@ impl Game {
             _ => None,
         };
         let scorch_scale = if drum == Drum::Fuel { t.scorch_fuel_scale } else { 1.0 };
-        f.scorches.push(Scorch::with(center, scorch_scale, streak));
+        if self.water.depth_at(center) == crate::ground::Depth::Dry {
+            f.scorches.push(Scorch::with(center, scorch_scale, streak));
+        }
         self.scorch_tracks(center);
         crate::grass::flatten(&mut self.grass, center, params.radius * t.blast_grass_flatten);
 
@@ -440,6 +442,11 @@ impl Game {
         }
         let pos = cell_to_world(cell.0, cell.1);
         if pos.x < 0.0 || pos.y < 0.0 || pos.x > f.width || pos.y > f.height {
+            return;
+        }
+        // Water does not burn (docs/water.md): no pool forms on it and a
+        // trail's fire stops at its edge.
+        if self.water.depth_at(pos) != crate::ground::Depth::Dry {
             return;
         }
         let step = 1.0 / tuning().oil_trail_cells_per_second.max(0.5);

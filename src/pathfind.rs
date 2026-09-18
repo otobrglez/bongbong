@@ -70,6 +70,11 @@ pub struct Grid {
     /// What stepping from a footprint cell into the hub costs, in cells;
     /// 0.0 while there are no portals (never read then).
     hop_cost: f32,
+    /// Per cell, what a step *into* it costs the router: 1 for open
+    /// ground, more for a cell worth avoiding when a cheaper way round
+    /// exists (`weigh` - a ford). Never below 1, so the Manhattan
+    /// heuristic stays admissible and A* still returns a cheapest route.
+    cost: Vec<u8>,
 }
 
 impl Grid {
@@ -175,6 +180,7 @@ impl Grid {
             }
         }
 
+        let cost = vec![1; cols * rows];
         Self {
             cell_size,
             cols,
@@ -183,6 +189,24 @@ impl Grid {
             portals: Vec::new(),
             portal_cells: Vec::new(),
             hop_cost: 0.0,
+            cost,
+        }
+    }
+
+    /// Make every cell whose centre a position in `cells` falls in cost
+    /// `cost` (at least 1) to step into, where it was 1: the router then
+    /// takes such a cell only when the dry way round is longer than the
+    /// extra it charges. Occupancy is untouched - a weighted cell is still
+    /// open to `usable`, `blocked_ahead` and the flood fills - so this
+    /// changes which route is chosen, never whether one exists.
+    pub fn weigh(&mut self, cells: impl Iterator<Item = Position>, cost: u32) {
+        let cost = cost.clamp(1, u8::MAX as u32) as u8;
+        for pos in cells {
+            if pos.x < 0.0 || pos.y < 0.0 || pos.x > self.cols as f32 * self.cell_size || pos.y > self.rows as f32 * self.cell_size {
+                continue;
+            }
+            let cell = self.cell_of(pos);
+            self.cost[cell.1 * self.cols + cell.0] = cost;
         }
     }
 
@@ -722,7 +746,9 @@ impl Grid {
                         if next != goal && self.blocked_at(next) {
                             continue;
                         }
-                        relax(NavNode::Cell(next), g + 1.0);
+                        // A step costs what the cell charges (`weigh`), 1 on
+                        // open ground.
+                        relax(NavNode::Cell(next), g + self.cost[idx(NavNode::Cell(next))] as f32);
                     }
                     if !closed[idx(NavNode::Hub)] && self.is_portal_cell(cell) {
                         relax(NavNode::Hub, g + self.hop_cost);
@@ -751,7 +777,8 @@ struct SearchHit {
 }
 
 /// Manhattan distance in cells - admissible since movement is 4-directional
-/// with unit cost per step, so A* with this heuristic finds a shortest path.
+/// and no step costs less than 1 (`Grid::cost`), so A* with this heuristic
+/// finds a cheapest path.
 fn heuristic(a: (usize, usize), b: (usize, usize)) -> f32 {
     (a.0 as f32 - b.0 as f32).abs() + (a.1 as f32 - b.1 as f32).abs()
 }
@@ -1179,5 +1206,26 @@ mod dims_tests {
         assert!(!one.is_blocked(0, 0));
         assert!(one.is_blocked(27, 0), "off-grid counts as blocked");
         assert_eq!(one.ascii().lines().nth(1).unwrap(), ".#.........................");
+    }
+
+    #[test]
+    fn a_weighed_cell_is_taken_only_when_the_way_round_costs_more() {
+        // 9 x 3 cells of 10 px, no obstacles, margin 0: a straight run
+        // along the middle row from (1, 1) to (7, 1) is 6 steps.
+        let mut grid = Grid::build(90.0, 30.0, 10.0, 0.0, std::iter::empty());
+        let at = |c: usize, r: usize| Position::new(c as f32 * 10.0 + 5.0, r as f32 * 10.0 + 5.0);
+        assert_eq!(grid.path_cost(at(1, 1), at(7, 1)), Some(6));
+        // A ford at (4, 1) costing 3: stepping round it through row 0 or
+        // row 2 is 8 unit steps, the straight run is 5 + 3 = 8 - a tie, so
+        // make the ford cost 4 and the detour wins ...
+        grid.weigh(std::iter::once(at(4, 1)), 4);
+        assert_eq!(grid.path_cost(at(1, 1), at(7, 1)), Some(8), "the dry way round is cheaper");
+        assert_ne!(grid.next_step(at(1, 1), at(7, 1)), Some(at(2, 1)).filter(|_| false), "still routes");
+        // ... and a whole column of fords (rows 0..3 at col 4) leaves no
+        // dry way round, so the router wades through at the ford's price.
+        grid.weigh([at(4, 0), at(4, 2)].into_iter(), 4);
+        assert_eq!(grid.path_cost(at(1, 1), at(7, 1)), Some(9), "5 dry steps plus one ford at 4");
+        assert!(grid.usable(at(4, 1)), "a weighed cell is still open");
+        assert!(!grid.blocked_ahead(at(3, 1), Position::new(1.0, 0.0)));
     }
 }

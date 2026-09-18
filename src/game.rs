@@ -187,7 +187,7 @@ impl Game {
         // white clear instead.
         if !self.plain_canvas {
             let (width, height) = self.map.field_size();
-            crate::ground::draw(c, &self.ground);
+            crate::ground::draw(c, &self.ground, self.time);
             crate::ground::draw_edge_shade(c, width.round() as i32, height.round() as i32);
         }
 
