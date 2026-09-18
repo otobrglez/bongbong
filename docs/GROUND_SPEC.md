@@ -30,17 +30,18 @@ pre-built autotile data, used as-is.
 overworld tileset (432×1040, 16×16 tiles, 27 columns), third-party,
 confirmed usable by the project owner.
 
-**The live PNG is a retinted copy, in the live theme.** The pack's own
+**The live PNGs are retinted copies, one per theme.** The pack's own
 grass fill (`#85A643`, hue ~80°) is a yellow-green and its dirt-path tiles
 (`#C4B253`, hue ~50°) bright yellow-khaki. `tools/retint_ground.py` always
 reads the pristine original preserved at
-`static/punyworld/_original/punyworld-overworld-tileset.png` and writes the
-live path, so it's idempotent — tweak a theme and rerun to iterate; never
-hand-edit the live PNG or overwrite `_original/`. `BONGBONG_THEME` picks
-the theme, and the same variable drives `tools/spritegen/gen_grass.py` so
-the tall grass matches the floor:
+`static/punyworld/_original/punyworld-overworld-tileset.png` and writes one
+live file per `map::Theme` (`Theme::ground_texture_path`), so it's
+idempotent — tweak a theme and rerun to iterate; never hand-edit a live PNG
+or overwrite `_original/`. A map picks its theme with a top-level `theme`
+key (docs/desert-theme.md), and `app.rs` draws with that theme's tileset
+and its matching tall-grass sheet from `tools/spritegen/gen_grass.py`:
 
-- **`desert`** (the default): the grass fill becomes pale, pebbly dust
+- **`desert`** (`punyworld-overworld-tileset-desert.png`): the grass fill becomes pale, pebbly dust
   (`#85A643` → `#CCB385`, its speck tones kept a step lighter and darker so
   they read as grains and pebbles), the dirt paths a darker packed-earth
   road (`#C4B253` → `#A08058`), and the pack's sand a slightly darker,
@@ -51,7 +52,7 @@ the tall grass matches the floor:
   dither pixels — a curve cannot send one dark and the other light without
   tearing every dither. The dithers land between the dust and the hardpan,
   which also puts them between the dust and the road.
-- **`meadow`**: the de-green pass. A smooth piecewise-linear HSV curve
+- **`grass`** (`punyworld-overworld-tileset.png`, the default theme): the de-green pass. A smooth piecewise-linear HSV curve
   shifts grass hues toward the pack's *own* deeper tree-canopy green
   (`#85A643` → `#619541`, landing next to its `#5E914B` foliage),
   desaturates and darkens dirt toward earth-tan (`#C4B253` → `#B1A567`),
@@ -64,8 +65,8 @@ the tall grass matches the floor:
   moat.
 
 `ground.rs` names its materials after the pack's wangset colours (grass,
-sand, dirt paths), not after what the live theme paints them as — nothing
-in Rust knows which theme is live.
+sand, dirt paths), not after what a theme paints them as — the only thing
+it takes from the theme is whether to drift the sand (`Theme::drifts`).
 
 See `static/punyworld/SOURCE.md` for
 the full provenance note, including: no license file was bundled with it,
@@ -282,9 +283,10 @@ hardpan under the desert retint — laid over the open floor.
 - **Keyed like `grass_variant`**, by `seed` and the lattice coordinates
   alone — the editor's fixed-seed rebuilds keep every patch in place across
   edits, and a round's floor replays from its seed.
-- `ground_drift_cover` 0 turns the layer off, which is what the meadow
-  theme wants: its retinted sand is a khaki that would bring back the dirt
-  patches the object-driven placement replaced.
+- Only on a theme whose `map::Theme::drifts` says so (`build`'s `drifts`
+  argument): on the grass retint the sand is a khaki that would bring back
+  the dirt patches the object-driven placement replaced.
+  `ground_drift_cover` 0 turns the layer off on the desert too.
 
 Extraction: the mask → tile table came from the `overworld` wangset's
 corner wangids, `[N, NE, E, SE, S, SW, W, NW]` with grass = 1 and sand = 3,

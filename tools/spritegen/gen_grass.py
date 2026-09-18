@@ -7,15 +7,17 @@ off this game's palette - its greens sit around hue 100 and swing to teal
 as a different game pasted on top. The *shapes* are the useful part, and
 those are what this reproduces.
 
-**Themes.** `BONGBONG_THEME` picks the sheet, and the same variable drives
-tools/retint_ground.py so the tall grass always matches the floor it
-stands on:
+**Themes.** One sheet per `map::Theme`, paired with the ground tileset
+tools/retint_ground.py writes for the same theme; a map picks both with
+its `theme` key. Every theme is written by default, BONGBONG_THEME=x one:
 
-  desert  (default) dry scrub for the dust floor. Three species: bleached
-          bunchgrass splaying out of a dark root, tall stalks carrying seed
-          heads, and a low sagebrush clump - a grey-green mound on dark
-          twigs, the one thing in the field that is still alive.
-  meadow  the green tufts: fine upright, tall spiky, short splayed.
+  grass   static/nature_sheet.png - the green tufts: fine upright, tall
+          spiky, short splayed.
+  desert  static/nature_sheet_desert.png - dry scrub for the dust floor.
+          Three species: bleached bunchgrass splaying out of a dark root,
+          tall stalks carrying seed heads, and a low sagebrush clump - a
+          grey-green mound on dark twigs, the one thing in the field that
+          is still alive.
 
 Two things about the colours are worth knowing before editing them:
 
@@ -27,9 +29,9 @@ Two things about the colours are worth knowing before editing them:
    SAND_* steps sit right on top of, so a straw-coloured blade vanishes
    against it. Dry grass here is a dark khaki *silhouette* with bleached
    tips, the way scrub actually reads against sand, not straw drawn in
-   straw colour. The meadow's floor is `#619541`, within ~11 RGB units of
-   GREEN_DK, which is why its blades are GREEN_DARKEST/GREEN_SHADE with
-   only GREEN_BRIGHT at the tip.
+   straw colour. The grass theme's floor is `#619541`, within ~11 RGB
+   units of GREEN_DK, which is why its blades are GREEN_DARKEST/GREEN_SHADE
+   with only GREEN_BRIGHT at the tip.
 2. **Green is allowed here.** `just check-sheets` bans GREEN_* on walls,
    props and blasts because a green pixel on a manufactured object reads as
    terrain showing through. Vegetation is the exception the rule always
@@ -47,7 +49,6 @@ wide at the base and taper to one at the tip - the same apparent weight as
 before, with a tip that is actually a tip.
 
 Run: SPRITE_OUT=static python3 tools/spritegen/gen_grass.py
-     (BONGBONG_THEME=meadow for the green sheet)
 """
 
 from PIL import Image
@@ -66,7 +67,7 @@ S = 32                      # sheet cell, in sheet pixels
 GRID = 1                    # 1 design pixel = 1 sheet pixel = 2 screen px
 D = S // GRID               # 32 design pixels per cell
 OUT = os.environ.get('SPRITE_OUT', 'assets/sprites')
-THEME = os.environ.get('BONGBONG_THEME', 'desert')
+ONLY = os.environ.get('BONGBONG_THEME')
 os.makedirs(OUT, exist_ok=True)
 
 SPECIES = 3
@@ -77,7 +78,7 @@ def op(c):
     return c + (255,)
 
 
-# --- meadow ramp, darkest at the root to brightest at the tip. Four
+# --- grass ramp, darkest at the root to brightest at the tip. Four
 # explicit steps rather than computed shades: snap() is nearest-Euclidean
 # over the whole palette and a multiplied green happily crosses into another
 # family (this is how a sand tone once ended up green - see docs/PALETTE.md).
@@ -158,13 +159,13 @@ def blade(img, rng, base_x, height, lean, ramp, dry=False):
             dpx(img, col + (1 if lean >= 0 else -1), y, root if t < 0.20 else body)
 
 
-MEADOW_RAMP = (ROOT, BODY, MID, LIT, TIP, DRY)
+GRASS_RAMP = (ROOT, BODY, MID, LIT, TIP, DRY)
 DESERT_RAMP = (D_ROOT, D_BODY, D_MID, D_LIT, D_TIP, D_BLEACH)
 
 
 def draw_tuft(species, variant, seed):
-    """One small meadow tuft - a handful of blades from a common root, not
-    a whole clump.
+    """One small grass-theme tuft - a handful of blades from a common root,
+    not a whole clump.
 
     Density comes from scattering several of these per cell at draw time,
     the way the reference gif does it. Drawing a full clump per sprite was
@@ -199,7 +200,7 @@ def draw_tuft(species, variant, seed):
         # a whole tuft leaning together reads as wind, and the wind is
         # applied at draw time.
         away = 1.0 if bx >= root else -1.0
-        blade(img, rng, bx, h, lean * away * rng.uniform(0.5, 1.4), MEADOW_RAMP, dry=rng.random() < 0.12)
+        blade(img, rng, bx, h, lean * away * rng.uniform(0.5, 1.4), GRASS_RAMP, dry=rng.random() < 0.12)
     return img
 
 
@@ -216,8 +217,8 @@ def seed_head(img, x, y, rng):
 
 
 def draw_dry_tuft(species, variant, seed):
-    """One desert tuft. Same scatter-at-draw-time contract as the meadow's:
-    a small thing, several per cell, gaps between them."""
+    """One desert tuft. Same scatter-at-draw-time contract as the grass
+    theme's: a small thing, several per cell, gaps between them."""
     rng = random.Random(seed)
     img = blank()
 
@@ -226,8 +227,7 @@ def draw_dry_tuft(species, variant, seed):
         # strongest splay on the sheet - dead grass does not stand up. Few
         # enough, and spread wide enough, that the dust shows between the
         # stalks: packed tighter they merged into one dark block at the
-        # base, which is the failure the meadow's draw_tuft comment
-        # describes.
+        # base, which is the failure draw_tuft's comment describes.
         n, lo, hi, lean, spread = 4 + variant // 3, 11, 17, 0.34, 7
         root = D // 2 + rng.randint(-4, 4)
         for _ in range(n):
@@ -277,7 +277,7 @@ def draw_dry_tuft(species, variant, seed):
         # only showing in the leaf mass, so the body is grey, the down-right
         # rim its warm shadow, and the green is *speckled* through it
         # rather than painted as a zone - a solid green disc read as a
-        # meadow bush that had wandered in.
+        # grass-theme bush that had wandered in.
         clusters = [(cx, base - 5, 7, 3)]
         for _ in range(2 + variant % 2):
             clusters.append((cx + rng.randint(-5, 5), base - rng.randint(6, 10), rng.randint(2, 4), rng.randint(2, 3)))
@@ -302,12 +302,18 @@ def draw_dry_tuft(species, variant, seed):
     return img
 
 
-sheet = Image.new('RGBA', (S * VARIANTS, S * SPECIES), (0, 0, 0, 0))
-draw = draw_tuft if THEME == 'meadow' else draw_dry_tuft
-for sp in range(SPECIES):
-    for v in range(VARIANTS):
-        cell = draw(sp, v, 900 + sp * 37 + v * 11)
-        sheet.paste(cell, (v * S, sp * S))   # direct copy: exact RGBA
-
-sheet.save(f'{OUT}/nature_sheet.png')
-print('nature_sheet.png', sheet.size, 'theme', THEME)
+# Output names must match `map::Theme::grass_texture_path`.
+THEMES = {
+    'grass': ('nature_sheet.png', draw_tuft),
+    'desert': ('nature_sheet_desert.png', draw_dry_tuft),
+}
+for name, (filename, draw) in THEMES.items():
+    if ONLY is not None and ONLY != name:
+        continue
+    sheet = Image.new('RGBA', (S * VARIANTS, S * SPECIES), (0, 0, 0, 0))
+    for sp in range(SPECIES):
+        for v in range(VARIANTS):
+            cell = draw(sp, v, 900 + sp * 37 + v * 11)
+            sheet.paste(cell, (v * S, sp * S))   # direct copy: exact RGBA
+    sheet.save(f'{OUT}/{filename}')
+    print(filename, sheet.size, 'theme', name)

@@ -1,21 +1,23 @@
-"""Retint the Puny World ground tileset for the live theme.
+"""Retint the Puny World ground tileset, one live copy per theme.
 
-The live game PNG is a *retinted copy* of the third-party pack, generated
-from the pristine original every time this runs. The theme decides what the
-field is painted in:
+The live game PNGs are *retinted copies* of the third-party pack, generated
+from the pristine original every time this runs - one file per
+`map::Theme`, which a map selects with its `theme` key:
 
-  desert  the pack's yellow-green grass fill becomes pale, pebbly dust, its
+  grass   static/punyworld/punyworld-overworld-tileset.png - the de-green
+          pass: grass hue-shifted toward the pack's own deeper tree-canopy
+          green (#85A643 -> #619541) and slightly darkened, yellow dirt
+          desaturated toward earth-tan (#C4B253 -> #B1A567).
+  desert  static/punyworld/punyworld-overworld-tileset-desert.png - the
+          pack's yellow-green grass fill becomes pale, pebbly dust, its
           dirt paths a darker packed-earth road, and its sand a slightly
           darker, wind-smoothed hardpan that ground.rs scatters in soft
-          patches (`Material::Sand`). Wood, roofs, water and greys are
-          untouched.
-  meadow  the de-green pass: grass hue-shifted toward the pack's own deeper
-          tree-canopy green (#85A643 -> #619541) and slightly darkened,
-          yellow dirt desaturated toward earth-tan (#C4B253 -> #B1A567).
+          patches (`Material::Sand`, `Theme::drifts`). Wood, roofs, water
+          and greys are untouched.
 
-Select with BONGBONG_THEME=desert|meadow; `desert` is the default. The same
-variable drives tools/spritegen/gen_grass.py, so one setting regenerates a
-matching floor and tall grass.
+Every theme is written by default; BONGBONG_THEME=grass|desert writes one.
+The same variable drives tools/spritegen/gen_grass.py, whose sheets pair
+with these per theme.
 
 Two mechanisms, applied in this order:
 
@@ -37,14 +39,13 @@ Two mechanisms, applied in this order:
 Desert dithers: the pack's grass->khaki transition pixels are used both at
 road edges and at sand edges, so they are mapped *between the dust and the
 hardpan*, which also puts them between the dust and the (darker) road. A
-road edge in the desert therefore steps a little harder than a meadow one;
+road edge in the desert therefore steps a little harder than a grass one;
 a lighter hardpan would instead have given every patch a dark rim.
 
 IDEMPOTENT BY CONSTRUCTION: always reads
 static/punyworld/_original/punyworld-overworld-tileset.png and writes the
-live game path static/punyworld/punyworld-overworld-tileset.png. Running it
-twice produces the same output; tweak a theme below and rerun to iterate.
-Run from the repo root:
+live paths above. Running it twice produces the same output; tweak a theme
+below and rerun to iterate. Run from the repo root:
 
   nix-shell -p "python3.withPackages (ps: [ps.pillow])" \
       --run "python3 tools/retint_ground.py"
@@ -56,20 +57,22 @@ import os
 from PIL import Image
 
 SRC = "static/punyworld/_original/punyworld-overworld-tileset.png"
-DST = "static/punyworld/punyworld-overworld-tileset.png"
 
-THEME = os.environ.get("BONGBONG_THEME", "desert")
+# The theme(s) to write: every one unless the variable names one.
+ONLY = os.environ.get("BONGBONG_THEME")
 
 
 def hx(s):
     return tuple(int(s[i:i + 2], 16) for i in (1, 3, 5))
 
 
-# A theme is a curve of (hue_deg, hue_shift_deg, sat_mul, val_mul) control
-# points - linear interpolation between them, identity outside the first
-# and last - and a table of exact overrides consulted first.
+# A theme is its live path, a curve of (hue_deg, hue_shift_deg, sat_mul,
+# val_mul) control points - linear interpolation between them, identity
+# outside the first and last - and a table of exact overrides consulted
+# first. Paths must match `map::Theme::ground_texture_path`.
 THEMES = {
-    "meadow": {
+    "grass": {
+        "dst": "static/punyworld/punyworld-overworld-tileset.png",
         "curve": [
             (40.0, 0.0, 1.00, 1.00),
             (50.0, 0.0, 0.72, 0.90),   # dirt core: strongly muted, a touch darker
@@ -81,6 +84,7 @@ THEMES = {
         "table": {},
     },
     "desert": {
+        "dst": "static/punyworld/punyworld-overworld-tileset-desert.png",
         # The grass band (66-92) is one flat plateau so anything the table
         # does not name keeps its relative shading when it turns to dust;
         # the ramp in from 40 walks the dirt band into the same register.
@@ -153,8 +157,7 @@ def retint(rgb, theme):
     return (round(r2 * 255), round(g2 * 255), round(b2 * 255))
 
 
-def main():
-    theme = THEMES[THEME]
+def write(name, theme):
     img = Image.open(SRC).convert("RGBA")
     px = img.load()
     cache = {}
@@ -169,13 +172,20 @@ def main():
                 out = retint(key, theme)
                 cache[key] = out
             px[x, y] = (out[0], out[1], out[2], a)
-    os.makedirs(os.path.dirname(DST), exist_ok=True)
-    img.save(DST)
-    print(f"wrote {DST} ({img.width}x{img.height}) theme={THEME}")
-    for name, rgb in [("grass", (0x85, 0xA6, 0x43)), ("dirt", (0xC4, 0xB2, 0x53)),
-                      ("sand", (0xC9, 0xB2, 0x66)), ("tuft", (0x7E, 0x9E, 0x3F))]:
-        print(f"  {name}: #{rgb[0]:02X}{rgb[1]:02X}{rgb[2]:02X} -> "
+    dst = theme["dst"]
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    img.save(dst)
+    print(f"wrote {dst} ({img.width}x{img.height}) theme={name}")
+    for label, rgb in [("grass", (0x85, 0xA6, 0x43)), ("dirt", (0xC4, 0xB2, 0x53)),
+                       ("sand", (0xC9, 0xB2, 0x66)), ("tuft", (0x7E, 0x9E, 0x3F))]:
+        print(f"  {label}: #{rgb[0]:02X}{rgb[1]:02X}{rgb[2]:02X} -> "
               f"#{'%02X%02X%02X' % retint(rgb, theme)}")
+
+
+def main():
+    for name, theme in THEMES.items():
+        if ONLY is None or ONLY == name:
+            write(name, theme)
 
 
 if __name__ == "__main__":

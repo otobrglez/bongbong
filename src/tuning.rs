@@ -1463,7 +1463,7 @@ tunables! {
         /// Never 1.0: a tuft that disappears entirely reads as a hole in
         /// the field rather than as matted grass.
         grass_crush_flatten: f32 = 0.78 in 0.0 ..= 0.95;
-        /// Straw specks a tank kicks up per second per grass cell it is
+        /// Leaf or straw specks a tank kicks up per second per grass cell it is
         /// crossing (`fx.rs`, scaled by `fx_density` like every other
         /// emitter). Zero turns the rustle off.
         grass_rustle_rate: f32 = 14.0 in 0.0 ..= 120.0;
@@ -1487,8 +1487,8 @@ tunables! {
         /// where a hashed value noise at the cell corners crosses this
         /// coverage, and resolved through the pack's own corner autotile
         /// so every edge is hand-painted (`ground::SAND_CORNER`). Never
-        /// beside a road cell. 0 turns them off - the plain fill the
-        /// meadow theme wants.
+        /// beside a road cell, and only on a theme that asks for them
+        /// (`map::Theme::drifts` - the desert); 0 turns them off there too.
         ground_drift_cover: f32 = 0.32 in 0.0 ..= 1.0 @ Restart;
         /// The patches' scale: the noise lattice pitch in cells. Larger
         /// means fewer, bigger drifts.

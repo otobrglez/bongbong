@@ -74,7 +74,9 @@ pub struct Textures<'a> {
     /// holds minigun ammo - see `tank::draw_minigun_mount`. One shared
     /// texture for every chassis (unlike `tanks` above), not a sheet.
     pub minigun_mount: &'a Texture2D,
-    /// static/nature_sheet.png - tall grass (grass.rs).
+    /// The tall-grass sheet of the round's map theme
+    /// (`map::Theme::grass_texture_path`, grass.rs); `ground` above is the
+    /// theme's ground tileset the same way. `app.rs` picks both per frame.
     pub grass: &'a Texture2D,
     /// static/trees_sheet.png - the two tree species (docs/TREES_SPEC.md).
     pub trees: &'a Texture2D,

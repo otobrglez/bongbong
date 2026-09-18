@@ -133,6 +133,80 @@ impl CellObject {
     }
 }
 
+/// The battlefield's look: which retint of the ground tileset and which
+/// tall-grass sheet a round draws with (TOML: a top-level `theme =
+/// "desert"`). Purely presentational - the simulation, the nav grid and
+/// the linter never read it - so two maps that differ only in theme play
+/// identically. Absent means `Grass`, so every older file parses
+/// unchanged. Both sheets of every theme ship in every build
+/// (`ground_texture_path`/`grass_texture_path` name them), and `app.rs`
+/// picks the pair by the live map each frame, so the builder can switch a
+/// map's theme and see it at once. New themes (ice is the obvious next
+/// one) are one variant plus one retint curve and one grass species set.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    #[default]
+    Grass,
+    Desert,
+}
+
+impl Theme {
+    /// Every theme, in the order the builder's THEME row cycles them.
+    pub const ALL: [Theme; 2] = [Theme::Grass, Theme::Desert];
+
+    /// The TOML spelling, also the dev server's and the builder's.
+    pub fn name(self) -> &'static str {
+        match self {
+            Theme::Grass => "grass",
+            Theme::Desert => "desert",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Theme> {
+        Theme::ALL.iter().copied().find(|t| t.name() == s)
+    }
+
+    /// The retinted Puny World tileset `ground.rs` blits from
+    /// (`tools/retint_ground.py`, one file per theme).
+    pub fn ground_texture_path(self) -> &'static str {
+        match self {
+            Theme::Grass => "static/punyworld/punyworld-overworld-tileset.png",
+            Theme::Desert => "static/punyworld/punyworld-overworld-tileset-desert.png",
+        }
+    }
+
+    /// The tall-grass sheet (`tools/spritegen/gen_grass.py`, one per theme).
+    pub fn grass_texture_path(self) -> &'static str {
+        match self {
+            Theme::Grass => "static/nature_sheet.png",
+            Theme::Desert => "static/nature_sheet_desert.png",
+        }
+    }
+
+    /// Whether `ground::build` drifts the pack's sand tiles over the open
+    /// floor. Only where the retint makes them a near tone of the fill
+    /// (the desert's hardpan): on the grass retint they are a khaki that
+    /// reads as dirt patches, which the object-driven road placement
+    /// deliberately replaced (docs/GROUND_SPEC.md §5).
+    pub fn drifts(self) -> bool {
+        matches!(self, Theme::Desert)
+    }
+
+    /// The tint a tall-grass cell's flecks and the builder's grass icon
+    /// use for the floor under the tufts: the theme's fill tone.
+    pub fn floor_color(self) -> (u8, u8, u8) {
+        match self {
+            Theme::Grass => (0x61, 0x95, 0x41),
+            Theme::Desert => (0xCC, 0xB3, 0x85),
+        }
+    }
+}
+
+fn is_default_theme(t: &Theme) -> bool {
+    *t == Theme::Grass
+}
+
 /// A saved battlefield layout. Keys are `"<col>,<row>"` grid-cell strings
 /// (TOML tables require string keys) - only occupied cells are stored, so a
 /// mostly-empty map stays a small file.
@@ -164,6 +238,11 @@ pub struct MapFile {
     /// means a random roll; `--tank2` outranks it.
     #[serde(default)]
     pub tank2: Option<TankKind>,
+    /// The look (TOML: a top-level `theme = "grass"|"desert"`, the MAP
+    /// panel's THEME row). Absent means grass, and grass is not written
+    /// back, so older files re-save unchanged.
+    #[serde(default, skip_serializing_if = "is_default_theme")]
+    pub theme: Theme,
     /// The `[mission]` table - what ends the round (docs/maps-to-levels.md).
     /// Absent means Protect.
     #[serde(default)]
@@ -223,6 +302,7 @@ impl MapFile {
             tanks: None,
             tank: None,
             tank2: None,
+            theme: Theme::default(),
             mission: MissionConfig::default(),
             spawn: SpawnConfig::default(),
             size: None,
@@ -429,6 +509,7 @@ pub fn maps_dir() -> PathBuf {
 /// stand in on native for a checkout without a `maps/` directory.
 pub const SHIPPED_MAPS: &[(&str, &str)] = &[
     ("default", include_str!("../maps/default.toml")),
+    ("default-desert", include_str!("../maps/default-desert.toml")),
     ("hunt-basic", include_str!("../maps/missions/hunt-basic.toml")),
     ("waves-basic", include_str!("../maps/missions/waves-basic.toml")),
 ];
@@ -530,6 +611,24 @@ mod toml_tests {
         assert_eq!(back.name, None, "name is not part of the file");
         assert_eq!(back.mission, map.mission, "the mission table changed");
         assert_eq!(back.spawn, map.spawn, "the spawn table changed");
+    }
+
+    #[test]
+    fn theme_round_trips_and_defaults_to_grass() {
+        let map = MapFile::from_toml_str("version = 1\n").unwrap();
+        assert_eq!(map.theme, Theme::Grass);
+        assert!(!map.to_toml_string().unwrap().contains("theme"), "the default is not written back");
+        let map = MapFile::from_toml_str("version = 1\ntheme = \"desert\"\ncells.\"1,1\" = { kind = \"road\" }\n").unwrap();
+        assert_eq!(map.theme, Theme::Desert);
+        let text = map.to_toml_string().unwrap();
+        assert!(text.contains("theme = \"desert\""), "{text}");
+        assert_eq!(MapFile::from_toml_str(&text).unwrap().theme, Theme::Desert);
+        assert!(MapFile::from_toml_str("version = 1\ntheme = \"lava\"\n").is_err(), "an unknown theme is a parse error");
+        for t in Theme::ALL {
+            assert_eq!(Theme::parse(t.name()), Some(t));
+        }
+        let desert = open_map("default-desert").unwrap();
+        assert_eq!(desert.theme, Theme::Desert);
     }
 
     #[test]

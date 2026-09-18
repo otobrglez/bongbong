@@ -225,8 +225,9 @@ fn drift_noise(seed: u64, vx: i32, vy: i32, period: f32) -> f32 {
 }
 
 /// Roll this round's ground layout: grass everywhere, sand drifted over it
-/// in soft patches (`ground_drift_cover` of the open floor, none touching a
-/// road cell), then road painted at exactly `road_cells` (world positions -
+/// in soft patches when `drifts` is set (`map::Theme::drifts` -
+/// `ground_drift_cover` of the open floor, none touching a road cell), then
+/// road painted at exactly `road_cells` (world positions -
 /// typically every static obstacle tile's own position plus the player
 /// fortress's `B`/`O` interior cells, see `Game::init`) and nowhere else. `width`/`height` are the same
 /// playable-area extents `Game::init` already threads through everything
@@ -239,7 +240,7 @@ fn drift_noise(seed: u64, vx: i32, vy: i32, period: f32) -> f32 {
 /// every real caller's positions are already clamped inside the
 /// battlefield, but not asserted here) is silently ignored rather than
 /// panicking.
-pub fn build(width: f32, height: f32, seed: u64, road_cells: &[Position], wall_cells: &[Position]) -> GroundGrid {
+pub fn build(width: f32, height: f32, seed: u64, road_cells: &[Position], wall_cells: &[Position], drifts: bool) -> GroundGrid {
     // +1 over the plain `ceil(width / T)` cell count: since cells are
     // centered rather than top-left-aligned (see module doc comment), the
     // last cell's own right/bottom half-tile can fall short of `width`/
@@ -271,7 +272,7 @@ pub fn build(width: f32, height: f32, seed: u64, road_cells: &[Position], wall_c
     // patch would show a fringe of the wrong tone along it. The patches
     // live in the open instead, which is also where they read.
     let t = tuning();
-    let cover = t.ground_drift_cover.clamp(0.0, 1.0);
+    let cover = if drifts { t.ground_drift_cover.clamp(0.0, 1.0) } else { 0.0 };
     let period = t.ground_drift_scale.max(1.0);
     let drift_vertex = |m: &[Material], vx: i32, vy: i32| -> bool {
         if cover <= 0.0 {

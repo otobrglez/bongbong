@@ -1008,7 +1008,7 @@ impl Game {
         // paint dirt underfoot, and passed separately they cast the baked
         // shading that makes a wall look like it is standing on the floor
         // rather than pasted onto it.
-        self.ground = crate::ground::build(width, height, rng.random(), &road_cells, &wall_positions);
+        self.ground = crate::ground::build(width, height, rng.random(), &road_cells, &wall_positions, self.map.theme.drifts());
 
         self.rng = Some(rng);
         // Not cleared here: a restart mid-`update` (R key, round end) still
