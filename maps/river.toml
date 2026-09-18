@@ -1,0 +1,97 @@
+# River demo: a stream one cell wide winds down the map into a lake and out
+# again, a brook feeds a two-cell pond, and a road crosses the outflow. Water
+# is ground - tanks cross it - so the layout plays like open field.
+version = 1
+tanks = 4
+
+cells."16,0" = { kind = "water" }
+cells."16,1" = { kind = "water" }
+cells."16,2" = { kind = "water" }
+cells."17,2" = { kind = "water" }
+cells."24,2" = { kind = "pickup", pickup = "ammo" }
+cells."30,2" = { kind = "tall_grass" }
+cells."31,2" = { kind = "tall_grass" }
+cells."17,3" = { kind = "water" }
+cells."27,3" = { kind = "water" }
+cells."28,3" = { kind = "water" }
+cells."30,3" = { kind = "tall_grass" }
+cells."31,3" = { kind = "tall_grass" }
+cells."17,4" = { kind = "water" }
+cells."18,4" = { kind = "water" }
+cells."23,4" = { kind = "water" }
+cells."24,4" = { kind = "water" }
+cells."25,4" = { kind = "water" }
+cells."26,4" = { kind = "water" }
+cells."27,4" = { kind = "water" }
+cells."28,4" = { kind = "water" }
+cells."5,5" = { kind = "wall", material = "brick" }
+cells."6,5" = { kind = "wall", material = "brick" }
+cells."7,5" = { kind = "wall", material = "brick" }
+cells."18,5" = { kind = "water" }
+cells."27,5" = { kind = "water" }
+cells."28,5" = { kind = "water" }
+cells."5,6" = { kind = "wall", material = "brick" }
+cells."6,6" = { kind = "wall", material = "brick" }
+cells."7,6" = { kind = "wall", material = "brick" }
+cells."16,6" = { kind = "water" }
+cells."17,6" = { kind = "water" }
+cells."18,6" = { kind = "water" }
+cells."19,6" = { kind = "water" }
+cells."20,6" = { kind = "water" }
+cells."21,6" = { kind = "water" }
+cells."15,7" = { kind = "water" }
+cells."16,7" = { kind = "water" }
+cells."17,7" = { kind = "water" }
+cells."18,7" = { kind = "water" }
+cells."19,7" = { kind = "water" }
+cells."20,7" = { kind = "water" }
+cells."21,7" = { kind = "water" }
+cells."3,8" = { kind = "start" }
+cells."12,8" = { kind = "tree" }
+cells."15,8" = { kind = "water" }
+cells."16,8" = { kind = "water" }
+cells."17,8" = { kind = "water" }
+cells."18,8" = { kind = "water" }
+cells."19,8" = { kind = "water" }
+cells."20,8" = { kind = "water" }
+cells."21,8" = { kind = "water" }
+cells."26,8" = { kind = "sandbag" }
+cells."30,8" = { kind = "enemy_frog" }
+cells."3,9" = { kind = "frog" }
+cells."11,9" = { kind = "pine" }
+cells."15,9" = { kind = "water" }
+cells."16,9" = { kind = "water" }
+cells."17,9" = { kind = "water" }
+cells."18,9" = { kind = "water" }
+cells."19,9" = { kind = "water" }
+cells."20,9" = { kind = "water" }
+cells."26,9" = { kind = "sandbag" }
+cells."18,10" = { kind = "water" }
+cells."17,11" = { kind = "water" }
+cells."18,11" = { kind = "water" }
+cells."9,12" = { kind = "road" }
+cells."10,12" = { kind = "road" }
+cells."11,12" = { kind = "road" }
+cells."12,12" = { kind = "road" }
+cells."13,12" = { kind = "road" }
+cells."14,12" = { kind = "road" }
+cells."15,12" = { kind = "road" }
+cells."16,12" = { kind = "road" }
+cells."17,12" = { kind = "water" }
+cells."18,12" = { kind = "road" }
+cells."19,12" = { kind = "road" }
+cells."20,12" = { kind = "road" }
+cells."21,12" = { kind = "road" }
+cells."22,12" = { kind = "road" }
+cells."23,12" = { kind = "road" }
+cells."24,12" = { kind = "road" }
+cells."25,12" = { kind = "road" }
+cells."26,12" = { kind = "road" }
+cells."17,13" = { kind = "water" }
+cells."20,13" = { kind = "pickup", pickup = "shield" }
+cells."10,14" = { kind = "pickup", pickup = "health" }
+cells."16,14" = { kind = "water" }
+cells."17,14" = { kind = "water" }
+cells."24,14" = { kind = "tree" }
+cells."16,15" = { kind = "water" }
+cells."16,16" = { kind = "water" }

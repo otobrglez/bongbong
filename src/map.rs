@@ -40,6 +40,16 @@ pub const CURRENT_VERSION: u32 = 1;
 pub enum CellObject {
     Wall { material: Material },
     Road,
+    /// Water: a ground cell painted like road. Its shape comes from the
+    /// cells around it (`ground::Layout`): a line of single cells is a
+    /// river, a block two or more wide a lake. The rules follow the shape
+    /// (docs/water.md): open lake water is deep - a wall to hulls, nothing
+    /// to shots - and every other water cell is a ford that slows a hull,
+    /// loosens its grip and, in a north/south stream, carries it
+    /// downstream; fire never takes on it, frogs hop toward it, and the
+    /// AI's router prices a ford and walls off the deep. Not an
+    /// `Obstacle`: deep water is static colliders spawned by `Game::init`.
+    Water,
     Frog,
     /// Player 1's start - singleton like `Frog`. A map without one spawns
     /// player 1 at the nearest free cell to the centre.
@@ -459,7 +469,7 @@ impl MapFile {
     /// starting point, so this only matters as a bound against a
     /// pathological future map, not something normal play ever brushes up
     /// against.
-    const NEAREST_FREE_CELL_MAX_RADIUS: i32 = 64;
+    pub(crate) const NEAREST_FREE_CELL_MAX_RADIUS: i32 = 64;
 
     /// `(col, row)` if it holds nothing solid, else the nearest cell to it
     /// (by expanding ring, closest first) that doesn't - only walls and
@@ -706,6 +716,7 @@ cells."4,4" = { kind = "sandbag" }
 cells."5,4" = { kind = "barrel" }
 cells."6,4" = { kind = "fence" }
 cells."7,4" = { kind = "road" }
+cells."8,4" = { kind = "water" }
 "#;
         let map = MapFile::from_toml_str(text).unwrap();
         assert_eq!(map.cell(4, 4).and_then(|c| c.material()), Some(Material::Sandbag));
@@ -714,6 +725,9 @@ cells."7,4" = { kind = "road" }
         assert!(map.cell(7, 4).is_some_and(|c| !c.is_solid()), "road is not solid");
         assert_ne!(map.nearest_free_cell(5, 4), (5, 4), "a barrel cell blocks a spawn");
         assert_eq!(map.nearest_free_cell(7, 4), (7, 4));
+        assert_eq!(map.cell(8, 4), Some(&CellObject::Water));
+        assert!(!CellObject::Water.is_solid(), "water is ground, like road");
+        assert_eq!(map.nearest_free_cell(8, 4), (8, 4), "a tank can stand in water");
         let back = MapFile::from_toml_str(&map.to_toml_string().unwrap()).unwrap();
         for (col, row, cell) in map.iter_cells() {
             assert!(back.cell(col, row) == Some(cell), "cell {col},{row} changed");

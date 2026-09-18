@@ -1493,6 +1493,48 @@ tunables! {
         /// The patches' scale: the noise lattice pitch in cells. Larger
         /// means fewer, bigger drifts.
         ground_drift_scale: f32 = 5.0 in 1.0 ..= 20.0 @ Restart;
+        /// Seconds each of the pack's four water frames stays up
+        /// (`ground::WATER_FRAMES`): the shimmer on shores and streams.
+        /// The pack's own timing is 0.1.
+        water_frame_seconds: f32 = 0.14 in 0.02 ..= 1.0;
+        /// How fast the current's marks drift down the map over open lake
+        /// water and along north/south streams, world px per second
+        /// (`ground::draw_current`). Zero holds them still.
+        water_flow_speed: f32 = 18.0 in 0.0 ..= 200.0;
+        /// Marks per column of water. Zero turns the current off and
+        /// leaves the pack's shimmer.
+        water_flow_lanes: i32 = 2 in 0 ..= 6;
+
+        // --- what water does to a hull (docs/water.md) ---
+        /// A ford's pace: the fraction of its top speed and of
+        /// `tank_accel_force` a hull in shallow water gets, so it wades
+        /// rather than drives and a hull entering at speed is pulled down
+        /// to the wading pace. Deep water is not scaled, it is a wall.
+        water_speed_factor: f32 = 0.55 in 0.05 ..= 1.0;
+        /// A ford's grip: the fraction of `tank_turn_grip_force` a hull in
+        /// shallow water keeps, so a turn sloshes wide and momentum
+        /// carries it.
+        water_grip_factor: f32 = 0.5 in 0.0 ..= 1.0;
+        /// The current: how fast the water in a stream joined north or
+        /// south moves down the map, px/s. A hull in it drives relative to
+        /// the water (`drive_tank_with`), so one that stops drifts south at
+        /// this speed and one crossing has to aim upstream. Zero turns it
+        /// off.
+        water_current_speed: f32 = 28.0 in 0.0 ..= 200.0;
+        /// What a step into a ford costs the AI's router, in dry steps
+        /// (`pathfind::Grid::weigh`): 1 makes water free, more sends a tank
+        /// round a river whenever the detour is shorter than the extra
+        /// this charges. Deep water is blocked outright.
+        water_ford_path_cost: i32 = 3 in 1 ..= 20 @ Restart;
+        /// Seconds a hull leaves wet tread marks after wading out. The
+        /// marks are darker (`water_wet_track_darken` times the dry
+        /// opacity) and fade over this same time.
+        water_wet_track_seconds: f32 = 2.5 in 0.0 ..= 20.0;
+        /// How much darker a wet tread mark is than a dry one.
+        water_wet_track_darken: f32 = 1.7 in 1.0 ..= 3.0;
+        /// Droplets a wading hull throws per second at full speed (fx.rs,
+        /// scaled by `fx_density`); zero turns the spray off.
+        water_spray_rate: f32 = 45.0 in 0.0 ..= 300.0;
         /// World px of travel between hull tread-animation frame advances
         /// (independent of the ground-decal spacing below).
         tank_hull_track_frame_distance: f32 = 8.0 in 1.0 ..= 64.0;

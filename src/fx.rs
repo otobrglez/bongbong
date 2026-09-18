@@ -15,7 +15,7 @@
 //! nobody can see, and keeping the additive kinds in one contiguous block
 //! matters far more for the web build than the shape of each speck does.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rand::RngExt;
 use sola_raylib::prelude::*;
@@ -37,6 +37,9 @@ pub enum ParticleKind {
     Smoke,
     /// A mote off a fire: rises, flickers, additive.
     Ember,
+    /// A droplet thrown up by a hull wading (docs/water.md): arcs up and
+    /// falls back, gone the moment it lands - water does not bounce.
+    Spray,
 }
 
 impl ParticleKind {
@@ -74,6 +77,9 @@ pub struct Fx {
     /// embers a second at 120fps owes 0.18 of an ember per frame, so each
     /// source keeps its own remainder, keyed by a hash of its position.
     accum: HashMap<u32, f32>,
+    /// Owner slots of the hulls that were wading last frame, so the frame
+    /// one wades in gets a splash rather than only the running spray.
+    wading: HashSet<usize>,
 }
 
 impl Fx {
@@ -87,6 +93,7 @@ impl Fx {
     pub fn clear(&mut self) {
         self.particles.clear();
         self.accum.clear();
+        self.wading.clear();
     }
 
     fn push(&mut self, p: Particle) {
@@ -164,6 +171,7 @@ impl Fx {
                 ParticleKind::Dust => (tuning().dust_lifetime, FX_GRID * 2.0, 0.0),
                 ParticleKind::Smoke => (tuning().smoke_lifetime, FX_GRID * 2.0, 0.0),
                 ParticleKind::Ember => (tuning().ember_lifetime, FX_GRID, 0.0),
+                ParticleKind::Spray => (tuning().chip_lifetime, FX_GRID, -rng.random_range(50.0..130.0)),
             };
             self.push(Particle {
                 pos: at,
@@ -290,8 +298,14 @@ impl Fx {
                     Event::Hit { target: HitTarget::Obstacle { material }, killed: false, x, y, .. } => {
                         self.tile_chip(material, Position::new(x, y))
                     }
-                    Event::Wreck { x, y, .. } => self.wreck(Position::new(x, y)),
-                    Event::Blast { x, y, chained, drum } => self.blast(Position::new(x, y), chained, drum),
+                    Event::Wreck { x, y, .. } => {
+                        self.wreck(Position::new(x, y));
+                        self.splash_if_wet(game, Position::new(x, y), 14);
+                    }
+                    Event::Blast { x, y, chained, drum } => {
+                        self.blast(Position::new(x, y), chained, drum);
+                        self.splash_if_wet(game, Position::new(x, y), 18);
+                    }
                     // A fuel drum leaving the ground: a spit of sparks and
                     // a puff where it stood.
                     Event::DrumLaunched { x, y, .. } => {
@@ -344,7 +358,33 @@ impl Fx {
     /// burning for a second and a half, not at one instant - so they are
     /// sampled from the world every render frame and rate-limited through
     /// `accum`, which keeps the output smooth at any frame rate.
+    /// A blast or a death on water throws water instead of leaving a
+    /// scorch (docs/water.md).
+    fn splash_if_wet(&mut self, game: &Game, at: Position, n: i32) {
+        if game.water().depth_at(at) != crate::ground::Depth::Dry {
+            self.burst(at, ParticleKind::Spray, self.count(n), 130.0, &[WATER_L, WATER_M, WHITE_T]);
+        }
+    }
+
     fn sample_world(&mut self, game: &Game, dt: f32) {
+        // Spray off a wading hull (docs/water.md): a splash the frame it
+        // wades in, then droplets at a rate that follows its speed.
+        let spray = tuning().water_spray_rate;
+        let mut wading_now = HashSet::new();
+        for (slot, pos, speed) in game.wading() {
+            wading_now.insert(slot);
+            if !self.wading.contains(&slot) {
+                self.burst(pos, ParticleKind::Spray, self.count(10), 80.0, &[WATER_L, WATER_M, WHITE_T]);
+            }
+            if spray > 0.0 && speed > 15.0 {
+                let rate = spray * (speed / 120.0).clamp(0.2, 1.5) * tuning().fx_density;
+                if self.due(0x5A7E_0000 ^ slot as u32, rate, dt) {
+                    self.burst(pos, ParticleKind::Spray, 1, 50.0, &[WATER_L, WATER_M]);
+                }
+            }
+        }
+        self.wading = wading_now;
+
         let (ember_rate, smoke_rate) = (tuning().wood_ember_rate, tuning().wood_smoke_rate);
         for (pos, _elapsed) in game.burning_tiles() {
             let key = crate::blast::seed_at(pos, 1);
@@ -513,6 +553,15 @@ impl Fx {
                     p.z += rise * dt;
                     p.size += growth * dt;
                 }
+                ParticleKind::Spray => {
+                    p.vz += gravity * dt;
+                    p.z -= p.vz * dt;
+                    // Landed: a droplet is gone the moment it meets the
+                    // water again.
+                    if p.z <= 0.0 && p.vz > 0.0 {
+                        return false;
+                    }
+                }
                 _ => {}
             }
             // Exponential, so the slowdown is frame-rate independent - the
@@ -629,6 +678,10 @@ const DEEP_T: Color = Color::new(0x81, 0x2F, 0x27, 255);
 const EMBER_T: Color = Color::new(0xE4, 0x42, 0x19, 255);
 const FIRE_T: Color = Color::new(0xEE, 0xA3, 0x43, 255);
 const WHITE_T: Color = Color::new(0xFF, 0xFF, 0xFF, 255);
+// The ground tileset's own water tones (`ground::WATER_FLOW_MARK` and the
+// flat lake), so spray is the water it came out of.
+const WATER_L: Color = Color::new(0x1D, 0xCC, 0xCB, 255);
+const WATER_M: Color = Color::new(0x04, 0xA0, 0xB4, 255);
 // Foliage. The one place particles are allowed green - it is the same
 // exemption trees_sheet.png/nature_sheet.png take (`just check-sheets`):
 // manufactured objects are never green, vegetation is.

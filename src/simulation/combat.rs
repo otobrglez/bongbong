@@ -390,6 +390,10 @@ pub(super) fn explosion_hit(
 /// rather than sitting still, and the fan stops at a quarter turn either
 /// way - past that a "hop away" would carry it back toward the threat.
 /// `None` only when the frog really is boxed in; the hop is best-effort.
+///
+/// Frogs love water (docs/water.md): the ladder runs twice, first taking
+/// only a landing in water, then any landing. One jitter draw either way,
+/// so a map without water hops exactly as before.
 pub(super) fn frog_hop_target(
     rng: &mut SmallRng,
     frog_pos: Position,
@@ -404,17 +408,20 @@ pub(super) fn frog_hop_target(
         .to_radians();
     let base_angle = away_dir.y.atan2(away_dir.x) + jitter;
     let margin = tuning().frog_hop_bounds_margin;
-    for step in FROG_HOP_DISTANCE_STEPS {
-        for offset_deg in FROG_HOP_ANGLE_FAN_DEG {
-            let angle = base_angle + offset_deg.to_radians();
-            let reach = distance * step;
-            let candidate = Position::new(frog_pos.x + angle.cos() * reach, frog_pos.y + angle.sin() * reach);
-            let in_bounds = candidate.x >= margin
-                && candidate.x <= width - margin
-                && candidate.y >= margin
-                && candidate.y <= height - margin;
-            if in_bounds && terrain.frog_fits(candidate) {
-                return Some(candidate);
+    for wet_only in [true, false] {
+        for step in FROG_HOP_DISTANCE_STEPS {
+            for offset_deg in FROG_HOP_ANGLE_FAN_DEG {
+                let angle = base_angle + offset_deg.to_radians();
+                let reach = distance * step;
+                let candidate = Position::new(frog_pos.x + angle.cos() * reach, frog_pos.y + angle.sin() * reach);
+                let in_bounds = candidate.x >= margin
+                    && candidate.x <= width - margin
+                    && candidate.y >= margin
+                    && candidate.y <= height - margin;
+                let wet = terrain.depth_at(candidate) != crate::ground::Depth::Dry;
+                if in_bounds && (wet || !wet_only) && terrain.frog_fits(candidate) {
+                    return Some(candidate);
+                }
             }
         }
     }
@@ -434,6 +441,27 @@ mod ram_tests {
         };
         tank.body = Some(physics.spawn_tank(tank.position, tank.move_half_extents(false), tank.mass()));
         tank
+    }
+
+    #[test]
+    fn the_frog_hops_into_water_when_the_fan_reaches_any() {
+        let world = hecs::World::new();
+        let (w, h) = (1280.0, 720.0);
+        // A pond east of the frog, just inside the widest leap.
+        let pond: Vec<Position> = (14..=16).flat_map(|c| (10..=12).map(move |r| crate::map::cell_to_world(c, r))).collect();
+        let water = crate::ground::WaterLayout::build(w, h, &[], &pond);
+        let terrain = Terrain::build(&world, w, h, &[], &water);
+        let frog = crate::map::cell_to_world(11, 11);
+        let away = Vector2::new(1.0, 0.0);
+        let mut rng = SmallRng::seed_from_u64(3);
+        let landing = frog_hop_target(&mut rng, frog, away, 96.0, &terrain, w, h).expect("a landing");
+        assert_ne!(water.depth_at(landing), crate::ground::Depth::Dry, "landed in the pond: {landing:?}");
+        // Threat from the east: hopping west finds no water in the fan, so
+        // it lands on dry ground as before.
+        let mut rng = SmallRng::seed_from_u64(3);
+        let landing = frog_hop_target(&mut rng, frog, Vector2::new(-1.0, 0.0), 96.0, &terrain, w, h).expect("a landing");
+        assert_eq!(water.depth_at(landing), crate::ground::Depth::Dry);
+        assert!(landing.x < frog.x);
     }
 
     #[test]

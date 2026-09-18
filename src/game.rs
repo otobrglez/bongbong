@@ -239,7 +239,7 @@ impl Game {
 
             // Ground first - the floor everything else sits on. See
             // ground.rs / docs/GROUND_SPEC.md.
-            crate::ground::draw(&mut d, textures.ground, &self.ground);
+            crate::ground::draw(&mut d, textures.ground, &self.ground, self.time);
             crate::ground::draw_edge_shade(&mut d, screen_width, screen_height);
 
             // Tread marks go down first so tanks and everything else draw on top.

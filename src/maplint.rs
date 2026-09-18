@@ -345,7 +345,9 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
             .map(|o| (o.position, o.hull_size() * 0.5))
             .chain(game.world.query::<&Frog>().iter().map(|fr| {
                 (fr.position, FROG_COLLIDER_HALF_EXTENT.0.max(FROG_COLLIDER_HALF_EXTENT.1))
-            })),
+            }))
+            // Deep water never goes away either (docs/water.md).
+            .chain(game.water().deep_cells().map(|p| (p, crate::OBSTACLE_GRID_SIZE * 0.5))),
     );
     let mut breach_open = vec![false; cols * rows];
     for row in 0..rows {
@@ -1145,6 +1147,30 @@ mod map_lint_tests {
 
     fn has(findings: &[LintFinding], kind: LintKind) -> bool {
         findings.iter().any(|f| f.kind == kind)
+    }
+
+    /// Water is ground: a river across the whole field neither splits the
+    /// playfield nor boxes anything in, and enemies may spawn on it.
+    #[test]
+    fn water_is_open_ground_to_the_planner_and_the_spawner() {
+        let mut map = base_map();
+        for row in 0..23 {
+            map.set_cell(17, row, CellObject::Water);
+        }
+        for col in 14..=20 {
+            for row in 9..=13 {
+                map.set_cell(col, row, CellObject::Water);
+            }
+        }
+        let findings = lint_map(map.clone());
+        dump("river and lake", &findings);
+        assert!(errors(&findings).is_empty(), "a river and a lake lint clean");
+        let game = init_game(map);
+        let (w, h) = game.map.field_size();
+        let grid = game.nav_grid(w, h);
+        assert!(!grid.usable(map::cell_to_world(17, 11)), "the lake's deep middle is a wall to the planner");
+        assert!(grid.usable(map::cell_to_world(17, 4)), "the river is a ford, open to the planner and the spawner");
+        assert!(!grid.boxed_in(map::cell_to_world(17, 4)));
     }
 
     /// The two-player checks: a `start2` sealed off from `start` is an

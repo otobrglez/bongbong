@@ -265,19 +265,19 @@ fn grass_under_the_stream_burns_away_and_stops_concealing() {
     let map = map_with("cells.\"20,13\" = { kind = \"tall_grass\" }\ncells.\"16,13\" = { kind = \"tall_grass\" }\n");
     let mut game = armed_game(&map, 5, 6.0);
     let cell = cell_to_world(20, 13);
-    assert!(Terrain::build(&game.world, W, H, &game.grass_cells).conceals(cell), "grass conceals before the fire");
+    assert!(Terrain::build(&game.world, W, H, &game.grass_cells, &game.water).conceals(cell), "grass conceals before the fire");
     let tufts = game.grass.len();
     assert!(tufts > 0);
 
     let ignite_frames = (tuning().flame_ignite_seconds / DT).ceil() as usize;
     hold(&mut game, ignite_frames + 2);
-    assert!(!Terrain::build(&game.world, W, H, &game.grass_cells).conceals(cell), "a burning cell no longer conceals");
+    assert!(!Terrain::build(&game.world, W, H, &game.grass_cells, &game.water).conceals(cell), "a burning cell no longer conceals");
     assert!(!game.grass_cells.iter().any(|c| c.distance_to(cell) < 1.0));
     assert_eq!(game.grass.len(), tufts, "the tufts stay, as stubs");
     let burnt = game.grass.iter().filter(|g| g.burnt).count();
     assert!(burnt > 0 && burnt < tufts, "the lit cell's tufts charred, the other cell's did not: {burnt}/{tufts}");
     idle(&mut game, 200);
-    assert!(!Terrain::build(&game.world, W, H, &game.grass_cells).conceals(cell), "burnt grass stays gone");
+    assert!(!Terrain::build(&game.world, W, H, &game.grass_cells, &game.water).conceals(cell), "burnt grass stays gone");
 }
 
 // 6. A wood tile rolled non-flammable still ignites under the stream.
