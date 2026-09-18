@@ -290,7 +290,7 @@ cells."10,14" = { kind = "wall", material = "brick" }
 "#,
     );
     let game = game_on(&map, 1);
-    let terrain = Terrain::build(&game.world, W, H, &game.grass_cells);
+    let terrain = Terrain::build(&game.world, W, H, &game.grass_cells, &game.water);
     let across = |row: i32| terrain.line_of_sight(cell_to_world(7, row), cell_to_world(13, row));
     assert!(across(5), "a sandbag is knee-high");
     assert!(across(8), "a fence is see-through");
@@ -1061,6 +1061,7 @@ cells."19,11" = { kind = "tall_grass" }
         max_opacity: 0.5,
         age: -10.0,
         scorched: false,
+        wet: false,
     });
     let tracks_scorched_before = game.tracks.iter().filter(|t| t.scorched).count();
     // Shatter the glass first so its rubble is on the ground before the

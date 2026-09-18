@@ -384,6 +384,6 @@ the wall clock; a round uses `Game::time`).
 
 **Placement**: `build` takes `water_cells` beside `road_cells`
 (`battlefield::MapSpawn::water_cells` from the map, the builder's own cell
-list in `rebuild_ground`). Nothing else in the game knows a cell is water
-— by design for now (the map format says so: "treat it as road"). A
-gameplay effect would start from §7's "what material is here" query.
+list in `rebuild_ground`). The rules read the same `ground::Layout` through
+`ground::WaterLayout` (open water is deep, everything else painted is a
+ford, a north/south stream carries the current) — docs/water.md.

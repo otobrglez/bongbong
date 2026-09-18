@@ -143,7 +143,7 @@ impl Game {
             tank.ease_visual_rotation(f.dt);
             tank.ease_turret_visual_rotation(f.dt);
             tank.ease_ring_position(f.dt);
-            lay_tracks(&mut self.tracks, tank, before);
+            lay_tracks(&mut self.tracks, tank, before, self.water.depth_at(tank.position));
         }
         for (entity, slot) in arrived {
             let (pos, half, mass) =

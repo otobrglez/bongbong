@@ -381,9 +381,11 @@ pickup = "ammo"
   small file.
 - `kind` is one of `"wall" | "road" | "water" | "frog" | "start" | "enemy_frog" |
   "gate" | "pickup" | "sandbag" | "barrel" | "fence" | "oil"` (`water` is
-  ground like `road`; the picture - a river where it is one cell wide, a
+  painted like `road`; the picture - a river where it is one cell wide, a
   lake where it is wider - is decided by `ground::build` from the cells
-  around it, docs/GROUND_SPEC.md §9); `material` is present only when `kind = "wall"` (one
+  around it, docs/GROUND_SPEC.md §9, and the rules follow the picture:
+  open lake water is deep and blocks hulls, everything else is a ford,
+  docs/water.md); `material` is present only when `kind = "wall"` (one
   of `"brick" | "iron" | "wood" | "glass"`); `pickup` is present only when
   `kind = "pickup"` (one of `"health" | "ammo" | "laser" | "minigun" |
   "plasma" | "speedup" | "shield"`); `drum` is optional and only on

@@ -439,6 +439,11 @@ pub struct Game {
     /// Decorative grass/dirt/road layer (`ground::build`), rebuilt each
     /// round; drawn first by `render`.
     pub(crate) ground: crate::ground::GroundGrid,
+    /// The map's water as the rules see it (docs/water.md): what is deep
+    /// (a wall to hulls, spawned as static colliders in `init`), what is a
+    /// ford, where the current runs. Built from the map's cells at the top
+    /// of `init`, before anything is placed.
+    pub(crate) water: crate::ground::WaterLayout,
     /// Fading tread marks, oldest first. Kept out of `world`: pure visual
     /// trail data nothing ever queries alongside another component.
     pub(crate) tracks: Vec<Track>,
@@ -738,6 +743,31 @@ impl Game {
         self.physics_accumulator = 0.0;
         battlefield::spawn_walls(&mut self.physics, width, height);
 
+        // --- Water (docs/water.md) ---
+        // Read off the map's cells alone, before anything is placed: the
+        // player's start, the enemy clearance rolls and the nav grid all
+        // need to know where the deep water is. Deep cells get a static
+        // collider each, seam-closed against their deep neighbours like a
+        // run of wall tiles so a hull slides along a shore without
+        // catching; nothing is spawned in `world`, so `hits::Terrain`
+        // never sees them and every shot flies over.
+        self.water = {
+            let painted = |pick: fn(&CellObject) -> bool| -> Vec<Position> {
+                self.map.iter_cells().filter(|(_, _, o)| pick(o)).map(|(c, r, _)| map::cell_to_world(c, r)).collect()
+            };
+            crate::ground::WaterLayout::build(
+                width,
+                height,
+                &painted(|o| matches!(o, CellObject::Wall { .. } | CellObject::Road)),
+                &painted(|o| matches!(o, CellObject::Water)),
+            )
+        };
+        let deep_cells: HashSet<(i32, i32)> = self.water.deep_grid_cells().collect();
+        for (gx, gy) in self.water.deep_grid_cells() {
+            let half = battlefield::tile_hull_half_extent(&deep_cells, gx, gy, OBSTACLE_GRID_SIZE * 0.5);
+            self.physics.spawn_static(map::cell_to_world(gx, gy), half);
+        }
+
         // --- Player ---
         let row = resolve_player_row(self.player_row_override, tuning().player_tank, self.map.tank, || {
             rng.random_range(0..TANK_VARIANTS)
@@ -748,6 +778,7 @@ impl Game {
             let (center_col, center_row) = map::world_to_cell(Position::new(width / 2.0, height / 2.0));
             self.map.nearest_free_cell(center_col, center_row)
         });
+        let start_cell = dry_cell_near(&self.map, &self.water, start_cell);
         let mut tank = Tank {
             row,
             shell_variant: TANK_SHELL_VARIANT_BY_ROW[row as usize],
@@ -791,7 +822,10 @@ impl Game {
             .flat_map(|c| crate::grass::tufts_for_cell(*c))
             .collect();
         self.grass.sort_by(|a, b| a.base.y.total_cmp(&b.base.y));
-        let obstacle_positions = map_spawn.obstacle_positions;
+        // Deep water counts as terrain for every clearance roll below:
+        // no enemy, frog or bonus spawns in a lake.
+        let mut obstacle_positions = map_spawn.obstacle_positions;
+        obstacle_positions.extend(self.water.deep_cells());
         let wall_positions = map_spawn.wall_positions;
         let map_road_cells = map_spawn.road_cells;
         let map_water_cells = map_spawn.water_cells;
@@ -1091,7 +1125,7 @@ impl Game {
         let mut rng = self.rng.take().expect("rng seeded in init");
         self.time += dt;
         self.tick_timers(dt, &mut rng);
-        let terrain = Terrain::build(&self.world, width, height, &self.grass_cells);
+        let terrain = Terrain::build(&self.world, width, height, &self.grass_cells, &self.water);
         // One nav grid for the whole frame, passed to the phases that need
         // it rather than parked on `Frame` - a borrow living there would
         // alias every `&mut Frame` the other phases take.
@@ -1231,6 +1265,7 @@ impl Game {
             tank.speed_boost_timer = (tank.speed_boost_timer - dt).max(0.0);
             tank.tick_shield(dt);
             tank.burn_timer = (tank.burn_timer - dt).max(0.0);
+            tank.wet_timer = (tank.wet_timer - dt).max(0.0);
             tank.tick_wreck(dt);
             tank.tick_minigun_spin(dt);
             if roll_wreck_col(tank, rng) {
@@ -1489,7 +1524,8 @@ impl Game {
             return;
         }
 
-        drive_tank(&mut self.physics, tank, intent, f.dt);
+        let footing = Footing::at(&self.water, tank.position);
+        drive_tank(&mut self.physics, tank, intent, f.dt, footing);
         tick_queued_shots(&mut self.physics, f, tank, owner);
 
         // A laser or minigun is full-auto while the key is held (still
@@ -1899,7 +1935,8 @@ impl Game {
         for p in &pending {
             let intent = self.commander.apply(p.slot, p.intent);
             with_tank_mut(&self.world, p.entity, |tank| {
-                drive_tank_with(&mut self.physics, tank, intent, f.dt, p.current, p.facing_before);
+                let footing = Footing::at(&self.water, tank.position);
+                drive_tank_with(&mut self.physics, tank, intent, f.dt, p.current, p.facing_before, footing);
             });
         }
     }
@@ -2001,7 +2038,7 @@ impl Game {
         }
         if f.physics_stepped {
             for &(player, before) in &players {
-                with_tank_mut(&self.world, player, |t| lay_tracks(&mut self.tracks, t, before));
+                with_tank_mut(&self.world, player, |t| lay_tracks(&mut self.tracks, t, before, self.water.depth_at(t.position)));
             }
         }
         for (enemy, before) in enemies_before {
@@ -2023,7 +2060,7 @@ impl Game {
                 }
             }
             if f.physics_stepped {
-                with_tank_mut(&self.world, enemy, |t| lay_tracks(&mut self.tracks, t, before));
+                with_tank_mut(&self.world, enemy, |t| lay_tracks(&mut self.tracks, t, before, self.water.depth_at(t.position)));
             }
         }
         // The two players: friendly fire, at the same factor a shell gets.
@@ -2291,7 +2328,9 @@ impl Game {
         f.blast_fx.push(BlastFx::new(center));
         f.impact_flashes.push(Shockwave::new(center));
         self.flash_screen();
-        f.scorches.push(Scorch::new(center));
+        if self.water.depth_at(center) == crate::ground::Depth::Dry {
+            f.scorches.push(Scorch::new(center));
+        }
         self.scorch_tracks(center);
 
         let throw = tuning().wreck_part_throw_px;
@@ -2561,7 +2600,7 @@ impl Game {
             .filter(|o| !o.material.is_tree())
             .map(|o| battlefield::pos_to_cell(o.position))
             .collect();
-        Grid::build(
+        let mut grid = Grid::build(
             width,
             height,
             PATHFIND_CELL_SIZE,
@@ -2587,8 +2626,15 @@ impl Game {
                 // routes around a pool rather than through it. A tiny
                 // half-extent, so only the margin decides how wide the
                 // detour is.
-                .chain(self.fires.iter().map(|fire| (fire.position(), 1.0))),
-        )
+                .chain(self.fires.iter().map(|fire| (fire.position(), 1.0)))
+                // Deep water is a wall (docs/water.md): the same cells the
+                // static colliders stand on, at a cell's half-extent.
+                .chain(self.water.deep_cells().map(|p| (p, OBSTACLE_GRID_SIZE * 0.5))),
+        );
+        // A ford is open but dear: the router wades only when the dry way
+        // round costs more.
+        grid.weigh(self.water.shallow_cells(), tuning().water_ford_path_cost.max(1) as u32);
+        grid
     }
 
     /// Shortest route between two points on this round's nav grid, in
@@ -2673,6 +2719,31 @@ impl Game {
     /// The tall-grass cells a live tank is currently moving through - the
     /// source `fx.rs` samples for the leaf specks a hull kicks up. A parked
     /// tank rustles nothing.
+    /// The map's water as the rules see it (docs/water.md).
+    pub fn water(&self) -> &crate::ground::WaterLayout {
+        &self.water
+    }
+
+    /// Every live hull in a ford this frame: its owner slot, position and
+    /// speed (px/s). What `fx.rs` throws spray from.
+    pub fn wading(&self) -> Vec<(usize, Position, f32)> {
+        let mut out: Vec<(usize, Position, f32)> = self
+            .world
+            .query::<&Tank>()
+            .iter()
+            .filter(|t| !t.is_wreck() && self.water.depth_at(t.position) != crate::ground::Depth::Dry)
+            .map(|t| {
+                let speed = t.body.map_or(0.0, |b| {
+                    let v = self.physics.velocity(b);
+                    (v.x * v.x + v.y * v.y).sqrt()
+                });
+                (t.owner_slot(), t.position, speed)
+            })
+            .collect();
+        out.sort_by_key(|w| w.0);
+        out
+    }
+
     pub fn grass_disturbed(&self) -> Vec<Position> {
         let reach = OBSTACLE_GRID_SIZE * 0.5 + tuning().grass_crush_radius * 0.5;
         let movers: Vec<Position> = self
@@ -2879,9 +2950,40 @@ struct Pending {
     facing_before: f32,
 }
 
-fn drive_tank(physics: &mut Physics, tank: &mut Tank, intent: Intent, dt: f32) {
+/// What the ground under a hull does to its drive this frame
+/// (docs/water.md): dry ground leaves everything at 1 and the water still.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct Footing {
+    /// Fraction of the commanded top speed and of `tank_accel_force` the
+    /// hull gets.
+    pace: f32,
+    /// Fraction of `tank_turn_grip_force` the hull keeps.
+    grip: f32,
+    /// The water's own velocity: the frame the hull drives relative to,
+    /// so a hull that stops in a current drifts with it.
+    flow: Position,
+    /// In water at all - drops a speed boost and wets the tracks.
+    wading: bool,
+}
+
+impl Footing {
+    pub(crate) const DRY: Footing = Footing { pace: 1.0, grip: 1.0, flow: Position::new(0.0, 0.0), wading: false };
+
+    pub(crate) fn at(water: &crate::ground::WaterLayout, pos: Position) -> Footing {
+        match water.depth_at(pos) {
+            crate::ground::Depth::Dry => Footing::DRY,
+            _ => {
+                let t = tuning();
+                let flow = if water.pushes_south(pos) { t.water_current_speed } else { 0.0 };
+                Footing { pace: t.water_speed_factor, grip: t.water_grip_factor, flow: Position::new(0.0, flow), wading: true }
+            }
+        }
+    }
+}
+
+fn drive_tank(physics: &mut Physics, tank: &mut Tank, intent: Intent, dt: f32, footing: Footing) {
     let handle = tank.body.expect("tank should always have a physics body once spawned");
-    drive_tank_with(physics, tank, intent, dt, physics.velocity(handle), tank.rotation)
+    drive_tank_with(physics, tank, intent, dt, physics.velocity(handle), tank.rotation, footing)
 }
 
 /// `drive_tank`, given the body velocity and hull facing as they stood
@@ -2900,6 +3002,14 @@ fn drive_tank(physics: &mut Physics, tank: &mut Tank, intent: Intent, dt: f32) {
 /// undeferred one.
 ///
 /// Every other caller goes through `drive_tank` and reads them itself.
+///
+/// `footing` is the ground's say (docs/water.md): in a ford the top speed,
+/// the drive and the grip are scaled down, and the whole model runs in the water's own
+/// frame - `current` is taken relative to `footing.flow`, so with no
+/// command the hull settles to the water's velocity rather than to rest,
+/// and driving upstream nets the difference. Impulses are deltas, so
+/// nothing else changes.
+#[allow(clippy::too_many_arguments)]
 fn drive_tank_with(
     physics: &mut Physics,
     tank: &mut Tank,
@@ -2907,8 +3017,16 @@ fn drive_tank_with(
     dt: f32,
     current: Position,
     facing_before: f32,
+    footing: Footing,
 ) {
     let handle = tank.body.expect("tank should always have a physics body once spawned");
+    let current = Position::new(current.x - footing.flow.x, current.y - footing.flow.y);
+    if footing.wading {
+        // Water takes the boost: a speed-up ends the moment its hull
+        // wades in, and the marks it leaves on the far bank are wet.
+        tank.speed_boost_timer = 0.0;
+        tank.wet_timer = tuning().water_wet_track_seconds;
+    }
 
     tank.control(intent.move_dir, intent.face);
     tank.ease_visual_rotation(dt);
@@ -2929,8 +3047,8 @@ fn drive_tank_with(
     // Nothing but `simulation::command` ever sets it; the player and every
     // `Ai` leave it at 0, so `scale` is 1.0 and this is a no-op multiply.
     let along_x = tank.facing_along_x();
-    let scale = intent.speed_scale();
-    tank.throttle = scale;
+    let scale = intent.speed_scale() * footing.pace;
+    tank.throttle = intent.speed_scale();
     let (current_on, target_on, current_off) = if along_x {
         (current.x, target.x * scale, current.y)
     } else {
@@ -2940,7 +3058,7 @@ fn drive_tank_with(
     let want_on = target_on - current_on;
     let speeding_up = want_on * current_on >= 0.0;
     let delta_on = if speeding_up {
-        let max_on = tuning().tank_accel_force * tank.speed_factor() / tank.mass() * dt;
+        let max_on = tuning().tank_accel_force * footing.pace * tank.speed_factor() / tank.mass() * dt;
         want_on.clamp(-max_on, max_on)
     } else {
         // Close a rate-controlled fraction of the remaining gap each frame
@@ -2951,7 +3069,7 @@ fn drive_tank_with(
         if remaining_gap.abs() < tuning().tank_decel_snap_px { want_on } else { want_on - remaining_gap }
     };
 
-    let max_off = tuning().tank_turn_grip_force / tank.mass() * dt;
+    let max_off = tuning().tank_turn_grip_force * footing.grip / tank.mass() * dt;
     let delta_off = (-current_off).clamp(-max_off, max_off);
 
     let delta = if along_x {
@@ -2960,6 +3078,34 @@ fn drive_tank_with(
         Position::new(delta_off, delta_on)
     };
     physics.apply_impulse(handle, Position::new(delta.x * tank.mass(), delta.y * tank.mass()));
+}
+
+/// `cell` unless it is deep water, else the nearest map cell (square
+/// rings outward, the map's own `nearest_free_cell` order) that is neither
+/// solid nor deep. A `start` cell can never be water itself (a cell holds
+/// one object), so this only matters for the centre fallback of a map
+/// without one: a lake over the middle of the field spawns the player on
+/// its shore rather than inside the lake's colliders.
+fn dry_cell_near(map: &MapFile, water: &crate::ground::WaterLayout, cell: (i32, i32)) -> (i32, i32) {
+    let deep = |c: i32, r: i32| water.depth_at(map::cell_to_world(c, r)) == crate::ground::Depth::Deep;
+    let solid = |c: i32, r: i32| map.cell(c, r).is_some_and(CellObject::is_solid);
+    if !deep(cell.0, cell.1) {
+        return cell;
+    }
+    for radius in 1..=MapFile::NEAREST_FREE_CELL_MAX_RADIUS {
+        for dy in -radius..=radius {
+            for dx in -radius..=radius {
+                if dx.abs() != radius && dy.abs() != radius {
+                    continue;
+                }
+                let (c, r) = (cell.0 + dx, cell.1 + dy);
+                if !deep(c, r) && !solid(c, r) {
+                    return (c, r);
+                }
+            }
+        }
+    }
+    cell
 }
 
 /// Read a tank's position back from its body; a tank still rolling in has
@@ -3318,8 +3464,11 @@ fn roll_wreck_col(tank: &mut Tank, rng: &mut SmallRng) -> bool {
 /// stationary `before` reads as idle and resets the animation. Marks
 /// follow the raw travel heading (not the snapped hull rotation), so a
 /// real turn traces its real curve and a sideways shove leaves sideways
-/// marks. Stops once the hull is disabled or wrecked.
-fn lay_tracks(tracks: &mut Vec<Track>, tank: &mut Tank, before: Position) {
+/// marks. Stops once the hull is disabled or wrecked. Water takes no
+/// mark (`depth`, the water under the hull): the treads still turn, but
+/// nothing is pressed into a river bed, and the marks laid while
+/// `Tank::wet_timer` runs after wading out are wet ones.
+fn lay_tracks(tracks: &mut Vec<Track>, tank: &mut Tank, before: Position, depth: crate::ground::Depth) {
     if tank.is_wreck() || tank.damage >= TANK_HULL_DISABLED_DAMAGE {
         return;
     }
@@ -3332,6 +3481,10 @@ fn lay_tracks(tracks: &mut Vec<Track>, tank: &mut Tank, before: Position) {
     while tank.hull_anim_accum >= tuning().tank_hull_track_frame_distance {
         tank.hull_anim_accum -= tuning().tank_hull_track_frame_distance;
         tank.hull_frame = (tank.hull_frame + 1) % TANK_HULL_TRACK_COLS.len() as i32;
+    }
+    if depth != crate::ground::Depth::Dry {
+        tank.track_accum = 0.0;
+        return;
     }
     // Unit vector pointing back along this frame's travel.
     let back = Vector2::new((before.x - tank.position.x) / moved, (before.y - tank.position.y) / moved);
@@ -3359,6 +3512,7 @@ fn lay_tracks(tracks: &mut Vec<Track>, tank: &mut Tank, before: Position) {
             max_opacity,
             age: 0.0,
             scorched: false,
+            wet: tank.wet_timer > 0.0,
         });
         tank.track_mark_count += 1;
     }
@@ -3634,6 +3788,186 @@ mod mechanics_tests {
 
     fn step(game: &mut Game, input: Input) {
         game.update(input, 1.0 / 60.0, W, H);
+    }
+
+    /// An empty sandbox with `water` cells: the player starts at (5, 11)
+    /// facing a 5 x 5 lake whose 3 x 3 interior is deep, a north-south
+    /// stream at column 26 from row 3 to row 19, a sideways stream along
+    /// row 4 from column 8 to column 14, and a brick wall at (32, 11)
+    /// beyond the lake for a shell to hit.
+    fn water_map(extra: &str) -> String {
+        let mut map = String::from("version = 1\ntanks = 0\ncells.\"5,11\" = { kind = \"start\" }\ncells.\"32,11\" = { kind = \"wall\", material = \"brick\" }\n");
+        for c in 14..=18 {
+            for r in 9..=13 {
+                map.push_str(&format!("cells.\"{c},{r}\" = {{ kind = \"water\" }}\n"));
+            }
+        }
+        for r in 3..=19 {
+            map.push_str(&format!("cells.\"26,{r}\" = {{ kind = \"water\" }}\n"));
+        }
+        for c in 8..=14 {
+            map.push_str(&format!("cells.\"{c},4\" = {{ kind = \"water\" }}\n"));
+        }
+        map.push_str(extra);
+        map
+    }
+
+    fn sandbox(map: &str) -> Game {
+        let mut game = Game::default();
+        game.seed_override = Some(7);
+        game.level_overrides.mission = Some(Mission::Destroy);
+        game.map = MapFile::from_toml_str(map).expect("test map parses");
+        game.init(W, H);
+        game
+    }
+
+    fn player_pos(game: &Game) -> Position {
+        game.tank_snapshots().iter().find(|t| t.is_player).expect("player").position
+    }
+
+    fn teleport_player(game: &mut Game, pos: Position) {
+        let player = game.player.expect("player");
+        let body = with_tank(&game.world, player, |t| t.body).expect("body");
+        game.physics.set_position(body, pos);
+        with_tank_mut(&game.world, player, |t| t.position = pos);
+    }
+
+    fn drive(game: &mut Game, dir: Option<Dir>, frames: usize) {
+        for _ in 0..frames {
+            let mut input = Input::default();
+            input.player_intent.move_dir = dir;
+            step(game, input);
+        }
+    }
+
+    #[test]
+    fn deep_water_stops_a_hull_but_not_a_shell() {
+        let mut game = sandbox(&water_map(""));
+        assert_eq!(game.water().deep_cells().count(), 9, "the 3 x 3 interior is deep");
+        // Drive east into the lake for a long while: the hull stops at
+        // the deep edge (the deep cells start at column 15, whose left
+        // face is at x = 464) and never gets past it.
+        teleport_player(&mut game, map::cell_to_world(11, 11));
+        drive(&mut game, Some(Dir::Right), 420);
+        let p = player_pos(&game);
+        assert!(p.x < 464.0, "the hull stopped short of the deep water: {p:?}");
+        assert!(p.x > 400.0, "but it did wade into the shore first: {p:?}");
+        assert!((p.y - 352.0).abs() < 8.0, "and slid along nothing: {p:?}");
+        // A shell fired from the same spot crosses the whole lake and
+        // lands on the wall beyond it.
+        let mut input = Input::default();
+        input.player_intent.fire = true;
+        step(&mut game, input);
+        for _ in 0..240 {
+            step(&mut game, Input::default());
+            if game.events().iter().any(|e| matches!(e, Event::Hit { target: HitTarget::Obstacle { .. }, .. })) {
+                return;
+            }
+        }
+        panic!("the shell never reached the wall beyond the lake");
+    }
+
+    #[test]
+    fn a_ford_slows_a_hull_and_takes_no_tread_marks() {
+        // The same drive on dry ground and through the sideways stream
+        // (row 4, columns 8..=14): start two cells short of it and drive
+        // east for two seconds.
+        let mut dry = sandbox(&water_map(""));
+        teleport_player(&mut dry, map::cell_to_world(6, 14));
+        drive(&mut dry, Some(Dir::Right), 120);
+        let dry_dist = player_pos(&dry).x - map::cell_to_world(6, 14).x;
+
+        let mut wet = sandbox(&water_map(""));
+        teleport_player(&mut wet, map::cell_to_world(6, 4));
+        drive(&mut wet, Some(Dir::Right), 120);
+        let wet_dist = player_pos(&wet).x - map::cell_to_world(6, 4).x;
+        assert!(wet_dist < dry_dist * 0.8, "wading is slower: dry {dry_dist:.0} px, wet {wet_dist:.0} px");
+        assert!(wet_dist > dry_dist * 0.3, "but it is not a wall: dry {dry_dist:.0} px, wet {wet_dist:.0} px");
+        assert!(player_pos(&wet).x > map::cell_to_world(8, 4).x, "the hull is in the stream by now");
+        // No mark was pressed into the stream bed; the ones on the bank
+        // before it are dry, since the hull had not waded yet.
+        let stream_left = map::cell_to_world(8, 4).x - 16.0;
+        assert!(wet.tracks.iter().all(|t| t.position.x < stream_left), "no tread mark in the water");
+        assert!(wet.tracks.iter().all(|t| !t.wet));
+        // Wading out again leaves wet marks for a while.
+        drive(&mut wet, Some(Dir::Down), 90);
+        assert!(wet.tracks.iter().any(|t| t.wet), "the marks on the far bank are wet");
+    }
+
+    #[test]
+    fn the_current_carries_an_idle_hull_south_on_a_stream_that_runs_that_way() {
+        let mut game = sandbox(&water_map(""));
+        let start = map::cell_to_world(26, 8);
+        teleport_player(&mut game, start);
+        drive(&mut game, None, 180);
+        let p = player_pos(&game);
+        let expect = tuning().water_current_speed * 3.0;
+        assert!(p.y > start.y + expect * 0.6, "drifted south with the current: {p:?}, start {start:?}");
+        assert!((p.x - start.x).abs() < 4.0, "and only south");
+        // The sideways stream has no current.
+        let mut game = sandbox(&water_map(""));
+        let start = map::cell_to_world(11, 4);
+        teleport_player(&mut game, start);
+        drive(&mut game, None, 180);
+        assert!(player_pos(&game).distance_to(start) < 2.0, "a sideways stream holds still: {:?}", player_pos(&game));
+    }
+
+    #[test]
+    fn water_puts_a_burning_hull_out_and_takes_no_fire() {
+        let mut game = sandbox(&water_map(""));
+        let player = game.player.expect("player");
+        teleport_player(&mut game, map::cell_to_world(11, 4));
+        with_tank_mut(&game.world, player, |t| t.burn_timer = 5.0);
+        step(&mut game, Input::default());
+        assert_eq!(with_tank(&game.world, player, |t| t.burn_timer), 0.0, "the afterburn went out in the stream");
+        // A cell of water refuses to light, a dry one beside it does.
+        let (w, h) = (W, H);
+        let mut f = Frame::new(1.0 / 60.0, w, h, SmallRng::seed_from_u64(1), Terrain::build(&game.world, w, h, &game.grass_cells, &game.water));
+        game.light_cell(&mut f, (10, 4), 3.0, true);
+        game.light_cell(&mut f, (10, 6), 3.0, true);
+        assert_eq!(game.burning_cells().len(), 1, "only the dry cell lit");
+        assert_eq!(game.burning_cells()[0].0, map::cell_to_world(10, 6));
+        assert!(f.events.iter().all(|e| !matches!(e, Event::FireStarted { y, .. } if *y == map::cell_to_world(10, 4).y)));
+    }
+
+    #[test]
+    fn a_start_in_deep_water_spawns_on_the_shore() {
+        // No start cell, so the player falls back to the cell nearest the
+        // centre - (20, 11) on this field - which a 5 x 5 lake makes deep.
+        let mut map = String::from("version = 1\ntanks = 0\n");
+        for c in 18..=22 {
+            for r in 9..=13 {
+                map.push_str(&format!("cells.\"{c},{r}\" = {{ kind = \"water\" }}\n"));
+            }
+        }
+        let game = sandbox(&map);
+        assert_eq!(game.water().depth_at(map::cell_to_world(20, 11)), crate::ground::Depth::Deep);
+        let p = player_pos(&game);
+        assert_eq!(game.water().depth_at(p), crate::ground::Depth::Shallow, "moved to the nearest shore cell: {p:?}");
+        // The shore ring is two cells out, diagonally at most.
+        assert!(p.distance_to(map::cell_to_world(20, 11)) <= 2.0 * OBSTACLE_GRID_SIZE * std::f32::consts::SQRT_2 + 1.0);
+    }
+
+    #[test]
+    fn the_router_prices_a_ford_and_walls_off_deep_water() {
+        // The north-south stream at column 26 spans rows 3..=19 of a
+        // 22.5-row field: going round it from (24, 11) to (28, 11) is far
+        // longer than the ford's price, so the route wades - three dry
+        // steps and one ford.
+        let game = sandbox(&water_map(""));
+        let ford = tuning().water_ford_path_cost as u32;
+        let cost = game.nav_path_cells(map::cell_to_world(24, 11), map::cell_to_world(28, 11), W, H).expect("routes");
+        assert_eq!(cost, 3 + ford);
+        // Straight across the sideways stream is exactly one ford dearer
+        // than a dry run of the same length.
+        let dry = game.nav_path_cells(map::cell_to_world(20, 14), map::cell_to_world(20, 18), W, H).expect("routes");
+        let crossing = game.nav_path_cells(map::cell_to_world(11, 2), map::cell_to_world(11, 6), W, H).expect("routes");
+        assert_eq!(dry, 4);
+        assert_eq!(crossing, dry - 1 + ford);
+        // The lake's deep middle is not routable at all; its shore is.
+        let grid = game.nav_grid(W, H);
+        assert!(!grid.usable(map::cell_to_world(16, 11)));
+        assert!(grid.next_step(map::cell_to_world(11, 11), map::cell_to_world(16, 11)).is_none() || !grid.usable(map::cell_to_world(16, 11)));
     }
 
     #[test]

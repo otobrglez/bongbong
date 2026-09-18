@@ -345,7 +345,9 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
             .map(|o| (o.position, o.hull_size() * 0.5))
             .chain(game.world.query::<&Frog>().iter().map(|fr| {
                 (fr.position, FROG_COLLIDER_HALF_EXTENT.0.max(FROG_COLLIDER_HALF_EXTENT.1))
-            })),
+            }))
+            // Deep water never goes away either (docs/water.md).
+            .chain(game.water().deep_cells().map(|p| (p, crate::OBSTACLE_GRID_SIZE * 0.5))),
     );
     let mut breach_open = vec![false; cols * rows];
     for row in 0..rows {
@@ -1166,9 +1168,9 @@ mod map_lint_tests {
         let game = init_game(map);
         let (w, h) = game.map.field_size();
         let grid = game.nav_grid(w, h);
-        let cell = map::cell_to_world(17, 11);
-        assert!(grid.usable(cell), "the lake's middle is open to the planner and the spawner");
-        assert!(!grid.boxed_in(cell));
+        assert!(!grid.usable(map::cell_to_world(17, 11)), "the lake's deep middle is a wall to the planner");
+        assert!(grid.usable(map::cell_to_world(17, 4)), "the river is a ford, open to the planner and the spawner");
+        assert!(!grid.boxed_in(map::cell_to_world(17, 4)));
     }
 
     /// The two-player checks: a `start2` sealed off from `start` is an

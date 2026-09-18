@@ -40,12 +40,15 @@ pub const CURRENT_VERSION: u32 = 1;
 pub enum CellObject {
     Wall { material: Material },
     Road,
-    /// Water: a ground cell painted like road and, for now, treated
-    /// exactly like one by the game - not solid, no nav effect, tanks
-    /// drive across it. Presentation decides its shape from the cells
-    /// around it (`ground::build`): a line of single cells is a river, a
-    /// block two or more wide a lake, and both animate with the current
-    /// running down the map.
+    /// Water: a ground cell painted like road. Its shape comes from the
+    /// cells around it (`ground::Layout`): a line of single cells is a
+    /// river, a block two or more wide a lake. The rules follow the shape
+    /// (docs/water.md): open lake water is deep - a wall to hulls, nothing
+    /// to shots - and every other water cell is a ford that slows a hull,
+    /// loosens its grip and, in a north/south stream, carries it
+    /// downstream; fire never takes on it, frogs hop toward it, and the
+    /// AI's router prices a ford and walls off the deep. Not an
+    /// `Obstacle`: deep water is static colliders spawned by `Game::init`.
     Water,
     Frog,
     /// Player 1's start - singleton like `Frog`. A map without one spawns
@@ -466,7 +469,7 @@ impl MapFile {
     /// starting point, so this only matters as a bound against a
     /// pathological future map, not something normal play ever brushes up
     /// against.
-    const NEAREST_FREE_CELL_MAX_RADIUS: i32 = 64;
+    pub(crate) const NEAREST_FREE_CELL_MAX_RADIUS: i32 = 64;
 
     /// `(col, row)` if it holds nothing solid, else the nearest cell to it
     /// (by expanding ring, closest first) that doesn't - only walls and
