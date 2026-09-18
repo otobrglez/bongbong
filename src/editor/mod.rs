@@ -23,6 +23,7 @@ use rand::RngExt;
 use sola_raylib::prelude::*;
 
 use crate::canvas::{GpuCanvas, Sheet, Sheets};
+use crate::portal::{draw_portal, portal_icon_source_rec};
 use crate::frog::FrogAnim;
 use crate::ground::{self, GroundGrid};
 use crate::hud::{mode_button_rect, BAR_FILL, DIM, HUD_LABEL_SIZE, HUD_TEXT_SIZE, TEXT};
@@ -128,6 +129,8 @@ pub struct EditorTextures<'a> {
     pub pickup_flamethrower: &'a Texture2D,
     pub pickup_frog_health: &'a Texture2D,
     pub eraser: &'a Texture2D,
+    /// static/portal_sheet.png - the spiral and its bar icon (portal.rs).
+    pub portal: &'a Texture2D,
     pub tanks: &'a Texture2D,
     pub trees: &'a Texture2D,
 }
@@ -144,6 +147,7 @@ impl Sheets for EditorTextures<'_> {
             Sheet::Props => self.props,
             Sheet::Trees => self.trees,
             Sheet::Grass => self.grass,
+            Sheet::Portal => self.portal,
             Sheet::Tanks => self.tanks,
             Sheet::Frog { clip: FrogAnim::Idle, .. } => self.frog_idle,
             Sheet::Pickup(PickupKind::Health) => self.pickup_health,
@@ -226,12 +230,16 @@ pub enum Tool {
     /// Tall grass: cover, not terrain. Any number of cells; not solid, so
     /// it never blocks movement or pathfinding (see `grass.rs`).
     TallGrass,
+    /// A teleport portal anchor - any number, not solid; the network only
+    /// works with two or more (the linter's `portal-alone` names a lone
+    /// one, and the canvas ghosts it).
+    Portal,
     Eraser,
 }
 
 /// Every brush, in bar order: the categories one after another, the
 /// eraser last.
-pub const TOOLS: [Tool; 29] = [
+pub const TOOLS: [Tool; 30] = [
     Tool::Wall(Material::Brick),
     Tool::Wall(Material::Iron),
     Tool::Wall(Material::Wood),
@@ -247,6 +255,7 @@ pub const TOOLS: [Tool; 29] = [
     Tool::TallGrass,
     Tool::OilTrail,
     Tool::Gate,
+    Tool::Portal,
     Tool::Start,
     Tool::Start2,
     Tool::Frog,
@@ -284,6 +293,7 @@ impl Tool {
             Tool::Road => "road",
             Tool::TallGrass => "tall_grass",
             Tool::Gate => "gate",
+            Tool::Portal => "portal",
             Tool::Start => "start",
             Tool::Start2 => "start2",
             Tool::Frog => "frog",
@@ -310,7 +320,7 @@ impl Tool {
         match self {
             Tool::Wall(_) => Some(Category::Wall),
             Tool::Prop(_) | Tool::Drum(_) => Some(Category::Prop),
-            Tool::Road | Tool::TallGrass | Tool::OilTrail | Tool::Gate => Some(Category::Ground),
+            Tool::Road | Tool::TallGrass | Tool::OilTrail | Tool::Gate | Tool::Portal => Some(Category::Ground),
             Tool::Start | Tool::Start2 | Tool::Frog | Tool::EnemyFrog => Some(Category::Actor),
             Tool::Pickup(_) => Some(Category::Pickup),
             Tool::Eraser => None,
@@ -330,6 +340,7 @@ impl Tool {
             Tool::Start2 => Some(CellObject::Start2),
             Tool::EnemyFrog => Some(CellObject::EnemyFrog),
             Tool::Gate => Some(CellObject::Gate),
+            Tool::Portal => Some(CellObject::Portal),
             Tool::Pickup(pickup) => Some(CellObject::Pickup { pickup }),
             Tool::TallGrass => Some(CellObject::TallGrass),
             Tool::Eraser => None,
@@ -1283,6 +1294,10 @@ impl MapEditor {
     ) {
         let (width, height) = (layout.field.w, layout.field.h);
         let cursor = self.cursor_cell(layout);
+        // A clock read, not an input: the builder has no round clock and
+        // this is the one raylib call it makes past drawing, so a placed
+        // portal turns here too.
+        let portal_clock = rl.get_time() as f32;
         let camera = Camera2D {
             offset: layout.field_origin(),
             target: Vector2::new(0.0, 0.0),
@@ -1297,6 +1312,24 @@ impl MapEditor {
                 d.draw_rectangle(0, 0, width as i32, height as i32, Color::WHITE);
             } else {
                 ground::draw(&mut GpuCanvas::new(&mut d, textures), &self.ground);
+            }
+
+            // Portals first, under every other cell: three cells of art on
+            // one anchor cell, and `iter_cells` is row-sorted, so a portal
+            // drawn in the loop would cover a wall placed above it. Ghosted
+            // while the network is inactive (fewer than two), with the
+            // anchor outlined like a gate off its edge - placed, not
+            // usable. `portal_clock` is the only clock the builder has.
+            let portals = self.map.portal_cells();
+            let active = portals.len() >= 2;
+            let tint = if active { Color::WHITE } else { Color::new(255, 255, 255, 110) };
+            for &(col, row) in &portals {
+                let pos = map::cell_to_world(col, row);
+                draw_portal(&mut GpuCanvas::new(&mut d, textures), pos, portal_clock, tint);
+                if !active {
+                    let size = OBSTACLE_GRID_SIZE;
+                    d.draw_rectangle_lines_ex(Rectangle::new(pos.x - size / 2.0, pos.y - size / 2.0, size, size), 2.0, GATE_COLOR);
+                }
             }
 
             for (col, row, obj) in self.map.iter_cells() {
@@ -1371,6 +1404,8 @@ impl MapEditor {
                         let src = Rectangle::new(0.0, 0.0, crate::PICKUP_TEXTURE_SIZE, crate::PICKUP_TEXTURE_SIZE);
                         d.draw_texture_pro(texture, src, dest, origin, 0.0, Color::WHITE);
                     }
+                    // Drawn in the pre-pass above.
+                    CellObject::Portal => {}
                 }
             }
 
@@ -1947,6 +1982,9 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme:
             let center = Position::new(dest.x + dest.width / 2.0, dest.y + dest.height / 2.0);
             draw_gate_chevron(d, center, dest.width, Position::new(1.0, 0.0));
         }
+        Tool::Portal => {
+            d.draw_texture_pro(textures.portal, portal_icon_source_rec(), dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+        }
         Tool::TallGrass => {
             // One tuft from the nature sheet on a patch of the theme's
             // floor, so the icon reads as grass-on-ground rather than
@@ -2112,6 +2150,8 @@ mod editor_tests {
         map.set_cell(21, 11, CellObject::Sandbag);
         map.set_cell(22, 11, CellObject::Barrel { drum: None });
         map.set_cell(23, 11, CellObject::Fence);
+        map.set_cell(10, 5, CellObject::Portal);
+        map.set_cell(30, 5, CellObject::Portal);
 
         let dir = std::env::temp_dir().join(format!("bongbong-editor-test-{}", std::process::id()));
         let path = dir.join("round-trip.toml");
@@ -2128,6 +2168,7 @@ mod editor_tests {
         assert_eq!(back.start2_cell(), Some((32, 11)));
         assert_eq!(back.tank2, Some(TankKind::Scout));
         assert_eq!(back.frog_cell(), Some((35, 11)));
+        assert_eq!(back.portal_cells(), vec![(10, 5), (30, 5)]);
         assert_eq!(back.cells.len(), map.cells.len());
         assert_eq!(back.cell(22, 11).and_then(|c| c.material()), Some(Material::Barrel));
     }
@@ -2217,6 +2258,27 @@ mod editor_tests {
         ed.stroke(&[(10, 5)], true);
         assert_eq!(ed.map().cell(10, 5), None);
         assert!(ed.dirty());
+    }
+
+    /// The portal brush places any number of anchors (a network, not a
+    /// singleton) and follows the toggle-erase rule like every other
+    /// multi-instance brush; its cell reads back by its own name.
+    #[test]
+    fn portal_brush_is_multi_instance_and_toggle_erases() {
+        let mut ed = MapEditor::new(MapFile::new());
+        ed.select_tool(Tool::Portal);
+        assert!(!Tool::Portal.is_singleton());
+        assert_eq!(Tool::parse("portal"), Some(Tool::Portal));
+        assert_eq!(Tool::Portal.category(), Some(Category::Ground));
+        ed.stroke(&[(10, 5)], false);
+        ed.stroke(&[(30, 5)], false);
+        assert_eq!(ed.map().portal_cells(), vec![(10, 5), (30, 5)]);
+        assert_eq!(cell_label(&CellObject::Portal), "portal");
+        // A stroke starting on a portal erases it and nothing else.
+        ed.stroke(&[(10, 5), (11, 5)], false);
+        assert_eq!(ed.map().portal_cells(), vec![(30, 5)]);
+        assert_eq!(ed.map().cell(11, 5), None);
+        assert_eq!(ed.history().undo_depth(), 3);
     }
 
     #[test]

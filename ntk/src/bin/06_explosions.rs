@@ -68,6 +68,7 @@ fn main() {
     let minigun_bullets = load(&mut rl, "static/minigun_bullets.png");
     let grass = load(&mut rl, "static/nature_sheet.png");
     let trees = load(&mut rl, "static/trees_sheet.png");
+    let portal = load(&mut rl, "static/portal_sheet.png");
     let minigun_mount = load(&mut rl, "static/minigun_mount.png");
     let damage = load(&mut rl, "static/damage.png");
     let tracks = load(&mut rl, "static/tracks.png");
@@ -163,6 +164,7 @@ fn main() {
             minigun_bullets: &minigun_bullets,
             grass: &grass,
             trees: &trees,
+            portal: &portal,
             minigun_mount: &minigun_mount,
             damage: &damage,
             tracks: &tracks,
@@ -227,6 +229,7 @@ fn main() {
                             ground: &ground,
                             grass: &grass,
                             trees: &trees,
+                            portal: &portal,
                             frog_idle: &frog_idle,
                             pickup_health: &pickup_health,
                             pickup_ammo: &pickup_ammo,

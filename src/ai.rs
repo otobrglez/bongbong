@@ -595,6 +595,30 @@ impl Ai {
         self.hit_alert_timer = tuning().enemy_hit_alert_seconds;
     }
 
+    /// The tank was just moved through a portal (`Game::portal_phase`).
+    /// Everything `think` measured at the old position is void: the
+    /// heading commitment pointed at the entrance, the stuck clock's
+    /// baseline is a screen away, the waypoint and any breach belong to
+    /// the room it left. Clearing them makes the next tick re-plan from
+    /// where it stands. Alertness, retreat state, the fire timer, the
+    /// escape count and the target player are about the fight, not the
+    /// place, and stay.
+    pub(crate) fn on_teleported(&mut self) {
+        self.retarget_timer = 0.0;
+        self.committed_dir = None;
+        self.dir_hold = 0.0;
+        self.dodge_dir = None;
+        self.dodge_timer = 0.0;
+        self.yield_timer = 0.0;
+        self.last_move_dir = None;
+        self.last_position = None;
+        self.progress_avg = None;
+        self.stuck_timer = 0.0;
+        self.wander_pocketed = false;
+        self.wall_ahead_timer = 0.0;
+        self.breach = None;
+    }
+
     /// Choose a heading toward `target` - or, if pathfinding can't reach
     /// `target` at all, toward a local fallback waypoint instead (see
     /// `wander`), so this always returns a real heading. `margin` is how

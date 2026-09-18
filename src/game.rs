@@ -10,6 +10,7 @@ use sola_raylib::prelude::*;
 use crate::bullet::{Bullet, BulletState, draw_bullet, draw_bullet_shadow};
 use crate::damage_stage::draw_damage;
 use crate::canvas::{Canvas, GpuCanvas, Sheet, Sheets};
+use crate::portal::{draw_portal, draw_portal_glow};
 use crate::frog::{FrogVariantTextures, draw_frog, draw_frog_ring};
 use crate::laser::draw_laser_beam;
 use crate::blast::{draw_blast, draw_blast_glow, draw_burning_hull_glow, draw_fire_glow, draw_flame_glow, draw_fuse_glow, draw_ground_fire, draw_scorch};
@@ -81,6 +82,8 @@ pub struct Textures<'a> {
     pub grass: &'a Texture2D,
     /// static/trees_sheet.png - the two tree species (docs/TREES_SPEC.md).
     pub trees: &'a Texture2D,
+    /// static/portal_sheet.png - the turning spiral (portal.rs).
+    pub portal: &'a Texture2D,
 }
 
 /// The game's `Sheet` lookup: what a `GpuCanvas` over these textures blits
@@ -98,6 +101,7 @@ impl Sheets for Textures<'_> {
             Sheet::MinigunMount => self.minigun_mount,
             Sheet::Tracks => self.tracks,
             Sheet::BarrelExplosion => self.barrel_explosion,
+            Sheet::Portal => self.portal,
             Sheet::Pickup(kind) => match kind {
                 PickupKind::Health => self.pickup_health,
                 PickupKind::Ammo => self.pickup_ammo,
@@ -208,6 +212,13 @@ impl Game {
         // Unlit oil trails: puddles on the ground, under everything.
         for &(col, row) in &self.oil_cells {
             draw_oil_cell(c, crate::map::cell_to_world(col, row));
+        }
+        // Portals last on the floor: over tracks and scorches, under
+        // everything that stands. Only an active network draws at all.
+        if self.portals_active() {
+            for &at in &self.portals {
+                draw_portal(c, at, self.time, Color::WHITE);
+            }
         }
     }
 
@@ -466,6 +477,12 @@ impl Game {
             // A barrel whose fuse is lit pulses (additive, so it reads as
             // light on the drum rather than a disc over it).
             d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+                // An active portal glows from below its spiral.
+                if self.portals_active() {
+                    for &at in &self.portals {
+                        draw_portal_glow(&mut bd, at, self.time);
+                    }
+                }
                 for obstacle in self.world.query::<&Obstacle>().iter() {
                     if obstacle.fuse.is_some() {
                         draw_fuse_glow(&mut bd, obstacle.position, self.time);

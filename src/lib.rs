@@ -644,6 +644,19 @@ pub const GRASS_VARIANTS: i32 = 8;
 // the map format), and the extra 8px on each side is canopy overhanging its
 // neighbours - which is what stops a grove reading as a tiled grid.
 pub const TREE_TEXTURE_SIZE: f32 = 48.0;
+
+// Portals (portal.rs, static/portal_sheet.png, docs/teleporting.md): 96px
+// cells drawn 1:1 on a 32px anchor cell - three cells of art on one cell
+// of map, so the spiral is comfortably wider than the biggest hull and
+// spills over neighbours that stay paintable. One row: the twelve turning
+// frames, then a 32px icon for the builder's bar in the top-left of the
+// last cell. The spiral has two arms, so a half turn is one full visual
+// period and the twelve frames are 15 degree steps of it - never rotated
+// at draw time, which would smear the 2px blocks.
+pub const PORTAL_TEXTURE_SIZE: f32 = 96.0;
+pub const PORTAL_FRAMES: i32 = 12;
+pub const PORTAL_ICON_COL: i32 = 12;
+pub const PORTAL_ICON_SIZE: f32 = 32.0;
 // Rows: 4 broadleaf variants, then 4 conifer, then the two rubble rows.
 //
 // Columns hold every damage stage once per *dapple frame* - a tree's whole
@@ -898,6 +911,7 @@ pub mod maplint;
 pub mod obstacle;
 pub mod pathfind;
 pub mod physics;
+pub mod portal;
 pub mod pickup;
 pub mod plasma;
 pub mod shell;

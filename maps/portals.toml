@@ -1,0 +1,57 @@
+# portals - the shipped portal map (docs/teleporting.md). Hand-authored:
+# re-saving from the map editor would drop these comments.
+#
+# Three portals in a triangle - two up in the corners, one down at the
+# bottom centre - each with a clear 3x3 of ground. Four 2x2 brick blocks
+# ring the centre where the player starts with the frog just above; two
+# short iron walls beside the corner portals make each of them a real
+# shortcut around the wall rather than a detour. Enemies spawn in the
+# border band and can hop from a corner straight into the middle; the
+# player can hop out of a pincer through the bottom one and come up behind
+# it. Where a tank comes out is random, so a portal is a gamble for both
+# sides. Health top centre, ammo in the bottom corners, a shield bottom
+# centre by the third portal.
+
+version = 1
+mission.kind = "protect"
+spawn.kind = "band"
+tanks = 5
+
+cells."17,9" = { kind = "start" }
+cells."17,5" = { kind = "frog" }
+cells."6,4" = { kind = "portal" }
+cells."27,4" = { kind = "portal" }
+cells."17,13" = { kind = "portal" }
+
+cells."17,2" = { kind = "pickup", pickup = "health" }
+cells."3,14" = { kind = "pickup", pickup = "ammo" }
+cells."30,14" = { kind = "pickup", pickup = "ammo" }
+cells."17,15" = { kind = "pickup", pickup = "shield" }
+
+cells."10,6" = { kind = "wall", material = "brick" }
+cells."10,7" = { kind = "wall", material = "brick" }
+cells."11,6" = { kind = "wall", material = "brick" }
+cells."11,7" = { kind = "wall", material = "brick" }
+cells."22,6" = { kind = "wall", material = "brick" }
+cells."22,7" = { kind = "wall", material = "brick" }
+cells."23,6" = { kind = "wall", material = "brick" }
+cells."23,7" = { kind = "wall", material = "brick" }
+cells."10,10" = { kind = "wall", material = "brick" }
+cells."10,11" = { kind = "wall", material = "brick" }
+cells."11,10" = { kind = "wall", material = "brick" }
+cells."11,11" = { kind = "wall", material = "brick" }
+cells."22,10" = { kind = "wall", material = "brick" }
+cells."22,11" = { kind = "wall", material = "brick" }
+cells."23,10" = { kind = "wall", material = "brick" }
+cells."23,11" = { kind = "wall", material = "brick" }
+
+cells."9,2" = { kind = "wall", material = "iron" }
+cells."9,3" = { kind = "wall", material = "iron" }
+cells."9,4" = { kind = "wall", material = "iron" }
+cells."9,5" = { kind = "wall", material = "iron" }
+cells."9,6" = { kind = "wall", material = "iron" }
+cells."24,2" = { kind = "wall", material = "iron" }
+cells."24,3" = { kind = "wall", material = "iron" }
+cells."24,4" = { kind = "wall", material = "iron" }
+cells."24,5" = { kind = "wall", material = "iron" }
+cells."24,6" = { kind = "wall", material = "iron" }

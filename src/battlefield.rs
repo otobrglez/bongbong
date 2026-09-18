@@ -350,6 +350,10 @@ pub struct MapSpawn {
     /// solid, nothing spawned - `Game::init` keeps them as the set a fire
     /// can run along (`Game::oil_cells`).
     pub oil_cells: Vec<(i32, i32)>,
+    /// Every portal anchor the map placed, as grid cells in `iter_cells`
+    /// order: not solid, nothing spawned - `Game::init` turns them into
+    /// `Game::portals` (docs/teleporting.md).
+    pub portal_cells: Vec<(i32, i32)>,
 }
 
 /// Spawn every cell `map` defines as a live entity - walls as `Obstacle`s
@@ -402,6 +406,7 @@ pub fn spawn_from_map(
     let mut road_cells = Vec::new();
     let mut grass_cells = Vec::new();
     let mut oil_cells = Vec::new();
+    let mut portal_cells = Vec::new();
     let mut frog_pos = None;
     let mut enemy_frog_pos = None;
     let mut pickup_slots = Vec::new();
@@ -447,6 +452,7 @@ pub fn spawn_from_map(
             CellObject::Road => road_cells.push(pos),
             CellObject::TallGrass => grass_cells.push(pos),
             CellObject::Oil => oil_cells.push((col, row)),
+            CellObject::Portal => portal_cells.push((col, row)),
             CellObject::Frog => frog_pos = Some(pos),
             // The player's start position is read directly from
             // `self.map.start_cell()` in `Game::init`, before this function
@@ -461,7 +467,7 @@ pub fn spawn_from_map(
         }
     }
 
-    MapSpawn { obstacle_positions, wall_positions, road_cells, frog_pos, enemy_frog_pos, pickup_slots, grass_cells, oil_cells }
+    MapSpawn { obstacle_positions, wall_positions, road_cells, frog_pos, enemy_frog_pos, pickup_slots, grass_cells, oil_cells, portal_cells }
 }
 
 /// One entry lane for a wave tank (docs/maps-to-levels.md "Gates and

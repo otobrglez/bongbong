@@ -68,6 +68,10 @@ pub struct DebugSnapshot {
     /// Every frog on the field: the player's first, then the enemy's
     /// (Hunt); empty in a Destroy round.
     pub frogs: Vec<FrogDebug>,
+    /// The map's portal anchors in `Game::portals` order, with whether the
+    /// network is active (two or more) - docs/teleporting.md.
+    pub portals: Vec<PortalDebug>,
+    pub portals_active: bool,
     pub obstacles_alive: usize,
     /// What the last enemy phase's engagement-slot assignment decided.
     /// Per-tank entries cover both rings (player and hunted frog); the slot
@@ -149,6 +153,8 @@ pub struct TankDebug {
     /// not seconds. Ranges over `shield_capacity`, not a duration.
     pub shield: f32,
     pub boost: f32,
+    /// Seconds before this tank may enter a portal again (`Tank::portal_cooldown`).
+    pub portal_cooldown: f32,
     /// The health ring's opacity factor, 0..=1
     /// (`tank::player_health_ring_visibility`/`enemy_health_ring_visibility`):
     /// 0 while rolling in, for a wreck, or under a full shield.
@@ -174,6 +180,15 @@ pub struct ProjectileDebug {
     pub vx: f32,
     pub vy: f32,
     pub state: &'static str,
+}
+
+/// One portal anchor (`Game::portals`).
+#[derive(Serialize, Debug)]
+pub struct PortalDebug {
+    pub x: f32,
+    pub y: f32,
+    /// The map cell (`map::world_to_cell`).
+    pub cell: [i32; 2],
 }
 
 #[derive(Serialize, Debug)]
@@ -289,6 +304,8 @@ pub struct TankPatch {
     /// Shield absorption left, in damage points (`Tank::shield_hp`).
     pub shield_hp: Option<f32>,
     pub speed_boost_timer: Option<f32>,
+    /// Seconds before the tank may enter a portal again (`Tank::portal_cooldown`).
+    pub portal_cooldown: Option<f32>,
 }
 
 /// Cap on serialised projectiles per snapshot (a minigun crossfire can
@@ -497,6 +514,7 @@ impl Game {
                     weapon: tank.active_weapon().name(),
                     shield: r1(tank.shield_hp),
                     boost: r1(tank.speed_boost_timer),
+                    portal_cooldown: r1(tank.portal_cooldown),
                     ring: r1(if tank.body.is_none() {
                         0.0
                     } else if tank.is_player() {
@@ -628,6 +646,15 @@ impl Game {
             projectiles_total,
             pickups,
             frogs,
+            portals: self
+                .portals
+                .iter()
+                .map(|p| {
+                    let (c, r) = crate::map::world_to_cell(*p);
+                    PortalDebug { x: r1(p.x), y: r1(p.y), cell: [c, r] }
+                })
+                .collect(),
+            portals_active: self.portals_active(),
             obstacles_alive: self.world.query::<&Obstacle>().iter().filter(|o| !o.destroyed).count(),
             engage,
             clusters: clusters(&live_enemies, CLUSTER_RADIUS_PX),
@@ -676,15 +703,26 @@ impl Game {
     }
 
     /// Move the tank in `slot` to `pos` (velocity zeroed) and optionally
-    /// snap its facing to `rotation` degrees. Goes through the physics body
-    /// - `sync_tanks_and_ram` would otherwise overwrite the position next
-    /// frame - and re-orients the movement collider when the facing axis
-    /// changed, the same way `drive_tank` does on a turn.
+    /// snap its facing to `rotation` degrees - `place_tank` behind a slot
+    /// lookup and a roll-in check.
     pub fn debug_teleport(&mut self, slot: usize, pos: Position, rotation: Option<f32>) -> Result<(), String> {
         let entity = self.tank_entity_by_slot(slot).ok_or_else(|| format!("no tank in slot {slot}"))?;
         if self.is_entering(entity) {
             return Err(format!("slot {slot} is still rolling in"));
         }
+        self.place_tank(entity, pos, rotation)
+    }
+
+    /// Put `entity`'s tank at `pos` with its velocity zeroed and its ring
+    /// snapped, optionally facing `rotation` degrees. Goes through the
+    /// physics body - `sync_tanks_and_ram` would otherwise overwrite the
+    /// position next frame - and re-orients the movement collider when
+    /// the facing axis changed, the same way `drive_tank` does on a turn.
+    /// The one placement path for a jump: the dev server's `teleport` and
+    /// a portal (`Game::portal_phase`) both go through it. The caller
+    /// keeps `tank.position` and the body in step *before* `step_world`,
+    /// so `lay_tracks` sees no travel.
+    pub(crate) fn place_tank(&mut self, entity: Entity, pos: Position, rotation: Option<f32>) -> Result<(), String> {
         let (body, half_extents) = {
             let mut q = self.world.query_one::<&mut Tank>(entity);
             let tank = q.get().map_err(|e| e.to_string())?;
@@ -748,6 +786,9 @@ impl Game {
         }
         if let Some(t) = patch.speed_boost_timer {
             tank.speed_boost_timer = t.max(0.0);
+        }
+        if let Some(t) = patch.portal_cooldown {
+            tank.portal_cooldown = t.max(0.0);
         }
         Ok(())
     }

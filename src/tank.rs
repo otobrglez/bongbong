@@ -487,6 +487,11 @@ pub struct Tank {
     pub fire_cooldown: f32,
     /// Seconds remaining before this tank can take ramming damage again.
     pub ram_cooldown: f32,
+    /// Seconds before this tank may enter a portal again
+    /// (`portal_cooldown_seconds`, set the frame it arrives through one;
+    /// `Game::portal_phase`). Ticked in `Game::tick_timers`, but only
+    /// while the tank is outside every portal's trigger radius.
+    pub portal_cooldown: f32,
     /// Seconds left in this tank's hit window: reset to
     /// `health_ring_hit_seconds` by `mark_hit` whenever it takes damage
     /// (shell, ram, explosion splash, frog bite), ticked down every frame
@@ -584,6 +589,7 @@ impl Default for Tank {
             recharge_timer: 0.0,
             fire_cooldown: 0.0,
             ram_cooldown: 0.0,
+            portal_cooldown: 0.0,
             hit_flash_timer: 0.0,
             wreck_timer: 0.0,
             despawn_timer: None,

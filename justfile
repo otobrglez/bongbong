@@ -76,7 +76,7 @@ thumbnails-gpu:
 # tolerance in thumbnail.rs. Opens a hidden window, hence a recipe rather
 # than a `cargo test` case (macOS creates windows on the main thread only).
 mapshot-compare:
-    cargo run --bin mapshot -- --check --out-dir target/thumbnails-check maps/default.toml maps/missions maps/test/props.toml
+    cargo run --bin mapshot -- --check --out-dir target/thumbnails-check maps/default.toml maps/portals.toml maps/missions maps/test/props.toml
 
 # Palette guards on the generated sheets: every opaque pixel on the Puny
 # Palette, and no green on anything drawn over the ground layer (walls,

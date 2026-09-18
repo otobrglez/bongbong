@@ -205,7 +205,7 @@ is the first in each list, and the active brush at entry is `WALL / brick`.
   list**: a centred panel over the field, 48 px rows, twelve visible with
   the wheel scrolling the rest, every map `map::available_maps` offers -
   the `maps/*.toml` files on native plus the maps shipped inside the
-  binary (`default`, `hunt-basic`, `waves-basic`, marked `shipped`), which
+  binary (`default`, `default-desert`, `hunt-basic`, `waves-basic`, `portals`, marked `shipped`), which
   is all the web build can list since nothing outside `static/` ships in
   the wasm. Picking a row loads the map as one undo step and the new
   baseline; no confirmation, undo covers a mistake.

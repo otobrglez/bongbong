@@ -298,6 +298,14 @@ impl Fx {
                         self.burst(Position::new(x, y), ParticleKind::Spark, self.count(8), 90.0, &[WHITE_T, FIRE_T]);
                         self.burst(Position::new(x, y), ParticleKind::Smoke, self.count(3), 20.0, &[SMOKE_T]);
                     }
+                    // A tank through a portal: a blue flare where it
+                    // vanished, a softer one plus settling motes where it
+                    // appeared, so the eye is led from one to the other.
+                    Event::Teleported { x, y, to_x, to_y, .. } => {
+                        self.burst(Position::new(x, y), ParticleKind::Spark, self.count(14), 140.0, &[PORTAL_T, PORTAL_LT_T, WHITE_T]);
+                        self.burst(Position::new(to_x, to_y), ParticleKind::Spark, self.count(10), 90.0, &[PORTAL_LT_T, WHITE_T]);
+                        self.burst(Position::new(to_x, to_y), ParticleKind::Ember, self.count(6), 40.0, &[PORTAL_T]);
+                    }
                     // Something the flamethrower lit or collapsed.
                     Event::Ignited { x, y, .. } => {
                         self.burst(Position::new(x, y), ParticleKind::Spark, self.count(6), 70.0, &[FIRE_T, WHITE_T]);
@@ -649,6 +657,10 @@ const HEAL_T: Color = Color::new(0x78, 0xDC, 0x5A, 255);
 /// the HUD gauge read as the same mechanic. Off the Puny Palette on purpose,
 /// like the shield ring itself.
 const SHIELD_T: Color = Color::new(0xAA, 0x78, 0xFF, 255);
+/// A portal's blues - the P1 team ramp, deliberately off-palette like the
+/// portal sheet itself (docs/PALETTE.md).
+const PORTAL_T: Color = Color::new(0x4D, 0x9B, 0xE6, 255);
+const PORTAL_LT_T: Color = Color::new(0x8F, 0xD3, 0xFF, 255);
 
 #[cfg(test)]
 mod fx_tests {

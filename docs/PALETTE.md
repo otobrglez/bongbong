@@ -245,8 +245,17 @@ of `PUNY_PALETTE` or `PUNY_EXTRA` (so `snap()` never lands on it), and
 `gen_tanks.py` walks the team ramp *by role* while a player block is
 drawn instead of calling `snap()`, which would throw a darkened pink onto
 roof-tile red. `check_sheets.py` admits the family on rows 12-35 of the
-tank sheet only; a team colour in the enemy block, or anywhere else, is a
-failure.
+tank sheet and on the whole of `portal_sheet.png` (`TEAM_SHEETS`); a team
+colour in the enemy block, or anywhere else, is a failure.
+
+### The portal sheet
+
+`static/portal_sheet.png` (docs/teleporting.md) draws only `BLACK`, `WHITE`
+and the four `TEAM_P1` steps, with no `snap()` at all. The argument is the
+team family's: a hole in the ground has to read as not-terrain, and the
+one true blue on screen already means "the player's side" - a portal
+borrowing it says "yours to use" without adding a hue. It is also held to
+the no-green rule, since it lies on the ground.
 
 ## Verifying
 
@@ -280,7 +289,8 @@ together they are *stronger* than the single check they replaced:
   green pixel there reads as terrain showing through. Scoped from
   measurement, not assumption: `scifi_tanks_sheet.png` has 2711 green pixels
   (a green chassis is a real colour choice) and `plasma.png` is deliberately
-  off-palette, so neither of those is checked.
+  off-palette, so neither of those is checked; `portal_sheet.png` is checked
+  against the palette plus the team family, and for green.
 
 This has already caught a real defect: darkening a sand tone with `mul()` for
 a chunk's bottom edge snapped it into the green family, putting green pixels

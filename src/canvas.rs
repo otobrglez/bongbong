@@ -59,6 +59,8 @@ pub enum Sheet {
     Tracks,
     /// static/barrel_explosion.png - the blast frames and scorches (blast.rs).
     BarrelExplosion,
+    /// static/portal_sheet.png - the turning spiral (portal.rs).
+    Portal,
     /// static/pickups/<kind>.png - each kind its own 32 x 32 image.
     Pickup(PickupKind),
     /// static/toxic_frog/<variant dir>/<clip>.png - one filmstrip per clip
@@ -66,8 +68,8 @@ pub enum Sheet {
     Frog { variant: u8, clip: FrogAnim },
 }
 
-/// The ten sheets that are one file each.
-pub const SINGLE_SHEETS: [Sheet; 10] = [
+/// The eleven sheets that are one file each.
+pub const SINGLE_SHEETS: [Sheet; 11] = [
     Sheet::Ground,
     Sheet::Tanks,
     Sheet::Walls,
@@ -78,6 +80,7 @@ pub const SINGLE_SHEETS: [Sheet; 10] = [
     Sheet::MinigunMount,
     Sheet::Tracks,
     Sheet::BarrelExplosion,
+    Sheet::Portal,
 ];
 
 /// Every pickup kind, each its own sheet (`pickup_file` is exhaustive over
@@ -112,6 +115,7 @@ impl Sheet {
             Sheet::MinigunMount => "static/minigun_mount.png".into(),
             Sheet::Tracks => "static/tracks.png".into(),
             Sheet::BarrelExplosion => "static/barrel_explosion.png".into(),
+            Sheet::Portal => "static/portal_sheet.png".into(),
             Sheet::Pickup(kind) => format!("static/pickups/{}.png", pickup_file(kind)),
             Sheet::Frog { variant, clip } => {
                 let dir = FROG_VARIANT_DIRS[variant as usize % FROG_VARIANT_DIRS.len()];
