@@ -1493,6 +1493,17 @@ tunables! {
         /// The patches' scale: the noise lattice pitch in cells. Larger
         /// means fewer, bigger drifts.
         ground_drift_scale: f32 = 5.0 in 1.0 ..= 20.0 @ Restart;
+        /// Seconds each of the pack's four water frames stays up
+        /// (`ground::WATER_FRAMES`): the shimmer on shores and streams.
+        /// The pack's own timing is 0.1.
+        water_frame_seconds: f32 = 0.14 in 0.02 ..= 1.0;
+        /// How fast the current's marks drift down the map over open lake
+        /// water and along north/south streams, world px per second
+        /// (`ground::draw_current`). Zero holds them still.
+        water_flow_speed: f32 = 18.0 in 0.0 ..= 200.0;
+        /// Marks per column of water. Zero turns the current off and
+        /// leaves the pack's shimmer.
+        water_flow_lanes: i32 = 2 in 0 ..= 6;
         /// World px of travel between hull tread-animation frame advances
         /// (independent of the ground-decal spacing below).
         tank_hull_track_frame_distance: f32 = 8.0 in 1.0 ..= 64.0;

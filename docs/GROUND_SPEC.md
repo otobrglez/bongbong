@@ -1,4 +1,4 @@
-# Ground Layer — grass / road under objects
+# Ground Layer — grass / road under objects / water
 
 **Status: integrated and wired in, screenshot-verified.** `src/ground.rs`
 builds this once per round from `simulation::Game::init` — after every
@@ -247,9 +247,10 @@ half-tile overhang past `width`/`height` that centering introduces (see
   `road_cells`/material-grid mechanism §5 now uses, rather than a full
   revert — nothing about the object-driven placement conflicts with it.
 - **More materials**: the pack's `overworld` wangset has full corner data
-  for `dirt`(2) and `cliff`(4) against grass too, plus `river`/3×`seawater`
-  for water — same extraction method as the sand table in §8 (a short
-  Python script over the `.tsx`, not hand-transcription).
+  for `dirt`(2) and `cliff`(4) against grass too, plus 3×`seawater` (the
+  `river` colour is water now, §9) — same extraction method as the sand
+  table in §8 (a short Python script over the `.tsx`, not
+  hand-transcription).
 - **Gameplay effects** (road = speed bonus?) would read
   `ground::GroundGrid` at the tank's position — nothing in `ground.rs`
   currently exposes a "what material is at this world position" query,
@@ -298,3 +299,91 @@ reading the corner slots 7/1/3/5 as TL/TR/BR/BL:
 | 0010 | 22 | 0110 | 49 | 1010 | 79 | 1110 | 52 |
 | 0011 | 23 | 0111 | 25 | 1011 | 26 | 1111 | 50 |
 | 0100 | 76 | 1000 | 78 | 1100 | 77 | 0000 | `GRASS_FILL` |
+
+---
+
+## 9. Water (`ground::WATER_CHANNEL`, `WATER_SHORE`, `WATER_FRAMES`, `water_*`)
+
+A map paints water one cell at a time (`kind = "water"`, the builder's
+Water brush in the GROUND category), exactly like road, and the game treats
+it exactly like road: not solid, no nav effect, tanks drive across. What
+differs is the picture. One brush draws two things, decided by the shape
+the author painted, so the format needs no river/lake distinction:
+
+- **A stream** is any water cell that is not inside a 2x2 block of water —
+  a line one cell wide, painted the way a road is. It resolves through the
+  pack's `water-paths` **edge** autotile (`WATER_CHANNEL`), the same 4x4
+  layout as `ROAD_EDGE` fifteen rows down the sheet and indexed the same
+  way (N E S W, 1 = a water neighbour of either kind). The isolated case
+  (0000) is tile 351, the rounded pool beside the end caps, where 84 sits
+  beside the road's.
+- **A lake** is every water cell inside some 2x2 block. Lake cells resolve
+  through the pack's `river` **corner** autotile (`WATER_SHORE`, laid out
+  like `SAND_CORNER`): a grid vertex is wet where all four cells around it
+  are water, so a painted block becomes a pool whose rounded shore runs half
+  a cell inside its outline, and a block two wide is a channel one cell
+  wide with a shore on each side. A vertex is also wet where three of its
+  four cells are water and one of them is a lake cell — that is a stream
+  meeting a shore, and it opens the shore into a mouth around the stream
+  instead of leaving a lip of grass between them. The two diagonal masks
+  (0101/1010) are not in the wangset and this rule never produces them
+  (a lake cell's block centre is one of its corners, and wetting the
+  opposite corner wets one of the other two); the table holds flat water
+  there so a mistake would show as water, never as grass inside a lake.
+- **Road wins** over water on the same cell (a wall stands on dirt), and
+  road and water never join each other's autotile.
+- **Never under a drift**: a vertex beside a water cell does not drift, for
+  the same fringe reason as road (§8).
+
+Extraction, same script as §8. `WATER_CHANNEL` from the `pathways` edge
+wangset with `water-paths` = 3, slots N/E/S/W:
+
+| mask (N E S W) | tile | mask | tile | mask | tile | mask | tile |
+|---|---|---|---|---|---|---|---|
+| 0000 | 351 (pool) | 0100 | 352 | 1000 | 324 | 1100 | 325 |
+| 0001 | 354 | 0101 | 353 | 1001 | 327 | 1101 | 326 |
+| 0010 | 270 | 0110 | 271 | 1010 | 297 | 1110 | 298 |
+| 0011 | 273 | 0111 | 272 | 1011 | 300 | 1111 | 299 |
+
+`WATER_SHORE` from the `overworld` corner wangset with `river` = 7, corner
+slots read as in §8:
+
+| mask (TL TR BR BL) | tile | mask | tile | mask | tile | mask | tile |
+|---|---|---|---|---|---|---|---|
+| 0001 | 279 | 0101 | 305 (never) | 1001 | 306 | 1101 | 308 |
+| 0010 | 277 | 0110 | 304 | 1010 | 305 (never) | 1110 | 307 |
+| 0011 | 278 | 0111 | 280 | 1011 | 281 | 1111 | 305 |
+| 0100 | 331 | 1000 | 333 | 1100 | 332 | 0000 | 305 (never) |
+
+**Animation.** Every one of those tiles but 305 carries a four-frame
+`<animation>` in the `.tsx` (100 ms each); the frames are scattered over
+the sheet (stream tiles step by 108, shore tiles by 81 or 54), so
+`WATER_FRAMES` is a table, not an offset, and `build` bakes all four ids
+into the cell (`GroundGrid::tiles` is `[i32; 4]` per cell — non-water cells
+repeat one id, so `draw` indexes every cell the same way).
+`water_frame_seconds` (default 0.14) is the frame time. 305 is a single
+flat tone with no animation in the pack (its would-be frames are
+byte-identical), which is what the next paragraph is for.
+
+**The current flows down the map.** The pack's frames shimmer in place, so
+the direction comes from `ground::draw_current`: short marks in the pack's
+own ripple highlight (`#1DCCCB`, a colour the sheet already has and one the
+retint leaves alone) drift southward at `water_flow_speed` px/s,
+`water_flow_lanes` per column, over every open lake cell (mask 1111) and
+along every stream cell joined north or south — inside the stream art's
+own water columns (`WATER_CHANNEL_BAND`, source columns 3..13), which open
+water contains too, so a lane keeps its column from a lake into the stream
+that drains it. Shores, bends and sideways streams get no marks (there is
+no room that is reliably water) and keep the shimmer. A lane is keyed by
+its column and repeats every `WATER_FLOW_PERIOD_CELLS` (3) cells:
+vertically adjacent cells show the same lane at the same moment, so a mark
+crosses a cell edge without a jump and a lake reads as one body of water.
+2 px blocks, clipped to the cell, hashed with no seed and no RNG — the
+builder shows the same water a round will (it drives the animation from
+the wall clock; a round uses `Game::time`).
+
+**Placement**: `build` takes `water_cells` beside `road_cells`
+(`battlefield::MapSpawn::water_cells` from the map, the builder's own cell
+list in `rebuild_ground`). Nothing else in the game knows a cell is water
+— by design for now (the map format says so: "treat it as road"). A
+gameplay effect would start from §7's "what material is here" query.

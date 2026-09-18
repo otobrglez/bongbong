@@ -332,6 +332,10 @@ pub struct MapSpawn {
     /// paints for free from `obstacle_positions` - this is only the
     /// standalone road cells, e.g. a path with no wall on it).
     pub road_cells: Vec<Position>,
+    /// World position of every cell the map marked as water. Ground like
+    /// road (nothing spawned, no nav effect); `ground::build` shapes it
+    /// into rivers and lakes.
+    pub water_cells: Vec<Position>,
     /// The map's one frog placement, if any - `None` means the map didn't
     /// place a frog, in which case `Game::init` falls back to a random
     /// near-center roll (every round needs exactly one live frog for the
@@ -400,6 +404,7 @@ pub fn spawn_from_map(
     let mut obstacle_positions = Vec::new();
     let mut wall_positions = Vec::new();
     let mut road_cells = Vec::new();
+    let mut water_cells = Vec::new();
     let mut grass_cells = Vec::new();
     let mut oil_cells = Vec::new();
     let mut frog_pos = None;
@@ -445,6 +450,7 @@ pub fn spawn_from_map(
                 world.spawn((Obstacle::new(material, variant, pos, flammable, body),));
             }
             CellObject::Road => road_cells.push(pos),
+            CellObject::Water => water_cells.push(pos),
             CellObject::TallGrass => grass_cells.push(pos),
             CellObject::Oil => oil_cells.push((col, row)),
             CellObject::Frog => frog_pos = Some(pos),
@@ -461,7 +467,7 @@ pub fn spawn_from_map(
         }
     }
 
-    MapSpawn { obstacle_positions, wall_positions, road_cells, frog_pos, enemy_frog_pos, pickup_slots, grass_cells, oil_cells }
+    MapSpawn { obstacle_positions, wall_positions, road_cells, water_cells, frog_pos, enemy_frog_pos, pickup_slots, grass_cells, oil_cells }
 }
 
 /// One entry lane for a wave tank (docs/maps-to-levels.md "Gates and

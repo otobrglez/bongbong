@@ -794,6 +794,7 @@ impl Game {
         let obstacle_positions = map_spawn.obstacle_positions;
         let wall_positions = map_spawn.wall_positions;
         let map_road_cells = map_spawn.road_cells;
+        let map_water_cells = map_spawn.water_cells;
         let map_frog_pos = map_spawn.frog_pos;
         self.map_pickup_slots = map_spawn.pickup_slots;
 
@@ -1008,7 +1009,7 @@ impl Game {
         // paint dirt underfoot, and passed separately they cast the baked
         // shading that makes a wall look like it is standing on the floor
         // rather than pasted onto it.
-        self.ground = crate::ground::build(width, height, rng.random(), &road_cells, &wall_positions, self.map.theme.drifts());
+        self.ground = crate::ground::build(width, height, rng.random(), &road_cells, &map_water_cells, &wall_positions, self.map.theme.drifts());
 
         self.rng = Some(rng);
         // Not cleared here: a restart mid-`update` (R key, round end) still
@@ -3119,8 +3120,8 @@ fn maybe_spawn_bonus(
 }
 
 /// A uniformly random free cell touching the slot at `slot`, or `None`
-/// when all eight neighbours are taken. Eligible: empty or road in the map
-/// (walls, the frog, the start cell and other slots are not), centre inside
+/// when all eight neighbours are taken. Eligible: empty, road or water in
+/// the map (walls, the frog, the start cell and other slots are not), centre inside
 /// the border walls (their inner faces sit at 0/`width`/0/`height`), and no
 /// live pickup already on it. Map walls are checked rather than the live
 /// obstacle set: a shot-away wall's cell stays off limits, which is
@@ -3140,7 +3141,7 @@ fn bonus_pickup_cell(
         .iter()
         .filter_map(|&(dx, dy)| {
             let (c, r) = (col + dx, row + dy);
-            let open = matches!(map.cell(c, r), None | Some(CellObject::Road));
+            let open = matches!(map.cell(c, r), None | Some(CellObject::Road | CellObject::Water));
             let pos = map::cell_to_world(c, r);
             let inside = pos.x >= half && pos.x <= width - half && pos.y >= half && pos.y <= height - half;
             let free = occupied.iter().all(|&p| p.distance_to(pos) > 0.5);
@@ -4922,7 +4923,7 @@ cells."30,20" = { kind = "frog" }
         let pos = bonus_pickup_cell(&map, slot, &[slot], W, H, &mut rng).expect("an open map has a free neighbour");
         let (c, r) = map::world_to_cell(pos);
         assert!((c - 20).abs() <= 1 && (r - 11).abs() <= 1 && (c, r) != (20, 11), "adjacent, not the slot: {c},{r}");
-        assert!(matches!(map.cell(c, r), None | Some(CellObject::Road)));
+        assert!(matches!(map.cell(c, r), None | Some(CellObject::Road | CellObject::Water)));
     }
 
     #[test]

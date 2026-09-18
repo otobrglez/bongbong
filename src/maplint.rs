@@ -1147,6 +1147,30 @@ mod map_lint_tests {
         findings.iter().any(|f| f.kind == kind)
     }
 
+    /// Water is ground: a river across the whole field neither splits the
+    /// playfield nor boxes anything in, and enemies may spawn on it.
+    #[test]
+    fn water_is_open_ground_to_the_planner_and_the_spawner() {
+        let mut map = base_map();
+        for row in 0..23 {
+            map.set_cell(17, row, CellObject::Water);
+        }
+        for col in 14..=20 {
+            for row in 9..=13 {
+                map.set_cell(col, row, CellObject::Water);
+            }
+        }
+        let findings = lint_map(map.clone());
+        dump("river and lake", &findings);
+        assert!(errors(&findings).is_empty(), "a river and a lake lint clean");
+        let game = init_game(map);
+        let (w, h) = game.map.field_size();
+        let grid = game.nav_grid(w, h);
+        let cell = map::cell_to_world(17, 11);
+        assert!(grid.usable(cell), "the lake's middle is open to the planner and the spawner");
+        assert!(!grid.boxed_in(cell));
+    }
+
     /// The two-player checks: a `start2` sealed off from `start` is an
     /// error, one painted right beside it a warning, a map with no start
     /// at all a warning whose fallback pair still shares a playfield.
