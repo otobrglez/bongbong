@@ -21,7 +21,8 @@
 
 use sola_raylib::prelude::*;
 
-use crate::obstacle::{Material, ObstacleTextures, Sheet, texture_for};
+use crate::canvas::Canvas;
+use crate::obstacle::{Material, Sheet};
 use crate::tuning::tuning;
 use crate::{OBSTACLE_TEXTURE_SIZE, Position, RUBBLE_VARIANTS};
 
@@ -154,7 +155,7 @@ pub fn draw_decal_shadow(d: &mut impl RaylibDraw, decal: &Decal) {
     d.draw_circle_v(ground, r, Color::new(0, 0, 0, a));
 }
 
-pub fn draw_decal(d: &mut impl RaylibDraw, textures: &ObstacleTextures, decal: &Decal) {
+pub fn draw_decal(c: &mut impl Canvas, decal: &Decal) {
     let cell = decal.sheet.cell();
     let flip = if decal.seed & 1 != 0 { -1.0 } else { 1.0 };
     let src = Rectangle::new(decal.col as f32 * cell, decal.row as f32 * cell, cell * flip, cell);
@@ -172,5 +173,5 @@ pub fn draw_decal(d: &mut impl RaylibDraw, textures: &ObstacleTextures, decal: &
     let tint = Color::new(255, 255, 255, (255.0 * opacity) as u8);
     let at = decal.draw_pos();
     let dest = Rectangle::new(at.x, at.y, size, size);
-    d.draw_texture_pro(texture_for(textures, decal.sheet), src, dest, Vector2::new(size / 2.0, size / 2.0), rotation, tint);
+    c.blit(decal.sheet, src, dest, Vector2::new(size / 2.0, size / 2.0), rotation, tint);
 }

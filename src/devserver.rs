@@ -129,14 +129,14 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "snapshot",
-        description: "World state as JSON: every tank (position with its grid `cell`, `rotation` - the sim-side heading - with `facing` as a name and the two drawn angles `hull`/`turret` that ease toward it, real velocity with `speed` and `heading` - the direction it is actually moving, which differs from `rotation` when it is being shoved - damage/hp, ammo, weapon, shield/boost, `ring` - the health ring's opacity 0..1, nearest_ally_px; enemies also `role` - player/hunter/guard - and dist_to_player), projectiles, pickups, `frogs` (a list with `side` player/enemy: the player's frog first, then the enemy frog in a hunt round; `facing` left/right is which way the sprite is drawn - the art is authored facing right and mirrored for the other way, so it says whether a hop or a bite reads correctly), `engage` (the engagement rings: per enemy its status - engaged/wreck/fleeing/retreating/out_of_range - the ring slot it holds and its target point, on the ring around the player or, for a hunter, the one around the player's frog; an engaged enemy with ring=null steers at its target directly, the pile-up case) and `clusters` (groups of live enemies within 90 px of each other). detail=full adds each enemy's AI memory (role, waypoint, committed heading, last behaviour-tree action, stuck timer, intent), the per-enemy slot rejection tally (claimed/off_map/unreachable/no_los), the player ring's 16-slot table (point, line of sight, who holds it) and `command`, the enemy command layer's last decision (orders by slot, the skipped-conflict tally, the blackboard; `enabled` false while the `c2_enabled` knob is off).",
+        description: "World state as JSON: every tank (position with its grid `cell`, `rotation` - the sim-side heading - with `facing` as a name and the two drawn angles `hull`/`turret` that ease toward it, real velocity with `speed` and `heading` - the direction it is actually moving, which differs from `rotation` when it is being shoved - damage/hp, ammo, weapon, shield/boost, `ring` - the health ring's opacity 0..1, nearest_ally_px; enemies also `role` - player/hunter/guard - and dist_to_player), projectiles, pickups, `frogs` (a list with `side` player/enemy: the player's frog first, then the enemy frog in a hunt round; `facing` left/right is which way the sprite is drawn - the art is authored facing right and mirrored for the other way, so it says whether a hop or a bite reads correctly), `portals` with `portals_active` (the map's portal anchors; each tank's `portal_cooldown` says when it may enter one again), `engage` (the engagement rings: per enemy its status - engaged/wreck/fleeing/retreating/out_of_range - the ring slot it holds and its target point, on the ring around the player or, for a hunter, the one around the player's frog; an engaged enemy with ring=null steers at its target directly, the pile-up case) and `clusters` (groups of live enemies within 90 px of each other). detail=full adds each enemy's AI memory (role, waypoint, committed heading, last behaviour-tree action, stuck timer, intent), the per-enemy slot rejection tally (claimed/off_map/unreachable/no_los), the player ring's 16-slot table (point, line of sight, who holds it) and `command`, the enemy command layer's last decision (orders by slot, the skipped-conflict tally, the blackboard; `enabled` false while the `c2_enabled` knob is off).",
         schema: r#"{"type":"object","properties":{"detail":{"type":"string","enum":["compact","full"],"default":"compact"}}}"#,
         read_only: true,
         destructive: false,
     },
     ToolSpec {
         name: "events",
-        description: "Gameplay events recorded since `since` (a seq number; 0 = everything kept, up to 4096): fired, hit, wreck, ram, deflected (off a shield), shells_collided, frog_bite (with the biting frog's side), pickup_collected, pickup_respawned, obstacle_destroyed, blast, drum_launched, fire_started, ignited (the flamethrower lit `what`: ground, oil, wood, tree, drum, or collapsed a sandbag/fence), round_started, round_ended, plus AI decisions - ai_action (behaviour-tree action changed), engage_slot (ring slot changed; null = steering at its target - the player, or a hunter's frog - directly), stuck_escape, breach (dir, or null when it ends), retreat (on/off), alert (shared last-known player position on/off), retarget (two-player rounds: the enemy switched to fighting `player` 0 or 1). Each carries the frame it happened on. `kinds` keeps only those event names, `exclude` drops them.",
+        description: "Gameplay events recorded since `since` (a seq number; 0 = everything kept, up to 4096): fired, hit, wreck, ram, deflected (off a shield), shells_collided, frog_bite (with the biting frog's side), pickup_collected, pickup_respawned, obstacle_destroyed, blast, drum_launched, fire_started, ignited (the flamethrower lit `what`: ground, oil, wood, tree, drum, or collapsed a sandbag/fence), teleported (a tank went through a portal: slot, from x/y, to to_x/to_y), round_started, round_ended, plus AI decisions - ai_action (behaviour-tree action changed), engage_slot (ring slot changed; null = steering at its target - the player, or a hunter's frog - directly), stuck_escape, breach (dir, or null when it ends), retreat (on/off), alert (shared last-known player position on/off), retarget (two-player rounds: the enemy switched to fighting `player` 0 or 1). Each carries the frame it happened on. `kinds` keeps only those event names, `exclude` drops them.",
         schema: r#"{"type":"object","properties":{"since":{"type":"integer","default":0,"description":"Return events with seq > since"},"limit":{"type":"integer","default":200},"kinds":{"type":"array","items":{"type":"string"},"description":"Only these event names"},"exclude":{"type":"array","items":{"type":"string"},"description":"Drop these event names"}}}"#,
         read_only: true,
         destructive: false,
@@ -192,7 +192,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "terrain",
-        description: "The battlefield's tiles and its fire layer as JSON - the numeric view of props, walls and flames that `snapshot` (tanks only) lacks: every live obstacle tile by grid `cell` with material, `hp`/`max_hp`, and when set `drum` (oil|fuel), `burning`/`burn_elapsed`, `fuse` {left, total} (an armed barrel), `heat` (flame exposure), `scorched` (blast-sooted faces, N E S W as bits 0..3), `ram_timer`, `flammable`; plus `fires` (burning ground cells: left, total, pool), `fused` (armed drums' cells), `flames` (this frame's flamethrower jets: shooter slot, origin, direction, range, reach), `burning_tanks`/`burning_wrecks`, and counts of burning tiles, flying drums, oil cells, grass cells and heated cells. `only` keeps just the damaged (hurt, burning, fused, sooted, heated or rammed), burning or fused tiles; `materials` keeps the listed ones. At most 800 tiles (`truncated`).",
+        description: "The battlefield's tiles and its fire layer as JSON - the numeric view of props, walls and flames that `snapshot` (tanks only) lacks: every live obstacle tile by grid `cell` with material, `hp`/`max_hp`, and when set `drum` (oil|fuel), `burning`/`burn_elapsed`, `fuse` {left, total} (an armed barrel), `heat` (flame exposure), `scorched` (blast-sooted faces, N E S W as bits 0..3), `ram_timer`, `flammable`; plus `fires` (burning ground cells: left, total, pool), `fused` (armed drums' cells), `flames` (this frame's flamethrower jets: shooter slot, origin, direction, range, reach), `burning_tanks`/`burning_wrecks`, and counts of burning tiles, flying drums, oil cells, grass cells and heated cells, plus `portals` (the map's portal anchors by cell) and `portals_active`. `only` keeps just the damaged (hurt, burning, fused, sooted, heated or rammed), burning or fused tiles; `materials` keeps the listed ones. At most 800 tiles (`truncated`).",
         schema: r#"{"type":"object","properties":{"only":{"type":"string","enum":["all","damaged","burning","fused"],"default":"all"},"materials":{"type":"array","items":{"type":"string","enum":["brick","iron","wood","glass","sandbag","barrel","fence","tree","pine"]},"description":"Only tiles of these materials"}}}"#,
         read_only: true,
         destructive: false,
@@ -207,14 +207,14 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "screenshot",
         description: "Capture the current frame (the state after the latest step) as a PNG: returned inline and saved under target/devshots/. scale 0.5 (default) halves it; use 1.0 to read overlay text. Optionally set overlay flags in the same call (same as the `overlays` tool). source=scene skips the HUD and overlays.",
-        schema: r#"{"type":"object","properties":{"scale":{"type":"number","default":0.5,"minimum":0.1,"maximum":1},"source":{"type":"string","enum":["screen","scene"],"default":"screen"},"overlays":{"type":"object","properties":{"nav_grid":{"type":"boolean"},"ai":{"type":"boolean"},"projectiles":{"type":"boolean"},"engage":{"type":"boolean"},"pickups":{"type":"boolean"},"inspect":{"type":"boolean"}}}}}"#,
+        schema: r#"{"type":"object","properties":{"scale":{"type":"number","default":0.5,"minimum":0.1,"maximum":1},"source":{"type":"string","enum":["screen","scene"],"default":"screen"},"overlays":{"type":"object","properties":{"nav_grid":{"type":"boolean"},"ai":{"type":"boolean"},"projectiles":{"type":"boolean"},"engage":{"type":"boolean"},"pickups":{"type":"boolean"},"hitboxes":{"type":"boolean"},"stats":{"type":"boolean"}}}}}"#,
         read_only: false,
         destructive: false,
     },
     ToolSpec {
         name: "overlays",
-        description: "Set persistent debug overlays drawn on top of the game (visible to the human too), one flag at a time: nav_grid (blocked pathfinding cells), ai (each enemy's waypoint, heading, last behaviour-tree action), projectiles (hit boxes + velocity), engage (engagement-ring targets), pickups (collect radius), inspect (tank hitboxes + stat readout). Omitted flags keep their value; replies with the current flags. The I key in the game window cycles presets instead (off -> inspect -> all); `input {cycle_overlays: true}` presses it.",
-        schema: r#"{"type":"object","properties":{"nav_grid":{"type":"boolean"},"ai":{"type":"boolean"},"projectiles":{"type":"boolean"},"engage":{"type":"boolean"},"pickups":{"type":"boolean"},"inspect":{"type":"boolean"}}}"#,
+        description: "Set persistent debug overlays drawn on top of the game (visible to the human too), one flag at a time: nav_grid (blocked pathfinding cells), ai (each enemy's waypoint, heading, last behaviour-tree action), projectiles (hit boxes + velocity), engage (engagement-ring targets), pickups (collect radius), hitboxes (each tank's hull and turret damage boxes and its rounded movement collider), stats (each tank's readout card: ammo, weapon, hp, speed, velocity, collider size, an enemy's retreat/fire state). Omitted flags keep their value, an unknown flag is an error; replies with the current flags. The I key in the game window cycles presets instead (off -> inspect = hitboxes + stats -> all); `input {cycle_overlays: true}` presses it.",
+        schema: r#"{"type":"object","properties":{"nav_grid":{"type":"boolean"},"ai":{"type":"boolean"},"projectiles":{"type":"boolean"},"engage":{"type":"boolean"},"pickups":{"type":"boolean"},"hitboxes":{"type":"boolean"},"stats":{"type":"boolean"}}}"#,
         read_only: false,
         destructive: false,
     },
@@ -241,8 +241,8 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "set_tank",
-        description: "Overwrite a tank's damage (0 = pristine, 100 = wreck), ammo counts (setting a special weapon's stock above 0 also arms it, like its pickup would), shield_hp (rainbow-shield absorption left in damage points, not seconds) and the speed-boost timer. Omitted fields are untouched.",
-        schema: r#"{"type":"object","properties":{"slot":{"type":"integer"},"damage":{"type":"number"},"shells_ammo":{"type":"integer"},"minigun_ammo":{"type":"integer"},"plasma_ammo":{"type":"integer"},"laser_charges":{"type":"integer"},"flame_fuel":{"type":"number"},"shield_hp":{"type":"number"},"speed_boost_timer":{"type":"number"}},"required":["slot"]}"#,
+        description: "Overwrite a tank's damage (0 = pristine, 100 = wreck), ammo counts (setting a special weapon's stock above 0 also arms it, like its pickup would), shield_hp (rainbow-shield absorption left in damage points, not seconds), the speed-boost timer and portal_cooldown (seconds before it may enter a portal again). Omitted fields are untouched.",
+        schema: r#"{"type":"object","properties":{"slot":{"type":"integer"},"damage":{"type":"number"},"shells_ammo":{"type":"integer"},"minigun_ammo":{"type":"integer"},"plasma_ammo":{"type":"integer"},"laser_charges":{"type":"integer"},"flame_fuel":{"type":"number"},"shield_hp":{"type":"number"},"speed_boost_timer":{"type":"number"},"portal_cooldown":{"type":"number"}},"required":["slot"]}"#,
         read_only: false,
         destructive: false,
     },
@@ -319,7 +319,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "builder_tool",
-        description: "Select the builder's brush by name - brick, iron, wood, glass (WALL); sandbag, barrel, oil_drum, fuel_drum, fence, tree, pine (PROP); road, water, tall_grass, oil_trail, gate (GROUND); start, start2 (player 2's start), frog, enemy_frog (ACTOR); health, ammo, laser, minigun, plasma, speedup, shield, flamethrower, frog_health (PICKUP); or eraser - through the category's own selection path, so the bar's category button updates as well. Without `tool`, only reports the active tool and every category's current tool and full list (the authoritative spelling of every brush).",
+        description: "Select the builder's brush by name - brick, iron, wood, glass (WALL); sandbag, barrel, oil_drum, fuel_drum, fence, tree, pine (PROP); road, water, tall_grass, oil_trail, gate, portal (GROUND); start, start2 (player 2's start), frog, enemy_frog (ACTOR); health, ammo, laser, minigun, plasma, speedup, shield, flamethrower, frog_health (PICKUP); or eraser - through the category's own selection path, so the bar's category button updates as well. Without `tool`, only reports the active tool and every category's current tool and full list (the authoritative spelling of every brush).",
         schema: r#"{"type":"object","properties":{"tool":{"type":"string","description":"A tool name (see the description) or eraser"}}}"#,
         read_only: false,
         destructive: false,
@@ -1041,7 +1041,10 @@ impl DevServer {
                     match source {
                         Ok(source) => {
                             if let Some(flags) = params.get("overlays") {
-                                apply_overlays(game, flags);
+                                if let Err(e) = apply_overlays(game, flags) {
+                                    let _ = reply.send(Err(e));
+                                    return;
+                                }
                             }
                             self.pending_shot = Some(PendingShot { scale: scale.clamp(0.1, 1.0), source, presented: false, reply });
                             return;
@@ -1050,10 +1053,7 @@ impl DevServer {
                     }
                 }
             }
-            "overlays" => {
-                apply_overlays(game, &params);
-                Ok(overlays_json(game))
-            }
+            "overlays" => apply_overlays(game, &params).map(|()| overlays_json(game)),
             "nav_grid" => Ok(json!({ "grid": game.nav_grid_ascii(width, height) })),
             "field" => {
                 let target = match params.get("target").and_then(Value::as_str).unwrap_or("player") {
@@ -1727,6 +1727,8 @@ fn terrain_json(game: &Game, params: &Value) -> Result<Value, String> {
         "burning_tanks": positions_with(game.burning_tanks(), "left"),
         "burning_wrecks": positions_with(game.burning_wrecks(), "age"),
         "flying_drums": game.flying_drums.len(),
+        "portals": game.portals().iter().map(|p| json!({ "x": r1(p.x), "y": r1(p.y), "cell": cell_of(*p) })).collect::<Vec<_>>(),
+        "portals_active": game.portals_active(),
         "oil_cells": game.oil_cells.len(),
         "grass_cells": game.grass_cells.len(),
         "hot_cells": game.heat.len(),
@@ -2074,8 +2076,15 @@ fn overlays_json(game: &Game) -> Value {
     to_value(game.debug_overlays)
 }
 
-/// Set only the overlay flags present in `flags`.
-fn apply_overlays(game: &mut Game, flags: &Value) {
+/// The overlay flags a tool may set, one per `Overlays` field.
+const OVERLAY_FLAGS: [&str; 7] = ["nav_grid", "ai", "projectiles", "engage", "pickups", "hitboxes", "stats"];
+
+/// Set only the overlay flags present in `flags`. A key that is not an
+/// `OVERLAY_FLAGS` entry is an error naming them, and nothing is applied.
+fn apply_overlays(game: &mut Game, flags: &Value) -> Result<(), String> {
+    if let Some(unknown) = flags.as_object().and_then(|map| map.keys().find(|k| !OVERLAY_FLAGS.contains(&k.as_str()))) {
+        return Err(format!("unknown overlay flag {unknown:?}; flags: {}", OVERLAY_FLAGS.join(", ")));
+    }
     let flag = |name: &str| flags.get(name).and_then(Value::as_bool);
     let o: &mut Overlays = &mut game.debug_overlays;
     if let Some(b) = flag("nav_grid") {
@@ -2093,9 +2102,13 @@ fn apply_overlays(game: &mut Game, flags: &Value) {
     if let Some(b) = flag("pickups") {
         o.pickups = b;
     }
-    if let Some(b) = flag("inspect") {
-        o.inspect = b;
+    if let Some(b) = flag("hitboxes") {
+        o.hitboxes = b;
     }
+    if let Some(b) = flag("stats") {
+        o.stats = b;
+    }
+    Ok(())
 }
 
 fn detail_param(params: &Value) -> Result<Detail, String> {
@@ -2205,6 +2218,19 @@ mod tests {
             s.shells_ammo,
             s.is_wreck,
         )
+    }
+
+    /// The `overlays` schema, the `screenshot` schema's `overlays` object
+    /// and `apply_overlays`'s accepted names are exactly the `Overlays`
+    /// fields, so a new layer cannot land in the struct without the tools.
+    #[test]
+    fn overlay_schemas_match_the_struct() {
+        let fields: std::collections::BTreeSet<String> = to_value(Overlays::ALL).as_object().unwrap().keys().cloned().collect();
+        let keys = |schema: &Value| -> std::collections::BTreeSet<String> { schema["properties"].as_object().unwrap().keys().cloned().collect() };
+        let spec = |name: &str| serde_json::from_str::<Value>(TOOLS.iter().find(|t| t.name == name).unwrap().schema).unwrap();
+        assert_eq!(keys(&spec("overlays")), fields);
+        assert_eq!(keys(&spec("screenshot")["properties"]["overlays"]), fields);
+        assert_eq!(OVERLAY_FLAGS.iter().map(|f| f.to_string()).collect::<std::collections::BTreeSet<_>>(), fields);
     }
 
     #[test]
@@ -2430,20 +2456,53 @@ mod tests {
         assert_eq!(tank["row"], 3);
     }
 
+    /// The two tank layers are independent flags: one on leaves the other
+    /// where it was, and `status` reports the same values.
     #[test]
-    fn overlays_sets_inspect_like_any_other_flag() {
+    fn overlays_sets_hitboxes_and_stats_independently() {
+        let (mut server, tx) = DevServer::headless();
+        let mut game = game(6);
+        let set = |server: &mut DevServer, game: &mut Session, params: Value| {
+            let rx = call(&tx, "overlays", params);
+            server.before_frame(game, W, H);
+            rx.recv().unwrap().unwrap()
+        };
+        let flags = set(&mut server, &mut game, json!({ "hitboxes": true, "ai": true }));
+        assert_eq!(flags["hitboxes"], true, "{flags}");
+        assert_eq!(flags["stats"], false, "{flags}");
+        assert_eq!(flags["ai"], true, "{flags}");
+        assert_eq!(flags["nav_grid"], false, "{flags}");
+        assert!(flags.get("inspect").is_none(), "{flags}");
+        let flags = set(&mut server, &mut game, json!({ "stats": true }));
+        assert_eq!(flags["hitboxes"], true, "{flags}");
+        assert_eq!(flags["stats"], true, "{flags}");
+        let flags = set(&mut server, &mut game, json!({ "hitboxes": false }));
+        assert_eq!(flags["hitboxes"], false, "{flags}");
+        assert_eq!(flags["stats"], true, "{flags}");
+        let rx = call(&tx, "status", json!({}));
+        server.before_frame(&mut game, W, H);
+        let status = rx.recv().unwrap().unwrap();
+        assert_eq!(status["overlays"]["hitboxes"], false, "{status}");
+        assert_eq!(status["overlays"]["stats"], true, "{status}");
+    }
+
+    /// A flag name the struct does not have is refused, naming the real
+    /// ones, and the current flags are untouched - on `overlays` and on
+    /// `screenshot {overlays}` alike.
+    #[test]
+    fn overlays_rejects_unknown_flags() {
         let (mut server, tx) = DevServer::headless();
         let mut game = game(6);
         let rx = call(&tx, "overlays", json!({ "inspect": true, "ai": true }));
         server.before_frame(&mut game, W, H);
-        let flags = rx.recv().unwrap().unwrap();
-        assert_eq!(flags["inspect"], true, "{flags}");
-        assert_eq!(flags["ai"], true, "{flags}");
-        assert_eq!(flags["nav_grid"], false, "{flags}");
-        let rx = call(&tx, "status", json!({}));
+        let err = rx.recv().unwrap().unwrap_err();
+        assert!(err.contains("inspect") && err.contains("hitboxes") && err.contains("stats"), "{err}");
+        assert_eq!(game.debug_overlays, Overlays::NONE);
+        let rx = call(&tx, "screenshot", json!({ "overlays": { "inspect": true } }));
         server.before_frame(&mut game, W, H);
-        let status = rx.recv().unwrap().unwrap();
-        assert_eq!(status["overlays"]["inspect"], true, "{status}");
+        let err = rx.recv().unwrap().unwrap_err();
+        assert!(err.contains("inspect"), "{err}");
+        assert_eq!(game.debug_overlays, Overlays::NONE);
     }
 
     #[test]
@@ -2805,7 +2864,7 @@ cells."1,1" = { kind = "wall" }"#;
         // The tools that must keep working in build mode.
         for (tool, params) in [
             ("mode", json!({})),
-            ("overlays", json!({ "inspect": true })),
+            ("overlays", json!({ "hitboxes": true })),
             ("map_get", json!({})),
             ("tuning_get", json!({ "diff_only": true })),
             ("tuning_schema", json!({ "name_contains": "tank_speed" })),

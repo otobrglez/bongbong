@@ -14,7 +14,8 @@
 //! sand, dirt paths - not after what they look like on screen: the live PNG
 //! is a *retinted* copy (`tools/retint_ground.py`), and under the desert
 //! theme the "grass" is pale dust, the "sand" a smoother hardpan and the
-//! dirt a packed-earth road. Nothing here knows which theme is live.
+//! dirt a packed-earth road. The tile ids and tints here are the same
+//! under every theme; `draw` only names which file to blit from.
 //!
 //! Purely decorative: no physics body, no gameplay effect. `build` runs
 //! once per round (from `simulation::Game::init`, after every obstacle for
@@ -44,6 +45,8 @@
 
 use sola_raylib::prelude::*;
 
+use crate::canvas::{Canvas, Sheet};
+use crate::map::Theme;
 use crate::tuning::tuning;
 use crate::{GROUND_WORLD_TILE, OBSTACLE_GRID_SIZE, Position};
 
@@ -766,7 +769,7 @@ pub fn build(
 /// stair-steps visibly. These interpolate per pixel. Drawn straight after
 /// the ground so it shades the floor only - tanks and walls stand in front
 /// of it, not under it.
-pub fn draw_edge_shade(d: &mut impl RaylibDraw, width: i32, height: i32) {
+pub fn draw_edge_shade(c: &mut impl Canvas, width: i32, height: i32) {
     let strength = tuning().ground_edge_shade;
     if strength <= 0.0 {
         return;
@@ -777,10 +780,10 @@ pub fn draw_edge_shade(d: &mut impl RaylibDraw, width: i32, height: i32) {
     let band = (tuning().ground_edge_shade_px).max(1.0) as i32;
     // `_v` runs top->bottom and `_h` runs left->right, so the far edges
     // pass the colours the other way round.
-    d.draw_rectangle_gradient_v(0, 0, width, band, dark, clear);
-    d.draw_rectangle_gradient_v(0, height - band, width, band, clear, dark);
-    d.draw_rectangle_gradient_h(0, 0, band, height, dark, clear);
-    d.draw_rectangle_gradient_h(width - band, 0, band, height, clear, dark);
+    c.gradient_v(0, 0, width, band, dark, clear);
+    c.gradient_v(0, height - band, width, band, clear, dark);
+    c.gradient_h(0, 0, band, height, dark, clear);
+    c.gradient_h(width - band, 0, band, height, clear, dark);
 }
 
 fn source_rec(tile_id: i32) -> Rectangle {
@@ -801,7 +804,9 @@ fn source_rec(tile_id: i32) -> Rectangle {
 /// drawn first, before tread marks/obstacles/tanks. `time` (seconds,
 /// any clock that only moves while the picture should) steps the water
 /// through its frames and drifts the flow marks (`draw_current`).
-pub fn draw(d: &mut impl RaylibDraw, texture: &Texture2D, grid: &GroundGrid, time: f32) {
+/// `theme` only names the tileset file (`Sheet::Ground`): the tile ids
+/// and tints are the same under every theme.
+pub fn draw(c: &mut impl Canvas, grid: &GroundGrid, theme: Theme, time: f32) {
     let size = GROUND_WORLD_TILE;
     let origin = Vector2::new(size / 2.0, size / 2.0);
     let t = tuning();
@@ -813,10 +818,10 @@ pub fn draw(d: &mut impl RaylibDraw, texture: &Texture2D, grid: &GroundGrid, tim
             };
             let src = source_rec(grid.tiles[i][frame]);
             let dest = Rectangle::new(x as f32 * GROUND_WORLD_TILE, y as f32 * GROUND_WORLD_TILE, size, size);
-            d.draw_texture_pro(texture, src, dest, origin, 0.0, grid.tints[i]);
+            c.blit(Sheet::Ground(theme), src, dest, origin, 0.0, grid.tints[i]);
         }
     }
-    draw_current(d, grid, time, t.water_flow_speed, t.water_flow_lanes.max(0) as u32);
+    draw_current(c, grid, time, t.water_flow_speed, t.water_flow_lanes.max(0) as u32);
 }
 
 /// A deterministic per-lane hash: the marks are cosmetic, so they are
@@ -843,7 +848,7 @@ fn lane_hash(x: i32, lane: u32) -> u64 {
 /// the *same* lane at the same moment, so a mark leaving one cell's bottom
 /// edge enters the next cell's top edge without a jump - the flow reads as
 /// one body of water, not a grid of looping cells.
-fn draw_current(d: &mut impl RaylibDraw, grid: &GroundGrid, time: f32, speed: f32, lanes: u32) {
+fn draw_current(c: &mut impl Canvas, grid: &GroundGrid, time: f32, speed: f32, lanes: u32) {
     if lanes == 0 {
         return;
     }
@@ -875,7 +880,7 @@ fn draw_current(d: &mut impl RaylibDraw, grid: &GroundGrid, time: f32, speed: f3
                 for block in 0..WATER_FLOW_MARK_BLOCKS {
                     let by = ly + 2.0 * block as f32;
                     if (0.0..tile).contains(&by) {
-                        d.draw_rectangle((left + lx) as i32, (top + by) as i32, 2, 2, WATER_FLOW_MARK);
+                        c.fill_rect((left + lx) as i32, (top + by) as i32, 2, 2, WATER_FLOW_MARK);
                     }
                 }
             }

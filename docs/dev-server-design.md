@@ -47,10 +47,12 @@ Claude Code ──stdio JSON-RPC (MCP)──> bbmcp (src/bin/bbmcp.rs)
   round start/end) the phases append to and the server
   streams. `Game::frame` counts `update` calls per round.
 - `Game::debug_overlays` (`simulation::Overlays`) - flags `game.rs` draws:
-  the inspect readout (tank hitboxes + stats), blocked nav cells, AI
-  waypoint/heading/last action, projectile hit boxes, engagement targets,
-  pickup radii. Screen-space, post-composite. The I key cycles the presets
-  off -> inspect -> all (`Overlays::next_preset`, via
+  every tank's hitboxes (hull and turret damage boxes, the rounded movement
+  collider) and its stats card (ammo, weapon, hp, speed, velocity, collider
+  size, an enemy's retreat/fire state) as two separate flags, blocked nav
+  cells, AI waypoint/heading/last action, projectile hit boxes, engagement
+  targets, pickup radii. Screen-space, post-composite. The I key cycles the
+  presets off -> inspect (hitboxes + stats) -> all (`Overlays::next_preset`, via
   `Input::cycle_overlays_pressed`); the drawing code is dev-only
   (`#[cfg(feature = "dev-tools")]`), so a release build has none of it.
 - `.mcp.json` - registers the `bongbong` MCP server for Claude Code
@@ -144,7 +146,7 @@ construction; every request still lands in `before_frame`.
 | `terrain` | `only: all\|damaged\|burning\|fused`, `materials` | every live tile by `cell` (material, hp/max_hp, and when set drum, burning/burn_elapsed, fuse, heat, scorched, ram_timer), capped at 800 (`truncated`, `total` is the live count), plus `fires`, `fused`, `flames`, `burning_tanks`/`burning_wrecks` and the burning-tile/flying-drum/oil/grass/heated-cell counts |
 | `history` | `slot`, `last` (600), `every` (10) | sampled per-tank rows (frame, x/y, rotation, turret, action, ring, stuck, touching, is_player) over the last N frames plus per-tank aggregates: frames, distance, net, cluster_frames, stuck_frames, no_ring_frames, touching_frames, tank_touching_frames, and `round` - the turn counters since the round began (turns, u_turns, reversals, spins, max_spin_deg, turret_deg, last_turn_frame) |
 | `screenshot` | `scale` (0.5), `source: screen\|scene`, `overlays` | PNG (base64) + path under `target/devshots/` |
-| `overlays` | `nav_grid`, `ai`, `projectiles`, `engage`, `pickups`, `inspect` (individual flags; the I key cycles presets off -> inspect -> all) | current flags |
+| `overlays` | `nav_grid`, `ai`, `projectiles`, `engage`, `pickups`, `hitboxes`, `stats` (individual flags, an unknown one is an error; the I key cycles presets off -> inspect = hitboxes + stats -> all) | current flags |
 | `nav_grid` | - | ASCII grid with tanks/frog/pickups marked |
 | `field` | `target: player\|player2\|frog` (player) | the flow field enemies follow toward that target: `arrows` (`^ v < >` per cell, `G` goal, `#` blocked, `.` unreachable) and `costs` (cost to the goal per cell, -1 blocked/unreachable) - a priced firing lane or crowd cell shows as a jump in the costs |
 | `teleport` | `slot`, `x`, `y`, `facing` | - |

@@ -1,3 +1,4 @@
+use crate::canvas::{Canvas, Sheet};
 use crate::tuning::tuning;
 use sola_raylib::prelude::*;
 
@@ -54,7 +55,7 @@ impl Track {
 
 /// Draw a track mark, centered on its position, rotated to the tank's heading and
 /// faded according to its age.
-pub fn draw_track(d: &mut impl RaylibDraw, texture: &Texture2D, track: &Track) {
+pub fn draw_track(c: &mut impl Canvas, track: &Track) {
     let src = Rectangle::new(0.0, 0.0, TRACK_TEXTURE_SIZE, TRACK_TEXTURE_SIZE);
     let size = TRACK_TEXTURE_SIZE * track.scale;
 
@@ -63,5 +64,5 @@ pub fn draw_track(d: &mut impl RaylibDraw, texture: &Texture2D, track: &Track) {
 
     // Fade the whole sprite by scaling its alpha with the mark's remaining life.
     let tint = Color::WHITE.alpha(track.opacity());
-    d.draw_texture_pro(texture, src, dest, origin, track.rotation, tint);
+    c.blit(Sheet::Tracks, src, dest, origin, track.rotation, tint);
 }

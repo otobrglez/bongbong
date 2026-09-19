@@ -1,0 +1,189 @@
+# ai-frog-island - the frog on a moated island. Hand-authored (generated from an
+# ASCII layout): re-saving from the map editor would drop these comments.
+# 
+# Protect on the band plan, six tanks, the player in an assault. The frog
+# and the player start on an island ringed by a three-cell moat: the moat's
+# middle line is deep water (docs/water.md) - a wall to hulls, nothing to
+# shots - so the only ways on are the two two-cell road causeways north
+# and south, and their ends are fords that slow a hull to a crawl. Two
+# rivers run the full height of the field down cols 5 and 28: a tank
+# crossing one is carried south, and a tank wading along one drifts off
+# its line. Sandbags stand at the outer end of each causeway for the
+# attackers, tall grass on the island for the defender. Frog health packs
+# sit past the rivers on either side, ammo beside them, health top centre,
+# a shield bottom centre.
+
+version = 1
+tank = "assault"
+tanks = 6
+mission.kind = "protect"
+spawn.kind = "band"
+
+cells."5,0" = { kind = "water" }
+cells."18,0" = { kind = "pickup", pickup = "health" }
+cells."28,0" = { kind = "water" }
+cells."5,1" = { kind = "water" }
+cells."28,1" = { kind = "water" }
+cells."5,2" = { kind = "water" }
+cells."8,2" = { kind = "tree" }
+cells."14,2" = { kind = "sandbag" }
+cells."19,2" = { kind = "sandbag" }
+cells."26,2" = { kind = "pine" }
+cells."28,2" = { kind = "water" }
+cells."5,3" = { kind = "water" }
+cells."10,3" = { kind = "water" }
+cells."11,3" = { kind = "water" }
+cells."12,3" = { kind = "water" }
+cells."13,3" = { kind = "water" }
+cells."14,3" = { kind = "water" }
+cells."15,3" = { kind = "water" }
+cells."16,3" = { kind = "road" }
+cells."17,3" = { kind = "road" }
+cells."18,3" = { kind = "water" }
+cells."19,3" = { kind = "water" }
+cells."20,3" = { kind = "water" }
+cells."21,3" = { kind = "water" }
+cells."22,3" = { kind = "water" }
+cells."23,3" = { kind = "water" }
+cells."28,3" = { kind = "water" }
+cells."5,4" = { kind = "water" }
+cells."10,4" = { kind = "water" }
+cells."11,4" = { kind = "water" }
+cells."12,4" = { kind = "water" }
+cells."13,4" = { kind = "water" }
+cells."14,4" = { kind = "water" }
+cells."15,4" = { kind = "water" }
+cells."16,4" = { kind = "road" }
+cells."17,4" = { kind = "road" }
+cells."18,4" = { kind = "water" }
+cells."19,4" = { kind = "water" }
+cells."20,4" = { kind = "water" }
+cells."21,4" = { kind = "water" }
+cells."22,4" = { kind = "water" }
+cells."23,4" = { kind = "water" }
+cells."28,4" = { kind = "water" }
+cells."5,5" = { kind = "water" }
+cells."10,5" = { kind = "water" }
+cells."11,5" = { kind = "water" }
+cells."12,5" = { kind = "water" }
+cells."13,5" = { kind = "water" }
+cells."14,5" = { kind = "water" }
+cells."15,5" = { kind = "water" }
+cells."16,5" = { kind = "road" }
+cells."17,5" = { kind = "road" }
+cells."18,5" = { kind = "water" }
+cells."19,5" = { kind = "water" }
+cells."20,5" = { kind = "water" }
+cells."21,5" = { kind = "water" }
+cells."22,5" = { kind = "water" }
+cells."23,5" = { kind = "water" }
+cells."28,5" = { kind = "water" }
+cells."2,6" = { kind = "pickup", pickup = "ammo" }
+cells."5,6" = { kind = "water" }
+cells."10,6" = { kind = "water" }
+cells."11,6" = { kind = "water" }
+cells."12,6" = { kind = "water" }
+cells."21,6" = { kind = "water" }
+cells."22,6" = { kind = "water" }
+cells."23,6" = { kind = "water" }
+cells."28,6" = { kind = "water" }
+cells."31,6" = { kind = "pickup", pickup = "ammo" }
+cells."5,7" = { kind = "water" }
+cells."10,7" = { kind = "water" }
+cells."11,7" = { kind = "water" }
+cells."12,7" = { kind = "water" }
+cells."15,7" = { kind = "tall_grass" }
+cells."18,7" = { kind = "tall_grass" }
+cells."21,7" = { kind = "water" }
+cells."22,7" = { kind = "water" }
+cells."23,7" = { kind = "water" }
+cells."28,7" = { kind = "water" }
+cells."1,8" = { kind = "pickup", pickup = "frog_health" }
+cells."5,8" = { kind = "water" }
+cells."10,8" = { kind = "water" }
+cells."11,8" = { kind = "water" }
+cells."12,8" = { kind = "water" }
+cells."15,8" = { kind = "frog" }
+cells."18,8" = { kind = "start" }
+cells."21,8" = { kind = "water" }
+cells."22,8" = { kind = "water" }
+cells."23,8" = { kind = "water" }
+cells."28,8" = { kind = "water" }
+cells."32,8" = { kind = "pickup", pickup = "frog_health" }
+cells."5,9" = { kind = "water" }
+cells."10,9" = { kind = "water" }
+cells."11,9" = { kind = "water" }
+cells."12,9" = { kind = "water" }
+cells."15,9" = { kind = "tall_grass" }
+cells."18,9" = { kind = "tall_grass" }
+cells."21,9" = { kind = "water" }
+cells."22,9" = { kind = "water" }
+cells."23,9" = { kind = "water" }
+cells."28,9" = { kind = "water" }
+cells."5,10" = { kind = "water" }
+cells."10,10" = { kind = "water" }
+cells."11,10" = { kind = "water" }
+cells."12,10" = { kind = "water" }
+cells."21,10" = { kind = "water" }
+cells."22,10" = { kind = "water" }
+cells."23,10" = { kind = "water" }
+cells."28,10" = { kind = "water" }
+cells."5,11" = { kind = "water" }
+cells."10,11" = { kind = "water" }
+cells."11,11" = { kind = "water" }
+cells."12,11" = { kind = "water" }
+cells."13,11" = { kind = "water" }
+cells."14,11" = { kind = "water" }
+cells."15,11" = { kind = "water" }
+cells."16,11" = { kind = "road" }
+cells."17,11" = { kind = "road" }
+cells."18,11" = { kind = "water" }
+cells."19,11" = { kind = "water" }
+cells."20,11" = { kind = "water" }
+cells."21,11" = { kind = "water" }
+cells."22,11" = { kind = "water" }
+cells."23,11" = { kind = "water" }
+cells."28,11" = { kind = "water" }
+cells."5,12" = { kind = "water" }
+cells."10,12" = { kind = "water" }
+cells."11,12" = { kind = "water" }
+cells."12,12" = { kind = "water" }
+cells."13,12" = { kind = "water" }
+cells."14,12" = { kind = "water" }
+cells."15,12" = { kind = "water" }
+cells."16,12" = { kind = "road" }
+cells."17,12" = { kind = "road" }
+cells."18,12" = { kind = "water" }
+cells."19,12" = { kind = "water" }
+cells."20,12" = { kind = "water" }
+cells."21,12" = { kind = "water" }
+cells."22,12" = { kind = "water" }
+cells."23,12" = { kind = "water" }
+cells."28,12" = { kind = "water" }
+cells."5,13" = { kind = "water" }
+cells."10,13" = { kind = "water" }
+cells."11,13" = { kind = "water" }
+cells."12,13" = { kind = "water" }
+cells."13,13" = { kind = "water" }
+cells."14,13" = { kind = "water" }
+cells."15,13" = { kind = "water" }
+cells."16,13" = { kind = "road" }
+cells."17,13" = { kind = "road" }
+cells."18,13" = { kind = "water" }
+cells."19,13" = { kind = "water" }
+cells."20,13" = { kind = "water" }
+cells."21,13" = { kind = "water" }
+cells."22,13" = { kind = "water" }
+cells."23,13" = { kind = "water" }
+cells."28,13" = { kind = "water" }
+cells."5,14" = { kind = "water" }
+cells."8,14" = { kind = "pine" }
+cells."14,14" = { kind = "sandbag" }
+cells."19,14" = { kind = "sandbag" }
+cells."26,14" = { kind = "tree" }
+cells."28,14" = { kind = "water" }
+cells."5,15" = { kind = "water" }
+cells."28,15" = { kind = "water" }
+cells."5,16" = { kind = "water" }
+cells."18,16" = { kind = "pickup", pickup = "shield" }
+cells."28,16" = { kind = "water" }

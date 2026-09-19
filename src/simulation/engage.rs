@@ -174,6 +174,15 @@ impl EngageRing {
         self.choice.clear();
     }
 
+    /// Forget `entity`'s sticky slot so its next `assign` picks afresh by
+    /// where it now stands. For a tank that just came through a portal:
+    /// its old slot is still "reachable" (portals merge components), so
+    /// without this it would route straight back through the portal to a
+    /// slot on the side it just left.
+    pub fn release(&mut self, entity: Entity) {
+        self.choice.remove(&entity);
+    }
+
     /// Assign one target point to each tank in `engaged` (entity, current
     /// position - callers pass these sorted by entity so the greedy order
     /// is stable frame to frame). A tank prefers the axis it already stands

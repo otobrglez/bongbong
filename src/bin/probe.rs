@@ -1207,6 +1207,18 @@ fn check_anomalies(
             }
         }
 
+        // A portal jump is not travel: the frame a tank came through one
+        // (`Event::Teleported`) the trail restarts at the arrival, so the
+        // churn window and the path total never count the screen it
+        // crossed, and the spin chain is cut too. `invariant`'s speed is
+        // the physics velocity, which the jump zeroes, so it needs nothing.
+        let teleported = game.events().iter().any(|e| matches!(e, Event::Teleported { slot, .. } if *slot == tank.slot));
+        if teleported {
+            track.trail.clear();
+            track.trail_path_len = 0.0;
+            track.spin_sum = 0.0;
+            track.spin_start_pos = pos;
+        }
         // Churn: maintain the trailing position trail and compare path
         // length against net displacement once the window is full.
         if let Some(&(_, last_pos)) = track.trail.back() {

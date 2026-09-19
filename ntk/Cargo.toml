@@ -1,0 +1,38 @@
+# Conference demos (NTK): small, self-contained raylib-with-Rust examples.
+# Each demo is one file under src/bin/, numbered in talk order, and depends
+# on nothing from the game - only sola-raylib. Run one with `just ntk 01_hello`
+# or `cargo run -p ntk-demos --bin 01_hello`.
+[package]
+name = "ntk-demos"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+raylib = { package = "sola-raylib", version = "6.3.0" }
+# Demo 06 runs the real engine: the game crate as a library.
+bongbong = { path = ".." }
+
+[[bin]]
+name = "01_hello"
+path = "src/bin/01_hello.rs"
+
+[[bin]]
+name = "02_move"
+path = "src/bin/02_move.rs"
+
+[[bin]]
+name = "03_shoot"
+path = "src/bin/03_shoot.rs"
+
+[[bin]]
+name = "04_tank"
+path = "src/bin/04_tank.rs"
+
+[[bin]]
+name = "05_astar"
+path = "src/bin/05_astar.rs"
+
+[[bin]]
+name = "06_explosions"
+path = "src/bin/06_explosions.rs"

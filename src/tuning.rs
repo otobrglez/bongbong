@@ -1017,6 +1017,31 @@ tunables! {
         enemy_retreat_range_factor: f32 = 1.3 in 1.0 ..= 5.0;
     }
 
+    group portal {
+        /// A tank whose centre comes this close (px) to a portal's anchor
+        /// centre teleports (docs/teleporting.md). Also the portal's nav
+        /// footprint: every grid cell whose centre is within it is a cell
+        /// the AI may route into the hub from.
+        portal_trigger_radius: f32 = 40.0 in 8.0 ..= 200.0;
+        /// Seconds after arriving before a tank may enter any portal
+        /// again - the arrival cell is just outside the exit's trigger
+        /// radius, so without this a tank rolling on would bounce back.
+        /// Counts down only while the tank is off every portal: one that
+        /// parks on its exit to fight never re-triggers until it leaves.
+        portal_cooldown_seconds: f32 = 1.5 in 0.0 ..= 30.0;
+        /// What the AI's planner charges for a hop, in grid cells. Low
+        /// makes enemies take every portal that shortens the walk; high
+        /// makes them walk unless the portal saves a whole trip. Never
+        /// below one step, or the hub would beat walking between two
+        /// cells of the same footprint (`Grid::with_portals` clamps).
+        portal_hop_cost: f32 = 4.0 in 1.0 ..= 64.0;
+        /// How many grid steps out from the exit portal the arrival
+        /// search may walk (through open cells only) for a free cell
+        /// outside the exit's trigger radius. Nothing free within it means
+        /// the teleport does not happen this frame.
+        portal_arrival_max_cells: i32 = 6 in 1 ..= 32;
+    }
+
     group frog {
         /// The frog's health - deliberately much lower than a tank's 100, a
         /// couple of hits end the round, so "protect the frog" is a real
@@ -1423,6 +1448,14 @@ tunables! {
     }
 
     group cosmetics {
+        // --- portals (portal.rs) ---
+        /// Seconds for one visual revolution of a portal's spiral - the
+        /// twelve baked frames cycle once over this. Slow on purpose: a
+        /// black hole turns, it does not spin.
+        portal_spin_seconds: f32 = 4.0 in 0.5 ..= 30.0;
+        /// Peak opacity of the additive blue glow under an active portal
+        /// (0 turns it off).
+        portal_glow_strength: f32 = 0.35 in 0.0 ..= 1.0;
         // --- tall grass (grass.rs) ---
         /// Tufts scattered per tall-grass cell.
         ///

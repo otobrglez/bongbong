@@ -8,6 +8,7 @@
 use serde::{Deserialize, Serialize};
 use sola_raylib::prelude::*;
 
+use crate::canvas::{Canvas, Sheet};
 use crate::{PICKUP_SCALE, PICKUP_TEXTURE_SIZE, Position};
 
 /// Which effect a pickup has when collected - see `simulation::collect_pickups`.
@@ -99,14 +100,13 @@ impl Pickup {
     }
 }
 
-/// Draw one pickup, centered on its position. `texture` is whichever of
-/// `game::Textures::pickup_health`/`pickup_ammo` matches `pickup.kind` - the
-/// caller picks (see `Game::render`), since each kind is its own standalone
-/// 32x32 image rather than rows in one shared sheet.
-pub fn draw_pickup(d: &mut impl RaylibDraw, texture: &Texture2D, pickup: &Pickup) {
+/// Draw one pickup, centered on its position, from its kind's own sheet
+/// (`Sheet::Pickup` - each kind is a standalone 32x32 image rather than rows
+/// in one shared sheet).
+pub fn draw_pickup(c: &mut impl Canvas, pickup: &Pickup) {
     let size = pickup.size();
     let src = Rectangle::new(0.0, 0.0, PICKUP_TEXTURE_SIZE, PICKUP_TEXTURE_SIZE);
     let dest = Rectangle::new(pickup.position.x, pickup.position.y, size, size);
     let origin = Vector2::new(size / 2.0, size / 2.0);
-    d.draw_texture_pro(texture, src, dest, origin, 0.0, Color::WHITE);
+    c.blit(Sheet::Pickup(pickup.kind), src, dest, origin, 0.0, Color::WHITE);
 }

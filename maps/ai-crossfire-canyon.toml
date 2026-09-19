@@ -1,0 +1,123 @@
+# ai-crossfire-canyon - a desert keep under fire from three sides. Hand-authored (generated
+# from an ASCII layout): re-saving from the map editor would drop these
+# comments. Level tables as dotted keys on purpose - a `[spawn]` header would
+# swallow every `cells.` line after it.
+# 
+# Destroy on the waves plan: five waves of 2, 3, 4, 5 and 6 tanks climbing
+# light -> super through three gates on the top edge and two on each side
+# (all clear of the iron walls, so every lane is straight).
+# No gate on the bottom edge, so the bottom lane is the one quiet flank.
+# The player holds a titan inside a brick keep (cols 14-24, rows 7-15) with
+# glass slits on every wall and three-cell doors top and bottom. Four iron
+# L-walls outside funnel every roll-in into the lanes that meet at the
+# keep, so the doors are always under crossfire. An oil drum sits in each
+# side lane and a fuel drum beside each door lane for anyone who wants to make
+# the approach worse. Laser and plasma in the top corners, minigun and
+# shield in the bottom ones, health and ammo inside the keep, a speed-up
+# on the quiet bottom lane.
+
+version = 1
+size = [40, 22.5]
+theme = "desert"
+tank = "titan"
+mission.kind = "destroy"
+spawn.kind = "waves"
+spawn.waves = 5
+spawn.size = 2
+spawn.growth = 1
+spawn.tier_start = "light"
+spawn.tier_end = "super"
+
+cells."5,0" = { kind = "gate" }
+cells."19,0" = { kind = "gate" }
+cells."34,0" = { kind = "gate" }
+cells."16,3" = { kind = "barrel", drum = "fuel" }
+cells."9,4" = { kind = "wall", material = "iron" }
+cells."10,4" = { kind = "wall", material = "iron" }
+cells."11,4" = { kind = "wall", material = "iron" }
+cells."12,4" = { kind = "wall", material = "iron" }
+cells."13,4" = { kind = "wall", material = "iron" }
+cells."14,4" = { kind = "wall", material = "iron" }
+cells."15,4" = { kind = "wall", material = "iron" }
+cells."23,4" = { kind = "wall", material = "iron" }
+cells."24,4" = { kind = "wall", material = "iron" }
+cells."25,4" = { kind = "wall", material = "iron" }
+cells."26,4" = { kind = "wall", material = "iron" }
+cells."27,4" = { kind = "wall", material = "iron" }
+cells."28,4" = { kind = "wall", material = "iron" }
+cells."29,4" = { kind = "wall", material = "iron" }
+cells."5,5" = { kind = "pickup", pickup = "laser" }
+cells."9,5" = { kind = "wall", material = "iron" }
+cells."29,5" = { kind = "wall", material = "iron" }
+cells."35,5" = { kind = "pickup", pickup = "plasma" }
+cells."0,6" = { kind = "gate" }
+cells."9,6" = { kind = "wall", material = "iron" }
+cells."29,6" = { kind = "wall", material = "iron" }
+cells."39,6" = { kind = "gate" }
+cells."9,7" = { kind = "wall", material = "iron" }
+cells."14,7" = { kind = "wall", material = "brick" }
+cells."15,7" = { kind = "wall", material = "brick" }
+cells."16,7" = { kind = "wall", material = "glass" }
+cells."17,7" = { kind = "wall", material = "brick" }
+cells."21,7" = { kind = "wall", material = "brick" }
+cells."22,7" = { kind = "wall", material = "glass" }
+cells."23,7" = { kind = "wall", material = "brick" }
+cells."24,7" = { kind = "wall", material = "brick" }
+cells."29,7" = { kind = "wall", material = "iron" }
+cells."9,8" = { kind = "wall", material = "iron" }
+cells."14,8" = { kind = "wall", material = "brick" }
+cells."24,8" = { kind = "wall", material = "brick" }
+cells."29,8" = { kind = "wall", material = "iron" }
+cells."14,9" = { kind = "wall", material = "brick" }
+cells."19,9" = { kind = "pickup", pickup = "health" }
+cells."24,9" = { kind = "wall", material = "brick" }
+cells."14,10" = { kind = "wall", material = "glass" }
+cells."24,10" = { kind = "wall", material = "glass" }
+cells."3,11" = { kind = "barrel", drum = "oil" }
+cells."14,11" = { kind = "wall", material = "brick" }
+cells."19,11" = { kind = "start" }
+cells."24,11" = { kind = "wall", material = "brick" }
+cells."35,11" = { kind = "barrel", drum = "oil" }
+cells."14,12" = { kind = "wall", material = "glass" }
+cells."24,12" = { kind = "wall", material = "glass" }
+cells."14,13" = { kind = "wall", material = "brick" }
+cells."19,13" = { kind = "pickup", pickup = "ammo" }
+cells."24,13" = { kind = "wall", material = "brick" }
+cells."9,14" = { kind = "wall", material = "iron" }
+cells."14,14" = { kind = "wall", material = "brick" }
+cells."24,14" = { kind = "wall", material = "brick" }
+cells."29,14" = { kind = "wall", material = "iron" }
+cells."9,15" = { kind = "wall", material = "iron" }
+cells."14,15" = { kind = "wall", material = "brick" }
+cells."15,15" = { kind = "wall", material = "brick" }
+cells."16,15" = { kind = "wall", material = "glass" }
+cells."17,15" = { kind = "wall", material = "brick" }
+cells."21,15" = { kind = "wall", material = "brick" }
+cells."22,15" = { kind = "wall", material = "glass" }
+cells."23,15" = { kind = "wall", material = "brick" }
+cells."24,15" = { kind = "wall", material = "brick" }
+cells."29,15" = { kind = "wall", material = "iron" }
+cells."0,16" = { kind = "gate" }
+cells."9,16" = { kind = "wall", material = "iron" }
+cells."29,16" = { kind = "wall", material = "iron" }
+cells."39,16" = { kind = "gate" }
+cells."5,17" = { kind = "pickup", pickup = "minigun" }
+cells."9,17" = { kind = "wall", material = "iron" }
+cells."29,17" = { kind = "wall", material = "iron" }
+cells."35,17" = { kind = "pickup", pickup = "shield" }
+cells."9,18" = { kind = "wall", material = "iron" }
+cells."10,18" = { kind = "wall", material = "iron" }
+cells."11,18" = { kind = "wall", material = "iron" }
+cells."12,18" = { kind = "wall", material = "iron" }
+cells."13,18" = { kind = "wall", material = "iron" }
+cells."14,18" = { kind = "wall", material = "iron" }
+cells."15,18" = { kind = "wall", material = "iron" }
+cells."23,18" = { kind = "wall", material = "iron" }
+cells."24,18" = { kind = "wall", material = "iron" }
+cells."25,18" = { kind = "wall", material = "iron" }
+cells."26,18" = { kind = "wall", material = "iron" }
+cells."27,18" = { kind = "wall", material = "iron" }
+cells."28,18" = { kind = "wall", material = "iron" }
+cells."29,18" = { kind = "wall", material = "iron" }
+cells."23,19" = { kind = "barrel", drum = "fuel" }
+cells."20,21" = { kind = "pickup", pickup = "speedup" }

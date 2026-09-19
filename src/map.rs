@@ -100,6 +100,14 @@ pub enum CellObject {
     /// drive through has to be its own light entity (see `grass.rs`).
     #[serde(rename = "tall_grass")]
     TallGrass,
+    /// A teleport portal (docs/teleporting.md): the *anchor* cell of a
+    /// ~3x3-cell spiral tanks drive into to be moved to another portal.
+    /// Multi-instance, deliberately **not** solid and not an `Obstacle`
+    /// (the same reasoning as `TallGrass`): the art spills over the
+    /// neighbouring cells, which stay paintable. A map with fewer than two
+    /// portals has an inert network - nothing teleports and the round
+    /// draws none of them.
+    Portal,
 }
 
 impl CellObject {
@@ -153,7 +161,7 @@ impl CellObject {
 /// picks the pair by the live map each frame, so the builder can switch a
 /// map's theme and see it at once. New themes (ice is the obvious next
 /// one) are one variant plus one retint curve and one grass species set.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Theme {
     #[default]
@@ -463,6 +471,16 @@ impl MapFile {
             .collect()
     }
 
+    /// Every portal anchor cell, in `iter_cells` order - the order
+    /// `Game::portals` keeps, so a portal's index is stable across the
+    /// map, the round and the dev server.
+    pub fn portal_cells(&self) -> Vec<(i32, i32)> {
+        self.iter_cells()
+            .filter(|(_, _, obj)| matches!(obj, CellObject::Portal))
+            .map(|(col, row, _)| (col, row))
+            .collect()
+    }
+
     /// Cap on how far `nearest_free_cell` will spiral out looking for an
     /// unwalled cell - 64 cells (2048px at `OBSTACLE_GRID_SIZE`) comfortably
     /// covers the default 1280x720 battlefield (40x22.5 cells) from any
@@ -513,8 +531,8 @@ pub fn maps_dir() -> PathBuf {
     PathBuf::from("maps")
 }
 
-/// The maps compiled into the binary, by name: the default battlefield and
-/// the two mission fixtures. They are what the web build can offer its
+/// The maps compiled into the binary, by name: the default battlefields,
+/// the two mission fixtures and the portal map. They are what the web build can offer its
 /// Load list, since nothing outside `static/` ships in the wasm, and they
 /// stand in on native for a checkout without a `maps/` directory.
 pub const SHIPPED_MAPS: &[(&str, &str)] = &[
@@ -522,6 +540,7 @@ pub const SHIPPED_MAPS: &[(&str, &str)] = &[
     ("default-desert", include_str!("../maps/default-desert.toml")),
     ("hunt-basic", include_str!("../maps/missions/hunt-basic.toml")),
     ("waves-basic", include_str!("../maps/missions/waves-basic.toml")),
+    ("portals", include_str!("../maps/portals.toml")),
 ];
 
 /// Whether this build can write a map to disk: native yes; web and iOS no
@@ -667,6 +686,8 @@ cells."3,5" = { kind = "enemy_frog" }
 cells."4,5" = { kind = "start2" }
 cells."0,11" = { kind = "gate" }
 cells."39,11" = { kind = "gate" }
+cells."30,5" = { kind = "portal" }
+cells."10,5" = { kind = "portal" }
 "#;
         let map = MapFile::from_toml_str(text).unwrap();
         assert_eq!(map.tank2, Some(TankKind::Titan));
@@ -681,11 +702,17 @@ cells."39,11" = { kind = "gate" }
         assert_eq!((map.spawn.tier_start, map.spawn.tier_end), (Some(Tier::Light), Some(Tier::Heavy)));
         assert_eq!(map.enemy_frog_cell(), Some((3, 5)));
         assert_eq!(map.gate_cells(), vec![(0, 11), (39, 11)]);
+        // Portals: multi-instance anchors in `iter_cells` order, never solid,
+        // so a spawn fallback can stand on one.
+        assert_eq!(map.portal_cells(), vec![(10, 5), (30, 5)]);
+        assert!(map.cell(10, 5).is_some_and(|c| !c.is_solid() && c.material().is_none()));
+        assert_eq!(map.nearest_free_cell(10, 5), (10, 5));
         let back = MapFile::from_toml_str(&map.to_toml_string().unwrap()).unwrap();
         assert_eq!(back.mission, map.mission);
         assert_eq!(back.spawn, map.spawn);
         assert_eq!(back.enemy_frog_cell(), map.enemy_frog_cell());
         assert_eq!(back.gate_cells(), map.gate_cells());
+        assert_eq!(back.portal_cells(), map.portal_cells());
         assert_eq!(back.start2_cell(), Some((4, 5)));
         assert_eq!(back.tank2, Some(TankKind::Titan));
     }

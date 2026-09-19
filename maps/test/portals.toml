@@ -1,0 +1,65 @@
+# maps/test/ fixture - the portal network (docs/teleporting.md). Hand-
+# authored: re-saving from the map editor would drop these comments. The
+# level tables are dotted keys on purpose - a `[mission]`/`[spawn]` table
+# header would swallow every `cells.` line after it.
+#
+# portals: two rooms split by a full-height iron column (col 20) and joined
+# by nothing but a portal on each side ((15,11) and (25,11), each with a
+# clear 3x3 around it). The player and the frog live on the left; three
+# waves of two roll in through two gates on the right edge, spread well
+# apart (rows 5 and 17) so a wave's pair does not arrive shoulder to
+# shoulder and circle each other on the way to the same portal. Every
+# enemy has to route through the portal to reach the frog, so this is the
+# standing check that the planner's hub routing works and that the linter
+# sees one playfield through the network: `just probe-fixtures` sweeps it
+# at the shared budgets (never-arrived=0, low-progress=0), and maplint
+# expects no errors, no portal-alone/portal-blocked and no disconnected
+# region. Brick pairs on each side are cover, not lanes.
+
+version = 1
+size = [40, 22.5]
+mission.kind = "protect"
+spawn.kind = "waves"
+spawn.waves = 3
+spawn.size = 2
+spawn.tier_start = "light"
+spawn.tier_end = "heavy"
+
+cells."10,11" = { kind = "start" }
+cells."5,11" = { kind = "frog" }
+cells."15,11" = { kind = "portal" }
+cells."25,11" = { kind = "portal" }
+cells."39,5" = { kind = "gate" }
+cells."39,17" = { kind = "gate" }
+cells."20,0" = { kind = "wall", material = "iron" }
+cells."20,1" = { kind = "wall", material = "iron" }
+cells."20,2" = { kind = "wall", material = "iron" }
+cells."20,3" = { kind = "wall", material = "iron" }
+cells."20,4" = { kind = "wall", material = "iron" }
+cells."20,5" = { kind = "wall", material = "iron" }
+cells."20,6" = { kind = "wall", material = "iron" }
+cells."20,7" = { kind = "wall", material = "iron" }
+cells."20,8" = { kind = "wall", material = "iron" }
+cells."20,9" = { kind = "wall", material = "iron" }
+cells."20,10" = { kind = "wall", material = "iron" }
+cells."20,11" = { kind = "wall", material = "iron" }
+cells."20,12" = { kind = "wall", material = "iron" }
+cells."20,13" = { kind = "wall", material = "iron" }
+cells."20,14" = { kind = "wall", material = "iron" }
+cells."20,15" = { kind = "wall", material = "iron" }
+cells."20,16" = { kind = "wall", material = "iron" }
+cells."20,17" = { kind = "wall", material = "iron" }
+cells."20,18" = { kind = "wall", material = "iron" }
+cells."20,19" = { kind = "wall", material = "iron" }
+cells."20,20" = { kind = "wall", material = "iron" }
+cells."20,21" = { kind = "wall", material = "iron" }
+cells."20,22" = { kind = "wall", material = "iron" }
+
+cells."12,6" = { kind = "wall", material = "brick" }
+cells."12,7" = { kind = "wall", material = "brick" }
+cells."12,15" = { kind = "wall", material = "brick" }
+cells."12,16" = { kind = "wall", material = "brick" }
+cells."28,6" = { kind = "wall", material = "brick" }
+cells."28,7" = { kind = "wall", material = "brick" }
+cells."28,15" = { kind = "wall", material = "brick" }
+cells."28,16" = { kind = "wall", material = "brick" }

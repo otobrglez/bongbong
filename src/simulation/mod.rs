@@ -230,6 +230,9 @@ pub enum Event {
     /// A fuel drum set off by another blast launched from (`x`, `y`)
     /// toward (`to_x`, `to_y`), where it will detonate when it lands.
     DrumLaunched { x: f32, y: f32, to_x: f32, to_y: f32 },
+    /// `slot`'s tank entered the portal at (`x`, `y`) and was placed at
+    /// (`to_x`, `to_y`), beside another portal (`Game::portal_phase`).
+    Teleported { slot: usize, x: f32, y: f32, to_x: f32, to_y: f32 },
     /// A ground cell centred on (`x`, `y`) caught fire: an oil drum's
     /// pool (`pool`) or a lit trail cell.
     FireStarted { x: f32, y: f32, pool: bool },
@@ -293,9 +296,13 @@ pub enum HitTarget {
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Overlays {
-    /// The hitbox/collider outlines and per-tank stat readout (`game.rs`'s
-    /// `draw_tank_inspect`).
-    pub inspect: bool,
+    /// Every tank's hull damage box, turret box and rounded movement
+    /// collider (`game.rs`'s `draw_tank_boxes`).
+    pub hitboxes: bool,
+    /// Every tank's readout card - ammo, weapon, hp, speed, velocity,
+    /// collider size, and an enemy's retreat/fire state (`game.rs`'s
+    /// `draw_tank_stats`).
+    pub stats: bool,
     /// The routing grid: blocked cells, priced cells shaded by their
     /// surcharge, and player 1's flow field as an arrow per cell.
     pub nav_grid: bool,
@@ -312,21 +319,24 @@ pub struct Overlays {
 impl Overlays {
     /// Every overlay off.
     pub const NONE: Overlays = Overlays {
-        inspect: false,
+        hitboxes: false,
+        stats: false,
         nav_grid: false,
         ai: false,
         projectiles: false,
         engage: false,
         pickups: false,
     };
-    /// Only the inspect layer.
+    /// Both tank layers - hitboxes and the stats card - and nothing else.
     pub const INSPECT: Overlays = Overlays {
-        inspect: true,
+        hitboxes: true,
+        stats: true,
         ..Overlays::NONE
     };
     /// Every overlay on.
     pub const ALL: Overlays = Overlays {
-        inspect: true,
+        hitboxes: true,
+        stats: true,
         nav_grid: true,
         ai: true,
         projectiles: true,
@@ -340,8 +350,9 @@ impl Overlays {
     }
 
     /// The I key's cycle: `NONE` -> `INSPECT` -> `ALL` -> `NONE`. A hand-set
-    /// mix (the dev server's `overlays` tool) snaps to its next step: nothing
-    /// on -> `INSPECT`, exactly `INSPECT` -> `ALL`, anything else -> `NONE`.
+    /// mix (the dev server's `overlays` tool - one tank layer without the
+    /// other counts) snaps to its next step: nothing on -> `INSPECT`,
+    /// exactly `INSPECT` -> `ALL`, anything else -> `NONE`.
     pub fn next_preset(self) -> Overlays {
         if !self.any() {
             Overlays::INSPECT
@@ -349,6 +360,20 @@ impl Overlays {
             Overlays::ALL
         } else {
             Overlays::NONE
+        }
+    }
+
+    /// The name the dev label prints: `None` while nothing is on, otherwise
+    /// the preset this mix is exactly (`inspect`, `all`) or `custom`.
+    pub fn preset_name(self) -> Option<&'static str> {
+        if !self.any() {
+            None
+        } else if self == Overlays::INSPECT {
+            Some("inspect")
+        } else if self == Overlays::ALL {
+            Some("all")
+        } else {
+            Some("custom")
         }
     }
 }
@@ -503,6 +528,12 @@ pub struct Game {
     /// The map's oil-trail cells that have not burnt yet, as grid cells
     /// (`CellObject::Oil`). Not solid, no nav effect until lit.
     pub(crate) oil_cells: HashSet<(i32, i32)>,
+    /// The map's portal anchors as world positions, in `MapFile::portal_cells`
+    /// order (docs/teleporting.md). Plain positions: a portal has no
+    /// entity and no body. The network is *active* only with two or more
+    /// (`portals_active`); a lone portal is kept here so tooling can list
+    /// it, but nothing teleports and the round draws nothing.
+    pub(crate) portals: Vec<Position>,
     /// Fuel drums in the air, launched by another blast and about to
     /// detonate where they land (`props::tick_launches`).
     pub(crate) flying_drums: Vec<FlyingDrum>,
@@ -589,6 +620,17 @@ pub struct Game {
     /// `apply_debug_kills` at the top of the next playing frame, so the
     /// kill runs through the normal explosion/round-end path.
     pub(crate) debug_kills: Vec<usize>,
+    /// Barrel positions a tool asked to set off (`debug_detonate`); drained
+    /// by `apply_debug_detonations` at the top of the next playing frame so
+    /// the blast runs through `damage_obstacle` like a direct hit would.
+    pub(crate) debug_detonations: Vec<Position>,
+    /// `render` skips the ground tileset and its edge vignette and leaves
+    /// the field flat white; everything on the ground (decals, scorches,
+    /// fires) still draws. For demos that want the effects on a blank sheet.
+    pub plain_canvas: bool,
+    /// `render` draws no player tank, ring or label. The tank still exists
+    /// and simulates; only its presentation is skipped.
+    pub hide_players: bool,
     /// Debug overlay switches `render` reads (dev builds only - see
     /// `game.rs`), set by the dev server's `overlays` tool or cycled by the
     /// I key. Survive restarts; all off by default.
@@ -682,6 +724,10 @@ pub(crate) const SHOCK_COOKOFF: f32 = 0.1;
 /// well under a tank dying. Deliberately no `flash_screen` - the whole-screen
 /// flash is reserved for kills and barrels.
 pub(crate) const SHOCK_SHIELD_BREAK: f32 = 0.45;
+/// A tank leaving or arriving through a portal: one small ring at each
+/// end, so the eye is led from where it vanished to where it appeared.
+/// Under a shield break - nothing was hurt - and no `flash_screen`.
+pub(crate) const SHOCK_TELEPORT: f32 = 0.3;
 
 impl Game {
     /// Set up a fresh round: player, map terrain, enemies, frog, pickups,
@@ -720,6 +766,7 @@ impl Game {
         self.cookoffs.clear();
         self.fires.clear();
         self.oil_cells.clear();
+        self.portals.clear();
         self.flying_drums.clear();
         self.screen_flash = None;
         self.screen_flash_cooldown = 0.0;
@@ -732,6 +779,7 @@ impl Game {
         self.frame = 0;
         self.last_engage.clear();
         self.debug_kills.clear();
+        self.debug_detonations.clear();
         self.player2 = None;
         self.frog = None;
         self.enemy_frog = None;
@@ -812,6 +860,7 @@ impl Game {
         // of tufts. Hashed from position, so this draws no round RNG.
         self.grass_cells = map_spawn.grass_cells.clone();
         self.oil_cells = map_spawn.oil_cells.iter().copied().collect();
+        self.portals = map_spawn.portal_cells.iter().map(|&(c, r)| map::cell_to_world(c, r)).collect();
         // Sorted by where each tuft is *rooted*, once and for all: tufts
         // never move, and `game.rs` merges them against the tanks in this
         // order every frame to get the depth right (a tuft rooted behind a
@@ -1137,8 +1186,10 @@ impl Game {
 
         if self.outcome == Outcome::Playing {
             self.apply_debug_kills(&mut f);
+            self.apply_debug_detonations(&mut f);
             self.frog_phase(&mut f);
             self.pickup_phase(&mut f);
+            self.portal_phase(&mut f, &grid);
             self.player_phase(input, &mut f);
             self.rollin_phase(&mut f);
             self.enemy_phase(&mut f, &grid);
@@ -1257,10 +1308,19 @@ impl Game {
     /// obstacles' burn, the frog's animation and in-flight hop (its static
     /// body follows `position`), and track fade.
     fn tick_timers(&mut self, dt: f32, rng: &mut SmallRng) {
+        // The portal cooldown only runs while the tank is off every
+        // portal: a tank that stops to fight beside its exit and drifts
+        // onto it must not bounce back the moment the timer ends - it has
+        // to leave and come back (docs/teleporting.md).
+        let portals: &[Position] = if self.portals.len() >= 2 { &self.portals } else { &[] };
+        let trigger_radius = tuning().portal_trigger_radius;
         for tank in self.world.query::<&mut Tank>().iter() {
             tank.tick_recharge(dt);
             tank.fire_cooldown = (tank.fire_cooldown - dt).max(0.0);
             tank.ram_cooldown = (tank.ram_cooldown - dt).max(0.0);
+            if tank.portal_cooldown > 0.0 && !portals.iter().any(|p| p.distance_to(tank.position) <= trigger_radius) {
+                tank.portal_cooldown = (tank.portal_cooldown - dt).max(0.0);
+            }
             tank.hit_flash_timer = (tank.hit_flash_timer - dt).max(0.0);
             tank.speed_boost_timer = (tank.speed_boost_timer - dt).max(0.0);
             tank.tick_shield(dt);
@@ -1499,6 +1559,124 @@ impl Game {
             }
         } else {
             self.pickup_respawn_timer = tuning().pickup_respawn_seconds;
+        }
+    }
+
+    /// Portals (docs/teleporting.md): a live tank whose centre comes
+    /// within `portal_trigger_radius` of a portal, with its
+    /// `portal_cooldown` run out, is placed beside a *different* portal
+    /// chosen uniformly at random among those with room - the nearest
+    /// open cell to the exit, reached through open cells within
+    /// `portal_arrival_max_cells`, outside the exit's trigger radius and
+    /// clear of every other tank (wrecks included). Heading is kept,
+    /// velocity zeroed (`place_tank`), the cooldown set, and the tank's
+    /// AI memory and engagement slot dropped so it plans afresh. No room
+    /// anywhere: nothing happens, and no RNG is drawn. Players in index
+    /// order first, then enemies by slot, one draw per teleport - a round
+    /// on a map with fewer than two portals is byte-identical to one with
+    /// none. Runs before `step_world` so the body and `tank.position`
+    /// agree when `sync_tanks_and_ram` measures travel: the jump lays no
+    /// tread marks.
+    fn portal_phase(&mut self, f: &mut Frame, grid: &Grid) {
+        if !self.portals_active() {
+            return;
+        }
+        let t = tuning();
+        let radius = t.portal_trigger_radius;
+        let max_cells = t.portal_arrival_max_cells.max(1) as usize;
+        // Two big tanks on neighbouring cell centres (32 px) overlap; two
+        // cells apart (64 px) they clear. The pad puts the bar between.
+        let clearance = battlefield::max_tank_clearance_half_extent() * 2.0 + PATHFIND_CELL_SIZE * 0.25;
+        let mut candidates: Vec<(Entity, usize, Position)> = Vec::new();
+        {
+            let mut visit = |entity: Entity, tank: &Tank| {
+                if tank.is_wreck() || tank.body.is_none() || tank.portal_cooldown > 0.0 {
+                    return;
+                }
+                let entrance = self
+                    .portals
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| (i, p.distance_to(tank.position)))
+                    .filter(|&(_, d)| d <= radius)
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
+                    .map(|(i, _)| i);
+                if let Some(i) = entrance {
+                    candidates.push((entity, i, tank.position));
+                }
+            };
+            for player in self.players().into_iter().flatten() {
+                if let Ok(tank) = self.world.get::<&Tank>(player) {
+                    visit(player, &tank);
+                }
+            }
+            let mut enemies: Vec<(Entity, usize)> = self
+                .world
+                .query::<(Entity, &Tank)>()
+                .with::<&Ai>()
+                .iter()
+                .map(|(e, tank)| (e, tank.owner_slot()))
+                .collect();
+            enemies.sort_by_key(|&(_, slot)| slot);
+            for (entity, _) in enemies {
+                if let Ok(tank) = self.world.get::<&Tank>(entity) {
+                    visit(entity, &tank);
+                }
+            }
+        }
+        if candidates.is_empty() {
+            return;
+        }
+        // Everything that occupies ground the arrival must stay clear of;
+        // each teleport appends its arrival so two tanks entering on the
+        // same frame never share a cell.
+        let mut occupied: Vec<(Entity, Position)> = self
+            .world
+            .query::<(Entity, &Tank)>()
+            .iter()
+            .filter(|(_, tank)| tank.body.is_some())
+            .map(|(e, tank)| (e, tank.position))
+            .collect();
+        for (entity, entrance, from) in candidates {
+            let arrivals: Vec<(usize, Position)> = self
+                .portals
+                .iter()
+                .enumerate()
+                .filter(|&(j, _)| j != entrance)
+                .filter_map(|(j, &exit)| {
+                    let free = |cell: Position| {
+                        cell.distance_to(exit) > radius
+                            && occupied.iter().all(|&(e, at)| e == entity || at.distance_to(cell) >= clearance)
+                    };
+                    grid.nearest_open_reachable(exit, max_cells, free).map(|at| (j, at))
+                })
+                .collect();
+            if arrivals.is_empty() {
+                continue;
+            }
+            let (_, to) = arrivals[f.rng.random_range(0..arrivals.len())];
+            if self.place_tank(entity, to, None).is_err() {
+                continue;
+            }
+            let slot = {
+                let mut q = self.world.query_one::<&mut Tank>(entity);
+                let tank = q.get().expect("placed tank exists");
+                tank.portal_cooldown = t.portal_cooldown_seconds;
+                tank.owner_slot()
+            };
+            if let Ok(mut ai) = self.world.get::<&mut Ai>(entity) {
+                ai.on_teleported();
+            }
+            for ring in &mut self.engage {
+                ring.release(entity);
+            }
+            self.engage_frog.release(entity);
+            if let Some(o) = occupied.iter_mut().find(|(e, _)| *e == entity) {
+                o.1 = to;
+            }
+            f.shocks.push(Shockwave::scaled(from, SHOCK_TELEPORT));
+            f.shocks.push(Shockwave::scaled(to, SHOCK_TELEPORT));
+            f.events.push(Event::Teleported { slot, x: from.x, y: from.y, to_x: to.x, to_y: to.y });
         }
     }
 
@@ -2600,6 +2778,10 @@ impl Game {
             .filter(|o| !o.material.is_tree())
             .map(|o| battlefield::pos_to_cell(o.position))
             .collect();
+        // An active portal network joins the grid as one hub the planner
+        // may route through (`Grid::with_portals`); with fewer than two
+        // portals the grid is exactly the plain one.
+        let t = tuning();
         let mut grid = Grid::build(
             width,
             height,
@@ -2630,11 +2812,30 @@ impl Game {
                 // Deep water is a wall (docs/water.md): the same cells the
                 // static colliders stand on, at a cell's half-extent.
                 .chain(self.water.deep_cells().map(|p| (p, OBSTACLE_GRID_SIZE * 0.5))),
-        );
+        )
+        .with_portals(self.active_portals(), t.portal_trigger_radius, t.portal_hop_cost);
         // A ford is open but dear: the router wades only when the dry way
         // round costs more.
         grid.weigh(self.water.shallow_cells(), tuning().water_ford_path_cost.max(1) as u32);
         grid
+    }
+
+    /// The map's portal anchors, active or not (docs/teleporting.md).
+    pub fn portals(&self) -> &[Position] {
+        &self.portals
+    }
+
+    /// Whether the portal network does anything: two or more portals. A
+    /// lone portal neither teleports nor draws.
+    pub fn portals_active(&self) -> bool {
+        self.portals.len() >= 2
+    }
+
+    /// The portals the round acts on: all of them when active, none
+    /// otherwise - so the phase, the nav grid, the renderer and the dev
+    /// server share one rule.
+    fn active_portals(&self) -> &[Position] {
+        if self.portals_active() { &self.portals } else { &[] }
     }
 
     /// The frame's routing grid: `nav_grid` labelled for O(1) reachability,
@@ -3621,20 +3822,35 @@ mod overlay_tests {
     use super::Overlays;
 
     /// The I key walks NONE -> INSPECT -> ALL -> NONE, and a hand-set mix
-    /// snaps back to NONE.
+    /// (including one tank layer on its own) snaps back to NONE.
     #[test]
     fn presets_cycle_and_mixes_snap() {
         assert_eq!(Overlays::default(), Overlays::NONE);
         assert_eq!(Overlays::NONE.next_preset(), Overlays::INSPECT);
         assert_eq!(Overlays::INSPECT.next_preset(), Overlays::ALL);
         assert_eq!(Overlays::ALL.next_preset(), Overlays::NONE);
-        let mixed = Overlays {
-            nav_grid: true,
-            ..Overlays::NONE
-        };
-        assert!(mixed.any());
-        assert_eq!(mixed.next_preset(), Overlays::NONE);
+        assert!(Overlays::INSPECT.hitboxes && Overlays::INSPECT.stats);
+        assert!(Overlays::ALL.hitboxes && Overlays::ALL.stats);
+        for mixed in [
+            Overlays { nav_grid: true, ..Overlays::NONE },
+            Overlays { hitboxes: true, ..Overlays::NONE },
+            Overlays { stats: true, ..Overlays::NONE },
+        ] {
+            assert!(mixed.any(), "{mixed:?}");
+            assert_eq!(mixed.next_preset(), Overlays::NONE, "{mixed:?}");
+        }
         assert!(!Overlays::NONE.any());
+    }
+
+    /// The label names the exact presets and calls everything else custom.
+    #[test]
+    fn preset_name_reads_inspect_all_custom() {
+        assert_eq!(Overlays::NONE.preset_name(), None);
+        assert_eq!(Overlays::INSPECT.preset_name(), Some("inspect"));
+        assert_eq!(Overlays::ALL.preset_name(), Some("all"));
+        assert_eq!(Overlays { hitboxes: true, ..Overlays::NONE }.preset_name(), Some("custom"));
+        assert_eq!(Overlays { stats: true, ..Overlays::NONE }.preset_name(), Some("custom"));
+        assert_eq!(Overlays { nav_grid: true, ..Overlays::INSPECT }.preset_name(), Some("custom"));
     }
 }
 
@@ -3804,6 +4020,48 @@ mod determinism_tests {
             let a = run_sampled(seed, mission, 600, 60, false);
             let b = run_sampled(seed, mission, 600, 60, false);
             assert_eq!(a.len(), b.len(), "seed {seed:#x}: sample counts differ");
+            for (i, (sa, sb)) in a.iter().zip(&b).enumerate() {
+                assert_eq!(sa.len(), sb.len(), "seed {seed:#x}, sample {i}: tank counts differ");
+                for (t, (ta, tb)) in sa.iter().zip(sb).enumerate() {
+                    assert_eq!(key(ta), key(tb), "seed {seed:#x}, sample {i}, tank {t}: state diverged");
+                }
+            }
+        }
+    }
+
+    /// A portal round replays too: the destination draw sits on the round
+    /// stream and the arrival placement is a deterministic search. The
+    /// fixture puts every enemy on the far side of an iron wall from the
+    /// frog, so within 900 frames at least one hops - both runs must show
+    /// the same `Teleported` events on the same frames.
+    #[test]
+    fn same_seed_replays_a_portal_round_bit_identical() {
+        let run = |seed: u64| {
+            let mut game = Game::default();
+            game.seed_override = Some(seed);
+            game.map = MapFile::from_toml_str(include_str!("../../maps/test/portals.toml")).expect("fixture parses");
+            let (w, h) = game.map.field_size();
+            game.init(w, h);
+            let mut samples = vec![game.tank_snapshots()];
+            let mut events: Vec<String> = Vec::new();
+            for frame in 1..=900u32 {
+                game.update(Input::default(), 1.0 / 60.0, w, h);
+                for e in game.events() {
+                    if let Event::Teleported { .. } = e {
+                        events.push(format!("{frame}:{e:?}"));
+                    }
+                }
+                if frame % 60 == 0 {
+                    samples.push(game.tank_snapshots());
+                }
+            }
+            (samples, events)
+        };
+        for seed in [0xB0B5_u64, 0xC0FFEE_u64] {
+            let (a, ea) = run(seed);
+            let (b, eb) = run(seed);
+            assert!(!ea.is_empty(), "seed {seed:#x}: nobody came through a portal in 900 frames");
+            assert_eq!(ea, eb, "seed {seed:#x}: teleport events diverged");
             for (i, (sa, sb)) in a.iter().zip(&b).enumerate() {
                 assert_eq!(sa.len(), sb.len(), "seed {seed:#x}, sample {i}: tank counts differ");
                 for (t, (ta, tb)) in sa.iter().zip(sb).enumerate() {
@@ -4753,6 +5011,190 @@ tanks = 1
 cells."20,11" = { kind = "start" }
 cells."30,20" = { kind = "frog" }
 "#;
+
+    /// Two rooms split by a full-height iron column at col 20, joined only
+    /// by portal A (10,11) on the player's side and portal B (30,11) on
+    /// the other (docs/teleporting.md).
+    fn portal_rooms_map(portal_b: bool, tanks: usize) -> String {
+        let mut s = format!(
+            "version = 1\ntanks = {tanks}\ncells.\"5,11\" = {{ kind = \"start\" }}\ncells.\"5,8\" = {{ kind = \"frog\" }}\ncells.\"10,11\" = {{ kind = \"portal\" }}\n"
+        );
+        if portal_b {
+            s.push_str("cells.\"30,11\" = { kind = \"portal\" }\n");
+        }
+        for row in 0..=22 {
+            s.push_str(&format!("cells.\"20,{row}\" = {{ kind = \"wall\", material = \"iron\" }}\n"));
+        }
+        s
+    }
+
+    fn teleports_of(game: &Game, slot: usize) -> Vec<(Position, Position)> {
+        game.events()
+            .iter()
+            .filter_map(|e| match e {
+                Event::Teleported { slot: s, x, y, to_x, to_y } if *s == slot => {
+                    Some((Position::new(*x, *y), Position::new(*to_x, *to_y)))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// `Game::portal_phase`: the player drives into portal A and comes
+    /// out beside portal B - the arrival is an open cell near B but
+    /// outside B's trigger radius, the heading is kept, the velocity is
+    /// zeroed, the cooldown is armed, exactly one event says so, and the
+    /// AI-less player hops nowhere else while the cooldown runs.
+    #[test]
+    fn driving_into_a_portal_places_the_tank_beside_another() {
+        let map = portal_rooms_map(true, 0);
+        let mut game = game_on(&map, 0, None);
+        assert!(game.portals_active());
+        let a = map::cell_to_world(10, 11);
+        let b = map::cell_to_world(30, 11);
+        assert_eq!(game.portals(), &[a, b]);
+        let right = Input { player_intent: Intent { move_dir: Some(Dir::Right), ..Intent::default() }, ..Input::default() };
+        let mut hop = None;
+        for _ in 0..600 {
+            step(&mut game, right);
+            let events = teleports_of(&game, 0);
+            if !events.is_empty() {
+                assert_eq!(events.len(), 1, "one hop per frame");
+                hop = Some(events[0]);
+                break;
+            }
+        }
+        let (from, to) = hop.expect("the player reached portal A and hopped");
+        let t = tuning();
+        assert!(from.distance_to(a) <= t.portal_trigger_radius, "entered through A");
+        assert!(to.distance_to(b) > t.portal_trigger_radius, "arrives outside B's trigger radius");
+        assert!(to.distance_to(b) <= (t.portal_arrival_max_cells as f32 + 1.0) * OBSTACLE_GRID_SIZE, "but beside B");
+        assert!(to.x > map::cell_to_world(20, 0).x, "on the far side of the wall");
+        let player = game.player.unwrap();
+        {
+            let tank = game.world.get::<&Tank>(player).unwrap();
+            // The same frame's player phase drives it on from the arrival
+            // cell (the hop zeroed its velocity first, so this is under a
+            // pixel of fresh acceleration, not carried momentum).
+            assert!(tank.position.distance_to(to) < 1.0, "placed at the arrival, got {:?} vs {to:?}", tank.position);
+            assert_eq!(tank.rotation, 90.0, "heading kept");
+            assert!((tank.portal_cooldown - t.portal_cooldown_seconds).abs() < 1e-3);
+        }
+        // Rolling on for the cooldown's length never re-triggers: the
+        // arrival cell is outside B's radius and the timer is running.
+        let frames = (t.portal_cooldown_seconds * 60.0) as usize;
+        for _ in 0..frames {
+            step(&mut game, right);
+            assert!(teleports_of(&game, 0).is_empty(), "no hop while the cooldown runs");
+        }
+        // Parked on B itself, the cooldown stands still: however long the
+        // tank sits there it stays put, and it hops again only after
+        // leaving and coming back.
+        game.debug_teleport(0, b, Some(90.0)).unwrap();
+        game.debug_set_tank(0, &crate::simulation::debug::TankPatch { portal_cooldown: Some(0.5), ..Default::default() }).unwrap();
+        for _ in 0..180 {
+            step(&mut game, Input::default());
+            assert!(teleports_of(&game, 0).is_empty(), "a tank standing on a portal never re-triggers");
+        }
+        assert!(game.world.get::<&Tank>(player).unwrap().portal_cooldown > 0.0, "the cooldown froze on the portal");
+        game.debug_teleport(0, Position::new(b.x, b.y + 3.0 * OBSTACLE_GRID_SIZE), Some(0.0)).unwrap();
+        for _ in 0..60 {
+            step(&mut game, Input::default());
+        }
+        assert_eq!(game.world.get::<&Tank>(player).unwrap().portal_cooldown, 0.0, "off the portal the cooldown ran out");
+        let up = Input { player_intent: Intent { move_dir: Some(Dir::Up), ..Intent::default() }, ..Input::default() };
+        let mut hopped_back = false;
+        for _ in 0..240 {
+            step(&mut game, up);
+            if !teleports_of(&game, 0).is_empty() {
+                hopped_back = true;
+                break;
+            }
+        }
+        assert!(hopped_back, "coming back onto B after leaving hops again");
+    }
+
+    /// A lone portal is an inert marker: nothing teleports, the grid has
+    /// no hub, and the round draws no RNG for it.
+    #[test]
+    fn a_single_portal_does_nothing() {
+        let map = portal_rooms_map(false, 0);
+        let mut game = game_on(&map, 0, None);
+        assert!(!game.portals_active());
+        assert_eq!(game.portals().len(), 1);
+        assert!(game.nav_grid(W, H).portal_cells().is_empty());
+        let right = Input { player_intent: Intent { move_dir: Some(Dir::Right), ..Intent::default() }, ..Input::default() };
+        let mut reached = false;
+        for _ in 0..600 {
+            step(&mut game, right);
+            assert!(teleports_of(&game, 0).is_empty());
+            let pos = game.world.get::<&Tank>(game.player.unwrap()).unwrap().position;
+            reached |= pos.distance_to(map::cell_to_world(10, 11)) <= tuning().portal_trigger_radius;
+        }
+        assert!(reached, "the player did drive over the lone portal");
+    }
+
+    /// The planner routes through the hub: with both portals the enemy's
+    /// room connects to the player's, without them it does not - and the
+    /// enemy actually makes the hop and ends up on the player's side.
+    #[test]
+    fn an_enemy_routes_through_the_portals_to_the_player() {
+        let with = portal_rooms_map(true, 1);
+        let without = portal_rooms_map(false, 1);
+        let mut game = game_on(&with, 1, None);
+        let slot = enemy_slot(&game);
+        let far = map::cell_to_world(28, 11);
+        game.debug_teleport(slot, far, Some(270.0)).expect("enemy placed in the far room");
+        let player_pos = game.world.get::<&Tank>(game.player.unwrap()).unwrap().position;
+        assert!(game.nav_path_cells(far, player_pos, W, H).is_some(), "a route through the hub exists");
+        let plain = game_on(&without, 1, None);
+        assert!(plain.nav_path_cells(far, player_pos, W, H).is_none(), "without a network the wall is final");
+
+        let mut hopped = None;
+        for _ in 0..1200 {
+            step(&mut game, Input::default());
+            if let Some(&(from, to)) = teleports_of(&game, slot).first() {
+                hopped = Some((from, to));
+                break;
+            }
+        }
+        let (from, to) = hopped.expect("the enemy drove into portal B within 20 s");
+        let wall_x = map::cell_to_world(20, 0).x;
+        assert!(from.x > wall_x && to.x < wall_x, "it went from the far room to the player's: {from:?} -> {to:?}");
+    }
+
+    /// No room to arrive: portal B ringed by iron with only its own
+    /// footprint open. The player drives onto A, nothing happens, and the
+    /// round's RNG stream is untouched - a portal-heavy map with a jammed
+    /// exit replays exactly like one where nobody tried.
+    #[test]
+    fn a_portal_with_no_free_arrival_cell_does_not_fire_and_draws_no_rng() {
+        let mut map = portal_rooms_map(true, 0);
+        for (c, r) in [(28, 9), (29, 9), (30, 9), (31, 9), (32, 9), (28, 10), (32, 10), (28, 11), (32, 11), (28, 12), (32, 12), (28, 13), (29, 13), (30, 13), (31, 13), (32, 13)] {
+            map.push_str(&format!("cells.\"{c},{r}\" = {{ kind = \"wall\", material = \"iron\" }}\n"));
+        }
+        let mut game = game_on(&map, 0, None);
+        assert!(game.portals_active());
+        let right = Input { player_intent: Intent { move_dir: Some(Dir::Right), ..Intent::default() }, ..Input::default() };
+        let a = map::cell_to_world(10, 11);
+        let mut on_portal = false;
+        for _ in 0..600 {
+            let rng_before = game.rng.clone().expect("rng parked between frames");
+            step(&mut game, right);
+            assert!(teleports_of(&game, 0).is_empty(), "nowhere to arrive: no hop");
+            let pos = game.world.get::<&Tank>(game.player.unwrap()).unwrap().position;
+            if pos.distance_to(a) <= tuning().portal_trigger_radius {
+                on_portal = true;
+                // A frame on the portal with no candidates must draw nothing
+                // beyond what the same frame draws elsewhere: with no
+                // enemies and no props that is nothing at all.
+                let mut before = rng_before;
+                let mut after = game.rng.clone().unwrap();
+                assert_eq!(before.random::<u64>(), after.random::<u64>(), "RNG advanced on a refused teleport");
+            }
+        }
+        assert!(on_portal, "the player did stand on portal A");
+    }
 
     /// Enemies only take what they would actually use. A pack that hoovers
     /// up every crate it drives past strips the field of what the player

@@ -507,6 +507,9 @@ pub fn run(args: Args) {
     let trees_texture = rl
         .load_texture(&thread, "static/trees_sheet.png")
         .expect("failed loading trees texture");
+    let portal_texture = rl
+        .load_texture(&thread, "static/portal_sheet.png")
+        .expect("failed loading portal texture");
     let minigun_mount_texture = rl
         .load_texture(&thread, "static/minigun_mount.png")
         .expect("failed loading minigun mount texture");
@@ -971,6 +974,7 @@ pub fn run(args: Args) {
                     pickup_flamethrower: &pickup_flamethrower_texture,
                     pickup_frog_health: &pickup_frog_health_texture,
                     eraser: &eraser_texture,
+                    portal: &portal_texture,
                     tanks: &tanks_texture,
                 },
             );
@@ -1078,6 +1082,7 @@ pub fn run(args: Args) {
                 minigun_mount: &minigun_mount_texture,
                 grass: &grass_textures[theme_index(session.game.map.theme)],
                 trees: &trees_texture,
+                portal: &portal_texture,
             },
             &layout,
             &session.play_chrome(),

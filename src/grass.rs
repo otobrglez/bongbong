@@ -48,6 +48,8 @@
 
 use sola_raylib::prelude::*;
 
+use crate::canvas::{Canvas, Sheet};
+use crate::map::Theme;
 use crate::tuning::tuning;
 use crate::{GRASS_SPECIES, GRASS_TEXTURE_SIZE, GRASS_VARIANTS, OBSTACLE_GRID_SIZE, Position};
 
@@ -197,12 +199,15 @@ fn bend(tuft: &GrassTuft, time: f32) -> f32 {
     let t = tuning();
     // Per-tuft phase, so a field ripples rather than swaying as one sheet.
     let phase = (tuft.seed % 628) as f32 * 0.01;
-    let wind = (time * t.grass_sway_speed + phase).sin() * t.grass_sway_px;
+    // `trig`, not libm: the CPU thumbnail of a grassy map is pinned by
+    // hash and has to come out the same on every platform.
+    let wind = crate::trig::sin(time * t.grass_sway_speed + phase) * t.grass_sway_px;
     wind * (1.0 - tuft.crush) + tuft.push
 }
 
-/// Draw one tuft, leaning and squashed by however flat it is lying.
-pub fn draw_tuft(d: &mut impl RaylibDraw, texture: &Texture2D, tuft: &GrassTuft, time: f32) {
+/// Draw one tuft, leaning and squashed by however flat it is lying, from
+/// `theme`'s sheet (`Sheet::Grass`).
+pub fn draw_tuft(c: &mut impl Canvas, tuft: &GrassTuft, theme: Theme, time: f32) {
     let cell = GRASS_TEXTURE_SIZE;
     let t = tuning();
     if tuft.burnt {
@@ -210,8 +215,8 @@ pub fn draw_tuft(d: &mut impl RaylibDraw, texture: &Texture2D, tuft: &GrassTuft,
         // nothing - a burnt meadow should read as burnt, not as mown.
         let x = (tuft.base.x / 2.0).floor() as i32 * 2;
         let y = (tuft.base.y / 2.0).floor() as i32 * 2;
-        d.draw_rectangle(x - 2, y - 4, 2, 4, Color::new(0x37, 0x37, 0x37, 255));
-        d.draw_rectangle(x, y - 2, 2, 2, Color::new(0x25, 0x25, 0x25, 255));
+        c.fill_rect(x - 2, y - 4, 2, 4, Color::new(0x37, 0x37, 0x37, 255));
+        c.fill_rect(x, y - 2, 2, 2, Color::new(0x25, 0x25, 0x25, 255));
         return;
     }
     let size = cell * t.grass_scale;
@@ -225,8 +230,8 @@ pub fn draw_tuft(d: &mut impl RaylibDraw, texture: &Texture2D, tuft: &GrassTuft,
     // Rotating about the base is what makes the tip move and the root stay
     // put; raylib rotates about `origin`, so the origin sits at the bottom
     // centre of the sprite.
-    let rotation = bend(tuft, time).atan2(size).to_degrees();
+    let rotation = crate::trig::atan2(bend(tuft, time), size).to_degrees();
     let dest = Rectangle::new(tuft.base.x, tuft.base.y, size, height);
     let origin = Vector2::new(size / 2.0, height);
-    d.draw_texture_pro(texture, src, dest, origin, rotation, Color::WHITE);
+    c.blit(Sheet::Grass(theme), src, dest, origin, rotation, Color::WHITE);
 }

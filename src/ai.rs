@@ -595,6 +595,30 @@ impl Ai {
         self.hit_alert_timer = tuning().enemy_hit_alert_seconds;
     }
 
+    /// The tank was just moved through a portal (`Game::portal_phase`).
+    /// Everything `think` measured at the old position is void: the
+    /// heading commitment pointed at the entrance, the stuck clock's
+    /// baseline is a screen away, the waypoint and any breach belong to
+    /// the room it left. Clearing them makes the next tick re-plan from
+    /// where it stands. Alertness, retreat state, the fire timer, the
+    /// escape count and the target player are about the fight, not the
+    /// place, and stay.
+    pub(crate) fn on_teleported(&mut self) {
+        self.retarget_timer = 0.0;
+        self.committed_dir = None;
+        self.dir_hold = 0.0;
+        self.dodge_dir = None;
+        self.dodge_timer = 0.0;
+        self.yield_timer = 0.0;
+        self.last_move_dir = None;
+        self.last_position = None;
+        self.progress_avg = None;
+        self.stuck_timer = 0.0;
+        self.wander_pocketed = false;
+        self.wall_ahead_timer = 0.0;
+        self.breach = None;
+    }
+
     /// Choose a heading toward `target` - or, if pathfinding can't reach
     /// `target` at all, toward a local fallback waypoint instead (see
     /// `wander`), so this always returns a real heading. `margin` is how
@@ -652,7 +676,7 @@ impl Ai {
         grid: &Grid,
         rng: &mut SmallRng,
     ) -> Dir {
-        let path = grid.next_step(from, target);
+        let path = if ctx.on_portal_cooldown { grid.next_step_walking(from, target) } else { grid.next_step(from, target) };
         if path.is_none() && !grid.same_cell(from, target) {
             return self.wander(from, bounds, half, margin, None, ctx, grid, rng);
         }
@@ -703,7 +727,17 @@ impl Ai {
         let (width, height) = bounds;
         // A label read, not a search: a candidate is a point nobody is
         // routing to yet, so the grid's flood fill answers it for free.
-        let reachable = |wp: Position| grid.connected(from, wp);
+        // The labels join rooms through the portal hub, so a tank on its
+        // portal cooldown (which may not route through the hub) asks the
+        // walking search instead - a few searches per resample, only
+        // while the cooldown runs.
+        let reachable = |wp: Position| {
+            if ctx.on_portal_cooldown {
+                grid.same_cell(from, wp) || grid.next_step_walking(from, wp).is_some()
+            } else {
+                grid.connected(from, wp)
+            }
+        };
         // The sampling box: the whole margin-inset battlefield, or the
         // beat's bounding box clipped to it (never empty - a beat pressed
         // against the edge still yields a sliver).
@@ -783,7 +817,8 @@ impl Ai {
             });
             self.retarget_timer = tuning().enemy_retarget_seconds;
         }
-        let path = grid.next_step(from, self.waypoint);
+        let path =
+            if ctx.on_portal_cooldown { grid.next_step_walking(from, self.waypoint) } else { grid.next_step(from, self.waypoint) };
         self.steer_toward(from, path, self.waypoint, bounds, half, ctx, grid)
     }
 
@@ -1057,7 +1092,7 @@ impl Ai {
     }
 
     /// True while backing off to recharge ammo (see `wants_retreat`). Read
-    /// by the inspect-mode debug overlay (`game.rs`) and by `Game::update`'s
+    /// by the `stats` debug overlay (`game.rs::draw_tank_stats`) and by `Game::update`'s
     /// engagement-slot assignment, which excludes a retreating tank from the
     /// engaged set - it isn't attacking, so it shouldn't consume a slot.
     pub fn is_retreating(&self) -> bool {
@@ -1074,7 +1109,7 @@ impl Ai {
     }
 
     /// Seconds until this tank may fire again (zero or negative means
-    /// ready). Read by the inspect-mode debug overlay (`game.rs`).
+    /// ready). Read by the `stats` debug overlay (`game.rs::draw_tank_stats`).
     pub fn fire_cooldown(&self) -> f32 {
         self.fire_timer
     }
@@ -1144,6 +1179,13 @@ struct AvoidCtx<'a> {
     radius: f32,
     /// This tank's movement speed (px/s).
     speed: f32,
+    /// This tank's portal cooldown is running (`Tank::portal_cooldown`),
+    /// so it routes on foot only (`Grid::next_step_walking`): a route
+    /// through the hub would walk it back onto the portal it just came out
+    /// of, where the cooldown stands still, and it would circle the
+    /// footprint until it left and came back. With no walking route it
+    /// wanders instead, and takes the portal once the cooldown is out.
+    on_portal_cooldown: bool,
 }
 
 /// The behavior-tree blackboard: transient per-frame perception plus references
@@ -1337,6 +1379,7 @@ impl Brain<'_> {
             my_index: self.my_index,
             radius,
             speed: self.me.effective_speed(),
+            on_portal_cooldown: self.me.portal_cooldown > 0.0,
         };
         self.ai.steer(
             self.me.position,
@@ -1360,6 +1403,7 @@ impl Brain<'_> {
             my_index: self.my_index,
             radius,
             speed: self.me.effective_speed(),
+            on_portal_cooldown: self.me.portal_cooldown > 0.0,
         };
         self.ai.wander(
             self.me.position,
@@ -1381,6 +1425,7 @@ impl Brain<'_> {
             my_index: self.my_index,
             radius,
             speed: self.me.effective_speed(),
+            on_portal_cooldown: self.me.portal_cooldown > 0.0,
         };
         self.ai.wander(
             self.me.position,

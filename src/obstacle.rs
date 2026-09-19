@@ -1,3 +1,4 @@
+use crate::canvas::Canvas;
 use crate::tuning::tuning;
 use rapier2d::prelude::RigidBodyHandle;
 use serde::{Deserialize, Serialize};
@@ -69,13 +70,9 @@ pub enum Material {
 /// toughness is a scalar knob each rather than a `wall_max_health` slot.
 pub const MATERIALS: [Material; 4] = [Material::Brick, Material::Iron, Material::Wood, Material::Glass];
 
-/// Which atlas a material's rows live in.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Sheet {
-    Walls,
-    Props,
-    Trees,
-}
+/// Which atlas a material's rows live in: the canvas's sheet names,
+/// re-exported so `Material::sheet` and the builder spell them from here.
+pub use crate::canvas::Sheet;
 
 impl Sheet {
     /// Source cell size in this atlas. Walls and props share the obstacle
@@ -344,14 +341,6 @@ impl Fuse {
 pub enum FenceAxis {
     Horizontal = 0,
     Vertical = 1,
-}
-
-/// The three obstacle atlases, bundled so a draw call can pick by
-/// `Material::sheet` without the caller matching on the material.
-pub struct ObstacleTextures<'a> {
-    pub walls: &'a Texture2D,
-    pub props: &'a Texture2D,
-    pub trees: &'a Texture2D,
 }
 
 /// A static battlefield obstacle: blocks tank movement like a wall (reusing
@@ -633,19 +622,18 @@ pub fn oil_source_rec(center: Position) -> Rectangle {
 /// An unlit oil-trail cell: a dark puddle on the ground, drawn under
 /// everything that stands. Not an obstacle, so it never goes through
 /// `draw_obstacle`.
-pub fn draw_oil_cell(d: &mut impl RaylibDraw, textures: &ObstacleTextures, center: Position) {
+pub fn draw_oil_cell(c: &mut impl Canvas, center: Position) {
     let src = oil_source_rec(center);
     let size = OBSTACLE_TEXTURE_SIZE * OBSTACLE_SCALE;
     let dest = Rectangle::new(center.x, center.y, size, size);
-    d.draw_texture_pro(textures.props, src, dest, Vector2::new(size / 2.0, size / 2.0), 0.0, Color::WHITE);
+    c.blit(Sheet::Props, src, dest, Vector2::new(size / 2.0, size / 2.0), 0.0, Color::WHITE);
 }
 
 /// A launched fuel drum in the air (`simulation::FlyingDrum`): the intact
 /// drum sprite tumbling in quarter-turns along its arc, over a shadow
 /// that shrinks as it rises - the same trick a thrown decal uses.
 pub fn draw_flying_drum(
-    d: &mut impl RaylibDraw,
-    textures: &ObstacleTextures,
+    c: &mut impl Canvas,
     drum: &crate::simulation::FlyingDrum,
     shadows: bool,
 ) {
@@ -655,33 +643,25 @@ pub fn draw_flying_drum(
         let lift = (drum.height() / (tuning().debris_arc_height * 1.4).max(1e-3)).clamp(0.0, 1.0);
         let r = size * 0.3 * (1.0 - 0.45 * lift);
         let a = (255.0 * tuning().obstacle_shadow_opacity * (1.0 - 0.4 * lift)) as u8;
-        d.draw_circle_v(ground, r, Color::new(0, 0, 0, a));
+        c.disc(ground, r, Color::new(0, 0, 0, a));
     }
     let src = source_rec(Sheet::Props, Material::Barrel.row_base() + drum.variant, 0);
     let at = drum.draw_pos();
     let dest = Rectangle::new(at.x, at.y, size, size);
     let rotation = ((drum.flight() * 6.0) as i32 % 4) as f32 * 90.0;
-    d.draw_texture_pro(textures.props, src, dest, Vector2::new(size / 2.0, size / 2.0), rotation, Color::WHITE);
-}
-
-pub(crate) fn texture_for<'a>(textures: &ObstacleTextures<'a>, sheet: Sheet) -> &'a Texture2D {
-    match sheet {
-        Sheet::Walls => textures.walls,
-        Sheet::Props => textures.props,
-        Sheet::Trees => textures.trees,
-    }
+    c.blit(Sheet::Props, src, dest, Vector2::new(size / 2.0, size / 2.0), rotation, Color::WHITE);
 }
 
 /// Draw a single obstacle sprite from its atlas at its center position.
 /// Obstacles never rotate (unlike tanks/shells), so this skips the
 /// rotation param `draw_tank` needs; `axis` only matters for fences.
-pub fn draw_obstacle(d: &mut impl RaylibDraw, textures: &ObstacleTextures, obstacle: &Obstacle, axis: FenceAxis, time: f32) {
+pub fn draw_obstacle(c: &mut impl Canvas, obstacle: &Obstacle, axis: FenceAxis, time: f32) {
     let sheet = obstacle.material.sheet();
     let src = source_rec(sheet, obstacle.row(axis), obstacle.col());
     let size = obstacle.sprite_size();
     let dest = Rectangle::new(obstacle.position.x + obstacle.fuse_rock(time), obstacle.position.y, size, size);
     let origin = Vector2::new(size / 2.0, size / 2.0);
-    d.draw_texture_pro(texture_for(textures, sheet), src, dest, origin, 0.0, Color::WHITE);
+    c.blit(sheet, src, dest, origin, 0.0, Color::WHITE);
 }
 
 /// Which of a cell's 16 neighbour combinations to draw a cap for.
@@ -739,7 +719,7 @@ pub fn neighbour_mask(cell: (i32, i32), cells: &HashSet<(i32, i32)>) -> u8 {
 /// drawn, so it works for every damage stage and variant. Only walls get
 /// one - a sandbag, a fence or a tree is a discrete object, not part of a
 /// run.
-pub fn draw_obstacle_cap(d: &mut impl RaylibDraw, textures: &ObstacleTextures, obstacle: &Obstacle) {
+pub fn draw_obstacle_cap(c: &mut impl Canvas, obstacle: &Obstacle) {
     if !obstacle.material.is_wall() {
         return;
     }
@@ -751,15 +731,15 @@ pub fn draw_obstacle_cap(d: &mut impl RaylibDraw, textures: &ObstacleTextures, o
     let size = obstacle.size();
     let dest = Rectangle::new(obstacle.position.x, obstacle.position.y, size, size);
     let origin = Vector2::new(size / 2.0, size / 2.0);
-    d.draw_texture_pro(textures.walls, src, dest, origin, 0.0, Color::WHITE);
-    draw_scorched_faces(d, obstacle);
+    c.blit(Sheet::Walls, src, dest, origin, 0.0, Color::WHITE);
+    draw_scorched_faces(c, obstacle);
 }
 
 /// Soot on the faces a blast hit (`Obstacle::scorched`): a dark band two
 /// blocks deep along each marked face, drawn over the cap. A band rather
 /// than a sheet row because it composites with every material, stage and
 /// variant the same way the cap itself does.
-fn draw_scorched_faces(d: &mut impl RaylibDraw, obstacle: &Obstacle) {
+fn draw_scorched_faces(c: &mut impl Canvas, obstacle: &Obstacle) {
     if obstacle.scorched == 0 {
         return;
     }
@@ -769,16 +749,16 @@ fn draw_scorched_faces(d: &mut impl RaylibDraw, obstacle: &Obstacle) {
     let soot = Color::new(20, 20, 20, 190);
     let faces = obstacle.scorched;
     if faces & SCORCH_N != 0 {
-        d.draw_rectangle(left as i32, top as i32, size as i32, band as i32, soot);
+        c.fill_rect(left as i32, top as i32, size as i32, band as i32, soot);
     }
     if faces & SCORCH_E != 0 {
-        d.draw_rectangle((left + size - band) as i32, top as i32, band as i32, size as i32, soot);
+        c.fill_rect((left + size - band) as i32, top as i32, band as i32, size as i32, soot);
     }
     if faces & SCORCH_S != 0 {
-        d.draw_rectangle(left as i32, (top + size - band) as i32, size as i32, band as i32, soot);
+        c.fill_rect(left as i32, (top + size - band) as i32, size as i32, band as i32, soot);
     }
     if faces & SCORCH_W != 0 {
-        d.draw_rectangle(left as i32, top as i32, band as i32, size as i32, soot);
+        c.fill_rect(left as i32, top as i32, band as i32, size as i32, soot);
     }
 }
 
@@ -874,16 +854,16 @@ pub fn tree_col(obstacle: &Obstacle, time: f32) -> i32 {
 /// Draw a tree. Split from `draw_obstacle` because a tree has its own
 /// column layout (`tree_col`) and because it is the one thing on the
 /// battlefield that can bend.
-pub fn draw_tree(d: &mut impl RaylibDraw, textures: &ObstacleTextures, obstacle: &Obstacle, lean: f32, time: f32) {
+pub fn draw_tree(c: &mut impl Canvas, obstacle: &Obstacle, lean: f32, time: f32) {
     let sheet = obstacle.material.sheet();
     let src = source_rec(sheet, obstacle.row(FenceAxis::Horizontal), tree_col(obstacle, time));
     let size = obstacle.sprite_size();
-    tree_blit(d, texture_for(textures, sheet), src, obstacle.position, size, lean, Color::WHITE);
+    tree_blit(c, sheet, src, obstacle.position, size, lean, Color::WHITE);
 }
 
 /// The same lean applied to the drop shadow, so a bending crown does not
 /// slide out of its own shadow. Must be called before `draw_tree`.
-pub fn draw_tree_shadow(d: &mut impl RaylibDraw, textures: &ObstacleTextures, obstacle: &Obstacle, lean: f32, time: f32) {
+pub fn draw_tree_shadow(c: &mut impl Canvas, obstacle: &Obstacle, lean: f32, time: f32) {
     let sheet = obstacle.material.sheet();
     let src = source_rec(sheet, obstacle.row(FenceAxis::Horizontal), tree_col(obstacle, time));
     let size = obstacle.sprite_size();
@@ -892,7 +872,7 @@ pub fn draw_tree_shadow(d: &mut impl RaylibDraw, textures: &ObstacleTextures, ob
         obstacle.position.y + tuning().shadow_dir_y * tuning().obstacle_shadow_offset,
     );
     let shadow = Color::new(0, 0, 0, (255.0 * tuning().obstacle_shadow_opacity) as u8);
-    tree_blit(d, texture_for(textures, sheet), src, at, size, lean, shadow);
+    tree_blit(c, sheet, src, at, size, lean, shadow);
 }
 
 /// How many horizontal slices a leaning tree is drawn in.
@@ -917,8 +897,8 @@ const TREE_SWAY_BANDS: i32 = 8;
 /// The shift ramps as the *square* of the height up the sprite, so the
 /// trunk holds still and the crown is what gives way.
 fn tree_blit(
-    d: &mut impl RaylibDraw,
-    texture: &Texture2D,
+    c: &mut impl Canvas,
+    sheet: Sheet,
     src: Rectangle,
     center: Position,
     size: f32,
@@ -942,8 +922,8 @@ fn tree_blit(
             end += 1;
         }
         let (y, h) = (start as f32 * band, (end - start) as f32 * band);
-        d.draw_texture_pro(
-            texture,
+        c.blit(
+            sheet,
             Rectangle::new(src.x, src.y + y, src.width, h),
             Rectangle::new(left + dx, top + y, size, h),
             Vector2::zero(),
@@ -960,7 +940,7 @@ const FX_BLOCK: f32 = 2.0;
 
 /// Draw this obstacle's drop shadow - see `tank::draw_tank_shadow` /
 /// docs/sprite-shadows-design.md. Must be called before `draw_obstacle`.
-pub fn draw_obstacle_shadow(d: &mut impl RaylibDraw, textures: &ObstacleTextures, obstacle: &Obstacle, axis: FenceAxis) {
+pub fn draw_obstacle_shadow(c: &mut impl Canvas, obstacle: &Obstacle, axis: FenceAxis) {
     let sheet = obstacle.material.sheet();
     let src = source_rec(sheet, obstacle.row(axis), obstacle.col());
     let size = obstacle.sprite_size();
@@ -972,5 +952,5 @@ pub fn draw_obstacle_shadow(d: &mut impl RaylibDraw, textures: &ObstacleTextures
     );
     let origin = Vector2::new(size / 2.0, size / 2.0);
     let shadow = Color::new(0, 0, 0, (255.0 * tuning().obstacle_shadow_opacity) as u8);
-    d.draw_texture_pro(texture_for(textures, sheet), src, dest, origin, 0.0, shadow);
+    c.blit(sheet, src, dest, origin, 0.0, shadow);
 }

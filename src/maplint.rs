@@ -142,6 +142,13 @@ pub enum LintKind {
     /// `Game::init` keeps between the two players, so the game ignores it
     /// and places player 2 at the nearest open cell instead.
     PlayersTooClose,
+    /// Exactly one portal on the map: a network needs two, so this one is
+    /// inert - it neither teleports nor draws in the round.
+    PortalAlone,
+    /// A portal no tank can use: its anchor has no open nav cell within
+    /// the trigger radius (it sits in terrain), or none of those cells is
+    /// in the playfield (nothing can reach it, nothing can arrive).
+    PortalBlocked,
 }
 
 impl LintKind {
@@ -166,6 +173,8 @@ impl LintKind {
             LintKind::StartPenned => "start-penned",
             LintKind::Player2Unreachable => "player2-unreachable",
             LintKind::PlayersTooClose => "players-too-close",
+            LintKind::PortalAlone => "portal-alone",
+            LintKind::PortalBlocked => "portal-blocked",
         }
     }
 }
@@ -195,11 +204,43 @@ struct Cells {
     rows: usize,
     open: Vec<bool>,
     playfield: Vec<bool>,
+    /// Per cell, the cells an active portal network joins it to: for a
+    /// cell in one portal's footprint, every other portal's footprint
+    /// (`Grid::portal_links`); empty everywhere else. The linter's own
+    /// flood fills step along these exactly as the AI's planner routes
+    /// through the hub, so reaching one active portal reaches them all
+    /// and a room joined to the field only by a portal is playfield, not
+    /// a disconnected region.
+    links: Vec<Vec<(usize, usize)>>,
 }
 
 impl Cells {
     fn idx(&self, col: usize, row: usize) -> usize {
         row * self.cols + col
+    }
+
+    /// The open cells a flood fill steps to from `(col, row)`: the four
+    /// cardinal neighbours, then the portal links.
+    fn neighbours(&self, col: usize, row: usize) -> Vec<(usize, usize)> {
+        let mut out: Vec<(usize, usize)> = [(0i32, -1i32), (0, 1), (-1, 0), (1, 0)]
+            .iter()
+            .map(|(dc, dr)| (col as i32 + dc, row as i32 + dr))
+            .filter(|&(c, r)| self.is_open(c as isize, r as isize))
+            .map(|(c, r)| (c as usize, r as usize))
+            .collect();
+        out.extend(self.links[self.idx(col, row)].iter().copied().filter(|&(c, r)| self.is_open(c as isize, r as isize)));
+        out
+    }
+
+    /// The portal links of `grid`, laid out per cell for `neighbours`.
+    fn links_from(grid: &Grid, cols: usize, rows: usize) -> Vec<Vec<(usize, usize)>> {
+        let mut links = vec![Vec::new(); cols * rows];
+        for &cell in grid.portal_cells() {
+            if cell.0 < cols && cell.1 < rows {
+                links[cell.1 * cols + cell.0] = grid.portal_links(cell).collect();
+            }
+        }
+        links
     }
 
     /// Whether `cell` is in the playfield or shares an edge with a cell
@@ -319,7 +360,8 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
     // treats start/goal cells as open for exactly the same reason);
     // otherwise the start is penned off and `check_players` says so,
     // rather than the whole map reading as unreachable from a pen.
-    let mut cells = Cells { cols, rows, open, playfield: vec![false; cols * rows] };
+    let links = Cells::links_from(&grid, cols, rows);
+    let mut cells = Cells { cols, rows, open, playfield: vec![false; cols * rows], links: links.clone() };
     let start_cell = cells.cell_of(player_pos);
     let seed = largest_component_seed(&cells).unwrap_or(start_cell);
     flood(&mut cells, seed);
@@ -348,6 +390,11 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
             }))
             // Deep water never goes away either (docs/water.md).
             .chain(game.water().deep_cells().map(|p| (p, crate::OBSTACLE_GRID_SIZE * 0.5))),
+    )
+    .with_portals(
+        if game.portals_active() { game.portals() } else { &[] },
+        tuning().portal_trigger_radius,
+        tuning().portal_hop_cost,
     );
     let mut breach_open = vec![false; cols * rows];
     for row in 0..rows {
@@ -355,7 +402,7 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
             breach_open[row * cols + col] = probe_open(&breach_grid, cols, rows, col, row);
         }
     }
-    let mut breach_cells = Cells { cols, rows, open: breach_open, playfield: vec![false; cols * rows] };
+    let mut breach_cells = Cells { cols, rows, open: breach_open, playfield: vec![false; cols * rows], links };
     flood(&mut breach_cells, seed);
     let start_breachable = breach_cells.touches_playfield(start_cell);
     flood(&mut breach_cells, start_cell);
@@ -371,6 +418,7 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
     check_enemy_frog(game, &cells, &mut findings);
     check_gates(game, &grid, width, height, &mut findings);
     check_wave_gates(game, &grid, width, height, &player_positions, &mut findings);
+    check_portals(game, &cells, &mut findings);
     check_disconnected_regions(&cells, &mut findings);
     check_boxed_in(&grid, &cells, &mut findings);
     // Only the band plan places enemies in the border band at init; a
@@ -625,11 +673,10 @@ fn largest_component_seed(cells: &Cells) -> Option<(usize, usize)> {
             seen[cells.idx(col, row)] = true;
             while let Some((c, r)) = queue.pop_front() {
                 size += 1;
-                for (dc, dr) in [(0i32, -1i32), (0, 1), (-1, 0), (1, 0)] {
-                    let (nc, nr) = (c as i32 + dc, r as i32 + dr);
-                    if cells.is_open(nc as isize, nr as isize) && !seen[nr as usize * cells.cols + nc as usize] {
-                        seen[nr as usize * cells.cols + nc as usize] = true;
-                        queue.push_back((nc as usize, nr as usize));
+                for (nc, nr) in cells.neighbours(c, r) {
+                    if !seen[cells.idx(nc, nr)] {
+                        seen[cells.idx(nc, nr)] = true;
+                        queue.push_back((nc, nr));
                     }
                 }
             }
@@ -646,15 +693,11 @@ fn flood(cells: &mut Cells, seed: (usize, usize)) {
     cells.playfield[seed.1 * cells.cols + seed.0] = true;
     queue.push_back(seed);
     while let Some((col, row)) = queue.pop_front() {
-        for (dc, dr) in [(0i32, -1i32), (0, 1), (-1, 0), (1, 0)] {
-            let (nc, nr) = (col as i32 + dc, row as i32 + dr);
-            if !cells.is_open(nc as isize, nr as isize) {
-                continue;
-            }
-            let idx = nr as usize * cells.cols + nc as usize;
+        for (nc, nr) in cells.neighbours(col, row) {
+            let idx = cells.idx(nc, nr);
             if !cells.playfield[idx] {
                 cells.playfield[idx] = true;
-                queue.push_back((nc as usize, nr as usize));
+                queue.push_back((nc, nr));
             }
         }
     }
@@ -740,6 +783,52 @@ fn point_reachable(cells: &Cells, pos: Position, reach: f32) -> bool {
 }
 
 /// §3.2.1 (regions): every open component that isn't the playfield.
+/// Portals (docs/teleporting.md): one alone is inert (`PortalAlone`); one
+/// whose anchor has no open nav cell within `portal_trigger_radius`, or
+/// - in an active network - none in the playfield, can never be entered
+/// or arrived at (`PortalBlocked`). Judged on the same footprint rule
+/// `Grid::with_portals` routes by.
+fn check_portals(game: &Game, cells: &Cells, findings: &mut Vec<LintFinding>) {
+    let anchors = game.map.portal_cells();
+    if anchors.len() == 1 {
+        let (col, row) = anchors[0];
+        findings.push(LintFinding {
+            severity: LintSeverity::Warning,
+            kind: LintKind::PortalAlone,
+            message: format!(
+                "one portal at map cell ({col},{row}): a network needs two - this one is inert and the round draws nothing"
+            ),
+        });
+    }
+    let radius = tuning().portal_trigger_radius;
+    for (col, row) in anchors {
+        let at = map::cell_to_world(col, row);
+        let footprint: Vec<(usize, usize)> = (0..cells.rows)
+            .flat_map(|r| (0..cells.cols).map(move |c| (c, r)))
+            .filter(|&(c, r)| cells.is_open(c as isize, r as isize) && cells.center(c, r).distance_to(at) <= radius)
+            .collect();
+        if footprint.is_empty() {
+            findings.push(LintFinding {
+                severity: LintSeverity::Error,
+                kind: LintKind::PortalBlocked,
+                message: format!(
+                    "portal at map cell ({col},{row}) = ({:.0},{:.0}) has no open nav cell within {radius:.0}px: it sits in terrain",
+                    at.x, at.y
+                ),
+            });
+        } else if game.portals_active() && !footprint.iter().any(|&c| cells.touches_playfield(c)) {
+            findings.push(LintFinding {
+                severity: LintSeverity::Error,
+                kind: LintKind::PortalBlocked,
+                message: format!(
+                    "portal at map cell ({col},{row}) = ({:.0},{:.0}) is not in the playfield: nothing can reach it or arrive through it",
+                    at.x, at.y
+                ),
+            });
+        }
+    }
+}
+
 fn check_disconnected_regions(cells: &Cells, findings: &mut Vec<LintFinding>) {
     let mut seen = cells.playfield.clone();
     for row in 0..cells.rows {
@@ -753,13 +842,10 @@ fn check_disconnected_regions(cells: &Cells, findings: &mut Vec<LintFinding>) {
             seen[cells.idx(col, row)] = true;
             while let Some((c, r)) = queue.pop_front() {
                 component.push((c, r));
-                for (dc, dr) in [(0i32, -1i32), (0, 1), (-1, 0), (1, 0)] {
-                    let (nc, nr) = (c as i32 + dc, r as i32 + dr);
-                    if cells.is_open(nc as isize, nr as isize)
-                        && !seen[nr as usize * cells.cols + nc as usize]
-                    {
-                        seen[nr as usize * cells.cols + nc as usize] = true;
-                        queue.push_back((nc as usize, nr as usize));
+                for (nc, nr) in cells.neighbours(c, r) {
+                    if !seen[cells.idx(nc, nr)] {
+                        seen[cells.idx(nc, nr)] = true;
+                        queue.push_back((nc, nr));
                     }
                 }
             }
@@ -1239,6 +1325,53 @@ mod map_lint_tests {
         assert!(has(&findings, LintKind::DisconnectedRegion));
     }
 
+    /// One portal is inert and says so; a portal walled in on every side
+    /// has no footprint and is an error; two portals across a full iron
+    /// wall join the rooms for the linter exactly as they do for the
+    /// planner - the far room is playfield, not a disconnected region.
+    #[test]
+    fn portals_lint_as_a_network() {
+        let mut lone = base_map();
+        lone.set_cell(20, 5, CellObject::Portal);
+        let f = lint_map(lone);
+        dump("lone portal", &f);
+        assert!(has(&f, LintKind::PortalAlone));
+        assert!(!has(&f, LintKind::PortalBlocked));
+        assert!(errors(&f).is_empty(), "a lone portal is a warning, not an error");
+
+        let mut walled = base_map();
+        walled.set_cell(20, 5, CellObject::Portal);
+        walled.set_cell(30, 5, CellObject::Portal);
+        for (c, r) in [(19, 4), (20, 4), (21, 4), (19, 5), (21, 5), (19, 6), (20, 6), (21, 6)] {
+            wall(&mut walled, c, r);
+        }
+        let f = lint_map(walled);
+        dump("walled portal", &f);
+        assert!(has(&f, LintKind::PortalBlocked), "an anchor ringed by iron has no open footprint");
+        assert!(!has(&f, LintKind::PortalAlone));
+
+        let mut rooms = base_map();
+        for row in 0..=22 {
+            wall(&mut rooms, 20, row);
+        }
+        rooms.set_cell(15, 11, CellObject::Portal);
+        rooms.set_cell(25, 11, CellObject::Portal);
+        let split = {
+            let mut m = rooms.clone();
+            m.clear_cell(15, 11);
+            m.clear_cell(25, 11);
+            m
+        };
+        let f_split = lint_map(split);
+        dump("split rooms", &f_split);
+        assert!(has(&f_split, LintKind::DisconnectedRegion), "without portals the far room is cut off");
+        let f = lint_map(rooms);
+        dump("portal rooms", &f);
+        assert!(!has(&f, LintKind::DisconnectedRegion), "the portals join the rooms");
+        assert!(!has(&f, LintKind::PortalBlocked) && !has(&f, LintKind::PortalAlone));
+        assert!(!has(&f, LintKind::UnreachableFrog), "the frog in the other room is reachable through the network");
+    }
+
     #[test]
     fn sealed_pickup_is_unreachable() {
         let mut map = base_map();
@@ -1407,7 +1540,7 @@ mod map_lint_tests {
                     open[row * cols + col] = probe_open(&grid, cols, rows, col, row);
                 }
             }
-            let cells = Cells { cols, rows, playfield: open.clone(), open };
+            let cells = Cells { cols, rows, playfield: open.clone(), links: vec![Vec::new(); open.len()], open };
             let mut findings = Vec::new();
             check_planner_physics(&cells, &boxes, &mut findings);
             findings
@@ -1821,6 +1954,15 @@ mod map_lint_tests {
         let f = lint_path("maps/test/props.toml").expect("fixture loads");
         dump("props", &f);
         assert!(errors(&f).is_empty(), "props is an open playground");
+
+        // Two rooms joined by nothing but a portal each: legal only
+        // because the linter walks the network like the planner does.
+        let f = lint_path("maps/test/portals.toml").expect("fixture loads");
+        dump("portals", &f);
+        assert!(errors(&f).is_empty(), "the portal rooms are one playfield");
+        assert!(!has(&f, LintKind::PortalAlone) && !has(&f, LintKind::PortalBlocked));
+        assert!(!has(&f, LintKind::DisconnectedRegion), "the far room is joined through the portals");
+        assert!(!has(&f, LintKind::UnreachableFrog));
     }
 
     /// maps/missions/ fixtures are clean starting points for one mission/
@@ -1838,6 +1980,11 @@ mod map_lint_tests {
         assert!(errors(&f).is_empty(), "waves-basic must be fully legal");
         assert!(!has(&f, LintKind::SpawnBandTooTight), "a waves plan is never judged on band capacity");
         assert!(!has(&f, LintKind::WavesNoGates), "waves-basic places its gates explicitly");
+
+        let f = lint_path("maps/portals.toml").expect("shipped map loads");
+        dump("portals (shipped)", &f);
+        assert!(errors(&f).is_empty(), "the shipped portal map must be fully legal");
+        assert!(!has(&f, LintKind::PortalAlone) && !has(&f, LintKind::PortalBlocked));
     }
 
     /// Everything else under maps/ is scratch: lint-and-print only

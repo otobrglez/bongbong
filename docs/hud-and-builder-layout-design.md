@@ -27,7 +27,8 @@ shared.
   (32 px cells, so 1280x704 of the 1280x720 default).
 - The **HUD is an overlay**: `SHELLS/HP/…` top-left, `WAVE n/m ENEMIES k`
   top-right, the version line bottom-right, the dev `DEV overlays:` label
-  and inspect readout under the top-left line (`game.rs::render`). All of
+  and per-tank stats readout (with the hitboxes, each its own overlay
+  flag) under the top-left line (`game.rs::render`). All of
   it sits on top of playable cells.
 - The **editor chrome is an overlay too**: hamburger top-left, `New/Save/
   Load/Close` top-right and a 20-icon palette bottom-centre that is 1132 px
@@ -98,7 +99,7 @@ what the probe shares with the game via `DEFAULT_SCREEN_WIDTH/HEIGHT`).
   bars with 11 px labels (`SPD`, `SHD`, `FROG`), and the `BUILD` toggle at
   the right end. About 1200 of 1280 px. The version string moves into the
   window title (`BongBong! v0.0.9`); the dev-only `DEV overlays:` label and
-  the multi-line inspect readout stay where they are today, over the field.
+  the multi-line per-tank stats readout stay where they are today, over the field.
 - **Build mode, same row, menus instead of a palette.** 20 tools do not
   fit inline next to the file actions, so the bar carries **category
   buttons** that open a dropdown over the field: `WALL` (brick/iron/wood/
@@ -167,7 +168,7 @@ what the probe shares with the game via `DEFAULT_SCREEN_WIDTH/HEIGHT`).
   word label is ~150 px and does not fit a 136 px column) with the active
   row outlined in its accent colour instead of the current `>` marker,
   speed/shield timer bars, the objective frog's HP (Protect and Hunt), then
-  the footer: the dev `DEV overlays:` preset label and inspect readout, the
+  the footer: the dev `DEV overlays:` preset label and stats readout, the
   `BUILD` toggle (only with `map-editor`), the version line.
 - The mission intro banner, pause/end-screen dims and the barrel flash
   centre on and cover the **field rect**, not the window - the sidebar
@@ -269,7 +270,7 @@ with its origin at (0,0).
 | Play readouts | one row, fixed slots, icon + count | stacked, room for labels and 31 pips |
 | Builder tools | category dropdowns, wheel to cycle | all 20 visible, one click each |
 | Map settings | behind `MAP ▾` | always visible |
-| Dev inspect readout | stays over the field | in the panel footer |
+| Dev stats readout | stays over the field | in the panel footer |
 | Feel | arcade status strip | Battle City sidebar |
 
 Take A unless the builder's click count turns out to hurt in practice; the

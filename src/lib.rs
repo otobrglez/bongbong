@@ -111,8 +111,9 @@ pub const TANK_HULL_BBOX_BY_ROW: [(f32, f32); 12] = [
 // TANK_HULL_BBOX_BY_ROW is scaled by this before reaching the physics body -
 // see `Tank::move_half_extents`. ~10% is invisible in play (sprites don't
 // visibly interpenetrate); past ~25% tanks start reading as clipping
-// *into* walls, so tune in small steps (the "I"-key inspect overlay draws
-// both boxes for exactly this).
+// *into* walls, so tune in small steps (the `hitboxes` debug overlay - the
+// I key's inspect preset, or `overlays {hitboxes: true}` on the dev server -
+// draws both boxes for exactly this).
 pub const TANK_MOVE_BBOX_FRACTION: f32 = 0.9;
 // Corner rounding (world px) of the movement collider: the collider is a
 // rapier round-cuboid (a box dilated by this radius - `Physics` shrinks the
@@ -142,8 +143,8 @@ pub const TANK_MOVE_CORNER_RADIUS: f32 = 4.0;
 // alongside the hull box, so a
 // shot landing on the visible barrel registers as a hit - overriding
 // docs/SPRITESHEET_SPEC.md §9's original "exclude the barrel from
-// collision" note after visually confirming (via `game.rs`'s "I"-key debug
-// inspect overlay, which draws this exact box) that it tracks the art
+// collision" note after visually confirming (via `game.rs`'s `hitboxes`
+// debug overlay, which draws this exact box) that it tracks the art
 // closely enough to be worth it.
 pub const TANK_TURRET_BBOX_BY_ROW: [(f32, f32, f32, f32); 12] = [
     (11.0, 2.0, 20.0, 20.0), // scout
@@ -602,7 +603,7 @@ pub const RUBBLE_ROW_GLASS: i32 = 17;
 // The props leave rubble on the *walls* sheet too, not on their own: the
 // rubble block is one contiguous thing and props_sheet.png has neither the
 // spare columns nor a reason to grow. `decal::draw_decal` therefore always
-// samples `ObstacleTextures::walls`, whatever material died.
+// samples `Sheet::Walls`, whatever material died.
 pub const RUBBLE_ROW_SANDBAG: i32 = 18;
 pub const RUBBLE_ROW_BARREL: i32 = 19;
 pub const RUBBLE_ROW_FENCE: i32 = 20;
@@ -644,6 +645,23 @@ pub const GRASS_VARIANTS: i32 = 8;
 // the map format), and the extra 8px on each side is canopy overhanging its
 // neighbours - which is what stops a grove reading as a tiled grid.
 pub const TREE_TEXTURE_SIZE: f32 = 48.0;
+
+// Portals (portal.rs, static/portal_sheet.png, docs/teleporting.md): 96px
+// cells drawn 1:1 on a 32px anchor cell - three cells of art on one cell
+// of map (the disc fills about 84 px of it), so the spiral is comfortably
+// wider than the biggest hull and spills over neighbours that stay
+// paintable. Cells run row-major in rows of `PORTAL_SHEET_COLS` (a row of
+// every frame would pass the 2048 px texture width GL ES 2 phones can
+// refuse): the turning frames first, then a 32px icon for the builder's
+// bar in the top-left of the cell after the last frame (`PORTAL_ICON_CELL`,
+// col 0 of the third row). The spiral has three arms, so a third of a turn
+// is one full visual period and the frames are 5 degree steps of it -
+// never rotated at draw time, which would smear the 2px blocks.
+pub const PORTAL_TEXTURE_SIZE: f32 = 96.0;
+pub const PORTAL_FRAMES: i32 = 24;
+pub const PORTAL_SHEET_COLS: i32 = 12;
+pub const PORTAL_ICON_CELL: i32 = PORTAL_FRAMES;
+pub const PORTAL_ICON_SIZE: f32 = 32.0;
 // Rows: 4 broadleaf variants, then 4 conifer, then the two rubble rows.
 //
 // Columns hold every damage stage once per *dapple frame* - a tree's whole
@@ -876,6 +894,7 @@ pub mod battlefield;
 pub mod blast;
 pub mod bt;
 pub mod bullet;
+pub mod canvas;
 #[cfg(feature = "dev-tools")]
 pub mod capi;
 pub mod damage_stage;
@@ -897,14 +916,17 @@ pub mod maplint;
 pub mod obstacle;
 pub mod pathfind;
 pub mod physics;
+pub mod portal;
 pub mod pickup;
 pub mod plasma;
 pub mod shell;
 pub mod shockwave;
 pub mod simulation;
 pub mod tank;
+pub mod thumbnail;
 pub mod touch;
 pub mod track;
+pub mod trig;
 pub mod tuning;
 pub mod view;
 pub mod app;

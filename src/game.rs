@@ -9,11 +9,13 @@ use sola_raylib::prelude::*;
 
 use crate::bullet::{Bullet, BulletState, draw_bullet, draw_bullet_shadow};
 use crate::damage_stage::draw_damage;
+use crate::canvas::{Canvas, GpuCanvas, Sheet, Sheets};
+use crate::portal::{draw_portal, draw_portal_glow};
 use crate::frog::{FrogVariantTextures, draw_frog, draw_frog_ring};
 use crate::laser::draw_laser_beam;
 use crate::blast::{draw_blast, draw_blast_glow, draw_burning_hull_glow, draw_fire_glow, draw_flame_glow, draw_fuse_glow, draw_ground_fire, draw_scorch};
 use crate::decal::{draw_decal, draw_decal_shadow};
-use crate::obstacle::{draw_flying_drum, draw_obstacle_cap, draw_oil_cell, draw_tree, draw_tree_shadow, tree_lean, Material, Obstacle, ObstacleTextures, draw_obstacle, draw_obstacle_shadow, fence_axis};
+use crate::obstacle::{draw_flying_drum, draw_obstacle_cap, draw_oil_cell, draw_tree, draw_tree_shadow, tree_lean, Material, Obstacle, draw_obstacle, draw_obstacle_shadow, fence_axis};
 #[cfg(feature = "dev-tools")]
 use crate::ai::Ai;
 use hecs::Entity;
@@ -80,6 +82,43 @@ pub struct Textures<'a> {
     pub grass: &'a Texture2D,
     /// static/trees_sheet.png - the two tree species (docs/TREES_SPEC.md).
     pub trees: &'a Texture2D,
+    /// static/portal_sheet.png - the turning spiral (portal.rs).
+    pub portal: &'a Texture2D,
+}
+
+/// The game's `Sheet` lookup: what a `GpuCanvas` over these textures blits
+/// from. Every sheet the field can name is here.
+impl Sheets for Textures<'_> {
+    fn texture(&self, sheet: Sheet) -> &Texture2D {
+        match sheet {
+            // `app.rs` picks `ground`/`grass` from the round's map theme
+            // every frame, the same theme `paint_floor`/`paint_standing`
+            // name here, so the payload needs no second lookup.
+            Sheet::Ground(_) => self.ground,
+            Sheet::Tanks => self.tanks,
+            Sheet::Walls => self.obstacles,
+            Sheet::Props => self.props,
+            Sheet::Trees => self.trees,
+            Sheet::Grass(_) => self.grass,
+            Sheet::Damage => self.damage,
+            Sheet::MinigunMount => self.minigun_mount,
+            Sheet::Tracks => self.tracks,
+            Sheet::BarrelExplosion => self.barrel_explosion,
+            Sheet::Portal => self.portal,
+            Sheet::Pickup(kind) => match kind {
+                PickupKind::Health => self.pickup_health,
+                PickupKind::Ammo => self.pickup_ammo,
+                PickupKind::Laser => self.pickup_laser,
+                PickupKind::Minigun => self.pickup_minigun,
+                PickupKind::Plasma => self.pickup_plasma,
+                PickupKind::SpeedUp => self.pickup_speedup,
+                PickupKind::Shield => self.pickup_shield,
+                PickupKind::Flamethrower => self.pickup_flamethrower,
+                PickupKind::FrogHealth => self.pickup_frog_health,
+            },
+            Sheet::Frog { variant, clip } => self.frog_variants[variant as usize % self.frog_variants.len()].clip(clip),
+        }
+    }
 }
 
 /// Which ring and readout a tank draws with. The three cases used to be
@@ -104,33 +143,216 @@ enum Standing<'a> {
 }
 
 /// A tank and everything drawn on it, in the order the layers stack.
-fn draw_one_tank(
-    d: &mut impl RaylibDraw,
-    textures: &Textures,
-    tank: &Tank,
-    role: TankRole,
-    time: f32,
-    shadows: bool,
-) {
+fn draw_one_tank(c: &mut impl Canvas, tank: &Tank, role: TankRole, time: f32, shadows: bool, locate_cue: bool) {
     match role {
         TankRole::Player | TankRole::Player2 => {
             // The locate ripple under the marker so the steady ring stays
             // legible over the swelling one.
-            draw_player_locate(d, tank, time, time);
-            draw_player_ring(d, tank, time);
+            if locate_cue {
+                draw_player_locate(c, tank, time, time);
+            }
+            draw_player_ring(c, tank, time);
         }
-        TankRole::Enemy => draw_enemy_ring(d, tank, time),
+        TankRole::Enemy => draw_enemy_ring(c, tank, time),
         TankRole::RollIn => {}
     }
-    draw_tank_shield(d, tank, time);
+    draw_tank_shield(c, tank, time);
     if shadows {
-        draw_tank_shadow(d, textures.tanks, tank);
-        draw_minigun_mount_shadow(d, textures.minigun_mount, tank);
+        draw_tank_shadow(c, tank);
+        draw_minigun_mount_shadow(c, tank);
     }
-    draw_tank(d, textures.tanks, tank);
-    draw_minigun_mount(d, textures.minigun_mount, tank);
+    draw_tank(c, tank);
+    draw_minigun_mount(c, tank);
     if role != TankRole::RollIn {
-        draw_damage(d, textures.damage, tank, time);
+        draw_damage(c, tank, time);
+    }
+}
+
+/// What `Game::paint_standing` draws besides the field itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PaintOptions {
+    /// The round-start locate ripple under each player's ring
+    /// (`tank::draw_player_locate`). The game draws it; a map thumbnail
+    /// (`mapshot`) leaves it out - a two-second cue is not the map. The
+    /// cue's other half, the `P1`/`P2` label, is text and stays in `render`.
+    pub locate_cue: bool,
+}
+
+impl Game {
+    /// The floor of the field: the ground tileset and its edge shade (a
+    /// flat white sheet under `plain_canvas`), tread marks, burn marks,
+    /// landed rubble and unlit oil pools - everything lying flat under
+    /// whatever stands. First of the three `Canvas` stages `render` and
+    /// `mapshot` share; `paint_field` runs all three.
+    pub fn paint_floor(&self, c: &mut impl Canvas) {
+        // Ground first - the floor everything else sits on. See
+        // ground.rs / docs/GROUND_SPEC.md. `plain_canvas` keeps the
+        // white clear instead.
+        if !self.plain_canvas {
+            let (width, height) = self.map.field_size();
+            crate::ground::draw(c, &self.ground, self.map.theme, self.time);
+            crate::ground::draw_edge_shade(c, width.round() as i32, height.round() as i32);
+        }
+
+        // Tread marks go down first so tanks and everything else draw on top.
+        for track in &self.tracks {
+            draw_track(c, track);
+        }
+
+        // Burn marks under everything that stands, so a barrel that
+        // survived a neighbour's blast sits on the mark it left.
+        for scorch in &self.scorches {
+            draw_scorch(c, scorch);
+        }
+
+        // Rubble from tiles that died this round: above the burn marks
+        // (a barrel that took a wall with it scorched the ground first)
+        // but under everything that still stands, so a wall built over
+        // old rubble still reads as solid.
+        for decal in self.decals.iter().filter(|dc| dc.landed()) {
+            draw_decal(c, decal);
+        }
+        // Unlit oil trails: puddles on the ground, under everything.
+        for &(col, row) in &self.oil_cells {
+            draw_oil_cell(c, crate::map::cell_to_world(col, row));
+        }
+        // Portals last on the floor: over tracks and scorches, under
+        // everything that stands. Only an active network draws at all.
+        if self.portals_active() {
+            for &at in &self.portals {
+                draw_portal(c, at, self.time, Color::WHITE);
+            }
+        }
+    }
+
+    /// The tiles: every wall and prop with its shadow and edge cap. Trees
+    /// are not tiles here - their canopies belong over the tanks, so they
+    /// close `paint_standing` instead.
+    pub fn paint_tiles(&self, c: &mut impl Canvas) {
+        let fences: HashSet<(i32, i32)> = self
+            .world
+            .query::<&Obstacle>()
+            .iter()
+            .filter(|o| o.material == Material::Fence)
+            .map(|o| o.cell())
+            .collect();
+        for obstacle in self.world.query::<&Obstacle>().iter().filter(|o| !o.material.is_tree()) {
+            let axis = fence_axis(obstacle, &fences);
+            if self.shadows_enabled {
+                draw_obstacle_shadow(c, obstacle, axis);
+            }
+            draw_obstacle(c, obstacle, axis, self.time);
+            // Lighting along whichever faces face open ground, so a run
+            // of tiles reads as one structure rather than as a grid.
+            draw_obstacle_cap(c, obstacle);
+        }
+    }
+
+    /// Everything standing on the ground: pickups, then tanks, frogs and
+    /// grass drawn back to front by where they *meet* the ground, then the
+    /// trees over the lot.
+    ///
+    /// Grass has to be interleaved rather than drawn on top of the lot: a
+    /// tuft rooted behind a tank should be hidden by it, and drawing all
+    /// grass last is exactly what made a tank look buried in grass that
+    /// grows well past it. `Game::grass` is already sorted by root (see
+    /// `Game::init`), so this is a merge walk, not a sort of several
+    /// hundred sprites.
+    ///
+    /// Trees are the deliberate exception and still come after all of
+    /// this: a crown is *above* tank height, so it overhangs a hull
+    /// whichever side of the trunk that hull is on. You drive under a tree
+    /// and through grass. Sorted back to front among themselves: their
+    /// 48px sprites overlap on a 32px grid, and without an order the
+    /// crowns of a grove pop in and out of each other as the query
+    /// iterates.
+    pub fn paint_standing(&self, c: &mut impl Canvas, opts: PaintOptions) {
+        for pickup in self.world.query::<&Pickup>().iter() {
+            draw_pickup(c, pickup);
+        }
+
+        let player = self.player.expect("player entity spawned in init");
+        let rollins: HashSet<Entity> = {
+            let mut q = self.world.query::<(Entity, &crate::simulation::RollIn)>();
+            let set = q.iter().map(|(e, _)| e).collect();
+            set
+        };
+        let mut tank_query = self.world.query::<(Entity, &Tank)>();
+        let mut standing: Vec<(f32, Standing)> = tank_query
+            .iter()
+            .map(|(entity, tank)| {
+                let role = if entity == player {
+                    TankRole::Player
+                } else if Some(entity) == self.player2 {
+                    TankRole::Player2
+                } else if rollins.contains(&entity) {
+                    TankRole::RollIn
+                } else {
+                    TankRole::Enemy
+                };
+                (tank.position.y, Standing::Tank(tank, role))
+            })
+            .filter(|(_, item)| {
+                !(self.hide_players && matches!(item, Standing::Tank(_, TankRole::Player | TankRole::Player2)))
+            })
+            .collect();
+        for frog_entity in [self.frog, self.enemy_frog].into_iter().flatten() {
+            let y = crate::simulation::with_frog(&self.world, frog_entity, |frog| frog.position.y);
+            standing.push((y, Standing::Frog(frog_entity)));
+        }
+        standing.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+        let mut next_tuft = 0usize;
+        let grass_up_to = |c: &mut _, upto: f32, from: usize| {
+            let mut i = from;
+            while i < self.grass.len() && self.grass[i].base.y <= upto {
+                crate::grass::draw_tuft(c, &self.grass[i], self.map.theme, self.time);
+                i += 1;
+            }
+            i
+        };
+        for (key, item) in &standing {
+            next_tuft = grass_up_to(c, *key, next_tuft);
+            match item {
+                Standing::Tank(tank, role) => draw_one_tank(c, tank, *role, self.time, self.shadows_enabled, opts.locate_cue),
+                Standing::Frog(entity) => {
+                    crate::simulation::with_frog(&self.world, *entity, |frog| {
+                        draw_frog_ring(c, frog, self.time);
+                        draw_frog(c, frog, self.time);
+                    });
+                }
+            }
+        }
+        grass_up_to(c, f32::INFINITY, next_tuft);
+
+        let movers: Vec<crate::Position> = self
+            .world
+            .query::<&Tank>()
+            .iter()
+            .filter(|t| !t.is_dead())
+            .map(|t| t.position)
+            .collect();
+        let mut tree_query = self.world.query::<&Obstacle>();
+        let mut trees: Vec<&Obstacle> = tree_query.iter().filter(|o| o.material.is_tree()).collect();
+        trees.sort_by(|a, b| a.position.y.total_cmp(&b.position.y));
+        for tree in &trees {
+            let lean = tree_lean(tree, &movers);
+            if self.shadows_enabled {
+                draw_tree_shadow(c, tree, lean, self.time);
+            }
+            draw_tree(c, tree, lean, self.time);
+        }
+    }
+
+    /// The static field as a fresh round shows it: `paint_floor`,
+    /// `paint_tiles`, `paint_standing`, in that order, onto a canvas the
+    /// caller has cleared. What `mapshot` renders (docs/mapshot-prd.md);
+    /// `render` runs the same three stages with its live-round layers in
+    /// between.
+    pub fn paint_field(&self, c: &mut impl Canvas, opts: PaintOptions) {
+        self.paint_floor(c);
+        self.paint_tiles(c);
+        self.paint_standing(c, opts);
     }
 }
 
@@ -237,34 +459,15 @@ impl Game {
         rl.draw_texture_mode(thread, scene_target, |mut d| {
             d.clear_background(Color::WHITE);
 
-            // Ground first - the floor everything else sits on. See
-            // ground.rs / docs/GROUND_SPEC.md.
-            crate::ground::draw(&mut d, textures.ground, &self.ground, self.time);
-            crate::ground::draw_edge_shade(&mut d, screen_width, screen_height);
+            // The field itself is painted through the `Canvas` trait in the
+            // three stages `mapshot` also runs on a CPU canvas (`paint_floor`,
+            // `paint_tiles`, `paint_standing`); between them come the layers
+            // only a live round has - fire, glows, the locate label,
+            // projectiles, blasts, airborne debris, particles - drawn with
+            // raylib directly. A `GpuCanvas` borrows `d` for one statement,
+            // so each stage makes its own.
+            self.paint_floor(&mut GpuCanvas::new(&mut d, textures));
 
-            // Tread marks go down first so tanks and everything else draw on top.
-            for track in &self.tracks {
-                draw_track(&mut d, textures.tracks, track);
-            }
-
-            // Burn marks under everything that stands, so a barrel that
-            // survived a neighbour's blast sits on the mark it left.
-            for scorch in &self.scorches {
-                draw_scorch(&mut d, textures.barrel_explosion, scorch);
-            }
-
-            let obstacle_textures = ObstacleTextures { walls: textures.obstacles, props: textures.props, trees: textures.trees };
-            // Rubble from tiles that died this round: above the burn marks
-            // (a barrel that took a wall with it scorched the ground first)
-            // but under everything that still stands, so a wall built over
-            // old rubble still reads as solid.
-            for decal in self.decals.iter().filter(|dc| dc.landed()) {
-                draw_decal(&mut d, &obstacle_textures, decal);
-            }
-            // Unlit oil trails: puddles on the ground, under everything.
-            for &(col, row) in &self.oil_cells {
-                draw_oil_cell(&mut d, &obstacle_textures, crate::map::cell_to_world(col, row));
-            }
             // Burning ground cells: the flames over the ground, under the
             // tiles beside them (a burning doorway's walls still stand
             // over the fire) and under whatever drives through them.
@@ -272,29 +475,17 @@ impl Game {
                 draw_ground_fire(&mut d, textures.barrel_explosion, at, self.time, left, total);
             }
 
-            let fences: HashSet<(i32, i32)> = self
-                .world
-                .query::<&Obstacle>()
-                .iter()
-                .filter(|o| o.material == Material::Fence)
-                .map(|o| o.cell())
-                .collect();
-            // Trees are held back to the vegetation pass further down -
-            // their canopies are bigger than their cell and belong over the
-            // tanks, not under them.
-            for obstacle in self.world.query::<&Obstacle>().iter().filter(|o| !o.material.is_tree()) {
-                let axis = fence_axis(obstacle, &fences);
-                if self.shadows_enabled {
-                    draw_obstacle_shadow(&mut d, &obstacle_textures, obstacle, axis);
-                }
-                draw_obstacle(&mut d, &obstacle_textures, obstacle, axis, self.time);
-                // Lighting along whichever faces face open ground, so a run
-                // of tiles reads as one structure rather than as a grid.
-                draw_obstacle_cap(&mut d, &obstacle_textures, obstacle);
-            }
+            self.paint_tiles(&mut GpuCanvas::new(&mut d, textures));
+
             // A barrel whose fuse is lit pulses (additive, so it reads as
             // light on the drum rather than a disc over it).
             d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+                // An active portal glows from below its spiral.
+                if self.portals_active() {
+                    for &at in &self.portals {
+                        draw_portal_glow(&mut bd, at, self.time);
+                    }
+                }
                 for obstacle in self.world.query::<&Obstacle>().iter() {
                     if obstacle.fuse.is_some() {
                         draw_fuse_glow(&mut bd, obstacle.position, self.time);
@@ -315,119 +506,13 @@ impl Game {
                 }
             });
 
-            for pickup in self.world.query::<&Pickup>().iter() {
-                let texture = match pickup.kind {
-                    PickupKind::Health => textures.pickup_health,
-                    PickupKind::Ammo => textures.pickup_ammo,
-                    PickupKind::Laser => textures.pickup_laser,
-                    PickupKind::Minigun => textures.pickup_minigun,
-                    PickupKind::Plasma => textures.pickup_plasma,
-                    PickupKind::SpeedUp => textures.pickup_speedup,
-                    PickupKind::Shield => textures.pickup_shield,
-                    PickupKind::Flamethrower => textures.pickup_flamethrower,
-                    PickupKind::FrogHealth => textures.pickup_frog_health,
-                };
-                draw_pickup(&mut d, texture, pickup);
-            }
-
-            // Everything standing on the ground - tanks, frogs and grass -
-            // drawn back to front by where it *meets* the ground.
-            //
-            // Grass has to be interleaved rather than drawn on top of the
-            // lot: a tuft rooted behind a tank should be hidden by it, and
-            // drawing all grass last is exactly what made a tank look
-            // buried in grass that grows well past it. `Game::grass` is
-            // already sorted by root (see `Game::init`), so this is a merge
-            // walk, not a sort of several hundred sprites.
-            //
-            // Trees are the deliberate exception and still come after all
-            // of this: a crown is *above* tank height, so it overhangs a
-            // hull whichever side of the trunk that hull is on. You drive
-            // under a tree and through grass.
-            let rollins: HashSet<Entity> = {
-                let mut q = self.world.query::<(Entity, &crate::simulation::RollIn)>();
-                let set = q.iter().map(|(e, _)| e).collect();
-                set
-            };
-            let mut tank_query = self.world.query::<(Entity, &Tank)>();
-            let mut standing: Vec<(f32, Standing)> = tank_query
-                .iter()
-                .map(|(entity, tank)| {
-                    let role = if entity == player {
-                        TankRole::Player
-                    } else if Some(entity) == self.player2 {
-                        TankRole::Player2
-                    } else if rollins.contains(&entity) {
-                        TankRole::RollIn
-                    } else {
-                        TankRole::Enemy
-                    };
-                    (tank.position.y, Standing::Tank(tank, role))
-                })
-                .collect();
-            for frog_entity in [self.frog, self.enemy_frog].into_iter().flatten() {
-                let y = crate::simulation::with_frog(&self.world, frog_entity, |frog| frog.position.y);
-                standing.push((y, Standing::Frog(frog_entity)));
-            }
-            standing.sort_by(|a, b| a.0.total_cmp(&b.0));
-
-            let mut next_tuft = 0usize;
-            let grass_up_to = |d: &mut _, upto: f32, from: usize| {
-                let mut i = from;
-                while i < self.grass.len() && self.grass[i].base.y <= upto {
-                    crate::grass::draw_tuft(d, textures.grass, &self.grass[i], self.time);
-                    i += 1;
-                }
-                i
-            };
-            for (key, item) in &standing {
-                next_tuft = grass_up_to(&mut d, *key, next_tuft);
-                match item {
-                    Standing::Tank(tank, role) => {
-                        draw_one_tank(&mut d, textures, tank, *role, self.time, self.shadows_enabled)
-                    }
-                    Standing::Frog(entity) => {
-                        crate::simulation::with_frog(&self.world, *entity, |frog| {
-                            let variant = &textures.frog_variants[frog.variant as usize];
-                            draw_frog_ring(&mut d, frog, self.time);
-                            draw_frog(&mut d, &variant.as_frog_textures(), frog, self.time);
-                        });
-                    }
-                }
-            }
-            grass_up_to(&mut d, f32::INFINITY, next_tuft);
-
-            // Trees, over everything on the ground and under the
-            // projectiles: a crown sits above tank height, so it overhangs
-            // a hull on either side of the trunk, and you can still see
-            // your own shots leave the cover you are firing from.
-            //
-            // Sorted back to front among themselves: their 48px sprites
-            // overlap on a 32px grid, and without an order the crowns of a
-            // grove pop in and out of each other as the query iterates.
-            let movers: Vec<crate::Position> = self
-                .world
-                .query::<&Tank>()
-                .iter()
-                .filter(|t| !t.is_dead())
-                .map(|t| t.position)
-                .collect();
-            let mut tree_query = self.world.query::<&Obstacle>();
-            let mut trees: Vec<&Obstacle> = tree_query.iter().filter(|o| o.material.is_tree()).collect();
-            trees.sort_by(|a, b| a.position.y.total_cmp(&b.position.y));
-            for tree in &trees {
-                let lean = tree_lean(tree, &movers);
-                if self.shadows_enabled {
-                    draw_tree_shadow(&mut d, &obstacle_textures, tree, lean, self.time);
-                }
-                draw_tree(&mut d, &obstacle_textures, tree, lean, self.time);
-            }
+            self.paint_standing(&mut GpuCanvas::new(&mut d, textures), PaintOptions { locate_cue: true });
 
             // The locate cue's P1/P2 labels, over the grass, the crowd and
             // the trees - the point is to be found under all of it.
-            for (_, item) in &standing {
-                if let Standing::Tank(tank, TankRole::Player | TankRole::Player2) = item {
-                    draw_player_label(&mut d, tank, self.time);
+            if !self.hide_players {
+                for entity in [Some(player), self.player2].into_iter().flatten() {
+                    crate::simulation::with_tank(&self.world, entity, |tank| draw_player_label(&mut d, tank, self.time));
                 }
             }
 
@@ -473,19 +558,21 @@ impl Game {
             // off a wreck passes over tanks and shells, not under them.
             // Their shadows go down first so no piece is drawn over
             // another's shadow.
-            let obstacle_textures = ObstacleTextures { walls: textures.obstacles, props: textures.props, trees: textures.trees };
             if self.shadows_enabled {
                 for decal in self.decals.iter().filter(|dc| !dc.landed()) {
                     draw_decal_shadow(&mut d, decal);
                 }
             }
-            for decal in self.decals.iter().filter(|dc| !dc.landed()) {
-                draw_decal(&mut d, &obstacle_textures, decal);
-            }
-            // Launched fuel drums, tumbling over the lot on their way to
-            // where they go off.
-            for drum in &self.flying_drums {
-                draw_flying_drum(&mut d, &obstacle_textures, drum, self.shadows_enabled);
+            {
+                let mut c = GpuCanvas::new(&mut d, textures);
+                for decal in self.decals.iter().filter(|dc| !dc.landed()) {
+                    draw_decal(&mut c, decal);
+                }
+                // Launched fuel drums, tumbling over the lot on their way to
+                // where they go off.
+                for drum in &self.flying_drums {
+                    draw_flying_drum(&mut c, drum, self.shadows_enabled);
+                }
             }
 
             // Sparks, chips, dust and smoke over the top of everything in
@@ -694,35 +781,32 @@ impl Game {
                     }
                 }
 
-                // Debug overlays (dev builds only): the inspect layer's
-                // hitbox/collider outlines plus a stat readout for every tank,
-                // then the dev server's other layers. Drawn here (screen space,
-                // post-composite) rather than into scene_target, so they're
-                // never warped by an in-flight shockwave and always render
-                // crisp - tank.position is already screen pixels (no camera
-                // transform), so the two spaces line up 1:1 with no extra math.
+                // Debug overlays (dev builds only): the two tank layers -
+                // hitbox/collider outlines and the stats card, each on its
+                // own flag - for every tank, then the dev server's other
+                // layers. Drawn here (screen space, post-composite) rather
+                // than into scene_target, so they're never warped by an
+                // in-flight shockwave and always render crisp - tank.position
+                // is already screen pixels (no camera transform), so the two
+                // spaces line up 1:1 with no extra math.
                 #[cfg(feature = "dev-tools")]
                 {
-                    if self.debug_overlays.inspect {
+                    let ov = self.debug_overlays;
+                    if ov.hitboxes || ov.stats {
                         for (tank, ai) in self.world.query::<(&Tank, &Ai)>().iter() {
-                            draw_tank_inspect(&mut d, tank, Some(ai));
+                            draw_tank_layers(&mut d, ov, tank, Some(ai));
                         }
-                        crate::simulation::with_tank(&self.world, player, |tank| {
-                            draw_tank_inspect(&mut d, tank, None);
-                        });
+                        for entity in [Some(player), self.player2].into_iter().flatten() {
+                            crate::simulation::with_tank(&self.world, entity, |tank| {
+                                draw_tank_layers(&mut d, ov, tank, None);
+                            });
+                        }
                     }
                     self.draw_debug_overlays(&mut d, screen_width as f32, screen_height as f32);
                     // Which preset is live, in the field's top-left corner (the
                     // player's readouts are in the bar, so this corner is free),
                     // so the I key's cycling is visible without counting layers.
-                    if self.debug_overlays.any() {
-                        let preset = if self.debug_overlays == Overlays::INSPECT {
-                            "inspect"
-                        } else if self.debug_overlays == Overlays::ALL {
-                            "all"
-                        } else {
-                            "custom"
-                        };
+                    if let Some(preset) = ov.preset_name() {
                         // Frame time and live particle count ride the same
                         // label: the FX budget has to hold on the wasm build,
                         // and without a number on screen that is an assertion
@@ -734,8 +818,8 @@ impl Game {
                         );
                         const LABEL_FONT_SIZE: i32 = 14;
                         let label_y = HUD_MARGIN;
-                        // Same 8px/char width estimate as `draw_tank_inspect`'s
-                        // stat panel - no font handle inside the draw closure.
+                        // Same 8px/char width estimate as `draw_tank_stats`'s
+                        // panel - no font handle inside the draw closure.
                         let label_w = label.len() as i32 * 8 + 8;
                         d.draw_rectangle(
                             HUD_MARGIN - 4,
@@ -840,15 +924,57 @@ impl Game {
     }
 }
 
-/// The inspect overlay for one tank (dev builds only - `Overlays::inspect`,
-/// part of the presets the I key cycles): its hull damage box, its
+/// One tank's dev overlay layers (`Overlays::hitboxes`, `Overlays::stats`;
+/// both in the preset the I key cycles to first): the geometry is read
+/// once and shared, the boxes go down first so the card stays on top.
+#[cfg(feature = "dev-tools")]
+fn draw_tank_layers(d: &mut impl RaylibDraw, ov: Overlays, tank: &Tank, ai: Option<&Ai>) {
+    let geo = TankInspectGeometry::of(tank);
+    if ov.hitboxes {
+        draw_tank_boxes(d, tank, ai, &geo);
+    }
+    if ov.stats {
+        draw_tank_stats(d, tank, ai, &geo);
+    }
+}
+
+/// What both tank layers read off a tank: the facing-oriented hull rect
+/// (the stats card anchors at its top-left, so the card needs it whether
+/// or not the box is drawn) and the movement collider's size and corner
+/// radius (drawn by the boxes, printed by the card's MOVE line).
+#[cfg(feature = "dev-tools")]
+struct TankInspectGeometry {
+    /// The hull damage box as `(x, y, width, height)` in whole pixels.
+    hull: (i32, i32, i32, i32),
+    /// `Tank::move_half_extents` for the current facing.
+    move_half: (f32, f32),
+    /// `physics::tank_corner_radius` for those half extents.
+    corner: f32,
+}
+
+#[cfg(feature = "dev-tools")]
+impl TankInspectGeometry {
+    fn of(tank: &Tank) -> Self {
+        // Same "which axis is the long one" check as `Tank::avoidance_radius` -
+        // tanks only ever face one of the four `Dir::rotation()` values, so an
+        // exact match is safe here (no epsilon needed).
+        let along_x = tank.rotation == Dir::Right.rotation() || tank.rotation == Dir::Left.rotation();
+        let (hx, hy) = tank.hull_half_extents(along_x);
+        let hull = (
+            (tank.position.x - hx).round() as i32,
+            (tank.position.y - hy).round() as i32,
+            (hx * 2.0).round() as i32,
+            (hy * 2.0).round() as i32,
+        );
+        let move_half = tank.move_half_extents(along_x);
+        let corner = crate::physics::tank_corner_radius(move_half);
+        Self { hull, move_half, corner }
+    }
+}
+
+/// The `hitboxes` overlay for one tank: its hull damage box, its
 /// turret+barrel damage box, and its (smaller, corner-rounded) movement
-/// collider, plus a small stat block - ammo, health, current speed and velocity for every
-/// tank, and additionally (`ai: Some`, i.e. this isn't the player) whether
-/// it's currently retreating to recharge and its fire cooldown, pulled
-/// straight from its `Ai` - the same state `ai.rs`'s
-/// `wants_retreat`/`fire_interval` act on. Purely diagnostic: reads state,
-/// draws it, mutates nothing.
+/// collider. Purely diagnostic: reads state, draws it, mutates nothing.
 ///
 /// Three shapes, each the *real* thing physics uses, not an approximation:
 /// - The lime/orange/gray box is `Tank::hull_half_extents` - the per-row
@@ -866,20 +992,11 @@ impl Game {
 ///   TANK_MOVE_CORNER_RADIUS in `lib.rs`). The visible gap between blue
 ///   and lime is the tuning surface: widen it (smaller fraction) for more
 ///   forgiving driving, shrink it if sprites start visibly clipping into
-///   walls. The stat block's MOVE line prints its current world-px size
+///   walls. The `stats` card's MOVE line prints its current world-px size
 ///   and corner radius for the same purpose.
 #[cfg(feature = "dev-tools")]
-fn draw_tank_inspect(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>) {
-    // Same "which axis is the long one" check as `Tank::avoidance_radius` -
-    // tanks only ever face one of the four `Dir::rotation()` values, so an
-    // exact match is safe here (no epsilon needed).
-    let along_x = tank.rotation == Dir::Right.rotation() || tank.rotation == Dir::Left.rotation();
-    let (hx, hy) = tank.hull_half_extents(along_x);
-    let x = (tank.position.x - hx).round() as i32;
-    let y = (tank.position.y - hy).round() as i32;
-    let width = (hx * 2.0).round() as i32;
-    let height = (hy * 2.0).round() as i32;
-
+fn draw_tank_boxes(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>, geo: &TankInspectGeometry) {
+    let (x, y, width, height) = geo.hull;
     let box_color = if tank.is_wreck() {
         Color::GRAY
     } else if ai.is_some_and(Ai::is_retreating) {
@@ -906,16 +1023,29 @@ fn draw_tank_inspect(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>) {
     // (`physics::tank_corner_radius`), mapped onto raylib's relative
     // roundness factor (corner radius = roundness * min(w, h) / 2, so the
     // division below inverts that).
-    let (mx, my) = tank.move_half_extents(along_x);
-    let corner = crate::physics::tank_corner_radius((mx, my));
+    let (mx, my) = geo.move_half;
     let move_rect = Rectangle::new(
         tank.position.x - mx,
         tank.position.y - my,
         mx * 2.0,
         my * 2.0,
     );
-    d.draw_rectangle_rounded_lines(move_rect, corner / mx.min(my), 8, Color::SKYBLUE);
+    d.draw_rectangle_rounded_lines(move_rect, geo.corner / mx.min(my), 8, Color::SKYBLUE);
+}
 
+/// The `stats` overlay for one tank: a small card above its hull rect -
+/// ammo, the live weapon and its ammo, health, current speed and velocity,
+/// the movement collider's size - and additionally (`ai: Some`, i.e. this
+/// isn't a player) whether it's currently retreating to recharge and its
+/// fire cooldown, pulled straight from its `Ai` - the same state `ai.rs`'s
+/// `wants_retreat`/`fire_interval` act on. Anchored at the hull box's
+/// top-left whether or not the `hitboxes` layer draws that box. Purely
+/// diagnostic: reads state, draws it, mutates nothing.
+#[cfg(feature = "dev-tools")]
+fn draw_tank_stats(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>, geo: &TankInspectGeometry) {
+    let (x, y, _, _) = geo.hull;
+    let (mx, my) = geo.move_half;
+    let corner = geo.corner;
     let speed = (tank.velocity.x * tank.velocity.x + tank.velocity.y * tank.velocity.y).sqrt();
     // What the trigger fires right now, with its own remaining ammo -
     // under the FIFO inventory (`Tank::weapon_queue`) this advances when
@@ -977,9 +1107,9 @@ fn draw_tank_inspect(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>) {
 
 #[cfg(feature = "dev-tools")]
 impl Game {
-    /// The debug overlay layers beyond inspect (`Game::debug_overlays`,
-    /// docs/dev-server-design.md; dev builds only), screen space and
-    /// post-composite like the inspect block: blocked nav cells, each
+    /// The debug overlay layers beyond the two tank layers
+    /// (`Game::debug_overlays`, docs/dev-server-design.md; dev builds only),
+    /// screen space and post-composite like them: blocked nav cells, each
     /// enemy's AI memory, projectile hit boxes, engagement targets, pickup
     /// collect radii. Each layer costs nothing while off.
     fn draw_debug_overlays(&self, d: &mut impl RaylibDraw, width: f32, height: f32) {

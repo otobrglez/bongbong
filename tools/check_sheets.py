@@ -28,6 +28,12 @@ Two checks, both of which have caught real defects:
 `plasma.png` is deliberately off-palette (a glowing bolt that does not sit
 in the terrain), so it is not listed here.
 
+The team family (`punypalette.PUNY_TEAM`, the two player identity ramps) is
+off-palette on purpose and admitted in exactly two places: the tank sheet's
+player rows, and the whole of `portal_sheet.png` (`TEAM_SHEETS`), which is
+drawn in the P1 blue ramp so a hole in the ground reads as not-terrain. The
+portal sits on the grass, so it is also held to the no-green rule.
+
 Run: `just check-sheets` (or `python3 tools/check_sheets.py`). Exits 1 on
 any violation and names the offending sheet.
 """
@@ -56,10 +62,11 @@ ON_PALETTE = [
     'minigun_mount.png',
     'damage.png',
     'tracks.png',
+    'portal_sheet.png',
 ]
 
 # The subset that is drawn over the ground layer and so must carry no green.
-NO_GREEN = ['walls_sheet.png', 'props_sheet.png', 'barrel_explosion.png']
+NO_GREEN = ['walls_sheet.png', 'props_sheet.png', 'barrel_explosion.png', 'portal_sheet.png']
 
 PALETTE = {tuple(c) for c in pp.PUNY_PALETTE}
 PALETTE_ALL = {tuple(c) for c in pp.PUNY_PALETTE_ALL}
@@ -74,6 +81,10 @@ TANK_SHEET = 'scifi_tanks_sheet.png'
 TANK_ROWS_PER_TEAM = 12
 TANK_CELL = 32
 
+# Sheets drawn in the team family throughout: the portal is the P1 blue ramp
+# over BLACK and WHITE, every row of it.
+TEAM_SHEETS = {'portal_sheet.png'}
+
 # Sheets allowed the palette extension (punypalette.PUNY_EXTRA): the walls
 # sheet for its stone/rust steps, the vegetation sheets for GREEN_SHADE
 # (and, on trees, WOOD_ASH for burnt-out foliage).
@@ -82,6 +93,8 @@ EXTENDED = {'walls_sheet.png', 'nature_sheet.png', 'nature_sheet_desert.png', 't
 
 def scan(name):
     allowed = PALETTE_ALL if name in EXTENDED else PALETTE
+    if name in TEAM_SHEETS:
+        allowed = PALETTE | TEAM
     img = Image.open(os.path.join(STATIC, name)).convert('RGBA')
     off = green = 0
     for y in range(img.height):
