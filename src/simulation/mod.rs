@@ -60,7 +60,7 @@ use crate::laser::{LaserBeam, LaserVariant};
 use crate::level::{LevelOverrides, Mission, SpawnPlan};
 use crate::map::{self, CellObject, MapFile};
 use crate::obstacle::{Drum, Material, Obstacle, neighbour_mask};
-use crate::pathfind::{Components, Grid};
+use crate::pathfind::Grid;
 use crate::physics::Physics;
 use crate::pickup::{Pickup, PickupKind};
 use crate::plasma::{Plasma, PlasmaVariant};
@@ -1126,13 +1126,12 @@ impl Game {
         self.time += dt;
         self.tick_timers(dt, &mut rng);
         let terrain = Terrain::build(&self.world, width, height, &self.grass_cells, &self.water);
-        // One nav grid for the whole frame, passed to the phases that need
-        // it rather than parked on `Frame` - a borrow living there would
-        // alias every `&mut Frame` the other phases take.
-        let grid = self.nav_grid(width, height);
-        // One flood fill for the frame too: `enemy_phase` needs it for
-        // slot validation.
-        let components = grid.components();
+        // One nav grid for the whole frame - labelled, priced and with a
+        // flow field per shared target (`route_grid`) - passed to the
+        // phases that need it rather than parked on `Frame`: a borrow
+        // living there would alias every `&mut Frame` the other phases
+        // take.
+        let grid = self.route_grid(width, height);
         let mut f = Frame::new(dt, width, height, rng, terrain);
 
         if self.outcome == Outcome::Playing {
@@ -1141,7 +1140,7 @@ impl Game {
             self.pickup_phase(&mut f);
             self.player_phase(input, &mut f);
             self.rollin_phase(&mut f);
-            self.enemy_phase(&mut f, &grid, &components);
+            self.enemy_phase(&mut f, &grid);
             self.wave_phase(&mut f);
             self.spawn_pending(&mut f);
             self.resolve_lasers(&mut f);
@@ -1560,7 +1559,7 @@ impl Game {
     /// not flip the pack every frame. Everything downstream - the ring it
     /// competes on, its line of sight, what `think` is handed as "the
     /// player" - keys off that choice.
-    fn enemy_phase(&mut self, f: &mut Frame, grid: &Grid, components: &Components) {
+    fn enemy_phase(&mut self, f: &mut Frame, grid: &Grid) {
         let (movers, enemy_indices) = self.motion_snapshot();
         // Every player as the enemies see it this frame; index = player.
         struct PlayerView {
@@ -1685,7 +1684,7 @@ impl Game {
             ring.sort_by_key(|(e, _)| *e);
         }
         engaged_frog.sort_by_key(|(e, _)| *e);
-        let reachable = |a: Position, b: Position| components.connected(&grid, a, b);
+        let reachable = |a: Position, b: Position| grid.connected(a, b);
         // One worst-case tank clear of the wall, plus a little.
         let margin = battlefield::max_tank_clearance_half_extent() + 8.0;
         let line_of_sight = |a: Position, b: Position| f.terrain.line_of_sight(a, b);
@@ -2635,6 +2634,69 @@ impl Game {
         // round costs more.
         grid.weigh(self.water.shallow_cells(), tuning().water_ford_path_cost.max(1) as u32);
         grid
+    }
+
+    /// The frame's routing grid: `nav_grid` labelled for O(1) reachability,
+    /// priced with the tactical surcharges, and carrying one flow field
+    /// per target the pack shares - every live player and, while it
+    /// lives, the player's frog (a hunter's quarry). Enemies then route
+    /// toward those by reading the field; only a target of their own (an
+    /// engagement slot, a wander waypoint, a pickup) still costs a search.
+    ///
+    /// The lane surcharge walks the cells in front of each live player's
+    /// barrel (`Tank::rotation` is the axis a shot flies along) out to
+    /// `route_lane_cells`, stopping at the first blocked cell - a shell
+    /// flies further, but no tank can stand there anyway. The crowd
+    /// surcharge is the cell each live enemy stands in. Both are read at
+    /// field-build time, so this is the one place they are applied. No
+    /// RNG: a surcharge is a pure function of positions, and the field's
+    /// ties break on cell index.
+    fn route_grid(&self, width: f32, height: f32) -> Grid {
+        let mut grid = self.nav_grid(width, height);
+        let t = tuning();
+        let players: Vec<(Position, f32)> = self
+            .players()
+            .into_iter()
+            .flatten()
+            .filter_map(|e| with_tank(&self.world, e, |tank| (!tank.is_wreck()).then_some((tank.position, tank.rotation))))
+            .collect();
+        if t.route_lane_cost > 0 {
+            let mut lane = Vec::new();
+            for &(pos, rotation) in &players {
+                let Some(dir) = Dir::from_rotation(rotation) else {
+                    continue;
+                };
+                let step = dir.vec();
+                let mut at = pos;
+                for _ in 0..t.route_lane_cells {
+                    if grid.blocked_ahead(at, step) {
+                        break;
+                    }
+                    at = Position::new(at.x + step.x * PATHFIND_CELL_SIZE, at.y + step.y * PATHFIND_CELL_SIZE);
+                    lane.push(at);
+                }
+            }
+            grid.surcharge(lane.into_iter(), t.route_lane_cost as u32);
+        }
+        if t.route_crowd_cost > 0 {
+            let standing: Vec<Position> =
+                self.world.query::<(&Tank, &Ai)>().iter().filter(|(tank, _)| !tank.is_wreck()).map(|(tank, _)| tank.position).collect();
+            grid.surcharge(standing.into_iter(), t.route_crowd_cost as u32);
+        }
+        grid.label();
+        for &(pos, _) in &players {
+            grid.add_field(pos);
+        }
+        if let Some(frog) = self.frog.and_then(|e| with_frog(&self.world, e, |fr| (!fr.is_dead()).then_some(fr.position))) {
+            grid.add_field(frog);
+        }
+        grid
+    }
+
+    /// The routing cell a world position falls in (`PATHFIND_CELL_SIZE`
+    /// pitch) - for tests and tooling that reason about the grid.
+    pub(crate) fn grid_cell_of(&self, p: Position) -> (usize, usize) {
+        ((p.x / PATHFIND_CELL_SIZE).max(0.0) as usize, (p.y / PATHFIND_CELL_SIZE).max(0.0) as usize)
     }
 
     /// Shortest route between two points on this round's nav grid, in
@@ -3838,6 +3900,35 @@ mod mechanics_tests {
             input.player_intent.move_dir = dir;
             step(game, input);
         }
+    }
+
+    /// The frame's routing grid prices the cells down the player's
+    /// barrel (`route_lane_cost` on each, out to `route_lane_cells`), so
+    /// the field toward the player is dearer straight up the lane than
+    /// round the side: from four cells in front the cheapest route
+    /// leaves the lane, while four cells to the flank cost the plain
+    /// four steps. A lane cell is priced, never blocked.
+    #[test]
+    fn the_route_grid_prices_the_players_firing_lane() {
+        let mut game = sandbox("version = 1\ntanks = 0\ncells.\"5,11\" = { kind = \"start\" }\n");
+        teleport_player(&mut game, map::cell_to_world(10, 8));
+        // Two frames east: the hull snaps to face right and barely moves.
+        drive(&mut game, Some(Dir::Right), 2);
+        let player = player_pos(&game);
+        assert!(game.grid_cell_of(player) == (10, 8), "still in its cell: {player:?}");
+        let grid = game.route_grid(W, H);
+        let ahead = map::cell_to_world(14, 8);
+        let flank = map::cell_to_world(10, 12);
+        assert!(grid.usable(map::cell_to_world(12, 8)), "a lane cell is open");
+        assert_eq!(grid.path_cost(flank, player), Some(4), "the flank costs its four steps");
+        let up_the_lane = grid.path_cost(ahead, player).expect("routes");
+        assert!(up_the_lane > 4, "the lane is dearer than the four steps: {up_the_lane}");
+        // The cheapest route out of the lane is round it: one step
+        // aside, four along, one back in - six, not three lane cells at
+        // four each plus one.
+        assert_eq!(up_the_lane, 6);
+        let first = grid.next_step(ahead, player).expect("routes");
+        assert_ne!(game.grid_cell_of(first), (13, 8), "the first step leaves the lane");
     }
 
     #[test]
