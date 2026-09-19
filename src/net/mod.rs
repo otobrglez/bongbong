@@ -18,6 +18,20 @@
 //! - `encode`: a live `Game` into a `Snapshot` or a `Welcome`.
 //! - `apply`: a `Welcome` into a replica `Game`, a `Snapshot` into one.
 //!
+//! The client's socket sits on top of that codec and is the one part of
+//! the module that is not shared with the server (docs/online-coop-prd.md
+//! §4.6):
+//!
+//! - `transport`: the `Transport` trait - `send` bytes, `drain` decoded
+//!   messages, a connection state - and nothing else a frame loop needs.
+//! - `native`, `web`: its two real implementations, a `tungstenite`
+//!   thread and emscripten's WebSocket API; `loopback`, the in-process
+//!   pair with dialled delay, jitter and loss the offline rig runs on.
+//! - `rooms`: the host in force and the URL a room code names.
+//! - `client`: `RoomClient`, the lobby's state machine over a transport -
+//!   host or join, the code, the roster, the seat, and the snapshots
+//!   with the deltas already applied.
+//!
 //! Where the PRD's protocol (§4.3) changed on contact with the real
 //! types: `TankState` carries the chassis `row` (a wave tank arrives
 //! mid-round and the roster names only the seats'), `ShotState` its sprite
@@ -43,10 +57,21 @@
 //! which `Ricochet` makes possible - is what closes it.
 
 pub mod apply;
+pub mod client;
 pub mod codec;
 pub mod delta;
 pub mod encode;
 pub mod events;
+pub mod loopback;
+// The client's socket: one implementation per platform, both behind the
+// `online` feature, so the headless crate the room server and the probe
+// build carries no second WebSocket stack.
+#[cfg(all(feature = "online", not(target_os = "emscripten")))]
+pub mod native;
+pub mod rooms;
+pub mod transport;
+#[cfg(all(feature = "online", target_os = "emscripten"))]
+pub mod web;
 pub mod wire;
 
 /// The protocol's version, compared in `Welcome`: a client on another

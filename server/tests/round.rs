@@ -7,14 +7,19 @@
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
+use bongbong::ai::Intent;
 use bongbong::level::Mission;
 use bongbong::net::apply;
+use bongbong::net::client::{ClientEvent, Identity, Phase, RoomClient, RoomSetup};
+use bongbong::net::native::NativeTransport;
+use bongbong::net::rooms::{RoomCode, RoomsHost, socket_url};
 use bongbong::net::codec::{self, Msg};
 use bongbong::net::delta::apply_delta;
 use bongbong::net::events::WireEvent;
 use bongbong::net::wire::{IntentMsg, Lobby, Snapshot};
 use bongbong::net::{MAX_SEATS, PROTOCOL_VERSION};
 use bongbong::simulation::Game;
+use bongbong::tank::Dir;
 use bongbong_server::room::{SEATS_PLAYABLE, SNAPSHOT_EVERY};
 use bongbong_server::{Config, Server};
 use futures_util::{SinkExt, StreamExt};
@@ -437,4 +442,150 @@ async fn lobby_refusals_are_errors_not_closes() {
     assert_eq!(said, (0, "gg".into()));
     send(&mut ws, &Msg::Lobby(Lobby::Leave)).await;
     assert!(expect_lobby_error(&mut ws).await.contains("left"));
+}
+
+// ---------------------------------------------------------------------------
+// The client's own transport (docs/online-coop-prd.md §4.6): the same
+// round again, but played through `bongbong::net::native` and
+// `RoomClient` instead of a hand-driven socket - the path a player's
+// machine takes, from the URL the rooms host derives to the deltas
+// landing in a replica.
+
+/// What one round through the client's own transport looked like.
+struct Played {
+    code: String,
+    seat: u8,
+    /// (arrival, tick) per snapshot the client handed out after the
+    /// round's welcome.
+    snapshots: Vec<(Instant, u32)>,
+    intents: u32,
+    /// How many times the replica was held to the wire.
+    compared: usize,
+}
+
+/// Host a room on `url`, start the round, drive it for `span` and follow
+/// the stream. Blocking, the way the game's frame loop is: one poll and
+/// one intent per 16 ms, no runtime.
+fn play_a_round(url: String, span: Duration) -> Played {
+    let mut client = RoomClient::host(
+        NativeTransport::connect(&url),
+        Identity::new("host", "tok-host"),
+        RoomSetup {
+            map: "default".into(),
+            map_toml: None,
+            mission: Mission::Protect,
+            seed: Some(0xB0B5),
+        },
+    );
+    let mut events = Vec::new();
+    let mut code: Option<String> = None;
+    let mut replica: Option<Game> = None;
+    let mut played =
+        Played { code: String::new(), seat: 0, snapshots: Vec::new(), intents: 0, compared: 0 };
+    let (mut asked_to_start, mut in_round) = (false, false);
+    let mut round_end: Option<Instant> = None;
+    let give_up = Instant::now() + WAIT * 4;
+    loop {
+        events.clear();
+        client.poll(&mut events);
+        for event in events.drain(..) {
+            match event {
+                ClientEvent::Created { code: minted } => code = Some(minted),
+                ClientEvent::Started => in_round = true,
+                ClientEvent::Welcomed(w) if in_round => {
+                    assert_eq!(w.seed, 0xB0B5, "the round runs on the seed the host pinned");
+                    let game = apply::welcome(&w).expect("a replica from the welcome");
+                    assert_replica_matches(&game, &w.snapshot);
+                    replica = Some(game);
+                    round_end = Some(Instant::now() + span);
+                }
+                ClientEvent::Welcomed(_) => {}
+                ClientEvent::Snapshot(snapshot) => {
+                    let game = replica.as_mut().expect("a snapshot before the welcome");
+                    apply::snapshot(game, &snapshot);
+                    played.snapshots.push((Instant::now(), snapshot.tick));
+                    if played.snapshots.len() % COMPARE_EVERY == 0 {
+                        assert_replica_matches(game, &snapshot);
+                        played.compared += 1;
+                    }
+                }
+                ClientEvent::Refused(why) => panic!("the room refused: {why}"),
+                ClientEvent::Closed(why) => panic!("the socket closed: {why}"),
+                ClientEvent::Roster { .. } | ClientEvent::Said { .. } => {}
+            }
+        }
+        if !asked_to_start && client.phase() == &Phase::Lobby {
+            client.start();
+            asked_to_start = true;
+        }
+        if replica.is_some() {
+            // A circle, a shot every 90 ticks: the same drive the
+            // hand-built client above does.
+            let leg = (played.intents / 30) % 4;
+            let dir = [Dir::Up, Dir::Right, Dir::Down, Dir::Left][leg as usize];
+            let fire = played.intents % 90 == 0;
+            client.send_intent(&Intent { move_dir: Some(dir), face: Some(dir), fire, ..Intent::default() });
+            played.intents += 1;
+        }
+        if round_end.is_some_and(|end| Instant::now() >= end) {
+            break;
+        }
+        assert!(Instant::now() < give_up, "the round never got going: {:?}", client.phase());
+        std::thread::sleep(Duration::from_millis(16));
+    }
+    if let Some(game) = &replica {
+        assert_replica_matches(game, client.snapshot().expect("a baseline"));
+        played.compared += 1;
+    }
+    played.code = code.expect("a room code");
+    played.seat = client.seat().expect("a seat");
+    client.close();
+    played
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_games_own_transport_hosts_a_round_and_keeps_up_with_it() {
+    let (addr, hub) = start_server().await;
+
+    // The URL rule: an override is one server, addressed at its own /ws,
+    // whether a room is being made or joined.
+    let rooms = RoomsHost::overriding(&format!("ws://{addr}"));
+    let url = socket_url(&rooms, None);
+    assert_eq!(url, format!("ws://{addr}/ws"));
+
+    let span = Duration::from_secs(2);
+    let played = tokio::task::spawn_blocking(move || play_a_round(url, span))
+        .await
+        .expect("the client's thread");
+
+    // The code names the pod that minted it, and on the cluster that
+    // letter alone would have picked the path.
+    assert_eq!(played.seat, 0, "the host takes the first seat");
+    let code = RoomCode::parse(&played.code).expect("a well-formed code");
+    assert_eq!(code.pod, 'A');
+    assert_eq!(socket_url(&rooms, Some(&code)), format!("ws://{addr}/ws"));
+    assert_eq!(socket_url(&RoomsHost::cluster(), Some(&code)), "wss://rooms.bongbong.io/r/rooms-a/ws");
+
+    // Cadence: snapshots at 20 Hz, the tick at 60 Hz.
+    let n = played.snapshots.len();
+    assert!(n >= 25, "only {n} snapshots in {span:?}");
+    let (t_first, tick_first) = played.snapshots[0];
+    let (t_last, tick_last) = played.snapshots[n - 1];
+    let elapsed = t_last.duration_since(t_first).as_secs_f64();
+    let snapshot_hz = (n - 1) as f64 / elapsed;
+    let tick_hz = (tick_last - tick_first) as f64 / elapsed;
+    eprintln!(
+        "measured: {n} snapshots over {elapsed:.2} s, snapshots {snapshot_hz:.1} Hz, tick {tick_hz:.1} Hz, {} intents sent, replica checked {} times",
+        played.intents, played.compared
+    );
+    assert!((17.0..=23.0).contains(&snapshot_hz), "snapshots at {snapshot_hz:.1} Hz, wanted 20");
+    assert!((54.0..=66.0).contains(&tick_hz), "tick at {tick_hz:.1} Hz, wanted 60");
+    assert!(
+        played.snapshots.windows(2).all(|w| w[1].1 == w[0].1 + SNAPSHOT_EVERY as u32),
+        "a client that keeps up gets every interval, in order"
+    );
+    assert!(played.intents >= 60, "only {} intents in {span:?}", played.intents);
+    assert!(played.compared >= 3, "the replica was held to the wire {} times", played.compared);
+    let (_, p99) = hub.metrics.tick_percentiles();
+    assert!(p99 < 16_667, "a tick must fit in the tick: p99 {p99} us");
 }

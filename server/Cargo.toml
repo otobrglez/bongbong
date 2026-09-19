@@ -31,6 +31,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
+# The game's own client transport (`bongbong::net::native`), so the
+# integration test can play a round the way a player's machine does.
+# Cargo unions this with the dependency above for test builds only; the
+# binary and its image still take the crate without it.
+bongbong = { path = "..", default-features = false, features = ["online"] }
 # The headless client of the integration test.
 tokio-tungstenite = "0.29"
 # `tokio::time::pause` for the lifecycle and mailbox tests.
