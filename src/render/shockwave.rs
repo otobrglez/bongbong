@@ -67,9 +67,9 @@ impl RippleFx {
         #[cfg(target_os = "android")]
         let mut shader = {
             let source = match shader_path.rsplit('/').next() {
-                Some("shockwave.fs") => include_str!("../static/web/shockwave.fs"),
-                Some("muzzle_flash.fs") => include_str!("../static/web/muzzle_flash.fs"),
-                Some("impact.fs") => include_str!("../static/web/impact.fs"),
+                Some("shockwave.fs") => include_str!("../../static/web/shockwave.fs"),
+                Some("muzzle_flash.fs") => include_str!("../../static/web/muzzle_flash.fs"),
+                Some("impact.fs") => include_str!("../../static/web/impact.fs"),
                 other => panic!("no embedded ripple shader for {other:?}"),
             };
             rl.load_shader_from_memory(thread, None, Some(source))
