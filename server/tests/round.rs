@@ -1,17 +1,20 @@
 //! The protocol's CI check (docs/online-coop-prd.md §4.13): a server on an
 //! ephemeral loopback port, two headless clients over WebSocket, a room
 //! created and joined by code, a round started and driven, the snapshot
-//! stream measured, a seat reclaimed after a disconnect.
+//! stream measured and applied into a client replica whose drawn tanks
+//! are held to the wire's, a seat reclaimed after a disconnect.
 
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use bongbong::level::Mission;
+use bongbong::net::apply;
 use bongbong::net::codec::{self, Msg};
 use bongbong::net::delta::apply_delta;
 use bongbong::net::events::WireEvent;
 use bongbong::net::wire::{IntentMsg, Lobby, Snapshot};
 use bongbong::net::{MAX_SEATS, PROTOCOL_VERSION};
+use bongbong::simulation::Game;
 use bongbong_server::room::{SEATS_PLAYABLE, SNAPSHOT_EVERY};
 use bongbong_server::{Config, Server};
 use futures_util::{SinkExt, StreamExt};
@@ -133,12 +136,52 @@ struct Stream {
     fulls: usize,
     baseline: Snapshot,
     events: Vec<WireEvent>,
+    /// The client's replica, built from the welcome and stepped by every
+    /// snapshot; `None` for a client that only counts.
+    replica: Option<Game>,
+    /// How many times the replica's drawn tanks were held to the wire's.
+    compared: usize,
 }
 
-/// Read `ws` for `span`, applying every delta onto the baseline; a client
-/// that keeps up sees only deltas.
-async fn follow(ws: &mut Client, baseline: Snapshot, span: Duration) -> Stream {
-    let mut stream = Stream { deltas: Vec::new(), fulls: 0, baseline, events: Vec::new() };
+/// Every snapshot lands in the replica; every `COMPARE_EVERY`th one, the
+/// replica's drawn tanks are checked against it.
+const COMPARE_EVERY: usize = 10;
+
+/// The replica draws exactly the tanks the snapshot lists, at the
+/// snapshot's quantised positions.
+fn assert_replica_matches(replica: &Game, snap: &Snapshot) {
+    let drawn: Vec<(usize, i32, i32)> = replica.drawable_state().tanks.iter().map(|t| (t.slot, t.x, t.y)).collect();
+    let wire: Vec<(usize, i32, i32)> = snap.tanks.iter().map(|t| (t.id as usize, t.x as i32, t.y as i32)).collect();
+    assert_eq!(drawn, wire, "replica tanks against the snapshot at tick {}", snap.tick);
+    assert_eq!(replica.frame(), snap.tick as u64);
+}
+
+impl Stream {
+    fn new(baseline: Snapshot, replica: Option<Game>) -> Stream {
+        if let Some(r) = &replica {
+            assert_replica_matches(r, &baseline);
+        }
+        Stream { deltas: Vec::new(), fulls: 0, baseline, events: Vec::new(), replica, compared: 0 }
+    }
+
+    /// The baseline moved on to `snap`: the replica follows, and is
+    /// checked every `COMPARE_EVERY`th time.
+    fn land(&mut self, snap: Snapshot) {
+        if let Some(r) = &mut self.replica {
+            apply::snapshot(r, &snap);
+            if (self.deltas.len() + self.fulls) % COMPARE_EVERY == 0 {
+                assert_replica_matches(r, &snap);
+                self.compared += 1;
+            }
+        }
+        self.baseline = snap;
+    }
+}
+
+/// Read `ws` for `span`, applying every delta onto the baseline and into
+/// the replica; a client that keeps up sees only deltas.
+async fn follow(ws: &mut Client, baseline: Snapshot, replica: Option<Game>, span: Duration) -> Stream {
+    let mut stream = Stream::new(baseline, replica);
     let end = Instant::now() + span;
     while Instant::now() < end {
         let left = end.saturating_duration_since(Instant::now());
@@ -152,14 +195,18 @@ async fn follow(ws: &mut Client, baseline: Snapshot, span: Duration) -> Stream {
                 assert!(next.tanks.iter().any(|t| t.id == 0) && next.tanks.iter().any(|t| t.id == 1), "both players' tanks persist");
                 stream.events.extend(next.events.iter().cloned());
                 stream.deltas.push((Instant::now(), d.tick));
-                stream.baseline = next;
+                stream.land(next);
             }
             Msg::Snapshot(s) => {
                 stream.fulls += 1;
-                stream.baseline = s;
+                stream.land(s);
             }
             other => eprintln!("follow: ignoring {}", describe(&other)),
         }
+    }
+    if let Some(r) = &stream.replica {
+        assert_replica_matches(r, &stream.baseline);
+        stream.compared += 1;
     }
     stream
 }
@@ -213,6 +260,7 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
     send(&mut second, &Msg::Lobby(Lobby::Ready)).await;
     send(&mut host, &Msg::Lobby(Lobby::Start)).await;
     let (mut host_baseline, mut second_baseline): (Option<Snapshot>, Option<Snapshot>) = (None, None);
+    let mut host_replica: Option<Game> = None;
     for (ws, seat) in [(&mut host, 0u8), (&mut second, 1u8)] {
         expect(ws, "started", |m| match m {
             Msg::Lobby(Lobby::Started) => Ok(()),
@@ -225,7 +273,16 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
         assert_eq!(w.snapshot.tick, 0);
         let ids: Vec<u16> = w.snapshot.tanks.iter().map(|t| t.id).collect();
         assert!(ids.starts_with(&[0, 1]), "both players' tanks lead the roster: {ids:?}");
+        assert!(
+            w.snapshot.events.iter().any(|e| matches!(e, WireEvent::RoundStarted { seed: 0xB0B5, .. })),
+            "the round start travels in the welcome's frame-0 snapshot: {:?}",
+            w.snapshot.events
+        );
+        assert!(w.enemy_count.is_none(), "the room pins no enemy count; the replica rolls the server's");
+        assert!(w.dead_cells.is_empty(), "a fresh field has no holes");
+        assert!(w.roster.iter().all(|s| s.chassis > 0 || s.seat == 0), "the roster carries the rolled chassis: {:?}", w.roster);
         if seat == 0 {
+            host_replica = Some(apply::welcome(&w).expect("a replica from the welcome"));
             host_baseline = Some(w.snapshot);
         } else {
             second_baseline = Some(w.snapshot);
@@ -233,6 +290,8 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
     }
     let host_baseline = host_baseline.take().unwrap();
     let second_baseline = second_baseline.take().unwrap();
+    let host_replica = host_replica.take().unwrap();
+    assert_eq!(host_replica.round_seed(), 0xB0B5, "the replica ran init on the room's seed");
     let start_x = second_baseline.tanks[1].x;
     let start_y = second_baseline.tanks[1].y;
 
@@ -244,7 +303,7 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
         let mut tick = 0u32;
         let mut clock = tokio::time::interval(Duration::from_millis(16));
         let end = Instant::now() + span;
-        let mut seen = Stream { deltas: Vec::new(), fulls: 0, baseline: second_baseline, events: Vec::new() };
+        let mut seen = Stream::new(second_baseline, None);
         while Instant::now() < end {
             tokio::select! {
                 _ = clock.tick() => {
@@ -268,7 +327,7 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
         }
         (ws, seen, tick)
     });
-    let host_stream = follow(&mut host, host_baseline, span).await;
+    let host_stream = follow(&mut host, host_baseline, Some(host_replica), span).await;
     let (second, second_stream, intents_sent) = driver.await.unwrap();
 
     // Cadence: snapshots at 20 Hz, the tick at 60 Hz.
@@ -283,7 +342,12 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
     assert!((17.0..=23.0).contains(&snapshot_hz), "snapshots at {snapshot_hz:.1} Hz, wanted 20");
     assert!((54.0..=66.0).contains(&tick_hz), "tick at {tick_hz:.1} Hz, wanted 60");
     assert_eq!(host_stream.fulls, 0, "a client that keeps up never needs a full snapshot");
-    assert!(host_stream.events.iter().any(|e| matches!(e, WireEvent::RoundStarted { seed: 0xB0B5, .. })), "the round start reached the host");
+    assert!(host_stream.compared >= 5, "the replica was held to the wire {} times", host_stream.compared);
+    eprintln!("replica checked against the wire {} times", host_stream.compared);
+    assert!(
+        !host_stream.events.iter().any(|e| matches!(e, WireEvent::RoundStarted { .. })),
+        "no delta repeats the round start (a replica would init again)"
+    );
     let (p50, p99) = hub.metrics.tick_percentiles();
     eprintln!("tick p50 {p50} us, p99 {p99} us");
     assert!(p99 < 16_667, "a tick must fit in the tick: p99 {p99} us");
@@ -305,9 +369,14 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
     assert_eq!(again.seat, 1, "the token reclaims the seat");
     assert_eq!(again.seed, 0xB0B5);
     assert!(again.snapshot.tick > tick_last, "the round went on meanwhile");
-    let resumed = follow(&mut back, again.snapshot.clone(), Duration::from_millis(500)).await;
+    assert!(again.snapshot.tanks.len() >= 2, "the welcome is cut from the live world");
+    assert!(again.dead_cells.windows(2).all(|w| w[0] < w[1]), "dead cells are sorted, each once: {:?}", again.dead_cells);
+    // A late joiner builds the round as it stands now and follows from there.
+    let late_replica = apply::welcome(&again).expect("a replica from the rejoin welcome");
+    let resumed = follow(&mut back, again.snapshot.clone(), Some(late_replica), Duration::from_millis(500)).await;
     assert_eq!(resumed.fulls, 1, "a rejoin gets one full snapshot to reset its baseline, then deltas");
     assert!(resumed.deltas.len() >= 5, "{} deltas after the rejoin", resumed.deltas.len());
+    assert!(resumed.compared >= 1);
     assert_eq!(hub.metrics.reconnects_total.load(std::sync::atomic::Ordering::Relaxed), 1);
     let roster = expect(&mut host, "the roster after the rejoin", |m| match m {
         Msg::Lobby(Lobby::Roster { seats, .. }) if seats.len() == 2 && seats[1].connected => Ok(seats),
