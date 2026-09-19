@@ -26,6 +26,13 @@ use crate::room::{Command, ConnLink, RoomParams};
 /// skipping its snapshots: at 20 Hz, under a second of lag.
 pub const OUTBOX_DEPTH: usize = 16;
 
+/// How long the writer gets to flush what is queued and send the
+/// WebSocket close frame once the reader has stopped. A refusal is
+/// queued and the connection closed in the same breath (`remove_seat`
+/// says why the seat went), so cutting the socket here would reset it
+/// before the client ever read the reason.
+const FLUSH_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// What became of a message offered to an outbox.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Delivery {
@@ -137,7 +144,13 @@ pub async fn run(socket: WebSocket, hub: Arc<Hub>) {
     if let Some(a) = &attached {
         let _ = a.room.commands.send(Command::Disconnected { conn_id }).await;
     }
-    writer.abort();
+    // Dropping every sender ends the writer's loop once it has drained
+    // what is queued, and it closes the socket properly on its way out.
+    drop(outbox);
+    let aborter = writer.abort_handle();
+    if tokio::time::timeout(FLUSH_GRACE, writer).await.is_err() {
+        aborter.abort();
+    }
     debug!(conn = conn_id, "closed");
 }
 
