@@ -51,11 +51,11 @@ fn step(game: &mut Game, input: Input) {
 }
 
 fn fire() -> Input {
-    Input { player_intent: Intent { fire: true, ..Intent::default() }, ..Input::default() }
+    Input::single(Intent { fire: true, ..Intent::default() })
 }
 
 fn drive(dir: Dir) -> Input {
-    Input { player_intent: Intent { move_dir: Some(dir), ..Intent::default() }, ..Input::default() }
+    Input::single(Intent { move_dir: Some(dir), ..Intent::default() })
 }
 
 /// Fire one shell and let it land: `frames` of AFK after the trigger pull.

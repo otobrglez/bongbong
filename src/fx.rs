@@ -281,8 +281,19 @@ impl Fx {
 
     // ---- the two halves of a frame -------------------------------------
 
-    /// Read this frame's events and world state and emit from both.
+    /// Read this frame's events and world state and emit from both. The
+    /// event half is a no-op when `observe_events` already saw this
+    /// simulation frame.
     pub fn observe(&mut self, game: &Game, dt: f32) {
+        self.observe_events(game);
+        self.sample_world(game, dt);
+    }
+
+    /// The bursts of the simulation frame `game` is at, once per frame:
+    /// `Game::events` holds one `update`'s output, so a rendered frame that
+    /// runs two steps calls this after each or the first step's bursts are
+    /// gone before the draw. A frame already consumed emits nothing.
+    pub fn observe_events(&mut self, game: &Game) {
         if game.frame() != self.last_frame {
             // A restart rewinds the counter, which is also the moment the
             // old round's particles should go.
@@ -361,7 +372,6 @@ impl Fx {
                 }
             }
         }
-        self.sample_world(game, dt);
     }
 
     /// Continuous emitters. These are *states*, not events - a tile is
