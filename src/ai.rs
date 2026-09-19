@@ -1092,7 +1092,7 @@ impl Ai {
     }
 
     /// True while backing off to recharge ammo (see `wants_retreat`). Read
-    /// by the inspect-mode debug overlay (`game.rs`) and by `Game::update`'s
+    /// by the `stats` debug overlay (`game.rs::draw_tank_stats`) and by `Game::update`'s
     /// engagement-slot assignment, which excludes a retreating tank from the
     /// engaged set - it isn't attacking, so it shouldn't consume a slot.
     pub fn is_retreating(&self) -> bool {
@@ -1109,7 +1109,7 @@ impl Ai {
     }
 
     /// Seconds until this tank may fire again (zero or negative means
-    /// ready). Read by the inspect-mode debug overlay (`game.rs`).
+    /// ready). Read by the `stats` debug overlay (`game.rs::draw_tank_stats`).
     pub fn fire_cooldown(&self) -> f32 {
         self.fire_timer
     }

@@ -781,35 +781,32 @@ impl Game {
                     }
                 }
 
-                // Debug overlays (dev builds only): the inspect layer's
-                // hitbox/collider outlines plus a stat readout for every tank,
-                // then the dev server's other layers. Drawn here (screen space,
-                // post-composite) rather than into scene_target, so they're
-                // never warped by an in-flight shockwave and always render
-                // crisp - tank.position is already screen pixels (no camera
-                // transform), so the two spaces line up 1:1 with no extra math.
+                // Debug overlays (dev builds only): the two tank layers -
+                // hitbox/collider outlines and the stats card, each on its
+                // own flag - for every tank, then the dev server's other
+                // layers. Drawn here (screen space, post-composite) rather
+                // than into scene_target, so they're never warped by an
+                // in-flight shockwave and always render crisp - tank.position
+                // is already screen pixels (no camera transform), so the two
+                // spaces line up 1:1 with no extra math.
                 #[cfg(feature = "dev-tools")]
                 {
-                    if self.debug_overlays.inspect {
+                    let ov = self.debug_overlays;
+                    if ov.hitboxes || ov.stats {
                         for (tank, ai) in self.world.query::<(&Tank, &Ai)>().iter() {
-                            draw_tank_inspect(&mut d, tank, Some(ai));
+                            draw_tank_layers(&mut d, ov, tank, Some(ai));
                         }
-                        crate::simulation::with_tank(&self.world, player, |tank| {
-                            draw_tank_inspect(&mut d, tank, None);
-                        });
+                        for entity in [Some(player), self.player2].into_iter().flatten() {
+                            crate::simulation::with_tank(&self.world, entity, |tank| {
+                                draw_tank_layers(&mut d, ov, tank, None);
+                            });
+                        }
                     }
                     self.draw_debug_overlays(&mut d, screen_width as f32, screen_height as f32);
                     // Which preset is live, in the field's top-left corner (the
                     // player's readouts are in the bar, so this corner is free),
                     // so the I key's cycling is visible without counting layers.
-                    if self.debug_overlays.any() {
-                        let preset = if self.debug_overlays == Overlays::INSPECT {
-                            "inspect"
-                        } else if self.debug_overlays == Overlays::ALL {
-                            "all"
-                        } else {
-                            "custom"
-                        };
+                    if let Some(preset) = ov.preset_name() {
                         // Frame time and live particle count ride the same
                         // label: the FX budget has to hold on the wasm build,
                         // and without a number on screen that is an assertion
@@ -821,8 +818,8 @@ impl Game {
                         );
                         const LABEL_FONT_SIZE: i32 = 14;
                         let label_y = HUD_MARGIN;
-                        // Same 8px/char width estimate as `draw_tank_inspect`'s
-                        // stat panel - no font handle inside the draw closure.
+                        // Same 8px/char width estimate as `draw_tank_stats`'s
+                        // panel - no font handle inside the draw closure.
                         let label_w = label.len() as i32 * 8 + 8;
                         d.draw_rectangle(
                             HUD_MARGIN - 4,
@@ -927,15 +924,57 @@ impl Game {
     }
 }
 
-/// The inspect overlay for one tank (dev builds only - `Overlays::inspect`,
-/// part of the presets the I key cycles): its hull damage box, its
+/// One tank's dev overlay layers (`Overlays::hitboxes`, `Overlays::stats`;
+/// both in the preset the I key cycles to first): the geometry is read
+/// once and shared, the boxes go down first so the card stays on top.
+#[cfg(feature = "dev-tools")]
+fn draw_tank_layers(d: &mut impl RaylibDraw, ov: Overlays, tank: &Tank, ai: Option<&Ai>) {
+    let geo = TankInspectGeometry::of(tank);
+    if ov.hitboxes {
+        draw_tank_boxes(d, tank, ai, &geo);
+    }
+    if ov.stats {
+        draw_tank_stats(d, tank, ai, &geo);
+    }
+}
+
+/// What both tank layers read off a tank: the facing-oriented hull rect
+/// (the stats card anchors at its top-left, so the card needs it whether
+/// or not the box is drawn) and the movement collider's size and corner
+/// radius (drawn by the boxes, printed by the card's MOVE line).
+#[cfg(feature = "dev-tools")]
+struct TankInspectGeometry {
+    /// The hull damage box as `(x, y, width, height)` in whole pixels.
+    hull: (i32, i32, i32, i32),
+    /// `Tank::move_half_extents` for the current facing.
+    move_half: (f32, f32),
+    /// `physics::tank_corner_radius` for those half extents.
+    corner: f32,
+}
+
+#[cfg(feature = "dev-tools")]
+impl TankInspectGeometry {
+    fn of(tank: &Tank) -> Self {
+        // Same "which axis is the long one" check as `Tank::avoidance_radius` -
+        // tanks only ever face one of the four `Dir::rotation()` values, so an
+        // exact match is safe here (no epsilon needed).
+        let along_x = tank.rotation == Dir::Right.rotation() || tank.rotation == Dir::Left.rotation();
+        let (hx, hy) = tank.hull_half_extents(along_x);
+        let hull = (
+            (tank.position.x - hx).round() as i32,
+            (tank.position.y - hy).round() as i32,
+            (hx * 2.0).round() as i32,
+            (hy * 2.0).round() as i32,
+        );
+        let move_half = tank.move_half_extents(along_x);
+        let corner = crate::physics::tank_corner_radius(move_half);
+        Self { hull, move_half, corner }
+    }
+}
+
+/// The `hitboxes` overlay for one tank: its hull damage box, its
 /// turret+barrel damage box, and its (smaller, corner-rounded) movement
-/// collider, plus a small stat block - ammo, health, current speed and velocity for every
-/// tank, and additionally (`ai: Some`, i.e. this isn't the player) whether
-/// it's currently retreating to recharge and its fire cooldown, pulled
-/// straight from its `Ai` - the same state `ai.rs`'s
-/// `wants_retreat`/`fire_interval` act on. Purely diagnostic: reads state,
-/// draws it, mutates nothing.
+/// collider. Purely diagnostic: reads state, draws it, mutates nothing.
 ///
 /// Three shapes, each the *real* thing physics uses, not an approximation:
 /// - The lime/orange/gray box is `Tank::hull_half_extents` - the per-row
@@ -953,20 +992,11 @@ impl Game {
 ///   TANK_MOVE_CORNER_RADIUS in `lib.rs`). The visible gap between blue
 ///   and lime is the tuning surface: widen it (smaller fraction) for more
 ///   forgiving driving, shrink it if sprites start visibly clipping into
-///   walls. The stat block's MOVE line prints its current world-px size
+///   walls. The `stats` card's MOVE line prints its current world-px size
 ///   and corner radius for the same purpose.
 #[cfg(feature = "dev-tools")]
-fn draw_tank_inspect(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>) {
-    // Same "which axis is the long one" check as `Tank::avoidance_radius` -
-    // tanks only ever face one of the four `Dir::rotation()` values, so an
-    // exact match is safe here (no epsilon needed).
-    let along_x = tank.rotation == Dir::Right.rotation() || tank.rotation == Dir::Left.rotation();
-    let (hx, hy) = tank.hull_half_extents(along_x);
-    let x = (tank.position.x - hx).round() as i32;
-    let y = (tank.position.y - hy).round() as i32;
-    let width = (hx * 2.0).round() as i32;
-    let height = (hy * 2.0).round() as i32;
-
+fn draw_tank_boxes(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>, geo: &TankInspectGeometry) {
+    let (x, y, width, height) = geo.hull;
     let box_color = if tank.is_wreck() {
         Color::GRAY
     } else if ai.is_some_and(Ai::is_retreating) {
@@ -993,16 +1023,29 @@ fn draw_tank_inspect(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>) {
     // (`physics::tank_corner_radius`), mapped onto raylib's relative
     // roundness factor (corner radius = roundness * min(w, h) / 2, so the
     // division below inverts that).
-    let (mx, my) = tank.move_half_extents(along_x);
-    let corner = crate::physics::tank_corner_radius((mx, my));
+    let (mx, my) = geo.move_half;
     let move_rect = Rectangle::new(
         tank.position.x - mx,
         tank.position.y - my,
         mx * 2.0,
         my * 2.0,
     );
-    d.draw_rectangle_rounded_lines(move_rect, corner / mx.min(my), 8, Color::SKYBLUE);
+    d.draw_rectangle_rounded_lines(move_rect, geo.corner / mx.min(my), 8, Color::SKYBLUE);
+}
 
+/// The `stats` overlay for one tank: a small card above its hull rect -
+/// ammo, the live weapon and its ammo, health, current speed and velocity,
+/// the movement collider's size - and additionally (`ai: Some`, i.e. this
+/// isn't a player) whether it's currently retreating to recharge and its
+/// fire cooldown, pulled straight from its `Ai` - the same state `ai.rs`'s
+/// `wants_retreat`/`fire_interval` act on. Anchored at the hull box's
+/// top-left whether or not the `hitboxes` layer draws that box. Purely
+/// diagnostic: reads state, draws it, mutates nothing.
+#[cfg(feature = "dev-tools")]
+fn draw_tank_stats(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>, geo: &TankInspectGeometry) {
+    let (x, y, _, _) = geo.hull;
+    let (mx, my) = geo.move_half;
+    let corner = geo.corner;
     let speed = (tank.velocity.x * tank.velocity.x + tank.velocity.y * tank.velocity.y).sqrt();
     // What the trigger fires right now, with its own remaining ammo -
     // under the FIFO inventory (`Tank::weapon_queue`) this advances when
@@ -1064,9 +1107,9 @@ fn draw_tank_inspect(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>) {
 
 #[cfg(feature = "dev-tools")]
 impl Game {
-    /// The debug overlay layers beyond inspect (`Game::debug_overlays`,
-    /// docs/dev-server-design.md; dev builds only), screen space and
-    /// post-composite like the inspect block: blocked nav cells, each
+    /// The debug overlay layers beyond the two tank layers
+    /// (`Game::debug_overlays`, docs/dev-server-design.md; dev builds only),
+    /// screen space and post-composite like them: blocked nav cells, each
     /// enemy's AI memory, projectile hit boxes, engagement targets, pickup
     /// collect radii. Each layer costs nothing while off.
     fn draw_debug_overlays(&self, d: &mut impl RaylibDraw, width: f32, height: f32) {

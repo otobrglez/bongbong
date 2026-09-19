@@ -207,14 +207,14 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "screenshot",
         description: "Capture the current frame (the state after the latest step) as a PNG: returned inline and saved under target/devshots/. scale 0.5 (default) halves it; use 1.0 to read overlay text. Optionally set overlay flags in the same call (same as the `overlays` tool). source=scene skips the HUD and overlays.",
-        schema: r#"{"type":"object","properties":{"scale":{"type":"number","default":0.5,"minimum":0.1,"maximum":1},"source":{"type":"string","enum":["screen","scene"],"default":"screen"},"overlays":{"type":"object","properties":{"nav_grid":{"type":"boolean"},"ai":{"type":"boolean"},"projectiles":{"type":"boolean"},"engage":{"type":"boolean"},"pickups":{"type":"boolean"},"inspect":{"type":"boolean"}}}}}"#,
+        schema: r#"{"type":"object","properties":{"scale":{"type":"number","default":0.5,"minimum":0.1,"maximum":1},"source":{"type":"string","enum":["screen","scene"],"default":"screen"},"overlays":{"type":"object","properties":{"nav_grid":{"type":"boolean"},"ai":{"type":"boolean"},"projectiles":{"type":"boolean"},"engage":{"type":"boolean"},"pickups":{"type":"boolean"},"hitboxes":{"type":"boolean"},"stats":{"type":"boolean"}}}}}"#,
         read_only: false,
         destructive: false,
     },
     ToolSpec {
         name: "overlays",
-        description: "Set persistent debug overlays drawn on top of the game (visible to the human too), one flag at a time: nav_grid (blocked pathfinding cells), ai (each enemy's waypoint, heading, last behaviour-tree action), projectiles (hit boxes + velocity), engage (engagement-ring targets), pickups (collect radius), inspect (tank hitboxes + stat readout). Omitted flags keep their value; replies with the current flags. The I key in the game window cycles presets instead (off -> inspect -> all); `input {cycle_overlays: true}` presses it.",
-        schema: r#"{"type":"object","properties":{"nav_grid":{"type":"boolean"},"ai":{"type":"boolean"},"projectiles":{"type":"boolean"},"engage":{"type":"boolean"},"pickups":{"type":"boolean"},"inspect":{"type":"boolean"}}}"#,
+        description: "Set persistent debug overlays drawn on top of the game (visible to the human too), one flag at a time: nav_grid (blocked pathfinding cells), ai (each enemy's waypoint, heading, last behaviour-tree action), projectiles (hit boxes + velocity), engage (engagement-ring targets), pickups (collect radius), hitboxes (each tank's hull and turret damage boxes and its rounded movement collider), stats (each tank's readout card: ammo, weapon, hp, speed, velocity, collider size, an enemy's retreat/fire state). Omitted flags keep their value, an unknown flag is an error; replies with the current flags. The I key in the game window cycles presets instead (off -> inspect = hitboxes + stats -> all); `input {cycle_overlays: true}` presses it.",
+        schema: r#"{"type":"object","properties":{"nav_grid":{"type":"boolean"},"ai":{"type":"boolean"},"projectiles":{"type":"boolean"},"engage":{"type":"boolean"},"pickups":{"type":"boolean"},"hitboxes":{"type":"boolean"},"stats":{"type":"boolean"}}}"#,
         read_only: false,
         destructive: false,
     },
@@ -1041,7 +1041,10 @@ impl DevServer {
                     match source {
                         Ok(source) => {
                             if let Some(flags) = params.get("overlays") {
-                                apply_overlays(game, flags);
+                                if let Err(e) = apply_overlays(game, flags) {
+                                    let _ = reply.send(Err(e));
+                                    return;
+                                }
                             }
                             self.pending_shot = Some(PendingShot { scale: scale.clamp(0.1, 1.0), source, presented: false, reply });
                             return;
@@ -1050,10 +1053,7 @@ impl DevServer {
                     }
                 }
             }
-            "overlays" => {
-                apply_overlays(game, &params);
-                Ok(overlays_json(game))
-            }
+            "overlays" => apply_overlays(game, &params).map(|()| overlays_json(game)),
             "nav_grid" => Ok(json!({ "grid": game.nav_grid_ascii(width, height) })),
             "field" => {
                 let target = match params.get("target").and_then(Value::as_str).unwrap_or("player") {
@@ -2076,8 +2076,15 @@ fn overlays_json(game: &Game) -> Value {
     to_value(game.debug_overlays)
 }
 
-/// Set only the overlay flags present in `flags`.
-fn apply_overlays(game: &mut Game, flags: &Value) {
+/// The overlay flags a tool may set, one per `Overlays` field.
+const OVERLAY_FLAGS: [&str; 7] = ["nav_grid", "ai", "projectiles", "engage", "pickups", "hitboxes", "stats"];
+
+/// Set only the overlay flags present in `flags`. A key that is not an
+/// `OVERLAY_FLAGS` entry is an error naming them, and nothing is applied.
+fn apply_overlays(game: &mut Game, flags: &Value) -> Result<(), String> {
+    if let Some(unknown) = flags.as_object().and_then(|map| map.keys().find(|k| !OVERLAY_FLAGS.contains(&k.as_str()))) {
+        return Err(format!("unknown overlay flag {unknown:?}; flags: {}", OVERLAY_FLAGS.join(", ")));
+    }
     let flag = |name: &str| flags.get(name).and_then(Value::as_bool);
     let o: &mut Overlays = &mut game.debug_overlays;
     if let Some(b) = flag("nav_grid") {
@@ -2095,9 +2102,13 @@ fn apply_overlays(game: &mut Game, flags: &Value) {
     if let Some(b) = flag("pickups") {
         o.pickups = b;
     }
-    if let Some(b) = flag("inspect") {
-        o.inspect = b;
+    if let Some(b) = flag("hitboxes") {
+        o.hitboxes = b;
     }
+    if let Some(b) = flag("stats") {
+        o.stats = b;
+    }
+    Ok(())
 }
 
 fn detail_param(params: &Value) -> Result<Detail, String> {
@@ -2207,6 +2218,19 @@ mod tests {
             s.shells_ammo,
             s.is_wreck,
         )
+    }
+
+    /// The `overlays` schema, the `screenshot` schema's `overlays` object
+    /// and `apply_overlays`'s accepted names are exactly the `Overlays`
+    /// fields, so a new layer cannot land in the struct without the tools.
+    #[test]
+    fn overlay_schemas_match_the_struct() {
+        let fields: std::collections::BTreeSet<String> = to_value(Overlays::ALL).as_object().unwrap().keys().cloned().collect();
+        let keys = |schema: &Value| -> std::collections::BTreeSet<String> { schema["properties"].as_object().unwrap().keys().cloned().collect() };
+        let spec = |name: &str| serde_json::from_str::<Value>(TOOLS.iter().find(|t| t.name == name).unwrap().schema).unwrap();
+        assert_eq!(keys(&spec("overlays")), fields);
+        assert_eq!(keys(&spec("screenshot")["properties"]["overlays"]), fields);
+        assert_eq!(OVERLAY_FLAGS.iter().map(|f| f.to_string()).collect::<std::collections::BTreeSet<_>>(), fields);
     }
 
     #[test]
@@ -2432,20 +2456,53 @@ mod tests {
         assert_eq!(tank["row"], 3);
     }
 
+    /// The two tank layers are independent flags: one on leaves the other
+    /// where it was, and `status` reports the same values.
     #[test]
-    fn overlays_sets_inspect_like_any_other_flag() {
+    fn overlays_sets_hitboxes_and_stats_independently() {
+        let (mut server, tx) = DevServer::headless();
+        let mut game = game(6);
+        let set = |server: &mut DevServer, game: &mut Session, params: Value| {
+            let rx = call(&tx, "overlays", params);
+            server.before_frame(game, W, H);
+            rx.recv().unwrap().unwrap()
+        };
+        let flags = set(&mut server, &mut game, json!({ "hitboxes": true, "ai": true }));
+        assert_eq!(flags["hitboxes"], true, "{flags}");
+        assert_eq!(flags["stats"], false, "{flags}");
+        assert_eq!(flags["ai"], true, "{flags}");
+        assert_eq!(flags["nav_grid"], false, "{flags}");
+        assert!(flags.get("inspect").is_none(), "{flags}");
+        let flags = set(&mut server, &mut game, json!({ "stats": true }));
+        assert_eq!(flags["hitboxes"], true, "{flags}");
+        assert_eq!(flags["stats"], true, "{flags}");
+        let flags = set(&mut server, &mut game, json!({ "hitboxes": false }));
+        assert_eq!(flags["hitboxes"], false, "{flags}");
+        assert_eq!(flags["stats"], true, "{flags}");
+        let rx = call(&tx, "status", json!({}));
+        server.before_frame(&mut game, W, H);
+        let status = rx.recv().unwrap().unwrap();
+        assert_eq!(status["overlays"]["hitboxes"], false, "{status}");
+        assert_eq!(status["overlays"]["stats"], true, "{status}");
+    }
+
+    /// A flag name the struct does not have is refused, naming the real
+    /// ones, and the current flags are untouched - on `overlays` and on
+    /// `screenshot {overlays}` alike.
+    #[test]
+    fn overlays_rejects_unknown_flags() {
         let (mut server, tx) = DevServer::headless();
         let mut game = game(6);
         let rx = call(&tx, "overlays", json!({ "inspect": true, "ai": true }));
         server.before_frame(&mut game, W, H);
-        let flags = rx.recv().unwrap().unwrap();
-        assert_eq!(flags["inspect"], true, "{flags}");
-        assert_eq!(flags["ai"], true, "{flags}");
-        assert_eq!(flags["nav_grid"], false, "{flags}");
-        let rx = call(&tx, "status", json!({}));
+        let err = rx.recv().unwrap().unwrap_err();
+        assert!(err.contains("inspect") && err.contains("hitboxes") && err.contains("stats"), "{err}");
+        assert_eq!(game.debug_overlays, Overlays::NONE);
+        let rx = call(&tx, "screenshot", json!({ "overlays": { "inspect": true } }));
         server.before_frame(&mut game, W, H);
-        let status = rx.recv().unwrap().unwrap();
-        assert_eq!(status["overlays"]["inspect"], true, "{status}");
+        let err = rx.recv().unwrap().unwrap_err();
+        assert!(err.contains("inspect"), "{err}");
+        assert_eq!(game.debug_overlays, Overlays::NONE);
     }
 
     #[test]
@@ -2807,7 +2864,7 @@ cells."1,1" = { kind = "wall" }"#;
         // The tools that must keep working in build mode.
         for (tool, params) in [
             ("mode", json!({})),
-            ("overlays", json!({ "inspect": true })),
+            ("overlays", json!({ "hitboxes": true })),
             ("map_get", json!({})),
             ("tuning_get", json!({ "diff_only": true })),
             ("tuning_schema", json!({ "name_contains": "tank_speed" })),

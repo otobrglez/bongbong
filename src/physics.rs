@@ -26,8 +26,8 @@ pub struct Physics {
 /// these overall `half_extents`: TANK_MOVE_CORNER_RADIUS, clamped to half
 /// the smaller half-extent so the collider's core box (which
 /// `tank_move_shape` shrinks by this radius) always keeps real area even
-/// for the smallest hull in the roster. Public so the "I"-key inspect
-/// overlay (`game.rs::draw_tank_inspect`) can draw the exact rounding the
+/// for the smallest hull in the roster. Public so the `hitboxes` debug
+/// overlay (`game.rs::draw_tank_boxes`) can draw the exact rounding the
 /// physics body carries rather than re-deriving (and possibly drifting
 /// from) this clamp.
 pub fn tank_corner_radius(half_extents: (f32, f32)) -> f32 {

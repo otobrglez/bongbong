@@ -111,8 +111,9 @@ pub const TANK_HULL_BBOX_BY_ROW: [(f32, f32); 12] = [
 // TANK_HULL_BBOX_BY_ROW is scaled by this before reaching the physics body -
 // see `Tank::move_half_extents`. ~10% is invisible in play (sprites don't
 // visibly interpenetrate); past ~25% tanks start reading as clipping
-// *into* walls, so tune in small steps (the "I"-key inspect overlay draws
-// both boxes for exactly this).
+// *into* walls, so tune in small steps (the `hitboxes` debug overlay - the
+// I key's inspect preset, or `overlays {hitboxes: true}` on the dev server -
+// draws both boxes for exactly this).
 pub const TANK_MOVE_BBOX_FRACTION: f32 = 0.9;
 // Corner rounding (world px) of the movement collider: the collider is a
 // rapier round-cuboid (a box dilated by this radius - `Physics` shrinks the
@@ -142,8 +143,8 @@ pub const TANK_MOVE_CORNER_RADIUS: f32 = 4.0;
 // alongside the hull box, so a
 // shot landing on the visible barrel registers as a hit - overriding
 // docs/SPRITESHEET_SPEC.md §9's original "exclude the barrel from
-// collision" note after visually confirming (via `game.rs`'s "I"-key debug
-// inspect overlay, which draws this exact box) that it tracks the art
+// collision" note after visually confirming (via `game.rs`'s `hitboxes`
+// debug overlay, which draws this exact box) that it tracks the art
 // closely enough to be worth it.
 pub const TANK_TURRET_BBOX_BY_ROW: [(f32, f32, f32, f32); 12] = [
     (11.0, 2.0, 20.0, 20.0), // scout

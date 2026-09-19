@@ -296,9 +296,13 @@ pub enum HitTarget {
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Overlays {
-    /// The hitbox/collider outlines and per-tank stat readout (`game.rs`'s
-    /// `draw_tank_inspect`).
-    pub inspect: bool,
+    /// Every tank's hull damage box, turret box and rounded movement
+    /// collider (`game.rs`'s `draw_tank_boxes`).
+    pub hitboxes: bool,
+    /// Every tank's readout card - ammo, weapon, hp, speed, velocity,
+    /// collider size, and an enemy's retreat/fire state (`game.rs`'s
+    /// `draw_tank_stats`).
+    pub stats: bool,
     /// The routing grid: blocked cells, priced cells shaded by their
     /// surcharge, and player 1's flow field as an arrow per cell.
     pub nav_grid: bool,
@@ -315,21 +319,24 @@ pub struct Overlays {
 impl Overlays {
     /// Every overlay off.
     pub const NONE: Overlays = Overlays {
-        inspect: false,
+        hitboxes: false,
+        stats: false,
         nav_grid: false,
         ai: false,
         projectiles: false,
         engage: false,
         pickups: false,
     };
-    /// Only the inspect layer.
+    /// Both tank layers - hitboxes and the stats card - and nothing else.
     pub const INSPECT: Overlays = Overlays {
-        inspect: true,
+        hitboxes: true,
+        stats: true,
         ..Overlays::NONE
     };
     /// Every overlay on.
     pub const ALL: Overlays = Overlays {
-        inspect: true,
+        hitboxes: true,
+        stats: true,
         nav_grid: true,
         ai: true,
         projectiles: true,
@@ -343,8 +350,9 @@ impl Overlays {
     }
 
     /// The I key's cycle: `NONE` -> `INSPECT` -> `ALL` -> `NONE`. A hand-set
-    /// mix (the dev server's `overlays` tool) snaps to its next step: nothing
-    /// on -> `INSPECT`, exactly `INSPECT` -> `ALL`, anything else -> `NONE`.
+    /// mix (the dev server's `overlays` tool - one tank layer without the
+    /// other counts) snaps to its next step: nothing on -> `INSPECT`,
+    /// exactly `INSPECT` -> `ALL`, anything else -> `NONE`.
     pub fn next_preset(self) -> Overlays {
         if !self.any() {
             Overlays::INSPECT
@@ -352,6 +360,20 @@ impl Overlays {
             Overlays::ALL
         } else {
             Overlays::NONE
+        }
+    }
+
+    /// The name the dev label prints: `None` while nothing is on, otherwise
+    /// the preset this mix is exactly (`inspect`, `all`) or `custom`.
+    pub fn preset_name(self) -> Option<&'static str> {
+        if !self.any() {
+            None
+        } else if self == Overlays::INSPECT {
+            Some("inspect")
+        } else if self == Overlays::ALL {
+            Some("all")
+        } else {
+            Some("custom")
         }
     }
 }
@@ -3800,20 +3822,35 @@ mod overlay_tests {
     use super::Overlays;
 
     /// The I key walks NONE -> INSPECT -> ALL -> NONE, and a hand-set mix
-    /// snaps back to NONE.
+    /// (including one tank layer on its own) snaps back to NONE.
     #[test]
     fn presets_cycle_and_mixes_snap() {
         assert_eq!(Overlays::default(), Overlays::NONE);
         assert_eq!(Overlays::NONE.next_preset(), Overlays::INSPECT);
         assert_eq!(Overlays::INSPECT.next_preset(), Overlays::ALL);
         assert_eq!(Overlays::ALL.next_preset(), Overlays::NONE);
-        let mixed = Overlays {
-            nav_grid: true,
-            ..Overlays::NONE
-        };
-        assert!(mixed.any());
-        assert_eq!(mixed.next_preset(), Overlays::NONE);
+        assert!(Overlays::INSPECT.hitboxes && Overlays::INSPECT.stats);
+        assert!(Overlays::ALL.hitboxes && Overlays::ALL.stats);
+        for mixed in [
+            Overlays { nav_grid: true, ..Overlays::NONE },
+            Overlays { hitboxes: true, ..Overlays::NONE },
+            Overlays { stats: true, ..Overlays::NONE },
+        ] {
+            assert!(mixed.any(), "{mixed:?}");
+            assert_eq!(mixed.next_preset(), Overlays::NONE, "{mixed:?}");
+        }
         assert!(!Overlays::NONE.any());
+    }
+
+    /// The label names the exact presets and calls everything else custom.
+    #[test]
+    fn preset_name_reads_inspect_all_custom() {
+        assert_eq!(Overlays::NONE.preset_name(), None);
+        assert_eq!(Overlays::INSPECT.preset_name(), Some("inspect"));
+        assert_eq!(Overlays::ALL.preset_name(), Some("all"));
+        assert_eq!(Overlays { hitboxes: true, ..Overlays::NONE }.preset_name(), Some("custom"));
+        assert_eq!(Overlays { stats: true, ..Overlays::NONE }.preset_name(), Some("custom"));
+        assert_eq!(Overlays { nav_grid: true, ..Overlays::INSPECT }.preset_name(), Some("custom"));
     }
 }
 

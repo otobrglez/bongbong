@@ -1027,8 +1027,8 @@ impl Tank {
 
     /// World-space center and half-extents of this tank's turret+barrel
     /// bounding box (`TANK_TURRET_BBOX_BY_ROW`) at its current `rotation` -
-    /// the second box the projectile hit test checks, and what the "I" key
-    /// debug inspect overlay (`game.rs::draw_tank_inspect`) draws.
+    /// the second box the projectile hit test checks, and what the
+    /// `hitboxes` debug overlay (`game.rs::draw_tank_boxes`) draws.
     /// Unlike `hull_half_extents`'s `along_x` swap (safe because
     /// the hull box is roughly centered on the tank), the turret+barrel box
     /// is off-center - the barrel extends it well past the tile center
