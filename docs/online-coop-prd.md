@@ -183,7 +183,7 @@ sees. This table is the first pass; the phase 1 audit finalises it.
 
 | Family | Travels | Derived | Local |
 |---|---|---|---|
-| Tank (51 fields) | `position`, `rotation`, body velocity, `damage`, `wreck_col`, `row` (in `Welcome`), `owner`, ammo counts, `flame_fuel`, active weapon and variants, `shield_hp` and `shield_broke`, `speed_boost_timer`, `burn_timer`, `portal_cooldown`, `despawn_timer`, a "hit this interval" bit, `flame_held` | `damage_variant`/stage from `damage`; `shell_variant` from row and the alternating shot; `hull_frame` from velocity and time; `wet_timer` from the hull's own wading (the water layout is the map's) | `visual_rotation`, `turret_visual_rotation`, `ring_position`/`ring_velocity`, `hull_anim_accum`, `minigun_cycle_timer`, track wobble and jitter, `track_accum`, `pending_shot` timing (the second barrel's shell arrives as its own `Fired`); `throttle` and `shield_recharge_delay` are server bookkeeping and never travel |
+| Tank (51 fields) | `position`, `rotation`, body velocity, `damage`, `wreck_col`, `row` (in `Welcome`), `owner`, ammo counts, `flame_fuel`, active weapon and variants, `shield_hp` and `shield_broke`, `speed_boost_timer`, `burn_timer`, `portal_cooldown`, a "hit this interval" bit, `flame_held` | `damage_variant`/stage from `damage`; `shell_variant` from row and the alternating shot; `hull_frame` from velocity and time; `wet_timer` from the hull's own wading (the water layout is the map's); `despawn_timer` armed the first frame a wreck is seen, so the fade costs no bytes | `visual_rotation`, `turret_visual_rotation`, `ring_position`/`ring_velocity`, `hull_anim_accum`, `minigun_cycle_timer`, track wobble and jitter, `track_accum`, `pending_shot` timing (the second barrel's shell arrives as its own `Fired`); `throttle` and `shield_recharge_delay` are server bookkeeping and never travel |
 | Frog (two) | `position`, `health`, a state byte with phase, `hop_end` while hopping | animation frame | — |
 | Obstacle (one per solid cell: 578 on the default 34 x 17 field, more on a map with its own `size`) | layout in `Welcome`; then deltas: `health`, `burning`, `fuse` armed with total, `scorched` mask, `destroyed`, a ram-lean byte | `variant`, `edge_mask` (recomputed as `refresh_edge_masks` does), `burn_frame` from time since ignition | `burn_frame_timer`, `heat` (ignition is an event) |
 | Portals (docs/teleporting.md) | anchors in `Welcome`; a hop is `Teleported` plus the tank's new position in the next snapshot | whether the network is active (two or more anchors) | the spiral's turn, the arrival flash |
@@ -191,7 +191,7 @@ sees. This table is the first pass; the phase 1 audit finalises it.
 | Shells, bullets, plasma | stage 1: id, kind, position, heading, state per live projectile. Later, with `Ricochet`: spawn from `Fired`, removal from `Hit`, nothing between | choreography frame from state and interval | — |
 | Laser, flamethrower | laser: `Fired` plus the hit point; flame: origin, direction, capped reach while held | beam fade, cone flicker | — |
 | Fires, oil, drums | `FireStarted`/`Ignited`, burning cells with remaining time as deltas, `oil_cells` in `Welcome` and removals, `DrumLaunched` with landing cell | the drum's arc and shadow; fire loop frames | — |
-| Round state | `mission`, spawn plan (`Welcome`), wave index/size/alive/pending, `intro_timer`, `time`, `outcome`, `restart_timer`, alert position and timer | banners, HUD | `paused` (meaningless online), `shadows_enabled`, `debug_overlays` |
+| Round state | `mission`, spawn plan (`Welcome`), wave index/size/alive/pending, the breather before the next wave, `intro_timer`, `outcome`, `restart_timer`, alert position and timer | `time` from the tick; banners, HUD | `paused` (meaningless online), `shadows_enabled`, `debug_overlays` |
 | Fireballs, scorches, rubble, shocks, flashes, screen flash, cook-offs | only their causing events | everything: `wreck_fx`, `apply_blast`'s cosmetic half, `obstacle_died` hash it all from position | their ages (`tick_effects`) |
 | Grass, tracks, ground, water | layout via map plus seed (the map carries the theme and the water cells); burnt cells as deltas | ground, water (`ground::Layout` for the picture, `WaterLayout` for the rules, both from the map's cells) and tufts from `Game::init`; tread marks from interpolated motion, wet ones after a ford | `crush`, `push`, sway, the water's shimmer and current marks (drawn from the round clock), spray, particles, camera shake |
 | AI, the commander, engage rings, nav and route grids with their flow fields, terrain snapshot | nothing | nothing | nothing; the client has no AI |
@@ -262,7 +262,7 @@ never sent (the AI's trace, recorded only while `Game::trace_ai` is set);
 | `FrogBite` | bite cue, frog ripple | `SHOCK_FROG` |
 | `FrogHealed {side, slot, amount, x, y}` | green sparks off the frog, its gauge refills | `fx.rs` |
 | `ShieldBroken {slot, x, y}` | a ring of sparks and smoke off the hull, ripple and shake, the shield ring goes | `fx.rs`, `drain_shield_breaks`' `SHOCK_SHIELD_BREAK` |
-| `WaveStarted`, `TankEntered`, `WreckRemoved` | WAVE N banner; roll-in appears at the gate; a wreck fades | HUD, `despawn_timer` |
+| `WaveStarted`, `TankEntered`, `WreckRemoved` | WAVE N banner; roll-in appears at the gate; the wreck goes (it has been fading on its own) | HUD, `fade_wrecks` |
 | `ObstacleDestroyed {material, x, y}` | rubble decal, thrown | `props::obstacle_died`'s decal part |
 | `Blast {x, y, chained, drum}`, `CookOff` | shaped fireball, scorch, parts, re-thrown rubble, flattened grass, burnt-in tracks, ripple, flash | `apply_blast`'s cosmetic half |
 | `DrumLaunched` | the flying drum from launch to landing | `draw_flying_drum` from a launch time |
@@ -298,8 +298,10 @@ Four pieces:
   in water, wet for `wet_timer` after a ford -, grass crush and push from hull
   boxes, fire and fuse frames, decal flight, the drum's arc, the wave banner
   timer), and the round clock the water's shimmer and current marks and the
-  fire loops are drawn from: `time` travels, the replica advances it between
-  snapshots and re-pins it on each. `Game::wading` (every hull in a ford,
+  fire loops are drawn from: `time` is derived, not sent - a room server's
+  round runs without the mission banner, so its clock is exactly
+  `tick * PHYSICS_FIXED_DT`, which every snapshot pins and the replica
+  advances between them. `Game::wading` (every hull in a ford,
   what `fx.rs` throws spray from) is a position query against the map's water
   and needs nothing sent. All of it exists inside phases that also do
   authoritative work; the refactor separates the halves.

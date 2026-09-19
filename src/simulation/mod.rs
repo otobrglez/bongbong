@@ -1219,13 +1219,10 @@ impl Game {
         if self.intro_timer > 0.0 {
             self.tick_effects(dt);
             let skip = input.seats[..self.players.count()].iter().any(|seat| seat.move_dir.is_some() || seat.fire);
-            self.intro_timer = if skip { 0.0 } else { (self.intro_timer - dt).max(0.0) };
-            if self.intro_timer <= 0.0 {
-                self.intro_fade = INTRO_FADE_SECONDS;
-            }
+            self.tick_intro_banner(dt, skip);
             return;
         }
-        self.intro_fade = (self.intro_fade - dt).max(0.0);
+        self.tick_intro_banner(dt, false);
 
         self.tick_effects(dt);
         let mut rng = self.rng.take().expect("rng seeded in init");
@@ -1265,7 +1262,7 @@ impl Game {
             self.tick_fires(&mut f, true);
             self.tick_fuses(&mut f);
             self.tick_launches(&mut f);
-            self.tick_grass(&mut f);
+            self.tick_grass(f.dt);
             self.drain_shield_breaks(&mut f);
             self.explosions(&mut f, true);
             self.despawn_wrecks(&mut f);
@@ -1285,7 +1282,7 @@ impl Game {
             self.tick_fires(&mut f, false);
             self.tick_fuses(&mut f);
             self.tick_launches(&mut f);
-            self.tick_grass(&mut f);
+            self.tick_grass(f.dt);
             self.explosions(&mut f, false);
             self.cleanup_done();
             self.restart_timer -= dt;
@@ -1396,7 +1393,115 @@ impl Game {
             frog.tick(dt);
             self.physics.set_position(frog.body, frog.position);
         }
+        self.fade_tracks(dt);
+    }
+
+    /// Age every tread mark and drop the ones that have faded out (a
+    /// wreck's are scorched and never do).
+    fn fade_tracks(&mut self, dt: f32) {
         self.tracks.retain_mut(|t| !t.tick(dt));
+    }
+
+    /// The mission banner's own timer: count the freeze down - a seat
+    /// moving or firing ends it outright - and hand the fade-out its
+    /// seconds the moment it runs out; once the banner is gone, fade it.
+    /// Display state either way, which is why a client replica runs it
+    /// between the snapshots that pin `intro_timer`
+    /// (`tick_presentation`, docs/online-coop-prd.md section 4.5).
+    fn tick_intro_banner(&mut self, dt: f32, skip: bool) {
+        if self.intro_timer > 0.0 {
+            self.intro_timer = if skip { 0.0 } else { (self.intro_timer - dt).max(0.0) };
+            if self.intro_timer <= 0.0 {
+                self.intro_fade = INTRO_FADE_SECONDS;
+            }
+        } else {
+            self.intro_fade = (self.intro_fade - dt).max(0.0);
+        }
+    }
+
+    /// Ease every hull's drawn angles, health ring and minigun barrel
+    /// toward the state it has been put in, and press the tread marks the
+    /// movement since the last presentation tick left behind.
+    ///
+    /// A round drives these from `drive_tank_with`, `rollin_phase` and
+    /// `tick_timers`, each on the tanks it moves; this is the replica's
+    /// walk, over every hull the snapshots place, and `Tank::track_from`
+    /// is the displacement it lays marks from. The ford rule is
+    /// `drive_tank_with`'s: water takes no mark and wets the ones laid on
+    /// the far bank.
+    fn ease_hulls(&mut self, dt: f32) {
+        let wet_seconds = tuning().water_wet_track_seconds;
+        for tank in self.world.query::<&mut Tank>().iter() {
+            tank.ease_visual_rotation(dt);
+            tank.ease_turret_visual_rotation(dt);
+            tank.ease_ring_position(dt);
+            tank.tick_minigun_spin(dt);
+            let depth = self.water.depth_at(tank.position);
+            if depth == crate::ground::Depth::Dry {
+                tank.wet_timer = (tank.wet_timer - dt).max(0.0);
+            } else {
+                tank.wet_timer = wet_seconds;
+            }
+            if let Some(before) = tank.track_from.replace(tank.position) {
+                lay_tracks(&mut self.tracks, tank, before, depth);
+            }
+        }
+    }
+
+    /// Flicker every burning tile, without the charring that kills it -
+    /// that death is the server's and travels as `ObstacleDestroyed`.
+    fn tick_burn_frames(&mut self, dt: f32) {
+        for obstacle in self.world.query::<&mut Obstacle>().iter() {
+            obstacle.tick_burn_frame(dt);
+        }
+    }
+
+    /// Stage a decal a replica made for itself, held to the same
+    /// `DECAL_MAX` ceiling `finish_frame` holds a round to.
+    pub(crate) fn push_decal(&mut self, decal: Decal) {
+        self.decals.push(decal);
+        if self.decals.len() > DECAL_MAX {
+            let excess = self.decals.len() - DECAL_MAX;
+            self.decals.drain(..excess);
+        }
+    }
+
+    /// The cosmetic half of a frame, for a `Game` nothing ever `update`s:
+    /// a client replica (docs/online-coop-prd.md section 4.5) applies the
+    /// server's snapshots and calls this on every rendered frame between
+    /// them, so the picture keeps moving at the client's own rate while
+    /// the authority arrives at 20 Hz.
+    ///
+    /// Every step is one the round runs too, from inside the phase that
+    /// owns it, so **a local round never calls this**: `update` does the
+    /// same work in its own order and local play is byte for byte what it
+    /// was. Nothing here draws RNG, steps physics or decides anything the
+    /// server has already decided - hulls, health, tiles, fires, the
+    /// round's scalars and every cause all arrive in a snapshot.
+    ///
+    /// The round clock is the one thing derived rather than sent: a room
+    /// server's round runs without the mission banner, so its `time` is
+    /// exactly `frame * PHYSICS_FIXED_DT`, which `net::apply` pins at
+    /// every snapshot; this carries it forward in between, and holds it
+    /// while a banner freezes the round the way `update` does.
+    pub fn tick_presentation(&mut self, dt: f32) {
+        self.tick_effects(dt);
+        let frozen = self.intro_timer > 0.0;
+        self.tick_intro_banner(dt, false);
+        if !frozen {
+            self.time += dt;
+        }
+        self.tick_wave_banner(dt);
+        self.ease_hulls(dt);
+        self.fade_tracks(dt);
+        self.tick_grass(dt);
+        self.tick_burn_frames(dt);
+        self.fade_fires(dt);
+        self.fade_wrecks(dt);
+        // A drum that lands blasts where the server says it did, so the
+        // landed ones are dropped here and the `Blast` event carries the
+        // rest.
+        self.age_flying_drums(dt);
     }
 
     /// Each frog on the field (the player's, then the enemy's) bites the
@@ -3032,7 +3137,7 @@ impl Game {
     /// Velocity comes from the *body*, not `Tank::velocity`, which is the
     /// commanded cardinal vector and reads as zero the instant the driver
     /// lets go while the hull is still rolling.
-    fn tick_grass(&mut self, f: &mut Frame) {
+    fn tick_grass(&mut self, dt: f32) {
         if self.grass.is_empty() {
             return;
         }
@@ -3047,7 +3152,7 @@ impl Game {
                 half: t.hull_size() * 0.5,
             })
             .collect();
-        crate::grass::tick(&mut self.grass, &movers, f.dt);
+        crate::grass::tick(&mut self.grass, &movers, dt);
     }
 
     /// The tall-grass cells a live tank is currently moving through - the
@@ -4229,6 +4334,36 @@ mod mechanics_tests {
             input.seats[0].move_dir = dir;
             step(game, input);
         }
+    }
+
+    /// A local round runs its own cosmetics inside `update` and never
+    /// calls `tick_presentation`, which is the only reason the two can
+    /// share their halves: one `update` advances the round clock and a
+    /// hull's drawn angle by exactly one step, and the tread marks come
+    /// off the physics step, so `Tank::track_from` - the replica's
+    /// displacement record - is never written.
+    #[test]
+    fn local_play_ticks_its_cosmetics_once() {
+        let dt = 1.0 / 60.0;
+        let mut game = sandbox("version = 1\ntanks = 0\ncells.\"5,5\" = { kind = \"start\" }\n");
+        // Facing up, commanded right: `rotation` snaps, the drawn angle
+        // swings across at `tank_visual_turn_speed_deg`.
+        let mut input = Input::default();
+        input.seats[0].move_dir = Some(Dir::Right);
+        step(&mut game, input);
+        let player = game.player.expect("player");
+        let step_deg = tuning().tank_visual_turn_speed_deg * dt;
+        let (visual, rotation, from) =
+            with_tank(&game.world, player, |t| (t.visual_rotation, t.rotation, t.track_from));
+        assert_eq!(rotation, Dir::Right.rotation(), "the hull's facing snaps");
+        assert!((visual - step_deg).abs() < 1e-4, "one update, one ease step: {visual} for {step_deg}");
+        assert_eq!(from, None, "a local round lays its marks from the physics step");
+        assert!((game.time - dt).abs() < 1e-6, "one update, one dt of round clock: {}", game.time);
+        // And the presentation tick a replica runs is a second step on
+        // top, which is why `update` must not call it.
+        game.tick_presentation(dt);
+        let after = with_tank(&game.world, player, |t| t.visual_rotation);
+        assert!((after - 2.0 * step_deg).abs() < 1e-4, "the presentation tick eases again: {after}");
     }
 
     /// `Input::held_only` is the input for a rendered frame's second and

@@ -115,12 +115,15 @@ impl Game {
     }
 
     /// Put the scheduler at wave `called` with `pending` tanks still to
-    /// roll in, as a snapshot reports it (`net::apply`): the queue is
-    /// filled with placeholder rows, since a replica never spawns from it.
-    pub(crate) fn set_wave_progress(&mut self, called: u32, pending: usize) {
+    /// roll in and `next_in` seconds of breather left, as a snapshot
+    /// reports it (`net::apply`): the queue is filled with placeholder
+    /// rows, since a replica never spawns from it, and the breather is
+    /// only ever the `WAVE N` banner's timer there.
+    pub(crate) fn set_wave_progress(&mut self, called: u32, pending: usize, next_in: Option<f32>) {
         self.wave.called = called;
         self.wave.pending.clear();
         self.wave.pending.extend(std::iter::repeat_n(TANK_SPRITE_ORDER[0], pending));
+        self.wave.gap = next_in;
     }
 
     /// Whether the tank entity is still rolling in.
@@ -184,13 +187,11 @@ impl Game {
         };
         if self.wave.called == 0 {
             self.call_wave(f);
-        } else if let Some(left) = self.wave.gap {
-            let left = left - f.dt;
-            if left <= 0.0 {
+        } else if self.wave.gap.is_some() {
+            self.tick_wave_banner(f.dt);
+            if self.wave.gap == Some(0.0) {
                 self.wave.gap = None;
                 self.call_wave(f);
-            } else {
-                self.wave.gap = Some(left);
             }
         } else if self.wave.called < waves {
             self.wave.elapsed += f.dt;
@@ -370,29 +371,15 @@ impl Game {
         self.wave.next_slot = self.wave.next_slot.max(slot + 1);
     }
 
-    /// Wave rounds with `wave_wreck_despawn_seconds` above zero: arm each
-    /// new wreck's `Tank::despawn_timer`, count it down, and once it runs
-    /// out remove the wreck (body included) with `Event::WreckRemoved`.
-    /// Band rounds keep their wrecks.
+    /// Run every wreck's fade (`fade_wrecks`) and remove the ones whose
+    /// `Tank::despawn_timer` has run out, body included, with an
+    /// `Event::WreckRemoved`. Band rounds arm no timer and so keep their
+    /// wrecks for the whole round.
     pub(super) fn despawn_wrecks(&mut self, f: &mut Frame) {
-        if !matches!(self.spawn_plan, SpawnPlan::Waves { .. }) {
-            return;
-        }
-        let seconds = tuning().wave_wreck_despawn_seconds;
-        if seconds <= 0.0 {
-            return;
-        }
+        self.fade_wrecks(f.dt);
         let mut gone: Vec<(Entity, usize)> = Vec::new();
-        for (entity, tank) in self.world.query::<(Entity, &mut Tank)>().with::<&Ai>().iter() {
-            if !tank.is_wreck() {
-                continue;
-            }
-            let left = match tank.despawn_timer {
-                None => seconds,
-                Some(t) => t - f.dt,
-            };
-            tank.despawn_timer = Some(left);
-            if left <= 0.0 {
+        for (entity, tank) in self.world.query::<(Entity, &Tank)>().with::<&Ai>().iter() {
+            if tank.despawn_timer.is_some_and(|left| left <= 0.0) {
                 gone.push((entity, tank.owner_slot()));
             }
         }
@@ -402,6 +389,49 @@ impl Game {
             }
             self.world.despawn(entity).ok();
             f.events.push(Event::WreckRemoved { slot });
+        }
+    }
+
+    /// Arm each new wreck's `Tank::despawn_timer` and count it down - the
+    /// last second of it is the fade `Tank::alpha` draws. Band rounds and
+    /// a `wave_wreck_despawn_seconds` of zero keep their wrecks, so
+    /// nothing is armed and nothing fades.
+    ///
+    /// The fade is all a client replica needs: its wrecks leave when the
+    /// server's snapshot stops listing them, so it arms the timer the
+    /// first frame it sees a wreck and lets it run
+    /// (`Game::tick_presentation`, docs/online-coop-prd.md section 4.5).
+    /// A wreck it joined in progress fades late, which costs no bytes and
+    /// shows only on a hull that was already burning when the client
+    /// arrived.
+    pub(crate) fn fade_wrecks(&mut self, dt: f32) {
+        if !matches!(self.spawn_plan, SpawnPlan::Waves { .. }) {
+            return;
+        }
+        let seconds = tuning().wave_wreck_despawn_seconds;
+        if seconds <= 0.0 {
+            return;
+        }
+        // Every enemy wreck, by owner rather than by `Ai`, so a replica's
+        // enemies - which carry none - fade like the server's.
+        for tank in self.world.query::<&mut Tank>().iter() {
+            if tank.is_player() || !tank.is_wreck() {
+                continue;
+            }
+            tank.despawn_timer = Some(match tank.despawn_timer {
+                None => seconds,
+                Some(left) => left - dt,
+            });
+        }
+    }
+
+    /// Count the breather before the next wave down - the `WAVE N`
+    /// banner's timer, and nothing else. Calling the wave once it reaches
+    /// zero is `wave_phase`'s; a replica holds the banner up until the
+    /// snapshot that pins the breather says it is over.
+    pub(crate) fn tick_wave_banner(&mut self, dt: f32) {
+        if let Some(left) = self.wave.gap {
+            self.wave.gap = Some((left - dt).max(0.0));
         }
     }
 }
