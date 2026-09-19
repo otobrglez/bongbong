@@ -322,11 +322,15 @@ pub mod tank_flags {
     pub const BOOST: u8 = 1 << 2;
     /// The hull is burning (afterburn).
     pub const BURNING: u8 = 1 << 3;
-    /// Something landed on the hull since the previous snapshot.
+    /// The hit window is running (`Tank::hit_flash_timer`, reset to
+    /// `health_ring_hit_seconds` by every hit): what shows an enemy's
+    /// health ring. A window rather than "since the previous snapshot"
+    /// because an encoder sees one frame, not the previous snapshot.
     pub const HIT: u8 = 1 << 4;
     /// The flamethrower's stream is on.
     pub const FLAME: u8 = 1 << 5;
 }
+
 
 /// One tank, player or enemy, keyed by its owner slot.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -335,6 +339,10 @@ pub struct TankState {
     /// enemy slot. A wave round's slot counter is monotonic, which is why
     /// this is wider than a byte.
     pub id: u16,
+    /// The chassis row (`Tank::row`, `TankKind` in sheet-row order). Never
+    /// changes, so a delta never repeats it; carried because a wave tank
+    /// arrives mid-round and the roster only names the seats' chassis.
+    pub row: u8,
     /// Hull centre, quarter pixels (`quantise_pos`).
     pub x: i16,
     /// Hull centre, quarter pixels (`quantise_pos`).
@@ -372,6 +380,11 @@ pub struct ShotState {
     /// `BulletState`, the plasma's equivalent), so the client picks the
     /// muzzle, flying and impact frames the server is on.
     pub state: u8,
+    /// The sprite variant: a shell's row in shells.png (`Shell::variant`,
+    /// the shooter's chassis row mapped through `TANK_SHELL_VARIANT_BY_ROW`),
+    /// a plasma bolt's `PlasmaVariant` (0 teal, 1 purple), 0 for a bullet.
+    /// Never changes, so a delta never repeats it.
+    pub variant: u8,
 }
 
 /// Bits of `FrogState::state`.
@@ -424,8 +437,11 @@ pub mod tile_flags {
     pub const BURNING: u8 = 1 << 0;
     /// A barrel whose fuse is lit.
     pub const FUSED: u8 = 1 << 1;
-    /// The tile died; the entry lingers one snapshot so the removal is
-    /// seen even by a client that missed the event.
+    /// The tile died on this tick. The simulation despawns a dead tile the
+    /// same frame, so `net::encode` writes this entry from the frame's
+    /// `ObstacleDestroyed` events (`hp` 0, the cell of the event) and it is
+    /// gone from the next snapshot; the event itself is the reliable
+    /// channel, the entry lets a client that reads only state see it too.
     pub const DESTROYED: u8 = 1 << 2;
     /// Shift of the ram-lean nibble: the leaning direction in its low two
     /// bits (`dir_index`) and the lean's strength in the high two.
@@ -589,9 +605,18 @@ pub struct Welcome {
     /// The room's tuning diff, a JSON patch for `tuning::submit_json`.
     pub tuning_json: String,
     pub overrides: WireOverrides,
-    /// Oil trail cells (`row * cols + col`), which the map does not carry
-    /// once a drum has spilled.
+    /// The room's `--enemies` pin (`Game::enemy_count_override`), which
+    /// `LevelOverrides` does not carry: the replica's `init` has to draw
+    /// exactly the rolls the server's did, and a pinned count skips one.
+    pub enemy_count: Option<u16>,
+    /// Oil trail cells (`row * cols + col`) still unburnt at the tick the
+    /// welcome was cut; the map's list minus what fire has used up.
     pub oil_cells: Vec<u16>,
+    /// Cells (`row * cols + col`) of the map's solid tiles that have died
+    /// this round. A snapshot lists only tiles that differ from fresh and
+    /// says nothing about one that is gone, so a joiner learns the holes
+    /// here and every later death from `ObstacleDestroyed`.
+    pub dead_cells: Vec<u16>,
     /// The complete state at the tick the welcome was cut.
     pub snapshot: Snapshot,
 }

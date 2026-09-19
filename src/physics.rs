@@ -196,6 +196,18 @@ impl Physics {
         body.set_linvel(Vector::new(0.0, 0.0), true);
     }
 
+    /// Overwrite a dynamic body's linear velocity. The client replica's
+    /// one use (`net::apply`): the snapshot's velocity goes on the body
+    /// after `set_position`, so `velocity` reads back what the server sent.
+    pub fn set_velocity(&mut self, handle: RigidBodyHandle, velocity: Position) {
+        let body = self
+            .world
+            .bodies
+            .get_mut(handle)
+            .expect("tank physics body handle should always be valid");
+        body.set_linvel(to_vector(velocity), true);
+    }
+
     /// Settle a tank that has just become a wreck: heavy linear and
     /// angular damping, and more surface friction.
     ///

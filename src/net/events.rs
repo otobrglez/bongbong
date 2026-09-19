@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::frog::Side;
 use crate::level::{Mission, SpawnKind, Tier};
-use crate::net::wire::{RoundOutcome, WeaponKind, dequantise_heading, dequantise_pos, quantise_pos};
+use crate::net::wire::{RoundOutcome, WeaponKind, dequantise_heading, dequantise_pos, quantise_heading, quantise_pos};
 use crate::obstacle::{Drum, Material};
 use crate::pickup::PickupKind;
 use crate::simulation::{Event, HitTarget};
@@ -142,11 +142,8 @@ pub enum WireEvent {
     FireStarted { x: i16, y: i16, pool: bool },
     Ignited { x: i16, y: i16, what: IgnitedWhat },
     CookOff { x: i16, y: i16 },
-    /// `slot`'s shell bounced off iron or a barrel at (`x`, `y`) and flies
-    /// on along `heading` (`wire::quantise_heading`). Reserved: the
-    /// simulation does not emit a ricochet yet (its bounces are silent,
-    /// docs/online-coop-prd.md §3), so `to_event` has nothing to map this
-    /// to and returns `None`.
+    /// `slot`'s shot bounced off iron or a barrel at (`x`, `y`) and flies
+    /// on along `heading` (`wire::quantise_heading`); `Event::Ricochet`.
     Ricochet { slot: u16, x: i16, y: i16, heading: u8 },
 }
 
@@ -221,6 +218,9 @@ impl WireEvent {
                 WireEvent::Ignited { x: q(x), y: q(y), what: kind }
             }
             Event::CookOff { x, y } => WireEvent::CookOff { x: q(x), y: q(y) },
+            Event::Ricochet { slot, x, y, heading } => {
+                WireEvent::Ricochet { slot: slot_u16(slot), x: q(x), y: q(y), heading: quantise_heading(heading) }
+            }
             // Never sent: logged on the server.
             Event::PhysicsQuarantine { .. } => return None,
             // Never sent: the AI's trace.
@@ -234,8 +234,9 @@ impl WireEvent {
         })
     }
 
-    /// The simulation `Event` the replica hands its presentation layer;
-    /// `None` for `Ricochet`, which the simulation has no counterpart for.
+    /// The simulation `Event` the replica hands its presentation layer.
+    /// Every variant has one; the `Option` is the shape `TryFrom` and the
+    /// round-trip tests read it through.
     pub fn to_event(&self) -> Option<Event> {
         let d = dequantise_pos;
         Some(match *self {
@@ -278,7 +279,9 @@ impl WireEvent {
             WireEvent::FireStarted { x, y, pool } => Event::FireStarted { x: d(x), y: d(y), pool },
             WireEvent::Ignited { x, y, what } => Event::Ignited { x: d(x), y: d(y), what: what.name() },
             WireEvent::CookOff { x, y } => Event::CookOff { x: d(x), y: d(y) },
-            WireEvent::Ricochet { .. } => return None,
+            WireEvent::Ricochet { slot, x, y, heading } => {
+                Event::Ricochet { slot: slot as usize, x: d(x), y: d(y), heading: dequantise_heading(heading) }
+            }
         })
     }
 
@@ -348,6 +351,7 @@ mod tests {
             Event::FireStarted { x: 48.0, y: 48.0, pool: true },
             Event::Ignited { x: 48.0, y: 80.0, what: "sandbag" },
             Event::CookOff { x: 64.0, y: 96.75 },
+            Event::Ricochet { slot: 2, x: 320.0, y: 64.0, heading: 90.0 },
             Event::PhysicsQuarantine { bodies: 1, colliders: 2 },
             Event::AiAction { slot: 5, from: None, to: Some("attack") },
             Event::EngageSlot { slot: 5, from: Some(1), to: None },
@@ -374,7 +378,7 @@ mod tests {
             let listed = NOT_SENT.contains(&tag.as_str());
             assert!(sent != listed, "{tag}: sent={sent} listed={listed}");
         }
-        assert_eq!(seen.len(), 31, "one sample per Event variant");
+        assert_eq!(seen.len(), 32, "one sample per Event variant");
         for name in NOT_SENT {
             assert!(seen.contains(name), "NOT_SENT names an unknown variant {name}");
         }
@@ -393,11 +397,13 @@ mod tests {
     }
 
     #[test]
-    fn ricochet_is_wire_only() {
+    fn ricochet_carries_its_heading_both_ways() {
         let wire = WireEvent::Ricochet { slot: 1, x: 4, y: 8, heading: 64 };
-        assert!(wire.to_event().is_none());
         assert_eq!(wire.ricochet_heading(), Some(90.0));
-        assert!(Event::try_from(&wire).is_err());
+        let Some(Event::Ricochet { slot, x, y, heading }) = wire.to_event() else { panic!("a ricochet has a simulation form") };
+        assert_eq!((slot, x, y, heading), (1, 1.0, 2.0, 90.0));
+        let back = WireEvent::from_event(&Event::Ricochet { slot: 1, x: 1.0, y: 2.0, heading: 90.4 }).unwrap();
+        assert_eq!(back, wire, "the heading lands on its nearest step");
         assert!(WireEvent::try_from(&Event::Retreat { slot: 1, on: true }).is_err());
     }
 

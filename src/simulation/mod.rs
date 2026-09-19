@@ -28,6 +28,7 @@ mod flame;
 mod hits;
 mod props;
 pub use props::{FlyingDrum, GroundFire};
+pub mod replica;
 #[cfg(test)]
 mod flame_tests;
 #[cfg(test)]
@@ -205,7 +206,7 @@ impl PlayerCount {
 pub(crate) const PLAYER_OWNER_SLOT: usize = 0;
 
 /// How the current round is going.
-#[derive(Clone, Copy, PartialEq, Default, Debug, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Outcome {
     #[default]
@@ -248,6 +249,12 @@ pub enum Event {
     PickupRespawned { kind: PickupKind, x: f32, y: f32 },
     /// A projectile bounced off `slot`'s rainbow shield at (`x`, `y`).
     Deflected { slot: usize, x: f32, y: f32 },
+    /// `slot`'s shot bounced off terrain at (`x`, `y`) - a shell off iron
+    /// (`Projectile::try_ricochet`) or a shell or bullet off a barrel
+    /// (`Material::deflect_chance`) - and flies on along `heading`
+    /// (degrees, 0 = up). Recorded so a client that sees only positions
+    /// knows why the shot turned.
+    Ricochet { slot: usize, x: f32, y: f32, heading: f32 },
     /// `slot`'s rainbow shield ran out of charge and shattered at
     /// (`x`, `y`) - the frame it crossed zero, emitted once.
     ShieldBroken { slot: usize, x: f32, y: f32 },
@@ -654,6 +661,8 @@ pub struct Game {
     player_fire_held_last_frame: [bool; MAX_SEATS],
     /// `update` calls this round (paused frames included); reset by `init`.
     pub(crate) frame: u64,
+    /// Projectiles spawned this round (`take_shot_id`); reset by `init`.
+    next_shot_id: u32,
     /// What happened during the most recent `update` - see `Event`.
     pub(crate) events: Vec<Event>,
     /// What the last enemy phase's engagement-slot assignment decided (every
@@ -826,6 +835,7 @@ impl Game {
         self.heat.clear();
         self.flame_contacts.clear();
         self.frame = 0;
+        self.next_shot_id = 0;
         self.last_engage.clear();
         self.debug_kills.clear();
         self.debug_detonations.clear();
@@ -1157,7 +1167,7 @@ impl Game {
 
     /// Put a fresh, full-health frog of `side` at `pos` with its static
     /// collider, returning its entity.
-    fn spawn_frog(&mut self, side: Side, pos: Position, variant: i32) -> Entity {
+    pub(crate) fn spawn_frog(&mut self, side: Side, pos: Position, variant: i32) -> Entity {
         let body = self
             .physics
             .spawn_static(pos, Position::new(FROG_COLLIDER_HALF_EXTENT.0, FROG_COLLIDER_HALF_EXTENT.1));
@@ -2169,15 +2179,25 @@ impl Game {
     /// Insert this frame's fired projectiles - only once no tank query is
     /// active, since hecs can't spawn into a world mid-iteration.
     fn spawn_pending(&mut self, f: &mut Frame) {
-        for shell in f.pending_shells.drain(..) {
+        for mut shell in f.pending_shells.drain(..) {
+            shell.set_id(self.take_shot_id());
             self.world.spawn((shell,));
         }
-        for plasma in f.pending_plasmas.drain(..) {
+        for mut plasma in f.pending_plasmas.drain(..) {
+            plasma.set_id(self.take_shot_id());
             self.world.spawn((plasma,));
         }
-        for bullet in f.pending_bullets.drain(..) {
+        for mut bullet in f.pending_bullets.drain(..) {
+            bullet.set_id(self.take_shot_id());
             self.world.spawn((bullet,));
         }
+    }
+
+    /// The next projectile id: one counter for shells, bullets and plasma,
+    /// starting at 1 each round, never reused. No RNG.
+    fn take_shot_id(&mut self) -> u32 {
+        self.next_shot_id += 1;
+        self.next_shot_id
     }
 
     /// Lasers have no travel time: each queued beam is swept over its whole
@@ -2496,7 +2516,7 @@ impl Game {
             let bounced = {
                 let mut q = self.world.query_one::<&mut P>(entity);
                 let p = q.get().expect("projectile collected this frame still exists");
-                match target {
+                let bounced = match target {
                     ShellTarget::Obstacle(e) => f.terrain.obstacle(e).is_some_and(|b| {
                         // The projectile's own rule (shells off Iron), or a
                         // barrel's chance deflection. Zero chance draws no RNG.
@@ -2509,9 +2529,11 @@ impl Game {
                         }
                     }),
                     _ => false,
-                }
+                };
+                bounced.then(|| p.heading())
             };
-            if bounced {
+            if let Some(heading) = bounced {
+                f.events.push(Event::Ricochet { slot: owner.slot(), x: hit_pos.x, y: hit_pos.y, heading });
                 continue;
             }
             {
@@ -2695,7 +2717,7 @@ impl Game {
     /// neighbours: destruction is rare, the pass is one HashSet build plus
     /// a few lookups per tile, and a full rebuild cannot drift out of sync
     /// the way an incremental update can.
-    fn refresh_edge_masks(&mut self) {
+    pub(crate) fn refresh_edge_masks(&mut self) {
         let cells: HashSet<(i32, i32)> = self
             .world
             .query::<&Obstacle>()
@@ -5651,6 +5673,45 @@ cells."30,20" = { kind = "frog" }
         let out = (enemy.position.x - center.x).abs() > OBSTACLE_GRID_SIZE * 1.5
             || (enemy.position.y - center.y).abs() > OBSTACLE_GRID_SIZE * 1.5;
         assert!(out, "enemy still inside the box at ({:.0},{:.0})", enemy.position.x, enemy.position.y);
+    }
+
+    /// Three iron tiles across the player's line of fire, two cells up.
+    const IRON_BAR_MAP: &str = r#"
+version = 1
+tanks = 0
+cells."20,11" = { kind = "start" }
+cells."19,8" = { kind = "wall", material = "iron" }
+cells."20,8" = { kind = "wall", material = "iron" }
+cells."21,8" = { kind = "wall", material = "iron" }
+"#;
+
+    /// A shell that bounces off iron says so once - `Event::Ricochet` with
+    /// the heading it flies on along - and keeps flying until it lands
+    /// somewhere else.
+    #[test]
+    fn a_shell_off_iron_ricochets_once_and_flies_on() {
+        let mut game = game_on(IRON_BAR_MAP, 0, Some(0));
+        let player = game.player.expect("player");
+        with_tank_mut(&game.world, player, |t| t.control(None, Some(Dir::Up)));
+        step(&mut game, Input::single(Intent { fire: true, ..Intent::default() }));
+        let (mut ricochets, mut headings, mut landed_after) = (0, Vec::new(), false);
+        for _ in 0..240 {
+            step(&mut game, Input::default());
+            for e in game.events() {
+                match *e {
+                    Event::Ricochet { slot: 0, heading, .. } => {
+                        ricochets += 1;
+                        headings.push(heading);
+                        assert!(game.world.query::<&Shell>().iter().any(|s| s.state == ShellState::Flying), "still flying");
+                    }
+                    Event::Hit { target: HitTarget::Wall, .. } if ricochets > 0 => landed_after = true,
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(ricochets, 1, "one bounce per shell (`shell_ricochet_bounces`)");
+        assert!((headings[0] - 180.0).abs() < 1.0, "reflected straight back down, got {}", headings[0]);
+        assert!(landed_after, "the shell flew on to the boundary wall");
     }
 
     #[test]

@@ -20,6 +20,27 @@ pub enum ShellState {
 }
 
 impl ShellState {
+    /// Every state, in sheet-column order (`col` is the index here).
+    pub const ALL: [ShellState; 7] = [
+        ShellState::Fire0,
+        ShellState::Fire1,
+        ShellState::Fire2,
+        ShellState::Flying,
+        ShellState::Hit0,
+        ShellState::Hit1,
+        ShellState::Hit2,
+    ];
+
+    /// The shells sheet column this state draws from (0..7), which is
+    /// also how the state travels on the wire.
+    pub fn col(self) -> i32 {
+        ShellState::ALL.iter().position(|&s| s == self).expect("every state is in ALL") as i32
+    }
+
+    /// Inverse of `col`; `None` past the last column.
+    pub fn from_col(col: i32) -> Option<ShellState> {
+        usize::try_from(col).ok().and_then(|i| ShellState::ALL.get(i).copied())
+    }
 
     /// How long this state is shown (seconds). Flying is time-unbounded
     /// (moves until it physically hits something - see `Shell::update`), so
@@ -116,6 +137,11 @@ pub struct Shell {
     /// sandbag it sailed over) - skipped by every later hit sweep, since a
     /// segment ending inside a tile would otherwise re-roll it next frame.
     pub passed_over: Vec<hecs::Entity>,
+    /// The round's projectile number, handed out by `Game::spawn_pending`
+    /// from one counter shared with bullets and plasma, so a shot keeps
+    /// one id for its whole flight and no two live shots share one
+    /// (`net::encode` keys shots by it). 0 until spawned into the world.
+    pub id: u32,
 }
 
 impl Shell {
@@ -167,6 +193,7 @@ impl Shell {
             prev_position: position,
             bounces_left: tuning().shell_ricochet_bounces,
             passed_over: Vec::new(),
+            id: 0,
         }
     }
 
