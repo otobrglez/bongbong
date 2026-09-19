@@ -258,6 +258,32 @@ pub struct EngageSlotDebug {
 }
 
 /// One tank's per-frame row for the dev server's history ring - the few
+/// Which shared target's flow field `Game::field_dump` reads.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FieldTarget {
+    /// A player by index: 0 is player 1.
+    Player(u8),
+    /// The player's frog.
+    Frog,
+}
+
+/// One flow field as the dev server's `field` tool returns it: `arrows`
+/// is one line per row, top first - `^ v < >` the neighbour each open
+/// cell steps into on the way to `goal`, `G` the goal cell, `#` blocked,
+/// `.` open but with no route; `costs` is the same cells as the field's
+/// cost to the goal, `-1` where blocked or unreachable.
+#[derive(Clone, Serialize, Debug)]
+pub struct FieldDump {
+    pub target: FieldTarget,
+    pub goal: (usize, usize),
+    pub cols: usize,
+    pub rows: usize,
+    pub cell: f32,
+    pub arrows: String,
+    pub costs: Vec<Vec<i64>>,
+}
+
 /// fields worth accumulating over time, read cheaply enough to record on
 /// every stepped frame.
 #[derive(Clone, Serialize, Debug)]
@@ -866,6 +892,51 @@ impl Game {
         enemy.body = Some(self.physics.spawn_tank(pos, enemy.move_half_extents(false), enemy.mass()));
         self.world.spawn((enemy, Ai::with_role(role.unwrap_or_default())));
         Ok(slot)
+    }
+
+    /// The frame's flow field toward `target` as a `FieldDump`: `None`
+    /// when that target is not in the round (no second player, a dead
+    /// frog). The same `route_grid` the enemies steer by, read through
+    /// the grid's accessors, so what the dump shows is what they follow.
+    pub fn field_dump(&self, width: f32, height: f32, target: FieldTarget) -> Option<FieldDump> {
+        let goal = match target {
+            FieldTarget::Player(i) => {
+                let entity = self.players().into_iter().flatten().nth(i as usize)?;
+                with_tank(&self.world, entity, |t| (!t.is_wreck()).then_some(t.position))?
+            }
+            FieldTarget::Frog => {
+                let entity = self.frog?;
+                with_frog(&self.world, entity, |fr| (!fr.is_dead()).then_some(fr.position))?
+            }
+        };
+        let grid = self.route_grid(width, height);
+        let (cols, rows, cell) = grid.dims();
+        let goal_cell = ((goal.x / cell) as usize, (goal.y / cell) as usize);
+        let mut arrows = String::with_capacity((cols + 1) * rows);
+        let mut costs = Vec::with_capacity(rows);
+        for row in 0..rows {
+            let mut line = Vec::with_capacity(cols);
+            for col in 0..cols {
+                let ch = if (col, row) == goal_cell {
+                    'G'
+                } else if grid.is_blocked(col, row) {
+                    '#'
+                } else {
+                    match grid.flow(goal, col, row) {
+                        Some((_, nr)) if nr < row => '^',
+                        Some((_, nr)) if nr > row => 'v',
+                        Some((nc, _)) if nc < col => '<',
+                        Some(_) => '>',
+                        None => '.',
+                    }
+                };
+                arrows.push(ch);
+                line.push(grid.to_goal(goal, col, row).map_or(-1, |c| c as i64));
+            }
+            arrows.push('\n');
+            costs.push(line);
+        }
+        Some(FieldDump { target, goal: goal_cell, cols, rows, cell, arrows, costs })
     }
 
     /// The nav grid as text, top row first: `#` blocked, `.` open, then

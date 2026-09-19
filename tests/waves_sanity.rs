@@ -21,6 +21,9 @@ fn run(seed: u64, shielded: bool) -> (Game, usize, usize, usize) {
     game.level_overrides.spawn = Some(SpawnKind::Waves);
     game.level_overrides.waves = Some(3);
     game.level_overrides.wave_size = Some(2);
+    // Pinned, like the other two: an unset override falls through to
+    // the map's own `spawn.growth`, and the shipped map's is not 1.
+    game.level_overrides.wave_growth = Some(1);
     game.map = MapFile::from_toml_str(include_str!("../maps/default.toml")).expect("default map parses");
     game.init(w, h);
     if shielded {
@@ -57,7 +60,7 @@ fn a_three_wave_destroy_round_on_the_default_map_plays_through() {
     let (w, h) = (1280.0, 720.0);
     let (game, waves, entered, removed) = run(0xB0B5, true);
     assert_eq!(waves, 3, "every wave was called");
-    // `wave_growth` defaults to 1: waves of 2, 3 and 4.
+    // Growth 1 from size 2: waves of 2, 3 and 4.
     assert_eq!(entered, 2 + 3 + 4, "every tank of every wave rolled in");
     assert!(removed >= 1, "at least one wreck despawned");
     assert!(matches!(game.outcome(), Outcome::Won | Outcome::Playing), "{:?}", game.outcome());

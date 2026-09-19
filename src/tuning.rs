@@ -797,6 +797,19 @@ tunables! {
         /// - hysteresis, so two players at equal range do not flip the pack
         /// between them every frame.
         enemy_target_switch_margin_px: f32 = 96.0 in 0.0 ..= 400.0;
+        /// Extra route cost on every cell a player's barrel points down
+        /// (out to `route_lane_cells`, stopping at the first blocked cell),
+        /// so the shared flow field brings enemies in from the flank
+        /// instead of straight up the line of fire. A cell normally costs
+        /// 1; 0 switches the lane layer off.
+        route_lane_cost: usize = 3 in 0 ..= 64;
+        /// How many cells ahead of a player's barrel the lane surcharge
+        /// reaches.
+        route_lane_cells: usize = 8 in 1 ..= 40;
+        /// Extra route cost on the cell each live enemy stands in, so
+        /// routes bend around a clump rather than queue through it. 0
+        /// switches it off.
+        route_crowd_cost: usize = 2 in 0 ..= 64;
         /// Stop and fight within this distance (px). The engagement ring and
         /// retreat range are factors of this - see the `engage` group.
         enemy_attack_range: f32 = 340.0 in 50.0 ..= 2000.0;

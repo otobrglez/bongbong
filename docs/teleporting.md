@@ -73,6 +73,13 @@ plan is exact; with three or more it is *optimistic* - the planner assumes the b
 tank lands wherever the draw says and re-plans from there. `Grid::components` unions the
 footprints' components, so a room joined to the field only by a portal counts as reachable.
 
+The flow fields (`Grid::add_field`, one per player and for the frog - see `pathfind.rs`'s
+module doc) walk the same hub: the Dijkstra outward from the goal, on popping a portal cell,
+relaxes every other portal cell at that cost plus the hop (the exit's own price is not
+charged, as in A*), and `descend` offers the exits beside the four neighbours from a portal
+cell. A target served by a field is therefore reached through a portal exactly when A*
+would go through one; `fields_route_through_portals_like_the_search` pins the two agreeing.
+
 ## Presentation (`portal.rs`)
 
 `static/portal_sheet.png` (1152 x 288) from `tools/spritegen/gen_portal.py`: twenty-four

@@ -12,6 +12,25 @@
 //! the AI reasons over lightweight snapshots, never the physics world or ECS
 //! directly.
 //!
+//! Two ways to route on one grid, behind the one `next_step` call:
+//!
+//! - **A\*** per query (`search`), for a target nobody else is heading to
+//!   (an engagement slot, a wander waypoint, a pickup).
+//! - **A flow field** per shared target (`Field`, built by `add_field`): one
+//!   Dijkstra outward from the goal cell stores every cell's cost to reach
+//!   it, and a query from anywhere is then a read of four neighbours. The
+//!   round builds one for each player and for the player's frog every
+//!   frame, so however many enemies are alive the frame's routing work is
+//!   bounded by the number of targets, not searchers. `next_step` picks
+//!   the field whose goal cell the target falls in and falls back to A\*
+//!   otherwise, so callers never know which served them.
+//!
+//! Step costs (`cost`) are what make the field tactical: `weigh` prices a
+//! ford, `surcharge` adds to the cells a player's barrel points down and
+//! to the cells other enemies stand in, and the same cheapest-neighbour
+//! rule then bends every route out of the line of fire and around a
+//! clump without any steering logic knowing.
+//!
 //! Portals are the one non-local feature: `Grid::with_portals` gives the
 //! search a single virtual **hub** node. Stepping from any portal footprint
 //! cell into the hub costs `hop_cost`, stepping out of the hub onto any
@@ -22,6 +41,11 @@
 //! whose portals do not survive `with_portals`, runs the very same search
 //! code with no hub edges and the same tie order, so its answers are
 //! byte-identical to a plain grid's.
+//! Both routers walk the hub: `search` as graph edges, and a flow field
+//! (`add_field`) by relaxing every entrance from an exit it has priced,
+//! with `descend` offering the exits beside the four neighbours - so a
+//! target served by a field is reached through a portal exactly when
+//! A* would go through one.
 
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, VecDeque};
@@ -75,7 +99,29 @@ pub struct Grid {
     /// exists (`weigh` - a ford). Never below 1, so the Manhattan
     /// heuristic stays admissible and A* still returns a cheapest route.
     cost: Vec<u8>,
+    /// One flow field per shared goal cell (`add_field`); `next_step`
+    /// serves a target from its field when one exists.
+    fields: Vec<Field>,
+    /// Connected-component labels once `label` has run: `connected`
+    /// answers reachability from them in O(1) instead of a search.
+    comps: Option<Components>,
 }
+
+/// Every cell's cost to reach one goal cell along cardinal steps - a
+/// Dijkstra run outward from the goal over the grid's `cost`s, stored
+/// so that routing from any cell is a read of its neighbours. Built by
+/// `Grid::add_field`, consulted by `Grid::next_step` and `path_cost`.
+struct Field {
+    goal: (usize, usize),
+    /// Per cell: the summed step cost from that cell to `goal`
+    /// (`UNREACHABLE` where no route exists, `0` at the goal). Stepping
+    /// *into* a cell costs that cell's `Grid::cost`, so a cell's value
+    /// is its cheapest neighbour's value plus that neighbour's cost.
+    to_goal: Vec<u32>,
+}
+
+/// `Field::to_goal` for a cell no route reaches.
+const UNREACHABLE: u32 = u32::MAX;
 
 impl Grid {
     /// Build a grid covering `0..width, 0..height` in `cell_size`-px cells.
@@ -190,6 +236,8 @@ impl Grid {
             portal_cells: Vec::new(),
             hop_cost: 0.0,
             cost,
+            fields: Vec::new(),
+            comps: None,
         }
     }
 
@@ -293,6 +341,192 @@ impl Grid {
 
     fn is_portal_cell(&self, cell: (usize, usize)) -> bool {
         self.portal_cells.binary_search(&cell).is_ok()
+    }
+
+    /// Add `extra` to the step cost of every cell a position in `cells`
+    /// falls in, saturating at the cost type's ceiling - the tactical
+    /// layer on top of `weigh`'s absolute prices (a firing lane, a cell
+    /// another tank stands in). Like `weigh`, occupancy is untouched: a
+    /// surcharged cell is still open, it is only dearer, so a route that
+    /// has no other way through still takes it. Call before `add_field`,
+    /// which bakes the costs in.
+    pub fn surcharge(&mut self, cells: impl Iterator<Item = Position>, extra: u32) {
+        if extra == 0 {
+            return;
+        }
+        for pos in cells {
+            if pos.x < 0.0 || pos.y < 0.0 || pos.x > self.cols as f32 * self.cell_size || pos.y > self.rows as f32 * self.cell_size {
+                continue;
+            }
+            let cell = self.cell_of(pos);
+            let slot = &mut self.cost[cell.1 * self.cols + cell.0];
+            *slot = (*slot as u32 + extra).min(u8::MAX as u32) as u8;
+        }
+    }
+
+    /// Run the connected-component flood fill (`components`) once and
+    /// keep the labels, so `connected` answers from them for the rest of
+    /// this grid's life. Occupancy never changes after `build`, so the
+    /// labels cannot go stale.
+    pub fn label(&mut self) {
+        self.comps = Some(self.components());
+    }
+
+    /// True if a cardinal-step route exists between `from` and `to` -
+    /// the same answer `next_step(from, to).is_some() || same_cell(from,
+    /// to)` gives, read from the labels when `label` has run and found by
+    /// a search otherwise. The cheap reachability test for a candidate
+    /// nobody is routing to yet (`Ai::wander` sampling waypoints, the
+    /// engagement ring validating slots).
+    pub fn connected(&self, from: Position, to: Position) -> bool {
+        match &self.comps {
+            Some(comps) => comps.connected(self, from, to),
+            None => self.same_cell(from, to) || self.next_step(from, to).is_some(),
+        }
+    }
+
+    /// Build and keep a flow field toward `goal` (see `Field`): from now on
+    /// `next_step` and `path_cost` toward any point in `goal`'s cell read
+    /// the field instead of searching. The goal cell counts as open
+    /// whatever `blocked` says, exactly as A* treats it. Adding a goal
+    /// whose cell already has a field is a no-op. Costs are read at build
+    /// time, so `weigh`/`surcharge` first.
+    pub fn add_field(&mut self, goal: Position) {
+        let goal = self.cell_of(goal);
+        if self.field_for(goal).is_some() {
+            return;
+        }
+        let n = self.cols * self.rows;
+        let idx = |c: (usize, usize)| c.1 * self.cols + c.0;
+        let mut to_goal = vec![UNREACHABLE; n];
+        // (cost, cell index): a min-heap through `Reverse`. Ties pop by
+        // index, though the final costs are the same whatever the order.
+        let mut open = BinaryHeap::new();
+        to_goal[idx(goal)] = 0;
+        open.push(std::cmp::Reverse((0u32, idx(goal))));
+        while let Some(std::cmp::Reverse((cost, at))) = open.pop() {
+            if cost > to_goal[at] {
+                continue;
+            }
+            let cell = (at % self.cols, at / self.cols);
+            // Reaching the goal from a neighbour means stepping *into*
+            // this cell, which costs this cell's own price.
+            let via = cost + self.cost[at] as u32;
+            for next in self.neighbors(cell) {
+                let ni = idx(next);
+                if self.blocked[ni] || via >= to_goal[ni] {
+                    continue;
+                }
+                to_goal[ni] = via;
+                open.push(std::cmp::Reverse((via, ni)));
+            }
+            // The hub, walked backwards: this cell is the free exit of a
+            // hop whose entrance is any other portal cell, so each of
+            // them reaches the goal for this cost plus the hop - the
+            // exit's own price is not charged, exactly as `search` relaxes
+            // an exit at the hub's cost. The hop is rounded once, as
+            // `search` rounds its whole total.
+            if self.is_portal_cell(cell) {
+                let hop = cost + self.hop_cost.round() as u32;
+                for &entrance in &self.portal_cells {
+                    let ei = idx(entrance);
+                    if entrance == cell || hop >= to_goal[ei] {
+                        continue;
+                    }
+                    to_goal[ei] = hop;
+                    open.push(std::cmp::Reverse((hop, ei)));
+                }
+            }
+        }
+        self.fields.push(Field { goal, to_goal });
+    }
+
+    /// A cell's step cost - 1 for plain ground, more where `weigh` or
+    /// `surcharge` priced it; 0 off the grid. For overlays and dumps.
+    pub fn cost_at(&self, col: usize, row: usize) -> u32 {
+        if col >= self.cols || row >= self.rows {
+            return 0;
+        }
+        self.cost[row * self.cols + col] as u32
+    }
+
+    /// The goal cell of every field this grid carries, in the order they
+    /// were added (player 1 first in the round's grid).
+    pub fn goals(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        self.fields.iter().map(|f| f.goal)
+    }
+
+    /// From cell (`col`, `row`), the neighbour cell the field toward
+    /// `goal`'s cell hands out - the arrow an overlay draws - or `None`
+    /// when there is no field for that goal, the cell is the goal, or no
+    /// route from it exists. Reads the same `descend` the router uses.
+    pub fn flow(&self, goal: Position, col: usize, row: usize) -> Option<(usize, usize)> {
+        let goal = self.cell_of(goal);
+        if (col, row) == goal || col >= self.cols || row >= self.rows {
+            return None;
+        }
+        self.field_for(goal).and_then(|f| self.descend(f, (col, row))).map(|hit| hit.first_step)
+    }
+
+    /// The field's stored cost from cell (`col`, `row`) to `goal`'s cell -
+    /// `Some(0)` at the goal, `None` for a blocked or unreachable cell or
+    /// when no field covers that goal.
+    pub fn to_goal(&self, goal: Position, col: usize, row: usize) -> Option<u32> {
+        let goal = self.cell_of(goal);
+        if col >= self.cols || row >= self.rows {
+            return None;
+        }
+        let field = self.field_for(goal)?;
+        let cost = field.to_goal[row * self.cols + col];
+        (cost != UNREACHABLE).then_some(cost)
+    }
+
+    fn field_for(&self, goal: (usize, usize)) -> Option<&Field> {
+        self.fields.iter().find(|f| f.goal == goal)
+    }
+
+    /// The cheapest neighbour of `start` to step into on the way to
+    /// `field`'s goal, with the whole route's cost through it: the
+    /// field's equivalent of `search`, including its rules that the start
+    /// cell is open whatever `blocked` says and the goal cell is enterable.
+    /// Ties break on the lowest cell index, so the answer is a pure
+    /// function of the grid. `None` when no neighbour reaches the goal.
+    fn descend(&self, field: &Field, start: (usize, usize)) -> Option<SearchHit> {
+        let idx = |c: (usize, usize)| c.1 * self.cols + c.0;
+        let mut best: Option<(u32, usize, (usize, usize))> = None;
+        for next in self.neighbors(start) {
+            let ni = idx(next);
+            if next != field.goal && self.blocked[ni] {
+                continue;
+            }
+            let there = field.to_goal[ni];
+            if there == UNREACHABLE {
+                continue;
+            }
+            let total = there + self.cost[ni] as u32;
+            if best.is_none_or(|(c, i, _)| (total, ni) < (c, i)) {
+                best = Some((total, ni, next));
+            }
+        }
+        // From a portal cell the hub is a step too: out at any other
+        // portal cell for the hop, its own price uncharged, and the first
+        // step is then the exit - the tank never drives there, the
+        // teleport fires first, but the heading is right for the far side
+        // (`next_step`).
+        if self.is_portal_cell(start) {
+            let hop = self.hop_cost.round() as u32;
+            for &exit in &self.portal_cells {
+                let ei = idx(exit);
+                if exit == start || field.to_goal[ei] == UNREACHABLE {
+                    continue;
+                }
+                let total = field.to_goal[ei] + hop;
+                if best.is_none_or(|(c, i, _)| (total, ei) < (c, i)) {
+                    best = Some((total, ei, exit));
+                }
+            }
+        }
+        best.map(|(cost, _, first_step)| SearchHit { first_step, cost })
     }
 
     fn cell_of(&self, p: Position) -> (usize, usize) {
@@ -605,8 +839,7 @@ impl Grid {
         if start == goal {
             return None;
         }
-        self.search(start, goal)
-            .map(|hit| self.center_of(hit.first_step))
+        self.route(start, goal).map(|hit| self.center_of(hit.first_step))
     }
 
     /// Shortest-path length from `from` to `to`, in grid steps (cells, not
@@ -626,11 +859,21 @@ impl Grid {
         if start == goal {
             return Some(0);
         }
-        self.search(start, goal).map(|hit| hit.cost)
+        self.route(start, goal).map(|hit| hit.cost)
     }
 
-    /// The one A* implementation both `next_step` and `path_cost` share -
-    /// callers guarantee `start != goal` (each handles the same-cell case
+    /// The field toward `goal` when one was added, A* otherwise - the
+    /// one seam both public routers go through, so they can never
+    /// disagree about which served a target.
+    fn route(&self, start: (usize, usize), goal: (usize, usize)) -> Option<SearchHit> {
+        match self.field_for(goal) {
+            Some(field) => self.descend(field, start),
+            None => self.search(start, goal),
+        }
+    }
+
+    /// The one A* implementation `route` searches with when no field
+    /// covers the goal - callers guarantee `start != goal` (each handles the same-cell case
     /// itself, with different semantics). Returns `None` when no path
     /// exists; on a hit, both the first cell to move into (what `next_step`
     /// wants) and the whole path's cost (what `path_cost` wants), since the
@@ -1037,6 +1280,32 @@ mod tests {
         assert_eq!(grid.path_cost(at(1, 1), at(2, 2)), Some(2));
     }
 
+    /// A field toward a goal behind the wall prices and steps every cell
+    /// exactly as the search does, hub included: the entrances are priced
+    /// through the exit, and standing on one the first step is the exit.
+    #[test]
+    fn fields_route_through_portals_like_the_search() {
+        let plain = two_portal_grid(3.0);
+        let mut grid = two_portal_grid(3.0);
+        let right = at(9, 9);
+        grid.add_field(right);
+        grid.add_field(at(2, 2));
+        assert_eq!(grid.path_cost(at(0, 0), right), Some(7));
+        assert_eq!(grid.next_step(at(1, 0), right), Some(at(1, 1)));
+        assert_eq!(grid.next_step(at(1, 1), right), Some(at(8, 8)));
+        // The hub never beats walking within one footprint here either.
+        assert_eq!(grid.path_cost(at(1, 1), at(2, 2)), Some(2));
+        // Costs agree from every cell (first steps may differ where two
+        // are equally good: the field breaks ties on cell index, A* on
+        // its heap order).
+        for row in 0..10 {
+            for col in 0..10 {
+                let from = at(col, row);
+                assert_eq!(grid.path_cost(from, right), plain.path_cost(from, right), "cost from ({col},{row})");
+            }
+        }
+    }
+
     #[test]
     fn hop_cost_is_clamped_to_the_footprint_span() {
         // Asked for a hop of 1, the grid charges 2 - one cell less than
@@ -1156,17 +1425,22 @@ mod component_tests {
         let obstacles = (0..10).map(|row| {
             (Position::new(220.0, row as f32 * cell + cell / 2.0), cell / 2.0)
         });
-        let grid = Grid::build(400.0, 400.0, cell, 0.0, obstacles);
-        let comps = grid.components();
+        let mut grid = Grid::build(400.0, 400.0, cell, 0.0, obstacles);
         let left = Position::new(20.0, 20.0);
         let right = Position::new(380.0, 20.0);
         let left_low = Position::new(20.0, 380.0);
-        assert!(grid.next_step(left, right).is_none());
-        assert!(!comps.connected(&grid, left, right));
-        assert!(grid.next_step(left, left_low).is_some());
-        assert!(comps.connected(&grid, left, left_low));
-        // Same cell counts as connected, matching `same_cell`.
-        assert!(comps.connected(&grid, left, Position::new(25.0, 25.0)));
+        // Unlabelled, `connected` searches; labelled, it reads. Same answers.
+        for labelled in [false, true] {
+            if labelled {
+                grid.label();
+            }
+            assert!(grid.next_step(left, right).is_none());
+            assert!(!grid.connected(left, right));
+            assert!(grid.next_step(left, left_low).is_some());
+            assert!(grid.connected(left, left_low));
+            // Same cell counts as connected, matching `same_cell`.
+            assert!(grid.connected(left, Position::new(25.0, 25.0)));
+        }
     }
 
     /// A point standing inside a blocked cell (an obstacle's clearance
@@ -1175,12 +1449,177 @@ mod component_tests {
     #[test]
     fn blocked_start_cell_uses_its_open_neighbours() {
         let cell = 40.0;
-        let grid = Grid::build(400.0, 400.0, cell, 0.0, std::iter::once((Position::new(220.0, 220.0), cell / 2.0)));
-        let comps = grid.components();
+        let mut grid = Grid::build(400.0, 400.0, cell, 0.0, std::iter::once((Position::new(220.0, 220.0), cell / 2.0)));
+        grid.label();
         let inside = Position::new(220.0, 220.0);
         let far = Position::new(20.0, 20.0);
         assert!(grid.next_step(inside, far).is_some());
-        assert!(comps.connected(&grid, inside, far));
+        assert!(grid.connected(inside, far));
+    }
+}
+
+#[cfg(test)]
+mod field_tests {
+    use super::*;
+
+    /// 9 x 5 cells of 40 px, margin 0, a two-cell wall at column 4 rows
+    /// 0-1, the goal at (7, 2): the worked example in the routing
+    /// write-up. `at` is a cell's centre.
+    fn nine_by_five() -> Grid {
+        let cell = 40.0;
+        let walls = [(4usize, 0usize), (4, 1)].into_iter().map(move |(c, r)| (at(c, r), cell / 2.0));
+        Grid::build(360.0, 200.0, cell, 0.0, walls)
+    }
+
+    fn at(c: usize, r: usize) -> Position {
+        Position::new(c as f32 * 40.0 + 20.0, r as f32 * 40.0 + 20.0)
+    }
+
+    /// Follow `next_step` from `from` until it reaches `to`'s cell,
+    /// returning the cells visited after `from`.
+    fn walk(grid: &Grid, from: Position, to: Position) -> Vec<(usize, usize)> {
+        let mut route = Vec::new();
+        let mut pos = from;
+        for _ in 0..100 {
+            if grid.same_cell(pos, to) {
+                return route;
+            }
+            pos = grid.next_step(pos, to).expect("route exists");
+            route.push(grid.cell_of(pos));
+        }
+        panic!("route never arrived: {route:?}");
+    }
+
+    /// With a field toward the goal, every open cell reports the same
+    /// route cost A* finds, and the step it hands out lowers that cost by
+    /// exactly the step's own price - the field is a Dijkstra table, not
+    /// an approximation.
+    #[test]
+    fn field_costs_and_steps_agree_with_astar_from_every_cell() {
+        let astar = nine_by_five();
+        let mut field = nine_by_five();
+        field.add_field(at(7, 2));
+        for r in 0..5 {
+            for c in 0..9 {
+                if astar.is_blocked(c, r) {
+                    continue;
+                }
+                let expect = astar.path_cost(at(c, r), at(7, 2));
+                let got = field.path_cost(at(c, r), at(7, 2));
+                assert_eq!(got, expect, "cost from ({c}, {r})");
+                if let Some(step) = field.next_step(at(c, r), at(7, 2)) {
+                    let (sc, sr) = field.cell_of(step);
+                    let rest = field.path_cost(step, at(7, 2)).expect("step is on a route");
+                    assert_eq!(rest + field.cost[sr * 9 + sc] as u32, got.unwrap(), "step from ({c}, {r}) to ({sc}, {sr})");
+                }
+            }
+        }
+    }
+
+    /// A start inside a blocked cell (an obstacle's margin) and a goal
+    /// inside one both route with the field exactly as A* lets them.
+    #[test]
+    fn field_treats_start_and_goal_cells_as_open_like_astar() {
+        let mut grid = nine_by_five();
+        grid.add_field(at(4, 1));
+        assert!(grid.next_step(at(0, 2), at(4, 1)).is_some(), "goal inside the wall");
+        assert_eq!(grid.path_cost(at(0, 2), at(4, 1)), nine_by_five().path_cost(at(0, 2), at(4, 1)));
+        grid.add_field(at(7, 2));
+        assert!(grid.next_step(at(4, 0), at(7, 2)).is_some(), "start inside the wall");
+        assert_eq!(grid.path_cost(at(4, 0), at(7, 2)), nine_by_five().path_cost(at(4, 0), at(7, 2)));
+    }
+
+    /// Sealed off from the goal, the field has no step to offer - the
+    /// same `None` A* returns, which `Ai::steer` reads as "wander".
+    #[test]
+    fn field_has_no_step_across_a_sealed_wall() {
+        let cell = 40.0;
+        let obstacles = (0..10).map(|row| (Position::new(220.0, row as f32 * cell + cell / 2.0), cell / 2.0));
+        let mut grid = Grid::build(400.0, 400.0, cell, 0.0, obstacles);
+        let left = Position::new(20.0, 20.0);
+        let right = Position::new(380.0, 20.0);
+        grid.add_field(right);
+        assert!(grid.next_step(left, right).is_none());
+        assert_eq!(grid.path_cost(left, right), None);
+        assert!(grid.next_step(left, Position::new(20.0, 380.0)).is_some(), "the open half still routes by A*");
+    }
+
+    /// The firing-lane surcharge: with every step costing 1 an enemy at
+    /// (0, 2) drives straight down row 2 into the goal at (7, 2). Charge
+    /// 3 extra on the five lane cells in front of the goal and the same
+    /// cheapest-neighbour rule drops to row 3, runs along it, and enters
+    /// the lane only at the last step - two steps longer, never in the
+    /// line of fire.
+    #[test]
+    fn a_surcharged_lane_bends_the_route_round_it() {
+        let goal = at(7, 2);
+        let mut plain = nine_by_five();
+        plain.add_field(goal);
+        assert_eq!(plain.path_cost(at(0, 2), goal), Some(7));
+        assert_eq!(walk(&plain, at(0, 2), goal), [(1, 2), (2, 2), (3, 2), (4, 2), (5, 2), (6, 2), (7, 2)]);
+
+        let mut lane = nine_by_five();
+        lane.surcharge((2..=6).map(|c| at(c, 2)), 3);
+        lane.add_field(goal);
+        assert_eq!(lane.path_cost(at(0, 2), goal), Some(9));
+        assert_eq!(walk(&lane, at(0, 2), goal), [(1, 2), (1, 3), (2, 3), (3, 3), (4, 3), (5, 3), (6, 3), (7, 3), (7, 2)]);
+        assert!(lane.usable(at(4, 2)), "a surcharged cell is still open");
+        // Without a way round, the lane is still taken: block rows 3 and
+        // 4 at column 4 too and every route must cross (4, 2), entered
+        // from (3, 2) and left through (5, 2) - three lane cells at 4
+        // each plus the eight dry steps that skirt the other two.
+        let mut penned = Grid::build(360.0, 200.0, 40.0, 0.0, [(4usize, 0usize), (4, 1), (4, 3), (4, 4)].into_iter().map(|(c, r)| (at(c, r), 20.0)));
+        penned.surcharge((2..=6).map(|c| at(c, 2)), 3);
+        penned.add_field(goal);
+        assert_eq!(penned.path_cost(at(0, 2), goal), Some(3 * 4 + 8));
+    }
+
+    /// A surcharge saturates instead of wrapping, and a zero surcharge
+    /// leaves the grid untouched.
+    #[test]
+    fn surcharge_saturates_and_zero_is_a_no_op() {
+        let mut grid = nine_by_five();
+        grid.surcharge(std::iter::once(at(1, 1)), 0);
+        assert_eq!(grid.cost[1 * 9 + 1], 1);
+        grid.surcharge(std::iter::once(at(1, 1)), 300);
+        assert_eq!(grid.cost[1 * 9 + 1], u8::MAX);
+        grid.surcharge(std::iter::once(at(1, 1)), 300);
+        assert_eq!(grid.cost[1 * 9 + 1], u8::MAX);
+    }
+
+    /// The read accessors an overlay and the dev server's `field` dump
+    /// use see the same table the router steps by.
+    #[test]
+    fn accessors_read_the_field_the_router_steps_by() {
+        let mut grid = nine_by_five();
+        grid.surcharge(std::iter::once(at(3, 2)), 3);
+        assert_eq!(grid.cost_at(3, 2), 4);
+        assert_eq!(grid.cost_at(0, 0), 1);
+        assert_eq!(grid.cost_at(99, 0), 0, "off the grid");
+        assert!(grid.goals().next().is_none());
+        assert_eq!(grid.flow(at(7, 2), 0, 2), None, "no field yet");
+        grid.add_field(at(7, 2));
+        assert_eq!(grid.goals().collect::<Vec<_>>(), [(7, 2)]);
+        assert_eq!(grid.to_goal(at(7, 2), 7, 2), Some(0));
+        assert_eq!(grid.to_goal(at(7, 2), 4, 0), None, "blocked");
+        assert_eq!(grid.to_goal(at(7, 2), 0, 2), grid.path_cost(at(0, 2), at(7, 2)));
+        let step = grid.flow(at(7, 2), 0, 2).expect("flows");
+        assert_eq!(grid.center_of(step), grid.next_step(at(0, 2), at(7, 2)).unwrap());
+        assert_eq!(grid.flow(at(7, 2), 7, 2), None, "the goal has no arrow");
+    }
+
+    /// Adding the same goal twice keeps one field, and a second goal gets
+    /// its own - `next_step` toward each reads its own table.
+    #[test]
+    fn one_field_per_goal_cell() {
+        let mut grid = nine_by_five();
+        grid.add_field(at(7, 2));
+        grid.add_field(Position::new(at(7, 2).x + 5.0, at(7, 2).y - 5.0));
+        assert_eq!(grid.fields.len(), 1);
+        grid.add_field(at(0, 0));
+        assert_eq!(grid.fields.len(), 2);
+        assert_eq!(grid.cell_of(grid.next_step(at(0, 2), at(0, 0)).unwrap()), (0, 1));
+        assert_eq!(grid.cell_of(grid.next_step(at(0, 2), at(7, 2)).unwrap()), (1, 2));
     }
 }
 
