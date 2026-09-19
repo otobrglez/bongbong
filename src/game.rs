@@ -985,18 +985,43 @@ impl Game {
     fn draw_debug_overlays(&self, d: &mut impl RaylibDraw, width: f32, height: f32) {
         let ov = self.debug_overlays;
         if ov.nav_grid {
-            let grid = self.nav_grid(width, height);
+            // The grid the enemies actually steer by this frame, prices
+            // and fields included - not the bare `nav_grid`.
+            let grid = self.route_grid(width, height);
             let (cols, rows, cell) = grid.dims();
             let size = cell.round() as i32;
+            let goal = grid.goals().next().map(|(c, r)| Vector2::new((c as f32 + 0.5) * cell, (r as f32 + 0.5) * cell));
             for row in 0..rows {
                 for col in 0..cols {
+                    let x = (col as f32 * cell).round() as i32;
+                    let y = (row as f32 * cell).round() as i32;
                     if grid.is_blocked(col, row) {
-                        let x = (col as f32 * cell).round() as i32;
-                        let y = (row as f32 * cell).round() as i32;
                         d.draw_rectangle(x, y, size, size, Color::new(255, 40, 40, 60));
                         d.draw_rectangle_lines(x, y, size, size, Color::new(255, 40, 40, 110));
+                        continue;
+                    }
+                    // A priced cell: amber, deeper the dearer, capped so a
+                    // ford at 8 and a lane at 4 both read as "priced".
+                    let extra = grid.cost_at(col, row).saturating_sub(1);
+                    if extra > 0 {
+                        let alpha = (40 + extra.min(8) * 18) as u8;
+                        d.draw_rectangle(x, y, size, size, Color::new(255, 170, 40, alpha));
+                    }
+                    // Player 1's flow: a short line from the centre toward
+                    // the cell the field steps into, tipped with a dot.
+                    if let Some(goal) = goal
+                        && let Some((nc, nr)) = grid.flow(goal, col, row)
+                    {
+                        let (cx, cy) = (x as f32 + cell * 0.5, y as f32 + cell * 0.5);
+                        let (dx, dy) = (nc as f32 - col as f32, nr as f32 - row as f32);
+                        let (ex, ey) = (cx + dx * cell * 0.35, cy + dy * cell * 0.35);
+                        d.draw_line(cx as i32, cy as i32, ex as i32, ey as i32, Color::new(80, 220, 255, 150));
+                        d.draw_rectangle(ex as i32 - 1, ey as i32 - 1, 2, 2, Color::new(80, 220, 255, 220));
                     }
                 }
+            }
+            if let Some(goal) = goal {
+                d.draw_rectangle_lines((goal.x - cell * 0.5) as i32, (goal.y - cell * 0.5) as i32, size, size, Color::new(80, 220, 255, 220));
             }
         }
         if ov.pickups {

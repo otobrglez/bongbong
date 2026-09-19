@@ -296,7 +296,8 @@ pub struct Overlays {
     /// The hitbox/collider outlines and per-tank stat readout (`game.rs`'s
     /// `draw_tank_inspect`).
     pub inspect: bool,
-    /// Blocked nav-grid cells.
+    /// The routing grid: blocked cells, priced cells shaded by their
+    /// surcharge, and player 1's flow field as an arrow per cell.
     pub nav_grid: bool,
     /// Each enemy's waypoint, committed heading and last behaviour-tree action.
     pub ai: bool,
@@ -2651,7 +2652,7 @@ impl Game {
     /// field-build time, so this is the one place they are applied. No
     /// RNG: a surcharge is a pure function of positions, and the field's
     /// ties break on cell index.
-    fn route_grid(&self, width: f32, height: f32) -> Grid {
+    pub(crate) fn route_grid(&self, width: f32, height: f32) -> Grid {
         let mut grid = self.nav_grid(width, height);
         let t = tuning();
         let players: Vec<(Position, f32)> = self
@@ -2694,7 +2695,8 @@ impl Game {
     }
 
     /// The routing cell a world position falls in (`PATHFIND_CELL_SIZE`
-    /// pitch) - for tests and tooling that reason about the grid.
+    /// pitch) - for tests that reason about the grid.
+    #[cfg(test)]
     pub(crate) fn grid_cell_of(&self, p: Position) -> (usize, usize) {
         ((p.x / PATHFIND_CELL_SIZE).max(0.0) as usize, (p.y / PATHFIND_CELL_SIZE).max(0.0) as usize)
     }

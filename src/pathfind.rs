@@ -307,6 +307,46 @@ impl Grid {
         self.fields.push(Field { goal, to_goal });
     }
 
+    /// A cell's step cost - 1 for plain ground, more where `weigh` or
+    /// `surcharge` priced it; 0 off the grid. For overlays and dumps.
+    pub fn cost_at(&self, col: usize, row: usize) -> u32 {
+        if col >= self.cols || row >= self.rows {
+            return 0;
+        }
+        self.cost[row * self.cols + col] as u32
+    }
+
+    /// The goal cell of every field this grid carries, in the order they
+    /// were added (player 1 first in the round's grid).
+    pub fn goals(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        self.fields.iter().map(|f| f.goal)
+    }
+
+    /// From cell (`col`, `row`), the neighbour cell the field toward
+    /// `goal`'s cell hands out - the arrow an overlay draws - or `None`
+    /// when there is no field for that goal, the cell is the goal, or no
+    /// route from it exists. Reads the same `descend` the router uses.
+    pub fn flow(&self, goal: Position, col: usize, row: usize) -> Option<(usize, usize)> {
+        let goal = self.cell_of(goal);
+        if (col, row) == goal || col >= self.cols || row >= self.rows {
+            return None;
+        }
+        self.field_for(goal).and_then(|f| self.descend(f, (col, row))).map(|hit| hit.first_step)
+    }
+
+    /// The field's stored cost from cell (`col`, `row`) to `goal`'s cell -
+    /// `Some(0)` at the goal, `None` for a blocked or unreachable cell or
+    /// when no field covers that goal.
+    pub fn to_goal(&self, goal: Position, col: usize, row: usize) -> Option<u32> {
+        let goal = self.cell_of(goal);
+        if col >= self.cols || row >= self.rows {
+            return None;
+        }
+        let field = self.field_for(goal)?;
+        let cost = field.to_goal[row * self.cols + col];
+        (cost != UNREACHABLE).then_some(cost)
+    }
+
     fn field_for(&self, goal: (usize, usize)) -> Option<&Field> {
         self.fields.iter().find(|f| f.goal == goal)
     }
@@ -1060,6 +1100,27 @@ mod field_tests {
         assert_eq!(grid.cost[1 * 9 + 1], u8::MAX);
         grid.surcharge(std::iter::once(at(1, 1)), 300);
         assert_eq!(grid.cost[1 * 9 + 1], u8::MAX);
+    }
+
+    /// The read accessors an overlay and the dev server's `field` dump
+    /// use see the same table the router steps by.
+    #[test]
+    fn accessors_read_the_field_the_router_steps_by() {
+        let mut grid = nine_by_five();
+        grid.surcharge(std::iter::once(at(3, 2)), 3);
+        assert_eq!(grid.cost_at(3, 2), 4);
+        assert_eq!(grid.cost_at(0, 0), 1);
+        assert_eq!(grid.cost_at(99, 0), 0, "off the grid");
+        assert!(grid.goals().next().is_none());
+        assert_eq!(grid.flow(at(7, 2), 0, 2), None, "no field yet");
+        grid.add_field(at(7, 2));
+        assert_eq!(grid.goals().collect::<Vec<_>>(), [(7, 2)]);
+        assert_eq!(grid.to_goal(at(7, 2), 7, 2), Some(0));
+        assert_eq!(grid.to_goal(at(7, 2), 4, 0), None, "blocked");
+        assert_eq!(grid.to_goal(at(7, 2), 0, 2), grid.path_cost(at(0, 2), at(7, 2)));
+        let step = grid.flow(at(7, 2), 0, 2).expect("flows");
+        assert_eq!(grid.center_of(step), grid.next_step(at(0, 2), at(7, 2)).unwrap());
+        assert_eq!(grid.flow(at(7, 2), 7, 2), None, "the goal has no arrow");
     }
 
     /// Adding the same goal twice keeps one field, and a second goal gets
