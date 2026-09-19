@@ -393,9 +393,9 @@ upgrade), tokio for the rest.
   writer has a bounded queue; a slow client gets snapshots skipped, never
   queued.
 - Seats outlive connections, in memory: nickname, device token, chassis,
-  connection state, last acked tick. A disconnect starts a 30 s grace; a reconnect with
-  the same token reclaims the seat and gets a fresh `Welcome`; past the grace
-  the seat is away but still owned for the whole round.
+  connection state, last acked tick. A disconnect starts a 30 s grace; a
+  reconnect with the same token reclaims the seat and gets a fresh `Welcome`;
+  past the grace the seat is away but still owned for the whole round.
 - Room codes carry the pod: one letter for the pod plus four for the room,
   from the 20-letter alphabet (4.10), so a join needs no directory.
 - The dev server rides along: every room can expose the existing tools on a
