@@ -38,19 +38,10 @@ impl PlasmaVariant {
     }
 }
 
-/// Column of this state in plasma.png - meaningless for `Flying`
-/// (superseded by `flying_col`'s 4-frame cycle), kept here only so this
-/// match stays exhaustive; nothing calls it for that variant.
+/// Column of this state in plasma.png - never asked for `Flying`, whose
+/// four columns `flying_col` cycles through instead.
 fn state_col(state: PlasmaState) -> i32 {
-    match state {
-        PlasmaState::Fire0 => 0,
-        PlasmaState::Fire1 => 1,
-        PlasmaState::Fire2 => 2,
-        PlasmaState::Flying => 3,
-        PlasmaState::Hit0 => 7,
-        PlasmaState::Hit1 => 8,
-        PlasmaState::Hit2 => 9,
-    }
+    state.col()
 }
 
 /// Source rectangle for a plasma frame at sheet column `col`, row

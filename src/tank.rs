@@ -630,6 +630,18 @@ impl Tank {
         (1.0 - self.damage / MAX_DAMAGE).clamp(0.0, 1.0)
     }
 
+    /// Remaining health in whole points, rounded to the nearest: 0 only
+    /// for a wreck, at least 1 while the tank lives (so a hull an inch from
+    /// death never reads as dead), at most `MAX_DAMAGE`. What travels on
+    /// the wire (`net::encode`) and what the picture compares.
+    pub fn hull_points(&self) -> u8 {
+        if self.is_wreck() {
+            return 0;
+        }
+        let points = (MAX_DAMAGE - self.damage).round().clamp(1.0, MAX_DAMAGE.min(255.0));
+        points as u8
+    }
+
     /// True while a rainbow shield is active (see `shield_hp`).
     /// Whether collecting `kind` would actually do this tank any good.
     ///
@@ -865,7 +877,7 @@ impl Tank {
     /// The ammo counter behind `weapon` - the one shared currency between
     /// the queue logic (`active_weapon`/`enqueue_weapon`) and the fire
     /// dispatch sites that actually decrement these fields.
-    fn weapon_ammo(&self, weapon: ActiveWeapon) -> i32 {
+    pub(crate) fn weapon_ammo(&self, weapon: ActiveWeapon) -> i32 {
         match weapon {
             ActiveWeapon::Laser => self.laser_charges,
             ActiveWeapon::Plasma => self.plasma_ammo,

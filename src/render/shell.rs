@@ -9,15 +9,7 @@ use crate::{SHELL_SCALE, SHELL_TEXTURE_SIZE};
 
 /// Column of this state in the shells sprite sheet.
 fn state_col(state: ShellState) -> i32 {
-    match state {
-        ShellState::Fire0 => 0,
-        ShellState::Fire1 => 1,
-        ShellState::Fire2 => 2,
-        ShellState::Flying => 3,
-        ShellState::Hit0 => 4,
-        ShellState::Hit1 => 5,
-        ShellState::Hit2 => 6,
-    }
+    state.col()
 }
 
 /// Source rectangle for a shell frame (variant row, state column) in shells.png.
