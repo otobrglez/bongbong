@@ -5,14 +5,16 @@
 //! generic over [`Canvas`] rather than raylib's `RaylibDraw`, so the same
 //! code paints two very different targets:
 //!
-//! - [`GpuCanvas`] wraps a raylib draw handle and the real `Texture2D`s.
-//!   Every method is one raylib call, so `Game::render` draws exactly what
-//!   it drew before the trait existed.
+//! - `render::canvas::GpuCanvas` wraps a raylib draw handle and the real
+//!   `Texture2D`s (behind the `render` feature). Every method is one raylib
+//!   call, so `Game::render` draws exactly what the trait describes.
 //! - [`CpuCanvas`] is a nearest-neighbour rasteriser over a plain pixel
-//!   buffer, fed by sprite sheets decoded with raylib's CPU image functions
+//!   buffer of `math::Color`, fed by sprite sheets decoded into [`Pixels`]
 //!   (no window, no GL context). It is what `mapshot` uses on a machine
 //!   with no display, and what the map thumbnail tests run under
-//!   `cargo test --lib`.
+//!   `cargo test --lib`. The rasteriser itself needs no raylib; decoding a
+//!   PNG into `Pixels` and encoding the canvas back out are raylib's image
+//!   functions, so those live in `render::canvas` too.
 //!
 //! Sheets are named by [`Sheet`], not passed as texture refs, so a draw
 //! function says *what* it blits and the canvas owns *where from*. The one
@@ -24,16 +26,17 @@
 //! blur), it ignores a negative source width (no mirroring, which grass and
 //! frogs rely on), `ImageDrawRectangle` copies bytes without blending, and
 //! `ImageDrawText` lazily loads the default font through a GL texture. So
-//! raylib only decodes PNGs and encodes the result here.
+//! raylib only decodes PNGs and encodes the result.
 //!
 //! There is deliberately no text method: the only text on the field is the
-//! transient `P1`/`P2` locate label, which stays raylib-only in `game.rs`.
+//! transient `P1`/`P2` locate label, which stays raylib-only
+//! (`render::tank::draw_player_label`).
 
 use crate::frog::{FROG_VARIANT_DIRS, FrogAnim};
 use crate::map::Theme;
 use crate::pickup::PickupKind;
 use crate::Position;
-use sola_raylib::prelude::*;
+use crate::math::{Color, Rectangle, Vec2};
 use std::collections::BTreeMap;
 
 /// A sprite sheet the field draws from. The canvas owns the backing store:
@@ -173,7 +176,7 @@ pub trait Canvas {
     /// pixels) lands, `rotation` is degrees clockwise on the y-down screen,
     /// a negative `src.width`/`src.height` mirrors along that axis, `tint`
     /// multiplies the texel, and the result is alpha-blended over.
-    fn blit(&mut self, sheet: Sheet, src: Rectangle, dest: Rectangle, origin: Vector2, rotation: f32, tint: Color);
+    fn blit(&mut self, sheet: Sheet, src: Rectangle, dest: Rectangle, origin: Vec2, rotation: f32, tint: Color);
     /// `DrawRectangle`: a filled, alpha-blended box.
     fn fill_rect(&mut self, x: i32, y: i32, width: i32, height: i32, color: Color);
     /// `DrawRectangleGradientV`: `top` at the first row to `bottom` at the last.
@@ -190,51 +193,6 @@ pub trait Canvas {
     fn ring(&mut self, center: Position, inner: f32, outer: f32, start_deg: f32, end_deg: f32, segments: i32, color: Color);
 }
 
-/// Where a [`GpuCanvas`] finds the texture behind a [`Sheet`]:
-/// `game::Textures` for the game, `editor::EditorTextures` for the builder.
-pub trait Sheets {
-    fn texture(&self, sheet: Sheet) -> &Texture2D;
-}
-
-/// A [`Canvas`] over a raylib draw handle: every call forwards to the
-/// raylib call the trait is named after.
-pub struct GpuCanvas<'a, D, S> {
-    d: &'a mut D,
-    sheets: &'a S,
-}
-
-impl<'a, D: RaylibDraw, S: Sheets> GpuCanvas<'a, D, S> {
-    pub fn new(d: &'a mut D, sheets: &'a S) -> Self {
-        GpuCanvas { d, sheets }
-    }
-}
-
-impl<D: RaylibDraw, S: Sheets> Canvas for GpuCanvas<'_, D, S> {
-    fn blit(&mut self, sheet: Sheet, src: Rectangle, dest: Rectangle, origin: Vector2, rotation: f32, tint: Color) {
-        self.d.draw_texture_pro(self.sheets.texture(sheet), src, dest, origin, rotation, tint);
-    }
-
-    fn fill_rect(&mut self, x: i32, y: i32, width: i32, height: i32, color: Color) {
-        self.d.draw_rectangle(x, y, width, height, color);
-    }
-
-    fn gradient_v(&mut self, x: i32, y: i32, width: i32, height: i32, top: Color, bottom: Color) {
-        self.d.draw_rectangle_gradient_v(x, y, width, height, top, bottom);
-    }
-
-    fn gradient_h(&mut self, x: i32, y: i32, width: i32, height: i32, left: Color, right: Color) {
-        self.d.draw_rectangle_gradient_h(x, y, width, height, left, right);
-    }
-
-    fn disc(&mut self, center: Position, radius: f32, color: Color) {
-        self.d.draw_circle_v(center, radius, color);
-    }
-
-    fn ring(&mut self, center: Position, inner: f32, outer: f32, start_deg: f32, end_deg: f32, segments: i32, color: Color) {
-        self.d.draw_ring(center, inner, outer, start_deg, end_deg, segments, color);
-    }
-}
-
 /// A decoded sprite sheet: RGBA pixels, row-major.
 #[derive(Clone, Debug)]
 pub struct Pixels {
@@ -247,15 +205,6 @@ impl Pixels {
     /// A blank sheet, for tests and for `CpuCanvas::blank`.
     pub fn filled(width: usize, height: usize, color: Color) -> Self {
         Pixels { width, height, data: vec![color; width * height] }
-    }
-
-    /// Decode a PNG through raylib's CPU image loader (stb_image). Needs no
-    /// window. Any pixel format is converted to RGBA by `LoadImageColors`.
-    pub fn load(path: &str) -> Result<Self, String> {
-        let image = Image::load_image(path).map_err(|e| format!("{path}: {e}"))?;
-        let (width, height) = (image.width().max(0) as usize, image.height().max(0) as usize);
-        let colors = image.get_image_data();
-        Ok(Pixels { width, height, data: colors.iter().copied().collect() })
     }
 
     #[inline]
@@ -286,17 +235,6 @@ impl CpuCanvas {
     /// still draw. For the rasteriser's own tests.
     pub fn blank(width: usize, height: usize) -> Self {
         Self::new(width, height, BTreeMap::new())
-    }
-
-    /// A white canvas with every sheet in [`Sheet::all`] decoded from
-    /// `static/` under the working directory. Fails naming the first file
-    /// that would not load.
-    pub fn load(width: usize, height: usize) -> Result<Self, String> {
-        let mut sheets = BTreeMap::new();
-        for sheet in Sheet::all() {
-            sheets.insert(sheet, Pixels::load(&sheet.path())?);
-        }
-        Ok(Self::new(width, height, sheets))
     }
 
     pub fn insert_sheet(&mut self, sheet: Sheet, pixels: Pixels) {
@@ -334,32 +272,6 @@ impl CpuCanvas {
             }
         }
         h
-    }
-
-    /// The canvas as a raylib `Image` (RGBA8), for encoding or resizing.
-    pub fn to_image(&self) -> Image {
-        let mut image = Image::gen_image_color(self.width as i32, self.height as i32, Color::WHITE);
-        for y in 0..self.height {
-            for x in 0..self.width {
-                image.draw_pixel(x as i32, y as i32, self.pixel(x, y));
-            }
-        }
-        image
-    }
-
-    /// PNG bytes of the canvas, scaled up `scale` times with whole pixels.
-    pub fn png_bytes(&self, scale: u32) -> Result<Vec<u8>, String> {
-        let mut image = self.to_image();
-        if scale > 1 {
-            image.resize_nn((self.width as u32 * scale) as i32, (self.height as u32 * scale) as i32);
-        }
-        image.export_image_to_memory(".png").map_err(|e| e.to_string())
-    }
-
-    /// Write the canvas to `path` as a PNG, scaled up `scale` times.
-    pub fn write_png(&self, path: &std::path::Path, scale: u32) -> Result<(), String> {
-        let bytes = self.png_bytes(scale)?;
-        std::fs::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))
     }
 
     #[inline]
@@ -422,7 +334,7 @@ fn lerp_color(a: Color, b: Color, t: f32) -> Color {
 }
 
 impl Canvas for CpuCanvas {
-    fn blit(&mut self, sheet: Sheet, src: Rectangle, dest: Rectangle, origin: Vector2, rotation: f32, tint: Color) {
+    fn blit(&mut self, sheet: Sheet, src: Rectangle, dest: Rectangle, origin: Vec2, rotation: f32, tint: Color) {
         let Some(px) = self.sheets.get(&sheet) else { return };
         let (flip_x, flip_y) = (src.width < 0.0, src.height < 0.0);
         let (sw, sh) = (src.width.abs(), src.height.abs());
@@ -620,7 +532,7 @@ mod tests {
     #[test]
     fn plain_blit_lands_texels_where_the_gpu_would() {
         let mut c = canvas_with_probe();
-        c.blit(Sheet::Tracks, Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(4.0, 4.0, 4.0, 4.0), Vector2::zero(), 0.0, Color::WHITE);
+        c.blit(Sheet::Tracks, Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(4.0, 4.0, 4.0, 4.0), Vec2::zero(), 0.0, Color::WHITE);
         assert_eq!(c.px(4, 4), rgba(RED));
         assert_eq!(c.px(7, 4), rgba(GREEN));
         assert_eq!(c.px(4, 7), rgba(BLUE));
@@ -631,7 +543,7 @@ mod tests {
     #[test]
     fn scaled_blit_is_nearest_neighbour() {
         let mut c = canvas_with_probe();
-        c.blit(Sheet::Tracks, Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(0.0, 0.0, 8.0, 8.0), Vector2::zero(), 0.0, Color::WHITE);
+        c.blit(Sheet::Tracks, Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(0.0, 0.0, 8.0, 8.0), Vec2::zero(), 0.0, Color::WHITE);
         // Every texel becomes a crisp 2 x 2 block, no blending between them.
         for (x, y) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
             assert_eq!(c.px(x, y), rgba(RED));
@@ -644,7 +556,7 @@ mod tests {
     #[test]
     fn negative_source_width_mirrors() {
         let mut c = canvas_with_probe();
-        c.blit(Sheet::Tracks, Rectangle::new(0.0, 0.0, -4.0, 4.0), Rectangle::new(0.0, 0.0, 4.0, 4.0), Vector2::zero(), 0.0, Color::WHITE);
+        c.blit(Sheet::Tracks, Rectangle::new(0.0, 0.0, -4.0, 4.0), Rectangle::new(0.0, 0.0, 4.0, 4.0), Vec2::zero(), 0.0, Color::WHITE);
         assert_eq!(c.px(3, 0), rgba(RED), "red texel now on the right");
         assert_eq!(c.px(0, 0), rgba(GREEN));
         assert_eq!(c.px(3, 3), rgba(BLUE));
@@ -655,7 +567,7 @@ mod tests {
         let mut c = canvas_with_probe();
         // Rotating 90 degrees clockwise about the sprite's centre: the
         // top-left texel goes to the top-right.
-        c.blit(Sheet::Tracks, Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(2.0, 2.0, 4.0, 4.0), Vector2::new(2.0, 2.0), 90.0, Color::WHITE);
+        c.blit(Sheet::Tracks, Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(2.0, 2.0, 4.0, 4.0), Vec2::new(2.0, 2.0), 90.0, Color::WHITE);
         assert_eq!(c.px(3, 0), rgba(RED));
         assert_eq!(c.px(3, 3), rgba(GREEN));
         assert_eq!(c.px(0, 0), rgba(BLUE));
@@ -664,7 +576,7 @@ mod tests {
     #[test]
     fn origin_shifts_the_quad() {
         let mut c = canvas_with_probe();
-        c.blit(Sheet::Tracks, Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(8.0, 8.0, 4.0, 4.0), Vector2::new(2.0, 2.0), 0.0, Color::WHITE);
+        c.blit(Sheet::Tracks, Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(8.0, 8.0, 4.0, 4.0), Vec2::new(2.0, 2.0), 0.0, Color::WHITE);
         assert_eq!(c.px(6, 6), rgba(RED));
         assert_eq!(c.px(9, 6), rgba(GREEN));
     }
@@ -678,7 +590,7 @@ mod tests {
         assert!((126..=129).contains(&p.r) && p.r == p.g && p.g == p.b, "{p:?}");
         assert_eq!(p.a, 255);
         // A tinted opaque texel is multiplied.
-        c.blit(Sheet::Tracks, Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(8.0, 0.0, 4.0, 4.0), Vector2::zero(), 0.0, Color::new(128, 255, 255, 255));
+        c.blit(Sheet::Tracks, Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(8.0, 0.0, 4.0, 4.0), Vec2::zero(), 0.0, Color::new(128, 255, 255, 255));
         assert_eq!(c.px(8, 0), rgba(Color::new(128, 0, 0, 255)));
     }
 
@@ -699,8 +611,8 @@ mod tests {
         c.gradient_v(-2, -2, 12, 12, RED, BLUE);
         c.gradient_h(0, 0, 0, 0, RED, BLUE);
         let mut d = canvas_with_probe();
-        d.blit(Sheet::Tracks, Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(-2.0, -2.0, 40.0, 40.0), Vector2::zero(), 33.0, Color::WHITE);
-        d.blit(Sheet::Grass(Theme::Grass), Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(0.0, 0.0, 4.0, 4.0), Vector2::zero(), 0.0, Color::WHITE);
+        d.blit(Sheet::Tracks, Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(-2.0, -2.0, 40.0, 40.0), Vec2::zero(), 33.0, Color::WHITE);
+        d.blit(Sheet::Grass(Theme::Grass), Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(0.0, 0.0, 4.0, 4.0), Vec2::zero(), 0.0, Color::WHITE);
     }
 
     #[test]
@@ -778,6 +690,8 @@ mod tests {
         assert_ne!(Sheet::Grass(Theme::Grass).path(), Sheet::Grass(Theme::Desert).path());
     }
 
+    /// Decoding is raylib's, so this test needs the `render` feature.
+    #[cfg(feature = "render")]
     #[test]
     fn every_sheet_loads_from_static() {
         unsafe { sola_raylib::ffi::SetTraceLogLevel(sola_raylib::consts::TraceLogLevel::LOG_WARNING as i32) }

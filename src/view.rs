@@ -11,9 +11,10 @@
 //!
 //! The field size is the map's (`MapFile::field_size`) and every player in
 //! a match shares it; the view is the one per-device thing, and it is
-//! presentation only - nothing in `simulation/` sees it.
+//! presentation only - nothing in `simulation/` sees it. The blit onto the
+//! window is `render::view::present`.
 
-use sola_raylib::prelude::*;
+use crate::math::{Rectangle, Vec2};
 
 /// The bitmap-to-screen mapping for one frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -25,7 +26,7 @@ pub struct View {
     /// Screen pixels per bitmap pixel.
     pub scale: f32,
     /// Where the bitmap's top-left lands in the window.
-    pub offset: Vector2,
+    pub offset: Vec2,
 }
 
 impl View {
@@ -65,7 +66,7 @@ impl View {
     fn at_scale(bitmap: (f32, f32), window: (f32, f32), scale: f32) -> Self {
         let (bw, bh) = bitmap;
         let (ww, wh) = window;
-        let offset = Vector2::new(((ww - bw * scale) / 2.0).floor(), ((wh - bh * scale) / 2.0).floor());
+        let offset = Vec2::new(((ww - bw * scale) / 2.0).floor(), ((wh - bh * scale) / 2.0).floor());
         View { bitmap, window, scale, offset }
     }
 
@@ -77,13 +78,13 @@ impl View {
     /// A window position as a bitmap position. Outside the bitmap the
     /// result is out of range rather than clamped, so a press on a
     /// letterbox bar is not a press on the bitmap's edge.
-    pub fn to_bitmap(&self, window: Vector2) -> Vector2 {
-        Vector2::new((window.x - self.offset.x) / self.scale, (window.y - self.offset.y) / self.scale)
+    pub fn to_bitmap(&self, window: Vec2) -> Vec2 {
+        Vec2::new((window.x - self.offset.x) / self.scale, (window.y - self.offset.y) / self.scale)
     }
 
     /// A bitmap position as a window position.
-    pub fn to_window(&self, bitmap: Vector2) -> Vector2 {
-        Vector2::new(bitmap.x * self.scale + self.offset.x, bitmap.y * self.scale + self.offset.y)
+    pub fn to_window(&self, bitmap: Vec2) -> Vec2 {
+        Vec2::new(bitmap.x * self.scale + self.offset.x, bitmap.y * self.scale + self.offset.y)
     }
 
     /// Whether the window is the bitmap's own size - the blit is then an
@@ -103,34 +104,6 @@ pub struct ScaleCap {
     pub snap_half: bool,
 }
 
-/// Put the composited frame on screen: the margins in `backdrop` (the
-/// HUD bar's own colour, so the bar and the margins read as one panel), a
-/// one-pixel frame around the bitmap, then the bitmap into `view.dest()`.
-/// Nearest filtering keeps the pixel art's blocks whole where the scale is
-/// an integer and sharp elsewhere. A window the bitmap's own size gets no
-/// margins and no frame.
-pub fn present(rl: &mut RaylibHandle, thread: &RaylibThread, composite: &RenderTexture2D, view: &View, backdrop: Color) {
-    // A render texture reads back bottom-up; a negative source height
-    // flips it on the way out.
-    let source = Rectangle::new(0.0, 0.0, view.bitmap.0, -view.bitmap.1);
-    let dest = view.dest();
-    rl.draw(thread, |mut d| {
-        d.clear_background(Color::BLACK);
-        if !view.is_identity() {
-            d.draw_rectangle(0, 0, view.window.0 as i32, view.window.1 as i32, backdrop);
-            d.draw_rectangle_lines_ex(
-                Rectangle::new(dest.x - 1.0, dest.y - 1.0, dest.width + 2.0, dest.height + 2.0),
-                1.0,
-                FRAME,
-            );
-        }
-        d.draw_texture_pro(composite, source, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
-    });
-}
-
-/// The frame around the bitmap when it does not fill the window.
-const FRAME: Color = Color::new(62, 62, 66, 255);
-
 #[cfg(test)]
 mod view_tests {
     use super::*;
@@ -139,7 +112,7 @@ mod view_tests {
     fn a_window_of_the_bitmaps_size_is_the_identity() {
         let v = View::fit((960.0, 512.0), (960.0, 512.0));
         assert!(v.is_identity());
-        assert_eq!(v.to_bitmap(Vector2::new(100.0, 40.0)), Vector2::new(100.0, 40.0));
+        assert_eq!(v.to_bitmap(Vec2::new(100.0, 40.0)), Vec2::new(100.0, 40.0));
     }
 
     #[test]
@@ -176,9 +149,9 @@ mod view_tests {
         let cap = Some(ScaleCap { max_scale: 1.5, snap_half: false });
         let v = View::fit_capped((960.0, 512.0), (1920.0, 1080.0), cap);
         assert_eq!(v.scale, 1.5);
-        assert_eq!(v.offset, Vector2::new(240.0, 156.0));
+        assert_eq!(v.offset, Vec2::new(240.0, 156.0));
         assert!(!v.is_identity());
-        assert!(v.to_bitmap(Vector2::new(10.0, 10.0)).x < 0.0);
+        assert!(v.to_bitmap(Vec2::new(10.0, 10.0)).x < 0.0);
         let d = v.dest();
         assert_eq!((d.width, d.height), (1440.0, 768.0));
     }
@@ -198,10 +171,10 @@ mod view_tests {
     #[test]
     fn pointer_mapping_round_trips_and_leaves_the_bars_out_of_range() {
         let v = View::fit((960.0, 512.0), (1920.0, 1080.0));
-        let p = Vector2::new(300.0, 200.0);
+        let p = Vec2::new(300.0, 200.0);
         let back = v.to_bitmap(v.to_window(p));
         assert!((back.x - p.x).abs() < 1e-4 && (back.y - p.y).abs() < 1e-4);
         // The top bar: above the bitmap.
-        assert!(v.to_bitmap(Vector2::new(500.0, 10.0)).y < 0.0);
+        assert!(v.to_bitmap(Vec2::new(500.0, 10.0)).y < 0.0);
     }
 }

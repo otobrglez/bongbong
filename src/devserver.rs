@@ -16,6 +16,7 @@
 //! is running and the round RNG sits in `Game::rng`.
 
 use std::collections::{BTreeMap, VecDeque};
+#[cfg(feature = "render")]
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -26,6 +27,8 @@ use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::{Map, Value, json};
+use crate::math::Vec2;
+#[cfg(feature = "render")]
 use sola_raylib::prelude::{RaylibHandle, RaylibTexture2D, RaylibThread, RenderTexture2D};
 
 use crate::ai::Intent;
@@ -65,6 +68,7 @@ const HISTORY_MAX_ROWS: usize = 2000;
 /// Events returned inline by one `step` reply.
 const STEP_EVENT_CAP: usize = 256;
 /// Where screenshots land (under the gitignored `target/`).
+#[cfg_attr(not(feature = "render"), allow(dead_code))]
 const SHOT_DIR: &str = "target/devshots";
 /// How far apart the points of a `click {drag_to}` drag are sampled: well
 /// under a 32 px cell, so the stroke crosses every cell on the line.
@@ -136,7 +140,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "events",
-        description: "Gameplay events recorded since `since` (a seq number; 0 = everything kept, up to 4096): fired, hit, wreck, ram, deflected (off a shield), shells_collided, frog_bite (with the biting frog's side), pickup_collected, pickup_respawned, obstacle_destroyed, blast, drum_launched, fire_started, ignited (the flamethrower lit `what`: ground, oil, wood, tree, drum, or collapsed a sandbag/fence), teleported (a tank went through a portal: slot, from x/y, to to_x/to_y), round_started, round_ended, plus AI decisions - ai_action (behaviour-tree action changed), engage_slot (ring slot changed; null = steering at its target - the player, or a hunter's frog - directly), stuck_escape, breach (dir, or null when it ends), retreat (on/off), alert (shared last-known player position on/off), retarget (two-player rounds: the enemy switched to fighting `player` 0 or 1). Each carries the frame it happened on. `kinds` keeps only those event names, `exclude` drops them.",
+        description: "Gameplay events recorded since `since` (a seq number; 0 = everything kept, up to 4096): fired, hit, wreck, ram, deflected (off a shield), ricochet (a shot off iron or a barrel, with the heading it flies on along), shells_collided, frog_bite (with the biting frog's side), pickup_collected, pickup_respawned, obstacle_destroyed, blast, drum_launched, fire_started, ignited (the flamethrower lit `what`: ground, oil, wood, tree, drum, or collapsed a sandbag/fence), teleported (a tank went through a portal: slot, from x/y, to to_x/to_y), round_started, round_ended, plus AI decisions - ai_action (behaviour-tree action changed), engage_slot (ring slot changed; null = steering at its target - the player, or a hunter's frog - directly), stuck_escape, breach (dir, or null when it ends), retreat (on/off), alert (shared last-known player position on/off), retarget (two-player rounds: the enemy switched to fighting `player` 0 or 1). Each carries the frame it happened on. `kinds` keeps only those event names, `exclude` drops them.",
         schema: r#"{"type":"object","properties":{"since":{"type":"integer","default":0,"description":"Return events with seq > since"},"limit":{"type":"integer","default":200},"kinds":{"type":"array","items":{"type":"string"},"description":"Only these event names"},"exclude":{"type":"array","items":{"type":"string"},"description":"Drop these event names"}}}"#,
         read_only: true,
         destructive: false,
@@ -592,6 +596,9 @@ enum ShotSource {
     Scene,
 }
 
+/// A `screenshot` request armed for `after_render`. Without the `render`
+/// feature nothing captures, so a headless server only ever arms it.
+#[cfg_attr(not(feature = "render"), allow(dead_code))]
 struct PendingShot {
     scale: f32,
     source: ShotSource,
@@ -617,6 +624,7 @@ pub struct DevServer {
     pending_shot: Option<PendingShot>,
     events: VecDeque<EventRecord>,
     next_seq: u64,
+    #[cfg_attr(not(feature = "render"), allow(dead_code))]
     shot_seq: u64,
     /// One entry per simulated frame, oldest first - see `history`.
     history: VecDeque<HistoryFrame>,
@@ -697,11 +705,11 @@ impl DevServer {
         let mut input = real;
         if let Some((intent, left)) = self.injected {
             self.injected = (left > 1).then_some((intent, left - 1));
-            input.player_intent = intent;
+            input.seats[0] = intent;
         }
         if let Some((intent, left)) = self.injected2 {
             self.injected2 = (left > 1).then_some((intent, left - 1));
-            input.player2_intent = intent;
+            input.seats[1] = intent;
         }
         if std::mem::take(&mut self.cycle_overlays_pending) {
             input.cycle_overlays_pressed = true;
@@ -710,19 +718,23 @@ impl DevServer {
     }
 
     /// Advance the game for this rendered frame: a pending `step` runs its
-    /// frames back-to-back at `PHYSICS_FIXED_DT` and replies; otherwise one
-    /// real-time update unless lockstep holds the game still.
-    pub fn advance(&mut self, game: &mut Game, input: Input, real_dt: f32, width: f32, height: f32) {
+    /// frames back-to-back at `PHYSICS_FIXED_DT` and replies; otherwise the
+    /// `steps` the loop's clock paid for (each at `PHYSICS_FIXED_DT`, the
+    /// one-shot presses in `input` spent by the first) unless lockstep holds
+    /// the game still. `after_step` runs after every update, on the state
+    /// it produced - the presentation's event readers hook in there so a
+    /// frame of several steps drops none of their events.
+    pub fn advance(&mut self, game: &mut Game, input: Input, steps: u32, width: f32, height: f32, after_step: &mut dyn FnMut(&Game)) {
         if let Some(mut step) = self.pending_step.take() {
             for i in 0..step.remaining {
-                let mut player_intent = step.intent.unwrap_or(input.player_intent);
-                let mut player2_intent = step.intent2.unwrap_or(input.player2_intent);
+                let mut player1 = step.intent.unwrap_or(input.seat(0));
+                let mut player2 = step.intent2.unwrap_or(input.seat(1));
                 if let Some(n) = step.fire_every {
-                    player_intent.fire = player_intent.fire && i % n == 0;
-                    player2_intent.fire = player2_intent.fire && i % n == 0;
+                    player1.fire = player1.fire && i % n == 0;
+                    player2.fire = player2.fire && i % n == 0;
                 }
                 let before = game.frame();
-                game.update(Input { player_intent, player2_intent, ..Input::default() }, PHYSICS_FIXED_DT, width, height);
+                game.update(Input::two(player1, player2), PHYSICS_FIXED_DT, width, height);
                 if game.frame() != before + 1 {
                     step.restarted = true;
                 }
@@ -730,6 +742,7 @@ impl DevServer {
                 self.drain_events(game, Some((&mut sink, &step.filter)));
                 step.events = sink;
                 self.record_history(game);
+                after_step(game);
             }
             let snapshot = step.want_snapshot.then(|| to_value(game.debug_snapshot(width, height, step.detail)));
             let _ = step.reply.send(Ok(json!({
@@ -742,9 +755,13 @@ impl DevServer {
                 "snapshot": snapshot,
             })));
         } else if !self.lockstep {
-            game.update(input, real_dt, width, height);
-            self.drain_events(game, None);
-            self.record_history(game);
+            for i in 0..steps {
+                let input = if i == 0 { input } else { input.held_only() };
+                game.update(input, PHYSICS_FIXED_DT, width, height);
+                self.drain_events(game, None);
+                self.record_history(game);
+                after_step(game);
+            }
         }
     }
 
@@ -847,6 +864,7 @@ impl DevServer {
     /// (raylib reads back after the buffer swap), so a shot armed this
     /// frame is captured on the next - in lockstep that frame is identical
     /// and carries any overlay flags set alongside the request.
+    #[cfg(feature = "render")]
     pub fn after_render(&mut self, rl: &mut RaylibHandle, thread: &RaylibThread, scene: &RenderTexture2D, game: &Game) {
         match self.pending_shot.as_mut() {
             None => return,
@@ -861,6 +879,7 @@ impl DevServer {
         let _ = shot.reply.send(result);
     }
 
+    #[cfg(feature = "render")]
     fn capture(
         &mut self,
         rl: &mut RaylibHandle,
@@ -1418,13 +1437,13 @@ impl DevServer {
             None | Some(Value::Null) => None,
             Some(v) => match v.as_array().map(Vec::as_slice) {
                 Some([dx, dy]) => match (dx.as_f64(), dy.as_f64()) {
-                    (Some(dx), Some(dy)) => Some(Position::new(dx as f32, dy as f32)),
+                    (Some(dx), Some(dy)) => Some(Vec2::new(dx as f32, dy as f32)),
                     _ => return Err(format!("drag_to must be [x, y] numbers, got {v}")),
                 },
                 _ => return Err(format!("drag_to must be [x, y], got {v}")),
             },
         };
-        let point = Position::new(x, y);
+        let point = Vec2::new(x, y);
         match session.mode() {
             Driver::Play => {
                 // The same order as `main.rs`: an open dialog eats every
@@ -1433,11 +1452,11 @@ impl DevServer {
                     let rects = players_dialog_rects(layout.field);
                     let p = layout.to_field(point);
                     let before = session.game.players;
-                    if rects.one.check_collision_point_rec(p) {
+                    if rects.one.contains(p) {
                         session.answer_players(PlayerCount::One);
-                    } else if rects.two.check_collision_point_rec(p) {
+                    } else if rects.two.contains(p) {
                         session.answer_players(PlayerCount::Two);
-                    } else if !rects.panel.check_collision_point_rec(p) {
+                    } else if !rects.panel.contains(p) {
                         session.close_players_dialog();
                     }
                     if session.game.players != before {
@@ -1446,16 +1465,16 @@ impl DevServer {
                 } else if session.dialog {
                     let rects = leave_dialog_rects(layout.field);
                     let p = layout.to_field(point);
-                    if rects.leave.check_collision_point_rec(p) {
+                    if rects.leave.contains(p) {
                         session.answer_dialog(true);
-                    } else if rects.stay.check_collision_point_rec(p) || !rects.panel.check_collision_point_rec(p) {
+                    } else if rects.stay.contains(p) || !rects.panel.contains(p) {
                         session.answer_dialog(false);
                     }
-                } else if mode_button_rect(layout.panel).check_collision_point_rec(point) {
+                } else if mode_button_rect(layout.panel).contains(point) {
                     session.press_build();
-                } else if crate::TWO_PLAYERS_AVAILABLE && players_button_rect(layout.panel).check_collision_point_rec(point) {
+                } else if crate::TWO_PLAYERS_AVAILABLE && players_button_rect(layout.panel).contains(point) {
                     session.press_players();
-                } else if !crate::KEYBOARD_AVAILABLE && restart_button_rect(layout.panel).check_collision_point_rec(point) {
+                } else if !crate::KEYBOARD_AVAILABLE && restart_button_rect(layout.panel).contains(point) {
                     crate::tuning::request_restart();
                 }
             }
@@ -1474,7 +1493,7 @@ impl DevServer {
                     let steps = (point.distance_to(to) / CLICK_DRAG_STEP_PX).ceil().max(1.0) as usize;
                     for i in 1..=steps {
                         let t = i as f32 / steps as f32;
-                        last = Position::new(point.x + (to.x - point.x) * t, point.y + (to.y - point.y) * t);
+                        last = Vec2::new(point.x + (to.x - point.x) * t, point.y + (to.y - point.y) * t);
                         let held = BuilderInput { pointer: Some(last), held: !right, right_held: right, ..BuilderInput::default() };
                         session.update_builder(&held, layout);
                     }
@@ -2323,7 +2342,7 @@ mod tests {
         for _ in 0..3 {
             let rx = call(&tx, "step", json!({ "frames": 1, "snapshot": false }));
             server.before_frame(&mut s, W, H);
-            server.advance(&mut s.game, Input::default(), 0.016, W, H);
+            server.advance(&mut s.game, Input::default(), 1, W, H, &mut |_| {});
             rx.recv().unwrap().unwrap();
         }
         ask(&mut server, &tx, &mut s, "players", json!({ "count": 2 })).unwrap();
@@ -2332,7 +2351,7 @@ mod tests {
         let before: Vec<_> = s.game.tank_snapshots().into_iter().filter(|t| t.is_player).map(|t| (t.player, t.position)).collect();
         let rx = call(&tx, "step", json!({ "frames": 30, "p2_move_dir": "down", "snapshot": false }));
         server.before_frame(&mut s, W, H);
-        server.advance(&mut s.game, Input::default(), 0.016, W, H);
+        server.advance(&mut s.game, Input::default(), 1, W, H, &mut |_| {});
         rx.recv().unwrap().unwrap();
         let after: Vec<_> = s.game.tank_snapshots().into_iter().filter(|t| t.is_player).map(|t| (t.player, t.position)).collect();
         assert!((after[0].1.y - before[0].1.y).abs() < 1.0, "player 1 stayed put");
@@ -2366,7 +2385,7 @@ mod tests {
         let rx = call(&tx, "step", held);
         server.before_frame(&mut stepped, W, H);
         assert!(server.lockstep(), "step enters lockstep");
-        server.advance(&mut stepped, Input::default(), 0.123, W, H);
+        server.advance(&mut stepped, Input::default(), 1, W, H, &mut |_| {});
         let reply = rx.recv().unwrap().unwrap();
         assert_eq!(reply["frame"], 90);
         assert_eq!(reply["restarted"], false);
@@ -2374,7 +2393,7 @@ mod tests {
 
         let intent = Intent { move_dir: Some(Dir::Up), fire: true, ..Intent::default() };
         for _ in 0..90 {
-            manual.update(Input { player_intent: intent, ..Input::default() }, PHYSICS_FIXED_DT, W, H);
+            manual.update(Input::single(intent), PHYSICS_FIXED_DT, W, H);
         }
         assert_eq!(reply["time"], r1(manual.time), "the reply's time is the game's, at snapshot precision");
         let (a, b) = (stepped.tank_snapshots(), manual.tank_snapshots());
@@ -2383,7 +2402,7 @@ mod tests {
             assert_eq!(key(x), key(y), "tank {i} diverged");
         }
         // Lockstep holds the game still until the next step.
-        server.advance(&mut stepped, Input::default(), 0.016, W, H);
+        server.advance(&mut stepped, Input::default(), 1, W, H, &mut |_| {});
         assert_eq!(stepped.frame(), 90);
     }
 
@@ -2393,7 +2412,7 @@ mod tests {
         let mut game = game(4);
         let rx = call(&tx, "step", json!({ "frames": 120, "fire": true, "fire_every": 40, "snapshot": false }));
         server.before_frame(&mut game, W, H);
-        server.advance(&mut game, Input::default(), 0.016, W, H);
+        server.advance(&mut game, Input::default(), 1, W, H, &mut |_| {});
         let reply = rx.recv().unwrap().unwrap();
         let shots = reply["events"].as_array().unwrap().iter().filter(|e| e["event"] == "fired" && e["slot"] == 0).count();
         assert_eq!(shots, 3, "{}", reply["events"]);
@@ -2408,7 +2427,7 @@ mod tests {
         rx.recv().unwrap().unwrap();
         let rx = call(&tx, "step", json!({ "frames": 1 }));
         server.before_frame(&mut game, W, H);
-        server.advance(&mut game, Input::default(), 0.016, W, H);
+        server.advance(&mut game, Input::default(), 1, W, H, &mut |_| {});
         let reply = rx.recv().unwrap().unwrap();
         let player = &reply["snapshot"]["tanks"][0];
         assert_eq!(player["slot"], 0);
@@ -2433,7 +2452,7 @@ mod tests {
         rx.recv().unwrap().unwrap();
         let rx = call(&tx, "step", json!({ "frames": 1 }));
         server.before_frame(&mut game, W, H);
-        server.advance(&mut game, Input::default(), 0.016, W, H);
+        server.advance(&mut game, Input::default(), 1, W, H, &mut |_| {});
         let reply = rx.recv().unwrap().unwrap();
         let events = reply["events"].as_array().unwrap();
         assert!(events.iter().any(|e| e["event"] == "wreck" && e["slot"] == 2), "{events:?}");
@@ -2505,6 +2524,36 @@ mod tests {
         assert_eq!(game.debug_overlays, Overlays::NONE);
     }
 
+    /// The windowed loop pays real time out in whole steps and hands the
+    /// count here: a live server runs each at the fixed step and spends
+    /// the one-shot presses on the first, a frozen one runs none of them,
+    /// and `after_step` sees every step's state.
+    #[test]
+    fn advance_runs_the_clocks_steps_unless_frozen() {
+        let (mut server, tx) = DevServer::headless();
+        let mut s = game(7);
+        let mut seen = Vec::new();
+        server.advance(&mut s.game, Input::default(), 3, W, H, &mut |g| seen.push(g.frame()));
+        assert_eq!(s.game.frame(), 3);
+        assert_eq!(seen, vec![1, 2, 3]);
+        // A frame of two steps toggles pause once, not twice.
+        let pause = Input { pause_pressed: true, ..Input::default() };
+        server.advance(&mut s.game, pause, 2, W, H, &mut |_| {});
+        assert!(s.game.paused);
+        assert_eq!(s.game.frame(), 5, "paused updates still count frames");
+        server.advance(&mut s.game, pause, 1, W, H, &mut |_| {});
+        assert!(!s.game.paused);
+        // Frozen: the steps the clock paid for do not run.
+        ask(&mut server, &tx, &mut s, "pause", json!({})).unwrap();
+        assert!(server.lockstep());
+        let mut ran = 0;
+        server.advance(&mut s.game, Input::default(), 4, W, H, &mut |_| ran += 1);
+        assert_eq!((s.game.frame(), ran), (6, 0));
+        ask(&mut server, &tx, &mut s, "resume", json!({})).unwrap();
+        server.advance(&mut s.game, Input::default(), 1, W, H, &mut |_| ran += 1);
+        assert_eq!((s.game.frame(), ran), (7, 1));
+    }
+
     #[test]
     fn input_cycle_overlays_presses_the_i_key_once() {
         let (mut server, tx) = DevServer::headless();
@@ -2517,13 +2566,13 @@ mod tests {
             rx.recv().unwrap().unwrap();
             let input = server.shape_input(Input::default());
             assert!(input.cycle_overlays_pressed);
-            assert!(input.player_intent.move_dir.is_none(), "a bare cycle request leaves the keyboard alone");
-            server.advance(&mut game, input, 0.016, W, H);
+            assert!(input.seats[0].move_dir.is_none(), "a bare cycle request leaves the keyboard alone");
+            server.advance(&mut game, input, 1, W, H, &mut |_| {});
             assert_eq!(game.debug_overlays, preset);
             // One-shot: the next frame's input does not press the key again.
             let input = server.shape_input(Input::default());
             assert!(!input.cycle_overlays_pressed);
-            server.advance(&mut game, input, 0.016, W, H);
+            server.advance(&mut game, input, 1, W, H, &mut |_| {});
             assert_eq!(game.debug_overlays, preset);
         }
     }
@@ -2609,7 +2658,7 @@ mod tests {
 
         let rx = call(&tx, "step", json!({ "frames": 120, "detail": "full" }));
         server.before_frame(&mut game, W, H);
-        server.advance(&mut game, Input::default(), 0.016, W, H);
+        server.advance(&mut game, Input::default(), 1, W, H, &mut |_| {});
         let reply = rx.recv().unwrap().unwrap();
         let text = reply["snapshot"].to_string();
         assert!(text.len() < 16_000, "full snapshot is {} bytes", text.len());
@@ -2688,7 +2737,7 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!(status["wave"]["index"], 0);
         let rx = call(&tx, "step", json!({ "frames": 1, "snapshot": true }));
         server.before_frame(&mut game, W, H);
-        server.advance(&mut game, Input::default(), 0.016, W, H);
+        server.advance(&mut game, Input::default(), 1, W, H, &mut |_| {});
         let stepped = rx.recv().unwrap().unwrap();
         let tanks = stepped["snapshot"]["tanks"].as_array().unwrap();
         assert_eq!(tanks.len(), 2, "wave 1's first tank is rolling in: {stepped}");
@@ -2729,7 +2778,7 @@ cells."1,1" = { kind = "wall" }"#;
         let mut game = game(14);
         let rx = call(&tx, "step", json!({ "frames": 120, "snapshot": false }));
         server.before_frame(&mut game, W, H);
-        server.advance(&mut game, Input::default(), 0.016, W, H);
+        server.advance(&mut game, Input::default(), 1, W, H, &mut |_| {});
         rx.recv().unwrap().unwrap();
         let rx = call(&tx, "history", json!({ "last": 100, "every": 10, "slot": 1 }));
         server.before_frame(&mut game, W, H);
@@ -2761,7 +2810,7 @@ cells."1,1" = { kind = "wall" }"#;
         let rx = call(&tx, "step", json!({ "frames": 300, "snapshot": false, "kinds": ["ai_action"] }));
         server.before_frame(&mut game, W, H);
         assert!(game.trace_ai, "the server switches AI tracing on");
-        server.advance(&mut game, Input::default(), 0.016, W, H);
+        server.advance(&mut game, Input::default(), 1, W, H, &mut |_| {});
         let step = rx.recv().unwrap().unwrap();
         let events = step["events"].as_array().unwrap();
         assert!(!events.is_empty(), "300 frames of AI produce action changes");
@@ -2790,7 +2839,7 @@ cells."1,1" = { kind = "wall" }"#;
             assert_eq!(status["tanks"], 4);
             let rx = call(&tx, "step", json!({ "frames": 300 }));
             server.before_frame(&mut game, W, H);
-            server.advance(&mut game, Input::default(), 0.016, W, H);
+            server.advance(&mut game, Input::default(), 1, W, H, &mut |_| {});
             runs.push(rx.recv().unwrap().unwrap()["snapshot"].to_string());
         }
         assert_eq!(runs[0], runs[1]);
@@ -3051,7 +3100,7 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!(ev["events"].as_array().unwrap().last().unwrap()["event"], "round_started", "{ev}");
         let step = call(&tx, "step", json!({ "frames": 2, "snapshot": false }));
         server.before_frame(&mut s, W, H);
-        server.advance(&mut s.game, Input::default(), 0.016, W, H);
+        server.advance(&mut s.game, Input::default(), 1, W, H, &mut |_| {});
         assert_eq!(step.recv().unwrap().unwrap()["frame"], 2);
         // The edit survives the round trip back into the builder.
         enter_build(&mut server, &tx, &mut s);
@@ -3067,7 +3116,7 @@ cells."1,1" = { kind = "wall" }"#;
         ask(&mut server, &tx, &mut s, "restart", json!({ "map_toml": INLINE_MAP, "seed": 1 })).unwrap();
         let layout = Layout::for_field(W, H);
         let button = mode_button_rect(layout.panel);
-        let centre = |r: sola_raylib::prelude::Rectangle| (r.x + r.width / 2.0, r.y + r.height / 2.0);
+        let centre = |r: crate::math::Rectangle| (r.x + r.width / 2.0, r.y + r.height / 2.0);
         // A click on BUILD opens the dialog like `build`.
         let (bx, by) = centre(button);
         let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": bx, "y": by })).unwrap();
@@ -3198,7 +3247,7 @@ cells."1,1" = { kind = "wall" }"#;
         let (w, h) = s.field_size();
         let rx = call(tx, "step", params);
         server.before_frame(s, w, h);
-        server.advance(&mut s.game, Input::default(), 0.016, w, h);
+        server.advance(&mut s.game, Input::default(), 1, w, h, &mut |_| {});
         rx.recv().unwrap().unwrap()
     }
 

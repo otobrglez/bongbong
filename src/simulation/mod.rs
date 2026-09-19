@@ -4,9 +4,9 @@
 //! `Game`'s state afterward and draws it; this module never reaches back.
 //! `Game::init`/`Game::update` take plain numbers and an `Input` snapshot,
 //! so a round can be driven headlessly (see `src/bin/probe.rs` and the
-//! tests at the bottom of this file). `sola_raylib::core::math::Vector2`
-//! (`Position`) is the one shared type, imported by name so nothing here
-//! names a window or drawing type.
+//! tests at the bottom of this file). `crate::math::Vec2` (`Position`) is
+//! the one shared vector type, so nothing here names a window or drawing
+//! type.
 //!
 //! Layout: this file owns `Game` (state, `init`, the phased `update`) and
 //! the small helpers those phases share; `weapons` fires shots and ticks
@@ -28,6 +28,7 @@ mod flame;
 mod hits;
 mod props;
 pub use props::{FlyingDrum, GroundFire};
+pub mod replica;
 #[cfg(test)]
 mod flame_tests;
 #[cfg(test)]
@@ -50,7 +51,7 @@ use hecs::Entity;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 use serde::{Deserialize, Serialize};
-use sola_raylib::core::math::Vector2;
+use crate::math::Vec2;
 
 use crate::ai::{Ai, AiSnapshot, Intent, Mover, Role, WallAhead};
 use crate::battlefield;
@@ -82,6 +83,7 @@ use crate::{
     SHOCK_MAX,
     RUBBLE_ROW_TANK,
     SCORCH_MAX,
+    MAX_SEATS,
     PATHFIND_CELL_SIZE,
     PHYSICS_FIXED_DT,
     PHYSICS_MAX_CATCHUP_SECONDS,
@@ -97,24 +99,22 @@ use engage::{EngageCtx, EngageReport, EngageRing, EngageStatus, EngageTank};
 use hits::{ShellTarget, Terrain};
 use weapons::{dispatch_fire, dispatch_fire_from, laser_damage_range, tick_queued_shots, PendingLaserShot, Projectile, laser_beam_half_width};
 
-/// One frame's player input, gathered by the caller (`main.rs` reading a
-/// live `RaylibHandle`, or a scripted probe) - the entire interface
-/// between the simulation and wherever input comes from. `player_intent`
-/// reuses the AI's `Intent` so the player and every enemy drive through the
-/// identical `drive_tank`/fire path; the four flags below are meta/UI
-/// toggles `Intent` has no use for.
+/// One step's player input, gathered by the caller (`app.rs` reading a
+/// live `RaylibHandle`, the dev server, a scripted probe) - the entire
+/// interface between the simulation and wherever input comes from. A seat's `Intent` is the AI's, so the
+/// players and every enemy drive through the identical `drive_tank`/fire
+/// path; the four flags below are meta/UI toggles `Intent` has no use for.
 #[derive(Default, Clone, Copy)]
 pub struct Input {
-    /// Player 1's raw movement/fire command. `fire` is "is the fire key
-    /// held this frame", not edge-detected: `update` decides whether that
-    /// fires (a laser or minigun is full-auto while held; shells and plasma
-    /// need a fresh press), since that depends on the player's current
-    /// weapon.
-    pub player_intent: Intent,
-    /// Player 2's command, the same shape. Read only in a two-player round
-    /// (`Game::players`); the default is "no input", so single-player
-    /// callers never fill it.
-    pub player2_intent: Intent,
+    /// One raw movement/fire command per seat: seat 0 is player 1, seat 1
+    /// player 2. The round reads the first `Game::players.count()` seats
+    /// and nothing else, so a single-player caller leaves seat 1 at its
+    /// default (no input) and the seats past two wait for the online
+    /// roster (`MAX_SEATS`). `fire` is "is the fire key held this step",
+    /// not edge-detected: `update` decides whether that fires (a laser or
+    /// minigun is full-auto while held; shells and plasma need a fresh
+    /// press), since that depends on the player's current weapon.
+    pub seats: [Intent; MAX_SEATS],
     pub pause_pressed: bool,
     pub restart_pressed: bool,
     pub toggle_shadows_pressed: bool,
@@ -122,6 +122,56 @@ pub struct Input {
     /// `Game::debug_overlays` through its presets (`Overlays::next_preset`).
     /// Never set in a release build.
     pub cycle_overlays_pressed: bool,
+}
+
+impl Input {
+    /// Seat 0 driven, every other seat idle, no toggles.
+    pub fn single(intent: Intent) -> Input {
+        let mut input = Input::default();
+        input.seats[0] = intent;
+        input
+    }
+
+    /// Seats 0 and 1 driven (a two-player round), no toggles.
+    pub fn two(player1: Intent, player2: Intent) -> Input {
+        let mut input = Input::single(player1);
+        input.seats[1] = player2;
+        input
+    }
+
+    /// Seat `index`'s command; a seat past `MAX_SEATS` reads as no input.
+    pub fn seat(&self, index: usize) -> Intent {
+        self.seats.get(index).copied().unwrap_or_default()
+    }
+
+    /// This input for the second and later steps of one rendered frame:
+    /// what is held stays held (directions, fire), the one-shot presses
+    /// (pause, restart, shadows, overlays) are spent by the first step, so
+    /// a frame that runs two steps toggles pause once, not twice.
+    pub fn held_only(mut self) -> Input {
+        self.pause_pressed = false;
+        self.restart_pressed = false;
+        self.toggle_shadows_pressed = false;
+        self.cycle_overlays_pressed = false;
+        self
+    }
+
+    /// This input with `pending`'s presses folded in: every seat's `fire`
+    /// and every one-shot toggle is either input's. The caller keeps the
+    /// input of a rendered frame that ran no step and folds it into the
+    /// next frame's, so a tap that lands between two steps still reaches
+    /// the simulation as a held fire key or a pressed toggle; directions
+    /// are `self`'s alone - a held key is read fresh every frame.
+    pub fn or_presses(mut self, pending: Input) -> Input {
+        for (seat, carried) in self.seats.iter_mut().zip(pending.seats) {
+            seat.fire |= carried.fire;
+        }
+        self.pause_pressed |= pending.pause_pressed;
+        self.restart_pressed |= pending.restart_pressed;
+        self.toggle_shadows_pressed |= pending.toggle_shadows_pressed;
+        self.cycle_overlays_pressed |= pending.cycle_overlays_pressed;
+        self
+    }
 }
 
 /// How many humans drive a tank this round - a session setting, chosen
@@ -156,7 +206,7 @@ impl PlayerCount {
 pub(crate) const PLAYER_OWNER_SLOT: usize = 0;
 
 /// How the current round is going.
-#[derive(Clone, Copy, PartialEq, Default, Debug, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Outcome {
     #[default]
@@ -199,6 +249,12 @@ pub enum Event {
     PickupRespawned { kind: PickupKind, x: f32, y: f32 },
     /// A projectile bounced off `slot`'s rainbow shield at (`x`, `y`).
     Deflected { slot: usize, x: f32, y: f32 },
+    /// `slot`'s shot bounced off terrain at (`x`, `y`) - a shell off iron
+    /// (`Projectile::try_ricochet`) or a shell or bullet off a barrel
+    /// (`Material::deflect_chance`) - and flies on along `heading`
+    /// (degrees, 0 = up). Recorded so a client that sees only positions
+    /// knows why the shot turned.
+    Ricochet { slot: usize, x: f32, y: f32, heading: f32 },
     /// `slot`'s rainbow shield ran out of charge and shattered at
     /// (`x`, `y`) - the frame it crossed zero, emitted once.
     ShieldBroken { slot: usize, x: f32, y: f32 },
@@ -600,11 +656,13 @@ pub struct Game {
     /// This round's pickup slots from the map's `Pickup` cells; `update`
     /// tops the field back up from these same slots.
     map_pickup_slots: Vec<(Position, PickupKind)>,
-    /// Last frame's raw fire-key state per player, for edge-detecting a
-    /// fresh press.
-    player_fire_held_last_frame: [bool; 2],
+    /// Last step's raw fire-key state per seat, for edge-detecting a fresh
+    /// press.
+    player_fire_held_last_frame: [bool; MAX_SEATS],
     /// `update` calls this round (paused frames included); reset by `init`.
     pub(crate) frame: u64,
+    /// Projectiles spawned this round (`take_shot_id`); reset by `init`.
+    next_shot_id: u32,
     /// What happened during the most recent `update` - see `Event`.
     pub(crate) events: Vec<Event>,
     /// What the last enemy phase's engagement-slot assignment decided (every
@@ -756,7 +814,7 @@ impl Game {
         self.engage_frog.clear();
         self.commander.clear();
         self.pickup_respawn_timer = tuning().pickup_respawn_seconds;
-        self.player_fire_held_last_frame = [false; 2];
+        self.player_fire_held_last_frame = [false; MAX_SEATS];
         self.shocks.clear();
         self.muzzle_flashes.clear();
         self.impact_flashes.clear();
@@ -777,6 +835,7 @@ impl Game {
         self.heat.clear();
         self.flame_contacts.clear();
         self.frame = 0;
+        self.next_shot_id = 0;
         self.last_engage.clear();
         self.debug_kills.clear();
         self.debug_detonations.clear();
@@ -1108,7 +1167,7 @@ impl Game {
 
     /// Put a fresh, full-health frog of `side` at `pos` with its static
     /// collider, returning its entity.
-    fn spawn_frog(&mut self, side: Side, pos: Position, variant: i32) -> Entity {
+    pub(crate) fn spawn_frog(&mut self, side: Side, pos: Position, variant: i32) -> Entity {
         let body = self
             .physics
             .spawn_static(pos, Position::new(FROG_COLLIDER_HALF_EXTENT.0, FROG_COLLIDER_HALF_EXTENT.1));
@@ -1159,10 +1218,7 @@ impl Game {
         // moves/fires. Effects still animate so the screen isn't dead.
         if self.intro_timer > 0.0 {
             self.tick_effects(dt);
-            let skip = input.player_intent.move_dir.is_some()
-                || input.player_intent.fire
-                || input.player2_intent.move_dir.is_some()
-                || input.player2_intent.fire;
+            let skip = input.seats[..self.players.count()].iter().any(|seat| seat.move_dir.is_some() || seat.fire);
             self.intro_timer = if skip { 0.0 } else { (self.intro_timer - dt).max(0.0) };
             if self.intro_timer <= 0.0 {
                 self.intro_fade = INTRO_FADE_SECONDS;
@@ -1406,7 +1462,7 @@ impl Game {
             && let Some((_, tank_pos, dist, _)) = nearest_any
             && dist <= avoid_range
         {
-            let away = Vector2::new(frog_pos.x - tank_pos.x, frog_pos.y - tank_pos.y);
+            let away = Vec2::new(frog_pos.x - tank_pos.x, frog_pos.y - tank_pos.y);
             if let Some(new_pos) = frog_hop_target(&mut f.rng, frog_pos, away, hop_distance, &f.terrain, f.width, f.height) {
                 with_frog_mut(&self.world, frog_entity, |fr| fr.start_hop(new_pos));
             }
@@ -1680,13 +1736,14 @@ impl Game {
         }
     }
 
-    /// Drive each player from this frame's input and handle their fire
-    /// keys (docs/two-players.md).
+    /// Drive each player from its seat's input and handle their fire keys
+    /// (docs/two-players.md): player 1 from seat 0, then player 2 from
+    /// seat 1 in a two-player round.
     fn player_phase(&mut self, input: Input, f: &mut Frame) {
         let player = self.player.expect("player entity spawned in init");
-        self.drive_player(f, 0, player, input.player_intent);
+        self.drive_player(f, 0, player, input.seat(0));
         if let Some(player2) = self.player2 {
-            self.drive_player(f, 1, player2, input.player2_intent);
+            self.drive_player(f, 1, player2, input.seat(1));
         }
     }
 
@@ -2122,15 +2179,25 @@ impl Game {
     /// Insert this frame's fired projectiles - only once no tank query is
     /// active, since hecs can't spawn into a world mid-iteration.
     fn spawn_pending(&mut self, f: &mut Frame) {
-        for shell in f.pending_shells.drain(..) {
+        for mut shell in f.pending_shells.drain(..) {
+            shell.set_id(self.take_shot_id());
             self.world.spawn((shell,));
         }
-        for plasma in f.pending_plasmas.drain(..) {
+        for mut plasma in f.pending_plasmas.drain(..) {
+            plasma.set_id(self.take_shot_id());
             self.world.spawn((plasma,));
         }
-        for bullet in f.pending_bullets.drain(..) {
+        for mut bullet in f.pending_bullets.drain(..) {
+            bullet.set_id(self.take_shot_id());
             self.world.spawn((bullet,));
         }
+    }
+
+    /// The next projectile id: one counter for shells, bullets and plasma,
+    /// starting at 1 each round, never reused. No RNG.
+    fn take_shot_id(&mut self) -> u32 {
+        self.next_shot_id += 1;
+        self.next_shot_id
     }
 
     /// Lasers have no travel time: each queued beam is swept over its whole
@@ -2314,7 +2381,7 @@ impl Game {
     /// head-on can pass through each other between frames. Same-side pairs
     /// (a twin volley, two different enemies' shells) never cancel.
     fn shell_vs_shell(&mut self, f: &mut Frame) {
-        let flying: Vec<(Entity, Position, Vector2, Owner)> = self
+        let flying: Vec<(Entity, Position, Vec2, Owner)> = self
             .world
             .query::<(Entity, &Shell)>()
             .iter()
@@ -2372,7 +2439,7 @@ impl Game {
             entity: Entity,
             prev: Position,
             pos: Position,
-            vel: Vector2,
+            vel: Vec2,
             owner: Owner,
             dmg: (f32, f32),
         }
@@ -2449,7 +2516,7 @@ impl Game {
             let bounced = {
                 let mut q = self.world.query_one::<&mut P>(entity);
                 let p = q.get().expect("projectile collected this frame still exists");
-                match target {
+                let bounced = match target {
                     ShellTarget::Obstacle(e) => f.terrain.obstacle(e).is_some_and(|b| {
                         // The projectile's own rule (shells off Iron), or a
                         // barrel's chance deflection. Zero chance draws no RNG.
@@ -2462,9 +2529,11 @@ impl Game {
                         }
                     }),
                     _ => false,
-                }
+                };
+                bounced.then(|| p.heading())
             };
-            if bounced {
+            if let Some(heading) = bounced {
+                f.events.push(Event::Ricochet { slot: owner.slot(), x: hit_pos.x, y: hit_pos.y, heading });
                 continue;
             }
             {
@@ -2477,7 +2546,7 @@ impl Game {
                 continue;
             }
             let len = (vel.x * vel.x + vel.y * vel.y).sqrt().max(f32::EPSILON);
-            let dir = Vector2::new(vel.x / len, vel.y / len);
+            let dir = Vec2::new(vel.x / len, vel.y / len);
             let effects = HitEffects {
                 knockback: P::knockback_speed().map(|speed| (dir, speed)),
                 frog_hop: P::frog_hops().then_some(vel),
@@ -2648,7 +2717,7 @@ impl Game {
     /// neighbours: destruction is rare, the pass is one HashSet build plus
     /// a few lookups per tile, and a full rebuild cannot drift out of sync
     /// the way an incremental update can.
-    fn refresh_edge_masks(&mut self) {
+    pub(crate) fn refresh_edge_masks(&mut self) {
         let cells: HashSet<(i32, i32)> = self
             .world
             .query::<&Obstacle>()
@@ -3752,7 +3821,7 @@ fn lay_tracks(tracks: &mut Vec<Track>, tank: &mut Tank, before: Position, depth:
         return;
     }
     // Unit vector pointing back along this frame's travel.
-    let back = Vector2::new((before.x - tank.position.x) / moved, (before.y - tank.position.y) / moved);
+    let back = Vec2::new((before.x - tank.position.x) / moved, (before.y - tank.position.y) / moved);
     let mut heading = (-back.x).atan2(back.y).to_degrees();
     if heading < 0.0 {
         heading += 360.0;
@@ -4157,9 +4226,66 @@ mod mechanics_tests {
     fn drive(game: &mut Game, dir: Option<Dir>, frames: usize) {
         for _ in 0..frames {
             let mut input = Input::default();
-            input.player_intent.move_dir = dir;
+            input.seats[0].move_dir = dir;
             step(game, input);
         }
+    }
+
+    /// `Input::held_only` is the input for a rendered frame's second and
+    /// later steps: the held state stays, the one-shot presses are spent.
+    #[test]
+    fn held_only_spends_the_presses_and_keeps_the_held_state() {
+        let mut input = Input::two(Intent { move_dir: Some(Dir::Up), fire: true, ..Intent::default() }, Intent { fire: true, ..Intent::default() });
+        input.pause_pressed = true;
+        input.restart_pressed = true;
+        input.toggle_shadows_pressed = true;
+        input.cycle_overlays_pressed = true;
+        let later = input.held_only();
+        assert_eq!(later.seats[0].move_dir, Some(Dir::Up));
+        assert!(later.seats[0].fire && later.seats[1].fire);
+        assert!(!later.pause_pressed && !later.restart_pressed && !later.toggle_shadows_pressed && !later.cycle_overlays_pressed);
+    }
+
+    /// `Input::or_presses` folds a frame that ran no step into the next:
+    /// its fire keys and toggles are still pressed, its directions are
+    /// not, and a seat past the array reads as idle.
+    #[test]
+    fn or_presses_carries_fire_and_toggles_but_never_a_direction() {
+        let mut missed = Input::two(Intent { move_dir: Some(Dir::Left), fire: true, ..Intent::default() }, Intent { move_dir: Some(Dir::Down), ..Intent::default() });
+        missed.restart_pressed = true;
+        let now = Input::single(Intent { move_dir: Some(Dir::Right), ..Intent::default() }).or_presses(missed);
+        assert_eq!(now.seats[0].move_dir, Some(Dir::Right));
+        assert!(now.seats[0].fire, "the tap between two steps still fires");
+        assert_eq!(now.seats[1].move_dir, None);
+        assert!(!now.seats[1].fire);
+        assert!(now.restart_pressed && !now.pause_pressed);
+        assert_eq!(now.seat(MAX_SEATS).move_dir, None);
+        assert!(!now.seat(MAX_SEATS + 3).fire);
+    }
+
+    /// The round reads the first `players.count()` seats and nothing
+    /// else: in a single-player round seat 1 can neither skip the mission
+    /// banner nor fire, while seat 0 skips it at once.
+    #[test]
+    fn a_single_player_round_ignores_the_second_seat() {
+        let intro_round = || {
+            let mut game = game_on(OPEN_MAP, 1, Some(0));
+            game.show_intro = true;
+            game.init(W, H);
+            assert!(game.intro_timer > 0.0, "the banner is up");
+            game
+        };
+        let mut game = intro_round();
+        let mut seat1 = Input::default();
+        seat1.seats[1] = Intent { move_dir: Some(Dir::Up), fire: true, ..Intent::default() };
+        for _ in 0..3 {
+            step(&mut game, seat1);
+        }
+        assert!(game.intro_timer > 0.0, "seat 1 is not read with one player");
+        assert!(!game.events().iter().any(|e| matches!(e, Event::Fired { .. })));
+        let mut game = intro_round();
+        step(&mut game, Input::single(Intent { fire: true, ..Intent::default() }));
+        assert_eq!(game.intro_timer, 0.0, "seat 0 skips the banner");
     }
 
     /// The frame's routing grid prices the cells down the player's
@@ -4207,7 +4333,7 @@ mod mechanics_tests {
         // A shell fired from the same spot crosses the whole lake and
         // lands on the wall beyond it.
         let mut input = Input::default();
-        input.player_intent.fire = true;
+        input.seats[0].fire = true;
         step(&mut game, input);
         for _ in 0..240 {
             step(&mut game, Input::default());
@@ -4378,7 +4504,7 @@ mod mechanics_tests {
         game.init(W, H);
         assert!(game.intro_timer > 0.0);
         let mut input = Input::default();
-        input.player_intent.fire = true;
+        input.seats[0].fire = true;
         step(&mut game, input);
         assert_eq!(game.intro_timer, 0.0, "fire skips the intro");
         step(&mut game, Input::default());
@@ -5053,7 +5179,7 @@ cells."30,20" = { kind = "frog" }
         let a = map::cell_to_world(10, 11);
         let b = map::cell_to_world(30, 11);
         assert_eq!(game.portals(), &[a, b]);
-        let right = Input { player_intent: Intent { move_dir: Some(Dir::Right), ..Intent::default() }, ..Input::default() };
+        let right = Input::single(Intent { move_dir: Some(Dir::Right), ..Intent::default() });
         let mut hop = None;
         for _ in 0..600 {
             step(&mut game, right);
@@ -5102,7 +5228,7 @@ cells."30,20" = { kind = "frog" }
             step(&mut game, Input::default());
         }
         assert_eq!(game.world.get::<&Tank>(player).unwrap().portal_cooldown, 0.0, "off the portal the cooldown ran out");
-        let up = Input { player_intent: Intent { move_dir: Some(Dir::Up), ..Intent::default() }, ..Input::default() };
+        let up = Input::single(Intent { move_dir: Some(Dir::Up), ..Intent::default() });
         let mut hopped_back = false;
         for _ in 0..240 {
             step(&mut game, up);
@@ -5123,7 +5249,7 @@ cells."30,20" = { kind = "frog" }
         assert!(!game.portals_active());
         assert_eq!(game.portals().len(), 1);
         assert!(game.nav_grid(W, H).portal_cells().is_empty());
-        let right = Input { player_intent: Intent { move_dir: Some(Dir::Right), ..Intent::default() }, ..Input::default() };
+        let right = Input::single(Intent { move_dir: Some(Dir::Right), ..Intent::default() });
         let mut reached = false;
         for _ in 0..600 {
             step(&mut game, right);
@@ -5175,7 +5301,7 @@ cells."30,20" = { kind = "frog" }
         }
         let mut game = game_on(&map, 0, None);
         assert!(game.portals_active());
-        let right = Input { player_intent: Intent { move_dir: Some(Dir::Right), ..Intent::default() }, ..Input::default() };
+        let right = Input::single(Intent { move_dir: Some(Dir::Right), ..Intent::default() });
         let a = map::cell_to_world(10, 11);
         let mut on_portal = false;
         for _ in 0..600 {
@@ -5464,10 +5590,7 @@ cells."30,20" = { kind = "frog" }
 
     fn fire_once(row: i32) -> i32 {
         let mut game = game_on(OPEN_MAP, 1, Some(row));
-        let fire = Input {
-            player_intent: Intent { fire: true, ..Intent::default() },
-            ..Input::default()
-        };
+        let fire = Input::single(Intent { fire: true, ..Intent::default() });
         step(&mut game, fire);
         for _ in 0..10 {
             step(&mut game, Input::default());
@@ -5488,10 +5611,7 @@ cells."30,20" = { kind = "frog" }
         assert!(game.events().is_empty(), "{:?}", game.events());
 
         let mut game = game_on(OPEN_MAP, 1, Some(0));
-        let fire = Input {
-            player_intent: Intent { fire: true, ..Intent::default() },
-            ..Input::default()
-        };
+        let fire = Input::single(Intent { fire: true, ..Intent::default() });
         step(&mut game, fire);
         assert!(
             game.events().iter().any(|e| matches!(e, Event::Fired { slot: 0, weapon: "shell" })),
@@ -5555,6 +5675,45 @@ cells."30,20" = { kind = "frog" }
         assert!(out, "enemy still inside the box at ({:.0},{:.0})", enemy.position.x, enemy.position.y);
     }
 
+    /// Three iron tiles across the player's line of fire, two cells up.
+    const IRON_BAR_MAP: &str = r#"
+version = 1
+tanks = 0
+cells."20,11" = { kind = "start" }
+cells."19,8" = { kind = "wall", material = "iron" }
+cells."20,8" = { kind = "wall", material = "iron" }
+cells."21,8" = { kind = "wall", material = "iron" }
+"#;
+
+    /// A shell that bounces off iron says so once - `Event::Ricochet` with
+    /// the heading it flies on along - and keeps flying until it lands
+    /// somewhere else.
+    #[test]
+    fn a_shell_off_iron_ricochets_once_and_flies_on() {
+        let mut game = game_on(IRON_BAR_MAP, 0, Some(0));
+        let player = game.player.expect("player");
+        with_tank_mut(&game.world, player, |t| t.control(None, Some(Dir::Up)));
+        step(&mut game, Input::single(Intent { fire: true, ..Intent::default() }));
+        let (mut ricochets, mut headings, mut landed_after) = (0, Vec::new(), false);
+        for _ in 0..240 {
+            step(&mut game, Input::default());
+            for e in game.events() {
+                match *e {
+                    Event::Ricochet { slot: 0, heading, .. } => {
+                        ricochets += 1;
+                        headings.push(heading);
+                        assert!(game.world.query::<&Shell>().iter().any(|s| s.state == ShellState::Flying), "still flying");
+                    }
+                    Event::Hit { target: HitTarget::Wall, .. } if ricochets > 0 => landed_after = true,
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(ricochets, 1, "one bounce per shell (`shell_ricochet_bounces`)");
+        assert!((headings[0] - 180.0).abs() < 1.0, "reflected straight back down, got {}", headings[0]);
+        assert!(landed_after, "the shell flew on to the boundary wall");
+    }
+
     #[test]
     fn a_twin_barrel_shot_costs_two_shells_and_a_single_costs_one() {
         let full = tuning().max_shells;
@@ -5565,10 +5724,7 @@ cells."30,20" = { kind = "frog" }
     #[test]
     fn a_held_fire_key_fires_shells_only_once() {
         let mut game = game_on(OPEN_MAP, 1, Some(0));
-        let fire = Input {
-            player_intent: Intent { fire: true, ..Intent::default() },
-            ..Input::default()
-        };
+        let fire = Input::single(Intent { fire: true, ..Intent::default() });
         for _ in 0..30 {
             step(&mut game, fire);
         }

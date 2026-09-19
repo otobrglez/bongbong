@@ -1,7 +1,7 @@
-use sola_raylib::prelude::*;
+use math::Vec2;
 
-/// A 2D screen position in pixels.
-pub type Position = Vector2;
+/// A 2D position in field pixels (y down); `math::Vec2` is the vector type.
+pub type Position = math::Vec2;
 
 // scifi_tanks_sheet.png is a 416x384 atlas: 13 columns x 12 rows of 32x32
 // tiles (see docs/SPRITESHEET_SPEC.md for the full authored spec). Each row
@@ -373,6 +373,14 @@ pub const KEYBOARD_AVAILABLE: bool = !cfg!(any(target_os = "ios", target_os = "a
 /// dev tools may set it - but no player-facing path reaches it.
 pub const TWO_PLAYERS_AVAILABLE: bool = KEYBOARD_AVAILABLE;
 
+/// How many human seats one round can carry: the width of
+/// `simulation::Input::seats` and of every per-seat array in `Game`. A
+/// round reads only the first `Game::players.count()` seats (one or two
+/// today, docs/two-players.md); the rest are the online co-op roster's
+/// (docs/online-coop-prd.md §4.11) and read as "no input" until then. The
+/// single source of the number - a net layer sizes its roster from here.
+pub const MAX_SEATS: usize = 8;
+
 // The HUD bar above the battlefield (docs/hud-and-builder-layout-design.md,
 // variant A): one obstacle cell tall, so the pickup icons sit in it
 // full-bleed and the window stays 1280 wide. The battlefield keeps its own
@@ -397,7 +405,7 @@ impl Rect {
         Rect { x, y, w, h }
     }
 
-    pub fn contains(&self, p: Vector2) -> bool {
+    pub fn contains(&self, p: Vec2) -> bool {
         p.x >= self.x && p.x < self.x + self.w && p.y >= self.y && p.y < self.y + self.h
     }
 }
@@ -439,16 +447,16 @@ impl Layout {
     }
 
     /// Where the field's (0, 0) lands in the window.
-    pub fn field_origin(&self) -> Vector2 {
-        Vector2::new(self.field.x, self.field.y)
+    pub fn field_origin(&self) -> Vec2 {
+        Vec2::new(self.field.x, self.field.y)
     }
 
     /// A window position as a field position - what the simulation and the
     /// editor's grid want. Outside the field the result is out of range
     /// rather than clamped, so a click on the bar is not a click on the
     /// top row of cells.
-    pub fn to_field(&self, window: Vector2) -> Vector2 {
-        Vector2::new(window.x - self.field.x, window.y - self.field.y)
+    pub fn to_field(&self, window: Vec2) -> Position {
+        Position::new(window.x - self.field.x, window.y - self.field.y)
     }
 }
 
@@ -459,16 +467,24 @@ impl Layout {
 // rendered, so the exact value doesn't matter as long as it's comfortably
 // more than a tank can move in one physics step.
 pub const WALL_THICKNESS: f32 = 100.0;
-// The physics world steps at a fixed rate regardless of render frame rate,
-// so contact resolution stays consistent; `Game::update` accumulates real
-// frame time and drains it in this many fixed chunks. Matches
-// rapier2d::prelude::IntegrationParameters::default().dt.
+// The simulation's step: every driver of `Game::update` - the windowed
+// loop's `StepClock` in app.rs, the dev server's lockstep `step`, the probe
+// and the tests - passes exactly this `dt`, so one update is one step and a
+// round replays bit-for-bit from its seed whatever the display's refresh
+// rate. `Game::step_world` still drains the `dt` it is given in chunks of
+// this size, so a caller with a larger `dt` gets several physics steps in
+// one update. Matches rapier2d::prelude::IntegrationParameters::default().dt.
 pub const PHYSICS_FIXED_DT: f32 = 1.0 / 60.0;
-// Caps how much real time a single frame's accumulator can catch up on, so a
-// long stall (window drag, backgrounded tab) doesn't dump a burst of extra
-// physics steps once it resumes (the classic fixed-timestep "spiral of
-// death").
+// Caps how much real time `step_world`'s own accumulator can catch up on
+// inside one update, so a caller passing a long `dt` never dumps a burst of
+// physics steps (the classic fixed-timestep "spiral of death").
 pub const PHYSICS_MAX_CATCHUP_SECONDS: f32 = 0.25;
+// The most simulation steps one rendered frame may run (app.rs's
+// `StepClock`): a frame that owes more - a window drag, a backgrounded tab,
+// a slow machine - runs this many and drops the rest, so the round falls
+// behind real time instead of spiralling. Four steps are 67 ms, enough to
+// absorb an ordinary hitch on a 60 Hz display without a visible skip.
+pub const SIM_MAX_STEPS_PER_FRAME: u32 = 4;
 
 // Obstacles: static battlefield terrain (see obstacle.rs), placed once per
 // round alongside enemies, built from one of four materials
@@ -832,7 +848,7 @@ pub const MINIGUN_MOUNT_SCALE: f32 = 1.0;
 pub const PLASMA_TEXTURE_SIZE: f32 = 32.0;
 // Bigger than SHELL_SCALE (2.0) - a plasma bolt reads as visibly larger and
 // heavier than a normal shell, matching its bigger damage per hit. Also
-// scales the in-flight pulse glow (see `plasma::glow_pulse`'s `base_radius`),
+// scales the in-flight pulse glow (see `render::plasma::glow_pulse`'s `base_radius`),
 // so this one constant sizes the whole effect. 2.08 = the original 2.6
 // tuning, reduced 20% after it read too big on screen.
 pub const PLASMA_SCALE: f32 = 2.08;
@@ -889,6 +905,14 @@ pub fn parse_seed(s: &str) -> Result<u64, String> {
     }
 }
 
+// The presentation - `app` and `render` - and the two binaries that
+// need it are behind the `render` feature (Cargo.toml); everything else
+// builds headless. `game.rs`, `hud.rs` and `editor/` keep their plain
+// halves here (the field painted over `canvas::Canvas`, the bar's model
+// and hit rects, the builder's edit model) and their raylib halves under
+// `render/` and `editor/render.rs`.
+#[cfg(feature = "render")]
+pub mod app;
 pub mod ai;
 pub mod battlefield;
 pub mod blast;
@@ -912,13 +936,17 @@ pub mod laser;
 pub mod level;
 pub mod map;
 pub mod mode;
+pub mod net;
 pub mod maplint;
+pub mod math;
 pub mod obstacle;
 pub mod pathfind;
 pub mod physics;
 pub mod portal;
 pub mod pickup;
 pub mod plasma;
+#[cfg(feature = "render")]
+pub mod render;
 pub mod shell;
 pub mod shockwave;
 pub mod simulation;
@@ -929,4 +957,3 @@ pub mod track;
 pub mod trig;
 pub mod tuning;
 pub mod view;
-pub mod app;

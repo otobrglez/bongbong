@@ -9,10 +9,10 @@
 use crate::tuning::tuning;
 use crate::ai::Intent;
 use crate::editor::{BuilderInput, CliOverrides, EditorTextures};
-use crate::game::{Effects, Textures};
+use crate::render::game::{Effects, Textures};
 use crate::hud::{leave_dialog_rects, mode_button_rect, players_button_rect, players_dialog_rects, restart_button_rect, BAR_FILL};
 use crate::mode::{Driver, Session};
-use crate::shockwave::{RippleFx, RippleTuning};
+use crate::render::shockwave::{RippleFx, RippleTuning};
 use crate::simulation::{Game, Input, PlayerCount};
 use crate::tuning;
 use crate::tank::{Dir, TankKind};
@@ -20,6 +20,8 @@ use crate::touch::TouchPoint;
 use crate::view::{ScaleCap, View};
 use crate::{
     Layout,
+    PHYSICS_FIXED_DT,
+    SIM_MAX_STEPS_PER_FRAME,
 };
 use clap::Parser;
 use sola_raylib::core::game_loop;
@@ -28,7 +30,7 @@ use sola_raylib::prelude::{KeyboardKey, RaylibHandle};
 /// This frame's raw movement/fire commands for both players, from the
 /// keyboard. `fire` is the raw held state - whether it actually fires
 /// (edge-triggered for shells, full-auto while a laser is charged) is
-/// `Game::update`'s call, not this function's; see `Input::player_intent`.
+/// `Game::update`'s call, not this function's; see `Input::seats`.
 /// Player 1 is always the arrows + Space; with two players, player 2 is
 /// WASD + Left Shift, otherwise idle (docs/two-players.md).
 fn gather_intents(rl: &RaylibHandle, players: PlayerCount) -> (Intent, Intent) {
@@ -77,6 +79,45 @@ fn left_shift_down(_rl: &RaylibHandle) -> bool {
 #[cfg(not(target_os = "emscripten"))]
 fn left_shift_down(rl: &RaylibHandle) -> bool {
     rl.is_key_down(KeyboardKey::KEY_LEFT_SHIFT)
+}
+
+/// The play clock: real frame time paid out in whole simulation steps of
+/// `PHYSICS_FIXED_DT`, so `Game::update` always sees the step the dev
+/// server, the probe and a replay see (docs/online-coop-prd.md §4.1). A
+/// rendered frame runs the steps it has accumulated - none on every other
+/// frame of a 120 Hz display, one per frame at 60 Hz, two after a hitch -
+/// and at most `SIM_MAX_STEPS_PER_FRAME`: a frame owing more runs the cap
+/// and forgets the rest, so a stall costs the round real time, never a
+/// spiral of catch-up steps.
+#[derive(Default)]
+struct StepClock {
+    /// Real seconds not yet paid out as a step, below one step after
+    /// `advance`.
+    owed: f32,
+}
+
+impl StepClock {
+    /// Add a rendered frame's `dt` and take the steps it pays for.
+    fn advance(&mut self, dt: f32) -> u32 {
+        let cap = SIM_MAX_STEPS_PER_FRAME as f32 * PHYSICS_FIXED_DT;
+        self.owed = (self.owed + dt.max(0.0)).min(cap);
+        let mut steps = 0;
+        while self.owed >= PHYSICS_FIXED_DT && steps < SIM_MAX_STEPS_PER_FRAME {
+            self.owed -= PHYSICS_FIXED_DT;
+            steps += 1;
+        }
+        if steps == SIM_MAX_STEPS_PER_FRAME {
+            self.owed = 0.0;
+        }
+        steps
+    }
+
+    /// Forget what is owed: the round was not running (a dialog, the
+    /// builder, the dev server's freeze), so it resumes on a fresh step
+    /// rather than a burst for the time it stood still.
+    fn reset(&mut self) {
+        self.owed = 0.0;
+    }
 }
 
 /// Command-line flags for bongbong's native binary. All optional - with none
@@ -532,9 +573,9 @@ pub fn run(args: Args) {
     // `Frog::variant` (rolled per round in `Game::init`) picks which one
     // `game.rs::render` draws from. Loaded up front like every other
     // texture, kept alive for the whole game loop.
-    let frog_textures: Vec<crate::frog::FrogVariantTextures> = crate::frog::FROG_VARIANT_DIRS
+    let frog_textures: Vec<crate::render::frog::FrogVariantTextures> = crate::frog::FROG_VARIANT_DIRS
         .iter()
-        .map(|dir| crate::frog::FrogVariantTextures {
+        .map(|dir| crate::render::frog::FrogVariantTextures {
             idle: rl
                 .load_texture(&thread, &format!("static/toxic_frog/{dir}/idle.png"))
                 .expect("failed loading frog idle texture"),
@@ -740,6 +781,10 @@ pub fn run(args: Args) {
     } else {
         120
     };
+    // The round's clock and the input of a frame that ran no step (its
+    // presses are owed to the next step - see `Input::or_presses`).
+    let mut clock = StepClock::default();
+    let mut carried = Input::default();
     game_loop::run(rl, thread, target_fps, move |rl, thread| {
         // Frame boundary, first: dev-server requests (state reads and
         // writes, tuning patches, an armed step or screenshot), so anything
@@ -826,15 +871,15 @@ pub fn run(args: Args) {
         let mouse_held = rl.is_mouse_button_down(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_LEFT);
         // Every pointer is read in bitmap pixels: the bar, the dialogs and
         // the builder hit-test there and never learn what the window is.
-        let pointer = view.to_bitmap(if touching { rl.get_touch_position(0) } else { rl.get_mouse_position() });
+        let pointer = view.to_bitmap(if touching { rl.get_touch_position(0).into() } else { rl.get_mouse_position().into() });
         // This frame's touch points for the touch scheme, ids included so
         // a stick follows its own finger. `--touch-from-mouse` stands a
         // held left button in for one.
         let mut touch_points: Vec<TouchPoint> = (0..rl.get_touch_point_count())
-            .map(|i| TouchPoint { id: rl.get_touch_point_id(i), pos: view.to_bitmap(rl.get_touch_position(i)) })
+            .map(|i| TouchPoint { id: rl.get_touch_point_id(i), pos: view.to_bitmap(rl.get_touch_position(i).into()) })
             .collect();
         if touch_from_mouse && mouse_held && touch_points.is_empty() {
-            touch_points.push(TouchPoint { id: -1, pos: view.to_bitmap(rl.get_mouse_position()) });
+            touch_points.push(TouchPoint { id: -1, pos: view.to_bitmap(rl.get_mouse_position().into()) });
         }
         let steer_right = tuning().touch_steer_side != 0;
         let pressed = mouse_pressed || touch_pressed;
@@ -858,11 +903,11 @@ pub fn run(args: Args) {
                     let rects = players_dialog_rects(layout.field);
                     let field_p = layout.to_field(pointer);
                     if pressed {
-                        if rects.one.check_collision_point_rec(field_p) {
+                        if rects.one.contains(field_p) {
                             session.answer_players(PlayerCount::One);
-                        } else if rects.two.check_collision_point_rec(field_p) {
+                        } else if rects.two.contains(field_p) {
                             session.answer_players(PlayerCount::Two);
-                        } else if !rects.panel.check_collision_point_rec(field_p) {
+                        } else if !rects.panel.contains(field_p) {
                             session.close_players_dialog();
                         }
                     }
@@ -885,10 +930,10 @@ pub fn run(args: Args) {
                     let rects = leave_dialog_rects(layout.field);
                     let field_p = layout.to_field(pointer);
                     if pressed {
-                        if rects.leave.check_collision_point_rec(field_p) {
+                        if rects.leave.contains(field_p) {
                             session.answer_dialog(true);
-                        } else if rects.stay.check_collision_point_rec(field_p)
-                            || !rects.panel.check_collision_point_rec(field_p)
+                        } else if rects.stay.contains(field_p)
+                            || !rects.panel.contains(field_p)
                         {
                             session.answer_dialog(false);
                         }
@@ -898,16 +943,16 @@ pub fn run(args: Args) {
                     } else if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) || tab {
                         session.answer_dialog(false);
                     }
-                } else if tab || (pressed && mode_button_rect(layout.panel).check_collision_point_rec(pointer)) {
+                } else if tab || (pressed && mode_button_rect(layout.panel).contains(pointer)) {
                     session.press_build();
                 } else if crate::TWO_PLAYERS_AVAILABLE
                     && pressed
-                    && players_button_rect(layout.panel).check_collision_point_rec(pointer)
+                    && players_button_rect(layout.panel).contains(pointer)
                 {
                     session.press_players();
                 } else if !crate::KEYBOARD_AVAILABLE
                     && pressed
-                    && restart_button_rect(layout.panel).check_collision_point_rec(pointer)
+                    && restart_button_rect(layout.panel).contains(pointer)
                 {
                     // The RESTART button stands in for the R key: staged the
                     // way the dev panel's button is, it becomes this frame's
@@ -945,8 +990,11 @@ pub fn run(args: Args) {
         if session.mode() == Driver::Build {
             // Nothing is steering while the builder is up, but the scheme
             // still sees the frame so a finger lifted here is not a stick
-            // still held when play resumes.
+            // still held when play resumes - on a fresh clock, owing no
+            // step and no press.
             touch.update(&touch_points, &layout, steer_right, dt);
+            clock.reset();
+            carried = Input::default();
             session.builder.render(
                 rl,
                 thread,
@@ -991,26 +1039,25 @@ pub fn run(args: Args) {
         // itself decides what to do with it (e.g. whether a wreck can move),
         // so nothing simulation-related needs to know a `RaylibHandle`
         // exists. See simulation.rs's module doc comment.
-        let (mut player_intent, player2_intent) = gather_intents(rl, session.game.players);
+        let (mut player1, player2) = gather_intents(rl, session.game.players);
         // A touch screen drives player 1 through the same intent the
         // keyboard does; a held key still wins the direction, a tap or a
         // key both fire. Fed every frame, dialog or not, so a lifted
         // finger is never a stick still held.
         let touch_intent = touch.update(&touch_points, &layout, steer_right, dt);
-        player_intent.move_dir = player_intent.move_dir.or(touch_intent.move_dir);
-        player_intent.fire = player_intent.fire || touch_intent.fire;
-        let input = Input {
-            player_intent,
-            player2_intent,
-            pause_pressed: rl.is_key_pressed(KeyboardKey::KEY_P),
-            // The dev panel's "Restart round" button lands here too, as if
-            // R had been pressed - the simulation never learns a browser
-            // exists.
-            restart_pressed: rl.is_key_pressed(KeyboardKey::KEY_R) || tuning::take_restart_request(),
-            toggle_shadows_pressed: rl.is_key_pressed(KeyboardKey::KEY_L),
-            // The I key is inert in a release build: overlays are dev-only.
-            cycle_overlays_pressed: cfg!(feature = "dev-tools") && rl.is_key_pressed(KeyboardKey::KEY_I),
-        };
+        player1.move_dir = player1.move_dir.or(touch_intent.move_dir);
+        player1.fire = player1.fire || touch_intent.fire;
+        let mut input = Input::two(player1, player2);
+        input.pause_pressed = rl.is_key_pressed(KeyboardKey::KEY_P);
+        // The dev panel's "Restart round" button lands here too, as if R
+        // had been pressed - the simulation never learns a browser exists.
+        input.restart_pressed = rl.is_key_pressed(KeyboardKey::KEY_R) || tuning::take_restart_request();
+        input.toggle_shadows_pressed = rl.is_key_pressed(KeyboardKey::KEY_L);
+        // The I key is inert in a release build: overlays are dev-only.
+        input.cycle_overlays_pressed = cfg!(feature = "dev-tools") && rl.is_key_pressed(KeyboardKey::KEY_I);
+        // A press from a frame that ran no step is still owed to the
+        // next one.
+        let input = input.or_presses(carried);
         // Injected input (the dev server's `input` tool) replaces the
         // keyboard's intent for as many frames as it asked.
         #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
@@ -1019,15 +1066,28 @@ pub fn run(args: Args) {
             None => input,
         };
 
-        // With the dev server attached it owns the advance: real-time
-        // updates normally, lockstep `step`s at the fixed timestep when
-        // asked, nothing at all while frozen. While the leave dialog is up
-        // nobody advances.
+        // The round advances in whole steps of `PHYSICS_FIXED_DT`, as many
+        // as this frame's real time pays for (`StepClock`), every step on
+        // this frame's input with the one-shot presses spent by the first.
+        // With the dev server attached it runs those steps, or a lockstep
+        // `step`'s own frames, or nothing while frozen - and a frozen or
+        // dialog frame leaves the clock at zero, so the round resumes on a
+        // fresh step rather than catching up on the time it stood still.
         if session.playing() {
+            #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+            let frozen = dev.as_ref().is_some_and(|dev| dev.lockstep());
+            #[cfg(not(all(feature = "dev-tools", not(target_os = "emscripten"))))]
+            let frozen = false;
+            let steps = if frozen {
+                clock.reset();
+                0
+            } else {
+                clock.advance(dt)
+            };
             #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
             let advanced = match &mut dev {
                 Some(dev) => {
-                    dev.advance(&mut session.game, input, dt, width, height);
+                    dev.advance(&mut session.game, input, steps, width, height, &mut |game| fx.observe_events(game));
                     true
                 }
                 None => false,
@@ -1035,13 +1095,24 @@ pub fn run(args: Args) {
             #[cfg(not(all(feature = "dev-tools", not(target_os = "emscripten"))))]
             let advanced = false;
             if !advanced {
-                session.game.update(input, dt, width, height);
+                for i in 0..steps {
+                    let step_input = if i == 0 { input } else { input.held_only() };
+                    session.game.update(step_input, PHYSICS_FIXED_DT, width, height);
+                    // The particle layer reads each step's events before
+                    // the next step clears them.
+                    fx.observe_events(&session.game);
+                }
             }
+            carried = if steps == 0 && !frozen { input } else { Input::default() };
+        } else {
+            clock.reset();
+            carried = Input::default();
         }
         let game = &session.game;
-        // Between the update and the draw: the particle layer reads the
-        // frame's events and the world it just produced, then ages what is
-        // already in flight. Deliberately not inside `Game` - see fx.rs.
+        // Between the steps and the draw: the particle layer samples the
+        // world the round is at (its events it read after each step),
+        // then ages what is already in flight. Deliberately not inside
+        // `Game` - see fx.rs.
         fx.observe(game, dt);
         fx.tick(dt);
         game.render(
@@ -1132,5 +1203,41 @@ impl FrameStats {
             );
             *self = Self { last_report: now, ..Self::default() };
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A 120 Hz display pays for a step every other frame, a 60 Hz one
+    /// every frame, and the round never falls behind either: over a second
+    /// both run sixty steps.
+    #[test]
+    fn the_step_clock_pays_real_time_out_in_whole_steps() {
+        let mut clock = StepClock::default();
+        let per_frame: Vec<u32> = (0..8).map(|_| clock.advance(1.0 / 120.0)).collect();
+        assert_eq!(per_frame, vec![0, 1, 0, 1, 0, 1, 0, 1]);
+        let mut clock = StepClock::default();
+        assert!((0..600).all(|_| clock.advance(1.0 / 60.0) == 1), "one step per 60 Hz frame, no drift");
+        let mut clock = StepClock::default();
+        assert_eq!((0..120).map(|_| clock.advance(1.0 / 120.0)).sum::<u32>(), 60);
+        let mut clock = StepClock::default();
+        assert!((0..30).all(|_| clock.advance(1.0 / 30.0) == 2), "two steps per 30 Hz frame");
+    }
+
+    /// A stall runs the cap and forgets the rest: the next frame owes
+    /// nothing extra, and a reset clock owes nothing at all.
+    #[test]
+    fn the_step_clock_caps_a_stall_and_drops_the_remainder() {
+        let mut clock = StepClock::default();
+        assert_eq!(clock.advance(2.0), SIM_MAX_STEPS_PER_FRAME);
+        assert_eq!(clock.advance(0.0), 0);
+        assert_eq!(clock.advance(1.0 / 60.0), 1);
+        let mut clock = StepClock::default();
+        clock.advance(0.9 / 60.0);
+        clock.reset();
+        assert_eq!(clock.advance(0.2 / 60.0), 0, "a reset forgets the time owed");
+        assert_eq!(clock.advance(-1.0), 0, "a negative dt owes nothing");
     }
 }

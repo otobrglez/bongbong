@@ -473,21 +473,14 @@ struct Args {
     heatmap: bool,
 }
 
-/// Both players' input for `frame`: player 1 on `--scenario`, player 2 on
+/// Both players' input for `frame`: seat 0 on `--scenario`, seat 1 on
 /// `--p2-scenario` (idle in a single-player round).
 fn input_for_frame(args: &Args, frame: u32) -> Input {
-    let player2_intent = if args.players == 2 {
-        intent_for_frame(args.p2_scenario.unwrap_or(args.scenario), frame)
+    let player1 = intent_for_frame(args.scenario, frame);
+    if args.players == 2 {
+        Input::two(player1, intent_for_frame(args.p2_scenario.unwrap_or(args.scenario), frame))
     } else {
-        Intent::default()
-    };
-    Input {
-        player_intent: intent_for_frame(args.scenario, frame),
-        player2_intent,
-        pause_pressed: false,
-        restart_pressed: false,
-        toggle_shadows_pressed: false,
-        cycle_overlays_pressed: false,
+        Input::single(player1)
     }
 }
 

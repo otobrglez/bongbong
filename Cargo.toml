@@ -8,11 +8,17 @@ repository = "https://github.com/otobrglez/bongbong"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 hecs = "0.11"
+# The online co-op wire codec (src/net/, docs/online-coop-prd.md §4.3):
+# compact serde binary for every message but the lobby's JSON. `use-std`
+# for the `Vec` encoders and `std::error::Error` on its error type.
+postcard = { version = "1", features = ["use-std"] }
 rand = "0.10.2"
 rapier2d = "0.35.3"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1"
-sola-raylib = { version = "6.3.0" }
+# The drawing crate, behind the `render` feature (below): the simulation,
+# the probe and the tests never name it.
+sola-raylib = { version = "6.3.0", optional = true }
 toml = "1"
 
 # iOS (docs/ios-native-port-prd.md, CLAUDE.md's iOS section): raylib (SDL
@@ -22,7 +28,7 @@ toml = "1"
 # and OpenGL frameworks; `sdl` drops its GLFW gamepad declaration. Edition
 # 2024 (resolver 3) scopes these features to iOS targets only.
 [target.'cfg(target_os = "ios")'.dependencies]
-sola-raylib = { version = "6.3.0", features = ["nobuild", "sdl"] }
+sola-raylib = { version = "6.3.0", features = ["nobuild", "sdl"], optional = true }
 
 # Android (docs/android-port-prd.md, CLAUDE.md's Android section): raylib's
 # own Android platform, prebuilt by tools/setup_android.sh and linked by
@@ -31,15 +37,23 @@ sola-raylib = { version = "6.3.0", features = ["nobuild", "sdl"] }
 # link args raylib needs; no `sdl` here, raylib drives the NativeActivity
 # itself.
 [target.'cfg(target_os = "android")'.dependencies]
-sola-raylib = { version = "6.3.0", features = ["nobuild"] }
+sola-raylib = { version = "6.3.0", features = ["nobuild"], optional = true }
 
 # The Android shared library lives in its own crate (android/) so the
 # desktop builds never link a cdylib; the root package stays the default
 # member, so `cargo build`/`test`/`watch` here are unchanged.
 [workspace]
-members = ["android", "ntk"]
+members = ["android", "ntk", "server"]
 
 [features]
+default = ["render"]
+# The presentation: raylib and everything that draws with it - `app`, the
+# `render` module, the particle layer, the builder's chrome, the `bongbong`,
+# `bbmcp` and `mapshot` binaries. On for every client build; off
+# (`--no-default-features`) the crate is the headless simulation the probe,
+# the tests and the room server build with no C compiler, no cmake and no
+# raylib (docs/online-coop-prd.md section 4.5).
+render = ["dep:sola-raylib"]
 # Dev/QA-only tooling: the embedded dev server (src/devserver.rs, native)
 # with its `bbmcp` MCP adapter and the debug overlays, and the `extern "C"`
 # tuning API in src/capi.rs that the web page's tuning panel drives
@@ -59,11 +73,25 @@ inherits = "release"
 lto = "thin"
 opt-level = 3
 
+# The windowed game needs the renderer; `probe` stays auto-discovered and
+# builds without it.
+[[bin]]
+name = "bongbong"
+path = "src/main.rs"
+required-features = ["render"]
+
 # The MCP adapter for the dev server (src/devserver.rs,
 # docs/dev-server-design.md). Gated on `dev-tools` so a plain build - and
 # a cargo-dist release archive, which builds without features - never
-# carries it. `probe` stays auto-discovered as before.
+# carries it.
 [[bin]]
 name = "bbmcp"
 path = "src/bin/bbmcp.rs"
-required-features = ["dev-tools"]
+required-features = ["dev-tools", "render"]
+
+# The map thumbnail tool (docs/mapshot-prd.md) decodes and encodes PNGs
+# through raylib's image functions.
+[[bin]]
+name = "mapshot"
+path = "src/bin/mapshot.rs"
+required-features = ["render"]

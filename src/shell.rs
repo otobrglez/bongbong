@@ -1,12 +1,8 @@
 use crate::tuning::tuning;
-use sola_raylib::prelude::*;
+use crate::math::Vec2;
 
 use crate::tank::Tank;
-use crate::{
-    Position,
-    SHELL_SCALE,
-    SHELL_TEXTURE_SIZE,
-};
+use crate::Position;
 
 /// A shell's lifecycle. Each variant maps to a column in shells.png (see
 /// SHELL_VARIANTS for the row dimension) and carries its own on-screen
@@ -24,17 +20,26 @@ pub enum ShellState {
 }
 
 impl ShellState {
-    /// Column of this state in the shells sprite sheet.
-    fn col(self) -> i32 {
-        match self {
-            ShellState::Fire0 => 0,
-            ShellState::Fire1 => 1,
-            ShellState::Fire2 => 2,
-            ShellState::Flying => 3,
-            ShellState::Hit0 => 4,
-            ShellState::Hit1 => 5,
-            ShellState::Hit2 => 6,
-        }
+    /// Every state, in sheet-column order (`col` is the index here).
+    pub const ALL: [ShellState; 7] = [
+        ShellState::Fire0,
+        ShellState::Fire1,
+        ShellState::Fire2,
+        ShellState::Flying,
+        ShellState::Hit0,
+        ShellState::Hit1,
+        ShellState::Hit2,
+    ];
+
+    /// The shells sheet column this state draws from (0..7), which is
+    /// also how the state travels on the wire.
+    pub fn col(self) -> i32 {
+        ShellState::ALL.iter().position(|&s| s == self).expect("every state is in ALL") as i32
+    }
+
+    /// Inverse of `col`; `None` past the last column.
+    pub fn from_col(col: i32) -> Option<ShellState> {
+        usize::try_from(col).ok().and_then(|i| ShellState::ALL.get(i).copied())
     }
 
     /// How long this state is shown (seconds). Flying is time-unbounded
@@ -89,7 +94,7 @@ pub struct Shell {
     pub state: ShellState,
     pub position: Position,
     /// Direction of travel while flying (pixels per second).
-    pub velocity: Vector2,
+    pub velocity: Vec2,
     /// Facing angle in degrees (matches the tank's rotation when fired).
     pub rotation: f32,
     /// Time elapsed in the current state.
@@ -132,6 +137,11 @@ pub struct Shell {
     /// sandbag it sailed over) - skipped by every later hit sweep, since a
     /// segment ending inside a tile would otherwise re-roll it next frame.
     pub passed_over: Vec<hecs::Entity>,
+    /// The round's projectile number, handed out by `Game::spawn_pending`
+    /// from one counter shared with bullets and plasma, so a shot keeps
+    /// one id for its whole flight and no two live shots share one
+    /// (`net::encode` keys shots by it). 0 until spawned into the world.
+    pub id: u32,
 }
 
 impl Shell {
@@ -148,7 +158,7 @@ impl Shell {
     pub fn spawn(tank: &Tank, owner: Owner, aim_offset: f32, lateral_offset: f32) -> Shell {
         let rot = (tank.rotation + aim_offset).to_radians();
         // rotation 0 == facing up (-Y); +90 == right, etc. matches the tank movement.
-        let dir = Vector2::new(rot.sin(), -rot.cos());
+        let dir = Vec2::new(rot.sin(), -rot.cos());
         // Start at the turret/barrel tip, not the tank's own center - see
         // TANK_MUZZLE_FORWARD_OFFSET_BY_ROW for how that distance was
         // measured per tank archetype from the sprite sheet's own published
@@ -164,7 +174,7 @@ impl Shell {
         // TANK_BARREL_LATERAL_OFFSET_BY_ROW's "positive = right barrel"
         // convention.
         let hull_rot = tank.rotation.to_radians();
-        let lateral = Vector2::new(hull_rot.cos(), hull_rot.sin()) * (lateral_offset * tank.scale);
+        let lateral = Vec2::new(hull_rot.cos(), hull_rot.sin()) * (lateral_offset * tank.scale);
         let position = Position::new(
             tank.position.x + dir.x * muzzle + lateral.x,
             tank.position.y + dir.y * muzzle + lateral.y,
@@ -172,7 +182,7 @@ impl Shell {
         Shell {
             state: ShellState::Fire0,
             position,
-            velocity: Vector2::new(dir.x * tuning().shell_speed, dir.y * tuning().shell_speed),
+            velocity: Vec2::new(dir.x * tuning().shell_speed, dir.y * tuning().shell_speed),
             rotation: tank.rotation + aim_offset,
             timer: 0.0,
             done: false,
@@ -183,6 +193,7 @@ impl Shell {
             prev_position: position,
             bounces_left: tuning().shell_ricochet_bounces,
             passed_over: Vec::new(),
+            id: 0,
         }
     }
 
@@ -223,50 +234,4 @@ impl Shell {
         self.state = ShellState::Hit0;
         self.timer = 0.0;
     }
-}
-
-/// Source rectangle for a shell frame (variant row, state column) in shells.png.
-fn source_rec(variant: i32, col: i32) -> Rectangle {
-    Rectangle::new(
-        col as f32 * SHELL_TEXTURE_SIZE,
-        variant as f32 * SHELL_TEXTURE_SIZE,
-        SHELL_TEXTURE_SIZE,
-        SHELL_TEXTURE_SIZE,
-    )
-}
-
-/// Draw a shell using its current state's frame (from its variant row),
-/// centered and rotated to face travel.
-pub fn draw_shell(d: &mut impl RaylibDraw, texture: &Texture2D, shell: &Shell) {
-    let src = source_rec(shell.variant, shell.state.col());
-    let size = SHELL_TEXTURE_SIZE * SHELL_SCALE;
-
-    let dest = Rectangle::new(shell.position.x, shell.position.y, size, size);
-    let origin = Vector2::new(size / 2.0, size / 2.0);
-
-    d.draw_texture_pro(texture, src, dest, origin, shell.rotation, Color::WHITE);
-}
-
-/// Draw this shell's drop shadow: same sprite/rotation, offset further than a
-/// tank's shadow so the gap between shell and shadow reads as height - see
-/// docs/sprite-shadows-design.md. The offset itself is `shell.shadow_offset`
-/// (rolled once per shell at fire time, see the field doc on `Shell`), not a
-/// flat constant, so different shells appear to fly at different heights.
-/// Caller (`Game::render`) only calls this while `shell.state ==
-/// ShellState::Flying`; the fire/impact frames are stationary blast sprites,
-/// not airborne objects, so they get no shadow.
-pub fn draw_shell_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, shell: &Shell) {
-    let src = source_rec(shell.variant, shell.state.col());
-    let size = SHELL_TEXTURE_SIZE * SHELL_SCALE;
-
-    let dest = Rectangle::new(
-        shell.position.x + tuning().shadow_dir_x * shell.shadow_offset,
-        shell.position.y + tuning().shadow_dir_y * shell.shadow_offset,
-        size,
-        size,
-    );
-    let origin = Vector2::new(size / 2.0, size / 2.0);
-    let shadow = Color::new(0, 0, 0, (255.0 * tuning().shell_shadow_opacity) as u8);
-
-    d.draw_texture_pro(texture, src, dest, origin, shell.rotation, shadow);
 }

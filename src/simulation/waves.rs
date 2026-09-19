@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 use hecs::Entity;
 use rand::RngExt;
 use serde::Serialize;
-use sola_raylib::core::math::Vector2;
+use crate::math::Vec2;
 
 use crate::ai::Ai;
 use crate::battlefield::{self, Gate};
@@ -22,7 +22,7 @@ use crate::tank::Tank;
 use crate::tuning::tuning;
 use crate::Position;
 
-use super::{lay_tracks, roll_enemy_tank, roll_role, with_frog, with_tank, with_tank_mut, Event, Frame, Game};
+use super::{lay_tracks, roll_enemy_tank, roll_role, with_frog, with_tank, with_tank_mut, Event, Frame, Game, TANK_SPRITE_ORDER};
 
 /// A wave tank still driving in from outside the battlefield toward `to`
 /// (its gate's inside point). While it carries this it has no physics
@@ -106,9 +106,21 @@ impl Game {
 
     /// Enemies that count against `wave_max_alive` and toward the next
     /// wave: live tanks on the field plus tanks rolling in. Wrecks don't.
+    /// Counted by owner rather than by `Ai` so a client replica, whose
+    /// enemies carry no `Ai` (`net::apply`), reports the same number the
+    /// server does; in a round every enemy tank either has its `Ai` or is
+    /// rolling in, so the two readings agree.
     pub(super) fn live_enemy_count(&self) -> usize {
-        let on_field = self.world.query::<&Tank>().with::<&Ai>().iter().filter(|t| !t.is_wreck()).count();
-        on_field + self.world.query::<&RollIn>().iter().count()
+        self.world.query::<&Tank>().iter().filter(|t| !t.is_player() && !t.is_wreck()).count()
+    }
+
+    /// Put the scheduler at wave `called` with `pending` tanks still to
+    /// roll in, as a snapshot reports it (`net::apply`): the queue is
+    /// filled with placeholder rows, since a replica never spawns from it.
+    pub(crate) fn set_wave_progress(&mut self, called: u32, pending: usize) {
+        self.wave.called = called;
+        self.wave.pending.clear();
+        self.wave.pending.extend(std::iter::repeat_n(TANK_SPRITE_ORDER[0], pending));
     }
 
     /// Whether the tank entity is still rolling in.
@@ -133,12 +145,12 @@ impl Game {
             let step = speed * f.dt;
             if dist <= step || dist <= f32::EPSILON {
                 tank.position = roll.to;
-                tank.velocity = Vector2::new(0.0, 0.0);
+                tank.velocity = Vec2::new(0.0, 0.0);
                 arrived.push((entity, tank.owner_slot()));
             } else {
                 let (ux, uy) = (dx / dist, dy / dist);
                 tank.position = Position::new(before.x + ux * step, before.y + uy * step);
-                tank.velocity = Vector2::new(ux * speed, uy * speed);
+                tank.velocity = Vec2::new(ux * speed, uy * speed);
             }
             tank.ease_visual_rotation(f.dt);
             tank.ease_turret_visual_rotation(f.dt);

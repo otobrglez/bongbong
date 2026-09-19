@@ -2,7 +2,7 @@ use crate::tuning::tuning;
 use clap::ValueEnum;
 use rapier2d::prelude::RigidBodyHandle;
 use serde::{Deserialize, Serialize};
-use sola_raylib::prelude::*;
+use crate::math::{Color, Rectangle, Vec2};
 
 use crate::canvas::{Canvas, Sheet};
 use crate::laser::LaserVariant;
@@ -78,12 +78,12 @@ impl Dir {
     }
 
     /// Unit movement vector (screen space: +x right, +y down).
-    pub fn vec(self) -> Vector2 {
+    pub fn vec(self) -> Vec2 {
         match self {
-            Dir::Up => Vector2::new(0.0, -1.0),
-            Dir::Down => Vector2::new(0.0, 1.0),
-            Dir::Left => Vector2::new(-1.0, 0.0),
-            Dir::Right => Vector2::new(1.0, 0.0),
+            Dir::Up => Vec2::new(0.0, -1.0),
+            Dir::Down => Vec2::new(0.0, 1.0),
+            Dir::Left => Vec2::new(-1.0, 0.0),
+            Dir::Right => Vec2::new(1.0, 0.0),
         }
     }
 
@@ -327,7 +327,7 @@ pub struct Tank {
     pub ring_position: Position,
     /// The ground ring's own velocity (px/s) - the inertia that makes it
     /// lag and catch up rather than track the hull instantly.
-    pub ring_velocity: Vector2,
+    pub ring_velocity: Vec2,
     /// Seconds accumulated toward the minigun barrel-cluster overlay's next
     /// "hot barrel" frame swap (see `draw_minigun_mount`), advanced while
     /// `minigun_burst` is active (see `tick_minigun_spin`) and held in place
@@ -541,7 +541,7 @@ pub struct Tank {
     /// `Game::drive_tank` to derive how much of the physics body's actual
     /// velocity is "ours" versus residual momentum from a ram/explosion
     /// impulse (see that function).
-    pub velocity: Vector2,
+    pub velocity: Vec2,
     /// This tank's rapier rigid body, once spawned into the physics world
     /// (see `Game::init`/`physics::Physics::spawn_tank`).
     pub body: Option<RigidBodyHandle>,
@@ -567,7 +567,7 @@ impl Default for Tank {
             visual_rotation: 0.0,
             turret_visual_rotation: 0.0,
             ring_position: Position::default(),
-            ring_velocity: Vector2::new(0.0, 0.0),
+            ring_velocity: Vec2::new(0.0, 0.0),
             minigun_cycle_timer: 0.0,
             hull_frame: 0,
             hull_anim_accum: 0.0,
@@ -604,7 +604,7 @@ impl Default for Tank {
             track_wobble_freq: 0.0,
             track_wobble_phase: 0.0,
             track_scale_jitter: 1.0,
-            velocity: Vector2::new(0.0, 0.0),
+            velocity: Vec2::new(0.0, 0.0),
             body: None,
 
             owner: Owner::Player(0),
@@ -628,6 +628,18 @@ impl Tank {
     /// read.
     pub fn health_fraction(&self) -> f32 {
         (1.0 - self.damage / MAX_DAMAGE).clamp(0.0, 1.0)
+    }
+
+    /// Remaining health in whole points, rounded to the nearest: 0 only
+    /// for a wreck, at least 1 while the tank lives (so a hull an inch from
+    /// death never reads as dead), at most `MAX_DAMAGE`. What travels on
+    /// the wire (`net::encode`) and what the picture compares.
+    pub fn hull_points(&self) -> u8 {
+        if self.is_wreck() {
+            return 0;
+        }
+        let points = (MAX_DAMAGE - self.damage).round().clamp(1.0, MAX_DAMAGE.min(255.0));
+        points as u8
     }
 
     /// True while a rainbow shield is active (see `shield_hp`).
@@ -865,7 +877,7 @@ impl Tank {
     /// The ammo counter behind `weapon` - the one shared currency between
     /// the queue logic (`active_weapon`/`enqueue_weapon`) and the fire
     /// dispatch sites that actually decrement these fields.
-    fn weapon_ammo(&self, weapon: ActiveWeapon) -> i32 {
+    pub(crate) fn weapon_ammo(&self, weapon: ActiveWeapon) -> i32 {
         match weapon {
             ActiveWeapon::Laser => self.laser_charges,
             ActiveWeapon::Plasma => self.plasma_ammo,
@@ -938,14 +950,14 @@ impl Tank {
         let snap = self.size();
         if dx * dx + dy * dy > snap * snap {
             self.ring_position = self.position;
-            self.ring_velocity = Vector2::new(0.0, 0.0);
+            self.ring_velocity = Vec2::new(0.0, 0.0);
             return;
         }
         let t = tuning();
         let omega = t.tank_ring_spring_hz * std::f32::consts::TAU;
         if omega <= 0.0 {
             self.ring_position = self.position;
-            self.ring_velocity = Vector2::new(0.0, 0.0);
+            self.ring_velocity = Vec2::new(0.0, 0.0);
             return;
         }
         // Semi-implicit Euler: stable for the omega*dt this game runs at
@@ -1176,9 +1188,9 @@ impl Tank {
             self.rotation = dir.rotation();
             let step = dir.vec();
             let speed = self.effective_speed();
-            self.velocity = Vector2::new(step.x * speed, step.y * speed);
+            self.velocity = Vec2::new(step.x * speed, step.y * speed);
         } else {
-            self.velocity = Vector2::new(0.0, 0.0);
+            self.velocity = Vec2::new(0.0, 0.0);
             if let Some(dir) = face {
                 self.rotation = dir.rotation();
             }
@@ -1229,8 +1241,8 @@ impl Tank {
 /// to `tank.position`, so the visible hull ends up drawn shifted forward of
 /// `position` by the same amount, at every facing - purely a draw-time
 /// choice; nothing gameplay-relevant reads this.
-fn draw_pivot(size: f32) -> Vector2 {
-    Vector2::new(size / 2.0, size / 2.0 + size * TANK_PIVOT_REAR_FRACTION)
+fn draw_pivot(size: f32) -> Vec2 {
+    Vec2::new(size / 2.0, size / 2.0 + size * TANK_PIVOT_REAR_FRACTION)
 }
 
 /// Which block of the sheet a tank draws from: 0 for an enemy, 1 and 2 for
@@ -1300,7 +1312,7 @@ const RED_MD: Color = Color::new(0xE4, 0x42, 0x19, 255);
 const RED_DEEP: Color = Color::new(0x9C, 0x35, 0x27, 255);
 const RED_DK: Color = Color::new(0x81, 0x2F, 0x27, 255);
 const RED_DARKEST: Color = Color::new(0x4A, 0x22, 0x21, 255);
-const BLACK: Color = Color::new(0x25, 0x25, 0x25, 255);
+pub(crate) const BLACK: Color = Color::new(0x25, 0x25, 0x25, 255);
 /// The two players' identity colours (docs/player-indicator-improvements.md):
 /// player 1 sky blue, player 2 hot pink - the base step of the team ramp
 /// the sheet's player blocks are painted in, deliberately off the Puny
@@ -1668,7 +1680,7 @@ pub fn draw_enemy_ring(c: &mut impl Canvas, tank: &Tank, time: f32) {
 /// not run behind the mission banner) a team-coloured ring swells from the
 /// player's own ring out to 1.6x its radius and fades as it goes,
 /// `player_locate_pulse_hz` times a second. Drawn under the hull like the
-/// other rings; `draw_player_label` is the cue's other half. Nothing for a
+/// other rings; `render::tank::draw_player_label` is the cue's other half. Nothing for a
 /// wreck, an enemy, or once the window has passed.
 pub fn draw_player_locate(c: &mut impl Canvas, tank: &Tank, time: f32, elapsed: f32) {
     let Some(index) = tank.player_index() else { return };
@@ -1684,26 +1696,6 @@ pub fn draw_player_locate(c: &mut impl Canvas, tank: &Tank, time: f32, elapsed: 
 /// Whether the locate cue is still showing `elapsed` seconds into play.
 pub fn player_locate_active(elapsed: f32) -> bool {
     elapsed < tuning().player_locate_seconds
-}
-
-/// The locate cue's label, `P1`/`P2` in the team colour just above the
-/// hull, drawn over everything so a crowd cannot cover it. Same window as
-/// `draw_player_locate`.
-pub fn draw_player_label(d: &mut impl RaylibDraw, tank: &Tank, elapsed: f32) {
-    let Some(index) = tank.player_index() else { return };
-    if tank.is_wreck() || !player_locate_active(elapsed) {
-        return;
-    }
-    let text = if index == 0 { "P1" } else { "P2" };
-    let size = crate::hud::HUD_TEXT_SIZE;
-    // The HUD's fixed cell width for this size; measuring needs the handle,
-    // which nothing in a draw pass has.
-    let w = text.len() as i32 * crate::hud::CHAR_W;
-    let x = (tank.position.x - w as f32 / 2.0).round() as i32;
-    let y = (tank.position.y - tank.size() / 2.0 - size as f32 - 4.0).round() as i32;
-    let color = TEAM_COLORS[index as usize & 1];
-    d.draw_text(text, x + 1, y + 1, size, BLACK);
-    d.draw_text(text, x, y, size, color);
 }
 
 /// Draw this tank's drop shadow: the same two layers (each at its own eased
@@ -2080,9 +2072,9 @@ mod ring_tests {
     #[test]
     fn ring_snaps_when_the_hull_is_far_away_and_drops_its_speed() {
         let mut tank = Tank { position: Position::new(500.0, 300.0), ..Tank::default() };
-        tank.ring_velocity = Vector2::new(40.0, 0.0);
+        tank.ring_velocity = Vec2::new(40.0, 0.0);
         tank.ease_ring_position(1.0 / 60.0);
-        assert_eq!(tank.ring_velocity, Vector2::new(0.0, 0.0));
+        assert_eq!(tank.ring_velocity, Vec2::new(0.0, 0.0));
     }
 
     #[test]
