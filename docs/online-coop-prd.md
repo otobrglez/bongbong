@@ -610,6 +610,53 @@ Measured in the rig before any real link: prediction error per snapshot (mass
 under a quarter pixel, a tail at contacts), corrections per minute above nudge
 and snap thresholds, lead and starvation per seat.
 
+### 4.13 Running it locally
+
+The developer loop needs no cluster: the server is a `cargo run`, the client
+points at it with one override, and the container is the same binary. The
+flags land with phase 2; the rig of phase 1 needs no server at all.
+
+```
+# the room server on loopback: plain ws://, pod letter A, dev tools on
+just run-server            # cargo run -p bongbong-server -- --listen 127.0.0.1:4848 --pod A --insecure
+
+# a host: creates a room over the socket, prints and shows the code
+BONGBONG_ROOMS=ws://127.0.0.1:4848 cargo run -- --host
+
+# a second client on the same machine, joining with that code
+BONGBONG_ROOMS=ws://127.0.0.1:4848 cargo run -- --join AK7QX --nick second
+
+# the web build against the same server: the join page takes the override as a query parameter
+just serve-web-dev         # then open the dev site's /j/AK7QX?rooms=ws://127.0.0.1:4848
+
+# the container, exactly what the cluster runs
+docker build -t bongbong-server .
+docker run --rm -p 4848:4848 bongbong-server --listen 0.0.0.0:4848 --pod A --insecure
+
+# the offline rig: an authoritative Game on a thread, the replica in the window, no server
+cargo run -- --rig --delay 80 --jitter 20 --loss 0.02
+```
+
+- `--insecure` allows plain `ws://` and skips Turnstile. The server refuses it
+  on a non-loopback listen address unless `--pod` is explicit too, so a stray
+  flag cannot open a cluster pod by accident.
+- `BONGBONG_ROOMS` (or `--rooms`) overrides the rooms host, default
+  `wss://rooms.bongbong.io`. With an override the client talks to that one
+  server at `/ws` and only checks the code's pod letter; on the cluster the
+  letter picks the Ingress path.
+- Two clients on one machine are two seats because the native device token
+  lives per nickname (`--nick`); the web build keeps its own in localStorage.
+- Behind `dev-tools`, `--dev-port 4747` exposes the dev server for the newest
+  room, so `just mcp-call status`, `snapshot`, `events`, `history` and
+  `terrain` inspect a live round; `screenshot` refuses, since there is no
+  renderer.
+- `cargo test -p bongbong-server` starts the server on an ephemeral port and
+  plays a round through a headless client; it is the CI check for the
+  protocol.
+- Rehearsing the drain: `kind create cluster && kubectl apply -k deploy/local`,
+  start a round through the local Ingress, then `kubectl rollout restart
+  statefulset/rooms` and watch the round finish on the old pod.
+
 ## 5. Numbers (order of magnitude)
 
 | Item | Value |
