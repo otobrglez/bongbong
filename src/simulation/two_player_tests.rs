@@ -67,19 +67,11 @@ fn snapshot_of(game: &Game, player: u8) -> TankSnapshot {
 }
 
 fn drive(p1: Option<Dir>, p2: Option<Dir>) -> Input {
-    Input {
-        player_intent: Intent { move_dir: p1, ..Intent::default() },
-        player2_intent: Intent { move_dir: p2, ..Intent::default() },
-        ..Input::default()
-    }
+    Input::two(Intent { move_dir: p1, ..Intent::default() }, Intent { move_dir: p2, ..Intent::default() })
 }
 
 fn fire(p1: bool, p2: bool) -> Input {
-    Input {
-        player_intent: Intent { fire: p1, ..Intent::default() },
-        player2_intent: Intent { fire: p2, ..Intent::default() },
-        ..Input::default()
-    }
+    Input::two(Intent { fire: p1, ..Intent::default() }, Intent { fire: p2, ..Intent::default() })
 }
 
 fn enemy_target(game: &Game, slot: usize) -> u8 {
@@ -280,11 +272,10 @@ fn a_two_player_round_replays_from_its_seed() {
     let run = || {
         let mut game = game_on(&map_with(""), 3, PlayerCount::Two, 21);
         for frame in 0..300u32 {
-            let input = Input {
-                player_intent: Intent { move_dir: Some(if frame % 40 < 20 { Dir::Left } else { Dir::Up }), fire: frame % 30 == 0, ..Intent::default() },
-                player2_intent: Intent { move_dir: Some(if frame % 50 < 25 { Dir::Down } else { Dir::Right }), fire: frame % 45 == 0, ..Intent::default() },
-                ..Input::default()
-            };
+            let input = Input::two(
+                Intent { move_dir: Some(if frame % 40 < 20 { Dir::Left } else { Dir::Up }), fire: frame % 30 == 0, ..Intent::default() },
+                Intent { move_dir: Some(if frame % 50 < 25 { Dir::Down } else { Dir::Right }), fire: frame % 45 == 0, ..Intent::default() },
+            );
             step(&mut game, input);
         }
         game.tank_snapshots()

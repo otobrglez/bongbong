@@ -705,11 +705,11 @@ impl DevServer {
         let mut input = real;
         if let Some((intent, left)) = self.injected {
             self.injected = (left > 1).then_some((intent, left - 1));
-            input.player_intent = intent;
+            input.seats[0] = intent;
         }
         if let Some((intent, left)) = self.injected2 {
             self.injected2 = (left > 1).then_some((intent, left - 1));
-            input.player2_intent = intent;
+            input.seats[1] = intent;
         }
         if std::mem::take(&mut self.cycle_overlays_pending) {
             input.cycle_overlays_pressed = true;
@@ -718,19 +718,23 @@ impl DevServer {
     }
 
     /// Advance the game for this rendered frame: a pending `step` runs its
-    /// frames back-to-back at `PHYSICS_FIXED_DT` and replies; otherwise one
-    /// real-time update unless lockstep holds the game still.
-    pub fn advance(&mut self, game: &mut Game, input: Input, real_dt: f32, width: f32, height: f32) {
+    /// frames back-to-back at `PHYSICS_FIXED_DT` and replies; otherwise the
+    /// `steps` the loop's clock paid for (each at `PHYSICS_FIXED_DT`, the
+    /// one-shot presses in `input` spent by the first) unless lockstep holds
+    /// the game still. `after_step` runs after every update, on the state
+    /// it produced - the presentation's event readers hook in there so a
+    /// frame of several steps drops none of their events.
+    pub fn advance(&mut self, game: &mut Game, input: Input, steps: u32, width: f32, height: f32, after_step: &mut dyn FnMut(&Game)) {
         if let Some(mut step) = self.pending_step.take() {
             for i in 0..step.remaining {
-                let mut player_intent = step.intent.unwrap_or(input.player_intent);
-                let mut player2_intent = step.intent2.unwrap_or(input.player2_intent);
+                let mut player1 = step.intent.unwrap_or(input.seat(0));
+                let mut player2 = step.intent2.unwrap_or(input.seat(1));
                 if let Some(n) = step.fire_every {
-                    player_intent.fire = player_intent.fire && i % n == 0;
-                    player2_intent.fire = player2_intent.fire && i % n == 0;
+                    player1.fire = player1.fire && i % n == 0;
+                    player2.fire = player2.fire && i % n == 0;
                 }
                 let before = game.frame();
-                game.update(Input { player_intent, player2_intent, ..Input::default() }, PHYSICS_FIXED_DT, width, height);
+                game.update(Input::two(player1, player2), PHYSICS_FIXED_DT, width, height);
                 if game.frame() != before + 1 {
                     step.restarted = true;
                 }
@@ -738,6 +742,7 @@ impl DevServer {
                 self.drain_events(game, Some((&mut sink, &step.filter)));
                 step.events = sink;
                 self.record_history(game);
+                after_step(game);
             }
             let snapshot = step.want_snapshot.then(|| to_value(game.debug_snapshot(width, height, step.detail)));
             let _ = step.reply.send(Ok(json!({
@@ -750,9 +755,13 @@ impl DevServer {
                 "snapshot": snapshot,
             })));
         } else if !self.lockstep {
-            game.update(input, real_dt, width, height);
-            self.drain_events(game, None);
-            self.record_history(game);
+            for i in 0..steps {
+                let input = if i == 0 { input } else { input.held_only() };
+                game.update(input, PHYSICS_FIXED_DT, width, height);
+                self.drain_events(game, None);
+                self.record_history(game);
+                after_step(game);
+            }
         }
     }
 
@@ -2333,7 +2342,7 @@ mod tests {
         for _ in 0..3 {
             let rx = call(&tx, "step", json!({ "frames": 1, "snapshot": false }));
             server.before_frame(&mut s, W, H);
-            server.advance(&mut s.game, Input::default(), 0.016, W, H);
+            server.advance(&mut s.game, Input::default(), 1, W, H, &mut |_| {});
             rx.recv().unwrap().unwrap();
         }
         ask(&mut server, &tx, &mut s, "players", json!({ "count": 2 })).unwrap();
@@ -2342,7 +2351,7 @@ mod tests {
         let before: Vec<_> = s.game.tank_snapshots().into_iter().filter(|t| t.is_player).map(|t| (t.player, t.position)).collect();
         let rx = call(&tx, "step", json!({ "frames": 30, "p2_move_dir": "down", "snapshot": false }));
         server.before_frame(&mut s, W, H);
-        server.advance(&mut s.game, Input::default(), 0.016, W, H);
+        server.advance(&mut s.game, Input::default(), 1, W, H, &mut |_| {});
         rx.recv().unwrap().unwrap();
         let after: Vec<_> = s.game.tank_snapshots().into_iter().filter(|t| t.is_player).map(|t| (t.player, t.position)).collect();
         assert!((after[0].1.y - before[0].1.y).abs() < 1.0, "player 1 stayed put");
@@ -2376,7 +2385,7 @@ mod tests {
         let rx = call(&tx, "step", held);
         server.before_frame(&mut stepped, W, H);
         assert!(server.lockstep(), "step enters lockstep");
-        server.advance(&mut stepped, Input::default(), 0.123, W, H);
+        server.advance(&mut stepped, Input::default(), 1, W, H, &mut |_| {});
         let reply = rx.recv().unwrap().unwrap();
         assert_eq!(reply["frame"], 90);
         assert_eq!(reply["restarted"], false);
@@ -2384,7 +2393,7 @@ mod tests {
 
         let intent = Intent { move_dir: Some(Dir::Up), fire: true, ..Intent::default() };
         for _ in 0..90 {
-            manual.update(Input { player_intent: intent, ..Input::default() }, PHYSICS_FIXED_DT, W, H);
+            manual.update(Input::single(intent), PHYSICS_FIXED_DT, W, H);
         }
         assert_eq!(reply["time"], r1(manual.time), "the reply's time is the game's, at snapshot precision");
         let (a, b) = (stepped.tank_snapshots(), manual.tank_snapshots());
@@ -2393,7 +2402,7 @@ mod tests {
             assert_eq!(key(x), key(y), "tank {i} diverged");
         }
         // Lockstep holds the game still until the next step.
-        server.advance(&mut stepped, Input::default(), 0.016, W, H);
+        server.advance(&mut stepped, Input::default(), 1, W, H, &mut |_| {});
         assert_eq!(stepped.frame(), 90);
     }
 
@@ -2403,7 +2412,7 @@ mod tests {
         let mut game = game(4);
         let rx = call(&tx, "step", json!({ "frames": 120, "fire": true, "fire_every": 40, "snapshot": false }));
         server.before_frame(&mut game, W, H);
-        server.advance(&mut game, Input::default(), 0.016, W, H);
+        server.advance(&mut game, Input::default(), 1, W, H, &mut |_| {});
         let reply = rx.recv().unwrap().unwrap();
         let shots = reply["events"].as_array().unwrap().iter().filter(|e| e["event"] == "fired" && e["slot"] == 0).count();
         assert_eq!(shots, 3, "{}", reply["events"]);
@@ -2418,7 +2427,7 @@ mod tests {
         rx.recv().unwrap().unwrap();
         let rx = call(&tx, "step", json!({ "frames": 1 }));
         server.before_frame(&mut game, W, H);
-        server.advance(&mut game, Input::default(), 0.016, W, H);
+        server.advance(&mut game, Input::default(), 1, W, H, &mut |_| {});
         let reply = rx.recv().unwrap().unwrap();
         let player = &reply["snapshot"]["tanks"][0];
         assert_eq!(player["slot"], 0);
@@ -2443,7 +2452,7 @@ mod tests {
         rx.recv().unwrap().unwrap();
         let rx = call(&tx, "step", json!({ "frames": 1 }));
         server.before_frame(&mut game, W, H);
-        server.advance(&mut game, Input::default(), 0.016, W, H);
+        server.advance(&mut game, Input::default(), 1, W, H, &mut |_| {});
         let reply = rx.recv().unwrap().unwrap();
         let events = reply["events"].as_array().unwrap();
         assert!(events.iter().any(|e| e["event"] == "wreck" && e["slot"] == 2), "{events:?}");
@@ -2515,6 +2524,36 @@ mod tests {
         assert_eq!(game.debug_overlays, Overlays::NONE);
     }
 
+    /// The windowed loop pays real time out in whole steps and hands the
+    /// count here: a live server runs each at the fixed step and spends
+    /// the one-shot presses on the first, a frozen one runs none of them,
+    /// and `after_step` sees every step's state.
+    #[test]
+    fn advance_runs_the_clocks_steps_unless_frozen() {
+        let (mut server, tx) = DevServer::headless();
+        let mut s = game(7);
+        let mut seen = Vec::new();
+        server.advance(&mut s.game, Input::default(), 3, W, H, &mut |g| seen.push(g.frame()));
+        assert_eq!(s.game.frame(), 3);
+        assert_eq!(seen, vec![1, 2, 3]);
+        // A frame of two steps toggles pause once, not twice.
+        let pause = Input { pause_pressed: true, ..Input::default() };
+        server.advance(&mut s.game, pause, 2, W, H, &mut |_| {});
+        assert!(s.game.paused);
+        assert_eq!(s.game.frame(), 5, "paused updates still count frames");
+        server.advance(&mut s.game, pause, 1, W, H, &mut |_| {});
+        assert!(!s.game.paused);
+        // Frozen: the steps the clock paid for do not run.
+        ask(&mut server, &tx, &mut s, "pause", json!({})).unwrap();
+        assert!(server.lockstep());
+        let mut ran = 0;
+        server.advance(&mut s.game, Input::default(), 4, W, H, &mut |_| ran += 1);
+        assert_eq!((s.game.frame(), ran), (6, 0));
+        ask(&mut server, &tx, &mut s, "resume", json!({})).unwrap();
+        server.advance(&mut s.game, Input::default(), 1, W, H, &mut |_| ran += 1);
+        assert_eq!((s.game.frame(), ran), (7, 1));
+    }
+
     #[test]
     fn input_cycle_overlays_presses_the_i_key_once() {
         let (mut server, tx) = DevServer::headless();
@@ -2527,13 +2566,13 @@ mod tests {
             rx.recv().unwrap().unwrap();
             let input = server.shape_input(Input::default());
             assert!(input.cycle_overlays_pressed);
-            assert!(input.player_intent.move_dir.is_none(), "a bare cycle request leaves the keyboard alone");
-            server.advance(&mut game, input, 0.016, W, H);
+            assert!(input.seats[0].move_dir.is_none(), "a bare cycle request leaves the keyboard alone");
+            server.advance(&mut game, input, 1, W, H, &mut |_| {});
             assert_eq!(game.debug_overlays, preset);
             // One-shot: the next frame's input does not press the key again.
             let input = server.shape_input(Input::default());
             assert!(!input.cycle_overlays_pressed);
-            server.advance(&mut game, input, 0.016, W, H);
+            server.advance(&mut game, input, 1, W, H, &mut |_| {});
             assert_eq!(game.debug_overlays, preset);
         }
     }
@@ -2619,7 +2658,7 @@ mod tests {
 
         let rx = call(&tx, "step", json!({ "frames": 120, "detail": "full" }));
         server.before_frame(&mut game, W, H);
-        server.advance(&mut game, Input::default(), 0.016, W, H);
+        server.advance(&mut game, Input::default(), 1, W, H, &mut |_| {});
         let reply = rx.recv().unwrap().unwrap();
         let text = reply["snapshot"].to_string();
         assert!(text.len() < 16_000, "full snapshot is {} bytes", text.len());
@@ -2698,7 +2737,7 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!(status["wave"]["index"], 0);
         let rx = call(&tx, "step", json!({ "frames": 1, "snapshot": true }));
         server.before_frame(&mut game, W, H);
-        server.advance(&mut game, Input::default(), 0.016, W, H);
+        server.advance(&mut game, Input::default(), 1, W, H, &mut |_| {});
         let stepped = rx.recv().unwrap().unwrap();
         let tanks = stepped["snapshot"]["tanks"].as_array().unwrap();
         assert_eq!(tanks.len(), 2, "wave 1's first tank is rolling in: {stepped}");
@@ -2739,7 +2778,7 @@ cells."1,1" = { kind = "wall" }"#;
         let mut game = game(14);
         let rx = call(&tx, "step", json!({ "frames": 120, "snapshot": false }));
         server.before_frame(&mut game, W, H);
-        server.advance(&mut game, Input::default(), 0.016, W, H);
+        server.advance(&mut game, Input::default(), 1, W, H, &mut |_| {});
         rx.recv().unwrap().unwrap();
         let rx = call(&tx, "history", json!({ "last": 100, "every": 10, "slot": 1 }));
         server.before_frame(&mut game, W, H);
@@ -2771,7 +2810,7 @@ cells."1,1" = { kind = "wall" }"#;
         let rx = call(&tx, "step", json!({ "frames": 300, "snapshot": false, "kinds": ["ai_action"] }));
         server.before_frame(&mut game, W, H);
         assert!(game.trace_ai, "the server switches AI tracing on");
-        server.advance(&mut game, Input::default(), 0.016, W, H);
+        server.advance(&mut game, Input::default(), 1, W, H, &mut |_| {});
         let step = rx.recv().unwrap().unwrap();
         let events = step["events"].as_array().unwrap();
         assert!(!events.is_empty(), "300 frames of AI produce action changes");
@@ -2800,7 +2839,7 @@ cells."1,1" = { kind = "wall" }"#;
             assert_eq!(status["tanks"], 4);
             let rx = call(&tx, "step", json!({ "frames": 300 }));
             server.before_frame(&mut game, W, H);
-            server.advance(&mut game, Input::default(), 0.016, W, H);
+            server.advance(&mut game, Input::default(), 1, W, H, &mut |_| {});
             runs.push(rx.recv().unwrap().unwrap()["snapshot"].to_string());
         }
         assert_eq!(runs[0], runs[1]);
@@ -3061,7 +3100,7 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!(ev["events"].as_array().unwrap().last().unwrap()["event"], "round_started", "{ev}");
         let step = call(&tx, "step", json!({ "frames": 2, "snapshot": false }));
         server.before_frame(&mut s, W, H);
-        server.advance(&mut s.game, Input::default(), 0.016, W, H);
+        server.advance(&mut s.game, Input::default(), 1, W, H, &mut |_| {});
         assert_eq!(step.recv().unwrap().unwrap()["frame"], 2);
         // The edit survives the round trip back into the builder.
         enter_build(&mut server, &tx, &mut s);
@@ -3208,7 +3247,7 @@ cells."1,1" = { kind = "wall" }"#;
         let (w, h) = s.field_size();
         let rx = call(tx, "step", params);
         server.before_frame(s, w, h);
-        server.advance(&mut s.game, Input::default(), 0.016, w, h);
+        server.advance(&mut s.game, Input::default(), 1, w, h, &mut |_| {});
         rx.recv().unwrap().unwrap()
     }
 
