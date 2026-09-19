@@ -6,6 +6,7 @@
 
 use crate::tuning::tuning;
 use sola_raylib::prelude::*;
+use crate::math::Vec2;
 
 use crate::bullet::{Bullet, BulletState, draw_bullet, draw_bullet_shadow};
 use crate::damage_stage::draw_damage;
@@ -41,7 +42,7 @@ use crate::tank::{
     draw_player_ring, draw_tank, draw_tank_shadow, draw_tank_shield,
 };
 use crate::track::draw_track;
-use crate::{Layout, SHOCK_MAX};
+use crate::{Layout, Position, SHOCK_MAX};
 #[cfg(feature = "dev-tools")]
 use crate::{HUD_MARGIN, MAX_DAMAGE};
 
@@ -1120,7 +1121,7 @@ impl Game {
             let grid = self.route_grid(width, height);
             let (cols, rows, cell) = grid.dims();
             let size = cell.round() as i32;
-            let goal = grid.goals().next().map(|(c, r)| Vector2::new((c as f32 + 0.5) * cell, (r as f32 + 0.5) * cell));
+            let goal = grid.goals().next().map(|(c, r)| Position::new((c as f32 + 0.5) * cell, (r as f32 + 0.5) * cell));
             for row in 0..rows {
                 for col in 0..cols {
                     let x = (col as f32 * cell).round() as i32;
@@ -1161,7 +1162,7 @@ impl Game {
             }
         }
         if ov.projectiles {
-            let mut boxes: Vec<(Vector2, Vector2, f32)> = Vec::new();
+            let mut boxes: Vec<(Position, Vec2, f32)> = Vec::new();
             for s in self.world.query::<&Shell>().iter() {
                 boxes.push((s.position, s.velocity, tuning().shell_hit_half_extent));
             }

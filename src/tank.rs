@@ -3,6 +3,7 @@ use clap::ValueEnum;
 use rapier2d::prelude::RigidBodyHandle;
 use serde::{Deserialize, Serialize};
 use sola_raylib::prelude::*;
+use crate::math::Vec2;
 
 use crate::canvas::{Canvas, Sheet};
 use crate::laser::LaserVariant;
@@ -78,12 +79,12 @@ impl Dir {
     }
 
     /// Unit movement vector (screen space: +x right, +y down).
-    pub fn vec(self) -> Vector2 {
+    pub fn vec(self) -> Vec2 {
         match self {
-            Dir::Up => Vector2::new(0.0, -1.0),
-            Dir::Down => Vector2::new(0.0, 1.0),
-            Dir::Left => Vector2::new(-1.0, 0.0),
-            Dir::Right => Vector2::new(1.0, 0.0),
+            Dir::Up => Vec2::new(0.0, -1.0),
+            Dir::Down => Vec2::new(0.0, 1.0),
+            Dir::Left => Vec2::new(-1.0, 0.0),
+            Dir::Right => Vec2::new(1.0, 0.0),
         }
     }
 
@@ -327,7 +328,7 @@ pub struct Tank {
     pub ring_position: Position,
     /// The ground ring's own velocity (px/s) - the inertia that makes it
     /// lag and catch up rather than track the hull instantly.
-    pub ring_velocity: Vector2,
+    pub ring_velocity: Vec2,
     /// Seconds accumulated toward the minigun barrel-cluster overlay's next
     /// "hot barrel" frame swap (see `draw_minigun_mount`), advanced while
     /// `minigun_burst` is active (see `tick_minigun_spin`) and held in place
@@ -541,7 +542,7 @@ pub struct Tank {
     /// `Game::drive_tank` to derive how much of the physics body's actual
     /// velocity is "ours" versus residual momentum from a ram/explosion
     /// impulse (see that function).
-    pub velocity: Vector2,
+    pub velocity: Vec2,
     /// This tank's rapier rigid body, once spawned into the physics world
     /// (see `Game::init`/`physics::Physics::spawn_tank`).
     pub body: Option<RigidBodyHandle>,
@@ -567,7 +568,7 @@ impl Default for Tank {
             visual_rotation: 0.0,
             turret_visual_rotation: 0.0,
             ring_position: Position::default(),
-            ring_velocity: Vector2::new(0.0, 0.0),
+            ring_velocity: Vec2::new(0.0, 0.0),
             minigun_cycle_timer: 0.0,
             hull_frame: 0,
             hull_anim_accum: 0.0,
@@ -604,7 +605,7 @@ impl Default for Tank {
             track_wobble_freq: 0.0,
             track_wobble_phase: 0.0,
             track_scale_jitter: 1.0,
-            velocity: Vector2::new(0.0, 0.0),
+            velocity: Vec2::new(0.0, 0.0),
             body: None,
 
             owner: Owner::Player(0),
@@ -938,14 +939,14 @@ impl Tank {
         let snap = self.size();
         if dx * dx + dy * dy > snap * snap {
             self.ring_position = self.position;
-            self.ring_velocity = Vector2::new(0.0, 0.0);
+            self.ring_velocity = Vec2::new(0.0, 0.0);
             return;
         }
         let t = tuning();
         let omega = t.tank_ring_spring_hz * std::f32::consts::TAU;
         if omega <= 0.0 {
             self.ring_position = self.position;
-            self.ring_velocity = Vector2::new(0.0, 0.0);
+            self.ring_velocity = Vec2::new(0.0, 0.0);
             return;
         }
         // Semi-implicit Euler: stable for the omega*dt this game runs at
@@ -1176,9 +1177,9 @@ impl Tank {
             self.rotation = dir.rotation();
             let step = dir.vec();
             let speed = self.effective_speed();
-            self.velocity = Vector2::new(step.x * speed, step.y * speed);
+            self.velocity = Vec2::new(step.x * speed, step.y * speed);
         } else {
-            self.velocity = Vector2::new(0.0, 0.0);
+            self.velocity = Vec2::new(0.0, 0.0);
             if let Some(dir) = face {
                 self.rotation = dir.rotation();
             }
@@ -2080,9 +2081,9 @@ mod ring_tests {
     #[test]
     fn ring_snaps_when_the_hull_is_far_away_and_drops_its_speed() {
         let mut tank = Tank { position: Position::new(500.0, 300.0), ..Tank::default() };
-        tank.ring_velocity = Vector2::new(40.0, 0.0);
+        tank.ring_velocity = Vec2::new(40.0, 0.0);
         tank.ease_ring_position(1.0 / 60.0);
-        assert_eq!(tank.ring_velocity, Vector2::new(0.0, 0.0));
+        assert_eq!(tank.ring_velocity, Vec2::new(0.0, 0.0));
     }
 
     #[test]

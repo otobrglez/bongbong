@@ -16,6 +16,7 @@
 use crate::canvas::{Canvas, Sheet};
 use crate::tuning::tuning;
 use sola_raylib::prelude::*;
+use crate::math::Vec2;
 
 use crate::{
     BARREL_EXPLOSION_FRAMES,
@@ -68,8 +69,6 @@ fn avalanche(mut h: u32) -> u32 {
 }
 
 /// A unit-ish direction in the plane, for the cosmetic lean of a blast.
-/// Plain fields rather than a `Vector2` so the simulation can hand one
-/// over without a drawing type in its signature.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Lean {
     pub x: f32,
@@ -316,7 +315,7 @@ const GLOW_BLOCK: f32 = 2.0;
 /// at the muzzle and a fainter, larger one part way down the stream,
 /// both flickering off the round clock. The stream itself is particles
 /// (`fx.rs`); this is the light they throw on the ground.
-pub fn draw_flame_glow(d: &mut impl RaylibDraw, origin: Position, dir: sola_raylib::core::math::Vector2, reach: f32, time: f32) {
+pub fn draw_flame_glow(d: &mut impl RaylibDraw, origin: Position, dir: Vec2, reach: f32, time: f32) {
     let flicker = 0.75 + 0.25 * (time * 47.0).sin();
     pixel_disc(d, origin, 10.0, Color::new(255, 200, 90, (150.0 * flicker) as u8));
     let mid = Position::new(origin.x + dir.x * reach * 0.4, origin.y + dir.y * reach * 0.4);

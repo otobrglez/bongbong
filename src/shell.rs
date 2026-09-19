@@ -1,5 +1,6 @@
 use crate::tuning::tuning;
 use sola_raylib::prelude::*;
+use crate::math::Vec2;
 
 use crate::tank::Tank;
 use crate::{
@@ -89,7 +90,7 @@ pub struct Shell {
     pub state: ShellState,
     pub position: Position,
     /// Direction of travel while flying (pixels per second).
-    pub velocity: Vector2,
+    pub velocity: Vec2,
     /// Facing angle in degrees (matches the tank's rotation when fired).
     pub rotation: f32,
     /// Time elapsed in the current state.
@@ -148,7 +149,7 @@ impl Shell {
     pub fn spawn(tank: &Tank, owner: Owner, aim_offset: f32, lateral_offset: f32) -> Shell {
         let rot = (tank.rotation + aim_offset).to_radians();
         // rotation 0 == facing up (-Y); +90 == right, etc. matches the tank movement.
-        let dir = Vector2::new(rot.sin(), -rot.cos());
+        let dir = Vec2::new(rot.sin(), -rot.cos());
         // Start at the turret/barrel tip, not the tank's own center - see
         // TANK_MUZZLE_FORWARD_OFFSET_BY_ROW for how that distance was
         // measured per tank archetype from the sprite sheet's own published
@@ -164,7 +165,7 @@ impl Shell {
         // TANK_BARREL_LATERAL_OFFSET_BY_ROW's "positive = right barrel"
         // convention.
         let hull_rot = tank.rotation.to_radians();
-        let lateral = Vector2::new(hull_rot.cos(), hull_rot.sin()) * (lateral_offset * tank.scale);
+        let lateral = Vec2::new(hull_rot.cos(), hull_rot.sin()) * (lateral_offset * tank.scale);
         let position = Position::new(
             tank.position.x + dir.x * muzzle + lateral.x,
             tank.position.y + dir.y * muzzle + lateral.y,
@@ -172,7 +173,7 @@ impl Shell {
         Shell {
             state: ShellState::Fire0,
             position,
-            velocity: Vector2::new(dir.x * tuning().shell_speed, dir.y * tuning().shell_speed),
+            velocity: Vec2::new(dir.x * tuning().shell_speed, dir.y * tuning().shell_speed),
             rotation: tank.rotation + aim_offset,
             timer: 0.0,
             done: false,

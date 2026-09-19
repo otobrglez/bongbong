@@ -6,7 +6,7 @@ use crate::tuning::tuning;
 use hecs::Entity;
 use rand::RngExt;
 use rand::rngs::SmallRng;
-use sola_raylib::core::math::Vector2;
+use crate::math::Vec2;
 
 use crate::ai::Ai;
 use crate::frog::Frog;
@@ -73,12 +73,12 @@ impl BlastParams {
 /// speed in px/s) for a surviving tank, and whether the frog tries to hop
 /// away (along the given direction) when it survives.
 pub(super) struct HitEffects {
-    pub knockback: Option<(Vector2, f32)>,
-    pub frog_hop: Option<Vector2>,
+    pub knockback: Option<(Vec2, f32)>,
+    pub frog_hop: Option<Vec2>,
     /// The projectile's unit travel direction, whatever it hit: a barrel
     /// it pops leans its fire this way (`BlastShape::Shot`). `None` for a
     /// beam, which has no travel to speak of.
-    pub travel: Option<Vector2>,
+    pub travel: Option<Vec2>,
 }
 
 impl HitEffects {
@@ -244,7 +244,7 @@ impl Game {
 
 /// Shove a live tank along `dir` (unit) at `speed` px/s - a real impulse
 /// sized by the tank's own mass, so the velocity change is exact.
-fn knockback(tank: &Tank, physics: &mut Physics, dir: Vector2, speed: f32) {
+fn knockback(tank: &Tank, physics: &mut Physics, dir: Vec2, speed: f32) {
     let handle = tank.body.expect("tank should always have a physics body once spawned");
     physics.apply_impulse(handle, Position::new(dir.x * speed * tank.mass(), dir.y * speed * tank.mass()));
 }
@@ -264,13 +264,13 @@ fn knockback(tank: &Tank, physics: &mut Physics, dir: Vector2, speed: f32) {
 ///
 /// `physics_velocity`: a tank's actual body velocity, or zero if it has no
 /// body yet (a wave tank still rolling in through a gate).
-fn physics_velocity(physics: &Physics, tank: &Tank) -> Vector2 {
+fn physics_velocity(physics: &Physics, tank: &Tank) -> Vec2 {
     match tank.body {
         Some(body) => {
             let v = physics.velocity(body);
-            Vector2::new(v.x, v.y)
+            Vec2::new(v.x, v.y)
         }
-        None => Vector2::new(0.0, 0.0),
+        None => Vec2::new(0.0, 0.0),
     }
 }
 
@@ -305,7 +305,7 @@ pub(super) fn ram(
     if dist <= 0.001 {
         return Some(dmg);
     }
-    let axis = Vector2::new(dx / dist, dy / dist);
+    let axis = Vec2::new(dx / dist, dy / dist);
     // Real closing speed off the bodies, not the commanded `Tank::velocity`.
     // The commanded value is a fixed-magnitude cardinal vector, so it says
     // "both are driving" rather than "how hard they hit": a tank shoved
@@ -325,7 +325,7 @@ pub(super) fn ram(
     }
     if !b.is_wreck() {
         let b_push = (push * 2.0 * a.mass() / total_mass).min(tuning().knockback_max_speed);
-        knockback(b, physics, Vector2::new(-axis.x, -axis.y), b_push);
+        knockback(b, physics, Vec2::new(-axis.x, -axis.y), b_push);
     }
     Some(dmg)
 }
@@ -370,10 +370,10 @@ pub(super) fn explosion_hit(
     let reference_mass = tank.scale * tank.scale;
     let push = (params.knockback * falloff * reference_mass / tank.mass()).min(tuning().knockback_max_speed);
     let axis = if dist > 0.001 {
-        Vector2::new(dx / dist, dy / dist)
+        Vec2::new(dx / dist, dy / dist)
     } else {
         // Sitting exactly on the blast center: any direction beats none.
-        Vector2::new(1.0, 0.0)
+        Vec2::new(1.0, 0.0)
     };
     knockback(tank, physics, axis, push);
 }
@@ -397,7 +397,7 @@ pub(super) fn explosion_hit(
 pub(super) fn frog_hop_target(
     rng: &mut SmallRng,
     frog_pos: Position,
-    away_dir: Vector2,
+    away_dir: Vec2,
     distance: f32,
     terrain: &Terrain,
     width: f32,
@@ -452,14 +452,14 @@ mod ram_tests {
         let water = crate::ground::WaterLayout::build(w, h, &[], &pond);
         let terrain = Terrain::build(&world, w, h, &[], &water);
         let frog = crate::map::cell_to_world(11, 11);
-        let away = Vector2::new(1.0, 0.0);
+        let away = Vec2::new(1.0, 0.0);
         let mut rng = SmallRng::seed_from_u64(3);
         let landing = frog_hop_target(&mut rng, frog, away, 96.0, &terrain, w, h).expect("a landing");
         assert_ne!(water.depth_at(landing), crate::ground::Depth::Dry, "landed in the pond: {landing:?}");
         // Threat from the east: hopping west finds no water in the fan, so
         // it lands on dry ground as before.
         let mut rng = SmallRng::seed_from_u64(3);
-        let landing = frog_hop_target(&mut rng, frog, Vector2::new(-1.0, 0.0), 96.0, &terrain, w, h).expect("a landing");
+        let landing = frog_hop_target(&mut rng, frog, Vec2::new(-1.0, 0.0), 96.0, &terrain, w, h).expect("a landing");
         assert_eq!(water.depth_at(landing), crate::ground::Depth::Dry);
         assert!(landing.x < frog.x);
     }

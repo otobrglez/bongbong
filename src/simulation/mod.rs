@@ -4,9 +4,9 @@
 //! `Game`'s state afterward and draws it; this module never reaches back.
 //! `Game::init`/`Game::update` take plain numbers and an `Input` snapshot,
 //! so a round can be driven headlessly (see `src/bin/probe.rs` and the
-//! tests at the bottom of this file). `sola_raylib::core::math::Vector2`
-//! (`Position`) is the one shared type, imported by name so nothing here
-//! names a window or drawing type.
+//! tests at the bottom of this file). `crate::math::Vec2` (`Position`) is
+//! the one shared vector type, so nothing here names a window or drawing
+//! type.
 //!
 //! Layout: this file owns `Game` (state, `init`, the phased `update`) and
 //! the small helpers those phases share; `weapons` fires shots and ticks
@@ -50,7 +50,7 @@ use hecs::Entity;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 use serde::{Deserialize, Serialize};
-use sola_raylib::core::math::Vector2;
+use crate::math::Vec2;
 
 use crate::ai::{Ai, AiSnapshot, Intent, Mover, Role, WallAhead};
 use crate::battlefield;
@@ -1406,7 +1406,7 @@ impl Game {
             && let Some((_, tank_pos, dist, _)) = nearest_any
             && dist <= avoid_range
         {
-            let away = Vector2::new(frog_pos.x - tank_pos.x, frog_pos.y - tank_pos.y);
+            let away = Vec2::new(frog_pos.x - tank_pos.x, frog_pos.y - tank_pos.y);
             if let Some(new_pos) = frog_hop_target(&mut f.rng, frog_pos, away, hop_distance, &f.terrain, f.width, f.height) {
                 with_frog_mut(&self.world, frog_entity, |fr| fr.start_hop(new_pos));
             }
@@ -2314,7 +2314,7 @@ impl Game {
     /// head-on can pass through each other between frames. Same-side pairs
     /// (a twin volley, two different enemies' shells) never cancel.
     fn shell_vs_shell(&mut self, f: &mut Frame) {
-        let flying: Vec<(Entity, Position, Vector2, Owner)> = self
+        let flying: Vec<(Entity, Position, Vec2, Owner)> = self
             .world
             .query::<(Entity, &Shell)>()
             .iter()
@@ -2372,7 +2372,7 @@ impl Game {
             entity: Entity,
             prev: Position,
             pos: Position,
-            vel: Vector2,
+            vel: Vec2,
             owner: Owner,
             dmg: (f32, f32),
         }
@@ -2477,7 +2477,7 @@ impl Game {
                 continue;
             }
             let len = (vel.x * vel.x + vel.y * vel.y).sqrt().max(f32::EPSILON);
-            let dir = Vector2::new(vel.x / len, vel.y / len);
+            let dir = Vec2::new(vel.x / len, vel.y / len);
             let effects = HitEffects {
                 knockback: P::knockback_speed().map(|speed| (dir, speed)),
                 frog_hop: P::frog_hops().then_some(vel),
@@ -3752,7 +3752,7 @@ fn lay_tracks(tracks: &mut Vec<Track>, tank: &mut Tank, before: Position, depth:
         return;
     }
     // Unit vector pointing back along this frame's travel.
-    let back = Vector2::new((before.x - tank.position.x) / moved, (before.y - tank.position.y) / moved);
+    let back = Vec2::new((before.x - tank.position.x) / moved, (before.y - tank.position.y) / moved);
     let mut heading = (-back.x).atan2(back.y).to_degrees();
     if heading < 0.0 {
         heading += 360.0;

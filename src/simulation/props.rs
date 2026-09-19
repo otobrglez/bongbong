@@ -8,7 +8,7 @@ use crate::tuning::tuning;
 use hecs::Entity;
 use rand::RngExt;
 use rapier2d::prelude::RigidBodyHandle;
-use sola_raylib::core::math::Vector2;
+use crate::math::Vec2;
 
 use crate::ai::Ai;
 use crate::blast::{BlastFx, BlastKind, BlastShape, Lean, Scorch};
@@ -50,7 +50,7 @@ pub(super) struct DeadTile {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(super) enum DamageCause {
     /// A projectile, travelling along `dir` (unit) when known.
-    Shot { dir: Option<Vector2> },
+    Shot { dir: Option<Vec2> },
     Ram,
     Blast { falloff: f32, from: Position },
     /// Sustained flame exposure (`flame.rs`): a sandbag or fence that

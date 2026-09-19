@@ -1,7 +1,7 @@
 use sola_raylib::prelude::*;
 
-/// A 2D screen position in pixels.
-pub type Position = Vector2;
+/// A 2D position in field pixels (y down); `math::Vec2` is the vector type.
+pub type Position = math::Vec2;
 
 // scifi_tanks_sheet.png is a 416x384 atlas: 13 columns x 12 rows of 32x32
 // tiles (see docs/SPRITESHEET_SPEC.md for the full authored spec). Each row
@@ -447,8 +447,8 @@ impl Layout {
     /// editor's grid want. Outside the field the result is out of range
     /// rather than clamped, so a click on the bar is not a click on the
     /// top row of cells.
-    pub fn to_field(&self, window: Vector2) -> Vector2 {
-        Vector2::new(window.x - self.field.x, window.y - self.field.y)
+    pub fn to_field(&self, window: Vector2) -> Position {
+        Position::new(window.x - self.field.x, window.y - self.field.y)
     }
 }
 
@@ -913,6 +913,7 @@ pub mod level;
 pub mod map;
 pub mod mode;
 pub mod maplint;
+pub mod math;
 pub mod obstacle;
 pub mod pathfind;
 pub mod physics;
