@@ -1,6 +1,7 @@
 # PRD: bongbong online co-op
 
-Written 2026-09-15. Same shape as docs/android-port-prd.md: the decision, what
+Written 2026-09-15, re-checked against the tree on 2026-09-19 (section 3 names
+the commit). Same shape as docs/android-port-prd.md: the decision, what
 exists today, the design by area, the phases, the risks. The design study
 behind it, with diagrams and the option comparison, is the "Bongbong Online"
 page (rev 2); this document is the version that lives with the code and is the
@@ -61,23 +62,37 @@ Non-goals, for now
 - Lag compensation on the server (section 4.13); a decision for after stage 2
   measures.
 
-## 3. What we have today (verified 2026-09-15, tree at f0cab22)
+## 3. What we have today (verified 2026-09-19, tree at 41fe857)
 
 Working for us
-- `simulation::Input` is two `Intent`s plus toggles. An `Intent` is `move_dir:
-  Option<Dir>`, `face: Option<Dir>`, `fire: bool`. Fire is "held";
-  `drive_player` detects the press edge per seat through
+- `simulation::Input` is two `Intent`s plus toggles. The part of an `Intent` a
+  human can set is `move_dir: Option<Dir>`, `face: Option<Dir>`, `fire: bool`;
+  its other two fields (`fire_aim_offset`, and `slow`, the throttle the enemy
+  command layer eases) belong to the AI and never leave the server. Fire is
+  "held"; `drive_player` detects the press edge per seat through
   `player_fire_held_last_frame`. The wire carries exactly today's input, two
   bytes per seat per tick.
 - The dev server's `step` runs `Game::update(input, PHYSICS_FIXED_DT, w, h)` N
   times per rendered frame and is bit-for-bit replayable. The server tick loop
   is that loop.
-- Headless play is proven and fast: `probe` ran 20 rounds of 12 enemies, up to
-  3600 frames each, in 1.3 s on this Mac. A tick costs tens of microseconds.
-- `drive_tank(&mut Physics, &mut Tank, Intent, dt)` is a free function: the
-  whole locomotion model as one impulse per frame. It can run against a
-  client-side sandbox unchanged, which is all stage 2's prediction needs from
-  it.
+- Headless play is proven and cheap, though not as cheap as first written. On
+  one 2.1 GHz Xeon vCPU a tick of the default map costs about 95 µs with no
+  enemies at all, plus about 11 µs per enemy and 13 µs per extra player:
+  roughly 230 µs with twelve enemies and one player, 250 µs with two (`probe
+  --scenario afk --spawn band --enemies 12 --rounds 20`, wall time over
+  `frames_run`; a `Game::init` is 2.5 ms). Half of the fixed cost arrived
+  with the flow-field router: the same sweep at f0cab22, before it, floors at
+  40 µs, and on fixture maps identical in both trees the router adds 45 to 55
+  µs a tick whatever the tank count. Section 5 has the projections and
+  section 8 the mitigation.
+- `drive_tank(&mut Physics, &mut Tank, Intent, dt, Footing)` is a free
+  function: the whole locomotion model as one impulse per frame. `Footing` is
+  what the ground under the hull says (docs/water.md): a ford's pace and grip
+  and the current's velocity, read by `Footing::at` from `Game::water`, a
+  `WaterLayout` built from the map's cells alone. The model is still a pure
+  function of intent, the hull's own state and static ground, so it can run
+  against a client-side sandbox unchanged, which is all stage 2's prediction
+  needs from it.
 - Effects are derived, not stored. Muzzle and impact flashes, blast fireballs,
   scorches, thrown rubble and shocks are pushed by the phases that cause them,
   shaped by a hash of their position; `fx.rs` diffs `game.events()`. A client
@@ -100,13 +115,14 @@ In the way
   `frog.rs`, `shell.rs`, `obstacle.rs`, ...) keeps its `draw_*` next to its
   state. Nothing in `simulation/` needs a window, but the crate cannot build
   without the C library.
-- No serializable world: `Game` is 61 fields around a `hecs::World`, neither
+- No serializable world: `Game` is 63 fields around a `hecs::World`, neither
   derives serde, rapier is built without `serde-serialize`. Snapshots are a
   purpose-built wire struct.
-- Ricochets are silent: `Shell::try_ricochet` reflects off iron and emits no
-  event; `Deflected` covers barrels only. Deriving projectiles from events
-  needs a `Ricochet` event first (stage 1 sends projectile positions and does
-  not care).
+- Ricochets are silent: `Shell`'s `Projectile::try_ricochet` reflects off iron
+  and emits no event, and a barrel's chance bounce in `resolve_projectiles` is
+  just as quiet; `Deflected` covers a shield's bounce only. Deriving
+  projectiles from events needs a `Ricochet` event first (stage 1 sends
+  projectile positions and does not care).
 - Tuning is process-global (`tuning()` is one `RwLock`). A room's tuning diff
   travels in `Welcome` and the dev panel locks for the round.
 - `Physics` has `set_position`, `velocity`, `apply_impulse`, `step`, but no
@@ -148,17 +164,17 @@ sees. This table is the first pass; the phase 1 audit finalises it.
 
 | Family | Travels | Derived | Local |
 |---|---|---|---|
-| Tank (46 fields) | `position`, `rotation`, body velocity, `damage`, `wreck_col`, `row` (in `Welcome`), `owner`, ammo counts, `flame_fuel`, active weapon and variants, `shield_timer`, `speed_boost_timer`, `burn_timer`, `despawn_timer`, a "hit this interval" bit, `flame_held` | `damage_variant`/stage from `damage`; `shell_variant` from row and the alternating shot; `hull_frame` from velocity and time | `visual_rotation`, `turret_visual_rotation`, `ring_position`/`ring_velocity`, `hull_anim_accum`, `minigun_cycle_timer`, track wobble and jitter, `track_accum`, `pending_shot` timing (the second barrel's shell arrives as its own `Fired`) |
+| Tank (50 fields) | `position`, `rotation`, body velocity, `damage`, `wreck_col`, `row` (in `Welcome`), `owner`, ammo counts, `flame_fuel`, active weapon and variants, `shield_hp` and `shield_broke`, `speed_boost_timer`, `burn_timer`, `despawn_timer`, a "hit this interval" bit, `flame_held` | `damage_variant`/stage from `damage`; `shell_variant` from row and the alternating shot; `hull_frame` from velocity and time; `wet_timer` from the hull's own wading (the water layout is the map's) | `visual_rotation`, `turret_visual_rotation`, `ring_position`/`ring_velocity`, `hull_anim_accum`, `minigun_cycle_timer`, track wobble and jitter, `track_accum`, `pending_shot` timing (the second barrel's shell arrives as its own `Fired`); `throttle` and `shield_recharge_delay` are server bookkeeping and never travel |
 | Frog (two) | `position`, `health`, a state byte with phase, `hop_end` while hopping | animation frame | — |
-| Obstacle (up to 578 cells) | layout in `Welcome`; then deltas: `health`, `burning`, `fuse` armed with total, `scorched` mask, `destroyed`, a ram-lean byte | `variant`, `edge_mask` (recomputed as `refresh_edge_masks` does), `burn_frame` from time since ignition | `burn_frame_timer`, `heat` (ignition is an event) |
-| Pickups | bitmask of slot-backed pickups present; bonus shields as explicit cells | kind and position from the map's slots | bob and spin |
+| Obstacle (one per solid cell: 578 on the default 34 x 17 field, more on a map with its own `size`) | layout in `Welcome`; then deltas: `health`, `burning`, `fuse` armed with total, `scorched` mask, `destroyed`, a ram-lean byte | `variant`, `edge_mask` (recomputed as `refresh_edge_masks` does), `burn_frame` from time since ignition | `burn_frame_timer`, `heat` (ignition is an event) |
+| Pickups | bitmask of slot-backed pickups present; the Health slot's bonus shields and frog packs as explicit cells | kind and position from the map's slots | bob and spin |
 | Shells, bullets, plasma | stage 1: id, kind, position, heading, state per live projectile. Later, with `Ricochet`: spawn from `Fired`, removal from `Hit`, nothing between | choreography frame from state and interval | — |
 | Laser, flamethrower | laser: `Fired` plus the hit point; flame: origin, direction, capped reach while held | beam fade, cone flicker | — |
 | Fires, oil, drums | `FireStarted`/`Ignited`, burning cells with remaining time as deltas, `oil_cells` in `Welcome` and removals, `DrumLaunched` with landing cell | the drum's arc and shadow; fire loop frames | — |
 | Round state | `mission`, spawn plan (`Welcome`), wave index/size/alive/pending, `intro_timer`, `time`, `outcome`, `restart_timer`, alert position and timer | banners, HUD | `paused` (meaningless online), `shadows_enabled`, `debug_overlays` |
 | Fireballs, scorches, rubble, shocks, flashes, screen flash, cook-offs | only their causing events | everything: `wreck_fx`, `apply_blast`'s cosmetic half, `obstacle_died` hash it all from position | their ages (`tick_effects`) |
-| Grass, tracks, ground | layout via map plus seed; burnt cells as deltas | ground and tufts from `Game::init`; tread marks from interpolated motion | `crush`, `push`, sway, particles, camera shake |
-| AI, engage rings, nav grid, terrain snapshot | nothing | nothing | nothing; the client has no AI |
+| Grass, tracks, ground, water | layout via map plus seed (the map carries the theme and the water cells); burnt cells as deltas | ground, water (`ground::Layout` for the picture, `WaterLayout` for the rules, both from the map's cells) and tufts from `Game::init`; tread marks from interpolated motion, wet ones after a ford | `crush`, `push`, sway, the water's shimmer and current marks (drawn from the round clock), spray, particles, camera shake |
+| AI, the commander, engage rings, nav and route grids with their flow fields, terrain snapshot | nothing | nothing | nothing; the client has no AI |
 
 Two rules fall out. Cosmetic state is owned by the replica and driven from
 interpolated authoritative values, never sent. Every cause must be an event,
@@ -210,7 +226,8 @@ is needed. Never compress the intent stream.
 ### 4.4 Events and the client's reactions
 
 `Event` as it exists, and what the replica does with each. `AiAction`,
-`EngageSlot`, `StuckEscape`, `Breach`, `Retreat`, `Retarget` are never sent;
+`EngageSlot`, `StuckEscape`, `Breach`, `Retreat`, `Alert`, `Retarget` are
+never sent (the AI's trace, recorded only while `Game::trace_ai` is set);
 `PhysicsQuarantine` is logged server-side.
 
 | Event | Client reaction | Existing code it calls |
@@ -221,8 +238,10 @@ is needed. Never compress the intent stream.
 | `Wreck {slot, x, y}` | fireball, flash, scorch, thrown parts, cook-off queue, screen flash, ripple, shake | `Game::wreck_fx`, `flash_screen`, `SHOCK_KILL` |
 | `Ram` | contact sparks and dust | `fx.rs` |
 | `PickupCollected` / `PickupRespawned` | pop / appear | `fx.rs` |
-| `Deflected`, `ShellsCollided` | spark, small flash | `impact_flashes.push` |
+| `Deflected` (a shield turned a shot, which changes owner), `ShellsCollided` | spark, small flash | `impact_flashes.push` |
 | `FrogBite` | bite cue, frog ripple | `SHOCK_FROG` |
+| `FrogHealed {side, slot, amount, x, y}` | green sparks off the frog, its gauge refills | `fx.rs` |
+| `ShieldBroken {slot, x, y}` | a ring of sparks and smoke off the hull, ripple and shake, the shield ring goes | `fx.rs`, `drain_shield_breaks`' `SHOCK_SHIELD_BREAK` |
 | `WaveStarted`, `TankEntered`, `WreckRemoved` | WAVE N banner; roll-in appears at the gate; a wreck fades | HUD, `despawn_timer` |
 | `ObstacleDestroyed {material, x, y}` | rubble decal, thrown | `props::obstacle_died`'s decal part |
 | `Blast {x, y, chained, drum}`, `CookOff` | shaped fireball, scorch, parts, re-thrown rubble, flattened grass, burnt-in tracks, ripple, flash | `apply_blast`'s cosmetic half |
@@ -254,10 +273,15 @@ Four pieces:
   `server_ms` through a smoothed offset.
 - `Game::tick_presentation(dt)`: `tick_effects` plus the cosmetic parts of the
   entity ticks (`ease_visual_rotation`, `ease_turret_visual_rotation`,
-  `ease_ring_position`, hull animation, tread marks from displacement, grass
-  crush and push from hull boxes, fire and fuse frames, decal flight, the
-  drum's arc, the wave banner timer). All of it exists inside phases that also
-  do authoritative work; the refactor separates the halves.
+  `ease_ring_position`, hull animation, tread marks from displacement - none
+  in water, wet for `wet_timer` after a ford -, grass crush and push from hull
+  boxes, fire and fuse frames, decal flight, the drum's arc, the wave banner
+  timer), and the round clock the water's shimmer and current marks and the
+  fire loops are drawn from: `time` travels, the replica advances it between
+  snapshots and re-pins it on each. `Game::wading` (every hull in a ford,
+  what `fx.rs` throws spray from) is a position query against the map's water
+  and needs nothing sent. All of it exists inside phases that also do
+  authoritative work; the refactor separates the halves.
 - Effects from events, applied at their tick's render time, not on arrival, so
   a fireball appears when the hull it belongs to is drawn there. `Fx::observe`
   then sees the same `game.events()` it sees today.
@@ -326,7 +350,7 @@ upgrade), tokio for the rest.
 
 | Option | Fits because | Hurts because | Cost |
 |---|---|---|---|
-| **Native server on a small VM** (Fly.io machines, or one Hetzner box) — recommended | same crate as the probe and tests; `cargo run` debugging; real 60 Hz timers; native TLS and QUIC later; hundreds of rooms per vCPU | a machine to keep alive; regions are yours (Frankfurt first) | ~$3–5/month per region |
+| **Native server on a small VM** (Fly.io machines, or one Hetzner box) — recommended | same crate as the probe and tests; `cargo run` debugging; real 60 Hz timers; native TLS and QUIC later; dozens of rooms per vCPU (section 5) | a machine to keep alive; regions are yours (Frankfurt first) | ~$3–5/month per region |
 | Cloudflare Durable Object per room (`workers-rs`) | zero machines; next to the site; placed near the room's creator | only after the sim compiles to bare wasm; a 60 Hz timer in a DO is workable, not a documented target; `wrangler dev` debugging; no datagrams ever | Workers Paid plus usage |
 | Split: Worker for the lobby, VM for rooms | each piece where it is easiest; both deploy lanes exist | two lanes | as the VM |
 
@@ -353,9 +377,10 @@ day for rematch and a results link).
 
 Recovery: a crash or same-binary restart reads the replay logs and
 fast-forwards each room to its last tick (ten minutes of play is 36 000 ticks,
-about a second); clients reconnect and resume. A CI test replays a logged
-round and compares the final snapshot. A new build cannot replay the old
-build's log, which is why upgrades are a routing problem:
+under ten seconds at section 5's tick cost); clients reconnect and resume. A
+CI test replays a logged round and compares the final snapshot. A new build
+cannot replay the old build's log, which is why upgrades are a routing
+problem:
 
 - Instances are addressable. Each server process registers `{address, version,
   protocol, region}` in the directory on start with a heartbeat; room records
@@ -418,12 +443,12 @@ co-op end rule.
 | Piece | Today | For online co-op |
 |---|---|---|
 | Seats | `PlayerCount::One\|Two`, two intents in `Input` | a roster of up to `MAX_SEATS` (8), one intent per seat; a seat with no human sends no input |
-| Spawns | `start`/`start2`; player 2 beside player 1 when unset | "beside the start" for N with `Game::init`'s clearance; numbered starts in the builder later |
+| Spawns | `start`/`start2`; player 2 beside player 1 when unset | "beside the start" for N with `Game::init`'s clearance and `dry_cell_near`'s shore rule; numbered starts in the builder later |
 | Enemy targeting | `Ai::target_player` over two, with hysteresis | the same rule over N; the engage ring is already per player |
 | Colours, labels | `TEAM_COLORS` two entries; sheet blocks enemy, P1, P2; `P1`/`P2` labels | seats past two draw the P1 block, told apart by ring colour and `P3`..`P8`; proper blocks from `gen_tanks.py` when a fourth friend shows up |
 | HUD | `SLOTS_ONE`/`SLOTS_TWO` | online: the local seat in full, others as a strip of ring-coloured hearts; couch tables stay |
 | Death | a wrecked player waits for the round to end | wave rounds: re-enter with the next wave through a gate (the roll-in that exists), no penalty in v1; band rounds keep today's rule (decision 7) |
-| Frog, pickups | unchanged | unchanged; the server decides who reached a pickup first |
+| Frog, pickups | unchanged | unchanged; the server decides who reached a pickup first, and a frog health pack heals the collector's side's frog wherever it stands (`FrogHealed`) |
 
 Difficulty scales with seats: a wave plan authored for one tank is a walk for
 four. The room can scale `tanks`, wave size and tier ramp by seat count with
@@ -439,7 +464,9 @@ static world.
 
 Predicted: own hull position, rotation, velocity; own shots (flash and shell
 on the frame of the press, confirmed by `Fired`; cooldown and ammo from the
-last snapshot plus local decrements); collisions with static terrain (exact).
+last snapshot plus local decrements); collisions with static terrain and
+water (both exact: deep cells are static colliders, and a ford's `Footing` is
+a function of the hull's position on the map's `WaterLayout`).
 Approximate: collisions with other tanks and wrecks (kinematic stand-ins at
 interpolated positions; the server's answer wins). Not predicted: damage,
 knockback, ram, pickups, buffs; everyone else stays interpolated.
@@ -456,19 +483,20 @@ Protocol changes:
 - `Event::Fired` gains `seat` and `client_tick` for player shots.
 
 The sandbox and the loop. The client owns a second `Physics`: the same statics
-`Game::init` spawns for walls, obstacles and the frog, `spawn_tank` for its
-own tank, a kinematic body per other live tank re-placed every frame. It keeps
-the last 120 intents by tick. Per frame: sample input, stamp, append, send;
-`drive_tank(sandbox, own, intent, dt)` and `sandbox.step()`; render the
-predicted tank for the local seat. On each snapshot: reset the sandbox tank to
+`Game::init` spawns for walls, obstacles, deep water and the frog,
+`spawn_tank` for its own tank, a kinematic body per other live tank re-placed
+every frame. It keeps the last 120 intents by tick. Per frame: sample input,
+stamp, append, send; `drive_tank(sandbox, own, intent, dt, Footing::at(water,
+own.position))` and `sandbox.step()`; render the predicted tank for the local
+seat. On each snapshot: reset the sandbox tank to
 the server's position, rotation and velocity at `acked` (the new
 `set_velocity`); replay every intent after `acked` (typically 5 to 15,
 microseconds each); compare with the pre-snapshot prediction. Within a quarter
 pixel: nothing. Otherwise the difference is a visual offset on the drawn hull
 decayed to zero over about 100 ms; over a hull width, snap. The replay lands
 because it runs the same tick count, `dt`, tuning, `drive_tank` and rapier on
-the same static shapes; cross-platform drift is sub-pixel per step and
-corrected every 50 ms, a nudge rather than a desync.
+the same static shapes and the same `WaterLayout`; cross-platform drift is
+sub-pixel per step and corrected every 50 ms, a nudge rather than a desync.
 
 Provisional shots: id `(seat, client_tick)`; adopts the server's projectile id
 when `Fired` arrives; removed quietly after one round trip plus one interval
@@ -484,9 +512,10 @@ dev server's history) is optional and mostly for the laser (decision 9).
 
 Sim additions for stage 2: `Physics::set_velocity` and `spawn_kinematic`;
 statics buildable from a map on a bare world
-(`battlefield::spawn_walls`/`spawn_from_map` callable outside `Game::init`);
-`drive_tank` reachable from the client module; a `Tank` constructor for the
-local seat from the roster.
+(`battlefield::spawn_walls`/`spawn_from_map` and the deep-water boxes callable
+outside `Game::init`; `WaterLayout::build` already takes only cells);
+`drive_tank` and `Footing::at` reachable from the client module; a `Tank`
+constructor for the local seat from the roster.
 
 Measured in the rig before any real link: prediction error per snapshot (mass
 under a quarter pixel, a tail at contacts), corrections per minute above nudge
@@ -498,10 +527,11 @@ and snap thresholds, lead and starvation per seat.
 |---|---|
 | Intent up, 60 Hz (three per packet in stage 2) | 0.4–0.8 KB/s payload, ~3 KB/s framed |
 | Snapshot down, 20 Hz, 8 tanks + 24 shots, delta | ~2–3 KB/s payload, ~4 KB/s framed |
-| Worst case, 32 tanks in a wave round | ~8 KB/s payload |
+| Worst case, ~40 tanks in a wave round (`wave_max_alive`'s cap of 31 plus eight seats) | ~10 KB/s payload |
 | `Welcome`, deflated | ~4 KB once |
-| Server tick, 12 tanks (measured here) | ≈ 20–40 µs |
-| CPU per room at 60 Hz | ≈ 0.2 % of a core; 100+ rooms per shared vCPU |
+| Server tick, 12 enemies + 1 player (measured, section 3) | ≈ 230 µs on a 2.1 GHz Xeon vCPU, ≈ 95 µs of it per-frame fixed cost |
+| Server tick, 12 enemies + 8 seats (projected) | ≈ 320 µs; ≈ 550 µs at `wave_max_alive` |
+| CPU per room at 60 Hz | ≈ 2 % of a core at 8 seats, ≈ 3 % worst case; 30–50 rooms per vCPU of that class, more on a desktop core |
 | Memory per room | < 2 MB |
 | Client replay per snapshot, stage 2 | < 0.2 ms |
 | Own-tank latency, stage 1 | ≈ 150–250 ms (≤16 sample + 20–60 up + ≤16 tick + ≤50 cadence + 20–60 down + 100 interpolation) |
@@ -523,11 +553,12 @@ ship a complete co-op game; 4 and 5 are stage 2.
    `Snapshot`, `Welcome`, the intent packet, delta encoding;
    `encode_snapshot`/`apply_snapshot`; `tick_presentation`; the cosmetic
    halves of `wreck_fx`, `apply_blast`, `obstacle_died` callable from events;
-   `Ricochet` and whatever else the audit finds silent. The rig: an
-   authoritative `Game` on a thread, a replica in the window, an in-process
-   transport with dialled delay, jitter and loss. Done when the round looks
-   and feels like the local game at 80 ms and 2 % loss with every effect
-   present; a snapshot round-trip test next to `determinism_tests`.
+   `Ricochet` (iron and the barrel bounce) and whatever else the audit finds
+   silent. The rig: an authoritative `Game` on a thread, a replica in the
+   window, an in-process transport with dialled delay, jitter and loss. Done
+   when the round looks and feels like the local game at 80 ms and 2 % loss
+   with every effect present; a snapshot round-trip test next to
+   `determinism_tests`.
 2. **Room server, WebSockets, join links (L).** `bongbong-server`; the JS
    bridge and tungstenite behind the `Transport` trait; the Worker's routes
    and directory with the owning instance on each record; the well-known
@@ -613,6 +644,14 @@ ship a complete co-op game; 4 and 5 are stage 2.
   cleanly.
 - **Co-op difficulty scales with seats.** Scale the wave plan by seat count
   with a tuning diff; play-test the curve with the probe's sweeps.
+- **The tick's fixed cost bounds rooms per core.** About 95 µs of every tick
+  is work that does not scale with tanks (section 3), and half of it is
+  `route_grid`: the nav grid rebuilt from every obstacle, labelled, priced,
+  and one Dijkstra per shared target - a field per seat plus one for the
+  frog, so eight seats are nine fields a tick. Watch tick p50 per room; if
+  it matters, build the route grid every other tick or only when a target
+  changed cell, both server-side changes no client sees, with the probe
+  fixtures as the oracle that the AI did not change.
 - **Abuse of open rooms.** Rate limits, Turnstile, nickname filter.
 
 ## 9. Parked: future modes
@@ -644,4 +683,8 @@ Recorded so co-op does not close the door on them; none are in the plan.
 - docs/fullscreen-resolution-research.md: the shared field, the window, and
   touch, which the invite page inherits.
 - docs/runtime-tuning-design.md: the tuning table the `Welcome` diff patches.
+- docs/water.md: the `Footing` and the deep-water colliders the stage 2
+  sandbox carries; the shimmer and spray the replica draws for itself.
+- docs/enemy-command-and-control-prd.md: the commander, the one layer that
+  reads several enemies at once; all of it stays on the server.
 
