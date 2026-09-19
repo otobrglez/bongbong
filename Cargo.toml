@@ -21,6 +21,19 @@ serde_json = "1"
 sola-raylib = { version = "6.3.0", optional = true }
 toml = "1"
 
+# The client's native WebSocket (src/net/native.rs,
+# docs/online-coop-prd.md section 4.6), behind the `online` feature: the
+# blocking `tungstenite` on one std thread, TLS through `rustls` with
+# emscripten's target excluded (the web build talks to emscripten's own
+# WebSocket API instead and links no Rust socket code). `rustls` is named
+# here only to pick its crypto provider - tungstenite takes it with no
+# default features, so without this row `ClientConfig::builder` finds no
+# provider at all; `ring` is the one that builds for macOS, Linux,
+# Windows, iOS and Android without cmake.
+[target.'cfg(not(target_os = "emscripten"))'.dependencies]
+tungstenite = { version = "0.29", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"], optional = true }
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"], optional = true }
+
 # iOS (docs/ios-native-port-prd.md, CLAUDE.md's iOS section): raylib (SDL
 # backend, OpenGL ES 2.0) and a static SDL3 are prebuilt for the simulator
 # by tools/setup_ios.sh and linked by build.rs. `nobuild` skips the crate's
@@ -46,7 +59,7 @@ sola-raylib = { version = "6.3.0", features = ["nobuild"], optional = true }
 members = ["android", "ntk", "server"]
 
 [features]
-default = ["render"]
+default = ["render", "online"]
 # The presentation: raylib and everything that draws with it - `app`, the
 # `render` module, the particle layer, the builder's chrome, the `bongbong`,
 # `bbmcp` and `mapshot` binaries. On for every client build; off
@@ -63,6 +76,15 @@ render = ["dep:sola-raylib"]
 # ways to drive it at runtime are gated). Enable with `--features dev-tools`
 # (`just run-dev`, `just build-web-dev`).
 dev-tools = []
+# Online co-op's client half (src/net/transport.rs and its implementations,
+# docs/online-coop-prd.md section 4.6): the socket a room is played over.
+# On for every client build, off under `--no-default-features`, which is
+# how the room server and the probe take the crate - the server speaks the
+# same protocol through tokio and must not drag a second WebSocket stack,
+# a TLS stack and a C compiler into its image. The trait, the loopback
+# link and the room session compile either way; the feature gates the
+# native socket alone.
+online = ["dep:tungstenite", "dep:rustls"]
 
 [profile.dev]
 opt-level = 0
