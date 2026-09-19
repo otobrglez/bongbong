@@ -3,9 +3,14 @@
 Written 2026-09-15, re-checked against the tree on 2026-09-19 (section 3 names
 the commit). Same shape as docs/android-port-prd.md: the decision, what
 exists today, the design by area, the phases, the risks. The design study
-behind it, with diagrams and the option comparison, is the "Bongbong Online"
-page (rev 2); this document is the version that lives with the code and is the
-one to update as things land. Nothing in the tree talks to a network yet.
+behind it, with diagrams, the measurements and the open checklist, is the
+"Bongbong online co-op" page (2026-09-19, superseding "Bongbong Online" rev
+2); this document is the version that lives with the code and is the one to
+update as things land. Nothing in the tree talks to a network yet. Four
+requirements added on 2026-09-19 are folded in: the server ships as a
+container on the Hetzner Kubernetes cluster (4.8), version 1 keeps nothing on
+disk (4.9), the client runtime was weighed against tokio (4.6), and local play
+stays untouched (4.5).
 
 ## 1. The decision, in one paragraph
 
@@ -23,7 +28,11 @@ reconciles on each snapshot, and spawns its own shots provisionally. Transport
 is WebSockets on every platform; rooms are created and joined through short
 links on bongbong.io that play in the browser at once and open the native app
 where it is installed; identity is a nickname and a device token, no accounts.
-The first mode, and the only one this PRD designs, is co-op against the AI.
+The room server is one container image on the Hetzner Kubernetes cluster, and
+version 1 keeps nothing on disk: a room lives in one pod's memory and its code
+names that pod. Local play is untouched: the online round is a third driver
+beside Play and Build. The first mode, and the only one this PRD designs, is
+co-op against the AI.
 
 Deterministic lockstep, which the sim's seeded-replay design seems to invite,
 was studied and rejected: it needs identical floats on emscripten, Apple,
@@ -44,12 +53,18 @@ Goals
   where the app is there. No sign-up on the critical path.
 - Own-tank steering that answers a key on the next frame (stage 2); everything
   else smooth at a fixed, known delay.
-- Server upgrades that end nobody's round; crashes that lose at most a round;
-  a link or a nickname that never stops working because a machine went away.
+- A planned deploy that ends nobody's round: a pod drains its rounds before it
+  exits. A crash ends the rounds on that pod in v1, the price of keeping
+  nothing on disk, until the replay log arrives.
+- Local play untouched: the single-player and couch two-player rounds, the
+  builder, the probe and the dev server keep working exactly as today, in the
+  same binary.
 - Every claim about feel measurable in an offline rig with dialled-in delay,
   jitter and loss, before a real link is involved.
 
 Non-goals, for now
+- Persistence of any kind in v1: no replay log, no records, no database. A
+  room is memory in one pod (4.9).
 - Free-for-all, team versus team, spectators, couch-plus-online: parked
   (section 9). The one rule kept for their sake is that `Owner::same_side`
   stays the single place deciding who may hurt whom.
@@ -59,7 +74,7 @@ Non-goals, for now
   under it later.
 - Cloudflare Durable Objects as the room host. Kept alive by building the sim
   crate for bare wasm in CI; not the first route.
-- Lag compensation on the server (section 4.13); a decision for after stage 2
+- Lag compensation on the server (section 4.12); a decision for after stage 2
   measures.
 
 ## 3. What we have today (verified 2026-09-19, tree at 41fe857)
@@ -106,8 +121,8 @@ Working for us
   `friendly_fire_damage_factor`, `Ai::target_player` over two players with
   hysteresis.
 - The site is a Cloudflare Worker deployed by `wrangler` from CI on tags, with
-  per-PR preview workers. The join page and the room directory are three
-  routes on it.
+  per-PR preview workers. The join page and the well-known files are the two
+  things it adds; it holds no room state.
 
 In the way
 - The sim links raylib. Seven simulation files import
@@ -207,7 +222,7 @@ Welcome  { protocol: u16, sim_version: &str, seat: u8, roster: [{ seat, nick, ch
            snapshot: Snapshot /* full */ }
 
 // lobby, JSON over the same socket
-Lobby    { Join { nick, device_token, code } | Ready | Start | Leave | Kick { seat } | Chat { text } }
+Lobby    { Create { nick, device_token, map, mission } | Join { nick, device_token, code } | Ready | Start | Leave | Kick { seat } | Chat { text } }
 ```
 
 Positions in quarter pixels fit an `i16` on fields up to 8192 px wide. Encode
@@ -291,35 +306,79 @@ late joiner misses earlier cosmetics (scorches, rubble); if it matters,
 `Welcome` can carry the decal and scorch lists, a few hundred bytes of
 positions plus hashed variants.
 
-### 4.6 Transport
+**One client, three modes.** Local play stays exactly as it is: the online
+round is a third driver beside Play and Build, never a replacement for the
+in-process `Game::update`.
+
+- `mode::Session` gains an `Online` driver next to Play and Build. Play still
+  runs `Game::update` in-process with the keyboard's `Input`, as today; Online
+  runs `apply_snapshot` and `tick_presentation` on the replica and sends the
+  local seat's intent. `Game::render`, `hud`, `fx`, the builder and touch are
+  shared by construction, which is why the replica is a `Game`.
+- The offline round keeps its whole toolchain: `--seed` replays, the probe,
+  `just probe-fixtures`, the dev server's lockstep `step` and the determinism
+  tests all run the local `Game` and see no network code. Couch two-player
+  stays a local mode; couch seats inside an online room stay parked.
+- One binary, one web build, one app per platform. The mode is chosen in the
+  bar (PLAY, BUILD, ONLINE), by `--join CODE` or `--host` on the command line,
+  or by the code in the join link's URL on the web. Embedded builds keep local
+  play with touch and add ONLINE to the same bar.
+- Phase 0's `render` feature is on by default for every client build; only the
+  server image and CI's bare-wasm check turn it off. Local play never depends
+  on a feature being off.
+
+### 4.6 Transport and the client runtime
 
 WebSockets everywhere in v1: the only transport all five platforms speak
 without a native stack, passes every proxy, TLS is free with the domain. Its
 weakness, TCP head-of-line blocking on a lossy link, costs a stutter at 20
 packets a second, not a disconnect.
 
-- Web (emscripten): a small `net.js` added with `--js-library` owns the
-  browser `WebSocket`. `onmessage` copies the bytes into wasm memory through
-  `Module.ccall("bb_net_push", ...)`; Rust drains the queue at the frame
-  boundary, the discipline `tuning::apply_pending` and the dev server follow.
-  Outgoing frames call an `extern "C" bb_js_send(ptr, len)` implemented in
-  that library; the handler sends a copy of the heap slice (the heap detaches
-  on growth under `ALLOW_MEMORY_GROWTH`). Single-threaded JS is not a problem:
-  the frame is a requestAnimationFrame task and socket events dispatch between
+- Web (emscripten): emscripten's own WebSocket API (`emscripten/websocket.h`,
+  linked with `-lwebsocket.js`) called through FFI from Rust:
+  `emscripten_websocket_new`, `emscripten_websocket_send_binary`, and the
+  open, message, error and close callbacks. The message callback copies the
+  bytes into a Rust queue; the frame drains it at the frame boundary, the
+  discipline `tuning::apply_pending` and the dev server follow. No site
+  JavaScript and no `--js-library` file. Single-threaded JS is not a problem:
+  the frame is a requestAnimationFrame task and socket callbacks run between
   frames; nothing ever blocks. Handle `visibilitychange` (a hidden tab stops
-  rAF while `onmessage` keeps firing) by draining and keeping the newest
+  rAF while messages keep arriving) by draining and keeping the newest
   snapshot. No wasm threads, no Worker, no Asyncify.
-- Native (desktop, iOS, Android): `tokio-tungstenite` with `rustls` and
-  `webpki-roots`, on a thread behind an mpsc channel, the dev server's
-  pattern.
+- Native (desktop, iOS, Android): blocking `tungstenite` with `rustls` and
+  `webpki-roots` on one std thread that owns the socket: it reads with a short
+  timeout and flushes the outgoing queue between reads, and talks to the frame
+  through two mpsc channels, the dev server's pattern.
 - One `Transport` trait, `send(&[u8])` and `drain(&mut Vec<Msg>)`, with three
-  implementations: the JS bridge, the native thread, and an in-process channel
-  with artificial delay, jitter and loss for the rig.
+  implementations: the emscripten socket, the native thread, and an in-process
+  channel with artificial delay, jitter and loss for the rig. Everything the
+  client says to a room, including creating one, goes over that one socket as
+  a lobby message, so the game needs no HTTP client.
 
 The datagram upgrade, later: WebTransport (native via `quinn`/`wtransport`;
 browser support only recently reached Safari, keep the WebSocket fallback) or
 WebRTC data channels (every browser, but drags an ICE/DTLS/SCTP stack into the
 server). Confined to the transport layer by the protocol's split.
+
+**Client runtime: tokio or threads?** Evaluated as asked, reading "use the
+Rust version" as: prefer a plain Rust path that adds no runtime dependency to
+the client. The frame loop is synchronous and raylib-driven, there is exactly
+one socket, and everything crosses into the frame at its boundary, so an async
+runtime has nothing to schedule on the client.
+
+| Option | Native | Web (emscripten) | Adds to the client | Verdict |
+|---|---|---|---|---|
+| tokio and `tokio-tungstenite` on a background thread | works | does not: tokio's reactor needs mio, which has no emscripten support, so the web needs its own path anyway | tokio, tokio-tungstenite, rustls, webpki-roots, about 60 crates | two code paths, and the heavy one buys nothing |
+| blocking `tungstenite` on a std thread with mpsc channels | works, on iOS and Android too | does not (no sockets) | tungstenite, rustls, webpki-roots, about 25 crates | the native path |
+| emscripten's WebSocket API through FFI | not applicable | works; callbacks land between frames; emscripten ships the JS | nothing | the web path |
+| a hand-written `net.js` `--js-library` | not applicable | works | a JS file to maintain in the repo | dropped; emscripten's API does the same |
+| tokio through `wasm-bindgen-futures` | not applicable | wrong target: that is `wasm32-unknown-unknown`, not emscripten | nothing usable | not applicable |
+
+What is shared with the server is the protocol, not the runtime: one `net`
+module with the codec (`Intent`, `Snapshot`, `Welcome`, the lobby messages)
+and the seat's state machine as plain synchronous code, used by the server's
+async tasks and the client's thread alike. tokio stays a server dependency
+only.
 
 ### 4.7 Room server
 
@@ -327,107 +386,137 @@ server). Confined to the transport layer by the protocol's split.
 upgrade), tokio for the rest.
 
 - One task per room owns the `Game`. Each tick it drains the seats' mailboxes
-  into an `Input`, calls `update`, appends the intents to the replay log, and
-  every third tick encodes the delta snapshot once and hands the same bytes to
-  every seat's writer.
+  into an `Input`, calls `update`, and every third tick encodes the delta
+  snapshot once and hands the same bytes to every seat's writer.
 - One task per connection reads, decodes, and drops intents into the seat's
   mailbox; lobby messages go to the room task over a command channel. The
   writer has a bounded queue; a slow client gets snapshots skipped, never
   queued.
-- Seats outlive connections: nickname, device token, chassis, connection
-  state, last acked tick. A disconnect starts a 30 s grace; a reconnect with
+- Seats outlive connections, in memory: nickname, device token, chassis,
+  connection state, last acked tick. A disconnect starts a 30 s grace; a reconnect with
   the same token reclaims the seat and gets a fresh `Welcome`; past the grace
   the seat is away but still owned for the whole round.
-- The directory client registers the instance at start, heartbeats, reports
-  room creation and closure.
+- Room codes carry the pod: one letter for the pod plus four for the room,
+  from the 20-letter alphabet (4.10), so a join needs no directory.
 - The dev server rides along: every room can expose the existing tools on a
   loopback port behind `dev-tools`, so a misbehaving live round is inspectable
   with the MCP tools used today.
-- Bounds everywhere: rooms per instance, waiting rooms (30 min), empty rooms
+- Bounds everywhere: rooms per pod, waiting rooms (30 min), empty rooms
   (5 min), rounds (30 min).
 
-### 4.8 Hosting
+### 4.8 Hosting: a container on Kubernetes at Hetzner
+
+The room server ships as one container image and runs on the existing
+Kubernetes cluster at Hetzner (a requirement of 2026-09-19).
+
+- The image: a multi-stage build, `cargo build --release -p bongbong-server
+  --no-default-features` in a Rust builder stage, the static binary alone in a
+  distroless (or scratch, with musl) final stage; about 20 MB. The server
+  needs no `static/` assets and no C library, which is why phase 0's headless
+  crate comes first. `SHIPPED_MAPS` are embedded; a builder map travels in
+  `Welcome`.
+- The workload: a StatefulSet `rooms` (one replica in v1, a handful later) so
+  pods have stable names; a per-pod Service selecting
+  `statefulset.kubernetes.io/pod-name`, and one Ingress path per pod,
+  `/r/rooms-0/` and so on, plus `/rooms` across all pods for creating a room.
+  The ingress controller's WebSocket read and send timeouts raised to an hour;
+  readiness and liveness on `/health`; resources sized from section 5 (a
+  1-vCPU limit is about 50 rooms).
+- The drain: `terminationGracePeriodSeconds` 1800. On `SIGTERM` the pod stops
+  accepting new rooms and rematches, reports not ready, keeps ticking its
+  rooms, and exits when the last ends or the grace runs out. Existing sockets
+  stay up through the drain; a rejoin to a draining pod fails in v1.
+- TLS and DNS: `rooms.bongbong.io` at the cluster's load balancer, DNS-only at
+  Cloudflare so the socket does not cross the proxy, cert-manager with Let's
+  Encrypt on the ingress. Proxied through Cloudflare works too (WebSockets
+  pass, with a 100 s idle limit the tick traffic never reaches) if the extra
+  hop measures fine.
+- The Worker keeps the site, the join page and the well-known files; it holds
+  no room state.
 
 | Option | Fits because | Hurts because | Cost |
 |---|---|---|---|
-| **Native server on a small VM** (Fly.io machines, or one Hetzner box) — recommended | same crate as the probe and tests; `cargo run` debugging; real 60 Hz timers; native TLS and QUIC later; dozens of rooms per vCPU (section 5) | a machine to keep alive; regions are yours (Frankfurt first) | ~$3–5/month per region |
+| **Container on the Hetzner Kubernetes cluster** — chosen | the cluster exists; one image, one manifest; rolling deploys with a drain; metrics and logs where the rest of the infrastructure has them | routing to the owning pod is the design's job (per-pod Services and paths); a rejoin during a drain fails until persistence arrives | the cluster's existing cost |
 | Cloudflare Durable Object per room (`workers-rs`) | zero machines; next to the site; placed near the room's creator | only after the sim compiles to bare wasm; a 60 Hz timer in a DO is workable, not a documented target; `wrangler dev` debugging; no datagrams ever | Workers Paid plus usage |
-| Split: Worker for the lobby, VM for rooms | each piece where it is easiest; both deploy lanes exist | two lanes | as the VM |
+| A bare VM (Fly.io machines, or one box) | `cargo run` debugging; no cluster | a second way to run things next to the cluster | ~$3–5/month per region |
 
-The split is the VM option written out and is what the design draws: the
-Worker gains `POST /rooms`, `GET /j/:code`, the directory (KV or one DO) and
-the well-known files; the room server is the only new machine.
+### 4.9 Rooms in memory, deploys and recovery
 
-### 4.9 Persistence and upgrades
+Version 1 keeps nothing on disk (a requirement of 2026-09-19): a room is
+memory in one pod, a planned deploy drains that memory gracefully, and a crash
+loses it. Persistence is the horizon, not the plan.
 
-Three kinds of data:
-
-| Kind | Examples | Where | Lifetime |
-|---|---|---|---|
-| the live world | the `Game`, hecs, rapier, timers, the AI's memory | server memory only | one round; never on disk |
-| the replay log | map, seed, tuning diff, mode, then every tick's intents (~3 KB/s per room) | appended in memory, flushed to local disk every few seconds | the round plus a day |
-| records | room: code, host, map, mission, roster, results, owning instance; player: nickname, device token, later stats; shared custom maps | the directory beside the Worker, or SQLite beside the server | rooms a day, players indefinitely |
+| What | Where in v1 | Lifetime |
+|---|---|---|
+| the live world: the `Game`, hecs, rapier, timers, the AI's memory | the room task's memory | one round |
+| seats: nickname, device token, chassis, connection state, last acked tick | the room task's memory | the room's life, so a rejoin within the grace works |
+| the room record: code, host, map, mission, roster, results | the room task's memory | until the room ends and its 5 min for a rematch pass |
+| nickname and device token on the player's side | localStorage, the app's keychain | across visits; the token is the reconnect key |
 
 The room's life: **waiting** (not ticking; reaped 30 min after the last seat
 leaves) → **playing** (60 Hz) → **paused, nobody connected** (not ticking: an
 empty room must not burn CPU and the AI must not kill the frog with nobody
 watching; the world stays in memory 5 min, resumes where it stopped on
-reconnect) → **ended** (world dropped at once; the record and results stay a
-day for rematch and a results link).
+reconnect) → **ended** (results and roster kept 5 min for a rematch, then
+dropped).
 
-Recovery: a crash or same-binary restart reads the replay logs and
-fast-forwards each room to its last tick (ten minutes of play is 36 000 ticks,
-under ten seconds at section 5's tick cost); clients reconnect and resume. A
-CI test replays a logged round and compares the final snapshot. A new build
-cannot replay the old build's log, which is why upgrades are a routing
-problem:
-
-- Instances are addressable. Each server process registers `{address, version,
-  protocol, region}` in the directory on start with a heartbeat; room records
-  carry the owning instance. One field, built in from phase 2.
-- Deploy is start new, drain old. The new instance passes a health check,
-  registers, and becomes the only member of the new-rooms pool. The old one
-  gets `SIGTERM`, leaves the pool, refuses new rooms and rematches, keeps
-  ticking its rooms, and exits when the last ends or after 15 min. On Fly.io:
-  a machine started beside the old one plus a delayed stop. On one box: a
-  supervisor and two ports.
-- Joins follow the room: `GET /j/CODE` resolves to the owner, whichever
-  version. Rollback is the same move backwards.
+- Deploys: a rolling update of the StatefulSet with the drain of 4.8. The old
+  pod refuses new rooms, keeps ticking the rounds it has, and exits when the
+  last ends or after 30 min; the new pod takes new rooms from the moment it
+  is ready. Rounds in progress finish on the old build. What v1 cannot do is
+  move a room between pods, so a rejoin to a draining pod fails, and a
+  rollback is the same rolling update backwards.
+- Recovery: there is no replay log, so a crash or an unplanned restart ends
+  the rounds on that pod. Clients see the socket close and land on the end
+  screen with "the room is gone"; the host makes a new room in one tap.
+  Accepted for v1.
 - Versions: a **protocol** number gates joining (web: "reload the page"; app:
   "update, or play this round in the browser", which the invite page already
-  offers); a **sim** version is stamped on logs and records. Ship the web
-  build and the server from the same tag in the existing release workflow.
+  offers); a **sim** version is stamped in `Welcome` and in the logs. Ship the
+  web build and the image from the same tag in the existing release workflow.
 - Tuning is a build, not a hot reload: the native `--tuning` file re-read
   would alter every live round on a global table. Captured per room at
   creation, sent in `Welcome`, changed by deploying.
-- Migrations are additive; records carry a schema version. Watch per instance:
-  rooms, seats, tick p50/p99, snapshot bytes/s, reconnects/min, version; tick
-  time nearing 16 ms is the one capacity alarm.
+- Watch per pod: rooms, seats, tick p50/p99, snapshot bytes/s, reconnects/min,
+  version, as Prometheus metrics on `/metrics`; tick time nearing 16 ms is the
+  one capacity alarm.
+- Persistence, when it comes (phase 6): the replay log (map, seed, tuning
+  diff, then every tick's intents, ~3 KB/s per room) makes a crash cost
+  nothing and lets a new pod fast-forward a room, which turns the drain into
+  a real blue/green with a directory of owning pods; records give results
+  links, stats and shared custom maps. Both are additive: the room task
+  already holds the intents and the record in memory.
 
 ### 4.10 Invites and identity
 
 Whoever receives a link is in the match within one tap with nothing installed:
 the browser build is the universal fallback, the apps the upgrade.
 
-- Host presses ONLINE → HOST; `POST /rooms` returns a four-character code from
-  a 20-letter alphabet without vowels or look-alikes (160 000 codes; idle
-  rooms are reaped, collisions are a non-issue) and the owning server. The
-  link `bongbong.io/j/K7QX` goes to the share sheet; a QR and the code stay on
-  the host's screen while the room is open.
-- The join page checks the room is open and the version, then: browser, the
-  wasm build with the code in the URL, read at start through
+- Host presses ONLINE → HOST; creating a room is a lobby message on the
+  WebSocket to `/rooms` (any pod), and the pod that answers mints a code from
+  the 20-letter alphabet without vowels or look-alikes: its own letter plus
+  four for the room (160 000 rooms per pod; idle rooms are reaped, collisions
+  are a non-issue). The link `bongbong.io/j/AK7QX` goes to the share sheet; a
+  QR and the code stay on the host's screen while the room is open. Every
+  client derives the socket URL from the code,
+  `wss://rooms.bongbong.io/r/rooms-<pod>/ws`, so no directory stands between
+  a link and a seat.
+- The join page derives the pod from the code and checks the version, then:
+  browser, the wasm build with the code in the URL, read at start through
   `emscripten_run_script` like `bbShift`; iOS, universal links
   (`apple-app-site-association` under `/.well-known/` on the Worker,
-  associated-domains entitlement), `bongbong://j/K7QX` as the button fallback;
-  Android, app links (`assetlinks.json`, an `autoVerify` intent filter in the
-  manifest template, the code from the activity's intent data); desktop, type
-  the code (the release archives register no scheme; an installer can, later).
+  associated-domains entitlement), `bongbong://j/AK7QX` as the button
+  fallback; Android, app links (`assetlinks.json`, an `autoVerify` intent
+  filter in the manifest template, the code from the activity's intent data);
+  desktop, type the code or `--join AK7QX` (the release archives register no
+  scheme; an installer can, later).
 - Identity: a nickname and a random device token minted on the join page and
   reused across visits (localStorage, the app's keychain). The token is the
-  reconnect key. Accounts can attach to it later without touching the
-  protocol.
-- Abuse: Turnstile on the web creation path, a per-IP rate limit at the
-  Worker, a nickname length cap and filter before anything public exists.
+  reconnect key within a room's life. Accounts can attach to it later without
+  touching the protocol.
+- Abuse: Turnstile on the web join page, a per-IP rate limit at the ingress
+  for room creation, a nickname length cap and filter before anything public
+  exists.
 - The lobby is a third mode next to Play and Build: seats with nicknames and
   chassis, the host picks map and mission (a builder map travels in
   `Welcome`), READY, the code and QR in a corner.
@@ -544,28 +633,30 @@ ship a complete co-op game; 4 and 5 are stage 2.
 
 0. **Headless simulation crate (M).** Replace the seven `sola_raylib::Vector2`
    imports with a local `math::Vec2`; move each entity file's `draw_*` and
-   `*Textures` behind a `render` feature or into `*_draw.rs` siblings;
-   generalise `Input` to N seats; a fixed 60 Hz accumulator in `app.rs`. Done
-   when `probe` and `cargo test --lib` build with `--no-default-features` and
-   no C compiler, and `just probe-fixtures` is byte-identical. Bonus: CI
-   builds the crate for `wasm32-unknown-unknown`.
+   `*Textures` behind a `render` feature (on by default for every client
+   build) or into `*_draw.rs` siblings; generalise `Input` to N seats; a fixed
+   60 Hz accumulator in `app.rs`. Done when `probe` and `cargo test --lib`
+   build with `--no-default-features` and no C compiler, `just
+   probe-fixtures` is byte-identical, and the windowed game plays exactly as
+   before. Bonus: CI builds the crate for `wasm32-unknown-unknown`.
 1. **Replica and protocol, offline (L).** The state audit made real:
    `Snapshot`, `Welcome`, the intent packet, delta encoding;
    `encode_snapshot`/`apply_snapshot`; `tick_presentation`; the cosmetic
    halves of `wreck_fx`, `apply_blast`, `obstacle_died` callable from events;
    `Ricochet` (iron and the barrel bounce) and whatever else the audit finds
-   silent. The rig: an authoritative `Game` on a thread, a replica in the
-   window, an in-process transport with dialled delay, jitter and loss. Done
-   when the round looks and feels like the local game at 80 ms and 2 % loss
-   with every effect present; a snapshot round-trip test next to
-   `determinism_tests`.
-2. **Room server, WebSockets, join links (L).** `bongbong-server`; the JS
-   bridge and tungstenite behind the `Transport` trait; the Worker's routes
-   and directory with the owning instance on each record; the well-known
-   files; the ONLINE dialog, the lobby, the code and QR; one region with
-   start-new-drain-old. Done when a link from a phone puts a laptop in the
-   same wave round, a closed tab rejoins the same seat, and a deploy mid-round
-   ends nobody's game.
+   silent; the `Online` driver in `Session`. The rig: an authoritative `Game`
+   on a thread, a replica in the window, an in-process transport with dialled
+   delay, jitter and loss. Done when the round looks and feels like the local
+   game at 80 ms and 2 % loss with every effect present, a snapshot round-trip
+   test sits next to `determinism_tests`, and local play is untouched.
+2. **Room server, container, join links (L).** `bongbong-server` and its
+   image; the emscripten socket and the tungstenite thread behind the
+   `Transport` trait; the StatefulSet, per-pod routing, TLS and the drain on
+   the Hetzner cluster; codes that name the pod; the Worker's join page and
+   well-known files; the ONLINE dialog, the lobby, the code and QR. Done when
+   a link from a phone puts a laptop in the same wave round, a closed tab
+   rejoins the same seat, and a deploy mid-round lets the round finish on the
+   old pod.
 3. **Co-op polish (M).** Seats beyond two, the compact HUD, N-seat spawns,
    re-entry with the next wave, end screen and rematch, host hand-over,
    builder maps in rooms, clock sync and adaptive interpolation delay. Done
@@ -583,14 +674,17 @@ ship a complete co-op game; 4 and 5 are stage 2.
    shells; predicted cooldown and ammo; full-auto visual streams; stand-ins
    and ram behaviour; the rewind ring and lag-compensated hit test if decision
    9 says yes. Feel pass on real links. **Stage 2 ships.**
-6. **Horizon.** Projectiles as events; datagram transport; more regions;
-   accounts and friends on the device token; public rooms; replays from the
-   log; a desktop installer with the URL scheme; the parked modes.
+6. **Horizon.** Persistence: the replay log (crash recovery, true blue/green
+   deploys with a directory of owning pods), records and results links;
+   projectiles as events; datagram transport; more regions; accounts and
+   friends on the device token; public rooms; replays from the log; a desktop
+   installer with the URL scheme; the parked modes.
 
 ## 7. Decisions and recommendations
 
-1. Room host: native Rust server on a VM, or Cloudflare Durable Objects?
-   **VM**, Worker for links and directory; keep the DO route alive with a
+1. Room host: a VM, Cloudflare Durable Objects, or the Kubernetes cluster?
+   **The Hetzner Kubernetes cluster, as a container** (a requirement of
+   2026-09-19); the Worker keeps the join page; keep the DO route alive with a
    bare-wasm CI build.
 2. Transport v1: WebSockets, or WebRTC data channels from day one?
    **WebSockets**; revisit only if lossy mobile links stutter, then
@@ -599,9 +693,10 @@ ship a complete co-op game; 4 and 5 are stage 2.
 4. Room size: up to 8 seats on the shared 34×17 field? **8**, 60 Hz tick, 20
    Hz snapshots; expect four to be common.
 5. Desktop deep links: type the code, or an installer registering
-   `bongbong://`? **Type the code.**
+   `bongbong://`? **Type the code, or `--join`.**
 6. Crate split: a `bongbong-sim` workspace crate, or a `render` feature?
-   **Feature first**; promote when the server wants a slimmer graph.
+   **Feature first**, on by default for clients; promote when the server image
+   wants a slimmer graph.
 7. A wrecked player in a wave round: watch, or re-enter with the next wave?
    **Re-enter through a gate, no penalty**; band rounds keep today's rule.
 8. Interpolation delay: fixed 100 ms, or adaptive? **Fixed in phases 1–2,
@@ -613,6 +708,18 @@ ship a complete co-op game; 4 and 5 are stage 2.
 10. Other tanks in the sandbox: kinematic stand-ins, or ignore? **Stand-ins**;
     without them a predicted tank drives through a friend for a round trip and
     snaps back.
+11. Persistence in v1: replay log and records, or nothing? **Nothing** (a
+    requirement of 2026-09-19): rooms are memory in one pod, a crash ends its
+    rounds, a planned deploy drains.
+12. Client runtime: tokio everywhere, or threads? **Threads**: blocking
+    `tungstenite` on a std thread natively, emscripten's WebSocket API on the
+    web; tokio is server-only; the protocol codec is the shared part (4.6).
+13. Local play: keep it in the same binary, or make online the game? **Keep
+    it untouched** (a requirement): Online is a third `Session` driver; Play,
+    Build and every offline tool are unchanged.
+14. Routing a join to the owning pod: a directory, or the code names the pod?
+    **The code names the pod** (one letter of five) until persistence brings
+    a directory.
 
 ## 8. Risks, mitigations, stop conditions
 
@@ -634,11 +741,18 @@ ship a complete co-op game; 4 and 5 are stage 2.
 - **Tuning agreement.** Online rounds apply the `Welcome` diff and lock the
   panel; the sandbox reads the same table; a mismatch shows as systematic
   prediction error in the metrics.
-- **Upgrades depend on the directory.** Skipping the owning-instance field in
-  phase 2 turns every deploy into a drain with a gap for new rooms. Build it
-  in.
-- **Web build.** Retire `-sASYNCIFY=1` before phase 2; the bridge does not
-  need it and it inflates the wasm on the invite's critical path.
+- **No persistence.** A crash or an unplanned pod restart ends that pod's
+  rounds, and a rejoin to a draining pod fails. Accepted for v1; the replay
+  log is the fix, and the room task already holds everything it would write.
+- **Routing to the owning pod.** Per-pod Services and Ingress paths are the
+  design's own responsibility on Kubernetes, and a misrouted join is a
+  confusing failure. Check the pod letter to path mapping in CI, and refuse a
+  code whose letter names no pod with a clear message.
+- **Cloudflare in front of the socket.** A proxied `rooms.bongbong.io` adds a
+  hop and a 100 s idle limit; keep it DNS-only unless the proxied path
+  measures fine.
+- **Web build.** Retire `-sASYNCIFY=1` before phase 2; the emscripten socket
+  does not need it and it inflates the wasm on the invite's critical path.
 - **Mobile lifecycle.** Neither iOS nor Android handles backgrounding yet; the
   grace covers the seat, the app must resume the socket and clock sync
   cleanly.
@@ -671,8 +785,9 @@ Recorded so co-op does not close the door on them; none are in the plan.
 
 ## 10. References
 
-- Bongbong Online, the design page (rev 2, 2026-09-15): option comparison,
-  diagrams, the stage 2 timeline.
+- Bongbong online co-op, the design page (2026-09-19): this design with
+  diagrams, the measurements and the open checklist; it supersedes the
+  "Bongbong Online" page (rev 2, 2026-09-15).
 - docs/two-players.md: the seat model this generalises.
 - docs/dev-server-design.md: the lockstep `step`, the frame-boundary
   discipline, the history ring.
