@@ -146,6 +146,7 @@ construction; every request still lands in `before_frame`.
 | `screenshot` | `scale` (0.5), `source: screen\|scene`, `overlays` | PNG (base64) + path under `target/devshots/` |
 | `overlays` | `nav_grid`, `ai`, `projectiles`, `engage`, `pickups`, `inspect` (individual flags; the I key cycles presets off -> inspect -> all) | current flags |
 | `nav_grid` | - | ASCII grid with tanks/frog/pickups marked |
+| `field` | `target: player\|player2\|frog` (player) | the flow field enemies follow toward that target: `arrows` (`^ v < >` per cell, `G` goal, `#` blocked, `.` unreachable) and `costs` (cost to the goal per cell, -1 blocked/unreachable) - a priced firing lane or crowd cell shows as a jump in the costs |
 | `teleport` | `slot`, `x`, `y`, `facing` | - |
 | `set_tank` | `slot`, `damage`, `*_ammo`, `laser_charges`, `shield_hp`, `speed_boost_timer` | the tank |
 | `kill` | `slot` | applied on the next simulated frame through the normal kill path |
@@ -183,7 +184,7 @@ its methods (`press_build`, `answer_dialog`, `play`, `replace_map`,
 
 **The refusal rule.** In build mode the tools that read or drive the
 round - `GAME_ONLY_TOOLS`: `snapshot`, `events`, `step`, `input`,
-`pause`, `resume`, `history`, `nav_grid`, `terrain`, `teleport`,
+`pause`, `resume`, `history`, `nav_grid`, `field`, `terrain`, `teleport`,
 `set_tank`, `kill`, `spawn_enemy`, `players` - return an error naming
 `play` rather than touching a frozen game. Everything else works in both
 modes: `status`, `mode`, `screenshot` and `overlays` (the presented frame

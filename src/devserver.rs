@@ -35,10 +35,7 @@ use crate::map::MapFile;
 use crate::maplint::LintSeverity;
 use crate::mode::{Driver, Session};
 use crate::obstacle::Obstacle;
-use crate::simulation::debug::{
-    CLUSTER_RADIUS_PX, Detail, JITTER_WINDOW_FRAMES, SPIN_FULL_CIRCLE_DEG, SPIN_NET_MAX, SPIN_WINDOW_FRAMES, TankPatch,
-    TrackRow, r1, signed_quarter_turn,
-};
+use crate::simulation::debug::{CLUSTER_RADIUS_PX, Detail, FieldTarget, JITTER_WINDOW_FRAMES, SPIN_FULL_CIRCLE_DEG, SPIN_NET_MAX, SPIN_WINDOW_FRAMES, TankPatch, TrackRow, r1, signed_quarter_turn};
 use crate::simulation::{Event, Game, Input, Overlays, PlayerCount};
 use crate::tank::{Dir, TankKind};
 use crate::tuning;
@@ -77,7 +74,7 @@ const CLICK_DRAG_STEP_PX: f32 = 8.0;
 /// (docs/game-editor-fusion.md section 11) rather than touching a round
 /// the builder has frozen.
 pub const GAME_ONLY_TOOLS: &[&str] = &[
-    "snapshot", "events", "step", "input", "pause", "resume", "history", "nav_grid", "terrain", "teleport",
+    "snapshot", "events", "step", "input", "pause", "resume", "history", "nav_grid", "field", "terrain", "teleport",
     "set_tank", "kill", "spawn_enemy", "players",
 ];
 
@@ -225,6 +222,13 @@ pub const TOOLS: &[ToolSpec] = &[
         name: "nav_grid",
         description: "The AI's pathfinding grid as text (# blocked, . open) with tanks (P player, digits enemies, x wrecks), the frog (F) and pickups (*) marked - the cheapest way to reason about the layout.",
         schema: NO_PARAMS,
+        read_only: true,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "field",
+        description: "The flow field enemies follow toward a shared target this frame: `arrows` (one line per row: ^ v < > the neighbour each cell steps into, G the goal, # blocked, . unreachable) and `costs` (the cost to the goal per cell, -1 blocked/unreachable, so a priced firing lane or crowd cell shows as a jump). target: player (default), player2 or frog. Errors when that target is not in the round.",
+        schema: r#"{"type":"object","properties":{"target":{"type":"string","enum":["player","player2","frog"],"default":"player"}}}"#,
         read_only: true,
         destructive: false,
     },
@@ -1051,6 +1055,19 @@ impl DevServer {
                 Ok(overlays_json(game))
             }
             "nav_grid" => Ok(json!({ "grid": game.nav_grid_ascii(width, height) })),
+            "field" => {
+                let target = match params.get("target").and_then(Value::as_str).unwrap_or("player") {
+                    "player" => Ok(FieldTarget::Player(0)),
+                    "player2" => Ok(FieldTarget::Player(1)),
+                    "frog" => Ok(FieldTarget::Frog),
+                    other => Err(format!("unknown field target {other:?}: player, player2 or frog")),
+                };
+                target.and_then(|target| {
+                    game.field_dump(width, height, target)
+                        .map(|dump| serde_json::to_value(dump).expect("FieldDump serialises"))
+                        .ok_or_else(|| format!("no {target:?} in the round to build a field toward"))
+                })
+            }
             "terrain" => terrain_json(game, &params),
             "map_get" => game.map.to_toml_string().map(|toml| {
                 let mut v = map_json(&game.map);
@@ -2208,7 +2225,7 @@ mod tests {
         let read_only: Vec<&str> = TOOLS.iter().filter(|t| t.read_only).map(|t| t.name).collect();
         assert_eq!(
             read_only,
-            ["status", "snapshot", "events", "map_get", "lint", "terrain", "history", "nav_grid", "tuning_get", "tuning_schema", "mode", "builder_files"]
+            ["status", "snapshot", "events", "map_get", "lint", "terrain", "history", "nav_grid", "field", "tuning_get", "tuning_schema", "mode", "builder_files"]
         );
         let destructive: Vec<&str> = TOOLS.iter().filter(|t| t.destructive).map(|t| t.name).collect();
         assert_eq!(destructive, ["restart", "kill", "tuning_reset", "players", "play", "builder_save"]);
@@ -2450,6 +2467,71 @@ mod tests {
             server.advance(&mut game, input, 0.016, W, H);
             assert_eq!(game.debug_overlays, preset);
         }
+    }
+
+    /// `field` reads the frame's routing grid toward a target: the goal
+    /// cell is marked and costs 0, every open reachable cell has an
+    /// arrow and a cost, blocked cells are `#`/-1, and a target that is
+    /// not in the round is an error naming it.
+    #[test]
+    fn field_dumps_the_flow_toward_a_target() {
+        let (mut server, tx) = DevServer::headless();
+        let mut game = game(21);
+        let rx = call(&tx, "field", json!({}));
+        server.before_frame(&mut game, W, H);
+        let reply = rx.recv().unwrap().unwrap();
+        let arrows = reply["arrows"].as_str().unwrap();
+        let lines: Vec<&str> = arrows.lines().collect();
+        assert_eq!(lines.len(), 23);
+        assert!(lines.iter().all(|l| l.len() == 40));
+        let goal = (reply["goal"][0].as_u64().unwrap() as usize, reply["goal"][1].as_u64().unwrap() as usize);
+        assert_eq!(lines[goal.1].as_bytes()[goal.0], b'G');
+        let costs = reply["costs"].as_array().unwrap();
+        assert_eq!(costs.len(), 23);
+        assert_eq!(costs[goal.1][goal.0], 0);
+        let (mut arrows_seen, mut stranded) = (0, Vec::new());
+        for (r, line) in lines.iter().enumerate() {
+            for (c, ch) in line.bytes().enumerate() {
+                let cost = costs[r][c].as_i64().unwrap();
+                match ch {
+                    b'#' => assert_eq!(cost, -1, "({c}, {r})"),
+                    b'.' => {
+                        assert_eq!(cost, -1, "({c}, {r})");
+                        stranded.push((c, r));
+                    }
+                    b'G' => assert_eq!(cost, 0),
+                    b'^' | b'v' | b'<' | b'>' => {
+                        assert!(cost > 0, "({c}, {r})");
+                        arrows_seen += 1;
+                    }
+                    other => panic!("unexpected {:?} at ({c}, {r})", other as char),
+                }
+            }
+        }
+        // A stranded cell is exactly one the flood fill says has no
+        // route to the player (the test window is larger than the map's
+        // field, so the open ground past the border walls is all of
+        // that, plus the roll-in lanes the walls seal from inside).
+        assert!(arrows_seen > 150, "flowing {arrows_seen}");
+        let grid = game.route_grid(W, H);
+        let cell = reply["cell"].as_f64().unwrap() as f32;
+        let centre = |(c, r): (usize, usize)| Position::new((c as f32 + 0.5) * cell, (r as f32 + 0.5) * cell);
+        assert!(!stranded.is_empty());
+        for &at in &stranded {
+            assert!(!grid.connected(centre(at), centre(goal)), "{at:?} is stranded but connected");
+        }
+        for (r, line) in lines.iter().enumerate() {
+            for (c, ch) in line.bytes().enumerate() {
+                if matches!(ch, b'^' | b'v' | b'<' | b'>') {
+                    assert!(grid.connected(centre((c, r)), centre(goal)), "({c}, {r}) flows but is not connected");
+                }
+            }
+        }
+
+        let rx = call(&tx, "field", json!({ "target": "player2" }));
+        server.before_frame(&mut game, W, H);
+        let err = rx.recv().unwrap().unwrap_err();
+        assert!(err.contains("Player(1)"), "{err}");
     }
 
     #[test]

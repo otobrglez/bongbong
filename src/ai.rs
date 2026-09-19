@@ -701,8 +701,9 @@ impl Ai {
         rng: &mut SmallRng,
     ) -> Dir {
         let (width, height) = bounds;
-        let reachable =
-            |wp: Position| grid.next_step(from, wp).is_some() || grid.same_cell(from, wp);
+        // A label read, not a search: a candidate is a point nobody is
+        // routing to yet, so the grid's flood fill answers it for free.
+        let reachable = |wp: Position| grid.connected(from, wp);
         // The sampling box: the whole margin-inset battlefield, or the
         // beat's bounding box clipped to it (never empty - a beat pressed
         // against the edge still yields a sliver).
