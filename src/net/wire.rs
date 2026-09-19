@@ -624,14 +624,31 @@ pub struct Welcome {
 // ---------------------------------------------------------------------------
 // Lobby, both directions
 
+/// One seat as the lobby shows it (`Lobby::Roster`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RosterSeat {
+    pub seat: u8,
+    pub nick: String,
+    /// The chassis row (`TankKind` in sheet-row order); 0 until the round
+    /// starts and the room rolls it.
+    pub chassis: u8,
+    pub ready: bool,
+    /// Somebody is on the socket right now; a seat that dropped keeps its
+    /// place while it reconnects.
+    pub connected: bool,
+}
+
 /// The lobby's vocabulary, JSON on the same socket as the binary messages:
 /// `{"type": "join", "nick": ..}`. Creating a room is a lobby message too,
-/// so a client needs no HTTP.
+/// so a client needs no HTTP. The first block is what a client says, the
+/// second what the room answers; a new optional field or variant here
+/// needs no `PROTOCOL_VERSION` bump.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Lobby {
     /// Open a room: `map` names a shipped map, or `map_toml` carries a
-    /// builder map instead.
+    /// builder map instead. `seed` pins the round's seed (a replay or a
+    /// test); absent, the room draws one.
     Create {
         nick: String,
         device_token: String,
@@ -639,6 +656,8 @@ pub enum Lobby {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         map_toml: Option<String>,
         mission: Mission,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seed: Option<u64>,
     },
     /// Take a seat in the room `code` names; the same `device_token`
     /// reclaims the seat after a disconnect.
@@ -648,6 +667,20 @@ pub enum Lobby {
     Leave,
     Kick { seat: u8 },
     Chat { text: String },
+
+    /// The room refused or could not do what was asked; the socket stays
+    /// open unless the message says otherwise.
+    Error { message: String },
+    /// The answer to `Create`: the code to share. A `Welcome` follows.
+    RoomCreated { code: String },
+    /// Every seat of the room, sent to everyone whenever a seat joins,
+    /// leaves, readies, drops or comes back.
+    Roster { host: u8, seats: Vec<RosterSeat> },
+    /// The host started the round; a fresh `Welcome` with the round's
+    /// parameters follows.
+    Started,
+    /// A `Chat` relayed to every seat with its sender.
+    Said { seat: u8, text: String },
 }
 
 #[cfg(test)]
@@ -815,9 +848,36 @@ mod tests {
             map: "default".into(),
             map_toml: None,
             mission: Mission::Protect,
+            seed: None,
         };
         let json = serde_json::to_string(&create).unwrap();
         assert!(!json.contains("map_toml"), "an absent builder map is left out: {json}");
+        assert!(!json.contains("seed"), "an absent seed is left out: {json}");
         assert_eq!(serde_json::from_str::<Lobby>(&json).unwrap(), create);
+        let without_seed = r#"{"type":"create","nick":"oto","device_token":"tok","map":"default","mission":"protect"}"#;
+        assert_eq!(serde_json::from_str::<Lobby>(without_seed).unwrap(), create);
+    }
+
+    #[test]
+    fn lobby_replies_are_tagged_json() {
+        let roster = Lobby::Roster {
+            host: 0,
+            seats: vec![RosterSeat { seat: 0, nick: "oto".into(), chassis: 4, ready: true, connected: true }],
+        };
+        let json = serde_json::to_string(&roster).unwrap();
+        assert_eq!(
+            json,
+            r#"{"type":"roster","host":0,"seats":[{"seat":0,"nick":"oto","chassis":4,"ready":true,"connected":true}]}"#
+        );
+        assert_eq!(serde_json::from_str::<Lobby>(&json).unwrap(), roster);
+        assert_eq!(
+            serde_json::to_string(&Lobby::RoomCreated { code: "AK7QX".into() }).unwrap(),
+            r#"{"type":"room_created","code":"AK7QX"}"#
+        );
+        assert_eq!(serde_json::to_string(&Lobby::Started).unwrap(), r#"{"type":"started"}"#);
+        assert_eq!(
+            serde_json::to_string(&Lobby::Error { message: "full".into() }).unwrap(),
+            r#"{"type":"error","message":"full"}"#
+        );
     }
 }
