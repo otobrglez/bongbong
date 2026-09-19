@@ -30,6 +30,7 @@
 //! transient `P1`/`P2` locate label, which stays raylib-only in `game.rs`.
 
 use crate::frog::{FROG_VARIANT_DIRS, FrogAnim};
+use crate::map::Theme;
 use crate::pickup::PickupKind;
 use crate::Position;
 use sola_raylib::prelude::*;
@@ -39,8 +40,10 @@ use std::collections::BTreeMap;
 /// a `Texture2D` on the GPU, decoded pixels on the CPU.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Sheet {
-    /// static/punyworld/punyworld-overworld-tileset.png (ground.rs).
-    Ground,
+    /// The ground tileset of a theme (`Theme::ground_texture_path`,
+    /// ground.rs): one file per theme, so a loader that wants every sheet
+    /// gets both and the field names the map's.
+    Ground(Theme),
     /// static/scifi_tanks_sheet.png (docs/SPRITESHEET_SPEC.md).
     Tanks,
     /// static/walls_sheet.png (docs/WALLS_SPEC.md); rubble rows too.
@@ -49,8 +52,9 @@ pub enum Sheet {
     Props,
     /// static/trees_sheet.png (docs/TREES_SPEC.md).
     Trees,
-    /// static/nature_sheet.png - tall grass (grass.rs).
-    Grass,
+    /// The tall-grass sheet of a theme (`Theme::grass_texture_path`,
+    /// grass.rs), one file per theme like `Ground`.
+    Grass(Theme),
     /// static/damage.png - the hull damage overlays (damage_stage.rs).
     Damage,
     /// static/minigun_mount.png - the barrel cluster on a turret.
@@ -68,14 +72,12 @@ pub enum Sheet {
     Frog { variant: u8, clip: FrogAnim },
 }
 
-/// The eleven sheets that are one file each.
-pub const SINGLE_SHEETS: [Sheet; 11] = [
-    Sheet::Ground,
+/// The nine sheets that are one file each regardless of theme.
+pub const SINGLE_SHEETS: [Sheet; 9] = [
     Sheet::Tanks,
     Sheet::Walls,
     Sheet::Props,
     Sheet::Trees,
-    Sheet::Grass,
     Sheet::Damage,
     Sheet::MinigunMount,
     Sheet::Tracks,
@@ -105,12 +107,12 @@ impl Sheet {
     /// every loader (the game, the demos, the CPU canvas) reads.
     pub fn path(self) -> String {
         match self {
-            Sheet::Ground => "static/punyworld/punyworld-overworld-tileset.png".into(),
+            Sheet::Ground(theme) => theme.ground_texture_path().into(),
             Sheet::Tanks => "static/scifi_tanks_sheet.png".into(),
             Sheet::Walls => "static/walls_sheet.png".into(),
             Sheet::Props => "static/props_sheet.png".into(),
             Sheet::Trees => "static/trees_sheet.png".into(),
-            Sheet::Grass => "static/nature_sheet.png".into(),
+            Sheet::Grass(theme) => theme.grass_texture_path().into(),
             Sheet::Damage => "static/damage.png".into(),
             Sheet::MinigunMount => "static/minigun_mount.png".into(),
             Sheet::Tracks => "static/tracks.png".into(),
@@ -124,10 +126,12 @@ impl Sheet {
         }
     }
 
-    /// Every sheet the field can ask for: the single sheets, one per pickup
-    /// kind, and every frog variant's five clips.
+    /// Every sheet the field can ask for: the ground and grass sheets of
+    /// every theme, the single sheets, one per pickup kind, and every
+    /// frog variant's five clips.
     pub fn all() -> Vec<Sheet> {
-        let mut all: Vec<Sheet> = SINGLE_SHEETS.to_vec();
+        let mut all: Vec<Sheet> = Theme::ALL.iter().flat_map(|&t| [Sheet::Ground(t), Sheet::Grass(t)]).collect();
+        all.extend(SINGLE_SHEETS);
         all.extend(PICKUP_KINDS.iter().map(|&k| Sheet::Pickup(k)));
         for variant in 0..FROG_VARIANT_DIRS.len() as u8 {
             all.extend(FROG_CLIPS.iter().map(|&clip| Sheet::Frog { variant, clip }));
@@ -696,7 +700,7 @@ mod tests {
         c.gradient_h(0, 0, 0, 0, RED, BLUE);
         let mut d = canvas_with_probe();
         d.blit(Sheet::Tracks, Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(-2.0, -2.0, 40.0, 40.0), Vector2::zero(), 33.0, Color::WHITE);
-        d.blit(Sheet::Grass, Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(0.0, 0.0, 4.0, 4.0), Vector2::zero(), 0.0, Color::WHITE);
+        d.blit(Sheet::Grass(Theme::Grass), Rectangle::new(0.0, 0.0, 4.0, 4.0), Rectangle::new(0.0, 0.0, 4.0, 4.0), Vector2::zero(), 0.0, Color::WHITE);
     }
 
     #[test]
@@ -758,7 +762,20 @@ mod tests {
         paths.sort();
         paths.dedup();
         assert_eq!(paths.len(), n);
-        assert_eq!(n, SINGLE_SHEETS.len() + PICKUP_KINDS.len() + FROG_VARIANT_DIRS.len() * FROG_CLIPS.len());
+        assert_eq!(n, 2 * Theme::ALL.len() + SINGLE_SHEETS.len() + PICKUP_KINDS.len() + FROG_VARIANT_DIRS.len() * FROG_CLIPS.len());
+    }
+
+    /// The ground and grass sheets follow the theme, the way `app.rs`
+    /// picks them per frame - a desert map's thumbnail is drawn from the
+    /// desert tileset, not the grass one.
+    #[test]
+    fn ground_and_grass_sheets_follow_the_theme() {
+        for theme in Theme::ALL {
+            assert_eq!(Sheet::Ground(theme).path(), theme.ground_texture_path());
+            assert_eq!(Sheet::Grass(theme).path(), theme.grass_texture_path());
+        }
+        assert_ne!(Sheet::Ground(Theme::Grass).path(), Sheet::Ground(Theme::Desert).path());
+        assert_ne!(Sheet::Grass(Theme::Grass).path(), Sheet::Grass(Theme::Desert).path());
     }
 
     #[test]

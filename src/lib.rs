@@ -647,15 +647,19 @@ pub const TREE_TEXTURE_SIZE: f32 = 48.0;
 
 // Portals (portal.rs, static/portal_sheet.png, docs/teleporting.md): 96px
 // cells drawn 1:1 on a 32px anchor cell - three cells of art on one cell
-// of map, so the spiral is comfortably wider than the biggest hull and
-// spills over neighbours that stay paintable. One row: the twelve turning
-// frames, then a 32px icon for the builder's bar in the top-left of the
-// last cell. The spiral has two arms, so a half turn is one full visual
-// period and the twelve frames are 15 degree steps of it - never rotated
-// at draw time, which would smear the 2px blocks.
+// of map (the disc fills about 84 px of it), so the spiral is comfortably
+// wider than the biggest hull and spills over neighbours that stay
+// paintable. Cells run row-major in rows of `PORTAL_SHEET_COLS` (a row of
+// every frame would pass the 2048 px texture width GL ES 2 phones can
+// refuse): the turning frames first, then a 32px icon for the builder's
+// bar in the top-left of the cell after the last frame (`PORTAL_ICON_CELL`,
+// col 0 of the third row). The spiral has three arms, so a third of a turn
+// is one full visual period and the frames are 5 degree steps of it -
+// never rotated at draw time, which would smear the 2px blocks.
 pub const PORTAL_TEXTURE_SIZE: f32 = 96.0;
-pub const PORTAL_FRAMES: i32 = 12;
-pub const PORTAL_ICON_COL: i32 = 12;
+pub const PORTAL_FRAMES: i32 = 24;
+pub const PORTAL_SHEET_COLS: i32 = 12;
+pub const PORTAL_ICON_CELL: i32 = PORTAL_FRAMES;
 pub const PORTAL_ICON_SIZE: f32 = 32.0;
 // Rows: 4 broadleaf variants, then 4 conifer, then the two rubble rows.
 //

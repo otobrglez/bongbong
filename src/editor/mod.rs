@@ -142,11 +142,13 @@ pub struct EditorTextures<'a> {
 impl Sheets for EditorTextures<'_> {
     fn texture(&self, sheet: Sheet) -> &Texture2D {
         match sheet {
-            Sheet::Ground => self.ground,
+            // Picked per frame by `app.rs` from the canvas's theme, the
+            // theme `render` names here.
+            Sheet::Ground(_) => self.ground,
             Sheet::Walls => self.obstacles,
             Sheet::Props => self.props,
             Sheet::Trees => self.trees,
-            Sheet::Grass => self.grass,
+            Sheet::Grass(_) => self.grass,
             Sheet::Portal => self.portal,
             Sheet::Tanks => self.tanks,
             Sheet::Frog { clip: FrogAnim::Idle, .. } => self.frog_idle,
@@ -1312,7 +1314,7 @@ impl MapEditor {
             if self.plain_canvas {
                 d.draw_rectangle(0, 0, width as i32, height as i32, Color::WHITE);
             } else {
-                ground::draw(&mut GpuCanvas::new(&mut d, textures), &self.ground, time);
+                ground::draw(&mut GpuCanvas::new(&mut d, textures), &self.ground, self.map.theme, time);
             }
 
             // Portals first, under every other cell: three cells of art on

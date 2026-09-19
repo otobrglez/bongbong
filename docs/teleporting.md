@@ -75,10 +75,14 @@ footprints' components, so a room joined to the field only by a portal counts as
 
 ## Presentation (`portal.rs`)
 
-`static/portal_sheet.png` (1248 x 96) from `tools/spritegen/gen_portal.py`: one row of twelve
-96 px frames of a two-arm log spiral (180 degrees periodic, so twelve 15 degree steps are one
-full visual period) and a 32 px builder icon in the top-left of the last cell. Designed at
-48 px and doubled, so it sits on the 2 px block grid like the props. Colours are only
+`static/portal_sheet.png` (1152 x 288) from `tools/spritegen/gen_portal.py`: twenty-four
+96 px frames of a three-arm log spiral (120 degrees periodic, so twenty-four 5 degree steps
+are one full visual period), row-major in rows of twelve (`PORTAL_SHEET_COLS`; a single row
+would pass the 2048 px width GL ES 2 phones can refuse), and a 32 px builder icon in the
+top-left of the cell after the last frame (`PORTAL_ICON_CELL`, col 0 of the third row). The
+frames turn the arms against their winding, so the spiral reads as pulling inward. The disc
+is about 84 px across on the 96 px cell. Designed at 48 px and doubled, so it sits on the
+2 px block grid like the props. Colours are only
 `BLACK`, `WHITE` and the four `TEAM_P1` blues - a deliberate off-palette exception, admitted
 by `check_sheets.py` for this sheet (docs/PALETTE.md).
 

@@ -49,6 +49,7 @@
 use sola_raylib::prelude::*;
 
 use crate::canvas::{Canvas, Sheet};
+use crate::map::Theme;
 use crate::tuning::tuning;
 use crate::{GRASS_SPECIES, GRASS_TEXTURE_SIZE, GRASS_VARIANTS, OBSTACLE_GRID_SIZE, Position};
 
@@ -204,8 +205,9 @@ fn bend(tuft: &GrassTuft, time: f32) -> f32 {
     wind * (1.0 - tuft.crush) + tuft.push
 }
 
-/// Draw one tuft, leaning and squashed by however flat it is lying.
-pub fn draw_tuft(c: &mut impl Canvas, tuft: &GrassTuft, time: f32) {
+/// Draw one tuft, leaning and squashed by however flat it is lying, from
+/// `theme`'s sheet (`Sheet::Grass`).
+pub fn draw_tuft(c: &mut impl Canvas, tuft: &GrassTuft, theme: Theme, time: f32) {
     let cell = GRASS_TEXTURE_SIZE;
     let t = tuning();
     if tuft.burnt {
@@ -231,5 +233,5 @@ pub fn draw_tuft(c: &mut impl Canvas, tuft: &GrassTuft, time: f32) {
     let rotation = crate::trig::atan2(bend(tuft, time), size).to_degrees();
     let dest = Rectangle::new(tuft.base.x, tuft.base.y, size, height);
     let origin = Vector2::new(size / 2.0, height);
-    c.blit(Sheet::Grass, src, dest, origin, rotation, Color::WHITE);
+    c.blit(Sheet::Grass(theme), src, dest, origin, rotation, Color::WHITE);
 }

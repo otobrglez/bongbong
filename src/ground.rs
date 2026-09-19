@@ -14,7 +14,8 @@
 //! sand, dirt paths - not after what they look like on screen: the live PNG
 //! is a *retinted* copy (`tools/retint_ground.py`), and under the desert
 //! theme the "grass" is pale dust, the "sand" a smoother hardpan and the
-//! dirt a packed-earth road. Nothing here knows which theme is live.
+//! dirt a packed-earth road. The tile ids and tints here are the same
+//! under every theme; `draw` only names which file to blit from.
 //!
 //! Purely decorative: no physics body, no gameplay effect. `build` runs
 //! once per round (from `simulation::Game::init`, after every obstacle for
@@ -45,6 +46,7 @@
 use sola_raylib::prelude::*;
 
 use crate::canvas::{Canvas, Sheet};
+use crate::map::Theme;
 use crate::tuning::tuning;
 use crate::{GROUND_WORLD_TILE, OBSTACLE_GRID_SIZE, Position};
 
@@ -802,7 +804,9 @@ fn source_rec(tile_id: i32) -> Rectangle {
 /// drawn first, before tread marks/obstacles/tanks. `time` (seconds,
 /// any clock that only moves while the picture should) steps the water
 /// through its frames and drifts the flow marks (`draw_current`).
-pub fn draw(c: &mut impl Canvas, grid: &GroundGrid, time: f32) {
+/// `theme` only names the tileset file (`Sheet::Ground`): the tile ids
+/// and tints are the same under every theme.
+pub fn draw(c: &mut impl Canvas, grid: &GroundGrid, theme: Theme, time: f32) {
     let size = GROUND_WORLD_TILE;
     let origin = Vector2::new(size / 2.0, size / 2.0);
     let t = tuning();
@@ -814,7 +818,7 @@ pub fn draw(c: &mut impl Canvas, grid: &GroundGrid, time: f32) {
             };
             let src = source_rec(grid.tiles[i][frame]);
             let dest = Rectangle::new(x as f32 * GROUND_WORLD_TILE, y as f32 * GROUND_WORLD_TILE, size, size);
-            c.blit(Sheet::Ground, src, dest, origin, 0.0, grid.tints[i]);
+            c.blit(Sheet::Ground(theme), src, dest, origin, 0.0, grid.tints[i]);
         }
     }
     draw_current(c, grid, time, t.water_flow_speed, t.water_flow_lanes.max(0) as u32);

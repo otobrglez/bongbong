@@ -161,7 +161,7 @@ impl CellObject {
 /// picks the pair by the live map each frame, so the builder can switch a
 /// map's theme and see it at once. New themes (ice is the obvious next
 /// one) are one variant plus one retint curve and one grass species set.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Theme {
     #[default]

@@ -91,12 +91,15 @@ pub struct Textures<'a> {
 impl Sheets for Textures<'_> {
     fn texture(&self, sheet: Sheet) -> &Texture2D {
         match sheet {
-            Sheet::Ground => self.ground,
+            // `app.rs` picks `ground`/`grass` from the round's map theme
+            // every frame, the same theme `paint_floor`/`paint_standing`
+            // name here, so the payload needs no second lookup.
+            Sheet::Ground(_) => self.ground,
             Sheet::Tanks => self.tanks,
             Sheet::Walls => self.obstacles,
             Sheet::Props => self.props,
             Sheet::Trees => self.trees,
-            Sheet::Grass => self.grass,
+            Sheet::Grass(_) => self.grass,
             Sheet::Damage => self.damage,
             Sheet::MinigunMount => self.minigun_mount,
             Sheet::Tracks => self.tracks,
@@ -187,7 +190,7 @@ impl Game {
         // white clear instead.
         if !self.plain_canvas {
             let (width, height) = self.map.field_size();
-            crate::ground::draw(c, &self.ground, self.time);
+            crate::ground::draw(c, &self.ground, self.map.theme, self.time);
             crate::ground::draw_edge_shade(c, width.round() as i32, height.round() as i32);
         }
 
@@ -303,7 +306,7 @@ impl Game {
         let grass_up_to = |c: &mut _, upto: f32, from: usize| {
             let mut i = from;
             while i < self.grass.len() && self.grass[i].base.y <= upto {
-                crate::grass::draw_tuft(c, &self.grass[i], self.time);
+                crate::grass::draw_tuft(c, &self.grass[i], self.map.theme, self.time);
                 i += 1;
             }
             i

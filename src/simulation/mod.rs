@@ -1540,8 +1540,6 @@ impl Game {
         }
     }
 
-    /// Drive each player from this frame's input and handle their fire
-    /// keys (docs/two-players.md).
     /// Portals (docs/teleporting.md): a live tank whose centre comes
     /// within `portal_trigger_radius` of a portal, with its
     /// `portal_cooldown` run out, is placed beside a *different* portal
@@ -1660,6 +1658,8 @@ impl Game {
         }
     }
 
+    /// Drive each player from this frame's input and handle their fire
+    /// keys (docs/two-players.md).
     fn player_phase(&mut self, input: Input, f: &mut Frame) {
         let player = self.player.expect("player entity spawned in init");
         self.drive_player(f, 0, player, input.player_intent);

@@ -215,11 +215,12 @@ mod tests {
     /// Deterministic, so a change here is a real change to what a thumbnail
     /// shows - re-baseline consciously after a deliberate art, map or
     /// tuning change, never to go green.
-    const PINNED: [(&str, u64); 4] = [
-        ("default", 0x9cfb_ca12_e504_0b61),
+    const PINNED: [(&str, u64); 5] = [
+        ("default", 0x6644_121d_d6f8_7986),
+        ("default-desert", 0x84de_37cf_aa6e_1aae),
         ("hunt-basic", 0xe569_2a10_47fe_b1a8),
         ("waves-basic", 0x6e02_7f87_d416_2e96),
-        ("portals", 0x57a5_4332_8ca7_5e83),
+        ("portals", 0xe2b6_ae87_295e_ec97),
     ];
 
     #[test]
