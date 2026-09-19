@@ -1,4 +1,4 @@
-use sola_raylib::prelude::*;
+use math::Vec2;
 
 /// A 2D position in field pixels (y down); `math::Vec2` is the vector type.
 pub type Position = math::Vec2;
@@ -397,7 +397,7 @@ impl Rect {
         Rect { x, y, w, h }
     }
 
-    pub fn contains(&self, p: Vector2) -> bool {
+    pub fn contains(&self, p: Vec2) -> bool {
         p.x >= self.x && p.x < self.x + self.w && p.y >= self.y && p.y < self.y + self.h
     }
 }
@@ -439,15 +439,15 @@ impl Layout {
     }
 
     /// Where the field's (0, 0) lands in the window.
-    pub fn field_origin(&self) -> Vector2 {
-        Vector2::new(self.field.x, self.field.y)
+    pub fn field_origin(&self) -> Vec2 {
+        Vec2::new(self.field.x, self.field.y)
     }
 
     /// A window position as a field position - what the simulation and the
     /// editor's grid want. Outside the field the result is out of range
     /// rather than clamped, so a click on the bar is not a click on the
     /// top row of cells.
-    pub fn to_field(&self, window: Vector2) -> Position {
+    pub fn to_field(&self, window: Vec2) -> Position {
         Position::new(window.x - self.field.x, window.y - self.field.y)
     }
 }
@@ -832,7 +832,7 @@ pub const MINIGUN_MOUNT_SCALE: f32 = 1.0;
 pub const PLASMA_TEXTURE_SIZE: f32 = 32.0;
 // Bigger than SHELL_SCALE (2.0) - a plasma bolt reads as visibly larger and
 // heavier than a normal shell, matching its bigger damage per hit. Also
-// scales the in-flight pulse glow (see `plasma::glow_pulse`'s `base_radius`),
+// scales the in-flight pulse glow (see `render::plasma::glow_pulse`'s `base_radius`),
 // so this one constant sizes the whole effect. 2.08 = the original 2.6
 // tuning, reduced 20% after it read too big on screen.
 pub const PLASMA_SCALE: f32 = 2.08;
@@ -889,6 +889,14 @@ pub fn parse_seed(s: &str) -> Result<u64, String> {
     }
 }
 
+// The presentation - `app` and `render` - and the two binaries that
+// need it are behind the `render` feature (Cargo.toml); everything else
+// builds headless. `game.rs`, `hud.rs` and `editor/` keep their plain
+// halves here (the field painted over `canvas::Canvas`, the bar's model
+// and hit rects, the builder's edit model) and their raylib halves under
+// `render/` and `editor/render.rs`.
+#[cfg(feature = "render")]
+pub mod app;
 pub mod ai;
 pub mod battlefield;
 pub mod blast;
@@ -920,6 +928,8 @@ pub mod physics;
 pub mod portal;
 pub mod pickup;
 pub mod plasma;
+#[cfg(feature = "render")]
+pub mod render;
 pub mod shell;
 pub mod shockwave;
 pub mod simulation;
@@ -930,4 +940,3 @@ pub mod track;
 pub mod trig;
 pub mod tuning;
 pub mod view;
-pub mod app;

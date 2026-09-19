@@ -18,7 +18,7 @@
 use std::collections::{HashMap, HashSet};
 
 use rand::RngExt;
-use sola_raylib::prelude::*;
+use crate::math::{Color, Vec2};
 
 use crate::obstacle::{Drum, Material};
 use crate::simulation::{Event, Game, HitTarget};
@@ -42,25 +42,21 @@ pub enum ParticleKind {
     Spray,
 }
 
-impl ParticleKind {
-    fn additive(self) -> bool {
-        matches!(self, ParticleKind::Spark | ParticleKind::Ember)
-    }
-}
-
 pub struct Particle {
-    pos: Position,
-    vel: Vector2,
+    pub(crate) pos: Position,
+    vel: Vec2,
     /// Fake height above the ground plane. The game is top-down with no
     /// camera, so this is only a draw-time y-offset - the same trick
     /// `decal::Decal`'s arc uses.
-    z: f32,
+    pub(crate) z: f32,
     vz: f32,
-    age: f32,
-    life: f32,
-    size: f32,
-    tint: Color,
-    kind: ParticleKind,
+    pub(crate) age: f32,
+    pub(crate) life: f32,
+    pub(crate) size: f32,
+    /// The colour it was thrown with; only the drawing reads it.
+    #[cfg_attr(not(feature = "render"), allow(dead_code))]
+    pub(crate) tint: Color,
+    pub(crate) kind: ParticleKind,
 }
 
 /// Every short-lived effect the presentation layer owns.
@@ -85,6 +81,12 @@ pub struct Fx {
 impl Fx {
     pub fn live(&self) -> usize {
         self.particles.len()
+    }
+
+    /// Every live particle, oldest first, for `render::fx::draw`.
+    #[cfg(feature = "render")]
+    pub(crate) fn particles(&self) -> &[Particle] {
+        &self.particles
     }
 
     /// Drop everything. Called when a new round starts - the `Fx` outlives
@@ -145,7 +147,7 @@ impl Fx {
         let tint = if along < 0.15 { WHITE_T } else if along < 0.55 { FIRE_T } else { EMBER_T };
         self.push(Particle {
             pos,
-            vel: Vector2::new(a.cos() * speed, a.sin() * speed),
+            vel: Vec2::new(a.cos() * speed, a.sin() * speed),
             z: 0.0,
             vz: 0.0,
             age: 0.0,
@@ -175,7 +177,7 @@ impl Fx {
             };
             self.push(Particle {
                 pos: at,
-                vel: Vector2::new(a.cos() * s, a.sin() * s),
+                vel: Vec2::new(a.cos() * s, a.sin() * s),
                 z: 0.0,
                 vz,
                 age: 0.0,
@@ -588,23 +590,6 @@ impl Fx {
             self.accum.clear();
         }
     }
-
-    /// Draw every particle. Non-additive kinds first in one run, then all
-    /// the additive ones inside a single blend-mode block: a blend switch
-    /// breaks raylib's batch, so interleaving them would cost one batch
-    /// per particle instead of two for the whole layer.
-    pub fn draw(&self, d: &mut impl RaylibDraw) {
-        for p in self.particles.iter().filter(|p| !p.kind.additive()) {
-            draw_particle(d, p);
-        }
-        if self.particles.iter().any(|p| p.kind.additive()) {
-            d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
-                for p in self.particles.iter().filter(|p| p.kind.additive()) {
-                    draw_particle(&mut bd, p);
-                }
-            });
-        }
-    }
 }
 
 /// Every sprite in the game lands on a 2-screen-pixel block (tanks draw a
@@ -614,55 +599,7 @@ impl Fx {
 /// positions snap to the block grid, sizes are whole numbers of blocks,
 /// and colour steps through a short ramp instead of fading an alpha
 /// channel. A pixel-art flame is drawn, not blended.
-const FX_GRID: f32 = 2.0;
-
-fn snap(v: f32) -> i32 {
-    ((v / FX_GRID).floor() * FX_GRID) as i32
-}
-
-/// Fire cools as it ages: white-hot, then yellow, orange, deep red. Four
-/// steps is enough to read as a flame and few enough to stay obviously
-/// hand-picked rather than interpolated.
-const FIRE_RAMP: [Color; 4] = [WHITE_T, FIRE_T, EMBER_T, DEEP_T];
-/// Smoke lightens and thins as it rises and cools.
-const SMOKE_RAMP: [Color; 3] = [SMOKE_DK, SMOKE_MD, SMOKE_LT];
-
-fn ramp_pick(ramp: &[Color], t: f32) -> Color {
-    let i = ((t * ramp.len() as f32) as usize).min(ramp.len() - 1);
-    ramp[i]
-}
-
-fn draw_particle(d: &mut impl RaylibDraw, p: &Particle) {
-    let t = (p.age / p.life).clamp(0.0, 1.0);
-    let base = match p.kind {
-        ParticleKind::Spark | ParticleKind::Ember => ramp_pick(&FIRE_RAMP, t),
-        ParticleKind::Smoke => ramp_pick(&SMOKE_RAMP, t),
-        // A chip or a dust mote keeps the colour of whatever it came off.
-        _ => p.tint,
-    };
-    // Stepped, not smooth: four levels of transparency read as a pixel-art
-    // dissolve, where a continuous fade reads as a soft airbrushed blob.
-    let levels = 4.0;
-    let fade = ((1.0 - t) * levels).ceil() / levels;
-    let opacity = match p.kind {
-        ParticleKind::Smoke => fade * tuning().smoke_opacity,
-        // Fire holds full brightness and dies by stepping down the ramp
-        // rather than by dimming.
-        ParticleKind::Spark | ParticleKind::Ember => if t < 0.85 { 1.0 } else { 0.5 },
-        _ => fade,
-    };
-    if opacity <= 0.0 {
-        return;
-    }
-    let c = Color::new(base.r, base.g, base.b, (255.0 * opacity) as u8);
-    // `z` is a straight y-offset - the game is top-down with no camera, so
-    // height is just "further up the screen".
-    let blocks = (p.size / FX_GRID).round().max(1.0);
-    let side = (blocks * FX_GRID) as i32;
-    let x = snap(p.pos.x - blocks * FX_GRID / 2.0);
-    let y = snap(p.pos.y - p.z - blocks * FX_GRID / 2.0);
-    d.draw_rectangle(x, y, side, side, c);
-}
+pub(crate) const FX_GRID: f32 = 2.0;
 
 // Particle tints. Deliberately literals rather than a palette import:
 // these are light, not surface, and several are drawn additively where a
@@ -679,13 +616,9 @@ const GLASS_L: Color = Color::new(0x27, 0xD8, 0xC5, 255);
 const GLASS_M: Color = Color::new(0x04, 0xA0, 0xB4, 255);
 const DUST_T: Color = Color::new(0xD8, 0xBF, 0x8E, 255);
 const SMOKE_T: Color = Color::new(0x55, 0x52, 0x4E, 255);
-const SMOKE_DK: Color = Color::new(0x37, 0x37, 0x37, 255);
-const SMOKE_MD: Color = Color::new(0x55, 0x52, 0x4E, 255);
-const SMOKE_LT: Color = Color::new(0x7E, 0x7E, 0x7E, 255);
-const DEEP_T: Color = Color::new(0x81, 0x2F, 0x27, 255);
-const EMBER_T: Color = Color::new(0xE4, 0x42, 0x19, 255);
-const FIRE_T: Color = Color::new(0xEE, 0xA3, 0x43, 255);
-const WHITE_T: Color = Color::new(0xFF, 0xFF, 0xFF, 255);
+pub(crate) const EMBER_T: Color = Color::new(0xE4, 0x42, 0x19, 255);
+pub(crate) const FIRE_T: Color = Color::new(0xEE, 0xA3, 0x43, 255);
+pub(crate) const WHITE_T: Color = Color::new(0xFF, 0xFF, 0xFF, 255);
 // The ground tileset's own water tones (`ground::WATER_FLOW_MARK` and the
 // flat lake), so spray is the water it came out of.
 const WATER_L: Color = Color::new(0x1D, 0xCC, 0xCB, 255);
@@ -722,7 +655,7 @@ mod fx_tests {
     fn spark(life: f32) -> Particle {
         Particle {
             pos: Position::new(0.0, 0.0),
-            vel: Vector2::new(0.0, 0.0),
+            vel: Vec2::new(0.0, 0.0),
             z: 0.0,
             vz: 0.0,
             age: 0.0,

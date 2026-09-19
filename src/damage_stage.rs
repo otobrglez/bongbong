@@ -1,4 +1,4 @@
-use sola_raylib::prelude::*;
+use crate::math::{Rectangle, Vec2};
 
 use crate::canvas::{Canvas, Sheet};
 use crate::tank::Tank;
@@ -97,6 +97,6 @@ pub fn draw_damage(c: &mut impl Canvas, tank: &Tank, time: f32) {
     let src = source_rec(col, tank.damage_variant);
     let size = tank.size();
     let dest = Rectangle::new(tank.position.x, tank.position.y, size, size);
-    let origin = Vector2::new(size / 2.0, size / 2.0);
+    let origin = Vec2::new(size / 2.0, size / 2.0);
     c.blit(Sheet::Damage, src, dest, origin, 0.0, tank.tint());
 }

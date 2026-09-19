@@ -23,13 +23,13 @@
 
 use bongbong::editor::{BuilderInput, EditorTextures, Tool};
 use bongbong::fx::Fx;
-use bongbong::game::{Effects, Textures};
+use bongbong::render::game::{Effects, Textures};
 use bongbong::hud::PlayChrome;
 use bongbong::level::{LevelOverrides, Mission};
 use bongbong::map::{CellObject, MapFile};
 use bongbong::mode::{Driver, Session};
 use bongbong::obstacle::Drum;
-use bongbong::shockwave::{RippleFx, RippleTuning};
+use bongbong::render::shockwave::{RippleFx, RippleTuning};
 use bongbong::simulation::debug::TankPatch;
 use bongbong::simulation::{Game, Input};
 use bongbong::tuning::tuning;
@@ -137,7 +137,7 @@ fn main() {
             Driver::Play => (&layout_play, (w, h)),
         };
         let view = View::fit((bitmap.0 as f32, bitmap.1 as f32), window);
-        let pointer = view.to_bitmap(rl.get_mouse_position());
+        let pointer = view.to_bitmap(rl.get_mouse_position().into());
         let pressed = rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT);
         let dt = rl.get_frame_time();
 
@@ -221,7 +221,7 @@ fn main() {
                         thread,
                         &mut composite_build,
                         &view,
-                        Color::WHITE,
+                        bongbong::math::Color::WHITE,
                         layout,
                         &EditorTextures {
                             obstacles: &obstacles,
@@ -274,7 +274,7 @@ fn main() {
             &mut scene,
             &mut composite_play,
             &view,
-            Color::WHITE,
+            bongbong::math::Color::WHITE,
             &mut Effects { shock: &mut shock, muzzle: &mut muzzle, impact: &mut impact, fx: &fx, touch: None },
             &textures,
             &layout_play,

@@ -5,20 +5,14 @@
 //! a position hash so two portals never turn in lockstep, and the frame is
 //! blitted unrotated - a rotated blit would smear the 2px blocks. Under an
 //! active portal the round adds a soft additive glow built from the same
-//! 2px blocks as every other glow (`blast::pixel_disc`).
+//! 2px blocks as every other glow (`render::blast::pixel_disc`).
 
-use sola_raylib::prelude::*;
+use crate::math::{Color, Rectangle, Vec2};
 
-use crate::blast::{pixel_disc, seed_at};
+use crate::blast::seed_at;
 use crate::canvas::{Canvas, Sheet};
 use crate::tuning::tuning;
 use crate::{Position, PORTAL_FRAMES, PORTAL_ICON_CELL, PORTAL_ICON_SIZE, PORTAL_SHEET_COLS, PORTAL_TEXTURE_SIZE};
-
-/// The P1 team blues (`tools/punypalette.py`'s `TEAM_P1`, `tank::TEAM_COLORS[0]`):
-/// deliberately off the ground palette, so a hole in the ground reads as
-/// not-terrain the way a player's ring does - docs/PALETTE.md.
-const PORTAL_MID: Color = Color::new(0x4D, 0x65, 0xB4, 255);
-const PORTAL_LIGHT: Color = Color::new(0x8F, 0xD3, 0xFF, 255);
 
 /// Which of the `PORTAL_FRAMES` frames a portal centred at `center` shows at `time`:
 /// one full cycle per `portal_spin_seconds`, phase-shifted by the position
@@ -56,20 +50,7 @@ pub fn portal_icon_source_rec() -> Rectangle {
 pub fn draw_portal(c: &mut impl Canvas, center: Position, time: f32, tint: Color) {
     let size = PORTAL_TEXTURE_SIZE;
     let dest = Rectangle::new(center.x, center.y, size, size);
-    c.blit(Sheet::Portal, portal_source_rec(portal_frame(center, time)), dest, Vector2::new(size / 2.0, size / 2.0), 0.0, tint);
-}
-
-/// The additive glow under an active portal: a wide dim disc and a small
-/// bright one, breathing slowly. `portal_glow_strength` 0 draws nothing.
-pub fn draw_portal_glow(d: &mut impl RaylibDraw, center: Position, time: f32) {
-    let strength = tuning().portal_glow_strength;
-    if strength <= 0.0 {
-        return;
-    }
-    let breathe = 0.85 + 0.15 * (time * 0.8 + seed_at(center, 102) as f32 * 0.01).sin();
-    let alpha = |base: f32| (base * strength * breathe * 255.0).round().clamp(0.0, 255.0) as u8;
-    pixel_disc(d, center, 40.0, Color::new(PORTAL_MID.r, PORTAL_MID.g, PORTAL_MID.b, alpha(0.6)));
-    pixel_disc(d, center, 16.0, Color::new(PORTAL_LIGHT.r, PORTAL_LIGHT.g, PORTAL_LIGHT.b, alpha(0.9)));
+    c.blit(Sheet::Portal, portal_source_rec(portal_frame(center, time)), dest, Vec2::new(size / 2.0, size / 2.0), 0.0, tint);
 }
 
 #[cfg(test)]

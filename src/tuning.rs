@@ -624,7 +624,7 @@ tunables! {
         /// A Purple charge batch scales `plasma_damage_factor` by this on
         /// top.
         plasma_purple_damage_factor: f32 = 1.10 in 0.1 ..= 5.0;
-        /// Pulsating in-flight glow (`plasma::draw_plasma`): pulses per
+        /// Pulsating in-flight glow (`render::plasma::draw_plasma`): pulses per
         /// second, and the glow radius at the low/high point of the pulse as
         /// a multiple of the sprite radius.
         plasma_pulse_hz: f32 = 6.0 in 0.1 ..= 30.0;
