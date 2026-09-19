@@ -30,6 +30,19 @@ pub enum BulletState {
 }
 
 impl BulletState {
+    /// Every state, in sheet-column order (`col` is the index here).
+    pub const ALL: [BulletState; 3] = [BulletState::Muzzle, BulletState::Flying, BulletState::Hit];
+
+    /// The bullets sheet column this state draws from (0..3), which is
+    /// also how the state travels on the wire.
+    pub fn col(self) -> i32 {
+        BulletState::ALL.iter().position(|&s| s == self).expect("every state is in ALL") as i32
+    }
+
+    /// Inverse of `col`; `None` past the last column.
+    pub fn from_col(col: i32) -> Option<BulletState> {
+        usize::try_from(col).ok().and_then(|i| BulletState::ALL.get(i).copied())
+    }
 
     /// How long this state is shown (seconds). Flying is time-unbounded
     /// (moves until it physically hits something), same convention as
@@ -73,6 +86,9 @@ pub struct Bullet {
     /// sandbag it sailed over) - skipped by every later hit sweep, since a
     /// segment ending inside a tile would otherwise re-roll it next frame.
     pub passed_over: Vec<hecs::Entity>,
+    /// The round's projectile number, same counter as `Shell::id`. 0 until
+    /// spawned into the world.
+    pub id: u32,
 }
 
 impl Bullet {
@@ -105,6 +121,7 @@ impl Bullet {
             shadow_offset: 0.0,
             prev_position: position,
             passed_over: Vec::new(),
+            id: 0,
         }
     }
 

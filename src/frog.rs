@@ -227,6 +227,16 @@ impl Frog {
         if self.max_health > 0.0 { (self.health / self.max_health).clamp(0.0, 1.0) } else { 0.0 }
     }
 
+    /// Remaining health in whole points, rounded to the nearest: 0 only
+    /// once dead, at least 1 while alive, at most 255. What travels on the
+    /// wire (`net::encode`) and what the picture compares.
+    pub fn health_points(&self) -> u8 {
+        if self.is_dead() {
+            return 0;
+        }
+        self.health.round().clamp(1.0, 255.0) as u8
+    }
+
     /// How far (px) a single hop covers - see FROG_HOP_DISTANCE_FACTOR's
     /// comment for why this is a factor of `size()` rather than a flat
     /// constant.

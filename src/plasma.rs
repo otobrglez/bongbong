@@ -48,6 +48,46 @@ pub enum PlasmaState {
 }
 
 impl PlasmaState {
+    /// Every state, in sheet order; `Flying` stands for its four columns.
+    pub const ALL: [PlasmaState; 7] = [
+        PlasmaState::Fire0,
+        PlasmaState::Fire1,
+        PlasmaState::Fire2,
+        PlasmaState::Flying,
+        PlasmaState::Hit0,
+        PlasmaState::Hit1,
+        PlasmaState::Hit2,
+    ];
+
+    /// The plasma sheet column this state starts at (0..10; `Flying` is
+    /// its first column, 3, the breathing cycle picks among 3..7 at draw
+    /// time), which is also how the state travels on the wire.
+    pub fn col(self) -> i32 {
+        match self {
+            PlasmaState::Fire0 => 0,
+            PlasmaState::Fire1 => 1,
+            PlasmaState::Fire2 => 2,
+            PlasmaState::Flying => 3,
+            PlasmaState::Hit0 => 7,
+            PlasmaState::Hit1 => 8,
+            PlasmaState::Hit2 => 9,
+        }
+    }
+
+    /// Inverse of `col`: any of the four flying columns reads as
+    /// `Flying`; `None` past the last column.
+    pub fn from_col(col: i32) -> Option<PlasmaState> {
+        match col {
+            0 => Some(PlasmaState::Fire0),
+            1 => Some(PlasmaState::Fire1),
+            2 => Some(PlasmaState::Fire2),
+            3..=6 => Some(PlasmaState::Flying),
+            7 => Some(PlasmaState::Hit0),
+            8 => Some(PlasmaState::Hit1),
+            9 => Some(PlasmaState::Hit2),
+            _ => None,
+        }
+    }
 
     /// How long this state is shown (seconds) - identical timings to
     /// `ShellState::duration`, since a plasma bolt fires at the same cadence
@@ -130,6 +170,9 @@ pub struct Plasma {
     /// sandbag it sailed over) - skipped by every later hit sweep, since a
     /// segment ending inside a tile would otherwise re-roll it next frame.
     pub passed_over: Vec<hecs::Entity>,
+    /// The round's projectile number, same counter as `Shell::id`. 0 until
+    /// spawned into the world.
+    pub id: u32,
 }
 
 impl Plasma {
@@ -167,6 +210,7 @@ impl Plasma {
             shadow_offset: 0.0,
             prev_position: position,
             passed_over: Vec::new(),
+            id: 0,
         }
     }
 

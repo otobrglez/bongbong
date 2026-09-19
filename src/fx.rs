@@ -359,6 +359,12 @@ impl Fx {
                     Event::Deflected { x, y, .. } => {
                         self.burst(Position::new(x, y), ParticleKind::Spark, self.count(4), 90.0, &[SHIELD_T, WHITE_T]);
                     }
+                    // A shot glancing off iron or a barrel: a few hot
+                    // sparks at the point of contact, as slight as the
+                    // shield's, since the impact flash already marks it.
+                    Event::Ricochet { x, y, .. } => {
+                        self.burst(Position::new(x, y), ParticleKind::Spark, self.count(3), 80.0, &[WHITE_T, FIRE_T]);
+                    }
                     // The shield itself giving way: a full ring of sparks
                     // off the hull plus a little smoke, so the moment reads
                     // as the shield going rather than another hit landing.

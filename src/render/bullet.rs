@@ -9,11 +9,7 @@ use crate::{MINIGUN_BULLET_SCALE, MINIGUN_BULLET_TEXTURE_SIZE};
 
 /// Column of this state in minigun_bullets.png.
 fn state_col(state: BulletState) -> i32 {
-    match state {
-        BulletState::Muzzle => 0,
-        BulletState::Flying => 1,
-        BulletState::Hit => 2,
-    }
+    state.col()
 }
 
 /// Source rectangle for a bullet frame (state column) in minigun_bullets.png.

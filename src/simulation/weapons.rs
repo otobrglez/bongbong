@@ -315,7 +315,12 @@ pub(super) trait Projectile: hecs::Component {
     /// Mark the current position as this frame's segment start.
     fn begin_frame(&mut self);
     fn velocity(&self) -> Vec2;
+    /// The facing in degrees (0 = up), which a bounce turns.
+    fn heading(&self) -> f32;
     fn owner(&self) -> Owner;
+    /// The round's projectile number (`Shell::id`), given once by
+    /// `Game::spawn_pending`.
+    fn set_id(&mut self, id: u32);
     fn advance(&mut self, dt: f32);
     fn detonate(&mut self);
     fn hit_half_extent() -> f32;
@@ -421,7 +426,9 @@ impl Projectile for Shell {
     fn prev_position(&self) -> Position { self.prev_position }
     fn begin_frame(&mut self) { self.prev_position = self.position; }
     fn velocity(&self) -> Vec2 { self.velocity }
+    fn heading(&self) -> f32 { self.rotation }
     fn owner(&self) -> Owner { self.owner }
+    fn set_id(&mut self, id: u32) { self.id = id; }
     fn advance(&mut self, dt: f32) { self.update(dt); }
     fn detonate(&mut self) { Shell::detonate(self); }
     fn hit_half_extent() -> f32 { tuning().shell_hit_half_extent }
@@ -452,7 +459,9 @@ impl Projectile for Bullet {
     fn prev_position(&self) -> Position { self.prev_position }
     fn begin_frame(&mut self) { self.prev_position = self.position; }
     fn velocity(&self) -> Vec2 { self.velocity }
+    fn heading(&self) -> f32 { self.rotation }
     fn owner(&self) -> Owner { self.owner }
+    fn set_id(&mut self, id: u32) { self.id = id; }
     fn advance(&mut self, dt: f32) { self.update(dt); }
     fn detonate(&mut self) { Bullet::detonate(self); }
     fn hit_half_extent() -> f32 { tuning().minigun_bullet_hit_half_extent }
@@ -478,7 +487,9 @@ impl Projectile for Plasma {
     fn prev_position(&self) -> Position { self.prev_position }
     fn begin_frame(&mut self) { self.prev_position = self.position; }
     fn velocity(&self) -> Vec2 { self.velocity }
+    fn heading(&self) -> f32 { self.rotation }
     fn owner(&self) -> Owner { self.owner }
+    fn set_id(&mut self, id: u32) { self.id = id; }
     fn advance(&mut self, dt: f32) { self.update(dt); }
     fn detonate(&mut self) { Plasma::detonate(self); }
     fn hit_half_extent() -> f32 { tuning().plasma_hit_half_extent }

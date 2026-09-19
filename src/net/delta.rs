@@ -284,6 +284,7 @@ mod tests {
     fn random_tank(rng: &mut SmallRng, id: u16) -> TankState {
         TankState {
             id,
+            row: rng.random_range(0..12),
             x: rng.random_range(-4000..4000),
             y: rng.random_range(-4000..4000),
             vx: rng.random_range(-100..100),
@@ -305,6 +306,7 @@ mod tests {
             y: rng.random_range(-4000..4000),
             heading: rng.random(),
             state: rng.random_range(0..8),
+            variant: rng.random_range(0..18),
         }
     }
 
@@ -529,6 +531,7 @@ mod tests {
         let tanks = (0..8u16)
             .map(|id| TankState {
                 id,
+                row: (id % 12) as u8,
                 x: quantise_pos(rng.random_range(64.0..1024.0)),
                 y: quantise_pos(rng.random_range(64.0..480.0)),
                 vx: quantise_velocity(rng.random_range(-210.0..210.0)),
@@ -549,6 +552,7 @@ mod tests {
                 y: quantise_pos(rng.random_range(32.0..512.0)),
                 heading: rng.random(),
                 state: 3,
+                variant: (id % 18) as u8,
             })
             .collect();
         let frogs = vec![
@@ -604,7 +608,7 @@ mod tests {
             s.y -= 100;
         }
         for id in 0..4u16 {
-            c.shots.push(ShotState { id: 2000 + id, kind: ShotKind::Shell, x: 400, y: 800, heading: 64, state: 0 });
+            c.shots.push(ShotState { id: 2000 + id, kind: ShotKind::Shell, x: 400, y: 800, heading: 64, state: 0, variant: 3 });
         }
         c.normalise();
         c.events = vec![
