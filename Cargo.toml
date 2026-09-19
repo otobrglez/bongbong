@@ -8,6 +8,10 @@ repository = "https://github.com/otobrglez/bongbong"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 hecs = "0.11"
+# The online co-op wire codec (src/net/, docs/online-coop-prd.md §4.3):
+# compact serde binary for every message but the lobby's JSON. `use-std`
+# for the `Vec` encoders and `std::error::Error` on its error type.
+postcard = { version = "1", features = ["use-std"] }
 rand = "0.10.2"
 rapier2d = "0.35.3"
 serde = { version = "1.0.229", features = ["derive"] }

@@ -936,6 +936,7 @@ pub mod laser;
 pub mod level;
 pub mod map;
 pub mod mode;
+pub mod net;
 pub mod maplint;
 pub mod math;
 pub mod obstacle;
