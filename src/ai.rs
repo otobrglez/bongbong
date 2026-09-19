@@ -676,7 +676,7 @@ impl Ai {
         grid: &Grid,
         rng: &mut SmallRng,
     ) -> Dir {
-        let path = grid.next_step(from, target);
+        let path = if ctx.on_portal_cooldown { grid.next_step_walking(from, target) } else { grid.next_step(from, target) };
         if path.is_none() && !grid.same_cell(from, target) {
             return self.wander(from, bounds, half, margin, None, ctx, grid, rng);
         }
@@ -727,7 +727,17 @@ impl Ai {
         let (width, height) = bounds;
         // A label read, not a search: a candidate is a point nobody is
         // routing to yet, so the grid's flood fill answers it for free.
-        let reachable = |wp: Position| grid.connected(from, wp);
+        // The labels join rooms through the portal hub, so a tank on its
+        // portal cooldown (which may not route through the hub) asks the
+        // walking search instead - a few searches per resample, only
+        // while the cooldown runs.
+        let reachable = |wp: Position| {
+            if ctx.on_portal_cooldown {
+                grid.same_cell(from, wp) || grid.next_step_walking(from, wp).is_some()
+            } else {
+                grid.connected(from, wp)
+            }
+        };
         // The sampling box: the whole margin-inset battlefield, or the
         // beat's bounding box clipped to it (never empty - a beat pressed
         // against the edge still yields a sliver).
@@ -807,7 +817,8 @@ impl Ai {
             });
             self.retarget_timer = tuning().enemy_retarget_seconds;
         }
-        let path = grid.next_step(from, self.waypoint);
+        let path =
+            if ctx.on_portal_cooldown { grid.next_step_walking(from, self.waypoint) } else { grid.next_step(from, self.waypoint) };
         self.steer_toward(from, path, self.waypoint, bounds, half, ctx, grid)
     }
 
@@ -1168,6 +1179,13 @@ struct AvoidCtx<'a> {
     radius: f32,
     /// This tank's movement speed (px/s).
     speed: f32,
+    /// This tank's portal cooldown is running (`Tank::portal_cooldown`),
+    /// so it routes on foot only (`Grid::next_step_walking`): a route
+    /// through the hub would walk it back onto the portal it just came out
+    /// of, where the cooldown stands still, and it would circle the
+    /// footprint until it left and came back. With no walking route it
+    /// wanders instead, and takes the portal once the cooldown is out.
+    on_portal_cooldown: bool,
 }
 
 /// The behavior-tree blackboard: transient per-frame perception plus references
@@ -1361,6 +1379,7 @@ impl Brain<'_> {
             my_index: self.my_index,
             radius,
             speed: self.me.effective_speed(),
+            on_portal_cooldown: self.me.portal_cooldown > 0.0,
         };
         self.ai.steer(
             self.me.position,
@@ -1384,6 +1403,7 @@ impl Brain<'_> {
             my_index: self.my_index,
             radius,
             speed: self.me.effective_speed(),
+            on_portal_cooldown: self.me.portal_cooldown > 0.0,
         };
         self.ai.wander(
             self.me.position,
@@ -1405,6 +1425,7 @@ impl Brain<'_> {
             my_index: self.my_index,
             radius,
             speed: self.me.effective_speed(),
+            on_portal_cooldown: self.me.portal_cooldown > 0.0,
         };
         self.ai.wander(
             self.me.position,

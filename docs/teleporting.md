@@ -49,6 +49,12 @@ already agree when `sync_tanks_and_ram` measures travel and `lay_tracks` sees no
   `tick_timers` **only while the tank is outside every portal's trigger radius**: the arrival
   cell sits just outside the exit's radius, and a tank that stops there to fight and drifts onto
   the exit must not bounce back the moment the timer ends - it has to leave and come back.
+- **AI on cooldown**: while `portal_cooldown` runs the AI routes on foot only
+  (`Grid::next_step_walking`, `AvoidCtx::on_portal_cooldown`), and wanders where no walking
+  route exists. A route through the hub would walk it straight back onto the portal it came
+  out of, where the cooldown stands still, and it would circle the footprint until it left
+  and came back - the orbit `maps/test/portals.toml` used to show as a `spin`. Once the
+  cooldown is out it plans through the hub again and drives at the portal's centre.
 - **AI on arrival**: `Ai::on_teleported` drops the heading commitment, the stuck clock's
   baseline, the waypoint, any breach and the dodge/yield timers (all measured at the old
   position); alertness, retreat state, fire timer, escape count and target player stay. Every
@@ -66,8 +72,12 @@ of the anchor - the anchor sits on a nav-grid corner (map cells are multiples of
 centres at half cells), so that is four cells at the defaults. Footprint cell -> hub costs
 `portal_hop_cost` (in cells, clamped to at least the footprint's span so the hub never beats
 walking between two cells of one portal); hub -> any footprint cell costs 0. Path
-reconstruction skips the hub; `next_step` from an entrance cell names the exit cell, which the
-tank never reaches because the trigger fires first. The heuristic stays admissible
+reconstruction skips the hub. `next_step` hands a step onto any footprint cell out as that
+portal's *centre* - the trigger point - so a hull steering at it lands inside the radius
+whatever its momentum overshoots (aimed at a footprint cell's centre beside the anchor, a tank
+could round the 2x2 footprint a few pixels outside the radius, pass after pass); from an
+entrance cell it names the exit portal's centre, which the tank never reaches because the
+trigger fires first. The heuristic stays admissible
 (`min(manhattan, nearest portal + hop + nearest exit to goal)`). With exactly two portals the
 plan is exact; with three or more it is *optimistic* - the planner assumes the best exit, the
 tank lands wherever the draw says and re-plans from there. `Grid::components` unions the

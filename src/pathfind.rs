@@ -90,6 +90,9 @@ pub struct Grid {
     /// Every cell of every footprint in `portals`, sorted and deduped, so
     /// membership is one binary search.
     portal_cells: Vec<(usize, usize)>,
+    /// The portals' centres, one per entry of `portals` - the trigger
+    /// point `next_step` hands out for a step onto a footprint cell.
+    portal_centres: Vec<Position>,
 
     /// What stepping from a footprint cell into the hub costs, in cells;
     /// 0.0 while there are no portals (never read then).
@@ -233,6 +236,7 @@ impl Grid {
             rows,
             blocked,
             portals: Vec::new(),
+            portal_centres: Vec::new(),
             portal_cells: Vec::new(),
             hop_cost: 0.0,
             cost,
@@ -281,6 +285,7 @@ impl Grid {
     /// the tank teleports off before it moves anyway.
     pub fn with_portals(mut self, centres: &[Position], radius: f32, hop_cost: f32) -> Self {
         let mut portals: Vec<Vec<(usize, usize)>> = Vec::with_capacity(centres.len());
+        let mut kept: Vec<Position> = Vec::with_capacity(centres.len());
         for &centre in centres {
             // Cells whose centre can possibly lie within `radius`.
             let lo = |v: f32| (((v - radius) / self.cell_size - 0.5).ceil().max(0.0)) as usize;
@@ -302,6 +307,7 @@ impl Grid {
             }
             if !footprint.is_empty() {
                 portals.push(footprint);
+                kept.push(centre);
             }
         }
         if portals.len() < 2 {
@@ -316,8 +322,24 @@ impl Grid {
         portal_cells.dedup();
         self.portals = portals;
         self.portal_cells = portal_cells;
+        self.portal_centres = kept;
         self.hop_cost = hop_cost.max(1.0).max(span);
         self
+    }
+
+    /// The centre of the portal whose footprint holds `cell` - the
+    /// nearest one when footprints overlap - or `None` off every footprint.
+    fn portal_centre_of(&self, cell: (usize, usize)) -> Option<Position> {
+        if !self.is_portal_cell(cell) {
+            return None;
+        }
+        let here = self.center_of(cell);
+        self.portals
+            .iter()
+            .zip(&self.portal_centres)
+            .filter(|(fp, _)| fp.contains(&cell))
+            .map(|(_, &c)| c)
+            .min_by(|a, b| a.distance_to(here).total_cmp(&b.distance_to(here)))
     }
 
     /// Every portal footprint cell, sorted - empty on a grid without
@@ -829,17 +851,25 @@ impl Grid {
     /// target) - the caller falls back to steering straight at `to` either
     /// way. The start and goal cells are always treated as open regardless
     /// of `blocked`, so standing next to (or aiming at a point inside) an
-    /// obstacle's margin never fails pathfinding outright. When the route
-    /// teleports and `from` is already on the entrance, the first step is
-    /// the exit cell - the tank never drives there, the teleport fires
-    /// first, but the heading is right for the far side.
+    /// obstacle's margin never fails pathfinding outright.
+    ///
+    /// A first step onto a portal footprint cell is handed out as that
+    /// portal's *centre* rather than the cell's: the centre is the trigger
+    /// point, and a hull steering at the middle of the footprint lands
+    /// inside the trigger radius whatever its momentum overshoots, where
+    /// one steering at a cell centre beside the anchor could round the 2x2
+    /// footprint a few pixels outside the radius, pass after pass. When
+    /// the route teleports and `from` is already on the entrance, the first
+    /// step is the exit portal's centre - the tank never drives there, the
+    /// teleport fires first, but the heading is right for the far side.
     pub fn next_step(&self, from: Position, to: Position) -> Option<Position> {
         let start = self.cell_of(from);
         let goal = self.cell_of(to);
         if start == goal {
             return None;
         }
-        self.route(start, goal).map(|hit| self.center_of(hit.first_step))
+        self.route(start, goal)
+            .map(|hit| self.portal_centre_of(hit.first_step).unwrap_or_else(|| self.center_of(hit.first_step)))
     }
 
     /// Shortest-path length from `from` to `to`, in grid steps (cells, not
@@ -868,8 +898,27 @@ impl Grid {
     fn route(&self, start: (usize, usize), goal: (usize, usize)) -> Option<SearchHit> {
         match self.field_for(goal) {
             Some(field) => self.descend(field, start),
-            None => self.search(start, goal),
+            None => self.search(start, goal, true),
         }
+    }
+
+    /// `next_step` on foot: the same route with the portal hub left out,
+    /// for a tank whose portal cooldown is running. Such a tank cannot
+    /// use a portal yet, and a route through one would walk it back onto
+    /// the portal it just came out of, where the cooldown stands still
+    /// (`Game::tick_timers`) - it would have to leave and come back,
+    /// circling the footprint in the meantime. Always a search: the flow
+    /// fields price the hub in. `None` where no walking route exists (a
+    /// room joined to the target's only by a portal), which `Ai::steer`
+    /// answers by wandering until the cooldown runs out. A grid without
+    /// portals routes exactly as `next_step`.
+    pub fn next_step_walking(&self, from: Position, to: Position) -> Option<Position> {
+        let start = self.cell_of(from);
+        let goal = self.cell_of(to);
+        if start == goal {
+            return None;
+        }
+        self.search(start, goal, false).map(|hit| self.center_of(hit.first_step))
     }
 
     /// The one A* implementation `route` searches with when no field
@@ -887,10 +936,12 @@ impl Grid {
     /// smaller of the plain Manhattan distance and "Manhattan to the nearest
     /// portal cell, plus the hop, plus `exit_h`", the hub's is `exit_h`
     /// alone, where `exit_h` is the Manhattan distance from the nearest
-    /// portal cell to the goal, computed once per search. Without portals
-    /// the extra terms are skipped outright and the search is the plain
-    /// grid A*, tie order included.
-    fn search(&self, start: (usize, usize), goal: (usize, usize)) -> Option<SearchHit> {
+    /// portal cell to the goal, computed once per search. Without portals,
+    /// or with `hub` false (`next_step_walking`), the extra terms are
+    /// skipped outright and the search is the plain grid A*, tie order
+    /// included.
+    fn search(&self, start: (usize, usize), goal: (usize, usize), hub: bool) -> Option<SearchHit> {
+        let hub = hub && !self.portal_cells.is_empty();
         let mut open = BinaryHeap::new();
         // One slot per cell plus the hub's sentinel slot at the end.
         let slots = self.cols * self.rows + 1;
@@ -920,7 +971,7 @@ impl Grid {
                 NavNode::Hub => exit_h,
                 NavNode::Cell(c) => {
                     let walk = heuristic(c, goal);
-                    if self.portal_cells.is_empty() {
+                    if !hub {
                         return walk;
                     }
                     let to_portal = self
@@ -993,7 +1044,7 @@ impl Grid {
                         // open ground.
                         relax(NavNode::Cell(next), g + self.cost[idx(NavNode::Cell(next))] as f32);
                     }
-                    if !closed[idx(NavNode::Hub)] && self.is_portal_cell(cell) {
+                    if hub && !closed[idx(NavNode::Hub)] && self.is_portal_cell(cell) {
                         relax(NavNode::Hub, g + self.hop_cost);
                     }
                 }
@@ -1271,10 +1322,15 @@ mod tests {
         // to the goal: 2.
         assert_eq!(grid.path_cost(left, right), Some(7));
         assert_eq!(grid.path_cost(right, left), Some(7));
-        // Beside the entrance, the first step is the entrance cell.
-        assert_eq!(grid.next_step(at(1, 0), right), Some(at(1, 1)));
-        // On the entrance, the first step is the exit cell on the far side.
-        assert_eq!(grid.next_step(at(1, 1), right), Some(at(8, 8)));
+        // Beside the entrance, the first step is the entrance portal's
+        // centre (the trigger point, not the footprint cell's centre).
+        assert_eq!(grid.next_step(at(1, 0), right), Some(corner(1, 1)));
+        // On the entrance, the first step is the exit portal's centre on
+        // the far side.
+        assert_eq!(grid.next_step(at(1, 1), right), Some(corner(7, 7)));
+        // Off every footprint a step is still a cell's centre.
+        let first = grid.next_step(at(0, 0), right).expect("routes");
+        assert!(first == at(1, 0) || first == at(0, 1), "{first:?}");
         assert!(grid.components().connected(&grid, left, right));
         // The hub never beats walking within one footprint.
         assert_eq!(grid.path_cost(at(1, 1), at(2, 2)), Some(2));
@@ -1291,8 +1347,8 @@ mod tests {
         grid.add_field(right);
         grid.add_field(at(2, 2));
         assert_eq!(grid.path_cost(at(0, 0), right), Some(7));
-        assert_eq!(grid.next_step(at(1, 0), right), Some(at(1, 1)));
-        assert_eq!(grid.next_step(at(1, 1), right), Some(at(8, 8)));
+        assert_eq!(grid.next_step(at(1, 0), right), Some(corner(1, 1)));
+        assert_eq!(grid.next_step(at(1, 1), right), Some(corner(7, 7)));
         // The hub never beats walking within one footprint here either.
         assert_eq!(grid.path_cost(at(1, 1), at(2, 2)), Some(2));
         // Costs agree from every cell (first steps may differ where two
@@ -1304,6 +1360,18 @@ mod tests {
                 assert_eq!(grid.path_cost(from, right), plain.path_cost(from, right), "cost from ({col},{row})");
             }
         }
+    }
+
+    /// On foot the sealed wall is sealed: no route, whatever the hub
+    /// offers; on a walkable target the walking route is the ordinary one.
+    #[test]
+    fn walking_routes_leave_the_hub_out() {
+        let grid = two_portal_grid(3.0);
+        assert_eq!(grid.next_step_walking(at(0, 0), at(9, 9)), None);
+        assert_eq!(grid.next_step_walking(at(1, 1), at(9, 9)), None);
+        assert!(grid.next_step(at(0, 0), at(9, 9)).is_some());
+        assert_eq!(grid.next_step_walking(at(0, 0), at(3, 0)), Some(at(1, 0)));
+        assert_eq!(grid.next_step_walking(at(0, 0), at(0, 0)), None);
     }
 
     #[test]
@@ -1338,8 +1406,8 @@ mod tests {
         assert_eq!(grid.path_cost(left, at(9, 9)), Some(2 + 3 + 2));
         // Mid-right goal (9,5): exit (8,7) is 3 away, (8,2) is 4.
         assert_eq!(grid.path_cost(left, at(9, 5)), Some(2 + 3 + 3));
-        assert_eq!(grid.next_step(at(1, 1), at(9, 0)), Some(at(8, 1)));
-        assert_eq!(grid.next_step(at(1, 1), at(9, 9)), Some(at(8, 8)));
+        assert_eq!(grid.next_step(at(1, 1), at(9, 0)), Some(corner(7, 1)));
+        assert_eq!(grid.next_step(at(1, 1), at(9, 9)), Some(corner(7, 7)));
     }
 
     /// Every answer of `plain` and `with` agrees over every cell pair.
