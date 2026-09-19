@@ -379,6 +379,7 @@ mod tests {
                 alive: rng.random_range(0..40),
                 pending: rng.random_range(0..40),
                 intro: rng.random_range(0..30),
+                next_wave: rng.random_range(0..30),
                 outcome: [RoundOutcome::Playing, RoundOutcome::Won, RoundOutcome::Lost][rng.random_range(0..3)],
             },
             events: random_events(rng),
@@ -566,7 +567,7 @@ mod tests {
             shots,
             frogs,
             pickups: 0b1011,
-            round: RoundState { wave: 2, alive: 7, pending: 4, intro: 0, outcome: RoundOutcome::Playing },
+            round: RoundState { wave: 2, alive: 7, pending: 4, intro: 0, next_wave: 0, outcome: RoundOutcome::Playing },
             ..Default::default()
         };
         s.normalise();

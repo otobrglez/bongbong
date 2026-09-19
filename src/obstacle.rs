@@ -553,14 +553,13 @@ impl Obstacle {
         true
     }
 
-    /// Advance a burning tile's fire - a no-op for anything not alight.
-    /// Cosmetic only (see docs/WALLS_SPEC.md's fire
-    /// section): cycles `burn_frame` through the sheet's 3-frame flicker
-    /// loop on `wood_burn_frame_seconds`, and once `burn_elapsed` passes
-    /// `wood_burn_seconds`, chars it out (`destroyed = true`) so it's
-    /// removed the same instant-vanish way every other destroyed material
-    /// already is.
-    pub fn tick_burn(&mut self, dt: f32) {
+    /// Cycle a burning tile's `burn_frame` through the sheet's 3-frame
+    /// flicker loop on `wood_burn_frame_seconds` - a no-op for anything
+    /// not alight (see docs/WALLS_SPEC.md's fire section). The picture's
+    /// half of `tick_burn`, so a client replica can flicker a tile the
+    /// server says is burning without charring it out
+    /// (`Game::tick_presentation`, docs/online-coop-prd.md section 4.5).
+    pub fn tick_burn_frame(&mut self, dt: f32) {
         if !self.burning {
             return;
         }
@@ -569,6 +568,18 @@ impl Obstacle {
             self.burn_frame_timer -= tuning().wood_burn_frame_seconds;
             self.burn_frame = (self.burn_frame + 1) % 3;
         }
+    }
+
+    /// Advance a burning tile's fire - a no-op for anything not alight:
+    /// the flicker loop above, and once `burn_elapsed` passes
+    /// `wood_burn_seconds`, chars it out (`destroyed = true`) so it's
+    /// removed the same instant-vanish way every other destroyed material
+    /// already is.
+    pub fn tick_burn(&mut self, dt: f32) {
+        if !self.burning {
+            return;
+        }
+        self.tick_burn_frame(dt);
         self.burn_elapsed += dt;
         if self.burn_elapsed >= tuning().wood_burn_seconds {
             self.destroyed = true;

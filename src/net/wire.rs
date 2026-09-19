@@ -485,6 +485,10 @@ pub struct RoundState {
     pub pending: u8,
     /// Time left on the mission banner, tenths of a second.
     pub intro: u8,
+    /// Time left on the breather before the next wave, tenths of a second
+    /// - the `WAVE N` banner's timer. Zero when no wave is being
+    /// announced, and always zero under the band plan.
+    pub next_wave: u8,
     pub outcome: RoundOutcome,
 }
 

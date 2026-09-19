@@ -17,9 +17,17 @@
 //! hash from the slot, a shot's shadow height from its id, a snapshot's
 //! flag becomes the full timer it stands for (a boost, an afterburn, the
 //! hit window), a frog's secondary clips run at full length, the round
-//! clock is the tick at the fixed step. `tuning_json` is the transport's
-//! to stage (`tuning::submit_json`, applied at the frame boundary) before
-//! `welcome` runs, since `init` reads the knobs.
+//! clock is the tick at the fixed step. Between two snapshots the whole
+//! picture is `Game::tick_presentation`'s, which is why a hull's *drawn*
+//! angles are left where they stand here while its facing snaps.
+//! `tuning_json` is the transport's to stage (`tuning::submit_json`,
+//! applied at the frame boundary) before `welcome` runs, since `init`
+//! reads the knobs.
+//!
+//! Two things a snapshot states by omission: a fire is out once the
+//! list stops carrying its cell (burning out is the only way one ever
+//! leaves), and the tile a `DrumLaunched` names is in the air rather than
+//! anywhere on the field.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -36,7 +44,7 @@ use crate::net::wire::{
     ShotKind, ShotState, Snapshot, TankState, Welcome, dequantise_heading, dequantise_pos, dequantise_seconds,
     dequantise_velocity, dir_from_index, frog_flags, tank_flags, tile_flags,
 };
-use crate::obstacle::{Fuse, Obstacle};
+use crate::obstacle::{Drum, Fuse, Obstacle};
 use crate::pickup::Pickup;
 use crate::plasma::{Plasma, PlasmaState};
 use crate::shell::{Owner, Shell, ShellState};
@@ -124,23 +132,42 @@ pub fn snapshot(game: &mut Game, s: &Snapshot) {
 /// `Game::events`) and collect the cells whose tile died. A `RoundStarted`
 /// among them is the server's round restarting (the end screen ran out):
 /// the replica starts over the same way, `init` on the event's seed, since
-/// a snapshot alone cannot put back what the old round destroyed.
+/// a snapshot alone cannot put back what the old round destroyed. A
+/// welcome's frame-0 snapshot carries the same event for the round
+/// `welcome` has just built, so a replica already standing at frame 0 on
+/// that seed keeps the world it has instead of building an identical one.
+///
+/// A `DrumLaunched` puts the drum in the air here, since a snapshot has
+/// no family for something that is neither a tile nor a shot; its arc is
+/// derived from an age `tick_presentation` advances, and the blast it
+/// sets off when it lands arrives as the server's own `Blast`.
 fn apply_events(game: &mut Game, s: &Snapshot, cols: u16) -> BTreeSet<u16> {
     let restarted = s.events.iter().rev().find_map(|e| match *e {
         WireEvent::RoundStarted { seed, .. } => Some(seed),
         _ => None,
     });
     if let Some(seed) = restarted {
-        game.seed_override = Some(seed);
-        let (width, height) = game.map.field_size();
-        game.init(width, height);
-        game.strip_ai();
+        if game.frame() != 0 || game.round_seed() != seed {
+            game.seed_override = Some(seed);
+            let (width, height) = game.map.field_size();
+            game.init(width, height);
+            game.strip_ai();
+        }
     }
     let mut dead = BTreeSet::new();
     for event in &s.events {
-        if let WireEvent::ObstacleDestroyed { x, y, .. } = *event {
-            let at = Position::new(dequantise_pos(x), dequantise_pos(y));
-            dead.insert(cell_index(cols, map::world_to_cell(at)));
+        match *event {
+            WireEvent::ObstacleDestroyed { x, y, .. } => {
+                let at = Position::new(dequantise_pos(x), dequantise_pos(y));
+                dead.insert(cell_index(cols, map::world_to_cell(at)));
+            }
+            WireEvent::DrumLaunched { x, y, to_x, to_y } => {
+                let from = Position::new(dequantise_pos(x), dequantise_pos(y));
+                let to = Position::new(dequantise_pos(to_x), dequantise_pos(to_y));
+                // Only a fuel drum ever launches (`props::tick_fuses`).
+                game.drum_in_flight(from, to, Drum::Fuel as i32);
+            }
+            _ => {}
         }
     }
     game.events = s.events.iter().filter_map(WireEvent::to_event).collect();
@@ -269,12 +296,11 @@ fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
         let mut q = game.world.query_one::<&mut Tank>(entity);
         let Ok(tank) = q.get() else { return };
         tank.position = position;
+        // The hull's facing snaps the way `Tank::control` snaps it; the
+        // drawn angles stay where they are and swing across in
+        // `Game::tick_presentation`, which is the turn the player sees.
         let turned = tank.rotation != rotation;
-        if turned {
-            tank.rotation = rotation;
-            tank.visual_rotation = rotation;
-            tank.turret_visual_rotation = rotation;
-        }
+        tank.rotation = rotation;
         let wreck = on(tank_flags::WRECK);
         tank.damage = if wreck { MAX_DAMAGE } else { MAX_DAMAGE - t.hp as f32 };
         if wreck && tank.wreck_col.is_none() {
@@ -545,20 +571,32 @@ fn apply_fires(game: &mut Game, s: &Snapshot, cols: u16) {
             }
         }
     }
+    // A cell only ever leaves the list by burning out, so the snapshot
+    // dropping it is the event: darker ground, the oil spent and a charred
+    // plank, once each (docs/online-coop-prd.md section 4.5).
+    let out: Vec<GroundFire> = game.fires.iter().filter(|f| !burning.contains(&f.cell)).copied().collect();
+    for fire in out {
+        if let Some(decal) = game.fire_burnt_out(&fire) {
+            game.push_decal(decal);
+        }
+    }
     game.fires = fires;
 }
 
 fn apply_round(game: &mut Game, s: &Snapshot) {
     game.intro_timer = dequantise_seconds(s.round.intro);
     game.outcome = s.round.outcome.into();
-    game.set_wave_progress(s.round.wave as u32, s.round.pending as usize);
+    // Zero tenths of breather is no breather: the banner is either up or
+    // it is not, and a last twentieth of a second of it changes nothing.
+    let next_in = (s.round.next_wave > 0).then(|| dequantise_seconds(s.round.next_wave));
+    game.set_wave_progress(s.round.wave as u32, s.round.pending as usize, next_in);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ai::Intent;
-    use crate::level::SpawnKind;
+    use crate::level::{Mission, SpawnKind};
     use crate::net::MAX_SEATS;
     use crate::net::codec::{Msg, decode, encode};
     use crate::net::encode as enc;
@@ -605,6 +643,42 @@ mod tests {
         welcome(&w).expect("a welcome builds a replica")
     }
 
+    /// The cosmetic state a replica carries forward on its own between two
+    /// snapshots, sorted by key: the drawn hull angles, the burning tiles'
+    /// flicker frames, the tread marks on the ground and the ages of the
+    /// rubble in flight.
+    #[derive(Default, PartialEq, Debug)]
+    struct Cosmetics {
+        angles: Vec<(usize, i32)>,
+        burn_frames: Vec<((i32, i32), i32)>,
+        marks: usize,
+        decal_ages: Vec<i32>,
+    }
+
+    fn cosmetics(game: &Game) -> Cosmetics {
+        let mut angles: Vec<(usize, i32)> = game
+            .world
+            .query::<&Tank>()
+            .iter()
+            .map(|t| (t.owner_slot(), (t.visual_rotation * 1000.0) as i32))
+            .collect();
+        angles.sort();
+        let mut burn_frames: Vec<((i32, i32), i32)> = game
+            .world
+            .query::<&Obstacle>()
+            .iter()
+            .filter(|o| o.burning && !o.destroyed)
+            .map(|o| (o.cell(), o.burn_frame))
+            .collect();
+        burn_frames.sort();
+        Cosmetics {
+            angles,
+            burn_frames,
+            marks: game.tracks.len(),
+            decal_ages: game.decals.iter().map(|d| (d.age * 1000.0) as i32).collect(),
+        }
+    }
+
     /// The families a run touched, so a test can say it exercised them.
     #[derive(Default, Debug)]
     struct Seen {
@@ -617,6 +691,13 @@ mod tests {
         tiles_gone: usize,
         /// Frames on the end screen.
         ended: usize,
+        /// Frames between snapshots on which the replica's own tick moved
+        /// a hull's drawn angle, a tile's flicker, the tread marks or a
+        /// piece of rubble in flight.
+        eased: usize,
+        flickered: usize,
+        marked: usize,
+        aged: usize,
     }
 
     impl Seen {
@@ -634,6 +715,13 @@ mod tests {
             self.tiles_gone += first.tiles.len().saturating_sub(state.tiles.len());
             self.ended += usize::from(state.outcome != crate::simulation::Outcome::Playing);
         }
+
+        fn record_tick(&mut self, before: &Cosmetics, after: &Cosmetics) {
+            self.eased += usize::from(before.angles != after.angles);
+            self.flickered += usize::from(before.burn_frames != after.burn_frames);
+            self.marked += usize::from(before.marks != after.marks);
+            self.aged += usize::from(before.decal_ages != after.decal_ages);
+        }
     }
 
     /// The state-only part of a snapshot: the frame's events and the tile
@@ -649,8 +737,11 @@ mod tests {
     /// Run a round for `frames` frames, snapshot every third one (the
     /// interval's events accumulated the way a room server does), build
     /// the replica from a welcome at frame 60 and apply every later
-    /// snapshot; after each apply the replica's picture must equal the
-    /// round's, and re-encoding the replica must give the server's bytes.
+    /// snapshot; on the two frames in between the replica runs
+    /// `tick_presentation`, as a client does. After each apply the
+    /// replica's picture must equal the round's, and re-encoding the
+    /// replica must give the server's bytes - so nothing the replica
+    /// animates on its own drifts out of what the wire pins.
     fn round_trip(map: &str, seed: u64, frames: u32, poke: impl Fn(&mut Game, u32)) -> Seen {
         let mut game = authoritative(map, seed, 6);
         let first = game.drawable_state();
@@ -662,6 +753,11 @@ mod tests {
             step(&mut game, frame);
             interval.extend(enc::wire_events(game.events()));
             if frame % 3 != 0 {
+                if let Some(replica) = replica.as_mut() {
+                    let before = cosmetics(replica);
+                    replica.tick_presentation(PHYSICS_FIXED_DT);
+                    seen.record_tick(&before, &cosmetics(replica));
+                }
                 continue;
             }
             let mut snap = enc::snapshot(&game, [0; MAX_SEATS]);
@@ -699,6 +795,8 @@ mod tests {
         assert!(seen.shots > 0, "{seen:?}: nobody fired");
         assert!(seen.wrecks > 0, "{seen:?}: no wreck");
         assert!(seen.changed_tiles > 0, "{seen:?}: no tile was hit");
+        assert!(seen.eased > 0, "{seen:?}: no hull swung its drawn angle between snapshots");
+        assert!(seen.marked > 0, "{seen:?}: no tread mark was pressed between snapshots");
     }
 
     #[test]
@@ -721,6 +819,34 @@ mod tests {
         // The round ends and restarts inside these 900 frames, so the end
         // screen and the `RoundStarted` re-init are covered too.
         assert!(seen.ended > 0, "{seen:?}: the round never ended");
+        assert!(seen.eased > 0, "{seen:?}: no hull swung its drawn angle between snapshots");
+        assert!(seen.aged > 0, "{seen:?}: no rubble aged between snapshots");
+    }
+
+    /// An `Obstacle` the replica has lost stays lost when the frame-0
+    /// snapshot that built it is applied again: its `RoundStarted` names
+    /// the round the replica is already standing in, and re-initing it
+    /// would only build an identical world. A snapshot naming another seed
+    /// is a real restart and does re-init.
+    #[test]
+    fn a_welcome_snapshot_does_not_rebuild_the_round_it_just_built() {
+        let game = authoritative(DEFAULT_MAP, 0x5EED, 4);
+        assert!(
+            game.events().iter().any(|e| matches!(e, crate::simulation::Event::RoundStarted { .. })),
+            "a round at frame 0 announces itself"
+        );
+        let snap = enc::snapshot(&game, [0; MAX_SEATS]);
+        let mut replica = welcome_through_the_codec(&game);
+        let doomed = replica.world.query::<(Entity, &Obstacle)>().iter().map(|(e, _)| e).next().expect("a tile");
+        replica.world.despawn(doomed).ok();
+        let tiles = replica.world.query::<&Obstacle>().iter().count();
+        snapshot(&mut replica, &snap);
+        assert_eq!(replica.world.query::<&Obstacle>().iter().count(), tiles, "the round was not rebuilt");
+        assert_eq!(replica.round_seed(), game.round_seed());
+
+        let other = authoritative(DEFAULT_MAP, 0xD1FF, 4);
+        snapshot(&mut replica, &enc::snapshot(&other, [0; MAX_SEATS]));
+        assert_eq!(replica.round_seed(), other.round_seed(), "another seed is a restart");
     }
 
     #[test]
@@ -767,6 +893,178 @@ mod tests {
         w.protocol -= 1;
         w.map_toml = "not a map".into();
         assert!(welcome(&w).is_err());
+    }
+
+    /// An open waves round, the shape a room server runs when the map
+    /// rolls its enemies in: one wave of one, no growth.
+    fn waves_round() -> Game {
+        let mut game = Game::default();
+        game.seed_override = Some(0x5A1E);
+        game.player_row_override = Some(3);
+        game.level_overrides.mission = Some(Mission::Destroy);
+        game.level_overrides.spawn = Some(SpawnKind::Waves);
+        game.level_overrides.waves = Some(1);
+        game.level_overrides.wave_size = Some(1);
+        game.level_overrides.wave_growth = Some(0);
+        game.map = MapFile::from_toml_str("version = 1\ntanks = 1\ncells.\"20,11\" = { kind = \"start\" }\n")
+            .expect("the inline map parses");
+        let (width, height) = game.map.field_size();
+        game.init(width, height);
+        game
+    }
+
+    /// `Tank::alpha` of the tank in `slot`, `None` once it is gone.
+    fn wreck_alpha(game: &Game, slot: usize) -> Option<f32> {
+        game.world.query::<&Tank>().iter().find(|t| t.owner_slot() == slot).map(|t| t.alpha())
+    }
+
+    /// A wave round's wreck fades out on the replica without the server
+    /// sending its `despawn_timer`: the replica arms the timer the first
+    /// frame it sees the wreck and runs it down, and taking the hull off
+    /// the field stays the server's (`Event::WreckRemoved` plus a snapshot
+    /// that no longer lists it).
+    #[test]
+    fn a_replicas_wreck_fades_out_on_its_own() {
+        let mut game = waves_round();
+        let mut slot = None;
+        for frame in 1..=900 {
+            step(&mut game, frame);
+            if let Some(&crate::simulation::Event::TankEntered { slot: s }) =
+                game.events().iter().find(|e| matches!(e, crate::simulation::Event::TankEntered { .. }))
+            {
+                slot = Some(s);
+                break;
+            }
+        }
+        let slot = slot.expect("a wave tank rolls in");
+        game.debug_kill(slot).expect("the tank that rolled in");
+        step(&mut game, 1);
+        assert!(game.drawable_state().tanks.iter().any(|t| t.wreck), "the round has a wreck");
+
+        let mut replica = welcome_through_the_codec(&game);
+        assert_eq!(wreck_alpha(&replica, slot), Some(1.0), "a wreck starts at full opacity");
+        let seconds = tuning().wave_wreck_despawn_seconds;
+        let ticks = |s: f32| (s / PHYSICS_FIXED_DT).round() as u32;
+        for _ in 0..ticks(seconds - 0.5) {
+            replica.tick_presentation(PHYSICS_FIXED_DT);
+        }
+        let fading = wreck_alpha(&replica, slot).expect("the replica does not remove its own wrecks");
+        assert!(fading > 0.0 && fading < 1.0, "half a second from removal it is fading: {fading}");
+        for _ in 0..ticks(0.6) {
+            replica.tick_presentation(PHYSICS_FIXED_DT);
+        }
+        assert_eq!(wreck_alpha(&replica, slot), Some(0.0), "faded out, and still on the field");
+    }
+
+    /// A ground fire that goes out darkens the replica's ground, spends
+    /// its oil cell and drops its charred plank - driven by the snapshot
+    /// that stops listing the cell, since burning out is the only way a
+    /// fire ever leaves the list.
+    #[test]
+    fn a_replicas_fire_burns_out_when_the_snapshot_drops_it() {
+        let mut game = authoritative(PROPS_MAP, 0xC0FFEE, 2);
+        game.debug_detonate(map::cell_to_world(17, 6)).expect("the oil drum at (17,6)");
+        for frame in 1..=30 {
+            step(&mut game, frame);
+        }
+        let lit: Vec<(i32, i32)> = game.fires.iter().map(|f| f.cell).collect();
+        assert!(!lit.is_empty(), "the drum leaves a burning pool");
+        let mut replica = welcome_through_the_codec(&game);
+        assert_eq!(replica.fires.len(), game.fires.len(), "the replica has the same pool");
+        let decals = replica.decals.len();
+
+        let mut burnt = false;
+        for frame in 31..=1800 {
+            step(&mut game, frame);
+            if frame % 3 == 0 {
+                snapshot(&mut replica, &enc::snapshot(&game, [0; MAX_SEATS]));
+            } else {
+                replica.tick_presentation(PHYSICS_FIXED_DT);
+            }
+            if lit.iter().all(|cell| !game.fires.iter().any(|f| f.cell == *cell)) {
+                snapshot(&mut replica, &enc::snapshot(&game, [0; MAX_SEATS]));
+                burnt = true;
+                break;
+            }
+        }
+        assert!(burnt, "the pool never burned out");
+        assert!(replica.fires.iter().all(|f| !lit.contains(&f.cell)), "the cells are out on the replica too");
+        assert!(replica.decals.len() > decals, "a burnt-out cell leaves a charred plank");
+        assert_eq!(replica.oil_cells, game.oil_cells, "and the oil it burned is spent on both sides");
+    }
+
+    /// A tile the snapshot says is burning flickers on the replica, and
+    /// only flickers: the charring that kills it is the server's, and the
+    /// tile stays on the field until an `ObstacleDestroyed` takes it away,
+    /// however long the replica runs.
+    #[test]
+    fn a_burning_tile_flickers_on_the_replica_without_charring_out() {
+        const WOOD_MAP: &str =
+            "version = 1\ntanks = 0\ncells.\"5,5\" = { kind = \"start\" }\ncells.\"10,8\" = { kind = \"wall\", material = \"wood\" }\n";
+        let cell = (10, 8);
+        let game = authoritative(WOOD_MAP, 1, 0);
+        // Light the wall the way a fire beside it does.
+        for obstacle in game.world.query::<&mut Obstacle>().iter() {
+            if obstacle.cell() == cell {
+                obstacle.health = 0.0;
+                obstacle.burning = true;
+            }
+        }
+        let mut replica = welcome_through_the_codec(&game);
+        let tile = |g: &Game| {
+            g.world.query::<&Obstacle>().iter().find(|o| o.cell() == cell).map(|o| (o.burning, o.burn_frame, o.burn_elapsed))
+        };
+        assert_eq!(tile(&replica), Some((true, 0, 0.0)), "the replica has the burning wall");
+        let ticks = ((tuning().wood_burn_frame_seconds + PHYSICS_FIXED_DT) / PHYSICS_FIXED_DT).ceil() as u32;
+        for _ in 0..ticks {
+            replica.tick_presentation(PHYSICS_FIXED_DT);
+        }
+        assert_eq!(tile(&replica), Some((true, 1, 0.0)), "the flicker advanced, the charring did not");
+        // Well past `wood_burn_seconds`, and the tile is still standing.
+        for _ in 0..600 {
+            replica.tick_presentation(PHYSICS_FIXED_DT);
+        }
+        assert!(tile(&replica).is_some(), "the replica never chars a tile out on its own");
+    }
+
+    /// `DrumLaunched` puts the drum in the air on the replica, which flies
+    /// it from an age `tick_presentation` advances and drops it when it
+    /// lands - the blast there is the server's own `Blast`.
+    #[test]
+    fn a_launched_drum_flies_on_the_replica() {
+        let mut game = authoritative(PROPS_MAP, 0xC0FFEE, 2);
+        let mut replica = welcome_through_the_codec(&game);
+        // A cascade can launch more than one drum on the same frame.
+        let mut launched: Vec<(f32, f32, f32, f32)> = Vec::new();
+        for frame in 1..=900 {
+            if frame == 120 {
+                game.debug_detonate(map::cell_to_world(17, 6)).expect("the oil drum at (17,6)");
+            }
+            step(&mut game, frame);
+            snapshot(&mut replica, &enc::snapshot(&game, [0; MAX_SEATS]));
+            launched.extend(game.events().iter().filter_map(|e| match *e {
+                crate::simulation::Event::DrumLaunched { x, y, to_x, to_y } => Some((x, y, to_x, to_y)),
+                _ => None,
+            }));
+            if !launched.is_empty() {
+                break;
+            }
+        }
+        let (x, y, to_x, to_y) = *launched.first().expect("the trail reaches a fuel drum and launches it");
+        assert_eq!(replica.flying_drums.len(), launched.len(), "the replica put every launched drum in the air");
+        let drum = replica.flying_drums[0];
+        // The launch travels in quarter pixels.
+        assert!(drum.from.distance_to(Position::new(x, y)) <= 0.5, "from {:?} for {x},{y}", drum.from);
+        assert!(drum.to.distance_to(Position::new(to_x, to_y)) <= 0.5, "to {:?} for {to_x},{to_y}", drum.to);
+
+        let start = drum.draw_pos();
+        replica.tick_presentation(PHYSICS_FIXED_DT);
+        assert!(replica.flying_drums[0].draw_pos().distance_to(start) > 0.0, "the arc advances");
+        let ticks = (tuning().debris_flight_seconds / PHYSICS_FIXED_DT).ceil() as u32 + 2;
+        for _ in 0..ticks {
+            replica.tick_presentation(PHYSICS_FIXED_DT);
+        }
+        assert!(replica.flying_drums.is_empty(), "and it lands");
     }
 
     #[test]

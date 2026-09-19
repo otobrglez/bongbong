@@ -515,6 +515,12 @@ pub struct Tank {
     pub despawn_timer: Option<f32>,
     /// Distance travelled (pixels) since the last track mark was dropped.
     pub track_accum: f32,
+    /// Where this hull stood at the last `Game::tick_presentation`, the
+    /// `before` its tread marks are laid from on a client replica
+    /// (docs/online-coop-prd.md section 4.5). `None` in a local round,
+    /// whose marks come off the physics step instead
+    /// (`Game::sync_tanks_and_ram`).
+    pub track_from: Option<Position>,
     /// Number of track marks this tank has laid this round - the phase input
     /// to its track wobble (see `track_wobble_phase`); incremented once per
     /// mark in `Game::lay_tracks`.
@@ -599,6 +605,7 @@ impl Default for Tank {
             wreck_timer: 0.0,
             despawn_timer: None,
             track_accum: 0.0,
+            track_from: None,
             track_mark_count: 0,
             track_wobble_amp: 0.0,
             track_wobble_freq: 0.0,
