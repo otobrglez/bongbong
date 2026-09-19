@@ -77,7 +77,7 @@ Non-goals, for now
 - Lag compensation on the server (section 4.12); a decision for after stage 2
   measures.
 
-## 3. What we have today (verified 2026-09-19, tree at 41fe857)
+## 3. What we have today (verified 2026-09-19, tree at ac5ebe4, v0.1.0)
 
 Working for us
 - `simulation::Input` is two `Intent`s plus toggles. The part of an `Intent` a
@@ -120,6 +120,10 @@ Working for us
   `Game::players()`, one engage ring per player, per-player fire edges,
   `friendly_fire_damage_factor`, `Ai::target_player` over two players with
   hysteresis.
+- `trig.rs` is portable `sin`/`cos`/`atan2`: IEEE add and multiply in f64,
+  rounded once, bit-identical on every platform. It exists for the pinned
+  CPU render, and it is exactly the tool stage 2 reaches for if
+  `drive_tank`'s transcendentals ever drift between a phone and the server.
 - The site is a Cloudflare Worker deployed by `wrangler` from CI on tags, with
   per-PR preview workers. The join page and the well-known files are the two
   things it adds; it holds no room state.
@@ -130,7 +134,7 @@ In the way
   `frog.rs`, `shell.rs`, `obstacle.rs`, ...) keeps its `draw_*` next to its
   state. Nothing in `simulation/` needs a window, but the crate cannot build
   without the C library.
-- No serializable world: `Game` is 63 fields around a `hecs::World`, neither
+- No serializable world: `Game` is 66 fields around a `hecs::World`, neither
   derives serde, rapier is built without `serde-serialize`. Snapshots are a
   purpose-built wire struct.
 - Ricochets are silent: `Shell`'s `Projectile::try_ricochet` reflects off iron
@@ -179,9 +183,10 @@ sees. This table is the first pass; the phase 1 audit finalises it.
 
 | Family | Travels | Derived | Local |
 |---|---|---|---|
-| Tank (50 fields) | `position`, `rotation`, body velocity, `damage`, `wreck_col`, `row` (in `Welcome`), `owner`, ammo counts, `flame_fuel`, active weapon and variants, `shield_hp` and `shield_broke`, `speed_boost_timer`, `burn_timer`, `despawn_timer`, a "hit this interval" bit, `flame_held` | `damage_variant`/stage from `damage`; `shell_variant` from row and the alternating shot; `hull_frame` from velocity and time; `wet_timer` from the hull's own wading (the water layout is the map's) | `visual_rotation`, `turret_visual_rotation`, `ring_position`/`ring_velocity`, `hull_anim_accum`, `minigun_cycle_timer`, track wobble and jitter, `track_accum`, `pending_shot` timing (the second barrel's shell arrives as its own `Fired`); `throttle` and `shield_recharge_delay` are server bookkeeping and never travel |
+| Tank (51 fields) | `position`, `rotation`, body velocity, `damage`, `wreck_col`, `row` (in `Welcome`), `owner`, ammo counts, `flame_fuel`, active weapon and variants, `shield_hp` and `shield_broke`, `speed_boost_timer`, `burn_timer`, `portal_cooldown`, `despawn_timer`, a "hit this interval" bit, `flame_held` | `damage_variant`/stage from `damage`; `shell_variant` from row and the alternating shot; `hull_frame` from velocity and time; `wet_timer` from the hull's own wading (the water layout is the map's) | `visual_rotation`, `turret_visual_rotation`, `ring_position`/`ring_velocity`, `hull_anim_accum`, `minigun_cycle_timer`, track wobble and jitter, `track_accum`, `pending_shot` timing (the second barrel's shell arrives as its own `Fired`); `throttle` and `shield_recharge_delay` are server bookkeeping and never travel |
 | Frog (two) | `position`, `health`, a state byte with phase, `hop_end` while hopping | animation frame | — |
 | Obstacle (one per solid cell: 578 on the default 34 x 17 field, more on a map with its own `size`) | layout in `Welcome`; then deltas: `health`, `burning`, `fuse` armed with total, `scorched` mask, `destroyed`, a ram-lean byte | `variant`, `edge_mask` (recomputed as `refresh_edge_masks` does), `burn_frame` from time since ignition | `burn_frame_timer`, `heat` (ignition is an event) |
+| Portals (docs/teleporting.md) | anchors in `Welcome`; a hop is `Teleported` plus the tank's new position in the next snapshot | whether the network is active (two or more anchors) | the spiral's turn, the arrival flash |
 | Pickups | bitmask of slot-backed pickups present; the Health slot's bonus shields and frog packs as explicit cells | kind and position from the map's slots | bob and spin |
 | Shells, bullets, plasma | stage 1: id, kind, position, heading, state per live projectile. Later, with `Ricochet`: spawn from `Fired`, removal from `Hit`, nothing between | choreography frame from state and interval | — |
 | Laser, flamethrower | laser: `Fired` plus the hit point; flame: origin, direction, capped reach while held | beam fade, cone flicker | — |
@@ -262,6 +267,7 @@ never sent (the AI's trace, recorded only while `Game::trace_ai` is set);
 | `Blast {x, y, chained, drum}`, `CookOff` | shaped fireball, scorch, parts, re-thrown rubble, flattened grass, burnt-in tracks, ripple, flash | `apply_blast`'s cosmetic half |
 | `DrumLaunched` | the flying drum from launch to landing | `draw_flying_drum` from a launch time |
 | `FireStarted`, `Ignited` | light the cell or tile | `light_cell`'s visual part |
+| `Teleported {slot, from, to}` | the departure and arrival flashes; the hull is drawn at `to` from that tick on, no interpolation across the hop | the portal phase's cosmetic part |
 | `RoundEnded {outcome}` | end screen, results, rematch | the end screen |
 | new `Ricochet {slot, x, y, heading}` | the shell's heading changes | `Shell::reflect_off` |
 
@@ -783,8 +789,9 @@ ship a complete co-op game; 4 and 5 are stage 2.
   pile-ups rare.
 - **Float drift under prediction.** Sub-pixel per step, corrected every 50 ms.
   If a platform shows systematic drift (a different `exp` in the decel curve),
-  route the few transcendentals in `drive_tank` through `libm`, locally,
-  without lockstep-grade effort.
+  route the few transcendentals in `drive_tank` through `trig.rs`, which
+  already gives bit-identical `sin`/`cos`/`atan2` on every platform, without
+  lockstep-grade effort.
 - **Tuning agreement.** Online rounds apply the `Welcome` diff and lock the
   panel; the sandbox reads the same table; a mismatch shows as systematic
   prediction error in the metrics.
