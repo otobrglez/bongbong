@@ -7,8 +7,11 @@
 //! kept a while for a rematch). Every third tick a snapshot is encoded
 //! once, as a delta against the previous one, and offered to every seat's
 //! outbox; a seat that skipped one, or just arrived, gets the next in
-//! full. Seats outlive connections: a disconnect keeps the seat for its
-//! device token, and a reconnect reclaims it with a fresh `Welcome`.
+//! full. The bytes come from `net::encode` (`snapshot`, `welcome`); the
+//! room only adds its clock and the events of the two ticks between
+//! snapshots. Seats outlive connections: a disconnect keeps the seat for
+//! its device token, and a reconnect reclaims it with a fresh `Welcome`
+//! cut from the live world, holes in the map included.
 //!
 //! The durations below are server policy, not gameplay tuning; nothing in
 //! the tuning table is written here.
@@ -19,19 +22,16 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use axum::body::Bytes;
+use bongbong::PHYSICS_FIXED_DT;
 use bongbong::level::{LevelOverrides, Mission};
 use bongbong::map::MapFile;
 use bongbong::net::codec::{self, Msg};
 use bongbong::net::delta::delta;
-use bongbong::net::events::{WireEvent, WireHitTarget};
-use bongbong::net::wire::{
-    Lobby, RosterSeat, RoundState, Seat as WireSeat, Snapshot, TankState, Welcome, dir_index, quantise_health,
-    quantise_pos, quantise_velocity, tank_flags,
-};
+use bongbong::net::encode;
+use bongbong::net::events::WireEvent;
+use bongbong::net::wire::{Lobby, RosterSeat, Seat as WireSeat, Snapshot, Welcome};
 use bongbong::net::{MAX_SEATS, PROTOCOL_VERSION};
 use bongbong::simulation::{Game, Input, Outcome, PlayerCount};
-use bongbong::tank::Dir;
-use bongbong::{MAX_DAMAGE, PHYSICS_FIXED_DT};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, Interval, MissedTickBehavior};
 use tracing::{info, warn};
@@ -71,8 +71,14 @@ pub const SEAT_GRACE: Duration = Duration::from_secs(30);
 /// The longest nickname kept; the rest is cut.
 pub const NICK_MAX: usize = 24;
 
-/// The simulation build stamped in every `Welcome`.
+/// The simulation build stamped in a waiting room's `Welcome` (a round's
+/// comes from `encode::welcome`); the workspace shares one version.
 pub const SIM_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The tuning diff every `Welcome` carries: rooms run the build's
+/// defaults, so it is the empty patch until a room carries a diff of its
+/// own.
+pub const ROOM_TUNING_JSON: &str = "{}";
 
 /// Where a room stands. The discriminants are what `RoomStats` stores.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -286,7 +292,8 @@ struct Room {
     interval: Interval,
     /// The last snapshot sent: the baseline of the next delta.
     prev: Snapshot,
-    /// Events since the last snapshot.
+    /// The events of the ticks since the last snapshot that sent none
+    /// (`encode::wire_events`), prepended to the next one's own.
     pending_events: Vec<WireEvent>,
     created: Instant,
     commands: mpsc::Receiver<Command>,
@@ -557,7 +564,9 @@ impl Room {
         let (w, h) = self.map.field_size();
         game.init(w, h);
         self.round_seed = game.round_seed();
-        self.pending_events = game.events().iter().filter_map(WireEvent::from_event).collect();
+        // `init`'s own events (the round start) travel in the welcome's
+        // snapshot, which is frame 0's.
+        self.pending_events.clear();
         self.game = Some(game);
         for seat in self.seats.iter_mut().flatten() {
             seat.ready = false;
@@ -567,16 +576,15 @@ impl Room {
         self.interval.reset();
         info!(code = self.code, seed = format!("{:#x}", self.round_seed), players, "round started");
         self.lobby_to_all(Lobby::Started);
-        // Everyone's baseline is the welcome's snapshot, so the first
-        // delta applies straight onto it.
-        let baseline = self.fresh_snapshot(self.acked());
+        // Everyone's baseline is the welcome's snapshot (the same frame
+        // for every seat), so the first delta applies straight onto it.
         for i in 0..self.seats.len() {
             let Some(seat) = self.seats[i].as_mut() else { continue };
             seat.needs_full = false;
-            let welcome = Welcome { snapshot: baseline.clone(), ..self.welcome(i as u8) };
+            let welcome = self.welcome(i as u8);
+            self.prev = welcome.snapshot.clone();
             self.send_to(i as u8, Msg::Welcome(welcome));
         }
-        self.prev = baseline;
         self.refresh_stats();
         Ok(())
     }
@@ -686,13 +694,28 @@ impl Room {
         kind.map_or(0, |k| k.row() as u8)
     }
 
+    /// The welcome for `seat`: in a round, `encode::welcome` on the live
+    /// world (its current snapshot, the holes shot in the map, the pins
+    /// the replica's `init` needs), so a joiner or a rejoiner builds the
+    /// round as it stands now; in a waiting room, the map and the roster
+    /// with an empty snapshot.
     fn welcome(&self, seat: u8) -> Welcome {
-        let roster = self
+        let roster: Vec<WireSeat> = self
             .seats
             .iter()
             .enumerate()
             .filter_map(|(i, s)| s.as_ref().map(|s| WireSeat { seat: i as u8, nick: s.nick.clone(), chassis: self.chassis(i as u8) }))
             .collect();
+        let acked = self.acked();
+        if let Some(game) = &self.game {
+            match encode::welcome(game, seat, roster.clone(), ROOM_TUNING_JSON.into(), acked) {
+                Ok(mut welcome) => {
+                    welcome.snapshot.server_ms = self.server_ms();
+                    return welcome;
+                }
+                Err(e) => warn!(code = self.code, error = e, "welcome could not be encoded; sending the map alone"),
+            }
+        }
         Welcome {
             protocol: PROTOCOL_VERSION,
             sim_version: SIM_VERSION.into(),
@@ -700,11 +723,18 @@ impl Room {
             roster,
             map_toml: self.map.to_toml_string().unwrap_or_default(),
             seed: self.round_seed,
-            tuning_json: bongbong::tuning::diff_json(),
+            tuning_json: ROOM_TUNING_JSON.into(),
             overrides: self.overrides.into(),
+            enemy_count: None,
             oil_cells: Vec::new(),
-            snapshot: self.fresh_snapshot(self.acked()),
+            dead_cells: Vec::new(),
+            snapshot: Snapshot { acked, server_ms: self.server_ms(), ..Snapshot::default() },
         }
+    }
+
+    /// The room's clock, milliseconds since it was created.
+    fn server_ms(&self) -> u32 {
+        self.created.elapsed().as_millis().min(u32::MAX as u128) as u32
     }
 
     // -----------------------------------------------------------------
@@ -741,26 +771,34 @@ impl Room {
             self.hub.metrics.tick_overruns_total.fetch_add(1, Ordering::Relaxed);
             warn!(code = self.code, frame = game.frame(), took_us = took.as_micros() as u64, "tick overran");
         }
-        self.pending_events.extend(game.events().iter().filter_map(WireEvent::from_event));
         let frame = game.frame();
         let ended = game.outcome() != Outcome::Playing;
         if frame % SNAPSHOT_EVERY == 0 || ended {
             self.broadcast_snapshot(acked);
+        } else {
+            // A tick that sends nothing banks its events for the next
+            // snapshot, whose own events are its frame's.
+            self.pending_events.extend(encode::wire_events(game.events()));
         }
         if ended {
             self.end_round("outcome");
         }
     }
 
-    /// The state now, as a `Snapshot` with the events since the last one.
+    /// The state now as a `Snapshot`: the encoder's, stamped with the
+    /// room's clock, the banked events of the ticks since the last
+    /// snapshot ahead of this frame's own.
     fn fresh_snapshot(&self, acked: [u32; MAX_SEATS]) -> Snapshot {
         let mut snap = match &self.game {
-            Some(game) => snapshot_of(game, acked),
+            Some(game) => encode::snapshot(game, acked),
             None => Snapshot { acked, ..Snapshot::default() },
         };
-        snap.server_ms = self.created.elapsed().as_millis().min(u32::MAX as u128) as u32;
-        snap.events = self.pending_events.clone();
-        mark_hits(&mut snap);
+        snap.server_ms = self.server_ms();
+        if !self.pending_events.is_empty() {
+            let mut events = self.pending_events.clone();
+            events.append(&mut snap.events);
+            snap.events = events;
+        }
         snap
     }
 
@@ -802,80 +840,6 @@ impl Room {
 fn clean_nick(nick: &str) -> String {
     let nick: String = nick.trim().chars().take(NICK_MAX).collect();
     if nick.is_empty() { "player".into() } else { nick }
-}
-
-/// The round as a `Snapshot`, from the public accessors: the server's own
-/// encoder until the library provides `net::encode::snapshot`. Fills
-/// `tick`, `acked`, `tanks` (position, body velocity, facing, hull and
-/// shield health, the `WRECK`/`SHIELD`/`BURNING` flags, shell ammo),
-/// `round` (wave, alive, pending, outcome) and this frame's `events`.
-/// Left empty until then: `shots`, `frogs`, `pickups`, `bonus_pickups`,
-/// `tiles`, `fires`, the `intro` timer, the `BOOST`/`FLAME` flags and the
-/// active `weapon` (always `Shell`), which no accessor exposes today.
-/// `server_ms` is 0: the room stamps its clock.
-pub fn snapshot_of(game: &Game, acked: [u32; MAX_SEATS]) -> Snapshot {
-    let tanks = game.tank_snapshots();
-    let mut snap = Snapshot {
-        tick: game.frame().min(u32::MAX as u64) as u32,
-        server_ms: 0,
-        acked,
-        ..Snapshot::default()
-    };
-    for t in &tanks {
-        let mut flags = 0;
-        if t.is_wreck {
-            flags |= tank_flags::WRECK;
-        }
-        if t.shield_hp > 0.0 {
-            flags |= tank_flags::SHIELD;
-        }
-        if t.burn_timer > 0.0 {
-            flags |= tank_flags::BURNING;
-        }
-        snap.tanks.push(TankState {
-            id: t.slot.min(u16::MAX as usize) as u16,
-            x: quantise_pos(t.position.x),
-            y: quantise_pos(t.position.y),
-            vx: quantise_velocity(t.velocity.x),
-            vy: quantise_velocity(t.velocity.y),
-            dir: Dir::from_rotation(t.rotation).map_or(0, dir_index),
-            hp: quantise_health(MAX_DAMAGE - t.damage),
-            shield: quantise_health(t.shield_hp),
-            flags,
-            ammo: t.shells_ammo.clamp(0, u8::MAX as i32) as u8,
-            ..TankState::default()
-        });
-    }
-    let alive_enemies = tanks.iter().filter(|t| !t.is_player && !t.is_wreck).count();
-    snap.round = match game.wave_status() {
-        Some(w) => RoundState {
-            wave: w.index.min(u8::MAX as u32) as u8,
-            alive: w.alive.min(u8::MAX as usize) as u8,
-            pending: w.pending.min(u8::MAX as usize) as u8,
-            intro: 0,
-            outcome: game.outcome().into(),
-        },
-        None => RoundState { wave: 0, alive: alive_enemies.min(u8::MAX as usize) as u8, pending: 0, intro: 0, outcome: game.outcome().into() },
-    };
-    snap.events = game.events().iter().filter_map(WireEvent::from_event).collect();
-    snap.normalise();
-    snap
-}
-
-/// Set the `HIT` flag on every tank one of the snapshot's events landed
-/// on (a player's seat is its slot).
-pub fn mark_hits(snap: &mut Snapshot) {
-    for event in &snap.events {
-        let slot = match event {
-            WireEvent::Hit { target: WireHitTarget::Player { player }, .. } => *player as u16,
-            WireEvent::Hit { target: WireHitTarget::Enemy { slot }, .. } => *slot,
-            WireEvent::Ram { slot, .. } => *slot,
-            _ => continue,
-        };
-        if let Some(tank) = snap.tanks.iter_mut().find(|t| t.id == slot) {
-            tank.flags |= tank_flags::HIT;
-        }
-    }
 }
 
 #[cfg(test)]
@@ -970,38 +934,5 @@ mod tests {
         assert_eq!(clean_nick("  oto "), "oto");
         assert_eq!(clean_nick("   "), "player");
         assert_eq!(clean_nick(&"x".repeat(100)).len(), NICK_MAX);
-    }
-
-    #[test]
-    fn snapshot_of_a_fresh_round_carries_the_players_and_the_round_start() {
-        let mut game = Box::new(Game::default());
-        game.map = bongbong::map::open_map("default").unwrap();
-        game.players = PlayerCount::Two;
-        game.seed_override = Some(7);
-        game.enemy_count_override = Some(2);
-        let (w, h) = game.map.field_size();
-        game.init(w, h);
-        let snap = snapshot_of(&game, [0; MAX_SEATS]);
-        assert_eq!(snap.tick, 0);
-        let ids: Vec<u16> = snap.tanks.iter().map(|t| t.id).collect();
-        assert!(ids.starts_with(&[0, 1]), "both seats' tanks first: {ids:?}");
-        assert!(snap.tanks.iter().all(|t| t.hp == MAX_DAMAGE as u8));
-        assert!(snap.tanks.windows(2).all(|w| w[0].id < w[1].id), "normalised");
-        assert!(matches!(snap.events.first(), Some(WireEvent::RoundStarted { seed: 7, .. })), "{:?}", snap.events);
-        assert_eq!(snap.round.outcome, bongbong::net::wire::RoundOutcome::Playing);
-        game.update(Input::default(), PHYSICS_FIXED_DT, w, h);
-        assert_eq!(snapshot_of(&game, [0; MAX_SEATS]).tick, 1);
-    }
-
-    #[test]
-    fn mark_hits_flags_the_tank_an_event_landed_on() {
-        let mut snap = Snapshot {
-            tanks: vec![TankState { id: 0, ..Default::default() }, TankState { id: 3, ..Default::default() }],
-            events: vec![WireEvent::Hit { target: WireHitTarget::Enemy { slot: 3 }, damage: 10.0, killed: false, x: 0, y: 0 }],
-            ..Default::default()
-        };
-        mark_hits(&mut snap);
-        assert_eq!(snap.tanks[0].flags & tank_flags::HIT, 0);
-        assert_ne!(snap.tanks[1].flags & tank_flags::HIT, 0);
     }
 }
