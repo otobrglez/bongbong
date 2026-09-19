@@ -25,6 +25,7 @@
 
 use crate::tuning::tuning;
 use sola_raylib::prelude::*;
+use crate::math::Vec2;
 
 use crate::shell::Owner;
 use crate::tank::Tank;
@@ -141,7 +142,7 @@ pub struct Plasma {
     pub state: PlasmaState,
     pub position: Position,
     /// Direction of travel while flying (pixels per second).
-    pub velocity: Vector2,
+    pub velocity: Vec2,
     /// Facing angle in degrees (matches the tank's rotation when fired).
     pub rotation: f32,
     /// Time elapsed in the current state - kept growing (unbounded) while
@@ -189,10 +190,10 @@ impl Plasma {
         lateral_offset: f32,
     ) -> Plasma {
         let rot = (tank.rotation + aim_offset).to_radians();
-        let dir = Vector2::new(rot.sin(), -rot.cos());
+        let dir = Vec2::new(rot.sin(), -rot.cos());
         let muzzle = tuning().tank_muzzle_forward_offset[tank.row as usize] * tank.scale;
         let hull_rot = tank.rotation.to_radians();
-        let lateral = Vector2::new(hull_rot.cos(), hull_rot.sin()) * (lateral_offset * tank.scale);
+        let lateral = Vec2::new(hull_rot.cos(), hull_rot.sin()) * (lateral_offset * tank.scale);
         let position = Position::new(
             tank.position.x + dir.x * muzzle + lateral.x,
             tank.position.y + dir.y * muzzle + lateral.y,
@@ -200,7 +201,7 @@ impl Plasma {
         Plasma {
             state: PlasmaState::Fire0,
             position,
-            velocity: Vector2::new(dir.x * tuning().plasma_speed, dir.y * tuning().plasma_speed),
+            velocity: Vec2::new(dir.x * tuning().plasma_speed, dir.y * tuning().plasma_speed),
             rotation: tank.rotation + aim_offset,
             timer: 0.0,
             done: false,

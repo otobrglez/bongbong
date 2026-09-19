@@ -1364,7 +1364,7 @@ cells."21,10" = { kind = "barrel", drum = "oil" }
     assert!(game.debug_detonate(cell_to_world(25, 5)).is_err(), "an empty cell is an error");
 
     // A point anywhere inside the cell resolves to that barrel.
-    let inside = cell_to_world(20, 10) + Vector2::new(7.0, -5.0);
+    let inside = cell_to_world(20, 10) + Vec2::new(7.0, -5.0);
     game.debug_detonate(inside).expect("a live barrel");
     step(&mut game, Input::default());
     let blasts: Vec<(i32, bool)> =

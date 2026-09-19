@@ -15,6 +15,7 @@
 
 use crate::tuning::tuning;
 use sola_raylib::prelude::*;
+use crate::math::Vec2;
 
 use crate::shell::Owner;
 use crate::tank::Tank;
@@ -61,7 +62,7 @@ pub struct Bullet {
     pub state: BulletState,
     pub position: Position,
     /// Direction of travel while flying (pixels per second).
-    pub velocity: Vector2,
+    pub velocity: Vec2,
     /// Facing angle in degrees (matches the tank's rotation when fired, plus
     /// this bullet's own misfire/spread skew).
     pub rotation: f32,
@@ -99,7 +100,7 @@ impl Bullet {
     /// this.
     pub fn spawn(tank: &Tank, owner: Owner, aim_offset: f32) -> Bullet {
         let rot = (tank.rotation + aim_offset).to_radians();
-        let dir = Vector2::new(rot.sin(), -rot.cos());
+        let dir = Vec2::new(rot.sin(), -rot.cos());
         let muzzle = tuning().tank_muzzle_forward_offset[tank.row as usize] * tank.scale;
         let position = Position::new(
             tank.position.x + dir.x * muzzle,
@@ -108,7 +109,7 @@ impl Bullet {
         Bullet {
             state: BulletState::Muzzle,
             position,
-            velocity: Vector2::new(dir.x * tuning().minigun_bullet_speed, dir.y * tuning().minigun_bullet_speed),
+            velocity: Vec2::new(dir.x * tuning().minigun_bullet_speed, dir.y * tuning().minigun_bullet_speed),
             rotation: tank.rotation + aim_offset,
             timer: 0.0,
             done: false,

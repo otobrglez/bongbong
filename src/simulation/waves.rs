@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 use hecs::Entity;
 use rand::RngExt;
 use serde::Serialize;
-use sola_raylib::core::math::Vector2;
+use crate::math::Vec2;
 
 use crate::ai::Ai;
 use crate::battlefield::{self, Gate};
@@ -133,12 +133,12 @@ impl Game {
             let step = speed * f.dt;
             if dist <= step || dist <= f32::EPSILON {
                 tank.position = roll.to;
-                tank.velocity = Vector2::new(0.0, 0.0);
+                tank.velocity = Vec2::new(0.0, 0.0);
                 arrived.push((entity, tank.owner_slot()));
             } else {
                 let (ux, uy) = (dx / dist, dy / dist);
                 tank.position = Position::new(before.x + ux * step, before.y + uy * step);
-                tank.velocity = Vector2::new(ux * speed, uy * speed);
+                tank.velocity = Vec2::new(ux * speed, uy * speed);
             }
             tank.ease_visual_rotation(f.dt);
             tank.ease_turret_visual_rotation(f.dt);

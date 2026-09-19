@@ -26,7 +26,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::{Map, Value, json};
-use sola_raylib::prelude::{RaylibHandle, RaylibTexture2D, RaylibThread, RenderTexture2D};
+use sola_raylib::prelude::{RaylibHandle, RaylibTexture2D, RaylibThread, RenderTexture2D, Vector2};
 
 use crate::ai::Intent;
 use crate::editor::{BuilderInput, Category, CellChange, MapEditor, Tool, parse_mission, parse_spawn, parse_tank, parse_tier};
@@ -1418,13 +1418,13 @@ impl DevServer {
             None | Some(Value::Null) => None,
             Some(v) => match v.as_array().map(Vec::as_slice) {
                 Some([dx, dy]) => match (dx.as_f64(), dy.as_f64()) {
-                    (Some(dx), Some(dy)) => Some(Position::new(dx as f32, dy as f32)),
+                    (Some(dx), Some(dy)) => Some(Vector2::new(dx as f32, dy as f32)),
                     _ => return Err(format!("drag_to must be [x, y] numbers, got {v}")),
                 },
                 _ => return Err(format!("drag_to must be [x, y], got {v}")),
             },
         };
-        let point = Position::new(x, y);
+        let point = Vector2::new(x, y);
         match session.mode() {
             Driver::Play => {
                 // The same order as `main.rs`: an open dialog eats every
@@ -1474,7 +1474,7 @@ impl DevServer {
                     let steps = (point.distance_to(to) / CLICK_DRAG_STEP_PX).ceil().max(1.0) as usize;
                     for i in 1..=steps {
                         let t = i as f32 / steps as f32;
-                        last = Position::new(point.x + (to.x - point.x) * t, point.y + (to.y - point.y) * t);
+                        last = Vector2::new(point.x + (to.x - point.x) * t, point.y + (to.y - point.y) * t);
                         let held = BuilderInput { pointer: Some(last), held: !right, right_held: right, ..BuilderInput::default() };
                         session.update_builder(&held, layout);
                     }
