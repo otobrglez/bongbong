@@ -2,8 +2,7 @@ use crate::tuning::tuning;
 use clap::ValueEnum;
 use rapier2d::prelude::RigidBodyHandle;
 use serde::{Deserialize, Serialize};
-use sola_raylib::prelude::*;
-use crate::math::Vec2;
+use crate::math::{Color, Rectangle, Vec2};
 
 use crate::canvas::{Canvas, Sheet};
 use crate::laser::LaserVariant;
@@ -1230,8 +1229,8 @@ impl Tank {
 /// to `tank.position`, so the visible hull ends up drawn shifted forward of
 /// `position` by the same amount, at every facing - purely a draw-time
 /// choice; nothing gameplay-relevant reads this.
-fn draw_pivot(size: f32) -> Vector2 {
-    Vector2::new(size / 2.0, size / 2.0 + size * TANK_PIVOT_REAR_FRACTION)
+fn draw_pivot(size: f32) -> Vec2 {
+    Vec2::new(size / 2.0, size / 2.0 + size * TANK_PIVOT_REAR_FRACTION)
 }
 
 /// Which block of the sheet a tank draws from: 0 for an enemy, 1 and 2 for
@@ -1301,7 +1300,7 @@ const RED_MD: Color = Color::new(0xE4, 0x42, 0x19, 255);
 const RED_DEEP: Color = Color::new(0x9C, 0x35, 0x27, 255);
 const RED_DK: Color = Color::new(0x81, 0x2F, 0x27, 255);
 const RED_DARKEST: Color = Color::new(0x4A, 0x22, 0x21, 255);
-const BLACK: Color = Color::new(0x25, 0x25, 0x25, 255);
+pub(crate) const BLACK: Color = Color::new(0x25, 0x25, 0x25, 255);
 /// The two players' identity colours (docs/player-indicator-improvements.md):
 /// player 1 sky blue, player 2 hot pink - the base step of the team ramp
 /// the sheet's player blocks are painted in, deliberately off the Puny
@@ -1669,7 +1668,7 @@ pub fn draw_enemy_ring(c: &mut impl Canvas, tank: &Tank, time: f32) {
 /// not run behind the mission banner) a team-coloured ring swells from the
 /// player's own ring out to 1.6x its radius and fades as it goes,
 /// `player_locate_pulse_hz` times a second. Drawn under the hull like the
-/// other rings; `draw_player_label` is the cue's other half. Nothing for a
+/// other rings; `render::tank::draw_player_label` is the cue's other half. Nothing for a
 /// wreck, an enemy, or once the window has passed.
 pub fn draw_player_locate(c: &mut impl Canvas, tank: &Tank, time: f32, elapsed: f32) {
     let Some(index) = tank.player_index() else { return };
@@ -1685,26 +1684,6 @@ pub fn draw_player_locate(c: &mut impl Canvas, tank: &Tank, time: f32, elapsed: 
 /// Whether the locate cue is still showing `elapsed` seconds into play.
 pub fn player_locate_active(elapsed: f32) -> bool {
     elapsed < tuning().player_locate_seconds
-}
-
-/// The locate cue's label, `P1`/`P2` in the team colour just above the
-/// hull, drawn over everything so a crowd cannot cover it. Same window as
-/// `draw_player_locate`.
-pub fn draw_player_label(d: &mut impl RaylibDraw, tank: &Tank, elapsed: f32) {
-    let Some(index) = tank.player_index() else { return };
-    if tank.is_wreck() || !player_locate_active(elapsed) {
-        return;
-    }
-    let text = if index == 0 { "P1" } else { "P2" };
-    let size = crate::hud::HUD_TEXT_SIZE;
-    // The HUD's fixed cell width for this size; measuring needs the handle,
-    // which nothing in a draw pass has.
-    let w = text.len() as i32 * crate::hud::CHAR_W;
-    let x = (tank.position.x - w as f32 / 2.0).round() as i32;
-    let y = (tank.position.y - tank.size() / 2.0 - size as f32 - 4.0).round() as i32;
-    let color = TEAM_COLORS[index as usize & 1];
-    d.draw_text(text, x + 1, y + 1, size, BLACK);
-    d.draw_text(text, x, y, size, color);
 }
 
 /// Draw this tank's drop shadow: the same two layers (each at its own eased

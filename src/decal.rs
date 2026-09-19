@@ -19,12 +19,12 @@
 //! material has 8 x 8 apparent forms and a levelled wall does not read as
 //! a grid of clones. Only Iron has no rubble row - it never dies.
 
-use sola_raylib::prelude::*;
+use crate::math::{Color, Rectangle, Vec2};
 
 use crate::canvas::Canvas;
 use crate::obstacle::{Material, Sheet};
 use crate::tuning::tuning;
-use crate::{OBSTACLE_TEXTURE_SIZE, Position, RUBBLE_VARIANTS};
+use crate::{Position, RUBBLE_VARIANTS};
 
 /// One leftover on the ground, oldest first in `Game::decals`.
 pub struct Decal {
@@ -136,25 +136,6 @@ impl Decal {
 /// Draw one settled decal. Mirrored and quarter-turned by its seed so a
 /// levelled wall doesn't read as a row of clones; quarter-turns keep the
 /// pixels square, exactly like `blast::draw_scorch`.
-/// The shadow under a piece still in the air, drawn at the point on the
-/// ground it is over. Shrinks as the piece rises, which is what actually
-/// sells the height in a game with no camera.
-pub fn draw_decal_shadow(d: &mut impl RaylibDraw, decal: &Decal) {
-    let h = decal.height();
-    if h <= 0.0 {
-        return;
-    }
-    let t = decal.flight();
-    let ground = Position::new(
-        decal.origin.x + (decal.center.x - decal.origin.x) * t,
-        decal.origin.y + (decal.center.y - decal.origin.y) * t,
-    );
-    let lift = (h / tuning().debris_arc_height.max(1e-3)).clamp(0.0, 1.0);
-    let r = OBSTACLE_TEXTURE_SIZE * 0.22 * (1.0 - 0.45 * lift);
-    let a = (255.0 * tuning().obstacle_shadow_opacity * (1.0 - 0.4 * lift)) as u8;
-    d.draw_circle_v(ground, r, Color::new(0, 0, 0, a));
-}
-
 pub fn draw_decal(c: &mut impl Canvas, decal: &Decal) {
     let cell = decal.sheet.cell();
     let flip = if decal.seed & 1 != 0 { -1.0 } else { 1.0 };
@@ -173,5 +154,5 @@ pub fn draw_decal(c: &mut impl Canvas, decal: &Decal) {
     let tint = Color::new(255, 255, 255, (255.0 * opacity) as u8);
     let at = decal.draw_pos();
     let dest = Rectangle::new(at.x, at.y, size, size);
-    c.blit(decal.sheet, src, dest, Vector2::new(size / 2.0, size / 2.0), rotation, tint);
+    c.blit(decal.sheet, src, dest, Vec2::new(size / 2.0, size / 2.0), rotation, tint);
 }

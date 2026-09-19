@@ -26,7 +26,7 @@ use crate::tank::{HealthRamp, RingStyle, draw_ground_ring_at, with_opacity};
 use crate::tuning::tuning;
 use rapier2d::prelude::RigidBodyHandle;
 use serde::{Deserialize, Serialize};
-use sola_raylib::prelude::*;
+use crate::math::{Color, Rectangle, Vec2};
 
 use crate::{
     FROG_ATTACK_FPS,
@@ -116,7 +116,7 @@ impl Facing {
 }
 
 /// How `facing` is drawn: the sign to multiply the source rectangle's width
-/// by - raylib's mirror idiom, as in `blast::draw_blast` - and the screen-px
+/// by - raylib's mirror idiom, as in `render::blast::draw_blast` - and the screen-px
 /// offset that keeps the mirrored body over the same patch of ground.
 ///
 /// The offset is not cosmetic slack: the body sits 2.5 design px left of the
@@ -146,7 +146,7 @@ pub struct Frog {
     /// spawn and fixed for the round. Purely cosmetic - every variant shares
     /// identical layout/frame counts/timing (see docs/FROG_SPEC.md), so
     /// nothing gameplay-relevant reads this - only `game.rs::render` does,
-    /// to pick which of `Textures::frog_variants`' texture sets to draw.
+    /// to pick which of `render::game::Textures::frog_variants`' texture sets to draw.
     pub variant: i32,
     /// This frog's rapier fixed-body collider (see
     /// `physics::Physics::spawn_static`) - the same "blocks tank movement
@@ -400,7 +400,7 @@ impl Frog {
 /// The `static/toxic_frog/<dir>/` colour variants (see docs/FROG_SPEC.md and
 /// `static/toxic_frog/SOURCE.md`), in `Frog::variant` index order - the
 /// single source of truth for both "which directory" and "how many
-/// variants exist" (`main.rs` loads one `FrogVariantTextures` per entry;
+/// variants exist" (`app.rs` loads one `render::frog::FrogVariantTextures` per entry;
 /// `Game::init` rolls `Frog::variant` via `rng.random_range(0..FROG_VARIANT_DIRS.len())`).
 /// All six are pixel-layout-identical (same frame counts/timing/cell size),
 /// just a different colour third-party art asset - see `SOURCE.md` for the
@@ -413,31 +413,6 @@ pub const FROG_VARIANT_DIRS: [&str; 6] = [
     "green_brown",
     "purple_blue",
 ];
-
-/// One colour variant's full set of five clips (see docs/FROG_SPEC.md) -
-/// `app.rs` loads one of these per `FROG_VARIANT_DIRS` entry and keeps the
-/// whole set alive for the game's lifetime; `game::Textures::frog_variants`
-/// then resolves `canvas::Sheet::Frog { variant, clip }` through `clip`.
-pub struct FrogVariantTextures {
-    pub idle: Texture2D,
-    pub hurt: Texture2D,
-    pub hop: Texture2D,
-    pub attack: Texture2D,
-    pub explosion: Texture2D,
-}
-
-impl FrogVariantTextures {
-    /// The filmstrip for one clip.
-    pub fn clip(&self, clip: FrogAnim) -> &Texture2D {
-        match clip {
-            FrogAnim::Idle => &self.idle,
-            FrogAnim::Hurt => &self.hurt,
-            FrogAnim::Hop => &self.hop,
-            FrogAnim::Attack => &self.attack,
-            FrogAnim::Explosion => &self.explosion,
-        }
-    }
-}
 
 /// Draw the frog's side marker as its health gauge: the shared ground ring
 /// (`tank::draw_ground_ring_at`, the player tank's own ring in the same
@@ -478,7 +453,7 @@ pub fn draw_frog(c: &mut impl Canvas, frog: &Frog, t: f32) {
     );
     let size = frog.size();
     let dest = Rectangle::new(frog.position.x + offset, frog.position.y, size, size);
-    let origin = Vector2::new(size / 2.0, size / 2.0);
+    let origin = Vec2::new(size / 2.0, size / 2.0);
     c.blit(sheet, src, dest, origin, 0.0, Color::WHITE);
 }
 

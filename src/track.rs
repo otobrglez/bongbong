@@ -1,6 +1,6 @@
 use crate::canvas::{Canvas, Sheet};
 use crate::tuning::tuning;
-use sola_raylib::prelude::*;
+use crate::math::{Color, Rectangle, Vec2};
 
 use crate::{Position, TRACK_TEXTURE_SIZE};
 
@@ -60,7 +60,7 @@ pub fn draw_track(c: &mut impl Canvas, track: &Track) {
     let size = TRACK_TEXTURE_SIZE * track.scale;
 
     let dest = Rectangle::new(track.position.x, track.position.y, size, size);
-    let origin = Vector2::new(size / 2.0, size / 2.0);
+    let origin = Vec2::new(size / 2.0, size / 2.0);
 
     // Fade the whole sprite by scaling its alpha with the mark's remaining life.
     let tint = Color::WHITE.alpha(track.opacity());

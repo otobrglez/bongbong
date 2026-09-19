@@ -16,6 +16,7 @@
 //! is running and the round RNG sits in `Game::rng`.
 
 use std::collections::{BTreeMap, VecDeque};
+#[cfg(feature = "render")]
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -26,7 +27,9 @@ use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::{Map, Value, json};
-use sola_raylib::prelude::{RaylibHandle, RaylibTexture2D, RaylibThread, RenderTexture2D, Vector2};
+use crate::math::Vec2;
+#[cfg(feature = "render")]
+use sola_raylib::prelude::{RaylibHandle, RaylibTexture2D, RaylibThread, RenderTexture2D};
 
 use crate::ai::Intent;
 use crate::editor::{BuilderInput, Category, CellChange, MapEditor, Tool, parse_mission, parse_spawn, parse_tank, parse_tier};
@@ -65,6 +68,7 @@ const HISTORY_MAX_ROWS: usize = 2000;
 /// Events returned inline by one `step` reply.
 const STEP_EVENT_CAP: usize = 256;
 /// Where screenshots land (under the gitignored `target/`).
+#[cfg_attr(not(feature = "render"), allow(dead_code))]
 const SHOT_DIR: &str = "target/devshots";
 /// How far apart the points of a `click {drag_to}` drag are sampled: well
 /// under a 32 px cell, so the stroke crosses every cell on the line.
@@ -592,6 +596,9 @@ enum ShotSource {
     Scene,
 }
 
+/// A `screenshot` request armed for `after_render`. Without the `render`
+/// feature nothing captures, so a headless server only ever arms it.
+#[cfg_attr(not(feature = "render"), allow(dead_code))]
 struct PendingShot {
     scale: f32,
     source: ShotSource,
@@ -617,6 +624,7 @@ pub struct DevServer {
     pending_shot: Option<PendingShot>,
     events: VecDeque<EventRecord>,
     next_seq: u64,
+    #[cfg_attr(not(feature = "render"), allow(dead_code))]
     shot_seq: u64,
     /// One entry per simulated frame, oldest first - see `history`.
     history: VecDeque<HistoryFrame>,
@@ -847,6 +855,7 @@ impl DevServer {
     /// (raylib reads back after the buffer swap), so a shot armed this
     /// frame is captured on the next - in lockstep that frame is identical
     /// and carries any overlay flags set alongside the request.
+    #[cfg(feature = "render")]
     pub fn after_render(&mut self, rl: &mut RaylibHandle, thread: &RaylibThread, scene: &RenderTexture2D, game: &Game) {
         match self.pending_shot.as_mut() {
             None => return,
@@ -861,6 +870,7 @@ impl DevServer {
         let _ = shot.reply.send(result);
     }
 
+    #[cfg(feature = "render")]
     fn capture(
         &mut self,
         rl: &mut RaylibHandle,
@@ -1418,13 +1428,13 @@ impl DevServer {
             None | Some(Value::Null) => None,
             Some(v) => match v.as_array().map(Vec::as_slice) {
                 Some([dx, dy]) => match (dx.as_f64(), dy.as_f64()) {
-                    (Some(dx), Some(dy)) => Some(Vector2::new(dx as f32, dy as f32)),
+                    (Some(dx), Some(dy)) => Some(Vec2::new(dx as f32, dy as f32)),
                     _ => return Err(format!("drag_to must be [x, y] numbers, got {v}")),
                 },
                 _ => return Err(format!("drag_to must be [x, y], got {v}")),
             },
         };
-        let point = Vector2::new(x, y);
+        let point = Vec2::new(x, y);
         match session.mode() {
             Driver::Play => {
                 // The same order as `main.rs`: an open dialog eats every
@@ -1433,11 +1443,11 @@ impl DevServer {
                     let rects = players_dialog_rects(layout.field);
                     let p = layout.to_field(point);
                     let before = session.game.players;
-                    if rects.one.check_collision_point_rec(p) {
+                    if rects.one.contains(p) {
                         session.answer_players(PlayerCount::One);
-                    } else if rects.two.check_collision_point_rec(p) {
+                    } else if rects.two.contains(p) {
                         session.answer_players(PlayerCount::Two);
-                    } else if !rects.panel.check_collision_point_rec(p) {
+                    } else if !rects.panel.contains(p) {
                         session.close_players_dialog();
                     }
                     if session.game.players != before {
@@ -1446,16 +1456,16 @@ impl DevServer {
                 } else if session.dialog {
                     let rects = leave_dialog_rects(layout.field);
                     let p = layout.to_field(point);
-                    if rects.leave.check_collision_point_rec(p) {
+                    if rects.leave.contains(p) {
                         session.answer_dialog(true);
-                    } else if rects.stay.check_collision_point_rec(p) || !rects.panel.check_collision_point_rec(p) {
+                    } else if rects.stay.contains(p) || !rects.panel.contains(p) {
                         session.answer_dialog(false);
                     }
-                } else if mode_button_rect(layout.panel).check_collision_point_rec(point) {
+                } else if mode_button_rect(layout.panel).contains(point) {
                     session.press_build();
-                } else if crate::TWO_PLAYERS_AVAILABLE && players_button_rect(layout.panel).check_collision_point_rec(point) {
+                } else if crate::TWO_PLAYERS_AVAILABLE && players_button_rect(layout.panel).contains(point) {
                     session.press_players();
-                } else if !crate::KEYBOARD_AVAILABLE && restart_button_rect(layout.panel).check_collision_point_rec(point) {
+                } else if !crate::KEYBOARD_AVAILABLE && restart_button_rect(layout.panel).contains(point) {
                     crate::tuning::request_restart();
                 }
             }
@@ -1474,7 +1484,7 @@ impl DevServer {
                     let steps = (point.distance_to(to) / CLICK_DRAG_STEP_PX).ceil().max(1.0) as usize;
                     for i in 1..=steps {
                         let t = i as f32 / steps as f32;
-                        last = Vector2::new(point.x + (to.x - point.x) * t, point.y + (to.y - point.y) * t);
+                        last = Vec2::new(point.x + (to.x - point.x) * t, point.y + (to.y - point.y) * t);
                         let held = BuilderInput { pointer: Some(last), held: !right, right_held: right, ..BuilderInput::default() };
                         session.update_builder(&held, layout);
                     }
@@ -3067,7 +3077,7 @@ cells."1,1" = { kind = "wall" }"#;
         ask(&mut server, &tx, &mut s, "restart", json!({ "map_toml": INLINE_MAP, "seed": 1 })).unwrap();
         let layout = Layout::for_field(W, H);
         let button = mode_button_rect(layout.panel);
-        let centre = |r: sola_raylib::prelude::Rectangle| (r.x + r.width / 2.0, r.y + r.height / 2.0);
+        let centre = |r: crate::math::Rectangle| (r.x + r.width / 2.0, r.y + r.height / 2.0);
         // A click on BUILD opens the dialog like `build`.
         let (bx, by) = centre(button);
         let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": bx, "y": by })).unwrap();

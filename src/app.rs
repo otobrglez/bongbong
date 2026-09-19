@@ -9,10 +9,10 @@
 use crate::tuning::tuning;
 use crate::ai::Intent;
 use crate::editor::{BuilderInput, CliOverrides, EditorTextures};
-use crate::game::{Effects, Textures};
+use crate::render::game::{Effects, Textures};
 use crate::hud::{leave_dialog_rects, mode_button_rect, players_button_rect, players_dialog_rects, restart_button_rect, BAR_FILL};
 use crate::mode::{Driver, Session};
-use crate::shockwave::{RippleFx, RippleTuning};
+use crate::render::shockwave::{RippleFx, RippleTuning};
 use crate::simulation::{Game, Input, PlayerCount};
 use crate::tuning;
 use crate::tank::{Dir, TankKind};
@@ -532,9 +532,9 @@ pub fn run(args: Args) {
     // `Frog::variant` (rolled per round in `Game::init`) picks which one
     // `game.rs::render` draws from. Loaded up front like every other
     // texture, kept alive for the whole game loop.
-    let frog_textures: Vec<crate::frog::FrogVariantTextures> = crate::frog::FROG_VARIANT_DIRS
+    let frog_textures: Vec<crate::render::frog::FrogVariantTextures> = crate::frog::FROG_VARIANT_DIRS
         .iter()
-        .map(|dir| crate::frog::FrogVariantTextures {
+        .map(|dir| crate::render::frog::FrogVariantTextures {
             idle: rl
                 .load_texture(&thread, &format!("static/toxic_frog/{dir}/idle.png"))
                 .expect("failed loading frog idle texture"),
@@ -826,15 +826,15 @@ pub fn run(args: Args) {
         let mouse_held = rl.is_mouse_button_down(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_LEFT);
         // Every pointer is read in bitmap pixels: the bar, the dialogs and
         // the builder hit-test there and never learn what the window is.
-        let pointer = view.to_bitmap(if touching { rl.get_touch_position(0) } else { rl.get_mouse_position() });
+        let pointer = view.to_bitmap(if touching { rl.get_touch_position(0).into() } else { rl.get_mouse_position().into() });
         // This frame's touch points for the touch scheme, ids included so
         // a stick follows its own finger. `--touch-from-mouse` stands a
         // held left button in for one.
         let mut touch_points: Vec<TouchPoint> = (0..rl.get_touch_point_count())
-            .map(|i| TouchPoint { id: rl.get_touch_point_id(i), pos: view.to_bitmap(rl.get_touch_position(i)) })
+            .map(|i| TouchPoint { id: rl.get_touch_point_id(i), pos: view.to_bitmap(rl.get_touch_position(i).into()) })
             .collect();
         if touch_from_mouse && mouse_held && touch_points.is_empty() {
-            touch_points.push(TouchPoint { id: -1, pos: view.to_bitmap(rl.get_mouse_position()) });
+            touch_points.push(TouchPoint { id: -1, pos: view.to_bitmap(rl.get_mouse_position().into()) });
         }
         let steer_right = tuning().touch_steer_side != 0;
         let pressed = mouse_pressed || touch_pressed;
@@ -858,11 +858,11 @@ pub fn run(args: Args) {
                     let rects = players_dialog_rects(layout.field);
                     let field_p = layout.to_field(pointer);
                     if pressed {
-                        if rects.one.check_collision_point_rec(field_p) {
+                        if rects.one.contains(field_p) {
                             session.answer_players(PlayerCount::One);
-                        } else if rects.two.check_collision_point_rec(field_p) {
+                        } else if rects.two.contains(field_p) {
                             session.answer_players(PlayerCount::Two);
-                        } else if !rects.panel.check_collision_point_rec(field_p) {
+                        } else if !rects.panel.contains(field_p) {
                             session.close_players_dialog();
                         }
                     }
@@ -885,10 +885,10 @@ pub fn run(args: Args) {
                     let rects = leave_dialog_rects(layout.field);
                     let field_p = layout.to_field(pointer);
                     if pressed {
-                        if rects.leave.check_collision_point_rec(field_p) {
+                        if rects.leave.contains(field_p) {
                             session.answer_dialog(true);
-                        } else if rects.stay.check_collision_point_rec(field_p)
-                            || !rects.panel.check_collision_point_rec(field_p)
+                        } else if rects.stay.contains(field_p)
+                            || !rects.panel.contains(field_p)
                         {
                             session.answer_dialog(false);
                         }
@@ -898,16 +898,16 @@ pub fn run(args: Args) {
                     } else if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) || tab {
                         session.answer_dialog(false);
                     }
-                } else if tab || (pressed && mode_button_rect(layout.panel).check_collision_point_rec(pointer)) {
+                } else if tab || (pressed && mode_button_rect(layout.panel).contains(pointer)) {
                     session.press_build();
                 } else if crate::TWO_PLAYERS_AVAILABLE
                     && pressed
-                    && players_button_rect(layout.panel).check_collision_point_rec(pointer)
+                    && players_button_rect(layout.panel).contains(pointer)
                 {
                     session.press_players();
                 } else if !crate::KEYBOARD_AVAILABLE
                     && pressed
-                    && restart_button_rect(layout.panel).check_collision_point_rec(pointer)
+                    && restart_button_rect(layout.panel).contains(pointer)
                 {
                     // The RESTART button stands in for the R key: staged the
                     // way the dev panel's button is, it becomes this frame's

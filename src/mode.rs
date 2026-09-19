@@ -299,7 +299,7 @@ mod session_tests {
         // The MAP button, from the bar's fixed slots.
         let map_button = {
             let r = crate::editor::MapEditor::map_rect(&layout);
-            sola_raylib::prelude::Vector2::new(r.x + r.width / 2.0, r.y + r.height / 2.0)
+            crate::math::Vec2::new(r.x + r.width / 2.0, r.y + r.height / 2.0)
         };
         let press = BuilderInput { pointer: Some(map_button), pressed: true, held: true, ..Default::default() };
         s.update_builder(&press, &layout);
@@ -312,13 +312,13 @@ mod session_tests {
         // The Save-as prompt (FILE > SAVE AS...) takes text: Tab is a
         // character there, not PLAY.
         let file_rect = crate::editor::MapEditor::file_rect(&layout);
-        let file_button = sola_raylib::prelude::Vector2::new(file_rect.x + file_rect.width / 2.0, file_rect.y + file_rect.height / 2.0);
+        let file_button = crate::math::Vec2::new(file_rect.x + file_rect.width / 2.0, file_rect.y + file_rect.height / 2.0);
         let press = BuilderInput { pointer: Some(file_button), pressed: true, held: true, ..Default::default() };
         s.update_builder(&press, &layout);
         assert_eq!(s.builder.open_menu(), Some("file"));
         if crate::map::saving_available() {
             // The third row of the menu is SAVE AS.
-            let save_as = sola_raylib::prelude::Vector2::new(file_rect.x + 8.0, layout.panel.y + 32.0 + 2.5 * 48.0);
+            let save_as = crate::math::Vec2::new(file_rect.x + 8.0, layout.panel.y + 32.0 + 2.5 * 48.0);
             let press = BuilderInput { pointer: Some(save_as), pressed: true, held: true, ..Default::default() };
             s.update_builder(&press, &layout);
             assert_eq!(s.builder.open_menu(), Some("save"));
