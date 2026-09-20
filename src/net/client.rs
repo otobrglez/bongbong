@@ -80,19 +80,52 @@ pub enum Target {
 /// Open a socket to the rooms server `host` and greet it.
 ///
 /// **The one place a client socket is opened.** The command line's
-/// `--host`/`--join`, the lobby's `HOST` and `JOIN` buttons and the dev
-/// server's `click` all come through here, so a button and a flag reach a
-/// room by exactly the same path - `rooms::socket_url` for the URL, a
-/// `NativeTransport` thread for the socket, this client for the lobby.
+/// `--host`/`--join`, the lobby's `HOST` and `JOIN` buttons, the room in
+/// a page's own URL and the dev server's `click` all come through here,
+/// so a button, a flag and a link reach a room by exactly the same path
+/// - `rooms::socket_url` for the URL, one socket for the platform, this
+/// client for the lobby.
+///
+/// The socket itself is the platform's: a `tungstenite` thread on the
+/// desktop and the phones, the browser's own WebSocket on the web (see
+/// the twin below). Nothing past this function knows which.
 #[cfg(all(feature = "online", not(target_os = "emscripten")))]
 pub fn connect(host: &crate::net::rooms::RoomsHost, identity: Identity, target: Target) -> RoomClient<Box<dyn Transport>> {
-    let code = match &target {
-        Target::Join(code) => Some(code),
-        Target::Host(_) => None,
-    };
-    let url = crate::net::rooms::socket_url(host, code);
+    let url = crate::net::rooms::socket_url(host, target_code(&target));
     eprintln!("[online] dialling {url}");
     let socket = Box::new(crate::net::native::NativeTransport::connect(&url)) as Box<dyn Transport>;
+    greet(socket, identity, target)
+}
+
+/// `connect` in the browser: the same URL and the same client, over
+/// emscripten's WebSocket instead of a thread.
+///
+/// The browser answers straight away whether it will dial at all, and a
+/// refusal here is a `transport::Failed` rather than a panic or an empty
+/// screen - a plain `ws://` override on a page served over TLS is the
+/// one a player will actually meet, and the lobby has to say so.
+#[cfg(all(feature = "online", target_os = "emscripten"))]
+pub fn connect(host: &crate::net::rooms::RoomsHost, identity: Identity, target: Target) -> RoomClient<Box<dyn Transport>> {
+    let url = crate::net::rooms::socket_url(host, target_code(&target));
+    let socket: Box<dyn Transport> = match crate::net::web::WebTransport::connect(&url) {
+        Ok(socket) => Box::new(socket),
+        Err(reason) => Box::new(crate::net::transport::Failed::new(reason)),
+    };
+    greet(socket, identity, target)
+}
+
+/// The code a target dials on, which is what picks the pod's path.
+#[cfg(feature = "online")]
+fn target_code(target: &Target) -> Option<&RoomCode> {
+    match target {
+        Target::Join(code) => Some(code),
+        Target::Host(_) => None,
+    }
+}
+
+/// Say to `socket` what `target` asks for.
+#[cfg(feature = "online")]
+fn greet(socket: Box<dyn Transport>, identity: Identity, target: Target) -> RoomClient<Box<dyn Transport>> {
     match target {
         Target::Host(setup) => RoomClient::host(socket, identity, setup),
         Target::Join(code) => RoomClient::join(socket, identity, code.text),

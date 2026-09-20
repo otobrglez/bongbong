@@ -772,6 +772,40 @@ mod lobby_tests {
         }
     }
 
+    /// The pointer path a browser actually takes, end to end. The page
+    /// keeps the canvas at the bitmap's own shape and raylib maps a tap
+    /// by dividing by the canvas's CSS box, so a tap arrives in window
+    /// pixels at whatever scale the page chose - a phone's narrow box,
+    /// one bitmap pixel each, or the 1.5x cap on a monitor. `View` and
+    /// `Layout` are what carry it back onto the panel, and a button that
+    /// is drawn at one place and hit at another is exactly what a fixed
+    /// panel in a scaled canvas would go wrong at.
+    #[test]
+    fn a_tap_on_a_scaled_canvas_lands_on_the_button_it_is_drawn_on() {
+        let layout = crate::Layout::for_field(crate::DEFAULT_SCREEN_WIDTH as f32, crate::DEFAULT_SCREEN_HEIGHT as f32);
+        let (w, h) = layout.window_size();
+        let bitmap = (w as f32, h as f32);
+        let mut lobby = lobby();
+        let playing = room(true, vec![seat(0, "oto", false), seat(1, "ana", true)]);
+        for scale in [0.35_f32, 1.0, 1.5] {
+            let view = crate::view::View::fit(bitmap, (bitmap.0 * scale, bitmap.1 * scale));
+            for (open, room) in [(false, None), (true, None), (false, Some(&playing))] {
+                lobby.entry_open = open;
+                for button in lobby.buttons(room) {
+                    if !lobby.enabled(button, room) {
+                        continue;
+                    }
+                    let drawn = centre(button_rect(layout.field, button));
+                    // Where the page puts that pixel on the canvas, and
+                    // the tap on it coming back the other way.
+                    let on_canvas = view.to_window(Vec2::new(drawn.x + layout.field.x, drawn.y + layout.field.y));
+                    let tapped = layout.to_field(view.to_bitmap(on_canvas));
+                    assert_eq!(lobby.hit(layout.field, tapped, room), Some(button), "at {scale}x");
+                }
+            }
+        }
+    }
+
     /// The QR square and the seat column share the panel without meeting,
     /// and neither reaches the buttons.
     #[test]

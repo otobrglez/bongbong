@@ -10,6 +10,13 @@ declare global {
     /** Bit 1 = ShiftLeft held; read once a frame by `app.rs`'s
      *  `left_shift_down`. See `input.ts`. */
     bbShift: number;
+    /** The URL this page was opened on, fragment stripped: the web
+     *  build's command line, parsed once at startup by `app.rs` through
+     *  `net::rooms::Invite`. See `room.ts`. */
+    bbInvite: string;
+    /** This tab's reconnect key in a room, read once at startup by
+     *  `app.rs`. See `room.ts`. */
+    bbToken: string;
   }
 
   // Old WebKit's prefixed Fullscreen API (see fullscreen.ts).
