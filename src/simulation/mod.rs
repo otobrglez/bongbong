@@ -1801,7 +1801,7 @@ impl Game {
                     candidates.push((entity, i, tank.position));
                 }
             };
-            for player in self.players().into_iter().flatten() {
+            for player in self.seats_on_field().into_iter().flatten() {
                 if let Ok(tank) = self.world.get::<&Tank>(player) {
                     visit(player, &tank);
                 }
@@ -1880,8 +1880,11 @@ impl Game {
     /// (docs/two-players.md): seat 0 first, then every further seat in
     /// index order, so their RNG draws keep a fixed order.
     fn player_phase(&mut self, input: Input, f: &mut Frame) {
+        // A seat driving back in through a gate is the roll-in's, not the
+        // stick's: it has no body until it arrives.
+        let seats = self.seats_on_field();
         for index in 0..self.players.count() {
-            let Some(entity) = self.seat(index) else { continue };
+            let Some(entity) = seats[index] else { continue };
             self.drive_player(f, index, entity, input.seat(index));
         }
     }
@@ -1942,14 +1945,20 @@ impl Game {
             pos: Position,
             wreck: bool,
             concealed: bool,
+            /// Driving back in through a gate, so off the field entirely.
+            entering: bool,
         }
+        // Built from `players()`, not `seats_on_field()`: the index is the
+        // seat number that `Ai::target_player`, the engagement rings and
+        // `movers[players.len()..]` below all count on.
+        let entering = |entity: Entity| self.world.get::<&RollIn>(entity).is_ok();
         let players: Vec<PlayerView> = self
             .players()
             .into_iter()
             .flatten()
             .map(|entity| {
                 let (pos, wreck) = with_tank(&self.world, entity, |t| (t.position, t.is_wreck()));
-                PlayerView { entity, pos, wreck, concealed: f.terrain.conceals(pos) }
+                PlayerView { entity, pos, wreck, concealed: f.terrain.conceals(pos), entering: entering(entity) }
             })
             .collect();
 
@@ -1964,7 +1973,7 @@ impl Game {
         if players.len() >= 2 {
             let margin = tuning().enemy_target_switch_margin_px;
             for (tank, ai) in self.world.query::<(&Tank, &mut Ai)>().iter() {
-                let eligible = |p: &PlayerView| !p.wreck && (!p.concealed || ai.is_hit_alerted());
+                let eligible = |p: &PlayerView| !p.wreck && !p.entering && (!p.concealed || ai.is_hit_alerted());
                 let current = (ai.target_player() as usize).min(players.len() - 1);
                 let mut best: Option<(usize, f32)> = None;
                 for (i, p) in players.iter().enumerate().filter(|(_, p)| eligible(p)) {
@@ -1998,7 +2007,7 @@ impl Game {
         let alert_before = self.alert_position.filter(|_| self.alert_timer > 0.0);
         let view_range = tuning().enemy_view_range;
         let mut seen: Option<(f32, Position)> = None;
-        for p in players.iter().filter(|p| !p.concealed && !p.wreck) {
+        for p in players.iter().filter(|p| !p.concealed && !p.wreck && !p.entering) {
             for m in &movers[players.len()..] {
                 let d = m.position.distance_to(p.pos);
                 if d <= view_range && seen.is_none_or(|(best, _)| d < best) {
@@ -2354,7 +2363,7 @@ impl Game {
     /// Lasers have no travel time: each queued beam is swept over its whole
     /// length right now, drawn up to where it stopped, and applied.
     fn resolve_lasers(&mut self, f: &mut Frame) {
-        let players = self.players();
+        let players = self.seats_on_field();
         let shots = std::mem::take(&mut f.pending_lasers);
         for shot in shots {
             let hit = f.terrain.sweep(&self.world, players, shot.owner, shot.start, shot.end, laser_beam_half_width());
@@ -2417,7 +2426,7 @@ impl Game {
     /// each other, then enemy against enemy.
     fn sync_tanks_and_ram(&mut self, f: &mut Frame) {
         let players: Vec<(Entity, Position)> = self
-            .players()
+            .seats_on_field()
             .into_iter()
             .flatten()
             .map(|p| (p, with_tank(&self.world, p, |t| t.position)))
@@ -2585,7 +2594,7 @@ impl Game {
     /// point, ricochet if it can (shells off Iron), otherwise detonate at
     /// that point and - when `live` - apply damage/knockback/frog hop.
     fn resolve_projectiles<P: Projectile>(&mut self, f: &mut Frame, live: bool) {
-        let players = self.players();
+        let players = self.seats_on_field();
         struct Flight {
             entity: Entity,
             prev: Position,
@@ -2902,7 +2911,13 @@ impl Game {
     /// happen on the same frame.
     fn check_round_end(&mut self, f: &mut Frame) {
         // Lost once every human tank is a wreck - the one player's in a
-        // single-player round, both in a two-player one - or the frog dies.
+        // single-player round, every seat's in a team round - or the frog
+        // dies. `players()`, not `seats_on_field()`: a seat driving back
+        // in through a gate is alive and the round goes on, and a seat
+        // waiting for the next wave to bring it back (decision 7,
+        // docs/online-coop-prd.md section 4.11) is a wreck like any other
+        // - one wreck of one seat still ends a solo round, and a team that
+        // falls together still loses.
         let players_dead = self
             .players()
             .into_iter()
@@ -3077,7 +3092,7 @@ impl Game {
         let mut grid = self.nav_grid(width, height);
         let t = tuning();
         let players: Vec<(Position, f32)> = self
-            .players()
+            .seats_on_field()
             .into_iter()
             .flatten()
             .filter_map(|e| with_tank(&self.world, e, |tank| (!tank.is_wreck()).then_some((tank.position, tank.rotation))))
@@ -3800,6 +3815,26 @@ impl Game {
     /// Player 1's tank - seat 0, the one every round has.
     pub(crate) fn player(&self) -> Option<Entity> {
         self.seats[PLAYER_OWNER_SLOT]
+    }
+
+    /// The seats whose tank stands on the battlefield: like `players()`,
+    /// but a seat driving back in through a gate reads as `None`.
+    ///
+    /// A returning seat (`waves::RollIn`, docs/online-coop-prd.md section
+    /// 4.11) is outside the field with no body, so it takes no part in
+    /// the frame - it is not shot at, blasted, burnt, rammed, targeted,
+    /// routed to or the centre of an engagement ring - the same way an
+    /// entering wave tank is left alone by every `.with::<&Ai>()` query.
+    /// It is still one of `players()`, which is what keeps the round from
+    /// being lost while a seat is on its way back.
+    pub(crate) fn seats_on_field(&self) -> [Option<Entity>; MAX_SEATS] {
+        let mut seats = self.seats;
+        for seat in &mut seats {
+            if seat.is_some_and(|e| self.world.get::<&RollIn>(e).is_ok()) {
+                *seat = None;
+            }
+        }
+        seats
     }
 
     /// Seat `index`'s tank, `None` past the seats this round holds.
@@ -6208,9 +6243,16 @@ cells."30,20" = { kind = "frog" }
     /// shielded for the whole round so the enemies can never end it and the
     /// scheduler's own timing is all that decides what happens.
     fn waves_game(waves: u32, size: u32) -> Game {
+        waves_game_seats(waves, size, 1)
+    }
+
+    /// `waves_game` for a team: `seats` seats, every one of them shielded
+    /// so only the scheduler ends the round.
+    fn waves_game_seats(waves: u32, size: u32, seats: usize) -> Game {
         let mut game = Game::default();
         game.seed_override = Some(7);
         game.player_row_override = Some(0);
+        game.players = PlayerCount::from_count(seats).expect("a seat count the round takes");
         game.level_overrides.mission = Some(Mission::Destroy);
         game.level_overrides.spawn = Some(SpawnKind::Waves);
         game.level_overrides.waves = Some(waves);
@@ -6218,8 +6260,9 @@ cells."30,20" = { kind = "frog" }
         game.level_overrides.wave_growth = Some(0);
         game.map = MapFile::from_toml_str(OPEN_MAP).expect("test map parses");
         game.init(W, H);
-        let player = game.player().expect("player");
-        with_tank_mut(&game.world, player, |t| t.shield_hp = 1.0e9);
+        for seat in game.players().into_iter().flatten() {
+            with_tank_mut(&game.world, seat, |t| t.shield_hp = 1.0e9);
+        }
         game
     }
 
@@ -6395,6 +6438,172 @@ cells."30,20" = { kind = "frog" }
         assert!(game.tank_entity_by_slot(slot).is_none());
         assert!(game.wave_status().unwrap().index >= 2, "wave 2 came meanwhile, so slot {slot} was never reused");
         assert!(game.tank_snapshots().iter().all(|t| t.is_player || !t.is_wreck));
+    }
+
+    // --- A wrecked seat re-entering with the next wave
+    // (docs/online-coop-prd.md section 4.11, decision 7) ---
+
+    /// Wreck `slot` and run the frame that applies it.
+    fn kill_and_step(game: &mut Game, slot: usize) {
+        game.debug_kill(slot).expect("a live tank in that slot");
+        step(game, Input::default());
+    }
+
+    /// Step until seat `seat` is off the field driving back in, at most
+    /// `limit` frames; the frame it started on.
+    fn step_until_returning(game: &mut Game, seat: usize, limit: u32) -> u32 {
+        for frame in 1..=limit {
+            step(game, Input::default());
+            let entity = game.seat(seat).expect("a seat's tank is never despawned");
+            if game.is_entering(entity) {
+                return frame;
+            }
+        }
+        panic!("seat {seat} never started back in within {limit} frames");
+    }
+
+    #[test]
+    fn a_wrecked_seat_drives_back_in_with_the_next_wave_and_plays_again() {
+        let mut game = waves_game_seats(3, 1, 2);
+        let wave_one = step_until_entered(&mut game, 600);
+        kill_and_step(&mut game, 1);
+        let seat1 = game.seat(1).expect("seat 1");
+        assert!(with_tank(&game.world, seat1, Tank::is_wreck), "seat 1 is a wreck");
+        assert_eq!(game.outcome(), Outcome::Playing, "seat 0 is still fighting");
+        // It waits where it fell until the wave it belongs to is called.
+        for _ in 0..60 {
+            step(&mut game, Input::default());
+            assert!(!game.is_entering(seat1), "a wreck waits for the next wave, it does not leave early");
+        }
+        // Clearing wave 1 calls wave 2, and seat 1 comes in with it.
+        game.debug_kill(wave_one).expect("wave 1's tank");
+        let started = step_until_returning(&mut game, 1, 900);
+        assert!(started > 0);
+        assert!(game.wave_status().unwrap().index >= 2, "it came with the next wave");
+        let out = with_tank(&game.world, seat1, |t| (t.position, t.is_wreck(), t.body.is_some(), t.hull_points()));
+        assert!(!out.1, "back at full health, not a wreck");
+        assert!(!out.2, "kinematic until it is through the gate");
+        assert_eq!(out.3, with_tank(&game.world, game.player().unwrap(), |t| t.hull_points()), "a fresh tank");
+        assert!(out.0.x < 0.0 || out.0.x > W || out.0.y < 0.0 || out.0.y > H, "starts outside the field, at a gate");
+        // It arrives, takes its body and no `Ai`, and answers its own keys.
+        let mut arrived = false;
+        for _ in 0..900 {
+            step(&mut game, Input::default());
+            if !game.is_entering(seat1) {
+                arrived = true;
+                break;
+            }
+        }
+        assert!(arrived, "seat 1 never finished its roll-in");
+        assert!(game.world.get::<&Ai>(seat1).is_err(), "a seat never takes an Ai");
+        assert!(with_tank(&game.world, seat1, |t| t.body.is_some()), "it has its physics body again");
+        let inside = with_tank(&game.world, seat1, |t| t.position);
+        assert!(inside.x > 0.0 && inside.x < W && inside.y > 0.0 && inside.y < H, "arrived inside the field");
+        let before = inside;
+        let mut input = Input::default();
+        input.seats[1] = Intent { move_dir: Some(Dir::Left), ..Intent::default() };
+        for _ in 0..30 {
+            step(&mut game, input);
+        }
+        let after = with_tank(&game.world, seat1, |t| t.position);
+        assert!(after.distance_to(before) > 8.0, "seat 1 drives again: {before:?} -> {after:?}");
+    }
+
+    #[test]
+    fn a_seat_driving_back_in_is_not_a_target_and_takes_no_fire() {
+        let mut game = waves_game_seats(3, 1, 2);
+        let wave_one = step_until_entered(&mut game, 600);
+        kill_and_step(&mut game, 1);
+        let seat1 = game.seat(1).expect("seat 1");
+        game.debug_kill(wave_one).expect("wave 1's tank");
+        step_until_returning(&mut game, 1, 900);
+        for _ in 0..120 {
+            step(&mut game, Input::default());
+            if !game.is_entering(seat1) {
+                break;
+            }
+            assert!(!game.seats_on_field().contains(&Some(seat1)), "off the field while it drives in");
+            assert!(with_tank(&game.world, seat1, |t| !t.is_wreck()), "nothing out there can touch it");
+        }
+    }
+
+    #[test]
+    fn every_seat_wrecked_at_once_still_loses_the_round() {
+        let mut game = waves_game_seats(3, 1, 2);
+        step_until_entered(&mut game, 600);
+        for seat in [0, 1] {
+            game.debug_kill(seat).expect("a live seat");
+        }
+        step(&mut game, Input::default());
+        assert_eq!(game.outcome(), Outcome::Lost, "nobody is left to hold the line");
+    }
+
+    #[test]
+    fn a_round_lost_while_a_seat_waits_leaves_it_where_it_fell() {
+        let mut game = waves_game_seats(3, 1, 2);
+        step_until_entered(&mut game, 600);
+        kill_and_step(&mut game, 1);
+        let seat1 = game.seat(1).expect("seat 1");
+        for _ in 0..30 {
+            step(&mut game, Input::default());
+        }
+        // The last seat standing falls while the other is still waiting
+        // for the wave that was going to bring it back.
+        let player = game.player().expect("player");
+        with_tank_mut(&game.world, player, |t| t.shield_hp = 0.0);
+        kill_and_step(&mut game, 0);
+        assert_eq!(game.outcome(), Outcome::Lost);
+        // Up to the restart the end screen plays out; nothing comes back
+        // on it, because `wave_phase` only runs while the round does.
+        for _ in 0..(tuning().restart_delay * 60.0) as u32 - 10 {
+            step(&mut game, Input::default());
+            assert!(with_tank(&game.world, seat1, Tank::is_wreck), "the round is over; nobody comes back");
+            assert!(!game.is_entering(seat1));
+        }
+        assert_eq!(game.outcome(), Outcome::Lost);
+    }
+
+    #[test]
+    fn a_band_round_leaves_a_wrecked_seat_wrecked() {
+        let mut game = Game::default();
+        game.enemy_count_override = Some(1);
+        game.seed_override = Some(7);
+        game.player_row_override = Some(0);
+        game.players = PlayerCount::TWO;
+        // Destroy, so the round can only end on the tanks: the one enemy
+        // and every seat are shielded, so it cannot end at all.
+        game.level_overrides.mission = Some(Mission::Destroy);
+        game.map = MapFile::from_toml_str(OPEN_MAP).expect("test map parses");
+        game.init(W, H);
+        for seat in game.players().into_iter().flatten() {
+            with_tank_mut(&game.world, seat, |t| t.shield_hp = 1.0e9);
+        }
+        for tank in game.world.query_mut::<&mut Tank>().with::<&Ai>() {
+            tank.shield_hp = 1.0e9;
+        }
+        kill_and_step(&mut game, 1);
+        let seat1 = game.seat(1).expect("seat 1");
+        for _ in 0..600 {
+            step(&mut game, Input::default());
+            assert!(with_tank(&game.world, seat1, Tank::is_wreck), "a band round keeps a wrecked seat wrecked");
+            assert!(!game.is_entering(seat1));
+        }
+        assert_eq!(game.outcome(), Outcome::Playing);
+    }
+
+    #[test]
+    fn a_single_seat_wave_round_loses_on_its_one_wreck() {
+        let mut game = waves_game(3, 1);
+        step_until_entered(&mut game, 600);
+        let player = game.player().expect("player");
+        with_tank_mut(&game.world, player, |t| t.shield_hp = 0.0);
+        kill_and_step(&mut game, 0);
+        assert_eq!(game.outcome(), Outcome::Lost, "one wreck of one seat is every seat wrecked");
+        assert!(with_tank(&game.world, player, Tank::is_wreck));
+        for _ in 0..600 {
+            step(&mut game, Input::default());
+            assert!(!game.is_entering(player), "nothing comes back: the round is over");
+        }
     }
 
     #[test]

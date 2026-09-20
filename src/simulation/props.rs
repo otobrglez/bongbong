@@ -267,7 +267,7 @@ impl Game {
         if live {
             // Players first, in index order, then the enemies - the same
             // draw order as a wreck's blast (`Game::apply_explosion`).
-            for player in self.players().into_iter().flatten() {
+            for player in self.seats_on_field().into_iter().flatten() {
                 let mut q = self.world.query_one::<&mut Tank>(player);
                 let tank = q.get().expect("player entity always has a Tank");
                 explosion_hit(tank, center, true, &mut self.physics, &mut f.rng, &mut f.kills, &params);
@@ -505,7 +505,7 @@ impl Game {
             let dps = t.oil_pool_damage_per_second;
             if dps > 0.0 {
                 let half_cell = OBSTACLE_GRID_SIZE * 0.5;
-                let mut order: Vec<Entity> = self.players().into_iter().flatten().collect();
+                let mut order: Vec<Entity> = self.seats_on_field().into_iter().flatten().collect();
                 order.extend(self.world.query::<(Entity, &Tank)>().with::<&Ai>().iter().map(|(e, _)| e));
                 for entity in order {
                     let mut q = self.world.query_one::<&mut Tank>(entity);

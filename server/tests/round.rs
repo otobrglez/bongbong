@@ -20,7 +20,8 @@ use bongbong::net::wire::{IntentMsg, Lobby, RoundOutcome, Snapshot};
 use bongbong::net::{MAX_SEATS, PROTOCOL_VERSION};
 use bongbong::simulation::Game;
 use bongbong::tank::Dir;
-use bongbong_server::room::{SEATS_PLAYABLE, SNAPSHOT_EVERY};
+use bongbong::tuning::Tuning;
+use bongbong_server::room::{SEATS_PLAYABLE, SNAPSHOT_EVERY, tuning_patch};
 use bongbong_server::{Config, Server};
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
@@ -482,6 +483,12 @@ async fn four_seats_play_one_round_and_every_replica_follows_the_wire() {
         let w = expect_welcome(&mut ws).await;
         assert_eq!(w.seat as usize, seat);
         assert_eq!(w.roster.len(), SEATS, "the whole team travels in the welcome");
+        // The round is sized to the team, and every seat is told the same
+        // numbers the room played `init` under (docs/online-coop-prd.md
+        // §4.11): a client resolves the room's plan, not the map's.
+        assert_eq!(w.tuning_json, tuning_patch(SEATS), "seat {seat} got the team's wave plan");
+        let knobs = Tuning::DEFAULT.with_json_patch(&w.tuning_json).expect("a patch the build knows every row of");
+        assert!(knobs.wave_size_scale > 1.0, "four seats meet a wider wave than one does");
         let ids: Vec<u16> = w.snapshot.tanks.iter().map(|t| t.id).collect();
         assert!(ids.starts_with(&[0, 1, 2, 3]), "a tank per seat leads the roster: {ids:?}");
         let replica = apply::welcome(&w).expect("a replica from the welcome");

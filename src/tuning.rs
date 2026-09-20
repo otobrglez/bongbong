@@ -400,6 +400,23 @@ tunables! {
         /// Cap on live enemies at once; a wave that would exceed it queues
         /// its surplus until slots free up.
         wave_max_alive: usize = 31 in 1 ..= 31;
+        /// Every wave of the plan the map or the CLI authored is multiplied
+        /// by this and rounded (the first wave's size and the tanks each
+        /// wave adds, both at least what the plan asked for once rounded);
+        /// 1.0 plays the plan as written.
+        ///
+        /// This is how a round is sized to the team that fights it
+        /// (docs/online-coop-prd.md section 4.11): a room works it out from
+        /// `online_wave_size_per_seat` and the seats its round starts with,
+        /// and sends it in the `Welcome`'s tuning patch, so a local round -
+        /// on a couch or in the probe - always runs at 1.0. Read once, when
+        /// the plan is resolved in `Game::init`.
+        wave_size_scale: f32 = 1.0 in 0.1 ..= 8.0 @ Restart;
+        /// Rungs added to both ends of the wave plan's tier ramp, clamped
+        /// to the top of the ladder: 1 starts a light -> super plan at
+        /// medium. The room's other seat-count dial
+        /// (`online_wave_tier_seats_per_step`), 0 on every local round.
+        wave_tier_step: usize = 0 in 0 ..= 3 @ Restart;
     }
 
     group movement {
@@ -1461,6 +1478,27 @@ tunables! {
         /// frames. A knob so it can be tried by hand against a rig run
         /// (`--rig --delay 80 --jitter 20`). Live.
         online_interpolation_delay_ms: f32 = 100.0 in 0.0 ..= 500.0;
+        /// How much of the authored wave each seat past the first adds to a
+        /// room's round (docs/online-coop-prd.md section 4.11): the room
+        /// sends `wave_size_scale = 1 + (seats - 1) * this` in its
+        /// `Welcome`, so at 1.0 a team of four meets four times the wave
+        /// one player does and at 0.0 nothing scales at all. Under 1.0 on
+        /// purpose - a team shares a field, focuses fire and covers each
+        /// other, so it is worth more than the sum of its tanks; the number
+        /// is the probe's `--players` sweeps flattened against the solo
+        /// round (docs/maps-to-levels.md "Difficulty by seat count").
+        ///
+        /// Read by the room server alone, when a round starts. Turning it
+        /// down makes every room easier; a local round never reads it.
+        online_wave_size_per_seat: f32 = 0.75 in 0.0 ..= 2.0;
+        /// A room's wave plan climbs one rung of the tier ladder
+        /// (`wave_tier_step`) for every this many seats past the first, so
+        /// a big team meets heavier chassis and not only more of them. At
+        /// 3, two and three seats fight the authored tiers, four fight one
+        /// rung up and eight two, and a ramp already at the top of the
+        /// ladder simply stays there. The coarse dial of the two -
+        /// `online_wave_size_per_seat` is the fine one.
+        online_wave_tier_seats_per_step: usize = 3 in 1 ..= 8;
     }
 
     group cosmetics {
@@ -1797,11 +1835,27 @@ impl Tuning {
         Self::SCHEMA.iter().find(|m| m.name == name)
     }
 
+    /// This table with a JSON patch object applied to a copy, or the
+    /// error that rejected it whole - the one place a patch string
+    /// becomes a table, shared by [`submit_json`] (the window's side of a
+    /// room's `Welcome`, the dev panel, `--tuning`) and by anyone
+    /// checking what a patch would do without touching the global store.
+    pub fn with_json_patch(&self, json: &str) -> Result<Tuning, String> {
+        let patch: Value = serde_json::from_str(json).map_err(|e| format!("invalid JSON: {e}"))?;
+        let Value::Object(patch) = patch else {
+            return Err("expected a JSON object of {\"knob\": value} pairs".to_string());
+        };
+        let mut next = *self;
+        next.apply_patch(&patch)?;
+        Ok(next)
+    }
+
     /// Apply a JSON patch object: any subset of keys, each a number (scalar
     /// row or `name.elem` element), a bool, or - for an array row - a
     /// full-length array. Validated key by key; the caller is expected to
     /// apply this to a *copy* and only commit on `Ok`, which is what
-    /// [`submit_json`] does. Returns how many keys were applied.
+    /// [`with_json_patch`](Tuning::with_json_patch) does. Returns how many
+    /// keys were applied.
     pub fn apply_patch(&mut self, patch: &Map<String, Value>) -> Result<usize, String> {
         for (key, value) in patch {
             match value {
@@ -1961,6 +2015,7 @@ pub fn submit_json(json: &str) -> Result<usize, String> {
     *staged = Some(next);
     Ok(applied)
 }
+
 
 /// Stage a full reset to [`Tuning::DEFAULT`].
 pub fn submit_reset() {

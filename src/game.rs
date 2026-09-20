@@ -34,7 +34,8 @@ enum TankRole {
     /// Any seat's tank: one ring, drawn in that seat's own team colour.
     Player,
     Enemy,
-    /// A wave tank still rolling in: partly off-screen by construction, and
+    /// A tank still rolling in - a wave's, or a seat driving back in
+    /// (`simulation/waves.rs`): partly off-screen by construction, and
     /// with no health ring or damage overlay until it arrives.
     RollIn,
 }
@@ -184,10 +185,12 @@ impl Game {
         let mut standing: Vec<(f32, Standing)> = tank_query
             .iter()
             .map(|(entity, tank)| {
-                let role = if self.is_player(entity) {
-                    TankRole::Player
-                } else if rollins.contains(&entity) {
+                // The lane first: a tank on its way in through a gate is
+                // off the field, seat or not, and draws nothing on it.
+                let role = if rollins.contains(&entity) {
                     TankRole::RollIn
+                } else if self.is_player(entity) {
+                    TankRole::Player
                 } else {
                     TankRole::Enemy
                 };

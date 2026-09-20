@@ -544,13 +544,48 @@ co-op end rule.
 | Enemy targeting | `Ai::target_player` over two, with hysteresis | the same rule over N; the engage ring is already per player |
 | Colours, labels | `TEAM_COLORS` two entries; sheet blocks enemy, P1, P2; `P1`/`P2` labels | seats past two draw the P1 block, told apart by ring colour and `P3`..`P8`; proper blocks from `gen_tanks.py` when a fourth friend shows up |
 | HUD | `SLOTS_ONE`/`SLOTS_TWO` | online: the local seat in full, others as a strip of ring-coloured hearts; couch tables stay |
-| Death | a wrecked player waits for the round to end | wave rounds: re-enter with the next wave through a gate (the roll-in that exists), no penalty in v1; band rounds keep today's rule (decision 7) |
+| Death | a wrecked player waits for the round to end | **built**: in a wave round of two or more a wrecked seat re-enters with the next wave through a gate (`simulation/waves.rs`), as a fresh tank of its own chassis - no penalty; band rounds and solo rounds keep today's rule (decision 7) |
 | Frog, pickups | unchanged | unchanged; the server decides who reached a pickup first, and a frog health pack heals the collector's side's frog wherever it stands (`FrogHealed`) |
 
-Difficulty scales with seats: a wave plan authored for one tank is a walk for
-four. The room can scale `tanks`, wave size and tier ramp by seat count with
-one tuning diff; the probe's `--players` sweeps are the tool for tuning the
-curve.
+**Re-entry, as built.** `call_wave` queues every seat that is a wreck, in
+seat order; the queue is drained at the head of that wave's own roll-ins,
+one lane per `wave_stagger_seconds`, through `pick_gate` - the same lane
+chooser the wave's tanks use, so a returning player and an arriving enemy
+never share a gate. The seat keeps its entity, owner slot, chassis and worn
+tread look and everything else is what `init` would have spawned: full
+health, shells, no special weapon, no shield. It drives in kinematically
+like a wave tank and takes no `Ai` on arrival - it answers its own stick the
+frame it is through the gate. Four rules hold it together:
+
+- **The round is still losable.** `check_round_end` walks `players()`, not
+  the on-field seats, so a seat waiting for the next wave is a wreck like
+  any other: the frame *every* seat is a wreck the round is Lost, exactly as
+  before.
+- **A solo round is untouched.** Its one wreck is every seat wrecked, so the
+  round has already ended before anything could be queued; nothing is
+  queued below two seats and a band round calls no wave at all. Both replay
+  byte for byte (`probe-waves` and the band sweeps are identical across the
+  change).
+- **Off the field means off the field.** While a seat is in the gate lane
+  `Game::seats_on_field()` reads it as empty - it is not shot at, blasted,
+  burnt, rammed, retargeted to, routed to or the centre of an engagement
+  ring, and `waves_finished` does not wait for it - the same shelter an
+  entering wave tank gets for free by having no `Ai` yet.
+- **A round that ends first keeps its result.** `wave_phase` only runs while
+  the round is Playing, so a seat waiting when the round is won or lost
+  stays where it fell, and a seat wrecked after the final wave is called has
+  no wave left to come back with.
+
+**Difficulty scales with seats** - a wave plan authored for one tank is a
+walk for four - and the room is the only thing that scales it, through the
+tuning patch its `Welcome` already carries (`room::tuning_patch`):
+`wave_size_scale` multiplies every wave of the map's plan and `wave_tier_step`
+lifts its tier ramp, both worked out from the seats the round starts with
+and the two dials `online_wave_size_per_seat` (0.75) and
+`online_wave_tier_seats_per_step` (3). One seat sends `{}`, so a room of one
+is the offline round to the byte, and local play - couch, probe, builder -
+never reads either row. The curve and the `--players` sweeps behind it are
+in docs/maps-to-levels.md, "Difficulty by seat count".
 
 ### 4.12 Stage 2: prediction
 
@@ -766,6 +801,7 @@ ship a complete co-op game; 4 and 5 are stage 2.
    wants a slimmer graph.
 7. A wrecked player in a wave round: watch, or re-enter with the next wave?
    **Re-enter through a gate, no penalty**; band rounds keep today's rule.
+   *Built in phase 3c* - see 4.11 for the four rules that hold it together.
 8. Interpolation delay: fixed 100 ms, or adaptive? **Fixed in phases 1–2,
    adaptive in 3.**
 9. Lag compensation: rewind to the shooter's view, or judge at server time?
