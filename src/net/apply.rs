@@ -71,9 +71,10 @@ pub fn welcome(w: &Welcome) -> Result<Game, String> {
     game.seed_override = Some(w.seed);
     game.level_overrides = w.overrides.into();
     game.enemy_count_override = w.enemy_count.map(|n| n as usize);
-    // The simulation seats two; a roster past that keeps the local rule
-    // (slot 0 and 1 are the seats, enemies from 2).
-    game.players = if w.roster.iter().any(|s| s.seat >= 1) { PlayerCount::Two } else { PlayerCount::One };
+    // As many seats as the roster's highest, so the replica's enemies
+    // count from the same slot the room's do.
+    let seats = w.roster.iter().map(|s| s.seat as usize + 1).max().unwrap_or(1);
+    game.players = PlayerCount::from_count(seats).unwrap_or(PlayerCount::MAX);
     let chassis = |seat: u8| w.roster.iter().find(|s| s.seat == seat).map(|s| s.chassis as i32);
     game.player_row_override = chassis(0);
     game.player2_row_override = chassis(1);
@@ -277,10 +278,8 @@ fn spawn_tank(game: &mut Game, t: &TankState, player: bool) -> Entity {
     tank.body = Some(game.physics_mut().spawn_tank(position, half, mass));
     let entity = game.world.spawn((tank,));
     if player {
-        match slot {
-            0 => game.player = Some(entity),
-            1 => game.player2 = Some(entity),
-            _ => {}
+        if let Some(held) = game.seats.get_mut(slot) {
+            *held = Some(entity);
         }
     }
     entity

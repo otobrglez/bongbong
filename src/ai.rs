@@ -249,11 +249,10 @@ pub struct Ai {
     /// rather than a flag so tooling can see an escape that fired and
     /// reset within one frame.
     escapes: u32,
-    /// Which human player this tank is fighting (0 or 1): the target of
-    /// its `Role::Player` behaviour and the ring it competes on. Always 0
-    /// in a single-player round; in a two-player round `enemy_phase`
-    /// retargets it to the nearer live, visible player past
-    /// `enemy_target_switch_margin_px`.
+    /// Which seat this tank is fighting: the target of its `Role::Player`
+    /// behaviour and the ring it competes on. Always 0 in a single-player
+    /// round; with more seats `enemy_phase` retargets it to the nearest
+    /// live, visible one past `enemy_target_switch_margin_px`.
     target_player: u8,
 }
 

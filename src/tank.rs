@@ -756,10 +756,9 @@ impl Tank {
     }
 
     /// This tank's owner slot, the number events, snapshots and the dev
-    /// tools address it by: players first (`0` for player 1, `1` for
-    /// player 2 in a two-player round), then the enemies, counting up from
-    /// the first free number - `1` in a single-player round, `2` with two
-    /// players (`Game::first_enemy_slot`). Unique for the round.
+    /// tools address it by: the seats first (`0` for player 1, then one
+    /// per further seat), then the enemies, counting up from the first
+    /// free number (`Game::first_enemy_slot`). Unique for the round.
     pub fn owner_slot(&self) -> usize {
         self.owner.slot()
     }
@@ -769,7 +768,7 @@ impl Tank {
         self.owner.is_player()
     }
 
-    /// Which player this is, 0 or 1, if a player at all.
+    /// Which seat this is, if a player at all.
     pub fn player_index(&self) -> Option<u8> {
         match self.owner {
             Owner::Player(i) => Some(i),
@@ -1253,11 +1252,14 @@ fn draw_pivot(size: f32) -> Vec2 {
 }
 
 /// Which block of the sheet a tank draws from: 0 for an enemy, 1 and 2 for
-/// the two players' recoloured copies.
+/// the two players' recoloured copies. The sheet holds three blocks, so a
+/// seat past the second borrows player 1's and is told apart by its ring
+/// colour and its `P3`..`P8` label instead (docs/online-coop-prd.md §4.11).
 fn sheet_block(player: Option<u8>) -> i32 {
     match player {
         None => 0,
-        Some(i) => 1 + i as i32,
+        Some(1) => 2,
+        Some(_) => 1,
     }
 }
 
@@ -1320,17 +1322,48 @@ const RED_DEEP: Color = Color::new(0x9C, 0x35, 0x27, 255);
 const RED_DK: Color = Color::new(0x81, 0x2F, 0x27, 255);
 const RED_DARKEST: Color = Color::new(0x4A, 0x22, 0x21, 255);
 pub(crate) const BLACK: Color = Color::new(0x25, 0x25, 0x25, 255);
-/// The two players' identity colours (docs/player-indicator-improvements.md):
-/// player 1 sky blue, player 2 hot pink - the base step of the team ramp
-/// the sheet's player blocks are painted in, deliberately off the Puny
-/// Palette because every one of its hue families is already an enemy
-/// hull. The hull, the ground ring, the HUD readouts and button, the
-/// editor's start markers and the round-start locate cue all draw from
-/// this one pair so the three surfaces read as one identity.
-pub const TEAM_COLORS: [Color; 2] = [Color::new(0x4D, 0x9B, 0xE6, 255), Color::new(0xF0, 0x4F, 0x78, 255)];
-/// The light step of each team ramp: the sheet's accent, and the ring's
-/// full-health colour so a healthy ring reads brighter than the hull.
-const TEAM_LIGHT: [Color; 2] = [Color::new(0x8F, 0xD3, 0xFF, 255), Color::new(0xED, 0x80, 0x99, 255)];
+/// One identity colour per seat (docs/player-indicator-improvements.md,
+/// docs/PALETTE.md): seat 0 sky blue, seat 1 hot pink - the base step of
+/// the team ramp the sheet's two player blocks are painted in - then six
+/// more for the seats a room adds. All eight are Resurrect 64 steps from
+/// the blue, cyan, violet and magenta families, the hue regions nothing on
+/// the field occupies, each family in a bright register (seats 0-3) and a
+/// deep one (seats 4-7); they stay off the Puny Palette for the same
+/// reason the first two do, and off the gold and red the health ramp
+/// shares, so a healthy seat never reads as a hurt one. The hull, the
+/// ground ring, the HUD readouts and button, the editor's start markers
+/// and the round-start locate cue all draw from this one table, so every
+/// surface reads as one identity.
+pub const TEAM_COLORS: [Color; crate::MAX_SEATS] = [
+    Color::new(0x4D, 0x9B, 0xE6, 255), // P1 sky blue
+    Color::new(0xF0, 0x4F, 0x78, 255), // P2 hot pink
+    Color::new(0xA8, 0x84, 0xF3, 255), // P3 violet
+    Color::new(0x30, 0xE1, 0xB9, 255), // P4 aqua
+    Color::new(0x4D, 0x65, 0xB4, 255), // P5 royal blue
+    Color::new(0xC3, 0x24, 0x54, 255), // P6 crimson
+    Color::new(0x90, 0x5E, 0xA9, 255), // P7 grape
+    Color::new(0x0B, 0x8A, 0x8F, 255), // P8 deep teal
+];
+/// The light step of each team ramp: the sheet's accent for the two seats
+/// it draws, and every seat's ring colour at full health, so a healthy
+/// ring reads brighter than the hull.
+const TEAM_LIGHT: [Color; crate::MAX_SEATS] = [
+    Color::new(0x8F, 0xD3, 0xFF, 255),
+    Color::new(0xED, 0x80, 0x99, 255),
+    Color::new(0xD6, 0xBF, 0xFB, 255),
+    Color::new(0x8F, 0xF8, 0xE2, 255),
+    Color::new(0x7C, 0x92, 0xD8, 255),
+    Color::new(0xE8, 0x63, 0x7F, 255),
+    Color::new(0xC3, 0x98, 0xD6, 255),
+    Color::new(0x4F, 0xC0, 0xC4, 255),
+];
+
+/// `TEAM_COLORS`/`TEAM_LIGHT` for a seat, wrapping past `MAX_SEATS` rather
+/// than panicking - a seat index only ever comes from an owner slot, but a
+/// wire message is not this build's to trust.
+pub fn team_color(seat: u8) -> Color {
+    TEAM_COLORS[seat as usize % TEAM_COLORS.len()]
+}
 
 /// Where a health gauge's filled arc starts, in raylib degrees: 12 o'clock.
 /// raylib measures from +x and, on a y-down screen, increasing angles run
@@ -1348,22 +1381,17 @@ pub enum HealthRamp {
     /// Bright red down to the darkest red: the enemy frog, whose ring is red
     /// at any health so its side still reads.
     Red,
-    /// Player 1: the team's light and base blues while healthy, then the
+    /// A seat: its own light and base team colours while healthy, then the
     /// same gold and bright red as `White` for the shared danger steps.
-    Blue,
-    /// Player 2: the same shape in the team's pinks.
-    Pink,
+    Team(u8),
 }
 
 impl HealthRamp {
     const WHITE_STEPS: [Color; 4] = [Color::WHITE, GOLD_BRIGHT, RED_BRIGHT, RED_DEEP];
     const RED_STEPS: [Color; 4] = [RED_BRIGHT, RED_DEEP, RED_DK, RED_DARKEST];
-    const BLUE_STEPS: [Color; 4] = [TEAM_LIGHT[0], TEAM_COLORS[0], GOLD_BRIGHT, RED_BRIGHT];
-    const PINK_STEPS: [Color; 4] = [TEAM_LIGHT[1], TEAM_COLORS[1], GOLD_BRIGHT, RED_BRIGHT];
-
-    /// The ramp for player `index` (0 or 1).
+    /// The ramp for the seat in `index`.
     pub fn player(index: u8) -> Self {
-        if index == 0 { Self::Blue } else { Self::Pink }
+        Self::Team(index % crate::MAX_SEATS as u8)
     }
 
     /// The step colour for `frac` remaining health.
@@ -1371,8 +1399,10 @@ impl HealthRamp {
         let steps = match self {
             Self::White => Self::WHITE_STEPS,
             Self::Red => Self::RED_STEPS,
-            Self::Blue => Self::BLUE_STEPS,
-            Self::Pink => Self::PINK_STEPS,
+            Self::Team(i) => {
+                let i = i as usize % TEAM_COLORS.len();
+                [TEAM_LIGHT[i], TEAM_COLORS[i], GOLD_BRIGHT, RED_BRIGHT]
+            }
         };
         steps[health_ring_step(frac)]
     }
@@ -1384,8 +1414,7 @@ impl HealthRamp {
         match self {
             Self::White => Color::WHITE,
             Self::Red => RED_MD,
-            Self::Blue => TEAM_COLORS[0],
-            Self::Pink => TEAM_COLORS[1],
+            Self::Team(i) => team_color(i),
         }
     }
 }
@@ -1587,7 +1616,7 @@ pub fn draw_tank_shield(c: &mut impl Canvas, tank: &Tank, time: f32) {
     }
     let base_hue = (time * tuning().shield_glow_hue_hz * 360.0 + tank.anim_phase() * 360.0).rem_euclid(360.0);
     let base = match tank.owner() {
-        Owner::Player(i) => with_opacity(TEAM_COLORS[i as usize & 1], tuning().player_ring_opacity * tuning().health_ring_base_opacity),
+        Owner::Player(i) => with_opacity(team_color(i), tuning().player_ring_opacity * tuning().health_ring_base_opacity),
         Owner::Enemy(_) => with_opacity(BLACK, tuning().health_ring_gap_opacity),
     };
     let style = RingStyle::Rainbow { base_hue, charge: tank.shield_charge(), base };
@@ -1695,7 +1724,7 @@ pub fn draw_player_locate(c: &mut impl Canvas, tank: &Tank, time: f32, elapsed: 
         return;
     }
     let phase = (elapsed * tuning().player_locate_pulse_hz).fract();
-    let color = with_opacity(TEAM_COLORS[index as usize & 1], (1.0 - phase) * tuning().player_ring_opacity);
+    let color = with_opacity(team_color(index), (1.0 - phase) * tuning().player_ring_opacity);
     let scale = ring_scale(tank) * (1.0 + 0.6 * phase);
     draw_ground_ring_scaled(c, tank.ring_position, tank.size(), tank.anim_phase(), time, RingStyle::Solid(color), 1.0, scale);
 }

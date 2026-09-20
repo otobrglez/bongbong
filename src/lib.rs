@@ -383,10 +383,10 @@ pub const ONLINE_AVAILABLE: bool = cfg!(all(feature = "online", not(target_os = 
 
 /// How many human seats one round can carry: the width of
 /// `simulation::Input::seats` and of every per-seat array in `Game`. A
-/// round reads only the first `Game::players.count()` seats (one or two
-/// today, docs/two-players.md); the rest are the online co-op roster's
-/// (docs/online-coop-prd.md §4.11) and read as "no input" until then. The
-/// single source of the number - a net layer sizes its roster from here.
+/// round holds `Game::players.count()` of them and spawns a tank in each
+/// (docs/two-players.md's seats section, docs/online-coop-prd.md §4.11); a
+/// seat nobody drives reads as "no input". The single source of the
+/// number - a net layer sizes its roster from here.
 pub const MAX_SEATS: usize = 8;
 
 // The HUD bar above the battlefield (docs/hud-and-builder-layout-design.md,

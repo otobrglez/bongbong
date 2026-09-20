@@ -94,7 +94,7 @@ fn snapshot(game: &Game, slot: usize) -> TankSnapshot {
 }
 
 fn player_weapon(game: &Game) -> ActiveWeapon {
-    with_tank(&game.world, game.player.unwrap(), |t| t.active_weapon())
+    with_tank(&game.world, game.player().unwrap(), |t| t.active_weapon())
 }
 
 fn obstacle_at(game: &Game, cell: (i32, i32)) -> Option<(Material, f32, bool, bool, u8, bool)> {

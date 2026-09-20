@@ -224,14 +224,14 @@ impl Terrain {
     /// four walls - is scored by its entry time and the nearest wins, so a
     /// long segment can never skip what it would really have struck first.
     /// Exact ties go players > enemies > frog > obstacles > walls. The
-    /// shooter's own boxes are skipped. `players` is `Game::players` - the
-    /// player entities in index order, `None` where there is no such
-    /// player. Returns the target plus `t` in `0..=1` along `p0..p1` (so a
-    /// beam can be clipped to where it hit).
+    /// shooter's own boxes are skipped. `players` is `Game::players()` -
+    /// the seats in index order, `None` where a seat holds no tank.
+    /// Returns the target plus `t` in `0..=1` along `p0..p1` (so a beam
+    /// can be clipped to where it hit).
     pub fn sweep(
         &self,
         world: &hecs::World,
-        players: [Option<Entity>; 2],
+        players: [Option<Entity>; crate::MAX_SEATS],
         shooter: Owner,
         p0: Position,
         p1: Position,
@@ -247,7 +247,7 @@ impl Terrain {
     pub fn sweep_ignoring(
         &self,
         world: &hecs::World,
-        players: [Option<Entity>; 2],
+        players: [Option<Entity>; crate::MAX_SEATS],
         shooter: Owner,
         p0: Position,
         p1: Position,

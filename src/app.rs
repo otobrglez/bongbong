@@ -44,8 +44,10 @@ use sola_raylib::prelude::{KeyboardKey, RaylibHandle};
 /// keyboard. `fire` is the raw held state - whether it actually fires
 /// (edge-triggered for shells, full-auto while a laser is charged) is
 /// `Game::update`'s call, not this function's; see `Input::seats`.
-/// Player 1 is always the arrows + Space; with two players, player 2 is
-/// WASD + Left Shift, otherwise idle (docs/two-players.md).
+/// Player 1 is always the arrows + Space; from two seats up, player 2 is
+/// WASD + Left Shift, otherwise idle (docs/two-players.md). The keyboard
+/// has no third or fourth pair of keys: the seats past these two are a
+/// room's, and their intents arrive over the wire.
 fn gather_intents(rl: &RaylibHandle, players: PlayerCount) -> (Intent, Intent) {
     let dir = |up: KeyboardKey, down: KeyboardKey, left: KeyboardKey, right: KeyboardKey| {
         if rl.is_key_down(up) {
@@ -62,13 +64,11 @@ fn gather_intents(rl: &RaylibHandle, players: PlayerCount) -> (Intent, Intent) {
     };
     let arrows = dir(KeyboardKey::KEY_UP, KeyboardKey::KEY_DOWN, KeyboardKey::KEY_LEFT, KeyboardKey::KEY_RIGHT);
     let player1 = Intent { move_dir: arrows, fire: rl.is_key_down(KeyboardKey::KEY_SPACE), ..Intent::default() };
-    match players {
-        PlayerCount::One => (player1, Intent::default()),
-        PlayerCount::Two => {
-            let wasd = dir(KeyboardKey::KEY_W, KeyboardKey::KEY_S, KeyboardKey::KEY_A, KeyboardKey::KEY_D);
-            (player1, Intent { move_dir: wasd, fire: left_shift_down(rl), ..Intent::default() })
-        }
+    if players.count() < 2 {
+        return (player1, Intent::default());
     }
+    let wasd = dir(KeyboardKey::KEY_W, KeyboardKey::KEY_S, KeyboardKey::KEY_A, KeyboardKey::KEY_D);
+    (player1, Intent { move_dir: wasd, fire: left_shift_down(rl), ..Intent::default() })
 }
 
 /// Whether the left Shift key - player 2's fire key - is held. Native reads
@@ -195,11 +195,13 @@ pub struct Args {
     #[arg(long = "tank2", value_enum)]
     tank2: Option<TankKind>,
 
-    /// Start the session in single (1) or two-player (2) mode - the
-    /// players button in the HUD bar switches later (docs/two-players.md).
-    /// Player 1 is always the arrows + Space; two players adds player 2 on
-    /// WASD + Left Shift. Kept across restarts.
-    #[arg(long = "players", default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=2))]
+    /// How many seats the round holds, 1 to `MAX_SEATS` - the players
+    /// button in the HUD bar switches between one and two later
+    /// (docs/two-players.md). Player 1 is always the arrows + Space; two
+    /// players adds player 2 on WASD + Left Shift, and the seats past
+    /// those two have no keys of their own: they are a room's, and stand
+    /// idle in a local round. Kept across restarts.
+    #[arg(long = "players", default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=crate::MAX_SEATS as i64))]
     players: u8,
 
     /// The window's initial size, e.g. `--resolution 1920x1080` (default:
@@ -825,7 +827,7 @@ pub fn run(args: Args) {
     game.show_intro = true;
     game.player_row_override = args.tank.map(TankKind::row);
     game.player2_row_override = args.tank2.map(TankKind::row);
-    game.players = PlayerCount::from_count(args.players as usize).expect("clap limits --players to 1 or 2");
+    game.players = PlayerCount::from_count(args.players as usize).expect("clap limits --players to the seats");
     game.shadows_enabled = !args.no_shadows;
     game.seed_override = args.seed;
     game.map = map;
@@ -1066,24 +1068,22 @@ pub fn run(args: Args) {
                     let field_p = layout.to_field(pointer);
                     if pressed {
                         if rects.one.contains(field_p) {
-                            session.answer_players(PlayerCount::One);
+                            session.answer_players(PlayerCount::ONE);
                         } else if rects.two.contains(field_p) {
-                            session.answer_players(PlayerCount::Two);
+                            session.answer_players(PlayerCount::TWO);
                         } else if !rects.panel.contains(field_p) {
                             session.close_players_dialog();
                         }
                     }
                     if rl.is_key_pressed(KeyboardKey::KEY_ONE) {
-                        session.answer_players(PlayerCount::One);
+                        session.answer_players(PlayerCount::ONE);
                     } else if rl.is_key_pressed(KeyboardKey::KEY_TWO) {
-                        session.answer_players(PlayerCount::Two);
+                        session.answer_players(PlayerCount::TWO);
                     } else if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
                         // Enter is the action, as it is "leave" in the other
                         // dialog: the point of opening this one is to switch.
-                        let other = match session.game.players {
-                            PlayerCount::One => PlayerCount::Two,
-                            PlayerCount::Two => PlayerCount::One,
-                        };
+                        let other =
+                            if session.game.players == PlayerCount::ONE { PlayerCount::TWO } else { PlayerCount::ONE };
                         session.answer_players(other);
                     } else if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) || tab {
                         session.close_players_dialog();

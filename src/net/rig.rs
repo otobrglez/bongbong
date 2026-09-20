@@ -605,7 +605,7 @@ mod tests {
     fn the_rig_draws_a_round_it_does_not_simulate() {
         let (rig, round, seen, authority) = play(LinkQuality::new(40, 10, 0.0), 150);
         let replica = round.game().expect("the rig welcomed the window into its round");
-        assert!(replica.player.is_some(), "the seat's tank is there for the HUD to read");
+        assert!(replica.player().is_some(), "the seat's tank is there for the HUD to read");
         assert!(rig.tick() > 60, "the authority ran its own round: tick {}", rig.tick());
         assert!(seen.len() > 100, "the window drew {} frames", seen.len());
 

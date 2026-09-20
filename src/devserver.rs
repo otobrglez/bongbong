@@ -157,7 +157,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "events",
-        description: "Gameplay events recorded since `since` (a seq number; 0 = everything kept, up to 4096): fired, hit, wreck, ram, deflected (off a shield), ricochet (a shot off iron or a barrel, with the heading it flies on along), shells_collided, frog_bite (with the biting frog's side), pickup_collected, pickup_respawned, obstacle_destroyed, blast, drum_launched, fire_started, ignited (the flamethrower lit `what`: ground, oil, wood, tree, drum, or collapsed a sandbag/fence), teleported (a tank went through a portal: slot, from x/y, to to_x/to_y), round_started, round_ended, plus AI decisions - ai_action (behaviour-tree action changed), engage_slot (ring slot changed; null = steering at its target - the player, or a hunter's frog - directly), stuck_escape, breach (dir, or null when it ends), retreat (on/off), alert (shared last-known player position on/off), retarget (two-player rounds: the enemy switched to fighting `player` 0 or 1). Each carries the frame it happened on. `kinds` keeps only those event names, `exclude` drops them.",
+        description: "Gameplay events recorded since `since` (a seq number; 0 = everything kept, up to 4096): fired, hit, wreck, ram, deflected (off a shield), ricochet (a shot off iron or a barrel, with the heading it flies on along), shells_collided, frog_bite (with the biting frog's side), pickup_collected, pickup_respawned, obstacle_destroyed, blast, drum_launched, fire_started, ignited (the flamethrower lit `what`: ground, oil, wood, tree, drum, or collapsed a sandbag/fence), teleported (a tank went through a portal: slot, from x/y, to to_x/to_y), round_started, round_ended, plus AI decisions - ai_action (behaviour-tree action changed), engage_slot (ring slot changed; null = steering at its target - the player, or a hunter's frog - directly), stuck_escape, breach (dir, or null when it ends), retreat (on/off), alert (shared last-known player position on/off), retarget (rounds with more than one seat: the enemy switched to fighting seat `player`). Each carries the frame it happened on. `kinds` keeps only those event names, `exclude` drops them.",
         schema: r#"{"type":"object","properties":{"since":{"type":"integer","default":0,"description":"Return events with seq > since"},"limit":{"type":"integer","default":200},"kinds":{"type":"array","items":{"type":"string"},"description":"Only these event names"},"exclude":{"type":"array","items":{"type":"string"},"description":"Drop these event names"}}}"#,
         read_only: true,
         destructive: false,
@@ -192,21 +192,21 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "restart",
-        description: "Start a fresh round, frozen in lockstep (call `resume` to let it run in real time). Optional seed (number or 0x-hex string; pinned for later restarts too), enemy count, player 1's chassis as `tank` (a name - scout, assault, ..., leviathan - the spelling maps and `--tank` use) or `tank_row` (0-11, the sheet order), `players` (1 or 2 - the session's player count, kept for later restarts; `tank2`/`tank2_row` pin player 2's chassis the same way), the map: `map` (a path to a TOML under maps/) or `map_toml` (the map's TOML text inline - see `map_get` for the format; the round keeps its current map when neither is given), and the level: `mission` (protect|hunt|destroy), `spawn` (band|waves) with `waves`/`wave_size`/`wave_growth`/`tier_start`/`tier_end` (light|medium|heavy|super) - each pinned for later restarts too, overriding the map's own [mission]/[spawn] tables. `intro: true` starts the round frozen behind the mission banner (off by default so `step` counts play frames). Same seed + same steps replays bit-for-bit.",
-        schema: r#"{"type":"object","properties":{"seed":{"type":["integer","string"]},"enemies":{"type":"integer","minimum":0,"maximum":31,"description":"Band plan enemy count; 0 is a sandbox round that never ends by wreck count"},"tank":{"type":"string","enum":["scout","assault","breaker","longbow","flak","wraith","warden","ravager","glacier","obelisk","titan","leviathan"],"description":"Player 1's chassis by name (or tank_row)"},"tank_row":{"type":"integer","minimum":0,"maximum":11},"players":{"type":"integer","minimum":1,"maximum":2},"tank2":{"type":"string","enum":["scout","assault","breaker","longbow","flak","wraith","warden","ravager","glacier","obelisk","titan","leviathan"],"description":"Player 2's chassis by name (or tank2_row)"},"tank2_row":{"type":"integer","minimum":0,"maximum":11},"map":{"type":"string","description":"Path to a map .toml, relative to the game's working directory"},"map_toml":{"type":"string","description":"Map TOML text, e.g. `version = 1\ntanks = 4\ncells.\"20,8\" = { kind = \"wall\", material = \"iron\" }`"},"mission":{"type":"string","enum":["protect","hunt","destroy"]},"spawn":{"type":"string","enum":["band","waves"]},"waves":{"type":"integer","minimum":1},"wave_size":{"type":"integer","minimum":1},"wave_growth":{"type":"integer","minimum":0},"tier_start":{"type":"string","enum":["light","medium","heavy","super"]},"tier_end":{"type":"string","enum":["light","medium","heavy","super"]},"intro":{"type":"boolean"}}}"#,
+        description: "Start a fresh round, frozen in lockstep (call `resume` to let it run in real time). Optional seed (number or 0x-hex string; pinned for later restarts too), enemy count, player 1's chassis as `tank` (a name - scout, assault, ..., leviathan - the spelling maps and `--tank` use) or `tank_row` (0-11, the sheet order), `players` (1 to 8 - how many seats the round holds, kept for later restarts; the keyboard drives the first two and the rest stand idle in a local round, and `tank2`/`tank2_row` pin seat 1's chassis the way `tank` pins seat 0's), the map: `map` (a path to a TOML under maps/) or `map_toml` (the map's TOML text inline - see `map_get` for the format; the round keeps its current map when neither is given), and the level: `mission` (protect|hunt|destroy), `spawn` (band|waves) with `waves`/`wave_size`/`wave_growth`/`tier_start`/`tier_end` (light|medium|heavy|super) - each pinned for later restarts too, overriding the map's own [mission]/[spawn] tables. `intro: true` starts the round frozen behind the mission banner (off by default so `step` counts play frames). Same seed + same steps replays bit-for-bit.",
+        schema: r#"{"type":"object","properties":{"seed":{"type":["integer","string"]},"enemies":{"type":"integer","minimum":0,"maximum":31,"description":"Band plan enemy count; 0 is a sandbox round that never ends by wreck count"},"tank":{"type":"string","enum":["scout","assault","breaker","longbow","flak","wraith","warden","ravager","glacier","obelisk","titan","leviathan"],"description":"Player 1's chassis by name (or tank_row)"},"tank_row":{"type":"integer","minimum":0,"maximum":11},"players":{"type":"integer","minimum":1,"maximum":8,"description":"Seats the round holds; enemies count from the slot after them"},"tank2":{"type":"string","enum":["scout","assault","breaker","longbow","flak","wraith","warden","ravager","glacier","obelisk","titan","leviathan"],"description":"Player 2's chassis by name (or tank2_row)"},"tank2_row":{"type":"integer","minimum":0,"maximum":11},"map":{"type":"string","description":"Path to a map .toml, relative to the game's working directory"},"map_toml":{"type":"string","description":"Map TOML text, e.g. `version = 1\ntanks = 4\ncells.\"20,8\" = { kind = \"wall\", material = \"iron\" }`"},"mission":{"type":"string","enum":["protect","hunt","destroy"]},"spawn":{"type":"string","enum":["band","waves"]},"waves":{"type":"integer","minimum":1},"wave_size":{"type":"integer","minimum":1},"wave_growth":{"type":"integer","minimum":0},"tier_start":{"type":"string","enum":["light","medium","heavy","super"]},"tier_end":{"type":"string","enum":["light","medium","heavy","super"]},"intro":{"type":"boolean"}}}"#,
         read_only: false,
         destructive: true,
     },
     ToolSpec {
         name: "map_get",
-        description: "The current map as TOML text (plus name, cell count, default tank count) - edit it and hand it back through `restart {map_toml}`. Format: `version = 1`, optional `tanks = N` (default enemy count), optional `tank = \"titan\"` / `tank2 = \"scout\"` (the players' chassis), optional `theme = \"grass\"|\"desert\"` (the look - ground tileset and tall-grass sheet, grass when absent), and one `cells.\"col,row\"` entry per occupied 32 px grid cell (col/row from 0 at the top-left; the field is the map's optional `size = [cols, rows]`, 34 x 17 = 1088x544 when absent): `{ kind = \"wall\", material = \"brick\"|\"iron\"|\"wood\"|\"glass\" }`, `{ kind = \"sandbag\" }` / `{ kind = \"barrel\" }` / `{ kind = \"fence\" }` (destructible props: shots sometimes pass over sandbags, barrels explode and chain, fences snap; tanks ram all three), `{ kind = \"barrel\", drum = \"oil\"|\"fuel\" }` (a pinned drum kind: oil leaves a burning pool, fuel goes off harder and launches when another blast sets it off; without `drum` the kind is rolled), `{ kind = \"oil\" }` (an oil trail cell: not solid, a fuse on the ground - a blast or a burning neighbour lights it and the fire runs along it, setting off any drum it reaches), `{ kind = \"tree\" }` / `{ kind = \"pine\" }` (destructible trees, solid like a prop but drawn larger than their cell; they often catch fire when killed and a tank can flatten one by driving into it), `{ kind = \"tall_grass\" }` (not solid - cover a tank hides in, enemies cannot shoot what is standing in it), `{ kind = \"road\" }`, `{ kind = \"water\" }` (a river where it is one cell wide, a lake where it is wider; a lake's open middle is deep - hulls cannot enter, shots fly over - and every other water cell is a ford that slows a hull and, in a north-south stream, carries it downstream; fire never lights on water, frogs hop toward it), `{ kind = \"frog\" }` (one), `{ kind = \"start\" }` (player 1, one), `{ kind = \"start2\" }` (player 2 in a two-player round, one, optional - placed beside player 1 when absent), `{ kind = \"pickup\", pickup = \"health\"|\"ammo\"|\"laser\"|\"minigun\"|\"plasma\"|\"speedup\"|\"shield\"|\"flamethrower\"|\"frog_health\" }` (the flamethrower is player-only: enemies drive over its fuel tank; the frog health pack fully heals the collector's own frog and is left on the ground by a tank whose frog is already at full health). Iron is indestructible, the rest can be shot away. Border walls and enemy spawns are added by the game on top.",
+        description: "The current map as TOML text (plus name, cell count, default tank count) - edit it and hand it back through `restart {map_toml}`. Format: `version = 1`, optional `tanks = N` (default enemy count), optional `tank = \"titan\"` / `tank2 = \"scout\"` (the players' chassis), optional `theme = \"grass\"|\"desert\"` (the look - ground tileset and tall-grass sheet, grass when absent), and one `cells.\"col,row\"` entry per occupied 32 px grid cell (col/row from 0 at the top-left; the field is the map's optional `size = [cols, rows]`, 34 x 17 = 1088x544 when absent): `{ kind = \"wall\", material = \"brick\"|\"iron\"|\"wood\"|\"glass\" }`, `{ kind = \"sandbag\" }` / `{ kind = \"barrel\" }` / `{ kind = \"fence\" }` (destructible props: shots sometimes pass over sandbags, barrels explode and chain, fences snap; tanks ram all three), `{ kind = \"barrel\", drum = \"oil\"|\"fuel\" }` (a pinned drum kind: oil leaves a burning pool, fuel goes off harder and launches when another blast sets it off; without `drum` the kind is rolled), `{ kind = \"oil\" }` (an oil trail cell: not solid, a fuse on the ground - a blast or a burning neighbour lights it and the fire runs along it, setting off any drum it reaches), `{ kind = \"tree\" }` / `{ kind = \"pine\" }` (destructible trees, solid like a prop but drawn larger than their cell; they often catch fire when killed and a tank can flatten one by driving into it), `{ kind = \"tall_grass\" }` (not solid - cover a tank hides in, enemies cannot shoot what is standing in it), `{ kind = \"road\" }`, `{ kind = \"water\" }` (a river where it is one cell wide, a lake where it is wider; a lake's open middle is deep - hulls cannot enter, shots fly over - and every other water cell is a ford that slows a hull and, in a north-south stream, carries it downstream; fire never lights on water, frogs hop toward it), `{ kind = \"frog\" }` (one), `{ kind = \"start\" }` (player 1, one), `{ kind = \"start2\" }` (player 2, one, optional - placed beside player 1 when absent, as every seat past the second always is), `{ kind = \"pickup\", pickup = \"health\"|\"ammo\"|\"laser\"|\"minigun\"|\"plasma\"|\"speedup\"|\"shield\"|\"flamethrower\"|\"frog_health\" }` (the flamethrower is player-only: enemies drive over its fuel tank; the frog health pack fully heals the collector's own frog and is left on the ground by a tank whose frog is already at full health). Iron is indestructible, the rest can be shot away. Border walls and enemy spawns are added by the game on top.",
         schema: NO_PARAMS,
         read_only: true,
         destructive: false,
     },
     ToolSpec {
         name: "lint",
-        description: "Run the static map linter (src/maplint.rs, the check CI runs on every shipped map) and reply with its findings. `source: builder` lints the builder's canvas as it stands (the default in build mode - validate a map authored with `builder_paint` before `play`); `source: round` lints the map the current round was built from, fresh (the default in play mode - not the round's current, partly shot-away terrain). The map is set up as a headless round with the session's seed, player count and CLI/restart overrides, so the check sees what PLAY would run. Each finding has `severity` (error|warning|info), `kind` (a tag such as gated-pickup, spawn-band-too-tight, gate-blocked, player2-unreachable) and `message`; `errors`/`warnings` count them. Two limits: the spawn-band check reads the map's own `spawn` table (not a `restart {spawn}` override), and the player-2 kinds appear only in a two-player session.",
+        description: "Run the static map linter (src/maplint.rs, the check CI runs on every shipped map) and reply with its findings. `source: builder` lints the builder's canvas as it stands (the default in build mode - validate a map authored with `builder_paint` before `play`); `source: round` lints the map the current round was built from, fresh (the default in play mode - not the round's current, partly shot-away terrain). The map is set up as a headless round with the session's seed, player count and CLI/restart overrides, so the check sees what PLAY would run. Each finding has `severity` (error|warning|info), `kind` (a tag such as gated-pickup, spawn-band-too-tight, gate-blocked, player2-unreachable) and `message`; `errors`/`warnings` count them. Two limits: the spawn-band check reads the map's own `spawn` table (not a `restart {spawn}` override), and the player-2 kinds appear only in a session with more than one seat.",
         schema: r#"{"type":"object","properties":{"source":{"type":"string","enum":["builder","round"],"description":"builder = the canvas (default in build mode); round = the round's map (default in play mode)"}}}"#,
         read_only: true,
         destructive: false,
@@ -326,7 +326,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "players",
-        description: "The players button in play mode (docs/two-players.md). Without `count`: press it - opens the 'How many players?' dialog (the round is frozen until it is answered) or closes an open one. With `count` (1 or 2): answer it - a different count restarts the round at once in that mode, frozen in lockstep like `restart`; the current count just closes the dialog. The count sticks for the session (later `restart`s, PLAY from the builder). Two players: slot 1 is player 2 and enemies count from 2; `step`/`input` take `p2_*` fields for it. Replies like `mode`.",
+        description: "The players button in play mode (docs/two-players.md). Without `count`: press it - opens the 'How many players?' dialog (the round is frozen until it is answered) or closes an open one. With `count` (1 to 8): answer it - a different count restarts the round at once with that many seats, frozen in lockstep like `restart`; the current count just closes the dialog. The dialog itself only offers one and two - the couch counts; the rest are a room's, and reach the round through this tool or `restart`. The count sticks for the session (later `restart`s, PLAY from the builder). Two seats: slot 1 is player 2 and enemies count from 2; `step`/`input` take `p2_*` fields for it. Past two, the extra seats stand idle and the bar keeps the two-player readout. Replies like `mode`.",
         schema: r#"{"type":"object","properties":{"count":{"type":"integer","minimum":1,"maximum":2,"description":"Answer the dialog with this player count"}}}"#,
         read_only: false,
         destructive: true,
@@ -1271,7 +1271,7 @@ impl DevServer {
             game.players = n
                 .as_u64()
                 .and_then(|n| PlayerCount::from_count(n as usize))
-                .ok_or_else(|| format!("players must be 1 or 2, got {n}"))?;
+                .ok_or_else(|| format!("players must be 1 to {}, got {n}", crate::MAX_SEATS))?;
         }
         let enum_param = |key: &str| -> Result<Option<String>, String> {
             match params.get(key) {
@@ -1395,7 +1395,7 @@ impl DevServer {
                         }
                         Ok(mode_json(session))
                     }
-                    None => Err(format!("count must be 1 or 2, got {v}")),
+                    None => Err(format!("count must be 1 to {}, got {v}", crate::MAX_SEATS)),
                 },
             },
             "play" => {
@@ -1515,9 +1515,9 @@ impl DevServer {
                     let p = layout.to_field(point);
                     let before = session.game.players;
                     if rects.one.contains(p) {
-                        session.answer_players(PlayerCount::One);
+                        session.answer_players(PlayerCount::ONE);
                     } else if rects.two.contains(p) {
-                        session.answer_players(PlayerCount::Two);
+                        session.answer_players(PlayerCount::TWO);
                     } else if !rects.panel.contains(p) {
                         session.close_players_dialog();
                     }
@@ -1608,16 +1608,13 @@ impl DevServer {
                 let before = session.game.players;
                 match key {
                     Some("1") => {
-                        session.answer_players(PlayerCount::One);
+                        session.answer_players(PlayerCount::ONE);
                     }
                     Some("2") => {
-                        session.answer_players(PlayerCount::Two);
+                        session.answer_players(PlayerCount::TWO);
                     }
                     Some("enter") => {
-                        let other = match before {
-                            PlayerCount::One => PlayerCount::Two,
-                            PlayerCount::Two => PlayerCount::One,
-                        };
+                        let other = if before == PlayerCount::ONE { PlayerCount::TWO } else { PlayerCount::ONE };
                         session.answer_players(other);
                     }
                     Some("escape") | Some("tab") => session.close_players_dialog(),
@@ -2474,7 +2471,7 @@ mod tests {
         assert!(server.lockstep());
         assert!(s.playing());
         assert_eq!(s.game.frame(), 0);
-        assert!(s.game.player2.is_some());
+        assert!(s.game.seat(1).is_some());
         let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
         assert_eq!(st["players"], 2);
         assert_eq!(st["enemies_alive"], 4, "both players excluded from the enemy count");
@@ -2507,17 +2504,23 @@ mod tests {
         ask(&mut server, &tx, &mut s, "players", json!({})).unwrap();
         let m = ask(&mut server, &tx, &mut s, "key", json!({ "key": "enter" })).unwrap();
         assert_eq!(m["players"], 1, "{m}");
-        assert!(s.game.player2.is_none());
+        assert!(s.game.seat(1).is_none());
         ask(&mut server, &tx, &mut s, "players", json!({})).unwrap();
         let m = ask(&mut server, &tx, &mut s, "key", json!({ "key": "2" })).unwrap();
         assert_eq!(m["players"], 2, "{m}");
-        assert!(ask(&mut server, &tx, &mut s, "players", json!({ "count": 3 })).is_err());
+        // Past the couch's two: the round seats up to `MAX_SEATS`, and
+        // nothing outside that range.
+        let m = ask(&mut server, &tx, &mut s, "players", json!({ "count": 4 })).unwrap();
+        assert_eq!(m["players"], 4, "{m}");
+        assert!(s.game.seat(3).is_some());
+        assert!(ask(&mut server, &tx, &mut s, "players", json!({ "count": 0 })).is_err());
+        assert!(ask(&mut server, &tx, &mut s, "players", json!({ "count": crate::MAX_SEATS + 1 })).is_err());
         // restart takes the count too, and clears an open dialog.
         ask(&mut server, &tx, &mut s, "players", json!({})).unwrap();
         let st = ask(&mut server, &tx, &mut s, "restart", json!({ "players": 1, "seed": 3 })).unwrap();
         assert_eq!(st["players"], 1, "{st}");
         assert_eq!(st["players_dialog_open"], false);
-        assert!(s.game.player2.is_none());
+        assert!(s.game.seat(1).is_none());
         // Refused in build mode, like the other game-only tools.
         enter_build(&mut server, &tx, &mut s);
         assert!(ask(&mut server, &tx, &mut s, "players", json!({ "count": 2 })).is_err());

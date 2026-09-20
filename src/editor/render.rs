@@ -717,7 +717,7 @@ fn draw_enemy_ring(d: &mut impl RaylibDraw, center: Position, radius: f32) {
 /// one, under the start markers: a `start` cell reads as "a tank, the blue
 /// one" and `start2` as the pink one, the colours the tanks will be.
 fn draw_player_ring(d: &mut impl RaylibDraw, center: Position, radius: f32, player: usize) {
-    let c = crate::tank::TEAM_COLORS[player & 1];
+    let c = crate::tank::team_color(player as u8);
     d.draw_ring(center, radius * 0.75, radius, 0.0, 360.0, 24, Color::new(c.r, c.g, c.b, 220));
     d.draw_circle_v(center, radius * 0.75, Color::new(c.r, c.g, c.b, 50));
 }

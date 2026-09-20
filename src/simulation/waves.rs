@@ -246,8 +246,8 @@ impl Game {
             let t = tuning();
             (t.wave_gate_inward_cells, t.wave_gate_min_player_dist)
         };
-        // Both players when there are two; `avoid[0]` stays player 1, the
-        // one the connectivity preference below routes to.
+        // Every seat that holds a tank; `avoid[0]` stays player 1, the one
+        // the connectivity preference below routes to.
         let mut avoid: Vec<Position> = self
             .players()
             .into_iter()
@@ -326,9 +326,17 @@ impl Game {
             let short_side = f.width.min(f.height);
             (short_side * t.enemy_spawn_margin_min, short_side * t.enemy_spawn_margin_max)
         };
-        let player = self.player.expect("player entity spawned in init");
+        let player = self.player().expect("player entity spawned in init");
         let player_pos = with_tank(&self.world, player, |t| t.position);
-        let player2_pos = self.player2.map(|p| with_tank(&self.world, p, |t| t.position));
+        // Every seat past the first, in index order - the same clearance
+        // the band placement at `init` keeps from them.
+        let seats: Vec<Position> = self
+            .players()
+            .into_iter()
+            .flatten()
+            .skip(1)
+            .map(|p| with_tank(&self.world, p, |t| t.position))
+            .collect();
         let size = Tank::default().size();
         let (clear, enemy_clear) = (size * 2.0, size * 1.5);
         let grid = self.nav_grid(f.width, f.height);
@@ -337,7 +345,7 @@ impl Game {
         let others: Vec<Position> = self.world.query::<&Tank>().iter().map(|t| t.position).collect();
         let pos = battlefield::sample_clear_position(&mut f.rng, f.width, f.height, margin_min, |pos| {
             battlefield::enemy_spawn_legal(pos, f.width, f.height, margin_min, margin_max, player_pos, clear, &grid, &walls)
-                && player2_pos.is_none_or(|p| pos.distance_to(p) >= clear)
+                && seats.iter().all(|&p| pos.distance_to(p) >= clear)
                 && others.iter().all(|&p| pos.distance_to(p) >= enemy_clear)
         })
         .unwrap_or_else(|| {

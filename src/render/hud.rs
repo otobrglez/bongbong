@@ -96,11 +96,12 @@ impl Slots {
         5 * CHAR_W_SMALL
     }
 
+    /// The bar has two tables: one seat's and two. A round with more seats
+    /// than that lays the bar out from the two-player table and shows the
+    /// first two seats - an N-seat readout is its own lane
+    /// (docs/online-coop-prd.md §4.11).
     fn for_players(players: PlayerCount) -> &'static Slots {
-        match players {
-            PlayerCount::One => &SLOTS_ONE,
-            PlayerCount::Two => &SLOTS_TWO,
-        }
+        if players.count() < 2 { &SLOTS_ONE } else { &SLOTS_TWO }
     }
 }
 
@@ -275,7 +276,7 @@ fn draw_pair_underlines_sized(d: &mut impl RaylibDraw, x: i32, y: i32, h: i32, d
 /// player's, while the warning and critical colours still win.
 fn team_tinted(color: Color, player: usize) -> Color {
     let plain = color.r == TEXT.r && color.g == TEXT.g && color.b == TEXT.b && color.a == TEXT.a;
-    if plain { TEAM_COLORS[player & 1] } else { color }
+    if plain { TEAM_COLORS[player % TEAM_COLORS.len()] } else { color }
 }
 
 /// The outline marking which slot the trigger fires: 2 px, inset one
@@ -323,14 +324,13 @@ pub fn draw_players_button(d: &mut impl RaylibDraw, panel: Rect, players: Player
     d.draw_rectangle_lines_ex(Rectangle::new(r.x, r.y + 2.0, r.width, r.height - 4.0), 2.0, outline);
     let glyph = 14;
     let gy = (r.y + (r.height - glyph as f32) / 2.0) as i32;
-    match players {
-        PlayerCount::One => draw_tank_glyph(d, (r.x + (r.width - glyph as f32) / 2.0) as i32, gy, TEAM_COLORS[0]),
-        PlayerCount::Two => {
-            let gap = 6;
-            let x = (r.x + (r.width - (2 * glyph + gap) as f32) / 2.0) as i32;
-            draw_tank_glyph(d, x, gy, TEAM_COLORS[0]);
-            draw_tank_glyph(d, x + glyph + gap, gy, TEAM_COLORS[1]);
-        }
+    if players.count() < 2 {
+        draw_tank_glyph(d, (r.x + (r.width - glyph as f32) / 2.0) as i32, gy, TEAM_COLORS[0]);
+    } else {
+        let gap = 6;
+        let x = (r.x + (r.width - (2 * glyph + gap) as f32) / 2.0) as i32;
+        draw_tank_glyph(d, x, gy, TEAM_COLORS[0]);
+        draw_tank_glyph(d, x + glyph + gap, gy, TEAM_COLORS[1]);
     }
 }
 
@@ -399,7 +399,7 @@ pub fn draw_players_dialog(d: &mut impl RaylibDraw, field: Rect, players: Player
     let r = players_dialog_rects(field);
     draw_dialog_panel(d, r.panel, "How many players?", "P1 arrows + Space    P2 WASD + L.Shift");
     let live_fill = Some(Color::new(255, 255, 255, 40));
-    let one_live = players == PlayerCount::One;
+    let one_live = players == PlayerCount::ONE;
     draw_dialog_button(d, r.one, "1 PLAYER", if one_live { TEXT } else { BUILD_COLOR }, one_live.then_some(live_fill).flatten());
     draw_dialog_button(d, r.two, "2 PLAYERS", if one_live { BUILD_COLOR } else { TEXT }, (!one_live).then_some(live_fill).flatten());
 }

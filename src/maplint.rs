@@ -134,13 +134,13 @@ pub enum LintKind {
     /// of the garage" opening - and an error when permanent walls seal it
     /// for good.
     StartPenned,
-    /// Two-player rounds: player 2's spawn (the `start2` cell, or the
-    /// fallback beside player 1) is not in the playfield, so the two
-    /// players start in separate regions.
+    /// Rounds with more than one seat: a seat past player 1 (the `start2`
+    /// cell, or a fallback beside player 1) is not in the playfield, so
+    /// the seats start in separate regions.
     Player2Unreachable,
     /// Two-player rounds: the `start2` cell sits inside the clearance
-    /// `Game::init` keeps between the two players, so the game ignores it
-    /// and places player 2 at the nearest open cell instead.
+    /// `Game::init` keeps between the seats, so the game ignores it and
+    /// places player 2 at the nearest open cell instead.
     PlayersTooClose,
     /// Exactly one portal on the map: a network needs two, so this one is
     /// inert - it neither teleports nor draws in the round.
@@ -331,7 +331,7 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
     // The player's actual spawned position: `init` already resolved the
     // map's `Start` cell (or the center-fallback), so reading it back
     // means zero duplicated spawn logic.
-    let player_entity = game.player.expect("lint runs on an initialized game");
+    let player_entity = game.player().expect("lint runs on an initialized game");
     let (player_pos, player_size) = {
         let mut query = game.world.query::<(Entity, &Tank)>();
         query
@@ -341,17 +341,23 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
             .expect("player tank exists after init")
     };
 
-    // Player 2, in a two-player round: the same read-back, so the lint
-    // sees the fallback placement `init` really made.
-    let player2 = game.player2.map(|entity| {
-        let mut query = game.world.query::<(Entity, &Tank)>();
-        query
-            .iter()
-            .find(|(e, _)| *e == entity)
-            .map(|(_, tank)| (tank.position, tank.size()))
-            .expect("player 2 tank exists after init")
-    });
-    let player_positions: Vec<Position> = std::iter::once(player_pos).chain(player2.map(|(p, _)| p)).collect();
+    // Every seat past the first: the same read-back, so the lint sees the
+    // fallback placements `init` really made.
+    let others: Vec<Position> = game
+        .players()
+        .into_iter()
+        .flatten()
+        .skip(1)
+        .map(|entity| {
+            let mut query = game.world.query::<(Entity, &Tank)>();
+            query
+                .iter()
+                .find(|(e, _)| *e == entity)
+                .map(|(_, tank)| tank.position)
+                .expect("a seat's tank exists after init")
+        })
+        .collect();
+    let player_positions: Vec<Position> = std::iter::once(player_pos).chain(others.iter().copied()).collect();
 
     // The playfield is the largest open region of intact terrain - the
     // battlefield the AI roams, whichever cell the author put the start
@@ -413,7 +419,7 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
     let frog_pos = game.world.query::<&Frog>().iter().next().map(|f| f.position);
 
     let mut findings = Vec::new();
-    check_players(game, &cells, start, player_pos, player_size, player2, &mut findings);
+    check_players(game, &cells, start, player_pos, player_size, &others, &mut findings);
     check_reachability(game, &cells, &breach_cells, frog_pos, &mut findings);
     check_enemy_frog(game, &cells, &mut findings);
     check_gates(game, &grid, width, height, &mut findings);
@@ -452,16 +458,16 @@ struct StartStatus {
 /// The players' starts: a map with no `start` cell is a warning (the
 /// game copes, but the author most likely meant to place one); a start
 /// outside the playfield is `StartPenned`, a warning while the pen is
-/// destructible and an error once it is permanent; in a two-player round
-/// player 2's spawn has to share the playfield, and the two spawns have
-/// to leave a tank's width between them.
+/// destructible and an error once it is permanent; every seat past the
+/// first has to share the playfield with player 1, and the two authored
+/// starts have to leave a tank's width between them.
 fn check_players(
     game: &Game,
     cells: &Cells,
     start: StartStatus,
     player_pos: Position,
     player_size: f32,
-    player2: Option<(Position, f32)>,
+    others: &[Position],
     findings: &mut Vec<LintFinding>,
 ) {
     if game.map.start_cell().is_none() {
@@ -490,17 +496,20 @@ fn check_players(
             ),
         });
     }
-    let Some((pos2, _)) = player2 else { return };
-    let (col, row) = cells.cell_of(pos2);
-    if !cells.touches_playfield((col, row)) {
-        findings.push(LintFinding {
-            severity: LintSeverity::Error,
-            kind: LintKind::Player2Unreachable,
-            message: format!(
-                "player 2 spawns at ({:.0},{:.0}) - nav cell ({col},{row}) - outside the playfield: the two players start in separate regions",
-                pos2.x, pos2.y
-            ),
-        });
+    for (i, &pos) in others.iter().enumerate() {
+        let (col, row) = cells.cell_of(pos);
+        if !cells.touches_playfield((col, row)) {
+            findings.push(LintFinding {
+                severity: LintSeverity::Error,
+                kind: LintKind::Player2Unreachable,
+                message: format!(
+                    "player {} spawns at ({:.0},{:.0}) - nav cell ({col},{row}) - outside the playfield: the seats start in separate regions",
+                    i + 2,
+                    pos.x,
+                    pos.y
+                ),
+            });
+        }
     }
     // The same clearance `Game::init` demands of a `start2` cell before
     // it honours it (`tank.size() * 2.0`), measured on the map's cells.
@@ -1142,7 +1151,7 @@ mod map_lint_tests {
         let (w, h) = map.field_size();
         let mut findings = lint(&init_game(map.clone()), w, h);
         findings.extend(
-            lint(&init_game_two(map), w, h)
+            lint(&init_game_seats(map, 2), w, h)
                 .into_iter()
                 .filter(|f| matches!(f.kind, LintKind::Player2Unreachable | LintKind::PlayersTooClose)),
         );
@@ -1161,12 +1170,13 @@ mod map_lint_tests {
         game
     }
 
-    /// The same round with two players, for the player-2 checks.
-    fn init_game_two(map: MapFile) -> Game {
+    /// The same round with `seats` seats, for the checks that only fire
+    /// once a map has to seat more than player 1.
+    fn init_game_seats(map: MapFile, seats: usize) -> Game {
         let mut game = Game::default();
         game.seed_override = Some(0xB0B5);
         game.enemy_count_override = Some(4);
-        game.players = crate::simulation::PlayerCount::Two;
+        game.players = crate::simulation::PlayerCount::from_count(seats).expect("a legal seat count");
         let (w, h) = map.field_size();
         game.map = map;
         game.init(w, h);
@@ -1291,6 +1301,39 @@ mod map_lint_tests {
         assert!(!has(&f, LintKind::Player2Unreachable), "the fallback beside player 1 shares its playfield");
         assert!(!has(&f, LintKind::PlayersTooClose));
         assert!(errors(&f).is_empty());
+    }
+
+    /// The seat check generalises: every shipped map seats all eight
+    /// without pushing one outside the playfield (the fallback walks
+    /// outward from player 1 until it finds a cell a tank can stand in,
+    /// so only an authored start can land off the playfield), and an
+    /// authored `start2` sealed off still reports - naming the seat by
+    /// number, with the seats after it placed by the fallback and clean.
+    #[test]
+    fn the_seat_checks_generalise_past_player_two() {
+        for path in SUPPORTED_MAPS {
+            let map = MapFile::load(std::path::Path::new(path)).expect("supported map must load");
+            let (w, h) = map.field_size();
+            for seats in 1..=crate::MAX_SEATS {
+                let f = lint(&init_game_seats(map.clone(), seats), w, h);
+                let penned: Vec<&str> =
+                    f.iter().filter(|f| f.kind == LintKind::Player2Unreachable).map(|f| f.message.as_str()).collect();
+                assert!(penned.is_empty(), "{path} with {seats} seats: {penned:?}");
+            }
+        }
+
+        let mut map = base_map();
+        map.set_cell(3, 3, CellObject::Start2);
+        for (c, r) in [(2, 2), (3, 2), (4, 2), (2, 3), (4, 3), (2, 4), (3, 4), (4, 4)] {
+            wall(&mut map, c, r);
+        }
+        let (w, h) = map.field_size();
+        let f = lint(&init_game_seats(map, 4), w, h);
+        dump("four seats, sealed start2", &f);
+        let penned: Vec<&str> =
+            f.iter().filter(|f| f.kind == LintKind::Player2Unreachable).map(|f| f.message.as_str()).collect();
+        assert_eq!(penned.len(), 1, "only the authored start is off the playfield: {penned:?}");
+        assert!(penned[0].starts_with("player 2 "), "the seat is named by number: {penned:?}");
     }
 
     fn errors(findings: &[LintFinding]) -> Vec<&LintFinding> {
