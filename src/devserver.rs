@@ -92,10 +92,11 @@ pub const GAME_ONLY_TOOLS: &[&str] = &[
 /// `events`, `history`, `nav_grid`, `field`, `map_get`, `lint`,
 /// `overlays`, `screenshot`, `mode`, `builder_files` and the `tuning_*`
 /// tools - describes the online round instead (`Session::shown`), and
-/// `key {escape}` gives the seat up.
+/// `key {escape}` gives the seat up, as does a `click` on the bar's
+/// `LEAVE` button - the one thing a click has to press in this mode.
 pub const ONLINE_REFUSED_TOOLS: &[&str] = &[
     "step", "input", "pause", "resume", "restart", "teleport", "set_tank", "kill", "spawn_enemy", "players", "play",
-    "build", "click", "builder_tool", "builder_paint", "builder_undo", "builder_redo", "builder_settings",
+    "build", "builder_tool", "builder_paint", "builder_undo", "builder_redo", "builder_settings",
     "builder_map", "builder_save",
 ];
 
@@ -1552,10 +1553,14 @@ impl DevServer {
                 };
                 session.update_lobby(&input, layout.field, crate::PHYSICS_FIXED_DT);
             }
-            // An online round is the room's: the replica has nothing on
-            // it to press, and the round is left to the keyboard and the
-            // touch scheme.
-            Driver::Online => {}
+            // An online round is the room's: the bar carries the one
+            // button that is this window's to press, and the round
+            // itself is left to the keyboard and the touch scheme.
+            Driver::Online => {
+                if !right && crate::hud::leave_button_rect(layout.panel).contains(point) {
+                    session.leave_online();
+                }
+            }
             Driver::Build => {
                 let press = BuilderInput {
                     pointer: Some(point),
@@ -3271,6 +3276,25 @@ cells."1,1" = { kind = "wall" }"#;
         server.before_frame(&mut s, W, H);
         server.advance(&mut s.game, Input::default(), 1, W, H, &mut |_| {});
         assert_eq!(rx.recv().unwrap().unwrap()["frame"], 1);
+    }
+
+    /// The bar's own way out of a room: a `click` on `LEAVE` lands on
+    /// the hit test a finger lands on, and comes back to the local round
+    /// the way Esc does.
+    #[test]
+    fn a_click_on_leave_gives_the_seat_up() {
+        let (mut s, _room) = online(53);
+        let (mut server, tx) = DevServer::headless();
+        let layout = Layout::for_field(W, H);
+        let r = crate::hud::leave_button_rect(layout.panel);
+        // A press anywhere else on the replica does nothing.
+        let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": 10.0, "y": 200.0 })).unwrap();
+        assert_eq!(m["mode"], "online", "{m}");
+        let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": r.x + r.width / 2.0, "y": r.y + r.height / 2.0 }))
+            .unwrap();
+        assert_eq!(m["mode"], "play", "{m}");
+        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert_eq!(st["round"]["kind"], "local", "{st}");
     }
 
     #[test]

@@ -237,7 +237,7 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
     assert!(welcome.map_toml.contains("cells"), "the map travels in the welcome");
     assert_eq!(welcome.snapshot.tick, 0, "a waiting room has no round yet");
 
-    // A second player joins by code; a wrong pod and a third seat are refused.
+    // A second player joins by code; a join for another pod is refused.
     let mut second = connect(addr).await;
     send(&mut second, &join("second", "tok-second", &code)).await;
     let welcome2 = expect_welcome(&mut second).await;
@@ -256,9 +256,6 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
     send(&mut third, &join("third", "tok-third", &other_pod)).await;
     let refused = expect_lobby_error(&mut third).await;
     assert!(refused.contains("pod D") && refused.contains("pod C"), "names the mismatch: {refused}");
-    send(&mut third, &join("third", "tok-third", &code)).await;
-    let refused = expect_lobby_error(&mut third).await;
-    assert!(refused.contains(&format!("{SEATS_PLAYABLE} seats")), "{refused}");
     drop(third);
 
     // Ready, start: both get Started and a fresh Welcome with the round.
@@ -407,6 +404,109 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
     assert!(refused.contains("draining"), "{refused}");
     let (_, metrics) = http_get(addr, "/metrics").await;
     assert!(metrics.contains("bongbong_draining 1"), "{metrics}");
+}
+
+/// A room seats a whole team: every seat up to `SEATS_PLAYABLE` is
+/// handed out in order, and the one after it is refused by name.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_room_fills_to_the_seats_it_takes_and_refuses_the_next() {
+    assert_eq!(SEATS_PLAYABLE, MAX_SEATS, "a room takes the seats the simulation holds");
+    let (addr, _hub) = start_server().await;
+    let mut host = connect(addr).await;
+    send(&mut host, &create(7)).await;
+    let code = expect(&mut host, "the code", |m| match m {
+        Msg::Lobby(Lobby::RoomCreated { code }) => Ok(code),
+        other => Err(other),
+    })
+    .await;
+    let _ = expect_welcome(&mut host).await;
+    let mut seated = vec![host];
+    for i in 1..SEATS_PLAYABLE {
+        let mut ws = connect(addr).await;
+        send(&mut ws, &join(&format!("p{i}"), &format!("tok-p{i}"), &code)).await;
+        let w = expect_welcome(&mut ws).await;
+        assert_eq!(w.seat as usize, i, "seats are handed out in order");
+        assert_eq!(w.roster.len(), i + 1);
+        seated.push(ws);
+    }
+    let mut over = connect(addr).await;
+    send(&mut over, &join("over", "tok-over", &code)).await;
+    let refused = expect_lobby_error(&mut over).await;
+    assert!(refused.contains("full") && refused.contains(&format!("{SEATS_PLAYABLE} seats")), "{refused}");
+}
+
+/// Four seats, one round: the room starts with four players, every
+/// client is welcomed into it, and every client's replica draws exactly
+/// the tanks the wire carries as the stream goes on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn four_seats_play_one_round_and_every_replica_follows_the_wire() {
+    const SEATS: usize = 4;
+    let (addr, _hub) = start_server().await;
+    let mut host = connect(addr).await;
+    send(&mut host, &create(0xF00D)).await;
+    let code = expect(&mut host, "the code", |m| match m {
+        Msg::Lobby(Lobby::RoomCreated { code }) => Ok(code),
+        other => Err(other),
+    })
+    .await;
+    let _ = expect_welcome(&mut host).await;
+
+    let mut clients = vec![host];
+    for seat in 1..SEATS as u8 {
+        let mut ws = connect(addr).await;
+        send(&mut ws, &join(&format!("guest{seat}"), &format!("tok-{seat}"), &code)).await;
+        let w = expect_welcome(&mut ws).await;
+        assert_eq!(w.seat, seat, "seats are handed out in order");
+        send(&mut ws, &Msg::Lobby(Lobby::Ready)).await;
+        clients.push(ws);
+    }
+    // The host asks for the round once the room says everyone else is
+    // ready, which is the condition the server checks itself.
+    expect(&mut clients[0], "a roster of four, all of them ready", |m| match m {
+        Msg::Lobby(Lobby::Roster { seats, .. }) if seats.len() == SEATS && seats.iter().all(|s| s.ready || s.seat == 0) => {
+            Ok(())
+        }
+        other => Err(other),
+    })
+    .await;
+    send(&mut clients[0], &Msg::Lobby(Lobby::Start)).await;
+
+    let span = Duration::from_millis(800);
+    let mut following = Vec::new();
+    for (seat, mut ws) in clients.into_iter().enumerate() {
+        expect(&mut ws, "started", |m| match m {
+            Msg::Lobby(Lobby::Started) => Ok(()),
+            other => Err(other),
+        })
+        .await;
+        let w = expect_welcome(&mut ws).await;
+        assert_eq!(w.seat as usize, seat);
+        assert_eq!(w.roster.len(), SEATS, "the whole team travels in the welcome");
+        let ids: Vec<u16> = w.snapshot.tanks.iter().map(|t| t.id).collect();
+        assert!(ids.starts_with(&[0, 1, 2, 3]), "a tank per seat leads the roster: {ids:?}");
+        let replica = apply::welcome(&w).expect("a replica from the welcome");
+        assert_eq!(replica.players.count(), SEATS, "the round started with a seat per client");
+        let baseline = w.snapshot;
+        following.push(tokio::spawn(async move {
+            // Every seat drives for a moment, so the wire carries four
+            // tanks that are not where they started.
+            let dir = 1 + (seat as u8 % 4);
+            for tick in 1..=10u32 {
+                send(&mut ws, &Msg::Intent(IntentMsg { tick, move_dir: dir, face: dir, fire: false })).await;
+            }
+            follow(&mut ws, baseline, Some(replica), span).await
+        }));
+    }
+    for (seat, task) in following.into_iter().enumerate() {
+        let stream = task.await.unwrap();
+        assert!(stream.deltas.len() >= 5, "seat {seat} saw {} deltas", stream.deltas.len());
+        assert_eq!(stream.fulls, 0, "seat {seat} kept up and never needed a full snapshot");
+        assert!(stream.compared >= 1, "seat {seat}'s replica was never held to the wire");
+        let ids: Vec<u16> = stream.baseline.tanks.iter().map(|t| t.id).collect();
+        for tank in 0..SEATS as u16 {
+            assert!(ids.contains(&tank), "seat {seat}: tank {tank} left the stream: {ids:?}");
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

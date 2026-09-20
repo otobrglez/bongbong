@@ -483,6 +483,12 @@ impl Session {
         match self.driver {
             Driver::Online => PlayChrome {
                 status: self.online.as_ref().map(AnyRound::status),
+                // The one button a room's round carries: the way back to
+                // the local one on a build with no Esc key.
+                leave_button: true,
+                // The bar is this seat's, whichever seat the room gave
+                // it; the others are the compact strip's.
+                seat: self.online.as_ref().and_then(AnyRound::seat),
                 // A room's round does not restart where it stands: the
                 // end screen counts down to the lobby it came from.
                 countdown_label: Some("Back to the lobby in"),
@@ -500,6 +506,8 @@ impl Session {
                 players_button: crate::TWO_PLAYERS_AVAILABLE,
                 online_button: crate::ONLINE_AVAILABLE,
                 restart_button: !crate::KEYBOARD_AVAILABLE,
+                leave_button: false,
+                seat: None,
                 leave_dialog: self.dialog,
                 players_dialog: self.players_dialog,
                 status: None,

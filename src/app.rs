@@ -11,8 +11,8 @@ use crate::ai::Intent;
 use crate::editor::{BuilderInput, CliOverrides, EditorTextures};
 use crate::render::game::{Effects, Textures};
 use crate::hud::{
-    leave_dialog_rects, mode_button_rect, online_button_rect, players_button_rect, players_dialog_rects,
-    restart_button_rect, BAR_FILL,
+    leave_button_rect, leave_dialog_rects, mode_button_rect, online_button_rect, players_button_rect,
+    players_dialog_rects, restart_button_rect, BAR_FILL,
 };
 use crate::lobby::LobbyInput;
 use crate::mode::{Driver, Session};
@@ -1220,10 +1220,13 @@ pub fn run(args: Args) {
                 session.update_lobby(&input, layout.field, dt);
             }
             Driver::Online => {
-                // A round belongs to its room: the bar's buttons are
-                // gone and Esc gives the seat back, which comes out at
-                // the local round exactly where it stood.
-                if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) {
+                // A round belongs to its room: the bar carries one
+                // button, `LEAVE`, and Esc does the same thing - the
+                // seat goes back and the window comes out at the local
+                // round exactly where it stood. A press on the bar is
+                // never a play input, so the hit test is safe here.
+                let left = pressed && leave_button_rect(layout.panel).contains(pointer);
+                if left || rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) {
                     session.leave_online();
                 }
             }

@@ -290,6 +290,53 @@ Variant B's 1440x720 does not fit a 1366x768 laptop. Two answers, in order:
    instead of the current non-uniform CSS stretch. Not needed for the
    sidebar itself.
 
+## Three tables: one seat, two, and a room
+
+The bar is laid out from one of three slot tables (`render/hud.rs`),
+picked by `hud::HudLayout` and gathered into one `HudModel`:
+
+| Layout | When | What the bar shows |
+| --- | --- | --- |
+| `One` | one seat | the row above: title, enemies, HP, shells, four weapon slots, three gauges |
+| `Two` | two on one couch | the same row with HP, shells and the weapon counts as `60|70` pairs, the SPEED and SHIELD gauges stacked |
+| `Compact` | three or more on a couch, or any room of two or more | one seat's whole block, then a chip per other seat |
+
+Which seat the block belongs to is the only thing the two couch tables
+and the compact one disagree about. On a couch the block is player 1's,
+because player 1 is whoever is holding the arrow keys. In a room the
+block is *this window's* seat, which is as likely to be seat 4 as seat 1 —
+that is why a room of two is compact rather than paired: pairing would
+put the local player's health on the right half of a `60|70` as often as
+the left.
+
+**The strip.** Every seat but the local one is a chip, `SEAT_CHIP_W`
+wide, at a fixed stride from the compact table's `seats` origin: the seat
+number over its health gauge, both in that seat's ring colour
+(`tank::team_color`), which is the colour of the ring under its tank and
+of its `P3` label on the field. A wrecked seat keeps its chip with an
+empty gauge and both halves in the spent grey, and the list is built from
+the round's seat count rather than from who is alive, so nothing in the
+bar moves when a seat dies or when a number changes width. Weapons and
+buffs are not in a chip: they are the local block's, and a chip has to
+stay narrow enough that seven of them fit.
+
+**What the strip costs.** Seven chips need 112 px of bar between the
+gauges and the buttons, and a couch round of three or more still draws
+`BUILD`, the players button and `ONLINE`. The compact table buys that
+back out of the block: the shell and weapon counts drop to the small font
+and their slots narrow with them, the same trade the two-player table
+makes for its pairs. HP stays in the full font — it is the number the
+person playing this seat glances at. `bar_tests` pins every table against
+the leftmost button, and the couch tables' own origins, so the one- and
+two-player bars cannot drift while the compact one is tuned.
+
+**Leaving a room.** An online round draws none of the local buttons — the
+round is the room's to restart and there is no builder behind it — so its
+mode-button slot carries `LEAVE` instead, in the room blue
+(`hud::leave_button_rect`, `PlayChrome::leave_button`). It is the only
+way out of a room on a build with no keyboard, and it goes through
+`Session::leave_online`, the same path Esc takes.
+
 ## Alternatives considered
 
 - **A band with the palette laid out inline** (window 1280x844 at the
