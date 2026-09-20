@@ -5,8 +5,8 @@
 use sola_raylib::prelude::*;
 
 use crate::hud::{
-    leave_dialog_rects, mode_button_rect, players_button_rect, players_dialog_rects, restart_button_rect, weapon_color, HudModel, WeaponSlot,
-    BAR_FILL, BUILD_COLOR, DIALOG_W, DIM, HUD_LABEL_SIZE, HUD_TEXT_SIZE, TEXT, WEAPON_SLOTS,
+    leave_dialog_rects, mode_button_rect, players_button_rect, players_dialog_rects, restart_button_rect, weapon_color, HudModel,
+    WeaponSlot, BAR_FILL, BUILD_COLOR, DIALOG_W, DIM, HUD_LABEL_SIZE, HUD_TEXT_SIZE, TEXT, WEAPON_SLOTS,
 };
 use crate::math::{Color, Rectangle};
 use crate::render::game::Textures;
@@ -416,7 +416,7 @@ pub fn draw_leave_dialog(d: &mut impl RaylibDraw, field: Rect) {
 #[cfg(test)]
 mod bar_tests {
     use super::*;
-    use crate::hud::PLAYERS_BUTTON_GAP;
+    use crate::hud::{online_button_rect, PLAYERS_BUTTON_GAP};
     use crate::{PICKUP_TEXTURE_SIZE, SHELL_TEXTURE_SIZE};
 
     fn default_panel() -> Rect {
@@ -445,8 +445,10 @@ mod bar_tests {
             assert!(s.weapons + WEAPON_SLOTS as i32 * s.weapon_slot_w <= s.bars, "{name}: four weapon slots run into the gauges");
             assert!(BAR_W <= BAR_SLOT_W);
             assert!(s.bars + 3 * BAR_SLOT_W <= crate::DEFAULT_SCREEN_WIDTH);
-            let button = players_button_rect(default_panel());
-            assert!((s.bars + 3 * BAR_SLOT_W) as f32 <= button.x, "{name}: bars run into the players button");
+            // The leftmost of the three buttons at the bar's right end
+            // is what the gauges have to clear.
+            let button = online_button_rect(default_panel());
+            assert!((s.bars + 3 * BAR_SLOT_W) as f32 <= button.x, "{name}: bars run into the ONLINE button");
         }
         // The pairs fit their cells: three digits a side for HP, two for
         // the shells, two in the small font for each weapon.
@@ -457,13 +459,15 @@ mod bar_tests {
     }
 
     #[test]
-    fn the_players_button_sits_between_the_bars_and_build() {
+    fn the_three_buttons_sit_between_the_bars_and_the_panels_edge() {
         let panel = default_panel();
+        let online = online_button_rect(panel);
         let players = players_button_rect(panel);
         let build = mode_button_rect(panel);
         assert!(players.width >= 48.0 && players.height == panel.h);
+        assert!(online.x + online.width + PLAYERS_BUTTON_GAP <= players.x);
         assert!(players.x + players.width + PLAYERS_BUTTON_GAP <= build.x);
-        assert!((SLOTS_TWO.bars + 3 * BAR_SLOT_W) as f32 <= players.x);
+        assert!((SLOTS_TWO.bars + 3 * BAR_SLOT_W) as f32 <= online.x);
     }
 
     #[test]

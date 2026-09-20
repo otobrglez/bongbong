@@ -7,25 +7,32 @@
 //! the same path. No `RaylibHandle` anywhere in this file: drawing stays
 //! in `game.rs`, `hud.rs` and `editor.rs`.
 //!
-//! Play runs `Game::update` in process, Build runs the map builder, and
-//! Online draws a `net::round::OnlineRound`'s replica - a round the room
-//! server simulates and this window only ever draws. The local round is
-//! left exactly where it stood: `playing()` is Play's alone, so nothing
-//! about online play can start or stop a local one.
+//! Play runs `Game::update` in process, Build runs the map builder,
+//! Lobby is the room screen (`lobby.rs`) and Online draws a
+//! `net::round::OnlineRound`'s replica - a round the room server
+//! simulates and this window only ever draws. The local round is left
+//! exactly where it stood: `playing()` is Play's alone, so nothing about
+//! the lobby or an online round can start or stop a local one.
 
 use crate::ai::Intent;
 use crate::editor::{BuilderInput, EditorAction, MapEditor};
 use crate::hud::PlayChrome;
+use crate::lobby::{Lobby, LobbyAction, LobbyInput, RoomPhase, RoomView};
 use crate::map::MapFile;
+use crate::net::client::{RoomSetup, Target};
 use crate::net::round::AnyRound;
+use crate::net::rooms::{RoomCode, RoomsHost};
 use crate::simulation::{Game, Outcome, PlayerCount};
-use crate::Layout;
+use crate::{Layout, Rect};
 
 /// Which mode the window is in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Driver {
     Play,
     Build,
+    /// The lobby: hosting or joining a room, before any round
+    /// (`lobby.rs`).
+    Lobby,
     /// A room's round, drawn from its snapshots and never updated here.
     Online,
 }
@@ -35,6 +42,7 @@ impl Driver {
         match self {
             Driver::Play => "play",
             Driver::Build => "build",
+            Driver::Lobby => "lobby",
             Driver::Online => "online",
         }
     }
@@ -55,10 +63,21 @@ pub struct Session {
     /// `dialog`. The chosen count itself lives on `Game::players`, which
     /// every restart keeps, so it is the session's setting.
     pub players_dialog: bool,
-    /// The seat in a room and the replica it draws, in online mode: the
-    /// second `Game` of the session, and the only one this window does
-    /// not simulate. `None` in every other mode.
+    /// The seat in a room and the replica it draws, from the moment the
+    /// lobby opens one: the second `Game` of the session, and the only
+    /// one this window does not simulate. `None` until then.
     pub online: Option<AnyRound>,
+    /// The lobby screen, from `press_online` until it is closed. It
+    /// outlives no round: leaving a room comes back through it.
+    pub lobby: Option<Lobby>,
+    /// Which rooms server this session talks to (`--rooms`,
+    /// `BONGBONG_ROOMS`): the lobby's invite link is built from it.
+    /// `app.rs` sets it once at startup; the cluster's is the default.
+    pub rooms: RoomsHost,
+    /// The name this player takes into a room (`--nick`). It also picks
+    /// the device token, so two clients on one machine under two names
+    /// are two seats.
+    pub nick: String,
 }
 
 /// A session reads as its round: the dev server, its tests and `main.rs`
@@ -82,7 +101,17 @@ impl Session {
     /// round and the builder's canvas never need to be told it.
     pub fn new(game: Game) -> Self {
         let builder = MapEditor::new(game.map.clone());
-        Session { driver: Driver::Play, game, builder, dialog: false, players_dialog: false, online: None }
+        Session {
+            driver: Driver::Play,
+            game,
+            builder,
+            dialog: false,
+            players_dialog: false,
+            online: None,
+            lobby: None,
+            rooms: RoomsHost::cluster(),
+            nick: "player".into(),
+        }
     }
 
     pub fn mode(&self) -> Driver {
@@ -196,29 +225,138 @@ impl Session {
             Driver::Play => self.press_build(),
             Driver::Build if self.builder.text_entry_open() => self.driver,
             Driver::Build => self.play(),
-            Driver::Online => self.driver,
+            Driver::Lobby | Driver::Online => self.driver,
         }
     }
 
-    /// Take the window into `round`: the local round and the builder are
-    /// left exactly as they stand, so leaving comes back to them.
+    /// The bar's `ONLINE` button: open the lobby over the local round,
+    /// which is left exactly where it stands (nothing here calls
+    /// `Game::update`, and `playing()` is false from this frame on).
+    /// A no-op where a build cannot reach a room, and while the builder
+    /// is up - the lobby is the play bar's button. Returns the mode
+    /// afterwards.
+    pub fn press_online(&mut self) -> Driver {
+        if !crate::ONLINE_AVAILABLE || self.driver != Driver::Play {
+            return self.driver;
+        }
+        self.dialog = false;
+        self.players_dialog = false;
+        self.lobby = Some(Lobby::new(self.rooms.clone()));
+        self.driver = Driver::Lobby;
+        self.driver
+    }
+
+    /// Open the lobby on a room that has already been dialled - the
+    /// command line's `--host`, `--join CODE` and `--rig`. The screen
+    /// shows the code and the QR while the room fills up, and hands over
+    /// to `Driver::Online` the moment the round begins.
+    pub fn open_lobby_with(&mut self, round: AnyRound) {
+        self.dialog = false;
+        self.players_dialog = false;
+        self.lobby = Some(Lobby::new(self.rooms.clone()));
+        self.online = Some(round);
+        self.driver = Driver::Lobby;
+    }
+
+    /// Put `round` in the session's seat, whatever opened it.
+    pub fn attach_round(&mut self, round: AnyRound) {
+        self.online = Some(round);
+    }
+
+    /// Dial a room for the lobby's `HOST` or `JOIN`, through
+    /// `net::client::connect` - the same socket the command line opens.
+    /// A build that cannot reach one never gets here: `press_online` is
+    /// gated on `ONLINE_AVAILABLE`.
+    #[cfg(all(feature = "online", not(target_os = "emscripten")))]
+    fn dial(&mut self, target: Target) {
+        let identity = crate::net::client::Identity::new(self.nick.clone(), format!("bongbong-{}", self.nick));
+        let client = crate::net::client::connect(&self.rooms, identity, target);
+        self.attach_round(crate::net::round::OnlineRound::new(client, "ROOM"));
+    }
+
+    #[cfg(not(all(feature = "online", not(target_os = "emscripten"))))]
+    fn dial(&mut self, _target: Target) {}
+
+    /// Take the window into `round` without the lobby - the primitive
+    /// `open_lobby_with` and the hand-over from the lobby both use. The
+    /// local round and the builder are left exactly as they stand.
     pub fn go_online(&mut self, round: AnyRound) {
         self.dialog = false;
         self.players_dialog = false;
+        self.lobby = None;
         self.online = Some(round);
         self.driver = Driver::Online;
     }
 
-    /// Give up the seat and come back to the local round, which has been
-    /// standing still the whole time (nothing online ever calls
-    /// `Game::update`). A no-op in the other modes.
+    /// Give up the seat, close the lobby and come back to the local
+    /// round, which has been standing still the whole time (nothing
+    /// online ever calls `Game::update`). A no-op in Play and Build.
     pub fn leave_online(&mut self) -> Driver {
         if let Some(round) = &mut self.online {
             round.leave();
         }
         self.online = None;
-        if self.driver == Driver::Online {
+        self.lobby = None;
+        if matches!(self.driver, Driver::Online | Driver::Lobby) {
             self.driver = Driver::Play;
+        }
+        self.driver
+    }
+
+    /// One frame of the lobby: what the room says, then the screen's own
+    /// hit tests, then whatever it asked for. `app.rs` and the dev server
+    /// both fill the same `LobbyInput`, so a tool's click lands on the
+    /// hit test a finger does.
+    ///
+    /// The room's round is polled from here, which is what makes a seat
+    /// fill up and a roster arrive while the screen is on; the seat sends
+    /// no intent, since there is no round to steer yet. The frame the
+    /// room starts the round the window hands over to `Driver::Online`
+    /// and the replica is what is drawn. Returns the mode afterwards.
+    pub fn update_lobby(&mut self, input: &LobbyInput, field: Rect, dt: f32) -> Driver {
+        if self.driver != Driver::Lobby {
+            return self.driver;
+        }
+        if let Some(round) = &mut self.online {
+            round.frame(&Intent::default(), dt);
+        }
+        let room = self.online.as_ref().map(RoomView::of);
+        let Some(lobby) = &mut self.lobby else { return self.driver };
+        match lobby.update(input, field, room.as_ref()) {
+            LobbyAction::None => {}
+            LobbyAction::Host { map, mission } => {
+                self.dial(Target::Host(RoomSetup { map, map_toml: None, mission, seed: None }));
+            }
+            // The screen only offers `JOIN` on a code it has parsed, so a
+            // refusal here is not something a player can reach.
+            LobbyAction::Join { code } => {
+                if let Ok(code) = RoomCode::parse(&code) {
+                    self.dial(Target::Join(code));
+                }
+            }
+            LobbyAction::Ready => {
+                if let Some(round) = &mut self.online {
+                    round.ready();
+                }
+            }
+            LobbyAction::Start => {
+                if let Some(round) = &mut self.online {
+                    round.start_round();
+                }
+            }
+            LobbyAction::Kick { seat } => {
+                if let Some(round) = &mut self.online {
+                    round.kick(seat);
+                }
+            }
+            LobbyAction::Leave => {
+                self.leave_online();
+            }
+        }
+        // The round has begun: the replica is the picture from here on.
+        if self.driver == Driver::Lobby && room.is_some_and(|r| r.phase == RoomPhase::Playing) {
+            self.lobby = None;
+            self.driver = Driver::Online;
         }
         self.driver
     }
@@ -280,7 +418,7 @@ impl Session {
     /// may be a different size until PLAY makes it the round's).
     pub fn field_size(&self) -> (f32, f32) {
         match self.driver {
-            Driver::Play => self.game.map.field_size(),
+            Driver::Play | Driver::Lobby => self.game.map.field_size(),
             Driver::Build => self.builder.map().field_size(),
             Driver::Online => self.shown().map.field_size(),
         }
@@ -293,20 +431,25 @@ impl Session {
     pub fn play_chrome(&self) -> PlayChrome {
         match self.driver {
             Driver::Online => PlayChrome {
-                build_button: false,
-                players_button: false,
-                restart_button: false,
-                leave_dialog: false,
-                players_dialog: false,
                 status: self.online.as_ref().map(AnyRound::status),
+                ..PlayChrome::default()
             },
+            Driver::Lobby => {
+                let room = self.online.as_ref().map(RoomView::of);
+                PlayChrome {
+                    lobby: self.lobby.as_ref().map(|lobby| lobby.view(room.as_ref())),
+                    ..PlayChrome::default()
+                }
+            }
             _ => PlayChrome {
                 build_button: true,
                 players_button: crate::TWO_PLAYERS_AVAILABLE,
+                online_button: crate::ONLINE_AVAILABLE,
                 restart_button: !crate::KEYBOARD_AVAILABLE,
                 leave_dialog: self.dialog,
                 players_dialog: self.players_dialog,
                 status: None,
+                lobby: None,
             },
         }
     }
@@ -535,6 +678,108 @@ mod session_tests {
         assert_eq!(s.game.frame(), 5);
         s.game.update(crate::simulation::Input::default(), crate::PHYSICS_FIXED_DT, W, H);
         assert_eq!(s.game.frame(), 6, "the local round carries on where it stood");
+    }
+
+    /// The lobby is a mode like Build: the round it stands over is
+    /// frozen because `playing()` is false and nothing calls `update`,
+    /// the builder's canvas is untouched, and closing it comes out where
+    /// the round stood.
+    #[test]
+    fn the_lobby_freezes_the_local_round_and_leaves_the_builder_alone() {
+        use crate::lobby::{Button, LobbyInput, Stage, button_rect};
+        use crate::net::rooms::RoomsHost;
+
+        let mut s = session();
+        s.rooms = RoomsHost::overriding("ws://127.0.0.1:4848");
+        s.builder.select_tool(Tool::Wall(Material::Iron));
+        s.builder.stroke(&[(20, 11)], false);
+        for _ in 0..5 {
+            s.game.update(crate::simulation::Input::default(), crate::PHYSICS_FIXED_DT, W, H);
+        }
+        let local = s.game.drawable_state();
+        let canvas = s.builder.map().clone();
+
+        if !crate::ONLINE_AVAILABLE {
+            assert_eq!(s.press_online(), Driver::Play, "a build with no client never opens the lobby");
+            return;
+        }
+        assert_eq!(s.press_online(), Driver::Lobby);
+        assert!(!s.playing(), "the local round only ever runs in play mode");
+        assert!(s.online.is_none(), "no room until a button asks for one");
+        assert!(std::ptr::eq(s.shown(), &s.game), "the lobby stands over the local round");
+        // The bar's own buttons are gone; the lobby is what is drawn.
+        let chrome = s.play_chrome();
+        assert!(!chrome.build_button && !chrome.players_button && !chrome.online_button);
+        let view = chrome.lobby.expect("the lobby is on screen");
+        assert_eq!(view.stage, Stage::Start);
+        assert_eq!(view.map, crate::map::SHIPPED_MAPS[0].0);
+
+        // Frames of it change nothing about the round or the canvas, and
+        // walking into the code entry and back out is all local.
+        let field = crate::Rect::new(0.0, 32.0, W, H);
+        let press = |b: Button| {
+            let r = button_rect(field, b);
+            LobbyInput {
+                pointer: Some(crate::math::Vec2::new(r.x + r.width / 2.0, r.y + r.height / 2.0)),
+                pressed: true,
+                ..LobbyInput::default()
+            }
+        };
+        s.update_lobby(&press(Button::Join), field, 1.0 / 60.0);
+        for _ in 0..10 {
+            s.update_lobby(&LobbyInput::default(), field, 1.0 / 60.0);
+        }
+        assert_eq!(s.play_chrome().lobby.expect("still up").stage, Stage::Code);
+        assert_eq!(s.game.frame(), 5, "the local round took a step");
+        assert_eq!(s.game.drawable_state(), local);
+        assert_eq!(s.builder.map(), &canvas, "the builder kept its edit");
+        assert!(s.builder.dirty());
+
+        // CLOSE comes back to the local round exactly where it stood.
+        s.update_lobby(&press(Button::Back), field, 1.0 / 60.0);
+        s.update_lobby(&press(Button::Back), field, 1.0 / 60.0);
+        assert_eq!(s.mode(), Driver::Play);
+        assert!(s.lobby.is_none() && s.playing());
+        assert_eq!(s.game.frame(), 5);
+        s.game.update(crate::simulation::Input::default(), crate::PHYSICS_FIXED_DT, W, H);
+        assert_eq!(s.game.frame(), 6, "the local round carries on where it stood");
+        // Tab is inert while the lobby is up, and the builder's own mode
+        // never offers it.
+        s.press_online();
+        assert_eq!(s.toggle(), Driver::Lobby);
+        s.leave_online();
+        s.press_build();
+        s.answer_dialog(true);
+        assert_eq!(s.press_online(), Driver::Build, "the lobby is the play bar's button");
+    }
+
+    /// A round dialled from the command line comes up in the lobby, and
+    /// hands over to `Driver::Online` the frame the room starts.
+    #[test]
+    fn a_command_line_room_opens_the_lobby_and_hands_over_when_it_starts() {
+        use crate::lobby::LobbyInput;
+        use crate::net::client::{Identity, RoomClient, RoomSetup};
+        use crate::net::loopback::{self, LinkQuality};
+        use crate::net::round::OnlineRound;
+        use crate::net::transport::Transport;
+
+        let mut s = session();
+        let (link, _room) = loopback::pair(LinkQuality::PERFECT, 5);
+        let client = RoomClient::host(Box::new(link) as Box<dyn Transport>, Identity::new("host", "tok"), RoomSetup::default());
+        s.open_lobby_with(OnlineRound::new(client, "ROOM"));
+        assert_eq!(s.mode(), Driver::Lobby);
+        assert!(!s.playing());
+        let field = crate::Rect::new(0.0, 32.0, W, H);
+        // Nobody answers, so the screen stays on "reaching the room" and
+        // the local round is still the picture behind it.
+        for _ in 0..5 {
+            assert_eq!(s.update_lobby(&LobbyInput::default(), field, 1.0 / 60.0), Driver::Lobby);
+        }
+        assert!(s.play_chrome().lobby.is_some());
+        assert!(s.play_chrome().status.is_none(), "the round's line waits for the round");
+        // Leaving hangs up and comes out at the local round.
+        assert_eq!(s.leave_online(), Driver::Play);
+        assert!(s.online.is_none() && s.lobby.is_none() && s.playing());
     }
 
     #[test]

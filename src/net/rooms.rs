@@ -20,6 +20,35 @@ pub const ROOMS_ENV: &str = "BONGBONG_ROOMS";
 /// room letters exist is the room server's business.
 pub const ROOM_LETTERS: usize = 4;
 
+/// The symbols a room's letters are drawn from: twenty with no vowels (a
+/// code never spells a word by accident) and no look-alikes (no 0/O,
+/// 1/I/L, 2/Z, 5/S, 6/G, 8/B, 9/g), so a code survives being read aloud
+/// or typed from a photo. The room server mints from this same list
+/// (`bongbong_server::code::ALPHABET`; a test below pins the two
+/// together), and the lobby's on-screen code entry offers exactly these
+/// keys, which is why the list lives here rather than in either screen.
+pub const CODE_ALPHABET: &[u8; 20] = b"CDFGHJKMNPQRTVWXY347";
+
+/// Where an invite points (docs/online-coop-prd.md §4.10): the join page
+/// on the site, which plays the room in the browser at once and opens the
+/// app where it is installed.
+pub const JOIN_URL_BASE: &str = "https://bongbong.io/j";
+
+/// The link to share for `code` - what goes on a screen, in a chat
+/// message and inside the lobby's QR.
+///
+/// A rooms host that came from `--rooms` or `BONGBONG_ROOMS` rides along
+/// as a query parameter, because the join page takes the same override
+/// the game does (docs/online-coop-prd.md §4.13): without it a scan would
+/// send the other device to the cluster, which knows nothing about a room
+/// on a laptop.
+pub fn join_url(host: &RoomsHost, code: &str) -> String {
+    match host.is_override() {
+        false => format!("{JOIN_URL_BASE}/{code}"),
+        true => format!("{JOIN_URL_BASE}/{code}?rooms={}", host.base()),
+    }
+}
+
 /// Which rooms server to talk to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RoomsHost {
@@ -208,6 +237,42 @@ mod tests {
             Some(v) => unsafe { std::env::set_var(ROOMS_ENV, v) },
             None => unsafe { std::env::remove_var(ROOMS_ENV) },
         }
+    }
+
+    /// The alphabet is one list: the room server mints its codes from it
+    /// and the lobby's key grid offers it. The server's copy is read off
+    /// disk rather than trusted, so the two cannot drift apart quietly.
+    #[test]
+    fn the_code_alphabet_is_the_one_the_room_server_mints_from() {
+        assert_eq!(CODE_ALPHABET.len(), 20);
+        let mut sorted = CODE_ALPHABET.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), 20, "every symbol is distinct");
+        assert!(CODE_ALPHABET.iter().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()));
+        for vowel in b"AEIOU" {
+            assert!(!CODE_ALPHABET.contains(vowel), "a code could spell a word");
+        }
+        // One of each look-alike pair is dropped: 0/O, 1/I/L, 2/Z, 5/S,
+        // 6/G, 8/B, 9/g - so only G survives its pair, and every digit
+        // but 3, 4 and 7 is gone.
+        for look_alike in b"BLSZ0125689" {
+            assert!(!CODE_ALPHABET.contains(look_alike), "{} is read wrong", *look_alike as char);
+        }
+        let server = include_str!("../../server/src/code.rs");
+        let quoted = format!("b\"{}\"", std::str::from_utf8(CODE_ALPHABET).expect("ASCII"));
+        assert!(server.contains(&quoted), "the room server mints from another alphabet than {quoted}");
+    }
+
+    #[test]
+    fn a_join_link_carries_a_local_override_so_a_scan_reaches_the_same_server() {
+        assert_eq!(join_url(&RoomsHost::cluster(), "AK7QX"), "https://bongbong.io/j/AK7QX");
+        assert_eq!(
+            join_url(&RoomsHost::overriding("ws://127.0.0.1:4848"), "AK7QX"),
+            "https://bongbong.io/j/AK7QX?rooms=ws://127.0.0.1:4848"
+        );
+        // Both fit the codes the lobby draws (`qr::MAX_BYTES` is 106).
+        assert!(join_url(&RoomsHost::overriding("ws://127.0.0.1:4848"), "AK7QX").len() <= crate::qr::MAX_BYTES);
     }
 
     #[test]

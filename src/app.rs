@@ -10,13 +10,17 @@ use crate::tuning::tuning;
 use crate::ai::Intent;
 use crate::editor::{BuilderInput, CliOverrides, EditorTextures};
 use crate::render::game::{Effects, Textures};
-use crate::hud::{leave_dialog_rects, mode_button_rect, players_button_rect, players_dialog_rects, restart_button_rect, BAR_FILL};
+use crate::hud::{
+    leave_dialog_rects, mode_button_rect, online_button_rect, players_button_rect, players_dialog_rects,
+    restart_button_rect, BAR_FILL,
+};
+use crate::lobby::LobbyInput;
 use crate::mode::{Driver, Session};
 // Online play reaches a room over a socket or the rig over a thread,
 // and the emscripten build has neither on the command line: the page
 // passes a room code instead (docs/online-coop-prd.md §4.13).
 #[cfg(not(target_os = "emscripten"))]
-use crate::net::client::{Identity, RoomClient, RoomSetup};
+use crate::net::client::{Identity, RoomClient, RoomSetup, Target};
 #[cfg(not(target_os = "emscripten"))]
 use crate::net::round::{AnyRound, OnlineRound};
 #[cfg(not(target_os = "emscripten"))]
@@ -370,40 +374,31 @@ fn open_online(args: &Args, map: &crate::map::MapFile) -> Option<(AnyRound, Opti
     }
     #[cfg(feature = "online")]
     {
-        use crate::net::rooms::{self, RoomCode, RoomsHost};
+        use crate::net::rooms::{RoomCode, RoomsHost};
         if !args.host && args.join.is_none() {
             return None;
         }
         let host = RoomsHost::resolve(args.rooms.as_deref());
-        let code = match args.join.as_deref().map(RoomCode::parse) {
-            Some(Ok(code)) => Some(code),
+        let target = match args.join.as_deref().map(RoomCode::parse) {
+            Some(Ok(code)) => Target::Join(code),
             Some(Err(e)) => {
                 eprintln!("[online] {e}");
                 std::process::exit(2);
             }
-            None => None,
+            // `-m` carries the whole map to the room; the lobby's own
+            // `HOST` sends a shipped map's name instead.
+            None => Target::Host(RoomSetup {
+                map: map.name.clone().unwrap_or_else(|| "default".into()),
+                map_toml: args.map.as_ref().and_then(|m| m.to_toml_string().ok()),
+                mission: args.mission.unwrap_or(crate::level::Mission::Protect),
+                seed: args.seed,
+            }),
         };
-        let url = rooms::socket_url(&host, code.as_ref());
-        eprintln!("[online] dialling {url}");
-        let socket = Box::new(crate::net::native::NativeTransport::connect(&url)) as Box<dyn Transport>;
         // The device token is the machine's, per nickname: two clients
         // here under two names are two seats, and either reclaims its own
         // seat on a reconnect.
         let identity = Identity::new(args.nick.clone(), format!("bongbong-{}", args.nick));
-        let client = match code {
-            Some(code) => RoomClient::join(socket, identity, code.text),
-            None => RoomClient::host(
-                socket,
-                identity,
-                RoomSetup {
-                    map: map.name.clone().unwrap_or_else(|| "default".into()),
-                    map_toml: args.map.as_ref().and_then(|m| m.to_toml_string().ok()),
-                    mission: args.mission.unwrap_or(crate::level::Mission::Protect),
-                    seed: args.seed,
-                },
-            ),
-        };
-        return Some((OnlineRound::new(client, "ROOM"), None));
+        return Some((OnlineRound::new(crate::net::client::connect(&host, identity, target), "ROOM"), None));
     }
     #[cfg(not(feature = "online"))]
     None
@@ -861,10 +856,21 @@ pub fn run(args: Args) {
     // window's whole life - and stops its thread on the way out.
     #[cfg(not(target_os = "emscripten"))]
     let room_map = session.game.map.clone();
+    // The rooms server the lobby's invite link names and its buttons
+    // dial, and the name this player takes into a room.
+    #[cfg(all(feature = "online", not(target_os = "emscripten")))]
+    {
+        session.rooms = crate::net::rooms::RoomsHost::resolve(args.rooms.as_deref());
+        session.nick = args.nick.clone();
+    }
     #[cfg(not(target_os = "emscripten"))]
     let _rig = match open_online(&args, &room_map) {
+        // The lobby shows the code and the QR while the room fills up
+        // and hands over to `Driver::Online` when the round begins; the
+        // rig's room is already playing by the time it answers, so
+        // `--rig` passes straight through.
         Some((round, rig)) => {
-            session.go_online(round);
+            session.open_lobby_with(round);
             rig
         }
         None => None,
@@ -1106,6 +1112,10 @@ pub fn run(args: Args) {
                     && players_button_rect(layout.panel).contains(pointer)
                 {
                     session.press_players();
+                } else if crate::ONLINE_AVAILABLE && pressed && online_button_rect(layout.panel).contains(pointer) {
+                    // The ONLINE button opens the lobby over the local
+                    // round, which is left exactly where it stands.
+                    session.press_online();
                 } else if !crate::KEYBOARD_AVAILABLE
                     && pressed
                     && restart_button_rect(layout.panel).contains(pointer)
@@ -1116,16 +1126,28 @@ pub fn run(args: Args) {
                     tuning::request_restart();
                 }
             }
+            Driver::Lobby => {
+                // The lobby's own screen: the pointer is already in
+                // bitmap space, and its rects are the field's.
+                let mut typed = String::new();
+                while let Some(c) = rl.get_char_pressed() {
+                    typed.push(c);
+                }
+                let input = LobbyInput {
+                    pointer: Some(layout.to_field(pointer)),
+                    pressed,
+                    typed,
+                    backspace: rl.is_key_pressed(KeyboardKey::KEY_BACKSPACE),
+                    enter: rl.is_key_pressed(KeyboardKey::KEY_ENTER),
+                    escape: rl.is_key_pressed(KeyboardKey::KEY_ESCAPE),
+                };
+                session.update_lobby(&input, layout.field, dt);
+            }
             Driver::Online => {
-                // The chrome of an online round is one status line and
-                // two keys until the lobby screen arrives: the host
-                // starts the round, Esc gives the seat back and returns
-                // to the local one.
-                if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
-                    if let Some(round) = session.online.as_mut() {
-                        round.start_round();
-                    }
-                } else if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) {
+                // A round belongs to its room: the bar's buttons are
+                // gone and Esc gives the seat back, which comes out at
+                // the local round exactly where it stood.
+                if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) {
                     session.leave_online();
                 }
             }
@@ -1308,7 +1330,9 @@ pub fn run(args: Args) {
                 muzzle: &mut muzzle_fx,
                 impact: &mut impact_fx,
                 fx: &fx,
-                touch: Some((&touch, steer_right)),
+                // No stick over the lobby: the field behind it is frozen
+                // and every press there belongs to the screen.
+                touch: (session.mode() != Driver::Lobby).then_some((&touch, steer_right)),
             },
             &Textures {
                 tanks: &tanks_texture,

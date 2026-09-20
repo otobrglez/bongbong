@@ -1536,13 +1536,25 @@ impl DevServer {
                     session.press_build();
                 } else if crate::TWO_PLAYERS_AVAILABLE && players_button_rect(layout.panel).contains(point) {
                     session.press_players();
+                } else if crate::ONLINE_AVAILABLE && crate::hud::online_button_rect(layout.panel).contains(point) {
+                    session.press_online();
                 } else if !crate::KEYBOARD_AVAILABLE && restart_button_rect(layout.panel).contains(point) {
                     crate::tuning::request_restart();
                 }
             }
-            // An online round is the room's: a click on a replica means
-            // nothing until the lobby screen (phase 2c) gives it
-            // something to hit.
+            // The lobby's own hit tests, on the same `LobbyInput`
+            // `app.rs` fills: a tool's click lands where a finger does.
+            Driver::Lobby => {
+                let input = crate::lobby::LobbyInput {
+                    pointer: Some(layout.to_field(point)),
+                    pressed: !right,
+                    ..crate::lobby::LobbyInput::default()
+                };
+                session.update_lobby(&input, layout.field, crate::PHYSICS_FIXED_DT);
+            }
+            // An online round is the room's: the replica has nothing on
+            // it to press, and the round is left to the keyboard and the
+            // touch scheme.
             Driver::Online => {}
             Driver::Build => {
                 let press = BuilderInput {
@@ -1632,20 +1644,26 @@ impl DevServer {
                 // undo/redo/backspace, 1/2 and typed text mean nothing in play.
                 _ => {}
             },
-            // The two keys an online round answers, the same ones
-            // `app.rs` reads: the host starts the round, Esc gives the
-            // seat up and comes back to the local one.
-            Driver::Online => match key {
-                Some("enter") => {
-                    if let Some(round) = session.online.as_mut() {
-                        round.start_round();
-                    }
-                }
-                Some("escape") => {
+            // The lobby takes typed characters for the code entry and
+            // the same three keys `app.rs` reads.
+            Driver::Lobby => {
+                let input = crate::lobby::LobbyInput {
+                    typed: text,
+                    backspace: key == Some("backspace"),
+                    enter: key == Some("enter"),
+                    escape: key == Some("escape"),
+                    ..crate::lobby::LobbyInput::default()
+                };
+                session.update_lobby(&input, layout.field, crate::PHYSICS_FIXED_DT);
+            }
+            // The one key an online round answers, the same one `app.rs`
+            // reads: Esc gives the seat up and comes back to the local
+            // round. Starting the round is the lobby's `START`.
+            Driver::Online => {
+                if key == Some("escape") {
                     session.leave_online();
                 }
-                _ => {}
-            },
+            }
             Driver::Build => {
                 if key == Some("tab") {
                     session.toggle();

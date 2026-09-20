@@ -22,6 +22,7 @@ use crate::hud::{
 };
 use crate::math::{Color, Rectangle};
 use crate::obstacle::{draw_flying_drum, Obstacle};
+use crate::render::lobby::{draw_lobby, draw_online_button};
 use crate::pickup::PickupKind;
 use crate::plasma::{Plasma, PlasmaState};
 use crate::render::blast::{draw_blast, draw_blast_glow, draw_burning_hull_glow, draw_fire_glow, draw_flame_glow, draw_fuse_glow, draw_ground_fire};
@@ -695,6 +696,13 @@ impl Game {
                 } else if chrome.players_dialog {
                     draw_players_dialog(&mut d, layout.field, self.players);
                 }
+                // The lobby (lobby.rs) stands over the whole field, in
+                // the dialogs' field space and with their dim: the round
+                // behind it is the local one, frozen because nothing
+                // calls `update` in this mode.
+                if let Some(lobby) = &chrome.lobby {
+                    draw_lobby(&mut d, layout.field, lobby, textures);
+                }
             });
 
             // The HUD bar, in window space, over anything the field pass
@@ -708,6 +716,9 @@ impl Game {
             }
             if chrome.build_button {
                 draw_mode_button(&mut d, layout.panel, "BUILD", BUILD_COLOR);
+            }
+            if chrome.online_button {
+                draw_online_button(&mut d, layout.panel);
             }
             // The touch scheme's stick, ripples and hint: over everything,
             // in bitmap space, so they sit where the thumbs are.

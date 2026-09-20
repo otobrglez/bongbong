@@ -20,6 +20,7 @@ use crate::ai::Intent;
 use crate::level::Mission;
 use crate::net::codec::Msg;
 use crate::net::delta::apply_delta;
+use crate::net::rooms::RoomCode;
 use crate::net::transport::{Closed, ConnState, Transport};
 use crate::net::wire::{IntentMsg, Lobby, RosterSeat, Snapshot, Welcome};
 
@@ -65,6 +66,36 @@ pub struct RoomSetup {
 impl Default for RoomSetup {
     fn default() -> RoomSetup {
         RoomSetup { map: "default".into(), map_toml: None, mission: Mission::Protect, seed: None }
+    }
+}
+
+/// What a client is dialling a rooms server for: a room of its own on
+/// these terms, or a seat in the room a code names.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Target {
+    Host(RoomSetup),
+    Join(RoomCode),
+}
+
+/// Open a socket to the rooms server `host` and greet it.
+///
+/// **The one place a client socket is opened.** The command line's
+/// `--host`/`--join`, the lobby's `HOST` and `JOIN` buttons and the dev
+/// server's `click` all come through here, so a button and a flag reach a
+/// room by exactly the same path - `rooms::socket_url` for the URL, a
+/// `NativeTransport` thread for the socket, this client for the lobby.
+#[cfg(all(feature = "online", not(target_os = "emscripten")))]
+pub fn connect(host: &crate::net::rooms::RoomsHost, identity: Identity, target: Target) -> RoomClient<Box<dyn Transport>> {
+    let code = match &target {
+        Target::Join(code) => Some(code),
+        Target::Host(_) => None,
+    };
+    let url = crate::net::rooms::socket_url(host, code);
+    eprintln!("[online] dialling {url}");
+    let socket = Box::new(crate::net::native::NativeTransport::connect(&url)) as Box<dyn Transport>;
+    match target {
+        Target::Host(setup) => RoomClient::host(socket, identity, setup),
+        Target::Join(code) => RoomClient::join(socket, identity, code.text),
     }
 }
 

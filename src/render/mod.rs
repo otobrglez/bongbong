@@ -24,6 +24,7 @@ pub mod fx;
 pub mod game;
 pub mod hud;
 pub mod laser;
+pub mod lobby;
 pub mod plasma;
 pub mod portal;
 pub mod shell;

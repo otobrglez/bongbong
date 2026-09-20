@@ -127,9 +127,47 @@ impl<T: Transport> OnlineRound<T> {
     }
 
     /// Whether pressing start would mean anything: this client holds the
-    /// room and the round has not begun.
+    /// room, the round has not begun, and every other seat has said it is
+    /// ready - the room server's own three conditions, so the button is
+    /// dead exactly when a press would come back refused.
     pub fn can_start(&self) -> bool {
-        self.client.is_host() && !self.start_sent && *self.client.phase() == Phase::Lobby
+        let seat = self.client.seat();
+        self.client.is_host()
+            && !self.start_sent
+            && *self.client.phase() == Phase::Lobby
+            && self.client.roster().iter().all(|s| s.ready || Some(s.seat) == seat)
+    }
+
+    /// Say this seat is ready for the round.
+    pub fn ready(&mut self) {
+        self.client.ready();
+    }
+
+    /// Put a seat out of the room (the host's to give; the room refuses
+    /// it from anyone else, and refuses a host kicking themself).
+    pub fn kick(&mut self, seat: u8) {
+        self.client.kick(seat);
+    }
+
+    /// Every seat in the room, by seat number.
+    pub fn roster(&self) -> &[crate::net::wire::RosterSeat] {
+        self.client.roster()
+    }
+
+    /// The seat that holds the room.
+    pub fn host_seat(&self) -> u8 {
+        self.client.host_seat()
+    }
+
+    /// Whether this client holds the room.
+    pub fn is_host(&self) -> bool {
+        self.client.is_host()
+    }
+
+    /// The last thing the room refused or the socket said on its way out,
+    /// which is what the lobby shows under the seats.
+    pub fn note(&self) -> Option<&str> {
+        self.note.as_deref()
     }
 
     /// Give up the seat and close the socket.
@@ -158,21 +196,17 @@ impl<T: Transport> OnlineRound<T> {
         &self.interp
     }
 
-    /// One line of chrome over the field: where this seat stands, what
-    /// the round is waiting for, and how deep the snapshot buffer is.
-    /// The lobby proper is its own screen; this is what makes the state
-    /// obvious until then.
+    /// One line of chrome over the field while the round runs: the room,
+    /// this seat, and how deep the snapshot buffer is. Everything before
+    /// the round - the code, the QR, the seats, the buttons - is the
+    /// lobby screen's (`lobby.rs`), which this line never repeats.
     pub fn status(&self) -> String {
         let code = self.client.code().unwrap_or("-----");
         let seat = self.client.seat().map_or_else(|| "-".to_string(), |s| format!("{}", s + 1));
         let mut line = match self.client.phase() {
             Phase::Connecting => format!("{} - CONNECTING", self.label),
             Phase::Greeting => format!("{} - ASKING FOR A SEAT", self.label),
-            Phase::Lobby if self.can_start() => {
-                format!("{} {code} - {} HERE - ENTER TO START", self.label, self.client.roster().len())
-            }
-            Phase::Lobby if self.client.is_host() => format!("{} {code} - STARTING", self.label),
-            Phase::Lobby => format!("{} {code} - SEAT {seat} - WAITING FOR THE HOST", self.label),
+            Phase::Lobby => format!("{} {code} - SEAT {seat} - IN THE LOBBY", self.label),
             Phase::Playing => {
                 // The buffer's depth is what the delay is buying. Below
                 // zero the picture has run past everything that arrived -
@@ -208,7 +242,12 @@ impl<T: Transport> OnlineRound<T> {
             match event {
                 ClientEvent::Welcomed(welcome) => self.welcomed(&welcome, now),
                 ClientEvent::Snapshot(snapshot) => self.interp.accept(*snapshot, now),
-                ClientEvent::Refused(message) => self.note = Some(message),
+                ClientEvent::Refused(message) => {
+                    // A refused start is askable again: the room says why
+                    // (a seat that is not ready), and the reason goes away.
+                    self.start_sent = false;
+                    self.note = Some(message);
+                }
                 ClientEvent::Closed(closed) => self.note = Some(closed.reason),
                 // The code, the roster and the start are read back off
                 // the client itself.
