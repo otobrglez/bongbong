@@ -17,6 +17,11 @@
 //! exactly what the replica has to survive - a gap - which is the point
 //! of `--loss`.
 //!
+//! The end of a round is the room server's: the end screen is ticked out
+//! and the round is announced over on the tick before `Game::update`
+//! would restart it, so a `--rig` round comes back to the lobby the way
+//! a room's does rather than quietly starting again.
+//!
 //! The round runs without the mission banner, as a room server's does,
 //! so the picture moves from the first frame.
 //!
@@ -37,9 +42,9 @@ use crate::net::codec::{self, Msg};
 use crate::net::encode;
 use crate::net::loopback::{self, LinkQuality, Loopback};
 use crate::net::transport::Transport;
-use crate::net::wire::{IntentMsg, Lobby, RosterSeat, Seat, Snapshot};
+use crate::net::wire::{IntentMsg, Lobby, RosterSeat, RoundOutcome, Seat, Snapshot};
 use crate::net::MAX_SEATS;
-use crate::simulation::{Game, Input};
+use crate::simulation::{Game, Input, Outcome};
 use crate::PHYSICS_FIXED_DT;
 
 /// The code the rig's room answers with. It reads as a room code (a pod
@@ -172,6 +177,8 @@ pub struct Lockstep {
     intent: Intent,
     /// What the room refused, if anything.
     note: Option<String>,
+    /// How the round the room finished went, `None` while one runs.
+    ended: Option<RoundOutcome>,
     /// Reused by `catch_up` so a step allocates nothing.
     scratch: Vec<ClientEvent>,
 }
@@ -189,6 +196,7 @@ impl Lockstep {
             replica: None,
             intent: Intent::default(),
             note: None,
+            ended: None,
             scratch: Vec::new(),
         };
         // One turn each: the client says hello, the room answers with the
@@ -253,6 +261,22 @@ impl Lockstep {
         self.note.as_deref()
     }
 
+    /// How the round the room finished went, once it has said so;
+    /// `None` while one is running. The room stops ticking here, so a
+    /// later `step` moves nothing until `rematch`.
+    pub fn ended(&self) -> Option<RoundOutcome> {
+        self.ended
+    }
+
+    /// Play again: the `Start` the room server takes from a host once a
+    /// round is over, on a fresh seed and a fresh `Welcome`.
+    pub fn rematch(&mut self) {
+        self.client.start();
+        self.catch_up();
+        self.room.pump();
+        self.catch_up();
+    }
+
     /// The newest snapshot the authority cut, stamped with the room's
     /// clock - the bytes a test can compare between two runs.
     pub fn snapshot(&self) -> Option<Snapshot> {
@@ -280,7 +304,9 @@ impl Lockstep {
                 }
                 ClientEvent::Refused(message) => self.note = Some(message),
                 ClientEvent::Closed(closed) => self.note = Some(closed.reason),
-                ClientEvent::Created { .. } | ClientEvent::Roster { .. } | ClientEvent::Started => {}
+                ClientEvent::Ended { outcome } => self.ended = Some(outcome),
+                ClientEvent::Started => self.ended = None,
+                ClientEvent::Created { .. } | ClientEvent::Roster { .. } => {}
                 ClientEvent::Said { .. } => {}
             }
         }
@@ -316,6 +342,9 @@ struct Room {
     options: RigOptions,
     /// `None` until the seat has greeted and the round has begun.
     game: Option<Game>,
+    /// The round has been played out and announced; the world stays for
+    /// a test to read, and the next `Start` begins a fresh one.
+    ended: bool,
     opened: Instant,
     /// What the room calls now: the wall clock on the thread, a count of
     /// fixed steps under `Lockstep`. Everything here that asks the time
@@ -341,6 +370,7 @@ impl Room {
             link,
             options,
             game: None,
+            ended: false,
             opened,
             now: opened,
             nick: "rig".into(),
@@ -378,11 +408,14 @@ impl Room {
     }
 
     /// Start the round and welcome the seat into it. A second call while
-    /// one is running is the start button pressed twice.
+    /// one is running is the start button pressed twice; one after the
+    /// round was played out is the rematch.
     fn begin(&mut self) {
-        if self.game.is_some() {
+        if self.game.is_some() && !self.ended {
             return;
         }
+        self.ended = false;
+        self.pending_events.clear();
         let mut game = Game::default();
         game.map = self.options.map.clone();
         game.seed_override = self.options.seed;
@@ -426,8 +459,21 @@ impl Room {
         }
     }
 
-    /// One tick of the round, and the snapshot it earns.
+    /// One tick of the round, and the snapshot it earns. The end screen
+    /// is a tick like any other - the room server's shape - except for
+    /// the restart at the bottom of it: a `Game::update` that took the
+    /// countdown past zero would start a second round nobody asked for,
+    /// so the round is announced over instead.
     fn tick(&mut self) {
+        if self.ended {
+            return;
+        }
+        if self.game.as_ref().is_some_and(|g| g.outcome() != Outcome::Playing && g.restart_countdown() <= PHYSICS_FIXED_DT) {
+            let outcome = self.game.as_ref().map_or(Outcome::Playing, Game::outcome);
+            self.ended = true;
+            self.say(Msg::Lobby(Lobby::Ended { outcome: outcome.into() }));
+            return;
+        }
         let intent = self.sampled_intent();
         let acked = self.acked();
         let server_ms = self.server_ms();
@@ -663,6 +709,75 @@ mod tests {
         assert_eq!(replica.frame(), a.tick(), "the replica did not catch up");
         assert_eq!(replica.drawable_state(), truth.drawable_state(), "the replica draws another picture");
         assert_eq!(b.replica().expect("a replica").drawable_state(), replica.drawable_state());
+    }
+
+    /// The fixture the end of a round is tested on: a Hunt won in well
+    /// under a second by a seat that pulls its trigger, whatever seed
+    /// the round runs on (its own header says how). The room server's
+    /// `tests/round.rs` ends a round with the same file.
+    const HUNT_MAP: &str = include_str!("../../maps/test/online/hunt-duel.toml");
+
+    fn hunt_options() -> RigOptions {
+        RigOptions {
+            map: MapFile::from_toml_str(HUNT_MAP).expect("the hunt map parses"),
+            seed: None,
+            quality: LinkQuality::PERFECT,
+            ..RigOptions::default()
+        }
+    }
+
+    /// A room ticks its round through the end screen and stops before the
+    /// restart a local round would take: the countdown runs down in the
+    /// snapshots, the world stays on the round that ended, and the next
+    /// `Start` is a rematch on a fresh seed.
+    #[test]
+    fn a_room_plays_the_end_screen_out_and_stops_short_of_the_restart() {
+        let mut rig = Lockstep::start(hunt_options());
+        // A player's shell is fired on the press, so the trigger is
+        // pulled rather than held; the weapon's own cooldown paces it.
+        let mut won_at = None;
+        for tick in 0..600 {
+            rig.drive(Intent { face: Some(Dir::Up), fire: tick % 6 == 0, ..Intent::default() });
+            rig.step(1);
+            let game = rig.authority().expect("the room is running a round");
+            if won_at.is_none() && game.outcome() != crate::simulation::Outcome::Playing {
+                won_at = Some(game.frame());
+            }
+            if rig.ended().is_some() {
+                break;
+            }
+        }
+        let won_at = won_at.expect("the round never ended");
+        assert_eq!(rig.ended(), Some(RoundOutcome::Won), "the hunt is won by killing the enemy frog");
+
+        // The end screen was played, not skipped: the room went on
+        // ticking for the whole countdown and only then said so.
+        let truth = rig.authority().expect("the world outlives the round");
+        let screen = truth.frame() - won_at;
+        let expected = (tuning().restart_delay / PHYSICS_FIXED_DT) as u64;
+        assert!(
+            screen.abs_diff(expected) <= 2,
+            "the end screen ran {screen} ticks of an expected {expected}"
+        );
+        assert!(truth.restart_countdown() <= PHYSICS_FIXED_DT, "the countdown was not run down");
+        assert_ne!(truth.outcome(), crate::simulation::Outcome::Playing, "the room started a round of its own");
+        let seed = truth.round_seed();
+
+        // Nothing moves any more, however long the room is left alone.
+        let standing = truth.frame();
+        rig.step(120);
+        assert_eq!(rig.authority().expect("a world").frame(), standing, "the room went on ticking after the round");
+
+        // The rematch: a fresh round on a new seed, and the replica is
+        // welcomed into it.
+        rig.rematch();
+        assert_eq!(rig.ended(), None, "the end screen is cleared by the round that follows");
+        let again = rig.authority().expect("the rematch built a round");
+        assert_eq!(again.frame(), 0, "the rematch starts at the top");
+        assert_ne!(again.round_seed(), seed, "the rematch replays the round it just finished");
+        assert_eq!(rig.replica().expect("a replica").frame(), 0);
+        rig.step(30);
+        assert_eq!(rig.tick(), 30, "the rematch ticks like any round");
     }
 
     /// The seat's command travels: a stepped rig that is driven ends

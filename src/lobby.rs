@@ -25,7 +25,7 @@ use crate::net::client::Phase;
 use crate::net::rooms::{self, CODE_ALPHABET, ROOM_LETTERS, RoomCode, RoomsHost};
 use crate::net::round::OnlineRound;
 use crate::net::transport::Transport;
-use crate::net::wire::RosterSeat;
+use crate::net::wire::{RosterSeat, RoundOutcome};
 use crate::qr::Qr;
 use crate::tank::TankKind;
 use crate::Rect;
@@ -87,7 +87,9 @@ pub enum Stage {
     Code,
     /// Dialling, or waiting for the room to answer.
     Waiting,
-    /// In the room: the code, the QR and the seats.
+    /// In the room: the code, the QR and the seats - before the round,
+    /// and again after it, when the same face carries how it went and
+    /// the host's action reads `REMATCH`.
     Room,
     /// The socket is gone, with why.
     Closed,
@@ -116,7 +118,8 @@ pub enum Button {
     Confirm,
     /// Say this seat is ready.
     Ready,
-    /// Start the round (the host's).
+    /// Start the round, or play it again once one has ended (the
+    /// host's).
     Start,
     /// Give the seat up and come back to the local round.
     Leave,
@@ -170,6 +173,10 @@ pub struct RoomView {
     pub seats: Vec<RosterSeat>,
     /// The last thing the room refused, or why the socket went.
     pub note: Option<String>,
+    /// How the round the room just finished went. While it is set the
+    /// room face reads as an end screen: the outcome under the seats and
+    /// `REMATCH` where `START` was.
+    pub ended: Option<RoundOutcome>,
 }
 
 impl RoomView {
@@ -192,6 +199,7 @@ impl RoomView {
             ready: round.roster().iter().any(|s| Some(s.seat) == seat && s.ready),
             seats: round.roster().to_vec(),
             note: round.note().map(str::to_string),
+            ended: round.ended(),
         }
     }
 }
@@ -515,6 +523,17 @@ impl Lobby {
             Stage::Code => self.entry_note.clone().unwrap_or_else(|| "Five characters, from the code you were given.".into()),
             Stage::Waiting => format!("{}...", self.rooms.base()),
             Stage::Closed => "Nothing is listening any more.".into(),
+            Stage::Room if room.is_some_and(|r| r.ended.is_some()) => {
+                let room = room.expect("the guard found one");
+                let outcome = match room.ended.expect("the guard found one") {
+                    RoundOutcome::Won => "ROUND WON.",
+                    RoundOutcome::Lost => "ROUND LOST.",
+                    // The round was cut short rather than played out.
+                    RoundOutcome::Playing => "ROUND OVER.",
+                };
+                let next = if room.is_host { "REMATCH when everyone is ready." } else { "Waiting for the host's rematch." };
+                format!("{outcome} {next}")
+            }
             Stage::Room if room.is_some_and(|r| r.is_host) => "Scan the code or read it out. START when everyone is ready.".into(),
             Stage::Room => "Waiting for the host to start the round.".into(),
         }
@@ -558,7 +577,7 @@ impl Lobby {
             Button::Del => "DELETE".to_string(),
             Button::Confirm => "JOIN".to_string(),
             Button::Ready => if room.is_some_and(|r| r.ready) { "READY" } else { "I'M READY" }.to_string(),
-            Button::Start => "START".to_string(),
+            Button::Start => if room.is_some_and(|r| r.ended.is_some()) { "REMATCH" } else { "START" }.to_string(),
             Button::Leave => "LEAVE".to_string(),
             Button::Kick(_) => "KICK".to_string(),
         };
@@ -679,7 +698,7 @@ pub fn button_rect(field: Rect, button: Button) -> Rectangle {
 #[cfg(test)]
 mod lobby_tests {
     use super::*;
-    use crate::net::wire::RosterSeat;
+    use crate::net::wire::{RosterSeat, RoundOutcome};
 
     const FIELD: Rect = Rect::new(0.0, 32.0, crate::DEFAULT_SCREEN_WIDTH as f32, crate::DEFAULT_SCREEN_HEIGHT as f32);
     /// The smallest field the game ships a map for (`maps/crossplay/`).
@@ -691,6 +710,11 @@ mod lobby_tests {
 
     fn seat(n: u8, nick: &str, ready: bool) -> RosterSeat {
         RosterSeat { seat: n, nick: nick.into(), chassis: 3, ready, connected: true }
+    }
+
+    /// The same room once its round has been played out.
+    fn ended(room: RoomView, outcome: RoundOutcome) -> RoomView {
+        RoomView { ended: Some(outcome), ..room }
     }
 
     fn room(is_host: bool, seats: Vec<RosterSeat>) -> RoomView {
@@ -705,6 +729,7 @@ mod lobby_tests {
             ready: false,
             seats,
             note: None,
+            ended: None,
         }
     }
 
@@ -721,7 +746,8 @@ mod lobby_tests {
     #[test]
     fn every_button_is_finger_sized_inside_the_panel_and_clear_of_the_rest() {
         let mut lobby = lobby();
-        let rooms = [None, Some(room(true, vec![seat(0, "oto", false), seat(1, "ana", true)]))];
+        let playing = room(true, vec![seat(0, "oto", false), seat(1, "ana", true)]);
+        let rooms = [None, Some(playing.clone()), Some(ended(playing, RoundOutcome::Lost))];
         for field in [FIELD, SMALL] {
             let panel = panel_rect(field);
             assert!(panel.width <= field.w && panel.height <= field.h, "the panel fits the field");
@@ -901,6 +927,50 @@ mod lobby_tests {
         let view = lobby.view(Some(&room));
         assert_eq!(view.join_url.as_deref(), Some("https://bongbong.io/j/AK7QX?rooms=ws://127.0.0.1:4848"));
         assert_eq!(view.qr.expect("encodes").version(), 3);
+    }
+
+    /// The room face once the round is over: the outcome under the seats,
+    /// the host's action reading `REMATCH` rather than `START`, and the
+    /// guest told whose move it is. Nothing else about the face moves -
+    /// the code, the QR and the seats are the ones the round was played
+    /// on - and `LEAVE` still leaves.
+    #[test]
+    fn the_room_face_reads_as_an_end_screen_once_the_round_is_over() {
+        let mut lobby = lobby();
+        // The room clears every seat's ready when a round starts, so a
+        // rematch is asked for the way the first round was.
+        let seats = vec![seat(0, "oto", false), seat(1, "ana", true)];
+        let host = ended(room(true, seats.clone()), RoundOutcome::Won);
+        lobby.update(&LobbyInput::default(), FIELD, Some(&host));
+        let view = lobby.view(Some(&host));
+        assert_eq!(view.stage, Stage::Room, "the room outlives its round");
+        assert_eq!(view.code.as_deref(), Some("AK7QX"));
+        assert!(view.qr.is_some(), "the invite is still up for anyone rejoining");
+        assert_eq!(view.seats.len(), 2);
+        assert_eq!(view.sub, "ROUND WON. REMATCH when everyone is ready.");
+        let action = |view: &LobbyView| {
+            view.buttons.iter().find(|b| b.button == Button::Start).map(|b| (b.label.clone(), b.enabled))
+        };
+        assert_eq!(action(&view), Some(("REMATCH".to_string(), true)));
+        // Dead until the other seat says it is ready again, exactly as
+        // `START` is before the first round.
+        let waiting = ended(room(true, vec![seat(0, "oto", false), seat(1, "ana", false)]), RoundOutcome::Won);
+        assert_eq!(action(&lobby.view(Some(&waiting))), Some(("REMATCH".to_string(), false)));
+        assert_eq!(lobby.hit(FIELD, centre(button_rect(FIELD, Button::Start)), Some(&waiting)), None);
+        // The rects are the ones a finger already knows: a relabelled
+        // button is the same button.
+        assert_eq!(button_rect(FIELD, Button::Start), button_rect(FIELD, Button::Confirm));
+        assert_eq!(lobby.update(&tap(centre(button_rect(FIELD, Button::Start))), FIELD, Some(&host)), LobbyAction::Start);
+        assert_eq!(lobby.update(&tap(centre(button_rect(FIELD, Button::Leave))), FIELD, Some(&host)), LobbyAction::Leave);
+
+        // A lost round says so, and a guest is told whose move it is.
+        let lost = ended(room(true, seats.clone()), RoundOutcome::Lost);
+        assert!(lobby.view(Some(&lost)).sub.starts_with("ROUND LOST."), "{}", lobby.view(Some(&lost)).sub);
+        let guest = ended(room(false, seats), RoundOutcome::Won);
+        let view = lobby.view(Some(&guest));
+        assert_eq!(view.sub, "ROUND WON. Waiting for the host's rematch.");
+        assert_eq!(action(&view), None, "a guest never starts the round, rematch or not");
+        assert!(view.buttons.iter().any(|b| b.button == Button::Leave));
     }
 
     /// A roster longer than the rows says how many it left out, and only

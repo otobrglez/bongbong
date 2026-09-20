@@ -4,12 +4,20 @@
 //! sampling every seat's mailbox into one `Input` and calling
 //! `Game::update`) → **paused** when nobody is connected (not ticking, the
 //! world kept in memory, resumed where it stopped) → **ended** (results
-//! kept a while for a rematch). Every third tick a snapshot is encoded
-//! once, as a delta against the previous one, and offered to every seat's
-//! outbox; a seat that skipped one, or just arrived, gets the next in
-//! full. The bytes come from `net::encode` (`snapshot`, `welcome`); the
-//! room only adds its clock and the events of the two ticks between
-//! snapshots. Seats outlive connections: a disconnect keeps the seat for
+//! kept a while for a rematch). The end screen belongs to **playing**:
+//! the room goes on ticking and sending while the shots land and the
+//! restart counts down, and ends the round on the tick before the one
+//! `Game::update` would call `init` on - a local round starts over
+//! there, a room would be dragging its seats into a round nobody asked
+//! for. The snapshots stop with it, so how the round went travels as a
+//! `Lobby::Ended` to every seat and the roster behind it is the one the
+//! room screen comes back on; `Start` from the host is then the rematch.
+//!
+//! Every third tick a snapshot is encoded once, as a delta against the
+//! previous one, and offered to every seat's outbox; a seat that skipped
+//! one, or just arrived, gets the next in full. The bytes come from
+//! `net::encode` (`snapshot`, `welcome`); the room only adds its clock
+//! and the events of the two ticks between snapshots. Seats outlive connections: a disconnect keeps the seat for
 //! its device token, and a reconnect reclaims it with a fresh `Welcome`
 //! cut from the live world, holes in the map included.
 //!
@@ -444,6 +452,13 @@ impl Room {
         let mailbox = self.seat(seat).expect("just seated").mailbox.clone();
         let welcome = self.welcome(seat);
         self.send_to(seat, Msg::Welcome(welcome));
+        if self.life.phase() == Phase::Ended {
+            // A seat reclaimed after the round finished is welcomed into
+            // the last tick of it, which no snapshot will ever follow, so
+            // it is told the round is over in the same breath.
+            let outcome = self.game.as_ref().map_or(Outcome::Playing, |g| g.outcome());
+            self.lobby_to(seat, Lobby::Ended { outcome: outcome.into() });
+        }
         self.broadcast_roster();
         self.refresh_stats();
         Ok(Joined { seat, mailbox })
@@ -594,6 +609,12 @@ impl Room {
         let outcome = self.game.as_ref().map_or(Outcome::Playing, |g| g.outcome());
         self.life.end(Instant::now());
         info!(code = self.code, frame, ?outcome, why, "round ended");
+        // The snapshots stop with the tick, so how the round went travels
+        // as a lobby message instead, and the roster behind it is the one
+        // the room screen comes back on - every seat unready again, ready
+        // for the host's rematch.
+        self.lobby_to_all(Lobby::Ended { outcome: outcome.into() });
+        self.broadcast_roster();
         self.refresh_stats();
     }
 
@@ -750,7 +771,28 @@ impl Room {
         acked
     }
 
+    /// The end screen's countdown runs out on the next `update`, which is
+    /// where a local round calls `init` and starts over. A room does not:
+    /// its seats would be dragged into a round nobody asked for, so the
+    /// round ends here instead and the host asks for the rematch.
+    fn restart_is_due(&self) -> bool {
+        self.game
+            .as_ref()
+            .is_some_and(|g| g.outcome() != Outcome::Playing && g.restart_countdown() <= PHYSICS_FIXED_DT)
+    }
+
     fn tick(&mut self) {
+        if self.restart_is_due() {
+            // The ticks since the last snapshot banked events nobody has
+            // been sent; they go out with the state they happened in
+            // before the stream stops.
+            if !self.pending_events.is_empty() {
+                let acked = self.acked();
+                self.broadcast_snapshot(acked);
+            }
+            self.end_round("outcome");
+            return;
+        }
         let now = Instant::now();
         let mut input = Input::default();
         for (i, seat) in self.seats.iter().enumerate().take(MAX_SEATS) {
@@ -763,6 +805,7 @@ impl Room {
         let acked = self.acked();
         let (w, h) = self.map.field_size();
         let game = self.game.as_mut().expect("a playing room has a game");
+        let was_playing = game.outcome() == Outcome::Playing;
         let began = std::time::Instant::now();
         game.update(input, PHYSICS_FIXED_DT, w, h);
         let took = began.elapsed();
@@ -772,16 +815,20 @@ impl Room {
             warn!(code = self.code, frame = game.frame(), took_us = took.as_micros() as u64, "tick overran");
         }
         let frame = game.frame();
-        let ended = game.outcome() != Outcome::Playing;
-        if frame % SNAPSHOT_EVERY == 0 || ended {
+        // The round is over from this tick on, and the end screen is a
+        // tick like any other: the shots land, the fires burn down and
+        // the restart counts toward zero, all of it on the room's clock
+        // and in the snapshots, so every seat watches the same end. The
+        // tick the counter runs out on never happens (`restart_is_due`).
+        // The tick it turned on gets a snapshot out of cadence, because
+        // the `RoundEnded` event in it is what puts the banner up.
+        let just_ended = was_playing && game.outcome() != Outcome::Playing;
+        if frame % SNAPSHOT_EVERY == 0 || just_ended {
             self.broadcast_snapshot(acked);
         } else {
             // A tick that sends nothing banks its events for the next
             // snapshot, whose own events are its frame's.
             self.pending_events.extend(encode::wire_events(game.events()));
-        }
-        if ended {
-            self.end_round("outcome");
         }
     }
 

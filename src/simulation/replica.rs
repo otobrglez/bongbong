@@ -247,6 +247,18 @@ impl Game {
         &mut self.physics
     }
 
+    /// Seconds left on the end screen's automatic restart - the number
+    /// the banner counts down - and zero while the round is playing.
+    ///
+    /// Public because a room server is another crate and this is what it
+    /// steers the end screen by: it ticks the round through the countdown
+    /// like any other frame and ends the round on the tick before the one
+    /// where `update` would call `init` and seat everyone in a round
+    /// nobody asked for (docs/online-coop-prd.md §4.7).
+    pub fn restart_countdown(&self) -> f32 {
+        self.restart_timer
+    }
+
     /// What the body does (`Physics::velocity`), or for a tank without a
     /// body - one rolling in - its kinematic `Tank::velocity`.
     pub(crate) fn body_velocity(&self, tank: &Tank) -> Vec2 {

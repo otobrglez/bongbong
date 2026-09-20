@@ -220,7 +220,8 @@ impl Game {
             let title_size = 72;
             let title_w = rl.measure_text(text, title_size);
             let sub = format!(
-                "Restarting in {}...",
+                "{} {}...",
+                chrome.countdown_label.unwrap_or("Restarting in"),
                 self.restart_timer.ceil().max(0.0) as i32
             );
             let sub_size = 28;

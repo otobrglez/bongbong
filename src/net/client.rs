@@ -22,7 +22,7 @@ use crate::net::codec::Msg;
 use crate::net::delta::apply_delta;
 use crate::net::rooms::RoomCode;
 use crate::net::transport::{Closed, ConnState, Transport};
-use crate::net::wire::{IntentMsg, Lobby, RosterSeat, Snapshot, Welcome};
+use crate::net::wire::{IntentMsg, Lobby, RosterSeat, RoundOutcome, Snapshot, Welcome};
 
 /// How many consecutive ticks a press is sent for
 /// (docs/online-coop-prd.md §4.1). The server samples one intent per
@@ -138,6 +138,10 @@ pub enum ClientEvent {
     /// The host started the round; a `Welcomed` with the round's
     /// parameters follows.
     Started,
+    /// The round is over and the room is back in its lobby, with how it
+    /// went. The snapshots stop here; the phase is `Lobby` again, so a
+    /// host can ask for the rematch on the same seat and the same code.
+    Ended { outcome: RoundOutcome },
     /// A whole snapshot, deltas already applied onto the one before it.
     Snapshot(Box<Snapshot>),
     /// Somebody said something.
@@ -369,6 +373,15 @@ impl<T: Transport> RoomClient<T> {
             Msg::Lobby(Lobby::Started) => {
                 self.started = true;
                 out.push(ClientEvent::Started);
+            }
+            Msg::Lobby(Lobby::Ended { outcome }) => {
+                // Back in the room: the next round is a fresh `Welcome`,
+                // so the next welcome must not be read as a joiner's.
+                self.started = false;
+                if self.phase == Phase::Playing {
+                    self.phase = Phase::Lobby;
+                }
+                out.push(ClientEvent::Ended { outcome });
             }
             Msg::Lobby(Lobby::Said { seat, text }) => out.push(ClientEvent::Said { seat, text }),
             Msg::Lobby(Lobby::Error { message }) => out.push(ClientEvent::Refused(message)),

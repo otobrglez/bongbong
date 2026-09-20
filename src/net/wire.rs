@@ -231,8 +231,11 @@ pub enum ShotKind {
 }
 
 /// `simulation::Outcome` on the wire (the simulation's own enum only
-/// serialises).
+/// serialises). The spelling is the simulation's, for the one place it
+/// travels as JSON rather than as postcard's variant index - the lobby's
+/// `Ended`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum RoundOutcome {
     #[default]
     Playing,
@@ -686,6 +689,11 @@ pub enum Lobby {
     /// The host started the round; a fresh `Welcome` with the round's
     /// parameters follows.
     Started,
+    /// The round is over, with how it went. The room stops ticking here,
+    /// so the end cannot travel in a snapshot - the stream ends with the
+    /// one the countdown ran out on. A `Roster` follows, and the room is
+    /// back in its lobby: `Start` from the host is the rematch.
+    Ended { outcome: RoundOutcome },
     /// A `Chat` relayed to every seat with its sender.
     Said { seat: u8, text: String },
 }
@@ -882,6 +890,10 @@ mod tests {
             r#"{"type":"room_created","code":"AK7QX"}"#
         );
         assert_eq!(serde_json::to_string(&Lobby::Started).unwrap(), r#"{"type":"started"}"#);
+        let ended = Lobby::Ended { outcome: RoundOutcome::Lost };
+        let json = serde_json::to_string(&ended).unwrap();
+        assert_eq!(json, r#"{"type":"ended","outcome":"lost"}"#);
+        assert_eq!(serde_json::from_str::<Lobby>(&json).unwrap(), ended);
         assert_eq!(
             serde_json::to_string(&Lobby::Error { message: "full".into() }).unwrap(),
             r#"{"type":"error","message":"full"}"#

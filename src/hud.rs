@@ -353,6 +353,10 @@ pub struct PlayChrome {
     /// The lobby over a dimmed field (`lobby.rs`), in place of the round
     /// this window is not playing.
     pub lobby: Option<crate::lobby::LobbyView>,
+    /// The words before the end screen's countdown. `None` is the local
+    /// round's "Restarting in", which is what a local round does; an
+    /// online round's counts down to the room's lobby instead.
+    pub countdown_label: Option<&'static str>,
 }
 
 /// The online status line's text size and how far in from the field's
