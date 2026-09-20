@@ -489,6 +489,9 @@ pub struct RoundState {
     /// - the `WAVE N` banner's timer. Zero when no wave is being
     /// announced, and always zero under the band plan.
     pub next_wave: u8,
+    /// Time left on the automatic restart, tenths of a second: the number
+    /// the end screen counts down. Zero while the round is playing.
+    pub restart: u8,
     pub outcome: RoundOutcome,
 }
 

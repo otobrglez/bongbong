@@ -131,7 +131,7 @@ mod tests {
                 TankState { id: 0, x: 400, y: 800, vx: 50, vy: 0, dir: 3, hp: 100, weapon: WeaponKind::Laser, ammo: 3, ..Default::default() },
                 TankState { id: 2, x: 2000, y: 1200, hp: 40, ..Default::default() },
             ],
-            round: RoundState { wave: 2, alive: 1, pending: 3, intro: 0, next_wave: 0, outcome: Default::default() },
+            round: RoundState { wave: 2, alive: 1, pending: 3, intro: 0, next_wave: 0, restart: 0, outcome: Default::default() },
             events: vec![WireEvent::TankEntered { slot: 2 }],
             ..Default::default()
         }

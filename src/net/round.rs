@@ -101,6 +101,21 @@ impl<T: Transport> OnlineRound<T> {
         self.replica.as_ref()
     }
 
+    /// The replica, to set a *drawing* flag on - the dev server's overlay
+    /// flags have to land on the `Game` that is drawn. The round's own
+    /// state is the room's: nothing but `net::apply` ever writes it.
+    pub fn game_mut(&mut self) -> Option<&mut Game> {
+        self.replica.as_mut()
+    }
+
+    /// How far ahead of render time the newest snapshot is, in
+    /// milliseconds: what the interpolation delay is buying, and negative
+    /// once the picture has run past everything that arrived. `None`
+    /// before the first snapshot.
+    pub fn buffer_ms(&self) -> Option<f64> {
+        self.interp.lead_ms(self.local_ms())
+    }
+
     /// Ask the room to start the round (the host's to give, and a no-op
     /// for anyone else - the room refuses it by name).
     pub fn start_round(&mut self) {

@@ -37,6 +37,8 @@ use crate::hud::{leave_dialog_rects, mode_button_rect, players_button_rect, play
 use crate::map::MapFile;
 use crate::maplint::LintSeverity;
 use crate::mode::{Driver, Session};
+use crate::net::client::Phase;
+use crate::net::round::AnyRound;
 use crate::obstacle::Obstacle;
 use crate::simulation::debug::{CLUSTER_RADIUS_PX, Detail, FieldTarget, JITTER_WINDOW_FRAMES, SPIN_FULL_CIRCLE_DEG, SPIN_NET_MAX, SPIN_WINDOW_FRAMES, TankPatch, TrackRow, r1, signed_quarter_turn};
 use crate::simulation::{Event, Game, Input, Overlays, PlayerCount};
@@ -80,6 +82,21 @@ const CLICK_DRAG_STEP_PX: f32 = 8.0;
 pub const GAME_ONLY_TOOLS: &[&str] = &[
     "snapshot", "events", "step", "input", "pause", "resume", "history", "nav_grid", "field", "terrain", "teleport",
     "set_tank", "kill", "spawn_enemy", "players",
+];
+
+/// The tools that drive the *local* round or the builder, refused while
+/// the window holds a seat in a room (docs/online-coop-prd.md §4.5): an
+/// online round is the server's to simulate and the replica on screen is
+/// a picture of it, so a write here would change the picture and reach
+/// nobody. Everything that only reads - `status`, `snapshot`, `terrain`,
+/// `events`, `history`, `nav_grid`, `field`, `map_get`, `lint`,
+/// `overlays`, `screenshot`, `mode`, `builder_files` and the `tuning_*`
+/// tools - describes the online round instead (`Session::shown`), and
+/// `key {escape}` gives the seat up.
+pub const ONLINE_REFUSED_TOOLS: &[&str] = &[
+    "step", "input", "pause", "resume", "restart", "teleport", "set_tank", "kill", "spawn_enemy", "players", "play",
+    "build", "click", "builder_tool", "builder_paint", "builder_undo", "builder_redo", "builder_settings",
+    "builder_map", "builder_save",
 ];
 
 /// Tiles one `terrain` reply lists at most (the standard 34 x 17 field
@@ -126,7 +143,7 @@ const SLOT_PARAMS: &str = r#"{"type":"object","properties":{"slot":{"type":"inte
 pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "status",
-        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `mode` (play|build) with the dialogs and the builder's state, and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). Cheap; call first.",
+        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `mode` (play|build|online) with the dialogs and the builder's state, and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), the server's tick and the phase - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
         schema: NO_PARAMS,
         read_only: true,
         destructive: false,
@@ -631,6 +648,9 @@ pub struct DevServer {
     /// Per-slot heading-turn counters for the whole round, cleared with
     /// `history`.
     turns: BTreeMap<usize, TurnStats>,
+    /// The replica tick whose events and track rows are already banked,
+    /// in an online round; `None` in every other mode.
+    shown_frame: Option<u64>,
 }
 
 impl DevServer {
@@ -675,6 +695,7 @@ impl DevServer {
             shot_seq: 0,
             history: VecDeque::with_capacity(HISTORY_FRAMES),
             turns: BTreeMap::new(),
+            shown_frame: None,
         }
     }
 
@@ -693,9 +714,31 @@ impl DevServer {
     pub fn before_frame(&mut self, session: &mut Session, width: f32, height: f32) {
         // The AI-decision events exist for this server's `events` feed.
         session.game.trace_ai = true;
+        self.observe_replica(session);
         while let Ok(req) = self.rx.try_recv() {
             self.dispatch(session, req, width, height);
         }
+    }
+
+    /// Bank an online replica's events and track rows on the frames a
+    /// snapshot moved it on, so `events` and `history` describe the round
+    /// on screen. A local round does this in `advance`, after every
+    /// update; an online one is never updated here, and its events are
+    /// the snapshot's (`net::apply` writes them), so the guard is the
+    /// replica's tick - the same one `Fx::observe` watches.
+    fn observe_replica(&mut self, session: &Session) {
+        if session.mode() != Driver::Online {
+            self.shown_frame = None;
+            return;
+        }
+        let Some(game) = session.online.as_ref().and_then(AnyRound::game) else { return };
+        let frame = game.frame();
+        if self.shown_frame == Some(frame) {
+            return;
+        }
+        self.shown_frame = Some(frame);
+        self.drain_events(game, None);
+        self.record_history(game);
     }
 
     /// Substitute injected player intent for the keyboard's, if any is
@@ -948,12 +991,15 @@ impl DevServer {
         }
     }
 
+    /// The round on screen, described: in an online round that is the
+    /// room's replica, and `round` says so (see `round_json`).
     fn status(&self, session: &Session, width: f32, height: f32) -> Value {
-        let game = &session.game;
+        let game = session.shown();
         let snap = game.debug_snapshot(width, height, Detail::Compact);
         json!({
             "version": env!("CARGO_PKG_VERSION"),
             "port": self.port,
+            "round": round_json(session),
             "seed": snap.seed,
             "frame": snap.frame,
             "time": snap.time,
@@ -991,13 +1037,29 @@ impl DevServer {
             let _ = reply.send(Err(format!("{method} needs play mode: the builder is live - call `play` first")));
             return;
         }
+        // The same refusal for a round that belongs to a room: only the
+        // server simulates it, so a write would move the picture and
+        // reach nobody.
+        if session.mode() == Driver::Online && ONLINE_REFUSED_TOOLS.contains(&method.as_str()) {
+            let room = session.online.as_ref().and_then(AnyRound::code).unwrap_or("-----");
+            let _ = reply.send(Err(format!(
+                "{method} needs a local round: this window holds a seat in room {room}, whose round only the server \
+                 simulates - the replica on screen is a picture of it, not the authority. Give the seat up with \
+                 `key {{\"key\": \"escape\"}}` to come back to the local round; the reading tools (status, snapshot, \
+                 terrain, events, history, nav_grid, field, screenshot) already describe the online one"
+            )));
+            return;
+        }
         // The tools that work on the whole session - the mode switch and
         // the builder - before the ones that only see the round.
         if let Some(result) = self.dispatch_session(session, &method, &params, width, height) {
             let _ = reply.send(result);
             return;
         }
-        let game = &mut session.game;
+        // The round on screen: the room's replica in an online round, the
+        // session's own otherwise. Only `screenshot`/`overlays` write
+        // through it, and only drawing flags.
+        let game = session.shown_mut();
         let result = match method.as_str() {
             "snapshot" => detail_param(&params).map(|d| to_value(game.debug_snapshot(width, height, d))),
             "events" => event_filter(&params).and_then(|filter| {
@@ -1619,7 +1681,9 @@ fn lint_json(session: &Session, source: Option<&str>) -> Result<Value, String> {
         Some(s @ ("builder" | "round")) => s,
         Some(other) => return Err(format!("source must be builder|round, got {other:?}")),
     };
-    let live = &session.game;
+    // In an online round the map to lint is the room's, as the replica
+    // was built from it.
+    let live = session.shown();
     let mut game = Game::default();
     game.map = if source == "builder" { session.builder.map().clone() } else { live.map.clone() };
     game.seed_override = Some(live.seed_override.unwrap_or_else(|| live.round_seed()));
@@ -1788,6 +1852,45 @@ fn mode_json(session: &Session) -> Value {
         "undo_depth": b.history().undo_depth(),
         "redo_depth": b.history().redo_depth(),
     })
+}
+
+/// Which round every reading tool is describing: the session's own, or
+/// the replica of a room's round. An online round names the room, the
+/// seat, how deep the snapshot buffer is and how far the server had got,
+/// so a `status` or a `snapshot` is never mistaken for the local round's.
+fn round_json(session: &Session) -> Value {
+    let round = match session.mode() {
+        Driver::Online => session.online.as_ref(),
+        _ => None,
+    };
+    let Some(round) = round else {
+        return json!({ "kind": "local" });
+    };
+    json!({
+        "kind": "online",
+        "room": round.code(),
+        "seat": round.seat(),
+        "phase": phase_name(round.phase()),
+        // What the interpolation delay is buying, rounded to the
+        // millisecond: negative once the picture has run past everything
+        // that arrived, null before the first snapshot.
+        "buffer_ms": round.buffer_ms().map(|ms| ms.round() as i64),
+        "server_tick": round.interp().newest_tick(),
+        // False between taking the seat and the room's `Welcome`: until
+        // then the window still draws the local round.
+        "replica": round.game().is_some(),
+    })
+}
+
+/// How far along the seat is, as one word.
+fn phase_name(phase: &Phase) -> &'static str {
+    match phase {
+        Phase::Connecting => "connecting",
+        Phase::Greeting => "greeting",
+        Phase::Lobby => "lobby",
+        Phase::Playing => "playing",
+        Phase::Closed(_) => "closed",
+    }
 }
 
 /// The category's name as the tools spell it (`wall`, not `WALL`).
@@ -2218,6 +2321,14 @@ pub fn base64_encode(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::client::{Identity, RoomClient, RoomSetup};
+    use crate::net::codec::{self, Msg};
+    use crate::net::encode as enc;
+    use crate::net::loopback::{self, LinkQuality, Loopback};
+    use crate::net::round::OnlineRound;
+    use crate::net::transport::Transport;
+    use crate::net::wire::{Lobby, Seat};
+    use crate::net::{MAX_SEATS, PROTOCOL_VERSION};
     use crate::simulation::TankSnapshot;
     use std::io::BufRead;
 
@@ -2955,6 +3066,190 @@ cells."1,1" = { kind = "wall" }"#;
         let m = ask(&mut server, &tx, &mut s, "build", json!({})).unwrap();
         assert_eq!(m["mode"], "build", "{m}");
         assert_eq!(m["dialog_open"], false);
+    }
+
+    /// A session holding a seat in a room, plus the authoritative round
+    /// the room is running and the room's end of the link.
+    ///
+    /// The room is answered by hand, as `net::round`'s tests answer one:
+    /// a perfect loopback, the code, the start and a `Welcome` built from
+    /// a round of its own. That round is deliberately unlike the
+    /// session's local one - another seed, two enemies instead of four -
+    /// so a reply that describes it cannot be mistaken for the local
+    /// round's.
+    struct Room {
+        link: Loopback,
+        game: Game,
+    }
+
+    impl Room {
+        fn say(&mut self, msg: Msg) {
+            self.link.send(&codec::encode(&msg));
+        }
+
+        /// Run the round on `ticks` ticks and send the snapshot they
+        /// earned, stamped `server_ms` - the room's clock, which a test
+        /// moves so the interpolator's render time reaches the snapshot
+        /// it means to draw (render time trails the newest stamp by the
+        /// interpolation delay, by design). The interval's events ride
+        /// along, as a room server's do.
+        fn tick(&mut self, ticks: u32, server_ms: u32) {
+            let (w, h) = self.game.map.field_size();
+            let mut events = Vec::new();
+            for _ in 0..ticks {
+                self.game.update(Input::default(), PHYSICS_FIXED_DT, w, h);
+                events.extend(enc::wire_events(self.game.events()));
+            }
+            let mut snapshot = enc::snapshot(&self.game, [0; MAX_SEATS]);
+            snapshot.server_ms = server_ms;
+            snapshot.events = events;
+            self.say(Msg::Snapshot(snapshot));
+        }
+    }
+
+    /// A session in an online round, welcomed into `Room`'s round.
+    fn online(seed: u64) -> (Session, Room) {
+        let mut session = game(seed);
+        let mut authority = Game::default();
+        authority.enemy_count_override = Some(2);
+        authority.level_overrides.mission = Some(crate::level::Mission::Protect);
+        authority.level_overrides.spawn = Some(crate::level::SpawnKind::Band);
+        authority.seed_override = Some(seed ^ 0xABC);
+        authority.player_row_override = Some(3);
+        // A room server's round has no mission banner to freeze behind.
+        authority.show_intro = false;
+        authority.map = session.game.map.clone();
+        let (w, h) = authority.map.field_size();
+        authority.init(w, h);
+
+        let (client_end, room_end) = loopback::pair(LinkQuality::PERFECT, seed);
+        let client = RoomClient::host(
+            Box::new(client_end) as Box<dyn Transport>,
+            Identity::new("dev", "tok-dev"),
+            RoomSetup::default(),
+        );
+        session.go_online(OnlineRound::new(client, "ROOM"));
+        // The create goes out on the first frame; the room answers it.
+        session.update_online(&Intent::default(), PHYSICS_FIXED_DT);
+        let mut room = Room { link: room_end, game: authority };
+        let roster = vec![Seat { seat: 0, nick: "dev".into(), chassis: 3 }];
+        let mut welcome =
+            enc::welcome(&room.game, 0, roster, "{}".into(), [0; MAX_SEATS]).expect("the map serialises");
+        welcome.protocol = PROTOCOL_VERSION;
+        welcome.snapshot.server_ms = 1_000;
+        room.say(Msg::Lobby(Lobby::RoomCreated { code: "AK7QX".into() }));
+        room.say(Msg::Lobby(Lobby::Started));
+        room.say(Msg::Welcome(welcome));
+        session.update_online(&Intent::default(), PHYSICS_FIXED_DT);
+        assert!(session.online.as_ref().and_then(AnyRound::game).is_some(), "the welcome built no replica");
+        (session, room)
+    }
+
+    /// One windowed frame in `app.rs`'s order: the dev server at the
+    /// boundary, then the online round's own frame. A snapshot's events
+    /// are handed over exactly once (`net::interp`), so the boundary has
+    /// to come first - as it does in the loop - for the server to see
+    /// them.
+    fn online_frame(server: &mut DevServer, session: &mut Session) {
+        server.before_frame(session, W, H);
+        session.update_online(&Intent::default(), PHYSICS_FIXED_DT);
+    }
+
+    /// In an online round every reading tool describes the round on
+    /// screen - the room's replica - and `status` says whose round that
+    /// is: the room, the seat, the buffer and how far the server has got.
+    #[test]
+    fn the_reading_tools_describe_the_online_round() {
+        let (mut s, mut room) = online(51);
+        let (mut server, tx) = DevServer::headless();
+        online_frame(&mut server, &mut s);
+        // Two snapshots: the one the replica is meant to land on, and a
+        // later one that carries the room's clock far enough forward for
+        // render time to reach it.
+        room.game.debug_kill(1).expect("enemy in slot 1");
+        room.tick(30, 1_500);
+        room.tick(30, 4_000);
+        online_frame(&mut server, &mut s);
+
+        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert_eq!(st["mode"], "online", "{st}");
+        let round = &st["round"];
+        assert_eq!(round["kind"], "online", "{round}");
+        assert_eq!(round["room"], "AK7QX");
+        assert_eq!(round["seat"], 0);
+        assert_eq!(round["phase"], "playing");
+        assert_eq!(round["replica"], true);
+        assert_eq!(round["server_tick"], 60, "the room's own tick: {round}");
+        assert!(round["buffer_ms"].is_i64(), "the snapshot buffer's depth: {round}");
+        assert_eq!(st["frame"], 30, "the replica's tick, the room's newest less the buffer: {st}");
+
+        // The numbers are the room's round, not the local one standing
+        // frozen behind it: another seed and two enemies, not four.
+        assert_eq!(st["seed"], format!("{:#x}", room.game.round_seed()), "{st}");
+        assert_ne!(st["seed"], format!("{:#x}", s.game.round_seed()));
+        assert_eq!(st["tanks"], 3, "the replica's tanks: {st}");
+        assert_eq!(st["enemies_alive"], 1, "one of the room's two enemies is a wreck: {st}");
+        let snap = ask(&mut server, &tx, &mut s, "snapshot", json!({})).unwrap();
+        assert_eq!(snap["tanks"].as_array().unwrap().len(), 3, "{snap}");
+        // And the other readers answer about it rather than refusing.
+        for (tool, params) in [
+            ("terrain", json!({ "only": "damaged" })),
+            ("events", json!({})),
+            ("history", json!({})),
+            ("nav_grid", json!({})),
+            ("field", json!({ "target": "player" })),
+            ("map_get", json!({})),
+            ("lint", json!({ "source": "round" })),
+            ("mode", json!({})),
+            ("overlays", json!({ "hitboxes": true })),
+            ("tuning_get", json!({ "diff_only": true })),
+            ("builder_files", json!({})),
+        ] {
+            ask(&mut server, &tx, &mut s, tool, params).unwrap_or_else(|e| panic!("{tool} in an online round: {e}"));
+        }
+        // The replica's own events and track rows are banked as the
+        // snapshots move it on, since nothing `advance`s it here.
+        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert!(st["events_kept"].as_u64().unwrap() > 0, "no event of the replica's was kept: {st}");
+        assert!(st["history_frames"].as_u64().unwrap() > 0, "no history of the replica's: {st}");
+        // An overlay flag landed on the round that is drawn.
+        assert!(s.shown().debug_overlays.hitboxes, "the overlay flag went to the local round");
+        assert!(!s.game.debug_overlays.hitboxes);
+    }
+
+    /// The other half of the rule: anything that would write refuses, by
+    /// name, and says what to do instead. Giving the seat up comes back
+    /// to the local round, and every tool works again.
+    #[test]
+    fn the_writing_tools_refuse_in_an_online_round() {
+        let (mut s, _room) = online(52);
+        let (mut server, tx) = DevServer::headless();
+        for tool in ONLINE_REFUSED_TOOLS {
+            let spec = TOOLS.iter().find(|t| t.name == *tool).unwrap_or_else(|| panic!("{tool} is not advertised"));
+            assert!(!spec.read_only, "{tool} reads only - it should describe the online round, not refuse");
+            let err = ask(&mut server, &tx, &mut s, tool, json!({})).unwrap_err();
+            assert!(err.contains("AK7QX"), "{tool}: {err}");
+            assert!(err.contains("escape"), "{tool}: {err}");
+        }
+        // The round that is not this window's is untouched by the asking.
+        assert_eq!(s.mode(), Driver::Online);
+        assert_eq!(s.game.frame(), 0, "the local round took a step");
+        assert!(!server.lockstep(), "a refused `pause` still froze the game");
+        // Naming a tool that does not exist still reads as unknown.
+        assert!(ask(&mut server, &tx, &mut s, "nonsense", json!({})).unwrap_err().contains("unknown method"));
+
+        // Esc gives the seat up; the local round is back and answers.
+        let m = ask(&mut server, &tx, &mut s, "key", json!({ "key": "escape" })).unwrap();
+        assert_eq!(m["mode"], "play", "{m}");
+        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert_eq!(st["round"]["kind"], "local", "{st}");
+        assert!(st["round"]["room"].is_null());
+        assert_eq!(st["tanks"], 5, "the local round is the one on screen again: {st}");
+        // A `step` is answered from `advance`, one rendered frame later.
+        let rx = call(&tx, "step", json!({ "frames": 1 }));
+        server.before_frame(&mut s, W, H);
+        server.advance(&mut s.game, Input::default(), 1, W, H, &mut |_| {});
+        assert_eq!(rx.recv().unwrap().unwrap()["frame"], 1);
     }
 
     #[test]

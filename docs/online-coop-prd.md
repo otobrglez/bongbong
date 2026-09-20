@@ -658,6 +658,14 @@ cargo run -- --rig --delay 80 --jitter 20 --loss 0.02
   room, so `just mcp-call status`, `snapshot`, `events`, `history` and
   `terrain` inspect a live round; `screenshot` refuses, since there is no
   renderer.
+- In the *window*, those tools follow the round on screen: in an online round
+  they describe the room's replica and `status.round` names the room, the
+  seat, the buffer and the server's tick, while everything that would write -
+  `step`, `restart`, `teleport`, the builder tools - refuses, since only the
+  server simulates that round (docs/dev-server-design.md section 4.2).
+  `net::rig::Lockstep` is how a test steps a networked round instead: the rig
+  with no thread and no clock, the replica catching up to the last snapshot
+  each `step` earned.
 - `cargo test -p bongbong-server` starts the server on an ephemeral port and
   plays a round through a headless client; it is the CI check for the
   protocol.

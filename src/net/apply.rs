@@ -585,6 +585,11 @@ fn apply_fires(game: &mut Game, s: &Snapshot, cols: u16) {
 
 fn apply_round(game: &mut Game, s: &Snapshot) {
     game.intro_timer = dequantise_seconds(s.round.intro);
+    // The end screen's countdown is the server's: the replica takes the
+    // number rather than running a clock of its own, so the two screens
+    // read the same second and the restart lands with the round the
+    // server starts.
+    game.restart_timer = dequantise_seconds(s.round.restart);
     game.outcome = s.round.outcome.into();
     // Zero tenths of breather is no breather: the banner is either up or
     // it is not, and a last twentieth of a second of it changes nothing.
@@ -847,6 +852,51 @@ mod tests {
         let other = authoritative(DEFAULT_MAP, 0xD1FF, 4);
         snapshot(&mut replica, &enc::snapshot(&other, [0; MAX_SEATS]));
         assert_eq!(replica.round_seed(), other.round_seed(), "another seed is a restart");
+    }
+
+    /// The end screen's countdown belongs to the server: a replica takes
+    /// the number off every snapshot and holds it in between, so the two
+    /// screens read the same second and the restart lands with the round
+    /// the server starts, rather than the replica counting down from zero.
+    #[test]
+    fn the_end_screens_countdown_travels() {
+        let mut game = authoritative(DEFAULT_MAP, 0x5EED, 1);
+        assert_eq!(enc::snapshot(&game, [0; MAX_SEATS]).round.restart, 0, "a live round has no countdown");
+        game.debug_kill(0).expect("the player is in slot 0");
+        let mut frame = 0;
+        while game.outcome() == crate::simulation::Outcome::Playing {
+            frame += 1;
+            step(&mut game, frame);
+            assert!(frame < 60, "the player's death never ended the round");
+        }
+        // The welcome's own snapshot puts the joiner on the end screen
+        // with the seconds the server has left, not with a fresh clock.
+        let mut replica = welcome_through_the_codec(&game);
+        let started = replica.drawable_state().restart_tenths;
+        assert!(started > 0, "the replica joined the end screen with no countdown");
+        assert_eq!(replica.drawable_state(), game.drawable_state());
+
+        let mut seen = vec![started];
+        for _ in 0..40 {
+            for _ in 0..3 {
+                frame += 1;
+                step(&mut game, frame);
+            }
+            let snap = enc::snapshot(&game, [0; MAX_SEATS]);
+            let Msg::Snapshot(snap) = decode(&encode(&Msg::Snapshot(snap))).expect("decodes") else { panic!("kind") };
+            snapshot(&mut replica, &snap);
+            assert_eq!(replica.drawable_state(), game.drawable_state(), "frame {frame}");
+            seen.push(replica.drawable_state().restart_tenths);
+            // The two frames in between are the replica's own, and it
+            // runs no clock of its own over them.
+            let held = replica.drawable_state().restart_tenths;
+            replica.tick_presentation(PHYSICS_FIXED_DT);
+            replica.tick_presentation(PHYSICS_FIXED_DT);
+            assert_eq!(replica.drawable_state().restart_tenths, held, "the replica ran the countdown itself");
+        }
+        assert!(seen.windows(2).all(|w| w[1] <= w[0]), "the countdown went back up: {seen:?}");
+        assert!(seen.last() < seen.first(), "the countdown never moved: {seen:?}");
+        assert!(game.outcome() != crate::simulation::Outcome::Playing, "the round restarted mid-test");
     }
 
     #[test]

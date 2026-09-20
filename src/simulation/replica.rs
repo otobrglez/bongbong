@@ -132,11 +132,13 @@ pub struct DrawableState {
     /// Every burning ground cell with its time left in tenths.
     pub fires: Vec<((i32, i32), u8)>,
     /// The wave (0 under the band plan), live enemies, tanks still to
-    /// roll in, the intro banner's time left in tenths, and the outcome.
+    /// roll in, the intro banner's and the end screen's time left in
+    /// tenths, and the outcome.
     pub wave: u32,
     pub alive: usize,
     pub pending: usize,
     pub intro_tenths: u8,
+    pub restart_tenths: u8,
     pub outcome: Outcome,
 }
 
@@ -397,6 +399,7 @@ impl Game {
             alive: wave.map_or(0, |w| w.alive),
             pending: wave.map_or(0, |w| w.pending),
             intro_tenths: tenths(self.intro_timer),
+            restart_tenths: tenths(self.restart_timer),
             outcome: self.outcome,
         }
     }
