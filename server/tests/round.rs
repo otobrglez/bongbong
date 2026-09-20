@@ -32,7 +32,7 @@ type Client = WebSocketStream<MaybeTlsStream<TcpStream>>;
 const WAIT: Duration = Duration::from_secs(5);
 
 async fn start_server() -> (SocketAddr, std::sync::Arc<bongbong_server::hub::Hub>) {
-    let config = Config { listen: "127.0.0.1:0".parse().unwrap(), pod: 'A', insecure: true, max_rooms: 8 };
+    let config = Config { listen: "127.0.0.1:0".parse().unwrap(), pod: 'C', insecure: true, max_rooms: 8 };
     let server = Server::bind(config).await.expect("bind an ephemeral port");
     let addr = server.addr;
     let hub = server.hub.clone();
@@ -229,7 +229,7 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
     })
     .await;
     assert_eq!(code.len(), 5);
-    assert!(code.starts_with('A'), "the pod letter leads: {code}");
+    assert!(code.starts_with('C'), "the pod letter leads: {code}");
     let welcome = expect_welcome(&mut host).await;
     assert_eq!(welcome.protocol, PROTOCOL_VERSION);
     assert_eq!(welcome.seat, 0);
@@ -252,10 +252,10 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
     assert_eq!(roster.1[1].nick, "second");
 
     let mut third = connect(addr).await;
-    let other_pod = format!("B{}", &code[1..]);
+    let other_pod = format!("D{}", &code[1..]);
     send(&mut third, &join("third", "tok-third", &other_pod)).await;
     let refused = expect_lobby_error(&mut third).await;
-    assert!(refused.contains("pod B") && refused.contains("pod A"), "names the mismatch: {refused}");
+    assert!(refused.contains("pod D") && refused.contains("pod C"), "names the mismatch: {refused}");
     send(&mut third, &join("third", "tok-third", &code)).await;
     let refused = expect_lobby_error(&mut third).await;
     assert!(refused.contains(&format!("{SEATS_PLAYABLE} seats")), "{refused}");
@@ -415,10 +415,10 @@ async fn lobby_refusals_are_errors_not_closes() {
     let mut ws = connect(addr).await;
     send(&mut ws, &Msg::Lobby(Lobby::Ready)).await;
     assert_eq!(expect_lobby_error(&mut ws).await, "not in a room");
-    send(&mut ws, &join("x", "tok-x", "AZZZZ")).await;
+    send(&mut ws, &join("x", "tok-x", "CZZZZ")).await;
     assert!(expect_lobby_error(&mut ws).await.contains("room code"));
-    send(&mut ws, &join("x", "tok-x", "AKKKK")).await;
-    assert!(expect_lobby_error(&mut ws).await.contains("no room AKKKK"));
+    send(&mut ws, &join("x", "tok-x", "CKKKK")).await;
+    assert!(expect_lobby_error(&mut ws).await.contains("no room CKKKK"));
     ws.send(Message::Binary(vec![9, 9].into())).await.unwrap();
     assert!(expect_lobby_error(&mut ws).await.contains("unknown message kind"));
     // A bare JSON text frame is a lobby message too.
@@ -562,9 +562,9 @@ async fn the_games_own_transport_hosts_a_round_and_keeps_up_with_it() {
     // letter alone would have picked the path.
     assert_eq!(played.seat, 0, "the host takes the first seat");
     let code = RoomCode::parse(&played.code).expect("a well-formed code");
-    assert_eq!(code.pod, 'A');
+    assert_eq!(code.pod, 'C');
     assert_eq!(socket_url(&rooms, Some(&code)), format!("ws://{addr}/ws"));
-    assert_eq!(socket_url(&RoomsHost::cluster(), Some(&code)), "wss://rooms.bongbong.io/r/rooms-a/ws");
+    assert_eq!(socket_url(&RoomsHost::cluster(), Some(&code)), "wss://rooms.bongbong.io/r/rooms-c/ws");
 
     // Cadence: snapshots at 20 Hz, the tick at 60 Hz.
     let n = played.snapshots.len();

@@ -1,5 +1,5 @@
 //! `bongbong-server`: the online co-op room server (docs/online-coop-prd.md
-//! §4.7, §4.13). `--listen 127.0.0.1:4848 --pod A --insecure` is the local
+//! §4.7, §4.13). `--listen 127.0.0.1:4848 --pod C --insecure` is the local
 //! run (`just run-server`); the container runs the same binary on
 //! `0.0.0.0`. SIGTERM drains: no new rooms, `/health` 503, the rounds in
 //! progress finish, exit when the last ends or after `DRAIN_MAX`; Ctrl-C
@@ -21,8 +21,9 @@ struct Args {
     /// Address to listen on.
     #[arg(long, default_value = "127.0.0.1:4848")]
     listen: SocketAddr,
-    /// This pod's letter, the first letter of every room code it mints.
-    /// Defaults to A on a loopback listen.
+    /// This pod's letter, the first letter of every room code it mints,
+    /// from `code::ALPHABET` so the lobby's key grid can type it.
+    /// Defaults to C on a loopback listen.
     #[arg(long)]
     pod: Option<char>,
     /// Plain ws:// is expected (a local run). Refused on a non-loopback
@@ -41,8 +42,11 @@ fn config(args: Args) -> Result<Config, String> {
     }
     let pod = match args.pod {
         Some(c) if bongbong_server::code::pod_letter_valid(c) => c,
-        Some(c) => return Err(format!("--pod {c:?} is not a capital letter or a digit")),
-        None if loopback => 'A',
+        Some(c) => {
+            let alphabet = std::str::from_utf8(bongbong_server::code::ALPHABET).expect("ASCII");
+            return Err(format!("--pod {c:?} is not one of {alphabet}"));
+        }
+        None if loopback => 'C',
         None => return Err(format!("--pod is required on {}", args.listen)),
     };
     if args.max_rooms == 0 {

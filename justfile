@@ -160,7 +160,7 @@ watch-dev:
 # letter A, `/health` and `/metrics` beside `/ws`. Headless - no raylib in
 # its graph. Extra args pass through (`just run-server --max-rooms 10`).
 run-server *ARGS:
-    cargo run -p bongbong-server -- --listen 127.0.0.1:4848 --pod A --insecure {{ARGS}}
+    cargo run -p bongbong-server -- --listen 127.0.0.1:4848 --pod C --insecure {{ARGS}}
 
 # Call one dev-server tool from the shell, e.g.
 # `just mcp-call step '{"frames":120,"move_dir":"up"}'` or `just mcp-call nav_grid`.

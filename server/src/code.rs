@@ -7,15 +7,17 @@ use rand::{Rng, RngExt};
 /// The room letters: 20 symbols with no vowels (a code never spells a
 /// word by accident) and no look-alikes (no 0/O, 1/I/L, 2/Z, 5/S, 6/G,
 /// 8/B, 9/g), so a code survives being read aloud or typed from a photo.
-pub const ALPHABET: &[u8; 20] = b"CDFGHJKMNPQRTVWXY347";
+pub use bongbong::net::rooms::CODE_ALPHABET as ALPHABET;
 
 /// Letters after the pod's: 20^4 = 160 000 rooms per pod.
 pub const ROOM_LETTERS: usize = 4;
 
-/// A pod letter is any capital letter or digit: the operator picks it
-/// (`--pod`), so it is not held to the alphabet.
+/// A pod letter comes from `ALPHABET` like the rest of a code. The
+/// operator picks it (`--pod`), but the lobby's key grid offers only
+/// these twenty symbols, so a pod letter outside them mints codes a
+/// player cannot tap in.
 pub fn pod_letter_valid(c: char) -> bool {
-    c.is_ascii_uppercase() || c.is_ascii_digit()
+    ALPHABET.contains(&(c as u8))
 }
 
 /// A fresh code for `pod`.
@@ -89,31 +91,42 @@ mod tests {
     fn mint_makes_codes_for_the_pod_that_check_passes() {
         let mut rng = rand::rng();
         for _ in 0..200 {
-            let code = mint('A', &mut rng);
+            let code = mint('C', &mut rng);
             assert_eq!(code.len(), 1 + ROOM_LETTERS);
-            assert!(code.starts_with('A'));
-            assert_eq!(check(&code, 'A'), Ok(code.clone()));
+            assert!(code.starts_with('C'));
+            assert_eq!(check(&code, 'C'), Ok(code.clone()));
             assert_eq!(
-                check(&code, 'B'),
-                Err(CodeError::OtherPod { code_pod: 'A', this_pod: 'B' }),
+                check(&code, 'D'),
+                Err(CodeError::OtherPod { code_pod: 'C', this_pod: 'D' }),
                 "another pod refuses it by name"
             );
         }
     }
 
     #[test]
+    fn every_symbol_a_pod_can_be_named_by_is_one_the_lobbys_grid_offers() {
+        for c in ALPHABET.iter().map(|&b| b as char) {
+            assert!(pod_letter_valid(c), "{c} mints codes the grid cannot type");
+        }
+        for outside in ['A', 'B', 'O', 'Z', '0', '1', 'c'] {
+            assert!(!pod_letter_valid(outside), "{outside} is not in the alphabet");
+        }
+    }
+
+    #[test]
     fn check_canonicalises_and_refuses_malformed_codes() {
-        assert_eq!(check(" ak7qx ", 'A'), Ok("AK7QX".into()));
-        assert_eq!(check("", 'A'), Err(CodeError::Malformed));
-        assert_eq!(check("AK7Q", 'A'), Err(CodeError::Malformed));
-        assert_eq!(check("AK7QXX", 'A'), Err(CodeError::Malformed));
-        assert_eq!(check("AK7QO", 'A'), Err(CodeError::Malformed), "O is not in the alphabet");
-        assert_eq!(check("AK7Q1", 'A'), Err(CodeError::Malformed), "1 is not in the alphabet");
+        assert_eq!(check(" ck7qx ", 'C'), Ok("CK7QX".into()));
+        assert_eq!(check("", 'C'), Err(CodeError::Malformed));
+        assert_eq!(check("CK7Q", 'C'), Err(CodeError::Malformed));
+        assert_eq!(check("CK7QXX", 'C'), Err(CodeError::Malformed));
+        assert_eq!(check("CK7QO", 'C'), Err(CodeError::Malformed), "O is not in the alphabet");
+        assert_eq!(check("CK7Q1", 'C'), Err(CodeError::Malformed), "1 is not in the alphabet");
+        assert_eq!(check("AK7QX", 'A'), Err(CodeError::Malformed), "A is not a pod letter either");
         assert_eq!(
-            check("ak7qx", 'a'),
-            Err(CodeError::OtherPod { code_pod: 'A', this_pod: 'a' }),
-            "the code is read in capitals; the pod letter is the operator's"
+            check("ck7qx", 'c'),
+            Err(CodeError::OtherPod { code_pod: 'C', this_pod: 'c' }),
+            "the code is read in capitals; a lower-case pod is not this pod"
         );
-        assert!(CodeError::OtherPod { code_pod: 'B', this_pod: 'A' }.to_string().contains("pod B"));
+        assert!(CodeError::OtherPod { code_pod: 'D', this_pod: 'C' }.to_string().contains("pod D"));
     }
 }

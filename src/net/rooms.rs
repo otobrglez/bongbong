@@ -259,9 +259,13 @@ mod tests {
         for look_alike in b"BLSZ0125689" {
             assert!(!CODE_ALPHABET.contains(look_alike), "{} is read wrong", *look_alike as char);
         }
+        // The room server mints from this very list rather than a copy of
+        // it, which is what keeps a minted code typable on the lobby's grid.
         let server = include_str!("../../server/src/code.rs");
-        let quoted = format!("b\"{}\"", std::str::from_utf8(CODE_ALPHABET).expect("ASCII"));
-        assert!(server.contains(&quoted), "the room server mints from another alphabet than {quoted}");
+        assert!(
+            server.contains("pub use bongbong::net::rooms::CODE_ALPHABET as ALPHABET;"),
+            "the room server should mint from CODE_ALPHABET, not its own list"
+        );
     }
 
     #[test]
