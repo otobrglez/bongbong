@@ -242,6 +242,25 @@ pub fn players_button_rect(panel: Rect) -> Rectangle {
 /// Full bar height, so a finger has the most to aim at.
 pub const MODE_BUTTON_W: f32 = 72.0;
 
+/// The `ONLINE` button, left of the players button: the way into the
+/// lobby (`lobby.rs`, docs/online-coop-prd.md §4.10). Wide enough for
+/// its six characters, and the bar's last free slot before the gauges.
+/// Not drawn where a build cannot reach a room (`ONLINE_AVAILABLE`).
+pub const ONLINE_BUTTON_W: f32 = 80.0;
+
+/// Where the `ONLINE` button sits in `panel` (window space): left of the
+/// players button, so all three follow `--resolution` together and every
+/// hit test agrees on them.
+pub fn online_button_rect(panel: Rect) -> Rectangle {
+    let p = players_button_rect(panel);
+    Rectangle::new(p.x - PLAYERS_BUTTON_GAP - ONLINE_BUTTON_W, p.y, ONLINE_BUTTON_W, p.height)
+}
+
+/// The colour of anything to do with a room: the `ONLINE` button, the
+/// lobby's accents and the round's status line. Deliberately not the
+/// builder's amber - a room is not an edit.
+pub const ONLINE_COLOR: Color = Color::new(120, 220, 255, 255);
+
 /// Where the RESTART button sits: the players button's slot, which is free
 /// exactly where this button is drawn (no keyboard means no R key and no
 /// second player - `KEYBOARD_AVAILABLE`), so nothing else in the bar moves.
@@ -315,19 +334,25 @@ pub fn players_dialog_rects(field: Rect) -> PlayersDialogRects {
 /// What play-mode chrome `Game::render` draws besides the readouts: the
 /// `BUILD` and players buttons in the bar and, while the player is being
 /// asked, the leave-round or players dialog over a dimmed field.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct PlayChrome {
     pub build_button: bool,
     pub players_button: bool,
+    /// The `ONLINE` button, which opens the lobby.
+    pub online_button: bool,
     /// The RESTART button in the players button's slot, where there is no
     /// keyboard for the R key (`KEYBOARD_AVAILABLE`).
     pub restart_button: bool,
     pub leave_dialog: bool,
     pub players_dialog: bool,
-    /// One line along the field's top edge: an online round's room code,
-    /// seat and state (`net::round::OnlineRound::status`), until the
-    /// lobby screen gives it a home of its own. `None` in a local round.
+    /// One line along the field's top edge while an online round runs:
+    /// the room code, this seat and the snapshot buffer
+    /// (`net::round::OnlineRound::status`). `None` in a local round -
+    /// and everything before the round is the lobby's, not this line's.
     pub status: Option<String>,
+    /// The lobby over a dimmed field (`lobby.rs`), in place of the round
+    /// this window is not playing.
+    pub lobby: Option<crate::lobby::LobbyView>,
 }
 
 /// The online status line's text size and how far in from the field's
@@ -336,13 +361,33 @@ pub struct PlayChrome {
 pub const HUD_STATUS_TEXT_SIZE: i32 = 14;
 pub const HUD_STATUS_INSET: i32 = 11;
 
-/// The status line's colour: the builder's amber, so a round somebody
-/// else is simulating never reads as one of the HUD's own numbers.
-pub const HUD_STATUS_COLOR: Color = BUILD_COLOR;
+/// The status line's colour: the room blue, so a round somebody else is
+/// simulating never reads as one of the HUD's own numbers.
+pub const HUD_STATUS_COLOR: Color = ONLINE_COLOR;
 
 #[cfg(test)]
 mod hud_tests {
     use super::*;
+
+    /// The three bar buttons sit in a row at the bar's right end, in
+    /// their fixed order, all of them full bar height and none of them
+    /// on top of another.
+    #[test]
+    fn the_online_button_sits_left_of_the_players_button() {
+        let panel = Rect::new(0.0, 0.0, crate::DEFAULT_SCREEN_WIDTH as f32, crate::HUD_BAR_HEIGHT as f32);
+        let online = online_button_rect(panel);
+        let players = players_button_rect(panel);
+        let mode = mode_button_rect(panel);
+        assert_eq!(online.height, panel.h);
+        assert!(online.width >= "ONLINE".len() as f32 * 11.0, "the label fits its slot");
+        assert!(online.x + online.width + PLAYERS_BUTTON_GAP <= players.x);
+        assert!(players.x + players.width + PLAYERS_BUTTON_GAP <= mode.x);
+        assert!(mode.x + mode.width <= panel.w);
+        assert!(online.x >= 0.0);
+        // The RESTART button of a keyboard-less build shares the players
+        // slot, so the row is the same three rects either way.
+        assert_eq!(restart_button_rect(panel), players);
+    }
 
     #[test]
     fn both_dialogs_have_finger_sized_buttons_inside_the_field() {

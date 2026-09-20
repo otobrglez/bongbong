@@ -373,6 +373,14 @@ pub const KEYBOARD_AVAILABLE: bool = !cfg!(any(target_os = "ios", target_os = "a
 /// dev tools may set it - but no player-facing path reaches it.
 pub const TWO_PLAYERS_AVAILABLE: bool = KEYBOARD_AVAILABLE;
 
+/// Whether this build can reach a room (docs/online-coop-prd.md §4.10):
+/// the bar carries an `ONLINE` button and `mode::Session` will open the
+/// lobby. Desktop, iOS and Android dial a socket through
+/// `net::native`; the web build reaches its room through the join
+/// link's own code instead, so the button would have nothing to open
+/// and is not drawn there.
+pub const ONLINE_AVAILABLE: bool = cfg!(all(feature = "online", not(target_os = "emscripten")));
+
 /// How many human seats one round can carry: the width of
 /// `simulation::Input::seats` and of every per-seat array in `Game`. A
 /// round reads only the first `Game::players.count()` seats (one or two
@@ -934,6 +942,7 @@ pub mod ground;
 pub mod hud;
 pub mod laser;
 pub mod level;
+pub mod lobby;
 pub mod map;
 pub mod mode;
 pub mod net;
@@ -945,6 +954,7 @@ pub mod physics;
 pub mod portal;
 pub mod pickup;
 pub mod plasma;
+pub mod qr;
 #[cfg(feature = "render")]
 pub mod render;
 pub mod shell;
