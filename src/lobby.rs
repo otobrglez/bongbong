@@ -1012,12 +1012,32 @@ mod lobby_tests {
     #[test]
     fn a_full_room_says_how_many_seats_it_left_out() {
         let mut lobby = lobby();
-        let seats: Vec<RosterSeat> = (0..crate::MAX_SEATS as u8).map(|i| seat(i, "p", true)).collect();
+        let seats: Vec<RosterSeat> = (0..crate::MAX_SEATS as u8).map(|i| seat(i, "p", i > 0)).collect();
         let room = room(true, seats);
         lobby.update(&LobbyInput::default(), FIELD, Some(&room));
         let view = lobby.view(Some(&room));
         assert_eq!(view.seats.len(), LOBBY_SEAT_ROWS);
         assert_eq!(view.more, crate::MAX_SEATS - LOBBY_SEAT_ROWS);
-        assert_eq!(lobby.buttons(Some(&room)).iter().filter(|b| matches!(b, Button::Kick(_))).count(), LOBBY_SEAT_ROWS - 1);
+        // Each row is named for its seat, and reads as what that seat is.
+        assert_eq!(view.seats.iter().map(|s| s.slot.as_str()).collect::<Vec<_>>(), vec!["P1", "P2", "P3", "P4"]);
+        assert_eq!(view.seats[0].state, "HOST");
+        assert!(view.seats[1..].iter().all(|s| s.state == "READY"));
+        // A full room starts once everybody but the host has readied,
+        // and every kick button belongs to a row that is drawn.
+        assert!(room.can_start);
+        let kicks: Vec<u8> = lobby
+            .buttons(Some(&room))
+            .into_iter()
+            .filter_map(|b| match b {
+                Button::Kick(row) => Some(row),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(kicks, vec![1, 2, 3], "the host's own row has no kick, and no row past the panel's");
+        let column = seats_rect(FIELD);
+        for row in kicks {
+            let r = button_rect(FIELD, Button::Kick(row));
+            assert!(r.y >= column.y && r.y + r.height <= column.y + column.height);
+        }
     }
 }

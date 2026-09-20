@@ -54,11 +54,12 @@ pub const TICK: Duration = Duration::from_nanos(1_000_000_000 / 60);
 /// A snapshot goes out every this many ticks: 20 Hz.
 pub const SNAPSHOT_EVERY: u64 = 3;
 
-/// Seats a round can carry today. The simulation itself seats up to
-/// `MAX_SEATS` (docs/online-coop-prd.md §4.11), so this is a room policy
-/// alone: a third join is refused until the compact N-seat HUD lands and
-/// the difficulty curve is tuned for a bigger team.
-pub const SEATS_PLAYABLE: usize = 2;
+/// Seats a room takes: the simulation's own `MAX_SEATS`
+/// (docs/online-coop-prd.md §4.11), since the bar now reads a whole team
+/// (the compact strip in `hud.rs`). A join past it is refused by name.
+/// The wave plan is still authored for one tank, so a big team has an
+/// easy round until the curve scales with the seat count.
+pub const SEATS_PLAYABLE: usize = MAX_SEATS;
 
 /// A waiting room with nobody connected is reaped after this.
 pub const WAITING_TTL: Duration = Duration::from_secs(30 * 60);
@@ -428,8 +429,11 @@ impl Room {
                 if self.life.phase() != Phase::Waiting {
                     return Err("the round has started; this room takes no new seats".into());
                 }
+                // A waiting room's seats are dense - `remove_seat` and
+                // `expire_graces` compact them and only a waiting room
+                // takes a join - so this caps the seat vector too.
                 if self.occupied() >= SEATS_PLAYABLE {
-                    return Err(format!("the room is full: {SEATS_PLAYABLE} seats until phase 3"));
+                    return Err(format!("the room is full: {SEATS_PLAYABLE} seats"));
                 }
                 let nick = clean_nick(&nick);
                 let i = self.seats.len();
@@ -570,12 +574,18 @@ impl Room {
         if self.life.phase() == Phase::Waiting {
             self.seats.retain(Option::is_some);
         }
-        let players = self.occupied().clamp(1, SEATS_PLAYABLE);
+        // As many players as the room has seats up to its highest
+        // occupied one, so every seat on the roster has a tank on the
+        // field. In a waiting room the seats are dense and that is
+        // `occupied()`; a rematch out of a round somebody left in the
+        // middle of keeps the hole and its idle tank rather than handing
+        // a seat a tank that was never spawned.
+        let players = self.seats.iter().rposition(Option::is_some).map_or(1, |i| i + 1).clamp(1, SEATS_PLAYABLE);
         let seed = self.pinned_seed.unwrap_or_else(|| rand::random::<u64>());
         let mut game = Box::new(Game::default());
         game.map = self.map.clone();
         game.level_overrides = self.overrides;
-        game.players = PlayerCount::from_count(players).expect("clamped to SEATS_PLAYABLE");
+        game.players = PlayerCount::from_count(players).expect("clamped to the seats a room takes");
         game.seed_override = Some(seed);
         let (w, h) = self.map.field_size();
         game.init(w, h);

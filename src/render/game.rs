@@ -30,7 +30,10 @@ use crate::render::bullet::{draw_bullet, draw_bullet_shadow};
 use crate::render::canvas::{GpuCanvas, Sheets};
 use crate::render::decal::draw_decal_shadow;
 use crate::render::frog::FrogVariantTextures;
-use crate::render::hud::{draw_bar, draw_leave_dialog, draw_mode_button, draw_players_button, draw_players_dialog, draw_restart_button};
+use crate::render::hud::{
+    draw_bar, draw_leave_button, draw_leave_dialog, draw_mode_button, draw_players_button, draw_players_dialog,
+    draw_restart_button,
+};
 use crate::render::laser::draw_laser_beam;
 use crate::render::plasma::{draw_plasma, draw_plasma_shadow};
 use crate::render::portal::draw_portal_glow;
@@ -178,7 +181,7 @@ impl Game {
         // borrow it, and the dev label needs the number.
         #[cfg(feature = "dev-tools")]
         let frame_ms = rl.get_frame_time() * 1000.0;
-        let hud = HudModel::gather(self);
+        let hud = HudModel::gather(self, chrome.seat);
         // The build stamp, bottom-right of the field (text width must be
         // measured on the RaylibHandle, outside the draw closure).
         let version = version_line();
@@ -715,6 +718,9 @@ impl Game {
             }
             if chrome.build_button {
                 draw_mode_button(&mut d, layout.panel, "BUILD", BUILD_COLOR);
+            }
+            if chrome.leave_button {
+                draw_leave_button(&mut d, layout.panel);
             }
             if chrome.online_button {
                 draw_online_button(&mut d, layout.panel);
