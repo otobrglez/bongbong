@@ -1447,6 +1447,22 @@ tunables! {
         view_scale_snap: i32 = 0 in 0 ..= 1;
     }
 
+    group online {
+        /// How far behind the server an online round is drawn, in
+        /// milliseconds (docs/online-coop-prd.md §4.5, `net::interp`). A
+        /// room sends twenty snapshots a second, so without a delay the
+        /// replica would have nothing to interpolate toward and would
+        /// step at 20 fps; drawing this far in the past keeps two
+        /// snapshots bracketing render time and the picture moves every
+        /// frame. Raise it on a jittery link (a late packet then still
+        /// arrives before it is needed), lower it to trade smoothness for
+        /// freshness - the hull answers the stick this much later. Below
+        /// one snapshot interval (50 ms) the replica extrapolates most
+        /// frames. A knob so it can be tried by hand against a rig run
+        /// (`--rig --delay 80 --jitter 20`). Live.
+        online_interpolation_delay_ms: f32 = 100.0 in 0.0 ..= 500.0;
+    }
+
     group cosmetics {
         // --- portals (portal.rs) ---
         /// Seconds for one visual revolution of a portal's spiral - the

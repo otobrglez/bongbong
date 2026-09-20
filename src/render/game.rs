@@ -16,7 +16,8 @@ use crate::canvas::Sheet;
 use crate::decal::draw_decal;
 use crate::game::PaintOptions;
 use crate::hud::{
-    version_line, HudModel, PlayChrome, BUILD_COLOR, HUD_VERSION_BOTTOM_INSET, HUD_VERSION_COLOR, HUD_VERSION_RIGHT_INSET,
+    version_line, HudModel, PlayChrome, BUILD_COLOR, HUD_STATUS_COLOR, HUD_STATUS_INSET, HUD_STATUS_TEXT_SIZE,
+    HUD_VERSION_BOTTOM_INSET, HUD_VERSION_COLOR, HUD_VERSION_RIGHT_INSET,
     HUD_VERSION_TEXT_SIZE,
 };
 use crate::math::{Color, Rectangle};
@@ -226,6 +227,12 @@ impl Game {
             (text, color, title_size, title_w, sub, sub_size, sub_w)
         });
         let paused_w = rl.measure_text("PAUSED", 72);
+        // An online round's one line of chrome (its width is measured
+        // here like every other string, outside the draw closures).
+        let status = chrome.status.as_ref().map(|line| {
+            let w = rl.measure_text(line, HUD_STATUS_TEXT_SIZE);
+            (line.as_str(), w)
+        });
 
         // Pass 1: draw the world (tracks, tanks, shells) into an offscreen
         // render texture, so a shockwave can distort the finished frame as a
@@ -610,6 +617,20 @@ impl Game {
                             Color::new(80, 200, 255, 255),
                         );
                     }
+                }
+
+                // An online round says where it stands along the field's
+                // top edge: the room, the seat and how much of the
+                // snapshot stream is in hand.
+                if let Some((line, width)) = status {
+                    d.draw_rectangle(
+                        HUD_STATUS_INSET - 4,
+                        HUD_STATUS_INSET - 3,
+                        width + 8,
+                        HUD_STATUS_TEXT_SIZE + 6,
+                        Color::new(0, 0, 0, 150),
+                    );
+                    d.draw_text(line, HUD_STATUS_INSET, HUD_STATUS_INSET, HUD_STATUS_TEXT_SIZE, HUD_STATUS_COLOR);
                 }
 
                 // The build stamp along the field's bottom edge, left of
