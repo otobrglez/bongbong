@@ -1,15 +1,23 @@
-//! The game's two modes and the switch between them
-//! (docs/game-editor-fusion.md, section 5): `Session` owns the `Game`, the
-//! `MapEditor` and which of the two is live, plus the "leave this round?"
-//! question in between and the "how many players?" one (docs/two-players.md).
-//! Both the window (`main.rs`) and the dev server go through the methods
-//! here, so a tool and a click are the same path. No `RaylibHandle`
-//! anywhere in this file: drawing stays in `game.rs`, `hud.rs` and
-//! `editor.rs`.
+//! The game's three modes and the switch between them
+//! (docs/game-editor-fusion.md, section 5; docs/online-coop-prd.md §4.5):
+//! `Session` owns the `Game`, the `MapEditor` and which driver is live,
+//! plus the "leave this round?" question in between and the "how many
+//! players?" one (docs/two-players.md). Both the window (`app.rs`) and
+//! the dev server go through the methods here, so a tool and a click are
+//! the same path. No `RaylibHandle` anywhere in this file: drawing stays
+//! in `game.rs`, `hud.rs` and `editor.rs`.
+//!
+//! Play runs `Game::update` in process, Build runs the map builder, and
+//! Online draws a `net::round::OnlineRound`'s replica - a round the room
+//! server simulates and this window only ever draws. The local round is
+//! left exactly where it stood: `playing()` is Play's alone, so nothing
+//! about online play can start or stop a local one.
 
+use crate::ai::Intent;
 use crate::editor::{BuilderInput, EditorAction, MapEditor};
 use crate::hud::PlayChrome;
 use crate::map::MapFile;
+use crate::net::round::AnyRound;
 use crate::simulation::{Game, Outcome, PlayerCount};
 use crate::Layout;
 
@@ -18,6 +26,8 @@ use crate::Layout;
 pub enum Driver {
     Play,
     Build,
+    /// A room's round, drawn from its snapshots and never updated here.
+    Online,
 }
 
 impl Driver {
@@ -25,6 +35,7 @@ impl Driver {
         match self {
             Driver::Play => "play",
             Driver::Build => "build",
+            Driver::Online => "online",
         }
     }
 }
@@ -44,6 +55,10 @@ pub struct Session {
     /// `dialog`. The chosen count itself lives on `Game::players`, which
     /// every restart keeps, so it is the session's setting.
     pub players_dialog: bool,
+    /// The seat in a room and the replica it draws, in online mode: the
+    /// second `Game` of the session, and the only one this window does
+    /// not simulate. `None` in every other mode.
+    pub online: Option<AnyRound>,
 }
 
 /// A session reads as its round: the dev server, its tests and `main.rs`
@@ -67,7 +82,7 @@ impl Session {
     /// round and the builder's canvas never need to be told it.
     pub fn new(game: Game) -> Self {
         let builder = MapEditor::new(game.map.clone());
-        Session { driver: Driver::Play, game, builder, dialog: false, players_dialog: false }
+        Session { driver: Driver::Play, game, builder, dialog: false, players_dialog: false, online: None }
     }
 
     pub fn mode(&self) -> Driver {
@@ -174,12 +189,60 @@ impl Session {
 
     /// The `Tab` key: `press_build` in play mode, `play` in build mode -
     /// except while the builder's Save prompt is taking text, when a key
-    /// is a character and not a command.
+    /// is a character and not a command. Online it is inert: the round
+    /// belongs to the room, and leaving it is `leave_online`.
     pub fn toggle(&mut self) -> Driver {
         match self.driver {
             Driver::Play => self.press_build(),
             Driver::Build if self.builder.text_entry_open() => self.driver,
             Driver::Build => self.play(),
+            Driver::Online => self.driver,
+        }
+    }
+
+    /// Take the window into `round`: the local round and the builder are
+    /// left exactly as they stand, so leaving comes back to them.
+    pub fn go_online(&mut self, round: AnyRound) {
+        self.dialog = false;
+        self.players_dialog = false;
+        self.online = Some(round);
+        self.driver = Driver::Online;
+    }
+
+    /// Give up the seat and come back to the local round, which has been
+    /// standing still the whole time (nothing online ever calls
+    /// `Game::update`). A no-op in the other modes.
+    pub fn leave_online(&mut self) -> Driver {
+        if let Some(round) = &mut self.online {
+            round.leave();
+        }
+        self.online = None;
+        if self.driver == Driver::Online {
+            self.driver = Driver::Play;
+        }
+        self.driver
+    }
+
+    /// One rendered frame of the online round: what arrived, this seat's
+    /// `intent` (seat 0 of the frame's `Input`), and the picture between
+    /// two snapshots. A no-op in the other modes.
+    pub fn update_online(&mut self, intent: &Intent, dt: f32) {
+        if self.driver != Driver::Online {
+            return;
+        }
+        if let Some(round) = &mut self.online {
+            round.frame(intent, dt);
+        }
+    }
+
+    /// The round on screen: the room's replica in online mode - the local
+    /// one until a `Welcome` has built it - and the session's own
+    /// otherwise. Everything that draws (`Game::render`, the HUD, `fx`)
+    /// reads this rather than `game`.
+    pub fn shown(&self) -> &Game {
+        match self.driver {
+            Driver::Online => self.online.as_ref().and_then(AnyRound::game).unwrap_or(&self.game),
+            _ => &self.game,
         }
     }
 
@@ -208,17 +271,32 @@ impl Session {
         match self.driver {
             Driver::Play => self.game.map.field_size(),
             Driver::Build => self.builder.map().field_size(),
+            Driver::Online => self.shown().map.field_size(),
         }
     }
 
-    /// What `Game::render` should draw around the field this frame.
+    /// What `Game::render` should draw around the field this frame. An
+    /// online round shows none of the local buttons - the round is the
+    /// room's to restart and the builder is not part of it - and carries
+    /// a status line instead, until the lobby screen replaces it.
     pub fn play_chrome(&self) -> PlayChrome {
-        PlayChrome {
-            build_button: true,
-            players_button: crate::TWO_PLAYERS_AVAILABLE,
-            restart_button: !crate::KEYBOARD_AVAILABLE,
-            leave_dialog: self.dialog,
-            players_dialog: self.players_dialog,
+        match self.driver {
+            Driver::Online => PlayChrome {
+                build_button: false,
+                players_button: false,
+                restart_button: false,
+                leave_dialog: false,
+                players_dialog: false,
+                status: self.online.as_ref().map(AnyRound::status),
+            },
+            _ => PlayChrome {
+                build_button: true,
+                players_button: crate::TWO_PLAYERS_AVAILABLE,
+                restart_button: !crate::KEYBOARD_AVAILABLE,
+                leave_dialog: self.dialog,
+                players_dialog: self.players_dialog,
+                status: None,
+            },
         }
     }
 }
@@ -391,6 +469,61 @@ mod session_tests {
         s.press_players();
         assert_eq!(s.answer_players(PlayerCount::One), PlayerCount::One);
         assert!(s.game.player2.is_none());
+    }
+
+    /// Online is a third driver, not a replacement: the local round and
+    /// the builder are exactly where they were when it started, and
+    /// `playing()` - the one predicate that decides whether
+    /// `Game::update` runs - stays Play's alone.
+    #[test]
+    fn going_online_freezes_the_local_round_and_leaves_the_builder_alone() {
+        use crate::net::client::{Identity, RoomClient, RoomSetup};
+        use crate::net::loopback::{self, LinkQuality};
+        use crate::net::round::OnlineRound;
+        use crate::net::transport::Transport;
+
+        let mut s = session();
+        s.builder.select_tool(Tool::Wall(Material::Iron));
+        s.builder.stroke(&[(20, 11)], false);
+        for _ in 0..5 {
+            s.game.update(crate::simulation::Input::default(), crate::PHYSICS_FIXED_DT, W, H);
+        }
+        let local = s.game.drawable_state();
+        let canvas = s.builder.map().clone();
+
+        // A room nobody answers: the driver is online, and the window
+        // draws the local round until a `Welcome` builds a replica.
+        let (link, _room) = loopback::pair(LinkQuality::PERFECT, 5);
+        let client = RoomClient::host(
+            Box::new(link) as Box<dyn Transport>,
+            Identity::new("host", "tok"),
+            RoomSetup::default(),
+        );
+        s.go_online(OnlineRound::new(client, "ROOM"));
+        assert_eq!(s.mode(), Driver::Online);
+        assert!(!s.playing(), "the local round only ever runs in play mode");
+        assert!(std::ptr::eq(s.shown(), &s.game), "nothing to draw yet but the local round");
+
+        // Frames of the online round change nothing about the local one.
+        for _ in 0..10 {
+            s.update_online(&crate::ai::Intent::default(), 1.0 / 60.0);
+        }
+        assert_eq!(s.game.frame(), 5, "the local round took a step");
+        assert_eq!(s.game.drawable_state(), local);
+        assert_eq!(s.builder.map(), &canvas, "the builder kept its edit");
+        assert!(s.builder.dirty());
+
+        // The bar's own chrome is gone while the round belongs to a room.
+        let chrome = s.play_chrome();
+        assert!(!chrome.build_button && !chrome.players_button && !chrome.restart_button);
+        assert!(chrome.status.is_some_and(|line| line.contains("ROOM")), "the status line names the mode");
+        // Tab is inert; leaving comes back to the local round as it was.
+        assert_eq!(s.toggle(), Driver::Online);
+        assert_eq!(s.leave_online(), Driver::Play);
+        assert!(s.online.is_none() && s.playing());
+        assert_eq!(s.game.frame(), 5);
+        s.game.update(crate::simulation::Input::default(), crate::PHYSICS_FIXED_DT, W, H);
+        assert_eq!(s.game.frame(), 6, "the local round carries on where it stood");
     }
 
     #[test]

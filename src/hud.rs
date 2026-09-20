@@ -20,8 +20,7 @@
 
 use crate::math::{Color, Rectangle};
 
-use crate::ai::Ai;
-use crate::simulation::{with_frog, with_tank, Game, PlayerCount};
+use crate::simulation::{with_frog, with_tank, Game, PlayerCount, RollIn};
 use crate::tank::{ActiveWeapon, Tank};
 use crate::tuning::tuning;
 use crate::{Rect, MAX_DAMAGE};
@@ -173,13 +172,18 @@ impl HudModel {
         if let Some(w) = &wave {
             title.push_str(&format!(" {}/{}", w.index, w.total));
         }
-        // Live enemies: the ones on the field with a mind of their own. A
-        // wave tank still rolling in has no `Ai` yet and counts as pending.
+        // Live enemies: the ones standing on the field. A wave tank still
+        // rolling in is outside it and counts as pending instead - which
+        // is what `RollIn` marks, rather than the `Ai` it has not been
+        // given yet, because a replica's enemies never have one
+        // (docs/online-coop-prd.md §4.5).
+        let first_enemy = game.first_enemy_slot();
         let enemies_alive = game
             .world
-            .query::<(&Tank, &Ai)>()
+            .query::<&Tank>()
+            .without::<&RollIn>()
             .iter()
-            .filter(|(tank, _)| !tank.is_wreck())
+            .filter(|tank| !tank.is_wreck() && tank.owner_slot() >= first_enemy)
             .count();
         let enemies_pending = wave.as_ref().map_or(0, |w| w.pending);
         // The objective: the player's own frog, or, in a round where only
@@ -311,7 +315,7 @@ pub fn players_dialog_rects(field: Rect) -> PlayersDialogRects {
 /// What play-mode chrome `Game::render` draws besides the readouts: the
 /// `BUILD` and players buttons in the bar and, while the player is being
 /// asked, the leave-round or players dialog over a dimmed field.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PlayChrome {
     pub build_button: bool,
     pub players_button: bool,
@@ -320,7 +324,21 @@ pub struct PlayChrome {
     pub restart_button: bool,
     pub leave_dialog: bool,
     pub players_dialog: bool,
+    /// One line along the field's top edge: an online round's room code,
+    /// seat and state (`net::round::OnlineRound::status`), until the
+    /// lobby screen gives it a home of its own. `None` in a local round.
+    pub status: Option<String>,
 }
+
+/// The online status line's text size and how far in from the field's
+/// top-left corner it sits: the corner the debug overlay label uses, and
+/// free in a release build.
+pub const HUD_STATUS_TEXT_SIZE: i32 = 14;
+pub const HUD_STATUS_INSET: i32 = 11;
+
+/// The status line's colour: the builder's amber, so a round somebody
+/// else is simulating never reads as one of the HUD's own numbers.
+pub const HUD_STATUS_COLOR: Color = BUILD_COLOR;
 
 #[cfg(test)]
 mod hud_tests {

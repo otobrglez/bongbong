@@ -12,6 +12,15 @@ use crate::editor::{BuilderInput, CliOverrides, EditorTextures};
 use crate::render::game::{Effects, Textures};
 use crate::hud::{leave_dialog_rects, mode_button_rect, players_button_rect, players_dialog_rects, restart_button_rect, BAR_FILL};
 use crate::mode::{Driver, Session};
+// Online play reaches a room over a socket or the rig over a thread,
+// and the emscripten build has neither on the command line: the page
+// passes a room code instead (docs/online-coop-prd.md §4.13).
+#[cfg(not(target_os = "emscripten"))]
+use crate::net::client::{Identity, RoomClient, RoomSetup};
+#[cfg(not(target_os = "emscripten"))]
+use crate::net::round::{AnyRound, OnlineRound};
+#[cfg(not(target_os = "emscripten"))]
+use crate::net::transport::Transport;
 use crate::render::shockwave::{RippleFx, RippleTuning};
 use crate::simulation::{Game, Input, PlayerCount};
 use crate::tuning;
@@ -272,6 +281,146 @@ pub struct Args {
     #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
     #[arg(long = "no-dev-server")]
     no_dev_server: bool,
+
+    /// Play the offline rig (docs/online-coop-prd.md §4.13): an
+    /// authoritative round on a background thread, an in-process link
+    /// with `--delay`/`--jitter`/`--loss`, and the replica in the window.
+    /// The whole online client - the encoder, the snapshots, the
+    /// interpolation, the feel of the hull at 80 ms - with no server, no
+    /// socket and no port. `-m`, `--seed`, `--enemies`, `--tank` and the
+    /// mission/spawn flags set up the round it simulates.
+    #[cfg(not(target_os = "emscripten"))]
+    #[arg(long = "rig")]
+    rig: bool,
+
+    /// One-way link delay in milliseconds for `--rig`.
+    #[cfg(not(target_os = "emscripten"))]
+    #[arg(long = "delay", default_value_t = 80)]
+    delay: u64,
+
+    /// Spread around `--delay`, milliseconds, never reordering arrivals.
+    #[cfg(not(target_os = "emscripten"))]
+    #[arg(long = "jitter", default_value_t = 20)]
+    jitter: u64,
+
+    /// The share of messages `--rig` drops, 0.0 to 1.0.
+    #[cfg(not(target_os = "emscripten"))]
+    #[arg(long = "loss", default_value_t = 0.02)]
+    loss: f64,
+
+    /// Open a room on the rooms server and play it: the code to share is
+    /// printed and shown over the field, and ENTER starts the round once
+    /// whoever is joining has a seat. `-m` sends this map to the room.
+    #[cfg(all(feature = "online", not(target_os = "emscripten")))]
+    #[arg(long = "host", conflicts_with = "join")]
+    host: bool,
+
+    /// Take a seat in the room this code names (`--join AK7QX`). The
+    /// round is the host's to start.
+    #[cfg(all(feature = "online", not(target_os = "emscripten")))]
+    #[arg(long = "join", value_name = "CODE")]
+    join: Option<String>,
+
+    /// The name on the room's roster. Also picks this machine's device
+    /// token, so two clients under different nicknames are two seats.
+    #[cfg(all(feature = "online", not(target_os = "emscripten")))]
+    #[arg(long = "nick", default_value = "player")]
+    nick: String,
+
+    /// The rooms server to talk to, over `BONGBONG_ROOMS` and the
+    /// cluster's own (`ws://127.0.0.1:4848` for `just run-server`).
+    #[cfg(all(feature = "online", not(target_os = "emscripten")))]
+    #[arg(long = "rooms", value_name = "URL")]
+    rooms: Option<String>,
+}
+
+/// The online round the command line asks for, with the rig's handle if
+/// it is the rig: `--rig` plays against a thread, `--host` opens a room
+/// on the rooms server and `--join` takes a seat in one. `None` is an
+/// ordinary local session.
+///
+/// Whichever it is, the window's side is the same `OnlineRound` over a
+/// boxed transport, so nothing past this function knows which.
+#[cfg(not(target_os = "emscripten"))]
+fn open_online(args: &Args, map: &crate::map::MapFile) -> Option<(AnyRound, Option<crate::net::rig::Rig>)> {
+    if args.rig {
+        let options = crate::net::rig::RigOptions {
+            map: map.clone(),
+            seed: args.seed,
+            enemies: args.enemies,
+            overrides: level_overrides(args),
+            tank_row: args.tank.map(TankKind::row),
+            quality: crate::net::loopback::LinkQuality::new(args.delay, args.jitter, args.loss),
+            // The link replays with the round: one seed for both.
+            link_seed: args.seed.unwrap_or(0xB0B5),
+        };
+        eprintln!(
+            "[rig] an authoritative round on a thread, link {} ms +/- {} ms, {:.1} % loss",
+            args.delay,
+            args.jitter,
+            args.loss * 100.0
+        );
+        let (rig, link) = crate::net::rig::start(options);
+        let client = RoomClient::host(
+            Box::new(link) as Box<dyn Transport>,
+            Identity::new("rig", "tok-rig"),
+            RoomSetup::default(),
+        );
+        return Some((OnlineRound::new(client, "RIG"), Some(rig)));
+    }
+    #[cfg(feature = "online")]
+    {
+        use crate::net::rooms::{self, RoomCode, RoomsHost};
+        if !args.host && args.join.is_none() {
+            return None;
+        }
+        let host = RoomsHost::resolve(args.rooms.as_deref());
+        let code = match args.join.as_deref().map(RoomCode::parse) {
+            Some(Ok(code)) => Some(code),
+            Some(Err(e)) => {
+                eprintln!("[online] {e}");
+                std::process::exit(2);
+            }
+            None => None,
+        };
+        let url = rooms::socket_url(&host, code.as_ref());
+        eprintln!("[online] dialling {url}");
+        let socket = Box::new(crate::net::native::NativeTransport::connect(&url)) as Box<dyn Transport>;
+        // The device token is the machine's, per nickname: two clients
+        // here under two names are two seats, and either reclaims its own
+        // seat on a reconnect.
+        let identity = Identity::new(args.nick.clone(), format!("bongbong-{}", args.nick));
+        let client = match code {
+            Some(code) => RoomClient::join(socket, identity, code.text),
+            None => RoomClient::host(
+                socket,
+                identity,
+                RoomSetup {
+                    map: map.name.clone().unwrap_or_else(|| "default".into()),
+                    map_toml: args.map.as_ref().and_then(|m| m.to_toml_string().ok()),
+                    mission: args.mission.unwrap_or(crate::level::Mission::Protect),
+                    seed: args.seed,
+                },
+            ),
+        };
+        return Some((OnlineRound::new(client, "ROOM"), None));
+    }
+    #[cfg(not(feature = "online"))]
+    None
+}
+
+/// The mission and spawn overrides the command line carries, shared by
+/// the local round and the rig's authoritative one.
+fn level_overrides(args: &Args) -> crate::level::LevelOverrides {
+    crate::level::LevelOverrides {
+        mission: args.mission,
+        spawn: args.spawn,
+        waves: args.waves,
+        wave_size: args.wave_size,
+        wave_growth: args.wave_growth,
+        tier_start: args.tier_start,
+        tier_end: args.tier_end,
+    }
 }
 
 fn parse_map(s: &str) -> Result<crate::map::MapFile, String> {
@@ -677,15 +826,7 @@ pub fn run(args: Args) {
 
     let mut game = Game::default();
     game.enemy_count_override = args.enemies;
-    game.level_overrides = crate::level::LevelOverrides {
-        mission: args.mission,
-        spawn: args.spawn,
-        waves: args.waves,
-        wave_size: args.wave_size,
-        wave_growth: args.wave_growth,
-        tier_start: args.tier_start,
-        tier_end: args.tier_end,
-    };
+    game.level_overrides = level_overrides(&args);
     game.show_intro = true;
     game.player_row_override = args.tank.map(TankKind::row);
     game.player2_row_override = args.tank2.map(TankKind::row);
@@ -713,6 +854,21 @@ pub fn run(args: Args) {
     if args.editor {
         session.driver = Driver::Build;
     }
+    // `--rig`, `--host` or `--join`: the window plays a round somebody
+    // else simulates. The local round above is still built and still
+    // sits there untouched, which is what leaving an online round comes
+    // back to. The rig's handle is held for the rest of `run` - the
+    // window's whole life - and stops its thread on the way out.
+    #[cfg(not(target_os = "emscripten"))]
+    let room_map = session.game.map.clone();
+    #[cfg(not(target_os = "emscripten"))]
+    let _rig = match open_online(&args, &room_map) {
+        Some((round, rig)) => {
+            session.go_online(round);
+            rig
+        }
+        None => None,
+    };
 
     // The dev server is serviced at the frame boundary below, like the
     // tuning transports; failing to bind is a warning, not a fatal error.
@@ -960,6 +1116,19 @@ pub fn run(args: Args) {
                     tuning::request_restart();
                 }
             }
+            Driver::Online => {
+                // The chrome of an online round is one status line and
+                // two keys until the lobby screen arrives: the host
+                // starts the round, Esc gives the seat back and returns
+                // to the local one.
+                if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
+                    if let Some(round) = session.online.as_mut() {
+                        round.start_round();
+                    }
+                } else if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) {
+                    session.leave_online();
+                }
+            }
             Driver::Build => {
                 let mut typed = String::new();
                 while let Some(c) = rl.get_char_pressed() {
@@ -1066,6 +1235,16 @@ pub fn run(args: Args) {
             None => input,
         };
 
+        // Online: this seat's own intent goes to the room and the
+        // replica is written from what came back. Seat 0 of the frame's
+        // input is the local player, whichever seat the room gave them.
+        // Nothing here runs `Game::update`, and the local round is left
+        // exactly where it stood.
+        if session.mode() == Driver::Online {
+            let intent = input.seat(0);
+            session.update_online(&intent, dt);
+        }
+
         // The round advances in whole steps of `PHYSICS_FIXED_DT`, as many
         // as this frame's real time pays for (`StepClock`), every step on
         // this frame's input with the one-shot presses spent by the first.
@@ -1108,7 +1287,9 @@ pub fn run(args: Args) {
             clock.reset();
             carried = Input::default();
         }
-        let game = &session.game;
+        // The round on screen: the room's replica in an online round,
+        // the session's own otherwise.
+        let game = session.shown();
         // Between the steps and the draw: the particle layer samples the
         // world the round is at (its events it read after each step),
         // then ages what is already in flight. Deliberately not inside
@@ -1139,7 +1320,7 @@ pub fn run(args: Args) {
                 obstacles: &obstacles_texture,
                 props: &props_texture,
                 barrel_explosion: &barrel_explosion_texture,
-                ground: &ground_textures[theme_index(session.game.map.theme)],
+                ground: &ground_textures[theme_index(game.map.theme)],
                 frog_variants: &frog_textures,
                 pickup_health: &pickup_health_texture,
                 pickup_ammo: &pickup_ammo_texture,
@@ -1151,7 +1332,7 @@ pub fn run(args: Args) {
                 pickup_flamethrower: &pickup_flamethrower_texture,
                 pickup_frog_health: &pickup_frog_health_texture,
                 minigun_mount: &minigun_mount_texture,
-                grass: &grass_textures[theme_index(session.game.map.theme)],
+                grass: &grass_textures[theme_index(game.map.theme)],
                 trees: &trees_texture,
                 portal: &portal_texture,
             },

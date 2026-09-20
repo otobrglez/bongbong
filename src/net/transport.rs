@@ -109,6 +109,27 @@ pub trait Transport {
     }
 }
 
+/// A boxed transport is a transport, so one caller can hold any of them
+/// behind `Box<dyn Transport>`: the window's online round is the same
+/// type whether it plays over a socket or over the rig's in-process link.
+impl<T: Transport + ?Sized> Transport for Box<T> {
+    fn state(&self) -> ConnState {
+        (**self).state()
+    }
+
+    fn send(&mut self, bytes: &[u8]) {
+        (**self).send(bytes);
+    }
+
+    fn drain(&mut self, out: &mut Vec<Msg>) {
+        (**self).drain(out);
+    }
+
+    fn close(&mut self) {
+        (**self).close();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

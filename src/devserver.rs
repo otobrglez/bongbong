@@ -1478,6 +1478,10 @@ impl DevServer {
                     crate::tuning::request_restart();
                 }
             }
+            // An online round is the room's: a click on a replica means
+            // nothing until the lobby screen (phase 2c) gives it
+            // something to hit.
+            Driver::Online => {}
             Driver::Build => {
                 let press = BuilderInput {
                     pointer: Some(point),
@@ -1564,6 +1568,20 @@ impl DevServer {
                     session.answer_dialog(true);
                 }
                 // undo/redo/backspace, 1/2 and typed text mean nothing in play.
+                _ => {}
+            },
+            // The two keys an online round answers, the same ones
+            // `app.rs` reads: the host starts the round, Esc gives the
+            // seat up and comes back to the local one.
+            Driver::Online => match key {
+                Some("enter") => {
+                    if let Some(round) = session.online.as_mut() {
+                        round.start_round();
+                    }
+                }
+                Some("escape") => {
+                    session.leave_online();
+                }
                 _ => {}
             },
             Driver::Build => {

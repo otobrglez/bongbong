@@ -32,6 +32,19 @@
 //!   host or join, the code, the roster, the seat, and the snapshots
 //!   with the deltas already applied.
 //!
+//! On top of that again, the window's own half (docs/online-coop-prd.md
+//! §4.5, §4.13):
+//!
+//! - `interp`: the clock the room's `server_ms` stamps set, and the
+//!   blend of the two snapshots bracketing render time. This is what
+//!   makes twenty snapshots a second look like a game.
+//! - `round`: `OnlineRound`, one call a frame - poll, apply, send this
+//!   seat's intent, tick the replica's cosmetics - and the status line
+//!   over the field. `mode::Session`'s `Driver::Online` holds one.
+//! - `rig`: the offline rig, an authoritative `Game` on a thread behind
+//!   a `loopback` link, which is how the feel of a delayed round is
+//!   judged and how every later change to this lane is tested.
+//!
 //! Where the PRD's protocol (§4.3) changed on contact with the real
 //! types: `TankState` carries the chassis `row` (a wave tank arrives
 //! mid-round and the roster names only the seats'), `ShotState` its sprite
@@ -62,6 +75,7 @@ pub mod codec;
 pub mod delta;
 pub mod encode;
 pub mod events;
+pub mod interp;
 pub mod loopback;
 // The client's socket: one implementation per platform, both behind the
 // `online` feature, so the headless crate the room server and the probe
@@ -69,6 +83,12 @@ pub mod loopback;
 #[cfg(all(feature = "online", not(target_os = "emscripten")))]
 pub mod native;
 pub mod rooms;
+pub mod round;
+// The offline rig runs an authoritative round on a background thread, so
+// it is every target's but emscripten's, where the page reaches a real
+// room over its own socket instead.
+#[cfg(not(target_os = "emscripten"))]
+pub mod rig;
 pub mod transport;
 #[cfg(all(feature = "online", target_os = "emscripten"))]
 pub mod web;
