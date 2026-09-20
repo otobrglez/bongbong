@@ -65,6 +65,9 @@ pub struct OnlineRound<T: Transport> {
     ended: Option<RoundOutcome>,
     /// Reused by `frame` so a frame allocates nothing.
     scratch: Vec<ClientEvent>,
+    /// The tuning table as it stood before the room's first patch went
+    /// on it, put back when the seat is given up (see `welcomed`).
+    tuning_before: Option<tuning::Tuning>,
 }
 
 impl<T: Transport> OnlineRound<T> {
@@ -87,6 +90,7 @@ impl<T: Transport> OnlineRound<T> {
             note: None,
             ended: None,
             scratch: Vec::new(),
+            tuning_before: None,
         }
     }
 
@@ -285,10 +289,17 @@ impl<T: Transport> OnlineRound<T> {
     ///
     /// The room's tuning patch is staged and applied before the replica
     /// is built, because `Game::init` reads the knobs: a round is drawn
-    /// with the numbers it is played with.
+    /// with the numbers it is played with. A room of two or more sends
+    /// the wave plan it sized to its team (docs/online-coop-prd.md
+    /// section 4.11), so the table is the window's own again the moment
+    /// the seat is given up - the local round behind the room is played
+    /// with the build's numbers, never the room's.
     fn welcomed(&mut self, welcome: &Welcome, now: i64) {
         let patch = welcome.tuning_json.trim();
         if !patch.is_empty() && patch != "{}" {
+            if self.tuning_before.is_none() {
+                self.tuning_before = Some(tuning::current());
+            }
             match tuning::submit_json(patch) {
                 Ok(_) => {
                     tuning::apply_pending();
@@ -342,6 +353,17 @@ impl<T: Transport> OnlineRound<T> {
             game.time = frame.snapshot.tick as f32 * PHYSICS_FIXED_DT + frame.ahead;
         } else {
             game.tick_presentation(dt);
+        }
+    }
+}
+
+/// Giving the seat up puts the tuning table back where the room found
+/// it, so the local round the window comes back to is played with the
+/// build's numbers rather than the room's team-sized wave plan.
+impl<T: Transport> Drop for OnlineRound<T> {
+    fn drop(&mut self) {
+        if let Some(before) = self.tuning_before.take() {
+            tuning::replace_now(before);
         }
     }
 }

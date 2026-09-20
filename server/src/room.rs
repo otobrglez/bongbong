@@ -21,11 +21,15 @@
 //! its device token, and a reconnect reclaims it with a fresh `Welcome`
 //! cut from the live world, holes in the map included.
 //!
-//! The durations below are server policy, not gameplay tuning; nothing in
-//! the tuning table is written here.
+//! The durations below are server policy, not gameplay tuning. The one
+//! thing here that does touch the tuning table is `tuning_patch`: the
+//! wave plan a room sizes to its team (docs/online-coop-prd.md §4.11),
+//! put on the table for the one call to `Game::init` that reads it and
+//! sent to every seat in the `Welcome` so a replica resolves the plan
+//! its room is fought under.
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -40,6 +44,7 @@ use bongbong::net::events::WireEvent;
 use bongbong::net::wire::{Lobby, RosterSeat, Seat as WireSeat, Snapshot, Welcome};
 use bongbong::net::{MAX_SEATS, PROTOCOL_VERSION};
 use bongbong::simulation::{Game, Input, Outcome, PlayerCount};
+use bongbong::tuning::{self, Tuning, tuning};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, Interval, MissedTickBehavior};
 use tracing::{info, warn};
@@ -85,10 +90,65 @@ pub const NICK_MAX: usize = 24;
 /// comes from `encode::welcome`); the workspace shares one version.
 pub const SIM_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// The tuning diff every `Welcome` carries: rooms run the build's
-/// defaults, so it is the empty patch until a room carries a diff of its
-/// own.
+/// The tuning diff a room that has not started carries in its `Welcome`:
+/// there is no round yet to size, so it is the empty patch. A round's is
+/// `tuning_patch` for the seats it starts with.
 pub const ROOM_TUNING_JSON: &str = "{}";
+
+/// The tuning rows a round is played under, as the JSON patch the
+/// `Welcome` carries: the map's wave plan sized to the team that fights
+/// it (docs/online-coop-prd.md §4.11, docs/maps-to-levels.md
+/// "Difficulty by seat count").
+///
+/// Every seat past the first widens each wave by
+/// `online_wave_size_per_seat` of what the map authored, and every
+/// `online_wave_tier_seats_per_step` seats lift the tier ramp a rung -
+/// both dials of the room's, not the round's, so a couch round and the
+/// probe never read them. **One seat is the empty patch**: a room of one
+/// plays exactly the round a single player plays offline, down to the
+/// bytes.
+pub fn tuning_patch(seats: usize) -> String {
+    // The two dials off the live table, which on a pod is the table it
+    // started with: the rows a round's patch writes are never these.
+    let (per_seat, per_step) = {
+        let t = tuning();
+        (t.online_wave_size_per_seat, t.online_wave_tier_seats_per_step)
+    };
+    let extra = seats.saturating_sub(1);
+    let scale = 1.0 + extra as f32 * per_seat;
+    let step = extra / per_step.max(1);
+    if scale == 1.0 && step == 0 {
+        return ROOM_TUNING_JSON.to_string();
+    }
+    format!("{{\"wave_size_scale\":{scale},\"wave_tier_step\":{step}}}")
+}
+
+/// One room at a time through `Game::init`.
+///
+/// The tuning table is the process's and a pod holds many rooms, so a
+/// room puts its own patch on it for exactly the one call that reads it.
+/// The rows the patch touches (`wave_size_scale`, `wave_tier_step`) are
+/// `Restart` rows, read where the spawn plan is resolved and nowhere
+/// else, so a room already playing reads nothing that moves under it -
+/// the lock has only to cover the patch and the `init` beside it.
+static ROUND_TUNING: Mutex<()> = Mutex::new(());
+
+/// The table the pod started with, read once under `ROUND_TUNING` before
+/// the first round patches it: a room's own rows go on top of this, not
+/// on top of the room that started before it.
+static BASE_TUNING: OnceLock<Tuning> = OnceLock::new();
+
+/// Run `game.init` with `patch` on the tuning table, on top of the
+/// pod's own table rather than whatever the last room left there.
+fn init_under(patch: &str, game: &mut Game, width: f32, height: f32) {
+    let _held = ROUND_TUNING.lock().unwrap_or_else(PoisonError::into_inner);
+    tuning::replace_now(*BASE_TUNING.get_or_init(tuning::current));
+    if let Err(e) = tuning::submit_json(patch) {
+        warn!(error = e, patch, "the room's tuning patch was refused; the round runs the defaults");
+    }
+    tuning::apply_pending();
+    game.init(width, height);
+}
 
 /// Where a room stands. The discriminants are what `RoomStats` stores.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -305,6 +365,10 @@ struct Room {
     /// The events of the ticks since the last snapshot that sent none
     /// (`encode::wire_events`), prepended to the next one's own.
     pending_events: Vec<WireEvent>,
+    /// The tuning patch the current round is played under and every
+    /// `Welcome` carries (`tuning_patch`); the empty patch until a round
+    /// starts.
+    tuning_json: String,
     created: Instant,
     commands: mpsc::Receiver<Command>,
 }
@@ -329,6 +393,7 @@ pub async fn run(hub: Arc<Hub>, code: String, params: RoomParams, commands: mpsc
         interval,
         prev: Snapshot::default(),
         pending_events: Vec::new(),
+        tuning_json: ROOM_TUNING_JSON.to_string(),
         created: now,
         commands,
     };
@@ -588,7 +653,10 @@ impl Room {
         game.players = PlayerCount::from_count(players).expect("clamped to the seats a room takes");
         game.seed_override = Some(seed);
         let (w, h) = self.map.field_size();
-        game.init(w, h);
+        // The wave plan this team's size asks for, on the table for the
+        // one call that reads it and in every `Welcome` behind it.
+        self.tuning_json = tuning_patch(players);
+        init_under(&self.tuning_json, &mut game, w, h);
         self.round_seed = game.round_seed();
         // `init`'s own events (the round start) travel in the welcome's
         // snapshot, which is frame 0's.
@@ -600,7 +668,7 @@ impl Room {
         }
         self.life.start(Instant::now());
         self.interval.reset();
-        info!(code = self.code, seed = format!("{:#x}", self.round_seed), players, "round started");
+        info!(code = self.code, seed = format!("{:#x}", self.round_seed), players, tuning = self.tuning_json, "round started");
         self.lobby_to_all(Lobby::Started);
         // Everyone's baseline is the welcome's snapshot (the same frame
         // for every seat), so the first delta applies straight onto it.
@@ -740,7 +808,7 @@ impl Room {
             .collect();
         let acked = self.acked();
         if let Some(game) = &self.game {
-            match encode::welcome(game, seat, roster.clone(), ROOM_TUNING_JSON.into(), acked) {
+            match encode::welcome(game, seat, roster.clone(), self.tuning_json.clone(), acked) {
                 Ok(mut welcome) => {
                     welcome.snapshot.server_ms = self.server_ms();
                     return welcome;
@@ -903,9 +971,80 @@ fn clean_nick(nick: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bongbong::level::{LevelOverrides, SpawnConfig, SpawnKind, Tier};
 
     async fn advance(d: Duration) {
         tokio::time::advance(d).await;
+    }
+
+    /// The patch as a client reads it: onto a *local* copy of the
+    /// defaults, which is exactly what `tuning::submit_json` does to the
+    /// staged table on the window's side, and never onto the global one
+    /// (these tests run in parallel with rooms that own it).
+    fn applied(seats: usize) -> Tuning {
+        Tuning::DEFAULT.with_json_patch(&tuning_patch(seats)).expect("every row the room sends is a row the build has")
+    }
+
+    #[test]
+    fn a_room_of_one_sends_the_empty_patch() {
+        assert_eq!(tuning_patch(1), "{}");
+        assert_eq!(tuning_patch(0), "{}", "a room with nobody in it is a room of one");
+        let solo = applied(1);
+        assert_eq!(solo.wave_size_scale, Tuning::DEFAULT.wave_size_scale);
+        assert_eq!(solo.wave_tier_step, Tuning::DEFAULT.wave_tier_step);
+    }
+
+    #[test]
+    fn the_patch_sizes_the_wave_plan_to_the_team() {
+        let (per_seat, per_step) = {
+            let t = tuning();
+            (t.online_wave_size_per_seat, t.online_wave_tier_seats_per_step)
+        };
+        for seats in [2usize, 4, 8] {
+            let t = applied(seats);
+            let extra = seats - 1;
+            assert_eq!(t.wave_size_scale, 1.0 + extra as f32 * per_seat, "{seats} seats");
+            assert_eq!(t.wave_tier_step, extra / per_step, "{seats} seats");
+            assert!(t.wave_size_scale > 1.0, "{seats} seats meet more than one player does");
+        }
+        // The shape the two dials currently make, spelled out: a team of
+        // four meets a wave three and a quarter times the authored one,
+        // one rung up the tier ladder; a full room of eight six and a
+        // quarter times it, two rungs up.
+        assert_eq!(tuning_patch(2), r#"{"wave_size_scale":1.75,"wave_tier_step":0}"#);
+        assert_eq!(tuning_patch(4), r#"{"wave_size_scale":3.25,"wave_tier_step":1}"#);
+        assert_eq!(tuning_patch(8), r#"{"wave_size_scale":6.25,"wave_tier_step":2}"#);
+    }
+
+    /// The knobs are only half the answer: this is the plan a client's
+    /// `Game::init` resolves once it has applied them - the same call the
+    /// room made for its own world.
+    #[test]
+    fn a_client_applying_the_patch_resolves_the_rooms_plan() {
+        // maps/default.toml's plan: four waves of 4, growing by 2, light
+        // up to super.
+        let map = SpawnConfig {
+            kind: SpawnKind::Waves,
+            waves: Some(4),
+            size: Some(4),
+            growth: Some(2),
+            tier_start: Some(Tier::Light),
+            tier_end: Some(Tier::Super),
+        };
+        let authored = LevelOverrides::default().resolve_spawn(&map, None);
+        let plan = |seats: usize| {
+            let t = applied(seats);
+            authored.scaled(t.wave_size_scale, t.wave_tier_step)
+        };
+        let sizes = |seats: usize| (0..4).map(|i| plan(seats).wave_size(i)).collect::<Vec<_>>();
+        assert_eq!(sizes(1), vec![4, 6, 8, 10], "a room of one fights the map as authored");
+        assert_eq!(sizes(2), vec![7, 11, 15, 19]);
+        assert_eq!(sizes(4), vec![13, 20, 27, 34]);
+        assert_eq!(sizes(8), vec![25, 38, 51, 64]);
+        assert_eq!(plan(1).wave_tier(0), Tier::Light);
+        assert_eq!(plan(4).wave_tier(0), Tier::Medium, "four seats start a rung up the ladder");
+        assert_eq!(plan(8).wave_tier(0), Tier::Heavy);
+        assert_eq!(plan(8).wave_tier(3), Tier::Super, "and still finish at the top of it");
     }
 
     #[tokio::test(start_paused = true)]

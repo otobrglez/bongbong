@@ -213,7 +213,7 @@ impl Game {
         let params = BlastParams::tank_wreck();
         // Players first, in index order, then the enemies: each tank's
         // damage roll is one RNG draw, so this order is part of the replay.
-        for player in self.players().into_iter().flatten() {
+        for player in self.seats_on_field().into_iter().flatten() {
             let mut q = self.world.query_one::<&mut Tank>(player);
             let tank = q.get().expect("player entity always has a Tank");
             let chips = !victim.same_side(tank.owner());
