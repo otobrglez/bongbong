@@ -246,6 +246,17 @@ impl Session {
         }
     }
 
+    /// The round on screen, to write a *drawing* flag on: the dev
+    /// server's overlays have to land on the `Game` that is drawn.
+    /// Nothing writes simulation state through here - an online round's
+    /// belongs to the room.
+    pub fn shown_mut(&mut self) -> &mut Game {
+        if self.driver == Driver::Online && self.online.as_ref().is_some_and(|r| r.game().is_some()) {
+            return self.online.as_mut().and_then(AnyRound::game_mut).expect("just checked");
+        }
+        &mut self.game
+    }
+
     /// Replace the session's map wholesale - the dev server's `restart`
     /// with a `map`/`map_toml`: the game's map for the round it is about
     /// to start, and the builder's canvas and baseline.

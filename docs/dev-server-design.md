@@ -134,7 +134,7 @@ construction; every request still lands in `before_frame`.
 
 | tool | params | reply |
 |---|---|---|
-| `status` | - | seed, frame, time, outcome, `mission`, `spawn` (the resolved plan), `intro_seconds_left`, paused, lockstep, tank counts, overlay flags, `map` (name/cells/tanks), `mode` (play\|build), `dialog_open`, `builder` (dirty, tool), history depth, `turns` (turns/u_turns/reversals/spins summed over the live tanks - see "Debugging spinning tanks") |
+| `status` | - | seed, frame, time, outcome, `mission`, `spawn` (the resolved plan), `intro_seconds_left`, paused, lockstep, tank counts, overlay flags, `map` (name/cells/tanks), `mode` (play\|build\|online), `dialog_open`, `builder` (dirty, tool), history depth, `turns` (turns/u_turns/reversals/spins summed over the live tanks - see "Debugging spinning tanks"), and `round` - whose round all of the above describes: `{kind: "local"}`, or `{kind: "online", room, seat, phase, buffer_ms, server_tick, replica}` (section 4.2) |
 | `snapshot` | `detail: compact\|full` | tanks (slot, chassis, x/y and the grid `cell`, `rotation` with `facing` as a name, the drawn `hull`/`turret` angles, real velocity with `speed` and `heading` - the direction it is actually moving, null when still - damage/hp, ammo, weapon, shield, boost, `ring` (the health ring's opacity, 0..1), `nearest_ally_px`, enemies' `dist_to_player`; `full` adds `ai`), projectiles (cap 64), pickups, frog, `engage` (per enemy: status `engaged\|wreck\|fleeing\|retreating\|out_of_range`, `ring` slot index or null, target x/y, `sticky`; `full` adds the rejection tally and the 16-slot table), `clusters` (live enemies within 90 px, as slot groups) |
 | `events` | `since`, `limit`, `kinds`, `exclude` | ring of `{seq, frame, event, ...}` (cap 4096); `kinds`/`exclude` filter by event name |
 | `step` | `frames`, `move_dir`, `face`, `fire`, `p2_move_dir`, `p2_face`, `p2_fire` (player 2, two-player rounds), `fire_every`, `snapshot`, `detail`, `kinds`, `exclude` | frame, time, outcome, restarted, events of the step (filtered like `events`), snapshot |
@@ -184,8 +184,9 @@ its methods (`press_build`, `answer_dialog`, `play`, `replace_map`,
 | `click` | `x`, `y`, `button`, `drag_to` | a raw press at a window position on the same hit-tests the mouse gets: in play, the BUILD button, the players button beside it, either dialog's buttons (outside a panel closes it); in build, the bar's buttons (PLAY starts the round), a dropdown row, a stepper, a field cell; `drag_to` drags in 8 px steps and releases. Replies like `mode` |
 | `key` | `key` (tab\|escape\|enter\|undo\|redo\|backspace\|1\|2), `text` | one key for one frame: in play, Tab opens/closes the leave dialog, Esc keeps playing / closes the players dialog, Enter leaves (or, in the players dialog, switches to the other count), 1/2 answer the players dialog; in build, Tab is PLAY and the rest go through `BuilderInput` (`text` types into an open prompt). Replies like `mode` |
 
-**The refusal rule.** In build mode the tools that read or drive the
-round - `GAME_ONLY_TOOLS`: `snapshot`, `events`, `step`, `input`,
+**The refusal rule.** There are two, one per mode that is not play; see
+section 4.2 for the online one. In build mode the tools that read or
+drive the round - `GAME_ONLY_TOOLS`: `snapshot`, `events`, `step`, `input`,
 `pause`, `resume`, `history`, `nav_grid`, `field`, `terrain`, `teleport`,
 `set_tank`, `kill`, `spawn_enemy`, `players` - return an error naming
 `play` rather than touching a frozen game. Everything else works in both
@@ -197,6 +198,40 @@ canvas is only *shown* in build mode). A `play`, or a `click`/`key {tab}`
 that presses PLAY, does what `restart` does afterwards: banks the
 `round_started` event, restarts the history ring and enters lockstep, so
 the `step`/`screenshot` loop carries over unchanged.
+
+### 4.2 An online round
+
+While the window holds a seat in a room (docs/online-coop-prd.md section
+4.5) the round on screen is the room's replica, not the session's own
+round - which stands frozen behind it. The tools follow the picture:
+**every reading tool describes `Session::shown()`**, so `status`,
+`snapshot`, `terrain`, `events`, `history`, `nav_grid`, `field`,
+`map_get`, `lint {source: round}` and `screenshot` are about the room's
+round, and `overlays` sets its flags through `Session::shown_mut` (a
+drawing flag is all that is ever written there). `status.round` names
+which round that is - the room code, the seat, the phase, `buffer_ms`
+(how far ahead of the picture the newest snapshot is; negative once the
+picture has run past everything that arrived) and `server_tick` (the
+newest tick the room has sent, against `frame`, the tick being drawn).
+
+Everything that would **write** refuses by name - `ONLINE_REFUSED_TOOLS`:
+`step`, `input`, `pause`, `resume`, `restart`, `teleport`, `set_tank`,
+`kill`, `spawn_enemy`, `players`, `play`, `build`, `click` and the
+`builder_*` tools bar `builder_files`. Only the server simulates an
+online round; the replica is a picture of it, so a write here would move
+the picture and reach nobody. The error names the room and says what to
+do instead: `key {"key": "escape"}` gives the seat up and comes back to
+the local round, where every tool works again. There is no lockstep for
+an online round - the room ticks on its own clock - so the way to step
+one deterministically is `net::rig::Lockstep` from a test, not this
+server.
+
+A replica is never `advance`d, so `before_frame` banks its events and
+track rows itself, on the frames a snapshot moved it on (the guard
+`Fx::observe` uses). That is why `events` and `history` answer about the
+round on screen; a snapshot's events are handed over exactly once
+(`net::interp`), and the frame boundary comes before the online round's
+own frame, so the server sees each one.
 
 A session, from PRD section 11:
 
@@ -298,8 +333,15 @@ refusal in build mode and the tools that must still answer, a stroke's
 toggle-erase with undo/redo, settings `null` = auto and `cli_overrides`,
 `builder_map`'s diff and load, `play` on the edited map leaving lockstep
 on, `click`/`key` through the dialog, the bar and a drag on the field, and
-`restart` from build mode) plus one real socket round-trip on an ephemeral
-port. `simulation::engage::tests` covers the report (slot
+`restart` from build mode; and, for an online round answered by a
+hand-driven room over a `net::loopback` link, that the reading tools
+describe the replica rather than the frozen local round - another seed,
+another tank count - that `status.round` names the room, the seat, the
+phase, the buffer and the server's tick, that the replica's events and
+track rows are banked, that an overlay flag lands on the round that is
+drawn, and that every `ONLINE_REFUSED_TOOLS` entry refuses by name until
+`key {escape}` gives the seat up) plus one real socket round-trip on an
+ephemeral port. `simulation::engage::tests` covers the report (slot
 indices, sticky flag, rejection tallies); `simulation::mechanics_tests` the
 event log; `pathfind::dims_tests` the grid accessors. Rendering, overlays
 and screenshots are verified by running `just run-dev` and reading the PNG.

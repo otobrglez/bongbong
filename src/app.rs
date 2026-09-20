@@ -1342,7 +1342,7 @@ pub fn run(args: Args) {
         // A pending screenshot reads the frame just presented.
         #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
         if let Some(dev) = &mut dev {
-            dev.after_render(rl, thread, &scene_target, &session.game);
+            dev.after_render(rl, thread, &scene_target, session.shown());
         }
     });
 }

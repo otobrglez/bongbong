@@ -31,6 +31,8 @@ use std::time::{Duration, Instant};
 use crate::ai::Intent;
 use crate::level::LevelOverrides;
 use crate::map::MapFile;
+use crate::net::apply;
+use crate::net::client::{ClientEvent, Identity, RoomClient, RoomSetup};
 use crate::net::codec::{self, Msg};
 use crate::net::encode;
 use crate::net::loopback::{self, LinkQuality, Loopback};
@@ -122,26 +124,168 @@ impl Drop for Rig {
 pub fn start(options: RigOptions) -> (Rig, Loopback) {
     let (client_end, room_end) = loopback::pair(options.quality, options.link_seed);
     let stop = Arc::new(AtomicBool::new(false));
-    let tick = Arc::new(AtomicU64::new(0));
-    let latest: Arc<Mutex<Option<Snapshot>>> = Arc::default();
-    let room = Room {
-        link: room_end,
-        options,
-        game: None,
-        opened: Instant::now(),
-        nick: "rig".into(),
-        intent: None,
-        pending_events: Vec::new(),
-        scratch: Vec::new(),
-        tick: Arc::clone(&tick),
-        latest: Arc::clone(&latest),
-    };
+    let room = Room::new(room_end, options);
+    // The two the window reads while the thread writes them.
+    let tick = Arc::clone(&room.tick);
+    let latest = Arc::clone(&room.latest);
     let flag = Arc::clone(&stop);
     let thread = thread::Builder::new()
         .name("bongbong-rig".into())
         .spawn(move || run(room, flag))
         .expect("the rig thread starts");
     (Rig { stop, thread: Some(thread), tick, latest }, client_end)
+}
+
+/// The rig with no thread and no clock: the authoritative round, the
+/// link and the replica all on the caller's, stepped a tick at a time.
+///
+/// `step` is to a networked round what the dev server's `step` is to a
+/// local one (docs/dev-server-design.md section 3): the same options and
+/// the same steps give the same two rounds, byte for byte. The room's
+/// own `now` advances by exactly `PHYSICS_FIXED_DT` a tick, so even
+/// `Snapshot::server_ms` replays, and the link hands everything over at
+/// once, so nothing depends on when a step was taken. After a step the
+/// replica stands on the last snapshot the authority cut, which is the
+/// tick `authority()` - the round itself, not just its snapshot, since
+/// it is on this thread - can be compared against.
+///
+/// Two things the threaded rig has are deliberately missing.
+///
+/// The link is perfect. Delay and jitter are dials on *real* time - a
+/// parcel becomes readable at an `Instant` and `Transport::drain` reads
+/// the wall clock - so no amount of stepping makes them repeatable;
+/// judging the feel of a delayed round is `--rig --delay`'s job. Loss
+/// would replay (it is a seeded roll, not a clock), but a snapshot
+/// dropped here is only a tick the replica never stands on, so nothing
+/// is dropped either.
+///
+/// And nothing is interpolated: `net::interp` measures render time
+/// against the wall clock too, so the replica is put *on* the newest
+/// snapshot's tick rather than a fraction past it. That is the seam
+/// `net::apply`'s round trips already compare on; the smoothing between
+/// two snapshots stays the windowed round's (`net::round`).
+pub struct Lockstep {
+    room: Room,
+    client: RoomClient<Loopback>,
+    replica: Option<Game>,
+    /// The seat's command, sent every tick until it is changed.
+    intent: Intent,
+    /// What the room refused, if anything.
+    note: Option<String>,
+    /// Reused by `catch_up` so a step allocates nothing.
+    scratch: Vec<ClientEvent>,
+}
+
+impl Lockstep {
+    /// A room, a seat in it and the replica it welcomed, all stepped by
+    /// hand. The round has begun by the time this returns, exactly as
+    /// `--rig`'s one-seat lobby begins it.
+    pub fn start(options: RigOptions) -> Lockstep {
+        let (client_end, room_end) = loopback::pair(LinkQuality::PERFECT, options.link_seed);
+        let setup = RoomSetup { seed: options.seed, ..RoomSetup::default() };
+        let mut rig = Lockstep {
+            room: Room::new(room_end, options),
+            client: RoomClient::host(client_end, Identity::new("rig", "tok-rig"), setup),
+            replica: None,
+            intent: Intent::default(),
+            note: None,
+            scratch: Vec::new(),
+        };
+        // One turn each: the client says hello, the room answers with the
+        // code, the roster, the start and the welcome, and the client
+        // builds the replica from it.
+        rig.catch_up();
+        rig.room.pump();
+        rig.catch_up();
+        rig
+    }
+
+    /// What the seat is doing from here on: repeated every tick until it
+    /// is changed, the way a held key reaches a local round.
+    pub fn drive(&mut self, intent: Intent) {
+        self.intent = intent;
+    }
+
+    /// Run the authority `ticks` ticks and let the replica catch up to
+    /// the last snapshot they earned. Returns the replica's tick.
+    pub fn step(&mut self, ticks: u64) -> u64 {
+        let step = Duration::from_secs_f32(PHYSICS_FIXED_DT);
+        for _ in 0..ticks {
+            self.client.send_intent(&self.intent);
+            self.room.now += step;
+            if !self.room.pump() {
+                break;
+            }
+            self.room.tick();
+        }
+        self.catch_up();
+        self.replica.as_ref().map_or(0, Game::frame)
+    }
+
+    /// The round the room is simulating: the truth a test checks the
+    /// picture against.
+    pub fn authority(&self) -> Option<&Game> {
+        self.room.game.as_ref()
+    }
+
+    /// The replica the seat draws, once the welcome has built one.
+    pub fn replica(&self) -> Option<&Game> {
+        self.replica.as_ref()
+    }
+
+    /// The authoritative round's tick.
+    pub fn tick(&self) -> u64 {
+        self.room.game.as_ref().map_or(0, Game::frame)
+    }
+
+    /// The seat this client was given.
+    pub fn seat(&self) -> Option<u8> {
+        self.client.seat()
+    }
+
+    /// The room's code (`RIG_CODE`).
+    pub fn code(&self) -> Option<&str> {
+        self.client.code()
+    }
+
+    /// The last thing the room refused, if it refused anything.
+    pub fn note(&self) -> Option<&str> {
+        self.note.as_deref()
+    }
+
+    /// The newest snapshot the authority cut, stamped with the room's
+    /// clock - the bytes a test can compare between two runs.
+    pub fn snapshot(&self) -> Option<Snapshot> {
+        self.room.latest.lock().expect("nothing else holds this lock").clone()
+    }
+
+    /// Everything the room has said since the last step, applied to the
+    /// replica in the order it arrived.
+    fn catch_up(&mut self) {
+        let mut events = std::mem::take(&mut self.scratch);
+        events.clear();
+        self.client.poll(&mut events);
+        for event in events.drain(..) {
+            match event {
+                // The rig's welcome carries the empty tuning patch, so
+                // there is nothing to stage before the replica is built.
+                ClientEvent::Welcomed(welcome) => match apply::welcome(&welcome) {
+                    Ok(game) => self.replica = Some(game),
+                    Err(e) => self.note = Some(e),
+                },
+                ClientEvent::Snapshot(snapshot) => {
+                    if let Some(replica) = self.replica.as_mut() {
+                        apply::snapshot(replica, &snapshot);
+                    }
+                }
+                ClientEvent::Refused(message) => self.note = Some(message),
+                ClientEvent::Closed(closed) => self.note = Some(closed.reason),
+                ClientEvent::Created { .. } | ClientEvent::Roster { .. } | ClientEvent::Started => {}
+                ClientEvent::Said { .. } => {}
+            }
+        }
+        self.scratch = events;
+    }
 }
 
 /// The authority's loop: answer what the seat said, take a tick, sleep
@@ -151,6 +295,7 @@ fn run(mut room: Room, stop: Arc<AtomicBool>) {
     let step = Duration::from_secs_f32(PHYSICS_FIXED_DT);
     let mut due = Instant::now();
     while !stop.load(Ordering::Relaxed) {
+        room.now = Instant::now();
         if !room.pump() {
             break;
         }
@@ -172,6 +317,10 @@ struct Room {
     /// `None` until the seat has greeted and the round has begun.
     game: Option<Game>,
     opened: Instant,
+    /// What the room calls now: the wall clock on the thread, a count of
+    /// fixed steps under `Lockstep`. Everything here that asks the time
+    /// reads this, so a stepped room needs no clock at all.
+    now: Instant,
     nick: String,
     /// The newest intent and when it arrived; older than `INTENT_COAST`
     /// it reads as no input.
@@ -185,6 +334,24 @@ struct Room {
 }
 
 impl Room {
+    /// A room on `link`, with no round until the seat greets it.
+    fn new(link: Loopback, options: RigOptions) -> Room {
+        let opened = Instant::now();
+        Room {
+            link,
+            options,
+            game: None,
+            opened,
+            now: opened,
+            nick: "rig".into(),
+            intent: None,
+            pending_events: Vec::new(),
+            scratch: Vec::new(),
+            tick: Arc::default(),
+            latest: Arc::default(),
+        }
+    }
+
     /// Everything the seat has said. `false` once the link is gone.
     fn pump(&mut self) -> bool {
         let mut scratch = std::mem::take(&mut self.scratch);
@@ -200,7 +367,7 @@ impl Room {
                 }
                 Msg::Lobby(Lobby::Start) => self.begin(),
                 Msg::Lobby(Lobby::Leave) => left = true,
-                Msg::Intent(intent) => self.intent = Some((intent, Instant::now())),
+                Msg::Intent(intent) => self.intent = Some((intent, self.now)),
                 // Ready, chat, kick and everything a room says rather
                 // than hears mean nothing to one seat playing alone.
                 _ => {}
@@ -290,7 +457,7 @@ impl Room {
     /// is younger than `INTENT_COAST`.
     fn sampled_intent(&self) -> Intent {
         match &self.intent {
-            Some((msg, at)) if at.elapsed() < INTENT_COAST => msg.intent(),
+            Some((msg, at)) if self.now.saturating_duration_since(*at) < INTENT_COAST => msg.intent(),
             _ => Intent::default(),
         }
     }
@@ -304,7 +471,7 @@ impl Room {
 
     /// The room's clock, milliseconds since the rig started.
     fn server_ms(&self) -> u32 {
-        self.opened.elapsed().as_millis().min(u32::MAX as u128) as u32
+        self.now.saturating_duration_since(self.opened).as_millis().min(u32::MAX as u128) as u32
     }
 
     fn say(&mut self, msg: Msg) {
@@ -451,6 +618,66 @@ mod tests {
             .filter(|pair| pair[0].newest == pair[1].newest && pair[0].hulls != pair[1].hulls)
             .count();
         assert!(smoothed > 20, "only {smoothed} of {} frames interpolated", seen.len());
+    }
+
+    /// The seat's hull on the replica, in quarter pixels.
+    fn seat_hull(rig: &Lockstep) -> (i32, i32) {
+        let state = rig.replica().expect("the room welcomed the seat").drawable_state();
+        let tank = state.tanks.iter().find(|t| t.slot == 0).expect("the seat's tank");
+        (tank.x, tank.y)
+    }
+
+    /// Lockstep for a networked round, the way `devserver`'s `step` is
+    /// lockstep for a local one: the same options and the same steps give
+    /// the same round twice - the bytes on the wire included, since the
+    /// room's clock is a count of steps - and the replica ends standing
+    /// exactly on the last snapshot the authority cut.
+    #[test]
+    fn a_stepped_rig_replays_and_the_replica_lands_on_the_authoritys_tick() {
+        let run = || {
+            let mut rig = Lockstep::start(options(LinkQuality::PERFECT));
+            rig.drive(Intent { move_dir: Some(Dir::Right), ..Intent::default() });
+            rig.step(90);
+            rig.drive(Intent { move_dir: Some(Dir::Up), fire: true, ..Intent::default() });
+            rig.step(90);
+            rig
+        };
+        let a = run();
+        let b = run();
+        assert_eq!(a.seat(), Some(0));
+        assert_eq!(a.code(), Some(RIG_CODE));
+        assert_eq!(a.note(), None, "the room refused something");
+        assert_eq!(a.tick(), 180, "the authority took every step");
+        let truth = a.authority().expect("the room is running a round");
+        assert_eq!(truth.drawable_state(), b.authority().expect("a round").drawable_state(), "two runs differ");
+        assert_eq!(
+            codec::encode(&Msg::Snapshot(a.snapshot().expect("a snapshot"))),
+            codec::encode(&Msg::Snapshot(b.snapshot().expect("a snapshot"))),
+            "the wire does not replay byte for byte"
+        );
+
+        // The replica stands on a snapshot tick, never between two, and
+        // draws the round the authority is running.
+        let replica = a.replica().expect("the welcome built a replica");
+        assert_eq!(replica.frame() % SNAPSHOT_EVERY, 0, "the replica invented tick {}", replica.frame());
+        assert_eq!(replica.frame(), a.tick(), "the replica did not catch up");
+        assert_eq!(replica.drawable_state(), truth.drawable_state(), "the replica draws another picture");
+        assert_eq!(b.replica().expect("a replica").drawable_state(), replica.drawable_state());
+    }
+
+    /// The seat's command travels: a stepped rig that is driven ends
+    /// somewhere one that is left alone does not.
+    #[test]
+    fn a_stepped_seats_intent_reaches_the_authority() {
+        let mut driven = Lockstep::start(options(LinkQuality::PERFECT));
+        let start = seat_hull(&driven);
+        driven.drive(Intent { move_dir: Some(Dir::Right), ..Intent::default() });
+        assert_eq!(driven.step(60), 60);
+        assert_ne!(seat_hull(&driven), start, "the seat's intent never reached the room");
+
+        let mut idle = Lockstep::start(options(LinkQuality::PERFECT));
+        idle.step(60);
+        assert_eq!(seat_hull(&idle), start, "a seat that asked for nothing moved");
     }
 
     /// The dial's whole point: a lossy link costs the picture nothing it

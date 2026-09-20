@@ -380,6 +380,7 @@ mod tests {
                 pending: rng.random_range(0..40),
                 intro: rng.random_range(0..30),
                 next_wave: rng.random_range(0..30),
+                restart: rng.random_range(0..30),
                 outcome: [RoundOutcome::Playing, RoundOutcome::Won, RoundOutcome::Lost][rng.random_range(0..3)],
             },
             events: random_events(rng),
@@ -567,7 +568,7 @@ mod tests {
             shots,
             frogs,
             pickups: 0b1011,
-            round: RoundState { wave: 2, alive: 7, pending: 4, intro: 0, next_wave: 0, outcome: RoundOutcome::Playing },
+            round: RoundState { wave: 2, alive: 7, pending: 4, intro: 0, next_wave: 0, restart: 0, outcome: RoundOutcome::Playing },
             ..Default::default()
         };
         s.normalise();
@@ -619,7 +620,7 @@ mod tests {
         let busy = encode(&Msg::Delta(delta(&b, &c))).len();
         let idle = encode(&Msg::Delta(delta(&a, &a))).len();
         println!("snapshot sizes: full {full} B, delta moving {moving} B, delta busy {busy} B, delta idle {idle} B");
-        assert!(full <= 400, "full snapshot {full} B");
+        assert!(full <= 410, "full snapshot {full} B");
         assert!(moving <= 200, "moving delta {moving} B");
         assert!(busy <= 260, "busy delta {busy} B");
         assert!(idle <= 40, "idle delta {idle} B");

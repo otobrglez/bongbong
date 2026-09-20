@@ -306,6 +306,7 @@ fn round(game: &Game) -> RoundState {
         pending: wave.map_or(0, |w| byte(w.pending)),
         intro: quantise_seconds(game.intro_timer),
         next_wave: wave.and_then(|w| w.next_in).map_or(0, quantise_seconds),
+        restart: quantise_seconds(game.restart_timer),
         outcome: game.outcome().into(),
     }
 }
