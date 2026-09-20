@@ -31,7 +31,7 @@ use crate::net::apply;
 use crate::net::client::{ClientEvent, Phase, RoomClient};
 use crate::net::interp::Interpolator;
 use crate::net::transport::Transport;
-use crate::net::wire::Welcome;
+use crate::net::wire::{RoundOutcome, Welcome};
 use crate::simulation::Game;
 use crate::tuning;
 use crate::PHYSICS_FIXED_DT;
@@ -59,6 +59,10 @@ pub struct OnlineRound<T: Transport> {
     pending_fire: bool,
     /// The last thing the room refused or the socket said on its way out.
     note: Option<String>,
+    /// How the round the room just finished went, from the moment it
+    /// says so until the next one starts. While it is set the window
+    /// belongs in the lobby, not over the field.
+    ended: Option<RoundOutcome>,
     /// Reused by `frame` so a frame allocates nothing.
     scratch: Vec<ClientEvent>,
 }
@@ -81,6 +85,7 @@ impl<T: Transport> OnlineRound<T> {
             send_owed: 0.0,
             pending_fire: false,
             note: None,
+            ended: None,
             scratch: Vec::new(),
         }
     }
@@ -170,6 +175,15 @@ impl<T: Transport> OnlineRound<T> {
         self.note.as_deref()
     }
 
+    /// How the round the room just finished went, `None` while one is
+    /// running or waiting to start. The room keeps ticking through the
+    /// end screen and says this when the countdown has run out, so the
+    /// banner has played by the time it is set: `mode::Session` reads it
+    /// to hand the window back to the lobby, on this seat and this room.
+    pub fn ended(&self) -> Option<RoundOutcome> {
+        self.ended
+    }
+
     /// Give up the seat and close the socket.
     pub fn leave(&mut self) {
         self.client.leave();
@@ -249,9 +263,18 @@ impl<T: Transport> OnlineRound<T> {
                     self.note = Some(message);
                 }
                 ClientEvent::Closed(closed) => self.note = Some(closed.reason),
-                // The code, the roster and the start are read back off
-                // the client itself.
-                ClientEvent::Created { .. } | ClientEvent::Roster { .. } | ClientEvent::Started => {}
+                ClientEvent::Ended { outcome } => {
+                    self.ended = Some(outcome);
+                    // The room is back in its lobby, so the rematch is
+                    // the host's to ask for again.
+                    self.start_sent = false;
+                }
+                // A round begun is the end screen cleared; the welcome
+                // that follows builds the replica for it.
+                ClientEvent::Started => self.ended = None,
+                // The code and the roster are read back off the client
+                // itself.
+                ClientEvent::Created { .. } | ClientEvent::Roster { .. } => {}
                 ClientEvent::Said { .. } => {}
             }
         }

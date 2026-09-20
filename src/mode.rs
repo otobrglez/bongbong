@@ -13,6 +13,12 @@
 //! simulates and this window only ever draws. The local round is left
 //! exactly where it stood: `playing()` is Play's alone, so nothing about
 //! the lobby or an online round can start or stop a local one.
+//!
+//! Lobby and Online hand back and forth on the same seat: the room says
+//! the round has begun and the window goes Online, the room says it is
+//! over and the window comes back to the screen it came from, code, QR
+//! and roster intact, where the host can ask for a rematch. Only
+//! `leave_online` gives the seat up.
 
 use crate::ai::Intent;
 use crate::editor::{BuilderInput, EditorAction, MapEditor};
@@ -371,6 +377,22 @@ impl Session {
         if let Some(round) = &mut self.online {
             round.frame(intent, dt);
         }
+        // The room ticks its round through the end screen and says so
+        // when the countdown has run out, so the banner has played by
+        // the time the window comes back to the lobby. The seat and the
+        // room are kept - the same roster, code and QR are on screen a
+        // frame later, with the host's button reading `REMATCH`.
+        if self.online.as_ref().is_some_and(|r| r.ended().is_some()) {
+            self.back_to_lobby();
+        }
+    }
+
+    /// Put the room screen back over the round without giving the seat
+    /// up: a fresh `Lobby` on the session's rooms host, since everything
+    /// about the room itself is read off the client each frame.
+    fn back_to_lobby(&mut self) {
+        self.lobby = Some(Lobby::new(self.rooms.clone()));
+        self.driver = Driver::Lobby;
     }
 
     /// The round on screen: the room's replica in online mode - the local
@@ -432,6 +454,9 @@ impl Session {
         match self.driver {
             Driver::Online => PlayChrome {
                 status: self.online.as_ref().map(AnyRound::status),
+                // A room's round does not restart where it stands: the
+                // end screen counts down to the lobby it came from.
+                countdown_label: Some("Back to the lobby in"),
                 ..PlayChrome::default()
             },
             Driver::Lobby => {
@@ -450,6 +475,7 @@ impl Session {
                 players_dialog: self.players_dialog,
                 status: None,
                 lobby: None,
+                countdown_label: None,
             },
         }
     }
@@ -780,6 +806,92 @@ mod session_tests {
         // Leaving hangs up and comes out at the local round.
         assert_eq!(s.leave_online(), Driver::Play);
         assert!(s.online.is_none() && s.lobby.is_none() && s.playing());
+    }
+
+    /// A round the room plays out is not a dead end: the window comes
+    /// back to the room screen on the same seat, the same code and the
+    /// same roster, with the host's action reading `REMATCH` - and the
+    /// local round is still standing exactly where the lobby left it.
+    #[test]
+    fn a_round_the_room_ends_hands_the_window_back_to_the_lobby() {
+        use crate::lobby::{Button, LobbyInput, Stage};
+        use crate::math::Vec2;
+        use crate::net::client::{Identity, RoomClient, RoomSetup};
+        use crate::net::codec::{self, Msg};
+        use crate::net::loopback::{self, LinkQuality};
+        use crate::net::round::OnlineRound;
+        use crate::net::transport::Transport;
+        use crate::net::wire::{Lobby as LobbyMsg, RosterSeat, RoundOutcome, Seat as WireSeat};
+        use crate::net::{MAX_SEATS, encode};
+
+        const DT: f32 = 1.0 / 60.0;
+        let field = crate::Rect::new(0.0, 32.0, W, H);
+        let mut s = session();
+        let local = s.game.frame();
+
+        // The room's side of a loopback link, answered by hand.
+        let mut authority = Game::default();
+        authority.seed_override = Some(0xB0B5);
+        authority.enemy_count_override = Some(0);
+        authority.map = MapFile::from_toml_str(include_str!("../maps/default.toml")).expect("default map parses");
+        let (w, h) = authority.map.field_size();
+        authority.init(w, h);
+        let roster = vec![RosterSeat { seat: 0, nick: "oto".into(), chassis: 3, ready: false, connected: true }];
+        let welcome = || {
+            encode::welcome(&authority, 0, vec![WireSeat { seat: 0, nick: "oto".into(), chassis: 3 }], "{}".into(), [0; MAX_SEATS])
+                .expect("the map serialises")
+        };
+
+        let (link, mut room) = loopback::pair(LinkQuality::PERFECT, 5);
+        let client = RoomClient::host(Box::new(link) as Box<dyn Transport>, Identity::new("oto", "tok"), RoomSetup::default());
+        s.open_lobby_with(OnlineRound::new(client, "ROOM"));
+        let say = |room: &mut loopback::Loopback, msg: Msg| room.send(&codec::encode(&msg));
+        say(&mut room, Msg::Lobby(LobbyMsg::RoomCreated { code: "AK7QX".into() }));
+        say(&mut room, Msg::Lobby(LobbyMsg::Roster { host: 0, seats: roster.clone() }));
+        say(&mut room, Msg::Lobby(LobbyMsg::Started));
+        say(&mut room, Msg::Welcome(welcome()));
+        assert_eq!(s.update_lobby(&LobbyInput::default(), field, DT), Driver::Online, "the round begins");
+
+        // The room plays its end screen out and then says how it went.
+        say(&mut room, Msg::Lobby(LobbyMsg::Ended { outcome: RoundOutcome::Won }));
+        say(&mut room, Msg::Lobby(LobbyMsg::Roster { host: 0, seats: roster.clone() }));
+        s.update_online(&Intent::default(), DT);
+        assert_eq!(s.mode(), Driver::Lobby, "the end of the round comes back to the room screen");
+        let seat = s.online.as_ref().expect("the seat is kept");
+        assert_eq!(seat.seat(), Some(0));
+        assert_eq!(seat.code(), Some("AK7QX"), "the same room, not a new one");
+        assert_eq!(s.game.frame(), local, "the local round moved while the window was online");
+        assert!(!s.playing());
+
+        // The room face is back, on the same roster, saying how the round
+        // went, with the host's action reading REMATCH.
+        s.update_lobby(&LobbyInput::default(), field, DT);
+        let view = s.play_chrome().lobby.expect("the room screen");
+        assert_eq!(view.stage, Stage::Room);
+        assert_eq!(view.code.as_deref(), Some("AK7QX"));
+        assert_eq!(view.seats.len(), 1);
+        assert!(view.sub.starts_with("ROUND WON"), "{}", view.sub);
+        let start = view.buttons.iter().find(|b| b.button == Button::Start).expect("the host's action");
+        assert_eq!(start.label, "REMATCH");
+        assert!(start.enabled, "the only other seat is the host's own, so the rematch is live");
+
+        // Pressing it is the `Start` the room already takes from a host.
+        let rect = crate::lobby::button_rect(field, Button::Start);
+        let tap = LobbyInput {
+            pointer: Some(Vec2::new(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0)),
+            pressed: true,
+            ..LobbyInput::default()
+        };
+        s.update_lobby(&tap, field, DT);
+        let mut heard = Vec::new();
+        room.drain(&mut heard);
+        assert!(heard.iter().any(|m| matches!(m, Msg::Lobby(LobbyMsg::Start))), "the rematch never left: {heard:?}");
+
+        // And the round the room starts is drawn like any other.
+        say(&mut room, Msg::Lobby(LobbyMsg::Started));
+        say(&mut room, Msg::Welcome(welcome()));
+        assert_eq!(s.update_lobby(&LobbyInput::default(), field, DT), Driver::Online);
+        assert!(s.play_chrome().status.is_some(), "the round's own line is back over the field");
     }
 
     #[test]

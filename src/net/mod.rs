@@ -30,7 +30,8 @@
 //! - `rooms`: the host in force and the URL a room code names.
 //! - `client`: `RoomClient`, the lobby's state machine over a transport -
 //!   host or join, the code, the roster, the seat, and the snapshots
-//!   with the deltas already applied.
+//!   with the deltas already applied. A round that ends puts it back in
+//!   the lobby phase with how it went, since the snapshots stop there.
 //!
 //! On top of that again, the window's own half (docs/online-coop-prd.md
 //! §4.5, §4.13):

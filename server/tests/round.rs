@@ -16,7 +16,7 @@ use bongbong::net::rooms::{RoomCode, RoomsHost, socket_url};
 use bongbong::net::codec::{self, Msg};
 use bongbong::net::delta::apply_delta;
 use bongbong::net::events::WireEvent;
-use bongbong::net::wire::{IntentMsg, Lobby, Snapshot};
+use bongbong::net::wire::{IntentMsg, Lobby, RoundOutcome, Snapshot};
 use bongbong::net::{MAX_SEATS, PROTOCOL_VERSION};
 use bongbong::simulation::Game;
 use bongbong::tank::Dir;
@@ -511,6 +511,7 @@ fn play_a_round(url: String, span: Duration) -> Played {
                 }
                 ClientEvent::Refused(why) => panic!("the room refused: {why}"),
                 ClientEvent::Closed(why) => panic!("the socket closed: {why}"),
+                ClientEvent::Ended { outcome } => panic!("the round ended early: {outcome:?}"),
                 ClientEvent::Roster { .. } | ClientEvent::Said { .. } => {}
             }
         }
@@ -588,4 +589,195 @@ async fn the_games_own_transport_hosts_a_round_and_keeps_up_with_it() {
     assert!(played.compared >= 3, "the replica was held to the wire {} times", played.compared);
     let (_, p99) = hub.metrics.tick_percentiles();
     assert!(p99 < 16_667, "a tick must fit in the tick: p99 {p99} us");
+}
+
+// ---------------------------------------------------------------------------
+// The end of a round (docs/online-coop-prd.md §4.7): a room ticks its round
+// through the end screen and stops the tick before the one a local round
+// would restart on, tells every seat how it went, and takes the host's next
+// `Start` as a rematch.
+
+/// The fixture the round is ended on; its own header says how it works.
+/// `Lobby::Create` carries it whole, so the room needs no file of its own.
+const HUNT_MAP: &str = include_str!("../../maps/test/online/hunt-duel.toml");
+
+/// The end screen's length in snapshots, 3 s of `restart_delay` at 20 Hz
+/// less the slack of where in the interval the round turned.
+const END_SCREEN_SNAPSHOTS: usize = 50;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_round_that_ends_plays_its_end_screen_out_and_comes_back_to_the_lobby() {
+    let (addr, hub) = start_server().await;
+
+    // Two seats in a room on the map the first of them wins in a second.
+    // No seed is pinned, so the room draws one - and another for the rematch.
+    let mut host = connect(addr).await;
+    send(
+        &mut host,
+        &Msg::Lobby(Lobby::Create {
+            nick: "host".into(),
+            device_token: "tok-host".into(),
+            map: "default".into(),
+            map_toml: Some(HUNT_MAP.into()),
+            mission: Mission::Hunt,
+            seed: None,
+        }),
+    )
+    .await;
+    let code = expect(&mut host, "the code", |m| match m {
+        Msg::Lobby(Lobby::RoomCreated { code }) => Ok(code),
+        other => Err(other),
+    })
+    .await;
+    let _ = expect_welcome(&mut host).await;
+    let mut guest = connect(addr).await;
+    send(&mut guest, &join("guest", "tok-guest", &code)).await;
+    let _ = expect_welcome(&mut guest).await;
+    ready_then_start(&mut host, &mut guest).await;
+
+    let first = start_of_round(&mut host).await;
+    let guest_start = start_of_round(&mut guest).await;
+    assert_eq!(guest_start.seed, first.seed, "both seats play the same round");
+
+    // The guest sits the round out; all it has to do is hear how it went,
+    // which is a whole round's worth of snapshots away.
+    let listening = tokio::spawn(async move {
+        let outcome = wait_for_the_end(&mut guest).await;
+        (guest, outcome)
+    });
+
+    // The host pulls its trigger up the lane and follows the stream until
+    // the room says the round is over.
+    let played = play_to_the_end(&mut host, first.snapshot.clone()).await;
+
+    assert_eq!(played.ended, Some(RoundOutcome::Won), "the hunt is won by killing the enemy frog");
+    let (mut guest, guest_outcome) = tokio::time::timeout(WAIT, listening).await.expect("the guest heard the room").unwrap();
+    assert_eq!(guest_outcome, RoundOutcome::Won, "every seat is told, not just the one that was playing");
+
+    // The end screen was played out: the room went on ticking and sending
+    // for the whole countdown, and the number it counts down reached zero.
+    let over: Vec<&(u32, u8, RoundOutcome)> = played.snapshots.iter().filter(|(_, _, o)| *o != RoundOutcome::Playing).collect();
+    assert!(
+        over.len() >= END_SCREEN_SNAPSHOTS,
+        "only {} snapshots over the end screen, wanted {END_SCREEN_SNAPSHOTS}",
+        over.len()
+    );
+    assert!(over.windows(2).all(|w| w[1].0 > w[0].0), "the room stopped ticking on the end screen");
+    assert!(over[0].1 >= 25, "the countdown starts at three seconds, not {}", over[0].1);
+    assert_eq!(over[over.len() - 1].1, 0, "the countdown never reached zero");
+
+    // And it stopped there: no second round, no world back at tick 0.
+    assert_eq!(played.restarts, 0, "the room started a round nobody asked for");
+    assert!(played.snapshots.windows(2).all(|w| w[1].0 > w[0].0), "a tick went backwards: the round started over");
+    let (_, metrics) = http_get(addr, "/metrics").await;
+    assert!(metrics.contains("bongbong_rooms{phase=\"ended\"} 1"), "{metrics}");
+
+    // The roster that follows the announcement is the one the room screen
+    // comes back on: everybody unready again, ready for the host's rematch.
+    let seats = expect(&mut host, "the roster after the round", |m| match m {
+        Msg::Lobby(Lobby::Roster { seats, .. }) => Ok(seats),
+        other => Err(other),
+    })
+    .await;
+    assert_eq!(seats.len(), 2);
+    assert!(seats.iter().all(|s| !s.ready && s.connected), "{seats:?}");
+
+    // The rematch: the `Start` the room already takes from a host, on a
+    // fresh round and a seed of its own.
+    ready_then_start(&mut host, &mut guest).await;
+    let again = start_of_round(&mut host).await;
+    assert_eq!(again.snapshot.tick, 0, "the rematch starts at the top");
+    assert_ne!(again.seed, first.seed, "the rematch replays the round it just finished");
+    assert!(
+        again.snapshot.events.iter().any(|e| matches!(e, WireEvent::RoundStarted { .. })),
+        "the rematch's frame-0 snapshot carries its round start: {:?}",
+        again.snapshot.events
+    );
+    let (_, metrics) = http_get(addr, "/metrics").await;
+    assert!(metrics.contains("bongbong_rooms{phase=\"playing\"} 1"), "{metrics}");
+    let _ = hub;
+}
+
+/// The guest says it is ready and the host starts the round. The room
+/// refuses a start while a seat is not ready and the two sockets race, so
+/// the start waits for the roster that says the guest is.
+async fn ready_then_start(host: &mut Client, guest: &mut Client) {
+    send(guest, &Msg::Lobby(Lobby::Ready)).await;
+    expect(host, "the guest's ready", |m| match m {
+        Msg::Lobby(Lobby::Roster { seats, .. }) if seats.len() == 2 && seats[1].ready => Ok(()),
+        other => Err(other),
+    })
+    .await;
+    send(host, &Msg::Lobby(Lobby::Start)).await;
+}
+
+/// Read `ws` until the room says the round is over, however many
+/// snapshots stand in the way.
+async fn wait_for_the_end(ws: &mut Client) -> RoundOutcome {
+    let give_up = Instant::now() + Duration::from_secs(20);
+    while Instant::now() < give_up {
+        let left = give_up.saturating_duration_since(Instant::now());
+        let Ok(Some(frame)) = tokio::time::timeout(left, ws.next()).await else { break };
+        let Message::Binary(bytes) = frame.expect("a frame") else { continue };
+        if let Msg::Lobby(Lobby::Ended { outcome }) = codec::decode(&bytes).expect("a protocol message") {
+            return outcome;
+        }
+    }
+    panic!("the room never said the round was over");
+}
+
+/// `Started` and the `Welcome` that follows it, for one seat.
+async fn start_of_round(ws: &mut Client) -> bongbong::net::wire::Welcome {
+    expect(ws, "started", |m| match m {
+        Msg::Lobby(Lobby::Started) => Ok(()),
+        other => Err(other),
+    })
+    .await;
+    expect_welcome(ws).await
+}
+
+/// What the host saw of a round it played to the end.
+struct PlayedOut {
+    /// (tick, `RoundState::restart`, outcome) per snapshot.
+    snapshots: Vec<(u32, u8, RoundOutcome)>,
+    /// `RoundStarted` events after the welcome's own: a round the room
+    /// began on its own.
+    restarts: usize,
+    ended: Option<RoundOutcome>,
+}
+
+/// Drive `ws`'s seat up the lane, one intent every 16 ms, and follow the
+/// snapshot stream until the room says the round is over.
+async fn play_to_the_end(ws: &mut Client, baseline: Snapshot) -> PlayedOut {
+    let mut played = PlayedOut { snapshots: Vec::new(), restarts: 0, ended: None };
+    let mut baseline = baseline;
+    let mut tick = 0u32;
+    let mut clock = tokio::time::interval(Duration::from_millis(16));
+    let give_up = Instant::now() + Duration::from_secs(20);
+    while played.ended.is_none() && Instant::now() < give_up {
+        tokio::select! {
+            _ = clock.tick() => {
+                tick += 1;
+                // Up the lane, and a shell on the press: a held trigger
+                // fires once, so the trigger is pulled.
+                send(ws, &Msg::Intent(IntentMsg { tick, move_dir: 0, face: 1, fire: tick % 6 == 0 })).await;
+            }
+            frame = ws.next() => {
+                let Some(Ok(Message::Binary(bytes))) = frame else { break };
+                let next = match codec::decode(&bytes).expect("a protocol message") {
+                    Msg::Delta(d) => apply_delta(&baseline, &d),
+                    Msg::Snapshot(s) => s,
+                    Msg::Lobby(Lobby::Ended { outcome }) => {
+                        played.ended = Some(outcome);
+                        break;
+                    }
+                    _ => continue,
+                };
+                played.restarts += next.events.iter().filter(|e| matches!(e, WireEvent::RoundStarted { .. })).count();
+                played.snapshots.push((next.tick, next.round.restart, next.round.outcome));
+                baseline = next;
+            }
+        }
+    }
+    played
 }
