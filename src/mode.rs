@@ -646,38 +646,38 @@ mod session_tests {
         for _ in 0..5 {
             s.game.update(crate::simulation::Input::default(), crate::PHYSICS_FIXED_DT, W, H);
         }
-        assert_eq!(s.game.players, PlayerCount::One);
-        assert!(s.game.player2.is_none());
+        assert_eq!(s.game.players, PlayerCount::ONE);
+        assert!(s.game.seat(1).is_none());
         // Closed: answering is a no-op.
-        assert_eq!(s.answer_players(PlayerCount::Two), PlayerCount::One);
-        assert!(s.game.player2.is_none());
+        assert_eq!(s.answer_players(PlayerCount::TWO), PlayerCount::ONE);
+        assert!(s.game.seat(1).is_none());
 
         s.press_players();
-        assert_eq!(s.answer_players(PlayerCount::Two), PlayerCount::Two);
+        assert_eq!(s.answer_players(PlayerCount::TWO), PlayerCount::TWO);
         assert!(!s.players_dialog && s.playing());
         assert_eq!(s.game.frame(), 0, "a new round started");
-        assert!(s.game.player2.is_some());
+        assert!(s.game.seat(1).is_some());
         for _ in 0..5 {
             s.game.update(crate::simulation::Input::default(), crate::PHYSICS_FIXED_DT, W, H);
         }
         // The same count: closes without a restart.
         s.press_players();
-        assert_eq!(s.answer_players(PlayerCount::Two), PlayerCount::Two);
+        assert_eq!(s.answer_players(PlayerCount::TWO), PlayerCount::TWO);
         assert_eq!(s.game.frame(), 5);
         assert!(!s.players_dialog);
         // The mode sticks: an R restart and a BUILD -> PLAY round trip keep it.
         s.game.update(crate::simulation::Input { restart_pressed: true, ..Default::default() }, crate::PHYSICS_FIXED_DT, W, H);
-        assert_eq!(s.game.players, PlayerCount::Two);
-        assert!(s.game.player2.is_some());
+        assert_eq!(s.game.players, PlayerCount::TWO);
+        assert!(s.game.seat(1).is_some());
         s.press_build();
         s.answer_dialog(true);
         s.play();
-        assert_eq!(s.game.players, PlayerCount::Two);
-        assert!(s.game.player2.is_some());
+        assert_eq!(s.game.players, PlayerCount::TWO);
+        assert!(s.game.seat(1).is_some());
         // And back to one.
         s.press_players();
-        assert_eq!(s.answer_players(PlayerCount::One), PlayerCount::One);
-        assert!(s.game.player2.is_none());
+        assert_eq!(s.answer_players(PlayerCount::ONE), PlayerCount::ONE);
+        assert!(s.game.seat(1).is_none());
     }
 
     /// Online is a third driver, not a replacement: the local round and

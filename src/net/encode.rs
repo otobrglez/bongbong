@@ -83,9 +83,11 @@ pub fn snapshot(game: &Game, acked: [u32; MAX_SEATS]) -> Snapshot {
 
 /// Everything a joining client needs: the round's parameters, the holes
 /// fire and shot have made in the map, and a full `snapshot`. The roster's
-/// chassis are what the server pinned each seat's `player_row_override`
-/// to, so the replica's `init` draws the same rolls. Fails only if the map
-/// does not serialise.
+/// first two chassis are what the server pinned
+/// `player_row_override`/`player2_row_override` to, so the replica's
+/// `init` draws the same rolls; a seat past those two rolls its chassis on
+/// both sides off the shared seed. Fails only if the map does not
+/// serialise.
 pub fn welcome(
     game: &Game,
     seat: u8,

@@ -152,10 +152,13 @@ pub struct HudModel {
     /// Live enemies, and the ones still to roll in (shown as a dim `+N`).
     pub enemies_alive: usize,
     pub enemies_pending: usize,
-    /// Which slot table the bar is laid out from.
+    /// Which slot table the bar is laid out from: the one-player table at
+    /// one seat, the two-player one from two seats up (the couch layouts
+    /// are all the bar has - an online round's own strip is its own lane).
     pub players: PlayerCount,
     pub p1: PlayerHud,
-    /// Player 2's readouts in a two-player round; a wreck shows zeros.
+    /// Seat 1's readouts from two seats up; a wreck, or an empty seat,
+    /// shows zeros.
     pub p2: Option<PlayerHud>,
     /// The objective frog's health fraction, `None` in a round without one.
     pub frog: Option<f32>,
@@ -163,10 +166,10 @@ pub struct HudModel {
 
 impl HudModel {
     pub fn gather(game: &Game) -> Self {
-        let player = game.player.expect("player entity spawned in init");
+        let player = game.player().expect("player entity spawned in init");
         let p1 = PlayerHud::gather(game, player);
-        let p2 = (game.players == PlayerCount::Two)
-            .then(|| game.player2.map(|e| PlayerHud::gather(game, e)).unwrap_or_else(PlayerHud::empty));
+        let p2 = (game.players.count() >= 2)
+            .then(|| game.seat(1).map(|e| PlayerHud::gather(game, e)).unwrap_or_else(PlayerHud::empty));
         let mut title = game.mission.name().to_ascii_uppercase();
         let wave = game.wave_status();
         if let Some(w) = &wave {

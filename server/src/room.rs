@@ -54,9 +54,10 @@ pub const TICK: Duration = Duration::from_nanos(1_000_000_000 / 60);
 /// A snapshot goes out every this many ticks: 20 Hz.
 pub const SNAPSHOT_EVERY: u64 = 3;
 
-/// Seats a round can carry today: the two players the simulation knows
-/// (docs/two-players.md). A third join is refused until the roster work
-/// of phase 3 lands; `MAX_SEATS` is the wire's ceiling, not this one.
+/// Seats a round can carry today. The simulation itself seats up to
+/// `MAX_SEATS` (docs/online-coop-prd.md §4.11), so this is a room policy
+/// alone: a third join is refused until the compact N-seat HUD lands and
+/// the difficulty curve is tuned for a bigger team.
 pub const SEATS_PLAYABLE: usize = 2;
 
 /// A waiting room with nobody connected is reaped after this.
@@ -574,7 +575,7 @@ impl Room {
         let mut game = Box::new(Game::default());
         game.map = self.map.clone();
         game.level_overrides = self.overrides;
-        game.players = PlayerCount::from_count(players).expect("1 or 2");
+        game.players = PlayerCount::from_count(players).expect("clamped to SEATS_PLAYABLE");
         game.seed_override = Some(seed);
         let (w, h) = self.map.field_size();
         game.init(w, h);

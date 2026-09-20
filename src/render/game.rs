@@ -178,8 +178,6 @@ impl Game {
         // borrow it, and the dev label needs the number.
         #[cfg(feature = "dev-tools")]
         let frame_ms = rl.get_frame_time() * 1000.0;
-        let player = self.player.expect("player entity spawned in init");
-
         let hud = HudModel::gather(self);
         // The build stamp, bottom-right of the field (text width must be
         // measured on the RaylibHandle, outside the draw closure).
@@ -291,10 +289,10 @@ impl Game {
 
             self.paint_standing(&mut GpuCanvas::new(&mut d, textures), PaintOptions { locate_cue: true });
 
-            // The locate cue's P1/P2 labels, over the grass, the crowd and
+            // The locate cue's P1..P8 labels, over the grass, the crowd and
             // the trees - the point is to be found under all of it.
             if !self.hide_players {
-                for entity in [Some(player), self.player2].into_iter().flatten() {
+                for entity in self.players().into_iter().flatten() {
                     crate::simulation::with_tank(&self.world, entity, |tank| draw_player_label(&mut d, tank, self.time));
                 }
             }
@@ -579,7 +577,7 @@ impl Game {
                         for (tank, ai) in self.world.query::<(&Tank, &Ai)>().iter() {
                             draw_tank_layers(&mut d, ov, tank, Some(ai));
                         }
-                        for entity in [Some(player), self.player2].into_iter().flatten() {
+                        for entity in self.players().into_iter().flatten() {
                             crate::simulation::with_tank(&self.world, entity, |tank| {
                                 draw_tank_layers(&mut d, ov, tank, None);
                             });

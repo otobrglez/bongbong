@@ -50,7 +50,7 @@ impl Default for ThumbnailOptions {
     fn default() -> Self {
         ThumbnailOptions {
             seed: DEFAULT_SEED,
-            players: PlayerCount::One,
+            players: PlayerCount::ONE,
             tank_row: None,
             tank2_row: None,
             hide_players: false,

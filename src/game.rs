@@ -31,9 +31,8 @@ use std::collections::HashSet;
 /// tanks had to be sorted against the grass.
 #[derive(Clone, Copy, PartialEq)]
 enum TankRole {
+    /// Any seat's tank: one ring, drawn in that seat's own team colour.
     Player,
-    /// The second human tank of a two-player round: its own blue ring.
-    Player2,
     Enemy,
     /// A wave tank still rolling in: partly off-screen by construction, and
     /// with no health ring or damage overlay until it arrives.
@@ -50,7 +49,7 @@ enum Standing<'a> {
 /// A tank and everything drawn on it, in the order the layers stack.
 fn draw_one_tank(c: &mut impl Canvas, tank: &Tank, role: TankRole, time: f32, shadows: bool, locate_cue: bool) {
     match role {
-        TankRole::Player | TankRole::Player2 => {
+        TankRole::Player => {
             // The locate ripple under the marker so the steady ring stays
             // legible over the swelling one.
             if locate_cue {
@@ -176,7 +175,6 @@ impl Game {
             draw_pickup(c, pickup);
         }
 
-        let player = self.player.expect("player entity spawned in init");
         let rollins: HashSet<Entity> = {
             let mut q = self.world.query::<(Entity, &crate::simulation::RollIn)>();
             let set = q.iter().map(|(e, _)| e).collect();
@@ -186,10 +184,8 @@ impl Game {
         let mut standing: Vec<(f32, Standing)> = tank_query
             .iter()
             .map(|(entity, tank)| {
-                let role = if entity == player {
+                let role = if self.is_player(entity) {
                     TankRole::Player
-                } else if Some(entity) == self.player2 {
-                    TankRole::Player2
                 } else if rollins.contains(&entity) {
                     TankRole::RollIn
                 } else {
@@ -198,7 +194,7 @@ impl Game {
                 (tank.position.y, Standing::Tank(tank, role))
             })
             .filter(|(_, item)| {
-                !(self.hide_players && matches!(item, Standing::Tank(_, TankRole::Player | TankRole::Player2)))
+                !(self.hide_players && matches!(item, Standing::Tank(_, TankRole::Player)))
             })
             .collect();
         for frog_entity in [self.frog, self.enemy_frog].into_iter().flatten() {

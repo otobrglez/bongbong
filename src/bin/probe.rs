@@ -374,11 +374,12 @@ struct Args {
     #[arg(long = "tank", value_enum)]
     tank: Option<TankKind>,
 
-    /// Two-player rounds (docs/two-players.md): run the round with two
-    /// human tanks, player 2 driven by `--p2-scenario`. Slot 1 is player
-    /// 2 and enemies count from 2; anomaly checks measure each enemy
-    /// against the nearest live player, which is what the AI targets.
-    #[arg(long = "players", default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=2))]
+    /// How many seats the round holds, 1 to `MAX_SEATS`
+    /// (docs/two-players.md, docs/online-coop-prd.md §4.11): every seat
+    /// past the first is driven by `--p2-scenario`. Enemies count from the
+    /// slot after the seats; anomaly checks measure each enemy against the
+    /// nearest live player, which is what the AI targets.
+    #[arg(long = "players", default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=bongbong::MAX_SEATS as i64))]
     players: u8,
 
     /// Two-player rounds: pin player 2's chassis (over the map's `tank2`
@@ -386,8 +387,10 @@ struct Args {
     #[arg(long = "tank2", value_enum)]
     tank2: Option<TankKind>,
 
-    /// Two-player rounds: player 2's scripted scenario (default: the same
-    /// as `--scenario`; `afk` parks it).
+    /// The scripted scenario every seat past the first runs (default: the
+    /// same as `--scenario`; `afk` parks them). One flag for all of them:
+    /// a sweep wants the same behaviour out of each, and a per-seat script
+    /// has no reader yet.
     #[arg(long = "p2-scenario", value_enum)]
     p2_scenario: Option<Scenario>,
 
@@ -473,15 +476,17 @@ struct Args {
     heatmap: bool,
 }
 
-/// Both players' input for `frame`: seat 0 on `--scenario`, seat 1 on
-/// `--p2-scenario` (idle in a single-player round).
+/// Every seat's input for `frame`: seat 0 on `--scenario`, the rest on
+/// `--p2-scenario` (nobody else in a single-player round).
 fn input_for_frame(args: &Args, frame: u32) -> Input {
-    let player1 = intent_for_frame(args.scenario, frame);
-    if args.players == 2 {
-        Input::two(player1, intent_for_frame(args.p2_scenario.unwrap_or(args.scenario), frame))
-    } else {
-        Input::single(player1)
+    let mut input = Input::single(intent_for_frame(args.scenario, frame));
+    if args.players > 1 {
+        let others = intent_for_frame(args.p2_scenario.unwrap_or(args.scenario), frame);
+        for seat in input.seats.iter_mut().take(args.players as usize).skip(1) {
+            *seat = others;
+        }
     }
+    input
 }
 
 fn intent_for_frame(scenario: Scenario, frame: u32) -> Intent {
@@ -856,16 +861,16 @@ fn report_global(round: u32, seed: u64, frame: u32, kind: &str, detail: &str) {
 
 /// Display label for the enemy in owner slot `slot`: "ENEMY#k" with k the
 /// enemy ordinal `slot - first_enemy` (owner slots count enemies from the
-/// first slot after the players - 1, or 2 with two players - and are
-/// never reused, so a wave tank arriving later gets a fresh number; the
-/// dev server's tools name the same tank by its raw slot).
+/// first slot after the seats, and are never reused, so a wave tank
+/// arriving later gets a fresh number; the dev server's tools name the
+/// same tank by its raw slot).
 fn enemy_label(slot: usize, first_enemy: usize) -> String {
     format!("ENEMY#{}", slot.saturating_sub(first_enemy))
 }
 
-/// Display label for any tank: "PLAYER" (or "PLAYER1"/"PLAYER2" in a
-/// two-player round), or `enemy_label`. `first_enemy` is
-/// `Game::first_enemy_slot`.
+/// Display label for any tank: "PLAYER" in a single-player round,
+/// "PLAYER1".."PLAYER8" where there are more seats, or `enemy_label`.
+/// `first_enemy` is `Game::first_enemy_slot`.
 fn tank_label(tank: &TankSnapshot, first_enemy: usize) -> String {
     match tank.player {
         Some(_) if first_enemy == 1 => "PLAYER".to_string(),
@@ -1516,7 +1521,8 @@ fn run_round(
     };
     game.player_row_override = args.tank.map(TankKind::row);
     game.player2_row_override = args.tank2.map(TankKind::row);
-    game.players = bongbong::simulation::PlayerCount::from_count(args.players as usize).expect("clap limits --players to 1 or 2");
+    game.players =
+        bongbong::simulation::PlayerCount::from_count(args.players as usize).expect("clap limits --players to the seats");
     game.seed_override = Some(seed);
     // The field is the map's; every anomaly bound below reads it.
     game.map = match &args.map {

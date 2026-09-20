@@ -34,7 +34,7 @@ mod flame_tests;
 #[cfg(test)]
 mod props_tests;
 #[cfg(test)]
-mod two_player_tests;
+mod seat_tests;
 mod waves;
 mod weapons;
 
@@ -107,10 +107,10 @@ use weapons::{dispatch_fire, dispatch_fire_from, laser_damage_range, tick_queued
 #[derive(Default, Clone, Copy)]
 pub struct Input {
     /// One raw movement/fire command per seat: seat 0 is player 1, seat 1
-    /// player 2. The round reads the first `Game::players.count()` seats
-    /// and nothing else, so a single-player caller leaves seat 1 at its
-    /// default (no input) and the seats past two wait for the online
-    /// roster (`MAX_SEATS`). `fire` is "is the fire key held this step",
+    /// player 2, and so on up to `MAX_SEATS`. The round reads the first
+    /// `Game::players.count()` seats and nothing else, so a single-player
+    /// caller leaves seat 1 at its default (no input) and a seat nobody
+    /// drives stands still. `fire` is "is the fire key held this step",
     /// not edge-detected: `update` decides whether that fires (a laser or
     /// minigun is full-auto while held; shells and plasma need a fresh
     /// press), since that depends on the player's current weapon.
@@ -174,35 +174,41 @@ impl Input {
     }
 }
 
-/// How many humans drive a tank this round - a session setting, chosen
-/// from the HUD's players dialog or `--players`, kept across restarts
-/// like `Game::player_row_override`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PlayerCount {
-    #[default]
-    One,
-    Two,
-}
+/// How many seats this round holds, 1 to `MAX_SEATS` - a session setting,
+/// chosen from the HUD's players dialog, `--players`, or the size of a
+/// room's roster, and kept across restarts like `Game::player_row_override`.
+/// A count, not a list of variants: the couch offers one or two, a room up
+/// to eight, and everything downstream reads `count()`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct PlayerCount(u8);
 
 impl PlayerCount {
+    /// A single-player round - the default.
+    pub const ONE: PlayerCount = PlayerCount(1);
+    /// The two-player couch round (docs/two-players.md).
+    pub const TWO: PlayerCount = PlayerCount(2);
+    /// Every seat the protocol carries.
+    pub const MAX: PlayerCount = PlayerCount(MAX_SEATS as u8);
+
+    /// How many seats hold a tank this round.
     pub fn count(self) -> usize {
-        match self {
-            PlayerCount::One => 1,
-            PlayerCount::Two => 2,
-        }
+        self.0 as usize
     }
 
+    /// `n` seats, or `None` outside `1..=MAX_SEATS`.
     pub fn from_count(n: usize) -> Option<PlayerCount> {
-        match n {
-            1 => Some(PlayerCount::One),
-            2 => Some(PlayerCount::Two),
-            _ => None,
-        }
+        (1..=MAX_SEATS).contains(&n).then_some(PlayerCount(n as u8))
     }
 }
 
-/// Player 1's owner slot (`Tank::owner_slot`). Player 2, when there is
-/// one, takes 1; the enemies count up from `Game::first_enemy_slot`.
+impl Default for PlayerCount {
+    fn default() -> Self {
+        PlayerCount::ONE
+    }
+}
+
+/// Player 1's owner slot (`Tank::owner_slot`). Each further seat takes the
+/// next number; the enemies count up from `Game::first_enemy_slot`.
 pub(crate) const PLAYER_OWNER_SLOT: usize = 0;
 
 /// How the current round is going.
@@ -325,8 +331,8 @@ pub enum Event {
     /// The shared last-known player position appeared or expired; `x`/`y`
     /// is the position (the last known one when `on` is false).
     Alert { on: bool, x: f32, y: f32 },
-    /// Two-player rounds: the enemy in `slot` switched to fighting
-    /// `player` (`Ai::target_player`).
+    /// Rounds with more than one seat: the enemy in `slot` switched to
+    /// fighting `player` (`Ai::target_player`).
     Retarget { slot: usize, player: u8 },
 }
 
@@ -477,14 +483,12 @@ pub struct Game {
     /// `Obstacle`s, `Pickup`s and in-flight `Shell`/`Bullet`/`Plasma`
     /// projectiles. `pub(crate)` so `render` and the map linter can read it.
     pub(crate) world: hecs::World,
-    /// Player 1's entity. `None` only before the first `init`; every
-    /// method treats it as `Some` once a round is running.
-    pub(crate) player: Option<Entity>,
-    /// Player 2's entity in a two-player round (`players`), `None` in a
-    /// single-player one. Spawned into the same archetype as player 1 - a
-    /// `Tank` and nothing else - so every query that tells enemies apart by
-    /// their `Ai` sees both players the same way.
-    pub(crate) player2: Option<Entity>,
+    /// One entity per seat, indexed by owner slot: seat 0 is player 1 and
+    /// is `None` only before the first `init`, seats 1.. hold a tank only
+    /// while `players` reaches them. Every seat is spawned into the same
+    /// archetype - a `Tank` and nothing else - so every query that tells
+    /// enemies apart by their `Ai` sees all of them the same way.
+    pub(crate) seats: [Option<Entity>; MAX_SEATS],
     /// The player's frog - `None` in a mission without one (`Destroy`),
     /// and before the first `init`.
     pub(crate) frog: Option<Entity>,
@@ -540,9 +544,9 @@ pub struct Game {
     alert_position: Option<Position>,
     alert_timer: f32,
     /// Engagement-slot assignment with per-tank memory - see `engage`. One
-    /// ring per player, indexed like `players`; the second is only ever
-    /// filled in a two-player round.
-    engage: [EngageRing; 2],
+    /// ring per seat, indexed like `seats`; a ring past the seats this
+    /// round holds stays empty.
+    engage: [EngageRing; MAX_SEATS],
     /// The second ring, around the player's frog: what hunters with a live
     /// quarry compete on (`enemy_phase`).
     engage_frog: EngageRing,
@@ -637,8 +641,8 @@ pub struct Game {
     pub player_row_override: Option<i32>,
     /// `--tank2`: player 2's chassis, over the map's `tank2` key.
     pub player2_row_override: Option<i32>,
-    /// One or two human players. Set before `init` and kept across
-    /// restarts; `init` spawns player 2 only under `Two`.
+    /// How many seats this round holds. Set before `init` and kept across
+    /// restarts; `init` spawns exactly `players.count()` tanks.
     pub players: PlayerCount,
     /// `--seed`: pins the round seed, so every restart replays the
     /// identical round - the repro loop for a round the probe flagged.
@@ -839,7 +843,7 @@ impl Game {
         self.last_engage.clear();
         self.debug_kills.clear();
         self.debug_detonations.clear();
-        self.player2 = None;
+        self.seats = [None; MAX_SEATS];
         self.frog = None;
         self.enemy_frog = None;
         self.mission = self.level_overrides.resolve_mission(&self.map.mission);
@@ -906,7 +910,7 @@ impl Game {
         // other so a crowded round doesn't start with tanks ramming.
         let clear = tank.size() * 2.0;
         let enemy_clear = tank.size() * 1.5;
-        self.player = Some(self.world.spawn((tank,)));
+        self.seats[PLAYER_OWNER_SLOT] = Some(self.world.spawn((tank,)));
 
         // --- Map terrain (walls/road/frog/pickup slots) ---
         // Before enemies, so their clearance check below sees every wall.
@@ -968,33 +972,66 @@ impl Game {
         // audits against below.
         let spawn_grid = self.nav_grid(width, height);
 
-        // --- Player 2 (two-player rounds only) ---
-        // Every draw here sits inside the `Two` branch, after the terrain
-        // and before the enemies, so a single-player round's RNG stream is
-        // exactly what it was without this block. Same rolls as player 1,
-        // in the same order.
-        let center2 = if self.players == PlayerCount::Two {
-            let row2 = resolve_player_row(self.player2_row_override, -1, self.map.tank2, || {
-                rng.random_range(0..TANK_VARIANTS)
-            });
-            // The map's `start2` cell (nudged off a solid tile); otherwise
-            // the nearest usable nav cell to player 1 that keeps a clear
-            // tank's width from it - never player 1's own cell, never a wall.
-            let position = self
-                .map
-                .start2_cell()
+        // --- The other seats ---
+        // Every draw here sits inside the loop, after the terrain and
+        // before the enemies, so a single-player round's RNG stream is
+        // exactly what it was without this block and a two-player one's is
+        // exactly what one pass of it drew. Same rolls as player 1, in the
+        // same order, one seat at a time.
+        let mut others: Vec<Position> = Vec::new();
+        for seat in 1..self.players.count() {
+            // `--tank2` and the map's `tank2` pin seat 1; the seats past it
+            // roll their chassis, which a replica's `init` re-rolls the
+            // same way off the same seed.
+            let (pin, map_row) = if seat == 1 { (self.player2_row_override, self.map.tank2) } else { (None, None) };
+            let row = resolve_player_row(pin, -1, map_row, || rng.random_range(0..TANK_VARIANTS));
+            // Seat 1 takes the map's `start2` cell (nudged off a solid
+            // tile); every seat without an authored start - and seat 1 with
+            // a `start2` inside player 1's clearance - takes the nearest
+            // usable nav cell to player 1 that keeps a clear tank's width
+            // from every seat already down, moved ashore if that lands it
+            // in a lake.
+            let placed: Vec<Position> = std::iter::once(center).chain(others.iter().copied()).collect();
+            let position = (seat == 1)
+                .then(|| self.map.start2_cell())
+                .flatten()
                 .map(|(col, row)| {
                     let (col, row) = self.map.nearest_free_cell(col, row);
                     map::cell_to_world(col, row)
                 })
-                .filter(|p| p.distance_to(center) >= clear)
-                .unwrap_or_else(|| spawn_grid.nearest_open(center, &[center], clear));
+                .filter(|p| placed.iter().all(|&q| p.distance_to(q) >= clear))
+                .unwrap_or_else(|| {
+                    // Seat 1 keeps the plain outward walk it has always
+                    // had, wall or no wall, because a seeded two-player
+                    // replay is that walk's answer. The seats after it
+                    // have no authored start to fall back on and no replay
+                    // to keep, so they take the walk that only crosses
+                    // ground a tank can drive over - `nearest_open`'s
+                    // frontier goes through walls, which on a real map can
+                    // drop a seat in a sealed pocket it could never leave.
+                    let open = if seat == 1 {
+                        spawn_grid.nearest_open(center, &placed, clear)
+                    } else {
+                        let (cols, rows, _) = spawn_grid.dims();
+                        let free = |p: Position| placed.iter().all(|&q| p.distance_to(q) >= clear);
+                        spawn_grid
+                            .nearest_open_reachable(center, cols + rows, free)
+                            .unwrap_or_else(|| spawn_grid.nearest_open(center, &placed, clear))
+                    };
+                    // The nav grid blocks deep water outright, so this only
+                    // ever fires for a cell the grid still calls open while
+                    // the lake reaches into it - and leaves the grid's own
+                    // answer alone when it does not.
+                    let cell = map::world_to_cell(open);
+                    let dry = dry_cell_near(&self.map, &self.water, cell);
+                    if dry == cell { open } else { map::cell_to_world(dry.0, dry.1) }
+                });
             let mut tank = Tank {
-                row: row2,
-                shell_variant: TANK_SHELL_VARIANT_BY_ROW[row2 as usize],
+                row,
+                shell_variant: TANK_SHELL_VARIANT_BY_ROW[row as usize],
                 damage_variant: rng.random_range(0..DAMAGE_VARIANTS),
                 position,
-                owner: Owner::Player(1),
+                owner: Owner::Player(seat as u8),
                 ..Tank::default()
             };
             if rng.random_range(0.0..1.0) < tuning().spawn_shield_chance {
@@ -1002,12 +1039,10 @@ impl Game {
             }
             roll_track_distortion(&mut tank, &mut rng);
             tank.body = Some(self.physics.spawn_tank(tank.position, tank.move_half_extents(false), tank.mass()));
-            self.player2 = Some(self.world.spawn((tank,)));
-            Some(position)
-        } else {
-            None
-        };
-        let clear_of_player2 = |pos: Position| center2.is_none_or(|c| pos.distance_to(c) >= clear);
+            self.seats[seat] = Some(self.world.spawn((tank,)));
+            others.push(position);
+        }
+        let clear_of_others = |pos: Position| others.iter().all(|&c| pos.distance_to(c) >= clear);
 
         let mut enemy_positions: Vec<Position> = Vec::with_capacity(enemy_count);
         while enemy_positions.len() < enemy_count {
@@ -1022,7 +1057,7 @@ impl Game {
                     clear,
                     &spawn_grid,
                     &obstacle_positions,
-                ) && clear_of_player2(pos)
+                ) && clear_of_others(pos)
             };
             let pos = battlefield::sample_clear_position(&mut rng, width, height, margin_min, |pos| {
                 legal(pos) && enemy_positions.iter().all(|&p| pos.distance_to(p) >= enemy_clear)
@@ -1038,7 +1073,7 @@ impl Game {
                 );
                 let mut avoid = enemy_positions.clone();
                 avoid.push(center);
-                avoid.extend(center2);
+                avoid.extend(others.iter().copied());
                 spawn_grid.nearest_open(sample, &avoid, enemy_clear)
             });
             let erow = TANK_SPRITE_ORDER[enemy_positions.len() % TANK_SPRITE_ORDER.len()];
@@ -1075,7 +1110,7 @@ impl Game {
             battlefield::sample_clear_position(&mut rng, width, height, margin_min, |pos| {
                 let dist = pos.distance_to(center);
                 (tuning().frog_spawn_min_dist..=tuning().frog_spawn_max_dist).contains(&dist)
-                    && clear_of_player2(pos)
+                    && clear_of_others(pos)
                     && enemy_positions.iter().all(|&p| pos.distance_to(p) >= enemy_clear)
                     && obstacle_positions.iter().all(|&p| pos.distance_to(p) >= frog_clear)
             })
@@ -1085,7 +1120,7 @@ impl Game {
                 let sample = Position::new(width * 0.5, height * 0.5);
                 let mut avoid = enemy_positions.clone();
                 avoid.push(center);
-                avoid.extend(center2);
+                avoid.extend(others.iter().copied());
                 spawn_grid.nearest_open(sample, &avoid, enemy_clear)
             })
         });
@@ -1108,7 +1143,7 @@ impl Game {
                     border_dist <= margin_max
                         && pos.distance_to(frog_pos) >= min_dist
                         && pos.distance_to(center) >= clear
-                        && clear_of_player2(pos)
+                        && clear_of_others(pos)
                         && spawn_grid.usable(pos)
                         && enemy_positions.iter().all(|&p| pos.distance_to(p) >= enemy_clear)
                         && obstacle_positions.iter().all(|&p| pos.distance_to(p) >= frog_clear)
@@ -1120,7 +1155,7 @@ impl Game {
                     );
                     let mut avoid = enemy_positions.clone();
                     avoid.push(center);
-                    avoid.extend(center2);
+                    avoid.extend(others.iter().copied());
                     avoid.push(frog_pos);
                     spawn_grid.nearest_open(sample, &avoid, enemy_clear)
                 })
@@ -1841,21 +1876,20 @@ impl Game {
         }
     }
 
-    /// Drive each player from its seat's input and handle their fire keys
-    /// (docs/two-players.md): player 1 from seat 0, then player 2 from
-    /// seat 1 in a two-player round.
+    /// Drive each seat from its own input and handle its fire key
+    /// (docs/two-players.md): seat 0 first, then every further seat in
+    /// index order, so their RNG draws keep a fixed order.
     fn player_phase(&mut self, input: Input, f: &mut Frame) {
-        let player = self.player.expect("player entity spawned in init");
-        self.drive_player(f, 0, player, input.seat(0));
-        if let Some(player2) = self.player2 {
-            self.drive_player(f, 1, player2, input.seat(1));
+        for index in 0..self.players.count() {
+            let Some(entity) = self.seat(index) else { continue };
+            self.drive_player(f, index, entity, input.seat(index));
         }
     }
 
-    /// One player's tank for one frame: drive it, tick its queued shots and
-    /// fire on its own key. A wreck is left alone - in a two-player round
-    /// a dead player's hulk outlives the round, and driving it would keep
-    /// shoving a corpse around.
+    /// One seat's tank for one frame: drive it, tick its queued shots and
+    /// fire on its own key. A wreck is left alone - a dead player's hulk
+    /// outlives the round while a team-mate fights on, and driving it
+    /// would keep shoving a corpse around.
     fn drive_player(&mut self, f: &mut Frame, index: usize, entity: Entity, intent: Intent) {
         let owner = Owner::Player(index as u8);
         let mut q = self.world.query_one::<&mut Tank>(entity);
@@ -1894,12 +1928,12 @@ impl Game {
 
     /// Every enemy perceives (motion snapshot, nav grid, shared alert,
     /// engagement slot, pickups, line of sight), thinks, drives and fires.
-    /// With two players each enemy first picks which one it is fighting
-    /// (`Ai::target_player`): the nearer live, visible one, switching only
-    /// past `enemy_target_switch_margin_px` so a pair at equal range does
-    /// not flip the pack every frame. Everything downstream - the ring it
-    /// competes on, its line of sight, what `think` is handed as "the
-    /// player" - keys off that choice.
+    /// With more than one seat each enemy first picks which player it is
+    /// fighting (`Ai::target_player`): the nearest live, visible one,
+    /// switching only past `enemy_target_switch_margin_px` so two at equal
+    /// range do not flip the pack every frame. Everything downstream - the
+    /// ring it competes on, its line of sight, what `think` is handed as
+    /// "the player" - keys off that choice.
     fn enemy_phase(&mut self, f: &mut Frame, grid: &Grid) {
         let (movers, enemy_indices) = self.motion_snapshot();
         // Every player as the enemies see it this frame; index = player.
@@ -1919,32 +1953,41 @@ impl Game {
             })
             .collect();
 
-        // Retarget pass, two-player rounds only (a single-player round
-        // never runs it, so its stream is untouched). A wreck is never a
-        // target - every enemy would otherwise stand over a hulk while the
-        // other player fought on - and a concealed player is one only for
-        // a tank they just shot, the same exemption the attack gates use.
+        // Retarget pass, from two seats up (a single-player round never
+        // runs it, so its stream is untouched). A wreck is never a target
+        // - every enemy would otherwise stand over a hulk while the rest
+        // of the team fought on - and a concealed player is one only for a
+        // tank they just shot, the same exemption the attack gates use.
+        // The candidate is the nearest eligible seat, ties going to the
+        // lower index, and the switch needs the margin only while the
+        // current target is still eligible.
         if players.len() >= 2 {
             let margin = tuning().enemy_target_switch_margin_px;
             for (tank, ai) in self.world.query::<(&Tank, &mut Ai)>().iter() {
                 let eligible = |p: &PlayerView| !p.wreck && (!p.concealed || ai.is_hit_alerted());
-                let current = ai.target_player() as usize;
-                let other = 1 - current;
-                let (pc, po) = (&players[current], &players[other]);
-                let switch = if !eligible(pc) {
-                    eligible(po)
+                let current = (ai.target_player() as usize).min(players.len() - 1);
+                let mut best: Option<(usize, f32)> = None;
+                for (i, p) in players.iter().enumerate().filter(|(_, p)| eligible(p)) {
+                    let d = tank.position.distance_to(p.pos);
+                    if best.is_none_or(|(_, bd)| d < bd) {
+                        best = Some((i, d));
+                    }
+                }
+                let Some((pick, pick_dist)) = best else { continue };
+                let switch = if !eligible(&players[current]) {
+                    true
                 } else {
-                    eligible(po) && tank.position.distance_to(po.pos) + margin < tank.position.distance_to(pc.pos)
+                    pick != current && pick_dist + margin < tank.position.distance_to(players[current].pos)
                 };
-                if switch {
-                    ai.set_target_player(other as u8);
+                if switch && pick != current {
+                    ai.set_target_player(pick as u8);
                     if self.trace_ai {
-                        f.events.push(Event::Retarget { slot: tank.owner_slot(), player: other as u8 });
+                        f.events.push(Event::Retarget { slot: tank.owner_slot(), player: pick as u8 });
                     }
                 }
             }
         }
-        let target_pos_of = |ai: &Ai| players[ai.target_player() as usize].pos;
+        let target_pos_of = |ai: &Ai| players[(ai.target_player() as usize).min(players.len() - 1)].pos;
 
         // Shared aggression: any enemy seeing a player refreshes the
         // group's last-known position (the nearest sighting when both
@@ -2003,9 +2046,9 @@ impl Game {
         // clustering anomaly); steering at the raw alert point is fine for
         // them. Hunters with a live quarry compete on the frog's ring;
         // everyone else on the ring around the player it is fighting - one
-        // ring per player, the second only ever populated with two.
+        // ring per seat, the rest only populated once that seat is filled.
         let mut report = EngageReport::default();
-        let mut engaged: [Vec<(Entity, Position)>; 2] = [Vec::new(), Vec::new()];
+        let mut engaged: Vec<Vec<(Entity, Position)>> = vec![Vec::new(); players.len()];
         let mut engaged_frog: Vec<(Entity, Position)> = Vec::new();
         for (entity, tank, ai) in self.world.query::<(Entity, &Tank, &Ai)>().iter() {
             let (target, hunting) = target_of(ai);
@@ -2015,7 +2058,7 @@ impl Game {
                 if hunting.is_some() {
                     engaged_frog.push((entity, tank.position));
                 } else {
-                    engaged[ai.target_player() as usize].push((entity, tank.position));
+                    engaged[(ai.target_player() as usize).min(players.len() - 1)].push((entity, tank.position));
                 }
             }
         }
@@ -2036,20 +2079,23 @@ impl Game {
                 &mut report,
             );
         }
-        if engaged[1].len() >= 2 {
-            // Player 2's ring keeps no slot table either (the snapshot
-            // shows player 1's); its per-tank outcomes are merged into the
-            // one report, the way the frog ring's are below.
-            let mut report2 = EngageReport {
-                tanks: report.tanks.iter().filter(|t| engaged[1].iter().any(|(e, _)| *e == t.entity)).copied().collect(),
+        for seat in 1..players.len() {
+            if engaged[seat].len() < 2 {
+                continue;
+            }
+            // A seat past the first keeps no slot table either (the
+            // snapshot shows player 1's); its per-tank outcomes are merged
+            // into the one report, the way the frog ring's are below.
+            let mut seat_report = EngageReport {
+                tanks: report.tanks.iter().filter(|t| engaged[seat].iter().any(|(e, _)| *e == t.entity)).copied().collect(),
                 ..Default::default()
             };
-            self.engage[1].assign(
-                &engaged[1],
-                &EngageCtx { target_pos: players[1].pos, width: f.width, height: f.height, margin, reachable: &reachable, line_of_sight: &line_of_sight },
-                &mut report2,
+            self.engage[seat].assign(
+                &engaged[seat],
+                &EngageCtx { target_pos: players[seat].pos, width: f.width, height: f.height, margin, reachable: &reachable, line_of_sight: &line_of_sight },
+                &mut seat_report,
             );
-            for t in report2.tanks {
+            for t in seat_report.tanks {
                 if let Some(slot) = report.tanks.iter_mut().find(|r| r.entity == t.entity) {
                     *slot = t;
                 }
@@ -2161,7 +2207,7 @@ impl Game {
             // and failed to be - revealing at 96px handed enemies
             // point-blank shots that never miss, and measured *worse* for
             // the player than standing in the open.
-            let fighting = &players[ai.target_player() as usize];
+            let fighting = &players[(ai.target_player() as usize).min(players.len() - 1)];
             let player_hidden = fighting.concealed && !ai.is_hit_alerted();
             let player_line_of_sight = !player_hidden && f.terrain.line_of_sight(tank.position, fighting.pos);
             // A hunter's fire gate is line of *fire* to the frog: only iron
@@ -3108,13 +3154,13 @@ impl Game {
     /// sources `resolve_player_row` picked it from. `None` only before the
     /// first `init`.
     pub fn player_chassis(&self) -> Option<TankKind> {
-        self.chassis_of(self.player?)
+        self.chassis_of(self.player()?)
     }
 
-    /// Player 2's chassis this round; `None` in a single-player round or
+    /// Seat 1's chassis this round; `None` in a single-player round or
     /// before the first `init`.
     pub fn player2_chassis(&self) -> Option<TankKind> {
-        self.chassis_of(self.player2?)
+        self.chassis_of(self.seat(1)?)
     }
 
     fn chassis_of(&self, entity: Entity) -> Option<TankKind> {
@@ -3744,32 +3790,34 @@ fn bonus_pickup_cell(
 /// long as the two never touch the same entity. `pub(crate)`: `render`
 /// uses it too.
 impl Game {
-    /// The player entities in index order: player 1, then player 2 in a
-    /// two-player round (`None` otherwise). Every loop that has to treat
-    /// the players before the enemies walks this, so their RNG draws keep
-    /// a fixed order.
-    pub(crate) fn players(&self) -> [Option<Entity>; 2] {
-        [self.player, self.player2]
+    /// The seats in owner-slot order, empty ones as `None`. Every loop
+    /// that has to treat the players before the enemies walks this, so
+    /// their RNG draws keep a fixed order whatever the seat count.
+    pub(crate) fn players(&self) -> [Option<Entity>; MAX_SEATS] {
+        self.seats
     }
 
-    /// Which human player `entity` is (0 or 1), or `None` for anything else.
+    /// Player 1's tank - seat 0, the one every round has.
+    pub(crate) fn player(&self) -> Option<Entity> {
+        self.seats[PLAYER_OWNER_SLOT]
+    }
+
+    /// Seat `index`'s tank, `None` past the seats this round holds.
+    pub(crate) fn seat(&self, index: usize) -> Option<Entity> {
+        self.seats.get(index).copied().flatten()
+    }
+
+    /// Which seat `entity` sits in, or `None` for anything else.
     pub(crate) fn player_index(&self, entity: Entity) -> Option<u8> {
-        if Some(entity) == self.player {
-            Some(0)
-        } else if Some(entity) == self.player2 {
-            Some(1)
-        } else {
-            None
-        }
+        self.seats.iter().position(|&e| e == Some(entity)).map(|i| i as u8)
     }
 
-    /// True for either player's tank.
+    /// True for any seat's tank.
     pub(crate) fn is_player(&self, entity: Entity) -> bool {
         self.player_index(entity).is_some()
     }
 
-    /// The first owner slot an enemy can take: the players sit below it.
-    /// 1 in a single-player round, 2 with two players.
+    /// The first owner slot an enemy can take: the seats sit below it.
     pub fn first_enemy_slot(&self) -> usize {
         self.players.count()
     }
@@ -4120,7 +4168,7 @@ cells."20,11" = { kind = "start" }
             game.player_row_override = cli;
             game.map = MapFile::from_toml_str(MAP).expect("test map parses");
             game.init(1280.0, 720.0);
-            let player = game.player.expect("player entity spawned in init");
+            let player = game.player().expect("player entity spawned in init");
             let mut q = game.world.query_one::<&Tank>(player);
             q.get().expect("player has a Tank").row
         };
@@ -4201,6 +4249,55 @@ mod determinism_tests {
                 }
             }
         }
+    }
+
+    /// One and two seats draw the round RNG in exactly the order they drew
+    /// it before a round could hold eight, so every seeded replay, probe
+    /// fixture and recorded ceiling still describes the same round. The
+    /// numbers below are that stream's fingerprint: a change to the order
+    /// or the count of the draws `init` and `update` make moves them.
+    /// Re-baseline consciously, the way `probe-fixtures` is re-baselined -
+    /// never to make this go green.
+    #[test]
+    fn the_one_and_two_seat_streams_are_pinned() {
+        let run = |seats: usize| {
+            let mut game = Game::default();
+            game.seed_override = Some(0xB0B5);
+            game.level_overrides.mission = Some(Mission::Protect);
+            game.level_overrides.spawn = Some(crate::level::SpawnKind::Band);
+            game.enemy_count_override = Some(4);
+            game.players = PlayerCount::from_count(seats).expect("one or two");
+            game.map = MapFile::from_toml_str(include_str!("../../maps/default.toml")).expect("embedded default map parses");
+            game.init(1280.0, 720.0);
+            // FNV-1a over the same bit-exact key the replay tests compare.
+            let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+            let mut eat = |bytes: &[u8]| {
+                for b in bytes {
+                    hash ^= *b as u64;
+                    hash = hash.wrapping_mul(0x1000_0000_01b3);
+                }
+            };
+            for frame in 0..=600u32 {
+                if frame > 0 {
+                    game.update(Input::default(), 1.0 / 60.0, 1280.0, 720.0);
+                }
+                if frame % 60 != 0 {
+                    continue;
+                }
+                for t in game.tank_snapshots() {
+                    eat(&(t.slot as u64).to_le_bytes());
+                    let k = key(&t);
+                    for word in k.2 {
+                        eat(&word.to_le_bytes());
+                    }
+                    eat(&[k.0 as u8, k.1 as u8, k.6 as u8]);
+                    eat(&k.3.to_le_bytes());
+                }
+            }
+            hash
+        };
+        assert_eq!(run(1), 16_887_373_289_363_662_579, "one seat");
+        assert_eq!(run(2), 13_902_766_956_039_934_748, "two seats");
     }
 
     /// A portal round replays too: the destination draw sits on the round
@@ -4322,7 +4419,7 @@ mod mechanics_tests {
     }
 
     fn teleport_player(game: &mut Game, pos: Position) {
-        let player = game.player.expect("player");
+        let player = game.player().expect("player");
         let body = with_tank(&game.world, player, |t| t.body).expect("body");
         game.physics.set_position(body, pos);
         with_tank_mut(&game.world, player, |t| t.position = pos);
@@ -4351,7 +4448,7 @@ mod mechanics_tests {
         let mut input = Input::default();
         input.seats[0].move_dir = Some(Dir::Right);
         step(&mut game, input);
-        let player = game.player.expect("player");
+        let player = game.player().expect("player");
         let step_deg = tuning().tank_visual_turn_speed_deg * dt;
         let (visual, rotation, from) =
             with_tank(&game.world, player, |t| (t.visual_rotation, t.rotation, t.track_from));
@@ -4527,7 +4624,7 @@ mod mechanics_tests {
     #[test]
     fn water_puts_a_burning_hull_out_and_takes_no_fire() {
         let mut game = sandbox(&water_map(""));
-        let player = game.player.expect("player");
+        let player = game.player().expect("player");
         teleport_player(&mut game, map::cell_to_world(11, 4));
         with_tank_mut(&game.world, player, |t| t.burn_timer = 5.0);
         step(&mut game, Input::default());
@@ -5331,7 +5428,7 @@ cells."30,20" = { kind = "frog" }
         assert!(to.distance_to(b) > t.portal_trigger_radius, "arrives outside B's trigger radius");
         assert!(to.distance_to(b) <= (t.portal_arrival_max_cells as f32 + 1.0) * OBSTACLE_GRID_SIZE, "but beside B");
         assert!(to.x > map::cell_to_world(20, 0).x, "on the far side of the wall");
-        let player = game.player.unwrap();
+        let player = game.player().unwrap();
         {
             let tank = game.world.get::<&Tank>(player).unwrap();
             // The same frame's player phase drives it on from the arrival
@@ -5389,7 +5486,7 @@ cells."30,20" = { kind = "frog" }
         for _ in 0..600 {
             step(&mut game, right);
             assert!(teleports_of(&game, 0).is_empty());
-            let pos = game.world.get::<&Tank>(game.player.unwrap()).unwrap().position;
+            let pos = game.world.get::<&Tank>(game.player().unwrap()).unwrap().position;
             reached |= pos.distance_to(map::cell_to_world(10, 11)) <= tuning().portal_trigger_radius;
         }
         assert!(reached, "the player did drive over the lone portal");
@@ -5406,7 +5503,7 @@ cells."30,20" = { kind = "frog" }
         let slot = enemy_slot(&game);
         let far = map::cell_to_world(28, 11);
         game.debug_teleport(slot, far, Some(270.0)).expect("enemy placed in the far room");
-        let player_pos = game.world.get::<&Tank>(game.player.unwrap()).unwrap().position;
+        let player_pos = game.world.get::<&Tank>(game.player().unwrap()).unwrap().position;
         assert!(game.nav_path_cells(far, player_pos, W, H).is_some(), "a route through the hub exists");
         let plain = game_on(&without, 1, None);
         assert!(plain.nav_path_cells(far, player_pos, W, H).is_none(), "without a network the wall is final");
@@ -5443,7 +5540,7 @@ cells."30,20" = { kind = "frog" }
             let rng_before = game.rng.clone().expect("rng parked between frames");
             step(&mut game, right);
             assert!(teleports_of(&game, 0).is_empty(), "nowhere to arrive: no hop");
-            let pos = game.world.get::<&Tank>(game.player.unwrap()).unwrap().position;
+            let pos = game.world.get::<&Tank>(game.player().unwrap()).unwrap().position;
             if pos.distance_to(a) <= tuning().portal_trigger_radius {
                 on_portal = true;
                 // A frame on the portal with no candidates must draw nothing
@@ -5503,7 +5600,7 @@ cells."11,10" = { kind = "pickup", pickup = "health" }
 cells."30,20" = { kind = "frog" }
 "#;
         let mut game = game_on(MAP, 0, Some(0));
-        let player = game.player.expect("a player exists");
+        let player = game.player().expect("a player exists");
         with_tank_mut(&game.world, player, |t| t.damage = 0.0);
         step(&mut game, Input::default());
         assert_eq!(health_on_field(&game), 0, "an undamaged player still collects");
@@ -5607,7 +5704,7 @@ cells."4,4" = { kind = "enemy_frog" }
         let mut game = game_on(FROG_PACK_MAP, 1, Some(0));
         let frog = game.frog.expect("a Protect round has a frog");
         hurt_frog(&game, frog, 25.0);
-        let player = game.player.expect("a player exists");
+        let player = game.player().expect("a player exists");
         with_tank_mut(&game.world, player, |t| t.damage = 30.0);
         step(&mut game, Input::default());
         assert_eq!(frog_health(&game, frog), tuning().frog_max_health);
@@ -5826,7 +5923,7 @@ cells."21,8" = { kind = "wall", material = "iron" }
     #[test]
     fn a_shell_off_iron_ricochets_once_and_flies_on() {
         let mut game = game_on(IRON_BAR_MAP, 0, Some(0));
-        let player = game.player.expect("player");
+        let player = game.player().expect("player");
         with_tank_mut(&game.world, player, |t| t.control(None, Some(Dir::Up)));
         step(&mut game, Input::single(Intent { fire: true, ..Intent::default() }));
         let (mut ricochets, mut headings, mut landed_after) = (0, Vec::new(), false);
@@ -5900,7 +5997,7 @@ cells."30,20" = { kind = "frog" }
     #[test]
     fn a_shield_pickup_heals_to_full_and_absorbs_until_it_is_spent() {
         let mut game = game_on(SEALED_SHIELD_MAP, 1, Some(0));
-        let player = game.player.expect("player");
+        let player = game.player().expect("player");
         {
             let mut q = game.world.query_one::<&mut Tank>(player);
             let tank = q.get().expect("player tank");
@@ -5979,7 +6076,7 @@ cells."30,20" = { kind = "frog" }
     /// player's damage at the end.
     fn shell_from_above(shielded: bool, above: f32, frames: u32) -> (bool, f32) {
         let mut game = game_on(OPEN_MAP, 0, Some(0));
-        let player = game.player.expect("player");
+        let player = game.player().expect("player");
         let (pos, row) = {
             let mut q = game.world.query_one::<&mut Tank>(player);
             let tank = q.get().expect("player tank");
@@ -6016,7 +6113,7 @@ cells."30,20" = { kind = "frog" }
     #[test]
     fn deflecting_a_shell_costs_the_shield_more_than_absorbing_it_would() {
         let mut game = game_on(OPEN_MAP, 0, Some(0));
-        let player = game.player.expect("player");
+        let player = game.player().expect("player");
         let capacity = tuning().shield_capacity;
         let (pos, row) = {
             let mut q = game.world.query_one::<&mut Tank>(player);
@@ -6046,7 +6143,7 @@ cells."30,20" = { kind = "frog" }
     #[test]
     fn sustained_fire_breaks_a_shield_and_says_so() {
         let mut game = game_on(OPEN_MAP, 0, Some(0));
-        let player = game.player.expect("player");
+        let player = game.player().expect("player");
         let (pos, row) = {
             let mut q = game.world.query_one::<&mut Tank>(player);
             let tank = q.get().expect("player tank");
@@ -6121,7 +6218,7 @@ cells."30,20" = { kind = "frog" }
         game.level_overrides.wave_growth = Some(0);
         game.map = MapFile::from_toml_str(OPEN_MAP).expect("test map parses");
         game.init(W, H);
-        let player = game.player.expect("player");
+        let player = game.player().expect("player");
         with_tank_mut(&game.world, player, |t| t.shield_hp = 1.0e9);
         game
     }
@@ -6319,7 +6416,7 @@ cells."30,20" = { kind = "frog" }
         game.level_overrides.tier_start = Some(Tier::Light);
         game.level_overrides.tier_end = Some(Tier::Super);
         game.init(W, H);
-        let player = game.player.expect("player");
+        let player = game.player().expect("player");
         with_tank_mut(&game.world, player, |t| t.shield_hp = 1.0e9);
         let plan = game.spawn_plan;
         let mut wave = 0u32;
