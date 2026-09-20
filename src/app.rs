@@ -94,6 +94,59 @@ fn left_shift_down(rl: &RaylibHandle) -> bool {
     rl.is_key_down(KeyboardKey::KEY_LEFT_SHIFT)
 }
 
+/// The URL the page was opened on, as the page published it
+/// (`site/src/scripts/room.ts`). The web build's command line, in full:
+/// a browser has no argv, so the room a link names and the rooms server
+/// a dev link overrides both travel in here (`net::rooms::Invite`,
+/// docs/online-coop-prd.md §4.10).
+#[cfg(all(feature = "online", target_os = "emscripten"))]
+const PAGE_INVITE: &std::ffi::CStr = c"(function(){try{return String(window.bbInvite||'')}catch(e){return ''}})()";
+
+/// This browser's reconnect key, minted and kept by the page - one per
+/// tab, so two tabs in one browser are two seats rather than one seat
+/// taken twice.
+#[cfg(all(feature = "online", target_os = "emscripten"))]
+const PAGE_TOKEN: &std::ffi::CStr = c"(function(){try{return String(window.bbToken||'')}catch(e){return ''}})()";
+
+/// Evaluate `script` in the page and copy back what it said.
+///
+/// The second half of the `window.bbShift` bargain (see
+/// `left_shift_down`): the page publishes a fact, the game reads it.
+/// These are read once at startup rather than once a frame, because a
+/// command line does not change either.
+///
+/// Two things are load-bearing. `emscripten_run_script_string` answers
+/// with a pointer into the runtime's own buffer, good only until the
+/// next call, so the string is copied here and not held; and an
+/// exception out of `eval` takes the runtime down with it, which is why
+/// every script is wrapped and answers with an empty string rather than
+/// throwing.
+#[cfg(all(feature = "online", target_os = "emscripten"))]
+fn page_string(script: &std::ffi::CStr) -> String {
+    unsafe extern "C" {
+        fn emscripten_run_script_string(script: *const std::os::raw::c_char) -> *const std::os::raw::c_char;
+    }
+    // SAFETY: a NUL-terminated literal, evaluated synchronously; the
+    // answer is a NUL-terminated string in emscripten's scratch buffer,
+    // copied before anything else can run.
+    let answer = unsafe { emscripten_run_script_string(script.as_ptr()) };
+    if answer.is_null() {
+        return String::new();
+    }
+    unsafe { std::ffi::CStr::from_ptr(answer) }.to_string_lossy().into_owned()
+}
+
+/// The reconnect key a desktop, iOS or Android build takes into a room
+/// (docs/online-coop-prd.md §4.13): the machine's, per nickname. Two
+/// clients here under two names are two seats, and either reclaims its
+/// own seat on a reconnect. A browser cannot use this rule - every tab
+/// would be the same player - and mints its own instead
+/// (`site/src/scripts/room.ts`).
+#[cfg(all(feature = "online", not(target_os = "emscripten")))]
+fn device_token(nick: &str) -> String {
+    format!("bongbong-{nick}")
+}
+
 /// The play clock: real frame time paid out in whole simulation steps of
 /// `PHYSICS_FIXED_DT`, so `Game::update` always sees the step the dev
 /// server, the probe and a replay see (docs/online-coop-prd.md §4.1). A
@@ -394,10 +447,7 @@ fn open_online(args: &Args, map: &crate::map::MapFile) -> Option<(AnyRound, Opti
                 seed: args.seed,
             }),
         };
-        // The device token is the machine's, per nickname: two clients
-        // here under two names are two seats, and either reclaims its own
-        // seat on a reconnect.
-        let identity = Identity::new(args.nick.clone(), format!("bongbong-{}", args.nick));
+        let identity = Identity::new(args.nick.clone(), device_token(&args.nick));
         return Some((OnlineRound::new(crate::net::client::connect(&host, identity, target), "ROOM"), None));
     }
     #[cfg(not(feature = "online"))]
@@ -862,6 +912,32 @@ pub fn run(args: Args) {
     {
         session.rooms = crate::net::rooms::RoomsHost::resolve(args.rooms.as_deref());
         session.nick = args.nick.clone();
+        session.token = device_token(&args.nick);
+    }
+    // The web build's command line is the page it was opened on: the
+    // room a `/j/AK7QX` or `?join=AK7QX` link names, the `?rooms=`
+    // override a dev QR carries so a scan reaches the laptop rather
+    // than the cluster, and this tab's own device token. A link naming
+    // a room takes the window straight into the lobby on it.
+    #[cfg(all(feature = "online", target_os = "emscripten"))]
+    {
+        let invite = crate::net::rooms::Invite::parse(&page_string(PAGE_INVITE));
+        if let Some(host) = invite.rooms_host() {
+            session.rooms = host;
+        }
+        let token = page_string(PAGE_TOKEN);
+        if !token.trim().is_empty() {
+            session.token = token;
+        }
+        eprintln!(
+            "[online] rooms {}, seat token {}, link code {}",
+            session.rooms.base(),
+            session.token,
+            invite.code.as_ref().map_or("-", |c| c.text.as_str())
+        );
+        if let Some(code) = invite.code {
+            session.join_room(code);
+        }
     }
     #[cfg(not(target_os = "emscripten"))]
     let _rig = match open_online(&args, &room_map) {

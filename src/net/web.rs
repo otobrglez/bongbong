@@ -164,7 +164,7 @@ impl WebTransport {
         // the URL immediately, as its header states.
         let socket = unsafe { emscripten_websocket_new(&attributes) };
         if socket <= 0 {
-            return Err(format!("the browser refused a socket to {url} (code {socket})"));
+            return Err(refusal(url, socket));
         }
 
         let inner = Rc::new(RefCell::new(Inner {
@@ -242,6 +242,20 @@ impl Drop for WebTransport {
             emscripten_websocket_delete(self.socket);
             drop(Rc::from_raw(self.user_data));
         }
+    }
+}
+
+/// What to show a player when the browser would not make the socket at
+/// all. It never says why - `new WebSocket` throws and emscripten hands
+/// back a negative handle - so the one refusal somebody will actually
+/// meet is named: a page served over TLS may open no plain socket, which
+/// is what a `?rooms=ws://...` override carried onto an https page comes
+/// to (`rooms::Invite`).
+fn refusal(url: &str, code: SocketHandle) -> String {
+    let refused = format!("the browser refused a socket to {url} (code {code})");
+    match url.starts_with("ws://") {
+        true => format!("{refused}; a page served over https can only open wss://"),
+        false => refused,
     }
 }
 

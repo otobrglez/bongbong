@@ -183,6 +183,166 @@ pub fn socket_url(host: &RoomsHost, code: Option<&RoomCode>) -> String {
     }
 }
 
+/// What a page's own URL says about the room to open
+/// (docs/online-coop-prd.md §4.10).
+///
+/// This is [`join_url`] read backwards, which is why it lives beside it:
+/// the game writes the invite - the link on the screen, the link inside
+/// the QR - so the game also reads it, and one set of tests holds both
+/// ends of the rule together. The web build has no command line, so the
+/// page hands its location over on `window.bbInvite`
+/// (`site/src/scripts/room.ts`) and `app.rs` parses it once at start, the
+/// way a desktop build reads `--join` and `--rooms` once.
+///
+/// Two spellings name a room: the invite's own path, `/j/AK7QX`, and
+/// `?join=AK7QX` for a page that serves no such route - a local Astro
+/// preview, an itch.io frame. Where a page carries both, the query is
+/// the one taken: a path is where the page happens to sit, a query is
+/// something somebody put there. The `rooms` override rides in the
+/// query either way, because that is how `join_url` puts it there.
+///
+/// **Nothing here refuses a URL.** A mangled link, a code somebody
+/// retyped wrong, a query with no `=` in it: every one of them leaves a
+/// field unset and the lobby opens on its own opening face, where a code
+/// is typed by hand anyway. A browser can be pointed at any URL at all,
+/// so this must never be a way to stop the game starting.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Invite {
+    /// The room the link names, if it names one that could be a room.
+    pub code: Option<RoomCode>,
+    /// The `rooms` override the link carries, exactly as it was written;
+    /// [`Invite::rooms_host`] is what turns it into a host.
+    pub rooms: Option<String>,
+    /// The page was served over TLS (`https`, or a `wss` link). It
+    /// decides the scheme an override with none of its own gets, since a
+    /// secure page can only open a secure socket.
+    pub secure: bool,
+}
+
+impl Invite {
+    /// Read `url` - a whole page URL, or just the path and query.
+    pub fn parse(url: &str) -> Invite {
+        let url = url.trim();
+        let (scheme, rest) = match url.split_once("://") {
+            Some((scheme, rest)) => (scheme.to_ascii_lowercase(), rest),
+            // No scheme: a bare path, which is a local page's, so the
+            // socket an override with no scheme gets is a plain one.
+            None => (String::new(), url),
+        };
+        // The fragment is never part of an invite and may hold anything.
+        let rest = rest.split('#').next().unwrap_or("");
+        let (authority_and_path, query) = match rest.split_once('?') {
+            Some((path, query)) => (path, query),
+            None => (rest, ""),
+        };
+        // With a scheme there is an authority to step over; without one
+        // the whole thing is the path.
+        let path = match scheme.is_empty() {
+            false => authority_and_path.split_once('/').map_or("", |(_, path)| path),
+            true => authority_and_path,
+        };
+        Invite {
+            code: query_value(query, "join")
+                .or_else(|| code_in_path(path))
+                .and_then(|text| RoomCode::parse(&text).ok()),
+            rooms: query_value(query, "rooms").filter(|r| !r.trim().is_empty()),
+            secure: scheme == "https" || scheme == "wss",
+        }
+    }
+
+    /// The rooms server this link points at, if it points at one of its
+    /// own - `RoomsHost::resolve`'s `--rooms` and `BONGBONG_ROOMS`, in
+    /// the one form a browser has.
+    ///
+    /// A socket is `ws://` or `wss://`, so the two spellings a person
+    /// actually writes are completed: `http`/`https` become the socket
+    /// scheme they pair with, and a host with no scheme at all takes the
+    /// page's own - a plain socket from a plain page, a secure one from a
+    /// secure page. An override with a scheme no socket speaks
+    /// (`ftp://...`) is no override at all, and the link falls back to
+    /// the cluster.
+    pub fn rooms_host(&self) -> Option<RoomsHost> {
+        let raw = self.rooms.as_deref()?.trim();
+        if raw.is_empty() {
+            return None;
+        }
+        let base = match raw.split_once("://") {
+            Some((scheme, rest)) => match scheme.to_ascii_lowercase().as_str() {
+                "ws" => format!("ws://{rest}"),
+                "wss" => format!("wss://{rest}"),
+                "http" => format!("ws://{rest}"),
+                "https" => format!("wss://{rest}"),
+                _ => return None,
+            },
+            None => {
+                let scheme = if self.secure { "wss" } else { "ws" };
+                format!("{scheme}://{}", raw.trim_start_matches('/'))
+            }
+        };
+        Some(RoomsHost::overriding(&base))
+    }
+}
+
+/// `name`'s value in a query string, percent-decoded.
+///
+/// Whichever spelling came out of the share sheet: a link is typed,
+/// forwarded and re-encoded on its way to a phone, so `ws://host` and
+/// `ws%3A%2F%2Fhost` are the same override. A pair with no `=` and a
+/// name that is not there both read as absent.
+fn query_value(query: &str, name: &str) -> Option<String> {
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(key, _)| *key == name)
+        .map(|(_, value)| percent_decode(value))
+        .filter(|value| !value.is_empty())
+}
+
+/// `%XX` back to the byte it stands for; anything else is itself. A
+/// truncated or non-hex escape is left as written rather than dropped,
+/// so a broken link still shows what it said.
+fn percent_decode(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let decoded = match bytes[i] {
+            b'%' if i + 2 < bytes.len() => {
+                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
+                hex.and_then(|hex| u8::from_str_radix(hex, 16).ok())
+            }
+            _ => None,
+        };
+        match decoded {
+            Some(byte) => {
+                out.push(byte);
+                i += 3;
+            }
+            None => {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The segment after the last `j` in `path`: the invite link's own
+/// shape, `bongbong.io/j/AK7QX`, wherever the site happens to serve it
+/// from.
+fn code_in_path(path: &str) -> Option<String> {
+    let mut segments = path.split('/').filter(|s| !s.is_empty()).peekable();
+    let mut found = None;
+    while let Some(segment) = segments.next() {
+        if segment.eq_ignore_ascii_case("j")
+            && let Some(next) = segments.peek()
+        {
+            found = Some(percent_decode(next));
+        }
+    }
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,6 +437,107 @@ mod tests {
         );
         // Both fit the codes the lobby draws (`qr::MAX_BYTES` is 106).
         assert!(join_url(&RoomsHost::overriding("ws://127.0.0.1:4848"), "AK7QX").len() <= crate::qr::MAX_BYTES);
+    }
+
+    /// The two shapes a link names a room in: the invite's own path and
+    /// the query a page with no such route carries.
+    #[test]
+    fn an_invite_link_is_read_back_the_way_it_was_written() {
+        let invite = Invite::parse("https://bongbong.io/j/AK7QX");
+        assert_eq!(invite.code.as_ref().map(|c| c.text.as_str()), Some("AK7QX"));
+        assert_eq!(invite.code.as_ref().map(|c| c.pod), Some('A'));
+        assert_eq!(invite.rooms, None);
+        assert!(invite.secure, "an https page can only open a secure socket");
+        // The page a local preview serves: no /j/ route, the code in the
+        // query, and a lower-case code from somebody's address bar.
+        let typed = Invite::parse("http://localhost:4321/?join=ak7qx");
+        assert_eq!(typed.code.map(|c| c.text), Some("AK7QX".into()));
+        assert!(!typed.secure);
+        // A path and query with no origin in front of them.
+        assert_eq!(Invite::parse("/j/AK7QX").code.map(|c| c.text), Some("AK7QX".into()));
+        // The site may serve the route under a prefix, and a trailing
+        // slash is not a segment.
+        assert_eq!(Invite::parse("https://bongbong.io/play/j/AK7QX/").code.map(|c| c.text), Some("AK7QX".into()));
+        // A fragment is not part of the link.
+        assert_eq!(Invite::parse("https://bongbong.io/j/AK7QX#top").code.map(|c| c.text), Some("AK7QX".into()));
+        // The query is the explicit one where a page carries both.
+        assert_eq!(Invite::parse("https://bongbong.io/j/AK7QX?join=CK7QX").code.map(|c| c.text), Some("CK7QX".into()));
+    }
+
+    /// Every way a link can say nothing, or nothing usable. None of them
+    /// is an error: the lobby opens where a code is typed by hand.
+    #[test]
+    fn a_link_with_no_room_in_it_is_simply_a_page() {
+        for url in [
+            "https://bongbong.io/",
+            "https://bongbong.io",
+            "http://localhost:4321/index.html",
+            // A code that is not one: too short, too long, and a
+            // character a code cannot hold.
+            "https://bongbong.io/j/AK7Q",
+            "https://bongbong.io/j/AK7QXX",
+            "https://bongbong.io/j/AK-QX",
+            "https://bongbong.io/?join=",
+            // `j` with nothing after it.
+            "https://bongbong.io/j",
+            "https://bongbong.io/j/",
+            // Not a URL at all.
+            "",
+            "   ",
+            "://///?&&=",
+            "%%%",
+        ] {
+            let invite = Invite::parse(url);
+            assert_eq!(invite.code, None, "{url} named a room");
+            assert_eq!(invite.rooms_host(), None, "{url} named a rooms server");
+        }
+    }
+
+    /// The override `join_url` appends for a local server, back out of
+    /// the link and into a host the client can dial - however the share
+    /// sheet, the QR reader or the address bar spelled it on the way.
+    #[test]
+    fn the_rooms_override_survives_the_round_trip_to_a_link_and_back() {
+        let host = RoomsHost::overriding("ws://127.0.0.1:4848");
+        let link = join_url(&host, "AK7QX");
+        let invite = Invite::parse(&link);
+        assert_eq!(invite.code.as_ref().map(|c| c.text.as_str()), Some("AK7QX"));
+        assert_eq!(invite.rooms_host(), Some(host), "the link carries the whole override");
+
+        // Percent-encoded, which is what `encodeURIComponent` writes.
+        let encoded = Invite::parse("https://bongbong.io/j/AK7QX?rooms=ws%3A%2F%2F127.0.0.1%3A4848");
+        assert_eq!(encoded.rooms.as_deref(), Some("ws://127.0.0.1:4848"));
+        assert_eq!(encoded.rooms_host(), Some(RoomsHost::overriding("ws://127.0.0.1:4848")));
+        // Beside other parameters, in either order.
+        let among = Invite::parse("https://bongbong.io/j/AK7QX?v=3&rooms=ws://h:1&x=y");
+        assert_eq!(among.rooms_host(), Some(RoomsHost::overriding("ws://h:1")));
+    }
+
+    /// A socket is `ws` or `wss`, so an override written any other way
+    /// is completed - by its own scheme where it has a usable one, and
+    /// by the page's where it has none. A page served over TLS can open
+    /// no plain socket at all, which is why the page's own scheme is the
+    /// one that decides.
+    #[test]
+    fn an_override_with_no_socket_scheme_takes_the_pages_own() {
+        let bare = |url: &str| Invite::parse(url).rooms_host().map(|h| h.base().to_string());
+        assert_eq!(bare("http://localhost:4321/?rooms=127.0.0.1:4848"), Some("ws://127.0.0.1:4848".into()));
+        assert_eq!(bare("https://bongbong.io/?rooms=rooms.example.com"), Some("wss://rooms.example.com".into()));
+        assert_eq!(bare("https://bongbong.io/?rooms=//rooms.example.com"), Some("wss://rooms.example.com".into()));
+        // A page URL with no scheme of its own is a local one.
+        assert_eq!(bare("/j/AK7QX?rooms=127.0.0.1:4848"), Some("ws://127.0.0.1:4848".into()));
+        // The two schemes people paste, each mapped onto its socket.
+        assert_eq!(bare("https://bongbong.io/?rooms=http://127.0.0.1:4848"), Some("ws://127.0.0.1:4848".into()));
+        assert_eq!(bare("http://localhost:4321/?rooms=https://rooms.example.com"), Some("wss://rooms.example.com".into()));
+        // An explicit socket scheme is kept as written, mixed content
+        // and all: the browser's own refusal names the URL, which says
+        // more than a silent rewrite would.
+        assert_eq!(bare("https://bongbong.io/?rooms=ws://127.0.0.1:4848"), Some("ws://127.0.0.1:4848".into()));
+        // A trailing slash is not part of a base, as `RoomsHost` has it.
+        assert_eq!(bare("http://localhost:4321/?rooms=ws://127.0.0.1:4848/"), Some("ws://127.0.0.1:4848".into()));
+        // Nothing the game could dial.
+        assert_eq!(bare("https://bongbong.io/?rooms=ftp://x"), None);
+        assert_eq!(bare("https://bongbong.io/?rooms=%20"), None);
     }
 
     #[test]

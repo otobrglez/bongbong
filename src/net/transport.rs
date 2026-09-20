@@ -65,6 +65,46 @@ impl std::fmt::Display for Closed {
     }
 }
 
+/// A socket that was never opened, carrying why.
+///
+/// There is exactly one moment a transport can fail before it exists,
+/// and it is the browser's: `new WebSocket(url)` throws on a URL it will
+/// not dial - a plain `ws://` from a page served over TLS, a host it
+/// cannot parse - so `net::web`'s `connect` answers from the call rather
+/// than from a callback. The native thread has no such moment; it dials
+/// in the background and reports a failure as a close like any other.
+///
+/// So rather than hand every caller a `Result` for one platform's sake,
+/// the failure is a transport: `Closed` from the first frame, with the
+/// reason where a hang-up's would be, so the lobby's "the room is gone"
+/// face says what happened along the path everything else takes.
+pub struct Failed {
+    closed: Closed,
+}
+
+impl Failed {
+    /// A connection that never happened, because `reason`.
+    pub fn new(reason: impl Into<String>) -> Failed {
+        Failed { closed: Closed::fault(reason) }
+    }
+}
+
+impl Transport for Failed {
+    fn state(&self) -> ConnState {
+        ConnState::Closed(self.closed.clone())
+    }
+
+    /// Nothing is sent on a socket that does not exist.
+    fn send(&mut self, _bytes: &[u8]) {}
+
+    /// Nothing ever arrives.
+    fn drain(&mut self, _out: &mut Vec<Msg>) {}
+
+    /// Already closed, and by the browser rather than by this end: the
+    /// reason stays the one worth reading.
+    fn close(&mut self) {}
+}
+
 /// A client's socket to a room.
 ///
 /// Implementations deliver whole messages in the order they were sent
@@ -179,6 +219,25 @@ mod tests {
         let mut again = Vec::new();
         t.drain(&mut again);
         assert!(again.is_empty(), "an empty drain returns nothing, not the last batch again");
+    }
+
+    /// A browser that would not open the socket at all still has to
+    /// reach the screen, and it does it as an ordinary closed
+    /// connection.
+    #[test]
+    fn a_socket_that_was_never_opened_is_a_closed_one_with_the_reason() {
+        let mut t = Failed::new("the browser refused a socket to ws://host/ws");
+        assert!(!t.is_open());
+        let closed = t.closed().expect("a reason");
+        assert!(closed.reason.contains("ws://host/ws"), "{closed}");
+        assert!(!closed.requested, "this end never asked for it");
+        // Nothing travels, and hanging up keeps the reason worth reading.
+        t.send_msg(&Msg::Intent(IntentMsg::default()));
+        let mut out = Vec::new();
+        t.drain(&mut out);
+        assert!(out.is_empty());
+        t.close();
+        assert_eq!(t.closed(), Some(closed));
     }
 
     #[test]

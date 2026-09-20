@@ -375,11 +375,12 @@ pub const TWO_PLAYERS_AVAILABLE: bool = KEYBOARD_AVAILABLE;
 
 /// Whether this build can reach a room (docs/online-coop-prd.md §4.10):
 /// the bar carries an `ONLINE` button and `mode::Session` will open the
-/// lobby. Desktop, iOS and Android dial a socket through
-/// `net::native`; the web build reaches its room through the join
-/// link's own code instead, so the button would have nothing to open
-/// and is not drawn there.
-pub const ONLINE_AVAILABLE: bool = cfg!(all(feature = "online", not(target_os = "emscripten")));
+/// lobby. Every client build can - desktop, iOS and Android dial a
+/// socket on a thread through `net::native`, the browser opens its own
+/// through `net::web` - so the flag is the `online` feature itself, and
+/// only the room server and the probe (`--no-default-features`, no
+/// socket in the graph at all) have no room to reach.
+pub const ONLINE_AVAILABLE: bool = cfg!(feature = "online");
 
 /// How many human seats one round can carry: the width of
 /// `simulation::Input::seats` and of every per-seat array in `Game`. A

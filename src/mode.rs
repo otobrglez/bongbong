@@ -80,10 +80,17 @@ pub struct Session {
     /// `BONGBONG_ROOMS`): the lobby's invite link is built from it.
     /// `app.rs` sets it once at startup; the cluster's is the default.
     pub rooms: RoomsHost,
-    /// The name this player takes into a room (`--nick`). It also picks
-    /// the device token, so two clients on one machine under two names
-    /// are two seats.
+    /// The name this player takes into a room (`--nick`).
     pub nick: String,
+    /// The reconnect key this session takes into a room
+    /// (`net::client::Identity::device_token`): the same token in a
+    /// later join reclaims the same seat for the room's life, so it has
+    /// to be this player's and nobody else's. A desktop build derives it
+    /// from the nickname, which is what makes two `--nick`s on one
+    /// machine two seats; the web page mints a random one and keeps it
+    /// per tab (`site/src/scripts/room.ts`), which is what makes two
+    /// tabs two players. `app.rs` sets it once at startup.
+    pub token: String,
 }
 
 /// A session reads as its round: the dev server, its tests and `main.rs`
@@ -117,6 +124,7 @@ impl Session {
             lobby: None,
             rooms: RoomsHost::cluster(),
             nick: "player".into(),
+            token: "bongbong-player".into(),
         }
     }
 
@@ -269,19 +277,40 @@ impl Session {
         self.online = Some(round);
     }
 
-    /// Dial a room for the lobby's `HOST` or `JOIN`, through
-    /// `net::client::connect` - the same socket the command line opens.
-    /// A build that cannot reach one never gets here: `press_online` is
-    /// gated on `ONLINE_AVAILABLE`.
-    #[cfg(all(feature = "online", not(target_os = "emscripten")))]
+    /// Dial a room for the lobby's `HOST` or `JOIN`, or for the room a
+    /// link named, through `net::client::connect` - the same socket the
+    /// command line opens. A build that cannot reach one never gets
+    /// here: every caller is gated on `ONLINE_AVAILABLE`.
+    #[cfg(feature = "online")]
     fn dial(&mut self, target: Target) {
-        let identity = crate::net::client::Identity::new(self.nick.clone(), format!("bongbong-{}", self.nick));
+        let identity = crate::net::client::Identity::new(self.nick.clone(), self.token.clone());
         let client = crate::net::client::connect(&self.rooms, identity, target);
         self.attach_round(crate::net::round::OnlineRound::new(client, "ROOM"));
     }
 
-    #[cfg(not(all(feature = "online", not(target_os = "emscripten"))))]
+    #[cfg(not(feature = "online"))]
     fn dial(&mut self, _target: Target) {}
+
+    /// Take the seat the link this build was opened on names: the web
+    /// build's `/j/AK7QX` or `?join=AK7QX` (`net::rooms::Invite`,
+    /// docs/online-coop-prd.md §4.10), read once at start the way
+    /// `--join CODE` is.
+    ///
+    /// The lobby opens on the room rather than on its opening face -
+    /// there is nothing to choose, the link chose - and hands over to
+    /// `Driver::Online` the moment the host starts the round. The local
+    /// round is built and left standing as usual, so `LEAVE` comes out
+    /// at a game.
+    pub fn join_room(&mut self, code: RoomCode) {
+        if !crate::ONLINE_AVAILABLE {
+            return;
+        }
+        self.dialog = false;
+        self.players_dialog = false;
+        self.lobby = Some(Lobby::new(self.rooms.clone()));
+        self.dial(Target::Join(code));
+        self.driver = Driver::Lobby;
+    }
 
     /// Take the window into `round` without the lobby - the primitive
     /// `open_lobby_with` and the hand-over from the lobby both use. The

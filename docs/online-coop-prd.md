@@ -634,8 +634,10 @@ BONGBONG_ROOMS=ws://127.0.0.1:4848 cargo run -- --host
 # a second client on the same machine, joining with that code
 BONGBONG_ROOMS=ws://127.0.0.1:4848 cargo run -- --join AK7QX --nick second
 
-# the web build against the same server: the join page takes the override as a query parameter
-just serve-web-dev         # then open the dev site's /j/AK7QX?rooms=ws://127.0.0.1:4848
+# the web build against the same server: the page takes the room and the override from its own URL
+just serve-web-dev         # host: http://localhost:4321/?rooms=ws://127.0.0.1:4848
+                           # join: http://localhost:4321/?join=AK7QX&rooms=ws://127.0.0.1:4848
+                           # (the site's own /j/AK7QX route is the Worker's; the preview serves ?join=)
 
 # the container, exactly what the cluster runs
 docker build -t bongbong-server .
@@ -653,7 +655,9 @@ cargo run -- --rig --delay 80 --jitter 20 --loss 0.02
   server at `/ws` and only checks the code's pod letter; on the cluster the
   letter picks the Ingress path.
 - Two clients on one machine are two seats because the native device token
-  lives per nickname (`--nick`); the web build keeps its own in localStorage.
+  lives per nickname (`--nick`); the web build crosses a device id in
+  localStorage with a tab id in sessionStorage, so a reload reclaims the seat
+  and a second tab is a second player.
 - Behind `dev-tools`, `--dev-port 4747` exposes the dev server for the newest
   room, so `just mcp-call status`, `snapshot`, `events`, `history` and
   `terrain` inspect a live round; `screenshot` refuses, since there is no

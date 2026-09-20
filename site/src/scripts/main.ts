@@ -6,11 +6,17 @@
 import { loadingPanel } from "./loading-panel";
 import { installModule } from "./runtime";
 import { installInputShims } from "./input";
+import { installRoom } from "./room";
 import { initTuningPanel } from "./tuning-panel";
 import { installFullscreenToggle } from "./fullscreen";
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement | null;
 const loading = loadingPanel();
+
+// The room this page was opened on, published before the runtime starts:
+// the game reads it once, at startup, the way a desktop build reads its
+// command line.
+installRoom();
 
 installModule(canvas, loading, (module) => {
   // The runtime is up but nothing has been drawn yet; wait for the frame
