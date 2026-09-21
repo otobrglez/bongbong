@@ -44,11 +44,6 @@
 
         .game {
           position: relative;
-          /* One source of truth for the canvas width: the overlay controls
-             have to sit on the canvas's own edges, and the canvas is
-             centred, so they all need the same expression. The shape is
-             the render target's own, the field under the 32 px HUD bar
-             (`--bitmap-w`/`--bitmap-h` below). */
           /* The bitmap's size, `Layout::for_field(DEFAULT_SCREEN_*)` in
              src/lib.rs: a 1088x544 field under the 32 px bar. */
           --bitmap-w: 1088;
@@ -58,22 +53,29 @@
              (src/view.rs) - the map is shared with phone players and
              would otherwise be blown up on a monitor. */
           --canvas-max-w: calc(var(--bitmap-w) * 1.5px);
+          /* One source of truth for the canvas width: `.stage` is the
+             canvas's box, and the overlay controls and the loading panel
+             are positioned inside it, so they sit on the canvas's own
+             edges wherever the stage lands. In the page the stage is as
+             wide as the viewport allows short of the cap, keeping 90 px
+             under itself for the instructions. */
           --canvas-w: min(100vw, var(--canvas-max-w), calc((100vh - 90px) * var(--bitmap-w) / var(--bitmap-h)));
+
+          .stage {
+            position: relative;
+            flex: none;
+            width: var(--canvas-w);
+          }
 
           /* The two overlay controls sit together in the canvas's
              *bottom-left* corner, off the HUD bar along its top: Full screen
-             first, the subscribe link beside it, one row. The canvas is
-             centred in .game and is its first block, so the corner is half
-             the leftover width in from ours and the canvas's own height
-             (its width at the bitmap's shape) down; `translateY(-100%)`
-             hangs the row up from that line so its height never needs to
-             be known. The game keeps its version stamp in the opposite
-             corner (src/hud.rs `HUD_VERSION_*_INSET`). */
+             first, the subscribe link beside it, one row. The game keeps
+             its version stamp in the opposite corner (src/hud.rs
+             `HUD_VERSION_*_INSET`). */
           .overlay-controls {
             position: absolute;
-            left: calc((100% - var(--canvas-w)) / 2 + 10px);
-            top: calc(var(--canvas-w) * var(--bitmap-h) / var(--bitmap-w) - 10px);
-            transform: translateY(-100%);
+            left: 10px;
+            bottom: 10px;
             display: flex;
             align-items: center;
             gap: 8px;
@@ -95,16 +97,12 @@
             }
           }
 
-          /* Covers exactly the canvas's own box - same centred width and
-             shape as the canvas itself, so the panel is the picture that
-             has not arrived yet rather than a banner above it. */
+          /* Covers exactly the canvas's own box, the stage, so the panel
+             is the picture that has not arrived yet rather than a banner
+             above it. */
           .loading {
             position: absolute;
-            top: 0;
-            left: 50%;
-            transform: translatex(-50%);
-            width: var(--canvas-w);
-            aspect-ratio: var(--bitmap-w) / var(--bitmap-h);
+            inset: 0;
             z-index: 2;
             display: flex;
             flex-direction: column;
@@ -198,7 +196,7 @@
                Sizing the box to the bitmap's own shape means it always
                fills the box exactly and raylib's normalisation is right by
                construction. */
-            width: var(--canvas-w);
+            width: 100%;
             aspect-ratio: var(--bitmap-w) / var(--bitmap-h);
             height: auto;
             outline: none;
@@ -218,39 +216,47 @@
              everything except the browser's own chrome. */
           &.immersive {
             position: fixed;
-            inset: 0;
+            /* The part of the viewport that is on screen, as fullscreen.ts
+               reads it off `window.visualViewport` - not `inset: 0`. A
+               phone lays a fixed box out in the *layout* viewport, which
+               is the largest one, the browser's bars collapsed; while a
+               bar shows it covers a strip of an `inset: 0` box, and a
+               canvas centred in that box loses its top or bottom under
+               the bar. Without the API the box is the layout viewport. */
+            top: var(--vv-top, 0);
+            left: var(--vv-left, 0);
+            width: var(--vv-width, 100%);
+            height: var(--vv-height, 100%);
             z-index: 100;
-            justify-content: center;
-            background: #151515;
-            padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
-
-            --canvas-w: min(100vw, var(--canvas-max-w), calc(100vh * var(--bitmap-w) / var(--bitmap-h)));
-
-            .instructions, .tuning {
-              display: none;
-            }
-
-            /* The canvas is centred vertically here, so its bottom edge is
-               the middle of the box plus half its height. */
-            .overlay-controls {
-              top: calc(50% + var(--canvas-w) * var(--bitmap-h) / var(--bitmap-w) / 2 - 10px);
-            }
           }
 
-          /* Same treatment for real fullscreen, where the .game element is
-             the fullscreen root. */
-          &:fullscreen {
+          /* Immersive mode and real full screen, where the .game element
+             is the fullscreen root, lay the stage out the same way: the
+             box is the whole viewport, and the stage is centred in what
+             is left inside the notch and home-indicator bands
+             (`viewport-fit=cover` in the head), kept as padding.
+             `border-box`, because the padding has to come out of the
+             box, not be added to it: under content-box sizing the two
+             side bands would widen the box past the viewport and push
+             everything centred in it right by the left band - 47 px on
+             a landscape iPhone, enough to put the canvas's right edge
+             under the browser's own toolbar. */
+          &.immersive, &:fullscreen {
+            box-sizing: border-box;
+            padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
             justify-content: center;
             background: #151515;
 
-            --canvas-w: min(100vw, var(--canvas-max-w), calc(100vh * var(--bitmap-w) / var(--bitmap-h)));
+            /* The stage fits the padding's inside: the viewport on screen
+               less the bands, the same figures the box is built from. */
+            --canvas-w: min(
+              calc(var(--vv-width, 100vw) - env(safe-area-inset-left) - env(safe-area-inset-right)),
+              var(--canvas-max-w),
+              calc((var(--vv-height, 100vh) - env(safe-area-inset-top) - env(safe-area-inset-bottom)) * var(--bitmap-w) / var(--bitmap-h))
+            );
 
             .instructions, .tuning {
               display: none;
-            }
-
-            .overlay-controls {
-              top: calc(50% + var(--canvas-w) * var(--bitmap-h) / var(--bitmap-w) / 2 - 10px);
             }
           }
 
@@ -488,19 +494,21 @@
 <body>
 <div class="wrapper">
     <div class="game">
-        <div class="overlay-controls">
-            <button class="fullscreen-toggle" id="fullscreen-toggle" type="button"
-                    title="Play full screen">&#9974; Full screen
-            </button>
-            <a class="subscribe-link" href="/subscribe">Subscribe for updates.</a>
-        </div>
-        <canvas id="canvas" tabindex="-1"></canvas>
-        <div class="loading" id="loading" role="status" aria-live="polite">
-            <p class="loading-title">Loading&hellip;</p>
-            <div class="loading-track">
-                <div class="loading-bar" id="loading-bar"></div>
+        <div class="stage">
+            <canvas id="canvas" tabindex="-1"></canvas>
+            <div class="overlay-controls">
+                <button class="fullscreen-toggle" id="fullscreen-toggle" type="button"
+                        title="Play full screen">&#9974; Full screen
+                </button>
+                <a class="subscribe-link" href="/subscribe">Subscribe for updates.</a>
             </div>
-            <p class="loading-note" id="loading-note">Fetching the game</p>
+            <div class="loading" id="loading" role="status" aria-live="polite">
+                <p class="loading-title">Loading&hellip;</p>
+                <div class="loading-track">
+                    <div class="loading-bar" id="loading-bar"></div>
+                </div>
+                <p class="loading-note" id="loading-note">Fetching the game</p>
+            </div>
         </div>
         <div class="instructions">
             <p>Arrows to drive, <kbd>Space</kbd> to fire, <kbd>r</kbd> to restart.</p>
