@@ -13,12 +13,18 @@
 //      launched app run standalone. Deliberately not advertised on the
 //      page: it is a wall of text over the game explaining a platform
 //      limitation the player cannot do anything about mid-round.
+//
+// The `.immersive` box is laid out on the part of the viewport that is on
+// screen (`trackVisualViewport`), not on `inset: 0`: on a phone a fixed
+// box fills the *layout* viewport, the largest one, the browser's bars
+// collapsed, and while a bar shows it covers a strip of that box.
 
 export function installFullscreenToggle(): void {
   const game = document.querySelector<HTMLElement>(".game");
   const canvas = document.getElementById("canvas");
   const button = document.getElementById("fullscreen-toggle");
   if (!game || !button) return;
+  trackVisualViewport();
   const request = game.requestFullscreen || game.webkitRequestFullscreen;
   const exit = document.exitFullscreen || document.webkitExitFullscreen;
 
@@ -68,4 +74,26 @@ export function installFullscreenToggle(): void {
   document.addEventListener("fullscreenchange", label);
   document.addEventListener("webkitfullscreenchange", label);
   label();
+}
+
+// Keep the visible viewport on the root as `--vv-top/left/width/height`,
+// the figures `.immersive` in index.astro is positioned and sized by.
+// `window.visualViewport` is the on-screen part of the layout viewport in
+// the coordinates fixed positioning uses, and it reports every change to
+// it: a browser bar collapsing or returning, a rotation, a pinch zoom.
+// Without the API (old WebKit) the variables stay unset and the CSS falls
+// back to the layout viewport.
+function trackVisualViewport(): void {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  const root = document.documentElement.style;
+  const apply = () => {
+    root.setProperty("--vv-top", `${vv.offsetTop}px`);
+    root.setProperty("--vv-left", `${vv.offsetLeft}px`);
+    root.setProperty("--vv-width", `${vv.width}px`);
+    root.setProperty("--vv-height", `${vv.height}px`);
+  };
+  vv.addEventListener("resize", apply);
+  vv.addEventListener("scroll", apply);
+  apply();
 }
