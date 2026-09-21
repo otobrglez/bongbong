@@ -7,8 +7,10 @@ name: Cloudflare Deploy
 # bongbong.io. Mirrors release.yml's tag trigger so a
 # `git tag vX.Y.Z && git push --tags` ships both the native binaries
 # (release.yml, cargo-dist) and the web build (this workflow) together.
-# Per-PR preview deploys live in pr-preview.yml, built from the same
-# composite action.
+# A manual run (the Actions "Run workflow" button, or a workflow dispatch
+# through the API) deploys the picked ref the same way, for a release
+# whose tag cannot be pushed from where you are. Per-PR preview deploys
+# live in pr-preview.yml, built from the same composite action.
 #
 # Toolchain pins (Rust, emsdk) live in .github/actions/build-web/action.yml.
 #
@@ -19,6 +21,7 @@ on:
   push:
     tags:
       - '**[0-9]+.[0-9]+.[0-9]+*'
+  workflow_dispatch:
 
 jobs:
   deploy:
