@@ -889,6 +889,36 @@ mod tests {
         );
     }
 
+    /// **The other half of the lag**: the shell is on screen on the frame
+    /// of the press, not a round trip later.
+    ///
+    /// Checked at the frame the trigger is pulled, before any snapshot
+    /// could possibly carry the server's own shell back - so a shell in
+    /// the replica here is the client's own.
+    #[test]
+    fn a_shot_is_on_screen_the_frame_it_is_fired() {
+        if !tuning().online_predict_own_tank {
+            return;
+        }
+        let (_rig, link) = start(options(LinkQuality::new(60, 0, 0.0)));
+        let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
+        let mut round = OnlineRound::new(client, "RIG");
+        let hold = Intent { move_dir: Some(Dir::Right), ..Intent::default() };
+        for _ in 0..90 {
+            round.frame(&hold, FRAME.as_secs_f32());
+            thread::sleep(FRAME);
+        }
+        let before = round.game().expect("a replica").drawable_state().shots.len();
+
+        // Pull the trigger and look on that very frame.
+        round.frame(&Intent { fire: true, ..hold }, FRAME.as_secs_f32());
+        let after = round.game().expect("a replica").drawable_state().shots.len();
+        assert!(
+            after > before,
+            "no shell on the frame of the press ({before} -> {after}): the shot still waits for the room"
+        );
+    }
+
     /// The dial's whole point: a lossy link costs the picture nothing it
     /// cannot ride out.
     #[test]

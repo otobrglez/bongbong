@@ -155,6 +155,34 @@ impl Shell {
     /// single-barrel shot, which fires from dead center. The travel
     /// direction itself is unaffected by this - both barrels of a twin
     /// chassis fire parallel, not converging/diverging.
+    /// A shell at a pose somebody else worked out, for drawing only.
+    ///
+    /// A client draws its own shot on the frame of the press, before the
+    /// server has confirmed it (`net::predict`), and has to put that
+    /// shell back into the replica every frame - a `Shell` owns a `Vec`
+    /// and so cannot simply be copied in. This rebuilds one from the
+    /// handful of values that describe where it is and where it is
+    /// going. It carries no `passed_over` and no bounces because it never
+    /// meets anything: a replica runs no hit test.
+    pub fn at(id: u32, position: Position, prev_position: Position, velocity: Vec2, rotation: f32, variant: i32, shooter_row: i32, owner: Owner) -> Shell {
+        Shell {
+            id,
+            state: ShellState::Flying,
+            position,
+            prev_position,
+            velocity,
+            rotation,
+            timer: 0.0,
+            done: false,
+            owner,
+            variant,
+            shooter_row,
+            shadow_offset: 0.0,
+            bounces_left: 0,
+            passed_over: Vec::new(),
+        }
+    }
+
     pub fn spawn(tank: &Tank, owner: Owner, aim_offset: f32, lateral_offset: f32) -> Shell {
         let rot = (tank.rotation + aim_offset).to_radians();
         // rotation 0 == facing up (-Y); +90 == right, etc. matches the tank movement.

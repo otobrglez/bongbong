@@ -18,9 +18,19 @@
 //! `Game::predict_seat` is ever called on it, so no RNG is drawn, nothing
 //! ages, and nothing but the one hull moves.
 //!
-//! What is predicted is the own hull alone. Damage, pickups, other tanks
-//! and every shot stay the server's, and stay interpolated; shots are
-//! phase 5.
+//! What is predicted is the own hull and the own shot leaving the
+//! muzzle. Damage, pickups, other tanks and everyone else's shots stay
+//! the server's, and stay interpolated.
+//!
+//! **A provisional shot is drawn, never simulated.** It flies by dead
+//! reckoning and meets nothing: a replica runs no hit test, and whether
+//! it hit is the server's word, arriving as an event like any other. It
+//! is retired when the server reports this seat fired - oldest first,
+//! since a seat's shots leave in the order the trigger was pulled and
+//! come back in that order, which is what lets a provisional be
+//! confirmed without `Fired` carrying a client tick, and so without a
+//! protocol change. A shot the server never mentions was one it refused,
+//! and goes quietly after `PROVISIONAL_MS`.
 //!
 //! **What still costs a correction**, deliberately, and what it costs:
 //!
@@ -44,9 +54,11 @@
 use std::collections::VecDeque;
 
 use crate::PHYSICS_FIXED_DT;
-use crate::math::Vec2 as Position;
 use crate::ai::Intent;
+use crate::math::Vec2 as Position;
+use crate::shell::{Owner, Shell};
 use crate::simulation::Game;
+use crate::tuning::tuning;
 
 /// How many ticks of input to keep. A replay starts at the last tick the
 /// server acknowledged, so this has to cover the worst round trip worth
@@ -70,6 +82,42 @@ pub const SNAP_PX: f32 = 48.0;
 /// enough that it reads as the hull settling rather than jumping.
 pub const NUDGE_SECONDS: f32 = 0.1;
 
+/// How long a shell nobody confirmed is left on screen.
+///
+/// A round trip plus an interval, generously: the server's `Fired` for a
+/// shot it accepted cannot take longer than that to come back, so
+/// anything still waiting here was refused - the trigger was pulled on a
+/// cooldown the client had not seen, or with ammo the server had already
+/// spent. Those are quiet failures by design (§4.12): the shell fades
+/// rather than announcing that the client guessed wrong.
+pub const PROVISIONAL_MS: i64 = 600;
+
+/// The id band provisional shells are drawn under.
+///
+/// The server hands its projectiles a per-round counter and the wire
+/// carries it as a `u16`, so the top of that range is free in any round
+/// that does not fire sixty thousand shots. A provisional needs an id
+/// only so the replica can hold it beside the server's own; it is never
+/// sent anywhere.
+pub const PROVISIONAL_ID_BASE: u32 = 0xF000;
+
+/// A shot the client has drawn but the server has not confirmed.
+///
+/// The pose rather than a `Shell`: a `Shell` owns a `Vec` and so cannot
+/// be copied into the replica, and it has to go back in every frame
+/// because `net::apply` despawns everything the snapshot did not list.
+/// `Shell::at` rebuilds one from these.
+struct Provisional {
+    position: Position,
+    prev_position: Position,
+    velocity: crate::math::Vec2,
+    rotation: f32,
+    variant: i32,
+    shooter_row: i32,
+    /// Local milliseconds at the trigger pull, for `PROVISIONAL_MS`.
+    born_ms: i64,
+}
+
 /// The local seat's own tank, run ahead of the server and pulled back
 /// into line by it.
 pub struct Predictor {
@@ -90,6 +138,18 @@ pub struct Predictor {
     /// the numbers §4.12 asks to be measured before a feel pass.
     pub nudges: u32,
     pub snaps: u32,
+    /// Shots drawn on the frame of the press, oldest first, waiting for
+    /// the server to say they happened.
+    shots: VecDeque<Provisional>,
+    /// Seconds until the local gate will let another shot out. Counted
+    /// down here rather than read off the sandbox, because
+    /// `predict_seat` deliberately does not fire - it only drives.
+    cooldown: f32,
+    /// How many provisional shots were drawn, and how many of those the
+    /// server never confirmed. A climbing refusal count means the local
+    /// gate is looser than the server's.
+    pub shots_drawn: u32,
+    pub shots_refused: u32,
 }
 
 impl Predictor {
@@ -104,7 +164,97 @@ impl Predictor {
             offset: Position::new(0.0, 0.0),
             nudges: 0,
             snaps: 0,
+            shots: VecDeque::new(),
+            cooldown: 0.0,
+            shots_drawn: 0,
+            shots_refused: 0,
         }
+    }
+
+    /// Draw a shot now, if the local gate allows one.
+    ///
+    /// **The gate is the client's guess at the server's.** It counts the
+    /// same `player_fire_interval` down, but it cannot know about ammo
+    /// the server has already spent or a cooldown set by a shot this
+    /// client has not heard about yet. Guessing wrong is cheap and
+    /// deliberate: the shell is drawn, no `Fired` ever comes back for it,
+    /// and `expire` takes it away quietly (§4.12).
+    ///
+    /// `now_ms` is the local clock the expiry is measured on.
+    pub fn fire(&mut self, now_ms: i64) {
+        if self.cooldown > 0.0 {
+            return;
+        }
+        // From the predicted pose, so the shell leaves the muzzle where
+        // the hull is *now* rather than where the room last saw it -
+        // which is the whole point of drawing it early.
+        let Some(shell) = self.sandbox.seat_shell(self.seat) else { return };
+        self.cooldown = tuning().player_fire_interval;
+        self.shots.push_back(Provisional {
+            position: shell.position,
+            prev_position: shell.position,
+            velocity: shell.velocity,
+            rotation: shell.rotation,
+            variant: shell.variant,
+            shooter_row: shell.shooter_row,
+            born_ms: now_ms,
+        });
+        self.shots_drawn += 1;
+    }
+
+    /// The server says this seat fired: the oldest shot still waiting was
+    /// that one.
+    ///
+    /// Matched oldest-first rather than by an id, because a seat's shots
+    /// leave in the order it pulled the trigger and the server reports
+    /// them in that same order. That is what lets a provisional be
+    /// confirmed without `Fired` carrying a client tick, and so without a
+    /// protocol change.
+    pub fn confirm_shot(&mut self) {
+        self.shots.pop_front();
+    }
+
+    /// Drop shots the server never confirmed, and count them.
+    pub fn expire(&mut self, now_ms: i64) {
+        while self.shots.front().is_some_and(|p| now_ms - p.born_ms > PROVISIONAL_MS) {
+            self.shots.pop_front();
+            self.shots_refused += 1;
+        }
+    }
+
+    /// Carry the unconfirmed shots forward by `dt` and run the local
+    /// fire gate down. Dead reckoning: a provisional has no physics of
+    /// its own and never hits anything - a hit is the server's word, and
+    /// arrives as an event like any other.
+    pub fn advance_shots(&mut self, dt: f32) {
+        self.cooldown = (self.cooldown - dt).max(0.0);
+        for p in &mut self.shots {
+            p.prev_position = p.position;
+            p.position = Position::new(p.position.x + p.velocity.x * dt, p.position.y + p.velocity.y * dt);
+        }
+    }
+
+    /// The shots to draw beside the server's, with the ids they are held
+    /// under in the replica.
+    pub fn shots(&self) -> impl Iterator<Item = Shell> + '_ {
+        let owner = Owner::Player(self.seat as u8);
+        self.shots.iter().enumerate().map(move |(i, p)| {
+            Shell::at(
+                PROVISIONAL_ID_BASE + i as u32,
+                p.position,
+                p.prev_position,
+                p.velocity,
+                p.rotation,
+                p.variant,
+                p.shooter_row,
+                owner,
+            )
+        })
+    }
+
+    /// How many shots are on screen that the server has not confirmed.
+    pub fn provisional_count(&self) -> usize {
+        self.shots.len()
     }
 
     /// The tick the next `step` will stamp.
@@ -343,6 +493,79 @@ mod tests {
         let a = authority.seat_motion(0).expect("a hull").0;
         let p = predictor.motion().expect("a hull").0;
         assert_eq!((a.x, a.y), (p.x, p.y), "the boosted hull drifted away from its own prediction");
+    }
+
+    /// The point of a provisional shot: it is on screen on the frame of
+    /// the press, and it leaves from where the hull is *now*.
+    #[test]
+    fn a_shot_is_drawn_from_the_predicted_muzzle_at_once() {
+        let sandbox = round();
+        let mut predictor = Predictor::new(sandbox, 0, 0);
+        for tick in 0..30u32 {
+            predictor.step(script(tick));
+        }
+        let hull = predictor.motion().expect("a hull").0;
+        predictor.fire(0);
+        assert_eq!(predictor.provisional_count(), 1, "the shot should be on screen at once");
+        assert_eq!(predictor.shots_drawn, 1);
+
+        let shell = predictor.shots().next().expect("a shell");
+        let gap = ((shell.position.x - hull.x).powi(2) + (shell.position.y - hull.y).powi(2)).sqrt();
+        assert!(gap > 1.0, "the shell should leave the muzzle, not the hull's centre");
+        assert!(gap < 100.0, "but it is a muzzle, not a mortar: {gap}");
+        // And it flies.
+        let before = shell.position;
+        predictor.advance_shots(PHYSICS_FIXED_DT);
+        let after = predictor.shots().next().expect("a shell").position;
+        assert_ne!((before.x, before.y), (after.x, after.y), "the shell did not move");
+    }
+
+    /// The local gate is the client's guess at the server's, and it has
+    /// to hold the trigger down to one shot per `player_fire_interval` -
+    /// otherwise holding fire paints the screen with shots the server
+    /// will refuse.
+    #[test]
+    fn the_local_gate_rations_a_held_trigger() {
+        let mut predictor = Predictor::new(round(), 0, 0);
+        for _ in 0..10 {
+            predictor.fire(0);
+        }
+        assert_eq!(predictor.provisional_count(), 1, "a held trigger drew more than one shot");
+        // Past the interval, another is allowed.
+        predictor.advance_shots(tuning().player_fire_interval + 0.001);
+        predictor.fire(0);
+        assert_eq!(predictor.provisional_count(), 2);
+    }
+
+    /// The server's word retires a shot; oldest first, since a seat's
+    /// shots leave in the order the trigger was pulled and come back in
+    /// that order.
+    #[test]
+    fn the_servers_fired_retires_the_oldest_shot() {
+        let mut predictor = Predictor::new(round(), 0, 0);
+        predictor.fire(0);
+        predictor.advance_shots(tuning().player_fire_interval + 0.001);
+        predictor.fire(0);
+        assert_eq!(predictor.provisional_count(), 2);
+        predictor.confirm_shot();
+        assert_eq!(predictor.provisional_count(), 1);
+        predictor.confirm_shot();
+        assert_eq!(predictor.provisional_count(), 0);
+        assert_eq!(predictor.shots_refused, 0, "a confirmed shot is not a refused one");
+    }
+
+    /// A shot the server never mentions was refused - the trigger was
+    /// pulled on a cooldown or an ammo count this client had not caught
+    /// up with - and it goes quietly rather than hanging on screen.
+    #[test]
+    fn a_shot_the_server_never_confirms_expires_quietly() {
+        let mut predictor = Predictor::new(round(), 0, 0);
+        predictor.fire(0);
+        predictor.expire(PROVISIONAL_MS);
+        assert_eq!(predictor.provisional_count(), 1, "not yet: it is still within a round trip");
+        predictor.expire(PROVISIONAL_MS + 1);
+        assert_eq!(predictor.provisional_count(), 0);
+        assert_eq!(predictor.shots_refused, 1, "and it is counted, so a loose gate is visible");
     }
 
     /// A teleport is not a correction to ease across - the hull is

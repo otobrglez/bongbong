@@ -1590,6 +1590,33 @@ impl Game {
         }
     }
 
+    /// Put a client's unconfirmed shell in the world under `id`, for
+    /// drawing only (`net::predict`).
+    ///
+    /// It is an ordinary `Shell` entity, so every painter and the dev
+    /// server's readers see it without knowing it is provisional - and
+    /// `net::apply` will despawn it on the next snapshot along with
+    /// anything else the server did not list, which is why the caller
+    /// puts it back each frame. It never hits anything: a replica runs no
+    /// hit test, and a hit is the server's word.
+    pub(crate) fn add_provisional_shell(&mut self, shell: crate::shell::Shell) {
+        self.world.spawn((shell,));
+    }
+
+    /// A shell as one seat would fire it right now: from its muzzle, on
+    /// its facing, at the shell speed.
+    ///
+    /// For a client drawing its own shot on the frame of the press
+    /// (`net::predict`). It is `Shell::spawn` and nothing else - nothing
+    /// is queued, no recoil is applied and no RNG is drawn, so a sandbox
+    /// stays the pure drive model it is; the shell it hands back is the
+    /// caller's to carry and to throw away.
+    pub(crate) fn seat_shell(&self, seat: usize) -> Option<crate::shell::Shell> {
+        let entity = self.seats.get(seat).copied().flatten()?;
+        let tank = self.world.get::<&Tank>(entity).ok()?;
+        Some(crate::shell::Shell::spawn(&tank, crate::shell::Owner::Player(seat as u8), 0.0, 0.0))
+    }
+
     /// Whether one seat's hull is under a speed boost.
     pub(crate) fn seat_boosted(&self, seat: usize) -> bool {
         self.seats

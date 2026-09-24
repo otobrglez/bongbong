@@ -33,6 +33,7 @@ use crate::math::Vec2 as Position;
 use crate::net::interp::Interpolator;
 use crate::net::predict::Predictor;
 use crate::net::transport::Transport;
+use crate::net::events::WireEvent;
 use crate::net::wire::{self, RoundOutcome, Snapshot, Welcome};
 use crate::simulation::Game;
 use crate::tuning::{self, tuning};
@@ -272,6 +273,7 @@ impl<T: Transport> OnlineRound<T> {
                 ClientEvent::Welcomed(welcome) => self.welcomed(&welcome, now),
                 ClientEvent::Snapshot(snapshot) => {
                     self.reconcile(&snapshot);
+                    self.confirm_shots(&snapshot, now);
                     self.interp.accept(*snapshot, now);
                 }
                 ClientEvent::Refused(message) => {
@@ -364,10 +366,17 @@ impl<T: Transport> OnlineRound<T> {
         // One counter for both: the sandbox steps on exactly the input
         // the packet carries, stamped with exactly the tick the server
         // will name back in `acked`.
+        let now = self.local_ms();
         if let Some(tick) = self.client.send_intent(&out)
             && let Some(predictor) = self.predictor.as_mut()
         {
             predictor.step_at(tick, out);
+            // The shot is drawn on the tick its press travels on, from
+            // the pose that tick produced, so the shell leaves the muzzle
+            // where the hull is now (§4.12).
+            if out.fire && tuning().online_predict_own_tank {
+                predictor.fire(now);
+            }
         }
     }
 
@@ -396,6 +405,7 @@ impl<T: Transport> OnlineRound<T> {
         }
         if let Some(predictor) = self.predictor.as_mut() {
             predictor.decay(dt);
+            predictor.advance_shots(dt);
         }
     }
 
@@ -423,6 +433,13 @@ impl<T: Transport> OnlineRound<T> {
         // hull, so it is carried through unchanged.
         let boosted = game.seat_boosted(seat as usize);
         game.place_seat(seat as usize, position, rotation, velocity, boosted);
+        // Beside the server's shots, not instead of them: `apply` has
+        // just despawned everything the snapshot did not list, so these
+        // are put back every frame until the server confirms or refuses
+        // them.
+        for shell in predictor.shots() {
+            game.add_provisional_shell(shell);
+        }
     }
 
     /// Pull the sandbox back into line with a snapshot that just landed.
@@ -449,6 +466,27 @@ impl<T: Transport> OnlineRound<T> {
         // boosted hull outruns its own prediction for the whole buff.
         let boosted = state.flags & wire::tank_flags::BOOST != 0;
         predictor.reconcile(acked, position, rotation, velocity, boosted);
+    }
+
+    /// Retire the provisional shots the server has now accounted for.
+    ///
+    /// One `Fired` from this seat retires the oldest shot still waiting:
+    /// a seat's shots leave in the order the trigger was pulled and the
+    /// server reports them in that order, so nothing has to carry an id
+    /// across - which is why this needs no protocol change. Anything the
+    /// server never mentions is a shot it refused, and `expire` takes it
+    /// away quietly.
+    fn confirm_shots(&mut self, snapshot: &Snapshot, now: i64) {
+        if !tuning().online_predict_own_tank {
+            return;
+        }
+        let (Some(predictor), Some(seat)) = (self.predictor.as_mut(), self.client.seat()) else { return };
+        for event in &snapshot.events {
+            if matches!(event, WireEvent::Fired { slot, .. } if *slot as u8 == seat) {
+                predictor.confirm_shot();
+            }
+        }
+        predictor.expire(now);
     }
 }
 
