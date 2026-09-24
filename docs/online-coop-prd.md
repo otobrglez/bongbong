@@ -585,7 +585,12 @@ the browser build is the universal fallback, the apps the upgrade.
   (3.2 million codes against a few hundred live rooms; idle rooms are reaped,
   collisions are a non-issue). The link `bongbong.io/j/CK7QX` goes to the
   share sheet; a QR and the code stay on the host's screen while the room is
-  open. **The code picks no URL**: every client - hosting or joining - dials
+  open. The site is static and has no page at that path, so
+  `site/public/_redirects` sends `/j/*` to `/?join=:splat`, the other spelling
+  `Invite::parse` already reads. That redirect replaces the query rather than
+  merging it, so `join_url` writes the query form directly when the host is
+  overridden (`?join=CODE&rooms=...`) and keeps the pretty path for the
+  deployed one - a QR minted against a laptop still reaches the laptop. **The code picks no URL**: every client - hosting or joining - dials
   that same `/ws`, and the code travels inside the join message, so no
   directory and no derived path stands between a link and a seat.
 - The join page checks the version, then: browser, the wasm build with the

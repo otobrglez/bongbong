@@ -1,0 +1,17 @@
+# Cloudflare redirects for the static site. Astro copies public/ into
+# dist/ byte for byte, and the Workers assets deploy reads this file from
+# there (wrangler.toml).
+#
+# **The invite link** (docs/online-coop-prd.md §4.10). `join_url` writes
+# `https://bongbong.io/j/CK7QX` onto the host's screen and into the
+# lobby's QR, but the site is static and has no page at that path, so
+# every scan and every shared link would 404. This sends it to the game
+# with the code in the query, which `net::rooms::Invite::parse` reads off
+# `window.bbInvite` exactly as it reads the path form - the two spellings
+# are one rule in that file, and this is why both exist.
+#
+# The incoming query rides along: a QR minted against a local server
+# carries `?rooms=ws://...` (`join_url` appends it for an overridden
+# host), and it has to survive or the phone dials the deployed server
+# instead of the laptop.
+/j/*  /?join=:splat  302
