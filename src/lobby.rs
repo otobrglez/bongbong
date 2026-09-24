@@ -955,14 +955,20 @@ mod lobby_tests {
 
     /// A local override rides along in the link, so a scan reaches the
     /// same server, and the longer link is still one QR.
+    ///
+    /// It is the *query* form rather than the pretty `/j/CODE` path: the
+    /// redirect that makes that path work replaces the query rather than
+    /// merging it, so an override has to skip it (`net::rooms::join_url`).
     #[test]
     fn a_local_rooms_override_travels_in_the_link_and_its_qr() {
         let mut lobby = Lobby::new(RoomsHost::overriding("ws://127.0.0.1:4848"));
         let room = room(true, vec![seat(0, "oto", false)]);
         lobby.update(&LobbyInput::default(), FIELD, Some(&room));
         let view = lobby.view(Some(&room));
-        assert_eq!(view.join_url.as_deref(), Some("https://bongbong.io/j/AK7QX?rooms=ws://127.0.0.1:4848"));
-        assert_eq!(view.qr.expect("encodes").version(), 3);
+        assert_eq!(view.join_url.as_deref(), Some("https://bongbong.io/?join=AK7QX&rooms=ws://127.0.0.1:4848"));
+        // Four characters longer than the path form, which is one QR
+        // version up - still a single block well inside `qr`'s 1..=5.
+        assert_eq!(view.qr.expect("encodes").version(), 4);
     }
 
     /// The room face once the round is over: the outcome under the seats,

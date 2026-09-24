@@ -30,9 +30,14 @@ pub const CODE_LETTERS: usize = 5;
 /// keys, which is why the list lives here rather than in either screen.
 pub const CODE_ALPHABET: &[u8; 20] = b"CDFGHJKMNPQRTVWXY347";
 
-/// Where an invite points (docs/online-coop-prd.md §4.10): the join page
-/// on the site, which plays the room in the browser at once and opens the
-/// app where it is installed.
+/// The site an invite points at (docs/online-coop-prd.md §4.10), which
+/// plays the room in the browser at once and opens the app where it is
+/// installed.
+pub const SITE_BASE: &str = "https://bongbong.io";
+
+/// Where a plain invite points: `bongbong.io/j/CK7QX`. The site is
+/// static and has no page there, so `site/public/_redirects` sends it to
+/// `/?join=CK7QX`, which `Invite::parse` reads the same way.
 pub const JOIN_URL_BASE: &str = "https://bongbong.io/j";
 
 /// The link to share for `code` - what goes on a screen, in a chat
@@ -43,10 +48,19 @@ pub const JOIN_URL_BASE: &str = "https://bongbong.io/j";
 /// the game does (docs/online-coop-prd.md §4.13): without it a scan would
 /// send the other device to the deployed server, which knows nothing
 /// about a room on a laptop.
+///
+/// **The two forms differ by more than that parameter.** A plain invite
+/// is the pretty path, `bongbong.io/j/CK7QX`, which
+/// `site/public/_redirects` turns into `/?join=CK7QX` at the edge. That
+/// redirect cannot carry a query across - its destination has one of its
+/// own, and Cloudflare replaces rather than merges - so an overridden
+/// host skips the path form and writes the query form itself. Both land
+/// on the same page and `Invite::parse` reads either; only the prettier
+/// one needs the redirect.
 pub fn join_url(host: &RoomsHost, code: &str) -> String {
     match host.is_override() {
         false => format!("{JOIN_URL_BASE}/{code}"),
-        true => format!("{JOIN_URL_BASE}/{code}?rooms={}", host.base()),
+        true => format!("{SITE_BASE}/?join={code}&rooms={}", host.base()),
     }
 }
 
@@ -224,6 +238,12 @@ impl Invite {
         };
         Invite {
             code: query_value(query, "join")
+                // `site/public/_redirects` splats the path into the
+                // query, so `/j/CK7QX/` arrives as `join=CK7QX/`. The
+                // path form drops empty segments and never sees this;
+                // trim it here so a link somebody's client tidied with a
+                // trailing slash still joins.
+                .map(|text| text.trim_end_matches('/').to_string())
                 .or_else(|| code_in_path(path))
                 .and_then(|text| RoomCode::parse(&text).ok()),
             rooms: query_value(query, "rooms").filter(|r| !r.trim().is_empty()),
@@ -403,12 +423,39 @@ mod tests {
     #[test]
     fn a_join_link_carries_a_local_override_so_a_scan_reaches_the_same_server() {
         assert_eq!(join_url(&RoomsHost::deployed(), "CK7QX"), "https://bongbong.io/j/CK7QX");
+        // An override writes the query form rather than the path form,
+        // because the `/j/*` redirect would drop the `rooms` parameter.
         assert_eq!(
             join_url(&RoomsHost::overriding("ws://127.0.0.1:4848"), "CK7QX"),
-            "https://bongbong.io/j/CK7QX?rooms=ws://127.0.0.1:4848"
+            "https://bongbong.io/?join=CK7QX&rooms=ws://127.0.0.1:4848"
         );
         // Both fit the codes the lobby draws (`qr::MAX_BYTES` is 106).
         assert!(join_url(&RoomsHost::overriding("ws://127.0.0.1:4848"), "CK7QX").len() <= crate::qr::MAX_BYTES);
+    }
+
+    /// The site is static, so `bongbong.io/j/CK7QX` only reaches the game
+    /// because `site/public/_redirects` sends it to the query form. That
+    /// file is read off disk here rather than trusted, the way the room
+    /// server's alphabet is: if the rule is dropped or its shape changes,
+    /// every shared invite and every QR 404s, and nothing else in the
+    /// tree would notice.
+    #[test]
+    fn the_invite_path_is_redirected_to_the_query_form_the_game_reads() {
+        let redirects = include_str!("../../site/public/_redirects");
+        let rule = redirects
+            .lines()
+            .map(str::trim)
+            .find(|l| l.starts_with("/j/"))
+            .expect("a rule for the invite path");
+        let mut parts = rule.split_whitespace();
+        assert_eq!(parts.next(), Some("/j/*"), "the invite path, splatted");
+        assert_eq!(parts.next(), Some("/?join=:splat"), "the query form `Invite::parse` reads");
+        // A redirect, not a rewrite: the code moves into the query, so
+        // the browser has to be told where it ended up.
+        assert_eq!(parts.next(), Some("302"));
+        // And the path the rule matches is the one `join_url` writes.
+        let link = join_url(&RoomsHost::deployed(), "CK7QX");
+        assert!(link.starts_with("https://bongbong.io/j/"), "{link} is not the path the rule catches");
     }
 
     /// The two shapes a link names a room in: the invite's own path and
@@ -433,6 +480,9 @@ mod tests {
         assert_eq!(Invite::parse("https://bongbong.io/j/CK7QX#top").code.map(|c| c.text), Some("CK7QX".into()));
         // The query is the explicit one where a page carries both.
         assert_eq!(Invite::parse("https://bongbong.io/j/CK7QX?join=DM4WT").code.map(|c| c.text), Some("DM4WT".into()));
+        // What the `/j/*` redirect makes of a trailing slash: the splat
+        // takes it along, so `?join=CK7QX/` has to read as the code.
+        assert_eq!(Invite::parse("https://bongbong.io/?join=CK7QX/").code.map(|c| c.text), Some("CK7QX".into()));
     }
 
     /// Every way a link can say nothing, or nothing usable. None of them
