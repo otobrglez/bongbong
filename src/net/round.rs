@@ -418,7 +418,11 @@ impl<T: Transport> OnlineRound<T> {
         // for the spray and the dust, and a hull the solver believes is
         // stopped settles differently from one that is moving.
         let Some((_, rotation, velocity)) = predictor.motion() else { return };
-        game.place_seat(seat as usize, position, rotation, velocity);
+        // The replica's own boost flag is the server's and already
+        // applied by `apply::snapshot`; the prediction only moves the
+        // hull, so it is carried through unchanged.
+        let boosted = game.seat_boosted(seat as usize);
+        game.place_seat(seat as usize, position, rotation, velocity, boosted);
     }
 
     /// Pull the sandbox back into line with a snapshot that just landed.
@@ -441,7 +445,10 @@ impl<T: Transport> OnlineRound<T> {
         let position = Position::new(wire::dequantise_pos(state.x), wire::dequantise_pos(state.y));
         let velocity = Position::new(wire::dequantise_velocity(state.vx), wire::dequantise_velocity(state.vy));
         let rotation = wire::dir_from_index(state.dir).unwrap_or(crate::tank::Dir::Up).rotation();
-        predictor.reconcile(acked, position, rotation, velocity);
+        // The one piece of state the drive model reads: without it a
+        // boosted hull outruns its own prediction for the whole buff.
+        let boosted = state.flags & wire::tank_flags::BOOST != 0;
+        predictor.reconcile(acked, position, rotation, velocity, boosted);
     }
 }
 

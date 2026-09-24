@@ -21,6 +21,25 @@
 //! What is predicted is the own hull alone. Damage, pickups, other tanks
 //! and every shot stay the server's, and stay interpolated; shots are
 //! phase 5.
+//!
+//! **What still costs a correction**, deliberately, and what it costs:
+//!
+//! - *Firing.* `weapons::apply_recoil` pushes the shooter back along the
+//!   shot's axis, and the sandbox never fires - it only drives. So every
+//!   shot ends one nudge, bounded by `shell_recoil_max_speed` over one
+//!   snapshot interval, and settled by the next reconciliation. Cheap
+//!   enough to leave; predicting the recoil means predicting the shot,
+//!   which is phase 5.
+//! - *A speed boost* would be worse than a correction - it changes the
+//!   top speed the drive model works to, so a sandbox that did not know
+//!   would fall behind every tick for the whole buff. That one is
+//!   carried: `reconcile` takes the flag the wire already sends.
+//! - *A teleport* is not eased at all. The hull is somewhere else
+//!   entirely, which is past `SNAP_PX` by construction, so it is taken
+//!   whole - easing across a portal would drag the picture through the
+//!   scenery between the two ends.
+//! - *The turret* is not on the wire at all; the replica derives it, so
+//!   it follows the hull this already predicts rather than lagging it.
 
 use std::collections::VecDeque;
 
@@ -125,9 +144,9 @@ impl Predictor {
     /// still in flight or still unacknowledged, so it is replayed on top
     /// - the same count of steps, the same `dt`, the same statics, which
     /// is why the answer lands rather than drifts.
-    pub fn reconcile(&mut self, acked: u32, position: Position, rotation: f32, velocity: Position) {
+    pub fn reconcile(&mut self, acked: u32, position: Position, rotation: f32, velocity: Position, boosted: bool) {
         let before = self.sandbox.seat_motion(self.seat).map(|(p, _, _)| p);
-        self.sandbox.place_seat(self.seat, position, rotation, velocity);
+        self.sandbox.place_seat(self.seat, position, rotation, velocity, boosted);
         // Anything the server has already accounted for is history.
         while self.history.front().is_some_and(|(t, _)| *t <= acked) {
             self.history.pop_front();
@@ -255,7 +274,7 @@ mod tests {
         let predicted_before = predictor.motion().expect("a hull").0;
 
         let (pos, rot, vel) = authority.seat_motion(0).expect("the authority's hull");
-        predictor.reconcile(59, pos, rot, vel);
+        predictor.reconcile(59, pos, rot, vel, false);
 
         let after = predictor.motion().expect("a hull").0;
         assert_eq!((predicted_before.x, predicted_before.y), (after.x, after.y), "the replay did not land");
@@ -279,7 +298,7 @@ mod tests {
         let (pos, rot, vel) = authority.seat_motion(0).expect("a hull");
         let nudged = Position::new(pos.x + 6.0, pos.y);
         let drawn_before = predictor.drawn_position().expect("a hull");
-        predictor.reconcile(39, nudged, rot, vel);
+        predictor.reconcile(39, nudged, rot, vel, false);
 
         assert_eq!(predictor.nudges, 1, "a real difference should count");
         assert_eq!(predictor.snaps, 0);
@@ -299,6 +318,53 @@ mod tests {
         assert!(predictor.offset().x.abs() < 0.001, "the nudge should be spent");
     }
 
+    /// **A boosted hull outruns a sandbox that does not know.**
+    ///
+    /// A SpeedUp changes the top speed the drive model works to
+    /// (`Tank::speed`), so this is not a one-off correction that settles
+    /// - it is a drift, every tick, for the whole buff. The wire carries
+    /// the flag and the reconciliation has to pass it on; pickups
+    /// themselves stay the server's.
+    #[test]
+    fn a_boost_the_server_reports_is_carried_into_the_sandbox() {
+        let (mut authority, sandbox) = (round(), round());
+        let mut predictor = Predictor::new(sandbox, 0, 0);
+        // The server's hull picks up a SpeedUp.
+        authority.place_seat(0, authority.seat_motion(0).expect("a hull").0, 0.0, Position::new(0.0, 0.0), true);
+        let (pos, rot, vel) = authority.seat_motion(0).expect("a hull");
+        predictor.reconcile(0, pos, rot, vel, true);
+
+        // Both now run the same script; a sandbox told about the boost
+        // keeps up, one that was not falls behind every tick.
+        for tick in 1..60u32 {
+            authority.predict_seat(0, script(tick), PHYSICS_FIXED_DT);
+            predictor.step(script(tick));
+        }
+        let a = authority.seat_motion(0).expect("a hull").0;
+        let p = predictor.motion().expect("a hull").0;
+        assert_eq!((a.x, a.y), (p.x, p.y), "the boosted hull drifted away from its own prediction");
+    }
+
+    /// A teleport is not a correction to ease across - the hull is
+    /// somewhere else entirely - and `SNAP_PX` is what makes it a jump
+    /// rather than a slide through the scenery.
+    #[test]
+    fn a_teleport_is_taken_whole() {
+        let (authority, sandbox) = (round(), round());
+        let mut predictor = Predictor::new(sandbox, 0, 0);
+        for tick in 0..30u32 {
+            predictor.step(script(tick));
+        }
+        let (pos, rot, vel) = authority.seat_motion(0).expect("a hull");
+        // The other side of the field, which is what a portal does.
+        let far = Position::new(pos.x + 500.0, pos.y + 300.0);
+        predictor.reconcile(29, far, rot, vel, false);
+        assert_eq!((predictor.nudges, predictor.snaps), (0, 1), "a teleport should snap, not ease");
+        assert_eq!((predictor.offset().x, predictor.offset().y), (0.0, 0.0));
+        let now = predictor.motion().expect("a hull").0;
+        assert!((now.x - far.x).abs() < 1.0, "the prediction should be where the portal put it");
+    }
+
     /// Past a hull's width the difference is structural, so it is taken
     /// whole rather than eased across - dragging the picture through a
     /// wall would look worse than the jump.
@@ -311,7 +377,7 @@ mod tests {
             authority.predict_seat(0, script(tick), PHYSICS_FIXED_DT);
         }
         let (pos, rot, vel) = authority.seat_motion(0).expect("a hull");
-        predictor.reconcile(19, Position::new(pos.x + SNAP_PX + 1.0, pos.y), rot, vel);
+        predictor.reconcile(19, Position::new(pos.x + SNAP_PX + 1.0, pos.y), rot, vel, false);
         assert_eq!((predictor.nudges, predictor.snaps), (0, 1));
         assert_eq!((predictor.offset().x, predictor.offset().y), (0.0, 0.0), "a snap leaves nothing to ease");
     }
