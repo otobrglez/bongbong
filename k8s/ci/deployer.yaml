@@ -1,0 +1,92 @@
+# What CI is allowed to do in the cluster (k8s/README.md).
+#
+# **There is no credential anywhere in this file, and none in the
+# KUBECONFIG secret either.** The Tailscale operator's API server proxy
+# authenticates by tailnet identity: a kubeconfig for it is a server URL
+# and the literal string `token: "unused"`. A GitHub runner that has
+# joined the tailnet as `tag:ci` is therefore already authenticated, and
+# the only question left is what it is authorised to do - which is this.
+#
+# The tailnet side maps `tag:ci` onto the Kubernetes group below, in the
+# tailnet policy file (Access controls -> JSON editor):
+#
+#     {
+#       "src": ["tag:ci"],
+#       "dst": ["tag:k8s-operator"],
+#       "app": {
+#         "tailscale.com/cap/kubernetes": [
+#           { "impersonate": { "groups": ["bongbong-deployers"] } }
+#         ]
+#       }
+#     }
+#
+# So the blast radius of the whole pipeline is gated by one thing: the
+# Tailscale OAuth secret that lets a runner become a `tag:ci` node.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: bongbong-deployer
+rules:
+  # Namespaces: production is applied into `bongbong-prod`, and every PR
+  # preview makes and destroys its own `bongbong-pr-<N>`.
+  #
+  # **The honest limitation**: RBAC cannot express "only namespaces whose
+  # name starts with bongbong-". `resourceNames` does not apply to
+  # `create` or `list`, and a preview's name is not known in advance, so
+  # this verb list is cluster-wide. A ValidatingAdmissionPolicy keyed on
+  # `request.userInfo.groups` could express the prefix and is the next
+  # hardening step if it is ever wanted; it is left out here because a
+  # broad admission policy that fails open is pointless and one that
+  # fails closed can wedge every write in the cluster.
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [create, get, list, watch, delete]
+
+  # The objects the manifests actually contain.
+  - apiGroups: [""]
+    resources: [configmaps, services, secrets]
+    verbs: [create, get, list, watch, update, patch, delete]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [create, get, list, watch, update, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [create, get, list, watch, update, patch, delete]
+  - apiGroups: [monitoring.coreos.com]
+    resources: [servicemonitors]
+    verbs: [create, get, list, watch, update, patch, delete]
+  # `bongbong-prod` carries its registry credentials on the namespace's
+  # default ServiceAccount, so a deploy has to be able to patch it.
+  - apiGroups: [""]
+    resources: [serviceaccounts]
+    verbs: [get, list, watch, patch]
+
+  # Read-only, for `kubectl rollout status` and for reading logs when a
+  # deploy goes wrong. ReplicaSets are what `rollout status` actually
+  # watches.
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [pods, pods/log, events]
+    verbs: [get, list, watch]
+
+  # Deliberately absent: rbac.authorization.k8s.io of any kind (CI cannot
+  # widen its own access), nodes, persistentvolumes, `pods/exec` and
+  # `pods/portforward`.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: bongbong-deployer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: bongbong-deployer
+subjects:
+  # The group the tailnet policy impersonates for `tag:ci`. A Group, not
+  # a ServiceAccount: nothing in the cluster holds a token for this, so
+  # there is no secret to leak or rotate.
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: bongbong-deployers

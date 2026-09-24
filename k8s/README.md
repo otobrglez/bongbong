@@ -79,15 +79,57 @@ than this repository's. **The registry pull secret is the one that blocks
 a first rollout** - without it the pod sits in `ImagePullBackOff` with
 "no basic auth credentials".
 
-1. **Repository secrets**, the same names boo-run uses, so one set covers
-   both projects: `TS_OAUTH_CLIENT_ID`, `TS_OAUTH_SECRET` (a Tailscale
-   OAuth client tagged `tag:ci`), `DOCKER_REGISTRY_USERNAME`,
-   `DOCKER_REGISTRY_PASSWORD`, and `KUBECONFIG` (base64 of a kubeconfig
-   that reaches the API server over the tailnet). `PUSHOVER_TOKEN` and
+1. **Repository secrets**: `TS_OAUTH_CLIENT_ID`, `TS_OAUTH_SECRET`,
+   `DOCKER_REGISTRY_USERNAME`, `DOCKER_REGISTRY_PASSWORD` and
+   `KUBECONFIG`, the same names boo-run uses. `PUSHOVER_TOKEN` and
    `PUSHOVER_USER` are optional - the notify step skips itself when they
    are unset.
 
-2. **The registry pull secret, per namespace.** boo-run's Deployments
+   **`KUBECONFIG` holds no credential.** The Tailscale operator's API
+   server proxy authenticates by tailnet identity, so a kubeconfig for it
+   is a server URL and the literal string `token: "unused"`:
+
+   ```yaml
+   apiVersion: v1
+   kind: Config
+   clusters:
+     - name: tailscale-operator
+       cluster: { server: https://tailscale-operator.folk-decibel.ts.net }
+   users:
+     - name: tailscale-auth
+       user: { token: "unused" }
+   contexts:
+     - name: tailscale-operator
+       context: { cluster: tailscale-operator, user: tailscale-auth }
+   current-context: tailscale-operator
+   ```
+
+   `tailscale configure kubeconfig tailscale-operator` writes exactly
+   that. Base64 it into the secret. The one credential in the whole
+   pipeline is the OAuth client that lets a runner become a `tag:ci`
+   node; everything else follows from being that node.
+
+2. **Authorisation for `tag:ci`** - two halves that have to agree, and
+   neither exists yet:
+
+   *In the cluster*, `kubectl apply -f k8s/ci/deployer.yaml` creates a
+   ClusterRole scoped to what the workflows do and binds it to the group
+   `bongbong-deployers`.
+
+   *On the tailnet* (Access controls -> JSON editor), a grant maps
+   `tag:ci` onto that group. Add it as the first entry of `"grants"`:
+
+   ```
+   {"src": ["tag:ci"], "dst": ["tag:k8s-operator"],
+    "app": {"tailscale.com/cap/kubernetes": [
+      {"impersonate": {"groups": ["bongbong-deployers"]}}]}},
+   ```
+
+   Without it a `tag:ci` runner reaches the operator over the network -
+   the existing wide-open grants already allow that - but arrives with no
+   Kubernetes identity, and every `kubectl` call is refused.
+
+3. **The registry pull secret, per namespace.** boo-run's Deployments
    declare no `imagePullSecrets` because `boo-prod` carries a `regcred`
    secret of type `kubernetes.io/dockerconfigjson` attached to the
    namespace's **default ServiceAccount**. That is a per-namespace thing,
@@ -119,7 +161,7 @@ a first rollout** - without it the pod sits in `ImagePullBackOff` with
    kubectl -n bongbong-prod rollout restart deployment/rooms
    ```
 
-3. **DNS - done.** `rooms.bongbong.io` is a **proxied CNAME to
+4. **DNS - done.** `rooms.bongbong.io` is a **proxied CNAME to
    `ogrodje-one.boo.run`**, which is the shape every service on this node
    uses (`api.boo.run`, `authentication.boo.run`, `ci.boo.run` are the
    same). `ogrodje-one.boo.run` is the one A/AAAA record holding the
@@ -133,7 +175,7 @@ a first rollout** - without it the pod sits in `ImagePullBackOff` with
    and this cluster has no cert-manager. WebSockets pass the proxy, and
    its 100 s idle limit is never reached by a 20 Hz snapshot stream.
 
-4. **TLS, and why there is none in these files.** This cluster runs no
+5. **TLS, and why there is none in these files.** This cluster runs no
    cert-manager at all - `clusterissuer` is not even a resource type - so
    the origin serves no certificate and Cloudflare terminates at the
    edge, exactly as it does for boo.run. §4.8 would rather have the
