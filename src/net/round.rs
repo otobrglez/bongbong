@@ -29,12 +29,11 @@ use std::time::Instant;
 use crate::ai::Intent;
 use crate::net::apply;
 use crate::net::client::{ClientEvent, Phase, RoomClient};
-use crate::math::Vec2 as Position;
 use crate::net::interp::Interpolator;
 use crate::net::predict::Predictor;
 use crate::net::transport::Transport;
 use crate::net::events::WireEvent;
-use crate::net::wire::{self, RoundOutcome, Snapshot, Welcome};
+use crate::net::wire::{RoundOutcome, Snapshot, Welcome};
 use crate::simulation::Game;
 use crate::tuning::{self, tuning};
 use crate::PHYSICS_FIXED_DT;
@@ -431,8 +430,7 @@ impl<T: Transport> OnlineRound<T> {
         // The replica's own boost flag is the server's and already
         // applied by `apply::snapshot`; the prediction only moves the
         // hull, so it is carried through unchanged.
-        let boosted = game.seat_boosted(seat as usize);
-        game.place_seat(seat as usize, position, rotation, velocity, boosted);
+        game.place_seat(seat as usize, position, rotation, velocity);
         // Beside the server's shots, not instead of them: `apply` has
         // just despawned everything the snapshot did not list, so these
         // are put back every frame until the server confirms or refuses
@@ -444,28 +442,23 @@ impl<T: Transport> OnlineRound<T> {
 
     /// Pull the sandbox back into line with a snapshot that just landed.
     ///
-    /// The server names the last input tick it applied for this seat and
-    /// where that left the hull; everything the client has predicted
-    /// since is replayed on top (`net::predict`).
+    /// The whole snapshot goes in, not this seat's hull picked out of it:
+    /// the sandbox is a projection of the server's world, so everything
+    /// the prediction steps against - other hulls, destroyed walls, a
+    /// speed boost - arrives by the same path the replica takes
+    /// (`net::predict::Predictor::reconcile`).
     fn reconcile(&mut self, snapshot: &Snapshot) {
         if !tuning().online_predict_own_tank {
             return;
         }
         let (Some(predictor), Some(seat)) = (self.predictor.as_mut(), self.client.seat()) else { return };
-        let Some(state) = snapshot.tanks.iter().find(|t| t.id as usize == seat as usize) else { return };
         let acked = snapshot.acked.get(seat as usize).copied().unwrap_or(0);
         // A server that has applied nothing for this seat yet has nothing
         // to reconcile against - the hull is still where it spawned.
         if acked == 0 {
             return;
         }
-        let position = Position::new(wire::dequantise_pos(state.x), wire::dequantise_pos(state.y));
-        let velocity = Position::new(wire::dequantise_velocity(state.vx), wire::dequantise_velocity(state.vy));
-        let rotation = wire::dir_from_index(state.dir).unwrap_or(crate::tank::Dir::Up).rotation();
-        // The one piece of state the drive model reads: without it a
-        // boosted hull outruns its own prediction for the whole buff.
-        let boosted = state.flags & wire::tank_flags::BOOST != 0;
-        predictor.reconcile(acked, position, rotation, velocity, boosted);
+        predictor.reconcile(snapshot, acked);
     }
 
     /// Retire the provisional shots the server has now accounted for.

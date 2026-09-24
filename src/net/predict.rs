@@ -56,6 +56,8 @@ use std::collections::VecDeque;
 use crate::PHYSICS_FIXED_DT;
 use crate::ai::Intent;
 use crate::math::Vec2 as Position;
+use crate::net::apply;
+use crate::net::wire::Snapshot;
 use crate::shell::{Owner, Shell};
 use crate::simulation::Game;
 use crate::tuning::tuning;
@@ -66,10 +68,18 @@ use crate::tuning::tuning;
 /// a link is unplayable for other reasons.
 pub const HISTORY_TICKS: usize = 120;
 
-/// Prediction error below this is not a correction at all. A quarter
-/// pixel is the wire's own resolution (`wire::pos` quantises to it), so
-/// anything smaller is a number the server never actually told us.
-pub const IGNORE_PX: f32 = 0.25;
+/// Prediction error below this is not a correction at all.
+///
+/// **Set by the wire, not by taste.** A position travels as quarter
+/// pixels (`wire::quantise_pos`), so the server's answer arrives rounded
+/// by up to an eighth of a pixel on each axis - about 0.18 as a
+/// distance - before the replay has done anything at all, and stepping
+/// from a rounded start moves that a little further. Anything under half
+/// a pixel is therefore the wire's rounding rather than a disagreement,
+/// and nudging the hull for it would be jitter dressed up as
+/// reconciliation: a correction on every single snapshot, forever, on a
+/// link with nothing wrong with it.
+pub const IGNORE_PX: f32 = 0.5;
 
 /// Error past this is not nudged but snapped. A hull is 64 px wide; being
 /// most of one out means the sandbox and the server disagree about
@@ -289,14 +299,31 @@ impl Predictor {
     /// Pull the sandbox back to what the server said, then replay
     /// everything it had not seen yet.
     ///
+    /// **The whole snapshot goes in, not just this seat's hull.** That is
+    /// the difference between a sandbox that drifts and one that cannot:
+    /// a prediction is only as good as the world it steps against, and
+    /// anything the server changed that the sandbox did not hear about
+    /// becomes a standing disagreement rather than a correction that
+    /// settles. Every hull but this one sitting where it was at the
+    /// welcome - which is what happens if only this seat is synced - is
+    /// the visible version: the predicted tank drives through tanks that
+    /// have moved and stops against tanks that are no longer there.
+    ///
+    /// So the sandbox takes `net::apply::snapshot`, the same call the
+    /// replica takes, and is a projection of the server's world rather
+    /// than a world of its own: other hulls, destroyed walls, a speed
+    /// boost, a spent pickup, all of it, through one path that is already
+    /// the tested one. What is left to predict on top is this seat's
+    /// unacknowledged input.
+    ///
     /// `acked` is the last input tick the server applied for this seat,
-    /// and the pose is where that left the hull. Every input after it is
-    /// still in flight or still unacknowledged, so it is replayed on top
-    /// - the same count of steps, the same `dt`, the same statics, which
-    /// is why the answer lands rather than drifts.
-    pub fn reconcile(&mut self, acked: u32, position: Position, rotation: f32, velocity: Position, boosted: bool) {
+    /// and the snapshot is where that left the world. Every input after
+    /// it is still in flight, so it is replayed on top - the same count
+    /// of steps, the same `dt`, the same statics, which is why the answer
+    /// lands rather than drifts.
+    pub fn reconcile(&mut self, snapshot: &Snapshot, acked: u32) {
         let before = self.sandbox.seat_motion(self.seat).map(|(p, _, _)| p);
-        self.sandbox.place_seat(self.seat, position, rotation, velocity, boosted);
+        apply::snapshot(&mut self.sandbox, snapshot);
         // Anything the server has already accounted for is history.
         while self.history.front().is_some_and(|(t, _)| *t <= acked) {
             self.history.pop_front();
@@ -354,7 +381,19 @@ impl Predictor {
 mod tests {
     use super::*;
     use crate::map::MapFile;
+    use crate::net::encode;
+    use crate::simulation::Input;
     use crate::tank::Dir;
+
+    /// What the server would send about `game` right now, with `acked`
+    /// as the input tick it has applied for seat 0. Reconciliation goes
+    /// through the real wire in these tests rather than a hand-picked
+    /// pose, which is the point: the sandbox takes the whole world.
+    fn wire(game: &mut Game, acked: u32) -> crate::net::wire::Snapshot {
+        let mut acks = [0u32; crate::net::MAX_SEATS];
+        acks[0] = acked;
+        encode::snapshot(game, acks)
+    }
 
     const MAP: &str = include_str!("../../maps/default.toml");
 
@@ -365,6 +404,19 @@ mod tests {
         let mut game = Game::default();
         game.seed_override = Some(0xB0B5);
         game.enemy_count_override = Some(0);
+        game.level_overrides.spawn = Some(crate::level::SpawnKind::Band);
+        game.map = MapFile::from_toml_str(MAP).expect("the default map parses");
+        let (w, h) = game.map.field_size();
+        game.init(w, h);
+        game
+    }
+
+    /// The same round with enemies in it, for the checks that are about
+    /// what the sandbox knows of the rest of the world.
+    fn round_with_enemies() -> Game {
+        let mut game = Game::default();
+        game.seed_override = Some(0xB0B5);
+        game.enemy_count_override = Some(3);
         game.level_overrides.spawn = Some(crate::level::SpawnKind::Band);
         game.map = MapFile::from_toml_str(MAP).expect("the default map parses");
         let (w, h) = game.map.field_size();
@@ -423,12 +475,14 @@ mod tests {
         }
         let predicted_before = predictor.motion().expect("a hull").0;
 
-        let (pos, rot, vel) = authority.seat_motion(0).expect("the authority's hull");
-        predictor.reconcile(59, pos, rot, vel, false);
+        predictor.reconcile(&wire(&mut authority, 59), 59);
 
         let after = predictor.motion().expect("a hull").0;
-        assert_eq!((predicted_before.x, predicted_before.y), (after.x, after.y), "the replay did not land");
-        // Nothing moved, so nothing to ease off and nothing to count.
+        // Within the wire's own resolution, which is as exactly as a
+        // replay can land: the server's position arrived quantised.
+        let drift = ((after.x - predicted_before.x).powi(2) + (after.y - predicted_before.y).powi(2)).sqrt();
+        assert!(drift < IGNORE_PX, "the replay landed {drift} px out, past the wire's rounding");
+        // And so it is not treated as a correction at all.
         assert_eq!((predictor.offset().x, predictor.offset().y), (0.0, 0.0));
         assert_eq!((predictor.nudges, predictor.snaps), (0, 0));
     }
@@ -447,14 +501,16 @@ mod tests {
         // The server's hull is a few pixels off where we had it.
         let (pos, rot, vel) = authority.seat_motion(0).expect("a hull");
         let nudged = Position::new(pos.x + 6.0, pos.y);
+        authority.place_seat(0, nudged, rot, vel);
         let drawn_before = predictor.drawn_position().expect("a hull");
-        predictor.reconcile(39, nudged, rot, vel, false);
+        predictor.reconcile(&wire(&mut authority, 39), 39);
 
         assert_eq!(predictor.nudges, 1, "a real difference should count");
         assert_eq!(predictor.snaps, 0);
-        // The prediction took the server's answer...
+        // The prediction took the server's answer, to the quarter pixel
+        // the wire carries it in.
         let (now, _, _) = predictor.motion().expect("a hull");
-        assert!((now.x - nudged.x).abs() < 0.001, "the prediction should be the server's");
+        assert!((now.x - nudged.x).abs() < IGNORE_PX, "the prediction should be the server's, got {now:?}");
         // ...while the drawn hull has not moved yet.
         let drawn_after = predictor.drawn_position().expect("a hull");
         assert!(
@@ -468,6 +524,34 @@ mod tests {
         assert!(predictor.offset().x.abs() < 0.001, "the nudge should be spent");
     }
 
+    /// **The bug this reconciliation shape exists to make impossible.**
+    ///
+    /// A sandbox that syncs only its own hull has every *other* tank
+    /// frozen where the welcome left it, so the prediction drives
+    /// through tanks that have since moved and stops against tanks that
+    /// are no longer there - reported from play as the hull ignoring
+    /// bounds. Taking the whole snapshot is what fixes it, and this is
+    /// the property that says so: after a reconciliation, every hull in
+    /// the sandbox stands where the server has it.
+    #[test]
+    fn the_sandbox_learns_where_every_other_tank_is() {
+        let mut authority = round_with_enemies();
+        let mut predictor = Predictor::new(round_with_enemies(), 0, 0);
+        // The room's enemies move; the sandbox has heard nothing yet.
+        for _ in 0..90 {
+            authority.update(Input::default(), PHYSICS_FIXED_DT, 1088.0, 544.0);
+        }
+        let room: Vec<(usize, i32, i32)> =
+            authority.drawable_state().tanks.iter().map(|t| (t.slot, t.x, t.y)).collect();
+        assert!(room.len() > 1, "the fixture should have enemies to be wrong about");
+
+        predictor.reconcile(&wire(&mut authority, 1), 1);
+
+        let sandbox: Vec<(usize, i32, i32)> =
+            predictor.sandbox.drawable_state().tanks.iter().map(|t| (t.slot, t.x, t.y)).collect();
+        assert_eq!(sandbox, room, "the sandbox and the room disagree about where the tanks are");
+    }
+
     /// **A boosted hull outruns a sandbox that does not know.**
     ///
     /// A SpeedUp changes the top speed the drive model works to
@@ -479,10 +563,10 @@ mod tests {
     fn a_boost_the_server_reports_is_carried_into_the_sandbox() {
         let (mut authority, sandbox) = (round(), round());
         let mut predictor = Predictor::new(sandbox, 0, 0);
-        // The server's hull picks up a SpeedUp.
-        authority.place_seat(0, authority.seat_motion(0).expect("a hull").0, 0.0, Position::new(0.0, 0.0), true);
-        let (pos, rot, vel) = authority.seat_motion(0).expect("a hull");
-        predictor.reconcile(0, pos, rot, vel, true);
+        // The server's hull picks up a SpeedUp. The flag rides in on the
+        // snapshot like everything else; nothing here names it.
+        authority.give_seat_boost(0);
+        predictor.reconcile(&wire(&mut authority, 0), 0);
 
         // Both now run the same script; a sandbox told about the boost
         // keeps up, one that was not falls behind every tick.
@@ -581,11 +665,14 @@ mod tests {
         let (pos, rot, vel) = authority.seat_motion(0).expect("a hull");
         // The other side of the field, which is what a portal does.
         let far = Position::new(pos.x + 500.0, pos.y + 300.0);
-        predictor.reconcile(29, far, rot, vel, false);
+        let mut authority = authority;
+        authority.place_seat(0, far, rot, vel);
+        predictor.reconcile(&wire(&mut authority, 29), 29);
         assert_eq!((predictor.nudges, predictor.snaps), (0, 1), "a teleport should snap, not ease");
         assert_eq!((predictor.offset().x, predictor.offset().y), (0.0, 0.0));
         let now = predictor.motion().expect("a hull").0;
         assert!((now.x - far.x).abs() < 1.0, "the prediction should be where the portal put it");
+        assert!((now.y - far.y).abs() < 1.0);
     }
 
     /// Past a hull's width the difference is structural, so it is taken
@@ -600,7 +687,8 @@ mod tests {
             authority.predict_seat(0, script(tick), PHYSICS_FIXED_DT);
         }
         let (pos, rot, vel) = authority.seat_motion(0).expect("a hull");
-        predictor.reconcile(19, Position::new(pos.x + SNAP_PX + 1.0, pos.y), rot, vel, false);
+        authority.place_seat(0, Position::new(pos.x + SNAP_PX + 1.0, pos.y), rot, vel);
+        predictor.reconcile(&wire(&mut authority, 19), 19);
         assert_eq!((predictor.nudges, predictor.snaps), (0, 1));
         assert_eq!((predictor.offset().x, predictor.offset().y), (0.0, 0.0), "a snap leaves nothing to ease");
     }

@@ -1561,29 +1561,15 @@ impl Game {
     /// ticks, because the drive model reads the body's velocity at the
     /// top of every step.
     ///
-    /// `boosted` is the one piece of *state* that comes with the pose,
-    /// because it is the one the drive model reads: a hull under a
-    /// SpeedUp has a different top speed (`Tank::speed`), and a sandbox
-    /// that did not know would fall behind the server for the whole
-    /// buff - not a correction but a drift, every tick of it. Pickups
-    /// themselves stay unpredicted (docs/online-coop-prd.md §4.12); this
-    /// is only the flag the wire already carries (`tank_flags::BOOST`).
-    pub(crate) fn place_seat(
-        &mut self,
-        seat: usize,
-        position: Position,
-        rotation: f32,
-        velocity: Position,
-        boosted: bool,
-    ) {
+    /// Only the pose. Everything else about a seat - its buffs, its
+    /// weapon, what it has collected - is the server's and arrives
+    /// through `net::apply`; this is the one thing a client may say
+    /// about its own hull ahead of the server.
+    pub(crate) fn place_seat(&mut self, seat: usize, position: Position, rotation: f32, velocity: Position) {
         let Some(entity) = self.seats.get(seat).copied().flatten() else { return };
         let Ok(mut tank) = self.world.get::<&mut Tank>(entity) else { return };
         tank.position = position;
         tank.rotation = rotation;
-        // The wire carries the bit, not the time left. A large value
-        // while it is set is exactly as good: the timer only gates a
-        // multiplier, and the next snapshot clears it when the buff ends.
-        tank.speed_boost_timer = if boosted { 3600.0 } else { 0.0 };
         if let Some(handle) = tank.body {
             self.physics.set_position(handle, position);
             self.physics.set_velocity(handle, velocity);
@@ -1603,6 +1589,17 @@ impl Game {
         self.world.spawn((shell,));
     }
 
+    /// Put one seat under a speed boost, for a test that needs the
+    /// server's side of one.
+    #[cfg(test)]
+    pub(crate) fn give_seat_boost(&mut self, seat: usize) {
+        if let Some(entity) = self.seats.get(seat).copied().flatten()
+            && let Ok(mut tank) = self.world.get::<&mut Tank>(entity)
+        {
+            tank.speed_boost_timer = tuning().speed_boost_duration_seconds;
+        }
+    }
+
     /// A shell as one seat would fire it right now: from its muzzle, on
     /// its facing, at the shell speed.
     ///
@@ -1615,16 +1612,6 @@ impl Game {
         let entity = self.seats.get(seat).copied().flatten()?;
         let tank = self.world.get::<&Tank>(entity).ok()?;
         Some(crate::shell::Shell::spawn(&tank, crate::shell::Owner::Player(seat as u8), 0.0, 0.0))
-    }
-
-    /// Whether one seat's hull is under a speed boost.
-    pub(crate) fn seat_boosted(&self, seat: usize) -> bool {
-        self.seats
-            .get(seat)
-            .copied()
-            .flatten()
-            .and_then(|e| self.world.get::<&Tank>(e).ok().map(|t| t.speed_boost_timer > 0.0))
-            .unwrap_or(false)
     }
 
     /// One seat's hull as the sandbox has it: where it is, which way it
