@@ -585,7 +585,11 @@ the browser build is the universal fallback, the apps the upgrade.
   (3.2 million codes against a few hundred live rooms; idle rooms are reaped,
   collisions are a non-issue). The link `bongbong.io/j/CK7QX` goes to the
   share sheet; a QR and the code stay on the host's screen while the room is
-  open. The site is static and has no page at that path, so
+  open. **The link points back at the page that minted it**
+  (`net::rooms::SiteBase`): the deployed site from a desktop or phone build,
+  and the page's own origin in a browser, so a PR preview's QR reaches that
+  preview rather than handing a phone production's build of the game. The
+  site is static and has no page at that path, so
   `site/public/_redirects` sends `/j/*` to `/?join=:splat`, the other spelling
   `Invite::parse` already reads. That redirect replaces the query rather than
   merging it, so `join_url` writes the query form directly when the host is

@@ -927,12 +927,20 @@ pub fn run(args: Args) {
         if let Some(host) = invite.rooms_host() {
             session.rooms = host;
         }
+        // The page's own origin, so the lobby's link and QR come back
+        // here. On bongbong.io this is the deployed site anyway; on a PR
+        // preview it is the difference between a scan reaching this
+        // build and reaching production's.
+        if let Some(site) = invite.site.clone() {
+            session.site = site;
+        }
         let token = page_string(PAGE_TOKEN);
         if !token.trim().is_empty() {
             session.token = token;
         }
         eprintln!(
-            "[online] rooms {}, seat token {}, link code {}",
+            "[online] site {}, rooms {}, seat token {}, link code {}",
+            session.site.base(),
             session.rooms.base(),
             session.token,
             invite.code.as_ref().map_or("-", |c| c.text.as_str())
