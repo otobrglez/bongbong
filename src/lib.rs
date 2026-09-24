@@ -552,15 +552,15 @@ pub const PROPS_OIL_VARIANTS: i32 = 4;
 // scorch cells, drawn at scale 2 over a burning cell (a pool or a trail).
 pub const FIRE_LOOP_COL: i32 = 6;
 pub const FIRE_LOOP_FRAMES: i32 = 3;
-// barrel_explosion.png: 768x384, six rows of 64x64 cells. Row 0 is the
+// barrel_explosion.png: 768x320, five rows of 64x64 cells. Row 0 is the
 // one-shot blast animation (12 frames, col * BARREL_EXPLOSION_TEXTURE_SIZE,
 // like the frog filmstrips), drawn at `blast_anim_scale`; row 1 holds
 // SCORCH_VARIANTS ground-decal cells a blast leaves behind plus the
 // directional streak at SCORCH_STREAK_COL; rows 2-4 are three more
 // fireball shapes (a tall column, a flat splash, a double core) the blast
-// picks between by its position hash (`blast::BlastFx::row`); row 5 is
-// the mushroom cloud a dying tank goes up in (`BlastFx::wreck`, never a
-// barrel). See docs/PROPS_SPEC.md and blast.rs.
+// picks between by its position hash (`blast::BlastFx::row`). See
+// docs/PROPS_SPEC.md and blast.rs. A dying tank's mushroom cloud is not on
+// the sheet: `mushroom.rs` composes it at draw time.
 pub const BARREL_EXPLOSION_TEXTURE_SIZE: f32 = 64.0;
 pub const BARREL_EXPLOSION_FRAMES: i32 = 12;
 pub const SCORCH_ROW: i32 = 1;
@@ -573,15 +573,6 @@ pub const BLAST_ROW_MUSHROOM: i32 = 0;
 pub const BLAST_ROW_TALL: i32 = 2;
 pub const BLAST_ROW_FLAT: i32 = 3;
 pub const BLAST_ROW_DOUBLE: i32 = 4;
-/// The tank-death mushroom cloud: a stem of fire under a rolling cap.
-/// Outside `BLAST_SHAPE_ROWS`, so a barrel never picks it, and drawn
-/// upright - its fire frames are never quarter-turned.
-pub const BLAST_ROW_MUSHROOM_CLOUD: i32 = 5;
-/// How far (sheet px) below its cell's centre the mushroom cloud's stem
-/// stands (`BASE` in gen_barrel_explosion.py, less the centre 32): the
-/// sprite is lifted by this times its draw scale so the stem rises off
-/// the hull.
-pub const BLAST_MUSHROOM_BASE_DROP: f32 = 14.0;
 // Oldest scorch marks are dropped past this many, so a long round with many
 // barrels doesn't accumulate an unbounded decal list.
 pub const SCORCH_MAX: usize = 64;
@@ -921,6 +912,7 @@ pub mod hud;
 pub mod laser;
 pub mod level;
 pub mod map;
+pub mod mushroom;
 pub mod mode;
 pub mod maplint;
 pub mod obstacle;
