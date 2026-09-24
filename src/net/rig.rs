@@ -47,9 +47,10 @@ use crate::net::MAX_SEATS;
 use crate::simulation::{Game, Input, Outcome};
 use crate::PHYSICS_FIXED_DT;
 
-/// The code the rig's room answers with. It reads as a room code (a pod
-/// letter and four more) so the status line and a screenshot look like
-/// the real thing.
+/// The code the rig's room answers with. It is `CODE_LETTERS` long, so
+/// the status line and a screenshot look like the real thing - the
+/// letters are not the room server's alphabet, which is the giveaway
+/// that no server was dialled.
 pub const RIG_CODE: &str = "RIG00";
 
 /// A snapshot every this many ticks: 20 Hz, the room server's cadence

@@ -1,5 +1,7 @@
-//! The pod's rooms (docs/online-coop-prd.md §4.9): a map from code to the
-//! handle of the task that owns the room, the room cap, and the drain.
+//! The server's rooms (docs/online-coop-prd.md §4.9): a map from code to
+//! the handle of the task that owns the room, the room cap, and the drain.
+//! There is one of these per process and one process, so this map is where
+//! every room in the world is.
 //! Nothing here touches a `Game`; the hub only creates, finds and forgets
 //! rooms.
 
@@ -17,7 +19,7 @@ use crate::room::{self, Command, Phase, RoomParams};
 /// sender; the lobby is chatty at the scale of a few seats, not thousands.
 pub const ROOM_COMMANDS: usize = 64;
 
-/// How long a draining pod waits for its last round before exiting
+/// How long a draining server waits for its last round before exiting
 /// anyway (docs/online-coop-prd.md §4.8: the workload's grace period).
 pub const DRAIN_MAX: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
@@ -49,9 +51,7 @@ impl RoomStats {
 }
 
 pub struct Hub {
-    /// This pod's letter, the first of every code it mints or accepts.
-    pub pod: char,
-    /// The most rooms this pod holds at once.
+    /// The most rooms this server holds at once.
     pub max_rooms: usize,
     pub metrics: Arc<Metrics>,
     rooms: Mutex<BTreeMap<String, RoomHandle>>,
@@ -65,9 +65,8 @@ pub struct Hub {
 }
 
 impl Hub {
-    pub fn new(pod: char, max_rooms: usize, metrics: Arc<Metrics>) -> Arc<Hub> {
+    pub fn new(max_rooms: usize, metrics: Arc<Metrics>) -> Arc<Hub> {
         Arc::new(Hub {
-            pod,
             max_rooms,
             metrics,
             rooms: Mutex::new(BTreeMap::new()),
@@ -85,18 +84,18 @@ impl Hub {
     }
 
     /// Open a room and spawn its task; `Err` names why not (draining, or
-    /// the pod is full).
+    /// the server is full).
     pub fn create_room(self: &Arc<Self>, params: RoomParams) -> Result<RoomHandle, String> {
         if self.draining() {
-            return Err("this pod is draining; try again in a moment".into());
+            return Err("this server is draining; try again in a moment".into());
         }
         let mut rooms = self.rooms.lock().expect("rooms poisoned");
         if rooms.len() >= self.max_rooms {
-            return Err(format!("this pod is full ({} rooms)", self.max_rooms));
+            return Err(format!("this server is full ({} rooms)", self.max_rooms));
         }
         let mut rng = rand::rng();
         let code = loop {
-            let candidate = code::mint(self.pod, &mut rng);
+            let candidate = code::mint(&mut rng);
             if !rooms.contains_key(&candidate) {
                 break candidate;
             }
@@ -111,15 +110,15 @@ impl Hub {
         Ok(handle)
     }
 
-    /// The room `code` names, after the pod check.
+    /// The room `code` names, once the code is a code at all.
     pub fn find(&self, code: &str) -> Result<RoomHandle, String> {
-        let code = code::check(code, self.pod).map_err(|e| e.to_string())?;
+        let code = code::check(code).map_err(|e| e.to_string())?;
         self.rooms
             .lock()
             .expect("rooms poisoned")
             .get(&code)
             .cloned()
-            .ok_or_else(|| format!("no room {code} on this pod"))
+            .ok_or_else(|| format!("no room {code} here"))
     }
 
     /// The room task is done with `code`.

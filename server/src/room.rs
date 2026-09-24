@@ -108,8 +108,9 @@ pub const ROOM_TUNING_JSON: &str = "{}";
 /// plays exactly the round a single player plays offline, down to the
 /// bytes.
 pub fn tuning_patch(seats: usize) -> String {
-    // The two dials off the live table, which on a pod is the table it
-    // started with: the rows a round's patch writes are never these.
+    // The two dials off the live table, which between rounds is the
+    // table the server started with: the rows a round's patch writes are
+    // never these.
     let (per_seat, per_step) = {
         let t = tuning();
         (t.online_wave_size_per_seat, t.online_wave_tier_seats_per_step)
@@ -125,21 +126,22 @@ pub fn tuning_patch(seats: usize) -> String {
 
 /// One room at a time through `Game::init`.
 ///
-/// The tuning table is the process's and a pod holds many rooms, so a
-/// room puts its own patch on it for exactly the one call that reads it.
+/// The tuning table is the process's and the process holds every room,
+/// so a room puts its own patch on it for exactly the one call that
+/// reads it.
 /// The rows the patch touches (`wave_size_scale`, `wave_tier_step`) are
 /// `Restart` rows, read where the spawn plan is resolved and nowhere
 /// else, so a room already playing reads nothing that moves under it -
 /// the lock has only to cover the patch and the `init` beside it.
 static ROUND_TUNING: Mutex<()> = Mutex::new(());
 
-/// The table the pod started with, read once under `ROUND_TUNING` before
+/// The table the server started with, read once under `ROUND_TUNING` before
 /// the first round patches it: a room's own rows go on top of this, not
 /// on top of the room that started before it.
 static BASE_TUNING: OnceLock<Tuning> = OnceLock::new();
 
 /// Run `game.init` with `patch` on the tuning table, on top of the
-/// pod's own table rather than whatever the last room left there.
+/// server's own table rather than whatever the last room left there.
 fn init_under(patch: &str, game: &mut Game, width: f32, height: f32) {
     let _held = ROUND_TUNING.lock().unwrap_or_else(PoisonError::into_inner);
     tuning::replace_now(*BASE_TUNING.get_or_init(tuning::current));
@@ -629,7 +631,9 @@ impl Room {
         }
         match self.life.phase() {
             Phase::Waiting => {}
-            Phase::Ended if self.hub.draining() => return Err("this pod is draining; make a new room for the rematch".into()),
+            Phase::Ended if self.hub.draining() => {
+                return Err("this server is draining; make a new room for the rematch".into());
+            }
             Phase::Ended => {}
             Phase::Playing | Phase::Paused => return Err("the round is in progress".into()),
         }

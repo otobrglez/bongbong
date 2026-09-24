@@ -86,7 +86,7 @@ fn draw_start<D: RaylibDraw>(d: &mut D, field: Rect, view: &LobbyView) {
 /// The code entry: five boxes and what has been typed into them.
 fn draw_code<D: RaylibDraw>(d: &mut D, field: Rect, view: &LobbyView) {
     let typed: Vec<char> = view.entry.chars().collect();
-    for i in 0..crate::net::rooms::ROOM_LETTERS + 1 {
+    for i in 0..crate::net::rooms::CODE_LETTERS {
         let r = code_box_rect(field, i);
         let filled = i < typed.len();
         d.draw_rectangle_rounded(r, 0.15, 8, if filled { ROW_YOU } else { ROW_FILL });

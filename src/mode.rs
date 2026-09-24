@@ -122,7 +122,7 @@ impl Session {
             players_dialog: false,
             online: None,
             lobby: None,
-            rooms: RoomsHost::cluster(),
+            rooms: RoomsHost::deployed(),
             nick: "player".into(),
             token: "bongbong-player".into(),
         }

@@ -22,12 +22,10 @@ use crate::metrics::Metrics;
 #[derive(Clone, Debug)]
 pub struct Config {
     pub listen: SocketAddr,
-    /// The pod letter, the first of every code this server mints.
-    pub pod: char,
-    /// Plain `ws://` is expected here (a local run); logged, and the CLI
-    /// refuses it on a non-loopback address without an explicit pod.
+    /// Plain `ws://` with nothing terminating TLS in front is expected
+    /// here (a local run). Logged, so a start-up line says which it was.
     pub insecure: bool,
-    /// The most rooms this pod holds at once.
+    /// The most rooms this server holds at once.
     pub max_rooms: usize,
 }
 
@@ -46,7 +44,7 @@ impl Server {
     pub async fn bind(config: Config) -> io::Result<Server> {
         let listener = TcpListener::bind(config.listen).await?;
         let addr = listener.local_addr()?;
-        let hub = Hub::new(config.pod, config.max_rooms, Arc::new(Metrics::new()));
+        let hub = Hub::new(config.max_rooms, Arc::new(Metrics::new()));
         Ok(Server { addr, hub, config, listener })
     }
 
@@ -73,7 +71,7 @@ async fn health(State(hub): State<Arc<Hub>>) -> Response {
 }
 
 async fn metrics(State(hub): State<Arc<Hub>>) -> Response {
-    let text = hub.metrics.render(hub.counts(), hub.draining(), hub.pod);
+    let text = hub.metrics.render(hub.counts(), hub.draining());
     ([("content-type", "text/plain; version=0.0.4; charset=utf-8")], text).into_response()
 }
 

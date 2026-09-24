@@ -156,11 +156,12 @@ watch-dev:
     cargo watch -x "run --features dev-tools"
 
 # The online co-op room server on loopback (docs/online-coop-prd.md §4.13,
-# CLAUDE.md's room server section): plain ws:// on 127.0.0.1:4848, pod
-# letter A, `/health` and `/metrics` beside `/ws`. Headless - no raylib in
-# its graph. Extra args pass through (`just run-server --max-rooms 10`).
+# CLAUDE.md's room server section): plain ws:// on 127.0.0.1:4848, with
+# `/health` and `/metrics` beside `/ws`. One instance holds every room.
+# Headless - no raylib in its graph. Extra args pass through
+# (`just run-server --max-rooms 10`).
 run-server *ARGS:
-    cargo run -p bongbong-server -- --listen 127.0.0.1:4848 --pod C --insecure {{ARGS}}
+    cargo run -p bongbong-server -- --listen 127.0.0.1:4848 --insecure {{ARGS}}
 
 # Call one dev-server tool from the shell, e.g.
 # `just mcp-call step '{"frames":120,"move_dir":"up"}'` or `just mcp-call nav_grid`.

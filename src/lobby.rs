@@ -22,7 +22,7 @@ use crate::level::Mission;
 use crate::map::SHIPPED_MAPS;
 use crate::math::{Rectangle, Vec2};
 use crate::net::client::Phase;
-use crate::net::rooms::{self, CODE_ALPHABET, ROOM_LETTERS, RoomCode, RoomsHost};
+use crate::net::rooms::{self, CODE_ALPHABET, CODE_LETTERS, RoomCode, RoomsHost};
 use crate::net::round::OnlineRound;
 use crate::net::transport::Transport;
 use crate::net::wire::{RosterSeat, RoundOutcome};
@@ -371,9 +371,11 @@ impl Lobby {
     fn keys(&mut self, input: &LobbyInput, stage: Stage, room: Option<&RoomView>) -> Option<LobbyAction> {
         if stage == Stage::Code {
             for c in input.typed.chars() {
-                // A pod letter is the operator's and need not come from
-                // the room alphabet (`RoomCode::parse`), so typing takes
-                // any letter or digit where the key grid offers twenty.
+                // Typing takes any letter or digit where the key grid
+                // offers twenty: the room server is what decides which
+                // letters name a room (`RoomCode::parse`), and a mistyped
+                // code deserves its refusal rather than a key that
+                // quietly does nothing.
                 let c = c.to_ascii_uppercase();
                 if c.is_ascii_alphanumeric() {
                     self.push(c);
@@ -452,7 +454,7 @@ impl Lobby {
 
     /// One more character in the entry, up to a whole code.
     fn push(&mut self, c: char) {
-        if self.entry.chars().count() < ROOM_LETTERS + 1 {
+        if self.entry.chars().count() < CODE_LETTERS {
             self.entry.push(c);
             self.entry_note = None;
         }
@@ -642,7 +644,7 @@ pub fn seat_row_rect(field: Rect, row: usize) -> Rectangle {
 /// The five code boxes, `i` from the left.
 pub fn code_box_rect(field: Rect, i: usize) -> Rectangle {
     let c = content_rect(field);
-    let span = (ROOM_LETTERS + 1) as f32 * LOBBY_CODE_BOX + ROOM_LETTERS as f32 * LOBBY_CODE_GAP;
+    let span = CODE_LETTERS as f32 * LOBBY_CODE_BOX + (CODE_LETTERS - 1) as f32 * LOBBY_CODE_GAP;
     let x = c.x + (c.width - span) / 2.0 + i as f32 * (LOBBY_CODE_BOX + LOBBY_CODE_GAP);
     Rectangle::new(x, c.y + 44.0, LOBBY_CODE_BOX, LOBBY_CODE_BOX)
 }
@@ -705,7 +707,7 @@ mod lobby_tests {
     const SMALL: Rect = Rect::new(0.0, 32.0, 24.0 * 32.0, 12.0 * 32.0);
 
     fn lobby() -> Lobby {
-        Lobby::new(RoomsHost::cluster())
+        Lobby::new(RoomsHost::deployed())
     }
 
     fn seat(n: u8, nick: &str, ready: bool) -> RosterSeat {
@@ -852,10 +854,10 @@ mod lobby_tests {
     }
 
     /// The keyboard does the same job: characters, Backspace, Enter to
-    /// join, Escape back out of the entry. A pod letter the twenty keys do
-    /// not carry can still be typed.
+    /// join, Escape back out of the entry. A letter the twenty keys do not
+    /// carry is still typed in, for the room server to refuse by name.
     #[test]
-    fn the_keyboard_types_a_code_including_a_pod_letter_off_the_alphabet() {
+    fn the_keyboard_types_a_code_including_a_letter_off_the_alphabet() {
         let mut lobby = lobby();
         lobby.update(&tap(centre(button_rect(FIELD, Button::Join))), FIELD, None);
         let typed = |text: &str| LobbyInput { typed: text.into(), ..Default::default() };

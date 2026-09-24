@@ -132,9 +132,11 @@ fn main() {
             rl.request_quit();
         }
         let window = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
+        // The demo never opens a room, so the two online drivers cannot
+        // come up here; they take the round's own layout all the same.
         let (layout, bitmap) = match session.mode() {
             Driver::Build => (&layout_build, layout_build.window_size()),
-            Driver::Play => (&layout_play, (w, h)),
+            Driver::Play | Driver::Lobby | Driver::Online => (&layout_play, (w, h)),
         };
         let view = View::fit((bitmap.0 as f32, bitmap.1 as f32), window);
         let pointer = view.to_bitmap(rl.get_mouse_position().into());
@@ -148,7 +150,7 @@ fn main() {
                 Driver::Build => {
                     session.play();
                 }
-                Driver::Play => {
+                Driver::Play | Driver::Lobby | Driver::Online => {
                     session.press_build();
                     if session.dialog {
                         session.answer_dialog(true);
@@ -248,7 +250,7 @@ fn main() {
                 }
             }
             // PLAY: a click on a barrel sets it off; R restarts the round.
-            Driver::Play => {
+            Driver::Play | Driver::Lobby | Driver::Online => {
                 if pressed {
                     let field_pos: Position = layout.to_field(pointer);
                     let _ = session.game.debug_detonate(field_pos);
@@ -278,7 +280,7 @@ fn main() {
             &mut Effects { shock: &mut shock, muzzle: &mut muzzle, impact: &mut impact, fx: &fx, touch: None },
             &textures,
             &layout_play,
-            &PlayChrome { build_button: false, players_button: false, restart_button: false, leave_dialog: false, players_dialog: false },
+            &PlayChrome::default(),
         );
     });
 }
