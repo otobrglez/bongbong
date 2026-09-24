@@ -1417,6 +1417,16 @@ tunables! {
         cookoff_count: i32 = 2 in 0 ..= 12;
         cookoff_window_seconds: f32 = 1.6 in 0.1 ..= 10.0;
         cookoff_blast_scale: f32 = 0.45 in 0.1 ..= 2.0;
+        /// Share of tank deaths that go up as the mushroom cloud (a stem
+        /// of fire under a rolling cap) instead of a plain fireball.
+        /// Picked from the kill position's hash, so no RNG is drawn.
+        wreck_mushroom_chance: f32 = 0.7 in 0.0 ..= 1.0;
+        /// The mushroom cloud's life in seconds, its height (px the cap
+        /// climbs above the hull) and its cap's radius (px) - each
+        /// jittered per kill by the position hash (`mushroom::Cloud`).
+        mushroom_seconds: f32 = 2.8 in 0.5 ..= 8.0;
+        mushroom_height_px: f32 = 84.0 in 16.0 ..= 240.0;
+        mushroom_cap_px: f32 = 30.0 in 8.0 ..= 96.0;
         /// A dying tank burns its last tread marks into the ground: this
         /// many of them stop fading and darken by this multiple, so the
         /// kill site stays readable after the wreck is cleared.

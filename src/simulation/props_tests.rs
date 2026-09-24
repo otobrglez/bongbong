@@ -1350,6 +1350,29 @@ fn every_blast_shape_and_jitter_comes_from_the_position_hash() {
 }
 
 #[test]
+fn a_dying_tank_goes_up_as_a_mushroom_cloud_in_its_share_of_kills() {
+    // The pick is a position hash: the same spot always picks the same
+    // way and the share over many kill spots tracks the chance.
+    use crate::blast::BlastFx;
+    let spots: Vec<Position> = (0..2000).map(|i| Position::new(40.0 + (i % 50) as f32 * 13.7, 60.0 + (i / 50) as f32 * 11.3)).collect();
+    let clouds = spots.iter().filter(|&&p| BlastFx::wreck_with(p, 0.7).cloud.is_some()).count();
+    let share = clouds as f32 / spots.len() as f32;
+    assert!((0.65..=0.75).contains(&share), "about 70% of kills are mushroom clouds: {share}");
+    for &p in &spots {
+        assert_eq!(BlastFx::wreck_with(p, 0.7).cloud, BlastFx::wreck_with(p, 0.7).cloud);
+    }
+    assert!(spots.iter().all(|&p| BlastFx::wreck_with(p, 0.0).cloud.is_none()));
+    assert!(spots.iter().all(|&p| BlastFx::wreck_with(p, 1.0).cloud.is_some()));
+    // The blast lives as long as its cloud, not the sheet's twelve frames.
+    let mut fx = BlastFx::wreck_with(spots[0], 1.0);
+    let seconds = fx.cloud.unwrap().seconds;
+    fx.time = seconds - 0.01;
+    assert!(!fx.done());
+    fx.time = seconds;
+    assert!(fx.done());
+}
+
+#[test]
 fn debug_detonate_sets_a_barrel_off_like_a_direct_hit() {
     // Two oil drums side by side: the asked-for one goes up on the next
     // frame as an unchained blast, its neighbour chains off it on a fuse.

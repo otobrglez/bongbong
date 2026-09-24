@@ -559,7 +559,8 @@ pub const FIRE_LOOP_FRAMES: i32 = 3;
 // directional streak at SCORCH_STREAK_COL; rows 2-4 are three more
 // fireball shapes (a tall column, a flat splash, a double core) the blast
 // picks between by its position hash (`blast::BlastFx::row`). See
-// docs/PROPS_SPEC.md and blast.rs.
+// docs/PROPS_SPEC.md and blast.rs. A dying tank's mushroom cloud is not on
+// the sheet: `mushroom.rs` composes it at draw time.
 pub const BARREL_EXPLOSION_TEXTURE_SIZE: f32 = 64.0;
 pub const BARREL_EXPLOSION_FRAMES: i32 = 12;
 pub const SCORCH_ROW: i32 = 1;
@@ -939,6 +940,7 @@ pub mod hud;
 pub mod laser;
 pub mod level;
 pub mod map;
+pub mod mushroom;
 pub mod mode;
 pub mod maplint;
 pub mod missile;
