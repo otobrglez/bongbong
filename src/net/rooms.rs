@@ -30,15 +30,80 @@ pub const CODE_LETTERS: usize = 5;
 /// keys, which is why the list lives here rather than in either screen.
 pub const CODE_ALPHABET: &[u8; 20] = b"CDFGHJKMNPQRTVWXY347";
 
-/// The site an invite points at (docs/online-coop-prd.md §4.10), which
-/// plays the room in the browser at once and opens the app where it is
-/// installed.
+/// The deployed site (docs/online-coop-prd.md §4.10), which plays the
+/// room in the browser at once and opens the app where it is installed.
+/// Where an invite points unless the game is running on some other page
+/// - see [`SiteBase`].
 pub const SITE_BASE: &str = "https://bongbong.io";
 
-/// Where a plain invite points: `bongbong.io/j/CK7QX`. The site is
-/// static and has no page there, so `site/public/_redirects` sends it to
-/// `/?join=CK7QX`, which `Invite::parse` reads the same way.
-pub const JOIN_URL_BASE: &str = "https://bongbong.io/j";
+/// The path an invite takes under the site: `bongbong.io/j/CK7QX`. The
+/// site is static and has no page there, so `site/public/_redirects`
+/// sends `/j/*` to `/?join=:splat`, which `Invite::parse` reads the same
+/// way.
+pub const JOIN_PATH: &str = "/j";
+
+/// Where the game itself is served from, which is where a scan of its QR
+/// has to come back to.
+///
+/// **This is not [`RoomsHost`]**, and the difference is the whole point:
+/// the rooms host is the server a client dials, this is the page a
+/// *person* opens. They usually pair up, but a PR preview is exactly the
+/// case where they do not - the client lives at
+/// `pr-37.preview.bongbong.io` and the room server at
+/// `rooms.bongbong.io/pr-37`.
+///
+/// A build with no page of its own - desktop, iOS, Android - has nowhere
+/// else to send a scan, so it names the deployed site. The web build
+/// takes the page's own origin (`app.rs` reads `window.bbInvite`), which
+/// is what keeps a preview's invite inside that preview instead of
+/// bouncing a phone to production's build of the game.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SiteBase {
+    base: String,
+}
+
+impl SiteBase {
+    /// The deployed site.
+    pub fn deployed() -> SiteBase {
+        SiteBase { base: SITE_BASE.into() }
+    }
+
+    /// The origin of the page the game is running in.
+    ///
+    /// Only an origin is taken - scheme and authority - because the rest
+    /// of a page's URL is where that page happened to sit, not where the
+    /// game lives; an invite opened at `/j/CK7QX` must not mint links to
+    /// `/j/CK7QX/j/DM4WT`. Anything that is not a whole `scheme://host`
+    /// leaves the deployed site in place, so a bare path or an empty
+    /// string (which is what a non-browser build reads) is simply no
+    /// answer rather than a broken link.
+    pub fn from_page(url: &str) -> SiteBase {
+        let url = url.trim();
+        let Some((scheme, rest)) = url.split_once("://") else {
+            return SiteBase::deployed();
+        };
+        let scheme = scheme.to_ascii_lowercase();
+        if scheme != "http" && scheme != "https" {
+            return SiteBase::deployed();
+        }
+        let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+        match authority.is_empty() {
+            true => SiteBase::deployed(),
+            false => SiteBase { base: format!("{scheme}://{authority}") },
+        }
+    }
+
+    /// The scheme and authority, with no trailing slash.
+    pub fn base(&self) -> &str {
+        &self.base
+    }
+}
+
+impl Default for SiteBase {
+    fn default() -> SiteBase {
+        SiteBase::deployed()
+    }
+}
 
 /// The link to share for `code` - what goes on a screen, in a chat
 /// message and inside the lobby's QR.
@@ -57,10 +122,11 @@ pub const JOIN_URL_BASE: &str = "https://bongbong.io/j";
 /// host skips the path form and writes the query form itself. Both land
 /// on the same page and `Invite::parse` reads either; only the prettier
 /// one needs the redirect.
-pub fn join_url(host: &RoomsHost, code: &str) -> String {
+pub fn join_url(site: &SiteBase, host: &RoomsHost, code: &str) -> String {
+    let site = site.base();
     match host.is_override() {
-        false => format!("{JOIN_URL_BASE}/{code}"),
-        true => format!("{SITE_BASE}/?join={code}&rooms={}", host.base()),
+        false => format!("{site}{JOIN_PATH}/{code}"),
+        true => format!("{site}/?join={code}&rooms={}", host.base()),
     }
 }
 
@@ -212,6 +278,11 @@ pub struct Invite {
     /// decides the scheme an override with none of its own gets, since a
     /// secure page can only open a secure socket.
     pub secure: bool,
+    /// The origin the page was served from, which is where this build's
+    /// own invite links have to point. `None` where the URL carried no
+    /// origin to take - a bare path, or the empty string a build with no
+    /// page reads - and the deployed site stands.
+    pub site: Option<SiteBase>,
 }
 
 impl Invite {
@@ -248,6 +319,10 @@ impl Invite {
                 .and_then(|text| RoomCode::parse(&text).ok()),
             rooms: query_value(query, "rooms").filter(|r| !r.trim().is_empty()),
             secure: scheme == "https" || scheme == "wss",
+            // The origin this page was served from, so the invite it
+            // mints comes back here rather than to the deployed site: a
+            // PR preview's QR has to stay inside that preview.
+            site: (SiteBase::from_page(url) != SiteBase::deployed()).then(|| SiteBase::from_page(url)),
         }
     }
 
@@ -422,15 +497,71 @@ mod tests {
 
     #[test]
     fn a_join_link_carries_a_local_override_so_a_scan_reaches_the_same_server() {
-        assert_eq!(join_url(&RoomsHost::deployed(), "CK7QX"), "https://bongbong.io/j/CK7QX");
+        let site = SiteBase::deployed();
+        assert_eq!(join_url(&site, &RoomsHost::deployed(), "CK7QX"), "https://bongbong.io/j/CK7QX");
         // An override writes the query form rather than the path form,
         // because the `/j/*` redirect would drop the `rooms` parameter.
         assert_eq!(
-            join_url(&RoomsHost::overriding("ws://127.0.0.1:4848"), "CK7QX"),
+            join_url(&site, &RoomsHost::overriding("ws://127.0.0.1:4848"), "CK7QX"),
             "https://bongbong.io/?join=CK7QX&rooms=ws://127.0.0.1:4848"
         );
         // Both fit the codes the lobby draws (`qr::MAX_BYTES` is 106).
-        assert!(join_url(&RoomsHost::overriding("ws://127.0.0.1:4848"), "CK7QX").len() <= crate::qr::MAX_BYTES);
+        assert!(join_url(&site, &RoomsHost::overriding("ws://127.0.0.1:4848"), "CK7QX").len() <= crate::qr::MAX_BYTES);
+    }
+
+    /// **A preview's invite has to come back to that preview.** The game
+    /// on `pr-37.preview.bongbong.io` is a different build from the one
+    /// on `bongbong.io`, and its room lives on a different server; a QR
+    /// pointing at the deployed site would hand a phone production's
+    /// client, dialling production's rooms, where that code names
+    /// nothing. This is the reason `join_url` takes a site at all.
+    #[test]
+    fn an_invite_points_back_at_the_page_that_minted_it() {
+        let preview = SiteBase::from_page("https://pr-37.preview.bongbong.io/?join=CK7QX");
+        assert_eq!(preview.base(), "https://pr-37.preview.bongbong.io");
+        assert_eq!(
+            join_url(&preview, &RoomsHost::deployed(), "CK7QX"),
+            "https://pr-37.preview.bongbong.io/j/CK7QX"
+        );
+        // With the PR's own room server named too, both halves of the
+        // preview travel in the one link.
+        let rooms = RoomsHost::overriding("wss://rooms.bongbong.io/pr-37");
+        assert_eq!(
+            join_url(&preview, &rooms, "CK7QX"),
+            "https://pr-37.preview.bongbong.io/?join=CK7QX&rooms=wss://rooms.bongbong.io/pr-37"
+        );
+        // And it is still one QR (`qr::MAX_BYTES` is 106).
+        assert!(join_url(&preview, &rooms, "CK7QX").len() <= crate::qr::MAX_BYTES);
+    }
+
+    /// Only an origin is taken, and anything that is not one leaves the
+    /// deployed site standing - a build with no page at all reads the
+    /// empty string here.
+    #[test]
+    fn a_site_base_is_the_pages_origin_or_the_deployed_one() {
+        let base = |u: &str| SiteBase::from_page(u).base().to_string();
+        assert_eq!(base("https://pr-9.preview.bongbong.io/j/CK7QX?rooms=x"), "https://pr-9.preview.bongbong.io");
+        assert_eq!(base("http://localhost:4321/?join=CK7QX"), "http://localhost:4321");
+        assert_eq!(base("HTTPS://Bongbong.io/"), "https://Bongbong.io", "the scheme is lowered, the host is the page's");
+        // Nothing usable: the deployed site stands.
+        for nothing in ["", "   ", "/j/CK7QX", "bongbong.io", "ftp://x/y", "://///", "https://"] {
+            assert_eq!(base(nothing), SITE_BASE, "{nothing:?} should not name a site");
+        }
+        assert_eq!(SiteBase::default(), SiteBase::deployed());
+    }
+
+    /// The origin rides in on the same parse as the code and the rooms
+    /// override, since all three come off the one page URL.
+    #[test]
+    fn a_page_url_yields_its_own_origin_beside_the_room_it_names() {
+        let invite = Invite::parse("https://pr-37.preview.bongbong.io/j/CK7QX");
+        assert_eq!(invite.code.as_ref().map(|c| c.text.as_str()), Some("CK7QX"));
+        assert_eq!(invite.site.as_ref().map(|s| s.base()), Some("https://pr-37.preview.bongbong.io"));
+        // The deployed site is not carried: there is nothing to override.
+        assert_eq!(Invite::parse("https://bongbong.io/j/CK7QX").site, None);
+        // A bare path names no origin.
+        assert_eq!(Invite::parse("/j/CK7QX").site, None);
+        assert_eq!(Invite::parse("").site, None);
     }
 
     /// The site is static, so `bongbong.io/j/CK7QX` only reaches the game
@@ -454,7 +585,7 @@ mod tests {
         // the browser has to be told where it ended up.
         assert_eq!(parts.next(), Some("302"));
         // And the path the rule matches is the one `join_url` writes.
-        let link = join_url(&RoomsHost::deployed(), "CK7QX");
+        let link = join_url(&SiteBase::deployed(), &RoomsHost::deployed(), "CK7QX");
         assert!(link.starts_with("https://bongbong.io/j/"), "{link} is not the path the rule catches");
     }
 
@@ -520,7 +651,7 @@ mod tests {
     #[test]
     fn the_rooms_override_survives_the_round_trip_to_a_link_and_back() {
         let host = RoomsHost::overriding("ws://127.0.0.1:4848");
-        let link = join_url(&host, "CK7QX");
+        let link = join_url(&SiteBase::deployed(), &host, "CK7QX");
         let invite = Invite::parse(&link);
         assert_eq!(invite.code.as_ref().map(|c| c.text.as_str()), Some("CK7QX"));
         assert_eq!(invite.rooms_host(), Some(host), "the link carries the whole override");

@@ -27,7 +27,7 @@ use crate::lobby::{Lobby, LobbyAction, LobbyInput, RoomPhase, RoomView};
 use crate::map::MapFile;
 use crate::net::client::{RoomSetup, Target};
 use crate::net::round::AnyRound;
-use crate::net::rooms::{RoomCode, RoomsHost};
+use crate::net::rooms::{RoomCode, RoomsHost, SiteBase};
 use crate::simulation::{Game, Outcome, PlayerCount};
 use crate::{Layout, Rect};
 
@@ -80,6 +80,11 @@ pub struct Session {
     /// `BONGBONG_ROOMS`): the lobby's invite link is built from it.
     /// `app.rs` sets it once at startup; the cluster's is the default.
     pub rooms: RoomsHost,
+    /// Where this build is served from, which is where the lobby's QR
+    /// sends a scan. The deployed site unless the web build's page says
+    /// otherwise (`app.rs` reads `window.bbInvite`), which is what keeps
+    /// a PR preview's invite inside that preview.
+    pub site: SiteBase,
     /// The name this player takes into a room (`--nick`).
     pub nick: String,
     /// The reconnect key this session takes into a room
@@ -123,6 +128,7 @@ impl Session {
             online: None,
             lobby: None,
             rooms: RoomsHost::deployed(),
+            site: SiteBase::deployed(),
             nick: "player".into(),
             token: "bongbong-player".into(),
         }
@@ -255,7 +261,7 @@ impl Session {
         }
         self.dialog = false;
         self.players_dialog = false;
-        self.lobby = Some(Lobby::new(self.rooms.clone()));
+        self.lobby = Some(Lobby::new(self.site.clone(), self.rooms.clone()));
         self.driver = Driver::Lobby;
         self.driver
     }
@@ -267,7 +273,7 @@ impl Session {
     pub fn open_lobby_with(&mut self, round: AnyRound) {
         self.dialog = false;
         self.players_dialog = false;
-        self.lobby = Some(Lobby::new(self.rooms.clone()));
+        self.lobby = Some(Lobby::new(self.site.clone(), self.rooms.clone()));
         self.online = Some(round);
         self.driver = Driver::Lobby;
     }
@@ -307,7 +313,7 @@ impl Session {
         }
         self.dialog = false;
         self.players_dialog = false;
-        self.lobby = Some(Lobby::new(self.rooms.clone()));
+        self.lobby = Some(Lobby::new(self.site.clone(), self.rooms.clone()));
         self.dial(Target::Join(code));
         self.driver = Driver::Lobby;
     }
@@ -420,7 +426,7 @@ impl Session {
     /// up: a fresh `Lobby` on the session's rooms host, since everything
     /// about the room itself is read off the client each frame.
     fn back_to_lobby(&mut self) {
-        self.lobby = Some(Lobby::new(self.rooms.clone()));
+        self.lobby = Some(Lobby::new(self.site.clone(), self.rooms.clone()));
         self.driver = Driver::Lobby;
     }
 

@@ -22,7 +22,7 @@ use crate::level::Mission;
 use crate::map::SHIPPED_MAPS;
 use crate::math::{Rectangle, Vec2};
 use crate::net::client::Phase;
-use crate::net::rooms::{self, CODE_ALPHABET, CODE_LETTERS, RoomCode, RoomsHost};
+use crate::net::rooms::{self, CODE_ALPHABET, CODE_LETTERS, RoomCode, RoomsHost, SiteBase};
 use crate::net::round::OnlineRound;
 use crate::net::transport::Transport;
 use crate::net::wire::{RosterSeat, RoundOutcome};
@@ -258,6 +258,11 @@ pub struct LobbyView {
 /// about the room itself is read off the client each frame.
 pub struct Lobby {
     rooms: RoomsHost,
+    /// Where this build is served from, which is where its invite link
+    /// and QR send a scan back to. Not `rooms`: that is the server a
+    /// client dials, this is the page a person opens, and a PR preview
+    /// is exactly where the two differ.
+    site: SiteBase,
     /// The code entry is open (`JOIN` was pressed).
     entry_open: bool,
     entry: String,
@@ -274,8 +279,8 @@ impl Lobby {
     /// A fresh lobby against `rooms` - the host `--rooms` or
     /// `BONGBONG_ROOMS` named, which is also what the invite link
     /// carries.
-    pub fn new(rooms: RoomsHost) -> Lobby {
-        Lobby { rooms, entry_open: false, entry: String::new(), map: 0, mission: 0, entry_note: None, qr: None }
+    pub fn new(site: SiteBase, rooms: RoomsHost) -> Lobby {
+        Lobby { rooms, site, entry_open: false, entry: String::new(), map: 0, mission: 0, entry_note: None, qr: None }
     }
 
     /// Which face is up.
@@ -476,7 +481,7 @@ impl Lobby {
     /// A frame's `update` comes before its `view`, so the picture is
     /// never a link behind.
     fn refresh_qr(&mut self, room: Option<&RoomView>) {
-        let Some(url) = room.and_then(|r| r.code.as_deref()).map(|code| rooms::join_url(&self.rooms, code)) else { return };
+        let Some(url) = room.and_then(|r| r.code.as_deref()).map(|code| rooms::join_url(&self.site, &self.rooms, code)) else { return };
         if self.qr.as_ref().is_none_or(|(had, _)| *had != url) {
             self.qr = Qr::encode(&url).ok().map(|qr| (url, qr));
         }
@@ -486,7 +491,7 @@ impl Lobby {
     pub fn view(&self, room: Option<&RoomView>) -> LobbyView {
         let stage = self.stage(room);
         let code = room.and_then(|r| r.code.clone());
-        let join_url = code.as_deref().map(|code| rooms::join_url(&self.rooms, code));
+        let join_url = code.as_deref().map(|code| rooms::join_url(&self.site, &self.rooms, code));
         let seats = room.map(|r| self.seat_rows(r)).unwrap_or_default();
         let more = room.map_or(0, |r| r.seats.len().saturating_sub(LOBBY_SEAT_ROWS));
         LobbyView {
@@ -707,7 +712,7 @@ mod lobby_tests {
     const SMALL: Rect = Rect::new(0.0, 32.0, 24.0 * 32.0, 12.0 * 32.0);
 
     fn lobby() -> Lobby {
-        Lobby::new(RoomsHost::deployed())
+        Lobby::new(SiteBase::deployed(), RoomsHost::deployed())
     }
 
     fn seat(n: u8, nick: &str, ready: bool) -> RosterSeat {
@@ -961,7 +966,7 @@ mod lobby_tests {
     /// merging it, so an override has to skip it (`net::rooms::join_url`).
     #[test]
     fn a_local_rooms_override_travels_in_the_link_and_its_qr() {
-        let mut lobby = Lobby::new(RoomsHost::overriding("ws://127.0.0.1:4848"));
+        let mut lobby = Lobby::new(SiteBase::deployed(), RoomsHost::overriding("ws://127.0.0.1:4848"));
         let room = room(true, vec![seat(0, "oto", false)]);
         lobby.update(&LobbyInput::default(), FIELD, Some(&room));
         let view = lobby.view(Some(&room));
