@@ -1,0 +1,8 @@
+# The room server's namespace. Created here rather than by hand so
+# `kubectl apply -k k8s/base/` works against a cluster that has never
+# seen bongbong before.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bongbong-prod
+  labels: { app.kubernetes.io/name: bongbong }

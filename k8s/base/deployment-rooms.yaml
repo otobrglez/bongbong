@@ -1,0 +1,173 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rooms-config
+  namespace: bongbong-prod
+data:
+  # tracing_subscriber's EnvFilter (server/src/main.rs). `info` is the
+  # room lifecycle: created, seat joined, round started, drain.
+  RUST_LOG: "info"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rooms
+  namespace: bongbong-prod
+  labels: { app: rooms }
+spec:
+  replicas: 1
+  # One instance holds every room, in memory (docs/online-coop-prd.md
+  # §4.8, §4.9). Recreate rather than RollingUpdate because two replicas
+  # during a rollout would take rooms the other cannot see: a code minted
+  # by the new pod names a room the old one has never heard of, and the
+  # Service would send half the joins to the wrong one. Spreading rooms
+  # across instances is deferred work; until then the rollout is serial
+  # by construction.
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: rooms } }
+  template:
+    metadata: { labels: { app: rooms } }
+    spec:
+      # The drain (server/src/main.rs, hub::DRAIN_MAX): on SIGTERM the
+      # server refuses new rooms and rematches, reports 503 on /health,
+      # keeps ticking the rounds it has, and exits when the last ends or
+      # after 30 minutes. This has to outlast DRAIN_MAX or the kubelet
+      # SIGKILLs a live round.
+      #
+      # No preStop hook, unlike boo-run's api: there is nothing for one
+      # to buy here. Existing WebSockets keep being served through the
+      # whole drain, and readiness going unready is what stops new joins
+      # being routed - the process does not die for up to half an hour,
+      # so there is no race to sleep through.
+      terminationGracePeriodSeconds: 1830
+      containers:
+        - name: rooms
+          image: registry.folk-decibel.ts.net/bongbong/bongbong-server
+          args: [ "--listen", "0.0.0.0:4848", "--max-rooms", "25" ]
+          ports:
+            - { containerPort: 4848, name: http }
+
+          envFrom:
+            - configMapRef:
+                name: rooms-config
+
+          # No secrets: the room server holds no credentials, talks to no
+          # database and calls no third-party API. Version 1 keeps nothing
+          # on disk (§4.9), so there is no volume either.
+
+          # Readiness is /health, which answers 503 the moment the drain
+          # starts - that is precisely what should take the pod out of the
+          # Service's endpoints so no new room lands on a server that is
+          # leaving.
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Liveness is deliberately NOT /health. /health reports 503 for
+          # as long as the drain runs, so an HTTP liveness probe would
+          # restart the pod a few seconds into every deploy and kill every
+          # round the drain exists to protect. A TCP check answers the
+          # only question liveness should ask here - is the listener still
+          # accepting? - and stays true throughout a drain.
+          livenessProbe:
+            tcpSocket: { port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # Sized from docs/online-coop-prd.md §5: about 2 % of a core per
+          # room at eight seats and under 2 MB of memory, so 500m is
+          # roughly the 25 rooms `--max-rooms` allows. Deliberately modest:
+          # this is one node shared with every other production namespace
+          # on the cluster, and a whole core reserved for a server nobody
+          # has found yet would be a poor neighbour. Raise the two together
+          # when the rooms gauge approaches the cap.
+          #
+          # **No CPU limit on purpose.** The tick is 60 Hz with a 16.6 ms
+          # budget; a CFS quota would throttle at the period boundary and
+          # every room on the pod would stutter together. The request is
+          # what guarantees the share, and a limit would only add jitter;
+          # with none, a busy pod still bursts into the node's headroom.
+          resources:
+            requests: { cpu: 500m, memory: 256Mi }
+            limits: { memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rooms
+  namespace: bongbong-prod
+  labels: { app: rooms }
+spec:
+  type: ClusterIP
+  selector: { app: rooms }
+  ports:
+    - { name: http, port: 80, targetPort: http }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: rooms-ingress
+  namespace: bongbong-prod
+  labels: { version: "1" }
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # A round holds one WebSocket open for as long as people play, and
+    # the traffic is a 20 Hz snapshot stream rather than request/response.
+    # nginx's default one-minute read timeout would hang up on every room
+    # (§4.8: raised to an hour).
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # The drain can run for half an hour; nginx should not give up on the
+    # pod while it is still serving the rounds it has.
+    nginx.ingress.kubernetes.io/proxy-next-upstream: "off"
+    # No TLS block and no cert-manager annotation, exactly as boo.run's
+    # ingresses have it: this cluster runs no cert-manager (there is no
+    # ClusterIssuer resource type at all), and boo.run resolves to
+    # Cloudflare, which terminates TLS at the edge and passes WebSockets
+    # through. rooms.bongbong.io rides the same path, so the origin needs
+    # no certificate of its own.
+    #
+    # §4.8 would rather have the socket DNS-only, off the proxy. That is
+    # a later measurement, not a blocker: it costs a cert-manager install
+    # and an issuer, and the 100 s idle limit a proxy imposes is never
+    # reached by a 20 Hz snapshot stream.
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: rooms.bongbong.io
+      http:
+        paths:
+          # /ws carries every message; /health and /metrics are the
+          # operator's. There is no other route - no HTTP POST anywhere
+          # in the protocol (§4.7).
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: rooms
+                port: { number: 80 }
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: rooms
+  namespace: bongbong-prod
+  labels: { release: prom }
+spec:
+  endpoints:
+    # /metrics shares the one port with /ws and /health, so this scrapes
+    # the http port rather than a metrics port of its own.
+    - interval: 10s
+      path: /metrics
+      port: http
+  namespaceSelector:
+    matchNames:
+      - bongbong-prod
+  selector:
+    matchLabels:
+      app: rooms

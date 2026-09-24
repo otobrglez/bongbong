@@ -163,6 +163,64 @@ watch-dev:
 run-server *ARGS:
     cargo run -p bongbong-server -- --listen 127.0.0.1:4848 --insecure {{ARGS}}
 
+# --- The room server's image and its deploy (docs/online-coop-prd.md §4.8) ---
+#
+# The registry and the cluster are reached over Tailscale, so these need
+# the tailnet up (`tailscale status`). The image tag is `git describe`,
+# the same one .github/workflows/deploy-rooms.yml stamps.
+
+rooms_registry := "registry.folk-decibel.ts.net"
+rooms_image := rooms_registry / "bongbong/bongbong-server"
+
+# linux/amd64 is what the cluster runs; on an Apple silicon machine this
+# is an emulated build - slow, but it is what makes the artifact the same
+# one the cluster gets.
+# Build the room server's image locally.
+rooms-image *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    TAG=$(git describe --tags --always)
+    echo "Building {{rooms_image}}:$TAG"
+    docker buildx build --platform linux/amd64 \
+      -t "{{rooms_image}}:latest" -t "{{rooms_image}}:$TAG" \
+      --load {{ARGS}} .
+
+# `--insecure` is added because nothing terminates TLS in front of it here.
+# Run the image the cluster would run, on loopback.
+rooms-image-run PORT='4848':
+    docker run --rm -p {{PORT}}:4848 {{rooms_image}}:latest \
+      --listen 0.0.0.0:4848 --insecure
+
+# deploy-rooms.yml does exactly this; this is the hand path for a one-off.
+# Build the image, push it, and point the kustomization at the new tag.
+rooms-push *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    TAG=$(git describe --tags --always)
+    echo "Building and pushing {{rooms_image}}:$TAG"
+    docker buildx build --platform linux/amd64 \
+      -t "{{rooms_image}}:latest" -t "{{rooms_image}}:$TAG" \
+      --push {{ARGS}} .
+    echo "Updating kustomization.yaml with tag: $TAG"
+    cd k8s/base && kustomize edit set image "{{rooms_image}}:$TAG"
+
+# A deploy with rounds in progress waits for them: `Recreate` plus a drain
+# of up to 30 minutes, which is the trade for ending nobody's round.
+# Apply the manifests and wait the rollout out.
+rooms-deploy:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    kubectl apply -k k8s/base/
+    kubectl rollout status deployment/rooms -n bongbong-prod --timeout=35m
+
+# What the cluster would apply, without applying it.
+rooms-manifests:
+    kubectl kustomize k8s/base/
+
+# The room server's own logs, followed.
+rooms-logs *ARGS:
+    kubectl logs -n bongbong-prod deployment/rooms --follow --tail=100 {{ARGS}}
+
 # Call one dev-server tool from the shell, e.g.
 # `just mcp-call step '{"frames":120,"move_dir":"up"}'` or `just mcp-call nav_grid`.
 # Same tools the MCP server exposes (src/devserver.rs's TOOLS).

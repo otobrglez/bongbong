@@ -422,32 +422,87 @@ upgrade), tokio for the rest.
 
 The room server ships as one container image and runs as **a single instance**
 on the existing Kubernetes cluster at Hetzner (a requirement of 2026-09-19,
-narrowed to one instance on 2026-09-24).
+narrowed to one instance on 2026-09-24). The pipeline is boo-run's, which is
+the pattern this cluster already runs: a private registry reached over
+Tailscale, `docker buildx` for the image, and `kustomize edit set image` plus
+`kubectl apply -k` for the rollout.
 
-- The image: a multi-stage build, `cargo build --release -p bongbong-server
-  --no-default-features` in a Rust builder stage, the static binary alone in a
-  distroless (or scratch, with musl) final stage; about 20 MB. The server
-  needs no `static/` assets and no C library, which is why phase 0's headless
-  crate comes first. `SHIPPED_MAPS` are embedded; a builder map travels in
-  `Welcome`.
-- The workload: a Deployment `rooms` with **one replica and
-  `strategy: Recreate`**, one Service in front of it, and one Ingress rule
-  sending `/ws`, `/health` and `/metrics` at it. Nothing in the URL names an
-  instance, because there is only one. The ingress controller's WebSocket read
-  and send timeouts raised to an hour; readiness and liveness on `/health`;
-  resources sized from section 5 (a 1-vCPU limit is about 50 rooms).
-  `Recreate` rather than `RollingUpdate` because a room is memory: two
-  replicas during a rollout would take new rooms the old one cannot see.
-- The drain: `terminationGracePeriodSeconds` 1800. On `SIGTERM` the server
-  stops accepting new rooms and rematches, reports not ready, keeps ticking
-  its rooms, and exits when the last ends or the grace runs out. Existing
-  sockets stay up through the drain; a rejoin while it drains fails in v1, and
-  a new room waits for the replacement.
-- TLS and DNS: `rooms.bongbong.io` at the cluster's load balancer, DNS-only at
-  Cloudflare so the socket does not cross the proxy, cert-manager with Let's
-  Encrypt on the ingress. Proxied through Cloudflare works too (WebSockets
-  pass, with a 100 s idle limit the tick traffic never reaches) if the extra
-  hop measures fine.
+- The image (`Dockerfile`): a two-stage build - `cargo build --release -p
+  bongbong-server` on `rust:1.97.1-bookworm`, then the binary alone on
+  `gcr.io/distroless/cc-debian12`; about 59 MB, of which the binary is 12 MB.
+  Headlessness is the manifest's, not a flag's: `server/Cargo.toml` takes the
+  game crate with `default-features = false`, so raylib is not in the graph
+  and the builder needs no cmake, no X11 and no GL - which is why phase 0's
+  headless crate came first. The build asserts it, failing if `cargo tree`
+  ever finds `sola` in the server's graph. The server reads no `static/`
+  assets: `SHIPPED_MAPS` are embedded and a builder map travels in `Welcome`.
+- The workload (`k8s/base/`): a Deployment `rooms` in namespace
+  `bongbong-prod` with **one replica and `strategy: Recreate`**, one Service,
+  one Ingress for `rooms.bongbong.io`, and a `ServiceMonitor` scraping
+  `/metrics`. Nothing in the URL names an instance, because there is only
+  one. `Recreate` rather than `RollingUpdate` because a room is memory: two
+  replicas during a rollout would take rooms the other cannot see, and a code
+  minted by one would name a room the other has never heard of. The ingress
+  raises nginx's WebSocket read and send timeouts to an hour, or a round is
+  hung up on after sixty seconds. There are **no secrets and no volumes**: the
+  server holds no credentials, talks to no database and keeps nothing on disk.
+- Probes, and the one subtlety: readiness is `/health`, which answers 503 the
+  moment a drain starts - exactly right for taking the pod out of the
+  Service's endpoints. **Liveness is a TCP check, not `/health`.** An HTTP
+  liveness probe would see that same 503 and restart the pod seconds into
+  every deploy, killing every round the drain exists to protect.
+- Resources, from section 5: `requests` of 500m and 256 MiB against
+  `--max-rooms 25`, at about 2 % of a core and under 2 MB per room. Modest on
+  purpose - the cluster is a single node shared with every other production
+  namespace, and a whole core reserved for a server nobody has found yet would
+  be a poor neighbour. **No CPU limit**, deliberately: the tick is 60 Hz with
+  a 16.6 ms budget, and a CFS quota would throttle at the period boundary and
+  stutter every room on the pod together. The request guarantees the share;
+  with no limit a busy pod still bursts into the node's headroom.
+- Pulling the image: the namespace needs a `regcred` dockerconfigjson secret
+  attached to its **default ServiceAccount**, which is how `boo-prod` does it
+  and why neither project's Deployment mentions `imagePullSecrets`. It is
+  per-namespace, so a new namespace has to be given one; k8s/README.md has the
+  two commands.
+- The drain: `terminationGracePeriodSeconds` 1830, just past `DRAIN_MAX`. On
+  `SIGTERM` the server stops accepting new rooms and rematches, reports not
+  ready, keeps ticking its rooms, and exits when the last ends or the grace
+  runs out. Existing sockets stay up through the drain; a rejoin while it
+  drains fails in v1, and a new room waits for the replacement. No `preStop`
+  hook: there is nothing for one to buy when the process does not die for half
+  an hour anyway.
+- Per-PR previews (`.github/workflows/pr-server.yml`,
+  `k8s/preview/rooms-preview.yaml`): every open PR gets a server in its own
+  namespace `bongbong-pr-<N>`, at `wss://rooms.bongbong.io/pr-<N>/ws`. The
+  preview takes a **path on production's host** rather than a host of its
+  own, so it costs no DNS record, no certificate and no new API token - the
+  ingress rewrites `/pr-<N>/ws` to `/ws`, nginx matches the longest path
+  first, and production keeps everything else. No client change either:
+  `--rooms wss://rooms.bongbong.io/pr-<N>` already produces that URL, since
+  `socket_url` appends `/ws` to its base. A sticky comment links the PR's web
+  preview at the PR's own server, so a protocol change can be played by a
+  matching client rather than refused by production's `PROTOCOL_VERSION`.
+  Closing the PR deletes the namespace, which is the whole preview.
+- The pipeline (`.github/workflows/deploy-rooms.yml`): connect to the tailnet
+  with a `tag:ci` OAuth client, `docker login` the private registry,
+  `docker buildx build --platform linux/amd64 --push` two tags (`latest` and
+  `git describe`), then in a second job `kustomize edit set image` and
+  `kubectl apply -k k8s/base/`, annotate the Deployment with the revision and
+  who deployed it, and wait out `kubectl rollout status --timeout=35m` - the
+  timeout is the drain, not a guess. A third job prunes the registry to the
+  newest three tags. **The trigger is the version tag
+  `cloudflare-deploy.yml` already uses**, so the wasm client and the image
+  ship together: a client and a server that disagree about
+  `net::PROTOCOL_VERSION` refuse each other by name.
+- TLS and DNS: `rooms.bongbong.io` **proxied through Cloudflare**, the way
+  `boo.run` is - it resolves to Cloudflare addresses, and that is why its
+  Ingress carries no `tls` block: the edge terminates TLS and the origin
+  serves none. The cluster runs no cert-manager at all (`clusterissuer` is not
+  a resource type there), so this is not a preference but the only path that
+  works today. WebSockets pass the proxy, and its 100 s idle limit is never
+  reached by a 20 Hz snapshot stream. Taking the socket DNS-only and off the
+  proxy, which this section originally preferred, costs a cert-manager install
+  and an issuer - worth doing if and only if the extra hop measures badly.
 - The Worker keeps the site, the join page and the well-known files; it holds
   no room state.
 - **Deferred: more than one instance.** When one process is not enough, rooms
@@ -698,9 +753,9 @@ just serve-web-dev         # host: http://localhost:4321/?rooms=ws://127.0.0.1:4
                            # join: http://localhost:4321/?join=CK7QX&rooms=ws://127.0.0.1:4848
                            # (the site's own /j/CK7QX route is the Worker's; the preview serves ?join=)
 
-# the container, exactly what the cluster runs
-docker build -t bongbong-server .
-docker run --rm -p 4848:4848 bongbong-server --listen 0.0.0.0:4848 --insecure
+# the container, exactly what the cluster runs (k8s/README.md)
+just rooms-image           # docker buildx build --platform linux/amd64, tagged from `git describe`
+just rooms-image-run       # docker run --rm -p 4848:4848 ... --listen 0.0.0.0:4848 --insecure
 
 # the offline rig: an authoritative Game on a thread, the replica in the window, no server
 cargo run -- --rig --delay 80 --jitter 20 --loss 0.02
@@ -732,9 +787,12 @@ cargo run -- --rig --delay 80 --jitter 20 --loss 0.02
 - `cargo test -p bongbong-server` starts the server on an ephemeral port and
   plays a round through a headless client; it is the CI check for the
   protocol.
-- Rehearsing the drain: `kind create cluster && kubectl apply -k deploy/local`,
-  start a round through the local Ingress, then `kubectl rollout restart
-  deployment/rooms` and watch the round finish before the replacement starts.
+- Rehearsing the drain needs no cluster: run the image, start a round, then
+  `docker kill -s TERM` it. `/health` turns 503 at once, the container stays
+  up, and the round plays to its result before the process exits - which is
+  the whole contract `terminationGracePeriodSeconds` is sized against. In a
+  cluster it is `kubectl rollout restart deployment/rooms -n bongbong-prod`
+  and the same wait.
 
 ## 5. Numbers (order of magnitude)
 
@@ -777,9 +835,9 @@ ship a complete co-op game; 4 and 5 are stage 2.
    test sits next to `determinism_tests`, and local play is untouched.
 2. **Room server, container, join links (L).** `bongbong-server` and its
    image; the emscripten socket and the tungstenite thread behind the
-   `Transport` trait; the single-replica Deployment, TLS and the drain on the
-   Hetzner cluster; five-letter codes that name a room; the Worker's join page
-   and well-known files; the ONLINE dialog, the lobby, the code and QR. Done
+   `Transport` trait; the image, the single-replica Deployment, TLS and the
+   drain on the Hetzner cluster; five-letter codes that name a room; the
+   Worker's join page and well-known files; the ONLINE dialog, the lobby, the code and QR. Done
    when a link from a phone puts a laptop in the same wave round, a closed tab
    rejoins the same seat, and a deploy mid-round lets the round finish before
    the replacement starts.

@@ -1,0 +1,9 @@
+resources:
+- namespace.yaml
+- deployment-rooms.yaml
+
+images:
+- name: registry.folk-decibel.ts.net/bongbong/bongbong-server
+  newTag: v0.1.0-39-gdcb8f2b
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
