@@ -848,7 +848,7 @@ impl Room {
         let mut acked = [0; MAX_SEATS];
         for (i, seat) in self.seats.iter().enumerate().take(MAX_SEATS) {
             if let Some(s) = seat {
-                acked[i] = s.mailbox.last_tick();
+                acked[i] = s.mailbox.acked_tick();
             }
         }
         acked
@@ -882,7 +882,14 @@ impl Room {
             if let Some(s) = seat
                 && s.connected()
             {
+                let before = s.mailbox.starvations();
                 input.seats[i] = s.mailbox.read(now).map(|m| m.intent()).unwrap_or_default();
+                // A starved tick means this seat's client is not stamping
+                // far enough ahead for the link (`mailbox`, §4.12).
+                let starved = s.mailbox.starvations() - before;
+                if starved > 0 {
+                    self.hub.metrics.intent_starvations_total.fetch_add(starved, Ordering::Relaxed);
+                }
             }
         }
         let acked = self.acked();

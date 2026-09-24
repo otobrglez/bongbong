@@ -83,6 +83,12 @@ pub struct Metrics {
     pub tick_overruns_total: AtomicU64,
     pub ticks_total: AtomicU64,
     pub reconnects_total: AtomicU64,
+    /// Ticks that found a seat's jitter buffer empty and repeated its
+    /// last intent (`mailbox::Mailbox`). A steady climb means clients are
+    /// not stamping far enough ahead for the link's jitter, which is what
+    /// §4.12's adaptive lead is for; a flat line means the buffer is
+    /// doing its job.
+    pub intent_starvations_total: AtomicU64,
     pub rooms_created_total: AtomicU64,
     pub connections_total: AtomicU64,
 }
@@ -97,6 +103,7 @@ impl Default for Metrics {
             tick_overruns_total: AtomicU64::new(0),
             ticks_total: AtomicU64::new(0),
             reconnects_total: AtomicU64::new(0),
+            intent_starvations_total: AtomicU64::new(0),
             rooms_created_total: AtomicU64::new(0),
             connections_total: AtomicU64::new(0),
         }
@@ -175,12 +182,17 @@ impl Metrics {
                 1.0,
             )],
         );
-        let counters: [(&str, &str, &AtomicU64); 7] = [
+        let counters: [(&str, &str, &AtomicU64); 8] = [
             ("bongbong_ticks_total", "Game::update calls.", &self.ticks_total),
             ("bongbong_tick_overruns_total", "Ticks whose update took longer than the tick.", &self.tick_overruns_total),
             ("bongbong_snapshot_bytes_total", "Snapshot bytes handed to seat writers.", &self.snapshot_bytes_total),
             ("bongbong_snapshots_skipped_total", "Snapshots a slow seat did not get.", &self.snapshots_skipped_total),
             ("bongbong_reconnects_total", "Seats reclaimed with their device token.", &self.reconnects_total),
+            (
+                "bongbong_intent_starvations_total",
+                "Ticks that found a seat's intent buffer empty and repeated the last one.",
+                &self.intent_starvations_total,
+            ),
             ("bongbong_rooms_created_total", "Rooms created.", &self.rooms_created_total),
             ("bongbong_connections_total", "WebSocket connections accepted.", &self.connections_total),
         ];
