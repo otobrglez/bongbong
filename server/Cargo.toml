@@ -21,7 +21,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"
 axum = { version = "0.8", features = ["ws"] }
 # `StreamExt`/`SinkExt` to split a socket into its reader and writer halves.
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
-# The command line (`--listen`, `--pod`, `--insecure`, `--max-rooms`).
+# The command line (`--listen`, `--insecure`, `--max-rooms`).
 clap = { version = "4", features = ["derive"] }
 # Room codes and round seeds; never on the simulation path, which draws
 # from the round's own seeded stream.

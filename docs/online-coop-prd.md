@@ -28,9 +28,10 @@ reconciles on each snapshot, and spawns its own shots provisionally. Transport
 is WebSockets on every platform; rooms are created and joined through short
 links on bongbong.io that play in the browser at once and open the native app
 where it is installed; identity is a nickname and a device token, no accounts.
-The room server is one container image on the Hetzner Kubernetes cluster, and
-version 1 keeps nothing on disk: a room lives in one pod's memory and its code
-names that pod. Local play is untouched: the online round is a third driver
+The room server is one container image on the Hetzner Kubernetes cluster, run
+as **a single instance**, and version 1 keeps nothing on disk: every room
+lives in that one process's memory and a code names a room and nothing else.
+Spreading rooms over several instances is deferred work (4.8). Local play is untouched: the online round is a third driver
 beside Play and Build. The first mode, and the only one this PRD designs, is
 co-op against the AI.
 
@@ -53,8 +54,8 @@ Goals
   where the app is there. No sign-up on the critical path.
 - Own-tank steering that answers a key on the next frame (stage 2); everything
   else smooth at a fixed, known delay.
-- A planned deploy that ends nobody's round: a pod drains its rounds before it
-  exits. A crash ends the rounds on that pod in v1, the price of keeping
+- A planned deploy that ends nobody's round: the server drains its rounds
+  before it exits. A crash ends every live round in v1, the price of keeping
   nothing on disk, until the replay log arrives.
 - Local play untouched: the single-player and couch two-player rounds, the
   builder, the probe and the dev server keep working exactly as today, in the
@@ -64,7 +65,11 @@ Goals
 
 Non-goals, for now
 - Persistence of any kind in v1: no replay log, no records, no database. A
-  room is memory in one pod (4.9).
+  room is memory in one process (4.9).
+- More than one server instance: one is what the traffic needs and one is what
+  ships. The routing a second instance would want - which is the only thing
+  that would put a server's identity back into a room code or a URL - is
+  designed in 4.8 and built when the capacity asks for it.
 - Free-for-all, team versus team, spectators, couch-plus-online: parked
   (section 9). The one rule kept for their sake is that `Owner::same_side`
   stays the single place deciding who may hurt whom.
@@ -404,18 +409,20 @@ upgrade), tokio for the rest.
   connection state, last acked tick. A disconnect starts a 30 s grace; a
   reconnect with the same token reclaims the seat and gets a fresh `Welcome`;
   past the grace the seat is away but still owned for the whole round.
-- Room codes carry the pod: one letter for the pod plus four for the room,
-  from the 20-letter alphabet (4.10), so a join needs no directory.
+- Room codes are five letters from the 20-letter alphabet (4.10), and name a
+  room and nothing else: one server holds them all, so a join needs neither a
+  directory nor a letter reserved for routing.
 - The dev server rides along: every room can expose the existing tools on a
   loopback port behind `dev-tools`, so a misbehaving live round is inspectable
   with the MCP tools used today.
-- Bounds everywhere: rooms per pod, waiting rooms (30 min), empty rooms
-  (5 min), rounds (30 min).
+- Bounds everywhere: rooms per instance (`--max-rooms`), waiting rooms
+  (30 min), empty rooms (5 min), rounds (30 min).
 
-### 4.8 Hosting: a container on Kubernetes at Hetzner
+### 4.8 Hosting: one container on Kubernetes at Hetzner
 
-The room server ships as one container image and runs on the existing
-Kubernetes cluster at Hetzner (a requirement of 2026-09-19).
+The room server ships as one container image and runs as **a single instance**
+on the existing Kubernetes cluster at Hetzner (a requirement of 2026-09-19,
+narrowed to one instance on 2026-09-24).
 
 - The image: a multi-stage build, `cargo build --release -p bongbong-server
   --no-default-features` in a Rust builder stage, the static binary alone in a
@@ -423,17 +430,19 @@ Kubernetes cluster at Hetzner (a requirement of 2026-09-19).
   needs no `static/` assets and no C library, which is why phase 0's headless
   crate comes first. `SHIPPED_MAPS` are embedded; a builder map travels in
   `Welcome`.
-- The workload: a StatefulSet `rooms` (one replica in v1, a handful later) so
-  pods have stable names; a per-pod Service selecting
-  `statefulset.kubernetes.io/pod-name`, and one Ingress path per pod,
-  `/r/rooms-0/` and so on, plus `/rooms` across all pods for creating a room.
-  The ingress controller's WebSocket read and send timeouts raised to an hour;
-  readiness and liveness on `/health`; resources sized from section 5 (a
-  1-vCPU limit is about 50 rooms).
-- The drain: `terminationGracePeriodSeconds` 1800. On `SIGTERM` the pod stops
-  accepting new rooms and rematches, reports not ready, keeps ticking its
-  rooms, and exits when the last ends or the grace runs out. Existing sockets
-  stay up through the drain; a rejoin to a draining pod fails in v1.
+- The workload: a Deployment `rooms` with **one replica and
+  `strategy: Recreate`**, one Service in front of it, and one Ingress rule
+  sending `/ws`, `/health` and `/metrics` at it. Nothing in the URL names an
+  instance, because there is only one. The ingress controller's WebSocket read
+  and send timeouts raised to an hour; readiness and liveness on `/health`;
+  resources sized from section 5 (a 1-vCPU limit is about 50 rooms).
+  `Recreate` rather than `RollingUpdate` because a room is memory: two
+  replicas during a rollout would take new rooms the old one cannot see.
+- The drain: `terminationGracePeriodSeconds` 1800. On `SIGTERM` the server
+  stops accepting new rooms and rematches, reports not ready, keeps ticking
+  its rooms, and exits when the last ends or the grace runs out. Existing
+  sockets stay up through the drain; a rejoin while it drains fails in v1, and
+  a new room waits for the replacement.
 - TLS and DNS: `rooms.bongbong.io` at the cluster's load balancer, DNS-only at
   Cloudflare so the socket does not cross the proxy, cert-manager with Let's
   Encrypt on the ingress. Proxied through Cloudflare works too (WebSockets
@@ -441,18 +450,30 @@ Kubernetes cluster at Hetzner (a requirement of 2026-09-19).
   hop measures fine.
 - The Worker keeps the site, the join page and the well-known files; it holds
   no room state.
+- **Deferred: more than one instance.** When one process is not enough, rooms
+  have to be findable across instances, and the cheapest way is the one this
+  design was originally drawn with: a StatefulSet so instances have stable
+  names, a per-instance Service selecting
+  `statefulset.kubernetes.io/pod-name`, one Ingress path each (`/r/rooms-0/`),
+  `/rooms` across all of them to create, and a routing letter carried in the
+  room code so a client derives the path from the code with no directory. That
+  costs a letter of the code, a URL rule with two shapes, and an operator
+  setting per instance - none of which is worth paying before the traffic asks
+  for it, which is why v1 pays none of it. The alternative, a directory the
+  replay log of phase 6 already makes possible, is the better answer once
+  there is persistence at all.
 
 | Option | Fits because | Hurts because | Cost |
 |---|---|---|---|
-| **Container on the Hetzner Kubernetes cluster** — chosen | the cluster exists; one image, one manifest; rolling deploys with a drain; metrics and logs where the rest of the infrastructure has them | routing to the owning pod is the design's job (per-pod Services and paths); a rejoin during a drain fails until persistence arrives | the cluster's existing cost |
+| **One container on the Hetzner Kubernetes cluster** — chosen | the cluster exists; one image, one manifest, one replica; a deploy is a drain and a restart; metrics and logs where the rest of the infrastructure has them | one instance is one failure domain and one capacity ceiling (~50 rooms per vCPU, section 5); a rejoin during a drain fails until persistence arrives | the cluster's existing cost |
 | Cloudflare Durable Object per room (`workers-rs`) | zero machines; next to the site; placed near the room's creator | only after the sim compiles to bare wasm; a 60 Hz timer in a DO is workable, not a documented target; `wrangler dev` debugging; no datagrams ever | Workers Paid plus usage |
 | A bare VM (Fly.io machines, or one box) | `cargo run` debugging; no cluster | a second way to run things next to the cluster | ~$3–5/month per region |
 
 ### 4.9 Rooms in memory, deploys and recovery
 
 Version 1 keeps nothing on disk (a requirement of 2026-09-19): a room is
-memory in one pod, a planned deploy drains that memory gracefully, and a crash
-loses it. Persistence is the horizon, not the plan.
+memory in the one server process, a planned deploy drains that memory
+gracefully, and a crash loses it. Persistence is the horizon, not the plan.
 
 | What | Where in v1 | Lifetime |
 |---|---|---|
@@ -468,16 +489,17 @@ watching; the world stays in memory 5 min, resumes where it stopped on
 reconnect) → **ended** (results and roster kept 5 min for a rematch, then
 dropped).
 
-- Deploys: a rolling update of the StatefulSet with the drain of 4.8. The old
-  pod refuses new rooms, keeps ticking the rounds it has, and exits when the
-  last ends or after 30 min; the new pod takes new rooms from the moment it
-  is ready. Rounds in progress finish on the old build. What v1 cannot do is
-  move a room between pods, so a rejoin to a draining pod fails, and a
-  rollback is the same rolling update backwards.
+- Deploys: a `Recreate` rollout with the drain of 4.8. The running server
+  refuses new rooms, keeps ticking the rounds it has, and exits when the last
+  ends or after 30 min; the replacement takes rooms from the moment it is
+  ready. Rounds in progress finish on the old build, and for as long as they
+  run no new room can be made - the price of one instance holding everything,
+  and a deploy is therefore something to do when nobody is playing. A rollback
+  is the same rollout backwards.
 - Recovery: there is no replay log, so a crash or an unplanned restart ends
-  the rounds on that pod. Clients see the socket close and land on the end
-  screen with "the room is gone"; the host makes a new room in one tap.
-  Accepted for v1.
+  every live round. Clients see the socket close and land on the end screen
+  with "the room is gone"; the host makes a new room in one tap. Accepted for
+  v1.
 - Versions: a **protocol** number gates joining (web: "reload the page"; app:
   "update, or play this round in the browser", which the invite page already
   offers); a **sim** version is stamped in `Welcome` and in the logs. Ship the
@@ -485,13 +507,15 @@ dropped).
 - Tuning is a build, not a hot reload: the native `--tuning` file re-read
   would alter every live round on a global table. Captured per room at
   creation, sent in `Welcome`, changed by deploying.
-- Watch per pod: rooms, seats, tick p50/p99, snapshot bytes/s, reconnects/min,
+- Watch: rooms, seats, tick p50/p99, snapshot bytes/s, reconnects/min,
   version, as Prometheus metrics on `/metrics`; tick time nearing 16 ms is the
-  one capacity alarm.
+  one capacity alarm, and with one instance it is also the signal to build the
+  distribution 4.8 defers.
 - Persistence, when it comes (phase 6): the replay log (map, seed, tuning
   diff, then every tick's intents, ~3 KB/s per room) makes a crash cost
-  nothing and lets a new pod fast-forward a room, which turns the drain into
-  a real blue/green with a directory of owning pods; records give results
+  nothing and lets a fresh process fast-forward a room, which turns the drain
+  into a real blue/green and gives the several-instance design of 4.8 the
+  directory it would rather have than a routing letter; records give results
   links, stats and shared custom maps. Both are additive: the room task
   already holds the intents and the record in memory.
 
@@ -501,23 +525,23 @@ Whoever receives a link is in the match within one tap with nothing installed:
 the browser build is the universal fallback, the apps the upgrade.
 
 - Host presses ONLINE → HOST; creating a room is a lobby message on the
-  WebSocket to `/rooms` (any pod), and the pod that answers mints a code from
-  the 20-letter alphabet without vowels or look-alikes: its own letter plus
-  four for the room (160 000 rooms per pod; idle rooms are reaped, collisions
-  are a non-issue). The link `bongbong.io/j/AK7QX` goes to the share sheet; a
-  QR and the code stay on the host's screen while the room is open. Every
-  client derives the socket URL from the code,
-  `wss://rooms.bongbong.io/r/rooms-<pod>/ws`, so no directory stands between
-  a link and a seat.
-- The join page derives the pod from the code and checks the version, then:
-  browser, the wasm build with the code in the URL, read at start through
-  `emscripten_run_script` like `bbShift`; iOS, universal links
-  (`apple-app-site-association` under `/.well-known/` on the Worker,
-  associated-domains entitlement), `bongbong://j/AK7QX` as the button
-  fallback; Android, app links (`assetlinks.json`, an `autoVerify` intent
-  filter in the manifest template, the code from the activity's intent data);
-  desktop, type the code or `--join AK7QX` (the release archives register no
-  scheme; an installer can, later).
+  WebSocket to `wss://rooms.bongbong.io/ws`, and the server mints a code of
+  five letters from the 20-letter alphabet without vowels or look-alikes
+  (3.2 million codes against a few hundred live rooms; idle rooms are reaped,
+  collisions are a non-issue). The link `bongbong.io/j/CK7QX` goes to the
+  share sheet; a QR and the code stay on the host's screen while the room is
+  open. **The code picks no URL**: every client - hosting or joining - dials
+  that same `/ws`, and the code travels inside the join message, so no
+  directory and no derived path stands between a link and a seat.
+- The join page checks the version, then: browser, the wasm build with the
+  code in the URL, read at start through `emscripten_run_script` like
+  `bbShift`; iOS, universal links (`apple-app-site-association` under
+  `/.well-known/` on the Worker, associated-domains entitlement),
+  `bongbong://j/CK7QX` as the button fallback; Android, app links
+  (`assetlinks.json`, an `autoVerify` intent filter in the manifest template,
+  the code from the activity's intent data); desktop, type the code or
+  `--join CK7QX` (the release archives register no scheme; an installer can,
+  later).
 - Identity: a nickname and a random device token minted on the join page and
   reused across visits (localStorage, the app's keychain). The token is the
   reconnect key within a room's life. Accounts can attach to it later without
@@ -660,35 +684,35 @@ points at it with one override, and the container is the same binary. The
 flags land with phase 2; the rig of phase 1 needs no server at all.
 
 ```
-# the room server on loopback: plain ws://, pod letter A, dev tools on
-just run-server            # cargo run -p bongbong-server -- --listen 127.0.0.1:4848 --pod A --insecure
+# the room server on loopback: plain ws://, every room in this one process
+just run-server            # cargo run -p bongbong-server -- --listen 127.0.0.1:4848 --insecure
 
 # a host: creates a room over the socket, prints and shows the code
 BONGBONG_ROOMS=ws://127.0.0.1:4848 cargo run -- --host
 
 # a second client on the same machine, joining with that code
-BONGBONG_ROOMS=ws://127.0.0.1:4848 cargo run -- --join AK7QX --nick second
+BONGBONG_ROOMS=ws://127.0.0.1:4848 cargo run -- --join CK7QX --nick second
 
 # the web build against the same server: the page takes the room and the override from its own URL
 just serve-web-dev         # host: http://localhost:4321/?rooms=ws://127.0.0.1:4848
-                           # join: http://localhost:4321/?join=AK7QX&rooms=ws://127.0.0.1:4848
-                           # (the site's own /j/AK7QX route is the Worker's; the preview serves ?join=)
+                           # join: http://localhost:4321/?join=CK7QX&rooms=ws://127.0.0.1:4848
+                           # (the site's own /j/CK7QX route is the Worker's; the preview serves ?join=)
 
 # the container, exactly what the cluster runs
 docker build -t bongbong-server .
-docker run --rm -p 4848:4848 bongbong-server --listen 0.0.0.0:4848 --pod A --insecure
+docker run --rm -p 4848:4848 bongbong-server --listen 0.0.0.0:4848 --insecure
 
 # the offline rig: an authoritative Game on a thread, the replica in the window, no server
 cargo run -- --rig --delay 80 --jitter 20 --loss 0.02
 ```
 
-- `--insecure` allows plain `ws://` and skips Turnstile. The server refuses it
-  on a non-loopback listen address unless `--pod` is explicit too, so a stray
-  flag cannot open a cluster pod by accident.
+- `--insecure` says plain `ws://` is expected, with no TLS terminator in front,
+  and skips Turnstile. It is recorded in the start-up line; deployed, the
+  ingress holds the certificate and the flag stays off.
 - `BONGBONG_ROOMS` (or `--rooms`) overrides the rooms host, default
-  `wss://rooms.bongbong.io`. With an override the client talks to that one
-  server at `/ws` and only checks the code's pod letter; on the cluster the
-  letter picks the Ingress path.
+  `wss://rooms.bongbong.io`. There is one URL rule and the override does not
+  change its shape: the host's own `/ws`, for creating a room and for joining
+  one alike.
 - Two clients on one machine are two seats because the native device token
   lives per nickname (`--nick`); the web build crosses a device id in
   localStorage with a tab id in sessionStorage, so a reload reclaims the seat
@@ -710,7 +734,7 @@ cargo run -- --rig --delay 80 --jitter 20 --loss 0.02
   protocol.
 - Rehearsing the drain: `kind create cluster && kubectl apply -k deploy/local`,
   start a round through the local Ingress, then `kubectl rollout restart
-  statefulset/rooms` and watch the round finish on the old pod.
+  deployment/rooms` and watch the round finish before the replacement starts.
 
 ## 5. Numbers (order of magnitude)
 
@@ -753,12 +777,12 @@ ship a complete co-op game; 4 and 5 are stage 2.
    test sits next to `determinism_tests`, and local play is untouched.
 2. **Room server, container, join links (L).** `bongbong-server` and its
    image; the emscripten socket and the tungstenite thread behind the
-   `Transport` trait; the StatefulSet, per-pod routing, TLS and the drain on
-   the Hetzner cluster; codes that name the pod; the Worker's join page and
-   well-known files; the ONLINE dialog, the lobby, the code and QR. Done when
-   a link from a phone puts a laptop in the same wave round, a closed tab
-   rejoins the same seat, and a deploy mid-round lets the round finish on the
-   old pod.
+   `Transport` trait; the single-replica Deployment, TLS and the drain on the
+   Hetzner cluster; five-letter codes that name a room; the Worker's join page
+   and well-known files; the ONLINE dialog, the lobby, the code and QR. Done
+   when a link from a phone puts a laptop in the same wave round, a closed tab
+   rejoins the same seat, and a deploy mid-round lets the round finish before
+   the replacement starts.
 3. **Co-op polish (M).** Seats beyond two, the compact HUD, N-seat spawns,
    re-entry with the next wave, end screen and rematch, host hand-over,
    builder maps in rooms, clock sync and adaptive interpolation delay. Done
@@ -776,11 +800,12 @@ ship a complete co-op game; 4 and 5 are stage 2.
    shells; predicted cooldown and ammo; full-auto visual streams; stand-ins
    and ram behaviour; the rewind ring and lag-compensated hit test if decision
    9 says yes. Feel pass on real links. **Stage 2 ships.**
-6. **Horizon.** Persistence: the replay log (crash recovery, true blue/green
-   deploys with a directory of owning pods), records and results links;
-   projectiles as events; datagram transport; more regions; accounts and
-   friends on the device token; public rooms; replays from the log; a desktop
-   installer with the URL scheme; the parked modes.
+6. **Horizon.** Distribution: more than one instance, with the directory the
+   replay log makes possible rather than a routing letter in the code (4.8).
+   Persistence: the replay log (crash recovery, true blue/green deploys),
+   records and results links; projectiles as events; datagram transport; more
+   regions; accounts and friends on the device token; public rooms; replays
+   from the log; a desktop installer with the URL scheme; the parked modes.
 
 ## 7. Decisions and recommendations
 
@@ -812,17 +837,20 @@ ship a complete co-op game; 4 and 5 are stage 2.
     without them a predicted tank drives through a friend for a round trip and
     snaps back.
 11. Persistence in v1: replay log and records, or nothing? **Nothing** (a
-    requirement of 2026-09-19): rooms are memory in one pod, a crash ends its
-    rounds, a planned deploy drains.
+    requirement of 2026-09-19): rooms are memory in one process, a crash ends
+    its rounds, a planned deploy drains.
 12. Client runtime: tokio everywhere, or threads? **Threads**: blocking
     `tungstenite` on a std thread natively, emscripten's WebSocket API on the
     web; tokio is server-only; the protocol codec is the shared part (4.6).
 13. Local play: keep it in the same binary, or make online the game? **Keep
     it untouched** (a requirement): Online is a third `Session` driver; Play,
     Build and every offline tool are unchanged.
-14. Routing a join to the owning pod: a directory, or the code names the pod?
-    **The code names the pod** (one letter of five) until persistence brings
-    a directory.
+14. How many server instances in v1: one, or several behind routing?
+    **One** (a requirement of 2026-09-24). Every room is in its memory, so a
+    code names a room and nothing else, and one URL reaches them all. The
+    several-instance design - stable names, a path per instance, a routing
+    letter in the code - is written down in 4.8 and built when the capacity
+    asks for it, by which time persistence may offer a directory instead.
 
 ## 8. Risks, mitigations, stop conditions
 
@@ -845,13 +873,15 @@ ship a complete co-op game; 4 and 5 are stage 2.
 - **Tuning agreement.** Online rounds apply the `Welcome` diff and lock the
   panel; the sandbox reads the same table; a mismatch shows as systematic
   prediction error in the metrics.
-- **No persistence.** A crash or an unplanned pod restart ends that pod's
-  rounds, and a rejoin to a draining pod fails. Accepted for v1; the replay
-  log is the fix, and the room task already holds everything it would write.
-- **Routing to the owning pod.** Per-pod Services and Ingress paths are the
-  design's own responsibility on Kubernetes, and a misrouted join is a
-  confusing failure. Check the pod letter to path mapping in CI, and refuse a
-  code whose letter names no pod with a clear message.
+- **No persistence.** A crash or an unplanned restart ends every live round,
+  and a rejoin while the server drains fails. Accepted for v1; the replay log
+  is the fix, and the room task already holds everything it would write.
+- **One instance is one ceiling and one failure domain.** Every room is in
+  one process, so a crash takes them all and a deploy blocks new rooms until
+  the rounds in progress finish. Accepted deliberately (decision 14). The
+  stop condition is `bongbong_tick_microseconds` nearing 16 ms or the room
+  count nearing `--max-rooms`: either is the signal to build the distribution
+  4.8 defers, before players meet the ceiling.
 - **Cloudflare in front of the socket.** A proxied `rooms.bongbong.io` adds a
   hop and a 100 s idle limit; keep it DNS-only unless the proxied path
   measures fine.

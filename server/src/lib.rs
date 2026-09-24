@@ -5,12 +5,12 @@
 //! `Server`; the integration test in `tests/` binds one on an ephemeral
 //! port and plays a round through it.
 //!
-//! - `code`: room codes, one pod letter plus four from the alphabet.
+//! - `code`: room codes, five letters from the alphabet.
 //! - `mailbox`: a seat's newest intent, sampled by the tick.
 //! - `room`: the room task - the lifecycle, the tick, the snapshots, the
 //!   lobby.
 //! - `conn`: one WebSocket connection - decode, route, write.
-//! - `hub`: the pod's rooms, the drain.
+//! - `hub`: every room this server holds, and the drain.
 //! - `metrics`: the Prometheus text on `/metrics`.
 //! - `http`: the axum router and `Server`.
 

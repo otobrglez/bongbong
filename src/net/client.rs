@@ -91,7 +91,7 @@ pub enum Target {
 /// the twin below). Nothing past this function knows which.
 #[cfg(all(feature = "online", not(target_os = "emscripten")))]
 pub fn connect(host: &crate::net::rooms::RoomsHost, identity: Identity, target: Target) -> RoomClient<Box<dyn Transport>> {
-    let url = crate::net::rooms::socket_url(host, target_code(&target));
+    let url = crate::net::rooms::socket_url(host);
     eprintln!("[online] dialling {url}");
     let socket = Box::new(crate::net::native::NativeTransport::connect(&url)) as Box<dyn Transport>;
     greet(socket, identity, target)
@@ -106,21 +106,12 @@ pub fn connect(host: &crate::net::rooms::RoomsHost, identity: Identity, target: 
 /// one a player will actually meet, and the lobby has to say so.
 #[cfg(all(feature = "online", target_os = "emscripten"))]
 pub fn connect(host: &crate::net::rooms::RoomsHost, identity: Identity, target: Target) -> RoomClient<Box<dyn Transport>> {
-    let url = crate::net::rooms::socket_url(host, target_code(&target));
+    let url = crate::net::rooms::socket_url(host);
     let socket: Box<dyn Transport> = match crate::net::web::WebTransport::connect(&url) {
         Ok(socket) => Box::new(socket),
         Err(reason) => Box::new(crate::net::transport::Failed::new(reason)),
     };
     greet(socket, identity, target)
-}
-
-/// The code a target dials on, which is what picks the pod's path.
-#[cfg(feature = "online")]
-fn target_code(target: &Target) -> Option<&RoomCode> {
-    match target {
-        Target::Join(code) => Some(code),
-        Target::Host(_) => None,
-    }
 }
 
 /// Say to `socket` what `target` asks for.
@@ -215,9 +206,9 @@ impl<T: Transport> RoomClient<T> {
         RoomClient::new(transport, identity, Greeting::Host(setup))
     }
 
-    /// Take a seat in the room `code` names. The code travels as given;
-    /// `rooms::RoomCode::parse` is what canonicalises it and picks the
-    /// URL the transport was dialled on.
+    /// Take a seat in the room `code` names. The code travels as given,
+    /// `rooms::RoomCode::parse` having canonicalised it; the room server
+    /// is the one that looks it up.
     pub fn join(transport: T, identity: Identity, code: impl Into<String>) -> RoomClient<T> {
         RoomClient::new(transport, identity, Greeting::Join(code.into()))
     }

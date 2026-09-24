@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// Ticks kept for the percentiles: at 60 Hz across every room, the last
-/// few seconds of a busy pod.
+/// few seconds of a busy server.
 pub const TICK_RING: usize = 1024;
 
 /// The window `snapshot_bytes_per_second` averages over.
@@ -127,7 +127,7 @@ impl Metrics {
     }
 
     /// Prometheus text exposition.
-    pub fn render(&self, rooms: RoomCounts, draining: bool, pod: char) -> String {
+    pub fn render(&self, rooms: RoomCounts, draining: bool) -> String {
         let (p50, p99) = self.tick_percentiles();
         let rate = self.bytes.lock().expect("bytes window poisoned").rate;
         let mut out = String::new();
@@ -139,7 +139,7 @@ impl Metrics {
         };
         gauge(
             "bongbong_rooms",
-            "Rooms on this pod by phase.",
+            "Rooms on this server by phase.",
             &[
                 ("{phase=\"waiting\"}", rooms.waiting as f64),
                 ("{phase=\"playing\"}", rooms.playing as f64),
@@ -149,7 +149,7 @@ impl Metrics {
         );
         gauge(
             "bongbong_seats",
-            "Seats on this pod by connection state.",
+            "Seats on this server by connection state.",
             &[("{state=\"connected\"}", rooms.seats_connected as f64), ("{state=\"away\"}", rooms.seats_away as f64)],
         );
         gauge(
@@ -158,13 +158,17 @@ impl Metrics {
             &[("{quantile=\"0.5\"}", p50 as f64), ("{quantile=\"0.99\"}", p99 as f64)],
         );
         gauge("bongbong_snapshot_bytes_per_second", "Snapshot bytes sent over the last second.", &[("", rate)]);
-        gauge("bongbong_draining", "1 while the pod refuses new rooms and waits for its rounds to end.", &[("", draining as u8 as f64)]);
+        gauge(
+            "bongbong_draining",
+            "1 while the server refuses new rooms and waits for its rounds to end.",
+            &[("", draining as u8 as f64)],
+        );
         gauge(
             "bongbong_info",
-            "Build and pod.",
+            "Build and protocol.",
             &[(
                 &format!(
-                    "{{version=\"{}\",pod=\"{pod}\",protocol=\"{}\"}}",
+                    "{{version=\"{}\",protocol=\"{}\"}}",
                     env!("CARGO_PKG_VERSION"),
                     bongbong::net::PROTOCOL_VERSION
                 ),
@@ -210,7 +214,7 @@ mod tests {
         m.record_tick(Duration::from_micros(1500));
         m.record_snapshot_bytes(200);
         m.reconnects_total.fetch_add(2, Ordering::Relaxed);
-        let text = m.render(RoomCounts { playing: 1, seats_connected: 2, ..Default::default() }, true, 'A');
+        let text = m.render(RoomCounts { playing: 1, seats_connected: 2, ..Default::default() }, true);
         for needle in [
             "bongbong_rooms{phase=\"playing\"} 1",
             "bongbong_seats{state=\"connected\"} 2",
@@ -220,7 +224,7 @@ mod tests {
             "bongbong_snapshot_bytes_total 200",
             "bongbong_reconnects_total 2",
             "bongbong_draining 1",
-            "pod=\"A\"",
+            &format!("protocol=\"{}\"", bongbong::net::PROTOCOL_VERSION),
         ] {
             assert!(text.contains(needle), "missing {needle:?} in:\n{text}");
         }

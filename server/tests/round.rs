@@ -33,7 +33,7 @@ type Client = WebSocketStream<MaybeTlsStream<TcpStream>>;
 const WAIT: Duration = Duration::from_secs(5);
 
 async fn start_server() -> (SocketAddr, std::sync::Arc<bongbong_server::hub::Hub>) {
-    let config = Config { listen: "127.0.0.1:0".parse().unwrap(), pod: 'C', insecure: true, max_rooms: 8 };
+    let config = Config { listen: "127.0.0.1:0".parse().unwrap(), insecure: true, max_rooms: 8 };
     let server = Server::bind(config).await.expect("bind an ephemeral port");
     let addr = server.addr;
     let hub = server.hub.clone();
@@ -230,7 +230,10 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
     })
     .await;
     assert_eq!(code.len(), 5);
-    assert!(code.starts_with('C'), "the pod letter leads: {code}");
+    assert!(
+        code.bytes().all(|b| bongbong::net::rooms::CODE_ALPHABET.contains(&b)),
+        "every letter is one the lobby's key grid offers: {code}"
+    );
     let welcome = expect_welcome(&mut host).await;
     assert_eq!(welcome.protocol, PROTOCOL_VERSION);
     assert_eq!(welcome.seat, 0);
@@ -238,7 +241,8 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
     assert!(welcome.map_toml.contains("cells"), "the map travels in the welcome");
     assert_eq!(welcome.snapshot.tick, 0, "a waiting room has no round yet");
 
-    // A second player joins by code; a join for another pod is refused.
+    // A second player joins by code; a code that is not one, and a
+    // well-formed code no room answers to, are both refused by name.
     let mut second = connect(addr).await;
     send(&mut second, &join("second", "tok-second", &code)).await;
     let welcome2 = expect_welcome(&mut second).await;
@@ -253,11 +257,18 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
     assert_eq!(roster.1[1].nick, "second");
 
     let mut third = connect(addr).await;
-    let other_pod = format!("D{}", &code[1..]);
-    send(&mut third, &join("third", "tok-third", &other_pod)).await;
+    send(&mut third, &join("third", "tok-third", "CK7QO")).await;
     let refused = expect_lobby_error(&mut third).await;
-    assert!(refused.contains("pod D") && refused.contains("pod C"), "names the mismatch: {refused}");
+    assert!(refused.contains("5 letters from"), "names the shape: {refused}");
     drop(third);
+
+    let mut fourth = connect(addr).await;
+    // One letter off the room that exists, so it is a code and no room.
+    let no_such_room = format!("{}{}", if code.starts_with('C') { 'D' } else { 'C' }, &code[1..]);
+    send(&mut fourth, &join("fourth", "tok-fourth", &no_such_room)).await;
+    let refused = expect_lobby_error(&mut fourth).await;
+    assert!(refused.contains(&no_such_room), "names the code it could not find: {refused}");
+    drop(fourth);
 
     // Ready, start: both get Started and a fresh Welcome with the round.
     send(&mut second, &Msg::Lobby(Lobby::Ready)).await;
@@ -655,10 +666,10 @@ fn play_a_round(url: String, span: Duration) -> Played {
 async fn the_games_own_transport_hosts_a_round_and_keeps_up_with_it() {
     let (addr, hub) = start_server().await;
 
-    // The URL rule: an override is one server, addressed at its own /ws,
-    // whether a room is being made or joined.
+    // The URL rule, whole: one server, addressed at its own /ws, whether
+    // a room is being made or joined.
     let rooms = RoomsHost::overriding(&format!("ws://{addr}"));
-    let url = socket_url(&rooms, None);
+    let url = socket_url(&rooms);
     assert_eq!(url, format!("ws://{addr}/ws"));
 
     let span = Duration::from_secs(2);
@@ -666,13 +677,11 @@ async fn the_games_own_transport_hosts_a_round_and_keeps_up_with_it() {
         .await
         .expect("the client's thread");
 
-    // The code names the pod that minted it, and on the cluster that
-    // letter alone would have picked the path.
+    // The code the room minted is one the client parses, and it picks
+    // no path: the deployed host is dialled at its own /ws too.
     assert_eq!(played.seat, 0, "the host takes the first seat");
-    let code = RoomCode::parse(&played.code).expect("a well-formed code");
-    assert_eq!(code.pod, 'C');
-    assert_eq!(socket_url(&rooms, Some(&code)), format!("ws://{addr}/ws"));
-    assert_eq!(socket_url(&RoomsHost::cluster(), Some(&code)), "wss://rooms.bongbong.io/r/rooms-c/ws");
+    RoomCode::parse(&played.code).expect("a well-formed code");
+    assert_eq!(socket_url(&RoomsHost::deployed()), "wss://rooms.bongbong.io/ws");
 
     // Cadence: snapshots at 20 Hz, the tick at 60 Hz.
     let n = played.snapshots.len();

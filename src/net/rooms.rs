@@ -1,29 +1,30 @@
 //! Where the rooms are (docs/online-coop-prd.md §4.10, §4.13): the host
-//! a client dials and the URL it derives from a room code. A link is
-//! enough to reach a seat, so no directory and no HTTP lookup stands
-//! between `bongbong.io/j/AK7QX` and the socket - the code's first
-//! letter names the pod that owns the room, and the pod's path falls out
-//! of it.
+//! a client dials and the code it names a room by. There is one rooms
+//! server and every room lives in it, so a link is enough to reach a
+//! seat: nothing - no directory, no HTTP lookup, no path derived from
+//! the code - stands between `bongbong.io/j/CK7QX` and the socket.
 
 use std::fmt;
 
-/// The cluster's rooms host, the default of `--rooms` and
-/// `BONGBONG_ROOMS`.
+/// The rooms server the game ships pointing at, the default of
+/// `--rooms` and `BONGBONG_ROOMS`. One deployment, one host name: there
+/// is nothing behind it to pick between.
 pub const DEFAULT_ROOMS_HOST: &str = "wss://rooms.bongbong.io";
 
 /// The environment variable that overrides the host, so a local server
 /// needs no code change: `BONGBONG_ROOMS=ws://127.0.0.1:4848`.
 pub const ROOMS_ENV: &str = "BONGBONG_ROOMS";
 
-/// Letters after the pod's, `bongbong_server::code::ROOM_LETTERS`. The
-/// client checks the shape of a code and reads its pod letter; which
-/// room letters exist is the room server's business.
-pub const ROOM_LETTERS: usize = 4;
+/// How long a room code is: 20^5 = 3.2 million rooms, which is room
+/// enough for one server. The client checks a code's shape before it
+/// opens a socket; which codes name a room that exists is the room
+/// server's business (`bongbong_server::code`, which re-exports this).
+pub const CODE_LETTERS: usize = 5;
 
-/// The symbols a room's letters are drawn from: twenty with no vowels (a
-/// code never spells a word by accident) and no look-alikes (no 0/O,
-/// 1/I/L, 2/Z, 5/S, 6/G, 8/B, 9/g), so a code survives being read aloud
-/// or typed from a photo. The room server mints from this same list
+/// The symbols a code is drawn from: twenty with no vowels (a code never
+/// spells a word by accident) and no look-alikes (no 0/O, 1/I/L, 2/Z,
+/// 5/S, 6/G, 8/B, 9/g), so a code survives being read aloud or typed
+/// from a photo. The room server mints from this same list
 /// (`bongbong_server::code::ALPHABET`; a test below pins the two
 /// together), and the lobby's on-screen code entry offers exactly these
 /// keys, which is why the list lives here rather than in either screen.
@@ -40,8 +41,8 @@ pub const JOIN_URL_BASE: &str = "https://bongbong.io/j";
 /// A rooms host that came from `--rooms` or `BONGBONG_ROOMS` rides along
 /// as a query parameter, because the join page takes the same override
 /// the game does (docs/online-coop-prd.md §4.13): without it a scan would
-/// send the other device to the cluster, which knows nothing about a room
-/// on a laptop.
+/// send the other device to the deployed server, which knows nothing
+/// about a room on a laptop.
 pub fn join_url(host: &RoomsHost, code: &str) -> String {
     match host.is_override() {
         false => format!("{JOIN_URL_BASE}/{code}"),
@@ -58,8 +59,8 @@ pub struct RoomsHost {
 
 impl RoomsHost {
     /// The rooms host in force: `arg` (`--rooms`) if given, else
-    /// `BONGBONG_ROOMS`, else the cluster's. Anything but the last is an
-    /// override and changes the paths `socket_url` builds.
+    /// `BONGBONG_ROOMS`, else the deployed one. Anything but the last is
+    /// an override, which is what puts the host inside a join link.
     pub fn resolve(arg: Option<&str>) -> RoomsHost {
         let from_env = std::env::var(ROOMS_ENV).ok();
         match arg.map(str::to_string).or(from_env) {
@@ -68,14 +69,14 @@ impl RoomsHost {
         }
     }
 
-    /// One server, addressed directly: a local `cargo run -p
-    /// bongbong-server`, a staging pod, the rig's own.
+    /// A server named by hand: a local `cargo run -p bongbong-server`,
+    /// a staging box, the rig's own.
     pub fn overriding(base: &str) -> RoomsHost {
         RoomsHost { base: base.trim().trim_end_matches('/').to_string(), overridden: true }
     }
 
-    /// The cluster's.
-    pub fn cluster() -> RoomsHost {
+    /// The deployed one, which is where the game points unasked.
+    pub fn deployed() -> RoomsHost {
         RoomsHost { base: DEFAULT_ROOMS_HOST.into(), overridden: false }
     }
 
@@ -96,34 +97,27 @@ pub struct RoomCode {
     /// Canonical text: trimmed and upper case, what travels in
     /// `Lobby::Join` and what a player is shown.
     pub text: String,
-    /// The first letter, the pod that owns the room.
-    pub pod: char,
 }
 
 impl RoomCode {
     /// `raw` as a code, trimmed and upper-cased.
     ///
-    /// The shape is checked here - one pod letter (a capital or a digit,
-    /// the operator's `--pod`) and `ROOM_LETTERS` more alphanumerics -
-    /// so a typo is caught before a socket is opened. Whether those
-    /// letters spell a room that exists is the pod's answer, and so is
-    /// whether they come from its alphabet: a client that held its own
-    /// copy of that alphabet would only drift from the server's.
+    /// The shape is checked here - `CODE_LETTERS` alphanumerics - so a
+    /// typo is caught before a socket is opened. Whether they come from
+    /// `CODE_ALPHABET`, and whether they spell a room that exists, is
+    /// the room server's answer: it is the one that mints them, and a
+    /// player who mistypes a letter deserves the server's reason rather
+    /// than a key that quietly does nothing.
     pub fn parse(raw: &str) -> Result<RoomCode, CodeError> {
         let text: String = raw.trim().to_ascii_uppercase();
-        let mut chars = text.chars();
-        let pod = chars.next().ok_or(CodeError::Length(text.chars().count()))?;
-        let room: Vec<char> = chars.collect();
-        if room.len() != ROOM_LETTERS {
-            return Err(CodeError::Length(text.chars().count()));
+        let n = text.chars().count();
+        if n != CODE_LETTERS {
+            return Err(CodeError::Length(n));
         }
-        if !pod.is_ascii_uppercase() && !pod.is_ascii_digit() {
-            return Err(CodeError::Character(pod));
-        }
-        if let Some(&bad) = room.iter().find(|c| !c.is_ascii_alphanumeric()) {
+        if let Some(bad) = text.chars().find(|c| !c.is_ascii_alphanumeric()) {
             return Err(CodeError::Character(bad));
         }
-        Ok(RoomCode { text, pod })
+        Ok(RoomCode { text })
     }
 }
 
@@ -136,7 +130,7 @@ impl fmt::Display for RoomCode {
 /// Why a code was refused before it ever reached a room.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CodeError {
-    /// Not a pod letter plus `ROOM_LETTERS`; the count is what came in.
+    /// Not `CODE_LETTERS` long; the count is what came in.
     Length(usize),
     /// A character a code cannot hold.
     Character(char),
@@ -146,7 +140,7 @@ impl fmt::Display for CodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CodeError::Length(n) => {
-                write!(f, "a room code is {} letters, not {n}", ROOM_LETTERS + 1)
+                write!(f, "a room code is {CODE_LETTERS} letters, not {n}")
             }
             CodeError::Character(c) => write!(f, "'{c}' is not part of a room code"),
         }
@@ -155,32 +149,19 @@ impl fmt::Display for CodeError {
 
 impl std::error::Error for CodeError {}
 
-/// The WebSocket to dial: `code` to join that room, `None` to create one.
+/// The WebSocket to dial, for hosting and for joining alike.
 ///
-/// The rule, whole:
+/// There is one rooms server and every room is in its memory, so the
+/// whole rule is its own `/ws` - the same socket for a create and for a
+/// join, whether the host is the deployed one or a laptop named by
+/// `--rooms`. The code travels inside `Lobby::Join`; it picks no path,
+/// because there is nowhere else a room could be.
 ///
-/// - On the cluster (the default host) the pods are a StatefulSet behind
-///   one Ingress, so the path has to name the pod that owns the room.
-///   Joining `AK7QX` is `wss://rooms.bongbong.io/r/rooms-a/ws`: the
-///   code's pod letter, lower-cased because that is how the pod is
-///   named (`rooms-0`, `rooms-a`), in the per-pod path. Creating a room
-///   goes to `/rooms`, which spreads across every pod, and the pod that
-///   answers mints a code beginning with its own letter - so the code a
-///   host shares already says where its room lives.
-/// - With an override (`--rooms`, `BONGBONG_ROOMS`) there is exactly one
-///   server and no Ingress in front of it, so both ends of the rule
-///   collapse onto that server's own `/ws`. The code is still parsed,
-///   because a join carries it and the server refuses a code minted by
-///   another pod, but its letter no longer picks the path.
-pub fn socket_url(host: &RoomsHost, code: Option<&RoomCode>) -> String {
-    let base = host.base();
-    match (host.is_override(), code) {
-        (true, _) => format!("{base}/ws"),
-        (false, None) => format!("{base}/rooms"),
-        (false, Some(code)) => {
-            format!("{base}/r/rooms-{}/ws", code.pod.to_ascii_lowercase())
-        }
-    }
+/// Spreading rooms over several servers is deferred distribution work
+/// (docs/online-coop-prd.md §4.8): it is what would put something
+/// derived from the code back into this URL.
+pub fn socket_url(host: &RoomsHost) -> String {
+    format!("{}/ws", host.base())
 }
 
 /// What a page's own URL says about the room to open
@@ -194,8 +175,8 @@ pub fn socket_url(host: &RoomsHost, code: Option<&RoomCode>) -> String {
 /// (`site/src/scripts/room.ts`) and `app.rs` parses it once at start, the
 /// way a desktop build reads `--join` and `--rooms` once.
 ///
-/// Two spellings name a room: the invite's own path, `/j/AK7QX`, and
-/// `?join=AK7QX` for a page that serves no such route - a local Astro
+/// Two spellings name a room: the invite's own path, `/j/CK7QX`, and
+/// `?join=CK7QX` for a page that serves no such route - a local Astro
 /// preview, an itch.io frame. Where a page carries both, the query is
 /// the one taken: a path is where the page happens to sit, a query is
 /// something somebody put there. The `rooms` override rides in the
@@ -260,7 +241,7 @@ impl Invite {
     /// page's own - a plain socket from a plain page, a secure one from a
     /// secure page. An override with a scheme no socket speaks
     /// (`ftp://...`) is no override at all, and the link falls back to
-    /// the cluster.
+    /// the deployed server.
     pub fn rooms_host(&self) -> Option<RoomsHost> {
         let raw = self.rooms.as_deref()?.trim();
         if raw.is_empty() {
@@ -347,42 +328,29 @@ fn code_in_path(path: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// One server, so one socket: hosting and joining dial the same
+    /// `/ws`, and no part of a code appears in the URL.
     #[test]
-    fn the_cluster_puts_the_pod_in_the_path_and_creates_across_all_of_them() {
-        let host = RoomsHost::cluster();
-        assert_eq!(host.base(), "wss://rooms.bongbong.io");
-        assert!(!host.is_override());
-        assert_eq!(socket_url(&host, None), "wss://rooms.bongbong.io/rooms");
-        let code = RoomCode::parse("AK7QX").unwrap();
-        assert_eq!(socket_url(&host, Some(&code)), "wss://rooms.bongbong.io/r/rooms-a/ws");
-        let numbered = RoomCode::parse("0K7QX").unwrap();
-        assert_eq!(
-            socket_url(&host, Some(&numbered)),
-            "wss://rooms.bongbong.io/r/rooms-0/ws",
-            "a digit pod letter is the StatefulSet's ordinal as it stands"
-        );
+    fn every_room_is_reached_at_the_one_servers_own_ws() {
+        let deployed = RoomsHost::deployed();
+        assert_eq!(deployed.base(), "wss://rooms.bongbong.io");
+        assert!(!deployed.is_override());
+        assert_eq!(socket_url(&deployed), "wss://rooms.bongbong.io/ws");
+
+        let local = RoomsHost::overriding("ws://127.0.0.1:4848/");
+        assert!(local.is_override());
+        assert_eq!(local.base(), "ws://127.0.0.1:4848", "a trailing slash is not part of the base");
+        assert_eq!(socket_url(&local), "ws://127.0.0.1:4848/ws");
     }
 
     #[test]
-    fn an_override_points_at_that_one_server_for_both_create_and_join() {
-        let host = RoomsHost::overriding("ws://127.0.0.1:4848/");
-        assert!(host.is_override());
-        assert_eq!(host.base(), "ws://127.0.0.1:4848", "a trailing slash is not part of the base");
-        assert_eq!(socket_url(&host, None), "ws://127.0.0.1:4848/ws");
-        let code = RoomCode::parse("AK7QX").unwrap();
-        assert_eq!(socket_url(&host, Some(&code)), "ws://127.0.0.1:4848/ws", "the pod letter picks no path here");
-        let other_pod = RoomCode::parse("BK7QX").unwrap();
-        assert_eq!(socket_url(&host, Some(&other_pod)), socket_url(&host, Some(&code)));
-    }
-
-    #[test]
-    fn resolve_prefers_the_argument_then_the_environment_then_the_cluster() {
+    fn resolve_prefers_the_argument_then_the_environment_then_the_deployed_host() {
         // The environment is process-wide, so this test owns it; no
         // other test in this module reads it.
         let saved = std::env::var(ROOMS_ENV).ok();
         // SAFETY: single-threaded within this test, restored below.
         unsafe { std::env::remove_var(ROOMS_ENV) };
-        assert_eq!(RoomsHost::resolve(None), RoomsHost::cluster());
+        assert_eq!(RoomsHost::resolve(None), RoomsHost::deployed());
         assert_eq!(RoomsHost::resolve(Some("ws://host:1/")), RoomsHost::overriding("ws://host:1"));
         unsafe { std::env::set_var(ROOMS_ENV, "ws://127.0.0.1:4848") };
         assert_eq!(RoomsHost::resolve(None), RoomsHost::overriding("ws://127.0.0.1:4848"));
@@ -392,7 +360,7 @@ mod tests {
             "the flag outranks the environment"
         );
         unsafe { std::env::set_var(ROOMS_ENV, "   ") };
-        assert_eq!(RoomsHost::resolve(None), RoomsHost::cluster(), "an empty override is no override");
+        assert_eq!(RoomsHost::resolve(None), RoomsHost::deployed(), "an empty override is no override");
         match saved {
             Some(v) => unsafe { std::env::set_var(ROOMS_ENV, v) },
             None => unsafe { std::env::remove_var(ROOMS_ENV) },
@@ -419,49 +387,52 @@ mod tests {
         for look_alike in b"BLSZ0125689" {
             assert!(!CODE_ALPHABET.contains(look_alike), "{} is read wrong", *look_alike as char);
         }
-        // The room server mints from this very list rather than a copy of
-        // it, which is what keeps a minted code typable on the lobby's grid.
+        // The room server mints from this very list, and to this very
+        // length, rather than from copies of them - which is what keeps a
+        // minted code typable on the lobby's grid and a five-box entry
+        // exactly one code wide.
         let server = include_str!("../../server/src/code.rs");
-        assert!(
-            server.contains("pub use bongbong::net::rooms::CODE_ALPHABET as ALPHABET;"),
-            "the room server should mint from CODE_ALPHABET, not its own list"
-        );
+        for line in [
+            "pub use bongbong::net::rooms::CODE_ALPHABET as ALPHABET;",
+            "pub use bongbong::net::rooms::CODE_LETTERS as LETTERS;",
+        ] {
+            assert!(server.contains(line), "the room server should mint from the client's own {line:?}");
+        }
     }
 
     #[test]
     fn a_join_link_carries_a_local_override_so_a_scan_reaches_the_same_server() {
-        assert_eq!(join_url(&RoomsHost::cluster(), "AK7QX"), "https://bongbong.io/j/AK7QX");
+        assert_eq!(join_url(&RoomsHost::deployed(), "CK7QX"), "https://bongbong.io/j/CK7QX");
         assert_eq!(
-            join_url(&RoomsHost::overriding("ws://127.0.0.1:4848"), "AK7QX"),
-            "https://bongbong.io/j/AK7QX?rooms=ws://127.0.0.1:4848"
+            join_url(&RoomsHost::overriding("ws://127.0.0.1:4848"), "CK7QX"),
+            "https://bongbong.io/j/CK7QX?rooms=ws://127.0.0.1:4848"
         );
         // Both fit the codes the lobby draws (`qr::MAX_BYTES` is 106).
-        assert!(join_url(&RoomsHost::overriding("ws://127.0.0.1:4848"), "AK7QX").len() <= crate::qr::MAX_BYTES);
+        assert!(join_url(&RoomsHost::overriding("ws://127.0.0.1:4848"), "CK7QX").len() <= crate::qr::MAX_BYTES);
     }
 
     /// The two shapes a link names a room in: the invite's own path and
     /// the query a page with no such route carries.
     #[test]
     fn an_invite_link_is_read_back_the_way_it_was_written() {
-        let invite = Invite::parse("https://bongbong.io/j/AK7QX");
-        assert_eq!(invite.code.as_ref().map(|c| c.text.as_str()), Some("AK7QX"));
-        assert_eq!(invite.code.as_ref().map(|c| c.pod), Some('A'));
+        let invite = Invite::parse("https://bongbong.io/j/CK7QX");
+        assert_eq!(invite.code.as_ref().map(|c| c.text.as_str()), Some("CK7QX"));
         assert_eq!(invite.rooms, None);
         assert!(invite.secure, "an https page can only open a secure socket");
         // The page a local preview serves: no /j/ route, the code in the
         // query, and a lower-case code from somebody's address bar.
-        let typed = Invite::parse("http://localhost:4321/?join=ak7qx");
-        assert_eq!(typed.code.map(|c| c.text), Some("AK7QX".into()));
+        let typed = Invite::parse("http://localhost:4321/?join=ck7qx");
+        assert_eq!(typed.code.map(|c| c.text), Some("CK7QX".into()));
         assert!(!typed.secure);
         // A path and query with no origin in front of them.
-        assert_eq!(Invite::parse("/j/AK7QX").code.map(|c| c.text), Some("AK7QX".into()));
+        assert_eq!(Invite::parse("/j/CK7QX").code.map(|c| c.text), Some("CK7QX".into()));
         // The site may serve the route under a prefix, and a trailing
         // slash is not a segment.
-        assert_eq!(Invite::parse("https://bongbong.io/play/j/AK7QX/").code.map(|c| c.text), Some("AK7QX".into()));
+        assert_eq!(Invite::parse("https://bongbong.io/play/j/CK7QX/").code.map(|c| c.text), Some("CK7QX".into()));
         // A fragment is not part of the link.
-        assert_eq!(Invite::parse("https://bongbong.io/j/AK7QX#top").code.map(|c| c.text), Some("AK7QX".into()));
+        assert_eq!(Invite::parse("https://bongbong.io/j/CK7QX#top").code.map(|c| c.text), Some("CK7QX".into()));
         // The query is the explicit one where a page carries both.
-        assert_eq!(Invite::parse("https://bongbong.io/j/AK7QX?join=CK7QX").code.map(|c| c.text), Some("CK7QX".into()));
+        assert_eq!(Invite::parse("https://bongbong.io/j/CK7QX?join=DM4WT").code.map(|c| c.text), Some("DM4WT".into()));
     }
 
     /// Every way a link can say nothing, or nothing usable. None of them
@@ -474,9 +445,9 @@ mod tests {
             "http://localhost:4321/index.html",
             // A code that is not one: too short, too long, and a
             // character a code cannot hold.
-            "https://bongbong.io/j/AK7Q",
-            "https://bongbong.io/j/AK7QXX",
-            "https://bongbong.io/j/AK-QX",
+            "https://bongbong.io/j/CK7Q",
+            "https://bongbong.io/j/CK7QXX",
+            "https://bongbong.io/j/CK-QX",
             "https://bongbong.io/?join=",
             // `j` with nothing after it.
             "https://bongbong.io/j",
@@ -499,17 +470,17 @@ mod tests {
     #[test]
     fn the_rooms_override_survives_the_round_trip_to_a_link_and_back() {
         let host = RoomsHost::overriding("ws://127.0.0.1:4848");
-        let link = join_url(&host, "AK7QX");
+        let link = join_url(&host, "CK7QX");
         let invite = Invite::parse(&link);
-        assert_eq!(invite.code.as_ref().map(|c| c.text.as_str()), Some("AK7QX"));
+        assert_eq!(invite.code.as_ref().map(|c| c.text.as_str()), Some("CK7QX"));
         assert_eq!(invite.rooms_host(), Some(host), "the link carries the whole override");
 
         // Percent-encoded, which is what `encodeURIComponent` writes.
-        let encoded = Invite::parse("https://bongbong.io/j/AK7QX?rooms=ws%3A%2F%2F127.0.0.1%3A4848");
+        let encoded = Invite::parse("https://bongbong.io/j/CK7QX?rooms=ws%3A%2F%2F127.0.0.1%3A4848");
         assert_eq!(encoded.rooms.as_deref(), Some("ws://127.0.0.1:4848"));
         assert_eq!(encoded.rooms_host(), Some(RoomsHost::overriding("ws://127.0.0.1:4848")));
         // Beside other parameters, in either order.
-        let among = Invite::parse("https://bongbong.io/j/AK7QX?v=3&rooms=ws://h:1&x=y");
+        let among = Invite::parse("https://bongbong.io/j/CK7QX?v=3&rooms=ws://h:1&x=y");
         assert_eq!(among.rooms_host(), Some(RoomsHost::overriding("ws://h:1")));
     }
 
@@ -525,7 +496,7 @@ mod tests {
         assert_eq!(bare("https://bongbong.io/?rooms=rooms.example.com"), Some("wss://rooms.example.com".into()));
         assert_eq!(bare("https://bongbong.io/?rooms=//rooms.example.com"), Some("wss://rooms.example.com".into()));
         // A page URL with no scheme of its own is a local one.
-        assert_eq!(bare("/j/AK7QX?rooms=127.0.0.1:4848"), Some("ws://127.0.0.1:4848".into()));
+        assert_eq!(bare("/j/CK7QX?rooms=127.0.0.1:4848"), Some("ws://127.0.0.1:4848".into()));
         // The two schemes people paste, each mapped onto its socket.
         assert_eq!(bare("https://bongbong.io/?rooms=http://127.0.0.1:4848"), Some("ws://127.0.0.1:4848".into()));
         assert_eq!(bare("http://localhost:4321/?rooms=https://rooms.example.com"), Some("wss://rooms.example.com".into()));
@@ -541,23 +512,22 @@ mod tests {
     }
 
     #[test]
-    fn a_code_is_canonicalised_and_its_pod_read_off_the_front() {
-        let code = RoomCode::parse("  ak7qx ").unwrap();
-        assert_eq!(code.text, "AK7QX");
-        assert_eq!(code.pod, 'A');
-        assert_eq!(code.to_string(), "AK7QX");
+    fn a_code_is_trimmed_and_read_in_capitals() {
+        let code = RoomCode::parse("  ck7qx ").unwrap();
+        assert_eq!(code.text, "CK7QX");
+        assert_eq!(code.to_string(), "CK7QX");
     }
 
     #[test]
     fn a_malformed_code_is_refused_before_a_socket_is_opened() {
         assert_eq!(RoomCode::parse(""), Err(CodeError::Length(0)));
-        assert_eq!(RoomCode::parse("AK7Q"), Err(CodeError::Length(4)));
-        assert_eq!(RoomCode::parse("AK7QXX"), Err(CodeError::Length(6)));
+        assert_eq!(RoomCode::parse("CK7Q"), Err(CodeError::Length(4)));
+        assert_eq!(RoomCode::parse("CK7QXX"), Err(CodeError::Length(6)));
         assert_eq!(RoomCode::parse("-K7QX"), Err(CodeError::Character('-')));
-        assert_eq!(RoomCode::parse("AK7Q-"), Err(CodeError::Character('-')));
-        assert!(RoomCode::parse("AK7Q ").is_err(), "an inner gap is not trimmed away");
+        assert_eq!(RoomCode::parse("CK7Q-"), Err(CodeError::Character('-')));
+        assert!(RoomCode::parse("CK7Q ").is_err(), "an inner gap is not trimmed away");
         assert!(CodeError::Length(3).to_string().contains("5 letters"));
         assert!(CodeError::Character('-').to_string().contains('-'));
-        assert!(RoomCode::parse("AK7QO").is_ok(), "the pod decides which letters it mints, not the client");
+        assert!(RoomCode::parse("CK7QO").is_ok(), "the room server decides which letters it mints, not the client");
     }
 }
