@@ -833,11 +833,12 @@ pub const MINIGUN_MOUNT_SCALE: f32 = 1.0;
 // static/missile.png: MISSILE_FRAMES cells of MISSILE_TEXTURE_SIZE in one
 // row, the missile pointing up (rotation 0) with its exhaust flame below,
 // the frames differing only in the flame's flicker. Authored as 16 design
-// px doubled to 32, the tanks' density, and drawn 1:1 - so a missile on
-// the ground reads a little bigger than a shell, and `missile_apex_draw_scale`
-// grows it further at the top of its climb.
+// px doubled to 32, the tanks' density, and drawn at 0.8 - so a missile on
+// the ground still reads a little bigger than a shell without crowding a
+// salvo, and `missile_apex_draw_scale` grows it further at the top of its
+// climb.
 pub const MISSILE_TEXTURE_SIZE: f32 = 32.0;
-pub const MISSILE_SCALE: f32 = 1.0;
+pub const MISSILE_SCALE: f32 = 0.8;
 pub const MISSILE_FRAMES: i32 = 4;
 // static/missile_pod.png: the four-tube launcher on the turret while a tank
 // holds missile ammo (tank.rs's draw_missile_pod), laid out and pivoted

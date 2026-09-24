@@ -480,7 +480,7 @@ tunables! {
 
     group shell {
         /// Shell flight speed (px/s).
-        shell_speed: f32 = 500.0 in 50.0 ..= 3000.0;
+        shell_speed: f32 = 550.0 in 50.0 ..= 3000.0;
         /// Half-extent (px) of a shell's own hit box, inflating every target
         /// box the swept hit test (`simulation::hits::Terrain::sweep`)
         /// checks its flight segment against. Kept small and near-point-like
@@ -554,7 +554,7 @@ tunables! {
         minigun_bullet_spread_deg: f32 = 4.0 in 0.0 ..= 90.0;
         /// Bullet flight speed (px/s) - faster than a shell: a zippy tracer,
         /// not a lobbed shell.
-        minigun_bullet_speed: f32 = 570.0 in 50.0 ..= 5000.0;
+        minigun_bullet_speed: f32 = 627.0 in 50.0 ..= 5000.0;
         /// Bullet hit-box half-extent (px) - smaller than a shell's, a
         /// lighter caliber.
         minigun_bullet_hit_half_extent: f32 = 2.0 in 0.5 ..= 32.0;
@@ -609,7 +609,7 @@ tunables! {
         /// `tank_damage_factor` - a straight damage upgrade over a shell.
         plasma_damage_factor: f32 = 1.24 in 0.1 ..= 5.0;
         /// Bolt flight speed (px/s) - a touch faster than a shell.
-        plasma_speed: f32 = 504.0 in 50.0 ..= 3000.0;
+        plasma_speed: f32 = 554.4 in 50.0 ..= 3000.0;
         /// Bolt hit-box half-extent (px) - a fatter bolt is easier to land,
         /// matching its bigger on-screen size.
         plasma_hit_half_extent: f32 = 5.0 in 0.5 ..= 32.0;
@@ -656,13 +656,18 @@ tunables! {
         missile_reload_seconds: f32 = 1.3 in 0.0 ..= 10.0;
         /// Degrees between neighbouring tubes' launch headings: the volley
         /// fans out as it climbs.
-        missile_fan_deg: f32 = 7.0 in 0.0 ..= 45.0;
+        missile_fan_deg: f32 = 12.0 in 0.0 ..= 45.0;
+        /// How far apart (px) the missiles of one salvo come down: each
+        /// tube aims this much beside its neighbour, across the line the
+        /// missile locked along, so a salvo lands as a spread of blasts
+        /// around the target rather than four on one spot.
+        missile_impact_spread_px: f32 = 14.0 in 0.0 ..= 128.0;
         /// Stage one, the climb: how long a missile rises, how high it
         /// gets (px, drawn as lift above its ground point) and how fast it
         /// drifts along the launch heading meanwhile (px/s).
         missile_climb_seconds: f32 = 0.28 in 0.05 ..= 3.0;
         missile_apex_height: f32 = 72.0 in 0.0 ..= 300.0;
-        missile_climb_speed: f32 = 150.0 in 0.0 ..= 1000.0;
+        missile_climb_speed: f32 = 165.0 in 0.0 ..= 1000.0;
         /// Stage two, the seek: seconds a missile hangs at the apex
         /// looking for a target, and how far from itself it looks (px).
         /// It locks the nearest opposing tank in range; with none, it
@@ -675,7 +680,7 @@ tunables! {
         /// gets there (px/s^2) and how fast it turns (degrees/s), the turn
         /// rate growing by `missile_turn_rate_growth_deg` every second of
         /// the chase so a missile circling its target always tightens in.
-        missile_speed: f32 = 330.0 in 20.0 ..= 3000.0;
+        missile_speed: f32 = 363.0 in 20.0 ..= 3000.0;
         missile_accel: f32 = 1100.0 in 1.0 ..= 10000.0;
         missile_turn_rate_deg: f32 = 200.0 in 1.0 ..= 3600.0;
         missile_turn_rate_growth_deg: f32 = 240.0 in 0.0 ..= 3600.0;

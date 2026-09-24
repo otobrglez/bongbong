@@ -601,7 +601,7 @@ material = "brick"
 
 [cells."14,12"]
 kind = "pickup"
-pickup = "flamethrower"
+pickup = "missiles"
 
 [cells."23,14"]
 kind = "wall"
@@ -866,7 +866,7 @@ kind = "tall_grass"
 
 [cells."13,12"]
 kind = "pickup"
-pickup = "flamethrower"
+pickup = "missiles"
 
 [cells."7,11"]
 kind = "barrel"

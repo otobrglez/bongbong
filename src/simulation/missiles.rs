@@ -43,9 +43,11 @@ impl Game {
     /// Every missile in the air, between frames: a missile done with its
     /// climb locks onto the nearest live tank on the other side within
     /// `missile_seek_range` of it (ties broken on slot), or - with none -
-    /// keeps the launcher's aim point; a missile following a tank takes
-    /// the tank's position as its aim, and one whose tank has died dives on
-    /// where it last was. No RNG.
+    /// keeps the launcher's aim point - either way offset by its tube
+    /// (`Missile::impact_offset`) so a salvo lands spread out; a missile
+    /// following a tank takes the tank's position plus that offset as its
+    /// aim, and one whose tank has died dives on where it last aimed. No
+    /// RNG.
     pub(super) fn guide_missiles(&mut self, f: &mut Frame) {
         // Everything a missile can lock: live tanks with a body (a wave tank
         // still rolling in has neither a body nor an `Ai`).
@@ -80,11 +82,15 @@ impl Game {
                     missile.aim = pos;
                     slot
                 });
+                // Each tube comes down a little beside the others.
+                missile.aim_offset = missile.impact_offset(missile.aim);
+                let spread = missile.aim + missile.aim_offset;
+                missile.aim = Position::new(spread.x.clamp(0.0, f.width), spread.y.clamp(0.0, f.height));
                 f.events.push(Event::MissileLocked { slot: missile.owner.slot(), target, x: missile.aim.x, y: missile.aim.y });
             } else if missile.tracking() {
                 let target = missile.target.expect("a tracking missile has a target");
                 match targets.iter().find(|&&(e, ..)| e == target) {
-                    Some(&(_, _, _, pos)) => missile.aim = pos,
+                    Some(&(_, _, _, pos)) => missile.aim = pos + missile.aim_offset,
                     // Wrecked or gone: come down where it last was.
                     None => missile.target = None,
                 }
@@ -310,7 +316,11 @@ mod tests {
         let at = with_tank(&game.world, enemy, |t| t.position);
         let blasts = blasts(&events);
         assert_eq!(blasts.len(), 4);
-        assert!(blasts.iter().all(|&b| b.distance_to(at) <= tuning().missile_blast_radius * 0.5), "{blasts:?} vs {at:?}");
+        // Spread by tube, but each well inside its blast of the hull.
+        let reach = 1.5 * tuning().missile_impact_spread_px + 1.0;
+        assert!(blasts.iter().all(|&b| b.distance_to(at) <= reach), "{blasts:?} vs {at:?}");
+        let spread = blasts.iter().map(|b| b.distance_to(blasts[0])).fold(0.0f32, f32::max);
+        assert!(spread >= 2.0 * tuning().missile_impact_spread_px, "the salvo lands spread out: {blasts:?}");
         assert!(with_tank(&game.world, enemy, |t| t.damage) > 0.0, "the enemy took the blasts");
         assert_eq!(with_tank(&game.world, player(&game), |t| t.damage), 0.0);
         assert_eq!(missiles_in_air(&game), 0, "all spent");
@@ -345,7 +355,8 @@ mod tests {
         let blasts = blasts(&events);
         assert_eq!(blasts.len(), 4);
         let aim = Position::new(from.x + tuning().missile_fallback_range, from.y);
-        assert!(blasts.iter().all(|&b| b.distance_to(aim) < 1.0), "{blasts:?} vs {aim:?}");
+        let reach = 1.5 * tuning().missile_impact_spread_px + 1.0;
+        assert!(blasts.iter().all(|&b| b.distance_to(aim) <= reach), "{blasts:?} vs {aim:?}");
         assert_eq!(with_tank(&game.world, player(&game), |t| t.damage), 0.0, "never hurt by its own missiles");
     }
 

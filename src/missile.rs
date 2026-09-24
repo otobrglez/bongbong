@@ -80,6 +80,11 @@ pub struct Missile {
     /// Set by `Game::guide_missiles` once the seek has picked (or failed
     /// to pick) a target; the chase starts only after that.
     pub locked: bool,
+    /// Where this missile comes down relative to what it locked onto:
+    /// across the lock line, by tube, `missile_impact_spread_px` apart
+    /// (`impact_offset`). Fixed at lock time, so the aim does not swing as
+    /// the missile turns.
+    pub aim_offset: Vector2,
     /// Set the step the missile reaches `aim` on its dive; the frame's
     /// `resolve_missiles` bursts it and removes it.
     pub arrived: bool,
@@ -105,6 +110,7 @@ impl Missile {
             target: None,
             aim: fallback_aim,
             locked: false,
+            aim_offset: Vector2::new(0.0, 0.0),
             arrived: false,
             tube,
         }
@@ -114,6 +120,19 @@ impl Missile {
     /// `Game::guide_missiles` looks for.
     pub fn wants_lock(&self) -> bool {
         self.stage == MissileStage::Seek && !self.locked
+    }
+
+    /// The offset this missile's tube comes down at beside `toward`, a
+    /// point it is locking onto: across the line from the missile to it,
+    /// the pod's middle between the second and third tubes.
+    pub fn impact_offset(&self, toward: Position) -> Vector2 {
+        let to = toward - self.position;
+        let len = to.length();
+        if len < 1e-3 {
+            return Vector2::new(0.0, 0.0);
+        }
+        let across = Vector2::new(-to.y / len, to.x / len);
+        across * ((self.tube as f32 - 1.5) * tuning().missile_impact_spread_px)
     }
 
     /// Still following a target, so its position should refresh `aim`.
