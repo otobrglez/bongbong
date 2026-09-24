@@ -538,8 +538,8 @@ fn log_frame(game: &Game, frame: u32) {
         // be read off the out-of-bounds position.
         let entering = if tank.entering { " entering=true" } else { "" };
         println!(
-            "  {label} pos=({:6.1},{:6.1}) vel=({:6.1},{:6.1}) speed={:6.1} rot={:5.0} dmg={:5.1}/100 ammo={:2} plasma={:2} minigun={:3} laser={:2} fuel={:4.1} burn={:3.1} shield={:5.1} wreck={}{entering}",
-            tank.position.x, tank.position.y, tank.velocity.x, tank.velocity.y, speed, tank.rotation, tank.damage, tank.shells_ammo, tank.plasma_ammo, tank.minigun_ammo, tank.laser_charges, tank.flame_fuel, tank.burn_timer, tank.shield_hp, tank.is_wreck,
+            "  {label} pos=({:6.1},{:6.1}) vel=({:6.1},{:6.1}) speed={:6.1} rot={:5.0} dmg={:5.1}/100 ammo={:2} plasma={:2} minigun={:3} missiles={:2} laser={:2} fuel={:4.1} burn={:3.1} shield={:5.1} wreck={}{entering}",
+            tank.position.x, tank.position.y, tank.velocity.x, tank.velocity.y, speed, tank.rotation, tank.damage, tank.shells_ammo, tank.plasma_ammo, tank.minigun_ammo, tank.missile_ammo, tank.laser_charges, tank.flame_fuel, tank.burn_timer, tank.shield_hp, tank.is_wreck,
         );
     }
 }
@@ -678,9 +678,9 @@ struct TankTrack {
     trail: VecDeque<(u32, Position)>,
     trail_path_len: f32,
     // --- deliberate-hold detection (see FIRED_RECENTLY_FRAMES) ---
-    // Last frame's (shells, minigun, plasma, laser) ammo, to spot a
-    // trigger pull as any pool decreasing; None until the first frame.
-    prev_ammo: Option<(i32, i32, i32, i32)>,
+    // Last frame's (shells, minigun, plasma, laser, missiles) ammo, to spot
+    // a trigger pull as any pool decreasing; None until the first frame.
+    prev_ammo: Option<(i32, i32, i32, i32, i32)>,
     // Frame of the most recent detected shot, if any.
     last_fire_frame: Option<u32>,
     // --- contact metrics (wall-grind / bump-rate / low-progress) ---
@@ -1041,9 +1041,10 @@ fn check_anomalies(
             tank.minigun_ammo,
             tank.plasma_ammo,
             tank.laser_charges,
+            tank.missile_ammo,
         );
         if let Some(prev) = track.prev_ammo
-            && (ammo.0 < prev.0 || ammo.1 < prev.1 || ammo.2 < prev.2 || ammo.3 < prev.3)
+            && (ammo.0 < prev.0 || ammo.1 < prev.1 || ammo.2 < prev.2 || ammo.3 < prev.3 || ammo.4 < prev.4)
         {
             track.last_fire_frame = Some(frame);
         }

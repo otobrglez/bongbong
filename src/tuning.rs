@@ -636,6 +636,74 @@ tunables! {
         plasma_flying_cycle_fps: f32 = 10.0 in 0.5 ..= 60.0;
     }
 
+    group missiles {
+        /// Seeker missiles granted per pickup - four full volleys from the
+        /// four-tube pod.
+        missile_ammo_per_pickup: i32 = 16 in 1 ..= 400;
+        /// Missiles per trigger pull, one per tube, so at most the pod's
+        /// four. The first leaves at once, the rest
+        /// `missile_launch_delay_seconds` apart (`Tank::missile_volley`).
+        missile_volley_size: u32 = 4 in 1 ..= 4;
+        /// Gap between two missiles of one volley leaving their tubes.
+        missile_launch_delay_seconds: f32 = 0.09 in 0.0 ..= 1.0;
+        /// Reload after a volley's last missile, before the next volley.
+        missile_reload_seconds: f32 = 1.3 in 0.0 ..= 10.0;
+        /// Degrees between neighbouring tubes' launch headings: the volley
+        /// fans out as it climbs.
+        missile_fan_deg: f32 = 7.0 in 0.0 ..= 45.0;
+        /// Stage one, the climb: how long a missile rises, how high it
+        /// gets (px, drawn as lift above its ground point) and how fast it
+        /// drifts along the launch heading meanwhile (px/s).
+        missile_climb_seconds: f32 = 0.45 in 0.05 ..= 3.0;
+        missile_apex_height: f32 = 72.0 in 0.0 ..= 300.0;
+        missile_climb_speed: f32 = 110.0 in 0.0 ..= 1000.0;
+        /// Stage two, the seek: seconds a missile hangs at the apex
+        /// looking for a target, and how far from itself it looks (px).
+        /// It locks the nearest opposing tank in range; with none, it
+        /// keeps the ground point `missile_fallback_range` px ahead of the
+        /// launcher and comes down there.
+        missile_acquire_seconds: f32 = 0.18 in 0.0 ..= 2.0;
+        missile_seek_range: f32 = 520.0 in 16.0 ..= 3000.0;
+        missile_fallback_range: f32 = 260.0 in 16.0 ..= 3000.0;
+        /// Stage three, the chase: top ground speed (px/s), how fast it
+        /// gets there (px/s^2) and how fast it turns (degrees/s), the turn
+        /// rate growing by `missile_turn_rate_growth_deg` every second of
+        /// the chase so a missile circling its target always tightens in.
+        missile_speed: f32 = 330.0 in 20.0 ..= 3000.0;
+        missile_accel: f32 = 700.0 in 1.0 ..= 10000.0;
+        missile_turn_rate_deg: f32 = 200.0 in 1.0 ..= 3600.0;
+        missile_turn_rate_growth_deg: f32 = 240.0 in 0.0 ..= 3600.0;
+        /// The missile comes down over this last stretch to its target
+        /// (px): full height beyond it, the ground at the end.
+        missile_dive_distance: f32 = 150.0 in 1.0 ..= 1000.0;
+        /// Inside this distance (px) it stops tracking and dives on the
+        /// spot it last saw the target at - a tank that keeps moving can
+        /// still slip the blast.
+        missile_commit_distance: f32 = 56.0 in 0.0 ..= 500.0;
+        /// A chase that has not come down after this long commits to a
+        /// dive straight ahead.
+        missile_max_flight_seconds: f32 = 4.0 in 0.5 ..= 30.0;
+        /// Each missile's blast: radius (px), centre damage (falling off
+        /// linearly to 0 at the edge) and the shove. Only the side opposing
+        /// the shooter is hurt; everything in range is shoved, and tiles
+        /// crack like under any blast.
+        missile_blast_radius: f32 = 44.0 in 0.0 ..= 400.0;
+        missile_blast_damage_min: f32 = 7.0 in 0.0 ..= 100.0;
+        missile_blast_damage_max: f32 = 13.0 in 0.0 ..= 100.0;
+        missile_blast_knockback_speed: f32 = 60.0 in 0.0 ..= 400.0;
+        /// Size of a missile's fireball and scorch against a barrel's.
+        missile_blast_fx_scale: f32 = 0.55 in 0.1 ..= 2.0;
+        /// Launch kick per missile - small, a volley is four of them.
+        missile_recoil_speed: f32 = 6.0 in 0.0 ..= 200.0;
+        missile_recoil_max_speed: f32 = 14.0 in 0.0 ..= 400.0;
+        /// How much bigger a missile draws at the top of its climb than on
+        /// the ground - nearer the camera.
+        missile_apex_draw_scale: f32 = 1.35 in 1.0 ..= 3.0;
+        /// Exhaust puffs per second behind each missile in the air.
+        missile_trail_rate: f32 = 28.0 in 0.0 ..= 200.0;
+        missile_shadow_opacity: f32 = 0.3 in 0.0 ..= 1.0;
+    }
+
     group flamethrower {
         /// Seconds of burn one flamethrower pickup grants; a second pickup
         /// stacks. The weapon is stocked while any fuel is left, and the
@@ -1774,6 +1842,13 @@ impl Tuning {
     pub fn minigun_burst_cooldown_seconds(&self) -> f32 {
         (self.minigun_burst_size.saturating_sub(1)) as f32 * self.minigun_bullet_delay_seconds
             + self.minigun_burst_trailing_gap_seconds
+    }
+
+    /// Fire cooldown held for a whole missile volley: every queued
+    /// launch's delay plus the pod's reload.
+    pub fn missile_volley_cooldown_seconds(&self) -> f32 {
+        (self.missile_volley_size.saturating_sub(1)) as f32 * self.missile_launch_delay_seconds
+            + self.missile_reload_seconds
     }
 
     /// Schema row for `name`, if it's a table row.

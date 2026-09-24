@@ -335,6 +335,13 @@ impl Fx {
                         self.burst(Position::new(x, y), ParticleKind::Spark, self.count(10), 60.0, &[HEAL_T, WHITE_T]);
                         self.burst(Position::new(x, y), ParticleKind::Ember, self.count(4), 26.0, &[HEAL_T]);
                     }
+                    // A seeker missile coming down: a tight fireball's
+                    // worth of sparks and a puff, a volley's four in a row.
+                    Event::MissileBlast { x, y, .. } => {
+                        self.burst(Position::new(x, y), ParticleKind::Spark, self.count(10), 150.0, &[FIRE_T, EMBER_T, WHITE_T]);
+                        self.burst(Position::new(x, y), ParticleKind::Smoke, self.count(4), 30.0, &[SMOKE_T]);
+                        self.splash_if_wet(game, Position::new(x, y), 8);
+                    }
                     Event::CookOff { x, y } => {
                         self.burst(Position::new(x, y), ParticleKind::Spark, self.count(8), 120.0, &[FIRE_T, EMBER_T]);
                     }
@@ -445,6 +452,25 @@ impl Fx {
                 if self.due(key ^ 0x5a5a, stream_rate * 0.12, dt) {
                     let end = Position::new(jet.origin.x + jet.dir.x * jet.reach, jet.origin.y + jet.dir.y * jet.reach);
                     self.burst(end, ParticleKind::Smoke, 1, 16.0, &[SMOKE_T]);
+                }
+            }
+        }
+        // Seeker missiles in the air trail pale exhaust, a spark now and
+        // then off the motor. Dust rather than smoke: a light, short-lived
+        // puff draws the flight path, where smoke's long dark life stacks
+        // into columns. Drained like the flame stream: a missile owes more
+        // than one puff a frame at its rate.
+        let trail = tuning().missile_trail_rate * tuning().fx_density;
+        if trail > 0.0 {
+            for (id, tail, _lift) in game.missiles() {
+                let key = 0x3155_0000 ^ id;
+                let mut n = 0;
+                while n < 4 && self.due(key, trail, dt) {
+                    self.burst(tail, ParticleKind::Dust, 1, 10.0, &[STONE_LT, SMOKE_LT, WHITE_T]);
+                    n += 1;
+                }
+                if self.due(key ^ 0x0f0f, trail * 0.25, dt) {
+                    self.burst(tail, ParticleKind::Spark, 1, 40.0, &[FIRE_T, EMBER_T]);
                 }
             }
         }

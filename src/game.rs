@@ -21,6 +21,7 @@ use crate::ai::Ai;
 use hecs::Entity;
 use std::collections::HashSet;
 use crate::pickup::{Pickup, PickupKind, draw_pickup};
+use crate::missile::{Missile, draw_missile, draw_missile_shadow};
 use crate::plasma::{Plasma, PlasmaState, draw_plasma, draw_plasma_shadow};
 use crate::shell::{Shell, ShellState, draw_shell, draw_shell_shadow};
 use crate::hud::{
@@ -37,7 +38,8 @@ use crate::tank::Dir;
 #[cfg(feature = "dev-tools")]
 use crate::tank::ActiveWeapon;
 use crate::tank::{
-    Tank, draw_enemy_ring, draw_minigun_mount, draw_minigun_mount_shadow, draw_player_label, draw_player_locate,
+    Tank, draw_enemy_ring, draw_minigun_mount, draw_minigun_mount_shadow, draw_missile_pod, draw_missile_pod_shadow,
+    draw_player_label, draw_player_locate,
     draw_player_ring, draw_tank, draw_tank_shadow, draw_tank_shield,
 };
 use crate::track::draw_track;
@@ -52,6 +54,8 @@ pub struct Textures<'a> {
     pub shells: &'a Texture2D,
     pub plasma: &'a Texture2D,
     pub minigun_bullets: &'a Texture2D,
+    /// static/missile.png - a seeker missile in flight (missile.rs).
+    pub missile: &'a Texture2D,
     pub damage: &'a Texture2D,
     pub tracks: &'a Texture2D,
     pub obstacles: &'a Texture2D,
@@ -68,6 +72,7 @@ pub struct Textures<'a> {
     pub pickup_laser: &'a Texture2D,
     pub pickup_minigun: &'a Texture2D,
     pub pickup_plasma: &'a Texture2D,
+    pub pickup_missiles: &'a Texture2D,
     pub pickup_speedup: &'a Texture2D,
     pub pickup_shield: &'a Texture2D,
     pub pickup_flamethrower: &'a Texture2D,
@@ -76,6 +81,9 @@ pub struct Textures<'a> {
     /// holds minigun ammo - see `tank::draw_minigun_mount`. One shared
     /// texture for every chassis (unlike `tanks` above), not a sheet.
     pub minigun_mount: &'a Texture2D,
+    /// The seeker-missile pod on a turret while the tank holds missiles -
+    /// see `tank::draw_missile_pod`. One texture for every chassis.
+    pub missile_pod: &'a Texture2D,
     /// The tall-grass sheet of the round's map theme
     /// (`map::Theme::grass_texture_path`, grass.rs); `ground` above is the
     /// theme's ground tileset the same way. `app.rs` picks both per frame.
@@ -102,6 +110,7 @@ impl Sheets for Textures<'_> {
             Sheet::Grass(_) => self.grass,
             Sheet::Damage => self.damage,
             Sheet::MinigunMount => self.minigun_mount,
+            Sheet::MissilePod => self.missile_pod,
             Sheet::Tracks => self.tracks,
             Sheet::BarrelExplosion => self.barrel_explosion,
             Sheet::Portal => self.portal,
@@ -111,6 +120,7 @@ impl Sheets for Textures<'_> {
                 PickupKind::Laser => self.pickup_laser,
                 PickupKind::Minigun => self.pickup_minigun,
                 PickupKind::Plasma => self.pickup_plasma,
+                PickupKind::Missiles => self.pickup_missiles,
                 PickupKind::SpeedUp => self.pickup_speedup,
                 PickupKind::Shield => self.pickup_shield,
                 PickupKind::Flamethrower => self.pickup_flamethrower,
@@ -160,9 +170,11 @@ fn draw_one_tank(c: &mut impl Canvas, tank: &Tank, role: TankRole, time: f32, sh
     if shadows {
         draw_tank_shadow(c, tank);
         draw_minigun_mount_shadow(c, tank);
+        draw_missile_pod_shadow(c, tank);
     }
     draw_tank(c, tank);
     draw_minigun_mount(c, tank);
+    draw_missile_pod(c, tank);
     if role != TankRole::RollIn {
         draw_damage(c, tank, time);
     }
@@ -573,6 +585,17 @@ impl Game {
                 for drum in &self.flying_drums {
                     draw_flying_drum(&mut c, drum, self.shadows_enabled);
                 }
+            }
+
+            // Seeker missiles are the highest thing in the air: over the
+            // debris, shadows first so none lands on another missile.
+            if self.shadows_enabled {
+                for missile in self.world.query::<&Missile>().iter() {
+                    draw_missile_shadow(&mut d, textures.missile, missile);
+                }
+            }
+            for missile in self.world.query::<&Missile>().iter() {
+                draw_missile(&mut d, textures.missile, missile);
             }
 
             // Sparks, chips, dust and smoke over the top of everything in
@@ -1056,6 +1079,7 @@ fn draw_tank_stats(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>, geo: &
         ActiveWeapon::Laser => ("LASER", tank.laser_charges),
         ActiveWeapon::Plasma => ("PLASMA", tank.plasma_ammo),
         ActiveWeapon::Minigun => ("MINIGUN", tank.minigun_ammo),
+        ActiveWeapon::Missiles => ("MISSILES", tank.missile_ammo),
         ActiveWeapon::Flamethrower => ("FLAME", tank.flame_fuel_seconds()),
         ActiveWeapon::Shell => ("SHELL", tank.shells_ammo),
     };
@@ -1170,6 +1194,11 @@ impl Game {
             }
             for b in self.world.query::<&Bullet>().iter() {
                 boxes.push((b.position, b.velocity, tuning().minigun_bullet_hit_half_extent));
+            }
+            // A missile has no hit box: its aim point, and the line to it.
+            for m in self.world.query::<&Missile>().iter() {
+                d.draw_line(m.position.x as i32, m.position.y as i32, m.aim.x as i32, m.aim.y as i32, Color::new(255, 120, 0, 160));
+                d.draw_circle_lines(m.aim.x as i32, m.aim.y as i32, tuning().missile_blast_radius, Color::ORANGE);
             }
             for (pos, vel, half) in boxes {
                 let size = (half * 2.0).round().max(2.0) as i32;

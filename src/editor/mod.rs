@@ -124,6 +124,7 @@ pub struct EditorTextures<'a> {
     pub pickup_laser: &'a Texture2D,
     pub pickup_minigun: &'a Texture2D,
     pub pickup_plasma: &'a Texture2D,
+    pub pickup_missiles: &'a Texture2D,
     pub pickup_speedup: &'a Texture2D,
     pub pickup_shield: &'a Texture2D,
     pub pickup_flamethrower: &'a Texture2D,
@@ -157,11 +158,12 @@ impl Sheets for EditorTextures<'_> {
             Sheet::Pickup(PickupKind::Laser) => self.pickup_laser,
             Sheet::Pickup(PickupKind::Minigun) => self.pickup_minigun,
             Sheet::Pickup(PickupKind::Plasma) => self.pickup_plasma,
+            Sheet::Pickup(PickupKind::Missiles) => self.pickup_missiles,
             Sheet::Pickup(PickupKind::SpeedUp) => self.pickup_speedup,
             Sheet::Pickup(PickupKind::Shield) => self.pickup_shield,
             Sheet::Pickup(PickupKind::Flamethrower) => self.pickup_flamethrower,
             Sheet::Pickup(PickupKind::FrogHealth) => self.pickup_frog_health,
-            Sheet::Damage | Sheet::MinigunMount | Sheet::Tracks | Sheet::BarrelExplosion | Sheet::Frog { .. } => {
+            Sheet::Damage | Sheet::MinigunMount | Sheet::MissilePod | Sheet::Tracks | Sheet::BarrelExplosion | Sheet::Frog { .. } => {
                 panic!("the builder has no {sheet:?} sheet")
             }
         }
@@ -244,7 +246,7 @@ pub enum Tool {
 
 /// Every brush, in bar order: the categories one after another, the
 /// eraser last.
-pub const TOOLS: [Tool; 31] = [
+pub const TOOLS: [Tool; 32] = [
     Tool::Wall(Material::Brick),
     Tool::Wall(Material::Iron),
     Tool::Wall(Material::Wood),
@@ -271,6 +273,7 @@ pub const TOOLS: [Tool; 31] = [
     Tool::Pickup(PickupKind::Laser),
     Tool::Pickup(PickupKind::Minigun),
     Tool::Pickup(PickupKind::Plasma),
+    Tool::Pickup(PickupKind::Missiles),
     Tool::Pickup(PickupKind::SpeedUp),
     Tool::Pickup(PickupKind::Shield),
     Tool::Pickup(PickupKind::Flamethrower),
@@ -310,6 +313,7 @@ impl Tool {
             Tool::Pickup(PickupKind::Laser) => "laser",
             Tool::Pickup(PickupKind::Minigun) => "minigun",
             Tool::Pickup(PickupKind::Plasma) => "plasma",
+            Tool::Pickup(PickupKind::Missiles) => "missiles",
             Tool::Pickup(PickupKind::SpeedUp) => "speedup",
             Tool::Pickup(PickupKind::Shield) => "shield",
             Tool::Pickup(PickupKind::Flamethrower) => "flamethrower",
@@ -1895,6 +1899,7 @@ fn pickup_texture<'a>(textures: &EditorTextures<'a>, pickup: PickupKind) -> &'a 
         PickupKind::Laser => textures.pickup_laser,
         PickupKind::Minigun => textures.pickup_minigun,
         PickupKind::Plasma => textures.pickup_plasma,
+        PickupKind::Missiles => textures.pickup_missiles,
         PickupKind::SpeedUp => textures.pickup_speedup,
         PickupKind::Shield => textures.pickup_shield,
         PickupKind::Flamethrower => textures.pickup_flamethrower,

@@ -13,6 +13,9 @@ use crate::{
     MAX_DAMAGE,
     MINIGUN_MOUNT_SCALE,
     MINIGUN_MOUNT_TEXTURE_SIZE,
+    MISSILE_POD_FRAMES,
+    MISSILE_POD_TEXTURE_SIZE,
+    MISSILE_TUBE_OFFSETS,
     Position,
     TANK_BROKEN_TURRET_COL,
     TANK_HULL_BBOX_BY_ROW,
@@ -233,12 +236,24 @@ pub struct MinigunBurst {
     pub aim_offset: f32,
 }
 
+/// A seeker-missile volley in progress: `missiles_remaining` more to leave
+/// the pod, `timer` until the next one, `next_tube` the tube it leaves from -
+/// see `Tank::missile_volley`. The `MinigunBurst` shape, one missile per
+/// tube.
+#[derive(Clone, Copy)]
+pub struct MissileVolley {
+    pub missiles_remaining: u32,
+    pub timer: f32,
+    pub next_tube: u8,
+}
+
 /// Which weapon a tank's next trigger-pull fires - see `Tank::active_weapon`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActiveWeapon {
     Laser,
     Plasma,
     Minigun,
+    Missiles,
     Flamethrower,
     Shell,
 }
@@ -250,6 +265,7 @@ impl ActiveWeapon {
             ActiveWeapon::Laser => "laser",
             ActiveWeapon::Plasma => "plasma",
             ActiveWeapon::Minigun => "minigun",
+            ActiveWeapon::Missiles => "missiles",
             ActiveWeapon::Flamethrower => "flamethrower",
             ActiveWeapon::Shell => "shell",
         }
@@ -289,6 +305,14 @@ pub struct Tank {
     /// the same call sites `pending_shot` is already ticked for player and
     /// enemy.
     pub minigun_burst: Option<MinigunBurst>,
+    /// A seeker-missile volley in progress (`MissileVolley`), ticked with
+    /// the other queued shots so a volley always completes unless the tank
+    /// is wrecked. `None` the rest of the time.
+    pub missile_volley: Option<MissileVolley>,
+    /// How many of the pod's tubes read empty right now (0..=4, the
+    /// `missile_pod.png` column): counts up as a volley leaves, back down
+    /// as the reload runs (`tick_missile_pod`). Presentation only.
+    pub missile_tubes_empty: u8,
     /// Row in damage.png this tank's damage overlay is drawn from
     /// (0..DAMAGE_VARIANTS). Rolled once at spawn (see Game::init) and fixed
     /// for the tank's whole life, so its damage sequence reads as one
@@ -406,6 +430,11 @@ pub struct Tank {
     /// `PLASMA_PURPLE_PICKUP_CHANCE`), meaningless while `plasma_ammo == 0`.
     /// Same mechanism as `laser_variant`.
     pub plasma_variant: PlasmaVariant,
+    /// Remaining seeker missiles (`pickup::PickupKind::Missiles`,
+    /// `missile.rs`). Pickup-only, one per missile - a full volley costs
+    /// `missile_volley_size`. While this is the live weapon and positive,
+    /// a trigger pull fires a volley instead of a shell.
+    pub missile_ammo: i32,
     /// Flamethrower fuel in seconds of burn (`pickup::PickupKind::
     /// Flamethrower`, docs/flamethrower-prd.md). Pickup-only; drained by
     /// `dt` every frame the trigger is held with the flamethrower live.
@@ -561,6 +590,8 @@ impl Default for Tank {
             pending_shot: None,
             pending_plasma_shot: None,
             minigun_burst: None,
+            missile_volley: None,
+            missile_tubes_empty: 0,
             damage_variant: 0,
             position: Position::default(),
             rotation: 0.0,
@@ -585,6 +616,7 @@ impl Default for Tank {
             minigun_ammo: 0,
             plasma_ammo: 0,
             plasma_variant: PlasmaVariant::Teal,
+            missile_ammo: 0,
             weapon_queue: Vec::new(),
             speed_boost_timer: 0.0,
             throttle: 1.0,
@@ -663,6 +695,7 @@ impl Tank {
             PickupKind::Laser => self.laser_charges <= 0,
             PickupKind::Plasma => self.plasma_ammo <= 0,
             PickupKind::Minigun => self.minigun_ammo <= 0,
+            PickupKind::Missiles => self.missile_ammo <= 0,
             PickupKind::SpeedUp => self.speed_boost_timer <= 0.0,
             PickupKind::Shield => self.shield_hp <= 0.0,
             // Player-only: the fuel tank does nothing for an enemy at all.
@@ -870,6 +903,7 @@ impl Tank {
             ActiveWeapon::Laser => self.laser_charges,
             ActiveWeapon::Plasma => self.plasma_ammo,
             ActiveWeapon::Minigun => self.minigun_ammo,
+            ActiveWeapon::Missiles => self.missile_ammo,
             // Whole seconds, rounded up: the last fraction still fires.
             ActiveWeapon::Flamethrower => self.flame_fuel.ceil().max(0.0) as i32,
             ActiveWeapon::Shell => self.shells_ammo,
@@ -911,6 +945,20 @@ impl Tank {
             self.minigun_cycle_timer =
                 (self.minigun_cycle_timer + dt) % (tuning().minigun_cycle_seconds * 3.0);
         }
+    }
+
+    /// Keep `missile_tubes_empty` in step with the pod: a volley in flight
+    /// shows the tubes it has emptied; after it, the tubes refill one by
+    /// one as `fire_cooldown` runs down the reload. Called with the other
+    /// per-tank timers, after `fire_cooldown` has ticked.
+    pub fn tick_missile_pod(&mut self) {
+        if self.missile_volley.is_some() || self.missile_tubes_empty == 0 {
+            return;
+        }
+        let reload = tuning().missile_reload_seconds;
+        let tubes = MISSILE_TUBE_OFFSETS.len() as f32;
+        let empty = if reload > 0.0 { (self.fire_cooldown / reload * tubes).ceil().clamp(0.0, tubes) as u8 } else { 0 };
+        self.missile_tubes_empty = self.missile_tubes_empty.min(empty);
     }
 
     /// Which of `minigun_mount.png`'s 3 "hot barrel" frames to draw right
@@ -1819,6 +1867,39 @@ pub fn draw_minigun_mount_shadow(c: &mut impl Canvas, tank: &Tank) {
     let origin = draw_pivot(size);
     let shadow = Color::new(0, 0, 0, (255.0 * tuning().tank_shadow_opacity * tank.alpha()) as u8);
     c.blit(Sheet::MinigunMount, src, dest, origin, tank.turret_visual_rotation, shadow);
+}
+
+/// Draw the seeker-missile pod on the turret while the tank holds missile
+/// ammo - the `draw_minigun_mount` rules exactly (same pivot, turret
+/// rotation, flat scale, hidden on a wreck, shown whether or not it is the
+/// live weapon), with the column picked by how many tubes are empty
+/// (`missile_tubes_empty`).
+pub fn draw_missile_pod(c: &mut impl Canvas, tank: &Tank) {
+    if tank.missile_ammo <= 0 || tank.is_wreck() {
+        return;
+    }
+    blit_missile_pod(c, tank, tank.position, Color::WHITE);
+}
+
+/// Shadow pass for `draw_missile_pod`, at the turret's own shadow offset.
+pub fn draw_missile_pod_shadow(c: &mut impl Canvas, tank: &Tank) {
+    if tank.missile_ammo <= 0 || tank.is_wreck() {
+        return;
+    }
+    let at = Position::new(
+        tank.position.x + tuning().shadow_dir_x * tuning().tank_shadow_offset,
+        tank.position.y + tuning().shadow_dir_y * tuning().tank_shadow_offset,
+    );
+    let shadow = Color::new(0, 0, 0, (255.0 * tuning().tank_shadow_opacity * tank.alpha()) as u8);
+    blit_missile_pod(c, tank, at, shadow);
+}
+
+fn blit_missile_pod(c: &mut impl Canvas, tank: &Tank, at: Position, tint: Color) {
+    let col = (tank.missile_tubes_empty as i32).clamp(0, MISSILE_POD_FRAMES - 1);
+    let src = Rectangle::new(col as f32 * MISSILE_POD_TEXTURE_SIZE, 0.0, MISSILE_POD_TEXTURE_SIZE, MISSILE_POD_TEXTURE_SIZE);
+    let size = MISSILE_POD_TEXTURE_SIZE * tank.scale;
+    let dest = Rectangle::new(at.x, at.y, size, size);
+    c.blit(Sheet::MissilePod, src, dest, draw_pivot(size), tank.turret_visual_rotation, tint);
 }
 
 // The FIFO weapon-inventory rule (`weapon_queue`/`active_weapon`/

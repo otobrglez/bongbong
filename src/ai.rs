@@ -1702,8 +1702,8 @@ fn build<'a>() -> Node<Brain<'a>> {
         // currently firing - it just lines up behind it - so this tier and
         // the two below are each gated only on "not already stocked with
         // that kind"; which detour is worth taking *first* is expressed by
-        // their tier order (laser, then plasma, then minigun - strongest
-        // first). See `act_seek_laser`.
+        // their tier order (laser, then plasma, then missiles, then minigun
+        // - strongest first). See `act_seek_laser`.
         sequence(vec![
             condition(|b: &mut Brain| {
                 b.me.wants_pickup(PickupKind::Laser) && b.pickups.iter().any(|(k, _)| *k == PickupKind::Laser)
@@ -1719,6 +1719,15 @@ fn build<'a>() -> Node<Brain<'a>> {
                     && b.pickups.iter().any(|(k, _)| *k == PickupKind::Plasma)
             }),
             action("seek_plasma", act_seek_plasma),
+        ]),
+        // 5.65. The seeker-missile pod, between plasma and the minigun: a
+        // volley finds its own target, so it is worth a detour.
+        sequence(vec![
+            condition(|b: &mut Brain| {
+                b.me.wants_pickup(PickupKind::Missiles)
+                    && b.pickups.iter().any(|(k, _)| *k == PickupKind::Missiles)
+            }),
+            action("seek_missiles", act_seek_missiles),
         ]),
         // 5.7. Same idea for a live Minigun pickup, last of the weapon
         // tiers (see tier 5.5's comment on ordering).
@@ -1827,6 +1836,17 @@ fn act_seek_laser(b: &mut Brain) -> Status {
 fn act_seek_plasma(b: &mut Brain) -> Status {
     b.reset_aim();
     let Some(target) = b.nearest_pickup(PickupKind::Plasma) else {
+        return Status::Failure;
+    };
+    b.intent.move_dir = Some(b.steer(target));
+    Status::Success
+}
+
+/// Same idea as `act_seek_laser`, for a Missiles pickup instead - see tier
+/// 5.65 (`build`) for when this is actually reached.
+fn act_seek_missiles(b: &mut Brain) -> Status {
+    b.reset_aim();
+    let Some(target) = b.nearest_pickup(PickupKind::Missiles) else {
         return Status::Failure;
     };
     b.intent.move_dir = Some(b.steer(target));
