@@ -78,6 +78,11 @@ pub mod encode;
 pub mod events;
 pub mod interp;
 pub mod loopback;
+// Your own tank on the frame you pressed the key (stage 2,
+// docs/online-coop-prd.md §4.12). It owns a `Game` it only ever calls
+// `predict_seat` on, so it needs no socket and no renderer and its tests
+// run headless.
+pub mod predict;
 // The client's socket: one implementation per platform, both behind the
 // `online` feature, so the headless crate the room server and the probe
 // build carries no second WebSocket stack.

@@ -1519,6 +1519,67 @@ impl Game {
     /// exactly `frame * PHYSICS_FIXED_DT`, which `net::apply` pins at
     /// every snapshot; this carries it forward in between, and holds it
     /// while a banner freezes the round the way `update` does.
+    /// One tick of *only* one seat's locomotion, for a client's
+    /// prediction sandbox (docs/online-coop-prd.md §4.12).
+    ///
+    /// This is deliberately not `update`: nothing here fires, ages,
+    /// damages, spawns or draws a single number of RNG. It is the hull
+    /// and the solver and nothing else, because that is the whole of what
+    /// a client may predict - locomotion is a pure function of intent
+    /// against a static world, which is what makes a replay land on the
+    /// server's answer rather than drift from it.
+    ///
+    /// The caller owns a `Game` built the way `net::apply::welcome`
+    /// builds a replica - same map, same seed - so the walls, the
+    /// obstacles and the deep-water boxes this steps against are the
+    /// server's own, by construction rather than by a second
+    /// implementation that could disagree.
+    pub(crate) fn predict_seat(&mut self, seat: usize, intent: Intent, dt: f32) {
+        let Some(entity) = self.seats.get(seat).copied().flatten() else { return };
+        // Disjoint borrows: `drive_tank` wants the solver and the hull at
+        // once, and they are two fields of the same struct.
+        let Game { world, physics, water, .. } = self;
+        let Ok(mut tank) = world.get::<&mut Tank>(entity) else { return };
+        if tank.body.is_none() {
+            return;
+        }
+        let footing = Footing::at(water, tank.position);
+        drive_tank(physics, &mut tank, intent, dt, footing);
+        physics.step();
+        // The solver moved the body; the tank's own position is what
+        // every reader (and the next tick's `Footing`) goes by.
+        if let Some(handle) = tank.body {
+            tank.position = physics.position(handle);
+        }
+    }
+
+    /// Put one seat's hull where an authority says it is, for the reset a
+    /// reconciliation starts from (docs/online-coop-prd.md §4.12).
+    ///
+    /// Position, facing and velocity together: a replay that starts from
+    /// the right place with the wrong momentum diverges within a few
+    /// ticks, because the drive model reads the body's velocity at the
+    /// top of every step.
+    pub(crate) fn place_seat(&mut self, seat: usize, position: Position, rotation: f32, velocity: Position) {
+        let Some(entity) = self.seats.get(seat).copied().flatten() else { return };
+        let Ok(mut tank) = self.world.get::<&mut Tank>(entity) else { return };
+        tank.position = position;
+        tank.rotation = rotation;
+        if let Some(handle) = tank.body {
+            self.physics.set_position(handle, position);
+            self.physics.set_velocity(handle, velocity);
+        }
+    }
+
+    /// One seat's hull as the sandbox has it: where it is, which way it
+    /// faces, and how fast it is going.
+    pub(crate) fn seat_motion(&self, seat: usize) -> Option<(Position, f32, Position)> {
+        let entity = self.seats.get(seat).copied().flatten()?;
+        let tank = self.world.get::<&Tank>(entity).ok()?;
+        let velocity = tank.body.map_or(Position::new(0.0, 0.0), |h| self.physics.velocity(h));
+        Some((tank.position, tank.rotation, velocity))
+    }
+
     pub fn tick_presentation(&mut self, dt: f32) {
         self.tick_effects(dt);
         let frozen = self.intro_timer > 0.0;
