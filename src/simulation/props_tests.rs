@@ -1350,6 +1350,33 @@ fn every_blast_shape_and_jitter_comes_from_the_position_hash() {
 }
 
 #[test]
+fn a_dying_tank_goes_up_as_a_mushroom_cloud_in_its_share_of_kills() {
+    // The pick is a position hash: the same spot always picks the same
+    // way, the share over many kill spots tracks the chance, and the
+    // cloud is never quarter-turned (its stem points up).
+    use crate::blast::BlastFx;
+    let spots: Vec<Position> = (0..2000).map(|i| Position::new(40.0 + (i % 50) as f32 * 13.7, 60.0 + (i / 50) as f32 * 11.3)).collect();
+    let is_cloud = |fx: &BlastFx| fx.row == crate::BLAST_ROW_MUSHROOM_CLOUD;
+    let clouds = spots.iter().filter(|&&p| is_cloud(&BlastFx::wreck_with(p, 0.7))).count();
+    let share = clouds as f32 / spots.len() as f32;
+    assert!((0.65..=0.75).contains(&share), "about 70% of kills are mushroom clouds: {share}");
+    for &p in &spots {
+        let fx = BlastFx::wreck_with(p, 0.7);
+        assert_eq!(is_cloud(&fx), is_cloud(&BlastFx::wreck_with(p, 0.7)));
+        if is_cloud(&fx) {
+            assert_eq!(fx.turn, 0);
+            assert!(fx.offset.y < 0.0, "lifted so the stem stands on the hull");
+        } else {
+            assert!(crate::BLAST_SHAPE_ROWS.contains(&fx.row));
+        }
+    }
+    assert!(spots.iter().all(|&p| !is_cloud(&BlastFx::wreck_with(p, 0.0))));
+    assert!(spots.iter().all(|&p| is_cloud(&BlastFx::wreck_with(p, 1.0))));
+    // A barrel never goes up as the cloud.
+    assert!(!crate::BLAST_SHAPE_ROWS.contains(&crate::BLAST_ROW_MUSHROOM_CLOUD));
+}
+
+#[test]
 fn debug_detonate_sets_a_barrel_off_like_a_direct_hit() {
     // Two oil drums side by side: the asked-for one goes up on the next
     // frame as an unchained blast, its neighbour chains off it on a fuse.

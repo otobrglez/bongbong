@@ -22,7 +22,9 @@ use crate::{
     BARREL_EXPLOSION_TEXTURE_SIZE,
     BLAST_ROW_DOUBLE,
     BLAST_ROW_FLAT,
+    BLAST_MUSHROOM_BASE_DROP,
     BLAST_ROW_MUSHROOM,
+    BLAST_ROW_MUSHROOM_CLOUD,
     BLAST_ROW_TALL,
     BLAST_SHAPE_ROWS,
     FIRE_LOOP_COL,
@@ -66,6 +68,10 @@ fn avalanche(mut h: u32) -> u32 {
     h ^= h >> 16;
     h
 }
+
+/// `seed_at` salt for the wreck's mushroom-cloud pick, clear of the
+/// other salts hashed at a kill position (parts, rubble, particles).
+const WRECK_MUSHROOM_SALT: u32 = 211;
 
 /// A unit-ish direction in the plane, for the cosmetic lean of a blast.
 /// Plain fields rather than a `Vector2` so the simulation can hand one
@@ -131,9 +137,32 @@ pub struct BlastFx {
 
 impl BlastFx {
     /// The reference fireball at `center`: the hashed shape, mirror,
-    /// turn and jitter with no cause-driven lean. What a dying tank uses.
+    /// turn and jitter with no cause-driven lean.
     pub fn new(center: Position) -> Self {
         Self::shaped(center, BlastKind::Oil, BlastShape::Plain)
+    }
+
+    /// A dying tank's fireball: the mushroom cloud in
+    /// `wreck_mushroom_chance` of kills, the reference fireball otherwise.
+    pub fn wreck(center: Position) -> Self {
+        Self::wreck_with(center, tuning().wreck_mushroom_chance)
+    }
+
+    /// `wreck` with the chance passed in. The pick is a salted position
+    /// hash, independent of the one that picks the plain row, so no RNG
+    /// is drawn. The cloud keeps the hashed mirror and jitter but not the
+    /// quarter-turn (its stem has to point up), and is lifted so the stem
+    /// stands on the hull.
+    pub fn wreck_with(center: Position, mushroom_chance: f32) -> Self {
+        let mut fx = Self::new(center);
+        let roll = (seed_at(center, WRECK_MUSHROOM_SALT) % 10_000) as f32 / 10_000.0;
+        if roll < mushroom_chance {
+            fx.row = BLAST_ROW_MUSHROOM_CLOUD;
+            fx.turn = 0;
+            let lift = BLAST_MUSHROOM_BASE_DROP * tuning().blast_anim_scale * fx.scale;
+            fx.offset = Lean { x: 0.0, y: -(lift / 2.0).round() * 2.0 };
+        }
+        fx
     }
 
     /// A barrel's fireball, shaped by what set it off.

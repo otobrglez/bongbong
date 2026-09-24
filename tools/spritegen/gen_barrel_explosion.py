@@ -1,7 +1,7 @@
 """Generate static/barrel_explosion.png - the oil barrel's blast animation
 and the scorch marks it leaves (docs/PROPS_SPEC.md, blast.rs).
 
-Layout: 768x320, five rows of 64x64 cells.
+Layout: 768x384, six rows of 64x64 cells.
     row 0  cols 0-11  the one-shot blast: flash, fireball, mushroom, smoke
     row 1  cols 0-4   five scorch-decal variants (three blots, two oil
                       splatters), col 5 the directional streak a shot's
@@ -11,6 +11,9 @@ Layout: 768x320, five rows of 64x64 cells.
     row 2  cols 0-11  the tall blast: a narrow column that rises fast
     row 3  cols 0-11  the flat blast: a wide, low splash, little smoke
     row 4  cols 0-11  the double blast: two cores, the second a beat behind
+    row 5  cols 0-11  the mushroom cloud a dying tank goes up in: a fireball
+                      that climbs a stem of fire, spreads into a rolling
+                      cap over a ring of dust, and thins out as smoke
 Row 0 is drawn by exactly the code it always was, so it is byte-identical
 to the single-row sheet; the new rows share its primitives through a
 shape table (sx, sy, rise, smoke, twin) and pick the same frame stages.
@@ -40,7 +43,7 @@ SCORCHES = 5
 STREAK_COL = 5
 FIRE_COL = 6
 FIRE_FRAMES = 3
-ROWS = 5
+ROWS = 6
 OUT = os.environ.get('SPRITE_OUT', 'assets/sprites')
 os.makedirs(OUT, exist_ok=True)
 
@@ -402,6 +405,110 @@ def double_frame(f, rng, sh):
     return first
 
 
+# ---------------------------------------------------------------- mushroom cloud
+# Row 5, a tank's death: never quarter-turned (the stem has to point up),
+# so every frame is drawn upright. The column stands on BASE, a little
+# below the cell centre, so the fire climbs off the hull rather than off
+# the ground behind it; the cap tops out near the cell's upper edge.
+BASE = 46
+
+
+def stem(img, top, bottom, w, cols):
+    """The column: nested widths, outermost colour first, a pixel of
+    wobble per row so it reads as rolling fire rather than a pipe."""
+    for i, c in enumerate(cols):
+        half = w * (1 - i / len(cols))
+        for y in range(int(top), int(bottom) + 1):
+            wob = 1 if (y * 7 + i * 3) % 5 == 0 else 0
+            for x in range(int(CX - half) - wob, int(CX + half) + 1 + wob):
+                put(img, x + 0.5, y, c)
+
+
+def skirt(img, rx, ry, c, rng, n=10):
+    """The ring of dust thrown out along the ground at the base."""
+    for k in range(n):
+        a = k * math.tau / n + rng.random() * 0.3
+        ell(img, CX + math.cos(a) * rx, BASE + math.sin(a) * ry, 4 + rng.random() * 2, 2 + rng.random(), c)
+
+
+def cap(img, cy, rx, ry, outer, inner, belly, rng):
+    """The rolling head: a lumpy flattened dome of `outer`, a smaller
+    `inner` roll on top, and `belly` - the fire still lighting its
+    underside - along the bottom edge."""
+    elump(img, CX, cy, rx, ry, outer, rng, 9)
+    elump(img, CX - rx * 0.25, cy - ry * 0.35, rx * 0.5, ry * 0.45, inner, rng, 5)
+    elump(img, CX + rx * 0.3, cy - ry * 0.3, rx * 0.45, ry * 0.4, inner, rng, 5)
+    if belly:
+        for k, c in enumerate(belly):
+            ell(img, CX, cy + ry * (0.45 + 0.12 * k), rx * (0.7 - 0.18 * k), ry * (0.35 - 0.08 * k), c)
+
+
+def mushroom_frame(f, rng):
+    img = blank()
+    if f == 0:
+        disc(img, CX, BASE - 4, 8, C(WHITE))
+        annulus(img, CX, BASE - 4, 8, 12, C(GOLD_BRIGHT))
+        rays(img, CX, BASE - 4, 17, C(WHITE), start=9)
+    elif f == 1:
+        skirt(img, 16, 5, smoke(200), rng)
+        lump(img, CX, BASE - 8, 15, C(RED_MD), rng, 7)
+        disc(img, CX, BASE - 8, 11, C(GOLD_BRIGHT))
+        disc(img, CX, BASE - 8, 6, C(WHITE))
+        debris(img, CX, BASE - 6, 20, 8, rng, DEBRIS)
+    elif f == 2:
+        skirt(img, 21, 6, smoke(210), rng)
+        stem(img, BASE - 14, BASE, 5, [C(RED_DEEP), C(RED_MD), C(GOLD_BRIGHT)])
+        lump(img, CX, BASE - 18, 16, C(RED_DEEP), rng, 8)
+        lump(img, CX, BASE - 18, 13, C(RED_MD), rng, 7)
+        disc(img, CX, BASE - 17, 9, C(GOLD_BRIGHT))
+        disc(img, CX, BASE - 16, 4, C(WHITE))
+        debris(img, CX, BASE - 12, 24, 10, rng, DEBRIS)
+        embers(img, CX, BASE - 14, 24, 10, rng, [C(GOLD_BRIGHT), C(RED_BRIGHT)])
+    elif f == 3:
+        skirt(img, 24, 7, smoke(200), rng)
+        stem(img, BASE - 22, BASE, 5, [C(RED_DEEP), C(RED_MD), C(RED_BRIGHT), C(GOLD_BRIGHT)])
+        cap(img, BASE - 25, 20, 10, C(RED_DEEP), C(RED_MD),
+            [C(RED_BRIGHT), C(GOLD_BRIGHT), C(WHITE)], rng)
+        embers(img, CX, BASE - 20, 24, 12, rng, [C(GOLD_BRIGHT), C(RED_BRIGHT)])
+    elif f == 4:
+        skirt(img, 25, 7, smoke(180), rng)
+        stem(img, BASE - 24, BASE, 5, [C(RED_DEEP), C(RED_MD), C(GOLD_BRIGHT)])
+        cap(img, BASE - 27, 23, 10, smoke_dk(235), smoke(235),
+            [C(RED_DEEP), C(RED_MD), C(GOLD_BRIGHT)], rng)
+        embers(img, CX, BASE - 22, 24, 10, rng, [C(GOLD_BRIGHT), C(RED_BRIGHT), C(RED_MD)])
+    elif f == 5:
+        skirt(img, 26, 7, smoke(150), rng)
+        stem(img, BASE - 26, BASE, 4, [smoke_dk(220), C(RED_DEEP), C(RED_MD)])
+        cap(img, BASE - 28, 24, 10, smoke_dk(225), smoke(225),
+            [C(RED_DEEP), C(RED_MD)], rng)
+        embers(img, CX, BASE - 24, 24, 8, rng, [C(GOLD_BRIGHT), C(RED_BRIGHT)])
+    elif f == 6:
+        skirt(img, 26, 7, smoke(115), rng)
+        stem(img, BASE - 27, BASE - 2, 4, [smoke(200), smoke_dk(200), C(RED_DEEP)])
+        cap(img, BASE - 29, 25, 10, smoke_dk(210), smoke_lt(210), [C(RED_DEEP)], rng)
+        embers(img, CX, BASE - 26, 26, 6, rng, [C(RED_BRIGHT), C(RED_MD)])
+    elif f in (7, 8, 9):
+        alpha = {7: 175, 8: 135, 9: 95}[f]
+        rise = f - 6
+        stem(img, BASE - 28 - rise, BASE - 4 - rise * 3, 3 - (f - 7), [smoke(alpha - 30), smoke_dk(alpha - 30)])
+        cap(img, BASE - 30 - rise // 2, 25 + rise, 10 - (f - 7), smoke_dk(alpha), smoke(alpha), None, rng)
+        embers(img, CX, BASE - 30, 24, 8 - (f - 7) * 2, rng, [C(RED_DK), C(RED_DEEP)])
+    elif f == 10:
+        for k in range(6):
+            a = rng.random() * math.tau
+            lump(img, CX + math.cos(a) * 22, BASE - 32 + math.sin(a) * 7, 5, smoke(55), rng, 4)
+        for _ in range(4):
+            put(img, CX + rng.randint(-26, 26), BASE - 32 + rng.randint(-8, 18), smoke_dk(120))
+        embers(img, CX, BASE - 30, 20, 2, rng, [C(RED_DK)])
+    else:
+        for k in range(5):
+            a = rng.random() * math.tau
+            lump(img, CX + math.cos(a) * 24, BASE - 33 + math.sin(a) * 7, 3, smoke(25), rng, 3)
+        for _ in range(5):
+            put(img, CX + rng.randint(-27, 27), BASE - 33 + rng.randint(-8, 18), smoke_dk(90))
+    return img
+
+
 def streak(rng):
     """Oil thrown downrange by a shot's blast: streaks fanning out to the
     right from just off centre, drawn over the blot."""
@@ -481,5 +588,7 @@ for row, name in ((2, 'tall'), (3, 'flat'), (4, 'double')):
         rng = random.Random(1200 + row * 100 + f * 7)
         cell = double_frame(f, rng, sh) if sh['twin'] else shaped_frame(f, rng, sh)
         sheet.paste(cell, (f * S, row * S))
+for f in range(FRAMES):
+    sheet.paste(mushroom_frame(f, random.Random(1800 + f * 7)), (f * S, 5 * S))
 sheet.save(f'{OUT}/barrel_explosion.png')
 print('barrel_explosion.png', sheet.size)

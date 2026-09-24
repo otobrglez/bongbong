@@ -18,7 +18,7 @@ nix-shell -p "python3.withPackages (ps: [ps.pillow])" \
 | File | Size | Grid | Drawn at |
 |---|---|---|---|
 | `props_sheet.png` | 128x320 | 4 cols x 10 rows of 32x32 | `OBSTACLE_SCALE` (1:1, like walls) |
-| `barrel_explosion.png` | 768x320 | 12 cols x 5 rows of 64x64 | `blast_anim_scale` / `scorch_scale` (2.0 default) |
+| `barrel_explosion.png` | 768x384 | 12 cols x 6 rows of 64x64 | `blast_anim_scale` / `scorch_scale` (2.0 default) |
 
 RGBA, no padding, nearest-neighbour sampling. Slice `x = col*cell, y =
 row*cell`. Every non-transparent pixel is on the Puny Palette
@@ -83,7 +83,7 @@ baked into the art.
 
 ## 3. Sheet map — `barrel_explosion.png`
 
-Rows 0, 2, 3 and 4, cols 0–11: the one-shot blast in four shapes
+Rows 0, 2, 3 and 4, cols 0–11: the one-shot barrel blast in four shapes
 (`BLAST_SHAPE_ROWS`), played at `blast_anim_fps` times a per-blast hashed
 jitter (`barrel_fps_jitter`), clamped to the last frame, removed when done
 (`blast::BlastFx`). Row 0 is the mushroom described below; row 2 is the
@@ -113,6 +113,24 @@ From frame 4 the cloud's centre drifts up one pixel a frame — smoke rising
 by its `seed` (a hash of its position) so two chained blasts don't look
 cloned; drawn oldest first, a chained blast's flash lands on the earlier
 fireball and reads as a second detonation.
+
+Row 5, cols 0–11: the **mushroom cloud**, a tank's death only
+(`BLAST_ROW_MUSHROOM_CLOUD`, outside `BLAST_SHAPE_ROWS` so a barrel never
+picks it). `BlastFx::wreck` takes it for `wreck_mushroom_chance` (0.7) of
+kills, picked from a salted position hash (no RNG); the rest get the
+reference fireball. It keeps the hashed mirror and jitter but is never
+quarter-turned, and is lifted by `BLAST_MUSHROOM_BASE_DROP` times its draw
+scale so the stem stands on the hull.
+
+| Frame | Content |
+|---|---|
+| 0 | the flash, low in the cell where the stem will stand |
+| 1 | fireball on the ground, the first ring of dust around it |
+| 2 | the fireball climbs off a short stem of fire, debris and embers |
+| 3 | the head spreads into a fiery cap with a white-hot underside over a rising stem |
+| 4–6 | the cap turns to dark rolling smoke, its belly still lit red, the stem cooling from gold to smoke, the dust ring spreading and fading |
+| 7–9 | the cap drifts up and widens as the stem thins, alpha 175 → 95 |
+| 10–11 | wisps and specks where the cap was |
 
 Row 1, cols 0–4: five scorch decals (`SCORCH_VARIANTS`) — three lumpy
 black blots with a darker ring of lumps, ten radial streaks, a lighter
