@@ -374,17 +374,29 @@ impl<T: Transport> OnlineRound<T> {
     /// The picture at render time, then the cosmetics of one frame.
     fn draw(&mut self, dt: f32, now: i64) {
         let Some(game) = self.replica.as_mut() else { return };
-        if let Some(frame) = self.interp.sample(now) {
+        let sampled = self.interp.sample(now);
+        if let Some(frame) = &sampled {
             apply::snapshot(game, &frame.snapshot);
-            game.tick_presentation(dt);
+        }
+        // **Before `tick_presentation`, not after.** The presentation
+        // pass eases `visual_rotation` toward `rotation` and presses the
+        // tread marks out of the hull's displacement, so it has to run on
+        // the pose that will actually be drawn. Writing the prediction
+        // after it left the rendered hull chasing the server's facing
+        // from `online_interpolation_delay_ms` ago while its position was
+        // already at the present - a tank that slides without turning.
+        self.write_predicted();
+        let Some(game) = self.replica.as_mut() else { return };
+        game.tick_presentation(dt);
+        if let Some(frame) = &sampled {
             // `apply` puts the clock on the snapshot's own tick; the
             // picture stands a fraction of an interval past it, and the
             // water, the fire loops and the sprite cycles read it.
             game.time = frame.snapshot.tick as f32 * PHYSICS_FIXED_DT + frame.ahead;
-        } else {
-            game.tick_presentation(dt);
         }
-        self.draw_predicted(dt);
+        if let Some(predictor) = self.predictor.as_mut() {
+            predictor.decay(dt);
+        }
     }
 
     /// Put the predicted hull where the local seat is drawn.
@@ -396,15 +408,17 @@ impl<T: Transport> OnlineRound<T> {
     /// Everything downstream is unchanged, and turning the knob off on
     /// any frame simply stops the write - the interpolated hull is
     /// already underneath it.
-    fn draw_predicted(&mut self, dt: f32) {
+    fn write_predicted(&mut self) {
         if !tuning().online_predict_own_tank {
             return;
         }
-        let (Some(predictor), Some(game)) = (self.predictor.as_mut(), self.replica.as_mut()) else { return };
-        predictor.decay(dt);
+        let (Some(predictor), Some(game)) = (self.predictor.as_ref(), self.replica.as_mut()) else { return };
         let (Some(seat), Some(position)) = (self.client.seat(), predictor.drawn_position()) else { return };
-        let Some((_, rotation, _)) = predictor.motion() else { return };
-        game.place_seat(seat as usize, position, rotation, Position::new(0.0, 0.0));
+        // The velocity is the prediction's own, not zero: `fx` reads it
+        // for the spray and the dust, and a hull the solver believes is
+        // stopped settles differently from one that is moving.
+        let Some((_, rotation, velocity)) = predictor.motion() else { return };
+        game.place_seat(seat as usize, position, rotation, velocity);
     }
 
     /// Pull the sandbox back into line with a snapshot that just landed.

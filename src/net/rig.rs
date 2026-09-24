@@ -811,30 +811,81 @@ mod tests {
     /// hull this client steers is drawn where it will be, not where the
     /// room last said it was.
     ///
-    /// Driven right for a while, the predicted seat has to be *ahead* of
-    /// the interpolated picture - the client has applied inputs the room
-    /// has not acknowledged yet. With the knob off the same run draws it
-    /// exactly where the room put it, which is the stage 1 behaviour and
-    /// what makes this an A/B rather than an assertion about a number.
+    /// `play` drives right the whole run, so the predicted hull is always
+    /// further right than the interpolated picture the room's snapshots
+    /// bracket. The gap is the lead plus the interpolation delay, which
+    /// is exactly the latency stage 2 removes.
     #[test]
     fn the_steered_hull_is_drawn_ahead_of_the_room() {
         if !tuning().online_predict_own_tank {
             return; // the build ships with it on; nothing to compare.
         }
-        let mut rig = Lockstep::start(options(LinkQuality::PERFECT));
-        rig.drive(Intent { move_dir: Some(Dir::Right), ..Intent::default() });
-        rig.step(90);
-
-        let drawn = seat_hull(&rig).0;
-        // Where the room itself has the hull, on the newest snapshot the
-        // client has: the interpolated picture can be no fresher.
-        let room = {
-            let state = rig.authority().expect("the room's own round").drawable_state();
-            state.tanks.iter().find(|t| t.slot == 0).expect("the seat's tank").x
-        };
+        let (_, round, seen, authority) = play(LinkQuality::PERFECT, 120);
+        let drawn = seen.last().expect("a drawn frame").hulls.iter().find(|(slot, _, _)| *slot == 0).expect("the seat").1;
+        let room = authority
+            .last()
+            .expect("a snapshot")
+            .1
+            .iter()
+            .find(|(slot, _, _)| *slot == 0)
+            .expect("the seat")
+            .1;
+        assert!(round.game().is_some(), "the welcome arrived");
         assert!(
-            drawn >= room,
-            "the steered hull was drawn at {drawn}, behind the room's {room} - prediction did nothing"
+            drawn > room,
+            "the steered hull was drawn at {drawn}, not ahead of the room's {room} - prediction did nothing"
+        );
+    }
+
+    /// **The hull has to turn with the prediction, not behind it.**
+    ///
+    /// `tick_presentation` eases `visual_rotation` toward `rotation`, so
+    /// it has to run on the pose that will be drawn. With the write
+    /// after it, every frame went: snapshot sets the facing to the
+    /// server's (a hundred milliseconds old), the easing chases *that*,
+    /// then the prediction overwrites it - and the next frame's snapshot
+    /// overwrites the prediction again. The drawn hull never once saw the
+    /// predicted facing, so it slid across the field still pointing the
+    /// old way.
+    ///
+    /// Which is why this turns late and looks straight away: driving one
+    /// way the whole run, the server and the prediction agree and the bug
+    /// is invisible.
+    #[test]
+    fn the_predicted_hull_turns_with_the_prediction() {
+        if !tuning().online_predict_own_tank {
+            return;
+        }
+        let (_rig, link) = start(options(LinkQuality::PERFECT));
+        let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
+        let mut round = OnlineRound::new(client, "RIG");
+
+        // Long enough that the room is welcoming, ticking and agreeing
+        // that this hull faces right.
+        for _ in 0..90 {
+            round.frame(&Intent { move_dir: Some(Dir::Right), ..Intent::default() }, FRAME.as_secs_f32());
+            thread::sleep(FRAME);
+        }
+        // Then turn, and look before the room's word can catch up.
+        for _ in 0..4 {
+            round.frame(&Intent { move_dir: Some(Dir::Down), ..Intent::default() }, FRAME.as_secs_f32());
+            thread::sleep(FRAME);
+        }
+
+        let replica = round.game().expect("a replica");
+        let mut seen = None;
+        for t in replica.world.query::<&crate::tank::Tank>().iter() {
+            if t.owner_slot() == 0 {
+                seen = Some((t.visual_rotation, t.rotation));
+            }
+        }
+        let (visual, facing) = seen.expect("the seat's tank");
+        assert_eq!(facing, Dir::Down.rotation(), "the prediction turned");
+        assert_ne!(
+            visual,
+            Dir::Right.rotation(),
+            "the drawn hull is still pointing the old way at {visual} while the prediction faces {facing}: \
+             the presentation pass never saw the prediction"
         );
     }
 
