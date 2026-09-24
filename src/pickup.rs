@@ -37,9 +37,9 @@ pub enum PickupKind {
     Plasma,
     /// Grants `missile_ammo_per_pickup` seeker missiles and queues the
     /// four-tube pod (FIFO, as above) - while live and stocked, a trigger
-    /// pull fires a volley of missiles that climb, lock onto the nearest
-    /// opposing tank and dive on it (`missile.rs`). Players and enemies
-    /// both use it.
+    /// pull fires a volley (two salvos of four by default) that climb,
+    /// lock onto the nearest opposing tank and dive on it (`missile.rs`).
+    /// Players and enemies both use it.
     Missiles,
     /// Sets `tank::Tank::speed_boost_timer` to SPEED_BOOST_DURATION_SECONDS -
     /// while positive, `Tank::effective_speed` is scaled by

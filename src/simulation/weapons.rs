@@ -163,7 +163,8 @@ fn fire_missile(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, owner: Ow
     let rot = (tank.rotation + aim_offset).to_radians();
     let dir = Vector2::new(rot.sin(), -rot.cos());
     let right = Vector2::new(rot.cos(), rot.sin());
-    let mouth = tank.position + dir * (MISSILE_TUBE_FORWARD * tank.scale) + right * (offsets[i] * tank.scale);
+    let pod = tank.scale * t.missile_pod_scale;
+    let mouth = tank.position + dir * (MISSILE_TUBE_FORWARD * pod) + right * (offsets[i] * pod);
     // Fan by where the tube sits: the middle pair a little, the outer pair
     // twice as much, each to its own side.
     let fan = t.missile_fan_deg * offsets[i] / 3.0;
@@ -240,13 +241,24 @@ pub(super) fn tick_queued_shots(physics: &mut Physics, f: &mut Frame, tank: &mut
                 tank.missile_volley = None;
             } else {
                 tank.missile_ammo -= 1;
+                if volley.next_tube == 0 {
+                    // A new salvo: the pod has reloaded its tubes.
+                    tank.missile_tubes_empty = 0;
+                }
                 fire_missile(physics, f, tank, owner, 0.0, volley.next_tube);
                 volley.missiles_remaining -= 1;
-                volley.next_tube += 1;
+                let tubes = tuning().missile_volley_size.clamp(1, MISSILE_TUBE_OFFSETS.len() as u32) as u8;
+                volley.next_tube = (volley.next_tube + 1) % tubes;
                 tank.missile_volley = if volley.missiles_remaining == 0 {
                     None
                 } else {
-                    volley.timer = tuning().missile_launch_delay_seconds;
+                    // Back to the first tube means the salvo is spent: the
+                    // longer gap while the pod reloads before the next.
+                    volley.timer = if volley.next_tube == 0 {
+                        tuning().missile_salvo_gap_seconds
+                    } else {
+                        tuning().missile_launch_delay_seconds
+                    };
                     Some(volley)
                 };
             }
@@ -323,7 +335,8 @@ pub(super) fn dispatch_fire_from(
             }
         }
         ActiveWeapon::Missiles => {
-            // A volley: the first tube now, the rest through
+            // A volley of `missile_salvos` salvos, one missile per tube
+            // each: the first tube now, the rest through
             // `tick_queued_shots`. Aimed dead ahead whatever the misfire
             // skew - the seek does the aiming.
             if tank.missile_ammo > 0 {
@@ -331,13 +344,15 @@ pub(super) fn dispatch_fire_from(
                 tank.missile_ammo -= 1;
                 tank.missile_tubes_empty = 0;
                 fire_missile(physics, f, tank, owner, 0.0, 0);
-                let volley = tuning().missile_volley_size.min(MISSILE_TUBE_OFFSETS.len() as u32);
+                let volley = tuning().missile_volley_count();
                 if volley > 1 {
-                    tank.missile_volley = Some(MissileVolley {
-                        missiles_remaining: volley - 1,
-                        timer: tuning().missile_launch_delay_seconds,
-                        next_tube: 1,
-                    });
+                    let tubes = tuning().missile_volley_size.clamp(1, MISSILE_TUBE_OFFSETS.len() as u32) as u8;
+                    let (next_tube, timer) = if tubes > 1 {
+                        (1, tuning().missile_launch_delay_seconds)
+                    } else {
+                        (0, tuning().missile_salvo_gap_seconds)
+                    };
+                    tank.missile_volley = Some(MissileVolley { missiles_remaining: volley - 1, timer, next_tube });
                 }
                 tank.fire_cooldown = tuning().missile_volley_cooldown_seconds();
             }

@@ -637,16 +637,22 @@ tunables! {
     }
 
     group missiles {
-        /// Seeker missiles granted per pickup - four full volleys from the
-        /// four-tube pod.
-        missile_ammo_per_pickup: i32 = 16 in 1 ..= 400;
-        /// Missiles per trigger pull, one per tube, so at most the pod's
-        /// four. The first leaves at once, the rest
+        /// Seeker missiles granted per pickup - three full volleys of two
+        /// salvos from the four-tube pod.
+        missile_ammo_per_pickup: i32 = 24 in 1 ..= 400;
+        /// Missiles per salvo, one per tube, so at most the pod's four.
+        /// The first leaves at once, the rest
         /// `missile_launch_delay_seconds` apart (`Tank::missile_volley`).
         missile_volley_size: u32 = 4 in 1 ..= 4;
-        /// Gap between two missiles of one volley leaving their tubes.
-        missile_launch_delay_seconds: f32 = 0.09 in 0.0 ..= 1.0;
-        /// Reload after a volley's last missile, before the next volley.
+        /// Salvos per trigger pull: the pod empties, reloads its tubes in
+        /// `missile_salvo_gap_seconds` and fires again, so a pull is
+        /// `missile_volley_size` x this many missiles.
+        missile_salvos: u32 = 2 in 1 ..= 4;
+        /// Gap between two missiles of one salvo leaving their tubes.
+        missile_launch_delay_seconds: f32 = 0.05 in 0.0 ..= 1.0;
+        /// Gap between one salvo's last missile and the next salvo's first.
+        missile_salvo_gap_seconds: f32 = 0.18 in 0.0 ..= 2.0;
+        /// Reload after a volley's last missile, before the next pull.
         missile_reload_seconds: f32 = 1.3 in 0.0 ..= 10.0;
         /// Degrees between neighbouring tubes' launch headings: the volley
         /// fans out as it climbs.
@@ -654,23 +660,23 @@ tunables! {
         /// Stage one, the climb: how long a missile rises, how high it
         /// gets (px, drawn as lift above its ground point) and how fast it
         /// drifts along the launch heading meanwhile (px/s).
-        missile_climb_seconds: f32 = 0.45 in 0.05 ..= 3.0;
+        missile_climb_seconds: f32 = 0.28 in 0.05 ..= 3.0;
         missile_apex_height: f32 = 72.0 in 0.0 ..= 300.0;
-        missile_climb_speed: f32 = 110.0 in 0.0 ..= 1000.0;
+        missile_climb_speed: f32 = 150.0 in 0.0 ..= 1000.0;
         /// Stage two, the seek: seconds a missile hangs at the apex
         /// looking for a target, and how far from itself it looks (px).
         /// It locks the nearest opposing tank in range; with none, it
         /// keeps the ground point `missile_fallback_range` px ahead of the
         /// launcher and comes down there.
-        missile_acquire_seconds: f32 = 0.18 in 0.0 ..= 2.0;
-        missile_seek_range: f32 = 520.0 in 16.0 ..= 3000.0;
-        missile_fallback_range: f32 = 260.0 in 16.0 ..= 3000.0;
+        missile_acquire_seconds: f32 = 0.08 in 0.0 ..= 2.0;
+        missile_seek_range: f32 = 676.0 in 16.0 ..= 3000.0;
+        missile_fallback_range: f32 = 338.0 in 16.0 ..= 3000.0;
         /// Stage three, the chase: top ground speed (px/s), how fast it
         /// gets there (px/s^2) and how fast it turns (degrees/s), the turn
         /// rate growing by `missile_turn_rate_growth_deg` every second of
         /// the chase so a missile circling its target always tightens in.
         missile_speed: f32 = 330.0 in 20.0 ..= 3000.0;
-        missile_accel: f32 = 700.0 in 1.0 ..= 10000.0;
+        missile_accel: f32 = 1100.0 in 1.0 ..= 10000.0;
         missile_turn_rate_deg: f32 = 200.0 in 1.0 ..= 3600.0;
         missile_turn_rate_growth_deg: f32 = 240.0 in 0.0 ..= 3600.0;
         /// The missile comes down over this last stretch to its target
@@ -682,7 +688,7 @@ tunables! {
         missile_commit_distance: f32 = 56.0 in 0.0 ..= 500.0;
         /// A chase that has not come down after this long commits to a
         /// dive straight ahead.
-        missile_max_flight_seconds: f32 = 4.0 in 0.5 ..= 30.0;
+        missile_max_flight_seconds: f32 = 5.2 in 0.5 ..= 30.0;
         /// Each missile's blast: radius (px), centre damage (falling off
         /// linearly to 0 at the edge) and the shove. Only the side opposing
         /// the shooter is hurt; everything in range is shoved, and tiles
@@ -699,8 +705,15 @@ tunables! {
         /// How much bigger a missile draws at the top of its climb than on
         /// the ground - nearer the camera.
         missile_apex_draw_scale: f32 = 1.35 in 1.0 ..= 3.0;
-        /// Exhaust puffs per second behind each missile in the air.
-        missile_trail_rate: f32 = 28.0 in 0.0 ..= 200.0;
+        /// The smoke trail each missile leaves in the air: one puff every
+        /// this many px of flight (0 turns it off), each hanging where it
+        /// was left for `missile_trail_seconds`, at this opacity.
+        missile_trail_spacing: f32 = 4.0 in 0.0 ..= 64.0;
+        missile_trail_seconds: f32 = 1.0 in 0.05 ..= 10.0;
+        missile_trail_opacity: f32 = 0.75 in 0.0 ..= 1.0;
+        /// Draw scale of the pod on the turret, against the tank's own
+        /// scale; the tube mouths the missiles leave from scale with it.
+        missile_pod_scale: f32 = 0.8 in 0.3 ..= 2.0;
         missile_shadow_opacity: f32 = 0.3 in 0.0 ..= 1.0;
     }
 
@@ -1844,10 +1857,18 @@ impl Tuning {
             + self.minigun_burst_trailing_gap_seconds
     }
 
+    /// Missiles one trigger pull fires: every salvo's tubes.
+    pub fn missile_volley_count(&self) -> u32 {
+        self.missile_volley_size.clamp(1, 4) * self.missile_salvos.max(1)
+    }
+
     /// Fire cooldown held for a whole missile volley: every queued
-    /// launch's delay plus the pod's reload.
+    /// launch's delay, the gaps between salvos, then the pod's reload.
     pub fn missile_volley_cooldown_seconds(&self) -> f32 {
-        (self.missile_volley_size.saturating_sub(1)) as f32 * self.missile_launch_delay_seconds
+        let salvos = self.missile_salvos.max(1);
+        let launches = self.missile_volley_count().saturating_sub(salvos);
+        launches as f32 * self.missile_launch_delay_seconds
+            + (salvos - 1) as f32 * self.missile_salvo_gap_seconds
             + self.missile_reload_seconds
     }
 

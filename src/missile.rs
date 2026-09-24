@@ -1,7 +1,7 @@
 //! Seeker missiles (`pickup::PickupKind::Missiles`, `Tank::missile_ammo`):
-//! a four-tube pod on the turret fires a volley, one missile per tube a
-//! beat apart (`Tank::missile_volley`), and each missile flies in three
-//! stages:
+//! a four-tube pod on the turret fires a volley - `missile_salvos` salvos,
+//! one missile per tube a beat apart, the pod reloading between them
+//! (`Tank::missile_volley`) - and each missile flies in three stages:
 //!
 //! 1. **Climb** - up out of its tube along the launcher's heading, fanned
 //!    a few degrees per tube, rising to `missile_apex_height`.

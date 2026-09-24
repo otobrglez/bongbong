@@ -239,7 +239,8 @@ pub struct MinigunBurst {
 /// A seeker-missile volley in progress: `missiles_remaining` more to leave
 /// the pod, `timer` until the next one, `next_tube` the tube it leaves from -
 /// see `Tank::missile_volley`. The `MinigunBurst` shape, one missile per
-/// tube.
+/// tube; the tubes are fired in order and wrap back to the first for the
+/// next salvo (`missile_salvos`).
 #[derive(Clone, Copy)]
 pub struct MissileVolley {
     pub missiles_remaining: u32,
@@ -1870,10 +1871,10 @@ pub fn draw_minigun_mount_shadow(c: &mut impl Canvas, tank: &Tank) {
 }
 
 /// Draw the seeker-missile pod on the turret while the tank holds missile
-/// ammo - the `draw_minigun_mount` rules exactly (same pivot, turret
-/// rotation, flat scale, hidden on a wreck, shown whether or not it is the
-/// live weapon), with the column picked by how many tubes are empty
-/// (`missile_tubes_empty`).
+/// ammo - the `draw_minigun_mount` rules (same pivot, turret rotation,
+/// hidden on a wreck, shown whether or not it is the live weapon), at
+/// `missile_pod_scale` of the tank's scale, with the column picked by how
+/// many tubes are empty (`missile_tubes_empty`).
 pub fn draw_missile_pod(c: &mut impl Canvas, tank: &Tank) {
     if tank.missile_ammo <= 0 || tank.is_wreck() {
         return;
@@ -1897,7 +1898,7 @@ pub fn draw_missile_pod_shadow(c: &mut impl Canvas, tank: &Tank) {
 fn blit_missile_pod(c: &mut impl Canvas, tank: &Tank, at: Position, tint: Color) {
     let col = (tank.missile_tubes_empty as i32).clamp(0, MISSILE_POD_FRAMES - 1);
     let src = Rectangle::new(col as f32 * MISSILE_POD_TEXTURE_SIZE, 0.0, MISSILE_POD_TEXTURE_SIZE, MISSILE_POD_TEXTURE_SIZE);
-    let size = MISSILE_POD_TEXTURE_SIZE * tank.scale;
+    let size = MISSILE_POD_TEXTURE_SIZE * tank.scale * tuning().missile_pod_scale;
     let dest = Rectangle::new(at.x, at.y, size, size);
     c.blit(Sheet::MissilePod, src, dest, draw_pivot(size), tank.turret_visual_rotation, tint);
 }

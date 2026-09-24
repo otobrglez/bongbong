@@ -270,18 +270,30 @@ mod tests {
     }
 
     #[test]
-    fn a_trigger_pull_fires_a_volley_of_four_a_beat_apart() {
+    fn a_trigger_pull_fires_two_salvos_of_four() {
         let mut game = sandbox("");
-        arm(&mut game, 16);
+        arm(&mut game, 24);
         let events = fire(&mut game);
         assert!(events.iter().any(|e| matches!(e, Event::Fired { weapon: "missiles", .. })));
         assert_eq!(missiles_in_air(&game), 1, "the first leaves at once");
-        idle(&mut game, 30);
-        assert_eq!(missiles_in_air(&game), 4, "the rest follow");
-        assert_eq!(with_tank(&game.world, player(&game), |t| t.missile_ammo), 12);
-        assert_eq!(with_tank(&game.world, player(&game), |t| t.missile_tubes_empty), 4, "the pod reads empty");
+        // Watch the pod frame by frame: it empties through the first
+        // salvo, holds empty through the gap, reloads and empties again.
+        let tubes = |game: &Game| with_tank(&game.world, player(game), |t| t.missile_tubes_empty);
+        let mut counts = Vec::new();
+        let mut tube_readings = Vec::new();
+        for _ in 0..40 {
+            idle(&mut game, 1);
+            counts.push(missiles_in_air(&game));
+            tube_readings.push(tubes(&game));
+        }
+        let first_four = counts.iter().position(|&n| n == 4).expect("the first salvo completes");
+        assert!(counts[first_four..].iter().take(8).all(|&n| n == 4), "a gap before the second salvo: {counts:?}");
+        assert_eq!(*counts.last().unwrap(), 8, "then four more: {counts:?}");
+        let reload = tube_readings.windows(2).position(|w| w[0] == 4 && w[1] < 4).expect("the pod reloads between salvos");
+        assert_eq!(tube_readings[reload + 1..].iter().max(), Some(&4), "and empties again: {tube_readings:?}");
+        assert_eq!(with_tank(&game.world, player(&game), |t| t.missile_ammo), 16);
         idle(&mut game, 240);
-        assert_eq!(with_tank(&game.world, player(&game), |t| t.missile_tubes_empty), 0, "and reloads");
+        assert_eq!(tubes(&game), 0, "reloaded for the next pull");
     }
 
     #[test]
@@ -293,7 +305,7 @@ mod tests {
         let mut events = fire(&mut game);
         events.extend(idle(&mut game, 400));
         let locks: Vec<&Event> = events.iter().filter(|e| matches!(e, Event::MissileLocked { .. })).collect();
-        assert_eq!(locks.len(), 4, "{locks:?}");
+        assert_eq!(locks.len(), 4, "four missiles armed, four fired: {locks:?}");
         assert!(locks.iter().all(|e| matches!(e, Event::MissileLocked { target: Some(s), .. } if *s == slot)), "{locks:?}");
         let at = with_tank(&game.world, enemy, |t| t.position);
         let blasts = blasts(&events);

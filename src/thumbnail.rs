@@ -216,7 +216,7 @@ mod tests {
     /// shows - re-baseline consciously after a deliberate art, map or
     /// tuning change, never to go green.
     const PINNED: [(&str, u64); 5] = [
-        ("default", 0x6644_121d_d6f8_7986),
+        ("default", 0x9634_dc6b_8290_485b),
         ("default-desert", 0x84de_37cf_aa6e_1aae),
         ("hunt-basic", 0xe569_2a10_47fe_b1a8),
         ("waves-basic", 0x6e02_7f87_d416_2e96),
