@@ -636,12 +636,23 @@ mod tests {
         // own, interpolated, never a guess of its own. A hull that only
         // appears in one end of the bracket (a wave tank arriving, a
         // wreck despawning) has nothing to be between.
+        //
+        // **The local seat is exempt, and that is stage 2 working.** With
+        // `online_predict_own_tank` on, the one hull this client steers
+        // is drawn at the present rather than interpolated in the past
+        // (docs/online-coop-prd.md §4.12); it is the seat whose position
+        // is deliberately *not* the room's most recent word. Every other
+        // hull still is, which is what this check is for.
+        let predicted = tuning().online_predict_own_tank.then_some(0usize);
         let mut checked = 0;
         for frame in &seen {
             let Some(i) = authority.iter().position(|(tick, _)| *tick as u64 == frame.tick) else { continue };
             let Some((_, from)) = authority.get(i) else { continue };
             let Some((_, to)) = authority.get(i + 1) else { continue };
             for &(slot, x, y) in &frame.hulls {
+                if Some(slot) == predicted {
+                    continue;
+                }
                 let Some(a) = from.iter().find(|h| h.0 == slot) else { continue };
                 let Some(b) = to.iter().find(|h| h.0 == slot) else { continue };
                 for (drawn, one, other) in [(x, a.1, b.1), (y, a.2, b.2)] {
@@ -794,6 +805,37 @@ mod tests {
         let mut idle = Lockstep::start(options(LinkQuality::PERFECT));
         idle.step(60);
         assert_eq!(seat_hull(&idle), start, "a seat that asked for nothing moved");
+    }
+
+    /// **Stage 2's whole point** (docs/online-coop-prd.md §4.12): the
+    /// hull this client steers is drawn where it will be, not where the
+    /// room last said it was.
+    ///
+    /// Driven right for a while, the predicted seat has to be *ahead* of
+    /// the interpolated picture - the client has applied inputs the room
+    /// has not acknowledged yet. With the knob off the same run draws it
+    /// exactly where the room put it, which is the stage 1 behaviour and
+    /// what makes this an A/B rather than an assertion about a number.
+    #[test]
+    fn the_steered_hull_is_drawn_ahead_of_the_room() {
+        if !tuning().online_predict_own_tank {
+            return; // the build ships with it on; nothing to compare.
+        }
+        let mut rig = Lockstep::start(options(LinkQuality::PERFECT));
+        rig.drive(Intent { move_dir: Some(Dir::Right), ..Intent::default() });
+        rig.step(90);
+
+        let drawn = seat_hull(&rig).0;
+        // Where the room itself has the hull, on the newest snapshot the
+        // client has: the interpolated picture can be no fresher.
+        let room = {
+            let state = rig.authority().expect("the room's own round").drawable_state();
+            state.tanks.iter().find(|t| t.slot == 0).expect("the seat's tank").x
+        };
+        assert!(
+            drawn >= room,
+            "the steered hull was drawn at {drawn}, behind the room's {room} - prediction did nothing"
+        );
     }
 
     /// The dial's whole point: a lossy link costs the picture nothing it

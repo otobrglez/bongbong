@@ -265,9 +265,13 @@ impl<T: Transport> RoomClient<T> {
     /// server's sampling. Call it once per frame while the round runs;
     /// a client with no seat yet or a closed socket sends nothing, so
     /// the count is the round's and not the lobby's.
-    pub fn send_intent(&mut self, intent: &Intent) {
+    ///
+    /// Returns the tick the packet was stamped with, which is what the
+    /// server names back in `Snapshot::acked` - `None` when nothing was
+    /// sent.
+    pub fn send_intent(&mut self, intent: &Intent) -> Option<u32> {
         if self.seat.is_none() || !self.transport.is_open() {
-            return;
+            return None;
         }
         let mut msg = IntentMsg::new(self.intent_tick, intent);
         if msg.fire {
@@ -278,6 +282,17 @@ impl<T: Transport> RoomClient<T> {
         }
         self.intent_tick = self.intent_tick.wrapping_add(1);
         self.transport.send_msg(&Msg::Intent(msg));
+        // The tick this packet carries, so a caller predicting the same
+        // input stamps it identically - one counter, not two that could
+        // drift apart (`net::predict`).
+        Some(msg.tick)
+    }
+
+    /// The tick the next packet will carry. A caller predicting the
+    /// same inputs stamps its history with this, so the server's
+    /// `acked` names an input both sides agree on (`net::predict`).
+    pub fn intent_tick(&self) -> u32 {
+        self.intent_tick
     }
 
     /// Say this seat is ready for the round.

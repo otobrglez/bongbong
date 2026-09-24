@@ -29,11 +29,13 @@ use std::time::Instant;
 use crate::ai::Intent;
 use crate::net::apply;
 use crate::net::client::{ClientEvent, Phase, RoomClient};
+use crate::math::Vec2 as Position;
 use crate::net::interp::Interpolator;
+use crate::net::predict::Predictor;
 use crate::net::transport::Transport;
-use crate::net::wire::{RoundOutcome, Welcome};
+use crate::net::wire::{self, RoundOutcome, Snapshot, Welcome};
 use crate::simulation::Game;
-use crate::tuning;
+use crate::tuning::{self, tuning};
 use crate::PHYSICS_FIXED_DT;
 
 /// The online round the window holds: any transport, behind one type, so
@@ -57,6 +59,14 @@ pub struct OnlineRound<T: Transport> {
     /// A trigger pulled since the last packet went out, so a tap between
     /// two packets still reaches the room.
     pending_fire: bool,
+    /// The local seat's own hull, run ahead of the room and pulled back
+    /// by each snapshot (stage 2, docs/online-coop-prd.md §4.12). Built
+    /// beside the replica from the same `Welcome`, so the two step
+    /// against the same statics. `None` until a welcome arrives, and
+    /// read only while `online_predict_own_tank` is on - the knob is
+    /// live, so turning it off hands the hull straight back to the
+    /// interpolator without dropping the sandbox.
+    predictor: Option<Predictor>,
     /// The last thing the room refused or the socket said on its way out.
     note: Option<String>,
     /// How the round the room just finished went, from the moment it
@@ -85,6 +95,7 @@ impl<T: Transport> OnlineRound<T> {
             label,
             opened: Instant::now(),
             start_sent: false,
+            predictor: None,
             send_owed: 0.0,
             pending_fire: false,
             note: None,
@@ -259,7 +270,10 @@ impl<T: Transport> OnlineRound<T> {
         for event in events.drain(..) {
             match event {
                 ClientEvent::Welcomed(welcome) => self.welcomed(&welcome, now),
-                ClientEvent::Snapshot(snapshot) => self.interp.accept(*snapshot, now),
+                ClientEvent::Snapshot(snapshot) => {
+                    self.reconcile(&snapshot);
+                    self.interp.accept(*snapshot, now);
+                }
                 ClientEvent::Refused(message) => {
                     // A refused start is askable again: the room says why
                     // (a seat that is not ready), and the reason goes away.
@@ -309,6 +323,15 @@ impl<T: Transport> OnlineRound<T> {
         }
         match apply::welcome(welcome) {
             Ok(game) => {
+                // The sandbox is a second round off the same welcome, so
+                // its walls, obstacles and deep water are the replica's
+                // and the room's by construction (`net::predict`). Built
+                // whether or not prediction is on: the knob is live, and
+                // a sandbox that started late would have no history to
+                // replay.
+                self.predictor = apply::welcome(welcome)
+                    .ok()
+                    .map(|sandbox| Predictor::new(sandbox, welcome.seat as usize, self.client.intent_tick()));
                 self.replica = Some(game);
                 self.interp.restart(&welcome.snapshot, now);
                 self.note = None;
@@ -338,7 +361,14 @@ impl<T: Transport> OnlineRound<T> {
         let mut out = *intent;
         out.fire |= self.pending_fire;
         self.pending_fire = false;
-        self.client.send_intent(&out);
+        // One counter for both: the sandbox steps on exactly the input
+        // the packet carries, stamped with exactly the tick the server
+        // will name back in `acked`.
+        if let Some(tick) = self.client.send_intent(&out)
+            && let Some(predictor) = self.predictor.as_mut()
+        {
+            predictor.step_at(tick, out);
+        }
     }
 
     /// The picture at render time, then the cosmetics of one frame.
@@ -354,6 +384,50 @@ impl<T: Transport> OnlineRound<T> {
         } else {
             game.tick_presentation(dt);
         }
+        self.draw_predicted(dt);
+    }
+
+    /// Put the predicted hull where the local seat is drawn.
+    ///
+    /// **The replica stays the one thing anything draws.** Rather than
+    /// teach the renderer, the HUD and the dev server's readers about a
+    /// second `Game`, the prediction is written over the one seat the
+    /// interpolator has no business owning, on the frame it is drawn.
+    /// Everything downstream is unchanged, and turning the knob off on
+    /// any frame simply stops the write - the interpolated hull is
+    /// already underneath it.
+    fn draw_predicted(&mut self, dt: f32) {
+        if !tuning().online_predict_own_tank {
+            return;
+        }
+        let (Some(predictor), Some(game)) = (self.predictor.as_mut(), self.replica.as_mut()) else { return };
+        predictor.decay(dt);
+        let (Some(seat), Some(position)) = (self.client.seat(), predictor.drawn_position()) else { return };
+        let Some((_, rotation, _)) = predictor.motion() else { return };
+        game.place_seat(seat as usize, position, rotation, Position::new(0.0, 0.0));
+    }
+
+    /// Pull the sandbox back into line with a snapshot that just landed.
+    ///
+    /// The server names the last input tick it applied for this seat and
+    /// where that left the hull; everything the client has predicted
+    /// since is replayed on top (`net::predict`).
+    fn reconcile(&mut self, snapshot: &Snapshot) {
+        if !tuning().online_predict_own_tank {
+            return;
+        }
+        let (Some(predictor), Some(seat)) = (self.predictor.as_mut(), self.client.seat()) else { return };
+        let Some(state) = snapshot.tanks.iter().find(|t| t.id as usize == seat as usize) else { return };
+        let acked = snapshot.acked.get(seat as usize).copied().unwrap_or(0);
+        // A server that has applied nothing for this seat yet has nothing
+        // to reconcile against - the hull is still where it spawned.
+        if acked == 0 {
+            return;
+        }
+        let position = Position::new(wire::dequantise_pos(state.x), wire::dequantise_pos(state.y));
+        let velocity = Position::new(wire::dequantise_velocity(state.vx), wire::dequantise_velocity(state.vy));
+        let rotation = wire::dir_from_index(state.dir).unwrap_or(crate::tank::Dir::Up).rotation();
+        predictor.reconcile(acked, position, rotation, velocity);
     }
 }
 

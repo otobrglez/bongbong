@@ -98,13 +98,23 @@ impl Predictor {
     /// server's `acked` can name it back.
     pub fn step(&mut self, intent: Intent) -> u32 {
         let stamped = self.tick;
+        self.step_at(stamped, intent);
+        stamped
+    }
+
+    /// `step`, on a tick somebody else stamped.
+    ///
+    /// This is the wired path: `RoomClient` owns the counter the packets
+    /// carry, and the sandbox has to agree with it exactly, or the tick
+    /// the server names back in `acked` would point at the wrong input.
+    /// One counter, not two that could drift.
+    pub fn step_at(&mut self, tick: u32, intent: Intent) {
         self.sandbox.predict_seat(self.seat, intent, PHYSICS_FIXED_DT);
-        self.history.push_back((stamped, intent));
+        self.history.push_back((tick, intent));
         while self.history.len() > HISTORY_TICKS {
             self.history.pop_front();
         }
-        self.tick = self.tick.wrapping_add(1);
-        stamped
+        self.tick = tick.wrapping_add(1);
     }
 
     /// Pull the sandbox back to what the server said, then replay

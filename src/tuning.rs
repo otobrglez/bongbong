@@ -1478,6 +1478,22 @@ tunables! {
         /// frames. A knob so it can be tried by hand against a rig run
         /// (`--rig --delay 80 --jitter 20`). Live.
         online_interpolation_delay_ms: f32 = 100.0 in 0.0 ..= 500.0;
+        /// Run the local seat's own hull ahead of the server and
+        /// reconcile it against each snapshot (stage 2,
+        /// docs/online-coop-prd.md section 4.12, `net::predict`).
+        ///
+        /// Off, your own tank answers the stick
+        /// `online_interpolation_delay_ms` plus half a round trip later,
+        /// like every other hull. On, it answers on the next frame and
+        /// the server's answer arrives as a correction - eased off over
+        /// `NUDGE_SECONDS`, or taken whole past `SNAP_PX`.
+        ///
+        /// A knob rather than a constant because the two have to be
+        /// judged side by side on the same link, which is what a rig run
+        /// is for (`--rig --delay 120 --jitter 20`). Live: it takes
+        /// effect on the next frame, and turning it off hands the hull
+        /// straight back to the interpolator.
+        online_predict_own_tank: bool = true in 0 ..= 1;
         /// How much of the authored wave each seat past the first adds to a
         /// room's round (docs/online-coop-prd.md section 4.11): the room
         /// sends `wave_size_scale = 1 + (seats - 1) * this` in its
