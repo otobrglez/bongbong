@@ -22,6 +22,24 @@
 //! muzzle. Damage, pickups, other tanks and everyone else's shots stay
 //! the server's, and stay interpolated.
 //!
+//! **Provisional shots are built but off by default**
+//! (`online_predict_shots`), and the reason is worth knowing before
+//! turning them on. A predicted shell is drawn at the present; every
+//! tank it might hit is drawn `online_interpolation_delay_ms` in the
+//! past. At `shell_speed` 500 and a 100 ms delay that is fifty pixels,
+//! most of a sixty-four pixel hull - so the shell reaches a tank's
+//! *drawn* position well before the server's copy reaches its real one,
+//! and sails through it. The server's own shell runs on the same delayed
+//! clock as the tanks, so it collides where it looks like it should.
+//!
+//! Drawing your own hull at the present has the same mismatch in the
+//! other direction - an enemy's shell is judged against where the server
+//! had you, not where you are drawn - but a hull is slow and wide where a
+//! shell is fast and small, so it is a beat of disagreement rather than a
+//! shot that visibly passes through. What makes a predicted shell correct
+//! rather than merely early is the server rewinding targets to the
+//! shooter's view (§4.12, decision 9), which is not built.
+//!
 //! **A provisional shot is drawn, never simulated.** It flies by dead
 //! reckoning and meets nothing: a replica runs no hit test, and whether
 //! it hit is the server's word, arriving as an event like any other. It

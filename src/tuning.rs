@@ -1494,6 +1494,31 @@ tunables! {
         /// effect on the next frame, and turning it off hands the hull
         /// straight back to the interpolator.
         online_predict_own_tank: bool = true in 0 ..= 1;
+        /// Also draw this seat's *shell* on the frame of the press
+        /// (docs/online-coop-prd.md section 4.12, `net::predict`).
+        ///
+        /// **Off, and here is why.** A predicted shell is drawn at the
+        /// present; every tank it might hit is drawn
+        /// `online_interpolation_delay_ms` in the past. At
+        /// `shell_speed` 500 and a 100 ms delay that is fifty pixels,
+        /// most of a sixty-four pixel hull - so the shell reaches a
+        /// tank's *drawn* position before the server's copy reaches its
+        /// real one, and sails through, because a replica runs no hit
+        /// test. What a player sees is a shot passing through a tank and
+        /// not hitting it.
+        ///
+        /// The server's own shell is drawn on the same delayed clock as
+        /// the tanks, so it collides where it looks like it should.
+        /// Leaving the shot to the server costs the press its
+        /// instant feedback and keeps the picture honest, which is the
+        /// better trade until the server rewinds targets to the
+        /// shooter's view - lag compensation, section 4.12's decision 9,
+        /// which is what makes a predicted shell correct rather than
+        /// merely early.
+        ///
+        /// On for judging that against a rig run; the hull's own
+        /// prediction (`online_predict_own_tank`) is unaffected.
+        online_predict_shots: bool = false in 0 ..= 1;
         /// How much of the authored wave each seat past the first adds to a
         /// room's round (docs/online-coop-prd.md section 4.11): the room
         /// sends `wave_size_scale = 1 + (seats - 1) * this` in its

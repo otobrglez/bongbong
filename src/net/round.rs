@@ -373,7 +373,10 @@ impl<T: Transport> OnlineRound<T> {
             // The shot is drawn on the tick its press travels on, from
             // the pose that tick produced, so the shell leaves the muzzle
             // where the hull is now (§4.12).
-            if out.fire && tuning().online_predict_own_tank {
+            // Behind its own knob, and off by default: a shell drawn at
+            // the present passes through tanks drawn in the past (see
+            // `online_predict_shots`).
+            if out.fire && tuning().online_predict_shots {
                 predictor.fire(now);
             }
         }

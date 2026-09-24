@@ -897,7 +897,10 @@ mod tests {
     /// the replica here is the client's own.
     #[test]
     fn a_shot_is_on_screen_the_frame_it_is_fired() {
-        if !tuning().online_predict_own_tank {
+        if !tuning().online_predict_shots {
+            // Off by default: a shell drawn at the present passes
+            // through tanks drawn in the past. The knob's own doc has
+            // the arithmetic.
             return;
         }
         let (_rig, link) = start(options(LinkQuality::new(60, 0, 0.0)));
