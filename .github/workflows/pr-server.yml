@@ -1,0 +1,258 @@
+name: PR Room Server
+
+# Deploys every open PR's room server into its own Kubernetes namespace
+# (`bongbong-pr-<N>`) on the Hetzner cluster, so a PR's protocol and
+# server changes can be played before merging. Sibling to pr-preview.yml,
+# which does the same for the web client; between them a PR gets a client
+# and a server that talk to each other.
+#
+# **The preview shares production's hostname and takes a path**:
+# `wss://rooms.bongbong.io/pr-<N>/ws`, rewritten to `/ws` by the ingress
+# (k8s/preview/rooms-preview.yaml). That is what keeps a preview free of
+# any DNS record or certificate of its own - the one `rooms.bongbong.io`
+# record and Cloudflare's edge certificate already cover it. nginx matches
+# the longest path first, so production keeps everything that is not
+# `/pr-<N>/...`. No client change is needed either: `--rooms
+# wss://rooms.bongbong.io/pr-<N>` already produces exactly that socket URL
+# (`net::rooms::socket_url` appends `/ws` to whatever base it is given).
+#
+# The whole preview is one namespace, so teardown on PR close is a single
+# `kubectl delete namespace`. Production (`bongbong-prod`) is never
+# touched - previews only ever own `bongbong-pr-<N>`.
+#
+# Requires the same repo secrets as deploy-rooms.yml:
+#   TS_OAUTH_CLIENT_ID / TS_OAUTH_SECRET — Tailscale OAuth client, tag:ci
+#   DOCKER_REGISTRY_USERNAME / DOCKER_REGISTRY_PASSWORD — the registry
+#   KUBECONFIG — base64 of a kubeconfig reaching the cluster over Tailscale
+#
+# Fork PRs: `pull_request` runs from forks get no secrets, so previews only
+# deploy for same-repo branches — the same posture as pr-preview.yml. Do
+# NOT switch this to `pull_request_target` to "fix" that; it would hand
+# untrusted PR code a kubeconfig for the production cluster.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+# One group per PR: a new push cancels the superseded build, and a close
+# event cancels any in-flight deploy so teardown cannot race a deploy that
+# would re-create the namespace after deletion.
+concurrency:
+  group: pr-server-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: registry.folk-decibel.ts.net
+  IMAGE: registry.folk-decibel.ts.net/bongbong/bongbong-server
+  NAMESPACE: bongbong-pr-${{ github.event.pull_request.number }}
+
+jobs:
+  deploy:
+    if: >-
+      github.event.action != 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          ping: registry.folk-decibel.ts.net,tailscale-operator.folk-decibel.ts.net
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+        with:
+          driver-opts: network=host
+
+      - name: Login to Docker Registry
+        run: |
+          echo "${{ secrets.DOCKER_REGISTRY_PASSWORD }}" \
+            | docker login "$REGISTRY" -u "${{ secrets.DOCKER_REGISTRY_USERNAME }}" --password-stdin
+
+      - name: Image tag
+        id: tag
+        run: |
+          # The PR's head commit, not `git describe`: a preview is a
+          # snapshot of this push, and the tag has to change on every
+          # push or the node's cached image would be reused.
+          TAG="pr-${{ github.event.pull_request.number }}-$(git rev-parse --short=7 HEAD)"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Building $IMAGE:$TAG"
+
+      - name: Build and push
+        run: |
+          docker buildx build \
+            --network host \
+            --platform linux/amd64 \
+            --cache-from type=gha \
+            --cache-to type=gha,mode=max \
+            -t "$IMAGE:${{ steps.tag.outputs.tag }}" \
+            --push \
+            .
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: Configure kubectl
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      # The namespace and its pull secret go first: the Deployment names
+      # `regcred` in its pod spec, and a pod that schedules before the
+      # secret exists sits in ImagePullBackOff through a growing retry.
+      - name: Namespace and registry credentials
+        run: |
+          kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+          kubectl -n "$NAMESPACE" create secret docker-registry regcred \
+            --docker-server="$REGISTRY" \
+            --docker-username="${{ secrets.DOCKER_REGISTRY_USERNAME }}" \
+            --docker-password="${{ secrets.DOCKER_REGISTRY_PASSWORD }}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy the preview
+        run: |
+          sed -e "s|__PR__|${{ github.event.pull_request.number }}|g" \
+              -e "s|__IMAGE__|$IMAGE:${{ steps.tag.outputs.tag }}|g" \
+              k8s/preview/rooms-preview.yaml \
+            | tee /tmp/preview.yaml \
+            | kubectl apply -f -
+          # A preview drains for 30 s, not production's half hour, so this
+          # is a short wait even when it is replacing a running pod.
+          kubectl -n "$NAMESPACE" rollout status deployment/rooms --timeout=5m
+
+      - name: Smoke the preview
+        run: |
+          PR=${{ github.event.pull_request.number }}
+          # Proves the path rule, the rewrite and the pod together: a 404
+          # here would mean the request fell through to production.
+          curl -fsS --retry 6 --retry-delay 5 --retry-connrefused \
+            "https://rooms.bongbong.io/pr-$PR/health"
+          echo
+          curl -fsS "https://rooms.bongbong.io/pr-$PR/metrics" | grep bongbong_info
+
+      - name: Comment the preview URLs
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const pr = context.payload.pull_request.number;
+            const sha = context.payload.pull_request.head.sha.slice(0, 7);
+            const marker = '<!-- bongbong-pr-server -->';
+            const rooms = `wss://rooms.bongbong.io/pr-${pr}`;
+            const lines = [
+              marker,
+              `🛰️ **This PR's room server:** \`${rooms}\``,
+              '',
+              `▶️ **Play it in the browser** (this PR's client against this PR's server):`,
+              `https://pr-${pr}.preview.bongbong.io/?rooms=${rooms}`,
+              '',
+              '<details><summary>Other ways in</summary>',
+              '',
+              '```',
+              `# desktop, hosting a room on this PR's server`,
+              `cargo run -- --rooms ${rooms} --host`,
+              '',
+              `# health and metrics`,
+              `curl https://rooms.bongbong.io/pr-${pr}/health`,
+              `curl https://rooms.bongbong.io/pr-${pr}/metrics`,
+              '```',
+              '',
+              `Namespace \`bongbong-pr-${pr}\`, up to 3 rooms. Deleted when this PR closes.`,
+              '</details>',
+              '',
+              `Updated for ${sha}.`,
+            ];
+            const body = lines.join('\n');
+            const { owner, repo } = context.repo;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner, repo, issue_number: pr, per_page: 100,
+            });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number: pr, body });
+            }
+
+  teardown:
+    # Same fork guard as the deploy job: a fork PR never got secrets and
+    # so never deployed, and without them the Tailscale step would fail
+    # and paint a red X on someone else's closed PR.
+    if: >-
+      github.event.action == 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      # No checkout: teardown needs the namespace name, not the manifests,
+      # and a closed PR's merge ref may already be gone.
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          ping: tailscale-operator.folk-decibel.ts.net
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: Configure kubectl
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      # One namespace holds the whole preview, so this is the entire
+      # teardown: Deployment, Service, Ingress, secret and pod all go with
+      # it. A namespace that is not there (a PR closed before any
+      # successful deploy, or a fork PR that never got secrets) is
+      # already-clean, not a failure.
+      - name: Delete the preview namespace
+        run: |
+          kubectl delete namespace "$NAMESPACE" --ignore-not-found --wait=true --timeout=5m
+          echo "Namespace $NAMESPACE is gone."
+
+      # Best effort: the preview's images are dead weight once the
+      # namespace is. A registry that refuses the delete is not worth
+      # failing a teardown over, so this never fails the job.
+      - name: Prune this PR's images
+        continue-on-error: true
+        run: |
+          REPO=bongbong/bongbong-server
+          AUTH="${{ secrets.DOCKER_REGISTRY_USERNAME }}:${{ secrets.DOCKER_REGISTRY_PASSWORD }}"
+          PREFIX="pr-${{ github.event.pull_request.number }}-"
+          TAGS=$(curl -s -u "$AUTH" "https://$REGISTRY/v2/$REPO/tags/list" \
+            | jq -r '.tags[]?' | grep "^$PREFIX" || true)
+          for tag in $TAGS; do
+            echo "Deleting $REPO:$tag"
+            DIGEST=$(curl -s -o /dev/null -w '%header{docker-content-digest}' \
+              -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+              -u "$AUTH" "https://$REGISTRY/v2/$REPO/manifests/$tag")
+            [ -n "$DIGEST" ] && curl -sS -X DELETE -u "$AUTH" \
+              "https://$REGISTRY/v2/$REPO/manifests/$DIGEST"
+          done
+
+      - name: Mark the preview comment as removed
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const pr = context.payload.pull_request.number;
+            const marker = '<!-- bongbong-pr-server -->';
+            const { owner, repo } = context.repo;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner, repo, issue_number: pr, per_page: 100,
+            });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (!existing) return;
+            const body = [marker, '🛰️ The room server preview for this PR has been deleted.'].join('\n');
+            await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });

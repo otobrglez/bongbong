@@ -1,0 +1,17 @@
+# What stays out of the build context. The tree is small apart from
+# `target/`, which is gigabytes, so this is deliberately a short list:
+# the room server's build reads the workspace manifests, `src/`,
+# `server/` and `maps/` (the shipped maps are `include_str!`-embedded,
+# src/map.rs), and paying a few megabytes for the rest is cheaper than a
+# context that breaks when a path moves.
+target/
+**/target/
+.git/
+.github/
+.claude/
+.devenv*
+.direnv/
+node_modules/
+**/node_modules/
+.DS_Store
+**/.DS_Store
