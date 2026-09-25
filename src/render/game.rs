@@ -335,7 +335,10 @@ impl Game {
                 }
             });
             for blast in &self.blast_fx {
-                draw_blast(&mut d, textures.barrel_explosion, blast);
+                match &blast.cloud {
+                    Some(cloud) => crate::mushroom::draw(&mut GpuCanvas::new(&mut d, textures), cloud, blast.center, blast.time),
+                    None => draw_blast(&mut d, textures.barrel_explosion, blast),
+                }
             }
 
             // Parts still in the air, last of all: a chunk of hull thrown

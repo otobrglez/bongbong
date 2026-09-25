@@ -2732,7 +2732,7 @@ impl Game {
     /// of `blast::seed_at` salted per piece, so a spectacular death cannot
     /// shift a seeded replay.
     fn wreck_fx(&mut self, f: &mut Frame, center: Position) {
-        f.blast_fx.push(BlastFx::new(center));
+        f.blast_fx.push(BlastFx::wreck(center));
         f.impact_flashes.push(Shockwave::new(center));
         self.flash_screen();
         if self.water.depth_at(center) == crate::ground::Depth::Dry {

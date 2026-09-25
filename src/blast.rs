@@ -17,6 +17,7 @@
 //! it and grows with how long it smouldered.
 
 use crate::canvas::{Canvas, Sheet};
+use crate::mushroom::Cloud;
 use crate::tuning::tuning;
 use crate::math::{Color, Rectangle, Vec2};
 
@@ -53,6 +54,12 @@ pub fn seed_at(center: Position, salt: u32) -> u32 {
     avalanche(h)
 }
 
+/// A cosmetic value in `0.0..1.0` for choice `k` of whatever `seed`
+/// belongs to: independent per `k`, no RNG drawn.
+pub fn hash_unit(seed: u32, k: u32) -> f32 {
+    (avalanche(seed ^ k.wrapping_mul(0x9e37_79b9)) >> 8) as f32 / (1u32 << 24) as f32
+}
+
 /// Spread a hash's entropy over all 32 bits. Everything here sits on a
 /// 32px grid, so both coordinates are multiples of 32 and the products
 /// above have five zero low bits - which is exactly where callers look
@@ -67,6 +74,10 @@ fn avalanche(mut h: u32) -> u32 {
     h ^= h >> 16;
     h
 }
+
+/// `seed_at` salt for the wreck's mushroom-cloud pick, clear of the
+/// other salts hashed at a kill position (parts, rubble, particles).
+const WRECK_MUSHROOM_SALT: u32 = 211;
 
 /// A unit-ish direction in the plane, for the cosmetic lean of a blast.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -126,13 +137,34 @@ pub struct BlastFx {
     /// Draw offset from `center` (px): the lean a cause gives the fire.
     pub offset: Lean,
     pub kind: BlastKind,
+    /// A dying tank's mushroom cloud, composed at draw time
+    /// (`mushroom.rs`), in place of the sheet's fireball.
+    pub cloud: Option<Cloud>,
 }
 
 impl BlastFx {
     /// The reference fireball at `center`: the hashed shape, mirror,
-    /// turn and jitter with no cause-driven lean. What a dying tank uses.
+    /// turn and jitter with no cause-driven lean.
     pub fn new(center: Position) -> Self {
         Self::shaped(center, BlastKind::Oil, BlastShape::Plain)
+    }
+
+    /// A dying tank's fireball: the mushroom cloud in
+    /// `wreck_mushroom_chance` of kills, the reference fireball otherwise.
+    pub fn wreck(center: Position) -> Self {
+        Self::wreck_with(center, tuning().wreck_mushroom_chance)
+    }
+
+    /// `wreck` with the chance passed in. The pick is a salted position
+    /// hash, independent of the one that picks the plain row, so no RNG
+    /// is drawn; the cloud's shape hashes from the blast's seed.
+    pub fn wreck_with(center: Position, mushroom_chance: f32) -> Self {
+        let mut fx = Self::new(center);
+        let roll = (seed_at(center, WRECK_MUSHROOM_SALT) % 10_000) as f32 / 10_000.0;
+        if roll < mushroom_chance {
+            fx.cloud = Some(Cloud::new(fx.seed, fx.scale));
+        }
+        fx
     }
 
     /// A barrel's fireball, shaped by what set it off.
@@ -168,7 +200,7 @@ impl BlastFx {
             row = BLAST_ROW_TALL;
             scale *= 1.15;
         }
-        BlastFx { center, time: 0.0, seed, scale, secondary: false, row, turn, fps_scale, offset, kind }
+        BlastFx { center, time: 0.0, seed, scale, secondary: false, row, turn, fps_scale, offset, kind, cloud: None }
     }
 
     /// A scaled-down fireball for a wreck's ammo cooking off: the same
@@ -186,6 +218,7 @@ impl BlastFx {
             fps_scale: 1.0,
             offset: Lean { x: 0.0, y: 0.0 },
             kind: BlastKind::Oil,
+            cloud: None,
         }
     }
 
@@ -203,6 +236,9 @@ impl BlastFx {
     }
 
     pub fn done(&self) -> bool {
+        if let Some(cloud) = &self.cloud {
+            return cloud.done(self.time);
+        }
         self.time >= BARREL_EXPLOSION_FRAMES as f32 / self.fps()
     }
 
