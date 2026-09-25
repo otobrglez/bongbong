@@ -3,9 +3,11 @@
 //! that have arrived, and the blend of two of them the replica is written
 //! from each rendered frame.
 //!
-//! A room sends twenty snapshots a second. Writing each one into the
-//! replica as it arrives would draw a 20 fps round on a 60 or 120 Hz
-//! screen, so the replica draws the *past* instead: render time is the
+//! A room sends a snapshot every tick, sixty a second. Writing each one
+//! into the replica as it arrives would still draw the round at the
+//! room's cadence on a 120 Hz screen - and at any cadence a packet can be
+//! late or lost - so the replica draws the *past* instead: render time is
+//! the
 //! server's clock minus `online_interpolation_delay_ms`, which keeps two
 //! snapshots bracketing it, and every frame lands somewhere between them.
 //!
@@ -46,13 +48,17 @@ use crate::tuning::tuning;
 /// two ticks at 60 Hz, `bongbong_server::room::SNAPSHOT_EVERY`. The
 /// starting guess for `Interpolator::interval_ms`, which then follows
 /// what actually arrives.
-pub const SNAPSHOT_INTERVAL_MS: f64 = 50.0;
+pub const SNAPSHOT_INTERVAL_MS: f64 = 1000.0 / 60.0;
 
 /// How far past the newest snapshot the hulls are carried on their last
-/// velocity before the picture holds still. Two intervals is a hundred
-/// milliseconds of gap ridden out; beyond that the guess is worse than a
-/// freeze.
-pub const EXTRAPOLATION_INTERVALS: f64 = 2.0;
+/// velocity before the picture holds still.
+///
+/// Counted in *intervals*, so it shrinks in wall-clock terms whenever the
+/// cadence goes up: at 20 Hz two intervals rode out 100 ms, at 60 Hz they
+/// would ride out 33. Four keeps roughly the old 66 ms of gap coverage at
+/// the new cadence, which is what a dropped packet or a stalled link
+/// actually needs; beyond that the guess is worse than a freeze.
+pub const EXTRAPOLATION_INTERVALS: f64 = 4.0;
 
 /// How much of each reading the clock offset takes: a tenth, so a
 /// jittered arrival moves render time by a tenth of its lateness and the
@@ -65,9 +71,14 @@ pub const CLOCK_GAIN: f64 = 0.1;
 pub const CLOCK_SNAP_MS: f64 = 500.0;
 
 /// How many snapshots are kept. Render time sits one interval or so
-/// behind the newest, so this is room for four intervals of jitter and
-/// loss before the oldest is dropped unseen.
-const BUFFERED_SNAPSHOTS: usize = 8;
+/// behind the newest, so this is room for jitter and loss before the
+/// oldest is dropped unseen.
+///
+/// A count, not a duration, so it halves in wall-clock terms every time
+/// the cadence doubles: eight covered 266 ms at 30 Hz and would cover
+/// 133 at 60. Sixteen keeps the window a quarter of a second, which is
+/// what the number was really buying.
+const BUFFERED_SNAPSHOTS: usize = 16;
 
 /// The plausible range for a measured interval; anything outside is a
 /// gap or a hiccup rather than the room's cadence.
@@ -424,7 +435,7 @@ mod tests {
     }
 
     #[test]
-    fn a_gap_runs_on_the_last_velocity_for_two_intervals_and_then_holds() {
+    fn a_gap_runs_on_the_last_velocity_for_four_intervals_and_then_holds() {
         let mut interp = fed(&[0, 3]);
         let newest = snapshot(3);
         let at_newest = newest.server_ms as f64;
@@ -432,18 +443,33 @@ mod tests {
         assert_eq!(held.snapshot.tanks[0].x, newest.tanks[0].x, "on the snapshot itself, nothing is guessed");
         assert!(!held.extrapolated);
 
-        // One interval past it: 50 ms at 200 px/s is 10 px, 40 quarters.
-        let one = interp.sample(at(at_newest + 50.0)).expect("a frame");
+        // Measured in *intervals*, so the arithmetic is written against
+        // the interval the interpolator has actually settled on rather
+        // than against a number baked in here - `SNAPSHOT_INTERVAL_MS`
+        // only seeds it, and a test that pinned the seed's value broke
+        // the moment the room's cadence changed.
+        let iv = interp.interval_ms();
+        // 200 px/s for one interval, in quarter pixels.
+        let per_interval = (200.0 * iv / 1000.0 * 4.0).round() as i16;
+
+        let one = interp.sample(at(at_newest + iv)).expect("a frame");
         assert!(one.extrapolated);
-        assert_eq!(one.snapshot.tanks[0].x, newest.tanks[0].x + 40);
+        assert_eq!(one.snapshot.tanks[0].x, newest.tanks[0].x + per_interval);
         assert_eq!(one.snapshot.frogs[0].x, newest.frogs[0].x, "a frog holds: the wire gives it no velocity");
 
-        // Two intervals is the cap, and a third changes nothing.
-        let two = interp.sample(at(at_newest + 100.0)).expect("a frame");
-        assert_eq!(two.snapshot.tanks[0].x, newest.tanks[0].x + 80);
-        let three = interp.sample(at(at_newest + 150.0)).expect("a frame");
-        assert_eq!(three.snapshot.tanks[0].x, two.snapshot.tanks[0].x, "past the cap the picture holds");
-        assert!((three.ahead - 0.1).abs() < 0.001, "the round clock stops with it");
+        let two = interp.sample(at(at_newest + 2.0 * iv)).expect("a frame");
+        assert_eq!(two.snapshot.tanks[0].x, newest.tanks[0].x + 2 * per_interval);
+
+        // `EXTRAPOLATION_INTERVALS` is the cap - four, the count that
+        // keeps roughly 66 ms of gap covered now the room cuts a snapshot
+        // every tick.
+        let cap = EXTRAPOLATION_INTERVALS;
+        let at_cap = interp.sample(at(at_newest + cap * iv)).expect("a frame");
+        assert_eq!(at_cap.snapshot.tanks[0].x, newest.tanks[0].x + cap as i16 * per_interval, "the cap is {cap} intervals");
+        let past = interp.sample(at(at_newest + (cap + 1.0) * iv)).expect("a frame");
+        assert_eq!(past.snapshot.tanks[0].x, at_cap.snapshot.tanks[0].x, "past the cap the picture holds");
+        let stopped = (cap * iv / 1000.0) as f32;
+        assert!((past.ahead - stopped).abs() < 0.001, "the round clock stops with it: {} vs {stopped}", past.ahead);
     }
 
     #[test]

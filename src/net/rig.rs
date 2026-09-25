@@ -53,10 +53,10 @@ use crate::PHYSICS_FIXED_DT;
 /// that no server was dialled.
 pub const RIG_CODE: &str = "RIG00";
 
-/// A snapshot every this many ticks: 30 Hz, the room server's cadence
+/// A snapshot every this many ticks: 60 Hz, the room server's cadence
 /// (`bongbong_server::room::SNAPSHOT_EVERY` - keep the two in step, or
 /// the rig stops standing in for the room it is meant to model).
-pub const SNAPSHOT_EVERY: u64 = 2;
+pub const SNAPSHOT_EVERY: u64 = 1;
 
 /// How long a tick keeps repeating the seat's last intent with nothing
 /// newer arrived, the room server's `INTENT_COAST`: a hiccup coasts
@@ -571,6 +571,19 @@ mod tests {
     /// One rig, one window, `frames` frames of it: what the window drew
     /// each frame, and every authoritative snapshot the run produced.
     fn play(quality: LinkQuality, frames: usize) -> (Rig, OnlineRound<Loopback>, Vec<Drawn>, Vec<(u32, Vec<Hull>)>) {
+        play_at(quality, frames, FRAME)
+    }
+
+    /// `play`, at a given display rate. The rate matters to what the
+    /// interpolator has to do: the room cuts a snapshot every tick, so a
+    /// 60 fps window gets roughly one per frame and has little to bridge,
+    /// while a 120 Hz one - `app.rs`'s native `target_fps` - draws two
+    /// frames per snapshot and every other one is interpolated.
+    fn play_at(
+        quality: LinkQuality,
+        frames: usize,
+        frame: Duration,
+    ) -> (Rig, OnlineRound<Loopback>, Vec<Drawn>, Vec<(u32, Vec<Hull>)>) {
         let (rig, link) = start(options(quality));
         let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
         let mut round = OnlineRound::new(client, "RIG");
@@ -578,7 +591,7 @@ mod tests {
         let mut authority: Vec<(u32, Vec<Hull>)> = Vec::new();
         let drive = Intent { move_dir: Some(Dir::Right), ..Intent::default() };
         for _ in 0..frames {
-            round.frame(&drive, FRAME.as_secs_f32());
+            round.frame(&drive, frame.as_secs_f32());
             // The truth, as often as the loop catches it: every snapshot
             // the authority cut, for the drawn frames to be checked
             // against.
@@ -595,7 +608,7 @@ mod tests {
                     hulls: state.tanks.iter().map(|t| (t.slot, t.x, t.y)).collect(),
                 });
             }
-            thread::sleep(FRAME);
+            thread::sleep(frame);
         }
         (rig, round, seen, authority)
     }
@@ -605,7 +618,13 @@ mod tests {
     /// never simulates.
     #[test]
     fn the_rig_draws_a_round_it_does_not_simulate() {
-        let (rig, round, seen, authority) = play(LinkQuality::new(40, 10, 0.0), 150);
+        // At 120 Hz - what a native window actually runs at - two frames
+        // are drawn per snapshot, so the interpolator is doing its job on
+        // every other one. A 60 fps window at the room's 60 Hz cadence
+        // gets about a snapshot a frame and has almost nothing to bridge,
+        // which says the cadence is generous, not that the interpolation
+        // stopped working.
+        let (rig, round, seen, authority) = play_at(LinkQuality::new(40, 10, 0.0), 300, FRAME / 2);
         let replica = round.game().expect("the rig welcomed the window into its round");
         assert!(replica.player().is_some(), "the seat's tank is there for the HUD to read");
         assert!(rig.tick() > 60, "the authority ran its own round: tick {}", rig.tick());
@@ -671,7 +690,8 @@ mod tests {
 
         // The point of the whole thing: the picture moves on frames no
         // snapshot arrived on. Without interpolation this count is zero
-        // and the round is drawn at 20 fps.
+        // and the round is drawn at the room's cadence however fast the
+        // window runs.
         let smoothed = seen
             .windows(2)
             .filter(|pair| pair[0].newest == pair[1].newest && pair[0].hulls != pair[1].hulls)
@@ -888,6 +908,50 @@ mod tests {
             "the drawn hull is still pointing the old way at {visual} while the prediction faces {facing}: \
              the presentation pass never saw the prediction"
         );
+    }
+
+    /// **How late is a shot?** Not a pass/fail test - a measurement, run
+    /// with `--ignored --nocapture`, so the budget behind "shooting feels
+    /// delayed" is a number rather than an argument.
+    ///
+    /// The hull is predicted and answers on the next frame; a shell is
+    /// not, so it waits the whole way round: the client's send pacing,
+    /// the link, the server's tick, the snapshot cadence and then
+    /// `online_interpolation_delay_ms` of deliberate buffering before it
+    /// is drawn at all.
+    #[test]
+    #[ignore]
+    fn measure_how_late_a_shot_is() {
+        for (label, quality) in
+            [("perfect link", LinkQuality::PERFECT), ("40 ms rtt", LinkQuality::new(20, 0, 0.0)), ("80 ms rtt", LinkQuality::new(40, 0, 0.0))]
+        {
+            let (_rig, link) = start(options(quality));
+            let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
+            let mut round = OnlineRound::new(client, "RIG");
+            for _ in 0..120 {
+                round.frame(&Intent::default(), FRAME.as_secs_f32());
+                thread::sleep(FRAME);
+            }
+            let before = round.game().map_or(0, |g| g.drawable_state().shots.len());
+            // The frame of the press.
+            round.frame(&Intent { fire: true, ..Intent::default() }, FRAME.as_secs_f32());
+            thread::sleep(FRAME);
+            let mut frames = 1;
+            while frames < 60 {
+                round.frame(&Intent::default(), FRAME.as_secs_f32());
+                if round.game().is_some_and(|g| g.drawable_state().shots.len() > before) {
+                    break;
+                }
+                thread::sleep(FRAME);
+                frames += 1;
+            }
+            eprintln!(
+                "{label}: the shell appears {frames} frames after the press (~{} ms at 60 fps); predict_shots={}, interp_delay={} ms",
+                frames * 100 / 6,
+                tuning().online_predict_shots,
+                tuning().online_interpolation_delay_ms,
+            );
+        }
     }
 
     /// **A tap has to reach the room.** Every other test of this lane

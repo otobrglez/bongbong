@@ -56,22 +56,29 @@ use crate::mailbox::Mailbox;
 /// The tick: one `PHYSICS_FIXED_DT`, 60 Hz.
 pub const TICK: Duration = Duration::from_nanos(1_000_000_000 / 60);
 
-/// A snapshot goes out every this many ticks: 30 Hz.
+/// A snapshot goes out every this many ticks: **one, so 60 Hz - a
+/// snapshot per tick.**
 ///
-/// **Two rather than three, to buy the picture latency.** A client draws
+/// **This is the cheapest latency in the system.** A client draws
 /// `online_interpolation_delay_ms` behind so that two snapshots always
-/// bracket render time; that delay can therefore be no shorter than one
-/// snapshot interval without the replica extrapolating most frames. At
-/// 20 Hz the interval was 50 ms, which put a floor of 50 ms under the
-/// delay and made 100 ms the comfortable setting. At 30 Hz the interval
-/// is 33 ms, so the same margin of safety costs 66 ms instead of 100 -
-/// forty milliseconds off every hull a player aims at.
+/// bracket render time, so that delay can be no shorter than one
+/// snapshot interval without the replica extrapolating most frames: the
+/// cadence sets a floor under every un-predicted thing a player sees.
+/// 20 Hz put that floor at 50 ms and made 100 ms the comfortable delay;
+/// 30 Hz made it 66; at 60 Hz the interval is 16.7 ms and 33 ms is two
+/// whole intervals of margin. Measured press-to-shell over a perfect
+/// link fell from about 100 ms to about 60.
 ///
-/// It is paid for in bandwidth and nothing else: a room goes from about
-/// 1.7 to 2.6 KB/s per client, against a tick that spends 451 µs of its
-/// 16,600 (section 5). Deltas are encoded once and handed to every seat,
-/// so the cost is one more encode per two ticks, not per seat.
-pub const SNAPSHOT_EVERY: u64 = 2;
+/// It is paid for in bandwidth and nothing else, and the bill is small:
+/// a live room measured 2.1 KB/s at 30 Hz, so about 4 KB/s here, against
+/// a tick whose p99 is 383 µs of its 16,600 - 2.3 %, with no overrun in
+/// thousands of ticks. Deltas are encoded once and handed to every seat,
+/// so the cost is one more encode per tick, not per seat, and a delta
+/// over one tick's change is smaller than one over two.
+///
+/// A slow client never queues these up: `conn`'s bounded outbox drops
+/// snapshots for a seat that cannot keep up and marks it for a full one.
+pub const SNAPSHOT_EVERY: u64 = 1;
 
 /// Seats a room takes: the simulation's own `MAX_SEATS`
 /// (docs/online-coop-prd.md §4.11), since the bar now reads a whole team

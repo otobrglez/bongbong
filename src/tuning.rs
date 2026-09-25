@@ -1485,20 +1485,23 @@ tunables! {
         /// arrives before it is needed), lower it to trade smoothness for
         /// freshness - the hull answers the stick this much later. Below
         /// one snapshot interval the replica extrapolates most frames,
-        /// which is the floor this can sensibly take: 33 ms at the room's
-        /// 30 Hz (`SNAPSHOT_EVERY`).
+        /// which is the floor this can sensibly take: 16.7 ms at the
+        /// room's 60 Hz (`SNAPSHOT_EVERY`).
         ///
-        /// **66 ms, not 100.** This is the largest single term in the
-        /// latency budget (section 5) and the one that is a choice rather
-        /// than a cost, and with prediction carrying the local hull it is
-        /// paid only by the tanks a player aims *at*. Two snapshot
-        /// intervals is the margin that was comfortable at 20 Hz and
-        /// still is at 30; the rate went up so this could come down. Drop
-        /// it further on a good link, raise it on a jittery one - a late
-        /// packet then still arrives before it is needed. Live, so the
-        /// two can be compared mid-round, which is the only honest way to
-        /// judge it (`--rig --delay 80 --jitter 20`).
-        online_interpolation_delay_ms: f32 = 66.0 in 0.0 ..= 500.0;
+        /// **33 ms, and it followed the cadence down.** This is the
+        /// largest single term in the latency budget (section 5) and the
+        /// one that is a choice rather than a cost; with prediction
+        /// carrying the local hull it is paid by the tanks a player aims
+        /// *at*, and by everything not predicted - a pickup, a hit, a
+        /// shell the server owns. Two snapshot intervals has been the
+        /// margin at every cadence: 100 ms at 20 Hz, 66 at 30, 33 at 60.
+        /// The rate went up so this could come down, which is the whole
+        /// reason the rate went up. Drop it further on a good link, raise
+        /// it on a jittery one - a late packet then still arrives before
+        /// it is needed. Live, so the two can be compared mid-round,
+        /// which is the only honest way to judge it (`--rig --delay 80
+        /// --jitter 20`).
+        online_interpolation_delay_ms: f32 = 33.0 in 0.0 ..= 500.0;
         /// Run the local seat's own hull ahead of the server and
         /// reconcile it against each snapshot (stage 2,
         /// docs/online-coop-prd.md section 4.12, `net::predict`).
@@ -1518,28 +1521,28 @@ tunables! {
         /// Also draw this seat's *shell* on the frame of the press
         /// (docs/online-coop-prd.md section 4.12, `net::predict`).
         ///
-        /// **Off, and here is why.** A predicted shell is drawn at the
-        /// present; every tank it might hit is drawn
-        /// `online_interpolation_delay_ms` in the past. At
-        /// `shell_speed` 500 and a 100 ms delay that is fifty pixels,
-        /// most of a sixty-four pixel hull - so the shell reaches a
-        /// tank's *drawn* position before the server's copy reaches its
-        /// real one, and sails through, because a replica runs no hit
-        /// test. What a player sees is a shot passing through a tank and
-        /// not hitting it.
+        /// **On, because the lie got small enough to be worth the
+        /// latency.** A predicted shell is drawn at the present; every
+        /// tank it might hit is drawn `online_interpolation_delay_ms` in
+        /// the past, so the shell reaches a tank's *drawn* position
+        /// before the server's copy reaches its real one and sails
+        /// through - a replica runs no hit test. That error is the delay
+        /// times `shell_speed`: at 500 px/s it was fifty pixels at a
+        /// 100 ms delay, most of a sixty-four pixel hull and plainly
+        /// wrong; at 33 ms it is sixteen, a quarter of a hull, against a
+        /// shot that now answers the press on the frame it is pressed
+        /// instead of about 100 ms later. The trade turned over when the
+        /// snapshot cadence went to 60 Hz and let the delay follow.
         ///
-        /// The server's own shell is drawn on the same delayed clock as
-        /// the tanks, so it collides where it looks like it should.
-        /// Leaving the shot to the server costs the press its
-        /// instant feedback and keeps the picture honest, which is the
-        /// better trade until the server rewinds targets to the
-        /// shooter's view - lag compensation, section 4.12's decision 9,
-        /// which is what makes a predicted shell correct rather than
-        /// merely early.
-        ///
-        /// On for judging that against a rig run; the hull's own
-        /// prediction (`online_predict_own_tank`) is unaffected.
-        online_predict_shots: bool = false in 0 ..= 1;
+        /// It is still a lie, and the honest fix is the server rewinding
+        /// targets to the shooter's view - lag compensation, section
+        /// 4.12's decision 9 - which is what makes a predicted shell
+        /// correct rather than merely early. Until then this is a live
+        /// knob: turn it off to hand the shot back to the server and see
+        /// the picture stay strictly honest at the cost of the wait.
+        /// The hull's own prediction (`online_predict_own_tank`) is
+        /// unaffected either way.
+        online_predict_shots: bool = true in 0 ..= 1;
         /// How much of the authored wave each seat past the first adds to a
         /// room's round (docs/online-coop-prd.md section 4.11): the room
         /// sends `wave_size_scale = 1 + (seats - 1) * this` in its

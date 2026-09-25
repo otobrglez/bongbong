@@ -353,7 +353,7 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
     let snapshot_hz = (n - 1) as f64 / elapsed;
     let tick_hz = (tick_last - tick_first) as f64 / elapsed;
     eprintln!("measured: {n} deltas over {elapsed:.2} s, snapshots {snapshot_hz:.1} Hz, tick {tick_hz:.1} Hz, {intents_sent} intents sent, {} full snapshots to the host", host_stream.fulls);
-    assert!((26.0..=34.0).contains(&snapshot_hz), "snapshots at {snapshot_hz:.1} Hz, wanted 30");
+    assert!((54.0..=66.0).contains(&snapshot_hz), "snapshots at {snapshot_hz:.1} Hz, wanted 60");
     assert!((54.0..=66.0).contains(&tick_hz), "tick at {tick_hz:.1} Hz, wanted 60");
     assert_eq!(host_stream.fulls, 0, "a client that keeps up never needs a full snapshot");
     assert!(host_stream.compared >= 5, "the replica was held to the wire {} times", host_stream.compared);
@@ -695,7 +695,7 @@ async fn the_games_own_transport_hosts_a_round_and_keeps_up_with_it() {
         "measured: {n} snapshots over {elapsed:.2} s, snapshots {snapshot_hz:.1} Hz, tick {tick_hz:.1} Hz, {} intents sent, replica checked {} times",
         played.intents, played.compared
     );
-    assert!((26.0..=34.0).contains(&snapshot_hz), "snapshots at {snapshot_hz:.1} Hz, wanted 30");
+    assert!((54.0..=66.0).contains(&snapshot_hz), "snapshots at {snapshot_hz:.1} Hz, wanted 60");
     assert!((54.0..=66.0).contains(&tick_hz), "tick at {tick_hz:.1} Hz, wanted 60");
     assert!(
         played.snapshots.windows(2).all(|w| w[1].1 == w[0].1 + SNAPSHOT_EVERY as u32),
