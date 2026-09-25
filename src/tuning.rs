@@ -1474,10 +1474,21 @@ tunables! {
         /// frame. Raise it on a jittery link (a late packet then still
         /// arrives before it is needed), lower it to trade smoothness for
         /// freshness - the hull answers the stick this much later. Below
-        /// one snapshot interval (50 ms) the replica extrapolates most
-        /// frames. A knob so it can be tried by hand against a rig run
-        /// (`--rig --delay 80 --jitter 20`). Live.
-        online_interpolation_delay_ms: f32 = 100.0 in 0.0 ..= 500.0;
+        /// one snapshot interval the replica extrapolates most frames,
+        /// which is the floor this can sensibly take: 33 ms at the room's
+        /// 30 Hz (`SNAPSHOT_EVERY`).
+        ///
+        /// **66 ms, not 100.** This is the largest single term in the
+        /// latency budget (section 5) and the one that is a choice rather
+        /// than a cost, and with prediction carrying the local hull it is
+        /// paid only by the tanks a player aims *at*. Two snapshot
+        /// intervals is the margin that was comfortable at 20 Hz and
+        /// still is at 30; the rate went up so this could come down. Drop
+        /// it further on a good link, raise it on a jittery one - a late
+        /// packet then still arrives before it is needed. Live, so the
+        /// two can be compared mid-round, which is the only honest way to
+        /// judge it (`--rig --delay 80 --jitter 20`).
+        online_interpolation_delay_ms: f32 = 66.0 in 0.0 ..= 500.0;
         /// Run the local seat's own hull ahead of the server and
         /// reconcile it against each snapshot (stage 2,
         /// docs/online-coop-prd.md section 4.12, `net::predict`).

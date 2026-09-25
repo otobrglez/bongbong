@@ -808,7 +808,7 @@ cargo run -- --rig --delay 80 --jitter 20 --loss 0.02
 | Item | Value |
 |---|---|
 | Intent up, 60 Hz (three per packet in stage 2) | 0.4–0.8 KB/s payload, ~3 KB/s framed |
-| Snapshot down, 20 Hz, 8 tanks + 24 shots, delta | ~2–3 KB/s payload, ~4 KB/s framed |
+| Snapshot down, 30 Hz, 8 tanks + 24 shots, delta | ~3–4 KB/s payload, ~6 KB/s framed (measured 1.7 KB/s on a real two-seat round) |
 | Worst case, ~40 tanks in a wave round (`wave_max_alive`'s cap of 31 plus eight seats) | ~10 KB/s payload |
 | `Welcome`, deflated | ~4 KB once |
 | Server tick, 12 enemies + 1 player (measured, section 3) | ≈ 230 µs on a 2.1 GHz Xeon vCPU, ≈ 95 µs of it per-frame fixed cost |
@@ -816,7 +816,8 @@ cargo run -- --rig --delay 80 --jitter 20 --loss 0.02
 | CPU per room at 60 Hz | ≈ 2 % of a core at 8 seats, ≈ 3 % worst case; 30–50 rooms per vCPU of that class, more on a desktop core |
 | Memory per room | < 2 MB |
 | Client replay per snapshot, stage 2 | < 0.2 ms |
-| Own-tank latency, stage 1 | ≈ 150–250 ms (≤16 sample + 20–60 up + ≤16 tick + ≤50 cadence + 20–60 down + 100 interpolation) |
+| Own-tank latency, stage 1 | ≈ 110–190 ms (≤16 sample + 20–60 up + ≤16 tick + ≤33 cadence + 20–60 down + 66 interpolation) |
+| Latency to a tank a player *aims at*, stage 2 | the same ≈ 110–190 ms. Prediction carries the local hull only, so what remains is paid by every other hull; the two terms that are a choice rather than a cost - the cadence and the interpolation delay - are 99 ms of it, down from 150 |
 | Own-tank latency, stage 2 | the next frame |
 
 ## 6. Phased plan

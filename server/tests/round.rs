@@ -344,7 +344,7 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
     let host_stream = follow(&mut host, host_baseline, Some(host_replica), span).await;
     let (second, second_stream, intents_sent) = driver.await.unwrap();
 
-    // Cadence: snapshots at 20 Hz, the tick at 60 Hz.
+    // Cadence: snapshots at 30 Hz, the tick at 60 Hz.
     let n = host_stream.deltas.len();
     assert!(n >= 20, "only {n} deltas in {span:?}");
     let (t_first, tick_first) = host_stream.deltas[0];
@@ -353,7 +353,7 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
     let snapshot_hz = (n - 1) as f64 / elapsed;
     let tick_hz = (tick_last - tick_first) as f64 / elapsed;
     eprintln!("measured: {n} deltas over {elapsed:.2} s, snapshots {snapshot_hz:.1} Hz, tick {tick_hz:.1} Hz, {intents_sent} intents sent, {} full snapshots to the host", host_stream.fulls);
-    assert!((17.0..=23.0).contains(&snapshot_hz), "snapshots at {snapshot_hz:.1} Hz, wanted 20");
+    assert!((26.0..=34.0).contains(&snapshot_hz), "snapshots at {snapshot_hz:.1} Hz, wanted 30");
     assert!((54.0..=66.0).contains(&tick_hz), "tick at {tick_hz:.1} Hz, wanted 60");
     assert_eq!(host_stream.fulls, 0, "a client that keeps up never needs a full snapshot");
     assert!(host_stream.compared >= 5, "the replica was held to the wire {} times", host_stream.compared);
@@ -683,7 +683,7 @@ async fn the_games_own_transport_hosts_a_round_and_keeps_up_with_it() {
     RoomCode::parse(&played.code).expect("a well-formed code");
     assert_eq!(socket_url(&RoomsHost::deployed()), "wss://rooms.bongbong.io/ws");
 
-    // Cadence: snapshots at 20 Hz, the tick at 60 Hz.
+    // Cadence: snapshots at 30 Hz, the tick at 60 Hz.
     let n = played.snapshots.len();
     assert!(n >= 25, "only {n} snapshots in {span:?}");
     let (t_first, tick_first) = played.snapshots[0];
@@ -695,7 +695,7 @@ async fn the_games_own_transport_hosts_a_round_and_keeps_up_with_it() {
         "measured: {n} snapshots over {elapsed:.2} s, snapshots {snapshot_hz:.1} Hz, tick {tick_hz:.1} Hz, {} intents sent, replica checked {} times",
         played.intents, played.compared
     );
-    assert!((17.0..=23.0).contains(&snapshot_hz), "snapshots at {snapshot_hz:.1} Hz, wanted 20");
+    assert!((26.0..=34.0).contains(&snapshot_hz), "snapshots at {snapshot_hz:.1} Hz, wanted 30");
     assert!((54.0..=66.0).contains(&tick_hz), "tick at {tick_hz:.1} Hz, wanted 60");
     assert!(
         played.snapshots.windows(2).all(|w| w[1].1 == w[0].1 + SNAPSHOT_EVERY as u32),

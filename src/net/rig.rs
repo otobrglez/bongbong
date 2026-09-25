@@ -53,9 +53,10 @@ use crate::PHYSICS_FIXED_DT;
 /// that no server was dialled.
 pub const RIG_CODE: &str = "RIG00";
 
-/// A snapshot every this many ticks: 20 Hz, the room server's cadence
-/// (`bongbong_server::room::SNAPSHOT_EVERY`).
-pub const SNAPSHOT_EVERY: u64 = 3;
+/// A snapshot every this many ticks: 30 Hz, the room server's cadence
+/// (`bongbong_server::room::SNAPSHOT_EVERY` - keep the two in step, or
+/// the rig stops standing in for the room it is meant to model).
+pub const SNAPSHOT_EVERY: u64 = 2;
 
 /// How long a tick keeps repeating the seat's last intent with nothing
 /// newer arrived, the room server's `INTENT_COAST`: a hiccup coasts

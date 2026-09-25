@@ -43,7 +43,7 @@ use crate::net::wire::{Snapshot, dequantise_velocity, quantise_pos};
 use crate::tuning::tuning;
 
 /// The gap between two snapshots a room with nothing to say would show:
-/// three ticks at 60 Hz, `bongbong_server::room::SNAPSHOT_EVERY`. The
+/// two ticks at 60 Hz, `bongbong_server::room::SNAPSHOT_EVERY`. The
 /// starting guess for `Interpolator::interval_ms`, which then follows
 /// what actually arrives.
 pub const SNAPSHOT_INTERVAL_MS: f64 = 50.0;

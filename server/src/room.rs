@@ -56,8 +56,22 @@ use crate::mailbox::Mailbox;
 /// The tick: one `PHYSICS_FIXED_DT`, 60 Hz.
 pub const TICK: Duration = Duration::from_nanos(1_000_000_000 / 60);
 
-/// A snapshot goes out every this many ticks: 20 Hz.
-pub const SNAPSHOT_EVERY: u64 = 3;
+/// A snapshot goes out every this many ticks: 30 Hz.
+///
+/// **Two rather than three, to buy the picture latency.** A client draws
+/// `online_interpolation_delay_ms` behind so that two snapshots always
+/// bracket render time; that delay can therefore be no shorter than one
+/// snapshot interval without the replica extrapolating most frames. At
+/// 20 Hz the interval was 50 ms, which put a floor of 50 ms under the
+/// delay and made 100 ms the comfortable setting. At 30 Hz the interval
+/// is 33 ms, so the same margin of safety costs 66 ms instead of 100 -
+/// forty milliseconds off every hull a player aims at.
+///
+/// It is paid for in bandwidth and nothing else: a room goes from about
+/// 1.7 to 2.6 KB/s per client, against a tick that spends 451 µs of its
+/// 16,600 (section 5). Deltas are encoded once and handed to every seat,
+/// so the cost is one more encode per two ticks, not per seat.
+pub const SNAPSHOT_EVERY: u64 = 2;
 
 /// Seats a room takes: the simulation's own `MAX_SEATS`
 /// (docs/online-coop-prd.md §4.11), since the bar now reads a whole team
