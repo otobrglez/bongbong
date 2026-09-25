@@ -83,6 +83,11 @@ fn ios_link() {
             pc_path.display()
         )
     });
+    // The archives are bundled into this crate's rlib, so a rebuilt SDL3 or
+    // raylib (tools/setup_ios.sh) has to rebuild the crate, not just relink.
+    for archive in ["libraylib.a", "libSDL3.a"] {
+        println!("cargo:rerun-if-changed={}", lib.join(archive).display());
+    }
     println!("cargo:rustc-link-search=native={}", lib.display());
     println!("cargo:rustc-link-lib=static=raylib");
     println!("cargo:rustc-link-lib=static=SDL3");

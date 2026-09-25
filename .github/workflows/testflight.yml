@@ -1,0 +1,108 @@
+name: TestFlight
+
+# Builds the iOS app and uploads it to App Store Connect, from where it
+# reaches TestFlight - the CI side of `just ios-testflight`
+# (tools/ios/testflight.sh; CLAUDE.md's iOS section). Same tag trigger as
+# release.yml and cloudflare-deploy.yml, so one `git tag vX.Y.Z && git push
+# --tags` ships the native archives, the web build and a TestFlight build
+# together; a manual run uploads the picked ref.
+#
+# Signing needs nothing on the runner: xcodebuild -exportArchive signs with
+# Apple's cloud-managed distribution certificate, authenticated by the App
+# Store Connect API key (Admin role). The build number is the UTC time
+# (tools/ios/bundle.sh), so every run uploads a new build; the version is
+# Cargo.toml's.
+#
+# Requires repo secrets (App Store Connect > Users and Access > Integrations):
+#   ASC_KEY_ID      the API key's ID
+#   ASC_ISSUER_ID   the team's issuer ID
+#   ASC_KEY_P8      the contents of AuthKey_<ASC_KEY_ID>.p8
+on:
+  push:
+    tags:
+      - '**[0-9]+.[0-9]+.[0-9]+*'
+  workflow_dispatch:
+
+# One upload at a time: two builds stamped in the same minute would carry
+# the same build number, and App Store Connect refuses the second.
+concurrency:
+  group: testflight
+  cancel-in-progress: false
+
+env:
+  # Pinned to devenv.nix's languages.rust.version.
+  RUST_VERSION: 1.97.1
+  # The Xcode the local builds use; tools/ios/env.sh reads it.
+  BONGBONG_DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+  BONGBONG_IOS_TEAM: PFET672VQB
+  CARGO_TERM_COLOR: always
+
+jobs:
+  upload:
+    runs-on: macos-26
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: aarch64-apple-ios
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: testflight-cargo-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: testflight-cargo-${{ env.RUST_VERSION }}-
+
+      # SDL3 and raylib for the device slice (tools/setup_ios.sh), the slow
+      # part of a cold run. The key covers everything that decides what is
+      # built: the script (SDL tag and options), the raylib patch, and
+      # Cargo.lock (the sola-raylib-sys tree raylib is built from).
+      - name: Cache SDL3 + raylib
+        id: ios-libs
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/bongbong-ios/ios
+          key: testflight-ios-libs-${{ hashFiles('tools/setup_ios.sh', 'tools/ios/raylib-sdl-highdpi.patch', 'Cargo.lock') }}-xcode26.3
+
+      - name: Build SDL3 + raylib
+        if: steps.ios-libs.outputs.cache-hit != 'true'
+        run: |
+          cargo fetch
+          SLICE=ios ./tools/setup_ios.sh
+
+      - name: Install the App Store Connect API key
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          [[ -n "$ASC_KEY_ID" && -n "$ASC_KEY_P8" ]] || { echo "::error::ASC_KEY_ID and ASC_KEY_P8 secrets are required"; exit 1; }
+          umask 077
+          mkdir -p ~/.appstoreconnect/private_keys
+          printf '%s\n' "$ASC_KEY_P8" > ~/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8
+
+      - name: Build, sign and upload
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: ./tools/ios/testflight.sh
+
+      - name: Keep the export log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testflight-export-log
+          path: target/ios-device/export.log
+          if-no-files-found: ignore
+
+      - name: Remove the API key
+        if: always()
+        run: rm -rf ~/.appstoreconnect
