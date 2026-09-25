@@ -64,6 +64,13 @@ pub struct Missile {
     pub height: f32,
     /// Unit heading over the ground.
     pub dir: Vector2,
+    /// Unit direction the sprite points on screen: along the path it is
+    /// *drawn* on, which is the ground motion plus the change in height -
+    /// so it noses up out of the tube, levels off at the apex and tips
+    /// down into the dive. Eased toward that path by
+    /// `missile_facing_smoothing` so a stage change never snaps it.
+    /// Presentation only; nothing in flight reads it.
+    pub facing: Vector2,
     /// Ground speed (px/s).
     pub speed: f32,
     /// Seconds since launch.
@@ -98,12 +105,19 @@ impl Missile {
     /// `dir` (unit, already fanned), aiming by default at `fallback_aim` -
     /// the ground point it dives on if the seek finds nothing.
     pub fn spawn(origin: Position, dir: Vector2, owner: Owner, tube: u8, fallback_aim: Position) -> Missile {
+        let t = tuning();
+        // Leaving the tube it climbs at the ease-out's opening rate, twice
+        // the average - steeply up, drifting along the launch heading.
+        let rise = 2.0 * t.missile_apex_height / t.missile_climb_seconds.max(1e-3);
+        let path = dir * t.missile_climb_speed - Vector2::new(0.0, rise);
+        let facing = if path.length() > 1e-3 { path / path.length() } else { dir };
         Missile {
             stage: MissileStage::Climb,
             position: origin,
             height: 0.0,
             dir,
-            speed: tuning().missile_climb_speed,
+            facing,
+            speed: t.missile_climb_speed,
             age: 0.0,
             stage_time: 0.0,
             owner,
@@ -156,9 +170,27 @@ impl Missile {
         if self.arrived {
             return;
         }
-        let t = tuning();
         self.age += dt;
         self.stage_time += dt;
+        let smoothing = tuning().missile_facing_smoothing;
+        let drawn_before = self.draw_pos();
+        self.fly(dt);
+        // Point along the path the sprite is drawn on this step.
+        let moved = self.draw_pos() - drawn_before;
+        let len = moved.length();
+        if len > 1e-4 {
+            let k = 1.0 - (-smoothing * dt).exp();
+            let eased = self.facing + (moved / len - self.facing) * k;
+            let l = eased.length();
+            if l > 1e-4 {
+                self.facing = eased / l;
+            }
+        }
+    }
+
+    /// One step of the stage machine.
+    fn fly(&mut self, dt: f32) {
+        let t = tuning();
         match self.stage {
             MissileStage::Climb => {
                 let k = (self.stage_time / t.missile_climb_seconds.max(1e-3)).clamp(0.0, 1.0);
@@ -261,8 +293,15 @@ impl Missile {
         self.dir = Vector2::new(turned.cos(), turned.sin());
     }
 
-    /// Facing in degrees, the game's convention (0 = up).
+    /// The sprite's facing in degrees, the game's convention (0 = up):
+    /// along the drawn flight path (`facing`), nose first.
     pub fn rotation(&self) -> f32 {
+        self.facing.x.atan2(-self.facing.y).to_degrees()
+    }
+
+    /// The ground heading in degrees - what the shadow, which lies on the
+    /// ground, points along.
+    pub fn ground_rotation(&self) -> f32 {
         self.dir.x.atan2(-self.dir.y).to_degrees()
     }
 
@@ -280,7 +319,7 @@ impl Missile {
     /// smoke trail comes out.
     pub fn tail(&self) -> Position {
         let back = MISSILE_TEXTURE_SIZE * MISSILE_SCALE * self.draw_scale() * 0.4;
-        self.draw_pos() - self.dir * back
+        self.draw_pos() - self.facing * back
     }
 
     /// Nearer the camera at the top of the climb, so drawn bigger.
@@ -311,7 +350,7 @@ pub fn draw_missile_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, missile
     );
     let alpha = 255.0 * tuning().missile_shadow_opacity * (1.0 - 0.5 * lift);
     let origin = Vector2::new(size / 2.0, size / 2.0);
-    d.draw_texture_pro(texture, source_rec(missile), dest, origin, missile.rotation(), Color::new(0, 0, 0, alpha as u8));
+    d.draw_texture_pro(texture, source_rec(missile), dest, origin, missile.ground_rotation(), Color::new(0, 0, 0, alpha as u8));
 }
 
 /// The missile itself, lifted by its height and scaled up as it rises.
@@ -374,6 +413,35 @@ mod tests {
         let mut m = Missile::spawn(Position::new(100.0, 300.0), Vector2::new(0.0, -1.0), Owner::Enemy(3), 2, aim);
         fly_until_arrived(&mut m, 5000);
         assert!(m.position.distance_to(aim) < 1e-3);
+    }
+
+    #[test]
+    fn the_sprite_points_along_the_path_it_is_drawn_on() {
+        // Launched to the right: it noses up out of the tube, levels off
+        // at the apex and tips down into the dive - never flat right
+        // while it climbs.
+        let aim = Position::new(500.0, 100.0);
+        let mut m = Missile::spawn(Position::new(100.0, 100.0), Vector2::new(1.0, 0.0), Owner::Player(0), 0, aim);
+        assert!(m.facing.y < -0.5, "leaves the tube pointing up the screen: {:?}", m.facing);
+        let mut leveled = false;
+        let mut dived = false;
+        for _ in 0..2000 {
+            if m.wants_lock() {
+                m.locked = true;
+            }
+            m.advance(crate::PHYSICS_FIXED_DT);
+            if m.stage == MissileStage::Seek && m.facing.y.abs() < 0.2 {
+                leveled = true;
+            }
+            if m.stage == MissileStage::Dive && m.facing.y > 0.1 {
+                dived = true;
+            }
+            if m.arrived {
+                break;
+            }
+        }
+        assert!(leveled && dived, "level at the apex ({leveled}), nose down in the dive ({dived})");
+        assert!((m.facing.length() - 1.0).abs() < 1e-3);
     }
 
     #[test]
