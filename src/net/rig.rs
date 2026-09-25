@@ -890,6 +890,47 @@ mod tests {
         );
     }
 
+    /// **A tap has to reach the room.** Every other test of this lane
+    /// drives the hull; the trigger goes through `OnlineRound::send`,
+    /// which neither `Lockstep` nor the server's own tests exercise
+    /// (both call `RoomClient::send_intent` directly). A seat that
+    /// steers but cannot shoot passes all of them.
+    ///
+    /// A shell is edge-triggered, so this taps: down two frames, up ten.
+    /// Every pull owes a `Fired` back from the room.
+    #[test]
+    fn a_tapped_trigger_reaches_the_room() {
+        let (_rig, link) = start(options(LinkQuality::PERFECT));
+        let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
+        let mut round = OnlineRound::new(client, "RIG");
+        for _ in 0..60 {
+            round.frame(&Intent::default(), FRAME.as_secs_f32());
+            thread::sleep(FRAME);
+        }
+        let (mut pulls, mut fired) = (0usize, 0usize);
+        for i in 0..240 {
+            let fire = i % 12 < 2;
+            if i % 12 == 0 {
+                pulls += 1;
+            }
+            round.frame(&Intent { fire, ..Intent::default() }, FRAME.as_secs_f32());
+            if let Some(game) = round.game() {
+                fired += game
+                    .events()
+                    .iter()
+                    .filter(|e| matches!(e, crate::simulation::Event::Fired { slot: 0, .. }))
+                    .count();
+            }
+            thread::sleep(FRAME);
+        }
+        eprintln!("pulled the trigger {pulls} times, {fired} shells came back");
+        assert!(pulls >= 15, "the test never got going: {pulls} pulls");
+        assert!(
+            fired * 2 >= pulls,
+            "pulled the trigger {pulls} times and only {fired} shells came back from the room"
+        );
+    }
+
     /// **The other half of the lag**: the shell is on screen on the frame
     /// of the press, not a round trip later.
     ///

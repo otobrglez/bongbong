@@ -897,3 +897,271 @@ async fn play_to_the_end(ws: &mut Client, baseline: Snapshot) -> PlayedOut {
     }
     played
 }
+
+/// **Pulling the trigger has to put a shell in the air.** Every other
+/// test here drives a round and holds the replica to the wire; none of
+/// them ever checked that the one input a player cares about most
+/// actually reaches `Game::update`. A seat that steers but cannot shoot
+/// passes all of them.
+///
+/// A shell is edge-triggered - `simulation::mod`'s `fire_pressed` fires
+/// once per physical press and a held key can never re-arm it - so this
+/// taps the way a hand does: pressed for a couple of frames, released,
+/// again. Every tap owes a shell.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_tap_of_the_trigger_puts_a_shell_in_the_air() {
+    let (addr, _hub) = start_server().await;
+    let url = socket_url(&RoomsHost::overriding(&format!("ws://{addr}")));
+
+    let (pulls, fired) = tokio::task::spawn_blocking(move || {
+        let mut client = RoomClient::host(
+            NativeTransport::connect(&url),
+            Identity::new("host", "tok-host"),
+            RoomSetup { map: "default".into(), map_toml: None, mission: Mission::Protect, seed: Some(0xB0B5) },
+        );
+        let mut events = Vec::new();
+        let (mut asked, mut in_round) = (false, false);
+        let mut round_end: Option<Instant> = None;
+        let mut fired = 0usize;
+        let mut seat = 0u16;
+        let (mut taps, mut pulls) = (0usize, 0usize);
+        let give_up = Instant::now() + WAIT * 4;
+        loop {
+            events.clear();
+            client.poll(&mut events);
+            for event in events.drain(..) {
+                match event {
+                    ClientEvent::Started => in_round = true,
+                    ClientEvent::Welcomed(w) if in_round => {
+                        seat = w.seat as u16;
+                        round_end = Some(Instant::now() + Duration::from_secs(2));
+                    }
+                    ClientEvent::Snapshot(s) => {
+                        fired += s
+                            .events
+                            .iter()
+                            .filter(|e| matches!(e, WireEvent::Fired { slot, .. } if *slot == seat))
+                            .count();
+                    }
+                    ClientEvent::Refused(why) => panic!("the room refused: {why}"),
+                    ClientEvent::Closed(why) => panic!("the socket closed: {why}"),
+                    _ => {}
+                }
+            }
+            if !asked && client.phase() == &Phase::Lobby {
+                client.start();
+                asked = true;
+            }
+            if round_end.is_some() {
+                // Tap: down for two frames, up for ten, the shape of a
+                // hand on the space bar.
+                let fire = taps % 12 < 2;
+                if fire && taps % 12 == 0 {
+                    pulls += 1;
+                }
+                client.send_intent(&Intent { fire, ..Intent::default() });
+                taps += 1;
+            }
+            if round_end.is_some_and(|end| Instant::now() >= end) {
+                break;
+            }
+            assert!(Instant::now() < give_up, "the round never got going: {:?}", client.phase());
+            std::thread::sleep(Duration::from_millis(16));
+        }
+        client.close();
+        (pulls, fired)
+    })
+    .await
+    .expect("the client's thread");
+
+    eprintln!("pulled the trigger {pulls} times, {fired} shells came out");
+    assert!(pulls >= 6, "the test never got going: only {pulls} trigger pulls");
+    assert!(
+        fired * 2 >= pulls,
+        "pulled the trigger {pulls} times over two seconds and only {fired} shells came out"
+    );
+}
+
+/// **The whole client, against the real server.** `OnlineRound::send`
+/// paces intents against real time and the server's mailbox applies them
+/// one per tick, in order; the two clocks are independent. Every other
+/// test drives one side or the other - `Lockstep` and the tests above
+/// call `RoomClient::send_intent` directly, and `net::rig`'s room is
+/// newest-wins rather than the ordered buffer this one runs. This is the
+/// intersection, which is where a lost trigger would live.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_whole_client_taps_the_trigger_and_the_room_answers() {
+    use bongbong::net::round::OnlineRound;
+
+    let (addr, _hub) = start_server().await;
+    let url = socket_url(&RoomsHost::overriding(&format!("ws://{addr}")));
+
+    let (pulls, fired) = tokio::task::spawn_blocking(move || {
+        let client = RoomClient::host(
+            NativeTransport::connect(&url),
+            Identity::new("host", "tok-host"),
+            RoomSetup { map: "default".into(), map_toml: None, mission: Mission::Protect, seed: Some(0xB0B5) },
+        );
+        let mut round = OnlineRound::new(client, "TEST");
+        let frame = Duration::from_millis(16);
+        let dt = frame.as_secs_f32();
+        // Settle: let the room mint the code, start and welcome.
+        let give_up = Instant::now() + WAIT * 4;
+        while round.game().is_none() {
+            round.frame(&Intent::default(), dt);
+            round.start_round();
+            assert!(Instant::now() < give_up, "the round never got going");
+            std::thread::sleep(frame);
+        }
+        let (mut pulls, mut fired) = (0usize, 0usize);
+        for i in 0..240 {
+            let fire = i % 12 < 2;
+            if i % 12 == 0 {
+                pulls += 1;
+            }
+            round.frame(&Intent { fire, ..Intent::default() }, dt);
+            if let Some(game) = round.game() {
+                fired += game
+                    .events()
+                    .iter()
+                    .filter(|e| matches!(e, bongbong::simulation::Event::Fired { slot: 0, .. }))
+                    .count();
+            }
+            std::thread::sleep(frame);
+        }
+        (pulls, fired)
+    })
+    .await
+    .expect("the client's thread");
+
+    eprintln!("pulled the trigger {pulls} times, {fired} shells came back");
+    assert!(pulls >= 15, "the test never got going: {pulls} pulls");
+    assert!(
+        fired * 2 >= pulls,
+        "pulled the trigger {pulls} times and only {fired} shells came back from the room"
+    );
+}
+
+/// **Co-op is two seats, and the second one has to be able to shoot.**
+/// A room of two also runs under `tuning_patch(2)`, which a room of one
+/// never does, and the guest's intents land in `Input::seats[1]` rather
+/// than `[0]`. Both clients are whole `OnlineRound`s, paced against real
+/// time the way the window paces them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn both_seats_of_a_co_op_room_can_shoot() {
+    use bongbong::net::round::OnlineRound;
+
+    let (addr, _hub) = start_server().await;
+    let url = socket_url(&RoomsHost::overriding(&format!("ws://{addr}")));
+
+    let counts = tokio::task::spawn_blocking(move || {
+        let frame = Duration::from_millis(16);
+        let dt = frame.as_secs_f32();
+        let host = RoomClient::host(
+            NativeTransport::connect(&url),
+            Identity::new("host", "tok-host"),
+            RoomSetup { map: "default".into(), map_toml: None, mission: Mission::Protect, seed: Some(0xB0B5) },
+        );
+        let mut host = OnlineRound::new(host, "HOST");
+        // Spin until the room has a code to join.
+        let give_up = Instant::now() + WAIT * 4;
+        let code = loop {
+            host.frame(&Intent::default(), dt);
+            if let Some(code) = host.code() {
+                break code.to_string();
+            }
+            assert!(Instant::now() < give_up, "the room never minted a code");
+            std::thread::sleep(frame);
+        };
+        let guest = RoomClient::join(
+            NativeTransport::connect(&url),
+            Identity::new("guest", "tok-guest"),
+            code,
+        );
+        let mut guest = OnlineRound::new(guest, "GUEST");
+        // Both in, guest ready, host starts. The wait is on the round
+        // *ticking*, not on a replica existing: a seat gets a `Welcome`
+        // for the waiting room too, so `game().is_some()` is true well
+        // before anything is being simulated.
+        let ticking = |r: &OnlineRound<NativeTransport>| r.game().is_some_and(|g| g.frame() > 0);
+        let mut readied = false;
+        while !ticking(&host) || !ticking(&guest) {
+            host.frame(&Intent::default(), dt);
+            guest.frame(&Intent::default(), dt);
+            if !readied && guest.roster().len() >= 2 {
+                guest.ready();
+                readied = true;
+            }
+            // `can_start` is already true for a lone host, so waiting on
+            // it alone starts a solo round and the guest is refused the
+            // room. The host presses START once the guest is on the
+            // roster and ready, which is what the lobby's hand does.
+            if host.roster().len() >= 2 && host.can_start() {
+                host.start_round();
+            }
+            assert!(
+                Instant::now() < give_up,
+                "the round never got going: host roster {:?} seat {:?} host? {} can_start {} note {:?} / guest roster {:?} seat {:?} note {:?}",
+                host.roster().iter().map(|s| (s.seat, s.ready)).collect::<Vec<_>>(),
+                host.seat(),
+                host.is_host(),
+                host.can_start(),
+                host.note(),
+                guest.roster().iter().map(|s| (s.seat, s.ready)).collect::<Vec<_>>(),
+                guest.seat(),
+                guest.note(),
+            );
+            std::thread::sleep(frame);
+        }
+        let seats = (host.seat().expect("host seat"), guest.seat().expect("guest seat"));
+        let (mut pulls, mut host_fired, mut guest_fired) = (0usize, 0usize, 0usize);
+        let mut guest_by_host = 0usize;
+        let count = |round: &OnlineRound<NativeTransport>, slot: usize| {
+            round.game().map_or(0, |g| {
+                g.events()
+                    .iter()
+                    .filter(|e| matches!(e, bongbong::simulation::Event::Fired { slot: s, .. } if *s == slot))
+                    .count()
+            })
+        };
+        // Ten pulls, half a magazine (`max_shells` 20), so ammo can never
+        // be what stops a seat shooting.
+        for i in 0..120 {
+            let fire = i % 12 < 2;
+            if i % 12 == 0 {
+                pulls += 1;
+            }
+            host.frame(&Intent { fire, ..Intent::default() }, dt);
+            guest.frame(&Intent { fire, ..Intent::default() }, dt);
+            host_fired += count(&host, seats.0 as usize);
+            guest_fired += count(&guest, seats.1 as usize);
+            guest_by_host += count(&host, seats.1 as usize);
+            std::thread::sleep(frame);
+        }
+        // Ammo, so a magazine running dry can never read as a lost
+        // trigger: the two chassis carry different ones.
+        let ammo: Vec<String> = host.game().map_or_else(Vec::new, |g| {
+            g.tank_snapshots()
+                .iter()
+                .filter(|t| t.is_player)
+                .map(|t| format!("seat {} has {} left", t.slot, t.shells_ammo))
+                .collect()
+        });
+        (pulls, seats, host_fired, guest_fired, guest_by_host, ammo)
+    })
+    .await
+    .expect("the clients' thread");
+
+    let (pulls, (host_seat, guest_seat), host_fired, guest_fired, guest_by_host, ammo) = counts;
+    eprintln!(
+        "{pulls} pulls each: seat {host_seat} (host) fired {host_fired}, seat {guest_seat} (guest) fired {guest_fired} \
+         (the host saw {guest_by_host} of the guest's); ammo left: {ammo:?}"
+    );
+    assert!(pulls >= 8, "the test never got going: {pulls} pulls");
+    assert_eq!(host_fired, pulls, "the host pulled {pulls} times");
+    assert_eq!(guest_fired, pulls, "the guest pulled {pulls} times");
+    // Both seats' shells are in the same round, so one observer has to
+    // see them all: a seat firing into its own replica only would pass
+    // the two counts above.
+    assert_eq!(guest_by_host, pulls, "the host saw only {guest_by_host} of the guest's {pulls} shells");
+}
