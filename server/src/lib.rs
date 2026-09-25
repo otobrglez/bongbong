@@ -13,9 +13,13 @@
 //! - `hub`: every room this server holds, and the drain.
 //! - `metrics`: the Prometheus text on `/metrics`.
 //! - `http`: the axum router and `Server`.
+//! - `devserver` (feature `dev-tools`): the loopback JSON socket
+//!   `bbmcp rooms` drives - never on the axum router.
 
 pub mod code;
 pub mod conn;
+#[cfg(feature = "dev-tools")]
+pub mod devserver;
 pub mod http;
 pub mod hub;
 pub mod mailbox;

@@ -51,6 +51,11 @@ use crate::{Layout, PHYSICS_FIXED_DT, Position, parse_seed};
 /// otherwise; the adapter defaults to the same.
 pub const DEFAULT_PORT: u16 = 4747;
 
+/// The room server's dev port (`ROOM_TOOLS`), one past the room server's
+/// own 4848 so both can run on one machine. `bbmcp rooms` dials it and
+/// `--dev-port`/`BONGBONG_ROOMS_DEV_PORT` moves it.
+pub const ROOMS_DEV_PORT: u16 = 4849;
+
 /// Longest a socket thread waits for the main loop to answer one request
 /// (a long `step` still finishes in well under a second). The adapter's
 /// own read timeout is longer than this, so the reply a client sees for a
@@ -138,6 +143,8 @@ impl ToolSpec {
 }
 
 const NO_PARAMS: &str = r#"{"type":"object","properties":{}}"#;
+/// Just a room code: what most of `ROOM_TOOLS` takes.
+const CODE_ONLY: &str = r#"{"type":"object","required":["code"],"properties":{"code":{"type":"string"}}}"#;
 const SLOT_PARAMS: &str = r#"{"type":"object","properties":{"slot":{"type":"integer","description":"Owner slot: 0 = player, enemies from 1 (see snapshot.tanks[].slot)"}},"required":["slot"]}"#;
 
 /// Every tool the server answers, in the order the adapter lists them.
@@ -408,6 +415,96 @@ pub const TOOLS: &[ToolSpec] = &[
         schema: r#"{"type":"object","properties":{"key":{"type":"string","enum":["tab","escape","enter","undo","redo","backspace","1","2"]},"text":{"type":"string","description":"Characters to type this frame (build mode)"}}}"#,
         read_only: false,
         destructive: false,
+    },
+];
+
+/// **The room server's tool table** (`bongbong-server`, CLAUDE.md's room
+/// server section): the same `ToolSpec` rows `TOOLS` is made of, over the
+/// same newline-delimited JSON on a socket - `bbmcp rooms` is this
+/// adapter pointed at the other port.
+///
+/// The *table* lives here rather than in `bongbong-server` because the
+/// dependency runs the other way: the server crate is built on this one,
+/// so a table there could not be read by a `bbmcp` that lives here. Pure
+/// data, so it costs a headless build nothing; the dispatch is the
+/// server's, and a test there holds every row to an arm so the two
+/// cannot drift - `TOOLS`'s own discipline.
+///
+/// **What it is for.** The game's dev server drives the round in *this*
+/// window; in an online round that window holds a replica and every
+/// writing tool refuses by name, because only the server simulates it.
+/// These are the other end - they read and drive the authoritative round
+/// itself, which is the only place a co-op bug can actually be observed.
+pub const ROOM_TOOLS: &[ToolSpec] = &[
+    ToolSpec {
+        name: "server_status",
+        description: "The server as a whole: how many rooms it holds and its cap, whether it is draining, its uptime, the build's `protocol_version`, and the counters `/metrics` publishes (rooms by phase, seats, tick p50/p99 in microseconds, tick overruns, snapshot bytes/s, reconnects, intent starvations). Cheap; call first.",
+        schema: NO_PARAMS,
+        read_only: true,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "rooms",
+        description: "Every room this server holds: `code`, `phase` (waiting|playing|paused|ended), the seat count and how many are connected, the round's `tick`, the map, the seed and how long the room has been alive. The `code` is what every other tool here takes.",
+        schema: NO_PARAMS,
+        read_only: true,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "room",
+        description: "One room in full: its lifecycle and how long until the TTL that would end it, the map, seed, mission and resolved spawn plan, the round's tick and outcome, the `tuning_patch` it is being fought under (a room of two or more scales the waves; a room of one is the empty patch), and a row per seat - nick, whether it holds the room, ready, connected, its chassis, and its mailbox. **The mailbox row is the one to read when inputs feel lost**: a `depth` pinned at `BUFFER_MAX` means the client is running ahead and the oldest intents are being dropped, while a climbing `starvations` means it is not stamping far enough ahead and the tick is repeating its last intent.",
+        schema: CODE_ONLY,
+        read_only: true,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "room_open",
+        description: "Open a room with no client at all and start its round, so a scenario needs no window and no socket: `seats` bot seats are taken (1..=8, each with a mailbox `seat_intent` drives), and the round begins at once rather than waiting for a host to press START. Takes the setup a hosting client takes - a shipped map by name or `map_toml` whole, the mission, and a pinned `seed` so the round replays. Replies with the code. It is a real room: a player can join it by code and play alongside the bots.",
+        schema: r#"{"type":"object","properties":{"map":{"type":"string","default":"default"},"map_toml":{"type":"string","description":"A whole map, instead of a shipped one by name"},"mission":{"type":"string","enum":["protect","hunt","destroy"]},"seed":{"type":"integer"},"seats":{"type":"integer","default":1,"minimum":1,"maximum":8}}}"#,
+        read_only: false,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "room_step",
+        description: "Freeze a room's round and advance exactly `ticks` at the fixed 1/60 s timestep, the way the game's `step` drives the local round - so an online round replays deterministically from a pinned seed instead of racing the wall clock. The room stops ticking on real time until `room_resume`; connected clients still get their snapshots, so a window watching it simply sees the round advance in steps. Replies with the events of the step and, by default, a compact snapshot.",
+        schema: r#"{"type":"object","required":["code"],"properties":{"code":{"type":"string"},"ticks":{"type":"integer","default":1,"minimum":1,"maximum":100000},"snapshot":{"type":"boolean","default":true},"kinds":{"type":"array","items":{"type":"string"}},"exclude":{"type":"array","items":{"type":"string"}}}}"#,
+        read_only: false,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "room_resume",
+        description: "Let a frozen room tick on real time again (the opposite of `room_step`).",
+        schema: CODE_ONLY,
+        read_only: false,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "seat_intent",
+        description: "Post an intent into one seat's mailbox for the next `ticks` ticks, exactly as that seat's client would - so a bot seat can be driven, or a real seat's input stood in for. `move_dir`/`face`/`fire` are the human-settable fields the wire carries; nothing else travels. A shell fires once per press and a held trigger can never re-arm it, so set `fire_every=N` to tap every N ticks rather than holding. Posted at the client tick that seat's mailbox is expecting, so the server's `acked` and a client's own replay stay in step.",
+        schema: r#"{"type":"object","required":["code","seat"],"properties":{"code":{"type":"string"},"seat":{"type":"integer","minimum":0,"maximum":7},"ticks":{"type":"integer","default":1,"minimum":1,"maximum":100000},"move_dir":{"type":"string","enum":["up","down","left","right"]},"face":{"type":"string","enum":["up","down","left","right"]},"fire":{"type":"boolean"},"fire_every":{"type":"integer","minimum":1,"description":"With fire=true: press on ticks 0, N, 2N... and release in between"}}}"#,
+        read_only: false,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "room_snapshot",
+        description: "The room's authoritative world as JSON - the reading the game's `snapshot` gives, on the round the server is simulating rather than on a client's replica: every tank with position, rotation, velocity, health, ammo, weapon and (for enemies) role and target, plus projectiles, pickups, frogs, portals and the engagement rings. `detail=full` adds each enemy's AI memory. This is the truth a replica is checked against.",
+        schema: r#"{"type":"object","required":["code"],"properties":{"code":{"type":"string"},"detail":{"type":"string","enum":["compact","full"],"default":"compact"}}}"#,
+        read_only: true,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "room_events",
+        description: "The room's gameplay events since `since` (0 = everything kept): fired, hit, wreck, ram, pickups, obstacle_destroyed, teleported, round_started, round_ended and the rest - the vocabulary the game's `events` speaks, recorded on the authoritative round. `kinds` keeps only those names, `exclude` drops them. **The way to tell an input that never arrived from a shot the server refused**: no `fired` for a seat that pulled the trigger is the first, a `fired` with nothing after it the second.",
+        schema: r#"{"type":"object","required":["code"],"properties":{"code":{"type":"string"},"since":{"type":"integer","default":0},"limit":{"type":"integer","default":200},"kinds":{"type":"array","items":{"type":"string"}},"exclude":{"type":"array","items":{"type":"string"}}}}"#,
+        read_only: true,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "room_close",
+        description: "End a room now: its round stops, its seats are let go and the code stops resolving. For clearing up after a scenario; a room `room_open` made also ages out on its own TTL.",
+        schema: CODE_ONLY,
+        read_only: false,
+        destructive: true,
     },
 ];
 

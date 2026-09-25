@@ -127,6 +127,12 @@ impl Hub {
         self.room_gone.notify_one();
     }
 
+    /// Every room this server holds, by code. For the dev tools'
+    /// `rooms` listing, which wants the handles rather than a count.
+    pub fn list(&self) -> Vec<RoomHandle> {
+        self.rooms.lock().expect("rooms poisoned").values().cloned().collect()
+    }
+
     pub fn room_count(&self) -> usize {
         self.rooms.lock().expect("rooms poisoned").len()
     }

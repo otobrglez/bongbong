@@ -30,6 +30,12 @@ struct Args {
     /// The most rooms this server holds at once.
     #[arg(long, default_value_t = 200)]
     max_rooms: usize,
+    /// The dev tools' loopback port (`bbmcp rooms`), 0 to turn them off.
+    /// Only a `--features dev-tools` build has them at all, and the
+    /// listener never leaves 127.0.0.1.
+    #[cfg(feature = "dev-tools")]
+    #[arg(long, default_value_t = bongbong::devserver::ROOMS_DEV_PORT)]
+    dev_port: u16,
 }
 
 fn config(args: Args) -> Result<Config, String> {
@@ -46,7 +52,10 @@ async fn main() -> ExitCode {
         .with_target(false)
         .with_ansi(std::io::stderr().is_terminal())
         .init();
-    let config = match config(Args::parse()) {
+    let args = Args::parse();
+    #[cfg(feature = "dev-tools")]
+    let dev_port = args.dev_port;
+    let config = match config(args) {
         Ok(c) => c,
         Err(e) => {
             error!("{e}");
@@ -68,6 +77,13 @@ async fn main() -> ExitCode {
         "listening; ws://{}/ws, /health, /metrics",
         server.addr
     );
+    // The dev tools, on loopback and only in a build that has them.
+    #[cfg(feature = "dev-tools")]
+    if dev_port != 0 {
+        let hub = server.hub.clone();
+        let addr = SocketAddr::from(([127, 0, 0, 1], dev_port));
+        tokio::spawn(async move { bongbong_server::devserver::serve(hub, addr).await });
+    }
     let hub = server.hub.clone();
     let shutdown = async move {
         tokio::select! {

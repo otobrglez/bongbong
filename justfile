@@ -163,6 +163,19 @@ watch-dev:
 run-server *ARGS:
     cargo run -p bongbong-server -- --listen 127.0.0.1:4848 --insecure {{ARGS}}
 
+# The same server with its dev tools (server/src/devserver.rs): a
+# loopback JSON socket on 4849 that `bbmcp rooms` drives, so the
+# `mcp__bongbong-rooms__*` tools can open a room with no client, post a
+# seat's intents and step the round deterministically. Dev only - the
+# release image builds without the feature and has no listener at all.
+run-server-dev *ARGS:
+    cargo run -p bongbong-server --features dev-tools -- --listen 127.0.0.1:4848 --insecure {{ARGS}}
+
+# One room-server tool from a shell, the way `just mcp-call` drives the
+# game (`just rooms-mcp-call rooms`, `just rooms-mcp-call room_open '{"seats":2}'`).
+rooms-mcp-call TOOL *PARAMS:
+    cargo run -q --features dev-tools --bin bbmcp -- rooms call {{TOOL}} {{PARAMS}}
+
 # --- The room server's image and its deploy (docs/online-coop-prd.md §4.8) ---
 #
 # The registry and the cluster are reached over Tailscale, so these need

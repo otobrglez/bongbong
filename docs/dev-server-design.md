@@ -223,8 +223,8 @@ the picture and reach nobody. The error names the room and says what to
 do instead: `key {"key": "escape"}` gives the seat up and comes back to
 the local round, where every tool works again. There is no lockstep for
 an online round - the room ticks on its own clock - so the way to step
-one deterministically is `net::rig::Lockstep` from a test, not this
-server.
+one deterministically is the room server's own `room_step` (section 4.3)
+or `net::rig::Lockstep` from a test, not this server.
 
 A replica is never `advance`d, so `before_frame` banks its events and
 track rows itself, on the frames a snapshot moved it on (the guard
@@ -258,6 +258,74 @@ capped at 64 (`projectiles_total` has the real count), a full snapshot of a
 5-tank round is about 12 KB (compact under 6 KB - the slot table and the
 rejection tallies are `full` only), screenshots default to half size, a
 `history` reply returns at most 2000 rows.
+
+### 4.3 The room server's own tools
+
+The window's tools stop at the replica: the round they describe is a
+picture the client never simulates, and everything that would write to
+it refuses. The authoritative round lives in the room server, one `Game`
+per room task, and it has its own dev surface - the same framing, the
+same `ToolSpec` rows, a different table.
+
+**One adapter, two targets.** `bbmcp` bare drives the game window
+(`bongbong::devserver::TOOLS`, port 4747); `bbmcp rooms` drives the room
+server (`bongbong::devserver::ROOM_TOOLS`, port 4849). `.mcp.json`
+registers both, so `mcp__bongbong__*` and `mcp__bongbong-rooms__*` are
+attached at once - which is what reading a co-op bug usually needs, one
+end in each hand. They are separate MCP servers rather than one merged
+table so a name from one can never be called against the other.
+
+The table lives in the **game** crate even though only the server
+answers it, because the dependency runs that way: `bongbong-server` is
+built on `bongbong`, so a table in the server could not be read by a
+`bbmcp` that lives in the lib. It is pure data, costing a headless build
+nothing; the dispatch is `server/src/room.rs`'s and
+`every_advertised_tool_has_an_arm` holds the two together, the way
+`TOOLS` is held to its own.
+
+| Tool | What it is for |
+|---|---|
+| `server_status`, `rooms` | The server and its rooms; `rooms` gives the codes everything else takes |
+| `room` | One room whole - and **each seat's mailbox**: `depth`, `acked`, `starvations` |
+| `room_open` | A room and a started round with **no client at all**, `seats` bots |
+| `seat_intent` | Drive a seat for N ticks, the way that seat's client would |
+| `room_step` / `room_resume` | Freeze the room and advance it deterministically: the game's `step`, for a room |
+| `room_snapshot`, `room_events` | The authoritative world and what actually happened in it |
+| `room_close` | End a room after a scenario |
+
+So a co-op scenario is four calls and needs no browser, no second
+machine and no window:
+
+```
+room_open   {"seats": 2, "seed": 45237}
+seat_intent {"code": "ABCDE", "seat": 1, "ticks": 120, "fire": true, "fire_every": 12}
+room_step   {"code": "ABCDE", "ticks": 120}
+room_events {"code": "ABCDE", "kinds": ["fired"]}
+```
+
+Two details are load-bearing.
+
+**`seat_intent` is a standing script, fed one intent per tick**, not a
+batch posted up front. The mailbox is a jitter buffer capped at
+`BUFFER_MAX` (8), so a hundred intents dropped in at once keeps the last
+eight and silently throws the rest away. One a tick is also exactly what
+a real client does, so the input goes down a player's path - ordering,
+`acked` and all.
+
+**The mailbox row in `room` is the first thing to read when input feels
+lost.** A `depth` pinned at `BUFFER_MAX` means that client is running
+ahead and its oldest intents are being dropped; a climbing `starvations`
+means it is not stamping far enough ahead and the tick is repeating its
+last intent. Neither is visible from the client, which is why chasing a
+co-op input bug from the window alone is guesswork.
+
+**Dev-only by construction.** The whole surface is behind the server
+crate's `dev-tools` feature, which the release image does not build, and
+the listener binds loopback only - it is never on the axum router, so
+nothing here is reachable over `/ws` or any other public route. The
+discipline is the game's: a socket task only queues a `Command::Dev`,
+and the room task answers it between ticks with the whole room in hand,
+so nothing reads a world mid-update.
 
 ### Debugging enemy clustering
 

@@ -134,6 +134,25 @@ impl Metrics {
     }
 
     /// Prometheus text exposition.
+    /// The counters as JSON, for the dev tools' `server_status` - the
+    /// same numbers `render` publishes, without the Prometheus text.
+    #[cfg(feature = "dev-tools")]
+    pub fn summary(&self) -> serde_json::Value {
+        let (p50, p99) = self.tick_percentiles();
+        serde_json::json!({
+            "tick_p50_us": p50,
+            "tick_p99_us": p99,
+            "ticks_total": self.ticks_total.load(Ordering::Relaxed),
+            "tick_overruns_total": self.tick_overruns_total.load(Ordering::Relaxed),
+            "snapshot_bytes_total": self.snapshot_bytes_total.load(Ordering::Relaxed),
+            "snapshots_skipped_total": self.snapshots_skipped_total.load(Ordering::Relaxed),
+            "reconnects_total": self.reconnects_total.load(Ordering::Relaxed),
+            "intent_starvations_total": self.intent_starvations_total.load(Ordering::Relaxed),
+            "rooms_created_total": self.rooms_created_total.load(Ordering::Relaxed),
+            "connections_total": self.connections_total.load(Ordering::Relaxed),
+        })
+    }
+
     pub fn render(&self, rooms: RoomCounts, draining: bool) -> String {
         let (p50, p99) = self.tick_percentiles();
         let rate = self.bytes.lock().expect("bytes window poisoned").rate;

@@ -325,6 +325,34 @@ pub struct RoomParams {
     pub seed: Option<u64>,
 }
 
+#[cfg(feature = "dev-tools")]
+impl RoomParams {
+    /// The setup a dev tool's `room_open` asks for, resolved the way a
+    /// hosting client's `Create` resolves it: a shipped map by name or a
+    /// whole `map_toml`, the mission by name, and an optional pinned
+    /// seed.
+    pub fn for_dev(
+        map: &str,
+        map_toml: Option<&str>,
+        mission: Option<&str>,
+        seed: Option<u64>,
+    ) -> Result<RoomParams, String> {
+        let map = match map_toml {
+            Some(toml) => bongbong::map::MapFile::from_toml_str(toml),
+            None => bongbong::map::open_map(map),
+        }
+        .map_err(|e| format!("bad map: {e}"))?;
+        let mission = match mission {
+            None => Mission::Protect,
+            Some("protect") => Mission::Protect,
+            Some("hunt") => Mission::Hunt,
+            Some("destroy") => Mission::Destroy,
+            Some(other) => return Err(format!("mission: {other:?} is not protect|hunt|destroy")),
+        };
+        Ok(RoomParams { map, mission, seed })
+    }
+}
+
 /// The answer to a `Command::Join`: the seat and the mailbox its intents
 /// go into.
 pub struct Joined {
@@ -337,6 +365,29 @@ pub enum Command {
     Join { nick: String, device_token: String, conn: ConnLink, reply: oneshot::Sender<Result<Joined, String>> },
     Lobby { conn_id: u64, msg: Lobby },
     Disconnected { conn_id: u64 },
+    /// A dev tool's call (`devserver`, feature `dev-tools`), answered
+    /// here rather than from the socket task: the room owns the `Game`,
+    /// and a command is drained between ticks, so nothing reads a world
+    /// mid-update. The game's own dev server keeps the same rule.
+    #[cfg(feature = "dev-tools")]
+    Dev(crate::devserver::DevRequest),
+}
+
+/// A dev tool's standing input for one seat (`seat_intent`): the same
+/// intent every tick until `remaining` runs out, with the trigger tapped
+/// every `fire_every` ticks rather than held - a shell fires once per
+/// press and a held one never re-arms.
+#[cfg(feature = "dev-tools")]
+#[derive(Clone, Copy)]
+pub struct DevScript {
+    pub intent: bongbong::ai::Intent,
+    pub remaining: u64,
+    pub fire_every: Option<u64>,
+    /// The client tick the next post carries, so the seat's counter runs
+    /// on unbroken whether a bot or a real client is stamping it.
+    pub tick: u32,
+    /// How many have gone out, for the tap phase.
+    pub sent: u64,
 }
 
 /// One seat, owned by its device token for the room's life.
@@ -344,6 +395,23 @@ struct Seat {
     nick: String,
     device_token: String,
     ready: bool,
+    /// A seat with no client at all, taken by `room_open` and driven by
+    /// `seat_intent`. It counts as connected - the tick samples its
+    /// mailbox and the lifecycle does not pause the room for it - and
+    /// nothing is ever sent to it, since there is nowhere to send.
+    #[cfg(feature = "dev-tools")]
+    bot: bool,
+    /// What a dev tool's `seat_intent` is driving this seat with: one
+    /// intent posted per tick until it runs out.
+    ///
+    /// It has to be *fed*, not posted all at once: the mailbox is a
+    /// jitter buffer capped at `BUFFER_MAX`, so dropping a hundred
+    /// intents in keeps the last eight and throws the rest away. One a
+    /// tick is also what a real client does, which is the point - the
+    /// input goes down the path a player's does, ordering and `acked`
+    /// included.
+    #[cfg(feature = "dev-tools")]
+    script: Option<DevScript>,
     conn: Option<ConnLink>,
     /// When the socket dropped; `None` while connected.
     away_since: Option<Instant>,
@@ -354,8 +422,17 @@ struct Seat {
 }
 
 impl Seat {
+    #[cfg(not(feature = "dev-tools"))]
     fn connected(&self) -> bool {
         self.conn.is_some()
+    }
+
+    /// A bot seat is "connected" to everything that samples or counts
+    /// seats: it has a mailbox being driven and the room must keep
+    /// ticking for it. Only the send paths look at `conn` itself.
+    #[cfg(feature = "dev-tools")]
+    fn connected(&self) -> bool {
+        self.conn.is_some() || self.bot
     }
 }
 
@@ -387,6 +464,16 @@ struct Room {
     tuning_json: String,
     created: Instant,
     commands: mpsc::Receiver<Command>,
+    /// `room_step` has taken the room off real time; it advances only
+    /// when a dev tool says so, until `room_resume`.
+    #[cfg(feature = "dev-tools")]
+    frozen: bool,
+    /// The events of the round, for `room_events`: a ring of the last
+    /// `DEV_EVENT_RING`, each with the seq and frame it happened on.
+    #[cfg(feature = "dev-tools")]
+    dev_events: std::collections::VecDeque<serde_json::Value>,
+    #[cfg(feature = "dev-tools")]
+    dev_seq: u64,
 }
 
 /// The room task: runs until the room is reaped.
@@ -412,6 +499,12 @@ pub async fn run(hub: Arc<Hub>, code: String, params: RoomParams, commands: mpsc
         tuning_json: ROOM_TUNING_JSON.to_string(),
         created: now,
         commands,
+        #[cfg(feature = "dev-tools")]
+        frozen: false,
+        #[cfg(feature = "dev-tools")]
+        dev_events: std::collections::VecDeque::new(),
+        #[cfg(feature = "dev-tools")]
+        dev_seq: 0,
     };
     info!(code = room.code, map = room.map.name.as_deref().unwrap_or("?"), "room created");
     room.refresh_stats();
@@ -423,7 +516,7 @@ pub async fn run(hub: Arc<Hub>, code: String, params: RoomParams, commands: mpsc
                 Some(cmd) => room.handle(cmd),
                 None => break,
             },
-            _ = room.interval.tick(), if room.life.ticking() => room.tick(),
+            _ = room.interval.tick(), if room.life.ticking() && !room.dev_frozen() => room.tick(),
             _ = tokio::time::sleep_until(deadline.unwrap_or_else(far_future)), if deadline.is_some() => {
                 if room.on_deadline() {
                     break;
@@ -456,6 +549,11 @@ impl Room {
                 }
             }
             Command::Disconnected { conn_id } => self.disconnected(conn_id),
+            #[cfg(feature = "dev-tools")]
+            Command::Dev(request) => {
+                let answer = self.dev(&request.method, &request.params);
+                let _ = request.reply.send(answer);
+            }
         }
     }
 
@@ -522,6 +620,10 @@ impl Room {
                     nick: nick.clone(),
                     device_token,
                     ready: false,
+                    #[cfg(feature = "dev-tools")]
+                    bot: false,
+                    #[cfg(feature = "dev-tools")]
+                    script: None,
                     conn: Some(conn),
                     away_since: None,
                     mailbox: Arc::new(Mailbox::new()),
@@ -891,6 +993,8 @@ impl Room {
             return;
         }
         let now = Instant::now();
+        #[cfg(feature = "dev-tools")]
+        self.feed_dev_scripts(now);
         let mut input = Input::default();
         for (i, seat) in self.seats.iter().enumerate().take(MAX_SEATS) {
             if let Some(s) = seat
@@ -919,6 +1023,9 @@ impl Room {
             warn!(code = self.code, frame = game.frame(), took_us = took.as_micros() as u64, "tick overran");
         }
         let frame = game.frame();
+        #[cfg(feature = "dev-tools")]
+        self.record_dev_events(frame);
+        let game = self.game.as_mut().expect("a playing room has a game");
         // The round is over from this tick on, and the end screen is a
         // tick like any other: the shots land, the fires burn down and
         // the restart counts toward zero, all of it on the room's clock
@@ -991,6 +1098,290 @@ impl Room {
 fn clean_nick(nick: &str) -> String {
     let nick: String = nick.trim().chars().take(NICK_MAX).collect();
     if nick.is_empty() { "player".into() } else { nick }
+}
+
+/// Whether a dev tool has taken this room off real time (`room_step`).
+/// Always false in a build without the tools, so the tick guard reads
+/// the same either way.
+impl Room {
+    #[cfg(not(feature = "dev-tools"))]
+    fn dev_frozen(&self) -> bool {
+        false
+    }
+
+    #[cfg(feature = "dev-tools")]
+    fn dev_frozen(&self) -> bool {
+        self.frozen
+    }
+}
+
+/// The dev tools' side of a room (`crate::devserver`, feature
+/// `dev-tools`). Every method here runs between ticks, with the room's
+/// whole state in hand.
+#[cfg(feature = "dev-tools")]
+mod dev {
+    use super::*;
+    use bongbong::ai::Intent;
+    use bongbong::net::wire::IntentMsg;
+    use bongbong::simulation::debug::Detail;
+    use bongbong::tank::Dir;
+    use serde_json::{Value, json};
+
+    /// Events kept for `room_events`, the game's dev server's own depth.
+    const DEV_EVENT_RING: usize = 4096;
+
+    fn dir(params: &Value, key: &str) -> Result<Option<Dir>, String> {
+        match params.get(key).and_then(Value::as_str) {
+            None => Ok(None),
+            Some("up") => Ok(Some(Dir::Up)),
+            Some("down") => Ok(Some(Dir::Down)),
+            Some("left") => Ok(Some(Dir::Left)),
+            Some("right") => Ok(Some(Dir::Right)),
+            Some(other) => Err(format!("{key}: {other:?} is not up|down|left|right")),
+        }
+    }
+
+    impl Room {
+        /// One dev call. The single dispatch table: every arm is a row of
+        /// `bongbong::devserver::ROOM_TOOLS` and every row is an arm.
+        pub(super) fn dev(&mut self, method: &str, params: &Value) -> Result<Value, String> {
+            match method {
+                "room" => Ok(self.dev_room()),
+                "room_open" => self.dev_open(params),
+                "room_step" => self.dev_step(params),
+                "room_resume" => {
+                    self.frozen = false;
+                    self.interval.reset();
+                    Ok(json!({ "frozen": false, "tick": self.dev_tick() }))
+                }
+                "seat_intent" => self.dev_seat_intent(params),
+                "room_snapshot" => self.dev_snapshot(params),
+                "room_events" => Ok(self.dev_events_since(params)),
+                "room_close" => {
+                    self.end_round("a dev tool closed the room");
+                    Ok(json!({ "closed": true, "code": self.code }))
+                }
+                other => Err(format!("unknown tool {other:?}")),
+            }
+        }
+
+        fn dev_tick(&self) -> u64 {
+            self.game.as_ref().map_or(0, |g| g.frame())
+        }
+
+        /// The room in full, seats and mailboxes included - the reading
+        /// that says whether an input was lost on the way in.
+        fn dev_room(&self) -> Value {
+            let seats: Vec<Value> = self
+                .seats
+                .iter()
+                .enumerate()
+                .map(|(i, seat)| match seat {
+                    None => json!({ "seat": i, "empty": true }),
+                    Some(s) => json!({
+                        "seat": i,
+                        "nick": s.nick,
+                        "host": self.host() == Some(i as u8),
+                        "ready": s.ready,
+                        "connected": s.conn.is_some(),
+                        "bot": s.bot,
+                        "driving_ticks_left": s.script.map(|d| d.remaining),
+                        "mailbox": {
+                            "depth": s.mailbox.depth(),
+                            "acked": s.mailbox.acked_tick(),
+                            "starvations": s.mailbox.starvations(),
+                        },
+                    }),
+                })
+                .collect();
+            json!({
+                "code": self.code,
+                "phase": self.life.phase().name(),
+                "frozen": self.frozen,
+                "tick": self.dev_tick(),
+                "map": self.map.name,
+                "seed": self.round_seed,
+                "outcome": self.game.as_ref().map(|g| format!("{:?}", g.outcome())),
+                "players": self.game.as_ref().map(|g| g.players.count()),
+                "tuning_patch": serde_json::from_str::<Value>(&self.tuning_json).unwrap_or(Value::Null),
+                "seats": seats,
+            })
+        }
+
+        /// Seat `seats` bots and start at once: the lobby's dance with
+        /// the waiting-for-a-human part left out.
+        fn dev_open(&mut self, params: &Value) -> Result<Value, String> {
+            let seats = params.get("seats").and_then(Value::as_u64).unwrap_or(1) as usize;
+            if self.life.phase() != Phase::Waiting {
+                return Err("this room has already started".into());
+            }
+            let now = Instant::now();
+            for i in 0..seats {
+                self.seats.push(Some(Seat {
+                    nick: format!("bot{i}"),
+                    device_token: format!("dev-bot-{}-{i}", self.code),
+                    // Ready by construction: `start` refuses otherwise,
+                    // and a bot has nothing to wait for.
+                    ready: true,
+                    bot: true,
+                    script: None,
+                    conn: None,
+                    away_since: None,
+                    mailbox: Arc::new(Mailbox::new()),
+                    needs_full: true,
+                }));
+                self.life.connect(now);
+            }
+            self.start(0)?;
+            self.refresh_stats();
+            Ok(json!({ "seats": seats, "tick": self.dev_tick(), "seed": self.round_seed }))
+        }
+
+        /// Freeze and advance exactly `ticks`, the game's `step` for a
+        /// room: deterministic, and as fast as the ticks take.
+        fn dev_step(&mut self, params: &Value) -> Result<Value, String> {
+            if self.game.is_none() {
+                return Err("this room has no round yet - `room_open` it or have a client start it".into());
+            }
+            let ticks = params.get("ticks").and_then(Value::as_u64).unwrap_or(1);
+            if !(1..=100_000).contains(&ticks) {
+                return Err("ticks must be 1..=100000".into());
+            }
+            self.frozen = true;
+            let from = self.dev_seq;
+            for _ in 0..ticks {
+                if !self.life.ticking() {
+                    break;
+                }
+                self.tick();
+            }
+            let mut out = json!({
+                "frozen": true,
+                "tick": self.dev_tick(),
+                "phase": self.life.phase().name(),
+                "events": self.dev_events_from(from, 256, params),
+            });
+            if params.get("snapshot").and_then(Value::as_bool).unwrap_or(true)
+                && let Some(value) = self.dev_snapshot_value(Detail::Compact)
+                && let Some(obj) = out.as_object_mut()
+            {
+                obj.insert("snapshot".into(), value);
+            }
+            Ok(out)
+        }
+
+        /// Drive a seat for the next `ticks` ticks. The script is *fed*
+        /// one intent per tick by `feed_dev_scripts`, not posted in one
+        /// go: the mailbox is a jitter buffer capped at `BUFFER_MAX`, so
+        /// a hundred intents dropped in at once keeps the last eight.
+        /// One a tick is also exactly what a real client does.
+        fn dev_seat_intent(&mut self, params: &Value) -> Result<Value, String> {
+            let seat = params.get("seat").and_then(Value::as_u64).unwrap_or(0) as usize;
+            let ticks = params.get("ticks").and_then(Value::as_u64).unwrap_or(1);
+            if !(1..=100_000).contains(&ticks) {
+                return Err("ticks must be 1..=100000".into());
+            }
+            let intent = Intent {
+                move_dir: dir(params, "move_dir")?,
+                face: dir(params, "face")?,
+                fire: params.get("fire").and_then(Value::as_bool).unwrap_or(false),
+                ..Intent::default()
+            };
+            let fire_every = params.get("fire_every").and_then(Value::as_u64);
+            let Some(Some(s)) = self.seats.get_mut(seat) else {
+                return Err(format!("no seat {seat} in this room"));
+            };
+            // Carry on from wherever this seat's client tick has reached,
+            // so a bot and a real client stamp one unbroken counter.
+            let tick = s.mailbox.acked_tick() + s.mailbox.depth() as u32 + 1;
+            s.script = Some(DevScript { intent, remaining: ticks, fire_every, tick, sent: 0 });
+            Ok(json!({ "seat": seat, "driving": ticks, "from_tick": tick }))
+        }
+
+        /// One intent per scripted seat, posted just before the tick
+        /// samples the mailboxes - the moment a packet would have landed.
+        pub(super) fn feed_dev_scripts(&mut self, now: Instant) {
+            for seat in self.seats.iter_mut().flatten() {
+                let Some(script) = seat.script.as_mut() else { continue };
+                if script.remaining == 0 {
+                    seat.script = None;
+                    continue;
+                }
+                // A shell fires once per press: with `fire_every` the
+                // trigger is down on 0, N, 2N... and up in between, the
+                // only way a held intent ever re-arms one.
+                let fire = script.intent.fire
+                    && script.fire_every.is_none_or(|n| script.sent % n == 0);
+                let msg = IntentMsg::new(script.tick, &Intent { fire, ..script.intent });
+                seat.mailbox.post(msg, now);
+                script.tick = script.tick.wrapping_add(1);
+                script.sent += 1;
+                script.remaining -= 1;
+            }
+        }
+
+        fn dev_snapshot_value(&self, detail: Detail) -> Option<Value> {
+            let game = self.game.as_ref()?;
+            let (w, h) = self.map.field_size();
+            serde_json::to_value(game.debug_snapshot(w, h, detail)).ok()
+        }
+
+        fn dev_snapshot(&self, params: &Value) -> Result<Value, String> {
+            let detail = match params.get("detail").and_then(Value::as_str) {
+                Some("full") => Detail::Full,
+                _ => Detail::Compact,
+            };
+            self.dev_snapshot_value(detail).ok_or_else(|| "this room has no round yet".to_string())
+        }
+
+        /// Bank this tick's events into the ring `room_events` reads.
+        pub(super) fn record_dev_events(&mut self, frame: u64) {
+            let Some(game) = self.game.as_ref() else { return };
+            for event in game.events() {
+                self.dev_seq += 1;
+                let mut value = serde_json::to_value(event).unwrap_or(Value::Null);
+                if let Some(obj) = value.as_object_mut() {
+                    obj.insert("seq".into(), json!(self.dev_seq));
+                    obj.insert("frame".into(), json!(frame));
+                }
+                self.dev_events.push_back(value);
+            }
+            while self.dev_events.len() > DEV_EVENT_RING {
+                self.dev_events.pop_front();
+            }
+        }
+
+        fn dev_events_since(&self, params: &Value) -> Value {
+            let since = params.get("since").and_then(Value::as_u64).unwrap_or(0);
+            let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(200) as usize;
+            let events = self.dev_events_from(since, limit, params);
+            let next = events.last().and_then(|e| e.get("seq").and_then(Value::as_u64)).unwrap_or(since);
+            json!({ "next": next, "events": events })
+        }
+
+        /// The ring past `since`, `kinds`/`exclude` applied - the game's
+        /// `events` filter, spelled the same way.
+        fn dev_events_from(&self, since: u64, limit: usize, params: &Value) -> Vec<Value> {
+            let names = |key: &str| {
+                params
+                    .get(key)
+                    .and_then(Value::as_array)
+                    .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>())
+            };
+            let (keep, drop) = (names("kinds"), names("exclude"));
+            self.dev_events
+                .iter()
+                .filter(|e| e.get("seq").and_then(Value::as_u64).is_some_and(|s| s > since))
+                .filter(|e| {
+                    let kind = e.get("event").and_then(Value::as_str).unwrap_or("");
+                    keep.as_ref().is_none_or(|k| k.iter().any(|n| n == kind))
+                        && drop.as_ref().is_none_or(|d| !d.iter().any(|n| n == kind))
+                })
+                .take(limit)
+                .cloned()
+                .collect()
+        }
+    }
 }
 
 #[cfg(test)]

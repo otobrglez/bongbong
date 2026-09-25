@@ -11,9 +11,19 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[features]
+# The dev surface (`devserver.rs`): a loopback JSON socket `bbmcp rooms`
+# drives, and the room-task seam it answers through. Off by default, so
+# the release image carries none of it - `just run-server-dev` and CI's
+# test build are what turn it on.
+default = []
+dev-tools = ["bongbong/dev-tools", "dep:serde_json"]
+
 [dependencies]
 # The simulation and the wire protocol, nothing that draws.
 bongbong = { path = "..", default-features = false }
+# The dev tools' JSON, on the loopback socket only.
+serde_json = { version = "1", optional = true }
 # The runtime: worker threads for the room tasks, `select!`, the 60 Hz
 # interval, channels, SIGTERM.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "signal", "net"] }

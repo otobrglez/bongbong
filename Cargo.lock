@@ -232,6 +232,7 @@ dependencies = [
  "clap",
  "futures-util",
  "rand 0.10.2",
+ "serde_json",
  "tokio",
  "tokio-tungstenite",
  "tracing",
