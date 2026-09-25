@@ -96,6 +96,10 @@ pub const EMPTY_TTL: Duration = Duration::from_secs(5 * 60);
 /// An ended room keeps its results and roster this long for a rematch.
 pub const ENDED_TTL: Duration = Duration::from_secs(5 * 60);
 
+/// An ended room on a draining server keeps its results this long -
+/// long enough to read how the round went, since no rematch can follow.
+pub const DRAIN_ENDED_TTL: Duration = Duration::from_secs(15);
+
 /// A round ends after this whatever the field says.
 pub const ROUND_MAX: Duration = Duration::from_secs(30 * 60);
 
@@ -215,6 +219,11 @@ pub enum Expiry {
 /// The room's clock rules, apart from the world so they test with paused
 /// time: which phase, since when, how many seats are connected, and when
 /// the next deadline falls.
+///
+/// On a draining server only a round being played is worth waiting for:
+/// a waiting or paused room is due the moment the drain starts, and an
+/// ended one after `DRAIN_ENDED_TTL`, so the process exits as soon as
+/// the last round in play is over.
 #[derive(Clone, Copy, Debug)]
 pub struct Lifecycle {
     phase: Phase,
@@ -223,11 +232,22 @@ pub struct Lifecycle {
     since: Instant,
     round_started: Option<Instant>,
     connected: usize,
+    /// When the server began draining, if it has.
+    drain_at: Option<Instant>,
 }
 
 impl Lifecycle {
     pub fn new(now: Instant) -> Lifecycle {
-        Lifecycle { phase: Phase::Waiting, since: now, round_started: None, connected: 0 }
+        Lifecycle { phase: Phase::Waiting, since: now, round_started: None, connected: 0, drain_at: None }
+    }
+
+    /// The server is draining; the first call counts.
+    pub fn drain(&mut self, now: Instant) {
+        self.drain_at.get_or_insert(now);
+    }
+
+    pub fn draining(&self) -> bool {
+        self.drain_at.is_some()
     }
 
     pub fn phase(&self) -> Phase {
@@ -285,6 +305,13 @@ impl Lifecycle {
     /// When the next `Expiry` falls due, if one does.
     pub fn deadline(&self) -> Option<Instant> {
         let round_max = self.round_started.map(|t| t + ROUND_MAX);
+        if let Some(drain_at) = self.drain_at {
+            return match self.phase {
+                Phase::Playing => round_max,
+                Phase::Waiting | Phase::Paused => Some(drain_at),
+                Phase::Ended => Some(self.since + DRAIN_ENDED_TTL),
+            };
+        }
         match self.phase {
             Phase::Waiting => (self.connected == 0).then(|| self.since + WAITING_TTL),
             Phase::Playing => round_max,
@@ -488,6 +515,9 @@ pub async fn run(hub: Arc<Hub>, code: String, params: RoomParams, commands: mpsc
     let now = Instant::now();
     let mut interval = tokio::time::interval(TICK);
     interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    // Subscribed before the first look, so a drain that begins between
+    // the two is still seen.
+    let mut drain = hub.drain_signal();
     let mut room = Room {
         hub,
         code,
@@ -515,10 +545,14 @@ pub async fn run(hub: Arc<Hub>, code: String, params: RoomParams, commands: mpsc
     };
     info!(code = room.code, map = room.map.name.as_deref().unwrap_or("?"), "room created");
     room.refresh_stats();
+    if *drain.borrow_and_update() {
+        room.begin_drain();
+    }
     loop {
         let deadline = room.next_deadline();
         tokio::select! {
             biased;
+            Ok(()) = drain.changed(), if !room.life.draining() => room.begin_drain(),
             cmd = room.commands.recv() => match cmd {
                 Some(cmd) => room.handle(cmd),
                 None => break,
@@ -531,7 +565,7 @@ pub async fn run(hub: Arc<Hub>, code: String, params: RoomParams, commands: mpsc
             }
         }
     }
-    room.close_all("the room closed");
+    room.close_all(if room.life.draining() { "this server is restarting; make a new room in a moment" } else { "the room closed" });
     info!(code = room.code, phase = room.life.phase().name(), "room dropped");
     room.hub.remove(&room.code);
 }
@@ -822,6 +856,13 @@ impl Room {
         self.lobby_to_all(Lobby::Ended { outcome: outcome.into() });
         self.broadcast_roster();
         self.refresh_stats();
+    }
+
+    /// The server began draining: this room's deadlines shorten to the
+    /// drain's (`Lifecycle::deadline`).
+    fn begin_drain(&mut self) {
+        self.life.drain(Instant::now());
+        info!(code = self.code, phase = self.life.phase().name(), "draining");
     }
 
     /// A deadline came due; `true` when the room is to be dropped.
@@ -1544,6 +1585,29 @@ mod tests {
         assert_eq!(life.deadline(), Some(Instant::now() + Duration::from_secs(30)), "the round limit comes before the empty limit");
         advance(Duration::from_secs(30)).await;
         assert_eq!(life.expired(Instant::now()), Some(Expiry::EndRound));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_drain_waits_for_a_round_in_play_and_nothing_else() {
+        let mut waiting = Lifecycle::new(Instant::now());
+        waiting.connect(Instant::now());
+        let mut playing = waiting;
+        playing.start(Instant::now());
+        let mut paused = playing;
+        paused.disconnect(Instant::now());
+        let mut ended = playing;
+        advance(Duration::from_secs(60)).await;
+        for life in [&mut waiting, &mut playing, &mut paused, &mut ended] {
+            life.drain(Instant::now());
+        }
+        assert_eq!(waiting.expired(Instant::now()), Some(Expiry::Reap), "a waiting room goes at once, connected or not");
+        assert_eq!(paused.expired(Instant::now()), Some(Expiry::Reap), "a paused round goes at once");
+        assert_eq!(playing.deadline(), Some(Instant::now() + ROUND_MAX - Duration::from_secs(60)), "a round in play keeps its own limit");
+        advance(Duration::from_secs(120)).await;
+        ended.end(Instant::now());
+        assert_eq!(ended.deadline(), Some(Instant::now() + DRAIN_ENDED_TTL), "an ended room keeps only long enough to read the result");
+        advance(DRAIN_ENDED_TTL).await;
+        assert_eq!(ended.expired(Instant::now()), Some(Expiry::Reap));
     }
 
     #[test]

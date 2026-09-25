@@ -466,8 +466,9 @@ Tailscale, `docker buildx` for the image, and `kustomize edit set image` plus
   two commands.
 - The drain: `terminationGracePeriodSeconds` 1830, just past `DRAIN_MAX`. On
   `SIGTERM` the server stops accepting new rooms and rematches, reports not
-  ready, keeps ticking its rooms, and exits when the last ends or the grace
-  runs out. Existing sockets stay up through the drain; a rejoin while it
+  ready, closes every room with no round in play (a lobby, a paused round, an
+  end screen after `DRAIN_ENDED_TTL`), keeps ticking the rounds in play, and
+  exits when the last ends or the grace runs out. Existing sockets stay up through the drain; a rejoin while it
   drains fails in v1, and a new room waits for the replacement. No `preStop`
   hook: there is nothing for one to buy when the process does not die for half
   an hour anyway.

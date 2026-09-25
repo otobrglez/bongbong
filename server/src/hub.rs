@@ -6,7 +6,7 @@
 //! rooms.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::{Notify, mpsc, watch};
@@ -55,7 +55,9 @@ pub struct Hub {
     pub max_rooms: usize,
     pub metrics: Arc<Metrics>,
     rooms: Mutex<BTreeMap<String, RoomHandle>>,
-    draining: AtomicBool,
+    /// Set once by `begin_drain`; every room task watches it, so a room
+    /// asleep on a long deadline wakes the moment the drain starts.
+    draining: watch::Sender<bool>,
     /// Signalled whenever a room goes, so `drained` can re-check.
     room_gone: Notify,
     /// Flipped once the drain is over: every connection task closes its
@@ -70,7 +72,7 @@ impl Hub {
             max_rooms,
             metrics,
             rooms: Mutex::new(BTreeMap::new()),
-            draining: AtomicBool::new(false),
+            draining: watch::Sender::new(false),
             room_gone: Notify::new(),
             shutdown: watch::Sender::new(false),
             next_conn_id: AtomicU64::new(1),
@@ -153,13 +155,19 @@ impl Hub {
         counts
     }
 
-    /// Stop taking rooms and rematches; the rooms in progress keep ticking.
+    /// Stop taking rooms and rematches. A round being played keeps
+    /// ticking to its end; every other room closes at once (`room::Lifecycle::drain`).
     pub fn begin_drain(&self) {
-        self.draining.store(true, Ordering::Relaxed);
+        self.draining.send_replace(true);
     }
 
     pub fn draining(&self) -> bool {
-        self.draining.load(Ordering::Relaxed)
+        *self.draining.borrow()
+    }
+
+    /// The drain flag as a room task waits on it.
+    pub fn drain_signal(&self) -> watch::Receiver<bool> {
+        self.draining.subscribe()
     }
 
     /// Resolves once no room is left (re-checked each time one goes).
