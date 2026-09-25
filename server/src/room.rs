@@ -1430,13 +1430,14 @@ mod tests {
             assert_eq!(t.wave_tier_step, extra / per_step, "{seats} seats");
             assert!(t.wave_size_scale > 1.0, "{seats} seats meet more than one player does");
         }
-        // The shape the two dials currently make, spelled out: a team of
-        // four meets a wave three and a quarter times the authored one,
-        // one rung up the tier ladder; a full room of eight six and a
-        // quarter times it, two rungs up.
-        assert_eq!(tuning_patch(2), r#"{"wave_size_scale":1.75,"wave_tier_step":0}"#);
-        assert_eq!(tuning_patch(4), r#"{"wave_size_scale":3.25,"wave_tier_step":1}"#);
-        assert_eq!(tuning_patch(8), r#"{"wave_size_scale":6.25,"wave_tier_step":2}"#);
+        // The shape the two dials currently make, spelled out: a pair
+        // meets half a wave more than one player does, a team of four two
+        // and a half times the authored wave and one rung up the tier
+        // ladder, a full room of eight four and a half times it and two
+        // rungs up.
+        assert_eq!(tuning_patch(2), r#"{"wave_size_scale":1.5,"wave_tier_step":0}"#);
+        assert_eq!(tuning_patch(4), r#"{"wave_size_scale":2.5,"wave_tier_step":1}"#);
+        assert_eq!(tuning_patch(8), r#"{"wave_size_scale":4.5,"wave_tier_step":2}"#);
     }
 
     /// The knobs are only half the answer: this is the plan a client's
@@ -1444,13 +1445,13 @@ mod tests {
     /// room made for its own world.
     #[test]
     fn a_client_applying_the_patch_resolves_the_rooms_plan() {
-        // maps/default.toml's plan: four waves of 4, growing by 2, light
+        // maps/default.toml's plan: four waves of 2, growing by 1, light
         // up to super.
         let map = SpawnConfig {
             kind: SpawnKind::Waves,
             waves: Some(4),
-            size: Some(4),
-            growth: Some(2),
+            size: Some(2),
+            growth: Some(1),
             tier_start: Some(Tier::Light),
             tier_end: Some(Tier::Super),
         };
@@ -1460,10 +1461,13 @@ mod tests {
             authored.scaled(t.wave_size_scale, t.wave_tier_step)
         };
         let sizes = |seats: usize| (0..4).map(|i| plan(seats).wave_size(i)).collect::<Vec<_>>();
-        assert_eq!(sizes(1), vec![4, 6, 8, 10], "a room of one fights the map as authored");
-        assert_eq!(sizes(2), vec![7, 11, 15, 19]);
-        assert_eq!(sizes(4), vec![13, 20, 27, 34]);
-        assert_eq!(sizes(8), vec![25, 38, 51, 64]);
+        assert_eq!(sizes(1), vec![2, 3, 4, 5], "a room of one fights the map as authored");
+        // **The opening is the number that matters**, and the scaling
+        // multiplies it rather than only the ramp: a pair opens one tank
+        // above the solo round, not three or four above it.
+        assert_eq!(sizes(2), vec![3, 5, 7, 9]);
+        assert_eq!(sizes(4), vec![5, 8, 11, 14]);
+        assert_eq!(sizes(8), vec![9, 14, 19, 24]);
         assert_eq!(plan(1).wave_tier(0), Tier::Light);
         assert_eq!(plan(4).wave_tier(0), Tier::Medium, "four seats start a rung up the ladder");
         assert_eq!(plan(8).wave_tier(0), Tier::Heavy);

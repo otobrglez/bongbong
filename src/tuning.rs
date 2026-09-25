@@ -1553,9 +1553,17 @@ tunables! {
         /// is the probe's `--players` sweeps flattened against the solo
         /// round (docs/maps-to-levels.md "Difficulty by seat count").
         ///
+        /// **0.5, down from 0.75.** At 0.75 a room of two met 1.75x the
+        /// authored wave, which turned the default map's opening into
+        /// seven tanks before a shot was fired - the scaling multiplies
+        /// the *first* wave, not just the ramp, so it is felt hardest
+        /// where a round is judged. Half a wave per seat keeps a duo's
+        /// opening one tank above the solo round and still has a team of
+        /// eight meeting four and a half times the wave.
+        ///
         /// Read by the room server alone, when a round starts. Turning it
         /// down makes every room easier; a local round never reads it.
-        online_wave_size_per_seat: f32 = 0.75 in 0.0 ..= 2.0;
+        online_wave_size_per_seat: f32 = 0.5 in 0.0 ..= 2.0;
         /// A room's wave plan climbs one rung of the tier ladder
         /// (`wave_tier_step`) for every this many seats past the first, so
         /// a big team meets heavier chassis and not only more of them. At
