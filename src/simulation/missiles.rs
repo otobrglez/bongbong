@@ -7,7 +7,7 @@
 
 use crate::tuning::tuning;
 use hecs::Entity;
-use sola_raylib::core::math::Vector2;
+use crate::math::Vec2;
 
 use crate::ai::Ai;
 use crate::blast::{BlastFx, BlastKind, BlastShape, Lean, Scorch};
@@ -102,7 +102,7 @@ impl Game {
     /// (`Missile::arrived`) and remove it. `live` is false on the end
     /// screen, where the blast plays out without touching anything.
     pub(super) fn resolve_missiles(&mut self, f: &mut Frame, live: bool) {
-        let landed: Vec<(Entity, Position, Owner, Vector2)> = self
+        let landed: Vec<(Entity, Position, Owner, Vec2)> = self
             .world
             .query::<(Entity, &Missile)>()
             .iter()
@@ -123,7 +123,7 @@ impl Game {
     /// damage; tiles crack and barrels go off (`damage_obstacle`, as any
     /// blast). Then the show: a small fireball leaning downrange, a ripple,
     /// a scorch and flattened grass.
-    fn missile_blast(&mut self, f: &mut Frame, center: Position, owner: Owner, dir: Vector2, live: bool) {
+    fn missile_blast(&mut self, f: &mut Frame, center: Position, owner: Owner, dir: Vec2, live: bool) {
         let params = BlastParams::missile();
         f.events.push(Event::MissileBlast { slot: owner.slot(), x: center.x, y: center.y });
         if live {
@@ -233,7 +233,7 @@ mod tests {
     }
 
     fn player(game: &Game) -> Entity {
-        game.player.expect("player")
+        game.player().expect("player")
     }
 
     /// Hand player 1 `count` missiles, facing right.
@@ -247,7 +247,7 @@ mod tests {
 
     fn fire(game: &mut Game) -> Vec<Event> {
         let mut input = Input::default();
-        input.player_intent.fire = true;
+        input.seats[0].fire = true;
         game.update(input, crate::PHYSICS_FIXED_DT, W, H);
         game.events().to_vec()
     }

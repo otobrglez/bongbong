@@ -1,0 +1,205 @@
+name: Deploy Room Server
+
+# Builds the room server image and rolls it out to the Kubernetes cluster
+# at Hetzner (docs/online-coop-prd.md §4.8). Shaped after boo-run's
+# deploy-master.yml, which is the working pattern for this cluster: reach
+# the private registry and the API server over Tailscale, push with
+# buildx, then `kustomize edit set image` + `kubectl apply -k`.
+#
+# **Same trigger as cloudflare-deploy.yml, on purpose.** A client and a
+# server that disagree about `net::PROTOCOL_VERSION` refuse each other by
+# name, so the wasm build and the image have to ship from one tag
+# (§4.9: "ship the web build and the image from the same tag"). Tagging
+# `vX.Y.Z` therefore ships three things together - the native archives
+# (release.yml), the web build (cloudflare-deploy.yml) and this.
+#
+# A deploy with rounds in progress is slow by design: `Recreate` waits for
+# the old pod, and the old pod drains for as long as its longest round,
+# up to 30 minutes (hub::DRAIN_MAX). Nobody's round ends; new rooms wait.
+#
+# Requires repo secrets (same names boo-run uses, so one set covers both):
+#   TS_OAUTH_CLIENT_ID / TS_OAUTH_SECRET — Tailscale OAuth client, tag:ci
+#   DOCKER_REGISTRY_USERNAME / DOCKER_REGISTRY_PASSWORD — the registry
+#   KUBECONFIG — base64 of a kubeconfig reaching the cluster over Tailscale
+#   PUSHOVER_TOKEN / PUSHOVER_USER — optional; the notify step is skipped
+#                                    when they are unset
+
+on:
+  push:
+    tags:
+      - '**[0-9]+.[0-9]+.[0-9]+*'
+  workflow_dispatch:
+
+env:
+  REGISTRY: registry.folk-decibel.ts.net
+  IMAGE: registry.folk-decibel.ts.net/bongbong/bongbong-server
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.get-tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # `git describe` needs the tags, which a shallow clone omits.
+          fetch-depth: 0
+
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          ping: registry.folk-decibel.ts.net
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+        with:
+          driver-opts: network=host
+
+      - name: Login to Docker Registry
+        run: |
+          echo "${{ secrets.DOCKER_REGISTRY_PASSWORD }}" \
+            | docker login "$REGISTRY" -u "${{ secrets.DOCKER_REGISTRY_USERNAME }}" --password-stdin
+
+      - name: Get version tag
+        id: get-tag
+        run: |
+          TAG=$(git describe --tags --always)
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Building room server image with tag: $TAG"
+
+      # linux/amd64 only: the cluster's nodes are x86_64 and a second
+      # platform would double a build that already compiles rapier.
+      - name: Build and push
+        run: |
+          docker buildx build \
+            --network host \
+            --platform linux/amd64 \
+            --cache-from type=gha \
+            --cache-to type=gha,mode=max \
+            -t "$IMAGE:latest" \
+            -t "$IMAGE:${{ steps.get-tag.outputs.tag }}" \
+            --push \
+            .
+
+  deploy:
+    needs: [ build ]
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://rooms.bongbong.io
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          ping: tailscale-operator.folk-decibel.ts.net
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: Setup kustomize
+        run: |
+          # Pinned release binary, as in boo-run: the upstream
+          # install_kustomize.sh against master was flaky.
+          KVER=5.4.3
+          curl -sSL -o /tmp/kustomize.tar.gz \
+            "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KVER}/kustomize_v${KVER}_linux_amd64.tar.gz"
+          tar -xzf /tmp/kustomize.tar.gz -C /tmp
+          sudo mv /tmp/kustomize /usr/local/bin/
+          kustomize version
+
+      - name: Configure kubectl
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Update kustomization with the new tag
+        run: |
+          cd k8s/base
+          kustomize edit set image "$IMAGE:${{ needs.build.outputs.tag }}"
+
+      - name: Deploy
+        run: |
+          kubectl apply -k k8s/base/
+
+          kubectl annotate deployment rooms -n bongbong-prod \
+            deployment.kubernetes.io/revision="${GITHUB_SHA}" \
+            deployment.kubernetes.io/deployed-by="${GITHUB_ACTOR}" \
+            deployment.kubernetes.io/deployed-at="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --overwrite
+
+          # Recreate waits for the old pod to go, and the old pod drains
+          # for as long as its longest round - up to DRAIN_MAX plus the
+          # grace. The timeout is that, not a guess; a deploy into a busy
+          # evening genuinely takes this long, and that is the trade for
+          # ending nobody's round.
+          kubectl rollout status deployment/rooms -n bongbong-prod --timeout=35m
+
+      - name: Smoke the deployed server
+        run: |
+          # /health is the readiness gate the rollout just waited on, so
+          # this only proves the ingress and TLS in front of it work.
+          curl -fsS --retry 5 --retry-delay 5 --retry-connrefused \
+            https://rooms.bongbong.io/health
+          echo
+          curl -fsS https://rooms.bongbong.io/metrics | grep bongbong_info
+
+      - name: Send Pushover notification
+        if: always()
+        env:
+          PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
+          PUSHOVER_USER: ${{ secrets.PUSHOVER_USER }}
+        run: |
+          if [ -z "$PUSHOVER_TOKEN" ] || [ -z "$PUSHOVER_USER" ]; then
+            echo "Pushover secrets unset; skipping the notification."
+            exit 0
+          fi
+          if [ "${{ job.status }}" = "success" ]; then
+            PRIORITY=0
+            TITLE="✅ Room server deployed"
+          else
+            PRIORITY=1
+            TITLE="❌ Room server deploy failed"
+          fi
+          curl -s --form-string "token=$PUSHOVER_TOKEN" \
+            --form-string "user=$PUSHOVER_USER" \
+            --form-string "title=$TITLE" \
+            --form-string "message=bongbong rooms ${{ needs.build.outputs.tag }} (${GITHUB_SHA:0:7}) by ${GITHUB_ACTOR}" \
+            --form-string "priority=$PRIORITY" \
+            https://api.pushover.net/1/messages.json > /dev/null
+
+  cleanup-registry:
+    needs: [ deploy ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      # Keeps the newest three tags besides `latest`, as boo-run does.
+      # The registry has no garbage collection of its own.
+      - name: Cleanup old images
+        run: |
+          REPO=bongbong/bongbong-server
+          AUTH="${{ secrets.DOCKER_REGISTRY_USERNAME }}:${{ secrets.DOCKER_REGISTRY_PASSWORD }}"
+          TAGS=$(curl -s -u "$AUTH" "https://$REGISTRY/v2/$REPO/tags/list" \
+            | jq -r '.tags[]?' | grep -v '^latest$' | sort -V -r)
+          echo "$TAGS" | tail -n +4 | while read -r tag; do
+            [ -z "$tag" ] && continue
+            echo "Deleting $REPO:$tag"
+            DIGEST=$(curl -s -o /dev/null -w '%header{docker-content-digest}' \
+              -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+              -u "$AUTH" "https://$REGISTRY/v2/$REPO/manifests/$tag")
+            [ -z "$DIGEST" ] && { echo "  no digest, skipping"; continue; }
+            curl -sS -X DELETE -u "$AUTH" "https://$REGISTRY/v2/$REPO/manifests/$DIGEST"
+          done

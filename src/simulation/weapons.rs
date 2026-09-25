@@ -8,7 +8,7 @@
 use crate::tuning::tuning;
 use hecs::Entity;
 use rand::RngExt;
-use sola_raylib::core::math::Vector2;
+use crate::math::Vec2;
 
 use crate::bullet::{Bullet, BulletState};
 use crate::laser::LaserVariant;
@@ -59,7 +59,7 @@ pub(super) struct PendingLaserShot {
 #[derive(Clone, Copy, Debug)]
 pub struct FlameJet {
     pub origin: Position,
-    pub dir: Vector2,
+    pub dir: Vec2,
     pub range: f32,
     /// Effective reach after `resolve_flames` capped it at the first
     /// solid tile; equal to `range` until then.
@@ -70,7 +70,7 @@ pub struct FlameJet {
 
 pub(super) fn flame_jet(tank: &Tank, owner: Owner, shooter: Entity) -> FlameJet {
     let rot = tank.rotation.to_radians();
-    let dir = Vector2::new(rot.sin(), -rot.cos());
+    let dir = Vec2::new(rot.sin(), -rot.cos());
     let muzzle = tuning().tank_muzzle_forward_offset[tank.row as usize] * tank.scale;
     let origin = Position::new(tank.position.x + dir.x * muzzle, tank.position.y + dir.y * muzzle);
     let range = tuning().flame_range;
@@ -87,7 +87,7 @@ pub(super) fn laser_damage_range(shot: &PendingLaserShot) -> (f32, f32) {
 /// clean shot. One centerline beam per trigger pull regardless of chassis.
 fn laser_shot(tank: &Tank, owner: Owner, aim_offset: f32, variant: LaserVariant) -> PendingLaserShot {
     let rot = (tank.rotation + aim_offset).to_radians();
-    let dir = Vector2::new(rot.sin(), -rot.cos());
+    let dir = Vec2::new(rot.sin(), -rot.cos());
     let muzzle = tuning().tank_muzzle_forward_offset[tank.row as usize] * tank.scale;
     let start = Position::new(tank.position.x + dir.x * muzzle, tank.position.y + dir.y * muzzle);
     let end = Position::new(start.x + dir.x * LASER_MAX_RANGE, start.y + dir.y * LASER_MAX_RANGE);
@@ -104,7 +104,7 @@ fn laser_shot(tank: &Tank, owner: Owner, aim_offset: f32, variant: LaserVariant)
 /// (so a misfire's skew kicks the same way it skews the shot) at `speed`
 /// px/s, normalized against the chassis-free baseline mass and capped at
 /// `max_speed`.
-fn apply_recoil(physics: &mut Physics, tank: &Tank, velocity: Vector2, speed: f32, max_speed: f32) {
+fn apply_recoil(physics: &mut Physics, tank: &Tank, velocity: Vec2, speed: f32, max_speed: f32) {
     let len = (velocity.x * velocity.x + velocity.y * velocity.y).sqrt();
     let Some(handle) = tank.body else { return };
     if len <= f32::EPSILON {
@@ -161,15 +161,15 @@ fn fire_missile(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, owner: Ow
     let offsets = MISSILE_TUBE_OFFSETS;
     let i = (tube as usize).min(offsets.len() - 1);
     let rot = (tank.rotation + aim_offset).to_radians();
-    let dir = Vector2::new(rot.sin(), -rot.cos());
-    let right = Vector2::new(rot.cos(), rot.sin());
+    let dir = Vec2::new(rot.sin(), -rot.cos());
+    let right = Vec2::new(rot.cos(), rot.sin());
     let pod = tank.scale * t.missile_pod_scale;
     let mouth = tank.position + dir * (MISSILE_TUBE_FORWARD * pod) + right * (offsets[i] * pod);
     // Fan by where the tube sits: the middle pair a little, the outer pair
     // twice as much, each to its own side.
     let fan = t.missile_fan_deg * offsets[i] / 3.0;
     let fanned = (tank.rotation + aim_offset + fan).to_radians();
-    let launch = Vector2::new(fanned.sin(), -fanned.cos());
+    let launch = Vec2::new(fanned.sin(), -fanned.cos());
     let ahead = tank.position + dir * t.missile_fallback_range;
     let aim = Position::new(ahead.x.clamp(0.0, f.width), ahead.y.clamp(0.0, f.height));
     f.muzzle_flashes.push(Shockwave::new(mouth));
@@ -401,8 +401,13 @@ pub(super) trait Projectile: hecs::Component {
     fn prev_position(&self) -> Position;
     /// Mark the current position as this frame's segment start.
     fn begin_frame(&mut self);
-    fn velocity(&self) -> Vector2;
+    fn velocity(&self) -> Vec2;
+    /// The facing in degrees (0 = up), which a bounce turns.
+    fn heading(&self) -> f32;
     fn owner(&self) -> Owner;
+    /// The round's projectile number (`Shell::id`), given once by
+    /// `Game::spawn_pending`.
+    fn set_id(&mut self, id: u32);
     fn advance(&mut self, dt: f32);
     fn detonate(&mut self);
     fn hit_half_extent() -> f32;
@@ -443,20 +448,20 @@ pub(super) trait Projectile: hecs::Component {
 /// at the centre goes straight back and a glancing one skims off. Should
 /// the mirror still point inward (a projectile that started inside the
 /// box), it leaves straight outward along the normal instead.
-pub(super) fn deflected_velocity(prev: Position, vel: Vector2, center: Position) -> Vector2 {
+pub(super) fn deflected_velocity(prev: Position, vel: Vec2, center: Position) -> Vec2 {
     let (nx, ny) = (prev.x - center.x, prev.y - center.y);
     let len = (nx * nx + ny * ny).sqrt();
     if len < f32::EPSILON {
-        return Vector2::new(-vel.x, -vel.y);
+        return Vec2::new(-vel.x, -vel.y);
     }
     let (nx, ny) = (nx / len, ny / len);
     let dot = vel.x * nx + vel.y * ny;
     let (rx, ry) = (vel.x - 2.0 * dot * nx, vel.y - 2.0 * dot * ny);
     if rx * nx + ry * ny > 0.0 {
-        Vector2::new(rx, ry)
+        Vec2::new(rx, ry)
     } else {
         let speed = (vel.x * vel.x + vel.y * vel.y).sqrt();
-        Vector2::new(nx * speed, ny * speed)
+        Vec2::new(nx * speed, ny * speed)
     }
 }
 
@@ -507,8 +512,10 @@ impl Projectile for Shell {
     fn set_position(&mut self, p: Position) { self.position = p; }
     fn prev_position(&self) -> Position { self.prev_position }
     fn begin_frame(&mut self) { self.prev_position = self.position; }
-    fn velocity(&self) -> Vector2 { self.velocity }
+    fn velocity(&self) -> Vec2 { self.velocity }
+    fn heading(&self) -> f32 { self.rotation }
     fn owner(&self) -> Owner { self.owner }
+    fn set_id(&mut self, id: u32) { self.id = id; }
     fn advance(&mut self, dt: f32) { self.update(dt); }
     fn detonate(&mut self) { Shell::detonate(self); }
     fn hit_half_extent() -> f32 { tuning().shell_hit_half_extent }
@@ -538,8 +545,10 @@ impl Projectile for Bullet {
     fn set_position(&mut self, p: Position) { self.position = p; }
     fn prev_position(&self) -> Position { self.prev_position }
     fn begin_frame(&mut self) { self.prev_position = self.position; }
-    fn velocity(&self) -> Vector2 { self.velocity }
+    fn velocity(&self) -> Vec2 { self.velocity }
+    fn heading(&self) -> f32 { self.rotation }
     fn owner(&self) -> Owner { self.owner }
+    fn set_id(&mut self, id: u32) { self.id = id; }
     fn advance(&mut self, dt: f32) { self.update(dt); }
     fn detonate(&mut self) { Bullet::detonate(self); }
     fn hit_half_extent() -> f32 { tuning().minigun_bullet_hit_half_extent }
@@ -564,8 +573,10 @@ impl Projectile for Plasma {
     fn set_position(&mut self, p: Position) { self.position = p; }
     fn prev_position(&self) -> Position { self.prev_position }
     fn begin_frame(&mut self) { self.prev_position = self.position; }
-    fn velocity(&self) -> Vector2 { self.velocity }
+    fn velocity(&self) -> Vec2 { self.velocity }
+    fn heading(&self) -> f32 { self.rotation }
     fn owner(&self) -> Owner { self.owner }
+    fn set_id(&mut self, id: u32) { self.id = id; }
     fn advance(&mut self, dt: f32) { self.update(dt); }
     fn detonate(&mut self) { Plasma::detonate(self); }
     fn hit_half_extent() -> f32 { tuning().plasma_hit_half_extent }
@@ -585,21 +596,21 @@ impl Projectile for Plasma {
 mod deflect_tests {
     use super::*;
 
-    fn outward(prev: Position, vel: Vector2, center: Position) -> f32 {
+    fn outward(prev: Position, vel: Vec2, center: Position) -> f32 {
         let v = deflected_velocity(prev, vel, center);
         (v.x * (prev.x - center.x) + v.y * (prev.y - center.y)) / ((prev.x - center.x).hypot(prev.y - center.y))
     }
 
     #[test]
     fn a_head_on_shot_comes_straight_back_at_full_speed() {
-        let v = deflected_velocity(Position::new(0.0, -100.0), Vector2::new(0.0, 300.0), Position::new(0.0, 0.0));
+        let v = deflected_velocity(Position::new(0.0, -100.0), Vec2::new(0.0, 300.0), Position::new(0.0, 0.0));
         assert!((v.x).abs() < 1e-3 && (v.y + 300.0).abs() < 1e-3, "{v:?}");
     }
 
     #[test]
     fn a_glancing_shot_skims_off_away_from_the_centre() {
         let prev = Position::new(-80.0, -60.0);
-        let vel = Vector2::new(300.0, 0.0);
+        let vel = Vec2::new(300.0, 0.0);
         let v = deflected_velocity(prev, vel, Position::new(0.0, 0.0));
         assert!(outward(prev, vel, Position::new(0.0, 0.0)) > 0.0, "leaves outward: {v:?}");
         assert!((v.x.hypot(v.y) - 300.0).abs() < 1e-3, "speed is preserved");
@@ -610,7 +621,7 @@ mod deflect_tests {
         // Moving away from the centre already: the mirror would point back
         // in, so it exits along the normal instead.
         let prev = Position::new(10.0, 0.0);
-        let v = deflected_velocity(prev, Vector2::new(200.0, 0.0), Position::new(0.0, 0.0));
+        let v = deflected_velocity(prev, Vec2::new(200.0, 0.0), Position::new(0.0, 0.0));
         assert!(v.x > 0.0 && v.y.abs() < 1e-3, "{v:?}");
     }
 }

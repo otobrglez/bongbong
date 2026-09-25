@@ -85,3 +85,34 @@ In two player mode HUD labels should start to look like: "60 | 70". Where 60 is 
   from `event.code` and the game reads it once a frame; native reads
   raylib's Left Shift.
 
+## Seats beyond two (2026-09-20, docs/online-coop-prd.md §4.11)
+
+- **The round holds `MAX_SEATS` (8), not two.** `PlayerCount` is a count
+  in `1..=MAX_SEATS`, `Game::seats` is one entity per owner slot, and one
+  `EngageRing` per seat. Everything above still holds for one and two: the
+  seat block `init` runs is the same block, one pass per extra seat, after
+  player 1 and before the enemies, so a one- or two-player round draws the
+  RNG it always drew and every seeded replay and probe ceiling still
+  describes the same round (`determinism_tests::the_one_and_two_seat_streams_are_pinned`).
+- **Where they stand.** Seat 0 takes `start`, seat 1 `start2`; the seats
+  after that have no authored cell and take the nearest open nav cell to
+  player 1 that a tank can *drive* to, keeping a tank's width from every
+  seat already down and moved ashore if it lands in a lake. Seat 1's
+  fallback is unchanged - the plain outward walk, wall or no wall - because
+  a seeded two-player replay is that walk's answer. Numbered starts in the
+  builder are a later lane.
+- **Who they fight.** `Ai::target_player` picks the nearest live,
+  unconcealed seat over all of them and switches only past
+  `enemy_target_switch_margin_px`, the two-player rule read over N.
+- **What they look like.** The sheet has three blocks, so a seat past the
+  second draws player 1's and is told apart by its ring colour
+  (`TEAM_COLORS`, eight Resurrect 64 steps from the blue, cyan, violet and
+  magenta families - four hues in a bright and a deep register) and its
+  `P1`..`P8` locate label. Proper blocks come from `gen_tanks.py` when a
+  fourth friend shows up.
+- **What is still two.** The players dialog and `--players`' keyboard
+  mapping (arrows + Space, WASD + Left Shift); the HUD's slot tables, which
+  lay a round of more seats out from the two-player table and show the
+  first two - the compact N-seat strip is its own lane; and the room
+  server's `SEATS_PLAYABLE`, a room policy rather than a limit of the
+  simulation.

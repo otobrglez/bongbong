@@ -14,15 +14,11 @@
 //! shell loop's ricochet branch entirely).
 
 use crate::tuning::tuning;
-use sola_raylib::prelude::*;
+use crate::math::Vec2;
 
 use crate::shell::Owner;
 use crate::tank::Tank;
-use crate::{
-    MINIGUN_BULLET_SCALE,
-    MINIGUN_BULLET_TEXTURE_SIZE,
-    Position,
-};
+use crate::Position;
 
 /// A minigun bullet's lifecycle - deliberately compact next to `ShellState`'s
 /// seven columns: muzzle -> flying -> impact and nothing else.
@@ -34,13 +30,18 @@ pub enum BulletState {
 }
 
 impl BulletState {
-    /// Column of this state in minigun_bullets.png.
-    fn col(self) -> i32 {
-        match self {
-            BulletState::Muzzle => 0,
-            BulletState::Flying => 1,
-            BulletState::Hit => 2,
-        }
+    /// Every state, in sheet-column order (`col` is the index here).
+    pub const ALL: [BulletState; 3] = [BulletState::Muzzle, BulletState::Flying, BulletState::Hit];
+
+    /// The bullets sheet column this state draws from (0..3), which is
+    /// also how the state travels on the wire.
+    pub fn col(self) -> i32 {
+        BulletState::ALL.iter().position(|&s| s == self).expect("every state is in ALL") as i32
+    }
+
+    /// Inverse of `col`; `None` past the last column.
+    pub fn from_col(col: i32) -> Option<BulletState> {
+        usize::try_from(col).ok().and_then(|i| BulletState::ALL.get(i).copied())
     }
 
     /// How long this state is shown (seconds). Flying is time-unbounded
@@ -61,7 +62,7 @@ pub struct Bullet {
     pub state: BulletState,
     pub position: Position,
     /// Direction of travel while flying (pixels per second).
-    pub velocity: Vector2,
+    pub velocity: Vec2,
     /// Facing angle in degrees (matches the tank's rotation when fired, plus
     /// this bullet's own misfire/spread skew).
     pub rotation: f32,
@@ -85,6 +86,9 @@ pub struct Bullet {
     /// sandbag it sailed over) - skipped by every later hit sweep, since a
     /// segment ending inside a tile would otherwise re-roll it next frame.
     pub passed_over: Vec<hecs::Entity>,
+    /// The round's projectile number, same counter as `Shell::id`. 0 until
+    /// spawned into the world.
+    pub id: u32,
 }
 
 impl Bullet {
@@ -99,7 +103,7 @@ impl Bullet {
     /// this.
     pub fn spawn(tank: &Tank, owner: Owner, aim_offset: f32) -> Bullet {
         let rot = (tank.rotation + aim_offset).to_radians();
-        let dir = Vector2::new(rot.sin(), -rot.cos());
+        let dir = Vec2::new(rot.sin(), -rot.cos());
         let muzzle = tuning().tank_muzzle_forward_offset[tank.row as usize] * tank.scale;
         let position = Position::new(
             tank.position.x + dir.x * muzzle,
@@ -108,7 +112,7 @@ impl Bullet {
         Bullet {
             state: BulletState::Muzzle,
             position,
-            velocity: Vector2::new(dir.x * tuning().minigun_bullet_speed, dir.y * tuning().minigun_bullet_speed),
+            velocity: Vec2::new(dir.x * tuning().minigun_bullet_speed, dir.y * tuning().minigun_bullet_speed),
             rotation: tank.rotation + aim_offset,
             timer: 0.0,
             done: false,
@@ -117,6 +121,7 @@ impl Bullet {
             shadow_offset: 0.0,
             prev_position: position,
             passed_over: Vec::new(),
+            id: 0,
         }
     }
 
@@ -150,45 +155,4 @@ impl Bullet {
         self.state = BulletState::Hit;
         self.timer = 0.0;
     }
-}
-
-/// Source rectangle for a bullet frame (state column) in minigun_bullets.png.
-fn source_rec(col: i32) -> Rectangle {
-    Rectangle::new(
-        col as f32 * MINIGUN_BULLET_TEXTURE_SIZE,
-        0.0,
-        MINIGUN_BULLET_TEXTURE_SIZE,
-        MINIGUN_BULLET_TEXTURE_SIZE,
-    )
-}
-
-/// Draw a bullet using its current state's frame, centered and rotated to
-/// face travel.
-pub fn draw_bullet(d: &mut impl RaylibDraw, texture: &Texture2D, bullet: &Bullet) {
-    let src = source_rec(bullet.state.col());
-    let size = MINIGUN_BULLET_TEXTURE_SIZE * MINIGUN_BULLET_SCALE;
-
-    let dest = Rectangle::new(bullet.position.x, bullet.position.y, size, size);
-    let origin = Vector2::new(size / 2.0, size / 2.0);
-
-    d.draw_texture_pro(texture, src, dest, origin, bullet.rotation, Color::WHITE);
-}
-
-/// Draw this bullet's drop shadow - same convention as `draw_shell_shadow`.
-/// Caller (`Game::render`) only calls this while `bullet.state ==
-/// BulletState::Flying`.
-pub fn draw_bullet_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, bullet: &Bullet) {
-    let src = source_rec(bullet.state.col());
-    let size = MINIGUN_BULLET_TEXTURE_SIZE * MINIGUN_BULLET_SCALE;
-
-    let dest = Rectangle::new(
-        bullet.position.x + tuning().shadow_dir_x * bullet.shadow_offset,
-        bullet.position.y + tuning().shadow_dir_y * bullet.shadow_offset,
-        size,
-        size,
-    );
-    let origin = Vector2::new(size / 2.0, size / 2.0);
-    let shadow = Color::new(0, 0, 0, (255.0 * tuning().minigun_bullet_shadow_opacity) as u8);
-
-    d.draw_texture_pro(texture, src, dest, origin, bullet.rotation, shadow);
 }

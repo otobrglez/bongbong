@@ -202,7 +202,9 @@ New group `waves`:
 | `wave_wreck_despawn_seconds` | 20.0 (wave rounds only) | Live |
 | `wave_max_alive` | 31 in 1..=31 | Live |
 
-The mission and plan *kind* are level data (map/CLI), not knobs.
+The mission and plan *kind* are level data (map/CLI), not knobs. Two more
+rows joined the group later, `wave_size_scale` and `wave_tier_step` - see
+"Difficulty by seat count" below.
 
 ### Game state (`simulation/mod.rs`)
 
@@ -371,6 +373,90 @@ rolling in through an edge gate.
   of the field or behind iron) fights the player instead until one opens.
   The default map's bunker also grew a 3x2 interior with an empty row above
   its roof.
+
+## Difficulty by seat count
+
+Added 2026-09-20 with online co-op phase 3c (docs/online-coop-prd.md
+section 4.11). A wave plan is authored for one tank and is a walk for
+four, so a round is **sized to the team that fights it** - but only ever
+by a room. Two `waves` rows do the sizing and both are the identity on
+every local round:
+
+| knob | what it does |
+|---|---|
+| `wave_size_scale` | every wave of the resolved plan multiplied by this and rounded, in `SpawnPlan::scaled` (the first wave's size and the tanks each wave adds), never below one tank |
+| `wave_tier_step` | rungs added to both ends of the tier ramp, clamped to `super` |
+
+The room works them out from the seats its round starts with
+(`server/src/room.rs`, `tuning_patch`) and two dials of its own, and
+sends the result in the `Welcome`'s tuning patch, which the client
+applies before `Game::init`:
+
+```
+wave_size_scale = 1 + (seats - 1) * online_wave_size_per_seat   // 0.75
+wave_tier_step  = (seats - 1) / online_wave_tier_seats_per_step // 3
+```
+
+One seat is the empty patch. On maps/default.toml's plan (four waves of
+4, growing by 2, light to super) that is:
+
+| seats | scale | step | waves |
+|---|---|---|---|
+| 1 | 1.00 | 0 | 4, 6, 8, 10, light to super |
+| 2 | 1.75 | 0 | 7, 11, 15, 19, light to super |
+| 4 | 3.25 | 1 | 13, 20, 27, 34, medium to super |
+| 8 | 6.25 | 2 | 25, 38, 51, 64, heavy to super |
+
+(`wave_max_alive` still caps what stands on the field at 31; the surplus
+queues behind the gates.)
+
+### The measurements behind the curve
+
+`src/bin/probe.rs` with `--players`, AFK seats on the wave fixtures, 20
+seeded rounds a cell (`--scenario afk --frames 10800 --rounds 20 --seed
+2000`). AFK is the instrument on purpose: nobody shoots back, so the
+number is how long the wave plan takes to chew through the team, which is
+exactly what the scale is sizing. **Median frames until the round ends**:
+
+| map | seats | before | + re-entry | + the curve |
+|---|---|---|---|---|
+| missions/waves-basic | 1 | 412 | 412 | 412 |
+| | 2 | 1123 | 1123 | 918 |
+| | 4 | 2262 | 2262 | 1208 |
+| | 8 | 4764 | past the three-minute cap (10 of 20 still going) | 1732 |
+| ai-fortress-siege | 1 | 515 | 515 | 515 |
+| | 2 | 1138 | 1138 | 822 |
+| | 4 | 2704 | 2704 | 1075 |
+| | 8 | 4685 | past the three-minute cap (10 of 20 still going) | 1729 |
+
+Re-entry only moves the eight-seat rounds: at two and four seats an AFK
+team falls inside the first wave's timeout, so no wave is ever called to
+bring anybody back.
+
+The size dial was swept at 8 seats with no tier step (median frames,
+waves-basic / fortress-siege): 0.5 gives 2346 / 2996, **0.75** gives 2318
+/ 1986 and 1.0 gives 2189 / 2124. Past 0.75 the curve flattens - the extra
+tanks queue behind `wave_max_alive` and the gate stagger rather than
+arriving - so 0.75 is the knee, and it is under linear for the right
+reason too: a team shares a field, splits the enemies' attention and
+covers each other, so it is worth more than the sum of its tanks.
+
+The tier dial was swept at 0.75 (median frames at 8 seats, then at 4):
+none 2318 / 1986 and 1349 / 1365; one rung every 4 seats 2019 / 1949 and
+1349 / 1365; every **3** seats 1732 / 1729 and 1208 / 1075; every 2 seats
+1658 / 1729 and 1208 / 1075. Three is the last step that still leaves a
+ramp: a light-to-super plan reads heavy-to-super at a full room instead
+of collapsing to super throughout, and four seats - the common room -
+get their rung.
+
+What is left is structural, not a knob: a team of eight still takes about
+four times a solo player's round. Some of it is re-entry (a solo player
+who falls is done; a team keeps getting up, which is the feature), and
+some is the field - an enemy has to *drive* to the fight, and past a
+point widening the wave only lengthens the queue at the gates. A small
+dense map makes that plain: `maps/crossplay/bunker.toml` at eight seats
+starves its own waves whether or not the plan is scaled (the team stands
+in the gate lanes), which is a map-authoring limit, not a tuning one.
 
 ## Out of scope
 

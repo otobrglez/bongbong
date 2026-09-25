@@ -8,7 +8,7 @@
 use hecs::Entity;
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
-use sola_raylib::core::math::Vector2;
+use crate::math::Vec2;
 
 use crate::ai::{Ai, AiSnapshot, Role};
 use crate::bullet::{Bullet, BulletState};
@@ -47,7 +47,7 @@ pub enum Detail {
     Full,
 }
 
-/// One frame's world state as plain numbers (`Vector2` is not
+/// One frame's world state as plain numbers (`Vec2` is not
 /// serialisable, hence the `x`/`y` pairs). Values are rounded to 0.1 so a
 /// full snapshot of a busy round stays a few kilobytes.
 #[derive(Serialize, Debug)]
@@ -770,8 +770,8 @@ impl Game {
             let tank = q.get().map_err(|e| e.to_string())?;
             tank.position = pos;
             tank.ring_position = pos;
-            tank.ring_velocity = Vector2::new(0.0, 0.0);
-            tank.velocity = Vector2::new(0.0, 0.0);
+            tank.ring_velocity = Vec2::new(0.0, 0.0);
+            tank.velocity = Vec2::new(0.0, 0.0);
             if let Some(rot) = rotation {
                 tank.rotation = rot;
                 tank.visual_rotation = rot;

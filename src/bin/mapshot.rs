@@ -23,10 +23,12 @@
 //! extracted release. The library side is `thumbnail.rs`.
 
 use bongbong::map::MapFile;
+use bongbong::math::Color;
 use bongbong::simulation::PlayerCount;
 use bongbong::tank::TankKind;
 use bongbong::canvas::{Pixels, Sheet};
-use bongbong::thumbnail::{self, Comparison, GpuSheets, ThumbnailOptions};
+use bongbong::render::thumbnail::{image_png_bytes, load_cpu_sheets, render_gpu, GpuSheets};
+use bongbong::thumbnail::{self, Comparison, ThumbnailOptions};
 use clap::{Parser, ValueEnum};
 use sola_raylib::consts::TraceLogLevel;
 use sola_raylib::prelude::{RaylibHandle, RaylibThread};
@@ -212,7 +214,7 @@ fn run(args: &Args) -> Result<usize, String> {
         shadows: !args.no_shadows,
     };
 
-    let cpu_sheets = if args.check || args.renderer == Renderer::Cpu { Some(thumbnail::load_cpu_sheets()?) } else { None };
+    let cpu_sheets = if args.check || args.renderer == Renderer::Cpu { Some(load_cpu_sheets()?) } else { None };
     let mut gpu = if args.check || args.renderer == Renderer::Gpu { Some(Gpu::open(log_level(args))?) } else { None };
 
     let mut failures = 0usize;
@@ -259,16 +261,19 @@ fn render_one(
     let (w, h) = thumbnail::field_pixels(&game);
     let cpu = cpu_sheets.map(|sheets| thumbnail::render_cpu(&game, sheets));
     let gpu_image = match gpu {
-        Some(gpu) => Some(thumbnail::render_gpu(&mut gpu.rl, &gpu.thread, &gpu.sheets, &game)?),
+        Some(gpu) => Some(render_gpu(&mut gpu.rl, &gpu.thread, &gpu.sheets, &game)?),
         None => None,
     };
     let check = match (&cpu, &gpu_image) {
-        (Some(cpu), Some(image)) => Some(thumbnail::compare_pixels(&image.get_image_data(), cpu.pixels())),
+        (Some(cpu), Some(image)) => {
+            let gpu: Vec<Color> = image.get_image_data().iter().map(|&c| c.into()).collect();
+            Some(thumbnail::compare_pixels(&gpu, cpu.pixels()))
+        }
         _ => None,
     };
     let bytes = match renderer {
         Renderer::Cpu => cpu.as_ref().expect("the CPU sheets are loaded for the CPU renderer").png_bytes(scale)?,
-        Renderer::Gpu => thumbnail::image_png_bytes(gpu_image.expect("the window is open for the GPU renderer"), scale)?,
+        Renderer::Gpu => image_png_bytes(gpu_image.expect("the window is open for the GPU renderer"), scale)?,
     };
     if let Some(parent) = job.out.parent() {
         if !parent.as_os_str().is_empty() {

@@ -17,6 +17,12 @@ rustflags = [
     # Recent emcc tree-shakes these aggressively; without them raylib's GLFW
     # glue and the shell's heap access hit "Module.X is undefined" at runtime.
     "-C", "link-arg=-sEXPORTED_RUNTIME_METHODS=['ccall','wasmMemory','HEAPU8','HEAP32','HEAPF32']",
+    # The online co-op client's socket (src/net/web.rs): emscripten's own
+    # WebSocket API lives in a JS library that is not linked by default,
+    # and without it the `emscripten_websocket_*` symbols are undefined at
+    # link time. Nothing else in the game needs it, and it costs a few
+    # kilobytes of glue.
+    "-C", "link-arg=-lwebsocket.js",
     # Bundle static/ (sprites + shaders) into the wasm's virtual filesystem
     # at /static, so `rl.load_texture(&thread, "static/tanks.png")` resolves
     # unchanged on web.

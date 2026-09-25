@@ -1,0 +1,125 @@
+# One PR's room server (k8s/README.md, docs/online-coop-prd.md §4.8).
+#
+# `__PR__` is substituted for the pull request's number by
+# .github/workflows/pr-server.yml, and `__IMAGE__` for the image it just
+# pushed. A plain template rather than a kustomize overlay on purpose:
+# every object here is parameterised by the same one number, which is the
+# one thing kustomize has no good answer for, and a `sed` a reader can
+# run by hand beats a patch they have to render to understand.
+#
+# The whole preview lives in namespace `bongbong-pr-__PR__`, so tearing it
+# down is one `kubectl delete namespace`.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bongbong-pr-__PR__
+  labels:
+    app.kubernetes.io/name: bongbong
+    bongbong.io/preview: "true"
+    bongbong.io/pr: "__PR__"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rooms
+  namespace: bongbong-pr-__PR__
+  labels: { app: rooms }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: rooms } }
+  template:
+    metadata: { labels: { app: rooms } }
+    spec:
+      # **Thirty seconds, not the production 1830.** A preview's rounds are
+      # nobody's evening, and `kubectl delete namespace` waits out the
+      # grace period - at production's value a closed PR would hold a pod
+      # for half an hour before the namespace finished going away.
+      terminationGracePeriodSeconds: 30
+      # Declared here rather than on the namespace's default
+      # ServiceAccount, which is how bongbong-prod carries it. A preview
+      # namespace is made and destroyed by CI, and naming the secret in
+      # the pod spec means no second `kubectl patch` that has to wait for
+      # the ServiceAccount to be created first. The workflow puts the
+      # secret in place before this is applied.
+      imagePullSecrets:
+        - name: regcred
+      containers:
+        - name: rooms
+          image: __IMAGE__
+          # Three rooms is plenty to try a PR with; it also caps what one
+          # preview can cost while every open PR has one of these.
+          args: [ "--listen", "0.0.0.0:4848", "--max-rooms", "3" ]
+          ports:
+            - { containerPort: 4848, name: http }
+          env:
+            - { name: RUST_LOG, value: "info" }
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            failureThreshold: 3
+          # TCP, not /health - the same reason as production: /health goes
+          # 503 for the whole drain and an HTTP probe would restart the pod
+          # through it.
+          livenessProbe:
+            tcpSocket: { port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            failureThreshold: 3
+          # A tenth of a core, because every open PR holds one of these on
+          # a node that also runs six production namespaces. Still no CPU
+          # limit: a throttled 60 Hz tick would make the preview feel worse
+          # than the thing it is previewing, which defeats the point.
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rooms
+  namespace: bongbong-pr-__PR__
+  labels: { app: rooms }
+spec:
+  type: ClusterIP
+  selector: { app: rooms }
+  ports:
+    - { name: http, port: 80, targetPort: http }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: rooms-pr-__PR__
+  namespace: bongbong-pr-__PR__
+  labels: { app: rooms, bongbong.io/preview: "true" }
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # A round is one long-lived WebSocket; nginx's default minute would
+    # hang up on it.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-next-upstream: "off"
+    # `/pr-7/ws` reaches the server as `/ws`. The capture groups are the
+    # second and third in the path below; `$2` is everything after the
+    # prefix, so `/pr-7` alone rewrites to `/`.
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+spec:
+  ingressClassName: nginx
+  rules:
+    # **The production host, a preview path.** This shares
+    # rooms.bongbong.io with bongbong-prod's own Ingress rather than
+    # taking a hostname of its own, which is what keeps a preview free of
+    # DNS records and certificates. nginx matches the longest path first,
+    # so `/pr-7/...` lands here and everything else stays with production.
+    - host: rooms.bongbong.io
+      http:
+        paths:
+          - path: /pr-__PR__(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: rooms
+                port: { number: 80 }

@@ -2,7 +2,7 @@ use crate::canvas::Canvas;
 use crate::tuning::tuning;
 use rapier2d::prelude::RigidBodyHandle;
 use serde::{Deserialize, Serialize};
-use sola_raylib::prelude::*;
+use crate::math::{Color, Rectangle, Vec2};
 use std::collections::HashSet;
 
 use crate::{
@@ -553,14 +553,13 @@ impl Obstacle {
         true
     }
 
-    /// Advance a burning tile's fire - a no-op for anything not alight.
-    /// Cosmetic only (see docs/WALLS_SPEC.md's fire
-    /// section): cycles `burn_frame` through the sheet's 3-frame flicker
-    /// loop on `wood_burn_frame_seconds`, and once `burn_elapsed` passes
-    /// `wood_burn_seconds`, chars it out (`destroyed = true`) so it's
-    /// removed the same instant-vanish way every other destroyed material
-    /// already is.
-    pub fn tick_burn(&mut self, dt: f32) {
+    /// Cycle a burning tile's `burn_frame` through the sheet's 3-frame
+    /// flicker loop on `wood_burn_frame_seconds` - a no-op for anything
+    /// not alight (see docs/WALLS_SPEC.md's fire section). The picture's
+    /// half of `tick_burn`, so a client replica can flicker a tile the
+    /// server says is burning without charring it out
+    /// (`Game::tick_presentation`, docs/online-coop-prd.md section 4.5).
+    pub fn tick_burn_frame(&mut self, dt: f32) {
         if !self.burning {
             return;
         }
@@ -569,6 +568,18 @@ impl Obstacle {
             self.burn_frame_timer -= tuning().wood_burn_frame_seconds;
             self.burn_frame = (self.burn_frame + 1) % 3;
         }
+    }
+
+    /// Advance a burning tile's fire - a no-op for anything not alight:
+    /// the flicker loop above, and once `burn_elapsed` passes
+    /// `wood_burn_seconds`, chars it out (`destroyed = true`) so it's
+    /// removed the same instant-vanish way every other destroyed material
+    /// already is.
+    pub fn tick_burn(&mut self, dt: f32) {
+        if !self.burning {
+            return;
+        }
+        self.tick_burn_frame(dt);
         self.burn_elapsed += dt;
         if self.burn_elapsed >= tuning().wood_burn_seconds {
             self.destroyed = true;
@@ -626,7 +637,7 @@ pub fn draw_oil_cell(c: &mut impl Canvas, center: Position) {
     let src = oil_source_rec(center);
     let size = OBSTACLE_TEXTURE_SIZE * OBSTACLE_SCALE;
     let dest = Rectangle::new(center.x, center.y, size, size);
-    c.blit(Sheet::Props, src, dest, Vector2::new(size / 2.0, size / 2.0), 0.0, Color::WHITE);
+    c.blit(Sheet::Props, src, dest, Vec2::new(size / 2.0, size / 2.0), 0.0, Color::WHITE);
 }
 
 /// A launched fuel drum in the air (`simulation::FlyingDrum`): the intact
@@ -649,7 +660,7 @@ pub fn draw_flying_drum(
     let at = drum.draw_pos();
     let dest = Rectangle::new(at.x, at.y, size, size);
     let rotation = ((drum.flight() * 6.0) as i32 % 4) as f32 * 90.0;
-    c.blit(Sheet::Props, src, dest, Vector2::new(size / 2.0, size / 2.0), rotation, Color::WHITE);
+    c.blit(Sheet::Props, src, dest, Vec2::new(size / 2.0, size / 2.0), rotation, Color::WHITE);
 }
 
 /// Draw a single obstacle sprite from its atlas at its center position.
@@ -660,7 +671,7 @@ pub fn draw_obstacle(c: &mut impl Canvas, obstacle: &Obstacle, axis: FenceAxis, 
     let src = source_rec(sheet, obstacle.row(axis), obstacle.col());
     let size = obstacle.sprite_size();
     let dest = Rectangle::new(obstacle.position.x + obstacle.fuse_rock(time), obstacle.position.y, size, size);
-    let origin = Vector2::new(size / 2.0, size / 2.0);
+    let origin = Vec2::new(size / 2.0, size / 2.0);
     c.blit(sheet, src, dest, origin, 0.0, Color::WHITE);
 }
 
@@ -730,7 +741,7 @@ pub fn draw_obstacle_cap(c: &mut impl Canvas, obstacle: &Obstacle) {
     let src = source_rec(Sheet::Walls, EDGE_CAP_ROW_BASE + row_offset as i32, col);
     let size = obstacle.size();
     let dest = Rectangle::new(obstacle.position.x, obstacle.position.y, size, size);
-    let origin = Vector2::new(size / 2.0, size / 2.0);
+    let origin = Vec2::new(size / 2.0, size / 2.0);
     c.blit(Sheet::Walls, src, dest, origin, 0.0, Color::WHITE);
     draw_scorched_faces(c, obstacle);
 }
@@ -926,7 +937,7 @@ fn tree_blit(
             sheet,
             Rectangle::new(src.x, src.y + y, src.width, h),
             Rectangle::new(left + dx, top + y, size, h),
-            Vector2::zero(),
+            Vec2::zero(),
             0.0,
             tint,
         );
@@ -950,7 +961,7 @@ pub fn draw_obstacle_shadow(c: &mut impl Canvas, obstacle: &Obstacle, axis: Fenc
         size,
         size,
     );
-    let origin = Vector2::new(size / 2.0, size / 2.0);
+    let origin = Vec2::new(size / 2.0, size / 2.0);
     let shadow = Color::new(0, 0, 0, (255.0 * tuning().obstacle_shadow_opacity) as u8);
     c.blit(sheet, src, dest, origin, 0.0, shadow);
 }

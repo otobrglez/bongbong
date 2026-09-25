@@ -1,0 +1,58 @@
+# maps/test/online/hunt-duel.toml - the fixture the online co-op tests end a
+# round with (src/net/rig.rs, server/tests/round.rs). It sits in a
+# subdirectory on purpose: `just probe-fixtures` globs maps/test/*.toml, and
+# this map is not an AI fixture - it has no enemies and nothing to steer.
+#
+# A Hunt with nobody on the field but the seats and the enemy frog at the head
+# of a one-cell iron shaft four cells up player one's barrel. An evasive hop
+# clears a wall as long as it lands somewhere it fits, so the shaft is walled
+# three rows deep and the only landing left is further down the lane, toward
+# the tank the frog is hopping away from: it stays in the line of fire and a
+# pulled trigger wins the round in well under a second, whatever seed it runs
+# on. That is what makes the end screen and what follows it testable in a few
+# seconds of wall clock.
+#
+# Hand-authored: re-saving from the map editor would drop these comments.
+
+version = 1
+size = [14, 8]
+tanks = 0
+mission.kind = "hunt"
+spawn.kind = "band"
+
+cells."7,5" = { kind = "start" }
+cells."5,5" = { kind = "start2" }
+cells."7,1" = { kind = "enemy_frog" }
+cells."1,1" = { kind = "wall", material = "iron" }
+cells."2,1" = { kind = "wall", material = "iron" }
+cells."3,1" = { kind = "wall", material = "iron" }
+cells."4,1" = { kind = "wall", material = "iron" }
+cells."5,1" = { kind = "wall", material = "iron" }
+cells."6,1" = { kind = "wall", material = "iron" }
+cells."8,1" = { kind = "wall", material = "iron" }
+cells."9,1" = { kind = "wall", material = "iron" }
+cells."10,1" = { kind = "wall", material = "iron" }
+cells."11,1" = { kind = "wall", material = "iron" }
+cells."12,1" = { kind = "wall", material = "iron" }
+cells."1,2" = { kind = "wall", material = "iron" }
+cells."2,2" = { kind = "wall", material = "iron" }
+cells."3,2" = { kind = "wall", material = "iron" }
+cells."4,2" = { kind = "wall", material = "iron" }
+cells."5,2" = { kind = "wall", material = "iron" }
+cells."6,2" = { kind = "wall", material = "iron" }
+cells."8,2" = { kind = "wall", material = "iron" }
+cells."9,2" = { kind = "wall", material = "iron" }
+cells."10,2" = { kind = "wall", material = "iron" }
+cells."11,2" = { kind = "wall", material = "iron" }
+cells."12,2" = { kind = "wall", material = "iron" }
+cells."1,3" = { kind = "wall", material = "iron" }
+cells."2,3" = { kind = "wall", material = "iron" }
+cells."3,3" = { kind = "wall", material = "iron" }
+cells."4,3" = { kind = "wall", material = "iron" }
+cells."5,3" = { kind = "wall", material = "iron" }
+cells."6,3" = { kind = "wall", material = "iron" }
+cells."8,3" = { kind = "wall", material = "iron" }
+cells."9,3" = { kind = "wall", material = "iron" }
+cells."10,3" = { kind = "wall", material = "iron" }
+cells."11,3" = { kind = "wall", material = "iron" }
+cells."12,3" = { kind = "wall", material = "iron" }

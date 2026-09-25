@@ -52,7 +52,7 @@ pub(crate) enum Unit {
 #[derive(Clone, Copy, Debug, Serialize)]
 pub(crate) struct Sighting {
     /// Plain fields rather than a `Position`: this type is `Serialize` for
-    /// the command report, and `Position` is `Vector2`, which is not - the
+    /// the command report, and `Position` (`Vec2`) is not - the
     /// same reason `DebugSnapshot` carries x/y.
     pub x: f32,
     pub y: f32,

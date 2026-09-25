@@ -21,8 +21,8 @@
 use crate::Position;
 use crate::blast::hash_unit;
 use crate::canvas::Canvas;
+use crate::math::Color;
 use crate::tuning::tuning;
-use sola_raylib::prelude::Color;
 use std::f32::consts::{PI, TAU};
 
 /// Fire from white hot to embers - the palette's own steps
@@ -595,6 +595,7 @@ mod tests {
     /// and target/mushroom_frames/*.png (four clouds at 30 fps, for a GIF).
     #[test]
     #[ignore]
+    #[cfg(feature = "render")] // write_png is raylib's PNG encoder
     fn preview() {
         let ground = Color::new(0x5e, 0x80, 0x3c, 255);
         let hull = Color::new(0x44, 0x44, 0x44, 255);

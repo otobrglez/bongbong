@@ -4,9 +4,9 @@
 //! `Game`'s state afterward and draws it; this module never reaches back.
 //! `Game::init`/`Game::update` take plain numbers and an `Input` snapshot,
 //! so a round can be driven headlessly (see `src/bin/probe.rs` and the
-//! tests at the bottom of this file). `sola_raylib::core::math::Vector2`
-//! (`Position`) is the one shared type, imported by name so nothing here
-//! names a window or drawing type.
+//! tests at the bottom of this file). `crate::math::Vec2` (`Position`) is
+//! the one shared vector type, so nothing here names a window or drawing
+//! type.
 //!
 //! Layout: this file owns `Game` (state, `init`, the phased `update`) and
 //! the small helpers those phases share; `weapons` fires shots and ticks
@@ -29,12 +29,13 @@ mod hits;
 mod missiles;
 mod props;
 pub use props::{FlyingDrum, GroundFire};
+pub mod replica;
 #[cfg(test)]
 mod flame_tests;
 #[cfg(test)]
 mod props_tests;
 #[cfg(test)]
-mod two_player_tests;
+mod seat_tests;
 mod waves;
 mod weapons;
 
@@ -51,7 +52,7 @@ use hecs::Entity;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 use serde::{Deserialize, Serialize};
-use sola_raylib::core::math::Vector2;
+use crate::math::Vec2;
 
 use crate::ai::{Ai, AiSnapshot, Intent, Mover, Role, WallAhead};
 use crate::battlefield;
@@ -84,6 +85,7 @@ use crate::{
     SHOCK_MAX,
     RUBBLE_ROW_TANK,
     SCORCH_MAX,
+    MAX_SEATS,
     PATHFIND_CELL_SIZE,
     PHYSICS_FIXED_DT,
     PHYSICS_MAX_CATCHUP_SECONDS,
@@ -99,24 +101,22 @@ use engage::{EngageCtx, EngageReport, EngageRing, EngageStatus, EngageTank};
 use hits::{ShellTarget, Terrain};
 use weapons::{dispatch_fire, dispatch_fire_from, laser_damage_range, tick_queued_shots, PendingLaserShot, Projectile, laser_beam_half_width};
 
-/// One frame's player input, gathered by the caller (`main.rs` reading a
-/// live `RaylibHandle`, or a scripted probe) - the entire interface
-/// between the simulation and wherever input comes from. `player_intent`
-/// reuses the AI's `Intent` so the player and every enemy drive through the
-/// identical `drive_tank`/fire path; the four flags below are meta/UI
-/// toggles `Intent` has no use for.
+/// One step's player input, gathered by the caller (`app.rs` reading a
+/// live `RaylibHandle`, the dev server, a scripted probe) - the entire
+/// interface between the simulation and wherever input comes from. A seat's `Intent` is the AI's, so the
+/// players and every enemy drive through the identical `drive_tank`/fire
+/// path; the four flags below are meta/UI toggles `Intent` has no use for.
 #[derive(Default, Clone, Copy)]
 pub struct Input {
-    /// Player 1's raw movement/fire command. `fire` is "is the fire key
-    /// held this frame", not edge-detected: `update` decides whether that
-    /// fires (a laser or minigun is full-auto while held; shells and plasma
-    /// need a fresh press), since that depends on the player's current
-    /// weapon.
-    pub player_intent: Intent,
-    /// Player 2's command, the same shape. Read only in a two-player round
-    /// (`Game::players`); the default is "no input", so single-player
-    /// callers never fill it.
-    pub player2_intent: Intent,
+    /// One raw movement/fire command per seat: seat 0 is player 1, seat 1
+    /// player 2, and so on up to `MAX_SEATS`. The round reads the first
+    /// `Game::players.count()` seats and nothing else, so a single-player
+    /// caller leaves seat 1 at its default (no input) and a seat nobody
+    /// drives stands still. `fire` is "is the fire key held this step",
+    /// not edge-detected: `update` decides whether that fires (a laser or
+    /// minigun is full-auto while held; shells and plasma need a fresh
+    /// press), since that depends on the player's current weapon.
+    pub seats: [Intent; MAX_SEATS],
     pub pause_pressed: bool,
     pub restart_pressed: bool,
     pub toggle_shadows_pressed: bool,
@@ -126,39 +126,95 @@ pub struct Input {
     pub cycle_overlays_pressed: bool,
 }
 
-/// How many humans drive a tank this round - a session setting, chosen
-/// from the HUD's players dialog or `--players`, kept across restarts
-/// like `Game::player_row_override`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum PlayerCount {
-    #[default]
-    One,
-    Two,
+impl Input {
+    /// Seat 0 driven, every other seat idle, no toggles.
+    pub fn single(intent: Intent) -> Input {
+        let mut input = Input::default();
+        input.seats[0] = intent;
+        input
+    }
+
+    /// Seats 0 and 1 driven (a two-player round), no toggles.
+    pub fn two(player1: Intent, player2: Intent) -> Input {
+        let mut input = Input::single(player1);
+        input.seats[1] = player2;
+        input
+    }
+
+    /// Seat `index`'s command; a seat past `MAX_SEATS` reads as no input.
+    pub fn seat(&self, index: usize) -> Intent {
+        self.seats.get(index).copied().unwrap_or_default()
+    }
+
+    /// This input for the second and later steps of one rendered frame:
+    /// what is held stays held (directions, fire), the one-shot presses
+    /// (pause, restart, shadows, overlays) are spent by the first step, so
+    /// a frame that runs two steps toggles pause once, not twice.
+    pub fn held_only(mut self) -> Input {
+        self.pause_pressed = false;
+        self.restart_pressed = false;
+        self.toggle_shadows_pressed = false;
+        self.cycle_overlays_pressed = false;
+        self
+    }
+
+    /// This input with `pending`'s presses folded in: every seat's `fire`
+    /// and every one-shot toggle is either input's. The caller keeps the
+    /// input of a rendered frame that ran no step and folds it into the
+    /// next frame's, so a tap that lands between two steps still reaches
+    /// the simulation as a held fire key or a pressed toggle; directions
+    /// are `self`'s alone - a held key is read fresh every frame.
+    pub fn or_presses(mut self, pending: Input) -> Input {
+        for (seat, carried) in self.seats.iter_mut().zip(pending.seats) {
+            seat.fire |= carried.fire;
+        }
+        self.pause_pressed |= pending.pause_pressed;
+        self.restart_pressed |= pending.restart_pressed;
+        self.toggle_shadows_pressed |= pending.toggle_shadows_pressed;
+        self.cycle_overlays_pressed |= pending.cycle_overlays_pressed;
+        self
+    }
 }
+
+/// How many seats this round holds, 1 to `MAX_SEATS` - a session setting,
+/// chosen from the HUD's players dialog, `--players`, or the size of a
+/// room's roster, and kept across restarts like `Game::player_row_override`.
+/// A count, not a list of variants: the couch offers one or two, a room up
+/// to eight, and everything downstream reads `count()`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct PlayerCount(u8);
 
 impl PlayerCount {
+    /// A single-player round - the default.
+    pub const ONE: PlayerCount = PlayerCount(1);
+    /// The two-player couch round (docs/two-players.md).
+    pub const TWO: PlayerCount = PlayerCount(2);
+    /// Every seat the protocol carries.
+    pub const MAX: PlayerCount = PlayerCount(MAX_SEATS as u8);
+
+    /// How many seats hold a tank this round.
     pub fn count(self) -> usize {
-        match self {
-            PlayerCount::One => 1,
-            PlayerCount::Two => 2,
-        }
+        self.0 as usize
     }
 
+    /// `n` seats, or `None` outside `1..=MAX_SEATS`.
     pub fn from_count(n: usize) -> Option<PlayerCount> {
-        match n {
-            1 => Some(PlayerCount::One),
-            2 => Some(PlayerCount::Two),
-            _ => None,
-        }
+        (1..=MAX_SEATS).contains(&n).then_some(PlayerCount(n as u8))
     }
 }
 
-/// Player 1's owner slot (`Tank::owner_slot`). Player 2, when there is
-/// one, takes 1; the enemies count up from `Game::first_enemy_slot`.
+impl Default for PlayerCount {
+    fn default() -> Self {
+        PlayerCount::ONE
+    }
+}
+
+/// Player 1's owner slot (`Tank::owner_slot`). Each further seat takes the
+/// next number; the enemies count up from `Game::first_enemy_slot`.
 pub(crate) const PLAYER_OWNER_SLOT: usize = 0;
 
 /// How the current round is going.
-#[derive(Clone, Copy, PartialEq, Default, Debug, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Outcome {
     #[default]
@@ -201,6 +257,12 @@ pub enum Event {
     PickupRespawned { kind: PickupKind, x: f32, y: f32 },
     /// A projectile bounced off `slot`'s rainbow shield at (`x`, `y`).
     Deflected { slot: usize, x: f32, y: f32 },
+    /// `slot`'s shot bounced off terrain at (`x`, `y`) - a shell off iron
+    /// (`Projectile::try_ricochet`) or a shell or bullet off a barrel
+    /// (`Material::deflect_chance`) - and flies on along `heading`
+    /// (degrees, 0 = up). Recorded so a client that sees only positions
+    /// knows why the shot turned.
+    Ricochet { slot: usize, x: f32, y: f32, heading: f32 },
     /// `slot`'s rainbow shield ran out of charge and shattered at
     /// (`x`, `y`) - the frame it crossed zero, emitted once.
     ShieldBroken { slot: usize, x: f32, y: f32 },
@@ -277,8 +339,8 @@ pub enum Event {
     /// The shared last-known player position appeared or expired; `x`/`y`
     /// is the position (the last known one when `on` is false).
     Alert { on: bool, x: f32, y: f32 },
-    /// Two-player rounds: the enemy in `slot` switched to fighting
-    /// `player` (`Ai::target_player`).
+    /// Rounds with more than one seat: the enemy in `slot` switched to
+    /// fighting `player` (`Ai::target_player`).
     Retarget { slot: usize, player: u8 },
 }
 
@@ -429,14 +491,12 @@ pub struct Game {
     /// `Obstacle`s, `Pickup`s and in-flight `Shell`/`Bullet`/`Plasma`
     /// projectiles. `pub(crate)` so `render` and the map linter can read it.
     pub(crate) world: hecs::World,
-    /// Player 1's entity. `None` only before the first `init`; every
-    /// method treats it as `Some` once a round is running.
-    pub(crate) player: Option<Entity>,
-    /// Player 2's entity in a two-player round (`players`), `None` in a
-    /// single-player one. Spawned into the same archetype as player 1 - a
-    /// `Tank` and nothing else - so every query that tells enemies apart by
-    /// their `Ai` sees both players the same way.
-    pub(crate) player2: Option<Entity>,
+    /// One entity per seat, indexed by owner slot: seat 0 is player 1 and
+    /// is `None` only before the first `init`, seats 1.. hold a tank only
+    /// while `players` reaches them. Every seat is spawned into the same
+    /// archetype - a `Tank` and nothing else - so every query that tells
+    /// enemies apart by their `Ai` sees all of them the same way.
+    pub(crate) seats: [Option<Entity>; MAX_SEATS],
     /// The player's frog - `None` in a mission without one (`Destroy`),
     /// and before the first `init`.
     pub(crate) frog: Option<Entity>,
@@ -492,9 +552,9 @@ pub struct Game {
     alert_position: Option<Position>,
     alert_timer: f32,
     /// Engagement-slot assignment with per-tank memory - see `engage`. One
-    /// ring per player, indexed like `players`; the second is only ever
-    /// filled in a two-player round.
-    engage: [EngageRing; 2],
+    /// ring per seat, indexed like `seats`; a ring past the seats this
+    /// round holds stays empty.
+    engage: [EngageRing; MAX_SEATS],
     /// The second ring, around the player's frog: what hunters with a live
     /// quarry compete on (`enemy_phase`).
     engage_frog: EngageRing,
@@ -589,8 +649,8 @@ pub struct Game {
     pub player_row_override: Option<i32>,
     /// `--tank2`: player 2's chassis, over the map's `tank2` key.
     pub player2_row_override: Option<i32>,
-    /// One or two human players. Set before `init` and kept across
-    /// restarts; `init` spawns player 2 only under `Two`.
+    /// How many seats this round holds. Set before `init` and kept across
+    /// restarts; `init` spawns exactly `players.count()` tanks.
     pub players: PlayerCount,
     /// `--seed`: pins the round seed, so every restart replays the
     /// identical round - the repro loop for a round the probe flagged.
@@ -608,11 +668,13 @@ pub struct Game {
     /// This round's pickup slots from the map's `Pickup` cells; `update`
     /// tops the field back up from these same slots.
     map_pickup_slots: Vec<(Position, PickupKind)>,
-    /// Last frame's raw fire-key state per player, for edge-detecting a
-    /// fresh press.
-    player_fire_held_last_frame: [bool; 2],
+    /// Last step's raw fire-key state per seat, for edge-detecting a fresh
+    /// press.
+    player_fire_held_last_frame: [bool; MAX_SEATS],
     /// `update` calls this round (paused frames included); reset by `init`.
     pub(crate) frame: u64,
+    /// Projectiles spawned this round (`take_shot_id`); reset by `init`.
+    next_shot_id: u32,
     /// What happened during the most recent `update` - see `Event`.
     pub(crate) events: Vec<Event>,
     /// What the last enemy phase's engagement-slot assignment decided (every
@@ -766,7 +828,7 @@ impl Game {
         self.engage_frog.clear();
         self.commander.clear();
         self.pickup_respawn_timer = tuning().pickup_respawn_seconds;
-        self.player_fire_held_last_frame = [false; 2];
+        self.player_fire_held_last_frame = [false; MAX_SEATS];
         self.shocks.clear();
         self.muzzle_flashes.clear();
         self.impact_flashes.clear();
@@ -787,10 +849,11 @@ impl Game {
         self.heat.clear();
         self.flame_contacts.clear();
         self.frame = 0;
+        self.next_shot_id = 0;
         self.last_engage.clear();
         self.debug_kills.clear();
         self.debug_detonations.clear();
-        self.player2 = None;
+        self.seats = [None; MAX_SEATS];
         self.frog = None;
         self.enemy_frog = None;
         self.mission = self.level_overrides.resolve_mission(&self.map.mission);
@@ -857,7 +920,7 @@ impl Game {
         // other so a crowded round doesn't start with tanks ramming.
         let clear = tank.size() * 2.0;
         let enemy_clear = tank.size() * 1.5;
-        self.player = Some(self.world.spawn((tank,)));
+        self.seats[PLAYER_OWNER_SLOT] = Some(self.world.spawn((tank,)));
 
         // --- Map terrain (walls/road/frog/pickup slots) ---
         // Before enemies, so their clearance check below sees every wall.
@@ -919,33 +982,66 @@ impl Game {
         // audits against below.
         let spawn_grid = self.nav_grid(width, height);
 
-        // --- Player 2 (two-player rounds only) ---
-        // Every draw here sits inside the `Two` branch, after the terrain
-        // and before the enemies, so a single-player round's RNG stream is
-        // exactly what it was without this block. Same rolls as player 1,
-        // in the same order.
-        let center2 = if self.players == PlayerCount::Two {
-            let row2 = resolve_player_row(self.player2_row_override, -1, self.map.tank2, || {
-                rng.random_range(0..TANK_VARIANTS)
-            });
-            // The map's `start2` cell (nudged off a solid tile); otherwise
-            // the nearest usable nav cell to player 1 that keeps a clear
-            // tank's width from it - never player 1's own cell, never a wall.
-            let position = self
-                .map
-                .start2_cell()
+        // --- The other seats ---
+        // Every draw here sits inside the loop, after the terrain and
+        // before the enemies, so a single-player round's RNG stream is
+        // exactly what it was without this block and a two-player one's is
+        // exactly what one pass of it drew. Same rolls as player 1, in the
+        // same order, one seat at a time.
+        let mut others: Vec<Position> = Vec::new();
+        for seat in 1..self.players.count() {
+            // `--tank2` and the map's `tank2` pin seat 1; the seats past it
+            // roll their chassis, which a replica's `init` re-rolls the
+            // same way off the same seed.
+            let (pin, map_row) = if seat == 1 { (self.player2_row_override, self.map.tank2) } else { (None, None) };
+            let row = resolve_player_row(pin, -1, map_row, || rng.random_range(0..TANK_VARIANTS));
+            // Seat 1 takes the map's `start2` cell (nudged off a solid
+            // tile); every seat without an authored start - and seat 1 with
+            // a `start2` inside player 1's clearance - takes the nearest
+            // usable nav cell to player 1 that keeps a clear tank's width
+            // from every seat already down, moved ashore if that lands it
+            // in a lake.
+            let placed: Vec<Position> = std::iter::once(center).chain(others.iter().copied()).collect();
+            let position = (seat == 1)
+                .then(|| self.map.start2_cell())
+                .flatten()
                 .map(|(col, row)| {
                     let (col, row) = self.map.nearest_free_cell(col, row);
                     map::cell_to_world(col, row)
                 })
-                .filter(|p| p.distance_to(center) >= clear)
-                .unwrap_or_else(|| spawn_grid.nearest_open(center, &[center], clear));
+                .filter(|p| placed.iter().all(|&q| p.distance_to(q) >= clear))
+                .unwrap_or_else(|| {
+                    // Seat 1 keeps the plain outward walk it has always
+                    // had, wall or no wall, because a seeded two-player
+                    // replay is that walk's answer. The seats after it
+                    // have no authored start to fall back on and no replay
+                    // to keep, so they take the walk that only crosses
+                    // ground a tank can drive over - `nearest_open`'s
+                    // frontier goes through walls, which on a real map can
+                    // drop a seat in a sealed pocket it could never leave.
+                    let open = if seat == 1 {
+                        spawn_grid.nearest_open(center, &placed, clear)
+                    } else {
+                        let (cols, rows, _) = spawn_grid.dims();
+                        let free = |p: Position| placed.iter().all(|&q| p.distance_to(q) >= clear);
+                        spawn_grid
+                            .nearest_open_reachable(center, cols + rows, free)
+                            .unwrap_or_else(|| spawn_grid.nearest_open(center, &placed, clear))
+                    };
+                    // The nav grid blocks deep water outright, so this only
+                    // ever fires for a cell the grid still calls open while
+                    // the lake reaches into it - and leaves the grid's own
+                    // answer alone when it does not.
+                    let cell = map::world_to_cell(open);
+                    let dry = dry_cell_near(&self.map, &self.water, cell);
+                    if dry == cell { open } else { map::cell_to_world(dry.0, dry.1) }
+                });
             let mut tank = Tank {
-                row: row2,
-                shell_variant: TANK_SHELL_VARIANT_BY_ROW[row2 as usize],
+                row,
+                shell_variant: TANK_SHELL_VARIANT_BY_ROW[row as usize],
                 damage_variant: rng.random_range(0..DAMAGE_VARIANTS),
                 position,
-                owner: Owner::Player(1),
+                owner: Owner::Player(seat as u8),
                 ..Tank::default()
             };
             if rng.random_range(0.0..1.0) < tuning().spawn_shield_chance {
@@ -953,12 +1049,10 @@ impl Game {
             }
             roll_track_distortion(&mut tank, &mut rng);
             tank.body = Some(self.physics.spawn_tank(tank.position, tank.move_half_extents(false), tank.mass()));
-            self.player2 = Some(self.world.spawn((tank,)));
-            Some(position)
-        } else {
-            None
-        };
-        let clear_of_player2 = |pos: Position| center2.is_none_or(|c| pos.distance_to(c) >= clear);
+            self.seats[seat] = Some(self.world.spawn((tank,)));
+            others.push(position);
+        }
+        let clear_of_others = |pos: Position| others.iter().all(|&c| pos.distance_to(c) >= clear);
 
         let mut enemy_positions: Vec<Position> = Vec::with_capacity(enemy_count);
         while enemy_positions.len() < enemy_count {
@@ -973,7 +1067,7 @@ impl Game {
                     clear,
                     &spawn_grid,
                     &obstacle_positions,
-                ) && clear_of_player2(pos)
+                ) && clear_of_others(pos)
             };
             let pos = battlefield::sample_clear_position(&mut rng, width, height, margin_min, |pos| {
                 legal(pos) && enemy_positions.iter().all(|&p| pos.distance_to(p) >= enemy_clear)
@@ -989,7 +1083,7 @@ impl Game {
                 );
                 let mut avoid = enemy_positions.clone();
                 avoid.push(center);
-                avoid.extend(center2);
+                avoid.extend(others.iter().copied());
                 spawn_grid.nearest_open(sample, &avoid, enemy_clear)
             });
             let erow = TANK_SPRITE_ORDER[enemy_positions.len() % TANK_SPRITE_ORDER.len()];
@@ -1026,7 +1120,7 @@ impl Game {
             battlefield::sample_clear_position(&mut rng, width, height, margin_min, |pos| {
                 let dist = pos.distance_to(center);
                 (tuning().frog_spawn_min_dist..=tuning().frog_spawn_max_dist).contains(&dist)
-                    && clear_of_player2(pos)
+                    && clear_of_others(pos)
                     && enemy_positions.iter().all(|&p| pos.distance_to(p) >= enemy_clear)
                     && obstacle_positions.iter().all(|&p| pos.distance_to(p) >= frog_clear)
             })
@@ -1036,7 +1130,7 @@ impl Game {
                 let sample = Position::new(width * 0.5, height * 0.5);
                 let mut avoid = enemy_positions.clone();
                 avoid.push(center);
-                avoid.extend(center2);
+                avoid.extend(others.iter().copied());
                 spawn_grid.nearest_open(sample, &avoid, enemy_clear)
             })
         });
@@ -1059,7 +1153,7 @@ impl Game {
                     border_dist <= margin_max
                         && pos.distance_to(frog_pos) >= min_dist
                         && pos.distance_to(center) >= clear
-                        && clear_of_player2(pos)
+                        && clear_of_others(pos)
                         && spawn_grid.usable(pos)
                         && enemy_positions.iter().all(|&p| pos.distance_to(p) >= enemy_clear)
                         && obstacle_positions.iter().all(|&p| pos.distance_to(p) >= frog_clear)
@@ -1071,7 +1165,7 @@ impl Game {
                     );
                     let mut avoid = enemy_positions.clone();
                     avoid.push(center);
-                    avoid.extend(center2);
+                    avoid.extend(others.iter().copied());
                     avoid.push(frog_pos);
                     spawn_grid.nearest_open(sample, &avoid, enemy_clear)
                 })
@@ -1118,7 +1212,7 @@ impl Game {
 
     /// Put a fresh, full-health frog of `side` at `pos` with its static
     /// collider, returning its entity.
-    fn spawn_frog(&mut self, side: Side, pos: Position, variant: i32) -> Entity {
+    pub(crate) fn spawn_frog(&mut self, side: Side, pos: Position, variant: i32) -> Entity {
         let body = self
             .physics
             .spawn_static(pos, Position::new(FROG_COLLIDER_HALF_EXTENT.0, FROG_COLLIDER_HALF_EXTENT.1));
@@ -1169,17 +1263,11 @@ impl Game {
         // moves/fires. Effects still animate so the screen isn't dead.
         if self.intro_timer > 0.0 {
             self.tick_effects(dt);
-            let skip = input.player_intent.move_dir.is_some()
-                || input.player_intent.fire
-                || input.player2_intent.move_dir.is_some()
-                || input.player2_intent.fire;
-            self.intro_timer = if skip { 0.0 } else { (self.intro_timer - dt).max(0.0) };
-            if self.intro_timer <= 0.0 {
-                self.intro_fade = INTRO_FADE_SECONDS;
-            }
+            let skip = input.seats[..self.players.count()].iter().any(|seat| seat.move_dir.is_some() || seat.fire);
+            self.tick_intro_banner(dt, skip);
             return;
         }
-        self.intro_fade = (self.intro_fade - dt).max(0.0);
+        self.tick_intro_banner(dt, false);
 
         self.tick_effects(dt);
         let mut rng = self.rng.take().expect("rng seeded in init");
@@ -1221,7 +1309,7 @@ impl Game {
             self.tick_fires(&mut f, true);
             self.tick_fuses(&mut f);
             self.tick_launches(&mut f);
-            self.tick_grass(&mut f);
+            self.tick_grass(f.dt);
             self.drain_shield_breaks(&mut f);
             self.explosions(&mut f, true);
             self.despawn_wrecks(&mut f);
@@ -1243,7 +1331,7 @@ impl Game {
             self.tick_fires(&mut f, false);
             self.tick_fuses(&mut f);
             self.tick_launches(&mut f);
-            self.tick_grass(&mut f);
+            self.tick_grass(f.dt);
             self.explosions(&mut f, false);
             self.cleanup_done();
             self.restart_timer -= dt;
@@ -1355,7 +1443,219 @@ impl Game {
             frog.tick(dt);
             self.physics.set_position(frog.body, frog.position);
         }
+        self.fade_tracks(dt);
+    }
+
+    /// Age every tread mark and drop the ones that have faded out (a
+    /// wreck's are scorched and never do).
+    fn fade_tracks(&mut self, dt: f32) {
         self.tracks.retain_mut(|t| !t.tick(dt));
+    }
+
+    /// The mission banner's own timer: count the freeze down - a seat
+    /// moving or firing ends it outright - and hand the fade-out its
+    /// seconds the moment it runs out; once the banner is gone, fade it.
+    /// Display state either way, which is why a client replica runs it
+    /// between the snapshots that pin `intro_timer`
+    /// (`tick_presentation`, docs/online-coop-prd.md section 4.5).
+    fn tick_intro_banner(&mut self, dt: f32, skip: bool) {
+        if self.intro_timer > 0.0 {
+            self.intro_timer = if skip { 0.0 } else { (self.intro_timer - dt).max(0.0) };
+            if self.intro_timer <= 0.0 {
+                self.intro_fade = INTRO_FADE_SECONDS;
+            }
+        } else {
+            self.intro_fade = (self.intro_fade - dt).max(0.0);
+        }
+    }
+
+    /// Ease every hull's drawn angles, health ring and minigun barrel
+    /// toward the state it has been put in, and press the tread marks the
+    /// movement since the last presentation tick left behind.
+    ///
+    /// A round drives these from `drive_tank_with`, `rollin_phase` and
+    /// `tick_timers`, each on the tanks it moves; this is the replica's
+    /// walk, over every hull the snapshots place, and `Tank::track_from`
+    /// is the displacement it lays marks from. The ford rule is
+    /// `drive_tank_with`'s: water takes no mark and wets the ones laid on
+    /// the far bank.
+    fn ease_hulls(&mut self, dt: f32) {
+        let wet_seconds = tuning().water_wet_track_seconds;
+        for tank in self.world.query::<&mut Tank>().iter() {
+            tank.ease_visual_rotation(dt);
+            tank.ease_turret_visual_rotation(dt);
+            tank.ease_ring_position(dt);
+            tank.tick_minigun_spin(dt);
+            let depth = self.water.depth_at(tank.position);
+            if depth == crate::ground::Depth::Dry {
+                tank.wet_timer = (tank.wet_timer - dt).max(0.0);
+            } else {
+                tank.wet_timer = wet_seconds;
+            }
+            if let Some(before) = tank.track_from.replace(tank.position) {
+                lay_tracks(&mut self.tracks, tank, before, depth);
+            }
+        }
+    }
+
+    /// Flicker every burning tile, without the charring that kills it -
+    /// that death is the server's and travels as `ObstacleDestroyed`.
+    fn tick_burn_frames(&mut self, dt: f32) {
+        for obstacle in self.world.query::<&mut Obstacle>().iter() {
+            obstacle.tick_burn_frame(dt);
+        }
+    }
+
+    /// Stage a decal a replica made for itself, held to the same
+    /// `DECAL_MAX` ceiling `finish_frame` holds a round to.
+    pub(crate) fn push_decal(&mut self, decal: Decal) {
+        self.decals.push(decal);
+        if self.decals.len() > DECAL_MAX {
+            let excess = self.decals.len() - DECAL_MAX;
+            self.decals.drain(..excess);
+        }
+    }
+
+    /// The cosmetic half of a frame, for a `Game` nothing ever `update`s:
+    /// a client replica (docs/online-coop-prd.md section 4.5) applies the
+    /// server's snapshots and calls this on every rendered frame between
+    /// them, so the picture keeps moving at the client's own rate while
+    /// the authority arrives at 20 Hz.
+    ///
+    /// Every step is one the round runs too, from inside the phase that
+    /// owns it, so **a local round never calls this**: `update` does the
+    /// same work in its own order and local play is byte for byte what it
+    /// was. Nothing here draws RNG, steps physics or decides anything the
+    /// server has already decided - hulls, health, tiles, fires, the
+    /// round's scalars and every cause all arrive in a snapshot.
+    ///
+    /// The round clock is the one thing derived rather than sent: a room
+    /// server's round runs without the mission banner, so its `time` is
+    /// exactly `frame * PHYSICS_FIXED_DT`, which `net::apply` pins at
+    /// every snapshot; this carries it forward in between, and holds it
+    /// while a banner freezes the round the way `update` does.
+    /// One tick of *only* one seat's locomotion, for a client's
+    /// prediction sandbox (docs/online-coop-prd.md §4.12).
+    ///
+    /// This is deliberately not `update`: nothing here fires, ages,
+    /// damages, spawns or draws a single number of RNG. It is the hull
+    /// and the solver and nothing else, because that is the whole of what
+    /// a client may predict - locomotion is a pure function of intent
+    /// against a static world, which is what makes a replay land on the
+    /// server's answer rather than drift from it.
+    ///
+    /// The caller owns a `Game` built the way `net::apply::welcome`
+    /// builds a replica - same map, same seed - so the walls, the
+    /// obstacles and the deep-water boxes this steps against are the
+    /// server's own, by construction rather than by a second
+    /// implementation that could disagree.
+    pub(crate) fn predict_seat(&mut self, seat: usize, intent: Intent, dt: f32) {
+        let Some(entity) = self.seats.get(seat).copied().flatten() else { return };
+        // Disjoint borrows: `drive_tank` wants the solver and the hull at
+        // once, and they are two fields of the same struct.
+        let Game { world, physics, water, .. } = self;
+        let Ok(mut tank) = world.get::<&mut Tank>(entity) else { return };
+        if tank.body.is_none() {
+            return;
+        }
+        let footing = Footing::at(water, tank.position);
+        drive_tank(physics, &mut tank, intent, dt, footing);
+        physics.step();
+        // The solver moved the body; the tank's own position is what
+        // every reader (and the next tick's `Footing`) goes by.
+        if let Some(handle) = tank.body {
+            tank.position = physics.position(handle);
+        }
+    }
+
+    /// Put one seat's hull where an authority says it is, for the reset a
+    /// reconciliation starts from (docs/online-coop-prd.md §4.12).
+    ///
+    /// Position, facing and velocity together: a replay that starts from
+    /// the right place with the wrong momentum diverges within a few
+    /// ticks, because the drive model reads the body's velocity at the
+    /// top of every step.
+    ///
+    /// Only the pose. Everything else about a seat - its buffs, its
+    /// weapon, what it has collected - is the server's and arrives
+    /// through `net::apply`; this is the one thing a client may say
+    /// about its own hull ahead of the server.
+    pub(crate) fn place_seat(&mut self, seat: usize, position: Position, rotation: f32, velocity: Position) {
+        let Some(entity) = self.seats.get(seat).copied().flatten() else { return };
+        let Ok(mut tank) = self.world.get::<&mut Tank>(entity) else { return };
+        tank.position = position;
+        tank.rotation = rotation;
+        if let Some(handle) = tank.body {
+            self.physics.set_position(handle, position);
+            self.physics.set_velocity(handle, velocity);
+        }
+    }
+
+    /// Put a client's unconfirmed shell in the world under `id`, for
+    /// drawing only (`net::predict`).
+    ///
+    /// It is an ordinary `Shell` entity, so every painter and the dev
+    /// server's readers see it without knowing it is provisional - and
+    /// `net::apply` will despawn it on the next snapshot along with
+    /// anything else the server did not list, which is why the caller
+    /// puts it back each frame. It never hits anything: a replica runs no
+    /// hit test, and a hit is the server's word.
+    pub(crate) fn add_provisional_shell(&mut self, shell: crate::shell::Shell) {
+        self.world.spawn((shell,));
+    }
+
+    /// Put one seat under a speed boost, for a test that needs the
+    /// server's side of one.
+    #[cfg(test)]
+    pub(crate) fn give_seat_boost(&mut self, seat: usize) {
+        if let Some(entity) = self.seats.get(seat).copied().flatten()
+            && let Ok(mut tank) = self.world.get::<&mut Tank>(entity)
+        {
+            tank.speed_boost_timer = tuning().speed_boost_duration_seconds;
+        }
+    }
+
+    /// A shell as one seat would fire it right now: from its muzzle, on
+    /// its facing, at the shell speed.
+    ///
+    /// For a client drawing its own shot on the frame of the press
+    /// (`net::predict`). It is `Shell::spawn` and nothing else - nothing
+    /// is queued, no recoil is applied and no RNG is drawn, so a sandbox
+    /// stays the pure drive model it is; the shell it hands back is the
+    /// caller's to carry and to throw away.
+    pub(crate) fn seat_shell(&self, seat: usize) -> Option<crate::shell::Shell> {
+        let entity = self.seats.get(seat).copied().flatten()?;
+        let tank = self.world.get::<&Tank>(entity).ok()?;
+        Some(crate::shell::Shell::spawn(&tank, crate::shell::Owner::Player(seat as u8), 0.0, 0.0))
+    }
+
+    /// One seat's hull as the sandbox has it: where it is, which way it
+    /// faces, and how fast it is going.
+    pub(crate) fn seat_motion(&self, seat: usize) -> Option<(Position, f32, Position)> {
+        let entity = self.seats.get(seat).copied().flatten()?;
+        let tank = self.world.get::<&Tank>(entity).ok()?;
+        let velocity = tank.body.map_or(Position::new(0.0, 0.0), |h| self.physics.velocity(h));
+        Some((tank.position, tank.rotation, velocity))
+    }
+
+    pub fn tick_presentation(&mut self, dt: f32) {
+        self.tick_effects(dt);
+        let frozen = self.intro_timer > 0.0;
+        self.tick_intro_banner(dt, false);
+        if !frozen {
+            self.time += dt;
+        }
+        self.tick_wave_banner(dt);
+        self.ease_hulls(dt);
+        self.fade_tracks(dt);
+        self.tick_grass(dt);
+        self.tick_burn_frames(dt);
+        self.fade_fires(dt);
+        self.fade_wrecks(dt);
+        // A drum that lands blasts where the server says it did, so the
+        // landed ones are dropped here and the `Blast` event carries the
+        // rest.
+        self.age_flying_drums(dt);
     }
 
     /// Each frog on the field (the player's, then the enemy's) bites the
@@ -1421,7 +1721,7 @@ impl Game {
             && let Some((_, tank_pos, dist, _)) = nearest_any
             && dist <= avoid_range
         {
-            let away = Vector2::new(frog_pos.x - tank_pos.x, frog_pos.y - tank_pos.y);
+            let away = Vec2::new(frog_pos.x - tank_pos.x, frog_pos.y - tank_pos.y);
             if let Some(new_pos) = frog_hop_target(&mut f.rng, frog_pos, away, hop_distance, &f.terrain, f.width, f.height) {
                 with_frog_mut(&self.world, frog_entity, |fr| fr.start_hop(new_pos));
             }
@@ -1624,7 +1924,7 @@ impl Game {
                     candidates.push((entity, i, tank.position));
                 }
             };
-            for player in self.players().into_iter().flatten() {
+            for player in self.seats_on_field().into_iter().flatten() {
                 if let Ok(tank) = self.world.get::<&Tank>(player) {
                     visit(player, &tank);
                 }
@@ -1699,20 +1999,23 @@ impl Game {
         }
     }
 
-    /// Drive each player from this frame's input and handle their fire
-    /// keys (docs/two-players.md).
+    /// Drive each seat from its own input and handle its fire key
+    /// (docs/two-players.md): seat 0 first, then every further seat in
+    /// index order, so their RNG draws keep a fixed order.
     fn player_phase(&mut self, input: Input, f: &mut Frame) {
-        let player = self.player.expect("player entity spawned in init");
-        self.drive_player(f, 0, player, input.player_intent);
-        if let Some(player2) = self.player2 {
-            self.drive_player(f, 1, player2, input.player2_intent);
+        // A seat driving back in through a gate is the roll-in's, not the
+        // stick's: it has no body until it arrives.
+        let seats = self.seats_on_field();
+        for index in 0..self.players.count() {
+            let Some(entity) = seats[index] else { continue };
+            self.drive_player(f, index, entity, input.seat(index));
         }
     }
 
-    /// One player's tank for one frame: drive it, tick its queued shots and
-    /// fire on its own key. A wreck is left alone - in a two-player round
-    /// a dead player's hulk outlives the round, and driving it would keep
-    /// shoving a corpse around.
+    /// One seat's tank for one frame: drive it, tick its queued shots and
+    /// fire on its own key. A wreck is left alone - a dead player's hulk
+    /// outlives the round while a team-mate fights on, and driving it
+    /// would keep shoving a corpse around.
     fn drive_player(&mut self, f: &mut Frame, index: usize, entity: Entity, intent: Intent) {
         let owner = Owner::Player(index as u8);
         let mut q = self.world.query_one::<&mut Tank>(entity);
@@ -1752,12 +2055,12 @@ impl Game {
 
     /// Every enemy perceives (motion snapshot, nav grid, shared alert,
     /// engagement slot, pickups, line of sight), thinks, drives and fires.
-    /// With two players each enemy first picks which one it is fighting
-    /// (`Ai::target_player`): the nearer live, visible one, switching only
-    /// past `enemy_target_switch_margin_px` so a pair at equal range does
-    /// not flip the pack every frame. Everything downstream - the ring it
-    /// competes on, its line of sight, what `think` is handed as "the
-    /// player" - keys off that choice.
+    /// With more than one seat each enemy first picks which player it is
+    /// fighting (`Ai::target_player`): the nearest live, visible one,
+    /// switching only past `enemy_target_switch_margin_px` so two at equal
+    /// range do not flip the pack every frame. Everything downstream - the
+    /// ring it competes on, its line of sight, what `think` is handed as
+    /// "the player" - keys off that choice.
     fn enemy_phase(&mut self, f: &mut Frame, grid: &Grid) {
         let (movers, enemy_indices) = self.motion_snapshot();
         // Every player as the enemies see it this frame; index = player.
@@ -1766,43 +2069,58 @@ impl Game {
             pos: Position,
             wreck: bool,
             concealed: bool,
+            /// Driving back in through a gate, so off the field entirely.
+            entering: bool,
         }
+        // Built from `players()`, not `seats_on_field()`: the index is the
+        // seat number that `Ai::target_player`, the engagement rings and
+        // `movers[players.len()..]` below all count on.
+        let entering = |entity: Entity| self.world.get::<&RollIn>(entity).is_ok();
         let players: Vec<PlayerView> = self
             .players()
             .into_iter()
             .flatten()
             .map(|entity| {
                 let (pos, wreck) = with_tank(&self.world, entity, |t| (t.position, t.is_wreck()));
-                PlayerView { entity, pos, wreck, concealed: f.terrain.conceals(pos) }
+                PlayerView { entity, pos, wreck, concealed: f.terrain.conceals(pos), entering: entering(entity) }
             })
             .collect();
 
-        // Retarget pass, two-player rounds only (a single-player round
-        // never runs it, so its stream is untouched). A wreck is never a
-        // target - every enemy would otherwise stand over a hulk while the
-        // other player fought on - and a concealed player is one only for
-        // a tank they just shot, the same exemption the attack gates use.
+        // Retarget pass, from two seats up (a single-player round never
+        // runs it, so its stream is untouched). A wreck is never a target
+        // - every enemy would otherwise stand over a hulk while the rest
+        // of the team fought on - and a concealed player is one only for a
+        // tank they just shot, the same exemption the attack gates use.
+        // The candidate is the nearest eligible seat, ties going to the
+        // lower index, and the switch needs the margin only while the
+        // current target is still eligible.
         if players.len() >= 2 {
             let margin = tuning().enemy_target_switch_margin_px;
             for (tank, ai) in self.world.query::<(&Tank, &mut Ai)>().iter() {
-                let eligible = |p: &PlayerView| !p.wreck && (!p.concealed || ai.is_hit_alerted());
-                let current = ai.target_player() as usize;
-                let other = 1 - current;
-                let (pc, po) = (&players[current], &players[other]);
-                let switch = if !eligible(pc) {
-                    eligible(po)
+                let eligible = |p: &PlayerView| !p.wreck && !p.entering && (!p.concealed || ai.is_hit_alerted());
+                let current = (ai.target_player() as usize).min(players.len() - 1);
+                let mut best: Option<(usize, f32)> = None;
+                for (i, p) in players.iter().enumerate().filter(|(_, p)| eligible(p)) {
+                    let d = tank.position.distance_to(p.pos);
+                    if best.is_none_or(|(_, bd)| d < bd) {
+                        best = Some((i, d));
+                    }
+                }
+                let Some((pick, pick_dist)) = best else { continue };
+                let switch = if !eligible(&players[current]) {
+                    true
                 } else {
-                    eligible(po) && tank.position.distance_to(po.pos) + margin < tank.position.distance_to(pc.pos)
+                    pick != current && pick_dist + margin < tank.position.distance_to(players[current].pos)
                 };
-                if switch {
-                    ai.set_target_player(other as u8);
+                if switch && pick != current {
+                    ai.set_target_player(pick as u8);
                     if self.trace_ai {
-                        f.events.push(Event::Retarget { slot: tank.owner_slot(), player: other as u8 });
+                        f.events.push(Event::Retarget { slot: tank.owner_slot(), player: pick as u8 });
                     }
                 }
             }
         }
-        let target_pos_of = |ai: &Ai| players[ai.target_player() as usize].pos;
+        let target_pos_of = |ai: &Ai| players[(ai.target_player() as usize).min(players.len() - 1)].pos;
 
         // Shared aggression: any enemy seeing a player refreshes the
         // group's last-known position (the nearest sighting when both
@@ -1813,7 +2131,7 @@ impl Game {
         let alert_before = self.alert_position.filter(|_| self.alert_timer > 0.0);
         let view_range = tuning().enemy_view_range;
         let mut seen: Option<(f32, Position)> = None;
-        for p in players.iter().filter(|p| !p.concealed && !p.wreck) {
+        for p in players.iter().filter(|p| !p.concealed && !p.wreck && !p.entering) {
             for m in &movers[players.len()..] {
                 let d = m.position.distance_to(p.pos);
                 if d <= view_range && seen.is_none_or(|(best, _)| d < best) {
@@ -1861,9 +2179,9 @@ impl Game {
         // clustering anomaly); steering at the raw alert point is fine for
         // them. Hunters with a live quarry compete on the frog's ring;
         // everyone else on the ring around the player it is fighting - one
-        // ring per player, the second only ever populated with two.
+        // ring per seat, the rest only populated once that seat is filled.
         let mut report = EngageReport::default();
-        let mut engaged: [Vec<(Entity, Position)>; 2] = [Vec::new(), Vec::new()];
+        let mut engaged: Vec<Vec<(Entity, Position)>> = vec![Vec::new(); players.len()];
         let mut engaged_frog: Vec<(Entity, Position)> = Vec::new();
         for (entity, tank, ai) in self.world.query::<(Entity, &Tank, &Ai)>().iter() {
             let (target, hunting) = target_of(ai);
@@ -1873,7 +2191,7 @@ impl Game {
                 if hunting.is_some() {
                     engaged_frog.push((entity, tank.position));
                 } else {
-                    engaged[ai.target_player() as usize].push((entity, tank.position));
+                    engaged[(ai.target_player() as usize).min(players.len() - 1)].push((entity, tank.position));
                 }
             }
         }
@@ -1894,20 +2212,23 @@ impl Game {
                 &mut report,
             );
         }
-        if engaged[1].len() >= 2 {
-            // Player 2's ring keeps no slot table either (the snapshot
-            // shows player 1's); its per-tank outcomes are merged into the
-            // one report, the way the frog ring's are below.
-            let mut report2 = EngageReport {
-                tanks: report.tanks.iter().filter(|t| engaged[1].iter().any(|(e, _)| *e == t.entity)).copied().collect(),
+        for seat in 1..players.len() {
+            if engaged[seat].len() < 2 {
+                continue;
+            }
+            // A seat past the first keeps no slot table either (the
+            // snapshot shows player 1's); its per-tank outcomes are merged
+            // into the one report, the way the frog ring's are below.
+            let mut seat_report = EngageReport {
+                tanks: report.tanks.iter().filter(|t| engaged[seat].iter().any(|(e, _)| *e == t.entity)).copied().collect(),
                 ..Default::default()
             };
-            self.engage[1].assign(
-                &engaged[1],
-                &EngageCtx { target_pos: players[1].pos, width: f.width, height: f.height, margin, reachable: &reachable, line_of_sight: &line_of_sight },
-                &mut report2,
+            self.engage[seat].assign(
+                &engaged[seat],
+                &EngageCtx { target_pos: players[seat].pos, width: f.width, height: f.height, margin, reachable: &reachable, line_of_sight: &line_of_sight },
+                &mut seat_report,
             );
-            for t in report2.tanks {
+            for t in seat_report.tanks {
                 if let Some(slot) = report.tanks.iter_mut().find(|r| r.entity == t.entity) {
                     *slot = t;
                 }
@@ -2019,7 +2340,7 @@ impl Game {
             // and failed to be - revealing at 96px handed enemies
             // point-blank shots that never miss, and measured *worse* for
             // the player than standing in the open.
-            let fighting = &players[ai.target_player() as usize];
+            let fighting = &players[(ai.target_player() as usize).min(players.len() - 1)];
             let player_hidden = fighting.concealed && !ai.is_hit_alerted();
             let player_line_of_sight = !player_hidden && f.terrain.line_of_sight(tank.position, fighting.pos);
             // A hunter's fire gate is line of *fire* to the frog: only iron
@@ -2142,24 +2463,35 @@ impl Game {
     /// Insert this frame's fired projectiles - only once no tank query is
     /// active, since hecs can't spawn into a world mid-iteration.
     fn spawn_pending(&mut self, f: &mut Frame) {
-        for shell in f.pending_shells.drain(..) {
+        for mut shell in f.pending_shells.drain(..) {
+            shell.set_id(self.take_shot_id());
             self.world.spawn((shell,));
         }
-        for plasma in f.pending_plasmas.drain(..) {
+        for mut plasma in f.pending_plasmas.drain(..) {
+            plasma.set_id(self.take_shot_id());
             self.world.spawn((plasma,));
         }
-        for bullet in f.pending_bullets.drain(..) {
+        for mut bullet in f.pending_bullets.drain(..) {
+            bullet.set_id(self.take_shot_id());
             self.world.spawn((bullet,));
         }
-        for missile in f.pending_missiles.drain(..) {
+        for mut missile in f.pending_missiles.drain(..) {
+            missile.set_id(self.take_shot_id());
             self.world.spawn((missile,));
         }
+    }
+
+    /// The next projectile id: one counter for shells, bullets and plasma,
+    /// starting at 1 each round, never reused. No RNG.
+    fn take_shot_id(&mut self) -> u32 {
+        self.next_shot_id += 1;
+        self.next_shot_id
     }
 
     /// Lasers have no travel time: each queued beam is swept over its whole
     /// length right now, drawn up to where it stopped, and applied.
     fn resolve_lasers(&mut self, f: &mut Frame) {
-        let players = self.players();
+        let players = self.seats_on_field();
         let shots = std::mem::take(&mut f.pending_lasers);
         for shot in shots {
             let hit = f.terrain.sweep(&self.world, players, shot.owner, shot.start, shot.end, laser_beam_half_width());
@@ -2225,7 +2557,7 @@ impl Game {
     /// each other, then enemy against enemy.
     fn sync_tanks_and_ram(&mut self, f: &mut Frame) {
         let players: Vec<(Entity, Position)> = self
-            .players()
+            .seats_on_field()
             .into_iter()
             .flatten()
             .map(|p| (p, with_tank(&self.world, p, |t| t.position)))
@@ -2340,7 +2672,7 @@ impl Game {
     /// head-on can pass through each other between frames. Same-side pairs
     /// (a twin volley, two different enemies' shells) never cancel.
     fn shell_vs_shell(&mut self, f: &mut Frame) {
-        let flying: Vec<(Entity, Position, Vector2, Owner)> = self
+        let flying: Vec<(Entity, Position, Vec2, Owner)> = self
             .world
             .query::<(Entity, &Shell)>()
             .iter()
@@ -2393,12 +2725,12 @@ impl Game {
     /// point, ricochet if it can (shells off Iron), otherwise detonate at
     /// that point and - when `live` - apply damage/knockback/frog hop.
     fn resolve_projectiles<P: Projectile>(&mut self, f: &mut Frame, live: bool) {
-        let players = self.players();
+        let players = self.seats_on_field();
         struct Flight {
             entity: Entity,
             prev: Position,
             pos: Position,
-            vel: Vector2,
+            vel: Vec2,
             owner: Owner,
             dmg: (f32, f32),
         }
@@ -2475,7 +2807,7 @@ impl Game {
             let bounced = {
                 let mut q = self.world.query_one::<&mut P>(entity);
                 let p = q.get().expect("projectile collected this frame still exists");
-                match target {
+                let bounced = match target {
                     ShellTarget::Obstacle(e) => f.terrain.obstacle(e).is_some_and(|b| {
                         // The projectile's own rule (shells off Iron), or a
                         // barrel's chance deflection. Zero chance draws no RNG.
@@ -2488,9 +2820,11 @@ impl Game {
                         }
                     }),
                     _ => false,
-                }
+                };
+                bounced.then(|| p.heading())
             };
-            if bounced {
+            if let Some(heading) = bounced {
+                f.events.push(Event::Ricochet { slot: owner.slot(), x: hit_pos.x, y: hit_pos.y, heading });
                 continue;
             }
             {
@@ -2503,7 +2837,7 @@ impl Game {
                 continue;
             }
             let len = (vel.x * vel.x + vel.y * vel.y).sqrt().max(f32::EPSILON);
-            let dir = Vector2::new(vel.x / len, vel.y / len);
+            let dir = Vec2::new(vel.x / len, vel.y / len);
             let effects = HitEffects {
                 knockback: P::knockback_speed().map(|speed| (dir, speed)),
                 frog_hop: P::frog_hops().then_some(vel),
@@ -2674,7 +3008,7 @@ impl Game {
     /// neighbours: destruction is rare, the pass is one HashSet build plus
     /// a few lookups per tile, and a full rebuild cannot drift out of sync
     /// the way an incremental update can.
-    fn refresh_edge_masks(&mut self) {
+    pub(crate) fn refresh_edge_masks(&mut self) {
         let cells: HashSet<(i32, i32)> = self
             .world
             .query::<&Obstacle>()
@@ -2708,7 +3042,13 @@ impl Game {
     /// happen on the same frame.
     fn check_round_end(&mut self, f: &mut Frame) {
         // Lost once every human tank is a wreck - the one player's in a
-        // single-player round, both in a two-player one - or the frog dies.
+        // single-player round, every seat's in a team round - or the frog
+        // dies. `players()`, not `seats_on_field()`: a seat driving back
+        // in through a gate is alive and the round goes on, and a seat
+        // waiting for the next wave to bring it back (decision 7,
+        // docs/online-coop-prd.md section 4.11) is a wreck like any other
+        // - one wreck of one seat still ends a solo round, and a team that
+        // falls together still loses.
         let players_dead = self
             .players()
             .into_iter()
@@ -2883,7 +3223,7 @@ impl Game {
         let mut grid = self.nav_grid(width, height);
         let t = tuning();
         let players: Vec<(Position, f32)> = self
-            .players()
+            .seats_on_field()
             .into_iter()
             .flatten()
             .filter_map(|e| with_tank(&self.world, e, |tank| (!tank.is_wreck()).then_some((tank.position, tank.rotation))))
@@ -2960,13 +3300,13 @@ impl Game {
     /// sources `resolve_player_row` picked it from. `None` only before the
     /// first `init`.
     pub fn player_chassis(&self) -> Option<TankKind> {
-        self.chassis_of(self.player?)
+        self.chassis_of(self.player()?)
     }
 
-    /// Player 2's chassis this round; `None` in a single-player round or
+    /// Seat 1's chassis this round; `None` in a single-player round or
     /// before the first `init`.
     pub fn player2_chassis(&self) -> Option<TankKind> {
-        self.chassis_of(self.player2?)
+        self.chassis_of(self.seat(1)?)
     }
 
     fn chassis_of(&self, entity: Entity) -> Option<TankKind> {
@@ -2989,7 +3329,7 @@ impl Game {
     /// Velocity comes from the *body*, not `Tank::velocity`, which is the
     /// commanded cardinal vector and reads as zero the instant the driver
     /// lets go while the hull is still rolling.
-    fn tick_grass(&mut self, f: &mut Frame) {
+    fn tick_grass(&mut self, dt: f32) {
         if self.grass.is_empty() {
             return;
         }
@@ -3004,7 +3344,7 @@ impl Game {
                 half: t.hull_size() * 0.5,
             })
             .collect();
-        crate::grass::tick(&mut self.grass, &movers, f.dt);
+        crate::grass::tick(&mut self.grass, &movers, dt);
     }
 
     /// The tall-grass cells a live tank is currently moving through - the
@@ -3598,32 +3938,54 @@ fn bonus_pickup_cell(
 /// long as the two never touch the same entity. `pub(crate)`: `render`
 /// uses it too.
 impl Game {
-    /// The player entities in index order: player 1, then player 2 in a
-    /// two-player round (`None` otherwise). Every loop that has to treat
-    /// the players before the enemies walks this, so their RNG draws keep
-    /// a fixed order.
-    pub(crate) fn players(&self) -> [Option<Entity>; 2] {
-        [self.player, self.player2]
+    /// The seats in owner-slot order, empty ones as `None`. Every loop
+    /// that has to treat the players before the enemies walks this, so
+    /// their RNG draws keep a fixed order whatever the seat count.
+    pub(crate) fn players(&self) -> [Option<Entity>; MAX_SEATS] {
+        self.seats
     }
 
-    /// Which human player `entity` is (0 or 1), or `None` for anything else.
-    pub(crate) fn player_index(&self, entity: Entity) -> Option<u8> {
-        if Some(entity) == self.player {
-            Some(0)
-        } else if Some(entity) == self.player2 {
-            Some(1)
-        } else {
-            None
+    /// Player 1's tank - seat 0, the one every round has.
+    pub(crate) fn player(&self) -> Option<Entity> {
+        self.seats[PLAYER_OWNER_SLOT]
+    }
+
+    /// The seats whose tank stands on the battlefield: like `players()`,
+    /// but a seat driving back in through a gate reads as `None`.
+    ///
+    /// A returning seat (`waves::RollIn`, docs/online-coop-prd.md section
+    /// 4.11) is outside the field with no body, so it takes no part in
+    /// the frame - it is not shot at, blasted, burnt, rammed, targeted,
+    /// routed to or the centre of an engagement ring - the same way an
+    /// entering wave tank is left alone by every `.with::<&Ai>()` query.
+    /// It is still one of `players()`, which is what keeps the round from
+    /// being lost while a seat is on its way back.
+    pub(crate) fn seats_on_field(&self) -> [Option<Entity>; MAX_SEATS] {
+        let mut seats = self.seats;
+        for seat in &mut seats {
+            if seat.is_some_and(|e| self.world.get::<&RollIn>(e).is_ok()) {
+                *seat = None;
+            }
         }
+        seats
     }
 
-    /// True for either player's tank.
+    /// Seat `index`'s tank, `None` past the seats this round holds.
+    pub(crate) fn seat(&self, index: usize) -> Option<Entity> {
+        self.seats.get(index).copied().flatten()
+    }
+
+    /// Which seat `entity` sits in, or `None` for anything else.
+    pub(crate) fn player_index(&self, entity: Entity) -> Option<u8> {
+        self.seats.iter().position(|&e| e == Some(entity)).map(|i| i as u8)
+    }
+
+    /// True for any seat's tank.
     pub(crate) fn is_player(&self, entity: Entity) -> bool {
         self.player_index(entity).is_some()
     }
 
-    /// The first owner slot an enemy can take: the players sit below it.
-    /// 1 in a single-player round, 2 with two players.
+    /// The first owner slot an enemy can take: the seats sit below it.
     pub fn first_enemy_slot(&self) -> usize {
         self.players.count()
     }
@@ -3780,7 +4142,7 @@ fn lay_tracks(tracks: &mut Vec<Track>, tank: &mut Tank, before: Position, depth:
         return;
     }
     // Unit vector pointing back along this frame's travel.
-    let back = Vector2::new((before.x - tank.position.x) / moved, (before.y - tank.position.y) / moved);
+    let back = Vec2::new((before.x - tank.position.x) / moved, (before.y - tank.position.y) / moved);
     let mut heading = (-back.x).atan2(back.y).to_degrees();
     if heading < 0.0 {
         heading += 360.0;
@@ -3974,7 +4336,7 @@ cells."20,11" = { kind = "start" }
             game.player_row_override = cli;
             game.map = MapFile::from_toml_str(MAP).expect("test map parses");
             game.init(1280.0, 720.0);
-            let player = game.player.expect("player entity spawned in init");
+            let player = game.player().expect("player entity spawned in init");
             let mut q = game.world.query_one::<&Tank>(player);
             q.get().expect("player has a Tank").row
         };
@@ -4055,6 +4417,64 @@ mod determinism_tests {
                 }
             }
         }
+    }
+
+    /// One and two seats draw the round RNG in exactly the order they drew
+    /// it before a round could hold eight, so every seeded replay, probe
+    /// fixture and recorded ceiling still describes the same round. The
+    /// numbers below are that stream's fingerprint: a change to the order
+    /// or the count of the draws `init` and `update` make moves them.
+    /// Re-baseline consciously, the way `probe-fixtures` is re-baselined -
+    /// never to make this go green.
+    #[test]
+    fn the_one_and_two_seat_streams_are_pinned() {
+        let run = |seats: usize| {
+            let mut game = Game::default();
+            game.seed_override = Some(0xB0B5);
+            game.level_overrides.mission = Some(Mission::Protect);
+            game.level_overrides.spawn = Some(crate::level::SpawnKind::Band);
+            game.enemy_count_override = Some(4);
+            game.players = PlayerCount::from_count(seats).expect("one or two");
+            game.map = MapFile::from_toml_str(include_str!("../../maps/default.toml")).expect("embedded default map parses");
+            game.init(1280.0, 720.0);
+            // FNV-1a over the same bit-exact key the replay tests compare.
+            let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+            let mut eat = |bytes: &[u8]| {
+                for b in bytes {
+                    hash ^= *b as u64;
+                    hash = hash.wrapping_mul(0x1000_0000_01b3);
+                }
+            };
+            for frame in 0..=600u32 {
+                if frame > 0 {
+                    game.update(Input::default(), 1.0 / 60.0, 1280.0, 720.0);
+                }
+                if frame % 60 != 0 {
+                    continue;
+                }
+                for t in game.tank_snapshots() {
+                    eat(&(t.slot as u64).to_le_bytes());
+                    let k = key(&t);
+                    for word in k.2 {
+                        eat(&word.to_le_bytes());
+                    }
+                    eat(&[k.0 as u8, k.1 as u8, k.6 as u8]);
+                    eat(&k.3.to_le_bytes());
+                }
+            }
+            hash
+        };
+        // **Re-baselined for master's seeker missiles, deliberately.**
+        // `PickupKind` gained a variant, so the Health-slot bonus roll
+        // draws a different number, and the projectile speeds moved - both
+        // shift where a seeded round's tanks end up, and neither has
+        // anything to do with the walk order this gate exists to protect.
+        // What it protects is unchanged: the per-seat block still runs once
+        // per seat after player 1, so a second seat does not disturb the
+        // first's stream. Never bump these to go green - work out which
+        // change moved them first.
+        assert_eq!(run(1), 3_330_505_246_546_623_918, "one seat");
+        assert_eq!(run(2), 15_003_608_774_004_553_797, "two seats");
     }
 
     /// A portal round replays too: the destination draw sits on the round
@@ -4176,7 +4596,7 @@ mod mechanics_tests {
     }
 
     fn teleport_player(game: &mut Game, pos: Position) {
-        let player = game.player.expect("player");
+        let player = game.player().expect("player");
         let body = with_tank(&game.world, player, |t| t.body).expect("body");
         game.physics.set_position(body, pos);
         with_tank_mut(&game.world, player, |t| t.position = pos);
@@ -4185,9 +4605,96 @@ mod mechanics_tests {
     fn drive(game: &mut Game, dir: Option<Dir>, frames: usize) {
         for _ in 0..frames {
             let mut input = Input::default();
-            input.player_intent.move_dir = dir;
+            input.seats[0].move_dir = dir;
             step(game, input);
         }
+    }
+
+    /// A local round runs its own cosmetics inside `update` and never
+    /// calls `tick_presentation`, which is the only reason the two can
+    /// share their halves: one `update` advances the round clock and a
+    /// hull's drawn angle by exactly one step, and the tread marks come
+    /// off the physics step, so `Tank::track_from` - the replica's
+    /// displacement record - is never written.
+    #[test]
+    fn local_play_ticks_its_cosmetics_once() {
+        let dt = 1.0 / 60.0;
+        let mut game = sandbox("version = 1\ntanks = 0\ncells.\"5,5\" = { kind = \"start\" }\n");
+        // Facing up, commanded right: `rotation` snaps, the drawn angle
+        // swings across at `tank_visual_turn_speed_deg`.
+        let mut input = Input::default();
+        input.seats[0].move_dir = Some(Dir::Right);
+        step(&mut game, input);
+        let player = game.player().expect("player");
+        let step_deg = tuning().tank_visual_turn_speed_deg * dt;
+        let (visual, rotation, from) =
+            with_tank(&game.world, player, |t| (t.visual_rotation, t.rotation, t.track_from));
+        assert_eq!(rotation, Dir::Right.rotation(), "the hull's facing snaps");
+        assert!((visual - step_deg).abs() < 1e-4, "one update, one ease step: {visual} for {step_deg}");
+        assert_eq!(from, None, "a local round lays its marks from the physics step");
+        assert!((game.time - dt).abs() < 1e-6, "one update, one dt of round clock: {}", game.time);
+        // And the presentation tick a replica runs is a second step on
+        // top, which is why `update` must not call it.
+        game.tick_presentation(dt);
+        let after = with_tank(&game.world, player, |t| t.visual_rotation);
+        assert!((after - 2.0 * step_deg).abs() < 1e-4, "the presentation tick eases again: {after}");
+    }
+
+    /// `Input::held_only` is the input for a rendered frame's second and
+    /// later steps: the held state stays, the one-shot presses are spent.
+    #[test]
+    fn held_only_spends_the_presses_and_keeps_the_held_state() {
+        let mut input = Input::two(Intent { move_dir: Some(Dir::Up), fire: true, ..Intent::default() }, Intent { fire: true, ..Intent::default() });
+        input.pause_pressed = true;
+        input.restart_pressed = true;
+        input.toggle_shadows_pressed = true;
+        input.cycle_overlays_pressed = true;
+        let later = input.held_only();
+        assert_eq!(later.seats[0].move_dir, Some(Dir::Up));
+        assert!(later.seats[0].fire && later.seats[1].fire);
+        assert!(!later.pause_pressed && !later.restart_pressed && !later.toggle_shadows_pressed && !later.cycle_overlays_pressed);
+    }
+
+    /// `Input::or_presses` folds a frame that ran no step into the next:
+    /// its fire keys and toggles are still pressed, its directions are
+    /// not, and a seat past the array reads as idle.
+    #[test]
+    fn or_presses_carries_fire_and_toggles_but_never_a_direction() {
+        let mut missed = Input::two(Intent { move_dir: Some(Dir::Left), fire: true, ..Intent::default() }, Intent { move_dir: Some(Dir::Down), ..Intent::default() });
+        missed.restart_pressed = true;
+        let now = Input::single(Intent { move_dir: Some(Dir::Right), ..Intent::default() }).or_presses(missed);
+        assert_eq!(now.seats[0].move_dir, Some(Dir::Right));
+        assert!(now.seats[0].fire, "the tap between two steps still fires");
+        assert_eq!(now.seats[1].move_dir, None);
+        assert!(!now.seats[1].fire);
+        assert!(now.restart_pressed && !now.pause_pressed);
+        assert_eq!(now.seat(MAX_SEATS).move_dir, None);
+        assert!(!now.seat(MAX_SEATS + 3).fire);
+    }
+
+    /// The round reads the first `players.count()` seats and nothing
+    /// else: in a single-player round seat 1 can neither skip the mission
+    /// banner nor fire, while seat 0 skips it at once.
+    #[test]
+    fn a_single_player_round_ignores_the_second_seat() {
+        let intro_round = || {
+            let mut game = game_on(OPEN_MAP, 1, Some(0));
+            game.show_intro = true;
+            game.init(W, H);
+            assert!(game.intro_timer > 0.0, "the banner is up");
+            game
+        };
+        let mut game = intro_round();
+        let mut seat1 = Input::default();
+        seat1.seats[1] = Intent { move_dir: Some(Dir::Up), fire: true, ..Intent::default() };
+        for _ in 0..3 {
+            step(&mut game, seat1);
+        }
+        assert!(game.intro_timer > 0.0, "seat 1 is not read with one player");
+        assert!(!game.events().iter().any(|e| matches!(e, Event::Fired { .. })));
+        let mut game = intro_round();
+        step(&mut game, Input::single(Intent { fire: true, ..Intent::default() }));
+        assert_eq!(game.intro_timer, 0.0, "seat 0 skips the banner");
     }
 
     /// The frame's routing grid prices the cells down the player's
@@ -4235,7 +4742,7 @@ mod mechanics_tests {
         // A shell fired from the same spot crosses the whole lake and
         // lands on the wall beyond it.
         let mut input = Input::default();
-        input.player_intent.fire = true;
+        input.seats[0].fire = true;
         step(&mut game, input);
         for _ in 0..240 {
             step(&mut game, Input::default());
@@ -4294,7 +4801,7 @@ mod mechanics_tests {
     #[test]
     fn water_puts_a_burning_hull_out_and_takes_no_fire() {
         let mut game = sandbox(&water_map(""));
-        let player = game.player.expect("player");
+        let player = game.player().expect("player");
         teleport_player(&mut game, map::cell_to_world(11, 4));
         with_tank_mut(&game.world, player, |t| t.burn_timer = 5.0);
         step(&mut game, Input::default());
@@ -4406,7 +4913,7 @@ mod mechanics_tests {
         game.init(W, H);
         assert!(game.intro_timer > 0.0);
         let mut input = Input::default();
-        input.player_intent.fire = true;
+        input.seats[0].fire = true;
         step(&mut game, input);
         assert_eq!(game.intro_timer, 0.0, "fire skips the intro");
         step(&mut game, Input::default());
@@ -5081,7 +5588,7 @@ cells."30,20" = { kind = "frog" }
         let a = map::cell_to_world(10, 11);
         let b = map::cell_to_world(30, 11);
         assert_eq!(game.portals(), &[a, b]);
-        let right = Input { player_intent: Intent { move_dir: Some(Dir::Right), ..Intent::default() }, ..Input::default() };
+        let right = Input::single(Intent { move_dir: Some(Dir::Right), ..Intent::default() });
         let mut hop = None;
         for _ in 0..600 {
             step(&mut game, right);
@@ -5098,7 +5605,7 @@ cells."30,20" = { kind = "frog" }
         assert!(to.distance_to(b) > t.portal_trigger_radius, "arrives outside B's trigger radius");
         assert!(to.distance_to(b) <= (t.portal_arrival_max_cells as f32 + 1.0) * OBSTACLE_GRID_SIZE, "but beside B");
         assert!(to.x > map::cell_to_world(20, 0).x, "on the far side of the wall");
-        let player = game.player.unwrap();
+        let player = game.player().unwrap();
         {
             let tank = game.world.get::<&Tank>(player).unwrap();
             // The same frame's player phase drives it on from the arrival
@@ -5130,7 +5637,7 @@ cells."30,20" = { kind = "frog" }
             step(&mut game, Input::default());
         }
         assert_eq!(game.world.get::<&Tank>(player).unwrap().portal_cooldown, 0.0, "off the portal the cooldown ran out");
-        let up = Input { player_intent: Intent { move_dir: Some(Dir::Up), ..Intent::default() }, ..Input::default() };
+        let up = Input::single(Intent { move_dir: Some(Dir::Up), ..Intent::default() });
         let mut hopped_back = false;
         for _ in 0..240 {
             step(&mut game, up);
@@ -5151,12 +5658,12 @@ cells."30,20" = { kind = "frog" }
         assert!(!game.portals_active());
         assert_eq!(game.portals().len(), 1);
         assert!(game.nav_grid(W, H).portal_cells().is_empty());
-        let right = Input { player_intent: Intent { move_dir: Some(Dir::Right), ..Intent::default() }, ..Input::default() };
+        let right = Input::single(Intent { move_dir: Some(Dir::Right), ..Intent::default() });
         let mut reached = false;
         for _ in 0..600 {
             step(&mut game, right);
             assert!(teleports_of(&game, 0).is_empty());
-            let pos = game.world.get::<&Tank>(game.player.unwrap()).unwrap().position;
+            let pos = game.world.get::<&Tank>(game.player().unwrap()).unwrap().position;
             reached |= pos.distance_to(map::cell_to_world(10, 11)) <= tuning().portal_trigger_radius;
         }
         assert!(reached, "the player did drive over the lone portal");
@@ -5173,7 +5680,7 @@ cells."30,20" = { kind = "frog" }
         let slot = enemy_slot(&game);
         let far = map::cell_to_world(28, 11);
         game.debug_teleport(slot, far, Some(270.0)).expect("enemy placed in the far room");
-        let player_pos = game.world.get::<&Tank>(game.player.unwrap()).unwrap().position;
+        let player_pos = game.world.get::<&Tank>(game.player().unwrap()).unwrap().position;
         assert!(game.nav_path_cells(far, player_pos, W, H).is_some(), "a route through the hub exists");
         let plain = game_on(&without, 1, None);
         assert!(plain.nav_path_cells(far, player_pos, W, H).is_none(), "without a network the wall is final");
@@ -5203,14 +5710,14 @@ cells."30,20" = { kind = "frog" }
         }
         let mut game = game_on(&map, 0, None);
         assert!(game.portals_active());
-        let right = Input { player_intent: Intent { move_dir: Some(Dir::Right), ..Intent::default() }, ..Input::default() };
+        let right = Input::single(Intent { move_dir: Some(Dir::Right), ..Intent::default() });
         let a = map::cell_to_world(10, 11);
         let mut on_portal = false;
         for _ in 0..600 {
             let rng_before = game.rng.clone().expect("rng parked between frames");
             step(&mut game, right);
             assert!(teleports_of(&game, 0).is_empty(), "nowhere to arrive: no hop");
-            let pos = game.world.get::<&Tank>(game.player.unwrap()).unwrap().position;
+            let pos = game.world.get::<&Tank>(game.player().unwrap()).unwrap().position;
             if pos.distance_to(a) <= tuning().portal_trigger_radius {
                 on_portal = true;
                 // A frame on the portal with no candidates must draw nothing
@@ -5270,7 +5777,7 @@ cells."11,10" = { kind = "pickup", pickup = "health" }
 cells."30,20" = { kind = "frog" }
 "#;
         let mut game = game_on(MAP, 0, Some(0));
-        let player = game.player.expect("a player exists");
+        let player = game.player().expect("a player exists");
         with_tank_mut(&game.world, player, |t| t.damage = 0.0);
         step(&mut game, Input::default());
         assert_eq!(health_on_field(&game), 0, "an undamaged player still collects");
@@ -5374,7 +5881,7 @@ cells."4,4" = { kind = "enemy_frog" }
         let mut game = game_on(FROG_PACK_MAP, 1, Some(0));
         let frog = game.frog.expect("a Protect round has a frog");
         hurt_frog(&game, frog, 25.0);
-        let player = game.player.expect("a player exists");
+        let player = game.player().expect("a player exists");
         with_tank_mut(&game.world, player, |t| t.damage = 30.0);
         step(&mut game, Input::default());
         assert_eq!(frog_health(&game, frog), tuning().frog_max_health);
@@ -5492,10 +5999,7 @@ cells."30,20" = { kind = "frog" }
 
     fn fire_once(row: i32) -> i32 {
         let mut game = game_on(OPEN_MAP, 1, Some(row));
-        let fire = Input {
-            player_intent: Intent { fire: true, ..Intent::default() },
-            ..Input::default()
-        };
+        let fire = Input::single(Intent { fire: true, ..Intent::default() });
         step(&mut game, fire);
         for _ in 0..10 {
             step(&mut game, Input::default());
@@ -5516,10 +6020,7 @@ cells."30,20" = { kind = "frog" }
         assert!(game.events().is_empty(), "{:?}", game.events());
 
         let mut game = game_on(OPEN_MAP, 1, Some(0));
-        let fire = Input {
-            player_intent: Intent { fire: true, ..Intent::default() },
-            ..Input::default()
-        };
+        let fire = Input::single(Intent { fire: true, ..Intent::default() });
         step(&mut game, fire);
         assert!(
             game.events().iter().any(|e| matches!(e, Event::Fired { slot: 0, weapon: "shell" })),
@@ -5583,6 +6084,45 @@ cells."30,20" = { kind = "frog" }
         assert!(out, "enemy still inside the box at ({:.0},{:.0})", enemy.position.x, enemy.position.y);
     }
 
+    /// Three iron tiles across the player's line of fire, two cells up.
+    const IRON_BAR_MAP: &str = r#"
+version = 1
+tanks = 0
+cells."20,11" = { kind = "start" }
+cells."19,8" = { kind = "wall", material = "iron" }
+cells."20,8" = { kind = "wall", material = "iron" }
+cells."21,8" = { kind = "wall", material = "iron" }
+"#;
+
+    /// A shell that bounces off iron says so once - `Event::Ricochet` with
+    /// the heading it flies on along - and keeps flying until it lands
+    /// somewhere else.
+    #[test]
+    fn a_shell_off_iron_ricochets_once_and_flies_on() {
+        let mut game = game_on(IRON_BAR_MAP, 0, Some(0));
+        let player = game.player().expect("player");
+        with_tank_mut(&game.world, player, |t| t.control(None, Some(Dir::Up)));
+        step(&mut game, Input::single(Intent { fire: true, ..Intent::default() }));
+        let (mut ricochets, mut headings, mut landed_after) = (0, Vec::new(), false);
+        for _ in 0..240 {
+            step(&mut game, Input::default());
+            for e in game.events() {
+                match *e {
+                    Event::Ricochet { slot: 0, heading, .. } => {
+                        ricochets += 1;
+                        headings.push(heading);
+                        assert!(game.world.query::<&Shell>().iter().any(|s| s.state == ShellState::Flying), "still flying");
+                    }
+                    Event::Hit { target: HitTarget::Wall, .. } if ricochets > 0 => landed_after = true,
+                    _ => {}
+                }
+            }
+        }
+        assert_eq!(ricochets, 1, "one bounce per shell (`shell_ricochet_bounces`)");
+        assert!((headings[0] - 180.0).abs() < 1.0, "reflected straight back down, got {}", headings[0]);
+        assert!(landed_after, "the shell flew on to the boundary wall");
+    }
+
     #[test]
     fn a_twin_barrel_shot_costs_two_shells_and_a_single_costs_one() {
         let full = tuning().max_shells;
@@ -5593,10 +6133,7 @@ cells."30,20" = { kind = "frog" }
     #[test]
     fn a_held_fire_key_fires_shells_only_once() {
         let mut game = game_on(OPEN_MAP, 1, Some(0));
-        let fire = Input {
-            player_intent: Intent { fire: true, ..Intent::default() },
-            ..Input::default()
-        };
+        let fire = Input::single(Intent { fire: true, ..Intent::default() });
         for _ in 0..30 {
             step(&mut game, fire);
         }
@@ -5637,7 +6174,7 @@ cells."30,20" = { kind = "frog" }
     #[test]
     fn a_shield_pickup_heals_to_full_and_absorbs_until_it_is_spent() {
         let mut game = game_on(SEALED_SHIELD_MAP, 1, Some(0));
-        let player = game.player.expect("player");
+        let player = game.player().expect("player");
         {
             let mut q = game.world.query_one::<&mut Tank>(player);
             let tank = q.get().expect("player tank");
@@ -5716,7 +6253,7 @@ cells."30,20" = { kind = "frog" }
     /// player's damage at the end.
     fn shell_from_above(shielded: bool, above: f32, frames: u32) -> (bool, f32) {
         let mut game = game_on(OPEN_MAP, 0, Some(0));
-        let player = game.player.expect("player");
+        let player = game.player().expect("player");
         let (pos, row) = {
             let mut q = game.world.query_one::<&mut Tank>(player);
             let tank = q.get().expect("player tank");
@@ -5753,7 +6290,7 @@ cells."30,20" = { kind = "frog" }
     #[test]
     fn deflecting_a_shell_costs_the_shield_more_than_absorbing_it_would() {
         let mut game = game_on(OPEN_MAP, 0, Some(0));
-        let player = game.player.expect("player");
+        let player = game.player().expect("player");
         let capacity = tuning().shield_capacity;
         let (pos, row) = {
             let mut q = game.world.query_one::<&mut Tank>(player);
@@ -5783,7 +6320,7 @@ cells."30,20" = { kind = "frog" }
     #[test]
     fn sustained_fire_breaks_a_shield_and_says_so() {
         let mut game = game_on(OPEN_MAP, 0, Some(0));
-        let player = game.player.expect("player");
+        let player = game.player().expect("player");
         let (pos, row) = {
             let mut q = game.world.query_one::<&mut Tank>(player);
             let tank = q.get().expect("player tank");
@@ -5848,9 +6385,16 @@ cells."30,20" = { kind = "frog" }
     /// shielded for the whole round so the enemies can never end it and the
     /// scheduler's own timing is all that decides what happens.
     fn waves_game(waves: u32, size: u32) -> Game {
+        waves_game_seats(waves, size, 1)
+    }
+
+    /// `waves_game` for a team: `seats` seats, every one of them shielded
+    /// so only the scheduler ends the round.
+    fn waves_game_seats(waves: u32, size: u32, seats: usize) -> Game {
         let mut game = Game::default();
         game.seed_override = Some(7);
         game.player_row_override = Some(0);
+        game.players = PlayerCount::from_count(seats).expect("a seat count the round takes");
         game.level_overrides.mission = Some(Mission::Destroy);
         game.level_overrides.spawn = Some(SpawnKind::Waves);
         game.level_overrides.waves = Some(waves);
@@ -5858,8 +6402,9 @@ cells."30,20" = { kind = "frog" }
         game.level_overrides.wave_growth = Some(0);
         game.map = MapFile::from_toml_str(OPEN_MAP).expect("test map parses");
         game.init(W, H);
-        let player = game.player.expect("player");
-        with_tank_mut(&game.world, player, |t| t.shield_hp = 1.0e9);
+        for seat in game.players().into_iter().flatten() {
+            with_tank_mut(&game.world, seat, |t| t.shield_hp = 1.0e9);
+        }
         game
     }
 
@@ -6037,6 +6582,172 @@ cells."30,20" = { kind = "frog" }
         assert!(game.tank_snapshots().iter().all(|t| t.is_player || !t.is_wreck));
     }
 
+    // --- A wrecked seat re-entering with the next wave
+    // (docs/online-coop-prd.md section 4.11, decision 7) ---
+
+    /// Wreck `slot` and run the frame that applies it.
+    fn kill_and_step(game: &mut Game, slot: usize) {
+        game.debug_kill(slot).expect("a live tank in that slot");
+        step(game, Input::default());
+    }
+
+    /// Step until seat `seat` is off the field driving back in, at most
+    /// `limit` frames; the frame it started on.
+    fn step_until_returning(game: &mut Game, seat: usize, limit: u32) -> u32 {
+        for frame in 1..=limit {
+            step(game, Input::default());
+            let entity = game.seat(seat).expect("a seat's tank is never despawned");
+            if game.is_entering(entity) {
+                return frame;
+            }
+        }
+        panic!("seat {seat} never started back in within {limit} frames");
+    }
+
+    #[test]
+    fn a_wrecked_seat_drives_back_in_with_the_next_wave_and_plays_again() {
+        let mut game = waves_game_seats(3, 1, 2);
+        let wave_one = step_until_entered(&mut game, 600);
+        kill_and_step(&mut game, 1);
+        let seat1 = game.seat(1).expect("seat 1");
+        assert!(with_tank(&game.world, seat1, Tank::is_wreck), "seat 1 is a wreck");
+        assert_eq!(game.outcome(), Outcome::Playing, "seat 0 is still fighting");
+        // It waits where it fell until the wave it belongs to is called.
+        for _ in 0..60 {
+            step(&mut game, Input::default());
+            assert!(!game.is_entering(seat1), "a wreck waits for the next wave, it does not leave early");
+        }
+        // Clearing wave 1 calls wave 2, and seat 1 comes in with it.
+        game.debug_kill(wave_one).expect("wave 1's tank");
+        let started = step_until_returning(&mut game, 1, 900);
+        assert!(started > 0);
+        assert!(game.wave_status().unwrap().index >= 2, "it came with the next wave");
+        let out = with_tank(&game.world, seat1, |t| (t.position, t.is_wreck(), t.body.is_some(), t.hull_points()));
+        assert!(!out.1, "back at full health, not a wreck");
+        assert!(!out.2, "kinematic until it is through the gate");
+        assert_eq!(out.3, with_tank(&game.world, game.player().unwrap(), |t| t.hull_points()), "a fresh tank");
+        assert!(out.0.x < 0.0 || out.0.x > W || out.0.y < 0.0 || out.0.y > H, "starts outside the field, at a gate");
+        // It arrives, takes its body and no `Ai`, and answers its own keys.
+        let mut arrived = false;
+        for _ in 0..900 {
+            step(&mut game, Input::default());
+            if !game.is_entering(seat1) {
+                arrived = true;
+                break;
+            }
+        }
+        assert!(arrived, "seat 1 never finished its roll-in");
+        assert!(game.world.get::<&Ai>(seat1).is_err(), "a seat never takes an Ai");
+        assert!(with_tank(&game.world, seat1, |t| t.body.is_some()), "it has its physics body again");
+        let inside = with_tank(&game.world, seat1, |t| t.position);
+        assert!(inside.x > 0.0 && inside.x < W && inside.y > 0.0 && inside.y < H, "arrived inside the field");
+        let before = inside;
+        let mut input = Input::default();
+        input.seats[1] = Intent { move_dir: Some(Dir::Left), ..Intent::default() };
+        for _ in 0..30 {
+            step(&mut game, input);
+        }
+        let after = with_tank(&game.world, seat1, |t| t.position);
+        assert!(after.distance_to(before) > 8.0, "seat 1 drives again: {before:?} -> {after:?}");
+    }
+
+    #[test]
+    fn a_seat_driving_back_in_is_not_a_target_and_takes_no_fire() {
+        let mut game = waves_game_seats(3, 1, 2);
+        let wave_one = step_until_entered(&mut game, 600);
+        kill_and_step(&mut game, 1);
+        let seat1 = game.seat(1).expect("seat 1");
+        game.debug_kill(wave_one).expect("wave 1's tank");
+        step_until_returning(&mut game, 1, 900);
+        for _ in 0..120 {
+            step(&mut game, Input::default());
+            if !game.is_entering(seat1) {
+                break;
+            }
+            assert!(!game.seats_on_field().contains(&Some(seat1)), "off the field while it drives in");
+            assert!(with_tank(&game.world, seat1, |t| !t.is_wreck()), "nothing out there can touch it");
+        }
+    }
+
+    #[test]
+    fn every_seat_wrecked_at_once_still_loses_the_round() {
+        let mut game = waves_game_seats(3, 1, 2);
+        step_until_entered(&mut game, 600);
+        for seat in [0, 1] {
+            game.debug_kill(seat).expect("a live seat");
+        }
+        step(&mut game, Input::default());
+        assert_eq!(game.outcome(), Outcome::Lost, "nobody is left to hold the line");
+    }
+
+    #[test]
+    fn a_round_lost_while_a_seat_waits_leaves_it_where_it_fell() {
+        let mut game = waves_game_seats(3, 1, 2);
+        step_until_entered(&mut game, 600);
+        kill_and_step(&mut game, 1);
+        let seat1 = game.seat(1).expect("seat 1");
+        for _ in 0..30 {
+            step(&mut game, Input::default());
+        }
+        // The last seat standing falls while the other is still waiting
+        // for the wave that was going to bring it back.
+        let player = game.player().expect("player");
+        with_tank_mut(&game.world, player, |t| t.shield_hp = 0.0);
+        kill_and_step(&mut game, 0);
+        assert_eq!(game.outcome(), Outcome::Lost);
+        // Up to the restart the end screen plays out; nothing comes back
+        // on it, because `wave_phase` only runs while the round does.
+        for _ in 0..(tuning().restart_delay * 60.0) as u32 - 10 {
+            step(&mut game, Input::default());
+            assert!(with_tank(&game.world, seat1, Tank::is_wreck), "the round is over; nobody comes back");
+            assert!(!game.is_entering(seat1));
+        }
+        assert_eq!(game.outcome(), Outcome::Lost);
+    }
+
+    #[test]
+    fn a_band_round_leaves_a_wrecked_seat_wrecked() {
+        let mut game = Game::default();
+        game.enemy_count_override = Some(1);
+        game.seed_override = Some(7);
+        game.player_row_override = Some(0);
+        game.players = PlayerCount::TWO;
+        // Destroy, so the round can only end on the tanks: the one enemy
+        // and every seat are shielded, so it cannot end at all.
+        game.level_overrides.mission = Some(Mission::Destroy);
+        game.map = MapFile::from_toml_str(OPEN_MAP).expect("test map parses");
+        game.init(W, H);
+        for seat in game.players().into_iter().flatten() {
+            with_tank_mut(&game.world, seat, |t| t.shield_hp = 1.0e9);
+        }
+        for tank in game.world.query_mut::<&mut Tank>().with::<&Ai>() {
+            tank.shield_hp = 1.0e9;
+        }
+        kill_and_step(&mut game, 1);
+        let seat1 = game.seat(1).expect("seat 1");
+        for _ in 0..600 {
+            step(&mut game, Input::default());
+            assert!(with_tank(&game.world, seat1, Tank::is_wreck), "a band round keeps a wrecked seat wrecked");
+            assert!(!game.is_entering(seat1));
+        }
+        assert_eq!(game.outcome(), Outcome::Playing);
+    }
+
+    #[test]
+    fn a_single_seat_wave_round_loses_on_its_one_wreck() {
+        let mut game = waves_game(3, 1);
+        step_until_entered(&mut game, 600);
+        let player = game.player().expect("player");
+        with_tank_mut(&game.world, player, |t| t.shield_hp = 0.0);
+        kill_and_step(&mut game, 0);
+        assert_eq!(game.outcome(), Outcome::Lost, "one wreck of one seat is every seat wrecked");
+        assert!(with_tank(&game.world, player, Tank::is_wreck));
+        for _ in 0..600 {
+            step(&mut game, Input::default());
+            assert!(!game.is_entering(player), "nothing comes back: the round is over");
+        }
+    }
+
     #[test]
     fn wrecks_stay_for_the_whole_round_under_the_band_plan() {
         let mut game = game_on(OPEN_MAP, 2, Some(0));
@@ -6056,7 +6767,7 @@ cells."30,20" = { kind = "frog" }
         game.level_overrides.tier_start = Some(Tier::Light);
         game.level_overrides.tier_end = Some(Tier::Super);
         game.init(W, H);
-        let player = game.player.expect("player");
+        let player = game.player().expect("player");
         with_tank_mut(&game.world, player, |t| t.shield_hp = 1.0e9);
         let plan = game.spawn_plan;
         let mut wave = 0u32;

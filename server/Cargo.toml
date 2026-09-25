@@ -1,0 +1,56 @@
+# The online co-op room server (docs/online-coop-prd.md §4.7, §4.9,
+# §4.13; CLAUDE.md's room server section): one binary that owns the
+# authoritative rounds and speaks the `bongbong::net` protocol over
+# WebSockets. Headless by construction - the game crate comes in without
+# its `render` feature, so no raylib, no cmake and no C compiler are in
+# the graph (`cargo tree -p bongbong-server -e normal | grep sola` is
+# empty).
+[package]
+name = "bongbong-server"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[features]
+# The dev surface (`devserver.rs`): a loopback JSON socket `bbmcp rooms`
+# drives, and the room-task seam it answers through. Off by default, so
+# the release image carries none of it - `just run-server-dev` and CI's
+# test build are what turn it on.
+default = []
+dev-tools = ["bongbong/dev-tools", "dep:serde_json"]
+
+[dependencies]
+# The simulation and the wire protocol, nothing that draws.
+bongbong = { path = "..", default-features = false }
+# The dev tools' JSON, on the loopback socket only.
+serde_json = { version = "1", optional = true }
+# The runtime: worker threads for the room tasks, `select!`, the 60 Hz
+# interval, channels, SIGTERM.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "signal", "net"] }
+# HTTP: `/health`, `/metrics` and the WebSocket upgrade on `/ws`.
+axum = { version = "0.8", features = ["ws"] }
+# `StreamExt`/`SinkExt` to split a socket into its reader and writer halves.
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+# The command line (`--listen`, `--insecure`, `--max-rooms`).
+clap = { version = "4", features = ["derive"] }
+# Room codes and round seeds; never on the simulation path, which draws
+# from the round's own seeded stream.
+rand = "0.10"
+# Logs with an `RUST_LOG` filter.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+# The game's own client transport (`bongbong::net::native`), so the
+# integration test can play a round the way a player's machine does.
+# Cargo unions this with the dependency above for test builds only; the
+# binary and its image still take the crate without it.
+bongbong = { path = "..", default-features = false, features = ["online"] }
+# The headless client of the integration test.
+tokio-tungstenite = "0.29"
+# `tokio::time::pause` for the lifecycle and mailbox tests.
+tokio = { version = "1", features = ["test-util"] }
+
+[[bin]]
+name = "bongbong-server"
+path = "src/main.rs"

@@ -2,8 +2,33 @@
   "mcpServers": {
     "bongbong": {
       "command": "cargo",
-      "args": ["run", "-q", "--features", "dev-tools", "--bin", "bbmcp"],
-      "env": { "BONGBONG_DEV_PORT": "4747" }
+      "args": [
+        "run",
+        "-q",
+        "--features",
+        "dev-tools",
+        "--bin",
+        "bbmcp"
+      ],
+      "env": {
+        "BONGBONG_DEV_PORT": "4747"
+      }
+    },
+    "bongbong-rooms": {
+      "command": "cargo",
+      "args": [
+        "run",
+        "-q",
+        "--features",
+        "dev-tools",
+        "--bin",
+        "bbmcp",
+        "--",
+        "rooms"
+      ],
+      "env": {
+        "BONGBONG_ROOMS_DEV_PORT": "4849"
+      }
     }
   }
 }

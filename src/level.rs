@@ -167,13 +167,17 @@ impl LevelOverrides {
                 let t = tuning();
                 let tier_start = self.tier_start.or(map.tier_start).unwrap_or(Tier::Light);
                 let tier_end = self.tier_end.or(map.tier_end).unwrap_or(Tier::Super);
-                SpawnPlan::Waves {
+                let authored = SpawnPlan::Waves {
                     waves: self.waves.or(map.waves).unwrap_or(t.wave_count_default as u32).max(1),
                     size: self.wave_size.or(map.size).unwrap_or(t.wave_size_default as u32).max(1),
                     growth: self.wave_growth.or(map.growth).unwrap_or(t.wave_growth_default as u32),
                     tier_start,
                     tier_end,
-                }
+                };
+                // The team's size is baked in here and nowhere else, so
+                // `SpawnPlan` is the plan the round is actually fought
+                // under and `wave_size`/`wave_tier` stay pure.
+                authored.scaled(t.wave_size_scale, t.wave_tier_step)
             }
         }
     }
@@ -202,6 +206,28 @@ impl SpawnPlan {
         match self {
             SpawnPlan::Band { .. } => SpawnKind::Band,
             SpawnPlan::Waves { .. } => SpawnKind::Waves,
+        }
+    }
+
+    /// The plan with every wave multiplied by `size_scale` and its tier
+    /// ramp lifted `tier_step` rungs - how a round is sized to the team
+    /// that fights it (docs/online-coop-prd.md section 4.11). A scale of
+    /// 1.0 and a step of 0 is the identity, which is what every local
+    /// round resolves with, and a band plan is never scaled at all.
+    ///
+    /// The scale lands on the first wave's size and on the tanks each
+    /// wave adds, both rounded and neither below what the plan asked for
+    /// when it asked for any, so wave `i` grows the way it was authored
+    /// to, only steeper.
+    pub fn scaled(self, size_scale: f32, tier_step: usize) -> SpawnPlan {
+        let SpawnPlan::Waves { waves, size, growth, tier_start, tier_end } = self else { return self };
+        let scale = |n: u32| (n as f32 * size_scale).round().max(0.0) as u32;
+        SpawnPlan::Waves {
+            waves,
+            size: scale(size).max(1),
+            growth: if growth == 0 { 0 } else { scale(growth).max(1) },
+            tier_start: Tier::from_index(tier_start.index() + tier_step),
+            tier_end: Tier::from_index(tier_end.index() + tier_step),
         }
     }
 
@@ -270,6 +296,22 @@ mod tests {
         assert_eq!((0..4).map(|i| plan.wave_size(i)).collect::<Vec<_>>(), [3, 4, 5, 6]);
         let flat = SpawnPlan::Waves { waves: 1, size: 3, growth: 1, tier_start: Tier::Medium, tier_end: Tier::Super };
         assert_eq!(flat.wave_tier(0), Tier::Medium, "a single wave is the start tier");
+    }
+
+    #[test]
+    fn a_scaled_plan_is_the_team_sized_one() {
+        let plan = SpawnPlan::Waves { waves: 4, size: 2, growth: 1, tier_start: Tier::Light, tier_end: Tier::Heavy };
+        assert_eq!(plan.scaled(1.0, 0), plan, "one seat is the plan as authored");
+        let four = plan.scaled(3.25, 0);
+        assert_eq!((four.wave_size(0), four.wave_size(3)), (7, 16), "every wave scales, not just the first");
+        let lifted = plan.scaled(1.0, 1);
+        assert_eq!(lifted.wave_tier(0), Tier::Medium);
+        assert_eq!(lifted.wave_tier(3), Tier::Super, "the ramp is lifted whole");
+        assert_eq!(plan.scaled(1.0, 9).wave_tier(0), Tier::Super, "the ladder clamps at the top");
+        let thin = SpawnPlan::Waves { waves: 2, size: 1, growth: 0, tier_start: Tier::Light, tier_end: Tier::Light };
+        let scaled = thin.scaled(0.2, 0);
+        assert_eq!((scaled.wave_size(0), scaled.wave_size(1)), (1, 1), "a wave never rounds away to nothing");
+        assert_eq!(SpawnPlan::Band { count: Some(4) }.scaled(3.0, 2), SpawnPlan::Band { count: Some(4) });
     }
 
     #[test]

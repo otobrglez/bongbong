@@ -1426,7 +1426,10 @@ kind = "protect"
 [spawn]
 kind = "waves"
 waves = 4
-size = 4
-growth = 2
+# Two, then one more each wave: 2, 3, 4, 5. The opening is what a round
+# is judged on, and four at once with two more every wave (7, 11, 15, 19
+# once a room of two scaled it) read as relentless rather than difficult.
+size = 2
+growth = 1
 tier_start = "light"
 tier_end = "super"

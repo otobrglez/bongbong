@@ -11,11 +11,16 @@
 use bongbong::level::{Mission, SpawnKind};
 use bongbong::map::MapFile;
 use bongbong::simulation::debug::TankPatch;
-use bongbong::simulation::{Event, Game, Input, Outcome};
+use bongbong::simulation::{Event, Game, Input, Outcome, PlayerCount};
 
 fn run(seed: u64, shielded: bool) -> (Game, usize, usize, usize) {
+    run_seats(seed, shielded, 1)
+}
+
+fn run_seats(seed: u64, shielded: bool, seats: usize) -> (Game, usize, usize, usize) {
     let (w, h) = (1280.0, 720.0);
     let mut game = Game::default();
+    game.players = PlayerCount::from_count(seats).expect("a seat count the round takes");
     game.seed_override = Some(seed);
     game.level_overrides.mission = Some(Mission::Destroy);
     game.level_overrides.spawn = Some(SpawnKind::Waves);
@@ -27,7 +32,9 @@ fn run(seed: u64, shielded: bool) -> (Game, usize, usize, usize) {
     game.map = MapFile::from_toml_str(include_str!("../maps/default.toml")).expect("default map parses");
     game.init(w, h);
     if shielded {
-        game.debug_set_tank(0, &TankPatch { shield_hp: Some(1.0e9), ..TankPatch::default() }).unwrap();
+        for seat in 0..seats {
+            game.debug_set_tank(seat, &TankPatch { shield_hp: Some(1.0e9), ..TankPatch::default() }).unwrap();
+        }
     }
     let (mut waves, mut entered, mut removed) = (0, 0, 0);
     // Three waves' worth of `wave_timeout_seconds` plus their gaps.
@@ -48,7 +55,7 @@ fn run(seed: u64, shielded: bool) -> (Game, usize, usize, usize) {
     }
     let status = game.wave_status().expect("a waves round reports status");
     eprintln!(
-        "seed={seed:#x} shielded={shielded} outcome={:?} waves_started={waves} tanks_entered={entered} wrecks_removed={removed} status={status:?} frame={}",
+        "seed={seed:#x} seats={seats} shielded={shielded} outcome={:?} waves_started={waves} tanks_entered={entered} wrecks_removed={removed} status={status:?} frame={}",
         game.outcome(),
         game.frame()
     );
@@ -75,4 +82,16 @@ fn a_three_wave_destroy_round_on_the_default_map_plays_through() {
 fn an_afk_player_still_sees_the_first_wave_arrive() {
     let (_, waves, entered, _) = run(0xB0B5, false);
     assert!(waves >= 1 && entered >= 2, "waves={waves} entered={entered}");
+}
+
+/// A couch round of two plays the wave plan the map authored, tank for
+/// tank: the plan is only ever sized to a team by a *room*, which sends
+/// `wave_size_scale` in its `Welcome` (docs/online-coop-prd.md §4.11).
+/// Both seats are shielded, so nobody falls and nobody comes back with a
+/// wave - the roll-ins counted here are the waves' own.
+#[test]
+fn two_seats_on_a_couch_still_play_the_map_as_authored() {
+    let (_, waves, entered, _) = run_seats(0xB0B5, true, 2);
+    assert_eq!(waves, 3, "every wave was called");
+    assert_eq!(entered, 2 + 3 + 4, "waves of 2, 3 and 4, exactly as with one seat");
 }

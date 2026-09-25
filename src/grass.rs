@@ -46,7 +46,7 @@
 //! last - which is what it used to do - buries a tank in grass that is
 //! rooted well past it.
 
-use sola_raylib::prelude::*;
+use crate::math::{Color, Rectangle, Vec2};
 
 use crate::canvas::{Canvas, Sheet};
 use crate::map::Theme;
@@ -232,6 +232,6 @@ pub fn draw_tuft(c: &mut impl Canvas, tuft: &GrassTuft, theme: Theme, time: f32)
     // centre of the sprite.
     let rotation = crate::trig::atan2(bend(tuft, time), size).to_degrees();
     let dest = Rectangle::new(tuft.base.x, tuft.base.y, size, height);
-    let origin = Vector2::new(size / 2.0, height);
+    let origin = Vec2::new(size / 2.0, height);
     c.blit(Sheet::Grass(theme), src, dest, origin, rotation, Color::WHITE);
 }

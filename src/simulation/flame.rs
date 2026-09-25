@@ -19,7 +19,7 @@
 //! ground-fire machinery in `props.rs`, reused untouched.
 
 use hecs::Entity;
-use sola_raylib::core::math::Vector2;
+use crate::math::Vec2;
 
 use super::props::{arm_fuse, DamageCause};
 use super::weapons::FlameJet;
@@ -48,7 +48,7 @@ const HULL_SLACK_FRACTION: f32 = 0.25;
 /// solid tile on its centre line.
 struct Cone {
     origin: Position,
-    dir: Vector2,
+    dir: Vec2,
     /// Effective reach: `flame_range`, or where the centre line met a tile.
     reach: f32,
     /// tan of the half angle: half width at distance `d` is `d * spread`.

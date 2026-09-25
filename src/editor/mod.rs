@@ -7,52 +7,34 @@
 //! and `main.rs` drives whichever mode is live.
 //!
 //! **Input arrives as a plain `BuilderInput`**, gathered once per frame by
-//! `main.rs` exactly like `simulation::Input` is for `Game::update`: a
+//! `app.rs` exactly like `simulation::Input` is for `Game::update`: a
 //! `RaylibHandle` is only ever needed to draw. That is what lets the dev
 //! server's `click`/`key`/`builder_*` tools feed the same struct a mouse
 //! or a finger produces, and the tests below run headlessly.
 //!
 //! The edit model (strokes with the toggle-erase rule, the MAP settings,
-//! load/reset, the undo stack in `history.rs`) is the part every input
-//! path shares; the bar, the dropdowns and the settings panel are the
-//! chrome on top.
+//! load/reset, the undo stack in `history.rs`) and every hit rect are this
+//! file, built into every build; the bar, the dropdowns and the settings
+//! panel are the chrome on top, drawn by `render.rs` behind the `render`
+//! feature.
 
 pub mod history;
+#[cfg(feature = "render")]
+pub mod render;
+#[cfg(feature = "render")]
+pub use render::EditorTextures;
 
 use rand::RngExt;
-use sola_raylib::prelude::*;
+use crate::math::{Color, Rectangle, Vec2};
 
-use crate::canvas::{GpuCanvas, Sheet, Sheets};
-use crate::portal::{draw_portal, portal_icon_source_rec};
-use crate::frog::FrogAnim;
 use crate::ground::{self, GroundGrid};
-use crate::hud::{mode_button_rect, BAR_FILL, DIM, HUD_LABEL_SIZE, HUD_TEXT_SIZE, TEXT};
+use crate::hud::mode_button_rect;
 use crate::level::{Mission, SpawnKind, Tier};
 use crate::map::{self, CellObject, MapEntry, MapFile, Theme};
-use crate::obstacle::{self, Drum, Material};
+use crate::obstacle::{Drum, Material};
 use crate::pickup::PickupKind;
 use crate::tank::TankKind;
-use crate::{
-    EDITOR_BAR_HIT_SLACK,
-    EDITOR_DROPDOWN_ROW_H,
-    EDITOR_DROPDOWN_W,
-    EDITOR_PANEL_BORDER_OPACITY,
-    EDITOR_PANEL_BORDER_THICKNESS,
-    EDITOR_PANEL_FILL,
-    EDITOR_PANEL_FILL_OPACITY,
-    EDITOR_PANEL_ROUNDNESS,
-    EDITOR_PANEL_SEGMENTS,
-    EDITOR_PANEL_SHADOW_OFFSET,
-    EDITOR_PANEL_SHADOW_OPACITY,
-    EDITOR_SETTINGS_W,
-    EDITOR_STEPPER_SIZE,
-    EDITOR_TOOLBAR_MARGIN,
-    Layout,
-    OBSTACLE_GRID_SIZE,
-    PATHFIND_CELL_SIZE,
-    Position,
-    Rect,
-};
+use crate::{EDITOR_BAR_HIT_SLACK, EDITOR_DROPDOWN_ROW_H, EDITOR_DROPDOWN_W, EDITOR_SETTINGS_W, EDITOR_STEPPER_SIZE, Layout, PATHFIND_CELL_SIZE, Position, Rect};
 pub use history::{CellChange, EditStep, MapDiff, MapSettings, UndoStack};
 
 /// The builder's accent: the amber the `BUILD` label, the active
@@ -61,11 +43,10 @@ pub const BUILD_ACCENT: Color = crate::hud::BUILD_COLOR;
 
 // Bar slots along the build bar (docs/game-editor-fusion.md section 7):
 // x offsets from the panel's left, fixed so a name or a readout changing
-// width never nudges the buttons after it. `bar_slot_tests` pins that
-// they do not overlap and all end before the SAVE/PLAY buttons.
-const SLOT_BUILD: f32 = 8.0;
-const SLOT_NAME: f32 = 72.0;
-const NAME_W: f32 = 152.0;
+// width never nudges the buttons after it. These are the ones the hit
+// rects read; the drawing's own (`BUILD`, the name, the caret) sit with
+// it in render.rs, and `bar_slots_fit_the_default_bar_without_overlapping`
+// there pins that nothing overlaps.
 const SLOT_CATEGORIES: f32 = 232.0;
 /// A category button is its current tool's icon and a caret, no text:
 /// the standard 960 px bar has no room for five labelled buttons, so the
@@ -84,92 +65,12 @@ const MAP_BUTTON_W: f32 = 64.0;
 /// standard field); the wheel scrolls the rest.
 const LOAD_VISIBLE_ROWS: usize = 8;
 const LOAD_PANEL_W: f32 = 360.0;
-/// The gap a button's drawn box keeps from the slot after it, so two
-/// adjacent outlines never touch.
-const BUTTON_GAP: f32 = 8.0;
-/// The category button's text column, right of its full-bleed icon.
-/// The category caret's left edge: flush with the button's drawn box,
-/// two blocks in from the active outline, so the 10 px name (`GROUND`
-/// is the widest) ends clear of it.
-const CATEGORY_CARET_X: i32 = (CATEGORY_W - BUTTON_GAP) as i32 - CARET_W;
-/// A caret is 10 px wide (`draw_caret`).
-const CARET_W: i32 = 10;
-/// A dropdown row's name column, right of its 32 px icon at 8 px inset.
-const DROPDOWN_TEXT_X: i32 = 48;
 /// The icons in the bar and the dropdown rows, the sheets' own 32 px.
 const ICON_PX: f32 = 32.0;
 /// The settings panel's row layout: label at the left inset, the `<`
 /// button, the value, the `>` button at the right inset.
 const SETTINGS_INSET: f32 = 4.0;
 const SETTINGS_DEC_X: f32 = 124.0;
-const SETTINGS_VALUE_X: i32 = 180;
-const SETTINGS_LABEL_SIZE: i32 = 16;
-
-/// The sprite atlases the builder needs to draw placed objects and their
-/// bar/dropdown icons - a small subset of `game::Textures`, plus the one
-/// texture only the builder uses (`eraser`, see docs/map-editor-design.md).
-pub struct EditorTextures<'a> {
-    pub obstacles: &'a Texture2D,
-    /// The props sheet (`obstacle::Sheet::Props`).
-    pub props: &'a Texture2D,
-    /// The ground tileset of the canvas map's theme
-    /// (`Theme::ground_texture_path`) - `app.rs` picks it per frame.
-    pub ground: &'a Texture2D,
-    /// The tall-grass sheet of the canvas map's theme
-    /// (`Theme::grass_texture_path`).
-    pub grass: &'a Texture2D,
-    pub frog_idle: &'a Texture2D,
-    pub pickup_health: &'a Texture2D,
-    pub pickup_ammo: &'a Texture2D,
-    pub pickup_laser: &'a Texture2D,
-    pub pickup_minigun: &'a Texture2D,
-    pub pickup_plasma: &'a Texture2D,
-    pub pickup_missiles: &'a Texture2D,
-    pub pickup_speedup: &'a Texture2D,
-    pub pickup_shield: &'a Texture2D,
-    pub pickup_flamethrower: &'a Texture2D,
-    pub pickup_frog_health: &'a Texture2D,
-    pub eraser: &'a Texture2D,
-    /// static/portal_sheet.png - the spiral and its bar icon (portal.rs).
-    pub portal: &'a Texture2D,
-    pub tanks: &'a Texture2D,
-    pub trees: &'a Texture2D,
-}
-
-/// The builder's `Sheet` lookup, for the `ground::draw` it shares with the
-/// game. It holds the sheets a map can show at rest; a sheet only a live
-/// round draws from (damage, tracks, blasts, the frog's other clips) is a
-/// programming error here.
-impl Sheets for EditorTextures<'_> {
-    fn texture(&self, sheet: Sheet) -> &Texture2D {
-        match sheet {
-            // Picked per frame by `app.rs` from the canvas's theme, the
-            // theme `render` names here.
-            Sheet::Ground(_) => self.ground,
-            Sheet::Walls => self.obstacles,
-            Sheet::Props => self.props,
-            Sheet::Trees => self.trees,
-            Sheet::Grass(_) => self.grass,
-            Sheet::Portal => self.portal,
-            Sheet::Tanks => self.tanks,
-            Sheet::Frog { clip: FrogAnim::Idle, .. } => self.frog_idle,
-            Sheet::Pickup(PickupKind::Health) => self.pickup_health,
-            Sheet::Pickup(PickupKind::Ammo) => self.pickup_ammo,
-            Sheet::Pickup(PickupKind::Laser) => self.pickup_laser,
-            Sheet::Pickup(PickupKind::Minigun) => self.pickup_minigun,
-            Sheet::Pickup(PickupKind::Plasma) => self.pickup_plasma,
-            Sheet::Pickup(PickupKind::Missiles) => self.pickup_missiles,
-            Sheet::Pickup(PickupKind::SpeedUp) => self.pickup_speedup,
-            Sheet::Pickup(PickupKind::Shield) => self.pickup_shield,
-            Sheet::Pickup(PickupKind::Flamethrower) => self.pickup_flamethrower,
-            Sheet::Pickup(PickupKind::FrogHealth) => self.pickup_frog_health,
-            Sheet::Damage | Sheet::MinigunMount | Sheet::MissilePod | Sheet::Tracks | Sheet::BarrelExplosion | Sheet::Frog { .. } => {
-                panic!("the builder has no {sheet:?} sheet")
-            }
-        }
-    }
-}
-
 /// One frame of raw builder input, in **window** pixels (the bar
 /// included). `main.rs` fills it from the mouse, the touch screen and the
 /// keyboard; the dev server fills it from `click`/`key` requests. Nothing
@@ -178,7 +79,7 @@ impl Sheets for EditorTextures<'_> {
 pub struct BuilderInput {
     /// Where the pointer is this frame: the mouse, or the finger while it
     /// touches. `None` on a touch screen with nothing touching.
-    pub pointer: Option<Vector2>,
+    pub pointer: Option<Vec2>,
     /// The primary button (left mouse, a finger) went down this frame.
     pub pressed: bool,
     /// The primary button is down this frame (including the press frame).
@@ -432,14 +333,6 @@ impl FileRow {
             &[FileRow::Load]
         }
     }
-
-    fn label(self) -> &'static str {
-        match self {
-            FileRow::Load => "LOAD...",
-            FileRow::Save => "SAVE",
-            FileRow::SaveAs => "SAVE AS...",
-        }
-    }
 }
 
 /// What the caller (`mode::Session`) should do after this frame's
@@ -500,7 +393,7 @@ pub struct MapEditor {
     /// The last pointer position `update` saw, in window pixels - the
     /// hover highlight and the cursor readout draw from it, so a touch
     /// screen keeps showing the last tapped cell.
-    pointer: Option<Vector2>,
+    pointer: Option<Vec2>,
     pub cli_overrides: CliOverrides,
     /// `render` draws a flat white field instead of the ground tileset -
     /// the builder-side twin of `Game::plain_canvas`.
@@ -866,8 +759,8 @@ impl MapEditor {
     /// The bar button under a window position, if any. Every button's
     /// hit rect reaches `EDITOR_BAR_HIT_SLACK` above and below its drawn
     /// box, so a slightly low tap on a phone still lands.
-    fn bar_button_at(point: Vector2, layout: &Layout) -> Option<BarButton> {
-        let on = |rect: Rectangle| hit_rect(rect).check_collision_point_rec(point);
+    fn bar_button_at(point: Vec2, layout: &Layout) -> Option<BarButton> {
+        let on = |rect: Rectangle| hit_rect(rect).contains(point);
         if on(mode_button_rect(layout.panel)) {
             return Some(BarButton::Play);
         }
@@ -1010,21 +903,8 @@ impl MapEditor {
     /// Whether a window position lands on the builder's own chrome (the
     /// bar, or the open popup over the field) - a press there never
     /// paints the cell behind it and the hover highlight hides.
-    fn point_on_ui(&self, point: Vector2, layout: &Layout) -> bool {
-        layout.panel.contains(point) || self.popup_rect(layout).is_some_and(|r| r.check_collision_point_rec(point))
-    }
-
-    /// The field cell under the last pointer position, when that is on
-    /// the field and not on chrome - what the hover highlight and the
-    /// cursor readout show.
-    fn cursor_cell(&self, layout: &Layout) -> Option<(i32, i32)> {
-        let pointer = self.pointer?;
-        let (width, height) = (layout.field.w, layout.field.h);
-        let m = layout.to_field(pointer);
-        if self.point_on_ui(pointer, layout) || m.x < 0.0 || m.x >= width || m.y < 0.0 || m.y >= height {
-            return None;
-        }
-        Some(map::world_to_cell(m))
+    fn point_on_ui(&self, point: Vec2, layout: &Layout) -> bool {
+        layout.panel.contains(point) || self.popup_rect(layout).is_some_and(|r| r.contains(point))
     }
 
     // --- input ---
@@ -1058,7 +938,7 @@ impl MapEditor {
             if let Some(pointer) = input.pointer {
                 let over = Category::ALL
                     .into_iter()
-                    .find(|&c| hit_rect(Self::category_rect(layout, c)).check_collision_point_rec(pointer));
+                    .find(|&c| hit_rect(Self::category_rect(layout, c)).contains(pointer));
                 if let Some(category) = over {
                     self.cycle_tool(category, input.wheel < 0.0);
                 }
@@ -1161,7 +1041,7 @@ impl MapEditor {
                     let picked = FileRow::all()
                         .iter()
                         .enumerate()
-                        .find(|&(i, _)| Self::file_row_rect(layout, i).check_collision_point_rec(pointer))
+                        .find(|&(i, _)| Self::file_row_rect(layout, i).contains(pointer))
                         .map(|(_, row)| *row);
                     match picked {
                         Some(FileRow::Load) => {
@@ -1189,7 +1069,7 @@ impl MapEditor {
                     return;
                 };
                 let panel = Self::load_panel_rect(layout, entries.len());
-                if !panel.check_collision_point_rec(pointer) {
+                if !panel.contains(pointer) {
                     return;
                 }
                 if input.pressed {
@@ -1198,7 +1078,7 @@ impl MapEditor {
                         .skip(scroll)
                         .take(LOAD_VISIBLE_ROWS)
                         .enumerate()
-                        .find(|&(i, _)| Self::load_row_rect(panel, i).check_collision_point_rec(pointer))
+                        .find(|&(i, _)| Self::load_row_rect(panel, i).contains(pointer))
                         .map(|(_, e)| e.name.clone());
                     if let Some(name) = picked {
                         if let Err(e) = self.load_named(&name) {
@@ -1220,7 +1100,7 @@ impl MapEditor {
                     let picked = category
                         .tools()
                         .enumerate()
-                        .find(|&(i, _)| Self::dropdown_row_rect(layout, category, i).check_collision_point_rec(pointer))
+                        .find(|&(i, _)| Self::dropdown_row_rect(layout, category, i).contains(pointer))
                         .map(|(_, tool)| tool);
                     if let Some(tool) = picked {
                         self.select_tool(tool);
@@ -1232,22 +1112,22 @@ impl MapEditor {
                     self.popup = Some(Popup::Settings);
                     return;
                 };
-                if !Self::settings_rect(layout).check_collision_point_rec(pointer) {
+                if !Self::settings_rect(layout).contains(pointer) {
                     return;
                 }
                 if input.pressed {
                     for (i, row) in SETTINGS_ROWS.iter().enumerate() {
                         let rect = Self::settings_row_rect(layout, i);
-                        if !rect.check_collision_point_rec(pointer) {
+                        if !rect.contains(pointer) {
                             continue;
                         }
                         if *row == SettingsRow::Reset {
-                            if Self::settings_reset_rect(rect).check_collision_point_rec(pointer) {
+                            if Self::settings_reset_rect(rect).contains(pointer) {
                                 self.reset();
                             }
-                        } else if Self::settings_dec_rect(rect).check_collision_point_rec(pointer) {
+                        } else if Self::settings_dec_rect(rect).contains(pointer) {
                             self.step_setting(*row, false);
-                        } else if Self::settings_inc_rect(rect).check_collision_point_rec(pointer) {
+                        } else if Self::settings_inc_rect(rect).contains(pointer) {
                             self.step_setting(*row, true);
                         }
                     }
@@ -1282,192 +1162,6 @@ impl MapEditor {
 
     // --- drawing ---
 
-    /// Draw the whole builder: ground, placed objects, hover highlight
-    /// through a `Camera2D` at the field origin (so every cell position
-    /// stays the world position the map format uses), then the bar and
-    /// any open popup in window space on top.
-    /// Draw the builder into `composite` (the bitmap: the bar over the
-    /// field, `layout.window_size()` in size) and put that on the window
-    /// through `view`, exactly as `Game::render` does for a round.
-    pub fn render(
-        &self,
-        rl: &mut RaylibHandle,
-        thread: &RaylibThread,
-        composite: &mut RenderTexture2D,
-        view: &crate::view::View,
-        backdrop: Color,
-        layout: &Layout,
-        textures: &EditorTextures,
-    ) {
-        let (width, height) = (layout.field.w, layout.field.h);
-        let cursor = self.cursor_cell(layout);
-        // A clock read, not an input: the builder has no round clock, and
-        // the wall clock animates the water and turns a placed portal so
-        // the author sees what a round will show.
-        let time = rl.get_time() as f32;
-        let camera = Camera2D {
-            offset: layout.field_origin(),
-            target: Vector2::new(0.0, 0.0),
-            rotation: 0.0,
-            zoom: 1.0,
-        };
-        rl.draw_texture_mode(thread, composite, |mut d| {
-        d.clear_background(Color::new(30, 30, 34, 255));
-
-        d.draw_mode2D(camera, |mut d, _| {
-            if self.plain_canvas {
-                d.draw_rectangle(0, 0, width as i32, height as i32, Color::WHITE);
-            } else {
-                ground::draw(&mut GpuCanvas::new(&mut d, textures), &self.ground, self.map.theme, time);
-            }
-
-            // Portals first, under every other cell: three cells of art on
-            // one anchor cell, and `iter_cells` is row-sorted, so a portal
-            // drawn in the loop would cover a wall placed above it. Ghosted
-            // while the network is inactive (fewer than two), with the
-            // anchor outlined like a gate off its edge - placed, not
-            // usable. `time` is the wall clock above.
-            let portals = self.map.portal_cells();
-            let active = portals.len() >= 2;
-            let tint = if active { Color::WHITE } else { Color::new(255, 255, 255, 110) };
-            for &(col, row) in &portals {
-                let pos = map::cell_to_world(col, row);
-                draw_portal(&mut GpuCanvas::new(&mut d, textures), pos, time, tint);
-                if !active {
-                    let size = OBSTACLE_GRID_SIZE;
-                    d.draw_rectangle_lines_ex(Rectangle::new(pos.x - size / 2.0, pos.y - size / 2.0, size, size), 2.0, GATE_COLOR);
-                }
-            }
-
-            for (col, row, obj) in self.map.iter_cells() {
-                let pos = map::cell_to_world(col, row);
-                let size = OBSTACLE_GRID_SIZE;
-                let dest = Rectangle::new(pos.x, pos.y, size, size);
-                let origin = Vector2::new(size / 2.0, size / 2.0);
-                match *obj {
-                    CellObject::Barrel { drum: Some(drum) } => {
-                        let src = obstacle::drum_source_rec(drum);
-                        d.draw_texture_pro(textures.props, src, dest, origin, 0.0, Color::WHITE);
-                    }
-                    CellObject::Wall { .. } | CellObject::Sandbag | CellObject::Barrel { .. } | CellObject::Fence => {
-                        let material = obj.material().expect("solid cells have a material");
-                        let (sheet, src) = obstacle::icon_source_rec(material);
-                        d.draw_texture_pro(sheet_texture(textures, sheet), src, dest, origin, 0.0, Color::WHITE);
-                    }
-                    CellObject::Oil => {
-                        let src = obstacle::oil_source_rec(pos);
-                        d.draw_texture_pro(textures.props, src, dest, origin, 0.0, Color::WHITE);
-                    }
-                    CellObject::Tree | CellObject::Pine => {
-                        // Drawn at the sprite's own 48px, not the 32px cell,
-                        // so the canopy overhang matches a round.
-                        let material = obj.material().expect("tree cells have a material");
-                        let (sheet, src) = obstacle::icon_source_rec(material);
-                        let big = crate::TREE_TEXTURE_SIZE;
-                        let dest = Rectangle::new(pos.x, pos.y, big, big);
-                        let origin = Vector2::new(big / 2.0, big / 2.0);
-                        d.draw_texture_pro(sheet_texture(textures, sheet), src, dest, origin, 0.0, Color::WHITE);
-                    }
-                    CellObject::Road | CellObject::Water => {} // already painted into `self.ground`
-                    CellObject::TallGrass => {
-                        // The round scatters several hashed tufts per cell;
-                        // one centred tuft is enough to show the cell is
-                        // grassed.
-                        let cell = crate::GRASS_TEXTURE_SIZE;
-                        let src = Rectangle::new(0.0, 0.0, cell, cell);
-                        let scale = cell * crate::tuning::tuning().grass_scale;
-                        let at = Rectangle::new(pos.x, pos.y + size / 2.0, scale, scale);
-                        d.draw_texture_pro(textures.grass, src, at, Vector2::new(scale / 2.0, scale), 0.0, Color::WHITE);
-                    }
-                    CellObject::Frog => {
-                        let src = Rectangle::new(0.0, 0.0, crate::FROG_TEXTURE_SIZE, crate::FROG_TEXTURE_SIZE);
-                        d.draw_texture_pro(textures.frog_idle, src, dest, origin, 0.0, Color::WHITE);
-                    }
-                    CellObject::Start => {
-                        draw_player_ring(&mut d, pos, size / 2.0, 0);
-                        let src = crate::tank::icon_source_rec(0);
-                        d.draw_texture_pro(textures.tanks, src, dest, origin, 0.0, Color::WHITE);
-                    }
-                    CellObject::Start2 => {
-                        draw_player_ring(&mut d, pos, size / 2.0, 1);
-                        let src = crate::tank::icon_source_rec(1);
-                        d.draw_texture_pro(textures.tanks, src, dest, origin, 0.0, Color::WHITE);
-                    }
-                    CellObject::EnemyFrog => {
-                        draw_enemy_ring(&mut d, pos, size / 2.0);
-                        let src = Rectangle::new(0.0, 0.0, crate::FROG_TEXTURE_SIZE, crate::FROG_TEXTURE_SIZE);
-                        d.draw_texture_pro(textures.frog_idle, src, dest, origin, 0.0, Color::WHITE);
-                    }
-                    CellObject::Gate => match gate_inward(pos, width, height) {
-                        Some(inward) => draw_gate_chevron(&mut d, pos, size, inward),
-                        None => d.draw_rectangle_lines_ex(
-                            Rectangle::new(pos.x - size / 2.0, pos.y - size / 2.0, size, size),
-                            2.0,
-                            GATE_COLOR,
-                        ),
-                    },
-                    CellObject::Pickup { pickup } => {
-                        let texture = pickup_texture(textures, pickup);
-                        let src = Rectangle::new(0.0, 0.0, crate::PICKUP_TEXTURE_SIZE, crate::PICKUP_TEXTURE_SIZE);
-                        d.draw_texture_pro(texture, src, dest, origin, 0.0, Color::WHITE);
-                    }
-                    // Drawn in the pre-pass above.
-                    CellObject::Portal => {}
-                }
-            }
-
-            // Hover highlight - no visible grid lines otherwise, per
-            // docs/map-editor-design.md. On touch this is the last tapped
-            // cell.
-            if let Some((col, row)) = cursor {
-                let pos = map::cell_to_world(col, row);
-                let size = OBSTACLE_GRID_SIZE;
-                d.draw_rectangle_lines_ex(
-                    Rectangle::new(pos.x - size / 2.0, pos.y - size / 2.0, size, size),
-                    2.0,
-                    Color::new(255, 255, 255, 160),
-                );
-            }
-
-            // The status line, bottom-left of the field: the active tool,
-            // the cell under the pointer (or the last tapped one), and any
-            // message.
-            let mut line = format!("{}: {}", self.active_category().map(|c| c.label()).unwrap_or("TOOL"), short_label(self.active_tool));
-            if let Some((col, row)) = cursor {
-                let under = self.map.cell(col, row).map(cell_label).unwrap_or("");
-                line.push_str(&format!("   {col},{row} {under}"));
-            }
-            if let Some(status) = &self.status {
-                line.push_str(&format!("   {status}"));
-            }
-            d.draw_text(&line, EDITOR_TOOLBAR_MARGIN as i32, (height - 22.0) as i32, 14, Color::LIGHTGRAY);
-        });
-
-        self.draw_bar(&mut d, layout, textures, cursor);
-        match &self.popup {
-            None => {}
-            Some(Popup::Dropdown(category)) => self.draw_dropdown(&mut d, layout, textures, *category),
-            Some(Popup::Settings) => self.draw_settings(&mut d, layout),
-            Some(Popup::File) => Self::draw_file_menu(&mut d, layout),
-            Some(Popup::Load { entries, scroll }) => Self::draw_load_list(&mut d, layout, entries, *scroll),
-            Some(Popup::Save { name }) => {
-                let panel = Self::save_prompt_rect(layout);
-                draw_panel(&mut d, panel);
-                d.draw_text("Save as:", (panel.x + 12.0) as i32, (panel.y + 10.0) as i32, 16, TEXT);
-                d.draw_text(&format!("{name}_"), (panel.x + 12.0) as i32, (panel.y + 34.0) as i32, 18, TEXT);
-                d.draw_text(
-                    "Enter to save, Esc to cancel",
-                    (panel.x + 12.0) as i32,
-                    (panel.y + 58.0) as i32,
-                    12,
-                    Color::GRAY,
-                );
-            }
-        }
-        });
-        crate::view::present(rl, thread, composite, view, backdrop);
-    }
-
     /// Whether the singleton `tool` already has its object on the map -
     /// the badge on its icon.
     pub fn singleton_placed(&self, tool: Tool) -> bool {
@@ -1480,153 +1174,6 @@ impl MapEditor {
         }
     }
 
-    /// The HUD bar in build mode (docs/game-editor-fusion.md section 7):
-    /// `BUILD`, the map's name with a `*` while edited, the five category
-    /// buttons, ERASE, UNDO, REDO, MAP, the cursor readout, the dev SAVE
-    /// button and PLAY at the right end.
-    fn draw_bar(&self, d: &mut impl RaylibDraw, layout: &Layout, textures: &EditorTextures, cursor: Option<(i32, i32)>) {
-        let panel = layout.panel;
-        let (px, py, pw, ph) = (panel.x as i32, panel.y as i32, panel.w as i32, panel.h as i32);
-        d.draw_rectangle(px, py, pw, ph, BAR_FILL);
-        let text_y = py + (ph - HUD_TEXT_SIZE) / 2;
-
-        d.draw_text("BUILD", px + SLOT_BUILD as i32, text_y, HUD_TEXT_SIZE, BUILD_ACCENT);
-        let name = format!("{}{}", self.name(), if self.dirty() { " *" } else { "" });
-        d.draw_text(&fit_text(&name, NAME_W, HUD_TEXT_SIZE), px + SLOT_NAME as i32, text_y, HUD_TEXT_SIZE, TEXT);
-
-        for category in Category::ALL {
-            self.draw_category_button(d, layout, textures, category);
-        }
-
-        let erase = Self::erase_rect(layout);
-        draw_tool_icon(d, textures, self.map.theme, Tool::Eraser, Rectangle::new(erase.x + 4.0, erase.y, ICON_PX, ICON_PX));
-        if self.active_tool == Tool::Eraser {
-            active_outline(d, erase.x as i32, py, (SMALL_BUTTON_W - 4.0) as i32, ph, BUILD_ACCENT);
-        }
-
-        let undo_color = if self.history.undo_depth() > 0 { TEXT } else { DIM };
-        draw_small_button(d, Self::undo_rect(layout), "UNDO", undo_color);
-        let redo_color = if self.history.redo_depth() > 0 { TEXT } else { DIM };
-        draw_small_button(d, Self::redo_rect(layout), "REDO", redo_color);
-
-        let file_open = matches!(self.popup, Some(Popup::File | Popup::Load { .. } | Popup::Save { .. }));
-        draw_menu_button(d, Self::file_rect(layout), "FILE", file_open);
-        draw_menu_button(d, Self::map_rect(layout), "MAP", matches!(self.popup, Some(Popup::Settings)));
-
-        let _ = cursor; // the readout is the field's status line, see `render`
-        crate::hud::draw_mode_button(d, panel, "PLAY", BUILD_ACCENT);
-    }
-
-    /// The FILE menu below its button.
-    fn draw_file_menu(d: &mut impl RaylibDraw, layout: &Layout) {
-        draw_panel(d, Self::file_menu_rect(layout));
-        for (i, row) in FileRow::all().iter().enumerate() {
-            let rect = Self::file_row_rect(layout, i);
-            d.draw_text(row.label(), rect.x as i32 + 16, (rect.y + (rect.height - HUD_TEXT_SIZE as f32) / 2.0) as i32, HUD_TEXT_SIZE, TEXT);
-        }
-    }
-
-    /// The Load list: one row per map, shipped ones marked, a scroll hint
-    /// when there are more than fit.
-    fn draw_load_list(d: &mut impl RaylibDraw, layout: &Layout, entries: &[MapEntry], scroll: usize) {
-        let panel = Self::load_panel_rect(layout, entries.len());
-        draw_panel(d, panel);
-        if entries.is_empty() {
-            d.draw_text("no maps to load", panel.x as i32 + 16, panel.y as i32 + 15, HUD_TEXT_SIZE, DIM);
-            return;
-        }
-        for (i, entry) in entries.iter().skip(scroll).take(LOAD_VISIBLE_ROWS).enumerate() {
-            let row = Self::load_row_rect(panel, i);
-            let text_y = (row.y + (row.height - HUD_TEXT_SIZE as f32) / 2.0) as i32;
-            d.draw_text(&fit_text(&entry.name, LOAD_PANEL_W - 120.0, HUD_TEXT_SIZE), row.x as i32 + 16, text_y, HUD_TEXT_SIZE, TEXT);
-            if !entry.on_disk {
-                d.draw_text("shipped", (row.x + row.width - 80.0) as i32, text_y, HUD_TEXT_SIZE, DIM);
-            }
-        }
-        if entries.len() > LOAD_VISIBLE_ROWS {
-            let hint = format!("{}-{} of {}  (wheel)", scroll + 1, (scroll + LOAD_VISIBLE_ROWS).min(entries.len()), entries.len());
-            d.draw_text(&hint, panel.x as i32 + 16, (panel.y + panel.height - 14.0) as i32, HUD_LABEL_SIZE, DIM);
-        }
-    }
-
-    /// One category button: the current tool's icon full-bleed at the
-    /// left and a caret beside it, outlined in the accent while the
-    /// active brush is one of its tools. The tool's name is in the
-    /// field's status line.
-    fn draw_category_button(&self, d: &mut impl RaylibDraw, layout: &Layout, textures: &EditorTextures, category: Category) {
-        let rect = Self::category_rect(layout, category);
-        let tool = self.current_tool(category);
-        let (x, y, h) = (rect.x as i32, rect.y as i32, rect.height as i32);
-        draw_tool_icon(d, textures, self.map.theme, tool, Rectangle::new(rect.x, rect.y, ICON_PX, ICON_PX));
-        if self.singleton_placed(tool) {
-            draw_badge(d, rect.x + ICON_PX, rect.y);
-        }
-        let open = matches!(self.popup, Some(Popup::Dropdown(c)) if c == category);
-        let label_color = if open { BUILD_ACCENT } else { DIM };
-        draw_caret(d, x + CATEGORY_CARET_X, y + (h - CARET_W) / 2, label_color);
-        if self.active_category() == Some(category) {
-            active_outline(d, x, y, (CATEGORY_W - BUTTON_GAP) as i32, h, BUILD_ACCENT);
-        }
-    }
-
-    /// A category's tool list below its button: one row per tool, the
-    /// current one highlighted.
-    fn draw_dropdown(&self, d: &mut impl RaylibDraw, layout: &Layout, textures: &EditorTextures, category: Category) {
-        draw_panel(d, Self::dropdown_rect(layout, category));
-        for (i, tool) in category.tools().enumerate() {
-            let row = Self::dropdown_row_rect(layout, category, i);
-            if tool == self.current_tool(category) {
-                let inset = Rectangle::new(row.x + 4.0, row.y + 2.0, row.width - 8.0, row.height - 4.0);
-                d.draw_rectangle_rounded(inset, 0.2, EDITOR_PANEL_SEGMENTS, Color::new(255, 255, 255, 40));
-            }
-            // A 40 px rect: the icon's own 4 px inset makes it 32 px at 8.
-            let icon = Rectangle::new(row.x + 4.0, row.y + 4.0, ICON_PX + 8.0, ICON_PX + 8.0);
-            draw_tool_icon(d, textures, self.map.theme, tool, icon);
-            if self.singleton_placed(tool) {
-                draw_badge(d, icon.x + icon.width - 4.0, icon.y + 4.0);
-            }
-            let text_y = row.y as i32 + (EDITOR_DROPDOWN_ROW_H as i32 - HUD_TEXT_SIZE) / 2;
-            d.draw_text(label(tool), row.x as i32 + DROPDOWN_TEXT_X, text_y, HUD_TEXT_SIZE, TEXT);
-        }
-    }
-
-    /// The MAP settings panel (docs/game-editor-fusion.md section 9): a
-    /// stepper per map key and the RESET MAP button.
-    fn draw_settings(&self, d: &mut impl RaylibDraw, layout: &Layout) {
-        draw_panel(d, Self::settings_rect(layout));
-        let settings = self.settings();
-        let waves_off = settings.spawn == SpawnKind::Band;
-        for (i, row) in SETTINGS_ROWS.iter().enumerate() {
-            let rect = Self::settings_row_rect(layout, i);
-            let text_y = rect.y as i32 + (EDITOR_DROPDOWN_ROW_H as i32 - HUD_TEXT_SIZE) / 2;
-            if *row == SettingsRow::Reset {
-                let button = Self::settings_reset_rect(rect);
-                let color = if self.dirty() { BUILD_ACCENT } else { DIM };
-                let inset = Rectangle::new(button.x, button.y + 4.0, button.width, button.height - 8.0);
-                d.draw_rectangle_rounded_lines_ex(inset, 0.2, EDITOR_PANEL_SEGMENTS, 2.0, color);
-                let w = text_width(row.label(), HUD_TEXT_SIZE);
-                d.draw_text(row.label(), (button.x + (button.width - w) / 2.0) as i32, text_y, HUD_TEXT_SIZE, color);
-                continue;
-            }
-            let dim = waves_off && row.is_wave_row();
-            let label_color = if dim { Color::new(70, 70, 76, 255) } else { DIM };
-            let value_color = if dim { DIM } else { TEXT };
-            d.draw_text(row.label(), rect.x as i32 + SETTINGS_INSET as i32, text_y, SETTINGS_LABEL_SIZE, label_color);
-            for (button, glyph) in [(Self::settings_dec_rect(rect), "<"), (Self::settings_inc_rect(rect), ">")] {
-                let inset = Rectangle::new(button.x + 2.0, button.y + 4.0, button.width - 4.0, button.height - 8.0);
-                d.draw_rectangle_rounded_lines_ex(inset, 0.2, EDITOR_PANEL_SEGMENTS, 1.0, Color::new(255, 255, 255, 60));
-                let w = text_width(glyph, HUD_TEXT_SIZE);
-                d.draw_text(glyph, (button.x + (button.width - w) / 2.0) as i32, text_y, HUD_TEXT_SIZE, value_color);
-            }
-            let value = row.value(&settings);
-            let value_x = rect.x as i32 + SETTINGS_VALUE_X;
-            d.draw_text(&value, value_x, text_y, HUD_TEXT_SIZE, value_color);
-            if row.cli_override(self.cli_overrides) {
-                let x = value_x + text_width(&value, HUD_TEXT_SIZE) as i32 + 4;
-                d.draw_text("(cli)", x, text_y + 5, HUD_LABEL_SIZE, DIM);
-            }
-        }
-    }
 }
 
 /// One of the bar's buttons, as `bar_button_at` reports a press.
@@ -1680,73 +1227,6 @@ const SETTINGS_ROWS: [SettingsRow; 12] = [
 
 const MISSIONS: [Mission; 3] = [Mission::Protect, Mission::Hunt, Mission::Destroy];
 
-impl SettingsRow {
-    fn label(self) -> &'static str {
-        match self {
-            SettingsRow::Tanks => "TANKS",
-            SettingsRow::Tank => "TANK",
-            SettingsRow::Tank2 => "TANK 2",
-            SettingsRow::Mission => "MISSION",
-            SettingsRow::Spawn => "SPAWN",
-            SettingsRow::Waves => "WAVES",
-            SettingsRow::Size => "SIZE",
-            SettingsRow::Growth => "GROWTH",
-            SettingsRow::TierStart => "TIER START",
-            SettingsRow::TierEnd => "TIER END",
-            SettingsRow::Theme => "THEME",
-            SettingsRow::Reset => "RESET MAP",
-        }
-    }
-
-    /// One of the five rows that only matter to a Waves spawn plan.
-    fn is_wave_row(self) -> bool {
-        matches!(
-            self,
-            SettingsRow::Waves | SettingsRow::Size | SettingsRow::Growth | SettingsRow::TierStart | SettingsRow::TierEnd
-        )
-    }
-
-    /// The row's value as the panel shows it; `auto` for `None`.
-    fn value(self, s: &MapSettings) -> String {
-        fn auto_or<T>(v: Option<T>, f: impl Fn(T) -> String) -> String {
-            v.map(f).unwrap_or_else(|| "auto".to_string())
-        }
-        match self {
-            SettingsRow::Tanks => auto_or(s.tanks, |n| n.to_string()),
-            SettingsRow::Tank => auto_or(s.tank, |k| k.name().to_string()),
-            SettingsRow::Tank2 => auto_or(s.tank2, |k| k.name().to_string()),
-            SettingsRow::Mission => s.mission.name().to_string(),
-            SettingsRow::Spawn => s.spawn.name().to_string(),
-            SettingsRow::Waves => auto_or(s.waves, |n| n.to_string()),
-            SettingsRow::Size => auto_or(s.size, |n| n.to_string()),
-            SettingsRow::Growth => auto_or(s.growth, |n| n.to_string()),
-            SettingsRow::TierStart => auto_or(s.tier_start, |t| t.name().to_string()),
-            SettingsRow::TierEnd => auto_or(s.tier_end, |t| t.name().to_string()),
-            SettingsRow::Theme => s.theme.name().to_string(),
-            SettingsRow::Reset => String::new(),
-        }
-    }
-
-    /// Whether a CLI flag outranks this row's value at PLAY.
-    fn cli_override(self, o: CliOverrides) -> bool {
-        match self {
-            SettingsRow::Tanks => o.tanks,
-            SettingsRow::Tank => o.tank,
-            SettingsRow::Tank2 => o.tank2,
-            SettingsRow::Mission => o.mission,
-            SettingsRow::Spawn => o.spawn,
-            SettingsRow::Waves => o.waves,
-            SettingsRow::Size => o.wave_size,
-            SettingsRow::Growth => o.wave_growth,
-            SettingsRow::TierStart => o.tier_start,
-            SettingsRow::TierEnd => o.tier_end,
-            // No CLI flag names a theme: the map is the only source.
-            SettingsRow::Theme => false,
-            SettingsRow::Reset => false,
-        }
-    }
-}
-
 /// Walk an optional number along `auto, min, min+1, .., max`: forwards
 /// from `auto` lands on `min`, backwards from `min` on `auto`, and the
 /// ends hold rather than wrap.
@@ -1782,293 +1262,6 @@ fn step_choice<T: Copy + PartialEq>(value: T, list: &[T], forward: bool) -> T {
 /// above and below (docs/game-editor-fusion.md section 10).
 fn hit_rect(rect: Rectangle) -> Rectangle {
     Rectangle::new(rect.x, rect.y - EDITOR_BAR_HIT_SLACK, rect.width, rect.height + 2.0 * EDITOR_BAR_HIT_SLACK)
-}
-
-/// The width the default font gives `text` at `size`, near enough to
-/// centre or clip by (~0.61 of the size per character).
-fn text_width(text: &str, size: i32) -> f32 {
-    text.chars().count() as f32 * size as f32 * 0.61
-}
-
-/// `text` cut down to what fits in `width` at `size`.
-fn fit_text(text: &str, width: f32, size: i32) -> String {
-    let max = (width / (size as f32 * 0.61)).floor() as usize;
-    if text.chars().count() <= max {
-        text.to_string()
-    } else {
-        text.chars().take(max.saturating_sub(1)).chain(std::iter::once('~')).collect()
-    }
-}
-
-/// A tool's name as the dropdown rows spell it.
-fn label(tool: Tool) -> &'static str {
-    match tool {
-        Tool::TallGrass => "tall grass",
-        Tool::Drum(Drum::Oil) => "oil drum",
-        Tool::Drum(Drum::Fuel) => "fuel drum",
-        Tool::OilTrail => "oil trail",
-        Tool::Start => "p1 start",
-        Tool::Start2 => "p2 start",
-        Tool::EnemyFrog => "enemy frog",
-        Tool::Pickup(PickupKind::SpeedUp) => "speed-up",
-        Tool::Pickup(PickupKind::Flamethrower) => "flamethrower",
-        Tool::Pickup(PickupKind::FrogHealth) => "frog pack",
-        other => other.name(),
-    }
-}
-
-/// A tool's name at the width the bar's 10 px line and the cursor
-/// readout have room for.
-fn short_label(tool: Tool) -> &'static str {
-    match tool {
-        Tool::TallGrass => "grass",
-        Tool::Drum(Drum::Oil) => "oil",
-        Tool::Drum(Drum::Fuel) => "fuel",
-        Tool::OilTrail => "oil",
-        Tool::EnemyFrog => "e.frog",
-        Tool::Pickup(PickupKind::Flamethrower) => "flame",
-        Tool::Pickup(PickupKind::FrogHealth) => "frog+",
-        other => other.name(),
-    }
-}
-
-/// What the cursor readout calls the object in a cell.
-fn cell_label(obj: &CellObject) -> &'static str {
-    TOOLS.iter().copied().find(|t| t.object().as_ref() == Some(obj)).map_or("?", short_label)
-}
-
-/// The outline marking the active category/eraser: 2 px, inset one
-/// block from the bar's top and bottom edges, like the play bar's live
-/// weapon slot.
-fn active_outline(d: &mut impl RaylibDraw, x: i32, y: i32, w: i32, h: i32, color: Color) {
-    d.draw_rectangle_lines_ex(
-        Rectangle::new((x - 2) as f32, (y + 2) as f32, (w + 4) as f32, (h - 6) as f32),
-        2.0,
-        color,
-    );
-}
-
-/// A down-pointing caret of 2 px blocks, 10 px wide, its top-left at
-/// (`x`, `y`).
-fn draw_caret(d: &mut impl RaylibDraw, x: i32, y: i32, color: Color) {
-    for (i, w) in [10, 6, 2].into_iter().enumerate() {
-        d.draw_rectangle(x + (10 - w) / 2, y + i as i32 * 2, w, 2, color);
-    }
-}
-
-/// The singleton badge: a dot at an icon's top-right corner.
-fn draw_badge(d: &mut impl RaylibDraw, right: f32, top: f32) {
-    d.draw_circle((right - 5.0) as i32, (top + 5.0) as i32, 4.0, Color::LIME);
-}
-
-/// An outlined bar button with a 10 px label centred in it (UNDO/REDO).
-/// FILE / MAP: an outlined button with its label and a caret, the label
-/// in the accent while its menu is open.
-fn draw_menu_button(d: &mut impl RaylibDraw, rect: Rectangle, label: &str, open: bool) {
-    let color = if open { BUILD_ACCENT } else { TEXT };
-    d.draw_rectangle_rounded_lines_ex(
-        Rectangle::new(rect.x, rect.y + 4.0, rect.width - BUTTON_GAP, rect.height - 8.0),
-        0.2,
-        EDITOR_PANEL_SEGMENTS,
-        1.0,
-        Color::new(255, 255, 255, 60),
-    );
-    let text_y = (rect.y + (rect.height - HUD_TEXT_SIZE as f32) / 2.0) as i32;
-    d.draw_text(label, rect.x as i32 + 6, text_y, HUD_TEXT_SIZE, color);
-    draw_caret(d, rect.x as i32 + 48, (rect.y + (rect.height - 6.0) / 2.0) as i32, color);
-}
-
-fn draw_small_button(d: &mut impl RaylibDraw, rect: Rectangle, text: &str, color: Color) {
-    let inset = Rectangle::new(rect.x, rect.y + 4.0, rect.width - 4.0, rect.height - 8.0);
-    d.draw_rectangle_rounded_lines_ex(inset, 0.2, EDITOR_PANEL_SEGMENTS, 1.0, Color::new(255, 255, 255, 60));
-    let w = text_width(text, HUD_LABEL_SIZE);
-    d.draw_text(
-        text,
-        (inset.x + (inset.width - w) / 2.0) as i32,
-        (rect.y + (rect.height - HUD_LABEL_SIZE as f32) / 2.0) as i32,
-        HUD_LABEL_SIZE,
-        color,
-    );
-}
-
-/// The pickup icon for a kind.
-fn pickup_texture<'a>(textures: &EditorTextures<'a>, pickup: PickupKind) -> &'a Texture2D {
-    match pickup {
-        PickupKind::Health => textures.pickup_health,
-        PickupKind::Ammo => textures.pickup_ammo,
-        PickupKind::Laser => textures.pickup_laser,
-        PickupKind::Minigun => textures.pickup_minigun,
-        PickupKind::Plasma => textures.pickup_plasma,
-        PickupKind::Missiles => textures.pickup_missiles,
-        PickupKind::SpeedUp => textures.pickup_speedup,
-        PickupKind::Shield => textures.pickup_shield,
-        PickupKind::Flamethrower => textures.pickup_flamethrower,
-        PickupKind::FrogHealth => textures.pickup_frog_health,
-    }
-}
-
-/// Draw a rounded, bordered, drop-shadowed panel background - shared by
-/// every panel the builder draws (dropdowns, the settings panel, the
-/// Save prompt), per
-/// docs/map-editor-design.md's "Panel chrome" section.
-pub fn draw_panel(d: &mut impl RaylibDraw, rect: Rectangle) {
-    let shadow = Rectangle::new(
-        rect.x + EDITOR_PANEL_SHADOW_OFFSET,
-        rect.y + EDITOR_PANEL_SHADOW_OFFSET,
-        rect.width,
-        rect.height,
-    );
-    d.draw_rectangle_rounded(
-        shadow,
-        EDITOR_PANEL_ROUNDNESS,
-        EDITOR_PANEL_SEGMENTS,
-        Color::new(0, 0, 0, (255.0 * EDITOR_PANEL_SHADOW_OPACITY) as u8),
-    );
-    d.draw_rectangle_rounded(
-        rect,
-        EDITOR_PANEL_ROUNDNESS,
-        EDITOR_PANEL_SEGMENTS,
-        Color::new(
-            EDITOR_PANEL_FILL.0,
-            EDITOR_PANEL_FILL.1,
-            EDITOR_PANEL_FILL.2,
-            (255.0 * EDITOR_PANEL_FILL_OPACITY) as u8,
-        ),
-    );
-    d.draw_rectangle_rounded_lines_ex(
-        rect,
-        EDITOR_PANEL_ROUNDNESS,
-        EDITOR_PANEL_SEGMENTS,
-        EDITOR_PANEL_BORDER_THICKNESS,
-        Color::new(0, 0, 0, (255.0 * EDITOR_PANEL_BORDER_OPACITY) as u8),
-    );
-}
-
-/// A tool's icon inside `rect` (4 px inset).
-pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme: Theme, tool: Tool, rect: Rectangle) {
-    let dest = Rectangle::new(rect.x + 4.0, rect.y + 4.0, rect.width - 8.0, rect.height - 8.0);
-    match tool {
-        Tool::Wall(material) | Tool::Prop(material) => {
-            let (sheet, src) = obstacle::icon_source_rec(material);
-            d.draw_texture_pro(sheet_texture(textures, sheet), src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
-        }
-        Tool::Drum(drum) => {
-            let src = obstacle::drum_source_rec(drum);
-            d.draw_texture_pro(textures.props, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
-        }
-        Tool::OilTrail => {
-            d.draw_rectangle_rounded(dest, 0.15, EDITOR_PANEL_SEGMENTS, Color::new(97, 149, 65, 255));
-            let src = obstacle::oil_source_rec(Position::new(0.0, 0.0));
-            d.draw_texture_pro(textures.props, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
-        }
-        Tool::Road => {
-            d.draw_rectangle_rounded(dest, 0.15, EDITOR_PANEL_SEGMENTS, Color::new(150, 111, 74, 255));
-        }
-        Tool::Water => {
-            // The pack's flat water, straight off the theme's tileset.
-            d.draw_texture_pro(textures.ground, ground::water_icon_source_rec(), dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
-        }
-        Tool::Frog => {
-            let src = Rectangle::new(0.0, 0.0, crate::FROG_TEXTURE_SIZE, crate::FROG_TEXTURE_SIZE);
-            d.draw_texture_pro(textures.frog_idle, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
-        }
-        Tool::Start => {
-            let center = Position::new(dest.x + dest.width / 2.0, dest.y + dest.height / 2.0);
-            draw_player_ring(d, center, dest.width / 2.0, 0);
-            let src = crate::tank::icon_source_rec(0);
-            d.draw_texture_pro(textures.tanks, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
-        }
-        Tool::Start2 => {
-            let center = Position::new(dest.x + dest.width / 2.0, dest.y + dest.height / 2.0);
-            draw_player_ring(d, center, dest.width / 2.0, 1);
-            let src = crate::tank::icon_source_rec(1);
-            d.draw_texture_pro(textures.tanks, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
-        }
-        Tool::EnemyFrog => {
-            let center = Position::new(dest.x + dest.width / 2.0, dest.y + dest.height / 2.0);
-            draw_enemy_ring(d, center, dest.width / 2.0);
-            let src = Rectangle::new(0.0, 0.0, crate::FROG_TEXTURE_SIZE, crate::FROG_TEXTURE_SIZE);
-            d.draw_texture_pro(textures.frog_idle, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
-        }
-        Tool::Gate => {
-            let center = Position::new(dest.x + dest.width / 2.0, dest.y + dest.height / 2.0);
-            draw_gate_chevron(d, center, dest.width, Position::new(1.0, 0.0));
-        }
-        Tool::Portal => {
-            d.draw_texture_pro(textures.portal, portal_icon_source_rec(), dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
-        }
-        Tool::TallGrass => {
-            // One tuft from the nature sheet on a patch of the theme's
-            // floor, so the icon reads as grass-on-ground rather than
-            // loose pixels.
-            let (r, g, b) = theme.floor_color();
-            d.draw_rectangle_rounded(dest, 0.15, EDITOR_PANEL_SEGMENTS, Color::new(r, g, b, 255));
-            let cell = crate::GRASS_TEXTURE_SIZE;
-            let src = Rectangle::new(0.0, 0.0, cell, cell);
-            d.draw_texture_pro(textures.grass, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
-        }
-        Tool::Pickup(pickup) => {
-            let texture = pickup_texture(textures, pickup);
-            let src = Rectangle::new(0.0, 0.0, crate::PICKUP_TEXTURE_SIZE, crate::PICKUP_TEXTURE_SIZE);
-            d.draw_texture_pro(texture, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
-        }
-        Tool::Eraser => {
-            d.draw_texture_pro(
-                textures.eraser,
-                Rectangle::new(0.0, 0.0, textures.eraser.width() as f32, textures.eraser.height() as f32),
-                dest,
-                Vector2::new(0.0, 0.0),
-                0.0,
-                Color::WHITE,
-            );
-        }
-    }
-}
-
-/// The atlas a material's icon comes from.
-fn sheet_texture<'a>(textures: &EditorTextures<'a>, sheet: obstacle::Sheet) -> &'a Texture2D {
-    match sheet {
-        obstacle::Sheet::Walls => textures.obstacles,
-        obstacle::Sheet::Props => textures.props,
-        obstacle::Sheet::Trees => textures.trees,
-        other => panic!("a map cell never draws from {other:?}"),
-    }
-}
-
-/// The enemy side's marker colour - the red ground ring the game draws
-/// under the enemy frog, so an `enemy_frog` cell reads the same here.
-const ENEMY_RING_COLOR: Color = Color::new(230, 60, 60, 220);
-
-const GATE_COLOR: Color = Color::ORANGE;
-
-/// A flat red ring of radius `radius` centred on `center`.
-fn draw_enemy_ring(d: &mut impl RaylibDraw, center: Position, radius: f32) {
-    d.draw_ring(center, radius * 0.75, radius, 0.0, 360.0, 24, ENEMY_RING_COLOR);
-    d.draw_circle_v(center, radius * 0.75, Color::new(230, 60, 60, 50));
-}
-
-/// A player's team-coloured ring, the same shape as the enemy frog's red
-/// one, under the start markers: a `start` cell reads as "a tank, the blue
-/// one" and `start2` as the pink one, the colours the tanks will be.
-fn draw_player_ring(d: &mut impl RaylibDraw, center: Position, radius: f32, player: usize) {
-    let c = crate::tank::TEAM_COLORS[player & 1];
-    d.draw_ring(center, radius * 0.75, radius, 0.0, 360.0, 24, Color::new(c.r, c.g, c.b, 220));
-    d.draw_circle_v(center, radius * 0.75, Color::new(c.r, c.g, c.b, 50));
-}
-
-/// An orange chevron of overall size `size` at `center`, its point aimed
-/// along `inward` (a unit axis vector) - the direction a tank rolling in
-/// through the gate travels.
-fn draw_gate_chevron(d: &mut impl RaylibDraw, center: Position, size: f32, inward: Position) {
-    let half = size / 2.0 - 3.0;
-    let side = Position::new(-inward.y, inward.x);
-    let tip = center + inward * half;
-    let tail = center - inward * (half * 0.4);
-    let wing_a = tail + side * half;
-    let wing_b = tail - side * half;
-    d.draw_line_ex(wing_a, tip, 3.0, GATE_COLOR);
-    d.draw_line_ex(wing_b, tip, 3.0, GATE_COLOR);
-    d.draw_line_ex(center - inward * half, tip, 3.0, GATE_COLOR);
 }
 
 /// The inward direction of a gate placed at world position `pos`, or
@@ -2235,8 +1428,6 @@ mod editor_tests {
         assert_eq!(ed.map().start2_cell(), None);
         assert!(!ed.singleton_placed(Tool::Start2));
         assert_eq!(Tool::parse("start2"), Some(Tool::Start2));
-        assert_eq!(cell_label(&CellObject::Start2), "start2");
-        assert_eq!(cell_label(&CellObject::Start), "start");
     }
 
     #[test]
@@ -2285,7 +1476,6 @@ mod editor_tests {
         ed.stroke(&[(10, 5)], false);
         ed.stroke(&[(30, 5)], false);
         assert_eq!(ed.map().portal_cells(), vec![(10, 5), (30, 5)]);
-        assert_eq!(cell_label(&CellObject::Portal), "portal");
         // A stroke starting on a portal erases it and nothing else.
         ed.stroke(&[(10, 5), (11, 5)], false);
         assert_eq!(ed.map().portal_cells(), vec![(30, 5)]);
@@ -2379,7 +1569,7 @@ mod editor_tests {
         let mut ed = MapEditor::new(MapFile::new());
         let at = |col: i32, row: i32| {
             let p = map::cell_to_world(col, row);
-            Vector2::new(p.x + layout.field.x, p.y + layout.field.y)
+            Vec2::new(p.x + layout.field.x, p.y + layout.field.y)
         };
         let press = BuilderInput { pointer: Some(at(4, 4)), pressed: true, held: true, ..Default::default() };
         assert_eq!(ed.update(&press, &layout), EditorAction::None);
@@ -2395,7 +1585,7 @@ mod editor_tests {
         assert_eq!(ed.map().cells.len(), 0);
         // A press on the PLAY slot is the mode switch, not a paint.
         let play = mode_button_rect(layout.panel);
-        let on_play = Vector2::new(play.x + 2.0, play.y + 2.0);
+        let on_play = Vec2::new(play.x + 2.0, play.y + 2.0);
         let press = BuilderInput { pointer: Some(on_play), pressed: true, held: true, ..Default::default() };
         assert_eq!(ed.update(&press, &layout), EditorAction::Play);
         assert_eq!(ed.map().cells.len(), 0);
@@ -2403,54 +1593,38 @@ mod editor_tests {
 
     /// A press-and-release at a window position, the way a click or a
     /// tap arrives over two frames.
-    fn click(ed: &mut MapEditor, layout: &Layout, at: Vector2) -> EditorAction {
+    fn click(ed: &mut MapEditor, layout: &Layout, at: Vec2) -> EditorAction {
         let press = BuilderInput { pointer: Some(at), pressed: true, held: true, ..Default::default() };
         let action = ed.update(&press, layout);
         ed.update(&BuilderInput { pointer: Some(at), ..Default::default() }, layout);
         action
     }
 
-    fn center(r: Rectangle) -> Vector2 {
-        Vector2::new(r.x + r.width / 2.0, r.y + r.height / 2.0)
+    fn center(r: Rectangle) -> Vec2 {
+        Vec2::new(r.x + r.width / 2.0, r.y + r.height / 2.0)
     }
 
-    /// The bar's slots must never overlap and must all end before the
-    /// SAVE and PLAY buttons at the default width, with the widest thing
-    /// each can hold written down here.
+    /// The FILE menu and the Load list fit the field.
     #[test]
-    fn bar_slots_fit_the_default_bar_without_overlapping() {
-        let ch = 11.0; // default-font advance at 18 px
-        assert!(SLOT_BUILD + "BUILD".len() as f32 * ch <= SLOT_NAME);
-        assert!(SLOT_NAME + NAME_W <= SLOT_CATEGORIES);
-        assert!(SLOT_CATEGORIES + Category::ALL.len() as f32 * CATEGORY_W <= SLOT_ERASE);
-        assert!(SLOT_ERASE + SMALL_BUTTON_W <= SLOT_UNDO);
-        assert!(SLOT_UNDO + SMALL_BUTTON_W <= SLOT_REDO);
-        assert!(SLOT_REDO + SMALL_BUTTON_W <= SLOT_FILE);
-        assert!(SLOT_FILE + MAP_BUTTON_W <= SLOT_MAP);
+    fn the_file_menu_and_the_load_list_fit_the_field() {
         let layout = Layout::for_field(W, H);
-        let play = mode_button_rect(layout.panel);
-        assert!(SLOT_MAP + MAP_BUTTON_W <= play.x, "MAP runs into PLAY");
-        // The FILE menu and the Load list fit the field.
         let menu = MapEditor::file_menu_rect(&layout);
         assert!(menu.y + menu.height <= layout.field.y + layout.field.h);
         let list = MapEditor::load_panel_rect(&layout, 40);
         assert!(list.y >= layout.field.y && list.y + list.height <= layout.field.y + layout.field.h);
-        // The caret sits clear of the icon and inside the button's box.
-        assert!(CATEGORY_CARET_X as f32 >= ICON_PX, "the caret overlaps the icon");
-        assert!(CATEGORY_CARET_X + CARET_W <= (CATEGORY_W - BUTTON_GAP) as i32, "caret leaves the button");
     }
 
     #[test]
     fn every_bar_button_hit_rect_reaches_into_the_field_gutter() {
         let layout = Layout::for_field(W, H);
         // Under the caret end of a category button, under the middle of any other.
-        let below = |r: Rectangle| Vector2::new(r.x + r.width - 8.0, r.y + r.height + EDITOR_BAR_HIT_SLACK - 1.0);
+        let below = |r: Rectangle| Vec2::new(r.x + r.width - 8.0, r.y + r.height + EDITOR_BAR_HIT_SLACK - 1.0);
         assert_eq!(
             MapEditor::bar_button_at(below(MapEditor::category_rect(&layout, Category::Wall)), &layout),
             Some(BarButton::CategoryMenu(Category::Wall))
         );
         assert_eq!(MapEditor::bar_button_at(below(MapEditor::map_rect(&layout)), &layout), Some(BarButton::Map));
-        let far = Vector2::new(SLOT_MAP + 2.0, layout.panel.h + EDITOR_BAR_HIT_SLACK + 1.0);
+        let far = Vec2::new(SLOT_MAP + 2.0, layout.panel.h + EDITOR_BAR_HIT_SLACK + 1.0);
         assert_eq!(MapEditor::bar_button_at(far, &layout), None);
     }
 
@@ -2489,7 +1663,7 @@ mod editor_tests {
         let mut ed = MapEditor::new(MapFile::new());
         let prop = MapEditor::category_rect(&layout, Category::Prop);
         // The caret half opens the dropdown and selects nothing yet.
-        click(&mut ed, &layout, Vector2::new(prop.x + prop.width - 10.0, prop.y + 16.0));
+        click(&mut ed, &layout, Vec2::new(prop.x + prop.width - 10.0, prop.y + 16.0));
         assert_eq!(ed.open_menu(), Some("prop"));
         assert_eq!(ed.tool(), Tool::Wall(Material::Brick));
         // Picking a row selects that tool, makes it the category's current
@@ -2502,7 +1676,7 @@ mod editor_tests {
         assert!(ed.map().cells.is_empty());
         // The icon half of WALL makes its current tool the brush again.
         let wall = MapEditor::category_rect(&layout, Category::Wall);
-        click(&mut ed, &layout, Vector2::new(wall.x + 10.0, wall.y + 16.0));
+        click(&mut ed, &layout, Vec2::new(wall.x + 10.0, wall.y + 16.0));
         assert_eq!(ed.tool(), Tool::Wall(Material::Brick));
         assert_eq!(ed.open_menu(), None);
         // ERASE is a plain button; UNDO with nothing to undo is harmless.
@@ -2517,11 +1691,11 @@ mod editor_tests {
         let layout = Layout::for_field(W, H);
         let mut ed = MapEditor::new(MapFile::new());
         let wall = MapEditor::category_rect(&layout, Category::Wall);
-        let caret = Vector2::new(wall.x + wall.width - 10.0, wall.y + 16.0);
+        let caret = Vec2::new(wall.x + wall.width - 10.0, wall.y + 16.0);
         click(&mut ed, &layout, caret);
         assert_eq!(ed.open_menu(), Some("wall"));
         let p = map::cell_to_world(20, 10);
-        let on_cell = Vector2::new(p.x + layout.field.x, p.y + layout.field.y);
+        let on_cell = Vec2::new(p.x + layout.field.x, p.y + layout.field.y);
         click(&mut ed, &layout, on_cell);
         assert_eq!(ed.open_menu(), None);
         assert!(ed.map().cells.is_empty(), "the dismissing press painted through the menu");
@@ -2600,7 +1774,7 @@ mod editor_tests {
         assert_eq!(ed.open_menu(), Some("map"));
         // A press outside closes the panel and paints nothing.
         let p = map::cell_to_world(5, 15);
-        click(&mut ed, &layout, Vector2::new(p.x + layout.field.x, p.y + layout.field.y));
+        click(&mut ed, &layout, Vec2::new(p.x + layout.field.x, p.y + layout.field.y));
         assert_eq!(ed.open_menu(), None);
         assert!(ed.map().cells.is_empty());
     }
@@ -2617,7 +1791,7 @@ mod editor_tests {
         ed.update(&BuilderInput { pointer: Some(wall), wheel: 1.0, ..Default::default() }, &layout);
         assert_eq!(ed.tool(), Tool::Wall(Material::Glass), "wraps");
         // Off the buttons the wheel does nothing.
-        let field = Vector2::new(400.0, 400.0);
+        let field = Vec2::new(400.0, 400.0);
         ed.update(&BuilderInput { pointer: Some(field), wheel: -1.0, ..Default::default() }, &layout);
         assert_eq!(ed.tool(), Tool::Wall(Material::Glass));
     }
@@ -2631,7 +1805,7 @@ mod editor_tests {
         // A press on the ACTOR caret while the panel is open only closes
         // the panel; the next one opens the list.
         let actor = MapEditor::category_rect(&layout, Category::Actor);
-        let caret = Vector2::new(actor.x + actor.width - 10.0, actor.y + 16.0);
+        let caret = Vec2::new(actor.x + actor.width - 10.0, actor.y + 16.0);
         click(&mut ed, &layout, caret);
         assert_eq!(ed.open_menu(), None);
         click(&mut ed, &layout, caret);
@@ -2649,13 +1823,13 @@ mod file_tests {
     const W: f32 = DEFAULT_SCREEN_WIDTH as f32;
     const H: f32 = DEFAULT_SCREEN_HEIGHT as f32;
 
-    fn press(ed: &mut MapEditor, layout: &Layout, at: Vector2) {
+    fn press(ed: &mut MapEditor, layout: &Layout, at: Vec2) {
         ed.update(&BuilderInput { pointer: Some(at), pressed: true, held: true, ..Default::default() }, layout);
         ed.update(&BuilderInput { pointer: Some(at), ..Default::default() }, layout);
     }
 
-    fn center(r: Rectangle) -> Vector2 {
-        Vector2::new(r.x + r.width / 2.0, r.y + r.height / 2.0)
+    fn center(r: Rectangle) -> Vec2 {
+        Vec2::new(r.x + r.width / 2.0, r.y + r.height / 2.0)
     }
 
     /// FILE opens its menu; LOAD... opens the list; picking a row loads
@@ -2692,7 +1866,7 @@ mod file_tests {
         press(&mut ed, &layout, center(MapEditor::file_rect(&layout)));
         press(&mut ed, &layout, center(MapEditor::file_row_rect(&layout, 0)));
         let before = ed.map().cells.len();
-        let field_corner = Vector2::new(layout.field.x + 16.0, layout.field.y + layout.field.h - 16.0);
+        let field_corner = Vec2::new(layout.field.x + 16.0, layout.field.y + layout.field.h - 16.0);
         press(&mut ed, &layout, field_corner);
         assert_eq!(ed.open_menu(), None);
         assert_eq!(ed.map().cells.len(), before);

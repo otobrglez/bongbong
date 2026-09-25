@@ -2,8 +2,11 @@
 //! battlefield rather than over it (docs/hud-and-builder-layout-design.md,
 //! variant A). Presentation only, same category as `game.rs`: `HudModel`
 //! is a handful of plain numbers gathered from `Game` between the update
-//! and the draw, and `draw_bar` lays them out as a row of fixed slots so a
-//! number never shifts its neighbours when it changes width.
+//! and the draw, and `render::hud::draw_bar` lays them out as a row of
+//! fixed slots so a number never shifts its neighbours when it changes
+//! width. This half is headless - the model, the shared colours and sizes,
+//! and every button and dialog rect the hit tests read; the slot tables
+//! and the drawing are the `render` half.
 //!
 //! The bar is one obstacle cell tall (`HUD_BAR_HEIGHT`), so the 32 px
 //! pickup icons and the shell sprite sit in it full-bleed and read as a
@@ -14,15 +17,23 @@
 //! left), the SPEED and SHIELD bars stack into two thin ones, and the
 //! whole-slot outline marking the live weapon becomes an underline under
 //! whichever side fires it. The single-player table is untouched.
+//!
+//! Past two seats there is no couch table to pair up, so the bar goes
+//! *compact* (docs/online-coop-prd.md §4.11): one seat - the one this
+//! window is playing - keeps a whole block of readouts, and every other
+//! seat becomes a chip in a strip at the bar's right end, its number and
+//! its health gauge in the ring colour that seat's tank wears on the
+//! field. An online round is compact from two seats up, since the seat
+//! this window steers is rarely seat 1 and the local block has to be
+//! *this* player's; a couch round keeps the one- and two-player tables
+//! and only goes compact from three.
 
-use sola_raylib::prelude::*;
+use crate::math::{Color, Rectangle};
 
-use crate::ai::Ai;
-use crate::game::Textures;
-use crate::simulation::{with_frog, with_tank, Game, PlayerCount};
-use crate::tank::{ActiveWeapon, Tank, TEAM_COLORS};
+use crate::simulation::{with_frog, with_tank, Game, RollIn};
+use crate::tank::{ActiveWeapon, Tank};
 use crate::tuning::tuning;
-use crate::{Rect, MAX_DAMAGE, PICKUP_TEXTURE_SIZE, SHELL_TEXTURE_SIZE};
+use crate::{Rect, MAX_DAMAGE};
 
 /// The bar's number/text size.
 pub const HUD_TEXT_SIZE: i32 = 18;
@@ -49,8 +60,8 @@ pub fn version_line() -> String {
     format!("v{} @otobrglez", env!("CARGO_PKG_VERSION"))
 }
 
-/// Accent colours for the special weapons: their count in the bar always,
-/// their slot's outline while that weapon is the live one.
+/// Accent colours for the three special weapons: their count in the bar
+/// always, their slot's outline while that weapon is the live one.
 pub const HUD_LASER_COLOR: Color = Color::new(255, 60, 160, 255);
 pub const HUD_PLASMA_COLOR: Color = Color::new(60, 220, 200, 255);
 pub const HUD_MINIGUN_COLOR: Color = Color::new(190, 205, 215, 255);
@@ -66,101 +77,11 @@ pub const HUD_FLAME_COLOR: Color = Color::new(255, 140, 40, 255);
 pub const BAR_FILL: Color = Color::new(21, 21, 21, 255);
 pub const TEXT: Color = Color::WHITE;
 pub const DIM: Color = Color::new(110, 110, 118, 255);
-const HEART: Color = Color::new(230, 60, 70, 255);
-const SPEED_COLOR: Color = Color::new(255, 210, 60, 255);
-const SHIELD_COLOR: Color = Color::new(170, 120, 255, 255);
-const FROG_COLOR: Color = Color::new(120, 220, 90, 255);
-
-// Slot origins along the bar, left to right. Fixed so a wave count or an
-// ammo number changing width never nudges what sits after it.
-const SLOT_TITLE: i32 = 8;
-const BAR_SLOT_W: i32 = 40;
-const BAR_W: i32 = 36;
-const BAR_H: i32 = 8;
-/// The two stacked bars of a two-player round: each this tall, one block
-/// apart, the pair ending where the single bar does.
-const BAR2_H: i32 = 6;
-const BAR2_GAP: i32 = 1;
-/// Approximate default-font advance per character at `HUD_TEXT_SIZE`; the
-/// pairs are laid out in cells of this width.
-pub const CHAR_W: i32 = 12;
-/// The small readout font (the two-player weapon pairs) and its cell.
-const HUD_SMALL_TEXT_SIZE: i32 = 10;
-const CHAR_W_SMALL: i32 = 7;
-
-/// The slot origins one table of readouts is laid out from. One table per
-/// player count: the pairs of a two-player round need wider HP, shell and
-/// weapon slots, paid for out of the gap after the enemy count. The two
-/// width fields are the budget `hud_tests` pins each table against.
-#[cfg_attr(not(test), allow(dead_code))]
-struct Slots {
-    enemies: i32,
-    enemy_count: i32,
-    heart: i32,
-    hp: i32,
-    shell: i32,
-    shells: i32,
-    weapons: i32,
-    weapon_slot_w: i32,
-    bars: i32,
-    /// Width of the HP readout (`100|100` with two players).
-    hp_w: i32,
-    /// Width of a shell or weapon count (`20|20` with two players).
-    count_w: i32,
-}
-
-const SLOTS_ONE: Slots = Slots {
-    enemies: 176,
-    enemy_count: 204,
-    heart: 276,
-    hp: 292,
-    shell: 332,
-    shells: 368,
-    weapons: 408,
-    weapon_slot_w: 72,
-    bars: 772,
-    hp_w: 3 * CHAR_W,
-    count_w: 3 * CHAR_W,
-};
-
-/// Two players: every pair - HP, shells and the five weapons - is set in
-/// the small font (`CHAR_W_SMALL`) so the whole row still ends before the
-/// gauges on the 960 px bar.
-const SLOTS_TWO: Slots = Slots {
-    enemies: 176,
-    enemy_count: 204,
-    heart: 272,
-    hp: 288,
-    shell: 340,
-    shells: 374,
-    weapons: 412,
-    weapon_slot_w: 72,
-    bars: 776,
-    hp_w: 7 * CHAR_W_SMALL,
-    count_w: 5 * CHAR_W_SMALL,
-};
-
 /// Weapon slots, in bar order. Five of them: laser, plasma, minigun,
 /// missiles, flamethrower.
 pub const WEAPON_SLOTS: usize = 5;
 
-impl Slots {
-    /// Width of the shells readout: `20|20` in the full font with two
-    /// players (the weapon pairs use `count_w`, in the small font).
-    #[cfg_attr(not(test), allow(dead_code))]
-    const fn shells_pair_w(&self) -> i32 {
-        5 * CHAR_W_SMALL
-    }
-
-    fn for_players(players: PlayerCount) -> &'static Slots {
-        match players {
-            PlayerCount::One => &SLOTS_ONE,
-            PlayerCount::Two => &SLOTS_TWO,
-        }
-    }
-}
-
-/// One of the special-weapon slots.
+/// One of the three special-weapon slots.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WeaponSlot {
     pub weapon: ActiveWeapon,
@@ -242,6 +163,73 @@ impl PlayerHud {
     }
 }
 
+/// One of the other seats, as the compact strip shows it: which seat,
+/// how much health, and whether it is still standing. No weapons and no
+/// buffs - that is the local seat's block's job, and a chip has to stay
+/// narrow enough that seven of them fit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SeatHud {
+    /// The owner slot, which is both the `P3` label and the ring colour
+    /// that tank wears on the field (`tank::team_color`).
+    pub seat: u8,
+    /// Health as a fraction of full; 0 for a wreck or an unspawned seat.
+    pub health: f32,
+    /// Still standing.
+    pub alive: bool,
+}
+
+impl SeatHud {
+    fn gather(game: &Game, seat: usize) -> Self {
+        let (health, alive) = match game.seat(seat) {
+            Some(entity) => with_tank(&game.world, entity, |tank| {
+                if tank.is_wreck() {
+                    (0.0, false)
+                } else {
+                    (((MAX_DAMAGE - tank.damage).max(0.0) / MAX_DAMAGE).clamp(0.0, 1.0), true)
+                }
+            }),
+            None => (0.0, false),
+        };
+        SeatHud { seat: seat as u8, health, alive }
+    }
+}
+
+/// Which slot table the bar is laid out from. One table per shape of
+/// round, picked by `HudModel::gather` and read by `Slots::for_layout`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HudLayout {
+    /// One seat: the plain row of readouts.
+    One,
+    /// Two on one couch: HP, shells and the weapon counts as pairs.
+    Two,
+    /// The local seat's readouts, then a chip per other seat
+    /// (docs/online-coop-prd.md §4.11).
+    Compact,
+}
+
+impl HudLayout {
+    /// The table a round of `seats` seats is drawn from. `local_seat` is
+    /// the seat this window plays in an online round and `None` on a
+    /// couch, which is the whole difference: a couch of two has a table
+    /// that shows both, a room of two has to put the local seat - seat 1
+    /// as often as seat 0 - in the block and the other in the strip.
+    pub fn choose(seats: usize, local_seat: Option<u8>) -> HudLayout {
+        match (seats, local_seat) {
+            (0 | 1, _) => HudLayout::One,
+            (2, None) => HudLayout::Two,
+            _ => HudLayout::Compact,
+        }
+    }
+}
+
+/// The seats the strip lists: every seat of the round but the local one,
+/// in seat order. A wrecked seat keeps its place - the strip is built
+/// from the round's seat count, never from who is alive, so a death
+/// never shifts a chip.
+pub fn other_seats(seats: usize, local: usize) -> Vec<usize> {
+    (0..seats).filter(|&i| i != local).collect()
+}
+
 /// Everything the bar shows, as plain values. Built once per frame by
 /// `HudModel::gather`, so the draw pass never queries the world.
 #[derive(Clone, Debug, PartialEq)]
@@ -252,32 +240,57 @@ pub struct HudModel {
     pub enemies_alive: usize,
     pub enemies_pending: usize,
     /// Which slot table the bar is laid out from.
-    pub players: PlayerCount,
-    pub p1: PlayerHud,
-    /// Player 2's readouts in a two-player round; a wreck shows zeros.
-    pub p2: Option<PlayerHud>,
+    pub layout: HudLayout,
+    /// The seat whose readouts fill the block: player 1 on a couch, the
+    /// seat this window is playing in a room.
+    pub local: PlayerHud,
+    /// Seat 1's readouts in a two-player couch round, paired with the
+    /// block's; `None` in every other layout. A wreck shows zeros.
+    pub second: Option<PlayerHud>,
+    /// The other seats, in seat order, in the compact layout; empty in
+    /// the couch ones.
+    pub others: Vec<SeatHud>,
     /// The objective frog's health fraction, `None` in a round without one.
     pub frog: Option<f32>,
 }
 
 impl HudModel {
-    pub fn gather(game: &Game) -> Self {
-        let player = game.player.expect("player entity spawned in init");
-        let p1 = PlayerHud::gather(game, player);
-        let p2 = (game.players == PlayerCount::Two)
-            .then(|| game.player2.map(|e| PlayerHud::gather(game, e)).unwrap_or_else(PlayerHud::empty));
+    /// The bar's numbers for the round on screen. `local_seat` is the
+    /// seat this window holds in a room and `None` in a couch round; a
+    /// seat the round has not spawned yet - the frame before a replica's
+    /// `Welcome` builds one - falls back to seat 0, which is the local
+    /// round still on screen behind it.
+    pub fn gather(game: &Game, local_seat: Option<u8>) -> Self {
+        let seats = game.players.count();
+        let local_index = local_seat.map_or(0, |s| s as usize).min(seats.saturating_sub(1));
+        let layout = HudLayout::choose(seats, local_seat);
+        let local = game
+            .seat(local_index)
+            .map(|e| PlayerHud::gather(game, e))
+            .unwrap_or_else(PlayerHud::empty);
+        let second = (layout == HudLayout::Two)
+            .then(|| game.seat(1).map(|e| PlayerHud::gather(game, e)).unwrap_or_else(PlayerHud::empty));
+        let others = match layout {
+            HudLayout::Compact => other_seats(seats, local_index).into_iter().map(|i| SeatHud::gather(game, i)).collect(),
+            _ => Vec::new(),
+        };
         let mut title = game.mission.name().to_ascii_uppercase();
         let wave = game.wave_status();
         if let Some(w) = &wave {
             title.push_str(&format!(" {}/{}", w.index, w.total));
         }
-        // Live enemies: the ones on the field with a mind of their own. A
-        // wave tank still rolling in has no `Ai` yet and counts as pending.
+        // Live enemies: the ones standing on the field. A wave tank still
+        // rolling in is outside it and counts as pending instead - which
+        // is what `RollIn` marks, rather than the `Ai` it has not been
+        // given yet, because a replica's enemies never have one
+        // (docs/online-coop-prd.md §4.5).
+        let first_enemy = game.first_enemy_slot();
         let enemies_alive = game
             .world
-            .query::<(&Tank, &Ai)>()
+            .query::<&Tank>()
+            .without::<&RollIn>()
             .iter()
-            .filter(|(tank, _)| !tank.is_wreck())
+            .filter(|tank| !tank.is_wreck() && tank.owner_slot() >= first_enemy)
             .count();
         let enemies_pending = wave.as_ref().map_or(0, |w| w.pending);
         // The objective: the player's own frog, or, in a round where only
@@ -286,7 +299,7 @@ impl HudModel {
             .frog
             .or(game.enemy_frog)
             .map(|e| with_frog(&game.world, e, |f| f.health_fraction()));
-        HudModel { title, enemies_alive, enemies_pending, players: game.players, p1, p2, frog }
+        HudModel { title, enemies_alive, enemies_pending, layout, local, second, others, frog }
     }
 }
 
@@ -317,218 +330,6 @@ pub fn weapon_color(weapon: ActiveWeapon) -> Color {
     }
 }
 
-/// Draw the bar into `panel` (window space). Everything is placed from
-/// the panel's origin, so the same function draws it wherever the layout
-/// puts the panel.
-pub fn draw_bar(d: &mut impl RaylibDraw, panel: Rect, model: &HudModel, textures: &Textures) {
-    let px = panel.x.round() as i32;
-    let py = panel.y.round() as i32;
-    let pw = panel.w.round() as i32;
-    let ph = panel.h.round() as i32;
-    d.draw_rectangle(px, py, pw, ph, BAR_FILL);
-    let s = Slots::for_players(model.players);
-    let p2 = model.p2.as_ref();
-
-    // Text sits in the vertical middle of the bar.
-    let text_y = py + (ph - HUD_TEXT_SIZE) / 2;
-
-    d.draw_text(&model.title, px + SLOT_TITLE, text_y, HUD_TEXT_SIZE, TEXT);
-
-    // A tank glyph stands for "enemies": the word does not fit the 960 px
-    // bar beside everything else, and the count next to a tank reads.
-    draw_tank_glyph(d, px + s.enemies, py + (ph - TANK_GLYPH_H) / 2, DIM);
-    let alive = format!("{}", model.enemies_alive);
-    d.draw_text(&alive, px + s.enemy_count, text_y, HUD_TEXT_SIZE, TEXT);
-    if model.enemies_pending > 0 {
-        // Two digits at most before the number stops being a count.
-        let x = px + s.enemy_count + (alive.len() as i32).min(2) * 12 + 6;
-        d.draw_text(&format!("+{}", model.enemies_pending), x, text_y, HUD_TEXT_SIZE, DIM);
-    }
-
-    draw_heart(d, px + s.heart, py + (ph - 12) / 2);
-    match p2 {
-        None => d.draw_text(&format!("{}", model.p1.hp), px + s.hp, text_y, HUD_TEXT_SIZE, model.p1.hp_color),
-        Some(p2) => {
-            let small_y = py + (ph - HUD_SMALL_TEXT_SIZE) / 2;
-            draw_pair_sized(d, px + s.hp, small_y, 3, (&format!("{}", model.p1.hp), team_tinted(model.p1.hp_color, 0)), (&format!("{}", p2.hp), team_tinted(p2.hp_color, 1)), HUD_SMALL_TEXT_SIZE, CHAR_W_SMALL);
-        }
-    }
-
-    // The shell sprite's in-flight frame, identical on every row of the
-    // sheet, full-bleed at its own 32 px.
-    let shell_src = Rectangle::new(3.0 * SHELL_TEXTURE_SIZE, 0.0, SHELL_TEXTURE_SIZE, SHELL_TEXTURE_SIZE);
-    let shell_dest = Rectangle::new((px + s.shell) as f32, py as f32, SHELL_TEXTURE_SIZE, SHELL_TEXTURE_SIZE);
-    d.draw_texture_pro(textures.shells, shell_src, shell_dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
-    match p2 {
-        None => {
-            if model.p1.shells_active {
-                active_outline(d, px + s.shell, py, s.weapons - s.shell - 8, ph, TEXT);
-            }
-            d.draw_text(&format!("{}", model.p1.shells), px + s.shells, text_y, HUD_TEXT_SIZE, model.p1.shells_color);
-        }
-        Some(p2) => {
-            let small_y = py + (ph - HUD_SMALL_TEXT_SIZE) / 2;
-            draw_pair_sized(d, px + s.shells, small_y, 2, (&format!("{}", model.p1.shells), team_tinted(model.p1.shells_color, 0)), (&format!("{}", p2.shells), team_tinted(p2.shells_color, 1)), HUD_SMALL_TEXT_SIZE, CHAR_W_SMALL);
-            draw_pair_underlines_sized(d, px + s.shells, py, ph, 2, model.p1.shells_active, p2.shells_active, CHAR_W_SMALL);
-        }
-    }
-
-    for i in 0..WEAPON_SLOTS {
-        let slot = model.p1.weapons[i];
-        let x = px + s.weapons + i as i32 * s.weapon_slot_w;
-        let texture = match slot.weapon {
-            ActiveWeapon::Laser => textures.pickup_laser,
-            ActiveWeapon::Plasma => textures.pickup_plasma,
-            ActiveWeapon::Minigun => textures.pickup_minigun,
-            ActiveWeapon::Missiles => textures.pickup_missiles,
-            ActiveWeapon::Flamethrower => textures.pickup_flamethrower,
-            ActiveWeapon::Shell => textures.shells,
-        };
-        let stocked = slot.count > 0 || p2.is_some_and(|p| p.weapons[i].count > 0);
-        let src = Rectangle::new(0.0, 0.0, PICKUP_TEXTURE_SIZE, PICKUP_TEXTURE_SIZE);
-        let dest = Rectangle::new(x as f32, py as f32, PICKUP_TEXTURE_SIZE, PICKUP_TEXTURE_SIZE);
-        let tint = if stocked { Color::WHITE } else { Color::new(255, 255, 255, 70) };
-        d.draw_texture_pro(texture, src, dest, Vector2::new(0.0, 0.0), 0.0, tint);
-        let count_of = |slot: WeaponSlot| -> (String, Color) {
-            if slot.count > 0 {
-                (format!("{}", slot.count), weapon_color(slot.weapon))
-            } else {
-                ("--".to_string(), DIM)
-            }
-        };
-        let count_x = x + PICKUP_TEXTURE_SIZE as i32 + 4;
-        match p2 {
-            None => {
-                let (count, color) = count_of(slot);
-                d.draw_text(&count, count_x, text_y, HUD_TEXT_SIZE, color);
-                if slot.active {
-                    active_outline(d, x, py, s.weapon_slot_w - 8, ph, weapon_color(slot.weapon));
-                }
-            }
-            Some(p2) => {
-                // The small font: five pairs have to fit before the gauges.
-                let (a, ac) = count_of(slot);
-                let (b, bc) = count_of(p2.weapons[i]);
-                let small_y = py + (ph - HUD_SMALL_TEXT_SIZE) / 2;
-                draw_pair_sized(d, count_x, small_y, 2, (&a, ac), (&b, bc), HUD_SMALL_TEXT_SIZE, CHAR_W_SMALL);
-                draw_pair_underlines_sized(d, count_x, py, ph, 2, slot.active, p2.weapons[i].active, CHAR_W_SMALL);
-            }
-        }
-    }
-
-    let bars: [(&str, f32, Option<f32>, Color, bool); 3] = [
-        ("SPEED", model.p1.speed, p2.map(|p| p.speed), SPEED_COLOR, true),
-        ("SHIELD", model.p1.shield, p2.map(|p| p.shield), SHIELD_COLOR, true),
-        ("FROG", model.frog.unwrap_or(0.0), None, FROG_COLOR, model.frog.is_some()),
-    ];
-    for (i, (label, frac, frac2, color, present)) in bars.iter().enumerate() {
-        let x = px + s.bars + i as i32 * BAR_SLOT_W;
-        let label_color = if *present { DIM } else { Color::new(60, 60, 66, 255) };
-        d.draw_text(label, x, py + 5, HUD_LABEL_SIZE, label_color);
-        match frac2 {
-            // Two thin bars, player 1 over player 2, ending where the
-            // single bar does.
-            Some(frac2) => {
-                let bottom = py + ph - 4;
-                draw_gauge(d, x, bottom - 2 * BAR2_H - BAR2_GAP, BAR2_H, *frac, *color, label_color);
-                draw_gauge(d, x, bottom - BAR2_H, BAR2_H, *frac2, *color, label_color);
-            }
-            None => draw_gauge(d, x, py + ph - 4 - BAR_H, BAR_H, if *present { *frac } else { 0.0 }, *color, label_color),
-        }
-    }
-}
-
-/// One outlined bar of `h` px at (`x`, `y`), filled to `frac` in whole
-/// 2 px blocks so it drains in steps like every other gauge in the game.
-fn draw_gauge(d: &mut impl RaylibDraw, x: i32, y: i32, h: i32, frac: f32, color: Color, outline: Color) {
-    d.draw_rectangle_lines_ex(Rectangle::new(x as f32, y as f32, BAR_W as f32, h as f32), 1.0, outline);
-    if frac > 0.0 {
-        let fill = ((BAR_W - 4) as f32 * frac.clamp(0.0, 1.0) / 2.0).round() as i32 * 2;
-        if fill > 0 {
-            d.draw_rectangle(x + 2, y + 2, fill, h - 4, color);
-        }
-    }
-}
-
-/// A two-player readout, `left|right`: the left number right-aligned to
-/// the dim separator in a cell `digits` wide, the right one after it, each
-/// side in its own colour, at an explicit font size and cell width - the weapon
-/// pairs use the small font so four slots fit.
-#[allow(clippy::too_many_arguments)]
-fn draw_pair_sized(d: &mut impl RaylibDraw, x: i32, text_y: i32, digits: i32, left: (&str, Color), right: (&str, Color), size: i32, ch: i32) {
-    let sep_x = x + digits * ch;
-    let left_x = sep_x - left.0.len() as i32 * ch;
-    d.draw_text(left.0, left_x, text_y, size, left.1);
-    d.draw_text("|", sep_x + 2, text_y, size, DIM);
-    d.draw_text(right.0, sep_x + ch, text_y, size, right.1);
-}
-
-/// The two-player stand-in for `active_outline`: a 2 px underline under
-/// whichever side of a pair is what that player's trigger fires, in that
-/// player's team colour, at an explicit cell width - for the small-font
-/// weapon pairs.
-#[allow(clippy::too_many_arguments)]
-fn draw_pair_underlines_sized(d: &mut impl RaylibDraw, x: i32, y: i32, h: i32, digits: i32, left: bool, right: bool, ch: i32) {
-    let w = digits * ch - 2;
-    let uy = y + h - 4;
-    if left {
-        d.draw_rectangle(x, uy, w, 2, TEAM_COLORS[0]);
-    }
-    if right {
-        d.draw_rectangle(x + (digits + 1) * ch, uy, w, 2, TEAM_COLORS[1]);
-    }
-}
-
-/// A two-player readout colour: `hud_number_color`'s plain white becomes
-/// the player's team colour, so each side of a `60|70` pair is its
-/// player's, while the warning and critical colours still win.
-fn team_tinted(color: Color, player: usize) -> Color {
-    let plain = color.r == TEXT.r && color.g == TEXT.g && color.b == TEXT.b && color.a == TEXT.a;
-    if plain { TEAM_COLORS[player & 1] } else { color }
-}
-
-/// The outline marking which slot the trigger fires: 2 px, inset one
-/// block from the bar's top and bottom edges.
-fn active_outline(d: &mut impl RaylibDraw, x: i32, y: i32, w: i32, h: i32, color: Color) {
-    d.draw_rectangle_lines_ex(
-        Rectangle::new((x - 2) as f32, (y + 2) as f32, (w + 4) as f32, (h - 6) as f32),
-        2.0,
-        color,
-    );
-}
-
-/// A pixel heart of 2 px blocks, 14x12, for the HP slot. Drawn rather
-/// than loaded: it is the one glyph in the game with no sheet of its own.
-fn draw_heart(d: &mut impl RaylibDraw, x: i32, y: i32) {
-    const ROWS: [&str; 6] = [".##.##.", "#######", "#######", ".#####.", "..###..", "...#..."];
-    for (row, line) in ROWS.iter().enumerate() {
-        for (col, c) in line.chars().enumerate() {
-            if c == '#' {
-                d.draw_rectangle(x + col as i32 * 2, y + row as i32 * 2, 2, 2, HEART);
-            }
-        }
-    }
-}
-
-/// The tank glyph's footprint: 7 x 7 blocks of 2 px.
-#[cfg_attr(not(test), allow(dead_code))]
-const TANK_GLYPH_W: i32 = 14;
-const TANK_GLYPH_H: i32 = 14;
-
-/// A pixel tank seen from above, 7x7 blocks of 2 px (14x14): tracks down
-/// both sides, the hull between, the barrel up. The players button shows
-/// one or two of these, the play bar one for the enemy count.
-fn draw_tank_glyph(d: &mut impl RaylibDraw, x: i32, y: i32, color: Color) {
-    const ROWS: [&str; 7] = ["...#...", "...#...", "#.###.#", "#.###.#", "#.###.#", "#.###.#", "#.....#"];
-    for (row, line) in ROWS.iter().enumerate() {
-        for (col, c) in line.chars().enumerate() {
-            if c == '#' {
-                d.draw_rectangle(x + col as i32 * 2, y + row as i32 * 2, 2, 2, color);
-            }
-        }
-    }
-}
-
 /// The players button, left of the mode button: one tank glyph in single
 /// player, two in a two-player round, each in its player's team colour. Full
 /// bar height like the mode button. Opens the players dialog
@@ -544,29 +345,38 @@ pub fn players_button_rect(panel: Rect) -> Rectangle {
     Rectangle::new(m.x - PLAYERS_BUTTON_GAP - PLAYERS_BUTTON_W, m.y, PLAYERS_BUTTON_W, m.height)
 }
 
-/// The players button: outlined like the mode button, dim until the
-/// dialog it opens is up, its glyphs the tank colours themselves.
-pub fn draw_players_button(d: &mut impl RaylibDraw, panel: Rect, players: PlayerCount, open: bool) {
-    let r = players_button_rect(panel);
-    let outline = if open { TEXT } else { DIM };
-    d.draw_rectangle_lines_ex(Rectangle::new(r.x, r.y + 2.0, r.width, r.height - 4.0), 2.0, outline);
-    let glyph = 14;
-    let gy = (r.y + (r.height - glyph as f32) / 2.0) as i32;
-    match players {
-        PlayerCount::One => draw_tank_glyph(d, (r.x + (r.width - glyph as f32) / 2.0) as i32, gy, TEAM_COLORS[0]),
-        PlayerCount::Two => {
-            let gap = 6;
-            let x = (r.x + (r.width - (2 * glyph + gap) as f32) / 2.0) as i32;
-            draw_tank_glyph(d, x, gy, TEAM_COLORS[0]);
-            draw_tank_glyph(d, x + glyph + gap, gy, TEAM_COLORS[1]);
-        }
-    }
-}
-
 /// The mode button's slot at the bar's right end: `BUILD` in play mode,
 /// `PLAY` in build mode (docs/game-editor-fusion.md, sections 6 and 7).
 /// Full bar height, so a finger has the most to aim at.
 pub const MODE_BUTTON_W: f32 = 72.0;
+
+/// The `ONLINE` button, left of the players button: the way into the
+/// lobby (`lobby.rs`, docs/online-coop-prd.md §4.10). Wide enough for
+/// its six characters, and the bar's last free slot before the gauges.
+/// Not drawn where a build cannot reach a room (`ONLINE_AVAILABLE`).
+pub const ONLINE_BUTTON_W: f32 = 80.0;
+
+/// Where the `ONLINE` button sits in `panel` (window space): left of the
+/// players button, so all three follow `--resolution` together and every
+/// hit test agrees on them.
+pub fn online_button_rect(panel: Rect) -> Rectangle {
+    let p = players_button_rect(panel);
+    Rectangle::new(p.x - PLAYERS_BUTTON_GAP - ONLINE_BUTTON_W, p.y, ONLINE_BUTTON_W, p.height)
+}
+
+/// The colour of anything to do with a room: the `ONLINE` button, the
+/// lobby's accents, the round's status line and its `LEAVE` button.
+/// Deliberately not the builder's amber - a room is not an edit.
+pub const ONLINE_COLOR: Color = Color::new(120, 220, 255, 255);
+
+/// Where the `LEAVE` button of an online round sits: the mode button's
+/// slot, which is free exactly while the round is the room's (a replica
+/// has no builder to switch to, so no `BUILD` button is drawn). It is the
+/// way out on a build with no keyboard for the Esc key, and the only one
+/// anywhere that says so; the press is `Session::leave_online`.
+pub fn leave_button_rect(panel: Rect) -> Rectangle {
+    mode_button_rect(panel)
+}
 
 /// Where the RESTART button sits: the players button's slot, which is free
 /// exactly where this button is drawn (no keyboard means no R key and no
@@ -575,31 +385,6 @@ pub fn restart_button_rect(panel: Rect) -> Rectangle {
     players_button_rect(panel)
 }
 
-/// The RESTART button: the bar's frame around a circular arrow, the one
-/// restart glyph a phone player reads without a label, in the bar's text
-/// colour so it is neither the builder's amber nor a weapon accent. The
-/// press is `tuning::request_restart`, the same path as the dev panel's
-/// button, and lands as `Input::restart_pressed` like the R key.
-pub fn draw_restart_button(d: &mut impl RaylibDraw, panel: Rect) {
-    let r = restart_button_rect(panel);
-    d.draw_rectangle_lines_ex(Rectangle::new(r.x, r.y + 2.0, r.width, r.height - 4.0), 2.0, TEXT);
-    let center = Vector2::new(r.x + r.width / 2.0, r.y + r.height / 2.0);
-    // Three quarters of a ring, the gap at the right, an arrowhead on the
-    // end that points on around the circle.
-    let (inner, outer) = (6.0, 10.0);
-    let (start, end) = (45.0, 315.0);
-    d.draw_ring(center, inner, outer, start, end, 24, TEXT);
-    let rad = (end as f32).to_radians();
-    let mid = (inner + outer) / 2.0;
-    let tip_at = Vector2::new(center.x + mid * rad.cos(), center.y + mid * rad.sin());
-    let tangent = Vector2::new(-rad.sin(), rad.cos());
-    let radial = Vector2::new(rad.cos(), rad.sin());
-    let tip = Vector2::new(tip_at.x + tangent.x * 6.0, tip_at.y + tangent.y * 6.0);
-    let a = Vector2::new(tip_at.x + radial.x * 5.0, tip_at.y + radial.y * 5.0);
-    let b = Vector2::new(tip_at.x - radial.x * 5.0, tip_at.y - radial.y * 5.0);
-    d.draw_triangle(a, b, tip, TEXT);
-    d.draw_triangle(tip, b, a, TEXT);
-}
 pub const MODE_BUTTON_RIGHT_INSET: f32 = 8.0;
 
 /// Where the mode button sits in `panel` (window space). Shared by the
@@ -607,15 +392,6 @@ pub const MODE_BUTTON_RIGHT_INSET: f32 = 8.0;
 /// finger agree on it.
 pub fn mode_button_rect(panel: Rect) -> Rectangle {
     Rectangle::new(panel.x + panel.w - MODE_BUTTON_RIGHT_INSET - MODE_BUTTON_W, panel.y, MODE_BUTTON_W, panel.h)
-}
-
-/// The mode button: an outlined slot with its label centred, in `color`.
-pub fn draw_mode_button(d: &mut impl RaylibDraw, panel: Rect, label: &str, color: Color) {
-    let r = mode_button_rect(panel);
-    d.draw_rectangle_lines_ex(Rectangle::new(r.x, r.y + 2.0, r.width, r.height - 4.0), 2.0, color);
-    // The default font runs ~11 px per character at 18 px.
-    let text_w = label.len() as i32 * 11;
-    d.draw_text(label, (r.x + (r.width - text_w as f32) / 2.0) as i32, (r.y + (r.height - HUD_TEXT_SIZE as f32) / 2.0) as i32, HUD_TEXT_SIZE, color);
 }
 
 /// The builder's amber, the colour the play bar's `BUILD` button and the
@@ -672,122 +448,199 @@ pub fn players_dialog_rects(field: Rect) -> PlayersDialogRects {
     PlayersDialogRects { panel, one, two }
 }
 
-/// The dialog panel both questions share: shadow, rounded fill, outline,
-/// a 28 px title and a 16 px line under it.
-fn draw_dialog_panel(d: &mut impl RaylibDraw, panel: Rectangle, title: &str, sub: &str) {
-    let shadow = Rectangle::new(panel.x + 4.0, panel.y + 4.0, panel.width, panel.height);
-    d.draw_rectangle_rounded(shadow, 0.08, 8, Color::new(0, 0, 0, 90));
-    d.draw_rectangle_rounded(panel, 0.08, 8, Color::new(20, 20, 24, 240));
-    d.draw_rectangle_rounded_lines_ex(panel, 0.08, 8, 1.5, Color::new(0, 0, 0, 150));
-    let title_w = title.len() as i32 * 15;
-    d.draw_text(title, (panel.x + (DIALOG_W - title_w as f32) / 2.0) as i32, (panel.y + 22.0) as i32, 28, TEXT);
-    let sub_w = sub.len() as i32 * 9;
-    d.draw_text(sub, (panel.x + (DIALOG_W - sub_w as f32) / 2.0) as i32, (panel.y + 62.0) as i32, 16, DIM);
-}
-
-/// One dialog button: an outlined rounded box with its label centred.
-fn draw_dialog_button(d: &mut impl RaylibDraw, rect: Rectangle, label: &str, color: Color, fill: Option<Color>) {
-    if let Some(fill) = fill {
-        d.draw_rectangle_rounded(rect, 0.2, 8, fill);
-    }
-    d.draw_rectangle_rounded_lines_ex(rect, 0.2, 8, 2.0, color);
-    let w = label.len() as i32 * 11;
-    d.draw_text(label, (rect.x + (rect.width - w as f32) / 2.0) as i32, (rect.y + (rect.height - HUD_TEXT_SIZE as f32) / 2.0) as i32, HUD_TEXT_SIZE, color);
-}
-
-/// Draw the players dialog over the (already dimmed) field: the live
-/// count's button highlighted, the other in the action colour. Field
-/// space, like `draw_leave_dialog`.
-pub fn draw_players_dialog(d: &mut impl RaylibDraw, field: Rect, players: PlayerCount) {
-    let r = players_dialog_rects(field);
-    draw_dialog_panel(d, r.panel, "How many players?", "P1 arrows + Space    P2 WASD + L.Shift");
-    let live_fill = Some(Color::new(255, 255, 255, 40));
-    let one_live = players == PlayerCount::One;
-    draw_dialog_button(d, r.one, "1 PLAYER", if one_live { TEXT } else { BUILD_COLOR }, one_live.then_some(live_fill).flatten());
-    draw_dialog_button(d, r.two, "2 PLAYERS", if one_live { BUILD_COLOR } else { TEXT }, (!one_live).then_some(live_fill).flatten());
-}
-
-/// Draw the leave-round dialog over the (already dimmed) field. Field
-/// space: call inside the field camera.
-pub fn draw_leave_dialog(d: &mut impl RaylibDraw, field: Rect) {
-    let r = leave_dialog_rects(field);
-    draw_dialog_panel(d, r.panel, "Leave this round?", "Your progress is lost. The map is kept.");
-    draw_dialog_button(d, r.leave, "LEAVE ROUND", BUILD_COLOR, None);
-    draw_dialog_button(d, r.stay, "KEEP PLAYING", TEXT, None);
-}
-
 /// What play-mode chrome `Game::render` draws besides the readouts: the
 /// `BUILD` and players buttons in the bar and, while the player is being
 /// asked, the leave-round or players dialog over a dimmed field.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct PlayChrome {
     pub build_button: bool,
     pub players_button: bool,
+    /// The `ONLINE` button, which opens the lobby.
+    pub online_button: bool,
     /// The RESTART button in the players button's slot, where there is no
     /// keyboard for the R key (`KEYBOARD_AVAILABLE`).
     pub restart_button: bool,
+    /// The `LEAVE` button in the mode button's slot: an online round's
+    /// way back to the local one without a keyboard.
+    pub leave_button: bool,
+    /// The seat this window is playing in a room, which is the one the
+    /// bar shows in full. `None` in a couch round, where the bar is
+    /// player 1's and the couch tables apply.
+    pub seat: Option<u8>,
     pub leave_dialog: bool,
     pub players_dialog: bool,
+    /// One line along the field's top edge while an online round runs:
+    /// the room code, this seat and the snapshot buffer
+    /// (`net::round::OnlineRound::status`). `None` in a local round -
+    /// and everything before the round is the lobby's, not this line's.
+    pub status: Option<String>,
+    /// The lobby over a dimmed field (`lobby.rs`), in place of the round
+    /// this window is not playing.
+    pub lobby: Option<crate::lobby::LobbyView>,
+    /// The words before the end screen's countdown. `None` is the local
+    /// round's "Restarting in", which is what a local round does; an
+    /// online round's counts down to the room's lobby instead.
+    pub countdown_label: Option<&'static str>,
 }
+
+/// The online status line's text size and how far in from the field's
+/// top-left corner it sits: the corner the debug overlay label uses, and
+/// free in a release build.
+pub const HUD_STATUS_TEXT_SIZE: i32 = 14;
+pub const HUD_STATUS_INSET: i32 = 11;
+
+/// The status line's colour: the room blue, so a round somebody else is
+/// simulating never reads as one of the HUD's own numbers.
+pub const HUD_STATUS_COLOR: Color = ONLINE_COLOR;
 
 #[cfg(test)]
 mod hud_tests {
     use super::*;
+    use crate::map::MapFile;
+    use crate::simulation::PlayerCount;
+    use crate::MAX_SEATS;
 
-    fn default_panel() -> Rect {
-        Rect::new(0.0, 0.0, crate::DEFAULT_SCREEN_WIDTH as f32, crate::HUD_BAR_HEIGHT as f32)
+    const W: f32 = crate::DEFAULT_SCREEN_WIDTH as f32;
+    const H: f32 = crate::DEFAULT_SCREEN_HEIGHT as f32;
+
+    /// A round of `seats` seats on the shipped map, seeded so the tanks
+    /// land in the same places every run.
+    fn round(seats: usize) -> Game {
+        let mut game = Game::default();
+        game.enemy_count_override = Some(1);
+        game.seed_override = Some(11);
+        game.players = PlayerCount::from_count(seats).expect("a seat count the round holds");
+        game.map = MapFile::from_toml_str(include_str!("../maps/default.toml")).expect("the default map parses");
+        game.init(W, H);
+        game
     }
 
-    /// The slots must stay inside the default bar and never overlap, in
-    /// both tables: the widest thing each can hold is written down here,
-    /// so growing a slot fails loudly rather than drawing over its
-    /// neighbour.
+    fn wreck(game: &mut Game, seat: usize) {
+        let entity = game.seat(seat).expect("the seat has a tank");
+        game.world.get::<&mut Tank>(entity).expect("a tank").damage = MAX_DAMAGE;
+    }
+
+    /// One seat and two on a couch keep the tables they have always had;
+    /// everything else - a third couch seat, and every room of two or
+    /// more - is the compact one.
     #[test]
-    fn slots_fit_the_default_bar_without_overlapping() {
-        let ch = CHAR_W;
-        for (name, s) in [("one", &SLOTS_ONE), ("two", &SLOTS_TWO)] {
-            let title_end = SLOT_TITLE + "DESTROY 12/12".len() as i32 * ch;
-            assert!(title_end <= s.enemies, "{name}: title runs into the enemies glyph");
-            let enemies_end = s.enemies + TANK_GLYPH_W;
-            assert!(enemies_end <= s.enemy_count, "{name}");
-            let count_end = s.enemy_count + 2 * ch + 6 + 3 * ch;
-            assert!(count_end <= s.heart, "{name}");
-            assert!(s.heart + 14 <= s.hp, "{name}");
-            assert!(s.hp + s.hp_w <= s.shell, "{name}: HP runs into the shell sprite");
-            assert!(s.shell + SHELL_TEXTURE_SIZE as i32 <= s.shells, "{name}");
-            assert!(s.shells + s.count_w <= s.weapons, "{name}: shells run into the weapons");
-            assert!(PICKUP_TEXTURE_SIZE as i32 + 4 + s.count_w <= s.weapon_slot_w, "{name}: a weapon count overflows its slot");
-            assert!(s.weapons + WEAPON_SLOTS as i32 * s.weapon_slot_w <= s.bars, "{name}: the weapon slots run into the gauges");
-            assert!(BAR_W <= BAR_SLOT_W);
-            assert!(s.bars + 3 * BAR_SLOT_W <= crate::DEFAULT_SCREEN_WIDTH);
-            let button = players_button_rect(default_panel());
-            assert!((s.bars + 3 * BAR_SLOT_W) as f32 <= button.x, "{name}: bars run into the players button");
+    fn the_couch_keeps_its_tables_and_a_room_is_compact_from_two() {
+        assert_eq!(HudLayout::choose(1, None), HudLayout::One);
+        assert_eq!(HudLayout::choose(2, None), HudLayout::Two);
+        for seats in 3..=MAX_SEATS {
+            assert_eq!(HudLayout::choose(seats, None), HudLayout::Compact, "{seats} on a couch");
         }
-        // The pairs fit their cells: three digits a side for HP, two for
-        // the shells, two in the small font for each weapon.
-        assert!(3 * CHAR_W_SMALL + CHAR_W_SMALL + 3 * CHAR_W_SMALL <= SLOTS_TWO.hp_w);
-        assert!(2 * CHAR_W_SMALL + CHAR_W_SMALL + 2 * CHAR_W_SMALL <= SLOTS_TWO.shells_pair_w());
-        assert!(2 * CHAR_W_SMALL + CHAR_W_SMALL + 2 * CHAR_W_SMALL <= SLOTS_TWO.count_w);
-        assert!(SLOTS_TWO.shells + SLOTS_TWO.shells_pair_w() <= SLOTS_TWO.weapons, "two: the shells pair runs into the weapons");
+        // A room: the seat this window plays is rarely seat 0, so even a
+        // pair goes compact rather than pairing the bar up.
+        assert_eq!(HudLayout::choose(1, Some(0)), HudLayout::One, "the rig's one seat");
+        for seats in 2..=MAX_SEATS {
+            for seat in 0..seats as u8 {
+                assert_eq!(HudLayout::choose(seats, Some(seat)), HudLayout::Compact, "{seats} seats at seat {seat}");
+            }
+        }
     }
 
+    /// The strip lists every seat but the local one, in seat order, at
+    /// every count and from every seat.
     #[test]
-    fn the_players_button_sits_between_the_bars_and_build() {
-        let panel = default_panel();
+    fn the_strip_lists_the_other_seats_in_order() {
+        for seats in 1..=MAX_SEATS {
+            for local in 0..seats {
+                let others = other_seats(seats, local);
+                assert_eq!(others.len(), seats - 1, "{seats} seats at {local}");
+                assert!(!others.contains(&local), "the local seat is the block, not a chip");
+                assert!(others.windows(2).all(|w| w[0] < w[1]), "seat order: {others:?}");
+                assert!(others.iter().all(|&i| i < seats));
+            }
+        }
+    }
+
+    /// The block is the local seat's, whichever seat that is, and the
+    /// chips are all the others - so a four-seat room at seat 2 reads its
+    /// own shells in the bar and seats 1, 2 and 4 in the strip.
+    #[test]
+    fn the_block_is_the_local_seats_and_the_chips_are_the_rest() {
+        let game = round(4);
+        for (seat, shells) in [(0usize, 3), (1, 4), (2, 5), (3, 6)] {
+            let entity = game.seat(seat).expect("the seat has a tank");
+            game.world.get::<&mut Tank>(entity).expect("a tank").shells_ammo = shells;
+        }
+        for seat in 0..4u8 {
+            let model = HudModel::gather(&game, Some(seat));
+            assert_eq!(model.layout, HudLayout::Compact);
+            assert_eq!(model.local.shells, 3 + seat as i32, "seat {seat}'s own block");
+            assert_eq!(model.second, None, "the compact layout pairs nothing");
+            let listed: Vec<u8> = model.others.iter().map(|s| s.seat).collect();
+            assert_eq!(listed, (0..4u8).filter(|&i| i != seat).collect::<Vec<_>>());
+            assert!(model.others.iter().all(|s| s.alive && s.health > 0.0));
+        }
+        // A couch round of four is the same layout, read from seat 0.
+        let couch = HudModel::gather(&game, None);
+        assert_eq!(couch.layout, HudLayout::Compact);
+        assert_eq!(couch.local.shells, 3);
+        assert_eq!(couch.others.iter().map(|s| s.seat).collect::<Vec<_>>(), vec![1, 2, 3]);
+    }
+
+    /// A seat dying takes nothing away: the same chips in the same order,
+    /// the dead one empty and marked. Numbers moving do not shift the
+    /// list either.
+    #[test]
+    fn a_wrecked_seat_keeps_its_chip() {
+        let mut game = round(5);
+        let before = HudModel::gather(&game, Some(1));
+        wreck(&mut game, 3);
+        let after = HudModel::gather(&game, Some(1));
+        let seats = |m: &HudModel| m.others.iter().map(|s| s.seat).collect::<Vec<_>>();
+        assert_eq!(seats(&before), seats(&after), "a death never moves a chip");
+        let dead = after.others.iter().find(|s| s.seat == 3).expect("still listed");
+        assert!(!dead.alive && dead.health == 0.0);
+        assert!(after.others.iter().filter(|s| s.seat != 3).all(|s| s.alive));
+        // The local seat's own block is untouched by any of it.
+        assert_eq!(after.local, before.local);
+    }
+
+    /// A seat the round has not spawned - the frames before a replica's
+    /// welcome builds one, when the local round is still on screen -
+    /// falls back to seat 0 rather than drawing an empty block.
+    #[test]
+    fn a_seat_the_round_does_not_hold_falls_back_to_the_first() {
+        let game = round(1);
+        let model = HudModel::gather(&game, Some(5));
+        assert_eq!(model.layout, HudLayout::One);
+        assert!(model.others.is_empty());
+        assert_eq!(model.local, HudModel::gather(&game, None).local);
+    }
+
+    /// The `LEAVE` button of an online round takes the mode button's
+    /// slot, which is free because a replica draws no `BUILD`.
+    #[test]
+    fn the_leave_button_takes_the_mode_buttons_slot() {
+        let panel = Rect::new(0.0, 0.0, crate::DEFAULT_SCREEN_WIDTH as f32, crate::HUD_BAR_HEIGHT as f32);
+        let leave = leave_button_rect(panel);
+        assert_eq!(leave, mode_button_rect(panel));
+        assert!(leave.width >= "LEAVE".len() as f32 * 11.0, "the label fits its slot");
+        assert!(leave.height >= 32.0, "a finger has the whole bar to aim at");
+        assert!(leave.x + leave.width <= panel.w);
+    }
+
+    /// The three bar buttons sit in a row at the bar's right end, in
+    /// their fixed order, all of them full bar height and none of them
+    /// on top of another.
+    #[test]
+    fn the_online_button_sits_left_of_the_players_button() {
+        let panel = Rect::new(0.0, 0.0, crate::DEFAULT_SCREEN_WIDTH as f32, crate::HUD_BAR_HEIGHT as f32);
+        let online = online_button_rect(panel);
         let players = players_button_rect(panel);
-        let build = mode_button_rect(panel);
-        assert!(players.width >= 48.0 && players.height == panel.h);
-        assert!(players.x + players.width + PLAYERS_BUTTON_GAP <= build.x);
-        assert!((SLOTS_TWO.bars + 3 * BAR_SLOT_W) as f32 <= players.x);
-    }
-
-    #[test]
-    fn the_stacked_bars_stay_under_their_label_and_inside_the_bar() {
-        let ph = crate::HUD_BAR_HEIGHT;
-        let bottom = ph - 4;
-        let top = bottom - 2 * BAR2_H - BAR2_GAP;
-        assert!(top >= 5 + HUD_LABEL_SIZE, "the top bar overlaps the label");
-        assert!(bottom <= ph);
+        let mode = mode_button_rect(panel);
+        assert_eq!(online.height, panel.h);
+        assert!(online.width >= "ONLINE".len() as f32 * 11.0, "the label fits its slot");
+        assert!(online.x + online.width + PLAYERS_BUTTON_GAP <= players.x);
+        assert!(players.x + players.width + PLAYERS_BUTTON_GAP <= mode.x);
+        assert!(mode.x + mode.width <= panel.w);
+        assert!(online.x >= 0.0);
+        // The RESTART button of a keyboard-less build shares the players
+        // slot, so the row is the same three rects either way.
+        assert_eq!(restart_button_rect(panel), players);
     }
 
     #[test]

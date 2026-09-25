@@ -26,7 +26,7 @@
 //! thrown decals already use. No RNG anywhere in flight.
 
 use crate::tuning::tuning;
-use sola_raylib::prelude::*;
+use crate::math::Vec2;
 
 use crate::shell::Owner;
 use crate::{MISSILE_FRAMES, MISSILE_SCALE, MISSILE_TEXTURE_SIZE, Position};
@@ -56,6 +56,11 @@ impl MissileStage {
 
 /// One seeker missile in the air.
 pub struct Missile {
+    /// Per-round id from `Game::spawn_pending`'s one projectile counter,
+    /// the same one shells, bullets and plasma take. It is the key this
+    /// missile travels under (`net::wire::MissileState`), so a replica can
+    /// follow one across snapshots.
+    pub id: u32,
     pub stage: MissileStage,
     /// The point on the ground under the missile.
     pub position: Position,
@@ -63,14 +68,14 @@ pub struct Missile {
     /// at the top of the climb.
     pub height: f32,
     /// Unit heading over the ground.
-    pub dir: Vector2,
+    pub dir: Vec2,
     /// Unit direction the sprite points on screen: along the path it is
     /// *drawn* on, which is the ground motion plus the change in height -
     /// so it noses up out of the tube, levels off at the apex and tips
     /// down into the dive. Eased toward that path by
     /// `missile_facing_smoothing` so a stage change never snaps it.
     /// Presentation only; nothing in flight reads it.
-    pub facing: Vector2,
+    pub facing: Vec2,
     /// Ground speed (px/s).
     pub speed: f32,
     /// Seconds since launch.
@@ -91,7 +96,7 @@ pub struct Missile {
     /// across the lock line, by tube, `missile_impact_spread_px` apart
     /// (`impact_offset`). Fixed at lock time, so the aim does not swing as
     /// the missile turns.
-    pub aim_offset: Vector2,
+    pub aim_offset: Vec2,
     /// Set the step the missile reaches `aim` on its dive; the frame's
     /// `resolve_missiles` bursts it and removes it.
     pub arrived: bool,
@@ -104,14 +109,16 @@ impl Missile {
     /// A missile leaving tube `tube` at `origin` (the tube mouth), heading
     /// `dir` (unit, already fanned), aiming by default at `fallback_aim` -
     /// the ground point it dives on if the seek finds nothing.
-    pub fn spawn(origin: Position, dir: Vector2, owner: Owner, tube: u8, fallback_aim: Position) -> Missile {
+    pub fn spawn(origin: Position, dir: Vec2, owner: Owner, tube: u8, fallback_aim: Position) -> Missile {
         let t = tuning();
         // Leaving the tube it climbs at the ease-out's opening rate, twice
         // the average - steeply up, drifting along the launch heading.
         let rise = 2.0 * t.missile_apex_height / t.missile_climb_seconds.max(1e-3);
-        let path = dir * t.missile_climb_speed - Vector2::new(0.0, rise);
+        let path = dir * t.missile_climb_speed - Vec2::new(0.0, rise);
         let facing = if path.length() > 1e-3 { path / path.length() } else { dir };
         Missile {
+            // 0 until `Game::spawn_pending` hands out the round's next one.
+            id: 0,
             stage: MissileStage::Climb,
             position: origin,
             height: 0.0,
@@ -124,7 +131,7 @@ impl Missile {
             target: None,
             aim: fallback_aim,
             locked: false,
-            aim_offset: Vector2::new(0.0, 0.0),
+            aim_offset: Vec2::new(0.0, 0.0),
             arrived: false,
             tube,
         }
@@ -139,13 +146,13 @@ impl Missile {
     /// The offset this missile's tube comes down at beside `toward`, a
     /// point it is locking onto: across the line from the missile to it,
     /// the pod's middle between the second and third tubes.
-    pub fn impact_offset(&self, toward: Position) -> Vector2 {
+    pub fn impact_offset(&self, toward: Position) -> Vec2 {
         let to = toward - self.position;
         let len = to.length();
         if len < 1e-3 {
-            return Vector2::new(0.0, 0.0);
+            return Vec2::new(0.0, 0.0);
         }
-        let across = Vector2::new(-to.y / len, to.x / len);
+        let across = Vec2::new(-to.y / len, to.x / len);
         across * ((self.tube as f32 - 1.5) * tuning().missile_impact_spread_px)
     }
 
@@ -290,7 +297,7 @@ impl Missile {
         }
         let max = rate_deg.to_radians() * dt;
         let turned = have + delta.clamp(-max, max);
-        self.dir = Vector2::new(turned.cos(), turned.sin());
+        self.dir = Vec2::new(turned.cos(), turned.sin());
     }
 
     /// The sprite's facing in degrees, the game's convention (0 = up):
@@ -328,39 +335,20 @@ impl Missile {
     }
 }
 
-/// The exhaust flicker frame: cycled from age, offset per tube.
-fn frame(missile: &Missile) -> i32 {
-    ((missile.age * 18.0) as i32 + missile.tube as i32) % MISSILE_FRAMES
+impl Missile {
+    /// Stamp the round's next projectile id on a missile being spawned.
+    pub fn set_id(&mut self, id: u32) {
+        self.id = id;
+    }
+
+    /// The exhaust flicker frame: cycled from age, offset per tube. The
+    /// drawing (`render/missile.rs`) asks for it; the cycle is the
+    /// entity's.
+    pub fn frame(&self) -> i32 {
+        ((self.age * 18.0) as i32 + self.tube as i32) % MISSILE_FRAMES
+    }
 }
 
-fn source_rec(missile: &Missile) -> Rectangle {
-    Rectangle::new(frame(missile) as f32 * MISSILE_TEXTURE_SIZE, 0.0, MISSILE_TEXTURE_SIZE, MISSILE_TEXTURE_SIZE)
-}
-
-/// The missile's shadow on the ground under it: its own silhouette,
-/// shrinking and fading as it rises (what sells the height with no camera).
-pub fn draw_missile_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, missile: &Missile) {
-    let lift = missile.lift();
-    let size = MISSILE_TEXTURE_SIZE * MISSILE_SCALE * (1.0 - 0.3 * lift);
-    let dest = Rectangle::new(
-        missile.position.x + tuning().shadow_dir_x * 4.0,
-        missile.position.y + tuning().shadow_dir_y * 4.0,
-        size,
-        size,
-    );
-    let alpha = 255.0 * tuning().missile_shadow_opacity * (1.0 - 0.5 * lift);
-    let origin = Vector2::new(size / 2.0, size / 2.0);
-    d.draw_texture_pro(texture, source_rec(missile), dest, origin, missile.ground_rotation(), Color::new(0, 0, 0, alpha as u8));
-}
-
-/// The missile itself, lifted by its height and scaled up as it rises.
-pub fn draw_missile(d: &mut impl RaylibDraw, texture: &Texture2D, missile: &Missile) {
-    let size = MISSILE_TEXTURE_SIZE * MISSILE_SCALE * missile.draw_scale();
-    let at = missile.draw_pos();
-    let dest = Rectangle::new(at.x, at.y, size, size);
-    let origin = Vector2::new(size / 2.0, size / 2.0);
-    d.draw_texture_pro(texture, source_rec(missile), dest, origin, missile.rotation(), Color::WHITE);
-}
 
 #[cfg(test)]
 mod tests {
@@ -382,7 +370,7 @@ mod tests {
     #[test]
     fn a_missile_climbs_seeks_chases_and_lands_on_its_aim() {
         let aim = Position::new(300.0, 100.0);
-        let mut m = Missile::spawn(Position::new(100.0, 100.0), Vector2::new(0.0, -1.0), Owner::Player(0), 0, aim);
+        let mut m = Missile::spawn(Position::new(100.0, 100.0), Vec2::new(0.0, -1.0), Owner::Player(0), 0, aim);
         let mut peak: f32 = 0.0;
         let mut stages = vec![m.stage];
         for _ in 0..2000 {
@@ -410,7 +398,7 @@ mod tests {
         // Launched up, target straight down: the chase has to turn all
         // the way round without circling forever.
         let aim = Position::new(100.0, 400.0);
-        let mut m = Missile::spawn(Position::new(100.0, 300.0), Vector2::new(0.0, -1.0), Owner::Enemy(3), 2, aim);
+        let mut m = Missile::spawn(Position::new(100.0, 300.0), Vec2::new(0.0, -1.0), Owner::Enemy(3), 2, aim);
         fly_until_arrived(&mut m, 5000);
         assert!(m.position.distance_to(aim) < 1e-3);
     }
@@ -421,7 +409,7 @@ mod tests {
         // at the apex and tips down into the dive - never flat right
         // while it climbs.
         let aim = Position::new(500.0, 100.0);
-        let mut m = Missile::spawn(Position::new(100.0, 100.0), Vector2::new(1.0, 0.0), Owner::Player(0), 0, aim);
+        let mut m = Missile::spawn(Position::new(100.0, 100.0), Vec2::new(1.0, 0.0), Owner::Player(0), 0, aim);
         assert!(m.facing.y < -0.5, "leaves the tube pointing up the screen: {:?}", m.facing);
         let mut leveled = false;
         let mut dived = false;
@@ -446,7 +434,7 @@ mod tests {
 
     #[test]
     fn a_missile_waits_at_the_apex_until_it_is_locked() {
-        let mut m = Missile::spawn(Position::new(0.0, 0.0), Vector2::new(1.0, 0.0), Owner::Player(0), 0, Position::new(500.0, 0.0));
+        let mut m = Missile::spawn(Position::new(0.0, 0.0), Vec2::new(1.0, 0.0), Owner::Player(0), 0, Position::new(500.0, 0.0));
         for _ in 0..600 {
             m.advance(crate::PHYSICS_FIXED_DT);
         }

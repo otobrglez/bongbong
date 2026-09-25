@@ -8,7 +8,7 @@ use crate::tuning::tuning;
 use hecs::Entity;
 use rand::RngExt;
 use rapier2d::prelude::RigidBodyHandle;
-use sola_raylib::core::math::Vector2;
+use crate::math::Vec2;
 
 use crate::ai::Ai;
 use crate::blast::{BlastFx, BlastKind, BlastShape, Lean, Scorch};
@@ -50,7 +50,7 @@ pub(super) struct DeadTile {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(super) enum DamageCause {
     /// A projectile, travelling along `dir` (unit) when known.
-    Shot { dir: Option<Vector2> },
+    Shot { dir: Option<Vec2> },
     Ram,
     Blast { falloff: f32, from: Position },
     /// Sustained flame exposure (`flame.rs`): a sandbag or fence that
@@ -267,7 +267,7 @@ impl Game {
         if live {
             // Players first, in index order, then the enemies - the same
             // draw order as a wreck's blast (`Game::apply_explosion`).
-            for player in self.players().into_iter().flatten() {
+            for player in self.seats_on_field().into_iter().flatten() {
                 let mut q = self.world.query_one::<&mut Tank>(player);
                 let tank = q.get().expect("player entity always has a Tank");
                 explosion_hit(tank, center, true, &mut self.physics, &mut f.rng, &mut f.kills, &params);
@@ -464,11 +464,11 @@ impl Game {
         }
         let t = tuning();
         let now = self.time;
+        self.fade_fires(f.dt);
         // Spread first, so a trail lit this frame does not also spread
         // this frame.
         let mut spread = Vec::new();
         for fire in self.fires.iter_mut() {
-            fire.left -= f.dt;
             if let Some(at) = fire.spread_at {
                 if now >= at {
                     fire.spread_at = None;
@@ -505,7 +505,7 @@ impl Game {
             let dps = t.oil_pool_damage_per_second;
             if dps > 0.0 {
                 let half_cell = OBSTACLE_GRID_SIZE * 0.5;
-                let mut order: Vec<Entity> = self.players().into_iter().flatten().collect();
+                let mut order: Vec<Entity> = self.seats_on_field().into_iter().flatten().collect();
                 order.extend(self.world.query::<(Entity, &Tank)>().with::<&Ai>().iter().map(|(e, _)| e));
                 for entity in order {
                     let mut q = self.world.query_one::<&mut Tank>(entity);
@@ -565,13 +565,36 @@ impl Game {
             false
         });
         for fire in done {
-            let pos = fire.position();
-            self.ground.darken_cell(pos, t.ground_burn_darken);
-            self.oil_cells.remove(&fire.cell);
-            if let Some(decal) = Decal::new(Material::Wood, pos, true) {
+            if let Some(decal) = self.fire_burnt_out(&fire) {
                 f.decals.push(decal);
             }
         }
+    }
+
+    /// Burn every lit ground cell down by `dt`, and nothing else: none of
+    /// `tick_fires`' spreading, damage or ignition. A client replica, whose
+    /// fires are listed by the server's snapshots, runs this between them
+    /// so the flames keep fading at the client's own rate
+    /// (`Game::tick_presentation`, docs/online-coop-prd.md section 4.5);
+    /// it never takes a cell out of the list.
+    pub(crate) fn fade_fires(&mut self, dt: f32) {
+        for fire in self.fires.iter_mut() {
+            fire.left -= dt;
+        }
+    }
+
+    /// What a ground fire leaves when it goes out: the ground darker for
+    /// the rest of the round, the oil cell spent, and a charred plank of
+    /// rubble for the caller to stage. **Runs exactly once per cell** -
+    /// `darken_cell` multiplies the tint, so a second call darkens twice.
+    /// The round calls it from `tick_fires`; a replica calls it for the
+    /// cell a snapshot has stopped listing, which is the only way a fire
+    /// ever leaves the list (`net::apply`).
+    pub(crate) fn fire_burnt_out(&mut self, fire: &GroundFire) -> Option<Decal> {
+        let pos = fire.position();
+        self.ground.darken_cell(pos, tuning().ground_burn_darken);
+        self.oil_cells.remove(&fire.cell);
+        Decal::new(Material::Wood, pos, true)
     }
 
     /// Advance every burning wood tile's fire and report the ones that
@@ -698,21 +721,38 @@ impl Game {
         }
         f.events.push(Event::ObstacleDestroyed { material: Material::Barrel, x: from.x, y: from.y });
         f.events.push(Event::DrumLaunched { x: from.x, y: from.y, to_x: to.x, to_y: to.y });
+        self.drum_in_flight(from, to, variant);
+    }
+
+    /// Put a drum in the air, from `from` toward `to`. The arc is derived
+    /// from its age, so nothing integrates it and the landing spot is
+    /// already decided. Its own function because both ends stage it: the
+    /// round from `launch_drum`, a client replica from the `DrumLaunched`
+    /// event (`net::apply`, docs/online-coop-prd.md section 4.4).
+    pub(crate) fn drum_in_flight(&mut self, from: Position, to: Position, variant: i32) {
         self.flying_drums.push(FlyingDrum { from, to, age: 0.0, variant });
     }
 
-    /// Age the drums in the air; one that lands detonates there - a
-    /// chained blast leaning away from where it was launched.
-    pub(super) fn tick_launches(&mut self, f: &mut Frame) {
+    /// Age every drum in the air and hand back the ones that have landed,
+    /// already out of the list. What happens where they land is the
+    /// caller's: the round detonates them, a replica waits for the
+    /// server's `Blast` (`Game::tick_presentation`).
+    pub(crate) fn age_flying_drums(&mut self, dt: f32) -> Vec<FlyingDrum> {
         let mut landed = Vec::new();
         for drum in self.flying_drums.iter_mut() {
-            drum.age += f.dt;
+            drum.age += dt;
             if drum.landed() {
                 landed.push(*drum);
             }
         }
         self.flying_drums.retain(|d| !d.landed());
-        for drum in landed {
+        landed
+    }
+
+    /// Age the drums in the air; one that lands detonates there - a
+    /// chained blast leaning away from where it was launched.
+    pub(super) fn tick_launches(&mut self, f: &mut Frame) {
+        for drum in self.age_flying_drums(f.dt) {
             let kind = Drum::from_variant(drum.variant);
             f.events.push(Event::Blast { x: drum.to.x, y: drum.to.y, chained: true, drum: kind });
             f.pending_blasts.push(PendingBlast {

@@ -19,11 +19,16 @@
 //! real touch point drives it; the mouse keeps its own role (the bar's
 //! buttons, the dialogs, the builder) unless `--touch-from-mouse` asks for
 //! a desktop stand-in, which is a development aid rather than a control
-//! scheme. Presentation-only feedback (`draw`): a faint base and knob
-//! while the stick is held, a ripple where a fire tap landed, and a
-//! one-time hint the first time a touch is seen.
+//! scheme. Presentation-only feedback (`draw`, the one item here that
+//! needs raylib): a faint base and knob while the stick is held, a ripple
+//! where a fire tap landed, and a one-time hint the first time a touch is
+//! seen.
 
-use sola_raylib::prelude::*;
+use crate::math::Vec2;
+#[cfg(feature = "render")]
+use crate::math::Color;
+#[cfg(feature = "render")]
+use sola_raylib::prelude::RaylibDraw;
 
 use crate::ai::Intent;
 use crate::tank::Dir;
@@ -48,21 +53,23 @@ pub const HINT_SECONDS: f32 = 4.0;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TouchPoint {
     pub id: i32,
-    pub pos: Vector2,
+    pub pos: Vec2,
 }
 
 #[derive(Clone, Copy, Debug)]
 struct Stick {
     id: i32,
-    origin: Vector2,
-    current: Vector2,
+    origin: Vec2,
+    current: Vec2,
     /// The direction the stick last resolved to, kept for the hysteresis.
     dir: Option<Dir>,
 }
 
 #[derive(Clone, Copy, Debug)]
 struct Ripple {
-    at: Vector2,
+    /// Where the tap landed; only the overlay reads it.
+    #[cfg_attr(not(feature = "render"), allow(dead_code))]
+    at: Vec2,
     age: f32,
 }
 
@@ -86,8 +93,8 @@ impl TouchScheme {
     pub fn update(&mut self, points: &[TouchPoint], layout: &Layout, steer_right: bool, dt: f32) -> Intent {
         let field = layout.field;
         let split = field.x + field.w / 2.0;
-        let on_field = |p: Vector2| p.y >= field.y && p.y < field.y + field.h && p.x >= field.x && p.x < field.x + field.w;
-        let on_steer = |p: Vector2| if steer_right { p.x >= split } else { p.x < split };
+        let on_field = |p: Vec2| p.y >= field.y && p.y < field.y + field.h && p.x >= field.x && p.x < field.x + field.w;
+        let on_steer = |p: Vec2| if steer_right { p.x >= split } else { p.x < split };
 
         if !points.is_empty() && !self.seen {
             self.seen = true;
@@ -143,13 +150,14 @@ impl TouchScheme {
 
     /// The scheme's feedback, drawn in bitmap space over the field after
     /// everything else: the stick while held, fire ripples, the hint.
+    #[cfg(feature = "render")]
     pub fn draw(&self, d: &mut impl RaylibDraw, layout: &Layout, steer_right: bool) {
         if let Some(s) = &self.stick {
             let dx = s.current.x - s.origin.x;
             let dy = s.current.y - s.origin.y;
             let len = (dx * dx + dy * dy).sqrt();
             let k = if len > KNOB_TRAVEL_PX { KNOB_TRAVEL_PX / len } else { 1.0 };
-            let knob = Vector2::new(s.origin.x + dx * k, s.origin.y + dy * k);
+            let knob = Vec2::new(s.origin.x + dx * k, s.origin.y + dy * k);
             d.draw_circle_v(s.origin, KNOB_TRAVEL_PX, Color::new(255, 255, 255, 40));
             d.draw_circle_lines(s.origin.x as i32, s.origin.y as i32, KNOB_TRAVEL_PX, Color::new(255, 255, 255, 140));
             d.draw_line_ex(s.origin, knob, 2.0, Color::new(255, 255, 255, 170));
@@ -212,7 +220,7 @@ mod touch_tests {
     }
 
     fn pt(id: i32, x: f32, y: f32) -> TouchPoint {
-        TouchPoint { id, pos: Vector2::new(x, y) }
+        TouchPoint { id, pos: Vec2::new(x, y) }
     }
 
     #[test]

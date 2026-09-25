@@ -2,7 +2,7 @@ use crate::tuning::tuning;
 use serde::{Deserialize, Serialize};
 use rand::RngExt;
 use rand::rngs::SmallRng;
-use sola_raylib::prelude::Vector2;
+use crate::math::Vec2;
 
 use crate::bt::{Node, Status, action, condition, selector, sequence};
 use crate::obstacle::Material;
@@ -22,7 +22,7 @@ use crate::{
 #[derive(Clone, Copy)]
 pub struct Mover {
     pub position: Position,
-    pub velocity: Vector2,
+    pub velocity: Vec2,
     /// Collision radius - see `Tank::avoidance_radius` (the true
     /// bounding-circle radius of the tank's real, per-row physics footprint
     /// at its current facing, not a flat approximation).
@@ -249,11 +249,10 @@ pub struct Ai {
     /// rather than a flag so tooling can see an escape that fired and
     /// reset within one frame.
     escapes: u32,
-    /// Which human player this tank is fighting (0 or 1): the target of
-    /// its `Role::Player` behaviour and the ring it competes on. Always 0
-    /// in a single-player round; in a two-player round `enemy_phase`
-    /// retargets it to the nearer live, visible player past
-    /// `enemy_target_switch_margin_px`.
+    /// Which seat this tank is fighting: the target of its `Role::Player`
+    /// behaviour and the ring it competes on. Always 0 in a single-player
+    /// round; with more seats `enemy_phase` retargets it to the nearest
+    /// live, visible one past `enemy_target_switch_margin_px`.
     target_player: u8,
 }
 
@@ -978,16 +977,16 @@ impl Ai {
         }
 
         let step = desired.vec();
-        let my_vel = Vector2::new(step.x * ctx.speed, step.y * ctx.speed);
+        let my_vel = Vec2::new(step.x * ctx.speed, step.y * ctx.speed);
 
         // Find the soonest predicted collision among the other movers.
-        let mut soonest: Option<(f32, Vector2)> = None; // (time, relative position)
+        let mut soonest: Option<(f32, Vec2)> = None; // (time, relative position)
         for (i, other) in ctx.movers.iter().enumerate() {
             if i == ctx.my_index {
                 continue;
             }
-            let p = Vector2::new(other.position.x - from.x, other.position.y - from.y);
-            let v = Vector2::new(my_vel.x - other.velocity.x, my_vel.y - other.velocity.y);
+            let p = Vec2::new(other.position.x - from.x, other.position.y - from.y);
+            let v = Vec2::new(my_vel.x - other.velocity.x, my_vel.y - other.velocity.y);
             let vv = v.x * v.x + v.y * v.y;
             if vv <= f32::EPSILON {
                 continue; // no relative motion
@@ -1051,13 +1050,13 @@ impl Ai {
     /// merely trades one collision for another.
     fn dir_collides(&self, dir: Dir, from: Position, ctx: AvoidCtx) -> bool {
         let step = dir.vec();
-        let my_vel = Vector2::new(step.x * ctx.speed, step.y * ctx.speed);
+        let my_vel = Vec2::new(step.x * ctx.speed, step.y * ctx.speed);
         for (i, other) in ctx.movers.iter().enumerate() {
             if i == ctx.my_index {
                 continue;
             }
-            let p = Vector2::new(other.position.x - from.x, other.position.y - from.y);
-            let v = Vector2::new(my_vel.x - other.velocity.x, my_vel.y - other.velocity.y);
+            let p = Vec2::new(other.position.x - from.x, other.position.y - from.y);
+            let v = Vec2::new(my_vel.x - other.velocity.x, my_vel.y - other.velocity.y);
             let vv = v.x * v.x + v.y * v.y;
             if vv <= f32::EPSILON {
                 continue;
@@ -1937,7 +1936,7 @@ fn act_guard(b: &mut Brain) -> Status {
         // away from home is dropped so the turn happens now - the
         // hold/margin gate is blind to a straight reversal by design, and
         // out here the only right answer is to go back.
-        let away = Vector2::new(me.x - leash.anchor.x, me.y - leash.anchor.y);
+        let away = Vec2::new(me.x - leash.anchor.x, me.y - leash.anchor.y);
         let len = (away.x * away.x + away.y * away.y).sqrt().max(1.0);
         let rim = Position::new(leash.anchor.x + away.x / len * leash.keep_off, leash.anchor.y + away.y / len * leash.keep_off);
         if b.ai.committed_dir.is_some_and(|d| d.vec().x * away.x + d.vec().y * away.y > 0.0) {
@@ -2050,8 +2049,8 @@ mod role_tests {
         player_tank.position = player;
         let grid = Grid::build(1280.0, 720.0, 48.0, 0.0, std::iter::empty());
         let movers = [
-            Mover { position: player, velocity: Vector2::new(0.0, 0.0), radius: 20.0, is_player: true },
-            Mover { position: me, velocity: Vector2::new(0.0, 0.0), radius: 20.0, is_player: false },
+            Mover { position: player, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: true },
+            Mover { position: me, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: false },
         ];
         let mut rng = SmallRng::seed_from_u64(7);
         ai.think(
@@ -2185,8 +2184,8 @@ mod stuck_tests {
         player.position = Position::new(200.0, 600.0);
         let grid = Grid::build(1280.0, 720.0, 48.0, 0.0, std::iter::empty());
         let movers = [
-            Mover { position: player.position, velocity: Vector2::new(0.0, 0.0), radius: 20.0, is_player: true },
-            Mover { position: me.position, velocity: Vector2::new(0.0, 0.0), radius: 20.0, is_player: false },
+            Mover { position: player.position, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: true },
+            Mover { position: me.position, velocity: Vec2::new(0.0, 0.0), radius: 20.0, is_player: false },
         ];
         let mut rng = SmallRng::seed_from_u64(7);
         ai.think(

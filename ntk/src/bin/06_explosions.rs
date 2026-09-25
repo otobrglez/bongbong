@@ -23,13 +23,13 @@
 
 use bongbong::editor::{BuilderInput, EditorTextures, Tool};
 use bongbong::fx::Fx;
-use bongbong::game::{Effects, Textures};
+use bongbong::render::game::{Effects, Textures};
 use bongbong::hud::PlayChrome;
 use bongbong::level::{LevelOverrides, Mission};
 use bongbong::map::{CellObject, MapFile};
 use bongbong::mode::{Driver, Session};
 use bongbong::obstacle::Drum;
-use bongbong::shockwave::{RippleFx, RippleTuning};
+use bongbong::render::shockwave::{RippleFx, RippleTuning};
 use bongbong::simulation::debug::TankPatch;
 use bongbong::simulation::{Game, Input};
 use bongbong::tuning::tuning;
@@ -135,12 +135,14 @@ fn main() {
             rl.request_quit();
         }
         let window = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
+        // The demo never opens a room, so the two online drivers cannot
+        // come up here; they take the round's own layout all the same.
         let (layout, bitmap) = match session.mode() {
             Driver::Build => (&layout_build, layout_build.window_size()),
-            Driver::Play => (&layout_play, (w, h)),
+            Driver::Play | Driver::Lobby | Driver::Online => (&layout_play, (w, h)),
         };
         let view = View::fit((bitmap.0 as f32, bitmap.1 as f32), window);
-        let pointer = view.to_bitmap(rl.get_mouse_position());
+        let pointer = view.to_bitmap(rl.get_mouse_position().into());
         let pressed = rl.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT);
         let dt = rl.get_frame_time();
 
@@ -151,7 +153,7 @@ fn main() {
                 Driver::Build => {
                     session.play();
                 }
-                Driver::Play => {
+                Driver::Play | Driver::Lobby | Driver::Online => {
                     session.press_build();
                     if session.dialog {
                         session.answer_dialog(true);
@@ -227,7 +229,7 @@ fn main() {
                         thread,
                         &mut composite_build,
                         &view,
-                        Color::WHITE,
+                        bongbong::math::Color::WHITE,
                         layout,
                         &EditorTextures {
                             obstacles: &obstacles,
@@ -255,7 +257,7 @@ fn main() {
                 }
             }
             // PLAY: a click on a barrel sets it off; R restarts the round.
-            Driver::Play => {
+            Driver::Play | Driver::Lobby | Driver::Online => {
                 if pressed {
                     let field_pos: Position = layout.to_field(pointer);
                     let _ = session.game.debug_detonate(field_pos);
@@ -281,11 +283,11 @@ fn main() {
             &mut scene,
             &mut composite_play,
             &view,
-            Color::WHITE,
+            bongbong::math::Color::WHITE,
             &mut Effects { shock: &mut shock, muzzle: &mut muzzle, impact: &mut impact, fx: &fx, touch: None },
             &textures,
             &layout_play,
-            &PlayChrome { build_button: false, players_button: false, restart_button: false, leave_dialog: false, players_dialog: false },
+            &PlayChrome::default(),
         );
     });
 }

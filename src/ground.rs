@@ -43,7 +43,7 @@
 //! actually makes `road_cells` in `build` line up pixel-for-pixel with the
 //! object it's meant to sit under.
 
-use sola_raylib::prelude::*;
+use crate::math::{Color, Rectangle, Vec2};
 
 use crate::canvas::{Canvas, Sheet};
 use crate::map::Theme;
@@ -808,7 +808,7 @@ fn source_rec(tile_id: i32) -> Rectangle {
 /// and tints are the same under every theme.
 pub fn draw(c: &mut impl Canvas, grid: &GroundGrid, theme: Theme, time: f32) {
     let size = GROUND_WORLD_TILE;
-    let origin = Vector2::new(size / 2.0, size / 2.0);
+    let origin = Vec2::new(size / 2.0, size / 2.0);
     let t = tuning();
     let frame = ((time / t.water_frame_seconds.max(0.01)).floor() as i64).rem_euclid(WATER_FRAME_COUNT as i64) as usize;
     for y in 0..grid.rows {

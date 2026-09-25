@@ -6,7 +6,7 @@
 //! position and a kind, checked against every living tank each frame.
 
 use serde::{Deserialize, Serialize};
-use sola_raylib::prelude::*;
+use crate::math::{Color, Rectangle, Vec2};
 
 use crate::canvas::{Canvas, Sheet};
 use crate::{PICKUP_SCALE, PICKUP_TEXTURE_SIZE, Position};
@@ -113,6 +113,6 @@ pub fn draw_pickup(c: &mut impl Canvas, pickup: &Pickup) {
     let size = pickup.size();
     let src = Rectangle::new(0.0, 0.0, PICKUP_TEXTURE_SIZE, PICKUP_TEXTURE_SIZE);
     let dest = Rectangle::new(pickup.position.x, pickup.position.y, size, size);
-    let origin = Vector2::new(size / 2.0, size / 2.0);
+    let origin = Vec2::new(size / 2.0, size / 2.0);
     c.blit(Sheet::Pickup(pickup.kind), src, dest, origin, 0.0, Color::WHITE);
 }

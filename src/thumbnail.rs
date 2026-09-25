@@ -2,6 +2,9 @@
 //! shows it, rendered to pixels either on the CPU (no window) or on the
 //! GPU (a hidden window). `src/bin/mapshot.rs` is the command line over
 //! this module; the tests here pin the CPU output of the shipped maps.
+//! Staging the round and painting it on the CPU canvas are headless;
+//! decoding the sheets, the GPU renderer and the PNG encoder are
+//! `render::thumbnail`.
 //!
 //! **The first frame is init plus one update.** `Tank::ring_position`
 //! starts at the origin and is only snapped onto the hull by
@@ -9,13 +12,13 @@
 //! render. With no enemies on the field that update draws no RNG, so the
 //! frame is a pure function of (map, seed, options).
 
-use crate::canvas::{CpuCanvas, GpuCanvas, Pixels, Sheet, Sheets};
+use crate::canvas::{CpuCanvas, Pixels, Sheet};
 use crate::game::PaintOptions;
 use crate::level::{LevelOverrides, SpawnKind};
 use crate::map::MapFile;
 use crate::simulation::{Game, Input, PlayerCount};
+use crate::math::Color;
 use crate::PHYSICS_FIXED_DT;
-use sola_raylib::prelude::*;
 use std::collections::BTreeMap;
 
 /// The round seed a thumbnail uses unless told otherwise, so a batch is
@@ -47,7 +50,7 @@ impl Default for ThumbnailOptions {
     fn default() -> Self {
         ThumbnailOptions {
             seed: DEFAULT_SEED,
-            players: PlayerCount::One,
+            players: PlayerCount::ONE,
             tank_row: None,
             tank2_row: None,
             hide_players: false,
@@ -86,59 +89,12 @@ pub fn field_pixels(game: &Game) -> (usize, usize) {
     (w.round().max(1.0) as usize, h.round().max(1.0) as usize)
 }
 
-/// Every sheet decoded for the CPU canvas. Load once per batch; each
-/// render clones the map (a few megabytes) into its canvas.
-pub fn load_cpu_sheets() -> Result<BTreeMap<Sheet, Pixels>, String> {
-    let mut sheets = BTreeMap::new();
-    for sheet in Sheet::all() {
-        sheets.insert(sheet, Pixels::load(&sheet.path())?);
-    }
-    Ok(sheets)
-}
-
 /// Paint `game`'s field onto a fresh CPU canvas.
 pub fn render_cpu(game: &Game, sheets: &BTreeMap<Sheet, Pixels>) -> CpuCanvas {
     let (w, h) = field_pixels(game);
     let mut canvas = CpuCanvas::new(w, h, sheets.clone());
     game.paint_field(&mut canvas, PAINT);
     canvas
-}
-
-/// The GPU side's `Sheet` lookup: one texture per sheet, loaded by path.
-pub struct GpuSheets(pub BTreeMap<Sheet, Texture2D>);
-
-impl GpuSheets {
-    /// Load every sheet as a texture. Needs a window (hidden is fine).
-    pub fn load(rl: &mut RaylibHandle, thread: &RaylibThread) -> Result<Self, String> {
-        let mut map = BTreeMap::new();
-        for sheet in Sheet::all() {
-            let path = sheet.path();
-            let texture = rl.load_texture(thread, &path).map_err(|e| format!("{path}: {e}"))?;
-            map.insert(sheet, texture);
-        }
-        Ok(GpuSheets(map))
-    }
-}
-
-impl Sheets for GpuSheets {
-    fn texture(&self, sheet: Sheet) -> &Texture2D {
-        self.0.get(&sheet).unwrap_or_else(|| panic!("{sheet:?} was not loaded"))
-    }
-}
-
-/// Paint `game`'s field into a render texture through the same `Canvas`
-/// stages the game's own pass 1 runs, and read it back as an `Image`
-/// (top row first, like the CPU canvas).
-pub fn render_gpu(rl: &mut RaylibHandle, thread: &RaylibThread, sheets: &GpuSheets, game: &Game) -> Result<Image, String> {
-    let (w, h) = field_pixels(game);
-    let mut scene = rl.load_render_texture(thread, w as u32, h as u32).map_err(|e| e.to_string())?;
-    rl.draw_texture_mode(thread, &mut scene, |mut d| {
-        d.clear_background(Color::WHITE);
-        game.paint_field(&mut GpuCanvas::new(&mut d, sheets), PAINT);
-    });
-    let mut image = scene.load_image().map_err(|e| e.to_string())?;
-    image.flip_vertical();
-    Ok(image)
 }
 
 /// How far two renders of one field are apart: the mean absolute
@@ -185,23 +141,17 @@ pub fn compare_pixels(a: &[Color], b: &[Color]) -> Comparison {
     Comparison { mean_channel_diff: sum as f64 / (3.0 * n), off_fraction: off as f64 / n }
 }
 
-/// PNG bytes of a read-back `Image`, scaled up `scale` times with whole
-/// pixels.
-pub fn image_png_bytes(mut image: Image, scale: u32) -> Result<Vec<u8>, String> {
-    if scale > 1 {
-        image.resize_nn(image.width() * scale as i32, image.height() * scale as i32);
-    }
-    image.export_image_to_memory(".png").map_err(|e| e.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::canvas::Canvas;
     use crate::map::SHIPPED_MAPS;
+    #[cfg(feature = "render")]
+    use crate::render::thumbnail::load_cpu_sheets;
 
     /// raylib logs every decoded file at INFO straight to stdout, past the
     /// test harness's capture; the tests only want its warnings.
+    #[cfg(feature = "render")]
     fn quiet_raylib() {
         unsafe { sola_raylib::ffi::SetTraceLogLevel(sola_raylib::consts::TraceLogLevel::LOG_WARNING as i32) }
     }
@@ -215,6 +165,7 @@ mod tests {
     /// Deterministic, so a change here is a real change to what a thumbnail
     /// shows - re-baseline consciously after a deliberate art, map or
     /// tuning change, never to go green.
+    #[cfg(feature = "render")]
     const PINNED: [(&str, u64); 5] = [
         ("default", 0x0144_1552_709b_6595),
         ("default-desert", 0x84de_37cf_aa6e_1aae),
@@ -223,6 +174,9 @@ mod tests {
         ("portals", 0xe2b6_ae87_295e_ec97),
     ];
 
+    /// Decoding the sheets is raylib's job, so this and the next test run
+    /// with the `render` feature only.
+    #[cfg(feature = "render")]
     #[test]
     fn shipped_maps_render_on_the_cpu() {
         quiet_raylib();
@@ -249,6 +203,7 @@ mod tests {
         assert!(changed.is_empty(), "pinned CPU renders changed; new rows for PINNED: {}", changed.join(", "));
     }
 
+    #[cfg(feature = "render")]
     #[test]
     fn options_change_the_picture() {
         quiet_raylib();

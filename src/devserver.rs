@@ -16,6 +16,7 @@
 //! is running and the round RNG sits in `Game::rng`.
 
 use std::collections::{BTreeMap, VecDeque};
+#[cfg(feature = "render")]
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -26,6 +27,8 @@ use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::{Map, Value, json};
+use crate::math::Vec2;
+#[cfg(feature = "render")]
 use sola_raylib::prelude::{RaylibHandle, RaylibTexture2D, RaylibThread, RenderTexture2D};
 
 use crate::ai::Intent;
@@ -34,6 +37,8 @@ use crate::hud::{leave_dialog_rects, mode_button_rect, players_button_rect, play
 use crate::map::MapFile;
 use crate::maplint::LintSeverity;
 use crate::mode::{Driver, Session};
+use crate::net::client::Phase;
+use crate::net::round::AnyRound;
 use crate::obstacle::Obstacle;
 use crate::simulation::debug::{CLUSTER_RADIUS_PX, Detail, FieldTarget, JITTER_WINDOW_FRAMES, SPIN_FULL_CIRCLE_DEG, SPIN_NET_MAX, SPIN_WINDOW_FRAMES, TankPatch, TrackRow, r1, signed_quarter_turn};
 use crate::simulation::{Event, Game, Input, Overlays, PlayerCount};
@@ -45,6 +50,11 @@ use crate::{Layout, PHYSICS_FIXED_DT, Position, parse_seed};
 /// Port the game listens on unless `--dev-port`/`BONGBONG_DEV_PORT` says
 /// otherwise; the adapter defaults to the same.
 pub const DEFAULT_PORT: u16 = 4747;
+
+/// The room server's dev port (`ROOM_TOOLS`), one past the room server's
+/// own 4848 so both can run on one machine. `bbmcp rooms` dials it and
+/// `--dev-port`/`BONGBONG_ROOMS_DEV_PORT` moves it.
+pub const ROOMS_DEV_PORT: u16 = 4849;
 
 /// Longest a socket thread waits for the main loop to answer one request
 /// (a long `step` still finishes in well under a second). The adapter's
@@ -65,6 +75,7 @@ const HISTORY_MAX_ROWS: usize = 2000;
 /// Events returned inline by one `step` reply.
 const STEP_EVENT_CAP: usize = 256;
 /// Where screenshots land (under the gitignored `target/`).
+#[cfg_attr(not(feature = "render"), allow(dead_code))]
 const SHOT_DIR: &str = "target/devshots";
 /// How far apart the points of a `click {drag_to}` drag are sampled: well
 /// under a 32 px cell, so the stroke crosses every cell on the line.
@@ -76,6 +87,22 @@ const CLICK_DRAG_STEP_PX: f32 = 8.0;
 pub const GAME_ONLY_TOOLS: &[&str] = &[
     "snapshot", "events", "step", "input", "pause", "resume", "history", "nav_grid", "field", "terrain", "teleport",
     "set_tank", "kill", "spawn_enemy", "players",
+];
+
+/// The tools that drive the *local* round or the builder, refused while
+/// the window holds a seat in a room (docs/online-coop-prd.md §4.5): an
+/// online round is the server's to simulate and the replica on screen is
+/// a picture of it, so a write here would change the picture and reach
+/// nobody. Everything that only reads - `status`, `snapshot`, `terrain`,
+/// `events`, `history`, `nav_grid`, `field`, `map_get`, `lint`,
+/// `overlays`, `screenshot`, `mode`, `builder_files` and the `tuning_*`
+/// tools - describes the online round instead (`Session::shown`), and
+/// `key {escape}` gives the seat up, as does a `click` on the bar's
+/// `LEAVE` button - the one thing a click has to press in this mode.
+pub const ONLINE_REFUSED_TOOLS: &[&str] = &[
+    "step", "input", "pause", "resume", "restart", "teleport", "set_tank", "kill", "spawn_enemy", "players", "play",
+    "build", "builder_tool", "builder_paint", "builder_undo", "builder_redo", "builder_settings",
+    "builder_map", "builder_save",
 ];
 
 /// Tiles one `terrain` reply lists at most (the standard 34 x 17 field
@@ -116,13 +143,15 @@ impl ToolSpec {
 }
 
 const NO_PARAMS: &str = r#"{"type":"object","properties":{}}"#;
+/// Just a room code: what most of `ROOM_TOOLS` takes.
+const CODE_ONLY: &str = r#"{"type":"object","required":["code"],"properties":{"code":{"type":"string"}}}"#;
 const SLOT_PARAMS: &str = r#"{"type":"object","properties":{"slot":{"type":"integer","description":"Owner slot: 0 = player, enemies from 1 (see snapshot.tanks[].slot)"}},"required":["slot"]}"#;
 
 /// Every tool the server answers, in the order the adapter lists them.
 pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "status",
-        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `mode` (play|build) with the dialogs and the builder's state, and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). Cheap; call first.",
+        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `mode` (play|build|online) with the dialogs and the builder's state, and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), the server's tick and the phase - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
         schema: NO_PARAMS,
         read_only: true,
         destructive: false,
@@ -136,7 +165,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "events",
-        description: "Gameplay events recorded since `since` (a seq number; 0 = everything kept, up to 4096): fired, hit, wreck, ram, deflected (off a shield), shells_collided, frog_bite (with the biting frog's side), pickup_collected, pickup_respawned, obstacle_destroyed, blast, drum_launched, fire_started, ignited (the flamethrower lit `what`: ground, oil, wood, tree, drum, or collapsed a sandbag/fence), teleported (a tank went through a portal: slot, from x/y, to to_x/to_y), round_started, round_ended, plus AI decisions - ai_action (behaviour-tree action changed), engage_slot (ring slot changed; null = steering at its target - the player, or a hunter's frog - directly), stuck_escape, breach (dir, or null when it ends), retreat (on/off), alert (shared last-known player position on/off), retarget (two-player rounds: the enemy switched to fighting `player` 0 or 1). Each carries the frame it happened on. `kinds` keeps only those event names, `exclude` drops them.",
+        description: "Gameplay events recorded since `since` (a seq number; 0 = everything kept, up to 4096): fired, hit, wreck, ram, deflected (off a shield), ricochet (a shot off iron or a barrel, with the heading it flies on along), shells_collided, frog_bite (with the biting frog's side), pickup_collected, pickup_respawned, obstacle_destroyed, blast, drum_launched, fire_started, ignited (the flamethrower lit `what`: ground, oil, wood, tree, drum, or collapsed a sandbag/fence), teleported (a tank went through a portal: slot, from x/y, to to_x/to_y), round_started, round_ended, plus AI decisions - ai_action (behaviour-tree action changed), engage_slot (ring slot changed; null = steering at its target - the player, or a hunter's frog - directly), stuck_escape, breach (dir, or null when it ends), retreat (on/off), alert (shared last-known player position on/off), retarget (rounds with more than one seat: the enemy switched to fighting seat `player`). Each carries the frame it happened on. `kinds` keeps only those event names, `exclude` drops them.",
         schema: r#"{"type":"object","properties":{"since":{"type":"integer","default":0,"description":"Return events with seq > since"},"limit":{"type":"integer","default":200},"kinds":{"type":"array","items":{"type":"string"},"description":"Only these event names"},"exclude":{"type":"array","items":{"type":"string"},"description":"Drop these event names"}}}"#,
         read_only: true,
         destructive: false,
@@ -171,21 +200,21 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "restart",
-        description: "Start a fresh round, frozen in lockstep (call `resume` to let it run in real time). Optional seed (number or 0x-hex string; pinned for later restarts too), enemy count, player 1's chassis as `tank` (a name - scout, assault, ..., leviathan - the spelling maps and `--tank` use) or `tank_row` (0-11, the sheet order), `players` (1 or 2 - the session's player count, kept for later restarts; `tank2`/`tank2_row` pin player 2's chassis the same way), the map: `map` (a path to a TOML under maps/) or `map_toml` (the map's TOML text inline - see `map_get` for the format; the round keeps its current map when neither is given), and the level: `mission` (protect|hunt|destroy), `spawn` (band|waves) with `waves`/`wave_size`/`wave_growth`/`tier_start`/`tier_end` (light|medium|heavy|super) - each pinned for later restarts too, overriding the map's own [mission]/[spawn] tables. `intro: true` starts the round frozen behind the mission banner (off by default so `step` counts play frames). Same seed + same steps replays bit-for-bit.",
-        schema: r#"{"type":"object","properties":{"seed":{"type":["integer","string"]},"enemies":{"type":"integer","minimum":0,"maximum":31,"description":"Band plan enemy count; 0 is a sandbox round that never ends by wreck count"},"tank":{"type":"string","enum":["scout","assault","breaker","longbow","flak","wraith","warden","ravager","glacier","obelisk","titan","leviathan"],"description":"Player 1's chassis by name (or tank_row)"},"tank_row":{"type":"integer","minimum":0,"maximum":11},"players":{"type":"integer","minimum":1,"maximum":2},"tank2":{"type":"string","enum":["scout","assault","breaker","longbow","flak","wraith","warden","ravager","glacier","obelisk","titan","leviathan"],"description":"Player 2's chassis by name (or tank2_row)"},"tank2_row":{"type":"integer","minimum":0,"maximum":11},"map":{"type":"string","description":"Path to a map .toml, relative to the game's working directory"},"map_toml":{"type":"string","description":"Map TOML text, e.g. `version = 1\ntanks = 4\ncells.\"20,8\" = { kind = \"wall\", material = \"iron\" }`"},"mission":{"type":"string","enum":["protect","hunt","destroy"]},"spawn":{"type":"string","enum":["band","waves"]},"waves":{"type":"integer","minimum":1},"wave_size":{"type":"integer","minimum":1},"wave_growth":{"type":"integer","minimum":0},"tier_start":{"type":"string","enum":["light","medium","heavy","super"]},"tier_end":{"type":"string","enum":["light","medium","heavy","super"]},"intro":{"type":"boolean"}}}"#,
+        description: "Start a fresh round, frozen in lockstep (call `resume` to let it run in real time). Optional seed (number or 0x-hex string; pinned for later restarts too), enemy count, player 1's chassis as `tank` (a name - scout, assault, ..., leviathan - the spelling maps and `--tank` use) or `tank_row` (0-11, the sheet order), `players` (1 to 8 - how many seats the round holds, kept for later restarts; the keyboard drives the first two and the rest stand idle in a local round, and `tank2`/`tank2_row` pin seat 1's chassis the way `tank` pins seat 0's), the map: `map` (a path to a TOML under maps/) or `map_toml` (the map's TOML text inline - see `map_get` for the format; the round keeps its current map when neither is given), and the level: `mission` (protect|hunt|destroy), `spawn` (band|waves) with `waves`/`wave_size`/`wave_growth`/`tier_start`/`tier_end` (light|medium|heavy|super) - each pinned for later restarts too, overriding the map's own [mission]/[spawn] tables. `intro: true` starts the round frozen behind the mission banner (off by default so `step` counts play frames). Same seed + same steps replays bit-for-bit.",
+        schema: r#"{"type":"object","properties":{"seed":{"type":["integer","string"]},"enemies":{"type":"integer","minimum":0,"maximum":31,"description":"Band plan enemy count; 0 is a sandbox round that never ends by wreck count"},"tank":{"type":"string","enum":["scout","assault","breaker","longbow","flak","wraith","warden","ravager","glacier","obelisk","titan","leviathan"],"description":"Player 1's chassis by name (or tank_row)"},"tank_row":{"type":"integer","minimum":0,"maximum":11},"players":{"type":"integer","minimum":1,"maximum":8,"description":"Seats the round holds; enemies count from the slot after them"},"tank2":{"type":"string","enum":["scout","assault","breaker","longbow","flak","wraith","warden","ravager","glacier","obelisk","titan","leviathan"],"description":"Player 2's chassis by name (or tank2_row)"},"tank2_row":{"type":"integer","minimum":0,"maximum":11},"map":{"type":"string","description":"Path to a map .toml, relative to the game's working directory"},"map_toml":{"type":"string","description":"Map TOML text, e.g. `version = 1\ntanks = 4\ncells.\"20,8\" = { kind = \"wall\", material = \"iron\" }`"},"mission":{"type":"string","enum":["protect","hunt","destroy"]},"spawn":{"type":"string","enum":["band","waves"]},"waves":{"type":"integer","minimum":1},"wave_size":{"type":"integer","minimum":1},"wave_growth":{"type":"integer","minimum":0},"tier_start":{"type":"string","enum":["light","medium","heavy","super"]},"tier_end":{"type":"string","enum":["light","medium","heavy","super"]},"intro":{"type":"boolean"}}}"#,
         read_only: false,
         destructive: true,
     },
     ToolSpec {
         name: "map_get",
-        description: "The current map as TOML text (plus name, cell count, default tank count) - edit it and hand it back through `restart {map_toml}`. Format: `version = 1`, optional `tanks = N` (default enemy count), optional `tank = \"titan\"` / `tank2 = \"scout\"` (the players' chassis), optional `theme = \"grass\"|\"desert\"` (the look - ground tileset and tall-grass sheet, grass when absent), and one `cells.\"col,row\"` entry per occupied 32 px grid cell (col/row from 0 at the top-left; the field is the map's optional `size = [cols, rows]`, 34 x 17 = 1088x544 when absent): `{ kind = \"wall\", material = \"brick\"|\"iron\"|\"wood\"|\"glass\" }`, `{ kind = \"sandbag\" }` / `{ kind = \"barrel\" }` / `{ kind = \"fence\" }` (destructible props: shots sometimes pass over sandbags, barrels explode and chain, fences snap; tanks ram all three), `{ kind = \"barrel\", drum = \"oil\"|\"fuel\" }` (a pinned drum kind: oil leaves a burning pool, fuel goes off harder and launches when another blast sets it off; without `drum` the kind is rolled), `{ kind = \"oil\" }` (an oil trail cell: not solid, a fuse on the ground - a blast or a burning neighbour lights it and the fire runs along it, setting off any drum it reaches), `{ kind = \"tree\" }` / `{ kind = \"pine\" }` (destructible trees, solid like a prop but drawn larger than their cell; they often catch fire when killed and a tank can flatten one by driving into it), `{ kind = \"tall_grass\" }` (not solid - cover a tank hides in, enemies cannot shoot what is standing in it), `{ kind = \"road\" }`, `{ kind = \"water\" }` (a river where it is one cell wide, a lake where it is wider; a lake's open middle is deep - hulls cannot enter, shots fly over - and every other water cell is a ford that slows a hull and, in a north-south stream, carries it downstream; fire never lights on water, frogs hop toward it), `{ kind = \"frog\" }` (one), `{ kind = \"start\" }` (player 1, one), `{ kind = \"start2\" }` (player 2 in a two-player round, one, optional - placed beside player 1 when absent), `{ kind = \"pickup\", pickup = \"health\"|\"ammo\"|\"laser\"|\"minigun\"|\"plasma\"|\"missiles\"|\"speedup\"|\"shield\"|\"flamethrower\"|\"frog_health\" }` (missiles are a four-tube pod firing two salvos of four seeker missiles per pull that climb, lock onto the nearest opposing tank and dive on it over any wall; the flamethrower is player-only: enemies drive over its fuel tank; the frog health pack fully heals the collector's own frog and is left on the ground by a tank whose frog is already at full health). Iron is indestructible, the rest can be shot away. Border walls and enemy spawns are added by the game on top.",
+        description: "The current map as TOML text (plus name, cell count, default tank count) - edit it and hand it back through `restart {map_toml}`. Format: `version = 1`, optional `tanks = N` (default enemy count), optional `tank = \"titan\"` / `tank2 = \"scout\"` (the players' chassis), optional `theme = \"grass\"|\"desert\"` (the look - ground tileset and tall-grass sheet, grass when absent), and one `cells.\"col,row\"` entry per occupied 32 px grid cell (col/row from 0 at the top-left; the field is the map's optional `size = [cols, rows]`, 34 x 17 = 1088x544 when absent): `{ kind = \"wall\", material = \"brick\"|\"iron\"|\"wood\"|\"glass\" }`, `{ kind = \"sandbag\" }` / `{ kind = \"barrel\" }` / `{ kind = \"fence\" }` (destructible props: shots sometimes pass over sandbags, barrels explode and chain, fences snap; tanks ram all three), `{ kind = \"barrel\", drum = \"oil\"|\"fuel\" }` (a pinned drum kind: oil leaves a burning pool, fuel goes off harder and launches when another blast sets it off; without `drum` the kind is rolled), `{ kind = \"oil\" }` (an oil trail cell: not solid, a fuse on the ground - a blast or a burning neighbour lights it and the fire runs along it, setting off any drum it reaches), `{ kind = \"tree\" }` / `{ kind = \"pine\" }` (destructible trees, solid like a prop but drawn larger than their cell; they often catch fire when killed and a tank can flatten one by driving into it), `{ kind = \"tall_grass\" }` (not solid - cover a tank hides in, enemies cannot shoot what is standing in it), `{ kind = \"road\" }`, `{ kind = \"water\" }` (a river where it is one cell wide, a lake where it is wider; a lake's open middle is deep - hulls cannot enter, shots fly over - and every other water cell is a ford that slows a hull and, in a north-south stream, carries it downstream; fire never lights on water, frogs hop toward it), `{ kind = \"frog\" }` (one), `{ kind = \"start\" }` (player 1, one), `{ kind = \"start2\" }` (player 2, one, optional - placed beside player 1 when absent, as every seat past the second always is), `{ kind = \"pickup\", pickup = \"health\"|\"ammo\"|\"laser\"|\"minigun\"|\"plasma\"|\"missiles\"|\"speedup\"|\"shield\"|\"flamethrower\"|\"frog_health\" }` (missiles are a four-tube pod firing two salvos of four seeker missiles per pull that climb, lock onto the nearest opposing tank and dive on it over any wall; the flamethrower is player-only: enemies drive over its fuel tank; the frog health pack fully heals the collector's own frog and is left on the ground by a tank whose frog is already at full health). Iron is indestructible, the rest can be shot away. Border walls and enemy spawns are added by the game on top.",
         schema: NO_PARAMS,
         read_only: true,
         destructive: false,
     },
     ToolSpec {
         name: "lint",
-        description: "Run the static map linter (src/maplint.rs, the check CI runs on every shipped map) and reply with its findings. `source: builder` lints the builder's canvas as it stands (the default in build mode - validate a map authored with `builder_paint` before `play`); `source: round` lints the map the current round was built from, fresh (the default in play mode - not the round's current, partly shot-away terrain). The map is set up as a headless round with the session's seed, player count and CLI/restart overrides, so the check sees what PLAY would run. Each finding has `severity` (error|warning|info), `kind` (a tag such as gated-pickup, spawn-band-too-tight, gate-blocked, player2-unreachable) and `message`; `errors`/`warnings` count them. Two limits: the spawn-band check reads the map's own `spawn` table (not a `restart {spawn}` override), and the player-2 kinds appear only in a two-player session.",
+        description: "Run the static map linter (src/maplint.rs, the check CI runs on every shipped map) and reply with its findings. `source: builder` lints the builder's canvas as it stands (the default in build mode - validate a map authored with `builder_paint` before `play`); `source: round` lints the map the current round was built from, fresh (the default in play mode - not the round's current, partly shot-away terrain). The map is set up as a headless round with the session's seed, player count and CLI/restart overrides, so the check sees what PLAY would run. Each finding has `severity` (error|warning|info), `kind` (a tag such as gated-pickup, spawn-band-too-tight, gate-blocked, player2-unreachable) and `message`; `errors`/`warnings` count them. Two limits: the spawn-band check reads the map's own `spawn` table (not a `restart {spawn}` override), and the player-2 kinds appear only in a session with more than one seat.",
         schema: r#"{"type":"object","properties":{"source":{"type":"string","enum":["builder","round"],"description":"builder = the canvas (default in build mode); round = the round's map (default in play mode)"}}}"#,
         read_only: true,
         destructive: false,
@@ -305,7 +334,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "players",
-        description: "The players button in play mode (docs/two-players.md). Without `count`: press it - opens the 'How many players?' dialog (the round is frozen until it is answered) or closes an open one. With `count` (1 or 2): answer it - a different count restarts the round at once in that mode, frozen in lockstep like `restart`; the current count just closes the dialog. The count sticks for the session (later `restart`s, PLAY from the builder). Two players: slot 1 is player 2 and enemies count from 2; `step`/`input` take `p2_*` fields for it. Replies like `mode`.",
+        description: "The players button in play mode (docs/two-players.md). Without `count`: press it - opens the 'How many players?' dialog (the round is frozen until it is answered) or closes an open one. With `count` (1 to 8): answer it - a different count restarts the round at once with that many seats, frozen in lockstep like `restart`; the current count just closes the dialog. The dialog itself only offers one and two - the couch counts; the rest are a room's, and reach the round through this tool or `restart`. The count sticks for the session (later `restart`s, PLAY from the builder). Two seats: slot 1 is player 2 and enemies count from 2; `step`/`input` take `p2_*` fields for it. Past two, the extra seats stand idle and the bar keeps the two-player readout. Replies like `mode`.",
         schema: r#"{"type":"object","properties":{"count":{"type":"integer","minimum":1,"maximum":2,"description":"Answer the dialog with this player count"}}}"#,
         read_only: false,
         destructive: true,
@@ -386,6 +415,96 @@ pub const TOOLS: &[ToolSpec] = &[
         schema: r#"{"type":"object","properties":{"key":{"type":"string","enum":["tab","escape","enter","undo","redo","backspace","1","2"]},"text":{"type":"string","description":"Characters to type this frame (build mode)"}}}"#,
         read_only: false,
         destructive: false,
+    },
+];
+
+/// **The room server's tool table** (`bongbong-server`, CLAUDE.md's room
+/// server section): the same `ToolSpec` rows `TOOLS` is made of, over the
+/// same newline-delimited JSON on a socket - `bbmcp rooms` is this
+/// adapter pointed at the other port.
+///
+/// The *table* lives here rather than in `bongbong-server` because the
+/// dependency runs the other way: the server crate is built on this one,
+/// so a table there could not be read by a `bbmcp` that lives here. Pure
+/// data, so it costs a headless build nothing; the dispatch is the
+/// server's, and a test there holds every row to an arm so the two
+/// cannot drift - `TOOLS`'s own discipline.
+///
+/// **What it is for.** The game's dev server drives the round in *this*
+/// window; in an online round that window holds a replica and every
+/// writing tool refuses by name, because only the server simulates it.
+/// These are the other end - they read and drive the authoritative round
+/// itself, which is the only place a co-op bug can actually be observed.
+pub const ROOM_TOOLS: &[ToolSpec] = &[
+    ToolSpec {
+        name: "server_status",
+        description: "The server as a whole: how many rooms it holds and its cap, whether it is draining, its uptime, the build's `protocol_version`, and the counters `/metrics` publishes (rooms by phase, seats, tick p50/p99 in microseconds, tick overruns, snapshot bytes/s, reconnects, intent starvations). Cheap; call first.",
+        schema: NO_PARAMS,
+        read_only: true,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "rooms",
+        description: "Every room this server holds: `code`, `phase` (waiting|playing|paused|ended), the seat count and how many are connected, the round's `tick`, the map, the seed and how long the room has been alive. The `code` is what every other tool here takes.",
+        schema: NO_PARAMS,
+        read_only: true,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "room",
+        description: "One room in full: its lifecycle and how long until the TTL that would end it, the map, seed, mission and resolved spawn plan, the round's tick and outcome, the `tuning_patch` it is being fought under (a room of two or more scales the waves; a room of one is the empty patch), and a row per seat - nick, whether it holds the room, ready, connected, its chassis, and its mailbox. **The mailbox row is the one to read when inputs feel lost**: a `depth` pinned at `BUFFER_MAX` means the client is running ahead and the oldest intents are being dropped, while a climbing `starvations` means it is not stamping far enough ahead and the tick is repeating its last intent.",
+        schema: CODE_ONLY,
+        read_only: true,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "room_open",
+        description: "Open a room with no client at all and start its round, so a scenario needs no window and no socket: `seats` bot seats are taken (1..=8, each with a mailbox `seat_intent` drives), and the round begins at once rather than waiting for a host to press START. Takes the setup a hosting client takes - a shipped map by name or `map_toml` whole, the mission, and a pinned `seed` so the round replays. Replies with the code. It is a real room: a player can join it by code and play alongside the bots.",
+        schema: r#"{"type":"object","properties":{"map":{"type":"string","default":"default"},"map_toml":{"type":"string","description":"A whole map, instead of a shipped one by name"},"mission":{"type":"string","enum":["protect","hunt","destroy"]},"seed":{"type":"integer"},"seats":{"type":"integer","default":1,"minimum":1,"maximum":8}}}"#,
+        read_only: false,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "room_step",
+        description: "Freeze a room's round and advance exactly `ticks` at the fixed 1/60 s timestep, the way the game's `step` drives the local round - so an online round replays deterministically from a pinned seed instead of racing the wall clock. The room stops ticking on real time until `room_resume`; connected clients still get their snapshots, so a window watching it simply sees the round advance in steps. Replies with the events of the step and, by default, a compact snapshot.",
+        schema: r#"{"type":"object","required":["code"],"properties":{"code":{"type":"string"},"ticks":{"type":"integer","default":1,"minimum":1,"maximum":100000},"snapshot":{"type":"boolean","default":true},"kinds":{"type":"array","items":{"type":"string"}},"exclude":{"type":"array","items":{"type":"string"}}}}"#,
+        read_only: false,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "room_resume",
+        description: "Let a frozen room tick on real time again (the opposite of `room_step`).",
+        schema: CODE_ONLY,
+        read_only: false,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "seat_intent",
+        description: "Post an intent into one seat's mailbox for the next `ticks` ticks, exactly as that seat's client would - so a bot seat can be driven, or a real seat's input stood in for. `move_dir`/`face`/`fire` are the human-settable fields the wire carries; nothing else travels. A shell fires once per press and a held trigger can never re-arm it, so set `fire_every=N` to tap every N ticks rather than holding. Posted at the client tick that seat's mailbox is expecting, so the server's `acked` and a client's own replay stay in step.",
+        schema: r#"{"type":"object","required":["code","seat"],"properties":{"code":{"type":"string"},"seat":{"type":"integer","minimum":0,"maximum":7},"ticks":{"type":"integer","default":1,"minimum":1,"maximum":100000},"move_dir":{"type":"string","enum":["up","down","left","right"]},"face":{"type":"string","enum":["up","down","left","right"]},"fire":{"type":"boolean"},"fire_every":{"type":"integer","minimum":1,"description":"With fire=true: press on ticks 0, N, 2N... and release in between"}}}"#,
+        read_only: false,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "room_snapshot",
+        description: "The room's authoritative world as JSON - the reading the game's `snapshot` gives, on the round the server is simulating rather than on a client's replica: every tank with position, rotation, velocity, health, ammo, weapon and (for enemies) role and target, plus projectiles, pickups, frogs, portals and the engagement rings. `detail=full` adds each enemy's AI memory. This is the truth a replica is checked against.",
+        schema: r#"{"type":"object","required":["code"],"properties":{"code":{"type":"string"},"detail":{"type":"string","enum":["compact","full"],"default":"compact"}}}"#,
+        read_only: true,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "room_events",
+        description: "The room's gameplay events since `since` (0 = everything kept): fired, hit, wreck, ram, pickups, obstacle_destroyed, teleported, round_started, round_ended and the rest - the vocabulary the game's `events` speaks, recorded on the authoritative round. `kinds` keeps only those names, `exclude` drops them. **The way to tell an input that never arrived from a shot the server refused**: no `fired` for a seat that pulled the trigger is the first, a `fired` with nothing after it the second.",
+        schema: r#"{"type":"object","required":["code"],"properties":{"code":{"type":"string"},"since":{"type":"integer","default":0},"limit":{"type":"integer","default":200},"kinds":{"type":"array","items":{"type":"string"}},"exclude":{"type":"array","items":{"type":"string"}}}}"#,
+        read_only: true,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "room_close",
+        description: "End a room now: its round stops, its seats are let go and the code stops resolving. For clearing up after a scenario; a room `room_open` made also ages out on its own TTL.",
+        schema: CODE_ONLY,
+        read_only: false,
+        destructive: true,
     },
 ];
 
@@ -592,6 +711,9 @@ enum ShotSource {
     Scene,
 }
 
+/// A `screenshot` request armed for `after_render`. Without the `render`
+/// feature nothing captures, so a headless server only ever arms it.
+#[cfg_attr(not(feature = "render"), allow(dead_code))]
 struct PendingShot {
     scale: f32,
     source: ShotSource,
@@ -617,12 +739,16 @@ pub struct DevServer {
     pending_shot: Option<PendingShot>,
     events: VecDeque<EventRecord>,
     next_seq: u64,
+    #[cfg_attr(not(feature = "render"), allow(dead_code))]
     shot_seq: u64,
     /// One entry per simulated frame, oldest first - see `history`.
     history: VecDeque<HistoryFrame>,
     /// Per-slot heading-turn counters for the whole round, cleared with
     /// `history`.
     turns: BTreeMap<usize, TurnStats>,
+    /// The replica tick whose events and track rows are already banked,
+    /// in an online round; `None` in every other mode.
+    shown_frame: Option<u64>,
 }
 
 impl DevServer {
@@ -667,6 +793,7 @@ impl DevServer {
             shot_seq: 0,
             history: VecDeque::with_capacity(HISTORY_FRAMES),
             turns: BTreeMap::new(),
+            shown_frame: None,
         }
     }
 
@@ -685,9 +812,31 @@ impl DevServer {
     pub fn before_frame(&mut self, session: &mut Session, width: f32, height: f32) {
         // The AI-decision events exist for this server's `events` feed.
         session.game.trace_ai = true;
+        self.observe_replica(session);
         while let Ok(req) = self.rx.try_recv() {
             self.dispatch(session, req, width, height);
         }
+    }
+
+    /// Bank an online replica's events and track rows on the frames a
+    /// snapshot moved it on, so `events` and `history` describe the round
+    /// on screen. A local round does this in `advance`, after every
+    /// update; an online one is never updated here, and its events are
+    /// the snapshot's (`net::apply` writes them), so the guard is the
+    /// replica's tick - the same one `Fx::observe` watches.
+    fn observe_replica(&mut self, session: &Session) {
+        if session.mode() != Driver::Online {
+            self.shown_frame = None;
+            return;
+        }
+        let Some(game) = session.online.as_ref().and_then(AnyRound::game) else { return };
+        let frame = game.frame();
+        if self.shown_frame == Some(frame) {
+            return;
+        }
+        self.shown_frame = Some(frame);
+        self.drain_events(game, None);
+        self.record_history(game);
     }
 
     /// Substitute injected player intent for the keyboard's, if any is
@@ -697,11 +846,11 @@ impl DevServer {
         let mut input = real;
         if let Some((intent, left)) = self.injected {
             self.injected = (left > 1).then_some((intent, left - 1));
-            input.player_intent = intent;
+            input.seats[0] = intent;
         }
         if let Some((intent, left)) = self.injected2 {
             self.injected2 = (left > 1).then_some((intent, left - 1));
-            input.player2_intent = intent;
+            input.seats[1] = intent;
         }
         if std::mem::take(&mut self.cycle_overlays_pending) {
             input.cycle_overlays_pressed = true;
@@ -710,19 +859,23 @@ impl DevServer {
     }
 
     /// Advance the game for this rendered frame: a pending `step` runs its
-    /// frames back-to-back at `PHYSICS_FIXED_DT` and replies; otherwise one
-    /// real-time update unless lockstep holds the game still.
-    pub fn advance(&mut self, game: &mut Game, input: Input, real_dt: f32, width: f32, height: f32) {
+    /// frames back-to-back at `PHYSICS_FIXED_DT` and replies; otherwise the
+    /// `steps` the loop's clock paid for (each at `PHYSICS_FIXED_DT`, the
+    /// one-shot presses in `input` spent by the first) unless lockstep holds
+    /// the game still. `after_step` runs after every update, on the state
+    /// it produced - the presentation's event readers hook in there so a
+    /// frame of several steps drops none of their events.
+    pub fn advance(&mut self, game: &mut Game, input: Input, steps: u32, width: f32, height: f32, after_step: &mut dyn FnMut(&Game)) {
         if let Some(mut step) = self.pending_step.take() {
             for i in 0..step.remaining {
-                let mut player_intent = step.intent.unwrap_or(input.player_intent);
-                let mut player2_intent = step.intent2.unwrap_or(input.player2_intent);
+                let mut player1 = step.intent.unwrap_or(input.seat(0));
+                let mut player2 = step.intent2.unwrap_or(input.seat(1));
                 if let Some(n) = step.fire_every {
-                    player_intent.fire = player_intent.fire && i % n == 0;
-                    player2_intent.fire = player2_intent.fire && i % n == 0;
+                    player1.fire = player1.fire && i % n == 0;
+                    player2.fire = player2.fire && i % n == 0;
                 }
                 let before = game.frame();
-                game.update(Input { player_intent, player2_intent, ..Input::default() }, PHYSICS_FIXED_DT, width, height);
+                game.update(Input::two(player1, player2), PHYSICS_FIXED_DT, width, height);
                 if game.frame() != before + 1 {
                     step.restarted = true;
                 }
@@ -730,6 +883,7 @@ impl DevServer {
                 self.drain_events(game, Some((&mut sink, &step.filter)));
                 step.events = sink;
                 self.record_history(game);
+                after_step(game);
             }
             let snapshot = step.want_snapshot.then(|| to_value(game.debug_snapshot(width, height, step.detail)));
             let _ = step.reply.send(Ok(json!({
@@ -742,9 +896,13 @@ impl DevServer {
                 "snapshot": snapshot,
             })));
         } else if !self.lockstep {
-            game.update(input, real_dt, width, height);
-            self.drain_events(game, None);
-            self.record_history(game);
+            for i in 0..steps {
+                let input = if i == 0 { input } else { input.held_only() };
+                game.update(input, PHYSICS_FIXED_DT, width, height);
+                self.drain_events(game, None);
+                self.record_history(game);
+                after_step(game);
+            }
         }
     }
 
@@ -847,6 +1005,7 @@ impl DevServer {
     /// (raylib reads back after the buffer swap), so a shot armed this
     /// frame is captured on the next - in lockstep that frame is identical
     /// and carries any overlay flags set alongside the request.
+    #[cfg(feature = "render")]
     pub fn after_render(&mut self, rl: &mut RaylibHandle, thread: &RaylibThread, scene: &RenderTexture2D, game: &Game) {
         match self.pending_shot.as_mut() {
             None => return,
@@ -861,6 +1020,7 @@ impl DevServer {
         let _ = shot.reply.send(result);
     }
 
+    #[cfg(feature = "render")]
     fn capture(
         &mut self,
         rl: &mut RaylibHandle,
@@ -929,12 +1089,15 @@ impl DevServer {
         }
     }
 
+    /// The round on screen, described: in an online round that is the
+    /// room's replica, and `round` says so (see `round_json`).
     fn status(&self, session: &Session, width: f32, height: f32) -> Value {
-        let game = &session.game;
+        let game = session.shown();
         let snap = game.debug_snapshot(width, height, Detail::Compact);
         json!({
             "version": env!("CARGO_PKG_VERSION"),
             "port": self.port,
+            "round": round_json(session),
             "seed": snap.seed,
             "frame": snap.frame,
             "time": snap.time,
@@ -972,13 +1135,29 @@ impl DevServer {
             let _ = reply.send(Err(format!("{method} needs play mode: the builder is live - call `play` first")));
             return;
         }
+        // The same refusal for a round that belongs to a room: only the
+        // server simulates it, so a write would move the picture and
+        // reach nobody.
+        if session.mode() == Driver::Online && ONLINE_REFUSED_TOOLS.contains(&method.as_str()) {
+            let room = session.online.as_ref().and_then(AnyRound::code).unwrap_or("-----");
+            let _ = reply.send(Err(format!(
+                "{method} needs a local round: this window holds a seat in room {room}, whose round only the server \
+                 simulates - the replica on screen is a picture of it, not the authority. Give the seat up with \
+                 `key {{\"key\": \"escape\"}}` to come back to the local round; the reading tools (status, snapshot, \
+                 terrain, events, history, nav_grid, field, screenshot) already describe the online one"
+            )));
+            return;
+        }
         // The tools that work on the whole session - the mode switch and
         // the builder - before the ones that only see the round.
         if let Some(result) = self.dispatch_session(session, &method, &params, width, height) {
             let _ = reply.send(result);
             return;
         }
-        let game = &mut session.game;
+        // The round on screen: the room's replica in an online round, the
+        // session's own otherwise. Only `screenshot`/`overlays` write
+        // through it, and only drawing flags.
+        let game = session.shown_mut();
         let result = match method.as_str() {
             "snapshot" => detail_param(&params).map(|d| to_value(game.debug_snapshot(width, height, d))),
             "events" => event_filter(&params).and_then(|filter| {
@@ -1190,7 +1369,7 @@ impl DevServer {
             game.players = n
                 .as_u64()
                 .and_then(|n| PlayerCount::from_count(n as usize))
-                .ok_or_else(|| format!("players must be 1 or 2, got {n}"))?;
+                .ok_or_else(|| format!("players must be 1 to {}, got {n}", crate::MAX_SEATS))?;
         }
         let enum_param = |key: &str| -> Result<Option<String>, String> {
             match params.get(key) {
@@ -1314,7 +1493,7 @@ impl DevServer {
                         }
                         Ok(mode_json(session))
                     }
-                    None => Err(format!("count must be 1 or 2, got {v}")),
+                    None => Err(format!("count must be 1 to {}, got {v}", crate::MAX_SEATS)),
                 },
             },
             "play" => {
@@ -1418,13 +1597,13 @@ impl DevServer {
             None | Some(Value::Null) => None,
             Some(v) => match v.as_array().map(Vec::as_slice) {
                 Some([dx, dy]) => match (dx.as_f64(), dy.as_f64()) {
-                    (Some(dx), Some(dy)) => Some(Position::new(dx as f32, dy as f32)),
+                    (Some(dx), Some(dy)) => Some(Vec2::new(dx as f32, dy as f32)),
                     _ => return Err(format!("drag_to must be [x, y] numbers, got {v}")),
                 },
                 _ => return Err(format!("drag_to must be [x, y], got {v}")),
             },
         };
-        let point = Position::new(x, y);
+        let point = Vec2::new(x, y);
         match session.mode() {
             Driver::Play => {
                 // The same order as `main.rs`: an open dialog eats every
@@ -1433,11 +1612,11 @@ impl DevServer {
                     let rects = players_dialog_rects(layout.field);
                     let p = layout.to_field(point);
                     let before = session.game.players;
-                    if rects.one.check_collision_point_rec(p) {
-                        session.answer_players(PlayerCount::One);
-                    } else if rects.two.check_collision_point_rec(p) {
-                        session.answer_players(PlayerCount::Two);
-                    } else if !rects.panel.check_collision_point_rec(p) {
+                    if rects.one.contains(p) {
+                        session.answer_players(PlayerCount::ONE);
+                    } else if rects.two.contains(p) {
+                        session.answer_players(PlayerCount::TWO);
+                    } else if !rects.panel.contains(p) {
                         session.close_players_dialog();
                     }
                     if session.game.players != before {
@@ -1446,17 +1625,37 @@ impl DevServer {
                 } else if session.dialog {
                     let rects = leave_dialog_rects(layout.field);
                     let p = layout.to_field(point);
-                    if rects.leave.check_collision_point_rec(p) {
+                    if rects.leave.contains(p) {
                         session.answer_dialog(true);
-                    } else if rects.stay.check_collision_point_rec(p) || !rects.panel.check_collision_point_rec(p) {
+                    } else if rects.stay.contains(p) || !rects.panel.contains(p) {
                         session.answer_dialog(false);
                     }
-                } else if mode_button_rect(layout.panel).check_collision_point_rec(point) {
+                } else if mode_button_rect(layout.panel).contains(point) {
                     session.press_build();
-                } else if crate::TWO_PLAYERS_AVAILABLE && players_button_rect(layout.panel).check_collision_point_rec(point) {
+                } else if crate::TWO_PLAYERS_AVAILABLE && players_button_rect(layout.panel).contains(point) {
                     session.press_players();
-                } else if !crate::KEYBOARD_AVAILABLE && restart_button_rect(layout.panel).check_collision_point_rec(point) {
+                } else if crate::ONLINE_AVAILABLE && crate::hud::online_button_rect(layout.panel).contains(point) {
+                    session.press_online();
+                } else if !crate::KEYBOARD_AVAILABLE && restart_button_rect(layout.panel).contains(point) {
                     crate::tuning::request_restart();
+                }
+            }
+            // The lobby's own hit tests, on the same `LobbyInput`
+            // `app.rs` fills: a tool's click lands where a finger does.
+            Driver::Lobby => {
+                let input = crate::lobby::LobbyInput {
+                    pointer: Some(layout.to_field(point)),
+                    pressed: !right,
+                    ..crate::lobby::LobbyInput::default()
+                };
+                session.update_lobby(&input, layout.field, crate::PHYSICS_FIXED_DT);
+            }
+            // An online round is the room's: the bar carries the one
+            // button that is this window's to press, and the round
+            // itself is left to the keyboard and the touch scheme.
+            Driver::Online => {
+                if !right && crate::hud::leave_button_rect(layout.panel).contains(point) {
+                    session.leave_online();
                 }
             }
             Driver::Build => {
@@ -1474,7 +1673,7 @@ impl DevServer {
                     let steps = (point.distance_to(to) / CLICK_DRAG_STEP_PX).ceil().max(1.0) as usize;
                     for i in 1..=steps {
                         let t = i as f32 / steps as f32;
-                        last = Position::new(point.x + (to.x - point.x) * t, point.y + (to.y - point.y) * t);
+                        last = Vec2::new(point.x + (to.x - point.x) * t, point.y + (to.y - point.y) * t);
                         let held = BuilderInput { pointer: Some(last), held: !right, right_held: right, ..BuilderInput::default() };
                         session.update_builder(&held, layout);
                     }
@@ -1511,16 +1710,13 @@ impl DevServer {
                 let before = session.game.players;
                 match key {
                     Some("1") => {
-                        session.answer_players(PlayerCount::One);
+                        session.answer_players(PlayerCount::ONE);
                     }
                     Some("2") => {
-                        session.answer_players(PlayerCount::Two);
+                        session.answer_players(PlayerCount::TWO);
                     }
                     Some("enter") => {
-                        let other = match before {
-                            PlayerCount::One => PlayerCount::Two,
-                            PlayerCount::Two => PlayerCount::One,
-                        };
+                        let other = if before == PlayerCount::ONE { PlayerCount::TWO } else { PlayerCount::ONE };
                         session.answer_players(other);
                     }
                     Some("escape") | Some("tab") => session.close_players_dialog(),
@@ -1547,6 +1743,26 @@ impl DevServer {
                 // undo/redo/backspace, 1/2 and typed text mean nothing in play.
                 _ => {}
             },
+            // The lobby takes typed characters for the code entry and
+            // the same three keys `app.rs` reads.
+            Driver::Lobby => {
+                let input = crate::lobby::LobbyInput {
+                    typed: text,
+                    backspace: key == Some("backspace"),
+                    enter: key == Some("enter"),
+                    escape: key == Some("escape"),
+                    ..crate::lobby::LobbyInput::default()
+                };
+                session.update_lobby(&input, layout.field, crate::PHYSICS_FIXED_DT);
+            }
+            // The one key an online round answers, the same one `app.rs`
+            // reads: Esc gives the seat up and comes back to the local
+            // round. Starting the round is the lobby's `START`.
+            Driver::Online => {
+                if key == Some("escape") {
+                    session.leave_online();
+                }
+            }
             Driver::Build => {
                 if key == Some("tab") {
                     session.toggle();
@@ -1582,7 +1798,9 @@ fn lint_json(session: &Session, source: Option<&str>) -> Result<Value, String> {
         Some(s @ ("builder" | "round")) => s,
         Some(other) => return Err(format!("source must be builder|round, got {other:?}")),
     };
-    let live = &session.game;
+    // In an online round the map to lint is the room's, as the replica
+    // was built from it.
+    let live = session.shown();
     let mut game = Game::default();
     game.map = if source == "builder" { session.builder.map().clone() } else { live.map.clone() };
     game.seed_override = Some(live.seed_override.unwrap_or_else(|| live.round_seed()));
@@ -1751,6 +1969,45 @@ fn mode_json(session: &Session) -> Value {
         "undo_depth": b.history().undo_depth(),
         "redo_depth": b.history().redo_depth(),
     })
+}
+
+/// Which round every reading tool is describing: the session's own, or
+/// the replica of a room's round. An online round names the room, the
+/// seat, how deep the snapshot buffer is and how far the server had got,
+/// so a `status` or a `snapshot` is never mistaken for the local round's.
+fn round_json(session: &Session) -> Value {
+    let round = match session.mode() {
+        Driver::Online => session.online.as_ref(),
+        _ => None,
+    };
+    let Some(round) = round else {
+        return json!({ "kind": "local" });
+    };
+    json!({
+        "kind": "online",
+        "room": round.code(),
+        "seat": round.seat(),
+        "phase": phase_name(round.phase()),
+        // What the interpolation delay is buying, rounded to the
+        // millisecond: negative once the picture has run past everything
+        // that arrived, null before the first snapshot.
+        "buffer_ms": round.buffer_ms().map(|ms| ms.round() as i64),
+        "server_tick": round.interp().newest_tick(),
+        // False between taking the seat and the room's `Welcome`: until
+        // then the window still draws the local round.
+        "replica": round.game().is_some(),
+    })
+}
+
+/// How far along the seat is, as one word.
+fn phase_name(phase: &Phase) -> &'static str {
+    match phase {
+        Phase::Connecting => "connecting",
+        Phase::Greeting => "greeting",
+        Phase::Lobby => "lobby",
+        Phase::Playing => "playing",
+        Phase::Closed(_) => "closed",
+    }
 }
 
 /// The category's name as the tools spell it (`wall`, not `WALL`).
@@ -2181,6 +2438,14 @@ pub fn base64_encode(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::client::{Identity, RoomClient, RoomSetup};
+    use crate::net::codec::{self, Msg};
+    use crate::net::encode as enc;
+    use crate::net::loopback::{self, LinkQuality, Loopback};
+    use crate::net::round::OnlineRound;
+    use crate::net::transport::Transport;
+    use crate::net::wire::{Lobby, Seat};
+    use crate::net::{MAX_SEATS, PROTOCOL_VERSION};
     use crate::simulation::TankSnapshot;
     use std::io::BufRead;
 
@@ -2308,7 +2573,7 @@ mod tests {
         assert!(server.lockstep());
         assert!(s.playing());
         assert_eq!(s.game.frame(), 0);
-        assert!(s.game.player2.is_some());
+        assert!(s.game.seat(1).is_some());
         let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
         assert_eq!(st["players"], 2);
         assert_eq!(st["enemies_alive"], 4, "both players excluded from the enemy count");
@@ -2323,7 +2588,7 @@ mod tests {
         for _ in 0..3 {
             let rx = call(&tx, "step", json!({ "frames": 1, "snapshot": false }));
             server.before_frame(&mut s, W, H);
-            server.advance(&mut s.game, Input::default(), 0.016, W, H);
+            server.advance(&mut s.game, Input::default(), 1, W, H, &mut |_| {});
             rx.recv().unwrap().unwrap();
         }
         ask(&mut server, &tx, &mut s, "players", json!({ "count": 2 })).unwrap();
@@ -2332,7 +2597,7 @@ mod tests {
         let before: Vec<_> = s.game.tank_snapshots().into_iter().filter(|t| t.is_player).map(|t| (t.player, t.position)).collect();
         let rx = call(&tx, "step", json!({ "frames": 30, "p2_move_dir": "down", "snapshot": false }));
         server.before_frame(&mut s, W, H);
-        server.advance(&mut s.game, Input::default(), 0.016, W, H);
+        server.advance(&mut s.game, Input::default(), 1, W, H, &mut |_| {});
         rx.recv().unwrap().unwrap();
         let after: Vec<_> = s.game.tank_snapshots().into_iter().filter(|t| t.is_player).map(|t| (t.player, t.position)).collect();
         assert!((after[0].1.y - before[0].1.y).abs() < 1.0, "player 1 stayed put");
@@ -2341,17 +2606,23 @@ mod tests {
         ask(&mut server, &tx, &mut s, "players", json!({})).unwrap();
         let m = ask(&mut server, &tx, &mut s, "key", json!({ "key": "enter" })).unwrap();
         assert_eq!(m["players"], 1, "{m}");
-        assert!(s.game.player2.is_none());
+        assert!(s.game.seat(1).is_none());
         ask(&mut server, &tx, &mut s, "players", json!({})).unwrap();
         let m = ask(&mut server, &tx, &mut s, "key", json!({ "key": "2" })).unwrap();
         assert_eq!(m["players"], 2, "{m}");
-        assert!(ask(&mut server, &tx, &mut s, "players", json!({ "count": 3 })).is_err());
+        // Past the couch's two: the round seats up to `MAX_SEATS`, and
+        // nothing outside that range.
+        let m = ask(&mut server, &tx, &mut s, "players", json!({ "count": 4 })).unwrap();
+        assert_eq!(m["players"], 4, "{m}");
+        assert!(s.game.seat(3).is_some());
+        assert!(ask(&mut server, &tx, &mut s, "players", json!({ "count": 0 })).is_err());
+        assert!(ask(&mut server, &tx, &mut s, "players", json!({ "count": crate::MAX_SEATS + 1 })).is_err());
         // restart takes the count too, and clears an open dialog.
         ask(&mut server, &tx, &mut s, "players", json!({})).unwrap();
         let st = ask(&mut server, &tx, &mut s, "restart", json!({ "players": 1, "seed": 3 })).unwrap();
         assert_eq!(st["players"], 1, "{st}");
         assert_eq!(st["players_dialog_open"], false);
-        assert!(s.game.player2.is_none());
+        assert!(s.game.seat(1).is_none());
         // Refused in build mode, like the other game-only tools.
         enter_build(&mut server, &tx, &mut s);
         assert!(ask(&mut server, &tx, &mut s, "players", json!({ "count": 2 })).is_err());
@@ -2366,7 +2637,7 @@ mod tests {
         let rx = call(&tx, "step", held);
         server.before_frame(&mut stepped, W, H);
         assert!(server.lockstep(), "step enters lockstep");
-        server.advance(&mut stepped, Input::default(), 0.123, W, H);
+        server.advance(&mut stepped, Input::default(), 1, W, H, &mut |_| {});
         let reply = rx.recv().unwrap().unwrap();
         assert_eq!(reply["frame"], 90);
         assert_eq!(reply["restarted"], false);
@@ -2374,7 +2645,7 @@ mod tests {
 
         let intent = Intent { move_dir: Some(Dir::Up), fire: true, ..Intent::default() };
         for _ in 0..90 {
-            manual.update(Input { player_intent: intent, ..Input::default() }, PHYSICS_FIXED_DT, W, H);
+            manual.update(Input::single(intent), PHYSICS_FIXED_DT, W, H);
         }
         assert_eq!(reply["time"], r1(manual.time), "the reply's time is the game's, at snapshot precision");
         let (a, b) = (stepped.tank_snapshots(), manual.tank_snapshots());
@@ -2383,7 +2654,7 @@ mod tests {
             assert_eq!(key(x), key(y), "tank {i} diverged");
         }
         // Lockstep holds the game still until the next step.
-        server.advance(&mut stepped, Input::default(), 0.016, W, H);
+        server.advance(&mut stepped, Input::default(), 1, W, H, &mut |_| {});
         assert_eq!(stepped.frame(), 90);
     }
 
@@ -2393,7 +2664,7 @@ mod tests {
         let mut game = game(4);
         let rx = call(&tx, "step", json!({ "frames": 120, "fire": true, "fire_every": 40, "snapshot": false }));
         server.before_frame(&mut game, W, H);
-        server.advance(&mut game, Input::default(), 0.016, W, H);
+        server.advance(&mut game, Input::default(), 1, W, H, &mut |_| {});
         let reply = rx.recv().unwrap().unwrap();
         let shots = reply["events"].as_array().unwrap().iter().filter(|e| e["event"] == "fired" && e["slot"] == 0).count();
         assert_eq!(shots, 3, "{}", reply["events"]);
@@ -2408,7 +2679,7 @@ mod tests {
         rx.recv().unwrap().unwrap();
         let rx = call(&tx, "step", json!({ "frames": 1 }));
         server.before_frame(&mut game, W, H);
-        server.advance(&mut game, Input::default(), 0.016, W, H);
+        server.advance(&mut game, Input::default(), 1, W, H, &mut |_| {});
         let reply = rx.recv().unwrap().unwrap();
         let player = &reply["snapshot"]["tanks"][0];
         assert_eq!(player["slot"], 0);
@@ -2433,7 +2704,7 @@ mod tests {
         rx.recv().unwrap().unwrap();
         let rx = call(&tx, "step", json!({ "frames": 1 }));
         server.before_frame(&mut game, W, H);
-        server.advance(&mut game, Input::default(), 0.016, W, H);
+        server.advance(&mut game, Input::default(), 1, W, H, &mut |_| {});
         let reply = rx.recv().unwrap().unwrap();
         let events = reply["events"].as_array().unwrap();
         assert!(events.iter().any(|e| e["event"] == "wreck" && e["slot"] == 2), "{events:?}");
@@ -2505,6 +2776,36 @@ mod tests {
         assert_eq!(game.debug_overlays, Overlays::NONE);
     }
 
+    /// The windowed loop pays real time out in whole steps and hands the
+    /// count here: a live server runs each at the fixed step and spends
+    /// the one-shot presses on the first, a frozen one runs none of them,
+    /// and `after_step` sees every step's state.
+    #[test]
+    fn advance_runs_the_clocks_steps_unless_frozen() {
+        let (mut server, tx) = DevServer::headless();
+        let mut s = game(7);
+        let mut seen = Vec::new();
+        server.advance(&mut s.game, Input::default(), 3, W, H, &mut |g| seen.push(g.frame()));
+        assert_eq!(s.game.frame(), 3);
+        assert_eq!(seen, vec![1, 2, 3]);
+        // A frame of two steps toggles pause once, not twice.
+        let pause = Input { pause_pressed: true, ..Input::default() };
+        server.advance(&mut s.game, pause, 2, W, H, &mut |_| {});
+        assert!(s.game.paused);
+        assert_eq!(s.game.frame(), 5, "paused updates still count frames");
+        server.advance(&mut s.game, pause, 1, W, H, &mut |_| {});
+        assert!(!s.game.paused);
+        // Frozen: the steps the clock paid for do not run.
+        ask(&mut server, &tx, &mut s, "pause", json!({})).unwrap();
+        assert!(server.lockstep());
+        let mut ran = 0;
+        server.advance(&mut s.game, Input::default(), 4, W, H, &mut |_| ran += 1);
+        assert_eq!((s.game.frame(), ran), (6, 0));
+        ask(&mut server, &tx, &mut s, "resume", json!({})).unwrap();
+        server.advance(&mut s.game, Input::default(), 1, W, H, &mut |_| ran += 1);
+        assert_eq!((s.game.frame(), ran), (7, 1));
+    }
+
     #[test]
     fn input_cycle_overlays_presses_the_i_key_once() {
         let (mut server, tx) = DevServer::headless();
@@ -2517,13 +2818,13 @@ mod tests {
             rx.recv().unwrap().unwrap();
             let input = server.shape_input(Input::default());
             assert!(input.cycle_overlays_pressed);
-            assert!(input.player_intent.move_dir.is_none(), "a bare cycle request leaves the keyboard alone");
-            server.advance(&mut game, input, 0.016, W, H);
+            assert!(input.seats[0].move_dir.is_none(), "a bare cycle request leaves the keyboard alone");
+            server.advance(&mut game, input, 1, W, H, &mut |_| {});
             assert_eq!(game.debug_overlays, preset);
             // One-shot: the next frame's input does not press the key again.
             let input = server.shape_input(Input::default());
             assert!(!input.cycle_overlays_pressed);
-            server.advance(&mut game, input, 0.016, W, H);
+            server.advance(&mut game, input, 1, W, H, &mut |_| {});
             assert_eq!(game.debug_overlays, preset);
         }
     }
@@ -2609,7 +2910,7 @@ mod tests {
 
         let rx = call(&tx, "step", json!({ "frames": 120, "detail": "full" }));
         server.before_frame(&mut game, W, H);
-        server.advance(&mut game, Input::default(), 0.016, W, H);
+        server.advance(&mut game, Input::default(), 1, W, H, &mut |_| {});
         let reply = rx.recv().unwrap().unwrap();
         let text = reply["snapshot"].to_string();
         assert!(text.len() < 16_000, "full snapshot is {} bytes", text.len());
@@ -2688,7 +2989,7 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!(status["wave"]["index"], 0);
         let rx = call(&tx, "step", json!({ "frames": 1, "snapshot": true }));
         server.before_frame(&mut game, W, H);
-        server.advance(&mut game, Input::default(), 0.016, W, H);
+        server.advance(&mut game, Input::default(), 1, W, H, &mut |_| {});
         let stepped = rx.recv().unwrap().unwrap();
         let tanks = stepped["snapshot"]["tanks"].as_array().unwrap();
         assert_eq!(tanks.len(), 2, "wave 1's first tank is rolling in: {stepped}");
@@ -2729,7 +3030,7 @@ cells."1,1" = { kind = "wall" }"#;
         let mut game = game(14);
         let rx = call(&tx, "step", json!({ "frames": 120, "snapshot": false }));
         server.before_frame(&mut game, W, H);
-        server.advance(&mut game, Input::default(), 0.016, W, H);
+        server.advance(&mut game, Input::default(), 1, W, H, &mut |_| {});
         rx.recv().unwrap().unwrap();
         let rx = call(&tx, "history", json!({ "last": 100, "every": 10, "slot": 1 }));
         server.before_frame(&mut game, W, H);
@@ -2761,7 +3062,7 @@ cells."1,1" = { kind = "wall" }"#;
         let rx = call(&tx, "step", json!({ "frames": 300, "snapshot": false, "kinds": ["ai_action"] }));
         server.before_frame(&mut game, W, H);
         assert!(game.trace_ai, "the server switches AI tracing on");
-        server.advance(&mut game, Input::default(), 0.016, W, H);
+        server.advance(&mut game, Input::default(), 1, W, H, &mut |_| {});
         let step = rx.recv().unwrap().unwrap();
         let events = step["events"].as_array().unwrap();
         assert!(!events.is_empty(), "300 frames of AI produce action changes");
@@ -2790,7 +3091,7 @@ cells."1,1" = { kind = "wall" }"#;
             assert_eq!(status["tanks"], 4);
             let rx = call(&tx, "step", json!({ "frames": 300 }));
             server.before_frame(&mut game, W, H);
-            server.advance(&mut game, Input::default(), 0.016, W, H);
+            server.advance(&mut game, Input::default(), 1, W, H, &mut |_| {});
             runs.push(rx.recv().unwrap().unwrap()["snapshot"].to_string());
         }
         assert_eq!(runs[0], runs[1]);
@@ -2888,6 +3189,209 @@ cells."1,1" = { kind = "wall" }"#;
         let m = ask(&mut server, &tx, &mut s, "build", json!({})).unwrap();
         assert_eq!(m["mode"], "build", "{m}");
         assert_eq!(m["dialog_open"], false);
+    }
+
+    /// A session holding a seat in a room, plus the authoritative round
+    /// the room is running and the room's end of the link.
+    ///
+    /// The room is answered by hand, as `net::round`'s tests answer one:
+    /// a perfect loopback, the code, the start and a `Welcome` built from
+    /// a round of its own. That round is deliberately unlike the
+    /// session's local one - another seed, two enemies instead of four -
+    /// so a reply that describes it cannot be mistaken for the local
+    /// round's.
+    struct Room {
+        link: Loopback,
+        game: Game,
+    }
+
+    impl Room {
+        fn say(&mut self, msg: Msg) {
+            self.link.send(&codec::encode(&msg));
+        }
+
+        /// Run the round on `ticks` ticks and send the snapshot they
+        /// earned, stamped `server_ms` - the room's clock, which a test
+        /// moves so the interpolator's render time reaches the snapshot
+        /// it means to draw (render time trails the newest stamp by the
+        /// interpolation delay, by design). The interval's events ride
+        /// along, as a room server's do.
+        fn tick(&mut self, ticks: u32, server_ms: u32) {
+            let (w, h) = self.game.map.field_size();
+            let mut events = Vec::new();
+            for _ in 0..ticks {
+                self.game.update(Input::default(), PHYSICS_FIXED_DT, w, h);
+                events.extend(enc::wire_events(self.game.events()));
+            }
+            let mut snapshot = enc::snapshot(&self.game, [0; MAX_SEATS]);
+            snapshot.server_ms = server_ms;
+            snapshot.events = events;
+            self.say(Msg::Snapshot(snapshot));
+        }
+    }
+
+    /// A session in an online round, welcomed into `Room`'s round.
+    fn online(seed: u64) -> (Session, Room) {
+        let mut session = game(seed);
+        let mut authority = Game::default();
+        authority.enemy_count_override = Some(2);
+        authority.level_overrides.mission = Some(crate::level::Mission::Protect);
+        authority.level_overrides.spawn = Some(crate::level::SpawnKind::Band);
+        authority.seed_override = Some(seed ^ 0xABC);
+        authority.player_row_override = Some(3);
+        // A room server's round has no mission banner to freeze behind.
+        authority.show_intro = false;
+        authority.map = session.game.map.clone();
+        let (w, h) = authority.map.field_size();
+        authority.init(w, h);
+
+        let (client_end, room_end) = loopback::pair(LinkQuality::PERFECT, seed);
+        let client = RoomClient::host(
+            Box::new(client_end) as Box<dyn Transport>,
+            Identity::new("dev", "tok-dev"),
+            RoomSetup::default(),
+        );
+        session.go_online(OnlineRound::new(client, "ROOM"));
+        // The create goes out on the first frame; the room answers it.
+        session.update_online(&Intent::default(), PHYSICS_FIXED_DT);
+        let mut room = Room { link: room_end, game: authority };
+        let roster = vec![Seat { seat: 0, nick: "dev".into(), chassis: 3 }];
+        let mut welcome =
+            enc::welcome(&room.game, 0, roster, "{}".into(), [0; MAX_SEATS]).expect("the map serialises");
+        welcome.protocol = PROTOCOL_VERSION;
+        welcome.snapshot.server_ms = 1_000;
+        room.say(Msg::Lobby(Lobby::RoomCreated { code: "AK7QX".into() }));
+        room.say(Msg::Lobby(Lobby::Started));
+        room.say(Msg::Welcome(welcome));
+        session.update_online(&Intent::default(), PHYSICS_FIXED_DT);
+        assert!(session.online.as_ref().and_then(AnyRound::game).is_some(), "the welcome built no replica");
+        (session, room)
+    }
+
+    /// One windowed frame in `app.rs`'s order: the dev server at the
+    /// boundary, then the online round's own frame. A snapshot's events
+    /// are handed over exactly once (`net::interp`), so the boundary has
+    /// to come first - as it does in the loop - for the server to see
+    /// them.
+    fn online_frame(server: &mut DevServer, session: &mut Session) {
+        server.before_frame(session, W, H);
+        session.update_online(&Intent::default(), PHYSICS_FIXED_DT);
+    }
+
+    /// In an online round every reading tool describes the round on
+    /// screen - the room's replica - and `status` says whose round that
+    /// is: the room, the seat, the buffer and how far the server has got.
+    #[test]
+    fn the_reading_tools_describe_the_online_round() {
+        let (mut s, mut room) = online(51);
+        let (mut server, tx) = DevServer::headless();
+        online_frame(&mut server, &mut s);
+        // Two snapshots: the one the replica is meant to land on, and a
+        // later one that carries the room's clock far enough forward for
+        // render time to reach it.
+        room.game.debug_kill(1).expect("enemy in slot 1");
+        room.tick(30, 1_500);
+        room.tick(30, 4_000);
+        online_frame(&mut server, &mut s);
+
+        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert_eq!(st["mode"], "online", "{st}");
+        let round = &st["round"];
+        assert_eq!(round["kind"], "online", "{round}");
+        assert_eq!(round["room"], "AK7QX");
+        assert_eq!(round["seat"], 0);
+        assert_eq!(round["phase"], "playing");
+        assert_eq!(round["replica"], true);
+        assert_eq!(round["server_tick"], 60, "the room's own tick: {round}");
+        assert!(round["buffer_ms"].is_i64(), "the snapshot buffer's depth: {round}");
+        assert_eq!(st["frame"], 30, "the replica's tick, the room's newest less the buffer: {st}");
+
+        // The numbers are the room's round, not the local one standing
+        // frozen behind it: another seed and two enemies, not four.
+        assert_eq!(st["seed"], format!("{:#x}", room.game.round_seed()), "{st}");
+        assert_ne!(st["seed"], format!("{:#x}", s.game.round_seed()));
+        assert_eq!(st["tanks"], 3, "the replica's tanks: {st}");
+        assert_eq!(st["enemies_alive"], 1, "one of the room's two enemies is a wreck: {st}");
+        let snap = ask(&mut server, &tx, &mut s, "snapshot", json!({})).unwrap();
+        assert_eq!(snap["tanks"].as_array().unwrap().len(), 3, "{snap}");
+        // And the other readers answer about it rather than refusing.
+        for (tool, params) in [
+            ("terrain", json!({ "only": "damaged" })),
+            ("events", json!({})),
+            ("history", json!({})),
+            ("nav_grid", json!({})),
+            ("field", json!({ "target": "player" })),
+            ("map_get", json!({})),
+            ("lint", json!({ "source": "round" })),
+            ("mode", json!({})),
+            ("overlays", json!({ "hitboxes": true })),
+            ("tuning_get", json!({ "diff_only": true })),
+            ("builder_files", json!({})),
+        ] {
+            ask(&mut server, &tx, &mut s, tool, params).unwrap_or_else(|e| panic!("{tool} in an online round: {e}"));
+        }
+        // The replica's own events and track rows are banked as the
+        // snapshots move it on, since nothing `advance`s it here.
+        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert!(st["events_kept"].as_u64().unwrap() > 0, "no event of the replica's was kept: {st}");
+        assert!(st["history_frames"].as_u64().unwrap() > 0, "no history of the replica's: {st}");
+        // An overlay flag landed on the round that is drawn.
+        assert!(s.shown().debug_overlays.hitboxes, "the overlay flag went to the local round");
+        assert!(!s.game.debug_overlays.hitboxes);
+    }
+
+    /// The other half of the rule: anything that would write refuses, by
+    /// name, and says what to do instead. Giving the seat up comes back
+    /// to the local round, and every tool works again.
+    #[test]
+    fn the_writing_tools_refuse_in_an_online_round() {
+        let (mut s, _room) = online(52);
+        let (mut server, tx) = DevServer::headless();
+        for tool in ONLINE_REFUSED_TOOLS {
+            let spec = TOOLS.iter().find(|t| t.name == *tool).unwrap_or_else(|| panic!("{tool} is not advertised"));
+            assert!(!spec.read_only, "{tool} reads only - it should describe the online round, not refuse");
+            let err = ask(&mut server, &tx, &mut s, tool, json!({})).unwrap_err();
+            assert!(err.contains("AK7QX"), "{tool}: {err}");
+            assert!(err.contains("escape"), "{tool}: {err}");
+        }
+        // The round that is not this window's is untouched by the asking.
+        assert_eq!(s.mode(), Driver::Online);
+        assert_eq!(s.game.frame(), 0, "the local round took a step");
+        assert!(!server.lockstep(), "a refused `pause` still froze the game");
+        // Naming a tool that does not exist still reads as unknown.
+        assert!(ask(&mut server, &tx, &mut s, "nonsense", json!({})).unwrap_err().contains("unknown method"));
+
+        // Esc gives the seat up; the local round is back and answers.
+        let m = ask(&mut server, &tx, &mut s, "key", json!({ "key": "escape" })).unwrap();
+        assert_eq!(m["mode"], "play", "{m}");
+        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert_eq!(st["round"]["kind"], "local", "{st}");
+        assert!(st["round"]["room"].is_null());
+        assert_eq!(st["tanks"], 5, "the local round is the one on screen again: {st}");
+        // A `step` is answered from `advance`, one rendered frame later.
+        let rx = call(&tx, "step", json!({ "frames": 1 }));
+        server.before_frame(&mut s, W, H);
+        server.advance(&mut s.game, Input::default(), 1, W, H, &mut |_| {});
+        assert_eq!(rx.recv().unwrap().unwrap()["frame"], 1);
+    }
+
+    /// The bar's own way out of a room: a `click` on `LEAVE` lands on
+    /// the hit test a finger lands on, and comes back to the local round
+    /// the way Esc does.
+    #[test]
+    fn a_click_on_leave_gives_the_seat_up() {
+        let (mut s, _room) = online(53);
+        let (mut server, tx) = DevServer::headless();
+        let layout = Layout::for_field(W, H);
+        let r = crate::hud::leave_button_rect(layout.panel);
+        // A press anywhere else on the replica does nothing.
+        let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": 10.0, "y": 200.0 })).unwrap();
+        assert_eq!(m["mode"], "online", "{m}");
+        let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": r.x + r.width / 2.0, "y": r.y + r.height / 2.0 }))
+            .unwrap();
+        assert_eq!(m["mode"], "play", "{m}");
+        let st = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert_eq!(st["round"]["kind"], "local", "{st}");
     }
 
     #[test]
@@ -3051,7 +3555,7 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!(ev["events"].as_array().unwrap().last().unwrap()["event"], "round_started", "{ev}");
         let step = call(&tx, "step", json!({ "frames": 2, "snapshot": false }));
         server.before_frame(&mut s, W, H);
-        server.advance(&mut s.game, Input::default(), 0.016, W, H);
+        server.advance(&mut s.game, Input::default(), 1, W, H, &mut |_| {});
         assert_eq!(step.recv().unwrap().unwrap()["frame"], 2);
         // The edit survives the round trip back into the builder.
         enter_build(&mut server, &tx, &mut s);
@@ -3067,7 +3571,7 @@ cells."1,1" = { kind = "wall" }"#;
         ask(&mut server, &tx, &mut s, "restart", json!({ "map_toml": INLINE_MAP, "seed": 1 })).unwrap();
         let layout = Layout::for_field(W, H);
         let button = mode_button_rect(layout.panel);
-        let centre = |r: sola_raylib::prelude::Rectangle| (r.x + r.width / 2.0, r.y + r.height / 2.0);
+        let centre = |r: crate::math::Rectangle| (r.x + r.width / 2.0, r.y + r.height / 2.0);
         // A click on BUILD opens the dialog like `build`.
         let (bx, by) = centre(button);
         let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": bx, "y": by })).unwrap();
@@ -3198,7 +3702,7 @@ cells."1,1" = { kind = "wall" }"#;
         let (w, h) = s.field_size();
         let rx = call(tx, "step", params);
         server.before_frame(s, w, h);
-        server.advance(&mut s.game, Input::default(), 0.016, w, h);
+        server.advance(&mut s.game, Input::default(), 1, w, h, &mut |_| {});
         rx.recv().unwrap().unwrap()
     }
 

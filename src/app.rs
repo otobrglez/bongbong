@@ -9,10 +9,23 @@
 use crate::tuning::tuning;
 use crate::ai::Intent;
 use crate::editor::{BuilderInput, CliOverrides, EditorTextures};
-use crate::game::{Effects, Textures};
-use crate::hud::{leave_dialog_rects, mode_button_rect, players_button_rect, players_dialog_rects, restart_button_rect, BAR_FILL};
+use crate::render::game::{Effects, Textures};
+use crate::hud::{
+    leave_button_rect, leave_dialog_rects, mode_button_rect, online_button_rect, players_button_rect,
+    players_dialog_rects, restart_button_rect, BAR_FILL,
+};
+use crate::lobby::LobbyInput;
 use crate::mode::{Driver, Session};
-use crate::shockwave::{RippleFx, RippleTuning};
+// Online play reaches a room over a socket or the rig over a thread,
+// and the emscripten build has neither on the command line: the page
+// passes a room code instead (docs/online-coop-prd.md §4.13).
+#[cfg(not(target_os = "emscripten"))]
+use crate::net::client::{Identity, RoomClient, RoomSetup, Target};
+#[cfg(not(target_os = "emscripten"))]
+use crate::net::round::{AnyRound, OnlineRound};
+#[cfg(not(target_os = "emscripten"))]
+use crate::net::transport::Transport;
+use crate::render::shockwave::{RippleFx, RippleTuning};
 use crate::simulation::{Game, Input, PlayerCount};
 use crate::tuning;
 use crate::tank::{Dir, TankKind};
@@ -20,6 +33,8 @@ use crate::touch::TouchPoint;
 use crate::view::{ScaleCap, View};
 use crate::{
     Layout,
+    PHYSICS_FIXED_DT,
+    SIM_MAX_STEPS_PER_FRAME,
 };
 use clap::Parser;
 use sola_raylib::core::game_loop;
@@ -28,9 +43,11 @@ use sola_raylib::prelude::{KeyboardKey, RaylibHandle};
 /// This frame's raw movement/fire commands for both players, from the
 /// keyboard. `fire` is the raw held state - whether it actually fires
 /// (edge-triggered for shells, full-auto while a laser is charged) is
-/// `Game::update`'s call, not this function's; see `Input::player_intent`.
-/// Player 1 is always the arrows + Space; with two players, player 2 is
-/// WASD + Left Shift, otherwise idle (docs/two-players.md).
+/// `Game::update`'s call, not this function's; see `Input::seats`.
+/// Player 1 is always the arrows + Space; from two seats up, player 2 is
+/// WASD + Left Shift, otherwise idle (docs/two-players.md). The keyboard
+/// has no third or fourth pair of keys: the seats past these two are a
+/// room's, and their intents arrive over the wire.
 fn gather_intents(rl: &RaylibHandle, players: PlayerCount) -> (Intent, Intent) {
     let dir = |up: KeyboardKey, down: KeyboardKey, left: KeyboardKey, right: KeyboardKey| {
         if rl.is_key_down(up) {
@@ -47,13 +64,11 @@ fn gather_intents(rl: &RaylibHandle, players: PlayerCount) -> (Intent, Intent) {
     };
     let arrows = dir(KeyboardKey::KEY_UP, KeyboardKey::KEY_DOWN, KeyboardKey::KEY_LEFT, KeyboardKey::KEY_RIGHT);
     let player1 = Intent { move_dir: arrows, fire: rl.is_key_down(KeyboardKey::KEY_SPACE), ..Intent::default() };
-    match players {
-        PlayerCount::One => (player1, Intent::default()),
-        PlayerCount::Two => {
-            let wasd = dir(KeyboardKey::KEY_W, KeyboardKey::KEY_S, KeyboardKey::KEY_A, KeyboardKey::KEY_D);
-            (player1, Intent { move_dir: wasd, fire: left_shift_down(rl), ..Intent::default() })
-        }
+    if players.count() < 2 {
+        return (player1, Intent::default());
     }
+    let wasd = dir(KeyboardKey::KEY_W, KeyboardKey::KEY_S, KeyboardKey::KEY_A, KeyboardKey::KEY_D);
+    (player1, Intent { move_dir: wasd, fire: left_shift_down(rl), ..Intent::default() })
 }
 
 /// Whether the left Shift key - player 2's fire key - is held. Native reads
@@ -77,6 +92,98 @@ fn left_shift_down(_rl: &RaylibHandle) -> bool {
 #[cfg(not(target_os = "emscripten"))]
 fn left_shift_down(rl: &RaylibHandle) -> bool {
     rl.is_key_down(KeyboardKey::KEY_LEFT_SHIFT)
+}
+
+/// The URL the page was opened on, as the page published it
+/// (`site/src/scripts/room.ts`). The web build's command line, in full:
+/// a browser has no argv, so the room a link names and the rooms server
+/// a dev link overrides both travel in here (`net::rooms::Invite`,
+/// docs/online-coop-prd.md §4.10).
+#[cfg(all(feature = "online", target_os = "emscripten"))]
+const PAGE_INVITE: &std::ffi::CStr = c"(function(){try{return String(window.bbInvite||'')}catch(e){return ''}})()";
+
+/// This browser's reconnect key, minted and kept by the page - one per
+/// tab, so two tabs in one browser are two seats rather than one seat
+/// taken twice.
+#[cfg(all(feature = "online", target_os = "emscripten"))]
+const PAGE_TOKEN: &std::ffi::CStr = c"(function(){try{return String(window.bbToken||'')}catch(e){return ''}})()";
+
+/// Evaluate `script` in the page and copy back what it said.
+///
+/// The second half of the `window.bbShift` bargain (see
+/// `left_shift_down`): the page publishes a fact, the game reads it.
+/// These are read once at startup rather than once a frame, because a
+/// command line does not change either.
+///
+/// Two things are load-bearing. `emscripten_run_script_string` answers
+/// with a pointer into the runtime's own buffer, good only until the
+/// next call, so the string is copied here and not held; and an
+/// exception out of `eval` takes the runtime down with it, which is why
+/// every script is wrapped and answers with an empty string rather than
+/// throwing.
+#[cfg(all(feature = "online", target_os = "emscripten"))]
+fn page_string(script: &std::ffi::CStr) -> String {
+    unsafe extern "C" {
+        fn emscripten_run_script_string(script: *const std::os::raw::c_char) -> *const std::os::raw::c_char;
+    }
+    // SAFETY: a NUL-terminated literal, evaluated synchronously; the
+    // answer is a NUL-terminated string in emscripten's scratch buffer,
+    // copied before anything else can run.
+    let answer = unsafe { emscripten_run_script_string(script.as_ptr()) };
+    if answer.is_null() {
+        return String::new();
+    }
+    unsafe { std::ffi::CStr::from_ptr(answer) }.to_string_lossy().into_owned()
+}
+
+/// The reconnect key a desktop, iOS or Android build takes into a room
+/// (docs/online-coop-prd.md §4.13): the machine's, per nickname. Two
+/// clients here under two names are two seats, and either reclaims its
+/// own seat on a reconnect. A browser cannot use this rule - every tab
+/// would be the same player - and mints its own instead
+/// (`site/src/scripts/room.ts`).
+#[cfg(all(feature = "online", not(target_os = "emscripten")))]
+fn device_token(nick: &str) -> String {
+    format!("bongbong-{nick}")
+}
+
+/// The play clock: real frame time paid out in whole simulation steps of
+/// `PHYSICS_FIXED_DT`, so `Game::update` always sees the step the dev
+/// server, the probe and a replay see (docs/online-coop-prd.md §4.1). A
+/// rendered frame runs the steps it has accumulated - none on every other
+/// frame of a 120 Hz display, one per frame at 60 Hz, two after a hitch -
+/// and at most `SIM_MAX_STEPS_PER_FRAME`: a frame owing more runs the cap
+/// and forgets the rest, so a stall costs the round real time, never a
+/// spiral of catch-up steps.
+#[derive(Default)]
+struct StepClock {
+    /// Real seconds not yet paid out as a step, below one step after
+    /// `advance`.
+    owed: f32,
+}
+
+impl StepClock {
+    /// Add a rendered frame's `dt` and take the steps it pays for.
+    fn advance(&mut self, dt: f32) -> u32 {
+        let cap = SIM_MAX_STEPS_PER_FRAME as f32 * PHYSICS_FIXED_DT;
+        self.owed = (self.owed + dt.max(0.0)).min(cap);
+        let mut steps = 0;
+        while self.owed >= PHYSICS_FIXED_DT && steps < SIM_MAX_STEPS_PER_FRAME {
+            self.owed -= PHYSICS_FIXED_DT;
+            steps += 1;
+        }
+        if steps == SIM_MAX_STEPS_PER_FRAME {
+            self.owed = 0.0;
+        }
+        steps
+    }
+
+    /// Forget what is owed: the round was not running (a dialog, the
+    /// builder, the dev server's freeze), so it resumes on a fresh step
+    /// rather than a burst for the time it stood still.
+    fn reset(&mut self) {
+        self.owed = 0.0;
+    }
 }
 
 /// Command-line flags for bongbong's native binary. All optional - with none
@@ -141,11 +248,13 @@ pub struct Args {
     #[arg(long = "tank2", value_enum)]
     tank2: Option<TankKind>,
 
-    /// Start the session in single (1) or two-player (2) mode - the
-    /// players button in the HUD bar switches later (docs/two-players.md).
-    /// Player 1 is always the arrows + Space; two players adds player 2 on
-    /// WASD + Left Shift. Kept across restarts.
-    #[arg(long = "players", default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=2))]
+    /// How many seats the round holds, 1 to `MAX_SEATS` - the players
+    /// button in the HUD bar switches between one and two later
+    /// (docs/two-players.md). Player 1 is always the arrows + Space; two
+    /// players adds player 2 on WASD + Left Shift, and the seats past
+    /// those two have no keys of their own: they are a room's, and stand
+    /// idle in a local round. Kept across restarts.
+    #[arg(long = "players", default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=crate::MAX_SEATS as i64))]
     players: u8,
 
     /// The window's initial size, e.g. `--resolution 1920x1080` (default:
@@ -231,6 +340,134 @@ pub struct Args {
     #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
     #[arg(long = "no-dev-server")]
     no_dev_server: bool,
+
+    /// Play the offline rig (docs/online-coop-prd.md §4.13): an
+    /// authoritative round on a background thread, an in-process link
+    /// with `--delay`/`--jitter`/`--loss`, and the replica in the window.
+    /// The whole online client - the encoder, the snapshots, the
+    /// interpolation, the feel of the hull at 80 ms - with no server, no
+    /// socket and no port. `-m`, `--seed`, `--enemies`, `--tank` and the
+    /// mission/spawn flags set up the round it simulates.
+    #[cfg(not(target_os = "emscripten"))]
+    #[arg(long = "rig")]
+    rig: bool,
+
+    /// One-way link delay in milliseconds for `--rig`.
+    #[cfg(not(target_os = "emscripten"))]
+    #[arg(long = "delay", default_value_t = 80)]
+    delay: u64,
+
+    /// Spread around `--delay`, milliseconds, never reordering arrivals.
+    #[cfg(not(target_os = "emscripten"))]
+    #[arg(long = "jitter", default_value_t = 20)]
+    jitter: u64,
+
+    /// The share of messages `--rig` drops, 0.0 to 1.0.
+    #[cfg(not(target_os = "emscripten"))]
+    #[arg(long = "loss", default_value_t = 0.02)]
+    loss: f64,
+
+    /// Open a room on the rooms server and play it: the code to share is
+    /// printed and shown over the field, and ENTER starts the round once
+    /// whoever is joining has a seat. `-m` sends this map to the room.
+    #[cfg(all(feature = "online", not(target_os = "emscripten")))]
+    #[arg(long = "host", conflicts_with = "join")]
+    host: bool,
+
+    /// Take a seat in the room this code names (`--join AK7QX`). The
+    /// round is the host's to start.
+    #[cfg(all(feature = "online", not(target_os = "emscripten")))]
+    #[arg(long = "join", value_name = "CODE")]
+    join: Option<String>,
+
+    /// The name on the room's roster. Also picks this machine's device
+    /// token, so two clients under different nicknames are two seats.
+    #[cfg(all(feature = "online", not(target_os = "emscripten")))]
+    #[arg(long = "nick", default_value = "player")]
+    nick: String,
+
+    /// The rooms server to talk to, over `BONGBONG_ROOMS` and the
+    /// cluster's own (`ws://127.0.0.1:4848` for `just run-server`).
+    #[cfg(all(feature = "online", not(target_os = "emscripten")))]
+    #[arg(long = "rooms", value_name = "URL")]
+    rooms: Option<String>,
+}
+
+/// The online round the command line asks for, with the rig's handle if
+/// it is the rig: `--rig` plays against a thread, `--host` opens a room
+/// on the rooms server and `--join` takes a seat in one. `None` is an
+/// ordinary local session.
+///
+/// Whichever it is, the window's side is the same `OnlineRound` over a
+/// boxed transport, so nothing past this function knows which.
+#[cfg(not(target_os = "emscripten"))]
+fn open_online(args: &Args, map: &crate::map::MapFile) -> Option<(AnyRound, Option<crate::net::rig::Rig>)> {
+    if args.rig {
+        let options = crate::net::rig::RigOptions {
+            map: map.clone(),
+            seed: args.seed,
+            enemies: args.enemies,
+            overrides: level_overrides(args),
+            tank_row: args.tank.map(TankKind::row),
+            quality: crate::net::loopback::LinkQuality::new(args.delay, args.jitter, args.loss),
+            // The link replays with the round: one seed for both.
+            link_seed: args.seed.unwrap_or(0xB0B5),
+        };
+        eprintln!(
+            "[rig] an authoritative round on a thread, link {} ms +/- {} ms, {:.1} % loss",
+            args.delay,
+            args.jitter,
+            args.loss * 100.0
+        );
+        let (rig, link) = crate::net::rig::start(options);
+        let client = RoomClient::host(
+            Box::new(link) as Box<dyn Transport>,
+            Identity::new("rig", "tok-rig"),
+            RoomSetup::default(),
+        );
+        return Some((OnlineRound::new(client, "RIG"), Some(rig)));
+    }
+    #[cfg(feature = "online")]
+    {
+        use crate::net::rooms::{RoomCode, RoomsHost};
+        if !args.host && args.join.is_none() {
+            return None;
+        }
+        let host = RoomsHost::resolve(args.rooms.as_deref());
+        let target = match args.join.as_deref().map(RoomCode::parse) {
+            Some(Ok(code)) => Target::Join(code),
+            Some(Err(e)) => {
+                eprintln!("[online] {e}");
+                std::process::exit(2);
+            }
+            // `-m` carries the whole map to the room; the lobby's own
+            // `HOST` sends a shipped map's name instead.
+            None => Target::Host(RoomSetup {
+                map: map.name.clone().unwrap_or_else(|| "default".into()),
+                map_toml: args.map.as_ref().and_then(|m| m.to_toml_string().ok()),
+                mission: args.mission.unwrap_or(crate::level::Mission::Protect),
+                seed: args.seed,
+            }),
+        };
+        let identity = Identity::new(args.nick.clone(), device_token(&args.nick));
+        return Some((OnlineRound::new(crate::net::client::connect(&host, identity, target), "ROOM"), None));
+    }
+    #[cfg(not(feature = "online"))]
+    None
+}
+
+/// The mission and spawn overrides the command line carries, shared by
+/// the local round and the rig's authoritative one.
+fn level_overrides(args: &Args) -> crate::level::LevelOverrides {
+    crate::level::LevelOverrides {
+        mission: args.mission,
+        spawn: args.spawn,
+        waves: args.waves,
+        wave_size: args.wave_size,
+        wave_growth: args.wave_growth,
+        tier_start: args.tier_start,
+        tier_end: args.tier_end,
+    }
 }
 
 fn parse_map(s: &str) -> Result<crate::map::MapFile, String> {
@@ -538,9 +775,9 @@ pub fn run(args: Args) {
     // `Frog::variant` (rolled per round in `Game::init`) picks which one
     // `game.rs::render` draws from. Loaded up front like every other
     // texture, kept alive for the whole game loop.
-    let frog_textures: Vec<crate::frog::FrogVariantTextures> = crate::frog::FROG_VARIANT_DIRS
+    let frog_textures: Vec<crate::render::frog::FrogVariantTextures> = crate::frog::FROG_VARIANT_DIRS
         .iter()
-        .map(|dir| crate::frog::FrogVariantTextures {
+        .map(|dir| crate::render::frog::FrogVariantTextures {
             idle: rl
                 .load_texture(&thread, &format!("static/toxic_frog/{dir}/idle.png"))
                 .expect("failed loading frog idle texture"),
@@ -645,19 +882,11 @@ pub fn run(args: Args) {
 
     let mut game = Game::default();
     game.enemy_count_override = args.enemies;
-    game.level_overrides = crate::level::LevelOverrides {
-        mission: args.mission,
-        spawn: args.spawn,
-        waves: args.waves,
-        wave_size: args.wave_size,
-        wave_growth: args.wave_growth,
-        tier_start: args.tier_start,
-        tier_end: args.tier_end,
-    };
+    game.level_overrides = level_overrides(&args);
     game.show_intro = true;
     game.player_row_override = args.tank.map(TankKind::row);
     game.player2_row_override = args.tank2.map(TankKind::row);
-    game.players = PlayerCount::from_count(args.players as usize).expect("clap limits --players to 1 or 2");
+    game.players = PlayerCount::from_count(args.players as usize).expect("clap limits --players to the seats");
     game.shadows_enabled = !args.no_shadows;
     game.seed_override = args.seed;
     game.map = map;
@@ -681,6 +910,66 @@ pub fn run(args: Args) {
     if args.editor {
         session.driver = Driver::Build;
     }
+    // `--rig`, `--host` or `--join`: the window plays a round somebody
+    // else simulates. The local round above is still built and still
+    // sits there untouched, which is what leaving an online round comes
+    // back to. The rig's handle is held for the rest of `run` - the
+    // window's whole life - and stops its thread on the way out.
+    #[cfg(not(target_os = "emscripten"))]
+    let room_map = session.game.map.clone();
+    // The rooms server the lobby's invite link names and its buttons
+    // dial, and the name this player takes into a room.
+    #[cfg(all(feature = "online", not(target_os = "emscripten")))]
+    {
+        session.rooms = crate::net::rooms::RoomsHost::resolve(args.rooms.as_deref());
+        session.nick = args.nick.clone();
+        session.token = device_token(&args.nick);
+    }
+    // The web build's command line is the page it was opened on: the
+    // room a `/j/AK7QX` or `?join=AK7QX` link names, the `?rooms=`
+    // override a dev QR carries so a scan reaches the laptop rather
+    // than the cluster, and this tab's own device token. A link naming
+    // a room takes the window straight into the lobby on it.
+    #[cfg(all(feature = "online", target_os = "emscripten"))]
+    {
+        let invite = crate::net::rooms::Invite::parse(&page_string(PAGE_INVITE));
+        if let Some(host) = invite.rooms_host() {
+            session.rooms = host;
+        }
+        // The page's own origin, so the lobby's link and QR come back
+        // here. On bongbong.io this is the deployed site anyway; on a PR
+        // preview it is the difference between a scan reaching this
+        // build and reaching production's.
+        if let Some(site) = invite.site.clone() {
+            session.site = site;
+        }
+        let token = page_string(PAGE_TOKEN);
+        if !token.trim().is_empty() {
+            session.token = token;
+        }
+        eprintln!(
+            "[online] site {}, rooms {}, seat token {}, link code {}",
+            session.site.base(),
+            session.rooms.base(),
+            session.token,
+            invite.code.as_ref().map_or("-", |c| c.text.as_str())
+        );
+        if let Some(code) = invite.code {
+            session.join_room(code);
+        }
+    }
+    #[cfg(not(target_os = "emscripten"))]
+    let _rig = match open_online(&args, &room_map) {
+        // The lobby shows the code and the QR while the room fills up
+        // and hands over to `Driver::Online` when the round begins; the
+        // rig's room is already playing by the time it answers, so
+        // `--rig` passes straight through.
+        Some((round, rig)) => {
+            session.open_lobby_with(round);
+            rig
+        }
+        None => None,
+    };
 
     // The dev server is serviced at the frame boundary below, like the
     // tuning transports; failing to bind is a warning, not a fatal error.
@@ -749,6 +1038,10 @@ pub fn run(args: Args) {
     } else {
         120
     };
+    // The round's clock and the input of a frame that ran no step (its
+    // presses are owed to the next step - see `Input::or_presses`).
+    let mut clock = StepClock::default();
+    let mut carried = Input::default();
     game_loop::run(rl, thread, target_fps, move |rl, thread| {
         // Frame boundary, first: dev-server requests (state reads and
         // writes, tuning patches, an armed step or screenshot), so anything
@@ -835,15 +1128,15 @@ pub fn run(args: Args) {
         let mouse_held = rl.is_mouse_button_down(sola_raylib::prelude::MouseButton::MOUSE_BUTTON_LEFT);
         // Every pointer is read in bitmap pixels: the bar, the dialogs and
         // the builder hit-test there and never learn what the window is.
-        let pointer = view.to_bitmap(if touching { rl.get_touch_position(0) } else { rl.get_mouse_position() });
+        let pointer = view.to_bitmap(if touching { rl.get_touch_position(0).into() } else { rl.get_mouse_position().into() });
         // This frame's touch points for the touch scheme, ids included so
         // a stick follows its own finger. `--touch-from-mouse` stands a
         // held left button in for one.
         let mut touch_points: Vec<TouchPoint> = (0..rl.get_touch_point_count())
-            .map(|i| TouchPoint { id: rl.get_touch_point_id(i), pos: view.to_bitmap(rl.get_touch_position(i)) })
+            .map(|i| TouchPoint { id: rl.get_touch_point_id(i), pos: view.to_bitmap(rl.get_touch_position(i).into()) })
             .collect();
         if touch_from_mouse && mouse_held && touch_points.is_empty() {
-            touch_points.push(TouchPoint { id: -1, pos: view.to_bitmap(rl.get_mouse_position()) });
+            touch_points.push(TouchPoint { id: -1, pos: view.to_bitmap(rl.get_mouse_position().into()) });
         }
         let steer_right = tuning().touch_steer_side != 0;
         let pressed = mouse_pressed || touch_pressed;
@@ -867,25 +1160,23 @@ pub fn run(args: Args) {
                     let rects = players_dialog_rects(layout.field);
                     let field_p = layout.to_field(pointer);
                     if pressed {
-                        if rects.one.check_collision_point_rec(field_p) {
-                            session.answer_players(PlayerCount::One);
-                        } else if rects.two.check_collision_point_rec(field_p) {
-                            session.answer_players(PlayerCount::Two);
-                        } else if !rects.panel.check_collision_point_rec(field_p) {
+                        if rects.one.contains(field_p) {
+                            session.answer_players(PlayerCount::ONE);
+                        } else if rects.two.contains(field_p) {
+                            session.answer_players(PlayerCount::TWO);
+                        } else if !rects.panel.contains(field_p) {
                             session.close_players_dialog();
                         }
                     }
                     if rl.is_key_pressed(KeyboardKey::KEY_ONE) {
-                        session.answer_players(PlayerCount::One);
+                        session.answer_players(PlayerCount::ONE);
                     } else if rl.is_key_pressed(KeyboardKey::KEY_TWO) {
-                        session.answer_players(PlayerCount::Two);
+                        session.answer_players(PlayerCount::TWO);
                     } else if rl.is_key_pressed(KeyboardKey::KEY_ENTER) {
                         // Enter is the action, as it is "leave" in the other
                         // dialog: the point of opening this one is to switch.
-                        let other = match session.game.players {
-                            PlayerCount::One => PlayerCount::Two,
-                            PlayerCount::Two => PlayerCount::One,
-                        };
+                        let other =
+                            if session.game.players == PlayerCount::ONE { PlayerCount::TWO } else { PlayerCount::ONE };
                         session.answer_players(other);
                     } else if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) || tab {
                         session.close_players_dialog();
@@ -894,10 +1185,10 @@ pub fn run(args: Args) {
                     let rects = leave_dialog_rects(layout.field);
                     let field_p = layout.to_field(pointer);
                     if pressed {
-                        if rects.leave.check_collision_point_rec(field_p) {
+                        if rects.leave.contains(field_p) {
                             session.answer_dialog(true);
-                        } else if rects.stay.check_collision_point_rec(field_p)
-                            || !rects.panel.check_collision_point_rec(field_p)
+                        } else if rects.stay.contains(field_p)
+                            || !rects.panel.contains(field_p)
                         {
                             session.answer_dialog(false);
                         }
@@ -907,21 +1198,53 @@ pub fn run(args: Args) {
                     } else if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) || tab {
                         session.answer_dialog(false);
                     }
-                } else if tab || (pressed && mode_button_rect(layout.panel).check_collision_point_rec(pointer)) {
+                } else if tab || (pressed && mode_button_rect(layout.panel).contains(pointer)) {
                     session.press_build();
                 } else if crate::TWO_PLAYERS_AVAILABLE
                     && pressed
-                    && players_button_rect(layout.panel).check_collision_point_rec(pointer)
+                    && players_button_rect(layout.panel).contains(pointer)
                 {
                     session.press_players();
+                } else if crate::ONLINE_AVAILABLE && pressed && online_button_rect(layout.panel).contains(pointer) {
+                    // The ONLINE button opens the lobby over the local
+                    // round, which is left exactly where it stands.
+                    session.press_online();
                 } else if !crate::KEYBOARD_AVAILABLE
                     && pressed
-                    && restart_button_rect(layout.panel).check_collision_point_rec(pointer)
+                    && restart_button_rect(layout.panel).contains(pointer)
                 {
                     // The RESTART button stands in for the R key: staged the
                     // way the dev panel's button is, it becomes this frame's
                     // `Input::restart_pressed`.
                     tuning::request_restart();
+                }
+            }
+            Driver::Lobby => {
+                // The lobby's own screen: the pointer is already in
+                // bitmap space, and its rects are the field's.
+                let mut typed = String::new();
+                while let Some(c) = rl.get_char_pressed() {
+                    typed.push(c);
+                }
+                let input = LobbyInput {
+                    pointer: Some(layout.to_field(pointer)),
+                    pressed,
+                    typed,
+                    backspace: rl.is_key_pressed(KeyboardKey::KEY_BACKSPACE),
+                    enter: rl.is_key_pressed(KeyboardKey::KEY_ENTER),
+                    escape: rl.is_key_pressed(KeyboardKey::KEY_ESCAPE),
+                };
+                session.update_lobby(&input, layout.field, dt);
+            }
+            Driver::Online => {
+                // A round belongs to its room: the bar carries one
+                // button, `LEAVE`, and Esc does the same thing - the
+                // seat goes back and the window comes out at the local
+                // round exactly where it stood. A press on the bar is
+                // never a play input, so the hit test is safe here.
+                let left = pressed && leave_button_rect(layout.panel).contains(pointer);
+                if left || rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) {
+                    session.leave_online();
                 }
             }
             Driver::Build => {
@@ -954,8 +1277,11 @@ pub fn run(args: Args) {
         if session.mode() == Driver::Build {
             // Nothing is steering while the builder is up, but the scheme
             // still sees the frame so a finger lifted here is not a stick
-            // still held when play resumes.
+            // still held when play resumes - on a fresh clock, owing no
+            // step and no press.
             touch.update(&touch_points, &layout, steer_right, dt);
+            clock.reset();
+            carried = Input::default();
             session.builder.render(
                 rl,
                 thread,
@@ -1001,26 +1327,25 @@ pub fn run(args: Args) {
         // itself decides what to do with it (e.g. whether a wreck can move),
         // so nothing simulation-related needs to know a `RaylibHandle`
         // exists. See simulation.rs's module doc comment.
-        let (mut player_intent, player2_intent) = gather_intents(rl, session.game.players);
+        let (mut player1, player2) = gather_intents(rl, session.game.players);
         // A touch screen drives player 1 through the same intent the
         // keyboard does; a held key still wins the direction, a tap or a
         // key both fire. Fed every frame, dialog or not, so a lifted
         // finger is never a stick still held.
         let touch_intent = touch.update(&touch_points, &layout, steer_right, dt);
-        player_intent.move_dir = player_intent.move_dir.or(touch_intent.move_dir);
-        player_intent.fire = player_intent.fire || touch_intent.fire;
-        let input = Input {
-            player_intent,
-            player2_intent,
-            pause_pressed: rl.is_key_pressed(KeyboardKey::KEY_P),
-            // The dev panel's "Restart round" button lands here too, as if
-            // R had been pressed - the simulation never learns a browser
-            // exists.
-            restart_pressed: rl.is_key_pressed(KeyboardKey::KEY_R) || tuning::take_restart_request(),
-            toggle_shadows_pressed: rl.is_key_pressed(KeyboardKey::KEY_L),
-            // The I key is inert in a release build: overlays are dev-only.
-            cycle_overlays_pressed: cfg!(feature = "dev-tools") && rl.is_key_pressed(KeyboardKey::KEY_I),
-        };
+        player1.move_dir = player1.move_dir.or(touch_intent.move_dir);
+        player1.fire = player1.fire || touch_intent.fire;
+        let mut input = Input::two(player1, player2);
+        input.pause_pressed = rl.is_key_pressed(KeyboardKey::KEY_P);
+        // The dev panel's "Restart round" button lands here too, as if R
+        // had been pressed - the simulation never learns a browser exists.
+        input.restart_pressed = rl.is_key_pressed(KeyboardKey::KEY_R) || tuning::take_restart_request();
+        input.toggle_shadows_pressed = rl.is_key_pressed(KeyboardKey::KEY_L);
+        // The I key is inert in a release build: overlays are dev-only.
+        input.cycle_overlays_pressed = cfg!(feature = "dev-tools") && rl.is_key_pressed(KeyboardKey::KEY_I);
+        // A press from a frame that ran no step is still owed to the
+        // next one.
+        let input = input.or_presses(carried);
         // Injected input (the dev server's `input` tool) replaces the
         // keyboard's intent for as many frames as it asked.
         #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
@@ -1029,15 +1354,38 @@ pub fn run(args: Args) {
             None => input,
         };
 
-        // With the dev server attached it owns the advance: real-time
-        // updates normally, lockstep `step`s at the fixed timestep when
-        // asked, nothing at all while frozen. While the leave dialog is up
-        // nobody advances.
+        // Online: this seat's own intent goes to the room and the
+        // replica is written from what came back. Seat 0 of the frame's
+        // input is the local player, whichever seat the room gave them.
+        // Nothing here runs `Game::update`, and the local round is left
+        // exactly where it stood.
+        if session.mode() == Driver::Online {
+            let intent = input.seat(0);
+            session.update_online(&intent, dt);
+        }
+
+        // The round advances in whole steps of `PHYSICS_FIXED_DT`, as many
+        // as this frame's real time pays for (`StepClock`), every step on
+        // this frame's input with the one-shot presses spent by the first.
+        // With the dev server attached it runs those steps, or a lockstep
+        // `step`'s own frames, or nothing while frozen - and a frozen or
+        // dialog frame leaves the clock at zero, so the round resumes on a
+        // fresh step rather than catching up on the time it stood still.
         if session.playing() {
+            #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+            let frozen = dev.as_ref().is_some_and(|dev| dev.lockstep());
+            #[cfg(not(all(feature = "dev-tools", not(target_os = "emscripten"))))]
+            let frozen = false;
+            let steps = if frozen {
+                clock.reset();
+                0
+            } else {
+                clock.advance(dt)
+            };
             #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
             let advanced = match &mut dev {
                 Some(dev) => {
-                    dev.advance(&mut session.game, input, dt, width, height);
+                    dev.advance(&mut session.game, input, steps, width, height, &mut |game| fx.observe_events(game));
                     true
                 }
                 None => false,
@@ -1045,13 +1393,26 @@ pub fn run(args: Args) {
             #[cfg(not(all(feature = "dev-tools", not(target_os = "emscripten"))))]
             let advanced = false;
             if !advanced {
-                session.game.update(input, dt, width, height);
+                for i in 0..steps {
+                    let step_input = if i == 0 { input } else { input.held_only() };
+                    session.game.update(step_input, PHYSICS_FIXED_DT, width, height);
+                    // The particle layer reads each step's events before
+                    // the next step clears them.
+                    fx.observe_events(&session.game);
+                }
             }
+            carried = if steps == 0 && !frozen { input } else { Input::default() };
+        } else {
+            clock.reset();
+            carried = Input::default();
         }
-        let game = &session.game;
-        // Between the update and the draw: the particle layer reads the
-        // frame's events and the world it just produced, then ages what is
-        // already in flight. Deliberately not inside `Game` - see fx.rs.
+        // The round on screen: the room's replica in an online round,
+        // the session's own otherwise.
+        let game = session.shown();
+        // Between the steps and the draw: the particle layer samples the
+        // world the round is at (its events it read after each step),
+        // then ages what is already in flight. Deliberately not inside
+        // `Game` - see fx.rs.
         fx.observe(game, dt);
         fx.tick(dt);
         game.render(
@@ -1066,7 +1427,9 @@ pub fn run(args: Args) {
                 muzzle: &mut muzzle_fx,
                 impact: &mut impact_fx,
                 fx: &fx,
-                touch: Some((&touch, steer_right)),
+                // No stick over the lobby: the field behind it is frozen
+                // and every press there belongs to the screen.
+                touch: (session.mode() != Driver::Lobby).then_some((&touch, steer_right)),
             },
             &Textures {
                 tanks: &tanks_texture,
@@ -1079,7 +1442,7 @@ pub fn run(args: Args) {
                 obstacles: &obstacles_texture,
                 props: &props_texture,
                 barrel_explosion: &barrel_explosion_texture,
-                ground: &ground_textures[theme_index(session.game.map.theme)],
+                ground: &ground_textures[theme_index(game.map.theme)],
                 frog_variants: &frog_textures,
                 pickup_health: &pickup_health_texture,
                 pickup_ammo: &pickup_ammo_texture,
@@ -1093,7 +1456,7 @@ pub fn run(args: Args) {
                 pickup_frog_health: &pickup_frog_health_texture,
                 minigun_mount: &minigun_mount_texture,
                 missile_pod: &missile_pod_texture,
-                grass: &grass_textures[theme_index(session.game.map.theme)],
+                grass: &grass_textures[theme_index(game.map.theme)],
                 trees: &trees_texture,
                 portal: &portal_texture,
             },
@@ -1103,7 +1466,7 @@ pub fn run(args: Args) {
         // A pending screenshot reads the frame just presented.
         #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
         if let Some(dev) = &mut dev {
-            dev.after_render(rl, thread, &scene_target, &session.game);
+            dev.after_render(rl, thread, &scene_target, session.shown());
         }
     });
 }
@@ -1145,5 +1508,41 @@ impl FrameStats {
             );
             *self = Self { last_report: now, ..Self::default() };
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A 120 Hz display pays for a step every other frame, a 60 Hz one
+    /// every frame, and the round never falls behind either: over a second
+    /// both run sixty steps.
+    #[test]
+    fn the_step_clock_pays_real_time_out_in_whole_steps() {
+        let mut clock = StepClock::default();
+        let per_frame: Vec<u32> = (0..8).map(|_| clock.advance(1.0 / 120.0)).collect();
+        assert_eq!(per_frame, vec![0, 1, 0, 1, 0, 1, 0, 1]);
+        let mut clock = StepClock::default();
+        assert!((0..600).all(|_| clock.advance(1.0 / 60.0) == 1), "one step per 60 Hz frame, no drift");
+        let mut clock = StepClock::default();
+        assert_eq!((0..120).map(|_| clock.advance(1.0 / 120.0)).sum::<u32>(), 60);
+        let mut clock = StepClock::default();
+        assert!((0..30).all(|_| clock.advance(1.0 / 30.0) == 2), "two steps per 30 Hz frame");
+    }
+
+    /// A stall runs the cap and forgets the rest: the next frame owes
+    /// nothing extra, and a reset clock owes nothing at all.
+    #[test]
+    fn the_step_clock_caps_a_stall_and_drops_the_remainder() {
+        let mut clock = StepClock::default();
+        assert_eq!(clock.advance(2.0), SIM_MAX_STEPS_PER_FRAME);
+        assert_eq!(clock.advance(0.0), 0);
+        assert_eq!(clock.advance(1.0 / 60.0), 1);
+        let mut clock = StepClock::default();
+        clock.advance(0.9 / 60.0);
+        clock.reset();
+        assert_eq!(clock.advance(0.2 / 60.0), 0, "a reset forgets the time owed");
+        assert_eq!(clock.advance(-1.0), 0, "a negative dt owes nothing");
     }
 }
