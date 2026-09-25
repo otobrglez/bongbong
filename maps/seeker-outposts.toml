@@ -1,0 +1,128 @@
+# seeker-outposts: a desert showcase for the seeker missiles. Hand-authored:
+# re-saving from the map editor would drop these comments. Level keys are
+# dotted on purpose - a `[mission]`/`[spawn]` header would swallow every
+# `cells.` line after it.
+#
+# Destroy on the band plan, six tanks. West to east:
+#   - The player's camp on the west edge: the start, two seeker-missile
+#     pickups flanking it, ammo and health behind it, a caravan track
+#     running east along the middle row.
+#   - A small oasis north of the track (a stream with reeds and two palms)
+#     and a dry wash of scrub south of it.
+#   - Six outposts spread over the east two thirds, each dug in behind cover
+#     that faces the camp: brick walls north and south, an iron barrier in
+#     the middle, sandbag berms, a fenced depot. A shell from the camp stops
+#     on the cover; a missile flies over it and comes down on whoever sits
+#     behind. Fuel and oil drums beside four of them chain the blasts.
+# Obstacles stand three free cells apart so every lane routes (the nav grid
+# pads a solid cell one cell to its left and above).
+
+version = 1
+size = [34, 17]
+theme = "desert"
+tanks = 6
+tank = "titan"
+mission.kind = "destroy"
+spawn.kind = "band"
+
+cells."5,8" = { kind = "start" }
+
+cells."6,5" = { kind = "pickup", pickup = "missiles" }
+cells."6,11" = { kind = "pickup", pickup = "missiles" }
+cells."2,4" = { kind = "pickup", pickup = "ammo" }
+cells."2,12" = { kind = "pickup", pickup = "health" }
+cells."17,8" = { kind = "pickup", pickup = "shield" }
+
+# The caravan track along the middle row.
+cells."1,8" = { kind = "road" }
+cells."2,8" = { kind = "road" }
+cells."3,8" = { kind = "road" }
+cells."4,8" = { kind = "road" }
+cells."6,8" = { kind = "road" }
+cells."7,8" = { kind = "road" }
+cells."8,8" = { kind = "road" }
+cells."9,8" = { kind = "road" }
+cells."10,8" = { kind = "road" }
+cells."11,8" = { kind = "road" }
+cells."12,8" = { kind = "road" }
+cells."13,8" = { kind = "road" }
+cells."14,8" = { kind = "road" }
+cells."15,8" = { kind = "road" }
+cells."16,8" = { kind = "road" }
+cells."18,8" = { kind = "road" }
+cells."18,9" = { kind = "road" }
+cells."18,10" = { kind = "road" }
+cells."19,10" = { kind = "road" }
+cells."20,10" = { kind = "road" }
+cells."21,10" = { kind = "road" }
+cells."22,10" = { kind = "road" }
+cells."23,10" = { kind = "road" }
+cells."24,10" = { kind = "road" }
+cells."25,10" = { kind = "road" }
+cells."26,10" = { kind = "road" }
+cells."27,10" = { kind = "road" }
+cells."28,10" = { kind = "road" }
+cells."29,10" = { kind = "road" }
+cells."30,10" = { kind = "road" }
+cells."31,10" = { kind = "road" }
+cells."32,10" = { kind = "road" }
+
+# The oasis: a short north-south stream with reeds and palms.
+cells."10,2" = { kind = "water" }
+cells."10,3" = { kind = "water" }
+cells."10,4" = { kind = "water" }
+cells."9,3" = { kind = "tall_grass" }
+cells."11,3" = { kind = "tall_grass" }
+cells."9,4" = { kind = "tall_grass" }
+cells."11,5" = { kind = "tall_grass" }
+cells."8,1" = { kind = "tree" }
+cells."12,1" = { kind = "pine" }
+
+# The dry wash south of the track.
+cells."9,12" = { kind = "tall_grass" }
+cells."10,12" = { kind = "tall_grass" }
+cells."10,13" = { kind = "tall_grass" }
+cells."11,14" = { kind = "tall_grass" }
+cells."8,15" = { kind = "pine" }
+
+# Outpost 1, north: a brick wall facing west, a fuel drum behind it.
+cells."16,1" = { kind = "wall", material = "brick" }
+cells."16,2" = { kind = "wall", material = "brick" }
+cells."16,3" = { kind = "wall", material = "brick" }
+cells."20,1" = { kind = "barrel", drum = "fuel" }
+
+# Outpost 2, south: a brick wall facing west, an oil drum behind it.
+cells."15,11" = { kind = "wall", material = "brick" }
+cells."15,12" = { kind = "wall", material = "brick" }
+cells."15,13" = { kind = "wall", material = "brick" }
+cells."19,13" = { kind = "barrel", drum = "oil" }
+
+# Outpost 3, the middle: an iron barrier nothing shoots through.
+cells."21,5" = { kind = "wall", material = "iron" }
+cells."21,6" = { kind = "wall", material = "iron" }
+cells."21,7" = { kind = "wall", material = "iron" }
+
+# Outpost 4, north-east: a sandbag berm.
+cells."25,1" = { kind = "sandbag" }
+cells."25,2" = { kind = "sandbag" }
+cells."25,3" = { kind = "sandbag" }
+
+# Outpost 5, south-east: a fenced depot with two fuel drums.
+cells."25,13" = { kind = "fence" }
+cells."25,14" = { kind = "fence" }
+cells."25,15" = { kind = "fence" }
+cells."29,15" = { kind = "barrel", drum = "fuel" }
+cells."30,15" = { kind = "barrel", drum = "fuel" }
+
+# Outpost 6, the far east: a brick bunker wall, an oil drum in the corner.
+cells."29,5" = { kind = "wall", material = "brick" }
+cells."29,6" = { kind = "wall", material = "brick" }
+cells."29,7" = { kind = "wall", material = "brick" }
+cells."32,2" = { kind = "barrel", drum = "oil" }
+
+# Scattered scrub.
+cells."22,2" = { kind = "tall_grass" }
+cells."22,3" = { kind = "tall_grass" }
+cells."21,13" = { kind = "tall_grass" }
+cells."22,14" = { kind = "tall_grass" }
+cells."31,12" = { kind = "tall_grass" }

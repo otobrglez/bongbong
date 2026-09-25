@@ -31,6 +31,14 @@ snapped, loud/high-contrast treatment. A filled lightning-bolt polygon
 universal "speed boost" symbol, distinct from the other three's beam/
 sparks/orb. Regenerate with `python3 tools/gen_speedup_pickup.py`.
 
+`missiles.png` is likewise not from the pack - generated from scratch by
+`tools/gen_missiles_pickup.py`, same raw-PNG-bytes/no-Pillow convention and
+the same loud/high-contrast treatment. A volley of four small missiles side
+by side, staggered as if they left their tubes a beat apart - lime bodies
+(the HUD's `HUD_MISSILES_COLOR`), red noses and fins, a flame under each -
+the seeker pod's volley, distinct from the minigun's sparks and the plasma's
+orb. Regenerate with `python3 tools/gen_missiles_pickup.py`.
+
 `flamethrower.png` is likewise not from the pack - generated from scratch by
 `tools/gen_flamethrower_pickup.py`, same raw-PNG-bytes/no-Pillow convention
 and the same loud/high-contrast treatment. A dark fuel drum with a short

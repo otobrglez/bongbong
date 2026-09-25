@@ -70,6 +70,8 @@ fn main() {
     let trees = load(&mut rl, "static/trees_sheet.png");
     let portal = load(&mut rl, "static/portal_sheet.png");
     let minigun_mount = load(&mut rl, "static/minigun_mount.png");
+    let missile_pod = load(&mut rl, "static/missile_pod.png");
+    let missile = load(&mut rl, "static/missile.png");
     let damage = load(&mut rl, "static/damage.png");
     let tracks = load(&mut rl, "static/tracks.png");
     let obstacles = load(&mut rl, "static/walls_sheet.png");
@@ -83,6 +85,7 @@ fn main() {
     let pickup_laser = pickup(&mut rl, "laser");
     let pickup_minigun = pickup(&mut rl, "minigun");
     let pickup_plasma = pickup(&mut rl, "plasma");
+    let pickup_missiles = pickup(&mut rl, "missiles");
     let pickup_speedup = pickup(&mut rl, "speedup");
     let pickup_shield = pickup(&mut rl, "shield");
     let pickup_flamethrower = pickup(&mut rl, "flamethrower");
@@ -162,10 +165,12 @@ fn main() {
             shells: &shells,
             plasma: &plasma,
             minigun_bullets: &minigun_bullets,
+            missile: &missile,
             grass: &grass,
             trees: &trees,
             portal: &portal,
             minigun_mount: &minigun_mount,
+            missile_pod: &missile_pod,
             damage: &damage,
             tracks: &tracks,
             obstacles: &obstacles,
@@ -178,6 +183,7 @@ fn main() {
             pickup_laser: &pickup_laser,
             pickup_minigun: &pickup_minigun,
             pickup_plasma: &pickup_plasma,
+            pickup_missiles: &pickup_missiles,
             pickup_speedup: &pickup_speedup,
             pickup_shield: &pickup_shield,
             pickup_flamethrower: &pickup_flamethrower,
@@ -236,6 +242,7 @@ fn main() {
                             pickup_laser: &pickup_laser,
                             pickup_minigun: &pickup_minigun,
                             pickup_plasma: &pickup_plasma,
+                            pickup_missiles: &pickup_missiles,
                             pickup_speedup: &pickup_speedup,
                             pickup_shield: &pickup_shield,
                             pickup_flamethrower: &pickup_flamethrower,

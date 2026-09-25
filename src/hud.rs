@@ -49,11 +49,14 @@ pub fn version_line() -> String {
     format!("v{} @otobrglez", env!("CARGO_PKG_VERSION"))
 }
 
-/// Accent colours for the three special weapons: their count in the bar
-/// always, their slot's outline while that weapon is the live one.
+/// Accent colours for the special weapons: their count in the bar always,
+/// their slot's outline while that weapon is the live one.
 pub const HUD_LASER_COLOR: Color = Color::new(255, 60, 160, 255);
 pub const HUD_PLASMA_COLOR: Color = Color::new(60, 220, 200, 255);
 pub const HUD_MINIGUN_COLOR: Color = Color::new(190, 205, 215, 255);
+/// Seeker missiles: the pickup icon's lime, clear of the speed gauge's
+/// yellow and the flamethrower's orange.
+pub const HUD_MISSILES_COLOR: Color = Color::new(190, 240, 70, 255);
 /// The flamethrower's accent: fuel-orange, the fire ramp's middle.
 pub const HUD_FLAME_COLOR: Color = Color::new(255, 140, 40, 255);
 
@@ -115,12 +118,12 @@ const SLOTS_ONE: Slots = Slots {
     shells: 368,
     weapons: 408,
     weapon_slot_w: 72,
-    bars: 700,
+    bars: 772,
     hp_w: 3 * CHAR_W,
     count_w: 3 * CHAR_W,
 };
 
-/// Two players: every pair - HP, shells and the four weapons - is set in
+/// Two players: every pair - HP, shells and the five weapons - is set in
 /// the small font (`CHAR_W_SMALL`) so the whole row still ends before the
 /// gauges on the 960 px bar.
 const SLOTS_TWO: Slots = Slots {
@@ -132,14 +135,14 @@ const SLOTS_TWO: Slots = Slots {
     shells: 374,
     weapons: 412,
     weapon_slot_w: 72,
-    bars: 704,
+    bars: 776,
     hp_w: 7 * CHAR_W_SMALL,
     count_w: 5 * CHAR_W_SMALL,
 };
 
-/// Weapon slots, in bar order. Four of them: laser, plasma, minigun,
-/// flamethrower.
-pub const WEAPON_SLOTS: usize = 4;
+/// Weapon slots, in bar order. Five of them: laser, plasma, minigun,
+/// missiles, flamethrower.
+pub const WEAPON_SLOTS: usize = 5;
 
 impl Slots {
     /// Width of the shells readout: `20|20` in the full font with two
@@ -157,7 +160,7 @@ impl Slots {
     }
 }
 
-/// One of the three special-weapon slots.
+/// One of the special-weapon slots.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WeaponSlot {
     pub weapon: ActiveWeapon,
@@ -193,7 +196,13 @@ impl PlayerHud {
             shells: 0,
             shells_color: hud_number_color(0.0, tuning().max_shells as f32),
             shells_active: false,
-            weapons: [slot(ActiveWeapon::Laser), slot(ActiveWeapon::Plasma), slot(ActiveWeapon::Minigun), slot(ActiveWeapon::Flamethrower)],
+            weapons: [
+                slot(ActiveWeapon::Laser),
+                slot(ActiveWeapon::Plasma),
+                slot(ActiveWeapon::Minigun),
+                slot(ActiveWeapon::Missiles),
+                slot(ActiveWeapon::Flamethrower),
+            ],
             speed: 0.0,
             shield: 0.0,
         }
@@ -222,6 +231,7 @@ impl PlayerHud {
                     WeaponSlot { weapon: ActiveWeapon::Laser, count: tank.laser_charges, active: active == ActiveWeapon::Laser },
                     WeaponSlot { weapon: ActiveWeapon::Plasma, count: tank.plasma_ammo, active: active == ActiveWeapon::Plasma },
                     WeaponSlot { weapon: ActiveWeapon::Minigun, count: tank.minigun_ammo, active: active == ActiveWeapon::Minigun },
+                    WeaponSlot { weapon: ActiveWeapon::Missiles, count: tank.missile_ammo, active: active == ActiveWeapon::Missiles },
                     // Fuel in whole seconds, rounded up.
                     WeaponSlot { weapon: ActiveWeapon::Flamethrower, count: tank.flame_fuel_seconds(), active: active == ActiveWeapon::Flamethrower },
                 ],
@@ -301,6 +311,7 @@ pub fn weapon_color(weapon: ActiveWeapon) -> Color {
         ActiveWeapon::Laser => HUD_LASER_COLOR,
         ActiveWeapon::Plasma => HUD_PLASMA_COLOR,
         ActiveWeapon::Minigun => HUD_MINIGUN_COLOR,
+        ActiveWeapon::Missiles => HUD_MISSILES_COLOR,
         ActiveWeapon::Flamethrower => HUD_FLAME_COLOR,
         ActiveWeapon::Shell => TEXT,
     }
@@ -369,6 +380,7 @@ pub fn draw_bar(d: &mut impl RaylibDraw, panel: Rect, model: &HudModel, textures
             ActiveWeapon::Laser => textures.pickup_laser,
             ActiveWeapon::Plasma => textures.pickup_plasma,
             ActiveWeapon::Minigun => textures.pickup_minigun,
+            ActiveWeapon::Missiles => textures.pickup_missiles,
             ActiveWeapon::Flamethrower => textures.pickup_flamethrower,
             ActiveWeapon::Shell => textures.shells,
         };
@@ -394,7 +406,7 @@ pub fn draw_bar(d: &mut impl RaylibDraw, panel: Rect, model: &HudModel, textures
                 }
             }
             Some(p2) => {
-                // The small font: four pairs have to fit before the gauges.
+                // The small font: five pairs have to fit before the gauges.
                 let (a, ac) = count_of(slot);
                 let (b, bc) = count_of(p2.weapons[i]);
                 let small_y = py + (ph - HUD_SMALL_TEXT_SIZE) / 2;
@@ -745,7 +757,7 @@ mod hud_tests {
             assert!(s.shell + SHELL_TEXTURE_SIZE as i32 <= s.shells, "{name}");
             assert!(s.shells + s.count_w <= s.weapons, "{name}: shells run into the weapons");
             assert!(PICKUP_TEXTURE_SIZE as i32 + 4 + s.count_w <= s.weapon_slot_w, "{name}: a weapon count overflows its slot");
-            assert!(s.weapons + WEAPON_SLOTS as i32 * s.weapon_slot_w <= s.bars, "{name}: four weapon slots run into the gauges");
+            assert!(s.weapons + WEAPON_SLOTS as i32 * s.weapon_slot_w <= s.bars, "{name}: the weapon slots run into the gauges");
             assert!(BAR_W <= BAR_SLOT_W);
             assert!(s.bars + 3 * BAR_SLOT_W <= crate::DEFAULT_SCREEN_WIDTH);
             let button = players_button_rect(default_panel());

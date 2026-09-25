@@ -59,6 +59,8 @@ pub enum Sheet {
     Damage,
     /// static/minigun_mount.png - the barrel cluster on a turret.
     MinigunMount,
+    /// static/missile_pod.png - the seeker-missile pod on a turret.
+    MissilePod,
     /// static/tracks.png - one tread mark.
     Tracks,
     /// static/barrel_explosion.png - the blast frames and scorches (blast.rs).
@@ -72,14 +74,15 @@ pub enum Sheet {
     Frog { variant: u8, clip: FrogAnim },
 }
 
-/// The nine sheets that are one file each regardless of theme.
-pub const SINGLE_SHEETS: [Sheet; 9] = [
+/// The ten sheets that are one file each regardless of theme.
+pub const SINGLE_SHEETS: [Sheet; 10] = [
     Sheet::Tanks,
     Sheet::Walls,
     Sheet::Props,
     Sheet::Trees,
     Sheet::Damage,
     Sheet::MinigunMount,
+    Sheet::MissilePod,
     Sheet::Tracks,
     Sheet::BarrelExplosion,
     Sheet::Portal,
@@ -87,12 +90,13 @@ pub const SINGLE_SHEETS: [Sheet; 9] = [
 
 /// Every pickup kind, each its own sheet (`pickup_file` is exhaustive over
 /// the enum, so a new kind without a row here fails to compile there).
-pub const PICKUP_KINDS: [PickupKind; 9] = [
+pub const PICKUP_KINDS: [PickupKind; 10] = [
     PickupKind::Health,
     PickupKind::Ammo,
     PickupKind::Laser,
     PickupKind::Minigun,
     PickupKind::Plasma,
+    PickupKind::Missiles,
     PickupKind::SpeedUp,
     PickupKind::Shield,
     PickupKind::Flamethrower,
@@ -115,6 +119,7 @@ impl Sheet {
             Sheet::Grass(theme) => theme.grass_texture_path().into(),
             Sheet::Damage => "static/damage.png".into(),
             Sheet::MinigunMount => "static/minigun_mount.png".into(),
+            Sheet::MissilePod => "static/missile_pod.png".into(),
             Sheet::Tracks => "static/tracks.png".into(),
             Sheet::BarrelExplosion => "static/barrel_explosion.png".into(),
             Sheet::Portal => "static/portal_sheet.png".into(),
@@ -148,6 +153,7 @@ fn pickup_file(kind: PickupKind) -> &'static str {
         PickupKind::Laser => "laser",
         PickupKind::Minigun => "minigun",
         PickupKind::Plasma => "plasma",
+        PickupKind::Missiles => "missiles",
         PickupKind::SpeedUp => "speedup",
         PickupKind::Shield => "shield",
         PickupKind::Flamethrower => "flamethrower",

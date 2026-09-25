@@ -830,6 +830,34 @@ pub const MINIGUN_MOUNT_TEXTURE_SIZE: f32 = 32.0;
 // is what to tune if the mount should read bigger/smaller overall.
 pub const MINIGUN_MOUNT_SCALE: f32 = 1.0;
 
+// --- Seeker missiles (missile.rs), tools/spritegen/gen_missiles.py ---
+// static/missile.png: MISSILE_FRAMES cells of MISSILE_TEXTURE_SIZE in one
+// row, the missile pointing up (rotation 0) with its exhaust flame below,
+// the frames differing only in the flame's flicker. Authored as 16 design
+// px doubled to 32, the tanks' density, and drawn at 0.8 - so a missile on
+// the ground still reads a little bigger than a shell without crowding a
+// salvo, and `missile_apex_draw_scale` grows it further at the top of its
+// climb.
+pub const MISSILE_TEXTURE_SIZE: f32 = 32.0;
+pub const MISSILE_SCALE: f32 = 0.8;
+pub const MISSILE_FRAMES: i32 = 4;
+// static/missile_pod.png: the four-tube launcher on the turret while a tank
+// holds missile ammo (tank.rs's draw_missile_pod), laid out and pivoted
+// exactly like minigun_mount.png. Column k shows k tubes empty
+// (MISSILE_POD_FRAMES = 0..=4), so the pod visibly empties through a volley
+// and refills through the reload (Tank::missile_tubes_empty).
+pub const MISSILE_POD_TEXTURE_SIZE: f32 = 32.0;
+pub const MISSILE_POD_FRAMES: i32 = 5;
+// The four tube mouths' lateral offsets from the turret pivot in pod design
+// px (the pod is drawn at Tank::scale, so screen px are twice these),
+// leftmost first - where each missile of a volley leaves from. Two pairs
+// either side of a centre spine, matching the tube columns gen_missiles.py
+// draws (pixels 9-10, 12-13, 18-19, 21-22 around the pivot at 16).
+pub const MISSILE_TUBE_OFFSETS: [f32; 4] = [-6.0, -3.0, 3.0, 6.0];
+// How far ahead of the pivot the tube mouths are, in pod design px (the
+// pod's front edge, row 5).
+pub const MISSILE_TUBE_FORWARD: f32 = 11.0;
+
 pub const PLASMA_TEXTURE_SIZE: f32 = 32.0;
 // Bigger than SHELL_SCALE (2.0) - a plasma bolt reads as visibly larger and
 // heavier than a normal shell, matching its bigger damage per hit. Also
@@ -915,6 +943,7 @@ pub mod map;
 pub mod mushroom;
 pub mod mode;
 pub mod maplint;
+pub mod missile;
 pub mod obstacle;
 pub mod pathfind;
 pub mod physics;

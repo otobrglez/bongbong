@@ -40,6 +40,9 @@ pub enum ParticleKind {
     /// A droplet thrown up by a hull wading (docs/water.md): arcs up and
     /// falls back, gone the moment it lands - water does not bounce.
     Spray,
+    /// A puff of a seeker missile's smoke trail: hangs in the air where
+    /// the missile left it, swells a little and pales away.
+    Trail,
 }
 
 impl ParticleKind {
@@ -80,6 +83,10 @@ pub struct Fx {
     /// Owner slots of the hulls that were wading last frame, so the frame
     /// one wades in gets a splash rather than only the running spray.
     wading: HashSet<usize>,
+    /// Where each missile in the air (by its key from `Game::missiles`)
+    /// last laid a trail puff: the trail is laid by distance flown, so it
+    /// stays a continuous line at any speed and frame rate.
+    trail_last: HashMap<u32, Position>,
 }
 
 impl Fx {
@@ -94,6 +101,7 @@ impl Fx {
         self.particles.clear();
         self.accum.clear();
         self.wading.clear();
+        self.trail_last.clear();
     }
 
     fn push(&mut self, p: Particle) {
@@ -172,6 +180,7 @@ impl Fx {
                 ParticleKind::Smoke => (tuning().smoke_lifetime, FX_GRID * 2.0, 0.0),
                 ParticleKind::Ember => (tuning().ember_lifetime, FX_GRID, 0.0),
                 ParticleKind::Spray => (tuning().chip_lifetime, FX_GRID, -rng.random_range(50.0..130.0)),
+                ParticleKind::Trail => (tuning().missile_trail_seconds, FX_GRID * 2.0, 0.0),
             };
             self.push(Particle {
                 pos: at,
@@ -185,6 +194,26 @@ impl Fx {
                 kind,
             });
         }
+    }
+
+    /// One puff of a missile's smoke trail at `at`, drifting a touch so
+    /// the line frays as it thins.
+    fn trail_puff(&mut self, at: Position) {
+        let mut rng = rand::rng();
+        let a = rng.random_range(0.0..std::f32::consts::TAU);
+        let s = rng.random_range(0.0..6.0);
+        let tints = [WHITE_T, STONE_LT];
+        self.push(Particle {
+            pos: at,
+            vel: Vector2::new(a.cos() * s, a.sin() * s),
+            z: 0.0,
+            vz: 0.0,
+            age: 0.0,
+            life: tuning().missile_trail_seconds * rng.random_range(0.75..1.25),
+            size: FX_GRID * 2.0,
+            tint: tints[rng.random_range(0..tints.len())],
+            kind: ParticleKind::Trail,
+        });
     }
 
     /// What a destroyed tile throws off, by material. The colours are the
@@ -335,6 +364,13 @@ impl Fx {
                         self.burst(Position::new(x, y), ParticleKind::Spark, self.count(10), 60.0, &[HEAL_T, WHITE_T]);
                         self.burst(Position::new(x, y), ParticleKind::Ember, self.count(4), 26.0, &[HEAL_T]);
                     }
+                    // A seeker missile coming down: a tight fireball's
+                    // worth of sparks and a puff, a volley's four in a row.
+                    Event::MissileBlast { x, y, .. } => {
+                        self.burst(Position::new(x, y), ParticleKind::Spark, self.count(10), 150.0, &[FIRE_T, EMBER_T, WHITE_T]);
+                        self.burst(Position::new(x, y), ParticleKind::Smoke, self.count(4), 30.0, &[SMOKE_T]);
+                        self.splash_if_wet(game, Position::new(x, y), 8);
+                    }
                     Event::CookOff { x, y } => {
                         self.burst(Position::new(x, y), ParticleKind::Spark, self.count(8), 120.0, &[FIRE_T, EMBER_T]);
                     }
@@ -448,6 +484,32 @@ impl Fx {
                 }
             }
         }
+        // Seeker missiles lay a smoke trail through the air: a puff every
+        // `missile_trail_spacing` px of flight, filled in along the whole
+        // segment since the last one so a fast missile draws a line, not
+        // dots. A spark off the motor now and then.
+        let spacing = tuning().missile_trail_spacing;
+        let mut flying = HashSet::new();
+        for (id, tail, _lift) in game.missiles() {
+            flying.insert(id);
+            if spacing <= 0.0 {
+                continue;
+            }
+            let from = *self.trail_last.entry(id).or_insert(tail);
+            let d = from.distance_to(tail);
+            let steps = ((d / spacing) as usize).min(64);
+            for k in 1..=steps {
+                let at = from + (tail - from) * (k as f32 * spacing / d);
+                self.trail_puff(at);
+            }
+            if steps > 0 {
+                self.trail_last.insert(id, from + (tail - from) * (steps as f32 * spacing / d));
+            }
+            if self.due(0x3155_0000 ^ id, 8.0 * tuning().fx_density, dt) {
+                self.burst(tail, ParticleKind::Spark, 1, 40.0, &[FIRE_T, EMBER_T]);
+            }
+        }
+        self.trail_last.retain(|id, _| flying.contains(id));
         // A hull with afterburn on it burns like a wreck does, until the
         // timer runs out.
         let (flame_rate, wsmoke_rate) = (tuning().wreck_flame_rate, tuning().wreck_smoke_rate);
@@ -561,6 +623,8 @@ impl Fx {
                     p.z += rise * dt;
                     p.size += growth * dt;
                 }
+                // Swells to about three blocks over its life.
+                ParticleKind::Trail => p.size += FX_GRID * 2.0 * dt / p.life.max(0.05),
                 ParticleKind::Spray => {
                     p.vz += gravity * dt;
                     p.z -= p.vz * dt;
@@ -626,6 +690,8 @@ fn snap(v: f32) -> i32 {
 const FIRE_RAMP: [Color; 4] = [WHITE_T, FIRE_T, EMBER_T, DEEP_T];
 /// Smoke lightens and thins as it rises and cools.
 const SMOKE_RAMP: [Color; 3] = [SMOKE_DK, SMOKE_MD, SMOKE_LT];
+/// A missile's trail is white where it was just laid and greys as it thins.
+const TRAIL_RAMP: [Color; 3] = [WHITE_T, STONE_LT, STONE_MD];
 
 fn ramp_pick(ramp: &[Color], t: f32) -> Color {
     let i = ((t * ramp.len() as f32) as usize).min(ramp.len() - 1);
@@ -637,6 +703,7 @@ fn draw_particle(d: &mut impl RaylibDraw, p: &Particle) {
     let base = match p.kind {
         ParticleKind::Spark | ParticleKind::Ember => ramp_pick(&FIRE_RAMP, t),
         ParticleKind::Smoke => ramp_pick(&SMOKE_RAMP, t),
+        ParticleKind::Trail => ramp_pick(&TRAIL_RAMP, t),
         // A chip or a dust mote keeps the colour of whatever it came off.
         _ => p.tint,
     };
@@ -646,6 +713,7 @@ fn draw_particle(d: &mut impl RaylibDraw, p: &Particle) {
     let fade = ((1.0 - t) * levels).ceil() / levels;
     let opacity = match p.kind {
         ParticleKind::Smoke => fade * tuning().smoke_opacity,
+        ParticleKind::Trail => fade * tuning().missile_trail_opacity,
         // Fire holds full brightness and dies by stepping down the ramp
         // rather than by dimming.
         ParticleKind::Spark | ParticleKind::Ember => if t < 0.85 { 1.0 } else { 0.5 },
