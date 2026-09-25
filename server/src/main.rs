@@ -3,8 +3,9 @@
 //! (`just run-server`); the container runs the same binary on `0.0.0.0`.
 //! **One instance holds every room**, so there is nothing to configure
 //! about where a room lives. SIGTERM drains: no new rooms, `/health` 503,
-//! the rounds in progress finish, exit when the last ends or after
-//! `DRAIN_MAX`; Ctrl-C exits at once.
+//! every room without a round in play closes at once, the rounds in play
+//! finish, exit when the last ends or after `DRAIN_MAX`; Ctrl-C exits at
+//! once.
 
 use std::io::IsTerminal;
 use std::net::SocketAddr;

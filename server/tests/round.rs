@@ -1169,3 +1169,55 @@ async fn both_seats_of_a_co_op_room_can_shoot() {
     // the two counts above.
     assert_eq!(guest_by_host, pulls, "the host saw only {guest_by_host} of the guest's {pulls} shells");
 }
+
+/// Read `ws` until the server closes it, however much stands in the way.
+async fn closed_by_server(ws: &mut Client) {
+    let give_up = Instant::now() + WAIT;
+    while Instant::now() < give_up {
+        let left = give_up.saturating_duration_since(Instant::now());
+        match tokio::time::timeout(left, ws.next()).await {
+            Ok(None | Some(Ok(Message::Close(_))) | Some(Err(_))) => return,
+            Ok(Some(Ok(_))) => continue,
+            Err(_) => break,
+        }
+    }
+    panic!("the server kept the socket open");
+}
+
+/// A drain waits for a round being played and nothing else: the waiting
+/// room goes at once, with its host told why, the round in progress plays
+/// on, and once its last seat drops the server has nothing left to wait for.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_drain_closes_idle_rooms_at_once_and_waits_only_for_a_round_in_play() {
+    let (_addr, hub) = start_server().await;
+    let addr = _addr;
+    let mut idle = connect(addr).await;
+    send(&mut idle, &create(1)).await;
+    let _ = expect_welcome(&mut idle).await;
+    let mut playing = connect(addr).await;
+    send(&mut playing, &create(2)).await;
+    let _ = expect_welcome(&mut playing).await;
+    send(&mut playing, &Msg::Lobby(Lobby::Start)).await;
+    let _ = start_of_round(&mut playing).await;
+    assert_eq!(hub.room_count(), 2);
+
+    hub.begin_drain();
+    let why = expect_lobby_error(&mut idle).await;
+    assert!(why.contains("restarting"), "{why}");
+    closed_by_server(&mut idle).await;
+    let give_up = Instant::now() + WAIT;
+    while hub.room_count() > 1 && Instant::now() < give_up {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(hub.room_count(), 1, "the waiting room went though its host was still connected");
+    let tick = expect(&mut playing, "a snapshot after the drain began", |m| match m {
+        Msg::Snapshot(s) => Ok(s.tick),
+        Msg::Delta(d) => Ok(d.tick),
+        other => Err(other),
+    })
+    .await;
+    assert!(tick > 0, "the round in play keeps ticking");
+
+    drop(playing);
+    tokio::time::timeout(WAIT, hub.drained()).await.expect("the paused round is not waited for");
+}

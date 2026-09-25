@@ -67,10 +67,14 @@ just rooms-manifests    # what would be applied, without applying it
 just rooms-logs         # follow the room server's logs
 ```
 
-**A deploy with rounds in progress is slow on purpose.** `Recreate` waits
-for the old pod, and the old pod drains for as long as its longest round -
-up to 30 minutes (`hub::DRAIN_MAX`). Nobody's round ends; new rooms wait
-for the replacement. Deploy when nobody is playing, or accept the wait.
+**A deploy with rounds in play is slow on purpose.** `Recreate` waits
+for the old pod, and the old pod drains for as long as its longest round in
+play - up to 30 minutes (`hub::DRAIN_MAX`). Nobody's round ends; new rooms
+wait for the replacement. A room with no round in play (a lobby, a paused
+round, an end screen) does not hold the drain: it closes at once, its players
+told the server is restarting, so a deploy with nobody mid-round takes
+seconds. To cut a drain short anyway:
+`kubectl -n bongbong-prod delete pod <pod> --grace-period=0 --force`.
 
 ## One-time setup
 

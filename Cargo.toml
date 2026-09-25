@@ -1,5 +1,5 @@
 [package]
-version = "0.1.1"
+version = "0.2.0"
 name = "bongbong"
 edition = "2024"
 default-run = "bongbong"
