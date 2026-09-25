@@ -41,6 +41,35 @@ mod weapons;
 
 pub use waves::{RollIn, WaveStatus};
 pub use weapons::FlameJet;
+
+/// Which projectile a client's provisional shot is drawn as
+/// (`net::predict`): the three the wire also carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProvisionalKind {
+    Shell,
+    Bullet,
+    Plasma,
+}
+
+/// A client's own shot before the server has confirmed it: the pose and
+/// nothing else, since it is drawn and never simulated (`net::predict`).
+/// `Game::seat_shot` builds one from a seat's muzzle and
+/// `Game::add_provisional_shot` puts it in a replica's world for a frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ProvisionalShot {
+    pub kind: ProvisionalKind,
+    /// The seat that fired it, for the shell's owner colouring.
+    pub seat: u8,
+    pub position: Position,
+    pub prev_position: Position,
+    pub velocity: Vec2,
+    pub rotation: f32,
+    /// A shell's row in shells.png; 0 for the other kinds.
+    pub variant: i32,
+    /// A bolt's variant; `Teal` for the other kinds.
+    pub plasma_variant: PlasmaVariant,
+    pub shooter_row: i32,
+}
 use waves::WaveState;
 
 use crate::blast::{BlastFx, Scorch};
@@ -1591,17 +1620,32 @@ impl Game {
         }
     }
 
-    /// Put a client's unconfirmed shell in the world under `id`, for
+    /// Put a client's unconfirmed shot in the world under `id`, for
     /// drawing only (`net::predict`).
     ///
-    /// It is an ordinary `Shell` entity, so every painter and the dev
-    /// server's readers see it without knowing it is provisional - and
-    /// `net::apply` will despawn it on the next snapshot along with
-    /// anything else the server did not list, which is why the caller
-    /// puts it back each frame. It never hits anything: a replica runs no
-    /// hit test, and a hit is the server's word.
-    pub(crate) fn add_provisional_shell(&mut self, shell: crate::shell::Shell) {
-        self.world.spawn((shell,));
+    /// It is an ordinary `Shell`, `Bullet` or `Plasma` entity, so every
+    /// painter and the dev server's readers see it without knowing it is
+    /// provisional - and `net::apply` will despawn it on the next
+    /// snapshot along with anything else the server did not list, which
+    /// is why the caller puts it back each frame. It never hits
+    /// anything: a replica runs no hit test, and a hit is the server's
+    /// word.
+    pub(crate) fn add_provisional_shot(&mut self, id: u32, shot: &ProvisionalShot) {
+        let owner = Owner::Player(shot.seat);
+        match shot.kind {
+            ProvisionalKind::Shell => {
+                let shell = Shell::at(id, shot.position, shot.prev_position, shot.velocity, shot.rotation, shot.variant, shot.shooter_row, owner);
+                self.world.spawn((shell,));
+            }
+            ProvisionalKind::Bullet => {
+                let bullet = Bullet::at(id, shot.position, shot.prev_position, shot.velocity, shot.rotation, shot.shooter_row, owner);
+                self.world.spawn((bullet,));
+            }
+            ProvisionalKind::Plasma => {
+                let plasma = Plasma::at(id, shot.position, shot.prev_position, shot.velocity, shot.rotation, shot.plasma_variant, shot.shooter_row, owner);
+                self.world.spawn((plasma,));
+            }
+        }
     }
 
     /// Put one seat under a speed boost, for a test that needs the
@@ -1615,18 +1659,101 @@ impl Game {
         }
     }
 
-    /// A shell as one seat would fire it right now: from its muzzle, on
-    /// its facing, at the shell speed.
-    ///
-    /// For a client drawing its own shot on the frame of the press
-    /// (`net::predict`). It is `Shell::spawn` and nothing else - nothing
-    /// is queued, no recoil is applied and no RNG is drawn, so a sandbox
-    /// stays the pure drive model it is; the shell it hands back is the
-    /// caller's to carry and to throw away.
-    pub(crate) fn seat_shell(&self, seat: usize) -> Option<crate::shell::Shell> {
+    /// What one seat's trigger would fire right now: the active weapon,
+    /// the ammo behind it, and the twin barrel's lateral offset (zero on
+    /// a single-barrel chassis). What a client gates its own provisional
+    /// shot on (`net::predict`); on a sandbox these are the server's, as
+    /// of the last snapshot. `None` for a wreck or an empty seat.
+    pub(crate) fn seat_arms(&self, seat: usize) -> Option<(ActiveWeapon, i32, f32)> {
         let entity = self.seats.get(seat).copied().flatten()?;
         let tank = self.world.get::<&Tank>(entity).ok()?;
-        Some(crate::shell::Shell::spawn(&tank, crate::shell::Owner::Player(seat as u8), 0.0, 0.0))
+        if tank.is_wreck() {
+            return None;
+        }
+        let weapon = tank.active_weapon();
+        let lateral = tuning().tank_barrel_lateral_offset[tank.row as usize];
+        Some((weapon, tank.weapon_ammo(weapon), lateral))
+    }
+
+    /// A shot as one seat would fire it right now: from its muzzle,
+    /// `lateral` off the centreline, `aim_offset` degrees off the barrel,
+    /// at the weapon's speed.
+    ///
+    /// For a client drawing its own shot on the frame of the press
+    /// (`net::predict`). It is `Shell::spawn` (or the bullet's, or the
+    /// bolt's) and nothing else - nothing is queued, no recoil is applied
+    /// and no RNG is drawn, so a sandbox stays the pure drive model it
+    /// is; the shot it hands back is the caller's to carry and to throw
+    /// away.
+    pub(crate) fn seat_shot(&self, seat: usize, kind: ProvisionalKind, aim_offset: f32, lateral: f32) -> Option<ProvisionalShot> {
+        let entity = self.seats.get(seat).copied().flatten()?;
+        let tank = self.world.get::<&Tank>(entity).ok()?;
+        let owner = Owner::Player(seat as u8);
+        let (position, velocity, rotation, variant, plasma_variant) = match kind {
+            ProvisionalKind::Shell => {
+                let s = Shell::spawn(&tank, owner, aim_offset, lateral);
+                (s.position, s.velocity, s.rotation, s.variant, PlasmaVariant::Teal)
+            }
+            ProvisionalKind::Bullet => {
+                let b = Bullet::spawn(&tank, owner, aim_offset);
+                (b.position, b.velocity, b.rotation, 0, PlasmaVariant::Teal)
+            }
+            ProvisionalKind::Plasma => {
+                let p = Plasma::spawn(&tank, owner, tank.plasma_variant, aim_offset, lateral);
+                (p.position, p.velocity, p.rotation, 0, p.variant)
+            }
+        };
+        Some(ProvisionalShot {
+            kind,
+            seat: seat as u8,
+            position,
+            prev_position: position,
+            velocity,
+            rotation,
+            variant,
+            plasma_variant,
+            shooter_row: tank.row,
+        })
+    }
+
+    /// Show one seat's flamethrower streaming, for the frames between
+    /// the local press and the server's word (`net::predict`): only if
+    /// the seat is armed with it and has fuel, which is the server's own
+    /// gate. `tick_presentation` draws the jet from the flag.
+    pub(crate) fn hold_flame(&mut self, seat: usize) {
+        let Some(entity) = self.seats.get(seat).copied().flatten() else { return };
+        let Ok(mut tank) = self.world.get::<&mut Tank>(entity) else { return };
+        if !tank.is_wreck() && tank.active_weapon() == ActiveWeapon::Flamethrower && tank.flame_fuel > 0.0 {
+            tank.flame_held = true;
+        }
+    }
+
+    /// The flame jets a replica draws, from the `flame_held` flag the
+    /// wire carries: one per streaming hull, its reach capped at the
+    /// first solid tile as `resolve_flames` caps it, so the cone stops
+    /// at the wall here too. A local round never calls this - its jets
+    /// are the phase's own.
+    fn derive_flame_jets(&mut self) {
+        let streaming: Vec<(Entity, Owner)> = self
+            .world
+            .query::<(Entity, &Tank)>()
+            .iter()
+            .filter(|(_, t)| t.flame_held && !t.is_wreck())
+            .map(|(e, t)| (e, t.owner()))
+            .collect();
+        self.flame_jets.clear();
+        if streaming.is_empty() {
+            return;
+        }
+        let (width, height) = self.map.field_size();
+        let terrain = Terrain::build(&self.world, width, height, &self.grass_cells, &self.water);
+        for (entity, owner) in streaming {
+            let Ok(tank) = self.world.get::<&Tank>(entity) else { continue };
+            let jet = weapons::flame_jet(&tank, owner, entity);
+            let end = Position::new(jet.origin.x + jet.dir.x * jet.range, jet.origin.y + jet.dir.y * jet.range);
+            let reach = terrain.first_solid_along(jet.origin, end).map_or(jet.range, |t| t * jet.range);
+            self.flame_jets.push(FlameJet { reach, ..jet });
+        }
     }
 
     /// One seat's hull as the sandbox has it: where it is, which way it
@@ -1656,6 +1783,9 @@ impl Game {
         // landed ones are dropped here and the `Blast` event carries the
         // rest.
         self.age_flying_drums(dt);
+        // A streaming flamethrower is a flag on the wire; the jet the
+        // glow and the particles are drawn from is rebuilt from it.
+        self.derive_flame_jets();
     }
 
     /// Each frog on the field (the player's, then the enemy's) bites the

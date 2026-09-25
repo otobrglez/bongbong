@@ -22,7 +22,9 @@ pub mod conn;
 pub mod devserver;
 pub mod http;
 pub mod hub;
-pub mod mailbox;
+/// The seats' jitter buffers are the game crate's (`net::mailbox`), so the
+/// rig and this server hold a seat's intents by one rule.
+pub use bongbong::net::mailbox;
 pub mod metrics;
 pub mod room;
 

@@ -78,6 +78,7 @@ pub mod encode;
 pub mod events;
 pub mod interp;
 pub mod loopback;
+pub mod mailbox;
 // Your own tank on the frame you pressed the key (stage 2,
 // docs/online-coop-prd.md §4.12). It owns a `Game` it only ever calls
 // `predict_seat` on, so it needs no socket and no renderer and its tests
@@ -108,7 +109,7 @@ pub mod wire;
 /// variant index), a change to a `codec::kind` tag or to a quantisation
 /// scale. A new optional field in a `Lobby` message (JSON, `serde(default)`)
 /// needs no bump.
-pub const PROTOCOL_VERSION: u16 = 5;
+pub const PROTOCOL_VERSION: u16 = 6;
 
 /// The most seats a room holds (docs/online-coop-prd.md §7, decision 4):
 /// the length of `Snapshot::acked`, and the same number `Input::seats`

@@ -92,6 +92,26 @@ pub struct Bullet {
 }
 
 impl Bullet {
+    /// A bullet at a pose somebody else worked out, for drawing only: a
+    /// client's provisional bullet (`net::predict`), rebuilt into the
+    /// replica each frame like `Shell::at`. Never meets anything.
+    pub fn at(id: u32, position: Position, prev_position: Position, velocity: Vec2, rotation: f32, shooter_row: i32, owner: Owner) -> Bullet {
+        Bullet {
+            id,
+            state: BulletState::Flying,
+            position,
+            prev_position,
+            velocity,
+            rotation,
+            timer: 0.0,
+            done: false,
+            owner,
+            shooter_row,
+            shadow_offset: 0.0,
+            passed_over: Vec::new(),
+        }
+    }
+
     /// Create a bullet at the tank's muzzle, travelling in the direction the
     /// tank faces. Same muzzle math as `Shell::spawn`, minus a
     /// `lateral_offset` param - every bullet fires dead-center regardless of

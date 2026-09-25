@@ -13,12 +13,14 @@
 //! One frame, in order:
 //!
 //! 1. `poll` the client: a `Welcome` builds the replica (`net::apply`), a
-//!    snapshot goes into the interpolator, a refusal or a close is kept
-//!    for the status line.
+//!    snapshot reconciles the prediction, goes into the interpolator and
+//!    steers the lead, a refusal or a close is kept for the status line.
 //! 2. Send the local seat's intent - the same `Intent` a local round
-//!    would drive player 1 with, seat 0 of the frame's `Input`.
-//! 3. Write the interpolated picture into the replica and tick its
-//!    cosmetics.
+//!    would drive player 1 with, seat 0 of the frame's `Input` - one
+//!    packet per tick of real time, plus or minus one when the lead says
+//!    so (`Lead`, docs/online-coop-prd.md §4.12).
+//! 3. Write the interpolated picture into the replica, the predicted
+//!    hull and shots over it, and tick its cosmetics.
 //!
 //! Nothing here runs `Game::update`, and the local round in
 //! `mode::Session` is untouched: online is a third driver beside Play and
@@ -29,8 +31,9 @@ use std::time::Instant;
 use crate::ai::Intent;
 use crate::net::apply;
 use crate::net::client::{ClientEvent, Phase, RoomClient};
-use crate::net::interp::Interpolator;
-use crate::net::predict::Predictor;
+use crate::net::interp::{InterpReport, Interpolator};
+use crate::net::mailbox;
+use crate::net::predict::{PredictionReport, Predictor};
 use crate::net::transport::Transport;
 use crate::net::events::WireEvent;
 use crate::net::wire::{RoundOutcome, Snapshot, Welcome};
@@ -42,6 +45,94 @@ use crate::PHYSICS_FIXED_DT;
 /// `mode::Session` is the same struct whether the round is played over a
 /// socket or over the rig's in-process link.
 pub type AnyRound = OnlineRound<Box<dyn Transport>>;
+
+/// How many snapshots the lead waits between two adjustments, and how
+/// long a starvation counts as recent: sixty, a second at the room's
+/// cadence. One packet's worth of lead per second is as fast as the loop
+/// needs to move and slow enough that it cannot hunt.
+pub const LEAD_WINDOW: u32 = 60;
+
+/// A reported depth above this, smoothed, for two windows without a
+/// starvation is more lead than the link needs, and one packet is
+/// skipped to give it back. Two and a half: the depth a steady link
+/// shows flickers between nought and one, so this is well clear of it.
+pub const LEAD_DEPTH_MAX: f32 = 2.5;
+
+/// How much of each reported depth the smoothed depth takes.
+pub const LEAD_GAIN: f32 = 0.1;
+
+/// What the lead asks of the frame's packet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Adjust {
+    /// One packet, as every tick.
+    Keep,
+    /// Two: the next tick's intent goes early, and the mailbox is one
+    /// deeper from here on.
+    Extra,
+    /// None: the mailbox drains one, and the sandbox holds a tick.
+    Skip,
+}
+
+/// The client's lead over the room, kept as the depth of its mailbox
+/// (docs/online-coop-prd.md §4.12, "The lead").
+///
+/// Every snapshot reports how deep this seat's mailbox stood after the
+/// tick's read and whether that read starved (`Snapshot::mailbox`). A
+/// starvation means a packet arrived after the tick that wanted it: one
+/// extra packet, once, and the buffer holds one more from then on. A
+/// depth that sits high with no starvation in sight is lead the link is
+/// not using, paid for in latency: one packet skipped, once. At most one
+/// adjustment per `LEAD_WINDOW`.
+#[derive(Clone, Copy, Debug)]
+struct Lead {
+    /// The reported depth, smoothed.
+    depth: f32,
+    /// Snapshots since the last reported starvation.
+    since_starved: u32,
+    /// Snapshots since the last adjustment.
+    since_adjust: u32,
+    /// Whether any reading has arrived at all.
+    seen: bool,
+    /// Adjustments made, for the report.
+    up: u32,
+    down: u32,
+}
+
+impl Lead {
+    fn new() -> Lead {
+        Lead { depth: 0.0, since_starved: u32::MAX, since_adjust: 0, seen: false, up: 0, down: 0 }
+    }
+
+    /// One snapshot's reading for this seat.
+    fn observe(&mut self, state: u8) {
+        let (depth, starved) = mailbox::unpack(state);
+        self.seen = true;
+        self.depth += (depth as f32 - self.depth) * LEAD_GAIN;
+        self.since_starved = if starved { 0 } else { self.since_starved.saturating_add(1) };
+        self.since_adjust = self.since_adjust.saturating_add(1);
+    }
+
+    /// What this tick's packet should be.
+    fn decide(&mut self) -> Adjust {
+        if !self.seen || self.since_adjust < LEAD_WINDOW {
+            return Adjust::Keep;
+        }
+        if self.since_starved < LEAD_WINDOW {
+            self.since_adjust = 0;
+            // One starvation buys one packet; the next has to be a new one.
+            self.since_starved = LEAD_WINDOW;
+            self.up += 1;
+            return Adjust::Extra;
+        }
+        if self.since_starved >= 2 * LEAD_WINDOW && self.depth > LEAD_DEPTH_MAX {
+            self.since_adjust = 0;
+            self.depth -= 1.0;
+            self.down += 1;
+            return Adjust::Skip;
+        }
+        Adjust::Keep
+    }
+}
 
 /// A seat in a room, the replica it draws, and the clock between them.
 pub struct OnlineRound<T: Transport> {
@@ -59,6 +150,11 @@ pub struct OnlineRound<T: Transport> {
     /// A trigger pulled since the last packet went out, so a tap between
     /// two packets still reaches the room.
     pending_fire: bool,
+    /// The frame's own trigger, for the flamethrower's cone: a stream
+    /// the local seat is drawn holding while the key is down.
+    trigger_down: bool,
+    /// The seat's lead over the room, steered by the mailbox readings.
+    lead: Lead,
     /// The local seat's own hull, run ahead of the room and pulled back
     /// by each snapshot (stage 2, docs/online-coop-prd.md §4.12). Built
     /// beside the replica from the same `Welcome`, so the two step
@@ -98,6 +194,8 @@ impl<T: Transport> OnlineRound<T> {
             predictor: None,
             send_owed: 0.0,
             pending_fire: false,
+            trigger_down: false,
+            lead: Lead::new(),
             note: None,
             ended: None,
             scratch: Vec::new(),
@@ -110,9 +208,27 @@ impl<T: Transport> OnlineRound<T> {
     /// local player's, whichever seat the room gave them.
     pub fn frame(&mut self, intent: &Intent, dt: f32) {
         let now = self.local_ms();
+        self.trigger_down = intent.fire;
         self.poll(now);
         self.send(intent, dt);
         self.draw(dt, now);
+    }
+
+    /// The predictor's counters, with the lead's own, once a welcome has
+    /// built a sandbox (docs/online-coop-prd.md §4.12, "Measured").
+    pub fn prediction(&self) -> Option<PredictionReport> {
+        self.predictor.as_ref().map(|p| p.report(self.lead.up, self.lead.down))
+    }
+
+    /// What the interpolator is doing: the delay in force, the jitter it
+    /// covers, the cadence, the frames it had to guess.
+    pub fn interpolation(&self) -> InterpReport {
+        self.interp.report()
+    }
+
+    /// The lead's smoothed reading of this seat's mailbox depth.
+    pub fn lead_depth(&self) -> f32 {
+        self.lead.depth
     }
 
     /// The replica, once a `Welcome` has built one. The window draws the
@@ -272,7 +388,12 @@ impl<T: Transport> OnlineRound<T> {
                 ClientEvent::Welcomed(welcome) => self.welcomed(&welcome, now),
                 ClientEvent::Snapshot(snapshot) => {
                     self.reconcile(&snapshot);
-                    self.confirm_shots(&snapshot, now);
+                    self.note_fired(&snapshot);
+                    if let Some(seat) = self.client.seat()
+                        && let Some(&state) = snapshot.mailbox.get(seat as usize)
+                    {
+                        self.lead.observe(state);
+                    }
                     self.interp.accept(*snapshot, now);
                 }
                 ClientEvent::Refused(message) => {
@@ -351,7 +472,8 @@ impl<T: Transport> OnlineRound<T> {
     /// tick, so the packets are paced the way `app::StepClock` paces the
     /// steps of a local round. A trigger pulled on a frame that sends
     /// nothing rides along with the next packet, so a tap between two of
-    /// them is never lost.
+    /// them is never lost. The lead may make a tick's packet two, or
+    /// none (`Lead`).
     fn send(&mut self, intent: &Intent, dt: f32) {
         self.pending_fire |= intent.fire;
         self.send_owed = (self.send_owed + dt.max(0.0)).min(2.0 * PHYSICS_FIXED_DT);
@@ -359,26 +481,32 @@ impl<T: Transport> OnlineRound<T> {
             return;
         }
         self.send_owed -= PHYSICS_FIXED_DT;
+        let packets = match self.lead.decide() {
+            Adjust::Keep => 1,
+            Adjust::Extra => 2,
+            Adjust::Skip => 0,
+        };
+        for _ in 0..packets {
+            self.send_one(intent);
+        }
+    }
+
+    /// One packet, and the sandbox's tick on it.
+    fn send_one(&mut self, intent: &Intent) {
         let mut out = *intent;
         out.fire |= self.pending_fire;
-        self.pending_fire = false;
         // One counter for both: the sandbox steps on exactly the input
-        // the packet carries, stamped with exactly the tick the server
-        // will name back in `acked`.
-        let now = self.local_ms();
-        if let Some(tick) = self.client.send_intent(&out)
-            && let Some(predictor) = self.predictor.as_mut()
-        {
-            predictor.step_at(tick, out);
-            // The shot is drawn on the tick its press travels on, from
-            // the pose that tick produced, so the shell leaves the muzzle
-            // where the hull is now (§4.12).
-            // Behind its own knob, and off by default: a shell drawn at
-            // the present passes through tanks drawn in the past (see
-            // `online_predict_shots`).
-            if out.fire && tuning().online_predict_shots {
-                predictor.fire(now);
-            }
+        // the packet carries - fire hold included, since that is the bit
+        // the server's press edge will see - stamped with exactly the
+        // tick the server will name back in `acked`.
+        let Some(sent) = self.client.send_intent(&out) else { return };
+        self.pending_fire = false;
+        if let Some(predictor) = self.predictor.as_mut() {
+            // The knob is live: read each tick, so a shot pressed after
+            // it was turned on is drawn and one after it was turned off
+            // is not.
+            predictor.set_shots_enabled(tuning().online_predict_shots);
+            predictor.step_at(sent.tick, sent.intent());
         }
     }
 
@@ -388,6 +516,7 @@ impl<T: Transport> OnlineRound<T> {
         let sampled = self.interp.sample(now);
         if let Some(frame) = &sampled {
             apply::snapshot(game, &frame.snapshot);
+            self.confirm_shots(&frame.snapshot);
         }
         // **Before `tick_presentation`, not after.** The presentation
         // pass eases `visual_rotation` toward `rotation` and presses the
@@ -438,8 +567,15 @@ impl<T: Transport> OnlineRound<T> {
         // just despawned everything the snapshot did not list, so these
         // are put back every frame until the server confirms or refuses
         // them.
-        for shell in predictor.shots() {
-            game.add_provisional_shell(shell);
+        for (id, shot) in predictor.shots() {
+            game.add_provisional_shot(id, &shot);
+        }
+        // The flamethrower's stream is a flag the wire carries; while the
+        // local key is down the seat is drawn streaming at once, if it is
+        // armed and fuelled, rather than a round trip later. Released,
+        // the flag is the server's again and goes out when its word does.
+        if self.trigger_down && tuning().online_predict_shots {
+            game.hold_flame(seat as usize);
         }
     }
 
@@ -464,25 +600,43 @@ impl<T: Transport> OnlineRound<T> {
         predictor.reconcile(snapshot, acked);
     }
 
-    /// Retire the provisional shots the server has now accounted for.
-    ///
-    /// One `Fired` from this seat retires the oldest shot still waiting:
-    /// a seat's shots leave in the order the trigger was pulled and the
-    /// server reports them in that order, so nothing has to carry an id
-    /// across - which is why this needs no protocol change. Anything the
-    /// server never mentions is a shot it refused, and `expire` takes it
-    /// away quietly.
-    fn confirm_shots(&mut self, snapshot: &Snapshot, now: i64) {
+    /// A snapshot *arrived* carrying this seat's `Fired`: the press it
+    /// names has its ammo in the snapshot the sandbox just took, so it
+    /// stops counting against the local gate (`Predictor::note_fired`).
+    /// The shot itself is retired later, when the frame reaches it.
+    fn note_fired(&mut self, snapshot: &Snapshot) {
         if !tuning().online_predict_own_tank {
             return;
         }
         let (Some(predictor), Some(seat)) = (self.predictor.as_mut(), self.client.seat()) else { return };
         for event in &snapshot.events {
             if matches!(event, WireEvent::Fired { slot, .. } if *slot as u8 == seat) {
-                predictor.confirm_shot();
+                predictor.note_fired();
             }
         }
-        predictor.expire(now);
+    }
+
+    /// The interpolator handed a snapshot's events over: each `Fired` of
+    /// this seat's retires the oldest press still drawn, on this frame,
+    /// the one the server's own shot appears in - so the provisional and
+    /// the real shot swap places rather than leaving a gap. A `Fired`
+    /// with no press waiting seeds the local gate from the room's
+    /// (`Predictor::confirm_shot`), measured back from the snapshot's
+    /// `acked` to the tick the client is on now.
+    fn confirm_shots(&mut self, frame: &Snapshot) {
+        if !tuning().online_predict_own_tank {
+            return;
+        }
+        let (Some(predictor), Some(seat)) = (self.predictor.as_mut(), self.client.seat()) else { return };
+        let acked = frame.acked.get(seat as usize).copied().unwrap_or(0);
+        let ticks_ago = predictor.tick().wrapping_sub(acked);
+        for event in &frame.events {
+            if let WireEvent::Fired { slot, weapon } = event
+                && *slot as u8 == seat
+            {
+                predictor.confirm_shot(*weapon, ticks_ago);
+            }
+        }
     }
 }
 
@@ -645,6 +799,61 @@ mod tests {
         let slots: Vec<usize> = drawn.tanks.iter().map(|t| t.slot).collect();
         let room_slots: Vec<usize> = room.game.drawable_state().tanks.iter().map(|t| t.slot).collect();
         assert_eq!(slots, room_slots, "the same hulls, by slot");
+    }
+
+    /// **The lead is a depth** (docs/online-coop-prd.md §4.12): a room
+    /// that reports a starvation gets one extra packet, once, and the
+    /// client's tick runs one further ahead from then on; a room that
+    /// reports a deep buffer with no starvation for two windows gets one
+    /// packet fewer, once.
+    #[test]
+    fn a_starvation_widens_the_lead_by_one_packet_and_a_deep_buffer_narrows_it() {
+        let (mut room, mut round) = room_and_round();
+        room.welcome();
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        room.heard();
+        let sent = |room: &mut Room| room.heard().iter().filter(|m| matches!(m, Msg::Intent(_))).count();
+
+        // A window of quiet snapshots: one packet a tick, as always.
+        for _ in 0..LEAD_WINDOW {
+            room.tick(Intent::default());
+            round.frame(&Intent::default(), 1.0 / 60.0);
+        }
+        assert_eq!(sent(&mut room), LEAD_WINDOW as usize, "one packet per tick on a quiet link");
+
+        // The room starved once. The next packet is two, and only once.
+        let mut starved = encode::snapshot(&room.game, [0; MAX_SEATS]);
+        starved.server_ms = room.server_ms + 1;
+        starved.mailbox[0] = mailbox::STARVED_BIT;
+        room.say(Msg::Snapshot(starved));
+        let before = round.prediction().map(|p| p.lead_up).unwrap_or(0);
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        assert_eq!(sent(&mut room), 2, "the starvation bought one extra packet");
+        assert_eq!(round.prediction().map(|p| p.lead_up), Some(before + 1));
+        for _ in 0..10 {
+            room.tick(Intent::default());
+            round.frame(&Intent::default(), 1.0 / 60.0);
+        }
+        assert_eq!(sent(&mut room), 10, "and no more than one");
+
+        // The buffer sits four deep with no starvation for two windows:
+        // a packet is skipped to give the lead back - one per window
+        // for as long as the room keeps reporting it deep, and never
+        // two in one.
+        let frames = 2 * LEAD_WINDOW + 5;
+        for _ in 0..frames {
+            let mut deep = encode::snapshot(&room.game, [0; MAX_SEATS]);
+            room.server_ms += 16;
+            deep.server_ms = room.server_ms;
+            deep.mailbox[0] = 4;
+            room.say(Msg::Snapshot(deep));
+            round.frame(&Intent::default(), 1.0 / 60.0);
+        }
+        let heard = sent(&mut room) as u32;
+        let down = round.prediction().map(|p| p.lead_down).expect("a sandbox");
+        assert!(down >= 1, "a deep buffer was never narrowed");
+        assert!(down <= frames / LEAD_WINDOW, "narrowed {down} times in {frames} snapshots");
+        assert_eq!(heard, frames - down, "each narrowing is exactly one packet fewer");
     }
 
     #[test]

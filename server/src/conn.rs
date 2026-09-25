@@ -165,7 +165,7 @@ async fn handle(bytes: &[u8], conn_id: u64, hub: &Arc<Hub>, outbox: &Outbox, att
     match msg {
         Msg::Intent(intent) => {
             if let Some(a) = attached {
-                a.mailbox.post(intent, Instant::now());
+                a.mailbox.post(intent, Instant::now().into_std());
             }
         }
         Msg::Lobby(Lobby::Create { nick, device_token, map, map_toml, mission, seed }) => {

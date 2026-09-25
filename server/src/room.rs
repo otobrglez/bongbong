@@ -1018,6 +1018,18 @@ impl Room {
         acked
     }
 
+    /// Each seat's mailbox as the tick left it (`Mailbox::wire_state`):
+    /// what the client steers its lead by.
+    fn mailbox_states(&self) -> [u8; MAX_SEATS] {
+        let mut states = [0; MAX_SEATS];
+        for (i, seat) in self.seats.iter().enumerate().take(MAX_SEATS) {
+            if let Some(s) = seat {
+                states[i] = s.mailbox.wire_state();
+            }
+        }
+        states
+    }
+
     /// The end screen's countdown runs out on the next `update`, which is
     /// where a local round calls `init` and starts over. A room does not:
     /// its seats would be dragged into a round nobody asked for, so the
@@ -1049,7 +1061,7 @@ impl Room {
                 && s.connected()
             {
                 let before = s.mailbox.starvations();
-                input.seats[i] = s.mailbox.read(now).map(|m| m.intent()).unwrap_or_default();
+                input.seats[i] = s.mailbox.read(now.into_std()).map(|m| m.intent()).unwrap_or_default();
                 // A starved tick means this seat's client is not stamping
                 // far enough ahead for the link (`mailbox`, §4.12).
                 let starved = s.mailbox.starvations() - before;
@@ -1100,6 +1112,7 @@ impl Room {
             None => Snapshot { acked, ..Snapshot::default() },
         };
         snap.server_ms = self.server_ms();
+        snap.mailbox = self.mailbox_states();
         if !self.pending_events.is_empty() {
             let mut events = self.pending_events.clone();
             events.append(&mut snap.events);
@@ -1361,7 +1374,7 @@ mod dev {
                 let fire = script.intent.fire
                     && script.fire_every.is_none_or(|n| script.sent % n == 0);
                 let msg = IntentMsg::new(script.tick, &Intent { fire, ..script.intent });
-                seat.mailbox.post(msg, now);
+                seat.mailbox.post(msg, now.into_std());
                 script.tick = script.tick.wrapping_add(1);
                 script.sent += 1;
                 script.remaining -= 1;

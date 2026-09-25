@@ -1,7 +1,7 @@
 //! Your own tank, on the frame you pressed the key
 //! (docs/online-coop-prd.md §4.12).
 //!
-//! Stage 1 draws every hull, your own included, `online_interpolation_delay_ms`
+//! Stage 1 draws every hull, your own included, the interpolation delay
 //! behind the server plus half a round trip. That is fine for the eight
 //! tanks you are not steering and wrong for the one you are. Stage 2 runs
 //! your seat's locomotion locally and reconciles it against the server's
@@ -18,56 +18,64 @@
 //! `Game::predict_seat` is ever called on it, so no RNG is drawn, nothing
 //! ages, and nothing but the one hull moves.
 //!
-//! What is predicted is the own hull and the own shot leaving the
+//! What is predicted is the own hull, and the own shot leaving the
 //! muzzle. Damage, pickups, other tanks and everyone else's shots stay
 //! the server's, and stay interpolated.
 //!
-//! **Provisional shots are built but off by default**
-//! (`online_predict_shots`), and the reason is worth knowing before
-//! turning them on. A predicted shell is drawn at the present; every
-//! tank it might hit is drawn `online_interpolation_delay_ms` in the
-//! past. At `shell_speed` 500 and a 100 ms delay that is fifty pixels,
-//! most of a sixty-four pixel hull - so the shell reaches a tank's
-//! *drawn* position well before the server's copy reaches its real one,
-//! and sails through it. The server's own shell runs on the same delayed
-//! clock as the tanks, so it collides where it looks like it should.
+//! **Provisional shots** (`online_predict_shots`, on by default). A shot
+//! is drawn from the predicted muzzle on the packet its press travels on,
+//! gated the way the server gates it: the sandbox's seat carries the
+//! server's active weapon and ammo as of the last snapshot (they are on
+//! the wire), the cooldown is the weapon's own, and the ammo still to be
+//! confirmed is subtracted, so a press the server would refuse draws
+//! nothing. Shells and plasma fire on the press edge, the minigun while
+//! the key is held - `drive_player`'s rule. A press opens a `Press`: the
+//! first shot at once and the rest on their own delays (a twin barrel's
+//! second shell `tank_twin_shot_delay_seconds` on, the burst's bullets
+//! `minigun_bullet_delay_seconds` apart), each spawned from the sandbox's
+//! pose on the frame it is due, as the server's `tick_queued_shots` would.
+//! A provisional flies by dead reckoning and meets nothing: a replica runs
+//! no hit test, and a hit is the server's word.
 //!
-//! Drawing your own hull at the present has the same mismatch in the
-//! other direction - an enemy's shell is judged against where the server
-//! had you, not where you are drawn - but a hull is slow and wide where a
-//! shell is fast and small, so it is a beat of disagreement rather than a
-//! shot that visibly passes through. What makes a predicted shell correct
-//! rather than merely early is the server rewinding targets to the
-//! shooter's view (§4.12, decision 9), which is not built.
-//!
-//! **A provisional shot is drawn, never simulated.** It flies by dead
-//! reckoning and meets nothing: a replica runs no hit test, and whether
-//! it hit is the server's word, arriving as an event like any other. It
-//! is retired when the server reports this seat fired - oldest first,
+//! A press is **retired against the server's own `Fired`**, oldest first,
 //! since a seat's shots leave in the order the trigger was pulled and
-//! come back in that order, which is what lets a provisional be
-//! confirmed without `Fired` carrying a client tick, and so without a
-//! protocol change. A shot the server never mentions was one it refused,
-//! and goes quietly after `PROVISIONAL_MS`.
+//! come back in that order - which is what lets a provisional be matched
+//! without `Fired` carrying a client tick, and so without a protocol
+//! change. It happens on the frame the interpolator hands that `Fired`
+//! over, which is the frame the server's shot appears in the replica, so
+//! nothing flickers; a press's later shots go their own delay after, as
+//! theirs appear. A press no `Fired` ever claims was one the server
+//! refused and goes quietly after `PROVISIONAL_SECONDS`, counted.
+//!
+//! It is still a lie: a shell drawn at the present passes through tanks
+//! drawn `online_interpolation_delay_ms` in the past, an error of the
+//! delay times `shell_speed` - sixteen pixels at 33 ms, a quarter of a
+//! hull, against a shot that answers the press on the frame it is pressed
+//! instead of a round trip later. What would make it correct rather than
+//! merely early is the server rewinding targets to the shooter's view
+//! (§4.12, decision 9), which is not built.
 //!
 //! **What still costs a correction**, deliberately, and what it costs:
 //!
 //! - *Firing.* `weapons::apply_recoil` pushes the shooter back along the
 //!   shot's axis, and the sandbox never fires - it only drives. So every
 //!   shot ends one nudge, bounded by `shell_recoil_max_speed` over one
-//!   snapshot interval, and settled by the next reconciliation. Cheap
-//!   enough to leave; predicting the recoil means predicting the shot,
-//!   which is phase 5.
+//!   snapshot interval, and settled by the next reconciliation.
 //! - *A speed boost* would be worse than a correction - it changes the
 //!   top speed the drive model works to, so a sandbox that did not know
 //!   would fall behind every tick for the whole buff. That one is
-//!   carried: `reconcile` takes the flag the wire already sends.
+//!   carried: `reconcile` takes the whole snapshot, flag included.
 //! - *A teleport* is not eased at all. The hull is somewhere else
 //!   entirely, which is past `SNAP_PX` by construction, so it is taken
 //!   whole - easing across a portal would drag the picture through the
 //!   scenery between the two ends.
 //! - *The turret* is not on the wire at all; the replica derives it, so
 //!   it follows the hull this already predicts rather than lagging it.
+//!
+//! **Measured** (`report`): every correction sorted into the buckets of
+//! `ERROR_BUCKETS_PX`, the largest, nudges and snaps, shots drawn and
+//! refused, the inputs in flight. The dev server's `status.round` reads
+//! it and the rig's tests assert on it.
 
 use std::collections::VecDeque;
 
@@ -75,9 +83,9 @@ use crate::PHYSICS_FIXED_DT;
 use crate::ai::Intent;
 use crate::math::Vec2 as Position;
 use crate::net::apply;
-use crate::net::wire::Snapshot;
-use crate::shell::{Owner, Shell};
-use crate::simulation::Game;
+use crate::net::wire::{Snapshot, WeaponKind};
+use crate::simulation::{Game, ProvisionalKind, ProvisionalShot};
+use crate::tank::ActiveWeapon;
 use crate::tuning::tuning;
 
 /// How many ticks of input to keep. A replay starts at the last tick the
@@ -106,21 +114,21 @@ pub const IGNORE_PX: f32 = 0.5;
 pub const SNAP_PX: f32 = 48.0;
 
 /// How long a nudge takes to die away. Short enough that a correction is
-/// over before the next one lands (snapshots are 50 ms apart), long
-/// enough that it reads as the hull settling rather than jumping.
+/// over before the next one lands, long enough that it reads as the hull
+/// settling rather than jumping.
 pub const NUDGE_SECONDS: f32 = 0.1;
 
-/// How long a shell nobody confirmed is left on screen.
+/// How long a press nobody confirmed is left on screen, in seconds.
 ///
-/// A round trip plus an interval, generously: the server's `Fired` for a
-/// shot it accepted cannot take longer than that to come back, so
-/// anything still waiting here was refused - the trigger was pulled on a
-/// cooldown the client had not seen, or with ammo the server had already
-/// spent. Those are quiet failures by design (§4.12): the shell fades
-/// rather than announcing that the client guessed wrong.
-pub const PROVISIONAL_MS: i64 = 600;
+/// A round trip plus the interpolation delay, generously: the server's
+/// `Fired` for a shot it accepted cannot take longer than that to be
+/// handed over, so anything still waiting here was refused - the trigger
+/// was pulled on a cooldown the client had not seen, or with ammo the
+/// server had already spent. Those are quiet failures by design (§4.12):
+/// the shot fades rather than announcing that the client guessed wrong.
+pub const PROVISIONAL_SECONDS: f32 = 0.6;
 
-/// The id band provisional shells are drawn under.
+/// The id band provisional shots are drawn under.
 ///
 /// The server hands its projectiles a per-round counter and the wire
 /// carries it as a `u16`, so the top of that range is free in any round
@@ -129,27 +137,92 @@ pub const PROVISIONAL_MS: i64 = 600;
 /// sent anywhere.
 pub const PROVISIONAL_ID_BASE: u32 = 0xF000;
 
-/// A shot the client has drawn but the server has not confirmed.
-///
-/// The pose rather than a `Shell`: a `Shell` owns a `Vec` and so cannot
-/// be copied into the replica, and it has to go back in every frame
-/// because `net::apply` despawns everything the snapshot did not list.
-/// `Shell::at` rebuilds one from these.
-struct Provisional {
-    position: Position,
-    prev_position: Position,
-    velocity: crate::math::Vec2,
-    rotation: f32,
-    variant: i32,
-    shooter_row: i32,
-    /// Local milliseconds at the trigger pull, for `PROVISIONAL_MS`.
-    born_ms: i64,
+/// The edges of the correction histogram, in pixels: the wire's own
+/// rounding, `IGNORE_PX`, a couple of pixels, a wheel's width, and
+/// `SNAP_PX`. The sixth bucket is everything past the last.
+pub const ERROR_BUCKETS_PX: [f32; 5] = [0.25, IGNORE_PX, 2.0, 8.0, SNAP_PX];
+
+/// One shot of a press, still to leave the muzzle.
+#[derive(Clone, Copy, Debug)]
+struct Pending {
+    /// Seconds after the press it leaves.
+    due: f32,
+    /// Sideways from the centreline, the twin barrel's offset.
+    lateral: f32,
+    /// Degrees off the barrel: a bullet's spread. Hashed, since the
+    /// server rolls it and the picture only needs variety.
+    aim: f32,
+}
+
+/// A shot that has left, drawn until the server's takes its place.
+#[derive(Clone, Copy, Debug)]
+struct Live {
+    shot: ProvisionalShot,
+    /// Seconds after the press it left, so it is retired that long after
+    /// the press is confirmed.
+    due: f32,
+}
+
+/// One pull of the trigger the client drew before the server answered.
+#[derive(Clone, Debug)]
+struct Press {
+    kind: ProvisionalKind,
+    /// Seconds since the press.
+    age: f32,
+    /// The `Fired` for this press has arrived - its ammo is now in the
+    /// sandbox, so it is no longer owed against the gate.
+    accounted: bool,
+    /// The age at which the interpolator handed that `Fired` over, which
+    /// is when the server's shot appeared: each shot of the press is
+    /// retired its own delay after it.
+    confirmed_at: Option<f32>,
+    pending: Vec<Pending>,
+    live: Vec<Live>,
+}
+
+impl Press {
+    /// The ammo the server will spend on this press.
+    fn cost(&self) -> i32 {
+        (self.pending.len() + self.live.len()) as i32
+    }
+}
+
+/// The predictor's counters (docs/online-coop-prd.md §4.12, "Measured").
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PredictionReport {
+    /// Reconciliations whose error was under `IGNORE_PX`.
+    pub ignored: u32,
+    /// Corrections eased off as an offset.
+    pub nudges: u32,
+    /// Corrections taken whole.
+    pub snaps: u32,
+    /// Every reconciliation's error by `ERROR_BUCKETS_PX`: at most the
+    /// first edge, at most the second, ..., past the last.
+    pub error_buckets: [u32; 6],
+    /// The largest error seen, in pixels.
+    pub max_error_px: f32,
+    /// Presses drawn ahead of the server.
+    pub shots_drawn: u32,
+    /// Presses the server never claimed.
+    pub shots_refused: u32,
+    /// Provisional shots on screen right now.
+    pub shots_on_screen: usize,
+    /// Inputs the server had not acknowledged at the last reconciliation:
+    /// the replay's length, the lead plus the round trip in ticks.
+    pub in_flight: usize,
+    /// The local fire gate, seconds until it opens.
+    pub cooldown: f32,
+    /// Times the client added a packet to widen its lead (`net::round`).
+    pub lead_up: u32,
+    /// Times it skipped one to narrow it.
+    pub lead_down: u32,
 }
 
 /// The local seat's own tank, run ahead of the server and pulled back
 /// into line by it.
 pub struct Predictor {
-    /// A `Game` used for nothing but `predict_seat`.
+    /// A `Game` used for nothing but `predict_seat`, and the seat's
+    /// weapon, ammo and muzzle.
     sandbox: Game,
     /// Which seat this window is playing.
     seat: usize,
@@ -159,25 +232,23 @@ pub struct Predictor {
     history: VecDeque<(u32, Intent)>,
     /// Where the drawn hull sits relative to the predicted one, decaying
     /// to nothing. A correction moves the *prediction* at once - the
-    /// physics has to be right or the next tick compounds the error - and
-    /// leaves this behind so the picture does not jump.
+    /// physics has to be right or the next tick compounds the error -
+    /// and leaves this behind so the picture does not jump.
     offset: Position,
-    /// How many corrections were past `IGNORE_PX`, and how many snapped:
-    /// the numbers §4.12 asks to be measured before a feel pass.
-    pub nudges: u32,
-    pub snaps: u32,
-    /// Shots drawn on the frame of the press, oldest first, waiting for
-    /// the server to say they happened.
-    shots: VecDeque<Provisional>,
-    /// Seconds until the local gate will let another shot out. Counted
+    /// The fire bit of the last input stepped: the server's press edge
+    /// is `fire && !held_last_tick`, on the same sequence of packets.
+    trigger_held: bool,
+    /// Whether presses are drawn at all (`online_predict_shots`, read by
+    /// the round each frame since the knob is live).
+    shots_enabled: bool,
+    /// Presses waiting for the server, oldest first.
+    presses: VecDeque<Press>,
+    next_press: u32,
+    /// Seconds until the local gate lets another press out. Counted
     /// down here rather than read off the sandbox, because
     /// `predict_seat` deliberately does not fire - it only drives.
     cooldown: f32,
-    /// How many provisional shots were drawn, and how many of those the
-    /// server never confirmed. A climbing refusal count means the local
-    /// gate is looser than the server's.
-    pub shots_drawn: u32,
-    pub shots_refused: u32,
+    report: PredictionReport,
 }
 
 impl Predictor {
@@ -190,99 +261,19 @@ impl Predictor {
             tick: first_tick,
             history: VecDeque::with_capacity(HISTORY_TICKS),
             offset: Position::new(0.0, 0.0),
-            nudges: 0,
-            snaps: 0,
-            shots: VecDeque::new(),
+            trigger_held: false,
+            shots_enabled: true,
+            presses: VecDeque::new(),
+            next_press: 0,
             cooldown: 0.0,
-            shots_drawn: 0,
-            shots_refused: 0,
+            report: PredictionReport::default(),
         }
     }
 
-    /// Draw a shot now, if the local gate allows one.
-    ///
-    /// **The gate is the client's guess at the server's.** It counts the
-    /// same `player_fire_interval` down, but it cannot know about ammo
-    /// the server has already spent or a cooldown set by a shot this
-    /// client has not heard about yet. Guessing wrong is cheap and
-    /// deliberate: the shell is drawn, no `Fired` ever comes back for it,
-    /// and `expire` takes it away quietly (§4.12).
-    ///
-    /// `now_ms` is the local clock the expiry is measured on.
-    pub fn fire(&mut self, now_ms: i64) {
-        if self.cooldown > 0.0 {
-            return;
-        }
-        // From the predicted pose, so the shell leaves the muzzle where
-        // the hull is *now* rather than where the room last saw it -
-        // which is the whole point of drawing it early.
-        let Some(shell) = self.sandbox.seat_shell(self.seat) else { return };
-        self.cooldown = tuning().player_fire_interval;
-        self.shots.push_back(Provisional {
-            position: shell.position,
-            prev_position: shell.position,
-            velocity: shell.velocity,
-            rotation: shell.rotation,
-            variant: shell.variant,
-            shooter_row: shell.shooter_row,
-            born_ms: now_ms,
-        });
-        self.shots_drawn += 1;
-    }
-
-    /// The server says this seat fired: the oldest shot still waiting was
-    /// that one.
-    ///
-    /// Matched oldest-first rather than by an id, because a seat's shots
-    /// leave in the order it pulled the trigger and the server reports
-    /// them in that same order. That is what lets a provisional be
-    /// confirmed without `Fired` carrying a client tick, and so without a
-    /// protocol change.
-    pub fn confirm_shot(&mut self) {
-        self.shots.pop_front();
-    }
-
-    /// Drop shots the server never confirmed, and count them.
-    pub fn expire(&mut self, now_ms: i64) {
-        while self.shots.front().is_some_and(|p| now_ms - p.born_ms > PROVISIONAL_MS) {
-            self.shots.pop_front();
-            self.shots_refused += 1;
-        }
-    }
-
-    /// Carry the unconfirmed shots forward by `dt` and run the local
-    /// fire gate down. Dead reckoning: a provisional has no physics of
-    /// its own and never hits anything - a hit is the server's word, and
-    /// arrives as an event like any other.
-    pub fn advance_shots(&mut self, dt: f32) {
-        self.cooldown = (self.cooldown - dt).max(0.0);
-        for p in &mut self.shots {
-            p.prev_position = p.position;
-            p.position = Position::new(p.position.x + p.velocity.x * dt, p.position.y + p.velocity.y * dt);
-        }
-    }
-
-    /// The shots to draw beside the server's, with the ids they are held
-    /// under in the replica.
-    pub fn shots(&self) -> impl Iterator<Item = Shell> + '_ {
-        let owner = Owner::Player(self.seat as u8);
-        self.shots.iter().enumerate().map(move |(i, p)| {
-            Shell::at(
-                PROVISIONAL_ID_BASE + i as u32,
-                p.position,
-                p.prev_position,
-                p.velocity,
-                p.rotation,
-                p.variant,
-                p.shooter_row,
-                owner,
-            )
-        })
-    }
-
-    /// How many shots are on screen that the server has not confirmed.
-    pub fn provisional_count(&self) -> usize {
-        self.shots.len()
+    /// Whether a press draws a shot. Off, the trigger still runs the
+    /// local gate down so turning it on mid-round starts in step.
+    pub fn set_shots_enabled(&mut self, on: bool) {
+        self.shots_enabled = on;
     }
 
     /// The tick the next `step` will stamp.
@@ -304,7 +295,13 @@ impl Predictor {
     /// This is the wired path: `RoomClient` owns the counter the packets
     /// carry, and the sandbox has to agree with it exactly, or the tick
     /// the server names back in `acked` would point at the wrong input.
-    /// One counter, not two that could drift.
+    /// One counter, not two that could drift. `intent` is the packet as
+    /// sent, fire hold included, so the press edge below is the one the
+    /// server will see.
+    ///
+    /// The trigger is pulled *after* the hull is driven, as
+    /// `drive_player` does it, so the shot leaves from the pose this tick
+    /// produced.
     pub fn step_at(&mut self, tick: u32, intent: Intent) {
         self.sandbox.predict_seat(self.seat, intent, PHYSICS_FIXED_DT);
         self.history.push_back((tick, intent));
@@ -312,6 +309,190 @@ impl Predictor {
             self.history.pop_front();
         }
         self.tick = tick.wrapping_add(1);
+        let pressed = intent.fire && !self.trigger_held;
+        self.trigger_held = intent.fire;
+        self.pull_trigger(pressed, intent.fire);
+    }
+
+    /// The local gate, and a press through it.
+    ///
+    /// **The gate is the client's guess at the server's**, and a good one:
+    /// the weapon, its ammo and the twin barrel are the sandbox's, which
+    /// the last snapshot wrote, and the cooldown is the same knob the
+    /// server counts down. What it cannot know is a cooldown set by a
+    /// shot this client has not heard about yet; guessing wrong there is
+    /// cheap and deliberate - the shot is drawn, no `Fired` ever comes
+    /// back for it, and it expires quietly.
+    fn pull_trigger(&mut self, pressed: bool, held: bool) {
+        if !self.shots_enabled || self.cooldown > 0.0 {
+            return;
+        }
+        let Some((weapon, ammo, lateral)) = self.sandbox.seat_arms(self.seat) else { return };
+        let t = tuning();
+        let (kind, cost, cooldown, pending) = match weapon {
+            ActiveWeapon::Shell | ActiveWeapon::Plasma if pressed => {
+                let kind = if weapon == ActiveWeapon::Shell { ProvisionalKind::Shell } else { ProvisionalKind::Plasma };
+                let cost = if lateral > 0.0 { 2 } else { 1 };
+                let mut pending = vec![Pending { due: 0.0, lateral: -lateral, aim: 0.0 }];
+                if lateral > 0.0 {
+                    pending.push(Pending { due: t.tank_twin_shot_delay_seconds, lateral, aim: 0.0 });
+                }
+                (kind, cost, t.player_fire_interval, pending)
+            }
+            ActiveWeapon::Minigun if held => {
+                let left = ammo - self.owed(ProvisionalKind::Bullet);
+                if left <= 0 {
+                    return;
+                }
+                let burst = (t.minigun_burst_size.max(1) as i32).min(left);
+                let spread = t.minigun_bullet_spread_deg;
+                let press = self.next_press;
+                let pending = (0..burst)
+                    .map(|k| Pending {
+                        due: k as f32 * t.minigun_bullet_delay_seconds,
+                        lateral: 0.0,
+                        aim: (hash01(press, k as u32) * 2.0 - 1.0) * spread,
+                    })
+                    .collect();
+                (ProvisionalKind::Bullet, 1, t.minigun_burst_cooldown_seconds(), pending)
+            }
+            // The laser's beam is a hit test, the pod's volley a seeker's,
+            // the flamethrower's cone the room's (§4.12); nothing here.
+            _ => return,
+        };
+        if ammo - self.owed(kind) < cost {
+            return;
+        }
+        self.cooldown = cooldown;
+        let mut press = Press {
+            kind,
+            age: 0.0,
+            accounted: false,
+            confirmed_at: None,
+            pending,
+            live: Vec::new(),
+        };
+        self.next_press = self.next_press.wrapping_add(1);
+        // The first shot leaves on the press itself, from the pose this
+        // tick produced.
+        self.launch_due(&mut press);
+        self.presses.push_back(press);
+        self.report.shots_drawn += 1;
+    }
+
+    /// Ammo the presses still unaccounted for will spend, by kind, so a
+    /// press the sandbox does not yet know about still counts against
+    /// the next.
+    fn owed(&self, kind: ProvisionalKind) -> i32 {
+        self.presses.iter().filter(|p| !p.accounted && p.kind == kind).map(Press::cost).sum()
+    }
+
+    /// Move every pending shot whose time has come out of the muzzle,
+    /// from the sandbox's pose right now - the twin's second shell and a
+    /// burst's later bullets leave from where the hull is *then*, which
+    /// is how `tick_queued_shots` fires them.
+    fn launch_due(&self, press: &mut Press) {
+        let mut i = 0;
+        while i < press.pending.len() {
+            let p = press.pending[i];
+            if p.due > press.age {
+                i += 1;
+                continue;
+            }
+            press.pending.remove(i);
+            if let Some(shot) = self.sandbox.seat_shot(self.seat, press.kind, p.aim, p.lateral) {
+                press.live.push(Live { shot, due: p.due });
+            }
+        }
+    }
+
+    /// The server's `Fired` for this seat has *arrived*: the oldest press
+    /// not yet accounted for is the one it names, and its ammo is now in
+    /// the snapshot the sandbox just took, so it no longer counts against
+    /// the gate. Retirement waits for `confirm_shot`, when the shot is
+    /// drawn.
+    pub fn note_fired(&mut self) {
+        if let Some(press) = self.presses.iter_mut().find(|p| !p.accounted) {
+            press.accounted = true;
+        }
+    }
+
+    /// The interpolator handed over the server's `Fired` for this seat:
+    /// the oldest press still waiting was that one, and the server's shot
+    /// is on screen from this frame, so the press's own shots retire from
+    /// here on, each its own delay after.
+    ///
+    /// With no press waiting - prediction was off for the press, or it
+    /// was pulled before the sandbox existed - the room's shot still sets
+    /// the local gate, measured back from `acked` by `ticks_ago`, so the
+    /// next press agrees with the server's cooldown.
+    pub fn confirm_shot(&mut self, weapon: WeaponKind, ticks_ago: u32) {
+        match self.presses.iter_mut().find(|p| p.confirmed_at.is_none()) {
+            Some(press) => press.confirmed_at = Some(press.age),
+            None => {
+                let t = tuning();
+                let interval = match weapon {
+                    WeaponKind::Shell | WeaponKind::Plasma | WeaponKind::Laser => t.player_fire_interval,
+                    WeaponKind::Minigun => t.minigun_burst_cooldown_seconds(),
+                    WeaponKind::Missiles => t.missile_volley_cooldown_seconds(),
+                    WeaponKind::Flamethrower => 0.0,
+                };
+                let left = interval - ticks_ago as f32 * PHYSICS_FIXED_DT;
+                self.cooldown = self.cooldown.max(left);
+            }
+        }
+    }
+
+    /// One rendered frame of the shots: the gate counts down, every press
+    /// ages, its due shots leave, the live ones fly on by dead reckoning,
+    /// confirmed ones retire as the server's appear, and a press nobody
+    /// claimed within `PROVISIONAL_SECONDS` goes quietly, counted.
+    pub fn advance_shots(&mut self, dt: f32) {
+        self.cooldown = (self.cooldown - dt).max(0.0);
+        let mut presses = std::mem::take(&mut self.presses);
+        for press in &mut presses {
+            press.age += dt;
+            self.launch_due(press);
+            for live in &mut press.live {
+                let s = &mut live.shot;
+                s.prev_position = s.position;
+                s.position = Position::new(s.position.x + s.velocity.x * dt, s.position.y + s.velocity.y * dt);
+            }
+            if let Some(at) = press.confirmed_at {
+                press.live.retain(|l| press.age < at + l.due);
+            }
+        }
+        presses.retain(|p| {
+            if p.confirmed_at.is_some() {
+                return !(p.pending.is_empty() && p.live.is_empty());
+            }
+            if p.age > PROVISIONAL_SECONDS {
+                self.report.shots_refused += 1;
+                return false;
+            }
+            true
+        });
+        self.presses = presses;
+    }
+
+    /// The shots to draw beside the server's, with the ids they are held
+    /// under in the replica.
+    pub fn shots(&self) -> impl Iterator<Item = (u32, ProvisionalShot)> + '_ {
+        self.presses
+            .iter()
+            .flat_map(|p| p.live.iter().map(|l| l.shot))
+            .enumerate()
+            .map(|(i, shot)| (PROVISIONAL_ID_BASE + i as u32, shot))
+    }
+
+    /// How many shots are on screen that the server has not yet drawn.
+    pub fn provisional_count(&self) -> usize {
+        self.presses.iter().map(|p| p.live.len()).sum()
+    }
+
+    /// Presses drawn and not yet retired, for a test.
+    pub fn presses_waiting(&self) -> usize {
+        self.presses.len()
     }
 
     /// Pull the sandbox back to what the server said, then replay
@@ -330,9 +511,9 @@ impl Predictor {
     /// So the sandbox takes `net::apply::snapshot`, the same call the
     /// replica takes, and is a projection of the server's world rather
     /// than a world of its own: other hulls, destroyed walls, a speed
-    /// boost, a spent pickup, all of it, through one path that is already
-    /// the tested one. What is left to predict on top is this seat's
-    /// unacknowledged input.
+    /// boost, a spent pickup, the seat's weapon and ammo, all of it,
+    /// through one path that is already the tested one. What is left to
+    /// predict on top is this seat's unacknowledged input.
     ///
     /// `acked` is the last input tick the server applied for this seat,
     /// and the snapshot is where that left the world. Every input after
@@ -346,6 +527,7 @@ impl Predictor {
         while self.history.front().is_some_and(|(t, _)| *t <= acked) {
             self.history.pop_front();
         }
+        self.report.in_flight = self.history.len();
         let replay: Vec<Intent> = self.history.iter().map(|(_, i)| *i).collect();
         for intent in replay {
             self.sandbox.predict_seat(self.seat, intent, PHYSICS_FIXED_DT);
@@ -356,16 +538,20 @@ impl Predictor {
         // as an offset so the hull eases rather than teleports.
         let error = Position::new(before.x - after.x, before.y - after.y);
         let distance = (error.x * error.x + error.y * error.y).sqrt();
+        let bucket = ERROR_BUCKETS_PX.iter().position(|&edge| distance <= edge).unwrap_or(ERROR_BUCKETS_PX.len());
+        self.report.error_buckets[bucket] += 1;
+        self.report.max_error_px = self.report.max_error_px.max(distance);
         if distance <= IGNORE_PX {
+            self.report.ignored += 1;
             return;
         }
         if distance >= SNAP_PX {
             self.offset = Position::new(0.0, 0.0);
-            self.snaps += 1;
+            self.report.snaps += 1;
             return;
         }
         self.offset = Position::new(self.offset.x + error.x, self.offset.y + error.y);
-        self.nudges += 1;
+        self.report.nudges += 1;
     }
 
     /// Let the visual offset die away. Called once per rendered frame
@@ -388,11 +574,29 @@ impl Predictor {
         Some(Position::new(p.x + self.offset.x, p.y + self.offset.y))
     }
 
-    /// The correction still being eased off, for the metrics §4.12 asks
-    /// for and for a test to assert on.
+    /// The correction still being eased off, for a test to assert on.
     pub fn offset(&self) -> Position {
         self.offset
     }
+
+    /// The counters, with the lead's own adjustments filled in by the
+    /// round that keeps them.
+    pub fn report(&self, lead_up: u32, lead_down: u32) -> PredictionReport {
+        PredictionReport {
+            shots_on_screen: self.provisional_count(),
+            cooldown: self.cooldown,
+            lead_up,
+            lead_down,
+            ..self.report
+        }
+    }
+}
+
+/// A unit hash of two counters, for a bullet's spread: the server rolls
+/// one per bullet and the picture only needs the variety.
+fn hash01(a: u32, b: u32) -> f32 {
+    let h = a.wrapping_mul(2_654_435_761).wrapping_add(b.wrapping_mul(0x9E37_79B9)) >> 8;
+    (h % 10_000) as f32 / 10_000.0
 }
 
 #[cfg(test)]
@@ -401,6 +605,7 @@ mod tests {
     use crate::map::MapFile;
     use crate::net::encode;
     use crate::simulation::Input;
+    use crate::simulation::debug::TankPatch;
     use crate::tank::Dir;
 
     /// What the server would send about `game` right now, with `acked`
@@ -419,22 +624,21 @@ mod tests {
     /// locomotion test needs - and no enemies means nothing else in the
     /// world for the solver to meet, so a difference is the hull's.
     fn round() -> Game {
-        let mut game = Game::default();
-        game.seed_override = Some(0xB0B5);
-        game.enemy_count_override = Some(0);
-        game.level_overrides.spawn = Some(crate::level::SpawnKind::Band);
-        game.map = MapFile::from_toml_str(MAP).expect("the default map parses");
-        let (w, h) = game.map.field_size();
-        game.init(w, h);
-        game
+        round_with(3, 0)
     }
 
     /// The same round with enemies in it, for the checks that are about
     /// what the sandbox knows of the rest of the world.
     fn round_with_enemies() -> Game {
+        round_with(3, 3)
+    }
+
+    /// A round on chassis row `row` with `enemies` enemies.
+    fn round_with(row: i32, enemies: usize) -> Game {
         let mut game = Game::default();
         game.seed_override = Some(0xB0B5);
-        game.enemy_count_override = Some(3);
+        game.enemy_count_override = Some(enemies);
+        game.player_row_override = Some(row);
         game.level_overrides.spawn = Some(crate::level::SpawnKind::Band);
         game.map = MapFile::from_toml_str(MAP).expect("the default map parses");
         let (w, h) = game.map.field_size();
@@ -452,6 +656,26 @@ mod tests {
             _ => Dir::Left,
         };
         Intent { move_dir: Some(dir), ..Intent::default() }
+    }
+
+    /// One tick with the trigger down, and one with it up.
+    fn press() -> Intent {
+        Intent { fire: true, ..Intent::default() }
+    }
+
+    fn release() -> Intent {
+        Intent::default()
+    }
+
+    /// A chassis row with one barrel and one with two.
+    fn single_barrel_row() -> i32 {
+        let lateral = tuning().tank_barrel_lateral_offset;
+        lateral.iter().position(|&l| l == 0.0).expect("a single-barrel chassis") as i32
+    }
+
+    fn twin_barrel_row() -> i32 {
+        let lateral = tuning().tank_barrel_lateral_offset;
+        lateral.iter().position(|&l| l > 0.0).expect("a twin-barrel chassis") as i32
     }
 
     /// **The property the whole technique rests on.** Two rounds built
@@ -502,7 +726,10 @@ mod tests {
         assert!(drift < IGNORE_PX, "the replay landed {drift} px out, past the wire's rounding");
         // And so it is not treated as a correction at all.
         assert_eq!((predictor.offset().x, predictor.offset().y), (0.0, 0.0));
-        assert_eq!((predictor.nudges, predictor.snaps), (0, 0));
+        let report = predictor.report(0, 0);
+        assert_eq!((report.nudges, report.snaps, report.ignored), (0, 0, 1));
+        assert_eq!(report.in_flight, 10, "ten inputs were still in flight");
+        assert!(report.error_buckets[0] + report.error_buckets[1] == 1, "counted under the wire's rounding: {report:?}");
     }
 
     /// When the server *does* disagree - it saw an input the client did
@@ -523,8 +750,11 @@ mod tests {
         let drawn_before = predictor.drawn_position().expect("a hull");
         predictor.reconcile(&wire(&mut authority, 39), 39);
 
-        assert_eq!(predictor.nudges, 1, "a real difference should count");
-        assert_eq!(predictor.snaps, 0);
+        let report = predictor.report(0, 0);
+        assert_eq!(report.nudges, 1, "a real difference should count");
+        assert_eq!(report.snaps, 0);
+        assert_eq!(report.error_buckets[3], 1, "six pixels sits in the two-to-eight bucket: {report:?}");
+        assert!((report.max_error_px - 6.0).abs() < IGNORE_PX, "{report:?}");
         // The prediction took the server's answer, to the quarter pixel
         // the wire carries it in.
         let (now, _, _) = predictor.motion().expect("a hull");
@@ -597,77 +827,186 @@ mod tests {
         assert_eq!((a.x, a.y), (p.x, p.y), "the boosted hull drifted away from its own prediction");
     }
 
-    /// The point of a provisional shot: it is on screen on the frame of
+    /// The point of a provisional shot: it is on screen on the tick of
     /// the press, and it leaves from where the hull is *now*.
     #[test]
     fn a_shot_is_drawn_from_the_predicted_muzzle_at_once() {
-        let sandbox = round();
-        let mut predictor = Predictor::new(sandbox, 0, 0);
+        let mut predictor = Predictor::new(round_with(single_barrel_row(), 0), 0, 0);
         for tick in 0..30u32 {
             predictor.step(script(tick));
         }
         let hull = predictor.motion().expect("a hull").0;
-        predictor.fire(0);
+        predictor.step(press());
         assert_eq!(predictor.provisional_count(), 1, "the shot should be on screen at once");
-        assert_eq!(predictor.shots_drawn, 1);
+        assert_eq!(predictor.report(0, 0).shots_drawn, 1);
 
-        let shell = predictor.shots().next().expect("a shell");
+        let (id, shell) = predictor.shots().next().expect("a shell");
+        assert_eq!(id, PROVISIONAL_ID_BASE);
+        assert_eq!(shell.kind, ProvisionalKind::Shell);
         let gap = ((shell.position.x - hull.x).powi(2) + (shell.position.y - hull.y).powi(2)).sqrt();
         assert!(gap > 1.0, "the shell should leave the muzzle, not the hull's centre");
         assert!(gap < 100.0, "but it is a muzzle, not a mortar: {gap}");
         // And it flies.
         let before = shell.position;
         predictor.advance_shots(PHYSICS_FIXED_DT);
-        let after = predictor.shots().next().expect("a shell").position;
+        let after = predictor.shots().next().expect("a shell").1.position;
         assert_ne!((before.x, before.y), (after.x, after.y), "the shell did not move");
     }
 
-    /// The local gate is the client's guess at the server's, and it has
-    /// to hold the trigger down to one shot per `player_fire_interval` -
-    /// otherwise holding fire paints the screen with shots the server
-    /// will refuse.
+    /// Shells fire on the press, not while held (`drive_player`), and the
+    /// local gate holds even a second press to one shot per
+    /// `player_fire_interval` - otherwise holding fire paints the screen
+    /// with shots the server will refuse.
     #[test]
-    fn the_local_gate_rations_a_held_trigger() {
-        let mut predictor = Predictor::new(round(), 0, 0);
+    fn a_shell_fires_on_the_edge_and_the_gate_rations_a_second_press() {
+        let mut predictor = Predictor::new(round_with(single_barrel_row(), 0), 0, 0);
         for _ in 0..10 {
-            predictor.fire(0);
+            predictor.step(press());
         }
-        assert_eq!(predictor.provisional_count(), 1, "a held trigger drew more than one shot");
-        // Past the interval, another is allowed.
+        assert_eq!(predictor.provisional_count(), 1, "a held trigger drew more than one shell");
+        // Released and pressed again inside the interval: nothing.
+        predictor.step(release());
+        predictor.step(press());
+        assert_eq!(predictor.provisional_count(), 1, "the gate let a second press through early");
+        // Past the interval, another is allowed - on a fresh edge.
         predictor.advance_shots(tuning().player_fire_interval + 0.001);
-        predictor.fire(0);
+        predictor.step(press());
+        assert_eq!(predictor.provisional_count(), 1, "a held trigger never re-arms a shell");
+        predictor.step(release());
+        predictor.step(press());
         assert_eq!(predictor.provisional_count(), 2);
     }
 
-    /// The server's word retires a shot; oldest first, since a seat's
-    /// shots leave in the order the trigger was pulled and come back in
-    /// that order.
+    /// **The bug this gate exists for.** A seat holding the minigun used
+    /// to draw a *shell* on every press: the predictor built one without
+    /// asking what the seat was armed with. Now the sandbox's weapon
+    /// decides, and the minigun draws its burst - bullets, one per
+    /// `minigun_bullet_delay_seconds`, while the key is held.
     #[test]
-    fn the_servers_fired_retires_the_oldest_shot() {
+    fn the_weapon_the_sandbox_holds_decides_what_is_drawn() {
         let mut predictor = Predictor::new(round(), 0, 0);
-        predictor.fire(0);
-        predictor.advance_shots(tuning().player_fire_interval + 0.001);
-        predictor.fire(0);
-        assert_eq!(predictor.provisional_count(), 2);
-        predictor.confirm_shot();
-        assert_eq!(predictor.provisional_count(), 1);
-        predictor.confirm_shot();
-        assert_eq!(predictor.provisional_count(), 0);
-        assert_eq!(predictor.shots_refused, 0, "a confirmed shot is not a refused one");
+        let patch = TankPatch { minigun_ammo: Some(40), ..Default::default() };
+        predictor.sandbox.debug_set_tank(0, &patch).expect("the seat's tank");
+        predictor.step(press());
+        let kinds: Vec<ProvisionalKind> = predictor.shots().map(|(_, s)| s.kind).collect();
+        assert_eq!(kinds, [ProvisionalKind::Bullet], "the first bullet of the burst, and no shell");
+        // The rest of the burst leaves on its own clock while held.
+        let burst = tuning().minigun_burst_size.max(1) as usize;
+        for _ in 0..burst {
+            predictor.advance_shots(tuning().minigun_bullet_delay_seconds + 0.001);
+            predictor.step(press());
+        }
+        assert_eq!(predictor.provisional_count(), burst, "the whole burst is on screen");
+        assert!(predictor.shots().all(|(_, s)| s.kind == ProvisionalKind::Bullet));
+        // Its bullets fan a little, the way the server's spread does.
+        let headings: Vec<f32> = predictor.shots().map(|(_, s)| s.rotation).collect();
+        assert!(headings.windows(2).any(|w| w[0] != w[1]), "every bullet flew dead straight: {headings:?}");
+        // Held past the burst cooldown, a second burst starts without a
+        // fresh press - full-auto.
+        predictor.advance_shots(tuning().minigun_burst_cooldown_seconds() + 0.001);
+        predictor.step(press());
+        assert_eq!(predictor.report(0, 0).shots_drawn, 2, "a held minigun keeps firing");
     }
 
-    /// A shot the server never mentions was refused - the trigger was
+    /// A twin-barrel chassis fires its left barrel on the press and its
+    /// right `tank_twin_shot_delay_seconds` later, from where the hull is
+    /// then, exactly as `tick_queued_shots` does it.
+    #[test]
+    fn a_twin_barrel_draws_its_second_shell_on_the_twins_delay() {
+        let mut predictor = Predictor::new(round_with(twin_barrel_row(), 0), 0, 0);
+        predictor.step(press());
+        assert_eq!(predictor.provisional_count(), 1, "the left barrel only, on the press");
+        let first = predictor.shots().next().expect("a shell").1;
+        predictor.advance_shots(tuning().tank_twin_shot_delay_seconds / 2.0);
+        assert_eq!(predictor.provisional_count(), 1, "not yet");
+        predictor.advance_shots(tuning().tank_twin_shot_delay_seconds / 2.0 + 0.001);
+        assert_eq!(predictor.provisional_count(), 2, "the right barrel, on the delay");
+        let second = predictor.shots().nth(1).expect("a second shell").1;
+        // Side by side across the hull, not one behind the other.
+        assert!((first.rotation - second.rotation).abs() < 0.001, "the barrels fire parallel");
+        let across = (first.position.x - second.position.x).abs() + (first.position.y - second.position.y).abs();
+        assert!(across > 1.0, "the two shells left the same barrel");
+        // One press, two shells: the gate charged two rounds for it.
+        assert_eq!(predictor.report(0, 0).shots_drawn, 1);
+    }
+
+    /// The server's ammo is the sandbox's, and a press the server would
+    /// refuse for want of it draws nothing - including one the sandbox
+    /// has not been told about yet, whose cost is still owed.
+    #[test]
+    fn a_press_the_server_would_refuse_for_ammo_draws_nothing() {
+        let mut predictor = Predictor::new(round_with(single_barrel_row(), 0), 0, 0);
+        let patch = TankPatch { shells_ammo: Some(1), ..Default::default() };
+        predictor.sandbox.debug_set_tank(0, &patch).expect("the seat's tank");
+        predictor.step(press());
+        assert_eq!(predictor.provisional_count(), 1, "the one shell there is");
+        predictor.step(release());
+        predictor.advance_shots(tuning().player_fire_interval + 0.001);
+        predictor.step(press());
+        assert_eq!(predictor.provisional_count(), 1, "the second press is owed the shell the first spent");
+        assert_eq!(predictor.report(0, 0).shots_drawn, 1);
+    }
+
+    /// The server's word retires a press oldest first, on the frame the
+    /// interpolator hands the `Fired` over - and a press's later shots
+    /// their own delay after, as the server's appear.
+    #[test]
+    fn the_servers_fired_retires_the_oldest_press_as_its_shots_appear() {
+        let mut predictor = Predictor::new(round_with(twin_barrel_row(), 0), 0, 0);
+        predictor.step(press());
+        predictor.step(release());
+        predictor.advance_shots(tuning().player_fire_interval + 0.001);
+        predictor.step(press());
+        assert_eq!(predictor.presses_waiting(), 2);
+        let twin = tuning().tank_twin_shot_delay_seconds;
+        assert_eq!(predictor.provisional_count(), 3, "both of the first press and the first of the second");
+        predictor.confirm_shot(WeaponKind::Shell, 0);
+        // Confirmed, but its shots stay until the server's take over:
+        // the first at once, the second after the twin's delay.
+        predictor.advance_shots(0.0);
+        assert_eq!(predictor.provisional_count(), 2, "the first press's first shell went at the handover");
+        predictor.advance_shots(twin + 0.001);
+        assert_eq!(predictor.presses_waiting(), 1, "the first press is spent");
+        assert_eq!(predictor.provisional_count(), 2, "the second press has both shells out by now");
+        predictor.confirm_shot(WeaponKind::Shell, 0);
+        predictor.advance_shots(twin + 0.001);
+        assert_eq!(predictor.presses_waiting(), 0);
+        assert_eq!(predictor.report(0, 0).shots_refused, 0, "a confirmed press is not a refused one");
+    }
+
+    /// A press the server never mentions was refused - the trigger was
     /// pulled on a cooldown or an ammo count this client had not caught
     /// up with - and it goes quietly rather than hanging on screen.
     #[test]
-    fn a_shot_the_server_never_confirms_expires_quietly() {
-        let mut predictor = Predictor::new(round(), 0, 0);
-        predictor.fire(0);
-        predictor.expire(PROVISIONAL_MS);
+    fn a_press_the_server_never_confirms_expires_quietly() {
+        let mut predictor = Predictor::new(round_with(single_barrel_row(), 0), 0, 0);
+        predictor.step(press());
+        predictor.advance_shots(PROVISIONAL_SECONDS - 0.01);
         assert_eq!(predictor.provisional_count(), 1, "not yet: it is still within a round trip");
-        predictor.expire(PROVISIONAL_MS + 1);
+        predictor.advance_shots(0.02);
         assert_eq!(predictor.provisional_count(), 0);
-        assert_eq!(predictor.shots_refused, 1, "and it is counted, so a loose gate is visible");
+        assert_eq!(predictor.report(0, 0).shots_refused, 1, "and it is counted, so a loose gate is visible");
+    }
+
+    /// A `Fired` with no press waiting is a shot this client did not
+    /// predict; the room's shot still sets the local gate, measured back
+    /// from how long ago the server took the input.
+    #[test]
+    fn a_fired_nobody_predicted_seeds_the_local_gate() {
+        let mut predictor = Predictor::new(round_with(single_barrel_row(), 0), 0, 0);
+        predictor.set_shots_enabled(false);
+        predictor.step(press());
+        assert_eq!(predictor.provisional_count(), 0, "off, nothing is drawn");
+        // The server fired that press five ticks ago.
+        predictor.confirm_shot(WeaponKind::Shell, 5);
+        let left = predictor.report(0, 0).cooldown;
+        let expected = tuning().player_fire_interval - 5.0 * PHYSICS_FIXED_DT;
+        assert!((left - expected).abs() < 0.001, "the gate reads {left}, the server's is at {expected}");
+        // Turned on inside that gate, a press draws nothing.
+        predictor.set_shots_enabled(true);
+        predictor.step(release());
+        predictor.step(press());
+        assert_eq!(predictor.provisional_count(), 0, "the seeded gate held the press");
     }
 
     /// A teleport is not a correction to ease across - the hull is
@@ -686,7 +1025,9 @@ mod tests {
         let mut authority = authority;
         authority.place_seat(0, far, rot, vel);
         predictor.reconcile(&wire(&mut authority, 29), 29);
-        assert_eq!((predictor.nudges, predictor.snaps), (0, 1), "a teleport should snap, not ease");
+        let report = predictor.report(0, 0);
+        assert_eq!((report.nudges, report.snaps), (0, 1), "a teleport should snap, not ease");
+        assert_eq!(report.error_buckets[5], 1, "and lands in the last bucket: {report:?}");
         assert_eq!((predictor.offset().x, predictor.offset().y), (0.0, 0.0));
         let now = predictor.motion().expect("a hull").0;
         assert!((now.x - far.x).abs() < 1.0, "the prediction should be where the portal put it");
@@ -707,7 +1048,8 @@ mod tests {
         let (pos, rot, vel) = authority.seat_motion(0).expect("a hull");
         authority.place_seat(0, Position::new(pos.x + SNAP_PX + 1.0, pos.y), rot, vel);
         predictor.reconcile(&wire(&mut authority, 19), 19);
-        assert_eq!((predictor.nudges, predictor.snaps), (0, 1));
+        let report = predictor.report(0, 0);
+        assert_eq!((report.nudges, report.snaps), (0, 1));
         assert_eq!((predictor.offset().x, predictor.offset().y), (0.0, 0.0), "a snap leaves nothing to ease");
     }
 }

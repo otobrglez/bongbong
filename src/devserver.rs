@@ -151,7 +151,7 @@ const SLOT_PARAMS: &str = r#"{"type":"object","properties":{"slot":{"type":"inte
 pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "status",
-        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `mode` (play|build|online) with the dialogs and the builder's state, and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), the server's tick and the phase - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
+        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `mode` (play|build|online) with the dialogs and the builder's state, and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, and the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
         schema: NO_PARAMS,
         read_only: true,
         destructive: false,
@@ -1993,6 +1993,31 @@ fn round_json(session: &Session) -> Value {
         // that arrived, null before the first snapshot.
         "buffer_ms": round.buffer_ms().map(|ms| ms.round() as i64),
         "server_tick": round.interp().newest_tick(),
+        // What the interpolator is doing and what the prediction cost
+        // (docs/online-coop-prd.md section 4.12, "Measured").
+        "interpolation": {
+            "delay_ms": round.interpolation().delay_ms,
+            "target_ms": round.interpolation().target_ms,
+            "jitter_ms": round.interpolation().jitter_ms,
+            "interval_ms": round.interpolation().interval_ms,
+            "buffered": round.interpolation().buffered,
+            "extrapolated_frames": round.interpolation().extrapolated_frames,
+        },
+        "prediction": round.prediction().map(|p| json!({
+            "ignored": p.ignored,
+            "nudges": p.nudges,
+            "snaps": p.snaps,
+            "error_buckets": p.error_buckets,
+            "max_error_px": p.max_error_px,
+            "shots_drawn": p.shots_drawn,
+            "shots_refused": p.shots_refused,
+            "shots_on_screen": p.shots_on_screen,
+            "in_flight": p.in_flight,
+            "cooldown": p.cooldown,
+            "lead_up": p.lead_up,
+            "lead_down": p.lead_down,
+            "lead_depth": round.lead_depth(),
+        })),
         // False between taking the seat and the room's `Welcome`: until
         // then the window still draws the local round.
         "replica": round.game().is_some(),
@@ -3304,6 +3329,14 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!(round["replica"], true);
         assert_eq!(round["server_tick"], 60, "the room's own tick: {round}");
         assert!(round["buffer_ms"].is_i64(), "the snapshot buffer's depth: {round}");
+        // The stage-2 readings ride along: what the interpolator is
+        // doing and what the prediction has cost so far.
+        assert!(round["interpolation"]["delay_ms"].is_number(), "{round}");
+        assert!(round["interpolation"]["jitter_ms"].is_number(), "{round}");
+        let prediction = &round["prediction"];
+        assert!(prediction.is_object(), "a welcome built a sandbox: {round}");
+        assert_eq!(prediction["error_buckets"].as_array().map(Vec::len), Some(6), "{prediction}");
+        assert!(prediction["shots_drawn"].is_number() && prediction["lead_up"].is_number(), "{prediction}");
         assert_eq!(st["frame"], 30, "the replica's tick, the room's newest less the buffer: {st}");
 
         // The numbers are the room's round, not the local one standing
