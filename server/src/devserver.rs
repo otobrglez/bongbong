@@ -27,7 +27,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use bongbong::devserver::{ROOM_TOOLS, ToolSpec};
+use bongbong::devserver::{REPLY_TIMEOUT, ROOM_TOOLS, ToolSpec};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -196,6 +196,14 @@ async fn forward(hub: &Arc<Hub>, method: &str, params: &Value) -> Result<Value, 
 }
 
 /// Queue one request on a room task and wait for its answer.
+///
+/// **Bounded.** A room task that never answers - wedged, starved of a
+/// thread, or working through a `room_step` far longer than anyone meant -
+/// must not hang the caller: an unbounded wait here shows up as a silent
+/// tool call that never returns, which is indistinguishable from the
+/// server being broken. `REPLY_TIMEOUT` is the game dev server's own, and
+/// the adapter outlasts it deliberately so this message is the one the
+/// model reads.
 async fn ask(
     commands: &tokio::sync::mpsc::Sender<Command>,
     method: &str,
@@ -204,7 +212,14 @@ async fn ask(
     let (reply, answer) = oneshot::channel();
     let request = DevRequest { method: method.to_string(), params: params.clone(), reply };
     commands.send(Command::Dev(request)).await.map_err(|_| "the room is gone".to_string())?;
-    answer.await.map_err(|_| "the room closed without answering".to_string())?
+    match tokio::time::timeout(REPLY_TIMEOUT, answer).await {
+        Ok(Ok(answer)) => answer,
+        Ok(Err(_)) => Err("the room closed without answering".to_string()),
+        Err(_) => Err(format!(
+            "the room did not answer {method:?} within {}s - it is wedged or still working",
+            REPLY_TIMEOUT.as_secs()
+        )),
+    }
 }
 
 #[cfg(test)]

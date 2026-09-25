@@ -13,6 +13,7 @@ use crate::math::Vec2;
 use crate::ai::{Ai, AiSnapshot, Role};
 use crate::bullet::{Bullet, BulletState};
 use crate::frog::{Facing, Frog, Side};
+use crate::missile::Missile;
 use crate::obstacle::Obstacle;
 use crate::pickup::{Pickup, PickupKind};
 use crate::plasma::{Plasma, PlasmaState};
@@ -142,6 +143,7 @@ pub struct TankDebug {
     pub wreck: bool,
     pub shells: i32,
     pub minigun: i32,
+    pub missiles: i32,
     pub plasma: i32,
     pub laser: i32,
     /// Flamethrower fuel, seconds.
@@ -323,6 +325,7 @@ pub struct TankPatch {
     pub damage: Option<f32>,
     pub shells_ammo: Option<i32>,
     pub minigun_ammo: Option<i32>,
+    pub missile_ammo: Option<i32>,
     pub plasma_ammo: Option<i32>,
     pub laser_charges: Option<i32>,
     /// Flamethrower fuel, in seconds.
@@ -533,6 +536,7 @@ impl Game {
                     wreck: tank.is_wreck(),
                     shells: tank.shells_ammo,
                     minigun: tank.minigun_ammo,
+                    missiles: tank.missile_ammo,
                     plasma: tank.plasma_ammo,
                     laser: tank.laser_charges,
                     flame_fuel: r1(tank.flame_fuel),
@@ -589,6 +593,18 @@ impl Game {
                 vx: r1(b.velocity.x),
                 vy: r1(b.velocity.y),
                 state: bullet_state_name(b.state),
+            });
+        }
+        for m in self.world.query::<&Missile>().iter() {
+            // Its ground point; the height is the stage's business.
+            projectiles.push(ProjectileDebug {
+                kind: "missile",
+                owner: m.owner.slot(),
+                x: r1(m.position.x),
+                y: r1(m.position.y),
+                vx: r1(m.dir.x * m.speed),
+                vy: r1(m.dir.y * m.speed),
+                state: m.stage.name(),
             });
         }
         let projectiles_total = projectiles.len();
@@ -787,6 +803,12 @@ impl Game {
             tank.minigun_ammo = n.max(0);
             if n > 0 {
                 tank.enqueue_weapon(ActiveWeapon::Minigun);
+            }
+        }
+        if let Some(n) = patch.missile_ammo {
+            tank.missile_ammo = n.max(0);
+            if n > 0 {
+                tank.enqueue_weapon(ActiveWeapon::Missiles);
             }
         }
         if let Some(n) = patch.plasma_ammo {

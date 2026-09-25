@@ -147,7 +147,7 @@ pub enum Tool {
 
 /// Every brush, in bar order: the categories one after another, the
 /// eraser last.
-pub const TOOLS: [Tool; 31] = [
+pub const TOOLS: [Tool; 32] = [
     Tool::Wall(Material::Brick),
     Tool::Wall(Material::Iron),
     Tool::Wall(Material::Wood),
@@ -174,6 +174,7 @@ pub const TOOLS: [Tool; 31] = [
     Tool::Pickup(PickupKind::Laser),
     Tool::Pickup(PickupKind::Minigun),
     Tool::Pickup(PickupKind::Plasma),
+    Tool::Pickup(PickupKind::Missiles),
     Tool::Pickup(PickupKind::SpeedUp),
     Tool::Pickup(PickupKind::Shield),
     Tool::Pickup(PickupKind::Flamethrower),
@@ -213,6 +214,7 @@ impl Tool {
             Tool::Pickup(PickupKind::Laser) => "laser",
             Tool::Pickup(PickupKind::Minigun) => "minigun",
             Tool::Pickup(PickupKind::Plasma) => "plasma",
+            Tool::Pickup(PickupKind::Missiles) => "missiles",
             Tool::Pickup(PickupKind::SpeedUp) => "speedup",
             Tool::Pickup(PickupKind::Shield) => "shield",
             Tool::Pickup(PickupKind::Flamethrower) => "flamethrower",

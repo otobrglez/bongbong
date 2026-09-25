@@ -55,6 +55,11 @@ struct Slots {
     shells: i32,
     weapons: i32,
     weapon_slot_w: i32,
+    /// Side of the weapon icon in its slot. The couch tables draw the
+    /// pickup sheet at its own 32 px; the compact table draws it at 28,
+    /// which is what buys the fifth slot in a bar that also has to leave
+    /// 112 px for the seat strip.
+    weapon_icon: i32,
     bars: i32,
     /// Width of the HP readout (`100|100` with two players).
     hp_w: i32,
@@ -69,15 +74,16 @@ struct Slots {
 }
 
 const SLOTS_ONE: Slots = Slots {
-    enemies: 176,
-    enemy_count: 204,
-    heart: 276,
-    hp: 292,
-    shell: 332,
-    shells: 368,
-    weapons: 408,
+    enemies: 166,
+    enemy_count: 182,
+    heart: 250,
+    hp: 266,
+    shell: 304,
+    shells: 338,
+    weapons: 376,
     weapon_slot_w: 72,
-    bars: 700,
+    weapon_icon: 32,
+    bars: 738,
     hp_w: 3 * CHAR_W,
     count_w: 3 * CHAR_W,
     count_size: HUD_TEXT_SIZE,
@@ -88,15 +94,16 @@ const SLOTS_ONE: Slots = Slots {
 /// the small font (`CHAR_W_SMALL`) so the whole row still ends before the
 /// gauges on the 960 px bar.
 const SLOTS_TWO: Slots = Slots {
-    enemies: 176,
-    enemy_count: 204,
-    heart: 272,
-    hp: 288,
-    shell: 340,
-    shells: 374,
-    weapons: 412,
-    weapon_slot_w: 72,
-    bars: 704,
+    enemies: 166,
+    enemy_count: 182,
+    heart: 250,
+    hp: 266,
+    shell: 317,
+    shells: 351,
+    weapons: 386,
+    weapon_slot_w: 71,
+    weapon_icon: 32,
+    bars: 743,
     hp_w: 7 * CHAR_W_SMALL,
     count_w: 5 * CHAR_W_SMALL,
     count_size: HUD_SMALL_TEXT_SIZE,
@@ -111,15 +118,16 @@ const SLOTS_TWO: Slots = Slots {
 /// pairs. HP stays in the full font: it is the number the player playing
 /// this seat glances at, and it is the one that has to stay big.
 const SLOTS_COMPACT: Slots = Slots {
-    enemies: 176,
-    enemy_count: 204,
-    heart: 272,
-    hp: 288,
-    shell: 328,
-    shells: 364,
-    weapons: 388,
-    weapon_slot_w: 58,
-    bars: 624,
+    enemies: 166,
+    enemy_count: 182,
+    heart: 250,
+    hp: 266,
+    shell: 304,
+    shells: 338,
+    weapons: 361,
+    weapon_slot_w: 53,
+    weapon_icon: 28,
+    bars: 628,
     hp_w: 3 * CHAR_W,
     count_w: 3 * CHAR_W_SMALL,
     count_size: HUD_SMALL_TEXT_SIZE,
@@ -229,12 +237,14 @@ pub fn draw_bar(d: &mut impl RaylibDraw, panel: Rect, model: &HudModel, textures
             ActiveWeapon::Laser => textures.pickup_laser,
             ActiveWeapon::Plasma => textures.pickup_plasma,
             ActiveWeapon::Minigun => textures.pickup_minigun,
+            ActiveWeapon::Missiles => textures.pickup_missiles,
             ActiveWeapon::Flamethrower => textures.pickup_flamethrower,
             ActiveWeapon::Shell => textures.shells,
         };
         let stocked = slot.count > 0 || p2.is_some_and(|p| p.weapons[i].count > 0);
         let src = Rectangle::new(0.0, 0.0, PICKUP_TEXTURE_SIZE, PICKUP_TEXTURE_SIZE);
-        let dest = Rectangle::new(x as f32, py as f32, PICKUP_TEXTURE_SIZE, PICKUP_TEXTURE_SIZE);
+        let icon = s.weapon_icon as f32;
+        let dest = Rectangle::new(x as f32, py as f32, icon, icon);
         let tint = if stocked { Color::WHITE } else { Color::new(255, 255, 255, 70) };
         d.draw_texture_pro(texture, src, dest, Vector2::new(0.0, 0.0), 0.0, tint);
         let count_of = |slot: WeaponSlot| -> (String, Color) {
@@ -244,7 +254,7 @@ pub fn draw_bar(d: &mut impl RaylibDraw, panel: Rect, model: &HudModel, textures
                 ("--".to_string(), DIM)
             }
         };
-        let count_x = x + PICKUP_TEXTURE_SIZE as i32 + 4;
+        let count_x = x + s.weapon_icon + 4;
         match p2 {
             None => {
                 let (count, color) = count_of(slot);
@@ -530,8 +540,12 @@ mod bar_tests {
             assert!(s.hp + s.hp_w <= s.shell, "{name}: HP runs into the shell sprite");
             assert!(s.shell + SHELL_TEXTURE_SIZE as i32 <= s.shells, "{name}");
             assert!(s.shells + s.count_w <= s.weapons, "{name}: shells run into the weapons");
-            assert!(PICKUP_TEXTURE_SIZE as i32 + 4 + s.count_w <= s.weapon_slot_w, "{name}: a weapon count overflows its slot");
-            assert!(s.weapons + WEAPON_SLOTS as i32 * s.weapon_slot_w <= s.bars, "{name}: four weapon slots run into the gauges");
+            assert!(s.weapon_icon <= PICKUP_TEXTURE_SIZE as i32, "{name}: the weapon icon is drawn larger than its sheet");
+            assert!(s.weapon_icon + 4 + s.count_w <= s.weapon_slot_w, "{name}: a weapon count overflows its slot");
+            assert!(
+                s.weapons + WEAPON_SLOTS as i32 * s.weapon_slot_w <= s.bars,
+                "{name}: {WEAPON_SLOTS} weapon slots run into the gauges"
+            );
             assert!(BAR_W <= BAR_SLOT_W);
             assert!(s.bars + 3 * BAR_SLOT_W <= crate::DEFAULT_SCREEN_WIDTH);
             // The leftmost of the three buttons at the bar's right end
@@ -571,13 +585,23 @@ mod bar_tests {
         for s in [&SLOTS_ONE, &SLOTS_TWO] {
             assert!(s.seats.is_none(), "a couch table draws no seat strip");
         }
-        // The one-player readouts are the full font, the two-player pairs
-        // the small one - what each table drew before the compact one
-        // was added beside them.
+        // The one-player readouts are the full font and the two-player
+        // pairs the small one, whatever else moves: the compact table's
+        // arrival did not change which font a couch table sets, and
+        // nothing since has either.
         assert_eq!(SLOTS_ONE.count_size, HUD_TEXT_SIZE);
         assert_eq!(SLOTS_TWO.count_size, HUD_SMALL_TEXT_SIZE);
-        assert_eq!((SLOTS_ONE.hp, SLOTS_ONE.shells, SLOTS_ONE.weapons, SLOTS_ONE.bars), (292, 368, 408, 700));
-        assert_eq!((SLOTS_TWO.hp, SLOTS_TWO.shells, SLOTS_TWO.weapons, SLOTS_TWO.bars), (288, 374, 412, 704));
+        // The origins themselves, re-pinned when the seeker missiles made
+        // the weapon strip five slots wide instead of four. Every gap
+        // between readouts went from four pixels to two to pay for it -
+        // the fonts and the couch icons are the sizes they always were, so
+        // the row is denser and starts further left, nothing is smaller.
+        assert_eq!((SLOTS_ONE.hp, SLOTS_ONE.shells, SLOTS_ONE.weapons, SLOTS_ONE.bars), (266, 338, 376, 738));
+        assert_eq!((SLOTS_TWO.hp, SLOTS_TWO.shells, SLOTS_TWO.weapons, SLOTS_TWO.bars), (266, 351, 386, 743));
+        // The couch tables draw the pickup sheet at its own size; only the
+        // compact block, which also pays for the seat strip, shrinks it.
+        assert_eq!(SLOTS_ONE.weapon_icon, PICKUP_TEXTURE_SIZE as i32);
+        assert_eq!(SLOTS_TWO.weapon_icon, PICKUP_TEXTURE_SIZE as i32);
     }
 
     /// The strip: every chip is finger-wide enough to read, none of them
@@ -627,3 +651,4 @@ mod bar_tests {
         assert!(bottom <= ph);
     }
 }
+

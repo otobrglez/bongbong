@@ -17,14 +17,14 @@ use crate::net::MAX_SEATS;
 use crate::net::PROTOCOL_VERSION;
 use crate::net::events::WireEvent;
 use crate::net::wire::{
-    BonusPickup, FireState, FrogState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, Welcome,
-    dir_index, frog_flags, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, tank_flags, tile_flags,
+    BonusPickup, FireState, FrogState, MissileState, RoundState, Seat, ShotKind, ShotState, Snapshot, TankState, TileState, Welcome, dir_index, frog_flags, quantise_heading, quantise_health, quantise_pos, quantise_seconds, quantise_velocity, tank_flags, tile_flags,
 };
 use crate::bullet::Bullet;
 use crate::frog::Frog;
 use crate::map;
 use crate::obstacle::Obstacle;
 use crate::pickup::Pickup;
+use crate::missile::Missile;
 use crate::plasma::Plasma;
 use crate::shell::Shell;
 use crate::simulation::replica::plasma_variant_index;
@@ -66,6 +66,7 @@ pub fn snapshot(game: &Game, acked: [u32; MAX_SEATS]) -> Snapshot {
         acked,
         tanks: tanks(game),
         shots: shots(game),
+        missiles: missiles(game),
         frogs: frogs(game),
         pickups: 0,
         bonus_pickups: Vec::new(),
@@ -189,6 +190,30 @@ fn shots(game: &Game) -> Vec<ShotState> {
     for p in game.world.query::<&Plasma>().iter() {
         out.push(shot(p.id, ShotKind::Plasma, p.position, p.rotation, p.state.col(), plasma_variant_index(p.variant)));
     }
+    out
+}
+
+/// The seeker missiles in flight, by id. Sorted like every other keyed
+/// family so a delta can diff two snapshots by walking them together.
+fn missiles(game: &Game) -> Vec<MissileState> {
+    let mut out: Vec<MissileState> = game
+        .world
+        .query::<&Missile>()
+        .iter()
+        .map(|m| MissileState {
+            id: m.id.min(u16::MAX as u32) as u16,
+            x: quantise_pos(m.position.x),
+            y: quantise_pos(m.position.y),
+            // Height rides the same quarter-pixel scale as a position: a
+            // missile's apex is a couple of hundred pixels, well inside an
+            // i16, and the shadow's shrink is visible at that resolution.
+            height: quantise_pos(m.height),
+            facing: quantise_heading(m.rotation()),
+            heading: quantise_heading(m.ground_rotation()),
+            tube: m.tube,
+        })
+        .collect();
+    out.sort_by_key(|m| m.id);
     out
 }
 

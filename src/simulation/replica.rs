@@ -63,6 +63,28 @@ pub struct DrawableTank {
     pub ammo: u8,
 }
 
+/// One seeker missile as it is drawn: where it is, how high, and the two
+/// angles the sprite and its shadow point along.
+///
+/// The exhaust flicker is deliberately absent. It cycles off `Missile::age`,
+/// which a replica runs itself, so holding the two sides to it would pin a
+/// cosmetic the wire does not carry on purpose.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DrawableMissile {
+    pub id: u32,
+    /// Quarter pixels: the ground point under it.
+    pub x: i32,
+    /// Quarter pixels.
+    pub y: i32,
+    /// Quarter pixels above the ground.
+    pub height: i32,
+    /// The sprite's facing in 256 steps around the turn.
+    pub facing: u8,
+    /// The shadow's ground heading in 256 steps.
+    pub heading: u8,
+    pub tube: u8,
+}
+
 /// One projectile in flight or in its muzzle/impact frames.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DrawableShot {
@@ -125,6 +147,7 @@ pub struct DrawableTile {
 pub struct DrawableState {
     pub tanks: Vec<DrawableTank>,
     pub shots: Vec<DrawableShot>,
+    pub missiles: Vec<DrawableMissile>,
     pub frogs: Vec<DrawableFrog>,
     /// Every pickup on the field: its cell and kind.
     pub pickups: Vec<((i32, i32), PickupKind)>,
@@ -347,6 +370,22 @@ impl Game {
         }
         shots.sort_by_key(|s| s.id);
 
+        let mut missiles: Vec<DrawableMissile> = self
+            .world
+            .query::<&crate::missile::Missile>()
+            .iter()
+            .map(|m| DrawableMissile {
+                id: m.id,
+                x: quarter_px(m.position.x),
+                y: quarter_px(m.position.y),
+                height: quarter_px(m.height),
+                facing: heading_step(m.rotation()),
+                heading: heading_step(m.ground_rotation()),
+                tube: m.tube,
+            })
+            .collect();
+        missiles.sort_by_key(|m| m.id);
+
         let mut frogs: Vec<DrawableFrog> = self
             .world
             .query::<&Frog>()
@@ -403,6 +442,7 @@ impl Game {
         DrawableState {
             tanks,
             shots,
+            missiles,
             frogs,
             pickups,
             tiles,

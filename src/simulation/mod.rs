@@ -26,6 +26,7 @@ pub mod debug;
 mod engage;
 mod flame;
 mod hits;
+mod missiles;
 mod props;
 pub use props::{FlyingDrum, GroundFire};
 pub mod replica;
@@ -58,6 +59,7 @@ use crate::battlefield;
 use crate::bullet::Bullet;
 use crate::frog::{Facing, Frog, Side};
 use crate::laser::{LaserBeam, LaserVariant};
+use crate::missile::Missile;
 use crate::level::{LevelOverrides, Mission, SpawnPlan};
 use crate::map::{self, CellObject, MapFile};
 use crate::obstacle::{Drum, Material, Obstacle, neighbour_mask};
@@ -303,6 +305,12 @@ pub enum Event {
     /// `wood`, `tree`, `drum`), or collapsed a prop under sustained heat
     /// (`sandbag`, `fence`).
     Ignited { x: f32, y: f32, what: &'static str },
+    /// A seeker missile fired by `slot` finished its climb and locked on:
+    /// onto the tank in `target` slot, or - `None` - onto the ground point
+    /// its launcher was aimed at, since nothing was in `missile_seek_range`.
+    MissileLocked { slot: usize, target: Option<usize>, x: f32, y: f32 },
+    /// A seeker missile fired by `slot` came down and burst at (`x`, `y`).
+    MissileBlast { slot: usize, x: f32, y: f32 },
     /// A delayed secondary pop from a wreck's ammo cooking off. Purely
     /// cosmetic - it deals no damage - but recorded so tooling and the
     /// presentation layer can see it.
@@ -727,6 +735,7 @@ struct Frame {
     pending_shells: Vec<Shell>,
     pending_plasmas: Vec<Plasma>,
     pending_bullets: Vec<Bullet>,
+    pending_missiles: Vec<Missile>,
     pending_lasers: Vec<PendingLaserShot>,
     /// Flame jets emitted this frame, one per firing nozzle
     /// (`resolve_flames` takes them).
@@ -756,6 +765,7 @@ impl Frame {
             pending_shells: Vec::new(),
             pending_plasmas: Vec::new(),
             pending_bullets: Vec::new(),
+            pending_missiles: Vec::new(),
             pending_lasers: Vec::new(),
             flame_jets: Vec::new(),
             muzzle_flashes: Vec::new(),
@@ -1283,6 +1293,7 @@ impl Game {
             self.enemy_phase(&mut f, &grid);
             self.wave_phase(&mut f);
             self.spawn_pending(&mut f);
+            self.guide_missiles(&mut f);
             self.resolve_lasers(&mut f);
             self.resolve_flames(&mut f);
             self.step_world(&mut f, true);
@@ -1292,6 +1303,7 @@ impl Game {
             self.resolve_projectiles::<Shell>(&mut f, true);
             self.resolve_projectiles::<Bullet>(&mut f, true);
             self.resolve_projectiles::<Plasma>(&mut f, true);
+            self.resolve_missiles(&mut f, true);
             self.tick_cookoffs(&mut f);
             self.tick_burns(&mut f);
             self.tick_fires(&mut f, true);
@@ -1308,10 +1320,12 @@ impl Game {
             // shots land without dealing damage, a barrel cascade finishes
             // without hurting anyone) while the restart counts down.
             // Physics doesn't step, so nothing drifts.
+            self.guide_missiles(&mut f);
             self.step_world(&mut f, false);
             self.resolve_projectiles::<Shell>(&mut f, false);
             self.resolve_projectiles::<Bullet>(&mut f, false);
             self.resolve_projectiles::<Plasma>(&mut f, false);
+            self.resolve_missiles(&mut f, false);
             self.tick_cookoffs(&mut f);
             self.tick_burns(&mut f);
             self.tick_fires(&mut f, false);
@@ -1416,6 +1430,7 @@ impl Game {
             tank.wet_timer = (tank.wet_timer - dt).max(0.0);
             tank.tick_wreck(dt);
             tank.tick_minigun_spin(dt);
+            tank.tick_missile_pod();
             if roll_wreck_col(tank, rng) {
                 // The frame a tank becomes a wreck: stop it behaving like
                 // an air-hockey puck. See `Physics::settle_wreck`.
@@ -1793,6 +1808,10 @@ impl Game {
                         tank.enqueue_weapon(ActiveWeapon::Minigun);
                         tank.minigun_ammo += tuning().minigun_ammo_per_pickup;
                     }
+                    PickupKind::Missiles => {
+                        tank.enqueue_weapon(ActiveWeapon::Missiles);
+                        tank.missile_ammo += tuning().missile_ammo_per_pickup;
+                    }
                     // Fuel in seconds; a second tank stacks.
                     PickupKind::Flamethrower => {
                         tank.enqueue_weapon(ActiveWeapon::Flamethrower);
@@ -2009,16 +2028,17 @@ impl Game {
         drive_tank(&mut self.physics, tank, intent, f.dt, footing);
         tick_queued_shots(&mut self.physics, f, tank, owner);
 
-        // A laser or minigun is full-auto while the key is held (still
-        // paced by `fire_cooldown`); shells and plasma fire once per
-        // physical press, so a held key can never re-arm them. The
+        // A laser, minigun or missile pod is full-auto while the key is
+        // held (still paced by `fire_cooldown` - for the pod, its reload);
+        // shells and plasma fire once per physical press, so a held key can
+        // never re-arm them. The
         // flamethrower is a stream: every held frame emits, with no
         // cooldown between frames at all.
         let fire_pressed = intent.fire && !self.player_fire_held_last_frame[index];
         self.player_fire_held_last_frame[index] = intent.fire;
         let weapon = tank.active_weapon();
         let should_fire = match weapon {
-            ActiveWeapon::Laser | ActiveWeapon::Minigun | ActiveWeapon::Flamethrower => intent.fire,
+            ActiveWeapon::Laser | ActiveWeapon::Minigun | ActiveWeapon::Missiles | ActiveWeapon::Flamethrower => intent.fire,
             ActiveWeapon::Plasma | ActiveWeapon::Shell => fire_pressed,
         };
         if weapon == ActiveWeapon::Flamethrower {
@@ -2455,6 +2475,10 @@ impl Game {
             bullet.set_id(self.take_shot_id());
             self.world.spawn((bullet,));
         }
+        for mut missile in f.pending_missiles.drain(..) {
+            missile.set_id(self.take_shot_id());
+            self.world.spawn((missile,));
+        }
     }
 
     /// The next projectile id: one counter for shells, bullets and plasma,
@@ -2499,6 +2523,9 @@ impl Game {
             self.advance_projectiles::<Shell>(PHYSICS_FIXED_DT);
             self.advance_projectiles::<Bullet>(PHYSICS_FIXED_DT);
             self.advance_projectiles::<Plasma>(PHYSICS_FIXED_DT);
+            for missile in self.world.query::<&mut Missile>().iter() {
+                missile.advance(PHYSICS_FIXED_DT);
+            }
             if step_physics {
                 self.physics.step();
                 let (bodies, colliders) = self.physics.quarantined();
@@ -3458,6 +3485,7 @@ impl Game {
                     damage: tank.damage,
                     shells_ammo: tank.shells_ammo,
                     minigun_ammo: tank.minigun_ammo,
+                    missile_ammo: tank.missile_ammo,
                     plasma_ammo: tank.plasma_ammo,
                     laser_charges: tank.laser_charges,
                     flame_fuel: tank.flame_fuel,
@@ -3502,6 +3530,7 @@ pub struct TankSnapshot {
     pub damage: f32,
     pub shells_ammo: i32,
     pub minigun_ammo: i32,
+    pub missile_ammo: i32,
     pub plasma_ammo: i32,
     pub laser_charges: i32,
     /// Flamethrower fuel left, in seconds of burn.
@@ -4435,8 +4464,17 @@ mod determinism_tests {
             }
             hash
         };
-        assert_eq!(run(1), 16_887_373_289_363_662_579, "one seat");
-        assert_eq!(run(2), 13_902_766_956_039_934_748, "two seats");
+        // **Re-baselined for master's seeker missiles, deliberately.**
+        // `PickupKind` gained a variant, so the Health-slot bonus roll
+        // draws a different number, and the projectile speeds moved - both
+        // shift where a seeded round's tanks end up, and neither has
+        // anything to do with the walk order this gate exists to protect.
+        // What it protects is unchanged: the per-seat block still runs once
+        // per seat after player 1, so a second seat does not disturb the
+        // first's stream. Never bump these to go green - work out which
+        // change moved them first.
+        assert_eq!(run(1), 3_330_505_246_546_623_918, "one seat");
+        assert_eq!(run(2), 15_003_608_774_004_553_797, "two seats");
     }
 
     /// A portal round replays too: the destination draw sits on the round

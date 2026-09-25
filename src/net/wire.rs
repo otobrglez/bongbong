@@ -171,16 +171,18 @@ pub enum WeaponKind {
     Laser,
     Plasma,
     Minigun,
+    Missiles,
     Flamethrower,
 }
 
 impl WeaponKind {
     /// Every kind, in wire order.
-    pub const ALL: [WeaponKind; 5] = [
+    pub const ALL: [WeaponKind; 6] = [
         WeaponKind::Shell,
         WeaponKind::Laser,
         WeaponKind::Plasma,
         WeaponKind::Minigun,
+        WeaponKind::Missiles,
         WeaponKind::Flamethrower,
     ];
 
@@ -203,6 +205,7 @@ impl From<ActiveWeapon> for WeaponKind {
             ActiveWeapon::Laser => WeaponKind::Laser,
             ActiveWeapon::Plasma => WeaponKind::Plasma,
             ActiveWeapon::Minigun => WeaponKind::Minigun,
+            ActiveWeapon::Missiles => WeaponKind::Missiles,
             ActiveWeapon::Flamethrower => WeaponKind::Flamethrower,
         }
     }
@@ -215,6 +218,7 @@ impl From<WeaponKind> for ActiveWeapon {
             WeaponKind::Laser => ActiveWeapon::Laser,
             WeaponKind::Plasma => ActiveWeapon::Plasma,
             WeaponKind::Minigun => ActiveWeapon::Minigun,
+            WeaponKind::Missiles => ActiveWeapon::Missiles,
             WeaponKind::Flamethrower => ActiveWeapon::Flamethrower,
         }
     }
@@ -390,6 +394,45 @@ pub struct ShotState {
     pub variant: u8,
 }
 
+/// One seeker missile in flight (`missile.rs`).
+///
+/// **Only what the drawing needs.** A replica never flies a missile - the
+/// seek, the lock, the dive and the burst are all the server's - so the
+/// aim point, the target, the stage timers and the speed never travel.
+/// What is left is where it is, how high, which way its sprite and its
+/// shadow point, and which tube it left: `render/missile.rs` derives the
+/// lift, the draw scale and both rotations from exactly these.
+///
+/// The exhaust flicker is deliberately *not* here. It cycles off `age`,
+/// which the replica runs itself in `tick_presentation` - a per-missile
+/// flame frame is the kind of cosmetic the wire is allowed to omit, and
+/// sending it would cost a byte a missile a snapshot to synchronise a
+/// flicker nobody can see out of step.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MissileState {
+    pub id: u16,
+    /// Quarter pixels (`quantise_pos`): the point on the ground under it.
+    pub x: i16,
+    /// Quarter pixels (`quantise_pos`).
+    pub y: i16,
+    /// Height above the ground in quarter pixels - what `Missile::lift`
+    /// turns into the shadow's shrink and the sprite's scale.
+    pub height: i16,
+    /// `quantise_heading` of `Missile::rotation` - the way the sprite
+    /// points, which noses up out of the tube and tips down into the dive.
+    pub facing: u8,
+    /// `quantise_heading` of `Missile::ground_rotation` - the way the
+    /// shadow points, which is the ground heading alone.
+    pub heading: u8,
+    /// Which tube it left: the flicker salt, fixed for its life.
+    ///
+    /// No owner rides along, for the reason no shot's does
+    /// (`apply::REPLICA_OWNER`): a replica resolves no hits and nothing in
+    /// the drawing asks whose missile it is. Whose volley *hit* travels as
+    /// the `MissileBlast` event, which is the part anything reads.
+    pub tube: u8,
+}
+
 /// Bits of `FrogState::state`.
 pub mod frog_flags {
     /// The frog is dead.
@@ -511,6 +554,8 @@ pub struct Snapshot {
     pub acked: [u32; MAX_SEATS],
     pub tanks: Vec<TankState>,
     pub shots: Vec<ShotState>,
+    /// Seeker missiles in flight, by `Missile::id`.
+    pub missiles: Vec<MissileState>,
     pub frogs: Vec<FrogState>,
     /// One bit per map pickup slot, set while its pickup is on the field.
     pub pickups: u64,

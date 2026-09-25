@@ -19,8 +19,7 @@ use crate::pickup::{draw_pickup, Pickup};
 use crate::portal::draw_portal;
 use crate::simulation::Game;
 use crate::tank::{
-    draw_enemy_ring, draw_minigun_mount, draw_minigun_mount_shadow, draw_player_locate, draw_player_ring, draw_tank, draw_tank_shadow,
-    draw_tank_shield, Tank,
+    draw_enemy_ring, draw_minigun_mount, draw_minigun_mount_shadow, draw_missile_pod, draw_missile_pod_shadow, draw_player_locate, draw_player_ring, draw_tank, draw_tank_shadow, draw_tank_shield, Tank,
 };
 use crate::track::draw_track;
 use hecs::Entity;
@@ -65,9 +64,11 @@ fn draw_one_tank(c: &mut impl Canvas, tank: &Tank, role: TankRole, time: f32, sh
     if shadows {
         draw_tank_shadow(c, tank);
         draw_minigun_mount_shadow(c, tank);
+        draw_missile_pod_shadow(c, tank);
     }
     draw_tank(c, tank);
     draw_minigun_mount(c, tank);
+    draw_missile_pod(c, tank);
     if role != TankRole::RollIn {
         draw_damage(c, tank, time);
     }

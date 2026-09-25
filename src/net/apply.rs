@@ -41,11 +41,11 @@ use crate::net::PROTOCOL_VERSION;
 use crate::net::encode::{cell_from_index, cell_index, field_cols};
 use crate::net::events::WireEvent;
 use crate::net::wire::{
-    ShotKind, ShotState, Snapshot, TankState, Welcome, dequantise_heading, dequantise_pos, dequantise_seconds,
-    dequantise_velocity, dir_from_index, frog_flags, tank_flags, tile_flags,
+    MissileState, ShotKind, ShotState, Snapshot, TankState, Welcome, dequantise_heading, dequantise_pos, dequantise_seconds, dequantise_velocity, dir_from_index, frog_flags, tank_flags, tile_flags,
 };
 use crate::obstacle::{Drum, Fuse, Obstacle};
 use crate::pickup::Pickup;
+use crate::missile::Missile;
 use crate::plasma::{Plasma, PlasmaState};
 use crate::shell::{Owner, Shell, ShellState};
 use crate::simulation::replica::plasma_variant_from_index;
@@ -121,6 +121,7 @@ pub fn snapshot(game: &mut Game, s: &Snapshot) {
     apply_tiles(game, s, cols, dead_tiles);
     apply_tanks(game, s);
     apply_shots(game, s);
+    apply_missiles(game, s);
     apply_frogs(game, s);
     apply_pickups(game, s, cols);
     apply_fires(game, s, cols);
@@ -319,6 +320,7 @@ fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
             ActiveWeapon::Laser => tank.laser_charges = ammo,
             ActiveWeapon::Plasma => tank.plasma_ammo = ammo,
             ActiveWeapon::Minigun => tank.minigun_ammo = ammo,
+            ActiveWeapon::Missiles => tank.missile_ammo = ammo,
             ActiveWeapon::Flamethrower => tank.flame_fuel = ammo as f32,
         }
         (tank.body, tank.move_half_extents(tank.facing_along_x()), turned)
@@ -340,6 +342,57 @@ fn set_timer(timer: &mut f32, on: bool, full: f32) {
         *timer = 0.0;
     } else if *timer <= 0.0 {
         *timer = full.max(f32::EPSILON);
+    }
+}
+
+/// The seeker missiles the snapshot lists, spawned, moved or dropped.
+///
+/// A replica never flies one: no seek, no lock, no dive, no burst. It holds
+/// the pose the server sent and `render/missile.rs` draws it, exactly as a
+/// shot is held. What the wire leaves out stays at its spawn value - the
+/// aim, the target, the stage timers - because nothing here reads them.
+fn apply_missiles(game: &mut Game, s: &Snapshot) {
+    let mut existing: BTreeMap<u16, Entity> = BTreeMap::new();
+    for (e, m) in game.world.query::<(Entity, &Missile)>().iter() {
+        existing.insert((m.id & 0xFFFF) as u16, e);
+    }
+    let wanted: BTreeMap<u16, &MissileState> = s.missiles.iter().map(|m| (m.id, m)).collect();
+    for (id, entity) in &existing {
+        if !wanted.contains_key(id) {
+            game.world.despawn(*entity).ok();
+        }
+    }
+    for (id, ms) in wanted {
+        let ground = Position::new(dequantise_pos(ms.x), dequantise_pos(ms.y));
+        let height = dequantise_pos(ms.height);
+        let unit = |deg: f32| {
+            let rad = deg.to_radians();
+            Vec2::new(rad.sin(), -rad.cos())
+        };
+        let facing = unit(dequantise_heading(ms.facing));
+        let dir = unit(dequantise_heading(ms.heading));
+        match existing.get(&id) {
+            Some(&entity) => {
+                let mut q = game.world.query_one::<&mut Missile>(entity);
+                if let Ok(m) = q.get() {
+                    m.position = ground;
+                    m.height = height;
+                    m.facing = facing;
+                    m.dir = dir;
+                }
+            }
+            None => {
+                // The aim is the ground point it is over: a replica never
+                // steers, so this only has to be finite.
+                let mut m = Missile::spawn(ground, dir, REPLICA_OWNER, ms.tube, ground);
+                m.set_id(ms.id as u32);
+                m.position = ground;
+                m.height = height;
+                m.facing = facing;
+                m.dir = dir;
+                game.world.spawn((m,));
+            }
+        }
     }
 }
 
@@ -625,6 +678,27 @@ mod tests {
         game
     }
 
+    /// Wreck `slot` on frame `at`, and insist the round is still running
+    /// when it happens.
+    ///
+    /// A kill is queued into the frame and applied by the next `update`,
+    /// but `update` deals no damage once the round is over - so a kill
+    /// scheduled past the end is silently nothing, and the test that
+    /// wanted a wreck fails with no clue why. Tuning moves where a seeded
+    /// round ends (master's projectile speeds did), so the frame is early
+    /// and the assumption is checked.
+    fn kill_at(game: &mut Game, frame: u32, at: u32, slot: usize) {
+        if frame != at {
+            return;
+        }
+        assert_eq!(
+            game.outcome(),
+            crate::simulation::Outcome::Playing,
+            "frame {at}: the round is already over, so killing slot {slot} would deal no damage - move the kill earlier"
+        );
+        game.debug_kill(slot).unwrap_or_else(|e| panic!("slot {slot}: {e}"));
+    }
+
     /// A scripted drive: a new heading every 40 frames, the trigger every
     /// twelfth frame.
     fn intent(frame: u32) -> Intent {
@@ -688,6 +762,7 @@ mod tests {
     struct Seen {
         wrecks: usize,
         shots: usize,
+        missiles: usize,
         changed_tiles: usize,
         fires: usize,
         pickups_taken: usize,
@@ -708,6 +783,7 @@ mod tests {
         fn record(&mut self, state: &DrawableState, first: &DrawableState) {
             self.wrecks += state.tanks.iter().filter(|t| t.wreck).count();
             self.shots += state.shots.len();
+            self.missiles += state.missiles.len();
             self.changed_tiles += state
                 .tiles
                 .iter()
@@ -791,11 +867,12 @@ mod tests {
 
     #[test]
     fn the_replica_draws_the_default_map_round() {
-        let seen = round_trip(DEFAULT_MAP, 0xB0B5, 600, |game, frame| {
-            if frame == 300 {
-                game.debug_kill(2).expect("enemy in slot 2");
-            }
-        });
+        // Frame 120, not 300: this map's round can be over well before
+        // then - the mission is Protect and six enemies reach the frog
+        // inside five seconds - and a kill on the end screen deals no
+        // damage, so the wreck this test is about never happens. `kill_at`
+        // says so out loud rather than leaving a bare "no wreck".
+        let seen = round_trip(DEFAULT_MAP, 0xB0B5, 600, |game, frame| kill_at(game, frame, 120, 2));
         assert!(seen.shots > 0, "{seen:?}: nobody fired");
         assert!(seen.wrecks > 0, "{seen:?}: no wreck");
         assert!(seen.changed_tiles > 0, "{seen:?}: no tile was hit");
@@ -898,6 +975,30 @@ mod tests {
         assert!(game.outcome() != crate::simulation::Outcome::Playing, "the round restarted mid-test");
     }
 
+/// **A seeker volley has to reach the replica.** Missiles are a keyed
+    /// family of their own (`wire::MissileState`) because nothing else on
+    /// the wire describes one: they are not shots, they have a height, and
+    /// the server flies them alone. Before the family existed a volley was
+    /// invisible in a room - the damage landed and the burst drew, but the
+    /// missiles themselves only ever existed on the server.
+    ///
+    /// The round-trip assertions inside `round_trip` do the real checking,
+    /// frame by frame; this test's job is to make sure a missile is
+    /// actually *up* while they run, so a green result is never vacuous.
+    #[test]
+    fn a_seeker_volley_reaches_the_replica() {
+        let seen = round_trip(DEFAULT_MAP, 0xB0B5, 420, |game, frame| {
+            // Hand the seat a pod and pull the trigger: `intent` fires
+            // every twelfth frame, and a pod puts two salvos of four in
+            // the air per press.
+            if frame == 30 {
+                let patch = crate::simulation::debug::TankPatch { missile_ammo: Some(40), ..Default::default() };
+                game.debug_set_tank(0, &patch).expect("the seat's tank");
+            }
+        });
+        assert!(seen.missiles > 0, "{seen:?}: no missile was ever in the air, so nothing was checked");
+    }
+
     #[test]
     fn a_late_joiner_sees_the_same_picture() {
         let mut game = authoritative(PROPS_MAP, 0xF406, 6);
@@ -905,9 +1006,7 @@ mod tests {
             if frame == 120 {
                 game.debug_detonate(map::cell_to_world(20, 10)).expect("the barrel cluster");
             }
-            if frame == 300 {
-                game.debug_kill(1).expect("enemy in slot 1");
-            }
+            kill_at(&mut game, frame, 150, 1);
             step(&mut game, frame);
         }
         let replica = welcome_through_the_codec(&game);

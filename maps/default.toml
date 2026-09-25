@@ -601,7 +601,7 @@ material = "brick"
 
 [cells."14,12"]
 kind = "pickup"
-pickup = "flamethrower"
+pickup = "missiles"
 
 [cells."23,14"]
 kind = "wall"
@@ -682,7 +682,7 @@ material = "brick"
 
 [cells."29,1"]
 kind = "pickup"
-pickup = "minigun"
+pickup = "missiles"
 
 [cells."6,12"]
 kind = "tall_grass"
@@ -701,7 +701,7 @@ material = "brick"
 
 [cells."12,12"]
 kind = "pickup"
-pickup = "minigun"
+pickup = "missiles"
 
 [cells."32,16"]
 kind = "pine"
@@ -866,7 +866,7 @@ kind = "tall_grass"
 
 [cells."13,12"]
 kind = "pickup"
-pickup = "flamethrower"
+pickup = "missiles"
 
 [cells."7,11"]
 kind = "barrel"
@@ -1054,7 +1054,7 @@ material = "brick"
 
 [cells."5,12"]
 kind = "pickup"
-pickup = "minigun"
+pickup = "missiles"
 
 [cells."6,13"]
 kind = "road"
@@ -1120,7 +1120,7 @@ kind = "road"
 
 [cells."28,1"]
 kind = "pickup"
-pickup = "minigun"
+pickup = "missiles"
 
 [cells."24,1"]
 kind = "tall_grass"

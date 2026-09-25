@@ -60,13 +60,15 @@ ON_PALETTE = [
     'shells.png',
     'minigun_bullets.png',
     'minigun_mount.png',
+    'missile.png',
+    'missile_pod.png',
     'damage.png',
     'tracks.png',
     'portal_sheet.png',
 ]
 
 # The subset that is drawn over the ground layer and so must carry no green.
-NO_GREEN = ['walls_sheet.png', 'props_sheet.png', 'barrel_explosion.png', 'portal_sheet.png']
+NO_GREEN = ['walls_sheet.png', 'props_sheet.png', 'barrel_explosion.png', 'portal_sheet.png', 'missile.png', 'missile_pod.png']
 
 PALETTE = {tuple(c) for c in pp.PUNY_PALETTE}
 PALETTE_ALL = {tuple(c) for c in pp.PUNY_PALETTE_ALL}

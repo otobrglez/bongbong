@@ -750,6 +750,12 @@ pub fn run(args: Args) {
     let minigun_mount_texture = rl
         .load_texture(&thread, "static/minigun_mount.png")
         .expect("failed loading minigun mount texture");
+    let missile_pod_texture = rl
+        .load_texture(&thread, "static/missile_pod.png")
+        .expect("failed loading missile pod texture");
+    let missile_texture = rl
+        .load_texture(&thread, "static/missile.png")
+        .expect("failed loading missile texture");
     let damage_texture = rl
         .load_texture(&thread, "static/damage.png")
         .expect("failed loading damage texture");
@@ -804,6 +810,9 @@ pub fn run(args: Args) {
     let pickup_plasma_texture = rl
         .load_texture(&thread, "static/pickups/plasma.png")
         .expect("failed loading plasma pickup texture");
+    let pickup_missiles_texture = rl
+        .load_texture(&thread, "static/pickups/missiles.png")
+        .expect("failed loading missiles pickup texture");
     let pickup_speedup_texture = rl
         .load_texture(&thread, "static/pickups/speedup.png")
         .expect("failed loading speed-up pickup texture");
@@ -1295,6 +1304,7 @@ pub fn run(args: Args) {
                     pickup_laser: &pickup_laser_texture,
                     pickup_minigun: &pickup_minigun_texture,
                     pickup_plasma: &pickup_plasma_texture,
+                    pickup_missiles: &pickup_missiles_texture,
                     pickup_speedup: &pickup_speedup_texture,
                     pickup_shield: &pickup_shield_texture,
                     pickup_flamethrower: &pickup_flamethrower_texture,
@@ -1426,6 +1436,7 @@ pub fn run(args: Args) {
                 shells: &shells_texture,
                 plasma: &plasma_texture,
                 minigun_bullets: &minigun_bullets_texture,
+                missile: &missile_texture,
                 damage: &damage_texture,
                 tracks: &tracks_texture,
                 obstacles: &obstacles_texture,
@@ -1438,11 +1449,13 @@ pub fn run(args: Args) {
                 pickup_laser: &pickup_laser_texture,
                 pickup_minigun: &pickup_minigun_texture,
                 pickup_plasma: &pickup_plasma_texture,
+                pickup_missiles: &pickup_missiles_texture,
                 pickup_speedup: &pickup_speedup_texture,
                 pickup_shield: &pickup_shield_texture,
                 pickup_flamethrower: &pickup_flamethrower_texture,
                 pickup_frog_health: &pickup_frog_health_texture,
                 minigun_mount: &minigun_mount_texture,
+                missile_pod: &missile_pod_texture,
                 grass: &grass_textures[theme_index(game.map.theme)],
                 trees: &trees_texture,
                 portal: &portal_texture,

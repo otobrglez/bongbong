@@ -371,7 +371,11 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
     assert!(tank1.x != start_x || tank1.y != start_y, "the driven tank moved");
     assert!(host_stream.baseline.acked[1] > 0, "the seat's newest intent tick is acked: {:?}", &host_stream.baseline.acked[..2]);
     assert_eq!(host_stream.baseline.acked[2..], [0; MAX_SEATS - 2]);
-    assert_eq!(second_stream.baseline.tick / 3 * 3, second_stream.baseline.tick);
+    // The baseline sits on the room's snapshot cadence, whatever it is.
+    // Spelled with `SNAPSHOT_EVERY` rather than a literal: written as
+    // `tick / 3 * 3 == tick` it silently became a one-in-three coin flip
+    // the moment the cadence changed.
+    assert_eq!(second_stream.baseline.tick as u64 % SNAPSHOT_EVERY, 0, "tick {}", second_stream.baseline.tick);
 
     // The second player drops and comes back with the same token: same
     // seat, a fresh welcome, then the stream resumes with a full snapshot.

@@ -1,6 +1,7 @@
-//! Firing. Spawning shells, plasma bolts, bullets and laser beams from a
-//! tank's muzzle (with recoil), ticking a twin-barrel chassis's queued
-//! second shot and a minigun burst, the per-weapon trigger dispatch the
+//! Firing. Spawning shells, plasma bolts, bullets, seeker missiles and
+//! laser beams from a tank's muzzle (with recoil), ticking a twin-barrel
+//! chassis's queued second shot, a minigun burst and a missile volley, the
+//! per-weapon trigger dispatch the
 //! player and every enemy share, and the `Projectile` view of the three
 //! projectile types that lets one hit-resolution loop serve them all.
 
@@ -11,12 +12,15 @@ use crate::math::Vec2;
 
 use crate::bullet::{Bullet, BulletState};
 use crate::laser::LaserVariant;
+use crate::missile::Missile;
 use crate::physics::Physics;
 use crate::plasma::{Plasma, PlasmaState};
 use crate::shell::{Owner, Shell, ShellState};
 use crate::shockwave::Shockwave;
-use crate::tank::{ActiveWeapon, MinigunBurst, PendingPlasmaShot, PendingShot, Tank};
+use crate::tank::{ActiveWeapon, MinigunBurst, MissileVolley, PendingPlasmaShot, PendingShot, Tank};
 use crate::{
+    MISSILE_TUBE_FORWARD,
+    MISSILE_TUBE_OFFSETS,
     Position,
 };
 
@@ -147,6 +151,33 @@ fn fire_bullet(physics: &mut Physics, f: &mut Frame, tank: &Tank, owner: Owner, 
     position
 }
 
+/// Launch one seeker missile from tube `tube` of `tank`'s pod: from the
+/// tube's mouth, along the turret's facing fanned `missile_fan_deg` per tube
+/// out from the centre, with the launcher's aim point
+/// (`missile_fallback_range` ahead, clamped to the field) as where it comes
+/// down if the seek finds nothing. A puff at the tube, a small kick. No RNG.
+fn fire_missile(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, owner: Owner, aim_offset: f32, tube: u8) {
+    let t = tuning();
+    let offsets = MISSILE_TUBE_OFFSETS;
+    let i = (tube as usize).min(offsets.len() - 1);
+    let rot = (tank.rotation + aim_offset).to_radians();
+    let dir = Vec2::new(rot.sin(), -rot.cos());
+    let right = Vec2::new(rot.cos(), rot.sin());
+    let pod = tank.scale * t.missile_pod_scale;
+    let mouth = tank.position + dir * (MISSILE_TUBE_FORWARD * pod) + right * (offsets[i] * pod);
+    // Fan by where the tube sits: the middle pair a little, the outer pair
+    // twice as much, each to its own side.
+    let fan = t.missile_fan_deg * offsets[i] / 3.0;
+    let fanned = (tank.rotation + aim_offset + fan).to_radians();
+    let launch = Vec2::new(fanned.sin(), -fanned.cos());
+    let ahead = tank.position + dir * t.missile_fallback_range;
+    let aim = Position::new(ahead.x.clamp(0.0, f.width), ahead.y.clamp(0.0, f.height));
+    f.muzzle_flashes.push(Shockwave::new(mouth));
+    apply_recoil(physics, tank, dir, t.missile_recoil_speed, t.missile_recoil_max_speed);
+    tank.missile_tubes_empty = tank.missile_tubes_empty.saturating_add(1).min(offsets.len() as u8);
+    f.pending_missiles.push(Missile::spawn(mouth, launch, owner, tube, aim));
+}
+
 /// Tick a tank's queued shots: a twin-barrel chassis's second shell or
 /// plasma bolt (`Tank::pending_shot`/`pending_plasma_shot`) and the rest of
 /// a minigun burst (`Tank::minigun_burst`). Runs every frame whether or not
@@ -200,6 +231,39 @@ pub(super) fn tick_queued_shots(physics: &mut Physics, f: &mut Frame, tank: &mut
             }
         } else {
             tank.minigun_burst = Some(burst);
+        }
+    }
+
+    if let Some(mut volley) = tank.missile_volley {
+        volley.timer -= dt;
+        if volley.timer <= 0.0 {
+            if wreck || tank.missile_ammo == 0 {
+                tank.missile_volley = None;
+            } else {
+                tank.missile_ammo -= 1;
+                if volley.next_tube == 0 {
+                    // A new salvo: the pod has reloaded its tubes.
+                    tank.missile_tubes_empty = 0;
+                }
+                fire_missile(physics, f, tank, owner, 0.0, volley.next_tube);
+                volley.missiles_remaining -= 1;
+                let tubes = tuning().missile_volley_size.clamp(1, MISSILE_TUBE_OFFSETS.len() as u32) as u8;
+                volley.next_tube = (volley.next_tube + 1) % tubes;
+                tank.missile_volley = if volley.missiles_remaining == 0 {
+                    None
+                } else {
+                    // Back to the first tube means the salvo is spent: the
+                    // longer gap while the pod reloads before the next.
+                    volley.timer = if volley.next_tube == 0 {
+                        tuning().missile_salvo_gap_seconds
+                    } else {
+                        tuning().missile_launch_delay_seconds
+                    };
+                    Some(volley)
+                };
+            }
+        } else {
+            tank.missile_volley = Some(volley);
         }
     }
 }
@@ -268,6 +332,29 @@ pub(super) fn dispatch_fire_from(
                     });
                 }
                 tank.fire_cooldown = tuning().minigun_burst_cooldown_seconds();
+            }
+        }
+        ActiveWeapon::Missiles => {
+            // A volley of `missile_salvos` salvos, one missile per tube
+            // each: the first tube now, the rest through
+            // `tick_queued_shots`. Aimed dead ahead whatever the misfire
+            // skew - the seek does the aiming.
+            if tank.missile_ammo > 0 {
+                f.events.push(Event::Fired { slot: tank.owner_slot(), weapon: ActiveWeapon::Missiles.name() });
+                tank.missile_ammo -= 1;
+                tank.missile_tubes_empty = 0;
+                fire_missile(physics, f, tank, owner, 0.0, 0);
+                let volley = tuning().missile_volley_count();
+                if volley > 1 {
+                    let tubes = tuning().missile_volley_size.clamp(1, MISSILE_TUBE_OFFSETS.len() as u32) as u8;
+                    let (next_tube, timer) = if tubes > 1 {
+                        (1, tuning().missile_launch_delay_seconds)
+                    } else {
+                        (0, tuning().missile_salvo_gap_seconds)
+                    };
+                    tank.missile_volley = Some(MissileVolley { missiles_remaining: volley - 1, timer, next_tube });
+                }
+                tank.fire_cooldown = tuning().missile_volley_cooldown_seconds();
             }
         }
         ActiveWeapon::Plasma => {

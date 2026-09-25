@@ -65,6 +65,9 @@ pub fn version_line() -> String {
 pub const HUD_LASER_COLOR: Color = Color::new(255, 60, 160, 255);
 pub const HUD_PLASMA_COLOR: Color = Color::new(60, 220, 200, 255);
 pub const HUD_MINIGUN_COLOR: Color = Color::new(190, 205, 215, 255);
+/// Seeker missiles: the pickup icon's lime, clear of the speed gauge's
+/// yellow and the flamethrower's orange.
+pub const HUD_MISSILES_COLOR: Color = Color::new(190, 240, 70, 255);
 /// The flamethrower's accent: fuel-orange, the fire ramp's middle.
 pub const HUD_FLAME_COLOR: Color = Color::new(255, 140, 40, 255);
 
@@ -74,9 +77,9 @@ pub const HUD_FLAME_COLOR: Color = Color::new(255, 140, 40, 255);
 pub const BAR_FILL: Color = Color::new(21, 21, 21, 255);
 pub const TEXT: Color = Color::WHITE;
 pub const DIM: Color = Color::new(110, 110, 118, 255);
-/// Weapon slots, in bar order. Four of them: laser, plasma, minigun,
-/// flamethrower.
-pub const WEAPON_SLOTS: usize = 4;
+/// Weapon slots, in bar order. Five of them: laser, plasma, minigun,
+/// missiles, flamethrower.
+pub const WEAPON_SLOTS: usize = 5;
 
 /// One of the three special-weapon slots.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -114,7 +117,13 @@ impl PlayerHud {
             shells: 0,
             shells_color: hud_number_color(0.0, tuning().max_shells as f32),
             shells_active: false,
-            weapons: [slot(ActiveWeapon::Laser), slot(ActiveWeapon::Plasma), slot(ActiveWeapon::Minigun), slot(ActiveWeapon::Flamethrower)],
+            weapons: [
+                slot(ActiveWeapon::Laser),
+                slot(ActiveWeapon::Plasma),
+                slot(ActiveWeapon::Minigun),
+                slot(ActiveWeapon::Missiles),
+                slot(ActiveWeapon::Flamethrower),
+            ],
             speed: 0.0,
             shield: 0.0,
         }
@@ -143,6 +152,7 @@ impl PlayerHud {
                     WeaponSlot { weapon: ActiveWeapon::Laser, count: tank.laser_charges, active: active == ActiveWeapon::Laser },
                     WeaponSlot { weapon: ActiveWeapon::Plasma, count: tank.plasma_ammo, active: active == ActiveWeapon::Plasma },
                     WeaponSlot { weapon: ActiveWeapon::Minigun, count: tank.minigun_ammo, active: active == ActiveWeapon::Minigun },
+                    WeaponSlot { weapon: ActiveWeapon::Missiles, count: tank.missile_ammo, active: active == ActiveWeapon::Missiles },
                     // Fuel in whole seconds, rounded up.
                     WeaponSlot { weapon: ActiveWeapon::Flamethrower, count: tank.flame_fuel_seconds(), active: active == ActiveWeapon::Flamethrower },
                 ],
@@ -314,6 +324,7 @@ pub fn weapon_color(weapon: ActiveWeapon) -> Color {
         ActiveWeapon::Laser => HUD_LASER_COLOR,
         ActiveWeapon::Plasma => HUD_PLASMA_COLOR,
         ActiveWeapon::Minigun => HUD_MINIGUN_COLOR,
+        ActiveWeapon::Missiles => HUD_MISSILES_COLOR,
         ActiveWeapon::Flamethrower => HUD_FLAME_COLOR,
         ActiveWeapon::Shell => TEXT,
     }

@@ -167,7 +167,7 @@ mod tests {
     /// tuning change, never to go green.
     #[cfg(feature = "render")]
     const PINNED: [(&str, u64); 5] = [
-        ("default", 0x6644_121d_d6f8_7986),
+        ("default", 0x0144_1552_709b_6595),
         ("default-desert", 0x84de_37cf_aa6e_1aae),
         ("hunt-basic", 0xe569_2a10_47fe_b1a8),
         ("waves-basic", 0x6e02_7f87_d416_2e96),

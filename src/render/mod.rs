@@ -27,6 +27,7 @@ pub mod laser;
 pub mod lobby;
 pub mod plasma;
 pub mod portal;
+pub mod missile;
 pub mod shell;
 pub mod shockwave;
 pub mod tank;

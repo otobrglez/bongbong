@@ -3,7 +3,7 @@
 //! keeps one `Snapshot` per room and the client one per socket, and both
 //! step them with `apply_delta`. `Welcome` carries the first full one.
 //!
-//! Per keyed family (`tanks`, `shots`, `frogs`, `tiles`, `fires`) a delta
+//! Per keyed family (`tanks`, `shots`, `missiles`, `frogs`, `tiles`, `fires`) a delta
 //! carries three lists: entries that are new or changed (in full),
 //! entries that only moved by less than 32 px on each axis (`Moved`: the
 //! key and two `i8` quarter-pixel steps, the common case for every hull
@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use crate::net::MAX_SEATS;
 use crate::net::events::WireEvent;
 use crate::net::wire::{
-    BonusPickup, FireState, FrogState, RoundState, ShotState, Snapshot, TankState, TileState, side_code,
+    BonusPickup, FireState, FrogState, MissileState, RoundState, ShotState, Snapshot, TankState, TileState, side_code,
 };
 
 /// An entry that kept every field but its position, which moved by
@@ -51,6 +51,10 @@ pub struct SnapshotDelta {
     pub shots: Vec<ShotState>,
     pub shots_moved: Vec<Moved>,
     pub shots_gone: Vec<u16>,
+    /// New or changed missiles, in full.
+    pub missiles: Vec<MissileState>,
+    pub missiles_moved: Vec<Moved>,
+    pub missiles_gone: Vec<u16>,
     /// New or changed frogs, in full.
     pub frogs: Vec<FrogState>,
     pub frogs_moved: Vec<Moved>,
@@ -109,6 +113,22 @@ impl Positioned for ShotState {
 
     fn with_xy(&self, x: i16, y: i16) -> Self {
         ShotState { x, y, ..*self }
+    }
+}
+
+impl Keyed for MissileState {
+    fn key(&self) -> u16 {
+        self.id
+    }
+}
+
+impl Positioned for MissileState {
+    fn xy(&self) -> (i16, i16) {
+        (self.x, self.y)
+    }
+
+    fn with_xy(&self, x: i16, y: i16) -> Self {
+        MissileState { x, y, ..*self }
     }
 }
 
@@ -211,6 +231,7 @@ fn apply_positioned<T: Positioned>(prev: &[T], changed: &[T], moved: &[Moved], g
 pub fn delta(prev: &Snapshot, next: &Snapshot) -> SnapshotDelta {
     let (tanks, tanks_moved, tanks_gone) = diff_positioned(&prev.tanks, &next.tanks);
     let (shots, shots_moved, shots_gone) = diff_positioned(&prev.shots, &next.shots);
+    let (missiles, missiles_moved, missiles_gone) = diff_positioned(&prev.missiles, &next.missiles);
     let (frogs, frogs_moved, frogs_gone) = diff_positioned(&prev.frogs, &next.frogs);
     let (tiles, tiles_gone) = diff_keyed(&prev.tiles, &next.tiles);
     let (fires, fires_gone) = diff_keyed(&prev.fires, &next.fires);
@@ -230,6 +251,9 @@ pub fn delta(prev: &Snapshot, next: &Snapshot) -> SnapshotDelta {
         shots,
         shots_moved,
         shots_gone,
+        missiles,
+        missiles_moved,
+        missiles_gone,
         frogs,
         frogs_moved,
         frogs_gone,
@@ -260,6 +284,7 @@ pub fn apply_delta(prev: &Snapshot, delta: &SnapshotDelta) -> Snapshot {
         acked: delta.acked,
         tanks: apply_positioned(&prev.tanks, &delta.tanks, &delta.tanks_moved, &delta.tanks_gone),
         shots: apply_positioned(&prev.shots, &delta.shots, &delta.shots_moved, &delta.shots_gone),
+        missiles: apply_positioned(&prev.missiles, &delta.missiles, &delta.missiles_moved, &delta.missiles_gone),
         frogs: apply_positioned(&prev.frogs, &delta.frogs, &delta.frogs_moved, &delta.frogs_gone),
         pickups: delta.pickups.unwrap_or(prev.pickups),
         bonus_pickups,
@@ -348,6 +373,18 @@ mod tests {
         }
         let tanks = random_keys(rng, 12, 40).into_iter().map(|id| random_tank(rng, id)).collect();
         let shots = random_keys(rng, 30, 400).into_iter().map(|id| random_shot(rng, id)).collect();
+        let missiles: Vec<MissileState> = random_keys(rng, 8, 400)
+            .into_iter()
+            .map(|id| MissileState {
+                id,
+                x: rng.random(),
+                y: rng.random(),
+                height: rng.random_range(0..2000),
+                facing: rng.random(),
+                heading: rng.random(),
+                tube: rng.random_range(0..4),
+            })
+            .collect();
         let mut frogs = Vec::new();
         for side in [Side::Player, Side::Enemy] {
             if rng.random::<bool>() {
@@ -369,6 +406,7 @@ mod tests {
             acked,
             tanks,
             shots,
+            missiles,
             frogs,
             pickups: rng.random(),
             bonus_pickups,

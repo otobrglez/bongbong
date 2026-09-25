@@ -9,6 +9,13 @@
 //! any future co-op bug wants.
 
 #![cfg(feature = "dev-tools")]
+//
+// Two worker threads each, not four: a room is its own task and these
+// tests only need it to run beside the caller. Four apiece, times the
+// tests cargo runs at once, oversubscribes a laptop that is also
+// compiling - and a starved room task shows up as a dev call that never
+// returns, which is the one failure mode hardest to read.
+
 
 use std::sync::Arc;
 
@@ -32,7 +39,7 @@ async fn open(hub: &Arc<Hub>, seats: u64) -> String {
 /// **The scenario the whole thing exists for.** Two seats, no clients,
 /// the trigger tapped on one of them, and the authoritative round's own
 /// events read back - what took two real browsers and a guess before.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_co_op_round_is_opened_driven_and_read_with_no_client() {
     let hub = hub();
     let code = open(&hub, 2).await;
@@ -96,7 +103,7 @@ async fn a_co_op_round_is_opened_driven_and_read_with_no_client() {
 
 /// A stepped room is off the wall clock and stays where it was left, so
 /// a scenario can look between two ticks without the round running on.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stepped_room_holds_still_until_it_is_resumed() {
     let hub = hub();
     let code = open(&hub, 1).await;
@@ -113,7 +120,7 @@ async fn a_stepped_room_holds_still_until_it_is_resumed() {
 
 /// The same seed, the same inputs, the same round - twice. Without this
 /// a scenario is a story rather than a reproduction.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_same_seed_and_the_same_inputs_replay_the_same_round() {
     async fn play() -> Value {
         let hub = hub();
@@ -134,7 +141,7 @@ async fn the_same_seed_and_the_same_inputs_replay_the_same_round() {
 
 /// A room opened by a tool is a room like any other, and closing it
 /// takes it out of the listing.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rooms_are_listed_and_closed() {
     let hub = hub();
     let code = open(&hub, 1).await;

@@ -7,8 +7,9 @@
 //! exhaustive `match` with no wildcard, so a variant added to `Event` fails
 //! to compile here until it is either mirrored or put on the not-sent
 //! list. The AI's trace (`AiAction`, `EngageSlot`, `StuckEscape`, `Breach`,
-//! `Retreat`, `Alert`, `Retarget`) and `PhysicsQuarantine` (logged
-//! server-side) never travel.
+//! `Retreat`, `Alert`, `Retarget`), `MissileLocked` (which tank a seeker
+//! picked - a decision, not a picture; its `MissileBlast` does travel) and
+//! `PhysicsQuarantine` (logged server-side) never travel.
 //!
 //! `to_event` gives the replica the `Event` its presentation layer already
 //! reads (`fx.rs` diffs `game.events()`), the quantised positions
@@ -142,6 +143,10 @@ pub enum WireEvent {
     FireStarted { x: i16, y: i16, pool: bool },
     Ignited { x: i16, y: i16, what: IgnitedWhat },
     CookOff { x: i16, y: i16 },
+    /// `slot`'s seeker missile came down and burst at (`x`, `y`);
+    /// `Event::MissileBlast`. `MissileLocked` does not travel - see
+    /// the not-sent list.
+    MissileBlast { slot: u16, x: i16, y: i16 },
     /// `slot`'s shot bounced off iron or a barrel at (`x`, `y`) and flies
     /// on along `heading` (`wire::quantise_heading`); `Event::Ricochet`.
     Ricochet { slot: u16, x: i16, y: i16, heading: u8 },
@@ -218,6 +223,9 @@ impl WireEvent {
                 WireEvent::Ignited { x: q(x), y: q(y), what: kind }
             }
             Event::CookOff { x, y } => WireEvent::CookOff { x: q(x), y: q(y) },
+            Event::MissileBlast { slot, x, y } => {
+                WireEvent::MissileBlast { slot: slot_u16(slot), x: q(x), y: q(y) }
+            }
             Event::Ricochet { slot, x, y, heading } => {
                 WireEvent::Ricochet { slot: slot_u16(slot), x: q(x), y: q(y), heading: quantise_heading(heading) }
             }
@@ -231,6 +239,10 @@ impl WireEvent {
             | Event::Retreat { .. }
             | Event::Alert { .. }
             | Event::Retarget { .. } => return None,
+            // Never sent: which tank a missile picked is the server's
+            // decision, not a picture. The burst it ends in travels, and
+            // that is the only part `fx.rs` reads.
+            Event::MissileLocked { .. } => return None,
         })
     }
 
@@ -279,6 +291,9 @@ impl WireEvent {
             WireEvent::FireStarted { x, y, pool } => Event::FireStarted { x: d(x), y: d(y), pool },
             WireEvent::Ignited { x, y, what } => Event::Ignited { x: d(x), y: d(y), what: what.name() },
             WireEvent::CookOff { x, y } => Event::CookOff { x: d(x), y: d(y) },
+            WireEvent::MissileBlast { slot, x, y } => {
+                Event::MissileBlast { slot: slot as usize, x: d(x), y: d(y) }
+            }
             WireEvent::Ricochet { slot, x, y, heading } => {
                 Event::Ricochet { slot: slot as usize, x: d(x), y: d(y), heading: dequantise_heading(heading) }
             }
