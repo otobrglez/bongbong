@@ -58,6 +58,7 @@ pub struct Hub {
     /// Set once by `begin_drain`; every room task watches it, so a room
     /// asleep on a long deadline wakes the moment the drain starts.
     draining: watch::Sender<bool>,
+
     /// Signalled whenever a room goes, so `drained` can re-check.
     room_gone: Notify,
     /// Flipped once the drain is over: every connection task closes its
