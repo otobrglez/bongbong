@@ -1,5 +1,7 @@
 # BongBong
 
+<img align="right" width="150" src="./tools/ios/Assets.xcassets/AppIcon.appiconset/icon-1024.png">
+
 BongBong is a simplistic and entertaining modern tank shooter game. 
 
 The main goal of this project is to build a fun, entertaining game with retro graphics and an illusion of modern physics, while paying respect to old-school tank games.
