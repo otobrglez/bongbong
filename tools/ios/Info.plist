@@ -1,8 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Template for the hand-made simulator bundle (tools/ios/bundle.sh fills
-     the __PLACEHOLDERS__). UILaunchScreen must be present, even empty:
-     without it iOS runs the app letterboxed at a compatibility size. -->
+<!-- Template for the hand-made bundle (tools/ios/bundle.sh fills the
+     __PLACEHOLDERS__ and adds the DT* toolchain keys and the icon keys
+     actool writes). UILaunchScreen must be present, even empty: without it
+     iOS runs the app letterboxed at a compatibility size.
+     ITSAppUsesNonExemptEncryption false answers App Store Connect's export
+     compliance question for every build: the only encryption is TLS to the
+     room server (wss://), which is exempt. -->
 <plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key>
@@ -22,7 +26,7 @@
     <key>CFBundleShortVersionString</key>
     <string>__VERSION__</string>
     <key>CFBundleVersion</key>
-    <string>__VERSION__</string>
+    <string>__BUILD__</string>
     <key>CFBundleSupportedPlatforms</key>
     <array>
         <string>__PLATFORM__</string>
@@ -33,6 +37,8 @@
     <string>__MIN_OS__</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
+    <key>ITSAppUsesNonExemptEncryption</key>
+    <false/>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.games</string>
     <key>UIDeviceFamily</key>

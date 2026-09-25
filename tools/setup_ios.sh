@@ -6,7 +6,7 @@
 # game against that prefix when the target is aarch64-apple-ios-sim. See
 # docs/ios-native-port-prd.md and CLAUDE.md's iOS section.
 #
-# Idempotent: SDL3 is skipped when its marker for the pinned tag exists;
+# Idempotent: SDL3 is skipped when its marker for the pinned tag and options exists;
 # raylib is cheap and is always rebuilt (its source is the registry crate,
 # so a `cargo update` of sola-raylib is picked up).
 set -euo pipefail
@@ -16,6 +16,11 @@ cd "$(dirname "$0")/.."
 SLICE="${SLICE:-sim}"
 export IOS_SLICE="$SLICE"
 source tools/ios/env.sh
+# The devenv shell's compiler environment targets macOS: nix's clang wrapper
+# (first on PATH) adds -mmacos-version-min, which the iOS compiler check
+# rejects. cmake gets Xcode's own clang instead.
+unset CFLAGS CXXFLAGS LDFLAGS NIX_CFLAGS_COMPILE NIX_LDFLAGS MACOSX_DEPLOYMENT_TARGET
+export CC="$(xcrun -f clang 2>/dev/null)" CXX="$(xcrun -f clang++ 2>/dev/null)"
 case "$SLICE" in
     sim) SYSROOT=iphonesimulator ;;
     ios) SYSROOT=iphoneos ;;
@@ -52,7 +57,15 @@ IOS_CMAKE=(
 JOBS="$(sysctl -n hw.ncpu)"
 
 # --- SDL3, static -----------------------------------------------------------
-if [[ -f "$IOS_PREFIX/.sdl3-$SDL_TAG" && -f "$IOS_PREFIX/lib/libSDL3.a" ]]; then
+# Built without the subsystems the game never uses whose code the App Store
+# scans for: the camera (AVCaptureDevice - an upload is refused without an
+# NSCameraUsageDescription) and HIDAPI (CoreBluetooth's CBCentralManager for
+# Steam controllers - NSBluetoothAlwaysUsageDescription). Controllers still
+# work through the GameController framework. SDL_OPTS is part of the marker,
+# so changing it rebuilds an existing install.
+SDL_OPTS=(-DSDL_CAMERA=OFF -DSDL_HIDAPI=OFF)
+SDL_MARK=".sdl3-$SDL_TAG-$(printf '%s' "${SDL_OPTS[*]}" | shasum | cut -c1-8)"
+if [[ -f "$IOS_PREFIX/$SDL_MARK" && -f "$IOS_PREFIX/lib/libSDL3.a" ]]; then
     echo "[setup-ios] SDL3 $SDL_TAG already installed in $IOS_PREFIX"
 else
     if [[ ! -d "$SRC/SDL/.git" ]]; then
@@ -63,11 +76,12 @@ else
     fi
     rm -rf "$BUILD/sdl3-$SLICE"
     cmake -S "$SRC/SDL" -B "$BUILD/sdl3-$SLICE" "${IOS_CMAKE[@]}" \
-        -DSDL_SHARED=OFF -DSDL_STATIC=ON -DSDL_TEST_LIBRARY=OFF -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF
+        -DSDL_SHARED=OFF -DSDL_STATIC=ON -DSDL_TEST_LIBRARY=OFF -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF \
+        "${SDL_OPTS[@]}"
     cmake --build "$BUILD/sdl3-$SLICE" -j"$JOBS"
     cmake --install "$BUILD/sdl3-$SLICE"
     rm -f "$IOS_PREFIX"/.sdl3-*
-    touch "$IOS_PREFIX/.sdl3-$SDL_TAG"
+    touch "$IOS_PREFIX/$SDL_MARK"
 fi
 
 # --- raylib 6.0 from the crate's vendored tree: SDL backend, ES 2.0 ---------

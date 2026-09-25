@@ -226,6 +226,17 @@ run-ios-device *ARGS: (build-ios-device ARGS)
 run-ios-ipad *ARGS: (build-ios-device ARGS)
     ./tools/ios/deploy.sh iPad
 
+# tools/ios/testflight.sh needs BONGBONG_IOS_TEAM and the ASC_* API key in
+# .envrc; `--export` stops at a signed .ipa instead of uploading.
+# Build (release), sign for the App Store and upload to TestFlight.
+ios-testflight *ARGS:
+    ./tools/ios/testflight.sh {{ARGS}}
+
+# tools/ios/gen_app_icon.py; --row N picks another chassis.
+# Regenerate the App Store icon.
+ios-icon *ARGS:
+    nix-shell -p "python3.withPackages (ps: [ps.pillow])" --run "python3 tools/ios/gen_app_icon.py {{ARGS}}"
+
 # --- Android (docs/android-port-prd.md, CLAUDE.md's Android section) ---
 # Every recipe sources tools/android/env.sh: the SDK, NDK and JDK paths,
 # the API pins, the prebuilt raylib prefix and the NDK compiler for cargo.
