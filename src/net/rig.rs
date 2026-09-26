@@ -41,8 +41,9 @@ use crate::net::client::{ClientEvent, Identity, RoomClient, RoomSetup};
 use crate::net::codec::{self, Msg};
 use crate::net::encode;
 use crate::net::loopback::{self, LinkQuality, Loopback};
+use crate::net::mailbox::Mailbox;
 use crate::net::transport::Transport;
-use crate::net::wire::{IntentMsg, Lobby, RosterSeat, RoundOutcome, Seat, Snapshot};
+use crate::net::wire::{Lobby, RosterSeat, RoundOutcome, Seat, Snapshot};
 use crate::net::MAX_SEATS;
 use crate::simulation::{Game, Input, Outcome};
 use crate::PHYSICS_FIXED_DT;
@@ -57,11 +58,6 @@ pub const RIG_CODE: &str = "RIG00";
 /// (`bongbong_server::room::SNAPSHOT_EVERY` - keep the two in step, or
 /// the rig stops standing in for the room it is meant to model).
 pub const SNAPSHOT_EVERY: u64 = 1;
-
-/// How long a tick keeps repeating the seat's last intent with nothing
-/// newer arrived, the room server's `INTENT_COAST`: a hiccup coasts
-/// rather than stops, a disconnect stops.
-const INTENT_COAST: Duration = Duration::from_millis(500);
 
 /// What the rig's round is.
 #[derive(Clone, Debug)]
@@ -353,9 +349,10 @@ struct Room {
     /// reads this, so a stepped room needs no clock at all.
     now: Instant,
     nick: String,
-    /// The newest intent and when it arrived; older than `INTENT_COAST`
-    /// it reads as no input.
-    intent: Option<(IntentMsg, Instant)>,
+    /// The seat's intents, one applied per tick in order - the room
+    /// server's own `net::mailbox`, so a starvation here means what it
+    /// means there and the client's lead is steered the same way.
+    mailbox: Mailbox,
     /// The events of the ticks since the last snapshot, ahead of the
     /// next one's own.
     pending_events: Vec<crate::net::events::WireEvent>,
@@ -376,7 +373,7 @@ impl Room {
             opened,
             now: opened,
             nick: "rig".into(),
-            intent: None,
+            mailbox: Mailbox::new(),
             pending_events: Vec::new(),
             scratch: Vec::new(),
             tick: Arc::default(),
@@ -399,7 +396,7 @@ impl Room {
                 }
                 Msg::Lobby(Lobby::Start) => self.begin(),
                 Msg::Lobby(Lobby::Leave) => left = true,
-                Msg::Intent(intent) => self.intent = Some((intent, self.now)),
+                Msg::Intent(intent) => self.mailbox.post(intent, self.now),
                 // Ready, chat, kick and everything a room says rather
                 // than hears mean nothing to one seat playing alone.
                 _ => {}
@@ -476,8 +473,10 @@ impl Room {
             self.say(Msg::Lobby(Lobby::Ended { outcome: outcome.into() }));
             return;
         }
-        let intent = self.sampled_intent();
+        let intent = self.mailbox.read(self.now).map(|m| m.intent()).unwrap_or_default();
         let acked = self.acked();
+        let mut mailbox = [0u8; MAX_SEATS];
+        mailbox[0] = self.mailbox.wire_state();
         let server_ms = self.server_ms();
         let Some(game) = &mut self.game else { return };
         let (width, height) = game.map.field_size();
@@ -492,6 +491,7 @@ impl Room {
         }
         let mut snapshot = encode::snapshot(game, acked);
         snapshot.server_ms = server_ms;
+        snapshot.mailbox = mailbox;
         if !self.pending_events.is_empty() {
             let mut events = std::mem::take(&mut self.pending_events);
             events.append(&mut snapshot.events);
@@ -501,19 +501,10 @@ impl Room {
         self.say(Msg::Snapshot(snapshot));
     }
 
-    /// The seat's command this tick: the newest intent, repeated while it
-    /// is younger than `INTENT_COAST`.
-    fn sampled_intent(&self) -> Intent {
-        match &self.intent {
-            Some((msg, at)) if self.now.saturating_duration_since(*at) < INTENT_COAST => msg.intent(),
-            _ => Intent::default(),
-        }
-    }
-
-    /// The last intent tick the round has taken (stage 2's ack).
+    /// The tick of the intent the round last applied (the seat's `acked`).
     fn acked(&self) -> [u32; MAX_SEATS] {
         let mut acked = [0; MAX_SEATS];
-        acked[0] = self.intent.as_ref().map_or(0, |(msg, _)| msg.tick);
+        acked[0] = self.mailbox.acked_tick();
         acked
     }
 
@@ -734,6 +725,12 @@ mod tests {
             codec::encode(&Msg::Snapshot(b.snapshot().expect("a snapshot"))),
             "the wire does not replay byte for byte"
         );
+
+        // One intent a step, one read a tick: the seat's mailbox is
+        // empty after every read and never starved, which is what the
+        // snapshot says (`net::mailbox::Mailbox::wire_state`).
+        let mailbox = a.snapshot().expect("a snapshot").mailbox;
+        assert_eq!(crate::net::mailbox::unpack(mailbox[0]), (0, false), "the stepped seat's mailbox: {mailbox:?}");
 
         // The replica stands on a snapshot tick, never between two, and
         // draws the round the authority is running.

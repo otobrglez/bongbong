@@ -371,6 +371,11 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
     assert!(tank1.x != start_x || tank1.y != start_y, "the driven tank moved");
     assert!(host_stream.baseline.acked[1] > 0, "the seat's newest intent tick is acked: {:?}", &host_stream.baseline.acked[..2]);
     assert_eq!(host_stream.baseline.acked[2..], [0; MAX_SEATS - 2]);
+    // And each seat's mailbox rides beside it: a depth under the cap for
+    // the two seats there are, nothing for the empty ones.
+    let (depth, _starved) = bongbong::net::mailbox::unpack(host_stream.baseline.mailbox[1]);
+    assert!(depth as usize <= bongbong::net::mailbox::BUFFER_MAX, "mailbox {:?}", &host_stream.baseline.mailbox[..2]);
+    assert_eq!(host_stream.baseline.mailbox[2..], [0; MAX_SEATS - 2]);
     // The baseline sits on the room's snapshot cadence, whatever it is.
     // Spelled with `SNAPSHOT_EVERY` rather than a literal: written as
     // `tick / 3 * 3 == tick` it silently became a one-in-three coin flip
@@ -990,9 +995,9 @@ async fn every_tap_of_the_trigger_puts_a_shell_in_the_air() {
 /// paces intents against real time and the server's mailbox applies them
 /// one per tick, in order; the two clocks are independent. Every other
 /// test drives one side or the other - `Lockstep` and the tests above
-/// call `RoomClient::send_intent` directly, and `net::rig`'s room is
-/// newest-wins rather than the ordered buffer this one runs. This is the
-/// intersection, which is where a lost trigger would live.
+/// call `RoomClient::send_intent` directly, and `net::rig`'s room, though
+/// it holds the same mailbox, is fed by a client on the same thread. This
+/// is the intersection, which is where a lost trigger would live.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_whole_client_taps_the_trigger_and_the_room_answers() {
     use bongbong::net::round::OnlineRound;

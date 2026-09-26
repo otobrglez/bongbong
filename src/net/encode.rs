@@ -64,6 +64,8 @@ pub fn snapshot(game: &Game, acked: [u32; MAX_SEATS]) -> Snapshot {
         tick: game.frame().min(u32::MAX as u64) as u32,
         server_ms: 0,
         acked,
+        // The mailboxes are the room's, stamped beside `server_ms`.
+        mailbox: [0; MAX_SEATS],
         tanks: tanks(game),
         shots: shots(game),
         missiles: missiles(game),

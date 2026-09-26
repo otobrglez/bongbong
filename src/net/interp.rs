@@ -7,9 +7,21 @@
 //! into the replica as it arrives would still draw the round at the
 //! room's cadence on a 120 Hz screen - and at any cadence a packet can be
 //! late or lost - so the replica draws the *past* instead: render time is
-//! the
-//! server's clock minus `online_interpolation_delay_ms`, which keeps two
-//! snapshots bracketing it, and every frame lands somewhere between them.
+//! the server's clock minus a delay, which keeps two snapshots bracketing
+//! it, and every frame lands somewhere between them.
+//!
+//! **The delay is adaptive** (docs/online-coop-prd.md §4.5, decision 8).
+//! Its floor is `online_interpolation_delay_ms`, two intervals at the
+//! room's cadence; on top of it goes the link's own jitter - the smoothed
+//! deviation of each snapshot's arrival from the clock's estimate
+//! (`ServerClock::jitter_ms`) - times `online_interpolation_jitter_factor`,
+//! capped at `online_interpolation_delay_max_ms`. A clean link pays the
+//! floor; a jittery one pays what its late packets need, and no more. The
+//! delay in force never jumps to its target: it slews at
+//! `DELAY_WIDEN_PER_MS` / `DELAY_NARROW_PER_MS`, so a jittery spell
+//! stretches the picture's time by a few per cent rather than rewinding
+//! it, and a link that settles gives the milliseconds back the same way.
+//! `online_interpolation_adaptive` off pins the delay at the floor.
 //!
 //! What blends and what does not:
 //!
@@ -70,6 +82,19 @@ pub const CLOCK_GAIN: f64 = 0.1;
 /// instead of smoothed toward over a minute.
 pub const CLOCK_SNAP_MS: f64 = 500.0;
 
+/// How fast the delay in force may grow toward a larger target, in
+/// milliseconds of delay per millisecond of real time: a tenth, so
+/// widening by 20 ms takes a fifth of a second, during which the picture
+/// runs at nine tenths speed. Growing is the urgent direction - a late
+/// packet is already being ridden out on extrapolation - so it is five
+/// times the shrink rate.
+pub const DELAY_WIDEN_PER_MS: f64 = 0.1;
+
+/// How fast the delay in force may shrink toward a smaller target: a
+/// fiftieth, so a link that settles gives 20 ms back over a second at
+/// two per cent over speed, which nothing notices.
+pub const DELAY_NARROW_PER_MS: f64 = 0.02;
+
 /// How many snapshots are kept. Render time sits one interval or so
 /// behind the newest, so this is room for jitter and loss before the
 /// oldest is dropped unseen.
@@ -95,6 +120,10 @@ const INTERVAL_RANGE_MS: std::ops::RangeInclusive<f64> = 5.0..=500.0;
 #[derive(Clone, Debug, Default)]
 pub struct ServerClock {
     offset_ms: Option<f64>,
+    /// The smoothed distance of each reading from the estimate: how far
+    /// a snapshot's arrival strays from where the clock expected it, the
+    /// jitter the adaptive delay covers. Zero on a perfect link.
+    jitter_ms: f64,
 }
 
 impl ServerClock {
@@ -103,10 +132,22 @@ impl ServerClock {
         let raw = server_ms as f64 - local_ms as f64;
         self.offset_ms = Some(match self.offset_ms {
             Some(estimate) if (raw - estimate).abs() < CLOCK_SNAP_MS => {
+                let deviation = (raw - estimate).abs();
+                self.jitter_ms += (deviation - self.jitter_ms) * CLOCK_GAIN;
                 estimate + (raw - estimate) * CLOCK_GAIN
             }
-            _ => raw,
+            _ => {
+                // Another clock: nothing measured against the old one
+                // says anything about this link.
+                self.jitter_ms = 0.0;
+                raw
+            }
         });
+    }
+
+    /// The link's jitter as the clock sees it, in milliseconds.
+    pub fn jitter_ms(&self) -> f64 {
+        self.jitter_ms
     }
 
     /// What the server's clock reads at local time `local_ms`; `None`
@@ -138,6 +179,25 @@ pub struct Frame {
     pub extrapolated: bool,
 }
 
+/// What the interpolator is doing, for `status.round.interpolation` and
+/// the rig's tests (docs/online-coop-prd.md §4.12, "Measured").
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct InterpReport {
+    /// The delay in force, milliseconds behind the server's clock.
+    pub delay_ms: f64,
+    /// Where the delay is heading: the floor plus the jitter margin.
+    pub target_ms: f64,
+    /// The link's jitter as the clock sees it.
+    pub jitter_ms: f64,
+    /// The room's measured cadence.
+    pub interval_ms: f64,
+    /// Snapshots waiting to be drawn.
+    pub buffered: usize,
+    /// Frames drawn past the newest snapshot on last-known velocities:
+    /// each one is a packet the delay did not cover.
+    pub extrapolated_frames: u64,
+}
+
 /// The snapshots that have arrived and the clock that orders them.
 #[derive(Clone, Debug)]
 pub struct Interpolator {
@@ -147,6 +207,13 @@ pub struct Interpolator {
     released: Option<u32>,
     /// The room's measured cadence.
     interval_ms: f64,
+    /// The delay in force; `None` until the first frame is sampled, when
+    /// it starts at its target rather than slewing up from nothing.
+    delay_ms: Option<f64>,
+    /// When the delay was last slewed, so the rate is per real time.
+    slewed_at: Option<i64>,
+    /// Frames that ran on extrapolation, for the report.
+    extrapolated_frames: u64,
 }
 
 impl Default for Interpolator {
@@ -156,6 +223,9 @@ impl Default for Interpolator {
             clock: ServerClock::default(),
             released: None,
             interval_ms: SNAPSHOT_INTERVAL_MS,
+            delay_ms: None,
+            slewed_at: None,
+            extrapolated_frames: 0,
         }
     }
 }
@@ -210,6 +280,7 @@ impl Interpolator {
     /// handing over the events of each exactly once, and blends toward
     /// the far end.
     pub fn sample(&mut self, local_ms: i64) -> Option<Frame> {
+        self.slew_delay(local_ms);
         let render = self.render_ms(local_ms)?;
         let mut events: Vec<WireEvent> = Vec::new();
         while self.buffer.len() > 1 && self.buffer[1].server_ms as f64 <= render {
@@ -238,6 +309,9 @@ impl Interpolator {
             }
             None => {
                 let held = ahead_ms.min(EXTRAPOLATION_INTERVALS * self.interval_ms);
+                if held > 0.0 {
+                    self.extrapolated_frames += 1;
+                }
                 Frame {
                     snapshot: extrapolate(from, (held / 1000.0) as f32),
                     ahead: (held / 1000.0) as f32,
@@ -251,8 +325,53 @@ impl Interpolator {
 
     /// Server time the picture is drawn at: the clock less the delay.
     fn render_ms(&self, local_ms: i64) -> Option<f64> {
-        let delay = tuning().online_interpolation_delay_ms as f64;
-        Some(self.clock.now(local_ms)? - delay)
+        Some(self.clock.now(local_ms)? - self.delay_ms())
+    }
+
+    /// Where the delay is heading: the floor, or two measured intervals
+    /// if the room's cadence is slower than the floor assumes, plus the
+    /// jitter margin, under the cap. With `online_interpolation_adaptive`
+    /// off it is the floor alone.
+    pub fn target_delay_ms(&self) -> f64 {
+        let t = tuning();
+        let floor = t.online_interpolation_delay_ms as f64;
+        if !t.online_interpolation_adaptive {
+            return floor;
+        }
+        let base = (2.0 * self.interval_ms).max(floor);
+        let margin = t.online_interpolation_jitter_factor as f64 * self.clock.jitter_ms();
+        (base + margin).min(t.online_interpolation_delay_max_ms as f64).max(floor)
+    }
+
+    /// The delay in force, milliseconds: the target until a frame has
+    /// been sampled, then wherever the slew has got to.
+    pub fn delay_ms(&self) -> f64 {
+        self.delay_ms.unwrap_or_else(|| self.target_delay_ms())
+    }
+
+    /// Move the delay in force toward its target, no faster than the
+    /// slew rates allow over the real time since the last frame.
+    fn slew_delay(&mut self, local_ms: i64) {
+        let target = self.target_delay_ms();
+        let elapsed = self.slewed_at.map_or(0, |at| (local_ms - at).max(0)) as f64;
+        self.slewed_at = Some(local_ms);
+        self.delay_ms = Some(match self.delay_ms {
+            None => target,
+            Some(now) if target > now => (now + elapsed * DELAY_WIDEN_PER_MS).min(target),
+            Some(now) => (now - elapsed * DELAY_NARROW_PER_MS).max(target),
+        });
+    }
+
+    /// The readings a status line or a test wants.
+    pub fn report(&self) -> InterpReport {
+        InterpReport {
+            delay_ms: self.delay_ms(),
+            target_ms: self.target_delay_ms(),
+            jitter_ms: self.clock.jitter_ms(),
+            interval_ms: self.interval_ms,
+            buffered: self.buffer.len(),
+            extrapolated_frames: self.extrapolated_frames,
+        }
     }
 
     /// Whether `tick`'s events still have to be handed over, marking them
@@ -392,16 +511,18 @@ mod tests {
     }
 
     /// The local time at which render time lands on `server_ms`, with the
-    /// clock reading true.
-    fn at(server_ms: f64) -> i64 {
-        (server_ms + tuning().online_interpolation_delay_ms as f64).round() as i64
+    /// clock reading true and the delay wherever the interpolator has it
+    /// (the floor on these exact clocks, plus what two measured intervals
+    /// add once the 50 ms cadence of `snapshot` has been seen).
+    fn at(interp: &Interpolator, server_ms: f64) -> i64 {
+        (server_ms + interp.delay_ms()).round() as i64
     }
 
     #[test]
     fn render_time_sits_between_the_two_snapshots_that_bracket_it() {
         let mut interp = fed(&[0, 3, 6, 9]);
         // Halfway between the snapshots at tick 3 (50 ms) and 6 (100 ms).
-        let frame = interp.sample(at(75.0)).expect("a frame");
+        let frame = interp.sample(at(&interp, 75.0)).expect("a frame");
         assert_eq!(frame.snapshot.tick, 3, "the near end is the snapshot render time has passed");
         assert!(!frame.extrapolated);
         let (a, b) = (snapshot(3).tanks[0].x, snapshot(6).tanks[0].x);
@@ -414,7 +535,7 @@ mod tests {
 
         // A frame later, with no snapshot in between, the picture has
         // moved on: this is the whole point of the delay.
-        let later = interp.sample(at(91.0)).expect("a frame");
+        let later = interp.sample(at(&interp, 91.0)).expect("a frame");
         assert!(later.snapshot.tanks[0].x > frame.snapshot.tanks[0].x, "a frame with no snapshot still moves");
         assert!(later.snapshot.tanks[0].x < b, "and never past the far end");
     }
@@ -427,10 +548,10 @@ mod tests {
         turned.tanks[0].dir = 2;
         interp.accept(turned, snapshot(6).server_ms as i64);
         // Nine tenths of the way toward the snapshot that turned.
-        let frame = interp.sample(at(95.0)).expect("a frame");
+        let frame = interp.sample(at(&interp, 95.0)).expect("a frame");
         assert_eq!(frame.snapshot.tanks[0].dir, 1, "the near end owns the facing");
         // Render time reaches the turn: it snaps, whole.
-        let frame = interp.sample(at(105.0)).expect("a frame");
+        let frame = interp.sample(at(&interp, 105.0)).expect("a frame");
         assert_eq!(frame.snapshot.tanks[0].dir, 2);
     }
 
@@ -439,7 +560,7 @@ mod tests {
         let mut interp = fed(&[0, 3]);
         let newest = snapshot(3);
         let at_newest = newest.server_ms as f64;
-        let held = interp.sample(at(at_newest)).expect("a frame");
+        let held = interp.sample(at(&interp, at_newest)).expect("a frame");
         assert_eq!(held.snapshot.tanks[0].x, newest.tanks[0].x, "on the snapshot itself, nothing is guessed");
         assert!(!held.extrapolated);
 
@@ -452,21 +573,21 @@ mod tests {
         // 200 px/s for one interval, in quarter pixels.
         let per_interval = (200.0 * iv / 1000.0 * 4.0).round() as i16;
 
-        let one = interp.sample(at(at_newest + iv)).expect("a frame");
+        let one = interp.sample(at(&interp, at_newest + iv)).expect("a frame");
         assert!(one.extrapolated);
         assert_eq!(one.snapshot.tanks[0].x, newest.tanks[0].x + per_interval);
         assert_eq!(one.snapshot.frogs[0].x, newest.frogs[0].x, "a frog holds: the wire gives it no velocity");
 
-        let two = interp.sample(at(at_newest + 2.0 * iv)).expect("a frame");
+        let two = interp.sample(at(&interp, at_newest + 2.0 * iv)).expect("a frame");
         assert_eq!(two.snapshot.tanks[0].x, newest.tanks[0].x + 2 * per_interval);
 
         // `EXTRAPOLATION_INTERVALS` is the cap - four, the count that
         // keeps roughly 66 ms of gap covered now the room cuts a snapshot
         // every tick.
         let cap = EXTRAPOLATION_INTERVALS;
-        let at_cap = interp.sample(at(at_newest + cap * iv)).expect("a frame");
+        let at_cap = interp.sample(at(&interp, at_newest + cap * iv)).expect("a frame");
         assert_eq!(at_cap.snapshot.tanks[0].x, newest.tanks[0].x + cap as i16 * per_interval, "the cap is {cap} intervals");
-        let past = interp.sample(at(at_newest + (cap + 1.0) * iv)).expect("a frame");
+        let past = interp.sample(at(&interp, at_newest + (cap + 1.0) * iv)).expect("a frame");
         assert_eq!(past.snapshot.tanks[0].x, at_cap.snapshot.tanks[0].x, "past the cap the picture holds");
         let stopped = (cap * iv / 1000.0) as f32;
         assert!((past.ahead - stopped).abs() < 0.001, "the round clock stops with it: {} vs {stopped}", past.ahead);
@@ -502,14 +623,14 @@ mod tests {
         interp.accept(with_event, snapshot(3).server_ms as i64);
         interp.accept(snapshot(6), snapshot(6).server_ms as i64);
         // Render time is still short of the snapshot that carries it.
-        let frame = interp.sample(at(20.0)).expect("a frame");
+        let frame = interp.sample(at(&interp, 20.0)).expect("a frame");
         assert!(frame.snapshot.events.is_empty(), "nothing of a tick not yet drawn");
         // It reaches it: the event goes over with the tick it belongs to.
-        let frame = interp.sample(at(60.0)).expect("a frame");
+        let frame = interp.sample(at(&interp, 60.0)).expect("a frame");
         assert_eq!(frame.snapshot.tick, 3);
         assert_eq!(frame.snapshot.events.len(), 1);
         // And never again.
-        let frame = interp.sample(at(70.0)).expect("a frame");
+        let frame = interp.sample(at(&interp, 70.0)).expect("a frame");
         assert!(frame.snapshot.events.is_empty());
     }
 
@@ -523,7 +644,7 @@ mod tests {
             interp.accept(s, snapshot(tick).server_ms as i64);
         }
         // One long frame, straight past ticks 3 and 6 onto 9.
-        let frame = interp.sample(at(160.0)).expect("a frame");
+        let frame = interp.sample(at(&interp, 160.0)).expect("a frame");
         assert_eq!(frame.snapshot.tick, 9);
         assert_eq!(
             frame.snapshot.events.len(),
@@ -551,7 +672,7 @@ mod tests {
         }];
         interp.accept(restarted, 5_000);
         assert_eq!(interp.buffered(), 1);
-        let frame = interp.sample(at(5_000.0)).expect("a frame");
+        let frame = interp.sample(at(&interp, 5_000.0)).expect("a frame");
         assert_eq!(frame.snapshot.tick, 0);
         assert_eq!(frame.snapshot.events.len(), 1, "the new round's own events are drawn");
         // A welcome's snapshot is the new baseline and is not drawn twice.
@@ -559,8 +680,65 @@ mod tests {
         baseline.events = vec![blast(1)];
         interp.restart(&baseline, 0);
         assert_eq!(interp.buffered(), 1);
-        let frame = interp.sample(at(0.0)).expect("a frame");
+        let frame = interp.sample(at(&interp, 0.0)).expect("a frame");
         assert!(frame.snapshot.events.is_empty(), "the welcome applied its own events");
+    }
+
+    /// The delay is the floor on a clean link and widens by the jitter on
+    /// a dirty one - and slews there rather than jumping, since a jump in
+    /// the delay is a jump in render time, which is the picture rewinding.
+    #[test]
+    fn the_delay_widens_with_the_links_jitter_and_slews_rather_than_jumps() {
+        let floor = tuning().online_interpolation_delay_ms as f64;
+        // A perfect link at the room's own cadence: the target is the
+        // floor (two intervals of 16.7 ms come to the same number).
+        let mut clean = Interpolator::default();
+        for tick in 0..120u32 {
+            let mut s = snapshot(tick);
+            s.server_ms = tick * 1000 / 60;
+            clean.accept(s, (tick * 1000 / 60) as i64);
+        }
+        let report = clean.report();
+        assert!(report.jitter_ms < 0.5, "an exact clock has no jitter: {report:?}");
+        assert!((report.target_ms - floor).abs() < 1.0, "a clean link pays the floor: {report:?}");
+
+        // The same room over a link whose packets land up to 30 ms late
+        // in a pattern: the clock's estimate strays, the jitter reading
+        // grows, and the target with it.
+        let mut dirty = Interpolator::default();
+        for tick in 0..120u32 {
+            let mut s = snapshot(tick);
+            let sent = tick * 1000 / 60;
+            s.server_ms = sent;
+            let late = [0, 30, 5, 25, 10, 20][(tick % 6) as usize];
+            dirty.accept(s, (sent + late) as i64);
+        }
+        let report = dirty.report();
+        assert!(report.jitter_ms > 5.0, "the late packets read as jitter: {report:?}");
+        assert!(
+            report.target_ms > floor + 15.0 && report.target_ms <= tuning().online_interpolation_delay_max_ms as f64,
+            "the target widened by the margin and stayed under the cap: {report:?}"
+        );
+
+        // The delay in force starts at the target on the first frame,
+        // and afterwards follows a moved target at the slew rate.
+        let first = dirty.sample(2_100).expect("a frame");
+        let _ = first;
+        let in_force = dirty.delay_ms();
+        assert!((in_force - report.target_ms).abs() < 0.01, "the first frame takes the target whole");
+        // Ten more perfectly timed snapshots pull the jitter down and the
+        // target with it; one frame 16 ms later has moved the delay by
+        // at most the narrow rate times sixteen.
+        for tick in 120..130u32 {
+            let mut s = snapshot(tick);
+            s.server_ms = tick * 1000 / 60;
+            dirty.accept(s, (tick * 1000 / 60) as i64);
+        }
+        let lower = dirty.target_delay_ms();
+        assert!(lower < in_force, "a settling link lowers the target");
+        dirty.sample(2_116).expect("a frame");
+        let moved = in_force - dirty.delay_ms();
+        assert!(moved > 0.0 && moved <= 16.0 * DELAY_NARROW_PER_MS + 1e-9, "slewed by {moved} ms, not jumped");
     }
 
     #[test]

@@ -176,6 +176,27 @@ pub struct Plasma {
 }
 
 impl Plasma {
+    /// A bolt at a pose somebody else worked out, for drawing only: a
+    /// client's provisional bolt (`net::predict`), rebuilt into the
+    /// replica each frame like `Shell::at`. Never meets anything.
+    pub fn at(id: u32, position: Position, prev_position: Position, velocity: Vec2, rotation: f32, variant: PlasmaVariant, shooter_row: i32, owner: Owner) -> Plasma {
+        Plasma {
+            id,
+            state: PlasmaState::Flying,
+            position,
+            prev_position,
+            velocity,
+            rotation,
+            timer: 0.0,
+            done: false,
+            owner,
+            variant,
+            shooter_row,
+            shadow_offset: 0.0,
+            passed_over: Vec::new(),
+        }
+    }
+
     /// Create a plasma bolt at the tank's muzzle, travelling in the
     /// direction the tank faces - identical muzzle/lateral-offset math to
     /// `Shell::spawn` (see its doc comment for the details), just at

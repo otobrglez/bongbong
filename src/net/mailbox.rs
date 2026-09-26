@@ -1,15 +1,18 @@
 //! A seat's jitter buffer (docs/online-coop-prd.md §4.1, §4.12): the
 //! intents a connection has dropped in, held by the client's own tick and
-//! applied **one per tick, in order**.
+//! applied **one per tick, in order**. One type for every room there is -
+//! the room server's (`bongbong_server::room`), the rig's thread and
+//! `rig::Lockstep` - so a client's lead is steered by the same reading
+//! whichever it is playing against.
 //!
 //! The order is what stage 2 needs. A client predicts its own hull by
 //! replaying the inputs the server has not acknowledged yet, so the two
 //! sides have to apply the same inputs in the same sequence or the replay
-//! lands somewhere the server never was. Holding only the newest - which
-//! is all stage 1 needed - drops an input whenever two packets arrive
-//! inside one tick, and jitter guarantees that happens: the client
-//! replays an input the server threw away, and the difference shows up as
-//! a correction that looks like network error but is not.
+//! lands somewhere the server never was. Holding only the newest drops an
+//! input whenever two packets arrive inside one tick, and jitter
+//! guarantees that happens: the client replays an input the server threw
+//! away, and the difference shows up as a correction that looks like
+//! network error but is not.
 //!
 //! A tick that finds the buffer empty repeats the last intent and counts
 //! a starvation, so a hiccup coasts rather than stops - for at most
@@ -18,16 +21,18 @@
 //!
 //! **The buffer never holds an intent back.** Each tick takes the oldest
 //! one waiting, so nothing here adds latency; depth is the client's to
-//! manage by how far ahead it stamps (§4.12's adaptive lead, which reads
-//! `starvations` to decide). What the buffer buys is that a burst is
-//! spread over the ticks that follow instead of being thrown away.
+//! manage. `wire_state` is how it finds out: the depth left after the
+//! tick's read and whether that read starved travel in
+//! `Snapshot::mailbox`, and `net::round` adds a packet on a starvation and
+//! skips one when the depth sits high (§4.12, "The lead"). What the buffer
+//! buys is that a burst is spread over the ticks that follow instead of
+//! being thrown away.
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use bongbong::net::wire::IntentMsg;
-use tokio::time::Instant;
+use crate::net::wire::IntentMsg;
 
 /// How long a tick keeps repeating a seat's last intent with nothing
 /// newer arrived. The client sends every tick (16.7 ms), so half a second
@@ -40,8 +45,12 @@ pub const INTENT_COAST: Duration = Duration::from_millis(500);
 /// client run arbitrarily far ahead: past this the oldest waiting intents
 /// are dropped, which bounds both the memory one seat can cost and how
 /// stale an applied input can be. Eight ticks is 133 ms of slack, well
-/// past the jitter any playable link has.
+/// past the jitter any playable link has, and past the depth the client's
+/// lead ever asks for.
 pub const BUFFER_MAX: usize = 8;
+
+/// The bit of `wire_state` that says the last read found nothing waiting.
+pub const STARVED_BIT: u8 = 0x80;
 
 #[derive(Default)]
 struct Inner {
@@ -60,6 +69,9 @@ struct Inner {
     posted: Option<Instant>,
     /// Ticks that found the buffer empty (§4.12 asks for this per seat).
     starvations: u64,
+    /// Whether the most recent read found the buffer empty: the bit the
+    /// snapshot carries to the client.
+    last_starved: bool,
 }
 
 /// One seat's intents, ordered.
@@ -111,10 +123,12 @@ impl Mailbox {
                 let msg = inner.queue.remove(&tick).expect("just looked it up");
                 inner.applied = Some(tick);
                 inner.last = Some(msg);
+                inner.last_starved = false;
                 Some(msg)
             }
             None => {
                 inner.starvations += 1;
+                inner.last_starved = true;
                 inner.last
             }
         }
@@ -130,8 +144,9 @@ impl Mailbox {
         self.inner.lock().expect("mailbox poisoned").applied.unwrap_or(0)
     }
 
-    /// How many ticks have found this seat's buffer empty. A client
-    /// widens its lead on these (§4.12) and `/metrics` reports them.
+    /// How many ticks have found this seat's buffer empty. `/metrics`
+    /// reports the total; the client reads each one as it happens off
+    /// `wire_state`.
     pub fn starvations(&self) -> u64 {
         self.inner.lock().expect("mailbox poisoned").starvations
     }
@@ -142,10 +157,25 @@ impl Mailbox {
         self.inner.lock().expect("mailbox poisoned").queue.len()
     }
 
+    /// The reading `Snapshot::mailbox` carries for this seat: the depth
+    /// left after the tick's read in the low seven bits and `STARVED_BIT`
+    /// if that read found nothing. Cut after the read, so a client sees
+    /// what the tick it is being told about actually found.
+    pub fn wire_state(&self) -> u8 {
+        let inner = self.inner.lock().expect("mailbox poisoned");
+        let depth = inner.queue.len().min((STARVED_BIT - 1) as usize) as u8;
+        if inner.last_starved { depth | STARVED_BIT } else { depth }
+    }
+
     /// Forget everything: the seat reads as no input from the next tick.
     pub fn clear(&self) {
         *self.inner.lock().expect("mailbox poisoned") = Inner::default();
     }
+}
+
+/// The two halves of a `wire_state` byte.
+pub fn unpack(state: u8) -> (u8, bool) {
+    (state & !STARVED_BIT, state & STARVED_BIT != 0)
 }
 
 #[cfg(test)]
@@ -156,18 +186,19 @@ mod tests {
         IntentMsg { tick, move_dir, face: 0, fire: false }
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn a_tick_without_a_new_intent_repeats_the_last_one_then_coasts_out() {
+    #[test]
+    fn a_tick_without_a_new_intent_repeats_the_last_one_then_coasts_out() {
         let mailbox = Mailbox::new();
         let t0 = Instant::now();
         assert_eq!(mailbox.read(t0), None, "nothing posted reads as no input");
         mailbox.post(intent(5, 1), t0);
         assert_eq!(mailbox.read(t0), Some(intent(5, 1)));
-        tokio::time::advance(Duration::from_millis(100)).await;
-        assert_eq!(mailbox.read(Instant::now()), Some(intent(5, 1)), "a missed tick repeats the last intent");
+        assert_eq!(unpack(mailbox.wire_state()), (0, false), "one in, one out, nothing left and nothing starved");
+        let later = t0 + Duration::from_millis(100);
+        assert_eq!(mailbox.read(later), Some(intent(5, 1)), "a missed tick repeats the last intent");
         assert_eq!(mailbox.starvations(), 1, "and counts as a starvation");
-        tokio::time::advance(INTENT_COAST).await;
-        assert_eq!(mailbox.read(Instant::now()), None, "past the coast the seat stops");
+        assert_eq!(unpack(mailbox.wire_state()), (0, true), "which the wire says");
+        assert_eq!(mailbox.read(later + INTENT_COAST + Duration::from_millis(1)), None, "past the coast the seat stops");
         assert_eq!(mailbox.acked_tick(), 5, "the ack names the intent that was applied");
     }
 
@@ -175,8 +206,8 @@ mod tests {
     /// what jitter does, and both have to be applied in order - a client
     /// replaying its own inputs against the server's answer diverges by
     /// exactly the one that was thrown away.
-    #[tokio::test(start_paused = true)]
-    async fn a_burst_is_applied_in_order_rather_than_collapsed() {
+    #[test]
+    fn a_burst_is_applied_in_order_rather_than_collapsed() {
         let mailbox = Mailbox::new();
         let now = Instant::now();
         mailbox.post(intent(1, 1), now);
@@ -185,6 +216,7 @@ mod tests {
         assert_eq!(mailbox.depth(), 3);
         assert_eq!(mailbox.read(now), Some(intent(1, 1)), "oldest first");
         assert_eq!(mailbox.acked_tick(), 1, "the ack names what was applied, not what arrived");
+        assert_eq!(unpack(mailbox.wire_state()), (2, false), "two still waiting after the read");
         assert_eq!(mailbox.read(now), Some(intent(2, 4)));
         assert_eq!(mailbox.read(now), Some(intent(3, 2)));
         assert_eq!(mailbox.acked_tick(), 3);
@@ -193,8 +225,8 @@ mod tests {
 
     /// Packets arrive out of order and get retransmitted; neither may
     /// move the hull backwards.
-    #[tokio::test(start_paused = true)]
-    async fn out_of_order_is_sorted_and_a_straggler_is_dropped() {
+    #[test]
+    fn out_of_order_is_sorted_and_a_straggler_is_dropped() {
         let mailbox = Mailbox::new();
         let now = Instant::now();
         mailbox.post(intent(3, 2), now);
@@ -212,8 +244,8 @@ mod tests {
 
     /// A client that runs far ahead is held to `BUFFER_MAX`, so one seat
     /// cannot grow without bound or drag the round through a backlog.
-    #[tokio::test(start_paused = true)]
-    async fn a_runaway_client_is_capped_at_the_freshest_intents() {
+    #[test]
+    fn a_runaway_client_is_capped_at_the_freshest_intents() {
         let mailbox = Mailbox::new();
         let now = Instant::now();
         for tick in 0..(BUFFER_MAX as u32 + 4) {
@@ -222,10 +254,11 @@ mod tests {
         assert_eq!(mailbox.depth(), BUFFER_MAX);
         // The four oldest went; the next applied is the fifth.
         assert_eq!(mailbox.read(now), Some(intent(4, 1)));
+        assert_eq!(unpack(mailbox.wire_state()), (BUFFER_MAX as u8 - 1, false));
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn clear_reads_as_no_input_and_forgets_the_ack() {
+    #[test]
+    fn clear_reads_as_no_input_and_forgets_the_ack() {
         let mailbox = Mailbox::new();
         let now = Instant::now();
         mailbox.post(intent(2, 4), now);
@@ -235,12 +268,13 @@ mod tests {
         assert_eq!(mailbox.read(now), None);
         assert_eq!(mailbox.acked_tick(), 0);
         assert_eq!(mailbox.depth(), 0);
+        assert_eq!(mailbox.wire_state(), 0);
     }
 
     /// Tick 0 is a real tick - the client's counter starts there - so it
     /// must not read as "nothing applied yet".
-    #[tokio::test(start_paused = true)]
-    async fn tick_zero_is_an_intent_like_any_other() {
+    #[test]
+    fn tick_zero_is_an_intent_like_any_other() {
         let mailbox = Mailbox::new();
         let now = Instant::now();
         mailbox.post(intent(0, 1), now);

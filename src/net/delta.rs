@@ -43,6 +43,7 @@ pub struct SnapshotDelta {
     pub tick: u32,
     pub server_ms: u32,
     pub acked: [u32; MAX_SEATS],
+    pub mailbox: [u8; MAX_SEATS],
     /// New or changed tanks, in full.
     pub tanks: Vec<TankState>,
     pub tanks_moved: Vec<Moved>,
@@ -245,6 +246,7 @@ pub fn delta(prev: &Snapshot, next: &Snapshot) -> SnapshotDelta {
         tick: next.tick,
         server_ms: next.server_ms,
         acked: next.acked,
+        mailbox: next.mailbox,
         tanks,
         tanks_moved,
         tanks_gone,
@@ -282,6 +284,7 @@ pub fn apply_delta(prev: &Snapshot, delta: &SnapshotDelta) -> Snapshot {
         tick: delta.tick,
         server_ms: delta.server_ms,
         acked: delta.acked,
+        mailbox: delta.mailbox,
         tanks: apply_positioned(&prev.tanks, &delta.tanks, &delta.tanks_moved, &delta.tanks_gone),
         shots: apply_positioned(&prev.shots, &delta.shots, &delta.shots_moved, &delta.shots_gone),
         missiles: apply_positioned(&prev.missiles, &delta.missiles, &delta.missiles_moved, &delta.missiles_gone),
@@ -371,6 +374,10 @@ mod tests {
         for a in &mut acked {
             *a = rng.random_range(0..100_000);
         }
+        let mut mailbox = [0u8; MAX_SEATS];
+        for m in &mut mailbox {
+            *m = rng.random_range(0..8) | if rng.random_ratio(1, 5) { crate::net::mailbox::STARVED_BIT } else { 0 };
+        }
         let tanks = random_keys(rng, 12, 40).into_iter().map(|id| random_tank(rng, id)).collect();
         let shots = random_keys(rng, 30, 400).into_iter().map(|id| random_shot(rng, id)).collect();
         let missiles: Vec<MissileState> = random_keys(rng, 8, 400)
@@ -404,6 +411,7 @@ mod tests {
             tick: rng.random_range(0..200_000),
             server_ms: rng.random(),
             acked,
+            mailbox,
             tanks,
             shots,
             missiles,
@@ -435,6 +443,9 @@ mod tests {
         next.server_ms = next.server_ms.wrapping_add(50);
         if rng.random_ratio(1, 3) {
             next.acked[rng.random_range(0..MAX_SEATS)] += 3;
+        }
+        if rng.random_ratio(1, 3) {
+            next.mailbox[rng.random_range(0..MAX_SEATS)] = rng.random_range(0..8);
         }
         for t in &mut next.tanks {
             match rng.random_range(0..10) {
@@ -658,9 +669,11 @@ mod tests {
         let busy = encode(&Msg::Delta(delta(&b, &c))).len();
         let idle = encode(&Msg::Delta(delta(&a, &a))).len();
         println!("snapshot sizes: full {full} B, delta moving {moving} B, delta busy {busy} B, delta idle {idle} B");
-        assert!(full <= 410, "full snapshot {full} B");
-        assert!(moving <= 200, "moving delta {moving} B");
-        assert!(busy <= 260, "busy delta {busy} B");
-        assert!(idle <= 40, "idle delta {idle} B");
+        // Every delta carries `acked` and `mailbox` whole: eight
+        // varints and eight bytes, the header the idle bound is.
+        assert!(full <= 420, "full snapshot {full} B");
+        assert!(moving <= 210, "moving delta {moving} B");
+        assert!(busy <= 270, "busy delta {busy} B");
+        assert!(idle <= 48, "idle delta {idle} B");
     }
 }

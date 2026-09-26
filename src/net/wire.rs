@@ -550,8 +550,15 @@ pub struct Snapshot {
     pub tick: u32,
     /// The server's clock in milliseconds, for the client's clock sync.
     pub server_ms: u32,
-    /// The last input tick applied per seat (stage 2; zero until then).
+    /// The last input tick applied per seat: what a client's replay is
+    /// measured from (`net::predict`).
     pub acked: [u32; MAX_SEATS],
+    /// Each seat's mailbox after this tick's read
+    /// (`net::mailbox::Mailbox::wire_state`): the intents still waiting
+    /// in the low seven bits, `STARVED_BIT` if the read found none. The
+    /// reading the client steers its lead by (docs/online-coop-prd.md
+    /// §4.12).
+    pub mailbox: [u8; MAX_SEATS],
     pub tanks: Vec<TankState>,
     pub shots: Vec<ShotState>,
     /// Seeker missiles in flight, by `Missile::id`.
