@@ -161,6 +161,9 @@ struct Live {
     /// Seconds after the press it left, so it is retired that long after
     /// the press is confirmed.
     due: f32,
+    /// Its drawn path has crossed a drawn hull (`mark_crossings`): the
+    /// moment the lie of §4.12 was visible, counted once.
+    crossed: bool,
 }
 
 /// One pull of the trigger the client drew before the server answered.
@@ -207,6 +210,17 @@ pub struct PredictionReport {
     pub shots_refused: u32,
     /// Provisional shots on screen right now.
     pub shots_on_screen: usize,
+    /// Provisional shots whose drawn path crossed a drawn enemy hull: the
+    /// frames the lie of §4.12 was on screen. The round keeps the two
+    /// that follow (decision 9's measurement).
+    pub crossings: u32,
+    /// Crossings the server answered with a `Hit` near that point within
+    /// `net::round::CROSSING_WINDOW_SECONDS`.
+    pub crossings_hit: u32,
+    /// Crossings it never did: a shell drawn through a hull it did not
+    /// touch on the server. The rate of these against `crossings` is
+    /// what decides lag compensation.
+    pub crossings_missed: u32,
     /// Inputs the server had not acknowledged at the last reconciliation:
     /// the replay's length, the lead plus the round trip in ticks.
     pub in_flight: usize,
@@ -401,7 +415,7 @@ impl Predictor {
             }
             press.pending.remove(i);
             if let Some(shot) = self.sandbox.seat_shot(self.seat, press.kind, p.aim, p.lateral) {
-                press.live.push(Live { shot, due: p.due });
+                press.live.push(Live { shot, due: p.due, crossed: false });
             }
         }
     }
@@ -483,6 +497,27 @@ impl Predictor {
             .flat_map(|p| p.live.iter().map(|l| l.shot))
             .enumerate()
             .map(|(i, shot)| (PROVISIONAL_ID_BASE + i as u32, shot))
+    }
+
+    /// Mark every live shot whose path this frame crosses something,
+    /// once each, and hand back where it did. `crosses` is the caller's
+    /// test of a segment against the picture - the predictor knows the
+    /// sandbox, not the drawn hulls - answering with the point to record.
+    pub fn mark_crossings(&mut self, mut crosses: impl FnMut(Position, Position) -> Option<Position>) -> Vec<Position> {
+        let mut points = Vec::new();
+        for press in &mut self.presses {
+            for live in &mut press.live {
+                if live.crossed {
+                    continue;
+                }
+                if let Some(at) = crosses(live.shot.prev_position, live.shot.position) {
+                    live.crossed = true;
+                    self.report.crossings += 1;
+                    points.push(at);
+                }
+            }
+        }
+        points
     }
 
     /// How many shots are on screen that the server has not yet drawn.
@@ -580,7 +615,7 @@ impl Predictor {
     }
 
     /// The counters, with the lead's own adjustments filled in by the
-    /// round that keeps them.
+    /// round that keeps them; the round fills the crossing answers too.
     pub fn report(&self, lead_up: u32, lead_down: u32) -> PredictionReport {
         PredictionReport {
             shots_on_screen: self.provisional_count(),
@@ -1007,6 +1042,21 @@ mod tests {
         predictor.step(release());
         predictor.step(press());
         assert_eq!(predictor.provisional_count(), 0, "the seeded gate held the press");
+    }
+
+    /// A shot's crossing of a hull is the caller's test and the
+    /// predictor's memory: asked every frame, it marks each shot once.
+    #[test]
+    fn a_crossing_is_marked_once_per_shot() {
+        let mut predictor = Predictor::new(round_with(single_barrel_row(), 0), 0, 0);
+        predictor.step(press());
+        let none = predictor.mark_crossings(|_, _| None);
+        assert!(none.is_empty());
+        let once = predictor.mark_crossings(|_, b| Some(b));
+        assert_eq!(once.len(), 1, "the shot crossed");
+        let again = predictor.mark_crossings(|_, b| Some(b));
+        assert!(again.is_empty(), "a shot crosses once, however often it is asked");
+        assert_eq!(predictor.report(0, 0).crossings, 1);
     }
 
     /// A teleport is not a correction to ease across - the hull is

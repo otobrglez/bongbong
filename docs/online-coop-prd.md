@@ -106,7 +106,7 @@ revision does about each:
 | the prediction metrics (4.12, phase 4's exit test) | built in this revision: `status.round.prediction` on the dev server, off the same counters the rig tests read |
 | predicted cooldown and ammo | built in this revision: the sandbox is a projection of the server's seat, so its weapon and ammo gate the provisional shot, and the cooldown is seeded from the room's own `Fired` |
 | full-auto streams | built in this revision for the minigun's burst and the twin barrel's second shot; plasma is a shell here. The laser, the missile pod and the flamethrower's cone are drawn from the room's word (4.12 says why) |
-| lag compensation (decision 9) | still deferred, deliberately; 4.12 names the measurement that decides it |
+| lag compensation (decision 9) | still deferred, deliberately; the instrument that decides it is built (4.12: `crossings` against `crossings_hit`/`crossings_missed` on `status.round.prediction`), the reading on a real link is what is left |
 
 ### As found (verified 2026-09-19, tree at ac5ebe4, v0.1.0)
 
@@ -832,10 +832,14 @@ the frame it is pressed instead of a round trip later. **Lag compensation**
 (decision 9) - the server rewinding targets to the shooter's view, capped at
 200 ms, off a per-room position ring like the dev server's history - is what
 would make it correct rather than merely early, and is not built. The
-measurement that decides it: the rate of `Hit` events for the local seat's
-shots against the rate of provisional shells that visibly crossed a hull
-without one, on a real link. Below a few per cent it is not worth the ring;
-the laser is the weapon that would complain first.
+measurement that decides it is: every provisional shot whose drawn path
+crosses a drawn, live enemy hull is a *crossing* (the lie on screen); a
+server `Hit` on an enemy within a hull and a half of that point inside
+`CROSSING_WINDOW_SECONDS` answers it, and one nothing answers was a shell
+drawn through a hull it never touched. `status.round.prediction` carries
+`crossings`, `crossings_hit` and `crossings_missed`; what is left is to
+read them on a real link. Below a few per cent missed it is not worth the
+ring; the laser is the weapon that would complain first.
 
 ### 4.13 Running it locally
 
@@ -976,8 +980,9 @@ ship a complete co-op game; 4 and 5 are stage 2.
      appears; the adaptive interpolation delay; the client's lead as a
      mailbox depth; the metrics on `status.round`; the flamethrower's cone
      drawn on a replica at all.
-   - 5c *open*: the feel pass on real links, and decision 9's measurement.
-     Lag compensation only if it says so.
+   - 5c *open*: the feel pass on real links, and decision 9's reading -
+     the instrument is on `status.round.prediction`. Lag compensation
+     only if it says so.
 6. **Horizon.** Distribution: more than one instance, with the directory the
    replay log makes possible rather than a routing letter in the code (4.8).
    Persistence: the replay log (crash recovery, true blue/green deploys),

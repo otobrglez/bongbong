@@ -35,9 +35,10 @@ use crate::net::interp::{InterpReport, Interpolator};
 use crate::net::mailbox;
 use crate::net::predict::{PredictionReport, Predictor};
 use crate::net::transport::Transport;
-use crate::net::events::WireEvent;
-use crate::net::wire::{RoundOutcome, Snapshot, Welcome};
+use crate::net::events::{WireEvent, WireHitTarget};
+use crate::net::wire::{RoundOutcome, Snapshot, Welcome, dequantise_pos};
 use crate::simulation::Game;
+use crate::tank::Tank;
 use crate::tuning::{self, tuning};
 use crate::PHYSICS_FIXED_DT;
 
@@ -60,6 +61,53 @@ pub const LEAD_DEPTH_MAX: f32 = 2.5;
 
 /// How much of each reported depth the smoothed depth takes.
 pub const LEAD_GAIN: f32 = 0.1;
+
+/// How long after a provisional shot crossed a drawn hull the server's
+/// `Hit` for it may still arrive: a round trip, the interpolation delay
+/// and the rest of the shell's flight, generously. Past it the crossing
+/// was a shell drawn through a hull it never touched (decision 9).
+pub const CROSSING_WINDOW_SECONDS: f32 = 0.5;
+
+/// How near a `Hit` has to land to a crossing to be its answer: a hull
+/// and a half, since the server's hull stood up to the delay times its
+/// speed from the drawn one.
+pub const HIT_MATCH_PX: f32 = 96.0;
+
+/// A provisional shot seen crossing a drawn hull, waiting for the
+/// server's word on it.
+#[derive(Clone, Copy, Debug)]
+struct Crossing {
+    at: crate::math::Vec2,
+    age: f32,
+}
+
+/// Whether the segment `a`-`b` passes through the box at `centre` with
+/// half extents `hx`, `hy`: the slab test, the same shape as the hit
+/// test's sweep, on the drawn picture rather than the world.
+fn segment_crosses_box(a: crate::math::Vec2, b: crate::math::Vec2, centre: crate::math::Vec2, hx: f32, hy: f32) -> bool {
+    let (mut t0, mut t1) = (0.0f32, 1.0f32);
+    for (p, d, lo, hi) in [
+        (a.x, b.x - a.x, centre.x - hx, centre.x + hx),
+        (a.y, b.y - a.y, centre.y - hy, centre.y + hy),
+    ] {
+        if d.abs() < f32::EPSILON {
+            if p < lo || p > hi {
+                return false;
+            }
+            continue;
+        }
+        let (mut near, mut far) = ((lo - p) / d, (hi - p) / d);
+        if near > far {
+            std::mem::swap(&mut near, &mut far);
+        }
+        t0 = t0.max(near);
+        t1 = t1.min(far);
+        if t0 > t1 {
+            return false;
+        }
+    }
+    true
+}
 
 /// What the lead asks of the frame's packet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -155,6 +203,11 @@ pub struct OnlineRound<T: Transport> {
     trigger_down: bool,
     /// The seat's lead over the room, steered by the mailbox readings.
     lead: Lead,
+    /// Provisional shots seen crossing a drawn hull, until the server's
+    /// `Hit` claims them or the window runs out (decision 9's numbers).
+    crossings: Vec<Crossing>,
+    crossings_hit: u32,
+    crossings_missed: u32,
     /// The local seat's own hull, run ahead of the room and pulled back
     /// by each snapshot (stage 2, docs/online-coop-prd.md §4.12). Built
     /// beside the replica from the same `Welcome`, so the two step
@@ -196,6 +249,9 @@ impl<T: Transport> OnlineRound<T> {
             pending_fire: false,
             trigger_down: false,
             lead: Lead::new(),
+            crossings: Vec::new(),
+            crossings_hit: 0,
+            crossings_missed: 0,
             note: None,
             ended: None,
             scratch: Vec::new(),
@@ -217,7 +273,11 @@ impl<T: Transport> OnlineRound<T> {
     /// The predictor's counters, with the lead's own, once a welcome has
     /// built a sandbox (docs/online-coop-prd.md §4.12, "Measured").
     pub fn prediction(&self) -> Option<PredictionReport> {
-        self.predictor.as_ref().map(|p| p.report(self.lead.up, self.lead.down))
+        self.predictor.as_ref().map(|p| PredictionReport {
+            crossings_hit: self.crossings_hit,
+            crossings_missed: self.crossings_missed,
+            ..p.report(self.lead.up, self.lead.down)
+        })
     }
 
     /// What the interpolator is doing: the delay in force, the jitter it
@@ -526,6 +586,7 @@ impl<T: Transport> OnlineRound<T> {
         // from `online_interpolation_delay_ms` ago while its position was
         // already at the present - a tank that slides without turning.
         self.write_predicted();
+        self.measure_crossings(dt);
         let Some(game) = self.replica.as_mut() else { return };
         game.tick_presentation(dt);
         if let Some(frame) = &sampled {
@@ -577,6 +638,42 @@ impl<T: Transport> OnlineRound<T> {
         if self.trigger_down && tuning().online_predict_shots {
             game.hold_flame(seat as usize);
         }
+    }
+
+    /// Decision 9's instrument: every provisional shot whose drawn path
+    /// crosses a drawn, live enemy hull this frame is a moment the lie of
+    /// §4.12 was on screen. It is remembered here until the server's
+    /// `Hit` near that point claims it (`confirm_shots`) or
+    /// `CROSSING_WINDOW_SECONDS` run out, and the two counts are the rate
+    /// that says whether lag compensation is worth building.
+    fn measure_crossings(&mut self, dt: f32) {
+        for c in &mut self.crossings {
+            c.age += dt;
+        }
+        let before = self.crossings.len();
+        self.crossings.retain(|c| c.age <= CROSSING_WINDOW_SECONDS);
+        self.crossings_missed += (before - self.crossings.len()) as u32;
+        let (Some(predictor), Some(game)) = (self.predictor.as_mut(), self.replica.as_ref()) else { return };
+        // The hulls as drawn: every live enemy with a body, boxed the way
+        // the hit test boxes it, oriented by its facing.
+        let hulls: Vec<(crate::math::Vec2, f32, f32)> = game
+            .world
+            .query::<&Tank>()
+            .iter()
+            .filter(|t| !t.is_player() && !t.is_wreck() && t.body.is_some())
+            .map(|t| {
+                let along_x = ((t.rotation / 90.0).round() as i32).rem_euclid(2) == 1;
+                let (hx, hy) = t.hull_half_extents(along_x);
+                (t.position, hx, hy)
+            })
+            .collect();
+        if hulls.is_empty() {
+            return;
+        }
+        let points = predictor.mark_crossings(|a, b| {
+            hulls.iter().any(|&(c, hx, hy)| segment_crosses_box(a, b, c, hx, hy)).then_some(b)
+        });
+        self.crossings.extend(points.into_iter().map(|at| Crossing { at, age: 0.0 }));
     }
 
     /// Pull the sandbox back into line with a snapshot that just landed.
@@ -631,10 +728,24 @@ impl<T: Transport> OnlineRound<T> {
         let acked = frame.acked.get(seat as usize).copied().unwrap_or(0);
         let ticks_ago = predictor.tick().wrapping_sub(acked);
         for event in &frame.events {
-            if let WireEvent::Fired { slot, weapon } = event
-                && *slot as u8 == seat
-            {
-                predictor.confirm_shot(*weapon, ticks_ago);
+            match event {
+                WireEvent::Fired { slot, weapon } if *slot as u8 == seat => {
+                    predictor.confirm_shot(*weapon, ticks_ago);
+                }
+                // A hit on an enemy near a crossing still waiting is the
+                // server agreeing with the picture: the oldest such
+                // crossing is answered.
+                WireEvent::Hit { target: WireHitTarget::Enemy { .. }, x, y, .. } => {
+                    let at = crate::math::Vec2::new(dequantise_pos(*x), dequantise_pos(*y));
+                    if let Some(i) = self.crossings.iter().position(|c| {
+                        let (dx, dy) = (c.at.x - at.x, c.at.y - at.y);
+                        (dx * dx + dy * dy).sqrt() <= HIT_MATCH_PX
+                    }) {
+                        self.crossings.remove(i);
+                        self.crossings_hit += 1;
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -854,6 +965,119 @@ mod tests {
         assert!(down >= 1, "a deep buffer was never narrowed");
         assert!(down <= frames / LEAD_WINDOW, "narrowed {down} times in {frames} snapshots");
         assert_eq!(heard, frames - down, "each narrowing is exactly one packet fewer");
+    }
+
+    /// **Decision 9's instrument.** A provisional shell drawn through an
+    /// enemy's hull is counted the frame it crosses, and the server's
+    /// `Hit` near that point, handed over within the window, answers it;
+    /// the two counts are what a real-link session reads to decide on
+    /// lag compensation.
+    #[test]
+    fn a_provisional_shot_through_a_drawn_hull_is_counted_and_the_servers_hit_answers_it() {
+        use crate::net::events::WireHitTarget;
+        use crate::net::wire::quantise_pos;
+        if !tuning().online_predict_own_tank || !tuning().online_predict_shots {
+            return;
+        }
+        let (mut room, mut round) = room_and_round();
+        room.welcome();
+        round.frame(&Intent::default(), 1.0 / 60.0);
+
+        // An enemy 200 px straight ahead of the seat, in the authority.
+        let seat = room.game.tank_snapshots().into_iter().find(|t| t.slot == 0).expect("the seat");
+        let rad = seat.rotation.to_radians();
+        let ahead = crate::math::Vec2::new(seat.position.x + rad.sin() * 200.0, seat.position.y - rad.cos() * 200.0);
+        room.game.debug_teleport(1, ahead, Some(seat.rotation)).expect("an enemy in slot 1");
+        // Snapshots of that world, cut by hand so nothing moves, stamped
+        // far enough ahead that the clock jumps to them at once.
+        let mut tick = 1u32;
+        let mut send = |room: &mut Room, from_ms: u32, count: usize, events: Vec<WireEvent>| {
+            for i in 0..count {
+                let mut s = encode::snapshot(&room.game, [0; MAX_SEATS]);
+                s.tick = tick;
+                s.server_ms = from_ms + 50 * i as u32;
+                s.events = if i == 0 { events.clone() } else { Vec::new() };
+                tick += 1;
+                room.say(Msg::Snapshot(s));
+            }
+        };
+        // Twenty of them: the clock's estimate trails a run of stamps by
+        // a few hundred milliseconds, and render time has to stand
+        // between two snapshots of the teleported world, not between the
+        // welcome and the first of them.
+        send(&mut room, 5_000, 20, Vec::new());
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        let drawn = round.game().expect("a replica").tank_snapshots();
+        let enemy = drawn.iter().find(|t| t.slot == 1).expect("the enemy is drawn");
+        assert!((enemy.position.x - ahead.x).abs() < 2.0 && (enemy.position.y - ahead.y).abs() < 2.0, "the enemy is drawn where it was put: {:?}", enemy.position);
+
+        // One press, and the shell flies at it.
+        round.frame(&Intent { fire: true, ..Intent::default() }, 1.0 / 60.0);
+        assert_eq!(round.prediction().map(|p| p.shots_drawn), Some(1));
+        let mut crossed_after = None;
+        for i in 0..40 {
+            round.frame(&Intent::default(), 1.0 / 60.0);
+            if round.prediction().is_some_and(|p| p.crossings == 1) {
+                crossed_after = Some(i);
+                break;
+            }
+        }
+        let crossed_after = crossed_after.expect("the shell crossed the drawn hull");
+        assert!(crossed_after > 5, "200 px is more than a few frames of flight: {crossed_after}");
+        assert_eq!(round.prediction().map(|p| (p.crossings_hit, p.crossings_missed)), Some((0, 0)), "nothing answered yet");
+
+        // The server's hit on that hull, handed over inside the window.
+        let hit = WireEvent::Hit {
+            target: WireHitTarget::Enemy { slot: 1 },
+            damage: 10.0,
+            killed: false,
+            x: quantise_pos(ahead.x),
+            y: quantise_pos(ahead.y),
+        };
+        // Fifteen, fewer than the ring holds (`BUFFERED_SNAPSHOTS`): more
+        // in one frame and the one carrying the hit is dropped unseen.
+        send(&mut room, 11_000, 15, vec![hit]);
+        for _ in 0..10 {
+            round.frame(&Intent::default(), 1.0 / 60.0);
+        }
+        assert_eq!(
+            round.prediction().map(|p| (p.crossings, p.crossings_hit, p.crossings_missed)),
+            Some((1, 1, 0)),
+            "the crossing was answered by the hit"
+        );
+    }
+
+    /// A crossing nobody answers is a shell drawn through a hull it
+    /// never touched, and is counted as such once the window runs out.
+    #[test]
+    fn a_crossing_the_server_never_answers_is_a_miss() {
+        if !tuning().online_predict_own_tank || !tuning().online_predict_shots {
+            return;
+        }
+        let (mut room, mut round) = room_and_round();
+        room.welcome();
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        let seat = room.game.tank_snapshots().into_iter().find(|t| t.slot == 0).expect("the seat");
+        let rad = seat.rotation.to_radians();
+        let ahead = crate::math::Vec2::new(seat.position.x + rad.sin() * 120.0, seat.position.y - rad.cos() * 120.0);
+        room.game.debug_teleport(1, ahead, Some(seat.rotation)).expect("an enemy in slot 1");
+        for (i, stamp) in [5_000u32, 5_050].into_iter().enumerate() {
+            let mut s = encode::snapshot(&room.game, [0; MAX_SEATS]);
+            s.tick = i as u32 + 1;
+            s.server_ms = stamp;
+            room.say(Msg::Snapshot(s));
+        }
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        round.frame(&Intent { fire: true, ..Intent::default() }, 1.0 / 60.0);
+        let frames = (CROSSING_WINDOW_SECONDS * 60.0) as usize + 40;
+        for _ in 0..frames {
+            round.frame(&Intent::default(), 1.0 / 60.0);
+        }
+        assert_eq!(
+            round.prediction().map(|p| (p.crossings, p.crossings_hit, p.crossings_missed)),
+            Some((1, 0, 1)),
+            "an unanswered crossing is a miss"
+        );
     }
 
     #[test]
