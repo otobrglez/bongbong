@@ -1138,7 +1138,7 @@ pub fn run(args: Args) {
         if touch_from_mouse && mouse_held && touch_points.is_empty() {
             touch_points.push(TouchPoint { id: -1, pos: view.to_bitmap(rl.get_mouse_position().into()) });
         }
-        let steer_right = tuning().touch_steer_side != 0;
+        let steer_right = crate::TOUCH_STEER_RIGHT;
         let pressed = mouse_pressed || touch_pressed;
         let held = mouse_held || touching;
         let tab = rl.is_key_pressed(KeyboardKey::KEY_TAB);

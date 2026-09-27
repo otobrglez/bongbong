@@ -372,6 +372,11 @@ pub const KEYBOARD_AVAILABLE: bool = !cfg!(any(target_os = "ios", target_os = "a
 /// dialog. The count itself, `Game::players`, still exists there - the
 /// dev tools may set it - but no player-facing path reaches it.
 pub const TWO_PLAYERS_AVAILABLE: bool = KEYBOARD_AVAILABLE;
+/// Which half of the field the touch stick lives on (touch.rs): the left
+/// unless the `touch-steer-right` cargo feature mirrors it. A build-time
+/// choice on purpose - there is no knob, file or dev tool that flips it at
+/// runtime, so a build with the stick on the right is a recompile.
+pub const TOUCH_STEER_RIGHT: bool = cfg!(feature = "touch-steer-right");
 
 /// Whether this build can reach a room (docs/online-coop-prd.md §4.10):
 /// the bar carries an `ONLINE` button and `mode::Session` will open the

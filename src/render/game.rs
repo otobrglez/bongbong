@@ -853,6 +853,24 @@ fn draw_tank_boxes(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>, geo: &
     let th = (turret_half.y * 2.0).round() as i32;
     d.draw_rectangle_lines(tx, ty, tw, th, Color::YELLOW);
 
+    // What a player's shot is tested against on an enemy: the hull and
+    // turret boxes grown by `player_shot_hit_pad_px`
+    // (`hits::Terrain::sweep`), so a screenshot shows the forgiveness.
+    if ai.is_some() && !tank.is_wreck() {
+        let pad = tuning().player_shot_hit_pad_px;
+        if pad > 0.0 {
+            for (c, h) in [tank.hull_bbox_world(), (turret_center, turret_half)] {
+                d.draw_rectangle_lines(
+                    (c.x - h.x - pad).round() as i32,
+                    (c.y - h.y - pad).round() as i32,
+                    ((h.x + pad) * 2.0).round() as i32,
+                    ((h.y + pad) * 2.0).round() as i32,
+                    Color::new(255, 140, 60, 150),
+                );
+            }
+        }
+    }
+
     // Movement collider (see the doc comment above): drawn with the exact
     // clamped corner radius the physics shape carries
     // (`physics::tank_corner_radius`), mapped onto raylib's relative
@@ -991,9 +1009,14 @@ impl Game {
             }
         }
         if ov.pickups {
-            let radius = tuning().pickup_collect_radius;
+            // The square a hull's box has to touch, grown by the pad: what
+            // `pickup_phase` tests (`Pickup::in_reach`), from the pickup's
+            // side of it.
+            let pad = tuning().pickup_collect_pad_px;
             for pickup in self.world.query::<&Pickup>().iter() {
-                d.draw_circle_lines(pickup.position.x as i32, pickup.position.y as i32, radius, Color::GOLD);
+                let half = pickup.size() * 0.5 + pad;
+                let side = (half * 2.0).round() as i32;
+                d.draw_rectangle_lines((pickup.position.x - half).round() as i32, (pickup.position.y - half).round() as i32, side, side, Color::GOLD);
             }
         }
         if ov.projectiles {

@@ -328,11 +328,20 @@ tunables! {
         /// `--tank` on the command line outranks this knob; nothing else
         /// does, so dragging this is how a browser round picks a chassis.
         player_tank: i32 = (-1) in -1 ..= 11 @ Restart;
-        /// Which half of the field steers on a touch screen (touch.rs): 1
-        /// puts the floating stick under the first touch on the right
-        /// half and fires on a tap on the left, 0 mirrors it for a
-        /// left-handed player. Keyboard input is unaffected.
-        touch_steer_side: i32 = 1 in 0 ..= 1;
+        /// A drag shorter than this (bitmap px) on both axes from the
+        /// stick's origin is a resting thumb, not a direction.
+        touch_dead_zone_px: f32 = 14.0 in 4.0 ..= 40.0;
+        /// The stick's origin trails the thumb so the drag never exceeds
+        /// this many px: a change of direction costs the same short slide
+        /// however far the thumb has pushed, and the drawn base sits where
+        /// the rule measures from. 0 pins the origin where the thumb
+        /// landed, and a long push then needs a long slide back.
+        touch_follow_radius_px: f32 = 40.0 in 0.0 ..= 120.0;
+        /// Degrees off the held axis a drag has to reach before the other
+        /// axis takes over - the hysteresis that keeps a drag near a
+        /// diagonal from flickering. 45 is no band at all; past 60 a thumb
+        /// reads the band as the tank refusing to turn.
+        touch_axis_switch_deg: f32 = 50.0 in 45.0 ..= 75.0;
         /// When the round ends (player destroyed, or all enemies destroyed)
         /// the result is shown for this long, then the game restarts.
         restart_delay: f32 = 3.0 in 0.0 ..= 30.0;
@@ -783,9 +792,11 @@ tunables! {
         /// Seconds after a pickup is collected before a fresh one spawns at
         /// a random empty map slot - keeps the field topped up.
         pickup_respawn_seconds: f32 = 15.0 in 0.0 ..= 120.0;
-        /// How close a tank's center needs to get to collect a pickup - more
-        /// forgiving than true hull overlap.
-        pickup_collect_radius: f32 = 32.0 in 4.0 ..= 200.0;
+        /// A pickup is collected once a tank's hull box, grown by this many
+        /// px on every side, overlaps the pickup's 32 px square
+        /// (`Pickup::in_reach`): touching it is enough, from the side, the
+        /// front or a corner alike. Enemies take the same test.
+        pickup_collect_pad_px: f32 = 6.0 in 0.0 ..= 64.0;
         /// Health pickup: deliberately not a full heal - roughly 2-3 enemy
         /// hits' worth, worth detouring for.
         pickup_heal_amount: f32 = 40.0 in 0.0 ..= 100.0;
@@ -857,6 +868,12 @@ tunables! {
         /// deals to the other player, as a factor of the normal roll. 1 is
         /// full friendly fire, 0 makes teammates harmless to each other.
         friendly_fire_damage_factor: f32 = 1.0 in 0.0 ..= 2.0;
+        /// Extra half-extent (px) on an enemy's hull and turret boxes for a
+        /// player's shot only (`hits::Terrain::sweep`), so a shell whose
+        /// sprite touches the hull lands instead of passing a pixel wide.
+        /// Enemy shots, other seats' hulls, tiles and walls keep the exact
+        /// boxes: this loosens the player's aim and nothing else.
+        player_shot_hit_pad_px: f32 = 8.0 in 0.0 ..= 32.0;
         /// Damage both tanks take from one ram contact, rolled uniformly in
         /// this range (`simulation::combat::ram`). Wrecks neither deal nor
         /// take it.
