@@ -76,6 +76,12 @@ render = ["dep:sola-raylib"]
 # ways to drive it at runtime are gated). Enable with `--features dev-tools`
 # (`just run-dev`, `just build-web-dev`).
 dev-tools = []
+# The touch stick on the right half of the field and fire on the left
+# (src/touch.rs, `TOUCH_STEER_RIGHT`): a build-time mirror of the default
+# left-thumb layout, deliberately not a runtime knob - no panel, `--tuning`
+# file or dev tool can flip the side under a player - so a right-side build
+# is a recompile (`--features touch-steer-right`).
+touch-steer-right = []
 # Online co-op's client half (src/net/transport.rs and its implementations,
 # docs/online-coop-prd.md section 4.6): the socket a room is played over.
 # On for every client build, off under `--no-default-features`, which is

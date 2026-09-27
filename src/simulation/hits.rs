@@ -17,6 +17,7 @@ use crate::frog::Frog;
 use crate::obstacle::{Material, Obstacle};
 use crate::shell::Owner;
 use crate::tank::Tank;
+use crate::tuning::tuning;
 use crate::{FROG_COLLIDER_HALF_EXTENT, Position};
 
 use super::with_tank;
@@ -60,6 +61,10 @@ pub(crate) struct Terrain {
     /// obstacle here: deep water stops hulls through its physics
     /// colliders and never a shot, so `sweep` must not see it.
     water: crate::ground::WaterLayout,
+    /// `player_shot_hit_pad_px` as the table held it when the snapshot was
+    /// taken: the extra half-extent a player's shot gets against an
+    /// enemy's hull and turret boxes in `sweep`.
+    player_shot_pad: f32,
 }
 
 fn frog_half() -> Position {
@@ -105,7 +110,16 @@ impl Terrain {
             walls: battlefield::wall_rects(width, height),
             grass: grass.to_vec(),
             water: water.clone(),
+            player_shot_pad: tuning().player_shot_hit_pad_px,
         }
+    }
+
+    /// This snapshot with another pad on enemy boxes for a player's shot -
+    /// a test's way to hold the exact boxes against the padded ones.
+    #[cfg(test)]
+    pub fn with_player_shot_pad(mut self, pad: f32) -> Self {
+        self.player_shot_pad = pad;
+        self
     }
 
     /// Is `p` standing in tall grass?
@@ -223,6 +237,10 @@ impl Terrain {
     /// each enemy's hull and turret, the frog, every obstacle tile, the
     /// four walls - is scored by its entry time and the nearest wins, so a
     /// long segment can never skip what it would really have struck first.
+    /// A player's shot is tested against an enemy's hull and turret grown
+    /// by `player_shot_hit_pad_px` besides - the forgiveness a thumb
+    /// needs, on the one target it is aimed at - while enemy shots, the
+    /// seats, the frog, tiles and walls keep the exact boxes.
     /// Exact ties go players > enemies > frog > obstacles > walls. The
     /// shooter's own boxes are skipped. `players` is `Game::players()` -
     /// the seats in index order, `None` where a seat holds no tank.
@@ -255,6 +273,10 @@ impl Terrain {
         ignore: &[Entity],
     ) -> Option<(ShellTarget, f32)> {
         let pad = Position::new(half_extent, half_extent);
+        let enemy_pad = match shooter {
+            Owner::Player(_) => pad + Position::new(self.player_shot_pad, self.player_shot_pad),
+            Owner::Enemy(_) => pad,
+        };
         let mut best: Option<(f32, u8, ShellTarget)> = None;
 
         // Wrecks are see-through to gunfire. A hulk kept its full hull and
@@ -280,9 +302,9 @@ impl Terrain {
                 continue;
             }
             let (hc, hh) = tank.hull_bbox_world();
-            consider_hit(&mut best, segment_hits_aabb(p0, p1, hc, hh + pad), 1, ShellTarget::Tank(entity));
+            consider_hit(&mut best, segment_hits_aabb(p0, p1, hc, hh + enemy_pad), 1, ShellTarget::Tank(entity));
             let (tc, th) = tank.turret_bbox_world();
-            consider_hit(&mut best, segment_hits_aabb(p0, p1, tc, th + pad), 1, ShellTarget::Tank(entity));
+            consider_hit(&mut best, segment_hits_aabb(p0, p1, tc, th + enemy_pad), 1, ShellTarget::Tank(entity));
         }
 
         for &(entity, pos) in &self.frogs {

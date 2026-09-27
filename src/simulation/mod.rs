@@ -1858,9 +1858,11 @@ impl Game {
         }
     }
 
-    /// Pickups: any live tank within PICKUP_COLLECT_RADIUS collects (pure
-    /// proximity, no physics), then the field is topped back up to the
-    /// map's slot count after PICKUP_RESPAWN_SECONDS.
+    /// Pickups: any live tank whose hull box, grown by
+    /// `pickup_collect_pad_px`, touches a pickup's square collects it
+    /// (`Pickup::in_reach` - pure geometry, no physics), then the field is
+    /// topped back up to the map's slot count after
+    /// `pickup_respawn_seconds`.
     /// Whether the player's frog is hurt enough to be worth dropping a
     /// bonus frog health pack for - the gate on that roll, checked before
     /// any RNG is drawn (docs/frog-health-pack-prd.md section 6). Only the
@@ -1875,13 +1877,17 @@ impl Game {
     }
 
     fn pickup_phase(&mut self, f: &mut Frame) {
-        let living_tanks: Vec<(Entity, Position)> = self
+        let pad = tuning().pickup_collect_pad_px;
+        let living_tanks: Vec<(Entity, Position, Position)> = self
             .world
             .query::<(Entity, &Tank)>()
             .without::<&RollIn>()
             .iter()
             .filter(|(_, t)| !t.is_wreck())
-            .map(|(e, t)| (e, t.position))
+            .map(|(e, t)| {
+                let (center, half) = t.hull_bbox_world();
+                (e, center, half)
+            })
             .collect();
         // A frog pack is left where it is for a tank whose own frog is
         // alive and already at full health - the one rule deciding who
@@ -1908,10 +1914,10 @@ impl Game {
                     // something it then refuses to pick up. Players always
                     // collect; taking what you do not strictly need is the
                     // player's call to make.
-                    .filter(|&&(e, _)| with_tank(&self.world, e, |t| t.wants_pickup(pickup.kind)))
-                    .filter(|&&(e, _)| pickup.kind != PickupKind::FrogHealth || !own_frog_full(e))
-                    .find(|(_, pos)| pos.distance_to(pickup.position) <= tuning().pickup_collect_radius)
-                    .map(|&(tank_entity, _)| (pickup_entity, tank_entity, pickup.kind))
+                    .filter(|&&(e, _, _)| with_tank(&self.world, e, |t| t.wants_pickup(pickup.kind)))
+                    .filter(|&&(e, _, _)| pickup.kind != PickupKind::FrogHealth || !own_frog_full(e))
+                    .find(|&&(_, center, half)| pickup.in_reach(center, half, pad))
+                    .map(|&(tank_entity, _, _)| (pickup_entity, tank_entity, pickup.kind))
             })
             .collect();
         for (pickup_entity, tank_entity, kind) in collected {
@@ -4594,17 +4600,18 @@ mod determinism_tests {
             }
             hash
         };
-        // **Re-baselined for master's seeker missiles, deliberately.**
-        // `PickupKind` gained a variant, so the Health-slot bonus roll
-        // draws a different number, and the projectile speeds moved - both
-        // shift where a seeded round's tanks end up, and neither has
-        // anything to do with the walk order this gate exists to protect.
-        // What it protects is unchanged: the per-seat block still runs once
-        // per seat after player 1, so a second seat does not disturb the
-        // first's stream. Never bump these to go green - work out which
-        // change moved them first.
-        assert_eq!(run(1), 3_330_505_246_546_623_918, "one seat");
-        assert_eq!(run(2), 15_003_608_774_004_553_797, "two seats");
+        // **Re-baselined for the pickup reach rule, deliberately.** A
+        // pickup collects the moment a hull's box touches it
+        // (`Pickup::in_reach`) rather than once the hull's centre is within
+        // a 32 px disc, so an enemy that wants one takes it a few frames
+        // earlier and, for a laser or plasma pickup, rolls its variant on
+        // an earlier draw - which moves everything after it. Nothing about
+        // the walk order this gate exists to protect changed: the per-seat
+        // block still runs once per seat after player 1, so a second seat
+        // does not disturb the first's stream. Never bump these to go
+        // green - work out which change moved them first.
+        let (one, two) = (run(1), run(2));
+        assert_eq!((one, two), (18_184_345_707_689_245_641, 6_153_265_604_910_160_067), "(one seat, two seats)");
     }
 
     /// A portal round replays too: the destination draw sits on the round
@@ -5622,8 +5629,8 @@ cells."20,11" = { kind = "frog" }
     }
 
     /// The player starts inside a sealed Iron ring with an ammo crate one
-    /// cell (32px = PICKUP_COLLECT_RADIUS) away, so it is collected on the
-    /// first frame without moving and nothing outside can interfere.
+    /// cell (32 px, well inside the hull's reach) away, so it is collected
+    /// on the first frame without moving and nothing outside can interfere.
     const SEALED_CRATE_MAP: &str = r#"
 version = 1
 tanks = 1
@@ -5668,6 +5675,72 @@ cells."30,20" = { kind = "frog" }
         }
         assert_eq!(game.outcome(), Outcome::Playing);
         assert_eq!(player_ammo(&game), full + 2 * grant, "the crate respawned once the delay elapsed");
+    }
+
+    /// A pickup collects the moment the sprites touch (`Pickup::in_reach`
+    /// with `pickup_collect_pad_px`): beside it, in front of it and corner
+    /// to corner alike, a px inside the reach takes it and a px outside
+    /// leaves it. In front and at the corner are where a disc around the
+    /// pickup's centre fell short of the hull's long side.
+    #[test]
+    fn a_pickup_collects_the_moment_the_sprites_touch() {
+        let at = Position::new(640.0, 360.0);
+        let try_at = |offset: Position| {
+            let mut game = game_on(OPEN_MAP, 1, Some(1));
+            spawn_pickup_at(&mut game.world, at, PickupKind::Ammo);
+            teleport_player(&mut game, Position::new(at.x + offset.x, at.y + offset.y));
+            let before = player_ammo(&game);
+            step(&mut game, Input::default());
+            player_ammo(&game) > before
+        };
+        let (hx, hy) = {
+            let game = game_on(OPEN_MAP, 1, Some(1));
+            let player = game.player().expect("player");
+            with_tank(&game.world, player, |t| t.hull_half_extents(t.facing_along_x()))
+        };
+        assert!(hy > hx, "the hull faces up, so its long side is the y axis");
+        let reach_x = hx + 16.0 + tuning().pickup_collect_pad_px;
+        let reach_y = hy + 16.0 + tuning().pickup_collect_pad_px;
+        assert!(try_at(Position::new(reach_x - 1.0, 0.0)), "beside it, touching");
+        assert!(!try_at(Position::new(reach_x + 1.0, 0.0)), "beside it, a px short");
+        assert!(try_at(Position::new(0.0, reach_y - 1.0)), "in front of it, touching");
+        assert!(!try_at(Position::new(0.0, reach_y + 1.0)), "in front of it, a px short");
+        assert!(try_at(Position::new(reach_x - 1.0, reach_y - 1.0)), "corner to corner, touching");
+        assert!(!try_at(Position::new(reach_x + 1.0, reach_y + 1.0)), "corner to corner, a px short");
+    }
+
+    /// The forgiveness a thumb needs (`player_shot_hit_pad_px`): a player's
+    /// shot is tested against an enemy's hull grown by the pad, so a shell
+    /// passing a few px outside the silhouette still lands; the enemy's
+    /// shot at the player is tested against the exact box, and with the
+    /// pad at zero so is the player's.
+    #[test]
+    fn a_players_shot_gets_the_pad_against_an_enemy_and_an_enemys_does_not() {
+        let mut game = game_on(OPEN_MAP, 1, Some(1));
+        let enemy = game.world.query::<(Entity, &Tank)>().with::<&Ai>().iter().map(|(e, _)| e).next().expect("one enemy");
+        game.debug_teleport(1, Position::new(700.0, 400.0), Some(0.0)).expect("enemy in slot 1");
+        teleport_player(&mut game, Position::new(300.0, 400.0));
+        let pad = tuning().player_shot_hit_pad_px;
+        let shell = tuning().shell_hit_half_extent;
+        assert!(pad >= 6.0, "the 6 px pass below needs the pad the table ships");
+        // A vertical shot `dx` px outside a tank's hull box, past it on
+        // both ends.
+        let shot_beside = |game: &Game, entity: Entity, dx: f32| {
+            let (center, half) = with_tank(&game.world, entity, |t| t.hull_bbox_world());
+            let x = center.x + half.x + dx;
+            (Position::new(x, center.y + 200.0), Position::new(x, center.y - 200.0))
+        };
+        let hits_tank = |terrain: &Terrain, shooter: Owner, (p0, p1): (Position, Position)| {
+            matches!(terrain.sweep(&game.world, game.players(), shooter, p0, p1, shell), Some((ShellTarget::Tank(_), _)))
+        };
+        let enemy_slot = with_tank(&game.world, enemy, |t| t.owner_slot());
+        let player = game.player().expect("player");
+        let terrain = Terrain::build(&game.world, W, H, &game.grass_cells, &game.water);
+        assert!(hits_tank(&terrain, Owner::Player(0), shot_beside(&game, enemy, 6.0)), "6 px outside the enemy's hull is inside the pad");
+        assert!(!hits_tank(&terrain, Owner::Player(0), shot_beside(&game, enemy, pad + shell + 6.0)), "past the pad is a miss");
+        assert!(!hits_tank(&terrain, Owner::Enemy(enemy_slot), shot_beside(&game, player, 6.0)), "the enemy's shot at the player gets no pad");
+        let exact = Terrain::build(&game.world, W, H, &game.grass_cells, &game.water).with_player_shot_pad(0.0);
+        assert!(!hits_tank(&exact, Owner::Player(0), shot_beside(&game, enemy, 6.0)), "no pad, no forgiveness");
     }
 
     const OPEN_MAP: &str = r#"

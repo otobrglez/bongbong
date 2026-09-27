@@ -2,8 +2,8 @@
 //! battlefield's corners (see `battlefield::sample_corner_position`,
 //! `simulation::respawn_pickup`). Unlike `Obstacle`/`Frog` there's no
 //! physics body - nothing should ever collide with a pickup, it's picked up
-//! by proximity alone (`simulation::collect_pickups`), so it's just a
-//! position and a kind, checked against every living tank each frame.
+//! by touch alone (`Pickup::in_reach`, `simulation::pickup_phase`), so it's
+//! just a position and a kind, checked against every living tank each frame.
 
 use serde::{Deserialize, Serialize};
 use crate::math::{Color, Rectangle, Vec2};
@@ -104,6 +104,19 @@ impl Pickup {
     pub fn size(&self) -> f32 {
         PICKUP_TEXTURE_SIZE * PICKUP_SCALE
     }
+
+    /// Whether a hull box centred at `hull_center` with half-extents
+    /// `hull_half`, grown by `pad` on every side, overlaps this pickup's
+    /// square - the collection test (`simulation::pickup_phase`, `pad` is
+    /// `pickup_collect_pad_px`). A box test rather than a radius from the
+    /// centre, because the sprites touching is what a player sees: a disc
+    /// that fits inside the touching rectangle collects from the hull's
+    /// short side and falls short on its long one.
+    pub fn in_reach(&self, hull_center: Position, hull_half: Position, pad: f32) -> bool {
+        let half = self.size() * 0.5 + pad;
+        (hull_center.x - self.position.x).abs() <= hull_half.x + half
+            && (hull_center.y - self.position.y).abs() <= hull_half.y + half
+    }
 }
 
 /// Draw one pickup, centered on its position, from its kind's own sheet
@@ -115,4 +128,33 @@ pub fn draw_pickup(c: &mut impl Canvas, pickup: &Pickup) {
     let dest = Rectangle::new(pickup.position.x, pickup.position.y, size, size);
     let origin = Vec2::new(size / 2.0, size / 2.0);
     c.blit(Sheet::Pickup(pickup.kind), src, dest, origin, 0.0, Color::WHITE);
+}
+
+#[cfg(test)]
+mod reach_tests {
+    use super::*;
+
+    fn pickup() -> Pickup {
+        Pickup { kind: PickupKind::Health, position: Position::new(100.0, 100.0) }
+    }
+
+    /// An assault hull facing up (half-extents 16 x 22) against a 32 px
+    /// pickup with a 6 px pad: the reach is 38 px beside, 44 px in front,
+    /// and the corner takes both.
+    #[test]
+    fn touching_collects_and_a_pixel_short_does_not() {
+        let p = pickup();
+        let half = Position::new(16.0, 22.0);
+        assert!(p.in_reach(Position::new(138.0, 100.0), half, 6.0));
+        assert!(!p.in_reach(Position::new(139.0, 100.0), half, 6.0));
+        assert!(p.in_reach(Position::new(100.0, 144.0), half, 6.0));
+        assert!(!p.in_reach(Position::new(100.0, 145.0), half, 6.0));
+        assert!(p.in_reach(Position::new(138.0, 144.0), half, 6.0));
+        assert!(!p.in_reach(Position::new(139.0, 144.0), half, 6.0));
+        // No pad is the sprites exactly touching; the facing swaps the
+        // reach with the half-extents.
+        assert!(p.in_reach(Position::new(132.0, 100.0), half, 0.0));
+        assert!(!p.in_reach(Position::new(133.0, 100.0), half, 0.0));
+        assert!(p.in_reach(Position::new(138.0, 100.0), Position::new(22.0, 16.0), 0.0));
+    }
 }

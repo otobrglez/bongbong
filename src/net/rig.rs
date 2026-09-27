@@ -1009,7 +1009,12 @@ mod tests {
         let (_rig, link) = start(options(LinkQuality::new(60, 0, 0.0)));
         let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
         let mut round = OnlineRound::new(client, "RIG");
-        let hold = Intent { move_dir: Some(Dir::Right), ..Intent::default() };
+        // Up, where the default map has nothing to drive over: a pickup a
+        // row off the drive line is within a hull's reach
+        // (`Pickup::in_reach`), and a laser or a missile pod collected on
+        // the way fires nothing provisional - only shells, bolts and
+        // bullets are drawn ahead of the room.
+        let hold = Intent { move_dir: Some(Dir::Up), ..Intent::default() };
         for _ in 0..90 {
             round.frame(&hold, FRAME.as_secs_f32());
             thread::sleep(FRAME);

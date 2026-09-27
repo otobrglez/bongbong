@@ -457,10 +457,12 @@ and the touch layout.
   the bitmap's shape from two CSS custom properties, so the view is the
   identity there and raylib's touch mapping stays right.
 - **Touch.** `touch.rs`: the floating joystick on one half of the field
-  (`touch_steer_side`, right by default), tap or hold to fire on the other,
-  dead zone and diagonal hysteresis, feedback only while touched, a
-  first-touch hint. Only real touch points drive it; `--touch-from-mouse`
-  is the desktop stand-in for development.
+  (the left since the first phone playtest, see below; the
+  `touch-steer-right` cargo feature mirrors it at build time), tap or hold
+  to fire on the other, dead zone and diagonal
+  hysteresis, feedback only while touched, a first-touch hint. Only real
+  touch points drive it; `--touch-from-mouse` is the desktop stand-in for
+  development.
 - **The bars at 960 px.** The play HUD and the builder bar were re-laid
   out (see docs/hud-and-builder-layout-design.md's revised rule).
 - **Knobs.** Only `enemy_frog_spawn_min_dist` (400 to 270) scaled with the
@@ -514,3 +516,45 @@ every other map keeps its declared size.
 | **34 x 17** | **+28%** | **7.2 mm** | **1.39x, 82%** | **1.5x, 68%** | **1.5x, 38%** |
 | 36 x 18 | +44% | 6.8 mm | 1.31x, 81% | 1.5x, 76% | 1.5x, 43% |
 | 40 x 20 | +77% | 6.2 mm | 1.18x, 81% | 1.5x, 93% | 1.5x, 52% |
+
+### The stick after the first phone playtest (2026-09-27)
+
+The first TestFlight build went to an iOS engineer, who sent back three
+things about the stick and two about forgiveness. All five traced to a
+rule in the tree; this records what changed and why.
+
+- **The origin trails the thumb.** Scheme J pinned the stick's origin
+  where the thumb landed and never clamped the drag, and the 15 degree
+  hysteresis band was measured from that origin. Together they meant that
+  after a normal 120 px push left, DOWN needed 208 px of slide - more than
+  two centimetres on a phone, and past 157 px of push the switch was
+  below the field. The tester's report was precise: "the tank starts going
+  down in the last 30 degrees before vertical", which is exactly the
+  60 degree switch. Now the origin is pulled along behind the thumb on a
+  `touch_follow_radius_px` leash (40 px), so the drag is always the last
+  few dozen pixels of motion and a change of direction is the same short
+  slide however far the thumb has pushed - about 40 px, under 5 mm. The
+  drawn base is that origin, so the picture no longer points somewhere the
+  tank is not going.
+- **The band is narrower.** The switch is `touch_axis_switch_deg` off the
+  held axis, 50 rather than 60: at the rim of a 40 px stick a resting
+  thumb wobbles two or three pixels, about four degrees, so five either
+  side of the diagonal is enough against flicker. The dead zone is
+  `touch_dead_zone_px` (14, unchanged). All three are knobs, so the web
+  preview's tuning panel can try other values on a phone.
+- **Left, by build.** Section 10's open question is answered the way the
+  tester and every dynamic-joystick game answer it: movement under the
+  left thumb, fire under the right. The `touch-steer-right` cargo feature
+  (`TOUCH_STEER_RIGHT`) mirrors it at build time, and there is
+  deliberately no runtime switch - no knob, file or dev tool - so a
+  right-side build is a recompile.
+- **Forgiveness**, outside the stick: a player's shot is tested against an
+  enemy's hull and turret grown by `player_shot_hit_pad_px` (8 px; enemy
+  shots, other seats, tiles and walls keep the exact boxes), and a pickup
+  collects the moment a hull's box grown by `pickup_collect_pad_px` (6 px)
+  touches its square, where a 32 px disc around the pickup's centre had
+  collected from the hull's short side only.
+
+Still open from that playtest: whether the turn's momentum wants a
+lighter hand once the stick registers in time, which waits for the second
+round of feedback.
