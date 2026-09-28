@@ -1583,31 +1583,24 @@ tunables! {
 
     group online {
         /// How far behind the server an online round is drawn, in
-        /// milliseconds, on a clean link (docs/online-coop-prd.md §4.5,
-        /// §4.16, `net::interp`) - the *floor* of the delay, which
-        /// `online_interpolation_adaptive` sizes from the link's
-        /// lateness. A room sends sixty snapshots a second; without a
-        /// delay the replica would have nothing to interpolate toward,
-        /// and drawing this far in the past keeps two snapshots
-        /// bracketing render time so the picture moves every frame. Lower
-        /// it to trade smoothness for freshness - the hull answers the
-        /// stick this much later. Below one snapshot interval the replica
-        /// extrapolates most frames, which is the floor this can sensibly
-        /// take: 16.7 ms at the room's 60 Hz (`SNAPSHOT_EVERY`).
+        /// milliseconds, at least (docs/online-coop-prd.md §4.5, §4.16,
+        /// `net::interp`) - the *floor* of the delay. A room sends sixty
+        /// snapshots a second; drawing this far in the past keeps two
+        /// snapshots bracketing render time, so the picture moves every
+        /// frame rather than running on guesses. Below one snapshot
+        /// interval (16.7 ms at the room's 60 Hz) the replica extrapolates
+        /// most frames, which is the least this can sensibly take.
         ///
-        /// **33 ms, and it followed the cadence down.** This is the
-        /// largest single term in the latency budget (section 5) and the
-        /// one that is a choice rather than a cost; with prediction
-        /// carrying the local hull it is paid by the tanks a player aims
-        /// *at*, and by everything not predicted - a pickup, a hit, a
-        /// shell the server owns. Two snapshot intervals has been the
-        /// margin at every cadence: 100 ms at 20 Hz, 66 at 30, 33 at 60.
-        /// The rate went up so this could come down, which is the whole
-        /// reason the rate went up. Drop it further on a good link, raise
-        /// it on a jittery one - a late packet then still arrives before
-        /// it is needed. Live, so the two can be compared mid-round,
-        /// which is the only honest way to judge it (`--rig --delay 80
-        /// --jitter 20`).
+        /// With `online_interpolation_adaptive` on - the default - the
+        /// delay the picture steers for is never below one interval plus
+        /// one 60 Hz frame, 33.3 ms, so this floor binds only below that
+        /// and only matters with the adaptive delay off, where it is the
+        /// delay itself: lower it to trade smoothness for freshness, raise
+        /// it on a jittery link. It is the largest single term in the
+        /// latency budget (section 5) that is a choice rather than a cost,
+        /// paid by the tanks a player aims *at* and everything not
+        /// predicted. Live, so settings can be compared mid-round
+        /// (`--rig --delay 80 --jitter 20`).
         online_interpolation_delay_ms: f32 = 33.0 in 0.0 ..= 500.0;
         /// Size the interpolation delay from the link's own lateness
         /// (docs/online-coop-prd.md §4.5, §4.16, decision 8;
