@@ -8,8 +8,8 @@
 //! scripted seats through the window's own `OnlineRound` over the real
 //! `NativeTransport` (`client`, `script`), plays the same scripts through a
 //! local two-seat round (`twin`), and measures both the same way
-//! (`sample`, `metrics`) into a report with a verdict (`report`). `suite`
-//! sweeps link profiles and scenarios into one table.
+//! (`sample`, `shots`, `metrics`) into a report with a verdict
+//! (`report`). `suite` sweeps link profiles and scenarios into one table.
 
 pub mod client;
 pub mod link;
@@ -19,6 +19,7 @@ pub mod report;
 pub mod run;
 pub mod sample;
 pub mod script;
+pub mod shots;
 pub mod suite;
 pub mod twin;
 pub mod wstap;

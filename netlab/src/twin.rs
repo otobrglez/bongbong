@@ -57,6 +57,8 @@ pub struct TwinPlan {
     pub scenario: Scenario,
     pub fps: f64,
     pub seconds: f64,
+    /// The most taps each script makes (`Scenario::script`).
+    pub tap_limit: Option<u32>,
 }
 
 /// A local two-seat round, the way the room builds one: the map, the
@@ -83,7 +85,7 @@ pub fn run(plan: &TwinPlan) -> Vec<FrameSample> {
     let mut game = build(plan);
     let (w, h) = game.map.field_size();
     let aim = aim_of(&game);
-    let mut scripts = [plan.scenario.script(0, aim), plan.scenario.script(1, aim)];
+    let mut scripts = [plan.scenario.script(0, aim, plan.tap_limit), plan.scenario.script(1, aim, plan.tap_limit)];
     let mut clock = StepClock::default();
     let mut carried = Input::default();
     let dt = (1.0 / plan.fps) as f32;
@@ -94,7 +96,8 @@ pub fn run(plan: &TwinPlan) -> Vec<FrameSample> {
         let intents = [scripts[0].intent(t), scripts[1].intent(t)];
         let input = Input::two(intents[0], intents[1]).or_presses(carried);
         let mut s = FrameSample { t_ms: t * 1000.0, script_s: t, ..FrameSample::default() };
-        sample::read_intent(&intents[0], &mut s);
+        sample::read_intent(0, &intents[0], &mut s);
+        sample::read_intent(1, &intents[1], &mut s);
         let steps = clock.advance(dt);
         let cpu = Instant::now();
         for i in 0..steps {
@@ -104,7 +107,7 @@ pub fn run(plan: &TwinPlan) -> Vec<FrameSample> {
         }
         s.cpu_us = cpu.elapsed().as_secs_f64() * 1e6;
         carried = if steps == 0 { input } else { Input::default() };
-        sample::read_picture(&game, &mut s);
+        sample::read_picture(&game, None, &mut s);
         out.push(s);
         // The recording stops where an online client's does: the round is
         // decided, and what follows is the end screen and a new round.

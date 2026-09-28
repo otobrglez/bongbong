@@ -26,6 +26,18 @@ enum Cmd {
     Run(RunArgs),
     /// Profiles x scenarios x hull modes, as one markdown table.
     Suite(SuiteArgs),
+    /// Measure a run's `--frames-out` dump again, offline.
+    Replay(ReplayArgs),
+}
+
+#[derive(clap::Args)]
+struct ReplayArgs {
+    /// A dump `netlab run --frames-out` wrote.
+    frames: PathBuf,
+    /// List every appearance of the host's own shots online: the frame, the
+    /// drawing, the shot the ledger put it down to, what it was and why.
+    #[arg(long)]
+    explain: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
@@ -86,6 +98,10 @@ struct RunArgs {
     enemies: Option<usize>,
     #[arg(long)]
     json_out: Option<PathBuf>,
+    /// Write every recorded frame - each seat's and the twin's: the hulls,
+    /// the shots, the events and the client's readings - as JSON.
+    #[arg(long)]
+    frames_out: Option<PathBuf>,
     #[arg(long, default_value = "run")]
     label: String,
     /// Print nothing but errors.
@@ -155,6 +171,7 @@ fn run_cmd(args: RunArgs) -> Result<(), String> {
         tank: args.common.tank,
         mission: args.common.mission,
         remote: args.common.remote.clone(),
+        frames_out: args.frames_out.clone(),
     };
     let report = run::run(&cfg)?;
     if !args.quiet {
@@ -203,11 +220,27 @@ fn suite_cmd(args: SuiteArgs) -> Result<(), String> {
     Ok(())
 }
 
+fn replay_cmd(args: ReplayArgs) -> Result<(), String> {
+    let text = std::fs::read_to_string(&args.frames).map_err(|e| format!("{}: {e}", args.frames.display()))?;
+    let dump: run::FrameDump = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", args.frames.display()))?;
+    let (online, twin) = run::measure_dump(&dump);
+    if let Some(online) = &online {
+        print!("{}", report::metrics_lines("online", online));
+    }
+    print!("{}", report::metrics_lines("twin", &twin));
+    if args.explain {
+        println!("  the host's own shots online:");
+        print!("{}", report::explain(&dump.host, &dump.guest, dump.host_seat, dump.wire.as_ref()));
+    }
+    Ok(())
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
         Cmd::Run(args) => run_cmd(args),
         Cmd::Suite(args) => suite_cmd(args),
+        Cmd::Replay(args) => replay_cmd(args),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

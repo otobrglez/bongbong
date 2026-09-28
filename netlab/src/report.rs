@@ -3,9 +3,12 @@
 
 use serde::{Deserialize, Serialize};
 
+use bongbong::net::predict::PROVISIONAL_ID_BASE;
+
 use crate::link::Impairment;
-use crate::metrics::{Metrics, Stat};
+use crate::metrics::{self, Metrics, Stat, WireFired};
 use crate::proxy::TapLog;
+use crate::sample::{FrameSample, LinkSample};
 use crate::script::Scenario;
 
 /// One seat's own readings, off its `OnlineRound` at the end of its
@@ -32,13 +35,59 @@ pub struct SeatSummary {
     pub interp_interval_ms: f64,
     /// Frames drawn past the newest snapshot over the script.
     pub extrapolated_frames: u64,
+    /// Arrival lateness behind the clock's envelope at the end of the
+    /// script, median and 95th percentile: what the delay covers.
+    pub lateness_p50_ms: f64,
+    pub lateness_p95_ms: f64,
+    /// Head-of-line stalls the interpolator rode out over the script.
+    pub stalls: u64,
+    /// The playout clock's speed, per frame.
+    pub playout_rate: Stat,
+    /// Corrections the interpolator eased by an error offset over the
+    /// script, and their 95th-percentile size at its end.
+    pub interp_corrections: u64,
+    pub interp_correction_p95_px: f64,
     pub rtt_p50_ms: Option<f64>,
     pub rtt_p95_ms: Option<f64>,
     pub rtt_min_ms: Option<f64>,
+    /// Dials the network refused before the socket opened.
+    pub dial_retries: u32,
     pub ended_early: bool,
     /// How the round ended, when it ended before the script.
     pub outcome: Option<String>,
     pub error: Option<String>,
+}
+
+/// One frame of a seat's own readings, for a time series.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct SeriesRow {
+    /// The process clock, milliseconds.
+    pub t_ms: f64,
+    /// Seconds into the seat's script.
+    pub script_s: f64,
+    /// The tick the picture drew.
+    pub tick: u64,
+    #[serde(flatten)]
+    pub link: LinkSample,
+}
+
+/// A seat's readings frame by frame over its script.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct SeatSeries {
+    pub seat: Option<u8>,
+    pub frames: Vec<SeriesRow>,
+}
+
+impl SeatSeries {
+    /// The rows of every recorded frame that carries the client's
+    /// readings.
+    pub fn of(seat: Option<u8>, samples: &[FrameSample]) -> SeatSeries {
+        let frames = samples
+            .iter()
+            .filter_map(|f| f.link.map(|link| SeriesRow { t_ms: f.t_ms, script_s: f.script_s, tick: f.tick, link }))
+            .collect();
+        SeatSeries { seat, frames }
+    }
 }
 
 /// The wire as the proxy saw it (in-process mode only).
@@ -82,6 +131,13 @@ pub struct Report {
     pub tank: String,
     pub map: String,
     pub remote: Option<String>,
+    /// The magazine netlab pinned on the room, the clients and the twin
+    /// (`max_shells`), so no scripted press is refused for ammo; `None` on
+    /// a remote room, whose magazine is its own - there the scripts stop
+    /// tapping at `tap_limit`.
+    pub max_shells: Option<i32>,
+    /// The most presses each script made.
+    pub tap_limit: Option<u32>,
     /// The online view: the host's frames for everything the host sees,
     /// the guest's for how the host looks to someone else.
     pub online: Option<Metrics>,
@@ -89,6 +145,8 @@ pub struct Report {
     pub twin: Metrics,
     /// Host first.
     pub seats: Vec<SeatSummary>,
+    /// Each seat's own readings frame by frame (`SeatSeries`), host first.
+    pub series: Vec<SeatSeries>,
     pub tap: Option<TapMetrics>,
     pub verdict: String,
     /// What kept the verdict from being `local`.
@@ -149,6 +207,64 @@ pub fn tap_metrics(log: &TapLog, from_ms: f64, to_ms: f64) -> TapMetrics {
     out
 }
 
+/// Which snapshot carried each host press's `Fired`, off the wire, and
+/// which shots it fired: the press's intent is the first on the host's
+/// connection to raise the trigger after the press's frame, and its
+/// `Fired` is the one whose `input_tick` falls from that intent's tick up
+/// to the next press's (the room merges a tick's inputs newest-wins, so it
+/// can name a later tick than the press's own). The guest's is the same
+/// `Fired` on the guest's connection. The press's shots are the host
+/// seat's first listed in the snapshot that carried its `Fired` - a shot
+/// spawns on the tick its `Fired` is raised. `presses` are the host frames'
+/// press times on the process clock the proxy stamps with.
+///
+/// `None` when the tap cannot answer for every press - it never saw the
+/// host's `Welcome`, or its reading of either seat's connection broke off
+/// part way - so the ledger pairs by order rather than calling presses the
+/// tap lost unanswered.
+pub fn wire_fired(log: &TapLog, presses: &[f64], host_seat: u8, guest_seat: u8) -> Option<WireFired> {
+    let conn = |seat: u8| log.conns.iter().find(|c| c.seat == Some(seat));
+    let host = conn(host_seat)?;
+    if host.tap_failed.is_some() || conn(guest_seat).is_some_and(|c| c.tap_failed.is_some()) {
+        return None;
+    }
+    // The intents that raised the trigger: a tap is held over a few
+    // ticks, so only the first of each run is a press.
+    let mut edges: Vec<(f64, u32)> = Vec::new();
+    let mut held = false;
+    for i in &host.intents {
+        if i.fire && !held {
+            edges.push((i.ingress_ms, i.tick));
+        }
+        held = i.fire;
+    }
+    let press_ticks: Vec<Option<u32>> = presses
+        .iter()
+        .enumerate()
+        .map(|(k, &p)| {
+            let until = presses.get(k + 1).copied().unwrap_or(f64::INFINITY);
+            edges.iter().find(|(at, _)| *at >= p && *at < until).map(|&(_, tick)| tick)
+        })
+        .collect();
+    let carried = |c: Option<&crate::proxy::ConnTap>, k: usize| -> Option<u32> {
+        let from = press_ticks[k]?;
+        let until = press_ticks[k + 1..].iter().flatten().next().copied().unwrap_or(u32::MAX);
+        c?.fired
+            .iter()
+            .find(|f| f.slot == host_seat as u16 && f.input_tick >= from && f.input_tick < until)
+            .map(|f| f.snapshot_tick)
+    };
+    let host_fired: Vec<Option<u32>> = (0..presses.len()).map(|k| carried(Some(host), k)).collect();
+    let room_ids = host_fired
+        .iter()
+        .map(|tick| {
+            let Some(tick) = *tick else { return Vec::new() };
+            host.shots.iter().filter(|s| s.owner == host_seat && s.snapshot_tick == tick).map(|s| s.id as u32).collect()
+        })
+        .collect();
+    Some(WireFired { host: host_fired, guest: (0..presses.len()).map(|k| carried(conn(guest_seat), k)).collect(), room_ids })
+}
+
 /// The verdict's thresholds (docs/online-coop-prd.md §4.16): within
 /// these, networked play measures as local.
 pub mod local {
@@ -196,7 +312,15 @@ pub fn verdict(online: &Metrics, twin: &Metrics, seats: &[SeatSummary], client_h
         check("remote backward%", Some(o.backward_pct), local::BACKWARD_PCT, CLOSE_FACTOR * local::BACKWARD_PCT);
     }
     check("handoff gap p95 px", online.shots.handoff_gap_px.p95, local::HANDOFF_GAP_PX, CLOSE_FACTOR * local::HANDOFF_GAP_PX);
+    // A local round never draws a shot twice; a handful is close.
+    check("own shots drawn twice", Some(online.shots.drawn_twice as f64), 0.0, CLOSE_CORRECTIONS as f64);
+    // A strike drawn in the present is on the hull by definition, so the
+    // distance reads bursts only; what a strike gets wrong is a strike the
+    // room never answers, and a hit is wrong when no drawn shot made it.
     check("hit from afar p95 px", online.incoming.from_afar_px.p95, local::HIT_FROM_AFAR_PX, CLOSE_FACTOR * local::HIT_FROM_AFAR_PX);
+    check("strikes drawn with no hit", Some(online.incoming.phantom_strikes as f64), 0.0, CLOSE_CORRECTIONS as f64);
+    let twin_unseen = twin.incoming.unseen as f64;
+    check("hits with no shot drawn", Some(online.incoming.unseen as f64), twin_unseen, twin_unseen + CLOSE_CORRECTIONS as f64);
     if client_hull {
         let corrections: u32 = seats.iter().map(|s| s.nudges + s.snaps).sum();
         if corrections > 0 {
@@ -224,6 +348,142 @@ fn one(v: Option<f64>) -> String {
     v.map_or_else(|| "-".to_string(), |v| format!("{v:.1}"))
 }
 
+fn rate(v: Option<f64>) -> String {
+    v.map_or_else(|| "-".to_string(), |v| format!("{v:.3}"))
+}
+
+/// A count, with its p95 beside it when there is one: `0`, `3 (12.5)`.
+fn count_and(s: Stat) -> String {
+    match s.p95 {
+        Some(p) if s.n > 0 => format!("{} ({p:.1})", s.n),
+        _ => s.n.to_string(),
+    }
+}
+
+/// A p95 with its count beside it: `12.5 (7)`, `- (0)`.
+fn p95_and_n(s: Stat) -> String {
+    format!("{} ({})", one(s.p95), s.n)
+}
+
+/// Every appearance of `seat`'s own shots on `host`, a line each: the
+/// frame, the drawing it began as (`P` a provisional by its index on that
+/// frame, `R` a room copy by the room's id), the shot the ledger put it
+/// down to and that shot's press, what it was, and what named its shot -
+/// the ledger's own reading, to hold a hand-off or a double against the
+/// frames it came from.
+pub fn explain(host: &[FrameSample], guest: &[FrameSample], seat: usize, wire: Option<&WireFired>) -> String {
+    use crate::metrics::Seen;
+    let presses = metrics::presses(host, seat);
+    let (fired, _, _) = metrics::fired_for(host, guest, seat, &presses, wire);
+    let (own, seen) = metrics::own_shots(host, seat, &presses, &fired, wire.map(|w| w.room_ids.as_slice()));
+    let press_of: std::collections::BTreeMap<usize, usize> = seen
+        .iter()
+        .filter_map(|a| match a.seen {
+            Seen::Launch { press } => Some((a.shot, press)),
+            _ => None,
+        })
+        .collect();
+    let mut s = String::new();
+    for a in &seen {
+        let t = &own[a.track];
+        let p = t.first();
+        let name = if t.provisional { format!("P{}", p.id.saturating_sub(PROVISIONAL_ID_BASE)) } else { format!("R{}", p.id) };
+        let stage = if p.flying {
+            "flying"
+        } else if p.impact {
+            "burst"
+        } else {
+            "muzzle"
+        };
+        let what = match a.seen {
+            Seen::Launch { .. } => "launch".to_string(),
+            Seen::HandOff { gap_px } => format!("hand-off {gap_px:.1} px"),
+            Seen::Twice => "drawn twice".to_string(),
+            Seen::Unmatched => "unmatched".to_string(),
+        };
+        let press = press_of.get(&a.shot).map_or_else(|| "-".to_string(), |p| p.to_string());
+        s.push_str(&format!(
+            "  frame {:5} {:9.1} ms  {name:>6} ({:4.0},{:4.0}) {stage:6}  shot {:3} press {press:>3}  {what:20} by {}\n",
+            a.frame, host[a.frame].t_ms, p.x, p.y, a.shot, a.by,
+        ));
+    }
+    s
+}
+
+/// The lines of a summary one view's metrics take (`summary`): its own
+/// input and remote hull, its shots, the hits on it and its frame loop.
+pub fn metrics_lines(name: &str, m: &Metrics) -> String {
+    let mut s = String::new();
+    let pacing = m.remote_pacing.as_ref().map_or("-".to_string(), |p| {
+        format!("stall {:.1}% jump {:.1}% back {:.1}% cv {:.2} ({} frames)", p.stall_pct, p.jump_pct, p.backward_pct, p.cv, p.frames)
+    });
+    s.push_str(&format!(
+        "  {name:6} own input p50/p95 {}/{} ms ({}/{} frames) | remote lag p50/p95/max {}/{}/{} ms | pacing {pacing}\n",
+        ms(m.own_input_ms.p50),
+        ms(m.own_input_ms.p95),
+        ms(m.own_input_frames.p50),
+        ms(m.own_input_frames.p95),
+        ms(m.remote_lag_ms.p50),
+        ms(m.remote_lag_ms.p95),
+        ms(m.remote_lag_ms.max),
+    ));
+    let l = &m.shots;
+    if l.presses > 0 {
+        s.push_str(&format!(
+            "         shots {} presses: drawn p50/p95 {}/{} ms, fired {}/{} ms (by {}), guest fired {}/{} ms, hit {}/{} ms (n {}), unanswered {}\n",
+            l.presses,
+            ms(l.drawn_ms.p50),
+            ms(l.drawn_ms.p95),
+            ms(l.fired_ms.p50),
+            ms(l.fired_ms.p95),
+            l.fired_pairing,
+            ms(l.guest_fired_ms.p50),
+            ms(l.guest_fired_ms.p95),
+            ms(l.hit_ms.p50),
+            ms(l.hit_ms.p95),
+            l.hit_ms.n,
+            l.unanswered,
+        ));
+        s.push_str(&format!(
+            "         own shots: {} hand-offs, gap p50/p95/max {}/{}/{} px, {} drawn twice, {} unmatched, room copies shown {} (put down to their shot by {})\n",
+            l.handoff_gap_px.n,
+            one(l.handoff_gap_px.p50),
+            one(l.handoff_gap_px.p95),
+            one(l.handoff_gap_px.max),
+            l.drawn_twice,
+            l.unmatched,
+            l.room_copies_shown.map_or_else(|| "- (no shot drawn ahead of the room)".to_string(), |n| n.to_string()),
+            l.shot_pairing,
+        ));
+    }
+    let inc = &m.incoming;
+    if inc.hits > 0 || inc.phantom_strikes > 0 {
+        s.push_str(&format!(
+            "         incoming {} hits, {} struck on the drawn hull (on it by definition): burst from afar p50/p95/max {}/{}/{} px (n {}), strike to hit p50/p95 {}/{} ms, {} with no shot drawn, {} strikes drawn with no hit\n",
+            inc.hits,
+            inc.struck,
+            one(inc.from_afar_px.p50),
+            one(inc.from_afar_px.p95),
+            one(inc.from_afar_px.max),
+            inc.from_afar_px.n,
+            ms(inc.strike_to_hit_ms.p50),
+            ms(inc.strike_to_hit_ms.p95),
+            inc.unseen,
+            inc.phantom_strikes,
+        ));
+    }
+    s.push_str(&format!(
+        "         frame cpu p50/p99/max {}/{}/{} us, frame interval p50/p99/max {}/{}/{} ms\n",
+        ms(m.frame_cpu_us.p50),
+        ms(m.frame_cpu_us.p99),
+        ms(m.frame_cpu_us.max),
+        one(m.frame_interval_ms.p50),
+        one(m.frame_interval_ms.p99),
+        one(m.frame_interval_ms.max),
+    ));
+    s
+}
+
 /// A few lines per run for a terminal.
 pub fn summary(r: &Report) -> String {
     let mut s = String::new();
@@ -245,61 +505,11 @@ pub fn summary(r: &Report) -> String {
     ));
     let rows: Vec<(&str, &Metrics)> = r.online.iter().map(|m| ("online", m)).chain([("twin", &r.twin)]).collect();
     for (name, m) in rows {
-        let pacing = m.remote_pacing.as_ref().map_or("-".to_string(), |p| {
-            format!("stall {:.1}% jump {:.1}% back {:.1}% cv {:.2} ({} frames)", p.stall_pct, p.jump_pct, p.backward_pct, p.cv, p.frames)
-        });
-        s.push_str(&format!(
-            "  {name:6} own input p50/p95 {}/{} ms ({}/{} frames) | remote lag p50/p95/max {}/{}/{} ms | pacing {pacing}\n",
-            ms(m.own_input_ms.p50),
-            ms(m.own_input_ms.p95),
-            ms(m.own_input_frames.p50),
-            ms(m.own_input_frames.p95),
-            ms(m.remote_lag_ms.p50),
-            ms(m.remote_lag_ms.p95),
-            ms(m.remote_lag_ms.max),
-        ));
-        let l = &m.shots;
-        if l.presses > 0 {
-            s.push_str(&format!(
-                "         shots {} presses: drawn p50/p95 {}/{} ms, fired {}/{} ms, guest fired {}/{} ms, hit {}/{} ms (n {}), handoff gap p95/max {}/{} px, unanswered {}\n",
-                l.presses,
-                ms(l.drawn_ms.p50),
-                ms(l.drawn_ms.p95),
-                ms(l.fired_ms.p50),
-                ms(l.fired_ms.p95),
-                ms(l.guest_fired_ms.p50),
-                ms(l.guest_fired_ms.p95),
-                ms(l.hit_ms.p50),
-                ms(l.hit_ms.p95),
-                l.hit_ms.n,
-                one(l.handoff_gap_px.p95),
-                one(l.handoff_gap_px.max),
-                l.unanswered,
-            ));
-        }
-        if m.incoming.hits > 0 {
-            s.push_str(&format!(
-                "         incoming {} hits: from afar p50/p95/max {}/{}/{} px, {} with no shot drawn\n",
-                m.incoming.hits,
-                one(m.incoming.from_afar_px.p50),
-                one(m.incoming.from_afar_px.p95),
-                one(m.incoming.from_afar_px.max),
-                m.incoming.unseen,
-            ));
-        }
-        s.push_str(&format!(
-            "         frame cpu p50/p99/max {}/{}/{} us, frame interval p50/p99/max {}/{}/{} ms\n",
-            ms(m.frame_cpu_us.p50),
-            ms(m.frame_cpu_us.p99),
-            ms(m.frame_cpu_us.max),
-            one(m.frame_interval_ms.p50),
-            one(m.frame_interval_ms.p99),
-            one(m.frame_interval_ms.max),
-        ));
+        s.push_str(&metrics_lines(name, m));
     }
     for seat in &r.seats {
         s.push_str(&format!(
-            "  seat {}: nudges {} snaps {} max err {:.1} px, lead +{}/-{}, interp delay p50 {} ms jitter {:.1} ms extrapolated {} frames, rtt p50/p95 {}/{} ms{}{}\n",
+            "  seat {}: nudges {} snaps {} max err {:.1} px, lead +{}/-{}, interp delay p50 {} ms jitter {:.1} ms lateness p50/p95 {:.1}/{:.1} ms, extrapolated {} frames, stalls {}, rate min/max {}/{}, corrections {} (p95 {:.1} px), rtt p50/p95 {}/{} ms{}{}{}\n",
             seat.seat.map_or("-".to_string(), |s| s.to_string()),
             seat.nudges,
             seat.snaps,
@@ -308,12 +518,25 @@ pub fn summary(r: &Report) -> String {
             seat.lead_down,
             ms(seat.interp_delay_ms.p50),
             seat.interp_jitter_ms,
+            seat.lateness_p50_ms,
+            seat.lateness_p95_ms,
             seat.extrapolated_frames,
+            seat.stalls,
+            rate(seat.playout_rate.min),
+            rate(seat.playout_rate.max),
+            seat.interp_corrections,
+            seat.interp_correction_p95_px,
             ms(seat.rtt_p50_ms),
             ms(seat.rtt_p95_ms),
+            if seat.dial_retries > 0 { format!(" - {} dials refused", seat.dial_retries) } else { String::new() },
             if seat.ended_early { format!(" - round ended early ({})", seat.outcome.as_deref().unwrap_or("closed")) } else { String::new() },
             seat.error.as_ref().map_or(String::new(), |e| format!(" - {e}")),
         ));
+    }
+    match (r.max_shells, r.tap_limit) {
+        (Some(n), _) => s.push_str(&format!("  magazine: {n} shells, pinned on the room, the clients and the twin\n")),
+        (None, Some(n)) => s.push_str(&format!("  magazine: the room's own (unpinned); each script stops tapping after {n} presses\n")),
+        (None, None) => s.push_str("  magazine: the room's own (unpinned)\n"),
     }
     if let Some(t) = &r.tap {
         s.push_str(&format!(
@@ -350,7 +573,7 @@ pub fn summary(r: &Report) -> String {
 }
 
 /// The suite's table header.
-pub const TABLE_HEADER: &str = "| profile | scenario | mode | own input p50/p95 ms (p95 frames) | remote lag p50/p95 ms | stall % | jump % | back % | cv | shot drawn p50 ms | fired p50 ms | hit p50 ms | handoff gap p95 px | hit from afar p95 px | nudges+snaps | rtt p50 ms | snap gap p99/max ms | verdict |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|";
+pub const TABLE_HEADER: &str = "| profile | scenario | mode | own input p50/p95 ms (p95 frames) | remote lag p50/p95 ms | stall % | jump % | back % | cv | shot drawn p50 ms | fired p50 ms | hit p50 ms | hand-offs n (gap p95 px) | drawn twice | burst from afar p95 px (n) | struck / phantom / unseen | nudges+snaps | rtt p50 ms | snap gap p99/max ms | verdict |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|";
 
 /// One row of the suite's table: the online view of `r`, or its twin.
 pub fn table_row(r: &Report, twin: bool) -> String {
@@ -370,7 +593,7 @@ pub fn table_row(r: &Report, twin: bool) -> String {
     };
     let verdict = if twin { "reference".to_string() } else { r.verdict.clone() };
     format!(
-        "| {profile} | {} | {mode} | {}/{} ({}) | {}/{} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {corrections} | {rtt} | {gap} | {verdict} |",
+        "| {profile} | {} | {mode} | {}/{} ({}) | {}/{} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {}/{}/{} | {corrections} | {rtt} | {gap} | {verdict} |",
         r.scenario.name(),
         ms(m.own_input_ms.p50),
         ms(m.own_input_ms.p95),
@@ -384,7 +607,133 @@ pub fn table_row(r: &Report, twin: bool) -> String {
         ms(m.shots.drawn_ms.p50),
         ms(m.shots.fired_ms.p50),
         ms(m.shots.hit_ms.p50),
-        one(m.shots.handoff_gap_px.p95),
-        one(m.incoming.from_afar_px.p95),
+        count_and(m.shots.handoff_gap_px),
+        if twin { "-".to_string() } else { m.shots.drawn_twice.to_string() },
+        p95_and_n(m.incoming.from_afar_px),
+        m.incoming.struck,
+        m.incoming.phantom_strikes,
+        m.incoming.unseen,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proxy::{ConnTap, FiredRec, IntentRec, ShotRec};
+    use bongbong::net::wire::NO_SEAT;
+
+    fn intent(at: f64, tick: u32, fire: bool) -> IntentRec {
+        IntentRec { ingress_ms: at, egress_ms: at + 1.0, tick, owned: true, fire }
+    }
+
+    fn fired(slot: u16, input_tick: u32, snapshot_tick: u32) -> FiredRec {
+        FiredRec { egress_ms: 0.0, snapshot_tick, slot, input_tick }
+    }
+
+    fn listed(snapshot_tick: u32, id: u16, owner: u8) -> ShotRec {
+        ShotRec { snapshot_tick, id, owner }
+    }
+
+    /// The two connections of a run: the host's first press answered by
+    /// the `Fired` in snapshot 60, with its shot 17 first listed there; its
+    /// second refused.
+    fn tapped() -> TapLog {
+        let host = ConnTap {
+            seat: Some(0),
+            // The first tap held over two ticks, the second over two more.
+            intents: vec![intent(105.0, 10, true), intent(122.0, 11, true), intent(139.0, 12, false), intent(505.0, 34, true), intent(522.0, 35, true)],
+            fired: vec![fired(1, 12, 58), fired(0, 11, 60)],
+            // The guest's shot in the snapshot before, an enemy's beside
+            // the host's.
+            shots: vec![listed(58, 16, 1), listed(60, 17, 0), listed(60, 18, NO_SEAT)],
+            ..ConnTap::default()
+        };
+        let guest = ConnTap { seat: Some(1), fired: vec![fired(0, 11, 63)], ..ConnTap::default() };
+        TapLog { conns: vec![host, guest] }
+    }
+
+    /// A press is its intent that raised the trigger; its `Fired` is the
+    /// host's that names a tick from there up to the next press's - later
+    /// than the press's own when the room merged the tick's inputs - and
+    /// the guest's is that same `Fired`; its shot is the host seat's first
+    /// listed in the snapshot that carried it. A press the room refused has
+    /// none of them.
+    #[test]
+    fn the_wire_names_the_snapshot_each_press_fired_in_and_its_shot() {
+        let wire = wire_fired(&tapped(), &[100.0, 500.0], 0, 1).expect("the tap read both connections");
+        assert_eq!(wire.host, vec![Some(60), None]);
+        assert_eq!(wire.guest, vec![Some(63), None]);
+        assert_eq!(wire.room_ids, vec![vec![17], vec![]]);
+    }
+
+    /// A tap that never saw the host's `Welcome`, or whose reading of a
+    /// connection broke off, answers for no press: the ledger pairs by
+    /// order rather than calling every press the tap lost unanswered.
+    #[test]
+    fn a_tap_that_lost_a_connection_answers_for_no_press() {
+        let presses = [100.0, 500.0];
+        let mut log = tapped();
+        log.conns[0].tap_failed = Some("Down: a frame that does not parse".into());
+        assert_eq!(wire_fired(&log, &presses, 0, 1), None);
+        let mut log = tapped();
+        log.conns[1].tap_failed = Some("Up: a frame that does not parse".into());
+        assert_eq!(wire_fired(&log, &presses, 0, 1), None);
+        let mut log = tapped();
+        log.conns[0].seat = None;
+        assert_eq!(wire_fired(&log, &presses, 0, 1), None);
+    }
+
+    /// Incoming fire drawn in the present is judged by what it can get
+    /// wrong - a strike the room never answers, a hit no drawn shot made -
+    /// and not by its distance from the hull, nought for a strike by
+    /// definition: a handful is close, more is far.
+    #[test]
+    fn a_strike_with_no_hit_and_a_hit_with_no_shot_miss_local() {
+        let twin = Metrics { incoming: crate::metrics::IncomingFire { hits: 10, unseen: 1, ..Default::default() }, ..Metrics::default() };
+        let online = |phantom_strikes: usize, unseen: usize| Metrics {
+            incoming: crate::metrics::IncomingFire { hits: 10, struck: 8, phantom_strikes, unseen, ..Default::default() },
+            ..Metrics::default()
+        };
+        assert_eq!(verdict(&online(0, 1), &twin, &[], true).0, "local", "the twin's own unseen hit is no miss");
+        let (v, misses) = verdict(&online(2, 1), &twin, &[], true);
+        assert_eq!(v, "close");
+        assert!(misses.iter().any(|m| m.starts_with("strikes drawn with no hit")), "{misses:?}");
+        let (v, misses) = verdict(&online(0, 1 + CLOSE_CORRECTIONS as usize + 1), &twin, &[], true);
+        assert_eq!(v, "far");
+        assert!(misses.iter().any(|m| m.starts_with("hits with no shot drawn")), "{misses:?}");
+    }
+
+    /// Every row of the suite's table has the header's columns.
+    #[test]
+    fn a_table_row_has_the_headers_columns() {
+        let report = Report {
+            label: "t".into(),
+            profile: "lan".into(),
+            link: Impairment::NONE,
+            scenario: Scenario::Shoot,
+            client_hull: true,
+            fps: 60.0,
+            seconds: 1.0,
+            seed: 1,
+            enemies: 0,
+            tank: "scout".into(),
+            map: "m".into(),
+            remote: None,
+            max_shells: Some(100),
+            tap_limit: None,
+            online: Some(Metrics::default()),
+            twin: Metrics::default(),
+            seats: vec![SeatSummary::default()],
+            series: Vec::new(),
+            tap: None,
+            verdict: "local".into(),
+            misses: Vec::new(),
+            errors: Vec::new(),
+        };
+        let columns = |line: &str| line.matches('|').count();
+        let header = TABLE_HEADER.lines().next().expect("a header");
+        assert_eq!(columns(TABLE_HEADER.lines().nth(1).expect("a rule")), columns(header));
+        assert_eq!(columns(&table_row(&report, false)), columns(header));
+        assert_eq!(columns(&table_row(&report, true)), columns(header));
+    }
 }

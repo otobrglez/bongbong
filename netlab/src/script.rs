@@ -44,13 +44,16 @@ impl Scenario {
 
     /// The script seat `seat` (0 the host, 1 the guest) runs. `aim` is the
     /// direction from the host toward the enemies when the round began,
-    /// read off the round itself.
-    pub fn script(self, seat: usize, aim: Dir) -> Script {
+    /// read off the round itself. `tap_limit` caps the presses: a room
+    /// whose magazine netlab cannot pin (`--remote`) is never tapped past
+    /// the shells a seat starts with, so no press is refused for ammo.
+    pub fn script(self, seat: usize, aim: Dir, tap_limit: Option<u32>) -> Script {
+        let taps = |period, offset| Taps::new(period, offset).limited(tap_limit);
         match (self, seat) {
             (Scenario::Drive, 0) => Script::rectangle(0.0, None),
-            (Scenario::Shoot, 0) => Script::Shoot { aim, taps: Taps::new(SHOOT_TAP_SECONDS, 0.2) },
-            (Scenario::Duel, 0) => Script::rectangle(0.0, Some(Taps::new(DUEL_TAP_SECONDS, 0.0))),
-            (Scenario::Duel, _) => Script::rectangle(RECTANGLE_SECONDS / 2.0, Some(Taps::new(DUEL_TAP_SECONDS, DUEL_TAP_SECONDS / 2.0))),
+            (Scenario::Shoot, 0) => Script::Shoot { aim, taps: taps(SHOOT_TAP_SECONDS, 0.2) },
+            (Scenario::Duel, 0) => Script::rectangle(0.0, Some(taps(DUEL_TAP_SECONDS, 0.0))),
+            (Scenario::Duel, _) => Script::rectangle(RECTANGLE_SECONDS / 2.0, Some(taps(DUEL_TAP_SECONDS, DUEL_TAP_SECONDS / 2.0))),
             _ => Script::Idle,
         }
     }
@@ -74,23 +77,32 @@ pub const STRAFE_CYCLE_SECONDS: f64 = 2.0;
 /// How long each strafe step drives.
 pub const STRAFE_STEP_SECONDS: f64 = 0.3;
 
-/// Trigger taps every `period` seconds from `offset`.
+/// Trigger taps every `period` seconds from `offset`, at most `limit` of
+/// them.
 #[derive(Clone, Copy, Debug)]
 pub struct Taps {
     period: f64,
     offset: f64,
     /// The last tap index fired.
     last: Option<i64>,
+    limit: Option<u32>,
+    /// Taps fired so far.
+    count: u32,
 }
 
 impl Taps {
     pub fn new(period: f64, offset: f64) -> Taps {
-        Taps { period, offset, last: None }
+        Taps { period, offset, last: None, limit: None, count: 0 }
+    }
+
+    /// The same taps, stopping after `limit` of them.
+    pub fn limited(self, limit: Option<u32>) -> Taps {
+        Taps { limit, ..self }
     }
 
     /// Whether this frame, at script time `t`, carries a tap.
     fn fire(&mut self, t: f64) -> bool {
-        if t < self.offset {
+        if t < self.offset || self.limit.is_some_and(|l| self.count >= l) {
             return false;
         }
         let index = ((t - self.offset) / self.period).floor() as i64;
@@ -98,6 +110,7 @@ impl Taps {
             return false;
         }
         self.last = Some(index);
+        self.count += 1;
         true
     }
 }
@@ -184,5 +197,15 @@ mod tests {
             let fired = (0..(10.0 * fps) as usize).filter(|i| taps.fire(*i as f64 / fps)).count();
             assert_eq!(fired, 25, "at {fps} fps");
         }
+    }
+
+    #[test]
+    fn a_tap_limit_stops_the_trigger_and_nothing_else() {
+        let mut script = Scenario::Shoot.script(0, Dir::Right, Some(3));
+        let frames: Vec<Intent> = (0..600).map(|i| script.intent(i as f64 / 60.0)).collect();
+        assert_eq!(frames.iter().filter(|i| i.fire).count(), 3, "three taps and no more");
+        assert!(frames[590].move_dir.is_some() || frames[590].face.is_some(), "the script still steers");
+        let mut open = Scenario::Shoot.script(0, Dir::Right, None);
+        assert_eq!((0..600).filter(|i| open.intent(*i as f64 / 60.0).fire).count(), 25);
     }
 }
