@@ -26,7 +26,7 @@ use crate::{
 
 use super::Event;
 use super::hits::{obstacle_reflect_axis, TerrainBox};
-use super::{Frame, Shoves};
+use super::Frame;
 
 /// How far a laser beam's hit segment reaches past its muzzle - longer
 /// than any battlefield diagonal, so it always meets a wall before running
@@ -103,20 +103,26 @@ fn laser_shot(tank: &Tank, owner: Owner, aim_offset: f32, variant: LaserVariant)
 /// Firing recoil: push the shooter back along the shot's own travel axis
 /// (so a misfire's skew kicks the same way it skews the shot) at `speed`
 /// px/s, normalized against the chassis-free baseline mass and capped at
-/// `max_speed`. The velocity change goes on `shoves`, which keeps it only
-/// for a client-owned seat (`Shoves::push`).
-fn apply_recoil(physics: &mut Physics, shoves: &mut Shoves, tank: &Tank, owner: Owner, velocity: Vec2, speed: f32, max_speed: f32) {
+/// `max_speed`. Returns the velocity change, `None` when nothing was
+/// pushed.
+///
+/// Only a missile launch's goes on to `Frame::shoves`. A client that owns
+/// its hull kicks it itself at every shell, bolt and bullet it launches
+/// (`net::predict`, `Game::seat_recoil`), so an `Event::Shoved` for those
+/// would kick it twice; it draws no missile, so that kick is the room's to
+/// tell it about.
+fn apply_recoil(physics: &mut Physics, tank: &Tank, velocity: Vec2, speed: f32, max_speed: f32) -> Option<Vec2> {
     let len = (velocity.x * velocity.x + velocity.y * velocity.y).sqrt();
-    let Some(handle) = tank.body else { return };
+    let handle = tank.body?;
     if len <= f32::EPSILON {
-        return;
+        return None;
     }
     let reference_mass = tank.scale * tank.scale;
     let push = (speed * reference_mass / tank.mass()).min(max_speed);
     let impulse = push * tank.mass() / len;
     let kick = Position::new(-velocity.x * impulse, -velocity.y * impulse);
     physics.apply_impulse(handle, kick);
-    shoves.push(owner, Vec2::new(kick.x / tank.mass(), kick.y / tank.mass()));
+    Some(Vec2::new(kick.x / tank.mass(), kick.y / tank.mass()))
 }
 
 /// Spawn one shell from `tank`: rolled drop shadow, muzzle-flash ripple,
@@ -126,7 +132,7 @@ fn fire_shell(physics: &mut Physics, f: &mut Frame, tank: &Tank, owner: Owner, a
     let mut shell = Shell::spawn(tank, owner, aim_offset, lateral_offset);
     shell.shadow_offset = f.rng.random_range(tuning().shell_shadow_offset_min..tuning().shell_shadow_offset_max);
     f.muzzle_flashes.push(Shockwave::new(shell.position));
-    apply_recoil(physics, &mut f.shoves, tank, owner, shell.velocity, tuning().shell_recoil_speed, tuning().shell_recoil_max_speed);
+    apply_recoil(physics, tank, shell.velocity, tuning().shell_recoil_speed, tuning().shell_recoil_max_speed);
     f.pending_shells.push(shell);
 }
 
@@ -135,7 +141,7 @@ fn fire_plasma(physics: &mut Physics, f: &mut Frame, tank: &Tank, owner: Owner, 
     let mut plasma = Plasma::spawn(tank, owner, tank.plasma_variant, aim_offset, lateral_offset);
     plasma.shadow_offset = f.rng.random_range(tuning().plasma_shadow_offset_min..tuning().plasma_shadow_offset_max);
     f.muzzle_flashes.push(Shockwave::new(plasma.position));
-    apply_recoil(physics, &mut f.shoves, tank, owner, plasma.velocity, tuning().plasma_recoil_speed, tuning().plasma_recoil_max_speed);
+    apply_recoil(physics, tank, plasma.velocity, tuning().plasma_recoil_speed, tuning().plasma_recoil_max_speed);
     f.pending_plasmas.push(plasma);
 }
 
@@ -148,7 +154,7 @@ fn fire_bullet(physics: &mut Physics, f: &mut Frame, tank: &Tank, owner: Owner, 
     let spread = f.rng.random_range(-tuning().minigun_bullet_spread_deg..tuning().minigun_bullet_spread_deg);
     let mut bullet = Bullet::spawn(tank, owner, aim_offset + spread);
     bullet.shadow_offset = f.rng.random_range(tuning().minigun_bullet_shadow_offset_min..tuning().minigun_bullet_shadow_offset_max);
-    apply_recoil(physics, &mut f.shoves, tank, owner, bullet.velocity, tuning().minigun_bullet_recoil_speed, tuning().minigun_bullet_recoil_max_speed);
+    apply_recoil(physics, tank, bullet.velocity, tuning().minigun_bullet_recoil_speed, tuning().minigun_bullet_recoil_max_speed);
     let position = bullet.position;
     f.pending_bullets.push(bullet);
     position
@@ -176,7 +182,9 @@ fn fire_missile(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, owner: Ow
     let ahead = tank.position + dir * t.missile_fallback_range;
     let aim = Position::new(ahead.x.clamp(0.0, f.width), ahead.y.clamp(0.0, f.height));
     f.muzzle_flashes.push(Shockwave::new(mouth));
-    apply_recoil(physics, &mut f.shoves, tank, owner, dir, t.missile_recoil_speed, t.missile_recoil_max_speed);
+    if let Some(dv) = apply_recoil(physics, tank, dir, t.missile_recoil_speed, t.missile_recoil_max_speed) {
+        f.shoves.push(owner, dv);
+    }
     tank.missile_tubes_empty = tank.missile_tubes_empty.saturating_add(1).min(offsets.len() as u8);
     f.pending_missiles.push(Missile::spawn(mouth, launch, owner, tube, aim));
 }

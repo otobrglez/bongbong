@@ -311,9 +311,9 @@ pub enum Event {
     /// draws it from (`LaserVariant::name`).
     LaserBeam { x0: f32, y0: f32, x1: f32, y1: f32, variant: &'static str, seat: u8 },
     /// A velocity change the room put on a client-owned hull (knockback, a
-    /// blast, a ram, recoil); the owner applies it to its own body, since
-    /// the room places that hull wherever the owner says
-    /// (docs/online-coop-prd.md §4.16).
+    /// blast, a ram, a missile launch's recoil); the owner applies it to
+    /// its own body, since the room places that hull wherever the owner
+    /// says (docs/online-coop-prd.md §4.16).
     Shoved { seat: usize, vx: f32, vy: f32 },
     /// A projectile or beam landed on `target` at (`x`, `y`).
     Hit { target: HitTarget, damage: f32, killed: bool, x: f32, y: f32 },
@@ -849,10 +849,12 @@ struct Frame {
 
 /// The velocity changes the room puts on hulls their clients own
 /// (docs/online-coop-prd.md §4.16, "Shoves on owned hulls"): hit
-/// knockback, blast shoves, ram pushes and firing recoil. The room places
-/// an owned hull wherever its client says, so a shove applied here alone
-/// would be erased by the next pose - each one travels as an
-/// `Event::Shoved` for the owner to apply to its own body.
+/// knockback, blast shoves (a missile's included), ram pushes and a
+/// missile launch's recoil. The room places an owned hull wherever its
+/// client says, so a shove applied here alone would be erased by the next
+/// pose - each one travels as an `Event::Shoved` for the owner to apply to
+/// its own body. The recoil of a shell, bolt or bullet is not among them:
+/// the client kicks its hull itself at each launch (`net::predict`).
 ///
 /// `owned` is set once per update from `Game::seat_owned`; everything
 /// else is pushed unconditionally and kept only for an owned seat, so a
@@ -1011,6 +1013,9 @@ impl Game {
         self.frame = 0;
         self.hit_history.clear();
         self.seat_view = [None; MAX_SEATS];
+        // `frame` starts over, so an update number held from the last
+        // round would name one of this round's.
+        self.seat_owned = [0; MAX_SEATS];
         self.next_shot_id = 0;
         self.last_engage.clear();
         self.debug_kills.clear();

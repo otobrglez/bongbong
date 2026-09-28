@@ -57,10 +57,13 @@
 //!
 //! **What still costs a correction**, deliberately, and what it costs:
 //!
-//! - *Firing.* `weapons::apply_recoil` pushes the shooter back along the
-//!   shot's axis, and the sandbox never fires - it only drives. So every
-//!   shot ends one nudge, bounded by `shell_recoil_max_speed` over one
-//!   snapshot interval, and settled by the next reconciliation.
+//! - *Firing*, for a predicted hull. `weapons::apply_recoil` pushes the
+//!   shooter back along the shot's axis, and the sandbox never fires - it
+//!   only drives. So every shot ends one nudge, bounded by
+//!   `shell_recoil_max_speed` over one snapshot interval, and settled by
+//!   the next reconciliation. An owned hull is never reconciled, so its
+//!   sandbox kicks it at each launch (`Game::seat_recoil`), drawn or not,
+//!   and the room leaves that kick to it.
 //! - *A speed boost* would be worse than a correction - it changes the
 //!   top speed the drive model works to, so a sandbox that did not know
 //!   would fall behind every tick for the whole buff. That one is
@@ -200,14 +203,21 @@ struct Press {
     accounted: bool,
     /// The room's `Fired` has been handed over: its shots are real.
     confirmed: bool,
+    /// Its shots are drawn (`online_predict_shots` when it was pulled).
+    /// An undrawn press is an owned hull's: it runs the gate and kicks the
+    /// hull at each launch, and puts nothing on screen.
+    drawn: bool,
     pending: Vec<Pending>,
     live: Vec<Live>,
+    /// Shots of an undrawn press that have left the muzzle: owed against
+    /// the gate as a drawn press's live shots are.
+    undrawn: usize,
 }
 
 impl Press {
     /// The ammo the server will spend on this press.
     fn cost(&self) -> i32 {
-        (self.pending.len() + self.live.len()) as i32
+        (self.pending.len() + self.live.len() + self.undrawn) as i32
     }
 }
 
@@ -376,8 +386,10 @@ impl Predictor {
         self.sandbox.seat_pose(self.seat)
     }
 
-    /// Whether a press draws a shot. Off, the trigger still runs the
-    /// local gate down so turning it on mid-round starts in step.
+    /// Whether a press draws a shot. Off, the local gate still counts
+    /// down so turning it on mid-round starts in step, and an owned hull's
+    /// presses still run it and kick the hull at each launch - the room
+    /// leaves that kick to the client whether the shot is drawn or not.
     pub fn set_shots_enabled(&mut self, on: bool) {
         self.shots_enabled = on;
     }
@@ -461,7 +473,9 @@ impl Predictor {
     /// cheap and deliberate - the shot is drawn, no `Fired` ever comes
     /// back for it, and it expires quietly.
     fn pull_trigger(&mut self, tick: u32, pressed: bool, held: bool) {
-        if !self.shots_enabled || self.cooldown > 0.0 {
+        // An owned hull presses with the shots off too, for its recoil.
+        let drawn = self.shots_enabled;
+        if !(drawn || self.owned) || self.cooldown > 0.0 {
             return;
         }
         let Some((weapon, ammo, lateral)) = self.sandbox.seat_arms(self.seat) else { return };
@@ -505,8 +519,10 @@ impl Predictor {
                 if let Some((start, dir, variant)) = self.sandbox.seat_beam(self.seat) {
                     self.cooldown = t.player_fire_interval;
                     self.beams_owed.push_back(tick);
-                    self.beams.push(BeamPress { start, dir, variant });
-                    self.report.shots_drawn += 1;
+                    if drawn {
+                        self.beams.push(BeamPress { start, dir, variant });
+                        self.report.shots_drawn += 1;
+                    }
                 }
                 return;
             }
@@ -525,15 +541,19 @@ impl Predictor {
             age: 0.0,
             accounted: false,
             confirmed: false,
+            drawn,
             pending,
             live: Vec::new(),
+            undrawn: 0,
         };
         self.next_press = self.next_press.wrapping_add(1);
         // The first shot leaves on the press itself, from the pose this
         // tick produced.
         self.launch_due(&mut press);
         self.presses.push_back(press);
-        self.report.shots_drawn += 1;
+        if drawn {
+            self.report.shots_drawn += 1;
+        }
     }
 
     /// Ammo the presses still unaccounted for will spend, by kind, so a
@@ -546,7 +566,8 @@ impl Predictor {
     /// Move every pending shot whose tick has come out of the muzzle,
     /// from the sandbox's pose right now - the twin's second shell and a
     /// burst's later bullets leave from where the hull is *then*, which
-    /// is how `tick_queued_shots` fires them.
+    /// is how `tick_queued_shots` fires them. An owned hull is kicked back
+    /// by every one, drawn or not.
     fn launch_due(&mut self, press: &mut Press) {
         let mut i = 0;
         while i < press.pending.len() {
@@ -557,12 +578,18 @@ impl Predictor {
             }
             press.pending.remove(i);
             if let Some(shot) = self.sandbox.seat_shot(self.seat, press.kind, p.aim, p.lateral) {
-                // The kick lands on the press, as the room's does in a
-                // local round; an owned hull's room does not echo it back.
+                // The kick lands on the launch, as the room's does in a
+                // local round. The room sends no `Shoved` for it
+                // (`weapons::apply_recoil`), so this is the owned hull's
+                // one kick per shot.
                 if self.owned {
                     self.sandbox.seat_recoil(self.seat, press.kind, shot.velocity);
                 }
-                press.live.push(Live { shot, server: None, local_hit: None, show_server: false, scored: false });
+                if press.drawn {
+                    press.live.push(Live { shot, server: None, local_hit: None, show_server: false, scored: false });
+                } else {
+                    press.undrawn += 1;
+                }
             }
         }
     }
@@ -606,8 +633,11 @@ impl Predictor {
                         // refused. Its shots go.
                         press.live.clear();
                         press.pending.clear();
+                        press.undrawn = 0;
                         press.confirmed = true;
-                        self.report.shots_refused += 1;
+                        if press.drawn {
+                            self.report.shots_refused += 1;
+                        }
                     }
                 }
                 if let Some(press) = self.presses.get_mut(i) {
@@ -737,7 +767,9 @@ impl Predictor {
                 return !(p.pending.is_empty() && p.live.is_empty());
             }
             if p.age > self.refusal_after {
-                self.report.shots_refused += 1;
+                if p.drawn {
+                    self.report.shots_refused += 1;
+                }
                 return false;
             }
             true
@@ -1395,6 +1427,85 @@ mod tests {
         let rad = rotation.to_radians();
         let back = -(kicked.x * rad.sin() - kicked.y * rad.cos());
         assert!(back > 0.1, "the hull moves back along its barrel after the press: {kicked:?}");
+    }
+
+    /// How fast `velocity` carries a hull facing `rotation` backwards.
+    fn back_speed(velocity: crate::math::Vec2, rotation: f32) -> f32 {
+        let rad = rotation.to_radians();
+        -(velocity.x * rad.sin() - velocity.y * rad.cos())
+    }
+
+    /// **One kick per shot, drawn or not.** The room sends no `Shoved`
+    /// for a shell, bolt or bullet (`weapons::apply_recoil`), so the owned
+    /// hull's sandbox is the one place it is kicked: with the shots off a
+    /// press still runs the gate and kicks the hull at each launch, drawing
+    /// nothing, and with them on the drawn shots kick exactly as hard.
+    #[test]
+    fn an_owned_hull_recoils_once_per_shot_drawn_or_not() {
+        let row = twin_barrel_row();
+        let delay = (tuning().tank_twin_shot_delay_seconds / PHYSICS_FIXED_DT).ceil() as usize;
+        let run = |drawn: bool| {
+            let mut predictor = Predictor::new(round_with(row, 0), 0, 0);
+            predictor.set_owned(true);
+            predictor.set_shots_enabled(drawn);
+            idle_ticks(&mut predictor, 5);
+            let mut velocities = vec![predictor.motion().expect("a hull").2];
+            predictor.step(press());
+            velocities.push(predictor.motion().expect("a hull").2);
+            for _ in 0..delay {
+                predictor.step(release());
+                velocities.push(predictor.motion().expect("a hull").2);
+            }
+            (velocities, predictor.provisional_count(), predictor.report(0, 0).shots_drawn)
+        };
+        let (drawn, on_screen, counted) = run(true);
+        let (undrawn, off_screen, uncounted) = run(false);
+        assert_eq!((on_screen, counted), (2, 1), "both barrels drawn, one press");
+        assert_eq!((off_screen, uncounted), (0, 0), "nothing drawn or counted with the shots off");
+        assert_eq!(drawn, undrawn, "the same kicks on the same ticks, drawn or not");
+
+        // The press is one kick - what one `seat_recoil` puts on the same
+        // standing hull - not none and not two.
+        let mut reference = Predictor::new(round_with(row, 0), 0, 0);
+        reference.set_owned(true);
+        idle_ticks(&mut reference, 6);
+        let lateral = tuning().tank_barrel_lateral_offset[row as usize];
+        let shot = reference.sandbox.seat_shot(0, ProvisionalKind::Shell, 0.0, -lateral).expect("a shell");
+        reference.sandbox.seat_recoil(0, ProvisionalKind::Shell, shot.velocity);
+        let (_, rotation, once) = reference.motion().expect("a hull");
+        assert!(back_speed(drawn[0], rotation).abs() < 0.01, "standing still first: {:?}", drawn[0]);
+        assert_eq!(drawn[1], once, "one kick on the press");
+        assert!(back_speed(once, rotation) > 0.1, "and it is backwards: {once:?}");
+        // The second barrel kicks again on its delay, where the hull had
+        // only been slowing down.
+        let back: Vec<f32> = drawn.iter().map(|&v| back_speed(v, rotation)).collect();
+        assert!(back[delay + 1] > back[delay], "the twin's kick on its tick: {back:?}");
+        assert!(back[2..=delay].windows(2).all(|w| w[1] <= w[0]), "and none between: {back:?}");
+    }
+
+    /// With the shots off an owned hull's gate still rations ammo: a
+    /// press the room would refuse kicks nothing.
+    #[test]
+    fn an_owned_hull_with_the_shots_off_is_not_kicked_by_a_refused_press() {
+        let row = single_barrel_row();
+        let ticks = (tuning().player_fire_interval / PHYSICS_FIXED_DT).ceil() as usize;
+        let run = |second: Intent| {
+            let mut predictor = Predictor::new(round_with(row, 0), 0, 0);
+            predictor.set_owned(true);
+            predictor.set_shots_enabled(false);
+            let patch = TankPatch { shells_ammo: Some(1), ..Default::default() };
+            predictor.sandbox.debug_set_tank(0, &patch).expect("the seat's tank");
+            idle_ticks(&mut predictor, 5);
+            predictor.step(press());
+            let kicked = predictor.motion().expect("a hull").2;
+            idle_ticks(&mut predictor, ticks);
+            predictor.step(second);
+            (kicked, predictor.motion().expect("a hull").2)
+        };
+        let (kicked, pressed) = run(press());
+        let (_, idle) = run(release());
+        assert!(kicked.x.abs() + kicked.y.abs() > 0.1, "the one shell there is kicks the hull: {kicked:?}");
+        assert_eq!(pressed, idle, "the second press is owed the shell the first spent, and kicks nothing");
     }
 
     /// The owned hull is drawn between its last two ticks.
