@@ -35,6 +35,8 @@ pub mod replica;
 #[cfg(test)]
 mod flame_tests;
 #[cfg(test)]
+mod lagcomp_tests;
+#[cfg(test)]
 mod props_tests;
 #[cfg(test)]
 mod seat_tests;
@@ -160,8 +162,8 @@ use crate::{
 
 use combat::{frog_hop_target, ram, HitEffects};
 use engage::{EngageCtx, EngageReport, EngageRing, EngageStatus, EngageTank};
-use hits::{ShellTarget, Terrain};
-use weapons::{dispatch_fire, dispatch_fire_from, laser_damage_range, tick_queued_shots, PendingLaserShot, Projectile, laser_beam_half_width};
+use hits::{HitBoxFrame, HitBoxHistory, REWIND_MAX_TICKS, ShellTarget, Terrain};
+use weapons::{dispatch_fire, dispatch_fire_from, laser_damage_range, tick_queued_shots, PendingLaserShot, Projectile, Rewind, laser_beam_half_width};
 
 /// One step's player input, gathered by the caller (`app.rs` reading a
 /// live `RaylibHandle`, the dev server, a scripted probe) - the entire
@@ -586,6 +588,10 @@ pub struct Game {
     /// dropped, one that went back to stage 2 - is the room's to drive
     /// again on the next tick without anybody having to release it.
     seat_owned: [u64; MAX_SEATS],
+    /// The enemy and frog hit boxes of the last `REWIND_MAX_TICKS` ticks,
+    /// recorded at the end of each update: what a seat's shot is swept
+    /// against when its client was drawing the past (`seat_rewind`).
+    hit_history: HitBoxHistory,
     /// The player's frog - `None` in a mission without one (`Destroy`),
     /// and before the first `init`.
     pub(crate) frog: Option<Entity>,
@@ -836,6 +842,42 @@ struct Frame {
     physics_stepped: bool,
     /// Events this frame's phases recorded; merged onto `Game::events`.
     events: Vec<Event>,
+    /// The velocity changes put on client-owned seats this frame, which
+    /// `finish_frame` turns into `Event::Shoved`.
+    shoves: Shoves,
+}
+
+/// The velocity changes the room puts on hulls their clients own
+/// (docs/online-coop-prd.md §4.16, "Shoves on owned hulls"): hit
+/// knockback, blast shoves, ram pushes and firing recoil. The room places
+/// an owned hull wherever its client says, so a shove applied here alone
+/// would be erased by the next pose - each one travels as an
+/// `Event::Shoved` for the owner to apply to its own body.
+///
+/// `owned` is set once per update from `Game::seat_owned`; everything
+/// else is pushed unconditionally and kept only for an owned seat, so a
+/// round with no client-owned hull - every local round - keeps nothing
+/// and emits nothing.
+#[derive(Debug, Default)]
+pub(super) struct Shoves {
+    owned: [bool; MAX_SEATS],
+    log: Vec<(usize, Vec2)>,
+}
+
+impl Shoves {
+    /// A shove of `dv` px/s on the tank `owner` names, kept only when that
+    /// tank is a seat its client owns this update.
+    pub(super) fn push(&mut self, owner: Owner, dv: Vec2) {
+        if let Owner::Player(seat) = owner
+            && self.owned.get(seat as usize).copied().unwrap_or(false)
+        {
+            self.log.push((seat as usize, dv));
+        }
+    }
+
+    fn into_events(self) -> impl Iterator<Item = Event> {
+        self.log.into_iter().map(|(seat, dv)| Event::Shoved { seat, vx: dv.x, vy: dv.y })
+    }
 }
 
 impl Frame {
@@ -862,6 +904,7 @@ impl Frame {
             shocks: Vec::new(),
             physics_stepped: false,
             events: Vec::new(),
+            shoves: Shoves::default(),
         }
     }
 
@@ -966,6 +1009,8 @@ impl Game {
         self.heat.clear();
         self.flame_contacts.clear();
         self.frame = 0;
+        self.hit_history.clear();
+        self.seat_view = [None; MAX_SEATS];
         self.next_shot_id = 0;
         self.last_engage.clear();
         self.debug_kills.clear();
@@ -1398,6 +1443,9 @@ impl Game {
         // take.
         let grid = self.route_grid(width, height);
         let mut f = Frame::new(dt, width, height, rng, terrain);
+        for (owned, &frame) in f.shoves.owned.iter_mut().zip(&self.seat_owned) {
+            *owned = frame != 0 && frame == self.frame;
+        }
 
         if self.outcome == Outcome::Playing {
             self.apply_debug_kills(&mut f);
@@ -1458,14 +1506,16 @@ impl Game {
                 return;
             }
         }
+        self.hit_history.record(&self.world, self.frame);
         self.finish_frame(f);
     }
 
     /// Append the frame's effects and events and put the RNG back.
     fn finish_frame(&mut self, f: Frame) {
-        let Frame { blast_fx, scorches, decals, muzzle_flashes, impact_flashes, shocks, events, rng, .. } = f;
+        let Frame { blast_fx, scorches, decals, muzzle_flashes, impact_flashes, shocks, events, shoves, rng, .. } = f;
         self.show(Spectacle { blast_fx, scorches, decals, muzzle_flashes, impact_flashes, shocks });
         self.events.extend(events);
+        self.events.extend(shoves.into_events());
         self.rng = Some(rng);
     }
 
@@ -1785,6 +1835,31 @@ impl Game {
         if let Some(view) = self.seat_view.get_mut(seat) {
             *view = (view_tick > 0).then_some((view_tick, view_frac));
         }
+    }
+
+    /// How many whole ticks behind this update the world a shot's owner
+    /// was drawing stands: lag compensation's rewind, "favor the shooter"
+    /// (docs/online-coop-prd.md §4.16). The update's frame less the seat's
+    /// view (`set_seat_view`, a tick plus 256ths), rounded to the nearest
+    /// tick and clamped to `0..=REWIND_MAX_TICKS`. 0 - the present - for
+    /// an enemy, and for a seat with no view: every local round, the
+    /// probe, a bot seat.
+    pub(crate) fn seat_rewind(&self, owner: Owner) -> u8 {
+        let Owner::Player(seat) = owner else { return 0 };
+        let Some(&Some((tick, frac))) = self.seat_view.get(seat as usize) else { return 0 };
+        // In 256ths of a tick, so the rounding is exact.
+        let behind = (self.frame as i64) * 256 - ((tick as i64) * 256 + frac as i64);
+        ((behind + 128).div_euclid(256)).clamp(0, REWIND_MAX_TICKS as i64) as u8
+    }
+
+    /// The enemy and frog boxes `rewind` ticks before this update, or
+    /// `None` for the present: a rewind of 0, or a tick the history does
+    /// not hold (before the round's first ticks, across a pause).
+    fn rewound_boxes(&self, rewind: u8) -> Option<&HitBoxFrame> {
+        if rewind == 0 {
+            return None;
+        }
+        self.frame.checked_sub(rewind as u64).and_then(|tick| self.hit_history.at(tick))
     }
 
     /// The room drives this seat again from the next update: nobody is
@@ -2799,22 +2874,41 @@ impl Game {
 
     /// Insert this frame's fired projectiles - only once no tank query is
     /// active, since hecs can't spawn into a world mid-iteration.
+    ///
+    /// A seat's shell, bolt or bullet takes its seat's rewind here
+    /// (`seat_rewind`, carried as a `Rewind` beside it when it is not
+    /// zero) and keeps it for its whole flight: the client that fired it
+    /// goes on drawing the enemies that far in the past for as long as the
+    /// shot flies.
     fn spawn_pending(&mut self, f: &mut Frame) {
         for mut shell in f.pending_shells.drain(..) {
             shell.set_id(self.take_shot_id());
-            self.world.spawn((shell,));
+            let rewind = self.seat_rewind(shell.owner);
+            self.spawn_shot(shell, rewind);
         }
         for mut plasma in f.pending_plasmas.drain(..) {
             plasma.set_id(self.take_shot_id());
-            self.world.spawn((plasma,));
+            let rewind = self.seat_rewind(plasma.owner);
+            self.spawn_shot(plasma, rewind);
         }
         for mut bullet in f.pending_bullets.drain(..) {
             bullet.set_id(self.take_shot_id());
-            self.world.spawn((bullet,));
+            let rewind = self.seat_rewind(bullet.owner);
+            self.spawn_shot(bullet, rewind);
         }
         for mut missile in f.pending_missiles.drain(..) {
             missile.set_id(self.take_shot_id());
             self.world.spawn((missile,));
+        }
+    }
+
+    /// Put one projectile in the world, with its `Rewind` only when it has
+    /// one: a shot judged in the present spawns as a bare projectile.
+    fn spawn_shot<P: Projectile>(&mut self, shot: P, rewind: u8) {
+        if rewind > 0 {
+            self.world.spawn((shot, Rewind(rewind)));
+        } else {
+            self.world.spawn((shot,));
         }
     }
 
@@ -2827,11 +2921,24 @@ impl Game {
 
     /// Lasers have no travel time: each queued beam is swept over its whole
     /// length right now, drawn up to where it stopped, and applied.
+    ///
+    /// A seat's beam is swept against the enemies and frogs its client was
+    /// drawing (`seat_rewind`, `rewound_boxes`), like its shells.
     fn resolve_lasers(&mut self, f: &mut Frame) {
         let players = self.seats_on_field();
         let shots = std::mem::take(&mut f.pending_lasers);
         for shot in shots {
-            let hit = f.terrain.sweep(&self.world, players, shot.owner, shot.start, shot.end, laser_beam_half_width());
+            let past = self.rewound_boxes(self.seat_rewind(shot.owner));
+            let hit = f.terrain.sweep_rewound(
+                &self.world,
+                players,
+                shot.owner,
+                shot.start,
+                shot.end,
+                laser_beam_half_width(),
+                &[],
+                past,
+            );
             let (hit_pos, target) = match hit {
                 Some((target, t)) => (shot.start + (shot.end - shot.start) * t, Some(target)),
                 None => (shot.end, None),
@@ -2932,7 +3039,7 @@ impl Game {
                 // melee and the melee hurt more.
                 if touching && !concealed {
                     let rammed = with_two_tanks_mut(&mut self.world, enemy, player, |e, p| {
-                        ram(e, p, &mut self.physics, &mut f.rng, &mut f.kills, 1.0)
+                        ram(e, p, &mut self.physics, &mut f.rng, &mut f.kills, &mut f.shoves, 1.0)
                             .map(|damage| (p.owner_slot(), e.owner_slot(), damage))
                     });
                     if let Some((slot, other_slot, damage)) = rammed {
@@ -2950,7 +3057,7 @@ impl Game {
             if touching {
                 let factor = tuning().friendly_fire_damage_factor;
                 let rammed = with_two_tanks_mut(&mut self.world, p1, p2, |a, b| {
-                    ram(a, b, &mut self.physics, &mut f.rng, &mut f.kills, factor)
+                    ram(a, b, &mut self.physics, &mut f.rng, &mut f.kills, &mut f.shoves, factor)
                         .map(|damage| (a.owner_slot(), b.owner_slot(), damage))
                 });
                 if let Some((slot, other_slot, damage)) = rammed {
@@ -3001,7 +3108,7 @@ impl Game {
                     continue;
                 }
                 let rammed = with_two_tanks_mut(&mut self.world, a, b, |x, y| {
-                    ram(x, y, &mut self.physics, &mut f.rng, &mut f.kills, 1.0)
+                    ram(x, y, &mut self.physics, &mut f.rng, &mut f.kills, &mut f.shoves, 1.0)
                         .map(|damage| (x.owner_slot(), y.owner_slot(), damage))
                 });
                 if let Some((slot, other_slot, damage)) = rammed {
@@ -3078,22 +3185,27 @@ impl Game {
             vel: Vec2,
             owner: Owner,
             dmg: (f32, f32),
+            rewind: u8,
         }
         let flying: Vec<Flight> = self
             .world
-            .query::<(Entity, &P)>()
+            .query::<(Entity, &P, Option<&Rewind>)>()
             .iter()
-            .filter(|(_, p)| p.is_flying())
-            .map(|(entity, p)| Flight {
+            .filter(|(_, p, _)| p.is_flying())
+            .map(|(entity, p, rewind)| Flight {
                 entity,
                 prev: p.prev_position(),
                 pos: p.position(),
                 vel: p.velocity(),
                 owner: p.owner(),
                 dmg: p.damage_range(),
+                rewind: rewind.map_or(0, |r| r.0),
             })
             .collect();
-        for Flight { entity, prev, pos, vel, owner, dmg } in flying {
+        for Flight { entity, prev, pos, vel, owner, dmg, rewind } in flying {
+            // Lag compensation: a seat's shot meets the enemies and frogs
+            // where its client drew them (`Rewind`); 0 is the present.
+            let past = self.rewound_boxes(rewind);
             // Sweep, and re-sweep past any prop tile the projectile rolls a
             // pass-over on (`Material::pass_over_chance`) - remembered on
             // the projectile, since a segment ending inside the tile would
@@ -3104,7 +3216,7 @@ impl Game {
                 q.get().expect("projectile collected this frame still exists").passed_over().to_vec()
             };
             let hit = loop {
-                let swept = f.terrain.sweep_ignoring(&self.world, players, owner, prev, pos, P::hit_half_extent(), &ignored);
+                let swept = f.terrain.sweep_rewound(&self.world, players, owner, prev, pos, P::hit_half_extent(), &ignored, past);
                 let Some((target, t)) = swept else { break None };
                 if let ShellTarget::Obstacle(e) = target {
                     let chance = f.terrain.obstacle(e).map_or(0.0, |b| b.material.pass_over_chance());
@@ -3146,6 +3258,12 @@ impl Game {
                 with_tank_mut(&self.world, shielded, |t| t.spend_shield(cost));
                 let mut q = self.world.query_one::<&mut P>(entity);
                 q.get().expect("projectile collected this frame still exists").deflect(center, new_owner);
+                drop(q);
+                // Turned back, the shot is the shield's and is judged in
+                // the present.
+                if let Ok(mut rewind) = self.world.get::<&mut Rewind>(entity) {
+                    rewind.0 = 0;
+                }
                 f.events.push(Event::Deflected { slot: new_owner.slot(), x: hit_pos.x, y: hit_pos.y });
                 continue;
             }

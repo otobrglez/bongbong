@@ -276,7 +276,9 @@ impl Game {
             for player in self.seats_on_field().into_iter().flatten() {
                 let mut q = self.world.query_one::<&mut Tank>(player);
                 let tank = q.get().expect("player entity always has a Tank");
-                explosion_hit(tank, center, true, &mut self.physics, &mut f.rng, &mut f.kills, &params);
+                if let Some(dv) = explosion_hit(tank, center, true, &mut self.physics, &mut f.rng, &mut f.kills, &params) {
+                    f.shoves.push(tank.owner(), dv);
+                }
             }
             for tank in self.world.query::<&mut Tank>().with::<&Ai>().iter() {
                 explosion_hit(tank, center, true, &mut self.physics, &mut f.rng, &mut f.kills, &params);
