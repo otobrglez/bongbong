@@ -535,34 +535,10 @@ struct Room {
 
 /// The room task: runs until the room is reaped.
 pub async fn run(hub: Arc<Hub>, code: String, params: RoomParams, commands: mpsc::Receiver<Command>, stats: Arc<RoomStats>) {
-    let now = Instant::now();
     // Subscribed before the first look, so a drain that begins between
     // the two is still seen.
     let mut drain = hub.drain_signal();
-    let mut room = Room {
-        hub,
-        code,
-        stats,
-        map: params.map,
-        overrides: LevelOverrides { mission: Some(params.mission), ..LevelOverrides::default() },
-        pinned_seed: params.seed,
-        round_seed: 0,
-        seats: Vec::new(),
-        kicked: BTreeSet::new(),
-        game: None,
-        life: Lifecycle::new(now),
-        clock: TickClock::new(TICK),
-        prev: Snapshot::default(),
-        pending_events: Vec::new(),
-        tuning_json: ROOM_TUNING_JSON.to_string(),
-        commands,
-        #[cfg(feature = "dev-tools")]
-        frozen: false,
-        #[cfg(feature = "dev-tools")]
-        dev_events: std::collections::VecDeque::new(),
-        #[cfg(feature = "dev-tools")]
-        dev_seq: 0,
-    };
+    let mut room = Room::new(hub, code, params, commands, stats);
     info!(code = room.code, map = room.map.name.as_deref().unwrap_or("?"), "room created");
     room.refresh_stats();
     if *drain.borrow_and_update() {
@@ -624,6 +600,34 @@ fn far_future() -> Instant {
 }
 
 impl Room {
+    /// A room with nobody in it yet, waiting.
+    fn new(hub: Arc<Hub>, code: String, params: RoomParams, commands: mpsc::Receiver<Command>, stats: Arc<RoomStats>) -> Room {
+        Room {
+            hub,
+            code,
+            stats,
+            map: params.map,
+            overrides: LevelOverrides { mission: Some(params.mission), ..LevelOverrides::default() },
+            pinned_seed: params.seed,
+            round_seed: 0,
+            seats: Vec::new(),
+            kicked: BTreeSet::new(),
+            game: None,
+            life: Lifecycle::new(Instant::now()),
+            clock: TickClock::new(TICK),
+            prev: Snapshot::default(),
+            pending_events: Vec::new(),
+            tuning_json: ROOM_TUNING_JSON.to_string(),
+            commands,
+            #[cfg(feature = "dev-tools")]
+            frozen: false,
+            #[cfg(feature = "dev-tools")]
+            dev_events: std::collections::VecDeque::new(),
+            #[cfg(feature = "dev-tools")]
+            dev_seq: 0,
+        }
+    }
+
     // -----------------------------------------------------------------
     // Seats and the lobby
 
@@ -1190,10 +1194,14 @@ impl Room {
         // §4.14), as far from the room's copy as the read's driving
         // reaches. A refused pose leaves the hull where it was and tells
         // the client so, since the client is not going to be pulled
-        // back by anything else.
+        // back by anything else. Only a seat whose pose this tick applied
+        // is measured after it: a seat the tick did not read - its client
+        // gone - owns nothing, whatever its last packet said.
+        for s in self.seats.iter_mut().flatten() {
+            s.applied_pose = None;
+        }
         for (i, pose, reach_ticks) in poses {
             let Some(Some(s)) = self.seats.get_mut(i) else { continue };
-            s.applied_pose = None;
             match authority::take_pose(game, i, pose, reach_ticks) {
                 PoseOutcome::Applied(at) => s.applied_pose = Some(at),
                 PoseOutcome::Refused(why, answer) => {
@@ -1807,6 +1815,57 @@ mod tests {
         let after = tick(&dispatch(&hub, "room", &json!({ "code": code })).await.expect("the room answers"));
         assert_eq!(after, before + 3, "the room caught its schedule up");
         assert_eq!(answered, before + 1, "the waiting call was served after tick {answered}, not between the first two of {before}..={after}");
+    }
+
+    /// **A seat whose client left owns nothing** (docs/online-coop-prd.md
+    /// §4.14). The tick measures a hull against the pose it was put on
+    /// only for a seat whose pose that tick applied; a seat it no longer
+    /// reads has no pose, so its idle tank being carried off - a blast, a
+    /// wave's gate - sends no `Placed` to a client that is not there, let
+    /// alone one every tick.
+    #[cfg(feature = "dev-tools")]
+    #[tokio::test]
+    async fn a_seat_whose_client_left_is_not_placed() {
+        use crate::metrics::Metrics;
+        use bongbong::net::wire::IntentMsg;
+        use serde_json::json;
+
+        let map = r#"
+version = 1
+size = [16, 8]
+tanks = 0
+spawn.kind = "band"
+cells."1,1" = { kind = "frog" }
+cells."4,4" = { kind = "start" }
+cells."11,4" = { kind = "start2" }
+"#;
+        let params = RoomParams::for_dev("", Some(map), None, Some(7)).expect("the room's setup");
+        let (_commands, rx) = mpsc::channel(1);
+        let hub = Hub::new(8, Arc::new(Metrics::new()));
+        let mut room = Room::new(hub, "TESTS".into(), params, rx, Arc::new(RoomStats::default()));
+        room.dev("room_open", &json!({ "seats": 2 })).expect("two bots seated");
+        let placed = |room: &Room| {
+            room.prev.events.iter().filter(|e| matches!(e, WireEvent::Placed { seat: 0, .. })).cloned().collect::<Vec<_>>()
+        };
+        // Seat 0's client owns its hull: its pose is taken.
+        let at = room.game.as_ref().and_then(|g| g.seat_pose(0)).expect("seat 0's tank");
+        let seat = room.seats[0].as_ref().expect("seat 0");
+        seat.mailbox.post(IntentMsg::default().with_pose(at), std::time::Instant::now());
+        room.tick();
+        assert!(room.seats[0].as_ref().is_some_and(|s| s.applied_pose.is_some()), "the pose was taken");
+        assert_eq!(placed(&room), [], "and stood");
+        // Its client leaves, as `disconnected` has it...
+        let seat = room.seats[0].as_mut().expect("seat 0");
+        seat.bot = false;
+        seat.mailbox.clear();
+        room.life.disconnect(Instant::now());
+        // ...and something carries its idle tank off.
+        let away = Position::new(at.position.x + 96.0, at.position.y);
+        room.game.as_mut().expect("a round").debug_teleport(0, away, None).expect("seat 0 moved");
+        for tick in 0..3 {
+            room.tick();
+            assert_eq!(placed(&room), [], "tick {tick}: a seat with nobody at it was placed");
+        }
     }
 
     #[test]

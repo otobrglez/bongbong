@@ -32,14 +32,29 @@
 //!
 //! The first read takes whatever is waiting. From there every
 //! `PLAYOUT_WINDOW_TICKS` reads are a window: `PLAYOUT_WIDEN_MISSES` or
-//! more reads that found their tick not yet arrived hold the point for a
-//! tick, widening the margin by one, and a window in which every read had
-//! at least `PLAYOUT_NARROW_AHEAD` ticks to spare moves it on two,
-//! narrowing it by one - so the point settles a tick or so behind the
-//! latest arrival the link actually delivers, costing the room's copy
-//! that much and no more, and follows a link that changes. A point left
-//! more than `BUFFER_MAX` behind the newest arrival - a room that stood
-//! still while its client drove on - starts again one tick behind it.
+//! more reads that found nothing at or past their tick arrived hold the
+//! point for a tick, widening the margin by one, and a window in which
+//! every read had at least `PLAYOUT_NARROW_AHEAD` ticks to spare moves it
+//! on two, narrowing it by one - so the point settles a tick or so behind
+//! the latest arrival the link actually delivers, costing the room's copy
+//! that much and no more, and follows a link that changes. A tick lost on
+//! the way while later ones have arrived is no miss: waiting longer would
+//! not bring it. The margin never widens past `BUFFER_MAX - 1`: a window
+//! in which any read already stood that far behind the newest arrival is
+//! not held, since one tick more is the cap.
+//!
+//! Two things move the point by more than the controller does. A point
+//! `BUFFER_MAX` or more behind the newest arrival - a room that stood
+//! still while its client drove on - starts again one tick behind it:
+//! `post` keeps only the newest `BUFFER_MAX`, so the tick the point would
+//! take next is already gone. And a point more than `PLAYOUT_NARROW_AHEAD`
+//! past the newest intent a read took goes back to that intent: the
+//! client's clock slipped behind the room's - a frame hitch longer than
+//! it catches up, a hidden tab - and its ticks now arrive at or before
+//! the point, where every read would take whatever came. A burst held up
+//! on the way is not that: it runs up to the client's current tick, at
+//! or past the point. A seat that coasted out (`INTENT_COAST`) starts
+//! its point again, as on its first read.
 //!
 //! **How far an owned pose is believed is the room's own time**
 //! (`Mailbox::pose_reach_ticks`, which a room hands
@@ -148,14 +163,16 @@ pub const REACH_SPARE_TICKS: u32 = 2;
 /// Reads in one window of the owned play point's controller: a second.
 pub const PLAYOUT_WINDOW_TICKS: u32 = 60;
 
-/// Reads in a window that found their tick not yet arrived before the
-/// play point is held a tick to widen its margin. One is a hiccup the
-/// dead reckoning rides out; two a second is a link that needs the room.
+/// Reads in a window that found nothing at or past their tick arrived
+/// before the play point is held a tick to widen its margin. One is a
+/// hiccup the dead reckoning rides out; two a second is a link that
+/// needs the room.
 pub const PLAYOUT_WIDEN_MISSES: u32 = 2;
 
 /// Ticks every read of a window had to spare - the newest arrival that
 /// far past the play point - before the point is moved on two to narrow
-/// its margin.
+/// its margin; and how far past the newest intent a read took the point
+/// may run before it is put back on the client's stream.
 pub const PLAYOUT_NARROW_AHEAD: i64 = 2;
 
 /// The bit of `wire_state` that says the last read found nothing waiting.
@@ -227,17 +244,19 @@ struct Inner {
     /// The newest client tick ever posted.
     newest_posted: Option<u32>,
     /// An owned seat's play point: the client tick the last read applied
-    /// up to. `None` until the first owned read.
+    /// up to. `None` until the first owned read, and again once the seat
+    /// has coasted out.
     play: Option<u32>,
     /// How far the next owned read moves the play point: one, or the
     /// controller's hold (0) or catch-up (2) for one read.
     next_step: u32,
     /// Reads in the controller's current window, the ones among them that
-    /// found their tick not yet arrived, and the fewest ticks any of them
-    /// had to spare.
+    /// found nothing at or past their tick arrived, and the fewest and
+    /// the most ticks any of them had to spare.
     window_reads: u32,
     window_misses: u32,
     window_ahead: i64,
+    window_ahead_max: i64,
     /// Reads since an intent was last applied, and when that was: the
     /// room's own time a pose may vouch for.
     reads_since_apply: u32,
@@ -263,17 +282,21 @@ impl Inner {
             (None, None) => return self.starve(),
         };
         let newest = self.newest_posted.unwrap_or(play);
-        let restarted = newest > play.saturating_add(BUFFER_MAX as u32);
-        if restarted {
+        // `BUFFER_MAX` behind, the point's own tick is one `post` dropped
+        // to make room, and every tick after it would be too.
+        if newest >= play.saturating_add(BUFFER_MAX as u32) {
             play = newest - 1;
         }
         self.play = Some(play);
         self.reads_since_apply = self.reads_since_apply.saturating_add(1);
         let later = self.queue.split_off(&play.saturating_add(1));
         let taken = std::mem::replace(&mut self.queue, later);
-        // A held point finds its tick already applied: not a miss.
-        let missed = taken.is_empty() && step > 0;
-        self.watch_playout(newest as i64 - play as i64, missed);
+        let ahead = newest as i64 - play as i64;
+        // A miss is a tick late: nothing at or past the point has
+        // arrived. A tick lost while later ones are here is not one, and
+        // a held point finds its tick already applied.
+        let missed = taken.is_empty() && step > 0 && ahead < 0;
+        self.watch_playout(ahead, missed);
         if taken.is_empty() {
             return self.starve();
         }
@@ -283,6 +306,12 @@ impl Inner {
         }
         let oldest = *taken.values().next()?;
         let newest_taken = *taken.values().next_back()?;
+        // The newest the client has sent is well behind the point, so
+        // its clock slipped: back onto its stream, from where the next
+        // read takes the tick after this one.
+        if (newest_taken.tick as i64) + PLAYOUT_NARROW_AHEAD < play as i64 {
+            self.play = Some(newest_taken.tick);
+        }
         // The client's driving from the intent last applied to the newest
         // taken - with none applied yet, from just before the oldest -
         // and the ticks the room guessed meanwhile, held to the room's
@@ -293,11 +322,10 @@ impl Inner {
         };
         let guessed = self.starved_run.min(DEAD_RECKON_TICKS);
         let elapsed = match self.applied_at {
-            Some(at) if !restarted => {
+            Some(at) => {
                 let wall = (now.saturating_duration_since(at).as_secs_f32() / PHYSICS_FIXED_DT).ceil() as u32;
                 self.reads_since_apply.max(wall).saturating_add(REACH_SPARE_TICKS)
             }
-            Some(_) => self.reads_since_apply.saturating_add(REACH_SPARE_TICKS),
             None => REACH_TICKS_MAX,
         };
         self.reach = driven.saturating_add(guessed).min(elapsed).clamp(1, REACH_TICKS_MAX);
@@ -323,18 +351,24 @@ impl Inner {
 
     /// One owned read's reading for the play point's controller: how many
     /// ticks the newest arrival stood past the point, and whether the
-    /// point's own tick was missing. At the end of a window the point is
-    /// held a tick if the window missed too often, or moved on two if
-    /// every read had room to spare.
+    /// read was late - nothing at or past the point arrived. At the end of
+    /// a window the point is held a tick if the window missed too often,
+    /// unless a read already stood `BUFFER_MAX - 1` behind the newest
+    /// arrival (one more and it starts again), or moved on two if every
+    /// read had room to spare.
     fn watch_playout(&mut self, ahead: i64, missed: bool) {
-        self.window_ahead = if self.window_reads == 0 { ahead } else { self.window_ahead.min(ahead) };
+        let first = self.window_reads == 0;
+        self.window_ahead = if first { ahead } else { self.window_ahead.min(ahead) };
+        self.window_ahead_max = if first { ahead } else { self.window_ahead_max.max(ahead) };
         self.window_reads += 1;
         self.window_misses += missed as u32;
         if self.window_reads < PLAYOUT_WINDOW_TICKS {
             return;
         }
         if self.window_misses >= PLAYOUT_WIDEN_MISSES {
-            self.next_step = 0;
+            if self.window_ahead_max < BUFFER_MAX as i64 - 1 {
+                self.next_step = 0;
+            }
         } else if self.window_ahead >= PLAYOUT_NARROW_AHEAD {
             self.next_step = 2;
         }
@@ -440,6 +474,9 @@ impl Mailbox {
         let mut inner = self.inner.lock().expect("mailbox poisoned");
         let posted = inner.posted?;
         if now.saturating_duration_since(posted) > INTENT_COAST {
+            // Coasted out: the seat's next owned read starts its play
+            // point afresh, like its first.
+            inner.play = None;
             return None;
         }
         // Owned when the newest intent waiting says so, or - with none
@@ -965,6 +1002,182 @@ mod tests {
             mailbox.read(now);
         }
         assert!(mailbox.depth() < widened + 2, "the spare was taken back: {} vs {widened}", mailbox.depth());
+    }
+
+    /// A standing owned pose at `100 + tick` px: no velocity, so a starved
+    /// read holds the hull still and a gap in the track shows as a step
+    /// the dead reckoning cannot fill.
+    fn standing(tick: u32) -> IntentMsg {
+        owned(tick, 100.0 + tick as f32, 0.0, false)
+    }
+
+    /// **A point `BUFFER_MAX` behind the newest arrival starts again.**
+    /// `post` keeps only the newest `BUFFER_MAX`, so at that margin the
+    /// point's own tick is one it dropped, and so is every tick after it
+    /// while the client keeps sending: left there, every read would
+    /// starve with a full buffer behind it.
+    #[test]
+    fn an_owned_point_at_the_cap_starts_again_rather_than_starving() {
+        let mailbox = Mailbox::new();
+        let now = Instant::now();
+        mailbox.post(standing(0), now);
+        mailbox.read(now);
+        // The room stands still while the client drives on.
+        let mut next = 1u32;
+        for _ in 0..=BUFFER_MAX {
+            mailbox.post(standing(next), now);
+            next += 1;
+        }
+        let starvations = mailbox.starvations();
+        let mut acked = Vec::new();
+        for _ in 0..PLAYOUT_WINDOW_TICKS {
+            mailbox.read(now);
+            acked.push(mailbox.acked_tick());
+            mailbox.post(standing(next), now);
+            next += 1;
+        }
+        assert_eq!(mailbox.starvations(), starvations, "a read starved with the buffer full: acked {acked:?}");
+        assert_eq!(acked[0], BUFFER_MAX as u32, "the first read starts again a tick behind the newest");
+        assert!(acked.windows(2).all(|w| w[1] == w[0] + 1), "and every read after it takes the next tick: {acked:?}");
+    }
+
+    /// **The margin never widens into the cap.** A link that delivers in
+    /// clumps of `BUFFER_MAX + 1` needs more margin than the buffer holds,
+    /// so the read before each clump misses however wide the point sits.
+    /// Holding the point for those misses once it stands `BUFFER_MAX - 1`
+    /// behind a clump would put it at the cap on the next and start it
+    /// again a tick behind - the margin thrown away and the room's track
+    /// jumping a clump. It widens that far and stays: one tick a read, two
+    /// after each miss.
+    #[test]
+    fn a_clumped_link_widens_the_owned_margin_short_of_the_cap() {
+        let mailbox = Mailbox::new();
+        let now = Instant::now();
+        let clump = BUFFER_MAX as u32 + 1;
+        let mut next = 0u32;
+        let mut acked = Vec::new();
+        let mut depths = Vec::new();
+        for read in 0..(30 * PLAYOUT_WINDOW_TICKS) {
+            if read % clump == 0 {
+                for _ in 0..clump {
+                    mailbox.post(standing(next), now);
+                    next += 1;
+                }
+            }
+            mailbox.read(now);
+            acked.push(mailbox.acked_tick());
+            depths.push(mailbox.depth());
+        }
+        // A window widens it a tick, so it is at its widest well before
+        // the twelfth.
+        let from = (12 * PLAYOUT_WINDOW_TICKS) as usize;
+        let jumps: Vec<(usize, u32)> =
+            acked[from..].windows(2).map(|w| w[1] - w[0]).enumerate().filter(|&(_, d)| d > 2).collect();
+        assert!(jumps.is_empty(), "the point restarted: {jumps:?}");
+        let widest = depths[from..].iter().copied().max().unwrap_or(0);
+        assert_eq!(widest, BUFFER_MAX - 1, "the margin behind a clump");
+    }
+
+    /// **A stream behind the point is followed back.** A client whose
+    /// clock slipped behind the room's - a frame hitch longer than it
+    /// catches up - goes on from its own next tick, which the point passed
+    /// while it was silent, and a point that stayed ahead would take
+    /// whatever arrived on every read, the room's track stalling and
+    /// doubling with the bunching. It goes back to the stream on the first
+    /// read that takes from it, and walks it one tick a read again once
+    /// the controller has found the link's margin.
+    #[test]
+    fn an_owned_point_ahead_of_a_slipped_stream_goes_back_to_it() {
+        let mailbox = Mailbox::new();
+        let now = Instant::now();
+        let mut next = 0u32;
+        let mut post = |n: usize| {
+            for _ in 0..n {
+                mailbox.post(standing(next), now);
+                next += 1;
+            }
+        };
+        let mut xs = Vec::new();
+        let read = |xs: &mut Vec<f32>| {
+            if let Some(read) = mailbox.read(now) {
+                xs.push(dequantise_pos(read.x));
+            }
+        };
+        // A steady stream a tick ahead of the point.
+        post(1);
+        read(&mut xs);
+        post(2);
+        for _ in 0..PLAYOUT_WINDOW_TICKS {
+            read(&mut xs);
+            post(1);
+        }
+        // The client's clock stops for twenty ticks while the room's runs.
+        for _ in 0..20 {
+            read(&mut xs);
+        }
+        // It goes on from its next tick, bunched as a LAN bunches it.
+        let resumed = xs.len();
+        let wobble = [1, 0, 2, 1, 2, 0, 1];
+        for i in 0..(6 * PLAYOUT_WINDOW_TICKS) as usize {
+            post(wobble[i % wobble.len()]);
+            read(&mut xs);
+        }
+        // Two windows to find the margin, then four to walk.
+        let walked = &xs[resumed + 2 * PLAYOUT_WINDOW_TICKS as usize..];
+        let off: Vec<(usize, f32)> =
+            walked.windows(2).map(|w| w[1] - w[0]).enumerate().filter(|&(_, d)| (d - 1.0).abs() > 0.01).collect();
+        // The controller may move the point once a window; count those.
+        assert!(off.len() <= 4, "the track stalled or doubled: {off:?}");
+    }
+
+    /// **A seat heard from again after coasting out starts afresh**: its
+    /// first read takes whatever is waiting, as a seat's first read does,
+    /// rather than walk on from the point the silence left behind.
+    #[test]
+    fn an_owned_seat_back_from_coasting_out_starts_its_point_afresh() {
+        let mailbox = Mailbox::new();
+        let dt = Duration::from_secs_f32(PHYSICS_FIXED_DT);
+        let mut now = Instant::now();
+        for tick in 0..10 {
+            mailbox.post(standing(tick), now);
+            mailbox.read(now);
+            now += dt;
+        }
+        // The link goes quiet for a second: the hull is carried a while,
+        // then the seat coasts out.
+        let mut coasted = 0;
+        for _ in 0..60 {
+            coasted += mailbox.read(now).is_none() as u32;
+            now += dt;
+        }
+        assert!(coasted > 0, "the silence outlasted INTENT_COAST");
+        // It comes back with its clock forty ticks on.
+        mailbox.post(standing(50), now);
+        let read = mailbox.read(now).expect("the seat is back");
+        assert_eq!(read.tick, 50, "the first read back takes what is waiting");
+        assert_eq!(mailbox.acked_tick(), 50);
+    }
+
+    /// **A lost tick is not a late one.** A packet that never arrives
+    /// leaves its read with nothing, but with later ticks already waiting
+    /// holding the point would not bring it back; only a read with
+    /// nothing at or past its tick counts toward widening the margin. One
+    /// tick in twenty lost leaves the margin where the link's timing puts
+    /// it.
+    #[test]
+    fn a_lost_owned_tick_does_not_widen_the_margin() {
+        let mailbox = Mailbox::new();
+        let now = Instant::now();
+        let mut depths = Vec::new();
+        for tick in 0..(6 * PLAYOUT_WINDOW_TICKS) {
+            if tick % 20 != 10 {
+                mailbox.post(standing(tick), now);
+            }
+            mailbox.read(now);
+            depths.push(mailbox.depth());
+        }
+        let widest = depths.iter().copied().max().unwrap_or(0);
+        assert!(widest <= 2, "the margin ratcheted up: widest {widest}, last {:?}", depths.last());
     }
 
     /// Over the cap an owned intent gives up its pose, never its trigger:
