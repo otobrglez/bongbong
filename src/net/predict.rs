@@ -316,6 +316,10 @@ pub struct Predictor {
     /// Where this frame's provisional shots met something, for the round's
     /// impact flashes.
     impacts: Vec<Position>,
+    /// Where each press drawn since the last frame left the muzzle - its
+    /// first shot, the first barrel of a twin - for the round's muzzle
+    /// ripple.
+    muzzles: Vec<Position>,
     /// The room's shots of this seat first seen unpaired, and when (local
     /// seconds of `clock`): held back from the picture for a moment in
     /// case their press is about to claim them, drawn if nothing does.
@@ -355,6 +359,7 @@ impl Predictor {
             beams_owed: VecDeque::new(),
             beams: Vec::new(),
             impacts: Vec::new(),
+            muzzles: Vec::new(),
             unpaired: std::collections::BTreeMap::new(),
             clock: 0.0,
             refusal_after: PROVISIONAL_SECONDS,
@@ -542,8 +547,12 @@ impl Predictor {
         };
         self.next_press = self.next_press.wrapping_add(1);
         // The first shot leaves on the press itself, from the pose this
-        // tick produced.
+        // tick produced, and ripples the muzzle as the room's `Fired`
+        // does on a replica - once a press.
         self.launch_due(&mut press);
+        if let Some(first) = press.live.first() {
+            self.muzzles.push(first.shot.position);
+        }
         self.presses.push_back(press);
         if drawn {
             self.report.shots_drawn += 1;
@@ -800,6 +809,12 @@ impl Predictor {
         std::mem::take(&mut self.impacts)
     }
 
+    /// Where the presses drawn since the last call left the muzzle, for the
+    /// round's muzzle ripples.
+    pub fn take_muzzles(&mut self) -> Vec<Position> {
+        std::mem::take(&mut self.muzzles)
+    }
+
     /// How many shots are on screen that the server has not yet drawn.
     pub fn provisional_count(&self) -> usize {
         self.presses.iter().map(|p| p.live.len()).sum()
@@ -828,7 +843,9 @@ impl Predictor {
     /// than a world of its own: other hulls, destroyed walls, a speed
     /// boost, a spent pickup, the seat's weapon and ammo, all of it,
     /// through one path that is already the tested one. What is left to
-    /// predict on top is this seat's unacknowledged input.
+    /// predict on top is this seat's unacknowledged input. Quietly
+    /// (`apply::Show::Quiet`): nobody draws the sandbox and nothing ages
+    /// it, so a fireball or a beam put on it would stay for the round.
     ///
     /// `acked` is the last input tick the server applied for this seat,
     /// and the snapshot is where that left the world. Every input after
@@ -841,7 +858,7 @@ impl Predictor {
             // The snapshot's copy of it is where the room had it a round
             // trip ago and is put back where it was before the write.
             let keep = self.sandbox.seat_motion(self.seat);
-            apply::snapshot(&mut self.sandbox, snapshot);
+            apply::snapshot_with(&mut self.sandbox, snapshot, apply::Show::Quiet);
             if let Some((position, rotation, velocity)) = keep {
                 self.sandbox.place_seat(self.seat, position, rotation, velocity);
             }
@@ -850,7 +867,7 @@ impl Predictor {
             return;
         }
         let before = self.sandbox.seat_motion(self.seat).map(|(p, _, _)| p);
-        apply::snapshot(&mut self.sandbox, snapshot);
+        apply::snapshot_with(&mut self.sandbox, snapshot, apply::Show::Quiet);
         // Anything the server has already accounted for is history.
         while self.history.front().is_some_and(|(t, _)| *t <= acked) {
             self.history.pop_front();
@@ -1597,5 +1614,42 @@ mod tests {
         let report = predictor.report(0, 0);
         assert_eq!((report.nudges, report.snaps), (0, 1));
         assert_eq!((predictor.offset().x, predictor.offset().y), (0.0, 0.0), "a snap leaves nothing to ease");
+    }
+
+    /// The sandbox takes every snapshot and nobody draws it, nor ages what
+    /// is drawn on it: a kill's fireball, a shot's ripples and flashes, a
+    /// beam, a shake put on it would stay for the round. It takes the
+    /// state and none of the show - in either mode.
+    #[test]
+    fn the_sandbox_collects_none_of_the_show() {
+        for owned in [false, true] {
+            let mut authority = round_with_enemies();
+            let mut predictor = Predictor::new(round_with_enemies(), 0, 0);
+            predictor.set_owned(owned);
+            let laser = TankPatch { laser_charges: Some(3), ..TankPatch::default() };
+            authority.debug_set_tank(0, &laser).expect("the seat's tank");
+            authority.debug_kill(authority.first_enemy_slot()).expect("an enemy to kill");
+            let (w, h) = authority.map.field_size();
+            let (mut wrecks, mut beams) = (0, 0);
+            for tick in 1..=40u32 {
+                let intent = Intent { fire: tick % 12 == 1, ..Intent::default() };
+                authority.update(Input::single(intent), PHYSICS_FIXED_DT, w, h);
+                for e in authority.events() {
+                    match e {
+                        crate::simulation::Event::Wreck { .. } => wrecks += 1,
+                        crate::simulation::Event::LaserBeam { .. } => beams += 1,
+                        _ => {}
+                    }
+                }
+                let snapshot = wire(&mut authority, tick);
+                predictor.reconcile(&snapshot, tick);
+            }
+            assert!(wrecks > 0 && beams > 0, "the room put on a show: {wrecks} wrecks, {beams} beams");
+            let s = &predictor.sandbox;
+            assert!(s.blast_fx.is_empty() && s.shocks.is_empty() && s.screen_flash.is_none(), "owned {owned}: a kill's show");
+            assert!(s.muzzle_flashes.is_empty() && s.impact_flashes.is_empty(), "owned {owned}: ripples and flashes");
+            assert!(s.scorches.is_empty() && s.decals.is_empty(), "owned {owned}: a scorch, thrown parts");
+            assert!(s.laser_beams.is_empty() && s.flying_drums.is_empty(), "owned {owned}: a beam, a drum in the air");
+        }
     }
 }

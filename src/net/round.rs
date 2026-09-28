@@ -738,13 +738,14 @@ impl<T: Transport> OnlineRound<T> {
         let sampled = self.interp.sample(now);
         let predicting_shots = tuning().online_predict_own_tank && tuning().online_predict_shots && self.predictor.is_some();
         if let Some(frame) = &sampled {
-            let mut snapshot = frame.snapshot.clone();
-            // A beam this seat drew on its press is not drawn twice.
-            if predicting_shots && let Some(seat) = self.client.seat() {
-                snapshot.events.retain(|e| !matches!(e, WireEvent::LaserBeam { seat: s, .. } if *s == seat));
-            }
+            // What this seat drew on its own press - its shots' muzzle
+            // ripples, its beams - is not drawn twice.
+            let show = match self.client.seat() {
+                Some(seat) if predicting_shots => apply::Show::OwnShotsDrawn(seat),
+                _ => apply::Show::All,
+            };
             if let Some(game) = self.replica.as_mut() {
-                apply::snapshot(game, &snapshot);
+                apply::snapshot_with(game, &frame.snapshot, show);
             }
             let frac = (frame.ahead / PHYSICS_FIXED_DT * 256.0).clamp(0.0, 255.0) as u8;
             self.view = (frame.snapshot.tick, frac);
@@ -836,12 +837,18 @@ impl<T: Transport> OnlineRound<T> {
     }
 
     /// One frame of this seat's provisional shots against the drawn world:
-    /// each flies by its own state machine and stops at the first tile,
-    /// edge, tank or frog it meets, its impact drawn there at once; beams
-    /// pressed since the last frame are drawn to where they stop.
+    /// a press since the last frame ripples the muzzle its first shot left
+    /// (the ripple a replica puts on a `Fired`, drawn here on the press
+    /// instead of a round trip later); each shot flies by its own state
+    /// machine and stops at the first tile, edge, tank or frog it meets,
+    /// its impact drawn there at once; beams pressed since the last frame
+    /// are drawn to where they stop.
     fn fly_own_shots(&mut self, dt: f32, world: &crate::simulation::present::PresentWorld, seat: u8) {
         use crate::simulation::present::{Contact, shot_half_extent};
         let (Some(predictor), Some(game)) = (self.predictor.as_mut(), self.replica.as_mut()) else { return };
+        for at in predictor.take_muzzles() {
+            game.draw_muzzle(at);
+        }
         predictor.advance_shots(dt, |kind, from, to| {
             world
                 .shot_contact(Some(seat), from, to, shot_half_extent(kind))
@@ -1366,6 +1373,77 @@ mod tests {
         let report = round.prediction().expect("a report");
         assert_eq!(report.crossings, 1, "the shell met the enemy in this client's picture: {report:?}");
         assert!(furthest < 90.0, "the shell was drawn {furthest} px out - past the enemy at 90");
+    }
+
+    /// **A press ripples its muzzle on the press** (§4.16): the provisional
+    /// shell leaves the barrel with the ripple a replica puts on a `Fired`,
+    /// on the frame of the press and once, where the shell is drawn; the
+    /// room's `Fired` for it, handed over a round trip and the picture's
+    /// delay later, draws no second one.
+    #[test]
+    fn a_press_ripples_the_muzzle_once_on_the_press_frame() {
+        if !tuning().online_predict_own_tank || !tuning().online_predict_shots {
+            return;
+        }
+        let (mut room, mut round) = room_and_round();
+        room.welcome();
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        // The room's world on its schedule, with nothing happening in it.
+        let quiet = |room: &Room, tick: u32| {
+            let mut s = encode::snapshot(&room.game, [0; MAX_SEATS]);
+            s.events.clear();
+            s.tick = tick;
+            s.server_ms = 5_000 + ((tick - 1) as f64 * 1000.0 / 60.0).round() as u32;
+            s
+        };
+        for tick in 1..=20u32 {
+            let s = quiet(&room, tick);
+            room.say(Msg::Snapshot(s));
+        }
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        room.heard();
+        // Ripples put on this frame: the presentation tick has aged them
+        // once.
+        let fresh = |round: &OnlineRound<loopback::Loopback>| -> Vec<crate::math::Vec2> {
+            let game = round.game().expect("a replica");
+            game.muzzle_flashes.iter().filter(|m| m.time < 1.5 / 60.0).map(|m| m.center).collect()
+        };
+        assert!(fresh(&round).is_empty(), "nothing fired yet");
+
+        round.frame(&Intent { fire: true, ..Intent::default() }, 1.0 / 60.0);
+        let rippled = fresh(&round);
+        assert_eq!(rippled.len(), 1, "one ripple on the press frame: {rippled:?}");
+        let shell = round
+            .game()
+            .expect("a replica")
+            .drawable_state()
+            .shots
+            .into_iter()
+            .find(|s| s.id >= crate::net::predict::PROVISIONAL_ID_BASE)
+            .expect("the provisional shell, drawn on the press");
+        let at = crate::math::Vec2::new(shell.x as f32 / 4.0, shell.y as f32 / 4.0);
+        assert!(at.distance_to(rippled[0]) <= 0.25, "the ripple is at the muzzle the shell left: {at:?} vs {:?}", rippled[0]);
+        let pressed = room
+            .heard()
+            .iter()
+            .find_map(|m| if let Msg::Intent(i) = m { i.fire.then_some(i.tick) } else { None })
+            .expect("the press went out");
+
+        // The room fires it. Render time reaches its `Fired` the picture's
+        // delay later, in real time.
+        let mut fired = quiet(&room, 21);
+        fired.events = vec![WireEvent::Fired { slot: 0, weapon: crate::net::wire::WeaponKind::Shell, input_tick: pressed }];
+        room.say(Msg::Snapshot(fired));
+        let deadline = Instant::now() + std::time::Duration::from_secs(3);
+        let mut handed_over = false;
+        while !handed_over && Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(4));
+            round.frame(&Intent::default(), 1.0 / 60.0);
+            let game = round.game().expect("a replica");
+            handed_over = game.events().iter().any(|e| matches!(e, crate::simulation::Event::Fired { slot: 0, .. }));
+            assert!(fresh(&round).is_empty(), "a second ripple for the press: {:?}", fresh(&round));
+        }
+        assert!(handed_over, "the room's `Fired` reached the picture");
     }
 
     /// The incoming-fire lead is the gap between where this client's
