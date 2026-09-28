@@ -23,6 +23,18 @@ pub struct TrackPoint {
     pub flying: bool,
 }
 
+/// Where and how the picture stopped a shot (`Track::stop`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Stop {
+    /// Index into the frames followed.
+    pub frame: usize,
+    pub x: f32,
+    pub y: f32,
+    /// Taken off the picture in flight, rather than bursting in its
+    /// impact frames.
+    pub vanished: bool,
+}
+
 /// One drawn shot over the frames it was drawn on, unbroken.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Track {
@@ -96,20 +108,32 @@ impl Track {
         (last.x + vx * ahead, last.y + vy * ahead)
     }
 
-    /// Where the picture stopped the shot and on which frame: the first
-    /// point after it flew where it no longer flies (its impact frames),
-    /// or - taken off the picture in flight - the frame after its last,
-    /// at the point its flight had carried it to by then. `None` when it
-    /// never flew, or was still flying when the frames ran out.
-    pub fn stop(&self, frames: &[FrameSample]) -> Option<(usize, f32, f32)> {
+    /// Where the picture stopped the shot: the first point after it flew
+    /// where it no longer flies (its impact frames, `vanished` false), or -
+    /// taken off the picture in flight - the frame after its last, at the
+    /// point its flight had carried it to by then. `None` when it never
+    /// flew, or was still flying when the frames ran out.
+    pub fn stop(&self, frames: &[FrameSample]) -> Option<Stop> {
         let flew = self.points.iter().position(|p| p.flying)?;
         if let Some(p) = self.points[flew..].iter().find(|p| !p.flying) {
-            return Some((p.frame, p.x, p.y));
+            return Some(Stop { frame: p.frame, x: p.x, y: p.y, vanished: false });
         }
         let gone = self.last().frame + 1;
         let at = frames.get(gone)?;
         let (x, y) = self.carried(frames, at.t_ms, at.t_ms - frames[self.last().frame].t_ms);
-        Some((gone, x, y))
+        Some(Stop { frame: gone, x, y, vanished: true })
+    }
+
+    /// The way it was last drawn moving, as a unit vector.
+    pub fn heading(&self) -> Option<(f32, f32)> {
+        let n = self.points.len();
+        if n < 2 {
+            return None;
+        }
+        let (a, b) = (self.points[n - 2], self.points[n - 1]);
+        let (dx, dy) = (b.x - a.x, b.y - a.y);
+        let len = (dx * dx + dy * dy).sqrt();
+        (len > 1e-3).then(|| (dx / len, dy / len))
     }
 
     /// How near `(x, y)` its drawn path passes: the segments between its
@@ -295,11 +319,11 @@ mod tests {
             vec![],
         ]);
         let tracks = follow(&f, |_| true);
-        let (frame, x, _) = tracks[0].stop(&f).expect("a stop");
-        assert_eq!(frame, 2);
-        assert!((x - 120.0).abs() < 0.01, "{x}");
+        let stop = tracks[0].stop(&f).expect("a stop");
+        assert_eq!((stop.frame, stop.vanished), (2, true));
+        assert!((stop.x - 120.0).abs() < 0.01, "{stop:?}");
         let g = frames(vec![vec![shot(3, 100.0, false, true)], vec![shot(3, 104.0, false, false)], vec![shot(3, 104.0, false, false)]]);
-        assert_eq!(follow(&g, |_| true)[0].stop(&g), Some((1, 104.0, 100.0)));
+        assert_eq!(follow(&g, |_| true)[0].stop(&g), Some(Stop { frame: 1, x: 104.0, y: 100.0, vanished: false }));
         let h = frames(vec![vec![shot(3, 100.0, false, true)], vec![shot(3, 110.0, false, true)]]);
         assert_eq!(follow(&h, |_| true)[0].stop(&h), None, "still flying when the frames ran out");
     }

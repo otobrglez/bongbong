@@ -127,18 +127,21 @@ the client's readings (`FrameSample::link`).
   - *hit* - press to the first enemy hit (shoot only, where the host is the
     only one shooting), and *guest fired* - press to the guest's `Fired`.
 - **incoming fire** - for each hit on the host, the shot that made it: a
-  shot not the host's whose drawn path passes the room's impact point and
-  which the picture stopped in the second before the hit was handed over -
-  its impact frames, or the frame it was taken off in flight (a client
-  drawing incoming fire in the present takes a shot that meets its drawn
-  hull off the picture there and then). *From afar* is the gap between
-  where the picture stopped it and the drawn hull's hit boxes (hull and
-  turret, as `Tank::hull_bbox_world` and `turret_bbox_world` build them,
-  grown by the shot's half extent), on that frame: nought locally, and
-  online for a strike drawn at the hull; *strike to hit* is how long the
-  strike stood before the damage was handed over; hits no drawn shot
-  accounts for (a beam, a ram, a blast) are counted, and so are *strikes
-  drawn with no hit* - a shot stopped at the hull the room judged a miss.
+  shot not the host's that the picture stopped in the second before the
+  hit was handed over, either taken off in flight on a path through the
+  room's impact point (a client drawing incoming fire in the present takes
+  a shot off the picture where its path meets the drawn hull, and draws
+  its impact there) or bursting at that point in its impact frames. *From
+  afar* is the gap between where the picture stopped it and the drawn
+  hull's hit boxes (hull and turret, as `Tank::hull_bbox_world` and
+  `turret_bbox_world` build them, grown by the shot's half extent), on that
+  frame: nought locally, and online for a strike drawn at the hull; a shot
+  drawn passing the hull that the room then bursts where the hull was a
+  moment ago is hit from afar. *Strike to hit* is how long the strike stood
+  before the damage was handed over; hits no drawn shot accounts for (a
+  beam, a ram, a blast, a shot never drawn) are counted, and so are
+  *strikes drawn with no hit* - a shot stopped at the hull the room judged
+  a miss.
 - per seat: prediction nudges, snaps and max error, the lead's ups and downs,
   the interpolation delay, jitter, lateness p50/p95, extrapolated frames,
   head-of-line stalls, the playout rate, the interpolator's corrections, the

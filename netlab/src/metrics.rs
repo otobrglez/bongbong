@@ -9,6 +9,7 @@
 
 use serde::Serialize;
 
+use bongbong::simulation::present::segment_box;
 use bongbong::tank::Dir;
 use bongbong::{TANK_HULL_BBOX_BY_ROW, TANK_TEXTURE_SIZE, TANK_TURRET_BBOX_BY_ROW};
 
@@ -116,6 +117,12 @@ pub const PATH_EXTEND_PX: f32 = 64.0;
 /// A shot the picture stopped this near the drawn hull's hit boxes struck
 /// it.
 pub const STRIKE_PX: f32 = 1.0;
+
+/// How far past a frame's flight a shot taken off the picture may have
+/// met the drawn hull: a client drawing incoming fire in the present
+/// carries a shot further than a frame's flight while it catches up to its
+/// lead (`net::round::CATCH_UP_MS`).
+pub const STRIKE_REACH_PX: f32 = 48.0;
 
 /// The own hull's input latency: from each frame `seat`'s scripted
 /// direction changes to the first frame the drawn hull of `seat` has moved
@@ -532,12 +539,14 @@ fn events_of(frames: &[FrameSample], pick: impl Fn(&EventSample) -> bool) -> Vec
 ///
 /// Read off the picture's own shots: every shot not the seat's, followed
 /// by the room's id, and where the picture stopped it - its impact frames,
-/// or the frame it was taken off in flight (a client drawing incoming fire
-/// in the present takes a shot that meets its drawn hull off the picture
-/// there and then, `net::round`). A hit is put down to the shot whose
-/// drawn path passes the room's impact point and which the picture
-/// stopped in the `STRIKE_WINDOW_MS` before the hit was handed over; of
-/// several, the one stopped nearest the hull.
+/// or the frame it was taken off in flight, at the point its path met the
+/// drawn hull when that is why it went (a client drawing incoming fire in
+/// the present takes a shot that meets its drawn hull off the picture
+/// there and then, `net::round`). A hit is put down to a shot the picture
+/// stopped in the `STRIKE_WINDOW_MS` before the hit was handed over that
+/// was taken off in flight on a path through the room's impact point, or
+/// that burst at that point; of several, the one stopped nearest the
+/// hull.
 #[derive(Clone, Copy, Debug, Default, Serialize, serde::Deserialize, PartialEq)]
 pub struct IncomingFire {
     pub hits: usize,
@@ -587,16 +596,54 @@ pub fn hit_boxes(row: i32, dir: u8) -> [(f32, f32, f32, f32); 2] {
 /// The draw scale every tank has (`Tank::scale`).
 pub const TANK_SCALE: f32 = 2.0;
 
+/// Where the picture stopped a shot that was taken off in flight, if that
+/// was a strike on `seat`'s drawn hull: the point its line of flight
+/// enters the hull's hit boxes (grown by its half extent), at most a
+/// frame's flight and `STRIKE_REACH_PX` past where it was last drawn - a
+/// client drawing incoming fire in the present takes a shot off the
+/// picture where its path this frame meets the hull, and draws the impact
+/// there. `None` for a shot that vanished anywhere else.
+fn strike_point(track: &shots::Track, stop: &shots::Stop, frames: &[FrameSample], seat: usize) -> Option<(f32, f32)> {
+    use bongbong::Position;
+    let hull = frames[stop.frame].tank(seat)?;
+    let (dx, dy) = track.heading()?;
+    let last = track.last();
+    let dt = (frames[stop.frame].t_ms - frames[last.frame].t_ms).max(0.0) as f32 / 1000.0;
+    let reach = shots::speed(track.kind) * dt * shots::FOLLOW_FLIGHT + STRIKE_REACH_PX;
+    let (p0, p1) = (Position::new(last.x, last.y), Position::new(last.x + dx * reach, last.y + dy * reach));
+    let half = shots::half_extent(track.kind);
+    let t = hit_boxes(hull.row, hull.dir)
+        .iter()
+        .filter_map(|&(ox, oy, hx, hy)| {
+            segment_box(p0, p1, Position::new(hull.x + ox, hull.y + oy), Position::new(hx + half, hy + half))
+        })
+        .min_by(f32::total_cmp)?;
+    Some((p0.x + (p1.x - p0.x) * t, p0.y + (p1.y - p0.y) * t))
+}
+
 /// Hits on `seat` over `frames`, and where the picture had the shots that
 /// made them (`IncomingFire`).
 pub fn incoming_fire(frames: &[FrameSample], seat: usize) -> IncomingFire {
     let mut out = IncomingFire::default();
     let tracks = shots::follow(frames, |s| s.seat != Some(seat as u8) && !s.provisional);
-    let stops: Vec<Option<(usize, f32, f32)>> = tracks.iter().map(|t| t.stop(frames)).collect();
+    // Where the picture stopped each shot: a vanished one at its strike
+    // on the hull where it was one.
+    let stops: Vec<Option<shots::Stop>> = tracks
+        .iter()
+        .map(|t| {
+            let mut stop = t.stop(frames)?;
+            if stop.vanished
+                && let Some((x, y)) = strike_point(t, &stop, frames, seat)
+            {
+                (stop.x, stop.y) = (x, y);
+            }
+            Some(stop)
+        })
+        .collect();
     let stop_gap = |k: usize| -> Option<f32> {
-        let (e, x, y) = stops[k]?;
-        let hull = frames[e].tank(seat)?;
-        Some(gap_to_hull(hull, x, y, shots::half_extent(tracks[k].kind)))
+        let stop = stops[k]?;
+        let hull = frames[stop.frame].tank(seat)?;
+        Some(gap_to_hull(hull, stop.x, stop.y, shots::half_extent(tracks[k].kind)))
     };
     let mut claimed = vec![false; tracks.len()];
     let (mut afar, mut lead) = (Vec::new(), Vec::new());
@@ -607,13 +654,21 @@ pub fn incoming_fire(frames: &[FrameSample], seat: usize) -> IncomingFire {
                 continue;
             }
             out.hits += 1;
+            // The shot that made it: one the picture took off in flight
+            // on a path through the room's impact point, or one it drew
+            // bursting there - a shot that burst anywhere else was the
+            // room's word on another target.
             let best = (0..tracks.len())
                 .filter(|&k| !claimed[k])
                 .filter_map(|k| {
-                    let (e, _, _) = stops[k]?;
-                    let fresh = e <= i && f.t_ms - frames[e].t_ms <= STRIKE_WINDOW_MS;
-                    let on_path = tracks[k].path_distance(x, y, PATH_EXTEND_PX) <= PATH_MATCH_PX;
-                    (fresh && on_path).then(|| (k, e, stop_gap(k).unwrap_or(f32::INFINITY)))
+                    let stop = stops[k]?;
+                    let fresh = stop.frame <= i && f.t_ms - frames[stop.frame].t_ms <= STRIKE_WINDOW_MS;
+                    let made_it = if stop.vanished {
+                        tracks[k].path_distance(x, y, PATH_EXTEND_PX) <= PATH_MATCH_PX
+                    } else {
+                        ((stop.x - x).powi(2) + (stop.y - y).powi(2)).sqrt() <= PATH_MATCH_PX
+                    };
+                    (fresh && made_it).then(|| (k, stop.frame, stop_gap(k).unwrap_or(f32::INFINITY)))
                 })
                 .min_by(|a, b| a.2.total_cmp(&b.2).then(b.1.cmp(&a.1)));
             match best {
@@ -631,7 +686,7 @@ pub fn incoming_fire(frames: &[FrameSample], seat: usize) -> IncomingFire {
     let end = frames.last().map_or(0.0, |f| f.t_ms);
     out.phantom_strikes = (0..tracks.len())
         .filter(|&k| !claimed[k])
-        .filter(|&k| stops[k].is_some_and(|(e, _, _)| end - frames[e].t_ms > STRIKE_WINDOW_MS))
+        .filter(|&k| stops[k].is_some_and(|s| end - frames[s.frame].t_ms > STRIKE_WINDOW_MS))
         .filter(|&k| stop_gap(k).is_some_and(|g| g <= STRIKE_PX))
         .count();
     out.from_afar_px = Stat::of(&afar);
@@ -1004,6 +1059,40 @@ mod tests {
         // Facing right, the scout's turret box reaches 28 px ahead of the
         // hull's centre (9 px out, 19 half long), and the shell's own 3.
         assert!((gap - (100.0 - 28.0 - 3.0)).abs() < 0.01, "{gap}");
+    }
+
+    /// A shell that burst somewhere else on the same line was the room's
+    /// word on another target: a later hit on that line is not put down
+    /// to it, from however far.
+    #[test]
+    fn a_shell_that_burst_elsewhere_did_not_make_the_hit() {
+        let mut frames: Vec<FrameSample> = (0..40).map(|i| frame(i as f64 * 16.0, None, 0.0, 0.0)).collect();
+        for i in 2..6 {
+            frames[i].shots = vec![enemy(5, 200.0 - 10.0 * (i - 2) as f32, true)];
+        }
+        for i in 6..12 {
+            frames[i].shots = vec![enemy(5, 150.0, false)];
+        }
+        frames[30].events = vec![EventSample::HitPlayer { player: 0, x: 30.0, y: 0.0 }];
+        let inc = incoming_fire(&frames, 0);
+        assert_eq!((inc.hits, inc.unseen), (1, 1), "{inc:?}");
+        assert_eq!(inc.from_afar_px.n, 0);
+    }
+
+    /// A shell taken off the picture a hull's length short of the hull,
+    /// flying at it, was struck there by a client drawing incoming fire
+    /// ahead of the room: its strike is on the hull, not where its last
+    /// frame of flight would have put it.
+    #[test]
+    fn a_shell_taken_off_flying_at_the_hull_struck_it() {
+        let mut frames = still(20);
+        for i in 2..6 {
+            frames[i].shots = vec![enemy(5, 100.0 - 8.0 * (i - 2) as f32, true)];
+        }
+        frames[9].events = vec![EventSample::HitPlayer { player: 0, x: 25.0, y: 0.0 }];
+        let inc = incoming_fire(&frames, 0);
+        assert_eq!((inc.hits, inc.unseen), (1, 0));
+        assert_eq!(inc.from_afar_px.p50, Some(0.0), "{inc:?}");
     }
 
     /// A strike the room never answered, and a hit nothing drawn accounts
