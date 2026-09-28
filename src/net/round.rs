@@ -1333,10 +1333,13 @@ mod tests {
         let rad = seat.rotation.to_radians();
         let ahead = crate::math::Vec2::new(seat.position.x + rad.sin() * 90.0, seat.position.y - rad.cos() * 90.0);
         room.game.debug_teleport(1, ahead, Some(seat.rotation)).expect("an enemy in slot 1");
+        // Twenty ticks of that world, stamped on the room's schedule:
+        // render time stands the delay behind the newest tick, which has to
+        // be one of the teleported world's rather than the welcome's.
         for i in 0..20u32 {
             let mut s = encode::snapshot(&room.game, [0; MAX_SEATS]);
             s.tick = i + 1;
-            s.server_ms = 5_000 + 50 * i;
+            s.server_ms = 5_000 + (i as f64 * 1000.0 / 60.0).round() as u32;
             room.say(Msg::Snapshot(s));
         }
         round.frame(&Intent::default(), 1.0 / 60.0);
@@ -1350,7 +1353,7 @@ mod tests {
             .expect("the press went out");
         let mut fired = encode::snapshot(&room.game, [0; MAX_SEATS]);
         fired.tick = 21;
-        fired.server_ms = 6_000;
+        fired.server_ms = 5_000 + (20.0 * 1000.0 / 60.0f64).round() as u32;
         fired.events = vec![WireEvent::Fired { slot: 0, weapon: crate::net::wire::WeaponKind::Shell, input_tick: pressed }];
         room.say(Msg::Snapshot(fired));
         let mut furthest = 0.0f32;
