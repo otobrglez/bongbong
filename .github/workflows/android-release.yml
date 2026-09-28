@@ -3,7 +3,8 @@ name: Android Release
 # Builds the Android APK (`just build-android`: the arm64 NativeActivity
 # shared object, the assets, the icon, signed with the release key) and
 # attaches it to the GitHub Release release.yml made for the same tag, as
-# bongbong-aarch64-linux-android.apk beside the cargo-dist archives. dist
+# bongbong-aarch64-linux-android.apk beside the cargo-dist archives, with a
+# row in the notes' download table (tools/android/release_table.sh). dist
 # cannot build an APK, and release.yml is generated and checked by dist, so
 # this is its own workflow - the shape testflight.yml has for iOS.
 #
@@ -152,4 +153,7 @@ jobs:
             || { echo "::error::no GitHub Release for $RELEASE_TAG - release.yml creates it; run this after it, or with upload=false"; exit 1; }
           gh release upload "$RELEASE_TAG" --clobber \
             bongbong-aarch64-linux-android.apk bongbong-aarch64-linux-android.apk.sha256
+          # dist wrote the notes' download table before the APK existed;
+          # give it its row.
+          GH_REPO="${{ github.repository }}" tools/android/release_table.sh "$RELEASE_TAG" bongbong-aarch64-linux-android.apk
           echo "uploaded to https://github.com/${{ github.repository }}/releases/tag/$RELEASE_TAG"
