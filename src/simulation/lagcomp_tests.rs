@@ -47,16 +47,22 @@ fn game() -> Game {
     game.seed_override = Some(7);
     game.player_row_override = Some(0);
     game.map = MapFile::from_toml_str(MAP).expect("test map parses");
+    start_round(&mut game);
+    game
+}
+
+/// `init`, then the scene every test starts from: seat 0 at its start
+/// facing east with no shield, the enemy holding its fire.
+fn start_round(game: &mut Game) {
     game.init(W, H);
     game.intro_timer = 0.0;
     let seat = game.seat(0).expect("seat 0");
     game.place_tank(seat, cell_to_world(5, 10), Some(90.0)).expect("seat placed");
     game.debug_set_tank(0, &debug::TankPatch { shield_hp: Some(0.0), ..Default::default() }).expect("seat 0");
     // The enemy holds its fire: nothing but the seat's shot is in the air.
-    let slot = enemy_slot(&game);
+    let slot = enemy_slot(game);
     game.debug_set_tank(slot, &debug::TankPatch { shells_ammo: Some(0), shield_hp: Some(0.0), ..Default::default() })
         .expect("the enemy");
-    game
 }
 
 fn enemy_slot(game: &Game) -> usize {
@@ -377,20 +383,102 @@ fn a_seat_nobody_owns_is_shoved_in_the_world_and_told_nothing() {
     assert!(shoves(&game).is_empty());
 }
 
-#[test]
-fn an_owned_seat_is_told_its_recoil() {
+/// Seat 0 armed by `patch`, owned by its client, pulling the trigger
+/// once: the round after that update.
+fn owned_seat_fires(patch: debug::TankPatch) -> Game {
     let mut game = game();
     park_enemy_far(&mut game);
+    game.debug_set_tank(0, &patch).expect("seat 0");
     step(&mut game, Input::default());
     own_seat(&mut game);
     step(&mut game, fire());
-    assert!(game.events().iter().any(|e| matches!(e, Event::Fired { slot: 0, .. })), "the seat fired");
+    game
+}
+
+fn seat_fired(game: &Game, weapon: crate::tank::ActiveWeapon) -> bool {
+    game.events().iter().any(|e| matches!(e, Event::Fired { slot: 0, weapon: w } if *w == weapon.name()))
+}
+
+#[test]
+fn an_owned_seat_is_not_told_the_recoil_its_client_applies() {
+    use crate::tank::ActiveWeapon;
+    // The client kicks its own hull at every shell, bolt and bullet it
+    // launches (`net::predict`), so a `Shoved` for them would kick it
+    // twice. The room's own copy of the hull is still kicked.
+    let arms = [
+        (ActiveWeapon::Shell, debug::TankPatch::default()),
+        (ActiveWeapon::Plasma, debug::TankPatch { plasma_ammo: Some(4), ..Default::default() }),
+        (ActiveWeapon::Minigun, debug::TankPatch { minigun_ammo: Some(20), ..Default::default() }),
+    ];
+    for (weapon, patch) in arms {
+        let game = owned_seat_fires(patch);
+        assert!(seat_fired(&game, weapon), "{weapon:?}: the seat fired: {:?}", game.events());
+        assert!(shoves(&game).is_empty(), "{weapon:?}: {:?}", shoves(&game));
+        let (_, _, v) = game.seat_motion(0).expect("seat 0");
+        assert!(v.x < 0.0, "{weapon:?}: the room's hull is kicked back along the barrel, which points east: {v:?}");
+    }
+}
+
+#[test]
+fn an_owned_seat_is_told_its_missile_recoil() {
+    // The client draws no missile and so kicks nothing for one: the room
+    // tells it.
+    let game = owned_seat_fires(debug::TankPatch { missile_ammo: Some(4), ..Default::default() });
+    assert!(seat_fired(&game, crate::tank::ActiveWeapon::Missiles), "the pod fired: {:?}", game.events());
     let shoves = shoves(&game);
-    assert_eq!(shoves.len(), 1, "one kick: {shoves:?}");
+    assert_eq!(shoves.len(), 1, "one kick, for the one missile out of the pod: {shoves:?}");
     let (seat, dv) = shoves[0];
     assert_eq!(seat, 0);
     assert!(dv.x < 0.0 && dv.y.abs() < 1e-3, "back along the barrel, which points east: {dv:?}");
-    assert!(-dv.x <= tuning().shell_recoil_max_speed + 1e-3);
+    assert!(-dv.x <= tuning().missile_recoil_max_speed + 1e-3);
+}
+
+#[test]
+fn an_owned_seat_beside_a_missile_blast_is_told_the_shove() {
+    let mut game = game();
+    park_enemy_far(&mut game);
+    step(&mut game, Input::default());
+    // An enemy missile coming down just north-east of the hull: well
+    // inside its blast, and clear of the barrel's.
+    let (hull, _, _) = game.seat_motion(0).expect("seat 0");
+    let at = Position::new(hull.x + 20.0, hull.y - 20.0);
+    let mut missile = crate::missile::Missile::spawn(at, Vec2::new(1.0, 0.0), Owner::Enemy(enemy_slot(&game)), 0, at);
+    missile.arrived = true;
+    game.world.spawn((missile,));
+    own_seat(&mut game);
+    step(&mut game, Input::default());
+    assert!(game.events().iter().any(|e| matches!(e, Event::MissileBlast { .. })), "the missile burst");
+    let shoves = shoves(&game);
+    assert_eq!(shoves.len(), 1, "one shove: {shoves:?}");
+    let (seat, dv) = shoves[0];
+    assert_eq!(seat, 0);
+    assert!(dv.x < 0.0 && dv.y > 0.0, "away from the blast, south-west: {dv:?}");
+}
+
+#[test]
+fn a_new_round_starts_with_no_seat_owned() {
+    let mut game = game();
+    park_enemy_far(&mut game);
+    for _ in 0..30 {
+        step(&mut game, Input::default());
+    }
+    own_seat(&mut game);
+    assert!(game.seat_is_owned(0));
+    // The update the client owned, by the last round's count.
+    let owned = game.frame() + 1;
+    start_round(&mut game);
+    assert!(!game.seat_is_owned(0), "a new round owns nothing until a pose says so");
+    // This round's update of the same number is the room's: a shell that
+    // lands then pushes the hull in the world and tells nobody.
+    park_enemy_far(&mut game);
+    while game.frame() + 1 < owned {
+        step(&mut game, Input::default());
+    }
+    shell_into_seat(&mut game);
+    step(&mut game, Input::default());
+    assert_eq!(game.frame(), owned);
+    assert!(seat_hit(&game), "the shell landed on the seat");
+    assert!(shoves(&game).is_empty(), "{:?}", shoves(&game));
 }
 
 #[test]

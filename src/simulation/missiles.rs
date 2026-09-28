@@ -119,10 +119,11 @@ impl Game {
     /// as it came down. When `live`: the side opposing `owner` takes
     /// linear-falloff damage and every live tank in range is shoved (the
     /// wreck blast's rule - `explosion_hit` - so one draw per tank in
-    /// range, players first, then enemies); frogs of the opposing side take
-    /// damage; tiles crack and barrels go off (`damage_obstacle`, as any
-    /// blast). Then the show: a small fireball leaning downrange, a ripple,
-    /// a scorch and flattened grass.
+    /// range, players first, then enemies; a seat's shove goes on
+    /// `Frame::shoves`, which tells a client-owned hull's client); frogs of
+    /// the opposing side take damage; tiles crack and barrels go off
+    /// (`damage_obstacle`, as any blast). Then the show: a small fireball
+    /// leaning downrange, a ripple, a scorch and flattened grass.
     fn missile_blast(&mut self, f: &mut Frame, center: Position, owner: Owner, dir: Vec2, live: bool) {
         let params = BlastParams::missile();
         f.events.push(Event::MissileBlast { slot: owner.slot(), x: center.x, y: center.y });
@@ -131,7 +132,9 @@ impl Game {
                 let mut q = self.world.query_one::<&mut Tank>(player);
                 let tank = q.get().expect("player entity always has a Tank");
                 let hurts = !owner.same_side(tank.owner());
-                explosion_hit(tank, center, hurts, &mut self.physics, &mut f.rng, &mut f.kills, &params);
+                if let Some(dv) = explosion_hit(tank, center, hurts, &mut self.physics, &mut f.rng, &mut f.kills, &params) {
+                    f.shoves.push(tank.owner(), dv);
+                }
             }
             for tank in self.world.query::<&mut Tank>().with::<&Ai>().iter() {
                 let hurts = !owner.same_side(tank.owner());
