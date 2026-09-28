@@ -18,7 +18,9 @@
 //! 2. Send the local seat's intent - the same `Intent` a local round
 //!    would drive player 1 with, seat 0 of the frame's `Input` - one
 //!    packet per tick of real time, plus or minus one when the lead says
-//!    so (`Lead`, docs/online-coop-prd.md §4.12).
+//!    so (`Lead`, docs/online-coop-prd.md §4.12), and only while the
+//!    room's round is playing: the lobby before and after a round sends
+//!    nothing, so a rematch never opens on the last round's poses.
 //! 3. Write the interpolated picture into the replica, the predicted
 //!    hull and shots over it, and tick its cosmetics.
 //!
@@ -248,11 +250,17 @@ pub struct OnlineRound<T: Transport> {
     /// The local seat's own hull, run ahead of the room and pulled back
     /// by each snapshot (stage 2, docs/online-coop-prd.md §4.12). Built
     /// beside the replica from the same `Welcome`, so the two step
-    /// against the same statics. `None` until a welcome arrives, and
-    /// read only while `online_predict_own_tank` is on - the knob is
-    /// live, so turning it off hands the hull straight back to the
-    /// interpolator without dropping the sandbox.
+    /// against the same statics. `None` until a welcome arrives. Drawn
+    /// only while `online_predict_own_tank` is on - the knob is live, so
+    /// turning it off hands the drawn hull straight back to the
+    /// interpolator without dropping the sandbox - and kept in step with
+    /// the room while that knob is on or the client owns its hull, since
+    /// an owned hull's poses come from it whatever is drawn.
     predictor: Option<Predictor>,
+    /// `online_predict_own_tank` pinned for a test, which may not write
+    /// the process-wide table.
+    #[cfg(test)]
+    predict_own_tank: Option<bool>,
     /// The last thing the room refused or the socket said on its way out.
     note: Option<String>,
     /// How the round the room just finished went, from the moment it
@@ -296,7 +304,34 @@ impl<T: Transport> OnlineRound<T> {
             ended: None,
             scratch: Vec::new(),
             tuning_before: None,
+            #[cfg(test)]
+            predict_own_tank: None,
         }
+    }
+
+    /// Whether the own hull is drawn predicted (`online_predict_own_tank`,
+    /// live).
+    fn predict_own_tank(&self) -> bool {
+        #[cfg(test)]
+        if let Some(on) = self.predict_own_tank {
+            return on;
+        }
+        tuning().online_predict_own_tank
+    }
+
+    /// Whether provisional shots are drawn: the own hull predicted and
+    /// `online_predict_shots` on, both live.
+    fn predict_shots(&self) -> bool {
+        self.predict_own_tank() && tuning().online_predict_shots
+    }
+
+    /// Whether the sandbox keeps in step with the room: it takes every
+    /// snapshot's world, accounts and confirms its presses and takes the
+    /// room's shoves. Always while the client owns its hull, whose every
+    /// pose comes from the sandbox whether or not the prediction is drawn;
+    /// otherwise only while the prediction is.
+    fn sandbox_follows_room(&self) -> bool {
+        self.client_hull || self.predict_own_tank()
     }
 
     /// One rendered frame: what arrived, what this seat is doing, and the
@@ -696,7 +731,19 @@ impl<T: Transport> OnlineRound<T> {
     /// nothing rides along with the next packet, so a tap between two of
     /// them is never lost. The lead may make a tick's packet two, or
     /// none (`Lead`).
+    ///
+    /// Only while the room's round is playing. In the lobby - waiting for
+    /// the first round, or back from one - there is nothing to steer, and
+    /// an owned hull's packets would carry the finished round's pose into
+    /// the next one's mailbox, so a rematch would open with the seat placed
+    /// where the last round left it. Nothing is owed across the gap: the
+    /// round starts on a fresh tick and an untouched trigger.
     fn send(&mut self, intent: &Intent, dt: f32) {
+        if *self.client.phase() != Phase::Playing {
+            self.send_owed = 0.0;
+            self.pending_fire = false;
+            return;
+        }
         self.pending_fire |= intent.fire;
         self.send_owed = (self.send_owed + dt.max(0.0)).min(SEND_CATCH_UP_TICKS as f32 * PHYSICS_FIXED_DT);
         while self.send_owed >= PHYSICS_FIXED_DT {
@@ -731,13 +778,14 @@ impl<T: Transport> OnlineRound<T> {
         let Some(msg) = self.client.prepare_intent(&out) else { return };
         let mut msg = msg.with_view(self.view.0, self.view.1);
         self.pending_fire = false;
+        let shots = self.predict_shots();
         if let Some(predictor) = self.predictor.as_mut() {
             // The knob is live: read each tick, so a shot pressed after
             // it was turned on is drawn and one after it was turned off
             // is not. Shots are drawn only with the own tank predicted -
             // the one test `draw` asks before it keeps the room's own
             // muzzle ripples and beams off the picture.
-            predictor.set_shots_enabled(tuning().online_predict_own_tank && tuning().online_predict_shots);
+            predictor.set_shots_enabled(shots);
             predictor.step_at(msg.tick, msg.intent());
             // Owning the hull, the packet says where this tick left it,
             // and the room puts the seat there (§4.14).
@@ -781,25 +829,31 @@ impl<T: Transport> OnlineRound<T> {
 
     /// The picture at render time, then the cosmetics of one frame.
     ///
-    /// In order (docs/online-coop-prd.md §4.16): the interpolated room is
-    /// written into the replica; this seat's `Fired` confirm its presses;
-    /// the room's copies of this seat's shots are paired with the
-    /// provisionals and taken off the picture; the owned hull is drawn
-    /// between its ticks; the provisionals fly one frame and stop at the
-    /// first thing they meet in the drawn world; beams pressed since the
-    /// last frame are drawn; everyone else's shots are carried forward to
-    /// the present; then the frame's cosmetics tick.
+    /// In order (docs/online-coop-prd.md §4.16): this seat's laser `Fired`
+    /// in the frame's snapshot claim the beams this client drew
+    /// (`confirm_beams`); the interpolated room is written into the
+    /// replica, less what this client drew itself - its shots' muzzle
+    /// ripples and the room's copies of the beams just claimed; this
+    /// seat's other `Fired` confirm their presses; the room's copies of
+    /// this seat's shots are paired with the provisionals and kept off the
+    /// picture while a provisional stands for them; the predicted hull is
+    /// written at the sandbox's newest tick; everyone else's shots are
+    /// carried forward to the present, then the provisionals fly one frame
+    /// and stop at the first thing they meet in the drawn world, an
+    /// opposing shell among it; beams pressed since the last frame are
+    /// drawn to where they stop; then the frame's cosmetics tick.
     fn draw(&mut self, dt: f32, now: i64) {
         if self.replica.is_none() {
             return;
         }
         let sampled = self.interp.sample(now);
-        let predicting_shots = tuning().online_predict_own_tank && tuning().online_predict_shots && self.predictor.is_some();
+        let predicting_shots = self.predict_shots() && self.predictor.is_some();
         if let Some(frame) = &sampled {
+            let beams = self.confirm_beams(&frame.snapshot);
             // What this seat drew on its own press - its shots' muzzle
-            // ripples, its beams - is not drawn twice.
+            // ripples, the beams it claimed - is not drawn twice.
             let show = match self.client.seat() {
-                Some(seat) if predicting_shots => apply::Show::OwnShotsDrawn(seat),
+                Some(seat) if predicting_shots => apply::Show::OwnShotsDrawn { seat, beams },
                 _ => apply::Show::All,
             };
             if let Some(game) = self.replica.as_mut() {
@@ -884,7 +938,7 @@ impl<T: Transport> OnlineRound<T> {
     ///
     /// True when the seat was written: the drawn hull is the prediction's.
     fn write_predicted(&mut self) -> bool {
-        if !tuning().online_predict_own_tank {
+        if !self.predict_own_tank() {
             return false;
         }
         let (Some(predictor), Some(game)) = (self.predictor.as_ref(), self.replica.as_mut()) else { return false };
@@ -907,15 +961,17 @@ impl<T: Transport> OnlineRound<T> {
         true
     }
 
-    /// This frame's room copies of this seat's shots: handed to the
-    /// predictor to pair with its provisionals, then taken off the picture
-    /// where a provisional stands for them - the provisional is the one
-    /// drawn for the shot's whole life, on this client's timeline, and is
-    /// never swapped for the room's copy in the past (§4.16).
+    /// This frame's room copies of this seat's shots, at the picture's
+    /// tick: handed to the predictor to pair with its provisionals, then
+    /// taken off the picture where a provisional stands for them - the
+    /// provisional is the one drawn for the shot's whole life, on this
+    /// client's timeline, and is never swapped for the room's copy in the
+    /// past (§4.16).
     fn pair_own_shots(&mut self) {
+        let tick = self.view.0;
         let (Some(predictor), Some(game), Some(seat)) = (self.predictor.as_mut(), self.replica.as_mut(), self.client.seat()) else { return };
         let own = game.seat_shots(seat);
-        predictor.observe_server_shots(&own);
+        predictor.observe_server_shots(tick, &own);
         game.remove_shots(&predictor.hidden_server_shots());
     }
 
@@ -1063,9 +1119,10 @@ impl<T: Transport> OnlineRound<T> {
     /// the sandbox is a projection of the server's world, so everything
     /// the prediction steps against - other hulls, destroyed walls, a
     /// speed boost - arrives by the same path the replica takes
-    /// (`net::predict::Predictor::reconcile`).
+    /// (`net::predict::Predictor::reconcile`). An owned hull's sandbox takes
+    /// it whether or not the prediction is drawn: its poses are the seat's.
     fn reconcile(&mut self, snapshot: &Snapshot) {
-        if !tuning().online_predict_own_tank {
+        if !self.sandbox_follows_room() {
             return;
         }
         let (Some(predictor), Some(seat)) = (self.predictor.as_mut(), self.client.seat()) else { return };
@@ -1085,7 +1142,7 @@ impl<T: Transport> OnlineRound<T> {
     /// The shots themselves are confirmed later, when the frame reaches
     /// them.
     fn note_fired(&mut self, snapshot: &Snapshot) {
-        if !tuning().online_predict_own_tank {
+        if !self.sandbox_follows_room() {
             return;
         }
         let (Some(predictor), Some(seat)) = (self.predictor.as_mut(), self.client.seat()) else { return };
@@ -1106,9 +1163,9 @@ impl<T: Transport> OnlineRound<T> {
     /// The interpolator handed a snapshot's events over: each `Fired` of
     /// this seat's confirms the press that travelled on its input tick
     /// (`Predictor::confirm_fired`), and one with no press waiting seeds
-    /// the local gate from the room's.
+    /// the local gate from the room's. A laser's is `confirm_beams`'.
     fn confirm_shots(&mut self, frame: &Snapshot) {
-        if !tuning().online_predict_own_tank {
+        if !self.sandbox_follows_room() {
             return;
         }
         let (Some(predictor), Some(seat)) = (self.predictor.as_mut(), self.client.seat()) else { return };
@@ -1119,6 +1176,34 @@ impl<T: Transport> OnlineRound<T> {
                 predictor.confirm_fired(weapon, input_tick);
             }
         }
+    }
+
+    /// The interpolator is handing a snapshot's events over, before they
+    /// are applied: each laser `Fired` of this seat's claims the oldest
+    /// beam this client drew at or before its input tick
+    /// (`Predictor::confirm_beam`), and the ones that did are the room's
+    /// beams for this seat the replica leaves out - bit `k` for the `k`th
+    /// (`apply::Show::OwnShotsDrawn`). A beam the client never drew - the
+    /// local gate refused a press the room fired - is not claimed, so the
+    /// room's is drawn, and it seeds the local gate instead.
+    fn confirm_beams(&mut self, frame: &Snapshot) -> u8 {
+        if !self.sandbox_follows_room() {
+            return 0;
+        }
+        let (Some(predictor), Some(seat)) = (self.predictor.as_mut(), self.client.seat()) else { return 0 };
+        let mut claimed = 0u8;
+        let mut k = 0u32;
+        for event in &frame.events {
+            if let WireEvent::Fired { slot, weapon: crate::net::wire::WeaponKind::Laser, input_tick } = *event
+                && slot == seat as u16
+            {
+                if predictor.confirm_beam(input_tick) && k < u8::BITS {
+                    claimed |= 1 << k;
+                }
+                k += 1;
+            }
+        }
+        claimed
     }
 }
 
@@ -1685,6 +1770,195 @@ mod tests {
             assert!(fresh(&round).is_empty(), "a second ripple for the press: {:?}", fresh(&round));
         }
         assert!(handed_over, "the room's `Fired` reached the picture");
+    }
+
+    /// The room's world on its schedule, nothing happening in it, with
+    /// this seat's input `tick` applied.
+    fn on_schedule(room: &Room, tick: u32) -> Snapshot {
+        let mut s = encode::snapshot(&room.game, [0; MAX_SEATS]);
+        s.events.clear();
+        s.tick = tick;
+        s.acked[0] = tick;
+        s.server_ms = 5_000 + ((tick - 1) as f64 * 1000.0 / 60.0).round() as u32;
+        s
+    }
+
+    /// Frames, a few milliseconds apart, until the picture hands over this
+    /// seat's `Fired` - render time reaching the snapshot that carried it -
+    /// and that frame's events; `None` if it never does. The frames owe no
+    /// packets (`dt` 0), so the sandbox stands on the tick it had: render
+    /// time runs on the wall clock whatever a frame's `dt` says.
+    fn until_handed_over(round: &mut OnlineRound<loopback::Loopback>) -> Option<Vec<crate::simulation::Event>> {
+        let deadline = Instant::now() + std::time::Duration::from_secs(3);
+        while Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(4));
+            round.frame(&Intent::default(), 0.0);
+            let events = round.game().expect("a replica").events();
+            if events.iter().any(|e| matches!(e, crate::simulation::Event::Fired { slot: 0, .. })) {
+                return Some(events.to_vec());
+            }
+        }
+        None
+    }
+
+    /// **Only a beam this client drew keeps the room's off the picture**
+    /// (§4.16): the room fires two beams for this seat in one snapshot, one
+    /// for the press the client drew on and one for an input it drew
+    /// nothing on - a press its gate refused. The first `Fired` claims
+    /// nothing, so its beam is the room's to draw; the second claims the
+    /// drawn one, and its beam is not drawn again.
+    #[test]
+    fn the_rooms_beam_is_left_out_only_for_a_press_this_client_drew() {
+        use crate::net::wire::{WeaponKind, quantise_pos};
+        if !tuning().online_predict_shots {
+            return;
+        }
+        let (mut room, mut round) = room_and_round();
+        round.predict_own_tank = Some(true);
+        let laser = crate::simulation::debug::TankPatch { laser_charges: Some(5), ..Default::default() };
+        room.game.debug_set_tank(0, &laser).expect("the seat's tank");
+        room.welcome();
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        for tick in 1..=20u32 {
+            let s = on_schedule(&room, tick);
+            room.say(Msg::Snapshot(s));
+        }
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        room.heard();
+        round.frame(&Intent { fire: true, ..Intent::default() }, 1.0 / 60.0);
+        let pressed = room
+            .heard()
+            .iter()
+            .find_map(|m| if let Msg::Intent(i) = m { i.fire.then_some(i.tick) } else { None })
+            .expect("the press went out");
+        assert!(round.game().expect("a replica").laser_beams.len() == 1, "the beam is drawn on the press");
+        assert!(pressed > 0, "an input before the press to have fired on");
+
+        let (refused_x, drawn_x) = (160.0f32, 320.0f32);
+        let beam = |x: f32| WireEvent::LaserBeam {
+            x0: quantise_pos(x),
+            y0: quantise_pos(200.0),
+            x1: quantise_pos(x),
+            y1: quantise_pos(40.0),
+            variant: 0,
+            seat: 0,
+        };
+        let mut fired = on_schedule(&room, 21);
+        fired.events = vec![
+            WireEvent::Fired { slot: 0, weapon: WeaponKind::Laser, input_tick: pressed - 1 },
+            beam(refused_x),
+            WireEvent::Fired { slot: 0, weapon: WeaponKind::Laser, input_tick: pressed },
+            beam(drawn_x),
+        ];
+        room.say(Msg::Snapshot(fired));
+        let events = until_handed_over(&mut round).expect("the room's `Fired` reached the picture");
+        let beams: Vec<f32> = events
+            .iter()
+            .filter_map(|e| if let crate::simulation::Event::LaserBeam { x0, .. } = e { Some(*x0) } else { None })
+            .collect();
+        assert_eq!(beams, vec![refused_x], "only the beam this client never drew is the room's");
+        let drawn = round.game().expect("a replica").laser_beams.iter().any(|b| b.start.x == refused_x);
+        assert!(drawn, "and it is drawn");
+    }
+
+    /// **An owned hull's sandbox follows the room with the prediction's
+    /// knob off** (§4.14): its poses are the seat's whether or not the
+    /// prediction is drawn, so it takes the room's world - here the seat
+    /// out of shells, so a press kicks nothing -, the room's shoves, and
+    /// the room's `Fired`, which holds the local gate.
+    #[test]
+    fn an_owned_hull_follows_the_room_with_the_prediction_knob_off() {
+        use crate::net::wire::{WeaponKind, quantise_velocity};
+        let (mut room, mut round) = room_and_round();
+        round.set_client_hull(true);
+        round.predict_own_tank = Some(false);
+        room.welcome();
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        let dry = crate::simulation::debug::TankPatch { shells_ammo: Some(0), ..Default::default() };
+        room.game.debug_set_tank(0, &dry).expect("the seat's tank");
+        for tick in 1..=20u32 {
+            let s = on_schedule(&room, tick);
+            room.say(Msg::Snapshot(s));
+        }
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        let still = round.own_hull_at().expect("a hull");
+
+        // The room's word is no shells: the press is refused here too, and
+        // kicks nothing.
+        round.frame(&Intent { fire: true, ..Intent::default() }, 1.0 / 60.0);
+        for _ in 0..5 {
+            round.frame(&Intent::default(), 1.0 / 60.0);
+        }
+        let after = round.own_hull_at().expect("a hull");
+        assert!((after.0 - still.0).abs() + (after.1 - still.1).abs() < 0.01, "a press on no shells kicked the hull: {still:?} -> {after:?}");
+        assert_eq!(round.prediction().map(|p| p.cooldown), Some(0.0), "and opened no cooldown");
+
+        // The room shoved the hull: the poses carry it on.
+        let mut shoved = on_schedule(&room, 21);
+        shoved.events = vec![WireEvent::Shoved { seat: 0, vx: quantise_velocity(240.0), vy: 0 }];
+        room.say(Msg::Snapshot(shoved));
+        for _ in 0..6 {
+            round.frame(&Intent::default(), 1.0 / 60.0);
+        }
+        let pushed = round.own_hull_at().expect("a hull");
+        assert!(pushed.0 > after.0 + 1.0, "the shove did not move the owned hull: {after:?} -> {pushed:?}");
+
+        // The room fired for the seat on its latest input: handed over, its
+        // `Fired` holds the local gate.
+        let mut fired = on_schedule(&room, 22);
+        let latest = round.client.intent_tick() - 1;
+        fired.events = vec![WireEvent::Fired { slot: 0, weapon: WeaponKind::Shell, input_tick: latest }];
+        room.say(Msg::Snapshot(fired));
+        until_handed_over(&mut round).expect("the room's `Fired` reached the picture");
+        let cooldown = round.prediction().map_or(0.0, |p| p.cooldown);
+        assert!(cooldown > 0.0, "the room's shot did not hold the local gate");
+    }
+
+    /// **The lobby sends nothing** (§4.14): a seat welcomed into a waiting
+    /// room, or back in the room after a round, has no round to steer, and
+    /// an owned hull's packets would carry the last round's pose into the
+    /// next. Intents go out only while the round is playing, and a trigger
+    /// pulled in the lobby is not carried into the round.
+    #[test]
+    fn the_lobby_sends_no_intents_before_or_after_a_round() {
+        let (mut room, mut round) = room_and_round();
+        round.set_client_hull(true);
+        let intents = |room: &mut Room| -> Vec<crate::net::wire::IntentMsg> {
+            room.heard().into_iter().filter_map(|m| if let Msg::Intent(i) = m { Some(i) } else { None }).collect()
+        };
+        let fire = Intent { move_dir: Some(Dir::Up), fire: true, ..Intent::default() };
+        // A waiting room's welcome: seated, no round yet.
+        let roster = vec![Seat { seat: 0, nick: "host".into(), chassis: 3 }];
+        let mut waiting = encode::welcome(&room.game, 0, roster, "{}".into(), [0; MAX_SEATS]).expect("the map serialises");
+        waiting.protocol = PROTOCOL_VERSION;
+        waiting.snapshot.server_ms = room.server_ms;
+        room.say(Msg::Lobby(Lobby::RoomCreated { code: "AK7QX".into() }));
+        room.say(Msg::Welcome(waiting));
+        for _ in 0..10 {
+            round.frame(&fire, 1.0 / 60.0);
+        }
+        assert_eq!(*round.phase(), Phase::Lobby);
+        assert!(intents(&mut room).is_empty(), "a seat in a waiting room steered nothing");
+
+        // The round starts: one packet a tick, and no trigger from the lobby.
+        room.welcome();
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        assert_eq!(*round.phase(), Phase::Playing);
+        for _ in 0..4 {
+            round.frame(&Intent::default(), 1.0 / 60.0);
+        }
+        let playing = intents(&mut room);
+        assert_eq!(playing.len(), 5, "one packet a tick while the round plays");
+        assert!(playing.iter().all(|i| !i.fire), "a trigger pulled in the lobby rode into the round");
+        assert!(playing.iter().all(|i| i.owned), "and each carries the owned hull's pose");
+
+        // The round is over: back in the lobby, nothing goes out.
+        room.say(Msg::Lobby(Lobby::Ended { outcome: RoundOutcome::Won }));
+        for _ in 0..10 {
+            round.frame(&fire, 1.0 / 60.0);
+        }
+        assert_eq!(*round.phase(), Phase::Lobby);
+        assert!(intents(&mut room).is_empty(), "the lobby sent the finished round's poses");
     }
 
     /// The incoming-fire lead is the gap between where this client's

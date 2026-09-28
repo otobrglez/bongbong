@@ -18,9 +18,10 @@
 //! `Game::predict_seat` is ever called on it, so no RNG is drawn, nothing
 //! ages, and nothing but the one hull moves.
 //!
-//! What is predicted is the own hull, and the own shot leaving the
-//! muzzle. Damage, pickups, other tanks and everyone else's shots stay
-//! the server's, and stay interpolated.
+//! What is predicted is the own hull, and the own shots for their whole
+//! flight. Damage, pickups, other tanks and everyone else's shots stay
+//! the server's, drawn from its snapshots (`net::round` carries the
+//! incoming fire forward to the present).
 //!
 //! **Provisional shots** (`online_predict_shots`, on by default). A shot
 //! is drawn from the predicted muzzle on the packet its press travels on,
@@ -34,26 +35,31 @@
 //! second shell `tank_twin_shot_delay_seconds` on, the burst's bullets
 //! `minigun_bullet_delay_seconds` apart), each spawned from the sandbox's
 //! pose on the frame it is due, as the server's `tick_queued_shots` would.
-//! A provisional flies by dead reckoning and meets nothing: a replica runs
-//! no hit test, and a hit is the server's word.
+//! A provisional runs its projectile's own state machine - the muzzle
+//! frames, then flight (`ProvisionalShot::advance`) - and is swept every
+//! frame against the drawn world through the contact `advance_shots` is
+//! handed: where it meets a tile, the field's edge, a tank or a frog it
+//! stops and plays its impact at once. Damage stays the room's.
 //!
-//! A press is **retired against the server's own `Fired`**, oldest first,
-//! since a seat's shots leave in the order the trigger was pulled and
-//! come back in that order - which is what lets a provisional be matched
-//! without `Fired` carrying a client tick, and so without a protocol
-//! change. It happens on the frame the interpolator hands that `Fired`
-//! over, which is the frame the server's shot appears in the replica, so
-//! nothing flickers; a press's later shots go their own delay after, as
-//! theirs appear. A press no `Fired` ever claims was one the server
-//! refused and goes quietly after `PROVISIONAL_SECONDS`, counted.
+//! A press is **confirmed by its `Fired`**, which names the input tick the
+//! press travelled on (`confirm_fired`), on the frame the interpolator
+//! hands that `Fired` over - the frame the room's copy of its first shot
+//! appears in the replica. Each live shot is then paired with its room
+//! copy (`observe_server_shots`, in launch order), the copy is kept off the
+//! picture for as long as the provisional stands for it
+//! (`hidden_server_shots`), and the shot is dropped once that copy has
+//! gone (`Live::finished`). A shot whose copy was due and never showed is
+//! orphaned: left out of the pairing, so the next shot's copy is never
+//! taken for it, and dropped as soon as it is off the picture. A press
+//! nobody claims within `refusal_after` was one the room refused, and is
+//! dropped, counted.
 //!
-//! It is still a lie: a shell drawn at the present passes through tanks
-//! drawn `online_interpolation_delay_ms` in the past, an error of the
-//! delay times `shell_speed` - sixteen pixels at 33 ms, a quarter of a
-//! hull, against a shot that answers the press on the frame it is pressed
-//! instead of a round trip later. What would make it correct rather than
-//! merely early is the server rewinding targets to the shooter's view
-//! (§4.12, decision 9), which is not built.
+//! The room judges the shot against the hulls this client was drawing
+//! when it pressed - lag compensation (§4.16: `IntentMsg::view_tick`,
+//! `HitBoxHistory`, `sweep_rewound`) - so a shot stopped at a drawn hull is
+//! the room's hit too. Where the room still disagrees, its copy is shown
+//! from there on and the disagreement counted (`HIT_MATCH_PX`,
+//! `MISS_MARGIN_PX`, `crossings_hit`/`crossings_missed`).
 //!
 //! **What still costs a correction**, deliberately, and what it costs:
 //!
@@ -77,8 +83,10 @@
 //!
 //! **Measured** (`report`): every correction sorted into the buckets of
 //! `ERROR_BUCKETS_PX`, the largest, nudges and snaps, shots drawn and
-//! refused, the inputs in flight. The dev server's `status.round` reads
-//! it and the rig's tests assert on it.
+//! refused, the inputs in flight, and the crossings - provisionals stopped
+//! against a drawn tank or frog, and how the room's copy answered them.
+//! The dev server's `status.round` reads it and the rig's tests assert on
+//! it.
 
 use std::collections::VecDeque;
 
@@ -135,6 +143,20 @@ pub const PROVISIONAL_SECONDS: f32 = 0.6;
 /// copy has to fly, still in flight, before the room is taken to have
 /// missed: a hull's half-width, so a hit on the far face is not a miss.
 pub const MISS_MARGIN_PX: f32 = 24.0;
+
+/// How near where a provisional shot stopped against a tank the room's
+/// copy has to burst for the room to have hit it too: a hull's half-width
+/// and a margin, so the same hull a little elsewhere in the room's rewound
+/// picture is the same hit, and a burst on another tank or on the wall
+/// behind is not.
+pub const HIT_MATCH_PX: f32 = 40.0;
+
+/// How many ticks after its due tick a press's later shot - a twin's
+/// second barrel, a burst's next bullet - may reach the picture before it
+/// is taken as never coming: the room counts their delays down in seconds
+/// (`tick_queued_shots`) and the sandbox on the whole-tick grid, and the
+/// two can land a tick apart.
+pub const LATER_SHOT_SLACK_TICKS: u32 = 1;
 
 /// How long a room shot of this seat that no press has claimed is kept
 /// off the picture: long enough for the press whose `Fired` rides in the
@@ -202,12 +224,22 @@ struct Live {
     /// Where it met something in the drawn world, and whether that was a
     /// tank: its impact was drawn there at once.
     local_hit: Option<(Position, bool)>,
-    /// The room's copy flew on past `local_hit`: the room disagreed, and
-    /// its shot is drawn instead from here on.
+    /// The room's copy flew on past `local_hit`, or burst away from it:
+    /// the room disagreed, and its shot is drawn instead from here on.
     show_server: bool,
     /// Its local tank hit has been scored against the room's word
     /// (`crossings_hit`/`crossings_missed`).
     scored: bool,
+    /// Sandbox ticks after its press it left the muzzle: its room copy
+    /// leaves that many ticks after the press's own.
+    after: u32,
+    /// Its room copy was due in the picture on an earlier frame
+    /// (`observe_server_shots`).
+    due: bool,
+    /// Its room copy was due and never came - its snapshot was stepped
+    /// over, or the copy died before one was cut. Nothing is paired with it
+    /// any more, so the next shot's copy is never taken for it.
+    orphaned: bool,
 }
 
 impl Live {
@@ -218,9 +250,15 @@ impl Live {
     }
 
     /// Nothing left to do: off the picture, and the room's copy either
-    /// came and went or never came inside `wait` seconds.
+    /// came and went, is known never to be coming, or never came inside
+    /// `wait` seconds.
     fn finished(&self, wait: f32) -> bool {
-        !self.drawn() && (self.server_gone || (self.server.is_none() && self.age > wait))
+        !self.drawn() && (self.server_gone || self.orphaned || (self.server.is_none() && self.age > wait))
+    }
+
+    /// Waiting for its room copy, and still able to take one.
+    fn pairable(&self) -> bool {
+        self.server.is_none() && !self.orphaned
     }
 }
 
@@ -240,6 +278,11 @@ struct Press {
     accounted: bool,
     /// The room's `Fired` has been handed over: its shots are real.
     confirmed: bool,
+    /// The picture's tick on the first frame its shots were paired after
+    /// the confirmation (`observe_server_shots`): the tick its first
+    /// shot's room copy is in the picture by, and each later shot's its own
+    /// delay after.
+    confirmed_tick: Option<u32>,
     /// Its shots are drawn (`online_predict_shots` when it was pulled).
     /// An undrawn press is an owned hull's: it runs the gate and kicks the
     /// hull at each launch, and puts nothing on screen.
@@ -300,14 +343,16 @@ pub struct PredictionReport {
     pub shots_refused: u32,
     /// Provisional shots on screen right now.
     pub shots_on_screen: usize,
-    /// Provisional shots this client drew hitting a tank in its own
-    /// picture (decision 9's measurement, §4.16).
+    /// Provisional shots this client drew stopping against a tank or a
+    /// frog in its own picture (decision 9's measurement, §4.16).
     pub crossings: u32,
-    /// Of those, the ones whose room copy hit too.
+    /// Of those, the ones whose paired room copy burst within
+    /// `HIT_MATCH_PX` of where the provisional stopped: the room hit it too.
     pub crossings_hit: u32,
-    /// And the ones whose room copy flew on: the room judged the shot
-    /// against somewhere else. With lag compensation this should be rare;
-    /// its rate is what says whether the rewind is right.
+    /// And the ones whose room copy flew on past `MISS_MARGIN_PX` or burst
+    /// somewhere else: the room judged the shot against a different
+    /// picture. With lag compensation this should be rare; its rate is
+    /// what says whether the rewind is right.
     pub crossings_missed: u32,
     /// Inputs the server had not acknowledged at the last reconciliation:
     /// the replay's length, the lead plus the round trip in ticks.
@@ -348,6 +393,12 @@ pub struct Predictor {
     next_press: u32,
     /// Laser presses whose `Fired` has not arrived: the charges owed.
     beams_owed: VecDeque<u32>,
+    /// Laser presses whose beam this client drew, by input tick, oldest
+    /// first, with seconds since the press: each claims the room's beam
+    /// for it when that `Fired` is handed over (`confirm_beam`), so only
+    /// the room's beams the client drew are kept off the picture. Dropped
+    /// past the refusal wait.
+    drawn_beams: VecDeque<(u32, f32)>,
     /// Beams drawn this tick, for the round to finish and draw.
     beams: Vec<BeamPress>,
     /// Where this frame's provisional shots met something, for the round's
@@ -396,6 +447,7 @@ impl Predictor {
             presses: VecDeque::new(),
             next_press: 0,
             beams_owed: VecDeque::new(),
+            drawn_beams: VecDeque::new(),
             beams: Vec::new(),
             impacts: Vec::new(),
             muzzles: Vec::new(),
@@ -560,6 +612,7 @@ impl Predictor {
                     self.beams_owed.push_back(tick);
                     if drawn {
                         self.beams.push(BeamPress { start, dir, variant });
+                        self.drawn_beams.push_back((tick, 0.0));
                         self.report.shots_drawn += 1;
                     }
                 }
@@ -580,6 +633,7 @@ impl Predictor {
             age: 0.0,
             accounted: false,
             confirmed: false,
+            confirmed_tick: None,
             drawn,
             pending,
             live: Vec::new(),
@@ -630,17 +684,20 @@ impl Predictor {
                 }
                 if press.drawn {
                     let id = self.next_shot;
-                self.next_shot = self.next_shot.wrapping_add(1);
-                press.live.push(Live {
-                    id,
-                    shot,
-                    age: 0.0,
-                    server: None,
-                    server_gone: false,
-                    local_hit: None,
-                    show_server: false,
-                    scored: false,
-                });
+                    self.next_shot = self.next_shot.wrapping_add(1);
+                    press.live.push(Live {
+                        id,
+                        shot,
+                        age: 0.0,
+                        server: None,
+                        server_gone: false,
+                        local_hit: None,
+                        show_server: false,
+                        scored: false,
+                        after: press.ticks,
+                        due: false,
+                        orphaned: false,
+                    });
                 } else {
                     press.undrawn += 1;
                 }
@@ -673,7 +730,8 @@ impl Predictor {
     /// With no press to confirm - prediction was off for it, or it was
     /// pulled before the sandbox existed - the room's shot still sets the
     /// local gate, measured back from `input_tick`, so the next press
-    /// agrees with the room's cooldown.
+    /// agrees with the room's cooldown. A laser's `Fired` is
+    /// `confirm_beam`'s.
     pub fn confirm_fired(&mut self, weapon: WeaponKind, input_tick: u32) {
         if weapon == WeaponKind::Laser {
             return;
@@ -699,28 +757,66 @@ impl Predictor {
                     press.accounted = true;
                 }
             }
-            None => {
-                let t = tuning();
-                let interval = match weapon {
-                    WeaponKind::Shell | WeaponKind::Plasma | WeaponKind::Laser => t.player_fire_interval,
-                    WeaponKind::Minigun => t.minigun_burst_cooldown_seconds(),
-                    WeaponKind::Missiles => t.missile_volley_cooldown_seconds(),
-                    WeaponKind::Flamethrower => 0.0,
-                };
-                let ago = self.tick.wrapping_sub(input_tick) as f32 * PHYSICS_FIXED_DT;
-                self.cooldown = self.cooldown.max(interval - ago);
-            }
+            None => self.seed_gate(weapon, input_tick),
         }
     }
 
-    /// This frame's room copies of this seat's shots: pair the new ones
-    /// with the confirmed presses' shots in launch order - a shot already
-    /// off the picture included, since its copy arrives a round trip after
-    /// it and is still its copy - note the copies that have left, and let
-    /// the room's outcome correct a provisional that disagrees: a hit the
-    /// client did not draw snaps it to the room's impact, and a room copy
-    /// that flies on past where the client drew a hit is shown instead.
-    pub fn observe_server_shots(&mut self, shots: &[ServerShot]) {
+    /// The interpolator is handing over the room's `Fired` for a laser of
+    /// this seat, on input tick `input_tick`: the oldest beam this client
+    /// drew at or before that tick is the one the room fired, and true says
+    /// the room's own beam for it is not drawn again. False - the local gate
+    /// refused a press the room fired, or beams are not drawn - leaves the
+    /// room's beam on the picture, and its shot seeds the local gate as an
+    /// unclaimed `confirm_fired` does.
+    pub fn confirm_beam(&mut self, input_tick: u32) -> bool {
+        if self.drawn_beams.front().is_some_and(|&(t, _)| t <= input_tick) {
+            self.drawn_beams.pop_front();
+            return true;
+        }
+        self.seed_gate(WeaponKind::Laser, input_tick);
+        false
+    }
+
+    /// The room fired `weapon` for this seat on input tick `input_tick`
+    /// with no press here to answer: its cooldown, measured back from that
+    /// tick, holds the local gate, so the next press agrees with the room.
+    fn seed_gate(&mut self, weapon: WeaponKind, input_tick: u32) {
+        let t = tuning();
+        let interval = match weapon {
+            WeaponKind::Shell | WeaponKind::Plasma | WeaponKind::Laser => t.player_fire_interval,
+            WeaponKind::Minigun => t.minigun_burst_cooldown_seconds(),
+            WeaponKind::Missiles => t.missile_volley_cooldown_seconds(),
+            WeaponKind::Flamethrower => 0.0,
+        };
+        let ago = self.tick.wrapping_sub(input_tick) as f32 * PHYSICS_FIXED_DT;
+        self.cooldown = self.cooldown.max(interval - ago);
+    }
+
+    /// This frame's room copies of this seat's shots, drawn at the
+    /// picture's tick `tick`: pair the new ones with the confirmed presses'
+    /// shots in launch order - a shot already off the picture included,
+    /// since its copy arrives a round trip after it and is still its copy -
+    /// note the copies that have left, and let the room's outcome correct a
+    /// provisional that disagrees: a hit the client did not draw snaps it to
+    /// the room's impact, and a room copy that flies on past where the
+    /// client drew it stop, or bursts away from there, is shown instead.
+    ///
+    /// **A copy that never shows cannot take the next shot's.** A press's
+    /// first shot leaves the room's muzzle on the tick that logs its
+    /// `Fired`, so its copy is in the picture on the frame that confirms the
+    /// press (`confirm_fired` runs before this), and each later shot's its
+    /// own delay after (`Live::after`). A shot still unpaired on the frame
+    /// after its copy came due never had one in the picture - the snapshot
+    /// that carried it was stepped over, or the copy died between two - and
+    /// is orphaned before the frame's copies are paired; otherwise the next
+    /// shot's copy would pair with it, and every copy after with the shot
+    /// before its own for as long as the firing went on.
+    pub fn observe_server_shots(&mut self, tick: u32, shots: &[ServerShot]) {
+        for live in self.presses.iter_mut().filter(|p| p.confirmed).flat_map(|p| p.live.iter_mut()) {
+            if live.due && live.server.is_none() {
+                live.orphaned = true;
+            }
+        }
         let paired: std::collections::BTreeSet<u16> =
             self.presses.iter().flat_map(|p| p.live.iter().filter_map(|l| l.server)).collect();
         let mut fresh: Vec<&ServerShot> = shots.iter().filter(|s| !paired.contains(&s.id)).collect();
@@ -731,7 +827,7 @@ impl Predictor {
                 .iter_mut()
                 .filter(|p| p.confirmed)
                 .flat_map(|p| p.live.iter_mut())
-                .find(|l| l.server.is_none() && l.shot.kind == s.kind);
+                .find(|l| l.pairable() && l.shot.kind == s.kind);
             match slot {
                 Some(live) => {
                     live.server = Some(s.id);
@@ -740,6 +836,15 @@ impl Predictor {
                 None => {
                     self.unpaired.entry(s.id).or_insert(self.clock);
                 }
+            }
+        }
+        // Whose copies are due in this frame's picture: the first shot's
+        // from the confirming frame on, a later one's its delay after.
+        for press in self.presses.iter_mut().filter(|p| p.confirmed) {
+            let since = tick.saturating_sub(*press.confirmed_tick.get_or_insert(tick));
+            for live in &mut press.live {
+                let slack = if live.after > 0 { LATER_SHOT_SLACK_TICKS } else { 0 };
+                live.due |= since >= live.after + slack;
             }
         }
         let by_id: std::collections::BTreeMap<u16, &ServerShot> = shots.iter().map(|s| (s.id, s)).collect();
@@ -770,9 +875,24 @@ impl Predictor {
                         }
                     }
                 }
-                Some((_, true)) if s.impact && !live.scored => {
-                    live.scored = true;
-                    self.report.crossings_hit += 1;
+                Some((at, tank)) if !live.show_server && s.impact => {
+                    if s.position.distance_to(at) <= HIT_MATCH_PX {
+                        // Burst where this client drew it stop: the room
+                        // hit what the picture showed it hitting.
+                        if tank && !live.scored {
+                            live.scored = true;
+                            self.report.crossings_hit += 1;
+                        }
+                    } else {
+                        // Burst somewhere else: the room judged the shot
+                        // against something the picture did not show it
+                        // meeting, and its burst is the one drawn.
+                        live.show_server = true;
+                        if tank && !live.scored {
+                            live.scored = true;
+                            self.report.crossings_missed += 1;
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -799,11 +919,18 @@ impl Predictor {
     /// machine, and one in flight is swept against the drawn world by
     /// `contact` (the round's `PresentWorld`): where it meets something
     /// it stops and plays its impact at once - damage stays the room's. A
-    /// shot off the picture is kept until its room copy has come and gone
-    /// (`Live::finished`); a press nobody claimed within the refusal wait
-    /// goes, counted.
+    /// shot off the picture is kept until its room copy has come and gone,
+    /// or is known never to be coming (`Live::finished`); a press nobody
+    /// claimed within the refusal wait goes, counted, and so does a drawn
+    /// beam whose `Fired` never came.
     pub fn advance_shots(&mut self, dt: f32, mut contact: impl FnMut(ProvisionalKind, Position, Position) -> Option<(Position, bool)>) {
         self.clock += dt;
+        for beam in &mut self.drawn_beams {
+            beam.1 += dt;
+        }
+        while self.drawn_beams.front().is_some_and(|&(_, age)| age > self.refusal_after) {
+            self.drawn_beams.pop_front();
+        }
         let mut presses = std::mem::take(&mut self.presses);
         for press in &mut presses {
             press.age += dt;
@@ -876,7 +1003,7 @@ impl Predictor {
         std::mem::take(&mut self.muzzles)
     }
 
-    /// How many shots are on screen that the server has not yet drawn.
+    /// How many provisional shots are on the picture.
     pub fn provisional_count(&self) -> usize {
         self.presses.iter().flat_map(|p| p.live.iter()).filter(|l| l.drawn()).count()
     }
@@ -1384,30 +1511,31 @@ mod tests {
             flying: false,
             impact: false,
         };
-        predictor.observe_server_shots(&[server]);
+        predictor.observe_server_shots(10, &[server]);
         assert_eq!(predictor.hidden_server_shots(), vec![7], "the room's copy is taken off the picture");
         fly(&mut predictor, 20);
         assert_eq!(predictor.provisional_count(), 1, "the provisional flies on in its place");
         // An unclaimed shot of this seat's is held back a moment, then drawn.
         let stray = ServerShot { id: 9, ..server };
-        predictor.observe_server_shots(&[server, stray]);
+        predictor.observe_server_shots(13, &[server, stray]);
         assert!(predictor.hidden_server_shots().contains(&9), "held a moment for a press to claim it");
         fly(&mut predictor, 12);
-        predictor.observe_server_shots(&[server, stray]);
+        predictor.observe_server_shots(16, &[server, stray]);
         assert!(!predictor.hidden_server_shots().contains(&9), "nothing claimed it: drawn");
     }
 
     /// **A late room copy finds its own shot.** The first shot meets a
-    /// wall at once and plays out before the room's copy of it arrives;
-    /// a second press is in flight when that copy turns up. The copy is
+    /// wall at once and plays out before the room's copy of it arrives -
+    /// with its `Fired`, a round trip and the picture's delay after the
+    /// press - and a second press is in flight when it does. The copy is
     /// the first shot's - hidden, and nothing moves the second - and the
-    /// second shot's own copy, arriving after, is the second's.
+    /// second shot's own copy, arriving with its own `Fired`, is the
+    /// second's.
     #[test]
     fn a_late_room_copy_pairs_with_its_own_finished_shot_not_the_next() {
         let mut predictor = Predictor::new(round_with(single_barrel_row(), 0), 0, 0);
-        predictor.set_refusal_after(1.0);
+        predictor.set_refusal_after(2.0);
         let first = predictor.step(press());
-        predictor.confirm_fired(WeaponKind::Shell, first);
         fly(&mut predictor, 12);
         let (_, shot) = predictor.shots().next().expect("the first shell in flight");
         let wall = shot.position;
@@ -1418,11 +1546,10 @@ mod tests {
         let ticks = (tuning().player_fire_interval / PHYSICS_FIXED_DT).ceil() as usize;
         idle_ticks(&mut predictor, ticks);
         let second = predictor.step(press());
-        predictor.confirm_fired(WeaponKind::Shell, second);
         fly(&mut predictor, 12);
         let (second_id, before) = predictor.shots().next().expect("the second shell in flight");
-        // The first shot's copy arrives now, bursting where the first shot
-        // hit: it is the first's.
+        // The first shot's `Fired` is handed over now, and its copy with
+        // it, bursting where the first shot hit: it is the first's.
         let copy = |id, position, flying, impact| ServerShot {
             id,
             kind: ProvisionalKind::Shell,
@@ -1431,21 +1558,119 @@ mod tests {
             flying,
             impact,
         };
-        predictor.observe_server_shots(&[copy(1, wall, false, true)]);
+        predictor.confirm_fired(WeaponKind::Shell, first);
+        predictor.observe_server_shots(40, &[copy(1, wall, false, true)]);
         assert_eq!(predictor.hidden_server_shots(), vec![1], "the late copy is hidden as the first shot's");
         let (id, after) = predictor.shots().next().expect("the second shell still in flight");
         assert_eq!(id, second_id, "one id for the second shell's life");
         assert!(after.is_flying() && after.position == before.position, "the second shell is not moved to the first's impact");
         assert!(predictor.take_impacts().iter().all(|&p| p == wall), "no impact drawn for the second shell");
-        // The second's own copy, flying, pairs with the second.
-        predictor.observe_server_shots(&[copy(1, wall, false, true), copy(2, before.position, true, false)]);
+        // The second's `Fired` and its own copy, flying: the second's.
+        predictor.confirm_fired(WeaponKind::Shell, second);
+        predictor.observe_server_shots(43, &[copy(1, wall, false, true), copy(2, before.position, true, false)]);
         let mut hidden = predictor.hidden_server_shots();
         hidden.sort_unstable();
         assert_eq!(hidden, vec![1, 2], "both copies are their own shots'");
         // The first's copy goes, and the first shot with it.
-        predictor.observe_server_shots(&[copy(2, before.position, true, false)]);
+        predictor.observe_server_shots(46, &[copy(2, before.position, true, false)]);
         fly(&mut predictor, 1);
         assert_eq!(predictor.hidden_server_shots(), vec![2]);
+    }
+
+    /// **A copy that never shows takes nobody's.** Press A's `Fired` is
+    /// handed over with no copy of its shot in the picture - the snapshot
+    /// that carried it was stepped over, or the copy died between two -
+    /// and press B's is handed over the next snapshot with B's copy in it:
+    /// the copy is B's, not A's, whose shot is orphaned and goes as soon as
+    /// it is off the picture rather than waiting out the refusal wait; and
+    /// a third press's copy is the third's, so nothing stays shifted.
+    #[test]
+    fn a_shot_whose_copy_never_shows_does_not_take_the_next_ones() {
+        let mut predictor = Predictor::new(round_with(single_barrel_row(), 0), 0, 0);
+        predictor.set_refusal_after(5.0);
+        let interval = (tuning().player_fire_interval / PHYSICS_FIXED_DT).ceil() as usize;
+        let copy = |id: u16| ServerShot {
+            id,
+            kind: ProvisionalKind::Shell,
+            position: Position::new(0.0, 0.0),
+            velocity: crate::math::Vec2::new(0.0, -500.0),
+            flying: true,
+            impact: false,
+        };
+        let a = predictor.step(press());
+        fly(&mut predictor, 20);
+        idle_ticks(&mut predictor, interval);
+        let b = predictor.step(press());
+        predictor.confirm_fired(WeaponKind::Shell, a);
+        predictor.observe_server_shots(30, &[]);
+        predictor.confirm_fired(WeaponKind::Shell, b);
+        predictor.observe_server_shots(33, &[copy(5)]);
+        assert_eq!(predictor.presses[1].live[0].server, Some(5), "B's copy is B's");
+        assert_eq!(predictor.presses[0].live[0].server, None, "and not A's");
+        assert!(predictor.presses[0].live[0].orphaned, "A's copy was due and never came");
+        assert_eq!(predictor.hidden_server_shots(), vec![5]);
+
+        // A's shell - in flight, while B's is still in its muzzle frames -
+        // meets a wall and plays its impact out; it goes the moment it is
+        // off the picture, well inside the refusal wait.
+        predictor.advance_shots(1.0 / 60.0, |_, _, to| Some((to, false)));
+        assert!(predictor.presses[1].live[0].local_hit.is_none(), "B's shell was not in flight yet");
+        let mut frames = 0;
+        while predictor.presses_waiting() > 1 && frames < 120 {
+            fly(&mut predictor, 1);
+            frames += 1;
+            predictor.observe_server_shots(33 + frames, &[copy(5)]);
+        }
+        assert_eq!(predictor.presses_waiting(), 1, "A's orphaned shot went once it was off the picture");
+        assert_eq!(predictor.presses[0].tick, b, "and B is the press left");
+
+        // A third press pairs with its own copy.
+        idle_ticks(&mut predictor, interval);
+        let c = predictor.step(press());
+        predictor.confirm_fired(WeaponKind::Shell, c);
+        predictor.observe_server_shots(200, &[copy(5), copy(6)]);
+        assert_eq!(predictor.presses[0].live[0].server, Some(5), "B keeps its copy");
+        assert_eq!(predictor.presses[1].live[0].server, Some(6), "C's copy is C's");
+        let mut hidden = predictor.hidden_server_shots();
+        hidden.sort_unstable();
+        assert_eq!(hidden, vec![5, 6]);
+    }
+
+    /// A press's later shot - the twin's second barrel - has its copy due
+    /// its delay after the first's, so it is not orphaned while that delay
+    /// runs: its copy, arriving then, is still its own.
+    #[test]
+    fn a_twins_second_copy_is_awaited_for_its_delay() {
+        let mut predictor = Predictor::new(round_with(twin_barrel_row(), 0), 0, 0);
+        predictor.set_refusal_after(5.0);
+        let delay = (tuning().tank_twin_shot_delay_seconds / PHYSICS_FIXED_DT).ceil() as u32;
+        let pressed = predictor.step(press());
+        idle_ticks(&mut predictor, delay as usize + 2);
+        assert_eq!(predictor.provisional_count(), 2, "both barrels have left");
+        let copy = |id: u16| ServerShot {
+            id,
+            kind: ProvisionalKind::Shell,
+            position: Position::new(0.0, 0.0),
+            velocity: crate::math::Vec2::new(0.0, -500.0),
+            flying: false,
+            impact: false,
+        };
+        predictor.confirm_fired(WeaponKind::Shell, pressed);
+        // Frames a snapshot apart: the first barrel's copy at once, the
+        // second's in the first snapshot the twin's delay has reached.
+        let mut tick = 30;
+        predictor.observe_server_shots(tick, &[copy(1)]);
+        loop {
+            tick += 3;
+            if tick >= 30 + delay {
+                break;
+            }
+            predictor.observe_server_shots(tick, &[copy(1)]);
+        }
+        predictor.observe_server_shots(tick, &[copy(1), copy(2)]);
+        let servers: Vec<Option<u16>> = predictor.presses[0].live.iter().map(|l| l.server).collect();
+        assert_eq!(servers, vec![Some(1), Some(2)], "each barrel's copy is its own");
+        assert!(predictor.presses[0].live.iter().all(|l| !l.orphaned));
     }
 
     /// A shot that meets something in the drawn world stops there and
@@ -1468,10 +1693,72 @@ mod tests {
         // The room's copy flies on well past it: the room missed.
         let past = Position::new(wall.x + shot.velocity.x * 0.2, wall.y + shot.velocity.y * 0.2);
         let server = ServerShot { id: 3, kind: ProvisionalKind::Shell, position: past, velocity: shot.velocity, flying: true, impact: false };
-        predictor.observe_server_shots(&[server]);
-        predictor.observe_server_shots(&[server]);
+        predictor.observe_server_shots(10, &[server]);
+        predictor.observe_server_shots(13, &[server]);
         assert!(!predictor.hidden_server_shots().contains(&3), "the room's copy is shown");
         assert_eq!(predictor.report(0, 0).crossings_missed, 1);
+    }
+
+    /// **A drawn tank hit is the room's hit only where the room burst.**
+    /// The provisional stops against a tank; the room's copy bursting within
+    /// `HIT_MATCH_PX` of that point is `crossings_hit`, and one bursting
+    /// anywhere else - on something the picture did not show it meeting -
+    /// is `crossings_missed`, its burst shown.
+    #[test]
+    fn a_drawn_tank_hit_counts_as_the_rooms_only_where_the_room_burst() {
+        for (off, hit) in [(10.0f32, true), (HIT_MATCH_PX + 60.0, false)] {
+            let mut predictor = Predictor::new(round_with(single_barrel_row(), 0), 0, 0);
+            let tick = predictor.step(press());
+            predictor.confirm_fired(WeaponKind::Shell, tick);
+            fly(&mut predictor, 12);
+            let (_, shot) = predictor.shots().next().expect("a shell in flight");
+            let at = Position::new(shot.position.x + shot.velocity.x * 0.05, shot.position.y + shot.velocity.y * 0.05);
+            predictor.advance_shots(1.0 / 60.0, |_, _, _| Some((at, true)));
+            assert_eq!(predictor.report(0, 0).crossings, 1, "a tank hit this client drew");
+            // The room's copy bursts `off` short of that point.
+            let speed = (shot.velocity.x * shot.velocity.x + shot.velocity.y * shot.velocity.y).sqrt();
+            let burst = Position::new(at.x - shot.velocity.x / speed * off, at.y - shot.velocity.y / speed * off);
+            let server = ServerShot { id: 3, kind: ProvisionalKind::Shell, position: burst, velocity: shot.velocity, flying: false, impact: true };
+            predictor.observe_server_shots(10, &[server]);
+            predictor.observe_server_shots(13, &[server]);
+            let report = predictor.report(0, 0);
+            if hit {
+                assert_eq!((report.crossings_hit, report.crossings_missed), (1, 0), "burst {off} px off: {report:?}");
+                assert!(predictor.hidden_server_shots().contains(&3), "the provisional stands for the room's burst");
+            } else {
+                assert_eq!((report.crossings_hit, report.crossings_missed), (0, 1), "burst {off} px off: {report:?}");
+                assert!(!predictor.hidden_server_shots().contains(&3), "the room's burst is shown");
+            }
+        }
+    }
+
+    /// **Only the beams drawn are claimed.** A laser press drawn on the
+    /// press claims the room's beam for it; a room `Fired` for a laser
+    /// press this client never drew claims nothing - its beam is the room's
+    /// to draw - and seeds the local gate; a drawn beam whose `Fired` never
+    /// comes is dropped past the refusal wait.
+    #[test]
+    fn a_beam_claims_the_rooms_beam_only_for_a_press_it_drew() {
+        let mut predictor = Predictor::new(round(), 0, 0);
+        let patch = TankPatch { laser_charges: Some(5), ..Default::default() };
+        predictor.sandbox.debug_set_tank(0, &patch).expect("the seat's tank");
+        let drawn = predictor.step(press());
+        assert_eq!(predictor.take_beams().len(), 1, "a beam on the press");
+        assert!(predictor.confirm_beam(drawn), "the room's beam for it is the drawn one");
+        assert!(!predictor.confirm_beam(drawn), "and it is claimed once");
+        // A press the room fired and this client did not draw.
+        let ticks = (tuning().player_fire_interval / PHYSICS_FIXED_DT).ceil() as usize;
+        idle_ticks(&mut predictor, ticks + 1);
+        assert_eq!(predictor.report(0, 0).cooldown, 0.0, "the gate is open");
+        let undrawn = predictor.tick() - 1;
+        assert!(!predictor.confirm_beam(undrawn), "nothing drawn to claim");
+        assert!(predictor.report(0, 0).cooldown > 0.0, "the room's shot holds the local gate");
+        // A drawn beam the room never fires goes after the refusal wait.
+        idle_ticks(&mut predictor, ticks + 1);
+        let late = predictor.step(press());
+        assert_eq!(predictor.take_beams().len(), 1);
+        predictor.advance_shots(PROVISIONAL_SECONDS + 0.1, open_air);
+        assert!(!predictor.confirm_beam(late), "dropped past the refusal wait");
     }
 
     /// A press the server never claims - or one passed over by a `Fired`
