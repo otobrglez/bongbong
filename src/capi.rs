@@ -134,9 +134,46 @@ static NET_STATS: std::sync::Mutex<String> = std::sync::Mutex::new(String::new()
 /// be driven by a measurement script.
 static SCRIPTED: std::sync::Mutex<Option<(u8, bool, u32)>> = std::sync::Mutex::new(None);
 
-/// Publish this frame's online readings (the frame loop calls this).
+/// Publish this frame's online readings (the frame loop calls this,
+/// through `NetStatsFeed`).
 pub fn publish_net_stats(json: String) {
     *NET_STATS.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = json;
+}
+
+/// What `bb_net_stats` hands out follows the driver (`app.rs` keeps one):
+/// an online round's readings on every frame one is played, and the empty
+/// string once, on the first frame it is not - a round that has ended or
+/// been given up is not the page's to measure. Only a change takes the
+/// lock.
+#[derive(Debug, Default)]
+pub struct NetStatsFeed {
+    /// The page holds a round's readings.
+    live: bool,
+}
+
+impl NetStatsFeed {
+    /// One frame: `stats` is the round's readings while the window plays
+    /// one, `None` in every other mode.
+    pub fn frame(&mut self, stats: Option<String>) {
+        if let Some(json) = self.publishing(stats) {
+            publish_net_stats(json);
+        }
+    }
+
+    /// What this frame publishes, if anything.
+    fn publishing(&mut self, stats: Option<String>) -> Option<String> {
+        match stats {
+            Some(json) => {
+                self.live = true;
+                Some(json)
+            }
+            None if self.live => {
+                self.live = false;
+                Some(String::new())
+            }
+            None => None,
+        }
+    }
 }
 
 /// The scripted input for this frame, if one holds, counting it down.
@@ -225,5 +262,25 @@ mod tests {
 
         let rc = unsafe { bb_tuning_apply_json(std::ptr::null()) };
         assert_eq!(rc, -1, "an empty string is not a JSON object");
+    }
+
+    /// `bb_net_stats` carries a round's readings while one is played and
+    /// nothing once it is not, taken down on the first frame after it -
+    /// not the finished round's numbers for as long as the page asks.
+    #[test]
+    fn net_stats_are_taken_down_the_frame_the_round_is_not_played() {
+        let mut feed = NetStatsFeed::default();
+        assert_eq!(feed.publishing(None), None, "nothing to take down before a round");
+        assert_eq!(feed.publishing(Some("{\"seat\":0}".into())), Some("{\"seat\":0}".into()));
+        assert_eq!(feed.publishing(None), Some(String::new()), "the round is not played: taken down");
+        assert_eq!(feed.publishing(None), None, "once, not every frame");
+
+        // SAFETY: the pointer is this module's own scratch buffer, read
+        // before the next call replaces it.
+        let read = || unsafe { CStr::from_ptr(bb_net_stats()) }.to_str().unwrap().to_string();
+        feed.frame(Some("{\"seat\":1}".into()));
+        assert_eq!(read(), "{\"seat\":1}");
+        feed.frame(None);
+        assert_eq!(read(), "", "the export reads empty once the round is gone");
     }
 }

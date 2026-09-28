@@ -351,7 +351,8 @@ impl Session {
     ///
     /// The room's round is polled from here, which is what makes a seat
     /// fill up and a roster arrive while the screen is on; the seat sends
-    /// no intent, since there is no round to steer yet. The frame the
+    /// no intent, before a round or after one, since `OnlineRound` sends
+    /// only while the room's round is playing. The frame the
     /// room starts the round the window hands over to `Driver::Online`
     /// and the replica is what is drawn. Returns the mode afterwards.
     pub fn update_lobby(&mut self, input: &LobbyInput, field: Rect, dt: f32) -> Driver {

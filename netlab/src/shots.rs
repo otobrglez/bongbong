@@ -2,15 +2,17 @@
 //! incoming-fire metric read.
 //!
 //! A room copy keeps the room's id for its life, so it is followed by id.
-//! A provisional has no identity that lasts: the client draws its live
-//! provisionals under `PROVISIONAL_ID_BASE` plus their index, and the
-//! index shifts down whenever an older one retires. So a provisional is
-//! followed by continuity instead - each one on a frame is the one from
-//! the frame before that it could have become: no further on than a shot
-//! of its kind flies in the time between the two frames, and no earlier in
-//! its own life (`ShotSample::stage`). A shot that moves further than that
-//! has jumped: its track ends and a new one begins, and the ledger puts
-//! the two back together as one shot (`metrics::own_shots`).
+//! A provisional's id is stable too - `PROVISIONAL_ID_BASE` plus the
+//! client's own number for the shot (`Live::id` within
+//! `PROVISIONAL_ID_MASK`), handed out in launch order and wrapping every
+//! 4096 shots - but a provisional is followed by continuity all the same,
+//! because a jump is what the ledger measures: each one on a frame is the
+//! one from the frame before that it could have become, no further on than
+//! a shot of its kind flies in the time between the two frames and no
+//! earlier in its own life (`ShotSample::stage`). A shot that moves further
+//! than that has jumped - the client moved it to where the room had it:
+//! its track ends and a new one begins, and the ledger puts the two back
+//! together as one shot (`metrics::own_shots`).
 
 use crate::sample::{FrameSample, ShotSample, flying_stage};
 
@@ -336,8 +338,10 @@ mod tests {
             .collect()
     }
 
-    /// The provisional ids shift as an older one retires; the tracks do
-    /// not.
+    /// A track does not hang on a provisional's id: frames that draw one
+    /// shot under another's id once that one has gone - a recorded run
+    /// whose client numbered its shots by their place - still follow it as
+    /// one track.
     #[test]
     fn provisionals_are_followed_through_their_ids_shifting() {
         let base = bongbong::net::predict::PROVISIONAL_ID_BASE;

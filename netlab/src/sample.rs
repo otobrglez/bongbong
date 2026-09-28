@@ -35,12 +35,11 @@ pub struct TankSample {
 /// A projectile as drawn.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct ShotSample {
-    /// The replica's id: the room's per-round counter for a room copy,
-    /// `PROVISIONAL_ID_BASE` and up for a provisional - an index into the
-    /// client's live provisionals, which shifts down as older ones retire,
-    /// so it names no shot from one frame to the next. Their order does:
-    /// the client keeps its shots in the order they left, and a retirement
-    /// only closes the gap.
+    /// The replica's id: the room's per-round counter for a room copy, and
+    /// for a provisional `PROVISIONAL_ID_BASE` plus the client's own number
+    /// for the shot (`Live::id` within `PROVISIONAL_ID_MASK`) - fixed for
+    /// the shot's life and handed out in launch order, wrapping every 4096
+    /// shots.
     pub id: u32,
     /// 0 shell, 1 bullet, 2 plasma.
     pub kind: u8,

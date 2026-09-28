@@ -100,11 +100,15 @@ pub enum Show {
     /// Every cause's show, every beam and every drum in the air: a client
     /// replica's picture.
     All,
-    /// `All`, less what this seat's client drew itself on the press
+    /// `All`, less what `seat`'s client drew itself on the press
     /// (docs/online-coop-prd.md section 4.16): the muzzle ripple of its
     /// shots, which `net::round` puts on as a provisional shot leaves, and
-    /// its laser beams, drawn there from the predicted muzzle.
-    OwnShotsDrawn(u8),
+    /// the laser beams it drew from the predicted muzzle and claimed by
+    /// their `Fired` (`net::predict::Predictor::confirm_beam`) - bit `k` of
+    /// `beams` for the seat's `k`th laser `Fired` in the snapshot. A beam
+    /// whose `Fired` the client did not claim is one it never drew, and is
+    /// drawn as the room's.
+    OwnShotsDrawn { seat: u8, beams: u8 },
     /// The state and nothing of the moment: a welcome, whose joiner has
     /// missed it, and a prediction sandbox (`net::predict`), which nobody
     /// draws and nothing ages - a fireball or a beam put on it would stay
@@ -121,7 +125,33 @@ impl Show {
     /// Whether the client drew the shots of the tank in owner slot `slot`
     /// itself.
     fn client_drew(self, slot: usize) -> bool {
-        matches!(self, Show::OwnShotsDrawn(seat) if seat as usize == slot)
+        matches!(self, Show::OwnShotsDrawn { seat, .. } if seat as usize == slot)
+    }
+
+    /// Which of `s`'s events are beams the client drew itself, by index:
+    /// for each of its seat's laser `Fired`s whose bit is set in `beams`,
+    /// the seat's first `LaserBeam` after it and before the seat's next
+    /// laser `Fired` - the beam that shot put up, which the room logs after
+    /// its `Fired` in the same tick. A `Fired` whose beam is missing (kept
+    /// from a snapshot handed over too late to draw) drops nothing.
+    fn beams_drawn(self, s: &Snapshot) -> BTreeSet<usize> {
+        let Show::OwnShotsDrawn { seat, beams } = self else { return BTreeSet::new() };
+        let mut out = BTreeSet::new();
+        let (mut fired, mut claimed) = (0u32, false);
+        for (i, event) in s.events.iter().enumerate() {
+            match *event {
+                WireEvent::Fired { slot, weapon: WeaponKind::Laser, .. } if slot == seat as u16 => {
+                    claimed = fired < u8::BITS && beams & (1 << fired) != 0;
+                    fired += 1;
+                }
+                WireEvent::LaserBeam { seat: by, .. } if by == seat && claimed => {
+                    out.insert(i);
+                    claimed = false;
+                }
+                _ => {}
+            }
+        }
+        out
     }
 }
 
@@ -192,14 +222,15 @@ pub fn snapshot_with(game: &mut Game, s: &Snapshot, show: Show) {
 
 fn apply(game: &mut Game, s: &Snapshot, show: Show) {
     let cols = field_cols(game);
-    let dead_tiles = apply_events(game, s, cols, show);
+    let own_beams = show.beams_drawn(s);
+    let dead_tiles = apply_events(game, s, cols, show, &own_beams);
     let mut spectacle = Spectacle::default();
     let drawn = show.drawn();
     if drawn {
         // Before the families move anything: a dying tile is still
         // standing, a bursting missile still in the air and a firing
         // hull where it is drawn.
-        apply_spectacle(game, s, show, &mut spectacle);
+        apply_spectacle(game, s, show, &own_beams, &mut spectacle);
     }
     apply_tiles(game, s, cols, dead_tiles);
     apply_tanks(game, s);
@@ -229,12 +260,13 @@ fn apply(game: &mut Game, s: &Snapshot, show: Show) {
 /// being the same position quantised the same way.
 ///
 /// What the client drew itself (`Show::OwnShotsDrawn`) is left out: its
-/// shots' muzzle ripples and its beams'. A beam's end still counts for
+/// shots' muzzle ripples, and the muzzle flash of each beam it drew
+/// (`own_beams`, indices into `s.events`). A beam's end still counts for
 /// the hit it stopped on.
 ///
 /// What the wire does not carry is taken plain: a drum's blast has no
 /// cause on the wire, so its fireball is the hashed pick without a lean.
-fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, show: &mut Spectacle) {
+fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, own_beams: &BTreeSet<usize>, show: &mut Spectacle) {
     let field = game.map.field_size();
     let at = |x: i16, y: i16| Position::new(dequantise_pos(x), dequantise_pos(y));
     let beam_ends: BTreeSet<(i16, i16)> = s
@@ -245,7 +277,7 @@ fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, show: &mut Spectac
             _ => None,
         })
         .collect();
-    for event in &s.events {
+    for (i, event) in s.events.iter().enumerate() {
         match *event {
             WireEvent::Wreck { x, y, .. } => game.wreck_show(show, at(x, y)),
             WireEvent::Blast { x, y, drum, .. } => game.blast_show(show, at(x, y), drum, BlastShape::Plain, field),
@@ -266,7 +298,7 @@ fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, show: &mut Spectac
             WireEvent::Deflected { x, y, .. } | WireEvent::Ricochet { x, y, .. } | WireEvent::ShellsCollided { x, y } => {
                 show.impact_flashes.push(Shockwave::new(at(x, y)));
             }
-            WireEvent::LaserBeam { x0, y0, seat, .. } if !mode.client_drew(seat as usize) => {
+            WireEvent::LaserBeam { x0, y0, .. } if !own_beams.contains(&i) => {
                 show.muzzle_flashes.push(Shockwave::new(at(x0, y0)));
             }
             WireEvent::Fired { slot, weapon, .. } if !mode.client_drew(slot as usize) => {
@@ -345,9 +377,9 @@ fn drawn_muzzle(game: &mut Game, slot: usize, weapon: WeaponKind) -> Option<Posi
 /// derived from an age `tick_presentation` advances, and the blast it
 /// sets off when it lands arrives as the server's own `Blast`. A
 /// `LaserBeam` is drawn likewise. Both are the moment's, so a quiet
-/// apply puts neither up, and a beam the client drew itself is neither
-/// drawn nor handed on.
-fn apply_events(game: &mut Game, s: &Snapshot, cols: u16, show: Show) -> BTreeSet<u16> {
+/// apply puts neither up, and a beam the client drew itself (`own_beams`,
+/// indices into `s.events`) is neither drawn nor handed on.
+fn apply_events(game: &mut Game, s: &Snapshot, cols: u16, show: Show, own_beams: &BTreeSet<usize>) -> BTreeSet<u16> {
     let restarted = s.events.iter().rev().find_map(|e| match *e {
         WireEvent::RoundStarted { seed, .. } => Some(seed),
         _ => None,
@@ -361,7 +393,7 @@ fn apply_events(game: &mut Game, s: &Snapshot, cols: u16, show: Show) -> BTreeSe
         }
     }
     let mut dead = BTreeSet::new();
-    for event in &s.events {
+    for (i, event) in s.events.iter().enumerate() {
         match *event {
             WireEvent::ObstacleDestroyed { x, y, .. } => {
                 let at = Position::new(dequantise_pos(x), dequantise_pos(y));
@@ -375,7 +407,7 @@ fn apply_events(game: &mut Game, s: &Snapshot, cols: u16, show: Show) -> BTreeSe
             }
             // An instant hit: the beam is the only trace, and the replica's
             // `tick_effects` fades it as a local round's does.
-            WireEvent::LaserBeam { x0, y0, x1, y1, variant, seat } if show.drawn() && !show.client_drew(seat as usize) => {
+            WireEvent::LaserBeam { x0, y0, x1, y1, variant, .. } if show.drawn() && !own_beams.contains(&i) => {
                 let start = Position::new(dequantise_pos(x0), dequantise_pos(y0));
                 let end = Position::new(dequantise_pos(x1), dequantise_pos(y1));
                 let variant = LaserVariant::ALL.get(variant as usize).copied().unwrap_or(LaserVariant::Red);
@@ -387,8 +419,9 @@ fn apply_events(game: &mut Game, s: &Snapshot, cols: u16, show: Show) -> BTreeSe
     game.events = s
         .events
         .iter()
-        .filter(|e| !matches!(**e, WireEvent::LaserBeam { seat, .. } if show.client_drew(seat as usize)))
-        .filter_map(WireEvent::to_event)
+        .enumerate()
+        .filter(|(i, _)| !own_beams.contains(i))
+        .filter_map(|(_, e)| WireEvent::to_event(e))
         .collect();
     dead
 }
@@ -1871,6 +1904,7 @@ mod tests {
         let game = quiet_round(DEFAULT_MAP, 0xB0B5, 2);
         let mut snap = enc::snapshot(&game, [0; MAX_SEATS]);
         snap.events = vec![
+            WireEvent::Fired { slot: 0, weapon: WeaponKind::Laser, input_tick: 1 },
             WireEvent::LaserBeam { x0: 400, y0: 400, x1: 1600, y1: 400, variant: 0, seat: 0 },
             WireEvent::Hit { target: WireHitTarget::Enemy { slot: 1 }, damage: 0.0, killed: false, x: 1600, y: 400 },
             WireEvent::Hit { target: WireHitTarget::Enemy { slot: 2 }, damage: 0.0, killed: false, x: 2000, y: 800 },
@@ -1884,13 +1918,45 @@ mod tests {
         assert_eq!(replica.muzzle_flashes.len(), 1, "the beam's muzzle");
 
         let mut own = welcome_through_the_codec(&game);
-        snapshot_with(&mut own, &snap, Show::OwnShotsDrawn(0));
+        snapshot_with(&mut own, &snap, Show::OwnShotsDrawn { seat: 0, beams: 1 });
         assert_eq!(flashes(&own), vec![Position::new(400.0, 100.0)], "the client's own beam still flashes its hit");
         assert!(own.laser_beams.is_empty() && own.muzzle_flashes.is_empty(), "the client drew its own beam and muzzle");
         assert!(
             !own.events().iter().any(|e| matches!(e, crate::simulation::Event::LaserBeam { .. })),
             "and the beam is not handed on as the replica's"
         );
+    }
+
+    /// Only the beams the client claimed are left out, each by the `Fired`
+    /// before it: with two of the seat's beams in a snapshot and only the
+    /// second `Fired` claimed, the first beam - a press the local gate
+    /// refused and the room fired - is drawn and handed on as the room's,
+    /// and the second is not; a seat whose client claimed none gets both.
+    #[test]
+    fn only_the_beams_the_client_drew_are_left_out() {
+        let game = quiet_round(DEFAULT_MAP, 0xB0B5, 2);
+        let mut snap = enc::snapshot(&game, [0; MAX_SEATS]);
+        let enemy = game.first_enemy_slot() as u16;
+        snap.events = vec![
+            WireEvent::Fired { slot: 0, weapon: WeaponKind::Laser, input_tick: 3 },
+            WireEvent::LaserBeam { x0: 400, y0: 400, x1: 1600, y1: 400, variant: 0, seat: 0 },
+            WireEvent::Fired { slot: enemy, weapon: WeaponKind::Shell, input_tick: 0 },
+            WireEvent::Fired { slot: 0, weapon: WeaponKind::Laser, input_tick: 5 },
+            WireEvent::LaserBeam { x0: 400, y0: 800, x1: 1600, y1: 800, variant: 0, seat: 0 },
+        ];
+        let beams = |g: &Game| g.events().iter().filter(|e| matches!(e, crate::simulation::Event::LaserBeam { .. })).count();
+
+        let mut second = welcome_through_the_codec(&game);
+        snapshot_with(&mut second, &snap, Show::OwnShotsDrawn { seat: 0, beams: 0b10 });
+        assert_eq!(second.laser_beams.len(), 1, "the beam the client did not draw is drawn");
+        let drawn = second.laser_beams[0].start;
+        assert_eq!((drawn.x, drawn.y), (100.0, 100.0), "and it is the first `Fired`'s");
+        assert_eq!(beams(&second), 1, "and handed on");
+        assert_eq!(second.muzzle_flashes.len(), 2, "its muzzle flashes, and the enemy's `Fired` ripples");
+
+        let mut none = welcome_through_the_codec(&game);
+        snapshot_with(&mut none, &snap, Show::OwnShotsDrawn { seat: 0, beams: 0 });
+        assert_eq!((none.laser_beams.len(), beams(&none)), (2, 2), "a client that drew no beam draws both of the room's");
     }
 
     /// The same, off a real round: a seat's laser into an enemy under a
@@ -1943,7 +2009,7 @@ mod tests {
             WireEvent::Fired { slot: enemy, weapon: WeaponKind::Shell, input_tick: 0 },
         ];
         let mut replica = welcome_through_the_codec(&game);
-        snapshot_with(&mut replica, &snap, Show::OwnShotsDrawn(0));
+        snapshot_with(&mut replica, &snap, Show::OwnShotsDrawn { seat: 0, beams: 0 });
         assert_eq!(replica.muzzle_flashes.len(), 1, "the enemy's ripple and not the seat's");
         let fired = replica.events().iter().filter(|e| matches!(e, crate::simulation::Event::Fired { .. })).count();
         assert_eq!(fired, 2, "both `Fired` are handed on");
