@@ -1036,7 +1036,8 @@ status line show it.
 ### 4.16 Stage 4: present-time co-op
 
 *Designed 2026-09-28 from the research sweep and a 53-finding code audit
-verified by two skeptics each; being built on `feature/coop-ng-2`.* Stage
+verified by two skeptics each; built on `feature/coop-ng-2` - each piece
+below says how far it got.* Stage
 3 made the own hull local; stage 4 makes everything the player acts on
 local-feeling while keeping the server the referee. The organising rule:
 **what the player controls lives in the present, what the player reacts
@@ -1087,7 +1088,9 @@ The pieces, each with its owner module:
 - **The owned hull on its own clock** (`net::round`, `net::predict`): the
   sandbox steps on its own fixed-step clock and is drawn at sub-tick
   interpolation; one packet per sandbox tick; no lead controller in owned
-  mode, so nothing double-steps or freezes.
+  mode, so nothing double-steps or freezes. *Built*: `drawn_pose`, the
+  lead off for an owned hull, recoil applied on the press
+  (`Game::seat_recoil`).
 - **Owned poses newest-wins** (`net::mailbox`, the room): an owned seat's
   intents are not queued - each tick takes the newest pose, ORs every
   consumed fire bit so no press is lost, and a starved tick dead-reckons
@@ -1103,7 +1106,10 @@ The pieces, each with its owner module:
   refusal) corrects it. The laser is drawn on the press from the
   predicted muzzle to the first drawn hull or tile, and the room's copy of
   this seat's beam (`LaserBeam::seat`) is skipped. Cooldowns and the
-  minigun run on the tick grid.
+  minigun run on the tick grid. *Built*: `simulation::present` (the
+  drawn-world sweep and the provisional's own state machine), pairing and
+  hiding in `net::predict`, a rig test over a 40 ms link that the shot is
+  one copy that never moves back.
 - **Lag compensation, favor the shooter** (the simulation's hit test):
   each intent carries the tick the client was drawing
   (`IntentMsg::view_tick`); the room keeps the last 250 ms of enemy and
@@ -1114,7 +1120,9 @@ The pieces, each with its owner module:
   shots are drawn forward along their straight path by the local lead,
   starting at the drawn muzzle and catching up over ~120 ms, clipped at
   walls; one that reaches the own drawn hull shows its impact at once
-  (health stays the room's).
+  (health stays the room's). *Built*: `incoming_lead_ticks` - the lead is
+  exact to the tick, from the newest snapshot's `acked` - and
+  `draw_incoming_in_present`.
 - **A controlled playout clock** (`net::interp`): time in ticks, the
   offset from the lower envelope of arrivals, render time monotone with a
   bounded rate, the delay from a lateness percentile with head-of-line
@@ -1126,7 +1134,12 @@ The pieces, each with its owner module:
   `MissileBlast`; impact flashes from `Hit`; muzzle ripples from `Fired`.
 - **Shoves on owned hulls** (`Event::Shoved`): the room sends the impulses
   it put on an owned hull and the owner applies them to its own body;
-  recoil is applied locally at each launch.
+  recoil is applied locally at each launch. *Built on the client*
+  (`Predictor::shove` on arrival).
+- **Measuring a browser**: a dev-tools web build (every PR preview) exports
+  `bb_net_stats` (`OnlineRound::stats_json`, the same readings the native
+  dev server shows) and `bb_input` (a scripted seat), so a browser tab
+  against a deployed room is driven and measured by a script. *Built.*
 
 Deferred, written down: WebTransport datagrams for the snapshot and
 intent streams (HOL blocking is the one link effect no client-side trick
