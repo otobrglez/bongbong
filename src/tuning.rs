@@ -1584,14 +1584,14 @@ tunables! {
     group online {
         /// How far behind the server an online round is drawn, in
         /// milliseconds, on a clean link (docs/online-coop-prd.md §4.5,
-        /// `net::interp`) - the *floor* of the delay, which
-        /// `online_interpolation_adaptive` widens by the link's jitter. A
-        /// room sends sixty snapshots a second; without a delay the
-        /// replica would have nothing to interpolate toward, and drawing
-        /// this far in the past keeps two snapshots bracketing render
-        /// time so the picture moves every frame. Lower it to trade
-        /// smoothness for freshness - the hull answers the stick this
-        /// much later. Below one snapshot interval the replica
+        /// §4.16, `net::interp`) - the *floor* of the delay, which
+        /// `online_interpolation_adaptive` sizes from the link's
+        /// lateness. A room sends sixty snapshots a second; without a
+        /// delay the replica would have nothing to interpolate toward,
+        /// and drawing this far in the past keeps two snapshots
+        /// bracketing render time so the picture moves every frame. Lower
+        /// it to trade smoothness for freshness - the hull answers the
+        /// stick this much later. Below one snapshot interval the replica
         /// extrapolates most frames, which is the floor this can sensibly
         /// take: 16.7 ms at the room's 60 Hz (`SNAPSHOT_EVERY`).
         ///
@@ -1609,26 +1609,27 @@ tunables! {
         /// which is the only honest way to judge it (`--rig --delay 80
         /// --jitter 20`).
         online_interpolation_delay_ms: f32 = 33.0 in 0.0 ..= 500.0;
-        /// Widen the interpolation delay by the link's own jitter
-        /// (docs/online-coop-prd.md §4.5, decision 8; `net::interp`). On,
-        /// the delay in force is the larger of
-        /// `online_interpolation_delay_ms` and two measured snapshot
-        /// intervals, plus `online_interpolation_jitter_factor` times the
-        /// smoothed deviation of each snapshot's arrival from the clock's
-        /// estimate, under `online_interpolation_delay_max_ms` - and it
-        /// slews there at a few per cent of real time rather than
-        /// jumping, so a jittery spell never rewinds the picture. Off
-        /// pins the delay at the knob, which is how the two are judged
-        /// side by side on one link (`--rig --jitter 20`). Live.
+        /// Size the interpolation delay from the link's own lateness
+        /// (docs/online-coop-prd.md §4.5, §4.16, decision 8;
+        /// `net::interp`). On, the delay the picture steers for is one
+        /// measured snapshot interval (the bracket's width) plus one
+        /// 60 Hz frame plus the 95th percentile, over the last three
+        /// seconds, of how late snapshots arrive behind the fastest - with
+        /// head-of-line stalls left out while they are isolated, since
+        /// those are ridden out on extrapolation rather than paid for on
+        /// every frame - floored at `online_interpolation_delay_ms` and
+        /// capped at `online_interpolation_delay_max_ms`. The picture
+        /// reaches it through its own playout clock, a few per cent
+        /// faster or slower than real time and never backwards, so a
+        /// jittery spell never rewinds it. Off pins the delay at the
+        /// floor, which is how the two are judged side by side on one
+        /// link (`--rig --jitter 20`). Live.
         online_interpolation_adaptive: bool = true in 0 ..= 1;
-        /// How many jitter-widths the adaptive delay keeps in hand:
-        /// three covers the tail of a late packet without paying for it
-        /// on every frame. 0 makes the adaptive delay the floor plus the
-        /// cadence term alone. Live.
-        online_interpolation_jitter_factor: f32 = 3.0 in 0.0 ..= 10.0;
         /// The most the adaptive delay may reach, in milliseconds. Past
         /// this a link is not worth smoothing over: the picture would be
-        /// a fifth of a second behind and the shots plainly late. Live.
+        /// a fifth of a second behind and the shots plainly late, and the
+        /// lateness above it is ridden out on extrapolation instead.
+        /// Live.
         online_interpolation_delay_max_ms: f32 = 200.0 in 0.0 ..= 500.0;
         /// Run the local seat's own hull ahead of the server and
         /// reconcile it against each snapshot (stage 2,

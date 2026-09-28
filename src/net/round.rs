@@ -26,6 +26,7 @@
 //! `mode::Session` is untouched: online is a third driver beside Play and
 //! Build, never a replacement for the in-process round.
 
+use std::collections::BTreeSet;
 use std::time::Instant;
 
 use crate::ai::Intent;
@@ -39,6 +40,7 @@ use crate::net::transport::Transport;
 use crate::net::events::WireEvent;
 use crate::net::wire::{RoundOutcome, Snapshot, Welcome, dequantise_pos};
 use crate::simulation::Game;
+use crate::tank::Tank;
 use crate::tuning::{self, tuning};
 use crate::PHYSICS_FIXED_DT;
 
@@ -81,6 +83,13 @@ pub const MAX_LEAD_TICKS: f32 = 30.0;
 /// first seen in flight: it leaves the drawn (past) muzzle and eases
 /// forward, so it never appears ahead of the tank that fired it.
 pub const CATCH_UP_MS: f32 = 120.0;
+
+/// A drawn own hull that moved further than this since the last frame
+/// jumped - a `Placed`, a portal, a correction taken whole - rather than
+/// drove, and presses no tread marks across the gap: the distance
+/// `net::apply` reads a jump by for the hulls it writes, half again a
+/// cell, far past what a hull covers in a frame.
+pub const OWN_JUMP_PX: f32 = 48.0;
 
 /// What the lead asks of the frame's packet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -351,14 +360,7 @@ impl<T: Transport> OnlineRound<T> {
                 "offset_ms": r.offset_ms,
                 "samples": r.samples,
             })),
-            "interpolation": {
-                "delay_ms": interp.delay_ms,
-                "target_ms": interp.target_ms,
-                "jitter_ms": interp.jitter_ms,
-                "interval_ms": interp.interval_ms,
-                "buffered": interp.buffered,
-                "extrapolated_frames": interp.extrapolated_frames,
-            },
+            "interpolation": interp_json(&interp),
             "prediction": self.prediction().map(|p| json!({
                 "ignored": p.ignored,
                 "nudges": p.nudges,
@@ -541,7 +543,12 @@ impl<T: Transport> OnlineRound<T> {
         self.client.poll(&mut events);
         for event in events.drain(..) {
             match event {
-                ClientEvent::Welcomed(welcome) => self.welcomed(&welcome, now),
+                ClientEvent::Welcomed { welcome, arrived } => {
+                    // The clock takes the welcome's reading at the instant
+                    // it came off the socket, as it does a snapshot's.
+                    let at = self.ms_at(arrived).min(now);
+                    self.welcomed(&welcome, at);
+                }
                 ClientEvent::Snapshot { snapshot, arrived } => {
                     self.place_from(&snapshot);
                     self.reconcile(&snapshot);
@@ -595,7 +602,10 @@ impl<T: Transport> OnlineRound<T> {
     /// section 4.11), so the table is the window's own again the moment
     /// the seat is given up - the local round behind the room is played
     /// with the build's numbers, never the room's.
-    fn welcomed(&mut self, welcome: &Welcome, now: i64) {
+    ///
+    /// `arrived` is when the welcome came off the socket, on `local_ms`'s
+    /// clock.
+    fn welcomed(&mut self, welcome: &Welcome, arrived: i64) {
         let patch = welcome.tuning_json.trim();
         if !patch.is_empty() && patch != "{}" {
             if self.tuning_before.is_none() {
@@ -622,7 +632,8 @@ impl<T: Transport> OnlineRound<T> {
                     predictor
                 });
                 self.replica = Some(game);
-                self.interp.restart(&welcome.snapshot, now);
+                self.interp.set_seat(Some(welcome.seat));
+                self.interp.restart(&welcome.snapshot, arrived);
                 self.note = None;
             }
             Err(e) => self.note = Some(e),
@@ -767,7 +778,7 @@ impl<T: Transport> OnlineRound<T> {
         // after it left the rendered hull chasing the server's facing
         // from `online_interpolation_delay_ms` ago while its position was
         // already at the present - a tank that slides without turning.
-        self.write_predicted();
+        let own_drawn = self.write_predicted();
         // The world as it is drawn this frame, own hull in the present:
         // what the present-time shots are tested against.
         let world = self.replica.as_ref().map(Game::present_world);
@@ -777,7 +788,23 @@ impl<T: Transport> OnlineRound<T> {
                 self.draw_incoming_in_present(frame, now, world, seat);
             }
         }
+        let seat = self.client.seat();
         let Some(game) = self.replica.as_mut() else { return };
+        // A hull that jumped onto this frame - a portal, a placement - is
+        // drawn there with no trail behind it: `tick_presentation` presses
+        // tread marks along every hull's displacement since the last
+        // frame, which for a jump is a line across the field. The own hull
+        // drawn by the prediction jumps when its drawn pose does, not when
+        // the interpolator reaches the room's copy of the jump.
+        let mut jumped: BTreeSet<usize> =
+            sampled.iter().flat_map(|frame| frame.snapped.iter().map(|&id| id as usize)).collect();
+        if own_drawn && let Some(seat) = seat {
+            jumped.remove(&(seat as usize));
+            if own_hull_jumped(game, seat as usize) {
+                jumped.insert(seat as usize);
+            }
+        }
+        lift_trails(game, &jumped);
         game.tick_presentation(dt);
         if let Some(frame) = &sampled {
             // `apply` puts the clock on the snapshot's own tick; the
@@ -802,16 +829,18 @@ impl<T: Transport> OnlineRound<T> {
     ///
     /// The hull is drawn at the sandbox's newest tick
     /// (`Predictor::drawn_pose`), as a local round draws its newest step.
-    fn write_predicted(&mut self) {
+    ///
+    /// True when the seat was written: the drawn hull is the prediction's.
+    fn write_predicted(&mut self) -> bool {
         if !tuning().online_predict_own_tank {
-            return;
+            return false;
         }
-        let (Some(predictor), Some(game)) = (self.predictor.as_ref(), self.replica.as_mut()) else { return };
-        let (Some(seat), Some((position, rotation))) = (self.client.seat(), predictor.drawn_pose()) else { return };
+        let (Some(predictor), Some(game)) = (self.predictor.as_ref(), self.replica.as_mut()) else { return false };
+        let (Some(seat), Some((position, rotation))) = (self.client.seat(), predictor.drawn_pose()) else { return false };
         // The velocity is the prediction's own, not zero: `fx` reads it
         // for the spray and the dust, and a hull the solver believes is
         // stopped settles differently from one that is moving.
-        let Some((_, _, velocity)) = predictor.motion() else { return };
+        let Some((_, _, velocity)) = predictor.motion() else { return false };
         // The replica's own boost flag is the server's and already
         // applied by `apply::snapshot`; the prediction only moves the
         // hull, so it is carried through unchanged.
@@ -823,6 +852,7 @@ impl<T: Transport> OnlineRound<T> {
         if self.trigger_down && tuning().online_predict_shots {
             game.hold_flame(seat as usize);
         }
+        true
     }
 
     /// This frame's room copies of this seat's shots: handed to the
@@ -1002,6 +1032,68 @@ impl<T: Transport> OnlineRound<T> {
             }
         }
     }
+}
+
+/// Lift the tread-mark trail of every tank whose owner slot is in `slots`
+/// and put its ring follower under the hull, as `net::apply` does for a
+/// hull it moves further than driving would: the next `tick_presentation`
+/// starts the trail again from where the hull landed instead of pressing
+/// marks across the jump, and the ring does not glide over after it.
+fn lift_trails(game: &mut Game, slots: &BTreeSet<usize>) {
+    if slots.is_empty() {
+        return;
+    }
+    for tank in game.world.query::<&mut Tank>().iter() {
+        if slots.contains(&tank.owner_slot()) {
+            tank.track_from = None;
+            tank.ring_position = tank.position;
+            tank.ring_velocity = crate::math::Vec2::new(0.0, 0.0);
+        }
+    }
+}
+
+/// Whether the seat's drawn hull moved further than `OWN_JUMP_PX` since
+/// the last `tick_presentation` put its trail down.
+fn own_hull_jumped(game: &Game, seat: usize) -> bool {
+    let Some(entity) = game.seats.get(seat).copied().flatten() else { return false };
+    let Ok(tank) = game.world.get::<&Tank>(entity) else { return false };
+    tank.track_from.is_some_and(|from| from.distance_to(tank.position) > OWN_JUMP_PX)
+}
+
+/// Every reading of the interpolator, as `stats_json` carries it. The
+/// report is taken apart field by field with no rest pattern, so a reading
+/// added to `InterpReport` does not compile until it is carried here too.
+fn interp_json(report: &InterpReport) -> serde_json::Value {
+    let InterpReport {
+        delay_ms,
+        target_ms,
+        jitter_ms,
+        interval_ms,
+        buffered,
+        extrapolated_frames,
+        lateness_p50_ms,
+        lateness_p95_ms,
+        stalls,
+        rate,
+        corrections,
+        error_p95_px,
+        stale_events,
+    } = *report;
+    serde_json::json!({
+        "delay_ms": delay_ms,
+        "target_ms": target_ms,
+        "jitter_ms": jitter_ms,
+        "interval_ms": interval_ms,
+        "buffered": buffered,
+        "extrapolated_frames": extrapolated_frames,
+        "lateness_p50_ms": lateness_p50_ms,
+        "lateness_p95_ms": lateness_p95_ms,
+        "stalls": stalls,
+        "rate": rate,
+        "corrections": corrections,
+        "error_p95_px": error_p95_px,
+        "stale_events": stale_events,
+    })
 }
 
 /// How many ticks ahead of the picture a straight shot is drawn so it
@@ -1320,6 +1412,37 @@ mod tests {
         assert!((snapped.0 - there.0).abs() < 0.5 && (snapped.1 - there.1).abs() < 0.5, "not placed: {snapped:?} vs {there:?}");
     }
 
+    /// An owned hull the room places elsewhere is drawn there with no
+    /// trail behind it: the drawn pose jumped, so its tread marks start
+    /// again where it landed rather than being pressed along the gap.
+    #[test]
+    fn an_owned_hull_placed_by_the_room_presses_no_tread_marks_across_the_jump() {
+        use crate::net::wire::quantise_pos;
+        if !tuning().online_predict_own_tank {
+            return;
+        }
+        let (mut room, mut round) = room_and_round();
+        round.set_client_hull(true);
+        room.welcome();
+        for _ in 0..3 {
+            round.frame(&Intent::default(), 1.0 / 60.0);
+        }
+        let start = round.own_hull_at().expect("a hull");
+        let tracks_before = round.game().expect("a replica").tracks.len();
+        let there = (start.0 - 96.0, start.1);
+        let mut placed = encode::snapshot(&room.game, [0; MAX_SEATS]);
+        placed.tick = 2;
+        placed.server_ms = room.server_ms + 33;
+        placed.events = vec![WireEvent::Placed { seat: 0, x: quantise_pos(there.0), y: quantise_pos(there.1), dir: 0 }];
+        room.say(Msg::Snapshot(placed));
+        for _ in 0..3 {
+            round.frame(&Intent::default(), 1.0 / 60.0);
+        }
+        let landed = round.own_hull_at().expect("a hull");
+        assert!((landed.0 - there.0).abs() < 0.5, "not placed: {landed:?} vs {there:?}");
+        assert_eq!(round.game().expect("a replica").tracks.len(), tracks_before, "tread marks were pressed across the placement");
+    }
+
     /// **A shot stops where it is seen to hit** (§4.16): a provisional
     /// shell fired at an enemy drawn 90 px ahead (inside the clear stretch
     /// of the default map's lane - a wall stands 80 px beyond) stops at
@@ -1475,5 +1598,113 @@ mod tests {
         }
         assert!(matches!(round.phase(), Phase::Closed(_)), "{:?}", round.phase());
         assert!(round.status().contains("OFFLINE"), "{}", round.status());
+    }
+
+    /// The clock reads a welcome at the instant it came off the socket, as
+    /// it reads every snapshot - not at the frame that got round to it.
+    #[test]
+    fn a_welcome_is_read_at_its_arrival_not_at_the_frame_that_polls_it() {
+        let (mut room, mut round) = room_and_round();
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        // Encoding the welcome takes a moment; it goes on the link at the
+        // end of it, and a perfect link has it readable at once.
+        let before = round.local_clock_ms();
+        room.welcome();
+        let after = round.local_clock_ms();
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        assert!(round.game().is_some(), "the welcome built a replica");
+        // A reading is the tick's time less the arrival: the arrival it
+        // was taken at is the tick's time less the estimate.
+        let tick = room.game.frame() as u32;
+        let offset = round.interp().clock().offset_ms().expect("the welcome was read");
+        let arrived = crate::net::interp::tick_ms(tick) - offset;
+        assert!(
+            (before as f64 - 1.0..=after as f64 + 1.0).contains(&arrived),
+            "the welcome was read as arriving at {arrived} ms; it came off the socket between {before} and {after} ms"
+        );
+    }
+
+    /// A hull the room moved by a portal onto the frame's near end is
+    /// drawn there with no tread marks pressed along the way: the
+    /// interpolator names it in `Frame::snapped`, and its trail is lifted
+    /// before `tick_presentation` lays the frame's marks. The hop is
+    /// shorter than `net::apply`'s own jump distance, so nothing else
+    /// would catch it.
+    #[test]
+    fn a_hull_that_jumped_presses_no_tread_marks_across_the_jump() {
+        let (mut room, mut round) = room_and_round();
+        room.welcome();
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        let tracks_before = round.game().expect("a replica").tracks.len();
+        let enemy = room.game.tank_snapshots().into_iter().find(|t| t.slot == 1).expect("an enemy in slot 1");
+        let from = enemy.position;
+        let to = crate::math::Vec2::new(from.x + 40.0, from.y);
+        let send = |room: &mut Room, tick: u32, events: Vec<WireEvent>| {
+            let mut s = encode::snapshot(&room.game, [0; MAX_SEATS]);
+            s.tick = tick;
+            s.server_ms = 1_000 + crate::net::interp::tick_ms(tick).round() as u32;
+            s.events = events;
+            room.say(Msg::Snapshot(s));
+        };
+        for tick in 1..8 {
+            send(&mut room, tick, Vec::new());
+        }
+        room.game.debug_teleport(1, to, None).expect("the enemy moves");
+        let hop = WireEvent::Teleported {
+            slot: 1,
+            x: crate::net::wire::quantise_pos(from.x),
+            y: crate::net::wire::quantise_pos(from.y),
+            to_x: crate::net::wire::quantise_pos(to.x),
+            to_y: crate::net::wire::quantise_pos(to.y),
+        };
+        send(&mut room, 8, vec![hop]);
+        for tick in 9..=20 {
+            send(&mut room, tick, Vec::new());
+        }
+        // Render time steers toward the newest ticks at its own pace; the
+        // frames run until it has passed the hop.
+        for _ in 0..100 {
+            round.frame(&Intent::default(), 1.0 / 60.0);
+            if round.game().is_some_and(|g| g.frame() >= 10) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(8));
+        }
+        let replica = round.game().expect("a replica");
+        assert!(replica.frame() >= 10, "the picture passed the hop: frame {}", replica.frame());
+        let drawn = replica.tank_snapshots().into_iter().find(|t| t.slot == 1).expect("the enemy");
+        assert!(drawn.position.distance_to(to) < 1.0, "drawn where it landed: {:?}", drawn.position);
+        assert_eq!(replica.tracks.len(), tracks_before, "tread marks were pressed across the hop");
+    }
+
+    /// Every reading of the interpolator's report reaches `stats_json`,
+    /// and through it `status.round.interpolation` and `bb_net_stats`.
+    #[test]
+    fn stats_json_carries_every_interpolation_reading() {
+        let (mut room, mut round) = room_and_round();
+        room.welcome();
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        let stats = round.stats_json();
+        let interp = stats["interpolation"].as_object().expect("an interpolation block");
+        let readings = [
+            "delay_ms",
+            "target_ms",
+            "jitter_ms",
+            "interval_ms",
+            "buffered",
+            "extrapolated_frames",
+            "lateness_p50_ms",
+            "lateness_p95_ms",
+            "stalls",
+            "rate",
+            "corrections",
+            "error_p95_px",
+            "stale_events",
+        ];
+        for key in readings {
+            assert!(interp.get(key).is_some_and(|v| v.is_number()), "{key} is missing from {stats}");
+        }
+        assert_eq!(interp.len(), readings.len(), "{stats}");
     }
 }

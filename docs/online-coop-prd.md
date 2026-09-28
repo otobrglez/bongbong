@@ -383,18 +383,20 @@ Four pieces:
   free.
 - Interpolation (`net::interp`): the replica keeps the last few snapshots.
   Render time is server time minus the interpolation delay. **The delay is
-  adaptive** (decision 8): its floor is `online_interpolation_delay_ms` (33,
-  two intervals at the room's 60 Hz), and on top of it the link's measured
-  jitter - the smoothed deviation of each snapshot's arrival from the clock's
-  estimate - times `online_interpolation_jitter_factor`, capped at
-  `online_interpolation_delay_max_ms`. The delay never jumps: it slews toward
-  its target at a bounded rate, so a jittery spell stretches time a few per
-  cent rather than rewinding the picture, and a link that settles gives the
-  milliseconds back the same way. `online_interpolation_adaptive` off pins
-  it at the floor, for comparing the two on one link. Positions blend
-  linearly; hulls snap by the four-way rule. A gap extrapolates on the last
-  velocity for at most `EXTRAPOLATION_INTERVALS`, then holds. Server time
-  comes from `server_ms` through a smoothed offset.
+  adaptive** (decision 8): one measured snapshot interval plus one 60 Hz
+  frame plus the 95th percentile of how late snapshots arrive behind the
+  fastest (isolated head-of-line stalls left out, and ridden out on
+  extrapolation instead), floored at `online_interpolation_delay_ms` (33 ms
+  at the room's 60 Hz) and capped at `online_interpolation_delay_max_ms`.
+  Render time runs on its own playout clock and never jumps back: it is
+  steered toward its target a few per cent faster or slower than real
+  time, so a jittery spell stretches time rather than rewinding the
+  picture, and a link that settles gives the milliseconds back the same
+  way. `online_interpolation_adaptive` off pins the delay at the floor, for
+  comparing the two on one link. Positions blend linearly; hulls snap by
+  the four-way rule. A gap extrapolates on the last velocity and then
+  dead-blends to a stop. Server time is the lower envelope of the snapshots'
+  arrivals on the tick schedule (§4.16, "A controlled playout clock").
 - `Game::tick_presentation(dt)`: `tick_effects` plus the cosmetic parts of the
   entity ticks (`ease_visual_rotation`, `ease_turret_visual_rotation`,
   `ease_ring_position`, hull animation, tread marks from displacement - none

@@ -152,10 +152,11 @@ pub enum ClientEvent {
     /// The room exists (a host's answer to its own create); this is the
     /// code to share. A `Welcomed` follows.
     Created { code: String },
-    /// The room's parameters and this client's seat. Build the replica
-    /// from it with `net::apply::welcome`; its own snapshot is the
-    /// baseline and is not repeated as a `Snapshot` event.
-    Welcomed(Box<Welcome>),
+    /// The room's parameters and this client's seat, and the instant it
+    /// came off the socket. Build the replica from it with
+    /// `net::apply::welcome`; its own snapshot is the baseline and is not
+    /// repeated as a `Snapshot` event.
+    Welcomed { welcome: Box<Welcome>, arrived: std::time::Instant },
     /// The roster changed: a seat joined, left, readied, dropped or came
     /// back.
     Roster { host: u8, seats: Vec<RosterSeat> },
@@ -466,7 +467,7 @@ impl<T: Transport> RoomClient<T> {
                     Phase::Lobby
                 };
                 self.baseline = Some(welcome.snapshot.clone());
-                out.push(ClientEvent::Welcomed(Box::new(welcome)));
+                out.push(ClientEvent::Welcomed { welcome: Box::new(welcome), arrived });
             }
             Msg::Snapshot(snapshot) => {
                 self.baseline = Some(snapshot.clone());
@@ -636,7 +637,7 @@ mod tests {
         room.say(Msg::Welcome(welcome(0, 0)));
         let events = frame(&mut room, &mut client);
         assert_eq!(events[0], ClientEvent::Created { code: "AK7QX".into() });
-        assert!(matches!(&events[1], ClientEvent::Welcomed(w) if w.seat == 0));
+        assert!(matches!(&events[1], ClientEvent::Welcomed { welcome, .. } if welcome.seat == 0));
         assert_eq!(events.len(), 2);
         assert_eq!(client.phase(), &Phase::Lobby);
         assert_eq!(client.code(), Some("AK7QX"));
@@ -660,7 +661,7 @@ mod tests {
         room.say(Msg::Welcome(welcome(0, 0)));
         let events = frame(&mut room, &mut client);
         assert_eq!(events[0], ClientEvent::Started);
-        assert!(matches!(events[1], ClientEvent::Welcomed(_)));
+        assert!(matches!(events[1], ClientEvent::Welcomed { .. }));
         assert_eq!(client.phase(), &Phase::Playing);
     }
 
@@ -684,7 +685,7 @@ mod tests {
 
         room.say(Msg::Welcome(welcome(1, 1_200)));
         let events = frame(&mut room, &mut client);
-        assert!(matches!(&events[0], ClientEvent::Welcomed(w) if w.seat == 1));
+        assert!(matches!(&events[0], ClientEvent::Welcomed { welcome, .. } if welcome.seat == 1));
         assert_eq!(client.phase(), &Phase::Playing, "a welcome cut mid-round is the round");
         assert_eq!(client.seat(), Some(1));
         assert!(!client.is_host());
@@ -827,7 +828,7 @@ mod tests {
         frame(&mut room, &mut client);
         room.say(Msg::Welcome(welcome(1, 0)));
         let events = frame(&mut room, &mut client);
-        let ClientEvent::Welcomed(w) = &events[0] else { panic!("no welcome: {events:?}") };
+        let ClientEvent::Welcomed { welcome: w, .. } = &events[0] else { panic!("no welcome: {events:?}") };
         assert_eq!(w.seed, 0xB0B5);
         assert_eq!(w.snapshot.acked, [0; MAX_SEATS]);
         let seat = client.seat().expect("a seat");
