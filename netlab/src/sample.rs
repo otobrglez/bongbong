@@ -1,14 +1,23 @@
-//! One rendered frame as the metrics need it: what the player asked for,
-//! what the picture held, and what happened - read the same way off an
-//! online client's replica and off the local twin's round, so every
-//! metric is one code path over one kind of record.
+//! One rendered frame as the metrics need it: what the players asked for,
+//! what the picture held, what happened, and - online - what the client's
+//! own counters read - taken the same way off an online client's replica
+//! and off the local twin's round, so every metric is one code path over
+//! one kind of record.
 
 use bongbong::ai::Intent;
-use bongbong::simulation::debug::Detail;
+use bongbong::bullet::BulletState;
+use bongbong::net::clock::RttReport;
+use bongbong::net::interp::InterpReport;
+use bongbong::net::predict::{PROVISIONAL_ID_BASE, PredictionReport};
+use bongbong::plasma::PlasmaState;
+use bongbong::shell::ShellState;
 use bongbong::simulation::replica::ShotKind;
 use bongbong::simulation::{Event, Game, HitTarget};
 use bongbong::tank::Dir;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+/// The seats a run scripts: the host's and the guest's.
+pub const SEATS: usize = 2;
 
 /// A hull as drawn, in field pixels.
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -26,18 +35,21 @@ pub struct TankSample {
 /// A projectile as drawn.
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct ShotSample {
+    /// The replica's id: the room's per-round counter for a room copy,
+    /// `PROVISIONAL_ID_BASE` and up for a provisional - an index into the
+    /// client's live provisionals, which shifts down as older ones retire,
+    /// so it names no shot from one frame to the next.
     pub id: u32,
     /// 0 shell, 1 bullet, 2 plasma.
     pub kind: u8,
     pub x: f32,
     pub y: f32,
-    /// The firing slot, when the debug snapshot names it: a seat's index,
-    /// an enemy's slot, `usize::MAX` for an enemy's shot on a replica.
-    pub owner: Option<usize>,
-    /// A shot this client drew on the press, ahead of the room
-    /// (`net::predict::PROVISIONAL_ID_BASE` and up).
+    /// The seat that fired it; `None` for an enemy's.
+    pub seat: Option<u8>,
+    /// A shot this client drew on the press, on its own timeline
+    /// (`net::predict`), rather than the room's copy of one.
     pub provisional: bool,
-    /// Still in flight (not at the muzzle, not bursting).
+    /// In flight: past the muzzle frames and not yet an impact.
     pub flying: bool,
 }
 
@@ -49,6 +61,98 @@ pub enum EventSample {
     HitPlayer { player: u8, x: f32, y: f32 },
 }
 
+/// An online client's own readings on one frame: the prediction's
+/// counters (cumulative), the round trip, and the interpolator - what a
+/// time series of the link is read from.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct LinkSample {
+    /// Corrections eased off and taken whole since the round opened.
+    pub nudges: u32,
+    pub snaps: u32,
+    /// The largest correction so far, pixels.
+    pub max_error_px: f32,
+    /// Inputs the room had not acknowledged at the last reconciliation.
+    pub in_flight: usize,
+    /// Provisional shots on screen.
+    pub shots_on_screen: usize,
+    pub shots_drawn: u32,
+    pub shots_refused: u32,
+    pub crossings: u32,
+    pub crossings_hit: u32,
+    pub crossings_missed: u32,
+    /// The lead's smoothed reading of the seat's mailbox depth.
+    pub lead_depth: f32,
+    /// The measured round trip (median of the window), once a probe has
+    /// been answered.
+    pub rtt_ms: Option<f64>,
+    /// How far ahead of the picture the newest snapshot stands.
+    pub buffer_ms: Option<f64>,
+    /// The interpolation delay in force, and where it is heading.
+    pub delay_ms: f64,
+    pub target_ms: f64,
+    pub jitter_ms: f64,
+    pub interval_ms: f64,
+    pub buffered: usize,
+    /// This frame ran past the newest snapshot on last-known velocities.
+    pub extrapolated: bool,
+    /// Frames drawn on extrapolation since the round opened.
+    pub extrapolated_frames: u64,
+    /// Arrival lateness behind the clock's envelope, median and 95th.
+    pub lateness_p50_ms: f64,
+    pub lateness_p95_ms: f64,
+    /// Head-of-line stalls ridden out on extrapolation so far.
+    pub stalls: u64,
+    /// The playout clock's speed this frame (1.0 settled).
+    pub rate: f64,
+    /// Corrections eased by an error offset so far, and their p95 size.
+    pub corrections: u64,
+    pub correction_p95_px: f64,
+}
+
+impl LinkSample {
+    /// The readings off a client's accessors. `prev_extrapolated` is the
+    /// last frame's cumulative count, so the flag says whether *this*
+    /// frame extrapolated.
+    pub fn read(
+        prediction: Option<PredictionReport>,
+        lead_depth: f32,
+        rtt: Option<RttReport>,
+        buffer_ms: Option<f64>,
+        interp: &InterpReport,
+        prev_extrapolated: Option<u64>,
+    ) -> LinkSample {
+        let p = prediction.unwrap_or_default();
+        LinkSample {
+            nudges: p.nudges,
+            snaps: p.snaps,
+            max_error_px: p.max_error_px,
+            in_flight: p.in_flight,
+            shots_on_screen: p.shots_on_screen,
+            shots_drawn: p.shots_drawn,
+            shots_refused: p.shots_refused,
+            crossings: p.crossings,
+            crossings_hit: p.crossings_hit,
+            crossings_missed: p.crossings_missed,
+            lead_depth,
+            rtt_ms: rtt.map(|r| r.rtt_ms),
+            buffer_ms,
+            delay_ms: interp.delay_ms,
+            target_ms: interp.target_ms,
+            jitter_ms: interp.jitter_ms,
+            interval_ms: interp.interval_ms,
+            buffered: interp.buffered,
+            extrapolated: prev_extrapolated.is_some_and(|prev| interp.extrapolated_frames > prev),
+            extrapolated_frames: interp.extrapolated_frames,
+            lateness_p50_ms: interp.lateness_p50_ms,
+            lateness_p95_ms: interp.lateness_p95_ms,
+            stalls: interp.stalls,
+            rate: interp.rate,
+            corrections: interp.corrections,
+            correction_p95_px: interp.error_p95_px,
+        }
+    }
+}
+
 /// One rendered frame.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct FrameSample {
@@ -56,10 +160,11 @@ pub struct FrameSample {
     pub t_ms: f64,
     /// Seconds since the seat's script began.
     pub script_s: f64,
-    /// The script's movement this frame (`Dir::index`), if any.
-    pub move_dir: Option<u8>,
-    /// The script tapped the trigger this frame.
-    pub fire: bool,
+    /// Each seat's scripted movement this frame (`Dir::index`), by seat:
+    /// the twin records both, an online client only its own.
+    pub move_dirs: [Option<u8>; SEATS],
+    /// Each seat's trigger tap this frame, the same way.
+    pub fires: [bool; SEATS],
     pub tanks: Vec<TankSample>,
     pub shots: Vec<ShotSample>,
     /// The events handed over on this frame.
@@ -69,8 +174,8 @@ pub struct FrameSample {
     pub cpu_us: f64,
     /// The world's tick as drawn (`Game::frame`).
     pub tick: u64,
-    /// The interpolation delay in force, milliseconds (online only).
-    pub interp_delay_ms: Option<f64>,
+    /// The client's own readings (online only).
+    pub link: Option<LinkSample>,
 }
 
 impl FrameSample {
@@ -78,8 +183,14 @@ impl FrameSample {
         self.tanks.iter().find(|t| t.slot == slot)
     }
 
-    pub fn move_dir(&self) -> Option<Dir> {
-        self.move_dir.and_then(|i| Dir::ALL.get(i as usize).copied())
+    /// `seat`'s scripted movement this frame, where this record knows it.
+    pub fn move_dir(&self, seat: usize) -> Option<Dir> {
+        self.move_dirs.get(seat).copied().flatten().and_then(|i| Dir::ALL.get(i as usize).copied())
+    }
+
+    /// Whether `seat` tapped the trigger this frame.
+    pub fn fire(&self, seat: usize) -> bool {
+        self.fires.get(seat).copied().unwrap_or(false)
     }
 }
 
@@ -88,9 +199,24 @@ pub fn dir_index(dir: Dir) -> u8 {
     dir.index() as u8
 }
 
+/// Whether a drawn shot of `kind` in sheet column `state` is in flight.
+fn in_flight(kind: ShotKind, state: i32) -> bool {
+    match kind {
+        ShotKind::Shell => ShellState::from_col(state) == Some(ShellState::Flying),
+        ShotKind::Bullet => BulletState::from_col(state) == Some(BulletState::Flying),
+        ShotKind::Plasma => PlasmaState::from_col(state) == Some(PlasmaState::Flying),
+    }
+}
+
 /// The picture half of a sample: the hulls and the shots as `game` holds
-/// them now.
-pub fn read_picture(game: &Game, sample: &mut FrameSample) {
+/// them now. `local_seat` is the seat whose provisionals the picture
+/// holds (an online client's own), `None` for the twin.
+///
+/// Every shot's firer is read by id, not guessed from its position: a
+/// provisional is the local seat's, a room copy is a seat's when that
+/// seat's own list (`Game::seat_shots`) names its id, and an enemy's
+/// otherwise.
+pub fn read_picture(game: &Game, local_seat: Option<u8>, sample: &mut FrameSample) {
     let state = game.drawable_state();
     sample.tanks = state
         .tanks
@@ -105,48 +231,29 @@ pub fn read_picture(game: &Game, sample: &mut FrameSample) {
             player: t.player.is_some(),
         })
         .collect();
-    // The drawable shots carry the id and the kind; the debug snapshot
-    // carries the owner and whether it flies. Matched on kind and
-    // position - the debug copy is rounded to a tenth of a pixel.
-    let (w, h) = game.map.field_size();
-    let debug = game.debug_snapshot(w, h, Detail::Compact);
-    let mut claimed = vec![false; debug.projectiles.len()];
+    let mut seat_of = std::collections::BTreeMap::new();
+    for seat in 0..game.players.count() as u8 {
+        for s in game.seat_shots(seat) {
+            seat_of.insert(s.id as u32, seat);
+        }
+    }
     sample.shots = state
         .shots
         .iter()
         .map(|s| {
-            let kind = match s.kind {
-                ShotKind::Shell => 0u8,
-                ShotKind::Bullet => 1,
-                ShotKind::Plasma => 2,
-            };
-            let name = ["shell", "bullet", "plasma"][kind as usize];
-            let (x, y) = (s.x as f32 / 4.0, s.y as f32 / 4.0);
-            let found = debug
-                .projectiles
-                .iter()
-                .enumerate()
-                .filter(|(i, p)| !claimed[*i] && p.kind == name)
-                .map(|(i, p)| (i, (p.x - x).abs() + (p.y - y).abs()))
-                .filter(|(_, d)| *d <= 0.6)
-                .min_by(|a, b| a.1.total_cmp(&b.1))
-                .map(|(i, _)| i);
-            let (owner, flying) = match found {
-                Some(i) => {
-                    claimed[i] = true;
-                    let p = &debug.projectiles[i];
-                    (Some(p.owner), p.state == "flying")
-                }
-                None => (None, true),
-            };
+            let provisional = s.id >= PROVISIONAL_ID_BASE;
             ShotSample {
                 id: s.id,
-                kind,
-                x,
-                y,
-                owner,
-                provisional: s.id >= bongbong::net::predict::PROVISIONAL_ID_BASE,
-                flying,
+                kind: match s.kind {
+                    ShotKind::Shell => 0,
+                    ShotKind::Bullet => 1,
+                    ShotKind::Plasma => 2,
+                },
+                x: s.x as f32 / 4.0,
+                y: s.y as f32 / 4.0,
+                seat: if provisional { local_seat } else { seat_of.get(&s.id).copied() },
+                provisional,
+                flying: in_flight(s.kind, s.state),
             }
         })
         .collect();
@@ -165,8 +272,10 @@ pub fn read_events(events: &[Event], out: &mut Vec<EventSample>) {
     }
 }
 
-/// The frame's intent in sample form.
-pub fn read_intent(intent: &Intent, sample: &mut FrameSample) {
-    sample.move_dir = intent.move_dir.map(dir_index);
-    sample.fire = intent.fire;
+/// `seat`'s intent this frame in sample form.
+pub fn read_intent(seat: usize, intent: &Intent, sample: &mut FrameSample) {
+    if seat < SEATS {
+        sample.move_dirs[seat] = intent.move_dir.map(dir_index);
+        sample.fires[seat] = intent.fire;
+    }
 }

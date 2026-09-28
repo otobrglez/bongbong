@@ -86,6 +86,10 @@ struct RunArgs {
     enemies: Option<usize>,
     #[arg(long)]
     json_out: Option<PathBuf>,
+    /// Write every recorded frame - each seat's and the twin's: the hulls,
+    /// the shots, the events and the client's readings - as JSON.
+    #[arg(long)]
+    frames_out: Option<PathBuf>,
     #[arg(long, default_value = "run")]
     label: String,
     /// Print nothing but errors.
@@ -155,6 +159,7 @@ fn run_cmd(args: RunArgs) -> Result<(), String> {
         tank: args.common.tank,
         mission: args.common.mission,
         remote: args.common.remote.clone(),
+        frames_out: args.frames_out.clone(),
     };
     let report = run::run(&cfg)?;
     if !args.quiet {

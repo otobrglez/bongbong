@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 use bongbong::net::MAX_SEATS;
 use bongbong::net::codec::{self, Msg};
+use bongbong::net::events::WireEvent;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
@@ -76,6 +77,20 @@ pub struct SnapRec {
     pub bytes: usize,
 }
 
+/// A seat's `Fired` as it crossed the proxy toward a client, inside a
+/// snapshot or a delta.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FiredRec {
+    pub egress_ms: f64,
+    /// The tick of the snapshot that carried it: the interpolator hands it
+    /// over on the frame the picture reaches that tick.
+    pub snapshot_tick: u32,
+    pub slot: u16,
+    /// The input tick of the intent the press travelled on
+    /// (`WireEvent::Fired::input_tick`).
+    pub input_tick: u32,
+}
+
 /// Everything the tap read off one connection.
 #[derive(Clone, Debug, Default)]
 pub struct ConnTap {
@@ -83,6 +98,8 @@ pub struct ConnTap {
     pub seat: Option<u8>,
     pub intents: Vec<IntentRec>,
     pub snapshots: Vec<SnapRec>,
+    /// Every seat's `Fired` the room sent this connection.
+    pub fired: Vec<FiredRec>,
     /// Every chunk's delivery and size, client to server.
     pub up_chunks: Vec<(f64, usize)>,
     /// Every chunk's delivery and size, server to client.
@@ -218,6 +235,18 @@ fn record(log: &SharedLog, conn: usize, way: Way, bytes: &[u8], egress: f64, mes
     }
     for m in messages.iter().filter(|m| m.opcode == OP_BINARY) {
         let Ok(msg) = codec::decode(&m.payload) else { continue };
+        let carried = match &msg {
+            Msg::Snapshot(s) => Some((s.tick, &s.events)),
+            Msg::Delta(d) => Some((d.tick, &d.events)),
+            _ => None,
+        };
+        if let Some((tick, events)) = carried {
+            for e in events {
+                if let WireEvent::Fired { slot, input_tick, .. } = *e {
+                    c.fired.push(FiredRec { egress_ms: m.egress_ms, snapshot_tick: tick, slot, input_tick });
+                }
+            }
+        }
         match msg {
             Msg::Intent(i) => c.intents.push(IntentRec {
                 ingress_ms: m.ingress_ms,

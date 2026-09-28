@@ -12,13 +12,15 @@ use serde::Serialize;
 use bongbong::tank::Dir;
 use bongbong::{TANK_HULL_BBOX_BY_ROW, TANK_TEXTURE_SIZE, TANK_TURRET_BBOX_BY_ROW};
 
-use crate::sample::{EventSample, FrameSample};
+use crate::sample::{EventSample, FrameSample, TankSample};
 use crate::script::{RECTANGLE, RECTANGLE_SECONDS, Scenario};
+use crate::shots;
 
 /// A distribution's summary. Every field is `None` with no samples.
 #[derive(Clone, Copy, Debug, Default, Serialize, serde::Deserialize, PartialEq)]
 pub struct Stat {
     pub n: usize,
+    pub min: Option<f64>,
     pub p50: Option<f64>,
     pub p95: Option<f64>,
     pub p99: Option<f64>,
@@ -36,6 +38,7 @@ impl Stat {
         let pick = |q: f64| v[((v.len() - 1) as f64 * q).round() as usize];
         Stat {
             n: v.len(),
+            min: v.first().copied(),
             p50: Some(pick(0.50)),
             p95: Some(pick(0.95)),
             p99: Some(pick(0.99)),
@@ -71,9 +74,6 @@ pub const LAG_MATCH_PX: f32 = 1.5;
 /// A backward step is past the wire's quarter-pixel rounding.
 pub const BACKWARD_PX: f32 = 0.25;
 
-/// How far a shot can move between two frames and still be the same shot.
-pub const SHOT_TRACK_PX: f32 = 24.0;
-
 /// How long after a press its `Fired` may arrive.
 pub const FIRED_WINDOW_MS: f64 = 1000.0;
 
@@ -81,25 +81,58 @@ pub const FIRED_WINDOW_MS: f64 = 1000.0;
 pub const HIT_WINDOW_MS: f64 = 1500.0;
 
 /// How near in ticks the guest's `Fired` has to be to the host's to be
-/// the same shot.
+/// the same shot, where the two are paired by order.
 pub const FIRED_TICK_MATCH: u64 = 6;
 
-/// The own hull's input latency: from each frame the scripted direction
-/// changes to the first frame the drawn own hull has moved
+/// How near the drawn own hull a shot first drawn counts as leaving its
+/// muzzle: a hull's length.
+pub const LAUNCH_RADIUS_PX: f32 = 64.0;
+
+/// How long after an own shot leaves the picture another own shot
+/// appearing away from the muzzle is taken as the same shot drawn again:
+/// past the client's hold on an unpaired room copy
+/// (`net::predict::UNPAIRED_HOLD_SECONDS`) by a few frames.
+pub const HANDOFF_WINDOW_MS: f64 = 250.0;
+
+/// The most a shot that left the picture in flight is carried on to where
+/// it would have been when the next one appeared: a few frames, not a
+/// guess at a flight nobody saw.
+pub const HANDOFF_CARRY_MS: f64 = 50.0;
+
+/// How long before a hit is handed over the picture may have stopped the
+/// shot that made it: a round trip and the picture's delay, generously.
+pub const STRIKE_WINDOW_MS: f64 = 1000.0;
+
+/// How near the room's impact point the drawn path of the shot that made
+/// it passes: shots fly straight, so the point is on the path the picture
+/// drew, give or take the wire's rounding and a hit box.
+pub const PATH_MATCH_PX: f32 = 12.0;
+
+/// How far past a drawn path's end the room's impact point may lie and
+/// still be on it: a shot the picture stopped short, at a wall or at the
+/// hull's near face.
+pub const PATH_EXTEND_PX: f32 = 64.0;
+
+/// A shot the picture stopped this near the drawn hull's hit boxes struck
+/// it.
+pub const STRIKE_PX: f32 = 1.0;
+
+/// The own hull's input latency: from each frame `seat`'s scripted
+/// direction changes to the first frame the drawn hull of `seat` has moved
 /// `MOVE_ANSWERED_PX` along the new direction, as milliseconds and as
 /// frames.
 pub fn own_input_latency(frames: &[FrameSample], seat: usize) -> Vec<(f64, usize)> {
     let mut out = Vec::new();
     for i in 1..frames.len() {
         let (prev, cur) = (&frames[i - 1], &frames[i]);
-        let Some(dir) = cur.move_dir() else { continue };
-        if prev.move_dir() == Some(dir) {
+        let Some(dir) = cur.move_dir(seat) else { continue };
+        if prev.move_dir(seat) == Some(dir) {
             continue;
         }
         let Some(base) = prev.tank(seat) else { continue };
         let v = dir.vec();
         for (k, later) in frames[i..].iter().enumerate() {
-            if later.t_ms - cur.t_ms > ANSWER_WINDOW_MS || later.move_dir() != Some(dir) {
+            if later.t_ms - cur.t_ms > ANSWER_WINDOW_MS || later.move_dir(seat) != Some(dir) {
                 break;
             }
             let Some(p) = later.tank(seat) else { break };
@@ -252,17 +285,36 @@ pub fn remote_pacing(observer: &[FrameSample], slot: usize, host_script_s: &[Opt
 }
 
 /// The host's presses and what became of them.
-#[derive(Clone, Copy, Debug, Default, Serialize, serde::Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, serde::Deserialize, PartialEq)]
 pub struct ShotLedger {
     pub presses: usize,
-    /// Press to the first frame the own shot is drawn.
+    /// Press to the first frame its shot is drawn leaving the muzzle: the
+    /// provisional where the client draws one, the room's copy where it
+    /// does not.
     pub drawn_ms: Stat,
     /// Press to the frame the room's `Fired` for it is handed over.
     pub fired_ms: Stat,
-    /// On the frame a provisional shot is retired, how far its last drawn
-    /// position is from the room's copy of it drawn that frame (max per
-    /// press).
+    /// How each press was paired with its `Fired`: `input_tick` - the
+    /// press's own intent tick, which the room's `Fired` names, both read
+    /// off the wire by the tap - or `order`, oldest first, where there is
+    /// no tap (`--remote`, the twin).
+    pub fired_pairing: String,
+    /// Every time an own shot left the picture and an own shot appeared
+    /// away from the muzzle within `HANDOFF_WINDOW_MS`: how far the shot
+    /// jumped between the two - a provisional swapped for the room's copy,
+    /// a room copy shown again after the provisional that stood for it
+    /// was gone, a provisional snapped to the room's impact. Nothing is
+    /// swapped on the present timeline, so its count is the finding there.
     pub handoff_gap_px: Stat,
+    /// Room copies of the host's shots that appeared while the provisional
+    /// standing for the same shot was still drawn - on its path, behind it:
+    /// one shot drawn twice, the second a round trip late.
+    pub drawn_twice: usize,
+    /// Distinct room copies of the host's own shots the picture drew, on a
+    /// client that draws its own shots from the press (`None` where it
+    /// draws none): each one is a shot drawn twice, or drawn only a round
+    /// trip late.
+    pub room_copies_shown: Option<usize>,
     /// Press to the first enemy hit handed over for it (only where the
     /// host is the one seat shooting).
     pub hit_ms: Stat,
@@ -272,102 +324,174 @@ pub struct ShotLedger {
     pub unanswered: usize,
 }
 
-/// A drawn own shot followed frame to frame.
-#[derive(Clone, Copy, Debug)]
-struct Track {
-    kind: u8,
-    provisional: bool,
-    x: f32,
-    y: f32,
-    press: Option<usize>,
-    seen: bool,
+/// The ticks of the snapshots that carried each host press's `Fired`, read
+/// off the wire by the tap: per press in press order, to the host and to
+/// the guest. What pairs a press with its `Fired` exactly
+/// (`ShotLedger::fired_pairing`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WireFired {
+    pub host: Vec<Option<u32>>,
+    pub guest: Vec<Option<u32>>,
+}
+
+/// When each press of `seat` was made: the frames whose script tapped.
+pub fn presses(frames: &[FrameSample], seat: usize) -> Vec<f64> {
+    frames.iter().filter(|f| f.fire(seat)).map(|f| f.t_ms).collect()
+}
+
+/// The first frame at or after `not_before` that draws tick `tick` or
+/// later - the frame the interpolator handed that snapshot's events over.
+fn frame_reaching(frames: &[FrameSample], tick: u32, not_before: f64) -> Option<(f64, u64)> {
+    frames.iter().find(|f| f.t_ms >= not_before && f.tick >= tick as u64).map(|f| (f.t_ms, f.tick))
+}
+
+/// The gap between a point and a drawn hull's hit boxes, grown by the
+/// shot's half extent: nought on or inside them.
+fn gap_to_hull(hull: &TankSample, x: f32, y: f32, half: f32) -> f32 {
+    hit_boxes(hull.row, hull.dir)
+        .iter()
+        .map(|&(ox, oy, hx, hy)| {
+            let dx = ((x - hull.x - ox).abs() - hx - half).max(0.0);
+            let dy = ((y - hull.y - oy).abs() - hy - half).max(0.0);
+            (dx * dx + dy * dy).sqrt()
+        })
+        .fold(f32::INFINITY, f32::min)
+}
+
+/// Whether the room copy `room` first appeared beside a provisional drawn
+/// on the same frame whose path it lies on, behind it or level with it: the
+/// same shot, drawn twice. A room copy of an older shot lies ahead of the
+/// newer provisionals on the same line, so it is not taken for one of
+/// them.
+fn beside_its_provisional(own: &[shots::Track], room: &shots::Track) -> bool {
+    let first = room.first();
+    own.iter().filter(|p| p.provisional).any(|p| {
+        let Some(now) = p.points.iter().find(|q| q.frame == first.frame) else { return false };
+        if p.path_distance(first.x, first.y, 0.0) > PATH_MATCH_PX {
+            return false;
+        }
+        let (dx, dy) = (p.last().x - p.first().x, p.last().y - p.first().y);
+        let len = (dx * dx + dy * dy).sqrt();
+        len < 1e-3 || ((now.x - first.x) * dx + (now.y - first.y) * dy) / len >= -PATH_MATCH_PX
+    })
 }
 
 /// The host's shot ledger. `guest` is the other seat's frames (the twin's
-/// own again), `hits` whether enemy hits can be put down to the host.
-pub fn shot_ledger(host: &[FrameSample], guest: &[FrameSample], seat: usize, hits: bool) -> ShotLedger {
-    let presses: Vec<f64> = host.iter().filter(|f| f.fire).map(|f| f.t_ms).collect();
+/// own again), `hits` whether enemy hits can be put down to the host,
+/// `wire` the tap's reading of which snapshot carried each press's
+/// `Fired`.
+pub fn shot_ledger(host: &[FrameSample], guest: &[FrameSample], seat: usize, hits: bool, wire: Option<&WireFired>) -> ShotLedger {
+    let presses = presses(host, seat);
     if presses.is_empty() {
         return ShotLedger::default();
     }
-    let any_provisional = host.iter().any(|f| f.shots.iter().any(|s| s.provisional));
+    let own = shots::follow(host, |s| s.seat == Some(seat as u8));
+    // A client that draws its own shots from the press: its provisionals
+    // are the launches, and a room copy of one is a shot drawn twice.
+    let predicted = own.iter().any(|t| t.provisional);
+
+    // Launches: a track that begins at the muzzle, answering the newest
+    // press at or before it if that press has no shot yet. A press that
+    // drew nothing (refused, the round over for this seat) is left
+    // unanswered rather than handed the next press's shot.
     let mut drawn: Vec<Option<f64>> = vec![None; presses.len()];
-    let mut gap: Vec<Option<f64>> = vec![None; presses.len()];
-    let mut tracks: Vec<Track> = Vec::new();
-    let mut press_i = 0usize;
-    for f in host {
-        while press_i < presses.len() && presses[press_i] <= f.t_ms {
-            press_i += 1;
+    let mut launched = vec![false; own.len()];
+    for (k, t) in own.iter().enumerate() {
+        if t.provisional != predicted {
+            continue;
         }
-        for t in &mut tracks {
-            t.seen = false;
+        let first = t.first();
+        let f = &host[first.frame];
+        let Some(hull) = f.tank(seat) else { continue };
+        if ((first.x - hull.x).powi(2) + (first.y - hull.y).powi(2)).sqrt() > LAUNCH_RADIUS_PX {
+            continue;
         }
-        let own: Vec<_> = f.shots.iter().filter(|s| s.provisional || s.owner == Some(seat)).collect();
-        let mut fresh = Vec::new();
-        for s in &own {
-            let near = tracks
-                .iter_mut()
-                .filter(|t| !t.seen && t.kind == s.kind && t.provisional == s.provisional)
-                .map(|t| {
-                    let d = ((t.x - s.x).powi(2) + (t.y - s.y).powi(2)).sqrt();
-                    (d, t)
-                })
-                .filter(|(d, _)| *d <= SHOT_TRACK_PX)
-                .min_by(|a, b| a.0.total_cmp(&b.0));
-            match near {
-                Some((_, t)) => {
-                    t.x = s.x;
-                    t.y = s.y;
-                    t.seen = true;
-                }
-                None => fresh.push(**s),
-            }
-        }
-        // A provisional that is gone this frame was retired: how far is
-        // the room's copy of it?
-        for t in tracks.iter().filter(|t| !t.seen && t.provisional) {
-            let Some(p) = t.press else { continue };
-            let nearest = own
-                .iter()
-                .filter(|s| !s.provisional && s.kind == t.kind)
-                .map(|s| (((s.x - t.x).powi(2) + (s.y - t.y).powi(2)).sqrt()) as f64)
-                .min_by(f64::total_cmp);
-            if let Some(d) = nearest {
-                gap[p] = Some(gap[p].map_or(d, |g: f64| g.max(d)));
-            }
-        }
-        tracks.retain(|t| t.seen);
-        for s in fresh {
-            let counts = s.provisional || !any_provisional;
-            let press = if counts {
-                // The newest press before this frame still without a shot:
-                // a press that drew nothing (the round over for this seat,
-                // a weapon with no projectile) is left unanswered rather
-                // than handed the next press's shot.
-                (0..press_i).rev().find(|&i| drawn[i].is_none() && f.t_ms - presses[i] <= FIRED_WINDOW_MS)
-            } else {
-                None
-            };
-            if let Some(i) = press {
-                drawn[i] = Some(f.t_ms - presses[i]);
-            }
-            tracks.push(Track { kind: s.kind, provisional: s.provisional, x: s.x, y: s.y, press, seen: true });
+        let Some(i) = presses.iter().rposition(|&p| p <= f.t_ms) else { continue };
+        if drawn[i].is_none() && f.t_ms - presses[i] <= FIRED_WINDOW_MS {
+            drawn[i] = Some(f.t_ms - presses[i]);
+            launched[k] = true;
         }
     }
 
-    // The room's `Fired` for each press, oldest first, each used once.
-    let fired_at: Vec<(f64, u64)> = events_of(host, |e| matches!(e, EventSample::Fired { slot } if *slot == seat));
-    let mut fired: Vec<Option<(f64, u64)>> = vec![None; presses.len()];
-    let mut next = 0usize;
-    for (i, &p) in presses.iter().enumerate() {
-        while next < fired_at.len() && fired_at[next].0 < p {
-            next += 1;
+    // Every other appearance of an own shot: a room copy drawn beside the
+    // provisional that stands for the same shot is that shot drawn twice;
+    // anything else is a hand-off from the own shot of its kind that left
+    // the picture most recently before it.
+    let mut handed = vec![false; own.len()];
+    let mut gaps = Vec::new();
+    let mut drawn_twice = 0;
+    for (k, t) in own.iter().enumerate() {
+        if launched[k] {
+            continue;
         }
-        if next < fired_at.len() && fired_at[next].0 - p <= FIRED_WINDOW_MS {
-            fired[i] = Some(fired_at[next]);
-            next += 1;
+        if predicted && !t.provisional && beside_its_provisional(&own, t) {
+            drawn_twice += 1;
+            continue;
+        }
+        let first = t.first();
+        let at = host[first.frame].t_ms;
+        let before = own
+            .iter()
+            .enumerate()
+            .filter(|&(j, e)| {
+                j != k && !handed[j] && e.kind == t.kind && e.last().frame < first.frame && at - host[e.last().frame].t_ms <= HANDOFF_WINDOW_MS
+            })
+            .map(|(j, e)| {
+                let (x, y) = e.carried(host, at, HANDOFF_CARRY_MS);
+                (j, e.last().frame, ((x - first.x).powi(2) + (y - first.y).powi(2)).sqrt())
+            })
+            .max_by(|a, b| a.1.cmp(&b.1).then(b.2.total_cmp(&a.2)));
+        if let Some((j, _, gap)) = before {
+            handed[j] = true;
+            gaps.push(gap as f64);
         }
     }
+    let room_copies_shown = predicted.then(|| {
+        own.iter().filter_map(|t| t.room_id).collect::<std::collections::BTreeSet<_>>().len()
+    });
+
+    // The room's `Fired` for each press: exactly, by the snapshot the tap
+    // saw carry it, or oldest first within a window.
+    let (fired, guest_ms, pairing): (Vec<Option<(f64, u64)>>, Vec<f64>, &str) = match wire {
+        Some(w) => {
+            let fired: Vec<Option<(f64, u64)>> = presses
+                .iter()
+                .enumerate()
+                .map(|(i, &p)| w.host.get(i).copied().flatten().and_then(|tick| frame_reaching(host, tick, p)))
+                .collect();
+            let guest_ms = presses
+                .iter()
+                .enumerate()
+                .filter_map(|(i, &p)| w.guest.get(i).copied().flatten().and_then(|tick| frame_reaching(guest, tick, p)).map(|(t, _)| t - p))
+                .collect();
+            (fired, guest_ms, "input_tick")
+        }
+        None => {
+            let fired_at: Vec<(f64, u64)> = events_of(host, |e| matches!(e, EventSample::Fired { slot } if *slot == seat));
+            let mut fired: Vec<Option<(f64, u64)>> = vec![None; presses.len()];
+            let mut next = 0usize;
+            for (i, &p) in presses.iter().enumerate() {
+                while next < fired_at.len() && fired_at[next].0 < p {
+                    next += 1;
+                }
+                if next < fired_at.len() && fired_at[next].0 - p <= FIRED_WINDOW_MS {
+                    fired[i] = Some(fired_at[next]);
+                    next += 1;
+                }
+            }
+            let guest_fired: Vec<(f64, u64)> = events_of(guest, |e| matches!(e, EventSample::Fired { slot } if *slot == seat));
+            let mut used = vec![false; guest_fired.len()];
+            let mut guest_ms = Vec::new();
+            for (i, f) in fired.iter().enumerate() {
+                let Some((_, tick)) = f else { continue };
+                if let Some(j) = (0..guest_fired.len()).find(|&j| !used[j] && guest_fired[j].1.abs_diff(*tick) <= FIRED_TICK_MATCH) {
+                    used[j] = true;
+                    guest_ms.push(guest_fired[j].0 - presses[i]);
+                }
+            }
+            (fired, guest_ms, "order")
+        }
+    };
 
     let mut hit_ms = Vec::new();
     if hits {
@@ -384,22 +508,14 @@ pub fn shot_ledger(host: &[FrameSample], guest: &[FrameSample], seat: usize, hit
         }
     }
 
-    let guest_fired: Vec<(f64, u64)> = events_of(guest, |e| matches!(e, EventSample::Fired { slot } if *slot == seat));
-    let mut used = vec![false; guest_fired.len()];
-    let mut guest_ms = Vec::new();
-    for (i, f) in fired.iter().enumerate() {
-        let Some((_, tick)) = f else { continue };
-        if let Some(j) = (0..guest_fired.len()).find(|&j| !used[j] && guest_fired[j].1.abs_diff(*tick) <= FIRED_TICK_MATCH) {
-            used[j] = true;
-            guest_ms.push(guest_fired[j].0 - presses[i]);
-        }
-    }
-
     ShotLedger {
         presses: presses.len(),
         drawn_ms: Stat::of(&drawn.iter().flatten().copied().collect::<Vec<_>>()),
         fired_ms: Stat::of(&fired.iter().zip(&presses).filter_map(|(f, p)| f.map(|(t, _)| t - p)).collect::<Vec<_>>()),
-        handoff_gap_px: Stat::of(&gap.iter().flatten().copied().collect::<Vec<_>>()),
+        fired_pairing: pairing.to_string(),
+        handoff_gap_px: Stat::of(&gaps),
+        drawn_twice,
+        room_copies_shown,
         hit_ms: Stat::of(&hit_ms),
         guest_fired_ms: Stat::of(&guest_ms),
         unanswered: fired.iter().filter(|f| f.is_none()).count(),
@@ -412,22 +528,37 @@ fn events_of(frames: &[FrameSample], pick: impl Fn(&EventSample) -> bool) -> Vec
     frames.iter().flat_map(|f| f.events.iter().filter(|e| pick(e)).map(move |_| (f.t_ms, f.tick))).collect()
 }
 
-/// Hits on the host, and how far from the drawn hull the shot that hit was
-/// drawn when it hit.
+/// Hits on a seat, and where the picture had the shot that made each.
+///
+/// Read off the picture's own shots: every shot not the seat's, followed
+/// by the room's id, and where the picture stopped it - its impact frames,
+/// or the frame it was taken off in flight (a client drawing incoming fire
+/// in the present takes a shot that meets its drawn hull off the picture
+/// there and then, `net::round`). A hit is put down to the shot whose
+/// drawn path passes the room's impact point and which the picture
+/// stopped in the `STRIKE_WINDOW_MS` before the hit was handed over; of
+/// several, the one stopped nearest the hull.
 #[derive(Clone, Copy, Debug, Default, Serialize, serde::Deserialize, PartialEq)]
 pub struct IncomingFire {
     pub hits: usize,
-    /// The gap between the drawn hull and the enemy shot that hit it: the
-    /// shot drawn nearest the impact on the frame before, carried on along
-    /// its own drawn motion to the hit frame, measured to the hull's hit
-    /// boxes as the hit test builds them (hull and turret, grown by the
-    /// shell's own half extent). In a local round the shot is inside them
-    /// on the frame it hits, so this is nought; a shot drawn in the past
-    /// against a hull drawn in the present hits "from afar".
+    /// Where the picture stopped the shot that hit, from the drawn hull's
+    /// hit boxes as the hit test builds them (hull and turret, grown by
+    /// the shot's own half extent), on the frame it stopped. Locally the
+    /// shot stops inside them on the frame it hits, so this is nought; a
+    /// shot the picture drew passing the hull, or bursting where the hull
+    /// was a moment ago, hits "from afar".
     pub from_afar_px: Stat,
-    /// Hits with no enemy shot drawn at all on the frame before (a beam,
-    /// a ram, a blast - or a shot the picture never showed).
+    /// From the frame the picture stopped that shot to the frame the
+    /// room's hit was handed over: nought locally; online, how long a
+    /// strike stands on screen before its damage lands.
+    pub strike_to_hit_ms: Stat,
+    /// Hits no drawn shot accounts for: a beam, a ram, a blast - or a shot
+    /// the picture never showed.
     pub unseen: usize,
+    /// Shots the picture stopped against the seat's drawn hull that no
+    /// hit ever followed: a strike drawn for a shot the room judged a
+    /// miss.
+    pub phantom_strikes: usize,
 }
 
 /// A hull's two hit boxes, as `Tank::hull_bbox_world` and
@@ -456,52 +587,55 @@ pub fn hit_boxes(row: i32, dir: u8) -> [(f32, f32, f32, f32); 2] {
 /// The draw scale every tank has (`Tank::scale`).
 pub const TANK_SCALE: f32 = 2.0;
 
-pub fn incoming_fire(host: &[FrameSample], seat: usize, seats: usize) -> IncomingFire {
+/// Hits on `seat` over `frames`, and where the picture had the shots that
+/// made them (`IncomingFire`).
+pub fn incoming_fire(frames: &[FrameSample], seat: usize) -> IncomingFire {
     let mut out = IncomingFire::default();
-    let mut dist = Vec::new();
-    let pad = bongbong::tuning::tuning().shell_hit_half_extent;
-    for i in 1..host.len() {
-        for e in &host[i].events {
+    let tracks = shots::follow(frames, |s| s.seat != Some(seat as u8) && !s.provisional);
+    let stops: Vec<Option<(usize, f32, f32)>> = tracks.iter().map(|t| t.stop(frames)).collect();
+    let stop_gap = |k: usize| -> Option<f32> {
+        let (e, x, y) = stops[k]?;
+        let hull = frames[e].tank(seat)?;
+        Some(gap_to_hull(hull, x, y, shots::half_extent(tracks[k].kind)))
+    };
+    let mut claimed = vec![false; tracks.len()];
+    let (mut afar, mut lead) = (Vec::new(), Vec::new());
+    for (i, f) in frames.iter().enumerate() {
+        for e in &f.events {
             let EventSample::HitPlayer { player, x, y } = *e else { continue };
             if player as usize != seat {
                 continue;
             }
             out.hits += 1;
-            let Some(hull) = host[i].tank(seat) else { continue };
-            let enemy = host[i - 1].shots.iter().filter(|s| s.owner.is_some_and(|o| o >= seats));
-            let Some(shot) = enemy.min_by(|a, b| {
-                let da = (a.x - x).powi(2) + (a.y - y).powi(2);
-                let db = (b.x - x).powi(2) + (b.y - y).powi(2);
-                da.total_cmp(&db)
-            }) else {
-                out.unseen += 1;
-                continue;
-            };
-            // Where the shot stands on the hit frame, carried on at the
-            // speed it was drawn moving between the two frames before.
-            let (mut sx, mut sy) = (shot.x, shot.y);
-            if i >= 2
-                && let Some(before) = host[i - 2].shots.iter().find(|s| s.id == shot.id && s.kind == shot.kind)
-            {
-                let span = (host[i - 1].t_ms - host[i - 2].t_ms) as f32;
-                if span > 0.0 {
-                    let ahead = (host[i].t_ms - host[i - 1].t_ms) as f32 / span;
-                    sx += (shot.x - before.x) * ahead;
-                    sy += (shot.y - before.y) * ahead;
-                }
-            }
-            let gap = hit_boxes(hull.row, hull.dir)
-                .iter()
-                .map(|&(ox, oy, hx, hy)| {
-                    let dx = ((sx - hull.x - ox).abs() - hx - pad).max(0.0);
-                    let dy = ((sy - hull.y - oy).abs() - hy - pad).max(0.0);
-                    (dx * dx + dy * dy).sqrt()
+            let best = (0..tracks.len())
+                .filter(|&k| !claimed[k])
+                .filter_map(|k| {
+                    let (e, _, _) = stops[k]?;
+                    let fresh = e <= i && f.t_ms - frames[e].t_ms <= STRIKE_WINDOW_MS;
+                    let on_path = tracks[k].path_distance(x, y, PATH_EXTEND_PX) <= PATH_MATCH_PX;
+                    (fresh && on_path).then(|| (k, e, stop_gap(k).unwrap_or(f32::INFINITY)))
                 })
-                .fold(f32::INFINITY, f32::min);
-            dist.push(gap as f64);
+                .min_by(|a, b| a.2.total_cmp(&b.2).then(b.1.cmp(&a.1)));
+            match best {
+                Some((k, e, gap)) => {
+                    claimed[k] = true;
+                    afar.push(gap as f64);
+                    lead.push(f.t_ms - frames[e].t_ms);
+                }
+                None => out.unseen += 1,
+            }
         }
     }
-    out.from_afar_px = Stat::of(&dist);
+    // A strike the picture drew with no hit after it, where the frames ran
+    // on long enough for one to have been handed over.
+    let end = frames.last().map_or(0.0, |f| f.t_ms);
+    out.phantom_strikes = (0..tracks.len())
+        .filter(|&k| !claimed[k])
+        .filter(|&k| stops[k].is_some_and(|(e, _, _)| end - frames[e].t_ms > STRIKE_WINDOW_MS))
+        .filter(|&k| stop_gap(k).is_some_and(|g| g <= STRIKE_PX))
+        .count();
+    out.from_afar_px = Stat::of(&afar);
+    out.strike_to_hit_ms = Stat::of(&lead);
     out
 }
 
@@ -532,6 +666,9 @@ pub struct View<'a> {
     pub host_seat: usize,
     pub guest_seat: usize,
     pub scenario: Scenario,
+    /// Which snapshot carried each host press's `Fired`, where the tap
+    /// read the wire.
+    pub wire: Option<&'a WireFired>,
 }
 
 /// Compute every frame-based metric of a view. The twin is a view whose
@@ -567,7 +704,6 @@ pub fn measure(view: &View) -> Metrics {
         }
         Scenario::Shoot => None,
     };
-    let seats = 2;
     let intervals: Vec<f64> = view.host.windows(2).map(|w| w[1].t_ms - w[0].t_ms).collect();
     Metrics {
         frames: view.host.len(),
@@ -575,8 +711,8 @@ pub fn measure(view: &View) -> Metrics {
         own_input_frames: Stat::of(&own.iter().map(|o| o.1 as f64).collect::<Vec<_>>()),
         remote_pacing,
         remote_lag_ms: Stat::of(&lags),
-        shots: shot_ledger(view.host, view.guest, host_seat, view.scenario == Scenario::Shoot),
-        incoming: incoming_fire(view.host, host_seat, seats),
+        shots: shot_ledger(view.host, view.guest, host_seat, view.scenario == Scenario::Shoot, view.wire),
+        incoming: incoming_fire(view.host, host_seat),
         frame_cpu_us: Stat::of(&view.host.iter().map(|f| f.cpu_us).collect::<Vec<_>>()),
         frame_interval_ms: Stat::of(&intervals),
     }
@@ -586,14 +722,28 @@ pub fn measure(view: &View) -> Metrics {
 mod tests {
     use super::*;
     use crate::sample::{ShotSample, TankSample, dir_index};
+    use bongbong::net::predict::PROVISIONAL_ID_BASE;
 
     fn frame(t_ms: f64, dir: Option<Dir>, x: f32, y: f32) -> FrameSample {
         FrameSample {
             t_ms,
-            move_dir: dir.map(dir_index),
+            move_dirs: [dir.map(dir_index), None],
             tanks: vec![TankSample { slot: 0, x, y, row: 0, dir: 3, wreck: false, player: true }],
             ..FrameSample::default()
         }
+    }
+
+    /// Frames 16 ms apart with seat 0's hull at the origin.
+    fn still(n: usize) -> Vec<FrameSample> {
+        (0..n).map(|i| frame(i as f64 * 16.0, None, 0.0, 0.0)).collect()
+    }
+
+    fn own(id: u32, x: f32, provisional: bool, flying: bool) -> ShotSample {
+        ShotSample { id, kind: 0, x, y: 0.0, seat: Some(0), provisional, flying }
+    }
+
+    fn enemy(id: u32, x: f32, flying: bool) -> ShotSample {
+        ShotSample { id, kind: 0, x, y: 0.0, seat: None, provisional: false, flying }
     }
 
     #[test]
@@ -616,6 +766,24 @@ mod tests {
             frame(48.0, Some(Dir::Right), 102.0, 100.0),
         ];
         assert_eq!(own_input_latency(&frames, 0), vec![(32.0, 2)]);
+    }
+
+    /// Each seat's latency runs from its own script's change: seat 1 is
+    /// told to go down on frame 4 and its hull moves on frame 6, while
+    /// seat 0's script turns on frame 1 - which seat 1's hull is not
+    /// answering.
+    #[test]
+    fn own_input_latency_reads_the_seats_own_direction() {
+        let frames: Vec<FrameSample> = (0..8)
+            .map(|i| {
+                let mut f = frame(i as f64 * 16.0, (i >= 1).then_some(Dir::Right), 0.0, 0.0);
+                f.move_dirs[1] = (i >= 4).then_some(dir_index(Dir::Down));
+                let y = if i >= 6 { 50.0 + (i - 5) as f32 } else { 50.0 };
+                f.tanks.push(TankSample { slot: 1, x: 300.0, y, row: 0, dir: 1, wreck: false, player: true });
+                f
+            })
+            .collect();
+        assert_eq!(own_input_latency(&frames, 1), vec![(32.0, 2)], "from seat 1's own turn on frame 4");
     }
 
     #[test]
@@ -651,26 +819,203 @@ mod tests {
         assert!(q.cv < 1e-6);
     }
 
+    /// A provisional swapped for the room's copy: the jump is measured
+    /// from where the provisional would have been on the swap frame.
     #[test]
-    fn the_ledger_times_a_press_to_its_shot_and_its_fired() {
-        let shot = |id, x, provisional| ShotSample { id, kind: 0, x, y: 0.0, owner: Some(0), provisional, flying: true };
-        let mut frames: Vec<FrameSample> = (0..10).map(|i| frame(i as f64 * 16.0, None, 0.0, 0.0)).collect();
-        frames[2].fire = true;
-        frames[3].shots = vec![shot(0xF000, 10.0, true)];
-        frames[4].shots = vec![shot(0xF000, 18.0, true)];
-        frames[5].shots = vec![shot(3, 21.0, false)];
+    fn a_swap_is_a_handoff_with_its_gap() {
+        let mut frames = still(10);
+        frames[2].fires[0] = true;
+        frames[3].shots = vec![own(PROVISIONAL_ID_BASE, 10.0, true, true)];
+        frames[4].shots = vec![own(PROVISIONAL_ID_BASE, 18.0, true, true)];
+        frames[5].shots = vec![own(3, 21.0, false, true)];
         frames[5].events = vec![EventSample::Fired { slot: 0 }];
         frames[5].tick = 40;
         let mut guest = frames.clone();
         guest[5].events.clear();
         guest[7].events = vec![EventSample::Fired { slot: 0 }];
         guest[7].tick = 40;
-        let l = shot_ledger(&frames, &guest, 0, false);
+        let l = shot_ledger(&frames, &guest, 0, false, None);
         assert_eq!(l.presses, 1);
         assert_eq!(l.drawn_ms.p50, Some(16.0));
         assert_eq!(l.fired_ms.p50, Some(48.0));
-        assert_eq!(l.handoff_gap_px.p50, Some(3.0));
+        assert_eq!(l.fired_pairing, "order");
+        assert_eq!(l.handoff_gap_px.n, 1);
+        assert_eq!(l.handoff_gap_px.p50, Some(5.0), "the provisional was carried to 26, the copy drawn at 21");
+        assert_eq!(l.room_copies_shown, Some(1));
         assert_eq!(l.guest_fired_ms.p50, Some(80.0));
         assert_eq!(l.unanswered, 0);
+    }
+
+    /// The present timeline: the provisional is the shot for its whole
+    /// life, its ids shifting as an older one retires, and the room's copy
+    /// never shows - no hand-off at all.
+    #[test]
+    fn a_shot_drawn_once_has_no_handoff() {
+        let mut frames = still(30);
+        frames[2].fires[0] = true;
+        frames[4].fires[0] = true;
+        for i in 3..20 {
+            let mut shots = Vec::new();
+            if i < 12 {
+                shots.push(own(PROVISIONAL_ID_BASE, 10.0 + 8.0 * (i - 3) as f32, true, true));
+            }
+            if i >= 5 {
+                // The second shell: under the first's id once that retires.
+                let id = if i < 12 { PROVISIONAL_ID_BASE + 1 } else { PROVISIONAL_ID_BASE };
+                shots.push(own(id, 12.0 + 8.0 * (i - 5) as f32, true, true));
+            }
+            frames[i].shots = shots;
+        }
+        let l = shot_ledger(&frames, &frames, 0, false, None);
+        assert_eq!(l.presses, 2);
+        assert_eq!(l.drawn_ms.n, 2, "both presses drew their shot");
+        assert_eq!(l.handoff_gap_px.n, 0, "{:?}", l.handoff_gap_px);
+        assert_eq!(l.room_copies_shown, Some(0));
+    }
+
+    /// The provisional plays its impact and goes; the room's copy, still
+    /// flying a round trip behind, is shown after the hold: a shot drawn
+    /// twice, and the jump back to it.
+    #[test]
+    fn a_room_copy_shown_after_its_provisional_is_a_handoff() {
+        let mut frames = still(20);
+        frames[1].fires[0] = true;
+        for i in 2..8 {
+            frames[i].shots = vec![own(PROVISIONAL_ID_BASE, 20.0 + 8.0 * (i - 2) as f32, true, true)];
+        }
+        for i in 8..11 {
+            frames[i].shots = vec![own(PROVISIONAL_ID_BASE, 60.0, true, false)];
+        }
+        for i in 14..17 {
+            frames[i].shots = vec![own(9, 30.0 + 8.0 * (i - 14) as f32, false, true)];
+        }
+        let l = shot_ledger(&frames, &frames, 0, false, None);
+        assert_eq!(l.handoff_gap_px.n, 1);
+        assert_eq!(l.handoff_gap_px.p50, Some(30.0), "from its impact at 60 back to 30");
+        assert_eq!(l.room_copies_shown, Some(1));
+    }
+
+    /// The room's copy shown at the muzzle while its provisional is still
+    /// flying ahead of it on the same line: one shot drawn twice - not a
+    /// hand-off. A room copy of an older shot, ahead of the newer
+    /// provisional on that line, is not mistaken for its twin.
+    #[test]
+    fn a_room_copy_beside_its_provisional_is_a_shot_drawn_twice() {
+        let mut frames = still(20);
+        frames[1].fires[0] = true;
+        for i in 2..16 {
+            let mut shots = vec![own(PROVISIONAL_ID_BASE, 20.0 + 8.0 * (i - 2) as f32, true, i < 14)];
+            if i >= 8 {
+                shots.push(own(12, 20.0 + 8.0 * (i - 8) as f32, false, true));
+            }
+            frames[i].shots = shots;
+        }
+        let l = shot_ledger(&frames, &frames, 0, false, None);
+        assert_eq!((l.drawn_twice, l.handoff_gap_px.n), (1, 0));
+        assert_eq!(l.room_copies_shown, Some(1));
+
+        // An older shot's copy, 100 px ahead of the newer provisional: its
+        // own provisional left the picture a few frames before.
+        let mut frames = still(20);
+        frames[1].fires[0] = true;
+        frames[6].fires[0] = true;
+        for i in 2..10 {
+            frames[i].shots = vec![own(PROVISIONAL_ID_BASE, 20.0 + 8.0 * (i - 2) as f32, true, true)];
+        }
+        for i in 7..16 {
+            let mut shots = vec![own(if i < 10 { PROVISIONAL_ID_BASE + 1 } else { PROVISIONAL_ID_BASE }, 20.0 + 8.0 * (i - 7) as f32, true, true)];
+            if i >= 12 {
+                shots.push(own(4, 120.0 + 8.0 * (i - 12) as f32, false, true));
+            }
+            frames[i].shots = shots;
+        }
+        let l = shot_ledger(&frames, &frames, 0, false, None);
+        assert_eq!((l.drawn_twice, l.handoff_gap_px.n), (0, 1), "{l:?}");
+    }
+
+    /// With the wire's reading, a press is paired with the `Fired` that
+    /// names its own tick: a refused press stays unanswered, where pairing
+    /// by order would hand it the next press's `Fired`.
+    #[test]
+    fn the_wire_pairs_a_press_with_its_own_fired() {
+        let mut frames = still(40);
+        frames[2].fires[0] = true;
+        frames[20].fires[0] = true;
+        for (i, f) in frames.iter_mut().enumerate() {
+            f.tick = 100 + i as u64;
+        }
+        frames[25].events = vec![EventSample::Fired { slot: 0 }];
+        let by_order = shot_ledger(&frames, &frames, 0, false, None);
+        assert_eq!(by_order.unanswered, 1);
+        assert_eq!(by_order.fired_ms.p50, Some((25 - 2) as f64 * 16.0), "order hands the first press the second's Fired");
+
+        let wire = WireFired { host: vec![None, Some(125)], guest: vec![None, Some(127)] };
+        let exact = shot_ledger(&frames, &frames, 0, false, Some(&wire));
+        assert_eq!(exact.fired_pairing, "input_tick");
+        assert_eq!(exact.unanswered, 1);
+        assert_eq!(exact.fired_ms.n, 1);
+        assert_eq!(exact.fired_ms.p50, Some(5.0 * 16.0));
+        assert_eq!(exact.guest_fired_ms.p50, Some(7.0 * 16.0));
+    }
+
+    /// A local round: the enemy shell stops inside the hull on the frame
+    /// its hit lands.
+    #[test]
+    fn a_local_hit_is_from_nowhere_and_on_time() {
+        let mut frames = still(10);
+        for i in 2..6 {
+            frames[i].shots = vec![enemy(5, 60.0 - 10.0 * (i - 2) as f32, true)];
+        }
+        frames[6].shots = vec![enemy(5, 20.0, false)];
+        frames[6].events = vec![EventSample::HitPlayer { player: 0, x: 20.0, y: 0.0 }];
+        let inc = incoming_fire(&frames, 0);
+        assert_eq!((inc.hits, inc.unseen, inc.phantom_strikes), (1, 0, 0));
+        assert_eq!(inc.from_afar_px.p50, Some(0.0));
+        assert_eq!(inc.strike_to_hit_ms.p50, Some(0.0));
+    }
+
+    /// Incoming fire in the present: the shell is taken off the picture
+    /// where it meets the drawn hull, and the room's hit lands later.
+    #[test]
+    fn a_strike_drawn_in_the_present_is_answered_by_the_later_hit() {
+        let mut frames = still(20);
+        for i in 2..6 {
+            frames[i].shots = vec![enemy(5, 60.0 - 10.0 * (i - 2) as f32, true)];
+        }
+        frames[12].events = vec![EventSample::HitPlayer { player: 0, x: 22.0, y: 0.0 }];
+        let inc = incoming_fire(&frames, 0);
+        assert_eq!((inc.hits, inc.unseen, inc.phantom_strikes), (1, 0, 0));
+        assert_eq!(inc.from_afar_px.p50, Some(0.0), "carried a frame on, it is inside the hull");
+        assert_eq!(inc.strike_to_hit_ms.p50, Some((12 - 6) as f64 * 16.0));
+    }
+
+    /// The room says hit where the picture had the shell a hull's length
+    /// away: hit from afar, by that gap.
+    #[test]
+    fn a_hit_where_the_picture_had_the_shell_elsewhere_is_from_afar() {
+        let mut frames = still(10);
+        for i in 2..6 {
+            frames[i].shots = vec![enemy(5, 160.0 - 10.0 * (i - 2) as f32, true)];
+        }
+        frames[6].shots = vec![enemy(5, 100.0, false)];
+        frames[6].events = vec![EventSample::HitPlayer { player: 0, x: 100.0, y: 0.0 }];
+        let inc = incoming_fire(&frames, 0);
+        let gap = inc.from_afar_px.p50.expect("a gap");
+        // Facing right, the scout's turret box reaches 28 px ahead of the
+        // hull's centre (9 px out, 19 half long), and the shell's own 3.
+        assert!((gap - (100.0 - 28.0 - 3.0)).abs() < 0.01, "{gap}");
+    }
+
+    /// A strike the room never answered, and a hit nothing drawn accounts
+    /// for.
+    #[test]
+    fn a_strike_with_no_hit_is_a_phantom_and_a_hit_with_no_shot_unseen() {
+        let mut frames: Vec<FrameSample> = (0..100).map(|i| frame(i as f64 * 16.0, None, 0.0, 0.0)).collect();
+        for i in 2..6 {
+            frames[i].shots = vec![enemy(5, 60.0 - 10.0 * (i - 2) as f32, true)];
+        }
+        frames[90].events = vec![EventSample::HitPlayer { player: 0, x: 0.0, y: 300.0 }];
+        let inc = incoming_fire(&frames, 0);
+        assert_eq!((inc.hits, inc.unseen, inc.phantom_strikes), (1, 1, 1));
     }
 }

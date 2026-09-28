@@ -15,9 +15,8 @@ publish = false
 dist = false
 
 [dependencies]
-# The simulation, the wire, the client (`online`: the native socket) and
-# the debug snapshot the shot owners are read from (`dev-tools`).
-bongbong = { path = "..", default-features = false, features = ["online", "dev-tools"] }
+# The simulation, the wire and the client (`online`: the native socket).
+bongbong = { path = "..", default-features = false, features = ["online"] }
 # The room server, run in-process on an ephemeral port.
 bongbong-server = { path = "../server" }
 # The server's runtime, and the proxy's sockets and timers.
