@@ -350,8 +350,8 @@ struct Room {
     now: Instant,
     nick: String,
     /// The seat's intents - the room server's own `net::mailbox`, one a
-    /// tick in order for a server-driven seat and newest-wins for an
-    /// owned one, so a starvation here means what it means there and the
+    /// tick in order for a server-driven seat and played out on the
+    /// room's clock for an owned one, so a starvation here means what it means there and the
     /// client's lead is steered the same way.
     mailbox: Mailbox,
     /// The events of the ticks since the last snapshot, ahead of the

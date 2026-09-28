@@ -1346,13 +1346,14 @@ async fn next_state(ws: &mut Client, baseline: &mut Snapshot) -> Snapshot {
     next
 }
 
-/// **Owned poses are newest-wins at the real room** (docs/online-coop-prd.md
+/// **An owned burst is one read at the real room** (docs/online-coop-prd.md
 /// §4.16). A client that owns its hull has already driven it wherever its
-/// intents say, so a burst of them - a stall on the way in, released at
-/// once - is one tick's work for the room: the newest pose, the ack at
-/// the newest intent, and nothing left waiting to run a tick late. The
-/// same burst from a server-driven seat is still applied one a tick, in
-/// order, which is what that seat's replay needs.
+/// intents say, so a burst of them at or before the room's play point -
+/// here the first of the seat's stream, which the play point starts from -
+/// is one tick's work: the newest pose, the ack at the newest intent, and
+/// nothing left waiting to run a tick late. The same burst from a
+/// server-driven seat is still applied one a tick, in order, which is
+/// what that seat's replay needs.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_owned_burst_is_taken_by_one_tick_and_a_server_driven_one_in_order() {
     use bongbong::net::mailbox::{BUFFER_MAX, unpack};

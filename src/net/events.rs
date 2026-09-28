@@ -149,9 +149,11 @@ pub enum WireEvent {
     /// shooter draws its own beam on the press and skips this one.
     LaserBeam { x0: i16, y0: i16, x1: i16, y1: i16, variant: u8, seat: u8 },
     /// A shove the room put on a client-owned hull - knockback, a blast, a
-    /// ram, recoil - that the owner applies to its own body, since the
-    /// room places that hull wherever the owner says
-    /// (docs/online-coop-prd.md §4.16). A velocity change, `quantise_velocity`.
+    /// ram, a missile launch's recoil - that the owner applies to its own
+    /// body, since the room places that hull wherever the owner says
+    /// (docs/online-coop-prd.md §4.16). The recoil of a shell, bolt or
+    /// bullet is not sent: the owner kicks its own hull at each launch.
+    /// A velocity change, `quantise_velocity`.
     Shoved { seat: u8, vx: i8, vy: i8 },
     /// The room moved a client-owned hull itself; the client snaps to it
     /// (`dir_index`).

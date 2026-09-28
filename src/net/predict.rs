@@ -615,8 +615,8 @@ impl Predictor {
 
     /// The interpolator handed over the room's `Fired` for this seat, on
     /// input tick `input_tick`: the press that travelled on it (the last
-    /// one at or before it - the room merges a tick's inputs newest-wins,
-    /// so its tick can be later than the press's) is confirmed, and any
+    /// one at or before it - the room merges the inputs a read takes, so
+    /// its tick can be later than the press's) is confirmed, and any
     /// earlier press still waiting was refused.
     ///
     /// With no press to confirm - prediction was off for it, or it was

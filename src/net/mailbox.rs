@@ -16,28 +16,45 @@
 //! the oldest waiting - so depth is the client's to manage, and
 //! `wire_state` is how it finds out.
 //!
-//! **A client-owned seat (stage 3 and on, `IntentMsg::owned`) is
-//! newest-wins**: a tick whose newest waiting intent carries a pose takes
-//! *every* intent waiting. The pose, `move_dir`, `face` and the view
-//! (`view_tick`, the world the client was drawing) are the newest's - the
-//! client has already driven the hull there, so the ticks in between have
-//! nothing left to replay - and the ack is the newest's tick, so depth is
-//! 0 after every such read and nothing an owned seat does on the server
-//! runs a tick later than the packet that asked for it. An ordered queue
-//! would instead keep every tick a starvation ever cost as standing
-//! depth, with nothing to drain it.
+//! **A client-owned seat (stage 3 and on, `IntentMsg::owned`) is played
+//! out on the room's own clock.** The mailbox keeps a *play point*, the
+//! client tick the room is applying, and moves it on one tick a read. A
+//! read takes every intent at or before the play point - pose,
+//! `move_dir`, `face` and the view (`view_tick`) from the newest of them,
+//! the trigger merged press for press - and leaves the later ones for
+//! their own ticks, so the room's copy of the hull walks the client's
+//! own track one client tick per room tick however the packets bunched
+//! on the way. Applying the newest intent waiting instead makes that
+//! track stall and double whenever arrivals straddle a tick - one tick in
+//! ten on a LAN - and every other player draws the room's track. There
+//! are no inputs to replay, so a read that finds several waiting at or
+//! before its point takes them all and the ack is the newest taken.
 //!
-//! **How far an owned pose is believed grows with what the read covers**
+//! The first read takes whatever is waiting. From there every
+//! `PLAYOUT_WINDOW_TICKS` reads are a window: `PLAYOUT_WIDEN_MISSES` or
+//! more reads that found their tick not yet arrived hold the point for a
+//! tick, widening the margin by one, and a window in which every read had
+//! at least `PLAYOUT_NARROW_AHEAD` ticks to spare moves it on two,
+//! narrowing it by one - so the point settles a tick or so behind the
+//! latest arrival the link actually delivers, costing the room's copy
+//! that much and no more, and follows a link that changes. A point left
+//! more than `BUFFER_MAX` behind the newest arrival - a room that stood
+//! still while its client drove on - starts again one tick behind it.
+//!
+//! **How far an owned pose is believed is the room's own time**
 //! (`Mailbox::pose_reach_ticks`, which a room hands
 //! `net::authority::take_pose` and the validator scales its reach by):
-//! the ticks of the client's own driving from the intent the last read
-//! applied to the newest this one took, plus the ticks the room
-//! dead-reckoned the hull while it waited - the guess may have gone the
-//! other way - capped at `REACH_TICKS_MAX`. An ordinary read covers one
-//! tick, which the validator's floor (`simulation::POSE_REACH_TICKS`)
-//! already allows for; the burst that ends a stall covers the whole
-//! stall, and refusing it would yank an honest client back with a
-//! `Placed`.
+//! the ticks of the client's driving from the intent the last read
+//! applied to the one this read applied, plus the ticks the room
+//! dead-reckoned the hull meanwhile - the guess may have gone the other
+//! way - but never more than the room's own ticks since that last pose
+//! (its reads, or the wall clock's ticks where the room stood still)
+//! plus `REACH_SPARE_TICKS`, and at most `REACH_TICKS_MAX`. An ordinary
+//! read covers one tick, which the validator's floor
+//! (`simulation::POSE_REACH_TICKS`) already allows for; the read that
+//! ends a stall covers the whole stall, and refusing it would yank an
+//! honest client back with a `Placed`; a client stamping its packets
+//! further apart than it drives gains nothing by it.
 //!
 //! **The trigger survives the merge press for press.** Shells and plasma
 //! are edge-triggered - the round fires one on the trigger going down
@@ -117,12 +134,29 @@ pub const BUFFER_MAX: usize = 8;
 pub const DEAD_RECKON_TICKS: u32 = 3;
 
 /// The most ticks of driving one owned read vouches for
-/// (`Mailbox::pose_reach_ticks`): the most intents a read can hold,
-/// `BUFFER_MAX`, plus the ticks the room dead-reckoned while it waited
-/// for them. A stall longer than that - or a client claiming one - is
-/// further than the room takes on trust, and the validator answers it
-/// with `Placed`.
-pub const REACH_TICKS_MAX: u32 = BUFFER_MAX as u32 + DEAD_RECKON_TICKS;
+/// (`Mailbox::pose_reach_ticks`): `INTENT_COAST`, the longest silence a
+/// seat is still driven through. A longer stall ends with the seat
+/// coasted out, and the validator answers the pose after it with
+/// `Placed`.
+pub const REACH_TICKS_MAX: u32 = 30;
+
+/// Ticks of driving an owned read may vouch for beyond the room's own
+/// ticks since the pose before it: a packet stamped a tick early, and the
+/// play point moving two in a narrowing read.
+pub const REACH_SPARE_TICKS: u32 = 2;
+
+/// Reads in one window of the owned play point's controller: a second.
+pub const PLAYOUT_WINDOW_TICKS: u32 = 60;
+
+/// Reads in a window that found their tick not yet arrived before the
+/// play point is held a tick to widen its margin. One is a hiccup the
+/// dead reckoning rides out; two a second is a link that needs the room.
+pub const PLAYOUT_WIDEN_MISSES: u32 = 2;
+
+/// Ticks every read of a window had to spare - the newest arrival that
+/// far past the play point - before the point is moved on two to narrow
+/// its margin.
+pub const PLAYOUT_NARROW_AHEAD: i64 = 2;
 
 /// The bit of `wire_state` that says the last read found nothing waiting.
 pub const STARVED_BIT: u8 = 0x80;
@@ -190,6 +224,24 @@ struct Inner {
     /// The trigger of the owned intents dropped over `BUFFER_MAX` since
     /// the last read, so a press in a backlog is not lost with its pose.
     folded: Option<Scan>,
+    /// The newest client tick ever posted.
+    newest_posted: Option<u32>,
+    /// An owned seat's play point: the client tick the last read applied
+    /// up to. `None` until the first owned read.
+    play: Option<u32>,
+    /// How far the next owned read moves the play point: one, or the
+    /// controller's hold (0) or catch-up (2) for one read.
+    next_step: u32,
+    /// Reads in the controller's current window, the ones among them that
+    /// found their tick not yet arrived, and the fewest ticks any of them
+    /// had to spare.
+    window_reads: u32,
+    window_misses: u32,
+    window_ahead: i64,
+    /// Reads since an intent was last applied, and when that was: the
+    /// room's own time a pose may vouch for.
+    reads_since_apply: u32,
+    applied_at: Option<Instant>,
 }
 
 impl Inner {
@@ -198,30 +250,96 @@ impl Inner {
         self.last.is_some_and(|m| m.fire)
     }
 
-    /// An owned seat's read: every intent waiting, merged into the newest.
-    fn take_all(&mut self) -> Option<IntentMsg> {
+    /// An owned seat's read: the play point moved on a tick (or as the
+    /// controller asked), every intent at or before it merged into the
+    /// newest of them, and a pose dead-reckoned when none has arrived.
+    fn read_owned(&mut self, now: Instant) -> Option<IntentMsg> {
+        let waiting = self.queue.keys().next_back().copied();
+        let step = std::mem::replace(&mut self.next_step, 1);
+        let mut play = match (self.play, waiting) {
+            (Some(play), _) => play.saturating_add(step),
+            // The first owned read takes whatever is waiting.
+            (None, Some(newest)) => newest,
+            (None, None) => return self.starve(),
+        };
+        let newest = self.newest_posted.unwrap_or(play);
+        let restarted = newest > play.saturating_add(BUFFER_MAX as u32);
+        if restarted {
+            play = newest - 1;
+        }
+        self.play = Some(play);
+        self.reads_since_apply = self.reads_since_apply.saturating_add(1);
+        let later = self.queue.split_off(&play.saturating_add(1));
+        let taken = std::mem::replace(&mut self.queue, later);
+        // A held point finds its tick already applied: not a miss.
+        let missed = taken.is_empty() && step > 0;
+        self.watch_playout(newest as i64 - play as i64, missed);
+        if taken.is_empty() {
+            return self.starve();
+        }
         let mut scan = self.folded.take().unwrap_or_else(|| Scan::from(self.own_down()));
-        let queue = std::mem::take(&mut self.queue);
-        for msg in queue.values() {
+        for msg in taken.values() {
             scan.step(msg);
         }
-        let oldest = *queue.values().next()?;
-        let newest = *queue.values().next_back()?;
+        let oldest = *taken.values().next()?;
+        let newest_taken = *taken.values().next_back()?;
         // The client's driving from the intent last applied to the newest
-        // taken - with none applied yet, from just before the oldest - and
-        // the ticks the room guessed meanwhile.
+        // taken - with none applied yet, from just before the oldest -
+        // and the ticks the room guessed meanwhile, held to the room's
+        // own time since that last pose.
         let driven = match self.applied {
-            Some(applied) => newest.tick.saturating_sub(applied),
-            None => newest.tick.saturating_sub(oldest.tick).saturating_add(1),
+            Some(applied) => newest_taken.tick.saturating_sub(applied),
+            None => newest_taken.tick.saturating_sub(oldest.tick).saturating_add(1),
         };
         let guessed = self.starved_run.min(DEAD_RECKON_TICKS);
-        self.reach = driven.saturating_add(guessed).clamp(1, REACH_TICKS_MAX);
-        self.applied = Some(newest.tick);
-        self.last = Some(newest);
+        let elapsed = match self.applied_at {
+            Some(at) if !restarted => {
+                let wall = (now.saturating_duration_since(at).as_secs_f32() / PHYSICS_FIXED_DT).ceil() as u32;
+                self.reads_since_apply.max(wall).saturating_add(REACH_SPARE_TICKS)
+            }
+            Some(_) => self.reads_since_apply.saturating_add(REACH_SPARE_TICKS),
+            None => REACH_TICKS_MAX,
+        };
+        self.reach = driven.saturating_add(guessed).min(elapsed).clamp(1, REACH_TICKS_MAX);
+        self.applied = Some(newest_taken.tick);
+        self.applied_at = Some(now);
+        self.reads_since_apply = 0;
+        self.last = Some(newest_taken);
         self.last_starved = false;
         self.starved_run = 0;
-        let fire = self.deliver(scan.press, newest.fire);
-        Some(IntentMsg { fire, ..newest })
+        let fire = self.deliver(scan.press, newest_taken.fire);
+        Some(IntentMsg { fire, ..newest_taken })
+    }
+
+    /// An owned read with nothing to apply: a starvation, the last pose
+    /// carried on.
+    fn starve(&mut self) -> Option<IntentMsg> {
+        self.starvations += 1;
+        self.last_starved = true;
+        self.starved_run = self.starved_run.saturating_add(1);
+        let last = self.last?;
+        Some(self.reckon(last))
+    }
+
+    /// One owned read's reading for the play point's controller: how many
+    /// ticks the newest arrival stood past the point, and whether the
+    /// point's own tick was missing. At the end of a window the point is
+    /// held a tick if the window missed too often, or moved on two if
+    /// every read had room to spare.
+    fn watch_playout(&mut self, ahead: i64, missed: bool) {
+        self.window_ahead = if self.window_reads == 0 { ahead } else { self.window_ahead.min(ahead) };
+        self.window_reads += 1;
+        self.window_misses += missed as u32;
+        if self.window_reads < PLAYOUT_WINDOW_TICKS {
+            return;
+        }
+        if self.window_misses >= PLAYOUT_WIDEN_MISSES {
+            self.next_step = 0;
+        } else if self.window_ahead >= PLAYOUT_NARROW_AHEAD {
+            self.next_step = 2;
+        }
+        self.window_reads = 0;
+        self.window_misses = 0;
     }
 
     /// The trigger an owned read hands the round: `press` is the client's
@@ -268,8 +386,8 @@ impl Inner {
     }
 }
 
-/// One seat's intents: ordered for a server-driven seat, newest-wins for
-/// an owned one.
+/// One seat's intents: ordered for a server-driven seat, played out on
+/// the room's clock for an owned one.
 #[derive(Default)]
 pub struct Mailbox {
     inner: Mutex<Inner>,
@@ -289,6 +407,7 @@ impl Mailbox {
     pub fn post(&self, msg: IntentMsg, now: Instant) {
         let mut inner = self.inner.lock().expect("mailbox poisoned");
         inner.posted = Some(now);
+        inner.newest_posted = Some(inner.newest_posted.map_or(msg.tick, |n| n.max(msg.tick)));
         if inner.applied.is_some_and(|applied| msg.tick <= applied) {
             return;
         }
@@ -313,9 +432,9 @@ impl Mailbox {
 
     /// The intent this tick applies. A server-driven seat's is the oldest
     /// one waiting; an owned seat's (the newest waiting carries a pose) is
-    /// every one waiting, merged; a starved tick repeats the last one
-    /// while it is younger than `INTENT_COAST`, an owned pose reckoned
-    /// forward. `None` when nothing was ever posted, the seat has coasted
+    /// every one at or before the play point, merged; a starved tick
+    /// repeats the last one while it is younger than `INTENT_COAST`, an
+    /// owned pose reckoned forward. `None` when nothing was ever posted, the seat has coasted
     /// out, or the mailbox was cleared.
     pub fn read(&self, now: Instant) -> Option<IntentMsg> {
         let mut inner = self.inner.lock().expect("mailbox poisoned");
@@ -323,38 +442,33 @@ impl Mailbox {
         if now.saturating_duration_since(posted) > INTENT_COAST {
             return None;
         }
-        let newest_owned = inner.queue.values().next_back().map(|m| m.owned);
-        match newest_owned {
-            Some(true) => inner.take_all(),
-            Some(false) => {
-                let (tick, msg) = inner.queue.pop_first().expect("the queue has a newest, so a first");
-                inner.applied = Some(tick);
-                inner.last = Some(msg);
-                inner.last_starved = false;
-                inner.starved_run = 0;
-                inner.reach = 1;
-                // The ordered path hands every intent over as sent; the
-                // owned path's trigger bookkeeping starts again from it.
-                inner.folded = None;
-                inner.owed_press = None;
-                inner.press = (msg.fire && !inner.delivered).then_some(tick);
-                inner.delivered = msg.fire;
-                Some(msg)
-            }
-            None => {
-                inner.starvations += 1;
-                inner.last_starved = true;
-                inner.starved_run = inner.starved_run.saturating_add(1);
-                let last = inner.last?;
-                if last.owned {
-                    Some(inner.reckon(last))
-                } else {
-                    inner.press = None;
-                    inner.reach = 1;
-                    Some(last)
-                }
-            }
+        // Owned when the newest intent waiting says so, or - with none
+        // waiting - when the last one applied did.
+        let owned = inner.queue.values().next_back().or(inner.last.as_ref()).map(|m| m.owned);
+        if owned == Some(true) {
+            return inner.read_owned(now);
         }
+        if let Some((tick, msg)) = inner.queue.pop_first() {
+            inner.applied = Some(tick);
+            inner.last = Some(msg);
+            inner.last_starved = false;
+            inner.starved_run = 0;
+            inner.reach = 1;
+            // The ordered path hands every intent over as sent; the owned
+            // path's trigger bookkeeping and play point start again from it.
+            inner.folded = None;
+            inner.owed_press = None;
+            inner.play = None;
+            inner.press = (msg.fire && !inner.delivered).then_some(tick);
+            inner.delivered = msg.fire;
+            return Some(msg);
+        }
+        inner.starvations += 1;
+        inner.last_starved = true;
+        inner.starved_run = inner.starved_run.saturating_add(1);
+        inner.press = None;
+        inner.reach = 1;
+        inner.last
     }
 
     /// The tick of the last intent **applied**, which is what a snapshot
@@ -378,14 +492,15 @@ impl Mailbox {
     }
 
     /// How many ticks of the client's own driving the pose the last read
-    /// delivered covers, which is how far from the hull the round has the
-    /// validator lets that pose stand (`net::authority::take_pose`,
-    /// `Game::accept_seat_pose`). An owned read that took what was
-    /// waiting covers the ticks from the intent the read before applied
-    /// to the newest it took, plus the ticks the room dead-reckoned in
-    /// between, at most `REACH_TICKS_MAX`: one for the packet a tick of a
-    /// steady link, the whole stall for the burst that ends one. Any
-    /// other read covers one - a starved read's guess moves a tick at
+    /// delivered is believed for, which is how far from the hull the
+    /// round has the validator lets that pose stand
+    /// (`net::authority::take_pose`, `Game::accept_seat_pose`). An owned
+    /// read that applied an intent covers the ticks from the intent
+    /// applied before it, plus the ticks the room dead-reckoned in
+    /// between, held to the room's own ticks since that pose plus
+    /// `REACH_SPARE_TICKS` and to `REACH_TICKS_MAX`: one for the packet a
+    /// tick of a steady link, the whole stall for the read that ends one.
+    /// Any other read covers one - a starved read's guess moves a tick at
     /// most. 0 before any read.
     pub fn pose_reach_ticks(&self) -> u32 {
         self.inner.lock().expect("mailbox poisoned").reach
@@ -400,7 +515,7 @@ impl Mailbox {
 
     /// How many intents are waiting. Deep means a server-driven seat's
     /// client is stamping further ahead than it needs to; an owned seat's
-    /// is 0 after every read.
+    /// is the margin its play point keeps behind the newest arrival.
     pub fn depth(&self) -> usize {
         self.inner.lock().expect("mailbox poisoned").queue.len()
     }
@@ -569,9 +684,10 @@ mod tests {
         assert_eq!(mailbox.depth(), 0);
     }
 
-    /// **Owned poses are newest-wins.** A burst of owned intents is one
-    /// tick's work: the newest pose, the ack at the newest tick, nothing
-    /// left behind - so a burst never becomes standing depth.
+    /// **An owned burst at or before the play point is one read.** Here it
+    /// is the first of the seat's stream, which the play point starts
+    /// from: the newest pose, the ack at the newest tick, nothing left
+    /// behind.
     #[test]
     fn an_owned_burst_is_taken_whole_by_one_tick() {
         let mailbox = Mailbox::new();
@@ -633,20 +749,25 @@ mod tests {
     }
 
     /// A held trigger stays held through the merge, and a hold's release
-    /// inside a burst is a release - neither makes a press of its own.
+    /// inside a merge is a release - neither makes a press of its own.
     #[test]
     fn an_owned_hold_is_a_hold_and_its_release_a_release() {
         let mailbox = Mailbox::new();
         let now = Instant::now();
         mailbox.post(owned(1, 100.0, 0.0, true), now);
         assert!(mailbox.read(now).unwrap().fire);
+        // Tick 2 is late: the read for it starves, and the next takes
+        // ticks 2 and 3 together.
+        assert!(mailbox.read(now).unwrap().fire, "a starved tick keeps the hold");
         mailbox.post(owned(2, 100.0, 0.0, true), now);
         mailbox.post(owned(3, 100.0, 0.0, true), now);
-        assert!(mailbox.read(now).unwrap().fire, "held across a burst");
+        assert!(mailbox.read(now).unwrap().fire, "held across a merge");
+        assert_eq!(mailbox.acked_tick(), 3, "both taken");
         assert_eq!(mailbox.press_tick(), 3, "no new press");
+        mailbox.read(now);
         mailbox.post(owned(4, 100.0, 0.0, true), now);
         mailbox.post(owned(5, 100.0, 0.0, false), now);
-        assert!(!mailbox.read(now).unwrap().fire, "a hold let go inside a burst is let go");
+        assert!(!mailbox.read(now).unwrap().fire, "a hold let go inside a merge is let go");
     }
 
     /// **A late packet keeps the hull going.** A starved tick carries an
@@ -700,11 +821,12 @@ mod tests {
         assert_eq!(held.press_tick(), 2, "and the packet after it is no new press");
     }
 
-    /// **An owned read vouches for the driving it covers.** An ordinary
-    /// read covers one tick, and so does a starved one; the burst that
-    /// ends a stall covers every tick since the intent last applied plus
-    /// the ticks the room guessed while it waited, up to
-    /// `REACH_TICKS_MAX`.
+    /// **An owned read vouches for the driving it covers, and for no
+    /// more than the room's own time.** An ordinary read covers one tick,
+    /// and so does a starved one; the read that ends a stall covers every
+    /// tick since the intent last applied plus the ticks the room guessed
+    /// while it waited; a client stamping its packets further apart than
+    /// the room's ticks is believed for the room's ticks alone.
     #[test]
     fn an_owned_reads_reach_covers_the_stall_it_ends() {
         let mailbox = Mailbox::new();
@@ -716,37 +838,133 @@ mod tests {
         mailbox.post(owned(11, 101.0, 60.0, false), now);
         mailbox.read(now);
         assert_eq!(mailbox.pose_reach_ticks(), 1, "one intent a tick is one tick a read");
-        // Two starved ticks, each guessing one tick on.
-        for _ in 0..2 {
+        // Four starved ticks, each guessing one tick on (the reckoning
+        // stops at `DEAD_RECKON_TICKS`).
+        for _ in 0..4 {
             mailbox.read(now);
             assert_eq!(mailbox.pose_reach_ticks(), 1, "a guess moves a tick at most");
         }
-        // The stall ends with five intents at once.
+        // The stall ends with the five late intents at once, all at or
+        // before the play point (tick 16).
         for tick in 12..=16 {
             mailbox.post(owned(tick, 100.0 + tick as f32, 60.0, false), now);
         }
         mailbox.read(now);
-        assert_eq!(mailbox.pose_reach_ticks(), 5 + 2, "five ticks driven and two guessed");
+        assert_eq!(mailbox.acked_tick(), 16);
+        // Five ticks driven and three guessed, held to the room's own five
+        // ticks since the last pose and the spare.
+        assert_eq!(mailbox.pose_reach_ticks(), 5 + REACH_SPARE_TICKS);
         // A gap in the ticks is driving the room never heard about: a
         // lost packet still moved the hull.
-        mailbox.post(owned(19, 119.0, 60.0, false), now);
         mailbox.read(now);
-        assert_eq!(mailbox.pose_reach_ticks(), 3);
-        // A stall past the buffer and the reckoning together is vouched
-        // for up to the cap, and no further.
-        for _ in 0..10 {
-            mailbox.read(now);
-        }
-        for tick in 20..=40 {
-            mailbox.post(owned(tick, 100.0 + tick as f32, 60.0, false), now);
-        }
+        mailbox.post(owned(18, 118.0, 60.0, false), now);
         mailbox.read(now);
-        assert_eq!(mailbox.pose_reach_ticks(), REACH_TICKS_MAX);
+        assert_eq!(mailbox.acked_tick(), 18);
+        assert_eq!(mailbox.pose_reach_ticks(), 2 + 1, "two ticks driven, one guessed");
+        // A packet stamped a hundred ticks on: the play point starts again
+        // one tick behind it, and the pose is believed for the room's own
+        // ticks since the last one, not the hundred it claims.
+        mailbox.post(owned(118, 218.0, 60.0, false), now);
+        mailbox.read(now);
+        mailbox.read(now);
+        assert_eq!(mailbox.acked_tick(), 118);
+        assert_eq!(mailbox.pose_reach_ticks(), 2 + REACH_SPARE_TICKS, "the room's two ticks and the spare");
         // A server-driven read vouches for nothing past its one tick.
-        mailbox.post(intent(41, 1), now);
-        mailbox.post(intent(42, 1), now);
+        mailbox.post(intent(141, 1), now);
+        mailbox.post(intent(142, 1), now);
         mailbox.read(now);
         assert_eq!(mailbox.pose_reach_ticks(), 1);
+    }
+
+    /// Owned intents from the tick the play point stands on at each
+    /// read, `wobble` of them arriving per read around a steady one: the
+    /// arrivals bunch, the room's track does not.
+    fn play_out(wobble: &[usize], reads: usize) -> (Mailbox, Vec<f32>) {
+        let mailbox = Mailbox::new();
+        let now = Instant::now();
+        let mut next = 0u32;
+        let mut xs = Vec::new();
+        for i in 0..reads {
+            for _ in 0..wobble[i % wobble.len()] {
+                mailbox.post(owned(next, 100.0 + next as f32, 60.0, false), now);
+                next += 1;
+            }
+            if let Some(read) = mailbox.read(now) {
+                xs.push(dequantise_pos(read.x));
+            }
+        }
+        (mailbox, xs)
+    }
+
+    /// **The room walks the client's track one tick a read** however the
+    /// packets bunch: arrivals of one, none and two a tick around a
+    /// steady stream give a hull that moves exactly one tick's driving on
+    /// every read - a late tick carried by the dead reckoning, the pair
+    /// after it taken one at a time - where applying the newest waiting
+    /// stalls on one read and doubles on the next.
+    #[test]
+    fn the_owned_play_point_walks_the_clients_track_one_tick_a_read() {
+        // 60 px/s is one pixel a tick.
+        let (mailbox, xs) = play_out(&[1, 0, 2, 1, 2, 0, 1], 600);
+        let steps: Vec<f32> = xs.windows(2).map(|w| w[1] - w[0]).collect();
+        // The controller may move the point once a window; count those.
+        let off: Vec<(usize, f32)> = steps.iter().copied().enumerate().filter(|&(_, d)| (d - 1.0).abs() > 0.01).collect();
+        assert!(off.len() <= 2, "the track stalled or doubled: {off:?}");
+        assert!(mailbox.depth() <= 3, "the point keeps a small margin: depth {}", mailbox.depth());
+    }
+
+    /// An intent that arrives before its tick waits for the play point:
+    /// it is the client's future, not a pose to jump to.
+    #[test]
+    fn an_owned_intent_ahead_of_the_play_point_waits_its_tick() {
+        let mailbox = Mailbox::new();
+        let now = Instant::now();
+        mailbox.post(owned(1, 101.0, 60.0, false), now);
+        assert_eq!(mailbox.read(now).unwrap().tick, 1);
+        mailbox.post(owned(2, 102.0, 60.0, false), now);
+        mailbox.post(owned(3, 103.0, 60.0, false), now);
+        assert_eq!(mailbox.read(now).unwrap().tick, 2, "tick 3 waits");
+        assert_eq!(unpack(mailbox.wire_state()), (1, false), "one waiting behind the point");
+        assert_eq!(mailbox.read(now).unwrap().tick, 3, "and is applied on its own read");
+    }
+
+    /// **The margin follows the link.** Late ticks twice in a window hold
+    /// the play point a tick, which ends the misses; a window with room
+    /// to spare on every read moves it on two, which takes the margin
+    /// back.
+    #[test]
+    fn misses_widen_the_owned_margin_and_spare_narrows_it() {
+        let mailbox = Mailbox::new();
+        let now = Instant::now();
+        let mut next = 0u32;
+        let mut post = |n: usize| {
+            for _ in 0..n {
+                mailbox.post(owned(next, 100.0 + next as f32, 60.0, false), now);
+                next += 1;
+            }
+        };
+        // A link that is a tick late every tenth read: two misses a
+        // window, until the point is held a tick.
+        let mut misses = Vec::new();
+        for window in 0..4 {
+            let before = mailbox.starvations();
+            for i in 0..PLAYOUT_WINDOW_TICKS {
+                post(match i % 10 { 4 => 0, 5 => 2, _ => 1 });
+                mailbox.read(now);
+            }
+            misses.push((window, mailbox.starvations() - before));
+        }
+        assert!(misses[0].1 >= PLAYOUT_WIDEN_MISSES as u64, "the fixture misses: {misses:?}");
+        assert_eq!(misses[3].1, 0, "a tick of margin ends them: {misses:?}");
+        let widened = mailbox.depth();
+        // The link then runs two ticks early for a whole window: the point
+        // moves on and the margin comes back down.
+        post(2);
+        for _ in 0..(2 * PLAYOUT_WINDOW_TICKS) {
+            post(1);
+            mailbox.read(now);
+        }
+        assert!(mailbox.depth() < widened + 2, "the spare was taken back: {} vs {widened}", mailbox.depth());
     }
 
     /// Over the cap an owned intent gives up its pose, never its trigger:

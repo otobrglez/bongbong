@@ -183,7 +183,7 @@ mod tests {
     use super::*;
     use crate::PHYSICS_FIXED_DT;
     use crate::map::MapFile;
-    use crate::net::mailbox::{Mailbox, REACH_TICKS_MAX};
+    use crate::net::mailbox::{Mailbox, REACH_SPARE_TICKS};
     use crate::net::wire::{IntentMsg, WeaponKind};
     use crate::simulation::{Input, POSE_REACH_SLACK_PX, POSE_REACH_TICKS, PlayerCount};
 
@@ -224,12 +224,13 @@ cells."8,8" = { kind = "start" }
 
     /// **The burst that ends a stall is taken; a jump is not**
     /// (docs/online-coop-prd.md §4.14, §4.16). An owned read takes every
-    /// intent waiting, so after a stall one pose carries the client's
-    /// whole drive through it, and the room believes it as far as the
+    /// intent at or before its play point, so after a stall one pose
+    /// carries the client's whole drive through it, and the room believes it as far as the
     /// read covers. A single tick's packet still vouches for one tick, so
     /// a hull that claims to have crossed three cells in it is refused,
     /// stays where it was and is told so; and no read vouches for more
-    /// than `REACH_TICKS_MAX`, whatever ticks the client stamps.
+    /// than the room's own ticks since the last pose, whatever ticks the
+    /// client stamps.
     #[test]
     fn an_owned_burst_after_a_stall_is_taken_and_a_jump_is_not() {
         let mut game = open_round();
@@ -287,13 +288,15 @@ cells."8,8" = { kind = "start" }
         let stayed = game.seat_pose(0).expect("the seat");
         assert!(stayed.position.x - here.position.x <= step + 0.5, "a refused pose moved the hull: {stayed:?}");
 
-        // A packet stamped a hundred ticks on vouches for the cap and no
-        // more: a pose past it is refused like the jump.
-        let claimed = REACH_TICKS_MAX as f32 + 8.0;
+        // A packet stamped a hundred ticks on claims a hundred ticks of
+        // driving; the room believes it for its own ticks since the last
+        // pose, and a pose that far off is refused like the jump.
+        let claimed = 100.0;
         mailbox.post(pose_at(4 + stall + 100, stayed.position.x + step * claimed, speed), now);
+        let _ = room_tick(&mut game, &mailbox, now);
         let outcome = room_tick(&mut game, &mailbox, now);
-        assert_eq!(mailbox.pose_reach_ticks(), REACH_TICKS_MAX);
-        assert!(matches!(outcome, PoseOutcome::Refused(..)), "a claimed stall was believed past the cap: {outcome:?}");
+        assert!(mailbox.pose_reach_ticks() <= 2 + REACH_SPARE_TICKS, "reach {}", mailbox.pose_reach_ticks());
+        assert!(matches!(outcome, PoseOutcome::Refused(..)), "a claimed stall was believed: {outcome:?}");
     }
 
     fn ms(n: u64) -> Duration {

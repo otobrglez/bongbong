@@ -646,9 +646,10 @@ impl<T: Transport> OnlineRound<T> {
         self.send_owed = (self.send_owed + dt.max(0.0)).min(SEND_CATCH_UP_TICKS as f32 * PHYSICS_FIXED_DT);
         while self.send_owed >= PHYSICS_FIXED_DT {
             self.send_owed -= PHYSICS_FIXED_DT;
-            // An owned hull's pose is taken newest-wins by the room, so
-            // there is no queue to steer: one packet and one sandbox tick
-            // per tick of real time, never two and never none (§4.16).
+            // An owned hull's poses are played out on the room's own clock,
+            // which keeps its margin itself, so there is no queue to steer:
+            // one packet and one sandbox tick per tick of real time, never
+            // two and never none (§4.16).
             let packets = if self.client_hull {
                 1
             } else {
@@ -1220,7 +1221,7 @@ mod tests {
     fn a_starvation_widens_the_lead_by_one_packet_and_a_deep_buffer_narrows_it() {
         let (mut room, mut round) = room_and_round();
         // The lead steers the mailbox of a predicted (stage 2) seat; an
-        // owned hull's poses are taken newest-wins and need none.
+        // owned hull's play point keeps its own margin and needs none.
         round.set_client_hull(false);
         room.welcome();
         round.frame(&Intent::default(), 1.0 / 60.0);

@@ -1794,8 +1794,9 @@ impl Game {
     /// `POSE_REACH_SLACK_PX`. `reach_ticks` is how much of the client's
     /// driving the pose covers, which the mailbox read that delivered it
     /// measures (`net::mailbox::Mailbox::pose_reach_ticks`): one tick for
-    /// an ordinary read, the whole stall for the burst that ends one,
-    /// since an owned read takes every intent waiting at once. The pose
+    /// an ordinary read, the whole stall for the read that ends one,
+    /// since an owned read takes every intent at or before its play
+    /// point at once. The pose
     /// must lie inside the field, off a solid tile and out of deep water;
     /// a wreck and a seat still rolling in through a gate own nothing. A
     /// refusal leaves the hull where it was, and the room answers with
