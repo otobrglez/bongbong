@@ -852,14 +852,12 @@ sandbox's seat carries the server's active weapon and ammo as of `acked`
 (`player_fire_interval`, the minigun's burst cooldown), and the ammo still to
 be confirmed is subtracted, so a press the server would refuse draws
 nothing. Shells and plasma fire on the press edge, the minigun while held,
-the same rule `drive_player` applies. A provisional flies by dead reckoning
-and meets nothing: a replica runs no hit test, and a hit is the server's
-word. It is retired when the interpolator hands over the `Fired` this seat
-earned - oldest press first, since a seat's shots leave in the order the
-trigger was pulled and come back in that order - on the frame render time
-reaches that tick, which is the frame the server's own shot appears in its
-place, so nothing flickers; a burst's later bullets and a twin's second
-shell are retired their own delay after it, as they appear. A shot no
+the same rule `drive_player` applies. *As first built*, a provisional flew
+by dead reckoning, met nothing and was retired when the room's shot
+appeared in its place; stage 4 (4.16) replaced that: the provisional is
+the one drawn copy for the shot's whole life, meets the drawn world, and
+the room's copy is paired with it by `Fired::input_tick` and hidden, so
+nothing is ever swapped. A shot no
 `Fired` ever claims was one the server refused and goes quietly after
 `PROVISIONAL_MS`; the count of those is the reading that says the local gate
 is looser than the server's. The room's `Fired` also seeds the local
@@ -959,10 +957,10 @@ the client drew it from and there is nothing provisional to swap. The
 client still draws its own shot on the press (the stage 2 press logic,
 minus the retirement dance - the server's copy *is* that shot, keyed by
 the tick it was fired on) and the laser is drawn at once to the first
-solid tile the client's own terrain reports, with damage the server's.
-What stays late is what it always was: whether the shot *hit* an enemy
-drawn the delay in the past, which is decision 9's question unchanged, and
-the same counters answer it.
+solid tile, drawn tank or frog in the client's own picture, with damage the
+server's. Whether the shot *hit* an enemy drawn the delay in the past was
+decision 9's question; stage 4's lag compensation (4.16) answers it on the
+room, which judges a seat's shots against the tick that seat was drawing.
 
 **What it makes redundant**, and phase 9 removes once the comparison is
 in: `reconcile`'s replay, the pose offset and its nudge and snap, the lead

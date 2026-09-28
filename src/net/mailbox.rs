@@ -44,10 +44,13 @@
 //! not held, since one tick more is the cap.
 //!
 //! Two things move the point by more than the controller does. A point
-//! `BUFFER_MAX` or more behind the newest arrival - a room that stood
-//! still while its client drove on - starts again one tick behind it:
-//! `post` keeps only the newest `BUFFER_MAX`, so the tick the point would
-//! take next is already gone. And a point more than `PLAYOUT_NARROW_AHEAD`
+//! `BUFFER_MAX` or more behind the newest arrival has lost the tick it
+//! would take next (`post` keeps only the newest `BUFFER_MAX`): it starts
+//! again one tick behind the newest when the room's own time since the
+//! last pose covers that much driving - a room that stood still while its
+//! client drove on - and otherwise steps over only what was dropped, onto
+//! the oldest intent still waiting, so the validator is never handed a
+//! jump it must refuse. And a point more than `PLAYOUT_NARROW_AHEAD`
 //! past the newest intent a read took goes back to that intent: the
 //! client's clock slipped behind the room's - a frame hitch longer than
 //! it catches up, a hidden tab - and its ticks now arrive at or before
@@ -283,9 +286,22 @@ impl Inner {
         };
         let newest = self.newest_posted.unwrap_or(play);
         // `BUFFER_MAX` behind, the point's own tick is one `post` dropped
-        // to make room, and every tick after it would be too.
+        // to make room, and every tick after it would be too. The point
+        // starts again one tick behind the newest when the room's own
+        // time since the last pose covers that much driving - a room that
+        // stood still while its client drove on - and otherwise steps
+        // over only what was dropped, onto the oldest still waiting, so
+        // the validator is never handed a jump it has to refuse.
         if newest >= play.saturating_add(BUFFER_MAX as u32) {
-            play = newest - 1;
+            let restart = newest - 1;
+            let covered = match (self.applied, self.applied_at) {
+                (Some(applied), Some(at)) => {
+                    let room = self.reads_since_apply.max(wall_ticks(now, at)).saturating_add(1 + REACH_SPARE_TICKS);
+                    room >= restart.saturating_sub(applied)
+                }
+                _ => true,
+            };
+            play = if covered { restart } else { self.queue.keys().next().copied().map_or(restart, |oldest| oldest.min(restart)) };
         }
         self.play = Some(play);
         self.reads_since_apply = self.reads_since_apply.saturating_add(1);
@@ -322,10 +338,7 @@ impl Inner {
         };
         let guessed = self.starved_run.min(DEAD_RECKON_TICKS);
         let elapsed = match self.applied_at {
-            Some(at) => {
-                let wall = (now.saturating_duration_since(at).as_secs_f32() / PHYSICS_FIXED_DT).ceil() as u32;
-                self.reads_since_apply.max(wall).saturating_add(REACH_SPARE_TICKS)
-            }
+            Some(at) => self.reads_since_apply.max(wall_ticks(now, at)).saturating_add(REACH_SPARE_TICKS),
             None => REACH_TICKS_MAX,
         };
         self.reach = driven.saturating_add(guessed).min(elapsed).clamp(1, REACH_TICKS_MAX);
@@ -418,6 +431,11 @@ impl Inner {
             ..last
         }
     }
+}
+
+/// Whole room ticks of wall time from `at` to `now`, rounded up.
+fn wall_ticks(now: Instant, at: Instant) -> u32 {
+    (now.saturating_duration_since(at).as_secs_f32() / PHYSICS_FIXED_DT).ceil() as u32
 }
 
 /// One seat's intents: ordered for a server-driven seat, played out on
@@ -1019,12 +1037,14 @@ mod tests {
     #[test]
     fn an_owned_point_at_the_cap_starts_again_rather_than_starving() {
         let mailbox = Mailbox::new();
-        let now = Instant::now();
+        let tick = Duration::from_secs_f32(PHYSICS_FIXED_DT);
+        let mut now = Instant::now();
         mailbox.post(standing(0), now);
         mailbox.read(now);
         // The room stands still while the client drives on.
         let mut next = 1u32;
         for _ in 0..=BUFFER_MAX {
+            now += tick;
             mailbox.post(standing(next), now);
             next += 1;
         }
@@ -1033,12 +1053,52 @@ mod tests {
         for _ in 0..PLAYOUT_WINDOW_TICKS {
             mailbox.read(now);
             acked.push(mailbox.acked_tick());
+            now += tick;
             mailbox.post(standing(next), now);
             next += 1;
         }
         assert_eq!(mailbox.starvations(), starvations, "a read starved with the buffer full: acked {acked:?}");
         assert_eq!(acked[0], BUFFER_MAX as u32, "the first read starts again a tick behind the newest");
         assert!(acked.windows(2).all(|w| w[1] == w[0] + 1), "and every read after it takes the next tick: {acked:?}");
+    }
+
+    /// **A point at the cap on a room that never stalled steps over only
+    /// what was dropped.** The room has read every tick, so its own time
+    /// since the last pose covers a tick or two of driving, not the whole
+    /// margin: starting again a tick behind the newest would hand the
+    /// validator a jump it refuses. The point moves onto the oldest intent
+    /// still waiting instead, and every read vouches for the driving it
+    /// applies.
+    #[test]
+    fn an_owned_point_at_the_cap_on_a_ticking_room_steps_over_only_the_dropped() {
+        let mailbox = Mailbox::new();
+        let tick = Duration::from_secs_f32(PHYSICS_FIXED_DT);
+        let mut now = Instant::now();
+        mailbox.post(standing(0), now);
+        mailbox.read(now);
+        // A margin of seven: ticks 1..=8 arrive together, then one a tick.
+        let mut next = 1u32;
+        for _ in 0..8 {
+            mailbox.post(standing(next), now);
+            next += 1;
+        }
+        let mut steps = Vec::new();
+        for read in 0..40 {
+            now += tick;
+            let before = mailbox.acked_tick();
+            mailbox.read(now);
+            steps.push((mailbox.acked_tick() - before, mailbox.pose_reach_ticks()));
+            // Two in one tick now and then, which puts the point at the cap.
+            let arrivals = if read % 10 == 5 { 2 } else { 1 };
+            for _ in 0..arrivals {
+                mailbox.post(standing(next), now);
+                next += 1;
+            }
+        }
+        assert!(
+            steps.iter().all(|&(driven, reach)| driven <= reach.max(1)),
+            "a read applied more driving than it vouched for: {steps:?}"
+        );
     }
 
     /// **The margin never widens into the cap.** A link that delivers in

@@ -207,8 +207,10 @@ pub const CLOCK_WINDOW_MS: i64 = 2_000;
 /// that outlasted the window: its late burst says nothing about the path,
 /// and half a second of the stream that follows it does. A stall's
 /// backlog comes back in chunks a round trip apart, each behind a gap of
-/// its own, and each of those gaps extends the settling by as much again,
-/// up to `CLOCK_SETTLE_MAX_MS` from the first.
+/// its own, and each of those gaps extends a settling already in effect by
+/// as much again, up to `CLOCK_SETTLE_MAX_MS` from the first; a gap on a
+/// link that is merely gappy extends nothing, since the window there never
+/// empties of what came before.
 pub const CLOCK_SETTLE_MS: i64 = 500;
 
 /// The longest one settling lasts from the gap that started it, however
@@ -432,18 +434,6 @@ impl ServerClock {
             return true;
         }
         let gap = self.last_local.map_or(0, |at| (local_ms - at).max(0));
-        // A stall's backlog comes back in chunks a round trip apart, each
-        // behind a gap of its own: the first gap starts the settling, and
-        // each later one inside it extends it without moving its start.
-        if gap as f64 > self.gap_ms {
-            let settling_already = self.settle_until.is_some_and(|until| local_ms < until);
-            let start = match self.resumed_at {
-                Some(at) if settling_already => at,
-                _ => local_ms,
-            };
-            self.resumed_at = Some(start);
-            self.settle_until = Some((local_ms + CLOCK_SETTLE_MS).min(start + CLOCK_SETTLE_MAX_MS));
-        }
         let credit = (gap as f64).min(CLOCK_FALL_CREDIT_MS);
         self.last_local = Some(self.last_local.map_or(local_ms, |at| at.max(local_ms)));
         self.window.push_back((local_ms, reading));
@@ -451,11 +441,30 @@ impl ServerClock {
         while self.window.len() > 1 && self.window.front().is_some_and(|&(at, _)| at < horizon) {
             self.window.pop_front();
         }
+        // A stall's backlog comes back in chunks a round trip apart, each
+        // behind a gap of its own: the first gap starts a settling, and a
+        // later one extends it without moving its start - but only once it
+        // is in effect, the window holding nothing from before that first
+        // gap. On a link that is merely gappy the window never empties, the
+        // pending settling runs out, and nothing settles.
+        if gap as f64 > self.gap_ms {
+            let pending = self.settle_until.is_some_and(|until| local_ms < until);
+            let in_effect = self.resumed_at.is_some_and(|at| self.window.front().is_some_and(|&(first, _)| first >= at));
+            match (pending, self.resumed_at) {
+                (true, Some(start)) if in_effect => {
+                    self.settle_until = Some((local_ms + CLOCK_SETTLE_MS).min(start + CLOCK_SETTLE_MAX_MS));
+                }
+                (true, _) => {}
+                (false, _) => {
+                    self.resumed_at = Some(local_ms);
+                    self.settle_until = Some(local_ms + CLOCK_SETTLE_MS);
+                }
+            }
+        }
         let envelope = self.window.iter().map(|&(_, r)| r).fold(f64::NEG_INFINITY, f64::max);
         // Settling: the window holds only what came after a gap, and the
         // gap is recent. Otherwise the window's best is the path.
-        let settling = self.settle_until.is_some_and(|until| local_ms < until)
-            && self.resumed_at.is_some_and(|at| self.window.front().is_some_and(|&(first, _)| first >= at));
+        let settling = self.settling(local_ms);
         let next = if envelope >= offset || !settling {
             envelope
         } else {
@@ -465,6 +474,13 @@ impl ServerClock {
         let late = (next - reading).max(0.0);
         self.jitter_ms += (late - self.jitter_ms) * JITTER_GAIN;
         false
+    }
+
+    /// Whether a settling is in effect at `local_ms`: one is pending and
+    /// the window holds nothing from before the gap that started it.
+    fn settling(&self, local_ms: i64) -> bool {
+        self.settle_until.is_some_and(|until| local_ms < until)
+            && self.resumed_at.is_some_and(|at| self.window.front().is_some_and(|&(first, _)| first >= at))
     }
 
     fn take_whole(&mut self, reading: f64, local_ms: i64) {
@@ -2564,5 +2580,28 @@ mod tests {
         far.restart(&welcome, sent + late);
         let reading = welcome.server_ms as f64 - (sent + late) as f64;
         assert_eq!(far.clock().offset_ms(), Some(reading), "{late} ms off is another clock, taken whole");
+    }
+
+    /// **A gappy link is its path, not a stall.** Snapshots come in bursts
+    /// behind 120 ms gaps every 330 ms, and nothing ever outlasts the
+    /// window, so no settling is ever in effect - a chain of pending ones
+    /// extended from gap to gap would, once the last reading from before
+    /// the first gap left the window, slow the clock's fall with no stall
+    /// behind it.
+    #[test]
+    fn a_gappy_link_never_settles() {
+        let mut clock = ServerClock::default();
+        clock.set_gap_ms(STALL_INTERVALS * SNAPSHOT_INTERVAL_MS);
+        let mut settled = Vec::new();
+        for sent in (0..9_000i64).step_by(16) {
+            let phase = sent % 330;
+            let held = if phase < 120 { 120 - phase } else { 0 };
+            let at = sent + 20 + held;
+            clock.observe_ms(sent as f64, at);
+            if clock.settling(at) {
+                settled.push(at);
+            }
+        }
+        assert!(settled.is_empty(), "settled with no stall behind it at {:?}", &settled[..settled.len().min(8)]);
     }
 }

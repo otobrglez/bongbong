@@ -1179,9 +1179,9 @@ impl<T: Transport> OnlineRound<T> {
     }
 
     /// The interpolator is handing a snapshot's events over, before they
-    /// are applied: each laser `Fired` of this seat's claims the oldest
-    /// beam this client drew at or before its input tick
-    /// (`Predictor::confirm_beam`), and the ones that did are the room's
+    /// are applied: each laser `Fired` of this seat's claims the last beam
+    /// this client drew at or before its input tick, earlier ones still
+    /// waiting having been refused (`Predictor::confirm_beam`), and the ones that did are the room's
     /// beams for this seat the replica leaves out - bit `k` for the `k`th
     /// (`apply::Show::OwnShotsDrawn`). A beam the client never drew - the
     /// local gate refused a press the room fired - is not claimed, so the

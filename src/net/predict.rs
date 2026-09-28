@@ -762,15 +762,16 @@ impl Predictor {
     }
 
     /// The interpolator is handing over the room's `Fired` for a laser of
-    /// this seat, on input tick `input_tick`: the oldest beam this client
-    /// drew at or before that tick is the one the room fired, and true says
-    /// the room's own beam for it is not drawn again. False - the local gate
-    /// refused a press the room fired, or beams are not drawn - leaves the
-    /// room's beam on the picture, and its shot seeds the local gate as an
-    /// unclaimed `confirm_fired` does.
+    /// this seat, on input tick `input_tick`: the last beam this client drew
+    /// at or before that tick is the one the room fired - any earlier one
+    /// still waiting the room refused, as `confirm_fired` has it for shots -
+    /// and true says the room's own beam for it is not drawn again. False -
+    /// the local gate refused a press the room fired, or beams are not drawn
+    /// - leaves the room's beam on the picture, and its shot seeds the local
+    /// gate as an unclaimed `confirm_fired` does.
     pub fn confirm_beam(&mut self, input_tick: u32) -> bool {
-        if self.drawn_beams.front().is_some_and(|&(t, _)| t <= input_tick) {
-            self.drawn_beams.pop_front();
+        if let Some(i) = self.drawn_beams.iter().rposition(|&(t, _)| t <= input_tick) {
+            self.drawn_beams.drain(..=i);
             return true;
         }
         self.seed_gate(WeaponKind::Laser, input_tick);
@@ -1673,6 +1674,39 @@ mod tests {
         assert!(predictor.presses[0].live.iter().all(|l| !l.orphaned));
     }
 
+    /// **A later shot's copy may reach the picture a tick after its own
+    /// tick** (`LATER_SHOT_SLACK_TICKS`): the room fires the twin's second
+    /// barrel on its tick, and a snapshot every tick can put it in the
+    /// picture one frame on. Seen then, it is still that barrel's copy -
+    /// not orphaned, not paired with the next shot.
+    #[test]
+    fn a_twins_second_copy_a_tick_late_is_still_its_own() {
+        let mut predictor = Predictor::new(round_with(twin_barrel_row(), 0), 0, 0);
+        predictor.set_refusal_after(5.0);
+        let delay = (tuning().tank_twin_shot_delay_seconds / PHYSICS_FIXED_DT).ceil() as u32;
+        let pressed = predictor.step(press());
+        idle_ticks(&mut predictor, delay as usize + 2);
+        let copy = |id: u16| ServerShot {
+            id,
+            kind: ProvisionalKind::Shell,
+            position: Position::new(0.0, 0.0),
+            velocity: crate::math::Vec2::new(0.0, -500.0),
+            flying: false,
+            impact: false,
+        };
+        predictor.confirm_fired(WeaponKind::Shell, pressed);
+        // A snapshot a tick: the second barrel's own tick passes without
+        // its copy, which turns up on the next.
+        let confirmed = 30;
+        for tick in confirmed..=confirmed + delay {
+            predictor.observe_server_shots(tick, &[copy(1)]);
+        }
+        predictor.observe_server_shots(confirmed + delay + 1, &[copy(1), copy(2)]);
+        let servers: Vec<Option<u16>> = predictor.presses[0].live.iter().map(|l| l.server).collect();
+        assert_eq!(servers, vec![Some(1), Some(2)], "the second barrel's copy is its own");
+        assert!(predictor.presses[0].live.iter().all(|l| !l.orphaned), "nothing orphaned");
+    }
+
     /// A shot that meets something in the drawn world stops there and
     /// plays its impact at once; if the room's copy then flies on past
     /// that point, the room missed, and its copy is shown instead.
@@ -1759,6 +1793,18 @@ mod tests {
         assert_eq!(predictor.take_beams().len(), 1);
         predictor.advance_shots(PROVISIONAL_SECONDS + 0.1, open_air);
         assert!(!predictor.confirm_beam(late), "dropped past the refusal wait");
+        // Two drawn beams, the room fires only the second: the first was
+        // refused and goes with the claim, so a room shot this client never
+        // drew after them claims nothing.
+        idle_ticks(&mut predictor, ticks + 1);
+        let _refused = predictor.step(press());
+        idle_ticks(&mut predictor, ticks + 1);
+        let fired = predictor.step(press());
+        assert_eq!(predictor.take_beams().len(), 2);
+        assert!(predictor.confirm_beam(fired), "the second press's beam is the room's");
+        idle_ticks(&mut predictor, ticks + 1);
+        let undrawn = predictor.tick() - 1;
+        assert!(!predictor.confirm_beam(undrawn), "the refused beam claims no later room shot");
     }
 
     /// A press the server never claims - or one passed over by a `Fired`

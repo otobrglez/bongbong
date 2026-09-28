@@ -116,9 +116,10 @@ the client's readings (`FrameSample::link`).
   shared clock). Rectangle scenarios only: the strafe retraces itself.
 - **shot ledger** (the host's presses; `src/shots.rs` follows the drawn
   shots - a room copy by the room's id, a provisional by continuity: no
-  further on than its kind flies in a frame and never back in its own life,
-  since a provisional's id is an index into the client's live shots that
-  shifts as older ones retire):
+  further on than its kind flies in a frame and never back in its own life;
+  a provisional's id is `PROVISIONAL_ID_BASE` plus its own number, stable
+  for the shot's life and wrapping every 4096, and continuity is what
+  measures a jump):
   - *drawn* - press to the first frame its shot is drawn leaving the muzzle
     (the provisional where the client draws one, the room's copy where not);
   - *fired* - press to the frame its `Fired` is handed over. In-process the
@@ -133,9 +134,9 @@ the client's readings (`FrameSample::link`).
     handed the next press's `Fired`;
   - every other appearance of an own shot is put down to **the same shot**
     (`metrics::own_shots`, `replay --explain`): a provisional that jumps -
-    moves further than its flight in a frame - continues the provisional at
-    its place in the client's list (the client keeps its shots in launch
-    order and a retirement only closes the gap); a room copy is the shot its
+    moves further than its flight in a frame - continues the provisional
+    drawn under the same id, or at its place in the client's list, which
+    keeps its shots in launch order; a room copy is the shot its
     id was drawn as before, or the press's the tap saw its id first listed
     with (in-process), or the shot whose provisional it trails the way that
     shot's room copy should - its `Fired` less its launch - at the same place
