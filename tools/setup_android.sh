@@ -10,19 +10,29 @@
 # Idempotent: every step checks for its result first. Downloads are several
 # gigabytes the first time. Android Studio's SDK Manager can install the same
 # packages by hand; the script then only builds raylib.
+#
+# BONGBONG_ANDROID_NO_EMULATOR=1 skips the system image, the emulator and the
+# virtual device - what a build machine needs is the NDK, a platform and
+# raylib, and the image alone is over a gigabyte. The android-release
+# workflow runs it that way on GitHub's Ubuntu image, whose preinstalled
+# SDK already carries the command-line tools and the build-tools.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source tools/android/env.sh
+NO_EMULATOR="${BONGBONG_ANDROID_NO_EMULATOR:-0}"
 
 # Any command-line tools release can bootstrap sdkmanager, which then installs
 # the current `cmdline-tools;latest` on top of itself.
-CMDLINE_TOOLS_BOOTSTRAP="${CMDLINE_TOOLS_BOOTSTRAP:-commandlinetools-mac-9862592_latest.zip}"
+case "$(uname -s)" in
+    Darwin) CMDLINE_TOOLS_BOOTSTRAP="${CMDLINE_TOOLS_BOOTSTRAP:-commandlinetools-mac-9862592_latest.zip}" ;;
+    *)      CMDLINE_TOOLS_BOOTSTRAP="${CMDLINE_TOOLS_BOOTSTRAP:-commandlinetools-linux-9862592_latest.zip}" ;;
+esac
 ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/bongbong-android"
 SRC="$ROOT/src"
 BUILD="$ROOT/build"
 mkdir -p "$SRC" "$BUILD" "$BONGBONG_ANDROID_LIBS"
 
-[[ -x "$JAVA_HOME/bin/java" ]] || { echo "[setup-android] no JDK at $JAVA_HOME (Android Studio's JBR): install Android Studio or set JAVA_HOME" >&2; exit 1; }
+[[ -x "${JAVA_HOME:-}/bin/java" ]] || { echo "[setup-android] no JDK at '${JAVA_HOME:-}' (Android Studio's JBR on a Mac): install Android Studio or set JAVA_HOME" >&2; exit 1; }
 for tool in git cmake curl unzip; do
     command -v "$tool" >/dev/null 2>&1 || { echo "[setup-android] $tool not found" >&2; exit 1; }
 done
@@ -52,16 +62,21 @@ yes | sdkmanager --licenses >/dev/null 2>&1 || true
 need=()
 [[ -d "$ANDROID_NDK_HOME" ]] || need+=("ndk;$ANDROID_NDK_VERSION")
 [[ -f "$ANDROID_HOME/platforms/android-$ANDROID_PLATFORM_VERSION/android.jar" ]] || need+=("platforms;android-$ANDROID_PLATFORM_VERSION")
-[[ -d "$ANDROID_HOME/system-images/android-$ANDROID_PLATFORM_VERSION/google_apis/arm64-v8a" ]] || need+=("$ANDROID_SYSTEM_IMAGE")
 [[ -x "$ANDROID_HOME/platform-tools/adb" ]] || need+=("platform-tools")
-[[ -x "$ANDROID_HOME/emulator/emulator" ]] || need+=("emulator")
+[[ -n "$ANDROID_BUILD_TOOLS" ]] || need+=("build-tools;$ANDROID_PLATFORM_VERSION.0.0")
+if [[ "$NO_EMULATOR" != 1 ]]; then
+    [[ -d "$ANDROID_HOME/system-images/android-$ANDROID_PLATFORM_VERSION/google_apis/arm64-v8a" ]] || need+=("$ANDROID_SYSTEM_IMAGE")
+    [[ -x "$ANDROID_HOME/emulator/emulator" ]] || need+=("emulator")
+fi
 if ((${#need[@]})); then
     echo "[setup-android] sdkmanager ${need[*]}"
     sdkmanager "${need[@]}"
 fi
 
 # --- the virtual device --------------------------------------------------------
-if ! emulator -list-avds 2>/dev/null | grep -qx "$BONGBONG_AVD"; then
+if [[ "$NO_EMULATOR" == 1 ]]; then
+    echo "[setup-android] BONGBONG_ANDROID_NO_EMULATOR=1: no system image, emulator or AVD"
+elif ! emulator -list-avds 2>/dev/null | grep -qx "$BONGBONG_AVD"; then
     echo "[setup-android] creating AVD $BONGBONG_AVD"
     device=pixel_7
     avdmanager list device -c 2>/dev/null | grep -qx "$device" || device="$(avdmanager list device -c 2>/dev/null | grep -E '^pixel' | tail -1)"
@@ -71,9 +86,10 @@ fi
 # it the emulator delivers a press as a down and an up in quick succession,
 # and a held arrow only nudges the tank (movement reads the key every frame).
 AVD_CONFIG="$HOME/.android/avd/$BONGBONG_AVD.avd/config.ini"
-if [[ -f "$AVD_CONFIG" ]] && ! grep -qx "hw.keyboard=yes" "$AVD_CONFIG"; then
+if [[ "$NO_EMULATOR" != 1 && -f "$AVD_CONFIG" ]] && ! grep -qx "hw.keyboard=yes" "$AVD_CONFIG"; then
     if grep -q "^hw.keyboard=" "$AVD_CONFIG"; then
-        sed -i '' 's/^hw.keyboard=.*/hw.keyboard=yes/' "$AVD_CONFIG"
+        # sed -i differs between BSD and GNU; a temp file works on both.
+        sed 's/^hw.keyboard=.*/hw.keyboard=yes/' "$AVD_CONFIG" > "$AVD_CONFIG.tmp" && mv "$AVD_CONFIG.tmp" "$AVD_CONFIG"
     else
         echo "hw.keyboard=yes" >> "$AVD_CONFIG"
     fi
@@ -93,11 +109,16 @@ cmake -S "$RL" -B "$BUILD/raylib-$ANDROID_ABI" -G "Unix Makefiles" \
     -DANDROID_ABI="$ANDROID_ABI" -DANDROID_PLATFORM="android-$ANDROID_API_MIN" \
     -DPLATFORM=Android -DBUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$PREFIX"
-cmake --build "$BUILD/raylib-$ANDROID_ABI" -j"$(sysctl -n hw.ncpu)"
+cmake --build "$BUILD/raylib-$ANDROID_ABI" -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
 cmake --install "$BUILD/raylib-$ANDROID_ABI"
 
 echo
 echo "[setup-android] raylib for $ANDROID_ABI in $PREFIX:"
 "$NDK_TOOLCHAIN/bin/llvm-nm" "$PREFIX/lib/libraylib.a" 2>/dev/null | grep -E " T (android_main|ANativeActivity_onCreate)$" | sed 's/^/  /'
-echo "[setup-android] SDK: ndk $ANDROID_NDK_VERSION, platform android-$ANDROID_PLATFORM_VERSION, image $ANDROID_SYSTEM_IMAGE, AVD $BONGBONG_AVD"
-echo "Next: just android-smoke, then just run-android."
+if [[ "$NO_EMULATOR" == 1 ]]; then
+    echo "[setup-android] SDK: ndk $ANDROID_NDK_VERSION, platform android-$ANDROID_PLATFORM_VERSION, build-tools $(basename "$ANDROID_BUILD_TOOLS")"
+    echo "Next: just build-android."
+else
+    echo "[setup-android] SDK: ndk $ANDROID_NDK_VERSION, platform android-$ANDROID_PLATFORM_VERSION, image $ANDROID_SYSTEM_IMAGE, AVD $BONGBONG_AVD"
+    echo "Next: just android-smoke, then just run-android."
+fi

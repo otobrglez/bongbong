@@ -3,7 +3,8 @@
      __PLACEHOLDERS__). A NativeActivity with no Java code: raylib's
      android_main runs the game from lib__LIB_NAME__.so. configChanges keeps
      the activity alive across rotation (raylib's config-change handling is a
-     stub); the theme removes the title and status bars. -->
+     stub); the theme removes the title and status bars; the icon is the
+     adaptive icon under tools/android/res/. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="__PACKAGE__"
     android:versionCode="__VERSION_CODE__"
@@ -14,6 +15,7 @@
 __PERMISSIONS__
     <application
         android:label="__NAME__"
+        android:icon="@mipmap/ic_launcher"
         android:hasCode="false"
         android:allowBackup="false"
         android:theme="@android:style/Theme.NoTitleBar.Fullscreen">

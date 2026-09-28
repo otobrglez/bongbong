@@ -334,10 +334,17 @@ android-smoke:
 # Build libbongbong_android.so (a plain cargo build for aarch64-linux-android;
 # tools/android/env.sh points cargo, cc-rs and bindgen at the NDK) and stage
 # target/android/BongBong.apk (tools/android/package.sh: assets/static, the
-# .so, debug signature).
+# .so, the icon, the INTERNET permission the rooms need; signed with the
+# debug key unless BONGBONG_ANDROID_KEYSTORE names the release one).
 build-android *ARGS:
     bash -c 'set -e; source tools/android/env.sh; cargo build --release --target aarch64-linux-android -p bongbong-android {{ARGS}}; \
-        tools/android/package.sh target/aarch64-linux-android/release/libbongbong_android.so bongbong_android com.otobrglez.bongbong BongBong target/android/BongBong.apk static/ "" bongbong_on_create'
+        tools/android/package.sh target/aarch64-linux-android/release/libbongbong_android.so bongbong_android com.otobrglez.bongbong BongBong target/android/BongBong.apk static/ \
+        "    <uses-permission android:name=\"android.permission.INTERNET\" />" bongbong_on_create'
+
+# tools/android/gen_app_icon.py; --row N picks another chassis.
+# Regenerate the launcher icon's layers under tools/android/res/.
+android-icon *ARGS:
+    nix-shell -p "python3.withPackages (ps: [ps.pillow])" --run "python3 tools/android/gen_app_icon.py {{ARGS}}"
 
 # Build, boot the AVD if needed, install and launch the game, then follow logcat (Ctrl-C detaches).
 run-android *ARGS: (build-android ARGS)
