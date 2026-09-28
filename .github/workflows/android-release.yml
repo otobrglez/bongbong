@@ -12,7 +12,11 @@ name: Android Release
 # already: the APK has to be uploaded second, never first. A manual run
 # builds the picked ref and uploads to that tag's release (input `tag`), or
 # only keeps the APK as a workflow artifact (input `upload` = false), which
-# is how a change to this pipeline is tried on a branch.
+# is how a change to this pipeline is tried on a branch. A pull request
+# that touches the Android build runs it too, as a check that keeps the
+# APK as an artifact: with the release key when the PR is the repo's own,
+# debug-signed from a fork, which gets no secrets by design - never "fix"
+# that with pull_request_target.
 #
 # Signing: Android ties an app to its signing key for life - a phone
 # refuses an update signed with a different key - so the release key is
@@ -25,6 +29,13 @@ on:
   workflow_run:
     workflows: [Release]
     types: [completed]
+  pull_request:
+    paths:
+      - .github/workflows/android-release.yml
+      - android/**
+      - tools/android/**
+      - tools/setup_android.sh
+      - src/app/android.rs
   workflow_dispatch:
     inputs:
       tag:
@@ -51,7 +62,7 @@ jobs:
     # Release also runs on pull requests (dist's plan-only mode); only a
     # successful run of a pushed version tag has a release to attach to.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      github.event_name != 'workflow_run' ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push' &&
        startsWith(github.event.workflow_run.head_branch, 'v'))
@@ -99,8 +110,12 @@ jobs:
           ANDROID_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
-          [[ -n "$ANDROID_KEYSTORE_B64" && -n "$ANDROID_KEYSTORE_PASS" && -n "$ANDROID_KEY_ALIAS" ]] \
-            || { echo "::error::ANDROID_KEYSTORE_B64, ANDROID_KEYSTORE_PASS and ANDROID_KEY_ALIAS secrets are required"; exit 1; }
+          if [[ -z "$ANDROID_KEYSTORE_B64" || -z "$ANDROID_KEYSTORE_PASS" || -z "$ANDROID_KEY_ALIAS" ]]; then
+            if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+              echo "::warning::no release key secrets (a fork's PR): the APK is debug-signed"; exit 0
+            fi
+            echo "::error::ANDROID_KEYSTORE_B64, ANDROID_KEYSTORE_PASS and ANDROID_KEY_ALIAS secrets are required"; exit 1
+          fi
           umask 077
           printf '%s' "$ANDROID_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
           {
