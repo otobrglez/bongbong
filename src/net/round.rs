@@ -1259,10 +1259,13 @@ mod tests {
         let rad = seat.rotation.to_radians();
         let ahead = crate::math::Vec2::new(seat.position.x + rad.sin() * 120.0, seat.position.y - rad.cos() * 120.0);
         room.game.debug_teleport(1, ahead, Some(seat.rotation)).expect("an enemy in slot 1");
-        for (i, stamp) in [5_000u32, 5_050].into_iter().enumerate() {
+        // Six ticks of that world, stamped on the room's schedule: render
+        // time stands the delay behind the newest tick, which has to be
+        // one of the teleported world's rather than the welcome's.
+        for i in 0..6u32 {
             let mut s = encode::snapshot(&room.game, [0; MAX_SEATS]);
-            s.tick = i as u32 + 1;
-            s.server_ms = stamp;
+            s.tick = i + 1;
+            s.server_ms = 5_000 + (i as f64 * 1000.0 / 60.0).round() as u32;
             room.say(Msg::Snapshot(s));
         }
         round.frame(&Intent::default(), 1.0 / 60.0);
