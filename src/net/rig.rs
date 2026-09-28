@@ -915,6 +915,66 @@ mod tests {
         assert_eq!((report.nudges, report.snaps), (0, 0), "an owned hull is never corrected: {report:?}");
     }
 
+    /// **The own shot never jumps back** (docs/online-coop-prd.md §4.16):
+    /// over a 40 ms link, a shell fired from a standing tank is drawn from
+    /// the press to its impact moving only forward along its heading - the
+    /// room's copy is paired by the press's input tick and kept off the
+    /// picture, so nothing swaps the shell for one drawn in the past - and
+    /// the room confirms the press rather than refusing it.
+    #[test]
+    fn the_own_shot_never_jumps_back_over_a_real_link() {
+        if !tuning().online_predict_own_tank || !tuning().online_predict_shots {
+            return;
+        }
+        let (_rig, link) = start(options(LinkQuality::new(40, 5, 0.0)));
+        let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
+        let mut round = OnlineRound::new(client, "RIG");
+        round.set_client_hull(true);
+        let give_up = Instant::now() + Duration::from_secs(10);
+        while round.game().is_none_or(|g| g.frame() < 30) {
+            round.frame(&Intent::default(), FRAME.as_secs_f32());
+            thread::sleep(FRAME);
+            assert!(Instant::now() < give_up, "the rig never got going");
+        }
+        let heading = round
+            .game()
+            .and_then(|g| g.tank_snapshots().into_iter().find(|t| t.slot == 0))
+            .map(|t| t.rotation.to_radians())
+            .expect("the seat");
+        let along = |x: i32, y: i32| (x as f32 / 4.0) * heading.sin() - (y as f32 / 4.0) * heading.cos();
+        round.frame(&Intent { fire: true, ..Intent::default() }, FRAME.as_secs_f32());
+        thread::sleep(FRAME);
+        let mut last: Option<f32> = None;
+        let mut worst_back = 0.0f32;
+        let mut seen = 0;
+        for _ in 0..90 {
+            round.frame(&Intent::default(), FRAME.as_secs_f32());
+            thread::sleep(FRAME);
+            let game = round.game().expect("a replica");
+            // The seat's shots on screen: at most one here, the one fired.
+            let rooms: Vec<u32> = game.seat_shots(0).iter().map(|s| s.id as u32).collect();
+            let own: Vec<f32> = game
+                .drawable_state()
+                .shots
+                .iter()
+                .filter(|s| s.id >= crate::net::predict::PROVISIONAL_ID_BASE || rooms.contains(&s.id))
+                .map(|s| along(s.x, s.y))
+                .collect();
+            assert!(own.len() <= 1, "the room's copy and the provisional were both drawn: {own:?}");
+            if let Some(&at) = own.first() {
+                seen += 1;
+                if let Some(prev) = last {
+                    worst_back = worst_back.max(prev - at);
+                }
+                last = Some(at);
+            }
+        }
+        assert!(seen > 10, "the shot was on screen for only {seen} frames");
+        assert!(worst_back <= 1.0, "the own shot jumped back {worst_back} px along its heading");
+        let report = round.prediction().expect("a report");
+        assert_eq!(report.shots_refused, 0, "the room fired the press: {report:?}");
+    }
+
     /// **The hull has to turn with the prediction, not behind it.**
     ///
     /// `tick_presentation` eases `visual_rotation` toward `rotation`, so

@@ -36,10 +36,9 @@ use crate::net::interp::{InterpReport, Interpolator};
 use crate::net::mailbox;
 use crate::net::predict::{PredictionReport, Predictor};
 use crate::net::transport::Transport;
-use crate::net::events::{WireEvent, WireHitTarget};
+use crate::net::events::WireEvent;
 use crate::net::wire::{RoundOutcome, Snapshot, Welcome, dequantise_pos};
 use crate::simulation::Game;
-use crate::tank::Tank;
 use crate::tuning::{self, tuning};
 use crate::PHYSICS_FIXED_DT;
 
@@ -72,52 +71,16 @@ pub const LEAD_GAIN: f32 = 0.1;
 /// number: past it the frame was a stall and the time is dropped.
 pub const SEND_CATCH_UP_TICKS: u32 = 4;
 
-/// How long after a provisional shot crossed a drawn hull the server's
-/// `Hit` for it may still arrive: a round trip, the interpolation delay
-/// and the rest of the shell's flight, generously. Past it the crossing
-/// was a shell drawn through a hull it never touched (decision 9).
-pub const CROSSING_WINDOW_SECONDS: f32 = 0.5;
+/// The most ticks the incoming fire is drawn ahead of where the room
+/// has it (`draw_incoming_in_present`): half a second, past which a link
+/// is not worth hiding.
+pub const MAX_LEAD_TICKS: f32 = 30.0;
 
-/// How near a `Hit` has to land to a crossing to be its answer: a hull
-/// and a half, since the server's hull stood up to the delay times its
-/// speed from the drawn one.
-pub const HIT_MATCH_PX: f32 = 96.0;
-
-/// A provisional shot seen crossing a drawn hull, waiting for the
-/// server's word on it.
-#[derive(Clone, Copy, Debug)]
-struct Crossing {
-    at: crate::math::Vec2,
-    age: f32,
-}
-
-/// Whether the segment `a`-`b` passes through the box at `centre` with
-/// half extents `hx`, `hy`: the slab test, the same shape as the hit
-/// test's sweep, on the drawn picture rather than the world.
-fn segment_crosses_box(a: crate::math::Vec2, b: crate::math::Vec2, centre: crate::math::Vec2, hx: f32, hy: f32) -> bool {
-    let (mut t0, mut t1) = (0.0f32, 1.0f32);
-    for (p, d, lo, hi) in [
-        (a.x, b.x - a.x, centre.x - hx, centre.x + hx),
-        (a.y, b.y - a.y, centre.y - hy, centre.y + hy),
-    ] {
-        if d.abs() < f32::EPSILON {
-            if p < lo || p > hi {
-                return false;
-            }
-            continue;
-        }
-        let (mut near, mut far) = ((lo - p) / d, (hi - p) / d);
-        if near > far {
-            std::mem::swap(&mut near, &mut far);
-        }
-        t0 = t0.max(near);
-        t1 = t1.min(far);
-        if t0 > t1 {
-            return false;
-        }
-    }
-    true
-}
+/// How long a foreign shot takes to catch up from where it is drawn in
+/// the past to where it is drawn in the present, from the moment it is
+/// first seen in flight: it leaves the drawn (past) muzzle and eases
+/// forward, so it never appears ahead of the tank that fired it.
+pub const CATCH_UP_MS: f32 = 120.0;
 
 /// What the lead asks of the frame's packet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -224,11 +187,12 @@ pub struct OnlineRound<T: Transport> {
     /// it in 256ths: what every packet carries as `IntentMsg::view_tick`
     /// for lag compensation (§4.16).
     view: (u32, u8),
-    /// Provisional shots seen crossing a drawn hull, until the server's
-    /// `Hit` claims them or the window runs out (decision 9's numbers).
-    crossings: Vec<Crossing>,
-    crossings_hit: u32,
-    crossings_missed: u32,
+    /// When each foreign shot was first seen in flight, local ms: its
+    /// catch-up into the present runs from there (`CATCH_UP_MS`).
+    flying_since: std::collections::BTreeMap<u16, i64>,
+    /// Foreign shots this client already drew meeting its own hull: kept
+    /// off the picture until the room's copy goes.
+    struck: std::collections::BTreeSet<u16>,
     /// The local seat's own hull, run ahead of the room and pulled back
     /// by each snapshot (stage 2, docs/online-coop-prd.md §4.12). Built
     /// beside the replica from the same `Welcome`, so the two step
@@ -273,9 +237,8 @@ impl<T: Transport> OnlineRound<T> {
             client_hull: tuning().online_client_hull,
             rtt: RttClock::default(),
             view: (0, 0),
-            crossings: Vec::new(),
-            crossings_hit: 0,
-            crossings_missed: 0,
+            flying_since: std::collections::BTreeMap::new(),
+            struck: std::collections::BTreeSet::new(),
             note: None,
             ended: None,
             scratch: Vec::new(),
@@ -342,11 +305,7 @@ impl<T: Transport> OnlineRound<T> {
     /// The predictor's counters, with the lead's own, once a welcome has
     /// built a sandbox (docs/online-coop-prd.md §4.12, "Measured").
     pub fn prediction(&self) -> Option<PredictionReport> {
-        self.predictor.as_ref().map(|p| PredictionReport {
-            crossings_hit: self.crossings_hit,
-            crossings_missed: self.crossings_missed,
-            ..p.report(self.lead.up, self.lead.down)
-        })
+        self.predictor.as_ref().map(|p| p.report(self.lead.up, self.lead.down))
     }
 
     /// What the interpolator is doing: the delay in force, the jitter it
@@ -625,10 +584,17 @@ impl<T: Transport> OnlineRound<T> {
         self.send_owed = (self.send_owed + dt.max(0.0)).min(SEND_CATCH_UP_TICKS as f32 * PHYSICS_FIXED_DT);
         while self.send_owed >= PHYSICS_FIXED_DT {
             self.send_owed -= PHYSICS_FIXED_DT;
-            let packets = match self.lead.decide() {
-                Adjust::Keep => 1,
-                Adjust::Extra => 2,
-                Adjust::Skip => 0,
+            // An owned hull's pose is taken newest-wins by the room, so
+            // there is no queue to steer: one packet and one sandbox tick
+            // per tick of real time, never two and never none (§4.16).
+            let packets = if self.client_hull {
+                1
+            } else {
+                match self.lead.decide() {
+                    Adjust::Keep => 1,
+                    Adjust::Extra => 2,
+                    Adjust::Skip => 0,
+                }
             };
             for _ in 0..packets {
                 self.send_one(intent);
@@ -694,14 +660,41 @@ impl<T: Transport> OnlineRound<T> {
     }
 
     /// The picture at render time, then the cosmetics of one frame.
+    ///
+    /// In order (docs/online-coop-prd.md §4.16): the interpolated room is
+    /// written into the replica; this seat's `Fired` confirm its presses;
+    /// the room's copies of this seat's shots are paired with the
+    /// provisionals and taken off the picture; the owned hull is drawn
+    /// between its ticks; the provisionals fly one frame and stop at the
+    /// first thing they meet in the drawn world; beams pressed since the
+    /// last frame are drawn; everyone else's shots are carried forward to
+    /// the present; then the frame's cosmetics tick.
     fn draw(&mut self, dt: f32, now: i64) {
-        let Some(game) = self.replica.as_mut() else { return };
+        if self.replica.is_none() {
+            return;
+        }
         let sampled = self.interp.sample(now);
+        let predicting_shots = tuning().online_predict_own_tank && tuning().online_predict_shots && self.predictor.is_some();
         if let Some(frame) = &sampled {
-            apply::snapshot(game, &frame.snapshot);
+            let mut snapshot = frame.snapshot.clone();
+            // A beam this seat drew on its press is not drawn twice.
+            if predicting_shots && let Some(seat) = self.client.seat() {
+                snapshot.events.retain(|e| !matches!(e, WireEvent::LaserBeam { seat: s, .. } if *s == seat));
+            }
+            if let Some(game) = self.replica.as_mut() {
+                apply::snapshot(game, &snapshot);
+            }
             let frac = (frame.ahead / PHYSICS_FIXED_DT * 256.0).clamp(0.0, 255.0) as u8;
             self.view = (frame.snapshot.tick, frac);
             self.confirm_shots(&frame.snapshot);
+        }
+        if predicting_shots {
+            let delay = self.interp.delay_ms();
+            let rtt = self.rtt.report().map_or(0.0, |r| r.rtt_p95_ms);
+            if let Some(predictor) = self.predictor.as_mut() {
+                predictor.set_refusal_after(((rtt + delay) / 1000.0) as f32 + REFUSAL_MARGIN_SECONDS);
+            }
+            self.pair_own_shots();
         }
         // **Before `tick_presentation`, not after.** The presentation
         // pass eases `visual_rotation` toward `rotation` and presses the
@@ -711,7 +704,15 @@ impl<T: Transport> OnlineRound<T> {
         // from `online_interpolation_delay_ms` ago while its position was
         // already at the present - a tank that slides without turning.
         self.write_predicted();
-        self.measure_crossings(dt);
+        // The world as it is drawn this frame, own hull in the present:
+        // what the present-time shots are tested against.
+        let world = self.replica.as_ref().map(Game::present_world);
+        if let (Some(world), Some(seat)) = (&world, self.client.seat()) {
+            self.fly_own_shots(dt, world, seat);
+            if let Some(frame) = &sampled {
+                self.draw_incoming_in_present(frame, now, world, seat);
+            }
+        }
         let Some(game) = self.replica.as_mut() else { return };
         game.tick_presentation(dt);
         if let Some(frame) = &sampled {
@@ -722,7 +723,6 @@ impl<T: Transport> OnlineRound<T> {
         }
         if let Some(predictor) = self.predictor.as_mut() {
             predictor.decay(dt);
-            predictor.advance_shots(dt);
         }
     }
 
@@ -735,27 +735,26 @@ impl<T: Transport> OnlineRound<T> {
     /// Everything downstream is unchanged, and turning the knob off on
     /// any frame simply stops the write - the interpolated hull is
     /// already underneath it.
+    ///
+    /// An owned hull is drawn between its last two ticks by the time owed
+    /// toward the next (`Predictor::drawn_pose`): the sandbox steps whole
+    /// ticks, and a frame that ran none or two of them would otherwise
+    /// show it standing or lurching.
     fn write_predicted(&mut self) {
         if !tuning().online_predict_own_tank {
             return;
         }
+        let alpha = if self.client_hull { self.send_owed / PHYSICS_FIXED_DT } else { 1.0 };
         let (Some(predictor), Some(game)) = (self.predictor.as_ref(), self.replica.as_mut()) else { return };
-        let (Some(seat), Some(position)) = (self.client.seat(), predictor.drawn_position()) else { return };
+        let (Some(seat), Some((position, rotation))) = (self.client.seat(), predictor.drawn_pose(alpha)) else { return };
         // The velocity is the prediction's own, not zero: `fx` reads it
         // for the spray and the dust, and a hull the solver believes is
         // stopped settles differently from one that is moving.
-        let Some((_, rotation, velocity)) = predictor.motion() else { return };
+        let Some((_, _, velocity)) = predictor.motion() else { return };
         // The replica's own boost flag is the server's and already
         // applied by `apply::snapshot`; the prediction only moves the
         // hull, so it is carried through unchanged.
         game.place_seat(seat as usize, position, rotation, velocity);
-        // Beside the server's shots, not instead of them: `apply` has
-        // just despawned everything the snapshot did not list, so these
-        // are put back every frame until the server confirms or refuses
-        // them.
-        for (id, shot) in predictor.shots() {
-            game.add_provisional_shot(id, &shot);
-        }
         // The flamethrower's stream is a flag the wire carries; while the
         // local key is down the seat is drawn streaming at once, if it is
         // armed and fuelled, rather than a round trip later. Released,
@@ -765,40 +764,112 @@ impl<T: Transport> OnlineRound<T> {
         }
     }
 
-    /// Decision 9's instrument: every provisional shot whose drawn path
-    /// crosses a drawn, live enemy hull this frame is a moment the lie of
-    /// §4.12 was on screen. It is remembered here until the server's
-    /// `Hit` near that point claims it (`confirm_shots`) or
-    /// `CROSSING_WINDOW_SECONDS` run out, and the two counts are the rate
-    /// that says whether lag compensation is worth building.
-    fn measure_crossings(&mut self, dt: f32) {
-        for c in &mut self.crossings {
-            c.age += dt;
+    /// This frame's room copies of this seat's shots: handed to the
+    /// predictor to pair with its provisionals, then taken off the picture
+    /// where a provisional stands for them - the provisional is the one
+    /// drawn for the shot's whole life, on this client's timeline, and is
+    /// never swapped for the room's copy in the past (§4.16).
+    fn pair_own_shots(&mut self) {
+        let (Some(predictor), Some(game), Some(seat)) = (self.predictor.as_mut(), self.replica.as_mut(), self.client.seat()) else { return };
+        let own = game.seat_shots(seat);
+        predictor.observe_server_shots(&own);
+        game.remove_shots(&predictor.hidden_server_shots());
+    }
+
+    /// One frame of this seat's provisional shots against the drawn world:
+    /// each flies by its own state machine and stops at the first tile,
+    /// edge, tank or frog it meets, its impact drawn there at once; beams
+    /// pressed since the last frame are drawn to where they stop.
+    fn fly_own_shots(&mut self, dt: f32, world: &crate::simulation::present::PresentWorld, seat: u8) {
+        use crate::simulation::present::{Contact, shot_half_extent};
+        let (Some(predictor), Some(game)) = (self.predictor.as_mut(), self.replica.as_mut()) else { return };
+        predictor.advance_shots(dt, |kind, from, to| {
+            world
+                .shot_contact(Some(seat), from, to, shot_half_extent(kind))
+                .map(|(at, contact)| (at, matches!(contact, Contact::Tank { .. } | Contact::Frog)))
+        });
+        for beam in predictor.take_beams() {
+            let far = crate::math::Vec2::new(beam.start.x + beam.dir.x * LASER_REACH_PX, beam.start.y + beam.dir.y * LASER_REACH_PX);
+            let end = world
+                .shot_contact(Some(seat), beam.start, far, tuning().shell_hit_half_extent)
+                .map_or(far, |(at, _)| at);
+            game.draw_beam(beam.start, end, beam.variant);
         }
-        let before = self.crossings.len();
-        self.crossings.retain(|c| c.age <= CROSSING_WINDOW_SECONDS);
-        self.crossings_missed += (before - self.crossings.len()) as u32;
-        let (Some(predictor), Some(game)) = (self.predictor.as_mut(), self.replica.as_ref()) else { return };
-        // The hulls as drawn: every live enemy with a body, boxed the way
-        // the hit test boxes it, oriented by its facing.
-        let hulls: Vec<(crate::math::Vec2, f32, f32)> = game
-            .world
-            .query::<&Tank>()
-            .iter()
-            .filter(|t| !t.is_player() && !t.is_wreck() && t.body.is_some())
-            .map(|t| {
-                let along_x = ((t.rotation / 90.0).round() as i32).rem_euclid(2) == 1;
-                let (hx, hy) = t.hull_half_extents(along_x);
-                (t.position, hx, hy)
-            })
-            .collect();
-        if hulls.is_empty() {
+        for at in predictor.take_impacts() {
+            game.draw_impact(at);
+        }
+        // Beside the room's shots, not instead of them: `apply` has just
+        // despawned everything the snapshot did not list, so these are
+        // put back every frame for as long as they live.
+        for (id, shot) in predictor.shots() {
+            game.add_provisional_shot(id, &shot);
+        }
+    }
+
+    /// Everyone else's shots, carried from where the room had them at
+    /// render time to where they will be when this client's present pose
+    /// reaches the room - the moment the room decides whether they hit it
+    /// (§4.16, "Incoming fire in the present").
+    ///
+    /// That lead is exact to the tick: the newest snapshot says the room
+    /// applied this seat's input `acked` on its tick `tick`, one input per
+    /// tick, so this client's latest input lands on room tick
+    /// `tick + (latest - acked)`; the picture stands at render tick `R`,
+    /// so a straight shot is `(that - R)` ticks of flight ahead. A shot
+    /// first seen in flight eases from its drawn place to the full lead
+    /// over `CATCH_UP_MS`, so it leaves the (past) muzzle it came from
+    /// rather than appearing ahead of it. It stops at walls; one that
+    /// reaches this seat's drawn hull shows its impact there at once and
+    /// is kept off the picture until the room's copy goes - the damage is
+    /// the room's, and arrives with its `Hit`.
+    fn draw_incoming_in_present(&mut self, frame: &crate::net::interp::Frame, now: i64, world: &crate::simulation::present::PresentWorld, seat: u8) {
+        use crate::simulation::present::segment_box;
+        let (Some(predictor), Some(newest)) = (self.predictor.as_ref(), self.interp.newest()) else { return };
+        let acked = newest.acked.get(seat as usize).copied().unwrap_or(0);
+        if acked == 0 {
             return;
         }
-        let points = predictor.mark_crossings(|a, b| {
-            hulls.iter().any(|&(c, hx, hy)| segment_crosses_box(a, b, c, hx, hy)).then_some(b)
-        });
-        self.crossings.extend(points.into_iter().map(|at| Crossing { at, age: 0.0 }));
+        let render = frame.snapshot.tick as f64 + (frame.ahead / PHYSICS_FIXED_DT) as f64;
+        let lead_ticks = incoming_lead_ticks(newest.tick, acked, predictor.tick().wrapping_sub(1), render);
+        let hull = world.seat_hull(seat);
+        let Some(game) = self.replica.as_mut() else { return };
+        let foreign = game.foreign_flying_shots(seat);
+        let alive: std::collections::BTreeSet<u16> = foreign.iter().map(|s| s.id).collect();
+        self.flying_since.retain(|id, _| alive.contains(id));
+        let gone: Vec<u16> = self.struck.iter().copied().filter(|id| !game.has_shot(*id)).collect();
+        for id in gone {
+            self.struck.remove(&id);
+        }
+        let mut struck_now = Vec::new();
+        for shot in foreign {
+            if self.struck.contains(&shot.id) {
+                continue;
+            }
+            let since = *self.flying_since.entry(shot.id).or_insert(now);
+            let catch = smoothstep(((now - since) as f32 / CATCH_UP_MS).clamp(0.0, 1.0));
+            let ahead = lead_ticks * PHYSICS_FIXED_DT * catch;
+            let mut to = crate::math::Vec2::new(shot.position.x + shot.velocity.x * ahead, shot.position.y + shot.velocity.y * ahead);
+            if let Some(stop) = world.static_contact(shot.position, to) {
+                to = stop;
+            }
+            if let Some((centre, half)) = hull {
+                let grow = crate::math::Vec2::new(shot.half_extent, shot.half_extent);
+                if let Some(t) = segment_box(shot.position, to, centre, half + grow) {
+                    let at = crate::math::Vec2::new(
+                        shot.position.x + (to.x - shot.position.x) * t,
+                        shot.position.y + (to.y - shot.position.y) * t,
+                    );
+                    game.draw_impact(at);
+                    struck_now.push(shot.id);
+                    continue;
+                }
+            }
+            game.move_shot(shot.id, to);
+        }
+        game.remove_shots(&struck_now);
+        self.struck.extend(struck_now);
+        let hidden: Vec<u16> = self.struck.iter().copied().collect();
+        game.remove_shots(&hidden);
     }
 
     /// Pull the sandbox back into line with a snapshot that just landed.
@@ -822,59 +893,73 @@ impl<T: Transport> OnlineRound<T> {
         predictor.reconcile(snapshot, acked);
     }
 
-    /// A snapshot *arrived* carrying this seat's `Fired`: the press it
-    /// names has its ammo in the snapshot the sandbox just took, so it
-    /// stops counting against the local gate (`Predictor::note_fired`).
-    /// The shot itself is retired later, when the frame reaches it.
+    /// A snapshot *arrived*: this seat's `Fired` in it put their presses'
+    /// ammo in the snapshot the sandbox just took, so they stop counting
+    /// against the local gate (`Predictor::note_fired`); a `Shoved` for this
+    /// seat is applied to the owned hull now, so the next pose carries it.
+    /// The shots themselves are confirmed later, when the frame reaches
+    /// them.
     fn note_fired(&mut self, snapshot: &Snapshot) {
         if !tuning().online_predict_own_tank {
             return;
         }
         let (Some(predictor), Some(seat)) = (self.predictor.as_mut(), self.client.seat()) else { return };
         for event in &snapshot.events {
-            if matches!(event, WireEvent::Fired { slot, .. } if *slot as u8 == seat) {
-                predictor.note_fired();
-            }
-        }
-    }
-
-    /// The interpolator handed a snapshot's events over: each `Fired` of
-    /// this seat's retires the oldest press still drawn, on this frame,
-    /// the one the server's own shot appears in - so the provisional and
-    /// the real shot swap places rather than leaving a gap. A `Fired`
-    /// with no press waiting seeds the local gate from the room's
-    /// (`Predictor::confirm_shot`), measured back from the snapshot's
-    /// `acked` to the tick the client is on now.
-    fn confirm_shots(&mut self, frame: &Snapshot) {
-        if !tuning().online_predict_own_tank {
-            return;
-        }
-        let (Some(predictor), Some(seat)) = (self.predictor.as_mut(), self.client.seat()) else { return };
-        let acked = frame.acked.get(seat as usize).copied().unwrap_or(0);
-        let ticks_ago = predictor.tick().wrapping_sub(acked);
-        for event in &frame.events {
-            match event {
-                WireEvent::Fired { slot, weapon, .. } if *slot as u8 == seat => {
-                    predictor.confirm_shot(*weapon, ticks_ago);
-                }
-                // A hit on an enemy near a crossing still waiting is the
-                // server agreeing with the picture: the oldest such
-                // crossing is answered.
-                WireEvent::Hit { target: WireHitTarget::Enemy { .. }, x, y, .. } => {
-                    let at = crate::math::Vec2::new(dequantise_pos(*x), dequantise_pos(*y));
-                    if let Some(i) = self.crossings.iter().position(|c| {
-                        let (dx, dy) = (c.at.x - at.x, c.at.y - at.y);
-                        (dx * dx + dy * dy).sqrt() <= HIT_MATCH_PX
-                    }) {
-                        self.crossings.remove(i);
-                        self.crossings_hit += 1;
-                    }
+            match *event {
+                WireEvent::Fired { slot, weapon, input_tick } if slot as u8 == seat => predictor.note_fired(weapon, input_tick),
+                WireEvent::Shoved { seat: s, vx, vy } if s == seat && self.client_hull => {
+                    predictor.shove(crate::math::Vec2::new(
+                        crate::net::wire::dequantise_velocity(vx),
+                        crate::net::wire::dequantise_velocity(vy),
+                    ));
                 }
                 _ => {}
             }
         }
     }
+
+    /// The interpolator handed a snapshot's events over: each `Fired` of
+    /// this seat's confirms the press that travelled on its input tick
+    /// (`Predictor::confirm_fired`), and one with no press waiting seeds
+    /// the local gate from the room's.
+    fn confirm_shots(&mut self, frame: &Snapshot) {
+        if !tuning().online_predict_own_tank {
+            return;
+        }
+        let (Some(predictor), Some(seat)) = (self.predictor.as_mut(), self.client.seat()) else { return };
+        for event in &frame.events {
+            if let WireEvent::Fired { slot, weapon, input_tick } = *event
+                && slot as u8 == seat
+            {
+                predictor.confirm_fired(weapon, input_tick);
+            }
+        }
+    }
 }
+
+/// How many ticks ahead of the picture a straight shot is drawn so it
+/// stands where it will be when this client's latest input lands on the
+/// room's clock (`OnlineRound::draw_incoming_in_present`): the newest
+/// snapshot `newest_tick` applied this seat's input `acked`, the room
+/// applies one input per tick, so input `latest` lands on
+/// `newest_tick + (latest - acked)`; the picture stands at `render_tick`.
+pub fn incoming_lead_ticks(newest_tick: u32, acked: u32, latest: u32, render_tick: f64) -> f32 {
+    let lands = newest_tick as f64 + (latest as i64 - acked as i64) as f64;
+    ((lands - render_tick) as f32).clamp(0.0, MAX_LEAD_TICKS)
+}
+
+/// `x` eased in and out: 0 at 0, 1 at 1, flat at both ends.
+fn smoothstep(x: f32) -> f32 {
+    x * x * (3.0 - 2.0 * x)
+}
+
+/// What a press's refusal timeout adds to the link's round trip and
+/// picture delay: a few ticks of the room's own scheduling.
+const REFUSAL_MARGIN_SECONDS: f32 = 0.15;
+
+/// How far a predicted beam is traced before it stops at the first thing
+/// it meets: longer than any field's diagonal, as `weapons` traces it.
+const LASER_REACH_PX: f32 = 4000.0;
 
 /// Giving the seat up puts the tuning table back where the room found
 /// it, so the local round the window comes back to is played with the
@@ -1068,6 +1153,9 @@ mod tests {
     #[test]
     fn a_starvation_widens_the_lead_by_one_packet_and_a_deep_buffer_narrows_it() {
         let (mut room, mut round) = room_and_round();
+        // The lead steers the mailbox of a predicted (stage 2) seat; an
+        // owned hull's poses are taken newest-wins and need none.
+        round.set_client_hull(false);
         room.welcome();
         round.frame(&Intent::default(), 1.0 / 60.0);
         room.heard();
@@ -1165,90 +1253,14 @@ mod tests {
         assert!((snapped.0 - there.0).abs() < 0.5 && (snapped.1 - there.1).abs() < 0.5, "not placed: {snapped:?} vs {there:?}");
     }
 
-    /// **Decision 9's instrument.** A provisional shell drawn through an
-    /// enemy's hull is counted the frame it crosses, and the server's
-    /// `Hit` near that point, handed over within the window, answers it;
-    /// the two counts are what a real-link session reads to decide on
-    /// lag compensation.
+    /// **A shot stops where it is seen to hit** (§4.16): a provisional
+    /// shell fired at an enemy drawn 90 px ahead (inside the clear stretch
+    /// of the default map's lane - a wall stands 80 px beyond) stops at
+    /// that enemy's near face and plays its impact there at once, and is
+    /// counted as a tank hit this client drew - it never sails on through
+    /// the hull.
     #[test]
-    fn a_provisional_shot_through_a_drawn_hull_is_counted_and_the_servers_hit_answers_it() {
-        use crate::net::events::WireHitTarget;
-        use crate::net::wire::quantise_pos;
-        if !tuning().online_predict_own_tank || !tuning().online_predict_shots {
-            return;
-        }
-        let (mut room, mut round) = room_and_round();
-        room.welcome();
-        round.frame(&Intent::default(), 1.0 / 60.0);
-
-        // An enemy 200 px straight ahead of the seat, in the authority.
-        let seat = room.game.tank_snapshots().into_iter().find(|t| t.slot == 0).expect("the seat");
-        let rad = seat.rotation.to_radians();
-        let ahead = crate::math::Vec2::new(seat.position.x + rad.sin() * 200.0, seat.position.y - rad.cos() * 200.0);
-        room.game.debug_teleport(1, ahead, Some(seat.rotation)).expect("an enemy in slot 1");
-        // Snapshots of that world, cut by hand so nothing moves, stamped
-        // far enough ahead that the clock jumps to them at once.
-        let mut tick = 1u32;
-        let mut send = |room: &mut Room, from_ms: u32, count: usize, events: Vec<WireEvent>| {
-            for i in 0..count {
-                let mut s = encode::snapshot(&room.game, [0; MAX_SEATS]);
-                s.tick = tick;
-                s.server_ms = from_ms + 50 * i as u32;
-                s.events = if i == 0 { events.clone() } else { Vec::new() };
-                tick += 1;
-                room.say(Msg::Snapshot(s));
-            }
-        };
-        // Twenty of them: the clock's estimate trails a run of stamps by
-        // a few hundred milliseconds, and render time has to stand
-        // between two snapshots of the teleported world, not between the
-        // welcome and the first of them.
-        send(&mut room, 5_000, 20, Vec::new());
-        round.frame(&Intent::default(), 1.0 / 60.0);
-        let drawn = round.game().expect("a replica").tank_snapshots();
-        let enemy = drawn.iter().find(|t| t.slot == 1).expect("the enemy is drawn");
-        assert!((enemy.position.x - ahead.x).abs() < 2.0 && (enemy.position.y - ahead.y).abs() < 2.0, "the enemy is drawn where it was put: {:?}", enemy.position);
-
-        // One press, and the shell flies at it.
-        round.frame(&Intent { fire: true, ..Intent::default() }, 1.0 / 60.0);
-        assert_eq!(round.prediction().map(|p| p.shots_drawn), Some(1));
-        let mut crossed_after = None;
-        for i in 0..40 {
-            round.frame(&Intent::default(), 1.0 / 60.0);
-            if round.prediction().is_some_and(|p| p.crossings == 1) {
-                crossed_after = Some(i);
-                break;
-            }
-        }
-        let crossed_after = crossed_after.expect("the shell crossed the drawn hull");
-        assert!(crossed_after > 5, "200 px is more than a few frames of flight: {crossed_after}");
-        assert_eq!(round.prediction().map(|p| (p.crossings_hit, p.crossings_missed)), Some((0, 0)), "nothing answered yet");
-
-        // The server's hit on that hull, handed over inside the window.
-        let hit = WireEvent::Hit {
-            target: WireHitTarget::Enemy { slot: 1 },
-            damage: 10.0,
-            killed: false,
-            x: quantise_pos(ahead.x),
-            y: quantise_pos(ahead.y),
-        };
-        // Fifteen, fewer than the ring holds (`BUFFERED_SNAPSHOTS`): more
-        // in one frame and the one carrying the hit is dropped unseen.
-        send(&mut room, 11_000, 15, vec![hit]);
-        for _ in 0..10 {
-            round.frame(&Intent::default(), 1.0 / 60.0);
-        }
-        assert_eq!(
-            round.prediction().map(|p| (p.crossings, p.crossings_hit, p.crossings_missed)),
-            Some((1, 1, 0)),
-            "the crossing was answered by the hit"
-        );
-    }
-
-    /// A crossing nobody answers is a shell drawn through a hull it
-    /// never touched, and is counted as such once the window runs out.
-    #[test]
-    fn a_crossing_the_server_never_answers_is_a_miss() {
+    fn a_provisional_shot_stops_at_the_enemy_it_meets() {
         if !tuning().online_predict_own_tank || !tuning().online_predict_shots {
             return;
         }
@@ -1257,101 +1269,55 @@ mod tests {
         round.frame(&Intent::default(), 1.0 / 60.0);
         let seat = room.game.tank_snapshots().into_iter().find(|t| t.slot == 0).expect("the seat");
         let rad = seat.rotation.to_radians();
-        let ahead = crate::math::Vec2::new(seat.position.x + rad.sin() * 120.0, seat.position.y - rad.cos() * 120.0);
+        let ahead = crate::math::Vec2::new(seat.position.x + rad.sin() * 90.0, seat.position.y - rad.cos() * 90.0);
         room.game.debug_teleport(1, ahead, Some(seat.rotation)).expect("an enemy in slot 1");
-        for (i, stamp) in [5_000u32, 5_050].into_iter().enumerate() {
+        for i in 0..20u32 {
             let mut s = encode::snapshot(&room.game, [0; MAX_SEATS]);
-            s.tick = i as u32 + 1;
-            s.server_ms = stamp;
+            s.tick = i + 1;
+            s.server_ms = 5_000 + 50 * i;
             room.say(Msg::Snapshot(s));
         }
         round.frame(&Intent::default(), 1.0 / 60.0);
+        room.heard();
         round.frame(&Intent { fire: true, ..Intent::default() }, 1.0 / 60.0);
-        let frames = (CROSSING_WINDOW_SECONDS * 60.0) as usize + 40;
-        for _ in 0..frames {
+        // The room fires it: a `Fired` naming the press's input tick.
+        let pressed = room
+            .heard()
+            .iter()
+            .find_map(|m| if let Msg::Intent(i) = m { i.fire.then_some(i.tick) } else { None })
+            .expect("the press went out");
+        let mut fired = encode::snapshot(&room.game, [0; MAX_SEATS]);
+        fired.tick = 21;
+        fired.server_ms = 6_000;
+        fired.events = vec![WireEvent::Fired { slot: 0, weapon: crate::net::wire::WeaponKind::Shell, input_tick: pressed }];
+        room.say(Msg::Snapshot(fired));
+        let mut furthest = 0.0f32;
+        for _ in 0..60 {
             round.frame(&Intent::default(), 1.0 / 60.0);
+            let game = round.game().expect("a replica");
+
+            for shot in game.drawable_state().shots {
+                let (x, y) = (shot.x as f32 / 4.0, shot.y as f32 / 4.0);
+                furthest = furthest.max((x - seat.position.x) * rad.sin() - (y - seat.position.y) * rad.cos());
+            }
         }
-        assert_eq!(
-            round.prediction().map(|p| (p.crossings, p.crossings_hit, p.crossings_missed)),
-            Some((1, 0, 1)),
-            "an unanswered crossing is a miss"
-        );
+        let report = round.prediction().expect("a report");
+        assert_eq!(report.crossings, 1, "the shell met the enemy in this client's picture: {report:?}");
+        assert!(furthest < 90.0, "the shell was drawn {furthest} px out - past the enemy at 90");
     }
 
-    /// Where a client's time goes, per operation, on a busy round: run
-    /// with `cargo test --release --no-default-features --features
-    /// dev-tools -- --ignored measure_client_costs --nocapture`. Not an
-    /// assertion, a reading: the numbers behind the co-op PRD's stage 3.
+    /// The incoming-fire lead is the gap between where this client's
+    /// latest pose will land on the room's clock and the tick the picture
+    /// stands at: the newest snapshot's tick plus the inputs sent since the
+    /// one it acknowledges, less the render tick.
     #[test]
-    #[ignore]
-    fn measure_client_costs() {
-        use std::time::Instant;
-        use crate::net::delta;
-        use crate::net::interp::Interpolator;
-        let build = |enemies: usize| {
-            let mut game = Game::default();
-            game.seed_override = Some(0xB0B5);
-            game.enemy_count_override = Some(enemies);
-            game.player_row_override = Some(3);
-            game.level_overrides.spawn = Some(crate::level::SpawnKind::Band);
-            game.map = MapFile::from_toml_str(DEFAULT_MAP).expect("the default map parses");
-            game.show_intro = false;
-            let (w, h) = game.map.field_size();
-            game.init(w, h);
-            game
-        };
-        fn time<F: FnMut()>(label: &str, iters: usize, mut f: F) {
-            let t0 = Instant::now();
-            for _ in 0..iters {
-                f();
-            }
-            let us = t0.elapsed().as_secs_f64() * 1e6 / iters as f64;
-            eprintln!("{label:<58} {us:9.1} us");
-        }
-        for enemies in [0usize, 12, 30] {
-            eprintln!("--- {enemies} enemies ---");
-            let mut authority = build(enemies);
-            let (w, h) = authority.map.field_size();
-            let drive = Intent { move_dir: Some(Dir::Right), fire: true, ..Intent::default() };
-            for _ in 0..180 {
-                authority.update(Input::single(drive), PHYSICS_FIXED_DT, w, h);
-            }
-            let roster = vec![Seat { seat: 0, nick: "m".into(), chassis: 3 }];
-            let welcome = encode::welcome(&authority, 0, roster, "{}".into(), [0; MAX_SEATS]).expect("welcome");
-            let mut replica = apply::welcome(&welcome).expect("replica");
-            let sandbox = apply::welcome(&welcome).expect("sandbox");
-            let mut predictor = Predictor::new(sandbox, 0, 0);
-            let a = encode::snapshot(&authority, [0; MAX_SEATS]);
-            authority.update(Input::single(drive), PHYSICS_FIXED_DT, w, h);
-            let mut b = encode::snapshot(&authority, [0; MAX_SEATS]);
-            b.server_ms = 17;
-            eprintln!("snapshot: {} tanks, {} shots, {} tiles, {} B full, {} B delta",
-                b.tanks.len(), b.shots.len(), b.tiles.len(),
-                crate::net::codec::encode(&Msg::Snapshot(b.clone())).len(),
-                crate::net::codec::encode(&Msg::Delta(delta::delta(&a, &b))).len());
-            let t_auth = &mut authority;
-            time("server: Game::update (one tick)", 120, || t_auth.update(Input::single(drive), PHYSICS_FIXED_DT, w, h));
-            time("server: encode::snapshot", 200, || { let _ = encode::snapshot(t_auth, [0; MAX_SEATS]); });
-            let d = delta::delta(&a, &b);
-            time("client: delta::apply_delta", 500, || { let _ = delta::apply_delta(&a, &d); });
-            let mut interp = Interpolator::default();
-            interp.accept(a.clone(), 0);
-            interp.accept(b.clone(), 17);
-            time("client: Interpolator::sample (blend)", 500, || { let _ = interp.sample(40); });
-            let r = &mut replica;
-            time("client: apply::snapshot onto the replica (per frame)", 300, || apply::snapshot(r, &b));
-            time("client: Game::tick_presentation (per frame)", 300, || r.tick_presentation(1.0 / 60.0));
-            let p = &mut predictor;
-            time("client: Predictor::step (one predicted tick)", 300, || { p.step(drive); });
-            // Eleven inputs in flight, the rig's steady state on 80 ms.
-            for tick in 0..11u32 { p.step_at(1000 + tick, drive); }
-            let mut acks = [0u32; MAX_SEATS];
-            acks[0] = 999;
-            let mut snap = b.clone();
-            snap.acked = acks;
-            time("client: Predictor::reconcile (11 in flight, every snapshot)", 100, || p.reconcile(&snap, 999));
-            time("client: Predictor::reconcile (0 in flight)", 100, || { let mut s = snap.clone(); s.acked[0] = 2000; p.reconcile(&s, 2000); });
-        }
+    fn the_incoming_lead_is_where_the_latest_pose_lands_less_the_picture() {
+        // The room applied input 100 on its tick 500; this client has
+        // since sent input 106; the picture stands at tick 497.5.
+        assert_eq!(incoming_lead_ticks(500, 100, 106, 497.5), 8.5);
+        // Never negative, never past the cap.
+        assert_eq!(incoming_lead_ticks(500, 100, 100, 501.0), 0.0);
+        assert_eq!(incoming_lead_ticks(500, 100, 400, 10.0), MAX_LEAD_TICKS);
     }
 
     #[test]

@@ -27,6 +27,7 @@ mod engage;
 mod flame;
 mod hits;
 mod missiles;
+pub mod present;
 mod props;
 pub use props::{FlyingDrum, GroundFire};
 pub mod replica;
@@ -92,6 +93,14 @@ pub struct ProvisionalShot {
     /// A bolt's variant; `Teal` for the other kinds.
     pub plasma_variant: PlasmaVariant,
     pub shooter_row: i32,
+    /// Its state as the kind's sheet column (`ShellState::col` and the
+    /// like) and the time in it: a provisional runs the real projectile's
+    /// state machine (`ProvisionalShot::advance`, `simulation::present`),
+    /// muzzle frames first, as the room's copy does.
+    pub state: i32,
+    pub timer: f32,
+    /// The impact frames have played out.
+    pub done: bool,
 }
 use waves::WaveState;
 
@@ -1768,15 +1777,21 @@ impl Game {
         let owner = Owner::Player(shot.seat);
         match shot.kind {
             ProvisionalKind::Shell => {
-                let shell = Shell::at(id, shot.position, shot.prev_position, shot.velocity, shot.rotation, shot.variant, shot.shooter_row, owner);
+                let mut shell = Shell::at(id, shot.position, shot.prev_position, shot.velocity, shot.rotation, shot.variant, shot.shooter_row, owner);
+                shell.state = ShellState::from_col(shot.state).unwrap_or(ShellState::Flying);
+                shell.timer = shot.timer;
                 self.world.spawn((shell,));
             }
             ProvisionalKind::Bullet => {
-                let bullet = Bullet::at(id, shot.position, shot.prev_position, shot.velocity, shot.rotation, shot.shooter_row, owner);
+                let mut bullet = Bullet::at(id, shot.position, shot.prev_position, shot.velocity, shot.rotation, shot.shooter_row, owner);
+                bullet.state = crate::bullet::BulletState::from_col(shot.state).unwrap_or(crate::bullet::BulletState::Flying);
+                bullet.timer = shot.timer;
                 self.world.spawn((bullet,));
             }
             ProvisionalKind::Plasma => {
-                let plasma = Plasma::at(id, shot.position, shot.prev_position, shot.velocity, shot.rotation, shot.plasma_variant, shot.shooter_row, owner);
+                let mut plasma = Plasma::at(id, shot.position, shot.prev_position, shot.velocity, shot.rotation, shot.plasma_variant, shot.shooter_row, owner);
+                plasma.state = crate::plasma::PlasmaState::from_col(shot.state).unwrap_or(crate::plasma::PlasmaState::Flying);
+                plasma.timer = shot.timer;
                 self.world.spawn((plasma,));
             }
         }
@@ -1837,6 +1852,13 @@ impl Game {
                 (p.position, p.velocity, p.rotation, 0, p.variant)
             }
         };
+        // It starts where the room's copy starts: in the kind's first
+        // muzzle state.
+        let state = match kind {
+            ProvisionalKind::Shell => ShellState::Fire0.col(),
+            ProvisionalKind::Bullet => crate::bullet::BulletState::Muzzle.col(),
+            ProvisionalKind::Plasma => crate::plasma::PlasmaState::Fire0.col(),
+        };
         Some(ProvisionalShot {
             kind,
             seat: seat as u8,
@@ -1847,6 +1869,9 @@ impl Game {
             variant,
             plasma_variant,
             shooter_row: tank.row,
+            state,
+            timer: 0.0,
+            done: false,
         })
     }
 
