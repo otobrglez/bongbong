@@ -1360,8 +1360,18 @@ pub fn run(args: Args) {
         // Nothing here runs `Game::update`, and the local round is left
         // exactly where it stood.
         if session.mode() == Driver::Online {
-            let intent = input.seat(0);
+            #[allow(unused_mut)]
+            let mut intent = input.seat(0);
+            // A page's measurement script drives the seat (`capi::bb_input`).
+            #[cfg(feature = "dev-tools")]
+            if let Some(scripted) = crate::capi::take_scripted_input() {
+                intent = scripted;
+            }
             session.update_online(&intent, dt);
+            #[cfg(feature = "dev-tools")]
+            if let Some(round) = session.online.as_ref() {
+                crate::capi::publish_net_stats(round.stats_json().to_string());
+            }
         }
 
         // The round advances in whole steps of `PHYSICS_FIXED_DT`, as many

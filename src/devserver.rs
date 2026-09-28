@@ -1983,58 +1983,21 @@ fn round_json(session: &Session) -> Value {
     let Some(round) = round else {
         return json!({ "kind": "local" });
     };
-    json!({
-        "kind": "online",
-        "room": round.code(),
-        "seat": round.seat(),
-        "phase": phase_name(round.phase()),
+    let mut out = round.stats_json();
+    if let Some(map) = out.as_object_mut() {
+        map.insert("kind".into(), json!("online"));
+        map.insert("room".into(), json!(round.code()));
+        map.insert("phase".into(), json!(phase_name(round.phase())));
         // What the interpolation delay is buying, rounded to the
         // millisecond: negative once the picture has run past everything
         // that arrived, null before the first snapshot.
-        "buffer_ms": round.buffer_ms().map(|ms| ms.round() as i64),
-        "server_tick": round.interp().newest_tick(),
-        // The measured link (`net::clock`): median, 95th percentile and
-        // floor of the round trip, and server-minus-local by the fastest
-        // probe. Null until a probe has been answered.
-        "rtt": round.rtt().map(|r| json!({
-            "rtt_ms": r.rtt_ms,
-            "rtt_p95_ms": r.rtt_p95_ms,
-            "rtt_min_ms": r.rtt_min_ms,
-            "offset_ms": r.offset_ms,
-            "samples": r.samples,
-        })),
-        // What the interpolator is doing and what the prediction cost
-        // (docs/online-coop-prd.md section 4.12, "Measured").
-        "interpolation": {
-            "delay_ms": round.interpolation().delay_ms,
-            "target_ms": round.interpolation().target_ms,
-            "jitter_ms": round.interpolation().jitter_ms,
-            "interval_ms": round.interpolation().interval_ms,
-            "buffered": round.interpolation().buffered,
-            "extrapolated_frames": round.interpolation().extrapolated_frames,
-        },
-        "prediction": round.prediction().map(|p| json!({
-            "ignored": p.ignored,
-            "nudges": p.nudges,
-            "snaps": p.snaps,
-            "error_buckets": p.error_buckets,
-            "max_error_px": p.max_error_px,
-            "shots_drawn": p.shots_drawn,
-            "shots_refused": p.shots_refused,
-            "shots_on_screen": p.shots_on_screen,
-            "in_flight": p.in_flight,
-            "cooldown": p.cooldown,
-            "lead_up": p.lead_up,
-            "lead_down": p.lead_down,
-            "lead_depth": round.lead_depth(),
-            "crossings": p.crossings,
-            "crossings_hit": p.crossings_hit,
-            "crossings_missed": p.crossings_missed,
-        })),
+        map.insert("buffer_ms".into(), json!(round.buffer_ms().map(|ms| ms.round() as i64)));
         // False between taking the seat and the room's `Welcome`: until
         // then the window still draws the local round.
-        "replica": round.game().is_some(),
-    })
+        map.insert("replica".into(), json!(round.game().is_some()));
+        map.remove("tanks");
+    }
+    out
 }
 
 /// How far along the seat is, as one word.

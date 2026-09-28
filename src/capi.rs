@@ -123,6 +123,48 @@ pub extern "C" fn bb_game_restart() {
     tuning::request_restart();
 }
 
+/// The online round's readings as of the last frame (`OnlineRound::stats_json`),
+/// published by the frame loop; empty outside an online round.
+static NET_STATS: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+/// A scripted input the page asked for: the move direction (0 none, 1-4 as
+/// `wire::dir_code`), fire, and how many frames it still holds for. While
+/// it holds, it replaces the local player's keyboard - the web build's
+/// counterpart of the dev server's `input` tool, so a browser session can
+/// be driven by a measurement script.
+static SCRIPTED: std::sync::Mutex<Option<(u8, bool, u32)>> = std::sync::Mutex::new(None);
+
+/// Publish this frame's online readings (the frame loop calls this).
+pub fn publish_net_stats(json: String) {
+    *NET_STATS.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = json;
+}
+
+/// The scripted input for this frame, if one holds, counting it down.
+pub fn take_scripted_input() -> Option<crate::ai::Intent> {
+    let mut slot = SCRIPTED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (dir, fire, frames) = (*slot)?;
+    *slot = (frames > 1).then_some((dir, fire, frames - 1));
+    Some(crate::ai::Intent { move_dir: crate::net::wire::dir_from_code(dir), fire, ..crate::ai::Intent::default() })
+}
+
+/// The online round's readings as JSON (`OnlineRound::stats_json`): the
+/// link, the interpolator, the prediction and the drawn tanks, as of the
+/// last frame. `""` outside an online round.
+#[unsafe(no_mangle)]
+pub extern "C" fn bb_net_stats() -> *const c_char {
+    let s = NET_STATS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    hand_out(s)
+}
+
+/// Drive the local player for `frames` frames: `move_dir` 0 none, 1 up, 2
+/// down, 3 left, 4 right; `fire` 0 or 1. `frames` 0 hands the keyboard
+/// back at once.
+#[unsafe(no_mangle)]
+pub extern "C" fn bb_input(move_dir: c_int, fire: c_int, frames: c_int) {
+    let mut slot = SCRIPTED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    *slot = (frames > 0).then_some((move_dir.clamp(0, 4) as u8, fire != 0, frames as u32));
+}
+
 /// Every exported entry point. `build.rs` carries the same list (with a
 /// leading underscore each) for emcc - keep the two in sync;
 /// `exports_match_build_rs` below checks.
@@ -135,6 +177,8 @@ pub const EXPORTS: &[(&str, *const ())] = &[
     ("bb_last_error", bb_last_error as *const ()),
     ("bb_tuning_reset", bb_tuning_reset as *const ()),
     ("bb_game_restart", bb_game_restart as *const ()),
+    ("bb_net_stats", bb_net_stats as *const ()),
+    ("bb_input", bb_input as *const ()),
 ];
 
 /// Pin every entry point into the final link by taking its address through

@@ -319,6 +319,68 @@ impl<T: Transport> OnlineRound<T> {
         self.lead.depth
     }
 
+    /// Everything a measurement wants from this round in one value: the
+    /// link, the interpolator, the prediction, and the picture as this
+    /// frame drew it - the own hull and every other tank, in field
+    /// pixels, on this round's clock (docs/online-coop-prd.md §4.16,
+    /// "Measurement first"). The dev server's `status.round` and the web
+    /// build's `bb_net_stats` both read it, so a browser session against a
+    /// deployed room is measured by the same numbers a native one is.
+    pub fn stats_json(&self) -> serde_json::Value {
+        use serde_json::json;
+        let interp = self.interpolation();
+        let tanks: Vec<serde_json::Value> = self
+            .game()
+            .map(|g| {
+                g.tank_snapshots()
+                    .into_iter()
+                    .map(|t| json!([t.slot, (t.position.x * 4.0).round() / 4.0, (t.position.y * 4.0).round() / 4.0]))
+                    .collect()
+            })
+            .unwrap_or_default();
+        json!({
+            "clock_ms": self.local_ms(),
+            "seat": self.seat(),
+            "client_hull": self.client_hull,
+            "server_tick": self.interp.newest_tick(),
+            "buffer_ms": self.buffer_ms(),
+            "rtt": self.rtt().map(|r| json!({
+                "rtt_ms": r.rtt_ms,
+                "rtt_p95_ms": r.rtt_p95_ms,
+                "rtt_min_ms": r.rtt_min_ms,
+                "offset_ms": r.offset_ms,
+                "samples": r.samples,
+            })),
+            "interpolation": {
+                "delay_ms": interp.delay_ms,
+                "target_ms": interp.target_ms,
+                "jitter_ms": interp.jitter_ms,
+                "interval_ms": interp.interval_ms,
+                "buffered": interp.buffered,
+                "extrapolated_frames": interp.extrapolated_frames,
+            },
+            "prediction": self.prediction().map(|p| json!({
+                "ignored": p.ignored,
+                "nudges": p.nudges,
+                "snaps": p.snaps,
+                "error_buckets": p.error_buckets,
+                "max_error_px": p.max_error_px,
+                "shots_drawn": p.shots_drawn,
+                "shots_refused": p.shots_refused,
+                "shots_on_screen": p.shots_on_screen,
+                "in_flight": p.in_flight,
+                "cooldown": p.cooldown,
+                "lead_up": p.lead_up,
+                "lead_down": p.lead_down,
+                "lead_depth": self.lead.depth,
+                "crossings": p.crossings,
+                "crossings_hit": p.crossings_hit,
+                "crossings_missed": p.crossings_missed,
+            })),
+            "tanks": tanks,
+        })
+    }
+
     /// The replica, once a `Welcome` has built one. The window draws the
     /// local round until then.
     pub fn game(&self) -> Option<&Game> {
