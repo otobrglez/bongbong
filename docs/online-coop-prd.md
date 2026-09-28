@@ -1015,6 +1015,123 @@ state that is one comparison per snapshot and no solver steps at all, and
 it is what every shipped prediction implementation does. Stage 3 makes it
 unnecessary.
 
+### 4.15 The clock: measured, not guessed
+
+*Built 2026-09-28.* A `Ping` carries the client's own milliseconds; the
+room server echoes it as a `Pong` straight from the connection task with
+its clock (`Hub::now_ms`, the one epoch every room's snapshots are
+stamped with too), and `net::clock::RttClock` keeps a ten-second window:
+the round trip as median, p95 and floor, and server-minus-local from the
+**fastest** probe (Cristian: the probe that spent least time queued has
+the tightest midpoint). `interp::ServerClock` stays what it is good for -
+the snapshot buffer's depth, which is arrival-relative by design - and
+`RttClock` answers "what is the server's time". Both are fed the instant
+a message came **off the socket** (`Transport::drain_stamped`: the native
+socket thread, the browser's callback, the loopback link's due time), not
+the frame that drained it: stamped at the drain, every arrival read up to
+a frame late, which the probe measured as round trip (22 ms on loopback,
+2 ms after) and the interpolator as jitter. `status.round.rtt` and the
+status line show it.
+
+### 4.16 Stage 4: present-time co-op
+
+*Designed 2026-09-28 from the research sweep and a 53-finding code audit
+verified by two skeptics each; being built on `feature/coop-ng-2`.* Stage
+3 made the own hull local; stage 4 makes everything the player acts on
+local-feeling while keeping the server the referee. The organising rule:
+**what the player controls lives in the present, what the player reacts
+to lives in the present on its approach, everything else is interpolated
+in the past - and the seams between them are hidden rather than ignored.**
+
+The audit's worst findings, in the order they are fixed:
+
+1. **Own shots jump backwards** 45-90 px when the provisional shell is
+   swapped for the server's: the server's shell sits 183 ms at the muzzle
+   in `Fire0..Fire2` and is drawn in the past, the provisional flies from
+   the press in the present.
+2. **The lead controller ratchets the mailbox** to about two ticks and
+   never trims it, so every server-side action of an owned seat runs
+   17-42 ms late; the owned hull only moves on packet frames and Extra or
+   Skip double-step or freeze it.
+3. **The kill spectacle never reaches a replica** - no fireball, mushroom
+   cloud, shockwave, shake or flash online - because those are pushed from
+   inside `Game::update`, which a replica never runs.
+4. **Enemy shells are drawn ~110 ms in the past** against an own hull in
+   the present: shells visibly miss and hit, or explode behind the tank.
+5. **No lag compensation**: own shots are judged against enemies ~110 ms
+   ahead of what was aimed at; the laser is a full round trip late.
+6. **The playout clock follows every arrival** (an EMA), modulating the
+   picture's speed every frame; one lost TCP segment freezes, rewinds and
+   slow-motions the round for seconds; missiles are not interpolated;
+   teleports are lerped across the map.
+7. **Knockback, blasts, rams and recoil are erased** on an owned hull.
+
+The pieces, each with its owner module:
+
+- **Measurement first: `netlab`** (its own crate). The in-process room
+  server behind an impairment proxy that models TCP rather than packets
+  (delay; jitter that never reorders; loss as a hold of that segment and
+  everything behind it until a retransmit time; a Nagle switch), N
+  headless clients running the window's real `OnlineRound` over the real
+  `NativeTransport`, all on one process clock so end-to-end latencies are
+  exact; a **local twin** - the same scripted inputs through a local
+  `Game` at the same frame rate - as the reference "feels local" is
+  measured against; and a remote mode that points the same clients at a
+  real server (a PR preview). It reports the own-input latency, the lag
+  and pacing of remote motion (per-frame displacement: stalls, jumps,
+  backward steps, their spread against the local twin), a shot ledger
+  (press, provisional drawn, `Fired` handed over, server shot drawn,
+  impact, hit) with the hand-off gap in pixels, how far an enemy shell was
+  from the drawn hull when it hit, corrections, round trip, snapshot
+  inter-arrival and bandwidth.
+- **The owned hull on its own clock** (`net::round`, `net::predict`): the
+  sandbox steps on its own fixed-step clock and is drawn at sub-tick
+  interpolation; one packet per sandbox tick; no lead controller in owned
+  mode, so nothing double-steps or freezes.
+- **Owned poses newest-wins** (`net::mailbox`, the room): an owned seat's
+  intents are not queued - each tick takes the newest pose, ORs every
+  consumed fire bit so no press is lost, and a starved tick dead-reckons
+  the last pose by its velocity; the room's tick is anchored to wall time
+  and serves its tick before its commands.
+- **Own shots on the present timeline** (`net::predict`): the provisional
+  runs the real state machine (the muzzle hold, then flight) from the
+  sandbox's muzzle, stops at the replica's walls and at drawn hulls with
+  its impact drawn at once (damage stays the room's), and is never swapped
+  for the server's: the room's copies of this seat's shots
+  (`ShotState::owner`) are hidden and paired by `Fired::input_tick`, and
+  only a server outcome that disagrees (a hit the client did not draw, a
+  refusal) corrects it. The laser is drawn on the press from the
+  predicted muzzle to the first drawn hull or tile, and the room's copy of
+  this seat's beam (`LaserBeam::seat`) is skipped. Cooldowns and the
+  minigun run on the tick grid.
+- **Lag compensation, favor the shooter** (the simulation's hit test):
+  each intent carries the tick the client was drawing
+  (`IntentMsg::view_tick`); the room keeps the last 250 ms of enemy and
+  frog hit boxes, and a seat's shots and beams are swept against the
+  boxes at the tick that seat saw. In co-op the AI does not feel it, so it
+  is strictly a gain.
+- **Incoming fire in the present** (`net::round`): enemy and teammate
+  shots are drawn forward along their straight path by the local lead,
+  starting at the drawn muzzle and catching up over ~120 ms, clipped at
+  walls; one that reaches the own drawn hull shows its impact at once
+  (health stays the room's).
+- **A controlled playout clock** (`net::interp`): time in ticks, the
+  offset from the lower envelope of arrivals, render time monotone with a
+  bounded rate, the delay from a lateness percentile with head-of-line
+  stalls ridden out on extrapolation rather than sized for; per-entity
+  error offsets that decay instead of snapping; missiles blended; hulls
+  and shots extrapolated along their paths; teleports snapped.
+- **The spectacle on replicas** (`net::apply`): fireball, mushroom,
+  shockwave, flash, scorch from `Wreck`; blast effects from `Blast` and
+  `MissileBlast`; impact flashes from `Hit`; muzzle ripples from `Fired`.
+- **Shoves on owned hulls** (`Event::Shoved`): the room sends the impulses
+  it put on an owned hull and the owner applies them to its own body;
+  recoil is applied locally at each launch.
+
+Deferred, written down: WebTransport datagrams for the snapshot and
+intent streams (HOL blocking is the one link effect no client-side trick
+removes); sub-tick rendering of the local round; the mobile lifecycle.
+
 ### 4.13 Running it locally
 
 The developer loop needs no cluster: the server is a `cargo run`, the client
