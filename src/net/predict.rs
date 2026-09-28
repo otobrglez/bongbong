@@ -316,9 +316,6 @@ pub struct Predictor {
     /// refused: `PROVISIONAL_SECONDS` at least, longer on a link whose
     /// round trip and picture delay take longer (`set_refusal_after`).
     refusal_after: f32,
-    /// The hull's pose before the latest sandbox tick, so the round can
-    /// draw it between ticks (`drawn_pose`).
-    prev_pose: Option<(Position, f32)>,
     /// Seconds until the local gate lets another press out. Counted
     /// down here rather than read off the sandbox, because
     /// `predict_seat` deliberately does not fire - it only drives.
@@ -351,7 +348,6 @@ impl Predictor {
             unpaired: std::collections::BTreeMap::new(),
             clock: 0.0,
             refusal_after: PROVISIONAL_SECONDS,
-            prev_pose: None,
             cooldown: 0.0,
             owned: false,
             report: PredictionReport::default(),
@@ -409,7 +405,6 @@ impl Predictor {
     /// `drive_player` does it, so the shot leaves from the pose this tick
     /// produced.
     pub fn step_at(&mut self, tick: u32, intent: Intent) {
-        self.prev_pose = self.sandbox.seat_motion(self.seat).map(|(p, r, _)| (p, r));
         // The room's order: timers count down, the hull drives, queued
         // shots leave, then the trigger - on the tick grid, so a skipped
         // or doubled frame cannot skew the gate against the room's.
@@ -431,16 +426,15 @@ impl Predictor {
         self.pull_trigger(tick, pressed, intent.fire);
     }
 
-    /// Where to draw the hull `alpha` of the way from the last tick's pose
-    /// to this one's: the owned hull drawn between its fixed steps, so a
-    /// frame that ran none or two of them does not show it standing or
-    /// lurching (docs/online-coop-prd.md §4.16).
-    pub fn drawn_pose(&self, alpha: f32) -> Option<(Position, f32)> {
+    /// Where to draw the hull: its newest tick, as `app.rs` draws a local
+    /// round's newest step. Drawing it between its last two ticks would
+    /// smooth a frame that ran none or two of them, at the price of
+    /// showing every input up to a tick late - a frame the local game
+    /// never pays - so the owned hull is drawn exactly as the local one
+    /// is, correction offset included.
+    pub fn drawn_pose(&self) -> Option<(Position, f32)> {
         let (p, r, _) = self.motion()?;
-        let Some((q, _)) = self.prev_pose else { return Some((p, r)) };
-        let a = alpha.clamp(0.0, 1.0);
-        let at = Position::new(q.x + (p.x - q.x) * a + self.offset.x, q.y + (p.y - q.y) * a + self.offset.y);
-        Some((at, r))
+        Some((Position::new(p.x + self.offset.x, p.y + self.offset.y), r))
     }
 
     /// A shove the room put on this hull (`Shoved`): the velocity change,
@@ -1397,19 +1391,22 @@ mod tests {
         assert!(back > 0.1, "the hull moves back along its barrel after the press: {kicked:?}");
     }
 
-    /// The owned hull is drawn between its last two ticks.
+    /// The owned hull is drawn at its newest tick, as a local round draws
+    /// its newest step: a direction change shows on the frame whose tick
+    /// made it.
     #[test]
-    fn the_owned_hull_is_drawn_between_its_ticks() {
+    fn the_owned_hull_is_drawn_at_its_newest_tick() {
         let mut predictor = Predictor::new(round(), 0, 0);
         predictor.set_owned(true);
         for _ in 0..20 {
             predictor.step(Intent { move_dir: Some(Dir::Right), ..Intent::default() });
         }
-        let (now, _) = predictor.drawn_pose(1.0).expect("a hull");
-        let (before, _) = predictor.drawn_pose(0.0).expect("a hull");
-        let (half, _) = predictor.drawn_pose(0.5).expect("a hull");
-        assert!(now.x > before.x, "moving right");
-        assert!((half.x - (before.x + now.x) / 2.0).abs() < 0.01, "halfway at alpha 0.5");
+        let (drawn, _) = predictor.drawn_pose().expect("a hull");
+        let (newest, _, _) = predictor.motion().expect("a hull");
+        assert_eq!(drawn, newest, "drawn where the newest tick put it");
+        predictor.step(Intent { move_dir: Some(Dir::Down), ..Intent::default() });
+        let (turned, _) = predictor.drawn_pose().expect("a hull");
+        assert!(turned.y > drawn.y, "the tick that turned it down is the one drawn: {drawn:?} -> {turned:?}");
     }
 
     /// **Stage 3** (docs/online-coop-prd.md §4.14): a client that owns

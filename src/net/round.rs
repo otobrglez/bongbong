@@ -798,17 +798,14 @@ impl<T: Transport> OnlineRound<T> {
     /// any frame simply stops the write - the interpolated hull is
     /// already underneath it.
     ///
-    /// An owned hull is drawn between its last two ticks by the time owed
-    /// toward the next (`Predictor::drawn_pose`): the sandbox steps whole
-    /// ticks, and a frame that ran none or two of them would otherwise
-    /// show it standing or lurching.
+    /// The hull is drawn at the sandbox's newest tick
+    /// (`Predictor::drawn_pose`), as a local round draws its newest step.
     fn write_predicted(&mut self) {
         if !tuning().online_predict_own_tank {
             return;
         }
-        let alpha = if self.client_hull { self.send_owed / PHYSICS_FIXED_DT } else { 1.0 };
         let (Some(predictor), Some(game)) = (self.predictor.as_ref(), self.replica.as_mut()) else { return };
-        let (Some(seat), Some((position, rotation))) = (self.client.seat(), predictor.drawn_pose(alpha)) else { return };
+        let (Some(seat), Some((position, rotation))) = (self.client.seat(), predictor.drawn_pose()) else { return };
         // The velocity is the prediction's own, not zero: `fx` reads it
         // for the spray and the dust, and a hull the solver believes is
         // stopped settles differently from one that is moving.
