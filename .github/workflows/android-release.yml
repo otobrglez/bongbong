@@ -1,0 +1,155 @@
+name: Android Release
+
+# Builds the Android APK (`just build-android`: the arm64 NativeActivity
+# shared object, the assets, the icon, signed with the release key) and
+# attaches it to the GitHub Release release.yml made for the same tag, as
+# bongbong-aarch64-linux-android.apk beside the cargo-dist archives. dist
+# cannot build an APK, and release.yml is generated and checked by dist, so
+# this is its own workflow - the shape testflight.yml has for iOS.
+#
+# It runs when the Release workflow finishes on a version tag, because dist
+# creates the release with `gh release create`, which fails if one exists
+# already: the APK has to be uploaded second, never first. A manual run
+# builds the picked ref and uploads to that tag's release (input `tag`), or
+# only keeps the APK as a workflow artifact (input `upload` = false), which
+# is how a change to this pipeline is tried on a branch. A pull request
+# that touches the Android build runs it too, as a check that keeps the
+# APK as an artifact: with the release key when the PR is the repo's own,
+# debug-signed from a fork, which gets no secrets by design - never "fix"
+# that with pull_request_target.
+#
+# Signing: Android ties an app to its signing key for life - a phone
+# refuses an update signed with a different key - so the release key is
+# minted once (see CLAUDE.md's Android section) and lives only in the
+# repo's secrets:
+#   ANDROID_KEYSTORE_B64    the .jks, base64
+#   ANDROID_KEYSTORE_PASS   its password (the key's is the same)
+#   ANDROID_KEY_ALIAS       the key's alias
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  pull_request:
+    paths:
+      - .github/workflows/android-release.yml
+      - android/**
+      - tools/android/**
+      - tools/setup_android.sh
+      - src/app/android.rs
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to upload to (default: the ref's own tag)"
+        required: false
+        type: string
+      upload:
+        description: "Upload to the GitHub Release (off: keep the APK as a workflow artifact only)"
+        required: false
+        type: boolean
+        default: true
+
+env:
+  # Pinned to devenv.nix's languages.rust.version.
+  RUST_VERSION: 1.97.1
+  CARGO_TERM_COLOR: always
+  # The tag a workflow_run carries is the branch the Release run was on,
+  # which for a tag push is the tag itself.
+  RELEASE_TAG: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || inputs.tag || github.ref_name }}
+  CHECKOUT_REF: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.ref }}
+
+jobs:
+  apk:
+    # Release also runs on pull requests (dist's plan-only mode); only a
+    # successful run of a pushed version tag has a release to attach to.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: aarch64-linux-android
+
+      - uses: extractions/setup-just@v3
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: android-cargo-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: android-cargo-${{ env.RUST_VERSION }}-
+
+      # The NDK and platform the pins in tools/android/env.sh name, on top of
+      # the SDK the runner image preinstalls, and raylib built for Android
+      # from the tree vendored in sola-raylib-sys (which `cargo fetch` puts
+      # in the registry). No emulator, no system image, no AVD.
+      - name: Android SDK + raylib
+        run: |
+          cargo fetch
+          BONGBONG_ANDROID_NO_EMULATOR=1 ./tools/setup_android.sh
+
+      - name: Install the release key
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if [[ -z "$ANDROID_KEYSTORE_B64" || -z "$ANDROID_KEYSTORE_PASS" || -z "$ANDROID_KEY_ALIAS" ]]; then
+            if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+              echo "::warning::no release key secrets (a fork's PR): the APK is debug-signed"; exit 0
+            fi
+            echo "::error::ANDROID_KEYSTORE_B64, ANDROID_KEYSTORE_PASS and ANDROID_KEY_ALIAS secrets are required"; exit 1
+          fi
+          umask 077
+          printf '%s' "$ANDROID_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          {
+            echo "BONGBONG_ANDROID_KEYSTORE=$RUNNER_TEMP/release.jks"
+            echo "BONGBONG_ANDROID_KEYSTORE_PASS=$ANDROID_KEYSTORE_PASS"
+            echo "BONGBONG_ANDROID_KEY_ALIAS=$ANDROID_KEY_ALIAS"
+          } >> "$GITHUB_ENV"
+
+      - name: Build and sign the APK
+        run: |
+          just build-android
+          cp target/android/BongBong.apk bongbong-aarch64-linux-android.apk
+          sha256sum bongbong-aarch64-linux-android.apk > bongbong-aarch64-linux-android.apk.sha256
+          cat bongbong-aarch64-linux-android.apk.sha256
+
+      - name: Remove the release key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.jks"
+
+      - name: Keep the APK as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bongbong-aarch64-linux-android
+          path: |
+            bongbong-aarch64-linux-android.apk
+            bongbong-aarch64-linux-android.apk.sha256
+
+      - name: Attach to the GitHub Release
+        if: ${{ github.event_name == 'workflow_run' || inputs.upload }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "$RELEASE_TAG" --json tagName -q .tagName \
+            || { echo "::error::no GitHub Release for $RELEASE_TAG - release.yml creates it; run this after it, or with upload=false"; exit 1; }
+          gh release upload "$RELEASE_TAG" --clobber \
+            bongbong-aarch64-linux-android.apk bongbong-aarch64-linux-android.apk.sha256
+          echo "uploaded to https://github.com/${{ github.repository }}/releases/tag/$RELEASE_TAG"

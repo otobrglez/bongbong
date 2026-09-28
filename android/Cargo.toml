@@ -1,6 +1,6 @@
 [package]
 name = "bongbong-android"
-version = "0.0.23"
+version = "0.2.2"
 edition = "2024"
 publish = false
 description = "The Android shared library: raylib's android_main calls the exported main, which runs bongbong::app"

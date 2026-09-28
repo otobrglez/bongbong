@@ -19,6 +19,7 @@ Everything runs from inside the devenv (Nix) shell. `just --list` has the rest.
 | iOS simulator | `just ios-setup` | `just run-ios-sim` |
 | iPhone | `just ios-setup-device` (plus an Apple ID in Xcode) | `just run-ios-device` |
 | Android emulator / phone | `just android-setup` | `just run-android` |
+| Android APK (sideload) | - | download `bongbong-aarch64-linux-android.apk` from the latest [release](https://github.com/otobrglez/bongbong/releases) and allow installs from your browser |
 
 ```bash
 # Options work the same on every desktop run
