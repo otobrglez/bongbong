@@ -930,8 +930,9 @@ the dynamic enemies out of its way, and `drive_player` leaves the seat
 alone for that tick (`Game::seat_owned`). A packet with no pose releases
 the seat to the room's own driving. **Validation, not simulation**: the
 step from where the room has the hull is bounded by the chassis's top
-speed over `POSE_REACH_TICKS` (four - the mailbox spreads a burst and
-repeats a starved tick, so one pose can cover a few ticks) plus
+speed over the ticks the mailbox read vouches for
+(`Mailbox::pose_reach_ticks`: the driving since the last pose, held to the
+room's own ticks since it, never fewer than `POSE_REACH_TICKS`) plus
 `POSE_REACH_SLACK_PX`; the pose must lie inside the field, off a solid
 tile and out of deep water; a wreck and a seat still rolling in through a
 gate own nothing. **The one correction path is `Placed`**: a refused pose
@@ -1087,17 +1088,36 @@ The pieces, each with its owner module:
   impact, hit) with the hand-off gap in pixels, how far an enemy shell was
   from the drawn hull when it hit, corrections, round trip, snapshot
   inter-arrival and bandwidth.
+  *Built* (`netlab/`, `just netlab`, `just netlab-suite`); `netlab replay
+  F --explain` re-measures a recorded run and names what each shot
+  appearance was paired with.
 - **The owned hull on its own clock** (`net::round`, `net::predict`): the
-  sandbox steps on its own fixed-step clock and is drawn at sub-tick
-  interpolation; one packet per sandbox tick; no lead controller in owned
-  mode, so nothing double-steps or freezes. *Built*: `drawn_pose`, the
-  lead off for an owned hull, recoil applied on the press
-  (`Game::seat_recoil`).
-- **Owned poses newest-wins** (`net::mailbox`, the room): an owned seat's
-  intents are not queued - each tick takes the newest pose, ORs every
-  consumed fire bit so no press is lost, and a starved tick dead-reckons
-  the last pose by its velocity; the room's tick is anchored to wall time
-  and serves its tick before its commands.
+  sandbox steps on its own fixed-step clock, one packet per sandbox tick,
+  no lead controller in owned mode, so nothing double-steps or freezes.
+  *Built*. It is drawn at its **newest** tick, as a local round draws its
+  newest step: drawing it between its last two ticks (the design) showed
+  every input up to a tick late, and netlab measured two frames of own
+  input at the median against the local twin's one. Recoil is applied on
+  the press (`Game::seat_recoil`), once per shot whether drawn or not.
+- **Owned poses played out on the room's clock** (`net::mailbox`, the
+  room). Designed as newest-wins - each tick takes the newest pose - and
+  built so first; netlab then showed the room's copy of an owned hull, the
+  one every other seat draws, stalling and doubling whenever packets
+  straddled a tick (3.8 % stalls and 2.3 % jumps on a LAN, against the
+  twin's 0). The mailbox keeps a *play point* instead: the client tick the
+  room applies, moved one tick a room tick, each read taking every intent
+  at or before it (pose from the newest, the trigger merged press for
+  press - a press whose release hid in an earlier merge is delivered up
+  then down), a missing tick dead-reckoned. A once-a-second controller
+  holds the point a tick after two late ticks in a window and moves it two
+  after a window with two ticks to spare, so it settles a tick or so
+  behind the latest arrival. The pose's reach is the driving since the
+  last pose held to the room's own ticks since it, so a client stamping
+  its packets far apart gains nothing. The room's tick is on the wall
+  clock (`TickClock`: catch-up up to four ticks, a restart past that),
+  serves a due tick before commands and one command between back-to-back
+  late ticks. *Built*; LAN drive 0.4 % stalls, 0 % jumps, the room's copy
+  about a tick further behind than newest-wins had it.
 - **Own shots on the present timeline** (`net::predict`): the provisional
   runs the real state machine (the muzzle hold, then flight) from the
   sandbox's muzzle, stops at the replica's walls and at drawn hulls with
@@ -1105,43 +1125,88 @@ The pieces, each with its owner module:
   for the server's: the room's copies of this seat's shots
   (`ShotState::owner`) are hidden and paired by `Fired::input_tick`, and
   only a server outcome that disagrees (a hit the client did not draw, a
-  refusal) corrects it. The laser is drawn on the press from the
-  predicted muzzle to the first drawn hull or tile, and the room's copy of
-  this seat's beam (`LaserBeam::seat`) is skipped. Cooldowns and the
-  minigun run on the tick grid. *Built*: `simulation::present` (the
-  drawn-world sweep and the provisional's own state machine), pairing and
-  hiding in `net::predict`, a rig test over a 40 ms link that the shot is
-  one copy that never moves back.
+  refusal) corrects it. The laser and each shot's muzzle ripple are drawn
+  on the press, and the replica skips the room's own (`apply::Show::
+  OwnShotsDrawn`). *Built*, with one rule netlab added: **a shot outlives
+  its own drawing** - kept off the picture until its room copy has come
+  and gone, since a shell that bursts near the muzzle has played out long
+  before its copy arrives a round trip later, and that copy was being
+  paired with the next shot (which leapt hundreds of pixels to the first
+  one's impact) or shown on its own (the shot drawn twice) on every link.
 - **Lag compensation, favor the shooter** (the simulation's hit test):
   each intent carries the tick the client was drawing
   (`IntentMsg::view_tick`); the room keeps the last 250 ms of enemy and
-  frog hit boxes, and a seat's shots and beams are swept against the
-  boxes at the tick that seat saw. In co-op the AI does not feel it, so it
-  is strictly a gain.
+  frog hit boxes (`HitBoxHistory`), and a seat's shots and beams are
+  swept against the boxes at the tick that seat saw (`weapons::Rewind`,
+  `sweep_rewound`). In co-op the AI does not feel it, so it is strictly a
+  gain. *Built*; a round with no seat views rewinds nothing.
 - **Incoming fire in the present** (`net::round`): enemy and teammate
   shots are drawn forward along their straight path by the local lead,
   starting at the drawn muzzle and catching up over ~120 ms, clipped at
   walls; one that reaches the own drawn hull shows its impact at once
-  (health stays the room's). *Built*: `incoming_lead_ticks` - the lead is
-  exact to the tick, from the newest snapshot's `acked` - and
+  (health stays the room's). *Built*: `incoming_lead_ticks` and
   `draw_incoming_in_present`.
-- **A controlled playout clock** (`net::interp`): time in ticks, the
-  offset from the lower envelope of arrivals, render time monotone with a
-  bounded rate, the delay from a lateness percentile with head-of-line
-  stalls ridden out on extrapolation rather than sized for; per-entity
-  error offsets that decay instead of snapping; missiles blended; hulls
-  and shots extrapolated along their paths; teleports snapped.
+- **A controlled playout clock** (`net::interp`): render time in ticks,
+  monotone, steered at a bounded rate (the full 10 % while it runs past
+  the newest snapshot), the delay from a lateness percentile with
+  head-of-line stalls ridden out on extrapolation; per-entity error
+  offsets that decay instead of snapping; missiles blended; hulls and
+  shots extrapolated along their paths; teleports snapped. *Built*, with
+  one change netlab forced: **the link is measured on the wall clock**.
+  The clock read tick time less arrival, so a waiting room's welcome -
+  tick 0 of a round that starts a tenth of a second later - opened every
+  round with the clock that far ahead (seconds of extrapolation, a 150 ms
+  delay on a 30 ms link), and a room that dropped ticks read as a late
+  link. It takes `server_ms` less arrival now, which only the link moves,
+  and the round's anchor (`server_ms - tick time`) turns it into tick time;
+  a welcome restarts the anchor, and an anchor that jumps forward holds the
+  picture for as long as the room stood still.
 - **The spectacle on replicas** (`net::apply`): fireball, mushroom,
-  shockwave, flash, scorch from `Wreck`; blast effects from `Blast` and
-  `MissileBlast`; impact flashes from `Hit`; muzzle ripples from `Fired`.
-- **Shoves on owned hulls** (`Event::Shoved`): the room sends the impulses
-  it put on an owned hull and the owner applies them to its own body;
-  recoil is applied locally at each launch. *Built on the client*
-  (`Predictor::shove` on arrival).
+  shockwave, flash, scorch and thrown parts from `Wreck`; blast effects
+  from `Blast` and `MissileBlast`; cook-offs; impact flashes from `Hit`,
+  `Deflected`, `Ricochet`, `ShellsCollided` and a shielded laser hit;
+  muzzle ripples from `Fired`; rubble from `ObstacleDestroyed`. Each
+  cause's cosmetic half is one `Game` show both a local round and a
+  replica call, so they cannot drift. *Built*; the predictor's sandbox
+  takes snapshots quietly (`Show::Quiet`).
+- **Shoves on owned hulls** (`Event::Shoved`): the room sends the velocity
+  changes it put on an owned hull - knockback, blasts, rams, a missile
+  launch's recoil - and the owner applies them to its own body; a shell's,
+  bolt's or bullet's recoil is the client's own at the launch and never
+  echoed. *Built*.
 - **Measuring a browser**: a dev-tools web build (every PR preview) exports
   `bb_net_stats` (`OnlineRound::stats_json`, the same readings the native
   dev server shows) and `bb_input` (a scripted seat), so a browser tab
   against a deployed room is driven and measured by a script. *Built.*
+
+**Measured** (netlab `suite --quick`, 8 s runs at 60 fps, the client
+owning its hull; *before* is stage 3 at `8c99fdf`, *after* is stage 4 as
+merged; profiles are one-way delay ± jitter with loss held as TCP holds
+it - lan 0 ms, typical 40 ± 10 ms, bad 100 ± 40 ms with 3 % loss):
+
+| run | own input p50 | remote lag p50 | remote stall / jump % | own shot hand-offs (gap p95) | drawn twice | verdict |
+|---|---|---|---|---|---|---|
+| lan drive, before | 16 ms | 66 ms | 0.0 / 0.0 | - | - | local |
+| lan drive, after | 12 ms | 60 ms | 2.0 / 1.5 (0.3 / 0.2 alone) | - | - | close |
+| typical drive, before | 17 ms | 167 ms | 0.3 / 0.0 | - | - | local |
+| typical drive, after | 13 ms | 156 ms | 0.0 / 0.0 | - | - | local |
+| bad drive, before | 0 ms | 515 ms | 14.4 / 5.5 | - | - | far |
+| bad drive, after | 18 ms | 458 ms | 11.8 / 4.7 | - | - | far |
+| typical shoot, before | 17 ms | - | - | every shot (96 px) | - | far |
+| typical shoot, after | 22 ms | - | - | 1 (89 px) | 0 | far |
+| lan duel, before | 17 ms | 73 ms | 1.3 / 0.0 | every shot (64 px) | - | far |
+| lan duel, after | 17 ms | 62 ms | 0.8 / 0.0 | 1 (40 px) | 0 | far |
+| typical duel, before | 17 ms | 168 ms | 1.3 / 3.3 | every shot (97 px) | - | far |
+| typical duel, after | 16 ms | 154 ms | 2.0 / 1.0 | 0 | 0 | close |
+
+The local twin reads 17 ms of own input (one frame) and no stalls. The
+hand-offs left are the room's outcome disagreeing with the drawn one - a
+hit the picture did not draw, or a drawn hit the room missed - one or two
+in an 8 s run of fifteen presses. Over the internet to the preview server
+(`wss://rooms.bongbong.io/pr-48`, a 28-33 ms round trip at the median
+and ~110 ms at the 95th) before the clock and playout fixes: own input
+one frame, remote lag ~120 ms, the picture 150 ms behind and
+extrapolating - the reading the two fixes were made against.
 
 Deferred, written down: WebTransport datagrams for the snapshot and
 intent streams (HOL blocking is the one link effect no client-side trick
@@ -1299,16 +1364,26 @@ ship a complete co-op game; 4 and 5 are stage 2.
    the pose on the intent, the placed seat body and the validator,
    `Placed`, the shot fired from the applied pose. *Built* 2026-09-28
    (`server/tests/round.rs`: the room's snapshot follows the owned hull
-   within a tenth of a pixel with zero corrections). Not yet: `Shoved`
-   (knockback on an owned hull), and the laser's beam drawn locally on
-   the press - it is drawn from the room's `LaserBeam` a round trip
-   later. Done when a real-link session with the knob on shows no
-   corrections at all on the own hull, the shot leaving from where it was
-   drawn, and the same round with the knob off for comparison.
-9. **Stage 3 takes over (S).** Delete the sandbox, the reconciliation, the
-   lead and the provisional retirement once 8's comparison says so; the
-   protocol loses `acked` and `mailbox`. Then the feel pass on real links
-   and decision 9's reading, on the simpler machine.
+   within a tenth of a pixel with zero corrections); `Shoved` and the
+   laser drawn on the press came with stage 4. Done when a real-link
+   session with the knob on shows no corrections at all on the own hull,
+   the shot leaving from where it was drawn, and the same round with the
+   knob off for comparison.
+8b. **Stage 4: present-time co-op (L).** 4.16: netlab first, then the
+   owned hull on its own clock, the play point, own shots on the present
+   timeline, lag compensation, incoming fire in the present, the playout
+   clock on a wall-measured link, the spectacle on replicas, shoves.
+   *Built* 2026-09-28 on `feature/coop-ng-2` (PR #48), measured in 4.16.
+   Open: the one or two own-shot corrections an 8 s run still makes (the
+   room's hit against the drawn one), phantom strikes of incoming fire (a
+   strike drawn on the hull the room judged a miss, one or two a run), and
+   the browser reading (`bb_net_stats` on a visible tab against the PR's
+   room). Done when netlab's typical profile reads `local` or `close` on
+   every scenario and a real-link session agrees.
+9. **Stage 3 takes over (S).** Once 8's comparison says so: delete the
+   stage-2 reconciliation's replay, the lead and the ordered mailbox path,
+   keeping the sandbox, which drives the owned hull; the protocol loses
+   `mailbox`. Then the feel pass on real links on the simpler machine.
 10. **Horizon.** Distribution: more than one instance, with the directory the
    replay log makes possible rather than a routing letter in the code (4.8).
    Persistence: the replay log (crash recovery, true blue/green deploys),
@@ -1393,6 +1468,20 @@ ship a complete co-op game; 4 and 5 are stage 2.
 19. `-sASYNCIFY=1` in the web build? **Off.** Nothing in the loop yields,
     there is no audio, and the instrumentation halves the client's speed on
     the platform that has the least to spare.
+20. An owned seat's poses at the room: the newest waiting each tick, or
+    played out? **Played out** (4.16), one client tick a room tick with a
+    margin a controller keeps: newest-wins is a tick less lag and a hull
+    every other seat sees stall and double whenever packets straddle a
+    tick, which on a real link is every second. Measured, not argued.
+21. The client's clock: tick time less arrival, or the room's wall clock?
+    **The wall clock**, with a per-round anchor turning it into ticks: the
+    link is one thing and the round's tick numbering another, and reading
+    them as one made a waiting room's welcome, a round start and a dropped
+    tick all look like the link.
+22. When does a provisional shot retire: when its drawing ends, or when
+    its room copy does? **When its room copy does** (or never comes): the
+    copy arrives a round trip after a near-muzzle burst, and a copy with no
+    shot of its own is either drawn twice or taken for the next shot.
 
 ## 8. Risks, mitigations, stop conditions
 
