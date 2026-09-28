@@ -499,7 +499,7 @@ impl Room {
         // The seat's own pose, the room server's rule (`net::authority`):
         // a client that owns its hull is put where it says before the
         // tick, and told if it is refused or moved.
-        let applied = match authority::take_pose(game, 0, read.and_then(|m| m.pose())) {
+        let applied = match authority::take_pose(game, 0, read.and_then(|m| m.pose()), self.mailbox.pose_reach_ticks()) {
             PoseOutcome::Applied(at) => Some(at),
             PoseOutcome::Refused(_, answer) => {
                 self.pending_events.extend(answer);
@@ -585,24 +585,43 @@ mod tests {
         }
     }
 
-    /// The hulls of an authoritative snapshot, in the replica's spelling:
-    /// the room's word on each. On a tick that found the seat's mailbox
-    /// empty the seat's own hull is left out - an owned pose was
-    /// dead-reckoned there (`net::mailbox`), the room's guess at a packet
-    /// still on its way rather than anything the client said.
-    fn hulls(snapshot: &Snapshot) -> Vec<Hull> {
-        let reckoned = crate::net::mailbox::unpack(snapshot.mailbox[0]).1;
-        snapshot
-            .tanks
-            .iter()
-            .filter(|t| !(reckoned && t.id == 0))
-            .map(|t| (t.id as usize, t.x as i32, t.y as i32))
-            .collect()
+    /// One authoritative snapshot as the checks read it.
+    struct Said {
+        tick: u32,
+        /// Every hull, in the replica's spelling: the room's word on each.
+        hulls: Vec<Hull>,
+        /// The tick's read of the seat's mailbox found nothing, so an
+        /// owned seat's hull stands on a pose the room dead-reckoned
+        /// (`net::mailbox`) - its guess at a packet still on its way,
+        /// which can run ahead of anything the client said, by at most
+        /// `DEAD_RECKON_TICKS` of the hull's speed.
+        reckoned: bool,
+    }
+
+    impl Said {
+        fn of(snapshot: &Snapshot) -> Said {
+            Said {
+                tick: snapshot.tick,
+                hulls: snapshot.tanks.iter().map(|t| (t.id as usize, t.x as i32, t.y as i32)).collect(),
+                reckoned: crate::net::mailbox::unpack(snapshot.mailbox[0]).1,
+            }
+        }
+
+        /// The hulls a check can hold to the room's word exactly: every
+        /// one but the seat's on a tick its pose was a guess.
+        fn exact(&self) -> impl Iterator<Item = &Hull> {
+            self.hulls.iter().filter(|h| !(self.reckoned && h.0 == 0))
+        }
+
+        /// The seat's own hull, guessed or not.
+        fn seat(&self) -> Option<&Hull> {
+            self.hulls.iter().find(|h| h.0 == 0)
+        }
     }
 
     /// One rig, one window, `frames` frames of it: what the window drew
     /// each frame, and every authoritative snapshot the run produced.
-    fn play(quality: LinkQuality, frames: usize) -> (Rig, OnlineRound<Loopback>, Vec<Drawn>, Vec<(u32, Vec<Hull>)>) {
+    fn play(quality: LinkQuality, frames: usize) -> (Rig, OnlineRound<Loopback>, Vec<Drawn>, Vec<Said>) {
         play_at(quality, frames, FRAME)
     }
 
@@ -615,12 +634,12 @@ mod tests {
         quality: LinkQuality,
         frames: usize,
         frame: Duration,
-    ) -> (Rig, OnlineRound<Loopback>, Vec<Drawn>, Vec<(u32, Vec<Hull>)>) {
+    ) -> (Rig, OnlineRound<Loopback>, Vec<Drawn>, Vec<Said>) {
         let (rig, link) = start(options(quality));
         let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
         let mut round = OnlineRound::new(client, "RIG");
         let mut seen: Vec<Drawn> = Vec::new();
-        let mut authority: Vec<(u32, Vec<Hull>)> = Vec::new();
+        let mut authority: Vec<Said> = Vec::new();
         let drive = Intent { move_dir: Some(Dir::Right), ..Intent::default() };
         for _ in 0..frames {
             round.frame(&drive, frame.as_secs_f32());
@@ -628,9 +647,9 @@ mod tests {
             // the authority cut, for the drawn frames to be checked
             // against.
             if let Some(snapshot) = rig.authority()
-                && authority.last().is_none_or(|(tick, _)| *tick != snapshot.tick)
+                && authority.last().is_none_or(|said| said.tick != snapshot.tick)
             {
-                authority.push((snapshot.tick, hulls(&snapshot)));
+                authority.push(Said::of(&snapshot));
             }
             if let Some(game) = round.game() {
                 let state = game.drawable_state();
@@ -698,15 +717,15 @@ mod tests {
         let predicted = tuning().online_predict_own_tank.then_some(0usize);
         let mut checked = 0;
         for frame in &seen {
-            let Some(i) = authority.iter().position(|(tick, _)| *tick as u64 == frame.tick) else { continue };
-            let Some((_, from)) = authority.get(i) else { continue };
-            let Some((_, to)) = authority.get(i + 1) else { continue };
+            let Some(i) = authority.iter().position(|said| said.tick as u64 == frame.tick) else { continue };
+            let Some(from) = authority.get(i) else { continue };
+            let Some(to) = authority.get(i + 1) else { continue };
             for &(slot, x, y) in &frame.hulls {
                 if Some(slot) == predicted {
                     continue;
                 }
-                let Some(a) = from.iter().find(|h| h.0 == slot) else { continue };
-                let Some(b) = to.iter().find(|h| h.0 == slot) else { continue };
+                let Some(a) = from.exact().find(|h| h.0 == slot) else { continue };
+                let Some(b) = to.exact().find(|h| h.0 == slot) else { continue };
                 for (drawn, one, other) in [(x, a.1, b.1), (y, a.2, b.2)] {
                     let (low, high) = (one.min(other), one.max(other));
                     assert!(
@@ -876,22 +895,38 @@ mod tests {
     /// and never behind it. Checked per frame against that frame's own
     /// newest snapshot, since a run long enough reaches a wall and both
     /// stop in the same place.
+    ///
+    /// A snapshot whose read of the seat's mailbox starved carries an
+    /// owned hull the room dead-reckoned, which may have run on past the
+    /// client's word: there the room may lead the drawn hull, by no more
+    /// than `DEAD_RECKON_TICKS` of the hull's top speed.
     #[test]
     fn the_steered_hull_is_drawn_ahead_of_the_room() {
         if !tuning().online_predict_own_tank && !tuning().online_client_hull {
             return; // neither stage is on; nothing to compare.
         }
         let (_, round, seen, authority) = play(LinkQuality::PERFECT, 90);
-        assert!(round.game().is_some(), "the welcome arrived");
-        let gaps: Vec<i32> = seen
-            .iter()
-            .filter_map(|frame| {
-                let newest = frame.newest?;
-                let room = authority.iter().find(|(tick, _)| *tick == newest)?.1.iter().find(|h| h.0 == 0)?.1;
-                let drawn = frame.hulls.iter().find(|h| h.0 == 0)?.1;
-                Some(drawn - room)
-            })
-            .collect();
+        let replica = round.game().expect("the welcome arrived");
+        let top_speed = replica.tank_snapshots().iter().find(|t| t.slot == 0).expect("the seat").top_speed;
+        // The gap on the wire's grid, frame by frame, and whether the
+        // room's hull that frame was a guess.
+        let mut gaps: Vec<i32> = Vec::new();
+        let mut guessed: Vec<i32> = Vec::new();
+        for frame in &seen {
+            let Some(newest) = frame.newest else { continue };
+            let Some(said) = authority.iter().find(|said| said.tick == newest) else { continue };
+            let (Some(room), Some(drawn)) = (said.seat(), frame.hulls.iter().find(|h| h.0 == 0)) else { continue };
+            let into = if said.reckoned { &mut guessed } else { &mut gaps };
+            into.push(drawn.1 - room.1);
+        }
+        // Quarter pixels: two pixels of slack as on every frame, the
+        // guess's reach at top speed, and one for its rounding onto the
+        // grid.
+        let reckoning = crate::net::mailbox::DEAD_RECKON_TICKS as f32 * top_speed * PHYSICS_FIXED_DT * 4.0;
+        let guess_bound = 8 + reckoning.ceil() as i32 + 1;
+        eprintln!("steered hull: {} exact frames, {} on a guess {guessed:?} (bound -{guess_bound})", gaps.len(), guessed.len());
+        let overrun = guessed.iter().filter(|&&g| g < -guess_bound).count();
+        assert_eq!(overrun, 0, "a dead-reckoned hull led the drawn one by more than its guess can reach: {guessed:?}");
         let leading = gaps.iter().filter(|&&g| g > 0).count();
         let behind = gaps.iter().filter(|&&g| g < -8).count();
         assert!(leading >= 10, "the steered hull was ahead of the room on only {leading} of {} frames: {gaps:?}", gaps.len());

@@ -68,10 +68,14 @@ pub struct SeatPose {
     pub velocity: Vec2,
 }
 
-/// How far a client-owned hull may move between two poses the room
-/// accepts, in ticks of its top speed: the mailbox spreads a burst over
-/// the ticks that follow and repeats a starved tick, so one pose can
-/// cover a few ticks of movement without the client having cheated.
+/// The least a client-owned hull may move between two poses the room
+/// accepts, in ticks of its top speed. An ordinary read covers one tick
+/// of the client's driving, and the hull the room compares it with can
+/// stand a few ticks off it - a starved tick's guess went on a tick the
+/// client did not, a contact held the room's copy back - so one pose may
+/// always cover this much without the client having cheated. A read that
+/// took a stall's worth of intents at once covers more, and says so
+/// (`accept_seat_pose`'s `reach_ticks`).
 pub const POSE_REACH_TICKS: f32 = 4.0;
 
 /// Slack on top of the reach, in pixels: the wire's rounding and the
@@ -1785,13 +1789,18 @@ impl Game {
     /// (docs/online-coop-prd.md §4.14).
     ///
     /// **Validation, not simulation.** The step from where the room has
-    /// the hull is bounded by the chassis's top speed over
-    /// `POSE_REACH_TICKS` plus `POSE_REACH_SLACK_PX`; the pose must lie
-    /// inside the field, off a solid tile and out of deep water; a wreck
-    /// and a seat still rolling in through a gate own nothing. A refusal
-    /// leaves the hull where it was, and the room answers with `Placed`
-    /// so the client comes back to it.
-    pub fn accept_seat_pose(&mut self, seat: usize, pose: SeatPose) -> Result<(), &'static str> {
+    /// the hull is bounded by the chassis's top speed over `reach_ticks`
+    /// ticks - never fewer than `POSE_REACH_TICKS` - plus
+    /// `POSE_REACH_SLACK_PX`. `reach_ticks` is how much of the client's
+    /// driving the pose covers, which the mailbox read that delivered it
+    /// measures (`net::mailbox::Mailbox::pose_reach_ticks`): one tick for
+    /// an ordinary read, the whole stall for the burst that ends one,
+    /// since an owned read takes every intent waiting at once. The pose
+    /// must lie inside the field, off a solid tile and out of deep water;
+    /// a wreck and a seat still rolling in through a gate own nothing. A
+    /// refusal leaves the hull where it was, and the room answers with
+    /// `Placed` so the client comes back to it.
+    pub fn accept_seat_pose(&mut self, seat: usize, pose: SeatPose, reach_ticks: u32) -> Result<(), &'static str> {
         let Some(entity) = self.seats.get(seat).copied().flatten() else { return Err("no such seat") };
         let (from, reach) = {
             let Ok(tank) = self.world.get::<&Tank>(entity) else { return Err("no tank") };
@@ -1801,7 +1810,8 @@ impl Game {
             if tank.body.is_none() {
                 return Err("still entering");
             }
-            (tank.position, tank.effective_speed() * PHYSICS_FIXED_DT * POSE_REACH_TICKS + POSE_REACH_SLACK_PX)
+            let ticks = (reach_ticks as f32).max(POSE_REACH_TICKS);
+            (tank.position, tank.effective_speed() * PHYSICS_FIXED_DT * ticks + POSE_REACH_SLACK_PX)
         };
         let (dx, dy) = (pose.position.x - from.x, pose.position.y - from.y);
         if (dx * dx + dy * dy).sqrt() > reach {

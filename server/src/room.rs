@@ -19,7 +19,10 @@
 //! back to back and a long one restarts the schedule, and a seat joining
 //! or reconnecting never moves it. The room's task serves a due tick
 //! before any command waiting, so a burst of lobby or dev traffic cannot
-//! hold one up; how late each tick started is on `/metrics`.
+//! hold one up; and a room running its ticks back to back - catching a
+//! late one up, or unable to keep up at all - serves one command waiting
+//! between each two, so its lobby is slowed to the tick rate rather than
+//! starved. How late each tick started is on `/metrics`.
 //!
 //! Every `SNAPSHOT_EVERY` ticks a snapshot is encoded once, as a delta
 //! against the previous one, and offered to every seat's outbox; a seat
@@ -58,6 +61,7 @@ use bongbong::Position;
 use bongbong::net::{MAX_SEATS, PROTOCOL_VERSION};
 use bongbong::simulation::{Game, Input, Outcome, PlayerCount};
 use bongbong::tuning::{self, Tuning, tuning};
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 use tracing::{info, warn};
@@ -564,15 +568,41 @@ pub async fn run(hub: Arc<Hub>, code: String, params: RoomParams, commands: mpsc
     if *drain.borrow_and_update() {
         room.begin_drain();
     }
+    // Whether the last turn of the loop ran a tick.
+    let mut ticked = false;
     loop {
-        let due = room.schedule(Instant::now());
+        let now = Instant::now();
+        let due = room.schedule(now);
         let deadline = room.next_deadline();
+        // A room behind its schedule - a late tick being caught up, or
+        // ticks that keep running late - has its next tick due every time
+        // round, and the select below serves a due tick first, so it
+        // would never reach the commands or the deadlines. Between two
+        // ticks run back to back, one command waiting and a deadline
+        // passed are served first: under overload the lobby and the
+        // tools go at the tick rate rather than not at all.
+        if ticked && due.is_some_and(|d| d <= now) {
+            ticked = false;
+            match room.commands.try_recv() {
+                Ok(cmd) => room.handle(cmd),
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => break,
+            }
+            if deadline.is_some_and(|d| d <= now) && room.on_deadline() {
+                break;
+            }
+            continue;
+        }
+        ticked = false;
         // A due tick is served before anything else waiting - a burst of
         // lobby or dev commands is handled after it, never ahead of it.
         tokio::select! {
             biased;
             Ok(()) = drain.changed(), if !room.life.draining() => room.begin_drain(),
-            _ = tokio::time::sleep_until(due.unwrap_or_else(far_future)), if due.is_some() => room.scheduled_tick(),
+            _ = tokio::time::sleep_until(due.unwrap_or_else(far_future)), if due.is_some() => {
+                room.scheduled_tick();
+                ticked = true;
+            }
             cmd = room.commands.recv() => match cmd {
                 Some(cmd) => room.handle(cmd),
                 None => break,
@@ -1122,7 +1152,9 @@ impl Room {
         #[cfg(feature = "dev-tools")]
         self.feed_dev_scripts(now);
         let mut input = Input::default();
-        let mut poses: Vec<(usize, Option<SeatPose>)> = Vec::new();
+        // Each seat's pose, if its packet carries one, with how many ticks
+        // of the client's driving the read covers (`pose_reach_ticks`).
+        let mut poses: Vec<(usize, Option<SeatPose>, u32)> = Vec::new();
         let mut views: Vec<(usize, (u32, u8))> = Vec::new();
         for (i, seat) in self.seats.iter().enumerate().take(MAX_SEATS) {
             if let Some(s) = seat
@@ -1131,7 +1163,7 @@ impl Room {
                 let before = s.mailbox.starvations();
                 let read = s.mailbox.read(now.into_std());
                 input.seats[i] = read.map(|m| m.intent()).unwrap_or_default();
-                poses.push((i, read.and_then(|m| m.pose())));
+                poses.push((i, read.and_then(|m| m.pose()), s.mailbox.pose_reach_ticks()));
                 views.push((i, read.map_or((0, 0), |m| (m.view_tick, m.view_frac))));
                 // A starved tick is a packet that did not arrive in time:
                 // a server-driven seat's client is not stamping far
@@ -1155,13 +1187,14 @@ impl Room {
         // A client that owns its hull is put where it says before the
         // tick runs, and the seat is released to the room's own driving
         // the moment its packets stop saying (docs/online-coop-prd.md
-        // §4.14). A refused pose leaves the hull where it was and tells
+        // §4.14), as far from the room's copy as the read's driving
+        // reaches. A refused pose leaves the hull where it was and tells
         // the client so, since the client is not going to be pulled
         // back by anything else.
-        for (i, pose) in poses {
+        for (i, pose, reach_ticks) in poses {
             let Some(Some(s)) = self.seats.get_mut(i) else { continue };
             s.applied_pose = None;
-            match authority::take_pose(game, i, pose) {
+            match authority::take_pose(game, i, pose, reach_ticks) {
                 PoseOutcome::Applied(at) => s.applied_pose = Some(at),
                 PoseOutcome::Refused(why, answer) => {
                     s.pose_refusals += 1;
@@ -1735,6 +1768,45 @@ mod tests {
         assert_eq!(ended.deadline(), Some(Instant::now() + DRAIN_ENDED_TTL), "an ended room keeps only long enough to read the result");
         advance(DRAIN_ENDED_TTL).await;
         assert_eq!(ended.expired(Instant::now()), Some(Expiry::Reap));
+    }
+
+    /// **A room behind its schedule still serves its commands**
+    /// (docs/online-coop-prd.md §4.16). Its next tick is due every time
+    /// round the loop and goes ahead of a command, so between two ticks
+    /// run back to back the loop serves one command waiting first. On
+    /// tokio's paused clock: the clock jumps three and a half ticks, the
+    /// room wakes owing three, and a call already waiting is answered
+    /// after the first of them rather than after all three.
+    #[cfg(feature = "dev-tools")]
+    #[tokio::test(start_paused = true)]
+    async fn a_room_behind_its_schedule_serves_a_command_between_its_ticks() {
+        use crate::devserver::{DevRequest, dispatch};
+        use crate::metrics::Metrics;
+        use serde_json::{Value, json};
+
+        let hub = Hub::new(8, Arc::new(Metrics::new()));
+        let opened = dispatch(&hub, "room_open", &json!({ "map": "default", "seed": 0xB0B5, "seats": 1 }))
+            .await
+            .expect("a room opens");
+        let tick = |v: &Value| v["tick"].as_u64().expect("a tick");
+        let before = tick(&opened);
+        let code = opened["code"].as_str().expect("a code").to_string();
+        let commands = hub.find(&code).expect("the room").commands;
+        // The room's first tick is due a tick from now. A task of our own
+        // makes the clock jump past three of them while this one sleeps a
+        // millisecond - a timer due before the room's, so the jump wakes
+        // this task first, and the call below is already waiting when the
+        // room comes round owing three ticks.
+        let jump = tokio::spawn(tokio::time::advance(TICK * 7 / 2));
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        let (reply, answer) = oneshot::channel();
+        let request = DevRequest { method: "room".into(), params: json!({ "code": code }), reply };
+        commands.send(Command::Dev(request)).await.expect("the room is there");
+        let answered = tick(&answer.await.expect("an answer").expect("the room answered"));
+        jump.await.expect("the clock jumped");
+        let after = tick(&dispatch(&hub, "room", &json!({ "code": code })).await.expect("the room answers"));
+        assert_eq!(after, before + 3, "the room caught its schedule up");
+        assert_eq!(answered, before + 1, "the waiting call was served after tick {answered}, not between the first two of {before}..={after}");
     }
 
     #[test]
