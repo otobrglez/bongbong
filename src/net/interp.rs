@@ -24,7 +24,9 @@
 //! readings, and the anchor - the lowest of the last `ANCHOR_SNAPSHOTS`,
 //! which reaches past a catch-up burst's late ticks to an on-time one -
 //! turns its estimate into tick time. A welcome starts the anchor again,
-//! never the link's clock; an anchor that jumps forward holds the picture
+//! and the link's clock only when its stamp is another server's or the
+//! link has been silent for longer than the clock's window (a lobby, the
+//! wait for a rematch); an anchor that jumps forward holds the picture
 //! for as long as the room stood still, which is what happened.
 //!
 //! **The clock is the lower envelope of arrivals** (`ServerClock`). Every
@@ -35,17 +37,24 @@
 //! the moment its last fast reading leaves the window. The one exception
 //! is the aftermath of an arrival gap: once a stall outlasts the window,
 //! the window holds nothing but the stall's late burst, which says
-//! nothing about the path, so for `CLOCK_SETTLE_MS` after the gap the
-//! estimate falls toward it at most `CLOCK_FALL_PER_MS`, and only for time
-//! during which snapshots were actually arriving. A reading far *above*
-//! the estimate is a new clock and is taken whole.
+//! nothing about the path, so for `CLOCK_SETTLE_MS` after the gap - after
+//! the last of them, for a backlog that comes back in chunks, and never
+//! more than `CLOCK_SETTLE_MAX_MS` after the first - the estimate falls
+//! toward it at most `CLOCK_FALL_PER_MS`, and only for time during which
+//! snapshots were actually arriving. A reading far *above* the estimate is
+//! a new clock and is taken whole. The room's stamps are a `u32` of
+//! milliseconds that wraps every 49.7 days; the interpolator unwraps each
+//! against the one before, so a round that spans the wrap reads one clock.
 //!
 //! **The picture runs on its own clock** (the playout clock). Render time
 //! is a place on the tick schedule, which no clock estimate moves. It
 //! advances at 1.0x real time and is steered toward its target - the
 //! clock less the delay - only through a bounded rate: `RATE_NEAR` (3 %)
 //! for small errors, up to `RATE_FAR` (10 %) when far off, nothing inside
-//! `RATE_DEADBAND_MS`. It never steps backwards: a target more than
+//! `RATE_DEADBAND_MS`. A picture running past the newest snapshot with its
+//! target behind it is a guess, so that error is closed bounded by
+//! `RATE_FAR` rather than the error-ramped bound, and without the
+//! deadband. It never steps backwards: a target more than
 //! `RENDER_SNAP_MS` ahead is taken whole, and a target behind it - a new
 //! clock, or more than `RENDER_SNAP_MS` behind - holds it where it stands
 //! until the target catches up. Only a round starting over (the tick
@@ -196,8 +205,17 @@ pub const CLOCK_WINDOW_MS: i64 = 2_000;
 /// estimate may only fall at `CLOCK_FALL_PER_MS` - and only while the
 /// window holds nothing but readings from after the gap, which is a stall
 /// that outlasted the window: its late burst says nothing about the path,
-/// and half a second of the stream that follows it does.
+/// and half a second of the stream that follows it does. A stall's
+/// backlog comes back in chunks a round trip apart, each behind a gap of
+/// its own, and each of those gaps extends the settling by as much again,
+/// up to `CLOCK_SETTLE_MAX_MS` from the first.
 pub const CLOCK_SETTLE_MS: i64 = 500;
+
+/// The longest one settling lasts from the gap that started it, however
+/// many later gaps extend it: the clock's window. By then the window holds
+/// nothing from before the stall, and a link that keeps arriving in bursts
+/// is simply its path.
+pub const CLOCK_SETTLE_MAX_MS: i64 = CLOCK_WINDOW_MS;
 
 /// How fast the clock's estimate may fall toward a slower envelope while
 /// it settles after a gap (`CLOCK_SETTLE_MS`), in milliseconds per
@@ -258,7 +276,9 @@ pub const RENDER_SNAP_MS: f64 = 250.0;
 /// shown late, a hidden tab's backlog is not shown at all.
 pub const EVENT_STALE_MS: f64 = RENDER_SNAP_MS;
 
-/// Inside this error the picture runs at exactly 1.0x.
+/// Inside this error the picture runs at exactly 1.0x - except past the
+/// newest snapshot, where a target behind render time is closed however
+/// small the error, since every frame there is a guess.
 pub const RATE_DEADBAND_MS: f64 = 1.0;
 
 /// The most the rate strays from 1.0 for a small error: 3 %, below what
@@ -357,6 +377,9 @@ pub fn tick_ms(tick: u32) -> f64 {
 /// while it settles after an arrival gap (`CLOCK_SETTLE_MS`): a stall
 /// longer than the window leaves nothing in it but the stall's late
 /// burst, and that may only pull the estimate down at `CLOCK_FALL_PER_MS`.
+///
+/// Readings are plain milliseconds on a line that does not wrap: the
+/// caller unwraps the room's `u32` stamps (`Interpolator` does).
 #[derive(Clone, Debug)]
 pub struct ServerClock {
     offset_ms: Option<f64>,
@@ -364,8 +387,14 @@ pub struct ServerClock {
     window: VecDeque<(i64, f64)>,
     /// The newest arrival, for the fall credit and the gap.
     last_local: Option<i64>,
-    /// The arrival that ended the last gap longer than `gap_ms`.
+    /// The arrival that ended the gap the settling in progress started
+    /// on: the window holds nothing from before the stall once its front
+    /// is at or past it.
     resumed_at: Option<i64>,
+    /// The settling lasts until this local time: `CLOCK_SETTLE_MS` past
+    /// the latest gap of a backlog, never more than `CLOCK_SETTLE_MAX_MS`
+    /// past `resumed_at`.
+    settle_until: Option<i64>,
     /// An arrival gap longer than this is a stall.
     gap_ms: f64,
     /// The smoothed lateness of each reading behind the estimate: how far
@@ -380,6 +409,7 @@ impl Default for ServerClock {
             window: VecDeque::new(),
             last_local: None,
             resumed_at: None,
+            settle_until: None,
             gap_ms: STALL_INTERVALS * SNAPSHOT_INTERVAL_MS,
             jitter_ms: 0.0,
         }
@@ -387,11 +417,6 @@ impl Default for ServerClock {
 }
 
 impl ServerClock {
-    /// A message stamped `server_ms` arrived at local time `local_ms`.
-    pub fn observe(&mut self, server_ms: u32, local_ms: i64) {
-        self.observe_ms(server_ms as f64, local_ms);
-    }
-
     /// A reading of the server's time `server_ms` at local arrival time
     /// `local_ms`. True when it was taken whole as a new clock.
     pub fn observe_ms(&mut self, server_ms: f64, local_ms: i64) -> bool {
@@ -409,10 +434,15 @@ impl ServerClock {
         let gap = self.last_local.map_or(0, |at| (local_ms - at).max(0));
         // A stall's backlog comes back in chunks a round trip apart, each
         // behind a gap of its own: the first gap starts the settling, and
-        // the later ones inside it do not start it again.
-        let settling_already = self.resumed_at.is_some_and(|at| local_ms - at < CLOCK_SETTLE_MS);
-        if gap as f64 > self.gap_ms && !settling_already {
-            self.resumed_at = Some(local_ms);
+        // each later one inside it extends it without moving its start.
+        if gap as f64 > self.gap_ms {
+            let settling_already = self.settle_until.is_some_and(|until| local_ms < until);
+            let start = match self.resumed_at {
+                Some(at) if settling_already => at,
+                _ => local_ms,
+            };
+            self.resumed_at = Some(start);
+            self.settle_until = Some((local_ms + CLOCK_SETTLE_MS).min(start + CLOCK_SETTLE_MAX_MS));
         }
         let credit = (gap as f64).min(CLOCK_FALL_CREDIT_MS);
         self.last_local = Some(self.last_local.map_or(local_ms, |at| at.max(local_ms)));
@@ -424,9 +454,8 @@ impl ServerClock {
         let envelope = self.window.iter().map(|&(_, r)| r).fold(f64::NEG_INFINITY, f64::max);
         // Settling: the window holds only what came after a gap, and the
         // gap is recent. Otherwise the window's best is the path.
-        let settling = self.resumed_at.is_some_and(|at| {
-            local_ms - at < CLOCK_SETTLE_MS && self.window.front().is_some_and(|&(first, _)| first >= at)
-        });
+        let settling = self.settle_until.is_some_and(|until| local_ms < until)
+            && self.resumed_at.is_some_and(|at| self.window.front().is_some_and(|&(first, _)| first >= at));
         let next = if envelope >= offset || !settling {
             envelope
         } else {
@@ -444,6 +473,7 @@ impl ServerClock {
         self.window.push_back((local_ms, reading));
         self.last_local = Some(local_ms);
         self.resumed_at = None;
+        self.settle_until = None;
         self.jitter_ms = 0.0;
     }
 
@@ -479,6 +509,11 @@ impl ServerClock {
     /// The estimate itself, for a status line.
     pub fn offset_ms(&self) -> Option<f64> {
         self.offset_ms
+    }
+
+    /// The local time of the newest reading; `None` before a first one.
+    pub fn last_local(&self) -> Option<i64> {
+        self.last_local
     }
 }
 
@@ -579,6 +614,12 @@ enum Key {
 pub struct Interpolator {
     buffer: VecDeque<Snapshot>,
     clock: ServerClock,
+    /// The last `server_ms` stamp as it came off the wire, and that stamp
+    /// unwrapped: the room's clock is a `u32` of milliseconds that wraps
+    /// every 49.7 days, so each stamp moves the unwrapped time on by its
+    /// signed distance from the one before (`unwrap_stamp`).
+    last_raw: Option<u32>,
+    extended: f64,
     /// The newest tick whose events have been handed to the replica.
     released: Option<u32>,
     /// Events of snapshots dropped from a full buffer before render time
@@ -644,6 +685,8 @@ impl Default for Interpolator {
         Interpolator {
             buffer: VecDeque::new(),
             clock: ServerClock::default(),
+            last_raw: None,
+            extended: 0.0,
             released: None,
             orphaned: Vec::new(),
             seat: None,
@@ -678,8 +721,10 @@ impl Interpolator {
     /// Start again from `baseline`, the snapshot inside a `Welcome`:
     /// `net::apply::welcome` has already written it into the replica,
     /// events included, so it is the near end and nothing of it is
-    /// released twice. The link's clock survives unless the stamps say it
-    /// is another server; the anchor starts again, and so does the
+    /// released twice. The link's clock survives unless the stamp says it
+    /// is another server or its newest reading is older than
+    /// `CLOCK_WINDOW_MS` - a lobby, the wait for a rematch - which says
+    /// nothing of the path now; the anchor starts again, and so does the
     /// picture, at its target.
     ///
     /// `local_ms` is when the welcome came off the socket, not the frame
@@ -690,20 +735,38 @@ impl Interpolator {
         self.previous = None;
         self.released = Some(baseline.tick);
         let tick_time = tick_ms(baseline.tick);
+        let server_ms = self.unwrap_stamp(baseline.server_ms);
         // A welcome is a round the room may not have started yet (a
         // waiting room's is tick 0 of a round that begins later) or one on
         // another schedule: the anchor starts again from it. The link is
-        // the same link - unless the stamp says another server.
+        // the same link - unless the stamp says another server, or the
+        // link has been silent for longer than the clock remembers.
         self.epochs.clear();
         self.anchor = None;
-        self.note_anchor(baseline.server_ms as f64 - tick_time);
-        let reading = baseline.server_ms as f64 - local_ms as f64;
-        if self.clock.offset_ms().is_some_and(|offset| (reading - offset).abs() > CLOCK_SNAP_MS) {
+        self.note_anchor(server_ms - tick_time);
+        let reading = server_ms - local_ms as f64;
+        let elsewhere = self.clock.offset_ms().is_some_and(|offset| (reading - offset).abs() > CLOCK_SNAP_MS);
+        let stale = self.clock.last_local().is_some_and(|at| local_ms - at > CLOCK_WINDOW_MS);
+        if elsewhere || stale {
             self.clock.reset();
         }
-        self.observe(baseline.server_ms as f64, local_ms);
+        self.observe(server_ms, local_ms);
         self.reset_picture();
         self.buffer.push_back(baseline.clone());
+    }
+
+    /// `raw`, a room's `server_ms` stamp, on a line that does not wrap:
+    /// the unwrapped time of the stamp before it moved on by the signed
+    /// distance between the two, so the hub clock's wrap at `u32::MAX` is
+    /// a step of a millisecond like any other. The first stamp is taken as
+    /// it is.
+    fn unwrap_stamp(&mut self, raw: u32) -> f64 {
+        self.extended = match self.last_raw {
+            Some(last) => self.extended + raw.wrapping_sub(last) as i32 as f64,
+            None => raw as f64,
+        };
+        self.last_raw = Some(raw);
+        self.extended
     }
 
     /// The seat this client plays, whose `Fired` a stale snapshot keeps.
@@ -747,7 +810,8 @@ impl Interpolator {
             None => {}
         }
         let tick_time = tick_ms(snapshot.tick);
-        let epoch = snapshot.server_ms as f64 - tick_time;
+        let server_ms = self.unwrap_stamp(snapshot.server_ms);
+        let epoch = server_ms - tick_time;
         self.note_anchor(epoch);
         let gap = self.last_arrival.map(|last| (at_ms - last) as f64);
         let stalled = gap.is_some_and(|gap| gap > STALL_INTERVALS * self.interval_ms);
@@ -757,8 +821,8 @@ impl Interpolator {
         let bunched = stalled || gap.is_some_and(|gap| gap < BURST_INTERVALS * self.interval_ms);
         self.last_arrival = Some(self.last_arrival.map_or(at_ms, |last| last.max(at_ms)));
         self.clock.set_gap_ms(STALL_INTERVALS * self.interval_ms);
-        self.observe(snapshot.server_ms as f64, at_ms);
-        let reading = snapshot.server_ms as f64 - at_ms as f64;
+        self.observe(server_ms, at_ms);
+        let reading = server_ms - at_ms as f64;
         let estimate = self.clock.offset_ms().unwrap_or(reading);
         self.readings.push_back(Reading { at_ms, reading, estimate, epoch, bunched });
         let horizon = at_ms - LATENESS_WINDOW_MS;
@@ -780,8 +844,8 @@ impl Interpolator {
     }
 
     /// One reading of the link's clock, at the room's send time
-    /// `server_ms`; a new clock starts the lateness over and holds the
-    /// picture.
+    /// `server_ms` (unwrapped); a new clock starts the lateness over and
+    /// holds the picture.
     fn observe(&mut self, server_ms: f64, at_ms: i64) {
         if self.clock.observe_ms(server_ms, at_ms) {
             self.new_clock();
@@ -980,9 +1044,10 @@ impl Interpolator {
     /// Never backwards: a target behind render time - after a new clock,
     /// or more than `RENDER_SNAP_MS` behind - holds it where it stands
     /// until the target catches up, and a target more than
-    /// `RENDER_SNAP_MS` ahead is jumped to. In between, the bounded rate -
-    /// its full `RATE_FAR` whenever the picture is past the newest snapshot
-    /// and the target behind it.
+    /// `RENDER_SNAP_MS` ahead is jumped to. In between, the bounded rate;
+    /// while the picture is past the newest snapshot and the target behind
+    /// it, the error is closed bounded by `RATE_FAR` rather than the
+    /// error-ramped bound, and without the deadband.
     fn advance(&mut self, target: f64, elapsed: f64) -> (f64, bool) {
         let Some(render) = self.render else {
             self.rate = 1.0;
@@ -999,8 +1064,9 @@ impl Interpolator {
             self.holding = false;
         } else if err <= RENDER_SNAP_MS {
             // Past the newest snapshot the picture is a guess, so a target
-            // behind it is closed at the full `RATE_FAR` whatever the error:
-            // every frame saved is a frame less guessed.
+            // behind it is closed in proportion to the error bounded by
+            // `RATE_FAR` rather than the error-ramped bound, and without the
+            // deadband: every frame saved is a frame less guessed.
             let guessing = self.buffer.back().is_some_and(|newest| render > tick_ms(newest.tick));
             self.rate = if guessing && err < 0.0 {
                 (1.0 + err / RATE_TIME_CONSTANT_MS).max(1.0 - RATE_FAR)
@@ -2308,5 +2374,195 @@ mod tests {
         }
         let after = clock.offset_ms().expect("an estimate");
         assert!(before - after <= CLOCK_FALL_CREDIT_MS * CLOCK_FALL_PER_MS * 3.0 + 1e-6, "dragged back {} ms", before - after);
+    }
+
+    /// The same with a longer round trip: a three-second stall whose
+    /// backlog comes back in eight chunks 250 ms apart, the last of them
+    /// well past `CLOCK_SETTLE_MS` after the first. Every chunk's gap
+    /// extends the settling, so no chunk drags the estimate back by the
+    /// stall; each earns only its fall credit.
+    #[test]
+    fn a_backlog_in_chunks_a_long_round_trip_apart_does_not_drag_the_clock_back() {
+        let mut clock = ServerClock::default();
+        for local in (0..3_000i64).step_by(16) {
+            clock.observe_ms(local as f64 + 1_000.0, local);
+        }
+        let before = clock.offset_ms().expect("an estimate");
+        let (resumed, chunks, per_chunk) = (6_000i64, 8i64, 23i64);
+        assert!((chunks - 1) * 250 > CLOCK_SETTLE_MS, "the backlog outlasts one settling");
+        let mut least = before;
+        for chunk in 0..chunks {
+            let at = resumed + chunk * 250;
+            for i in 0..per_chunk {
+                let sent = 3_000 + (chunk * per_chunk + i) * 16;
+                clock.observe_ms(sent as f64 + 1_000.0, at);
+                least = least.min(clock.offset_ms().expect("an estimate"));
+            }
+        }
+        let credit = chunks as f64 * CLOCK_FALL_CREDIT_MS * CLOCK_FALL_PER_MS;
+        assert!(before - least <= credit + 1e-6, "dragged back {} ms by a stall's backlog", before - least);
+    }
+
+    /// A link that goes on arriving in bursts after a stall - a path that
+    /// is simply bursty, and slower - is not settled for ever: the
+    /// settling ends `CLOCK_SETTLE_MAX_MS` after the gap that started it,
+    /// and the estimate follows the path.
+    #[test]
+    fn a_link_that_keeps_arriving_in_bursts_stops_settling() {
+        let mut clock = ServerClock::default();
+        for local in (0..3_000i64).step_by(16) {
+            clock.observe_ms(local as f64 + 1_000.0, local);
+        }
+        // Three seconds of silence, then chunks every 250 ms on a path
+        // 300 ms slower than before.
+        let resumed = 6_000i64;
+        let mut followed_at = None;
+        for chunk in 0..24i64 {
+            let at = resumed + chunk * 250;
+            for i in 0..15i64 {
+                clock.observe_ms((at - 14 + i) as f64 + 700.0, at);
+            }
+            let offset = clock.offset_ms().expect("an estimate");
+            if at < resumed + CLOCK_SETTLE_MAX_MS {
+                assert!(offset > 900.0, "still settling at {at}: {offset}");
+            } else if followed_at.is_none() && (offset - 700.0).abs() < 1e-6 {
+                followed_at = Some(at);
+            }
+        }
+        let followed_at = followed_at.expect("the estimate followed the bursty path");
+        assert!(followed_at <= resumed + CLOCK_SETTLE_MAX_MS + 250, "followed only at {followed_at}");
+    }
+
+    /// **A round across the hub clock's wrap reads one clock.** The
+    /// room's `server_ms` is a `u32` of milliseconds since the hub
+    /// started, which wraps every 49.7 days; a round that spans the wrap
+    /// is played exactly as the same round far from it: render time never
+    /// goes back, nothing is guessed or held, and the delay target is the
+    /// same.
+    #[test]
+    fn a_round_across_the_hub_clocks_wrap_is_played_as_any_other() {
+        let transit = 20i64;
+        let run = |base: u32| {
+            let arrivals: Vec<(Snapshot, i64)> = (0..=420u32)
+                .map(|t| {
+                    let mut s = snapshot(t);
+                    s.server_ms = base.wrapping_add(stamp(t));
+                    (s, exact(t) + transit)
+                })
+                .collect();
+            let mut interp = Interpolator::default();
+            interp.restart(&arrivals[0].0, arrivals[0].1);
+            let (renders, extrapolated, held) = play(&mut interp, &arrivals[1..], transit, exact(420) + transit);
+            (renders, extrapolated, held, interp.report())
+        };
+        // The clock wraps three seconds into the round.
+        let base = u32::MAX - 3_000;
+        assert!(base.wrapping_add(stamp(420)) < base, "the stamps cross the wrap");
+        let (renders, extrapolated, held, wrapped) = run(base);
+        assert!(renders.windows(2).all(|w| w[1] >= w[0] - 1e-3), "render time went back");
+        assert_eq!(extrapolated, 0, "frames guessed across the wrap");
+        assert_eq!(held, 0, "the picture held across the wrap");
+        assert_eq!(wrapped.extrapolated_frames, 0, "{wrapped:?}");
+        let (_, _, _, plain) = run(1_000);
+        assert!((wrapped.target_ms - plain.target_ms).abs() < 1e-3, "the delay target moved: {wrapped:?} vs {plain:?}");
+    }
+
+    /// **A welcome after a lobby measures the link afresh.** A round on
+    /// a 20 ms path, ten seconds of silence in the lobby, then the next
+    /// round's welcome and snapshots on a path 60 ms slower: a clock kept
+    /// from the round before would put the room 60 ms ahead of every
+    /// snapshot, and the round would open on a run of extrapolated frames
+    /// and a delay widened for lateness that was never there.
+    #[test]
+    fn a_welcome_after_a_long_lobby_measures_the_link_afresh() {
+        let (fast, slow) = (20i64, 80i64);
+        let round = |started: u32, transit: i64| -> Vec<(Snapshot, i64)> {
+            (0..=180u32)
+                .map(|t| {
+                    let mut s = snapshot(t);
+                    s.server_ms = started + stamp(t);
+                    let at = s.server_ms as i64 + transit;
+                    (s, at)
+                })
+                .collect()
+        };
+        let mut interp = Interpolator::default();
+        let first = round(1_000, fast);
+        interp.restart(&first[0].0, first[0].1);
+        play(&mut interp, &first[1..], first[0].1, first[180].1);
+        let settled = interp.clock().offset_ms().expect("a clock");
+        assert!((settled + fast as f64).abs() < 1e-6, "the first round's path: {settled}");
+
+        let second = round(1_000 + stamp(180) + 10_000, slow);
+        interp.restart(&second[0].0, second[0].1);
+        let (renders, extrapolated, held) = play(&mut interp, &second[1..], second[0].1, second[180].1);
+        assert!(renders.windows(2).all(|w| w[1] >= w[0] - 1e-3), "render time went back");
+        assert!(extrapolated <= 2, "the round opened on {extrapolated} extrapolated frames");
+        assert_eq!(held, 0, "the picture held at the round's start");
+        let report = interp.report();
+        assert!(report.target_ms < 40.0, "the delay was sized for lateness that was never there: {report:?}");
+        let offset = interp.clock().offset_ms().expect("a clock");
+        assert!((offset + slow as f64).abs() < 1e-6, "the second round's path: {offset}");
+    }
+
+    /// **Lateness includes how late the room sent the tick.** A room that
+    /// runs ticks 10, 11 and 12 of every twenty late sends them together
+    /// with tick 13 - 50, 34 and 17 ms behind the anchor - over a link
+    /// that is otherwise perfect: the clock sees every arrival on time, so
+    /// only the send lateness can widen the delay to cover them. It does,
+    /// and the picture waits for those ticks rather than guessing past
+    /// them, never holding and never going back.
+    #[test]
+    fn the_delay_covers_the_ticks_a_room_sent_late() {
+        let transit = 20i64;
+        let sent_at = |t: u32| if (10..13).contains(&(t % 20)) { stamp(t - t % 20 + 13) } else { stamp(t) };
+        let arrivals: Vec<(Snapshot, i64)> = (0..=420u32)
+            .map(|t| {
+                let mut s = snapshot(t);
+                s.server_ms = sent_at(t);
+                let at = s.server_ms as i64 + transit;
+                (s, at)
+            })
+            .collect();
+        assert_eq!(sent_at(10) - stamp(10), 50);
+        let mut interp = Interpolator::default();
+        interp.restart(&arrivals[0].0, arrivals[0].1);
+        let (renders, extrapolated, held) = play(&mut interp, &arrivals[1..], transit, exact(420) + transit);
+        assert!(renders.windows(2).all(|w| w[1] >= w[0] - 1e-3), "render time went back");
+        assert_eq!(held, 0, "a late tick is not a schedule that moved");
+        let report = interp.report();
+        assert!(report.lateness_p95_ms >= 25.0, "the send lateness is lateness: {report:?}");
+        assert!(report.target_ms >= 55.0, "and the delay covers it: {report:?}");
+        assert!(extrapolated < 30, "{extrapolated} frames guessed past ticks the delay should cover");
+    }
+
+    /// A welcome whose reading is within `CLOCK_SNAP_MS` of the link's
+    /// clock is the same link and keeps the clock; one further off is
+    /// another server's and starts it again.
+    #[test]
+    fn a_welcome_keeps_the_link_clock_within_the_snap_and_resets_it_past() {
+        let transit = 20i64;
+        let fed = || {
+            let mut interp = Interpolator::default();
+            for tick in 0..120u32 {
+                interp.accept(snapshot(tick), exact(tick) + transit);
+            }
+            interp
+        };
+        let mut welcome = snapshot(0);
+        welcome.server_ms = stamp(120);
+        let sent = stamp(120) as i64 + transit;
+
+        let mut near = fed();
+        let offset = near.clock().offset_ms().expect("a clock");
+        let late = CLOCK_SNAP_MS as i64 - 100;
+        near.restart(&welcome, sent + late);
+        assert_eq!(near.clock().offset_ms(), Some(offset), "{late} ms off is the same link");
+
+        let mut far = fed();
+        let late = CLOCK_SNAP_MS as i64 + 100;
+        far.restart(&welcome, sent + late);
+        let reading = welcome.server_ms as f64 - (sent + late) as f64;
+        assert_eq!(far.clock().offset_ms(), Some(reading), "{late} ms off is another clock, taken whole");
     }
 }

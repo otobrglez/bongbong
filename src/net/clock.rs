@@ -47,6 +47,13 @@ struct Sample {
 #[derive(Clone, Debug, Default)]
 pub struct RttClock {
     samples: VecDeque<Sample>,
+    /// The last `Pong`'s server stamp as it came off the wire, and that
+    /// stamp unwrapped: the server's clock is a `u32` of milliseconds that
+    /// wraps every 49.7 days, so each stamp moves the unwrapped time on by
+    /// its signed distance from the one before, and every offset in the
+    /// window is on one line.
+    server_raw: Option<u32>,
+    server_ms: f64,
     last_sent: Option<i64>,
     answered: u64,
     sent: u64,
@@ -87,6 +94,7 @@ impl RttClock {
     /// answered. A stamp from the future or older than the timeout is
     /// not an answer to anything this clock sent and is ignored.
     pub fn observe(&mut self, client_ms: u32, server_ms: u32, now_ms: i64) {
+        let server_ms = self.unwrap_server(server_ms);
         // The stamp is the low 32 bits of the local clock, which wraps
         // after 49 days; unwrap it against now.
         let sent = now_ms - (now_ms as u32).wrapping_sub(client_ms) as i64;
@@ -94,12 +102,25 @@ impl RttClock {
         if !(0.0..=PING_TIMEOUT_MS as f64).contains(&rtt) {
             return;
         }
-        let offset = server_ms as f64 + rtt / 2.0 - now_ms as f64;
+        let offset = server_ms + rtt / 2.0 - now_ms as f64;
         self.samples.push_back(Sample { rtt, offset });
         while self.samples.len() > PING_WINDOW {
             self.samples.pop_front();
         }
         self.answered += 1;
+    }
+
+    /// A `Pong`'s server stamp on the unwrapped line: the stamp before it
+    /// moved on by the signed distance between the two. The first is
+    /// taken as it is. Every answer is a reading of the one server clock,
+    /// so this runs whether or not the probe it answers is kept.
+    fn unwrap_server(&mut self, raw: u32) -> f64 {
+        self.server_ms = match self.server_raw {
+            Some(last) => self.server_ms + raw.wrapping_sub(last) as i32 as f64,
+            None => raw as f64,
+        };
+        self.server_raw = Some(raw);
+        self.server_ms
     }
 
     /// Server minus local by the window's fastest probe; `None` until one
@@ -175,6 +196,27 @@ mod tests {
         assert_eq!(report.rtt_ms, 80.0, "median of 80, 180, 80");
         assert_eq!(report.rtt_p95_ms, 180.0);
         assert_eq!(report.offset_ms, 1_000.0, "the slow probe's midpoint would have said 950");
+    }
+
+    /// The server's clock wraps at `u32::MAX` between two probes: the
+    /// answers after the wrap continue the line of the ones before it, so
+    /// the fastest probe's offset - here one after the wrap - is the same
+    /// offset the probes before it measured, not four billion off.
+    #[test]
+    fn the_servers_stamp_is_unwrapped_across_its_u32_wrap() {
+        let mut clock = RttClock::default();
+        // The server reads `u32::MAX - 100` more than local, on every probe.
+        let ahead = u32::MAX as i64 - 100;
+        let server_at = |local: i64| ((local + ahead) % (u32::MAX as i64 + 1)) as u32;
+        // 40 ms round trips before the wrap, then one of 30 ms after it.
+        clock.observe(0, server_at(20), 40);
+        clock.observe(50, server_at(70), 90);
+        assert!(server_at(515) < 1_000, "the server's clock wrapped between the probes");
+        clock.observe(500, server_at(515), 530);
+        let report = clock.report().expect("answers");
+        assert_eq!(report.rtt_min_ms, 30.0);
+        assert_eq!(report.offset_ms, ahead as f64, "the probe after the wrap is on the line of the ones before");
+        assert_eq!(clock.server_now(1_000), Some((1_000 + ahead) as f64));
     }
 
     #[test]
