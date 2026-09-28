@@ -1,7 +1,8 @@
-//! What `/metrics` reports (docs/online-coop-prd.md §4.9): rooms by
-//! phase, seats, tick time percentiles from a ring of recent ticks,
-//! snapshot bytes per second, reconnects. Counters are atomics the room
-//! and connection tasks bump; the two windows sit behind short mutexes.
+//! What `/metrics` reports (docs/online-coop-prd.md §4.9, §4.16): rooms
+//! by phase, seats, tick time and tick lateness percentiles from rings of
+//! recent ticks, snapshot bytes per second, reconnects. Counters are
+//! atomics the room and connection tasks bump; the three windows sit
+//! behind short mutexes.
 
 use std::fmt::Write;
 use std::sync::Mutex;
@@ -12,10 +13,16 @@ use std::time::{Duration, Instant};
 /// few seconds of a busy server.
 pub const TICK_RING: usize = 1024;
 
+/// A tick that starts later than this after its schedule said is counted
+/// in `ticks_late_total`: a third of a tick, past the scheduler's own
+/// wake-up noise and far enough behind to be felt downstream as a
+/// snapshot arriving out of step.
+pub const LATE_TICK: Duration = Duration::from_millis(5);
+
 /// The window `snapshot_bytes_per_second` averages over.
 const BYTES_WINDOW: Duration = Duration::from_secs(1);
 
-/// The last `TICK_RING` tick durations in microseconds, oldest overwritten.
+/// The last `TICK_RING` tick readings in microseconds, oldest overwritten.
 struct TickRing {
     micros: Vec<u32>,
     next: usize,
@@ -77,17 +84,27 @@ pub struct RoomCounts {
 
 pub struct Metrics {
     ticks: Mutex<TickRing>,
+    /// How late each tick started against the room's schedule
+    /// (`net::authority::TickClock`).
+    lateness: Mutex<TickRing>,
     bytes: Mutex<BytesWindow>,
     pub snapshot_bytes_total: AtomicU64,
     pub snapshots_skipped_total: AtomicU64,
     pub tick_overruns_total: AtomicU64,
+    /// Ticks that started more than `LATE_TICK` after they were due.
+    pub ticks_late_total: AtomicU64,
+    /// Ticks a room gave up on after a stall longer than its catch-up
+    /// (`net::authority::CATCH_UP_TICKS`): the round ran that much less
+    /// than wall time.
+    pub ticks_dropped_total: AtomicU64,
     pub ticks_total: AtomicU64,
     pub reconnects_total: AtomicU64,
-    /// Ticks that found a seat's jitter buffer empty and repeated its
-    /// last intent (`mailbox::Mailbox`). A steady climb means clients are
-    /// not stamping far enough ahead for the link's jitter, which is what
-    /// §4.12's adaptive lead is for; a flat line means the buffer is
-    /// doing its job.
+    /// Ticks that found a seat's mailbox empty and repeated its last
+    /// intent (`mailbox::Mailbox`). For a server-driven seat a steady
+    /// climb means clients are not stamping far enough ahead for the
+    /// link's jitter, which is what §4.12's adaptive lead is for; for an
+    /// owned seat each is a packet late enough that the room
+    /// dead-reckoned its hull.
     pub intent_starvations_total: AtomicU64,
     pub rooms_created_total: AtomicU64,
     pub connections_total: AtomicU64,
@@ -97,10 +114,13 @@ impl Default for Metrics {
     fn default() -> Self {
         Metrics {
             ticks: Mutex::new(TickRing { micros: Vec::with_capacity(TICK_RING), next: 0 }),
+            lateness: Mutex::new(TickRing { micros: Vec::with_capacity(TICK_RING), next: 0 }),
             bytes: Mutex::new(BytesWindow { started: Instant::now(), bytes: 0, rate: 0.0 }),
             snapshot_bytes_total: AtomicU64::new(0),
             snapshots_skipped_total: AtomicU64::new(0),
             tick_overruns_total: AtomicU64::new(0),
+            ticks_late_total: AtomicU64::new(0),
+            ticks_dropped_total: AtomicU64::new(0),
             ticks_total: AtomicU64::new(0),
             reconnects_total: AtomicU64::new(0),
             intent_starvations_total: AtomicU64::new(0),
@@ -122,6 +142,19 @@ impl Metrics {
         self.ticks.lock().expect("tick ring poisoned").record(micros);
     }
 
+    /// A scheduled tick started `late` after it was due, and the schedule
+    /// gave up on `dropped` ticks to get there.
+    pub fn record_tick_start(&self, late: Duration, dropped: u32) {
+        if late > LATE_TICK {
+            self.ticks_late_total.fetch_add(1, Ordering::Relaxed);
+        }
+        if dropped > 0 {
+            self.ticks_dropped_total.fetch_add(dropped as u64, Ordering::Relaxed);
+        }
+        let micros = late.as_micros().min(u32::MAX as u128) as u32;
+        self.lateness.lock().expect("lateness ring poisoned").record(micros);
+    }
+
     /// `bytes` of snapshot went to one seat.
     pub fn record_snapshot_bytes(&self, bytes: usize) {
         self.snapshot_bytes_total.fetch_add(bytes as u64, Ordering::Relaxed);
@@ -133,17 +166,26 @@ impl Metrics {
         self.ticks.lock().expect("tick ring poisoned").percentiles()
     }
 
-    /// Prometheus text exposition.
+    /// (p50, p99) of how late the recorded ticks started, microseconds.
+    pub fn lateness_percentiles(&self) -> (u32, u32) {
+        self.lateness.lock().expect("lateness ring poisoned").percentiles()
+    }
+
     /// The counters as JSON, for the dev tools' `server_status` - the
     /// same numbers `render` publishes, without the Prometheus text.
     #[cfg(feature = "dev-tools")]
     pub fn summary(&self) -> serde_json::Value {
         let (p50, p99) = self.tick_percentiles();
+        let (late50, late99) = self.lateness_percentiles();
         serde_json::json!({
             "tick_p50_us": p50,
             "tick_p99_us": p99,
+            "tick_lateness_p50_us": late50,
+            "tick_lateness_p99_us": late99,
             "ticks_total": self.ticks_total.load(Ordering::Relaxed),
             "tick_overruns_total": self.tick_overruns_total.load(Ordering::Relaxed),
+            "ticks_late_total": self.ticks_late_total.load(Ordering::Relaxed),
+            "ticks_dropped_total": self.ticks_dropped_total.load(Ordering::Relaxed),
             "snapshot_bytes_total": self.snapshot_bytes_total.load(Ordering::Relaxed),
             "snapshots_skipped_total": self.snapshots_skipped_total.load(Ordering::Relaxed),
             "reconnects_total": self.reconnects_total.load(Ordering::Relaxed),
@@ -153,8 +195,10 @@ impl Metrics {
         })
     }
 
+    /// Prometheus text exposition.
     pub fn render(&self, rooms: RoomCounts, draining: bool) -> String {
         let (p50, p99) = self.tick_percentiles();
+        let (late50, late99) = self.lateness_percentiles();
         let rate = self.bytes.lock().expect("bytes window poisoned").rate;
         let mut out = String::new();
         let mut gauge = |name: &str, help: &str, rows: &[(&str, f64)]| {
@@ -183,6 +227,11 @@ impl Metrics {
             "Game::update wall time over the last ticks.",
             &[("{quantile=\"0.5\"}", p50 as f64), ("{quantile=\"0.99\"}", p99 as f64)],
         );
+        gauge(
+            "bongbong_tick_lateness_microseconds",
+            "How late ticks started against the room's schedule, over the last ticks.",
+            &[("{quantile=\"0.5\"}", late50 as f64), ("{quantile=\"0.99\"}", late99 as f64)],
+        );
         gauge("bongbong_snapshot_bytes_per_second", "Snapshot bytes sent over the last second.", &[("", rate)]);
         gauge(
             "bongbong_draining",
@@ -201,9 +250,15 @@ impl Metrics {
                 1.0,
             )],
         );
-        let counters: [(&str, &str, &AtomicU64); 8] = [
+        let counters: [(&str, &str, &AtomicU64); 10] = [
             ("bongbong_ticks_total", "Game::update calls.", &self.ticks_total),
             ("bongbong_tick_overruns_total", "Ticks whose update took longer than the tick.", &self.tick_overruns_total),
+            ("bongbong_ticks_late_total", "Ticks that started more than 5 ms after they were due.", &self.ticks_late_total),
+            (
+                "bongbong_ticks_dropped_total",
+                "Ticks a room skipped after a stall longer than its catch-up.",
+                &self.ticks_dropped_total,
+            ),
             ("bongbong_snapshot_bytes_total", "Snapshot bytes handed to seat writers.", &self.snapshot_bytes_total),
             ("bongbong_snapshots_skipped_total", "Snapshots a slow seat did not get.", &self.snapshots_skipped_total),
             ("bongbong_reconnects_total", "Seats reclaimed with their device token.", &self.reconnects_total),
@@ -239,10 +294,30 @@ mod tests {
         assert!(p99 <= (TICK_RING + 99) as u32);
     }
 
+    /// Lateness has its own ring, and a tick past `LATE_TICK` or a
+    /// schedule that gave up on ticks is counted.
+    #[test]
+    fn tick_lateness_is_a_ring_and_the_late_ones_are_counted() {
+        let m = Metrics::new();
+        assert_eq!(m.lateness_percentiles(), (0, 0));
+        for micros in [100, 200, 300, 400] {
+            m.record_tick_start(Duration::from_micros(micros), 0);
+        }
+        m.record_tick_start(LATE_TICK + Duration::from_micros(1), 0);
+        m.record_tick_start(Duration::from_millis(90), 5);
+        let (p50, p99) = m.lateness_percentiles();
+        assert_eq!(p50, 400, "the middle of six");
+        assert_eq!(p99, 90_000);
+        assert_eq!(m.ticks_late_total.load(Ordering::Relaxed), 2, "two started past {LATE_TICK:?}");
+        assert_eq!(m.ticks_dropped_total.load(Ordering::Relaxed), 5);
+        assert_eq!(m.tick_percentiles(), (0, 0), "lateness is not the tick's own time");
+    }
+
     #[test]
     fn render_is_prometheus_text_with_every_series() {
         let m = Metrics::new();
         m.record_tick(Duration::from_micros(1500));
+        m.record_tick_start(Duration::from_micros(700), 0);
         m.record_snapshot_bytes(200);
         m.reconnects_total.fetch_add(2, Ordering::Relaxed);
         let text = m.render(RoomCounts { playing: 1, seats_connected: 2, ..Default::default() }, true);
@@ -251,6 +326,9 @@ mod tests {
             "bongbong_seats{state=\"connected\"} 2",
             "bongbong_tick_microseconds{quantile=\"0.5\"} 1500",
             "bongbong_tick_microseconds{quantile=\"0.99\"} 1500",
+            "bongbong_tick_lateness_microseconds{quantile=\"0.5\"} 700",
+            "bongbong_ticks_late_total 0",
+            "bongbong_ticks_dropped_total 0",
             "bongbong_snapshot_bytes_per_second ",
             "bongbong_snapshot_bytes_total 200",
             "bongbong_reconnects_total 2",

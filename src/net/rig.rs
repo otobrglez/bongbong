@@ -37,7 +37,7 @@ use crate::ai::Intent;
 use crate::level::LevelOverrides;
 use crate::map::MapFile;
 use crate::net::apply;
-use crate::net::authority::{self, PoseOutcome};
+use crate::net::authority::{self, PoseOutcome, TickClock};
 use crate::net::client::{ClientEvent, Identity, RoomClient, RoomSetup};
 use crate::net::codec::{self, Msg};
 use crate::net::encode;
@@ -313,24 +313,23 @@ impl Lockstep {
     }
 }
 
-/// The authority's loop: answer what the seat said, take a tick, sleep
-/// until the next one is due. A tick that overran does not try to catch
-/// up - the round loses that time, exactly as `app::StepClock` drops it.
+/// The authority's loop: sleep until the next tick is due, answer what
+/// the seat said, take the tick. The schedule is the room server's
+/// (`authority::TickClock`): anchored to wall time, a short stall caught
+/// up and a long one dropped.
 fn run(mut room: Room, stop: Arc<AtomicBool>) {
-    let step = Duration::from_secs_f32(PHYSICS_FIXED_DT);
-    let mut due = Instant::now();
+    let mut clock = TickClock::new(Duration::from_secs_f32(PHYSICS_FIXED_DT));
+    clock.start(Instant::now());
     while !stop.load(Ordering::Relaxed) {
+        if let Some(left) = clock.due().and_then(|due| due.checked_duration_since(Instant::now())) {
+            thread::sleep(left);
+        }
+        clock.fire(Instant::now());
         room.now = Instant::now();
         if !room.pump() {
             break;
         }
         room.tick();
-        due += step;
-        let now = Instant::now();
-        match due.checked_duration_since(now) {
-            Some(left) => thread::sleep(left),
-            None => due = now,
-        }
     }
     room.link.close();
 }
@@ -350,9 +349,10 @@ struct Room {
     /// reads this, so a stepped room needs no clock at all.
     now: Instant,
     nick: String,
-    /// The seat's intents, one applied per tick in order - the room
-    /// server's own `net::mailbox`, so a starvation here means what it
-    /// means there and the client's lead is steered the same way.
+    /// The seat's intents - the room server's own `net::mailbox`, one a
+    /// tick in order for a server-driven seat and newest-wins for an
+    /// owned one, so a starvation here means what it means there and the
+    /// client's lead is steered the same way.
     mailbox: Mailbox,
     /// The events of the ticks since the last snapshot, ahead of the
     /// next one's own.
@@ -486,6 +486,11 @@ impl Room {
             game.set_seat_view(0, m.view_tick, m.view_frac);
         }
         let acked = self.acked();
+        // The seat's `Fired` names the intent its press came on, which an
+        // owned read that merged several can put before the ack - the
+        // room server's stamping (`authority::stamp_presses`).
+        let mut presses = [0; MAX_SEATS];
+        presses[0] = self.mailbox.press_tick();
         let mut mailbox = [0u8; MAX_SEATS];
         mailbox[0] = self.mailbox.wire_state();
         let server_ms = self.server_ms();
@@ -511,10 +516,11 @@ impl Room {
         if frame % SNAPSHOT_EVERY != 0 {
             // A tick that sends nothing banks its events for the next
             // snapshot, whose own events are its frame's.
-            self.pending_events.extend(encode::wire_events_acked(game.events(), &acked));
+            self.pending_events.extend(encode::wire_events_acked(game.events(), &presses));
             return;
         }
         let mut snapshot = encode::snapshot(game, acked);
+        authority::stamp_presses(&mut snapshot.events, &presses);
         snapshot.server_ms = server_ms;
         snapshot.mailbox = mailbox;
         if !self.pending_events.is_empty() {
@@ -579,9 +585,19 @@ mod tests {
         }
     }
 
-    /// The hulls of an authoritative snapshot, in the replica's spelling.
+    /// The hulls of an authoritative snapshot, in the replica's spelling:
+    /// the room's word on each. On a tick that found the seat's mailbox
+    /// empty the seat's own hull is left out - an owned pose was
+    /// dead-reckoned there (`net::mailbox`), the room's guess at a packet
+    /// still on its way rather than anything the client said.
     fn hulls(snapshot: &Snapshot) -> Vec<Hull> {
-        snapshot.tanks.iter().map(|t| (t.id as usize, t.x as i32, t.y as i32)).collect()
+        let reckoned = crate::net::mailbox::unpack(snapshot.mailbox[0]).1;
+        snapshot
+            .tanks
+            .iter()
+            .filter(|t| !(reckoned && t.id == 0))
+            .map(|t| (t.id as usize, t.x as i32, t.y as i32))
+            .collect()
     }
 
     /// One rig, one window, `frames` frames of it: what the window drew
