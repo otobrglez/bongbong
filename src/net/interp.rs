@@ -11,11 +11,21 @@
 //! server's time less a delay, which keeps two snapshots bracketing it,
 //! and every frame lands somewhere between them.
 //!
-//! **Time is counted in ticks.** A snapshot's time is `tick * TICK_MS`,
-//! exact, because the room ticks at 60 Hz on a schedule anchored to its
-//! wall clock; `server_ms` is a send-time stamp that wobbles with the
-//! room's scheduling and is kept only to notice a *new* clock - a rejoin,
-//! a room that paused and resumed - as a jump in `server_ms - tick time`.
+//! **The picture is placed in ticks, the link is measured on the wall.**
+//! A snapshot's place in the round is `tick * TICK_MS`, exact, and is
+//! what render time and every blend run on. Its `server_ms` is the room's
+//! wall clock when it was sent, which is what the link is measured with:
+//! the two differ by the round's **anchor** - `server_ms - tick time` -
+//! which only moves when the room's schedule does. A room owing more
+//! ticks than it catches up restarts its schedule, a paused room resumes,
+//! a round starts or a welcome arrives from a waiting room at tick 0, and
+//! in every case the tick numbers shift against the wall while the link
+//! has not changed at all. So the clock (`ServerClock`) takes `server_ms`
+//! readings, and the anchor - the lowest of the last `ANCHOR_SNAPSHOTS`,
+//! which reaches past a catch-up burst's late ticks to an on-time one -
+//! turns its estimate into tick time. A welcome starts the anchor again,
+//! never the link's clock; an anchor that jumps forward holds the picture
+//! for as long as the room stood still, which is what happened.
 //!
 //! **The clock is the lower envelope of arrivals** (`ServerClock`). Every
 //! arrival reads the server's time less that packet's transit; the
@@ -47,7 +57,9 @@
 //! lateness is how far it came in behind the envelope as it stood then,
 //! or as it stands now if it has since fallen: when the envelope falls to
 //! a slower path, the lateness the delay was paying for falls with it and
-//! the render target stays where it was.
+//! the render target stays where it was. To that comes how far behind the
+//! anchor the room itself sent the snapshot - a tick run late and caught
+//! up - since the picture has to wait for that too.
 //! The target is one snapshot interval (the bracket's own width) plus one
 //! 60 Hz frame plus the 95th percentile of lateness over
 //! `LATENESS_WINDOW_MS` - floored at
@@ -151,6 +163,28 @@ pub const FRAME_MS: f64 = 1000.0 / 60.0;
 /// clock: a rejoin, a room restarted or resumed under the same socket. It
 /// is taken whole.
 pub const CLOCK_SNAP_MS: f64 = 500.0;
+
+/// Snapshots the anchor (`server_ms - tick time`) is the lowest of: one
+/// more than a catch-up burst's run of late ticks
+/// (`net::authority::CATCH_UP_TICKS`) and the on-time one after it, so a
+/// burst never moves the anchor and a restarted schedule moves it within
+/// a tenth of a second.
+pub const ANCHOR_SNAPSHOTS: usize = crate::net::authority::CATCH_UP_TICKS as usize + 2;
+
+/// An anchor that moves forward further than this is a room that fell
+/// behind its own schedule and restarted it: the picture holds for as
+/// long rather than playing on through time the room never ran.
+pub const ANCHOR_HOLD_MS: f64 = 2.0 * TICK_MS;
+
+/// Snapshots in a row that agree on a later anchor, within
+/// `ANCHOR_AGREE_MS`, before it is taken without waiting out
+/// `ANCHOR_SNAPSHOTS`: a restarted schedule stamps every tick after it
+/// the same amount late, where a catch-up burst's late ticks each come a
+/// whole tick less late than the one before - two tell them apart.
+pub const ANCHOR_RUN: usize = 2;
+
+/// How closely `ANCHOR_RUN` snapshots have to agree.
+pub const ANCHOR_AGREE_MS: f64 = 3.0;
 
 /// How long the clock remembers an arrival: the envelope is the fastest
 /// arrival of the last two seconds, long enough that one lucky packet
@@ -373,7 +407,11 @@ impl ServerClock {
             return true;
         }
         let gap = self.last_local.map_or(0, |at| (local_ms - at).max(0));
-        if gap as f64 > self.gap_ms {
+        // A stall's backlog comes back in chunks a round trip apart, each
+        // behind a gap of its own: the first gap starts the settling, and
+        // the later ones inside it do not start it again.
+        let settling_already = self.resumed_at.is_some_and(|at| local_ms - at < CLOCK_SETTLE_MS);
+        if gap as f64 > self.gap_ms && !settling_already {
             self.resumed_at = Some(local_ms);
         }
         let credit = (gap as f64).min(CLOCK_FALL_CREDIT_MS);
@@ -515,10 +553,13 @@ pub struct InterpReport {
 struct Reading {
     /// Local arrival time.
     at_ms: i64,
-    /// Tick time less arrival time.
+    /// The room's send time (`server_ms`) less arrival time.
     reading: f64,
     /// The clock's estimate just after this reading was taken.
     estimate: f64,
+    /// The snapshot's own `server_ms - tick time`: past the anchor, the
+    /// room sent it late.
+    epoch: f64,
     /// It ended an arrival gap of `STALL_INTERVALS` or came less than
     /// `BURST_INTERVALS` behind the arrival before it: the shape of a
     /// head-of-line stall, so its lateness may be one.
@@ -552,9 +593,11 @@ pub struct Interpolator {
     /// The last near end render time left behind: the second point of
     /// every velocity estimate past the newest snapshot.
     previous: Option<Snapshot>,
-    /// `server_ms - tick time` of the newest snapshot: a jump in it is a
-    /// new clock.
-    epoch_ms: Option<f64>,
+    /// `server_ms - tick time` of the last `ANCHOR_SNAPSHOTS` snapshots,
+    /// and the lowest of them: the round's anchor, which turns the
+    /// clock's wall time into tick time.
+    epochs: VecDeque<f64>,
+    anchor: Option<f64>,
     /// Recent tick gaps between consecutive snapshots.
     gaps: VecDeque<u32>,
     /// The room's measured cadence: the median gap, in milliseconds.
@@ -606,7 +649,8 @@ impl Default for Interpolator {
             seat: None,
             stale_events: 0,
             previous: None,
-            epoch_ms: None,
+            epochs: VecDeque::new(),
+            anchor: None,
             gaps: VecDeque::new(),
             interval_ms: SNAPSHOT_INTERVAL_MS,
             readings: VecDeque::new(),
@@ -634,8 +678,9 @@ impl Interpolator {
     /// Start again from `baseline`, the snapshot inside a `Welcome`:
     /// `net::apply::welcome` has already written it into the replica,
     /// events included, so it is the near end and nothing of it is
-    /// released twice. The clock estimate survives unless the stamps say
-    /// it is another clock; the picture starts again at its target.
+    /// released twice. The link's clock survives unless the stamps say it
+    /// is another server; the anchor starts again, and so does the
+    /// picture, at its target.
     ///
     /// `local_ms` is when the welcome came off the socket, not the frame
     /// that read it: the clock is the link's.
@@ -645,8 +690,18 @@ impl Interpolator {
         self.previous = None;
         self.released = Some(baseline.tick);
         let tick_time = tick_ms(baseline.tick);
-        self.note_epoch(baseline.server_ms as f64 - tick_time);
-        self.observe(tick_time, local_ms);
+        // A welcome is a round the room may not have started yet (a
+        // waiting room's is tick 0 of a round that begins later) or one on
+        // another schedule: the anchor starts again from it. The link is
+        // the same link - unless the stamp says another server.
+        self.epochs.clear();
+        self.anchor = None;
+        self.note_anchor(baseline.server_ms as f64 - tick_time);
+        let reading = baseline.server_ms as f64 - local_ms as f64;
+        if self.clock.offset_ms().is_some_and(|offset| (reading - offset).abs() > CLOCK_SNAP_MS) {
+            self.clock.reset();
+        }
+        self.observe(baseline.server_ms as f64, local_ms);
         self.reset_picture();
         self.buffer.push_back(baseline.clone());
     }
@@ -662,8 +717,8 @@ impl Interpolator {
     /// The client hands snapshots over in tick order, so a repeat of the
     /// newest is dropped and a tick *behind* it is the round having
     /// started over (the server's counter rewinds on `Game::init`):
-    /// nothing buffered describes that world any more, so the buffer and
-    /// the clocks start again from it.
+    /// nothing buffered describes that world any more, so the buffer, the
+    /// anchor and the picture start again from it.
     pub fn accept(&mut self, snapshot: Snapshot, at_ms: i64) {
         match self.buffer.back() {
             Some(newest) if snapshot.tick == newest.tick => return,
@@ -672,7 +727,8 @@ impl Interpolator {
                 self.orphaned.clear();
                 self.previous = None;
                 self.released = None;
-                self.clock.reset();
+                self.epochs.clear();
+                self.anchor = None;
                 self.readings.clear();
                 self.reset_picture();
             }
@@ -691,7 +747,8 @@ impl Interpolator {
             None => {}
         }
         let tick_time = tick_ms(snapshot.tick);
-        self.note_epoch(snapshot.server_ms as f64 - tick_time);
+        let epoch = snapshot.server_ms as f64 - tick_time;
+        self.note_anchor(epoch);
         let gap = self.last_arrival.map(|last| (at_ms - last) as f64);
         let stalled = gap.is_some_and(|gap| gap > STALL_INTERVALS * self.interval_ms);
         if stalled {
@@ -700,17 +757,17 @@ impl Interpolator {
         let bunched = stalled || gap.is_some_and(|gap| gap < BURST_INTERVALS * self.interval_ms);
         self.last_arrival = Some(self.last_arrival.map_or(at_ms, |last| last.max(at_ms)));
         self.clock.set_gap_ms(STALL_INTERVALS * self.interval_ms);
-        self.observe(tick_time, at_ms);
-        let reading = tick_time - at_ms as f64;
+        self.observe(snapshot.server_ms as f64, at_ms);
+        let reading = snapshot.server_ms as f64 - at_ms as f64;
         let estimate = self.clock.offset_ms().unwrap_or(reading);
-        self.readings.push_back(Reading { at_ms, reading, estimate, bunched });
+        self.readings.push_back(Reading { at_ms, reading, estimate, epoch, bunched });
         let horizon = at_ms - LATENESS_WINDOW_MS;
         while self.readings.front().is_some_and(|r| r.at_ms < horizon) {
             self.readings.pop_front();
         }
         self.refresh_lateness();
         self.buffer.push_back(snapshot);
-        let cutoff = self.stale_before(self.clock.now(at_ms));
+        let cutoff = self.stale_before(self.server_now(at_ms));
         let mut owed = std::mem::take(&mut self.orphaned);
         while self.buffer.len() > BUFFERED_SNAPSHOTS {
             let dropped = self.buffer.pop_front().expect("the buffer is over its cap");
@@ -722,23 +779,57 @@ impl Interpolator {
         self.orphaned = owed;
     }
 
-    /// One reading of the clock; a new clock starts the lateness over and
-    /// holds the picture.
-    fn observe(&mut self, tick_time: f64, at_ms: i64) {
-        if self.clock.observe_ms(tick_time, at_ms) {
+    /// One reading of the link's clock, at the room's send time
+    /// `server_ms`; a new clock starts the lateness over and holds the
+    /// picture.
+    fn observe(&mut self, server_ms: f64, at_ms: i64) {
+        if self.clock.observe_ms(server_ms, at_ms) {
             self.new_clock();
         }
     }
 
-    /// Compare a snapshot's `server_ms - tick time` with the last one's: a
-    /// jump past `CLOCK_SNAP_MS` is a room that paused or restarted, and
-    /// the tick clock is taken afresh.
-    fn note_epoch(&mut self, epoch: f64) {
-        if self.epoch_ms.is_some_and(|last| (epoch - last).abs() > CLOCK_SNAP_MS) {
-            self.clock.reset();
-            self.new_clock();
+    /// A snapshot's `server_ms - tick time` into the anchor: the lowest of
+    /// the last `ANCHOR_SNAPSHOTS`, so a catch-up burst's late ticks never
+    /// move it. One past `CLOCK_SNAP_MS` from it - a room that paused and
+    /// resumed - is taken at once, and so is a run of `ANCHOR_RUN` equally
+    /// late ones - a schedule that restarted; either way an anchor that
+    /// moves forward by more than `ANCHOR_HOLD_MS` holds the picture until
+    /// the target behind it catches up, the time the room stood still.
+    fn note_anchor(&mut self, epoch: f64) {
+        let Some(anchor) = self.anchor else {
+            self.epochs.push_back(epoch);
+            self.anchor = Some(epoch);
+            return;
+        };
+        if (epoch - anchor).abs() > CLOCK_SNAP_MS {
+            self.epochs.clear();
         }
-        self.epoch_ms = Some(epoch);
+        self.epochs.push_back(epoch);
+        while self.epochs.len() > ANCHOR_SNAPSHOTS {
+            self.epochs.pop_front();
+        }
+        let mut low = self.epochs.iter().copied().fold(f64::INFINITY, f64::min);
+        // A run of equally late ticks is a schedule that restarted: take
+        // it now, not once the on-time ones have left the window.
+        let run: Vec<f64> = self.epochs.iter().rev().take(ANCHOR_RUN).copied().collect();
+        if run.len() == ANCHOR_RUN {
+            let (lo, hi) = run.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &e| (lo.min(e), hi.max(e)));
+            if hi - lo <= ANCHOR_AGREE_MS && lo - anchor > ANCHOR_HOLD_MS {
+                low = lo;
+                let keep = self.epochs.len().saturating_sub(ANCHOR_RUN);
+                self.epochs.drain(..keep);
+            }
+        }
+        if low - anchor > ANCHOR_HOLD_MS {
+            self.holding = true;
+        }
+        self.anchor = Some(low);
+    }
+
+    /// The room's tick time at local time `local_ms`: the link's clock
+    /// less the round's anchor. `None` before both are known.
+    fn server_now(&self, local_ms: i64) -> Option<f64> {
+        Some(self.clock.now(local_ms)? - self.anchor?)
     }
 
     /// Another clock: lateness measured against the old one means nothing.
@@ -782,12 +873,14 @@ impl Interpolator {
     /// those are isolated they are left out.
     fn refresh_lateness(&mut self) {
         let Some(offset) = self.clock.offset_ms() else { return };
+        let anchor = self.anchor.unwrap_or(0.0);
         let limit = STALL_INTERVALS * self.interval_ms;
         let late: Vec<(f64, bool)> = self
             .readings
             .iter()
             .map(|r| {
-                let late = (r.estimate.min(offset) - r.reading - ARRIVAL_RESOLUTION_MS).max(0.0);
+                let sent_late = (r.epoch - anchor).max(0.0);
+                let late = (r.estimate.min(offset) - r.reading + sent_late - ARRIVAL_RESOLUTION_MS).max(0.0);
                 (late, r.bunched && late > limit)
             })
             .collect();
@@ -817,7 +910,7 @@ impl Interpolator {
         if self.buffer.is_empty() {
             return None;
         }
-        let now = self.clock.now(local_ms)?;
+        let now = self.server_now(local_ms)?;
         let elapsed = self.rendered_at.map_or(0.0, |at| (local_ms - at).max(0) as f64);
         let previous_render = self.render;
         let target = now - self.target_delay_ms();
@@ -887,7 +980,9 @@ impl Interpolator {
     /// Never backwards: a target behind render time - after a new clock,
     /// or more than `RENDER_SNAP_MS` behind - holds it where it stands
     /// until the target catches up, and a target more than
-    /// `RENDER_SNAP_MS` ahead is jumped to. In between, the bounded rate.
+    /// `RENDER_SNAP_MS` ahead is jumped to. In between, the bounded rate -
+    /// its full `RATE_FAR` whenever the picture is past the newest snapshot
+    /// and the target behind it.
     fn advance(&mut self, target: f64, elapsed: f64) -> (f64, bool) {
         let Some(render) = self.render else {
             self.rate = 1.0;
@@ -903,7 +998,15 @@ impl Interpolator {
             }
             self.holding = false;
         } else if err <= RENDER_SNAP_MS {
-            self.rate = rate_for(err);
+            // Past the newest snapshot the picture is a guess, so a target
+            // behind it is closed at the full `RATE_FAR` whatever the error:
+            // every frame saved is a frame less guessed.
+            let guessing = self.buffer.back().is_some_and(|newest| render > tick_ms(newest.tick));
+            self.rate = if guessing && err < 0.0 {
+                (1.0 + err / RATE_TIME_CONSTANT_MS).max(1.0 - RATE_FAR)
+            } else {
+                rate_for(err)
+            };
             return (render + elapsed * self.rate, false);
         }
         // Caught up with a held picture, or far behind the target: taken
@@ -1028,7 +1131,7 @@ impl Interpolator {
     fn render_at(&self, local_ms: i64) -> Option<f64> {
         match (self.render, self.rendered_at) {
             (Some(render), Some(at)) => Some(render + (local_ms - at).max(0) as f64 * self.rate),
-            _ => Some(self.clock.now(local_ms)? - self.target_delay_ms()),
+            _ => Some(self.server_now(local_ms)? - self.target_delay_ms()),
         }
     }
 
@@ -1965,7 +2068,7 @@ mod tests {
         // clock then slows by at most `RATE_FAR` to let the snapshots get
         // ahead of it again: about a second and a half of guessed frames,
         // and none once the clock has followed.
-        assert!(extrapolated <= 200, "{extrapolated} frames extrapolated after the step");
+        assert!(extrapolated <= 150, "{extrapolated} frames extrapolated after the step");
         assert_eq!(extrapolated_late, 0, "still guessing half a second after the clock followed");
         let report = interp.report();
         assert!(report.target_ms - floor < 1.0, "the delay came back to the floor: {report:?}");
@@ -2087,5 +2190,123 @@ mod tests {
         assert!(held_ms > 0, "the picture held for the new clock's target");
         assert!(held_ms <= stall + 100, "held for {held_ms} ms after a {stall} ms stall");
         assert!(!tail.is_empty() && tail.iter().all(|e| !e), "back between snapshots once the target caught up");
+    }
+
+    /// Frames every 8 ms of local time over `arrivals` (sorted by arrival):
+    /// the render times drawn, the frames that moved on extrapolation -
+    /// guessed, rather than held still past the newest snapshot - and the
+    /// milliseconds the picture stood still.
+    fn play(interp: &mut Interpolator, arrivals: &[(Snapshot, i64)], from: i64, until: i64) -> (Vec<f64>, u32, i64) {
+        let (mut next, mut local) = (0usize, from);
+        let (mut renders, mut extrapolated, mut held) = (Vec::new(), 0, 0);
+        while local <= until {
+            while next < arrivals.len() && arrivals[next].1 <= local {
+                let (s, at) = arrivals[next].clone();
+                interp.accept(s, at);
+                next += 1;
+            }
+            if let Some(frame) = interp.sample(local) {
+                renders.push(render_of(&frame));
+                let still = interp.report().rate == 0.0;
+                extrapolated += (frame.extrapolated && !still) as u32;
+                if still {
+                    held += 8;
+                }
+            }
+            local += 8;
+        }
+        (renders, extrapolated, held)
+    }
+
+    /// **A waiting room's welcome does not set the round's clock.** The
+    /// room welcomes each seat at tick 0 while it waits, then again at
+    /// tick 0 when the round starts, a tenth of a second later, and ticks
+    /// from there. Read as one clock, the first welcome put the room a
+    /// tenth of a second ahead of every snapshot after it, and the round
+    /// opened on seconds of extrapolation and a delay sized for lateness
+    /// that was never there.
+    #[test]
+    fn a_waiting_rooms_welcome_does_not_skew_the_rounds_clock() {
+        let transit = 20i64;
+        let (waiting, started) = (23u32, 134u32);
+        let mut interp = Interpolator::default();
+        let mut lobby = snapshot(0);
+        lobby.server_ms = waiting;
+        interp.restart(&lobby, waiting as i64 + transit);
+        let mut round = snapshot(0);
+        round.server_ms = started;
+        interp.restart(&round, started as i64 + transit);
+        let arrivals: Vec<(Snapshot, i64)> = (1..=180u32)
+            .map(|t| {
+                let mut s = snapshot(t);
+                s.server_ms = started + stamp(t);
+                let at = s.server_ms as i64 + transit;
+                (s, at)
+            })
+            .collect();
+        let start = started as i64 + transit;
+        let (renders, extrapolated, _) = play(&mut interp, &arrivals, start, start + 3_000);
+        assert!(renders.windows(2).all(|w| w[1] >= w[0] - 1e-3), "render time went back");
+        assert!(extrapolated <= 2, "the round opened on {extrapolated} extrapolated frames");
+        let report = interp.report();
+        assert!(report.target_ms < 40.0, "the delay was sized for lateness that was never there: {report:?}");
+        assert!(report.delay_ms < 45.0, "the picture stood {} ms behind", report.delay_ms);
+    }
+
+    /// **A room that falls behind its schedule is waited for, not guessed
+    /// past.** Owing more ticks than it catches up, a room restarts its
+    /// schedule: every tick from there is stamped `dropped` later on the
+    /// wall than its number says. The picture holds for that long - the
+    /// room stood still - rather than reading every snapshot after as
+    /// late, running on extrapolation and widening its delay for it.
+    #[test]
+    fn a_room_that_drops_ticks_holds_the_picture_rather_than_guessing() {
+        let (transit, dropped) = (20i64, 100u32);
+        let arrivals: Vec<(Snapshot, i64)> = (0..=420u32)
+            .map(|t| {
+                let mut s = snapshot(t);
+                s.server_ms = stamp(t) + if t > 200 { dropped } else { 0 };
+                let at = s.server_ms as i64 + transit;
+                (s, at)
+            })
+            .collect();
+        let mut interp = Interpolator::default();
+        interp.restart(&arrivals[0].0, arrivals[0].1);
+        let (renders, extrapolated, held) = play(&mut interp, &arrivals[1..], transit, exact(420) + dropped as i64 + transit);
+        assert!(renders.windows(2).all(|w| w[1] >= w[0] - 1e-3), "render time went back");
+        // Until the first late tick arrives nothing says the room stopped:
+        // the gap's frames past the delay run on the last velocities, and
+        // the two late ticks that name the new schedule take one more.
+        // Past that the picture holds rather than guessing on.
+        let gap_frames = ((dropped as f64 + TICK_MS - 33.3) / 8.0).ceil() as u32 + 3;
+        assert!(extrapolated <= gap_frames, "{extrapolated} frames were guessed past a room that had stopped");
+        assert!(held >= dropped as i64 / 2 && held <= dropped as i64 + 50, "held {held} ms for a {dropped} ms stop");
+        let report = interp.report();
+        assert!(report.target_ms < 40.0, "the stop widened the delay: {report:?}");
+    }
+
+    /// A stall longer than the clock's window whose backlog comes back in
+    /// chunks, a round trip apart: the chunks after the first do not
+    /// restart the settling, so the stall's late readings never drag the
+    /// estimate back by the stall's length.
+    #[test]
+    fn a_backlog_in_chunks_does_not_drag_the_clock_back() {
+        let mut clock = ServerClock::default();
+        for local in (0..3_000i64).step_by(16) {
+            clock.observe_ms(local as f64 + 1_000.0, local);
+        }
+        let before = clock.offset_ms().expect("an estimate");
+        // Silent for three seconds, then the backlog in three chunks 80 ms
+        // apart, every reading as late as the stall.
+        let resumed = 6_000i64;
+        for chunk in 0..3i64 {
+            let at = resumed + chunk * 80;
+            for i in 0..20i64 {
+                let sent = 3_000 + (chunk * 20 + i) * 16;
+                clock.observe_ms(sent as f64 + 1_000.0, at);
+            }
+        }
+        let after = clock.offset_ms().expect("an estimate");
+        assert!(before - after <= CLOCK_FALL_CREDIT_MS * CLOCK_FALL_PER_MS * 3.0 + 1e-6, "dragged back {} ms", before - after);
     }
 }
