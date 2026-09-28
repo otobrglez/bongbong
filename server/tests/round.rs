@@ -273,8 +273,9 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
     drop(fourth);
 
     // Ready, start: both get Started and a fresh Welcome with the round.
-    send(&mut second, &Msg::Lobby(Lobby::Ready)).await;
-    send(&mut host, &Msg::Lobby(Lobby::Start)).await;
+    // The two sockets reach the room by two tasks, so the start waits for
+    // the roster to show the ready rather than racing it.
+    ready_then_start(&mut host, &mut second).await;
     let (mut host_baseline, mut second_baseline): (Option<Snapshot>, Option<Snapshot>) = (None, None);
     let mut host_replica: Option<Game> = None;
     for (ws, seat) in [(&mut host, 0u8), (&mut second, 1u8)] {
@@ -1380,12 +1381,27 @@ async fn an_owned_burst_is_taken_by_one_tick_and_a_server_driven_one_in_order() 
         owned_seen.push((s.acked[seat], depth));
         assert!(owned_seen.len() < 60, "the burst was never acknowledged: {owned_seen:?}");
     }
+    // Nothing is sent now, so the snapshots from the one that acknowledged
+    // the burst onwards say what its read left behind.
+    for _ in 0..3 {
+        let s = next_state(&mut ws, &mut baseline).await;
+        owned_seen.push((s.acked[seat], unpack(s.mailbox[seat]).0));
+    }
     eprintln!("owned burst of {burst}: (acked, depth) per snapshot {owned_seen:?}");
-    assert!(owned_seen.iter().all(|&(_, depth)| depth == 0), "an owned burst left depth behind: {owned_seen:?}");
+    let whole = owned_seen.iter().position(|&(acked, _)| acked >= burst).expect("the burst was acknowledged");
+    assert!(
+        owned_seen[whole..].iter().all(|&(_, depth)| depth == 0),
+        "the read that took the burst left depth behind: {owned_seen:?}"
+    );
     // One tick takes the burst whole; a second only if the tick fell in
-    // the middle of the sends.
+    // the middle of the sends. `wire_state` is cut after the tick's
+    // update, so that one partial read's snapshot can show the rest of
+    // the burst arrived and waiting - on that snapshot alone, since the
+    // next read takes it all.
     let partial = owned_seen.iter().filter(|&&(acked, _)| (1..burst).contains(&acked)).count();
     assert!(partial <= 1, "the burst was worked through a tick at a time: {owned_seen:?}");
+    let waiting = owned_seen[..whole].iter().filter(|&&(_, depth)| depth > 0).count();
+    assert!(waiting <= 1, "an owned burst stood as depth past one partial read: {owned_seen:?}");
 
     // The same burst from a seat the room drives: in order, one a tick.
     for tick in burst + 1..=2 * burst {

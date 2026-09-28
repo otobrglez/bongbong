@@ -5,9 +5,12 @@
 //! played.
 //!
 //! One tick, in order: `take_pose` for every seat's intent before
-//! `Game::update` (a pose puts the hull there, a packet without one
-//! releases the seat to the room's own driving, a refused pose leaves the
-//! hull and answers with `Placed`), then `moved_since` after it (a tick
+//! `Game::update` (a pose puts the hull there, if it is no further from
+//! the room's copy than the driving its mailbox read covers -
+//! `Mailbox::pose_reach_ticks`, a whole stall for the burst that ends
+//! one -, a packet without one releases the seat to the room's own
+//! driving, a refused pose leaves the hull and answers with `Placed`),
+//! then `moved_since` after it (a tick
 //! that carried an owned hull further than a contact could - a portal, a
 //! gate - answers with `Placed` too), and `stamp_presses` on the events
 //! it sends, so a seat's `Fired` names the intent its press came on.
@@ -125,9 +128,13 @@ pub enum PoseOutcome {
 }
 
 /// Apply the pose one seat's intent carries, before the tick runs.
-pub fn take_pose(game: &mut Game, seat: usize, pose: Option<SeatPose>) -> PoseOutcome {
+/// `reach_ticks` is how much of the client's driving the mailbox read
+/// that delivered it covers (`net::mailbox::Mailbox::pose_reach_ticks`),
+/// which is how far from the room's copy of the hull the validator lets
+/// the pose stand (`Game::accept_seat_pose`).
+pub fn take_pose(game: &mut Game, seat: usize, pose: Option<SeatPose>, reach_ticks: u32) -> PoseOutcome {
     match pose {
-        Some(pose) => match game.accept_seat_pose(seat, pose) {
+        Some(pose) => match game.accept_seat_pose(seat, pose, reach_ticks) {
             Ok(()) => PoseOutcome::Applied(pose.position),
             Err(why) => PoseOutcome::Refused(why, game.seat_pose(seat).map(|at| placed(seat, at))),
         },
@@ -174,9 +181,120 @@ pub fn placed(seat: usize, at: SeatPose) -> WireEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::net::wire::WeaponKind;
+    use crate::PHYSICS_FIXED_DT;
+    use crate::map::MapFile;
+    use crate::net::mailbox::{Mailbox, REACH_TICKS_MAX};
+    use crate::net::wire::{IntentMsg, WeaponKind};
+    use crate::simulation::{Input, POSE_REACH_SLACK_PX, POSE_REACH_TICKS, PlayerCount};
 
     const PERIOD: Duration = Duration::from_millis(10);
+
+    /// A one-seat round on an open field with no enemy and no intro.
+    fn open_round() -> Game {
+        let mut game = Game::default();
+        game.enemy_count_override = Some(0);
+        game.seed_override = Some(7);
+        game.player_row_override = Some(0);
+        game.players = PlayerCount::ONE;
+        game.show_intro = false;
+        game.map = MapFile::from_toml_str(
+            r#"
+version = 1
+tanks = 1
+cells."2,2" = { kind = "frog" }
+cells."8,8" = { kind = "start" }
+"#,
+        )
+        .expect("the map parses");
+        let (width, height) = game.map.field_size();
+        game.init(width, height);
+        game
+    }
+
+    /// One tick of a room's seat 0, the room server's order: read the
+    /// mailbox, put its pose through `take_pose` with the reach the read
+    /// vouches for, then run the update.
+    fn room_tick(game: &mut Game, mailbox: &Mailbox, now: Instant) -> PoseOutcome {
+        let read = mailbox.read(now);
+        let outcome = take_pose(game, 0, read.and_then(|m| m.pose()), mailbox.pose_reach_ticks());
+        let (width, height) = game.map.field_size();
+        game.update(Input::single(read.map(|m| m.intent()).unwrap_or_default()), PHYSICS_FIXED_DT, width, height);
+        outcome
+    }
+
+    /// **The burst that ends a stall is taken; a jump is not**
+    /// (docs/online-coop-prd.md §4.14, §4.16). An owned read takes every
+    /// intent waiting, so after a stall one pose carries the client's
+    /// whole drive through it, and the room believes it as far as the
+    /// read covers. A single tick's packet still vouches for one tick, so
+    /// a hull that claims to have crossed three cells in it is refused,
+    /// stays where it was and is told so; and no read vouches for more
+    /// than `REACH_TICKS_MAX`, whatever ticks the client stamps.
+    #[test]
+    fn an_owned_burst_after_a_stall_is_taken_and_a_jump_is_not() {
+        let mut game = open_round();
+        let mailbox = Mailbox::new();
+        let now = Instant::now();
+        let start = game.seat_pose(0).expect("the seat");
+        let speed = game.tank_snapshots()[0].top_speed;
+        let step = speed * PHYSICS_FIXED_DT;
+        let y = start.position.y;
+        let pose_at = |tick: u32, x: f32, vx: f32| {
+            IntentMsg { tick, ..IntentMsg::default() }.with_pose(SeatPose {
+                position: Position::new(x, y),
+                rotation: Dir::Right.rotation(),
+                velocity: Position::new(vx, 0.0),
+            })
+        };
+        // Standing still, one packet a tick: every pose taken.
+        for tick in 0..5 {
+            mailbox.post(pose_at(tick, start.position.x, 0.0), now);
+            let outcome = room_tick(&mut game, &mailbox, now);
+            assert!(matches!(outcome, PoseOutcome::Applied(_)), "tick {tick}: {outcome:?}");
+        }
+        // The link stalls ten ticks while the client drives off at top
+        // speed; the room holds the still hull where it was.
+        let stall = 10u32;
+        for _ in 0..stall {
+            let outcome = room_tick(&mut game, &mailbox, now);
+            assert!(matches!(outcome, PoseOutcome::Applied(_)), "a still guess is taken: {outcome:?}");
+        }
+        // Then the ten packets arrive at once.
+        for n in 1..=stall {
+            mailbox.post(pose_at(4 + n, start.position.x + step * n as f32, speed), now);
+        }
+        let travelled = step * stall as f32;
+        let floor = step * POSE_REACH_TICKS + POSE_REACH_SLACK_PX;
+        assert!(travelled > floor, "the fixture drives past the validator's floor: {travelled} px vs {floor} px");
+        let outcome = room_tick(&mut game, &mailbox, now);
+        assert!(matches!(outcome, PoseOutcome::Applied(_)), "the stall's burst was refused: {outcome:?}");
+        let here = game.seat_pose(0).expect("the seat");
+        assert!(
+            (here.position.x - (start.position.x + travelled)).abs() < 1.0,
+            "the room's hull is not where the client drove it: {here:?}, {travelled} px on from {start:?}"
+        );
+
+        // One packet, one tick on, three cells further: refused.
+        let jump = pose_at(4 + stall + 1, here.position.x + 96.0, speed);
+        mailbox.post(jump, now);
+        let outcome = room_tick(&mut game, &mailbox, now);
+        assert!(
+            matches!(outcome, PoseOutcome::Refused("further than the hull could have gone", Some(WireEvent::Placed { seat: 0, .. }))),
+            "a one-tick jump was taken: {outcome:?}"
+        );
+        // The tick drove the seat itself from where it was, so it coasts
+        // a step at most - nowhere near the pose.
+        let stayed = game.seat_pose(0).expect("the seat");
+        assert!(stayed.position.x - here.position.x <= step + 0.5, "a refused pose moved the hull: {stayed:?}");
+
+        // A packet stamped a hundred ticks on vouches for the cap and no
+        // more: a pose past it is refused like the jump.
+        let claimed = REACH_TICKS_MAX as f32 + 8.0;
+        mailbox.post(pose_at(4 + stall + 100, stayed.position.x + step * claimed, speed), now);
+        let outcome = room_tick(&mut game, &mailbox, now);
+        assert_eq!(mailbox.pose_reach_ticks(), REACH_TICKS_MAX);
+        assert!(matches!(outcome, PoseOutcome::Refused(..)), "a claimed stall was believed past the cap: {outcome:?}");
+    }
 
     fn ms(n: u64) -> Duration {
         Duration::from_millis(n)

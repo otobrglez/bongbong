@@ -516,7 +516,7 @@ fn an_owned_pose_is_taken_when_reachable_and_refused_otherwise() {
 
     // A step within reach is taken, facing and all.
     let near = SeatPose { position: Position::new(from.position.x + reach * 0.5, from.position.y), rotation: Dir::Right.rotation(), velocity: still };
-    assert_eq!(game.accept_seat_pose(0, near), Ok(()));
+    assert_eq!(game.accept_seat_pose(0, near, 1), Ok(()));
     assert!(game.seat_is_owned(0));
     let at = game.seat_pose(0).expect("the seat");
     assert!((at.position.x - near.position.x).abs() < 0.01 && at.rotation == Dir::Right.rotation(), "{at:?}");
@@ -535,7 +535,7 @@ fn an_owned_pose_is_taken_when_reachable_and_refused_otherwise() {
         rotation: Dir::Right.rotation(),
         velocity: Vec2::new(180.0, 0.0),
     };
-    assert_eq!(game.accept_seat_pose(0, moving), Ok(()));
+    assert_eq!(game.accept_seat_pose(0, moving, 1), Ok(()));
     game.update(Input::default(), PHYSICS_FIXED_DT, W, H);
     let landed = game.seat_pose(0).expect("the seat");
     assert!((landed.position.x - moving.position.x).abs() < 0.5, "the room's hull ended at {landed:?}, not the pose {moving:?}");
@@ -549,16 +549,16 @@ fn an_owned_pose_is_taken_when_reachable_and_refused_otherwise() {
     // Out of reach: refused, the hull stays.
     let here = game.seat_pose(0).expect("the seat");
     let far = SeatPose { position: Position::new(here.position.x + reach * 3.0, here.position.y), ..here };
-    assert_eq!(game.accept_seat_pose(0, far), Err("further than the hull could have gone"));
+    assert_eq!(game.accept_seat_pose(0, far, 1), Err("further than the hull could have gone"));
     assert!(!game.seat_is_owned(0));
     assert_eq!(game.seat_pose(0).expect("the seat").position, here.position);
     // Outside the field: refused.
     let outside = SeatPose { position: Position::new(-4.0, here.position.y), ..here };
-    assert_eq!(game.accept_seat_pose(0, outside), Err("further than the hull could have gone"));
+    assert_eq!(game.accept_seat_pose(0, outside, 1), Err("further than the hull could have gone"));
     // A wreck owns nothing.
     game.debug_kill(0).expect("the seat");
     game.update(Input::default(), PHYSICS_FIXED_DT, W, H);
-    assert_eq!(game.accept_seat_pose(0, here), Err("a wreck"));
+    assert_eq!(game.accept_seat_pose(0, here, 1), Err("a wreck"));
 }
 
 /// A pose inside a solid tile is refused even when it is within reach:
@@ -577,6 +577,6 @@ fn an_owned_pose_inside_a_tile_is_refused() {
     let mut game = game_on(&map_with(&format!("cells.\"{col},{row}\" = {{ kind = \"wall\", material = \"iron\" }}")), 0, PlayerCount::ONE, 7);
     let from = game.seat_pose(0).expect("the seat");
     let step = SeatPose { position: target, ..from };
-    assert_eq!(game.accept_seat_pose(0, step), Err("inside a solid tile"));
+    assert_eq!(game.accept_seat_pose(0, step, 1), Err("inside a solid tile"));
     assert_eq!(game.seat_pose(0).expect("the seat").position, from.position);
 }
