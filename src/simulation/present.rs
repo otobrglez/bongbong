@@ -90,6 +90,32 @@ impl Game {
         PresentWorld { terrain, tanks, frogs, width, height }
     }
 
+    /// Kick one seat's hull back from a shot it just fired along
+    /// `velocity`, exactly as `weapons::apply_recoil` does in the room:
+    /// the kind's recoil speed, normalised to the chassis-free mass and
+    /// capped. For a client firing from a hull it owns (`net::predict`),
+    /// so the kick lands on the press rather than a round trip later.
+    pub fn seat_recoil(&mut self, seat: usize, kind: ProvisionalKind, velocity: Vec2) {
+        let Some(entity) = self.seats.get(seat).copied().flatten() else { return };
+        let Ok(tank) = self.world.get::<&Tank>(entity) else { return };
+        let Some(handle) = tank.body else { return };
+        let t = tuning();
+        let (speed, max_speed) = match kind {
+            ProvisionalKind::Shell => (t.shell_recoil_speed, t.shell_recoil_max_speed),
+            ProvisionalKind::Bullet => (t.minigun_bullet_recoil_speed, t.minigun_bullet_recoil_max_speed),
+            ProvisionalKind::Plasma => (t.plasma_recoil_speed, t.plasma_recoil_max_speed),
+        };
+        let len = (velocity.x * velocity.x + velocity.y * velocity.y).sqrt();
+        if len <= f32::EPSILON {
+            return;
+        }
+        let reference_mass = tank.scale * tank.scale;
+        let push = (speed * reference_mass / tank.mass()).min(max_speed);
+        let impulse = push * tank.mass() / len;
+        drop(tank);
+        self.physics.apply_impulse(handle, Position::new(-velocity.x * impulse, -velocity.y * impulse));
+    }
+
     /// Where one seat's laser would leave its muzzle right now, which way,
     /// and with which beam: `weapons::laser_shot`'s geometry with no misfire
     /// skew. For a client drawing its own beam on the press

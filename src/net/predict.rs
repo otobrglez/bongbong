@@ -547,7 +547,7 @@ impl Predictor {
     /// from the sandbox's pose right now - the twin's second shell and a
     /// burst's later bullets leave from where the hull is *then*, which
     /// is how `tick_queued_shots` fires them.
-    fn launch_due(&self, press: &mut Press) {
+    fn launch_due(&mut self, press: &mut Press) {
         let mut i = 0;
         while i < press.pending.len() {
             let p = press.pending[i];
@@ -557,6 +557,11 @@ impl Predictor {
             }
             press.pending.remove(i);
             if let Some(shot) = self.sandbox.seat_shot(self.seat, press.kind, p.aim, p.lateral) {
+                // The kick lands on the press, as the room's does in a
+                // local round; an owned hull's room does not echo it back.
+                if self.owned {
+                    self.sandbox.seat_recoil(self.seat, press.kind, shot.velocity);
+                }
                 press.live.push(Live { shot, server: None, local_hit: None, show_server: false, scored: false });
             }
         }
@@ -1374,6 +1379,22 @@ mod tests {
         assert!(predictor.take_beams().is_empty(), "the one charge is owed");
         predictor.note_fired(WeaponKind::Laser, tick);
         assert!(predictor.beams_owed.is_empty(), "its Fired settles it");
+    }
+
+    /// Firing from an owned hull kicks it back on the press, as the room
+    /// kicks a hull in a local round - not a round trip later.
+    #[test]
+    fn an_owned_hull_recoils_on_the_press() {
+        let mut predictor = Predictor::new(round_with(single_barrel_row(), 0), 0, 0);
+        predictor.set_owned(true);
+        idle_ticks(&mut predictor, 5);
+        let (_, rotation, still) = predictor.motion().expect("a hull");
+        assert!(still.x.abs() + still.y.abs() < 0.01, "standing still first");
+        predictor.step(press());
+        let (_, _, kicked) = predictor.motion().expect("a hull");
+        let rad = rotation.to_radians();
+        let back = -(kicked.x * rad.sin() - kicked.y * rad.cos());
+        assert!(back > 0.1, "the hull moves back along its barrel after the press: {kicked:?}");
     }
 
     /// The owned hull is drawn between its last two ticks.
