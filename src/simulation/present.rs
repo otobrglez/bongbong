@@ -264,6 +264,13 @@ impl Game {
     pub fn draw_impact(&mut self, at: Position) {
         self.impact_flashes.push(crate::shockwave::Shockwave::new(at));
     }
+
+    /// Draw a muzzle ripple at `at` on this replica (presentation only):
+    /// the one a trigger pull puts at the barrel, for a shot this client
+    /// drew leaving it.
+    pub fn draw_muzzle(&mut self, at: Position) {
+        self.muzzle_flashes.push(crate::shockwave::Shockwave::new(at));
+    }
 }
 
 impl PresentWorld {
