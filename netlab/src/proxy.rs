@@ -91,6 +91,20 @@ pub struct FiredRec {
     pub input_tick: u32,
 }
 
+/// A projectile's first listing in a snapshot or a delta toward a client:
+/// it spawned on a tick since the one before, and a shot spawns on the
+/// tick its `Fired` is raised, so it comes with that `Fired`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShotRec {
+    /// The tick of the snapshot that first listed it.
+    pub snapshot_tick: u32,
+    /// The room's id for it (`ShotState::id`).
+    pub id: u16,
+    /// The seat that fired it (`ShotState::owner`, `NO_SEAT` for an
+    /// enemy's).
+    pub owner: u8,
+}
+
 /// Everything the tap read off one connection.
 #[derive(Clone, Debug, Default)]
 pub struct ConnTap {
@@ -100,6 +114,11 @@ pub struct ConnTap {
     pub snapshots: Vec<SnapRec>,
     /// Every seat's `Fired` the room sent this connection.
     pub fired: Vec<FiredRec>,
+    /// Every projectile the room listed to this connection, once, at its
+    /// first listing.
+    pub shots: Vec<ShotRec>,
+    /// The ids already in `shots`.
+    pub(crate) listed: std::collections::BTreeSet<u16>,
     /// Every chunk's delivery and size, client to server.
     pub up_chunks: Vec<(f64, usize)>,
     /// Every chunk's delivery and size, server to client.
@@ -235,15 +254,23 @@ fn record(log: &SharedLog, conn: usize, way: Way, bytes: &[u8], egress: f64, mes
     }
     for m in messages.iter().filter(|m| m.opcode == OP_BINARY) {
         let Ok(msg) = codec::decode(&m.payload) else { continue };
+        // A delta lists a shot in full when it is new or changed, and a
+        // full snapshot lists every shot: its first listing is when it
+        // spawned.
         let carried = match &msg {
-            Msg::Snapshot(s) => Some((s.tick, &s.events)),
-            Msg::Delta(d) => Some((d.tick, &d.events)),
+            Msg::Snapshot(s) => Some((s.tick, &s.events, &s.shots)),
+            Msg::Delta(d) => Some((d.tick, &d.events, &d.shots)),
             _ => None,
         };
-        if let Some((tick, events)) = carried {
+        if let Some((tick, events, shots)) = carried {
             for e in events {
                 if let WireEvent::Fired { slot, input_tick, .. } = *e {
                     c.fired.push(FiredRec { egress_ms: m.egress_ms, snapshot_tick: tick, slot, input_tick });
+                }
+            }
+            for s in shots {
+                if c.listed.insert(s.id) {
+                    c.shots.push(ShotRec { snapshot_tick: tick, id: s.id, owner: s.owner });
                 }
             }
         }

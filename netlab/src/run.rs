@@ -14,9 +14,10 @@ use bongbong::tuning::{self, Tuning};
 
 use crate::client::{Rendezvous, Role, SeatPlan, SeatRun, run_seat};
 use crate::link::Impairment;
-use crate::metrics::{self, Metrics, Stat, View};
+use crate::metrics::{self, Metrics, Stat, View, WireFired};
 use crate::proxy::{self, Clock};
 use crate::report::{self, Report, SeatSeries, SeatSummary};
+use crate::sample::FrameSample;
 use crate::script::Scenario;
 use crate::twin::{self, TwinPlan};
 
@@ -172,13 +173,48 @@ fn seat_summary(run: &SeatRun) -> SeatSummary {
     s
 }
 
-/// Every frame a run recorded, for `--frames-out`: each seat's and the
-/// twin's.
-#[derive(serde::Serialize)]
-struct Frames<'a> {
-    host: &'a [crate::sample::FrameSample],
-    guest: &'a [crate::sample::FrameSample],
-    twin: &'a [crate::sample::FrameSample],
+/// Every frame a run recorded - each seat's and the twin's - with what
+/// the metrics read beside the frames: what `--frames-out` writes, and what
+/// `netlab replay` measures again (`measure_dump`).
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct FrameDump {
+    pub scenario: Scenario,
+    pub host_seat: usize,
+    pub guest_seat: usize,
+    /// The host's script start on the process clock.
+    pub host_t0_ms: Option<f64>,
+    /// The tap's reading of each host press (in-process only).
+    pub wire: Option<WireFired>,
+    pub host: Vec<FrameSample>,
+    pub guest: Vec<FrameSample>,
+    pub twin: Vec<FrameSample>,
+}
+
+/// The metrics of a run's frames: the online view (`None` when either
+/// seat recorded nothing) and the twin's.
+pub fn measure_dump(d: &FrameDump) -> (Option<Metrics>, Metrics) {
+    let twin = metrics::measure(&View {
+        host: &d.twin,
+        guest: &d.twin,
+        host_t0_ms: 0.0,
+        host_seat: 0,
+        guest_seat: 1,
+        scenario: d.scenario,
+        wire: None,
+    });
+    let online = match (d.host_t0_ms, d.host.is_empty() || d.guest.is_empty()) {
+        (Some(t0), false) => Some(metrics::measure(&View {
+            host: &d.host,
+            guest: &d.guest,
+            host_t0_ms: t0,
+            host_seat: d.host_seat,
+            guest_seat: d.guest_seat,
+            scenario: d.scenario,
+            wire: d.wire.as_ref(),
+        })),
+        _ => None,
+    };
+    (online, twin)
 }
 
 /// Play the run and measure it.
@@ -268,48 +304,36 @@ pub fn run(cfg: &RunConfig) -> Result<Report, String> {
         (Some(log), Some((from, to))) => {
             let log = log.lock().unwrap_or_else(PoisonError::into_inner).clone();
             let presses = metrics::presses(&host.samples, host_seat as usize);
-            (Some(report::tap_metrics(&log, from, to)), Some(report::wire_fired(&log, &presses, host_seat, guest_seat)))
+            (Some(report::tap_metrics(&log, from, to)), report::wire_fired(&log, &presses, host_seat, guest_seat))
         }
         _ => (None, None),
     };
     runtime.shutdown_timeout(Duration::from_millis(200));
 
-    let twin_frames = twin::run(&TwinPlan {
-        map,
-        mission: cfg.mission,
-        seed: cfg.seed,
+    let dump = FrameDump {
         scenario: cfg.scenario,
-        fps: cfg.fps,
-        seconds: cfg.seconds,
-        tap_limit,
-    });
-    let twin = metrics::measure(&View {
-        host: &twin_frames,
-        guest: &twin_frames,
-        host_t0_ms: 0.0,
-        host_seat: 0,
-        guest_seat: 1,
-        scenario: cfg.scenario,
-        wire: None,
-    });
-    let online: Option<Metrics> = match (host.t0_ms, host.samples.is_empty() || guest.samples.is_empty()) {
-        (Some(t0), false) => Some(metrics::measure(&View {
-            host: &host.samples,
-            guest: &guest.samples,
-            host_t0_ms: t0,
-            host_seat: host_seat as usize,
-            guest_seat: guest_seat as usize,
+        host_seat: host_seat as usize,
+        guest_seat: guest_seat as usize,
+        host_t0_ms: host.t0_ms,
+        wire,
+        host: host.samples.clone(),
+        guest: guest.samples.clone(),
+        twin: twin::run(&TwinPlan {
+            map,
+            mission: cfg.mission,
+            seed: cfg.seed,
             scenario: cfg.scenario,
-            wire: wire.as_ref(),
-        })),
-        _ => {
-            errors.push("no online frames were recorded".into());
-            None
-        }
+            fps: cfg.fps,
+            seconds: cfg.seconds,
+            tap_limit,
+        }),
     };
+    let (online, twin) = measure_dump(&dump);
+    if online.is_none() {
+        errors.push("no online frames were recorded".into());
+    }
     if let Some(path) = &cfg.frames_out {
-        let frames = Frames { host: &host.samples, guest: &guest.samples, twin: &twin_frames };
-        let text = serde_json::to_string(&frames).map_err(|e| e.to_string())?;
+        let text = serde_json::to_string(&dump).map_err(|e| e.to_string())?;
         std::fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()))?;
     }
     let seats: Vec<SeatSummary> = runs.iter().map(seat_summary).collect();

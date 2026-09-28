@@ -21,15 +21,21 @@ just netlab run --profile custom --delay-ms 80 --jitter-ms 20 --loss 0.02 --nagl
 just netlab run --remote wss://rooms.bongbong.io/pr-48 --scenario duel
 just netlab-suite --quick          # three profiles x three scenarios x hull on/off
 just netlab-suite                  # every profile, 20 s a run
+just netlab replay F --explain     # measure a --frames-out dump again
 ```
 
 `run` prints a summary (`--json-out F` writes the whole report, `--frames-out
 F` every frame each seat and the twin recorded - hulls, shots, events and the
-client's readings - and `--quiet` prints nothing); `suite` prints one
-markdown table, each run in its own process because the tuning table and the
-room server's base table are process-wide. For the same reason a test that
-calls `run::run` is the only test in its binary (`tests/lan_drive.rs`,
-`tests/late_server.rs`).
+client's readings - with the tap's reading of the host's presses, and
+`--quiet` prints nothing); `suite` prints one markdown table, each run in its
+own process because the tuning table and the room server's base table are
+process-wide. For the same reason a test that calls `run::run` is the only
+test in its binary (`tests/lan_drive.rs`, `tests/late_server.rs`). `replay`
+measures a `--frames-out` dump offline, the same code path a run takes, and
+`--explain` lists every appearance of the host's own shots online - the
+frame, the drawing, the shot the ledger put it down to, what it was and what
+named its shot - so a hand-off or a double can be held against the frames it
+came from.
 
 ## The link
 
@@ -55,10 +61,14 @@ round trip completes.
 spelled as `--rooms` takes it (`wss://rooms.bongbong.io/pr-48`, with or
 without `/ws`); an `http(s)://` address is read as its socket's scheme and a
 bare `host:port` gets `ws://` on this machine and `wss://` anywhere else. A
-dial the network refuses before the socket opens is made again every 250 ms
-for up to 20 s, so netlab can be started beside a room server that is still
-coming up (the summary counts the refused dials). The tap's metrics are
-absent, and the presses are paired with their `Fired` by order.
+dial whose TCP connection is refused - nothing listening yet - is made again
+every 250 ms for up to 20 s, so netlab can be started beside a room server
+that is still coming up (the summary counts the refused dials); a server
+that answers the upgrade with an error (a wrong path, a preview that is not
+deployed), a name that does not resolve or a TLS failure ends the run at
+once. The tap's metrics are absent, the presses are paired with their
+`Fired` by order and the room's copies of the host's shots with their shots
+by timing (see the shot ledger).
 
 ## The scenarios
 
@@ -105,23 +115,44 @@ the client's readings (`FrameSample::link`).
   where the guest draws it (a search of the host's own drawn path on the
   shared clock). Rectangle scenarios only: the strafe retraces itself.
 - **shot ledger** (the host's presses; `src/shots.rs` follows the drawn
-  shots - a room copy by the room's id, a provisional by continuity, since a
-  provisional's id is an index into the client's live shots that shifts as
-  older ones retire):
+  shots - a room copy by the room's id, a provisional by continuity: no
+  further on than its kind flies in a frame and never back in its own life,
+  since a provisional's id is an index into the client's live shots that
+  shifts as older ones retire):
   - *drawn* - press to the first frame its shot is drawn leaving the muzzle
     (the provisional where the client draws one, the room's copy where not);
   - *fired* - press to the frame its `Fired` is handed over. In-process the
     tap pairs each press with the `Fired` that names its own intent's tick
-    and reads which snapshot carried it (`by input_tick`); remote and in the
-    twin, oldest first (`by order`);
-  - *hand-offs* - an own shot appearing anywhere but the muzzle, taken as the
-    own shot that left the picture last in the 250 ms before it: the gap is
-    how far the shot jumped (a provisional swapped for the room's copy, a
-    room copy shown after its provisional was gone, a provisional snapped to
-    a room impact). On the present timeline nothing is swapped, so the count
-    is the finding;
-  - *drawn twice* - a room copy that appears while the provisional standing
-    for the same shot is still drawn ahead of it on its path;
+    and reads which snapshot carried it (`by input_tick`); remote, in the
+    twin, or where the tap lost the host's connection, in order (`by
+    order`): pairs never cross, and each lies within 200 ms of what the
+    client's own readings expected of that press (a round trip, plus how far
+    the picture trailed the newest snapshot) and a bias the run shares. The
+    expectation is what tells a lag from the same lag one press interval
+    longer or shorter, and a press the room refused is left out rather than
+    handed the next press's `Fired`;
+  - every other appearance of an own shot is put down to **the same shot**
+    (`metrics::own_shots`, `replay --explain`): a provisional that jumps -
+    moves further than its flight in a frame - continues the provisional at
+    its place in the client's list (the client keeps its shots in launch
+    order and a retirement only closes the gap); a room copy is the shot its
+    id was drawn as before, or the press's the tap saw its id first listed
+    with (in-process), or the shot whose provisional it trails the way that
+    shot's room copy should - its `Fired` less its launch - at the same place
+    or within two hull lengths of it, flying the same way (`timing`, what a
+    remote run gets; its misses are reported unmatched, never paired with
+    another shot). Then:
+    - *hand-offs* - the shot drawn again after the picture stopped drawing
+      it, or moved further than its flight: the gap is how far that same
+      shot jumped, from where it was last drawn (carried on at most 50 ms if
+      it was flying) - a provisional snapped to a room impact, a room copy
+      shown after its provisional was gone or shown again after being hidden.
+      On the present timeline nothing is swapped, so the count is the
+      finding;
+    - *drawn twice* - shots whose room copy was shown while another drawing
+      of the same shot was on the picture, counted once per shot;
+    - *unmatched* - appearances no earlier drawing of the same shot
+      accounts for;
   - *room copies shown* - distinct room copies of the host's shots drawn at
     all, on a client that draws its own from the press;
   - *hit* - press to the first enemy hit (shoot only, where the host is the
@@ -133,16 +164,17 @@ the client's readings (`FrameSample::link`).
   does, drawing the impact there - on a path through the room's impact
   point, or bursting at that point in its impact frames (a shot first
   drawn already bursting included). A shot that vanished anywhere else was
-  cleared by the room and struck nothing. *From afar* is the gap between
-  where the picture stopped it and the drawn hull's hit boxes (hull and
-  turret, as `Tank::hull_bbox_world` and `turret_bbox_world` build them,
-  grown by the shot's half extent), on that frame: nought locally and for
-  a strike; a shot drawn passing the hull that the room then bursts where
-  the hull was a moment ago is hit from afar. *Strike to hit* is how long
-  the strike stood before the damage was handed over; hits no drawn shot
-  accounts for (a beam, a ram, a blast, a shot never drawn striking or
-  bursting) are counted, and so are *strikes drawn with no hit* - a shot
-  struck at the hull that the room judged a miss.
+  cleared by the room and struck nothing. *Struck* counts the hits put down
+  to a strike, which is on the drawn hull by definition; *from afar* is,
+  for each hit put down to a burst, the gap between where it burst and the
+  drawn hull's hit boxes (hull and turret, as `Tank::hull_bbox_world` and
+  `turret_bbox_world` build them, grown by the shot's half extent) on that
+  frame: nought locally; a shot drawn passing the hull that the room then
+  bursts where the hull was a moment ago is hit from afar. *Strike to hit*
+  is how long the strike or burst stood before the damage was handed over;
+  hits no drawn shot accounts for (a beam, a ram, a blast, a shot never
+  drawn striking or bursting) are counted, and so are *strikes drawn with
+  no hit* - a shot struck at the hull that the room judged a miss.
 - per seat: prediction nudges, snaps and max error, the lead's ups and downs,
   the interpolation delay, jitter, lateness p50/p95, extrapolated frames,
   head-of-line stalls, the playout rate, the interpolator's corrections, the
@@ -160,12 +192,19 @@ the client's readings (`FrameSample::link`).
 ## The verdict
 
 `local` when every one holds, `far` when any misses by more than three times
-its allowance (more than five corrections or doubles), `close` otherwise:
+its allowance (by more than five where the allowance is a count: corrections,
+doubles, unanswered strikes, unseen hits), `close` otherwise:
 
 - own input p95 no more than one frame over the twin's;
 - remote stall% no more than two points over the twin's, jump% at most 2,
   backward% at most 0.5;
 - hand-off gap p95 at most 2 px;
 - no own shot drawn twice;
-- hit from afar p95 at most 12 px;
+- hit from afar p95 at most 12 px (bursts; a strike is on the hull);
+- no strike drawn that the room never answered with a hit;
+- no more hits with no shot drawn than the twin has;
 - no nudges or snaps with the client owning its hull.
+
+How long a strike or a hit takes to land (*strike to hit*, *hit*) is
+reported, not judged: online it is never nought, so it would only say
+"online".

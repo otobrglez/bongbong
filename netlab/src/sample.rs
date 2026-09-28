@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 pub const SEATS: usize = 2;
 
 /// A hull as drawn, in field pixels.
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct TankSample {
     pub slot: usize,
     pub x: f32,
@@ -33,12 +33,14 @@ pub struct TankSample {
 }
 
 /// A projectile as drawn.
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct ShotSample {
     /// The replica's id: the room's per-round counter for a room copy,
     /// `PROVISIONAL_ID_BASE` and up for a provisional - an index into the
     /// client's live provisionals, which shifts down as older ones retire,
-    /// so it names no shot from one frame to the next.
+    /// so it names no shot from one frame to the next. Their order does:
+    /// the client keeps its shots in the order they left, and a retirement
+    /// only closes the gap.
     pub id: u32,
     /// 0 shell, 1 bullet, 2 plasma.
     pub kind: u8,
@@ -53,10 +55,38 @@ pub struct ShotSample {
     pub flying: bool,
     /// In its impact frames: the shot has burst.
     pub impact: bool,
+    /// Where the shot is in its own life: its state's index in the kind's
+    /// state list (`ShellState::ALL`, `BulletState::ALL`,
+    /// `PlasmaState::ALL`) - the muzzle frames, then flight
+    /// (`flying_stage`), then the impact frames up to `final_stage`. A
+    /// shot's own state machine only runs forward.
+    #[serde(default)]
+    pub stage: u8,
+}
+
+/// The stage a shot of `kind` (0 shell, 1 bullet, 2 plasma) flies in.
+pub fn flying_stage(kind: u8) -> u8 {
+    let at = match kind {
+        1 => BulletState::ALL.iter().position(|&s| s == BulletState::Flying),
+        2 => PlasmaState::ALL.iter().position(|&s| s == PlasmaState::Flying),
+        _ => ShellState::ALL.iter().position(|&s| s == ShellState::Flying),
+    };
+    at.unwrap_or(0) as u8
+}
+
+/// The last stage of a shot of `kind`: its last impact frame, after which
+/// it is gone.
+pub fn final_stage(kind: u8) -> u8 {
+    let n = match kind {
+        1 => BulletState::ALL.len(),
+        2 => PlasmaState::ALL.len(),
+        _ => ShellState::ALL.len(),
+    };
+    (n - 1) as u8
 }
 
 /// What the metrics read out of a frame's events.
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum EventSample {
     Fired { slot: usize },
     HitEnemy { slot: usize, x: f32, y: f32 },
@@ -156,7 +186,7 @@ impl LinkSample {
 }
 
 /// One rendered frame.
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct FrameSample {
     /// The process clock when the frame was drawn, milliseconds.
     pub t_ms: f64,
@@ -208,6 +238,17 @@ fn in_flight(kind: ShotKind, state: i32) -> bool {
         ShotKind::Bullet => BulletState::from_col(state) == Some(BulletState::Flying),
         ShotKind::Plasma => PlasmaState::from_col(state) == Some(PlasmaState::Flying),
     }
+}
+
+/// Where a drawn shot of `kind` in sheet column `state` is in its life
+/// (`ShotSample::stage`).
+fn stage(kind: ShotKind, state: i32) -> u8 {
+    let at = match kind {
+        ShotKind::Shell => ShellState::from_col(state).and_then(|s| ShellState::ALL.iter().position(|&a| a == s)),
+        ShotKind::Bullet => BulletState::from_col(state).and_then(|s| BulletState::ALL.iter().position(|&a| a == s)),
+        ShotKind::Plasma => PlasmaState::from_col(state).and_then(|s| PlasmaState::ALL.iter().position(|&a| a == s)),
+    };
+    at.unwrap_or(0) as u8
 }
 
 /// Whether a drawn shot of `kind` in sheet column `state` is in its impact
@@ -267,6 +308,7 @@ pub fn read_picture(game: &Game, local_seat: Option<u8>, sample: &mut FrameSampl
                 provisional,
                 flying: in_flight(s.kind, s.state),
                 impact: bursting(s.kind, s.state),
+                stage: stage(s.kind, s.state),
             }
         })
         .collect();
