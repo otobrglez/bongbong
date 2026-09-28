@@ -138,6 +138,9 @@ pub struct ForeignShot {
     pub position: Position,
     pub velocity: Vec2,
     pub half_extent: f32,
+    /// A shell of the side opposing this seat: the room's
+    /// `shell_vs_shell` bursts it and this seat's shells where they meet.
+    pub opposing_shell: bool,
 }
 
 impl Game {
@@ -189,13 +192,31 @@ impl Game {
         let t = tuning();
         let mut out = Vec::new();
         for s in self.world.query::<&Shell>().iter().filter(|s| s.owner != own && s.id < base && s.state == ShellState::Flying) {
-            out.push(ForeignShot { id: s.id as u16, position: s.position, velocity: s.velocity, half_extent: t.shell_hit_half_extent });
+            out.push(ForeignShot {
+                id: s.id as u16,
+                position: s.position,
+                velocity: s.velocity,
+                half_extent: t.shell_hit_half_extent,
+                opposing_shell: !s.owner.same_side(own),
+            });
         }
         for b in self.world.query::<&Bullet>().iter().filter(|b| b.owner != own && b.id < base && b.state == BulletState::Flying) {
-            out.push(ForeignShot { id: b.id as u16, position: b.position, velocity: b.velocity, half_extent: t.minigun_bullet_hit_half_extent });
+            out.push(ForeignShot {
+                id: b.id as u16,
+                position: b.position,
+                velocity: b.velocity,
+                half_extent: t.minigun_bullet_hit_half_extent,
+                opposing_shell: false,
+            });
         }
         for p in self.world.query::<&Plasma>().iter().filter(|p| p.owner != own && p.id < base && p.state == PlasmaState::Flying) {
-            out.push(ForeignShot { id: p.id as u16, position: p.position, velocity: p.velocity, half_extent: t.plasma_hit_half_extent });
+            out.push(ForeignShot {
+                id: p.id as u16,
+                position: p.position,
+                velocity: p.velocity,
+                half_extent: t.plasma_hit_half_extent,
+                opposing_shell: false,
+            });
         }
         out
     }
@@ -350,6 +371,21 @@ impl PresentWorld {
 /// The fraction along `p0..p1` at which it enters the box at `center` with
 /// half extents `half`, or `None`: the slab test `hits::segment_hits_aabb`
 /// is, with a segment starting inside reporting 0.
+/// Where two shells moving over the same frame - `a0` to `a1` and `b0` to
+/// `b1` - come within `reach` of each other, the room's own rule
+/// (`Game::shell_vs_shell`: the closest approach over the frame's motion):
+/// the fraction of the frame and the midpoint between them there.
+pub fn shells_meet(a0: Position, a1: Position, b0: Position, b1: Position, reach: f32) -> Option<(f32, Position)> {
+    let rel = Vec2::new(a0.x - b0.x, a0.y - b0.y);
+    let rel_step = Vec2::new((a1.x - a0.x) - (b1.x - b0.x), (a1.y - a0.y) - (b1.y - b0.y));
+    let denom = rel_step.x * rel_step.x + rel_step.y * rel_step.y;
+    let t = if denom > 0.0 { (-(rel.x * rel_step.x + rel.y * rel_step.y) / denom).clamp(0.0, 1.0) } else { 0.0 };
+    let a = Position::new(a0.x + (a1.x - a0.x) * t, a0.y + (a1.y - a0.y) * t);
+    let b = Position::new(b0.x + (b1.x - b0.x) * t, b0.y + (b1.y - b0.y) * t);
+    let (dx, dy) = (a.x - b.x, a.y - b.y);
+    (dx * dx + dy * dy <= reach * reach).then(|| (t, Position::new((a.x + b.x) * 0.5, (a.y + b.y) * 0.5)))
+}
+
 pub fn segment_box(p0: Position, p1: Position, center: Position, half: Position) -> Option<f32> {
     let (mut t0, mut t1) = (0.0f32, 1.0f32);
     for (p, d, lo, hi) in [

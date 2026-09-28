@@ -84,6 +84,44 @@ pub const MAX_LEAD_TICKS: f32 = 30.0;
 /// forward, so it never appears ahead of the tank that fired it.
 pub const CATCH_UP_MS: f32 = 120.0;
 
+/// Where an own shot crossing `from` to `to` this frame stops first: the
+/// drawn world's contact (`world_hit`, and whether it is a tank's), or an
+/// opposing shell of `shells` it meets within `reach` by the room's rule
+/// (`present::shells_meet`), whichever comes sooner along the way - with
+/// the shell's id, so it bursts too. A shell already met this frame
+/// (`met`) meets nothing else.
+pub fn first_contact(
+    from: crate::math::Vec2,
+    to: crate::math::Vec2,
+    world_hit: Option<(crate::math::Vec2, bool)>,
+    shells: &[IncomingShell],
+    reach: f32,
+    met: &[(u16, crate::math::Vec2)],
+) -> Option<(crate::math::Vec2, bool, Option<u16>)> {
+    let span = ((to.x - from.x).powi(2) + (to.y - from.y).powi(2)).sqrt().max(f32::EPSILON);
+    let along = |at: crate::math::Vec2| ((at.x - from.x).powi(2) + (at.y - from.y).powi(2)).sqrt() / span;
+    let shell = shells
+        .iter()
+        .filter(|s| !met.iter().any(|&(id, _)| id == s.id))
+        .filter_map(|s| crate::simulation::present::shells_meet(from, to, s.from, s.to, reach).map(|(t, at)| (t, at, s.id)))
+        .min_by(|a, b| a.0.total_cmp(&b.0));
+    match (world_hit, shell) {
+        (Some((at, tank)), Some((t, _, _))) if along(at) <= t => Some((at, tank, None)),
+        (_, Some((_, at, id))) => Some((at, false, Some(id))),
+        (Some((at, tank)), None) => Some((at, tank, None)),
+        (None, None) => None,
+    }
+}
+
+/// An opposing shell's stretch of this frame as it is drawn in the
+/// present, for this seat's own shells to meet.
+#[derive(Clone, Copy, Debug)]
+pub struct IncomingShell {
+    pub id: u16,
+    pub from: crate::math::Vec2,
+    pub to: crate::math::Vec2,
+}
+
 /// A drawn own hull that moved further than this since the last frame
 /// jumped - a `Placed`, a portal, a correction taken whole - rather than
 /// drove, and presses no tread marks across the gap: the distance
@@ -199,9 +237,14 @@ pub struct OnlineRound<T: Transport> {
     /// When each foreign shot was first seen in flight, local ms: its
     /// catch-up into the present runs from there (`CATCH_UP_MS`).
     flying_since: std::collections::BTreeMap<u16, i64>,
-    /// Foreign shots this client already drew meeting its own hull: kept
-    /// off the picture until the room's copy goes.
-    struck: std::collections::BTreeSet<u16>,
+    /// Foreign shots this client drew bursting - on its own hull, or
+    /// against one of its own shells - and where: kept off the picture
+    /// until the room's copy goes, or until the room's copy is seen flying
+    /// on past that point, which is the room saying it missed.
+    struck: std::collections::BTreeMap<u16, crate::math::Vec2>,
+    /// Where each foreign shot was drawn last frame, for the stretch it
+    /// crossed this one.
+    incoming_drawn: std::collections::BTreeMap<u16, crate::math::Vec2>,
     /// The local seat's own hull, run ahead of the room and pulled back
     /// by each snapshot (stage 2, docs/online-coop-prd.md §4.12). Built
     /// beside the replica from the same `Welcome`, so the two step
@@ -247,7 +290,8 @@ impl<T: Transport> OnlineRound<T> {
             rtt: RttClock::default(),
             view: (0, 0),
             flying_since: std::collections::BTreeMap::new(),
-            struck: std::collections::BTreeSet::new(),
+            struck: std::collections::BTreeMap::new(),
+            incoming_drawn: std::collections::BTreeMap::new(),
             note: None,
             ended: None,
             scratch: Vec::new(),
@@ -788,10 +832,13 @@ impl<T: Transport> OnlineRound<T> {
         // what the present-time shots are tested against.
         let world = self.replica.as_ref().map(Game::present_world);
         if let (Some(world), Some(seat)) = (&world, self.client.seat()) {
-            self.fly_own_shots(dt, world, seat);
-            if let Some(frame) = &sampled {
-                self.draw_incoming_in_present(frame, now, world, seat);
-            }
+            // Incoming first: this frame's stretch of every opposing shell
+            // is what the own shells are swept against.
+            let shells = match &sampled {
+                Some(frame) => self.draw_incoming_in_present(frame, now, world, seat),
+                None => Vec::new(),
+            };
+            self.fly_own_shots(dt, world, seat, &shells);
         }
         let seat = self.client.seat();
         let Some(game) = self.replica.as_mut() else { return };
@@ -879,17 +926,33 @@ impl<T: Transport> OnlineRound<T> {
     /// machine and stops at the first tile, edge, tank or frog it meets,
     /// its impact drawn there at once; beams pressed since the last frame
     /// are drawn to where they stop.
-    fn fly_own_shots(&mut self, dt: f32, world: &crate::simulation::present::PresentWorld, seat: u8) {
+    fn fly_own_shots(&mut self, dt: f32, world: &crate::simulation::present::PresentWorld, seat: u8, shells: &[IncomingShell]) {
         use crate::simulation::present::{Contact, shot_half_extent};
         let (Some(predictor), Some(game)) = (self.predictor.as_mut(), self.replica.as_mut()) else { return };
         for at in predictor.take_muzzles() {
             game.draw_muzzle(at);
         }
+        // An own shell meets an opposing one where the room's
+        // `shell_vs_shell` would have them meet: both are drawn on the
+        // room's clock of this client's present, so the crossing in the
+        // picture is the crossing in the room.
+        let reach = tuning().shell_hit_half_extent * 2.0;
+        let mut met: Vec<(u16, crate::math::Vec2)> = Vec::new();
         predictor.advance_shots(dt, |kind, from, to| {
-            world
+            let world_hit = world
                 .shot_contact(Some(seat), from, to, shot_half_extent(kind))
-                .map(|(at, contact)| (at, matches!(contact, Contact::Tank { .. } | Contact::Frog)))
+                .map(|(at, contact)| (at, matches!(contact, Contact::Tank { .. } | Contact::Frog)));
+            let opposing: &[IncomingShell] = if kind == crate::simulation::ProvisionalKind::Shell { shells } else { &[] };
+            let (at, tank, shell) = first_contact(from, to, world_hit, opposing, reach, &met)?;
+            if let Some(id) = shell {
+                met.push((id, at));
+            }
+            Some((at, tank))
         });
+        for (id, at) in met {
+            self.struck.insert(id, at);
+            game.remove_shots(&[id]);
+        }
         for beam in predictor.take_beams() {
             let far = crate::math::Vec2::new(beam.start.x + beam.dir.x * LASER_REACH_PX, beam.start.y + beam.dir.y * LASER_REACH_PX);
             let end = world
@@ -923,29 +986,45 @@ impl<T: Transport> OnlineRound<T> {
     /// rather than appearing ahead of it. It stops at walls; one that
     /// reaches this seat's drawn hull shows its impact there at once and
     /// is kept off the picture until the room's copy goes - the damage is
-    /// the room's, and arrives with its `Hit`.
-    fn draw_incoming_in_present(&mut self, frame: &crate::net::interp::Frame, now: i64, world: &crate::simulation::present::PresentWorld, seat: u8) {
+    /// the room's, and arrives with its `Hit` - or until the room's copy is
+    /// seen flying on past it, when it is drawn again. Returns this frame's
+    /// stretch of every opposing shell, which this seat's own shells meet
+    /// the way the room's `shell_vs_shell` has them meet.
+    fn draw_incoming_in_present(
+        &mut self,
+        frame: &crate::net::interp::Frame,
+        now: i64,
+        world: &crate::simulation::present::PresentWorld,
+        seat: u8,
+    ) -> Vec<IncomingShell> {
         use crate::simulation::present::segment_box;
-        let (Some(predictor), Some(newest)) = (self.predictor.as_ref(), self.interp.newest()) else { return };
+        let (Some(predictor), Some(newest)) = (self.predictor.as_ref(), self.interp.newest()) else { return Vec::new() };
         let acked = newest.acked.get(seat as usize).copied().unwrap_or(0);
         if acked == 0 {
-            return;
+            return Vec::new();
         }
         let render = frame.snapshot.tick as f64 + (frame.ahead / PHYSICS_FIXED_DT) as f64;
         let lead_ticks = incoming_lead_ticks(newest.tick, acked, predictor.tick().wrapping_sub(1), render);
         let hull = world.seat_hull(seat);
-        let Some(game) = self.replica.as_mut() else { return };
+        let Some(game) = self.replica.as_mut() else { return Vec::new() };
         let foreign = game.foreign_flying_shots(seat);
         let alive: std::collections::BTreeSet<u16> = foreign.iter().map(|s| s.id).collect();
         self.flying_since.retain(|id, _| alive.contains(id));
-        let gone: Vec<u16> = self.struck.iter().copied().filter(|id| !game.has_shot(*id)).collect();
-        for id in gone {
-            self.struck.remove(&id);
-        }
+        self.incoming_drawn.retain(|id, _| alive.contains(id));
+        self.struck.retain(|id, _| game.has_shot(*id));
         let mut struck_now = Vec::new();
+        let mut shells = Vec::new();
         for shot in foreign {
-            if self.struck.contains(&shot.id) {
-                continue;
+            if let Some(&at) = self.struck.get(&shot.id) {
+                // The room's copy itself - where the room has it, not
+                // carried ahead - flying on past where this client drew
+                // it burst: the room missed, and the shot is drawn again.
+                let speed = (shot.velocity.x * shot.velocity.x + shot.velocity.y * shot.velocity.y).sqrt();
+                let past = ((shot.position.x - at.x) * shot.velocity.x + (shot.position.y - at.y) * shot.velocity.y) / speed.max(f32::EPSILON);
+                if past <= crate::net::predict::MISS_MARGIN_PX {
+                    continue;
+                }
+                self.struck.remove(&shot.id);
             }
             let since = *self.flying_since.entry(shot.id).or_insert(now);
             let catch = smoothstep(((now - since) as f32 / CATCH_UP_MS).clamp(0.0, 1.0));
@@ -962,16 +1041,20 @@ impl<T: Transport> OnlineRound<T> {
                         shot.position.y + (to.y - shot.position.y) * t,
                     );
                     game.draw_impact(at);
-                    struck_now.push(shot.id);
+                    struck_now.push((shot.id, at));
                     continue;
                 }
             }
+            let from = self.incoming_drawn.insert(shot.id, to).unwrap_or(to);
+            if shot.opposing_shell {
+                shells.push(IncomingShell { id: shot.id, from, to });
+            }
             game.move_shot(shot.id, to);
         }
-        game.remove_shots(&struck_now);
         self.struck.extend(struck_now);
-        let hidden: Vec<u16> = self.struck.iter().copied().collect();
+        let hidden: Vec<u16> = self.struck.keys().copied().collect();
         game.remove_shots(&hidden);
+        shells
     }
 
     /// Pull the sandbox back into line with a snapshot that just landed.
@@ -1446,6 +1529,35 @@ mod tests {
         let landed = round.own_hull_at().expect("a hull");
         assert!((landed.0 - there.0).abs() < 0.5, "not placed: {landed:?} vs {there:?}");
         assert_eq!(round.game().expect("a replica").tracks.len(), tracks_before, "tread marks were pressed across the placement");
+    }
+
+    /// **Own shells meet opposing ones in the picture** where the room's
+    /// `shell_vs_shell` meets them: head-on, between frames, at the
+    /// midpoint of their closest approach; a wall nearer along the way
+    /// stops the shell first; a shell met once meets nothing else; and a
+    /// shot of another kind never meets a shell.
+    #[test]
+    fn an_own_shell_meets_an_opposing_one_where_the_room_would() {
+        use crate::math::Vec2;
+        let reach = tuning().shell_hit_half_extent * 2.0;
+        // Ours climbs 100 -> 80, theirs falls 60 -> 90: they pass between
+        // the frame's two ends.
+        let coming = IncomingShell { id: 7, from: Vec2::new(10.0, 60.0), to: Vec2::new(10.0, 90.0) };
+        let (from, to) = (Vec2::new(10.0, 100.0), Vec2::new(10.0, 80.0));
+        let (at, tank, id) = first_contact(from, to, None, &[coming], reach, &[]).expect("they meet");
+        assert_eq!((tank, id), (false, Some(7)));
+        assert!((at.x - 10.0).abs() < 0.01 && (80.0..=100.0).contains(&at.y), "met at {at:?}");
+        // A wall at y = 95, before the meeting: the wall.
+        let wall = Some((Vec2::new(10.0, 95.0), false));
+        assert_eq!(first_contact(from, to, wall, &[coming], reach, &[]), Some((Vec2::new(10.0, 95.0), false, None)));
+        // A wall past it: the shell.
+        let beyond = Some((Vec2::new(10.0, 81.0), false));
+        assert_eq!(first_contact(from, to, beyond, &[coming], reach, &[]).map(|c| c.2), Some(Some(7)));
+        // Met already this frame: nothing left to meet.
+        assert_eq!(first_contact(from, to, None, &[coming], reach, &[(7, at)]), None);
+        // Side by side a lane apart: no meeting.
+        let wide = IncomingShell { id: 8, from: Vec2::new(60.0, 60.0), to: Vec2::new(60.0, 90.0) };
+        assert_eq!(first_contact(from, to, None, &[wide], reach, &[]), None);
     }
 
     /// **A shot stops where it is seen to hit** (§4.16): a provisional
