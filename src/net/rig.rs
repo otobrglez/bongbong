@@ -292,7 +292,7 @@ impl Lockstep {
             match event {
                 // The rig's welcome carries the empty tuning patch, so
                 // there is nothing to stage before the replica is built.
-                ClientEvent::Welcomed(welcome) => match apply::welcome(&welcome) {
+                ClientEvent::Welcomed { welcome, .. } => match apply::welcome(&welcome) {
                     Ok(game) => self.replica = Some(game),
                     Err(e) => self.note = Some(e),
                 },
@@ -572,6 +572,10 @@ mod tests {
         newest: Option<u32>,
         tick: u64,
         hulls: Vec<Hull>,
+        /// The frame ran past the newest snapshot on last-known velocities.
+        extrapolated: bool,
+        /// Slots drawn off their snapshots by an easing correction.
+        eased: Vec<usize>,
     }
 
     fn options(quality: LinkQuality) -> RigOptions {
@@ -634,10 +638,13 @@ mod tests {
             }
             if let Some(game) = round.game() {
                 let state = game.drawable_state();
+                let interp = round.interp();
                 seen.push(Drawn {
-                    newest: round.interp().newest_tick(),
+                    newest: interp.newest_tick(),
                     tick: game.frame(),
                     hulls: state.tanks.iter().map(|t| (t.slot, t.x, t.y)).collect(),
+                    extrapolated: interp.extrapolating(),
+                    eased: state.tanks.iter().map(|t| t.slot).filter(|&slot| interp.easing(slot as u16)).collect(),
                 });
             }
             thread::sleep(frame);
@@ -695,14 +702,32 @@ mod tests {
         // (docs/online-coop-prd.md §4.12); it is the seat whose position
         // is deliberately *not* the room's most recent word. Every other
         // hull still is, which is what this check is for.
+        //
+        // **So are the interpolator's own two departures from the
+        // bracket, both deliberate**: a frame that ran past the newest
+        // snapshot draws every hull where its last velocity carries it
+        // (a machine too loaded to keep the delay covered is exactly when
+        // that happens), and a hull whose guess the next snapshots
+        // corrected is drawn gliding back by an easing offset. Those
+        // frames and hulls are named by the interpolator itself; every
+        // other one is held to the quarter pixel.
         let predicted = tuning().online_predict_own_tank.then_some(0usize);
         let mut checked = 0;
+        let mut exempt = 0;
         for frame in &seen {
             let Some(i) = authority.iter().position(|(tick, _)| *tick as u64 == frame.tick) else { continue };
             let Some((_, from)) = authority.get(i) else { continue };
             let Some((_, to)) = authority.get(i + 1) else { continue };
+            if frame.extrapolated {
+                exempt += 1;
+                continue;
+            }
             for &(slot, x, y) in &frame.hulls {
                 if Some(slot) == predicted {
+                    continue;
+                }
+                if frame.eased.contains(&slot) {
+                    exempt += 1;
                     continue;
                 }
                 let Some(a) = from.iter().find(|h| h.0 == slot) else { continue };
@@ -718,7 +743,7 @@ mod tests {
                 }
             }
         }
-        assert!(checked > 100, "only {checked} positions could be checked against the room");
+        assert!(checked > 100, "only {checked} positions could be checked against the room ({exempt} frames or hulls a guess)");
 
         // The point of the whole thing: the picture moves on frames no
         // snapshot arrived on. Without interpolation this count is zero

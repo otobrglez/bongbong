@@ -21,34 +21,48 @@
 //! arrival reads the server's time less that packet's transit; the
 //! fastest arrivals in the last `CLOCK_WINDOW_MS` are the ones that spent
 //! least time queued, so the estimate is the largest reading in the
-//! window. A slower reading never pulls it down at once: the estimate
-//! falls toward the window's best at most `CLOCK_FALL_PER_MS`, and only
-//! for time during which snapshots were actually arriving, so slow drift
-//! is followed and a lost segment's late burst is not mistaken for it.
-//! A reading far *above* the estimate is a new clock and is taken whole.
+//! window - up or down, so a path that got slower for good is followed
+//! the moment its last fast reading leaves the window. The one exception
+//! is the aftermath of an arrival gap: once a stall outlasts the window,
+//! the window holds nothing but the stall's late burst, which says
+//! nothing about the path, so for `CLOCK_SETTLE_MS` after the gap the
+//! estimate falls toward it at most `CLOCK_FALL_PER_MS`, and only for time
+//! during which snapshots were actually arriving. A reading far *above*
+//! the estimate is a new clock and is taken whole.
 //!
 //! **The picture runs on its own clock** (the playout clock). Render time
-//! advances monotonically at 1.0x real time and is steered toward its
-//! target - the clock less the delay - only through a bounded rate:
-//! `RATE_NEAR` (3 %) for small errors, up to `RATE_FAR` (10 %) when far
-//! off, nothing inside `RATE_DEADBAND_MS`. It never steps backwards; it
-//! is taken whole only on a new clock or when more than
-//! `RENDER_SNAP_MS` off. Jittered arrivals move neither the envelope nor
-//! the target, so on a live link the picture's speed is exactly 1.0 on
-//! almost every frame.
+//! is a place on the tick schedule, which no clock estimate moves. It
+//! advances at 1.0x real time and is steered toward its target - the
+//! clock less the delay - only through a bounded rate: `RATE_NEAR` (3 %)
+//! for small errors, up to `RATE_FAR` (10 %) when far off, nothing inside
+//! `RATE_DEADBAND_MS`. It never steps backwards: a target more than
+//! `RENDER_SNAP_MS` ahead is taken whole, and a target behind it - a new
+//! clock, or more than `RENDER_SNAP_MS` behind - holds it where it stands
+//! until the target catches up. Only a round starting over (the tick
+//! counter going back) or a `Welcome` starts it afresh. Jittered arrivals
+//! move neither the envelope nor the target, so on a live link the
+//! picture's speed is exactly 1.0 on almost every frame.
 //!
 //! **The delay is sized from lateness** (decision 8). Each arrival's
-//! lateness is how far it came in behind the envelope. The target is one
-//! snapshot interval (the bracket's own width) plus one 60 Hz frame plus
-//! the 95th percentile of lateness over `LATENESS_WINDOW_MS` - floored at
+//! lateness is how far it came in behind the envelope as it stood then,
+//! or as it stands now if it has since fallen: when the envelope falls to
+//! a slower path, the lateness the delay was paying for falls with it and
+//! the render target stays where it was.
+//! The target is one snapshot interval (the bracket's own width) plus one
+//! 60 Hz frame plus the 95th percentile of lateness over
+//! `LATENESS_WINDOW_MS` - floored at
 //! `online_interpolation_delay_ms`, capped at
 //! `online_interpolation_delay_max_ms`, pinned to the floor with
 //! `online_interpolation_adaptive` off. Head-of-line stalls - lateness
-//! past `STALL_INTERVALS` intervals, a lost TCP segment holding everything
-//! behind it - are left out of the percentile while they are isolated
-//! (under `STALL_SHARE_MAX` of the window): sizing the delay for them
-//! would pay a stall's worth of latency on every frame to hide one frame
-//! in a few seconds, so they are ridden out on extrapolation instead.
+//! past `STALL_INTERVALS` intervals arriving bunched, a lost TCP segment
+//! holding everything behind it and releasing it at once - are left out
+//! of the percentile while they are isolated (under `STALL_SHARE_MAX` of
+//! the window): sizing the delay for them would pay a stall's worth of
+//! latency on every frame to hide one frame in a few seconds, so they are
+//! ridden out on extrapolation instead. Lateness that arrives on the
+//! room's cadence is the path's and always counts: a route that got
+//! slower is covered within a twentieth of the window, before the clock
+//! has followed it.
 //!
 //! What blends and what does not:
 //!
@@ -62,11 +76,12 @@
 //!   it does in a local round. A shot's heading is the same: it only ever
 //!   changes on a ricochet, where a snap is the truth.
 //! - A hull that moved further between the two ends than it could have
-//!   driven, or whose far end carries its `Teleported`, `TankEntered` or
-//!   `Placed`, is not lerped across the map: it holds at the near end and
-//!   is drawn at the far end the frame render time reaches it, and that
-//!   frame lists it in `Frame::snapped` so the caller can lift its tread
-//!   marks.
+//!   driven, or whose far end carries its `Teleported` or `Placed`, is not
+//!   lerped across the map: it holds at the near end and is drawn at the
+//!   far end the frame render time reaches it, and that frame lists it in
+//!   `Frame::snapped` so the caller can lift its tread marks. A
+//!   `TankEntered` is no such cue: it marks a rolling-in hull reaching the
+//!   inside of its gate at the end of a drive the snapshots show whole.
 //! - Everything discrete - tiles, fires, pickups, the round's scalars, the
 //!   flags on a hull - is the near end's, so the picture never shows a
 //!   state the server has not reached yet.
@@ -74,7 +89,13 @@
 //!   frame render time reaches the snapshot they were cut with, so a
 //!   fireball appears when the hull it belongs to is drawn where it died.
 //!   `Game::frame` is that snapshot's tick, which is what makes
-//!   `Fx::observe` fire once per snapshot rather than once per frame.
+//!   `Fx::observe` fire once per snapshot rather than once per frame. A
+//!   snapshot the picture never showed - dropped from a full buffer, or
+//!   stepped over by a frame that came after a hidden tab - keeps only the
+//!   events the replica needs as state (`carries_state`) once it is more
+//!   than `EVENT_STALE_MS` older than the delay would have shown it; its
+//!   cosmetics would all land on one frame, a mass burst of things long
+//!   over. The near end on screen always hands over everything it carries.
 //!
 //! **Past the newest snapshot** - a lost segment, a stalled link - hulls
 //! carry on at their last velocity for `HULL_EXTRAPOLATE_MS` and then
@@ -133,13 +154,21 @@ pub const CLOCK_SNAP_MS: f64 = 500.0;
 
 /// How long the clock remembers an arrival: the envelope is the fastest
 /// arrival of the last two seconds, long enough that one lucky packet
-/// sets it for a while and short enough to follow drift.
+/// sets it for a while and short enough that a path that got slower is
+/// followed two seconds later.
 pub const CLOCK_WINDOW_MS: i64 = 2_000;
 
-/// How fast the clock's estimate may fall toward a slower envelope, in
-/// milliseconds per millisecond of arrivals: 50 ms a second, so a path
-/// that got 100 ms slower is followed in two seconds while a burst of
-/// late packets moves it by next to nothing.
+/// How long after an arrival gap past `STALL_INTERVALS` intervals the
+/// estimate may only fall at `CLOCK_FALL_PER_MS` - and only while the
+/// window holds nothing but readings from after the gap, which is a stall
+/// that outlasted the window: its late burst says nothing about the path,
+/// and half a second of the stream that follows it does.
+pub const CLOCK_SETTLE_MS: i64 = 500;
+
+/// How fast the clock's estimate may fall toward a slower envelope while
+/// it settles after a gap (`CLOCK_SETTLE_MS`), in milliseconds per
+/// millisecond of arrivals: 50 ms a second, so a burst of late packets
+/// moves it by next to nothing.
 pub const CLOCK_FALL_PER_MS: f64 = 0.05;
 
 /// The most one arrival gap counts toward `CLOCK_FALL_PER_MS`: a stall of
@@ -158,9 +187,17 @@ pub const LATENESS_WINDOW_MS: i64 = 3_000;
 /// The lateness percentile the delay covers.
 pub const LATENESS_PERCENTILE: f64 = 0.95;
 
-/// Lateness past this many snapshot intervals is a head-of-line stall
+/// Lateness past this many snapshot intervals, on an arrival that ended a
+/// gap this wide or came in the burst behind one, is a head-of-line stall
 /// rather than jitter; an arrival gap this wide is counted as one.
 pub const STALL_INTERVALS: f64 = 3.0;
+
+/// An arrival less than this many snapshot intervals after the one before
+/// it came in a burst - what a stall releases at once. Lateness that
+/// arrives on the room's cadence instead is the path's own, however
+/// large: a route that got slower, which the delay has to cover until the
+/// clock's window has followed it.
+pub const BURST_INTERVALS: f64 = 0.5;
 
 /// While stalls are at most this share of the lateness window they are
 /// isolated and left out of the percentile; past it they are simply the
@@ -172,10 +209,20 @@ pub const STALL_SHARE_MAX: f64 = 0.2;
 /// speed; a larger one is taken at once.
 pub const DELAY_NARROW_HYSTERESIS_MS: f64 = 5.0;
 
-/// Render time this far from its target is taken whole instead of steered
-/// toward: a quarter of a second at 10 % would be two and a half seconds
-/// of fast or slow motion.
+/// Render time this far behind its target is taken whole instead of
+/// steered toward, and this far ahead of it is held until the target
+/// catches up: a quarter of a second at 10 % would be two and a half
+/// seconds of fast or slow motion.
 pub const RENDER_SNAP_MS: f64 = 250.0;
+
+/// A snapshot the picture never showed - dropped from a full buffer or
+/// stepped over by a long frame - whose events reach the replica more
+/// than this much later than the delay would have shown them keeps only
+/// the ones the replica needs as state (`carries_state`). A quarter of a
+/// second is how far render time may fall behind before it jumps, and
+/// about as long as a fireball lasts: a lost segment's burst is still
+/// shown late, a hidden tab's backlog is not shown at all.
+pub const EVENT_STALE_MS: f64 = RENDER_SNAP_MS;
 
 /// Inside this error the picture runs at exactly 1.0x.
 pub const RATE_DEADBAND_MS: f64 = 1.0;
@@ -234,7 +281,8 @@ pub const TELEPORT_SLACK_PX: f32 = 16.0;
 /// How many snapshots are kept. Render time sits the delay behind the
 /// newest - up to `online_interpolation_delay_max_ms` - and a burst after
 /// a stall lands several at once, so this is room for both before the
-/// oldest is dropped unseen (its events are still handed over).
+/// oldest is dropped unseen (what of its events is still owed as state is
+/// handed over).
 const BUFFERED_SNAPSHOTS: usize = 32;
 
 /// The plausible range for a measured interval; anything outside is a
@@ -270,16 +318,38 @@ pub fn tick_ms(tick: u32) -> f64 {
 /// queued and a late one moves nothing. The link's time on the wire is
 /// part of the delay's floor, not something this tries to measure (that
 /// is `net::clock`'s round trip).
-#[derive(Clone, Debug, Default)]
+///
+/// The estimate follows the window's largest reading both ways, except
+/// while it settles after an arrival gap (`CLOCK_SETTLE_MS`): a stall
+/// longer than the window leaves nothing in it but the stall's late
+/// burst, and that may only pull the estimate down at `CLOCK_FALL_PER_MS`.
+#[derive(Clone, Debug)]
 pub struct ServerClock {
     offset_ms: Option<f64>,
     /// The readings in the window, oldest first, with their arrival time.
     window: VecDeque<(i64, f64)>,
-    /// The newest arrival, for the fall credit.
+    /// The newest arrival, for the fall credit and the gap.
     last_local: Option<i64>,
+    /// The arrival that ended the last gap longer than `gap_ms`.
+    resumed_at: Option<i64>,
+    /// An arrival gap longer than this is a stall.
+    gap_ms: f64,
     /// The smoothed lateness of each reading behind the estimate: how far
     /// arrivals stray from the fastest. Zero on a perfect link.
     jitter_ms: f64,
+}
+
+impl Default for ServerClock {
+    fn default() -> ServerClock {
+        ServerClock {
+            offset_ms: None,
+            window: VecDeque::new(),
+            last_local: None,
+            resumed_at: None,
+            gap_ms: STALL_INTERVALS * SNAPSHOT_INTERVAL_MS,
+            jitter_ms: 0.0,
+        }
+    }
 }
 
 impl ServerClock {
@@ -302,7 +372,11 @@ impl ServerClock {
             self.take_whole(reading, local_ms);
             return true;
         }
-        let credit = self.last_local.map_or(0.0, |at| ((local_ms - at).max(0) as f64).min(CLOCK_FALL_CREDIT_MS));
+        let gap = self.last_local.map_or(0, |at| (local_ms - at).max(0));
+        if gap as f64 > self.gap_ms {
+            self.resumed_at = Some(local_ms);
+        }
+        let credit = (gap as f64).min(CLOCK_FALL_CREDIT_MS);
         self.last_local = Some(self.last_local.map_or(local_ms, |at| at.max(local_ms)));
         self.window.push_back((local_ms, reading));
         let horizon = local_ms - CLOCK_WINDOW_MS;
@@ -310,7 +384,16 @@ impl ServerClock {
             self.window.pop_front();
         }
         let envelope = self.window.iter().map(|&(_, r)| r).fold(f64::NEG_INFINITY, f64::max);
-        let next = if envelope >= offset { envelope } else { (offset - credit * CLOCK_FALL_PER_MS).max(envelope) };
+        // Settling: the window holds only what came after a gap, and the
+        // gap is recent. Otherwise the window's best is the path.
+        let settling = self.resumed_at.is_some_and(|at| {
+            local_ms - at < CLOCK_SETTLE_MS && self.window.front().is_some_and(|&(first, _)| first >= at)
+        });
+        let next = if envelope >= offset || !settling {
+            envelope
+        } else {
+            (offset - credit * CLOCK_FALL_PER_MS).max(envelope)
+        };
         self.offset_ms = Some(next);
         let late = (next - reading).max(0.0);
         self.jitter_ms += (late - self.jitter_ms) * JITTER_GAIN;
@@ -322,12 +405,19 @@ impl ServerClock {
         self.window.clear();
         self.window.push_back((local_ms, reading));
         self.last_local = Some(local_ms);
+        self.resumed_at = None;
         self.jitter_ms = 0.0;
     }
 
-    /// Forget everything: the next reading is taken whole.
+    /// The arrival gap past which the readings that follow are a stall's
+    /// burst (`STALL_INTERVALS` of the room's measured cadence).
+    pub fn set_gap_ms(&mut self, gap_ms: f64) {
+        self.gap_ms = gap_ms;
+    }
+
+    /// Forget every reading: the next one is taken whole.
     pub fn reset(&mut self) {
-        *self = ServerClock::default();
+        *self = ServerClock { gap_ms: self.gap_ms, ..ServerClock::default() };
     }
 
     /// How late a reading of `server_ms` arriving at `local_ms` is behind
@@ -370,9 +460,9 @@ pub struct Frame {
     /// velocities rather than between two of them.
     pub extrapolated: bool,
     /// Tanks (by id) that jumped rather than drove onto this frame's near
-    /// end - a portal, a gate, a `Placed` - and are drawn there whole: the
-    /// caller lifts their tread marks rather than pressing a line across
-    /// the field.
+    /// end - a portal, a `Placed`, a move longer than driving allows - and
+    /// are drawn there whole: the caller lifts their tread marks rather
+    /// than pressing a line across the field.
     pub snapped: Vec<u16>,
 }
 
@@ -402,12 +492,37 @@ pub struct InterpReport {
     /// Arrival gaps wider than `STALL_INTERVALS` intervals: head-of-line
     /// stalls ridden out on extrapolation.
     pub stalls: u64,
-    /// The playout clock's speed on the last frame, 1.0 on a settled link.
+    /// The playout clock's speed on the last frame, 1.0 on a settled link
+    /// and 0 while render time holds for its target to catch up.
     pub rate: f64,
     /// Corrections eased by an error offset.
     pub corrections: u64,
     /// The 95th percentile of those corrections' size, pixels.
     pub error_p95_px: f64,
+    /// Cosmetic events left out of snapshots handed over too late to show
+    /// (`EVENT_STALE_MS`): a hidden tab's backlog, a buffer that overflowed.
+    pub stale_events: u64,
+}
+
+/// One arrival's reading of the clock, for the lateness percentile.
+///
+/// Its lateness is how far it fell short of the clock's estimate: the
+/// estimate when it arrived, or the estimate now if that has since fallen.
+/// A path that got slower brings the estimate down and every reading that
+/// looked late against the old path with it; a faster reading raising the
+/// estimate later does not make the earlier ones late after the fact.
+#[derive(Clone, Copy, Debug)]
+struct Reading {
+    /// Local arrival time.
+    at_ms: i64,
+    /// Tick time less arrival time.
+    reading: f64,
+    /// The clock's estimate just after this reading was taken.
+    estimate: f64,
+    /// It ended an arrival gap of `STALL_INTERVALS` or came less than
+    /// `BURST_INTERVALS` behind the arrival before it: the shape of a
+    /// head-of-line stall, so its lateness may be one.
+    bunched: bool,
 }
 
 /// Which entity an error offset belongs to.
@@ -426,8 +541,14 @@ pub struct Interpolator {
     /// The newest tick whose events have been handed to the replica.
     released: Option<u32>,
     /// Events of snapshots dropped from a full buffer before render time
-    /// reached them, owed to the next frame.
+    /// reached them, owed to the next frame - only the ones the replica
+    /// needs as state, since such a snapshot is long past.
     orphaned: Vec<WireEvent>,
+    /// The seat this client plays: its `Fired` confirm its presses, so a
+    /// stale snapshot keeps them where it drops everyone else's.
+    seat: Option<u8>,
+    /// Cosmetic events left out of stale snapshots, for the report.
+    stale_events: u64,
     /// The last near end render time left behind: the second point of
     /// every velocity estimate past the newest snapshot.
     previous: Option<Snapshot>,
@@ -438,8 +559,9 @@ pub struct Interpolator {
     gaps: VecDeque<u32>,
     /// The room's measured cadence: the median gap, in milliseconds.
     interval_ms: f64,
-    /// Arrival lateness behind the envelope, with the arrival time.
-    lateness: VecDeque<(i64, f64)>,
+    /// Each recent arrival's reading of the clock (its tick time less its
+    /// arrival time), for the lateness percentile (`Reading`).
+    readings: VecDeque<Reading>,
     lateness_p50: f64,
     lateness_p95: f64,
     /// The delay the lateness asks for before the floor and the cap, with
@@ -449,8 +571,11 @@ pub struct Interpolator {
     last_arrival: Option<i64>,
     stalls: u64,
     /// Render time on the room's tick schedule; `None` until the first
-    /// frame, and again after a new clock.
+    /// frame, and again after a round starts over or a welcome.
     render: Option<f64>,
+    /// Render time stands still until its target catches up with it: a
+    /// new clock, or a target that fell more than `RENDER_SNAP_MS` behind.
+    holding: bool,
     /// The local time of the last frame.
     rendered_at: Option<i64>,
     /// The playout clock's speed on the last frame.
@@ -478,17 +603,20 @@ impl Default for Interpolator {
             clock: ServerClock::default(),
             released: None,
             orphaned: Vec::new(),
+            seat: None,
+            stale_events: 0,
             previous: None,
             epoch_ms: None,
             gaps: VecDeque::new(),
             interval_ms: SNAPSHOT_INTERVAL_MS,
-            lateness: VecDeque::new(),
+            readings: VecDeque::new(),
             lateness_p50: 0.0,
             lateness_p95: 0.0,
             want_ms: SNAPSHOT_INTERVAL_MS + FRAME_MS,
             last_arrival: None,
             stalls: 0,
             render: None,
+            holding: false,
             rendered_at: None,
             rate: 1.0,
             delay_ms: None,
@@ -508,6 +636,9 @@ impl Interpolator {
     /// events included, so it is the near end and nothing of it is
     /// released twice. The clock estimate survives unless the stamps say
     /// it is another clock; the picture starts again at its target.
+    ///
+    /// `local_ms` is when the welcome came off the socket, not the frame
+    /// that read it: the clock is the link's.
     pub fn restart(&mut self, baseline: &Snapshot, local_ms: i64) {
         self.buffer.clear();
         self.orphaned.clear();
@@ -515,9 +646,14 @@ impl Interpolator {
         self.released = Some(baseline.tick);
         let tick_time = tick_ms(baseline.tick);
         self.note_epoch(baseline.server_ms as f64 - tick_time);
-        self.clock.observe_ms(tick_time, local_ms);
+        self.observe(tick_time, local_ms);
         self.reset_picture();
         self.buffer.push_back(baseline.clone());
+    }
+
+    /// The seat this client plays, whose `Fired` a stale snapshot keeps.
+    pub fn set_seat(&mut self, seat: Option<u8>) {
+        self.seat = seat;
     }
 
     /// A whole snapshot from the room, which came off the socket at local
@@ -537,7 +673,7 @@ impl Interpolator {
                 self.previous = None;
                 self.released = None;
                 self.clock.reset();
-                self.lateness.clear();
+                self.readings.clear();
                 self.reset_picture();
             }
             Some(newest) => {
@@ -556,32 +692,41 @@ impl Interpolator {
         }
         let tick_time = tick_ms(snapshot.tick);
         self.note_epoch(snapshot.server_ms as f64 - tick_time);
-        if let Some(last) = self.last_arrival
-            && (at_ms - last) as f64 > STALL_INTERVALS * self.interval_ms
-        {
+        let gap = self.last_arrival.map(|last| (at_ms - last) as f64);
+        let stalled = gap.is_some_and(|gap| gap > STALL_INTERVALS * self.interval_ms);
+        if stalled {
             self.stalls += 1;
         }
+        let bunched = stalled || gap.is_some_and(|gap| gap < BURST_INTERVALS * self.interval_ms);
         self.last_arrival = Some(self.last_arrival.map_or(at_ms, |last| last.max(at_ms)));
-        if self.clock.observe_ms(tick_time, at_ms) {
-            // A new clock: lateness against the old one means nothing,
-            // and the picture starts again at its target.
-            self.lateness.clear();
-            self.reset_picture();
-        }
-        let late = (self.clock.lateness(tick_time, at_ms) - ARRIVAL_RESOLUTION_MS).max(0.0);
-        self.lateness.push_back((at_ms, late));
+        self.clock.set_gap_ms(STALL_INTERVALS * self.interval_ms);
+        self.observe(tick_time, at_ms);
+        let reading = tick_time - at_ms as f64;
+        let estimate = self.clock.offset_ms().unwrap_or(reading);
+        self.readings.push_back(Reading { at_ms, reading, estimate, bunched });
         let horizon = at_ms - LATENESS_WINDOW_MS;
-        while self.lateness.front().is_some_and(|&(at, _)| at < horizon) {
-            self.lateness.pop_front();
+        while self.readings.front().is_some_and(|r| r.at_ms < horizon) {
+            self.readings.pop_front();
         }
         self.refresh_lateness();
         self.buffer.push_back(snapshot);
+        let cutoff = self.stale_before(self.clock.now(at_ms));
+        let mut owed = std::mem::take(&mut self.orphaned);
         while self.buffer.len() > BUFFERED_SNAPSHOTS {
             let dropped = self.buffer.pop_front().expect("the buffer is over its cap");
             if self.owed(dropped.tick) {
-                self.orphaned.extend(dropped.events.iter().cloned());
+                self.stale_events += hand_over(&dropped, cutoff, self.seat, &mut owed);
             }
             self.previous = Some(dropped);
+        }
+        self.orphaned = owed;
+    }
+
+    /// One reading of the clock; a new clock starts the lateness over and
+    /// holds the picture.
+    fn observe(&mut self, tick_time: f64, at_ms: i64) {
+        if self.clock.observe_ms(tick_time, at_ms) {
+            self.new_clock();
         }
     }
 
@@ -591,31 +736,65 @@ impl Interpolator {
     fn note_epoch(&mut self, epoch: f64) {
         if self.epoch_ms.is_some_and(|last| (epoch - last).abs() > CLOCK_SNAP_MS) {
             self.clock.reset();
-            self.lateness.clear();
-            self.reset_picture();
+            self.new_clock();
         }
         self.epoch_ms = Some(epoch);
     }
 
-    /// The picture starts again: render time is taken whole on the next
-    /// frame and nothing drawn before is eased from.
+    /// Another clock: lateness measured against the old one means nothing.
+    /// Render time is a place on the tick schedule, which the new clock
+    /// does not move, so it is kept - held until the new target reaches
+    /// it rather than rewound to a target behind it, or taken forward to
+    /// one ahead.
+    fn new_clock(&mut self) {
+        self.readings.clear();
+        self.holding = true;
+    }
+
+    /// The picture starts again - the round started over, or a welcome
+    /// built a new replica: render time is taken whole on the next frame
+    /// and nothing drawn before is eased from.
     fn reset_picture(&mut self) {
         self.render = None;
         self.rendered_at = None;
         self.rate = 1.0;
+        self.holding = false;
+        self.drop_corrections();
+    }
+
+    /// Nothing drawn before is eased from: the picture jumped.
+    fn drop_corrections(&mut self) {
         self.extrapolated_from = None;
         self.drawn.clear();
         self.offsets.clear();
     }
 
-    /// The lateness percentiles and the delay they ask for.
+    /// The tick time before which a snapshot handed over at server time
+    /// `now` is stale (`EVENT_STALE_MS`); `None` before the clock has a
+    /// reading, when nothing is.
+    fn stale_before(&self, now: Option<f64>) -> Option<f64> {
+        now.map(|now| now - self.target_delay_ms() - EVENT_STALE_MS)
+    }
+
+    /// The lateness percentiles and the delay they ask for. A reading is a
+    /// stall's when it is later than `STALL_INTERVALS` intervals and came
+    /// bunched - at the head of a gap or in the burst behind it; while
+    /// those are isolated they are left out.
     fn refresh_lateness(&mut self) {
+        let Some(offset) = self.clock.offset_ms() else { return };
         let limit = STALL_INTERVALS * self.interval_ms;
-        let mut values: Vec<f64> = self.lateness.iter().map(|&(_, l)| l).collect();
-        let stalled = values.iter().filter(|&&l| l > limit).count();
-        if (stalled as f64) <= STALL_SHARE_MAX * values.len() as f64 {
-            values.retain(|&l| l <= limit);
-        }
+        let late: Vec<(f64, bool)> = self
+            .readings
+            .iter()
+            .map(|r| {
+                let late = (r.estimate.min(offset) - r.reading - ARRIVAL_RESOLUTION_MS).max(0.0);
+                (late, r.bunched && late > limit)
+            })
+            .collect();
+        let stalled = late.iter().filter(|&&(_, stall)| stall).count();
+        let isolated = (stalled as f64) <= STALL_SHARE_MAX * late.len() as f64;
+        let mut values: Vec<f64> =
+            late.iter().filter(|&&(_, stall)| !(stall && isolated)).map(|&(late, _)| late).collect();
         values.sort_by(f64::total_cmp);
         self.lateness_p50 = percentile(&values, 0.5);
         self.lateness_p95 = percentile(&values, LATENESS_PERCENTILE);
@@ -631,7 +810,9 @@ impl Interpolator {
     /// Advances the playout clock, eases any correction the newest
     /// arrivals made to what was drawn last frame, moves the near end past
     /// every snapshot render time has reached - handing over the events of
-    /// each exactly once - and blends toward the far end.
+    /// each exactly once, only the ones kept as state from a snapshot it
+    /// stepped over that is long past (`EVENT_STALE_MS`) - and blends
+    /// toward the far end.
     pub fn sample(&mut self, local_ms: i64) -> Option<Frame> {
         if self.buffer.is_empty() {
             return None;
@@ -640,23 +821,7 @@ impl Interpolator {
         let elapsed = self.rendered_at.map_or(0.0, |at| (local_ms - at).max(0) as f64);
         let previous_render = self.render;
         let target = now - self.target_delay_ms();
-        let render = match self.render {
-            Some(render) => {
-                let err = target - (render + elapsed);
-                if err.abs() > RENDER_SNAP_MS {
-                    self.reset_picture();
-                    target
-                } else {
-                    self.rate = rate_for(err);
-                    render + elapsed * self.rate
-                }
-            }
-            None => {
-                self.rate = 1.0;
-                target
-            }
-        };
-        let restarted = self.render.is_none();
+        let (render, fresh) = self.advance(target, elapsed);
         self.render = Some(render);
         self.rendered_at = Some(local_ms);
         self.delay_ms = Some(now - render);
@@ -664,7 +829,7 @@ impl Interpolator {
         // Newer snapshots have come in since a frame that ran past the
         // newest one: what they say about that frame's instant replaces
         // what was guessed, and the difference is eased off.
-        if !restarted
+        if !fresh
             && let (Some(from), Some(then)) = (self.extrapolated_from, previous_render)
             && self.buffer.back().is_some_and(|newest| newest.tick > from)
         {
@@ -679,16 +844,19 @@ impl Interpolator {
 
         let mut events: Vec<WireEvent> = std::mem::take(&mut self.orphaned);
         let mut snapped: BTreeSet<u16> = BTreeSet::new();
+        let cutoff = self.stale_before(Some(now));
         while self.buffer.len() > 1 && tick_ms(self.buffer[1].tick) <= render {
             let passed = self.buffer.pop_front().expect("the buffer holds two");
             // A frame long enough to step over a whole snapshot leaves one
             // that was never the near end; its events are still owed.
             if self.owed(passed.tick) {
-                events.extend(passed.events.iter().cloned());
+                self.stale_events += hand_over(&passed, cutoff, self.seat, &mut events);
             }
             snapped.extend(teleported(&passed, &self.buffer[0]));
             self.previous = Some(passed);
         }
+        // The near end is the snapshot on screen, however far back its
+        // tick: its events are this frame's.
         let front_tick = self.buffer.front()?.tick;
         if self.owed(front_tick) {
             events.extend(self.buffer[0].events.iter().cloned());
@@ -711,6 +879,41 @@ impl Interpolator {
             extrapolated,
             snapped: snapped.into_iter().collect(),
         })
+    }
+
+    /// Render time `elapsed` milliseconds after the last frame, steered
+    /// toward `target`, and whether the picture starts afresh on it.
+    ///
+    /// Never backwards: a target behind render time - after a new clock,
+    /// or more than `RENDER_SNAP_MS` behind - holds it where it stands
+    /// until the target catches up, and a target more than
+    /// `RENDER_SNAP_MS` ahead is jumped to. In between, the bounded rate.
+    fn advance(&mut self, target: f64, elapsed: f64) -> (f64, bool) {
+        let Some(render) = self.render else {
+            self.rate = 1.0;
+            self.holding = false;
+            return (target, true);
+        };
+        let err = target - (render + elapsed);
+        if self.holding || err < -RENDER_SNAP_MS {
+            if target < render {
+                self.holding = true;
+                self.rate = 0.0;
+                return (render, false);
+            }
+            self.holding = false;
+        } else if err <= RENDER_SNAP_MS {
+            self.rate = rate_for(err);
+            return (render + elapsed * self.rate, false);
+        }
+        // Caught up with a held picture, or far behind the target: taken
+        // whole, and a jump drops what was being eased.
+        self.rate = 1.0;
+        let jumped = target - render > RENDER_SNAP_MS;
+        if jumped {
+            self.drop_corrections();
+        }
+        (target, jumped)
     }
 
     /// The picture at render time `t` from what is buffered now, without
@@ -801,7 +1004,8 @@ impl Interpolator {
     }
 
     /// Where the delay is heading: one interval, one frame and the
-    /// lateness percentile, between `online_interpolation_delay_ms` and
+    /// lateness percentile (stalls left out while isolated), between
+    /// `online_interpolation_delay_ms` and
     /// `online_interpolation_delay_max_ms`. With
     /// `online_interpolation_adaptive` off it is the floor alone.
     pub fn target_delay_ms(&self) -> f64 {
@@ -845,7 +1049,20 @@ impl Interpolator {
             rate: self.rate,
             corrections: self.corrections,
             error_p95_px: percentile(&sizes, 0.95),
+            stale_events: self.stale_events,
         }
+    }
+
+    /// Whether the last frame ran past the newest snapshot on last-known
+    /// velocities: a picture that is a guess, not the room's word.
+    pub fn extrapolating(&self) -> bool {
+        self.extrapolated_from.is_some()
+    }
+
+    /// Whether tank `id` was drawn off its snapshots on the last frame by
+    /// an easing correction (`ERROR_HALF_LIFE_MS`).
+    pub fn easing(&self, id: u16) -> bool {
+        self.offsets.contains_key(&Key::Tank(id))
     }
 
     /// Whether `tick`'s events still have to be handed over, marking them
@@ -917,6 +1134,47 @@ fn percentile(values: &[f64], q: f64) -> f64 {
     values[((values.len() - 1) as f64 * q).round() as usize]
 }
 
+/// Append `snapshot`'s events to `out`: all of them while it is on time,
+/// only the ones `carries_state` keeps once its tick is before `cutoff`
+/// (`EVENT_STALE_MS`). Returns how many were left out.
+fn hand_over(snapshot: &Snapshot, cutoff: Option<f64>, seat: Option<u8>, out: &mut Vec<WireEvent>) -> u64 {
+    if cutoff.is_none_or(|cutoff| tick_ms(snapshot.tick) >= cutoff) {
+        out.extend(snapshot.events.iter().cloned());
+        return 0;
+    }
+    let before = out.len();
+    out.extend(snapshot.events.iter().filter(|e| carries_state(e, seat)).cloned());
+    (snapshot.events.len() - (out.len() - before)) as u64
+}
+
+/// Whether the replica needs `event` as state however late it comes, as
+/// opposed to a cosmetic that is only worth showing on time.
+///
+/// Kept: a round starting over (`net::apply` re-inits on it) or ending; a
+/// tile's death (the tile family says nothing of a tile that is gone); a
+/// fuel drum's launch (its flight is no snapshot family); a hull moved by
+/// the room - `Placed`, `Teleported`, `TankEntered` - and a `Shoved`, which
+/// the own hull takes as state; and this seat's `Fired`, which confirms a
+/// press the client is holding a provisional shot for - dropping it would
+/// strand the press. Everything else - blasts, wrecks, hits, flashes,
+/// other seats' and enemies' muzzles, beams - is how something looked at
+/// the moment, and the moment is gone. With no seat known, every `Fired`
+/// is kept.
+pub fn carries_state(event: &WireEvent, seat: Option<u8>) -> bool {
+    match *event {
+        WireEvent::RoundStarted { .. }
+        | WireEvent::RoundEnded { .. }
+        | WireEvent::ObstacleDestroyed { .. }
+        | WireEvent::DrumLaunched { .. }
+        | WireEvent::Placed { .. }
+        | WireEvent::Teleported { .. }
+        | WireEvent::TankEntered { .. }
+        | WireEvent::Shoved { .. } => true,
+        WireEvent::Fired { slot, .. } => seat.is_none_or(|seat| slot == seat as u16),
+        _ => false,
+    }
+}
+
 /// Move a position by its key's error offset, if it has one.
 fn shift(offsets: &BTreeMap<Key, (f32, f32)>, key: Key, x: &mut i16, y: &mut i16) {
     if let Some(&(dx, dy)) = offsets.get(&key) {
@@ -973,10 +1231,12 @@ fn teleported(from: &Snapshot, to: &Snapshot) -> Vec<u16> {
 /// Whether a hull went from `a` to `b` in `span_s` seconds by some way
 /// other than driving: an event says it was moved, or the distance is
 /// more than twice the fastest it could have been going plus
-/// `TELEPORT_SLACK_PX`.
+/// `TELEPORT_SLACK_PX`. `TankEntered` says nothing of the kind - a
+/// rolling-in hull reaches the inside of its gate on a drive the
+/// snapshots carry tick by tick - so it is left to the distance.
 fn jumped(a: &TankState, b: &TankState, span_s: f32, top_speed: f32, events: &[WireEvent]) -> bool {
     let moved = events.iter().any(|event| match *event {
-        WireEvent::Teleported { slot, .. } | WireEvent::TankEntered { slot } => slot == a.id,
+        WireEvent::Teleported { slot, .. } => slot == a.id,
         WireEvent::Placed { seat, .. } => seat as u16 == a.id,
         _ => false,
     });
@@ -1379,9 +1639,8 @@ mod tests {
         // A faster one than any before is the envelope at once.
         clock.observe_ms(1_220.0, 210);
         assert_eq!(clock.offset_ms(), Some(1_010.0));
-        // A path that got 40 ms slower is followed, but only as fast as
-        // `CLOCK_FALL_PER_MS` allows, and only once the fast readings
-        // have left the window.
+        // A path that got 40 ms slower is followed once the fast readings
+        // have left the window, and never below the envelope.
         let mut local = 210;
         let mut least = f64::MAX;
         for _ in 0..240 {
@@ -1655,5 +1914,178 @@ mod tests {
             interp.accept(snapshot(n * 6), exact(n * 6));
         }
         assert!((interp.interval_ms() - 100.0).abs() < 1e-6, "{}", interp.interval_ms());
+    }
+
+    /// A path that got 100 ms slower for good - a route change, not a
+    /// stall - is followed the moment its last fast reading leaves the
+    /// clock's window rather than at a fall-limited crawl after it. The
+    /// picture rides the change out on a bounded run of extrapolated
+    /// frames, never steps back, and ends on the floor again with every
+    /// frame between two snapshots.
+    #[test]
+    fn a_sustained_step_in_transit_is_followed_within_the_clock_window() {
+        let floor = tuning().online_interpolation_delay_ms as f64;
+        let step_tick = 300u32;
+        let arrive = |tick: u32| exact(tick) + if tick < step_tick { 20 } else { 120 };
+        let stepped_at = arrive(step_tick);
+        let mut interp = Interpolator::default();
+        let (mut next, mut local) = (0u32, 0i64);
+        let mut renders: Vec<f64> = Vec::new();
+        let mut followed_at = None;
+        let (mut extrapolated, mut extrapolated_late) = (0u32, 0u32);
+        while next < 700 {
+            while next < 700 && arrive(next) <= local {
+                interp.accept(snapshot(next), arrive(next));
+                next += 1;
+            }
+            if let Some(frame) = interp.sample(local) {
+                renders.push(render_of(&frame));
+                if local >= stepped_at && frame.extrapolated {
+                    extrapolated += 1;
+                    if local > stepped_at + CLOCK_WINDOW_MS + 500 {
+                        extrapolated_late += 1;
+                    }
+                }
+            }
+            // The new path reads -120 ms, give or take a third of a
+            // millisecond of rounding.
+            let offset = interp.clock().offset_ms();
+            if local >= stepped_at && followed_at.is_none() && offset.is_some_and(|o| o < -119.0) {
+                followed_at = Some(local);
+            }
+            local += 8;
+        }
+        let followed = followed_at.expect("the clock followed the slower path") - stepped_at;
+        assert!(followed <= CLOCK_WINDOW_MS + 100, "the clock took {followed} ms to follow a 100 ms step");
+        for pair in renders.windows(2) {
+            assert!(pair[1] >= pair[0] - 1e-6, "render time went back from {} to {}", pair[0], pair[1]);
+        }
+        // 125 frames a second. The lateness on the room's cadence widens
+        // the delay within a twentieth of its window, and the playout
+        // clock then slows by at most `RATE_FAR` to let the snapshots get
+        // ahead of it again: about a second and a half of guessed frames,
+        // and none once the clock has followed.
+        assert!(extrapolated <= 200, "{extrapolated} frames extrapolated after the step");
+        assert_eq!(extrapolated_late, 0, "still guessing half a second after the clock followed");
+        let report = interp.report();
+        assert!(report.target_ms - floor < 1.0, "the delay came back to the floor: {report:?}");
+    }
+
+    /// A wave tank reaching the inside of its gate carries a
+    /// `TankEntered`, but it drove there: it is blended like any drive,
+    /// not held at the near end and snapped.
+    #[test]
+    fn a_tank_entering_through_its_gate_is_blended_not_snapped() {
+        let a = snapshot(3);
+        let mut b = snapshot(6);
+        b.events = vec![WireEvent::TankEntered { slot: 0 }];
+        let mut interp = Interpolator::default();
+        interp.accept(a.clone(), exact(3));
+        interp.accept(b.clone(), exact(6));
+        interp.accept(snapshot(9), exact(9));
+        let frame = interp.sample(at(&interp, 75.0)).expect("a frame");
+        let (from, to) = (a.tanks[0].x, b.tanks[0].x);
+        assert!(
+            (frame.snapshot.tanks[0].x - (from + to) / 2).abs() <= 1,
+            "halfway along its drive from {from} to {to}, got {}",
+            frame.snapshot.tanks[0].x
+        );
+        let frame = interp.sample(at(&interp, 101.0)).expect("a frame");
+        assert_eq!(frame.snapshot.tick, 6);
+        assert!(frame.snapped.is_empty(), "a drive is not a jump: {:?}", frame.snapped);
+    }
+
+    /// A tab that was hidden hands its whole backlog over at once: the
+    /// buffer overflows and the next frame steps over everything it kept.
+    /// The snapshots long past keep only what the replica needs as state -
+    /// a tile's death, this seat's `Fired` - and their blasts and everyone
+    /// else's muzzles are dropped rather than all drawn on one frame; the
+    /// snapshots about the delay behind the room keep all of theirs.
+    #[test]
+    fn a_hidden_tabs_backlog_keeps_only_the_events_the_replica_needs_as_state() {
+        use crate::net::wire::WeaponKind;
+        let mut interp = Interpolator::default();
+        interp.set_seat(Some(0));
+        for tick in 0..10u32 {
+            interp.accept(snapshot(tick), exact(tick));
+        }
+        interp.sample(exact(9)).expect("a frame");
+        let backlog = 10..310u32;
+        for tick in backlog.clone() {
+            let mut s = snapshot(tick);
+            s.events = vec![
+                blast(tick as i16),
+                WireEvent::Fired { slot: 0, weapon: WeaponKind::Shell, input_tick: tick },
+                WireEvent::Fired { slot: 4, weapon: WeaponKind::Shell, input_tick: 0 },
+            ];
+            if tick % 50 == 0 {
+                s.events.push(WireEvent::ObstacleDestroyed { material: crate::obstacle::Material::Brick, x: tick as i16, y: 0 });
+            }
+            interp.accept(s, exact(tick));
+        }
+        let frame = interp.sample(exact(backlog.end - 1)).expect("a frame");
+        let events = &frame.snapshot.events;
+        let count = |pick: &dyn Fn(&WireEvent) -> bool| events.iter().filter(|e| pick(e)).count() as u32;
+        let handed = frame.snapshot.tick - backlog.start + 1;
+        assert!(handed > 250, "the frame reached the end of the backlog: tick {}", frame.snapshot.tick);
+        assert_eq!(count(&|e| matches!(e, WireEvent::ObstacleDestroyed { .. })), 6, "every tile death is state");
+        assert_eq!(
+            count(&|e| matches!(e, WireEvent::Fired { slot: 0, .. })),
+            handed,
+            "every one of this seat's presses is confirmed"
+        );
+        let blasts = count(&|e| matches!(e, WireEvent::Blast { .. }));
+        let on_time = ((tuning().online_interpolation_delay_max_ms as f64 + EVENT_STALE_MS) / TICK_MS) as u32 + 2;
+        assert!(blasts > 0, "the snapshots the delay would have shown keep their cosmetics");
+        assert!(blasts <= on_time, "{blasts} blasts of a {handed}-snapshot backlog drawn on one frame");
+        assert_eq!(count(&|e| matches!(e, WireEvent::Fired { slot: 4, .. })), blasts, "an enemy's muzzle is a cosmetic");
+        assert_eq!(interp.report().stale_events, 2 * (handed - blasts) as u64);
+    }
+
+    /// A room that stalled for 700 ms and dropped the ticks it missed
+    /// comes back on another clock - `server_ms - tick time` jumped - whose
+    /// target is behind where render time had run on extrapolation. The
+    /// picture holds there until the target catches up rather than
+    /// rewinding, then runs between snapshots again.
+    #[test]
+    fn a_new_clock_behind_the_picture_holds_it_rather_than_rewinding() {
+        let stall = 700i64;
+        let mut arrivals: Vec<(Snapshot, i64)> = (0..=300u32).map(|t| (snapshot(t), exact(t) + 20)).collect();
+        for tick in 301..=500u32 {
+            let mut s = snapshot(tick);
+            s.server_ms = stamp(tick) + stall as u32;
+            arrivals.push((s, exact(tick) + stall + 20));
+        }
+        let mut interp = Interpolator::default();
+        let (mut next, mut local) = (0usize, 0i64);
+        let mut renders: Vec<f64> = Vec::new();
+        let mut held_ms = 0;
+        let mut tail: Vec<bool> = Vec::new();
+        while next < arrivals.len() {
+            while next < arrivals.len() && arrivals[next].1 <= local {
+                let (s, at) = arrivals[next].clone();
+                interp.accept(s, at);
+                next += 1;
+            }
+            if let Some(frame) = interp.sample(local) {
+                renders.push(render_of(&frame));
+                if interp.report().rate == 0.0 {
+                    held_ms += 8;
+                }
+                if local > exact(420) + stall {
+                    tail.push(frame.extrapolated);
+                }
+            }
+            local += 8;
+        }
+        // A frame's `ahead` travels as an `f32` of seconds, so the render
+        // time it spells out is exact to about a ten-thousandth of a
+        // millisecond.
+        for pair in renders.windows(2) {
+            assert!(pair[1] >= pair[0] - 1e-3, "render time went back from {} to {}", pair[0], pair[1]);
+        }
+        assert!(held_ms > 0, "the picture held for the new clock's target");
+        assert!(held_ms <= stall + 100, "held for {held_ms} ms after a {stall} ms stall");
+        assert!(!tail.is_empty() && tail.iter().all(|e| !e), "back between snapshots once the target caught up");
     }
 }

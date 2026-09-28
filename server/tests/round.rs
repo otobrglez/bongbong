@@ -621,14 +621,14 @@ fn play_a_round(url: String, span: Duration) -> Played {
             match event {
                 ClientEvent::Created { code: minted } => code = Some(minted),
                 ClientEvent::Started => in_round = true,
-                ClientEvent::Welcomed(w) if in_round => {
+                ClientEvent::Welcomed { welcome: w, .. } if in_round => {
                     assert_eq!(w.seed, 0xB0B5, "the round runs on the seed the host pinned");
                     let game = apply::welcome(&w).expect("a replica from the welcome");
                     assert_replica_matches(&game, &w.snapshot);
                     replica = Some(game);
                     round_end = Some(Instant::now() + span);
                 }
-                ClientEvent::Welcomed(_) => {}
+                ClientEvent::Welcomed { .. } => {}
                 ClientEvent::Snapshot { snapshot, .. } => {
                     let game = replica.as_mut().expect("a snapshot before the welcome");
                     apply::snapshot(game, &snapshot);
@@ -943,7 +943,7 @@ async fn every_tap_of_the_trigger_puts_a_shell_in_the_air() {
             for event in events.drain(..) {
                 match event {
                     ClientEvent::Started => in_round = true,
-                    ClientEvent::Welcomed(w) if in_round => {
+                    ClientEvent::Welcomed { welcome: w, .. } if in_round => {
                         seat = w.seat as u16;
                         round_end = Some(Instant::now() + Duration::from_secs(2));
                     }
