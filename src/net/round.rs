@@ -690,8 +690,10 @@ impl<T: Transport> OnlineRound<T> {
         if let Some(predictor) = self.predictor.as_mut() {
             // The knob is live: read each tick, so a shot pressed after
             // it was turned on is drawn and one after it was turned off
-            // is not.
-            predictor.set_shots_enabled(tuning().online_predict_shots);
+            // is not. Shots are drawn only with the own tank predicted -
+            // the one test `draw` asks before it keeps the room's own
+            // muzzle ripples and beams off the picture.
+            predictor.set_shots_enabled(tuning().online_predict_own_tank && tuning().online_predict_shots);
             predictor.step_at(msg.tick, msg.intent());
             // Owning the hull, the packet says where this tick left it,
             // and the room puts the seat there (§4.14).
@@ -763,12 +765,15 @@ impl<T: Transport> OnlineRound<T> {
             self.view = (frame.snapshot.tick, frac);
             self.confirm_shots(&frame.snapshot);
         }
-        if predicting_shots {
+        // How long a press waits for its `Fired` follows the link whether
+        // its shots are drawn or not: an owned hull's undrawn presses run
+        // the gate and kick the hull on the same wait.
+        if let Some(predictor) = self.predictor.as_mut() {
             let delay = self.interp.delay_ms();
             let rtt = self.rtt.report().map_or(0.0, |r| r.rtt_p95_ms);
-            if let Some(predictor) = self.predictor.as_mut() {
-                predictor.set_refusal_after(((rtt + delay) / 1000.0) as f32 + REFUSAL_MARGIN_SECONDS);
-            }
+            predictor.set_refusal_after(((rtt + delay) / 1000.0) as f32 + REFUSAL_MARGIN_SECONDS);
+        }
+        if predicting_shots {
             self.pair_own_shots();
         }
         // **Before `tick_presentation`, not after.** The presentation
@@ -1614,11 +1619,10 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(120));
         round.frame(&Intent::default(), 1.0 / 60.0);
         assert!(round.game().is_some(), "the welcome built a replica");
-        // A reading is the tick's time less the arrival: the arrival it
-        // was taken at is the tick's time less the estimate.
-        let tick = room.game.frame() as u32;
+        // A reading is the room's send time less the arrival: the arrival
+        // it was taken at is the send time less the estimate.
         let offset = round.interp().clock().offset_ms().expect("the welcome was read");
-        let arrived = crate::net::interp::tick_ms(tick) - offset;
+        let arrived = room.server_ms as f64 - offset;
         assert!(
             (before as f64 - 1.0..=after as f64 + 1.0).contains(&arrived),
             "the welcome was read as arriving at {arrived} ms; it came off the socket between {before} and {after} ms"
