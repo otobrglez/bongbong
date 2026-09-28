@@ -51,6 +51,8 @@ pub struct ShotSample {
     pub provisional: bool,
     /// In flight: past the muzzle frames and not yet an impact.
     pub flying: bool,
+    /// In its impact frames: the shot has burst.
+    pub impact: bool,
 }
 
 /// What the metrics read out of a frame's events.
@@ -208,6 +210,16 @@ fn in_flight(kind: ShotKind, state: i32) -> bool {
     }
 }
 
+/// Whether a drawn shot of `kind` in sheet column `state` is in its impact
+/// frames.
+fn bursting(kind: ShotKind, state: i32) -> bool {
+    match kind {
+        ShotKind::Shell => matches!(ShellState::from_col(state), Some(ShellState::Hit0 | ShellState::Hit1 | ShellState::Hit2)),
+        ShotKind::Bullet => BulletState::from_col(state) == Some(BulletState::Hit),
+        ShotKind::Plasma => matches!(PlasmaState::from_col(state), Some(PlasmaState::Hit0 | PlasmaState::Hit1 | PlasmaState::Hit2)),
+    }
+}
+
 /// The picture half of a sample: the hulls and the shots as `game` holds
 /// them now. `local_seat` is the seat whose provisionals the picture
 /// holds (an online client's own), `None` for the twin.
@@ -254,6 +266,7 @@ pub fn read_picture(game: &Game, local_seat: Option<u8>, sample: &mut FrameSampl
                 seat: if provisional { local_seat } else { seat_of.get(&s.id).copied() },
                 provisional,
                 flying: in_flight(s.kind, s.state),
+                impact: bursting(s.kind, s.state),
             }
         })
         .collect();

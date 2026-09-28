@@ -794,11 +794,11 @@ mod tests {
     }
 
     fn own(id: u32, x: f32, provisional: bool, flying: bool) -> ShotSample {
-        ShotSample { id, kind: 0, x, y: 0.0, seat: Some(0), provisional, flying }
+        ShotSample { id, kind: 0, x, y: 0.0, seat: Some(0), provisional, flying, impact: !flying }
     }
 
     fn enemy(id: u32, x: f32, flying: bool) -> ShotSample {
-        ShotSample { id, kind: 0, x, y: 0.0, seat: None, provisional: false, flying }
+        ShotSample { id, kind: 0, x, y: 0.0, seat: None, provisional: false, flying, impact: !flying }
     }
 
     #[test]
@@ -1077,6 +1077,21 @@ mod tests {
         let inc = incoming_fire(&frames, 0);
         assert_eq!((inc.hits, inc.unseen), (1, 1), "{inc:?}");
         assert_eq!(inc.from_afar_px.n, 0);
+    }
+
+    /// A shell the picture first drew already bursting - it flew and hit
+    /// while the picture stood still - still accounts for the hit it burst
+    /// at.
+    #[test]
+    fn a_shell_first_drawn_bursting_at_the_hit_accounts_for_it() {
+        let mut frames = still(10);
+        for i in 4..8 {
+            frames[i].shots = vec![enemy(5, 20.0, false)];
+        }
+        frames[4].events = vec![EventSample::HitPlayer { player: 0, x: 20.0, y: 0.0 }];
+        let inc = incoming_fire(&frames, 0);
+        assert_eq!((inc.hits, inc.unseen), (1, 0));
+        assert_eq!(inc.from_afar_px.p50, Some(0.0));
     }
 
     /// A shell taken off the picture a hull's length short of the hull,

@@ -21,6 +21,7 @@ pub struct TrackPoint {
     pub x: f32,
     pub y: f32,
     pub flying: bool,
+    pub impact: bool,
 }
 
 /// Where and how the picture stopped a shot (`Track::stop`).
@@ -108,15 +109,18 @@ impl Track {
         (last.x + vx * ahead, last.y + vy * ahead)
     }
 
-    /// Where the picture stopped the shot: the first point after it flew
-    /// where it no longer flies (its impact frames, `vanished` false), or -
-    /// taken off the picture in flight - the frame after its last, at the
-    /// point its flight had carried it to by then. `None` when it never
-    /// flew, or was still flying when the frames ran out.
+    /// Where the picture stopped the shot: its first point in its impact
+    /// frames (`vanished` false), a shot that burst before the picture ever
+    /// drew it flying included, or, for one taken off the picture in flight,
+    /// the frame after its last, at the point its flight had carried it to
+    /// by then. `None` for a shot still flying when the frames ran out, or
+    /// one that never left its muzzle.
     pub fn stop(&self, frames: &[FrameSample]) -> Option<Stop> {
-        let flew = self.points.iter().position(|p| p.flying)?;
-        if let Some(p) = self.points[flew..].iter().find(|p| !p.flying) {
+        if let Some(p) = self.points.iter().find(|p| p.impact) {
             return Some(Stop { frame: p.frame, x: p.x, y: p.y, vanished: false });
+        }
+        if !self.last().flying {
+            return None;
         }
         let gone = self.last().frame + 1;
         let at = frames.get(gone)?;
@@ -170,7 +174,7 @@ pub fn follow(frames: &[FrameSample], pick: impl Fn(&ShotSample) -> bool) -> Vec
     let mut tracks: Vec<Track> = Vec::new();
     for (i, f) in frames.iter().enumerate() {
         let dt = if i == 0 { 0.0 } else { (f.t_ms - frames[i - 1].t_ms).max(0.0) as f32 / 1000.0 };
-        let point = |s: &ShotSample| TrackPoint { frame: i, x: s.x, y: s.y, flying: s.flying };
+        let point = |s: &ShotSample| TrackPoint { frame: i, x: s.x, y: s.y, flying: s.flying, impact: s.impact };
         let shots: Vec<&ShotSample> = f.shots.iter().filter(|s| pick(s)).collect();
         // The tracks drawn on the frame before, still open to this one.
         let open: Vec<usize> = (0..tracks.len()).filter(|&k| i > 0 && tracks[k].last().frame == i - 1).collect();
@@ -229,8 +233,14 @@ pub fn follow(frames: &[FrameSample], pick: impl Fn(&ShotSample) -> bool) -> Vec
 mod tests {
     use super::*;
 
+    /// A shot in flight, or - not flying - bursting.
     fn shot(id: u32, x: f32, provisional: bool, flying: bool) -> ShotSample {
-        ShotSample { id, kind: 0, x, y: 100.0, seat: Some(0), provisional, flying }
+        ShotSample { id, kind: 0, x, y: 100.0, seat: Some(0), provisional, flying, impact: !flying }
+    }
+
+    /// A shot standing in its muzzle frames.
+    fn muzzle(id: u32, x: f32) -> ShotSample {
+        ShotSample { impact: false, ..shot(id, x, true, false) }
     }
 
     fn frames(shots: Vec<Vec<ShotSample>>) -> Vec<FrameSample> {
@@ -283,8 +293,8 @@ mod tests {
         let base = bongbong::net::predict::PROVISIONAL_ID_BASE;
         let step = speed(0) / 60.0;
         let f = frames(vec![
-            vec![shot(base, 50.0, true, false)],
-            vec![shot(base, 50.0, true, false)],
+            vec![muzzle(base, 50.0)],
+            vec![muzzle(base, 50.0)],
             vec![shot(base, 50.0 + step, true, true)],
             vec![shot(base, 50.0 + 2.0 * step, true, true)],
         ]);
