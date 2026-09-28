@@ -299,6 +299,65 @@ cells."8,8" = { kind = "start" }
         assert!(matches!(outcome, PoseOutcome::Refused(..)), "a claimed stall was believed: {outcome:?}");
     }
 
+    /// **A room that stood still believes the driving its stall cost.**
+    /// A room held up 200 ms finds its client twelve ticks on, and the
+    /// read after the stall - `BUFFER_MAX` or more behind, so its play
+    /// point starts again - carries all of that driving in one pose. The
+    /// room ran one read since the last pose, but the wall clock ran
+    /// twelve ticks, and the pose is believed for those.
+    #[test]
+    fn an_owned_pose_after_a_room_stall_is_taken() {
+        let mut game = open_round();
+        let mailbox = Mailbox::new();
+        let dt = Duration::from_secs_f32(PHYSICS_FIXED_DT);
+        let mut now = Instant::now();
+        let start = game.seat_pose(0).expect("the seat");
+        let speed = game.tank_snapshots()[0].top_speed;
+        let step = speed * PHYSICS_FIXED_DT;
+        let x_at = |tick: u32| start.position.x + step * tick as f32;
+        let pose_at = |tick: u32| {
+            IntentMsg { tick, ..IntentMsg::default() }.with_pose(SeatPose {
+                position: Position::new(x_at(tick), start.position.y),
+                rotation: Dir::Right.rotation(),
+                velocity: Position::new(speed, 0.0),
+            })
+        };
+        // Driving right at top speed, a packet and a tick a tick.
+        let mut tick = 0u32;
+        for _ in 0..10 {
+            mailbox.post(pose_at(tick), now);
+            let outcome = room_tick(&mut game, &mailbox, now);
+            assert!(matches!(outcome, PoseOutcome::Applied(_)), "tick {tick}: {outcome:?}");
+            tick += 1;
+            now += dt;
+        }
+        // The room stalls 200 ms while the packets keep coming.
+        let stall = 12u32;
+        for _ in 0..stall {
+            mailbox.post(pose_at(tick), now);
+            tick += 1;
+            now += dt;
+        }
+        let floor = step * POSE_REACH_TICKS + POSE_REACH_SLACK_PX;
+        let driven = step * stall as f32;
+        assert!(driven > floor, "the fixture drives past the validator's floor: {driven} px vs {floor} px");
+        // Then it ticks again: the pose after the stall is taken.
+        for _ in 0..4 {
+            mailbox.post(pose_at(tick), now);
+            let outcome = room_tick(&mut game, &mailbox, now);
+            assert!(matches!(outcome, PoseOutcome::Applied(_)), "a pose after the stall was refused at tick {tick}: {outcome:?}");
+            tick += 1;
+            now += dt;
+        }
+        let here = game.seat_pose(0).expect("the seat");
+        let acked = mailbox.acked_tick();
+        assert!(
+            (here.position.x - x_at(acked)).abs() < 1.0,
+            "the room's hull is not where the client drove it: {here:?}, tick {acked} at {} px",
+            x_at(acked)
+        );
+    }
+
     fn ms(n: u64) -> Duration {
         Duration::from_millis(n)
     }
