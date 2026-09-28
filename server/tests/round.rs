@@ -324,7 +324,7 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
                     tick += 1;
                     let leg = (tick / 30) % 4;
                     let move_dir = [1u8, 4, 2, 3][leg as usize];
-                    send(&mut ws, &Msg::Intent(IntentMsg { tick, move_dir, face: move_dir, fire: tick % 90 == 0 })).await;
+                    send(&mut ws, &Msg::Intent(IntentMsg { tick, move_dir, face: move_dir, fire: tick % 90 == 0, ..IntentMsg::default() })).await;
                 }
                 frame = ws.next() => {
                     let Some(Ok(Message::Binary(bytes))) = frame else { break };
@@ -519,7 +519,7 @@ async fn four_seats_play_one_round_and_every_replica_follows_the_wire() {
             // tanks that are not where they started.
             let dir = 1 + (seat as u8 % 4);
             for tick in 1..=10u32 {
-                send(&mut ws, &Msg::Intent(IntentMsg { tick, move_dir: dir, face: dir, fire: false })).await;
+                send(&mut ws, &Msg::Intent(IntentMsg { tick, move_dir: dir, face: dir, fire: false, ..IntentMsg::default() })).await;
             }
             follow(&mut ws, baseline, Some(replica), span).await
         }));
@@ -885,7 +885,7 @@ async fn play_to_the_end(ws: &mut Client, baseline: Snapshot) -> PlayedOut {
                 tick += 1;
                 // Up the lane, and a shell on the press: a held trigger
                 // fires once, so the trigger is pulled.
-                send(ws, &Msg::Intent(IntentMsg { tick, move_dir: 0, face: 1, fire: tick % 6 == 0 })).await;
+                send(ws, &Msg::Intent(IntentMsg { tick, move_dir: 0, face: 1, fire: tick % 6 == 0, ..IntentMsg::default() })).await;
             }
             frame = ws.next() => {
                 let Some(Ok(Message::Binary(bytes))) = frame else { break };
@@ -1049,6 +1049,59 @@ async fn the_whole_client_taps_the_trigger_and_the_room_answers() {
         fired * 2 >= pulls,
         "pulled the trigger {pulls} times and only {fired} shells came back from the room"
     );
+}
+
+/// **Stage 3 against the real room** (docs/online-coop-prd.md §4.14): a
+/// client that owns its hull drives it on the spot, every packet carries
+/// the pose, and the room's snapshots follow it - the room's copy is
+/// where the client was a round trip ago, never somewhere the client is
+/// pulled back to.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_client_that_owns_its_hull_is_followed_by_the_room() {
+    use bongbong::net::round::OnlineRound;
+    use bongbong::tank::Dir;
+
+    let (addr, _hub) = start_server().await;
+    let url = socket_url(&RoomsHost::overriding(&format!("ws://{addr}")));
+
+    let (start, mine, room, report) = tokio::task::spawn_blocking(move || {
+        let client = RoomClient::host(
+            NativeTransport::connect(&url),
+            Identity::new("host", "tok-host"),
+            RoomSetup { map: "default".into(), map_toml: None, mission: Mission::Protect, seed: Some(0xB0B5) },
+        );
+        let mut round = OnlineRound::new(client, "TEST");
+        round.set_client_hull(true);
+        let frame = Duration::from_millis(16);
+        let dt = frame.as_secs_f32();
+        let give_up = Instant::now() + WAIT * 4;
+        while round.game().is_none_or(|g| g.frame() == 0) {
+            round.frame(&Intent::default(), dt);
+            round.start_round();
+            assert!(Instant::now() < give_up, "the round never got going");
+            std::thread::sleep(frame);
+        }
+        let start = round.own_hull_at().expect("the seat's hull");
+        let drive = Intent { move_dir: Some(Dir::Right), ..Intent::default() };
+        for _ in 0..120 {
+            round.frame(&drive, dt);
+            std::thread::sleep(frame);
+        }
+        // Stand still a few frames so the room's word catches up with
+        // where the hull stopped.
+        for _ in 0..12 {
+            round.frame(&Intent::default(), dt);
+            std::thread::sleep(frame);
+        }
+        (start, round.own_hull_at().expect("a hull"), round.room_has_seat_at().expect("the room's word"), round.prediction().expect("a report"))
+    })
+    .await
+    .expect("the client's thread");
+
+    eprintln!("owned hull: start {start:?}, mine {mine:?}, the room has it at {room:?}; {report:?}");
+    assert!(mine.0 > start.0 + 60.0, "the hull drove right on the spot: {start:?} -> {mine:?}");
+    assert!((room.0 - mine.0).abs() < 8.0 && (room.1 - mine.1).abs() < 8.0, "the room followed the hull: {room:?} vs {mine:?}");
+    assert_eq!((report.nudges, report.snaps, report.in_flight), (0, 0, 0), "an owned hull is never corrected: {report:?}");
 }
 
 /// **Co-op is two seats, and the second one has to be able to shoot.**

@@ -62,6 +62,15 @@ pub const LEAD_DEPTH_MAX: f32 = 2.5;
 /// How much of each reported depth the smoothed depth takes.
 pub const LEAD_GAIN: f32 = 0.1;
 
+/// The most ticks' worth of packets one rendered frame may send: a frame
+/// that took longer than a tick owes more than one packet, and a client
+/// drawing at 30 fps has to send sixty intents a second all the same -
+/// or the room starves every other tick, repeats the last intent, and the
+/// hull moves on ticks the sandbox never stepped, which arrives as a
+/// correction on every snapshot. Four is `app::SIM_MAX_STEPS_PER_FRAME`'s
+/// number: past it the frame was a stall and the time is dropped.
+pub const SEND_CATCH_UP_TICKS: u32 = 4;
+
 /// How long after a provisional shot crossed a drawn hull the server's
 /// `Hit` for it may still arrive: a round trip, the interpolation delay
 /// and the rest of the shell's flight, generously. Past it the crossing
@@ -203,6 +212,10 @@ pub struct OnlineRound<T: Transport> {
     trigger_down: bool,
     /// The seat's lead over the room, steered by the mailbox readings.
     lead: Lead,
+    /// This client owns its hull (docs/online-coop-prd.md §4.14,
+    /// `online_client_hull`): the sandbox drives it, every packet carries
+    /// its pose, and the room follows; off, stage 2 predicts it.
+    client_hull: bool,
     /// Provisional shots seen crossing a drawn hull, until the server's
     /// `Hit` claims them or the window runs out (decision 9's numbers).
     crossings: Vec<Crossing>,
@@ -249,6 +262,7 @@ impl<T: Transport> OnlineRound<T> {
             pending_fire: false,
             trigger_down: false,
             lead: Lead::new(),
+            client_hull: tuning().online_client_hull,
             crossings: Vec::new(),
             crossings_hit: 0,
             crossings_missed: 0,
@@ -268,6 +282,35 @@ impl<T: Transport> OnlineRound<T> {
         self.poll(now);
         self.send(intent, dt);
         self.draw(dt, now);
+    }
+
+    /// Whether this client owns its hull (stage 3) or predicts it (stage
+    /// 2). Read from `online_client_hull` when the round is opened; a
+    /// test sets it by hand.
+    pub fn set_client_hull(&mut self, owned: bool) {
+        self.client_hull = owned;
+        if let Some(predictor) = self.predictor.as_mut() {
+            predictor.set_owned(owned);
+        }
+    }
+
+    /// Whether this client owns its hull.
+    pub fn client_hull(&self) -> bool {
+        self.client_hull
+    }
+
+    /// Where the room's newest snapshot has this seat's hull, in field
+    /// pixels: what a test compares the owned hull against.
+    pub fn room_has_seat_at(&self) -> Option<(f32, f32)> {
+        let seat = self.client.seat()?;
+        let t = self.interp.newest()?.tanks.iter().find(|t| t.id as u8 == seat)?;
+        Some((dequantise_pos(t.x), dequantise_pos(t.y)))
+    }
+
+    /// Where this client has its own hull.
+    pub fn own_hull_at(&self) -> Option<(f32, f32)> {
+        let p = self.predictor.as_ref()?.pose()?;
+        Some((p.position.x, p.position.y))
     }
 
     /// The predictor's counters, with the lead's own, once a welcome has
@@ -447,6 +490,7 @@ impl<T: Transport> OnlineRound<T> {
             match event {
                 ClientEvent::Welcomed(welcome) => self.welcomed(&welcome, now),
                 ClientEvent::Snapshot(snapshot) => {
+                    self.place_from(&snapshot);
                     self.reconcile(&snapshot);
                     self.note_fired(&snapshot);
                     if let Some(seat) = self.client.seat()
@@ -511,9 +555,11 @@ impl<T: Transport> OnlineRound<T> {
                 // whether or not prediction is on: the knob is live, and
                 // a sandbox that started late would have no history to
                 // replay.
-                self.predictor = apply::welcome(welcome)
-                    .ok()
-                    .map(|sandbox| Predictor::new(sandbox, welcome.seat as usize, self.client.intent_tick()));
+                self.predictor = apply::welcome(welcome).ok().map(|sandbox| {
+                    let mut predictor = Predictor::new(sandbox, welcome.seat as usize, self.client.intent_tick());
+                    predictor.set_owned(self.client_hull);
+                    predictor
+                });
                 self.replica = Some(game);
                 self.interp.restart(&welcome.snapshot, now);
                 self.note = None;
@@ -536,18 +582,17 @@ impl<T: Transport> OnlineRound<T> {
     /// none (`Lead`).
     fn send(&mut self, intent: &Intent, dt: f32) {
         self.pending_fire |= intent.fire;
-        self.send_owed = (self.send_owed + dt.max(0.0)).min(2.0 * PHYSICS_FIXED_DT);
-        if self.send_owed < PHYSICS_FIXED_DT {
-            return;
-        }
-        self.send_owed -= PHYSICS_FIXED_DT;
-        let packets = match self.lead.decide() {
-            Adjust::Keep => 1,
-            Adjust::Extra => 2,
-            Adjust::Skip => 0,
-        };
-        for _ in 0..packets {
-            self.send_one(intent);
+        self.send_owed = (self.send_owed + dt.max(0.0)).min(SEND_CATCH_UP_TICKS as f32 * PHYSICS_FIXED_DT);
+        while self.send_owed >= PHYSICS_FIXED_DT {
+            self.send_owed -= PHYSICS_FIXED_DT;
+            let packets = match self.lead.decide() {
+                Adjust::Keep => 1,
+                Adjust::Extra => 2,
+                Adjust::Skip => 0,
+            };
+            for _ in 0..packets {
+                self.send_one(intent);
+            }
         }
     }
 
@@ -559,14 +604,51 @@ impl<T: Transport> OnlineRound<T> {
         // the packet carries - fire hold included, since that is the bit
         // the server's press edge will see - stamped with exactly the
         // tick the server will name back in `acked`.
-        let Some(sent) = self.client.send_intent(&out) else { return };
+        let Some(mut msg) = self.client.prepare_intent(&out) else { return };
         self.pending_fire = false;
         if let Some(predictor) = self.predictor.as_mut() {
             // The knob is live: read each tick, so a shot pressed after
             // it was turned on is drawn and one after it was turned off
             // is not.
             predictor.set_shots_enabled(tuning().online_predict_shots);
-            predictor.step_at(sent.tick, sent.intent());
+            predictor.step_at(msg.tick, msg.intent());
+            // Owning the hull, the packet says where this tick left it,
+            // and the room puts the seat there (§4.14).
+            if self.client_hull && let Some(pose) = predictor.pose() {
+                msg = msg.with_pose(pose);
+            }
+        }
+        self.client.send_prepared(&msg);
+    }
+
+    /// The room moved this seat's hull itself: `Placed` (a refused pose,
+    /// or a run of them), a portal's `Teleported`, or the seat coming
+    /// back through a gate (`TankEntered`). An owned hull snaps to where
+    /// the room says on arrival, since the room is not going to follow
+    /// it there.
+    fn place_from(&mut self, snapshot: &Snapshot) {
+        if !self.client_hull {
+            return;
+        }
+        let (Some(predictor), Some(seat)) = (self.predictor.as_mut(), self.client.seat()) else { return };
+        for event in &snapshot.events {
+            match *event {
+                WireEvent::Placed { seat: s, x, y, dir } if s == seat => {
+                    let rotation = crate::net::wire::dir_from_index(dir).unwrap_or(crate::tank::Dir::Up).rotation();
+                    predictor.place_own(crate::math::Vec2::new(dequantise_pos(x), dequantise_pos(y)), rotation);
+                }
+                WireEvent::Teleported { slot, to_x, to_y, .. } if slot as u8 == seat => {
+                    let rotation = predictor.pose().map_or(0.0, |p| p.rotation);
+                    predictor.place_own(crate::math::Vec2::new(dequantise_pos(to_x), dequantise_pos(to_y)), rotation);
+                }
+                WireEvent::TankEntered { slot } if slot as u8 == seat => {
+                    if let Some(t) = snapshot.tanks.iter().find(|t| t.id as u8 == seat) {
+                        let rotation = crate::net::wire::dir_from_index(t.dir).unwrap_or(crate::tank::Dir::Up).rotation();
+                        predictor.place_own(crate::math::Vec2::new(dequantise_pos(t.x), dequantise_pos(t.y)), rotation);
+                    }
+                }
+                _ => {}
+            }
         }
     }
 
@@ -879,6 +961,29 @@ mod tests {
         assert_eq!(sent.move_dir, 1);
     }
 
+    /// A slow frame owes the room every tick it covered: a client at 20
+    /// fps still sends sixty intents a second, and its sandbox steps
+    /// sixty times, so the room never starves and the prediction never
+    /// falls behind the hull the room moved on repeated intents.
+    #[test]
+    fn a_slow_frame_sends_every_tick_it_covered() {
+        let (mut room, mut round) = room_and_round();
+        room.welcome();
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        room.heard();
+        let drive = Intent { move_dir: Some(Dir::Up), ..Intent::default() };
+        // A 20 fps frame: three ticks' worth, and a hair over so the
+        // accumulator's float arithmetic cannot land a hair under.
+        round.frame(&drive, 3.0 * PHYSICS_FIXED_DT + 1e-4);
+        let sent = room.heard().iter().filter(|m| matches!(m, Msg::Intent(_))).count();
+        assert_eq!(sent, 3, "three ticks of frame, three packets");
+        assert_eq!(round.prediction().map(|p| p.in_flight), Some(0), "nothing acked yet, nothing reconciled");
+        // A stall is dropped past `SEND_CATCH_UP_TICKS`, as `app::StepClock` drops it.
+        round.frame(&drive, 1.0);
+        let sent = room.heard().iter().filter(|m| matches!(m, Msg::Intent(_))).count();
+        assert_eq!(sent as u32, SEND_CATCH_UP_TICKS, "a second-long stall does not send sixty packets");
+    }
+
     #[test]
     fn the_replica_draws_between_the_snapshots_and_never_simulates() {
         let (mut room, mut round) = room_and_round();
@@ -965,6 +1070,56 @@ mod tests {
         assert!(down >= 1, "a deep buffer was never narrowed");
         assert!(down <= frames / LEAD_WINDOW, "narrowed {down} times in {frames} snapshots");
         assert_eq!(heard, frames - down, "each narrowing is exactly one packet fewer");
+    }
+
+    /// **Stage 3 on the wire** (docs/online-coop-prd.md §4.14): with the
+    /// client owning its hull, every packet carries where the hull is,
+    /// a snapshot that has it somewhere older pulls nothing back, and a
+    /// `Placed` from the room snaps it.
+    #[test]
+    fn an_owned_hull_travels_on_the_intent_and_only_a_placed_moves_it() {
+        use crate::net::wire::quantise_pos;
+        let (mut room, mut round) = room_and_round();
+        round.set_client_hull(true);
+        room.welcome();
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        room.heard();
+        let start = round.own_hull_at().expect("a hull");
+        let drive = Intent { move_dir: Some(Dir::Right), ..Intent::default() };
+        for _ in 0..30 {
+            round.frame(&drive, 1.0 / 60.0);
+        }
+        let heard = room.heard();
+        let packets: Vec<crate::net::wire::IntentMsg> =
+            heard.iter().filter_map(|m| if let Msg::Intent(i) = m { Some(*i) } else { None }).collect();
+        assert_eq!(packets.len(), 30);
+        assert!(packets.iter().all(|p| p.owned), "every packet owns the hull");
+        let last = packets.last().expect("a packet").pose().expect("a pose");
+        let mine = round.own_hull_at().expect("a hull");
+        assert!(mine.0 > start.0 + 20.0, "the hull drove right: {start:?} -> {mine:?}");
+        assert!((last.position.x - mine.0).abs() < 0.5, "the packet says where the hull is: {last:?} vs {mine:?}");
+
+        // The room's snapshot still has the hull at the start, a round
+        // trip behind: an owned hull is not pulled back to it.
+        let mut lagging = encode::snapshot(&room.game, [0; MAX_SEATS]);
+        lagging.server_ms = room.server_ms + 50;
+        lagging.acked[0] = 20;
+        room.say(Msg::Snapshot(lagging));
+        round.frame(&drive, 1.0 / 60.0);
+        let after = round.own_hull_at().expect("a hull");
+        assert!(after.0 >= mine.0, "the lagging snapshot pulled the hull back: {mine:?} -> {after:?}");
+        assert_eq!(round.prediction().map(|p| (p.nudges, p.snaps)), Some((0, 0)));
+
+        // The room moved it itself: `Placed` is obeyed, whole.
+        let there = (start.0 - 96.0, start.1);
+        let mut placed = encode::snapshot(&room.game, [0; MAX_SEATS]);
+        placed.tick = 2;
+        placed.server_ms = room.server_ms + 100;
+        placed.events = vec![WireEvent::Placed { seat: 0, x: quantise_pos(there.0), y: quantise_pos(there.1), dir: 0 }];
+        room.say(Msg::Snapshot(placed));
+        round.frame(&Intent::default(), 1.0 / 60.0);
+        let snapped = round.own_hull_at().expect("a hull");
+        assert!((snapped.0 - there.0).abs() < 0.5 && (snapped.1 - there.1).abs() < 0.5, "not placed: {snapped:?} vs {there:?}");
     }
 
     /// **Decision 9's instrument.** A provisional shell drawn through an
@@ -1078,6 +1233,82 @@ mod tests {
             Some((1, 0, 1)),
             "an unanswered crossing is a miss"
         );
+    }
+
+    /// Where a client's time goes, per operation, on a busy round: run
+    /// with `cargo test --release --no-default-features --features
+    /// dev-tools -- --ignored measure_client_costs --nocapture`. Not an
+    /// assertion, a reading: the numbers behind the co-op PRD's stage 3.
+    #[test]
+    #[ignore]
+    fn measure_client_costs() {
+        use std::time::Instant;
+        use crate::net::delta;
+        use crate::net::interp::Interpolator;
+        let build = |enemies: usize| {
+            let mut game = Game::default();
+            game.seed_override = Some(0xB0B5);
+            game.enemy_count_override = Some(enemies);
+            game.player_row_override = Some(3);
+            game.level_overrides.spawn = Some(crate::level::SpawnKind::Band);
+            game.map = MapFile::from_toml_str(DEFAULT_MAP).expect("the default map parses");
+            game.show_intro = false;
+            let (w, h) = game.map.field_size();
+            game.init(w, h);
+            game
+        };
+        fn time<F: FnMut()>(label: &str, iters: usize, mut f: F) {
+            let t0 = Instant::now();
+            for _ in 0..iters {
+                f();
+            }
+            let us = t0.elapsed().as_secs_f64() * 1e6 / iters as f64;
+            eprintln!("{label:<58} {us:9.1} us");
+        }
+        for enemies in [0usize, 12, 30] {
+            eprintln!("--- {enemies} enemies ---");
+            let mut authority = build(enemies);
+            let (w, h) = authority.map.field_size();
+            let drive = Intent { move_dir: Some(Dir::Right), fire: true, ..Intent::default() };
+            for _ in 0..180 {
+                authority.update(Input::single(drive), PHYSICS_FIXED_DT, w, h);
+            }
+            let roster = vec![Seat { seat: 0, nick: "m".into(), chassis: 3 }];
+            let welcome = encode::welcome(&authority, 0, roster, "{}".into(), [0; MAX_SEATS]).expect("welcome");
+            let mut replica = apply::welcome(&welcome).expect("replica");
+            let sandbox = apply::welcome(&welcome).expect("sandbox");
+            let mut predictor = Predictor::new(sandbox, 0, 0);
+            let a = encode::snapshot(&authority, [0; MAX_SEATS]);
+            authority.update(Input::single(drive), PHYSICS_FIXED_DT, w, h);
+            let mut b = encode::snapshot(&authority, [0; MAX_SEATS]);
+            b.server_ms = 17;
+            eprintln!("snapshot: {} tanks, {} shots, {} tiles, {} B full, {} B delta",
+                b.tanks.len(), b.shots.len(), b.tiles.len(),
+                crate::net::codec::encode(&Msg::Snapshot(b.clone())).len(),
+                crate::net::codec::encode(&Msg::Delta(delta::delta(&a, &b))).len());
+            let t_auth = &mut authority;
+            time("server: Game::update (one tick)", 120, || t_auth.update(Input::single(drive), PHYSICS_FIXED_DT, w, h));
+            time("server: encode::snapshot", 200, || { let _ = encode::snapshot(t_auth, [0; MAX_SEATS]); });
+            let d = delta::delta(&a, &b);
+            time("client: delta::apply_delta", 500, || { let _ = delta::apply_delta(&a, &d); });
+            let mut interp = Interpolator::default();
+            interp.accept(a.clone(), 0);
+            interp.accept(b.clone(), 17);
+            time("client: Interpolator::sample (blend)", 500, || { let _ = interp.sample(40); });
+            let r = &mut replica;
+            time("client: apply::snapshot onto the replica (per frame)", 300, || apply::snapshot(r, &b));
+            time("client: Game::tick_presentation (per frame)", 300, || r.tick_presentation(1.0 / 60.0));
+            let p = &mut predictor;
+            time("client: Predictor::step (one predicted tick)", 300, || { p.step(drive); });
+            // Eleven inputs in flight, the rig's steady state on 80 ms.
+            for tick in 0..11u32 { p.step_at(1000 + tick, drive); }
+            let mut acks = [0u32; MAX_SEATS];
+            acks[0] = 999;
+            let mut snap = b.clone();
+            snap.acked = acks;
+            time("client: Predictor::reconcile (11 in flight, every snapshot)", 100, || p.reconcile(&snap, 999));
+            time("client: Predictor::reconcile (0 in flight)", 100, || { let mut s = snap.clone(); s.acked[0] = 2000; p.reconcile(&s, 2000); });
+        }
     }
 
     #[test]

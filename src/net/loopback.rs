@@ -209,7 +209,7 @@ mod tests {
     use crate::net::wire::IntentMsg;
 
     fn intent(tick: u32) -> Vec<u8> {
-        codec::encode(&Msg::Intent(IntentMsg { tick, move_dir: 1, face: 1, fire: false }))
+        codec::encode(&Msg::Intent(IntentMsg { tick, move_dir: 1, face: 1, fire: false, ..IntentMsg::default() }))
     }
 
     fn ticks(msgs: &[Msg]) -> Vec<u32> {

@@ -406,6 +406,11 @@ impl Interpolator {
         self.buffer.back().map(|s| s.tick)
     }
 
+    /// The newest snapshot itself: the room's most recent word.
+    pub fn newest(&self) -> Option<&Snapshot> {
+        self.buffer.back()
+    }
+
     /// How far ahead of the picture the newest snapshot stands, in
     /// milliseconds: the depth of the buffer the delay is buying. It
     /// hovers around the delay on a steady link, dips toward zero when

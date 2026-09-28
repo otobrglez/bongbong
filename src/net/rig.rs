@@ -37,6 +37,7 @@ use crate::ai::Intent;
 use crate::level::LevelOverrides;
 use crate::map::MapFile;
 use crate::net::apply;
+use crate::net::authority::{self, PoseOutcome};
 use crate::net::client::{ClientEvent, Identity, RoomClient, RoomSetup};
 use crate::net::codec::{self, Msg};
 use crate::net::encode;
@@ -473,14 +474,29 @@ impl Room {
             self.say(Msg::Lobby(Lobby::Ended { outcome: outcome.into() }));
             return;
         }
-        let intent = self.mailbox.read(self.now).map(|m| m.intent()).unwrap_or_default();
+        let read = self.mailbox.read(self.now);
+        let intent = read.map(|m| m.intent()).unwrap_or_default();
         let acked = self.acked();
         let mut mailbox = [0u8; MAX_SEATS];
         mailbox[0] = self.mailbox.wire_state();
         let server_ms = self.server_ms();
         let Some(game) = &mut self.game else { return };
         let (width, height) = game.map.field_size();
+        // The seat's own pose, the room server's rule (`net::authority`):
+        // a client that owns its hull is put where it says before the
+        // tick, and told if it is refused or moved.
+        let applied = match authority::take_pose(game, 0, read.and_then(|m| m.pose())) {
+            PoseOutcome::Applied(at) => Some(at),
+            PoseOutcome::Refused(_, answer) => {
+                self.pending_events.extend(answer);
+                None
+            }
+            PoseOutcome::Released => None,
+        };
         game.update(Input::single(intent), PHYSICS_FIXED_DT, width, height);
+        if let Some(at) = applied {
+            self.pending_events.extend(authority::moved_since(game, 0, at));
+        }
         let frame = game.frame();
         self.tick.store(frame, Ordering::Relaxed);
         if frame % SNAPSHOT_EVERY != 0 {
@@ -825,34 +841,69 @@ mod tests {
         assert_eq!(seat_hull(&idle), start, "a seat that asked for nothing moved");
     }
 
-    /// **Stage 2's whole point** (docs/online-coop-prd.md §4.12): the
-    /// hull this client steers is drawn where it will be, not where the
-    /// room last said it was.
+    /// **The whole point of stages 2 and 3** (docs/online-coop-prd.md
+    /// §4.12, §4.14): the hull this client steers is drawn where it is
+    /// now, not where the room last said it was.
     ///
-    /// `play` drives right the whole run, so the predicted hull is always
-    /// further right than the interpolated picture the room's snapshots
-    /// bracket. The gap is the lead plus the interpolation delay, which
-    /// is exactly the latency stage 2 removes.
+    /// `play` drives right the whole run, so on every frame the hull is
+    /// still moving the drawn hull stands at or ahead of the newest
+    /// snapshot the window had heard - by the lead plus the pipeline -
+    /// and never behind it. Checked per frame against that frame's own
+    /// newest snapshot, since a run long enough reaches a wall and both
+    /// stop in the same place.
     #[test]
     fn the_steered_hull_is_drawn_ahead_of_the_room() {
-        if !tuning().online_predict_own_tank {
-            return; // the build ships with it on; nothing to compare.
+        if !tuning().online_predict_own_tank && !tuning().online_client_hull {
+            return; // neither stage is on; nothing to compare.
         }
-        let (_, round, seen, authority) = play(LinkQuality::PERFECT, 120);
-        let drawn = seen.last().expect("a drawn frame").hulls.iter().find(|(slot, _, _)| *slot == 0).expect("the seat").1;
-        let room = authority
-            .last()
-            .expect("a snapshot")
-            .1
-            .iter()
-            .find(|(slot, _, _)| *slot == 0)
-            .expect("the seat")
-            .1;
+        let (_, round, seen, authority) = play(LinkQuality::PERFECT, 90);
         assert!(round.game().is_some(), "the welcome arrived");
-        assert!(
-            drawn > room,
-            "the steered hull was drawn at {drawn}, not ahead of the room's {room} - prediction did nothing"
-        );
+        let gaps: Vec<i32> = seen
+            .iter()
+            .filter_map(|frame| {
+                let newest = frame.newest?;
+                let room = authority.iter().find(|(tick, _)| *tick == newest)?.1.iter().find(|h| h.0 == 0)?.1;
+                let drawn = frame.hulls.iter().find(|h| h.0 == 0)?.1;
+                Some(drawn - room)
+            })
+            .collect();
+        let leading = gaps.iter().filter(|&&g| g > 0).count();
+        let behind = gaps.iter().filter(|&&g| g < -8).count();
+        assert!(leading >= 10, "the steered hull was ahead of the room on only {leading} of {} frames: {gaps:?}", gaps.len());
+        assert_eq!(behind, 0, "the steered hull was drawn behind the room's word: {gaps:?}");
+    }
+
+    /// **Stage 3 in the rig** (docs/online-coop-prd.md §4.14): the rig's
+    /// room takes the seat's pose by the room server's own rule
+    /// (`net::authority`), so a client that owns its hull is followed and
+    /// never corrected - the rig models the room it stands in for.
+    #[test]
+    fn an_owned_hull_is_followed_by_the_rigs_room_with_no_corrections() {
+        let (rig, link) = start(options(LinkQuality::PERFECT));
+        let client = RoomClient::host(link, Identity::new("rig", "tok-rig"), RoomSetup::default());
+        let mut round = OnlineRound::new(client, "RIG");
+        round.set_client_hull(true);
+        while round.game().is_none() {
+            round.frame(&Intent::default(), FRAME.as_secs_f32());
+            thread::sleep(FRAME);
+        }
+        let start = round.own_hull_at().expect("a hull");
+        for _ in 0..40 {
+            round.frame(&Intent { move_dir: Some(Dir::Right), ..Intent::default() }, FRAME.as_secs_f32());
+            thread::sleep(FRAME);
+        }
+        for _ in 0..12 {
+            round.frame(&Intent::default(), FRAME.as_secs_f32());
+            thread::sleep(FRAME);
+        }
+        let mine = round.own_hull_at().expect("a hull");
+        let truth = rig.authority().expect("a snapshot");
+        let room = truth.tanks.iter().find(|t| t.id == 0).expect("the seat");
+        let (rx, ry) = (crate::net::wire::dequantise_pos(room.x), crate::net::wire::dequantise_pos(room.y));
+        assert!(mine.0 > start.0 + 20.0, "the owned hull drove: {start:?} -> {mine:?}");
+        assert!((rx - mine.0).abs() < 1.0 && (ry - mine.1).abs() < 1.0, "the rig's room did not follow: ({rx}, {ry}) vs {mine:?}");
+        let report = round.prediction().expect("a report");
+        assert_eq!((report.nudges, report.snaps), (0, 0), "an owned hull is never corrected: {report:?}");
     }
 
     /// **The hull has to turn with the prediction, not behind it.**

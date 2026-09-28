@@ -17,7 +17,7 @@ use crate::level::{LevelOverrides, Mission, SpawnKind, Tier};
 use crate::net::MAX_SEATS;
 use crate::net::events::WireEvent;
 use crate::pickup::PickupKind;
-use crate::simulation::Outcome;
+use crate::simulation::{Outcome, SeatPose};
 use crate::tank::{ActiveWeapon, Dir};
 
 // ---------------------------------------------------------------------------
@@ -285,17 +285,57 @@ pub struct IntentMsg {
     /// `Intent::fire`, held for at least two ticks by the client so a short
     /// press survives sampling.
     pub fire: bool,
+    /// The client owns its hull (docs/online-coop-prd.md §4.14,
+    /// `online_client_hull`): the pose below is where it is this tick, and
+    /// the room puts the seat there instead of driving it from `move_dir`.
+    pub owned: bool,
+    /// Hull centre, quarter pixels (`quantise_pos`); meaningful with `owned`.
+    pub x: i16,
+    pub y: i16,
+    /// Facing, `dir_index`.
+    pub dir: u8,
+    /// The body's velocity (`quantise_velocity`).
+    pub vx: i8,
+    pub vy: i8,
 }
 
 impl IntentMsg {
-    /// The wire form of `intent` for `tick`.
+    /// The wire form of `intent` for `tick`, with no pose: the room
+    /// drives the seat.
     pub fn new(tick: u32, intent: &Intent) -> IntentMsg {
         IntentMsg {
             tick,
             move_dir: dir_code(intent.move_dir),
             face: dir_code(intent.face),
             fire: intent.fire,
+            owned: false,
+            x: 0,
+            y: 0,
+            dir: 0,
+            vx: 0,
+            vy: 0,
         }
+    }
+
+    /// The same packet carrying where the client's own hull is, which
+    /// makes it an owned one.
+    pub fn with_pose(mut self, pose: SeatPose) -> IntentMsg {
+        self.owned = true;
+        self.x = quantise_pos(pose.position.x);
+        self.y = quantise_pos(pose.position.y);
+        self.dir = dir_index(Dir::from_rotation(pose.rotation).unwrap_or(Dir::Up));
+        self.vx = quantise_velocity(pose.velocity.x);
+        self.vy = quantise_velocity(pose.velocity.y);
+        self
+    }
+
+    /// The hull's pose, if this packet owns one.
+    pub fn pose(&self) -> Option<SeatPose> {
+        self.owned.then(|| SeatPose {
+            position: crate::math::Vec2::new(dequantise_pos(self.x), dequantise_pos(self.y)),
+            rotation: dir_from_index(self.dir).unwrap_or(Dir::Up).rotation(),
+            velocity: crate::math::Vec2::new(dequantise_velocity(self.vx), dequantise_velocity(self.vy)),
+        })
     }
 
     /// The `Intent` this stands for, with the AI-only fields at their

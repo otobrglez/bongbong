@@ -1700,6 +1700,16 @@ tunables! {
         /// ladder simply stays there. The coarse dial of the two -
         /// `online_wave_size_per_seat` is the fine one.
         online_wave_tier_seats_per_step: usize = 3 in 1 ..= 8;
+        /// The client owns its own hull in an online round
+        /// (docs/online-coop-prd.md section 4.14, stage 3): every tick it
+        /// sends where its tank is and the room puts the seat there,
+        /// validated against the chassis's speed, the walls and deep
+        /// water, instead of driving it from the stick and having the
+        /// client predict and reconcile. On, the own hull never takes a
+        /// correction and the shot leaves from where it was drawn; off,
+        /// stage 2's prediction runs. Restart: read when a round is
+        /// opened, so the two are compared round by round on one link.
+        online_client_hull: bool = true in 0 ..= 1 @ Restart;
     }
 
     group cosmetics {

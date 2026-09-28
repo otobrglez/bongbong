@@ -43,6 +43,7 @@ use crate::net::events::WireEvent;
 use crate::net::wire::{
     MissileState, ShotKind, ShotState, Snapshot, TankState, Welcome, dequantise_heading, dequantise_pos, dequantise_seconds, dequantise_velocity, dir_from_index, frog_flags, tank_flags, tile_flags,
 };
+use crate::laser::{LaserBeam, LaserVariant};
 use crate::obstacle::{Drum, Fuse, Obstacle};
 use crate::pickup::Pickup;
 use crate::missile::Missile;
@@ -168,6 +169,14 @@ fn apply_events(game: &mut Game, s: &Snapshot, cols: u16) -> BTreeSet<u16> {
                 let to = Position::new(dequantise_pos(to_x), dequantise_pos(to_y));
                 // Only a fuel drum ever launches (`props::tick_fuses`).
                 game.drum_in_flight(from, to, Drum::Fuel as i32);
+            }
+            // An instant hit: the beam is the only trace, and the replica's
+            // `tick_effects` fades it as a local round's does.
+            WireEvent::LaserBeam { x0, y0, x1, y1, variant } => {
+                let start = Position::new(dequantise_pos(x0), dequantise_pos(y0));
+                let end = Position::new(dequantise_pos(x1), dequantise_pos(y1));
+                let variant = LaserVariant::ALL.get(variant as usize).copied().unwrap_or(LaserVariant::Red);
+                game.laser_beams.push(LaserBeam::new(start, end, variant));
             }
             _ => {}
         }
@@ -1184,6 +1193,40 @@ mod tests {
     /// `DrumLaunched` puts the drum in the air on the replica, which flies
     /// it from an age `tick_presentation` advances and drops it when it
     /// lands - the blast there is the server's own `Blast`.
+    /// **A laser was invisible online**: an instant hit leaves nothing in
+    /// the world for a snapshot to list, and `Fired` carries no
+    /// geometry. The beam travels as its own event now, and a replica
+    /// draws it and fades it as a local round does.
+    #[test]
+    fn a_laser_beam_arrives_as_an_event_and_is_drawn_on_the_replica() {
+        let mut game = authoritative(DEFAULT_MAP, 0xB0B5, 0);
+        let patch = crate::simulation::debug::TankPatch { laser_charges: Some(3), ..Default::default() };
+        game.debug_set_tank(0, &patch).expect("the seat's tank");
+        let mut replica = welcome_through_the_codec(&game);
+        let (w, h) = game.map.field_size();
+        game.update(Input::single(Intent { fire: true, ..Intent::default() }), PHYSICS_FIXED_DT, w, h);
+        assert!(
+            game.events().iter().any(|e| matches!(e, crate::simulation::Event::LaserBeam { .. })),
+            "the authority fired a laser: {:?}",
+            game.events()
+        );
+        let wire = enc::snapshot(&game, [0; MAX_SEATS]);
+        assert!(wire.events.iter().any(|e| matches!(e, WireEvent::LaserBeam { .. })), "the beam is on the wire");
+        snapshot(&mut replica, &wire);
+        assert_eq!(replica.laser_beams.len(), 1, "the replica draws the beam");
+        let beam = &replica.laser_beams[0];
+        assert!(
+            (beam.start.x - beam.end.x).abs() + (beam.start.y - beam.end.y).abs() > 32.0,
+            "a beam with length: {:?}",
+            (beam.start, beam.end)
+        );
+        // And it fades on the replica's own clock.
+        for _ in 0..120 {
+            replica.tick_presentation(PHYSICS_FIXED_DT);
+        }
+        assert!(replica.laser_beams.is_empty(), "the beam faded");
+    }
+
     #[test]
     fn a_launched_drum_flies_on_the_replica() {
         let mut game = authoritative(PROPS_MAP, 0xC0FFEE, 2);

@@ -223,6 +223,12 @@ fn dial(url: &str) -> Result<tungstenite::WebSocket<MaybeTlsStream<std::net::Tcp
     };
     tcp.set_read_timeout(Some(READ_TIMEOUT))
         .map_err(|e| format!("cannot set the socket's read timeout: {e}"))?;
+    // Sixty tiny frames a second must leave as sixty, not as one burst
+    // per round trip: Nagle's algorithm holds a small segment back until
+    // the last one is acknowledged, which on a real link is the whole
+    // "shooting is delayed" feel. A browser's WebSocket already does
+    // this; the std socket has to be told.
+    tcp.set_nodelay(true).map_err(|e| format!("cannot set TCP_NODELAY on the socket: {e}"))?;
     Ok(socket)
 }
 

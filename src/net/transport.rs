@@ -210,7 +210,7 @@ mod tests {
     #[test]
     fn send_msg_encodes_and_drain_decodes() {
         let mut t = Echo::open();
-        let msg = Msg::Intent(IntentMsg { tick: 4, move_dir: 2, face: 2, fire: true });
+        let msg = Msg::Intent(IntentMsg { tick: 4, move_dir: 2, face: 2, fire: true, ..IntentMsg::default() });
         t.send_msg(&msg);
         let mut out = vec![Msg::Intent(IntentMsg::default())];
         t.drain(&mut out);

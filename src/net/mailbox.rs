@@ -183,7 +183,7 @@ mod tests {
     use super::*;
 
     fn intent(tick: u32, move_dir: u8) -> IntentMsg {
-        IntentMsg { tick, move_dir, face: 0, fire: false }
+        IntentMsg { tick, move_dir, face: 0, fire: false, ..IntentMsg::default() }
     }
 
     #[test]

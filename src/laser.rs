@@ -24,6 +24,27 @@ pub enum LaserVariant {
 }
 
 impl LaserVariant {
+    /// Every variant, in wire order (`index`).
+    pub const ALL: [LaserVariant; 2] = [LaserVariant::Red, LaserVariant::Blue];
+
+    /// Lower-case name for tooling/JSON (`Event::LaserBeam`).
+    pub fn name(self) -> &'static str {
+        match self {
+            LaserVariant::Red => "red",
+            LaserVariant::Blue => "blue",
+        }
+    }
+
+    /// The variant `name` spells, if any.
+    pub fn parse(name: &str) -> Option<LaserVariant> {
+        LaserVariant::ALL.into_iter().find(|v| v.name() == name)
+    }
+
+    /// Its position in `ALL`: the byte the wire carries.
+    pub fn index(self) -> u8 {
+        LaserVariant::ALL.iter().position(|&v| v == self).unwrap_or(0) as u8
+    }
+
     /// Multiplier on `LASER_DAMAGE_MIN/MAX` this variant fires at.
     pub fn damage_factor(self) -> f32 {
         match self {

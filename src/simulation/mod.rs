@@ -51,6 +51,29 @@ pub enum ProvisionalKind {
     Plasma,
 }
 
+/// Where a seat's hull is: what a client that owns its hull sends every
+/// tick and the room puts the seat at (docs/online-coop-prd.md §4.14),
+/// and what the room sends back in `Placed` when it moved the hull
+/// itself.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SeatPose {
+    pub position: Position,
+    /// Degrees, 0 = up, one of the four facings.
+    pub rotation: f32,
+    /// The body's velocity, so the room's ram reads impact speed off it.
+    pub velocity: Vec2,
+}
+
+/// How far a client-owned hull may move between two poses the room
+/// accepts, in ticks of its top speed: the mailbox spreads a burst over
+/// the ticks that follow and repeats a starved tick, so one pose can
+/// cover a few ticks of movement without the client having cheated.
+pub const POSE_REACH_TICKS: f32 = 4.0;
+
+/// Slack on top of the reach, in pixels: the wire's rounding and the
+/// solver's own nudge on the room's copy.
+pub const POSE_REACH_SLACK_PX: f32 = 8.0;
+
 /// A client's own shot before the server has confirmed it: the pose and
 /// nothing else, since it is drawn and never simulated (`net::predict`).
 /// `Game::seat_shot` builds one from a seat's muzzle and
@@ -266,6 +289,15 @@ pub enum Event {
     /// A trigger pull that launched something. A twin barrel's queued
     /// second shot and a burst's later bullets are part of the same pull.
     Fired { slot: usize, weapon: &'static str },
+    /// The room moved a client-owned hull itself - a refused pose, a
+    /// portal, a gate - and the client snaps to it
+    /// (docs/online-coop-prd.md §4.14).
+    Placed { seat: usize, x: f32, y: f32, rotation: f32 },
+    /// A laser beam was drawn from the muzzle at (`x0`, `y0`) to where it
+    /// stopped at (`x1`, `y1`): an instant hit leaves nothing in the world
+    /// for a snapshot to carry, so the beam itself is the event a replica
+    /// draws it from (`LaserVariant::name`).
+    LaserBeam { x0: f32, y0: f32, x1: f32, y1: f32, variant: &'static str },
     /// A projectile or beam landed on `target` at (`x`, `y`).
     Hit { target: HitTarget, damage: f32, killed: bool, x: f32, y: f32 },
     /// A tank became a wreck (any cause) at (`x`, `y`).
@@ -526,6 +558,13 @@ pub struct Game {
     /// archetype - a `Tank` and nothing else - so every query that tells
     /// enemies apart by their `Ai` sees all of them the same way.
     pub(crate) seats: [Option<Entity>; MAX_SEATS],
+    /// The update a seat's client owns its hull for (`accept_seat_pose`),
+    /// by the frame number that update will run as; `drive_player` puts
+    /// nothing on it that frame, since the pose already did. One update
+    /// only: a seat whose packets stop saying where it is - a client that
+    /// dropped, one that went back to stage 2 - is the room's to drive
+    /// again on the next tick without anybody having to release it.
+    seat_owned: [u64; MAX_SEATS],
     /// The player's frog - `None` in a mission without one (`Destroy`),
     /// and before the first `init`.
     pub(crate) frog: Option<Entity>,
@@ -1584,7 +1623,7 @@ impl Game {
         // once, and they are two fields of the same struct.
         let Game { world, physics, water, .. } = self;
         let Ok(mut tank) = world.get::<&mut Tank>(entity) else { return };
-        if tank.body.is_none() {
+        if tank.body.is_none() || tank.is_wreck() {
             return;
         }
         let footing = Footing::at(water, tank.position);
@@ -1618,6 +1657,81 @@ impl Game {
             self.physics.set_position(handle, position);
             self.physics.set_velocity(handle, velocity);
         }
+    }
+
+    /// Where one seat's hull is, for the room to compare against the
+    /// pose it applied and for a client to report its own.
+    pub fn seat_pose(&self, seat: usize) -> Option<SeatPose> {
+        let (position, rotation, velocity) = self.seat_motion(seat)?;
+        Some(SeatPose { position, rotation, velocity })
+    }
+
+    /// A client that owns its hull says where it is: put the seat there
+    /// if the pose is one the hull could have reached, and mark the seat
+    /// as owned so this tick's `drive_player` leaves it alone
+    /// (docs/online-coop-prd.md §4.14).
+    ///
+    /// **Validation, not simulation.** The step from where the room has
+    /// the hull is bounded by the chassis's top speed over
+    /// `POSE_REACH_TICKS` plus `POSE_REACH_SLACK_PX`; the pose must lie
+    /// inside the field, off a solid tile and out of deep water; a wreck
+    /// and a seat still rolling in through a gate own nothing. A refusal
+    /// leaves the hull where it was, and the room answers with `Placed`
+    /// so the client comes back to it.
+    pub fn accept_seat_pose(&mut self, seat: usize, pose: SeatPose) -> Result<(), &'static str> {
+        let Some(entity) = self.seats.get(seat).copied().flatten() else { return Err("no such seat") };
+        let (from, reach) = {
+            let Ok(tank) = self.world.get::<&Tank>(entity) else { return Err("no tank") };
+            if tank.is_wreck() {
+                return Err("a wreck");
+            }
+            if tank.body.is_none() {
+                return Err("still entering");
+            }
+            (tank.position, tank.effective_speed() * PHYSICS_FIXED_DT * POSE_REACH_TICKS + POSE_REACH_SLACK_PX)
+        };
+        let (dx, dy) = (pose.position.x - from.x, pose.position.y - from.y);
+        if (dx * dx + dy * dy).sqrt() > reach {
+            return Err("further than the hull could have gone");
+        }
+        let (width, height) = self.map.field_size();
+        let inset = OBSTACLE_GRID_SIZE * 0.5;
+        if !(inset..=width - inset).contains(&pose.position.x) || !(inset..=height - inset).contains(&pose.position.y) {
+            return Err("outside the field");
+        }
+        let (col, row) = map::world_to_cell(pose.position);
+        if self.map.cell(col, row).is_some_and(CellObject::is_solid) {
+            return Err("inside a solid tile");
+        }
+        if self.water.depth_at(pose.position) == crate::ground::Depth::Deep {
+            return Err("in deep water");
+        }
+        // One tick back along the reported velocity: the coming update's
+        // solver step carries the body forward by exactly that much, so
+        // it ends the tick on the pose the client reported - with the
+        // velocity the contacts and `combat::ram` read - rather than one
+        // tick past it.
+        let back = Position::new(
+            pose.position.x - pose.velocity.x * PHYSICS_FIXED_DT,
+            pose.position.y - pose.velocity.y * PHYSICS_FIXED_DT,
+        );
+        self.place_seat(seat, back, pose.rotation, pose.velocity);
+        self.seat_owned[seat] = self.frame + 1;
+        Ok(())
+    }
+
+    /// The room drives this seat again from the next update: nobody is
+    /// reporting its pose.
+    pub fn release_seat(&mut self, seat: usize) {
+        if let Some(owned) = self.seat_owned.get_mut(seat) {
+            *owned = 0;
+        }
+    }
+
+    /// Whether a client owns this seat's hull for the coming update (or
+    /// the one that just ran).
+    pub fn seat_is_owned(&self, seat: usize) -> bool {
+        self.seat_owned.get(seat).is_some_and(|&f| f != 0 && f >= self.frame)
     }
 
     /// Put a client's unconfirmed shot in the world under `id`, for
@@ -2160,8 +2274,12 @@ impl Game {
             return;
         }
 
-        let footing = Footing::at(&self.water, tank.position);
-        drive_tank(&mut self.physics, tank, intent, f.dt, footing);
+        // A seat whose client owns the hull was put where it is by
+        // `accept_seat_pose` before this tick; the stick only fires.
+        if self.seat_owned[index] != self.frame {
+            let footing = Footing::at(&self.water, tank.position);
+            drive_tank(&mut self.physics, tank, intent, f.dt, footing);
+        }
         tick_queued_shots(&mut self.physics, f, tank, owner);
 
         // A laser, minigun or missile pod is full-auto while the key is
@@ -2637,6 +2755,13 @@ impl Game {
             };
             f.muzzle_flashes.push(Shockwave::new(shot.start));
             self.laser_beams.push(LaserBeam::new(shot.start, hit_pos, shot.variant));
+            f.events.push(Event::LaserBeam {
+                x0: shot.start.x,
+                y0: shot.start.y,
+                x1: hit_pos.x,
+                y1: hit_pos.y,
+                variant: shot.variant.name(),
+            });
             let Some(target) = target else { continue };
             f.impact_flashes.push(Shockwave::new(hit_pos));
             // No knockback and no frog hop: an instant beam isn't something

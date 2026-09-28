@@ -41,7 +41,10 @@ use bongbong::net::codec::{self, Msg};
 use bongbong::net::delta::delta;
 use bongbong::net::encode;
 use bongbong::net::events::WireEvent;
+use bongbong::net::authority::{self, PoseOutcome};
 use bongbong::net::wire::{Lobby, RosterSeat, Seat as WireSeat, Snapshot, Welcome};
+use bongbong::simulation::SeatPose;
+use bongbong::Position;
 use bongbong::net::{MAX_SEATS, PROTOCOL_VERSION};
 use bongbong::simulation::{Game, Input, Outcome, PlayerCount};
 use bongbong::tuning::{self, Tuning, tuning};
@@ -429,6 +432,11 @@ struct Seat {
     nick: String,
     device_token: String,
     ready: bool,
+    /// Where this tick put a client-owned hull (docs/online-coop-prd.md
+    /// §4.14), to be compared with where the tick left it.
+    applied_pose: Option<Position>,
+    /// Poses the validator refused, for the dev `room` tool.
+    pose_refusals: u64,
     /// A seat with no client at all, taken by `room_open` and driven by
     /// `seat_intent`. It counts as connected - the tick samples its
     /// mailbox and the lifecycle does not pause the room for it - and
@@ -661,6 +669,8 @@ impl Room {
                     nick: nick.clone(),
                     device_token,
                     ready: false,
+                    applied_pose: None,
+                    pose_refusals: 0,
                     #[cfg(feature = "dev-tools")]
                     bot: false,
                     #[cfg(feature = "dev-tools")]
@@ -1056,12 +1066,15 @@ impl Room {
         #[cfg(feature = "dev-tools")]
         self.feed_dev_scripts(now);
         let mut input = Input::default();
+        let mut poses: Vec<(usize, Option<SeatPose>)> = Vec::new();
         for (i, seat) in self.seats.iter().enumerate().take(MAX_SEATS) {
             if let Some(s) = seat
                 && s.connected()
             {
                 let before = s.mailbox.starvations();
-                input.seats[i] = s.mailbox.read(now.into_std()).map(|m| m.intent()).unwrap_or_default();
+                let read = s.mailbox.read(now.into_std());
+                input.seats[i] = read.map(|m| m.intent()).unwrap_or_default();
+                poses.push((i, read.and_then(|m| m.pose())));
                 // A starved tick means this seat's client is not stamping
                 // far enough ahead for the link (`mailbox`, §4.12).
                 let starved = s.mailbox.starvations() - before;
@@ -1073,6 +1086,27 @@ impl Room {
         let acked = self.acked();
         let (w, h) = self.map.field_size();
         let game = self.game.as_mut().expect("a playing room has a game");
+        // A client that owns its hull is put where it says before the
+        // tick runs, and the seat is released to the room's own driving
+        // the moment its packets stop saying (docs/online-coop-prd.md
+        // §4.14). A refused pose leaves the hull where it was and tells
+        // the client so, since the client is not going to be pulled
+        // back by anything else.
+        for (i, pose) in poses {
+            let Some(Some(s)) = self.seats.get_mut(i) else { continue };
+            s.applied_pose = None;
+            match authority::take_pose(game, i, pose) {
+                PoseOutcome::Applied(at) => s.applied_pose = Some(at),
+                PoseOutcome::Refused(why, answer) => {
+                    s.pose_refusals += 1;
+                    if s.pose_refusals == 1 || s.pose_refusals % 600 == 0 {
+                        warn!(code = self.code, seat = i, why, refusals = s.pose_refusals, "a client's pose was refused");
+                    }
+                    self.pending_events.extend(answer);
+                }
+                PoseOutcome::Released => {}
+            }
+        }
         let was_playing = game.outcome() == Outcome::Playing;
         let began = std::time::Instant::now();
         game.update(input, PHYSICS_FIXED_DT, w, h);
@@ -1083,6 +1117,15 @@ impl Room {
             warn!(code = self.code, frame = game.frame(), took_us = took.as_micros() as u64, "tick overran");
         }
         let frame = game.frame();
+        // The tick moved an owned hull further than a contact could - a
+        // portal, a gate, the round's end - so the client snaps to it.
+        for (i, seat) in self.seats.iter().enumerate().take(MAX_SEATS) {
+            if let Some(s) = seat
+                && let Some(applied) = s.applied_pose
+            {
+                self.pending_events.extend(authority::moved_since(game, i, applied));
+            }
+        }
         #[cfg(feature = "dev-tools")]
         self.record_dev_events(frame);
         let game = self.game.as_mut().expect("a playing room has a game");
@@ -1252,6 +1295,8 @@ mod dev {
                             "acked": s.mailbox.acked_tick(),
                             "starvations": s.mailbox.starvations(),
                         },
+                        "owns_hull": s.applied_pose.is_some(),
+                        "pose_refusals": s.pose_refusals,
                     }),
                 })
                 .collect();
@@ -1284,6 +1329,8 @@ mod dev {
                     // Ready by construction: `start` refuses otherwise,
                     // and a bot has nothing to wait for.
                     ready: true,
+                    applied_pose: None,
+                    pose_refusals: 0,
                     bot: true,
                     script: None,
                     conn: None,

@@ -262,6 +262,11 @@ pub struct Predictor {
     /// down here rather than read off the sandbox, because
     /// `predict_seat` deliberately does not fire - it only drives.
     cooldown: f32,
+    /// The client owns the hull (docs/online-coop-prd.md §4.14): the
+    /// sandbox's seat is the truth, a snapshot never moves it, and
+    /// nothing is replayed - the room follows this hull, not the other
+    /// way round.
+    owned: bool,
     report: PredictionReport,
 }
 
@@ -280,8 +285,27 @@ impl Predictor {
             presses: VecDeque::new(),
             next_press: 0,
             cooldown: 0.0,
+            owned: false,
             report: PredictionReport::default(),
         }
+    }
+
+    /// Whether this client owns its hull (`online_client_hull`, stage 3).
+    pub fn set_owned(&mut self, owned: bool) {
+        self.owned = owned;
+    }
+
+    /// The room moved the hull itself - `Placed`, a portal, a gate - and
+    /// the owned hull snaps to where it says, standing still.
+    pub fn place_own(&mut self, position: Position, rotation: f32) {
+        self.sandbox.place_seat(self.seat, position, rotation, Position::new(0.0, 0.0));
+        self.offset = Position::new(0.0, 0.0);
+        self.history.clear();
+    }
+
+    /// Where the owned hull is, to put on the wire.
+    pub fn pose(&self) -> Option<crate::simulation::SeatPose> {
+        self.sandbox.seat_pose(self.seat)
     }
 
     /// Whether a press draws a shot. Off, the trigger still runs the
@@ -556,6 +580,19 @@ impl Predictor {
     /// of steps, the same `dt`, the same statics, which is why the answer
     /// lands rather than drifts.
     pub fn reconcile(&mut self, snapshot: &Snapshot, acked: u32) {
+        if self.owned {
+            // The world around the hull is the room's; the hull is ours.
+            // The snapshot's copy of it is where the room had it a round
+            // trip ago and is put back where it was before the write.
+            let keep = self.sandbox.seat_motion(self.seat);
+            apply::snapshot(&mut self.sandbox, snapshot);
+            if let Some((position, rotation, velocity)) = keep {
+                self.sandbox.place_seat(self.seat, position, rotation, velocity);
+            }
+            self.history.clear();
+            self.report.in_flight = 0;
+            return;
+        }
         let before = self.sandbox.seat_motion(self.seat).map(|(p, _, _)| p);
         apply::snapshot(&mut self.sandbox, snapshot);
         // Anything the server has already accounted for is history.
@@ -1042,6 +1079,41 @@ mod tests {
         predictor.step(release());
         predictor.step(press());
         assert_eq!(predictor.provisional_count(), 0, "the seeded gate held the press");
+    }
+
+    /// **Stage 3** (docs/online-coop-prd.md §4.14): a client that owns
+    /// its hull is never pulled back by a snapshot - the room's copy is a
+    /// round trip old and is put back where the sandbox had it - and
+    /// nothing is replayed. The world around it is still the room's.
+    #[test]
+    fn an_owned_hull_keeps_its_place_through_a_snapshot_that_lags_it() {
+        let (mut authority, sandbox) = (round_with_enemies(), round_with_enemies());
+        let mut predictor = Predictor::new(sandbox, 0, 0);
+        predictor.set_owned(true);
+        for tick in 0..40u32 {
+            predictor.step(Intent { move_dir: Some(Dir::Right), ..Intent::default() });
+            let _ = tick;
+        }
+        let mine = predictor.motion().expect("a hull").0;
+        // The room has the hull where it started and the enemies moved.
+        for _ in 0..90 {
+            authority.update(Input::default(), PHYSICS_FIXED_DT, 1088.0, 544.0);
+        }
+        let room: Vec<(usize, i32, i32)> =
+            authority.drawable_state().tanks.iter().filter(|t| t.slot != 0).map(|t| (t.slot, t.x, t.y)).collect();
+        predictor.reconcile(&wire(&mut authority, 39), 39);
+        let after = predictor.motion().expect("a hull").0;
+        assert_eq!((after.x, after.y), (mine.x, mine.y), "the snapshot moved an owned hull");
+        let report = predictor.report(0, 0);
+        assert_eq!((report.nudges, report.snaps, report.in_flight), (0, 0, 0), "nothing to reconcile: {report:?}");
+        let sandbox: Vec<(usize, i32, i32)> =
+            predictor.sandbox.drawable_state().tanks.iter().filter(|t| t.slot != 0).map(|t| (t.slot, t.x, t.y)).collect();
+        assert_eq!(sandbox, room, "the rest of the world is still the room's");
+        // The room moved the hull itself: the owned hull snaps to it.
+        let far = Position::new(mine.x + 300.0, mine.y);
+        predictor.place_own(far, Dir::Left.rotation());
+        let (p, r, _) = predictor.motion().expect("a hull");
+        assert_eq!((p.x, p.y, r), (far.x, far.y, Dir::Left.rotation()));
     }
 
     /// A shot's crossing of a hull is the caller's test and the

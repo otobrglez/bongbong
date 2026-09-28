@@ -18,8 +18,10 @@
 use serde::{Deserialize, Serialize};
 
 use crate::frog::Side;
+use crate::laser::LaserVariant;
 use crate::level::{Mission, SpawnKind, Tier};
-use crate::net::wire::{RoundOutcome, WeaponKind, dequantise_heading, dequantise_pos, quantise_heading, quantise_pos};
+use crate::net::wire::{RoundOutcome, WeaponKind, dequantise_heading, dequantise_pos, dir_from_index, dir_index, quantise_heading, quantise_pos};
+use crate::tank::Dir;
 use crate::obstacle::{Drum, Material};
 use crate::pickup::PickupKind;
 use crate::simulation::{Event, HitTarget};
@@ -139,6 +141,11 @@ pub enum WireEvent {
     ObstacleDestroyed { material: Material, x: i16, y: i16 },
     Blast { x: i16, y: i16, chained: bool, drum: Drum },
     DrumLaunched { x: i16, y: i16, to_x: i16, to_y: i16 },
+    /// A laser's beam, muzzle to where it stopped (`LaserVariant::index`).
+    LaserBeam { x0: i16, y0: i16, x1: i16, y1: i16, variant: u8 },
+    /// The room moved a client-owned hull itself; the client snaps to it
+    /// (`dir_index`).
+    Placed { seat: u8, x: i16, y: i16, dir: u8 },
     Teleported { slot: u16, x: i16, y: i16, to_x: i16, to_y: i16 },
     FireStarted { x: i16, y: i16, pool: bool },
     Ignited { x: i16, y: i16, what: IgnitedWhat },
@@ -210,6 +217,19 @@ impl WireEvent {
             Event::Blast { x, y, chained, drum } => WireEvent::Blast { x: q(x), y: q(y), chained, drum },
             Event::DrumLaunched { x, y, to_x, to_y } => {
                 WireEvent::DrumLaunched { x: q(x), y: q(y), to_x: q(to_x), to_y: q(to_y) }
+            }
+            Event::Placed { seat, x, y, rotation } => WireEvent::Placed {
+                seat: seat.min(u8::MAX as usize) as u8,
+                x: q(x),
+                y: q(y),
+                dir: dir_index(Dir::from_rotation(rotation).unwrap_or(Dir::Up)),
+            },
+            Event::LaserBeam { x0, y0, x1, y1, variant } => {
+                let variant = LaserVariant::parse(variant).unwrap_or_else(|| {
+                    debug_assert!(false, "unknown laser variant {variant:?} in Event::LaserBeam");
+                    LaserVariant::Red
+                });
+                WireEvent::LaserBeam { x0: q(x0), y0: q(y0), x1: q(x1), y1: q(y1), variant: variant.index() }
             }
             Event::Teleported { slot, x, y, to_x, to_y } => {
                 WireEvent::Teleported { slot: slot_u16(slot), x: q(x), y: q(y), to_x: q(to_x), to_y: q(to_y) }
@@ -285,6 +305,19 @@ impl WireEvent {
             WireEvent::DrumLaunched { x, y, to_x, to_y } => {
                 Event::DrumLaunched { x: d(x), y: d(y), to_x: d(to_x), to_y: d(to_y) }
             }
+            WireEvent::Placed { seat, x, y, dir } => Event::Placed {
+                seat: seat as usize,
+                x: d(x),
+                y: d(y),
+                rotation: dir_from_index(dir).unwrap_or(Dir::Up).rotation(),
+            },
+            WireEvent::LaserBeam { x0, y0, x1, y1, variant } => Event::LaserBeam {
+                x0: d(x0),
+                y0: d(y0),
+                x1: d(x1),
+                y1: d(y1),
+                variant: LaserVariant::ALL.get(variant as usize).copied().unwrap_or(LaserVariant::Red).name(),
+            },
             WireEvent::Teleported { slot, x, y, to_x, to_y } => {
                 Event::Teleported { slot: slot as usize, x: d(x), y: d(y), to_x: d(to_x), to_y: d(to_y) }
             }
@@ -362,6 +395,8 @@ mod tests {
             Event::ObstacleDestroyed { material: Material::Pine, x: 96.0, y: 96.0 },
             Event::Blast { x: 128.0, y: 160.0, chained: true, drum: Drum::Fuel },
             Event::DrumLaunched { x: 128.0, y: 160.0, to_x: 256.0, to_y: 160.0 },
+            Event::LaserBeam { x0: 100.0, y0: 200.0, x1: 100.0, y1: 32.0, variant: "blue" },
+            Event::Placed { seat: 2, x: 320.0, y: 160.0, rotation: 90.0 },
             Event::Teleported { slot: 1, x: 64.0, y: 64.0, to_x: 960.0, to_y: 480.0 },
             Event::FireStarted { x: 48.0, y: 48.0, pool: true },
             Event::Ignited { x: 48.0, y: 80.0, what: "sandbag" },
@@ -393,7 +428,7 @@ mod tests {
             let listed = NOT_SENT.contains(&tag.as_str());
             assert!(sent != listed, "{tag}: sent={sent} listed={listed}");
         }
-        assert_eq!(seen.len(), 32, "one sample per Event variant");
+        assert_eq!(seen.len(), 34, "one sample per Event variant");
         for name in NOT_SENT {
             assert!(seen.contains(name), "NOT_SENT names an unknown variant {name}");
         }

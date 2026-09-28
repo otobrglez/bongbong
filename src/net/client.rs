@@ -271,6 +271,17 @@ impl<T: Transport> RoomClient<T> {
     /// server's edge detection will see - or `None` when nothing was
     /// sent.
     pub fn send_intent(&mut self, intent: &Intent) -> Option<IntentMsg> {
+        let msg = self.prepare_intent(intent)?;
+        self.send_prepared(&msg);
+        Some(msg)
+    }
+
+    /// The packet `send_intent` would send, stamped and with the fire
+    /// hold applied, not yet sent: a caller that owns its hull steps its
+    /// sandbox on it first and adds the pose that produced
+    /// (`IntentMsg::with_pose`), then hands it to `send_prepared`. The
+    /// tick is spent here, so a prepared packet must be sent.
+    pub fn prepare_intent(&mut self, intent: &Intent) -> Option<IntentMsg> {
         if self.seat.is_none() || !self.transport.is_open() {
             return None;
         }
@@ -282,12 +293,16 @@ impl<T: Transport> RoomClient<T> {
             msg.fire = true;
         }
         self.intent_tick = self.intent_tick.wrapping_add(1);
-        self.transport.send_msg(&Msg::Intent(msg));
         // The packet this carries, so a caller predicting the same input
         // stamps it identically - one counter, not two that could drift
         // apart - and gates its own trigger on the fire bit the server
         // will actually sample (`net::predict`).
         Some(msg)
+    }
+
+    /// Send a packet `prepare_intent` made.
+    pub fn send_prepared(&mut self, msg: &IntentMsg) {
+        self.transport.send_msg(&Msg::Intent(*msg));
     }
 
     /// The tick the next packet will carry. A caller predicting the
