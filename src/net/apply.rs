@@ -172,7 +172,7 @@ fn apply_events(game: &mut Game, s: &Snapshot, cols: u16) -> BTreeSet<u16> {
             }
             // An instant hit: the beam is the only trace, and the replica's
             // `tick_effects` fades it as a local round's does.
-            WireEvent::LaserBeam { x0, y0, x1, y1, variant } => {
+            WireEvent::LaserBeam { x0, y0, x1, y1, variant, .. } => {
                 let start = Position::new(dequantise_pos(x0), dequantise_pos(y0));
                 let end = Position::new(dequantise_pos(x1), dequantise_pos(y1));
                 let variant = LaserVariant::ALL.get(variant as usize).copied().unwrap_or(LaserVariant::Red);
@@ -485,9 +485,16 @@ fn shadow_offset(id: u16, min: f32, max: f32) -> f32 {
     min + (max - min) * (h % 1000) as f32 / 1000.0
 }
 
+/// Who fired `sh`, as the replica holds it: the seat the wire names, or
+/// the replica's stand-in for an enemy.
+fn shot_owner(sh: &ShotState) -> Owner {
+    if sh.owner == crate::net::wire::NO_SEAT { REPLICA_OWNER } else { Owner::Player(sh.owner) }
+}
+
 fn spawn_shot(game: &mut Game, sh: &ShotState, position: Position, rotation: f32, dir: Vec2) {
     let knobs = tuning();
     let id = sh.id as u32;
+    let owner = shot_owner(sh);
     match sh.kind {
         ShotKind::Shell => {
             game.world.spawn((Shell {
@@ -497,7 +504,7 @@ fn spawn_shot(game: &mut Game, sh: &ShotState, position: Position, rotation: f32
                 rotation,
                 timer: 0.0,
                 done: false,
-                owner: REPLICA_OWNER,
+                owner,
                 variant: sh.variant as i32,
                 shooter_row: 0,
                 shadow_offset: shadow_offset(sh.id, knobs.shell_shadow_offset_min, knobs.shell_shadow_offset_max),
@@ -515,7 +522,7 @@ fn spawn_shot(game: &mut Game, sh: &ShotState, position: Position, rotation: f32
                 rotation,
                 timer: 0.0,
                 done: false,
-                owner: REPLICA_OWNER,
+                owner,
                 shooter_row: 0,
                 shadow_offset: shadow_offset(
                     sh.id,
@@ -535,7 +542,7 @@ fn spawn_shot(game: &mut Game, sh: &ShotState, position: Position, rotation: f32
                 rotation,
                 timer: 0.0,
                 done: false,
-                owner: REPLICA_OWNER,
+                owner,
                 variant: plasma_variant_from_index(sh.variant as i32),
                 shooter_row: 0,
                 shadow_offset: shadow_offset(sh.id, knobs.plasma_shadow_offset_min, knobs.plasma_shadow_offset_max),

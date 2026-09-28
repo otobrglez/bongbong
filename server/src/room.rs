@@ -1066,6 +1066,7 @@ impl Room {
         self.feed_dev_scripts(now);
         let mut input = Input::default();
         let mut poses: Vec<(usize, Option<SeatPose>)> = Vec::new();
+        let mut views: Vec<(usize, (u32, u8))> = Vec::new();
         for (i, seat) in self.seats.iter().enumerate().take(MAX_SEATS) {
             if let Some(s) = seat
                 && s.connected()
@@ -1074,6 +1075,7 @@ impl Room {
                 let read = s.mailbox.read(now.into_std());
                 input.seats[i] = read.map(|m| m.intent()).unwrap_or_default();
                 poses.push((i, read.and_then(|m| m.pose())));
+                views.push((i, read.map_or((0, 0), |m| (m.view_tick, m.view_frac))));
                 // A starved tick means this seat's client is not stamping
                 // far enough ahead for the link (`mailbox`, §4.12).
                 let starved = s.mailbox.starvations() - before;
@@ -1085,6 +1087,11 @@ impl Room {
         let acked = self.acked();
         let (w, h) = self.map.field_size();
         let game = self.game.as_mut().expect("a playing room has a game");
+        // Which tick of the world each seat was looking at, for lag
+        // compensation of its shots (docs/online-coop-prd.md §4.16).
+        for &(i, (tick, frac)) in &views {
+            game.set_seat_view(i, tick, frac);
+        }
         // A client that owns its hull is put where it says before the
         // tick runs, and the seat is released to the room's own driving
         // the moment its packets stop saying (docs/online-coop-prd.md
@@ -1141,7 +1148,7 @@ impl Room {
         } else {
             // A tick that sends nothing banks its events for the next
             // snapshot, whose own events are its frame's.
-            self.pending_events.extend(encode::wire_events(game.events()));
+            self.pending_events.extend(encode::wire_events_acked(game.events(), &acked));
         }
     }
 

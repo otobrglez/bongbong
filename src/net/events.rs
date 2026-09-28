@@ -124,7 +124,10 @@ impl From<WireHitTarget> for HitTarget {
 pub enum WireEvent {
     RoundStarted { seed: u64, enemies: u16, mission: Mission, spawn: SpawnKind },
     RoundEnded { outcome: RoundOutcome },
-    Fired { slot: u16, weapon: WeaponKind },
+    /// A trigger pull; `input_tick` is the seat's input tick the room
+    /// applied on the tick it fired (0 for an enemy), so the client pairs
+    /// it with the press it drew (`encode::wire_events_acked`).
+    Fired { slot: u16, weapon: WeaponKind, input_tick: u32 },
     Hit { target: WireHitTarget, damage: f32, killed: bool, x: i16, y: i16 },
     Wreck { slot: u16, x: i16, y: i16 },
     Ram { slot: u16, other_slot: u16, damage: f32 },
@@ -141,8 +144,15 @@ pub enum WireEvent {
     ObstacleDestroyed { material: Material, x: i16, y: i16 },
     Blast { x: i16, y: i16, chained: bool, drum: Drum },
     DrumLaunched { x: i16, y: i16, to_x: i16, to_y: i16 },
-    /// A laser's beam, muzzle to where it stopped (`LaserVariant::index`).
-    LaserBeam { x0: i16, y0: i16, x1: i16, y1: i16, variant: u8 },
+    /// A laser's beam, muzzle to where it stopped (`LaserVariant::index`),
+    /// and the seat that fired it (`wire::NO_SEAT` for an enemy): the
+    /// shooter draws its own beam on the press and skips this one.
+    LaserBeam { x0: i16, y0: i16, x1: i16, y1: i16, variant: u8, seat: u8 },
+    /// A shove the room put on a client-owned hull - knockback, a blast, a
+    /// ram, recoil - that the owner applies to its own body, since the
+    /// room places that hull wherever the owner says
+    /// (docs/online-coop-prd.md §4.16). A velocity change, `quantise_velocity`.
+    Shoved { seat: u8, vx: i8, vy: i8 },
     /// The room moved a client-owned hull itself; the client snaps to it
     /// (`dir_index`).
     Placed { seat: u8, x: i16, y: i16, dir: u8 },
@@ -184,7 +194,7 @@ impl WireEvent {
                     debug_assert!(false, "unknown weapon name {weapon:?} in Event::Fired");
                     WeaponKind::Shell
                 });
-                WireEvent::Fired { slot: slot_u16(slot), weapon: kind }
+                WireEvent::Fired { slot: slot_u16(slot), weapon: kind, input_tick: 0 }
             }
             Event::Hit { target, damage, killed, x, y } => {
                 WireEvent::Hit { target: target.into(), damage, killed, x: q(x), y: q(y) }
@@ -224,13 +234,18 @@ impl WireEvent {
                 y: q(y),
                 dir: dir_index(Dir::from_rotation(rotation).unwrap_or(Dir::Up)),
             },
-            Event::LaserBeam { x0, y0, x1, y1, variant } => {
+            Event::LaserBeam { x0, y0, x1, y1, variant, seat } => {
                 let variant = LaserVariant::parse(variant).unwrap_or_else(|| {
                     debug_assert!(false, "unknown laser variant {variant:?} in Event::LaserBeam");
                     LaserVariant::Red
                 });
-                WireEvent::LaserBeam { x0: q(x0), y0: q(y0), x1: q(x1), y1: q(y1), variant: variant.index() }
+                WireEvent::LaserBeam { x0: q(x0), y0: q(y0), x1: q(x1), y1: q(y1), variant: variant.index(), seat }
             }
+            Event::Shoved { seat, vx, vy } => WireEvent::Shoved {
+                seat: seat.min(u8::MAX as usize) as u8,
+                vx: crate::net::wire::quantise_velocity(vx),
+                vy: crate::net::wire::quantise_velocity(vy),
+            },
             Event::Teleported { slot, x, y, to_x, to_y } => {
                 WireEvent::Teleported { slot: slot_u16(slot), x: q(x), y: q(y), to_x: q(to_x), to_y: q(to_y) }
             }
@@ -276,7 +291,7 @@ impl WireEvent {
                 Event::RoundStarted { seed, enemies: enemies as usize, mission, spawn }
             }
             WireEvent::RoundEnded { outcome } => Event::RoundEnded { outcome: outcome.into() },
-            WireEvent::Fired { slot, weapon } => Event::Fired { slot: slot as usize, weapon: weapon.name() },
+            WireEvent::Fired { slot, weapon, .. } => Event::Fired { slot: slot as usize, weapon: weapon.name() },
             WireEvent::Hit { target, damage, killed, x, y } => {
                 Event::Hit { target: target.into(), damage, killed, x: d(x), y: d(y) }
             }
@@ -311,7 +326,13 @@ impl WireEvent {
                 y: d(y),
                 rotation: dir_from_index(dir).unwrap_or(Dir::Up).rotation(),
             },
-            WireEvent::LaserBeam { x0, y0, x1, y1, variant } => Event::LaserBeam {
+            WireEvent::Shoved { seat, vx, vy } => Event::Shoved {
+                seat: seat as usize,
+                vx: crate::net::wire::dequantise_velocity(vx),
+                vy: crate::net::wire::dequantise_velocity(vy),
+            },
+            WireEvent::LaserBeam { x0, y0, x1, y1, variant, seat } => Event::LaserBeam {
+                seat,
                 x0: d(x0),
                 y0: d(y0),
                 x1: d(x1),
@@ -395,7 +416,8 @@ mod tests {
             Event::ObstacleDestroyed { material: Material::Pine, x: 96.0, y: 96.0 },
             Event::Blast { x: 128.0, y: 160.0, chained: true, drum: Drum::Fuel },
             Event::DrumLaunched { x: 128.0, y: 160.0, to_x: 256.0, to_y: 160.0 },
-            Event::LaserBeam { x0: 100.0, y0: 200.0, x1: 100.0, y1: 32.0, variant: "blue" },
+            Event::LaserBeam { x0: 100.0, y0: 200.0, x1: 100.0, y1: 32.0, variant: "blue", seat: 1 },
+            Event::Shoved { seat: 0, vx: 120.0, vy: -40.0 },
             Event::Placed { seat: 2, x: 320.0, y: 160.0, rotation: 90.0 },
             Event::Teleported { slot: 1, x: 64.0, y: 64.0, to_x: 960.0, to_y: 480.0 },
             Event::FireStarted { x: 48.0, y: 48.0, pool: true },
@@ -428,7 +450,7 @@ mod tests {
             let listed = NOT_SENT.contains(&tag.as_str());
             assert!(sent != listed, "{tag}: sent={sent} listed={listed}");
         }
-        assert_eq!(seen.len(), 34, "one sample per Event variant");
+        assert_eq!(seen.len(), 35, "one sample per Event variant");
         for name in NOT_SENT {
             assert!(seen.contains(name), "NOT_SENT names an unknown variant {name}");
         }

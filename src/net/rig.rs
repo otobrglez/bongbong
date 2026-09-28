@@ -482,6 +482,9 @@ impl Room {
         }
         let read = self.mailbox.read(self.now);
         let intent = read.map(|m| m.intent()).unwrap_or_default();
+        if let (Some(game), Some(m)) = (self.game.as_mut(), read) {
+            game.set_seat_view(0, m.view_tick, m.view_frac);
+        }
         let acked = self.acked();
         let mut mailbox = [0u8; MAX_SEATS];
         mailbox[0] = self.mailbox.wire_state();
@@ -508,7 +511,7 @@ impl Room {
         if frame % SNAPSHOT_EVERY != 0 {
             // A tick that sends nothing banks its events for the next
             // snapshot, whose own events are its frame's.
-            self.pending_events.extend(encode::wire_events(game.events()));
+            self.pending_events.extend(encode::wire_events_acked(game.events(), &acked));
             return;
         }
         let mut snapshot = encode::snapshot(game, acked);

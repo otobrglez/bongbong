@@ -297,6 +297,13 @@ pub struct IntentMsg {
     /// The body's velocity (`quantise_velocity`).
     pub vx: i8,
     pub vy: i8,
+    /// The server tick this client was drawing the world at when it made
+    /// this input - the interpolation bracket's near end - and how far
+    /// past it, in 256ths of a tick. What the room rewinds the enemies to
+    /// when it judges this seat's shots (lag compensation,
+    /// docs/online-coop-prd.md §4.16). Zero before the first snapshot.
+    pub view_tick: u32,
+    pub view_frac: u8,
 }
 
 impl IntentMsg {
@@ -314,7 +321,17 @@ impl IntentMsg {
             dir: 0,
             vx: 0,
             vy: 0,
+            view_tick: 0,
+            view_frac: 0,
         }
+    }
+
+    /// The same packet saying which tick of the world the client was
+    /// drawing when it was made.
+    pub fn with_view(mut self, view_tick: u32, view_frac: u8) -> IntentMsg {
+        self.view_tick = view_tick;
+        self.view_frac = view_frac;
+        self
     }
 
     /// The same packet carrying where the client's own hull is, which
@@ -449,7 +466,15 @@ pub struct ShotState {
     /// a plasma bolt's `PlasmaVariant` (0 teal, 1 purple), 0 for a bullet.
     /// Never changes, so a delta never repeats it.
     pub variant: u8,
+    /// The seat that fired it, or `NO_SEAT` for an enemy's: how a client
+    /// knows which shots are its own to draw on its own timeline
+    /// (docs/online-coop-prd.md §4.16). Never changes.
+    pub owner: u8,
 }
+
+/// `ShotState::owner` and `WireEvent::LaserBeam::seat` for a shot no seat
+/// fired.
+pub const NO_SEAT: u8 = u8::MAX;
 
 /// One seeker missile in flight (`missile.rs`).
 ///

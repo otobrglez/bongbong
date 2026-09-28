@@ -297,7 +297,12 @@ pub enum Event {
     /// stopped at (`x1`, `y1`): an instant hit leaves nothing in the world
     /// for a snapshot to carry, so the beam itself is the event a replica
     /// draws it from (`LaserVariant::name`).
-    LaserBeam { x0: f32, y0: f32, x1: f32, y1: f32, variant: &'static str },
+    LaserBeam { x0: f32, y0: f32, x1: f32, y1: f32, variant: &'static str, seat: u8 },
+    /// A velocity change the room put on a client-owned hull (knockback, a
+    /// blast, a ram, recoil); the owner applies it to its own body, since
+    /// the room places that hull wherever the owner says
+    /// (docs/online-coop-prd.md §4.16).
+    Shoved { seat: usize, vx: f32, vy: f32 },
     /// A projectile or beam landed on `target` at (`x`, `y`).
     Hit { target: HitTarget, damage: f32, killed: bool, x: f32, y: f32 },
     /// A tank became a wreck (any cause) at (`x`, `y`).
@@ -558,6 +563,12 @@ pub struct Game {
     /// archetype - a `Tank` and nothing else - so every query that tells
     /// enemies apart by their `Ai` sees all of them the same way.
     pub(crate) seats: [Option<Entity>; MAX_SEATS],
+    /// The tick of the world each seat's client was drawing when it made
+    /// the input this tick applies, in 256ths of a tick: what lag
+    /// compensation rewinds the enemies to for that seat's shots
+    /// (`set_seat_view`, docs/online-coop-prd.md §4.16). `None` for a seat
+    /// with no client view (a local round, a bot).
+    seat_view: [Option<(u32, u8)>; MAX_SEATS],
     /// The update a seat's client owns its hull for (`accept_seat_pose`),
     /// by the frame number that update will run as; `drive_player` puts
     /// nothing on it that frame, since the pose already did. One update
@@ -1720,6 +1731,15 @@ impl Game {
         Ok(())
     }
 
+    /// The tick of the world a seat's client was drawing when it made the
+    /// input this tick applies (`IntentMsg::view_tick`/`view_frac`); set
+    /// by the room before the update, read by lag compensation.
+    pub fn set_seat_view(&mut self, seat: usize, view_tick: u32, view_frac: u8) {
+        if let Some(view) = self.seat_view.get_mut(seat) {
+            *view = (view_tick > 0).then_some((view_tick, view_frac));
+        }
+    }
+
     /// The room drives this seat again from the next update: nobody is
     /// reporting its pose.
     pub fn release_seat(&mut self, seat: usize) {
@@ -2761,6 +2781,7 @@ impl Game {
                 x1: hit_pos.x,
                 y1: hit_pos.y,
                 variant: shot.variant.name(),
+                seat: crate::net::encode::owner_seat(shot.owner),
             });
             let Some(target) = target else { continue };
             f.impact_flashes.push(Shockwave::new(hit_pos));

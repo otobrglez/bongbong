@@ -220,6 +220,10 @@ pub struct OnlineRound<T: Transport> {
     /// The measured round trip and the server's clock, from `Ping`s
     /// (`net::clock`, docs/online-coop-prd.md §4.15).
     rtt: RttClock,
+    /// The tick of the world the last drawn frame showed and how far past
+    /// it in 256ths: what every packet carries as `IntentMsg::view_tick`
+    /// for lag compensation (§4.16).
+    view: (u32, u8),
     /// Provisional shots seen crossing a drawn hull, until the server's
     /// `Hit` claims them or the window runs out (decision 9's numbers).
     crossings: Vec<Crossing>,
@@ -268,6 +272,7 @@ impl<T: Transport> OnlineRound<T> {
             lead: Lead::new(),
             client_hull: tuning().online_client_hull,
             rtt: RttClock::default(),
+            view: (0, 0),
             crossings: Vec::new(),
             crossings_hit: 0,
             crossings_missed: 0,
@@ -639,7 +644,8 @@ impl<T: Transport> OnlineRound<T> {
         // the packet carries - fire hold included, since that is the bit
         // the server's press edge will see - stamped with exactly the
         // tick the server will name back in `acked`.
-        let Some(mut msg) = self.client.prepare_intent(&out) else { return };
+        let Some(msg) = self.client.prepare_intent(&out) else { return };
+        let mut msg = msg.with_view(self.view.0, self.view.1);
         self.pending_fire = false;
         if let Some(predictor) = self.predictor.as_mut() {
             // The knob is live: read each tick, so a shot pressed after
@@ -693,6 +699,8 @@ impl<T: Transport> OnlineRound<T> {
         let sampled = self.interp.sample(now);
         if let Some(frame) = &sampled {
             apply::snapshot(game, &frame.snapshot);
+            let frac = (frame.ahead / PHYSICS_FIXED_DT * 256.0).clamp(0.0, 255.0) as u8;
+            self.view = (frame.snapshot.tick, frac);
             self.confirm_shots(&frame.snapshot);
         }
         // **Before `tick_presentation`, not after.** The presentation
@@ -846,7 +854,7 @@ impl<T: Transport> OnlineRound<T> {
         let ticks_ago = predictor.tick().wrapping_sub(acked);
         for event in &frame.events {
             match event {
-                WireEvent::Fired { slot, weapon } if *slot as u8 == seat => {
+                WireEvent::Fired { slot, weapon, .. } if *slot as u8 == seat => {
                     predictor.confirm_shot(*weapon, ticks_ago);
                 }
                 // A hit on an enemy near a crossing still waiting is the
