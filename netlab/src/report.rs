@@ -683,6 +683,26 @@ mod tests {
         assert_eq!(wire_fired(&log, &presses, 0, 1), None);
     }
 
+    /// Incoming fire drawn in the present is judged by what it can get
+    /// wrong - a strike the room never answers, a hit no drawn shot made -
+    /// and not by its distance from the hull, nought for a strike by
+    /// definition: a handful is close, more is far.
+    #[test]
+    fn a_strike_with_no_hit_and_a_hit_with_no_shot_miss_local() {
+        let twin = Metrics { incoming: crate::metrics::IncomingFire { hits: 10, unseen: 1, ..Default::default() }, ..Metrics::default() };
+        let online = |phantom_strikes: usize, unseen: usize| Metrics {
+            incoming: crate::metrics::IncomingFire { hits: 10, struck: 8, phantom_strikes, unseen, ..Default::default() },
+            ..Metrics::default()
+        };
+        assert_eq!(verdict(&online(0, 1), &twin, &[], true).0, "local", "the twin's own unseen hit is no miss");
+        let (v, misses) = verdict(&online(2, 1), &twin, &[], true);
+        assert_eq!(v, "close");
+        assert!(misses.iter().any(|m| m.starts_with("strikes drawn with no hit")), "{misses:?}");
+        let (v, misses) = verdict(&online(0, 1 + CLOSE_CORRECTIONS as usize + 1), &twin, &[], true);
+        assert_eq!(v, "far");
+        assert!(misses.iter().any(|m| m.starts_with("hits with no shot drawn")), "{misses:?}");
+    }
+
     /// Every row of the suite's table has the header's columns.
     #[test]
     fn a_table_row_has_the_headers_columns() {
