@@ -1042,6 +1042,9 @@ pub fn run(args: Args) {
     // presses are owed to the next step - see `Input::or_presses`).
     let mut clock = StepClock::default();
     let mut carried = Input::default();
+    // What `bb_net_stats` hands the page: the online round's readings.
+    #[cfg(feature = "dev-tools")]
+    let mut net_stats = crate::capi::NetStatsFeed::default();
     game_loop::run(rl, thread, target_fps, move |rl, thread| {
         // Frame boundary, first: dev-server requests (state reads and
         // writes, tuning patches, an armed step or screenshot), so anything
@@ -1368,11 +1371,15 @@ pub fn run(args: Args) {
                 intent = scripted;
             }
             session.update_online(&intent, dt);
-            #[cfg(feature = "dev-tools")]
-            if let Some(round) = session.online.as_ref() {
-                crate::capi::publish_net_stats(round.stats_json().to_string());
-            }
         }
+        // The page reads a round's numbers only while one is played: the
+        // frame the window is in any other mode - the round over and the
+        // lobby back, the seat given up - they are taken down.
+        #[cfg(feature = "dev-tools")]
+        net_stats.frame(match (session.mode(), session.online.as_ref()) {
+            (Driver::Online, Some(round)) => Some(round.stats_json().to_string()),
+            _ => None,
+        });
 
         // The round advances in whole steps of `PHYSICS_FIXED_DT`, as many
         // as this frame's real time pays for (`StepClock`), every step on
