@@ -347,12 +347,16 @@ impl Game {
                     }
                 }
             }
-            let lit: Vec<(i32, i32)> = self
+            // Sorted: `oil_cells` is a hash set, and the order the cells
+            // are lit is the order `fires` holds them - which `tick_fires`
+            // spreads, fuses and burns out in.
+            let mut lit: Vec<(i32, i32)> = self
                 .oil_cells
                 .iter()
                 .copied()
                 .filter(|&cell| cell_to_world(cell.0, cell.1).distance_to(center) <= params.radius)
                 .collect();
+            lit.sort_unstable();
             for cell in lit {
                 self.light_cell(f, cell, t.oil_trail_burn_seconds, false);
             }
