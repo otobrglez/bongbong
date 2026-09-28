@@ -29,6 +29,7 @@ mod hits;
 mod missiles;
 mod props;
 pub use props::{FlyingDrum, GroundFire};
+pub(crate) use props::tile_rubble;
 pub mod replica;
 #[cfg(test)]
 mod flame_tests;
@@ -854,6 +855,34 @@ impl Frame {
             events: Vec::new(),
         }
     }
+
+    /// Take `show`'s cosmetics into the frame's, each list in its own
+    /// order, as if the phase had pushed them itself.
+    fn stage(&mut self, show: Spectacle) {
+        self.blast_fx.extend(show.blast_fx);
+        self.scorches.extend(show.scorches);
+        self.decals.extend(show.decals);
+        self.muzzle_flashes.extend(show.muzzle_flashes);
+        self.impact_flashes.extend(show.impact_flashes);
+        self.shocks.extend(show.shocks);
+    }
+}
+
+/// The cosmetics one cause lays down - a kill, a drum's blast, a missile's
+/// burst, a cook-off pop - gathered by the cause's `*_show` method, the
+/// one place that decides them. A round stages them into its `Frame`; a
+/// client replica (docs/online-coop-prd.md section 4.16), which never
+/// runs the phases, hands them to `Game::show` off the server's events,
+/// so both pictures come from the same code. Hashed from positions, never
+/// drawn from the round RNG.
+#[derive(Default)]
+pub(crate) struct Spectacle {
+    pub(crate) blast_fx: Vec<BlastFx>,
+    pub(crate) scorches: Vec<Scorch>,
+    pub(crate) decals: Vec<Decal>,
+    pub(crate) muzzle_flashes: Vec<Shockwave>,
+    pub(crate) impact_flashes: Vec<Shockwave>,
+    pub(crate) shocks: Vec<Shockwave>,
 }
 
 // How hard each thing that shakes the screen shakes it, relative to a tank
@@ -1425,20 +1454,31 @@ impl Game {
 
     /// Append the frame's effects and events and put the RNG back.
     fn finish_frame(&mut self, f: Frame) {
-        self.muzzle_flashes.extend(f.muzzle_flashes);
-        self.impact_flashes.extend(f.impact_flashes);
-        self.blast_fx.extend(f.blast_fx);
-        self.scorches.extend(f.scorches);
+        let Frame { blast_fx, scorches, decals, muzzle_flashes, impact_flashes, shocks, events, rng, .. } = f;
+        self.show(Spectacle { blast_fx, scorches, decals, muzzle_flashes, impact_flashes, shocks });
+        self.events.extend(events);
+        self.rng = Some(rng);
+    }
+
+    /// Put `show` on screen, each list held to its ceiling: `SCORCH_MAX`
+    /// and `DECAL_MAX` drop the oldest, `SHOCK_MAX` the weakest. Every
+    /// frame of a round ends here, and a replica's spectacle comes here
+    /// too.
+    pub(crate) fn show(&mut self, show: Spectacle) {
+        self.muzzle_flashes.extend(show.muzzle_flashes);
+        self.impact_flashes.extend(show.impact_flashes);
+        self.blast_fx.extend(show.blast_fx);
+        self.scorches.extend(show.scorches);
         if self.scorches.len() > SCORCH_MAX {
             let excess = self.scorches.len() - SCORCH_MAX;
             self.scorches.drain(..excess);
         }
-        self.decals.extend(f.decals);
+        self.decals.extend(show.decals);
         if self.decals.len() > DECAL_MAX {
             let excess = self.decals.len() - DECAL_MAX;
             self.decals.drain(..excess);
         }
-        self.shocks.extend(f.shocks);
+        self.shocks.extend(show.shocks);
         if self.shocks.len() > SHOCK_MAX {
             // Evict by punch left, not by age: a cascade's little fuse pops
             // arrive after the tank explosion that set them off, and
@@ -1446,8 +1486,6 @@ impl Game {
             self.shocks.sort_by(|a, b| b.remaining().total_cmp(&a.remaining()));
             self.shocks.truncate(SHOCK_MAX);
         }
-        self.events.extend(f.events);
-        self.rng = Some(f.rng);
     }
 
     /// Age the shader effects (shockwave, muzzle/impact flashes, laser
@@ -3129,27 +3167,45 @@ impl Game {
         }
     }
 
-    /// Every tank killed this frame gets a shockwave and an explosion, and
-    /// every barrel detonated this frame its blast; a splash that kills
-    /// another tank, or a blast that finishes a barrel's fuse elsewhere, is
-    /// appended and handled in turn. Processed in order, so the last ring
-    /// shown is the most recent one's. Terminates: a tank can only ever be
-    /// pushed once (every push is gated by its own transition into a wreck)
-    /// and a barrel dies once. `live` is false on the end screen, where
-    /// blasts play out without damage (no kills happen there).
-    /// Everything a dying tank throws off: the same fireball, screen flash
-    /// and scorch a barrel gets, plus its own wreckage and a set of
-    /// delayed pops.
+    /// Everything a dying tank throws off: its show (`wreck_show`) and a
+    /// set of delayed pops.
     ///
     /// Draws no RNG: the parts' landing spots, cells and arcs all come out
     /// of `blast::seed_at` salted per piece, so a spectacular death cannot
     /// shift a seeded replay.
     fn wreck_fx(&mut self, f: &mut Frame, center: Position) {
-        f.blast_fx.push(BlastFx::wreck(center));
-        f.impact_flashes.push(Shockwave::new(center));
+        let mut show = Spectacle::default();
+        self.wreck_show(&mut show, center);
+        f.stage(show);
+
+        // Ammo cooking off: a few small pops after the fact, spread over
+        // `cookoff_window_seconds`. Queued rather than fired now, and
+        // ticked by `tick_cookoffs`; each pop is an `Event::CookOff`, which
+        // is how a replica gets it.
+        let count = tuning().cookoff_count.max(0) as u32;
+        let window = tuning().cookoff_window_seconds;
+        for i in 0..count {
+            let h = crate::blast::seed_at(center, 90 + i * 7);
+            let delay = window * (0.15 + 0.85 * (h % 1000) as f32 / 1000.0);
+            let off = ((h >> 10) % 21) as f32 - 10.0;
+            let off2 = ((h >> 16) % 21) as f32 - 10.0;
+            self.cookoffs.push((Position::new(center.x + off, center.y + off2), delay));
+        }
+    }
+
+    /// The show a tank dying at `center` puts on: the kill's shockwave,
+    /// the fireball (a mushroom cloud in `wreck_mushroom_chance` of kills,
+    /// hashed), the impact flash, the screen flash, a scorch on dry
+    /// ground, its last tread marks burnt in and its hull parts thrown.
+    /// Everything but the damage and the cook-offs, which is why a replica
+    /// can call it off `Event::Wreck`. No RNG.
+    pub(crate) fn wreck_show(&mut self, show: &mut Spectacle, center: Position) {
+        show.shocks.push(Shockwave::scaled(center, SHOCK_KILL));
+        show.blast_fx.push(BlastFx::wreck(center));
+        show.impact_flashes.push(Shockwave::new(center));
         self.flash_screen();
         if self.water.depth_at(center) == crate::ground::Depth::Dry {
-            f.scorches.push(Scorch::new(center));
+            show.scorches.push(Scorch::new(center));
         }
         self.scorch_tracks(center);
 
@@ -3162,20 +3218,7 @@ impl Game {
             let angle = (h % 3600) as f32 / 3600.0 * std::f32::consts::TAU;
             let dist = throw * (0.35 + 0.65 * ((h >> 12) % 100) as f32 / 100.0);
             let to = Position::new(center.x + angle.cos() * dist, center.y + angle.sin() * dist);
-            f.decals.push(Decal::thrown(RUBBLE_ROW_TANK, center, to, 40 + i * 5));
-        }
-
-        // Ammo cooking off: a few small pops after the fact, spread over
-        // `cookoff_window_seconds`. Queued rather than fired now, and
-        // ticked by `tick_cookoffs`.
-        let count = tuning().cookoff_count.max(0) as u32;
-        let window = tuning().cookoff_window_seconds;
-        for i in 0..count {
-            let h = crate::blast::seed_at(center, 90 + i * 7);
-            let delay = window * (0.15 + 0.85 * (h % 1000) as f32 / 1000.0);
-            let off = ((h >> 10) % 21) as f32 - 10.0;
-            let off2 = ((h >> 16) % 21) as f32 - 10.0;
-            self.cookoffs.push((Position::new(center.x + off, center.y + off2), delay));
+            show.decals.push(Decal::thrown(RUBBLE_ROW_TANK, center, to, 40 + i * 5));
         }
     }
 
@@ -3226,12 +3269,28 @@ impl Game {
             false
         });
         for center in popped {
-            f.blast_fx.push(BlastFx::small(center));
-            f.shocks.push(Shockwave::scaled(center, SHOCK_COOKOFF));
+            let mut show = Spectacle::default();
+            Self::cookoff_show(&mut show, center);
+            f.stage(show);
             f.events.push(Event::CookOff { x: center.x, y: center.y });
         }
     }
 
+    /// One cook-off pop at `center`: a small fireball and a faint ripple,
+    /// nothing screen-level. A replica calls it off `Event::CookOff`.
+    pub(crate) fn cookoff_show(show: &mut Spectacle, center: Position) {
+        show.blast_fx.push(BlastFx::small(center));
+        show.shocks.push(Shockwave::scaled(center, SHOCK_COOKOFF));
+    }
+
+    /// Every tank killed this frame gets a shockwave and an explosion, and
+    /// every barrel detonated this frame its blast; a splash that kills
+    /// another tank, or a blast that finishes a barrel's fuse elsewhere, is
+    /// appended and handled in turn. Processed in order, so the last ring
+    /// shown is the most recent one's. Terminates: a tank can only ever be
+    /// pushed once (every push is gated by its own transition into a wreck)
+    /// and a barrel dies once. `live` is false on the end screen, where
+    /// blasts play out without damage (no kills happen there).
     fn explosions(&mut self, f: &mut Frame, live: bool) {
         let (mut i, mut j) = (0, 0);
         while i < f.kills.len() || j < f.pending_blasts.len() {
@@ -3239,7 +3298,6 @@ impl Game {
                 let (center, victim) = f.kills[i];
                 i += 1;
                 f.events.push(Event::Wreck { slot: victim.slot(), x: center.x, y: center.y });
-                f.shocks.push(Shockwave::scaled(center, SHOCK_KILL));
                 self.wreck_fx(f, center);
                 self.apply_explosion(f, center, victim);
             }

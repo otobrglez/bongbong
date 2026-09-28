@@ -21,7 +21,7 @@ use crate::Position;
 
 use super::combat::{explosion_hit, BlastParams};
 use super::props::DamageCause;
-use super::{Event, Frame, Game, SHOCK_FROG};
+use super::{Event, Frame, Game, Spectacle, SHOCK_FROG};
 
 /// How hard one missile's burst shakes the screen, relative to a tank
 /// dying (see `SHOCK_KILL`): a volley is four of these in quick succession,
@@ -178,16 +178,27 @@ impl Game {
             }
         }
 
+        let mut show = Spectacle::default();
+        self.missile_show(&mut show, center, dir);
+        f.stage(show);
+    }
+
+    /// The show a missile bursting at `center`, coming down along `dir`,
+    /// puts on: a small fireball leaning downrange, a ripple, the impact
+    /// flash, a scorch on dry ground and flattened grass. Everything but
+    /// the damage, which is why a replica can call it off
+    /// `Event::MissileBlast`. No RNG.
+    pub(crate) fn missile_show(&mut self, show: &mut Spectacle, center: Position, dir: Vec2) {
         let lean = Lean { x: dir.x, y: dir.y };
         let mut fx = BlastFx::shaped(center, BlastKind::Oil, BlastShape::Shot { dir: lean });
         fx.scale *= tuning().missile_blast_fx_scale;
-        f.blast_fx.push(fx);
-        f.shocks.push(Shockwave::scaled(center, SHOCK_MISSILE));
-        f.impact_flashes.push(Shockwave::new(center));
+        show.blast_fx.push(fx);
+        show.shocks.push(Shockwave::scaled(center, SHOCK_MISSILE));
+        show.impact_flashes.push(Shockwave::new(center));
         if self.water.depth_at(center) == crate::ground::Depth::Dry {
-            f.scorches.push(Scorch::with(center, tuning().missile_blast_fx_scale, None));
+            show.scorches.push(Scorch::with(center, tuning().missile_blast_fx_scale, None));
         }
-        crate::grass::flatten(&mut self.grass, center, params.radius * tuning().blast_grass_flatten);
+        crate::grass::flatten(&mut self.grass, center, BlastParams::missile().radius * tuning().blast_grass_flatten);
     }
 
     /// The missiles in the air, for the presentation: (a stable per-missile
