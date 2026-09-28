@@ -35,9 +35,13 @@ pub const START_TIMEOUT: Duration = Duration::from_secs(20);
 /// connection comes back at once.
 pub const DIAL_RETRY: Duration = Duration::from_millis(250);
 
-/// How a refused dial reads (`net::native`'s own wording): the socket
-/// never opened, as opposed to a room that answered and then refused.
-pub const DIAL_REFUSED: &str = "cannot reach";
+/// How a dial that never got through reads: `net::native` puts every
+/// failed dial as "cannot reach URL: why", and this is tungstenite's why
+/// when no address took the TCP connection - nothing listening yet. A name
+/// that does not resolve, a TLS failure or an HTTP answer to the upgrade
+/// (a wrong path, a preview that is not deployed) read otherwise, and are
+/// the run's answer at once.
+pub const DIAL_REFUSED: (&str, &str) = ("cannot reach", "Unable to connect");
 
 /// The last millisecond of each frame's wait is spun rather than slept,
 /// so frames land on their deadline rather than a scheduler tick later.
@@ -145,11 +149,13 @@ fn dial(plan: &SeatPlan, code: Option<&str>) -> OnlineRound<NativeTransport> {
     round
 }
 
-/// Whether a round's socket was refused before it ever opened - the dial
-/// is worth making again while the room server may still be starting - as
-/// opposed to a room that answered and then closed (`answered`).
+/// Whether a round's TCP connection was refused before its socket ever
+/// opened (`DIAL_REFUSED`) - the dial is worth making again while the room
+/// server may still be starting - as opposed to a dial the server or the
+/// network answered, or a room that answered and then closed (`answered`).
 pub fn refused_before_open(phase: &Phase, answered: bool) -> bool {
-    !answered && matches!(phase, Phase::Closed(c) if c.reason.starts_with(DIAL_REFUSED))
+    let (prefix, why) = DIAL_REFUSED;
+    !answered && matches!(phase, Phase::Closed(c) if c.reason.starts_with(prefix) && c.reason.contains(why))
 }
 
 /// Play one seat to the end of its script (and until every other seat is
@@ -333,15 +339,24 @@ mod tests {
     use super::*;
     use bongbong::net::transport::Closed;
 
-    /// Only a dial the network refused before the socket ever opened is
-    /// made again; a room that answered and then closed has said its word.
+    /// Only a TCP connection refused before the socket ever opened is made
+    /// again; a server that answered the upgrade, a name that does not
+    /// resolve, a TLS failure or a room that answered and then closed has
+    /// said its word.
     #[test]
     fn only_a_refused_dial_is_made_again() {
-        let refused = Phase::Closed(Closed::fault("cannot reach ws://127.0.0.1:4848/ws: URL error: Unable to connect"));
+        let refused = Phase::Closed(Closed::fault("cannot reach ws://127.0.0.1:4848/ws: URL error: Unable to connect to ws://127.0.0.1:4848/ws"));
         assert!(refused_before_open(&refused, false));
         assert!(!refused_before_open(&refused, true), "the room had answered");
-        let hung_up = Phase::Closed(Closed::fault("the room closed the connection"));
-        assert!(!refused_before_open(&hung_up, false));
+        for said in [
+            "cannot reach wss://rooms.bongbong.io/pr-48/ws: HTTP error: 404 Not Found",
+            "cannot reach wss://rooms.bongbong.io/pr-48/ws: HTTP error: 503 Service Unavailable",
+            "cannot reach wss://rooms.bongbong.example/ws: IO error: failed to lookup address information: nodename nor servname provided, or not known",
+            "cannot reach wss://127.0.0.1:4848/ws: TLS error: invalid peer certificate",
+            "the room closed the connection",
+        ] {
+            assert!(!refused_before_open(&Phase::Closed(Closed::fault(said)), false), "{said}");
+        }
         assert!(!refused_before_open(&Phase::Connecting, false));
     }
 }
