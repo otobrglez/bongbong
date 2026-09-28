@@ -424,7 +424,7 @@ pub struct Appearance {
     pub shot: usize,
     pub seen: Seen,
     /// What put it down to that shot: `launch`, `the client's order` (a
-    /// provisional's place in the client's list of shots, kept across a
+    /// provisional's place among the provisionals by id, kept across a
     /// jump), `the room's id` (drawn under it before), `the tap`,
     /// `timing`, or `nothing`.
     pub by: &'static str,
@@ -442,12 +442,14 @@ struct Shot {
 
 /// The provisional track that track `k` - a provisional beginning away
 /// from the muzzle, on frame `f` - continues: one that ended on the frame
-/// before, at the same place in the client's list. The client keeps its shots in the
-/// order they left and only closes the gap a retired one leaves, so the
-/// provisionals drawn on both frames keep their order, and the jumped one
-/// has as many of them ahead of it after the jump as before. Of two that
-/// fit, one that ended in its last impact frame retired rather than
-/// jumped; of two that still fit, the newer.
+/// before, at the same place among the provisionals by id. A provisional
+/// is drawn under `PROVISIONAL_ID_BASE` plus its `Live::id` within
+/// `PROVISIONAL_ID_MASK`, fixed for the shot's life, handed out in launch
+/// order and wrapping every 4096 shots, so the provisionals drawn on both
+/// frames keep their order and the jumped one has as many of them ahead of
+/// it after the jump as before. Of two that fit, one that ended in its
+/// last impact frame retired rather than jumped; of two that still fit,
+/// the newer.
 fn jump_predecessor(own: &[Track], k: usize, taken: &[bool]) -> Option<usize> {
     let t = &own[k];
     let f = t.first().frame;
@@ -1230,8 +1232,9 @@ mod tests {
     }
 
     /// The present timeline: the provisional is the shot for its whole
-    /// life, its ids shifting as an older one retires, and the room's copy
-    /// never shows - no hand-off at all.
+    /// life - drawn here under ids that shift as an older one goes, which
+    /// the ledger does not hang on - and the room's copy never shows: no
+    /// hand-off at all.
     #[test]
     fn a_shot_drawn_once_has_no_handoff() {
         let mut frames = still(30);
@@ -1243,7 +1246,7 @@ mod tests {
                 shots.push(own(PROVISIONAL_ID_BASE, 10.0 + 8.0 * (i - 3) as f32, true, true));
             }
             if i >= 5 {
-                // The second shell: under the first's id once that retires.
+                // The second shell: under the first's id once that goes.
                 let id = if i < 12 { PROVISIONAL_ID_BASE + 1 } else { PROVISIONAL_ID_BASE };
                 shots.push(own(id, 12.0 + 8.0 * (i - 5) as f32, true, true));
             }

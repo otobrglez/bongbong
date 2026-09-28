@@ -108,7 +108,7 @@ revision does about each:
 | the prediction metrics (4.12, phase 4's exit test) | built in this revision: `status.round.prediction` on the dev server, off the same counters the rig tests read |
 | predicted cooldown and ammo | built in this revision: the sandbox is a projection of the server's seat, so its weapon and ammo gate the provisional shot, and the cooldown is seeded from the room's own `Fired` |
 | full-auto streams | built in this revision for the minigun's burst and the twin barrel's second shot; plasma is a shell here. The laser, the missile pod and the flamethrower's cone are drawn from the room's word (4.12 says why) |
-| lag compensation (decision 9) | still deferred, deliberately; the instrument that decides it is built (4.12: `crossings` against `crossings_hit`/`crossings_missed` on `status.round.prediction`), the reading on a real link is what is left |
+| lag compensation (decision 9) | deferred in this revision; built since, in 4.16 (`IntentMsg::view_tick`, `HitBoxHistory`, `sweep_rewound`), with 4.12's instrument (`crossings` against `crossings_hit`/`crossings_missed` on `status.round.prediction`) reading whether its rewind is right |
 
 ### What the field said (2026-09-28, v0.2.3, `feature/coop-ng-2`)
 
@@ -886,21 +886,22 @@ tail at contacts - are pinned rather than eyeballed.
 **Under prediction** your hull is drawn at the present while others are the
 delay in the past. Ramming a friend looks like arriving a beat early and
 being settled back; an enemy's hit is judged against where you were on the
-server. A provisional shell is drawn at the present and passes through tanks
-drawn the delay in the past: the error is the delay times `shell_speed`,
-sixteen pixels at 33 ms, a quarter of a hull, against a shot that answers on
-the frame it is pressed instead of a round trip later. **Lag compensation**
-(decision 9) - the server rewinding targets to the shooter's view, capped at
-200 ms, off a per-room position ring like the dev server's history - is what
-would make it correct rather than merely early, and is not built. The
-measurement that decides it is: every provisional shot whose drawn path
-crosses a drawn, live enemy hull is a *crossing* (the lie on screen); a
-server `Hit` on an enemy within a hull and a half of that point inside
-`CROSSING_WINDOW_SECONDS` answers it, and one nothing answers was a shell
-drawn through a hull it never touched. `status.round.prediction` carries
-`crossings`, `crossings_hit` and `crossings_missed`; what is left is to
-read them on a real link. Below a few per cent missed it is not worth the
-ring; the laser is the weapon that would complain first.
+server. A provisional shot is drawn at the present against tanks drawn the
+delay in the past, and stops where it meets one in the picture (4.16).
+**Lag compensation** (decision 9) - the server rewinding targets to the
+shooter's view - is what makes the room judge the shot against that same
+picture rather than against where the tanks had since moved, and it is
+built (4.16): each intent carries the tick the client was drawing
+(`IntentMsg::view_tick`), the room keeps the last 250 ms of enemy and frog
+hit boxes (`HitBoxHistory`), and a seat's shots and beams are swept against
+the boxes of that tick (`sweep_rewound`). The measurement that checks it:
+every provisional `advance_shots` stops against a drawn tank or frog is a
+*crossing*; its paired room copy bursting within `HIT_MATCH_PX` (40 px) of
+that stop makes it `crossings_hit`, and its copy flying on past
+`MISS_MARGIN_PX` or bursting anywhere else `crossings_missed`, the room's
+shot then shown in its place. `status.round.prediction` carries all three;
+a missed rate above a few per cent says the rewind is wrong, and the laser
+is the weapon that would complain first.
 
 ### 4.14 Stage 3: the client owns its hull
 
@@ -940,11 +941,17 @@ holds the hull where it was and answers with `Placed { seat, x, y, dir }`,
 and so does a tick that moved an owned hull further than a contact could
 (`PLACED_PX`) - a portal, a gate, the round's end; the client snaps to it
 the way a teleport snaps (`Predictor::place_own`, also on this seat's
-`Teleported` and `TankEntered`). Knockback and blast shoves on a player
-are *not* carried yet: the next tick's pose overwrites the room's push,
-so a player under fire is not knocked about - `Shoved { seat, vx, vy }`,
-an impulse the client applies to its own body, is phase 9's. The water's
-current the client already runs itself.
+`Teleported` and `TankEntered`). **Shoves are carried**: the next tick's
+pose would overwrite any push the room put on an owned hull, so the room
+sends the velocity change it applied - a hit's knockback, a blast, a ram,
+a missile launch's recoil - as `Shoved { seat, vx, vy }`, and the client
+adds it to its own body the moment the snapshot arrives
+(`Predictor::shove`), so the poses that follow carry it; a shell's, bolt's
+or bullet's recoil is the client's own at the launch and never echoed. The
+client's sandbox takes the room's world, its `Fired` and its shoves
+whether or not the prediction is drawn (`online_predict_own_tank` off only
+stops the drawing), since every pose comes from it. The water's current
+the client already runs itself.
 
 **Shots** are spawned where the client had the hull, by construction: the
 server fires from the pose it just applied, so the shell leaves the muzzle
@@ -1125,14 +1132,22 @@ The pieces, each with its owner module:
   for the server's: the room's copies of this seat's shots
   (`ShotState::owner`) are hidden and paired by `Fired::input_tick`, and
   only a server outcome that disagrees (a hit the client did not draw, a
-  refusal) corrects it. The laser and each shot's muzzle ripple are drawn
-  on the press, and the replica skips the room's own (`apply::Show::
-  OwnShotsDrawn`). *Built*, with one rule netlab added: **a shot outlives
-  its own drawing** - kept off the picture until its room copy has come
-  and gone, since a shell that bursts near the muzzle has played out long
-  before its copy arrives a round trip later, and that copy was being
-  paired with the next shot (which leapt hundreds of pixels to the first
-  one's impact) or shown on its own (the shot drawn twice) on every link.
+  drawn hit the room's copy flies on past or bursts away from, a refusal)
+  corrects it. The laser and each shot's muzzle ripple are drawn on the
+  press, and the replica skips the room's own for the presses it drew
+  (`apply::Show::OwnShotsDrawn { seat, beams }`: each laser `Fired` claims
+  the beam drawn for its press, and one no drawn press claims - the local
+  gate refused what the room fired - is the room's beam to draw). *Built*,
+  with one rule netlab added: **a shot outlives its own drawing** - kept
+  off the picture until its room copy has come and gone, since a shell
+  that bursts near the muzzle has played out long before its copy arrives
+  a round trip later, and that copy was being paired with the next shot
+  (which leapt hundreds of pixels to the first one's impact) or shown on
+  its own (the shot drawn twice) on every link. Its converse: a shot whose
+  copy was due in the picture and never came (the snapshot carrying it
+  stepped over, the copy dead between two) is orphaned - left out of the
+  pairing, so the next shot's copy is not taken for it - and goes as soon
+  as it is off the picture.
 - **Lag compensation, favor the shooter** (the simulation's hit test):
   each intent carries the tick the client was drawing
   (`IntentMsg::view_tick`); the room keeps the last 250 ms of enemy and
@@ -1147,8 +1162,10 @@ The pieces, each with its owner module:
   (health stays the room's). *Built*: `incoming_lead_ticks` and
   `draw_incoming_in_present`.
 - **A controlled playout clock** (`net::interp`): render time in ticks,
-  monotone, steered at a bounded rate (the full 10 % while it runs past
-  the newest snapshot), the delay from a lateness percentile with
+  monotone, steered at a bounded rate (while it runs past the newest
+  snapshot with the target behind it, bounded by the full `RATE_FAR` (10 %)
+  rather than the error-ramped bound, without the deadband), the delay
+  from a lateness percentile with
   head-of-line stalls ridden out on extrapolation; per-entity error
   offsets that decay instead of snapping; missiles blended; hulls and
   shots extrapolated along their paths; teleports snapped. *Built*, with

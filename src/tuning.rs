@@ -1637,33 +1637,31 @@ tunables! {
         /// A knob rather than a constant because the two have to be
         /// judged side by side on the same link, which is what a rig run
         /// is for (`--rig --delay 120 --jitter 20`). Live: it takes
-        /// effect on the next frame, and turning it off hands the hull
-        /// straight back to the interpolator.
+        /// effect on the next frame, and turning it off hands the drawn
+        /// hull straight back to the interpolator and draws no
+        /// provisional shots. A client that owns its hull
+        /// (`online_client_hull`) keeps its sandbox in step with the room
+        /// either way - the room's world, shoves and `Fired` - since every
+        /// pose it sends comes from there; only the drawing follows this.
         online_predict_own_tank: bool = true in 0 ..= 1;
-        /// Also draw this seat's *shell* on the frame of the press
-        /// (docs/online-coop-prd.md section 4.12, `net::predict`).
+        /// Also draw this seat's shots on the frame of the press
+        /// (docs/online-coop-prd.md sections 4.12 and 4.16,
+        /// `net::predict`): each is the only drawn copy of its shot for
+        /// its whole life, runs its projectile's own state machine, and
+        /// stops at the first tile, tank or frog it meets in the drawn
+        /// world with its impact drawn at once, the room's copy kept off
+        /// the picture while it stands for it. A laser's beam and each
+        /// shot's muzzle ripple are drawn on the press too.
         ///
-        /// **On, because the lie got small enough to be worth the
-        /// latency.** A predicted shell is drawn at the present; every
-        /// tank it might hit is drawn `online_interpolation_delay_ms` in
-        /// the past, so the shell reaches a tank's *drawn* position
-        /// before the server's copy reaches its real one and sails
-        /// through - a replica runs no hit test. That error is the delay
-        /// times `shell_speed`: at 500 px/s it was fifty pixels at a
-        /// 100 ms delay, most of a sixty-four pixel hull and plainly
-        /// wrong; at 33 ms it is sixteen, a quarter of a hull, against a
-        /// shot that now answers the press on the frame it is pressed
-        /// instead of about 100 ms later. The trade turned over when the
-        /// snapshot cadence went to 60 Hz and let the delay follow.
-        ///
-        /// It is still a lie, and the honest fix is the server rewinding
-        /// targets to the shooter's view - lag compensation, section
-        /// 4.12's decision 9 - which is what makes a predicted shell
-        /// correct rather than merely early. Until then this is a live
-        /// knob: turn it off to hand the shot back to the server and see
-        /// the picture stay strictly honest at the cost of the wait.
-        /// The hull's own prediction (`online_predict_own_tank`) is
-        /// unaffected either way.
+        /// The room judges the shot against the hulls this client was
+        /// drawing when it pressed (lag compensation, section 4.16), so a
+        /// shot stopped at a drawn hull is the room's hit too; where the
+        /// room still disagrees its copy is shown from there on and the
+        /// disagreement counted (`crossings_hit`/`crossings_missed` on
+        /// `status.round.prediction`). Live: off, the shot is the room's
+        /// to draw, a round trip and the picture's delay after the press.
+        /// Drawn only with `online_predict_own_tank` on; the hull's own
+        /// prediction is unaffected either way.
         online_predict_shots: bool = true in 0 ..= 1;
         /// How much of the authored wave each seat past the first adds to a
         /// room's round (docs/online-coop-prd.md section 4.11): the room
