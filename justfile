@@ -176,6 +176,22 @@ run-server-dev *ARGS:
 rooms-mcp-call TOOL *PARAMS:
     cargo run -q --features dev-tools --bin bbmcp -- rooms call {{TOOL}} {{PARAMS}}
 
+# netlab (netlab/README.md, docs/online-coop-prd.md §4.16): how far
+# networked play is from local play, measured - the room server in-process
+# behind a TCP-modelling impairment proxy, two headless clients running the
+# window's own `OnlineRound`, and a local twin fed the same scripts. Release
+# build, because its frame loops run in real time.
+# `just netlab run --profile typical --scenario shoot`,
+# `just netlab run --remote wss://rooms.bongbong.io/pr-48 --scenario duel`.
+netlab *ARGS:
+    cargo run --release -p netlab -- {{ARGS}}
+
+# Profiles x scenarios x client-hull modes as one markdown table, each run
+# in its own process (`just netlab-suite --quick`, a few minutes;
+# `--remote URL` to sweep a deployed server).
+netlab-suite *ARGS:
+    cargo run --release -p netlab -- suite {{ARGS}}
+
 # --- The room server's image and its deploy (docs/online-coop-prd.md §4.8) ---
 #
 # The registry and the cluster are reached over Tailscale, so these need
