@@ -994,8 +994,9 @@ async fn every_tap_of_the_trigger_puts_a_shell_in_the_air() {
 }
 
 /// **The whole client, against the real server.** `OnlineRound::send`
-/// paces intents against real time and the server's mailbox applies them
-/// one per tick, in order; the two clocks are independent. Every other
+/// paces intents against real time and the server's mailbox takes them
+/// on its own ticks - one a tick in order for a server-driven seat, all
+/// waiting for an owned one; the two clocks are independent. Every other
 /// test drives one side or the other - `Lockstep` and the tests above
 /// call `RoomClient::send_intent` directly, and `net::rig`'s room, though
 /// it holds the same mailbox, is fed by a client on the same thread. This
@@ -1325,4 +1326,81 @@ async fn a_drain_closes_idle_rooms_at_once_and_waits_only_for_a_round_in_play() 
 
     drop(playing);
     tokio::time::timeout(WAIT, hub.drained()).await.expect("the paused round is not waited for");
+}
+
+/// The next snapshot on `ws`, a delta applied onto `baseline`, which
+/// moves on to it.
+async fn next_state(ws: &mut Client, baseline: &mut Snapshot) -> Snapshot {
+    let msg = expect(ws, "a snapshot", |m| match m {
+        m @ (Msg::Delta(_) | Msg::Snapshot(_)) => Ok(m),
+        other => Err(other),
+    })
+    .await;
+    let next = match msg {
+        Msg::Delta(d) => apply_delta(baseline, &d),
+        Msg::Snapshot(s) => s,
+        _ => unreachable!("picked above"),
+    };
+    *baseline = next.clone();
+    next
+}
+
+/// **Owned poses are newest-wins at the real room** (docs/online-coop-prd.md
+/// §4.16). A client that owns its hull has already driven it wherever its
+/// intents say, so a burst of them - a stall on the way in, released at
+/// once - is one tick's work for the room: the newest pose, the ack at
+/// the newest intent, and nothing left waiting to run a tick late. The
+/// same burst from a server-driven seat is still applied one a tick, in
+/// order, which is what that seat's replay needs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_owned_burst_is_taken_by_one_tick_and_a_server_driven_one_in_order() {
+    use bongbong::net::mailbox::{BUFFER_MAX, unpack};
+
+    let (addr, _hub) = start_server().await;
+    let mut ws = connect(addr).await;
+    send(&mut ws, &create(0xB0B5)).await;
+    let _ = expect_welcome(&mut ws).await;
+    send(&mut ws, &Msg::Lobby(Lobby::Start)).await;
+    let welcome = start_of_round(&mut ws).await;
+    let mut baseline = welcome.snapshot.clone();
+    let seat = welcome.seat as usize;
+    let me = *baseline.tanks.iter().find(|t| t.id as usize == seat).expect("the seat's tank");
+    // Standing still where the room has the hull, so every pose is taken.
+    let owned = |tick: u32| IntentMsg { tick, owned: true, x: me.x, y: me.y, dir: me.dir, ..IntentMsg::default() };
+    let _ = next_state(&mut ws, &mut baseline).await;
+
+    let burst = BUFFER_MAX as u32;
+    for tick in 1..=burst {
+        send(&mut ws, &Msg::Intent(owned(tick))).await;
+    }
+    let mut owned_seen: Vec<(u32, u8)> = Vec::new();
+    while owned_seen.last().is_none_or(|&(acked, _)| acked < burst) {
+        let s = next_state(&mut ws, &mut baseline).await;
+        let (depth, _) = unpack(s.mailbox[seat]);
+        owned_seen.push((s.acked[seat], depth));
+        assert!(owned_seen.len() < 60, "the burst was never acknowledged: {owned_seen:?}");
+    }
+    eprintln!("owned burst of {burst}: (acked, depth) per snapshot {owned_seen:?}");
+    assert!(owned_seen.iter().all(|&(_, depth)| depth == 0), "an owned burst left depth behind: {owned_seen:?}");
+    // One tick takes the burst whole; a second only if the tick fell in
+    // the middle of the sends.
+    let partial = owned_seen.iter().filter(|&&(acked, _)| (1..burst).contains(&acked)).count();
+    assert!(partial <= 1, "the burst was worked through a tick at a time: {owned_seen:?}");
+
+    // The same burst from a seat the room drives: in order, one a tick.
+    for tick in burst + 1..=2 * burst {
+        send(&mut ws, &Msg::Intent(IntentMsg { tick, ..IntentMsg::default() })).await;
+    }
+    let mut ordered_seen: Vec<(u32, u8)> = Vec::new();
+    while ordered_seen.last().is_none_or(|&(acked, _)| acked < 2 * burst) {
+        let s = next_state(&mut ws, &mut baseline).await;
+        let (depth, _) = unpack(s.mailbox[seat]);
+        ordered_seen.push((s.acked[seat], depth));
+        assert!(ordered_seen.len() < 60, "the burst was never acknowledged: {ordered_seen:?}");
+    }
+    eprintln!("server-driven burst of {burst}: (acked, depth) per snapshot {ordered_seen:?}");
+    let mut acks: Vec<u32> = ordered_seen.iter().map(|&(acked, _)| acked).filter(|&a| a > burst).collect();
+    acks.dedup();
+    assert!(acks.len() as u32 >= burst - 2, "a server-driven burst is applied a tick at a time: {ordered_seen:?}");
+    assert!(ordered_seen.iter().any(|&(_, depth)| depth >= 2), "and waits its turn in the buffer: {ordered_seen:?}");
 }
