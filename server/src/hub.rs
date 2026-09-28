@@ -86,7 +86,9 @@ impl Hub {
     }
 
     /// The server's clock in milliseconds since it started, wrapping at
-    /// `u32` (49 days - a client estimates an offset, not an epoch).
+    /// `u32` every 49.7 days. A client unwraps each stamp against the one
+    /// before it (`net::interp::Interpolator`, `net::clock::RttClock`), so
+    /// a round that spans the wrap reads one clock.
     pub fn now_ms(&self) -> u32 {
         (self.epoch.elapsed().as_millis() % (u32::MAX as u128 + 1)) as u32
     }
