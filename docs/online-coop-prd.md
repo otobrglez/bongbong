@@ -1202,26 +1202,31 @@ it - lan 0 ms, typical 40 ± 10 ms, bad 100 ± 40 ms with 3 % loss):
 | run | own input p50 | remote lag p50 | remote stall / jump % | own shot hand-offs (gap p95) | drawn twice | verdict |
 |---|---|---|---|---|---|---|
 | lan drive, before | 16 ms | 66 ms | 0.0 / 0.0 | - | - | local |
-| lan drive, after | 12 ms | 60 ms | 2.0 / 1.5 (0.3 / 0.2 alone) | - | - | close |
+| lan drive, after | 17 ms | 61 ms | 2.0 / 1.3 | - | - | close |
 | typical drive, before | 17 ms | 167 ms | 0.3 / 0.0 | - | - | local |
-| typical drive, after | 13 ms | 156 ms | 0.0 / 0.0 | - | - | local |
+| typical drive, after | 18 ms | 151 ms | 0.0 / 0.0 | - | - | local |
 | bad drive, before | 0 ms | 515 ms | 14.4 / 5.5 | - | - | far |
-| bad drive, after | 18 ms | 458 ms | 11.8 / 4.7 | - | - | far |
+| bad drive, after | 0 ms | 452 ms | 4.7 / 2.6 | - | - | close |
 | typical shoot, before | 17 ms | - | - | every shot (96 px) | - | far |
-| typical shoot, after | 22 ms | - | - | 1 (89 px) | 0 | far |
+| typical shoot, after | 0 ms | - | - | 0 | 0 | local |
 | lan duel, before | 17 ms | 73 ms | 1.3 / 0.0 | every shot (64 px) | - | far |
-| lan duel, after | 17 ms | 62 ms | 0.8 / 0.0 | 1 (40 px) | 0 | far |
+| lan duel, after | 0 ms | 65 ms | 0.3 / 0.0 | 0 | 0 | close |
 | typical duel, before | 17 ms | 168 ms | 1.3 / 3.3 | every shot (97 px) | - | far |
-| typical duel, after | 16 ms | 154 ms | 2.0 / 1.0 | 0 | 0 | close |
+| typical duel, after | 0 ms | 152 ms | 1.5 / 5.4 | 0 | 0 | close |
+| bad duel, before | 16 ms | 477 ms | 19.5 / 9.2 | every shot (301 px) | - | far |
+| bad duel, after | 18 ms | 452 ms | 11.1 / 2.4 | 1 (53 px) | 0 | far |
 
-The local twin reads 17 ms of own input (one frame) and no stalls. The
-hand-offs left are the room's outcome disagreeing with the drawn one - a
-hit the picture did not draw, or a drawn hit the room missed - one or two
-in an 8 s run of fifteen presses. Over the internet to the preview server
-(`wss://rooms.bongbong.io/pr-48`, a 28-33 ms round trip at the median
-and ~110 ms at the 95th) before the clock and playout fixes: own input
-one frame, remote lag ~120 ms, the picture 150 ms behind and
-extrapolating - the reading the two fixes were made against.
+The local twin reads 17 ms of own input (one frame) and no stalls; an own
+input median of 0 ms is a direction change drawn on the frame it was made.
+Own shots are one copy for their whole life on every profile - the
+hand-offs left are the bad profile's, where the room judges a hit the
+picture did not draw. The bad profile holds a TCP retransmit (200 ms)
+behind 3 % of its segments and stays "far" by nature. Over the internet to
+this PR's preview server (a 28-33 ms round trip at the median, ~110 ms at
+the 95th): before the clock and playout fixes the picture ran 150 ms
+behind and extrapolated hundreds of frames a run, drive and duel both
+"far"; after them drive reads "local" (1.2 % stalls, 0.7 % jumps) and duel
+"close", own input one frame, the delay 60 ms.
 
 Deferred, written down: WebTransport datagrams for the snapshot and
 intent streams (HOL blocking is the one link effect no client-side trick
@@ -1389,12 +1394,14 @@ ship a complete co-op game; 4 and 5 are stage 2.
    timeline, lag compensation, incoming fire in the present, the playout
    clock on a wall-measured link, the spectacle on replicas, shoves.
    *Built* 2026-09-28 on `feature/coop-ng-2` (PR #48), measured in 4.16.
-   Open: the one or two own-shot corrections an 8 s run still makes (the
-   room's hit against the drawn one), phantom strikes of incoming fire (a
-   strike drawn on the hull the room judged a miss, one or two a run), and
-   the browser reading (`bb_net_stats` on a visible tab against the PR's
-   room). Done when netlab's typical profile reads `local` or `close` on
-   every scenario and a real-link session agrees.
+   Met on netlab's typical profile (drive and shoot `local`, duel `close`)
+   and on the real link to the preview (drive `local`, duel `close`).
+   Open: own-shot corrections on the bad profile (the room's hit against
+   the drawn one behind a retransmit), a phantom strike of incoming fire
+   now and then (a strike drawn on the hull the room judged a miss), the
+   round start (the play point settles its margin in the first second),
+   and the browser reading (`bb_net_stats` on a visible tab against the
+   PR's room).
 9. **Stage 3 takes over (S).** Once 8's comparison says so: delete the
    stage-2 reconciliation's replay, the lead and the ordered mailbox path,
    keeping the sandbox, which drives the owned hull; the protocol loses
