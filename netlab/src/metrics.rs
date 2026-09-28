@@ -539,14 +539,14 @@ fn events_of(frames: &[FrameSample], pick: impl Fn(&EventSample) -> bool) -> Vec
 ///
 /// Read off the picture's own shots: every shot not the seat's, followed
 /// by the room's id, and where the picture stopped it - its impact frames,
-/// or the frame it was taken off in flight, at the point its path met the
-/// drawn hull when that is why it went (a client drawing incoming fire in
-/// the present takes a shot that meets its drawn hull off the picture
-/// there and then, `net::round`). A hit is put down to a shot the picture
-/// stopped in the `STRIKE_WINDOW_MS` before the hit was handed over that
-/// was taken off in flight on a path through the room's impact point, or
-/// that burst at that point; of several, the one stopped nearest the
-/// hull.
+/// or, taken off in flight, the point its path met the drawn hull (a
+/// client drawing incoming fire in the present takes a shot that meets its
+/// drawn hull off the picture there and then, `net::round`; a shot that
+/// vanished anywhere else was cleared by the room and is no strike). A hit
+/// is put down to a shot the picture stopped in the `STRIKE_WINDOW_MS`
+/// before the hit was handed over: struck on a path through the room's
+/// impact point, or burst at that point; of several, the one stopped
+/// nearest the hull.
 #[derive(Clone, Copy, Debug, Default, Serialize, serde::Deserialize, PartialEq)]
 pub struct IncomingFire {
     pub hits: usize,
@@ -562,7 +562,7 @@ pub struct IncomingFire {
     /// strike stands on screen before its damage lands.
     pub strike_to_hit_ms: Stat,
     /// Hits no drawn shot accounts for: a beam, a ram, a blast - or a shot
-    /// the picture never showed.
+    /// the picture never showed striking or bursting.
     pub unseen: usize,
     /// Shots the picture stopped against the seat's drawn hull that no
     /// hit ever followed: a strike drawn for a shot the room judged a
@@ -626,16 +626,17 @@ fn strike_point(track: &shots::Track, stop: &shots::Stop, frames: &[FrameSample]
 pub fn incoming_fire(frames: &[FrameSample], seat: usize) -> IncomingFire {
     let mut out = IncomingFire::default();
     let tracks = shots::follow(frames, |s| s.seat != Some(seat as u8) && !s.provisional);
-    // Where the picture stopped each shot: a vanished one at its strike
-    // on the hull where it was one.
+    // Where the picture stopped each shot against this seat: a burst
+    // wherever it burst, a shot taken off in flight only where it struck
+    // the drawn hull - one that vanished anywhere else was the room
+    // clearing a shot that hit nothing here, and the picture never showed
+    // it hitting.
     let stops: Vec<Option<shots::Stop>> = tracks
         .iter()
         .map(|t| {
             let mut stop = t.stop(frames)?;
-            if stop.vanished
-                && let Some((x, y)) = strike_point(t, &stop, frames, seat)
-            {
-                (stop.x, stop.y) = (x, y);
+            if stop.vanished {
+                (stop.x, stop.y) = strike_point(t, &stop, frames, seat)?;
             }
             Some(stop)
         })
@@ -1077,6 +1078,22 @@ mod tests {
         let inc = incoming_fire(&frames, 0);
         assert_eq!((inc.hits, inc.unseen), (1, 1), "{inc:?}");
         assert_eq!(inc.from_afar_px.n, 0);
+    }
+
+    /// A shell that left the picture in flight far from the hull - the
+    /// room cleared it - did not make a hit on its line: the picture never
+    /// showed it hitting.
+    #[test]
+    fn a_shell_that_vanished_away_from_the_hull_did_not_make_the_hit() {
+        let mut frames = still(20);
+        // Flying at the hull, gone 100 px short of it: further than a frame
+        // and a catch-up could have carried it.
+        for i in 2..6 {
+            frames[i].shots = vec![enemy(5, -124.0 + 8.0 * (i - 2) as f32, true)];
+        }
+        frames[12].events = vec![EventSample::HitPlayer { player: 0, x: -30.0, y: 0.0 }];
+        let inc = incoming_fire(&frames, 0);
+        assert_eq!((inc.hits, inc.unseen, inc.phantom_strikes), (1, 1, 0), "{inc:?}");
     }
 
     /// A shell the picture first drew already bursting - it flew and hit
