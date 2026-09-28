@@ -151,7 +151,7 @@ const SLOT_PARAMS: &str = r#"{"type":"object","properties":{"slot":{"type":"inte
 pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "status",
-        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `mode` (play|build|online) with the dialogs and the builder's state, and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots drawn through a live enemy hull -, `crossings_hit` - answered by a server `Hit` near that point within half a second - and `crossings_missed`) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
+        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `mode` (play|build|online) with the dialogs and the builder's state, and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), `rtt` (the measured round trip - median, p95, floor - and server-minus-local from ping/pong probes), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots drawn through a live enemy hull -, `crossings_hit` - answered by a server `Hit` near that point within half a second - and `crossings_missed`) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
         schema: NO_PARAMS,
         read_only: true,
         destructive: false,
@@ -1993,6 +1993,16 @@ fn round_json(session: &Session) -> Value {
         // that arrived, null before the first snapshot.
         "buffer_ms": round.buffer_ms().map(|ms| ms.round() as i64),
         "server_tick": round.interp().newest_tick(),
+        // The measured link (`net::clock`): median, 95th percentile and
+        // floor of the round trip, and server-minus-local by the fastest
+        // probe. Null until a probe has been answered.
+        "rtt": round.rtt().map(|r| json!({
+            "rtt_ms": r.rtt_ms,
+            "rtt_p95_ms": r.rtt_p95_ms,
+            "rtt_min_ms": r.rtt_min_ms,
+            "offset_ms": r.offset_ms,
+            "samples": r.samples,
+        })),
         // What the interpolator is doing and what the prediction cost
         // (docs/online-coop-prd.md section 4.12, "Measured").
         "interpolation": {

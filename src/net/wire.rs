@@ -350,6 +350,23 @@ impl IntentMsg {
     }
 }
 
+/// A clock probe (docs/online-coop-prd.md §4.15): the client's own
+/// milliseconds, echoed straight back by whoever holds the socket's
+/// other end, so the round trip is measured on one clock and the
+/// server's time is read at the far end of it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Ping {
+    pub client_ms: u32,
+}
+
+/// The echo of a `Ping`: the client's stamp back, and the server's clock
+/// when it answered - the same clock `Snapshot::server_ms` reads.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Pong {
+    pub client_ms: u32,
+    pub server_ms: u32,
+}
+
 impl From<&IntentMsg> for Intent {
     fn from(msg: &IntentMsg) -> Self {
         msg.intent()

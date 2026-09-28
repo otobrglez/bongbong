@@ -28,7 +28,7 @@
 //! grid, or the map format - they're layout, not tuning.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, PoisonError, RwLock, RwLockReadGuard};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError, RwLock};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -2204,7 +2204,20 @@ fn number_literal(v: f64, kind: Kind) -> String {
 // Global store: one live table, one staged replacement, one restart flag.
 // ---------------------------------------------------------------------------
 
-static TUNING: RwLock<Tuning> = RwLock::new(Tuning::DEFAULT);
+/// The live table, as a shared snapshot: a reader clones the `Arc` under
+/// the lock and lets go at once, and a writer swaps a new `Arc` in.
+///
+/// **No code ever runs while the lock is held**, and that is the point.
+/// The table used to hand out the read guard itself, and the simulation
+/// binds `let t = tuning()` at the top of a phase and then calls helpers
+/// that call `tuning()` again - a second read while holding the first.
+/// `std`'s `RwLock` lets a waiting writer block new readers, so a write
+/// arriving between the two (a client applying its room's tuning patch,
+/// the room server's `init_under` starting a round in another room)
+/// waited for the first guard while the second waited for the writer:
+/// a deadlock that froze every thread that read tuning - in the room
+/// server, every room. A snapshot has nothing to wait for.
+static TUNING: LazyLock<RwLock<Arc<Tuning>>> = LazyLock::new(|| RwLock::new(Arc::new(Tuning::DEFAULT)));
 /// The next table, built up by `submit_*` calls since the last frame
 /// boundary; `apply_pending` swaps it in. Staging on a copy means a batch of
 /// submits between two frames all land together, and a rejected patch never
@@ -2212,13 +2225,18 @@ static TUNING: RwLock<Tuning> = RwLock::new(Tuning::DEFAULT);
 static STAGED: Mutex<Option<Tuning>> = Mutex::new(None);
 static RESTART_REQUESTED: AtomicBool = AtomicBool::new(false);
 
-/// The live table. Cheap (an uncontended read lock); bind once per function
-/// in hot code. Never hold the guard across [`apply_pending`]/[`replace_now`]
-/// (they take the write lock) - the main loop calls those between frames,
-/// outside any read.
+/// The live table, as a snapshot: cheap (a read lock held for one `Arc`
+/// clone), and safe to hold for as long as the caller likes - across other
+/// `tuning()` calls and across a write on another thread, which the
+/// snapshot simply does not see. Bind once per function in hot code.
 #[inline]
-pub fn tuning() -> RwLockReadGuard<'static, Tuning> {
-    TUNING.read().unwrap_or_else(PoisonError::into_inner)
+pub fn tuning() -> Arc<Tuning> {
+    Arc::clone(&TUNING.read().unwrap_or_else(PoisonError::into_inner))
+}
+
+/// Swap `next` in as the live table.
+fn set_live(next: Tuning) {
+    *TUNING.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(next);
 }
 
 /// A copy of the live table.
@@ -2261,7 +2279,7 @@ pub fn apply_pending() -> bool {
     let staged = STAGED.lock().unwrap_or_else(PoisonError::into_inner).take();
     match staged {
         Some(next) => {
-            *TUNING.write().unwrap_or_else(PoisonError::into_inner) = next;
+            set_live(next);
             true
         }
         None => false,
@@ -2276,7 +2294,7 @@ pub fn take_restart_request() -> bool {
 /// Replace the live table immediately, bypassing staging - for startup
 /// (`--tuning <file>`) and the probe, before any frame has read it.
 pub fn replace_now(t: Tuning) {
-    *TUNING.write().unwrap_or_else(PoisonError::into_inner) = t;
+    set_live(t);
 }
 
 /// Read a JSON file holding a patch object (typically a saved

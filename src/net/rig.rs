@@ -296,7 +296,7 @@ impl Lockstep {
                     Ok(game) => self.replica = Some(game),
                     Err(e) => self.note = Some(e),
                 },
-                ClientEvent::Snapshot(snapshot) => {
+                ClientEvent::Snapshot { snapshot, .. } => {
                     if let Some(replica) = self.replica.as_mut() {
                         apply::snapshot(replica, &snapshot);
                     }
@@ -306,7 +306,7 @@ impl Lockstep {
                 ClientEvent::Ended { outcome } => self.ended = Some(outcome),
                 ClientEvent::Started => self.ended = None,
                 ClientEvent::Created { .. } | ClientEvent::Roster { .. } => {}
-                ClientEvent::Said { .. } => {}
+                ClientEvent::Said { .. } | ClientEvent::Pong { .. } => {}
             }
         }
         self.scratch = events;
@@ -398,6 +398,12 @@ impl Room {
                 Msg::Lobby(Lobby::Start) => self.begin(),
                 Msg::Lobby(Lobby::Leave) => left = true,
                 Msg::Intent(intent) => self.mailbox.post(intent, self.now),
+                // The room server answers a probe on the connection's own
+                // task; the rig answers it on the spot too.
+                Msg::Ping(ping) => {
+                    let server_ms = self.server_ms();
+                    self.say(Msg::Pong(crate::net::wire::Pong { client_ms: ping.client_ms, server_ms }));
+                }
                 // Ready, chat, kick and everything a room says rather
                 // than hears mean nothing to one seat playing alone.
                 _ => {}

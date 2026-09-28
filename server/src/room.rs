@@ -504,7 +504,6 @@ struct Room {
     /// `Welcome` carries (`tuning_patch`); the empty patch until a round
     /// starts.
     tuning_json: String,
-    created: Instant,
     commands: mpsc::Receiver<Command>,
     /// `room_step` has taken the room off real time; it advances only
     /// when a dev tool says so, until `room_resume`.
@@ -542,7 +541,6 @@ pub async fn run(hub: Arc<Hub>, code: String, params: RoomParams, commands: mpsc
         prev: Snapshot::default(),
         pending_events: Vec::new(),
         tuning_json: ROOM_TUNING_JSON.to_string(),
-        created: now,
         commands,
         #[cfg(feature = "dev-tools")]
         frozen: false,
@@ -1010,9 +1008,10 @@ impl Room {
         }
     }
 
-    /// The room's clock, milliseconds since it was created.
+    /// The server's clock (`Hub::now_ms`): the one a `Pong` reads, so a
+    /// client measures snapshots and probes against the same time.
     fn server_ms(&self) -> u32 {
-        self.created.elapsed().as_millis().min(u32::MAX as u128) as u32
+        self.hub.now_ms()
     }
 
     // -----------------------------------------------------------------

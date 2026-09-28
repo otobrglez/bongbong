@@ -166,8 +166,9 @@ pub enum ClientEvent {
     /// went. The snapshots stop here; the phase is `Lobby` again, so a
     /// host can ask for the rematch on the same seat and the same code.
     Ended { outcome: RoundOutcome },
-    /// A whole snapshot, deltas already applied onto the one before it.
-    Snapshot(Box<Snapshot>),
+    /// A whole snapshot, deltas already applied onto the one before it,
+    /// and the instant it came off the socket (`Transport::drain_stamped`).
+    Snapshot { snapshot: Box<Snapshot>, arrived: std::time::Instant },
     /// Somebody said something.
     Said { seat: u8, text: String },
     /// The room refused what was asked (a code that names no room, a
@@ -176,6 +177,9 @@ pub enum ClientEvent {
     Refused(String),
     /// The connection ended.
     Closed(Closed),
+    /// The answer to a clock probe (`RoomClient::ping`), and the instant
+    /// it came off the socket.
+    Pong { client_ms: u32, server_ms: u32, arrived: std::time::Instant },
 }
 
 /// A seat in a room, over one socket.
@@ -196,7 +200,7 @@ pub struct RoomClient<T: Transport> {
     intent_tick: u32,
     fire_held: u8,
     /// Reused by `poll` so a frame allocates nothing.
-    scratch: Vec<Msg>,
+    scratch: Vec<(Msg, std::time::Instant)>,
 }
 
 impl<T: Transport> RoomClient<T> {
@@ -240,7 +244,7 @@ impl<T: Transport> RoomClient<T> {
         }
         let mut scratch = std::mem::take(&mut self.scratch);
         scratch.clear();
-        self.transport.drain(&mut scratch);
+        self.transport.drain_stamped(&mut scratch);
         if self.transport.is_open()
             && self.phase == Phase::Connecting
             && let Some(greeting) = self.greeting.take()
@@ -248,8 +252,8 @@ impl<T: Transport> RoomClient<T> {
             self.say_hello(&greeting);
             self.phase = Phase::Greeting;
         }
-        for msg in scratch.drain(..) {
-            self.take(msg, out);
+        for (msg, arrived) in scratch.drain(..) {
+            self.take(msg, arrived, out);
         }
         self.scratch = scratch;
         if let ConnState::Closed(closed) = self.transport.state() {
@@ -303,6 +307,15 @@ impl<T: Transport> RoomClient<T> {
     /// Send a packet `prepare_intent` made.
     pub fn send_prepared(&mut self, msg: &IntentMsg) {
         self.transport.send_msg(&Msg::Intent(*msg));
+    }
+
+    /// Send a clock probe stamped with the caller's own milliseconds
+    /// (`net::clock`); the `Pong` comes back as a `ClientEvent`. Nothing
+    /// is sent on a socket that is not open.
+    pub fn ping(&mut self, client_ms: u32) {
+        if self.transport.is_open() {
+            self.transport.send_msg(&Msg::Ping(crate::net::wire::Ping { client_ms }));
+        }
     }
 
     /// The tick the next packet will carry. A caller predicting the
@@ -415,7 +428,7 @@ impl<T: Transport> RoomClient<T> {
     }
 
     /// One message from the room.
-    fn take(&mut self, msg: Msg, out: &mut Vec<ClientEvent>) {
+    fn take(&mut self, msg: Msg, arrived: std::time::Instant, out: &mut Vec<ClientEvent>) {
         match msg {
             Msg::Lobby(Lobby::RoomCreated { code }) => {
                 self.code = Some(code.clone());
@@ -457,7 +470,7 @@ impl<T: Transport> RoomClient<T> {
             }
             Msg::Snapshot(snapshot) => {
                 self.baseline = Some(snapshot.clone());
-                out.push(ClientEvent::Snapshot(Box::new(snapshot)));
+                out.push(ClientEvent::Snapshot { snapshot: Box::new(snapshot), arrived });
             }
             Msg::Delta(delta) => {
                 // A delta is cut against the snapshot before it, so one
@@ -469,10 +482,14 @@ impl<T: Transport> RoomClient<T> {
                 };
                 let next = apply_delta(baseline, &delta);
                 self.baseline = Some(next.clone());
-                out.push(ClientEvent::Snapshot(Box::new(next)));
+                out.push(ClientEvent::Snapshot { snapshot: Box::new(next), arrived });
             }
             // A room is told intents, never told them.
-            Msg::Intent(_) => {}
+            Msg::Pong(pong) => {
+                out.push(ClientEvent::Pong { client_ms: pong.client_ms, server_ms: pong.server_ms, arrived });
+            }
+            // A client never receives what only a client sends.
+            Msg::Intent(_) | Msg::Ping(_) => {}
             // The lobby's client half never comes back from a room.
             Msg::Lobby(_) => {}
         }
@@ -693,7 +710,7 @@ mod tests {
         let seen: Vec<&Snapshot> = events
             .iter()
             .map(|e| match e {
-                ClientEvent::Snapshot(s) => s.as_ref(),
+                ClientEvent::Snapshot { snapshot: s, .. } => s.as_ref(),
                 other => panic!("not a snapshot: {other:?}"),
             })
             .collect();

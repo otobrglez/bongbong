@@ -73,6 +73,7 @@
 pub mod apply;
 pub mod authority;
 pub mod client;
+pub mod clock;
 pub mod codec;
 pub mod delta;
 pub mod encode;

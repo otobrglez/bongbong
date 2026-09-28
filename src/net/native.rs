@@ -8,7 +8,9 @@
 //! The thread's loop is flush-then-read: it drains the outgoing queue,
 //! writes it, then reads with a short timeout, so an intent leaves
 //! within `READ_TIMEOUT` of the frame that made it and nothing waits on
-//! the socket but the thread. A read timeout arrives as `WouldBlock`,
+//! the socket but the thread. Every message read is stamped with the
+//! instant it came off the socket (`Transport::drain_stamped`), so the
+//! frame that drains it later knows when it really arrived. A read timeout arrives as `WouldBlock`,
 //! which is not an error but the quiet between messages; tungstenite
 //! keeps a half-read frame in its own buffer across one, and rustls its
 //! half-read record, so the loop can retry forever.
@@ -20,7 +22,7 @@
 use std::io::ErrorKind;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Error as WsError, Message};
@@ -29,10 +31,13 @@ use crate::net::codec::{self, Msg};
 use crate::net::transport::{Closed, ConnState, Transport};
 
 /// How long the socket thread waits on a read before it looks at the
-/// outgoing queue again. Short enough that an intent made this frame
-/// leaves on this frame, long enough that an idle connection is not a
-/// spin loop.
-const READ_TIMEOUT: Duration = Duration::from_millis(5);
+/// outgoing queue again: the longest an intent can sit behind a read
+/// that has nothing to return. A blocked read cannot be woken from the
+/// frame's thread, so this is the send path's own latency; at one
+/// millisecond it is a thousand cheap wake-ups a second, which is nothing
+/// beside a game drawing at 60 fps, and an intent leaves within a
+/// millisecond of the frame that made it rather than up to five.
+const READ_TIMEOUT: Duration = Duration::from_millis(1);
 
 /// What the frame asks the socket thread to do.
 enum Cmd {
@@ -43,7 +48,8 @@ enum Cmd {
 /// What the socket thread tells the frame.
 enum Wire {
     Open,
-    Bytes(Vec<u8>),
+    /// A message's bytes and the instant they came off the socket.
+    Bytes(Vec<u8>, Instant),
     Closed(Closed),
 }
 
@@ -79,11 +85,11 @@ impl NativeTransport {
 
     /// Take everything the socket thread has said, updating the state
     /// and handing back the bytes that arrived.
-    fn pump(&mut self, mut bytes: impl FnMut(Vec<u8>)) {
+    fn pump(&mut self, mut bytes: impl FnMut(Vec<u8>, Instant)) {
         loop {
             match self.wire.try_recv() {
                 Ok(Wire::Open) => self.state = ConnState::Open,
-                Ok(Wire::Bytes(b)) => bytes(b),
+                Ok(Wire::Bytes(b, at)) => bytes(b, at),
                 Ok(Wire::Closed(c)) => self.state = ConnState::Closed(c),
                 Err(TryRecvError::Empty) => return,
                 // The thread is gone without a word: it panicked, or the
@@ -112,9 +118,15 @@ impl Transport for NativeTransport {
     }
 
     fn drain(&mut self, out: &mut Vec<Msg>) {
+        let mut stamped = Vec::new();
+        self.drain_stamped(&mut stamped);
+        out.extend(stamped.into_iter().map(|(m, _)| m));
+    }
+
+    fn drain_stamped(&mut self, out: &mut Vec<(Msg, Instant)>) {
         let mut arrived = Vec::new();
-        self.pump(|b| arrived.push(b));
-        out.extend(arrived.iter().filter_map(|b| codec::decode(b).ok()));
+        self.pump(|b, at| arrived.push((b, at)));
+        out.extend(arrived.iter().filter_map(|(b, at)| codec::decode(b).ok().map(|m| (m, *at))));
     }
 
     fn close(&mut self) {
@@ -176,7 +188,7 @@ fn run(url: String, cmds: Receiver<Cmd>, wire: Sender<Wire>) {
         }
         match socket.read() {
             Ok(Message::Binary(bytes)) => {
-                if wire.send(Wire::Bytes(bytes.to_vec())).is_err() {
+                if wire.send(Wire::Bytes(bytes.to_vec(), Instant::now())).is_err() {
                     break Closed::by_us();
                 }
             }

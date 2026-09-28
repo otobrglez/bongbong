@@ -79,6 +79,8 @@ fn describe(msg: &Msg) -> String {
         Msg::Snapshot(s) => format!("snapshot tick {}", s.tick),
         Msg::Delta(d) => format!("delta tick {}", d.tick),
         Msg::Intent(_) => "intent".into(),
+        Msg::Ping(p) => format!("ping {}", p.client_ms),
+        Msg::Pong(p) => format!("pong {} at {}", p.client_ms, p.server_ms),
     }
 }
 
@@ -627,7 +629,7 @@ fn play_a_round(url: String, span: Duration) -> Played {
                     round_end = Some(Instant::now() + span);
                 }
                 ClientEvent::Welcomed(_) => {}
-                ClientEvent::Snapshot(snapshot) => {
+                ClientEvent::Snapshot { snapshot, .. } => {
                     let game = replica.as_mut().expect("a snapshot before the welcome");
                     apply::snapshot(game, &snapshot);
                     played.snapshots.push((Instant::now(), snapshot.tick));
@@ -639,7 +641,7 @@ fn play_a_round(url: String, span: Duration) -> Played {
                 ClientEvent::Refused(why) => panic!("the room refused: {why}"),
                 ClientEvent::Closed(why) => panic!("the socket closed: {why}"),
                 ClientEvent::Ended { outcome } => panic!("the round ended early: {outcome:?}"),
-                ClientEvent::Roster { .. } | ClientEvent::Said { .. } => {}
+                ClientEvent::Roster { .. } | ClientEvent::Said { .. } | ClientEvent::Pong { .. } => {}
             }
         }
         if !asked_to_start && client.phase() == &Phase::Lobby {
@@ -945,7 +947,7 @@ async fn every_tap_of_the_trigger_puts_a_shell_in_the_air() {
                         seat = w.seat as u16;
                         round_end = Some(Instant::now() + Duration::from_secs(2));
                     }
-                    ClientEvent::Snapshot(s) => {
+                    ClientEvent::Snapshot { snapshot: s, .. } => {
                         fired += s
                             .events
                             .iter()
@@ -1102,6 +1104,51 @@ async fn a_client_that_owns_its_hull_is_followed_by_the_room() {
     assert!(mine.0 > start.0 + 60.0, "the hull drove right on the spot: {start:?} -> {mine:?}");
     assert!((room.0 - mine.0).abs() < 8.0 && (room.1 - mine.1).abs() < 8.0, "the room followed the hull: {room:?} vs {mine:?}");
     assert_eq!((report.nudges, report.snaps, report.in_flight), (0, 0, 0), "an owned hull is never corrected: {report:?}");
+}
+
+/// **The round trip is measured, not guessed** (docs/online-coop-prd.md
+/// §4.15): a probe goes out four times a second, the connection task
+/// echoes it with the server's clock, and the round's `RttClock` reads a
+/// round trip on loopback in the low milliseconds and a server time that
+/// agrees with the snapshots' stamps.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_round_trip_is_measured_against_the_real_room() {
+    use bongbong::net::round::OnlineRound;
+
+    let (addr, _hub) = start_server().await;
+    let url = socket_url(&RoomsHost::overriding(&format!("ws://{addr}")));
+    let (report, newest_server_ms, server_now) = tokio::task::spawn_blocking(move || {
+        let client = RoomClient::host(
+            NativeTransport::connect(&url),
+            Identity::new("host", "tok-host"),
+            RoomSetup { map: "default".into(), map_toml: None, mission: Mission::Protect, seed: Some(0xB0B5) },
+        );
+        let mut round = OnlineRound::new(client, "TEST");
+        let frame = Duration::from_millis(16);
+        let give_up = Instant::now() + WAIT * 4;
+        while round.game().is_none_or(|g| g.frame() == 0) {
+            round.frame(&Intent::default(), frame.as_secs_f32());
+            round.start_round();
+            assert!(Instant::now() < give_up, "the round never got going");
+            std::thread::sleep(frame);
+        }
+        for _ in 0..90 {
+            round.frame(&Intent::default(), frame.as_secs_f32());
+            std::thread::sleep(frame);
+        }
+        let report = round.rtt().expect("probes answered");
+        let newest = round.interp().newest().expect("a snapshot").server_ms as f64;
+        let now = report.offset_ms + round.local_clock_ms() as f64;
+        (report, newest, now)
+    })
+    .await
+    .expect("the client's thread");
+    eprintln!("rtt {report:?}; newest snapshot stamped {newest_server_ms}, server now {server_now}");
+    assert!(report.samples >= 4, "four probes a second for a second and a half: {report:?}");
+    assert!(report.rtt_ms < 20.0, "a loopback round trip is milliseconds: {report:?}");
+    // The newest snapshot was stamped a moment ago on the same clock.
+    let age = server_now - newest_server_ms;
+    assert!((-5.0..60.0).contains(&age), "the snapshot's stamp is {age} ms from the probe clock's now");
 }
 
 /// **Co-op is two seats, and the second one has to be able to shoot.**

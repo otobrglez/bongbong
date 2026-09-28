@@ -31,6 +31,7 @@ use std::time::Instant;
 use crate::ai::Intent;
 use crate::net::apply;
 use crate::net::client::{ClientEvent, Phase, RoomClient};
+use crate::net::clock::{RttClock, RttReport};
 use crate::net::interp::{InterpReport, Interpolator};
 use crate::net::mailbox;
 use crate::net::predict::{PredictionReport, Predictor};
@@ -216,6 +217,9 @@ pub struct OnlineRound<T: Transport> {
     /// `online_client_hull`): the sandbox drives it, every packet carries
     /// its pose, and the room follows; off, stage 2 predicts it.
     client_hull: bool,
+    /// The measured round trip and the server's clock, from `Ping`s
+    /// (`net::clock`, docs/online-coop-prd.md §4.15).
+    rtt: RttClock,
     /// Provisional shots seen crossing a drawn hull, until the server's
     /// `Hit` claims them or the window runs out (decision 9's numbers).
     crossings: Vec<Crossing>,
@@ -263,6 +267,7 @@ impl<T: Transport> OnlineRound<T> {
             trigger_down: false,
             lead: Lead::new(),
             client_hull: tuning().online_client_hull,
+            rtt: RttClock::default(),
             crossings: Vec::new(),
             crossings_hit: 0,
             crossings_missed: 0,
@@ -280,8 +285,24 @@ impl<T: Transport> OnlineRound<T> {
         let now = self.local_ms();
         self.trigger_down = intent.fire;
         self.poll(now);
+        if self.rtt.due(now) {
+            self.client.ping(now as u32);
+        }
         self.send(intent, dt);
         self.draw(dt, now);
+    }
+
+    /// The measured round trip and the server's clock (`net::clock`),
+    /// once a probe has been answered.
+    pub fn rtt(&self) -> Option<RttReport> {
+        self.rtt.report()
+    }
+
+    /// Milliseconds since this round was opened: the clock every one of
+    /// its stamps is read on, for a harness that wants to line its own
+    /// samples up with them.
+    pub fn local_clock_ms(&self) -> i64 {
+        self.local_ms()
     }
 
     /// Whether this client owns its hull (stage 3) or predicts it (stage
@@ -461,9 +482,10 @@ impl<T: Transport> OnlineRound<T> {
                 // a stalled link, or a room that has stopped ticking
                 // because the round is over - and a number would only
                 // say how long ago that was.
+                let rtt = self.rtt.report().map_or_else(String::new, |r| format!(" - PING {} MS", r.rtt_ms.round() as i64));
                 match self.interp.lead_ms(self.local_ms()).unwrap_or(0.0).round() as i64 {
-                    lead if lead >= 0 => format!("{} {code} - SEAT {seat} - BUFFER {lead} MS", self.label),
-                    _ => format!("{} {code} - SEAT {seat} - WAITING FOR THE ROOM", self.label),
+                    lead if lead >= 0 => format!("{} {code} - SEAT {seat}{rtt} - BUFFER {lead} MS", self.label),
+                    _ => format!("{} {code} - SEAT {seat}{rtt} - WAITING FOR THE ROOM", self.label),
                 }
             }
             Phase::Closed(closed) => format!("{} - OFFLINE: {closed}", self.label),
@@ -481,6 +503,11 @@ impl<T: Transport> OnlineRound<T> {
         self.opened.elapsed().as_millis().min(i64::MAX as u128) as i64
     }
 
+    /// An arrival instant on the same clock as `local_ms`.
+    fn ms_at(&self, at: Instant) -> i64 {
+        at.saturating_duration_since(self.opened).as_millis().min(i64::MAX as u128) as i64
+    }
+
     /// Everything the room has said since the last frame.
     fn poll(&mut self, now: i64) {
         let mut events = std::mem::take(&mut self.scratch);
@@ -489,7 +516,7 @@ impl<T: Transport> OnlineRound<T> {
         for event in events.drain(..) {
             match event {
                 ClientEvent::Welcomed(welcome) => self.welcomed(&welcome, now),
-                ClientEvent::Snapshot(snapshot) => {
+                ClientEvent::Snapshot { snapshot, arrived } => {
                     self.place_from(&snapshot);
                     self.reconcile(&snapshot);
                     self.note_fired(&snapshot);
@@ -498,7 +525,11 @@ impl<T: Transport> OnlineRound<T> {
                     {
                         self.lead.observe(state);
                     }
-                    self.interp.accept(*snapshot, now);
+                    // Stamped with when it came off the socket, not with
+                    // this frame: the clock and the jitter reading are
+                    // the link's, not the frame rate's (§4.15).
+                    let at = self.ms_at(arrived).min(now);
+                    self.interp.accept(*snapshot, at);
                 }
                 ClientEvent::Refused(message) => {
                     // A refused start is askable again: the room says why
@@ -520,6 +551,10 @@ impl<T: Transport> OnlineRound<T> {
                 // itself.
                 ClientEvent::Created { .. } | ClientEvent::Roster { .. } => {}
                 ClientEvent::Said { .. } => {}
+                ClientEvent::Pong { client_ms, server_ms, arrived } => {
+                    let at = self.ms_at(arrived).min(now);
+                    self.rtt.observe(client_ms, server_ms, at);
+                }
             }
         }
         self.scratch = events;

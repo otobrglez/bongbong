@@ -65,6 +65,10 @@ pub struct Hub {
     /// socket so the HTTP server can finish.
     shutdown: watch::Sender<bool>,
     next_conn_id: AtomicU64,
+    /// The server's clock: what every room's `Snapshot::server_ms` and
+    /// every connection's `Pong` read, so a client measures both against
+    /// one clock (docs/online-coop-prd.md §4.15).
+    epoch: std::time::Instant,
 }
 
 impl Hub {
@@ -77,7 +81,14 @@ impl Hub {
             room_gone: Notify::new(),
             shutdown: watch::Sender::new(false),
             next_conn_id: AtomicU64::new(1),
+            epoch: std::time::Instant::now(),
         })
+    }
+
+    /// The server's clock in milliseconds since it started, wrapping at
+    /// `u32` (49 days - a client estimates an offset, not an epoch).
+    pub fn now_ms(&self) -> u32 {
+        (self.epoch.elapsed().as_millis() % (u32::MAX as u128 + 1)) as u32
     }
 
     /// A fresh id for a connection, so a room can tell a stale

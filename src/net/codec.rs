@@ -7,7 +7,7 @@
 use std::fmt;
 
 use crate::net::delta::SnapshotDelta;
-use crate::net::wire::{IntentMsg, Lobby, Snapshot, Welcome};
+use crate::net::wire::{IntentMsg, Lobby, Ping, Pong, Snapshot, Welcome};
 
 /// The kind tags, the first byte of every message.
 pub mod kind {
@@ -21,6 +21,10 @@ pub mod kind {
     pub const WELCOME: u8 = 4;
     /// A `Lobby` message as JSON, either direction.
     pub const LOBBY: u8 = 5;
+    /// A client's clock probe (`wire::Ping`).
+    pub const PING: u8 = 6;
+    /// Its echo (`wire::Pong`).
+    pub const PONG: u8 = 7;
 }
 
 /// Any message the socket carries.
@@ -31,6 +35,8 @@ pub enum Msg {
     Delta(SnapshotDelta),
     Welcome(Welcome),
     Lobby(Lobby),
+    Ping(Ping),
+    Pong(Pong),
 }
 
 impl Msg {
@@ -42,6 +48,8 @@ impl Msg {
             Msg::Delta(_) => kind::DELTA,
             Msg::Welcome(_) => kind::WELCOME,
             Msg::Lobby(_) => kind::LOBBY,
+            Msg::Ping(_) => kind::PING,
+            Msg::Pong(_) => kind::PONG,
         }
     }
 }
@@ -92,6 +100,8 @@ pub fn encode(msg: &Msg) -> Vec<u8> {
         Msg::Snapshot(m) => postcard::to_stdvec(m),
         Msg::Delta(m) => postcard::to_stdvec(m),
         Msg::Welcome(m) => postcard::to_stdvec(m),
+        Msg::Ping(m) => postcard::to_stdvec(m),
+        Msg::Pong(m) => postcard::to_stdvec(m),
         Msg::Lobby(m) => {
             out.extend(serde_json::to_vec(m).expect("a Lobby message always serialises"));
             return out;
@@ -110,6 +120,8 @@ pub fn decode(bytes: &[u8]) -> Result<Msg, DecodeError> {
         kind::DELTA => Msg::Delta(postcard::from_bytes(body)?),
         kind::WELCOME => Msg::Welcome(postcard::from_bytes(body)?),
         kind::LOBBY => Msg::Lobby(serde_json::from_slice(body)?),
+        kind::PING => Msg::Ping(postcard::from_bytes(body)?),
+        kind::PONG => Msg::Pong(postcard::from_bytes(body)?),
         other => return Err(DecodeError::UnknownKind(other)),
     })
 }

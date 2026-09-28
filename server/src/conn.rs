@@ -219,7 +219,16 @@ async fn handle(bytes: &[u8], conn_id: u64, hub: &Arc<Hub>, outbox: &Outbox, att
                 }
             }
         }
-        Msg::Lobby(_) | Msg::Snapshot(_) | Msg::Delta(_) | Msg::Welcome(_) => {
+        // A clock probe is answered here, on the connection's own task,
+        // the moment it is read: through the room it would wait for the
+        // tick and measure the room's schedule, not the link. The pong
+        // queues behind whatever snapshots the writer has not flushed,
+        // which is the path a snapshot takes too.
+        Msg::Ping(ping) => {
+            let pong = Msg::Pong(bongbong::net::wire::Pong { client_ms: ping.client_ms, server_ms: hub.now_ms() });
+            outbox.offer(Bytes::from(codec::encode(&pong)));
+        }
+        Msg::Lobby(_) | Msg::Snapshot(_) | Msg::Delta(_) | Msg::Welcome(_) | Msg::Pong(_) => {
             outbox.lobby(Lobby::Error { message: "that message is the server's to send".into() });
         }
     }
