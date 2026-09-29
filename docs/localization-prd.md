@@ -1,9 +1,8 @@
 # PRD: bongbong in more than one language
 
 Status: agreed with the owner 2026-09-29 (the decisions are in section 8),
-surveyed against `feature/coop-ng-2`. Nothing is built. The font is decided by
-the phase 0 screenshots; three smaller questions in section 8 stay open with a
-recommendation each.
+surveyed against `feature/coop-ng-2`. Nothing is built. Three smaller
+questions in section 8 stay open with a recommendation each.
 
 Contents
 
@@ -14,8 +13,9 @@ Contents
 5. Numbers
 6. Phased plan
 7. Risks, mitigations, stop conditions
-8. Decisions for the owner
-9. References
+8. Decisions
+9. Parked: a font for other scripts
+10. References
 
 ## 1. The decision, in one paragraph
 
@@ -24,9 +24,11 @@ language, embedded in the binary the way `SHIPPED_MAPS` embeds maps, resolved
 through a headless `text` module that `hud.rs`, `lobby.rs`, `editor/` and
 `net/round.rs` read the way they read `tuning()`. The catalogue format is
 Fluent, because the author's own language has a dual and Fluent's plural rules
-already know that. raylib's default font is replaced by one pixel font family
-whose atlas is built at startup from the codepoints the loaded language actually
-uses, so a language costs a text file and no art. The language comes from the
+already know that. **raylib's default font stays.** It draws Basic Latin and
+Latin-1, and every letter outside that set folds to its base letter before it
+is drawn - Č to C, Š to S, Ž to Z - by one table in the text module, so a
+language costs a text file and no art, and the scripts the game can show are
+the Latin ones until a font is ever adopted (parked, section 9). The language comes from the
 platform - the OS on desktop, iOS and Android, the page's `navigator.language`
 on the web - overridable by `--lang` and `?lang=`; there is no in-game picker.
 English and Slovenian ship first. The room server never sees a translated string: its refusals
@@ -39,30 +41,34 @@ and the wire are untouched.
 
 Goals
 
-- A new language is one `.ftl` file plus, where its script needs it, a font
-  pack. No Rust change, no layout change, no art.
+- A new language is one `.ftl` file plus, where its alphabet needs it, rows in
+  the fold table. No Rust change beyond that, no layout change, no art.
 - Every platform the game ships on picks the player's language on its own:
   macOS, Linux, Windows (`bongbong` archives), the web (bongbong.io and the PR
   previews), iOS (TestFlight), Android (the APK).
 - The same picture on every platform for the same language: the text module and
-  the font are shared code, not per-platform code.
+  the fold are shared code, not per-platform code.
 - Layout does not break when a label is longer than its English: every text box
   has a budget, every language is checked against every budget in `cargo test`,
   and a label that still does not fit shrinks or truncates by a rule rather
   than overflowing into its neighbour.
-- Scripts beyond Latin render: Cyrillic and Greek from the first release,
-  Chinese, Japanese and Korean when their font pack is added.
+- Every Latin-alphabet language is drawable with the font the game has: what
+  Latin-1 lacks (č, š, ž, ł, ő, ř, ă, ...) folds to the letter the font has,
+  and a test proves every shipped message drawable.
 - The room server, the probe, the dev server, `bbmcp`, the map format and the
   seeded replays are unchanged: not one string in `simulation/` or `net/wire.rs`
   is human language.
 
 Non-goals
 
-- **No right-to-left text** (Arabic, Hebrew) and **no shaped scripts** (Arabic,
-  Devanagari, Thai). raylib draws one glyph per codepoint left to right and
-  knows nothing of bidi or shaping. Adding a shaping engine is a separate
-  project; the design leaves the door open by keeping every draw behind
-  `render/text.rs`.
+- **No custom font, and so no script beyond Latin** (owner's decision, section
+  8). Cyrillic, Greek, Chinese, Japanese and Korean have no glyphs in raylib's
+  default font and cannot be folded to letters that mean the same thing. They
+  wait for a font, whose design is parked in section 9 so that adopting one
+  later reopens nothing else in this document. Right-to-left and shaped
+  scripts (Arabic, Hebrew, Devanagari, Thai) are further out still: raylib
+  draws one glyph per codepoint left to right and knows nothing of bidi or
+  shaping.
 - No locale formatting of numbers, dates or units. The game shows ping in
   milliseconds and a countdown in seconds as plain digits; that stays.
 - No translation of map files, map names, chassis data keys or the dev-server
@@ -76,8 +82,8 @@ Non-goals
   are the developer's and the tester's overrides. A picker would need a
   settings surface the game does not have, and a phone already has one. The
   design keeps the switch cheap - the catalogue is a snapshot swapped at the
-  frame boundary, the atlas a rebuild - so a picker can be added later without
-  reopening anything here.
+  frame boundary - so a picker can be added later without reopening anything
+  here.
 - Not the store listings. App Store and Play Store descriptions are localized
   in their consoles, not in this repo.
 
@@ -99,12 +105,13 @@ site. About 200 of them:
 
 Three facts shape the design more than the count:
 
-1. **The font cannot show most languages.** Nothing loads a font; every draw is
-   `draw_text` with raylib's default (`render/lobby.rs:5-8` says so). That font
-   is 224 glyphs, U+0000..U+00FF (`rtext.c:163-166`): Basic Latin and the
-   Latin-1 Supplement. Slovenian's č, š and ž are Latin Extended-A and draw as
-   `?` today, as does every Cyrillic, Greek and CJK codepoint. A custom font is
-   not an option in this project, it is the first step.
+1. **The font draws Latin-1 and nothing else.** Nothing loads a font; every
+   draw is `draw_text` with raylib's default (`render/lobby.rs:5-8` says so).
+   That font is 224 glyphs, U+0000..U+00FF (`rtext.c:163-166`): Basic Latin
+   and the Latin-1 Supplement, so é, ü, ñ, ß and à draw, while Slovenian's č,
+   š and ž are Latin Extended-A and draw as `?` today, as does every Cyrillic,
+   Greek and CJK codepoint. Every string has to be brought inside that set
+   before it reaches `draw_text`.
 2. **Width is guessed, not measured, and guessed in bytes.** The HUD uses
    `CHAR_W = 12` at size 18 and `CHAR_W_SMALL = 7` at size 10
    (`render/hud.rs:38-41`), buttons `label.len() * 11` (`render/hud.rs:455,490`),
@@ -199,69 +206,67 @@ itself (section 8).
   `to_ascii_uppercase` on a data key is what the HUD title does today and goes
   away: `Mission::name` stays the TOML spelling and `mission-protect-title` is
   its word. Runtime case mapping is locale-dependent (Turkish dotless i, German
-  ß) and a capitals-only language pack for Georgian or CJK is meaningless.
-- Every message carries a comment with where it is drawn and its **budget** in
-  cells (section 4.3), so a translator sees `# HUD bar, 40 px slot, 5 cells`
-  above `hud-speed = SPEED`.
+  ß), and the translator knows better than a table which words of their
+  language carry capitals well.
+- Every message carries a comment with where it is drawn, its **budget**
+  (section 4.3) and a note that it is drawn folded (section 4.2), so a
+  translator sees `# HUD bar, 40 px slot, about 6 letters` above
+  `hud-speed = SPEED`.
 - Placeholders are named (`{ $code }`, `{ $seat }`, `{ $ms }`), never
   positional, so a translator can reorder them.
 
-### 4.2 The font: `render/text.rs`
+### 4.2 The glyphs: the default font and the fold
 
-raylib's default font goes; one pixel font family comes in, loaded from
-`static/fonts/` through `load_font_from_memory(.., font_size, Some(chars))`
-(`sola-raylib/raylib/src/core/text.rs:189`). The `chars` argument is what
-makes this cheap: **the atlas is built from the codepoints the loaded catalogue
-contains**, plus ASCII, the digits, `CODE_ALPHABET` and the punctuation the
-status line uses. A 200-message language is a few hundred codepoints in Latin
-or Cyrillic and one to two thousand in Chinese - one texture either way, built
-once at startup and again on a language change.
+**No font is added** (owner's decision, section 8). raylib's default font
+draws every string, as it does today, and the text module makes every string
+drawable by **folding** each codepoint the font has no glyph for onto the
+Latin-1 letter it is built on:
 
-**Which font.** The candidates, all free for commercial use (verify the
-`LICENSE` in the release vendored):
+```
+Č Ć → C    Š → S    Ž → Z    Đ → D    Ł → L    Ő → Ö    Ř → R    Ă → A ...
+č ć → c    š → s    ž → z    đ → d    ł → l    ő → ö    ř → r    ă → a ...
+```
 
-| Font | Licence | Scripts | Native size | Note |
-|---|---|---|---|---|
-| Fusion Pixel (TakWolf) | OFL 1.1 | Latin, Latin Ext, Cyrillic, Greek, Chinese (Simplified and Traditional), Japanese, Korean | 8, 10, 12 px | Ships a **monospaced** and a proportional build; one family for every script this PRD admits. The recommendation. |
-| Ark Pixel | OFL 1.1 | Latin, Cyrillic, Greek, CJK | 10, 12, 16 px | Fusion Pixel's ancestor; the same coverage, fewer sizes. |
-| Press Start 2P | OFL 1.1 | Latin, Cyrillic, Greek | 8 px | The classic arcade look, but every glyph is a full square: `HOST A ROOM` would not fit a 200 px button. |
-| GNU Unifont | GPLv2+ with font exception, or OFL 1.1 | The whole Basic Multilingual Plane | 16 px (8 px half-width) | The universal fallback; utilitarian rather than arcade. |
+`text::fold(&str) -> Cow<str>` is one table in `text.rs`: Latin Extended-A
+and the parts of Extended-B and Additional that European alphabets use, each
+row the base letter (or the Latin-1 letter nearest it - ő to ö, not o, because
+ö is in the font). A codepoint in the table folds; a codepoint the font has
+(U+0020..U+007E, U+00A0..U+00FF) passes; anything else becomes `?`, which is
+what raylib would draw anyway and is now visible in a test rather than on a
+phone. The table is hand-written, not a Unicode normalisation crate: the
+languages this game ships need a few dozen rows, a new language brings its
+rows in the same PR as its `.ftl`, and the test below says which are missing.
 
-The recommendation is Fusion Pixel's **monospaced** build at its 10 px size:
-Latin, Cyrillic and Greek glyphs are half-width (5 px), CJK full-width (10 px).
-That is the property section 4.3 rests on - width is a count, not a
-measurement. The look changes: the default font is a 10 px design too, so the
-sizes in use map to whole multiples (10 small, 20 for the bar's 18, 30 for the
-dialog title's 28, 40 for the code entry, 50 and 70 for the banners' 48 and
-72) and every draw scales the one atlas by an integer, which raylib does
-crisply with nearest filtering. This is a visual pass over the HUD, the lobby
-and the editor bar, and it is done **first, as a spike with screenshots** of
-the same screens in the current font and two candidates, published for a
-decision before any string moves (the project's rule for visual choices).
+**Where it runs.** Once, when the catalogue snapshot is built: every message
+is folded as it is resolved, so `hud.rs`, `lobby.rs` and the tests see the
+text as the screen will show it and the width rule (4.3) counts the right
+letters. And once more on user text as it enters a model - a nickname in the
+roster, a map name from a file - through the same function, so nothing that
+reaches a painter carries a glyph the font lacks. Painters do not fold; they
+draw what the model hands them. Room codes are `CODE_ALPHABET` already and
+never touch the table.
 
-**Packs.** The Latin/Cyrillic/Greek subset of a 10 px pixel TTF is on the order
-of 100 to 200 KB and ships in every build. The CJK glyphs are megabytes and
-are a second file, `static/fonts/cjk-10.ttf`, added only with the first CJK
-language (phase 3). **When it comes it ships in every download** (owner's
-decision): `--preload-file static@/static` takes it like every other asset,
-one loading path on every platform, at the cost of one to three megabytes on
-a `.data` file that already carries the sheets. `tools/fontpack.py` (pyftsubset under the
-same nix invocation the sprite generators use) writes both files from the
-vendored full font, subset to the scripts each pack carries; it is a generator
-like `gen_tanks.py`, run by hand, its outputs committed.
+**What it costs the reader.** Slovenian without diacritics is legible and
+familiar - every Slovene has typed it on a keyboard without them - and in the
+capitals the chrome uses (`ZACNI`, `CAKAM`, `IGRALEC 2`) it reads as the same
+arcade voice as the English. It is a compromise the translator writes toward:
+where a folded word turns ambiguous (`čas`/`cas` is not, `šal`/`sal` is), a
+synonym is chosen. The comment above each message says the text will be drawn
+folded, so nobody translates for diacritics that will not appear.
 
-**Glyphs the atlas lacks** draw as `?` - raylib's behaviour, kept. Two places
-can hit it: nicknames and, later, chat. When a roster arrives with a codepoint
-the atlas has not got, `render/text.rs` rebuilds the atlas with the roster's
-codepoints added, at most once per roster change; a codepoint outside every
-shipped pack stays `?`. Section 8 asks whether to restrict nicknames instead.
+**The test that replaces the font work.** `text_tests::every_message_is_drawable`
+resolves every message of every shipped language and fails on any codepoint
+that is neither in the font nor in the fold table, naming the language, the
+key and the character - so adding Polish and forgetting ą is a red test, not
+a `?` in the lobby. A sibling test pins the fold of a sentence in each shipped
+language.
 
 **The API the painters see** is small and mirrors what they do now:
 `draw(d, &str, x, y, size, color)`, `draw_centered(d, &str, rect, size,
-color)`, `fit(&str, cells, size) -> Cow<str>` (truncate with `~` as the editor
-does), and the headless `width(&str, size)` from `text.rs`. `MeasureTextEx` is
-never needed, so a closure without a `RaylibHandle` can centre text, which is
-what `render/game.rs:941-944` cannot do today.
+color)`, `fit(&str, max_px, size) -> Cow<str>` (truncate with `~` as the editor
+does), and the headless `width(&str, size)` from `text.rs`, so a closure
+without a `RaylibHandle` can centre text, which is what `render/game.rs:941-944`
+cannot do today.
 
 ### 4.3 Width, budgets and the fixed layouts
 
@@ -271,17 +276,24 @@ tests (`render/hud.rs` `SLOTS_*` and `bar_tests`, `lobby.rs` `button_rect` and
 stay fixed - a phone needs buttons that do not move - and the text adapts to
 them, by three rules:
 
-1. **Width is a headless function of the string.** `text::width(s, size)` sums
-   a per-codepoint advance: half a cell for every codepoint East Asian Width
-   calls narrow, a whole cell for wide and fullwidth, zero for combining marks.
-   This replaces every `len() * CHAR_W` and `chars().count() * 0.61`, and is
-   the same number the font draws because the font is monospaced per class.
-   `hud.rs`, `lobby.rs` and `editor/` can centre, right-align and fit without
-   raylib, and their tests can assert on it.
-2. **Every box has a budget** in cells, stated once beside the geometry it
-   comes from (`MODE_BUTTON_W = 72` at size 20 is 7 cells; a 40 px `BAR_SLOT_W`
-   at size 10 is 8 cells; a 200 px lobby button at size 20 is 20 cells minus
-   padding). `text_tests::every_language_fits_every_budget` loads each shipped
+1. **Width is a headless function of the string, and exact.** raylib's default
+   font is proportional, and its 224 glyph widths are a constant table in
+   `rtext.c` (`charsWidth[224]`, 10 px tall, `DrawText` scaling them by
+   `size / 10` and adding a spacing of the same factor). `text::width(s, size)`
+   carries that table and that rule, so it returns the pixels `MeasureText`
+   would, with no `RaylibHandle`, for a string the fold has already brought
+   into the font's set. This replaces every `len() * CHAR_W`, `len() * 11` and
+   `chars().count() * 0.61` - all of them guesses, and the byte-counting ones
+   wrong for any non-ASCII letter the font does draw. `hud.rs`, `lobby.rs` and
+   `editor/` can centre, right-align and fit without raylib, their tests can
+   assert on it, and a `render`-only test pins the table against `MeasureText`
+   for every glyph, the way `math::raylib_tests` pins the vector arithmetic.
+2. **Every box has a budget** in pixels at its size, stated once beside the
+   geometry it comes from (`MODE_BUTTON_W = 72` less padding at size 18; a
+   40 px `BAR_SLOT_W` at size 10; a 200 px lobby button at size 18). The
+   translator's comment carries it as a character count against the font's
+   average advance, which is what a person can count.
+   `text_tests::every_language_fits_every_budget` loads each shipped
    catalogue, resolves each message with its widest plausible arguments (the
    largest seat number, a five-letter code, `999 MS`) and fails naming the
    language, the key, the width and the budget. A language file that does not
@@ -292,9 +304,9 @@ them, by three rules:
    their budget; titles and subtitles in the lobby wrap to a second line, for
    which the panel's `Room` face has the room (the subtitle sits at
    `bottom.y - 18` today, one line); banners are measured and centred already.
-   The translator's comment names the rule, so `HOST A ROOM` in German
-   (`RAUM ERSTELLEN`, 14 cells in 20) is written to fit rather than trusted to
-   the truncator.
+   The translator's comment names the rule, so `HOST A ROOM` in Slovenian
+   (`USTVARI SOBO`, twelve letters against a 200 px button) is written to fit
+   rather than trusted to the truncator.
 
 The two `bar_tests` that pin English widths (`"DESTROY 12/12".len() * CHAR_W`,
 `"BUILD".len() * 11`) become budget assertions over every language.
@@ -368,8 +380,8 @@ language the screen was in.
 There is no picker (section 2), but the switch itself is built, because the
 dev server's `lang` tool and `lang-shots` need it: a language change is
 staged like a tuning patch and applied at the next
-frame boundary - the catalogue snapshot swaps, the atlas rebuilds, and the
-models re-gather on the next frame, since nothing else holds a string. If a
+frame boundary - the catalogue snapshot swaps and the models re-gather on the
+next frame, since nothing else holds a string. If a
 picker is ever wanted, it is a `LANGUAGE` row in the players dialog and a
 stepper on the lobby's `Start` face over this switch, and nothing more.
 
@@ -402,8 +414,8 @@ stepper on the lobby's `Start` face over this switch, and nothing more.
   and `net/wire.rs` never name `text()`.
 - `hud_tests`, `lobby_tests` and the two `bar_tests` run their fit assertions
   over `SHIPPED_LANGS`, not over English.
-- The dev server takes `lang` on `restart` and as a live tool (`Live`, since
-  the atlas rebuild is a frame-boundary write), and `just lang-shots` renders
+- The dev server takes `lang` on `restart` and as a live tool (the catalogue
+  swap is a frame-boundary write), and `just lang-shots` renders
   the HUD, the two dialogs, every lobby face and the editor bar in every
   language to `target/lang-shots/<tag>/`, the thumbnail recipe's shape - the
   review surface for a translation PR, since a test cannot judge whether
@@ -420,60 +432,57 @@ stepper on the lobby's `Start` face over this switch, and nothing more.
 |---|---|
 | Player-visible strings today | 200 |
 | Catalogue per language | 10 to 15 KB of `.ftl`, embedded |
-| Latin + Cyrillic + Greek font pack, 10 px | 100 to 200 KB, in every build |
-| CJK font pack, 10 px, subset to the common-use sets | 1 to 3 MB, phase 3, in every download once added |
-| Atlas at startup | one texture; under 512 x 512 for a CJK language, far less for Latin |
+| Fold table | a few dozen rows for Slovenian and its neighbours; under 200 for every Latin alphabet in Europe |
+| Default font width table | 224 constants copied from `rtext.c` |
+| Assets added | none; the download size does not move |
 | New crates | Fluent's six plus `sys-locale`; all pure Rust, wasm-clean |
 | Protocol | one `PROTOCOL_VERSION` bump (refusal codes) |
 | Draw sites to convert | roughly 120 `draw_text` calls across `render/`, `editor/render.rs`, `touch.rs`, `app.rs` |
 
 ## 6. Phased plan
 
-0. **Font spike** (a day or two). Load two candidate fonts behind a flag, draw
-   the bar, the lobby `Room` face, a dialog and the editor bar in each and in
-   the current font, publish the comparison, decide. Nothing merges but the
-   decision and the vendored font.
-1. **English, localizable.** `text.rs`, `render/text.rs`, `lang/en.ftl`, the
-   generated keys, every literal moved, `width()` replacing every estimate,
-   budgets and their test, the wave banner and mission banner moved out of
-   `simulation/`, refusal codes on the wire (protocol bump). Ships as an
-   English-only release that looks different (the font) and behaves the same.
-   This is the large mechanical change and touches `lobby.rs`, `hud.rs` and
-   `net/round.rs`, which the co-op branch is still editing: **it starts after
-   `feature/coop-ng-2` lands**, or it is a merge nobody wants.
+1. **English, localizable.** `text.rs` (catalogue, fold, width),
+   `render/text.rs` (the draw helpers), `lang/en.ftl`, the generated keys,
+   every literal moved, `width()` replacing every estimate, budgets and their
+   test, the wave banner and mission banner moved out of `simulation/`,
+   refusal codes on the wire (protocol bump). Ships as an English-only release
+   that looks and behaves exactly as before - the font is the same, the
+   centring is now exact where it was a guess. This is the large mechanical
+   change and touches `lobby.rs`, `hud.rs` and `net/round.rs`, which the co-op
+   branch is still editing: **it starts after `feature/coop-ng-2` lands**, or
+   it is a merge nobody wants.
 2. **Platform language and Slovenian.** `--lang`, `?lang=`, the four platform
-   reads, negotiation, and `lang/sl.ftl` - the one translation of the first
-   release, reviewed by the author, with its `lang-shots` in the PR. The
-   Slovenian pass is what proves the budgets and the fit rules on a real
-   language before any other is drafted; a further language is a PR of one
-   file each, whenever one is wanted.
-3. **CJK and the page.** The second font pack in every download,
-   `zh-Hans`/`ja`/`ko` when asked for, `site/` strings and `<html lang>`.
+   reads, negotiation, the Slovenian rows of the fold table and `lang/sl.ftl`
+   - the one translation of the first release, reviewed by the author, with
+   its `lang-shots` in the PR. The Slovenian pass is what proves the budgets,
+   the fold and the fit rules on a real language before any other is drafted;
+   a further Latin-alphabet language is a PR of one file and its fold rows,
+   whenever one is wanted.
+3. **The page.** `site/` strings and `<html lang>`, following the same tags.
+   Other scripts are not a phase; they are section 9.
 
 ## 7. Risks, mitigations, stop conditions
 
-- **The font changes the game's face.** Every screen looks different after
-  phase 1. Mitigation: phase 0 decides on screenshots, not in the abstract;
-  the sizes map to integer multiples so nothing blurs. Stop condition: if no
-  candidate reads as well as the default at 10 px in the bar's small labels,
-  keep raylib's default for `[A-Za-z0-9]` and use the pixel font only for
-  glyphs it lacks - a two-font fallback `render/text.rs` can hide behind the
-  same API, at the price of two atlases.
-- **German, Russian and Finnish are long.** Budgets catch it in CI; the fit
-  rules degrade gracefully; the translator sees the budget in the file.
-  Residual risk is a screen that fits and reads badly, which `lang-shots`
-  exists to show.
-- **Web download grows.** Phase 1 adds under 200 KB to a `.data` file that
-  already carries the sheets. CJK is the real cost, decided (section 8) as a
-  one-to-three megabyte addition to every download when it arrives; measure
-  the `.data` size in that PR and say it in the release notes.
+- **Folded Slovenian reads as a compromise.** `ČAKAM` drawn as `CAKAM` is
+  legible to every Slovene and looks like the SMS Slovenian everyone has
+  typed, but it is not the language written properly, and a reviewer may
+  want the diacritics back. Mitigation: the translator writes toward the
+  fold (synonyms where a folded word turns ambiguous), the capitals hide most
+  of the loss, and the way back is a font (section 9), which changes nothing
+  in the catalogue - the `.ftl` keeps its diacritics, only the fold stops
+  firing. Stop condition: if folded Slovenian is judged unacceptable on the
+  phase 2 screenshots, section 9 is unparked before any third language.
+- **German and Finnish are long.** Budgets catch it in CI; the fit rules
+  degrade gracefully; the translator sees the budget in the file. Residual
+  risk is a screen that fits and reads badly, which `lang-shots` exists to
+  show.
 - **A protocol bump strands old clients.** Already the rule: client and image
   ship on one version tag and refuse each other by name on a mismatch.
 - **Merge conflict with the co-op branch.** Phase 1 rewrites the files the
   branch is in. Sequenced after it, above.
-- **`?` in nicknames.** A Thai nickname on a Latin atlas is `?????`. The
-  roster-time atlas extension covers every script a shipped pack has; beyond
-  that, either accept `?` or restrict the alphabet at the server (section 8).
+- **`?` in nicknames.** A Cyrillic or Thai nickname folds to nothing and
+  draws as `?????`, exactly as it does today. Either accept it, or restrict
+  the alphabet at the server to what the fold can draw (section 8).
 - **Fluent's dependency tree.** Six crates for plurals, decided (section 8).
   The `text()` API hides the format, so if the tree ever becomes a problem
   the eight plural messages are the whole cost of a hand-rolled replacement.
@@ -490,31 +499,70 @@ Taken by the owner on 2026-09-29:
    with the crate; translators' tools read the files. The TOML alternative
    was considered and rejected as right only for a short Western European
    list.
-2. **First release: English and Slovenian.** No tier-1 list. One font pack,
-   one translation the author can review, and the budgets proven on a real
-   language before any other is drafted. Further languages are one file each,
-   added when wanted.
-3. **CJK ships in every download** once a CJK language is added. One loading
-   path on every platform; the megabytes are accepted.
+2. **First release: English and Slovenian.** No tier-1 list. One translation
+   the author can review, and the budgets proven on a real language before
+   any other is drafted. Further languages are one file each, added when
+   wanted.
+3. **No custom font. Letters outside the default font fold to their base
+   letter** - Č to C, Š to S, Ž to Z - for now. The scripts the game can show
+   are therefore the Latin ones; the font that would open the others is
+   parked in section 9. (An earlier draft of this document proposed a pixel
+   font family with a per-language atlas and a CJK pack in every download;
+   that decision is withdrawn with the font.)
 4. **No in-game picker.** The platform's language, with `--lang` and `?lang=`
    as the overrides for testing. No saved preference either, since there is
    nothing to save.
 
 Open, each with the recommendation the text above proceeds under:
 
-5. **Font**: Fusion Pixel monospaced 10 px (one family, every script,
-   half/full-width so width is a count), or Ark Pixel, or Press Start 2P for
-   the look at the cost of every budget. Decided on the phase 0 screenshots.
-6. **Nicknames**: any Unicode, `?` beyond the shipped scripts (recommended,
-   keeps the server ignorant of fonts), or an alphabet the server enforces.
-7. **Capitals**: the chrome stays all-capitals in every language, written so by
-   the translator (recommended), or the design drops capitals now that
-   `to_uppercase` is off the table.
-8. **Translation source**: machine-drafted and speaker-reviewed (recommended -
+5. **Nicknames**: any Unicode, `?` beyond what the fold can draw (recommended,
+   keeps the server ignorant of fonts and is today's behaviour), or an
+   alphabet the server enforces.
+6. **Capitals**: the chrome stays all-capitals in every language, written so by
+   the translator (recommended - it also hides most of what the fold takes
+   away), or the design drops capitals now that `to_uppercase` is off the
+   table.
+7. **Translation source**: machine-drafted and speaker-reviewed (recommended -
    for Slovenian the reviewer is the author), or speaker-written from the
    start.
 
-## 9. References
+## 9. Parked: a font for other scripts
+
+Kept here so that adopting a font later is a decision about one asset, not a
+reopening of this design. Nothing in sections 4.1 to 4.8 depends on the
+default font except the fold table and the width table, and both are behind
+`text.rs`.
+
+- **Mechanism.** raylib loads a TTF with a chosen glyph set:
+  `load_font_from_memory(.., size, Some(chars))`
+  (`sola-raylib/raylib/src/core/text.rs:189`). With the catalogue in hand,
+  `chars` is every codepoint the loaded language uses plus ASCII and
+  `CODE_ALPHABET`, so the atlas is one small texture built at startup - a
+  few hundred glyphs for a Latin or Cyrillic language, one to two thousand
+  for Chinese. The fold then applies only to codepoints the *loaded* font
+  lacks, and `width()` reads the loaded font's advances instead of the
+  default's table; every painter and every budget stays as it is.
+- **Candidates**, all under licences that allow a commercial game (check the
+  vendored release's `LICENSE`): Fusion Pixel (OFL 1.1; Latin, Cyrillic,
+  Greek, Chinese, Japanese, Korean; 8, 10 and 12 px; a monospaced build in
+  which Latin is half-width and CJK full-width, which keeps width a count),
+  its ancestor Ark Pixel (OFL 1.1), Press Start 2P (OFL 1.1; Latin, Cyrillic,
+  Greek; square glyphs too wide for the bar's slots) and GNU Unifont
+  (GPLv2+ with font exception or OFL 1.1; the whole Basic Multilingual Plane;
+  utilitarian). A 10 px design maps the sizes in use onto integer multiples
+  (10, 20, 30, 40, 50, 70) and scales crisply with nearest filtering.
+- **Costs.** A Latin/Cyrillic/Greek subset is 100 to 200 KB; CJK glyphs are
+  one to three megabytes and `--preload-file static@/static` puts everything
+  in `static/` into every web download, so a CJK pack is a download-size
+  decision as much as a font one. A font changes the game's face on every
+  screen, so it is chosen on side-by-side screenshots of the bar, the lobby
+  and the editor (the project's rule for visual choices), never in the
+  abstract. Glyphs outside the loaded atlas still draw as `?`; a roster with
+  an unknown codepoint would rebuild the atlas once per roster change.
+- **What unparks it.** Folded Slovenian judged unacceptable (section 7), or a
+  request for any non-Latin language.
+
+## 10. References
 
 - `docs/hud-and-builder-layout-design.md` - the fixed slot tables the budgets
   are derived from.
@@ -522,16 +570,15 @@ Open, each with the recommendation the text above proceeds under:
   refusals), §4.4 (`PROTOCOL_VERSION`).
 - `docs/runtime-tuning-design.md` - the `tuning()` snapshot and
   frame-boundary write `text()` copies.
-- `docs/mapshot-prd.md` - the generator-and-committed-output pattern the font
-  packs and `lang-shots` follow.
-- raylib `rtext.c` (`LoadFontDefault`, 224 glyphs; `LoadFontFromMemory`
-  with a codepoint list), `sola-raylib/raylib/src/core/text.rs:189`.
+- `docs/mapshot-prd.md` - the render-to-files recipe `lang-shots` follows.
+- raylib `rtext.c` - `LoadFontDefault` (224 glyphs, U+0000..U+00FF, the
+  `charsWidth[224]` table `width()` copies) and, for section 9,
+  `LoadFontFromMemory` with a codepoint list
+  (`sola-raylib/raylib/src/core/text.rs:189`).
 - Project Fluent: <https://projectfluent.org/>, `fluent-rs`
   (<https://github.com/projectfluent/fluent-rs>).
-- Fusion Pixel Font (<https://github.com/TakWolf/fusion-pixel-font>), Ark
-  Pixel Font (<https://github.com/TakWolf/ark-pixel-font>), Press Start 2P,
-  GNU Unifont.
-- Unicode East Asian Width (UAX #11) - the half/full-width rule `width()`
-  implements.
+- Section 9's candidates: Fusion Pixel Font
+  (<https://github.com/TakWolf/fusion-pixel-font>), Ark Pixel Font
+  (<https://github.com/TakWolf/ark-pixel-font>), Press Start 2P, GNU Unifont.
 - SDL3 `SDL_GetPreferredLocales`, Android NDK `AConfiguration_getLanguage`,
   `sys-locale` crate.
