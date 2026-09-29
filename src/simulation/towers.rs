@@ -267,8 +267,9 @@ impl Game {
         for jump in 0..=jumps {
             let to = target.pos;
             self.tesla_bolts.push(TeslaBolt::new(from, to, cell_frame_hash(cell, self.frame, jump)));
+            // No impact flash: the flares are fire-coloured, and the strike
+            // draws its own violet burst off the event (`fx.rs`).
             f.events.push(Event::TeslaStrike { x0: from.x, y0: from.y, x1: to.x, y1: to.y, chained: jump > 0 });
-            f.impact_flashes.push(Shockwave::new(to));
             let dmg = (t.tesla_damage_min * factor, t.tesla_damage_max * factor);
             self.apply_hit(f, ShellTarget::Tank(target.entity), to, dmg, HitEffects::none(), owner);
             hit.push(target.entity);
@@ -385,8 +386,9 @@ impl Game {
         });
         tower.cooldown = interval;
         tower.charge = 0.0;
+        // No muzzle flash: a lob is a spit of ooze, not a bang (`fx.rs`
+        // throws it off the event).
         f.events.push(Event::TowerFired { kind: TowerKind::Bio.name(), x: muzzle.x, y: muzzle.y, heading: tower.heading });
-        f.muzzle_flashes.push(Shockwave::new(muzzle));
     }
 
     /// Age the globs in the air and splash the ones that landed. `live` is
@@ -412,7 +414,6 @@ impl Game {
         let t = tuning();
         let at = glob.to;
         f.events.push(Event::GlobSplashed { x: at.x, y: at.y });
-        f.impact_flashes.push(Shockwave::new(at));
         if !live || self.water.depth_at(at) != crate::ground::Depth::Dry {
             return;
         }

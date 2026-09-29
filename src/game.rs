@@ -136,10 +136,7 @@ impl Game {
         for ruin in &self.tower_ruins {
             crate::tower::draw_ruin(c, ruin);
         }
-        for (&cell, puddle) in &self.ooze {
-            // Full strength until its last moments, then it dries away.
-            crate::tower::draw_puddle(c, cell, self.time, (puddle.left / 0.8).min(1.0));
-        }
+        crate::tower::draw_ooze(c, &self.ooze, self.time);
     }
 
     /// The tiles: every wall and prop with its shadow and edge cap. Trees

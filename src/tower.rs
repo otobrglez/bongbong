@@ -10,6 +10,8 @@
 //! layer, which the game rotates to the tower's heading the way it rotates a
 //! tank's turret.
 
+use std::collections::BTreeMap;
+
 use hecs::Entity;
 
 use crate::canvas::{Canvas, Sheet};
@@ -379,56 +381,100 @@ fn cell_hash(x: i32, y: i32, salt: u32) -> u32 {
     h
 }
 
-/// One cell of ooze on the ground, in 2 px blocks: a lumpy edge hashed from
-/// the cell, a darker rim, a lit patch and bubbles that swell and pop on a
-/// hashed clock. `time` is the round clock; `fade` 0..=1 thins it as it
-/// dries.
-pub fn draw_puddle(c: &mut impl Canvas, cell: (i32, i32), time: f32, fade: f32) {
+/// How far one puddle cell's pull reaches, in px: past half a cell, so
+/// the cells of one splash run together into one puddle.
+const OOZE_REACH: f32 = 34.0;
+/// The field level a block has to reach to be ooze, and the band above it
+/// that is the darker rim.
+const OOZE_EDGE: f32 = 0.38;
+const OOZE_RIM: f32 = 0.08;
+/// A puddle stays at full size until its last this-many seconds, then
+/// shrinks and thins away.
+const OOZE_DRY_SECONDS: f32 = 0.8;
+
+/// How much a puddle's cell pulls at `p`: a smooth bump, 1 at the cell's
+/// centre falling to nothing at `OOZE_REACH`, scaled by how wet it is.
+fn ooze_pull(ooze: &BTreeMap<(i32, i32), OozePuddle>, p: Vec2) -> (f32, f32) {
     let size = crate::OBSTACLE_GRID_SIZE;
-    // A map cell is centred on its multiple of the grid size.
-    let x0 = cell.0 as f32 * size - size / 2.0;
-    let y0 = cell.1 as f32 * size - size / 2.0;
-    let a = (230.0 * fade.clamp(0.0, 1.0)) as u8;
-    if a == 0 {
-        return;
-    }
-    let with = |col: Color| Color::new(col.r, col.g, col.b, a);
-    let blocks = (size / 2.0) as i32;
-    let r = blocks as f32 / 2.0;
-    for by in 0..blocks {
-        for bx in 0..blocks {
-            let dx = bx as f32 + 0.5 - r;
-            let dy = by as f32 + 0.5 - r;
-            let ang = dy.atan2(dx);
-            let lobe = cell_hash(cell.0 * 7 + ((ang + std::f32::consts::PI) * 1.6) as i32, cell.1, 3) % 100;
-            let edge = r * (0.78 + 0.3 * lobe as f32 / 100.0);
-            let d = (dx * dx + dy * dy).sqrt();
-            if d > edge {
-                continue;
+    let (cc, cr) = ((p.x / size).round() as i32, (p.y / size).round() as i32);
+    let (mut field, mut wet) = (0.0f32, 0.0f32);
+    for r in cr - 1..=cr + 1 {
+        for c in cc - 1..=cc + 1 {
+            let Some(puddle) = ooze.get(&(c, r)) else { continue };
+            let dry = (puddle.left / OOZE_DRY_SECONDS).clamp(0.0, 1.0);
+            let (dx, dy) = (p.x - c as f32 * size, p.y - r as f32 * size);
+            let k = 1.0 - (dx * dx + dy * dy) / (OOZE_REACH * OOZE_REACH);
+            if k > 0.0 {
+                let pull = k * k * (0.45 + 0.55 * dry);
+                field += pull;
+                wet = wet.max(dry);
             }
-            let col = if d > edge - 1.2 {
-                OOZE_DK
-            } else if dx + dy < -r * 0.3 && d < edge * 0.7 {
-                OOZE_LT
-            } else {
-                OOZE_MD
-            };
-            c.fill_rect(x0 as i32 + bx * 2, y0 as i32 + by * 2, 2, 2, with(col));
         }
     }
-    for k in 0..2u32 {
-        let h = cell_hash(cell.0, cell.1, 11 + k);
-        let phase = (time * 0.9 + (h % 1000) as f32 / 1000.0).fract();
-        let bx = 3 + (h >> 10) as i32 % (blocks - 6);
-        let by = 3 + (h >> 20) as i32 % (blocks - 6);
-        let mut dot = |ox: i32, oy: i32| {
-            c.fill_rect(x0 as i32 + (bx + ox) * 2, y0 as i32 + (by + oy) * 2, 2, 2, with(OOZE_HI));
-        };
-        if phase < 0.72 {
-            dot(0, 0);
-        } else if phase < 0.84 {
-            for (ox, oy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
-                dot(ox, oy);
+    (field, wet)
+}
+
+/// The ooze on the ground, in 2 px blocks (docs/defence-towers-prd.md
+/// section 12, the acid lime pick). Every puddle cell pulls at the blocks
+/// round it and the pulls add up, so the cells of one splash run together
+/// into one puddle rather than sitting as squares (a metaball field); the
+/// edge is made lumpy by a coarse position hash, the band just inside it
+/// is a darker rim, the side facing the light carries a sheen, and bubbles
+/// swell and pop on a hashed clock. A drying puddle shrinks and thins over
+/// its last `OOZE_DRY_SECONDS`. `time` is the round clock.
+pub fn draw_ooze(c: &mut impl Canvas, ooze: &BTreeMap<(i32, i32), OozePuddle>, time: f32) {
+    if ooze.is_empty() {
+        return;
+    }
+    let size = crate::OBSTACLE_GRID_SIZE;
+    let span = ((size * 0.5 + OOZE_REACH) / 2.0).ceil() as i32;
+    let mut done: std::collections::HashSet<(i32, i32)> = std::collections::HashSet::new();
+    for &(cc, cr) in ooze.keys() {
+        let (bx0, by0) = (((cc as f32 * size) / 2.0) as i32, ((cr as f32 * size) / 2.0) as i32);
+        for by in by0 - span..=by0 + span {
+            for bx in bx0 - span..=bx0 + span {
+                if !done.insert((bx, by)) {
+                    continue;
+                }
+                let p = Vec2::new(bx as f32 * 2.0 + 1.0, by as f32 * 2.0 + 1.0);
+                let (field, wet) = ooze_pull(ooze, p);
+                let lump = (cell_hash(bx >> 1, by >> 1, 5) % 100) as f32 / 100.0 * 0.12 - 0.06;
+                let edge = OOZE_EDGE + lump;
+                if field < edge || wet <= 0.0 {
+                    continue;
+                }
+                let a = (230.0 * (0.35 + 0.65 * wet)) as u8;
+                let lit = ooze_pull(ooze, Vec2::new(p.x - 4.0, p.y - 4.0)).0 < field - 0.12;
+                let col = if field < edge + OOZE_RIM {
+                    OOZE_DK
+                } else if lit {
+                    OOZE_LT
+                } else {
+                    OOZE_MD
+                };
+                c.fill_rect(bx * 2, by * 2, 2, 2, Color::new(col.r, col.g, col.b, a));
+            }
+        }
+    }
+    // Bubbles, two a cell, where the ooze is deep enough to hold one.
+    for (&(cc, cr), puddle) in ooze {
+        let a = (230.0 * (puddle.left / OOZE_DRY_SECONDS).clamp(0.0, 1.0)) as u8;
+        for k in 0..2u32 {
+            let h = cell_hash(cc, cr, 11 + k);
+            let phase = (time * 0.9 + (h % 1000) as f32 / 1000.0).fract();
+            let bx = ((cc as f32 * size) / 2.0) as i32 + ((h >> 10) % 9) as i32 - 4;
+            let by = ((cr as f32 * size) / 2.0) as i32 + ((h >> 20) % 9) as i32 - 4;
+            let deep = ooze_pull(ooze, Vec2::new(bx as f32 * 2.0 + 1.0, by as f32 * 2.0 + 1.0)).0 > OOZE_EDGE + 0.3;
+            if !deep {
+                continue;
+            }
+            let mut dot = |ox: i32, oy: i32| c.fill_rect((bx + ox) * 2, (by + oy) * 2, 2, 2, Color::new(OOZE_HI.r, OOZE_HI.g, OOZE_HI.b, a));
+            if phase < 0.72 {
+                dot(0, 0);
+            } else if phase < 0.84 {
+                for (ox, oy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                    dot(ox, oy);
+                }
             }
         }
     }

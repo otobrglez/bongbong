@@ -56,6 +56,10 @@ pub enum ImpactKind {
     Plasma(PlasmaVariant),
     /// A laser's burn; `true` for the blue beam.
     Laser(bool),
+    /// A tesla coil's bolt landing.
+    Tesla,
+    /// A bio slush glob bursting on the ground.
+    Ooze,
 }
 
 impl ImpactKind {
@@ -67,6 +71,8 @@ impl ImpactKind {
             ImpactKind::Bullet => t.bullet_hit_seconds,
             ImpactKind::Plasma(_) => t.plasma_hit_seconds,
             ImpactKind::Laser(_) => t.laser_hit_seconds,
+            ImpactKind::Tesla => t.tesla_hit_seconds,
+            ImpactKind::Ooze => t.ooze_hit_seconds,
         }
     }
 }
@@ -550,6 +556,7 @@ impl Fx {
                     // A tesla bolt landing: a crackle of violet sparks off
                     // the hull it struck and a spit off the terminal.
                     Event::TeslaStrike { x0, y0, x1, y1, chained } => {
+                        self.start_impact(Position::new(x1, y1), Vec2::new(x1 - x0, y1 - y0), ImpactKind::Tesla);
                         let n = if chained { 6 } else { 10 };
                         self.burst(Position::new(x1, y1), ParticleKind::Spark, self.count(n), 150.0, &[TESLA_T, TESLA_DEEP_T, WHITE_T]);
                         self.burst(Position::new(x0, y0), ParticleKind::Spark, self.count(3), 70.0, &[TESLA_T, WHITE_T]);
@@ -562,6 +569,7 @@ impl Fx {
                         self.cone_burst(Position::new(x, y), dir, 0.5, ParticleKind::Spray, self.count(5), 90.0, &OOZE_TINTS);
                     }
                     Event::GlobSplashed { x, y } => {
+                        self.start_impact(Position::new(x, y), Vec2::zero(), ImpactKind::Ooze);
                         self.burst(Position::new(x, y), ParticleKind::Spray, self.count(14), 110.0, &OOZE_TINTS);
                         self.splash_if_wet(game, Position::new(x, y), 8);
                     }

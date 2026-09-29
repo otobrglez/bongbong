@@ -218,6 +218,9 @@ impl Game {
             let k = 1.0 - (flash.time / tuning().impact_flash_duration.max(0.01)).clamp(0.0, 1.0);
             ground_light(d, flash.center, 38.0 - 10.0 * k, warm, 0.3 * k);
         }
+        if !self.towers.is_empty() || !self.ooze.is_empty() || !self.tesla_bolts.is_empty() {
+            self.draw_towers_ground_light(d);
+        }
     }
 }
 
