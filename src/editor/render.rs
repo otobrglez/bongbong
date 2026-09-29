@@ -8,6 +8,7 @@
 use sola_raylib::prelude::*;
 
 use super::*;
+use crate::text::{keys, text};
 use crate::canvas::Sheet;
 use crate::frog::FrogAnim;
 use crate::hud::{BAR_FILL, DIM, HUD_LABEL_SIZE, HUD_TEXT_SIZE, TEXT};
@@ -36,57 +37,34 @@ const DROPDOWN_TEXT_X: i32 = 48;
 const SETTINGS_VALUE_X: i32 = 180;
 const SETTINGS_LABEL_SIZE: i32 = 16;
 
-/// The width the default font gives `text` at `size`, near enough to
-/// centre or clip by (~0.61 of the size per character).
+/// The width the default font gives `text` at `size`: `text::width`,
+/// which is `MeasureText`'s answer with no handle.
 fn text_width(text: &str, size: i32) -> f32 {
-    text.chars().count() as f32 * size as f32 * 0.61
+    crate::text::width(text, size) as f32
 }
 
-/// `text` cut down to what fits in `width` at `size`.
+/// `text` cut down to what fits in `width` at `size`, the cut marked `~`.
 fn fit_text(text: &str, width: f32, size: i32) -> String {
-    let max = (width / (size as f32 * 0.61)).floor() as usize;
-    if text.chars().count() <= max {
-        text.to_string()
-    } else {
-        text.chars().take(max.saturating_sub(1)).chain(std::iter::once('~')).collect()
-    }
+    crate::text::fit(text, width as i32, size).into_owned()
 }
 
-/// A tool's name as the dropdown rows spell it.
-fn label(tool: Tool) -> &'static str {
-    match tool {
-        Tool::TallGrass => "tall grass",
-        Tool::Drum(Drum::Oil) => "oil drum",
-        Tool::Drum(Drum::Fuel) => "fuel drum",
-        Tool::OilTrail => "oil trail",
-        Tool::Start => "p1 start",
-        Tool::Start2 => "p2 start",
-        Tool::EnemyFrog => "enemy frog",
-        Tool::Pickup(PickupKind::SpeedUp) => "speed-up",
-        Tool::Pickup(PickupKind::Flamethrower) => "flamethrower",
-        Tool::Pickup(PickupKind::FrogHealth) => "frog pack",
-        other => other.name(),
-    }
+/// A tool's name as the dropdown rows spell it, in the language on
+/// screen: the catalogue's `tool-<name>` message.
+fn label(tool: Tool) -> String {
+    text().named("tool", tool.name())
 }
 
 /// A tool's name at the width the bar's 10 px line and the cursor
-/// readout have room for.
-fn short_label(tool: Tool) -> &'static str {
-    match tool {
-        Tool::TallGrass => "grass",
-        Tool::Drum(Drum::Oil) => "oil",
-        Tool::Drum(Drum::Fuel) => "fuel",
-        Tool::OilTrail => "oil",
-        Tool::EnemyFrog => "e.frog",
-        Tool::Pickup(PickupKind::Flamethrower) => "flame",
-        Tool::Pickup(PickupKind::FrogHealth) => "frog+",
-        other => other.name(),
-    }
+/// readout have room for: the catalogue's `tool-short-<name>` where the
+/// language has one, else its full name.
+fn short_label(tool: Tool) -> String {
+    let t = text();
+    t.message(&format!("tool-short-{}", tool.name()), &[]).unwrap_or_else(|| t.named("tool", tool.name()))
 }
 
 /// What the cursor readout calls the object in a cell.
-fn cell_label(obj: &CellObject) -> &'static str {
-    TOOLS.iter().copied().find(|t| t.object().as_ref() == Some(obj)).map_or("?", short_label)
+fn cell_label(obj: &CellObject) -> String {
+    TOOLS.iter().copied().find(|t| t.object().as_ref() == Some(obj)).map_or_else(|| "?".to_string(), short_label)
 }
 
 use crate::{
@@ -322,9 +300,9 @@ impl MapEditor {
             // The status line, bottom-left of the field: the active tool,
             // the cell under the pointer (or the last tapped one), and any
             // message.
-            let mut line = format!("{}: {}", self.active_category().map(|c| c.label()).unwrap_or("TOOL"), short_label(self.active_tool));
+            let mut line = format!("{}: {}", self.active_category().map_or_else(|| text().get(keys::EDITOR_TOOL), |c| c.label()), short_label(self.active_tool));
             if let Some((col, row)) = cursor {
-                let under = self.map.cell(col, row).map(cell_label).unwrap_or("");
+                let under = self.map.cell(col, row).map(cell_label).unwrap_or_default();
                 line.push_str(&format!("   {col},{row} {under}"));
             }
             if let Some(status) = &self.status {
@@ -343,10 +321,10 @@ impl MapEditor {
             Some(Popup::Save { name }) => {
                 let panel = Self::save_prompt_rect(layout);
                 draw_panel(&mut d, panel);
-                d.draw_text("Save as:", (panel.x + 12.0) as i32, (panel.y + 10.0) as i32, 16, TEXT);
+                d.draw_text(&text().get(keys::EDITOR_SAVE_AS), (panel.x + 12.0) as i32, (panel.y + 10.0) as i32, 16, TEXT);
                 d.draw_text(&format!("{name}_"), (panel.x + 12.0) as i32, (panel.y + 34.0) as i32, 18, TEXT);
                 d.draw_text(
-                    "Enter to save, Esc to cancel",
+                    &text().get(keys::EDITOR_SAVE_HINT),
                     (panel.x + 12.0) as i32,
                     (panel.y + 58.0) as i32,
                     12,
@@ -367,7 +345,7 @@ impl MapEditor {
         d.draw_rectangle(px, py, pw, ph, BAR_FILL);
         let text_y = py + (ph - HUD_TEXT_SIZE) / 2;
 
-        d.draw_text("BUILD", px + SLOT_BUILD as i32, text_y, HUD_TEXT_SIZE, BUILD_ACCENT);
+        d.draw_text(&text().get(keys::EDITOR_BUILD), px + SLOT_BUILD as i32, text_y, HUD_TEXT_SIZE, BUILD_ACCENT);
         let name = format!("{}{}", self.name(), if self.dirty() { " *" } else { "" });
         d.draw_text(&fit_text(&name, NAME_W, HUD_TEXT_SIZE), px + SLOT_NAME as i32, text_y, HUD_TEXT_SIZE, TEXT);
 
@@ -382,16 +360,16 @@ impl MapEditor {
         }
 
         let undo_color = if self.history.undo_depth() > 0 { TEXT } else { DIM };
-        draw_small_button(d, Self::undo_rect(layout), "UNDO", undo_color);
+        draw_small_button(d, Self::undo_rect(layout), &text().get(keys::EDITOR_UNDO), undo_color);
         let redo_color = if self.history.redo_depth() > 0 { TEXT } else { DIM };
-        draw_small_button(d, Self::redo_rect(layout), "REDO", redo_color);
+        draw_small_button(d, Self::redo_rect(layout), &text().get(keys::EDITOR_REDO), redo_color);
 
         let file_open = matches!(self.popup, Some(Popup::File | Popup::Load { .. } | Popup::Save { .. }));
-        draw_menu_button(d, Self::file_rect(layout), "FILE", file_open);
-        draw_menu_button(d, Self::map_rect(layout), "MAP", matches!(self.popup, Some(Popup::Settings)));
+        draw_menu_button(d, Self::file_rect(layout), &text().get(keys::EDITOR_FILE), file_open);
+        draw_menu_button(d, Self::map_rect(layout), &text().get(keys::EDITOR_MAP), matches!(self.popup, Some(Popup::Settings)));
 
         let _ = cursor; // the readout is the field's status line, see `render`
-        crate::render::hud::draw_mode_button(d, panel, "PLAY", BUILD_ACCENT);
+        crate::render::hud::draw_mode_button(d, panel, &text().get(keys::BUTTON_PLAY), BUILD_ACCENT);
     }
 
     /// The FILE menu below its button.
@@ -399,7 +377,7 @@ impl MapEditor {
         draw_panel(d, Self::file_menu_rect(layout));
         for (i, row) in FileRow::all().iter().enumerate() {
             let rect = Self::file_row_rect(layout, i);
-            d.draw_text(row.label(), rect.x as i32 + 16, (rect.y + (rect.height - HUD_TEXT_SIZE as f32) / 2.0) as i32, HUD_TEXT_SIZE, TEXT);
+            d.draw_text(&row.label(), rect.x as i32 + 16, (rect.y + (rect.height - HUD_TEXT_SIZE as f32) / 2.0) as i32, HUD_TEXT_SIZE, TEXT);
         }
     }
 
@@ -409,7 +387,7 @@ impl MapEditor {
         let panel = Self::load_panel_rect(layout, entries.len());
         draw_panel(d, panel);
         if entries.is_empty() {
-            d.draw_text("no maps to load", panel.x as i32 + 16, panel.y as i32 + 15, HUD_TEXT_SIZE, DIM);
+            d.draw_text(&text().get(keys::EDITOR_NO_MAPS), panel.x as i32 + 16, panel.y as i32 + 15, HUD_TEXT_SIZE, DIM);
             return;
         }
         for (i, entry) in entries.iter().skip(scroll).take(LOAD_VISIBLE_ROWS).enumerate() {
@@ -417,11 +395,14 @@ impl MapEditor {
             let text_y = (row.y + (row.height - HUD_TEXT_SIZE as f32) / 2.0) as i32;
             d.draw_text(&fit_text(&entry.name, LOAD_PANEL_W - 120.0, HUD_TEXT_SIZE), row.x as i32 + 16, text_y, HUD_TEXT_SIZE, TEXT);
             if !entry.on_disk {
-                d.draw_text("shipped", (row.x + row.width - 80.0) as i32, text_y, HUD_TEXT_SIZE, DIM);
+                d.draw_text(&text().get(keys::EDITOR_SHIPPED), (row.x + row.width - 80.0) as i32, text_y, HUD_TEXT_SIZE, DIM);
             }
         }
         if entries.len() > LOAD_VISIBLE_ROWS {
-            let hint = format!("{}-{} of {}  (wheel)", scroll + 1, (scroll + LOAD_VISIBLE_ROWS).min(entries.len()), entries.len());
+            let hint = text().fmt(
+                keys::EDITOR_PAGE,
+                &[("from", (scroll + 1).into()), ("to", (scroll + LOAD_VISIBLE_ROWS).min(entries.len()).into()), ("n", entries.len().into())],
+            );
             d.draw_text(&hint, panel.x as i32 + 16, (panel.y + panel.height - 14.0) as i32, HUD_LABEL_SIZE, DIM);
         }
     }
@@ -463,7 +444,7 @@ impl MapEditor {
                 draw_badge(d, icon.x + icon.width - 4.0, icon.y + 4.0);
             }
             let text_y = row.y as i32 + (EDITOR_DROPDOWN_ROW_H as i32 - HUD_TEXT_SIZE) / 2;
-            d.draw_text(label(tool), row.x as i32 + DROPDOWN_TEXT_X, text_y, HUD_TEXT_SIZE, TEXT);
+            d.draw_text(&label(tool), row.x as i32 + DROPDOWN_TEXT_X, text_y, HUD_TEXT_SIZE, TEXT);
         }
     }
 
@@ -481,14 +462,15 @@ impl MapEditor {
                 let color = if self.dirty() { BUILD_ACCENT } else { DIM };
                 let inset = Rectangle::new(button.x, button.y + 4.0, button.width, button.height - 8.0);
                 d.draw_rectangle_rounded_lines_ex(inset, 0.2, EDITOR_PANEL_SEGMENTS, 2.0, color);
-                let w = text_width(row.label(), HUD_TEXT_SIZE);
-                d.draw_text(row.label(), (button.x + (button.width - w) / 2.0) as i32, text_y, HUD_TEXT_SIZE, color);
+                let label = row.label();
+                let w = text_width(&label, HUD_TEXT_SIZE);
+                d.draw_text(&label, (button.x + (button.width - w) / 2.0) as i32, text_y, HUD_TEXT_SIZE, color);
                 continue;
             }
             let dim = waves_off && row.is_wave_row();
             let label_color = if dim { Color::new(70, 70, 76, 255) } else { DIM };
             let value_color = if dim { DIM } else { TEXT };
-            d.draw_text(row.label(), rect.x as i32 + SETTINGS_INSET as i32, text_y, SETTINGS_LABEL_SIZE, label_color);
+            d.draw_text(&row.label(), rect.x as i32 + SETTINGS_INSET as i32, text_y, SETTINGS_LABEL_SIZE, label_color);
             for (button, glyph) in [(Self::settings_dec_rect(rect), "<"), (Self::settings_inc_rect(rect), ">")] {
                 let inset = Rectangle::new(button.x + 2.0, button.y + 4.0, button.width - 4.0, button.height - 8.0);
                 d.draw_rectangle_rounded_lines_ex(inset, 0.2, EDITOR_PANEL_SEGMENTS, 1.0, Color::new(255, 255, 255, 60));
@@ -500,7 +482,7 @@ impl MapEditor {
             d.draw_text(&value, value_x, text_y, HUD_TEXT_SIZE, value_color);
             if row.cli_override(self.cli_overrides) {
                 let x = value_x + text_width(&value, HUD_TEXT_SIZE) as i32 + 4;
-                d.draw_text("(cli)", x, text_y + 5, HUD_LABEL_SIZE, DIM);
+                d.draw_text(&text().get(keys::SETTINGS_CLI), x, text_y + 5, HUD_LABEL_SIZE, DIM);
             }
         }
     }
@@ -741,32 +723,32 @@ fn draw_gate_chevron(d: &mut impl RaylibDraw, center: Position, size: f32, inwar
 }
 
 impl FileRow {
-    fn label(self) -> &'static str {
-        match self {
-            FileRow::Load => "LOAD...",
-            FileRow::Save => "SAVE",
-            FileRow::SaveAs => "SAVE AS...",
-            FileRow::Clear => "CLEAR MAP",
-        }
+    fn label(self) -> String {
+        text().get(match self {
+            FileRow::Load => keys::FILE_LOAD,
+            FileRow::Save => keys::FILE_SAVE,
+            FileRow::SaveAs => keys::FILE_SAVE_AS,
+            FileRow::Clear => keys::FILE_CLEAR,
+        })
     }
 }
 
 impl SettingsRow {
-    fn label(self) -> &'static str {
-        match self {
-            SettingsRow::Tanks => "TANKS",
-            SettingsRow::Tank => "TANK",
-            SettingsRow::Tank2 => "TANK 2",
-            SettingsRow::Mission => "MISSION",
-            SettingsRow::Spawn => "SPAWN",
-            SettingsRow::Waves => "WAVES",
-            SettingsRow::Size => "SIZE",
-            SettingsRow::Growth => "GROWTH",
-            SettingsRow::TierStart => "TIER START",
-            SettingsRow::TierEnd => "TIER END",
-            SettingsRow::Theme => "THEME",
-            SettingsRow::Reset => "RESET MAP",
-        }
+    fn label(self) -> String {
+        text().get(match self {
+            SettingsRow::Tanks => keys::SETTINGS_TANKS,
+            SettingsRow::Tank => keys::SETTINGS_TANK,
+            SettingsRow::Tank2 => keys::SETTINGS_TANK2,
+            SettingsRow::Mission => keys::SETTINGS_MISSION,
+            SettingsRow::Spawn => keys::SETTINGS_SPAWN,
+            SettingsRow::Waves => keys::SETTINGS_WAVES,
+            SettingsRow::Size => keys::SETTINGS_SIZE,
+            SettingsRow::Growth => keys::SETTINGS_GROWTH,
+            SettingsRow::TierStart => keys::SETTINGS_TIER_START,
+            SettingsRow::TierEnd => keys::SETTINGS_TIER_END,
+            SettingsRow::Theme => keys::SETTINGS_THEME,
+            SettingsRow::Reset => keys::SETTINGS_RESET,
+        })
     }
 
     /// One of the five rows that only matter to a Waves spawn plan.
@@ -777,23 +759,24 @@ impl SettingsRow {
         )
     }
 
-    /// The row's value as the panel shows it; `auto` for `None`.
+    /// The row's value as the panel shows it, in the language on screen:
+    /// a data name looked up by its family (`tank-scout`, `theme-desert`),
+    /// or the word for `auto` where the map leaves it to the game.
     fn value(self, s: &MapSettings) -> String {
-        fn auto_or<T>(v: Option<T>, f: impl Fn(T) -> String) -> String {
-            v.map(f).unwrap_or_else(|| "auto".to_string())
-        }
+        let t = text();
+        let auto_or = |v: Option<String>| v.unwrap_or_else(|| t.get(keys::SETTINGS_AUTO));
         match self {
-            SettingsRow::Tanks => auto_or(s.tanks, |n| n.to_string()),
-            SettingsRow::Tank => auto_or(s.tank, |k| k.name().to_string()),
-            SettingsRow::Tank2 => auto_or(s.tank2, |k| k.name().to_string()),
-            SettingsRow::Mission => s.mission.name().to_string(),
-            SettingsRow::Spawn => s.spawn.name().to_string(),
-            SettingsRow::Waves => auto_or(s.waves, |n| n.to_string()),
-            SettingsRow::Size => auto_or(s.size, |n| n.to_string()),
-            SettingsRow::Growth => auto_or(s.growth, |n| n.to_string()),
-            SettingsRow::TierStart => auto_or(s.tier_start, |t| t.name().to_string()),
-            SettingsRow::TierEnd => auto_or(s.tier_end, |t| t.name().to_string()),
-            SettingsRow::Theme => s.theme.name().to_string(),
+            SettingsRow::Tanks => auto_or(s.tanks.map(|n| n.to_string())),
+            SettingsRow::Tank => auto_or(s.tank.map(|k| t.named("tank", k.name()))),
+            SettingsRow::Tank2 => auto_or(s.tank2.map(|k| t.named("tank", k.name()))),
+            SettingsRow::Mission => t.named("mission", s.mission.name()),
+            SettingsRow::Spawn => t.named("spawn", s.spawn.name()),
+            SettingsRow::Waves => auto_or(s.waves.map(|n| n.to_string())),
+            SettingsRow::Size => auto_or(s.size.map(|n| n.to_string())),
+            SettingsRow::Growth => auto_or(s.growth.map(|n| n.to_string())),
+            SettingsRow::TierStart => auto_or(s.tier_start.map(|tier| t.named("tier", tier.name()))),
+            SettingsRow::TierEnd => auto_or(s.tier_end.map(|tier| t.named("tier", tier.name()))),
+            SettingsRow::Theme => t.named("theme", s.theme.name()),
             SettingsRow::Reset => String::new(),
         }
     }
@@ -831,8 +814,7 @@ mod bar_tests {
     /// each can hold written down here.
     #[test]
     fn bar_slots_fit_the_default_bar_without_overlapping() {
-        let ch = 11.0; // default-font advance at 18 px
-        assert!(SLOT_BUILD + "BUILD".len() as f32 * ch <= SLOT_NAME);
+        assert!(SLOT_BUILD + crate::text::width("BUILD", HUD_TEXT_SIZE) as f32 <= SLOT_NAME);
         assert!(SLOT_NAME + NAME_W <= SLOT_CATEGORIES);
         assert!(SLOT_CATEGORIES + Category::ALL.len() as f32 * CATEGORY_W <= SLOT_ERASE);
         assert!(SLOT_ERASE + SMALL_BUTTON_W <= SLOT_UNDO);

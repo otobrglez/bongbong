@@ -10,6 +10,7 @@ use crate::hud::{
     HUD_TEXT_SIZE, ONLINE_COLOR, TEXT, WEAPON_SLOTS,
 };
 use crate::math::{Color, Rectangle};
+use crate::text::{keys, text, width};
 use crate::render::game::Textures;
 use crate::simulation::PlayerCount;
 use crate::tank::{team_color, ActiveWeapon, TEAM_COLORS};
@@ -274,10 +275,11 @@ pub fn draw_bar(d: &mut impl RaylibDraw, panel: Rect, model: &HudModel, textures
         }
     }
 
-    let bars: [(&str, f32, Option<f32>, Color, bool); 3] = [
-        ("SPEED", model.local.speed, p2.map(|p| p.speed), SPEED_COLOR, true),
-        ("SHIELD", model.local.shield, p2.map(|p| p.shield), SHIELD_COLOR, true),
-        ("FROG", model.frog.unwrap_or(0.0), None, FROG_COLOR, model.frog.is_some()),
+    let t = text();
+    let bars: [(String, f32, Option<f32>, Color, bool); 3] = [
+        (t.get(keys::HUD_SPEED), model.local.speed, p2.map(|p| p.speed), SPEED_COLOR, true),
+        (t.get(keys::HUD_SHIELD), model.local.shield, p2.map(|p| p.shield), SHIELD_COLOR, true),
+        (t.get(keys::HUD_FROG), model.frog.unwrap_or(0.0), None, FROG_COLOR, model.frog.is_some()),
     ];
     for (i, (label, frac, frac2, color, present)) in bars.iter().enumerate() {
         let x = px + s.bars + i as i32 * BAR_SLOT_W;
@@ -451,8 +453,7 @@ pub fn draw_restart_button(d: &mut impl RaylibDraw, panel: Rect) {
 /// mode button and the online round's `LEAVE` button share.
 fn draw_slot_button(d: &mut impl RaylibDraw, r: Rectangle, label: &str, color: Color) {
     d.draw_rectangle_lines_ex(Rectangle::new(r.x, r.y + 2.0, r.width, r.height - 4.0), 2.0, color);
-    // The default font runs ~11 px per character at 18 px.
-    let text_w = label.len() as i32 * 11;
+    let text_w = width(label, HUD_TEXT_SIZE);
     d.draw_text(label, (r.x + (r.width - text_w as f32) / 2.0) as i32, (r.y + (r.height - HUD_TEXT_SIZE as f32) / 2.0) as i32, HUD_TEXT_SIZE, color);
 }
 
@@ -465,19 +466,19 @@ pub fn draw_mode_button(d: &mut impl RaylibDraw, panel: Rect, label: &str, color
 /// in the room blue: the one way out of a room a finger can reach, and
 /// the only one that names itself.
 pub fn draw_leave_button(d: &mut impl RaylibDraw, panel: Rect) {
-    draw_slot_button(d, leave_button_rect(panel), "LEAVE", ONLINE_COLOR);
+    draw_slot_button(d, leave_button_rect(panel), &text().get(keys::BUTTON_LEAVE), ONLINE_COLOR);
 }
 
 /// The dialog panel both questions share: shadow, rounded fill, outline,
-/// a 28 px title and a 16 px line under it.
+/// a 28 px title and a 16 px line under it, both centred by `text::width`.
 fn draw_dialog_panel(d: &mut impl RaylibDraw, panel: Rectangle, title: &str, sub: &str) {
     let shadow = Rectangle::new(panel.x + 4.0, panel.y + 4.0, panel.width, panel.height);
     d.draw_rectangle_rounded(shadow, 0.08, 8, Color::new(0, 0, 0, 90));
     d.draw_rectangle_rounded(panel, 0.08, 8, Color::new(20, 20, 24, 240));
     d.draw_rectangle_rounded_lines_ex(panel, 0.08, 8, 1.5, Color::new(0, 0, 0, 150));
-    let title_w = title.len() as i32 * 15;
+    let title_w = width(title, 28);
     d.draw_text(title, (panel.x + (DIALOG_W - title_w as f32) / 2.0) as i32, (panel.y + 22.0) as i32, 28, TEXT);
-    let sub_w = sub.len() as i32 * 9;
+    let sub_w = width(sub, 16);
     d.draw_text(sub, (panel.x + (DIALOG_W - sub_w as f32) / 2.0) as i32, (panel.y + 62.0) as i32, 16, DIM);
 }
 
@@ -487,7 +488,7 @@ fn draw_dialog_button(d: &mut impl RaylibDraw, rect: Rectangle, label: &str, col
         d.draw_rectangle_rounded(rect, 0.2, 8, fill);
     }
     d.draw_rectangle_rounded_lines_ex(rect, 0.2, 8, 2.0, color);
-    let w = label.len() as i32 * 11;
+    let w = width(label, HUD_TEXT_SIZE);
     d.draw_text(label, (rect.x + (rect.width - w as f32) / 2.0) as i32, (rect.y + (rect.height - HUD_TEXT_SIZE as f32) / 2.0) as i32, HUD_TEXT_SIZE, color);
 }
 
@@ -495,21 +496,23 @@ fn draw_dialog_button(d: &mut impl RaylibDraw, rect: Rectangle, label: &str, col
 /// count's button highlighted, the other in the action colour. Field
 /// space, like `draw_leave_dialog`.
 pub fn draw_players_dialog(d: &mut impl RaylibDraw, field: Rect, players: PlayerCount) {
+    let t = text();
     let r = players_dialog_rects(field);
-    draw_dialog_panel(d, r.panel, "How many players?", "P1 arrows + Space    P2 WASD + L.Shift");
+    draw_dialog_panel(d, r.panel, &t.get(keys::PLAYERS_TITLE), &t.get(keys::PLAYERS_KEYS));
     let live_fill = Some(Color::new(255, 255, 255, 40));
     let one_live = players == PlayerCount::ONE;
-    draw_dialog_button(d, r.one, "1 PLAYER", if one_live { TEXT } else { BUILD_COLOR }, one_live.then_some(live_fill).flatten());
-    draw_dialog_button(d, r.two, "2 PLAYERS", if one_live { BUILD_COLOR } else { TEXT }, (!one_live).then_some(live_fill).flatten());
+    draw_dialog_button(d, r.one, &t.get(keys::PLAYERS_ONE), if one_live { TEXT } else { BUILD_COLOR }, one_live.then_some(live_fill).flatten());
+    draw_dialog_button(d, r.two, &t.get(keys::PLAYERS_TWO), if one_live { BUILD_COLOR } else { TEXT }, (!one_live).then_some(live_fill).flatten());
 }
 
 /// Draw the leave-round dialog over the (already dimmed) field. Field
 /// space: call inside the field camera.
 pub fn draw_leave_dialog(d: &mut impl RaylibDraw, field: Rect) {
+    let t = text();
     let r = leave_dialog_rects(field);
-    draw_dialog_panel(d, r.panel, "Leave this round?", "Your progress is lost. The map is kept.");
-    draw_dialog_button(d, r.leave, "LEAVE ROUND", BUILD_COLOR, None);
-    draw_dialog_button(d, r.stay, "KEEP PLAYING", TEXT, None);
+    draw_dialog_panel(d, r.panel, &t.get(keys::LEAVE_TITLE), &t.get(keys::LEAVE_SUB));
+    draw_dialog_button(d, r.leave, &t.get(keys::LEAVE_CONFIRM), BUILD_COLOR, None);
+    draw_dialog_button(d, r.stay, &t.get(keys::LEAVE_STAY), TEXT, None);
 }
 
 #[cfg(test)]
@@ -529,9 +532,15 @@ mod bar_tests {
     #[test]
     fn slots_fit_the_default_bar_without_overlapping() {
         let ch = CHAR_W;
+        // The gauge labels' budget, which `text_tests` measures every
+        // language against, is this table's slot less a gap.
+        assert_eq!(BAR_SLOT_W - 2, crate::hud::HUD_GAUGE_LABEL_MAX_PX);
         for (name, s) in [("one", &SLOTS_ONE), ("two", &SLOTS_TWO), ("compact", &SLOTS_COMPACT)] {
-            let title_end = SLOT_TITLE + "DESTROY 12/12".len() as i32 * ch;
+            // The widest title in English; every language's is held to
+            // the same 158 px by `text_tests::every_language_fits_every_budget`.
+            let title_end = SLOT_TITLE + width("DESTROY 12/12", HUD_TEXT_SIZE);
             assert!(title_end <= s.enemies, "{name}: title runs into the enemies glyph");
+            assert_eq!(s.enemies - SLOT_TITLE, 158, "{name}: the title budget the catalogue is measured against");
             let enemies_end = s.enemies + TANK_GLYPH_W;
             assert!(enemies_end <= s.enemy_count, "{name}");
             let count_end = s.enemy_count + 2 * ch + 6 + 3 * ch;

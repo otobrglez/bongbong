@@ -11,6 +11,7 @@
 
 use sola_raylib::prelude::*;
 
+use crate::text::keys;
 use crate::bullet::{Bullet, BulletState};
 use crate::canvas::Sheet;
 use crate::decal::draw_decal;
@@ -192,6 +193,7 @@ impl Game {
         #[cfg(feature = "dev-tools")]
         let frame_ms = rl.get_frame_time() * 1000.0;
         let hud = HudModel::gather(self, chrome.seat);
+        let t = crate::text::text();
         // The build stamp, bottom-right of the field (text width must be
         // measured on the RaylibHandle, outside the draw closure).
         let version = version_line();
@@ -201,8 +203,8 @@ impl Game {
         // measured on the RaylibHandle, outside the draw closure).
         let banner = match self.outcome {
             Outcome::Playing => None,
-            Outcome::Won => Some(("YOU WIN", Color::DARKGREEN)),
-            Outcome::Lost => Some(("YOU LOSE", Color::MAROON)),
+            Outcome::Won => Some((t.get(keys::ROUND_WON), Color::DARKGREEN)),
+            Outcome::Lost => Some((t.get(keys::ROUND_LOST), Color::MAROON)),
         };
         // Opening mission banner: solid while the round is frozen behind
         // it, then fading over INTRO_FADE_SECONDS once play starts.
@@ -213,33 +215,32 @@ impl Game {
                 (self.intro_fade / crate::simulation::INTRO_FADE_SECONDS).clamp(0.0, 1.0)
             };
             (alpha > 0.0).then(|| {
-                let text = self.mission.banner();
+                let text = t.get(crate::text::mission_banner(self.mission));
                 let size = 72;
-                let w = rl.measure_text(text, size);
+                let w = rl.measure_text(&text, size);
                 (text, size, w, alpha)
             })
         };
         // Wave rounds: the `WAVE N` banner during the breather before a
         // wave - smaller than the mission banner, no dim overlay, and never
         // over the end-of-round banner. The counter itself is in the bar.
-        let wave_banner = self.wave_banner().filter(|_| self.outcome == Outcome::Playing).map(|text| {
+        let wave_banner = self.wave_banner().filter(|_| self.outcome == Outcome::Playing).map(|banner| {
+            let text = if banner.is_final { t.get(keys::WAVE_FINAL) } else { t.fmt(keys::WAVE_BANNER, &[("n", banner.next.into())]) };
             let size = 48;
             let w = rl.measure_text(&text, size);
             (text, size, w)
         });
         let banner = banner.map(|(text, color)| {
             let title_size = 72;
-            let title_w = rl.measure_text(text, title_size);
-            let sub = format!(
-                "{} {}...",
-                chrome.countdown_label.unwrap_or("Restarting in"),
-                self.restart_timer.ceil().max(0.0) as i32
-            );
+            let title_w = rl.measure_text(&text, title_size);
+            let seconds = self.restart_timer.ceil().max(0.0) as i32;
+            let sub = t.fmt(chrome.countdown_label.unwrap_or(keys::ROUND_RESTARTING), &[("seconds", seconds.into())]);
             let sub_size = 28;
             let sub_w = rl.measure_text(&sub, sub_size);
             (text, color, title_size, title_w, sub, sub_size, sub_w)
         });
-        let paused_w = rl.measure_text("PAUSED", 72);
+        let paused = t.get(keys::PAUSED);
+        let paused_w = rl.measure_text(&paused, 72);
         // An online round's one line of chrome (its width is measured
         // here like every other string, outside the draw closures).
         let status = chrome.status.as_ref().map(|line| {
@@ -687,10 +688,10 @@ impl Game {
 
                 // Mission banner: big white text over a dim overlay that both
                 // fade together once the round unfreezes.
-                if let Some((text, size, w, alpha)) = intro {
+                if let Some((text, size, w, alpha)) = &intro {
                     let a = |max: f32| (max * alpha) as u8;
                     d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(0, 0, 0, a(120.0)));
-                    d.draw_text(text, screen_width / 2 - w / 2, screen_height / 2 - size / 2, size, Color::new(255, 255, 255, a(255.0)));
+                    d.draw_text(text, screen_width / 2 - w / 2, screen_height / 2 - size / 2, *size, Color::new(255, 255, 255, a(255.0)));
                 }
                 if let Some((text, size, w)) = &wave_banner {
                     d.draw_text(text, screen_width / 2 - w / 2, screen_height / 2 - size / 2, *size, Color::RAYWHITE);
@@ -702,7 +703,7 @@ impl Game {
                     d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(0, 0, 0, 120));
                     let title_size = 72;
                     d.draw_text(
-                        "PAUSED",
+                        &paused,
                         screen_width / 2 - paused_w / 2,
                         screen_height / 2 - title_size / 2,
                         title_size,
@@ -741,7 +742,7 @@ impl Game {
                 draw_restart_button(&mut d, layout.panel);
             }
             if chrome.build_button {
-                draw_mode_button(&mut d, layout.panel, "BUILD", BUILD_COLOR);
+                draw_mode_button(&mut d, layout.panel, &t.get(keys::BUTTON_BUILD), BUILD_COLOR);
             }
             if chrome.leave_button {
                 draw_leave_button(&mut d, layout.panel);

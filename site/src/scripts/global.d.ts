@@ -14,6 +14,10 @@ declare global {
      *  build's command line, parsed once at startup by `app.rs` through
      *  `net::rooms::Invite`. See `room.ts`. */
     bbInvite: string;
+    /** The browser's preferred languages, most preferred first, as BCP 47
+     *  tags joined by commas: the web build's only word on which language
+     *  to speak (src/text.rs, docs/localization-prd.md section 4.5). */
+    bbLang: string;
     /** This tab's reconnect key in a room, read once at startup by
      *  `app.rs`. See `room.ts`. */
     bbToken: string;

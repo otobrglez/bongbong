@@ -96,11 +96,18 @@ fn left_shift_down(rl: &RaylibHandle) -> bool {
 
 /// The URL the page was opened on, as the page published it
 /// (`site/src/scripts/room.ts`). The web build's command line, in full:
-/// a browser has no argv, so the room a link names and the rooms server
-/// a dev link overrides both travel in here (`net::rooms::Invite`,
-/// docs/online-coop-prd.md §4.10).
-#[cfg(all(feature = "online", target_os = "emscripten"))]
+/// a browser has no argv, so the room a link names, the rooms server a
+/// dev link overrides and the `?lang=` a tester adds all travel in here
+/// (`net::rooms::Invite`, docs/online-coop-prd.md §4.10;
+/// `text::lang_from_url`).
+#[cfg(target_os = "emscripten")]
 const PAGE_INVITE: &std::ffi::CStr = c"(function(){try{return String(window.bbInvite||'')}catch(e){return ''}})()";
+
+/// The browser's preferred languages, as the page published them
+/// (`navigator.languages`, comma-joined): the platform's word on which
+/// language to speak (docs/localization-prd.md section 4.5).
+#[cfg(target_os = "emscripten")]
+const PAGE_LANG: &std::ffi::CStr = c"(function(){try{return String(window.bbLang||'')}catch(e){return ''}})()";
 
 /// This browser's reconnect key, minted and kept by the page - one per
 /// tab, so two tabs in one browser are two seats rather than one seat
@@ -121,7 +128,7 @@ const PAGE_TOKEN: &std::ffi::CStr = c"(function(){try{return String(window.bbTok
 /// exception out of `eval` takes the runtime down with it, which is why
 /// every script is wrapped and answers with an empty string rather than
 /// throwing.
-#[cfg(all(feature = "online", target_os = "emscripten"))]
+#[cfg(target_os = "emscripten")]
 fn page_string(script: &std::ffi::CStr) -> String {
     unsafe extern "C" {
         fn emscripten_run_script_string(script: *const std::os::raw::c_char) -> *const std::os::raw::c_char;
@@ -134,6 +141,42 @@ fn page_string(script: &std::ffi::CStr) -> String {
         return String::new();
     }
     unsafe { std::ffi::CStr::from_ptr(answer) }.to_string_lossy().into_owned()
+}
+
+/// The language asked for outright: `--lang` on a desktop, the page's
+/// `?lang=` on the web (a browser has no argv, and the page's URL is the
+/// one place a tester can write it).
+fn explicit_language(args: &Args) -> Option<String> {
+    #[cfg(target_os = "emscripten")]
+    {
+        let _ = args;
+        return crate::text::lang_from_url(&page_string(PAGE_INVITE));
+    }
+    #[cfg(not(target_os = "emscripten"))]
+    args.lang.clone()
+}
+
+/// The languages this platform prefers, most preferred first, as the
+/// platform spells them: the page's `navigator.languages` on the web,
+/// SDL's list on iOS, the system properties on Android, `sys-locale`'s
+/// answer everywhere else.
+fn platform_languages() -> Vec<String> {
+    #[cfg(target_os = "emscripten")]
+    {
+        page_string(PAGE_LANG).split(',').map(str::trim).filter(|t| !t.is_empty()).map(str::to_string).collect()
+    }
+    #[cfg(target_os = "ios")]
+    {
+        ios::platform_languages()
+    }
+    #[cfg(target_os = "android")]
+    {
+        android::platform_languages()
+    }
+    #[cfg(not(any(target_os = "emscripten", target_os = "ios", target_os = "android")))]
+    {
+        crate::text::platform_languages()
+    }
 }
 
 /// The reconnect key a desktop, iOS or Android build takes into a room
@@ -391,6 +434,15 @@ pub struct Args {
     #[cfg(all(feature = "online", not(target_os = "emscripten")))]
     #[arg(long = "rooms", value_name = "URL")]
     rooms: Option<String>,
+
+    /// The language to play in, as a tag (`sl`, `en`), for testing a
+    /// translation on a machine set to another language
+    /// (docs/localization-prd.md section 4.5). Without it the game speaks
+    /// the platform's language where a shipped one matches, else English;
+    /// a tag the game has not got is ignored. The web build reads
+    /// `?lang=` off its page instead.
+    #[arg(long = "lang", value_name = "TAG")]
+    lang: Option<String>,
 }
 
 /// The online round the command line asks for, with the rig's handle if
@@ -621,6 +673,14 @@ pub fn run(args: Args) {
     // it. See `capi::keep_alive`.
     #[cfg(feature = "dev-tools")]
     crate::capi::keep_alive();
+
+    // The language every string is drawn in (docs/localization-prd.md
+    // section 4.5): an explicit `--lang` - or the page's `?lang=` on the
+    // web - when it names a shipped language, else the platform's own
+    // list, else English. Set once, here, before anything gathers a
+    // string; the dev server's `lang` tool is the only later writer.
+    let language = crate::text::set_language(crate::text::choose(explicit_language(&args).as_deref(), &platform_languages()));
+    eprintln!("[text] language {language}");
 
     // The battlefield is the map's (`MapFile::field_size`); the bitmap the
     // game draws is that field plus the HUD bar above it

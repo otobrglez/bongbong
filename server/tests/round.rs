@@ -96,7 +96,7 @@ fn describe(msg: &Msg) -> String {
 
 fn serde_json_type(l: &Lobby) -> String {
     match l {
-        Lobby::Error { message } => format!("error {message:?}"),
+        Lobby::Error { refusal } => format!("error {refusal}"),
         Lobby::RoomCreated { code } => format!("room_created {code}"),
         Lobby::Roster { seats, .. } => format!("roster of {}", seats.len()),
         Lobby::Started => "started".into(),
@@ -107,7 +107,7 @@ fn serde_json_type(l: &Lobby) -> String {
 
 async fn expect_lobby_error(ws: &mut Client) -> String {
     expect(ws, "an error", |m| match m {
-        Msg::Lobby(Lobby::Error { message }) => Ok(message),
+        Msg::Lobby(Lobby::Error { refusal }) => Ok(refusal.to_string()),
         other => Err(other),
     })
     .await

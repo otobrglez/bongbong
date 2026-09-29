@@ -326,6 +326,13 @@ pub const TOOLS: &[ToolSpec] = &[
         destructive: false,
     },
     ToolSpec {
+        name: "lang",
+        description: "The language the window draws its text in (docs/localization-prd.md). Without `tag` reports the one in force and every shipped tag; with `tag` (`en`, `sl`) switches to it at this frame boundary - a tag the game has not got is answered with English. Works in every mode; nothing about the round changes.",
+        schema: r#"{"type":"object","properties":{"tag":{"type":"string","description":"A shipped language tag to switch to"}}}"#,
+        read_only: false,
+        destructive: false,
+    },
+    ToolSpec {
         name: "build",
         description: "Press BUILD in play mode: opens the 'Leave this round?' dialog while a round is in progress (the round is frozen until it is answered) and switches to the builder at once on the end screen. `answer: leave` confirms an open dialog and enters build mode; `answer: stay` closes it and keeps playing. A no-op in build mode. Replies like `mode`.",
         schema: r#"{"type":"object","properties":{"answer":{"type":"string","enum":["leave","stay"],"description":"Answer the open leave dialog instead of pressing the button"}}}"#,
@@ -1117,6 +1124,7 @@ impl DevServer {
             "players": game.players.count(),
             "map": map_json(&game.map),
             "mode": session.mode().name(),
+            "language": crate::text::language(),
             "dialog_open": session.dialog,
             "players_dialog_open": session.players_dialog,
             "builder": { "dirty": session.builder.dirty(), "tool": session.builder.tool().name() },
@@ -1461,6 +1469,15 @@ impl DevServer {
             "restart" => self.restart(session, params),
             "lint" => lint_json(session, params.get("source").and_then(Value::as_str)),
             "mode" => Ok(mode_json(session)),
+            "lang" => {
+                if let Some(tag) = params.get("tag").and_then(Value::as_str) {
+                    crate::text::set_language(tag);
+                }
+                Ok(json!({
+                    "language": crate::text::language(),
+                    "shipped": crate::text::SHIPPED_LANGS.iter().map(|(tag, _)| *tag).collect::<Vec<_>>(),
+                }))
+            }
             "build" => match params.get("answer") {
                 None | Some(Value::Null) => {
                     session.press_build();

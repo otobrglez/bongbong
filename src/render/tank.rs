@@ -4,8 +4,8 @@
 use sola_raylib::prelude::*;
 
 use crate::hud::HUD_TEXT_SIZE;
-use crate::render::hud::CHAR_W;
 use crate::tank::{player_locate_active, team_color, Tank, BLACK};
+use crate::text::{keys, text, width};
 
 /// The locate cue's label, `P1`..`P8` in the seat's team colour just above
 /// the hull, drawn over everything so a crowd cannot cover it. Same window
@@ -16,12 +16,12 @@ pub fn draw_player_label(d: &mut impl RaylibDraw, tank: &Tank, elapsed: f32) {
     if tank.is_wreck() || !player_locate_active(elapsed) {
         return;
     }
-    let text = format!("P{}", index + 1);
+    let text = text().fmt(keys::SEAT_LABEL, &[("n", (index + 1).into())]);
     let text = text.as_str();
     let size = HUD_TEXT_SIZE;
-    // The HUD's fixed cell width for this size; measuring needs the handle,
-    // which nothing in a draw pass has.
-    let w = text.len() as i32 * CHAR_W;
+    // Measured headless (`text::width`): nothing in a draw pass has the
+    // handle `MeasureText` needs.
+    let w = width(text, size);
     let x = (tank.position.x - w as f32 / 2.0).round() as i32;
     let y = (tank.position.y - tank.size() / 2.0 - size as f32 - 4.0).round() as i32;
     let color = team_color(index);
