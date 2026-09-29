@@ -94,7 +94,7 @@ lobby-im-ready = PRIPRAVLJEN!
 lobby-start = ZAČNI
 lobby-rematch = REVANŠA
 lobby-leave = ZAPUSTI
-lobby-kick = VEN
+lobby-kick = ODSTRANI
 
 code-error-length = koda sobe ima { $expected } znakov, ne { $got }
 code-error-character = '{ $char }' ni del kode sobe
