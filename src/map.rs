@@ -20,7 +20,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::level::{MissionConfig, SpawnConfig};
+use crate::frog::Side;
 use crate::obstacle::{Drum, Material};
+use crate::tower::TowerKind;
 use crate::pickup::PickupKind;
 use crate::tank::TankKind;
 use crate::{OBSTACLE_GRID_SIZE, Position};
@@ -108,6 +110,23 @@ pub enum CellObject {
     /// portals has an inert network - nothing teleports and the round
     /// draws none of them.
     Portal,
+    /// The defence towers (docs/defence-towers-prd.md): a solid tile that
+    /// fights for `side` - the player's when the key is absent, so a file
+    /// without it reads the way the builder's plain tool writes it.
+    Tesla {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        side: Option<Side>,
+    },
+    #[serde(rename = "gun_tower")]
+    GunTower {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        side: Option<Side>,
+    },
+    #[serde(rename = "bio_slush")]
+    BioSlush {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        side: Option<Side>,
+    },
 }
 
 impl CellObject {
@@ -120,7 +139,34 @@ impl CellObject {
             CellObject::Fence => Some(Material::Fence),
             CellObject::Tree => Some(Material::Tree),
             CellObject::Pine => Some(Material::Pine),
+            CellObject::Tesla { .. } => Some(Material::Tesla),
+            CellObject::GunTower { .. } => Some(Material::GunTower),
+            CellObject::BioSlush { .. } => Some(Material::BioSlush),
             _ => None,
+        }
+    }
+
+    /// The tower a cell places and the side it fights for, if it is a
+    /// tower: the player's unless the cell says `side = "enemy"`.
+    pub fn tower(&self) -> Option<(TowerKind, Side)> {
+        let (kind, side) = match *self {
+            CellObject::Tesla { side } => (TowerKind::Tesla, side),
+            CellObject::GunTower { side } => (TowerKind::Gun, side),
+            CellObject::BioSlush { side } => (TowerKind::Bio, side),
+            _ => return None,
+        };
+        Some((kind, side.unwrap_or(Side::Player)))
+    }
+
+    /// The cell that places a `kind` tower fighting for `side`. The
+    /// player's side is written without the key, the way a hand-authored
+    /// file leaves it out.
+    pub fn for_tower(kind: TowerKind, side: Side) -> CellObject {
+        let side = (side == Side::Enemy).then_some(Side::Enemy);
+        match kind {
+            TowerKind::Tesla => CellObject::Tesla { side },
+            TowerKind::Gun => CellObject::GunTower { side },
+            TowerKind::Bio => CellObject::BioSlush { side },
         }
     }
 
@@ -638,6 +684,7 @@ pub const SHIPPED_MAPS: &[(&str, &str)] = &[
     ("hunt-basic", include_str!("../maps/missions/hunt-basic.toml")),
     ("waves-basic", include_str!("../maps/missions/waves-basic.toml")),
     ("portals", include_str!("../maps/portals.toml")),
+    ("towers", include_str!("../maps/towers.toml")),
 ];
 
 /// Whether this build can write a map to disk: native yes; web and iOS no

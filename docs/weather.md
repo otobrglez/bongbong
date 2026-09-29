@@ -142,7 +142,7 @@ against the walls:
   (`pickup_glow_strength`), so a lamp can find them.
 
 **Shadows** come from `weather::Occluders`: the map's cells, marked where a
-tile's `Material::blocks_light` (brick, iron and wood; glass lets light
+tile's `Material::blocks_light` (brick, iron, wood and the towers; glass lets light
 through, props are too low and trees too open to throw a hard edge). A
 light is drawn as a fan of rays, each walked across the grid until it
 enters a blocking cell (an Amanatides-Woo walk, one step per cell) and

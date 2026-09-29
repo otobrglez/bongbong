@@ -788,6 +788,127 @@ tunables! {
         flame_shimmer_every_frames: i32 = 11 in 1 ..= 60;
     }
 
+    group towers {
+        /// Tesla coil toughness (docs/defence-towers-prd.md). Baked in at
+        /// spawn.
+        tesla_max_health: f32 = 120.0 in 1.0 ..= 1000.0 @ Spawn;
+        /// How close (px, centre to hull box) an opposing tank has to come
+        /// before the coil starts charging at it.
+        tesla_range: f32 = 112.0 in 32.0 ..= 600.0;
+        /// Seconds from an empty coil to a strike with a target in reach:
+        /// the telegraph a player backs out on.
+        tesla_charge_seconds: f32 = 1.3 in 0.1 ..= 10.0;
+        /// Charge lost per second while nothing is in reach.
+        tesla_drain_per_second: f32 = 1.0 in 0.0 ..= 10.0;
+        /// Pause after a strike before the coil charges again.
+        tesla_cooldown_seconds: f32 = 0.35 in 0.0 ..= 10.0;
+        /// Strike damage, rolled per strike.
+        tesla_damage_min: f32 = 18.0 in 0.0 ..= 100.0;
+        tesla_damage_max: f32 = 26.0 in 0.0 ..= 100.0;
+        /// Extra tanks a strike jumps to after the first; 0 turns the
+        /// chain off.
+        tesla_chain_jumps: i32 = 1 in 0 ..= 4;
+        /// How far a jump reaches from the tank it leaves (px).
+        tesla_chain_radius: f32 = 64.0 in 0.0 ..= 300.0;
+        /// Damage of each jump, as a fraction of the strike's roll.
+        tesla_chain_factor: f32 = 0.5 in 0.0 ..= 1.0;
+        /// How long a bolt stays on screen.
+        tesla_bolt_display_seconds: f32 = 0.24 in 0.05 ..= 1.0;
+        /// Odds a shell or bullet glances off a coil.
+        tesla_deflect_chance: f64 = 0.15 in 0.0 ..= 1.0;
+        /// The discharge when a coil dies: radius and damage at the centre
+        /// (linear falloff), to every tank of either side.
+        tesla_death_blast_radius: f32 = 64.0 in 0.0 ..= 300.0;
+        tesla_death_blast_damage: f32 = 10.0 in 0.0 ..= 100.0;
+        /// Gun tower toughness. Baked in at spawn.
+        gun_tower_max_health: f32 = 150.0 in 1.0 ..= 1000.0 @ Spawn;
+        /// How far the gun tower shoots (px, centre to centre).
+        gun_tower_range: f32 = 256.0 in 32.0 ..= 1200.0;
+        /// Turret turn rate, degrees a second.
+        gun_tower_turn_deg_per_second: f32 = 220.0 in 10.0 ..= 2000.0;
+        /// How far the gun aims ahead of a moving target: 0 aims where the
+        /// tank is, 1 where it will be when the bullet gets there.
+        gun_tower_lead: f32 = 0.5 in 0.0 ..= 1.0;
+        /// Aim error (degrees) the gun opens fire within.
+        gun_tower_fire_cone_deg: f32 = 6.0 in 0.0 ..= 45.0;
+        /// Bullets per burst, the gap between them and the pause after.
+        gun_tower_burst_size: i32 = 5 in 1 ..= 30;
+        gun_tower_bullet_delay_seconds: f32 = 0.06 in 0.01 ..= 1.0;
+        gun_tower_burst_gap_seconds: f32 = 0.9 in 0.0 ..= 10.0;
+        /// Spread either side of the aim, degrees, rolled per bullet.
+        gun_tower_spread_deg: f32 = 3.0 in 0.0 ..= 45.0;
+        /// Bullet damage, rolled per hit.
+        gun_tower_damage_min: f32 = 3.0 in 0.0 ..= 100.0;
+        gun_tower_damage_max: f32 = 5.0 in 0.0 ..= 100.0;
+        /// The gun holds fire while a tank of its own side is this close
+        /// (px) to the line to its target.
+        gun_tower_friendly_block_px: f32 = 20.0 in 0.0 ..= 100.0;
+        /// Odds a shell or bullet glances off the gun tower's armour.
+        gun_tower_deflect_chance: f64 = 0.25 in 0.0 ..= 1.0;
+        /// Bio slush toughness. Baked in at spawn.
+        bio_max_health: f32 = 130.0 in 1.0 ..= 1000.0 @ Spawn;
+        /// Where the bio slush can land a glob: no closer than the first,
+        /// no further than the second (px, centre to centre).
+        bio_min_range: f32 = 56.0 in 0.0 ..= 600.0;
+        bio_range: f32 = 192.0 in 32.0 ..= 1200.0;
+        /// Nozzle turn rate, degrees a second.
+        bio_turn_deg_per_second: f32 = 160.0 in 10.0 ..= 2000.0;
+        /// Aim error (degrees) it lobs within.
+        bio_fire_cone_deg: f32 = 12.0 in 0.0 ..= 45.0;
+        /// Seconds between globs.
+        bio_lob_interval_seconds: f32 = 2.2 in 0.2 ..= 20.0;
+        /// A glob's time in the air and the drawn height at the top of its
+        /// arc (px). It has no hit test in flight.
+        bio_glob_flight_seconds: f32 = 0.8 in 0.1 ..= 5.0;
+        bio_glob_apex_px: f32 = 28.0 in 0.0 ..= 200.0;
+        /// How far the glob aims ahead of a moving target over its flight.
+        bio_lead: f32 = 0.7 in 0.0 ..= 1.0;
+        /// Hashed miss around the aim point (px); no RNG.
+        bio_scatter_px: f32 = 10.0 in 0.0 ..= 64.0;
+        /// Splash reach (px) for coating tanks and laying puddles.
+        bio_splash_radius: f32 = 36.0 in 0.0 ..= 160.0;
+        /// Damage of the splash itself (fixed, no roll).
+        bio_splash_damage: f32 = 4.0 in 0.0 ..= 100.0;
+        /// How long a coat of ooze lasts on a tank, what it corrodes a
+        /// second, and the fraction of its pace the tank keeps. A new coat
+        /// resets the timer, never adds to it.
+        bio_slime_seconds: f32 = 4.0 in 0.0 ..= 30.0;
+        bio_slime_dps: f32 = 3.0 in 0.0 ..= 50.0;
+        bio_slime_speed_factor: f32 = 0.6 in 0.1 ..= 1.0;
+        /// How long a puddle lasts, and what each step through one costs
+        /// the router (it never blocks).
+        bio_puddle_seconds: f32 = 6.0 in 0.0 ..= 60.0;
+        bio_puddle_path_cost: usize = 3 in 0 ..= 64;
+        /// How long the spill a destroyed bio slush leaves lasts.
+        bio_spill_seconds: f32 = 12.0 in 0.0 ..= 120.0;
+        /// Odds a shell or bullet glances off the bio slush.
+        bio_deflect_chance: f64 = 0.1 in 0.0 ..= 1.0;
+        /// Target hysteresis for the gun and the bio slush: a turret only
+        /// switches to a new target this much (px) nearer than its current
+        /// one.
+        tower_switch_margin_px: f32 = 48.0 in 0.0 ..= 400.0;
+        /// Health fraction below which a tower catches fire.
+        tower_burn_below: f32 = 0.25 in 0.0 ..= 1.0;
+        /// Damage a burning tower takes a second, until repaired or dead.
+        tower_burn_dps: f32 = 2.0 in 0.0 ..= 50.0;
+        /// Fraction of its rate a burning tower still fires at.
+        tower_burning_fire_factor: f32 = 0.5 in 0.0 ..= 1.0;
+        /// How long a ruin smoulders.
+        tower_ruin_smoke_seconds: f32 = 8.0 in 0.0 ..= 60.0;
+        /// Odds a tower pack drops beside a Health slot when it spawns,
+        /// while a player tower is hurt. Gated before any RNG draw.
+        tower_pack_near_health_chance: f32 = 0.25 in 0.0 ..= 1.0;
+        /// Route surcharge on every cell a live player tower reaches, so
+        /// enemies come round its reach when there is another way; 0 turns
+        /// it off. Kept low on purpose: a gun tower's reach is a disc eight
+        /// cells across, and a steep price on all of it sends every enemy
+        /// down the same cheapest seam, where they pile up.
+        route_tower_cost: usize = 2 in 0 ..= 64;
+        /// Seconds an enemy a tower hit goes after that tower while no
+        /// player is within its attack range.
+        enemy_tower_grudge_seconds: f32 = 4.0 in 0.0 ..= 30.0;
+    }
+
     group pickups {
         /// Seconds after a pickup is collected before a fresh one spawns at
         /// a random empty map slot - keeps the field topped up.
@@ -2047,11 +2168,14 @@ tunables! {
         /// How long each hit plays (seconds; `render/shot_shaders.rs`,
         /// `static/impact_burst.fs`): a shell's fireball, flash, shock ring,
         /// debris and smoke; a bullet's spark star and ricochets; a plasma
-        /// bolt's energy ring; a laser's molten splash.
+        /// bolt's energy ring; a laser's molten splash; a tesla strike's
+        /// crackling violet ring; a bio slush glob's splash of ooze.
         shell_hit_seconds: f32 = 0.6 in 0.05 ..= 3.0;
         bullet_hit_seconds: f32 = 0.22 in 0.05 ..= 2.0;
         plasma_hit_seconds: f32 = 0.5 in 0.05 ..= 3.0;
         laser_hit_seconds: f32 = 0.3 in 0.05 ..= 2.0;
+        tesla_hit_seconds: f32 = 0.4 in 0.05 ..= 2.0;
+        ooze_hit_seconds: f32 = 0.6 in 0.05 ..= 3.0;
         /// Size of every hit's burst, as a multiple of its designed size.
         hit_fx_scale: f32 = 1.0 in 0.2 ..= 3.0;
         /// Glints per second a flying plasma bolt sheds in its own colour,

@@ -27,6 +27,7 @@ use crate::plasma::{Plasma, PlasmaState, PlasmaVariant};
 use crate::shell::{Shell, ShellState};
 use crate::simulation::Game;
 use crate::tank::Tank;
+use crate::tower::TowerKind;
 use crate::tuning::Tuning;
 use crate::{OBSTACLE_GRID_SIZE, Position};
 
@@ -44,6 +45,13 @@ const STORM_TINT: Rgb = [0.9, 0.97, 1.2];
 /// How far past a cone's half angle its soft edge runs, as a factor of
 /// that angle.
 const CONE_EDGE: f32 = 1.3;
+
+/// A tesla tower's violet, its coil and its bolts (`render/tower.rs`'s
+/// `BOLT_GLOW`).
+const TESLA_LIGHT: Rgb = [0.69, 0.47, 1.0];
+
+/// The bio slush's lime ooze (`tower::OOZE_LT`).
+const OOZE_LIGHT: Rgb = [0.78, 1.0, 0.3];
 
 /// A weather as numbers: the light the field is lit by and how much of
 /// each layer the sky carries. `Look::of` resolves one from its weather
@@ -449,6 +457,7 @@ fn pickup_color(kind: PickupKind) -> Rgb {
         PickupKind::Shield => [0.45, 0.7, 1.0],
         PickupKind::Flamethrower => [1.0, 0.55, 0.2],
         PickupKind::FrogHealth => [0.45, 1.0, 0.55],
+        PickupKind::TowerPack => [0.8, 0.7, 1.0],
     }
 }
 
@@ -571,6 +580,35 @@ pub fn lights(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning) -> Vec<L
         out.push(fire(drum.ground_pos(), 56.0, 0.8).unshadowed());
     }
 
+    // The towers: a tesla's coil as it charges and every bolt along its
+    // path, a mortar's ooze and the globs it lobs, a tower on fire.
+    for view in game.tower_views() {
+        match view.kind {
+            TowerKind::Tesla if view.charge > 0.05 => {
+                let charge = view.charge * view.charge;
+                out.push(Light::point(view.position, 56.0 + 56.0 * charge, scale(TESLA_LIGHT, k * 1.1 * charge)));
+            }
+            TowerKind::Bio => out.push(Light::point(view.position, 44.0, scale(OOZE_LIGHT, k * 0.35)).unshadowed()),
+            _ => {}
+        }
+        if view.burning {
+            out.push(fire(view.position, t.fire_light_radius_px * 0.9, 1.0));
+        }
+    }
+    for bolt in &game.tesla_bolts {
+        let strength = k * t.shot_light_strength * bolt.alpha();
+        for along in [0.0, 0.5, 1.0] {
+            let at = bolt.start + (bolt.end - bolt.start) * along;
+            out.push(Light::point(at, 70.0, scale(TESLA_LIGHT, strength * (1.2 - 0.4 * (along - 0.5f32).abs()))));
+        }
+    }
+    for glob in &game.globs {
+        out.push(Light::point(glob.ground_pos(), 30.0, scale(OOZE_LIGHT, k * 0.45)).unshadowed());
+    }
+    for (&(c, r), puddle) in &game.ooze {
+        out.push(Light::point(crate::map::cell_to_world(c, r), 30.0, scale(OOZE_LIGHT, k * 0.25 * puddle.freshness())).unshadowed());
+    }
+
     // Blasts light the field in the frame they go off and fade with their
     // glow; a mushroom cloud's flash reaches half as far again.
     let s = k * t.shot_light_strength;
@@ -656,6 +694,8 @@ pub fn lights(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning) -> Vec<L
                 let variant = if blue { LaserVariant::Blue } else { LaserVariant::Red };
                 Light::point(impact.pos, 70.0, scale(laser_color(variant), s * 1.4 * life))
             }
+            ImpactKind::Tesla => Light::point(impact.pos, 90.0, scale(TESLA_LIGHT, s * 1.5 * life)),
+            ImpactKind::Ooze => Light::point(impact.pos, 44.0, scale(OOZE_LIGHT, s * 0.6 * life)).unshadowed(),
         });
     }
 

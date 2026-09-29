@@ -362,7 +362,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "builder_tool",
-        description: "Select the builder's brush by name - brick, iron, wood, glass (WALL); sandbag, barrel, oil_drum, fuel_drum, fence, tree, pine (PROP); road, water, tall_grass, oil_trail, gate, portal (GROUND); start, start2 (player 2's start), frog, enemy_frog (ACTOR); health, ammo, laser, minigun, plasma, missiles, speedup, shield, flamethrower, frog_health (PICKUP); or eraser - through the category's own selection path, so the bar's category button updates as well. Without `tool`, only reports the active tool and every category's current tool and full list (the authoritative spelling of every brush).",
+        description: "Select the builder's brush by name - brick, iron, wood, glass (WALL); sandbag, barrel, oil_drum, fuel_drum, fence, tesla, tesla_enemy, gun_tower, gun_tower_enemy, bio_slush, bio_slush_enemy (PROP); road, water, tall_grass, tree, pine, oil_trail, gate, portal (GROUND); start, start2 (player 2's start), frog, enemy_frog (ACTOR); health, ammo, laser, minigun, plasma, missiles, speedup, shield, flamethrower, frog_health, tower_pack (PICKUP); or eraser - through the category's own selection path, so the bar's category button updates as well. Without `tool`, only reports the active tool and every category's current tool and full list (the authoritative spelling of every brush).",
         schema: r#"{"type":"object","properties":{"tool":{"type":"string","description":"A tool name (see the description) or eraser"}}}"#,
         read_only: false,
         destructive: false,
@@ -3539,7 +3539,7 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!(cats.len(), 5);
         assert_eq!(cats[0]["name"], "wall");
         assert_eq!(cats[0]["current"], "iron");
-        assert_eq!(cats[4]["tools"].as_array().unwrap().len(), 10, "{}", cats[4]);
+        assert_eq!(cats[4]["tools"].as_array().unwrap().len(), 11, "{}", cats[4]);
         let err = ask(&mut server, &tx, &mut s, "builder_tool", json!({ "tool": "granite" })).unwrap_err();
         assert!(err.contains("brick") && err.contains("eraser"), "{err}");
 

@@ -832,6 +832,12 @@ pub fn run(args: Args) {
     let trees_texture = rl
         .load_texture(&thread, "static/trees_sheet.png")
         .expect("failed loading trees texture");
+    let towers_texture = rl
+        .load_texture(&thread, "static/towers_sheet.png")
+        .expect("failed loading towers texture");
+    let pickup_tower_pack_texture = rl
+        .load_texture(&thread, "static/pickups/tower_pack.png")
+        .expect("failed loading tower pack texture");
     let portal_texture = rl
         .load_texture(&thread, "static/portal_sheet.png")
         .expect("failed loading portal texture");
@@ -1412,6 +1418,8 @@ pub fn run(args: Args) {
                     ground: &ground_textures[theme_index(session.builder.map().theme)],
                     grass: &grass_textures[theme_index(session.builder.map().theme)],
                     trees: &trees_texture,
+                    towers: &towers_texture,
+                    pickup_tower_pack: &pickup_tower_pack_texture,
                     // Palette icon: the first colour variant's idle frame -
                     // a fixed representative sprite, since the builder
                     // places a frog *cell*, not a rolled colour.
@@ -1602,6 +1610,8 @@ pub fn run(args: Args) {
                 missile_pod: &missile_pod_texture,
                 grass: &grass_textures[theme_index(game.map.theme)],
                 trees: &trees_texture,
+                towers: &towers_texture,
+                pickup_tower_pack: &pickup_tower_pack_texture,
                 portal: &portal_texture,
             },
             &layout,

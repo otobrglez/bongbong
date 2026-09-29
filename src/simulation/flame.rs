@@ -148,6 +148,7 @@ impl Game {
                     let target = match owner {
                         crate::shell::Owner::Player(player) => HitTarget::Player { player },
                         crate::shell::Owner::Enemy(slot) => HitTarget::Enemy { slot },
+                        crate::shell::Owner::Tower { .. } => unreachable!("no tank is owned by a tower"),
                     };
                     f.events.push(Event::Hit { target, damage: 0.0, killed, x: pos.x, y: pos.y });
                 }
