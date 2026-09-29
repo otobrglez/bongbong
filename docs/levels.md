@@ -14,7 +14,7 @@ after a win, the same one after a loss - instead of restarting the round.
 | Order | Roughly easy to hard: Lotus Lagoon (5 tanks) first, Grand Campaign (7 waves) last. Edit `levels.toml` to change it. |
 | Progression | Only a win opens the next level. A loss offers the same level again. Winning the last level shows "all levels complete" and leads back to level 1. |
 | Start and save | A session opens on the furthest level reached. On the web that is the page's `localStorage` (`bongbong.level`); on a desktop or a phone, a file. Progress is kept by map name, so reordering the list keeps it. |
-| End screen | Counts down like free play's (`restart_delay`, 3 s): `NEXT LEVEL IN 3, 2, 1` after a win, `PLAY AGAIN IN 3, 2, 1` after a loss, then takes that way by itself. The last level's win counts nothing down: `ALL 14 LEVELS COMPLETE!` waits for `BACK TO LEVEL 1`, going round being the player's call. The buttons - `LEVELS` and `PLAY AGAIN` always, `NEXT LEVEL` after a win - take a way at once; Enter takes the way on after a win and plays again after a loss; R plays again, as it always did; Esc opens the level select, which, like a dialog or the builder, stops the countdown. |
+| End screen | Counts down like free play's (`restart_delay`, 3 s), inside the button it will press: `NEXT LEVEL IN 3, 2, 1` after a win, `PLAY AGAIN IN 3, 2, 1` after a loss, then takes that way by itself - a press on the counting button takes it at once. The last level's win counts nothing down: `ALL 14 LEVELS COMPLETE!` waits for `BACK TO LEVEL 1`, going round being the player's call. The buttons - `LEVELS` and `PLAY AGAIN` always, `NEXT LEVEL` after a win - take a way at once; Enter takes the way on after a win and plays again after a loss; R plays again, as it always did; Esc opens the level select, which, like a dialog or the builder, stops the countdown. |
 | Stats | Time (the round clock, which stands still behind the banner and while paused) and enemies destroyed out of all the round brings, split by seat in a couch round. |
 | Banner | `LEVEL 3 / 14` over the mission banner, the level's title under it at half the banner's size (36 px under 72). |
 | Builder edits | A level edited in the builder is played as edited for the rest of the session, every time it comes round. On a desktop the builder's Save writes it to `maps/<map>.toml`, which later sessions read first. |
@@ -40,8 +40,10 @@ since where a level goes next is the session's to decide. After every
 frame's steps `app.rs` calls `Session::follow_countdown`, which takes the
 way the screen counted down to once the timer stands at zero: `next_level`
 after a win, `play_again` after a loss. `ResultButtons::countdown` is the
-number the screen shows, whole seconds and never 0; it is `None` after the
-last level's win, which waits for a button. A screen behind the level
+number the screen shows, whole seconds and never 0, in the label of the
+button it counts down to - no line of its own, so the press that skips the
+wait is where the eye already is; it is `None` after the last level's win,
+which waits for a button. A screen behind the level
 select, a dialog or the builder never moves on by itself: nothing updates
 the round, so nothing counts it down.
 
@@ -141,7 +143,7 @@ also held to its tile, whole, on two lines.
   round's total, a held end screen counts down, waits at zero, and R still
   restarts it.
 - `hud::hud_tests` - the end screen fits the smallest field in every form,
-  its countdown over its three buttons in one centred row; `touch` - a claimed touch neither
+  its three buttons in one centred row and a level's countdown in a button; `touch` - a claimed touch neither
   fires nor steers; `devserver` - the end screen takes `click` and `key`.
 - `level_select::level_select_tests` - the shipped levels fit one page,
   every tile and `BACK` are finger-sized inside the panel on both field

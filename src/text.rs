@@ -839,8 +839,10 @@ mod text_tests {
             (keys::RESULT_NEXT, HUD_TEXT_SIZE, RESULT_BUTTON_W as i32 - 16, vec![]),
             (keys::RESULT_FIRST, HUD_TEXT_SIZE, RESULT_BUTTON_W as i32 - 16, vec![]),
             (keys::RESULT_LEVELS, HUD_TEXT_SIZE, RESULT_LEVELS_W as i32 - 16, vec![]),
-            (keys::RESULT_NEXT_IN, RESULT_LINE_SIZE, RESULT_TEXT_PX, vec![("seconds", 30.into())]),
-            (keys::RESULT_AGAIN_IN, RESULT_LINE_SIZE, RESULT_TEXT_PX, vec![("seconds", 30.into())]),
+            // The counting labels hold two digits: `restart_delay` goes
+            // up to 30.
+            (keys::RESULT_NEXT_IN, HUD_TEXT_SIZE, RESULT_BUTTON_W as i32 - 16, vec![("seconds", 30.into())]),
+            (keys::RESULT_AGAIN_IN, HUD_TEXT_SIZE, RESULT_BUTTON_W as i32 - 16, vec![("seconds", 30.into())]),
             // The level select: the lobby's title and line sizes across
             // its content, BACK in its button; the bar's level button
             // holds its word and a two-digit number.

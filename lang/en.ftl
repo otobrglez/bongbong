@@ -101,9 +101,9 @@ result-first = BACK TO LEVEL 1
 # Beside those, in a 160 px button: the level select.
 result-levels = LEVELS
 
-# Over the buttons, 28 px, about 700 px: the end screen counting down to
-# the way it takes by itself - the next level after a win, the same one
-# again after a loss. $seconds counts 3, 2, 1.
+# The same two buttons while the end screen counts down to taking them by
+# itself - NEXT LEVEL after a win, PLAY AGAIN after a loss - in the same
+# 224 px (about 17 letters with a two-digit $seconds, which counts 3, 2, 1).
 result-next-in = NEXT LEVEL IN { $seconds }
 result-again-in = PLAY AGAIN IN { $seconds }
 

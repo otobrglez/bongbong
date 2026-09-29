@@ -11,7 +11,7 @@ use crate::hud::{
     LEVEL_BUTTON_WORD_GAP, ONLINE_COLOR, RESULT_LINE_SIZE, RESULT_SEATS_SIZE, RESULT_STATS_GAP, TEXT, WEAPON_SLOTS,
 };
 use crate::math::{Color, Rectangle};
-use crate::text::{keys, text, width};
+use crate::text::{keys, text, width, Key};
 use crate::render::game::Textures;
 use crate::simulation::PlayerCount;
 use crate::tank::{team_color, ActiveWeapon, TEAM_COLORS};
@@ -555,10 +555,10 @@ pub fn draw_leave_dialog(d: &mut impl RaylibDraw, field: Rect) {
 
 /// Draw the end screen under its outcome (docs/levels.md): every level
 /// complete after the last one's win, the round's time and wrecks, the
-/// wrecks by seat from two seats, then a level's countdown and buttons -
-/// or free play's `countdown` in their place. Field space, over the dim,
-/// at the rows `hud::result_layout` gives, which is what the hit tests
-/// read too.
+/// wrecks by seat from two seats, then a level's buttons - the way it is
+/// counting down to carrying the count - or free play's `countdown` in
+/// their place. Field space, over the dim, at the rows
+/// `hud::result_layout` gives, which is what the hit tests read too.
 pub fn draw_result(d: &mut impl RaylibDraw, field: Rect, view: &ResultView, countdown: &str) {
     fn centred(d: &mut impl RaylibDraw, field: Rect, line: &str, y: f32, size: i32, color: Color) {
         let w = width(line, size);
@@ -593,25 +593,28 @@ pub fn draw_result(d: &mut impl RaylibDraw, field: Rect, view: &ResultView, coun
     if let Some(rects) = rows.buttons {
         draw_dialog_button(d, rects.levels, &t.get(keys::RESULT_LEVELS), TEXT, None);
     }
-    // A level's countdown over its buttons, to the way the screen takes
-    // by itself: the next level after a win, the same one after a loss.
-    if let (Some(y), Some(ResultButtons { next, countdown: Some(seconds) })) = (rows.countdown_y, view.buttons) {
-        let key = if next.is_some() { keys::RESULT_NEXT_IN } else { keys::RESULT_AGAIN_IN };
-        centred(d, field, &t.fmt(key, &[("seconds", seconds.into())]), y, RESULT_LINE_SIZE, Color::RAYWHITE);
-    }
+    // The button the screen is counting down to says so and counts: the
+    // press that skips the wait is the one the eye is already on.
+    let count = view.buttons.and_then(|b| b.countdown);
+    let counting = |counted: Key, plain: Key| match count {
+        Some(seconds) => t.fmt(counted, &[("seconds", seconds.into())]),
+        None => t.get(plain),
+    };
     match (rows.buttons, view.buttons.and_then(|b| b.next)) {
         // The way on is the one to press; PLAY AGAIN stands beside it.
         (Some(rects), Some(next)) => {
             draw_dialog_button(d, rects.again, &t.get(keys::RESULT_AGAIN), TEXT, None);
             let label = match next {
-                NextLevel::Next => keys::RESULT_NEXT,
-                NextLevel::FirstAgain { .. } => keys::RESULT_FIRST,
+                NextLevel::Next => counting(keys::RESULT_NEXT_IN, keys::RESULT_NEXT),
+                NextLevel::FirstAgain { .. } => t.get(keys::RESULT_FIRST),
             };
             if let Some(rect) = rects.next {
-                draw_dialog_button(d, rect, &t.get(label), BUILD_COLOR, lit);
+                draw_dialog_button(d, rect, &label, BUILD_COLOR, lit);
             }
         }
-        (Some(rects), None) => draw_dialog_button(d, rects.again, &t.get(keys::RESULT_AGAIN), BUILD_COLOR, lit),
+        (Some(rects), None) => {
+            draw_dialog_button(d, rects.again, &counting(keys::RESULT_AGAIN_IN, keys::RESULT_AGAIN), BUILD_COLOR, lit)
+        }
         (None, _) => {
             if let Some(y) = rows.countdown_y {
                 centred(d, field, countdown, y, RESULT_LINE_SIZE, Color::RAYWHITE);

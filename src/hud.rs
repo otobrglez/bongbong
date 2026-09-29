@@ -504,11 +504,12 @@ pub struct ResultView {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ResultButtons {
     pub next: Option<NextLevel>,
-    /// Whole seconds until the screen takes its way by itself - `NEXT
-    /// LEVEL IN 3` after a win, `PLAY AGAIN IN 3` after a loss
-    /// (`Session::follow_countdown`). `None` after the last level's win,
-    /// which waits for a button: going round to level 1 is the player's
-    /// call.
+    /// Whole seconds until the screen takes its way by itself
+    /// (`Session::follow_countdown`), counted down in that way's own
+    /// button - `NEXT LEVEL IN 3` after a win, `PLAY AGAIN IN 3` after a
+    /// loss - so the press that skips the wait is the one the eye is
+    /// already on. `None` after the last level's win, which waits for a
+    /// button: going round to level 1 is the player's call.
     pub countdown: Option<u32>,
 }
 
@@ -547,8 +548,8 @@ pub struct ResultLayout {
     pub seats_y: Option<f32>,
     /// A level's buttons; free play has none.
     pub buttons: Option<ResultRects>,
-    /// The countdown, at `RESULT_LINE_SIZE`: free play's restart in the
-    /// buttons' place, a level's way on over its buttons.
+    /// Free play's restart countdown, at `RESULT_LINE_SIZE`, in the
+    /// buttons' place; a level counts down inside a button instead.
     pub countdown_y: Option<f32>,
 }
 
@@ -570,11 +571,9 @@ pub const RESULT_BUTTON_H: f32 = 48.0;
 pub const RESULT_BUTTON_GAP: f32 = 24.0;
 /// `LEVELS` is the quieter way out, and narrower.
 pub const RESULT_LEVELS_W: f32 = 160.0;
-/// The gap between a level's countdown line and its buttons.
-pub const RESULT_COUNTDOWN_GAP: f32 = 12.0;
 
 /// The end screen stacked and centred on the field: the outcome, then
-/// whichever lines `view` carries, then the countdown and the buttons. A
+/// whichever lines `view` carries, then the buttons or the countdown. A
 /// level's buttons sit in one centred row - `LEVELS`, `PLAY AGAIN`, and
 /// after a win the way on - so the way forward is always on the right;
 /// free play's countdown stands where they would.
@@ -587,10 +586,7 @@ pub fn result_layout(field: Rect, view: &ResultView) -> ResultLayout {
         + 10.0
         + if view.seats >= 2 { RESULT_SEATS_SIZE as f32 + 10.0 } else { 0.0 }
         + 14.0
-        + match view.buttons {
-            Some(b) => (if b.countdown.is_some() { line + RESULT_COUNTDOWN_GAP } else { 0.0 }) + RESULT_BUTTON_H,
-            None => line,
-        };
+        + if view.buttons.is_some() { RESULT_BUTTON_H } else { line };
     let top = ((field.h - RESULT_TITLE_SIZE as f32 - rows) / 2.0).max(8.0).round();
     let mut y = top + RESULT_TITLE_SIZE as f32 + 16.0;
     let all_clear_y = all_clear.then(|| {
@@ -606,15 +602,7 @@ pub fn result_layout(field: Rect, view: &ResultView) -> ResultLayout {
         at
     });
     y += 14.0;
-    let countdown_y = match view.buttons {
-        None => Some(y),
-        Some(ResultButtons { countdown: Some(_), .. }) => {
-            let at = y;
-            y += line + RESULT_COUNTDOWN_GAP;
-            Some(at)
-        }
-        Some(_) => None,
-    };
+    let countdown_y = view.buttons.is_none().then_some(y);
     let buttons = view.buttons.map(|b| {
         let (w, h, gap, levels_w) = (RESULT_BUTTON_W, RESULT_BUTTON_H, RESULT_BUTTON_GAP, RESULT_LEVELS_W);
         let row = levels_w + gap + w + if b.next.is_some() { gap + w } else { 0.0 };
@@ -863,7 +851,7 @@ mod hud_tests {
     /// tallest and widest form - every level complete, eight seats'
     /// shares, three buttons - its buttons finger-sized, apart and in one
     /// centred row, and each form puts its lines top to bottom without
-    /// overlapping.
+    /// overlapping; a level's countdown is in a button, never a line.
     #[test]
     fn the_end_screen_fits_the_smallest_field_in_every_form() {
         let fields = [Rect::new(0.0, 0.0, 768.0, 384.0), Rect::new(0.0, 0.0, W, H), Rect::new(0.0, 0.0, 1536.0, 768.0)];
@@ -889,13 +877,7 @@ mod hud_tests {
                             y = at + size as f32;
                         }
                     }
-                    let counting = buttons.is_none_or(|b| b.countdown.is_some());
-                    assert_eq!(rows.countdown_y.is_some(), counting, "{what}: a countdown line exactly where one counts");
-                    if let (Some(at), Some(r)) = (rows.countdown_y, rows.buttons) {
-                        assert!(at >= y, "{what}: the countdown overlaps the lines above");
-                        y = at + RESULT_LINE_SIZE as f32;
-                        assert!(y <= r.again.y, "{what}: the countdown runs into the buttons");
-                    }
+                    assert_eq!(rows.countdown_y.is_some(), buttons.is_none(), "{what}: a line of countdown only in free play");
                     match rows.buttons {
                         Some(r) => {
                             let row: Vec<Rectangle> = [Some(r.levels), Some(r.again), r.next].into_iter().flatten().collect();
