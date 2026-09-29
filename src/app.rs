@@ -14,6 +14,7 @@ use crate::hud::{
     leave_button_rect, leave_dialog_rects, mode_button_rect, online_button_rect, players_button_rect,
     players_dialog_rects, restart_button_rect, BAR_FILL,
 };
+use crate::levels::{Campaign, Levels};
 use crate::lobby::LobbyInput;
 use crate::mode::{Driver, Session};
 // Online play reaches a room over a socket or the rig over a thread,
@@ -190,6 +191,72 @@ fn device_token(nick: &str) -> String {
     format!("bongbong-{nick}")
 }
 
+/// The level progress the page kept in `localStorage`: the map name of
+/// the furthest level reached (docs/levels.md).
+#[cfg(target_os = "emscripten")]
+const PAGE_PROGRESS: &std::ffi::CStr =
+    c"(function(){try{return String(localStorage.getItem('bongbong.level')||'')}catch(e){return ''}})()";
+
+/// Where a desktop or a phone keeps its level progress: the platform's
+/// data directory (`levels::progress_path`), or on Android the activity's
+/// own files directory.
+#[cfg(not(target_os = "emscripten"))]
+fn progress_path() -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "android")]
+    {
+        android::data_dir().map(|dir| dir.join("progress.toml"))
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        crate::levels::progress_path()
+    }
+}
+
+/// The furthest level this player reached in an earlier session, as its
+/// map's name: the page's `localStorage` on the web, a file elsewhere.
+/// `None` for a first session, or a store that cannot be read.
+fn load_progress() -> Option<String> {
+    #[cfg(target_os = "emscripten")]
+    {
+        let level = page_string(PAGE_PROGRESS).trim().to_string();
+        (!level.is_empty()).then_some(level)
+    }
+    #[cfg(not(target_os = "emscripten"))]
+    {
+        progress_path().and_then(|path| crate::levels::read_progress(&path))
+    }
+}
+
+/// Keep `level` as the furthest level reached, where `load_progress`
+/// will find it. A store that cannot be written is logged and skipped:
+/// the session plays on, it only forgets.
+fn save_progress(level: &str) {
+    #[cfg(target_os = "emscripten")]
+    {
+        unsafe extern "C" {
+            fn emscripten_run_script(script: *const std::os::raw::c_char);
+        }
+        // A level's name is a map name - letters, digits, `-` and `_`
+        // (`Levels::parse`) - so it goes into the script as it is.
+        if !level.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+            return;
+        }
+        let script = format!("(function(){{try{{localStorage.setItem('bongbong.level','{level}')}}catch(e){{}}}})()");
+        let Ok(script) = std::ffi::CString::new(script) else { return };
+        // SAFETY: a NUL-terminated script, evaluated synchronously; it
+        // catches its own exceptions, so nothing unwinds into the runtime.
+        unsafe { emscripten_run_script(script.as_ptr()) };
+    }
+    #[cfg(not(target_os = "emscripten"))]
+    match progress_path() {
+        Some(path) => match crate::levels::write_progress(&path, level) {
+            Ok(()) => eprintln!("[levels] reached {level} ({})", path.display()),
+            Err(e) => eprintln!("[levels] {e}"),
+        },
+        None => eprintln!("[levels] reached {level}, with nowhere to keep it"),
+    }
+}
+
 /// The play clock: real frame time paid out in whole simulation steps of
 /// `PHYSICS_FIXED_DT`, so `Game::update` always sees the step the dev
 /// server, the probe and a replay see (docs/online-coop-prd.md §4.1). A
@@ -332,14 +399,21 @@ pub struct Args {
     #[arg(long = "no-shadows")]
     no_shadows: bool,
 
-    /// Load a saved battlefield (see docs/map-editor-design.md) instead of
-    /// today's fully-random layout - border walls, the player fortress, and
-    /// enemy spawns stay procedural on top of the map's terrain. Loaded (and
-    /// validated) eagerly at CLI-parse time, so a missing/malformed map file
-    /// fails fast with a clear error instead of silently falling back to
-    /// random. With `--editor` the builder opens on this map.
+    /// Play this map instead of the levels (see docs/map-editor-design.md
+    /// and docs/levels.md) - border walls and enemy spawns stay procedural
+    /// on top of the map's terrain. Free play, which restarts on its own,
+    /// unless the file is one of the levels' maps by name. Loaded (and
+    /// validated) eagerly at CLI-parse time, so a missing/malformed map
+    /// file fails fast with a clear error. With `--editor` the builder
+    /// opens on this map.
     #[arg(short = 'm', long = "map", value_parser = parse_map)]
     map: Option<crate::map::MapFile>,
+
+    /// Start on this level of levels.toml - its number, counted from 1,
+    /// or its map's name - instead of the furthest one reached
+    /// (docs/levels.md). Progress still moves only on a win.
+    #[arg(long = "level", conflicts_with = "map")]
+    level: Option<String>,
 
     /// Start in Build mode - the map builder - instead of playing
     /// (docs/game-editor-fusion.md). The round is set up as usual, so
@@ -688,7 +762,26 @@ pub fn run(args: Args) {
     // the player makes it - the bitmap is fitted into it by `view::View`.
     // The simulation, the physics, the maps and the probe only ever see
     // the field.
-    let map = args.map.clone().unwrap_or_else(default_map);
+    // The levels (docs/levels.md): a session opens on the furthest one
+    // this player has reached, or on `--level`; `-m` is free play on the
+    // map it names.
+    let campaign = Campaign::new(Levels::shipped(), load_progress().as_deref());
+    let map = match &args.map {
+        Some(map) => map.clone(),
+        None => {
+            let start = match args.level.as_deref() {
+                Some(spec) => campaign.levels.find(spec).unwrap_or_else(|| {
+                    eprintln!("[levels] no level {spec:?}: a number from 1 to {} or a level's map name", campaign.levels.len());
+                    std::process::exit(2);
+                }),
+                None => campaign.reached(),
+            };
+            campaign.map(start).unwrap_or_else(|e| {
+                eprintln!("[levels] level {}: {e}; playing the default map", start + 1);
+                default_map()
+            })
+        }
+    };
     let (screen_width, screen_height) = {
         let (w, h) = map.field_size();
         (w.round() as i32, h.round() as i32)
@@ -955,6 +1048,7 @@ pub fn run(args: Args) {
     // The two modes (docs/game-editor-fusion.md): the round and the map
     // builder, whichever is live. `--editor` starts on the builder.
     let mut session = Session::new(game);
+    session.set_campaign(campaign);
     session.builder.cli_overrides = CliOverrides {
         tanks: args.enemies.is_some(),
         tank: args.tank.is_some(),
@@ -1248,6 +1342,8 @@ pub fn run(args: Args) {
                     let rects = leave_dialog_rects(layout.field);
                     let field_p = layout.to_field(pointer);
                     if pressed {
+                        // The dialog's own press is nobody's shot.
+                        touch.claim(&touch_points);
                         if rects.leave.contains(field_p) {
                             session.answer_dialog(true);
                         } else if rects.stay.contains(field_p)
@@ -1261,6 +1357,14 @@ pub fn run(args: Args) {
                     } else if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) || tab {
                         session.answer_dialog(false);
                     }
+                } else if pressed && session.press_result(layout.to_field(pointer)) {
+                    // A level's end screen (docs/levels.md): PLAY AGAIN or
+                    // the way on. The tap that pressed it must not also be
+                    // the fire press that skips the next banner.
+                    touch.claim(&touch_points);
+                } else if rl.is_key_pressed(KeyboardKey::KEY_ENTER) && session.enter_result() {
+                    // Enter takes the way on after a win, PLAY AGAIN after
+                    // a loss; R is the simulation's own restart.
                 } else if tab || (pressed && mode_button_rect(layout.panel).contains(pointer)) {
                     session.press_build();
                 } else if crate::TWO_PLAYERS_AVAILABLE
@@ -1482,6 +1586,12 @@ pub fn run(args: Args) {
         } else {
             clock.reset();
             carried = Input::default();
+        }
+        // A won level is progress, kept the frame it is won - a player who
+        // closes the window on the end screen has still reached the next.
+        session.note_outcome();
+        if let Some(level) = session.take_progress() {
+            save_progress(&level);
         }
         // The round on screen: the room's replica in an online round,
         // the session's own otherwise.

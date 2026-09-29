@@ -546,6 +546,20 @@ impl MapEditor {
         self.rebuild_ground();
     }
 
+    /// Open `map` as a new document: the canvas, the baseline and an
+    /// empty undo history - the level a round has moved on to
+    /// (`mode::Session::start_level`), which undo must not walk back out
+    /// of into the level before.
+    pub fn open(&mut self, map: MapFile) {
+        self.finish_stroke();
+        self.popup = None;
+        self.status = None;
+        self.map = map;
+        self.baseline = self.map.clone();
+        self.history.clear();
+        self.rebuild_ground();
+    }
+
     /// Revert cells and settings to the baseline, as one undo step.
     pub fn reset(&mut self) {
         self.finish_stroke();

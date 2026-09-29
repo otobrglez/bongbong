@@ -977,6 +977,7 @@ pub mod ground;
 pub mod hud;
 pub mod laser;
 pub mod level;
+pub mod levels;
 pub mod lobby;
 pub mod map;
 pub mod mushroom;

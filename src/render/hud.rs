@@ -5,9 +5,10 @@
 use sola_raylib::prelude::*;
 
 use crate::hud::{
-    leave_button_rect, leave_dialog_rects, mode_button_rect, players_button_rect, players_dialog_rects, restart_button_rect,
-    weapon_color, HudLayout, HudModel, SeatHud, WeaponSlot, BAR_FILL, BUILD_COLOR, DIALOG_W, DIM, HUD_LABEL_SIZE,
-    HUD_TEXT_SIZE, ONLINE_COLOR, TEXT, WEAPON_SLOTS,
+    clock_text, leave_button_rect, leave_dialog_rects, mode_button_rect, players_button_rect, players_dialog_rects,
+    restart_button_rect, result_layout, weapon_color, HudLayout, HudModel, NextLevel, ResultButtons, ResultView, SeatHud,
+    WeaponSlot, BAR_FILL, BUILD_COLOR, DIALOG_W, DIM, HUD_LABEL_SIZE, HUD_TEXT_SIZE, ONLINE_COLOR, RESULT_LINE_SIZE,
+    RESULT_SEATS_SIZE, RESULT_STATS_GAP, TEXT, WEAPON_SLOTS,
 };
 use crate::math::{Color, Rectangle};
 use crate::text::{keys, text, width};
@@ -513,6 +514,63 @@ pub fn draw_leave_dialog(d: &mut impl RaylibDraw, field: Rect) {
     draw_dialog_panel(d, r.panel, &t.get(keys::LEAVE_TITLE), &t.get(keys::LEAVE_SUB));
     draw_dialog_button(d, r.leave, &t.get(keys::LEAVE_CONFIRM), BUILD_COLOR, None);
     draw_dialog_button(d, r.stay, &t.get(keys::LEAVE_STAY), TEXT, None);
+}
+
+/// Draw the end screen under its outcome (docs/levels.md): every level
+/// complete after the last one's win, the round's time and wrecks, the
+/// wrecks by seat from two seats, then a level's buttons - or free play's
+/// `countdown` in their place. Field space, over the dim, at the rows
+/// `hud::result_layout` gives, which is what the hit tests read too.
+pub fn draw_result(d: &mut impl RaylibDraw, field: Rect, view: &ResultView, countdown: &str) {
+    fn centred(d: &mut impl RaylibDraw, field: Rect, line: &str, y: f32, size: i32, color: Color) {
+        let w = width(line, size);
+        d.draw_text(line, (field.w as i32 - w) / 2, y as i32, size, color);
+    }
+    let t = text();
+    let rows = result_layout(field, view);
+    if let (Some(y), Some(ResultButtons { next: Some(NextLevel::FirstAgain { levels }) })) = (rows.all_clear_y, view.buttons) {
+        centred(d, field, &t.fmt(keys::RESULT_ALL_CLEAR, &[("count", levels.into())]), y, RESULT_LINE_SIZE, BUILD_COLOR);
+    }
+    let time = t.fmt(keys::RESULT_TIME, &[("time", clock_text(view.stats.seconds).into())]);
+    let wrecks = t.fmt(keys::RESULT_WRECKS, &[("n", view.stats.destroyed.into()), ("total", view.stats.enemies.into())]);
+    let (time_w, wrecks_w) = (width(&time, RESULT_LINE_SIZE), width(&wrecks, RESULT_LINE_SIZE));
+    let x = (field.w as i32 - time_w - RESULT_STATS_GAP - wrecks_w) / 2;
+    d.draw_text(&time, x, rows.stats_y as i32, RESULT_LINE_SIZE, Color::RAYWHITE);
+    d.draw_text(&wrecks, x + time_w + RESULT_STATS_GAP, rows.stats_y as i32, RESULT_LINE_SIZE, Color::RAYWHITE);
+    if let Some(y) = rows.seats_y {
+        // Each seat's share in the colour its tank wears, `P1 7  P2 5`.
+        let seats = view.seats.min(MAX_SEATS);
+        let gap = if seats > 4 { RESULT_STATS_GAP / 2 } else { RESULT_STATS_GAP };
+        let parts: Vec<String> = (0..seats)
+            .map(|seat| format!("{} {}", t.fmt(keys::SEAT_LABEL, &[("n", (seat + 1).into())]), view.stats.by_seat[seat]))
+            .collect();
+        let total: i32 = parts.iter().map(|p| width(p, RESULT_SEATS_SIZE)).sum::<i32>() + gap * (seats as i32 - 1);
+        let mut x = (field.w as i32 - total) / 2;
+        for (seat, part) in parts.iter().enumerate() {
+            d.draw_text(part, x, y as i32, RESULT_SEATS_SIZE, team_color(seat as u8));
+            x += width(part, RESULT_SEATS_SIZE) + gap;
+        }
+    }
+    let lit = Some(Color::new(BUILD_COLOR.r, BUILD_COLOR.g, BUILD_COLOR.b, 40));
+    match (rows.buttons, view.buttons.and_then(|b| b.next)) {
+        // The way on is the one to press; PLAY AGAIN stands beside it.
+        (Some(rects), Some(next)) => {
+            draw_dialog_button(d, rects.again, &t.get(keys::RESULT_AGAIN), TEXT, None);
+            let label = match next {
+                NextLevel::Next => keys::RESULT_NEXT,
+                NextLevel::FirstAgain { .. } => keys::RESULT_FIRST,
+            };
+            if let Some(rect) = rects.next {
+                draw_dialog_button(d, rect, &t.get(label), BUILD_COLOR, lit);
+            }
+        }
+        (Some(rects), None) => draw_dialog_button(d, rects.again, &t.get(keys::RESULT_AGAIN), BUILD_COLOR, lit),
+        (None, _) => {
+            if let Some(y) = rows.countdown_y {
+                centred(d, field, countdown, y, RESULT_LINE_SIZE, Color::RAYWHITE);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

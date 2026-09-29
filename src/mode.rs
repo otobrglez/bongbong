@@ -19,10 +19,16 @@
 //! over and the window comes back to the screen it came from, code, QR
 //! and roster intact, where the host can ask for a rematch. Only
 //! `leave_online` gives the seat up.
+//!
+//! The local round is a level when its map is one (`levels.rs`,
+//! docs/levels.md): its end screen then waits for `PLAY AGAIN` or, after
+//! a win, `NEXT LEVEL`, and a win is progress for the store. Any other
+//! map is free play and restarts on its own.
 
 use crate::ai::Intent;
 use crate::editor::{BuilderInput, EditorAction, MapEditor};
-use crate::hud::PlayChrome;
+use crate::hud::{result_layout, LevelBanner, NextLevel, PlayChrome, ResultButtons, ResultView};
+use crate::levels::Campaign;
 use crate::lobby::{Lobby, LobbyAction, LobbyInput, RoomPhase, RoomView};
 use crate::map::MapFile;
 use crate::net::client::{RoomSetup, Target};
@@ -96,6 +102,10 @@ pub struct Session {
     /// per tab (`site/src/scripts/room.ts`), which is what makes two
     /// tabs two players. `app.rs` sets it once at startup.
     pub token: String,
+    /// The levels and how far this player has got (`levels.rs`), set by
+    /// `set_campaign`. `None` - a test's session, a tool's - makes every
+    /// map free play.
+    pub campaign: Option<Campaign>,
 }
 
 /// A session reads as its round: the dev server, its tests and `main.rs`
@@ -131,6 +141,138 @@ impl Session {
             site: SiteBase::deployed(),
             nick: "player".into(),
             token: "bongbong-player".into(),
+            campaign: None,
+        }
+    }
+
+    /// Put the levels on the session: from here on a round on a level's
+    /// map is that level.
+    pub fn set_campaign(&mut self, campaign: Campaign) {
+        self.campaign = Some(campaign);
+        self.sync_level();
+    }
+
+    /// Which level the local round is, if its map is one of the levels
+    /// (`levels::Campaign::position`).
+    pub fn level(&self) -> Option<usize> {
+        self.campaign.as_ref()?.position(self.game.map.name.as_deref())
+    }
+
+    /// A level's end screen waits for its buttons; free play's restarts
+    /// on its own. Called wherever the round's map changes.
+    fn sync_level(&mut self) {
+        self.game.hold_end_screen = self.level().is_some();
+    }
+
+    /// Start level `i` - its map as last edited this session - on the
+    /// field and in the builder, as a new document there, and a fresh
+    /// round on it (a `--seed` stays pinned, the banner shows).
+    pub fn start_level(&mut self, i: usize) -> Result<(), String> {
+        let map = self.campaign.as_ref().ok_or("this session has no levels")?.map(i)?;
+        self.builder.open(map.clone());
+        self.game.map = map;
+        self.sync_level();
+        self.dialog = false;
+        self.players_dialog = false;
+        let (width, height) = self.game.map.field_size();
+        self.game.init(width, height);
+        Ok(())
+    }
+
+    /// `PLAY AGAIN`: the same map, a fresh round - what the R key does.
+    /// Play mode only.
+    pub fn play_again(&mut self) {
+        if self.driver == Driver::Play {
+            self.dialog = false;
+            self.players_dialog = false;
+            let (width, height) = self.game.map.field_size();
+            self.game.init(width, height);
+        }
+    }
+
+    /// `NEXT LEVEL`: after a won level, the one after it - the first again
+    /// after the last. A no-op anywhere else; answers whether it moved.
+    pub fn next_level(&mut self) -> bool {
+        let Some(i) = self.level() else { return false };
+        if self.driver != Driver::Play || self.game.outcome() != Outcome::Won {
+            return false;
+        }
+        let next = self.campaign.as_ref().map_or(i, |c| c.next(i));
+        match self.start_level(next) {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("[levels] level {}: {e}", next + 1);
+                false
+            }
+        }
+    }
+
+    /// Count a won level as progress. Called after every frame's steps:
+    /// only the first call after a win moves anything, and
+    /// `take_progress` hands the move to the store.
+    pub fn note_outcome(&mut self) {
+        if self.game.outcome() != Outcome::Won {
+            return;
+        }
+        if let (Some(i), Some(campaign)) = (self.level(), self.campaign.as_mut()) {
+            campaign.won(i);
+        }
+    }
+
+    /// The progress to write, once per change: the map name of the
+    /// furthest level reached.
+    pub fn take_progress(&mut self) -> Option<String> {
+        self.campaign.as_mut()?.take_unsaved()
+    }
+
+    /// The end screen's content: set once a local round is decided, with
+    /// a level's buttons on a level.
+    fn result_view(&self) -> Option<ResultView> {
+        if self.game.outcome() == Outcome::Playing {
+            return None;
+        }
+        let buttons = self.level().zip(self.campaign.as_ref()).map(|(i, campaign)| ResultButtons {
+            next: (self.game.outcome() == Outcome::Won).then(|| {
+                if campaign.is_last(i) { NextLevel::FirstAgain { levels: campaign.levels.len() } } else { NextLevel::Next }
+            }),
+        });
+        Some(ResultView { stats: self.game.round_stats(), seats: self.game.players.count(), buttons })
+    }
+
+    /// A press at `p` (field space) on a level's end screen: `PLAY AGAIN`
+    /// or the way on. Answers whether it landed on a button; a press
+    /// anywhere else is the caller's.
+    pub fn press_result(&mut self, p: crate::math::Vec2) -> bool {
+        if !self.playing() {
+            return false;
+        }
+        let Some(view) = self.result_view() else { return false };
+        let (width, height) = self.game.map.field_size();
+        let Some(rects) = result_layout(Rect::new(0.0, 0.0, width, height), &view).buttons else { return false };
+        if rects.again.contains(p) {
+            self.play_again();
+            true
+        } else if rects.next.is_some_and(|r| r.contains(p)) {
+            self.next_level();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Enter on a level's end screen: the way on after a win, `PLAY
+    /// AGAIN` after a loss. Answers whether there was a screen to answer.
+    pub fn enter_result(&mut self) -> bool {
+        if !self.playing() {
+            return false;
+        }
+        match self.result_view().and_then(|view| view.buttons) {
+            Some(ResultButtons { next: Some(_) }) => self.next_level(),
+            Some(ResultButtons { next: None }) => {
+                self.play_again();
+                true
+            }
+            None => false,
         }
     }
 
@@ -227,6 +369,11 @@ impl Session {
             // A menu left open would still be there on the next BUILD.
             self.builder.close_popup();
             self.game.map = self.builder.map().clone();
+            // A level's canvas is that level for the rest of the session.
+            if let Some(campaign) = &mut self.campaign {
+                campaign.remember_edit(&self.game.map);
+            }
+            self.sync_level();
             let (width, height) = self.game.map.field_size();
             self.game.init(width, height);
             self.driver = Driver::Play;
@@ -459,6 +606,7 @@ impl Session {
     pub fn replace_map(&mut self, map: MapFile) {
         self.game.map = map.clone();
         self.builder.load(map);
+        self.sync_level();
     }
 
     /// One frame of the builder, in build mode: `PLAY` starts the round.
@@ -520,6 +668,11 @@ impl Session {
                 status: None,
                 lobby: None,
                 countdown_label: None,
+                level: self.level().zip(self.campaign.as_ref()).and_then(|(i, campaign)| {
+                    let level = campaign.levels.get(i)?;
+                    Some(LevelBanner { number: i + 1, count: campaign.levels.len(), title: level.title() })
+                }),
+                result: self.result_view(),
             },
         }
     }
@@ -947,5 +1100,169 @@ mod session_tests {
         assert_eq!(s.game.map.cell(3, 3), Some(&CellObject::Gate));
         assert_eq!(s.builder.map().cell(3, 3), Some(&CellObject::Gate));
         assert!(!s.builder.dirty());
+    }
+
+    /// Two band levels, so a win on the second is the last level's.
+    fn two_levels() -> crate::levels::Levels {
+        crate::levels::Levels::parse(
+            "[[level]]\nmap = \"lotus-lagoon\"\ntitle = \"Lotus Lagoon\"\n[[level]]\nmap = \"glasshouses\"\ntitle = \"Glasshouse Gardens\"\n",
+        )
+        .expect("the test's levels parse")
+    }
+
+    /// A session on `levels`, on level `i`, one enemy a round.
+    fn level_session(levels: crate::levels::Levels, i: usize) -> Session {
+        let campaign = Campaign::new(levels, None);
+        let mut game = Game::default();
+        game.enemy_count_override = Some(1);
+        game.seed_override = Some(7);
+        game.map = campaign.map(i).expect("the level opens");
+        let (w, h) = game.map.field_size();
+        game.init(w, h);
+        let mut s = Session::new(game);
+        s.set_campaign(campaign);
+        s
+    }
+
+    fn step(s: &mut Session) {
+        let (w, h) = s.game.map.field_size();
+        s.game.update(crate::simulation::Input::default(), crate::PHYSICS_FIXED_DT, w, h);
+        s.note_outcome();
+    }
+
+    /// Wreck the round's enemy (`win`) or player 1 (`!win`) and step
+    /// once, so the round ends.
+    fn finish(s: &mut Session, win: bool) {
+        let slot = if win {
+            s.game.world.query::<&crate::tank::Tank>().with::<&crate::ai::Ai>().iter().map(|t| t.owner_slot()).min().expect("an enemy")
+        } else {
+            0
+        };
+        s.game.debug_kill(slot).expect("the tank exists");
+        step(s);
+        assert_eq!(s.game.outcome(), if win { Outcome::Won } else { Outcome::Lost });
+    }
+
+    fn centre(r: crate::math::Rectangle) -> crate::math::Vec2 {
+        crate::math::Vec2::new(r.x + r.width / 2.0, r.y + r.height / 2.0)
+    }
+
+    fn result_rects(s: &Session) -> Option<crate::hud::ResultRects> {
+        let view = s.play_chrome().result?;
+        let (w, h) = s.game.map.field_size();
+        crate::hud::result_layout(Rect::new(0.0, 0.0, w, h), &view).buttons
+    }
+
+    /// A level opens with its number and title, waits on its end screen
+    /// for as long as it takes, and a win is progress the frame it
+    /// happens: `NEXT LEVEL` then opens the next one, and the last one's
+    /// way on is the first level again.
+    #[test]
+    fn a_won_level_waits_for_next_level_and_the_last_leads_back_to_the_first() {
+        let mut s = level_session(two_levels(), 0);
+        assert_eq!(s.level(), Some(0));
+        assert!(s.game.hold_end_screen);
+        let banner = s.play_chrome().level.expect("a level's banner");
+        assert_eq!((banner.number, banner.count, banner.title.as_str()), (1, 2, "Lotus Lagoon"));
+        assert!(s.play_chrome().result.is_none(), "no end screen mid-round");
+
+        finish(&mut s, true);
+        assert_eq!(s.take_progress().as_deref(), Some("glasshouses"), "the next level is reached");
+        assert_eq!(s.take_progress(), None, "once");
+        let view = s.play_chrome().result.expect("the end screen");
+        assert_eq!(view.buttons, Some(ResultButtons { next: Some(NextLevel::Next) }));
+        assert_eq!((view.stats.destroyed, view.stats.enemies), (1, 1));
+        for _ in 0..((crate::tuning::tuning().restart_delay * 60.0) as usize + 60) {
+            step(&mut s);
+        }
+        assert_eq!(s.game.outcome(), Outcome::Won, "a level never restarts on its own");
+
+        assert!(s.enter_result(), "Enter takes the way on");
+        assert_eq!(s.level(), Some(1));
+        assert_eq!(s.game.outcome(), Outcome::Playing);
+        assert_eq!(s.builder.map().name.as_deref(), Some("glasshouses"), "the builder holds the level on the field");
+        assert_eq!(s.builder.history().undo_depth(), 0, "and undo cannot walk back into the last one");
+        assert_eq!(s.play_chrome().level.expect("a level").number, 2);
+
+        finish(&mut s, true);
+        assert_eq!(s.take_progress(), None, "the last level opens nothing further");
+        let next = s.play_chrome().result.and_then(|v| v.buttons).and_then(|b| b.next);
+        assert_eq!(next, Some(NextLevel::FirstAgain { levels: 2 }));
+        let rects = result_rects(&s).expect("the buttons");
+        assert!(s.press_result(centre(rects.next.expect("the way on"))));
+        assert_eq!(s.level(), Some(0), "round to the first");
+    }
+
+    /// A lost level offers only `PLAY AGAIN`: the same level, a fresh
+    /// round, and nothing gained. A press off the buttons is not theirs.
+    #[test]
+    fn a_lost_level_offers_only_play_again() {
+        let mut s = level_session(two_levels(), 0);
+        finish(&mut s, false);
+        assert_eq!(s.take_progress(), None);
+        let view = s.play_chrome().result.expect("the end screen");
+        assert_eq!(view.buttons, Some(ResultButtons { next: None }));
+        assert!(!s.next_level(), "no way on after a loss");
+        let rects = result_rects(&s).expect("the button");
+        assert!(rects.next.is_none());
+        assert!(!s.press_result(crate::math::Vec2::new(4.0, 4.0)), "a press off the buttons");
+        assert_eq!(s.game.outcome(), Outcome::Lost);
+        assert!(s.press_result(centre(rects.again)));
+        assert_eq!((s.level(), s.game.outcome()), (Some(0), Outcome::Playing), "the same level again");
+        // Enter after a loss is PLAY AGAIN too.
+        finish(&mut s, false);
+        assert!(s.enter_result());
+        assert_eq!((s.level(), s.game.outcome()), (Some(0), Outcome::Playing));
+    }
+
+    /// A level edited in the builder is played as edited, and still is
+    /// when the campaign comes back round to it; the dialogs and the
+    /// builder keep the end screen's buttons out of reach.
+    #[test]
+    fn a_levels_edit_is_played_every_time_it_comes_round() {
+        let mut s = level_session(two_levels(), 0);
+        let mut edited = s.builder.map().clone();
+        edited.set_cell(5, 5, CellObject::Gate);
+        s.press_build();
+        s.answer_dialog(true);
+        s.builder.load(edited.clone());
+        s.play();
+        assert_eq!(s.level(), Some(0), "the canvas is still that level by name");
+        assert_eq!(s.game.map.cell(5, 5), Some(&CellObject::Gate));
+        finish(&mut s, true);
+        s.next_level();
+        finish(&mut s, true);
+        s.next_level();
+        assert_eq!(s.level(), Some(0));
+        assert_eq!(s.game.map.cell(5, 5), Some(&CellObject::Gate), "played as edited");
+        assert_eq!(s.builder.map().cell(5, 5), Some(&CellObject::Gate), "and the builder has the edit");
+        finish(&mut s, true);
+        s.press_build();
+        assert_eq!(s.mode(), Driver::Build, "the end screen switches at once");
+        assert!(!s.press_result(centre(result_rects(&s).expect("buttons").again)), "not while the builder is up");
+    }
+
+    /// Any map that is not a level is free play: its end screen shows the
+    /// numbers and counts down to a restart of its own, with no buttons.
+    #[test]
+    fn a_map_that_is_no_level_is_free_play() {
+        let mut s = session();
+        s.set_campaign(Campaign::new(two_levels(), None));
+        assert_eq!(s.level(), None);
+        assert!(!s.game.hold_end_screen);
+        assert!(s.play_chrome().level.is_none());
+        // The default map is a wave round, so its enemies are still out
+        // of the field: the round ends on player 1's wreck.
+        s.game.debug_kill(0).unwrap();
+        s.game.update(crate::simulation::Input::default(), crate::PHYSICS_FIXED_DT, W, H);
+        s.note_outcome();
+        let view = s.play_chrome().result.expect("the numbers still show");
+        assert_eq!(view.buttons, None);
+        assert_eq!(s.take_progress(), None);
+        assert!(!s.enter_result() && !s.next_level());
+        // A level's map by name makes it that level, however it arrives.
+        s.replace_map(crate::map::open_map("glasshouses").unwrap());
+        assert_eq!(s.level(), Some(1));
+        assert!(s.game.hold_end_screen);
     }
 }

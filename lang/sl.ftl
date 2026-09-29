@@ -42,6 +42,31 @@ mission-destroy-banner = UNIČI VSE!
 wave-banner = VAL { $n }
 wave-final = ZADNJI VAL
 
+## Stopnje
+
+level-number = STOPNJA { $n } / { $count }
+result-time = ČAS { $time }
+result-wrecks = UNIČENIH { $n } / { $total }
+result-all-clear = VSE STOPNJE SO OPRAVLJENE!
+result-again = ŠE ENKRAT
+result-next = NASLEDNJA STOPNJA
+result-first = NAZAJ NA ZAČETEK
+
+level-lotus-lagoon = Lotosova laguna
+level-glasshouses = Vrt s steklenjaki
+level-oasis-bazaar = Bazar v oazi
+level-carnival = Karneval
+level-jungle-temple = Tempelj v džungli
+level-hedge-maze = Labirint živih mej
+level-archipelago = Otočje
+level-harbor-lights = Luči pristanišča
+level-serpent-river = Kačja reka
+level-no-mans-land = Nikogaršnje ozemlje
+level-scrapyard = Odpad
+level-black-gold = Črno zlato
+level-castle-moat = Grajski jarek
+level-grand-campaign = Veliki pohod
+
 seat-label = P{ $n }
 
 touch-steer = VLECI ZA VOŽNJO

@@ -1127,6 +1127,8 @@ impl DevServer {
             "language": crate::text::language(),
             "dialog_open": session.dialog,
             "players_dialog_open": session.players_dialog,
+            "level": level_json(session),
+            "stats": game.round_stats(),
             "builder": { "dirty": session.builder.dirty(), "tool": session.builder.tool().name() },
             "events_kept": self.events.len(),
             "next_event_seq": self.next_seq,
@@ -1656,6 +1658,9 @@ impl DevServer {
                     } else if rects.stay.contains(p) || !rects.panel.contains(p) {
                         session.answer_dialog(false);
                     }
+                } else if !right && session.press_result(layout.to_field(point)) {
+                    // A level's end screen: PLAY AGAIN or the way on.
+                    self.round_started(session);
                 } else if mode_button_rect(layout.panel).contains(point) {
                     session.press_build();
                 } else if crate::TWO_PLAYERS_AVAILABLE && players_button_rect(layout.panel).contains(point) {
@@ -1763,8 +1768,14 @@ impl DevServer {
                 Some("escape") => {
                     session.answer_dialog(false);
                 }
+                // The leave dialog's answer while it asks; otherwise a
+                // level's end screen takes it, as `app.rs` does.
                 Some("enter") => {
-                    session.answer_dialog(true);
+                    if session.dialog {
+                        session.answer_dialog(true);
+                    } else if session.enter_result() {
+                        self.round_started(session);
+                    }
                 }
                 // undo/redo/backspace, 1/2 and typed text mean nothing in play.
                 _ => {}
@@ -1980,6 +1991,21 @@ fn terrain_json(game: &Game, params: &Value) -> Result<Value, String> {
 }
 
 /// `mode`'s reply: the session's mode and the builder's state in one look.
+/// The level the local round is (docs/levels.md) - its number, map and
+/// title, and the furthest one reached - or `null` in free play.
+fn level_json(session: &Session) -> Value {
+    let (Some(i), Some(campaign)) = (session.level(), session.campaign.as_ref()) else { return Value::Null };
+    let Some(level) = campaign.levels.get(i) else { return Value::Null };
+    json!({
+        "number": i + 1,
+        "count": campaign.levels.len(),
+        "map": level.map,
+        "title": level.title(),
+        "reached": campaign.reached() + 1,
+        "last": campaign.is_last(i),
+    })
+}
+
 fn mode_json(session: &Session) -> Value {
     let b = &session.builder;
     json!({
@@ -1994,6 +2020,7 @@ fn mode_json(session: &Session) -> Value {
         "open_menu": b.open_menu(),
         "undo_depth": b.history().undo_depth(),
         "redo_depth": b.history().redo_depth(),
+        "level": level_json(session),
     })
 }
 
@@ -3626,6 +3653,49 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!(s.builder.map().cell(10, 5), Some(&crate::map::CellObject::Wall { material: crate::obstacle::Material::Iron }));
         let status = ask(&mut server, &tx, &mut s, "play", json!({ "intro": true })).unwrap();
         assert!(status["intro_seconds_left"].as_f64().unwrap() > 0.0, "{status}");
+    }
+
+    /// A level's end screen answers `click` and `key` the way `app.rs`
+    /// answers the mouse and the keyboard: NEXT LEVEL by its button, PLAY
+    /// AGAIN by Enter after a loss, and `status` names the level.
+    #[test]
+    fn a_levels_end_screen_takes_clicks_and_enter() {
+        let (mut server, tx) = DevServer::headless();
+        let campaign = crate::levels::Campaign::new(crate::levels::Levels::shipped(), None);
+        let mut game = Game::default();
+        game.enemy_count_override = Some(1);
+        game.seed_override = Some(3);
+        game.map = campaign.map(0).expect("level 1 opens");
+        let (w, h) = game.map.field_size();
+        game.init(w, h);
+        let mut s = Session::new(game);
+        s.set_campaign(campaign);
+        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert_eq!(status["level"]["number"], 1, "{status}");
+        assert_eq!(status["level"]["map"], "lotus-lagoon");
+        assert_eq!(status["stats"]["enemies"], 1);
+
+        let enemy = s.game.world.query::<&crate::tank::Tank>().with::<&crate::ai::Ai>().iter().map(|t| t.owner_slot()).min().unwrap();
+        s.game.debug_kill(enemy).unwrap();
+        s.game.update(Input::default(), crate::PHYSICS_FIXED_DT, w, h);
+        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert_eq!((status["outcome"].as_str(), status["stats"]["destroyed"].as_u64()), (Some("won"), Some(1)), "{status}");
+        let view = s.play_chrome().result.expect("the end screen");
+        let rects = crate::hud::result_layout(crate::Rect::new(0.0, 0.0, w, h), &view).buttons.expect("a level's buttons");
+        let next = rects.next.expect("the way on");
+        let at = json!({ "x": next.x + next.width / 2.0, "y": next.y + next.height / 2.0 + Layout::for_field(w, h).field.y });
+        let m = ask(&mut server, &tx, &mut s, "click", at).unwrap();
+        assert_eq!(m["level"]["number"], 2, "{m}");
+        assert_eq!(m["mode"], "play");
+        assert!(server.lockstep(), "a new round, frozen like `restart`'s");
+
+        s.game.debug_kill(0).unwrap();
+        let (w, h) = s.game.map.field_size();
+        s.game.update(Input::default(), crate::PHYSICS_FIXED_DT, w, h);
+        assert_eq!(s.game.outcome(), crate::simulation::Outcome::Lost);
+        let m = ask(&mut server, &tx, &mut s, "key", json!({ "key": "enter" })).unwrap();
+        assert_eq!(m["level"]["number"], 2, "Enter after a loss is the same level again: {m}");
+        assert_eq!(s.game.outcome(), crate::simulation::Outcome::Playing);
     }
 
     #[test]
