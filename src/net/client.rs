@@ -31,6 +31,19 @@ use crate::net::wire::{IntentMsg, Lobby, RosterSeat, RoundOutcome, Snapshot, Wel
 /// tap is spread over two.
 pub const FIRE_HOLD_TICKS: u8 = 2;
 
+/// How long a ping may go with nothing at all arriving after it before the
+/// room is taken as gone (`RoomClient::poll`). A connection can die without
+/// closing - a path that stalls between here and the room, a network that
+/// drops a phone - and a socket left open on it shows a frozen round for
+/// as long as the operating system cares to keep it. The room answers
+/// every ping and sends sixty snapshots a second during a round, so five
+/// seconds of silence after asking is not a hiccup: the lobby and the
+/// status line say so instead, and a rejoin reclaims the seat within the
+/// room's grace. The clock starts at a ping, not at the last message, so
+/// a client that stopped asking - a hidden browser tab runs no frames -
+/// is not closed for the silence it caused.
+pub const ROOM_SILENT_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Who this client is to a room.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Identity {
@@ -202,6 +215,10 @@ pub struct RoomClient<T: Transport> {
     fire_held: u8,
     /// Reused by `poll` so a frame allocates nothing.
     scratch: Vec<(Msg, std::time::Instant)>,
+    /// When the oldest ping nothing has answered yet went out: any
+    /// message arriving after it clears it (`ROOM_SILENT_AFTER`).
+    unanswered_since: Option<std::time::Instant>,
+    silent_after: std::time::Duration,
 }
 
 impl<T: Transport> RoomClient<T> {
@@ -233,6 +250,8 @@ impl<T: Transport> RoomClient<T> {
             intent_tick: 0,
             fire_held: 0,
             scratch: Vec::new(),
+            unanswered_since: None,
+            silent_after: ROOM_SILENT_AFTER,
         }
     }
 
@@ -253,6 +272,9 @@ impl<T: Transport> RoomClient<T> {
             self.say_hello(&greeting);
             self.phase = Phase::Greeting;
         }
+        if self.unanswered_since.is_some_and(|since| scratch.iter().any(|&(_, arrived)| arrived >= since)) {
+            self.unanswered_since = None;
+        }
         for (msg, arrived) in scratch.drain(..) {
             self.take(msg, arrived, out);
         }
@@ -260,7 +282,22 @@ impl<T: Transport> RoomClient<T> {
         if let ConnState::Closed(closed) = self.transport.state() {
             self.phase = Phase::Closed(closed.clone());
             out.push(ClientEvent::Closed(closed));
+            return;
         }
+        // Asked, and nothing since: the connection died without closing.
+        if self.unanswered_since.is_some_and(|since| since.elapsed() >= self.silent_after) {
+            self.transport.close();
+            let closed = Closed::fault("the room stopped answering");
+            self.phase = Phase::Closed(closed.clone());
+            out.push(ClientEvent::Closed(closed));
+        }
+    }
+
+    /// How long a ping may go unanswered before the room is taken as gone
+    /// (`ROOM_SILENT_AFTER` unless set), for a test that cannot wait it
+    /// out.
+    pub fn set_silent_after(&mut self, silent_after: std::time::Duration) {
+        self.silent_after = silent_after;
     }
 
     /// This frame's input for the local seat, sent as one `IntentMsg`.
@@ -312,10 +349,12 @@ impl<T: Transport> RoomClient<T> {
 
     /// Send a clock probe stamped with the caller's own milliseconds
     /// (`net::clock`); the `Pong` comes back as a `ClientEvent`. Nothing
-    /// is sent on a socket that is not open.
+    /// is sent on a socket that is not open. A probe nothing answers for
+    /// `ROOM_SILENT_AFTER` closes the connection (`poll`).
     pub fn ping(&mut self, client_ms: u32) {
         if self.transport.is_open() {
             self.transport.send_msg(&Msg::Ping(crate::net::wire::Ping { client_ms }));
+            self.unanswered_since.get_or_insert_with(std::time::Instant::now);
         }
     }
 
@@ -739,6 +778,35 @@ mod tests {
         assert_eq!(events, [ClientEvent::Refused("no room AKKKK".into())]);
         assert_eq!(client.phase(), &Phase::Greeting, "still connected, still nobody's seat");
         assert_eq!(client.seat(), None);
+    }
+
+    /// **A connection that dies without closing is noticed.** Silence the
+    /// client did not ask about - a hidden tab sends no pings - closes
+    /// nothing; a ping the room answers keeps the connection; a ping
+    /// nothing answers for the limit closes it, once, with the reason, and
+    /// the socket with it.
+    #[test]
+    fn a_ping_nothing_answers_closes_the_connection() {
+        use std::time::Duration;
+        let (mut room, mut client) = room_and_client();
+        client.set_silent_after(Duration::from_millis(40));
+        frame(&mut room, &mut client);
+        std::thread::sleep(Duration::from_millis(60));
+        assert!(frame(&mut room, &mut client).is_empty(), "silence nobody asked about closes nothing");
+        client.ping(1);
+        room.say(Msg::Pong(crate::net::wire::Pong { client_ms: 1, server_ms: 5 }));
+        std::thread::sleep(Duration::from_millis(60));
+        let events = frame(&mut room, &mut client);
+        assert!(events.iter().all(|e| !matches!(e, ClientEvent::Closed(_))), "an answered ping keeps it: {events:?}");
+        assert!(!matches!(client.phase(), Phase::Closed(_)));
+        client.ping(2);
+        std::thread::sleep(Duration::from_millis(60));
+        let events = frame(&mut room, &mut client);
+        assert_eq!(events, vec![ClientEvent::Closed(Closed::fault("the room stopped answering"))]);
+        assert!(matches!(client.phase(), Phase::Closed(_)));
+        assert!(frame(&mut room, &mut client).is_empty(), "reported once");
+        client.ping(3);
+        assert!(room.listen().is_empty(), "the socket is closed: nothing more goes out");
     }
 
     #[test]

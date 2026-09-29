@@ -38,6 +38,7 @@ pub fn profile(name: &str) -> Option<Impairment> {
         loss,
         rto_ms: Impairment::default_rto_ms(delay),
         nagle: false,
+        blackhole_after_ms: None,
     })
 }
 

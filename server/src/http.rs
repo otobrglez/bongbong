@@ -50,6 +50,13 @@ impl Server {
         Ok(Server { addr, hub, config, listener })
     }
 
+    /// The connection keep-alive, set before serving: a test shortens it
+    /// to see a silent client go without waiting ten seconds.
+    pub fn keep_alive(mut self, keep_alive: crate::hub::KeepAlive) -> Server {
+        Arc::get_mut(&mut self.hub).expect("the hub is only shared once the server runs").keep_alive = keep_alive;
+        self
+    }
+
     /// Serve until `shutdown` resolves, then finish the open connections.
     ///
     /// **Every accepted socket gets `TCP_NODELAY`.** The room sends a

@@ -50,9 +50,32 @@ impl RoomStats {
     }
 }
 
+/// How the server tells a live connection from a dead one that never
+/// closed - a path that stalled somewhere between here and the client, a
+/// laptop lid shut on a socket. Every `ping_every` the writer sends a
+/// WebSocket ping, which a browser answers at the protocol level even in
+/// a hidden tab and a native client answers on its next read; a
+/// connection that has sent nothing at all - not an intent, not a
+/// ping, not that pong - for `silent_after` is taken as gone, so its seat
+/// starts its grace and an empty round pauses, rather than a room holding
+/// a seat for a client that will never speak again.
+#[derive(Clone, Copy, Debug)]
+pub struct KeepAlive {
+    pub ping_every: std::time::Duration,
+    pub silent_after: std::time::Duration,
+}
+
+impl Default for KeepAlive {
+    fn default() -> KeepAlive {
+        KeepAlive { ping_every: std::time::Duration::from_secs(2), silent_after: std::time::Duration::from_secs(10) }
+    }
+}
+
 pub struct Hub {
     /// The most rooms this server holds at once.
     pub max_rooms: usize,
+    /// The connection keep-alive every socket runs by.
+    pub keep_alive: KeepAlive,
     pub metrics: Arc<Metrics>,
     rooms: Mutex<BTreeMap<String, RoomHandle>>,
     /// Set once by `begin_drain`; every room task watches it, so a room
@@ -75,6 +98,7 @@ impl Hub {
     pub fn new(max_rooms: usize, metrics: Arc<Metrics>) -> Arc<Hub> {
         Arc::new(Hub {
             max_rooms,
+            keep_alive: KeepAlive::default(),
             metrics,
             rooms: Mutex::new(BTreeMap::new()),
             draining: watch::Sender::new(false),

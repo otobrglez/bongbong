@@ -29,11 +29,16 @@ pub struct Impairment {
     /// is still unacknowledged is held and coalesced until that round trip
     /// completes.
     pub nagle: bool,
+    /// From this many milliseconds on the proxy's clock, every chunk either
+    /// way is swallowed and neither socket is closed: a path that died
+    /// without anyone hanging up, which only a keep-alive notices.
+    pub blackhole_after_ms: Option<f64>,
 }
 
 impl Impairment {
     /// No impairment at all: the loopback link.
-    pub const NONE: Impairment = Impairment { delay_ms: 0.0, jitter_ms: 0.0, loss: 0.0, rto_ms: 200.0, nagle: false };
+    pub const NONE: Impairment =
+        Impairment { delay_ms: 0.0, jitter_ms: 0.0, loss: 0.0, rto_ms: 200.0, nagle: false, blackhole_after_ms: None };
 
     /// The retransmit timeout a real stack would pick for this delay:
     /// Linux's floor of 200 ms, or two round trips' worth past it.
@@ -103,6 +108,12 @@ impl Schedule {
         Schedule { link, rng: SplitMix::new(seed), last_delivery: f64::NEG_INFINITY, last_send: None }
     }
 
+    /// Whether a chunk arriving at `arrival_ms` falls into the blackhole
+    /// (`Impairment::blackhole_after_ms`) and is never delivered.
+    pub fn swallows(&self, arrival_ms: f64) -> bool {
+        self.link.blackhole_after_ms.is_some_and(|at| arrival_ms >= at)
+    }
+
     /// The delivery of a chunk that arrived at `arrival_ms`. Calls come in
     /// arrival order, as the proxy reads them.
     pub fn deliver(&mut self, arrival_ms: f64) -> Delivery {
@@ -150,7 +161,7 @@ mod tests {
     use super::*;
 
     fn link(delay: f64, jitter: f64, loss: f64) -> Impairment {
-        Impairment { delay_ms: delay, jitter_ms: jitter, loss, rto_ms: Impairment::default_rto_ms(delay), nagle: false }
+        Impairment { delay_ms: delay, jitter_ms: jitter, loss, rto_ms: Impairment::default_rto_ms(delay), nagle: false, blackhole_after_ms: None }
     }
 
     #[test]

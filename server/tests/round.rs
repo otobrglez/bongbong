@@ -41,6 +41,16 @@ async fn start_server() -> (SocketAddr, std::sync::Arc<bongbong_server::hub::Hub
     (addr, hub)
 }
 
+/// A server whose connections run on a short keep-alive, for a test to
+/// see a silent client go without waiting ten seconds.
+async fn start_server_with_keep_alive(keep_alive: bongbong_server::hub::KeepAlive) -> SocketAddr {
+    let config = Config { listen: "127.0.0.1:0".parse().unwrap(), insecure: true, max_rooms: 8 };
+    let server = Server::bind(config).await.expect("bind an ephemeral port").keep_alive(keep_alive);
+    let addr = server.addr;
+    tokio::spawn(server.run(std::future::pending()));
+    addr
+}
+
 async fn connect(addr: SocketAddr) -> Client {
     let (ws, _) = connect_async(format!("ws://{addr}/ws")).await.expect("connect");
     ws
@@ -330,7 +340,13 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
                     send(&mut ws, &Msg::Intent(IntentMsg { tick, move_dir, face: move_dir, fire: tick % 90 == 0, ..IntentMsg::default() })).await;
                 }
                 frame = ws.next() => {
-                    let Some(Ok(Message::Binary(bytes))) = frame else { break };
+                    // The server's keep-alive pings are the socket's own
+                    // business: tungstenite answers them on the next read.
+                    let bytes = match frame {
+                        Some(Ok(Message::Binary(bytes))) => bytes,
+                        Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
+                        _ => break,
+                    };
                     match codec::decode(&bytes).unwrap() {
                         Msg::Delta(d) => {
                             seen.baseline = apply_delta(&seen.baseline, &d);
@@ -891,7 +907,13 @@ async fn play_to_the_end(ws: &mut Client, baseline: Snapshot) -> PlayedOut {
                 send(ws, &Msg::Intent(IntentMsg { tick, move_dir: 0, face: 1, fire: tick % 6 == 0, ..IntentMsg::default() })).await;
             }
             frame = ws.next() => {
-                let Some(Ok(Message::Binary(bytes))) = frame else { break };
+                // The server's keep-alive pings are the socket's own
+                // business: tungstenite answers them on the next read.
+                let bytes = match frame {
+                    Some(Ok(Message::Binary(bytes))) => bytes,
+                    Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
+                    _ => break,
+                };
                 let next = match codec::decode(&bytes).expect("a protocol message") {
                     Msg::Delta(d) => apply_delta(&baseline, &d),
                     Msg::Snapshot(s) => s,
@@ -1420,4 +1442,50 @@ async fn an_owned_burst_is_taken_by_one_tick_and_a_server_driven_one_in_order() 
     acks.dedup();
     assert!(acks.len() as u32 >= burst - 2, "a server-driven burst is applied a tick at a time: {ordered_seen:?}");
     assert!(ordered_seen.iter().any(|&(_, depth)| depth >= 2), "and waits its turn in the buffer: {ordered_seen:?}");
+}
+
+/// **A client that goes silent is let go; one that is only quiet is not**
+/// (`hub::KeepAlive`). The server pings every connection; a client that
+/// reads its socket answers at the protocol level - which is what a
+/// browser does even in a hidden tab - and stays however long it says
+/// nothing of its own, while one that neither reads nor sends, a path
+/// that died without closing, is closed once the limit passes, so its
+/// seat's grace starts and an empty round can pause.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_client_that_goes_silent_is_let_go_and_a_quiet_one_is_not() {
+    let keep_alive = bongbong_server::hub::KeepAlive {
+        ping_every: Duration::from_millis(50),
+        silent_after: Duration::from_millis(300),
+    };
+    let addr = start_server_with_keep_alive(keep_alive).await;
+
+    // Quiet: it reads (and so answers the pings) and says nothing else.
+    let mut quiet = connect(addr).await;
+    send(&mut quiet, &create(0xB0B5)).await;
+    let _ = expect_welcome(&mut quiet).await;
+    let until = Instant::now() + Duration::from_millis(900);
+    while Instant::now() < until {
+        match tokio::time::timeout(Duration::from_millis(50), quiet.next()).await {
+            Ok(Some(Ok(Message::Close(_)))) | Ok(None) | Ok(Some(Err(_))) => panic!("a quiet client that reads was closed"),
+            _ => {}
+        }
+    }
+
+    // Silent: it stops reading, so the server's pings go unanswered.
+    let mut silent = connect(addr).await;
+    send(&mut silent, &create(0xB0B6)).await;
+    let _ = expect_welcome(&mut silent).await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    let mut closed = false;
+    for _ in 0..200 {
+        match tokio::time::timeout(Duration::from_millis(100), silent.next()).await {
+            Ok(Some(Ok(Message::Close(_)))) | Ok(None) | Ok(Some(Err(_))) => {
+                closed = true;
+                break;
+            }
+            Ok(Some(Ok(_))) => continue,
+            Err(_) => break,
+        }
+    }
+    assert!(closed, "a client that answered nothing for the limit was kept");
 }

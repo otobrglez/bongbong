@@ -1189,6 +1189,18 @@ The pieces, each with its owner module:
   launch's recoil - and the owner applies them to its own body; a shell's,
   bolt's or bullet's recoil is the client's own at the launch and never
   echoed. *Built*.
+- **Connections that die without closing** (`net::client`, the room's
+  `conn.rs`): the first real-link measurement ran into one - a stream that
+  stopped two seconds in with neither end hanging up, the client drawing a
+  frozen round and the room holding both seats for a quarter of an hour.
+  The client takes the room as gone when a ping has gone five seconds with
+  nothing arriving after it (`ROOM_SILENT_AFTER`; timed from the ping, so a
+  hidden tab that sent none is not closed for it), and the room pings every
+  socket at the WebSocket level every two seconds and closes one that has
+  sent nothing, that pong included, for ten (`hub::KeepAlive`), so the
+  seat's grace starts and an empty round pauses. *Built*; netlab's
+  `--blackhole-after` reproduces the fault and `tests/silent_link.rs` pins
+  both clients noticing it.
 - **Measuring a browser**: a dev-tools web build (every PR preview) exports
   `bb_net_stats` (`OnlineRound::stats_json`, the same readings the native
   dev server shows) and `bb_input` (a scripted seat), so a browser tab

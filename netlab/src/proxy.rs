@@ -153,7 +153,9 @@ enum Way {
 
 /// Bind `127.0.0.1:0` and relay every connection to `upstream` under
 /// `link`. The accept loop runs until the runtime stops.
-pub async fn start(upstream: SocketAddr, link: Impairment, seed: u64, clock: Clock) -> std::io::Result<Proxy> {
+pub async fn start(upstream: SocketAddr, mut link: Impairment, seed: u64, clock: Clock) -> std::io::Result<Proxy> {
+    // The blackhole is timed from the proxy's start, on the shared clock.
+    link.blackhole_after_ms = link.blackhole_after_ms.map(|after| clock.now_ms() + after);
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     let log: SharedLog = Arc::new(Mutex::new(TapLog::default()));
@@ -203,6 +205,9 @@ fn relay(
                 Ok(n) => n,
             };
             let arrival = clock.now_ms();
+            if schedule.swallows(arrival) {
+                continue;
+            }
             let delivery = schedule.deliver(arrival);
             if delivery.lost {
                 let mut log = reader_log.lock().unwrap_or_else(PoisonError::into_inner);

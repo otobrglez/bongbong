@@ -87,6 +87,10 @@ struct RunArgs {
     /// Model Nagle's algorithm on both senders.
     #[arg(long)]
     nagle: bool,
+    /// From this many seconds after the proxy starts, swallow everything
+    /// both ways without closing a socket: a path that died silently.
+    #[arg(long)]
+    blackhole_after: Option<f64>,
     #[arg(long, default_value_t = 20.0)]
     seconds: f64,
     #[arg(long, value_enum, default_value = "drive")]
@@ -153,6 +157,7 @@ fn link_of(args: &RunArgs) -> Result<Impairment, String> {
         link.rto_ms = r;
     }
     link.nagle |= args.nagle;
+    link.blackhole_after_ms = args.blackhole_after.map(|s| s * 1000.0);
     Ok(link)
 }
 

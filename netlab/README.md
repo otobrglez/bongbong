@@ -56,6 +56,9 @@ round trip completes.
 | bad | 100 ms | 40 ms | 3% | 200 ms |
 
 `rto` defaults to `max(200 ms, 2 x delay)`; `--rto-ms` overrides it.
+`--blackhole-after S` swallows every chunk both ways from S seconds after
+the proxy starts and closes neither socket - a path that died with nobody
+hanging up, which only a keep-alive notices (`tests/silent_link.rs`).
 
 `--remote URL` skips the server and the proxy and dials a real rooms host,
 spelled as `--rooms` takes it (`wss://rooms.bongbong.io/pr-48`, with or
