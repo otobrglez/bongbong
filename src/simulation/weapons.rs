@@ -523,6 +523,8 @@ fn side_damage(owner: Owner, shooter_row: i32) -> (f32, f32) {
     let (min, max) = match owner {
         Owner::Player(_) => (tuning().player_damage_min, tuning().player_damage_max),
         Owner::Enemy(_) => (tuning().enemy_damage_min, tuning().enemy_damage_max),
+        // A tower has no chassis: its bullets carry the gun tower's damage.
+        Owner::Tower { .. } => return (tuning().gun_tower_damage_min, tuning().gun_tower_damage_max),
     };
     let factor = tuning().tank_damage_factor[shooter_row as usize];
     (min * factor, max * factor)
@@ -575,8 +577,12 @@ impl Projectile for Bullet {
     fn advance(&mut self, dt: f32) { self.update(dt); }
     fn detonate(&mut self) { Bullet::detonate(self); }
     fn hit_half_extent() -> f32 { tuning().minigun_bullet_hit_half_extent }
-    /// One shared range for player and enemy, chassis-scaled only.
+    /// One shared range for player and enemy, chassis-scaled only; a
+    /// tower's bullets carry the gun tower's own range.
     fn damage_range(&self) -> (f32, f32) {
+        if self.owner.is_tower() {
+            return side_damage(self.owner, self.shooter_row);
+        }
         let factor = tuning().tank_damage_factor[self.shooter_row as usize];
         (tuning().minigun_bullet_damage_min * factor, tuning().minigun_bullet_damage_max * factor)
     }

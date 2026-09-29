@@ -76,7 +76,7 @@ impl Game {
             .map(|t| TankBoxes {
                 seat: match t.owner() {
                     Owner::Player(seat) => Some(seat),
-                    Owner::Enemy(_) => None,
+                    Owner::Enemy(_) | Owner::Tower { .. } => None,
                 },
                 hull: t.hull_bbox_world(),
                 turret: t.turret_bbox_world(),

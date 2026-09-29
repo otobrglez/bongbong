@@ -137,6 +137,7 @@ impl Game {
                         let hit_target = match tank.owner() {
                             Owner::Player(player) => HitTarget::Player { player },
                             Owner::Enemy(slot) => HitTarget::Enemy { slot },
+                            Owner::Tower { .. } => unreachable!("no tank is owned by a tower"),
                         };
                         f.events.push(Event::Hit { target: hit_target, damage: landed, killed, x: at.x, y: at.y });
                         if killed {

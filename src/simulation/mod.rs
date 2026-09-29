@@ -29,6 +29,7 @@ mod hits;
 mod missiles;
 pub mod present;
 mod props;
+mod towers;
 pub use props::{FlyingDrum, GroundFire};
 pub(crate) use props::tile_rubble;
 pub mod replica;
@@ -397,6 +398,25 @@ pub enum Event {
     /// cosmetic - it deals no damage - but recorded so tooling and the
     /// presentation layer can see it.
     CookOff { x: f32, y: f32 },
+    /// A tesla coil's bolt, from its terminal at (`x0`, `y0`) to the tank
+    /// it struck at (`x1`, `y1`); `chained` for a jump on from the first
+    /// target (docs/defence-towers-prd.md section 4). The strike itself is
+    /// the `Hit` that follows.
+    TeslaStrike { x0: f32, y0: f32, x1: f32, y1: f32, chained: bool },
+    /// A tower fired from its muzzle at (`x`, `y`) along `heading`: a gun
+    /// tower's burst began, or a bio slush lobbed a glob (`kind`:
+    /// `gun_tower`, `bio_slush`).
+    TowerFired { kind: &'static str, x: f32, y: f32, heading: f32 },
+    /// A glob of ooze landed at (`x`, `y`) and splashed.
+    GlobSplashed { x: f32, y: f32 },
+    /// Tank `slot` was coated in ooze, by a splash or a puddle. A coat on
+    /// a tank already coated refreshes it without an event.
+    Slimed { slot: usize },
+    /// Tank `slot` drove into water and washed its ooze off.
+    SlimeWashed { slot: usize },
+    /// A tower pack restored the `side` tower at (`x`, `y`) to full health
+    /// and put it out.
+    TowerRepaired { side: Side, x: f32, y: f32 },
     /// Rapier quarantined `bodies` bodies and `colliders` colliders on one
     /// fixed step because their state went non-finite (see
     /// `Physics::quarantined`). A solver blow-up, never normal play - the
@@ -727,6 +747,19 @@ pub struct Game {
     /// Tanks and frogs a stream touched last frame, sorted - the first
     /// frame of contact during a hold is what `Event::Hit` records.
     pub(crate) flame_contacts: Vec<Entity>,
+    /// The defence towers' weapons (docs/defence-towers-prd.md), keyed by
+    /// the cell their `Obstacle` stands on. A `BTreeMap` because the tower
+    /// phase walks it and draws RNG, so its order is part of a replay.
+    pub(crate) towers: BTreeMap<(i32, i32), crate::tower::Tower>,
+    /// Globs of ooze in the air, oldest first (`towers::resolve_globs`).
+    pub(crate) globs: Vec<crate::tower::Glob>,
+    /// Ooze on the ground, per cell: slimes whatever drives over it until
+    /// it dries or a fire takes it. Ordered like `heat`.
+    pub(crate) ooze: BTreeMap<(i32, i32), crate::tower::OozePuddle>,
+    /// Tesla bolts still in their short display window.
+    pub(crate) tesla_bolts: Vec<crate::tower::TeslaBolt>,
+    /// What dead towers left on the ground, oldest first.
+    pub(crate) tower_ruins: Vec<crate::tower::TowerRuin>,
     /// Frozen simulation plus a "PAUSED" overlay. Cleared by `init`.
     pub(crate) paused: bool,
     /// Drop shadows on/off (toggle key, and `--no-shadows` at startup).
@@ -1014,6 +1047,11 @@ impl Game {
         self.flame_jets.clear();
         self.heat.clear();
         self.flame_contacts.clear();
+        self.towers.clear();
+        self.globs.clear();
+        self.ooze.clear();
+        self.tesla_bolts.clear();
+        self.tower_ruins.clear();
         self.frame = 0;
         self.hit_history.clear();
         self.seat_view = [None; MAX_SEATS];
@@ -1100,6 +1138,8 @@ impl Game {
         // The layout is final now, so every wall tile can work out which of
         // its faces are exposed. Only ever recomputed again on destruction.
         self.refresh_edge_masks();
+        // The towers' weapons, one per tower tile. No RNG.
+        self.build_towers();
         // Tall grass: whole cells from the map, each scattering a handful
         // of tufts. Hashed from position, so this draws no round RNG.
         self.grass_cells = map_spawn.grass_cells.clone();
@@ -1356,7 +1396,7 @@ impl Game {
                 // The frog was created at full health a few lines up, so
                 // no frog pack is ever rolled here and round setup draws
                 // the RNG it always drew.
-                maybe_spawn_health_slot_bonuses(&mut self.world, &self.map, pos, width, height, false, &mut rng);
+                maybe_spawn_health_slot_bonuses(&mut self.world, &self.map, pos, width, height, BonusGates::default(), &mut rng);
             }
         }
 
@@ -1466,6 +1506,7 @@ impl Game {
             self.rollin_phase(&mut f);
             self.enemy_phase(&mut f, &grid);
             self.wave_phase(&mut f);
+            self.tower_phase(&mut f);
             self.spawn_pending(&mut f);
             self.guide_missiles(&mut f);
             self.resolve_lasers(&mut f);
@@ -1478,9 +1519,11 @@ impl Game {
             self.resolve_projectiles::<Bullet>(&mut f, true);
             self.resolve_projectiles::<Plasma>(&mut f, true);
             self.resolve_missiles(&mut f, true);
+            self.resolve_globs(&mut f, true);
             self.tick_cookoffs(&mut f);
             self.tick_burns(&mut f);
             self.tick_fires(&mut f, true);
+            self.tick_ooze(&mut f);
             self.tick_fuses(&mut f);
             self.tick_launches(&mut f);
             self.tick_grass(f.dt);
@@ -1500,6 +1543,7 @@ impl Game {
             self.resolve_projectiles::<Bullet>(&mut f, false);
             self.resolve_projectiles::<Plasma>(&mut f, false);
             self.resolve_missiles(&mut f, false);
+            self.resolve_globs(&mut f, false);
             self.tick_cookoffs(&mut f);
             self.tick_burns(&mut f);
             self.tick_fires(&mut f, false);
@@ -1589,6 +1633,7 @@ impl Game {
             scorch.age += dt;
         }
         self.laser_beams.retain_mut(|beam| !beam.tick(dt));
+        self.tick_tower_effects(dt);
     }
 
     /// Per-entity timers: every tank's cooldowns/recharge/wreck burn,
@@ -2184,6 +2229,12 @@ impl Game {
         let player_frog_full = self.frog.is_some_and(|e| with_frog(&self.world, e, Frog::at_full_health));
         let enemy_frog_full = self.enemy_frog.is_some_and(|e| with_frog(&self.world, e, Frog::at_full_health));
         let own_frog_full = |e: Entity| if self.is_player(e) { player_frog_full } else { enemy_frog_full };
+        // The tower pack's rule, the frog pack's shape: left alone while
+        // every standing tower of the collector's side is whole and not
+        // burning (docs/defence-towers-prd.md section 9).
+        let player_towers_want = self.tower_pack_wanted(Side::Player);
+        let enemy_towers_want = self.tower_pack_wanted(Side::Enemy);
+        let towers_want = |e: Entity| if self.is_player(e) { player_towers_want } else { enemy_towers_want };
         let collected: Vec<(Entity, Entity, PickupKind)> = self
             .world
             .query::<(Entity, &Pickup)>()
@@ -2204,6 +2255,7 @@ impl Game {
                     // player's call to make.
                     .filter(|&&(e, _, _)| with_tank(&self.world, e, |t| t.wants_pickup(pickup.kind)))
                     .filter(|&&(e, _, _)| pickup.kind != PickupKind::FrogHealth || !own_frog_full(e))
+                    .filter(|&&(e, _, _)| pickup.kind != PickupKind::TowerPack || towers_want(e))
                     .find(|&&(_, center, half)| pickup.in_reach(center, half, pad))
                     .map(|&(tank_entity, _, _)| (pickup_entity, tank_entity, pickup.kind))
             })
@@ -2262,9 +2314,16 @@ impl Game {
                     // the frog can't be touched while this `&mut Tank`
                     // borrow is live - see just below.
                     PickupKind::FrogHealth => {}
+                    // Nothing on the tank either: it repairs its side's
+                    // towers, just below.
+                    PickupKind::TowerPack => {}
                 }
                 tank.owner_slot()
             };
+            if kind == PickupKind::TowerPack {
+                let side = if self.is_player(tank_entity) { Side::Player } else { Side::Enemy };
+                self.repair_towers(f, side);
+            }
             if kind == PickupKind::FrogHealth {
                 let frog = if self.is_player(tank_entity) { self.frog } else { self.enemy_frog };
                 if let Some(frog) = frog {
@@ -2285,14 +2344,14 @@ impl Game {
         if slot_backed_count(&self.world, &self.map_pickup_slots) < self.map_pickup_slots.len() {
             self.pickup_respawn_timer -= f.dt;
             if self.pickup_respawn_timer <= 0.0 {
-                let frog_hurt = self.frog_wants_a_pack();
+                let hurt = BonusGates { frog: self.frog_wants_a_pack(), towers: self.player_tower_hurt() };
                 let respawned = respawn_from_slots(
                     &mut self.world,
                     &self.map,
                     &self.map_pickup_slots,
                     f.width,
                     f.height,
-                    frog_hurt,
+                    hurt,
                     &mut f.rng,
                 );
                 if let Some((pos, kind)) = respawned {
@@ -4179,7 +4238,10 @@ fn drive_tank_with(
     // Nothing but `simulation::command` ever sets it; the player and every
     // `Ai` leave it at 0, so `scale` is 1.0 and this is a no-op multiply.
     let along_x = tank.facing_along_x();
-    let scale = intent.speed_scale() * footing.pace;
+    // Ooze slows a hull like a ford does (docs/defence-towers-prd.md
+    // section 6): the top speed and the drive together.
+    let pace = footing.pace * tank.slime_pace();
+    let scale = intent.speed_scale() * pace;
     tank.throttle = intent.speed_scale();
     let (current_on, target_on, current_off) = if along_x {
         (current.x, target.x * scale, current.y)
@@ -4190,7 +4252,7 @@ fn drive_tank_with(
     let want_on = target_on - current_on;
     let speeding_up = want_on * current_on >= 0.0;
     let delta_on = if speeding_up {
-        let max_on = tuning().tank_accel_force * footing.pace * tank.speed_factor() / tank.mass() * dt;
+        let max_on = tuning().tank_accel_force * pace * tank.speed_factor() / tank.mass() * dt;
         want_on.clamp(-max_on, max_on)
     } else {
         // Close a rate-controlled fraction of the remaining gap each frame
@@ -4314,16 +4376,25 @@ fn slot_backed_count(world: &hecs::World, slots: &[(Position, PickupKind)]) -> u
         .count()
 }
 
+/// The conditional bonuses a Health slot may roll, each checked before
+/// any RNG is drawn for it: the frog pack while the frog is hurt, the
+/// tower pack while a player tower is.
+#[derive(Clone, Copy, Default)]
+struct BonusGates {
+    frog: bool,
+    towers: bool,
+}
+
 /// Top up one pickup at a uniformly random slot not currently occupied,
 /// with the health slot's bonus rolls if that slot is a health pack
-/// (`frog_hurt` is the frog pack's gate). A no-op if every slot is full.
+/// (`hurt` gates the conditional ones). A no-op if every slot is full.
 fn respawn_from_slots(
     world: &mut hecs::World,
     map: &MapFile,
     slots: &[(Position, PickupKind)],
     width: f32,
     height: f32,
-    frog_hurt: bool,
+    hurt: BonusGates,
     rng: &mut SmallRng,
 ) -> Option<(Position, PickupKind)> {
     let occupied: Vec<Position> = world.query::<&Pickup>().iter().map(|p| p.position).collect();
@@ -4338,14 +4409,14 @@ fn respawn_from_slots(
     let (pos, kind) = free[rng.random_range(0..free.len())];
     spawn_pickup_at(world, pos, kind);
     if kind == PickupKind::Health {
-        maybe_spawn_health_slot_bonuses(world, map, pos, width, height, frog_hurt, rng);
+        maybe_spawn_health_slot_bonuses(world, map, pos, width, height, hurt, rng);
     }
     Some((pos, kind))
 }
 
 /// The un-slotted bonuses that ride along with a Health slot just
-/// (re)spawned at `slot`: the rainbow shield always, and a frog health pack
-/// only while `frog_hurt`.
+/// (re)spawned at `slot`: the rainbow shield always, a frog health pack
+/// only while `hurt.frog`, a tower pack only while `hurt.towers`.
 ///
 /// The frog pack's gate is checked *before* its roll, never after, and that
 /// ordering is load-bearing (docs/frog-health-pack-prd.md section 6): a
@@ -4360,13 +4431,17 @@ fn maybe_spawn_health_slot_bonuses(
     slot: Position,
     width: f32,
     height: f32,
-    frog_hurt: bool,
+    hurt: BonusGates,
     rng: &mut SmallRng,
 ) {
     maybe_spawn_bonus(world, map, slot, PickupKind::Shield, tuning().shield_near_health_chance, width, height, rng);
-    if frog_hurt {
+    if hurt.frog {
         let chance = tuning().frog_pack_near_health_chance;
         maybe_spawn_bonus(world, map, slot, PickupKind::FrogHealth, chance, width, height, rng);
+    }
+    if hurt.towers {
+        let chance = tuning().tower_pack_near_health_chance;
+        maybe_spawn_bonus(world, map, slot, PickupKind::TowerPack, chance, width, height, rng);
     }
 }
 

@@ -367,6 +367,13 @@ impl Fx {
                 self.burst(at, ParticleKind::Dust, self.count(tuning().tile_burst_particles + 8), 45.0, &[LEAF_L, LEAF_M, LEAF_D]);
                 self.burst(at, ParticleKind::Chip, self.count(5), 95.0, &[WOOD_M, WOOD_D]);
             }
+            // A tower comes apart as armour plate, sparks and smoke; its
+            // own death (discharge, cook-off, spill) adds the rest.
+            Material::Tesla | Material::GunTower | Material::BioSlush => {
+                self.burst(at, ParticleKind::Chip, self.count(tuning().tile_burst_particles + 6), 120.0, &[STONE_LT, STONE_MD, STONE_DK]);
+                self.burst(at, ParticleKind::Spark, self.count(10), 160.0, &[FIRE_T, EMBER_T, WHITE_T]);
+                self.burst(at, ParticleKind::Smoke, self.count(6), 30.0, &[SMOKE_T]);
+            }
         }
     }
 
