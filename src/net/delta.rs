@@ -334,7 +334,7 @@ mod tests {
             y: rng.random_range(-4000..4000),
             heading: rng.random(),
             state: rng.random_range(0..8),
-            variant: rng.random_range(0..18),
+            variant: rng.random_range(0..18), owner: 255,
         }
     }
 
@@ -362,7 +362,7 @@ mod tests {
     fn random_events(rng: &mut SmallRng) -> Vec<WireEvent> {
         (0..rng.random_range(0..4))
             .map(|_| match rng.random_range(0..3) {
-                0 => WireEvent::Fired { slot: rng.random_range(0..40), weapon: WeaponKind::Shell },
+                0 => WireEvent::Fired { slot: rng.random_range(0..40), weapon: WeaponKind::Shell, input_tick: 0 },
                 1 => WireEvent::Wreck { slot: rng.random_range(0..40), x: rng.random(), y: rng.random() },
                 _ => WireEvent::CookOff { x: rng.random(), y: rng.random() },
             })
@@ -603,7 +603,7 @@ mod tests {
                 y: quantise_pos(rng.random_range(32.0..512.0)),
                 heading: rng.random(),
                 state: 3,
-                variant: (id % 18) as u8,
+                variant: (id % 18) as u8, owner: 255,
             })
             .collect();
         let frogs = vec![
@@ -659,21 +659,22 @@ mod tests {
             s.y -= 100;
         }
         for id in 0..4u16 {
-            c.shots.push(ShotState { id: 2000 + id, kind: ShotKind::Shell, x: 400, y: 800, heading: 64, state: 0, variant: 3 });
+            c.shots.push(ShotState { id: 2000 + id, kind: ShotKind::Shell, x: 400, y: 800, heading: 64, state: 0, variant: 3, owner: 255 });
         }
         c.normalise();
         c.events = vec![
             WireEvent::Hit { target: crate::net::events::WireHitTarget::Enemy { slot: 1 }, damage: 12.0, killed: false, x: 400, y: 800 },
-            WireEvent::Fired { slot: 0, weapon: WeaponKind::Shell },
+            WireEvent::Fired { slot: 0, weapon: WeaponKind::Shell, input_tick: 0 },
         ];
         let busy = encode(&Msg::Delta(delta(&b, &c))).len();
         let idle = encode(&Msg::Delta(delta(&a, &a))).len();
         println!("snapshot sizes: full {full} B, delta moving {moving} B, delta busy {busy} B, delta idle {idle} B");
         // Every delta carries `acked` and `mailbox` whole: eight
-        // varints and eight bytes, the header the idle bound is.
-        assert!(full <= 420, "full snapshot {full} B");
+        // varints and eight bytes, the header the idle bound is. A new
+        // shot costs one more byte for its owner (protocol 8).
+        assert!(full <= 440, "full snapshot {full} B");
         assert!(moving <= 210, "moving delta {moving} B");
-        assert!(busy <= 270, "busy delta {busy} B");
+        assert!(busy <= 276, "busy delta {busy} B");
         assert!(idle <= 48, "idle delta {idle} B");
     }
 }

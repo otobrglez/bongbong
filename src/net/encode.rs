@@ -56,6 +56,23 @@ pub fn wire_events(events: &[Event]) -> Vec<WireEvent> {
     events.iter().filter_map(WireEvent::from_event).collect()
 }
 
+/// `wire_events` for a tick that applied `acked` - each seat's input tick
+/// - so a seat's `Fired` names the press it answers
+/// (`WireEvent::Fired::input_tick`, docs/online-coop-prd.md §4.16). The
+/// simulation does not know input ticks; the room does, and every
+/// `Fired` of a tick was fired by that tick's applied input.
+pub fn wire_events_acked(events: &[Event], acked: &[u32; MAX_SEATS]) -> Vec<WireEvent> {
+    let mut out = wire_events(events);
+    for e in &mut out {
+        if let WireEvent::Fired { slot, input_tick, .. } = e
+            && let Some(&tick) = acked.get(*slot as usize)
+        {
+            *input_tick = tick;
+        }
+    }
+    out
+}
+
 /// The complete state of `game` at its current frame. `server_ms` is left
 /// at 0: the clock is the server's, which stamps it before sending.
 pub fn snapshot(game: &Game, acked: [u32; MAX_SEATS]) -> Snapshot {
@@ -75,7 +92,7 @@ pub fn snapshot(game: &Game, acked: [u32; MAX_SEATS]) -> Snapshot {
         tiles: tiles(game, cols),
         fires: game.fires.iter().map(|f| FireState { cell: cell_index(cols, f.cell), left: quantise_seconds(f.left) }).collect(),
         round: round(game),
-        events: wire_events(game.events()),
+        events: wire_events_acked(game.events(), &acked),
     };
     let (mask, bonus) = pickups(game, cols);
     s.pickups = mask;
@@ -169,7 +186,8 @@ fn tanks(game: &Game) -> Vec<TankState> {
         .collect()
 }
 
-fn shot(id: u32, kind: ShotKind, position: Position, rotation: f32, state: i32, variant: i32) -> ShotState {
+#[allow(clippy::too_many_arguments)]
+fn shot(id: u32, kind: ShotKind, position: Position, rotation: f32, state: i32, variant: i32, owner: crate::shell::Owner) -> ShotState {
     ShotState {
         id: (id & 0xFFFF) as u16,
         kind,
@@ -178,19 +196,28 @@ fn shot(id: u32, kind: ShotKind, position: Position, rotation: f32, state: i32, 
         heading: quantise_heading(rotation),
         state: state.clamp(0, u8::MAX as i32) as u8,
         variant: variant.clamp(0, u8::MAX as i32) as u8,
+        owner: owner_seat(owner),
+    }
+}
+
+/// The seat an owner is, or `NO_SEAT`.
+pub fn owner_seat(owner: crate::shell::Owner) -> u8 {
+    match owner {
+        crate::shell::Owner::Player(seat) => seat,
+        crate::shell::Owner::Enemy(_) => crate::net::wire::NO_SEAT,
     }
 }
 
 fn shots(game: &Game) -> Vec<ShotState> {
     let mut out = Vec::new();
     for s in game.world.query::<&Shell>().iter() {
-        out.push(shot(s.id, ShotKind::Shell, s.position, s.rotation, s.state.col(), s.variant));
+        out.push(shot(s.id, ShotKind::Shell, s.position, s.rotation, s.state.col(), s.variant, s.owner));
     }
     for b in game.world.query::<&Bullet>().iter() {
-        out.push(shot(b.id, ShotKind::Bullet, b.position, b.rotation, b.state.col(), 0));
+        out.push(shot(b.id, ShotKind::Bullet, b.position, b.rotation, b.state.col(), 0, b.owner));
     }
     for p in game.world.query::<&Plasma>().iter() {
-        out.push(shot(p.id, ShotKind::Plasma, p.position, p.rotation, p.state.col(), plasma_variant_index(p.variant)));
+        out.push(shot(p.id, ShotKind::Plasma, p.position, p.rotation, p.state.col(), plasma_variant_index(p.variant), p.owner));
     }
     out
 }

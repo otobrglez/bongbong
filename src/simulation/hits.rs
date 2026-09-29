@@ -6,8 +6,14 @@
 //! so nothing tunnels through a thin target however large `dt` was and
 //! nothing threads the seam between two touching wall tiles. Rapier is not
 //! involved - projectiles have no physics body.
+//!
+//! `HitBoxHistory` is lag compensation's memory (docs/online-coop-prd.md
+//! §4.16, "favor the shooter"): the enemy tanks' and frogs' boxes at the
+//! end of each of the last `REWIND_MAX_TICKS` ticks, so a seat's shot can
+//! be swept against the world that seat's client was drawing. Only those
+//! are rewound - tiles, walls and the seats stay current.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 
 use hecs::Entity;
 
@@ -65,6 +71,97 @@ pub(crate) struct Terrain {
     /// taken: the extra half-extent a player's shot gets against an
     /// enemy's hull and turret boxes in `sweep`.
     player_shot_pad: f32,
+}
+
+/// How far back lag compensation reaches, in ticks: 250 ms at 60 Hz. A
+/// client drawing the world further behind than this is judged against
+/// the oldest tick kept, which is further back than any playable link
+/// draws.
+pub(crate) const REWIND_MAX_TICKS: u8 = 15;
+
+/// One enemy tank's hit boxes as `Terrain::sweep` tests them: the hull
+/// and the turret, each a centre and half-extents, unpadded.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TankBoxes {
+    pub entity: Entity,
+    pub hull: (Position, Position),
+    pub turret: (Position, Position),
+}
+
+/// The rewindable hit boxes of one tick, as they stood when its update
+/// ended - which is what a snapshot of that tick shows a client. Both
+/// lists are sorted by entity bits, so a lookup is a binary search and
+/// nothing depends on a query's order.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct HitBoxFrame {
+    pub frame: u64,
+    pub tanks: Vec<TankBoxes>,
+    pub frogs: Vec<(Entity, Position)>,
+}
+
+impl HitBoxFrame {
+    pub fn tank(&self, entity: Entity) -> Option<&TankBoxes> {
+        self.tanks
+            .binary_search_by_key(&entity.to_bits(), |t| t.entity.to_bits())
+            .ok()
+            .map(|i| &self.tanks[i])
+    }
+
+    pub fn frog(&self, entity: Entity) -> Option<Position> {
+        self.frogs
+            .binary_search_by_key(&entity.to_bits(), |&(e, _)| e.to_bits())
+            .ok()
+            .map(|i| self.frogs[i].1)
+    }
+}
+
+/// The last `REWIND_MAX_TICKS` ticks of enemy and frog hit boxes, newest
+/// last. `Game::update` records one entry at the end of every tick it
+/// simulates; a paused tick or the intro banner records none, and a tick
+/// with no entry is judged against the present. Recording draws no RNG
+/// and changes nothing in the world, so a round that never rewinds plays
+/// exactly as it would without it.
+#[derive(Debug, Default)]
+pub(crate) struct HitBoxHistory {
+    frames: VecDeque<HitBoxFrame>,
+}
+
+impl HitBoxHistory {
+    /// Record the boxes the world holds now as tick `frame`'s: every live
+    /// enemy (a tank with an `Ai` - a seat and a tank still rolling in
+    /// through a gate carry none) and every frog. The oldest entry's
+    /// buffers are reused once the ring is full.
+    pub fn record(&mut self, world: &hecs::World, frame: u64) {
+        let mut entry = if self.frames.len() >= REWIND_MAX_TICKS as usize {
+            self.frames.pop_front().unwrap_or_default()
+        } else {
+            HitBoxFrame::default()
+        };
+        entry.frame = frame;
+        entry.tanks.clear();
+        entry.frogs.clear();
+        entry.tanks.extend(
+            world
+                .query::<(Entity, &Tank)>()
+                .with::<&Ai>()
+                .iter()
+                .filter(|(_, t)| !t.is_wreck())
+                .map(|(entity, t)| TankBoxes { entity, hull: t.hull_bbox_world(), turret: t.turret_bbox_world() }),
+        );
+        entry.tanks.sort_by_key(|t| t.entity.to_bits());
+        entry.frogs.extend(world.query::<(Entity, &Frog)>().iter().map(|(e, f)| (e, f.position)));
+        entry.frogs.sort_by_key(|&(e, _)| e.to_bits());
+        self.frames.push_back(entry);
+    }
+
+    /// Tick `frame`'s entry, if the ring still holds it.
+    pub fn at(&self, frame: u64) -> Option<&HitBoxFrame> {
+        self.frames.iter().rev().find(|e| e.frame == frame)
+    }
+
+    pub fn clear(&mut self) {
+        self.frames.clear();
+    }
 }
 
 fn frog_half() -> Position {
@@ -245,7 +342,10 @@ impl Terrain {
     /// shooter's own boxes are skipped. `players` is `Game::players()` -
     /// the seats in index order, `None` where a seat holds no tank.
     /// Returns the target plus `t` in `0..=1` along `p0..p1` (so a beam
-    /// can be clipped to where it hit).
+    /// can be clipped to where it hit). The game itself sweeps through
+    /// `sweep_rewound`, which this is with nothing ignored and nothing
+    /// rewound.
+    #[cfg(test)]
     pub fn sweep(
         &self,
         world: &hecs::World,
@@ -255,14 +355,21 @@ impl Terrain {
         p1: Position,
         half_extent: f32,
     ) -> Option<(ShellTarget, f32)> {
-        self.sweep_ignoring(world, players, shooter, p0, p1, half_extent, &[])
+        self.sweep_rewound(world, players, shooter, p0, p1, half_extent, &[], None)
     }
 
-    /// `sweep` with the obstacle tiles in `ignore` left out - the ones a
-    /// projectile already rolled a pass-over on (`Projectile::passed_over`),
-    /// so it keeps flying past them to whatever is behind.
+    /// `sweep`, the one hit test, with two additions. The obstacle tiles
+    /// in `ignore` are left out - the ones a projectile already rolled a
+    /// pass-over on (`Projectile::passed_over`), so it keeps flying past
+    /// them to whatever is behind. And the enemy tanks and the frogs stand
+    /// where `past` had them: lag compensation for a seat's shot
+    /// (docs/online-coop-prd.md §4.16). Only the boxes move back - who is
+    /// a candidate is decided now, so a tank wrecked or gone since is not
+    /// hit again, and one with no entry in `past` (it arrived since) is
+    /// tested where it stands. The seats, the tiles and the walls are the
+    /// present's. `past: None` is the present, box for box.
     #[allow(clippy::too_many_arguments)]
-    pub fn sweep_ignoring(
+    pub fn sweep_rewound(
         &self,
         world: &hecs::World,
         players: [Option<Entity>; crate::MAX_SEATS],
@@ -271,6 +378,7 @@ impl Terrain {
         p1: Position,
         half_extent: f32,
         ignore: &[Entity],
+        past: Option<&HitBoxFrame>,
     ) -> Option<(ShellTarget, f32)> {
         let pad = Position::new(half_extent, half_extent);
         let enemy_pad = match shooter {
@@ -301,13 +409,16 @@ impl Terrain {
             if tank.owner() == shooter || tank.is_wreck() {
                 continue;
             }
-            let (hc, hh) = tank.hull_bbox_world();
+            let ((hc, hh), (tc, th)) = match past.and_then(|p| p.tank(entity)) {
+                Some(then) => (then.hull, then.turret),
+                None => (tank.hull_bbox_world(), tank.turret_bbox_world()),
+            };
             consider_hit(&mut best, segment_hits_aabb(p0, p1, hc, hh + enemy_pad), 1, ShellTarget::Tank(entity));
-            let (tc, th) = tank.turret_bbox_world();
             consider_hit(&mut best, segment_hits_aabb(p0, p1, tc, th + enemy_pad), 1, ShellTarget::Tank(entity));
         }
 
-        for &(entity, pos) in &self.frogs {
+        for &(entity, now) in &self.frogs {
+            let pos = past.and_then(|p| p.frog(entity)).unwrap_or(now);
             consider_hit(&mut best, segment_hits_aabb(p0, p1, pos, frog_half() + pad), 2, ShellTarget::Frog(entity));
         }
 

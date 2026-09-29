@@ -18,6 +18,7 @@
 //! dialled delay, jitter and loss for the offline rig). `client` is the
 //! lobby state machine over any of them.
 
+use std::time::Instant;
 use crate::net::codec::{self, Msg};
 
 /// Where a connection stands. A transport reports what its last `drain`
@@ -126,6 +127,23 @@ pub trait Transport {
     /// oldest first, and return. `out` is appended to, not cleared.
     fn drain(&mut self, out: &mut Vec<Msg>);
 
+    /// `drain`, with the instant each message arrived at this end.
+    ///
+    /// **The arrival, not the drain.** A frame drains once per rendered
+    /// frame, so a message that landed just after the last one waits up
+    /// to a frame to be seen; stamped at the drain, every arrival reads
+    /// as up to 16 ms late, which the round-trip probe measures as round
+    /// trip and the interpolator measures as jitter (docs/online-coop-prd.md
+    /// §4.15). A transport that knows better - a socket thread, a browser
+    /// callback, the loopback link's due time - says when; the default is
+    /// the drain's own moment, for one that cannot.
+    fn drain_stamped(&mut self, out: &mut Vec<(Msg, Instant)>) {
+        let now = Instant::now();
+        let mut msgs = Vec::new();
+        self.drain(&mut msgs);
+        out.extend(msgs.into_iter().map(|m| (m, now)));
+    }
+
     /// Close the connection. Further `send`s are dropped and `state`
     /// settles on `Closed` with `requested` set.
     fn close(&mut self);
@@ -163,6 +181,10 @@ impl<T: Transport + ?Sized> Transport for Box<T> {
 
     fn drain(&mut self, out: &mut Vec<Msg>) {
         (**self).drain(out);
+    }
+
+    fn drain_stamped(&mut self, out: &mut Vec<(Msg, Instant)>) {
+        (**self).drain_stamped(out);
     }
 
     fn close(&mut self) {
@@ -210,7 +232,7 @@ mod tests {
     #[test]
     fn send_msg_encodes_and_drain_decodes() {
         let mut t = Echo::open();
-        let msg = Msg::Intent(IntentMsg { tick: 4, move_dir: 2, face: 2, fire: true });
+        let msg = Msg::Intent(IntentMsg { tick: 4, move_dir: 2, face: 2, fire: true, ..IntentMsg::default() });
         t.send_msg(&msg);
         let mut out = vec![Msg::Intent(IntentMsg::default())];
         t.drain(&mut out);

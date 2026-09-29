@@ -28,6 +28,18 @@
 //! list stops carrying its cell (burning out is the only way one ever
 //! leaves), and the tile a `DrumLaunched` names is in the air rather than
 //! anywhere on the field.
+//!
+//! The spectacle a round lays down from inside its phases - a kill's
+//! fireball, mushroom cloud, shockwave, screen flash, scorch and thrown
+//! hull parts, a drum's or a missile's blast, cook-off pops, impact and
+//! muzzle flashes, rubble - comes to a replica off the events that
+//! announce each cause (`apply_spectacle`), through the same `*_show`
+//! methods the phases call (docs/online-coop-prd.md section 4.16). The
+//! interpolator hands a snapshot's events over exactly once, so each is
+//! drawn once; a welcome draws none, since a late joiner has missed the
+//! moment, and neither does a prediction sandbox, which nobody draws
+//! (`Show`). What a client drew itself on its own press - its shots'
+//! muzzle ripples, its laser beams - the replica does not draw again.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -40,16 +52,20 @@ use crate::math::Vec2;
 use crate::net::PROTOCOL_VERSION;
 use crate::net::encode::{cell_from_index, cell_index, field_cols};
 use crate::net::events::WireEvent;
+use crate::net::events::WireHitTarget;
 use crate::net::wire::{
-    MissileState, ShotKind, ShotState, Snapshot, TankState, Welcome, dequantise_heading, dequantise_pos, dequantise_seconds, dequantise_velocity, dir_from_index, frog_flags, tank_flags, tile_flags,
+    MissileState, ShotKind, ShotState, Snapshot, TankState, WeaponKind, Welcome, dequantise_heading, dequantise_pos, dequantise_seconds, dequantise_velocity, dir_from_index, frog_flags, tank_flags, tile_flags,
 };
+use crate::laser::{LaserBeam, LaserVariant};
 use crate::obstacle::{Drum, Fuse, Obstacle};
 use crate::pickup::Pickup;
 use crate::missile::Missile;
 use crate::plasma::{Plasma, PlasmaState};
 use crate::shell::{Owner, Shell, ShellState};
 use crate::simulation::replica::plasma_variant_from_index;
-use crate::simulation::{Game, GroundFire, PlayerCount};
+use crate::blast::BlastShape;
+use crate::shockwave::Shockwave;
+use crate::simulation::{Game, GroundFire, PlayerCount, SHOCK_FROG, SHOCK_SHIELD_BREAK, SHOCK_TELEPORT, Spectacle, tile_rubble};
 use crate::tank::{ActiveWeapon, Dir, Tank};
 use crate::tuning::tuning;
 use crate::{DAMAGE_VARIANTS, MAX_DAMAGE, PHYSICS_FIXED_DT, Position, TANK_SHELL_VARIANT_BY_ROW, TANK_WRECK_COLS};
@@ -58,6 +74,86 @@ use crate::{DAMAGE_VARIANTS, MAX_DAMAGE, PHYSICS_FIXED_DT, Position, TANK_SHELL_
 /// replica never resolves a hit, so the slot only has to be one no tank
 /// ever holds.
 const REPLICA_OWNER: Owner = Owner::Enemy(usize::MAX);
+
+/// How far (px) a hull may move between two applies before the replica
+/// reads it as a jump - a portal, a seat driven back in at a gate, the
+/// room placing a hull - rather than as driving: past it the tread marks
+/// start again from where the hull landed and the ring follower is put
+/// under it, so nothing is drawn across the gap. Half again a cell: a
+/// hull at full boost covers a few pixels a frame, and the interpolator
+/// blends every other move.
+const JUMP_PX: f32 = 48.0;
+
+/// Where the wire last put a replica's hull: the room's own track of it,
+/// which a jump is read from. Not `Tank::position`, because the local
+/// seat's hull is drawn somewhere else - `net::round` writes the
+/// prediction over it every frame, ahead of the track by the picture's
+/// delay and the round trip, and that gap is no jump. Only `write_tank`
+/// adds one, so a local round's tanks never carry it.
+struct WireTrack(Position);
+
+/// How much of the moment a snapshot's events are drawn with. The state -
+/// every hull, shot, tile, fire and the round's scalars - is written
+/// whatever the show.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Show {
+    /// Every cause's show, every beam and every drum in the air: a client
+    /// replica's picture.
+    All,
+    /// `All`, less what `seat`'s client drew itself on the press
+    /// (docs/online-coop-prd.md section 4.16): the muzzle ripple of its
+    /// shots, which `net::round` puts on as a provisional shot leaves, and
+    /// the laser beams it drew from the predicted muzzle and claimed by
+    /// their `Fired` (`net::predict::Predictor::confirm_beam`) - bit `k` of
+    /// `beams` for the seat's `k`th laser `Fired` in the snapshot. A beam
+    /// whose `Fired` the client did not claim is one it never drew, and is
+    /// drawn as the room's.
+    OwnShotsDrawn { seat: u8, beams: u8 },
+    /// The state and nothing of the moment: a welcome, whose joiner has
+    /// missed it, and a prediction sandbox (`net::predict`), which nobody
+    /// draws and nothing ages - a fireball or a beam put on it would stay
+    /// for the round.
+    Quiet,
+}
+
+impl Show {
+    /// Whether anything of the moment is drawn at all.
+    fn drawn(self) -> bool {
+        self != Show::Quiet
+    }
+
+    /// Whether the client drew the shots of the tank in owner slot `slot`
+    /// itself.
+    fn client_drew(self, slot: usize) -> bool {
+        matches!(self, Show::OwnShotsDrawn { seat, .. } if seat as usize == slot)
+    }
+
+    /// Which of `s`'s events are beams the client drew itself, by index:
+    /// for each of its seat's laser `Fired`s whose bit is set in `beams`,
+    /// the seat's first `LaserBeam` after it and before the seat's next
+    /// laser `Fired` - the beam that shot put up, which the room logs after
+    /// its `Fired` in the same tick. A `Fired` whose beam is missing (kept
+    /// from a snapshot handed over too late to draw) drops nothing.
+    fn beams_drawn(self, s: &Snapshot) -> BTreeSet<usize> {
+        let Show::OwnShotsDrawn { seat, beams } = self else { return BTreeSet::new() };
+        let mut out = BTreeSet::new();
+        let (mut fired, mut claimed) = (0u32, false);
+        for (i, event) in s.events.iter().enumerate() {
+            match *event {
+                WireEvent::Fired { slot, weapon: WeaponKind::Laser, .. } if slot == seat as u16 => {
+                    claimed = fired < u8::BITS && beams & (1 << fired) != 0;
+                    fired += 1;
+                }
+                WireEvent::LaserBeam { seat: by, .. } if by == seat && claimed => {
+                    out.insert(i);
+                    claimed = false;
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+}
 
 /// A replica of the round `w` describes, at the tick its snapshot was
 /// cut. Refuses a welcome from another protocol version or with a map
@@ -86,7 +182,7 @@ pub fn welcome(w: &Welcome) -> Result<Game, String> {
     let cols = field_cols(&game);
     game.oil_cells = w.oil_cells.iter().map(|&i| cell_from_index(cols, i)).collect();
     remove_tiles(&mut game, &w.dead_cells.iter().copied().collect(), cols);
-    snapshot(&mut game, &w.snapshot);
+    apply(&mut game, &w.snapshot, Show::Quiet);
     Ok(game)
 }
 
@@ -114,20 +210,157 @@ fn remove_tiles(game: &mut Game, dead: &BTreeSet<u16>, cols: u16) {
 }
 
 /// Write `s` into `game`: the frame's events first (a tile death there
-/// removes the tile), then every family.
+/// removes the tile) and the spectacle they announce, then every family.
 pub fn snapshot(game: &mut Game, s: &Snapshot) {
+    apply(game, s, Show::All);
+}
+
+/// `snapshot`, with as much of the moment drawn as `show` says.
+pub fn snapshot_with(game: &mut Game, s: &Snapshot, show: Show) {
+    apply(game, s, show);
+}
+
+fn apply(game: &mut Game, s: &Snapshot, show: Show) {
     let cols = field_cols(game);
-    let dead_tiles = apply_events(game, s, cols);
+    let own_beams = show.beams_drawn(s);
+    let dead_tiles = apply_events(game, s, cols, show, &own_beams);
+    let mut spectacle = Spectacle::default();
+    let drawn = show.drawn();
+    if drawn {
+        // Before the families move anything: a dying tile is still
+        // standing, a bursting missile still in the air and a firing
+        // hull where it is drawn.
+        apply_spectacle(game, s, show, &own_beams, &mut spectacle);
+    }
     apply_tiles(game, s, cols, dead_tiles);
     apply_tanks(game, s);
     apply_shots(game, s);
-    apply_missiles(game, s);
-    apply_frogs(game, s);
+    apply_missiles(game, s, drawn.then_some(&mut spectacle));
+    apply_frogs(game, s, drawn.then_some(&mut spectacle));
     apply_pickups(game, s, cols);
     apply_fires(game, s, cols);
     apply_round(game, s);
+    game.show(spectacle);
     game.frame = s.tick as u64;
     game.time = s.tick as f32 * PHYSICS_FIXED_DT;
+}
+
+/// The cosmetics the round laid down for each event in `s`, from the code
+/// that laid them: `Wreck` is a kill's whole show, `Blast` a drum's,
+/// `MissileBlast` a missile's (leaning the way the replica's copy of it
+/// was heading), `CookOff` a pop; every hit that flashed on the server
+/// flashes here, a laser flashes at its muzzle, a shield break and a
+/// portal ripple, and a tile that died drops its rubble. `Fired` puts a
+/// ripple at the drawn muzzle of the tank that fired.
+///
+/// A zero-damage hit on a tank or a frog is a flame's contact, which
+/// never flashes - unless it lies where a beam in the same snapshot
+/// stopped: a laser on a shield deals nothing and flashes all the same,
+/// as `resolve_lasers` flashes it. The two land on one point exactly,
+/// being the same position quantised the same way.
+///
+/// What the client drew itself (`Show::OwnShotsDrawn`) is left out: its
+/// shots' muzzle ripples, and the muzzle flash of each beam it drew
+/// (`own_beams`, indices into `s.events`). A beam's end still counts for
+/// the hit it stopped on.
+///
+/// What the wire does not carry is taken plain: a drum's blast has no
+/// cause on the wire, so its fireball is the hashed pick without a lean.
+fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, own_beams: &BTreeSet<usize>, show: &mut Spectacle) {
+    let field = game.map.field_size();
+    let at = |x: i16, y: i16| Position::new(dequantise_pos(x), dequantise_pos(y));
+    let beam_ends: BTreeSet<(i16, i16)> = s
+        .events
+        .iter()
+        .filter_map(|e| match *e {
+            WireEvent::LaserBeam { x1, y1, .. } => Some((x1, y1)),
+            _ => None,
+        })
+        .collect();
+    for (i, event) in s.events.iter().enumerate() {
+        match *event {
+            WireEvent::Wreck { x, y, .. } => game.wreck_show(show, at(x, y)),
+            WireEvent::Blast { x, y, drum, .. } => game.blast_show(show, at(x, y), drum, BlastShape::Plain, field),
+            WireEvent::MissileBlast { x, y, .. } => {
+                let center = at(x, y);
+                let dir = landing_dir(game, center);
+                game.missile_show(show, center, dir);
+            }
+            WireEvent::CookOff { x, y } => Game::cookoff_show(show, at(x, y)),
+            WireEvent::Hit { target, damage, x, y, .. } => {
+                let contact = damage == 0.0
+                    && matches!(target, WireHitTarget::Player { .. } | WireHitTarget::Enemy { .. } | WireHitTarget::Frog { .. })
+                    && !beam_ends.contains(&(x, y));
+                if !contact {
+                    show.impact_flashes.push(Shockwave::new(at(x, y)));
+                }
+            }
+            WireEvent::Deflected { x, y, .. } | WireEvent::Ricochet { x, y, .. } | WireEvent::ShellsCollided { x, y } => {
+                show.impact_flashes.push(Shockwave::new(at(x, y)));
+            }
+            WireEvent::LaserBeam { x0, y0, .. } if !own_beams.contains(&i) => {
+                show.muzzle_flashes.push(Shockwave::new(at(x0, y0)));
+            }
+            WireEvent::Fired { slot, weapon, .. } if !mode.client_drew(slot as usize) => {
+                if let Some(muzzle) = drawn_muzzle(game, slot as usize, weapon) {
+                    show.muzzle_flashes.push(Shockwave::new(muzzle));
+                }
+            }
+            WireEvent::ShieldBroken { x, y, .. } => show.shocks.push(Shockwave::scaled(at(x, y), SHOCK_SHIELD_BREAK)),
+            WireEvent::Teleported { x, y, to_x, to_y, .. } => {
+                show.shocks.push(Shockwave::scaled(at(x, y), SHOCK_TELEPORT));
+                show.shocks.push(Shockwave::scaled(at(to_x, to_y), SHOCK_TELEPORT));
+            }
+            WireEvent::ObstacleDestroyed { material, x, y } => {
+                let center = at(x, y);
+                let cell = map::world_to_cell(center);
+                // A tile that was burning when it died is the charred
+                // plank a fire leaves; the tile is still standing here.
+                let charred = game.world.query::<&Obstacle>().iter().any(|o| o.burning && o.cell() == cell);
+                if let Some(decal) = tile_rubble(material, center, charred) {
+                    show.decals.push(decal);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Which way the missile bursting at `center` was coming down: the
+/// heading of the replica's nearest missile, which the snapshot about to
+/// drop it still holds. Straight onto the spot, with no lean, when there
+/// is none.
+fn landing_dir(game: &Game, center: Position) -> Vec2 {
+    game.world
+        .query::<&Missile>()
+        .iter()
+        .min_by(|a, b| a.position.distance_to(center).total_cmp(&b.position.distance_to(center)))
+        .map_or(Vec2::new(0.0, 0.0), |m| m.dir)
+}
+
+/// Where a shot of `weapon` leaves `slot`'s tank as it is drawn: the spawn
+/// point the round's own `Shell::spawn`/`Plasma::spawn`/`Bullet::spawn`
+/// give, turned to the drawn turret (a twin barrel's first, as the round
+/// fires it). `None` for the weapons whose muzzle comes another way - a
+/// laser's rides its `LaserBeam`, a missile's is its own puff when it
+/// first shows (`apply_missiles`) - and for the flamethrower, which has
+/// none.
+fn drawn_muzzle(game: &mut Game, slot: usize, weapon: WeaponKind) -> Option<Position> {
+    let entity = game.world.query::<(Entity, &Tank)>().iter().find(|(_, t)| t.owner_slot() == slot).map(|(e, _)| e)?;
+    let mut q = game.world.query_one::<&mut Tank>(entity);
+    let tank = q.get().ok()?;
+    let facing = tank.rotation;
+    tank.rotation = tank.turret_visual_rotation;
+    let lateral = tuning().tank_barrel_lateral_offset[tank.row as usize];
+    let owner = tank.owner();
+    let muzzle = match weapon {
+        WeaponKind::Shell => Some(Shell::spawn(tank, owner, 0.0, -lateral).position),
+        WeaponKind::Plasma => Some(Plasma::spawn(tank, owner, tank.plasma_variant, 0.0, -lateral).position),
+        WeaponKind::Minigun => Some(Bullet::spawn(tank, owner, 0.0).position),
+        WeaponKind::Laser | WeaponKind::Missiles | WeaponKind::Flamethrower => None,
+    };
+    tank.rotation = facing;
+    muzzle
 }
 
 /// Hand the frame's events to the replica's presentation (`fx.rs` reads
@@ -142,8 +375,11 @@ pub fn snapshot(game: &mut Game, s: &Snapshot) {
 /// A `DrumLaunched` puts the drum in the air here, since a snapshot has
 /// no family for something that is neither a tile nor a shot; its arc is
 /// derived from an age `tick_presentation` advances, and the blast it
-/// sets off when it lands arrives as the server's own `Blast`.
-fn apply_events(game: &mut Game, s: &Snapshot, cols: u16) -> BTreeSet<u16> {
+/// sets off when it lands arrives as the server's own `Blast`. A
+/// `LaserBeam` is drawn likewise. Both are the moment's, so a quiet
+/// apply puts neither up, and a beam the client drew itself (`own_beams`,
+/// indices into `s.events`) is neither drawn nor handed on.
+fn apply_events(game: &mut Game, s: &Snapshot, cols: u16, show: Show, own_beams: &BTreeSet<usize>) -> BTreeSet<u16> {
     let restarted = s.events.iter().rev().find_map(|e| match *e {
         WireEvent::RoundStarted { seed, .. } => Some(seed),
         _ => None,
@@ -157,22 +393,36 @@ fn apply_events(game: &mut Game, s: &Snapshot, cols: u16) -> BTreeSet<u16> {
         }
     }
     let mut dead = BTreeSet::new();
-    for event in &s.events {
+    for (i, event) in s.events.iter().enumerate() {
         match *event {
             WireEvent::ObstacleDestroyed { x, y, .. } => {
                 let at = Position::new(dequantise_pos(x), dequantise_pos(y));
                 dead.insert(cell_index(cols, map::world_to_cell(at)));
             }
-            WireEvent::DrumLaunched { x, y, to_x, to_y } => {
+            WireEvent::DrumLaunched { x, y, to_x, to_y } if show.drawn() => {
                 let from = Position::new(dequantise_pos(x), dequantise_pos(y));
                 let to = Position::new(dequantise_pos(to_x), dequantise_pos(to_y));
                 // Only a fuel drum ever launches (`props::tick_fuses`).
                 game.drum_in_flight(from, to, Drum::Fuel as i32);
             }
+            // An instant hit: the beam is the only trace, and the replica's
+            // `tick_effects` fades it as a local round's does.
+            WireEvent::LaserBeam { x0, y0, x1, y1, variant, .. } if show.drawn() && !own_beams.contains(&i) => {
+                let start = Position::new(dequantise_pos(x0), dequantise_pos(y0));
+                let end = Position::new(dequantise_pos(x1), dequantise_pos(y1));
+                let variant = LaserVariant::ALL.get(variant as usize).copied().unwrap_or(LaserVariant::Red);
+                game.laser_beams.push(LaserBeam::new(start, end, variant));
+            }
             _ => {}
         }
     }
-    game.events = s.events.iter().filter_map(WireEvent::to_event).collect();
+    game.events = s
+        .events
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !own_beams.contains(i))
+        .filter_map(|(_, e)| WireEvent::to_event(e))
+        .collect();
     dead
 }
 
@@ -287,14 +537,27 @@ fn spawn_tank(game: &mut Game, t: &TankState, player: bool) -> Entity {
 }
 
 /// Write `t` into the tank `entity` and put its body where the hull is.
+///
+/// A jump is read off the hull's wire track (`WireTrack`), the last place
+/// the wire put it, rather than off where it was drawn. With no track yet
+/// the hull stands where `init` or `spawn_tank` put it, which nothing has
+/// drawn over.
 fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
     let position = Position::new(dequantise_pos(t.x), dequantise_pos(t.y));
     let velocity = Position::new(dequantise_velocity(t.vx), dequantise_velocity(t.vy));
     let rotation = dir_from_index(t.dir).unwrap_or(Dir::Up).rotation();
     let on = |bit: u8| t.flags & bit != 0;
+    let track = game.world.get::<&WireTrack>(entity).ok().map(|w| w.0);
     let (body, half_extents, turned) = {
         let mut q = game.world.query_one::<&mut Tank>(entity);
         let Ok(tank) = q.get() else { return };
+        if track.unwrap_or(tank.position).distance_to(position) > JUMP_PX {
+            // A jump, not a drive: no marks across it, and the ring put
+            // under the hull rather than left to chase it.
+            tank.track_from = None;
+            tank.ring_position = position;
+            tank.ring_velocity = Vec2::new(0.0, 0.0);
+        }
         tank.position = position;
         // The hull's facing snaps the way `Tank::control` snaps it; the
         // drawn angles stay where they are and swing across in
@@ -325,6 +588,10 @@ fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
         }
         (tank.body, tank.move_half_extents(tank.facing_along_x()), turned)
     };
+    let tracked = game.world.get::<&mut WireTrack>(entity).map(|mut w| w.0 = position).is_ok();
+    if !tracked {
+        game.world.insert_one(entity, WireTrack(position)).ok();
+    }
     let Some(body) = body else { return };
     let physics = game.physics_mut();
     physics.set_position(body, position);
@@ -351,7 +618,10 @@ fn set_timer(timer: &mut f32, on: bool, full: f32) {
 /// the pose the server sent and `render/missile.rs` draws it, exactly as a
 /// shot is held. What the wire leaves out stays at its spawn value - the
 /// aim, the target, the stage timers - because nothing here reads them.
-fn apply_missiles(game: &mut Game, s: &Snapshot) {
+///
+/// A missile seen for the first time puts the puff its launch put at the
+/// tube into `show`, when the spectacle is on.
+fn apply_missiles(game: &mut Game, s: &Snapshot, mut show: Option<&mut Spectacle>) {
     let mut existing: BTreeMap<u16, Entity> = BTreeMap::new();
     for (e, m) in game.world.query::<(Entity, &Missile)>().iter() {
         existing.insert((m.id & 0xFFFF) as u16, e);
@@ -391,6 +661,9 @@ fn apply_missiles(game: &mut Game, s: &Snapshot) {
                 m.facing = facing;
                 m.dir = dir;
                 game.world.spawn((m,));
+                if let Some(show) = show.as_deref_mut() {
+                    show.muzzle_flashes.push(Shockwave::new(ground));
+                }
             }
         }
     }
@@ -476,9 +749,16 @@ fn shadow_offset(id: u16, min: f32, max: f32) -> f32 {
     min + (max - min) * (h % 1000) as f32 / 1000.0
 }
 
+/// Who fired `sh`, as the replica holds it: the seat the wire names, or
+/// the replica's stand-in for an enemy.
+fn shot_owner(sh: &ShotState) -> Owner {
+    if sh.owner == crate::net::wire::NO_SEAT { REPLICA_OWNER } else { Owner::Player(sh.owner) }
+}
+
 fn spawn_shot(game: &mut Game, sh: &ShotState, position: Position, rotation: f32, dir: Vec2) {
     let knobs = tuning();
     let id = sh.id as u32;
+    let owner = shot_owner(sh);
     match sh.kind {
         ShotKind::Shell => {
             game.world.spawn((Shell {
@@ -488,7 +768,7 @@ fn spawn_shot(game: &mut Game, sh: &ShotState, position: Position, rotation: f32
                 rotation,
                 timer: 0.0,
                 done: false,
-                owner: REPLICA_OWNER,
+                owner,
                 variant: sh.variant as i32,
                 shooter_row: 0,
                 shadow_offset: shadow_offset(sh.id, knobs.shell_shadow_offset_min, knobs.shell_shadow_offset_max),
@@ -506,7 +786,7 @@ fn spawn_shot(game: &mut Game, sh: &ShotState, position: Position, rotation: f32
                 rotation,
                 timer: 0.0,
                 done: false,
-                owner: REPLICA_OWNER,
+                owner,
                 shooter_row: 0,
                 shadow_offset: shadow_offset(
                     sh.id,
@@ -526,7 +806,7 @@ fn spawn_shot(game: &mut Game, sh: &ShotState, position: Position, rotation: f32
                 rotation,
                 timer: 0.0,
                 done: false,
-                owner: REPLICA_OWNER,
+                owner,
                 variant: plasma_variant_from_index(sh.variant as i32),
                 shooter_row: 0,
                 shadow_offset: shadow_offset(sh.id, knobs.plasma_shadow_offset_min, knobs.plasma_shadow_offset_max),
@@ -538,7 +818,10 @@ fn spawn_shot(game: &mut Game, sh: &ShotState, position: Position, rotation: f32
     }
 }
 
-fn apply_frogs(game: &mut Game, s: &Snapshot) {
+/// The frogs as the snapshot has them. A frog that dies here puts the
+/// ripple its death set off on the server into `show`, when the
+/// spectacle is on.
+fn apply_frogs(game: &mut Game, s: &Snapshot, mut show: Option<&mut Spectacle>) {
     for f in &s.frogs {
         let position = Position::new(dequantise_pos(f.x), dequantise_pos(f.y));
         let entity = match f.side {
@@ -562,6 +845,11 @@ fn apply_frogs(game: &mut Game, s: &Snapshot) {
             let Ok(frog) = q.get() else { continue };
             frog.position = position;
             let dead = on(frog_flags::DEAD);
+            if dead && !frog.is_dead() {
+                if let Some(show) = show.as_deref_mut() {
+                    show.shocks.push(Shockwave::scaled(position, SHOCK_FROG));
+                }
+            }
             let hopping = on(frog_flags::HOPPING);
             frog.health = if dead { 0.0 } else { f.hp.max(1) as f32 };
             if hopping {
@@ -1184,6 +1472,40 @@ mod tests {
     /// `DrumLaunched` puts the drum in the air on the replica, which flies
     /// it from an age `tick_presentation` advances and drops it when it
     /// lands - the blast there is the server's own `Blast`.
+    /// **A laser was invisible online**: an instant hit leaves nothing in
+    /// the world for a snapshot to list, and `Fired` carries no
+    /// geometry. The beam travels as its own event now, and a replica
+    /// draws it and fades it as a local round does.
+    #[test]
+    fn a_laser_beam_arrives_as_an_event_and_is_drawn_on_the_replica() {
+        let mut game = authoritative(DEFAULT_MAP, 0xB0B5, 0);
+        let patch = crate::simulation::debug::TankPatch { laser_charges: Some(3), ..Default::default() };
+        game.debug_set_tank(0, &patch).expect("the seat's tank");
+        let mut replica = welcome_through_the_codec(&game);
+        let (w, h) = game.map.field_size();
+        game.update(Input::single(Intent { fire: true, ..Intent::default() }), PHYSICS_FIXED_DT, w, h);
+        assert!(
+            game.events().iter().any(|e| matches!(e, crate::simulation::Event::LaserBeam { .. })),
+            "the authority fired a laser: {:?}",
+            game.events()
+        );
+        let wire = enc::snapshot(&game, [0; MAX_SEATS]);
+        assert!(wire.events.iter().any(|e| matches!(e, WireEvent::LaserBeam { .. })), "the beam is on the wire");
+        snapshot(&mut replica, &wire);
+        assert_eq!(replica.laser_beams.len(), 1, "the replica draws the beam");
+        let beam = &replica.laser_beams[0];
+        assert!(
+            (beam.start.x - beam.end.x).abs() + (beam.start.y - beam.end.y).abs() > 32.0,
+            "a beam with length: {:?}",
+            (beam.start, beam.end)
+        );
+        // And it fades on the replica's own clock.
+        for _ in 0..120 {
+            replica.tick_presentation(PHYSICS_FIXED_DT);
+        }
+        assert!(replica.laser_beams.is_empty(), "the beam faded");
+    }
+
     #[test]
     fn a_launched_drum_flies_on_the_replica() {
         let mut game = authoritative(PROPS_MAP, 0xC0FFEE, 2);
@@ -1219,6 +1541,482 @@ mod tests {
             replica.tick_presentation(PHYSICS_FIXED_DT);
         }
         assert!(replica.flying_drums.is_empty(), "and it lands");
+    }
+
+    /// A round with no mission banner, so the first `update` already
+    /// plays: the frame a test's kill or detonation lands on is frame 1,
+    /// and every effect list is empty before it.
+    fn quiet_round(map: &str, seed: u64, enemies: usize) -> Game {
+        let mut game = Game::default();
+        game.show_intro = false;
+        game.seed_override = Some(seed);
+        game.enemy_count_override = Some(enemies);
+        game.player_row_override = Some(3);
+        game.level_overrides.spawn = Some(SpawnKind::Band);
+        game.map = MapFile::from_toml_str(map).expect("map parses");
+        let (width, height) = game.map.field_size();
+        game.init(width, height);
+        game
+    }
+
+    /// One idle frame of the authority, then its snapshot (that frame's
+    /// events included) through the codec onto `replica`.
+    fn step_and_apply(game: &mut Game, replica: &mut Game) {
+        let (width, height) = game.map.field_size();
+        game.update(Input::default(), PHYSICS_FIXED_DT, width, height);
+        let snap = enc::snapshot(game, [0; MAX_SEATS]);
+        let Msg::Snapshot(snap) = decode(&encode(&Msg::Snapshot(snap))).expect("decodes") else { panic!("kind") };
+        snapshot(replica, &snap);
+    }
+
+    /// The show a game is putting on, in a form two games can be compared
+    /// by: each list's entries sorted, positions rounded to whole pixels
+    /// (the wire carries quarter pixels, so a float centre and its
+    /// quantised twin agree to the pixel).
+    #[derive(Debug, PartialEq)]
+    struct Spectacles {
+        /// (x, y, scale in thousandths, secondary, fuel)
+        blasts: Vec<(i32, i32, i32, bool, bool)>,
+        /// (x, y, strength in hundredths)
+        shocks: Vec<(i32, i32, i32)>,
+        scorches: Vec<(i32, i32)>,
+        /// Each piece's landing spot.
+        decals: Vec<(i32, i32)>,
+        impacts: Vec<(i32, i32)>,
+        flash: bool,
+    }
+
+    fn spectacles(game: &Game) -> Spectacles {
+        let px = |p: Position| (p.x.round() as i32, p.y.round() as i32);
+        let sorted = |mut v: Vec<(i32, i32)>| {
+            v.sort();
+            v
+        };
+        let mut blasts: Vec<_> = game
+            .blast_fx
+            .iter()
+            .map(|b| {
+                let (x, y) = px(b.center);
+                (x, y, (b.scale * 1000.0).round() as i32, b.secondary, b.kind == crate::blast::BlastKind::Fuel)
+            })
+            .collect();
+        blasts.sort();
+        let mut shocks: Vec<_> = game
+            .shocks
+            .iter()
+            .map(|s| {
+                let (x, y) = px(s.center);
+                (x, y, (s.strength * 100.0).round() as i32)
+            })
+            .collect();
+        shocks.sort();
+        Spectacles {
+            blasts,
+            shocks,
+            scorches: sorted(game.scorches.iter().map(|s| px(s.center)).collect()),
+            decals: sorted(game.decals.iter().map(|d| px(d.center)).collect()),
+            impacts: sorted(game.impact_flashes.iter().map(|s| px(s.center)).collect()),
+            flash: game.screen_flash.is_some(),
+        }
+    }
+
+    /// A kill on the server is the same show on the replica: the kill's
+    /// shockwave, the wreck's fireball (the mushroom cloud where the hash
+    /// gives one), the impact flash, the screen flash, the scorch and the
+    /// hull parts thrown to the same spots - all off the `Wreck` event,
+    /// through the code the round itself ran.
+    ///
+    /// The victim stands on a whole pixel, which the wire carries exactly:
+    /// the show hashes from the pixel the centre truncates to, and a
+    /// centre just under a whole pixel can quantise onto the next one,
+    /// which picks another fireball. Every replica reads the same wire,
+    /// so they all agree with each other; only the headless server, which
+    /// nobody watches, might have drawn it otherwise.
+    #[test]
+    fn a_kill_puts_on_the_same_show_on_the_replica() {
+        let mut game = quiet_round(DEFAULT_MAP, 0xB0B5, 3);
+        let slot = game.first_enemy_slot();
+        let at = game.tank_snapshots().into_iter().find(|t| t.slot == slot).expect("the enemy").position;
+        game.debug_teleport(slot, Position::new(at.x.round(), at.y.round()), None).expect("a whole pixel");
+        let mut replica = welcome_through_the_codec(&game);
+        game.debug_kill(slot).expect("an enemy to kill");
+        step_and_apply(&mut game, &mut replica);
+        assert!(game.events().iter().any(|e| matches!(e, crate::simulation::Event::Wreck { .. })), "the kill landed");
+
+        let (server, client) = (spectacles(&game), spectacles(&replica));
+        assert!(!server.blasts.is_empty() && !server.shocks.is_empty() && !server.scorches.is_empty(), "{server:?}");
+        assert!(!server.decals.is_empty() && server.flash, "hull parts and a flash: {server:?}");
+        assert_eq!(client, server, "the replica puts on the round's show");
+
+        // The fireball is the wreck's own - the same hashed row and, where
+        // the hash gives one, the same mushroom cloud.
+        let fireball = |g: &Game| g.blast_fx.iter().map(|b| (b.row, b.turn, b.cloud.is_some())).collect::<Vec<_>>();
+        assert_eq!(fireball(&replica), fireball(&game));
+    }
+
+    /// A drum's blast likewise: the barrel's ripple, flash quad, fireball,
+    /// screen flash, scorch and thrown drum parts, off the `Blast` event -
+    /// and none of the damage, which the snapshot already carries.
+    #[test]
+    fn a_barrel_blast_puts_on_the_same_show_on_the_replica() {
+        let mut game = quiet_round(PROPS_MAP, 0xC0FFEE, 2);
+        let mut replica = welcome_through_the_codec(&game);
+        game.debug_detonate(map::cell_to_world(17, 6)).expect("the oil drum at (17,6)");
+        step_and_apply(&mut game, &mut replica);
+        assert!(game.events().iter().any(|e| matches!(e, crate::simulation::Event::Blast { .. })), "the drum went off");
+
+        let (server, client) = (spectacles(&game), spectacles(&replica));
+        assert!(server.blasts.iter().any(|b| !b.3), "a fireball: {server:?}");
+        assert!(!server.shocks.is_empty() && !server.scorches.is_empty() && !server.decals.is_empty(), "{server:?}");
+        assert_eq!(client, server, "the replica puts on the round's show");
+    }
+
+    /// The cook-offs a kill queues pop on the server seconds later, each
+    /// an `Event::CookOff`; the replica pops them off that event rather
+    /// than queuing its own, so each pops once.
+    #[test]
+    fn a_kills_cook_offs_pop_on_the_replica_off_their_events() {
+        let mut game = quiet_round(DEFAULT_MAP, 0xB0B5, 3);
+        let mut replica = welcome_through_the_codec(&game);
+        game.debug_kill(game.first_enemy_slot()).expect("an enemy to kill");
+        step_and_apply(&mut game, &mut replica);
+        assert!(replica.cookoffs.is_empty(), "the replica queues nothing of its own");
+        let mut popped = 0;
+        for _ in 0..(tuning().cookoff_window_seconds / PHYSICS_FIXED_DT) as u32 + 2 {
+            replica.tick_presentation(PHYSICS_FIXED_DT);
+            step_and_apply(&mut game, &mut replica);
+            let pops = game.events().iter().filter(|e| matches!(e, crate::simulation::Event::CookOff { .. })).count();
+            popped += pops;
+            let fresh = |g: &Game| g.blast_fx.iter().filter(|b| b.secondary && b.time == 0.0).count();
+            assert_eq!(fresh(&replica), pops, "every pop the server made this frame, and no other");
+            assert_eq!(fresh(&replica), fresh(&game));
+        }
+        assert!(popped > 0, "the wreck cooked off");
+    }
+
+    /// A seeker volley on the replica: a puff at each tube as its missile
+    /// first shows, and each burst the server's own show - the small
+    /// fireball leaning the way the missile came down, its ripple, flash
+    /// and scorch - off `MissileBlast`, leaning by the heading the
+    /// replica's copy of the missile last had, a tick before the dive
+    /// ended. Where it lands and which way it leans are compared; the size
+    /// jitter hashes from the pixel
+    /// the centre truncates to, which the wire's quarter pixel can move
+    /// (see `a_kill_puts_on_the_same_show_on_the_replica`).
+    #[test]
+    fn a_missile_burst_puts_on_the_same_show_on_the_replica() {
+        let mut game = quiet_round(DEFAULT_MAP, 0xB0B5, 2);
+        let patch = crate::simulation::debug::TankPatch { missile_ammo: Some(1), ..Default::default() };
+        game.debug_set_tank(0, &patch).expect("the seat's tank");
+        let mut replica = welcome_through_the_codec(&game);
+        let (width, height) = game.map.field_size();
+        let fresh_blasts = |g: &Game| {
+            let mut v: Vec<_> = g
+                .blast_fx
+                .iter()
+                .filter(|b| b.time == 0.0)
+                .map(|b| {
+                    let px = |v: f32| v.round() as i32;
+                    (px(b.center.x), px(b.center.y), px(b.offset.x), px(b.offset.y))
+                })
+                .collect();
+            v.sort();
+            v
+        };
+        let (mut puffs, mut bursts) = (0, 0);
+        for frame in 0..240 {
+            let fire = Intent { fire: frame == 0, ..Intent::default() };
+            let before = replica.muzzle_flashes.len();
+            game.update(Input::single(fire), PHYSICS_FIXED_DT, width, height);
+            let snap = enc::snapshot(&game, [0; MAX_SEATS]);
+            snapshot(&mut replica, &snap);
+            let launched = game.muzzle_flashes.iter().filter(|m| m.time == 0.0).count();
+            let drawn = replica.muzzle_flashes.len() - before;
+            puffs += launched;
+            assert_eq!(drawn, launched, "frame {frame}: a puff per missile launched");
+            if game.events().iter().any(|e| matches!(e, crate::simulation::Event::MissileBlast { .. })) {
+                bursts += 1;
+                let (client, server) = (fresh_blasts(&replica), fresh_blasts(&game));
+                assert_eq!(client.len(), server.len(), "frame {frame}: a fireball per burst");
+                for (c, s) in client.iter().zip(&server) {
+                    assert_eq!((c.0, c.1), (s.0, s.1), "frame {frame}: where it burst");
+                    // One 2 px step of lean at most: the heading the replica
+                    // leans by is the wire's, a tick before the dive ended.
+                    assert!((c.2 - s.2).abs() <= 2 && (c.3 - s.3).abs() <= 2, "frame {frame}: the lean {c:?} for {s:?}");
+                }
+            }
+            replica.tick_presentation(PHYSICS_FIXED_DT);
+        }
+        assert!(puffs > 0 && bursts > 0, "a volley went up ({puffs}) and came down ({bursts})");
+    }
+
+    /// A shot that lands flashes where it landed; a flamethrower's
+    /// contact, the zero-damage hit on a hull, never flashed on the server
+    /// and does not here.
+    #[test]
+    fn a_hit_leaves_an_impact_flash_and_a_flames_contact_does_not() {
+        let game = quiet_round(DEFAULT_MAP, 0xB0B5, 2);
+        let mut replica = welcome_through_the_codec(&game);
+        let mut snap = enc::snapshot(&game, [0; MAX_SEATS]);
+        snap.events = vec![
+            WireEvent::Hit { target: WireHitTarget::Wall, damage: 0.0, killed: false, x: 400, y: 800 },
+            WireEvent::Hit { target: WireHitTarget::Enemy { slot: 1 }, damage: 0.0, killed: false, x: 1600, y: 1600 },
+        ];
+        snapshot(&mut replica, &snap);
+        let at: Vec<Position> = replica.impact_flashes.iter().map(|s| s.center).collect();
+        assert_eq!(at, vec![Position::new(100.0, 200.0)], "one flash, at the wall hit");
+    }
+
+    /// A trigger pull ripples at the drawn muzzle: the spawn point the
+    /// round's own `Shell::spawn` gives, turned to where the turret is
+    /// drawn.
+    #[test]
+    fn a_shot_ripples_at_the_drawn_muzzle() {
+        let game = quiet_round(DEFAULT_MAP, 0xB0B5, 2);
+        let mut replica = welcome_through_the_codec(&game);
+        let mut snap = enc::snapshot(&game, [0; MAX_SEATS]);
+        snap.events = vec![WireEvent::Fired { slot: 0, weapon: WeaponKind::Shell, input_tick: 1 }];
+        let (expected, hull) = {
+            let player = replica.player().expect("a seat");
+            let tank = replica.world.get::<&Tank>(player).expect("its tank");
+            let lateral = tuning().tank_barrel_lateral_offset[tank.row as usize];
+            (Shell::spawn(&tank, tank.owner(), 0.0, -lateral).position, tank.position)
+        };
+        snapshot(&mut replica, &snap);
+        let at: Vec<Position> = replica.muzzle_flashes.iter().map(|s| s.center).collect();
+        assert_eq!(at, vec![expected]);
+        assert!(expected.distance_to(hull) > 1.0, "at the barrel's tip, not the hull's centre");
+    }
+
+    /// A welcome builds a round already under way: it puts on no show for
+    /// the tick it was cut on, since a late joiner has missed the moment.
+    #[test]
+    fn a_welcome_puts_on_no_show() {
+        let mut game = quiet_round(DEFAULT_MAP, 0xB0B5, 3);
+        game.debug_kill(game.first_enemy_slot()).expect("an enemy to kill");
+        let (width, height) = game.map.field_size();
+        game.update(Input::default(), PHYSICS_FIXED_DT, width, height);
+        assert!(!game.blast_fx.is_empty(), "the server's frame has its fireball");
+        let replica = welcome_through_the_codec(&game);
+        assert!(replica.blast_fx.is_empty() && replica.shocks.is_empty() && replica.screen_flash.is_none());
+    }
+
+    /// Where the replica's hull stands and how many tread marks it has.
+    fn player_marks(replica: &Game) -> (Position, Position, usize) {
+        let player = replica.player().expect("a seat");
+        let tank = replica.world.get::<&Tank>(player).expect("its tank");
+        (tank.position, tank.ring_position, replica.tracks.len())
+    }
+
+    /// A hull that jumps - a portal, a gate, the room placing it - lays no
+    /// tread marks across the gap and takes its ring with it, while one
+    /// that drives lays marks along the way as ever.
+    #[test]
+    fn a_hull_that_jumps_lays_no_tread_marks_across_the_gap() {
+        let game = quiet_round(DEFAULT_MAP, 0xB0B5, 0);
+        let mut replica = welcome_through_the_codec(&game);
+        replica.tick_presentation(PHYSICS_FIXED_DT);
+        let base = enc::snapshot(&game, [0; MAX_SEATS]);
+        let moved = |dx_px: i16| {
+            let mut s = base.clone();
+            s.events.clear();
+            let seat = s.tanks.iter_mut().find(|t| t.id == 0).expect("the seat's tank");
+            seat.x += dx_px * 4;
+            s
+        };
+
+        let (_, _, marks) = player_marks(&replica);
+        snapshot(&mut replica, &moved(40));
+        replica.tick_presentation(PHYSICS_FIXED_DT);
+        let (_, _, driven) = player_marks(&replica);
+        assert!(driven > marks, "a drive of 40 px lays marks: {marks} -> {driven}");
+
+        snapshot(&mut replica, &moved(40 + 200));
+        replica.tick_presentation(PHYSICS_FIXED_DT);
+        let (hull, ring, jumped) = player_marks(&replica);
+        assert_eq!(jumped, driven, "no mark across a 200 px jump");
+        assert_eq!(ring, hull, "the ring is under the hull, not flying after it");
+
+        snapshot(&mut replica, &moved(40 + 200 + 40));
+        replica.tick_presentation(PHYSICS_FIXED_DT);
+        let (_, _, after) = player_marks(&replica);
+        assert!(after > jumped, "and it lays marks again from where it landed");
+    }
+
+    /// The local seat's hull is drawn where its prediction has it
+    /// (`net::round` writes it over the replica every frame, between the
+    /// apply and the presentation tick), ahead of its wire track by the
+    /// picture's delay and the round trip. That gap is no jump: a drive on
+    /// the wire keeps the tread marks coming and the ring following. A
+    /// jump on the wire itself still is one.
+    #[test]
+    fn a_hull_drawn_ahead_of_its_wire_track_is_no_jump() {
+        let game = quiet_round(DEFAULT_MAP, 0xB0B5, 0);
+        let mut replica = welcome_through_the_codec(&game);
+        let base = enc::snapshot(&game, [0; MAX_SEATS]);
+        let moved = |dx_px: i16| {
+            let mut s = base.clone();
+            s.events.clear();
+            let seat = s.tanks.iter_mut().find(|t| t.id == 0).expect("the seat's tank");
+            seat.x += dx_px * 4;
+            s
+        };
+        let player = replica.player().expect("a seat");
+        // The prediction, a hundred pixels up the road from the track.
+        let draw_ahead = |replica: &mut Game| {
+            let (wire, rotation) = {
+                let tank = replica.world.get::<&Tank>(player).expect("its tank");
+                (tank.position, tank.rotation)
+            };
+            replica.place_seat(0, Position::new(wire.x + 100.0, wire.y), rotation, Vec2::new(0.0, 0.0));
+        };
+        draw_ahead(&mut replica);
+        replica.tick_presentation(PHYSICS_FIXED_DT);
+        let (_, _, marks) = player_marks(&replica);
+
+        for step in 1..=8 {
+            snapshot(&mut replica, &moved(8 * step));
+            {
+                let tank = replica.world.get::<&Tank>(player).expect("its tank");
+                assert!(tank.track_from.is_some(), "step {step}: an 8 px drive read as a jump - the marks start over");
+                assert!(tank.ring_position != tank.position, "step {step}: the ring was put under the wire track");
+            }
+            draw_ahead(&mut replica);
+            replica.tick_presentation(PHYSICS_FIXED_DT);
+        }
+        let (_, _, driven) = player_marks(&replica);
+        assert!(driven > marks, "the drawn hull drove 64 px and laid marks: {marks} -> {driven}");
+
+        snapshot(&mut replica, &moved(8 * 8 + 200));
+        let (hull, ring, _) = player_marks(&replica);
+        let tank = replica.world.get::<&Tank>(player).expect("its tank");
+        assert!(tank.track_from.is_none(), "a 200 px jump on the wire lays no mark across it");
+        assert_eq!(ring, hull, "and takes the ring with it");
+    }
+
+    /// A beam stopped by a shield deals nothing, and flashes where it
+    /// stopped all the same, as `resolve_lasers` flashes it; the
+    /// zero-damage hit a flame's contact makes still does not. A beam
+    /// the client drew itself (`Show::OwnShotsDrawn`) is not drawn again,
+    /// and still tells its hit apart.
+    #[test]
+    fn a_beam_stopped_by_a_shield_flashes_where_it_stopped() {
+        let game = quiet_round(DEFAULT_MAP, 0xB0B5, 2);
+        let mut snap = enc::snapshot(&game, [0; MAX_SEATS]);
+        snap.events = vec![
+            WireEvent::Fired { slot: 0, weapon: WeaponKind::Laser, input_tick: 1 },
+            WireEvent::LaserBeam { x0: 400, y0: 400, x1: 1600, y1: 400, variant: 0, seat: 0 },
+            WireEvent::Hit { target: WireHitTarget::Enemy { slot: 1 }, damage: 0.0, killed: false, x: 1600, y: 400 },
+            WireEvent::Hit { target: WireHitTarget::Enemy { slot: 2 }, damage: 0.0, killed: false, x: 2000, y: 800 },
+        ];
+        let flashes = |g: &Game| g.impact_flashes.iter().map(|s| s.center).collect::<Vec<_>>();
+
+        let mut replica = welcome_through_the_codec(&game);
+        snapshot(&mut replica, &snap);
+        assert_eq!(flashes(&replica), vec![Position::new(400.0, 100.0)], "the beam's hit flashes, the flame's contact does not");
+        assert_eq!(replica.laser_beams.len(), 1);
+        assert_eq!(replica.muzzle_flashes.len(), 1, "the beam's muzzle");
+
+        let mut own = welcome_through_the_codec(&game);
+        snapshot_with(&mut own, &snap, Show::OwnShotsDrawn { seat: 0, beams: 1 });
+        assert_eq!(flashes(&own), vec![Position::new(400.0, 100.0)], "the client's own beam still flashes its hit");
+        assert!(own.laser_beams.is_empty() && own.muzzle_flashes.is_empty(), "the client drew its own beam and muzzle");
+        assert!(
+            !own.events().iter().any(|e| matches!(e, crate::simulation::Event::LaserBeam { .. })),
+            "and the beam is not handed on as the replica's"
+        );
+    }
+
+    /// Only the beams the client claimed are left out, each by the `Fired`
+    /// before it: with two of the seat's beams in a snapshot and only the
+    /// second `Fired` claimed, the first beam - a press the local gate
+    /// refused and the room fired - is drawn and handed on as the room's,
+    /// and the second is not; a seat whose client claimed none gets both.
+    #[test]
+    fn only_the_beams_the_client_drew_are_left_out() {
+        let game = quiet_round(DEFAULT_MAP, 0xB0B5, 2);
+        let mut snap = enc::snapshot(&game, [0; MAX_SEATS]);
+        let enemy = game.first_enemy_slot() as u16;
+        snap.events = vec![
+            WireEvent::Fired { slot: 0, weapon: WeaponKind::Laser, input_tick: 3 },
+            WireEvent::LaserBeam { x0: 400, y0: 400, x1: 1600, y1: 400, variant: 0, seat: 0 },
+            WireEvent::Fired { slot: enemy, weapon: WeaponKind::Shell, input_tick: 0 },
+            WireEvent::Fired { slot: 0, weapon: WeaponKind::Laser, input_tick: 5 },
+            WireEvent::LaserBeam { x0: 400, y0: 800, x1: 1600, y1: 800, variant: 0, seat: 0 },
+        ];
+        let beams = |g: &Game| g.events().iter().filter(|e| matches!(e, crate::simulation::Event::LaserBeam { .. })).count();
+
+        let mut second = welcome_through_the_codec(&game);
+        snapshot_with(&mut second, &snap, Show::OwnShotsDrawn { seat: 0, beams: 0b10 });
+        assert_eq!(second.laser_beams.len(), 1, "the beam the client did not draw is drawn");
+        let drawn = second.laser_beams[0].start;
+        assert_eq!((drawn.x, drawn.y), (100.0, 100.0), "and it is the first `Fired`'s");
+        assert_eq!(beams(&second), 1, "and handed on");
+        assert_eq!(second.muzzle_flashes.len(), 2, "its muzzle flashes, and the enemy's `Fired` ripples");
+
+        let mut none = welcome_through_the_codec(&game);
+        snapshot_with(&mut none, &snap, Show::OwnShotsDrawn { seat: 0, beams: 0 });
+        assert_eq!((none.laser_beams.len(), beams(&none)), (2, 2), "a client that drew no beam draws both of the room's");
+    }
+
+    /// The same, off a real round: a seat's laser into an enemy under a
+    /// shield. The room flashes the hit and the replica flashes it where
+    /// the room did.
+    #[test]
+    fn a_laser_on_a_shield_flashes_on_the_replica_as_on_the_server() {
+        let mut game = quiet_round(DEFAULT_MAP, 0xB0B5, 2);
+        let seat = game.tank_snapshots().into_iter().find(|t| t.slot == 0).expect("the seat");
+        let rad = seat.rotation.to_radians();
+        let ahead = Position::new(seat.position.x + rad.sin() * 90.0, seat.position.y - rad.cos() * 90.0);
+        let enemy = game.first_enemy_slot();
+        game.debug_teleport(enemy, ahead, Some(seat.rotation)).expect("an enemy");
+        let shield = crate::simulation::debug::TankPatch { shield_hp: Some(500.0), ..Default::default() };
+        game.debug_set_tank(enemy, &shield).expect("the enemy's tank");
+        let laser = crate::simulation::debug::TankPatch { laser_charges: Some(3), ..Default::default() };
+        game.debug_set_tank(0, &laser).expect("the seat's tank");
+        let mut replica = welcome_through_the_codec(&game);
+        let (width, height) = game.map.field_size();
+        game.update(Input::single(Intent { fire: true, ..Intent::default() }), PHYSICS_FIXED_DT, width, height);
+        assert!(
+            game.events().iter().any(|e| matches!(e, crate::simulation::Event::Hit { damage, .. } if *damage == 0.0)),
+            "the beam stopped on the shield: {:?}",
+            game.events()
+        );
+        let snap = enc::snapshot(&game, [0; MAX_SEATS]);
+        let Msg::Snapshot(snap) = decode(&encode(&Msg::Snapshot(snap))).expect("decodes") else { panic!("kind") };
+        snapshot(&mut replica, &snap);
+        let centres = |g: &Game| g.impact_flashes.iter().map(|s| s.center).collect::<Vec<_>>();
+        let (server, client) = (centres(&game), centres(&replica));
+        assert!(!server.is_empty(), "the room flashed the hit");
+        assert_eq!(client.len(), server.len(), "a flash for each of the room's: {client:?} vs {server:?}");
+        // The wire carries quarter pixels.
+        for at in &server {
+            assert!(client.iter().any(|c| c.distance_to(*at) <= 0.25), "no flash at {at:?} on the replica: {client:?}");
+        }
+    }
+
+    /// A seat whose client drew its own shots (`Show::OwnShotsDrawn`) gets
+    /// no ripple from its `Fired` - the client put one on at the press -
+    /// while every other tank's `Fired` ripples as ever, and the event
+    /// itself is handed on either way.
+    #[test]
+    fn a_fired_the_client_drew_itself_ripples_nothing() {
+        let game = quiet_round(DEFAULT_MAP, 0xB0B5, 2);
+        let enemy = game.first_enemy_slot() as u16;
+        let mut snap = enc::snapshot(&game, [0; MAX_SEATS]);
+        snap.events = vec![
+            WireEvent::Fired { slot: 0, weapon: WeaponKind::Shell, input_tick: 1 },
+            WireEvent::Fired { slot: enemy, weapon: WeaponKind::Shell, input_tick: 0 },
+        ];
+        let mut replica = welcome_through_the_codec(&game);
+        snapshot_with(&mut replica, &snap, Show::OwnShotsDrawn { seat: 0, beams: 0 });
+        assert_eq!(replica.muzzle_flashes.len(), 1, "the enemy's ripple and not the seat's");
+        let fired = replica.events().iter().filter(|e| matches!(e, crate::simulation::Event::Fired { .. })).count();
+        assert_eq!(fired, 2, "both `Fired` are handed on");
+
+        let mut plain = welcome_through_the_codec(&game);
+        snapshot(&mut plain, &snap);
+        assert_eq!(plain.muzzle_flashes.len(), 2, "a replica that predicts nothing ripples both");
     }
 
     #[test]

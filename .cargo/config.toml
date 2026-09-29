@@ -28,13 +28,11 @@ rustflags = [
     # unchanged on web.
     "-C", "link-arg=--preload-file",
     "-C", "link-arg=static@/static",
-    # EXPERIMENTAL: normally skipped (the game loop runs via
-    # sola_raylib::core::game_loop::run/emscripten_set_main_loop_arg, not a
-    # blocking `while` pattern, and there's no audio yet - see CLAUDE.md),
-    # since it costs real wasm size and per-call overhead. Turned on here to
-    # try letting `Game::init`'s spawn-placement loop (and anything else
-    # synchronous) yield mid-frame instead of relying on it staying bounded.
-    "-C", "link-arg=-sASYNCIFY=1",
+    # No `-sASYNCIFY=1` (docs/online-coop-prd.md decision 19): the loop runs
+    # through emscripten_set_main_loop_arg and never yields mid-frame, there
+    # is no audio, and asyncify instruments every function in the binary,
+    # which roughly halved the web client's speed. Adding `InitAudioDevice`
+    # is what would bring it back.
     # The wasm shadow stack. emscripten's default is 64 KB, which `app::run`
     # (a ~20 KB frame: every texture handle, the session and the loop closure
     # are its locals) plus raylib's PNG decoder already exceed. An overflow

@@ -41,6 +41,16 @@ async fn start_server() -> (SocketAddr, std::sync::Arc<bongbong_server::hub::Hub
     (addr, hub)
 }
 
+/// A server whose connections run on a short keep-alive, for a test to
+/// see a silent client go without waiting ten seconds.
+async fn start_server_with_keep_alive(keep_alive: bongbong_server::hub::KeepAlive) -> SocketAddr {
+    let config = Config { listen: "127.0.0.1:0".parse().unwrap(), insecure: true, max_rooms: 8 };
+    let server = Server::bind(config).await.expect("bind an ephemeral port").keep_alive(keep_alive);
+    let addr = server.addr;
+    tokio::spawn(server.run(std::future::pending()));
+    addr
+}
+
 async fn connect(addr: SocketAddr) -> Client {
     let (ws, _) = connect_async(format!("ws://{addr}/ws")).await.expect("connect");
     ws
@@ -79,6 +89,8 @@ fn describe(msg: &Msg) -> String {
         Msg::Snapshot(s) => format!("snapshot tick {}", s.tick),
         Msg::Delta(d) => format!("delta tick {}", d.tick),
         Msg::Intent(_) => "intent".into(),
+        Msg::Ping(p) => format!("ping {}", p.client_ms),
+        Msg::Pong(p) => format!("pong {} at {}", p.client_ms, p.server_ms),
     }
 }
 
@@ -271,8 +283,9 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
     drop(fourth);
 
     // Ready, start: both get Started and a fresh Welcome with the round.
-    send(&mut second, &Msg::Lobby(Lobby::Ready)).await;
-    send(&mut host, &Msg::Lobby(Lobby::Start)).await;
+    // The two sockets reach the room by two tasks, so the start waits for
+    // the roster to show the ready rather than racing it.
+    ready_then_start(&mut host, &mut second).await;
     let (mut host_baseline, mut second_baseline): (Option<Snapshot>, Option<Snapshot>) = (None, None);
     let mut host_replica: Option<Game> = None;
     for (ws, seat) in [(&mut host, 0u8), (&mut second, 1u8)] {
@@ -324,10 +337,16 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
                     tick += 1;
                     let leg = (tick / 30) % 4;
                     let move_dir = [1u8, 4, 2, 3][leg as usize];
-                    send(&mut ws, &Msg::Intent(IntentMsg { tick, move_dir, face: move_dir, fire: tick % 90 == 0 })).await;
+                    send(&mut ws, &Msg::Intent(IntentMsg { tick, move_dir, face: move_dir, fire: tick % 90 == 0, ..IntentMsg::default() })).await;
                 }
                 frame = ws.next() => {
-                    let Some(Ok(Message::Binary(bytes))) = frame else { break };
+                    // The server's keep-alive pings are the socket's own
+                    // business: tungstenite answers them on the next read.
+                    let bytes = match frame {
+                        Some(Ok(Message::Binary(bytes))) => bytes,
+                        Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
+                        _ => break,
+                    };
                     match codec::decode(&bytes).unwrap() {
                         Msg::Delta(d) => {
                             seen.baseline = apply_delta(&seen.baseline, &d);
@@ -519,7 +538,7 @@ async fn four_seats_play_one_round_and_every_replica_follows_the_wire() {
             // tanks that are not where they started.
             let dir = 1 + (seat as u8 % 4);
             for tick in 1..=10u32 {
-                send(&mut ws, &Msg::Intent(IntentMsg { tick, move_dir: dir, face: dir, fire: false })).await;
+                send(&mut ws, &Msg::Intent(IntentMsg { tick, move_dir: dir, face: dir, fire: false, ..IntentMsg::default() })).await;
             }
             follow(&mut ws, baseline, Some(replica), span).await
         }));
@@ -619,15 +638,15 @@ fn play_a_round(url: String, span: Duration) -> Played {
             match event {
                 ClientEvent::Created { code: minted } => code = Some(minted),
                 ClientEvent::Started => in_round = true,
-                ClientEvent::Welcomed(w) if in_round => {
+                ClientEvent::Welcomed { welcome: w, .. } if in_round => {
                     assert_eq!(w.seed, 0xB0B5, "the round runs on the seed the host pinned");
                     let game = apply::welcome(&w).expect("a replica from the welcome");
                     assert_replica_matches(&game, &w.snapshot);
                     replica = Some(game);
                     round_end = Some(Instant::now() + span);
                 }
-                ClientEvent::Welcomed(_) => {}
-                ClientEvent::Snapshot(snapshot) => {
+                ClientEvent::Welcomed { .. } => {}
+                ClientEvent::Snapshot { snapshot, .. } => {
                     let game = replica.as_mut().expect("a snapshot before the welcome");
                     apply::snapshot(game, &snapshot);
                     played.snapshots.push((Instant::now(), snapshot.tick));
@@ -639,7 +658,7 @@ fn play_a_round(url: String, span: Duration) -> Played {
                 ClientEvent::Refused(why) => panic!("the room refused: {why}"),
                 ClientEvent::Closed(why) => panic!("the socket closed: {why}"),
                 ClientEvent::Ended { outcome } => panic!("the round ended early: {outcome:?}"),
-                ClientEvent::Roster { .. } | ClientEvent::Said { .. } => {}
+                ClientEvent::Roster { .. } | ClientEvent::Said { .. } | ClientEvent::Pong { .. } => {}
             }
         }
         if !asked_to_start && client.phase() == &Phase::Lobby {
@@ -885,10 +904,16 @@ async fn play_to_the_end(ws: &mut Client, baseline: Snapshot) -> PlayedOut {
                 tick += 1;
                 // Up the lane, and a shell on the press: a held trigger
                 // fires once, so the trigger is pulled.
-                send(ws, &Msg::Intent(IntentMsg { tick, move_dir: 0, face: 1, fire: tick % 6 == 0 })).await;
+                send(ws, &Msg::Intent(IntentMsg { tick, move_dir: 0, face: 1, fire: tick % 6 == 0, ..IntentMsg::default() })).await;
             }
             frame = ws.next() => {
-                let Some(Ok(Message::Binary(bytes))) = frame else { break };
+                // The server's keep-alive pings are the socket's own
+                // business: tungstenite answers them on the next read.
+                let bytes = match frame {
+                    Some(Ok(Message::Binary(bytes))) => bytes,
+                    Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
+                    _ => break,
+                };
                 let next = match codec::decode(&bytes).expect("a protocol message") {
                     Msg::Delta(d) => apply_delta(&baseline, &d),
                     Msg::Snapshot(s) => s,
@@ -941,11 +966,11 @@ async fn every_tap_of_the_trigger_puts_a_shell_in_the_air() {
             for event in events.drain(..) {
                 match event {
                     ClientEvent::Started => in_round = true,
-                    ClientEvent::Welcomed(w) if in_round => {
+                    ClientEvent::Welcomed { welcome: w, .. } if in_round => {
                         seat = w.seat as u16;
                         round_end = Some(Instant::now() + Duration::from_secs(2));
                     }
-                    ClientEvent::Snapshot(s) => {
+                    ClientEvent::Snapshot { snapshot: s, .. } => {
                         fired += s
                             .events
                             .iter()
@@ -992,8 +1017,9 @@ async fn every_tap_of_the_trigger_puts_a_shell_in_the_air() {
 }
 
 /// **The whole client, against the real server.** `OnlineRound::send`
-/// paces intents against real time and the server's mailbox applies them
-/// one per tick, in order; the two clocks are independent. Every other
+/// paces intents against real time and the server's mailbox takes them
+/// on its own ticks - one a tick in order for a server-driven seat, all
+/// waiting for an owned one; the two clocks are independent. Every other
 /// test drives one side or the other - `Lockstep` and the tests above
 /// call `RoomClient::send_intent` directly, and `net::rig`'s room, though
 /// it holds the same mailbox, is fed by a client on the same thread. This
@@ -1049,6 +1075,104 @@ async fn the_whole_client_taps_the_trigger_and_the_room_answers() {
         fired * 2 >= pulls,
         "pulled the trigger {pulls} times and only {fired} shells came back from the room"
     );
+}
+
+/// **Stage 3 against the real room** (docs/online-coop-prd.md §4.14): a
+/// client that owns its hull drives it on the spot, every packet carries
+/// the pose, and the room's snapshots follow it - the room's copy is
+/// where the client was a round trip ago, never somewhere the client is
+/// pulled back to.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_client_that_owns_its_hull_is_followed_by_the_room() {
+    use bongbong::net::round::OnlineRound;
+    use bongbong::tank::Dir;
+
+    let (addr, _hub) = start_server().await;
+    let url = socket_url(&RoomsHost::overriding(&format!("ws://{addr}")));
+
+    let (start, mine, room, report) = tokio::task::spawn_blocking(move || {
+        let client = RoomClient::host(
+            NativeTransport::connect(&url),
+            Identity::new("host", "tok-host"),
+            RoomSetup { map: "default".into(), map_toml: None, mission: Mission::Protect, seed: Some(0xB0B5) },
+        );
+        let mut round = OnlineRound::new(client, "TEST");
+        round.set_client_hull(true);
+        let frame = Duration::from_millis(16);
+        let dt = frame.as_secs_f32();
+        let give_up = Instant::now() + WAIT * 4;
+        while round.game().is_none_or(|g| g.frame() == 0) {
+            round.frame(&Intent::default(), dt);
+            round.start_round();
+            assert!(Instant::now() < give_up, "the round never got going");
+            std::thread::sleep(frame);
+        }
+        let start = round.own_hull_at().expect("the seat's hull");
+        let drive = Intent { move_dir: Some(Dir::Right), ..Intent::default() };
+        for _ in 0..120 {
+            round.frame(&drive, dt);
+            std::thread::sleep(frame);
+        }
+        // Stand still a few frames so the room's word catches up with
+        // where the hull stopped.
+        for _ in 0..12 {
+            round.frame(&Intent::default(), dt);
+            std::thread::sleep(frame);
+        }
+        (start, round.own_hull_at().expect("a hull"), round.room_has_seat_at().expect("the room's word"), round.prediction().expect("a report"))
+    })
+    .await
+    .expect("the client's thread");
+
+    eprintln!("owned hull: start {start:?}, mine {mine:?}, the room has it at {room:?}; {report:?}");
+    assert!(mine.0 > start.0 + 60.0, "the hull drove right on the spot: {start:?} -> {mine:?}");
+    assert!((room.0 - mine.0).abs() < 8.0 && (room.1 - mine.1).abs() < 8.0, "the room followed the hull: {room:?} vs {mine:?}");
+    assert_eq!((report.nudges, report.snaps, report.in_flight), (0, 0, 0), "an owned hull is never corrected: {report:?}");
+}
+
+/// **The round trip is measured, not guessed** (docs/online-coop-prd.md
+/// §4.15): a probe goes out four times a second, the connection task
+/// echoes it with the server's clock, and the round's `RttClock` reads a
+/// round trip on loopback in the low milliseconds and a server time that
+/// agrees with the snapshots' stamps.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_round_trip_is_measured_against_the_real_room() {
+    use bongbong::net::round::OnlineRound;
+
+    let (addr, _hub) = start_server().await;
+    let url = socket_url(&RoomsHost::overriding(&format!("ws://{addr}")));
+    let (report, newest_server_ms, server_now) = tokio::task::spawn_blocking(move || {
+        let client = RoomClient::host(
+            NativeTransport::connect(&url),
+            Identity::new("host", "tok-host"),
+            RoomSetup { map: "default".into(), map_toml: None, mission: Mission::Protect, seed: Some(0xB0B5) },
+        );
+        let mut round = OnlineRound::new(client, "TEST");
+        let frame = Duration::from_millis(16);
+        let give_up = Instant::now() + WAIT * 4;
+        while round.game().is_none_or(|g| g.frame() == 0) {
+            round.frame(&Intent::default(), frame.as_secs_f32());
+            round.start_round();
+            assert!(Instant::now() < give_up, "the round never got going");
+            std::thread::sleep(frame);
+        }
+        for _ in 0..90 {
+            round.frame(&Intent::default(), frame.as_secs_f32());
+            std::thread::sleep(frame);
+        }
+        let report = round.rtt().expect("probes answered");
+        let newest = round.interp().newest().expect("a snapshot").server_ms as f64;
+        let now = report.offset_ms + round.local_clock_ms() as f64;
+        (report, newest, now)
+    })
+    .await
+    .expect("the client's thread");
+    eprintln!("rtt {report:?}; newest snapshot stamped {newest_server_ms}, server now {server_now}");
+    assert!(report.samples >= 4, "four probes a second for a second and a half: {report:?}");
+    assert!(report.rtt_ms < 20.0, "a loopback round trip is milliseconds: {report:?}");
+    // The newest snapshot was stamped a moment ago on the same clock.
+    let age = server_now - newest_server_ms;
+    assert!((-5.0..60.0).contains(&age), "the snapshot's stamp is {age} ms from the probe clock's now");
 }
 
 /// **Co-op is two seats, and the second one has to be able to shoot.**
@@ -1225,4 +1349,143 @@ async fn a_drain_closes_idle_rooms_at_once_and_waits_only_for_a_round_in_play() 
 
     drop(playing);
     tokio::time::timeout(WAIT, hub.drained()).await.expect("the paused round is not waited for");
+}
+
+/// The next snapshot on `ws`, a delta applied onto `baseline`, which
+/// moves on to it.
+async fn next_state(ws: &mut Client, baseline: &mut Snapshot) -> Snapshot {
+    let msg = expect(ws, "a snapshot", |m| match m {
+        m @ (Msg::Delta(_) | Msg::Snapshot(_)) => Ok(m),
+        other => Err(other),
+    })
+    .await;
+    let next = match msg {
+        Msg::Delta(d) => apply_delta(baseline, &d),
+        Msg::Snapshot(s) => s,
+        _ => unreachable!("picked above"),
+    };
+    *baseline = next.clone();
+    next
+}
+
+/// **An owned burst is one read at the real room** (docs/online-coop-prd.md
+/// §4.16). A client that owns its hull has already driven it wherever its
+/// intents say, so a burst of them at or before the room's play point -
+/// here the first of the seat's stream, which the play point starts from -
+/// is one tick's work: the newest pose, the ack at the newest intent, and
+/// nothing left waiting to run a tick late. The same burst from a
+/// server-driven seat is still applied one a tick, in order, which is
+/// what that seat's replay needs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_owned_burst_is_taken_by_one_tick_and_a_server_driven_one_in_order() {
+    use bongbong::net::mailbox::{BUFFER_MAX, unpack};
+
+    let (addr, _hub) = start_server().await;
+    let mut ws = connect(addr).await;
+    send(&mut ws, &create(0xB0B5)).await;
+    let _ = expect_welcome(&mut ws).await;
+    send(&mut ws, &Msg::Lobby(Lobby::Start)).await;
+    let welcome = start_of_round(&mut ws).await;
+    let mut baseline = welcome.snapshot.clone();
+    let seat = welcome.seat as usize;
+    let me = *baseline.tanks.iter().find(|t| t.id as usize == seat).expect("the seat's tank");
+    // Standing still where the room has the hull, so every pose is taken.
+    let owned = |tick: u32| IntentMsg { tick, owned: true, x: me.x, y: me.y, dir: me.dir, ..IntentMsg::default() };
+    let _ = next_state(&mut ws, &mut baseline).await;
+
+    let burst = BUFFER_MAX as u32;
+    for tick in 1..=burst {
+        send(&mut ws, &Msg::Intent(owned(tick))).await;
+    }
+    let mut owned_seen: Vec<(u32, u8)> = Vec::new();
+    while owned_seen.last().is_none_or(|&(acked, _)| acked < burst) {
+        let s = next_state(&mut ws, &mut baseline).await;
+        let (depth, _) = unpack(s.mailbox[seat]);
+        owned_seen.push((s.acked[seat], depth));
+        assert!(owned_seen.len() < 60, "the burst was never acknowledged: {owned_seen:?}");
+    }
+    // Nothing is sent now, so the snapshots from the one that acknowledged
+    // the burst onwards say what its read left behind.
+    for _ in 0..3 {
+        let s = next_state(&mut ws, &mut baseline).await;
+        owned_seen.push((s.acked[seat], unpack(s.mailbox[seat]).0));
+    }
+    eprintln!("owned burst of {burst}: (acked, depth) per snapshot {owned_seen:?}");
+    let whole = owned_seen.iter().position(|&(acked, _)| acked >= burst).expect("the burst was acknowledged");
+    assert!(
+        owned_seen[whole..].iter().all(|&(_, depth)| depth == 0),
+        "the read that took the burst left depth behind: {owned_seen:?}"
+    );
+    // One tick takes the burst whole; a second only if the tick fell in
+    // the middle of the sends. `wire_state` is cut after the tick's
+    // update, so that one partial read's snapshot can show the rest of
+    // the burst arrived and waiting - on that snapshot alone, since the
+    // next read takes it all.
+    let partial = owned_seen.iter().filter(|&&(acked, _)| (1..burst).contains(&acked)).count();
+    assert!(partial <= 1, "the burst was worked through a tick at a time: {owned_seen:?}");
+    let waiting = owned_seen[..whole].iter().filter(|&&(_, depth)| depth > 0).count();
+    assert!(waiting <= 1, "an owned burst stood as depth past one partial read: {owned_seen:?}");
+
+    // The same burst from a seat the room drives: in order, one a tick.
+    for tick in burst + 1..=2 * burst {
+        send(&mut ws, &Msg::Intent(IntentMsg { tick, ..IntentMsg::default() })).await;
+    }
+    let mut ordered_seen: Vec<(u32, u8)> = Vec::new();
+    while ordered_seen.last().is_none_or(|&(acked, _)| acked < 2 * burst) {
+        let s = next_state(&mut ws, &mut baseline).await;
+        let (depth, _) = unpack(s.mailbox[seat]);
+        ordered_seen.push((s.acked[seat], depth));
+        assert!(ordered_seen.len() < 60, "the burst was never acknowledged: {ordered_seen:?}");
+    }
+    eprintln!("server-driven burst of {burst}: (acked, depth) per snapshot {ordered_seen:?}");
+    let mut acks: Vec<u32> = ordered_seen.iter().map(|&(acked, _)| acked).filter(|&a| a > burst).collect();
+    acks.dedup();
+    assert!(acks.len() as u32 >= burst - 2, "a server-driven burst is applied a tick at a time: {ordered_seen:?}");
+    assert!(ordered_seen.iter().any(|&(_, depth)| depth >= 2), "and waits its turn in the buffer: {ordered_seen:?}");
+}
+
+/// **A client that goes silent is let go; one that is only quiet is not**
+/// (`hub::KeepAlive`). The server pings every connection; a client that
+/// reads its socket answers at the protocol level - which is what a
+/// browser does even in a hidden tab - and stays however long it says
+/// nothing of its own, while one that neither reads nor sends, a path
+/// that died without closing, is closed once the limit passes, so its
+/// seat's grace starts and an empty round can pause.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_client_that_goes_silent_is_let_go_and_a_quiet_one_is_not() {
+    let keep_alive = bongbong_server::hub::KeepAlive {
+        ping_every: Duration::from_millis(50),
+        silent_after: Duration::from_millis(300),
+    };
+    let addr = start_server_with_keep_alive(keep_alive).await;
+
+    // Quiet: it reads (and so answers the pings) and says nothing else.
+    let mut quiet = connect(addr).await;
+    send(&mut quiet, &create(0xB0B5)).await;
+    let _ = expect_welcome(&mut quiet).await;
+    let until = Instant::now() + Duration::from_millis(900);
+    while Instant::now() < until {
+        match tokio::time::timeout(Duration::from_millis(50), quiet.next()).await {
+            Ok(Some(Ok(Message::Close(_)))) | Ok(None) | Ok(Some(Err(_))) => panic!("a quiet client that reads was closed"),
+            _ => {}
+        }
+    }
+
+    // Silent: it stops reading, so the server's pings go unanswered.
+    let mut silent = connect(addr).await;
+    send(&mut silent, &create(0xB0B6)).await;
+    let _ = expect_welcome(&mut silent).await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    let mut closed = false;
+    for _ in 0..200 {
+        match tokio::time::timeout(Duration::from_millis(100), silent.next()).await {
+            Ok(Some(Ok(Message::Close(_)))) | Ok(None) | Ok(Some(Err(_))) => {
+                closed = true;
+                break;
+            }
+            Ok(Some(Ok(_))) => continue,
+            Err(_) => break,
+        }
+    }
+    assert!(closed, "a client that answered nothing for the limit was kept");
 }

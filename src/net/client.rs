@@ -31,6 +31,33 @@ use crate::net::wire::{IntentMsg, Lobby, RosterSeat, RoundOutcome, Snapshot, Wel
 /// tap is spread over two.
 pub const FIRE_HOLD_TICKS: u8 = 2;
 
+/// How long a ping may go with nothing at all arriving after it before the
+/// room is taken as gone (`RoomClient::poll`). A connection can die without
+/// closing - a path that stalls between here and the room, a network that
+/// drops a phone - and a socket left open on it shows a frozen round for
+/// as long as the operating system cares to keep it. The room answers
+/// every ping and sends sixty snapshots a second during a round, so five
+/// seconds of silence after asking is not a hiccup: the lobby and the
+/// status line say so instead, and a rejoin reclaims the seat within the
+/// room's grace. The clock starts at a ping, not at the last message, so
+/// a client that stopped asking - a hidden browser tab runs no frames -
+/// is not closed for the silence it caused.
+pub const ROOM_SILENT_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// A gap between two of the client's own polls longer than this is the
+/// client having been away - a phone app suspended in the background, a
+/// debugger, a frame that took seconds - and the silence it ran up is its
+/// own: the clock toward `ROOM_SILENT_AFTER` starts again at the next ping,
+/// so a connection that is still alive is not closed on the first frame
+/// back, before its messages have had a moment to arrive.
+pub const CLIENT_AWAY_AFTER: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// How long a connection may stay unopened before the room is taken as
+/// unreachable (`RoomClient::poll`). The keep-alive only starts once the
+/// socket is open, and a dial whose path dies mid-handshake would
+/// otherwise leave the lobby reaching for the room forever.
+pub const ROOM_REACH_WITHIN: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// Who this client is to a room.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Identity {
@@ -152,10 +179,11 @@ pub enum ClientEvent {
     /// The room exists (a host's answer to its own create); this is the
     /// code to share. A `Welcomed` follows.
     Created { code: String },
-    /// The room's parameters and this client's seat. Build the replica
-    /// from it with `net::apply::welcome`; its own snapshot is the
-    /// baseline and is not repeated as a `Snapshot` event.
-    Welcomed(Box<Welcome>),
+    /// The room's parameters and this client's seat, and the instant it
+    /// came off the socket. Build the replica from it with
+    /// `net::apply::welcome`; its own snapshot is the baseline and is not
+    /// repeated as a `Snapshot` event.
+    Welcomed { welcome: Box<Welcome>, arrived: std::time::Instant },
     /// The roster changed: a seat joined, left, readied, dropped or came
     /// back.
     Roster { host: u8, seats: Vec<RosterSeat> },
@@ -166,8 +194,9 @@ pub enum ClientEvent {
     /// went. The snapshots stop here; the phase is `Lobby` again, so a
     /// host can ask for the rematch on the same seat and the same code.
     Ended { outcome: RoundOutcome },
-    /// A whole snapshot, deltas already applied onto the one before it.
-    Snapshot(Box<Snapshot>),
+    /// A whole snapshot, deltas already applied onto the one before it,
+    /// and the instant it came off the socket (`Transport::drain_stamped`).
+    Snapshot { snapshot: Box<Snapshot>, arrived: std::time::Instant },
     /// Somebody said something.
     Said { seat: u8, text: String },
     /// The room refused what was asked (a code that names no room, a
@@ -176,6 +205,9 @@ pub enum ClientEvent {
     Refused(String),
     /// The connection ended.
     Closed(Closed),
+    /// The answer to a clock probe (`RoomClient::ping`), and the instant
+    /// it came off the socket.
+    Pong { client_ms: u32, server_ms: u32, arrived: std::time::Instant },
 }
 
 /// A seat in a room, over one socket.
@@ -196,7 +228,17 @@ pub struct RoomClient<T: Transport> {
     intent_tick: u32,
     fire_held: u8,
     /// Reused by `poll` so a frame allocates nothing.
-    scratch: Vec<Msg>,
+    scratch: Vec<(Msg, std::time::Instant)>,
+    /// When the oldest ping nothing has answered yet went out: any
+    /// message arriving after it clears it (`ROOM_SILENT_AFTER`).
+    unanswered_since: Option<std::time::Instant>,
+    silent_after: std::time::Duration,
+    /// When `poll` last ran (`CLIENT_AWAY_AFTER`).
+    last_poll: Option<std::time::Instant>,
+    /// When this client started dialling, and how long the socket may take
+    /// to open (`ROOM_REACH_WITHIN`).
+    dialled_at: std::time::Instant,
+    reach_within: std::time::Duration,
 }
 
 impl<T: Transport> RoomClient<T> {
@@ -228,6 +270,11 @@ impl<T: Transport> RoomClient<T> {
             intent_tick: 0,
             fire_held: 0,
             scratch: Vec::new(),
+            unanswered_since: None,
+            silent_after: ROOM_SILENT_AFTER,
+            last_poll: None,
+            dialled_at: std::time::Instant::now(),
+            reach_within: ROOM_REACH_WITHIN,
         }
     }
 
@@ -238,9 +285,14 @@ impl<T: Transport> RoomClient<T> {
         if matches!(self.phase, Phase::Closed(_)) {
             return;
         }
+        let now = std::time::Instant::now();
+        if self.last_poll.is_some_and(|last| now.saturating_duration_since(last) > CLIENT_AWAY_AFTER) {
+            self.unanswered_since = None;
+        }
+        self.last_poll = Some(now);
         let mut scratch = std::mem::take(&mut self.scratch);
         scratch.clear();
-        self.transport.drain(&mut scratch);
+        self.transport.drain_stamped(&mut scratch);
         if self.transport.is_open()
             && self.phase == Phase::Connecting
             && let Some(greeting) = self.greeting.take()
@@ -248,14 +300,46 @@ impl<T: Transport> RoomClient<T> {
             self.say_hello(&greeting);
             self.phase = Phase::Greeting;
         }
-        for msg in scratch.drain(..) {
-            self.take(msg, out);
+        if self.unanswered_since.is_some_and(|since| scratch.iter().any(|&(_, arrived)| arrived >= since)) {
+            self.unanswered_since = None;
+        }
+        for (msg, arrived) in scratch.drain(..) {
+            self.take(msg, arrived, out);
         }
         self.scratch = scratch;
         if let ConnState::Closed(closed) = self.transport.state() {
             self.phase = Phase::Closed(closed.clone());
             out.push(ClientEvent::Closed(closed));
+            return;
         }
+        // Asked, and nothing since: the connection died without closing.
+        if self.unanswered_since.is_some_and(|since| since.elapsed() >= self.silent_after) {
+            self.give_up("the room stopped answering", out);
+        } else if self.phase == Phase::Connecting && self.dialled_at.elapsed() >= self.reach_within {
+            self.give_up("the room could not be reached", out);
+        }
+    }
+
+    /// Close the connection from this end for `reason`, which the lobby
+    /// and the status line show.
+    fn give_up(&mut self, reason: &str, out: &mut Vec<ClientEvent>) {
+        self.transport.close();
+        let closed = Closed::fault(reason);
+        self.phase = Phase::Closed(closed.clone());
+        out.push(ClientEvent::Closed(closed));
+    }
+
+    /// How long the socket may take to open (`ROOM_REACH_WITHIN` unless
+    /// set), for a test that cannot wait it out.
+    pub fn set_reach_within(&mut self, reach_within: std::time::Duration) {
+        self.reach_within = reach_within;
+    }
+
+    /// How long a ping may go unanswered before the room is taken as gone
+    /// (`ROOM_SILENT_AFTER` unless set), for a test that cannot wait it
+    /// out.
+    pub fn set_silent_after(&mut self, silent_after: std::time::Duration) {
+        self.silent_after = silent_after;
     }
 
     /// This frame's input for the local seat, sent as one `IntentMsg`.
@@ -271,6 +355,17 @@ impl<T: Transport> RoomClient<T> {
     /// server's edge detection will see - or `None` when nothing was
     /// sent.
     pub fn send_intent(&mut self, intent: &Intent) -> Option<IntentMsg> {
+        let msg = self.prepare_intent(intent)?;
+        self.send_prepared(&msg);
+        Some(msg)
+    }
+
+    /// The packet `send_intent` would send, stamped and with the fire
+    /// hold applied, not yet sent: a caller that owns its hull steps its
+    /// sandbox on it first and adds the pose that produced
+    /// (`IntentMsg::with_pose`), then hands it to `send_prepared`. The
+    /// tick is spent here, so a prepared packet must be sent.
+    pub fn prepare_intent(&mut self, intent: &Intent) -> Option<IntentMsg> {
         if self.seat.is_none() || !self.transport.is_open() {
             return None;
         }
@@ -282,12 +377,27 @@ impl<T: Transport> RoomClient<T> {
             msg.fire = true;
         }
         self.intent_tick = self.intent_tick.wrapping_add(1);
-        self.transport.send_msg(&Msg::Intent(msg));
         // The packet this carries, so a caller predicting the same input
         // stamps it identically - one counter, not two that could drift
         // apart - and gates its own trigger on the fire bit the server
         // will actually sample (`net::predict`).
         Some(msg)
+    }
+
+    /// Send a packet `prepare_intent` made.
+    pub fn send_prepared(&mut self, msg: &IntentMsg) {
+        self.transport.send_msg(&Msg::Intent(*msg));
+    }
+
+    /// Send a clock probe stamped with the caller's own milliseconds
+    /// (`net::clock`); the `Pong` comes back as a `ClientEvent`. Nothing
+    /// is sent on a socket that is not open. A probe nothing answers for
+    /// `ROOM_SILENT_AFTER` closes the connection (`poll`).
+    pub fn ping(&mut self, client_ms: u32) {
+        if self.transport.is_open() {
+            self.transport.send_msg(&Msg::Ping(crate::net::wire::Ping { client_ms }));
+            self.unanswered_since.get_or_insert_with(std::time::Instant::now);
+        }
     }
 
     /// The tick the next packet will carry. A caller predicting the
@@ -400,7 +510,7 @@ impl<T: Transport> RoomClient<T> {
     }
 
     /// One message from the room.
-    fn take(&mut self, msg: Msg, out: &mut Vec<ClientEvent>) {
+    fn take(&mut self, msg: Msg, arrived: std::time::Instant, out: &mut Vec<ClientEvent>) {
         match msg {
             Msg::Lobby(Lobby::RoomCreated { code }) => {
                 self.code = Some(code.clone());
@@ -438,11 +548,11 @@ impl<T: Transport> RoomClient<T> {
                     Phase::Lobby
                 };
                 self.baseline = Some(welcome.snapshot.clone());
-                out.push(ClientEvent::Welcomed(Box::new(welcome)));
+                out.push(ClientEvent::Welcomed { welcome: Box::new(welcome), arrived });
             }
             Msg::Snapshot(snapshot) => {
                 self.baseline = Some(snapshot.clone());
-                out.push(ClientEvent::Snapshot(Box::new(snapshot)));
+                out.push(ClientEvent::Snapshot { snapshot: Box::new(snapshot), arrived });
             }
             Msg::Delta(delta) => {
                 // A delta is cut against the snapshot before it, so one
@@ -454,10 +564,14 @@ impl<T: Transport> RoomClient<T> {
                 };
                 let next = apply_delta(baseline, &delta);
                 self.baseline = Some(next.clone());
-                out.push(ClientEvent::Snapshot(Box::new(next)));
+                out.push(ClientEvent::Snapshot { snapshot: Box::new(next), arrived });
             }
             // A room is told intents, never told them.
-            Msg::Intent(_) => {}
+            Msg::Pong(pong) => {
+                out.push(ClientEvent::Pong { client_ms: pong.client_ms, server_ms: pong.server_ms, arrived });
+            }
+            // A client never receives what only a client sends.
+            Msg::Intent(_) | Msg::Ping(_) => {}
             // The lobby's client half never comes back from a room.
             Msg::Lobby(_) => {}
         }
@@ -604,7 +718,7 @@ mod tests {
         room.say(Msg::Welcome(welcome(0, 0)));
         let events = frame(&mut room, &mut client);
         assert_eq!(events[0], ClientEvent::Created { code: "AK7QX".into() });
-        assert!(matches!(&events[1], ClientEvent::Welcomed(w) if w.seat == 0));
+        assert!(matches!(&events[1], ClientEvent::Welcomed { welcome, .. } if welcome.seat == 0));
         assert_eq!(events.len(), 2);
         assert_eq!(client.phase(), &Phase::Lobby);
         assert_eq!(client.code(), Some("AK7QX"));
@@ -628,7 +742,7 @@ mod tests {
         room.say(Msg::Welcome(welcome(0, 0)));
         let events = frame(&mut room, &mut client);
         assert_eq!(events[0], ClientEvent::Started);
-        assert!(matches!(events[1], ClientEvent::Welcomed(_)));
+        assert!(matches!(events[1], ClientEvent::Welcomed { .. }));
         assert_eq!(client.phase(), &Phase::Playing);
     }
 
@@ -652,7 +766,7 @@ mod tests {
 
         room.say(Msg::Welcome(welcome(1, 1_200)));
         let events = frame(&mut room, &mut client);
-        assert!(matches!(&events[0], ClientEvent::Welcomed(w) if w.seat == 1));
+        assert!(matches!(&events[0], ClientEvent::Welcomed { welcome, .. } if welcome.seat == 1));
         assert_eq!(client.phase(), &Phase::Playing, "a welcome cut mid-round is the round");
         assert_eq!(client.seat(), Some(1));
         assert!(!client.is_host());
@@ -678,7 +792,7 @@ mod tests {
         let seen: Vec<&Snapshot> = events
             .iter()
             .map(|e| match e {
-                ClientEvent::Snapshot(s) => s.as_ref(),
+                ClientEvent::Snapshot { snapshot: s, .. } => s.as_ref(),
                 other => panic!("not a snapshot: {other:?}"),
             })
             .collect();
@@ -706,6 +820,135 @@ mod tests {
         assert_eq!(events, [ClientEvent::Refused("no room AKKKK".into())]);
         assert_eq!(client.phase(), &Phase::Greeting, "still connected, still nobody's seat");
         assert_eq!(client.seat(), None);
+    }
+
+    /// **A connection that dies without closing is noticed.** Silence the
+    /// client did not ask about - a hidden tab sends no pings - closes
+    /// nothing; a ping the room answers keeps the connection; a ping
+    /// nothing answers for the limit closes it, once, with the reason, and
+    /// the socket with it.
+    #[test]
+    fn a_ping_nothing_answers_closes_the_connection() {
+        use std::time::Duration;
+        let (mut room, mut client) = room_and_client();
+        client.set_silent_after(Duration::from_millis(40));
+        frame(&mut room, &mut client);
+        std::thread::sleep(Duration::from_millis(60));
+        assert!(frame(&mut room, &mut client).is_empty(), "silence nobody asked about closes nothing");
+        client.ping(1);
+        room.say(Msg::Pong(crate::net::wire::Pong { client_ms: 1, server_ms: 5 }));
+        std::thread::sleep(Duration::from_millis(60));
+        let events = frame(&mut room, &mut client);
+        assert!(events.iter().all(|e| !matches!(e, ClientEvent::Closed(_))), "an answered ping keeps it: {events:?}");
+        assert!(!matches!(client.phase(), Phase::Closed(_)));
+        client.ping(2);
+        std::thread::sleep(Duration::from_millis(60));
+        let events = frame(&mut room, &mut client);
+        assert_eq!(events, vec![ClientEvent::Closed(Closed::fault("the room stopped answering"))]);
+        assert!(matches!(client.phase(), Phase::Closed(_)));
+        assert!(frame(&mut room, &mut client).is_empty(), "reported once");
+        client.ping(3);
+        assert!(room.listen().is_empty(), "the socket is closed: nothing more goes out");
+    }
+
+    /// A socket that never opens: a dial whose path died mid-handshake.
+    struct NeverOpens {
+        closed: bool,
+    }
+
+    impl Transport for NeverOpens {
+        fn state(&self) -> ConnState {
+            if self.closed { ConnState::Closed(Closed::by_us()) } else { ConnState::Connecting }
+        }
+
+        fn send(&mut self, _bytes: &[u8]) {}
+
+        fn drain(&mut self, _out: &mut Vec<Msg>) {}
+
+        fn close(&mut self) {
+            self.closed = true;
+        }
+    }
+
+    /// **A room that cannot be reached is said so**: a socket still not
+    /// open past the limit is closed from this end with the reason, once,
+    /// rather than leaving the lobby reaching for the room forever.
+    #[test]
+    fn a_socket_that_never_opens_is_given_up_on() {
+        use std::time::Duration;
+        let mut client = RoomClient::host(NeverOpens { closed: false }, Identity::new("host", "tok"), RoomSetup::default());
+        client.set_reach_within(Duration::from_millis(30));
+        let mut out = Vec::new();
+        client.poll(&mut out);
+        assert!(out.is_empty(), "not yet");
+        std::thread::sleep(Duration::from_millis(40));
+        client.poll(&mut out);
+        assert_eq!(out, vec![ClientEvent::Closed(Closed::fault("the room could not be reached"))]);
+        out.clear();
+        client.poll(&mut out);
+        assert!(out.is_empty(), "reported once");
+    }
+
+    /// **The clock runs from the oldest unanswered ping**, not the newest:
+    /// a round pings every 250 ms, and a clock moved on by each would never
+    /// grow past one ping's worth on a dead link.
+    #[test]
+    fn pings_on_a_cadence_do_not_hold_the_close_off() {
+        use std::time::{Duration, Instant};
+        let (mut room, mut client) = room_and_client();
+        client.set_silent_after(Duration::from_millis(40));
+        frame(&mut room, &mut client);
+        let started = Instant::now();
+        let mut closed = None;
+        for n in 0..30u32 {
+            client.ping(n);
+            let events = frame(&mut room, &mut client);
+            if events.iter().any(|e| matches!(e, ClientEvent::Closed(_))) {
+                closed = Some(started.elapsed());
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let closed = closed.expect("pinging every 10 ms against a 40 ms limit, nothing answering, never closed");
+        assert!(closed < Duration::from_millis(200), "closed only after {closed:?}");
+    }
+
+    /// Only a message that arrived after the ping answers it: one already
+    /// waiting when the ping went out says nothing about the link since.
+    #[test]
+    fn a_message_older_than_the_ping_does_not_answer_it() {
+        use std::time::Duration;
+        let (mut room, mut client) = room_and_client();
+        client.set_silent_after(Duration::from_millis(40));
+        frame(&mut room, &mut client);
+        room.lobby(Lobby::Error { message: "said before the ping".into() });
+        std::thread::sleep(Duration::from_millis(5));
+        client.ping(1);
+        std::thread::sleep(Duration::from_millis(60));
+        let events = frame(&mut room, &mut client);
+        assert!(events.contains(&ClientEvent::Closed(Closed::fault("the room stopped answering"))), "{events:?}");
+    }
+
+    /// **A client that was away is not closed for its own absence.** A
+    /// ping goes out, then the client stops polling for longer than
+    /// `CLIENT_AWAY_AFTER` - suspended, hidden - and the first poll back
+    /// comes before anything has arrived: the clock starts again rather
+    /// than closing a connection that may still be alive.
+    #[test]
+    fn a_client_back_from_being_away_is_not_closed_on_its_first_poll() {
+        use std::time::Duration;
+        let (mut room, mut client) = room_and_client();
+        client.set_silent_after(Duration::from_millis(40));
+        frame(&mut room, &mut client);
+        client.ping(1);
+        std::thread::sleep(CLIENT_AWAY_AFTER + Duration::from_millis(100));
+        assert!(frame(&mut room, &mut client).is_empty(), "closed on the first poll back");
+        assert!(!matches!(client.phase(), Phase::Closed(_)));
+        // Asked again once back, and still nothing: now it is the room.
+        client.ping(2);
+        std::thread::sleep(Duration::from_millis(60));
+        let events = frame(&mut room, &mut client);
+        assert_eq!(events, vec![ClientEvent::Closed(Closed::fault("the room stopped answering"))]);
     }
 
     #[test]
@@ -795,7 +1038,7 @@ mod tests {
         frame(&mut room, &mut client);
         room.say(Msg::Welcome(welcome(1, 0)));
         let events = frame(&mut room, &mut client);
-        let ClientEvent::Welcomed(w) = &events[0] else { panic!("no welcome: {events:?}") };
+        let ClientEvent::Welcomed { welcome: w, .. } = &events[0] else { panic!("no welcome: {events:?}") };
         assert_eq!(w.seed, 0xB0B5);
         assert_eq!(w.snapshot.acked, [0; MAX_SEATS]);
         let seat = client.seat().expect("a seat");

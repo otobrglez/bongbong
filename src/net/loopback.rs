@@ -144,12 +144,20 @@ impl Loopback {
 
     /// `drain` at a given moment: everything due by `now`, in order.
     pub fn drain_at(&mut self, now: Instant, out: &mut Vec<Msg>) {
+        let mut stamped = Vec::new();
+        self.drain_stamped_at(now, &mut stamped);
+        out.extend(stamped.into_iter().map(|(m, _)| m));
+    }
+
+    /// `drain_stamped` at a given moment: each message with the instant
+    /// it became readable, which is when it arrived.
+    pub fn drain_stamped_at(&mut self, now: Instant, out: &mut Vec<(Msg, Instant)>) {
         let inbox = Arc::clone(&self.inbox);
         let mut pipe = inbox.lock().expect("the link's other end did not panic");
         while pipe.queue.front().is_some_and(|p| p.due <= now) {
             let parcel = pipe.queue.pop_front().expect("just peeked");
             if let Ok(msg) = codec::decode(&parcel.bytes) {
-                out.push(msg);
+                out.push((msg, parcel.due));
             }
         }
         if pipe.queue.is_empty() {
@@ -197,6 +205,10 @@ impl Transport for Loopback {
         self.drain_at(Instant::now(), out);
     }
 
+    fn drain_stamped(&mut self, out: &mut Vec<(Msg, Instant)>) {
+        self.drain_stamped_at(Instant::now(), out);
+    }
+
     fn close(&mut self) {
         self.hang_up(Closed::by_us());
         self.finished = Some(Closed::by_us());
@@ -209,7 +221,7 @@ mod tests {
     use crate::net::wire::IntentMsg;
 
     fn intent(tick: u32) -> Vec<u8> {
-        codec::encode(&Msg::Intent(IntentMsg { tick, move_dir: 1, face: 1, fire: false }))
+        codec::encode(&Msg::Intent(IntentMsg { tick, move_dir: 1, face: 1, fire: false, ..IntentMsg::default() }))
     }
 
     fn ticks(msgs: &[Msg]) -> Vec<u32> {

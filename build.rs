@@ -38,6 +38,8 @@ fn main() {
             "_bb_last_error",
             "_bb_tuning_reset",
             "_bb_game_restart",
+            "_bb_net_stats",
+            "_bb_input",
         ];
         println!(
             "cargo:rustc-link-arg-bin=bongbong=-sEXPORTED_FUNCTIONS={}",

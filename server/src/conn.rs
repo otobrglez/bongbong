@@ -112,29 +112,51 @@ pub async fn run(socket: WebSocket, hub: Arc<Hub>) {
     debug!(conn = conn_id, "connected");
     let (mut sink, mut stream) = socket.split();
     let (outbox, mut rx, close) = Outbox::pair();
+    let keep_alive = hub.keep_alive;
     let writer = tokio::spawn(async move {
-        while let Some(bytes) = rx.recv().await {
-            if sink.send(Message::Binary(bytes)).await.is_err() {
-                break;
+        let mut ping = tokio::time::interval_at(Instant::now() + keep_alive.ping_every, keep_alive.ping_every);
+        ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                queued = rx.recv() => {
+                    let Some(bytes) = queued else { break };
+                    if sink.send(Message::Binary(bytes)).await.is_err() {
+                        break;
+                    }
+                }
+                _ = ping.tick() => {
+                    if sink.send(Message::Ping(Bytes::new())).await.is_err() {
+                        break;
+                    }
+                }
             }
         }
         let _ = sink.close().await;
     });
     let mut attached: Option<Attached> = None;
+    // Anything the client sends - a pong to the writer's ping included -
+    // says the connection lives (`hub::KeepAlive`).
+    let mut heard = Instant::now();
     loop {
         tokio::select! {
+            _ = tokio::time::sleep_until(heard + keep_alive.silent_after) => {
+                info!(conn = conn_id, silent_ms = keep_alive.silent_after.as_millis() as u64, "the client went silent; closing");
+                break;
+            }
             frame = stream.next() => match frame {
                 Some(Ok(Message::Binary(bytes))) => {
+                    heard = Instant::now();
                     handle(&bytes, conn_id, &hub, &outbox, &mut attached).await;
                 }
                 Some(Ok(Message::Text(text))) => {
                     // A bare JSON lobby message, for a hand-driven client
                     // (`websocat`): the kind byte is implied.
+                    heard = Instant::now();
                     let mut bytes = vec![codec::kind::LOBBY];
                     bytes.extend_from_slice(text.as_bytes());
                     handle(&bytes, conn_id, &hub, &outbox, &mut attached).await;
                 }
-                Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
+                Some(Ok(Message::Ping(_) | Message::Pong(_))) => heard = Instant::now(),
                 Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
             },
             _ = close.notified() => break,
@@ -219,7 +241,16 @@ async fn handle(bytes: &[u8], conn_id: u64, hub: &Arc<Hub>, outbox: &Outbox, att
                 }
             }
         }
-        Msg::Lobby(_) | Msg::Snapshot(_) | Msg::Delta(_) | Msg::Welcome(_) => {
+        // A clock probe is answered here, on the connection's own task,
+        // the moment it is read: through the room it would wait for the
+        // tick and measure the room's schedule, not the link. The pong
+        // queues behind whatever snapshots the writer has not flushed,
+        // which is the path a snapshot takes too.
+        Msg::Ping(ping) => {
+            let pong = Msg::Pong(bongbong::net::wire::Pong { client_ms: ping.client_ms, server_ms: hub.now_ms() });
+            outbox.offer(Bytes::from(codec::encode(&pong)));
+        }
+        Msg::Lobby(_) | Msg::Snapshot(_) | Msg::Delta(_) | Msg::Welcome(_) | Msg::Pong(_) => {
             outbox.lobby(Lobby::Error { message: "that message is the server's to send".into() });
         }
     }

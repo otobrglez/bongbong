@@ -151,7 +151,7 @@ const SLOT_PARAMS: &str = r#"{"type":"object","properties":{"slot":{"type":"inte
 pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "status",
-        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `mode` (play|build|online) with the dialogs and the builder's state, and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots drawn through a live enemy hull -, `crossings_hit` - answered by a server `Hit` near that point within half a second - and `crossings_missed`) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
+        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `mode` (play|build|online) with the dialogs and the builder's state, and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), `rtt` (the measured round trip - median, p95, floor - and server-minus-local from ping/pong probes), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation, lateness p50/p95, stalls, the playout rate, corrections and their p95 in px, stale events dropped) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots the picture stopped against a drawn tank or frog -, `crossings_hit` - their paired room copy bursting within 40 px (`HIT_MATCH_PX`) of that stop - and `crossings_missed` - their copy flying on past it (`MISS_MARGIN_PX`) or bursting anywhere else) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
         schema: NO_PARAMS,
         read_only: true,
         destructive: false,
@@ -165,7 +165,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "events",
-        description: "Gameplay events recorded since `since` (a seq number; 0 = everything kept, up to 4096): fired, hit, wreck, ram, deflected (off a shield), ricochet (a shot off iron or a barrel, with the heading it flies on along), shells_collided, frog_bite (with the biting frog's side), pickup_collected, pickup_respawned, obstacle_destroyed, blast, drum_launched, fire_started, ignited (the flamethrower lit `what`: ground, oil, wood, tree, drum, or collapsed a sandbag/fence), teleported (a tank went through a portal: slot, from x/y, to to_x/to_y), round_started, round_ended, plus AI decisions - ai_action (behaviour-tree action changed), engage_slot (ring slot changed; null = steering at its target - the player, or a hunter's frog - directly), stuck_escape, breach (dir, or null when it ends), retreat (on/off), alert (shared last-known player position on/off), retarget (rounds with more than one seat: the enemy switched to fighting seat `player`). Each carries the frame it happened on. `kinds` keeps only those event names, `exclude` drops them.",
+        description: "Gameplay events recorded since `since` (a seq number; 0 = everything kept, up to 4096): fired, hit, wreck, ram, deflected (off a shield), ricochet (a shot off iron or a barrel, with the heading it flies on along), laser_beam (a laser's beam from the muzzle to where it stopped, with its variant), shells_collided, frog_bite (with the biting frog's side), pickup_collected, pickup_respawned, obstacle_destroyed, blast, drum_launched, fire_started, ignited (the flamethrower lit `what`: ground, oil, wood, tree, drum, or collapsed a sandbag/fence), teleported (a tank went through a portal: slot, from x/y, to to_x/to_y), round_started, round_ended, plus AI decisions - ai_action (behaviour-tree action changed), engage_slot (ring slot changed; null = steering at its target - the player, or a hunter's frog - directly), stuck_escape, breach (dir, or null when it ends), retreat (on/off), alert (shared last-known player position on/off), retarget (rounds with more than one seat: the enemy switched to fighting seat `player`). Each carries the frame it happened on. `kinds` keeps only those event names, `exclude` drops them.",
         schema: r#"{"type":"object","properties":{"since":{"type":"integer","default":0,"description":"Return events with seq > since"},"limit":{"type":"integer","default":200},"kinds":{"type":"array","items":{"type":"string"},"description":"Only these event names"},"exclude":{"type":"array","items":{"type":"string"},"description":"Drop these event names"}}}"#,
         read_only: true,
         destructive: false,
@@ -452,7 +452,7 @@ pub const ROOM_TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "room",
-        description: "One room in full: its lifecycle and how long until the TTL that would end it, the map, seed, mission and resolved spawn plan, the round's tick and outcome, the `tuning_patch` it is being fought under (a room of two or more scales the waves; a room of one is the empty patch), and a row per seat - nick, whether it holds the room, ready, connected, its chassis, and its mailbox. **The mailbox row is the one to read when inputs feel lost**: a `depth` pinned at `BUFFER_MAX` means the client is running ahead and the oldest intents are being dropped, while a climbing `starvations` means it is not stamping far enough ahead and the tick is repeating its last intent.",
+        description: "One room in full: its lifecycle and how long until the TTL that would end it, the map, seed, mission and resolved spawn plan, the round's tick and outcome, the `tuning_patch` it is being fought under (a room of two or more scales the waves; a room of one is the empty patch), and a row per seat - nick, whether it holds the room, ready, connected, its chassis, and its mailbox. `owns_hull` and `pose_refusals` say whether the seat's client owns its hull (stage 3) and how many of its poses the validator refused. **The mailbox row is the one to read when inputs feel lost**: a `depth` pinned at `BUFFER_MAX` means the client is running ahead and the oldest intents are being dropped, while a climbing `starvations` means it is not stamping far enough ahead and the tick is repeating its last intent.",
         schema: CODE_ONLY,
         read_only: true,
         destructive: false,
@@ -1992,48 +1992,21 @@ fn round_json(session: &Session) -> Value {
     let Some(round) = round else {
         return json!({ "kind": "local" });
     };
-    json!({
-        "kind": "online",
-        "room": round.code(),
-        "seat": round.seat(),
-        "phase": phase_name(round.phase()),
+    let mut out = round.stats_json();
+    if let Some(map) = out.as_object_mut() {
+        map.insert("kind".into(), json!("online"));
+        map.insert("room".into(), json!(round.code()));
+        map.insert("phase".into(), json!(phase_name(round.phase())));
         // What the interpolation delay is buying, rounded to the
         // millisecond: negative once the picture has run past everything
         // that arrived, null before the first snapshot.
-        "buffer_ms": round.buffer_ms().map(|ms| ms.round() as i64),
-        "server_tick": round.interp().newest_tick(),
-        // What the interpolator is doing and what the prediction cost
-        // (docs/online-coop-prd.md section 4.12, "Measured").
-        "interpolation": {
-            "delay_ms": round.interpolation().delay_ms,
-            "target_ms": round.interpolation().target_ms,
-            "jitter_ms": round.interpolation().jitter_ms,
-            "interval_ms": round.interpolation().interval_ms,
-            "buffered": round.interpolation().buffered,
-            "extrapolated_frames": round.interpolation().extrapolated_frames,
-        },
-        "prediction": round.prediction().map(|p| json!({
-            "ignored": p.ignored,
-            "nudges": p.nudges,
-            "snaps": p.snaps,
-            "error_buckets": p.error_buckets,
-            "max_error_px": p.max_error_px,
-            "shots_drawn": p.shots_drawn,
-            "shots_refused": p.shots_refused,
-            "shots_on_screen": p.shots_on_screen,
-            "in_flight": p.in_flight,
-            "cooldown": p.cooldown,
-            "lead_up": p.lead_up,
-            "lead_down": p.lead_down,
-            "lead_depth": round.lead_depth(),
-            "crossings": p.crossings,
-            "crossings_hit": p.crossings_hit,
-            "crossings_missed": p.crossings_missed,
-        })),
+        map.insert("buffer_ms".into(), json!(round.buffer_ms().map(|ms| ms.round() as i64)));
         // False between taking the seat and the room's `Welcome`: until
         // then the window still draws the local round.
-        "replica": round.game().is_some(),
-    })
+        map.insert("replica".into(), json!(round.game().is_some()));
+        map.remove("tanks");
+    }
+    out
 }
 
 /// How far along the seat is, as one word.

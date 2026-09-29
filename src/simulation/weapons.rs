@@ -103,17 +103,26 @@ fn laser_shot(tank: &Tank, owner: Owner, aim_offset: f32, variant: LaserVariant)
 /// Firing recoil: push the shooter back along the shot's own travel axis
 /// (so a misfire's skew kicks the same way it skews the shot) at `speed`
 /// px/s, normalized against the chassis-free baseline mass and capped at
-/// `max_speed`.
-fn apply_recoil(physics: &mut Physics, tank: &Tank, velocity: Vec2, speed: f32, max_speed: f32) {
+/// `max_speed`. Returns the velocity change, `None` when nothing was
+/// pushed.
+///
+/// Only a missile launch's goes on to `Frame::shoves`. A client that owns
+/// its hull kicks it itself at every shell, bolt and bullet it launches
+/// (`net::predict`, `Game::seat_recoil`), so an `Event::Shoved` for those
+/// would kick it twice; it draws no missile, so that kick is the room's to
+/// tell it about.
+fn apply_recoil(physics: &mut Physics, tank: &Tank, velocity: Vec2, speed: f32, max_speed: f32) -> Option<Vec2> {
     let len = (velocity.x * velocity.x + velocity.y * velocity.y).sqrt();
-    let Some(handle) = tank.body else { return };
+    let handle = tank.body?;
     if len <= f32::EPSILON {
-        return;
+        return None;
     }
     let reference_mass = tank.scale * tank.scale;
     let push = (speed * reference_mass / tank.mass()).min(max_speed);
     let impulse = push * tank.mass() / len;
-    physics.apply_impulse(handle, Position::new(-velocity.x * impulse, -velocity.y * impulse));
+    let kick = Position::new(-velocity.x * impulse, -velocity.y * impulse);
+    physics.apply_impulse(handle, kick);
+    Some(Vec2::new(kick.x / tank.mass(), kick.y / tank.mass()))
 }
 
 /// Spawn one shell from `tank`: rolled drop shadow, muzzle-flash ripple,
@@ -173,7 +182,9 @@ fn fire_missile(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, owner: Ow
     let ahead = tank.position + dir * t.missile_fallback_range;
     let aim = Position::new(ahead.x.clamp(0.0, f.width), ahead.y.clamp(0.0, f.height));
     f.muzzle_flashes.push(Shockwave::new(mouth));
-    apply_recoil(physics, tank, dir, t.missile_recoil_speed, t.missile_recoil_max_speed);
+    if let Some(dv) = apply_recoil(physics, tank, dir, t.missile_recoil_speed, t.missile_recoil_max_speed) {
+        f.shoves.push(owner, dv);
+    }
     tank.missile_tubes_empty = tank.missile_tubes_empty.saturating_add(1).min(offsets.len() as u8);
     f.pending_missiles.push(Missile::spawn(mouth, launch, owner, tube, aim));
 }
@@ -441,6 +452,18 @@ pub(super) trait Projectile: hecs::Component {
     /// shells get.
     fn deflect(&mut self, center: Position, new_owner: Owner);
 }
+
+/// How many ticks into the past stand the enemies and frogs a seat's
+/// shell, bolt or bullet is swept against: its seat's rewind, taken at
+/// spawn (`Game::spawn_pending`, `Game::seat_rewind`; lag compensation,
+/// docs/online-coop-prd.md §4.16). A component beside the projectile
+/// rather than a field of it, attached only when it is not zero - so an
+/// enemy's shot and every shot of a local round spawn exactly as they
+/// would without lag compensation - and zeroed when a shield turns the
+/// shot back, since it is the shield's from then on, not the seat's that
+/// aimed it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Rewind(pub u8);
 
 /// Velocity of a projectile bouncing off a shield centred at `center`: the
 /// approach velocity mirrored across the radial normal from the centre to

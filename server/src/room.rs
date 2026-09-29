@@ -1,8 +1,8 @@
 //! A room (docs/online-coop-prd.md §4.1, §4.7, §4.9): one task that owns
 //! the authoritative `Game`, its seats and the lobby. Its life is
-//! **waiting** (not ticking) → **playing** (a 60 Hz interval, each tick
-//! sampling every seat's mailbox into one `Input` and calling
-//! `Game::update`) → **paused** when nobody is connected (not ticking, the
+//! **waiting** (not ticking) → **playing** (60 Hz, each tick sampling
+//! every seat's mailbox into one `Input` and calling `Game::update`) →
+//! **paused** when nobody is connected (not ticking, the
 //! world kept in memory, resumed where it stopped) → **ended** (results
 //! kept a while for a rematch). The end screen belongs to **playing**:
 //! the room goes on ticking and sending while the shots land and the
@@ -13,13 +13,26 @@
 //! `Lobby::Ended` to every seat and the roster behind it is the one the
 //! room screen comes back on; `Start` from the host is then the rematch.
 //!
-//! Every third tick a snapshot is encoded once, as a delta against the
-//! previous one, and offered to every seat's outbox; a seat that skipped
-//! one, or just arrived, gets the next in full. The bytes come from
-//! `net::encode` (`snapshot`, `welcome`); the room only adds its clock
-//! and the events of the two ticks between snapshots. Seats outlive connections: a disconnect keeps the seat for
-//! its device token, and a reconnect reclaims it with a fresh `Welcome`
-//! cut from the live world, holes in the map included.
+//! **The tick is on a wall-clock schedule** (`net::authority::TickClock`,
+//! docs/online-coop-prd.md §4.16): tick n is due at a fixed instant
+//! however long the ticks before it took, a short stall is caught up
+//! back to back and a long one restarts the schedule, and a seat joining
+//! or reconnecting never moves it. The room's task serves a due tick
+//! before any command waiting, so a burst of lobby or dev traffic cannot
+//! hold one up; and a room running its ticks back to back - catching a
+//! late one up, or unable to keep up at all - serves one command waiting
+//! between each two, so its lobby is slowed to the tick rate rather than
+//! starved. How late each tick started is on `/metrics`.
+//!
+//! Every `SNAPSHOT_EVERY` ticks a snapshot is encoded once, as a delta
+//! against the previous one, and offered to every seat's outbox; a seat
+//! that skipped one, or just arrived, gets the next in full. The bytes
+//! come from `net::encode` (`snapshot`, `welcome`); the room only adds
+//! its clock, the events of any ticks between snapshots, and each seat's
+//! press on its `Fired` (`authority::stamp_presses`). Seats outlive
+//! connections: a disconnect keeps the seat for its device token, and a
+//! reconnect reclaims it with a fresh `Welcome` cut from the live world,
+//! holes in the map included.
 //!
 //! The durations below are server policy, not gameplay tuning. The one
 //! thing here that does touch the tuning table is `tuning_patch`: the
@@ -41,12 +54,16 @@ use bongbong::net::codec::{self, Msg};
 use bongbong::net::delta::delta;
 use bongbong::net::encode;
 use bongbong::net::events::WireEvent;
+use bongbong::net::authority::{self, PoseOutcome, TickClock};
 use bongbong::net::wire::{Lobby, RosterSeat, Seat as WireSeat, Snapshot, Welcome};
+use bongbong::simulation::SeatPose;
+use bongbong::Position;
 use bongbong::net::{MAX_SEATS, PROTOCOL_VERSION};
 use bongbong::simulation::{Game, Input, Outcome, PlayerCount};
 use bongbong::tuning::{self, Tuning, tuning};
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::{mpsc, oneshot};
-use tokio::time::{Instant, Interval, MissedTickBehavior};
+use tokio::time::Instant;
 use tracing::{info, warn};
 
 use crate::conn::{Delivery, Outbox};
@@ -429,6 +446,11 @@ struct Seat {
     nick: String,
     device_token: String,
     ready: bool,
+    /// Where this tick put a client-owned hull (docs/online-coop-prd.md
+    /// §4.14), to be compared with where the tick left it.
+    applied_pose: Option<Position>,
+    /// Poses the validator refused, for the dev `room` tool.
+    pose_refusals: u64,
     /// A seat with no client at all, taken by `room_open` and driven by
     /// `seat_intent`. It counts as connected - the tick samples its
     /// mailbox and the lifecycle does not pause the room for it - and
@@ -486,7 +508,9 @@ struct Room {
     kicked: BTreeSet<String>,
     game: Option<Box<Game>>,
     life: Lifecycle,
-    interval: Interval,
+    /// When the next tick is due: running while the room ticks, stopped
+    /// otherwise and started afresh when it ticks again.
+    clock: TickClock,
     /// The last snapshot sent: the baseline of the next delta.
     prev: Snapshot,
     /// The events of the ticks since the last snapshot that sent none
@@ -496,7 +520,6 @@ struct Room {
     /// `Welcome` carries (`tuning_patch`); the empty patch until a round
     /// starts.
     tuning_json: String,
-    created: Instant,
     commands: mpsc::Receiver<Command>,
     /// `room_step` has taken the room off real time; it advances only
     /// when a dev tool says so, until `room_resume`.
@@ -512,52 +535,54 @@ struct Room {
 
 /// The room task: runs until the room is reaped.
 pub async fn run(hub: Arc<Hub>, code: String, params: RoomParams, commands: mpsc::Receiver<Command>, stats: Arc<RoomStats>) {
-    let now = Instant::now();
-    let mut interval = tokio::time::interval(TICK);
-    interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
     // Subscribed before the first look, so a drain that begins between
     // the two is still seen.
     let mut drain = hub.drain_signal();
-    let mut room = Room {
-        hub,
-        code,
-        stats,
-        map: params.map,
-        overrides: LevelOverrides { mission: Some(params.mission), ..LevelOverrides::default() },
-        pinned_seed: params.seed,
-        round_seed: 0,
-        seats: Vec::new(),
-        kicked: BTreeSet::new(),
-        game: None,
-        life: Lifecycle::new(now),
-        interval,
-        prev: Snapshot::default(),
-        pending_events: Vec::new(),
-        tuning_json: ROOM_TUNING_JSON.to_string(),
-        created: now,
-        commands,
-        #[cfg(feature = "dev-tools")]
-        frozen: false,
-        #[cfg(feature = "dev-tools")]
-        dev_events: std::collections::VecDeque::new(),
-        #[cfg(feature = "dev-tools")]
-        dev_seq: 0,
-    };
+    let mut room = Room::new(hub, code, params, commands, stats);
     info!(code = room.code, map = room.map.name.as_deref().unwrap_or("?"), "room created");
     room.refresh_stats();
     if *drain.borrow_and_update() {
         room.begin_drain();
     }
+    // Whether the last turn of the loop ran a tick.
+    let mut ticked = false;
     loop {
+        let now = Instant::now();
+        let due = room.schedule(now);
         let deadline = room.next_deadline();
+        // A room behind its schedule - a late tick being caught up, or
+        // ticks that keep running late - has its next tick due every time
+        // round, and the select below serves a due tick first, so it
+        // would never reach the commands or the deadlines. Between two
+        // ticks run back to back, one command waiting and a deadline
+        // passed are served first: under overload the lobby and the
+        // tools go at the tick rate rather than not at all.
+        if ticked && due.is_some_and(|d| d <= now) {
+            ticked = false;
+            match room.commands.try_recv() {
+                Ok(cmd) => room.handle(cmd),
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => break,
+            }
+            if deadline.is_some_and(|d| d <= now) && room.on_deadline() {
+                break;
+            }
+            continue;
+        }
+        ticked = false;
+        // A due tick is served before anything else waiting - a burst of
+        // lobby or dev commands is handled after it, never ahead of it.
         tokio::select! {
             biased;
             Ok(()) = drain.changed(), if !room.life.draining() => room.begin_drain(),
+            _ = tokio::time::sleep_until(due.unwrap_or_else(far_future)), if due.is_some() => {
+                room.scheduled_tick();
+                ticked = true;
+            }
             cmd = room.commands.recv() => match cmd {
                 Some(cmd) => room.handle(cmd),
                 None => break,
             },
-            _ = room.interval.tick(), if room.life.ticking() && !room.dev_frozen() => room.tick(),
             _ = tokio::time::sleep_until(deadline.unwrap_or_else(far_future)), if deadline.is_some() => {
                 if room.on_deadline() {
                     break;
@@ -575,6 +600,34 @@ fn far_future() -> Instant {
 }
 
 impl Room {
+    /// A room with nobody in it yet, waiting.
+    fn new(hub: Arc<Hub>, code: String, params: RoomParams, commands: mpsc::Receiver<Command>, stats: Arc<RoomStats>) -> Room {
+        Room {
+            hub,
+            code,
+            stats,
+            map: params.map,
+            overrides: LevelOverrides { mission: Some(params.mission), ..LevelOverrides::default() },
+            pinned_seed: params.seed,
+            round_seed: 0,
+            seats: Vec::new(),
+            kicked: BTreeSet::new(),
+            game: None,
+            life: Lifecycle::new(Instant::now()),
+            clock: TickClock::new(TICK),
+            prev: Snapshot::default(),
+            pending_events: Vec::new(),
+            tuning_json: ROOM_TUNING_JSON.to_string(),
+            commands,
+            #[cfg(feature = "dev-tools")]
+            frozen: false,
+            #[cfg(feature = "dev-tools")]
+            dev_events: std::collections::VecDeque::new(),
+            #[cfg(feature = "dev-tools")]
+            dev_seq: 0,
+        }
+    }
+
     // -----------------------------------------------------------------
     // Seats and the lobby
 
@@ -661,6 +714,8 @@ impl Room {
                     nick: nick.clone(),
                     device_token,
                     ready: false,
+                    applied_pose: None,
+                    pose_refusals: 0,
                     #[cfg(feature = "dev-tools")]
                     bot: false,
                     #[cfg(feature = "dev-tools")]
@@ -675,9 +730,9 @@ impl Room {
                 i as u8
             }
         };
-        if self.life.ticking() {
-            self.interval.reset();
-        }
+        // The schedule is left alone: every other seat's client is paced
+        // against it. A join that wakes a paused room starts it afresh
+        // (`schedule`).
         let mailbox = self.seat(seat).expect("just seated").mailbox.clone();
         let welcome = self.welcome(seat);
         self.send_to(seat, Msg::Welcome(welcome));
@@ -828,7 +883,6 @@ impl Room {
             seat.mailbox.clear();
         }
         self.life.start(Instant::now());
-        self.interval.reset();
         info!(code = self.code, seed = format!("{:#x}", self.round_seed), players, tuning = self.tuning_json, "round started");
         self.lobby_to_all(Lobby::Started);
         // Everyone's baseline is the welcome's snapshot (the same frame
@@ -1000,13 +1054,46 @@ impl Room {
         }
     }
 
-    /// The room's clock, milliseconds since it was created.
+    /// The server's clock (`Hub::now_ms`): the one a `Pong` reads, so a
+    /// client measures snapshots and probes against the same time.
     fn server_ms(&self) -> u32 {
-        self.created.elapsed().as_millis().min(u32::MAX as u128) as u32
+        self.hub.now_ms()
     }
 
     // -----------------------------------------------------------------
     // The tick and the snapshots
+
+    /// When the next tick is due, if the room is ticking: the schedule
+    /// runs while the room ticks and is stopped otherwise (waiting,
+    /// paused, ended, frozen by a dev tool), so ticking again - a round
+    /// starting, a seat waking a paused room, `room_resume` - starts it
+    /// one tick from `now` rather than paying the stop back as a burst.
+    fn schedule(&mut self, now: Instant) -> Option<Instant> {
+        if self.life.ticking() && !self.dev_frozen() {
+            if !self.clock.running() {
+                self.clock.start((now + TICK).into_std());
+            }
+        } else {
+            self.clock.stop();
+        }
+        self.clock.due().map(Instant::from_std)
+    }
+
+    /// The tick the schedule said was due: how late it started goes to
+    /// `/metrics`, then the tick itself.
+    fn scheduled_tick(&mut self) {
+        let start = self.clock.fire(Instant::now().into_std());
+        self.hub.metrics.record_tick_start(start.late, start.dropped);
+        if start.dropped > 0 {
+            warn!(
+                code = self.code,
+                late_ms = start.late.as_millis() as u64,
+                dropped = start.dropped,
+                "the room stalled past its catch-up; the schedule starts again from now"
+            );
+        }
+        self.tick();
+    }
 
     fn acked(&self) -> [u32; MAX_SEATS] {
         let mut acked = [0; MAX_SEATS];
@@ -1016,6 +1103,19 @@ impl Room {
             }
         }
         acked
+    }
+
+    /// The input tick each seat's shot this tick answers
+    /// (`Mailbox::press_tick`), for its `Fired`: the press, which an owned
+    /// seat's merged read can put before its ack.
+    fn presses(&self) -> [u32; MAX_SEATS] {
+        let mut presses = [0; MAX_SEATS];
+        for (i, seat) in self.seats.iter().enumerate().take(MAX_SEATS) {
+            if let Some(s) = seat {
+                presses[i] = s.mailbox.press_tick();
+            }
+        }
+        presses
     }
 
     /// Each seat's mailbox as the tick left it (`Mailbox::wire_state`):
@@ -1056,14 +1156,23 @@ impl Room {
         #[cfg(feature = "dev-tools")]
         self.feed_dev_scripts(now);
         let mut input = Input::default();
+        // Each seat's pose, if its packet carries one, with how many ticks
+        // of the client's driving the read covers (`pose_reach_ticks`).
+        let mut poses: Vec<(usize, Option<SeatPose>, u32)> = Vec::new();
+        let mut views: Vec<(usize, (u32, u8))> = Vec::new();
         for (i, seat) in self.seats.iter().enumerate().take(MAX_SEATS) {
             if let Some(s) = seat
                 && s.connected()
             {
                 let before = s.mailbox.starvations();
-                input.seats[i] = s.mailbox.read(now.into_std()).map(|m| m.intent()).unwrap_or_default();
-                // A starved tick means this seat's client is not stamping
-                // far enough ahead for the link (`mailbox`, §4.12).
+                let read = s.mailbox.read(now.into_std());
+                input.seats[i] = read.map(|m| m.intent()).unwrap_or_default();
+                poses.push((i, read.and_then(|m| m.pose()), s.mailbox.pose_reach_ticks()));
+                views.push((i, read.map_or((0, 0), |m| (m.view_tick, m.view_frac))));
+                // A starved tick is a packet that did not arrive in time:
+                // a server-driven seat's client is not stamping far
+                // enough ahead for the link (§4.12), an owned seat's hull
+                // was dead-reckoned (`mailbox`, §4.16).
                 let starved = s.mailbox.starvations() - before;
                 if starved > 0 {
                     self.hub.metrics.intent_starvations_total.fetch_add(starved, Ordering::Relaxed);
@@ -1071,8 +1180,40 @@ impl Room {
             }
         }
         let acked = self.acked();
+        let presses = self.presses();
         let (w, h) = self.map.field_size();
         let game = self.game.as_mut().expect("a playing room has a game");
+        // Which tick of the world each seat was looking at, for lag
+        // compensation of its shots (docs/online-coop-prd.md §4.16).
+        for &(i, (tick, frac)) in &views {
+            game.set_seat_view(i, tick, frac);
+        }
+        // A client that owns its hull is put where it says before the
+        // tick runs, and the seat is released to the room's own driving
+        // the moment its packets stop saying (docs/online-coop-prd.md
+        // §4.14), as far from the room's copy as the read's driving
+        // reaches. A refused pose leaves the hull where it was and tells
+        // the client so, since the client is not going to be pulled
+        // back by anything else. Only a seat whose pose this tick applied
+        // is measured after it: a seat the tick did not read - its client
+        // gone - owns nothing, whatever its last packet said.
+        for s in self.seats.iter_mut().flatten() {
+            s.applied_pose = None;
+        }
+        for (i, pose, reach_ticks) in poses {
+            let Some(Some(s)) = self.seats.get_mut(i) else { continue };
+            match authority::take_pose(game, i, pose, reach_ticks) {
+                PoseOutcome::Applied(at) => s.applied_pose = Some(at),
+                PoseOutcome::Refused(why, answer) => {
+                    s.pose_refusals += 1;
+                    if s.pose_refusals == 1 || s.pose_refusals % 600 == 0 {
+                        warn!(code = self.code, seat = i, why, refusals = s.pose_refusals, "a client's pose was refused");
+                    }
+                    self.pending_events.extend(answer);
+                }
+                PoseOutcome::Released => {}
+            }
+        }
         let was_playing = game.outcome() == Outcome::Playing;
         let began = std::time::Instant::now();
         game.update(input, PHYSICS_FIXED_DT, w, h);
@@ -1083,6 +1224,15 @@ impl Room {
             warn!(code = self.code, frame = game.frame(), took_us = took.as_micros() as u64, "tick overran");
         }
         let frame = game.frame();
+        // The tick moved an owned hull further than a contact could - a
+        // portal, a gate, the round's end - so the client snaps to it.
+        for (i, seat) in self.seats.iter().enumerate().take(MAX_SEATS) {
+            if let Some(s) = seat
+                && let Some(applied) = s.applied_pose
+            {
+                self.pending_events.extend(authority::moved_since(game, i, applied));
+            }
+        }
         #[cfg(feature = "dev-tools")]
         self.record_dev_events(frame);
         let game = self.game.as_mut().expect("a playing room has a game");
@@ -1099,18 +1249,20 @@ impl Room {
         } else {
             // A tick that sends nothing banks its events for the next
             // snapshot, whose own events are its frame's.
-            self.pending_events.extend(encode::wire_events(game.events()));
+            self.pending_events.extend(encode::wire_events_acked(game.events(), &presses));
         }
     }
 
     /// The state now as a `Snapshot`: the encoder's, stamped with the
     /// room's clock, the banked events of the ticks since the last
-    /// snapshot ahead of this frame's own.
+    /// snapshot ahead of this frame's own, each seat's `Fired` naming its
+    /// press.
     fn fresh_snapshot(&self, acked: [u32; MAX_SEATS]) -> Snapshot {
         let mut snap = match &self.game {
             Some(game) => encode::snapshot(game, acked),
             None => Snapshot { acked, ..Snapshot::default() },
         };
+        authority::stamp_presses(&mut snap.events, &self.presses());
         snap.server_ms = self.server_ms();
         snap.mailbox = self.mailbox_states();
         if !self.pending_events.is_empty() {
@@ -1212,7 +1364,6 @@ mod dev {
                 "room_step" => self.dev_step(params),
                 "room_resume" => {
                     self.frozen = false;
-                    self.interval.reset();
                     Ok(json!({ "frozen": false, "tick": self.dev_tick() }))
                 }
                 "seat_intent" => self.dev_seat_intent(params),
@@ -1252,6 +1403,8 @@ mod dev {
                             "acked": s.mailbox.acked_tick(),
                             "starvations": s.mailbox.starvations(),
                         },
+                        "owns_hull": s.applied_pose.is_some(),
+                        "pose_refusals": s.pose_refusals,
                     }),
                 })
                 .collect();
@@ -1284,6 +1437,8 @@ mod dev {
                     // Ready by construction: `start` refuses otherwise,
                     // and a bot has nothing to wait for.
                     ready: true,
+                    applied_pose: None,
+                    pose_refusals: 0,
                     bot: true,
                     script: None,
                     conn: None,
@@ -1621,6 +1776,96 @@ mod tests {
         assert_eq!(ended.deadline(), Some(Instant::now() + DRAIN_ENDED_TTL), "an ended room keeps only long enough to read the result");
         advance(DRAIN_ENDED_TTL).await;
         assert_eq!(ended.expired(Instant::now()), Some(Expiry::Reap));
+    }
+
+    /// **A room behind its schedule still serves its commands**
+    /// (docs/online-coop-prd.md §4.16). Its next tick is due every time
+    /// round the loop and goes ahead of a command, so between two ticks
+    /// run back to back the loop serves one command waiting first. On
+    /// tokio's paused clock: the clock jumps three and a half ticks, the
+    /// room wakes owing three, and a call already waiting is answered
+    /// after the first of them rather than after all three.
+    #[cfg(feature = "dev-tools")]
+    #[tokio::test(start_paused = true)]
+    async fn a_room_behind_its_schedule_serves_a_command_between_its_ticks() {
+        use crate::devserver::{DevRequest, dispatch};
+        use crate::metrics::Metrics;
+        use serde_json::{Value, json};
+
+        let hub = Hub::new(8, Arc::new(Metrics::new()));
+        let opened = dispatch(&hub, "room_open", &json!({ "map": "default", "seed": 0xB0B5, "seats": 1 }))
+            .await
+            .expect("a room opens");
+        let tick = |v: &Value| v["tick"].as_u64().expect("a tick");
+        let before = tick(&opened);
+        let code = opened["code"].as_str().expect("a code").to_string();
+        let commands = hub.find(&code).expect("the room").commands;
+        // The room's first tick is due a tick from now. A task of our own
+        // makes the clock jump past three of them while this one sleeps a
+        // millisecond - a timer due before the room's, so the jump wakes
+        // this task first, and the call below is already waiting when the
+        // room comes round owing three ticks.
+        let jump = tokio::spawn(tokio::time::advance(TICK * 7 / 2));
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        let (reply, answer) = oneshot::channel();
+        let request = DevRequest { method: "room".into(), params: json!({ "code": code }), reply };
+        commands.send(Command::Dev(request)).await.expect("the room is there");
+        let answered = tick(&answer.await.expect("an answer").expect("the room answered"));
+        jump.await.expect("the clock jumped");
+        let after = tick(&dispatch(&hub, "room", &json!({ "code": code })).await.expect("the room answers"));
+        assert_eq!(after, before + 3, "the room caught its schedule up");
+        assert_eq!(answered, before + 1, "the waiting call was served after tick {answered}, not between the first two of {before}..={after}");
+    }
+
+    /// **A seat whose client left owns nothing** (docs/online-coop-prd.md
+    /// §4.14). The tick measures a hull against the pose it was put on
+    /// only for a seat whose pose that tick applied; a seat it no longer
+    /// reads has no pose, so its idle tank being carried off - a blast, a
+    /// wave's gate - sends no `Placed` to a client that is not there, let
+    /// alone one every tick.
+    #[cfg(feature = "dev-tools")]
+    #[tokio::test]
+    async fn a_seat_whose_client_left_is_not_placed() {
+        use crate::metrics::Metrics;
+        use bongbong::net::wire::IntentMsg;
+        use serde_json::json;
+
+        let map = r#"
+version = 1
+size = [16, 8]
+tanks = 0
+spawn.kind = "band"
+cells."1,1" = { kind = "frog" }
+cells."4,4" = { kind = "start" }
+cells."11,4" = { kind = "start2" }
+"#;
+        let params = RoomParams::for_dev("", Some(map), None, Some(7)).expect("the room's setup");
+        let (_commands, rx) = mpsc::channel(1);
+        let hub = Hub::new(8, Arc::new(Metrics::new()));
+        let mut room = Room::new(hub, "TESTS".into(), params, rx, Arc::new(RoomStats::default()));
+        room.dev("room_open", &json!({ "seats": 2 })).expect("two bots seated");
+        let placed = |room: &Room| {
+            room.prev.events.iter().filter(|e| matches!(e, WireEvent::Placed { seat: 0, .. })).cloned().collect::<Vec<_>>()
+        };
+        // Seat 0's client owns its hull: its pose is taken.
+        let at = room.game.as_ref().and_then(|g| g.seat_pose(0)).expect("seat 0's tank");
+        let seat = room.seats[0].as_ref().expect("seat 0");
+        seat.mailbox.post(IntentMsg::default().with_pose(at), std::time::Instant::now());
+        room.tick();
+        assert!(room.seats[0].as_ref().is_some_and(|s| s.applied_pose.is_some()), "the pose was taken");
+        assert_eq!(placed(&room), [], "and stood");
+        // Its client leaves, as `disconnected` has it...
+        let seat = room.seats[0].as_mut().expect("seat 0");
+        seat.bot = false;
+        seat.mailbox.clear();
+        room.life.disconnect(Instant::now());
+        // ...and something carries its idle tank off.
+        let away = Position::new(at.position.x + 96.0, at.position.y);
+        room.game.as_mut().expect("a round").debug_teleport(0, away, None).expect("seat 0 moved");
+        for tick in 0..3 {
+            room.tick();
+            assert_eq!(placed(&room), [], "tick {tick}: a seat with nobody at it was placed");
+        }
     }
 
     #[test]
