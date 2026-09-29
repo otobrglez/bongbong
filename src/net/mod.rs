@@ -71,7 +71,9 @@
 //! which `Ricochet` makes possible - is what closes it.
 
 pub mod apply;
+pub mod authority;
 pub mod client;
+pub mod clock;
 pub mod codec;
 pub mod delta;
 pub mod encode;
@@ -109,7 +111,7 @@ pub mod wire;
 /// variant index), a change to a `codec::kind` tag or to a quantisation
 /// scale. A new optional field in a `Lobby` message (JSON, `serde(default)`)
 /// needs no bump.
-pub const PROTOCOL_VERSION: u16 = 7;
+pub const PROTOCOL_VERSION: u16 = 9;
 
 /// The most seats a room holds (docs/online-coop-prd.md §7, decision 4):
 /// the length of `Snapshot::acked`, and the same number `Input::seats`

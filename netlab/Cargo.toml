@@ -1,0 +1,30 @@
+# netlab: how far networked play is from local play, measured
+# (docs/online-coop-prd.md §4.16, "Measurement first"). The real room
+# server in-process behind an impairment proxy that models TCP, headless
+# clients running the window's own `OnlineRound` over the real
+# `NativeTransport`, and a local twin fed the same scripted inputs - all on
+# one process clock. Headless: the game crate comes in without `render`.
+[package]
+name = "netlab"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# A developer's instrument, never a release artifact.
+[package.metadata.dist]
+dist = false
+
+[dependencies]
+# The simulation, the wire and the client (`online`: the native socket).
+bongbong = { path = "..", default-features = false, features = ["online"] }
+# The room server, run in-process on an ephemeral port.
+bongbong-server = { path = "../server" }
+# The server's runtime, and the proxy's sockets and timers.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "io-util"] }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[[bin]]
+name = "netlab"
+path = "src/main.rs"

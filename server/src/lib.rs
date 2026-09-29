@@ -6,7 +6,16 @@
 //! port and plays a round through it.
 //!
 //! - `code`: room codes, five letters from the alphabet.
-//! - `mailbox`: a seat's newest intent, sampled by the tick.
+//! - `mailbox`: a seat's intents between the socket and the tick, the
+//!   game crate's `net::mailbox`: an ordered jitter buffer for a
+//!   server-driven seat, one intent a tick; a play point on the room's
+//!   clock for a client that owns its hull, one client tick a room tick
+//!   with every intent at or before it taken at once and its trigger
+//!   merged press for press, the margin kept by a once-a-second
+//!   controller, its pose dead-reckoned on a tick that has not arrived,
+//!   and the reach the pose is believed to (`pose_reach_ticks`) and the
+//!   intent a shot's press came on (`press_tick`, which `Fired` is
+//!   stamped with) read off each tick's read.
 //! - `room`: the room task - the lifecycle, the tick, the snapshots, the
 //!   lobby.
 //! - `conn`: one WebSocket connection - decode, route, write.
@@ -22,8 +31,8 @@ pub mod conn;
 pub mod devserver;
 pub mod http;
 pub mod hub;
-/// The seats' jitter buffers are the game crate's (`net::mailbox`), so the
-/// rig and this server hold a seat's intents by one rule.
+/// The seats' mailboxes are the game crate's (`net::mailbox`), so the rig
+/// and this server hold a seat's intents by one rule.
 pub use bongbong::net::mailbox;
 pub mod metrics;
 pub mod room;

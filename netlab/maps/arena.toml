@@ -1,0 +1,19 @@
+# netlab/maps/arena.toml - netlab's default field (netlab/README.md).
+#
+# An open field at the shipped default size, 34 x 17 cells, with nothing
+# on it but the two starts: the scripted rectangles never touch a wall, so
+# a stall or a jump in the drawn motion is the link's and not the map's.
+# Player one starts left of centre and drives right and down from there;
+# player two starts lower right and drives left and up, so the two laps
+# never cross. The enemy count, the spawn plan and the chassis are set by
+# netlab per run (`--enemies`, band placement, `--tank`).
+#
+# Hand-authored: re-saving from the map editor would drop these comments.
+
+version = 1
+size = [34, 17]
+tanks = 0
+spawn.kind = "band"
+
+cells."6,5" = { kind = "start" }
+cells."26,11" = { kind = "start2" }

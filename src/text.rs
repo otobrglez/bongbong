@@ -144,6 +144,7 @@ keys! {
     STATUS_CONNECTING = "status-connecting";
     STATUS_GREETING = "status-greeting";
     STATUS_LOBBY = "status-lobby";
+    STATUS_PING = "status-ping";
     STATUS_BUFFER = "status-buffer";
     STATUS_WAITING = "status-waiting";
     STATUS_OFFLINE = "status-offline";
@@ -691,6 +692,7 @@ mod text_tests {
             ("code", "AK7QX".into()),
             ("seat", 2.into()),
             ("ms", 100.into()),
+            ("rtt", " - PING 40 MS".into()),
             ("reason", "closed".into()),
             ("detail", "x".into()),
             ("nick", "ana".into()),
@@ -909,7 +911,8 @@ mod text_tests {
         assert_eq!(en.get(keys::LOBBY_HOST), "HOST A ROOM");
         assert_eq!(en.fmt(keys::LOBBY_MORE, &[("n", 4.into())]), "+4 MORE");
         assert_eq!(en.fmt(keys::WAVE_BANNER, &[("n", 2.into())]), "WAVE 2");
-        assert_eq!(en.fmt(keys::STATUS_BUFFER, &[("room", "ROOM".into()), ("code", "AK7QX".into()), ("seat", 2.into()), ("ms", 100.into())]), "ROOM AK7QX - SEAT 2 - BUFFER 100 MS");
+        assert_eq!(en.fmt(keys::STATUS_BUFFER, &[("room", "ROOM".into()), ("code", "AK7QX".into()), ("seat", 2.into()), ("rtt", "".into()), ("ms", 100.into())]), "ROOM AK7QX - SEAT 2 - BUFFER 100 MS");
+        assert_eq!(en.fmt(keys::STATUS_PING, &[("ms", 40.into())]), "PING 40 MS");
         assert_eq!(en.named("tank", "scout"), "scout");
         assert_eq!(en.named("tank", "unknown"), "unknown", "a name the catalogue lacks is itself");
         assert_eq!(en.message("no-such-message", &[]), None);

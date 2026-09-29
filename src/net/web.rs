@@ -124,7 +124,7 @@ unsafe extern "C" {
 /// and never at the same moment: the frame's `RefCell` borrow is dropped
 /// before it yields, and a callback's before it returns.
 struct Inner {
-    arrived: VecDeque<Vec<u8>>,
+    arrived: VecDeque<(Vec<u8>, std::time::Instant)>,
     state: ConnState,
 }
 
@@ -210,10 +210,18 @@ impl Transport for WebTransport {
     }
 
     fn drain(&mut self, out: &mut Vec<Msg>) {
+        let mut stamped = Vec::new();
+        self.drain_stamped(&mut stamped);
+        out.extend(stamped.into_iter().map(|(m, _)| m));
+    }
+
+    /// Each message with the instant its callback ran - when the browser
+    /// handed it over, not when the frame got round to it.
+    fn drain_stamped(&mut self, out: &mut Vec<(Msg, std::time::Instant)>) {
         let mut inner = self.inner.borrow_mut();
-        while let Some(bytes) = inner.arrived.pop_front() {
+        while let Some((bytes, at)) = inner.arrived.pop_front() {
             if let Ok(msg) = codec::decode(&bytes) {
-                out.push(msg);
+                out.push((msg, at));
             }
         }
     }
@@ -296,7 +304,8 @@ extern "C" fn on_message(_kind: c_int, event: *const MessageEvent, user_data: *m
         std::slice::from_raw_parts(event.data, event.num_bytes as usize).to_vec()
     };
     // SAFETY: as in `on_open`.
-    unsafe { with_inner(user_data, move |inner| inner.arrived.push_back(bytes)) }
+    let at = std::time::Instant::now();
+    unsafe { with_inner(user_data, move |inner| inner.arrived.push_back((bytes, at))) }
 }
 
 extern "C" fn on_error(_kind: c_int, _event: *const ErrorEvent, user_data: *mut c_void) -> bool {

@@ -51,9 +51,32 @@ impl RoomStats {
     }
 }
 
+/// How the server tells a live connection from a dead one that never
+/// closed - a path that stalled somewhere between here and the client, a
+/// laptop lid shut on a socket. Every `ping_every` the writer sends a
+/// WebSocket ping, which a browser answers at the protocol level even in
+/// a hidden tab and a native client answers on its next read; a
+/// connection that has sent nothing at all - not an intent, not a
+/// ping, not that pong - for `silent_after` is taken as gone, so its seat
+/// starts its grace and an empty round pauses, rather than a room holding
+/// a seat for a client that will never speak again.
+#[derive(Clone, Copy, Debug)]
+pub struct KeepAlive {
+    pub ping_every: std::time::Duration,
+    pub silent_after: std::time::Duration,
+}
+
+impl Default for KeepAlive {
+    fn default() -> KeepAlive {
+        KeepAlive { ping_every: std::time::Duration::from_secs(2), silent_after: std::time::Duration::from_secs(10) }
+    }
+}
+
 pub struct Hub {
     /// The most rooms this server holds at once.
     pub max_rooms: usize,
+    /// The connection keep-alive every socket runs by.
+    pub keep_alive: KeepAlive,
     pub metrics: Arc<Metrics>,
     rooms: Mutex<BTreeMap<String, RoomHandle>>,
     /// Set once by `begin_drain`; every room task watches it, so a room
@@ -66,19 +89,33 @@ pub struct Hub {
     /// socket so the HTTP server can finish.
     shutdown: watch::Sender<bool>,
     next_conn_id: AtomicU64,
+    /// The server's clock: what every room's `Snapshot::server_ms` and
+    /// every connection's `Pong` read, so a client measures both against
+    /// one clock (docs/online-coop-prd.md §4.15).
+    epoch: std::time::Instant,
 }
 
 impl Hub {
     pub fn new(max_rooms: usize, metrics: Arc<Metrics>) -> Arc<Hub> {
         Arc::new(Hub {
             max_rooms,
+            keep_alive: KeepAlive::default(),
             metrics,
             rooms: Mutex::new(BTreeMap::new()),
             draining: watch::Sender::new(false),
             room_gone: Notify::new(),
             shutdown: watch::Sender::new(false),
             next_conn_id: AtomicU64::new(1),
+            epoch: std::time::Instant::now(),
         })
+    }
+
+    /// The server's clock in milliseconds since it started, wrapping at
+    /// `u32` every 49.7 days. A client unwraps each stamp against the one
+    /// before it (`net::interp::Interpolator`, `net::clock::RttClock`), so
+    /// a round that spans the wrap reads one clock.
+    pub fn now_ms(&self) -> u32 {
+        (self.epoch.elapsed().as_millis() % (u32::MAX as u128 + 1)) as u32
     }
 
     /// A fresh id for a connection, so a room can tell a stale

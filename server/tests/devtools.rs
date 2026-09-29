@@ -158,3 +158,91 @@ async fn rooms_are_listed_and_closed() {
     let room = dispatch(&hub, "room", &json!({ "code": code })).await.unwrap();
     assert_eq!(room["phase"], "ended", "{room}");
 }
+
+/// **A due tick goes ahead of the commands waiting** (docs/online-coop-prd.md
+/// §4.16): a room flooded with dev calls from eight callers at once - a
+/// burst of lobby or tool traffic, on the real clock - still starts its
+/// ticks on time, because the task serves a due tick before the next
+/// command.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_flood_of_commands_does_not_hold_the_tick_up() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+
+    let hub = hub();
+    let code = open(&hub, 1).await;
+    let tick = |v: Value| v["tick"].as_u64().expect("a tick");
+    let from = tick(dispatch(&hub, "room", &json!({ "code": code })).await.unwrap());
+    let started = Instant::now();
+    let stop = Arc::new(AtomicBool::new(false));
+    let mut flood = Vec::new();
+    for _ in 0..8 {
+        let (hub, code, stop) = (hub.clone(), code.clone(), stop.clone());
+        flood.push(tokio::spawn(async move {
+            let mut calls = 0u64;
+            while !stop.load(Ordering::Relaxed) {
+                dispatch(&hub, "room", &json!({ "code": code })).await.expect("an answer");
+                calls += 1;
+            }
+            calls
+        }));
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    stop.store(true, Ordering::Relaxed);
+    let mut calls = 0;
+    for caller in flood {
+        calls += caller.await.expect("a caller");
+    }
+    let elapsed = started.elapsed().as_secs_f64();
+    let ticked = tick(dispatch(&hub, "room", &json!({ "code": code })).await.unwrap()) - from;
+    let expected = elapsed * 60.0;
+    let metrics = &dispatch(&hub, "server_status", &json!({})).await.unwrap()["metrics"];
+    eprintln!("{calls} calls in {elapsed:.3} s, {ticked} ticks of an expected {expected:.0}; {metrics}");
+    assert!(calls > 200, "the flood was a trickle: {calls} calls");
+    assert!(ticked as f64 >= expected * 0.8, "the flood held the tick up: {ticked} ticks in {elapsed:.3} s");
+    // The count alone does not tell: the schedule catches a late tick up.
+    // How late the ticks started does - served after the commands, the
+    // median tick starts tens of milliseconds late under this flood.
+    let late_p50 = metrics["tick_lateness_p50_us"].as_u64().expect("a reading");
+    assert!(late_p50 < 5_000, "the median tick started {late_p50} µs late under the flood: {metrics}");
+}
+
+/// **A room keeps its clients' pace** (docs/online-coop-prd.md §4.16),
+/// on tokio's paused clock so the seconds are exact. Tick n is due at a
+/// fixed instant, so two seconds are 120 ticks however the timer rounds
+/// each wake-up (a schedule that restarted from every tick's own start
+/// drifts a tick or two behind in that time); a room frozen by a dev tool
+/// and resumed ticks on from the resume rather than paying the frozen
+/// second back in a burst; and `/metrics` reads how late every tick
+/// started - under a millisecond here, the timer's own resolution.
+#[tokio::test(start_paused = true)]
+async fn the_room_ticks_on_a_wall_clock_schedule() {
+    use std::time::Duration;
+
+    let hub = hub();
+    let code = open(&hub, 1).await;
+    let tick = |v: Value| v["tick"].as_u64().expect("a tick");
+    let by_code = json!({ "code": code });
+    let room = || dispatch(&hub, "room", &by_code);
+
+    let from = tick(room().await.unwrap());
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let ticked = tick(room().await.unwrap()) - from;
+    assert!((119..=121).contains(&ticked), "two seconds at 60 Hz ran {ticked} ticks");
+
+    // Frozen for a second, then resumed: the frozen second is gone, not
+    // owed.
+    let frozen_at = tick(dispatch(&hub, "room_step", &json!({ "code": code, "ticks": 1, "snapshot": false })).await.unwrap());
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(tick(room().await.unwrap()), frozen_at, "a frozen room ticked");
+    dispatch(&hub, "room_resume", &json!({ "code": code })).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let resumed = tick(room().await.unwrap()) - frozen_at;
+    assert!((29..=31).contains(&resumed), "half a second after the resume ran {resumed} ticks");
+
+    let metrics = &dispatch(&hub, "server_status", &json!({})).await.unwrap()["metrics"];
+    eprintln!("{metrics}");
+    assert_eq!(metrics["ticks_late_total"], 0, "{metrics}");
+    assert_eq!(metrics["ticks_dropped_total"], 0, "{metrics}");
+    assert!(metrics["tick_lateness_p99_us"].as_u64().unwrap() <= 1_000, "{metrics}");
+}

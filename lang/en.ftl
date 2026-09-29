@@ -152,8 +152,10 @@ status-label-room = ROOM
 status-connecting = { $room } - CONNECTING
 status-greeting = { $room } - ASKING FOR A SEAT
 status-lobby = { $room } { $code } - SEAT { $seat } - IN THE LOBBY
-status-buffer = { $room } { $code } - SEAT { $seat } - BUFFER { $ms } MS
-status-waiting = { $room } { $code } - SEAT { $seat } - WAITING FOR THE ROOM
+# `{ $rtt }` is empty, or ` - ` and `status-ping` once a round trip is known.
+status-ping = PING { $ms } MS
+status-buffer = { $room } { $code } - SEAT { $seat }{ $rtt } - BUFFER { $ms } MS
+status-waiting = { $room } { $code } - SEAT { $seat }{ $rtt } - WAITING FOR THE ROOM
 status-offline = { $room } - OFFLINE: { $reason }
 note-tuning-refused = the room's tuning was refused: { $detail }
 note-welcome-refused = the room's round could not be built: { $detail }

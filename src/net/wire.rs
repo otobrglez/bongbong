@@ -17,7 +17,7 @@ use crate::level::{LevelOverrides, Mission, SpawnKind, Tier};
 use crate::net::MAX_SEATS;
 use crate::net::events::WireEvent;
 use crate::pickup::PickupKind;
-use crate::simulation::Outcome;
+use crate::simulation::{Outcome, SeatPose};
 use crate::tank::{ActiveWeapon, Dir};
 
 // ---------------------------------------------------------------------------
@@ -285,17 +285,74 @@ pub struct IntentMsg {
     /// `Intent::fire`, held for at least two ticks by the client so a short
     /// press survives sampling.
     pub fire: bool,
+    /// The client owns its hull (docs/online-coop-prd.md §4.14,
+    /// `online_client_hull`): the pose below is where it is this tick, and
+    /// the room puts the seat there instead of driving it from `move_dir`.
+    pub owned: bool,
+    /// Hull centre, quarter pixels (`quantise_pos`); meaningful with `owned`.
+    pub x: i16,
+    pub y: i16,
+    /// Facing, `dir_index`.
+    pub dir: u8,
+    /// The body's velocity (`quantise_velocity`).
+    pub vx: i8,
+    pub vy: i8,
+    /// The server tick this client was drawing the world at when it made
+    /// this input - the interpolation bracket's near end - and how far
+    /// past it, in 256ths of a tick. What the room rewinds the enemies to
+    /// when it judges this seat's shots (lag compensation,
+    /// docs/online-coop-prd.md §4.16). Zero before the first snapshot.
+    pub view_tick: u32,
+    pub view_frac: u8,
 }
 
 impl IntentMsg {
-    /// The wire form of `intent` for `tick`.
+    /// The wire form of `intent` for `tick`, with no pose: the room
+    /// drives the seat.
     pub fn new(tick: u32, intent: &Intent) -> IntentMsg {
         IntentMsg {
             tick,
             move_dir: dir_code(intent.move_dir),
             face: dir_code(intent.face),
             fire: intent.fire,
+            owned: false,
+            x: 0,
+            y: 0,
+            dir: 0,
+            vx: 0,
+            vy: 0,
+            view_tick: 0,
+            view_frac: 0,
         }
+    }
+
+    /// The same packet saying which tick of the world the client was
+    /// drawing when it was made.
+    pub fn with_view(mut self, view_tick: u32, view_frac: u8) -> IntentMsg {
+        self.view_tick = view_tick;
+        self.view_frac = view_frac;
+        self
+    }
+
+    /// The same packet carrying where the client's own hull is, which
+    /// makes it an owned one.
+    pub fn with_pose(mut self, pose: SeatPose) -> IntentMsg {
+        self.owned = true;
+        self.x = quantise_pos(pose.position.x);
+        self.y = quantise_pos(pose.position.y);
+        self.dir = dir_index(Dir::from_rotation(pose.rotation).unwrap_or(Dir::Up));
+        self.vx = quantise_velocity(pose.velocity.x);
+        self.vy = quantise_velocity(pose.velocity.y);
+        self
+    }
+
+    /// The hull's pose, if this packet owns one.
+    pub fn pose(&self) -> Option<SeatPose> {
+        self.owned.then(|| SeatPose {
+            position: crate::math::Vec2::new(dequantise_pos(self.x), dequantise_pos(self.y)),
+            rotation: dir_from_index(self.dir).unwrap_or(Dir::Up).rotation(),
+            velocity: crate::math::Vec2::new(dequantise_velocity(self.vx), dequantise_velocity(self.vy)),
+        })
     }
 
     /// The `Intent` this stands for, with the AI-only fields at their
@@ -308,6 +365,23 @@ impl IntentMsg {
             ..Intent::default()
         }
     }
+}
+
+/// A clock probe (docs/online-coop-prd.md §4.15): the client's own
+/// milliseconds, echoed straight back by whoever holds the socket's
+/// other end, so the round trip is measured on one clock and the
+/// server's time is read at the far end of it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Ping {
+    pub client_ms: u32,
+}
+
+/// The echo of a `Ping`: the client's stamp back, and the server's clock
+/// when it answered - the same clock `Snapshot::server_ms` reads.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Pong {
+    pub client_ms: u32,
+    pub server_ms: u32,
 }
 
 impl From<&IntentMsg> for Intent {
@@ -392,7 +466,15 @@ pub struct ShotState {
     /// a plasma bolt's `PlasmaVariant` (0 teal, 1 purple), 0 for a bullet.
     /// Never changes, so a delta never repeats it.
     pub variant: u8,
+    /// The seat that fired it, or `NO_SEAT` for an enemy's: how a client
+    /// knows which shots are its own to draw on its own timeline
+    /// (docs/online-coop-prd.md §4.16). Never changes.
+    pub owner: u8,
 }
+
+/// `ShotState::owner` and `WireEvent::LaserBeam::seat` for a shot no seat
+/// fired.
+pub const NO_SEAT: u8 = u8::MAX;
 
 /// One seeker missile in flight (`missile.rs`).
 ///

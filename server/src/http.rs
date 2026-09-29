@@ -9,6 +9,8 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::{State, WebSocketUpgrade};
+use axum::serve::ListenerExt;
+use tracing::warn;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -48,9 +50,29 @@ impl Server {
         Ok(Server { addr, hub, config, listener })
     }
 
+    /// The connection keep-alive, set before serving: a test shortens it
+    /// to see a silent client go without waiting ten seconds.
+    pub fn keep_alive(mut self, keep_alive: crate::hub::KeepAlive) -> Server {
+        Arc::get_mut(&mut self.hub).expect("the hub is only shared once the server runs").keep_alive = keep_alive;
+        self
+    }
+
     /// Serve until `shutdown` resolves, then finish the open connections.
+    ///
+    /// **Every accepted socket gets `TCP_NODELAY`.** The room sends a
+    /// small frame sixty times a second and hears one back as often; with
+    /// Nagle's algorithm on, the kernel holds each small segment until the
+    /// previous one is acknowledged, so on a real link the sixty-a-second
+    /// stream leaves in bursts once a round trip - jitter the client
+    /// cannot interpolate away, and intents that arrive in clumps and
+    /// starve the ticks between. axum does not set it by itself.
     pub async fn run(self, shutdown: impl Future<Output = ()> + Send + 'static) -> io::Result<()> {
-        axum::serve(self.listener, router(self.hub)).with_graceful_shutdown(shutdown).await
+        let listener = self.listener.tap_io(|tcp| {
+            if let Err(e) = tcp.set_nodelay(true) {
+                warn!("TCP_NODELAY refused on an accepted socket: {e}");
+            }
+        });
+        axum::serve(listener, router(self.hub)).with_graceful_shutdown(shutdown).await
     }
 }
 

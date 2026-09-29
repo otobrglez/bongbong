@@ -1411,3 +1411,40 @@ cells."21,10" = { kind = "barrel", drum = "oil" }
     assert!(chained_at.is_some(), "the neighbour chains within its fuse");
     assert!(game.barrels().is_empty());
 }
+
+#[test]
+fn a_blast_lights_the_oil_around_it_in_the_same_order_every_run() {
+    // A fuel drum in a field of oil: its blast lights every trail cell in
+    // reach on one frame, and the fire runs on from there. `oil_cells` is
+    // a hash set, seeded afresh for every round, so the order the cells
+    // are lit - the order `fires` holds them and `tick_fires` walks them
+    // in - has to come from somewhere else for a seeded round to replay.
+    let mut extra = String::from("cells.\"20,10\" = { kind = \"barrel\", drum = \"fuel\" }\n");
+    for c in 16..=24 {
+        for r in 6..=14 {
+            if (c, r) != (20, 10) {
+                extra.push_str(&format!("cells.\"{c},{r}\" = {{ kind = \"oil\" }}\n"));
+            }
+        }
+    }
+    let map = map_with(&extra);
+    let run = || {
+        let mut game = game_on(&map, 7);
+        game.debug_detonate(cell_to_world(20, 10)).expect("the fuel drum at (20,10)");
+        let mut lit = Vec::new();
+        for _ in 0..90 {
+            step(&mut game, Input::default());
+            lit.extend(game.events().iter().filter_map(|e| match *e {
+                Event::FireStarted { x, y, .. } => Some((x as i32, y as i32)),
+                _ => None,
+            }));
+        }
+        let burning: Vec<(i32, i32)> = game.fires.iter().map(|f| f.cell).collect();
+        (lit, burning)
+    };
+    let first = run();
+    assert!(first.0.len() >= 20, "the blast lit the oil around it: {:?}", first.0);
+    for _ in 0..4 {
+        assert_eq!(run(), first, "the same round lit its oil in another order");
+    }
+}

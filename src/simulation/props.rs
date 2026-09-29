@@ -21,7 +21,7 @@ use crate::tank::Tank;
 use crate::{MAX_DAMAGE, OBSTACLE_GRID_SIZE, Position, RUBBLE_ROW_BARREL};
 
 use super::combat::{explosion_hit, BlastParams};
-use super::{Event, Frame, Game, SHOCK_BARREL, SHOCK_FROG, SHOCK_FUEL};
+use super::{Event, Frame, Game, Spectacle, SHOCK_BARREL, SHOCK_FROG, SHOCK_FUEL};
 
 /// Everything `obstacle_died` needs to know about a tile that just died.
 /// Bundled rather than passed loose because each death path has the whole
@@ -140,6 +140,17 @@ fn cell_of(pos: Position) -> (i32, i32) {
     ((pos.x / OBSTACLE_GRID_SIZE).round() as i32, (pos.y / OBSTACLE_GRID_SIZE).round() as i32)
 }
 
+/// What a dead tile leaves where it stood: its rubble, charred when fire
+/// finished it. A barrel's leftovers are thrown by its blast
+/// (`Game::blast_show`) instead; iron has no rubble row and never dies
+/// anyway. A replica calls it off `Event::ObstacleDestroyed`.
+pub(crate) fn tile_rubble(material: Material, pos: Position, charred: bool) -> Option<Decal> {
+    if material.is_explosive() {
+        return None;
+    }
+    Decal::new(material, pos, charred)
+}
+
 impl Game {
     /// Apply `amount` of damage to the obstacle `entity` - the only place on
     /// the simulation path an obstacle loses health, so the per-material
@@ -223,13 +234,8 @@ impl Game {
     fn obstacle_died(&mut self, f: &mut Frame, tile: DeadTile) {
         let DeadTile { material, variant, position: pos, chained, charred, shape } = tile;
         f.events.push(Event::ObstacleDestroyed { material, x: pos.x, y: pos.y });
-        // A barrel's leftovers are thrown by its blast (`apply_blast`);
-        // everything else with a rubble row drops it in place. Iron has
-        // none and never dies anyway.
-        if !material.is_explosive() {
-            if let Some(decal) = Decal::new(material, pos, charred) {
-                f.decals.push(decal);
-            }
+        if let Some(decal) = tile_rubble(material, pos, charred) {
+            f.decals.push(decal);
         }
         if material.is_explosive() {
             let drum = Drum::from_variant(variant);
@@ -247,7 +253,7 @@ impl Game {
     /// Beyond the damage, what the blast leaves depends on the drum and on
     /// what set it off: an oil drum's pool of fire, a fuel drum's harder
     /// shake and bigger scorch, a ram's extra lurch, a shot's streak. The
-    /// visuals: the full-screen ripple and camera shake (`f.shock`), the
+    /// visuals (`blast_show`): the full-screen ripple and camera shake, the
     /// impact-flash quad, the fireball animation, a scorch mark, thrown
     /// drum parts, delayed cook-off pops, flattened grass, burnt-in tread
     /// marks, and any rubble already lying inside the radius thrown again.
@@ -270,7 +276,9 @@ impl Game {
             for player in self.seats_on_field().into_iter().flatten() {
                 let mut q = self.world.query_one::<&mut Tank>(player);
                 let tank = q.get().expect("player entity always has a Tank");
-                explosion_hit(tank, center, true, &mut self.physics, &mut f.rng, &mut f.kills, &params);
+                if let Some(dv) = explosion_hit(tank, center, true, &mut self.physics, &mut f.rng, &mut f.kills, &params) {
+                    f.shoves.push(tank.owner(), dv);
+                }
             }
             for tank in self.world.query::<&mut Tank>().with::<&Ai>().iter() {
                 explosion_hit(tank, center, true, &mut self.physics, &mut f.rng, &mut f.kills, &params);
@@ -339,25 +347,64 @@ impl Game {
                     }
                 }
             }
-            let lit: Vec<(i32, i32)> = self
+            // Sorted: `oil_cells` is a hash set, and the order the cells
+            // are lit is the order `fires` holds them - which `tick_fires`
+            // spreads, fuses and burns out in.
+            let mut lit: Vec<(i32, i32)> = self
                 .oil_cells
                 .iter()
                 .copied()
                 .filter(|&cell| cell_to_world(cell.0, cell.1).distance_to(center) <= params.radius)
                 .collect();
+            lit.sort_unstable();
             for cell in lit {
                 self.light_cell(f, cell, t.oil_trail_burn_seconds, false);
             }
         }
 
-        // --- the show ---
+        let mut show = Spectacle::default();
+        self.blast_show(&mut show, center, drum, shape, (f.width, f.height));
+        f.stage(show);
+
+        // Delayed secondaries, hashed 0..=max per blast so a third of
+        // drums get none; the same queue a wreck's cook-offs use.
+        let max = t.barrel_cookoff_max.max(0) as u32;
+        if max > 0 {
+            let count = crate::blast::seed_at(center, 90) % (max + 1);
+            let window = t.cookoff_window_seconds;
+            for i in 0..count {
+                let h = crate::blast::seed_at(center, 90 + i * 7);
+                let delay = window * (0.15 + 0.85 * (h % 1000) as f32 / 1000.0);
+                let off = ((h >> 10) % 21) as f32 - 10.0;
+                let off2 = ((h >> 16) % 21) as f32 - 10.0;
+                self.cookoffs.push((Position::new(center.x + off, center.y + off2), delay));
+            }
+        }
+    }
+
+    /// The show a drum's blast at `center` puts on: the ripple and camera
+    /// shake, the impact-flash quad, the fireball shaped by what set it
+    /// off, the screen flash, a scorch on dry ground, burnt-in tread
+    /// marks, flattened grass, the drum's parts thrown and any rubble
+    /// already inside the radius thrown again (clamped to the `field`,
+    /// width by height). Everything but the damage and the cook-offs,
+    /// which is why a replica can call it off `Event::Blast`. Every choice
+    /// hashes the position; no RNG.
+    pub(crate) fn blast_show(&mut self, show: &mut Spectacle, center: Position, drum: Drum, shape: BlastShape, field: (f32, f32)) {
+        let t = tuning();
+        let (width, height) = field;
+        let radius = match drum {
+            Drum::Oil => BlastParams::barrel(),
+            Drum::Fuel => BlastParams::fuel(),
+        }
+        .radius;
         let kind = match drum {
             Drum::Oil => BlastKind::Oil,
             Drum::Fuel => BlastKind::Fuel,
         };
-        f.shocks.push(Shockwave::scaled(center, if drum == Drum::Fuel { SHOCK_FUEL } else { SHOCK_BARREL }));
-        f.impact_flashes.push(Shockwave::new(center));
-        f.blast_fx.push(BlastFx::shaped(center, kind, shape));
+        show.shocks.push(Shockwave::scaled(center, if drum == Drum::Fuel { SHOCK_FUEL } else { SHOCK_BARREL }));
+        show.impact_flashes.push(Shockwave::new(center));
+        show.blast_fx.push(BlastFx::shaped(center, kind, shape));
         self.flash_screen();
         let streak = match shape {
             BlastShape::Shot { dir } => Some(dir),
@@ -365,10 +412,10 @@ impl Game {
         };
         let scorch_scale = if drum == Drum::Fuel { t.scorch_fuel_scale } else { 1.0 };
         if self.water.depth_at(center) == crate::ground::Depth::Dry {
-            f.scorches.push(Scorch::with(center, scorch_scale, streak));
+            show.scorches.push(Scorch::with(center, scorch_scale, streak));
         }
         self.scorch_tracks(center);
-        crate::grass::flatten(&mut self.grass, center, params.radius * t.blast_grass_flatten);
+        crate::grass::flatten(&mut self.grass, center, radius * t.blast_grass_flatten);
 
         // Drum parts thrown in arcs to hashed landing spots (the same
         // machinery a wreck's hull parts use); with none, the plain
@@ -376,7 +423,7 @@ impl Game {
         let parts = t.barrel_parts.max(0) as u32;
         if parts == 0 {
             if let Some(decal) = Decal::new(Material::Barrel, center, false) {
-                f.decals.push(decal);
+                show.decals.push(decal);
             }
         }
         for i in 0..parts {
@@ -384,7 +431,7 @@ impl Game {
             let angle = (h % 3600) as f32 / 3600.0 * std::f32::consts::TAU;
             let dist = t.barrel_part_throw_px * (0.35 + 0.65 * ((h >> 12) % 100) as f32 / 100.0);
             let to = Position::new(center.x + angle.cos() * dist, center.y + angle.sin() * dist);
-            f.decals.push(Decal::thrown(RUBBLE_ROW_BARREL, center, to, 40 + i * 5));
+            show.decals.push(Decal::thrown(RUBBLE_ROW_BARREL, center, to, 40 + i * 5));
         }
 
         // Rubble already on the ground inside the blast is picked up and
@@ -402,7 +449,7 @@ impl Game {
                 continue;
             }
             let dist = decal.center.distance_to(center);
-            if dist > params.radius * 0.7 {
+            if dist > radius * 0.7 {
                 continue;
             }
             rethrown += 1;
@@ -411,25 +458,10 @@ impl Game {
             angle += ((h % 100) as f32 / 100.0 - 0.5) * 0.8;
             let throw = 16.0 + ((h >> 8) % 24) as f32;
             let to = Position::new(
-                (center.x + angle.cos() * (dist + throw)).clamp(0.0, f.width),
-                (center.y + angle.sin() * (dist + throw)).clamp(0.0, f.height),
+                (center.x + angle.cos() * (dist + throw)).clamp(0.0, width),
+                (center.y + angle.sin() * (dist + throw)).clamp(0.0, height),
             );
             decal.rethrow(to);
-        }
-
-        // Delayed secondaries, hashed 0..=max per blast so a third of
-        // drums get none; the same queue a wreck's cook-offs use.
-        let max = t.barrel_cookoff_max.max(0) as u32;
-        if max > 0 {
-            let count = crate::blast::seed_at(center, 90) % (max + 1);
-            let window = t.cookoff_window_seconds;
-            for i in 0..count {
-                let h = crate::blast::seed_at(center, 90 + i * 7);
-                let delay = window * (0.15 + 0.85 * (h % 1000) as f32 / 1000.0);
-                let off = ((h >> 10) % 21) as f32 - 10.0;
-                let off2 = ((h >> 16) % 21) as f32 - 10.0;
-                self.cookoffs.push((Position::new(center.x + off, center.y + off2), delay));
-            }
         }
     }
 

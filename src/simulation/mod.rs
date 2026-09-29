@@ -27,11 +27,15 @@ mod engage;
 mod flame;
 mod hits;
 mod missiles;
+pub mod present;
 mod props;
 pub use props::{FlyingDrum, GroundFire};
+pub(crate) use props::tile_rubble;
 pub mod replica;
 #[cfg(test)]
 mod flame_tests;
+#[cfg(test)]
+mod lagcomp_tests;
 #[cfg(test)]
 mod props_tests;
 #[cfg(test)]
@@ -51,6 +55,33 @@ pub enum ProvisionalKind {
     Plasma,
 }
 
+/// Where a seat's hull is: what a client that owns its hull sends every
+/// tick and the room puts the seat at (docs/online-coop-prd.md §4.14),
+/// and what the room sends back in `Placed` when it moved the hull
+/// itself.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SeatPose {
+    pub position: Position,
+    /// Degrees, 0 = up, one of the four facings.
+    pub rotation: f32,
+    /// The body's velocity, so the room's ram reads impact speed off it.
+    pub velocity: Vec2,
+}
+
+/// The least a client-owned hull may move between two poses the room
+/// accepts, in ticks of its top speed. An ordinary read covers one tick
+/// of the client's driving, and the hull the room compares it with can
+/// stand a few ticks off it - a starved tick's guess went on a tick the
+/// client did not, a contact held the room's copy back - so one pose may
+/// always cover this much without the client having cheated. A read that
+/// took a stall's worth of intents at once covers more, and says so
+/// (`accept_seat_pose`'s `reach_ticks`).
+pub const POSE_REACH_TICKS: f32 = 4.0;
+
+/// Slack on top of the reach, in pixels: the wire's rounding and the
+/// solver's own nudge on the room's copy.
+pub const POSE_REACH_SLACK_PX: f32 = 8.0;
+
 /// A client's own shot before the server has confirmed it: the pose and
 /// nothing else, since it is drawn and never simulated (`net::predict`).
 /// `Game::seat_shot` builds one from a seat's muzzle and
@@ -69,6 +100,14 @@ pub struct ProvisionalShot {
     /// A bolt's variant; `Teal` for the other kinds.
     pub plasma_variant: PlasmaVariant,
     pub shooter_row: i32,
+    /// Its state as the kind's sheet column (`ShellState::col` and the
+    /// like) and the time in it: a provisional runs the real projectile's
+    /// state machine (`ProvisionalShot::advance`, `simulation::present`),
+    /// muzzle frames first, as the room's copy does.
+    pub state: i32,
+    pub timer: f32,
+    /// The impact frames have played out.
+    pub done: bool,
 }
 use waves::WaveState;
 
@@ -127,8 +166,8 @@ use crate::{
 
 use combat::{frog_hop_target, ram, HitEffects};
 use engage::{EngageCtx, EngageReport, EngageRing, EngageStatus, EngageTank};
-use hits::{ShellTarget, Terrain};
-use weapons::{dispatch_fire, dispatch_fire_from, laser_damage_range, tick_queued_shots, PendingLaserShot, Projectile, laser_beam_half_width};
+use hits::{HitBoxFrame, HitBoxHistory, REWIND_MAX_TICKS, ShellTarget, Terrain};
+use weapons::{dispatch_fire, dispatch_fire_from, laser_damage_range, tick_queued_shots, PendingLaserShot, Projectile, Rewind, laser_beam_half_width};
 
 /// One step's player input, gathered by the caller (`app.rs` reading a
 /// live `RaylibHandle`, the dev server, a scripted probe) - the entire
@@ -266,6 +305,20 @@ pub enum Event {
     /// A trigger pull that launched something. A twin barrel's queued
     /// second shot and a burst's later bullets are part of the same pull.
     Fired { slot: usize, weapon: &'static str },
+    /// The room moved a client-owned hull itself - a refused pose, a
+    /// portal, a gate - and the client snaps to it
+    /// (docs/online-coop-prd.md §4.14).
+    Placed { seat: usize, x: f32, y: f32, rotation: f32 },
+    /// A laser beam was drawn from the muzzle at (`x0`, `y0`) to where it
+    /// stopped at (`x1`, `y1`): an instant hit leaves nothing in the world
+    /// for a snapshot to carry, so the beam itself is the event a replica
+    /// draws it from (`LaserVariant::name`).
+    LaserBeam { x0: f32, y0: f32, x1: f32, y1: f32, variant: &'static str, seat: u8 },
+    /// A velocity change the room put on a client-owned hull (knockback, a
+    /// blast, a ram, a missile launch's recoil); the owner applies it to
+    /// its own body, since the room places that hull wherever the owner
+    /// says (docs/online-coop-prd.md §4.16).
+    Shoved { seat: usize, vx: f32, vy: f32 },
     /// A projectile or beam landed on `target` at (`x`, `y`).
     Hit { target: HitTarget, damage: f32, killed: bool, x: f32, y: f32 },
     /// A tank became a wreck (any cause) at (`x`, `y`).
@@ -526,6 +579,23 @@ pub struct Game {
     /// archetype - a `Tank` and nothing else - so every query that tells
     /// enemies apart by their `Ai` sees all of them the same way.
     pub(crate) seats: [Option<Entity>; MAX_SEATS],
+    /// The tick of the world each seat's client was drawing when it made
+    /// the input this tick applies, in 256ths of a tick: what lag
+    /// compensation rewinds the enemies to for that seat's shots
+    /// (`set_seat_view`, docs/online-coop-prd.md §4.16). `None` for a seat
+    /// with no client view (a local round, a bot).
+    seat_view: [Option<(u32, u8)>; MAX_SEATS],
+    /// The update a seat's client owns its hull for (`accept_seat_pose`),
+    /// by the frame number that update will run as; `drive_player` puts
+    /// nothing on it that frame, since the pose already did. One update
+    /// only: a seat whose packets stop saying where it is - a client that
+    /// dropped, one that went back to stage 2 - is the room's to drive
+    /// again on the next tick without anybody having to release it.
+    seat_owned: [u64; MAX_SEATS],
+    /// The enemy and frog hit boxes of the last `REWIND_MAX_TICKS` ticks,
+    /// recorded at the end of each update: what a seat's shot is swept
+    /// against when its client was drawing the past (`seat_rewind`).
+    hit_history: HitBoxHistory,
     /// The player's frog - `None` in a mission without one (`Destroy`),
     /// and before the first `init`.
     pub(crate) frog: Option<Entity>,
@@ -776,6 +846,44 @@ struct Frame {
     physics_stepped: bool,
     /// Events this frame's phases recorded; merged onto `Game::events`.
     events: Vec<Event>,
+    /// The velocity changes put on client-owned seats this frame, which
+    /// `finish_frame` turns into `Event::Shoved`.
+    shoves: Shoves,
+}
+
+/// The velocity changes the room puts on hulls their clients own
+/// (docs/online-coop-prd.md §4.16, "Shoves on owned hulls"): hit
+/// knockback, blast shoves (a missile's included), ram pushes and a
+/// missile launch's recoil. The room places an owned hull wherever its
+/// client says, so a shove applied here alone would be erased by the next
+/// pose - each one travels as an `Event::Shoved` for the owner to apply to
+/// its own body. The recoil of a shell, bolt or bullet is not among them:
+/// the client kicks its hull itself at each launch (`net::predict`).
+///
+/// `owned` is set once per update from `Game::seat_owned`; everything
+/// else is pushed unconditionally and kept only for an owned seat, so a
+/// round with no client-owned hull - every local round - keeps nothing
+/// and emits nothing.
+#[derive(Debug, Default)]
+pub(super) struct Shoves {
+    owned: [bool; MAX_SEATS],
+    log: Vec<(usize, Vec2)>,
+}
+
+impl Shoves {
+    /// A shove of `dv` px/s on the tank `owner` names, kept only when that
+    /// tank is a seat its client owns this update.
+    pub(super) fn push(&mut self, owner: Owner, dv: Vec2) {
+        if let Owner::Player(seat) = owner
+            && self.owned.get(seat as usize).copied().unwrap_or(false)
+        {
+            self.log.push((seat as usize, dv));
+        }
+    }
+
+    fn into_events(self) -> impl Iterator<Item = Event> {
+        self.log.into_iter().map(|(seat, dv)| Event::Shoved { seat, vx: dv.x, vy: dv.y })
+    }
 }
 
 impl Frame {
@@ -802,8 +910,37 @@ impl Frame {
             shocks: Vec::new(),
             physics_stepped: false,
             events: Vec::new(),
+            shoves: Shoves::default(),
         }
     }
+
+    /// Take `show`'s cosmetics into the frame's, each list in its own
+    /// order, as if the phase had pushed them itself.
+    fn stage(&mut self, show: Spectacle) {
+        self.blast_fx.extend(show.blast_fx);
+        self.scorches.extend(show.scorches);
+        self.decals.extend(show.decals);
+        self.muzzle_flashes.extend(show.muzzle_flashes);
+        self.impact_flashes.extend(show.impact_flashes);
+        self.shocks.extend(show.shocks);
+    }
+}
+
+/// The cosmetics one cause lays down - a kill, a drum's blast, a missile's
+/// burst, a cook-off pop - gathered by the cause's `*_show` method, the
+/// one place that decides them. A round stages them into its `Frame`; a
+/// client replica (docs/online-coop-prd.md section 4.16), which never
+/// runs the phases, hands them to `Game::show` off the server's events,
+/// so both pictures come from the same code. Hashed from positions, never
+/// drawn from the round RNG.
+#[derive(Default)]
+pub(crate) struct Spectacle {
+    pub(crate) blast_fx: Vec<BlastFx>,
+    pub(crate) scorches: Vec<Scorch>,
+    pub(crate) decals: Vec<Decal>,
+    pub(crate) muzzle_flashes: Vec<Shockwave>,
+    pub(crate) impact_flashes: Vec<Shockwave>,
+    pub(crate) shocks: Vec<Shockwave>,
 }
 
 // How hard each thing that shakes the screen shakes it, relative to a tank
@@ -878,6 +1015,11 @@ impl Game {
         self.heat.clear();
         self.flame_contacts.clear();
         self.frame = 0;
+        self.hit_history.clear();
+        self.seat_view = [None; MAX_SEATS];
+        // `frame` starts over, so an update number held from the last
+        // round would name one of this round's.
+        self.seat_owned = [0; MAX_SEATS];
         self.next_shot_id = 0;
         self.last_engage.clear();
         self.debug_kills.clear();
@@ -1310,6 +1452,9 @@ impl Game {
         // take.
         let grid = self.route_grid(width, height);
         let mut f = Frame::new(dt, width, height, rng, terrain);
+        for (owned, &frame) in f.shoves.owned.iter_mut().zip(&self.seat_owned) {
+            *owned = frame != 0 && frame == self.frame;
+        }
 
         if self.outcome == Outcome::Playing {
             self.apply_debug_kills(&mut f);
@@ -1370,25 +1515,38 @@ impl Game {
                 return;
             }
         }
+        self.hit_history.record(&self.world, self.frame);
         self.finish_frame(f);
     }
 
     /// Append the frame's effects and events and put the RNG back.
     fn finish_frame(&mut self, f: Frame) {
-        self.muzzle_flashes.extend(f.muzzle_flashes);
-        self.impact_flashes.extend(f.impact_flashes);
-        self.blast_fx.extend(f.blast_fx);
-        self.scorches.extend(f.scorches);
+        let Frame { blast_fx, scorches, decals, muzzle_flashes, impact_flashes, shocks, events, shoves, rng, .. } = f;
+        self.show(Spectacle { blast_fx, scorches, decals, muzzle_flashes, impact_flashes, shocks });
+        self.events.extend(events);
+        self.events.extend(shoves.into_events());
+        self.rng = Some(rng);
+    }
+
+    /// Put `show` on screen, each list held to its ceiling: `SCORCH_MAX`
+    /// and `DECAL_MAX` drop the oldest, `SHOCK_MAX` the weakest. Every
+    /// frame of a round ends here, and a replica's spectacle comes here
+    /// too.
+    pub(crate) fn show(&mut self, show: Spectacle) {
+        self.muzzle_flashes.extend(show.muzzle_flashes);
+        self.impact_flashes.extend(show.impact_flashes);
+        self.blast_fx.extend(show.blast_fx);
+        self.scorches.extend(show.scorches);
         if self.scorches.len() > SCORCH_MAX {
             let excess = self.scorches.len() - SCORCH_MAX;
             self.scorches.drain(..excess);
         }
-        self.decals.extend(f.decals);
+        self.decals.extend(show.decals);
         if self.decals.len() > DECAL_MAX {
             let excess = self.decals.len() - DECAL_MAX;
             self.decals.drain(..excess);
         }
-        self.shocks.extend(f.shocks);
+        self.shocks.extend(show.shocks);
         if self.shocks.len() > SHOCK_MAX {
             // Evict by punch left, not by age: a cascade's little fuse pops
             // arrive after the tank explosion that set them off, and
@@ -1396,8 +1554,6 @@ impl Game {
             self.shocks.sort_by(|a, b| b.remaining().total_cmp(&a.remaining()));
             self.shocks.truncate(SHOCK_MAX);
         }
-        self.events.extend(f.events);
-        self.rng = Some(f.rng);
     }
 
     /// Age the shader effects (shockwave, muzzle/impact flashes, laser
@@ -1584,7 +1740,7 @@ impl Game {
         // once, and they are two fields of the same struct.
         let Game { world, physics, water, .. } = self;
         let Ok(mut tank) = world.get::<&mut Tank>(entity) else { return };
-        if tank.body.is_none() {
+        if tank.body.is_none() || tank.is_wreck() {
             return;
         }
         let footing = Footing::at(water, tank.position);
@@ -1620,6 +1776,122 @@ impl Game {
         }
     }
 
+    /// Where one seat's hull is, for the room to compare against the
+    /// pose it applied and for a client to report its own.
+    pub fn seat_pose(&self, seat: usize) -> Option<SeatPose> {
+        let (position, rotation, velocity) = self.seat_motion(seat)?;
+        Some(SeatPose { position, rotation, velocity })
+    }
+
+    /// A client that owns its hull says where it is: put the seat there
+    /// if the pose is one the hull could have reached, and mark the seat
+    /// as owned so this tick's `drive_player` leaves it alone
+    /// (docs/online-coop-prd.md §4.14).
+    ///
+    /// **Validation, not simulation.** The step from where the room has
+    /// the hull is bounded by the chassis's top speed over `reach_ticks`
+    /// ticks - never fewer than `POSE_REACH_TICKS` - plus
+    /// `POSE_REACH_SLACK_PX`. `reach_ticks` is how much of the client's
+    /// driving the pose covers, which the mailbox read that delivered it
+    /// measures (`net::mailbox::Mailbox::pose_reach_ticks`): one tick for
+    /// an ordinary read, the whole stall for the read that ends one,
+    /// since an owned read takes every intent at or before its play
+    /// point at once. The pose
+    /// must lie inside the field, off a solid tile and out of deep water;
+    /// a wreck and a seat still rolling in through a gate own nothing. A
+    /// refusal leaves the hull where it was, and the room answers with
+    /// `Placed` so the client comes back to it.
+    pub fn accept_seat_pose(&mut self, seat: usize, pose: SeatPose, reach_ticks: u32) -> Result<(), &'static str> {
+        let Some(entity) = self.seats.get(seat).copied().flatten() else { return Err("no such seat") };
+        let (from, reach) = {
+            let Ok(tank) = self.world.get::<&Tank>(entity) else { return Err("no tank") };
+            if tank.is_wreck() {
+                return Err("a wreck");
+            }
+            if tank.body.is_none() {
+                return Err("still entering");
+            }
+            let ticks = (reach_ticks as f32).max(POSE_REACH_TICKS);
+            (tank.position, tank.effective_speed() * PHYSICS_FIXED_DT * ticks + POSE_REACH_SLACK_PX)
+        };
+        let (dx, dy) = (pose.position.x - from.x, pose.position.y - from.y);
+        if (dx * dx + dy * dy).sqrt() > reach {
+            return Err("further than the hull could have gone");
+        }
+        let (width, height) = self.map.field_size();
+        let inset = OBSTACLE_GRID_SIZE * 0.5;
+        if !(inset..=width - inset).contains(&pose.position.x) || !(inset..=height - inset).contains(&pose.position.y) {
+            return Err("outside the field");
+        }
+        let (col, row) = map::world_to_cell(pose.position);
+        if self.map.cell(col, row).is_some_and(CellObject::is_solid) {
+            return Err("inside a solid tile");
+        }
+        if self.water.depth_at(pose.position) == crate::ground::Depth::Deep {
+            return Err("in deep water");
+        }
+        // One tick back along the reported velocity: the coming update's
+        // solver step carries the body forward by exactly that much, so
+        // it ends the tick on the pose the client reported - with the
+        // velocity the contacts and `combat::ram` read - rather than one
+        // tick past it.
+        let back = Position::new(
+            pose.position.x - pose.velocity.x * PHYSICS_FIXED_DT,
+            pose.position.y - pose.velocity.y * PHYSICS_FIXED_DT,
+        );
+        self.place_seat(seat, back, pose.rotation, pose.velocity);
+        self.seat_owned[seat] = self.frame + 1;
+        Ok(())
+    }
+
+    /// The tick of the world a seat's client was drawing when it made the
+    /// input this tick applies (`IntentMsg::view_tick`/`view_frac`); set
+    /// by the room before the update, read by lag compensation.
+    pub fn set_seat_view(&mut self, seat: usize, view_tick: u32, view_frac: u8) {
+        if let Some(view) = self.seat_view.get_mut(seat) {
+            *view = (view_tick > 0).then_some((view_tick, view_frac));
+        }
+    }
+
+    /// How many whole ticks behind this update the world a shot's owner
+    /// was drawing stands: lag compensation's rewind, "favor the shooter"
+    /// (docs/online-coop-prd.md §4.16). The update's frame less the seat's
+    /// view (`set_seat_view`, a tick plus 256ths), rounded to the nearest
+    /// tick and clamped to `0..=REWIND_MAX_TICKS`. 0 - the present - for
+    /// an enemy, and for a seat with no view: every local round, the
+    /// probe, a bot seat.
+    pub(crate) fn seat_rewind(&self, owner: Owner) -> u8 {
+        let Owner::Player(seat) = owner else { return 0 };
+        let Some(&Some((tick, frac))) = self.seat_view.get(seat as usize) else { return 0 };
+        // In 256ths of a tick, so the rounding is exact.
+        let behind = (self.frame as i64) * 256 - ((tick as i64) * 256 + frac as i64);
+        ((behind + 128).div_euclid(256)).clamp(0, REWIND_MAX_TICKS as i64) as u8
+    }
+
+    /// The enemy and frog boxes `rewind` ticks before this update, or
+    /// `None` for the present: a rewind of 0, or a tick the history does
+    /// not hold (before the round's first ticks, across a pause).
+    fn rewound_boxes(&self, rewind: u8) -> Option<&HitBoxFrame> {
+        if rewind == 0 {
+            return None;
+        }
+        self.frame.checked_sub(rewind as u64).and_then(|tick| self.hit_history.at(tick))
+    }
+
+    /// The room drives this seat again from the next update: nobody is
+    /// reporting its pose.
+    pub fn release_seat(&mut self, seat: usize) {
+        if let Some(owned) = self.seat_owned.get_mut(seat) {
+            *owned = 0;
+        }
+    }
+
+    /// Whether a client owns this seat's hull for the coming update (or
+    /// the one that just ran).
+    pub fn seat_is_owned(&self, seat: usize) -> bool {
+        self.seat_owned.get(seat).is_some_and(|&f| f != 0 && f >= self.frame)
+    }
+
     /// Put a client's unconfirmed shot in the world under `id`, for
     /// drawing only (`net::predict`).
     ///
@@ -1634,15 +1906,21 @@ impl Game {
         let owner = Owner::Player(shot.seat);
         match shot.kind {
             ProvisionalKind::Shell => {
-                let shell = Shell::at(id, shot.position, shot.prev_position, shot.velocity, shot.rotation, shot.variant, shot.shooter_row, owner);
+                let mut shell = Shell::at(id, shot.position, shot.prev_position, shot.velocity, shot.rotation, shot.variant, shot.shooter_row, owner);
+                shell.state = ShellState::from_col(shot.state).unwrap_or(ShellState::Flying);
+                shell.timer = shot.timer;
                 self.world.spawn((shell,));
             }
             ProvisionalKind::Bullet => {
-                let bullet = Bullet::at(id, shot.position, shot.prev_position, shot.velocity, shot.rotation, shot.shooter_row, owner);
+                let mut bullet = Bullet::at(id, shot.position, shot.prev_position, shot.velocity, shot.rotation, shot.shooter_row, owner);
+                bullet.state = crate::bullet::BulletState::from_col(shot.state).unwrap_or(crate::bullet::BulletState::Flying);
+                bullet.timer = shot.timer;
                 self.world.spawn((bullet,));
             }
             ProvisionalKind::Plasma => {
-                let plasma = Plasma::at(id, shot.position, shot.prev_position, shot.velocity, shot.rotation, shot.plasma_variant, shot.shooter_row, owner);
+                let mut plasma = Plasma::at(id, shot.position, shot.prev_position, shot.velocity, shot.rotation, shot.plasma_variant, shot.shooter_row, owner);
+                plasma.state = crate::plasma::PlasmaState::from_col(shot.state).unwrap_or(crate::plasma::PlasmaState::Flying);
+                plasma.timer = shot.timer;
                 self.world.spawn((plasma,));
             }
         }
@@ -1703,6 +1981,13 @@ impl Game {
                 (p.position, p.velocity, p.rotation, 0, p.variant)
             }
         };
+        // It starts where the room's copy starts: in the kind's first
+        // muzzle state.
+        let state = match kind {
+            ProvisionalKind::Shell => ShellState::Fire0.col(),
+            ProvisionalKind::Bullet => crate::bullet::BulletState::Muzzle.col(),
+            ProvisionalKind::Plasma => crate::plasma::PlasmaState::Fire0.col(),
+        };
         Some(ProvisionalShot {
             kind,
             seat: seat as u8,
@@ -1713,6 +1998,9 @@ impl Game {
             variant,
             plasma_variant,
             shooter_row: tank.row,
+            state,
+            timer: 0.0,
+            done: false,
         })
     }
 
@@ -2160,8 +2448,12 @@ impl Game {
             return;
         }
 
-        let footing = Footing::at(&self.water, tank.position);
-        drive_tank(&mut self.physics, tank, intent, f.dt, footing);
+        // A seat whose client owns the hull was put where it is by
+        // `accept_seat_pose` before this tick; the stick only fires.
+        if self.seat_owned[index] != self.frame {
+            let footing = Footing::at(&self.water, tank.position);
+            drive_tank(&mut self.physics, tank, intent, f.dt, footing);
+        }
         tick_queued_shots(&mut self.physics, f, tank, owner);
 
         // A laser, minigun or missile pod is full-auto while the key is
@@ -2598,22 +2890,41 @@ impl Game {
 
     /// Insert this frame's fired projectiles - only once no tank query is
     /// active, since hecs can't spawn into a world mid-iteration.
+    ///
+    /// A seat's shell, bolt or bullet takes its seat's rewind here
+    /// (`seat_rewind`, carried as a `Rewind` beside it when it is not
+    /// zero) and keeps it for its whole flight: the client that fired it
+    /// goes on drawing the enemies that far in the past for as long as the
+    /// shot flies.
     fn spawn_pending(&mut self, f: &mut Frame) {
         for mut shell in f.pending_shells.drain(..) {
             shell.set_id(self.take_shot_id());
-            self.world.spawn((shell,));
+            let rewind = self.seat_rewind(shell.owner);
+            self.spawn_shot(shell, rewind);
         }
         for mut plasma in f.pending_plasmas.drain(..) {
             plasma.set_id(self.take_shot_id());
-            self.world.spawn((plasma,));
+            let rewind = self.seat_rewind(plasma.owner);
+            self.spawn_shot(plasma, rewind);
         }
         for mut bullet in f.pending_bullets.drain(..) {
             bullet.set_id(self.take_shot_id());
-            self.world.spawn((bullet,));
+            let rewind = self.seat_rewind(bullet.owner);
+            self.spawn_shot(bullet, rewind);
         }
         for mut missile in f.pending_missiles.drain(..) {
             missile.set_id(self.take_shot_id());
             self.world.spawn((missile,));
+        }
+    }
+
+    /// Put one projectile in the world, with its `Rewind` only when it has
+    /// one: a shot judged in the present spawns as a bare projectile.
+    fn spawn_shot<P: Projectile>(&mut self, shot: P, rewind: u8) {
+        if rewind > 0 {
+            self.world.spawn((shot, Rewind(rewind)));
+        } else {
+            self.world.spawn((shot,));
         }
     }
 
@@ -2626,17 +2937,38 @@ impl Game {
 
     /// Lasers have no travel time: each queued beam is swept over its whole
     /// length right now, drawn up to where it stopped, and applied.
+    ///
+    /// A seat's beam is swept against the enemies and frogs its client was
+    /// drawing (`seat_rewind`, `rewound_boxes`), like its shells.
     fn resolve_lasers(&mut self, f: &mut Frame) {
         let players = self.seats_on_field();
         let shots = std::mem::take(&mut f.pending_lasers);
         for shot in shots {
-            let hit = f.terrain.sweep(&self.world, players, shot.owner, shot.start, shot.end, laser_beam_half_width());
+            let past = self.rewound_boxes(self.seat_rewind(shot.owner));
+            let hit = f.terrain.sweep_rewound(
+                &self.world,
+                players,
+                shot.owner,
+                shot.start,
+                shot.end,
+                laser_beam_half_width(),
+                &[],
+                past,
+            );
             let (hit_pos, target) = match hit {
                 Some((target, t)) => (shot.start + (shot.end - shot.start) * t, Some(target)),
                 None => (shot.end, None),
             };
             f.muzzle_flashes.push(Shockwave::new(shot.start));
             self.laser_beams.push(LaserBeam::new(shot.start, hit_pos, shot.variant));
+            f.events.push(Event::LaserBeam {
+                x0: shot.start.x,
+                y0: shot.start.y,
+                x1: hit_pos.x,
+                y1: hit_pos.y,
+                variant: shot.variant.name(),
+                seat: crate::net::encode::owner_seat(shot.owner),
+            });
             let Some(target) = target else { continue };
             f.impact_flashes.push(Shockwave::new(hit_pos));
             // No knockback and no frog hop: an instant beam isn't something
@@ -2723,7 +3055,7 @@ impl Game {
                 // melee and the melee hurt more.
                 if touching && !concealed {
                     let rammed = with_two_tanks_mut(&mut self.world, enemy, player, |e, p| {
-                        ram(e, p, &mut self.physics, &mut f.rng, &mut f.kills, 1.0)
+                        ram(e, p, &mut self.physics, &mut f.rng, &mut f.kills, &mut f.shoves, 1.0)
                             .map(|damage| (p.owner_slot(), e.owner_slot(), damage))
                     });
                     if let Some((slot, other_slot, damage)) = rammed {
@@ -2741,7 +3073,7 @@ impl Game {
             if touching {
                 let factor = tuning().friendly_fire_damage_factor;
                 let rammed = with_two_tanks_mut(&mut self.world, p1, p2, |a, b| {
-                    ram(a, b, &mut self.physics, &mut f.rng, &mut f.kills, factor)
+                    ram(a, b, &mut self.physics, &mut f.rng, &mut f.kills, &mut f.shoves, factor)
                         .map(|damage| (a.owner_slot(), b.owner_slot(), damage))
                 });
                 if let Some((slot, other_slot, damage)) = rammed {
@@ -2792,7 +3124,7 @@ impl Game {
                     continue;
                 }
                 let rammed = with_two_tanks_mut(&mut self.world, a, b, |x, y| {
-                    ram(x, y, &mut self.physics, &mut f.rng, &mut f.kills, 1.0)
+                    ram(x, y, &mut self.physics, &mut f.rng, &mut f.kills, &mut f.shoves, 1.0)
                         .map(|damage| (x.owner_slot(), y.owner_slot(), damage))
                 });
                 if let Some((slot, other_slot, damage)) = rammed {
@@ -2869,22 +3201,27 @@ impl Game {
             vel: Vec2,
             owner: Owner,
             dmg: (f32, f32),
+            rewind: u8,
         }
         let flying: Vec<Flight> = self
             .world
-            .query::<(Entity, &P)>()
+            .query::<(Entity, &P, Option<&Rewind>)>()
             .iter()
-            .filter(|(_, p)| p.is_flying())
-            .map(|(entity, p)| Flight {
+            .filter(|(_, p, _)| p.is_flying())
+            .map(|(entity, p, rewind)| Flight {
                 entity,
                 prev: p.prev_position(),
                 pos: p.position(),
                 vel: p.velocity(),
                 owner: p.owner(),
                 dmg: p.damage_range(),
+                rewind: rewind.map_or(0, |r| r.0),
             })
             .collect();
-        for Flight { entity, prev, pos, vel, owner, dmg } in flying {
+        for Flight { entity, prev, pos, vel, owner, dmg, rewind } in flying {
+            // Lag compensation: a seat's shot meets the enemies and frogs
+            // where its client drew them (`Rewind`); 0 is the present.
+            let past = self.rewound_boxes(rewind);
             // Sweep, and re-sweep past any prop tile the projectile rolls a
             // pass-over on (`Material::pass_over_chance`) - remembered on
             // the projectile, since a segment ending inside the tile would
@@ -2895,7 +3232,7 @@ impl Game {
                 q.get().expect("projectile collected this frame still exists").passed_over().to_vec()
             };
             let hit = loop {
-                let swept = f.terrain.sweep_ignoring(&self.world, players, owner, prev, pos, P::hit_half_extent(), &ignored);
+                let swept = f.terrain.sweep_rewound(&self.world, players, owner, prev, pos, P::hit_half_extent(), &ignored, past);
                 let Some((target, t)) = swept else { break None };
                 if let ShellTarget::Obstacle(e) = target {
                     let chance = f.terrain.obstacle(e).map_or(0.0, |b| b.material.pass_over_chance());
@@ -2937,6 +3274,12 @@ impl Game {
                 with_tank_mut(&self.world, shielded, |t| t.spend_shield(cost));
                 let mut q = self.world.query_one::<&mut P>(entity);
                 q.get().expect("projectile collected this frame still exists").deflect(center, new_owner);
+                drop(q);
+                // Turned back, the shot is the shield's and is judged in
+                // the present.
+                if let Ok(mut rewind) = self.world.get::<&mut Rewind>(entity) {
+                    rewind.0 = 0;
+                }
                 f.events.push(Event::Deflected { slot: new_owner.slot(), x: hit_pos.x, y: hit_pos.y });
                 continue;
             }
@@ -2983,27 +3326,45 @@ impl Game {
         }
     }
 
-    /// Every tank killed this frame gets a shockwave and an explosion, and
-    /// every barrel detonated this frame its blast; a splash that kills
-    /// another tank, or a blast that finishes a barrel's fuse elsewhere, is
-    /// appended and handled in turn. Processed in order, so the last ring
-    /// shown is the most recent one's. Terminates: a tank can only ever be
-    /// pushed once (every push is gated by its own transition into a wreck)
-    /// and a barrel dies once. `live` is false on the end screen, where
-    /// blasts play out without damage (no kills happen there).
-    /// Everything a dying tank throws off: the same fireball, screen flash
-    /// and scorch a barrel gets, plus its own wreckage and a set of
-    /// delayed pops.
+    /// Everything a dying tank throws off: its show (`wreck_show`) and a
+    /// set of delayed pops.
     ///
     /// Draws no RNG: the parts' landing spots, cells and arcs all come out
     /// of `blast::seed_at` salted per piece, so a spectacular death cannot
     /// shift a seeded replay.
     fn wreck_fx(&mut self, f: &mut Frame, center: Position) {
-        f.blast_fx.push(BlastFx::wreck(center));
-        f.impact_flashes.push(Shockwave::new(center));
+        let mut show = Spectacle::default();
+        self.wreck_show(&mut show, center);
+        f.stage(show);
+
+        // Ammo cooking off: a few small pops after the fact, spread over
+        // `cookoff_window_seconds`. Queued rather than fired now, and
+        // ticked by `tick_cookoffs`; each pop is an `Event::CookOff`, which
+        // is how a replica gets it.
+        let count = tuning().cookoff_count.max(0) as u32;
+        let window = tuning().cookoff_window_seconds;
+        for i in 0..count {
+            let h = crate::blast::seed_at(center, 90 + i * 7);
+            let delay = window * (0.15 + 0.85 * (h % 1000) as f32 / 1000.0);
+            let off = ((h >> 10) % 21) as f32 - 10.0;
+            let off2 = ((h >> 16) % 21) as f32 - 10.0;
+            self.cookoffs.push((Position::new(center.x + off, center.y + off2), delay));
+        }
+    }
+
+    /// The show a tank dying at `center` puts on: the kill's shockwave,
+    /// the fireball (a mushroom cloud in `wreck_mushroom_chance` of kills,
+    /// hashed), the impact flash, the screen flash, a scorch on dry
+    /// ground, its last tread marks burnt in and its hull parts thrown.
+    /// Everything but the damage and the cook-offs, which is why a replica
+    /// can call it off `Event::Wreck`. No RNG.
+    pub(crate) fn wreck_show(&mut self, show: &mut Spectacle, center: Position) {
+        show.shocks.push(Shockwave::scaled(center, SHOCK_KILL));
+        show.blast_fx.push(BlastFx::wreck(center));
+        show.impact_flashes.push(Shockwave::new(center));
         self.flash_screen();
         if self.water.depth_at(center) == crate::ground::Depth::Dry {
-            f.scorches.push(Scorch::new(center));
+            show.scorches.push(Scorch::new(center));
         }
         self.scorch_tracks(center);
 
@@ -3016,20 +3377,7 @@ impl Game {
             let angle = (h % 3600) as f32 / 3600.0 * std::f32::consts::TAU;
             let dist = throw * (0.35 + 0.65 * ((h >> 12) % 100) as f32 / 100.0);
             let to = Position::new(center.x + angle.cos() * dist, center.y + angle.sin() * dist);
-            f.decals.push(Decal::thrown(RUBBLE_ROW_TANK, center, to, 40 + i * 5));
-        }
-
-        // Ammo cooking off: a few small pops after the fact, spread over
-        // `cookoff_window_seconds`. Queued rather than fired now, and
-        // ticked by `tick_cookoffs`.
-        let count = tuning().cookoff_count.max(0) as u32;
-        let window = tuning().cookoff_window_seconds;
-        for i in 0..count {
-            let h = crate::blast::seed_at(center, 90 + i * 7);
-            let delay = window * (0.15 + 0.85 * (h % 1000) as f32 / 1000.0);
-            let off = ((h >> 10) % 21) as f32 - 10.0;
-            let off2 = ((h >> 16) % 21) as f32 - 10.0;
-            self.cookoffs.push((Position::new(center.x + off, center.y + off2), delay));
+            show.decals.push(Decal::thrown(RUBBLE_ROW_TANK, center, to, 40 + i * 5));
         }
     }
 
@@ -3080,12 +3428,28 @@ impl Game {
             false
         });
         for center in popped {
-            f.blast_fx.push(BlastFx::small(center));
-            f.shocks.push(Shockwave::scaled(center, SHOCK_COOKOFF));
+            let mut show = Spectacle::default();
+            Self::cookoff_show(&mut show, center);
+            f.stage(show);
             f.events.push(Event::CookOff { x: center.x, y: center.y });
         }
     }
 
+    /// One cook-off pop at `center`: a small fireball and a faint ripple,
+    /// nothing screen-level. A replica calls it off `Event::CookOff`.
+    pub(crate) fn cookoff_show(show: &mut Spectacle, center: Position) {
+        show.blast_fx.push(BlastFx::small(center));
+        show.shocks.push(Shockwave::scaled(center, SHOCK_COOKOFF));
+    }
+
+    /// Every tank killed this frame gets a shockwave and an explosion, and
+    /// every barrel detonated this frame its blast; a splash that kills
+    /// another tank, or a blast that finishes a barrel's fuse elsewhere, is
+    /// appended and handled in turn. Processed in order, so the last ring
+    /// shown is the most recent one's. Terminates: a tank can only ever be
+    /// pushed once (every push is gated by its own transition into a wreck)
+    /// and a barrel dies once. `live` is false on the end screen, where
+    /// blasts play out without damage (no kills happen there).
     fn explosions(&mut self, f: &mut Frame, live: bool) {
         let (mut i, mut j) = (0, 0);
         while i < f.kills.len() || j < f.pending_blasts.len() {
@@ -3093,7 +3457,6 @@ impl Game {
                 let (center, victim) = f.kills[i];
                 i += 1;
                 f.events.push(Event::Wreck { slot: victim.slot(), x: center.x, y: center.y });
-                f.shocks.push(Shockwave::scaled(center, SHOCK_KILL));
                 self.wreck_fx(f, center);
                 self.apply_explosion(f, center, victim);
             }

@@ -28,7 +28,7 @@
 //! grid, or the map format - they're layout, not tuning.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, PoisonError, RwLock, RwLockReadGuard};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError, RwLock};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -1583,52 +1583,46 @@ tunables! {
 
     group online {
         /// How far behind the server an online round is drawn, in
-        /// milliseconds, on a clean link (docs/online-coop-prd.md §4.5,
-        /// `net::interp`) - the *floor* of the delay, which
-        /// `online_interpolation_adaptive` widens by the link's jitter. A
-        /// room sends sixty snapshots a second; without a delay the
-        /// replica would have nothing to interpolate toward, and drawing
-        /// this far in the past keeps two snapshots bracketing render
-        /// time so the picture moves every frame. Lower it to trade
-        /// smoothness for freshness - the hull answers the stick this
-        /// much later. Below one snapshot interval the replica
-        /// extrapolates most frames, which is the floor this can sensibly
-        /// take: 16.7 ms at the room's 60 Hz (`SNAPSHOT_EVERY`).
+        /// milliseconds, at least (docs/online-coop-prd.md §4.5, §4.16,
+        /// `net::interp`) - the *floor* of the delay. A room sends sixty
+        /// snapshots a second; drawing this far in the past keeps two
+        /// snapshots bracketing render time, so the picture moves every
+        /// frame rather than running on guesses. Below one snapshot
+        /// interval (16.7 ms at the room's 60 Hz) the replica extrapolates
+        /// most frames, which is the least this can sensibly take.
         ///
-        /// **33 ms, and it followed the cadence down.** This is the
-        /// largest single term in the latency budget (section 5) and the
-        /// one that is a choice rather than a cost; with prediction
-        /// carrying the local hull it is paid by the tanks a player aims
-        /// *at*, and by everything not predicted - a pickup, a hit, a
-        /// shell the server owns. Two snapshot intervals has been the
-        /// margin at every cadence: 100 ms at 20 Hz, 66 at 30, 33 at 60.
-        /// The rate went up so this could come down, which is the whole
-        /// reason the rate went up. Drop it further on a good link, raise
-        /// it on a jittery one - a late packet then still arrives before
-        /// it is needed. Live, so the two can be compared mid-round,
-        /// which is the only honest way to judge it (`--rig --delay 80
-        /// --jitter 20`).
+        /// With `online_interpolation_adaptive` on - the default - the
+        /// delay the picture steers for is never below one interval plus
+        /// one 60 Hz frame, 33.3 ms, so this floor binds only below that
+        /// and only matters with the adaptive delay off, where it is the
+        /// delay itself: lower it to trade smoothness for freshness, raise
+        /// it on a jittery link. It is the largest single term in the
+        /// latency budget (section 5) that is a choice rather than a cost,
+        /// paid by the tanks a player aims *at* and everything not
+        /// predicted. Live, so settings can be compared mid-round
+        /// (`--rig --delay 80 --jitter 20`).
         online_interpolation_delay_ms: f32 = 33.0 in 0.0 ..= 500.0;
-        /// Widen the interpolation delay by the link's own jitter
-        /// (docs/online-coop-prd.md §4.5, decision 8; `net::interp`). On,
-        /// the delay in force is the larger of
-        /// `online_interpolation_delay_ms` and two measured snapshot
-        /// intervals, plus `online_interpolation_jitter_factor` times the
-        /// smoothed deviation of each snapshot's arrival from the clock's
-        /// estimate, under `online_interpolation_delay_max_ms` - and it
-        /// slews there at a few per cent of real time rather than
-        /// jumping, so a jittery spell never rewinds the picture. Off
-        /// pins the delay at the knob, which is how the two are judged
-        /// side by side on one link (`--rig --jitter 20`). Live.
+        /// Size the interpolation delay from the link's own lateness
+        /// (docs/online-coop-prd.md §4.5, §4.16, decision 8;
+        /// `net::interp`). On, the delay the picture steers for is one
+        /// measured snapshot interval (the bracket's width) plus one
+        /// 60 Hz frame plus the 95th percentile, over the last three
+        /// seconds, of how late snapshots arrive behind the fastest - with
+        /// head-of-line stalls left out while they are isolated, since
+        /// those are ridden out on extrapolation rather than paid for on
+        /// every frame - floored at `online_interpolation_delay_ms` and
+        /// capped at `online_interpolation_delay_max_ms`. The picture
+        /// reaches it through its own playout clock, a few per cent
+        /// faster or slower than real time and never backwards, so a
+        /// jittery spell never rewinds it. Off pins the delay at the
+        /// floor, which is how the two are judged side by side on one
+        /// link (`--rig --jitter 20`). Live.
         online_interpolation_adaptive: bool = true in 0 ..= 1;
-        /// How many jitter-widths the adaptive delay keeps in hand:
-        /// three covers the tail of a late packet without paying for it
-        /// on every frame. 0 makes the adaptive delay the floor plus the
-        /// cadence term alone. Live.
-        online_interpolation_jitter_factor: f32 = 3.0 in 0.0 ..= 10.0;
         /// The most the adaptive delay may reach, in milliseconds. Past
         /// this a link is not worth smoothing over: the picture would be
-        /// a fifth of a second behind and the shots plainly late. Live.
+        /// a fifth of a second behind and the shots plainly late, and the
+        /// lateness above it is ridden out on extrapolation instead.
+        /// Live.
         online_interpolation_delay_max_ms: f32 = 200.0 in 0.0 ..= 500.0;
         /// Run the local seat's own hull ahead of the server and
         /// reconcile it against each snapshot (stage 2,
@@ -1643,33 +1637,31 @@ tunables! {
         /// A knob rather than a constant because the two have to be
         /// judged side by side on the same link, which is what a rig run
         /// is for (`--rig --delay 120 --jitter 20`). Live: it takes
-        /// effect on the next frame, and turning it off hands the hull
-        /// straight back to the interpolator.
+        /// effect on the next frame, and turning it off hands the drawn
+        /// hull straight back to the interpolator and draws no
+        /// provisional shots. A client that owns its hull
+        /// (`online_client_hull`) keeps its sandbox in step with the room
+        /// either way - the room's world, shoves and `Fired` - since every
+        /// pose it sends comes from there; only the drawing follows this.
         online_predict_own_tank: bool = true in 0 ..= 1;
-        /// Also draw this seat's *shell* on the frame of the press
-        /// (docs/online-coop-prd.md section 4.12, `net::predict`).
+        /// Also draw this seat's shots on the frame of the press
+        /// (docs/online-coop-prd.md sections 4.12 and 4.16,
+        /// `net::predict`): each is the only drawn copy of its shot for
+        /// its whole life, runs its projectile's own state machine, and
+        /// stops at the first tile, tank or frog it meets in the drawn
+        /// world with its impact drawn at once, the room's copy kept off
+        /// the picture while it stands for it. A laser's beam and each
+        /// shot's muzzle ripple are drawn on the press too.
         ///
-        /// **On, because the lie got small enough to be worth the
-        /// latency.** A predicted shell is drawn at the present; every
-        /// tank it might hit is drawn `online_interpolation_delay_ms` in
-        /// the past, so the shell reaches a tank's *drawn* position
-        /// before the server's copy reaches its real one and sails
-        /// through - a replica runs no hit test. That error is the delay
-        /// times `shell_speed`: at 500 px/s it was fifty pixels at a
-        /// 100 ms delay, most of a sixty-four pixel hull and plainly
-        /// wrong; at 33 ms it is sixteen, a quarter of a hull, against a
-        /// shot that now answers the press on the frame it is pressed
-        /// instead of about 100 ms later. The trade turned over when the
-        /// snapshot cadence went to 60 Hz and let the delay follow.
-        ///
-        /// It is still a lie, and the honest fix is the server rewinding
-        /// targets to the shooter's view - lag compensation, section
-        /// 4.12's decision 9 - which is what makes a predicted shell
-        /// correct rather than merely early. Until then this is a live
-        /// knob: turn it off to hand the shot back to the server and see
-        /// the picture stay strictly honest at the cost of the wait.
-        /// The hull's own prediction (`online_predict_own_tank`) is
-        /// unaffected either way.
+        /// The room judges the shot against the hulls this client was
+        /// drawing when it pressed (lag compensation, section 4.16), so a
+        /// shot stopped at a drawn hull is the room's hit too; where the
+        /// room still disagrees its copy is shown from there on and the
+        /// disagreement counted (`crossings_hit`/`crossings_missed` on
+        /// `status.round.prediction`). Live: off, the shot is the room's
+        /// to draw, a round trip and the picture's delay after the press.
+        /// Drawn only with `online_predict_own_tank` on; the hull's own
+        /// prediction is unaffected either way.
         online_predict_shots: bool = true in 0 ..= 1;
         /// How much of the authored wave each seat past the first adds to a
         /// room's round (docs/online-coop-prd.md section 4.11): the room
@@ -1700,6 +1692,16 @@ tunables! {
         /// ladder simply stays there. The coarse dial of the two -
         /// `online_wave_size_per_seat` is the fine one.
         online_wave_tier_seats_per_step: usize = 3 in 1 ..= 8;
+        /// The client owns its own hull in an online round
+        /// (docs/online-coop-prd.md section 4.14, stage 3): every tick it
+        /// sends where its tank is and the room puts the seat there,
+        /// validated against the chassis's speed, the walls and deep
+        /// water, instead of driving it from the stick and having the
+        /// client predict and reconcile. On, the own hull never takes a
+        /// correction and the shot leaves from where it was drawn; off,
+        /// stage 2's prediction runs. Restart: read when a round is
+        /// opened, so the two are compared round by round on one link.
+        online_client_hull: bool = true in 0 ..= 1 @ Restart;
     }
 
     group cosmetics {
@@ -2194,7 +2196,20 @@ fn number_literal(v: f64, kind: Kind) -> String {
 // Global store: one live table, one staged replacement, one restart flag.
 // ---------------------------------------------------------------------------
 
-static TUNING: RwLock<Tuning> = RwLock::new(Tuning::DEFAULT);
+/// The live table, as a shared snapshot: a reader clones the `Arc` under
+/// the lock and lets go at once, and a writer swaps a new `Arc` in.
+///
+/// **No code ever runs while the lock is held**, and that is the point.
+/// The table used to hand out the read guard itself, and the simulation
+/// binds `let t = tuning()` at the top of a phase and then calls helpers
+/// that call `tuning()` again - a second read while holding the first.
+/// `std`'s `RwLock` lets a waiting writer block new readers, so a write
+/// arriving between the two (a client applying its room's tuning patch,
+/// the room server's `init_under` starting a round in another room)
+/// waited for the first guard while the second waited for the writer:
+/// a deadlock that froze every thread that read tuning - in the room
+/// server, every room. A snapshot has nothing to wait for.
+static TUNING: LazyLock<RwLock<Arc<Tuning>>> = LazyLock::new(|| RwLock::new(Arc::new(Tuning::DEFAULT)));
 /// The next table, built up by `submit_*` calls since the last frame
 /// boundary; `apply_pending` swaps it in. Staging on a copy means a batch of
 /// submits between two frames all land together, and a rejected patch never
@@ -2202,13 +2217,18 @@ static TUNING: RwLock<Tuning> = RwLock::new(Tuning::DEFAULT);
 static STAGED: Mutex<Option<Tuning>> = Mutex::new(None);
 static RESTART_REQUESTED: AtomicBool = AtomicBool::new(false);
 
-/// The live table. Cheap (an uncontended read lock); bind once per function
-/// in hot code. Never hold the guard across [`apply_pending`]/[`replace_now`]
-/// (they take the write lock) - the main loop calls those between frames,
-/// outside any read.
+/// The live table, as a snapshot: cheap (a read lock held for one `Arc`
+/// clone), and safe to hold for as long as the caller likes - across other
+/// `tuning()` calls and across a write on another thread, which the
+/// snapshot simply does not see. Bind once per function in hot code.
 #[inline]
-pub fn tuning() -> RwLockReadGuard<'static, Tuning> {
-    TUNING.read().unwrap_or_else(PoisonError::into_inner)
+pub fn tuning() -> Arc<Tuning> {
+    Arc::clone(&TUNING.read().unwrap_or_else(PoisonError::into_inner))
+}
+
+/// Swap `next` in as the live table.
+fn set_live(next: Tuning) {
+    *TUNING.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(next);
 }
 
 /// A copy of the live table.
@@ -2251,7 +2271,7 @@ pub fn apply_pending() -> bool {
     let staged = STAGED.lock().unwrap_or_else(PoisonError::into_inner).take();
     match staged {
         Some(next) => {
-            *TUNING.write().unwrap_or_else(PoisonError::into_inner) = next;
+            set_live(next);
             true
         }
         None => false,
@@ -2266,7 +2286,7 @@ pub fn take_restart_request() -> bool {
 /// Replace the live table immediately, bypassing staging - for startup
 /// (`--tuning <file>`) and the probe, before any frame has read it.
 pub fn replace_now(t: Tuning) {
-    *TUNING.write().unwrap_or_else(PoisonError::into_inner) = t;
+    set_live(t);
 }
 
 /// Read a JSON file holding a patch object (typically a saved

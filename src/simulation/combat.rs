@@ -24,7 +24,7 @@ use crate::{
 
 use super::hits::{ShellTarget, Terrain};
 use super::props::DamageCause;
-use super::{SHOCK_FROG, with_frog_mut, Event, Frame, Game, HitTarget};
+use super::{SHOCK_FROG, with_frog_mut, Event, Frame, Game, HitTarget, Shoves};
 
 /// One explosion's numbers - a tank wreck's or a barrel's - so
 /// `explosion_hit` serves both.
@@ -144,7 +144,8 @@ impl Game {
                             false
                         } else {
                             if let Some((dir, speed)) = effects.knockback {
-                                knockback(tank, &mut self.physics, dir, speed);
+                                let dv = knockback(tank, &mut self.physics, dir, speed);
+                                f.shoves.push(tank.owner(), dv);
                             }
                             true
                         }
@@ -217,7 +218,9 @@ impl Game {
             let mut q = self.world.query_one::<&mut Tank>(player);
             let tank = q.get().expect("player entity always has a Tank");
             let chips = !victim.same_side(tank.owner());
-            explosion_hit(tank, center, chips, &mut self.physics, &mut f.rng, &mut f.kills, &params);
+            if let Some(dv) = explosion_hit(tank, center, chips, &mut self.physics, &mut f.rng, &mut f.kills, &params) {
+                f.shoves.push(tank.owner(), dv);
+            }
         }
         for tank in self.world.query::<&mut Tank>().with::<&Ai>().iter() {
             let chips = !victim.same_side(tank.owner());
@@ -243,10 +246,12 @@ impl Game {
 }
 
 /// Shove a live tank along `dir` (unit) at `speed` px/s - a real impulse
-/// sized by the tank's own mass, so the velocity change is exact.
-fn knockback(tank: &Tank, physics: &mut Physics, dir: Vec2, speed: f32) {
+/// sized by the tank's own mass, so the velocity change is exact. Returns
+/// that change, for `Shoves`.
+fn knockback(tank: &Tank, physics: &mut Physics, dir: Vec2, speed: f32) -> Vec2 {
     let handle = tank.body.expect("tank should always have a physics body once spawned");
     physics.apply_impulse(handle, Position::new(dir.x * speed * tank.mass(), dir.y * speed * tank.mass()));
+    Vec2::new(dir.x * speed, dir.y * speed)
 }
 
 /// Ram contact between two live tanks on opposing sides: both take
@@ -259,7 +264,8 @@ fn knockback(tank: &Tank, physics: &mut Physics, dir: Vec2, speed: f32) {
 /// enemy against enemy, and the two players against each other. The roll
 /// is scaled by `damage_scale` after it is drawn (1 for opposing sides,
 /// `friendly_fire_damage_factor` for the two players). A tank this kills
-/// is recorded in `kills` with its owner. Returns the damage dealt, or
+/// is recorded in `kills` with its owner, and each shove goes on `shoves`
+/// (kept only for a client-owned seat). Returns the damage dealt, or
 /// `None` when nothing was exchanged.
 ///
 /// `physics_velocity`: a tank's actual body velocity, or zero if it has no
@@ -280,6 +286,7 @@ pub(super) fn ram(
     physics: &mut Physics,
     rng: &mut SmallRng,
     kills: &mut Vec<(Position, Owner)>,
+    shoves: &mut Shoves,
     damage_scale: f32,
 ) -> Option<f32> {
     if a.is_wreck() || b.is_wreck() || a.ram_cooldown > 0.0 || b.ram_cooldown > 0.0 {
@@ -321,11 +328,11 @@ pub(super) fn ram(
     // A tank this very hit just killed stays put, like any wreck.
     if !a.is_wreck() {
         let a_push = (push * 2.0 * b.mass() / total_mass).min(tuning().knockback_max_speed);
-        knockback(a, physics, axis, a_push);
+        shoves.push(a.owner(), knockback(a, physics, axis, a_push));
     }
     if !b.is_wreck() {
         let b_push = (push * 2.0 * a.mass() / total_mass).min(tuning().knockback_max_speed);
-        knockback(b, physics, Vec2::new(-axis.x, -axis.y), b_push);
+        shoves.push(b.owner(), knockback(b, physics, Vec2::new(-axis.x, -axis.y), b_push));
     }
     Some(dmg)
 }
@@ -334,7 +341,8 @@ pub(super) fn ram(
 /// `Game::apply_blast`): a shove that fades linearly with distance and,
 /// only when `damage` is true, a chip of damage scaled the same way. No-op
 /// on a wreck or a tank outside `params.radius`. A resulting kill is
-/// recorded with the tank's owner.
+/// recorded with the tank's owner. Returns the shove's velocity change,
+/// `None` when there was none, for the caller's `Shoves`.
 pub(super) fn explosion_hit(
     tank: &mut Tank,
     center: Position,
@@ -343,15 +351,15 @@ pub(super) fn explosion_hit(
     rng: &mut SmallRng,
     kills: &mut Vec<(Position, Owner)>,
     params: &BlastParams,
-) {
+) -> Option<Vec2> {
     if tank.is_wreck() {
-        return;
+        return None;
     }
     let dx = tank.position.x - center.x;
     let dy = tank.position.y - center.y;
     let dist = (dx * dx + dy * dy).sqrt();
     if dist > params.radius {
-        return;
+        return None;
     }
     let falloff = 1.0 - dist / params.radius;
 
@@ -361,7 +369,7 @@ pub(super) fn explosion_hit(
         tank.mark_hit();
         if tank.is_wreck() {
             kills.push((tank.position, tank.owner()));
-            return;
+            return None;
         }
     }
 
@@ -375,7 +383,7 @@ pub(super) fn explosion_hit(
         // Sitting exactly on the blast center: any direction beats none.
         Vec2::new(1.0, 0.0)
     };
-    knockback(tank, physics, axis, push);
+    Some(knockback(tank, physics, axis, push))
 }
 
 /// A landing spot for the frog's evasive hop, up to `distance` px away
@@ -471,7 +479,7 @@ mod ram_tests {
         let mut live = tank_at(130.0, 10.0, &mut physics);
         let mut rng = SmallRng::seed_from_u64(1);
         let mut kills = Vec::new();
-        ram(&mut wreck, &mut live, &mut physics, &mut rng, &mut kills, 1.0);
+        ram(&mut wreck, &mut live, &mut physics, &mut rng, &mut kills, &mut Shoves::default(), 1.0);
         assert_eq!(live.damage, 10.0);
         assert_eq!(live.ram_cooldown, 0.0);
         assert!(kills.is_empty());
@@ -484,12 +492,33 @@ mod ram_tests {
         let mut b = tank_at(130.0, 0.0, &mut physics);
         let mut rng = SmallRng::seed_from_u64(1);
         let mut kills = Vec::new();
-        ram(&mut a, &mut b, &mut physics, &mut rng, &mut kills, 1.0);
+        ram(&mut a, &mut b, &mut physics, &mut rng, &mut kills, &mut Shoves::default(), 1.0);
         assert!(a.damage >= tuning().ram_damage_min && a.damage < tuning().ram_damage_max);
         assert_eq!(a.damage, b.damage);
         assert_eq!(a.ram_cooldown, tuning().ram_damage_cooldown);
         let before = b.damage;
-        ram(&mut a, &mut b, &mut physics, &mut rng, &mut kills, 1.0);
+        ram(&mut a, &mut b, &mut physics, &mut rng, &mut kills, &mut Shoves::default(), 1.0);
         assert_eq!(b.damage, before, "second contact inside the cooldown must not re-damage");
+    }
+
+    #[test]
+    fn a_ram_on_an_owned_seat_logs_its_push_and_nobody_elses() {
+        let mut physics = Physics::new();
+        let mut seat = tank_at(100.0, 0.0, &mut physics);
+        seat.owner = Owner::Player(0);
+        let mut enemy = tank_at(130.0, 0.0, &mut physics);
+        enemy.owner = Owner::Enemy(3);
+        // The seat drives east into the enemy.
+        physics.set_velocity(seat.body.expect("a body"), Position::new(120.0, 0.0));
+        let mut shoves = Shoves::default();
+        shoves.owned[0] = true;
+        let mut rng = SmallRng::seed_from_u64(1);
+        let mut kills = Vec::new();
+        ram(&mut seat, &mut enemy, &mut physics, &mut rng, &mut kills, &mut shoves, 1.0).expect("an exchange");
+        assert_eq!(shoves.log.len(), 1, "the enemy's push is nobody's to be told: {:?}", shoves.log);
+        let (who, dv) = shoves.log[0];
+        assert_eq!(who, 0);
+        assert!(dv.x < 0.0 && dv.y == 0.0, "the seat is pushed back west, away from the enemy: {dv:?}");
+        assert!(-dv.x <= tuning().knockback_max_speed);
     }
 }
