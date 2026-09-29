@@ -99,6 +99,20 @@ keys! {
     MISSION_DESTROY_BANNER = "mission-destroy-banner";
     WAVE_BANNER = "wave-banner";
     WAVE_FINAL = "wave-final";
+    LEVEL_NUMBER = "level-number";
+    RESULT_TIME = "result-time";
+    RESULT_WRECKS = "result-wrecks";
+    RESULT_ALL_CLEAR = "result-all-clear";
+    RESULT_AGAIN = "result-again";
+    RESULT_NEXT = "result-next";
+    RESULT_FIRST = "result-first";
+    RESULT_LEVELS = "result-levels";
+    RESULT_NEXT_IN = "result-next-in";
+    RESULT_AGAIN_IN = "result-again-in";
+    LEVELS_TITLE = "levels-title";
+    LEVELS_SUB = "levels-sub";
+    LEVELS_BACK = "levels-back";
+    BAR_LEVEL = "bar-level";
     SEAT_LABEL = "seat-label";
     TOUCH_STEER = "touch-steer";
     TOUCH_FIRE = "touch-fire";
@@ -586,7 +600,12 @@ pub fn fit(text: &str, max_px: i32, size: i32) -> Cow<'_, str> {
 #[cfg(test)]
 mod text_tests {
     use super::*;
-    use crate::hud::{DIALOG_BUTTON_W, DIALOG_W, HUD_GAUGE_LABEL_MAX_PX, HUD_LABEL_SIZE, HUD_TEXT_SIZE, MODE_BUTTON_W, ONLINE_BUTTON_W};
+    use crate::hud::{
+        DIALOG_BUTTON_W, DIALOG_W, HUD_GAUGE_LABEL_MAX_PX, HUD_LABEL_SIZE, HUD_TEXT_SIZE, LEVEL_BUTTON_W, LEVEL_BUTTON_WORD_GAP,
+        LEVEL_NUMBER_SIZE, LEVEL_TITLE_SIZE, MODE_BUTTON_W, ONLINE_BUTTON_W, RESULT_BUTTON_W, RESULT_LEVELS_W, RESULT_LINE_SIZE,
+        RESULT_STATS_GAP, RESULT_TEXT_PX,
+    };
+    use crate::level_select::{SELECT_BACK_W, SELECT_MARGIN, SELECT_W, TILE_TITLE_SIZE};
     use crate::lobby::{LOBBY_BUTTON_W, LOBBY_KICK_W, LOBBY_WIDE_W, LOBBY_W, LOBBY_MARGIN};
 
     /// The ids of every message in a shipped file: a message starts a
@@ -661,6 +680,7 @@ mod text_tests {
     #[test]
     fn every_shipped_language_parses_and_is_a_subset_of_english() {
         let english = english();
+        let levels = crate::levels::Levels::shipped();
         for (tag, source) in SHIPPED_LANGS {
             let _: LanguageIdentifier = tag.parse().unwrap_or_else(|e| panic!("{tag}: {e:?}"));
             let ids = message_ids(source);
@@ -668,7 +688,10 @@ mod text_tests {
                 // A language may give a tool a short spelling English
                 // never needed, since its full name fits the bar.
                 let short_tool = id.strip_prefix("tool-short-").is_some_and(|name| crate::editor::Tool::parse(name).is_some());
-                assert!(english.contains(id) || short_tool, "lang/{tag}.ftl has {id}, which English has not");
+                // A level's English title is levels.toml's, so only the
+                // other languages carry `level-<map>`.
+                let level_title = id.strip_prefix("level-").is_some_and(|map| levels.position(map).is_some());
+                assert!(english.contains(id) || short_tool || level_title, "lang/{tag}.ftl has {id}, which English has not");
             }
             let missing: Vec<&String> = english.iter().filter(|id| !ids.contains(id)).collect();
             if !missing.is_empty() {
@@ -704,6 +727,9 @@ mod text_tests {
             ("to", 8.into()),
             ("rooms", 64.into()),
             ("seats", 8.into()),
+            ("count", 14.into()),
+            ("total", 14.into()),
+            ("time", "2:34".into()),
         ];
         for (tag, source) in SHIPPED_LANGS {
             let catalogue = Catalogue::new(tag);
@@ -802,6 +828,33 @@ mod text_tests {
             (keys::SETTINGS_TIER_END, 16, 116, vec![]),
             (keys::SETTINGS_THEME, 16, 116, vec![]),
             (keys::SETTINGS_RESET, 16, 116, vec![]),
+            // The level's lines and the end screen: across the smallest
+            // field the game ships (maps/crossplay/, 768 px) less a margin,
+            // the end screen's two numbers side by side with a gap.
+            (keys::LEVEL_NUMBER, LEVEL_NUMBER_SIZE, RESULT_TEXT_PX, vec![("n", 14.into()), ("count", 14.into())]),
+            (keys::RESULT_ALL_CLEAR, RESULT_LINE_SIZE, RESULT_TEXT_PX, vec![("count", 14.into())]),
+            (keys::RESULT_TIME, RESULT_LINE_SIZE, (RESULT_TEXT_PX - RESULT_STATS_GAP) / 2, vec![("time", "59:59".into())]),
+            (keys::RESULT_WRECKS, RESULT_LINE_SIZE, (RESULT_TEXT_PX - RESULT_STATS_GAP) / 2, vec![("n", 99.into()), ("total", 99.into())]),
+            (keys::RESULT_AGAIN, HUD_TEXT_SIZE, RESULT_BUTTON_W as i32 - 16, vec![]),
+            (keys::RESULT_NEXT, HUD_TEXT_SIZE, RESULT_BUTTON_W as i32 - 16, vec![]),
+            (keys::RESULT_FIRST, HUD_TEXT_SIZE, RESULT_BUTTON_W as i32 - 16, vec![]),
+            (keys::RESULT_LEVELS, HUD_TEXT_SIZE, RESULT_LEVELS_W as i32 - 16, vec![]),
+            // The counting labels hold two digits: `restart_delay` goes
+            // up to 30.
+            (keys::RESULT_NEXT_IN, HUD_TEXT_SIZE, RESULT_BUTTON_W as i32 - 16, vec![("seconds", 30.into())]),
+            (keys::RESULT_AGAIN_IN, HUD_TEXT_SIZE, RESULT_BUTTON_W as i32 - 16, vec![("seconds", 30.into())]),
+            // The level select: the lobby's title and line sizes across
+            // its content, BACK in its button; the bar's level button
+            // holds its word and a two-digit number.
+            (keys::LEVELS_TITLE, 22, (SELECT_W - 2.0 * SELECT_MARGIN) as i32, vec![]),
+            (keys::LEVELS_SUB, HUD_LABEL_SIZE + 2, (SELECT_W - 2.0 * SELECT_MARGIN) as i32, vec![]),
+            (keys::LEVELS_BACK, HUD_TEXT_SIZE, SELECT_BACK_W as i32 - 12, vec![]),
+            (
+                keys::BAR_LEVEL,
+                HUD_LABEL_SIZE,
+                LEVEL_BUTTON_W as i32 - 12 - LEVEL_BUTTON_WORD_GAP - width("88", HUD_TEXT_SIZE),
+                vec![],
+            ),
         ]
     }
 
@@ -817,6 +870,19 @@ mod text_tests {
                 let w = width(&text, size);
                 if w > max_px {
                     over.push(format!("{tag}: {} = {text:?} is {w} px at {size} px, over its {max_px} px budget", key.0));
+                }
+            }
+            // Every level's title under the mission banner, and on its
+            // tile in the level select, whole.
+            let tile_px = crate::level_select::tile_text_px(crate::Rect::new(0.0, 0.0, 768.0, 384.0));
+            for level in crate::levels::Levels::shipped().iter() {
+                let title = catalogue.message(&format!("level-{}", level.map), &[]).unwrap_or_else(|| fold(&level.title).into_owned());
+                if width(&title, LEVEL_TITLE_SIZE) > RESULT_TEXT_PX {
+                    over.push(format!("{tag}: level {} = {title:?} overflows the field", level.map));
+                }
+                let lines = crate::level_select::wrap(&title, tile_px, TILE_TITLE_SIZE);
+                if lines.iter().any(|line| line.ends_with('~')) {
+                    over.push(format!("{tag}: level {} = {title:?} is cut on its tile: {lines:?}", level.map));
                 }
             }
             // The tool names in their dropdown rows, and the short ones

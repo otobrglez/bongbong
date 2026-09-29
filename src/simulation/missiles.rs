@@ -29,12 +29,13 @@ use super::{Event, Frame, Game, Spectacle, SHOCK_FROG};
 pub(super) const SHOCK_MISSILE: f32 = 0.3;
 
 impl BlastParams {
-    /// One seeker missile's burst.
-    pub fn missile() -> Self {
+    /// One seeker missile's burst, fired by `by`.
+    pub fn missile(by: Owner) -> Self {
         BlastParams {
             radius: tuning().missile_blast_radius,
             damage: (tuning().missile_blast_damage_min, tuning().missile_blast_damage_max),
             knockback: tuning().missile_blast_knockback_speed,
+            by: Some(by),
         }
     }
 }
@@ -125,7 +126,7 @@ impl Game {
     /// (`damage_obstacle`, as any blast). Then the show: a small fireball
     /// leaning downrange, a ripple, a scorch and flattened grass.
     fn missile_blast(&mut self, f: &mut Frame, center: Position, owner: Owner, dir: Vec2, live: bool) {
-        let params = BlastParams::missile();
+        let params = BlastParams::missile(owner);
         f.events.push(Event::MissileBlast { slot: owner.slot(), x: center.x, y: center.y });
         if live {
             for player in self.players().into_iter().flatten() {
@@ -201,7 +202,7 @@ impl Game {
         if self.water.depth_at(center) == crate::ground::Depth::Dry {
             show.scorches.push(Scorch::with(center, tuning().missile_blast_fx_scale, None));
         }
-        crate::grass::flatten(&mut self.grass, center, BlastParams::missile().radius * tuning().blast_grass_flatten);
+        crate::grass::flatten(&mut self.grass, center, tuning().missile_blast_radius * tuning().blast_grass_flatten);
     }
 
     /// The missiles in the air, for the presentation: (a stable per-missile

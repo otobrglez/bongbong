@@ -3,10 +3,13 @@
 # Level tables as dotted keys on purpose - a `[spawn]` header would
 # swallow every `cells.` line after it.
 #
-# Destroy on the band plan, six tanks. The fair is in town: a big top striped
+# Destroy on the band plan, eight tanks. The fair is in town: a big top striped
 # timber and glass like a pinwheel fills the middle, a ferris wheel of drums
 # in the north-west, a carousel in the north-east, a duck pond with its boats
 # in the south-west and a row of prize stalls along the south promenade.
+# Iron crowd barriers stand in both lanes beside the big top and along the
+# north and south midways, with sandbag emplacements at the south midway's
+# ends: hard cover for both sides, so the fair is fought corner to corner.
 #
 # Every prize is a pickup: the good ones - laser, missiles, a shield - wait at
 # the big top's doors; plasma at the carousel, a flamethrower at the stalls,
@@ -14,7 +17,7 @@
 
 version = 1
 size = [36, 18]
-tanks = 6
+tanks = 8
 tank = "flak"
 tank2 = "wraith"
 mission.kind = "destroy"
@@ -56,6 +59,10 @@ cells."29,3" = { kind = "road" }
 cells."5,4" = { kind = "road" }
 cells."6,4" = { kind = "road" }
 cells."7,4" = { kind = "pickup", pickup = "health" }
+cells."15,4" = { kind = "wall", material = "iron" }
+cells."16,4" = { kind = "wall", material = "iron" }
+cells."20,4" = { kind = "wall", material = "iron" }
+cells."21,4" = { kind = "wall", material = "iron" }
 cells."29,4" = { kind = "road" }
 cells."30,4" = { kind = "road" }
 cells."31,4" = { kind = "road" }
@@ -83,11 +90,13 @@ cells."6,7" = { kind = "wall", material = "iron" }
 cells."7,7" = { kind = "wall", material = "iron" }
 cells."9,7" = { kind = "barrel", drum = "fuel" }
 cells."10,7" = { kind = "barrel", drum = "fuel" }
+cells."13,7" = { kind = "wall", material = "iron" }
 cells."16,7" = { kind = "wall", material = "wood" }
 cells."17,7" = { kind = "wall", material = "glass" }
 cells."18,7" = { kind = "wall", material = "wood" }
 cells."19,7" = { kind = "wall", material = "wood" }
 cells."20,7" = { kind = "wall", material = "glass" }
+cells."23,7" = { kind = "wall", material = "iron" }
 cells."27,7" = { kind = "wall", material = "wood" }
 cells."29,7" = { kind = "wall", material = "iron" }
 cells."31,7" = { kind = "wall", material = "wood" }
@@ -95,6 +104,7 @@ cells."33,7" = { kind = "road" }
 cells."3,8" = { kind = "road" }
 cells."6,8" = { kind = "barrel", drum = "fuel" }
 cells."9,8" = { kind = "barrel", drum = "fuel" }
+cells."13,8" = { kind = "wall", material = "iron" }
 cells."15,8" = { kind = "wall", material = "glass" }
 cells."16,8" = { kind = "wall", material = "glass" }
 cells."17,8" = { kind = "wall", material = "wood" }
@@ -102,6 +112,7 @@ cells."18,8" = { kind = "wall", material = "wood" }
 cells."19,8" = { kind = "wall", material = "glass" }
 cells."20,8" = { kind = "wall", material = "wood" }
 cells."21,8" = { kind = "wall", material = "wood" }
+cells."23,8" = { kind = "wall", material = "iron" }
 cells."33,8" = { kind = "road" }
 cells."1,9" = { kind = "pickup", pickup = "speedup" }
 cells."3,9" = { kind = "road" }
@@ -169,7 +180,15 @@ cells."5,13" = { kind = "water" }
 cells."6,13" = { kind = "wall", material = "glass" }
 cells."7,13" = { kind = "wall", material = "wood" }
 cells."8,13" = { kind = "water" }
+cells."10,13" = { kind = "sandbag" }
+cells."11,13" = { kind = "sandbag" }
+cells."14,13" = { kind = "wall", material = "iron" }
+cells."15,13" = { kind = "wall", material = "iron" }
 cells."18,13" = { kind = "pickup", pickup = "shield" }
+cells."21,13" = { kind = "wall", material = "iron" }
+cells."22,13" = { kind = "wall", material = "iron" }
+cells."25,13" = { kind = "sandbag" }
+cells."26,13" = { kind = "sandbag" }
 cells."31,13" = { kind = "road" }
 cells."32,13" = { kind = "road" }
 cells."34,13" = { kind = "tall_grass" }

@@ -11,9 +11,10 @@ Today every map plays the same round: a random band of enemies, one frog to
 protect, the round ends when the player or the frog dies or every enemy is a
 wreck. This design turns a map into a *level*: each map states its
 **mission** (what ends the round) and its **spawn plan** (how enemies arrive),
-both overridable from the CLI and tunable at runtime. "Proceed to the next
-level" stays out of scope: a finished round restarts the same map, exactly as
-now.
+both overridable from the CLI and tunable at runtime. Proceeding from one
+level to the next is docs/levels.md: `levels.toml` lists the levels in order
+and a level's end screen waits for `NEXT LEVEL` or `PLAY AGAIN`; any other
+map still restarts on its own.
 
 ## Decisions (from the 2026-09-04 interview)
 

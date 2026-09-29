@@ -30,7 +30,7 @@
 
 use crate::math::{Color, Rectangle};
 
-use crate::simulation::{with_frog, with_tank, Game, RollIn};
+use crate::simulation::{with_frog, with_tank, Game, RollIn, RoundStats};
 use crate::tank::{ActiveWeapon, Tank};
 use crate::tuning::tuning;
 use crate::{Rect, MAX_DAMAGE};
@@ -239,8 +239,12 @@ pub fn other_seats(seats: usize, local: usize) -> Vec<usize> {
 /// `HudModel::gather`, so the draw pass never queries the world.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HudModel {
-    /// `PROTECT`, or `PROTECT   WAVE 2/5` in a wave round.
+    /// `PROTECT`, or `PROTECT 2/5` in a wave round.
     pub title: String,
+    /// The wave called and how many the round has, in a wave round: what
+    /// the bar keeps beside the level button when that takes the mission
+    /// word's place.
+    pub wave: Option<(u32, u32)>,
     /// Live enemies, and the ones still to roll in (shown as a dim `+N`).
     pub enemies_alive: usize,
     pub enemies_pending: usize,
@@ -306,7 +310,8 @@ impl HudModel {
             .frog
             .or(game.enemy_frog)
             .map(|e| with_frog(&game.world, e, |f| f.health_fraction()));
-        HudModel { title, enemies_alive, enemies_pending, layout, local, second, others, frog }
+        let wave = wave.map(|w| (w.index, w.total));
+        HudModel { title, wave, enemies_alive, enemies_pending, layout, local, second, others, frog }
     }
 }
 
@@ -385,6 +390,22 @@ pub fn leave_button_rect(panel: Rect) -> Rectangle {
     mode_button_rect(panel)
 }
 
+/// The level button at the bar's left end (docs/levels.md): on a level it
+/// takes the mission word's place - `LEVEL 3`, the word small and the
+/// number in the bar's size - and opens the level select
+/// (`Session::press_levels`). The wave count of a wave round stays beside
+/// it; the mission word is the opening banner's. Outlined like the slots
+/// at the other end, and as tall.
+pub const LEVEL_BUTTON_X: f32 = 6.0;
+pub const LEVEL_BUTTON_W: f32 = 88.0;
+/// The gap between the level button's word and its number.
+pub const LEVEL_BUTTON_WORD_GAP: i32 = 5;
+
+/// Where the level button sits in `panel` (window space).
+pub fn level_button_rect(panel: Rect) -> Rectangle {
+    Rectangle::new(panel.x + LEVEL_BUTTON_X, panel.y, LEVEL_BUTTON_W, panel.h)
+}
+
 /// Where the RESTART button sits: the players button's slot, which is free
 /// exactly where this button is drawn (no keyboard means no R key and no
 /// second player - `KEYBOARD_AVAILABLE`), so nothing else in the bar moves.
@@ -455,6 +476,153 @@ pub fn players_dialog_rects(field: Rect) -> PlayersDialogRects {
     PlayersDialogRects { panel, one, two }
 }
 
+/// A level's opening lines (docs/levels.md): its number over the mission
+/// banner and its title under it, half the banner's size.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LevelBanner {
+    /// Counted from 1.
+    pub number: usize,
+    pub count: usize,
+    /// In the language on screen (`levels::Level::title`).
+    pub title: String,
+}
+
+/// What the end screen shows under the outcome (docs/levels.md): the
+/// round's numbers, and on a level the buttons that stand where free play
+/// counts down to its restart.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResultView {
+    pub stats: RoundStats,
+    /// Seats in the round: from two, the wrecks are split by seat.
+    pub seats: usize,
+    /// `None` in free play.
+    pub buttons: Option<ResultButtons>,
+}
+
+/// A level's end-screen buttons: `PLAY AGAIN` always, and after a win the
+/// way on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResultButtons {
+    pub next: Option<NextLevel>,
+    /// Whole seconds until the screen takes its way by itself
+    /// (`Session::follow_countdown`), counted down in that way's own
+    /// button - `NEXT LEVEL IN 3` after a win, `PLAY AGAIN IN 3` after a
+    /// loss - so the press that skips the wait is the one the eye is
+    /// already on. `None` after the last level's win, which waits for a
+    /// button: going round to level 1 is the player's call.
+    pub countdown: Option<u32>,
+}
+
+/// Where a won level's second button goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NextLevel {
+    /// `NEXT LEVEL`.
+    Next,
+    /// The last of `levels` levels was won: the line says every level is
+    /// complete and the button goes back to the first.
+    FirstAgain { levels: usize },
+}
+
+/// The end screen's buttons, field space.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ResultRects {
+    /// `LEVELS`, the level select, on the left.
+    pub levels: Rectangle,
+    pub again: Rectangle,
+    /// Only after a win.
+    pub next: Option<Rectangle>,
+}
+
+/// Where each line of the end screen goes, field space - the one
+/// geometry the drawing and every hit test read, so a button that is not
+/// drawn cannot be pressed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ResultLayout {
+    /// The outcome's top edge, at `RESULT_TITLE_SIZE`.
+    pub title_y: f32,
+    /// Every level complete, after the last level's win.
+    pub all_clear_y: Option<f32>,
+    /// Time and wrecks, at `RESULT_LINE_SIZE`.
+    pub stats_y: f32,
+    /// The wrecks by seat, from two seats, at `RESULT_SEATS_SIZE`.
+    pub seats_y: Option<f32>,
+    /// A level's buttons; free play has none.
+    pub buttons: Option<ResultRects>,
+    /// Free play's restart countdown, at `RESULT_LINE_SIZE`, in the
+    /// buttons' place; a level counts down inside a button instead.
+    pub countdown_y: Option<f32>,
+}
+
+pub const RESULT_TITLE_SIZE: i32 = 72;
+pub const RESULT_LINE_SIZE: i32 = 28;
+pub const RESULT_SEATS_SIZE: i32 = 20;
+/// The gap between the end screen's two numbers, and between the seats'.
+pub const RESULT_STATS_GAP: i32 = 40;
+/// A level's number over the mission banner, and its title under it at
+/// half the banner's size.
+pub const LEVEL_NUMBER_SIZE: i32 = 28;
+pub const LEVEL_TITLE_SIZE: i32 = 36;
+/// The room one line of a level's banner or the end screen has: the
+/// smallest field the game ships (`maps/crossplay/`, 768 px) less 16 px a
+/// side - the budget `text_tests` measures every language against.
+pub const RESULT_TEXT_PX: i32 = 768 - 32;
+pub const RESULT_BUTTON_W: f32 = 224.0;
+pub const RESULT_BUTTON_H: f32 = 48.0;
+pub const RESULT_BUTTON_GAP: f32 = 24.0;
+/// `LEVELS` is the quieter way out, and narrower.
+pub const RESULT_LEVELS_W: f32 = 160.0;
+
+/// The end screen stacked and centred on the field: the outcome, then
+/// whichever lines `view` carries, then the buttons or the countdown. A
+/// level's buttons sit in one centred row - `LEVELS`, `PLAY AGAIN`, and
+/// after a win the way on - so the way forward is always on the right;
+/// free play's countdown stands where they would.
+pub fn result_layout(field: Rect, view: &ResultView) -> ResultLayout {
+    let line = RESULT_LINE_SIZE as f32;
+    let all_clear = matches!(view.buttons, Some(ResultButtons { next: Some(NextLevel::FirstAgain { .. }), .. }));
+    let rows = 16.0
+        + if all_clear { line + 12.0 } else { 0.0 }
+        + line
+        + 10.0
+        + if view.seats >= 2 { RESULT_SEATS_SIZE as f32 + 10.0 } else { 0.0 }
+        + 14.0
+        + if view.buttons.is_some() { RESULT_BUTTON_H } else { line };
+    let top = ((field.h - RESULT_TITLE_SIZE as f32 - rows) / 2.0).max(8.0).round();
+    let mut y = top + RESULT_TITLE_SIZE as f32 + 16.0;
+    let all_clear_y = all_clear.then(|| {
+        let at = y;
+        y += line + 12.0;
+        at
+    });
+    let stats_y = y;
+    y += line + 10.0;
+    let seats_y = (view.seats >= 2).then(|| {
+        let at = y;
+        y += RESULT_SEATS_SIZE as f32 + 10.0;
+        at
+    });
+    y += 14.0;
+    let countdown_y = view.buttons.is_none().then_some(y);
+    let buttons = view.buttons.map(|b| {
+        let (w, h, gap, levels_w) = (RESULT_BUTTON_W, RESULT_BUTTON_H, RESULT_BUTTON_GAP, RESULT_LEVELS_W);
+        let row = levels_w + gap + w + if b.next.is_some() { gap + w } else { 0.0 };
+        let x = ((field.w - row) / 2.0).round();
+        let again = Rectangle::new(x + levels_w + gap, y, w, h);
+        ResultRects {
+            levels: Rectangle::new(x, y, levels_w, h),
+            again,
+            next: b.next.map(|_| Rectangle::new(again.x + w + gap, y, w, h)),
+        }
+    });
+    ResultLayout { title_y: top, all_clear_y, stats_y, seats_y, buttons, countdown_y }
+}
+
+/// A round's length as the end screen writes it: `m:ss`, whole seconds.
+pub fn clock_text(seconds: f32) -> String {
+    let whole = seconds.max(0.0) as u32;
+    format!("{}:{:02}", whole / 60, whole % 60)
+}
+
 /// What play-mode chrome `Game::render` draws besides the readouts: the
 /// `BUILD` and players buttons in the bar and, while the player is being
 /// asked, the leave-round or players dialog over a dimmed field.
@@ -488,6 +656,17 @@ pub struct PlayChrome {
     /// round's `ROUND_RESTARTING`, which is what a local round does; an
     /// online round's counts down to the room's lobby instead.
     pub countdown_label: Option<crate::text::Key>,
+    /// The level on the field, for the opening banner's lines (`None` in
+    /// free play and online).
+    pub level: Option<LevelBanner>,
+    /// The end screen's numbers and a level's buttons, once a local
+    /// round is decided.
+    pub result: Option<ResultView>,
+    /// The level button's number (`Session::level_button`), drawn in the
+    /// mission word's place on a level.
+    pub level_button: Option<usize>,
+    /// The level select over a dimmed field (`level_select.rs`).
+    pub levels: Option<crate::level_select::LevelSelectView>,
 }
 
 /// The online status line's text size and how far in from the field's
@@ -666,5 +845,72 @@ mod hud_tests {
             assert!(left.x + left.width + 16.0 <= right.x);
             assert!(panel.x >= 0.0 && panel.x + panel.width <= field.w);
         }
+    }
+
+    /// The end screen fits the smallest field the game ships in its
+    /// tallest and widest form - every level complete, eight seats'
+    /// shares, three buttons - its buttons finger-sized, apart and in one
+    /// centred row, and each form puts its lines top to bottom without
+    /// overlapping; a level's countdown is in a button, never a line.
+    #[test]
+    fn the_end_screen_fits_the_smallest_field_in_every_form() {
+        let fields = [Rect::new(0.0, 0.0, 768.0, 384.0), Rect::new(0.0, 0.0, W, H), Rect::new(0.0, 0.0, 1536.0, 768.0)];
+        let forms = [
+            None,
+            Some(ResultButtons { next: None, countdown: Some(3) }),
+            Some(ResultButtons { next: Some(NextLevel::Next), countdown: Some(3) }),
+            Some(ResultButtons { next: Some(NextLevel::FirstAgain { levels: 14 }), countdown: None }),
+            Some(ResultButtons { next: None, countdown: None }),
+            Some(ResultButtons { next: Some(NextLevel::Next), countdown: None }),
+        ];
+        for field in fields {
+            for seats in [1, 2, MAX_SEATS] {
+                for buttons in forms {
+                    let view = ResultView { stats: RoundStats::default(), seats, buttons };
+                    let rows = result_layout(field, &view);
+                    let what = format!("{}x{}, {seats} seats, {buttons:?}", field.w, field.h);
+                    assert!(rows.title_y >= 0.0, "{what}");
+                    let mut y = rows.title_y + RESULT_TITLE_SIZE as f32;
+                    for (line, size) in [(rows.all_clear_y, RESULT_LINE_SIZE), (Some(rows.stats_y), RESULT_LINE_SIZE), (rows.seats_y, RESULT_SEATS_SIZE)] {
+                        if let Some(at) = line {
+                            assert!(at >= y, "{what}: a line overlaps the one above");
+                            y = at + size as f32;
+                        }
+                    }
+                    assert_eq!(rows.countdown_y.is_some(), buttons.is_none(), "{what}: a line of countdown only in free play");
+                    match rows.buttons {
+                        Some(r) => {
+                            let row: Vec<Rectangle> = [Some(r.levels), Some(r.again), r.next].into_iter().flatten().collect();
+                            for b in &row {
+                                assert!(b.y >= y && b.y + b.height <= field.h, "{what}: the buttons leave the field");
+                                assert!(b.width >= crate::lobby::LOBBY_TOUCH_MIN && b.height >= crate::lobby::LOBBY_TOUCH_MIN);
+                                assert!(b.x >= 16.0 && b.x + b.width <= field.w - 16.0, "{what}: a button runs off the side");
+                                assert_eq!(b.y, r.again.y, "{what}: one row");
+                            }
+                            for pair in row.windows(2) {
+                                assert!(pair[0].x + pair[0].width + 16.0 <= pair[1].x, "{what}: two buttons touch");
+                            }
+                            let (left, right) = (row[0].x, row[row.len() - 1].x + row[row.len() - 1].width);
+                            assert!(((left + right) / 2.0 - field.w / 2.0).abs() <= 1.0, "{what}: the row is centred");
+                            assert_eq!(r.next.is_some(), buttons.is_some_and(|b| b.next.is_some()), "{what}: a way on only after a win");
+                        }
+                        None => {
+                            assert!(buttons.is_none());
+                            let at = rows.countdown_y.expect("free play counts down");
+                            assert!(at >= y && at + RESULT_LINE_SIZE as f32 <= field.h, "{what}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_rounds_length_reads_as_minutes_and_seconds() {
+        assert_eq!(clock_text(0.0), "0:00");
+        assert_eq!(clock_text(59.9), "0:59");
+        assert_eq!(clock_text(154.2), "2:34");
+        assert_eq!(clock_text(3725.0), "62:05");
+        assert_eq!(clock_text(-3.0), "0:00");
     }
 }

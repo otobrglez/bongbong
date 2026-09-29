@@ -1,21 +1,29 @@
-# glasshouses - Victorian glasshouses, a lily pond and a formal parterre
+# glasshouses - Victorian glasshouses, a lily pond and the frog's own glasshouse
 # Hand-authored: re-saving from the map editor would drop these comments.
 # Level tables as dotted keys on purpose - a `[spawn]` header would
 # swallow every `cells.` line after it.
 #
-# Protect on the band plan, five tanks. Two glasshouses of timber-framed glass
-# flank the gardens, each with a door toward the middle and a bed of palms
-# inside; the frog sits by the lily pond at the centre, where the gravel walks
-# meet, and a parterre of box hedges and flower beds fills the south.
+# Protect on the band plan, four tanks: the campaign's second level, built to
+# be forgiving. Two glasshouses of timber-framed glass flank the gardens, each
+# with a door toward the middle and a bed of palms inside; a lily pond lies
+# between them, and south of it, where the gravel walks meet, the frog lives
+# in a small glasshouse of its own - iron on three sides, glass panes inside,
+# and a brick door onto the south walk. A frog hops clear of any tank that
+# comes near, and the double walls north and south leave it nowhere to land,
+# so it stays in its house: the one way to it is through the door and the
+# pane behind it, from the south walk.
 #
-# Glass shatters and timber burns, so the glasshouses are cover only until
-# somebody decides otherwise. Plasma and a shield in the glasshouses, a laser
-# and a minigun under their eaves, health and ammo in the orchard, frog health
-# by the pond, a speed-up on the long walk.
+# Glass shatters and timber burns, so the big glasshouses are cover only
+# until somebody decides otherwise. Plasma and a shield in the glasshouses,
+# a laser and a minigun under their eaves, missiles and a flamethrower beside
+# the two starts, a second minigun and laser in the parterre, health and ammo
+# in the orchard and the far corners, two more health packs by the frog's
+# door and frog health beside the house, a shield on the pond's north bank
+# and a speed-up on the long walk.
 
 version = 1
 size = [34, 17]
-tanks = 5
+tanks = 4
 tank = "warden"
 tank2 = "glacier"
 mission.kind = "protect"
@@ -75,6 +83,7 @@ cells."32,4" = { kind = "wall", material = "wood" }
 cells."2,5" = { kind = "wall", material = "glass" }
 cells."5,5" = { kind = "pickup", pickup = "plasma" }
 cells."10,5" = { kind = "wall", material = "glass" }
+cells."16,5" = { kind = "pickup", pickup = "shield" }
 cells."17,5" = { kind = "road" }
 cells."24,5" = { kind = "wall", material = "glass" }
 cells."29,5" = { kind = "pickup", pickup = "shield" }
@@ -83,6 +92,12 @@ cells."2,6" = { kind = "wall", material = "glass" }
 cells."3,6" = { kind = "tall_grass" }
 cells."9,6" = { kind = "tall_grass" }
 cells."10,6" = { kind = "wall", material = "glass" }
+cells."15,6" = { kind = "water" }
+cells."16,6" = { kind = "water" }
+cells."17,6" = { kind = "water" }
+cells."18,6" = { kind = "water" }
+cells."19,6" = { kind = "water" }
+cells."20,6" = { kind = "water" }
 cells."24,6" = { kind = "wall", material = "glass" }
 cells."25,6" = { kind = "tall_grass" }
 cells."31,6" = { kind = "tall_grass" }
@@ -93,12 +108,14 @@ cells."4,7" = { kind = "wall", material = "glass" }
 cells."5,7" = { kind = "wall", material = "glass" }
 cells."6,7" = { kind = "wall", material = "wood" }
 cells."10,7" = { kind = "wall", material = "wood" }
+cells."14,7" = { kind = "water" }
 cells."15,7" = { kind = "water" }
 cells."16,7" = { kind = "water" }
 cells."17,7" = { kind = "water" }
 cells."18,7" = { kind = "water" }
 cells."19,7" = { kind = "water" }
 cells."20,7" = { kind = "water" }
+cells."21,7" = { kind = "water" }
 cells."24,7" = { kind = "wall", material = "wood" }
 cells."28,7" = { kind = "wall", material = "wood" }
 cells."29,7" = { kind = "wall", material = "glass" }
@@ -117,26 +134,30 @@ cells."21,8" = { kind = "water" }
 cells."22,8" = { kind = "start2" }
 cells."6,9" = { kind = "pickup", pickup = "laser" }
 cells."11,9" = { kind = "tree" }
-cells."14,9" = { kind = "water" }
 cells."15,9" = { kind = "water" }
 cells."16,9" = { kind = "water" }
 cells."17,9" = { kind = "water" }
 cells."18,9" = { kind = "water" }
 cells."19,9" = { kind = "water" }
 cells."20,9" = { kind = "water" }
-cells."21,9" = { kind = "water" }
 cells."23,9" = { kind = "tree" }
 cells."28,9" = { kind = "pickup", pickup = "minigun" }
 cells."2,10" = { kind = "pine" }
 cells."5,10" = { kind = "pine" }
-cells."15,10" = { kind = "water" }
-cells."16,10" = { kind = "water" }
-cells."17,10" = { kind = "water" }
-cells."18,10" = { kind = "water" }
-cells."19,10" = { kind = "water" }
-cells."20,10" = { kind = "water" }
+cells."15,10" = { kind = "wall", material = "iron" }
+cells."16,10" = { kind = "wall", material = "iron" }
+cells."17,10" = { kind = "wall", material = "iron" }
+cells."18,10" = { kind = "wall", material = "iron" }
+cells."19,10" = { kind = "wall", material = "iron" }
 cells."29,10" = { kind = "pine" }
 cells."32,10" = { kind = "pine" }
+cells."10,11" = { kind = "pickup", pickup = "missiles" }
+cells."15,11" = { kind = "wall", material = "iron" }
+cells."16,11" = { kind = "wall", material = "glass" }
+cells."17,11" = { kind = "wall", material = "glass" }
+cells."18,11" = { kind = "wall", material = "glass" }
+cells."19,11" = { kind = "wall", material = "iron" }
+cells."24,11" = { kind = "pickup", pickup = "flamethrower" }
 cells."0,12" = { kind = "road" }
 cells."1,12" = { kind = "road" }
 cells."2,12" = { kind = "road" }
@@ -152,11 +173,11 @@ cells."11,12" = { kind = "road" }
 cells."12,12" = { kind = "road" }
 cells."13,12" = { kind = "road" }
 cells."14,12" = { kind = "road" }
-cells."15,12" = { kind = "road" }
+cells."15,12" = { kind = "wall", material = "iron" }
 cells."16,12" = { kind = "road" }
 cells."17,12" = { kind = "frog" }
 cells."18,12" = { kind = "road" }
-cells."19,12" = { kind = "road" }
+cells."19,12" = { kind = "wall", material = "iron" }
 cells."20,12" = { kind = "road" }
 cells."21,12" = { kind = "road" }
 cells."22,12" = { kind = "road" }
@@ -172,7 +193,11 @@ cells."31,12" = { kind = "road" }
 cells."32,12" = { kind = "road" }
 cells."33,12" = { kind = "road" }
 cells."34,12" = { kind = "road" }
-cells."17,13" = { kind = "road" }
+cells."15,13" = { kind = "wall", material = "iron" }
+cells."16,13" = { kind = "wall", material = "glass" }
+cells."17,13" = { kind = "wall", material = "glass" }
+cells."18,13" = { kind = "wall", material = "glass" }
+cells."19,13" = { kind = "wall", material = "iron" }
 cells."20,13" = { kind = "pickup", pickup = "frog_health" }
 cells."4,14" = { kind = "pine" }
 cells."5,14" = { kind = "pine" }
@@ -180,8 +205,11 @@ cells."6,14" = { kind = "pine" }
 cells."10,14" = { kind = "pine" }
 cells."11,14" = { kind = "pine" }
 cells."12,14" = { kind = "pine" }
-cells."15,14" = { kind = "wall", material = "wood" }
-cells."17,14" = { kind = "wall", material = "wood" }
+cells."15,14" = { kind = "wall", material = "iron" }
+cells."16,14" = { kind = "wall", material = "brick" }
+cells."17,14" = { kind = "wall", material = "brick" }
+cells."18,14" = { kind = "wall", material = "brick" }
+cells."19,14" = { kind = "wall", material = "iron" }
 cells."21,14" = { kind = "pine" }
 cells."22,14" = { kind = "pine" }
 cells."23,14" = { kind = "pine" }
@@ -191,14 +219,17 @@ cells."29,14" = { kind = "pine" }
 cells."4,15" = { kind = "tall_grass" }
 cells."5,15" = { kind = "tall_grass" }
 cells."6,15" = { kind = "tall_grass" }
+cells."8,15" = { kind = "pickup", pickup = "minigun" }
 cells."10,15" = { kind = "tall_grass" }
 cells."11,15" = { kind = "tall_grass" }
 cells."12,15" = { kind = "tall_grass" }
-cells."16,15" = { kind = "wall", material = "glass" }
+cells."14,15" = { kind = "pickup", pickup = "health" }
 cells."17,15" = { kind = "road" }
+cells."20,15" = { kind = "pickup", pickup = "health" }
 cells."21,15" = { kind = "tall_grass" }
 cells."22,15" = { kind = "tall_grass" }
 cells."23,15" = { kind = "tall_grass" }
+cells."26,15" = { kind = "pickup", pickup = "laser" }
 cells."27,15" = { kind = "tall_grass" }
 cells."28,15" = { kind = "tall_grass" }
 cells."29,15" = { kind = "tall_grass" }

@@ -125,6 +125,9 @@ pub struct TouchScheme {
     stick: Option<Stick>,
     /// Touch ids currently held on the fire half.
     fire_ids: Vec<i32>,
+    /// Touch ids that pressed a button (`claim`): neither steering nor
+    /// firing until they lift.
+    claimed: Vec<i32>,
     ripples: Vec<Ripple>,
     /// Seconds of hint left; `None` until the first touch is ever seen.
     hint: Option<f32>,
@@ -191,8 +194,11 @@ impl TouchScheme {
         // Fire ids that lifted are gone; new touches are classified by
         // where they landed.
         self.fire_ids.retain(|id| points.iter().any(|p| p.id == *id));
+        self.claimed.retain(|id| points.iter().any(|p| p.id == *id));
         for p in points {
-            let claimed = self.stick.map(|s| s.id == p.id).unwrap_or(false) || self.fire_ids.contains(&p.id);
+            let claimed = self.stick.map(|s| s.id == p.id).unwrap_or(false)
+                || self.fire_ids.contains(&p.id)
+                || self.claimed.contains(&p.id);
             if claimed || !on_field(p.pos) {
                 continue;
             }
@@ -211,6 +217,23 @@ impl TouchScheme {
             s.dir
         });
         Intent { move_dir, fire: !self.fire_ids.is_empty(), ..Intent::default() }
+    }
+
+    /// The touches down now pressed a button over the field - an end
+    /// screen's, a dialog's: none of them steers or fires, this frame or
+    /// for as long as it stays down, so the tap on `NEXT LEVEL` is not
+    /// also the fire press that skips the next level's banner.
+    pub fn claim(&mut self, points: &[TouchPoint]) {
+        for p in points {
+            if !self.claimed.contains(&p.id) {
+                self.claimed.push(p.id);
+            }
+        }
+        let claimed = &self.claimed;
+        self.fire_ids.retain(|id| !claimed.contains(id));
+        if self.stick.is_some_and(|s| claimed.contains(&s.id)) {
+            self.stick = None;
+        }
     }
 
     /// Whether a touch is steering right now.
@@ -473,5 +496,28 @@ mod touch_tests {
         let i = t.update(&[pt(1, 700.0, 340.0), pt(9, 800.0, 100.0)], &l, true, DT);
         assert_eq!(i.move_dir, Some(Dir::Down));
         assert!(!i.fire);
+    }
+
+    /// A touch that pressed a button neither fires nor steers while it is
+    /// down, whichever half it landed on; once it lifts, the next touch is
+    /// the scheme's again.
+    #[test]
+    fn a_claimed_touch_neither_fires_nor_steers_until_it_lifts() {
+        let l = layout();
+        let mut t = TouchScheme::default();
+        let (fire, steer) = (pt(5, 200.0, 300.0), pt(6, 700.0, 300.0));
+        t.claim(&[fire, steer]);
+        let i = t.update(&[fire, steer], &l, true, DT);
+        assert!(!i.fire && !t.steering());
+        let i = t.update(&[fire, pt(6, 700.0, 240.0)], &l, true, DT);
+        assert!(!i.fire && i.move_dir.is_none(), "held and dragged, still nobody's");
+        // Claimed after the scheme already took it: let go at once.
+        let mut t = TouchScheme::default();
+        assert!(t.update(&[pt(7, 200.0, 300.0)], &l, true, DT).fire);
+        t.claim(&[pt(7, 200.0, 300.0)]);
+        assert!(!t.update(&[pt(7, 200.0, 300.0)], &l, true, DT).fire);
+        // Lifted, and a new touch fires as usual.
+        t.update(&[], &l, true, DT);
+        assert!(t.update(&[pt(8, 200.0, 300.0)], &l, true, DT).fire);
     }
 }

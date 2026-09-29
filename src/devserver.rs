@@ -45,6 +45,7 @@ use crate::simulation::{Event, Game, Input, Overlays, PlayerCount};
 use crate::tank::{Dir, TankKind};
 use crate::tuning;
 use crate::level::{Mission, SpawnKind, Tier};
+use crate::level_select::SelectInput;
 use crate::{Layout, PHYSICS_FIXED_DT, Position, parse_seed};
 
 /// Port the game listens on unless `--dev-port`/`BONGBONG_DEV_PORT` says
@@ -110,7 +111,7 @@ pub const ONLINE_REFUSED_TOOLS: &[&str] = &[
 const TERRAIN_MAX_TILES: usize = 800;
 
 /// The `key` tool's key names.
-const KEY_NAMES: &[&str] = &["tab", "escape", "enter", "undo", "redo", "backspace", "1", "2"];
+const KEY_NAMES: &[&str] = &["tab", "escape", "enter", "undo", "redo", "backspace", "1", "2", "left", "right", "up", "down"];
 
 /// One tool: its wire/MCP name, the description the model reads, and its
 /// input JSON schema (an `object` schema, as a string so this table can be
@@ -411,15 +412,15 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "click",
-        description: "A raw press at a window position (pixels, the 32 px HUD bar included: the field starts at y = 32), in either mode, on the same hit-tests a mouse or a finger uses: in play mode the BUILD button (right end of the bar), the players button beside it, either dialog's buttons (a press outside a dialog closes it) - a press on the field itself does nothing in play mode; in build mode the bar's buttons (PLAY starts the round like `play`), a dropdown row, a settings stepper or a field cell. With `drag_to`, a press, a straight drag to that point and a release, crossing every cell on the way. Replies like `mode`. This tests the UI; `build`/`play`/`builder_*` address the model directly.",
+        description: "A raw press at a window position (pixels, the 32 px HUD bar included: the field starts at y = 32), in either mode, on the same hit-tests a mouse or a finger uses: in play mode the BUILD button (right end of the bar), the players button beside it, the level button at the bar's left end on a level, either dialog's buttons (a press outside a dialog closes it), a level's end-screen buttons (LEVELS, PLAY AGAIN, the way on) and the level select's tiles and BACK (a press outside it closes it) - a press on the field itself does nothing in play mode; in build mode the bar's buttons (PLAY starts the round like `play`), a dropdown row, a settings stepper or a field cell. With `drag_to`, a press, a straight drag to that point and a release, crossing every cell on the way. Replies like `mode`. This tests the UI; `build`/`play`/`builder_*` address the model directly.",
         schema: r#"{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"},"button":{"type":"string","enum":["left","right"],"default":"left"},"drag_to":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2,"description":"[x, y] to drag to before releasing"}},"required":["x","y"]}"#,
         read_only: false,
         destructive: false,
     },
     ToolSpec {
         name: "key",
-        description: "Press one key for one frame: tab (BUILD/PLAY - in play mode it opens the leave dialog, or closes an open one; in build mode it starts the round like `play`), escape (keep playing / close a dialog or popup), enter (leave the round; in the players dialog, switch to the other count; confirm a popup), 1 / 2 (answer the players dialog), undo, redo (Ctrl+Z / Ctrl+Y in the builder), backspace; `text` types characters into an open builder prompt. Replies like `mode`.",
-        schema: r#"{"type":"object","properties":{"key":{"type":"string","enum":["tab","escape","enter","undo","redo","backspace","1","2"]},"text":{"type":"string","description":"Characters to type this frame (build mode)"}}}"#,
+        description: "Press one key for one frame: tab (BUILD/PLAY - in play mode it opens the leave dialog, or closes an open one; in build mode it starts the round like `play`), escape (keep playing / close a dialog or popup; in play mode with no dialog, open or close the level select), enter (leave the round; in the players dialog, switch to the other count; on a level's end screen, the way on or PLAY AGAIN; in the level select, start the level under the focus; confirm a popup), left / right / up / down (move the level select's focus over the open levels), 1 / 2 (answer the players dialog), undo, redo (Ctrl+Z / Ctrl+Y in the builder), backspace; `text` types characters into an open builder prompt. Replies like `mode` (`levels_open`, `levels_focus`).",
+        schema: r#"{"type":"object","properties":{"key":{"type":"string","enum":["tab","escape","enter","undo","redo","backspace","1","2","left","right","up","down"]},"text":{"type":"string","description":"Characters to type this frame (build mode)"}}}"#,
         read_only: false,
         destructive: false,
     },
@@ -1127,6 +1128,10 @@ impl DevServer {
             "language": crate::text::language(),
             "dialog_open": session.dialog,
             "players_dialog_open": session.players_dialog,
+            "levels_open": session.level_select.is_some(),
+            "levels_focus": session.level_select.as_ref().map(|select| select.focus() + 1),
+            "level": level_json(session),
+            "stats": game.round_stats(),
             "builder": { "dirty": session.builder.dirty(), "tool": session.builder.tool().name() },
             "events_kept": self.events.len(),
             "next_event_seq": self.next_seq,
@@ -1141,6 +1146,20 @@ impl DevServer {
         // touching a frozen round (docs/game-editor-fusion.md section 11).
         if session.mode() == Driver::Build && GAME_ONLY_TOOLS.contains(&method.as_str()) {
             let _ = reply.send(Err(format!("{method} needs play mode: the builder is live - call `play` first")));
+            return;
+        }
+        // A step while the round stands still behind a question would
+        // wait for frames that never run (`app.rs` advances only while
+        // `Session::playing`): say what is asking instead.
+        if method == "step" && session.mode() == Driver::Play && !session.playing() {
+            let what = if session.level_select.is_some() {
+                "the level select is open - key escape closes it, key enter or a click on a tile starts a level"
+            } else if session.players_dialog {
+                "the players dialog is open - key escape closes it"
+            } else {
+                "the leave dialog is open - key escape keeps playing"
+            };
+            let _ = reply.send(Err(format!("step needs the round running: {what}")));
             return;
         }
         // The same refusal for a round that belongs to a room: only the
@@ -1632,9 +1651,15 @@ impl DevServer {
         let point = Vec2::new(x, y);
         match session.mode() {
             Driver::Play => {
-                // The same order as `main.rs`: an open dialog eats every
-                // press while it is up, then the two bar buttons.
-                if session.players_dialog {
+                // The same order as `main.rs`: the level select or an
+                // open dialog eats every press while it is up, then the
+                // end screen, then the bar's buttons.
+                if session.level_select.is_some() {
+                    let input = SelectInput { pointer: Some(layout.to_field(point)), pressed: !right, ..SelectInput::default() };
+                    if session.update_level_select(&input, layout.field) {
+                        self.round_started(session);
+                    }
+                } else if session.players_dialog {
                     let rects = players_dialog_rects(layout.field);
                     let p = layout.to_field(point);
                     let before = session.game.players;
@@ -1656,6 +1681,14 @@ impl DevServer {
                     } else if rects.stay.contains(p) || !rects.panel.contains(p) {
                         session.answer_dialog(false);
                     }
+                } else if !right && session.press_result(layout.to_field(point)) {
+                    // A level's end screen: PLAY AGAIN or the way on start
+                    // a round; LEVELS opens the level select over this one.
+                    if session.level_select.is_none() {
+                        self.round_started(session);
+                    }
+                } else if !right && session.level_button().is_some() && crate::hud::level_button_rect(layout.panel).contains(point) {
+                    session.press_levels();
                 } else if mode_button_rect(layout.panel).contains(point) {
                     session.press_build();
                 } else if crate::TWO_PLAYERS_AVAILABLE && players_button_rect(layout.panel).contains(point) {
@@ -1732,6 +1765,22 @@ impl DevServer {
             return Err(format!("key needs `key` ({}) or `text`", KEY_NAMES.join("|")));
         }
         match session.mode() {
+            // The level select's keys, as `app.rs` reads them: the arrows
+            // walk the open tiles, Enter starts one, Esc and Tab close it.
+            Driver::Play if session.level_select.is_some() => {
+                let input = SelectInput {
+                    left: key == Some("left"),
+                    right: key == Some("right"),
+                    up: key == Some("up"),
+                    down: key == Some("down"),
+                    enter: key == Some("enter"),
+                    escape: matches!(key, Some("escape") | Some("tab")),
+                    ..SelectInput::default()
+                };
+                if session.update_level_select(&input, layout.field) {
+                    self.round_started(session);
+                }
+            }
             Driver::Play if session.players_dialog => {
                 let before = session.game.players;
                 match key {
@@ -1760,11 +1809,23 @@ impl DevServer {
                         session.press_build();
                     }
                 }
+                // Esc answers the leave dialog while it asks, and opens
+                // the level select otherwise.
                 Some("escape") => {
-                    session.answer_dialog(false);
+                    if session.dialog {
+                        session.answer_dialog(false);
+                    } else {
+                        session.press_levels();
+                    }
                 }
+                // The leave dialog's answer while it asks; otherwise a
+                // level's end screen takes it, as `app.rs` does.
                 Some("enter") => {
-                    session.answer_dialog(true);
+                    if session.dialog {
+                        session.answer_dialog(true);
+                    } else if session.enter_result() {
+                        self.round_started(session);
+                    }
                 }
                 // undo/redo/backspace, 1/2 and typed text mean nothing in play.
                 _ => {}
@@ -1980,12 +2041,29 @@ fn terrain_json(game: &Game, params: &Value) -> Result<Value, String> {
 }
 
 /// `mode`'s reply: the session's mode and the builder's state in one look.
+/// The level the local round is (docs/levels.md) - its number, map and
+/// title, and the furthest one reached - or `null` in free play.
+fn level_json(session: &Session) -> Value {
+    let (Some(i), Some(campaign)) = (session.level(), session.campaign.as_ref()) else { return Value::Null };
+    let Some(level) = campaign.levels.get(i) else { return Value::Null };
+    json!({
+        "number": i + 1,
+        "count": campaign.levels.len(),
+        "map": level.map,
+        "title": level.title(),
+        "reached": campaign.reached() + 1,
+        "last": campaign.is_last(i),
+    })
+}
+
 fn mode_json(session: &Session) -> Value {
     let b = &session.builder;
     json!({
         "mode": session.mode().name(),
         "dialog_open": session.dialog,
         "players_dialog_open": session.players_dialog,
+        "levels_open": session.level_select.is_some(),
+        "levels_focus": session.level_select.as_ref().map(|select| select.focus() + 1),
         "players": session.game.players.count(),
         "dirty": b.dirty(),
         "map_name": b.name(),
@@ -1994,6 +2072,7 @@ fn mode_json(session: &Session) -> Value {
         "open_menu": b.open_menu(),
         "undo_depth": b.history().undo_depth(),
         "redo_depth": b.history().redo_depth(),
+        "level": level_json(session),
     })
 }
 
@@ -3626,6 +3705,90 @@ cells."1,1" = { kind = "wall" }"#;
         assert_eq!(s.builder.map().cell(10, 5), Some(&crate::map::CellObject::Wall { material: crate::obstacle::Material::Iron }));
         let status = ask(&mut server, &tx, &mut s, "play", json!({ "intro": true })).unwrap();
         assert!(status["intro_seconds_left"].as_f64().unwrap() > 0.0, "{status}");
+    }
+
+    /// A level's end screen answers `click` and `key` the way `app.rs`
+    /// answers the mouse and the keyboard: NEXT LEVEL by its button, PLAY
+    /// AGAIN by Enter after a loss, and `status` names the level.
+    #[test]
+    fn a_levels_end_screen_takes_clicks_and_enter() {
+        let (mut server, tx) = DevServer::headless();
+        let campaign = crate::levels::Campaign::new(crate::levels::Levels::shipped(), None);
+        let mut game = Game::default();
+        game.enemy_count_override = Some(1);
+        game.seed_override = Some(3);
+        game.map = campaign.map(0).expect("level 1 opens");
+        let (w, h) = game.map.field_size();
+        game.init(w, h);
+        let mut s = Session::new(game);
+        s.set_campaign(campaign);
+        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert_eq!(status["level"]["number"], 1, "{status}");
+        assert_eq!(status["level"]["map"], "lotus-lagoon");
+        assert_eq!(status["stats"]["enemies"], 1);
+
+        let enemy = s.game.world.query::<&crate::tank::Tank>().with::<&crate::ai::Ai>().iter().map(|t| t.owner_slot()).min().unwrap();
+        s.game.debug_kill(enemy).unwrap();
+        s.game.update(Input::default(), crate::PHYSICS_FIXED_DT, w, h);
+        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert_eq!((status["outcome"].as_str(), status["stats"]["destroyed"].as_u64()), (Some("won"), Some(1)), "{status}");
+        let view = s.play_chrome().result.expect("the end screen");
+        let rects = crate::hud::result_layout(crate::Rect::new(0.0, 0.0, w, h), &view).buttons.expect("a level's buttons");
+        let next = rects.next.expect("the way on");
+        let at = json!({ "x": next.x + next.width / 2.0, "y": next.y + next.height / 2.0 + Layout::for_field(w, h).field.y });
+        let m = ask(&mut server, &tx, &mut s, "click", at).unwrap();
+        assert_eq!(m["level"]["number"], 2, "{m}");
+        assert_eq!(m["mode"], "play");
+        assert!(server.lockstep(), "a new round, frozen like `restart`'s");
+
+        s.game.debug_kill(0).unwrap();
+        let (w, h) = s.game.map.field_size();
+        s.game.update(Input::default(), crate::PHYSICS_FIXED_DT, w, h);
+        assert_eq!(s.game.outcome(), crate::simulation::Outcome::Lost);
+        let m = ask(&mut server, &tx, &mut s, "key", json!({ "key": "enter" })).unwrap();
+        assert_eq!(m["level"]["number"], 2, "Enter after a loss is the same level again: {m}");
+        assert_eq!(s.game.outcome(), crate::simulation::Outcome::Playing);
+    }
+
+    /// The level select through the tools: the bar's level button and
+    /// Esc open it, a locked tile is no button, the arrows and Enter start
+    /// a level reached, and `step` refuses by name while the screen stands
+    /// over the round rather than waiting for frames that never run.
+    #[test]
+    fn the_level_select_takes_clicks_and_keys() {
+        let (mut server, tx) = DevServer::headless();
+        let mut campaign = crate::levels::Campaign::new(crate::levels::Levels::shipped(), None);
+        campaign.won(0);
+        let mut game = Game::default();
+        game.enemy_count_override = Some(1);
+        game.seed_override = Some(3);
+        game.map = campaign.map(1).expect("level 2 opens");
+        let (w, h) = game.map.field_size();
+        game.init(w, h);
+        let mut s = Session::new(game);
+        s.set_campaign(campaign);
+        let layout = Layout::for_field(w, h);
+        let button = crate::hud::level_button_rect(layout.panel);
+        let m = ask(&mut server, &tx, &mut s, "click", json!({ "x": button.x + 10.0, "y": button.y + 16.0 })).unwrap();
+        assert_eq!((m["levels_open"].as_bool(), m["levels_focus"].as_u64()), (Some(true), Some(2)), "{m}");
+        let err = ask(&mut server, &tx, &mut s, "step", json!({ "frames": 1 })).unwrap_err();
+        assert!(err.contains("level select"), "{err}");
+
+        let field = crate::Rect::new(0.0, 0.0, w, h);
+        let r = crate::level_select::tile_rect(field, 2);
+        let locked = json!({ "x": r.x + r.width / 2.0, "y": r.y + r.height / 2.0 + layout.field.y });
+        let m = ask(&mut server, &tx, &mut s, "click", locked).unwrap();
+        assert_eq!((m["levels_open"].as_bool(), m["level"]["number"].as_u64()), (Some(true), Some(2)), "a locked tile: {m}");
+
+        let m = ask(&mut server, &tx, &mut s, "key", json!({ "key": "escape" })).unwrap();
+        assert_eq!(m["levels_open"], false, "{m}");
+        let m = ask(&mut server, &tx, &mut s, "key", json!({ "key": "escape" })).unwrap();
+        assert_eq!(m["levels_open"], true, "Esc opens it over the round: {m}");
+        let m = ask(&mut server, &tx, &mut s, "key", json!({ "key": "left" })).unwrap();
+        assert_eq!(m["levels_focus"], 1, "{m}");
+        let m = ask(&mut server, &tx, &mut s, "key", json!({ "key": "enter" })).unwrap();
+        assert_eq!((m["levels_open"].as_bool(), m["level"]["number"].as_u64()), (Some(false), Some(1)), "{m}");
+        assert!(server.lockstep(), "a new round, frozen like `restart`'s");
     }
 
     #[test]
