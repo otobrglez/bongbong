@@ -18,6 +18,7 @@ use crate::lobby::{
 use crate::math::{Color, Rectangle};
 use crate::render::canvas::GpuCanvas;
 use crate::tank::TEAM_COLORS;
+use crate::text::{keys, mission_title, text, width};
 use crate::{qr, Rect};
 
 /// The panel's fill and outline, the dialogs' so the three screens read
@@ -34,9 +35,6 @@ const ROW_YOU: Color = Color::new(120, 220, 255, 26);
 const DEAD: Color = Color::new(70, 70, 78, 255);
 /// The size the room code is set in, the one number a player reads out.
 const CODE_TEXT_SIZE: i32 = 34;
-/// The default font's advance per character, by size: the same
-/// approximation the HUD's buttons are centred with.
-const CHAR_W_18: i32 = 11;
 
 /// Draw the whole screen over the field. Field space: call inside the
 /// field camera, as `draw_leave_dialog` is called.
@@ -71,15 +69,18 @@ pub fn draw_lobby<D: RaylibDraw, S: Sheets>(d: &mut D, field: Rect, view: &Lobby
 /// The opening face: the two steppers and what they stand on.
 fn draw_start<D: RaylibDraw>(d: &mut D, field: Rect, view: &LobbyView) {
     let c = content_rect(field);
-    for (row, (label, value)) in [("MAP", view.map.as_str()), ("MISSION", view.mission.name())].into_iter().enumerate() {
+    let t = text();
+    // The map is its slug, a data name every build spells the same; the
+    // mission is the word for it in the language on screen.
+    let rows = [(t.get(keys::LOBBY_MAP), view.map.to_ascii_uppercase()), (t.get(keys::LOBBY_MISSION), t.get(mission_title(view.mission)))];
+    for (row, (label, value)) in rows.into_iter().enumerate() {
         let prev = button_rect(field, if row == 0 { Button::MapPrev } else { Button::MissionPrev });
         let mid_y = (prev.y + (prev.height - HUD_TEXT_SIZE as f32) / 2.0) as i32;
-        d.draw_text(label, c.x as i32, mid_y, HUD_TEXT_SIZE, DIM);
+        d.draw_text(&label, c.x as i32, mid_y, HUD_TEXT_SIZE, DIM);
         // Left-aligned a fixed step in from the `<` button rather than
-        // centred between the two: the default font's advance is only
-        // approximated here, and a value that stays put as it changes
+        // centred between the two: a value that stays put as it changes
         // reads better than one that drifts.
-        d.draw_text(&value.to_ascii_uppercase(), (prev.x + prev.width + 24.0) as i32, mid_y, HUD_TEXT_SIZE, TEXT);
+        d.draw_text(&value, (prev.x + prev.width + 24.0) as i32, mid_y, HUD_TEXT_SIZE, TEXT);
     }
 }
 
@@ -93,7 +94,7 @@ fn draw_code<D: RaylibDraw>(d: &mut D, field: Rect, view: &LobbyView) {
         d.draw_rectangle_rounded_lines_ex(r, 0.15, 8, 2.0, if i == typed.len() { ONLINE_COLOR } else { DIM });
         if let Some(&c) = typed.get(i) {
             let size = 40;
-            let w = size * 3 / 5;
+            let w = width(&c.to_string(), size);
             d.draw_text(
                 &c.to_string(),
                 (r.x + (LOBBY_CODE_BOX - w as f32) / 2.0) as i32,
@@ -114,7 +115,8 @@ fn draw_room<D: RaylibDraw, S: Sheets>(d: &mut D, field: Rect, view: &LobbyView,
     }
     if view.more > 0 {
         let y = (seats.y + seats.height + 2.0) as i32;
-        d.draw_text(&format!("+{} MORE", view.more), seats.x as i32, y, HUD_LABEL_SIZE, DIM);
+        let more = text().fmt(keys::LOBBY_MORE, &[("n", (view.more as i64).into())]);
+        d.draw_text(&more, seats.x as i32, y, HUD_LABEL_SIZE, DIM);
     }
     // The line under the title has nowhere to go in this face; it runs
     // along the bottom between the buttons instead.
@@ -132,7 +134,7 @@ fn draw_room<D: RaylibDraw, S: Sheets>(d: &mut D, field: Rect, view: &LobbyView,
         qr::draw(&mut GpuCanvas::new(d, sheets), code, x, y, scale, Color::BLACK, Color::WHITE);
     }
     if let Some(code) = &view.code {
-        let w = code.len() as i32 * (CODE_TEXT_SIZE * 3 / 5 + 3);
+        let w = width(code, CODE_TEXT_SIZE);
         d.draw_text(
             code,
             (box_rect.x + (LOBBY_QR_BOX - w as f32) / 2.0) as i32,
@@ -144,8 +146,9 @@ fn draw_room<D: RaylibDraw, S: Sheets>(d: &mut D, field: Rect, view: &LobbyView,
     if let Some(url) = &view.join_url {
         // The link is long with a local override; the tail is what
         // differs, so the head is what gets cut.
-        let shown: String = match url.len() > 34 {
-            true => format!("...{}", &url[url.len() - 31..]),
+        let chars = url.chars().count();
+        let shown: String = match chars > 34 {
+            true => format!("...{}", url.chars().skip(chars - 31).collect::<String>()),
             false => url.clone(),
         };
         d.draw_text(
@@ -163,7 +166,7 @@ fn draw_seat<D: RaylibDraw>(d: &mut D, r: Rectangle, seat: Option<&SeatRow>) {
     let inner = Rectangle::new(r.x, r.y + 3.0, r.width, r.height - 6.0);
     let Some(seat) = seat else {
         d.draw_rectangle_rounded_lines_ex(inner, 0.2, 8, 1.0, Color::new(70, 70, 78, 140));
-        d.draw_text("EMPTY", (r.x + 12.0) as i32, (r.y + (r.height - HUD_LABEL_SIZE as f32) / 2.0) as i32, HUD_LABEL_SIZE, DEAD);
+        d.draw_text(&text().get(keys::SEAT_EMPTY), (r.x + 12.0) as i32, (r.y + (r.height - HUD_LABEL_SIZE as f32) / 2.0) as i32, HUD_LABEL_SIZE, DEAD);
         return;
     };
     d.draw_rectangle_rounded(inner, 0.2, 8, if seat.you { ROW_YOU } else { ROW_FILL });
@@ -173,13 +176,13 @@ fn draw_seat<D: RaylibDraw>(d: &mut D, r: Rectangle, seat: Option<&SeatRow>) {
     let slot_color = TEAM_COLORS[seat.seat as usize % TEAM_COLORS.len()];
     d.draw_text(&seat.slot, (r.x + 10.0) as i32, text_y, HUD_TEXT_SIZE, slot_color);
     d.draw_text(&seat.nick, (r.x + 46.0) as i32, text_y, HUD_TEXT_SIZE, if seat.you { TEXT } else { Color::new(210, 210, 216, 255) });
-    d.draw_text(seat.chassis, (r.x + 190.0) as i32, text_y + 4, HUD_LABEL_SIZE, DIM);
+    d.draw_text(&seat.chassis, (r.x + 190.0) as i32, text_y + 4, HUD_LABEL_SIZE, DIM);
     let state_color = match (seat.host, seat.ready) {
         (true, _) => ONLINE_COLOR,
         (_, true) => BUILD_COLOR,
         _ => DIM,
     };
-    d.draw_text(seat.state, (r.x + 280.0) as i32, text_y + 4, HUD_LABEL_SIZE, state_color);
+    d.draw_text(&seat.state, (r.x + 280.0) as i32, text_y + 4, HUD_LABEL_SIZE, state_color);
 }
 
 /// One button: the dialogs' outlined rounded box, dim when dead.
@@ -194,7 +197,7 @@ fn draw_button<D: RaylibDraw>(d: &mut D, r: Rectangle, view: &ButtonView) {
     }
     d.draw_rectangle_rounded_lines_ex(r, 0.2, 8, 2.0, color);
     let size = if view.label.chars().count() == 1 { 24 } else { HUD_TEXT_SIZE };
-    let w = view.label.len() as i32 * if size == 24 { 14 } else { CHAR_W_18 };
+    let w = width(&view.label, size);
     d.draw_text(
         &view.label,
         (r.x + (r.width - w as f32) / 2.0) as i32,
@@ -209,10 +212,10 @@ fn draw_button<D: RaylibDraw>(d: &mut D, r: Rectangle, view: &ButtonView) {
 pub fn draw_online_button<D: RaylibDraw>(d: &mut D, panel: Rect) {
     let r = crate::hud::online_button_rect(panel);
     d.draw_rectangle_lines_ex(Rectangle::new(r.x, r.y + 2.0, r.width, r.height - 4.0), 2.0, ONLINE_COLOR);
-    let label = "ONLINE";
-    let w = label.len() as i32 * CHAR_W_18;
+    let label = text().get(keys::BUTTON_ONLINE);
+    let w = width(&label, HUD_TEXT_SIZE);
     d.draw_text(
-        label,
+        &label,
         (r.x + (r.width - w as f32) / 2.0) as i32,
         (r.y + (r.height - HUD_TEXT_SIZE as f32) / 2.0) as i32,
         HUD_TEXT_SIZE,

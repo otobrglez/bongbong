@@ -998,6 +998,7 @@ pub mod shell;
 pub mod shockwave;
 pub mod simulation;
 pub mod tank;
+pub mod text;
 pub mod thumbnail;
 pub mod touch;
 pub mod track;

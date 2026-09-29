@@ -257,10 +257,11 @@ impl TouchScheme {
             };
             let color = Color::new(255, 255, 255, alpha);
             let size = 20;
-            let steer = "DRAG TO STEER";
-            let fire = "TAP TO FIRE";
-            d.draw_text(steer, steer_x as i32 - steer.len() as i32 * 5, y, size, color);
-            d.draw_text(fire, fire_x as i32 - fire.len() as i32 * 5, y, size, color);
+            let t = crate::text::text();
+            let steer = t.get(crate::text::keys::TOUCH_STEER);
+            let fire = t.get(crate::text::keys::TOUCH_FIRE);
+            d.draw_text(&steer, steer_x as i32 - crate::text::width(&steer, size) / 2, y, size, color);
+            d.draw_text(&fire, fire_x as i32 - crate::text::width(&fire, size) / 2, y, size, color);
         }
     }
 }

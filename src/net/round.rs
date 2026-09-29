@@ -406,12 +406,18 @@ impl<T: Transport> OnlineRound<T> {
     /// the round - the code, the QR, the seats, the buttons - is the
     /// lobby screen's (`lobby.rs`), which this line never repeats.
     pub fn status(&self) -> String {
+        use crate::text::{keys, text};
+        let t = text();
         let code = self.client.code().unwrap_or("-----");
         let seat = self.client.seat().map_or_else(|| "-".to_string(), |s| format!("{}", s + 1));
+        // The label is a word where the catalogue has one (`ROOM`), and
+        // itself where it does not (the rig's `RIG`).
+        let room = t.named("status-label", &self.label.to_ascii_lowercase());
+        let args = |ms: i64| vec![("room", room.as_str().into()), ("code", code.into()), ("seat", seat.as_str().into()), ("ms", ms.into())];
         let mut line = match self.client.phase() {
-            Phase::Connecting => format!("{} - CONNECTING", self.label),
-            Phase::Greeting => format!("{} - ASKING FOR A SEAT", self.label),
-            Phase::Lobby => format!("{} {code} - SEAT {seat} - IN THE LOBBY", self.label),
+            Phase::Connecting => t.fmt(keys::STATUS_CONNECTING, &args(0)),
+            Phase::Greeting => t.fmt(keys::STATUS_GREETING, &args(0)),
+            Phase::Lobby => t.fmt(keys::STATUS_LOBBY, &args(0)),
             Phase::Playing => {
                 // The buffer's depth is what the delay is buying. Below
                 // zero the picture has run past everything that arrived -
@@ -419,15 +425,15 @@ impl<T: Transport> OnlineRound<T> {
                 // because the round is over - and a number would only
                 // say how long ago that was.
                 match self.interp.lead_ms(self.local_ms()).unwrap_or(0.0).round() as i64 {
-                    lead if lead >= 0 => format!("{} {code} - SEAT {seat} - BUFFER {lead} MS", self.label),
-                    _ => format!("{} {code} - SEAT {seat} - WAITING FOR THE ROOM", self.label),
+                    lead if lead >= 0 => t.fmt(keys::STATUS_BUFFER, &args(lead)),
+                    _ => t.fmt(keys::STATUS_WAITING, &args(0)),
                 }
             }
-            Phase::Closed(closed) => format!("{} - OFFLINE: {closed}", self.label),
+            Phase::Closed(closed) => t.fmt(keys::STATUS_OFFLINE, &[("room", room.as_str().into()), ("reason", closed.reason.as_str().into())]),
         };
         if let Some(note) = &self.note {
             line.push_str(" - ");
-            line.push_str(note);
+            line.push_str(&crate::text::fold(note));
         }
         line
     }
@@ -456,11 +462,11 @@ impl<T: Transport> OnlineRound<T> {
                     }
                     self.interp.accept(*snapshot, now);
                 }
-                ClientEvent::Refused(message) => {
+                ClientEvent::Refused(refusal) => {
                     // A refused start is askable again: the room says why
                     // (a seat that is not ready), and the reason goes away.
                     self.start_sent = false;
-                    self.note = Some(message);
+                    self.note = Some(crate::text::refusal(&refusal));
                 }
                 ClientEvent::Closed(closed) => self.note = Some(closed.reason),
                 ClientEvent::Ended { outcome } => {
@@ -500,7 +506,7 @@ impl<T: Transport> OnlineRound<T> {
                 Ok(_) => {
                     tuning::apply_pending();
                 }
-                Err(e) => self.note = Some(format!("the room's tuning was refused: {e}")),
+                Err(e) => self.note = Some(crate::text::text().fmt(crate::text::keys::NOTE_TUNING_REFUSED, &[("detail", e.to_string().into())])),
             }
         }
         match apply::welcome(welcome) {
@@ -518,7 +524,7 @@ impl<T: Transport> OnlineRound<T> {
                 self.interp.restart(&welcome.snapshot, now);
                 self.note = None;
             }
-            Err(e) => self.note = Some(e),
+            Err(e) => self.note = Some(crate::text::text().fmt(crate::text::keys::NOTE_WELCOME_REFUSED, &[("detail", e.into())])),
         }
         // A fresh welcome is a fresh round: the next one has to be asked
         // for again.
@@ -1084,7 +1090,7 @@ mod tests {
     fn a_refusal_and_a_close_are_kept_for_the_status_line() {
         let (mut room, mut round) = room_and_round();
         round.frame(&Intent::default(), 1.0 / 60.0);
-        room.say(Msg::Lobby(Lobby::Error { message: "the room is full".into() }));
+        room.say(Msg::Lobby(Lobby::Error { refusal: crate::net::wire::Refusal::RoomFull { seats: 8 } }));
         round.frame(&Intent::default(), 1.0 / 60.0);
         assert!(round.status().contains("the room is full"), "{}", round.status());
         room.link.close();

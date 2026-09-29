@@ -34,6 +34,27 @@ pub fn is_emulator() -> bool {
     n > 0 && buf[0] as u8 == b'1'
 }
 
+/// The languages this device prefers, most preferred first, for
+/// `text::choose`: the system's `persist.sys.locale` (`sl-SI`), set by
+/// the Settings app, with the build's `ro.product.locale` behind it. Both
+/// are BCP 47 tags already.
+pub fn platform_languages() -> Vec<String> {
+    ["persist.sys.locale", "ro.product.locale"]
+        .into_iter()
+        .filter_map(|name| {
+            let name = CString::new(name).ok()?;
+            let mut buf = [0 as c_char; 92]; // PROP_VALUE_MAX
+            // SAFETY: the buffer is PROP_VALUE_MAX bytes, as the API requires.
+            let n = unsafe { __system_property_get(name.as_ptr(), buf.as_mut_ptr()) };
+            (n > 0).then(|| {
+                let bytes: Vec<u8> = buf[..n as usize].iter().map(|c| *c as u8).collect();
+                String::from_utf8_lossy(&bytes).trim().to_string()
+            })
+        })
+        .filter(|tag| !tag.is_empty())
+        .collect()
+}
+
 /// One line to logcat, tag `bongbong`.
 pub fn log(prio: c_int, msg: &str) {
     let msg = CString::new(msg.replace('\0', "?")).unwrap_or_default();

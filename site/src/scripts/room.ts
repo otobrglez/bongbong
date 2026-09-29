@@ -67,6 +67,17 @@ export function installRoom(): void {
   }
   window.bbInvite = here;
 
+  // The languages this browser prefers, for the game to pick a shipped
+  // one from (src/text.rs's `choose`). `navigator.languages` is the
+  // ordered list; a browser without it has the one `language`.
+  let langs: string[] = [];
+  try {
+    langs = navigator.languages?.length ? [...navigator.languages] : navigator.language ? [navigator.language] : [];
+  } catch {
+    langs = [];
+  }
+  window.bbLang = langs.join(",");
+
   // The reconnect key a room knows this player by: the device, then the
   // tab. Two tabs are two seats; a reload of either is the same seat
   // coming back.

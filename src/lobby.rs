@@ -28,6 +28,7 @@ use crate::net::transport::Transport;
 use crate::net::wire::{RosterSeat, RoundOutcome};
 use crate::qr::Qr;
 use crate::tank::TankKind;
+use crate::text::{fold, keys, text, Key};
 use crate::Rect;
 
 /// The panel, centred in the field. Fixed rather than fitted to the
@@ -212,10 +213,11 @@ pub struct SeatRow {
     /// `P1`..`P8`, the label the tank wears on the field.
     pub slot: String,
     pub nick: String,
-    /// The chassis name, or `-` before the room has rolled one.
-    pub chassis: &'static str,
-    /// `HOST`, `READY`, `WAITING` or `AWAY`.
-    pub state: &'static str,
+    /// The chassis name in the language on screen, or `-` before the
+    /// room has rolled one.
+    pub chassis: String,
+    /// `HOST`, `READY`, `WAITING` or `AWAY`, in the language on screen.
+    pub state: String,
     pub ready: bool,
     pub you: bool,
     pub host: bool,
@@ -443,7 +445,7 @@ impl Lobby {
             Button::Confirm => match RoomCode::parse(&self.entry) {
                 Ok(code) => LobbyAction::Join { code: code.text },
                 Err(e) => {
-                    self.entry_note = Some(e.to_string());
+                    self.entry_note = Some(code_error_text(&e));
                     LobbyAction::None
                 }
             },
@@ -496,7 +498,7 @@ impl Lobby {
         let more = room.map_or(0, |r| r.seats.len().saturating_sub(LOBBY_SEAT_ROWS));
         LobbyView {
             stage,
-            title: self.title(stage, room).to_string(),
+            title: self.title(stage, room),
             sub: self.sub(stage, room),
             code,
             join_url,
@@ -510,45 +512,50 @@ impl Lobby {
         }
     }
 
-    fn title(&self, stage: Stage, room: Option<&RoomView>) -> &'static str {
-        match stage {
-            Stage::Start => "ONLINE CO-OP",
-            Stage::Code => "JOIN A ROOM",
-            Stage::Waiting => "REACHING THE ROOM",
-            Stage::Closed => "THE ROOM IS GONE",
-            Stage::Room if room.is_some_and(|r| r.is_host) => "YOUR ROOM",
-            Stage::Room => "IN THE ROOM",
-        }
+    fn title(&self, stage: Stage, room: Option<&RoomView>) -> String {
+        let key = match stage {
+            Stage::Start => keys::LOBBY_TITLE_START,
+            Stage::Code => keys::LOBBY_TITLE_CODE,
+            Stage::Waiting => keys::LOBBY_TITLE_WAITING,
+            Stage::Closed => keys::LOBBY_TITLE_CLOSED,
+            Stage::Room if room.is_some_and(|r| r.is_host) => keys::LOBBY_TITLE_HOST,
+            Stage::Room => keys::LOBBY_TITLE_GUEST,
+        };
+        text().get(key)
     }
 
     fn sub(&self, stage: Stage, room: Option<&RoomView>) -> String {
+        // A note is already in the language on screen (`OnlineRound`
+        // resolves it), or the server's own detail, shown as it came.
         if let Some(note) = room.and_then(|r| r.note.as_deref()) {
-            return note.to_string();
+            return fold(note).into_owned();
         }
+        let t = text();
         match stage {
-            Stage::Start => "Host a room and share the code, or join one.".into(),
-            Stage::Code => self.entry_note.clone().unwrap_or_else(|| "Five characters, from the code you were given.".into()),
-            Stage::Waiting => format!("{}...", self.rooms.base()),
-            Stage::Closed => "Nothing is listening any more.".into(),
+            Stage::Start => t.get(keys::LOBBY_SUB_START),
+            Stage::Code => self.entry_note.clone().unwrap_or_else(|| t.get(keys::LOBBY_SUB_CODE)),
+            Stage::Waiting => t.fmt(keys::LOBBY_SUB_WAITING, &[("host", self.rooms.base().into())]),
+            Stage::Closed => t.get(keys::LOBBY_SUB_CLOSED),
             Stage::Room if room.is_some_and(|r| r.ended.is_some()) => {
                 let room = room.expect("the guard found one");
                 let outcome = match room.ended.expect("the guard found one") {
-                    RoundOutcome::Won => "ROUND WON.",
-                    RoundOutcome::Lost => "ROUND LOST.",
+                    RoundOutcome::Won => keys::LOBBY_OUTCOME_WON,
+                    RoundOutcome::Lost => keys::LOBBY_OUTCOME_LOST,
                     // The round was cut short rather than played out.
-                    RoundOutcome::Playing => "ROUND OVER.",
+                    RoundOutcome::Playing => keys::LOBBY_OUTCOME_OVER,
                 };
-                let next = if room.is_host { "REMATCH when everyone is ready." } else { "Waiting for the host's rematch." };
-                format!("{outcome} {next}")
+                let next = if room.is_host { keys::LOBBY_REMATCH_HOST } else { keys::LOBBY_REMATCH_GUEST };
+                format!("{} {}", t.get(outcome), t.get(next))
             }
-            Stage::Room if room.is_some_and(|r| r.is_host) => "Scan the code or read it out. START when everyone is ready.".into(),
-            Stage::Room => "Waiting for the host to start the round.".into(),
+            Stage::Room if room.is_some_and(|r| r.is_host) => t.get(keys::LOBBY_SUB_HOST),
+            Stage::Room => t.get(keys::LOBBY_SUB_GUEST),
         }
     }
 
     /// The seat rows, padded out to the slots the panel draws so an empty
     /// room says how much room it has.
     fn seat_rows(&self, room: &RoomView) -> Vec<SeatRow> {
+        let t = text();
         room.seats
             .iter()
             .take(LOBBY_SEAT_ROWS)
@@ -556,15 +563,18 @@ impl Lobby {
                 let host = seat.seat == room.host_seat;
                 SeatRow {
                     seat: seat.seat,
-                    slot: format!("P{}", seat.seat + 1),
-                    nick: seat.nick.clone(),
-                    chassis: TankKind::from_row(seat.chassis as i32).map_or("-", TankKind::name),
-                    state: match (seat.connected, host, seat.ready) {
-                        (false, _, _) => "AWAY",
-                        (_, true, _) => "HOST",
-                        (_, _, true) => "READY",
-                        _ => "WAITING",
-                    },
+                    slot: t.fmt(keys::SEAT_LABEL, &[("n", (seat.seat + 1).into())]),
+                    // A nickname is anyone's text: folded here, where it
+                    // enters the picture, so the painter draws what the
+                    // font has.
+                    nick: fold(&seat.nick).into_owned(),
+                    chassis: TankKind::from_row(seat.chassis as i32).map_or_else(|| "-".to_string(), |kind| t.named("tank", kind.name())),
+                    state: t.get(match (seat.connected, host, seat.ready) {
+                        (false, _, _) => keys::SEAT_AWAY,
+                        (_, true, _) => keys::SEAT_HOST,
+                        (_, _, true) => keys::SEAT_READY,
+                        _ => keys::SEAT_WAITING,
+                    }),
                     ready: seat.ready,
                     you: Some(seat.seat) == room.seat,
                     host,
@@ -574,22 +584,33 @@ impl Lobby {
     }
 
     fn button_view(&self, button: Button, room: Option<&RoomView>) -> ButtonView {
+        let word = |key: Key| text().get(key);
         let label = match button {
-            Button::Host => "HOST A ROOM".to_string(),
-            Button::Join => "JOIN A ROOM".to_string(),
-            Button::Back => if self.entry_open && room.is_none() { "BACK" } else { "CLOSE" }.to_string(),
+            Button::Host => word(keys::LOBBY_HOST),
+            Button::Join => word(keys::LOBBY_JOIN),
+            Button::Back => word(if self.entry_open && room.is_none() { keys::LOBBY_BACK } else { keys::LOBBY_CLOSE }),
             Button::MapPrev | Button::MissionPrev => "<".to_string(),
             Button::MapNext | Button::MissionNext => ">".to_string(),
             Button::Key(i) => (CODE_ALPHABET[i as usize % CODE_ALPHABET.len()] as char).to_string(),
-            Button::Del => "DELETE".to_string(),
-            Button::Confirm => "JOIN".to_string(),
-            Button::Ready => if room.is_some_and(|r| r.ready) { "READY" } else { "I'M READY" }.to_string(),
-            Button::Start => if room.is_some_and(|r| r.ended.is_some()) { "REMATCH" } else { "START" }.to_string(),
-            Button::Leave => "LEAVE".to_string(),
-            Button::Kick(_) => "KICK".to_string(),
+            Button::Del => word(keys::LOBBY_DELETE),
+            Button::Confirm => word(keys::LOBBY_CONFIRM),
+            Button::Ready => word(if room.is_some_and(|r| r.ready) { keys::LOBBY_READY } else { keys::LOBBY_IM_READY }),
+            Button::Start => word(if room.is_some_and(|r| r.ended.is_some()) { keys::LOBBY_REMATCH } else { keys::LOBBY_START }),
+            Button::Leave => word(keys::LOBBY_LEAVE),
+            Button::Kick(_) => word(keys::LOBBY_KICK),
         };
         let accent = matches!(button, Button::Host | Button::Confirm | Button::Start | Button::Ready);
         ButtonView { button, label, enabled: self.enabled(button, room), accent }
+    }
+}
+
+/// What the code entry says about a code that is not one, in the
+/// language on screen (`net::rooms::CodeError` is the rule; this is its
+/// words).
+fn code_error_text(error: &rooms::CodeError) -> String {
+    match error {
+        rooms::CodeError::Length(n) => text().fmt(keys::CODE_ERROR_LENGTH, &[("expected", CODE_LETTERS.into()), ("got", (*n).into())]),
+        rooms::CodeError::Character(c) => text().fmt(keys::CODE_ERROR_CHARACTER, &[("char", c.to_string().into())]),
     }
 }
 
@@ -947,7 +968,7 @@ mod lobby_tests {
         let qr = view.qr.expect("the link has a QR");
         assert_eq!(qr.version(), 2, "27 characters is a version 2 code");
         assert!(qr.padded_size() as f32 * qr.scale_for(LOBBY_QR_BOX as i32) as f32 <= LOBBY_QR_BOX);
-        let states: Vec<&str> = view.seats.iter().map(|s| s.state).collect();
+        let states: Vec<&str> = view.seats.iter().map(|s| s.state.as_str()).collect();
         assert_eq!(states, vec!["HOST", "READY", "AWAY"]);
         assert_eq!(view.seats[1].nick, "ana");
         assert!(view.seats[1].you && !view.seats[0].you);

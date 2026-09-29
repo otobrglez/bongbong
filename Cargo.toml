@@ -16,6 +16,14 @@ rand = "0.10.2"
 rapier2d = "0.35.3"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1"
+# The language catalogues (src/text.rs, docs/localization-prd.md section
+# 4.1): Fluent messages with CLDR plural rules, one `.ftl` per language
+# embedded like `SHIPPED_MAPS`. Pure Rust, builds for every target
+# including wasm; `unic-langid` is the language tag the bundle is keyed
+# by. Negotiation against the platform's list is `text::negotiate`'s own
+# few lines (a tag, then its language subtag), so no second tag crate.
+fluent-bundle = "0.16"
+unic-langid = "0.9"
 # The drawing crate, behind the `render` feature (below): the simulation,
 # the probe and the tests never name it.
 sola-raylib = { version = "6.3.0", optional = true }
@@ -40,6 +48,14 @@ rustls = { version = "0.23", default-features = false, features = ["std", "tls12
 # own cmake/link step, which would treat iOS as macOS and ask for the Cocoa
 # and OpenGL frameworks; `sdl` drops its GLFW gamepad declaration. Edition
 # 2024 (resolver 3) scopes these features to iOS targets only.
+# The desktop's own language list (src/text.rs, docs/localization-prd.md
+# section 4.5): CoreFoundation on macOS, `GetUserDefaultLocaleName` on
+# Windows, `LC_ALL`/`LC_MESSAGES`/`LANG` on Linux. The web reads the
+# page's `navigator.languages`, iOS asks SDL and Android the system
+# properties, so none of them carry this crate.
+[target.'cfg(not(any(target_os = "emscripten", target_os = "ios", target_os = "android")))'.dependencies]
+sys-locale = "0.3"
+
 [target.'cfg(target_os = "ios")'.dependencies]
 sola-raylib = { version = "6.3.0", features = ["nobuild", "sdl"], optional = true }
 

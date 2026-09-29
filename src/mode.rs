@@ -497,7 +497,7 @@ impl Session {
                 seat: self.online.as_ref().and_then(AnyRound::seat),
                 // A room's round does not restart where it stands: the
                 // end screen counts down to the lobby it came from.
-                countdown_label: Some("Back to the lobby in"),
+                countdown_label: Some(crate::text::keys::ROUND_BACK_TO_LOBBY),
                 ..PlayChrome::default()
             },
             Driver::Lobby => {

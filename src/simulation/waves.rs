@@ -20,6 +20,14 @@ use crate::math::Vec2;
 use crate::ai::Ai;
 use crate::battlefield::{self, Gate};
 use crate::level::{SpawnPlan, Tier};
+
+/// The `WAVE N` banner as data: the wave about to roll in, and whether it
+/// is the round's last.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WaveBanner {
+    pub next: u32,
+    pub is_final: bool,
+}
 use crate::obstacle::Obstacle;
 use crate::tank::Tank;
 use crate::tuning::tuning;
@@ -113,13 +121,15 @@ impl Game {
         })
     }
 
-    /// The banner text for the wave about to arrive, while the breather
-    /// before it runs: `WAVE N`, or `FINAL WAVE` for the last one.
-    pub fn wave_banner(&self) -> Option<String> {
+    /// The banner for the wave about to arrive, while the breather before
+    /// it runs: which wave, and whether it is the last. The words are the
+    /// renderer's (`text::keys::WAVE_BANNER`/`WAVE_FINAL`); the
+    /// simulation names no language.
+    pub fn wave_banner(&self) -> Option<WaveBanner> {
         let SpawnPlan::Waves { waves, .. } = self.spawn_plan else { return None };
         self.wave.gap?;
         let next = self.wave.called + 1;
-        Some(if next >= waves { "FINAL WAVE".to_string() } else { format!("WAVE {next}") })
+        Some(WaveBanner { next, is_final: next >= waves })
     }
 
     /// Every wave called, the queue drained and no enemy still rolling

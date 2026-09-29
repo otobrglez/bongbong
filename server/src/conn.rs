@@ -12,7 +12,7 @@ use axum::body::Bytes;
 use axum::extract::ws::{Message, WebSocket};
 use bongbong::map::{MapFile, open_map};
 use bongbong::net::codec::{self, Msg};
-use bongbong::net::wire::Lobby;
+use bongbong::net::wire::{Lobby, Refusal};
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::{Notify, mpsc, oneshot};
 use tokio::time::Instant;
@@ -158,7 +158,7 @@ async fn handle(bytes: &[u8], conn_id: u64, hub: &Arc<Hub>, outbox: &Outbox, att
     let msg = match codec::decode(bytes) {
         Ok(msg) => msg,
         Err(e) => {
-            outbox.lobby(Lobby::Error { message: e.to_string() });
+            outbox.lobby(Lobby::Error { refusal: Refusal::BadMessage { detail: e.to_string() } });
             return;
         }
     };
@@ -170,7 +170,7 @@ async fn handle(bytes: &[u8], conn_id: u64, hub: &Arc<Hub>, outbox: &Outbox, att
         }
         Msg::Lobby(Lobby::Create { nick, device_token, map, map_toml, mission, seed }) => {
             if attached.is_some() {
-                outbox.lobby(Lobby::Error { message: "already in a room".into() });
+                outbox.lobby(Lobby::Error { refusal: Refusal::AlreadyInRoom });
                 return;
             }
             let map = match map_toml {
@@ -180,16 +180,16 @@ async fn handle(bytes: &[u8], conn_id: u64, hub: &Arc<Hub>, outbox: &Outbox, att
             let map = match map {
                 Ok(map) => map,
                 Err(e) => {
-                    outbox.lobby(Lobby::Error { message: format!("bad map: {e}") });
+                    outbox.lobby(Lobby::Error { refusal: Refusal::BadMap { detail: e } });
                     return;
                 }
             };
             let params = RoomParams { map, mission, seed };
             let room = match hub.create_room(params) {
                 Ok(room) => room,
-                Err(message) => {
-                    warn!(conn = conn_id, %message, "create refused");
-                    outbox.lobby(Lobby::Error { message });
+                Err(refusal) => {
+                    warn!(conn = conn_id, %refusal, "create refused");
+                    outbox.lobby(Lobby::Error { refusal });
                     return;
                 }
             };
@@ -198,14 +198,14 @@ async fn handle(bytes: &[u8], conn_id: u64, hub: &Arc<Hub>, outbox: &Outbox, att
         }
         Msg::Lobby(Lobby::Join { nick, device_token, code }) => {
             if attached.is_some() {
-                outbox.lobby(Lobby::Error { message: "already in a room".into() });
+                outbox.lobby(Lobby::Error { refusal: Refusal::AlreadyInRoom });
                 return;
             }
             match hub.find(&code) {
                 Ok(room) => join(room, nick, device_token, conn_id, outbox, attached).await,
-                Err(message) => {
-                    info!(conn = conn_id, code, %message, "join refused");
-                    outbox.lobby(Lobby::Error { message });
+                Err(refusal) => {
+                    info!(conn = conn_id, code, %refusal, "join refused");
+                    outbox.lobby(Lobby::Error { refusal });
                 }
             }
         }
@@ -215,12 +215,12 @@ async fn handle(bytes: &[u8], conn_id: u64, hub: &Arc<Hub>, outbox: &Outbox, att
                     let _ = a.room.commands.send(Command::Lobby { conn_id, msg }).await;
                 }
                 None => {
-                    outbox.lobby(Lobby::Error { message: "not in a room".into() });
+                    outbox.lobby(Lobby::Error { refusal: Refusal::NotInRoom });
                 }
             }
         }
         Msg::Lobby(_) | Msg::Snapshot(_) | Msg::Delta(_) | Msg::Welcome(_) => {
-            outbox.lobby(Lobby::Error { message: "that message is the server's to send".into() });
+            outbox.lobby(Lobby::Error { refusal: Refusal::NotYours });
         }
     }
 }
@@ -237,19 +237,19 @@ async fn join(
     let (reply, answer) = oneshot::channel();
     let link = ConnLink { id: conn_id, outbox: outbox.clone() };
     if room.commands.send(Command::Join { nick, device_token, conn: link, reply }).await.is_err() {
-        outbox.lobby(Lobby::Error { message: format!("room {} is gone", room.code) });
+        outbox.lobby(Lobby::Error { refusal: Refusal::RoomGone { code: room.code.clone() } });
         return;
     }
     match answer.await {
         Ok(Ok(joined)) => {
             *attached = Some(Attached { room, mailbox: joined.mailbox });
         }
-        Ok(Err(message)) => {
-            info!(conn = conn_id, code = room.code, %message, "seat refused");
-            outbox.lobby(Lobby::Error { message });
+        Ok(Err(refusal)) => {
+            info!(conn = conn_id, code = room.code, %refusal, "seat refused");
+            outbox.lobby(Lobby::Error { refusal });
         }
         Err(_) => {
-            outbox.lobby(Lobby::Error { message: format!("room {} is gone", room.code) });
+            outbox.lobby(Lobby::Error { refusal: Refusal::RoomGone { code: room.code.clone() } });
         }
     }
 }

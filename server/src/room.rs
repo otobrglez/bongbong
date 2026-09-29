@@ -41,7 +41,7 @@ use bongbong::net::codec::{self, Msg};
 use bongbong::net::delta::delta;
 use bongbong::net::encode;
 use bongbong::net::events::WireEvent;
-use bongbong::net::wire::{Lobby, RosterSeat, Seat as WireSeat, Snapshot, Welcome};
+use bongbong::net::wire::{Lobby, Refusal, RosterSeat, Seat as WireSeat, Snapshot, Welcome};
 use bongbong::net::{MAX_SEATS, PROTOCOL_VERSION};
 use bongbong::simulation::{Game, Input, Outcome, PlayerCount};
 use bongbong::tuning::{self, Tuning, tuning};
@@ -396,7 +396,7 @@ pub struct Joined {
 
 /// What a connection task asks a room.
 pub enum Command {
-    Join { nick: String, device_token: String, conn: ConnLink, reply: oneshot::Sender<Result<Joined, String>> },
+    Join { nick: String, device_token: String, conn: ConnLink, reply: oneshot::Sender<Result<Joined, Refusal>> },
     Lobby { conn_id: u64, msg: Lobby },
     Disconnected { conn_id: u64 },
     /// A dev tool's call (`devserver`, feature `dev-tools`), answered
@@ -565,7 +565,7 @@ pub async fn run(hub: Arc<Hub>, code: String, params: RoomParams, commands: mpsc
             }
         }
     }
-    room.close_all(if room.life.draining() { "this server is restarting; make a new room in a moment" } else { "the room closed" });
+    room.close_all(if room.life.draining() { Refusal::ServerRestarting } else { Refusal::RoomClosed });
     info!(code = room.code, phase = room.life.phase().name(), "room dropped");
     room.hub.remove(&room.code);
 }
@@ -585,8 +585,8 @@ impl Room {
             }
             Command::Lobby { conn_id, msg } => {
                 let Some(seat) = self.seat_of_conn(conn_id) else { return };
-                if let Err(message) = self.lobby(seat, msg) {
-                    self.lobby_to(seat, Lobby::Error { message });
+                if let Err(refusal) = self.lobby(seat, msg) {
+                    self.lobby_to(seat, Lobby::Error { refusal });
                 }
             }
             Command::Disconnected { conn_id } => self.disconnected(conn_id),
@@ -622,17 +622,17 @@ impl Room {
         self.seats.iter().filter(|s| s.is_some()).count()
     }
 
-    fn join(&mut self, nick: String, device_token: String, conn: ConnLink) -> Result<Joined, String> {
+    fn join(&mut self, nick: String, device_token: String, conn: ConnLink) -> Result<Joined, Refusal> {
         let now = Instant::now();
         if self.kicked.contains(&device_token) {
-            return Err("the host removed you from this room".into());
+            return Err(Refusal::Kicked);
         }
         let existing = self.seats.iter().position(|s| s.as_ref().is_some_and(|s| s.device_token == device_token));
         let seat = match existing {
             Some(i) => {
                 let seat = self.seats[i].as_mut().expect("found by position");
                 if let Some(old) = seat.conn.take() {
-                    old.outbox.lobby(Lobby::Error { message: "reconnected from another socket".into() });
+                    old.outbox.lobby(Lobby::Error { refusal: Refusal::Reconnected });
                     old.outbox.close();
                 } else {
                     self.life.connect(now);
@@ -647,13 +647,13 @@ impl Room {
             }
             None => {
                 if self.life.phase() != Phase::Waiting {
-                    return Err("the round has started; this room takes no new seats".into());
+                    return Err(Refusal::AlreadyStarted);
                 }
                 // A waiting room's seats are dense - `remove_seat` and
                 // `expire_graces` compact them and only a waiting room
                 // takes a join - so this caps the seat vector too.
                 if self.occupied() >= SEATS_PLAYABLE {
-                    return Err(format!("the room is full: {SEATS_PLAYABLE} seats"));
+                    return Err(Refusal::RoomFull { seats: SEATS_PLAYABLE as u8 });
                 }
                 let nick = clean_nick(&nick);
                 let i = self.seats.len();
@@ -710,7 +710,7 @@ impl Room {
         self.refresh_stats();
     }
 
-    fn lobby(&mut self, seat: u8, msg: Lobby) -> Result<(), String> {
+    fn lobby(&mut self, seat: u8, msg: Lobby) -> Result<(), Refusal> {
         match msg {
             Lobby::Ready => {
                 if let Some(s) = self.seat_mut(seat) {
@@ -721,19 +721,19 @@ impl Room {
             }
             Lobby::Start => self.start(seat),
             Lobby::Leave => {
-                self.remove_seat(seat, "you left the room");
+                self.remove_seat(seat, Refusal::LeftRoom);
                 Ok(())
             }
             Lobby::Kick { seat: target } => {
                 if self.host() != Some(seat) {
-                    return Err("only the host kicks".into());
+                    return Err(Refusal::OnlyHostKicks);
                 }
                 if target == seat {
-                    return Err("the host cannot kick themself".into());
+                    return Err(Refusal::KickSelf);
                 }
-                let token = self.seat(target).map(|s| s.device_token.clone()).ok_or("no such seat")?;
+                let token = self.seat(target).map(|s| s.device_token.clone()).ok_or(Refusal::NoSuchSeat)?;
                 self.kicked.insert(token);
-                self.remove_seat(target, "the host removed you from the room");
+                self.remove_seat(target, Refusal::Kicked);
                 Ok(())
             }
             Lobby::Chat { text } => {
@@ -741,21 +741,21 @@ impl Room {
                 self.lobby_to_all(Lobby::Said { seat, text });
                 Ok(())
             }
-            _ => Err("that message is the server's to send".into()),
+            _ => Err(Refusal::NotYours),
         }
     }
 
     /// Free `seat`: told why, closed, and in a waiting room the seats
     /// above it move down (a fresh `Welcome` at start names the final
     /// number).
-    fn remove_seat(&mut self, seat: u8, why: &str) {
+    fn remove_seat(&mut self, seat: u8, why: Refusal) {
         let Some(s) = self.seats.get_mut(seat as usize).and_then(Option::take) else { return };
         if let Some(conn) = &s.conn {
-            conn.outbox.lobby(Lobby::Error { message: why.into() });
+            conn.outbox.lobby(Lobby::Error { refusal: why.clone() });
             conn.outbox.close();
             self.life.disconnect(Instant::now());
         }
-        info!(code = self.code, seat, nick = s.nick, why, "seat freed");
+        info!(code = self.code, seat, nick = s.nick, why = %why, "seat freed");
         if self.life.phase() == Phase::Waiting {
             self.seats.retain(Option::is_some);
         }
@@ -778,24 +778,24 @@ impl Room {
             .collect();
         // Highest first, so the compaction never moves a seat still to go.
         for seat in expired.into_iter().rev() {
-            self.remove_seat(seat, "grace over");
+            self.remove_seat(seat, Refusal::GraceOver);
         }
     }
 
-    fn start(&mut self, by: u8) -> Result<(), String> {
+    fn start(&mut self, by: u8) -> Result<(), Refusal> {
         if self.host() != Some(by) {
-            return Err("only the host starts".into());
+            return Err(Refusal::OnlyHostStarts);
         }
         match self.life.phase() {
             Phase::Waiting => {}
             Phase::Ended if self.hub.draining() => {
-                return Err("this server is draining; make a new room for the rematch".into());
+                return Err(Refusal::ServerDraining);
             }
             Phase::Ended => {}
-            Phase::Playing | Phase::Paused => return Err("the round is in progress".into()),
+            Phase::Playing | Phase::Paused => return Err(Refusal::InProgress),
         }
         if let Some(not_ready) = self.seats.iter().flatten().find(|s| !s.ready && s.device_token != self.seat(by).expect("host").device_token) {
-            return Err(format!("{} is not ready", not_ready.nick));
+            return Err(Refusal::NotReady { nick: not_ready.nick.clone() });
         }
         if self.life.phase() == Phase::Waiting {
             self.seats.retain(Option::is_some);
@@ -896,10 +896,10 @@ impl Room {
         due
     }
 
-    fn close_all(&mut self, why: &str) {
+    fn close_all(&mut self, why: Refusal) {
         for seat in self.seats.iter_mut().flatten() {
             if let Some(conn) = seat.conn.take() {
-                conn.outbox.lobby(Lobby::Error { message: why.into() });
+                conn.outbox.lobby(Lobby::Error { refusal: why.clone() });
                 conn.outbox.close();
             }
         }

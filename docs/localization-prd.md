@@ -1,8 +1,9 @@
 # PRD: bongbong in more than one language
 
-Status: agreed with the owner 2026-09-29 (the decisions are in section 8),
-surveyed against `feature/coop-ng-2`. Nothing is built. Three smaller
-questions in section 8 stay open with a recommendation each.
+Status: agreed with the owner 2026-09-29 (the decisions are in section 8)
+and built the same day on this branch - phases 1 and 2; section 8b lists
+where the build departs from the text. Three smaller questions in
+section 8 stay open with a recommendation each.
 
 Contents
 
@@ -14,6 +15,7 @@ Contents
 6. Phased plan
 7. Risks, mitigations, stop conditions
 8. Decisions
+8b. As built
 9. Parked: a font for other scripts
 10. References
 
@@ -525,6 +527,55 @@ Open, each with the recommendation the text above proceeds under:
 7. **Translation source**: machine-drafted and speaker-reviewed (recommended -
    for Slovenian the reviewer is the author), or speaker-written from the
    start.
+
+## 8b. As built (2026-09-29)
+
+Phases 1 and 2 are in the branch this document ships on. What the build
+does that the text above does not say, or says differently:
+
+- **`src/text.rs` holds everything**: the catalogue, `fold`, `width`,
+  `fit`, the negotiation and the platform hooks. There is no
+  `render/text.rs`: every painter measures with `text::width` and draws
+  with raylib's `draw_text` as before, so the raylib half needed nothing.
+- **Keys are a macro, not a generator.** `keys! { LOBBY_HOST = "lobby-host"; ... }`
+  in `text.rs` expands to the constants and `keys::ALL`, and
+  `the_keys_and_the_english_file_name_the_same_messages` holds the list
+  and `lang/en.ftl` together both ways. A data family (`tool-*`, `tank-*`,
+  `mission-*`, `theme-*`, `spawn-*`, `tier-*`, `status-label-*`) is looked
+  up by `Catalogue::named` and checked against the code's own lists.
+- **No `fluent-langneg`.** Its current release keys on a different tag
+  crate than `fluent-bundle`; `text::shipped`/`negotiate` are the few
+  lines needed (an exact tag, then the language subtag), so the
+  dependency is `fluent-bundle` and `unic-langid` plus `sys-locale` on
+  the desktop. `FluentBundle::new_concurrent` with isolation marks off.
+- **Width is exact.** The default font's 224 glyph widths were copied from
+  `rtext.c` and `width` applies `DrawText`'s scale and spacing, so the
+  budgets are pixels and the pins in `render::hud::bar_tests` and
+  `editor::render::bar_tests` measure the real string.
+- **The refusal codes** are `net::wire::Refusal`, twenty-five variants
+  with a `Display` in English for the server's logs and tests, carried
+  in `Lobby::Error { refusal }`; `text::refusal` is the client's words.
+  The client's own close reasons (`Closed::reason`) stay strings: they
+  name addresses and socket errors and are shown as the detail they are,
+  under the localized `OFFLINE` label. `PROTOCOL_VERSION` is 7.
+- **The status line's label** is `OnlineRound::new`'s `label` looked up
+  as `status-label-<label>`: the game's `ROOM` is a word, the rig's `RIG`
+  falls back to itself.
+- **Android** reads `persist.sys.locale` and `ro.product.locale` through
+  the `__system_property_get` the entry already declares rather than
+  `AConfiguration_getLanguage`, which needs the activity handle raylib
+  does not export.
+- **The dev server's `lang` tool** reports and switches the language;
+  `status.language` carries it. `just lang-shots` is not built: the review
+  flow is `lang {tag: "sl"}` then `screenshot` through `bbmcp`, by hand.
+- **Slovenian** (`lang/sl.ftl`) is the author's to review. Where a
+  Slovenian word did not fit its budget the shorter one was chosen
+  (`TEMPO` for `SPEED` in the 38 px gauge label, `VEN` for the bar's
+  `LEAVE` and the `KICK` button, `RAZRED OD`/`RAZRED DO` for the tier
+  rows); `UNDO`/`REDO` and `PING`/`MS` are left as they are. The editor's
+  `FILE` reads `MENI` and its `MAP` button `IGRA`.
+- **The site's own strings** (phase 3) are not touched; the page
+  publishes `window.bbLang` and that is all it does for now.
 
 ## 9. Parked: a font for other scripts
 

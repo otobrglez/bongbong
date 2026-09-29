@@ -730,9 +730,10 @@ pub enum Lobby {
     Kick { seat: u8 },
     Chat { text: String },
 
-    /// The room refused or could not do what was asked; the socket stays
-    /// open unless the message says otherwise.
-    Error { message: String },
+    /// The room refused or could not do what was asked, as a code the
+    /// client puts into words in its own language (`text::refusal`); the
+    /// socket stays open unless the message says otherwise.
+    Error { refusal: Refusal },
     /// The answer to `Create`: the code to share. A `Welcome` follows.
     RoomCreated { code: String },
     /// Every seat of the room, sent to everyone whenever a seat joins,
@@ -750,9 +751,107 @@ pub enum Lobby {
     Said { seat: u8, text: String },
 }
 
+/// Why a room or the server refused, as a code rather than a sentence
+/// (docs/localization-prd.md section 4.4): the server speaks no language,
+/// and the client renders each in its own. `detail` fields carry the
+/// server's own text where it has some - a parse error, a malformed code -
+/// and are shown as they came; they are for the developer, not the player.
+/// `Display` is the English reading, for the server's logs and tests.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Refusal {
+    /// A `Create` or `Join` from a socket that already has a seat.
+    AlreadyInRoom,
+    /// A room message from a socket with no seat.
+    NotInRoom,
+    /// A message only the server sends.
+    NotYours,
+    /// Bytes that did not decode as a message.
+    BadMessage { detail: String },
+    /// A `Create` whose map did not parse or is unknown.
+    BadMap { detail: String },
+    /// A `Join` whose code is not the shape of a room code.
+    BadCode { detail: String },
+    /// A `Join` naming a code no room has.
+    NoSuchRoom { code: String },
+    /// The room a socket named has closed under it.
+    RoomGone { code: String },
+    /// The server is draining for a restart: no new rooms or rematches.
+    ServerDraining,
+    /// The server holds as many rooms as it will.
+    ServerFull { rooms: u32 },
+    /// Every seat is taken.
+    RoomFull { seats: u8 },
+    /// The round is on, and a running round takes no new seats.
+    AlreadyStarted,
+    /// The host removed this seat.
+    Kicked,
+    /// The same device reclaimed the seat from another socket.
+    Reconnected,
+    /// Away past the seat's grace, and the seat was freed.
+    GraceOver,
+    /// This socket asked to leave; the seat is gone.
+    LeftRoom,
+    OnlyHostStarts,
+    OnlyHostKicks,
+    KickSelf,
+    /// A kick of a seat the room has not got.
+    NoSuchSeat,
+    /// A `Start` while the round runs.
+    InProgress,
+    /// A `Start` while `nick` has not readied.
+    NotReady { nick: String },
+    /// The server is restarting and the room with it.
+    ServerRestarting,
+    /// The room closed for good.
+    RoomClosed,
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Refusal::AlreadyInRoom => f.write_str("already in a room"),
+            Refusal::NotInRoom => f.write_str("not in a room"),
+            Refusal::NotYours => f.write_str("that message is the server's to send"),
+            Refusal::BadMessage { detail } => f.write_str(detail),
+            Refusal::BadMap { detail } => write!(f, "bad map: {detail}"),
+            Refusal::BadCode { detail } => f.write_str(detail),
+            Refusal::NoSuchRoom { code } => write!(f, "no room {code} here"),
+            Refusal::RoomGone { code } => write!(f, "room {code} is gone"),
+            Refusal::ServerDraining => f.write_str("this server is draining; try again in a moment"),
+            Refusal::ServerFull { rooms } => write!(f, "this server is full ({rooms} rooms)"),
+            Refusal::RoomFull { seats } => write!(f, "the room is full: {seats} seats"),
+            Refusal::AlreadyStarted => f.write_str("the round has started; this room takes no new seats"),
+            Refusal::Kicked => f.write_str("the host removed you from the room"),
+            Refusal::Reconnected => f.write_str("reconnected from another socket"),
+            Refusal::GraceOver => f.write_str("grace over"),
+            Refusal::LeftRoom => f.write_str("you left the room"),
+            Refusal::OnlyHostStarts => f.write_str("only the host starts"),
+            Refusal::OnlyHostKicks => f.write_str("only the host kicks"),
+            Refusal::KickSelf => f.write_str("the host cannot kick themself"),
+            Refusal::NoSuchSeat => f.write_str("no such seat"),
+            Refusal::InProgress => f.write_str("the round is in progress"),
+            Refusal::NotReady { nick } => write!(f, "{nick} is not ready"),
+            Refusal::ServerRestarting => f.write_str("this server is restarting; make a new room in a moment"),
+            Refusal::RoomClosed => f.write_str("the room closed"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A refusal is JSON the lobby channel carries, its arguments with it.
+    #[test]
+    fn a_refusal_round_trips_as_lobby_json() {
+        for refusal in [Refusal::RoomFull { seats: 8 }, Refusal::NotReady { nick: "ana".into() }, Refusal::Kicked, Refusal::BadCode { detail: "x".into() }] {
+            let json = serde_json::to_string(&Lobby::Error { refusal: refusal.clone() }).expect("encodes");
+            let back: Lobby = serde_json::from_str(&json).expect("decodes");
+            assert_eq!(back, Lobby::Error { refusal });
+        }
+        assert_eq!(Refusal::RoomFull { seats: 8 }.to_string(), "the room is full: 8 seats");
+    }
 
     #[test]
     fn position_round_trip_stays_within_a_quarter_pixel() {
@@ -947,8 +1046,8 @@ mod tests {
         assert_eq!(json, r#"{"type":"ended","outcome":"lost"}"#);
         assert_eq!(serde_json::from_str::<Lobby>(&json).unwrap(), ended);
         assert_eq!(
-            serde_json::to_string(&Lobby::Error { message: "full".into() }).unwrap(),
-            r#"{"type":"error","message":"full"}"#
+            serde_json::to_string(&Lobby::Error { refusal: Refusal::RoomFull { seats: 8 } }).unwrap(),
+            r#"{"type":"error","refusal":{"kind":"room_full","seats":8}}"#
         );
     }
 }

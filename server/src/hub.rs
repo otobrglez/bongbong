@@ -5,6 +5,7 @@
 //! Nothing here touches a `Game`; the hub only creates, finds and forgets
 //! rooms.
 
+use bongbong::net::wire::Refusal;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -88,13 +89,13 @@ impl Hub {
 
     /// Open a room and spawn its task; `Err` names why not (draining, or
     /// the server is full).
-    pub fn create_room(self: &Arc<Self>, params: RoomParams) -> Result<RoomHandle, String> {
+    pub fn create_room(self: &Arc<Self>, params: RoomParams) -> Result<RoomHandle, Refusal> {
         if self.draining() {
-            return Err("this server is draining; try again in a moment".into());
+            return Err(Refusal::ServerDraining);
         }
         let mut rooms = self.rooms.lock().expect("rooms poisoned");
         if rooms.len() >= self.max_rooms {
-            return Err(format!("this server is full ({} rooms)", self.max_rooms));
+            return Err(Refusal::ServerFull { rooms: self.max_rooms as u32 });
         }
         let mut rng = rand::rng();
         let code = loop {
@@ -114,14 +115,14 @@ impl Hub {
     }
 
     /// The room `code` names, once the code is a code at all.
-    pub fn find(&self, code: &str) -> Result<RoomHandle, String> {
-        let code = code::check(code).map_err(|e| e.to_string())?;
+    pub fn find(&self, code: &str) -> Result<RoomHandle, Refusal> {
+        let code = code::check(code).map_err(|e| Refusal::BadCode { detail: e.to_string() })?;
         self.rooms
             .lock()
             .expect("rooms poisoned")
             .get(&code)
             .cloned()
-            .ok_or_else(|| format!("no room {code} here"))
+            .ok_or_else(|| Refusal::NoSuchRoom { code })
     }
 
     /// The room task is done with `code`.
