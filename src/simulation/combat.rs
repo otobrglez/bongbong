@@ -154,9 +154,13 @@ impl Game {
                 };
                 if survived {
                     // A player carries no `Ai`, so this is a no-op for one.
+                    let tower = self.tower_by_owner(shooter);
                     let mut q = self.world.query_one::<&mut Ai>(entity);
                     if let Ok(ai) = q.get() {
-                        ai.notify_hit();
+                        match tower {
+                            Some(at) => ai.notify_tower_hit(at),
+                            None => ai.notify_hit(),
+                        }
                     }
                 }
             }

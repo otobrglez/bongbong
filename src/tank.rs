@@ -1380,6 +1380,36 @@ pub fn draw_tank(c: &mut impl Canvas, tank: &Tank) {
     );
 }
 
+/// A tank coated in ooze from a bio slush tower
+/// (docs/defence-towers-prd.md section 12): hull and turret again, washed
+/// in the ooze's colour, with a few blobs stuck on; the wash fades out over
+/// the coat's last half second.
+pub fn draw_tank_slime(c: &mut impl Canvas, tank: &Tank, time: f32) {
+    if !tank.is_slimed() || tank.is_wreck() {
+        return;
+    }
+    let fade = (tank.slime_timer / 0.5).clamp(0.0, 1.0);
+    let size = tank.size();
+    let dest = Rectangle::new(tank.position.x, tank.position.y, size, size);
+    let origin = draw_pivot(size);
+    let wash = |col: Color, a: f32| Color::new(col.r, col.g, col.b, (a * fade) as u8);
+    c.blit(Sheet::Tanks, source_rec(tank.sheet_row(), tank.hull_col()), dest, origin, tank.visual_rotation, wash(crate::tower::OOZE_MD, 120.0));
+    c.blit(Sheet::Tanks, source_rec(tank.sheet_row(), tank.turret_col()), dest, origin, tank.turret_visual_rotation, wash(crate::tower::OOZE_LT, 90.0));
+    let (center, half) = tank.hull_bbox_world();
+    let seed = crate::blast::seed_at(Position::new(tank.owner_slot() as f32 * 32.0, 0.0), 61);
+    for k in 0..7u32 {
+        let h = seed.rotate_left(k * 5) ^ k.wrapping_mul(0x9e37_79b9);
+        let dx = ((h % 1000) as f32 / 1000.0 - 0.5) * 2.0 * half.x * 0.8;
+        // Drips run down the hull on a slow clock.
+        let run = ((time * 0.7 + (h >> 12) as f32 / 1000.0).fract() * 6.0).floor() * 2.0 * (k % 2) as f32;
+        let dy = (((h >> 20) % 1000) as f32 / 1000.0 - 0.5) * 2.0 * half.y * 0.8 + run;
+        let x = ((center.x + dx) / 2.0).round() as i32 * 2;
+        let y = ((center.y + dy) / 2.0).round() as i32 * 2;
+        let col = if k % 3 == 0 { crate::tower::OOZE_LT } else { crate::tower::OOZE_MD };
+        c.fill_rect(x, y, 2 + 2 * (k % 2) as i32, 2, wash(col, 230.0));
+    }
+}
+
 // Puny Palette entries (tools/punypalette.py) the health gauge draws with -
 // literals rather than a sheet sample, like `fx.rs`'s particle tints, since
 // a ring is drawn, not blitted.

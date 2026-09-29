@@ -385,8 +385,9 @@ fn cell_hash(x: i32, y: i32, salt: u32) -> u32 {
 /// dries.
 pub fn draw_puddle(c: &mut impl Canvas, cell: (i32, i32), time: f32, fade: f32) {
     let size = crate::OBSTACLE_GRID_SIZE;
-    let x0 = cell.0 as f32 * size;
-    let y0 = cell.1 as f32 * size;
+    // A map cell is centred on its multiple of the grid size.
+    let x0 = cell.0 as f32 * size - size / 2.0;
+    let y0 = cell.1 as f32 * size - size / 2.0;
     let a = (230.0 * fade.clamp(0.0, 1.0)) as u8;
     if a == 0 {
         return;

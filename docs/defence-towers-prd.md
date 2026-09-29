@@ -470,11 +470,13 @@ name, 48 px for the short). Proposed short names: `tesla`, `e.tsl`, `gun`,
 `e.gun`, `bio`, `e.bio`. The dev server's `builder_tool` description and
 docs/game-editor-fusion.md list the tool names and need the six added.
 
-**Linter.** Towers are obstacles, so connectivity already counts them. New:
-`tower-in-gate-lane` (error: a tower on a gate's roll-in lane), `tower-at-start`
-(warning: an enemy tower whose reach covers a seat's start cell - the round
-would open under fire), `tower-no-reach` (info: a tower whose reach covers no
-playfield cell).
+**Linter.** Towers are obstacles, so connectivity already counts them, and
+a tower on a gate's roll-in lane already fails `gate-blocked` (the lane
+cell is solid), so it needs no lint of its own. New: `tower-at-start`
+(warning: an enemy tower whose reach covers a seat's start - the round
+would open under fire), `tower-no-reach` (info: a tower whose reach covers
+no playfield cell, for the bio slush none beyond its minimum range) and
+`too-many-towers` (info: more than six on one side).
 
 **Fixtures.** `maps/test/towers.toml` - all three kinds, both sides, a tesla
 beside the frog, a bio tower covering a corridor with a stream nearby -
@@ -694,7 +696,7 @@ A new `group towers` in `tuning.rs`:
 Plus: map round-trip of all three kinds with and without `side`; the editor's
 `TOOLS` count, the dropdown-fit test for PROP and GROUND and
 `every_tool_has_a_unique_name_that_parses_back`; `maplint` fixtures for the
-three new lints; `maps/test/towers.toml` in `just probe-fixtures`; the
+new lints; `maps/test/towers.toml` in `just probe-fixtures`; the
 thumbnail hashes if a shipped map gains towers; `just check-sheets` with the
 ooze exemption; and in phase 6 the `apply.rs` round-trip tests with towers,
 globs and puddles on the map and the `net` event-count test.

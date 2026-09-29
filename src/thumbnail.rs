@@ -166,12 +166,13 @@ mod tests {
     /// shows - re-baseline consciously after a deliberate art, map or
     /// tuning change, never to go green.
     #[cfg(feature = "render")]
-    const PINNED: [(&str, u64); 5] = [
+    const PINNED: [(&str, u64); 6] = [
         ("default", 0x0144_1552_709b_6595),
         ("default-desert", 0x84de_37cf_aa6e_1aae),
         ("hunt-basic", 0xe569_2a10_47fe_b1a8),
         ("waves-basic", 0x6e02_7f87_d416_2e96),
         ("portals", 0xe2b6_ae87_295e_ec97),
+        ("towers", 0x9c96_8b5f_cb1a_f124),
     ];
 
     /// Decoding the sheets is raylib's job, so this and the next test run

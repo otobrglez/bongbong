@@ -41,6 +41,8 @@ mod lagcomp_tests;
 mod props_tests;
 #[cfg(test)]
 mod seat_tests;
+#[cfg(test)]
+mod tower_tests;
 mod waves;
 mod weapons;
 
@@ -1139,7 +1141,7 @@ impl Game {
         // its faces are exposed. Only ever recomputed again on destruction.
         self.refresh_edge_masks();
         // The towers' weapons, one per tower tile. No RNG.
-        self.build_towers();
+        self.build_towers(width, height);
         // Tall grass: whole cells from the map, each scattering a handful
         // of tufts. Hashed from position, so this draws no round RNG.
         self.grass_cells = map_spawn.grass_cells.clone();
@@ -2776,6 +2778,9 @@ impl Game {
         let breach_pad = tuning().shell_hit_half_extent;
         let breach_reach_extra = tuning().enemy_breach_reach_px;
 
+        // Towers an enemy may hold a grudge against (`Ai::notify_tower_hit`).
+        let standing_towers = if self.towers.is_empty() { Vec::new() } else { self.standing_towers() };
+
         // --- collect pass: perception, `think`, aim and fire, exactly as
         // before. Only the impulse is deferred. ---
         let mut pending: Vec<Pending> = Vec::new();
@@ -2788,6 +2793,13 @@ impl Game {
                     .map(|(material, burning)| WallAhead { material, burning })
             });
             let engage_target = self.last_engage.target(entity);
+            if let Some(at) = ai.grudge_target() {
+                let sight = standing_towers
+                    .iter()
+                    .find(|&&(p, _)| p == at)
+                    .map(|&(_, tile)| f.terrain.line_of_sight_from(tile, tank.position, at));
+                ai.set_grudge_sight(sight);
+            }
             let (mut target, mut hunting) = target_of(ai);
             // A hunter that cannot route to the frog and holds no slot on
             // its ring (every slot rejected: off the map, unreachable from
@@ -3808,6 +3820,14 @@ impl Game {
             let standing: Vec<Position> =
                 self.world.query::<(&Tank, &Ai)>().iter().filter(|(tank, _)| !tank.is_wreck()).map(|(tank, _)| tank.position).collect();
             grid.surcharge(standing.into_iter(), t.route_crowd_cost as u32);
+        }
+        // The player's towers and the ooze on the ground (docs/defence-
+        // towers-prd.md section 9): cells an enemy would rather go round.
+        if !self.towers.is_empty() {
+            grid.surcharge(self.player_tower_reach(width, height).into_iter(), t.route_tower_cost as u32);
+        }
+        if !self.ooze.is_empty() {
+            grid.surcharge(self.ooze_route_cells().into_iter(), t.bio_puddle_path_cost as u32);
         }
         grid.label();
         for &(pos, _) in &players {
@@ -6628,7 +6648,7 @@ cells."30,20" = { kind = "frog" }
         let slot = map::cell_to_world(11, 10);
         let (mut with_gate, mut shield_only) = (SmallRng::seed_from_u64(99), SmallRng::seed_from_u64(99));
         let (mut wa, mut wb) = (hecs::World::new(), hecs::World::new());
-        maybe_spawn_health_slot_bonuses(&mut wa, &map, slot, W, H, false, &mut with_gate);
+        maybe_spawn_health_slot_bonuses(&mut wa, &map, slot, W, H, BonusGates::default(), &mut with_gate);
         let chance = tuning().shield_near_health_chance;
         maybe_spawn_bonus(&mut wb, &map, slot, PickupKind::Shield, chance, W, H, &mut shield_only);
         assert_eq!(

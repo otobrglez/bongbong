@@ -587,6 +587,7 @@ pub const SHIPPED_MAPS: &[(&str, &str)] = &[
     ("hunt-basic", include_str!("../maps/missions/hunt-basic.toml")),
     ("waves-basic", include_str!("../maps/missions/waves-basic.toml")),
     ("portals", include_str!("../maps/portals.toml")),
+    ("towers", include_str!("../maps/towers.toml")),
 ];
 
 /// Whether this build can write a map to disk: native yes; web and iOS no

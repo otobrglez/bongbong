@@ -900,8 +900,10 @@ tunables! {
         tower_pack_near_health_chance: f32 = 0.25 in 0.0 ..= 1.0;
         /// Route surcharge on every cell a live player tower reaches, so
         /// enemies come round its reach when there is another way; 0 turns
-        /// it off.
-        route_tower_cost: usize = 4 in 0 ..= 64;
+        /// it off. Kept low on purpose: a gun tower's reach is a disc eight
+        /// cells across, and a steep price on all of it sends every enemy
+        /// down the same cheapest seam, where they pile up.
+        route_tower_cost: usize = 2 in 0 ..= 64;
         /// Seconds an enemy a tower hit goes after that tower while no
         /// player is within its attack range.
         enemy_tower_grudge_seconds: f32 = 4.0 in 0.0 ..= 30.0;

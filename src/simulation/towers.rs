@@ -87,13 +87,22 @@ fn cell_frame_hash(cell: (i32, i32), frame: u64, salt: u32) -> u32 {
 impl Game {
     /// One `Tower` per tower tile `spawn_from_map` placed, keyed by its
     /// cell; the tile's variant is its side. No RNG.
-    pub(super) fn build_towers(&mut self) {
+    /// A turning tower starts aimed at the middle of the field, where the
+    /// fight will come from, rather than straight up.
+    pub(super) fn build_towers(&mut self, width: f32, height: f32) {
+        let middle = Position::new(width * 0.5, height * 0.5);
         self.towers = self
             .world
             .query::<(Entity, &Obstacle)>()
             .iter()
             .filter_map(|(e, o)| {
-                TowerKind::from_material(o.material).map(|kind| (o.cell(), Tower::new(kind, side_of_variant(o.variant), e, o.position)))
+                TowerKind::from_material(o.material).map(|kind| {
+                    let mut tower = Tower::new(kind, side_of_variant(o.variant), e, o.position);
+                    if kind.turns() && o.position.distance_to(middle) > 1.0 {
+                        tower.heading = heading_to(o.position, middle);
+                    }
+                    (o.cell(), tower)
+                })
             })
             .collect();
     }
@@ -413,13 +422,16 @@ impl Game {
             if glob.owner.same_side(c.owner) || box_distance(at, c.hull) > t.bio_splash_radius {
                 continue;
             }
-            self.coat(f, c.entity, t.bio_splash_damage, true);
+            self.coat(f, c.entity, t.bio_splash_damage, Some(glob.owner));
         }
     }
 
     /// Coat `entity` in ooze and deal it `damage` - a splash's, or a
-    /// spill's. `hit` marks it hit and alerts an enemy, as a shot would.
-    fn coat(&mut self, f: &mut Frame, entity: Entity, damage: f32, hit: bool) {
+    /// puddle's. A coat `by` a shooter marks it hit and alerts an enemy, as
+    /// a shot would - and one by a standing tower gives it a grudge.
+    fn coat(&mut self, f: &mut Frame, entity: Entity, damage: f32, by: Option<Owner>) {
+        let hit = by.is_some();
+        let tower = by.and_then(|owner| self.tower_by_owner(owner));
         let slime = tuning().bio_slime_seconds;
         let (killed, fresh, slot, pos, owner) = {
             let mut q = self.world.query_one::<&mut Tank>(entity);
@@ -443,7 +455,10 @@ impl Game {
         if killed {
             f.kills.push((pos, owner));
         } else if hit && let Ok(mut ai) = self.world.get::<&mut Ai>(entity) {
-            ai.notify_hit();
+            match tower {
+                Some(at) => ai.notify_tower_hit(at),
+                None => ai.notify_hit(),
+            }
         }
     }
 
@@ -589,7 +604,7 @@ impl Game {
                 }
                 for c in self.tower_candidates(f) {
                     if box_distance(pos, c.hull) <= t.bio_splash_radius {
-                        self.coat(f, c.entity, 0.0, false);
+                        self.coat(f, c.entity, 0.0, None);
                     }
                 }
             }
@@ -647,6 +662,86 @@ impl Game {
         }
     }
 
+    /// Where the standing tower that fired as `owner` is, if `owner` is a
+    /// tower and it still stands.
+    pub(super) fn tower_by_owner(&self, owner: Owner) -> Option<Position> {
+        let Owner::Tower { cell, .. } = owner else { return None };
+        let key = ((cell & 0xff) as i32, (cell >> 8) as i32);
+        let tower = self.towers.get(&key)?;
+        let standing = self.world.get::<&Obstacle>(tower.entity).is_ok_and(|o| !o.destroyed);
+        standing.then_some(tower.position)
+    }
+
+    /// The centre of every routing cell inside a standing player tower's
+    /// reach - what `route_grid` surcharges with `route_tower_cost`, so the
+    /// enemies route round the player's defences where a way round exists.
+    pub(super) fn player_tower_reach(&self, width: f32, height: f32) -> Vec<Position> {
+        let size = PATHFIND_CELL_SIZE;
+        let (cols, rows) = ((width / size).ceil() as i32, (height / size).ceil() as i32);
+        let mut cells = Vec::new();
+        for (at, _) in self.standing_towers() {
+            let Some(tower) = self.towers.values().find(|t| t.position == at && t.side == Side::Player) else { continue };
+            let range = tower.kind.range();
+            let c0 = (((at.x - range) / size).floor() as i32).max(0);
+            let c1 = (((at.x + range) / size).floor() as i32).min(cols - 1);
+            let r0 = (((at.y - range) / size).floor() as i32).max(0);
+            let r1 = (((at.y + range) / size).floor() as i32).min(rows - 1);
+            for r in r0..=r1 {
+                for c in c0..=c1 {
+                    let p = Position::new((c as f32 + 0.5) * size, (r as f32 + 0.5) * size);
+                    if p.distance_to(at) <= range {
+                        cells.push(p);
+                    }
+                }
+            }
+        }
+        cells
+    }
+
+    /// The centre of every routing cell a puddle lies on - what
+    /// `route_grid` surcharges with `bio_puddle_path_cost`. A map cell is
+    /// centred on a routing cell corner, so each puddle touches four, and
+    /// a cell two puddles share is counted once.
+    pub(super) fn ooze_route_cells(&self) -> Vec<Position> {
+        let size = PATHFIND_CELL_SIZE;
+        let cells: std::collections::BTreeSet<(i32, i32)> = self
+            .ooze
+            .keys()
+            .flat_map(|&(c, r)| [(c - 1, r - 1), (c, r - 1), (c - 1, r), (c, r)])
+            .filter(|&(c, r)| c >= 0 && r >= 0)
+            .collect();
+        cells.into_iter().map(|(c, r)| Position::new((c as f32 + 0.5) * size, (r as f32 + 0.5) * size)).collect()
+    }
+
+    /// Every standing tower's position and tile, for `enemy_phase`'s
+    /// grudge sight test.
+    pub(super) fn standing_towers(&self) -> Vec<(Position, Entity)> {
+        self.towers
+            .values()
+            .filter(|t| self.world.get::<&Obstacle>(t.entity).is_ok_and(|o| !o.destroyed))
+            .map(|t| (t.position, t.entity))
+            .collect()
+    }
+
+    /// The ruins dead towers left, for the smoke `fx.rs` raises off them.
+    pub fn tower_ruins(&self) -> &[crate::tower::TowerRuin] {
+        &self.tower_ruins
+    }
+
+    /// Every live tank wearing ooze, by slot, with its position - the drips
+    /// `fx.rs` sheds.
+    pub fn slimed(&self) -> Vec<(usize, Position)> {
+        let mut out: Vec<(usize, Position)> = self
+            .world
+            .query::<&Tank>()
+            .iter()
+            .filter(|t| t.is_slimed() && !t.is_wreck())
+            .map(|t| (t.owner_slot(), t.position))
+            .collect();
+        out.sort_by_key(|s| s.0);
+        out
+    }
+
     /// Standing towers with what the picture needs: kind, side, position,
     /// health stage (0..=3), heading, charge (0..=1) and whether it burns.
     pub fn tower_views(&self) -> Vec<crate::tower::TowerView> {
@@ -693,10 +788,12 @@ fn friend_in_line(tower: &Tower, target: Position, cands: &[Candidate]) -> bool 
 
 /// Whether the hull box (`center`, `half`) overlaps a cell with ooze.
 fn over_ooze(ooze: &BTreeMap<(i32, i32), OozePuddle>, (center, half): (Position, Position)) -> bool {
+    // Map cells are centred on multiples of the grid size (`map::world_to_cell`
+    // rounds), so a coordinate's cell is the nearest multiple.
     let size = OBSTACLE_GRID_SIZE;
-    let c0 = ((center.x - half.x) / size).floor() as i32;
-    let c1 = ((center.x + half.x) / size).floor() as i32;
-    let r0 = ((center.y - half.y) / size).floor() as i32;
-    let r1 = ((center.y + half.y) / size).floor() as i32;
+    let c0 = ((center.x - half.x) / size).round() as i32;
+    let c1 = ((center.x + half.x) / size).round() as i32;
+    let r0 = ((center.y - half.y) / size).round() as i32;
+    let r1 = ((center.y + half.y) / size).round() as i32;
     (r0..=r1).any(|r| (c0..=c1).any(|c| ooze.contains_key(&(c, r))))
 }
