@@ -175,7 +175,7 @@ async fn room_open(hub: &Arc<Hub>, params: &Value) -> Result<Value, String> {
     let mission = params.get("mission").and_then(Value::as_str);
     let seed = params.get("seed").and_then(Value::as_u64);
     let params = RoomParams::for_dev(map, map_toml, mission, seed)?;
-    let handle = hub.create_room(params)?;
+    let handle = hub.create_room(params).map_err(|r| r.to_string())?;
     let code = handle.code.clone();
     let result = ask(&handle.commands, "room_open", &json!({ "seats": seats })).await;
     match result {
@@ -191,7 +191,7 @@ async fn room_open(hub: &Arc<Hub>, params: &Value) -> Result<Value, String> {
 
 async fn forward(hub: &Arc<Hub>, method: &str, params: &Value) -> Result<Value, String> {
     let code = params.get("code").and_then(Value::as_str).ok_or("this tool needs a room `code`")?;
-    let handle = hub.find(code)?;
+    let handle = hub.find(code).map_err(|r| r.to_string())?;
     ask(&handle.commands, method, params).await
 }
 
