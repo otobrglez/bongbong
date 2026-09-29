@@ -5,8 +5,10 @@ use sola_raylib::prelude::*;
 
 use crate::math::{Color, Rectangle};
 use crate::plasma::{Plasma, PlasmaState, PlasmaVariant};
+use crate::render::blast::pixel_disc;
+use crate::render::shot_fx::{fade, heading, pixel_streak};
 use crate::tuning::tuning;
-use crate::{PLASMA_SCALE, PLASMA_TEXTURE_SIZE};
+use crate::{Position, PLASMA_SCALE, PLASMA_TEXTURE_SIZE};
 
 impl PlasmaVariant {
     /// Which row of plasma.png this variant draws from - a genuine second
@@ -23,8 +25,8 @@ impl PlasmaVariant {
         }
     }
 
-    /// (outer, inner) glow-halo colours at full alpha, for `draw_plasma`'s
-    /// two runtime-drawn circles - drawn fresh each frame (not sampled from
+    /// (outer, inner) glow-halo colours at full alpha, for
+    /// `draw_plasma_light`'s halo and trail - drawn fresh each frame (not sampled from
     /// the sprite), matched to this variant's own baked row
     /// (`tools/spritegen/gen_plasma.py`'s `TEAL`/`PURPLE` palettes) so the
     /// halo and the sprite read as the same colour.
@@ -71,7 +73,7 @@ fn flying_col(timer: f32) -> i32 {
 /// The in-flight glow halo's current radius/alpha, derived from `timer`
 /// (see its doc comment) - a sine wave over PLASMA_PULSE_HZ cycles/second,
 /// remapped from the base sprite's own half-size into
-/// PLASMA_PULSE_MIN_SCALE..MAX_SCALE. Shared by `draw_plasma`'s two glow
+/// PLASMA_PULSE_MIN_SCALE..MAX_SCALE. Shared by `draw_plasma_light`'s halo
 /// passes so they always pulse in lockstep. Deliberately a different cycle
 /// rate/shape than the baked `flying_col` animation - see
 /// PLASMA_FLYING_CYCLE_FPS's doc comment.
@@ -82,28 +84,12 @@ fn glow_pulse(plasma: &Plasma) -> (f32, f32) {
     (base_radius * scale, phase)
 }
 
-/// Draw a plasma bolt: while flying, a pulsating glow halo (two concentric
-/// translucent discs, sized/faded by `glow_pulse`, coloured by
-/// `PlasmaVariant::glow_colors`) drawn first so the sprite composites on top
-/// of it, then the sprite itself from its current frame (`flying_col` while
-/// `Flying`, `PlasmaState::col` otherwise) at `plasma.variant`'s own sheet
-/// row - centered and rotated to face travel, same as
-/// `draw_shell`/`draw_bullet`. The glow is purely a runtime draw effect
-/// (like `laser::draw_laser_beam`'s fade), layered on top of the sprite's
-/// own baked breathing animation rather than replacing it.
+/// Draw a plasma bolt's sprite from its current frame (`flying_col`
+/// while `Flying`, `PlasmaState::col` otherwise) at `plasma.variant`'s own
+/// sheet row - centered and rotated to face travel, same as
+/// `draw_shell`/`draw_bullet`. Its light is `draw_plasma_light`, drawn
+/// first in the additive block so the sprite composites over it.
 pub fn draw_plasma(d: &mut impl RaylibDraw, texture: &Texture2D, plasma: &Plasma) {
-    if plasma.state == PlasmaState::Flying {
-        let (radius, phase) = glow_pulse(plasma);
-        let (glow_outer, glow_inner) = plasma.variant.glow_colors();
-        let outer_alpha = (90.0 + 90.0 * phase) as u8;
-        d.draw_circle_v(plasma.position, radius, Color::new(glow_outer.r, glow_outer.g, glow_outer.b, outer_alpha));
-        d.draw_circle_v(
-            plasma.position,
-            radius * 0.5,
-            Color::new(glow_inner.r, glow_inner.g, glow_inner.b, (outer_alpha as f32 * 0.9) as u8),
-        );
-    }
-
     let col = if plasma.state == PlasmaState::Flying {
         flying_col(plasma.timer)
     } else {
@@ -114,6 +100,34 @@ pub fn draw_plasma(d: &mut impl RaylibDraw, texture: &Texture2D, plasma: &Plasma
     let dest = Rectangle::new(plasma.position.x, plasma.position.y, size, size);
     let origin = Vector2::new(size / 2.0, size / 2.0);
     d.draw_texture_pro(texture, src, dest, origin, plasma.rotation, Color::WHITE);
+}
+
+/// A flying bolt's light (call inside the additive block): the pulsating
+/// halo - two concentric block-built discs sized and faded by
+/// `glow_pulse`, coloured by `PlasmaVariant::glow_colors` - over a chain
+/// of shrinking, dimming afterimages strung back along its path
+/// (`plasma_trail_length`), so the bolt streaks like a comet rather than
+/// sliding. A runtime effect over the sprite's own baked breathing
+/// animation, not a replacement for it.
+pub fn draw_plasma_light(d: &mut impl RaylibDraw, plasma: &Plasma) {
+    let strength = tuning().shot_glow_strength;
+    if plasma.state != PlasmaState::Flying || strength <= 0.0 {
+        return;
+    }
+    let (radius, phase) = glow_pulse(plasma);
+    let (glow_outer, glow_inner) = plasma.variant.glow_colors();
+    let dir = heading(plasma.rotation);
+    let trail = tuning().plasma_trail_length;
+    const GHOSTS: i32 = 5;
+    for i in (1..=GHOSTS).rev() {
+        let t = i as f32 / GHOSTS as f32;
+        let at = Position::new(plasma.position.x - dir.x * trail * t, plasma.position.y - dir.y * trail * t);
+        pixel_disc(d, at, radius * 0.5 * (1.0 - 0.6 * t), fade(glow_outer, strength * 0.6 * (1.0 - t)));
+    }
+    pixel_streak(d, plasma.position, dir, trail, 1, fade(glow_inner, strength * 0.9), fade(glow_outer, 0.0));
+    let pulse = (90.0 + 90.0 * phase) / 255.0;
+    pixel_disc(d, plasma.position, radius * 0.75, fade(glow_outer, strength * pulse * 0.6));
+    pixel_disc(d, plasma.position, radius * 0.4, fade(glow_inner, strength * pulse * 0.55));
 }
 
 /// Draw this bolt's drop shadow - same tint/offset convention as

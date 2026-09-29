@@ -27,7 +27,7 @@ use crate::render::lobby::{draw_lobby, draw_online_button};
 use crate::pickup::PickupKind;
 use crate::plasma::{Plasma, PlasmaState};
 use crate::render::blast::{draw_blast, draw_blast_glow, draw_burning_hull_glow, draw_fire_glow, draw_flame_glow, draw_fuse_glow, draw_ground_fire};
-use crate::render::bullet::{draw_bullet, draw_bullet_shadow};
+use crate::render::bullet::{draw_bullet, draw_bullet_light, draw_bullet_shadow};
 use crate::render::canvas::{GpuCanvas, Sheets};
 use crate::render::decal::draw_decal_shadow;
 use crate::render::frog::FrogVariantTextures;
@@ -35,12 +35,13 @@ use crate::render::hud::{
     draw_bar, draw_leave_button, draw_leave_dialog, draw_mode_button, draw_players_button, draw_players_dialog,
     draw_restart_button,
 };
-use crate::render::laser::draw_laser_beam;
-use crate::render::plasma::{draw_plasma, draw_plasma_shadow};
+use crate::render::laser::{draw_laser_beam, draw_laser_bloom, draw_laser_flares};
+use crate::render::plasma::{draw_plasma, draw_plasma_light, draw_plasma_shadow};
 use crate::render::portal::draw_portal_glow;
 use crate::missile::Missile;
-use crate::render::missile::{draw_missile, draw_missile_shadow};
-use crate::render::shell::{draw_shell, draw_shell_shadow};
+use crate::render::missile::{draw_missile, draw_missile_exhaust, draw_missile_shadow};
+use crate::render::shell::{draw_shell, draw_shell_light, draw_shell_shadow};
+use crate::render::shot_fx::{at_nozzle, draw_impact_flare, draw_muzzle_flare};
 use crate::render::shockwave::{screen_to_ripple_uv, RippleFx};
 use crate::render::tank::draw_player_label;
 use crate::shell::{Shell, ShellState};
@@ -311,6 +312,28 @@ impl Game {
                 }
             }
 
+            // The light the shots throw, under their sprites so each round
+            // sits in its own glow: tracers, halos, the plasma's comet
+            // tail, the laser's bloom (`render/shot_fx.rs`). One additive
+            // block for all of it - a blend switch breaks the batch.
+            let lit = tuning().shot_glow_strength > 0.0;
+            if lit {
+                d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+                    for shell in self.world.query::<&Shell>().iter() {
+                        draw_shell_light(&mut bd, shell);
+                    }
+                    for bullet in self.world.query::<&Bullet>().iter() {
+                        draw_bullet_light(&mut bd, bullet);
+                    }
+                    for plasma in self.world.query::<&Plasma>().iter() {
+                        draw_plasma_light(&mut bd, plasma);
+                    }
+                    for beam in &self.laser_beams {
+                        draw_laser_bloom(&mut bd, beam);
+                    }
+                });
+            }
+
             for shell in self.world.query::<&Shell>().iter() {
                 if self.shadows_enabled && shell.state == ShellState::Flying {
                     draw_shell_shadow(&mut d, textures.shells, shell);
@@ -334,6 +357,25 @@ impl Game {
 
             for beam in &self.laser_beams {
                 draw_laser_beam(&mut d, beam);
+            }
+
+            // Over the shots: the flares where they leave the barrel and
+            // where they land, and the burn at each end of a laser. A
+            // flamethrower nozzle pushes a muzzle flash every held frame
+            // and has its own glow, so it gets no flare.
+            if lit && !(self.muzzle_flashes.is_empty() && self.impact_flashes.is_empty() && self.laser_beams.is_empty()) {
+                let nozzles: Vec<Position> = self.flames().iter().map(|jet| jet.origin).collect();
+                d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+                    for beam in &self.laser_beams {
+                        draw_laser_flares(&mut bd, beam);
+                    }
+                    for flash in self.muzzle_flashes.iter().filter(|f| !at_nozzle(f.center, &nozzles)) {
+                        draw_muzzle_flare(&mut bd, flash);
+                    }
+                    for flash in &self.impact_flashes {
+                        draw_impact_flare(&mut bd, flash);
+                    }
+                });
             }
 
             // Barrel blasts last, so the fireball covers tanks and shots:
@@ -379,6 +421,13 @@ impl Game {
                 for missile in self.world.query::<&Missile>().iter() {
                     draw_missile_shadow(&mut d, textures.missile, missile);
                 }
+            }
+            if lit && self.world.query::<&Missile>().iter().next().is_some() {
+                d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+                    for missile in self.world.query::<&Missile>().iter() {
+                        draw_missile_exhaust(&mut bd, missile, self.time);
+                    }
+                });
             }
             for missile in self.world.query::<&Missile>().iter() {
                 draw_missile(&mut d, textures.missile, missile);

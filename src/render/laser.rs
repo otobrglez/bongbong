@@ -3,8 +3,11 @@
 use sola_raylib::prelude::*;
 
 use crate::laser::{LaserBeam, LaserVariant};
-use crate::math::Color;
+use crate::math::{Color, Vec2};
+use crate::render::blast::pixel_disc;
+use crate::render::shot_fx::fade;
 use crate::tuning::tuning;
+use crate::Position;
 
 impl LaserVariant {
     /// (glow, core) colors `draw_laser_beam` renders this variant's beam
@@ -29,4 +32,58 @@ pub fn draw_laser_beam(d: &mut impl RaylibDraw, beam: &LaserBeam) {
     let core = Color::new(core.r, core.g, core.b, (core.a as f32 * alpha) as u8);
     d.draw_line_ex(beam.start, beam.end, tuning().laser_beam_width, glow);
     d.draw_line_ex(beam.start, beam.end, tuning().laser_beam_width * 0.4, core);
+}
+
+/// How bright the beam's light is this frame, 0..=1: its fade-out times
+/// a fast flicker off its own timer, so a held beam buzzes rather than
+/// glowing flat.
+fn light(beam: &LaserBeam) -> f32 {
+    let alpha = (beam.timer / tuning().laser_beam_display_seconds).clamp(0.0, 1.0);
+    let flicker = 0.8 + 0.2 * (beam.timer * tuning().laser_flicker_hz * std::f32::consts::TAU).sin();
+    alpha * flicker * tuning().shot_glow_strength
+}
+
+/// The bloom around a beam (additive, drawn under it): a wide, faint band
+/// in the beam's colour, plus bright packets of light racing from the
+/// muzzle to the far end.
+pub fn draw_laser_bloom(d: &mut impl RaylibDraw, beam: &LaserBeam) {
+    let k = light(beam);
+    if k <= 0.0 {
+        return;
+    }
+    let (glow, core) = beam.variant.colors();
+    let width = tuning().laser_beam_width;
+    d.draw_line_ex(beam.start, beam.end, width * 3.5, fade(glow, 0.45 * k));
+    d.draw_line_ex(beam.start, beam.end, width * 1.8, fade(glow, 0.7 * k));
+    let span = Vec2::new(beam.end.x - beam.start.x, beam.end.y - beam.start.y);
+    let length = span.length();
+    if length < 1.0 {
+        return;
+    }
+    // Packets every 40 px, running the beam's length at 900 px/s.
+    let offset = (beam.timer * 900.0) % 40.0;
+    let mut along = 40.0 - offset;
+    while along < length {
+        let t = along / length;
+        let at = Position::new(beam.start.x + span.x * t, beam.start.y + span.y * t);
+        pixel_disc(d, at, width * 0.9, fade(core, 0.7 * k));
+        along += 40.0;
+    }
+}
+
+/// The two ends of a beam (additive, drawn over it): a hot lens at the
+/// emitter and a bigger, whiter burn where the beam stops, both pulsing
+/// with the flicker.
+pub fn draw_laser_flares(d: &mut impl RaylibDraw, beam: &LaserBeam) {
+    let k = light(beam);
+    if k <= 0.0 {
+        return;
+    }
+    let (glow, core) = beam.variant.colors();
+    let width = tuning().laser_beam_width;
+    pixel_disc(d, beam.start, width * 2.5, fade(glow, 0.8 * k));
+    pixel_disc(d, beam.start, width * 1.2, fade(core, k));
+    pixel_disc(d, beam.end, width * 4.0, fade(glow, 0.7 * k));
+    pixel_disc(d, beam.end, width * 2.0, fade(core, k));
+    pixel_disc(d, beam.end, width * 0.9, fade(Color::WHITE, k));
 }

@@ -2005,6 +2005,43 @@ tunables! {
         /// punch reaches ~125px, so 70 visibly clipped it.
         impact_flash_quad_radius: f32 = 130.0 in 10.0 ..= 500.0;
     }
+
+    group shot_fx {
+        /// One multiplier on the light every shot throws (`render/shot_fx.rs`,
+        /// all additive and built from 2 px blocks): the halos and tracers
+        /// in flight, the muzzle and impact flares with their star rays and
+        /// glare, the laser's bloom, the missile's exhaust. 0 draws the
+        /// plain sprites alone.
+        shot_glow_strength: f32 = 1.0 in 0.0 ..= 2.0;
+        /// Length (px) of the hot tracer streak a flying shell draws behind it.
+        shell_tracer_length: f32 = 40.0 in 0.0 ..= 160.0;
+        /// Length (px) of a minigun bullet's tracer streak.
+        bullet_tracer_length: f32 = 26.0 in 0.0 ..= 160.0;
+        /// Length (px) of the fading afterimage chain a plasma bolt leaves.
+        plasma_trail_length: f32 = 52.0 in 0.0 ..= 160.0;
+        /// Radius (px) of the muzzle flare at its first frame; it shrinks
+        /// over `muzzle_flash_duration`. The star rays reach twice as far.
+        muzzle_glow_radius: f32 = 14.0 in 0.0 ..= 80.0;
+        /// Radius (px) of the impact flare at its first frame; it swells
+        /// and fades over `impact_flash_duration`.
+        impact_glow_radius: f32 = 16.0 in 0.0 ..= 80.0;
+        /// Half-length (px) of the horizontal lens glare across a fresh
+        /// muzzle or impact flare. 0 turns the glare off.
+        shot_glare_length: f32 = 34.0 in 0.0 ..= 200.0;
+        /// How fast (Hz) a laser beam's bloom and end flares flicker.
+        laser_flicker_hz: f32 = 28.0 in 0.0 ..= 120.0;
+        /// Sparks thrown off a hull, frog or border wall a shot hits
+        /// (`fx.rs`, scaled by `fx_density`); tiles keep their own
+        /// material bursts.
+        shot_hit_sparks: i32 = 9 in 0 ..= 60;
+        /// Sparks spat from the barrel with every shot (`fx.rs`, scaled
+        /// by `fx_density`), plus a wisp of gun smoke.
+        muzzle_sparks: i32 = 4 in 0 ..= 40;
+        /// Glints per second a flying plasma bolt sheds in its own colour,
+        /// and embers per second a flying shell sheds (`fx.rs`, scaled by
+        /// `fx_density`).
+        shot_trail_glint_rate: f32 = 26.0 in 0.0 ..= 200.0;
+    }
 }
 
 /// Values derived from other knobs - kept as methods (not their own rows)

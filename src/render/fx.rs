@@ -58,7 +58,11 @@ fn ramp_pick(ramp: &[Color], t: f32) -> Color {
 fn draw_particle(d: &mut impl RaylibDraw, p: &Particle) {
     let t = (p.age / p.life).clamp(0.0, 1.0);
     let base = match p.kind {
-        ParticleKind::Spark | ParticleKind::Ember => ramp_pick(&FIRE_RAMP, t),
+        // Fire cools down its ramp; light of any other colour (a portal's
+        // blue, a plasma bolt's teal, a laser's red) flashes white and
+        // then burns in its own colour.
+        ParticleKind::Spark | ParticleKind::Ember if is_fire(p.tint) => ramp_pick(&FIRE_RAMP, t),
+        ParticleKind::Spark | ParticleKind::Ember => if t < 0.15 { WHITE_T } else { p.tint },
         ParticleKind::Smoke => ramp_pick(&SMOKE_RAMP, t),
         ParticleKind::Trail => ramp_pick(&TRAIL_RAMP, t),
         // A chip or a dust mote keeps the colour of whatever it came off.
@@ -86,6 +90,25 @@ fn draw_particle(d: &mut impl RaylibDraw, p: &Particle) {
     let side = (blocks * FX_GRID) as i32;
     let x = snap(p.pos.x - blocks * FX_GRID / 2.0);
     let y = snap(p.pos.y - p.z - blocks * FX_GRID / 2.0);
+    // A fast spark smears: one more block, half as bright, where it was a
+    // hundredth of a second ago - enough to read as a streak of light
+    // rather than a dot, still on the block grid.
+    if p.kind == ParticleKind::Spark && p.vel.length() > SMEAR_SPEED {
+        let bx = snap(p.pos.x - p.vel.x * 0.012 - blocks * FX_GRID / 2.0);
+        let by = snap(p.pos.y - p.vel.y * 0.012 - p.z - blocks * FX_GRID / 2.0);
+        if (bx, by) != (x, y) {
+            d.draw_rectangle(bx, by, side, side, Color::new(c.r, c.g, c.b, c.a / 2));
+        }
+    }
     d.draw_rectangle(x, y, side, side, c);
+}
+
+/// Speed (px/s) above which a spark draws its one block of smear.
+const SMEAR_SPEED: f32 = 90.0;
+
+/// Is `c` one of the fire colours a spark or ember is thrown in? Those
+/// cool down `FIRE_RAMP`; anything else keeps its own colour.
+fn is_fire(c: Color) -> bool {
+    [WHITE_T, FIRE_T, EMBER_T].iter().any(|f| f.r == c.r && f.g == c.g && f.b == c.b)
 }
 

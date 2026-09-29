@@ -3,9 +3,11 @@
 use sola_raylib::prelude::*;
 
 use crate::math::{Color, Rectangle};
+use crate::render::blast::pixel_disc;
+use crate::render::shot_fx::{fade, heading, pixel_streak};
 use crate::shell::{Shell, ShellState};
 use crate::tuning::tuning;
-use crate::{SHELL_SCALE, SHELL_TEXTURE_SIZE};
+use crate::{Position, SHELL_SCALE, SHELL_TEXTURE_SIZE};
 
 /// Column of this state in the shells sprite sheet.
 fn state_col(state: ShellState) -> i32 {
@@ -56,4 +58,21 @@ pub fn draw_shell_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, shell: &S
     let shadow = Color::new(0, 0, 0, (255.0 * tuning().shell_shadow_opacity) as u8);
 
     d.draw_texture_pro(texture, src, dest, origin, shell.rotation, shadow);
+}
+
+/// The light a flying shell throws (additive, drawn before the sprites):
+/// an orange tracer tail with a white-hot line down its middle, and a warm
+/// halo around the round itself, so a shot in the air reads at a glance.
+/// Nothing before `Flying` - the barrel frames are their own blast.
+pub fn draw_shell_light(d: &mut impl RaylibDraw, shell: &Shell) {
+    let strength = tuning().shot_glow_strength;
+    if shell.state != ShellState::Flying || strength <= 0.0 {
+        return;
+    }
+    let dir = heading(shell.rotation);
+    let length = tuning().shell_tracer_length;
+    let tail = Position::new(shell.position.x - dir.x * 4.0, shell.position.y - dir.y * 4.0);
+    pixel_streak(d, tail, dir, length, 3, fade(Color::new(255, 90, 20, 210), strength), Color::new(180, 20, 0, 0));
+    pixel_streak(d, tail, dir, length * 0.8, 1, fade(Color::new(255, 255, 220, 255), strength), fade(Color::new(255, 150, 30, 140), strength));
+    pixel_disc(d, shell.position, 10.0, fade(Color::new(255, 120, 30, 70), strength));
 }

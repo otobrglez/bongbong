@@ -20,7 +20,10 @@ use std::collections::{HashMap, HashSet};
 use rand::RngExt;
 use crate::math::{Color, Vec2};
 
+use crate::bullet::Bullet;
 use crate::obstacle::{Drum, Material};
+use crate::plasma::{Plasma, PlasmaState, PlasmaVariant};
+use crate::shell::{Shell, ShellState};
 use crate::simulation::{Event, Game, HitTarget};
 use crate::tuning::tuning;
 use crate::Position;
@@ -47,7 +50,10 @@ pub enum ParticleKind {
 
 pub struct Particle {
     pub(crate) pos: Position,
-    vel: Vec2,
+    /// Only the drawing reads it outside this module: a fast spark is
+    /// drawn with a block of motion blur behind it.
+    #[cfg_attr(not(feature = "render"), allow(dead_code))]
+    pub(crate) vel: Vec2,
     /// Fake height above the ground plane. The game is top-down with no
     /// camera, so this is only a draw-time y-offset - the same trick
     /// `decal::Decal`'s arc uses.
@@ -196,6 +202,47 @@ impl Fx {
                 kind,
             });
         }
+    }
+
+    /// Like `burst`, but thrown forward: every particle leaves along `dir`
+    /// (a unit vector) turned by up to `half` radians either way - a muzzle
+    /// spitting sparks down the barrel's line, a laser's burn splashing
+    /// back toward the gun.
+    #[allow(clippy::too_many_arguments)]
+    fn cone_burst(&mut self, at: Position, dir: Vec2, half: f32, kind: ParticleKind, n: i32, speed: f32, tints: &[Color]) {
+        if tuning().fx_max_particles <= 0 || n <= 0 {
+            return;
+        }
+        self.burst(at, kind, n, speed, tints);
+        let mut rng = rand::rng();
+        let base = dir.y.atan2(dir.x);
+        // `push` appends and evicts from the front, so the burst is always
+        // the last `n` particles.
+        let from = self.particles.len().saturating_sub(n as usize);
+        for p in &mut self.particles[from..] {
+            let s = p.vel.length();
+            let a = base + rng.random_range(-half..=half);
+            p.vel = Vec2::new(a.cos() * s, a.sin() * s);
+        }
+    }
+
+    /// A glint off a flying shot: one block of light in the shot's own
+    /// colour, loosed backwards and sideways off its path so a bolt sheds a
+    /// glittering wake.
+    fn glint(&mut self, at: Position, back: Vec2, kind: ParticleKind, tint: Color) {
+        let mut rng = rand::rng();
+        let side = Vec2::new(-back.y, back.x) * rng.random_range(-30.0..30.0);
+        self.push(Particle {
+            pos: at,
+            vel: back * rng.random_range(20.0..60.0) + side,
+            z: 0.0,
+            vz: 0.0,
+            age: 0.0,
+            life: tuning().spark_lifetime * rng.random_range(0.8..1.6),
+            size: FX_GRID,
+            tint,
+            kind,
+        });
     }
 
     /// One puff of a missile's smoke trail at `at`, drifting a touch so
@@ -410,9 +457,59 @@ impl Fx {
                         self.burst(Position::new(x, y), ParticleKind::Spark, self.count(16), 150.0, &[SHIELD_T, WHITE_T]);
                         self.burst(Position::new(x, y), ParticleKind::Smoke, self.count(5), 34.0, &[SMOKE_T]);
                     }
+                    // A shot landing on a hull, a frog or the border: a
+                    // shower of hot sparks, a couple of dark flecks of
+                    // armour and a wisp of smoke. Tiles are `tile_chip`'s.
+                    Event::Hit { target: HitTarget::Player { .. } | HitTarget::Enemy { .. } | HitTarget::Frog { .. }, x, y, .. } => {
+                        let at = Position::new(x, y);
+                        self.burst(at, ParticleKind::Spark, self.count(tuning().shot_hit_sparks), 190.0, &[WHITE_T, FIRE_T, EMBER_T]);
+                        self.burst(at, ParticleKind::Chip, self.count(2), 90.0, &[STONE_DK, STONE_MD]);
+                        self.burst(at, ParticleKind::Smoke, self.count(1), 18.0, &[SMOKE_T]);
+                    }
+                    Event::Hit { target: HitTarget::Wall, x, y, .. } => {
+                        let at = Position::new(x, y);
+                        self.burst(at, ParticleKind::Spark, self.count(tuning().shot_hit_sparks / 2), 150.0, &[WHITE_T, FIRE_T]);
+                        self.burst(at, ParticleKind::Dust, self.count(2), 35.0, &[DUST_T]);
+                    }
+                    // A laser's burn: sparks in the beam's colour splashing
+                    // back off whatever stopped it.
+                    Event::LaserBeam { x0, y0, x1, y1, variant, .. } => {
+                        let (dx, dy) = (x0 - x1, y0 - y1);
+                        let len = (dx * dx + dy * dy).sqrt();
+                        if len > 0.5 {
+                            let tint = if variant == "blue" { LASER_BLUE_T } else { LASER_RED_T };
+                            let back = Vec2::new(dx / len, dy / len);
+                            self.cone_burst(Position::new(x1, y1), back, 1.2, ParticleKind::Spark, self.count(tuning().shot_hit_sparks), 170.0, &[tint, WHITE_T]);
+                        }
+                    }
                     _ => {}
                 }
             }
+            self.muzzle_sparks(game);
+        }
+    }
+
+    /// Every muzzle flash the frame just lit: sparks spat down the line of
+    /// the shot that left it, and a wisp of gun smoke. The flash itself
+    /// carries no heading, so the shot is looked up - the nearest round
+    /// still at the barrel - and a flash with none near (a missile launch)
+    /// throws its sparks all round. A flamethrower nozzle lights one every
+    /// held frame and has its own stream, so it is left out.
+    fn muzzle_sparks(&mut self, game: &Game) {
+        let n = self.count(tuning().muzzle_sparks);
+        if n <= 0 {
+            return;
+        }
+        let fresh: Vec<Position> = game.muzzle_flashes.iter().filter(|f| f.time == 0.0).map(|f| f.center).collect();
+        for at in fresh {
+            if game.flames().iter().any(|jet| jet.origin.distance_to(at) < 6.0) {
+                continue;
+            }
+            match shot_heading_near(game, at) {
+                Some(dir) => self.cone_burst(at, dir, 0.45, ParticleKind::Spark, n, 220.0, &[WHITE_T, FIRE_T]),
+                None => self.burst(at, ParticleKind::Spark, n, 120.0, &[WHITE_T, FIRE_T]),
+            }
+            self.burst(at, ParticleKind::Smoke, self.count(1), 14.0, &[SMOKE_T]);
         }
     }
 
@@ -499,6 +596,32 @@ impl Fx {
                 if self.due(key ^ 0x5a5a, stream_rate * 0.12, dt) {
                     let end = Position::new(jet.origin.x + jet.dir.x * jet.reach, jet.origin.y + jet.dir.y * jet.reach);
                     self.burst(end, ParticleKind::Smoke, 1, 16.0, &[SMOKE_T]);
+                }
+            }
+        }
+        // Flying shots shed light: a plasma bolt glitters in its own
+        // colour, a shell throws the odd ember off its tracer.
+        let glint = tuning().shot_trail_glint_rate * tuning().fx_density;
+        if glint > 0.0 {
+            let mut lit: Vec<(u32, Position, Vec2, ParticleKind, Color)> = Vec::new();
+            for plasma in game.world.query::<&Plasma>().iter() {
+                if plasma.state == PlasmaState::Flying {
+                    let tint = match plasma.variant {
+                        PlasmaVariant::Teal => PLASMA_TEAL_T,
+                        PlasmaVariant::Purple => PLASMA_PURPLE_T,
+                    };
+                    lit.push((0x9A5A_0000 ^ plasma.id, plasma.position, back_of(plasma.velocity), ParticleKind::Spark, tint));
+                }
+            }
+            for shell in game.world.query::<&Shell>().iter() {
+                if shell.state == ShellState::Flying {
+                    lit.push((0x5E11_0000 ^ shell.id, shell.position, back_of(shell.velocity), ParticleKind::Ember, FIRE_T));
+                }
+            }
+            for (key, at, back, kind, tint) in lit {
+                let rate = if kind == ParticleKind::Ember { glint * 0.5 } else { glint };
+                if self.due(key, rate, dt) {
+                    self.glint(at, back, kind, tint);
                 }
             }
         }
@@ -672,6 +795,36 @@ impl Fx {
     }
 }
 
+/// The unit vector pointing back along `velocity`, or up for a shot at
+/// rest.
+fn back_of(velocity: Vec2) -> Vec2 {
+    let len = velocity.length();
+    if len > 0.01 { velocity * (-1.0 / len) } else { Vec2::new(0.0, 1.0) }
+}
+
+/// The heading of the shell, bullet or plasma bolt nearest `at` within
+/// 28 px - the round a muzzle flash at `at` just let out.
+fn shot_heading_near(game: &Game, at: Position) -> Option<Vec2> {
+    let mut best: Option<(f32, Vec2)> = None;
+    let mut consider = |pos: Position, vel: Vec2| {
+        let d = pos.distance_to(at);
+        let len = vel.length();
+        if d < 28.0 && len > 0.01 && best.is_none_or(|(b, _)| d < b) {
+            best = Some((d, vel * (1.0 / len)));
+        }
+    };
+    for s in game.world.query::<&Shell>().iter() {
+        consider(s.position, s.velocity);
+    }
+    for b in game.world.query::<&Bullet>().iter() {
+        consider(b.position, b.velocity);
+    }
+    for p in game.world.query::<&Plasma>().iter() {
+        consider(p.position, p.velocity);
+    }
+    best.map(|(_, dir)| dir)
+}
+
 /// Every sprite in the game lands on a 2-screen-pixel block (tanks draw a
 /// 32px tile at scale 2, walls bake the same chunkiness into the art - see
 /// CLAUDE.md), so particles have to as well or they read as a different,
@@ -696,6 +849,12 @@ const GLASS_L: Color = Color::new(0x27, 0xD8, 0xC5, 255);
 const GLASS_M: Color = Color::new(0x04, 0xA0, 0xB4, 255);
 const DUST_T: Color = Color::new(0xD8, 0xBF, 0x8E, 255);
 const SMOKE_T: Color = Color::new(0x55, 0x52, 0x4E, 255);
+/// The light colours of the shots themselves, matched to their drawn
+/// glows (`render/laser.rs`, `render/plasma.rs`).
+const LASER_RED_T: Color = Color::new(0xFF, 0x50, 0x46, 255);
+const LASER_BLUE_T: Color = Color::new(0x50, 0x9A, 0xFF, 255);
+const PLASMA_TEAL_T: Color = Color::new(0x28, 0xDC, 0xC8, 255);
+const PLASMA_PURPLE_T: Color = Color::new(0xB0, 0x6A, 0xF0, 255);
 pub(crate) const EMBER_T: Color = Color::new(0xE4, 0x42, 0x19, 255);
 pub(crate) const FIRE_T: Color = Color::new(0xEE, 0xA3, 0x43, 255);
 pub(crate) const WHITE_T: Color = Color::new(0xFF, 0xFF, 0xFF, 255);
