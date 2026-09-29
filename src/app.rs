@@ -890,6 +890,16 @@ pub fn run(args: Args) {
         .expect("failed loading eraser texture");
 
     let (mut shock_fx, mut muzzle_fx, mut impact_fx) = load_ripples(&mut rl, &thread, screen_width, screen_height);
+    // The plasma orb and flame jet shaders. A driver that cannot compile
+    // them still plays: the bolt flies as its baked sprite and the stream
+    // is its particles.
+    let mut shot_shaders = match crate::render::shot_shaders::ShotShaders::load(&mut rl, &thread) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            eprintln!("[render] shot shaders unavailable, drawing the plain shots: {e}");
+            None
+        }
+    };
     // The short-lived particle layer lives here rather than on `Game`:
     // it is presentation only, so nothing in the simulation can see it and
     // it is free to use `rand::rng()` (see fx.rs). The web build starts at
@@ -1503,6 +1513,7 @@ pub fn run(args: Args) {
                 shock: &mut shock_fx,
                 muzzle: &mut muzzle_fx,
                 impact: &mut impact_fx,
+                shots: shot_shaders.as_mut(),
                 fx: &fx,
                 // No stick over the lobby: the field behind it is frozen
                 // and every press there belongs to the screen.

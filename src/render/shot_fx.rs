@@ -2,8 +2,9 @@
 //! flares with their star rays and lens glare. Every call here draws
 //! inside an additive blend block (`Game::render` opens it), so the
 //! colours add up to light on the ground rather than paint over it, and
-//! every shape is built from whole `BLOCK`s, like `pixel_disc`: a smooth
-//! gradient would read as a softer game layered over this one.
+//! the shapes on the shots themselves are built from whole `BLOCK`s,
+//! like `pixel_disc`; the light they throw on the ground (`ground_light`)
+//! and the spike rings of an energy burst are smooth.
 //!
 //! Nothing here holds state. A shot's streak is drawn back from where it
 //! is along the way it faces, and a flare is a function of its
@@ -147,6 +148,42 @@ pub fn draw_impact_flare(d: &mut impl RaylibDraw, flash: &Shockwave) {
     if k > 0.4 {
         glare(d, flash.center, tuning().shot_glare_length * 1.2 * k, fade(Color::new(255, 200, 150, 190), strength));
     }
+}
+
+/// A soft pool of light a shot throws on the ground around it (call
+/// inside the additive block): a smooth radial falloff from `color` at
+/// `strength` in the middle to nothing at `radius`. The one smooth shape
+/// here - light on the floor has no edge to step.
+pub fn ground_light(d: &mut impl RaylibDraw, at: Position, radius: f32, color: Color, strength: f32) {
+    let k = strength * tuning().shot_glow_strength;
+    if k <= 0.0 || radius < 1.0 {
+        return;
+    }
+    d.draw_circle_gradient(at.x as i32, at.y as i32, radius, fade(color, k), Color::new(color.r, color.g, color.b, 0));
+}
+
+/// A ring of short radial spikes thrown out from `center` (additive): the
+/// burst an energy shot makes where it lands. `progress` 0..1 carries the
+/// ring from `from` to `to` px while it fades; `spikes` of them, turned by
+/// `turn` radians so two bursts do not line up.
+#[allow(clippy::too_many_arguments)]
+pub fn spike_ring(d: &mut impl RaylibDraw, center: Position, progress: f32, from: f32, to: f32, spikes: i32, turn: f32, color: Color) {
+    let k = tuning().shot_glow_strength * (1.0 - progress);
+    if k <= 0.0 {
+        return;
+    }
+    let r = from + (to - from) * (1.0 - (1.0 - progress) * (1.0 - progress));
+    let len = 3.0 + 7.0 * (1.0 - progress);
+    let c = fade(color, k);
+    for i in 0..spikes {
+        let a = turn + i as f32 / spikes as f32 * std::f32::consts::TAU;
+        let (cs, sn) = (a.cos(), a.sin());
+        let inner = Vec2::new(center.x + cs * r, center.y + sn * r);
+        let outer = Vec2::new(center.x + cs * (r + len), center.y + sn * (r + len));
+        d.draw_line_ex(inner, outer, 2.0, c);
+        d.draw_circle_v(outer, 1.5, fade(Color::WHITE, k));
+    }
+    d.draw_ring(center, (r - 1.0).max(0.0), r + 1.0, 0.0, 360.0, 48, fade(color, k * 0.45));
 }
 
 #[cfg(test)]

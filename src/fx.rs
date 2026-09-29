@@ -134,24 +134,26 @@ impl Fx {
 
     // ---- emitters ------------------------------------------------------
 
-    /// One mote of the flamethrower's stream: thrown from the nozzle down
-    /// the cone at a speed that carries it to the cone's reach within its
-    /// life, fanned across the half angle, in the fire ramp - white-hot
-    /// near the nozzle, ember-red further out. `along` is where on the
-    /// stream it starts (0 at the nozzle, 1 at the reach): motes seeded
-    /// along the length keep the cone full from the first frame, instead
-    /// of a stream that visibly "arrives".
+    /// One mote of the flamethrower's stream: a droplet of burning fuel
+    /// thrown from the nozzle down the stream at a speed that carries it to
+    /// the reach within its life, in the fire ramp - white-hot near the
+    /// nozzle, ember-red further out. The stream is a jet of liquid, so the
+    /// motes hug its line and fan out only as it blooms: the spread grows
+    /// with the square of how far along they start. `along` is where on
+    /// the stream it starts (0 at the nozzle, 1 at the reach): motes seeded
+    /// along the length keep the stream full from the first frame, instead
+    /// of one that visibly "arrives".
     fn flame_mote(&mut self, jet: &crate::simulation::FlameJet, along: f32) {
         let mut rng = rand::rng();
-        let half = tuning().flame_half_angle_deg.to_radians();
+        let half = tuning().flame_half_angle_deg.to_radians() * (0.15 + 0.55 * along * along);
         let a = jet.dir.y.atan2(jet.dir.x) + rng.random_range(-half..half);
         // Reach the end of the cone in about a third of a second.
         let speed = (jet.reach / 0.3) * rng.random_range(0.6..1.1);
         let start = jet.reach * along;
-        // Seeded across the cone's width at its start point, not only on
-        // the centre line, so the body of the stream is filled rather
-        // than a dotted line that fans out late.
-        let half_w = start * half.tan();
+        // Seeded across part of the stream's width at its start point,
+        // not only on the centre line, so the body is filled rather than a
+        // dotted line.
+        let half_w = start * half.tan() * 0.5;
         let side = rng.random_range(-half_w..=half_w.max(0.01));
         let pos = Position::new(
             jet.origin.x + jet.dir.x * start - jet.dir.y * side,

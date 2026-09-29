@@ -106,6 +106,21 @@ impl PlasmaState {
     }
 }
 
+impl Plasma {
+    /// How far through its impact burst the bolt is, 0 at the hit to 1 as
+    /// the last frame ends, or `None` before it hits.
+    pub fn impact_progress(&self) -> Option<f32> {
+        let before = match self.state {
+            PlasmaState::Hit0 => 0.0,
+            PlasmaState::Hit1 => PlasmaState::Hit0.duration(),
+            PlasmaState::Hit2 => PlasmaState::Hit0.duration() + PlasmaState::Hit1.duration(),
+            _ => return None,
+        };
+        let total = PlasmaState::Hit0.duration() + PlasmaState::Hit1.duration() + PlasmaState::Hit2.duration();
+        Some(((before + self.timer.clamp(0.0, self.state.duration())) / total).clamp(0.0, 1.0))
+    }
+}
+
 /// Which colour batch a plasma charge is - rolled once per
 /// `pickup::PickupKind::Plasma` pickup (see `PLASMA_PURPLE_PICKUP_CHANCE`)
 /// and carried on `Tank::plasma_variant` until the next pickup rerolls it,

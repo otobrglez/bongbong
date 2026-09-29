@@ -92,77 +92,17 @@ pub fn pixel_disc(d: &mut impl RaylibDraw, center: Position, radius: f32, color:
 /// one source pixel of every sprite in the game covers.
 const GLOW_BLOCK: f32 = 2.0;
 
-/// The flamethrower's nozzle glow while it fires (additive): a hot disc
-/// at the muzzle and a fainter, larger one part way down the stream,
-/// both flickering off the round clock. The stream itself is particles
-/// (`fx.rs`); this is the light they throw on the ground.
+/// The flamethrower's nozzle glow while it fires (additive): a hot soft
+/// pool at the muzzle and a fainter, larger one part way down the stream,
+/// both flickering off the round clock - the light the stream (the jet
+/// shader and the motes in `fx.rs`) throws on the ground.
 pub fn draw_flame_glow(d: &mut impl RaylibDraw, origin: Position, dir: Vec2, reach: f32, time: f32) {
     let flicker = 0.75 + 0.25 * (time * 47.0).sin();
-    pixel_disc(d, origin, 10.0, Color::new(255, 200, 90, (150.0 * flicker) as u8));
+    let hot = Color::new(255, 200, 90, (150.0 * flicker) as u8);
+    d.draw_circle_gradient(origin.x as i32, origin.y as i32, 12.0, hot, Color::new(255, 200, 90, 0));
     let mid = Position::new(origin.x + dir.x * reach * 0.4, origin.y + dir.y * reach * 0.4);
-    pixel_disc(d, mid, (reach * 0.22).max(6.0), Color::new(255, 120, 40, (70.0 * flicker) as u8));
-}
-
-/// One slice of the flamethrower's stream at step `i` of `steps`: where
-/// its centre sits (swaying sideways off the round clock), its half width
-/// (licking in and out) and how far along the stream it is (0..1).
-fn flame_slice(origin: Position, dir: Vec2, reach: f32, time: f32, i: i32, steps: i32) -> (Position, f32, f32, f32) {
-    let spread = tuning().flame_half_angle_deg.to_radians().tan();
-    let t = i as f32 / steps as f32;
-    let along = reach * 0.8 * t;
-    let lick = 0.5 + 0.5 * (time * 31.0 - i as f32 * 0.9).sin();
-    let sway = (time * 19.0 + i as f32 * 0.7).sin() * along * 0.07;
-    let at = Position::new(origin.x + dir.x * along - dir.y * sway, origin.y + dir.y * along + dir.x * sway);
-    (at, 2.0 + along * spread * (0.4 + 0.25 * lick), t, lick)
-}
-
-/// Steps along the stream: one slice every 4 px of the drawn length.
-fn flame_steps(reach: f32) -> i32 {
-    (reach * 0.8 / 4.0).ceil() as i32
-}
-
-/// The flamethrower's stream body (normal blend, drawn over the tanks):
-/// a tapering tongue of block discs, yellow at the root through orange to
-/// a dull red tip, each slice's width and sideways sway flickering so the
-/// stream licks and rolls. Drawn as paint rather than light so the orange
-/// stays orange over grass; `draw_flame_core` is the light inside it and
-/// the motes (`fx.rs`) ride over both.
-pub fn draw_flame_body(d: &mut impl RaylibDraw, origin: Position, dir: Vec2, reach: f32, time: f32) {
-    let strength = tuning().shot_glow_strength;
-    if strength <= 0.0 || reach <= 4.0 {
-        return;
-    }
-    let steps = flame_steps(reach);
-    for i in (0..steps).rev() {
-        let (at, half, t, lick) = flame_slice(origin, dir, reach, time, i, steps);
-        let color = if t < 0.3 {
-            Color::new(255, 206, 84, 255)
-        } else if t < 0.6 {
-            Color::new(246, 128, 38, 255)
-        } else {
-            Color::new(196, 56, 26, 255)
-        };
-        let a = (strength * (1.0 - t).powf(0.5) * (0.45 + 0.2 * lick)).clamp(0.0, 1.0);
-        pixel_disc(d, at, half, Color::new(color.r, color.g, color.b, (255.0 * a) as u8));
-    }
-}
-
-/// The white-hot light inside the stream (additive, over the body): a
-/// narrower core through the first two thirds of it.
-pub fn draw_flame_core(d: &mut impl RaylibDraw, origin: Position, dir: Vec2, reach: f32, time: f32) {
-    let strength = tuning().shot_glow_strength;
-    if strength <= 0.0 || reach <= 4.0 {
-        return;
-    }
-    let steps = flame_steps(reach);
-    for i in 0..steps {
-        let (at, half, t, lick) = flame_slice(origin, dir, reach, time, i, steps);
-        if t > 0.65 {
-            break;
-        }
-        let a = (strength * (1.0 - t / 0.65) * (0.4 + 0.25 * lick)).clamp(0.0, 1.0);
-        pixel_disc(d, at, half * 0.45, Color::new(255, 240, 190, (255.0 * a) as u8));
-    }
+    let warm = Color::new(255, 120, 40, (45.0 * flicker) as u8);
+    d.draw_circle_gradient(mid.x as i32, mid.y as i32, (reach * 0.22).max(8.0), warm, Color::new(255, 120, 40, 0));
 }
 
 /// The glow on a hull the flamethrower set alight (additive): a flickering
@@ -182,15 +122,15 @@ pub fn draw_fuse_glow(d: &mut impl RaylibDraw, center: Position, time: f32) {
     pixel_disc(d, center, 22.0, Color::new(255, 120, 40, a));
 }
 
-/// The glow of a burning ground cell (an oil pool or a lit trail):
-/// additive like the fuse, flickering at its own hashed phase, dying down
+/// The glow of a burning ground cell (an oil pool or a lit trail): a soft
+/// additive pool of light, flickering at its own hashed phase, dying down
 /// over the last part of `left`.
 pub fn draw_fire_glow(d: &mut impl RaylibDraw, center: Position, time: f32, left: f32) {
     let phase = (seed_at(center, 23) % 100) as f32 / 100.0 * std::f32::consts::TAU;
     let flicker = 0.7 + 0.3 * (time * 31.0 + phase).sin();
     let dying = (left / 0.6).clamp(0.0, 1.0);
-    let a = (255.0 * 0.35 * flicker * dying) as u8;
-    pixel_disc(d, center, 20.0, Color::new(255, 130, 40, a));
+    let a = (255.0 * 0.3 * flicker * dying) as u8;
+    d.draw_circle_gradient(center.x as i32, center.y as i32, 26.0, Color::new(255, 130, 40, a), Color::new(255, 130, 40, 0));
 }
 
 /// A burning ground cell's flames (`Game::fires`): the three-frame loop
@@ -206,12 +146,14 @@ pub fn draw_ground_fire(d: &mut impl RaylibDraw, texture: &Texture2D, center: Po
     let frame = (((time / cadence) as i64 + (seed % FIRE_LOOP_FRAMES as u32) as i64).rem_euclid(FIRE_LOOP_FRAMES as i64)) as i32;
     let flip = if seed & 2 != 0 { -1.0 } else { 1.0 };
     let src = Rectangle::new((FIRE_LOOP_COL + frame) as f32 * cell, SCORCH_ROW as f32 * cell, cell * flip, cell);
-    let size = cell * 2.0;
+    // One and a half cells across: the tongues reach past their own cell
+    // without neighbouring fires fusing into a solid wall.
+    let size = cell * 1.5;
     let dying = (left / 0.6).clamp(0.0, 1.0);
     let catching = ((total - left) / 0.25).clamp(0.0, 1.0);
     let a = (255.0 * dying.min(catching)) as u8;
     // The flames sit in the lower half of the cell art, so the sprite is
     // centred a little above the ground cell and the tongues rise past it.
-    let dest = Rectangle::new(center.x, center.y - 8.0, size, size);
+    let dest = Rectangle::new(center.x, center.y - 6.0, size, size);
     d.draw_texture_pro(texture, src, dest, Vector2::new(size / 2.0, size / 2.0), 0.0, Color::new(255, 255, 255, a));
 }

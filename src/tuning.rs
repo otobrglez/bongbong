@@ -650,15 +650,15 @@ tunables! {
         /// A Purple charge batch scales `plasma_damage_factor` by this on
         /// top.
         plasma_purple_damage_factor: f32 = 1.10 in 0.1 ..= 5.0;
-        /// Pulsating in-flight glow (`render::plasma::draw_plasma`): pulses per
-        /// second, and the glow radius at the low/high point of the pulse as
-        /// a multiple of the sprite radius.
+        /// The in-flight orb's breathing (`render/shot_shaders.rs`): pulses
+        /// per second, and the strength of its glow and rim at the low and
+        /// high point of each pulse.
         plasma_pulse_hz: f32 = 6.0 in 0.1 ..= 30.0;
         plasma_pulse_min_scale: f32 = 0.85 in 0.1 ..= 3.0;
         plasma_pulse_max_scale: f32 = 1.35 in 0.1 ..= 3.0;
         /// The Flying state's baked 4-frame breathing cycle plays this many
-        /// full cycles per second, independent of `plasma_pulse_hz` - two
-        /// independent cycles read richer than one rate driving both.
+        /// full cycles per second, where the baked sprite is what flies (no
+        /// shaders, or `shot_glow_strength` 0).
         plasma_flying_cycle_fps: f32 = 10.0 in 0.5 ..= 60.0;
     }
 
@@ -2019,10 +2019,11 @@ tunables! {
         bullet_tracer_length: f32 = 26.0 in 0.0 ..= 160.0;
         /// Length (px) of the fading afterimage chain a plasma bolt leaves.
         plasma_trail_length: f32 = 52.0 in 0.0 ..= 160.0;
-        /// Radius (px) of the plasma orb drawn in flight (`render/plasma.rs`);
-        /// its orbit rings reach 1.75 times as far.
+        /// Radius (px) of the plasma orb drawn in flight
+        /// (`render/shot_shaders.rs`); its glow reaches about 2.3 times as far.
         plasma_orb_radius: f32 = 11.0 in 4.0 ..= 32.0;
-        /// Turns per second of the plasma orb's energy bands and rings.
+        /// Turns per second of the plasma orb's surface, before each bolt's
+        /// own speed factor (0.7 to 1.5, either way round).
         plasma_orb_spin_hz: f32 = 1.6 in 0.0 ..= 10.0;
         /// Radius (px) of the muzzle flare at its first frame; it shrinks
         /// over `muzzle_flash_duration`. The star rays reach twice as far.

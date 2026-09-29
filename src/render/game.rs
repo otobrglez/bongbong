@@ -26,7 +26,7 @@ use crate::obstacle::{draw_flying_drum, Obstacle};
 use crate::render::lobby::{draw_lobby, draw_online_button};
 use crate::pickup::PickupKind;
 use crate::plasma::{Plasma, PlasmaState};
-use crate::render::blast::{draw_blast, draw_blast_glow, draw_burning_hull_glow, draw_fire_glow, draw_flame_body, draw_flame_core, draw_flame_glow, draw_fuse_glow, draw_ground_fire};
+use crate::render::blast::{draw_blast, draw_blast_glow, draw_burning_hull_glow, draw_fire_glow, draw_flame_glow, draw_fuse_glow, draw_ground_fire};
 use crate::render::bullet::{draw_bullet, draw_bullet_light, draw_bullet_shadow};
 use crate::render::canvas::{GpuCanvas, Sheets};
 use crate::render::decal::draw_decal_shadow;
@@ -36,12 +36,12 @@ use crate::render::hud::{
     draw_restart_button,
 };
 use crate::render::laser::{draw_laser_beam, draw_laser_bloom, draw_laser_flares};
-use crate::render::plasma::{draw_plasma, draw_plasma_front, draw_plasma_light, draw_plasma_shadow};
+use crate::render::plasma::{draw_plasma, draw_plasma_shadow};
 use crate::render::portal::draw_portal_glow;
 use crate::missile::Missile;
 use crate::render::missile::{draw_missile, draw_missile_exhaust, draw_missile_shadow};
 use crate::render::shell::{draw_shell, draw_shell_light, draw_shell_shadow};
-use crate::render::shot_fx::{at_nozzle, draw_impact_flare, draw_muzzle_flare};
+use crate::render::shot_fx::{at_nozzle, draw_impact_flare, draw_muzzle_flare, ground_light, spike_ring};
 use crate::render::shockwave::{screen_to_ripple_uv, RippleFx};
 use crate::render::tank::draw_player_label;
 use crate::shell::{Shell, ShellState};
@@ -54,13 +54,11 @@ use crate::simulation::Overlays;
 use crate::tank::{ActiveWeapon, Dir, Tank};
 use crate::tuning::tuning;
 use crate::view::View;
-use crate::{Layout, SHOCK_MAX};
+use crate::{Layout, Position, SHOCK_MAX};
 #[cfg(feature = "dev-tools")]
 use crate::math::Vec2;
 #[cfg(feature = "dev-tools")]
 use crate::pickup::Pickup;
-#[cfg(feature = "dev-tools")]
-use crate::Position;
 #[cfg(feature = "dev-tools")]
 use crate::{HUD_MARGIN, MAX_DAMAGE};
 
@@ -153,6 +151,10 @@ pub struct Effects<'a> {
     pub shock: &'a mut RippleFx,
     pub muzzle: &'a mut RippleFx,
     pub impact: &'a mut RippleFx,
+    /// The plasma orb and flame jet shaders (`render/shot_shaders.rs`);
+    /// `None` flies the baked plasma sprite and draws the flamethrower from
+    /// its particles alone.
+    pub shots: Option<&'a mut crate::render::shot_shaders::ShotShaders>,
     /// The short-lived particle layer. Owned by `main.rs`, not by `Game`
     /// (see `fx.rs`), and read-only here - `render` never mutates it, the
     /// same contract it has with `Game`.
@@ -161,6 +163,57 @@ pub struct Effects<'a> {
     /// bitmap space when a keyboard-less device is playing; `None` draws
     /// nothing. The `bool` is whether the stick lives on the right half.
     pub touch: Option<(&'a crate::touch::TouchScheme, bool)>,
+}
+
+impl Game {
+    /// The light shots throw on the ground (inside the first additive
+    /// block, under every sprite): a soft pool in the shot's colour under
+    /// each shell, bullet, plasma orb and missile, along the flamethrower's
+    /// stream, where a laser burns, and a flash of it at every muzzle and
+    /// impact - so the floor itself says where the fire is.
+    fn draw_ground_light(&self, d: &mut impl RaylibDraw) {
+        let warm = Color::new(255, 140, 50, 255);
+        for shell in self.world.query::<&Shell>().iter() {
+            if shell.state == ShellState::Flying {
+                ground_light(d, shell.position, 30.0, warm, 0.28);
+            }
+        }
+        for bullet in self.world.query::<&Bullet>().iter() {
+            if bullet.state == BulletState::Flying {
+                ground_light(d, bullet.position, 14.0, Color::new(255, 200, 90, 255), 0.22);
+            }
+        }
+        for plasma in self.world.query::<&Plasma>().iter() {
+            let [_, body, bright, _] = plasma.variant.orb_colors();
+            match plasma.impact_progress() {
+                Some(p) => ground_light(d, plasma.position, 30.0 + 40.0 * p, bright, 0.55 * (1.0 - p)),
+                None if plasma.state == PlasmaState::Flying => ground_light(d, plasma.position, 44.0, body, 0.4),
+                None => {}
+            }
+        }
+        for missile in self.world.query::<&Missile>().iter() {
+            ground_light(d, missile.position, 26.0, warm, 0.3 * (1.0 - 0.6 * missile.lift()));
+        }
+        for jet in self.flames() {
+            let flicker = 0.8 + 0.2 * (self.time * 29.0).sin();
+            for (along, r) in [(0.35, 0.3), (0.75, 0.45)] {
+                let at = Position::new(jet.origin.x + jet.dir.x * jet.reach * along, jet.origin.y + jet.dir.y * jet.reach * along);
+                ground_light(d, at, jet.reach * r, warm, 0.3 * flicker);
+            }
+        }
+        for beam in &self.laser_beams {
+            let k = (beam.timer / tuning().laser_beam_display_seconds).clamp(0.0, 1.0);
+            ground_light(d, beam.end, 36.0, Color::new(255, 90, 70, 255), 0.5 * k);
+        }
+        for flash in &self.muzzle_flashes {
+            let k = 1.0 - (flash.time / tuning().muzzle_flash_duration.max(0.01)).clamp(0.0, 1.0);
+            ground_light(d, flash.center, 44.0, Color::new(255, 190, 90, 255), 0.45 * k);
+        }
+        for flash in &self.impact_flashes {
+            let k = 1.0 - (flash.time / tuning().impact_flash_duration.max(0.01)).clamp(0.0, 1.0);
+            ground_light(d, flash.center, 56.0 - 16.0 * k, warm, 0.5 * k);
+        }
+    }
 }
 
 impl Game {
@@ -319,14 +372,14 @@ impl Game {
             let lit = tuning().shot_glow_strength > 0.0;
             if lit {
                 d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+                    // Light on the floor first: every shot, burn and flash
+                    // lights the ground around it in its own colour.
+                    self.draw_ground_light(&mut bd);
                     for shell in self.world.query::<&Shell>().iter() {
                         draw_shell_light(&mut bd, shell);
                     }
                     for bullet in self.world.query::<&Bullet>().iter() {
                         draw_bullet_light(&mut bd, bullet);
-                    }
-                    for plasma in self.world.query::<&Plasma>().iter() {
-                        draw_plasma_light(&mut bd, plasma);
                     }
                     for beam in &self.laser_beams {
                         draw_laser_bloom(&mut bd, beam);
@@ -341,11 +394,18 @@ impl Game {
                 draw_shell(&mut d, textures.shells, shell);
             }
 
+            // A flying bolt is the shader orb where the shaders loaded; its
+            // muzzle and impact frames stay the baked sprite.
+            let orb = lit && effects.shots.is_some();
             for plasma in self.world.query::<&Plasma>().iter() {
-                if self.shadows_enabled && plasma.state == PlasmaState::Flying {
-                    draw_plasma_shadow(&mut d, textures.plasma, plasma);
+                let flying = plasma.state == PlasmaState::Flying;
+                if self.shadows_enabled && flying {
+                    draw_plasma_shadow(&mut d, textures.plasma, plasma, orb);
                 }
-                draw_plasma(&mut d, textures.plasma, plasma, self.time);
+                match effects.shots.as_deref_mut() {
+                    Some(shots) if orb && flying => shots.draw_orb(&mut d, plasma, self.time),
+                    _ => draw_plasma(&mut d, textures.plasma, plasma),
+                }
             }
 
             for bullet in self.world.query::<&Bullet>().iter() {
@@ -358,26 +418,20 @@ impl Game {
             for beam in &self.laser_beams {
                 draw_laser_beam(&mut d, beam);
             }
-            if lit {
-                for jet in self.flames() {
-                    draw_flame_body(&mut d, jet.origin, jet.dir, jet.reach, self.time);
+            // The flamethrower's jet of burning fuel, over the tanks and
+            // under its own flying motes.
+            if let Some(shots) = effects.shots.as_deref_mut().filter(|_| lit) {
+                for (i, jet) in self.flames().iter().enumerate() {
+                    shots.draw_flame(&mut d, jet.origin, jet.dir, jet.reach, self.time, i as f32 * 7.31);
                 }
             }
 
-            // Over the shots: the plasma orbs' bands and near rings, the
-            // flamethrower's white-hot core, the flares where shots leave
-            // the barrel and where they land, and the burn at each end of a
-            // laser. A flamethrower nozzle pushes a muzzle flash every held
+            // Over the shots: the flares where they leave the barrel and
+            // where they land, and the burn at each end of a laser. A flamethrower nozzle pushes a muzzle flash every held
             // frame and has its own glow, so it gets no flare.
             if lit {
                 let nozzles: Vec<Position> = self.flames().iter().map(|jet| jet.origin).collect();
                 d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
-                    for plasma in self.world.query::<&Plasma>().iter() {
-                        draw_plasma_front(&mut bd, plasma, self.time);
-                    }
-                    for jet in self.flames() {
-                        draw_flame_core(&mut bd, jet.origin, jet.dir, jet.reach, self.time);
-                    }
                     for beam in &self.laser_beams {
                         draw_laser_flares(&mut bd, beam);
                     }
@@ -386,6 +440,15 @@ impl Game {
                     }
                     for flash in &self.impact_flashes {
                         draw_impact_flare(&mut bd, flash);
+                    }
+                    // A plasma bolt's burst: a ring of spikes thrown out in
+                    // the bolt's colour, turned by its id.
+                    for plasma in self.world.query::<&Plasma>().iter() {
+                        if let Some(p) = plasma.impact_progress() {
+                            let [_, _, bright, _] = plasma.variant.orb_colors();
+                            let turn = (plasma.id % 16) as f32 * 0.39;
+                            spike_ring(&mut bd, plasma.position, p, 6.0, 38.0, 14, turn, bright);
+                        }
                     }
                 });
             }
