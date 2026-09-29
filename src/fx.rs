@@ -592,6 +592,11 @@ impl Fx {
                     self.flame_mote(jet, along);
                     n += 1;
                 }
+                // Sparks spat off the tip, arcing on past the reach.
+                if self.due(key ^ 0x3c3c, stream_rate * 0.06, dt) {
+                    let tip = Position::new(jet.origin.x + jet.dir.x * jet.reach * 0.8, jet.origin.y + jet.dir.y * jet.reach * 0.8);
+                    self.cone_burst(tip, jet.dir, 0.6, ParticleKind::Spark, 1, 160.0, &[WHITE_T, FIRE_T]);
+                }
                 // Smoke off the far end, where the fire has burnt out.
                 if self.due(key ^ 0x5a5a, stream_rate * 0.12, dt) {
                     let end = Position::new(jet.origin.x + jet.dir.x * jet.reach, jet.origin.y + jet.dir.y * jet.reach);

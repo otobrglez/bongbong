@@ -26,7 +26,7 @@ use crate::obstacle::{draw_flying_drum, Obstacle};
 use crate::render::lobby::{draw_lobby, draw_online_button};
 use crate::pickup::PickupKind;
 use crate::plasma::{Plasma, PlasmaState};
-use crate::render::blast::{draw_blast, draw_blast_glow, draw_burning_hull_glow, draw_fire_glow, draw_flame_glow, draw_fuse_glow, draw_ground_fire};
+use crate::render::blast::{draw_blast, draw_blast_glow, draw_burning_hull_glow, draw_fire_glow, draw_flame_body, draw_flame_core, draw_flame_glow, draw_fuse_glow, draw_ground_fire};
 use crate::render::bullet::{draw_bullet, draw_bullet_light, draw_bullet_shadow};
 use crate::render::canvas::{GpuCanvas, Sheets};
 use crate::render::decal::draw_decal_shadow;
@@ -36,7 +36,7 @@ use crate::render::hud::{
     draw_restart_button,
 };
 use crate::render::laser::{draw_laser_beam, draw_laser_bloom, draw_laser_flares};
-use crate::render::plasma::{draw_plasma, draw_plasma_light, draw_plasma_shadow};
+use crate::render::plasma::{draw_plasma, draw_plasma_front, draw_plasma_light, draw_plasma_shadow};
 use crate::render::portal::draw_portal_glow;
 use crate::missile::Missile;
 use crate::render::missile::{draw_missile, draw_missile_exhaust, draw_missile_shadow};
@@ -345,7 +345,7 @@ impl Game {
                 if self.shadows_enabled && plasma.state == PlasmaState::Flying {
                     draw_plasma_shadow(&mut d, textures.plasma, plasma);
                 }
-                draw_plasma(&mut d, textures.plasma, plasma);
+                draw_plasma(&mut d, textures.plasma, plasma, self.time);
             }
 
             for bullet in self.world.query::<&Bullet>().iter() {
@@ -358,14 +358,26 @@ impl Game {
             for beam in &self.laser_beams {
                 draw_laser_beam(&mut d, beam);
             }
+            if lit {
+                for jet in self.flames() {
+                    draw_flame_body(&mut d, jet.origin, jet.dir, jet.reach, self.time);
+                }
+            }
 
-            // Over the shots: the flares where they leave the barrel and
-            // where they land, and the burn at each end of a laser. A
-            // flamethrower nozzle pushes a muzzle flash every held frame
-            // and has its own glow, so it gets no flare.
-            if lit && !(self.muzzle_flashes.is_empty() && self.impact_flashes.is_empty() && self.laser_beams.is_empty()) {
+            // Over the shots: the plasma orbs' bands and near rings, the
+            // flamethrower's white-hot core, the flares where shots leave
+            // the barrel and where they land, and the burn at each end of a
+            // laser. A flamethrower nozzle pushes a muzzle flash every held
+            // frame and has its own glow, so it gets no flare.
+            if lit {
                 let nozzles: Vec<Position> = self.flames().iter().map(|jet| jet.origin).collect();
                 d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+                    for plasma in self.world.query::<&Plasma>().iter() {
+                        draw_plasma_front(&mut bd, plasma, self.time);
+                    }
+                    for jet in self.flames() {
+                        draw_flame_core(&mut bd, jet.origin, jet.dir, jet.reach, self.time);
+                    }
                     for beam in &self.laser_beams {
                         draw_laser_flares(&mut bd, beam);
                     }

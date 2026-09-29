@@ -2019,6 +2019,11 @@ tunables! {
         bullet_tracer_length: f32 = 26.0 in 0.0 ..= 160.0;
         /// Length (px) of the fading afterimage chain a plasma bolt leaves.
         plasma_trail_length: f32 = 52.0 in 0.0 ..= 160.0;
+        /// Radius (px) of the plasma orb drawn in flight (`render/plasma.rs`);
+        /// its orbit rings reach 1.75 times as far.
+        plasma_orb_radius: f32 = 11.0 in 4.0 ..= 32.0;
+        /// Turns per second of the plasma orb's energy bands and rings.
+        plasma_orb_spin_hz: f32 = 1.6 in 0.0 ..= 10.0;
         /// Radius (px) of the muzzle flare at its first frame; it shrinks
         /// over `muzzle_flash_duration`. The star rays reach twice as far.
         muzzle_glow_radius: f32 = 14.0 in 0.0 ..= 80.0;

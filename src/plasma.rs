@@ -4,10 +4,10 @@
 //! way - straight down the barrel, a twin-barrel chassis firing one bolt per
 //! barrel a beat apart (see `Tank::pending_plasma_shot`, mirroring
 //! `shell::Shell`'s `PendingShot`) - but dealing PLASMA_DAMAGE_FACTOR more
-//! damage and rendered as a glowing, pulsating orb (the runtime sine-wave
-//! glow in `render::plasma::draw_plasma`, layered on top of a 4-frame baked
-//! breathing animation while `Flying` - see `render::plasma::flying_col`/
-//! docs/PLASMA_SPEC.md) that
+//! damage and rendered in flight as a spinning, shaded "magic" orb with two
+//! orbit rings, composed at draw time in `render::plasma::draw_plasma` (the
+//! 4-frame baked breathing animation - `render::plasma::flying_col`,
+//! docs/PLASMA_SPEC.md - is what flies when `shot_glow_strength` is 0) that
 //! bursts into a small electric/sci-fi splash on impact instead of a
 //! shell's smoke-and-fire blast.
 //!

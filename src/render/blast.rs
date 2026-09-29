@@ -103,6 +103,68 @@ pub fn draw_flame_glow(d: &mut impl RaylibDraw, origin: Position, dir: Vec2, rea
     pixel_disc(d, mid, (reach * 0.22).max(6.0), Color::new(255, 120, 40, (70.0 * flicker) as u8));
 }
 
+/// One slice of the flamethrower's stream at step `i` of `steps`: where
+/// its centre sits (swaying sideways off the round clock), its half width
+/// (licking in and out) and how far along the stream it is (0..1).
+fn flame_slice(origin: Position, dir: Vec2, reach: f32, time: f32, i: i32, steps: i32) -> (Position, f32, f32, f32) {
+    let spread = tuning().flame_half_angle_deg.to_radians().tan();
+    let t = i as f32 / steps as f32;
+    let along = reach * 0.8 * t;
+    let lick = 0.5 + 0.5 * (time * 31.0 - i as f32 * 0.9).sin();
+    let sway = (time * 19.0 + i as f32 * 0.7).sin() * along * 0.07;
+    let at = Position::new(origin.x + dir.x * along - dir.y * sway, origin.y + dir.y * along + dir.x * sway);
+    (at, 2.0 + along * spread * (0.4 + 0.25 * lick), t, lick)
+}
+
+/// Steps along the stream: one slice every 4 px of the drawn length.
+fn flame_steps(reach: f32) -> i32 {
+    (reach * 0.8 / 4.0).ceil() as i32
+}
+
+/// The flamethrower's stream body (normal blend, drawn over the tanks):
+/// a tapering tongue of block discs, yellow at the root through orange to
+/// a dull red tip, each slice's width and sideways sway flickering so the
+/// stream licks and rolls. Drawn as paint rather than light so the orange
+/// stays orange over grass; `draw_flame_core` is the light inside it and
+/// the motes (`fx.rs`) ride over both.
+pub fn draw_flame_body(d: &mut impl RaylibDraw, origin: Position, dir: Vec2, reach: f32, time: f32) {
+    let strength = tuning().shot_glow_strength;
+    if strength <= 0.0 || reach <= 4.0 {
+        return;
+    }
+    let steps = flame_steps(reach);
+    for i in (0..steps).rev() {
+        let (at, half, t, lick) = flame_slice(origin, dir, reach, time, i, steps);
+        let color = if t < 0.3 {
+            Color::new(255, 206, 84, 255)
+        } else if t < 0.6 {
+            Color::new(246, 128, 38, 255)
+        } else {
+            Color::new(196, 56, 26, 255)
+        };
+        let a = (strength * (1.0 - t).powf(0.5) * (0.45 + 0.2 * lick)).clamp(0.0, 1.0);
+        pixel_disc(d, at, half, Color::new(color.r, color.g, color.b, (255.0 * a) as u8));
+    }
+}
+
+/// The white-hot light inside the stream (additive, over the body): a
+/// narrower core through the first two thirds of it.
+pub fn draw_flame_core(d: &mut impl RaylibDraw, origin: Position, dir: Vec2, reach: f32, time: f32) {
+    let strength = tuning().shot_glow_strength;
+    if strength <= 0.0 || reach <= 4.0 {
+        return;
+    }
+    let steps = flame_steps(reach);
+    for i in 0..steps {
+        let (at, half, t, lick) = flame_slice(origin, dir, reach, time, i, steps);
+        if t > 0.65 {
+            break;
+        }
+        let a = (strength * (1.0 - t / 0.65) * (0.4 + 0.25 * lick)).clamp(0.0, 1.0);
+        pixel_disc(d, at, half * 0.45, Color::new(255, 240, 190, (255.0 * a) as u8));
+    }
+}
+
 /// The glow on a hull the flamethrower set alight (additive): a flickering
 /// disc that shrinks as the afterburn runs out, `left` seconds to go.
 pub fn draw_burning_hull_glow(d: &mut impl RaylibDraw, center: Position, time: f32, left: f32) {
