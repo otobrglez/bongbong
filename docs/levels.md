@@ -13,12 +13,13 @@ the end screen waits for the player instead of restarting the round.
 | Order | Roughly easy to hard: Lotus Lagoon (5 tanks) first, Grand Campaign (7 waves) last. Edit `levels.toml` to change it. |
 | Progression | Only a win opens the next level. A loss offers the same level again. Winning the last level shows "all levels complete" and leads back to level 1. |
 | Start and save | A session opens on the furthest level reached. On the web that is the page's `localStorage` (`bongbong.level`); on a desktop or a phone, a file. Progress is kept by map name, so reordering the list keeps it. |
-| End screen | Waits for a button: `PLAY AGAIN` always, `NEXT LEVEL` after a win (`BACK TO LEVEL 1` after the last). Enter takes the way on after a win and plays again after a loss; R plays again, as it always did. |
+| End screen | Waits for a button: `LEVELS` and `PLAY AGAIN` always, `NEXT LEVEL` after a win (`BACK TO LEVEL 1` after the last). Enter takes the way on after a win and plays again after a loss; R plays again, as it always did; Esc opens the level select. |
 | Stats | Time (the round clock, which stands still behind the banner and while paused) and enemies destroyed out of all the round brings, split by seat in a couch round. |
 | Banner | `LEVEL 3 / 14` over the mission banner, the level's title under it at half the banner's size (36 px under 72). |
 | Builder edits | A level edited in the builder is played as edited for the rest of the session, every time it comes round. On a desktop the builder's Save writes it to `maps/<map>.toml`, which later sessions read first. |
 | Free play | Any map that is not a level (`-m`, the builder's Load list, a Save As under a new name) restarts on its own after `restart_delay`, as every round did before; its end screen shows the same numbers. |
 | Online | Unchanged: a room's round counts down to the room's lobby. |
+| Going back | The level select: every level as a tile, the ones won and the furthest reached open, the rest locked. Opened from the bar's level button (`LEVEL 3`, in the mission word's place on a level), the end screen's `LEVELS` and Esc; the round behind it stands still. A replay moves nothing: only a win on the furthest level reached opens another. No best times. |
 
 ## The flow
 
@@ -62,7 +63,7 @@ banner. `play_again` is `init` on the same map. `press_result` and
 `enter_result` are the one entry for a click, a tap, the dev server's
 `click`/`key` and Enter; the hit test reads `hud::result_layout`, the same
 geometry the painter draws from, so a button that is not drawn cannot be
-pressed. A tap that presses one is claimed from the touch scheme
+pressed. `LEVELS` opens the level select (below). A tap that presses one is claimed from the touch scheme
 (`TouchScheme::claim`) so it is not also the fire press that skips the next
 level's banner.
 
@@ -76,14 +77,42 @@ seat touched (a drum, a fire, a frog's bite) counts for the team alone. All
 of it is bookkeeping: no RNG, so every seeded replay and probe fixture is
 unchanged.
 
+## Going back: the level select
+
+`level_select.rs` is the screen and `render/level_select.rs` its painting,
+the lobby's shape: a fixed 704 x 336 panel over the dimmed field (it fits
+the smallest field the game ships, 768 x 384), `tile_rect` and `back_rect`
+the one geometry the painter and every hit test read, and a
+`LevelSelectView` of plain data. Fourteen tiles in two rows of seven, 88 x
+90 px: the number, the title on at most two balanced lines (`wrap`), a tick
+on a level won, a padlock on a locked one, the amber of the furthest
+reached, a white edge where the keyboard's focus is and a pip on the level
+the round behind is. A test holds `levels.toml` to the one page.
+
+`Session::level_select` is the screen's state; while it is up `playing()`
+is false, so the round is frozen the way the dialogs freeze it and resumes
+where it stood on `BACK`, Esc, Tab or a press outside the panel. A press on
+an open tile - or Enter on the focus the arrow keys move - is
+`start_level`, which is a new round with its banner; a locked tile is no
+button. It opens from three places: the bar's level button
+(`hud::level_button_rect`, `Session::level_button` - which the painter and
+the hit tests both read, so it is pressable exactly where it is drawn), the
+end screen's `LEVELS` (left of `PLAY AGAIN`, so the way on stays on the
+right), and Esc in play mode. The level button takes the bar's title slot
+on a level - `LEVEL 3` with a wave round's `2/5` beside it; the mission word
+is the opening banner's - and free play keeps its mission word, Esc being
+its way to the level select.
+
 ## Words
 
 The English titles are `levels.toml`'s. Another language translates a title
 as `level-<map>` in its `lang/*.ftl` (`text_tests` allows those ids beyond
 English's and measures every title against the smallest field). The
 chrome is `level-number`, `result-time`, `result-wrecks`,
-`result-all-clear`, `result-again`, `result-next` and `result-first`, each
-with its budget in `text_tests::budgets`.
+`result-all-clear`, `result-again`, `result-next`, `result-first`,
+`result-levels`, `levels-title`, `levels-sub`, `levels-back` and
+`bar-level`, each with its budget in `text_tests::budgets`; every title is
+also held to its tile, whole, on two lines.
 
 ## Tests
 
@@ -96,6 +125,15 @@ with its budget in `text_tests::budgets`.
   play.
 - `simulation::mechanics_tests` - the numbers and the seat credit, a wave
   round's total, a held end screen waits and R still restarts it.
-- `hud::hud_tests` - the end screen fits the smallest field in every form;
-  `touch` - a claimed touch neither fires nor steers; `devserver` - the end
-  screen takes `click` and `key`.
+- `hud::hud_tests` - the end screen fits the smallest field in every form,
+  its three buttons in one centred row; `touch` - a claimed touch neither
+  fires nor steers; `devserver` - the end screen takes `click` and `key`.
+- `level_select::level_select_tests` - the shipped levels fit one page,
+  every tile and `BACK` are finger-sized inside the panel on both field
+  sizes, a locked tile is no button, the keys walk only the open tiles, the
+  pointer takes the focus only by moving, titles wrap balanced;
+  `mode::session_tests` - the screen freezes the round, `BACK` resumes it
+  where it stood, a replay moves nothing, the end screen's `LEVELS` opens it;
+  `devserver` - the bar's button, Esc, the arrows and Enter, and `step`
+  refusing by name while the screen is up; `render::hud::bar_tests` - the
+  level button and a wave count fit the title slot.

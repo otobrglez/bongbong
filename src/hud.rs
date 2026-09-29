@@ -239,8 +239,12 @@ pub fn other_seats(seats: usize, local: usize) -> Vec<usize> {
 /// `HudModel::gather`, so the draw pass never queries the world.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HudModel {
-    /// `PROTECT`, or `PROTECT   WAVE 2/5` in a wave round.
+    /// `PROTECT`, or `PROTECT 2/5` in a wave round.
     pub title: String,
+    /// The wave called and how many the round has, in a wave round: what
+    /// the bar keeps beside the level button when that takes the mission
+    /// word's place.
+    pub wave: Option<(u32, u32)>,
     /// Live enemies, and the ones still to roll in (shown as a dim `+N`).
     pub enemies_alive: usize,
     pub enemies_pending: usize,
@@ -306,7 +310,8 @@ impl HudModel {
             .frog
             .or(game.enemy_frog)
             .map(|e| with_frog(&game.world, e, |f| f.health_fraction()));
-        HudModel { title, enemies_alive, enemies_pending, layout, local, second, others, frog }
+        let wave = wave.map(|w| (w.index, w.total));
+        HudModel { title, wave, enemies_alive, enemies_pending, layout, local, second, others, frog }
     }
 }
 
@@ -383,6 +388,22 @@ pub const ONLINE_COLOR: Color = Color::new(120, 220, 255, 255);
 /// anywhere that says so; the press is `Session::leave_online`.
 pub fn leave_button_rect(panel: Rect) -> Rectangle {
     mode_button_rect(panel)
+}
+
+/// The level button at the bar's left end (docs/levels.md): on a level it
+/// takes the mission word's place - `LEVEL 3`, the word small and the
+/// number in the bar's size - and opens the level select
+/// (`Session::press_levels`). The wave count of a wave round stays beside
+/// it; the mission word is the opening banner's. Outlined like the slots
+/// at the other end, and as tall.
+pub const LEVEL_BUTTON_X: f32 = 6.0;
+pub const LEVEL_BUTTON_W: f32 = 88.0;
+/// The gap between the level button's word and its number.
+pub const LEVEL_BUTTON_WORD_GAP: i32 = 5;
+
+/// Where the level button sits in `panel` (window space).
+pub fn level_button_rect(panel: Rect) -> Rectangle {
+    Rectangle::new(panel.x + LEVEL_BUTTON_X, panel.y, LEVEL_BUTTON_W, panel.h)
 }
 
 /// Where the RESTART button sits: the players button's slot, which is free
@@ -498,6 +519,8 @@ pub enum NextLevel {
 /// The end screen's buttons, field space.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ResultRects {
+    /// `LEVELS`, the level select, on the left.
+    pub levels: Rectangle,
     pub again: Rectangle,
     /// Only after a win.
     pub next: Option<Rectangle>,
@@ -538,11 +561,13 @@ pub const RESULT_TEXT_PX: i32 = 768 - 32;
 pub const RESULT_BUTTON_W: f32 = 224.0;
 pub const RESULT_BUTTON_H: f32 = 48.0;
 pub const RESULT_BUTTON_GAP: f32 = 24.0;
+/// `LEVELS` is the quieter way out, and narrower.
+pub const RESULT_LEVELS_W: f32 = 160.0;
 
 /// The end screen stacked and centred on the field: the outcome, then
-/// whichever lines `view` carries, then the buttons or the countdown. Two
-/// buttons sit side by side, `PLAY AGAIN` on the left; alone it is
-/// centred.
+/// whichever lines `view` carries, then the buttons or the countdown. A
+/// level's buttons sit in one centred row - `LEVELS`, `PLAY AGAIN`, and
+/// after a win the way on - so the way forward is always on the right.
 pub fn result_layout(field: Rect, view: &ResultView) -> ResultLayout {
     let line = RESULT_LINE_SIZE as f32;
     let all_clear = matches!(view.buttons, Some(ResultButtons { next: Some(NextLevel::FirstAgain { .. }) }));
@@ -569,13 +594,14 @@ pub fn result_layout(field: Rect, view: &ResultView) -> ResultLayout {
     });
     y += 14.0;
     let buttons = view.buttons.map(|b| {
-        let (w, h, gap) = (RESULT_BUTTON_W, RESULT_BUTTON_H, RESULT_BUTTON_GAP);
-        match b.next {
-            Some(_) => {
-                let x = ((field.w - 2.0 * w - gap) / 2.0).round();
-                ResultRects { again: Rectangle::new(x, y, w, h), next: Some(Rectangle::new(x + w + gap, y, w, h)) }
-            }
-            None => ResultRects { again: Rectangle::new(((field.w - w) / 2.0).round(), y, w, h), next: None },
+        let (w, h, gap, levels_w) = (RESULT_BUTTON_W, RESULT_BUTTON_H, RESULT_BUTTON_GAP, RESULT_LEVELS_W);
+        let row = levels_w + gap + w + if b.next.is_some() { gap + w } else { 0.0 };
+        let x = ((field.w - row) / 2.0).round();
+        let again = Rectangle::new(x + levels_w + gap, y, w, h);
+        ResultRects {
+            levels: Rectangle::new(x, y, levels_w, h),
+            again,
+            next: b.next.map(|_| Rectangle::new(again.x + w + gap, y, w, h)),
         }
     });
     let countdown_y = view.buttons.is_none().then_some(y);
@@ -627,6 +653,11 @@ pub struct PlayChrome {
     /// The end screen's numbers and a level's buttons, once a local
     /// round is decided.
     pub result: Option<ResultView>,
+    /// The level button's number (`Session::level_button`), drawn in the
+    /// mission word's place on a level.
+    pub level_button: Option<usize>,
+    /// The level select over a dimmed field (`level_select.rs`).
+    pub levels: Option<crate::level_select::LevelSelectView>,
 }
 
 /// The online status line's text size and how far in from the field's
@@ -808,9 +839,10 @@ mod hud_tests {
     }
 
     /// The end screen fits the smallest field the game ships in its
-    /// tallest form - every level complete, eight seats' shares, two
-    /// buttons - its buttons finger-sized and apart, and each form puts
-    /// its lines top to bottom without overlapping.
+    /// tallest and widest form - every level complete, eight seats'
+    /// shares, three buttons - its buttons finger-sized, apart and in one
+    /// centred row, and each form puts its lines top to bottom without
+    /// overlapping.
     #[test]
     fn the_end_screen_fits_the_smallest_field_in_every_form() {
         let fields = [Rect::new(0.0, 0.0, 768.0, 384.0), Rect::new(0.0, 0.0, W, H), Rect::new(0.0, 0.0, 1536.0, 768.0)];
@@ -831,16 +863,18 @@ mod hud_tests {
                     }
                     match rows.buttons {
                         Some(r) => {
-                            assert!(r.again.y >= y && r.again.y + r.again.height <= field.h, "{what}: the buttons leave the field");
-                            assert!(r.again.width >= crate::lobby::LOBBY_TOUCH_MIN && r.again.height >= crate::lobby::LOBBY_TOUCH_MIN);
-                            assert!(r.again.x >= 0.0);
-                            match r.next {
-                                Some(next) => {
-                                    assert!(r.again.x + r.again.width + 16.0 <= next.x, "{what}: the two touch");
-                                    assert!(next.x + next.width <= field.w && next.y == r.again.y);
-                                }
-                                None => assert!(((r.again.x + r.again.width / 2.0) - field.w / 2.0).abs() <= 1.0, "{what}: alone, centred"),
+                            let row: Vec<Rectangle> = [Some(r.levels), Some(r.again), r.next].into_iter().flatten().collect();
+                            for b in &row {
+                                assert!(b.y >= y && b.y + b.height <= field.h, "{what}: the buttons leave the field");
+                                assert!(b.width >= crate::lobby::LOBBY_TOUCH_MIN && b.height >= crate::lobby::LOBBY_TOUCH_MIN);
+                                assert!(b.x >= 16.0 && b.x + b.width <= field.w - 16.0, "{what}: a button runs off the side");
+                                assert_eq!(b.y, r.again.y, "{what}: one row");
                             }
+                            for pair in row.windows(2) {
+                                assert!(pair[0].x + pair[0].width + 16.0 <= pair[1].x, "{what}: two buttons touch");
+                            }
+                            let (left, right) = (row[0].x, row[row.len() - 1].x + row[row.len() - 1].width);
+                            assert!(((left + right) / 2.0 - field.w / 2.0).abs() <= 1.0, "{what}: the row is centred");
                             assert_eq!(r.next.is_some(), buttons.is_some_and(|b| b.next.is_some()), "{what}: a way on only after a win");
                             assert!(rows.countdown_y.is_none());
                         }

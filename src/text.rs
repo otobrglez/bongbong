@@ -106,6 +106,11 @@ keys! {
     RESULT_AGAIN = "result-again";
     RESULT_NEXT = "result-next";
     RESULT_FIRST = "result-first";
+    RESULT_LEVELS = "result-levels";
+    LEVELS_TITLE = "levels-title";
+    LEVELS_SUB = "levels-sub";
+    LEVELS_BACK = "levels-back";
+    BAR_LEVEL = "bar-level";
     SEAT_LABEL = "seat-label";
     TOUCH_STEER = "touch-steer";
     TOUCH_FIRE = "touch-fire";
@@ -594,9 +599,11 @@ pub fn fit(text: &str, max_px: i32, size: i32) -> Cow<'_, str> {
 mod text_tests {
     use super::*;
     use crate::hud::{
-        DIALOG_BUTTON_W, DIALOG_W, HUD_GAUGE_LABEL_MAX_PX, HUD_LABEL_SIZE, HUD_TEXT_SIZE, LEVEL_NUMBER_SIZE, LEVEL_TITLE_SIZE,
-        MODE_BUTTON_W, ONLINE_BUTTON_W, RESULT_BUTTON_W, RESULT_LINE_SIZE, RESULT_STATS_GAP, RESULT_TEXT_PX,
+        DIALOG_BUTTON_W, DIALOG_W, HUD_GAUGE_LABEL_MAX_PX, HUD_LABEL_SIZE, HUD_TEXT_SIZE, LEVEL_BUTTON_W, LEVEL_BUTTON_WORD_GAP,
+        LEVEL_NUMBER_SIZE, LEVEL_TITLE_SIZE, MODE_BUTTON_W, ONLINE_BUTTON_W, RESULT_BUTTON_W, RESULT_LEVELS_W, RESULT_LINE_SIZE,
+        RESULT_STATS_GAP, RESULT_TEXT_PX,
     };
+    use crate::level_select::{SELECT_BACK_W, SELECT_MARGIN, SELECT_W, TILE_TITLE_SIZE};
     use crate::lobby::{LOBBY_BUTTON_W, LOBBY_KICK_W, LOBBY_WIDE_W, LOBBY_W, LOBBY_MARGIN};
 
     /// The ids of every message in a shipped file: a message starts a
@@ -829,6 +836,19 @@ mod text_tests {
             (keys::RESULT_AGAIN, HUD_TEXT_SIZE, RESULT_BUTTON_W as i32 - 16, vec![]),
             (keys::RESULT_NEXT, HUD_TEXT_SIZE, RESULT_BUTTON_W as i32 - 16, vec![]),
             (keys::RESULT_FIRST, HUD_TEXT_SIZE, RESULT_BUTTON_W as i32 - 16, vec![]),
+            (keys::RESULT_LEVELS, HUD_TEXT_SIZE, RESULT_LEVELS_W as i32 - 16, vec![]),
+            // The level select: the lobby's title and line sizes across
+            // its content, BACK in its button; the bar's level button
+            // holds its word and a two-digit number.
+            (keys::LEVELS_TITLE, 22, (SELECT_W - 2.0 * SELECT_MARGIN) as i32, vec![]),
+            (keys::LEVELS_SUB, HUD_LABEL_SIZE + 2, (SELECT_W - 2.0 * SELECT_MARGIN) as i32, vec![]),
+            (keys::LEVELS_BACK, HUD_TEXT_SIZE, SELECT_BACK_W as i32 - 12, vec![]),
+            (
+                keys::BAR_LEVEL,
+                HUD_LABEL_SIZE,
+                LEVEL_BUTTON_W as i32 - 12 - LEVEL_BUTTON_WORD_GAP - width("88", HUD_TEXT_SIZE),
+                vec![],
+            ),
         ]
     }
 
@@ -846,11 +866,17 @@ mod text_tests {
                     over.push(format!("{tag}: {} = {text:?} is {w} px at {size} px, over its {max_px} px budget", key.0));
                 }
             }
-            // Every level's title under the mission banner.
+            // Every level's title under the mission banner, and on its
+            // tile in the level select, whole.
+            let tile_px = crate::level_select::tile_text_px(crate::Rect::new(0.0, 0.0, 768.0, 384.0));
             for level in crate::levels::Levels::shipped().iter() {
                 let title = catalogue.message(&format!("level-{}", level.map), &[]).unwrap_or_else(|| fold(&level.title).into_owned());
                 if width(&title, LEVEL_TITLE_SIZE) > RESULT_TEXT_PX {
                     over.push(format!("{tag}: level {} = {title:?} overflows the field", level.map));
+                }
+                let lines = crate::level_select::wrap(&title, tile_px, TILE_TITLE_SIZE);
+                if lines.iter().any(|line| line.ends_with('~')) {
+                    over.push(format!("{tag}: level {} = {title:?} is cut on its tile: {lines:?}", level.map));
                 }
             }
             // The tool names in their dropdown rows, and the short ones

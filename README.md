@@ -32,7 +32,9 @@ cargo run -- --editor                        # start in the map builder (BUILD/P
 
 The game is a run of levels, listed in order in `levels.toml`: win one and
 the next opens, lose and play it again (docs/levels.md). The furthest level
-reached is remembered between sessions.
+reached is remembered between sessions, and any level up to it can be played
+again from the level select - the `LEVEL` button at the left end of the bar,
+`LEVELS` on the end screen, or Esc.
 
 The phone lanes are documented in `CLAUDE.md` (the "iOS simulator build" and
 "Android build" sections) and in `docs/ios-native-port-prd.md` /

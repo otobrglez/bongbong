@@ -23,6 +23,7 @@ use crate::hud::{
 };
 use crate::math::{Color, Rectangle};
 use crate::obstacle::{draw_flying_drum, Obstacle};
+use crate::render::level_select::draw_level_select;
 use crate::render::lobby::{draw_lobby, draw_online_button};
 use crate::pickup::PickupKind;
 use crate::plasma::{Plasma, PlasmaState};
@@ -749,11 +750,16 @@ impl Game {
                 if let Some(lobby) = &chrome.lobby {
                     draw_lobby(&mut d, layout.field, lobby, textures);
                 }
+                // The level select (level_select.rs), with its own dim,
+                // over a round that stands still behind it.
+                if let Some(levels) = &chrome.levels {
+                    draw_level_select(&mut d, layout.field, levels);
+                }
             });
 
             // The HUD bar, in window space, over anything the field pass
             // might have put on its edge.
-            draw_bar(&mut d, layout.panel, &hud, textures);
+            draw_bar(&mut d, layout.panel, &hud, textures, chrome.level_button.map(|n| (n, chrome.levels.is_some())));
             if chrome.players_button {
                 draw_players_button(&mut d, layout.panel, self.players, chrome.players_dialog);
             }

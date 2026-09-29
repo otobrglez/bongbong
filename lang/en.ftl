@@ -98,6 +98,20 @@ result-again = PLAY AGAIN
 result-next = NEXT LEVEL
 result-first = BACK TO LEVEL 1
 
+# Beside those, in a 160 px button: the level select.
+result-levels = LEVELS
+
+# The level select, over the dimmed field: its title (22 px) and the line
+# under it (12 px), both in about 660 px, and its one button (18 px text in
+# 140 px) that goes back to the round or the end screen it opened over.
+levels-title = LEVELS
+levels-sub = Pick a level to play. Winning one opens the next.
+levels-back = BACK
+
+# The bar's level button, in the mission word's place on a level: this
+# word small (10 px) with the level's number after it, in about 44 px.
+bar-level = LEVEL
+
 # The locate label over a player's tank and the lobby's seat column: the
 # seat's number. Keep it short - it sits over a 48 px hull.
 seat-label = P{ $n }

@@ -23,11 +23,14 @@
 //! The local round is a level when its map is one (`levels.rs`,
 //! docs/levels.md): its end screen then waits for `PLAY AGAIN` or, after
 //! a win, `NEXT LEVEL`, and a win is progress for the store. Any other
-//! map is free play and restarts on its own.
+//! map is free play and restarts on its own. The level select
+//! (`level_select.rs`) stands over the frozen round the way the dialogs
+//! do, and is the way back to a level already won.
 
 use crate::ai::Intent;
 use crate::editor::{BuilderInput, EditorAction, MapEditor};
 use crate::hud::{result_layout, LevelBanner, NextLevel, PlayChrome, ResultButtons, ResultView};
+use crate::level_select::{LevelSelect, SelectAction, SelectInput};
 use crate::levels::Campaign;
 use crate::lobby::{Lobby, LobbyAction, LobbyInput, RoomPhase, RoomView};
 use crate::map::MapFile;
@@ -106,6 +109,10 @@ pub struct Session {
     /// `set_campaign`. `None` - a test's session, a tool's - makes every
     /// map free play.
     pub campaign: Option<Campaign>,
+    /// The level select (`level_select.rs`), from `press_levels` until a
+    /// level starts or it is closed: play mode only, never together with
+    /// a dialog, and the round behind it frozen the dialogs' way.
+    pub level_select: Option<LevelSelect>,
 }
 
 /// A session reads as its round: the dev server, its tests and `main.rs`
@@ -142,6 +149,7 @@ impl Session {
             nick: "player".into(),
             token: "bongbong-player".into(),
             campaign: None,
+            level_select: None,
         }
     }
 
@@ -174,6 +182,7 @@ impl Session {
         self.sync_level();
         self.dialog = false;
         self.players_dialog = false;
+        self.level_select = None;
         let (width, height) = self.game.map.field_size();
         self.game.init(width, height);
         Ok(())
@@ -255,9 +264,61 @@ impl Session {
         } else if rects.next.is_some_and(|r| r.contains(p)) {
             self.next_level();
             true
+        } else if rects.levels.contains(p) {
+            self.press_levels();
+            true
         } else {
             false
         }
+    }
+
+    /// The level select: open it over the round, which stands still
+    /// behind it (`playing()` is false while it is up), or close it if it
+    /// already is - the bar's level button, the end screen's `LEVELS` and
+    /// Esc. Play mode with levels only; a dialog that was asking closes.
+    /// Answers whether it is open.
+    pub fn press_levels(&mut self) -> bool {
+        if self.level_select.take().is_some() {
+            return false;
+        }
+        let Some(campaign) = &self.campaign else { return false };
+        if self.driver != Driver::Play {
+            return false;
+        }
+        self.dialog = false;
+        self.players_dialog = false;
+        self.level_select = Some(LevelSelect::open(self.level(), campaign.reached()));
+        true
+    }
+
+    /// One frame of the level select (`input` in field space): its hit
+    /// tests and keys, and whatever they ask. Answers whether a level
+    /// started - a new round, with its banner.
+    pub fn update_level_select(&mut self, input: &SelectInput, field: Rect) -> bool {
+        let (Some(select), Some(campaign)) = (&mut self.level_select, &self.campaign) else { return false };
+        match select.update(input, field, campaign.levels.len(), campaign.reached()) {
+            SelectAction::Stay => false,
+            SelectAction::Close => {
+                self.level_select = None;
+                false
+            }
+            SelectAction::Start(i) => match self.start_level(i) {
+                Ok(()) => true,
+                Err(e) => {
+                    eprintln!("[levels] level {}: {e}", i + 1);
+                    self.level_select = None;
+                    false
+                }
+            },
+        }
+    }
+
+    /// The number of the level on the field, for the bar's level button
+    /// in the mission word's place: a local round in play mode on a
+    /// level. The painter and every hit test read it, so the button is
+    /// pressable exactly where it is drawn.
+    pub fn level_button(&self) -> Option<usize> {
+        (self.driver == Driver::Play).then(|| self.level()).flatten().map(|i| i + 1)
     }
 
     /// Enter on a level's end screen: the way on after a win, `PLAY
@@ -283,7 +344,7 @@ impl Session {
     /// Whether `Game::update` should run this frame: play mode with no
     /// question pending.
     pub fn playing(&self) -> bool {
-        self.driver == Driver::Play && !self.dialog && !self.players_dialog
+        self.driver == Driver::Play && !self.dialog && !self.players_dialog && self.level_select.is_none()
     }
 
     /// A round the player could still lose by leaving: anything but the
@@ -297,7 +358,9 @@ impl Session {
     /// a no-op. Returns the mode afterwards.
     pub fn press_build(&mut self) -> Driver {
         if self.driver == Driver::Play {
-            if self.players_dialog {
+            if self.level_select.take().is_some() {
+                // As with the players question: the level select closes.
+            } else if self.players_dialog {
                 // A press anywhere else closes the players question.
                 self.players_dialog = false;
             } else if self.dialog {
@@ -331,11 +394,12 @@ impl Session {
 
     /// The players button in the bar: open the players dialog, or close it
     /// if it is already up. Play mode only, and a no-op while the leave
-    /// dialog is asking - one question at a time. Works on the end screen
+    /// dialog is asking or the level select is up - one question at a
+    /// time. Works on the end screen
     /// too (the restart countdown waits). Returns whether it is open. Never
     /// opens where two players are not offered (`TWO_PLAYERS_AVAILABLE`).
     pub fn press_players(&mut self) -> bool {
-        if crate::TWO_PLAYERS_AVAILABLE && self.driver == Driver::Play && !self.dialog {
+        if crate::TWO_PLAYERS_AVAILABLE && self.driver == Driver::Play && !self.dialog && self.level_select.is_none() {
             self.players_dialog = !self.players_dialog;
         }
         self.players_dialog
@@ -408,6 +472,7 @@ impl Session {
         }
         self.dialog = false;
         self.players_dialog = false;
+        self.level_select = None;
         self.lobby = Some(Lobby::new(self.site.clone(), self.rooms.clone()));
         self.driver = Driver::Lobby;
         self.driver
@@ -673,6 +738,11 @@ impl Session {
                     Some(LevelBanner { number: i + 1, count: campaign.levels.len(), title: level.title() })
                 }),
                 result: self.result_view(),
+                level_button: self.level_button(),
+                levels: self.level_select.as_ref().zip(self.campaign.as_ref()).map(|(select, campaign)| {
+                    let (width, height) = self.game.map.field_size();
+                    select.view(campaign, self.level(), Rect::new(0.0, 0.0, width, height))
+                }),
             },
         }
     }
@@ -1242,6 +1312,62 @@ mod session_tests {
         assert!(!s.press_result(centre(result_rects(&s).expect("buttons").again)), "not while the builder is up");
     }
 
+    /// The level select stands over a frozen round and starts only a
+    /// level already reached; closing it leaves the round exactly where
+    /// it stood, and a replay - won or lost - moves nothing. The end
+    /// screen's `LEVELS` opens it, as the bar's level button does.
+    #[test]
+    fn the_level_select_replays_a_reached_level_over_a_frozen_round() {
+        use crate::level_select::{back_rect, tile_rect, SelectInput, TileState};
+        assert!(!session().press_levels(), "a session with no levels has no level select");
+
+        let mut s = level_session(two_levels(), 0);
+        let (w, h) = s.game.map.field_size();
+        let field = Rect::new(0.0, 0.0, w, h);
+        let press = |p| SelectInput { pointer: Some(p), pressed: true, ..SelectInput::default() };
+        assert_eq!(s.level_button(), Some(1));
+        step(&mut s);
+        let frame = s.game.frame();
+        if crate::TWO_PLAYERS_AVAILABLE {
+            s.press_players();
+        }
+        assert!(s.press_levels());
+        assert!(!s.players_dialog, "one question at a time");
+        assert!(!s.playing(), "the round stands still behind it");
+        let view = s.play_chrome().levels.expect("the screen");
+        assert_eq!((view.tiles[0].state, view.tiles[1].state), (TileState::Next, TileState::Locked));
+        assert!(!s.update_level_select(&press(centre(tile_rect(field, 1))), field));
+        assert!(s.level_select.is_some(), "a locked level is no button");
+        assert!(!s.update_level_select(&press(centre(back_rect(field))), field));
+        assert!(s.level_select.is_none() && s.playing());
+        assert_eq!((s.game.frame(), s.level()), (frame, Some(0)), "the same round, where it stood");
+
+        // Won: level 2 is reached, and the end screen opens the screen.
+        finish(&mut s, true);
+        assert_eq!(s.take_progress().as_deref(), Some("glasshouses"));
+        assert!(s.press_result(centre(result_rects(&s).expect("the buttons").levels)));
+        assert!(s.level_select.is_some());
+        assert!(s.update_level_select(&press(centre(tile_rect(field, 0))), field), "level 1 again");
+        assert_eq!((s.level(), s.game.outcome()), (Some(0), Outcome::Playing));
+        assert!(s.level_select.is_none() && s.playing());
+        finish(&mut s, false);
+        assert_eq!(s.take_progress(), None, "a lost replay moves nothing");
+        assert_eq!(s.campaign.as_ref().map(Campaign::reached), Some(1), "level 2 is still the furthest reached");
+
+        // The keys: right onto level 2, Enter starts it.
+        s.play_again();
+        s.press_levels();
+        let key = |f: fn(&mut SelectInput)| {
+            let mut input = SelectInput::default();
+            f(&mut input);
+            input
+        };
+        assert!(!s.update_level_select(&key(|i| i.right = true), field));
+        assert!(s.update_level_select(&key(|i| i.enter = true), field));
+        assert_eq!(s.level(), Some(1));
+        assert_eq!(s.level_button(), Some(2));
+    }
+
     /// Any map that is not a level is free play: its end screen shows the
     /// numbers and counts down to a restart of its own, with no buttons.
     #[test]
@@ -1251,6 +1377,9 @@ mod session_tests {
         assert_eq!(s.level(), None);
         assert!(!s.game.hold_end_screen);
         assert!(s.play_chrome().level.is_none());
+        assert_eq!(s.level_button(), None, "the bar keeps its mission word");
+        assert!(s.press_levels(), "and the level select is the way back to the levels");
+        assert!(!s.press_levels());
         // The default map is a wave round, so its enemies are still out
         // of the field: the round ends on player 1's wreck.
         s.game.debug_kill(0).unwrap();

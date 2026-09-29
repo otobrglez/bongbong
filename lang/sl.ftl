@@ -51,6 +51,11 @@ result-all-clear = VSE STOPNJE SO OPRAVLJENE!
 result-again = ŠE ENKRAT
 result-next = NASLEDNJA STOPNJA
 result-first = NAZAJ NA ZAČETEK
+result-levels = STOPNJE
+levels-title = STOPNJE
+levels-sub = Izberi stopnjo. Zmaga odpre naslednjo.
+levels-back = NAZAJ
+bar-level = STOPNJA
 
 level-lotus-lagoon = Lotosova laguna
 level-glasshouses = Vrt s steklenjaki

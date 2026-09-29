@@ -11,9 +11,10 @@ use crate::ai::Intent;
 use crate::editor::{BuilderInput, CliOverrides, EditorTextures};
 use crate::render::game::{Effects, Textures};
 use crate::hud::{
-    leave_button_rect, leave_dialog_rects, mode_button_rect, online_button_rect, players_button_rect,
+    leave_button_rect, leave_dialog_rects, level_button_rect, mode_button_rect, online_button_rect, players_button_rect,
     players_dialog_rects, restart_button_rect, BAR_FILL,
 };
+use crate::level_select::SelectInput;
 use crate::levels::{Campaign, Levels};
 use crate::lobby::LobbyInput;
 use crate::mode::{Driver, Session};
@@ -1313,7 +1314,25 @@ pub fn run(args: Args) {
                 // on any of them is never a tank order. Nothing here
                 // touches the simulation - a frozen round is one whose
                 // `update` is not called (see `Session::playing`).
-                if session.players_dialog {
+                if session.level_select.is_some() {
+                    // The level select takes every press and key while it
+                    // is up, and a press on it is nobody's shot - neither
+                    // the round's it closes back onto nor the next level's.
+                    if pressed {
+                        touch.claim(&touch_points);
+                    }
+                    let input = SelectInput {
+                        pointer: Some(layout.to_field(pointer)),
+                        pressed,
+                        left: rl.is_key_pressed(KeyboardKey::KEY_LEFT),
+                        right: rl.is_key_pressed(KeyboardKey::KEY_RIGHT),
+                        up: rl.is_key_pressed(KeyboardKey::KEY_UP),
+                        down: rl.is_key_pressed(KeyboardKey::KEY_DOWN),
+                        enter: rl.is_key_pressed(KeyboardKey::KEY_ENTER),
+                        escape: rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) || tab,
+                    };
+                    session.update_level_select(&input, layout.field);
+                } else if session.players_dialog {
                     let rects = players_dialog_rects(layout.field);
                     let field_p = layout.to_field(pointer);
                     if pressed {
@@ -1365,6 +1384,12 @@ pub fn run(args: Args) {
                 } else if rl.is_key_pressed(KeyboardKey::KEY_ENTER) && session.enter_result() {
                     // Enter takes the way on after a win, PLAY AGAIN after
                     // a loss; R is the simulation's own restart.
+                } else if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) && session.press_levels() {
+                    // Esc opens the level select over the round, wherever
+                    // it stands (docs/levels.md).
+                } else if pressed && session.level_button().is_some() && level_button_rect(layout.panel).contains(pointer) {
+                    // The bar's level button, in the mission word's place.
+                    session.press_levels();
                 } else if tab || (pressed && mode_button_rect(layout.panel).contains(pointer)) {
                     session.press_build();
                 } else if crate::TWO_PLAYERS_AVAILABLE

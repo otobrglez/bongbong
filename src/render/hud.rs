@@ -5,10 +5,10 @@
 use sola_raylib::prelude::*;
 
 use crate::hud::{
-    clock_text, leave_button_rect, leave_dialog_rects, mode_button_rect, players_button_rect, players_dialog_rects,
-    restart_button_rect, result_layout, weapon_color, HudLayout, HudModel, NextLevel, ResultButtons, ResultView, SeatHud,
-    WeaponSlot, BAR_FILL, BUILD_COLOR, DIALOG_W, DIM, HUD_LABEL_SIZE, HUD_TEXT_SIZE, ONLINE_COLOR, RESULT_LINE_SIZE,
-    RESULT_SEATS_SIZE, RESULT_STATS_GAP, TEXT, WEAPON_SLOTS,
+    clock_text, leave_button_rect, leave_dialog_rects, level_button_rect, mode_button_rect, players_button_rect,
+    players_dialog_rects, restart_button_rect, result_layout, weapon_color, HudLayout, HudModel, NextLevel, ResultButtons,
+    ResultView, SeatHud, WeaponSlot, BAR_FILL, BUILD_COLOR, DIALOG_W, DIM, HUD_LABEL_SIZE, HUD_TEXT_SIZE,
+    LEVEL_BUTTON_WORD_GAP, ONLINE_COLOR, RESULT_LINE_SIZE, RESULT_SEATS_SIZE, RESULT_STATS_GAP, TEXT, WEAPON_SLOTS,
 };
 use crate::math::{Color, Rectangle};
 use crate::text::{keys, text, width};
@@ -176,7 +176,11 @@ const TANK_GLYPH_H: i32 = 14;
 /// Draw the bar into `panel` (window space). Everything is placed from
 /// the panel's origin, so the same function draws it wherever the layout
 /// puts the panel.
-pub fn draw_bar(d: &mut impl RaylibDraw, panel: Rect, model: &HudModel, textures: &Textures) {
+///
+/// `level` is the level button's number and whether the level select it
+/// opens is up (`PlayChrome::level_button`): on a level the button takes
+/// the mission word's place and a wave round's count stands beside it.
+pub fn draw_bar(d: &mut impl RaylibDraw, panel: Rect, model: &HudModel, textures: &Textures, level: Option<(usize, bool)>) {
     let px = panel.x.round() as i32;
     let py = panel.y.round() as i32;
     let pw = panel.w.round() as i32;
@@ -191,7 +195,16 @@ pub fn draw_bar(d: &mut impl RaylibDraw, panel: Rect, model: &HudModel, textures
     // compact table sets small so its strip has room.
     let count_y = py + (ph - s.count_size) / 2;
 
-    d.draw_text(&model.title, px + SLOT_TITLE, text_y, HUD_TEXT_SIZE, TEXT);
+    match level {
+        Some((number, open)) => {
+            draw_level_button(d, panel, number, open);
+            if let Some((index, total)) = model.wave {
+                let r = level_button_rect(panel);
+                d.draw_text(&format!("{index}/{total}"), (r.x + r.width) as i32 + LEVEL_WAVE_GAP, text_y, HUD_TEXT_SIZE, TEXT);
+            }
+        }
+        None => d.draw_text(&model.title, px + SLOT_TITLE, text_y, HUD_TEXT_SIZE, TEXT),
+    }
 
     // A tank glyph stands for "enemies": the word does not fit the 960 px
     // bar beside everything else, and the count next to a tank reads.
@@ -450,6 +463,30 @@ pub fn draw_restart_button(d: &mut impl RaylibDraw, panel: Rect) {
     d.draw_triangle(tip, b, a, TEXT);
 }
 
+/// The gap between the level button and the wave count beside it.
+const LEVEL_WAVE_GAP: i32 = 8;
+
+/// The level button: the bar's slot frame in the levels' amber around
+/// `LEVEL 3` - the word small, the number in the bar's size - washed
+/// amber while the level select it opens is up.
+pub fn draw_level_button(d: &mut impl RaylibDraw, panel: Rect, number: usize, open: bool) {
+    let r = level_button_rect(panel);
+    let frame = Rectangle::new(r.x, r.y + 2.0, r.width, r.height - 4.0);
+    if open {
+        d.draw_rectangle_rec(frame, Color::new(BUILD_COLOR.r, BUILD_COLOR.g, BUILD_COLOR.b, 50));
+    }
+    d.draw_rectangle_lines_ex(frame, 2.0, BUILD_COLOR);
+    let word = text().get(keys::BAR_LEVEL);
+    let number = number.to_string();
+    let (word_w, number_w) = (width(&word, HUD_LABEL_SIZE), width(&number, HUD_TEXT_SIZE));
+    let x = (r.x + (r.width - (word_w + LEVEL_BUTTON_WORD_GAP + number_w) as f32) / 2.0) as i32;
+    let number_y = (r.y + (r.height - HUD_TEXT_SIZE as f32) / 2.0) as i32;
+    // The word sits on the number's baseline rather than its middle.
+    let word_y = number_y + HUD_TEXT_SIZE - HUD_LABEL_SIZE - 2;
+    d.draw_text(&word, x, word_y, HUD_LABEL_SIZE, BUILD_COLOR);
+    d.draw_text(&number, x + word_w + LEVEL_BUTTON_WORD_GAP, number_y, HUD_TEXT_SIZE, BUILD_COLOR);
+}
+
 /// An outlined bar slot with its label centred, in `color`: the shape the
 /// mode button and the online round's `LEAVE` button share.
 fn draw_slot_button(d: &mut impl RaylibDraw, r: Rectangle, label: &str, color: Color) {
@@ -552,6 +589,9 @@ pub fn draw_result(d: &mut impl RaylibDraw, field: Rect, view: &ResultView, coun
         }
     }
     let lit = Some(Color::new(BUILD_COLOR.r, BUILD_COLOR.g, BUILD_COLOR.b, 40));
+    if let Some(rects) = rows.buttons {
+        draw_dialog_button(d, rects.levels, &t.get(keys::RESULT_LEVELS), TEXT, None);
+    }
     match (rows.buttons, view.buttons.and_then(|b| b.next)) {
         // The way on is the one to press; PLAY AGAIN stands beside it.
         (Some(rects), Some(next)) => {
@@ -707,6 +747,19 @@ mod bar_tests {
         assert!(online.x + online.width + PLAYERS_BUTTON_GAP <= players.x);
         assert!(players.x + players.width + PLAYERS_BUTTON_GAP <= build.x);
         assert!((SLOTS_TWO.bars + 3 * BAR_SLOT_W) as f32 <= online.x);
+    }
+
+    /// On a level the title slot holds the level button and, in a wave
+    /// round, the widest wave count beside it: both end before the enemy
+    /// count in every table. (The button's own word is `text_tests`'.)
+    #[test]
+    fn the_level_button_and_a_wave_count_fit_the_title_slot() {
+        let button = crate::hud::level_button_rect(default_panel());
+        assert!(button.width >= 48.0 && button.height == default_panel().h, "a finger's target like the other end's");
+        let end = button.x + button.width + (LEVEL_WAVE_GAP + width("12/12", HUD_TEXT_SIZE)) as f32;
+        for (name, s) in [("one", &SLOTS_ONE), ("two", &SLOTS_TWO), ("compact", &SLOTS_COMPACT)] {
+            assert!(end <= s.enemies as f32, "{name}: the wave count runs into the enemy count");
+        }
     }
 
     #[test]
