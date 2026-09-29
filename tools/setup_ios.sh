@@ -84,9 +84,12 @@ else
     touch "$IOS_PREFIX/$SDL_MARK"
 fi
 
-# --- raylib 6.0 from the crate's vendored tree: SDL backend, ES 2.0 ---------
-RL_VENDORED="$(ls -d "$HOME"/.cargo/registry/src/*/sola-raylib-sys-6.3.0/raylib 2>/dev/null | head -1 || true)"
-[[ -d "$RL_VENDORED" ]] || { echo "[setup-ios] sola-raylib-sys-6.3.0 is not in the cargo registry; run 'cargo fetch' first" >&2; exit 1; }
+# --- raylib from the crate's vendored tree: SDL backend, ES 2.0 ---------
+# The raylib the bindings were generated from: the sola-raylib-sys version
+# Cargo.lock pins, so a crate bump needs no edit here.
+RL_SYS_VERSION="$(awk '/^name = "sola-raylib-sys"$/ { getline; gsub(/version = |"/, ""); print; exit }' Cargo.lock)"
+RL_VENDORED="$(ls -d "$HOME"/.cargo/registry/src/*/sola-raylib-sys-"$RL_SYS_VERSION"/raylib 2>/dev/null | head -1 || true)"
+[[ -d "$RL_VENDORED" ]] || { echo "[setup-ios] sola-raylib-sys-$RL_SYS_VERSION is not in the cargo registry; run 'cargo fetch' first" >&2; exit 1; }
 
 # A fresh copy of the vendored tree (the registry is never edited) with the
 # one patch iOS needs on top: tools/ios/raylib-sdl-highdpi.patch teaches the

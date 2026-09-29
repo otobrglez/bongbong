@@ -31,7 +31,7 @@ concurrency:
 
 env:
   # Pinned to devenv.nix's languages.rust.version.
-  RUST_VERSION: 1.97.1
+  RUST_VERSION: 1.98.1
   # The Xcode the local builds use; tools/ios/env.sh reads it.
   BONGBONG_DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
   BONGBONG_IOS_TEAM: PFET672VQB
@@ -44,7 +44,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
@@ -53,7 +53,7 @@ jobs:
           targets: aarch64-apple-ios
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -68,7 +68,7 @@ jobs:
       # Cargo.lock (the sola-raylib-sys tree raylib is built from).
       - name: Cache SDL3 + raylib
         id: ios-libs
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.local/share/bongbong-ios/ios
           key: testflight-ios-libs-${{ hashFiles('tools/setup_ios.sh', 'tools/ios/raylib-sdl-highdpi.patch', 'Cargo.lock') }}-xcode26.3
@@ -97,7 +97,7 @@ jobs:
 
       - name: Keep the export log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: testflight-export-log
           path: target/ios-device/export.log

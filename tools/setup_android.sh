@@ -97,11 +97,17 @@ if [[ "$NO_EMULATOR" != 1 && -f "$AVD_CONFIG" ]] && ! grep -qx "hw.keyboard=yes"
 fi
 
 # --- raylib for Android --------------------------------------------------------------
-RL_VENDORED="$(ls -d "$HOME"/.cargo/registry/src/*/sola-raylib-sys-6.3.0/raylib 2>/dev/null | head -1 || true)"
-[[ -d "$RL_VENDORED" ]] || { echo "[setup-android] sola-raylib-sys-6.3.0 is not in the cargo registry; run 'cargo fetch' first" >&2; exit 1; }
+# The raylib the bindings were generated from: the sola-raylib-sys version
+# Cargo.lock pins, so a crate bump needs no edit here.
+RL_SYS_VERSION="$(awk '/^name = "sola-raylib-sys"$/ { getline; gsub(/version = |"/, ""); print; exit }' Cargo.lock)"
+RL_VENDORED="$(ls -d "$HOME"/.cargo/registry/src/*/sola-raylib-sys-"$RL_SYS_VERSION"/raylib 2>/dev/null | head -1 || true)"
+[[ -d "$RL_VENDORED" ]] || { echo "[setup-android] sola-raylib-sys-$RL_SYS_VERSION is not in the cargo registry; run 'cargo fetch' first" >&2; exit 1; }
+# A fresh copy of the vendored tree (the registry is never edited) with
+# raylib master's relaunch fix on top (tools/android/raylib-android-relaunch.patch).
 RL="$SRC/raylib"
 rm -rf "$RL"
 cp -R "$RL_VENDORED" "$RL"
+patch -p1 -d "$RL" --silent < tools/android/raylib-android-relaunch.patch
 PREFIX="$BONGBONG_ANDROID_LIBS/$ANDROID_ABI"
 rm -rf "$BUILD/raylib-$ANDROID_ABI"
 cmake -S "$RL" -B "$BUILD/raylib-$ANDROID_ABI" -G "Unix Makefiles" \

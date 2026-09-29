@@ -13,7 +13,7 @@
 # .github/actions/build-web/action.yml and devenv.nix's
 # languages.rust.version.
 
-FROM rust:1.97.1-bookworm AS build
+FROM rust:1.98.1-bookworm AS build
 WORKDIR /src
 COPY . .
 

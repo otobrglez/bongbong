@@ -47,7 +47,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # binary and its image still take the crate without it.
 bongbong = { path = "..", default-features = false, features = ["online"] }
 # The headless client of the integration test.
-tokio-tungstenite = "0.29"
+tokio-tungstenite = "0.30"
 # `tokio::time::pause` for the lifecycle and mailbox tests.
 tokio = { version = "1", features = ["test-util"] }
 

@@ -17,14 +17,13 @@ inputs:
   rust-version:
     description: Rust toolchain version. Pinned to match devenv.nix's languages.rust.version.
     required: false
-    default: "1.97.1"
+    default: "1.98.1"
   emsdk-version:
     description: >-
-      emsdk version. Pinned to match tools/setup_emscripten.sh (newer emsdk's
-      wasm-opt breaks on wasm built with -fwasm-exceptions, which rustc 1.93+
-      emits).
+      emsdk version. Pinned to match tools/setup_emscripten.sh, which says
+      why it is pinned.
     required: false
-    default: "5.0.6"
+    default: "6.0.10"
   cargo-features:
     description: >-
       Extra cargo flags for the wasm build, e.g. "--features dev-tools" to
@@ -48,7 +47,7 @@ runs:
       run: corepack enable
 
     - name: Install Node
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v7
       with:
         node-version: "24"
         cache: yarn
@@ -60,7 +59,7 @@ runs:
       run: yarn install --immutable
 
     - name: Cache cargo/emsdk
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: |
           ~/.cargo/registry
