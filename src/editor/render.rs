@@ -746,6 +746,7 @@ impl FileRow {
             FileRow::Load => "LOAD...",
             FileRow::Save => "SAVE",
             FileRow::SaveAs => "SAVE AS...",
+            FileRow::Clear => "CLEAR MAP",
         }
     }
 }
