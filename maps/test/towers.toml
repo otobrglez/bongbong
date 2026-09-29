@@ -1,0 +1,46 @@
+# maps/test/ fixture - the defence towers (docs/defence-towers-prd.md).
+# Swept by `just probe-fixtures` like its neighbours so a tower rule can
+# never quietly break the AI: the enemies have to route round the
+# player's towers' reach, walk into the enemy mortar's ooze, turn on a
+# tower that hurt them and still reach the player. Hand-authored:
+# re-saving from the map editor would drop these comments.
+#
+# towers: the player's tesla beside the frog (cols 30-34, row 11) and a
+# player gun tower up the right side; an enemy gun tower and an enemy
+# tesla out in the field; an enemy bio slush mortar (13,15) covering the
+# lower corridor between two brick runs (rows 13 and 17), with a short
+# stream (col 18) beside it that washes ooze off. Lanes stay at least 3
+# cells wide and the spawn band is clear, so the AI is never forced
+# through a tower.
+
+version = 1
+size = [40, 22.5]
+tanks = 4
+
+cells."30,11" = { kind = "start" }
+cells."34,11" = { kind = "frog" }
+
+cells."32,11" = { kind = "tesla" }
+cells."30,5" = { kind = "gun_tower" }
+
+cells."12,6" = { kind = "gun_tower", side = "enemy" }
+cells."20,9" = { kind = "tesla", side = "enemy" }
+cells."13,15" = { kind = "bio_slush", side = "enemy" }
+
+cells."8,13" = { kind = "wall", material = "brick" }
+cells."9,13" = { kind = "wall", material = "brick" }
+cells."10,13" = { kind = "wall", material = "brick" }
+cells."16,13" = { kind = "wall", material = "brick" }
+cells."17,13" = { kind = "wall", material = "brick" }
+cells."8,17" = { kind = "wall", material = "brick" }
+cells."9,17" = { kind = "wall", material = "brick" }
+cells."10,17" = { kind = "wall", material = "brick" }
+cells."16,17" = { kind = "wall", material = "brick" }
+cells."17,17" = { kind = "wall", material = "brick" }
+
+cells."18,14" = { kind = "water" }
+cells."18,15" = { kind = "water" }
+cells."18,16" = { kind = "water" }
+
+cells."24,3" = { kind = "pickup", pickup = "tower_pack" }
+cells."24,19" = { kind = "pickup", pickup = "health" }

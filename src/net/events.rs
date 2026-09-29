@@ -24,6 +24,7 @@ use crate::net::wire::{RoundOutcome, WeaponKind, dequantise_heading, dequantise_
 use crate::tank::Dir;
 use crate::obstacle::{Drum, Material};
 use crate::pickup::PickupKind;
+use crate::tower::TowerKind;
 use crate::simulation::{Event, HitTarget};
 
 /// The serde tags (`Event`'s `event` field) of the variants
@@ -49,11 +50,13 @@ pub enum IgnitedWhat {
     Drum,
     Sandbag,
     Fence,
+    /// A defence tower caught fire (docs/defence-towers-prd.md section 7).
+    Tower,
 }
 
 impl IgnitedWhat {
     /// Every kind, in wire order.
-    pub const ALL: [IgnitedWhat; 7] = [
+    pub const ALL: [IgnitedWhat; 8] = [
         IgnitedWhat::Ground,
         IgnitedWhat::Oil,
         IgnitedWhat::Wood,
@@ -61,6 +64,7 @@ impl IgnitedWhat {
         IgnitedWhat::Drum,
         IgnitedWhat::Sandbag,
         IgnitedWhat::Fence,
+        IgnitedWhat::Tower,
     ];
 
     /// The name `flame.rs` puts in the event.
@@ -73,6 +77,7 @@ impl IgnitedWhat {
             IgnitedWhat::Drum => "drum",
             IgnitedWhat::Sandbag => "sandbag",
             IgnitedWhat::Fence => "fence",
+            IgnitedWhat::Tower => "tower",
         }
     }
 
@@ -169,6 +174,15 @@ pub enum WireEvent {
     /// `slot`'s shot bounced off iron or a barrel at (`x`, `y`) and flies
     /// on along `heading` (`wire::quantise_heading`); `Event::Ricochet`.
     Ricochet { slot: u16, x: i16, y: i16, heading: u8 },
+    /// A tesla coil's bolt; `Event::TeslaStrike` (docs/defence-towers-prd.md).
+    TeslaStrike { x0: i16, y0: i16, x1: i16, y1: i16, chained: bool },
+    /// A tower fired along `heading` (`wire::quantise_heading`);
+    /// `Event::TowerFired`.
+    TowerFired { kind: TowerKind, x: i16, y: i16, heading: u8 },
+    GlobSplashed { x: i16, y: i16 },
+    Slimed { slot: u16 },
+    SlimeWashed { slot: u16 },
+    TowerRepaired { side: Side, x: i16, y: i16 },
 }
 
 fn slot_u16(slot: usize) -> u16 {
@@ -266,6 +280,20 @@ impl WireEvent {
             Event::Ricochet { slot, x, y, heading } => {
                 WireEvent::Ricochet { slot: slot_u16(slot), x: q(x), y: q(y), heading: quantise_heading(heading) }
             }
+            Event::TeslaStrike { x0, y0, x1, y1, chained } => {
+                WireEvent::TeslaStrike { x0: q(x0), y0: q(y0), x1: q(x1), y1: q(y1), chained }
+            }
+            Event::TowerFired { kind, x, y, heading } => {
+                let kind = TowerKind::parse(kind).unwrap_or_else(|| {
+                    debug_assert!(false, "unknown tower name {kind:?} in Event::TowerFired");
+                    TowerKind::Gun
+                });
+                WireEvent::TowerFired { kind, x: q(x), y: q(y), heading: quantise_heading(heading) }
+            }
+            Event::GlobSplashed { x, y } => WireEvent::GlobSplashed { x: q(x), y: q(y) },
+            Event::Slimed { slot } => WireEvent::Slimed { slot: slot_u16(slot) },
+            Event::SlimeWashed { slot } => WireEvent::SlimeWashed { slot: slot_u16(slot) },
+            Event::TowerRepaired { side, x, y } => WireEvent::TowerRepaired { side, x: q(x), y: q(y) },
             // Never sent: logged on the server.
             Event::PhysicsQuarantine { .. } => return None,
             // Never sent: the AI's trace.
@@ -353,6 +381,16 @@ impl WireEvent {
             WireEvent::Ricochet { slot, x, y, heading } => {
                 Event::Ricochet { slot: slot as usize, x: d(x), y: d(y), heading: dequantise_heading(heading) }
             }
+            WireEvent::TeslaStrike { x0, y0, x1, y1, chained } => {
+                Event::TeslaStrike { x0: d(x0), y0: d(y0), x1: d(x1), y1: d(y1), chained }
+            }
+            WireEvent::TowerFired { kind, x, y, heading } => {
+                Event::TowerFired { kind: kind.name(), x: d(x), y: d(y), heading: dequantise_heading(heading) }
+            }
+            WireEvent::GlobSplashed { x, y } => Event::GlobSplashed { x: d(x), y: d(y) },
+            WireEvent::Slimed { slot } => Event::Slimed { slot: slot as usize },
+            WireEvent::SlimeWashed { slot } => Event::SlimeWashed { slot: slot as usize },
+            WireEvent::TowerRepaired { side, x, y } => Event::TowerRepaired { side, x: d(x), y: d(y) },
         })
     }
 
@@ -426,6 +464,12 @@ mod tests {
             Event::Ignited { x: 48.0, y: 80.0, what: "sandbag" },
             Event::CookOff { x: 64.0, y: 96.75 },
             Event::Ricochet { slot: 2, x: 320.0, y: 64.0, heading: 90.0 },
+            Event::TeslaStrike { x0: 160.0, y0: 80.0, x1: 240.5, y1: 96.25, chained: true },
+            Event::TowerFired { kind: "bio_slush", x: 160.0, y: 67.0, heading: 90.0 },
+            Event::GlobSplashed { x: 300.0, y: 180.0 },
+            Event::Slimed { slot: 4 },
+            Event::SlimeWashed { slot: 4 },
+            Event::TowerRepaired { side: Side::Enemy, x: 176.0, y: 80.0 },
             Event::PhysicsQuarantine { bodies: 1, colliders: 2 },
             Event::AiAction { slot: 5, from: None, to: Some("attack") },
             Event::EngageSlot { slot: 5, from: Some(1), to: None },
@@ -452,7 +496,7 @@ mod tests {
             let listed = NOT_SENT.contains(&tag.as_str());
             assert!(sent != listed, "{tag}: sent={sent} listed={listed}");
         }
-        assert_eq!(seen.len(), 35, "one sample per Event variant");
+        assert_eq!(seen.len(), 41, "one sample per Event variant");
         for name in NOT_SENT {
             assert!(seen.contains(name), "NOT_SENT names an unknown variant {name}");
         }

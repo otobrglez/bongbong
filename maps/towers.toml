@@ -1,0 +1,60 @@
+# towers - the shipped defence towers map (docs/defence-towers-prd.md).
+# Hand-authored: re-saving from the map editor would drop these comments.
+# The level tables are dotted keys on purpose - a `[spawn]` header would
+# swallow every `cells.` line after it.
+#
+# Hold the base. The frog sits in a sandbag pen on the left with the
+# player's three towers round it - a tesla coil on the pen's mouth, a gun
+# tower above and a bio slush mortar below - and four waves, light to
+# heavy, roll in through the two gates on the right edge. The enemy has its
+# own three dug in behind a brick line on the right, between the gates and
+# the field: knock them out from outside their reach, or drive past
+# quickly. A tower pack sits just out of the pen (it mends the player's
+# towers and puts out a fire), health and ammo top and bottom, a shield in
+# the middle for the push. Two short streams wash ooze off. The start sits
+# a third of the way in rather than on the edge, which is what keeps the
+# waves off the border lanes.
+
+version = 1
+mission.kind = "protect"
+spawn.kind = "waves"
+spawn.waves = 4
+spawn.size = 2
+spawn.growth = 1
+spawn.tier_start = "light"
+spawn.tier_end = "heavy"
+
+cells."11,8" = { kind = "start" }
+cells."6,8" = { kind = "frog" }
+cells."33,4" = { kind = "gate" }
+cells."33,12" = { kind = "gate" }
+
+cells."5,6" = { kind = "sandbag" }
+cells."6,6" = { kind = "sandbag" }
+cells."7,6" = { kind = "sandbag" }
+cells."5,10" = { kind = "sandbag" }
+cells."6,10" = { kind = "sandbag" }
+cells."7,10" = { kind = "sandbag" }
+
+cells."8,8" = { kind = "tesla" }
+cells."9,4" = { kind = "gun_tower" }
+cells."9,12" = { kind = "bio_slush" }
+
+cells."27,6" = { kind = "gun_tower", side = "enemy" }
+cells."29,8" = { kind = "tesla", side = "enemy" }
+cells."27,10" = { kind = "bio_slush", side = "enemy" }
+
+cells."22,6" = { kind = "wall", material = "brick" }
+cells."22,10" = { kind = "wall", material = "brick" }
+cells."17,7" = { kind = "wall", material = "iron" }
+cells."17,9" = { kind = "wall", material = "iron" }
+
+cells."20,1" = { kind = "water" }
+cells."20,2" = { kind = "water" }
+cells."20,14" = { kind = "water" }
+cells."20,15" = { kind = "water" }
+
+cells."13,8" = { kind = "pickup", pickup = "tower_pack" }
+cells."16,2" = { kind = "pickup", pickup = "health" }
+cells."16,14" = { kind = "pickup", pickup = "ammo" }
+cells."20,8" = { kind = "pickup", pickup = "shield" }

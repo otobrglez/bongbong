@@ -55,6 +55,9 @@ pub enum Sheet {
     Props,
     /// static/trees_sheet.png (docs/TREES_SPEC.md).
     Trees,
+    /// static/towers_sheet.png (docs/TOWERS_SPEC.md): the defence towers'
+    /// bases, top layers and ruins.
+    Towers,
     /// The tall-grass sheet of a theme (`Theme::grass_texture_path`,
     /// grass.rs), one file per theme like `Ground`.
     Grass(Theme),
@@ -77,12 +80,13 @@ pub enum Sheet {
     Frog { variant: u8, clip: FrogAnim },
 }
 
-/// The ten sheets that are one file each regardless of theme.
-pub const SINGLE_SHEETS: [Sheet; 10] = [
+/// The eleven sheets that are one file each regardless of theme.
+pub const SINGLE_SHEETS: [Sheet; 11] = [
     Sheet::Tanks,
     Sheet::Walls,
     Sheet::Props,
     Sheet::Trees,
+    Sheet::Towers,
     Sheet::Damage,
     Sheet::MinigunMount,
     Sheet::MissilePod,
@@ -93,7 +97,7 @@ pub const SINGLE_SHEETS: [Sheet; 10] = [
 
 /// Every pickup kind, each its own sheet (`pickup_file` is exhaustive over
 /// the enum, so a new kind without a row here fails to compile there).
-pub const PICKUP_KINDS: [PickupKind; 10] = [
+pub const PICKUP_KINDS: [PickupKind; 11] = [
     PickupKind::Health,
     PickupKind::Ammo,
     PickupKind::Laser,
@@ -104,6 +108,7 @@ pub const PICKUP_KINDS: [PickupKind; 10] = [
     PickupKind::Shield,
     PickupKind::Flamethrower,
     PickupKind::FrogHealth,
+    PickupKind::TowerPack,
 ];
 
 /// The five frog clips, in `FrogAnim` order.
@@ -119,6 +124,7 @@ impl Sheet {
             Sheet::Walls => "static/walls_sheet.png".into(),
             Sheet::Props => "static/props_sheet.png".into(),
             Sheet::Trees => "static/trees_sheet.png".into(),
+            Sheet::Towers => "static/towers_sheet.png".into(),
             Sheet::Grass(theme) => theme.grass_texture_path().into(),
             Sheet::Damage => "static/damage.png".into(),
             Sheet::MinigunMount => "static/minigun_mount.png".into(),
@@ -161,6 +167,7 @@ fn pickup_file(kind: PickupKind) -> &'static str {
         PickupKind::Shield => "shield",
         PickupKind::Flamethrower => "flamethrower",
         PickupKind::FrogHealth => "frog_health",
+        PickupKind::TowerPack => "tower_pack",
     }
 }
 

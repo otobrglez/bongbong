@@ -34,6 +34,12 @@ player rows, and the whole of `portal_sheet.png` (`TEAM_SHEETS`), which is
 drawn in the P1 blue ramp so a hole in the ground reads as not-terrain. The
 portal sits on the grass, so it is also held to the no-green rule.
 
+`towers_sheet.png` is a manufactured object on the grass, so it is held to
+the extended set and the no-green rule, with two admissions of its own
+(`TOWER_EXTRA`): the P1 team ramp, which trims the player's towers, and
+`punypalette.OOZE`, the bio slush's glowing acid lime - off the palette on
+purpose like plasma.png, and not one of the grass greens the rule counts.
+
 Run: `just check-sheets` (or `python3 tools/check_sheets.py`). Exits 1 on
 any violation and names the offending sheet.
 """
@@ -65,10 +71,14 @@ ON_PALETTE = [
     'damage.png',
     'tracks.png',
     'portal_sheet.png',
+    'towers_sheet.png',
 ]
 
 # The subset that is drawn over the ground layer and so must carry no green.
-NO_GREEN = ['walls_sheet.png', 'props_sheet.png', 'barrel_explosion.png', 'portal_sheet.png', 'missile.png', 'missile_pod.png']
+NO_GREEN = [
+    'walls_sheet.png', 'props_sheet.png', 'barrel_explosion.png', 'portal_sheet.png', 'missile.png', 'missile_pod.png',
+    'towers_sheet.png',
+]
 
 PALETTE = {tuple(c) for c in pp.PUNY_PALETTE}
 PALETTE_ALL = {tuple(c) for c in pp.PUNY_PALETTE_ALL}
@@ -90,13 +100,19 @@ TEAM_SHEETS = {'portal_sheet.png'}
 # Sheets allowed the palette extension (punypalette.PUNY_EXTRA): the walls
 # sheet for its stone/rust steps, the vegetation sheets for GREEN_SHADE
 # (and, on trees, WOOD_ASH for burnt-out foliage).
-EXTENDED = {'walls_sheet.png', 'nature_sheet.png', 'nature_sheet_desert.png', 'trees_sheet.png'}
+EXTENDED = {'walls_sheet.png', 'nature_sheet.png', 'nature_sheet_desert.png', 'trees_sheet.png', 'towers_sheet.png'}
+
+# The towers sheet's own admissions: the player's trim and the ooze.
+TOWER_SHEET = 'towers_sheet.png'
+TOWER_EXTRA = {tuple(c) for c in pp.TEAM_P1} | {tuple(c) for c in pp.OOZE}
 
 
 def scan(name):
     allowed = PALETTE_ALL if name in EXTENDED else PALETTE
     if name in TEAM_SHEETS:
         allowed = PALETTE | TEAM
+    if name == TOWER_SHEET:
+        allowed = PALETTE_ALL | TOWER_EXTRA
     img = Image.open(os.path.join(STATIC, name)).convert('RGBA')
     off = green = 0
     for y in range(img.height):

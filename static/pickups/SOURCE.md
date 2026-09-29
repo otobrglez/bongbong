@@ -68,6 +68,16 @@ raw-PNG-bytes/no-Pillow convention and the same minimal decoder as the
 shield, and it inherits `health.png`'s provenance and terms for the same
 reason. Regenerate with `python3 tools/gen_frog_health_pickup.py`.
 
+`tower_pack.png` is derived from `health.png` the same way as the shield:
+`tools/gen_tower_pack_pickup.py` sweeps the box's red through the same
+rainbow on the same diagonal, paints the white cross over in the box's own
+body tone (the rainbow running on underneath it) and stamps a spanner in
+the cross's off-white with a dark edge - "a rainbow pack, but it fixes
+towers" (docs/defence-towers-prd.md section 12, the R2 pick). Same raw-PNG-
+bytes/no-Pillow convention and the same minimal decoder, and it inherits
+`health.png`'s provenance and terms for the same reason. Regenerate with
+`python3 tools/gen_tower_pack_pickup.py`.
+
 `health.png` and `ammo.png` are `health-red 32px.png` and
 `ammo-pistol 32px.png` from the third-party "2D Health & Ammo Pickups v6.2"
 pack (`bongbong-assets/2D Health & Ammo Pickups v6.2/32px/`), copied in

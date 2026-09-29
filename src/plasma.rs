@@ -4,10 +4,10 @@
 //! way - straight down the barrel, a twin-barrel chassis firing one bolt per
 //! barrel a beat apart (see `Tank::pending_plasma_shot`, mirroring
 //! `shell::Shell`'s `PendingShot`) - but dealing PLASMA_DAMAGE_FACTOR more
-//! damage and rendered as a glowing, pulsating orb (the runtime sine-wave
-//! glow in `render::plasma::draw_plasma`, layered on top of a 4-frame baked
-//! breathing animation while `Flying` - see `render::plasma::flying_col`/
-//! docs/PLASMA_SPEC.md) that
+//! damage and rendered in flight as a spinning, shaded "magic" orb with two
+//! orbit rings, composed at draw time in `render::plasma::draw_plasma` (the
+//! 4-frame baked breathing animation - `render::plasma::flying_col`,
+//! docs/PLASMA_SPEC.md - is what flies when `shot_glow_strength` is 0) that
 //! bursts into a small electric/sci-fi splash on impact instead of a
 //! shell's smoke-and-fire blast.
 //!
@@ -103,6 +103,21 @@ impl PlasmaState {
             PlasmaState::Hit1 => 0.1,
             PlasmaState::Hit2 => 0.14,
         }
+    }
+}
+
+impl Plasma {
+    /// How far through its impact burst the bolt is, 0 at the hit to 1 as
+    /// the last frame ends, or `None` before it hits.
+    pub fn impact_progress(&self) -> Option<f32> {
+        let before = match self.state {
+            PlasmaState::Hit0 => 0.0,
+            PlasmaState::Hit1 => PlasmaState::Hit0.duration(),
+            PlasmaState::Hit2 => PlasmaState::Hit0.duration() + PlasmaState::Hit1.duration(),
+            _ => return None,
+        };
+        let total = PlasmaState::Hit0.duration() + PlasmaState::Hit1.duration() + PlasmaState::Hit2.duration();
+        Some(((before + self.timer.clamp(0.0, self.state.duration())) / total).clamp(0.0, 1.0))
     }
 }
 

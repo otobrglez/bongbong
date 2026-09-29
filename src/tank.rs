@@ -451,6 +451,11 @@ pub struct Tank {
     /// refreshed every frame the hull is in water, counted down by
     /// `tick_timers`, read by `lay_tracks`.
     pub wet_timer: f32,
+    /// Seconds left of a coat of ooze from a bio slush tower
+    /// (docs/defence-towers-prd.md section 6): while positive the tank
+    /// corrodes at `bio_slime_dps` and drives at `bio_slime_speed_factor`
+    /// of its pace. Set, never added to; water washes it off.
+    pub slime_timer: f32,
     /// FIFO queue of this tank's collected special weapons. The inventory
     /// rule: the weapon at the front keeps firing until its own ammo runs
     /// dry - a fresh pickup never interrupts it, it lines up *behind* (see
@@ -618,6 +623,7 @@ impl Default for Tank {
             flame_fuel: 0.0,
             flame_held: false,
             burn_timer: 0.0,
+            slime_timer: 0.0,
             wet_timer: 0.0,
             laser_variant: LaserVariant::Red,
             minigun_ammo: 0,
@@ -723,11 +729,24 @@ impl Tank {
             // Decided by the frog's own state, not the tank's - see
             // `Game::pickup_phase` and docs/frog-health-pack-prd.md.
             PickupKind::FrogHealth => true,
+            // Decided by the towers' state (`Game::tower_pack_wanted`).
+            PickupKind::TowerPack => true,
         }
     }
 
     pub fn is_shielded(&self) -> bool {
         self.shield_hp > 0.0
+    }
+
+    /// Coated in ooze.
+    pub fn is_slimed(&self) -> bool {
+        self.slime_timer > 0.0
+    }
+
+    /// The fraction of its pace a coat of ooze leaves this tank: 1 when
+    /// clean, so a round without towers multiplies by exactly one.
+    pub fn slime_pace(&self) -> f32 {
+        if self.is_slimed() { tuning().bio_slime_speed_factor } else { 1.0 }
     }
 
     /// How much of a shield is left, 0..=1: `shield_hp` over
@@ -806,7 +825,7 @@ impl Tank {
     pub fn player_index(&self) -> Option<u8> {
         match self.owner {
             Owner::Player(i) => Some(i),
-            Owner::Enemy(_) => None,
+            Owner::Enemy(_) | Owner::Tower { .. } => None,
         }
     }
 
@@ -1361,6 +1380,36 @@ pub fn draw_tank(c: &mut impl Canvas, tank: &Tank) {
     );
 }
 
+/// A tank coated in ooze from a bio slush tower
+/// (docs/defence-towers-prd.md section 12): hull and turret again, washed
+/// in the ooze's colour, with a few blobs stuck on; the wash fades out over
+/// the coat's last half second.
+pub fn draw_tank_slime(c: &mut impl Canvas, tank: &Tank, time: f32) {
+    if !tank.is_slimed() || tank.is_wreck() {
+        return;
+    }
+    let fade = (tank.slime_timer / 0.5).clamp(0.0, 1.0);
+    let size = tank.size();
+    let dest = Rectangle::new(tank.position.x, tank.position.y, size, size);
+    let origin = draw_pivot(size);
+    let wash = |col: Color, a: f32| Color::new(col.r, col.g, col.b, (a * fade) as u8);
+    c.blit(Sheet::Tanks, source_rec(tank.sheet_row(), tank.hull_col()), dest, origin, tank.visual_rotation, wash(crate::tower::OOZE_MD, 120.0));
+    c.blit(Sheet::Tanks, source_rec(tank.sheet_row(), tank.turret_col()), dest, origin, tank.turret_visual_rotation, wash(crate::tower::OOZE_LT, 90.0));
+    let (center, half) = tank.hull_bbox_world();
+    let seed = crate::blast::seed_at(Position::new(tank.owner_slot() as f32 * 32.0, 0.0), 61);
+    for k in 0..7u32 {
+        let h = seed.rotate_left(k * 5) ^ k.wrapping_mul(0x9e37_79b9);
+        let dx = ((h % 1000) as f32 / 1000.0 - 0.5) * 2.0 * half.x * 0.8;
+        // Drips run down the hull on a slow clock.
+        let run = ((time * 0.7 + (h >> 12) as f32 / 1000.0).fract() * 6.0).floor() * 2.0 * (k % 2) as f32;
+        let dy = (((h >> 20) % 1000) as f32 / 1000.0 - 0.5) * 2.0 * half.y * 0.8 + run;
+        let x = ((center.x + dx) / 2.0).round() as i32 * 2;
+        let y = ((center.y + dy) / 2.0).round() as i32 * 2;
+        let col = if k % 3 == 0 { crate::tower::OOZE_LT } else { crate::tower::OOZE_MD };
+        c.fill_rect(x, y, 2 + 2 * (k % 2) as i32, 2, wash(col, 230.0));
+    }
+}
+
 // Puny Palette entries (tools/punypalette.py) the health gauge draws with -
 // literals rather than a sheet sample, like `fx.rs`'s particle tints, since
 // a ring is drawn, not blitted.
@@ -1666,7 +1715,7 @@ pub fn draw_tank_shield(c: &mut impl Canvas, tank: &Tank, time: f32) {
     let base_hue = (time * tuning().shield_glow_hue_hz * 360.0 + tank.anim_phase() * 360.0).rem_euclid(360.0);
     let base = match tank.owner() {
         Owner::Player(i) => with_opacity(team_color(i), tuning().player_ring_opacity * tuning().health_ring_base_opacity),
-        Owner::Enemy(_) => with_opacity(BLACK, tuning().health_ring_gap_opacity),
+        Owner::Enemy(_) | Owner::Tower { .. } => with_opacity(BLACK, tuning().health_ring_gap_opacity),
     };
     let style = RingStyle::Rainbow { base_hue, charge: tank.shield_charge(), base };
     draw_ground_ring(c, tank, time, style, shield_visibility(tank));

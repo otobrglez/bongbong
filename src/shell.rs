@@ -1,3 +1,4 @@
+use crate::frog::Side;
 use crate::tuning::tuning;
 use crate::math::Vec2;
 
@@ -61,20 +62,28 @@ impl ShellState {
 /// Who fired a projectile: damage/kill attribution, same-side checks, and
 /// shooter self-exclusion in the hit test. `Player(i)` is human player `i`
 /// (0 or 1); `Enemy(slot)` carries the tank's owner slot directly - see
-/// `Tank::owner_slot` for the numbering.
+/// `Tank::owner_slot` for the numbering. `Tower` is a defence tower
+/// (docs/defence-towers-prd.md), named by its side and its cell index; no
+/// tank ever has it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Owner {
     Player(u8),
     Enemy(usize),
+    Tower { side: Side, cell: u16 },
 }
+
+/// The owner slot a tower's shots report in events that name a slot
+/// (`Event::Ricochet`): past every tank's, so it never names one.
+pub const TOWER_SLOT: usize = u16::MAX as usize;
 
 impl Owner {
     /// The owner slot this maps to (`Tank::owner_slot`): a player's index,
-    /// an enemy's slot as stored.
+    /// an enemy's slot as stored, `TOWER_SLOT` for a tower.
     pub fn slot(self) -> usize {
         match self {
             Owner::Player(i) => i as usize,
             Owner::Enemy(slot) => slot,
+            Owner::Tower { .. } => TOWER_SLOT,
         }
     }
 
@@ -83,10 +92,25 @@ impl Owner {
         matches!(self, Owner::Player(_))
     }
 
+    /// A defence tower.
+    pub fn is_tower(self) -> bool {
+        matches!(self, Owner::Tower { .. })
+    }
+
+    /// The side this owner fights on: the players' or the enemies'.
+    pub fn side(self) -> Side {
+        match self {
+            Owner::Player(_) => Side::Player,
+            Owner::Enemy(_) => Side::Enemy,
+            Owner::Tower { side, .. } => side,
+        }
+    }
+
     /// True if both owners fight on the same side - every enemy counts as
-    /// friendly to every other enemy, and both players to each other.
+    /// friendly to every other enemy, and both players to each other; a
+    /// tower to its own side.
     pub fn same_side(self, other: Owner) -> bool {
-        matches!((self, other), (Owner::Player(_), Owner::Player(_)) | (Owner::Enemy(_), Owner::Enemy(_)))
+        self.side() == other.side()
     }
 }
 

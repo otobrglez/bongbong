@@ -193,6 +193,13 @@ TEAM_P2 = ((0x83, 0x1C, 0x5D), (0xC3, 0x24, 0x54), (0xF0, 0x4F, 0x78), (0xED, 0x
 
 PUNY_TEAM = [c for ramp in (TEAM_P1, TEAM_P2) for c in ramp]
 
+# The bio slush tower's ooze (docs/defence-towers-prd.md section 12, the O1
+# "acid lime" pick): hi, lt, md, dk, darkest. Off the Puny set for the same
+# reason as the team ramps - it glows, and a glowing liquid that sat in the
+# grass's own greens would read as grass. Admitted by check_sheets.py on
+# towers_sheet.png alone; `tower::OOZE_*` are the same values in the game.
+OOZE = ((0xF4, 0xFF, 0xC4), (0xC8, 0xFF, 0x4D), (0x93, 0xE2, 0x3D), (0x52, 0xA9, 0x2F), (0x2B, 0x5F, 0x25))
+
 # Keyed by palette identity as well as colour: one shared dict would let
 # whichever generator ran first decide the answer for the other.
 _cache = {}

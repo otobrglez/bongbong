@@ -294,6 +294,16 @@ impl Terrain {
         self.line_of_sight_to_frog(from, to, None)
     }
 
+    /// `line_of_sight` from inside the tile `own`: a tower looking out of
+    /// its own cell, whose box every such segment starts in.
+    pub fn line_of_sight_from(&self, own: Entity, from: Position, to: Position) -> bool {
+        self.obstacles
+            .iter()
+            .filter(|b| b.entity != own && b.material.blocks_sight())
+            .all(|b| segment_hits_aabb(from, to, b.center, b.half).is_none())
+            && self.frogs.iter().all(|&(_, p)| segment_hits_aabb(from, to, p, frog_half()).is_none())
+    }
+
     /// `line_of_sight` for a shot aimed *at* the frog `target`: that frog's
     /// own box is not an obstruction (a segment ending at its centre always
     /// enters it), every other frog and tile still is. `None` ignores
@@ -383,8 +393,12 @@ impl Terrain {
         let pad = Position::new(half_extent, half_extent);
         let enemy_pad = match shooter {
             Owner::Player(_) => pad + Position::new(self.player_shot_pad, self.player_shot_pad),
-            Owner::Enemy(_) => pad,
+            Owner::Enemy(_) | Owner::Tower { .. } => pad,
         };
+        // A tower's shots pass through its own side's tanks
+        // (docs/defence-towers-prd.md decision 7); a tank's shots only skip
+        // the tank that fired them.
+        let skips = |owner: Owner| owner == shooter || (shooter.is_tower() && shooter.same_side(owner));
         let mut best: Option<(f32, u8, ShellTarget)> = None;
 
         // Wrecks are see-through to gunfire. A hulk kept its full hull and
@@ -399,14 +413,14 @@ impl Terrain {
             let (owner, wrecked, hull, turret) = with_tank(world, player, |t| {
                 (t.owner(), t.is_wreck(), t.hull_bbox_world(), t.turret_bbox_world())
             });
-            if owner != shooter && !wrecked {
+            if !skips(owner) && !wrecked {
                 consider_hit(&mut best, segment_hits_aabb(p0, p1, hull.0, hull.1 + pad), 0, ShellTarget::Tank(player));
                 consider_hit(&mut best, segment_hits_aabb(p0, p1, turret.0, turret.1 + pad), 0, ShellTarget::Tank(player));
             }
         }
 
         for (entity, tank) in world.query::<(Entity, &Tank)>().with::<&Ai>().iter() {
-            if tank.owner() == shooter || tank.is_wreck() {
+            if skips(tank.owner()) || tank.is_wreck() {
                 continue;
             }
             let ((hc, hh), (tc, th)) = match past.and_then(|p| p.tank(entity)) {

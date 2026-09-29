@@ -101,6 +101,9 @@ pub struct EditorTextures<'a> {
     pub portal: &'a Texture2D,
     pub tanks: &'a Texture2D,
     pub trees: &'a Texture2D,
+    /// static/towers_sheet.png - the defence towers' bases and tops.
+    pub towers: &'a Texture2D,
+    pub pickup_tower_pack: &'a Texture2D,
 }
 
 /// The builder's `Sheet` lookup, for the `ground::draw` it shares with the
@@ -116,6 +119,7 @@ impl Sheets for EditorTextures<'_> {
             Sheet::Walls => self.obstacles,
             Sheet::Props => self.props,
             Sheet::Trees => self.trees,
+            Sheet::Towers => self.towers,
             Sheet::Grass(_) => self.grass,
             Sheet::Portal => self.portal,
             Sheet::Tanks => self.tanks,
@@ -130,6 +134,7 @@ impl Sheets for EditorTextures<'_> {
             Sheet::Pickup(PickupKind::Shield) => self.pickup_shield,
             Sheet::Pickup(PickupKind::Flamethrower) => self.pickup_flamethrower,
             Sheet::Pickup(PickupKind::FrogHealth) => self.pickup_frog_health,
+            Sheet::Pickup(PickupKind::TowerPack) => self.pickup_tower_pack,
             Sheet::Damage | Sheet::MinigunMount | Sheet::MissilePod | Sheet::Tracks | Sheet::BarrelExplosion | Sheet::Frog { .. } => {
                 panic!("the builder has no {sheet:?} sheet")
             }
@@ -235,6 +240,20 @@ impl MapEditor {
                         let dest = Rectangle::new(pos.x, pos.y, big, big);
                         let origin = Vector2::new(big / 2.0, big / 2.0);
                         d.draw_texture_pro(sheet_texture(textures, sheet), src, dest, origin, 0.0, Color::WHITE);
+                    }
+                    CellObject::Tesla { .. } | CellObject::GunTower { .. } | CellObject::BioSlush { .. } => {
+                        // At the sprite's own 48px like a tree, base then
+                        // top pointing up, with its reach ringed faintly so
+                        // a map maker sees what it covers.
+                        let (kind, side) = obj.tower().expect("tower cells name a tower");
+                        let big = crate::TREE_TEXTURE_SIZE;
+                        let dest = Rectangle::new(pos.x, pos.y, big, big);
+                        let origin = Vector2::new(big / 2.0, big / 2.0);
+                        let reach = if side == crate::frog::Side::Enemy { Color::new(230, 60, 60, 70) } else { Color::new(77, 155, 230, 70) };
+                        d.draw_circle_lines(pos.x as i32, pos.y as i32, kind.range(), reach);
+                        for src in [crate::tower::icon_source_rec(kind, side), crate::tower::icon_top_rec(kind, side)] {
+                            d.draw_texture_pro(textures.towers, src, dest, origin, 0.0, Color::WHITE);
+                        }
                     }
                     CellObject::Road | CellObject::Water => {} // already painted into `self.ground`
                     CellObject::TallGrass => {
@@ -565,6 +584,7 @@ fn pickup_texture<'a>(textures: &EditorTextures<'a>, pickup: PickupKind) -> &'a 
         PickupKind::Shield => textures.pickup_shield,
         PickupKind::Flamethrower => textures.pickup_flamethrower,
         PickupKind::FrogHealth => textures.pickup_frog_health,
+        PickupKind::TowerPack => textures.pickup_tower_pack,
     }
 }
 
@@ -673,6 +693,12 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme:
             let src = Rectangle::new(0.0, 0.0, crate::PICKUP_TEXTURE_SIZE, crate::PICKUP_TEXTURE_SIZE);
             d.draw_texture_pro(texture, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
+        Tool::Tower(kind, side) => {
+            // Base and top as a round draws them, the top pointing up.
+            for src in [crate::tower::icon_source_rec(kind, side), crate::tower::icon_top_rec(kind, side)] {
+                d.draw_texture_pro(textures.towers, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+            }
+        }
         Tool::Eraser => {
             d.draw_texture_pro(
                 textures.eraser,
@@ -692,6 +718,7 @@ fn sheet_texture<'a>(textures: &EditorTextures<'a>, sheet: obstacle::Sheet) -> &
         obstacle::Sheet::Walls => textures.obstacles,
         obstacle::Sheet::Props => textures.props,
         obstacle::Sheet::Trees => textures.trees,
+        obstacle::Sheet::Towers => textures.towers,
         other => panic!("a map cell never draws from {other:?}"),
     }
 }

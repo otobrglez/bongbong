@@ -33,6 +33,8 @@ use crate::level::{Mission, SpawnKind, Tier};
 use crate::map::{self, CellObject, MapEntry, MapFile, Theme};
 use crate::obstacle::{Drum, Material};
 use crate::pickup::PickupKind;
+use crate::frog::Side;
+use crate::tower::TowerKind;
 use crate::tank::TankKind;
 use crate::{EDITOR_BAR_HIT_SLACK, EDITOR_DROPDOWN_ROW_H, EDITOR_DROPDOWN_W, EDITOR_SETTINGS_W, EDITOR_STEPPER_SIZE, Layout, PATHFIND_CELL_SIZE, Position, Rect};
 pub use history::{CellChange, EditStep, MapDiff, MapSettings, UndoStack};
@@ -144,12 +146,18 @@ pub enum Tool {
     /// works with two or more (the linter's `portal-alone` names a lone
     /// one, and the canvas ghosts it).
     Portal,
+    /// A defence tower fighting for a side (docs/defence-towers-prd.md).
+    /// One tool per kind and side rather than a side switch: the cursor's
+    /// readout names a cell by the tool that paints exactly its object.
+    Tower(TowerKind, Side),
     Eraser,
 }
 
 /// Every brush, in bar order: the categories one after another, the
-/// eraser last.
-pub const TOOLS: [Tool; 32] = [
+/// eraser last. The trees sit with the ground's vegetation, which leaves
+/// PROP room for the six tower tools inside the eleven rows a dropdown
+/// fits.
+pub const TOOLS: [Tool; 39] = [
     Tool::Wall(Material::Brick),
     Tool::Wall(Material::Iron),
     Tool::Wall(Material::Wood),
@@ -159,11 +167,17 @@ pub const TOOLS: [Tool; 32] = [
     Tool::Drum(Drum::Oil),
     Tool::Drum(Drum::Fuel),
     Tool::Prop(Material::Fence),
-    Tool::Prop(Material::Tree),
-    Tool::Prop(Material::Pine),
+    Tool::Tower(TowerKind::Tesla, Side::Player),
+    Tool::Tower(TowerKind::Tesla, Side::Enemy),
+    Tool::Tower(TowerKind::Gun, Side::Player),
+    Tool::Tower(TowerKind::Gun, Side::Enemy),
+    Tool::Tower(TowerKind::Bio, Side::Player),
+    Tool::Tower(TowerKind::Bio, Side::Enemy),
     Tool::Road,
     Tool::Water,
     Tool::TallGrass,
+    Tool::Prop(Material::Tree),
+    Tool::Prop(Material::Pine),
     Tool::OilTrail,
     Tool::Gate,
     Tool::Portal,
@@ -181,6 +195,7 @@ pub const TOOLS: [Tool; 32] = [
     Tool::Pickup(PickupKind::Shield),
     Tool::Pickup(PickupKind::Flamethrower),
     Tool::Pickup(PickupKind::FrogHealth),
+    Tool::Pickup(PickupKind::TowerPack),
     Tool::Eraser,
 ];
 
@@ -221,6 +236,13 @@ impl Tool {
             Tool::Pickup(PickupKind::Shield) => "shield",
             Tool::Pickup(PickupKind::Flamethrower) => "flamethrower",
             Tool::Pickup(PickupKind::FrogHealth) => "frog_health",
+            Tool::Pickup(PickupKind::TowerPack) => "tower_pack",
+            Tool::Tower(TowerKind::Tesla, Side::Player) => "tesla",
+            Tool::Tower(TowerKind::Tesla, Side::Enemy) => "tesla_enemy",
+            Tool::Tower(TowerKind::Gun, Side::Player) => "gun_tower",
+            Tool::Tower(TowerKind::Gun, Side::Enemy) => "gun_tower_enemy",
+            Tool::Tower(TowerKind::Bio, Side::Player) => "bio_slush",
+            Tool::Tower(TowerKind::Bio, Side::Enemy) => "bio_slush_enemy",
             Tool::Eraser => "eraser",
         }
     }
@@ -233,7 +255,8 @@ impl Tool {
     pub fn category(self) -> Option<Category> {
         match self {
             Tool::Wall(_) => Some(Category::Wall),
-            Tool::Prop(_) | Tool::Drum(_) => Some(Category::Prop),
+            Tool::Prop(Material::Tree | Material::Pine) => Some(Category::Ground),
+            Tool::Prop(_) | Tool::Drum(_) | Tool::Tower(..) => Some(Category::Prop),
             Tool::Road | Tool::Water | Tool::TallGrass | Tool::OilTrail | Tool::Gate | Tool::Portal => Some(Category::Ground),
             Tool::Start | Tool::Start2 | Tool::Frog | Tool::EnemyFrog => Some(Category::Actor),
             Tool::Pickup(_) => Some(Category::Pickup),
@@ -258,6 +281,7 @@ impl Tool {
             Tool::Portal => Some(CellObject::Portal),
             Tool::Pickup(pickup) => Some(CellObject::Pickup { pickup }),
             Tool::TallGrass => Some(CellObject::TallGrass),
+            Tool::Tower(kind, side) => Some(CellObject::for_tower(kind, side)),
             Tool::Eraser => None,
         }
     }
