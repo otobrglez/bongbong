@@ -243,6 +243,7 @@ weather-fog = megla
 weather-sandstorm = vihar
 weather-snow = sneg
 weather-heat_haze = vročina
+weather-random = naključno
 spawn-band = pas
 spawn-waves = valovi
 tier-light = lahki

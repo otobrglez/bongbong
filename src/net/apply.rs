@@ -1224,6 +1224,35 @@ mod tests {
         assert_eq!(replica.round_seed(), other.round_seed(), "another seed is a restart");
     }
 
+    /// A map whose sky is `random` is drawn under one sky in the room and
+    /// on every replica: the pick is the round seed's
+    /// (`weather::random_sky`), and a replica stands on the room's seed -
+    /// built on it by the `Welcome`, moved to the next by a rematch's
+    /// `RoundStarted`. Nothing about the sky travels but the map's key.
+    #[test]
+    fn a_random_sky_is_the_rooms_on_every_replica() {
+        use crate::map::Weather;
+        use crate::weather::random_sky;
+        let map = format!("weather = \"random\"\n{DEFAULT_MAP}");
+        let mut skies = std::collections::BTreeSet::new();
+        for seed in [0x5EED, 0xB0B5, 0xD1FF, 7, 8, 9] {
+            let room = authoritative(&map, seed, 2);
+            let replica = welcome_through_the_codec(&room);
+            assert_eq!(replica.map.weather, Weather::Random, "the key rides the welcome's map");
+            assert_ne!(room.weather(), Weather::Random);
+            assert_eq!(replica.weather(), room.weather(), "seed {seed:#x}");
+            skies.insert(room.weather());
+        }
+        assert!(skies.len() > 1, "six seeds brought one sky: {skies:?}");
+
+        let (first, next) = (0x5EED, 0xD1FF);
+        assert_ne!(random_sky(first), random_sky(next), "the rematch below has to change the sky to prove anything");
+        let mut replica = welcome_through_the_codec(&authoritative(&map, first, 2));
+        let rematch = authoritative(&map, next, 2);
+        snapshot(&mut replica, &enc::snapshot(&rematch, [0; MAX_SEATS]));
+        assert_eq!(replica.weather(), rematch.weather(), "a rematch's sky is its new seed's");
+    }
+
     /// The end screen's countdown belongs to the server: a replica takes
     /// the number off every snapshot and holds it in between, so the two
     /// screens read the same second and the restart lands with the round

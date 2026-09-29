@@ -334,8 +334,8 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "weather",
-        description: "The sky over the round on screen (docs/weather.md; presentation only - the simulation never reads it). Without `name` reports `in_force` (what is drawn), `map` (the round's map's own `weather` key), `override` (the `weather_override` tuning knob's, null when it follows the map - `--weather` and the web page's `?weather=` set it) and every name. With `name` (clear, night, dusk, rain, storm, fog, sandstorm, snow, heat_haze) sets the round's map key at this frame boundary; it lasts through `restart`s on that map, and the override knob still outranks it. In an online round it changes only this window's replica. The builder's WEATHER row is `builder_settings {weather}`; `map_get`/`restart {map_toml}` carry the key as `weather = \"night\"`.",
-        schema: r#"{"type":"object","properties":{"name":{"type":"string","enum":["clear","night","dusk","rain","storm","fog","sandstorm","snow","heat_haze"],"description":"The sky to draw the round under"}}}"#,
+        description: "The sky over the round on screen (docs/weather.md; presentation only - the simulation never reads it). Without `name` reports `in_force` (what is drawn - never `random`: a random weather is the sky the round's seed picks, the same for the same seed), `map` (the round's map's own `weather` key), `override` (the `weather_override` tuning knob's, null when it follows the map - `--weather` and the web page's `?weather=` set it) and every name. With `name` (clear, night, dusk, rain, storm, fog, sandstorm, snow, heat_haze, random) sets the round's map key at this frame boundary; it lasts through `restart`s on that map, and the override knob still outranks it. In an online round it changes only this window's replica. The builder's WEATHER row is `builder_settings {weather}`; `map_get`/`restart {map_toml}` carry the key as `weather = \"night\"`.",
+        schema: r#"{"type":"object","properties":{"name":{"type":"string","enum":["clear","night","dusk","rain","storm","fog","sandstorm","snow","heat_haze","random"],"description":"The sky to draw the round under; random is picked by the round's seed"}}}"#,
         read_only: false,
         destructive: false,
     },
@@ -391,7 +391,7 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "builder_settings",
         description: "The builder's MAP settings - the map file's own level keys: tanks (enemy count 0-31), tank (player 1's chassis name), tank2 (player 2's, two-player rounds), mission (protect|hunt|destroy), spawn (band|waves), waves (1-20), wave_size (1-31), wave_growth (0-10), tier_start/tier_end (light|medium|heavy|super), theme (grass|desert - the look: ground tileset and tall-grass sheet; the canvas redraws in it at once), weather (clear|night|dusk|rain|storm|fog|sandstorm|snow|heat_haze - the sky the round is drawn under, docs/weather.md; the canvas itself stays clear to edit on). A field left out is untouched; a field set to null goes back to auto (unset: the game's own roll or the `waves` tuning group; mission/spawn back to protect/band). Each changed field is one undo step, in the order listed. `reset: true` then reverts cells and settings to the baseline (one undoable step). Replies with the current values (null = auto) and `cli_overrides`: which of them a command-line flag (-e, --tank, --mission, ...) or an earlier `restart` parameter overrides at PLAY, so the map's value is not what the round will use.",
-        schema: r#"{"type":"object","properties":{"tanks":{"type":["integer","null"],"minimum":0,"maximum":31},"tank":{"type":["string","null"],"description":"A chassis name, e.g. titan"},"tank2":{"type":["string","null"],"description":"Player 2's chassis name"},"mission":{"type":["string","null"],"enum":["protect","hunt","destroy",null]},"spawn":{"type":["string","null"],"enum":["band","waves",null]},"waves":{"type":["integer","null"],"minimum":1,"maximum":20},"wave_size":{"type":["integer","null"],"minimum":1,"maximum":31},"wave_growth":{"type":["integer","null"],"minimum":0,"maximum":10},"tier_start":{"type":["string","null"],"enum":["light","medium","heavy","super",null]},"tier_end":{"type":["string","null"],"enum":["light","medium","heavy","super",null]},"theme":{"type":["string","null"],"enum":["grass","desert",null],"description":"null = grass, the default"},"weather":{"type":["string","null"],"enum":["clear","night","dusk","rain","storm","fog","sandstorm","snow","heat_haze",null],"description":"null = clear, the default"},"reset":{"type":"boolean","default":false,"description":"Revert cells and settings to the baseline"}}}"#,
+        schema: r#"{"type":"object","properties":{"tanks":{"type":["integer","null"],"minimum":0,"maximum":31},"tank":{"type":["string","null"],"description":"A chassis name, e.g. titan"},"tank2":{"type":["string","null"],"description":"Player 2's chassis name"},"mission":{"type":["string","null"],"enum":["protect","hunt","destroy",null]},"spawn":{"type":["string","null"],"enum":["band","waves",null]},"waves":{"type":["integer","null"],"minimum":1,"maximum":20},"wave_size":{"type":["integer","null"],"minimum":1,"maximum":31},"wave_growth":{"type":["integer","null"],"minimum":0,"maximum":10},"tier_start":{"type":["string","null"],"enum":["light","medium","heavy","super",null]},"tier_end":{"type":["string","null"],"enum":["light","medium","heavy","super",null]},"theme":{"type":["string","null"],"enum":["grass","desert",null],"description":"null = grass, the default"},"weather":{"type":["string","null"],"enum":["clear","night","dusk","rain","storm","fog","sandstorm","snow","heat_haze","random",null],"description":"null = clear, the default; random = a sky picked by each round's seed"},"reset":{"type":"boolean","default":false,"description":"Revert cells and settings to the baseline"}}}"#,
         read_only: false,
         destructive: false,
     },
@@ -2873,6 +2873,18 @@ mod tests {
         let err = ask(&mut server, &mut game, "weather", json!({ "name": "hail" })).unwrap_err();
         assert!(err.contains("heat_haze"), "{err}");
         assert_eq!(game.game.map.weather, crate::map::Weather::Storm, "a refused name changes nothing");
+        // A random sky is the round seed's pick, and a restart on the same
+        // seed brings it back.
+        let w = ask(&mut server, &mut game, "weather", json!({ "name": "random" })).unwrap();
+        assert_eq!(w["map"], "random", "{w}");
+        assert_eq!(w["in_force"], crate::weather::random_sky(game.game.round_seed()).name(), "{w}");
+        for _ in 0..2 {
+            ask(&mut server, &mut game, "restart", json!({ "seed": "0xB0B5" })).unwrap();
+            let w = ask(&mut server, &mut game, "weather", json!({})).unwrap();
+            assert_eq!(w["map"], "random", "a restart keeps the map's key: {w}");
+            assert_eq!(w["in_force"], crate::weather::random_sky(0xB0B5).name(), "{w}");
+        }
+        ask(&mut server, &mut game, "weather", json!({ "name": "storm" })).unwrap();
         let status = ask(&mut server, &mut game, "status", json!({})).unwrap();
         assert_eq!(status["weather"]["in_force"], "storm", "{status}");
         assert_eq!(status["map"]["weather"], "storm", "{status}");

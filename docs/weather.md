@@ -2,7 +2,8 @@
 
 A map's `weather` key puts a sky over it: `clear` (the default, and what
 every older file gets), `night`, `dusk`, `rain`, `storm`, `fog`,
-`sandstorm`, `snow` or `heat_haze`. Purely presentational, like
+`sandstorm`, `snow` or `heat_haze` - or `random`, a sky picked by each
+round's seed. Purely presentational, like
 [the theme](desert-theme.md): the simulation, the nav grid, the linter and
 the room server never read it, so a map plays the same under every sky and
 a seeded replay, a probe fixture and a room's authoritative round are
@@ -19,21 +20,33 @@ untouched by it.
 - **Builder**: the MAP panel's WEATHER row cycles `Weather::ALL`, one undo
   step per press like every other settings field. The canvas stays clear,
   since a map is edited in daylight; PLAY starts the round under the sky.
+- **Random**: `random` is one of `Weather::SKIES` (every sky, clear
+  included, as likely as the others) picked afresh for every round by
+  `weather::random_sky`, a hash of the round's seed. It is not a draw from
+  the round's RNG, so the stream is untouched and every seeded replay and
+  probe fixture is the same under it, and it is not the wall clock: the
+  same seed always brings the same sky - `--seed`, the dev server's
+  `restart {seed}` and a room's `Welcome`, whose seed every replica is
+  initialised on (a rematch's `RoundStarted` moves them all to the next
+  one together). An unpinned round draws a fresh seed, so a fresh sky.
+  `Game::weather()` is never `Random`; the key stays `random` on disk, in
+  the builder and in `map_get`.
 - **Over every map**: the `weather_override` knob (`weather` tuning group)
-  takes a weather's index in `Weather::ALL`, `-1` following the map.
-  `--weather night` stages it at startup the way `--zoom` stages
-  `view_max_scale`, the web build reads `?weather=night` off its page
-  (`weather::weather_from_url`, through `window.bbInvite`), and on a PR
-  preview it is a row in the tuning panel. The builder's row shows `(cli)`
-  while it is set.
-- **Dev server**: `weather` reports what is drawn (`in_force`), the map's
-  own key, the override's pick and every name, and with `name` sets the
-  round's map key at the frame boundary; `status.weather`, `map.weather`,
-  `builder_settings {weather}` (null = clear) and `map_get`/`restart
-  {map_toml}` carry it too.
+  takes a weather's index in `Weather::ALL`, `-1` following the map and 9
+  a random sky for every round. `--weather night` (or `--weather random`)
+  stages it at startup the way `--zoom` stages `view_max_scale`, the web
+  build reads `?weather=night` off its page (`weather::weather_from_url`,
+  through `window.bbInvite`), and on a PR preview it is a row in the
+  tuning panel. The builder's row shows `(cli)` while it is set.
+- **Dev server**: `weather` reports what is drawn (`in_force`, a random
+  map's sky by name), the map's own key, the override's pick and every
+  name, and with `name` sets the round's map key at the frame boundary;
+  `status.weather`, `map.weather`, `builder_settings {weather}` (null =
+  clear) and `map_get`/`restart {map_toml}` carry it too.
 - **Online**: the key rides the map TOML every `Welcome` carries, so every
-  replica draws the room's sky with nothing new on the wire.
-  `PROTOCOL_VERSION` is unchanged. The override knob is the window's own.
+  replica draws the room's sky with nothing new on the wire - a random
+  one too, since the seed rides the same message. `PROTOCOL_VERSION` is
+  unchanged. The override knob is the window's own.
 
 ## The skies
 
@@ -183,14 +196,18 @@ shot shaders' fallback.
 ## Tests
 
 - `weather::tests`: every sky but clear has a plan and strength 0 has
-  none, the knobs scale their layer, the override outranks the map, the
+  none, the knobs scale their layer, the override outranks the map, a
+  random sky is the seed's, never `Random`, and every sky comes up about
+  as often (9000 seeds), a random map's replay is drawn under its sky, the
   page URL names a weather, lightning is a pure function of the clock and
   strikes now and then, walls stop rays and glass does not, a cone fades
   across its edge, a hull's beam is cut short by the wall in front of it,
   and every light on a shipped map is finite and inside its radius.
 - `map::toml_tests::weather_round_trips_and_defaults_to_clear`, the
   builder's settings test, the dev server's
-  `weather_sets_the_rounds_sky_and_every_reader_reports_it`, and
+  `weather_sets_the_rounds_sky_and_every_reader_reports_it` (random
+  included: a `restart {seed}` brings the seed's sky back),
+  `net::apply::tests::a_random_sky_is_the_rooms_on_every_replica`, and
   `text_tests` (every weather name fits its settings row in every
   language).
 - The picture itself is checked the way every effect is: `just run-dev`,

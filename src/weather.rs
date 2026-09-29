@@ -113,6 +113,9 @@ impl Look {
             Weather::Sandstorm => Look { ambient: [1.0, 0.87, 0.7], lights: 0.35, vignette: 0.25, sand: 0.9, ..Look::CLEAR },
             Weather::Snow => Look { ambient: [0.98, 1.0, 1.06], lights: 0.15, vignette: 0.05, snow: 0.85, ..Look::CLEAR },
             Weather::HeatHaze => Look { ambient: [1.08, 1.0, 0.86], haze: 1.0, ..Look::CLEAR },
+            // Not a sky of its own: `in_force` puts one of `SKIES` in its
+            // place before a look is asked for.
+            Weather::Random => Look::CLEAR,
         };
         let s = t.weather_strength.clamp(0.0, 1.0);
         Look {
@@ -160,15 +163,33 @@ pub struct Plan {
 
 impl Game {
     /// The sky over this round: the `weather_override` knob when it names
-    /// one, else the map's own key.
+    /// one, else the map's own key, a `random` one picked by the round's
+    /// seed.
     pub fn weather(&self) -> Weather {
-        in_force(self.map.weather, &crate::tuning::tuning())
+        in_force(self.map.weather, self.round_seed(), &crate::tuning::tuning())
     }
 }
 
-/// `map`'s weather under the `weather_override` knob.
-pub fn in_force(map: Weather, t: &Tuning) -> Weather {
-    usize::try_from(t.weather_override).ok().and_then(|i| Weather::ALL.get(i).copied()).unwrap_or(map)
+/// The sky drawn over a round of `map` seeded `seed`: the `weather_override`
+/// knob's weather when it names one, else the map's, and in place of
+/// `Random` the seed's `random_sky`. Never `Random` itself.
+pub fn in_force(map: Weather, seed: u64, t: &Tuning) -> Weather {
+    match usize::try_from(t.weather_override).ok().and_then(|i| Weather::ALL.get(i).copied()).unwrap_or(map) {
+        Weather::Random => random_sky(seed),
+        sky => sky,
+    }
+}
+
+/// The sky a `random` weather is in the round seeded `seed`: one of
+/// `Weather::SKIES`, every one as likely. A hash of the seed rather than a
+/// draw from the round's RNG, so the round's stream is untouched - a
+/// seeded replay, the probe fixtures and a room's round are the same
+/// under it - and the same seed always brings the same sky: `--seed`, a
+/// `restart {seed}` and a room's `Welcome`, whose seed every replica is
+/// initialised on. An unpinned round's seed is drawn fresh, so is its sky.
+pub fn random_sky(seed: u64) -> Weather {
+    let h = mix64(seed.wrapping_add(0x5EA7_4E12).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    Weather::SKIES[(h % Weather::SKIES.len() as u64) as usize]
 }
 
 /// The `weather` query parameter of a page URL, if it names a weather -
@@ -182,15 +203,19 @@ pub fn weather_from_url(url: &str) -> Option<Weather> {
         .and_then(|(_, value)| Weather::parse(value.trim()))
 }
 
-/// A hash of `n` to 0..1 (SplitMix64's mixing step), for the lightning
-/// schedule: no RNG, the same on every machine.
-fn unit_hash(n: i64, salt: u64) -> f32 {
-    let mut h = (n as u64).wrapping_add(salt).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+/// SplitMix64's mixing step: every bit of `h` stirred into every bit of
+/// the answer. No RNG, the same on every machine.
+fn mix64(mut h: u64) -> u64 {
     h ^= h >> 30;
     h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
     h ^= h >> 27;
     h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
-    h ^= h >> 31;
+    h ^ (h >> 31)
+}
+
+/// A hash of `n` to 0..1, for the lightning schedule.
+fn unit_hash(n: i64, salt: u64) -> f32 {
+    let h = mix64((n as u64).wrapping_add(salt).wrapping_mul(0x9E37_79B9_7F4A_7C15));
     (h >> 40) as f32 / (1u64 << 24) as f32
 }
 
@@ -663,7 +688,7 @@ mod tests {
     fn clear_draws_nothing_and_every_other_sky_draws_something() {
         let t = Tuning::DEFAULT;
         assert_eq!(Look::of(Weather::Clear, &t).plan(), None);
-        for w in Weather::ALL.into_iter().filter(|w| *w != Weather::Clear) {
+        for w in Weather::SKIES.into_iter().filter(|w| *w != Weather::Clear) {
             assert!(Look::of(w, &t).plan().is_some(), "{w:?} draws nothing");
         }
         let night = Look::of(Weather::Night, &t).plan().unwrap();
@@ -680,7 +705,7 @@ mod tests {
     fn weather_strength_zero_is_a_clear_day_and_the_knobs_scale_their_layer() {
         let mut t = Tuning::DEFAULT;
         t.weather_strength = 0.0;
-        for w in Weather::ALL {
+        for w in Weather::SKIES {
             assert_eq!(Look::of(w, &t).plan(), None, "{w:?} at strength 0");
         }
         let mut t = Tuning::DEFAULT;
@@ -698,11 +723,59 @@ mod tests {
     #[test]
     fn the_override_knob_outranks_the_map_and_minus_one_follows_it() {
         let mut t = Tuning::DEFAULT;
-        assert_eq!(in_force(Weather::Fog, &t), Weather::Fog);
+        assert_eq!(in_force(Weather::Fog, 7, &t), Weather::Fog);
         t.weather_override = Weather::Night.index() as i32;
-        assert_eq!(in_force(Weather::Fog, &t), Weather::Night);
+        assert_eq!(in_force(Weather::Fog, 7, &t), Weather::Night);
+        assert_eq!(in_force(Weather::Random, 7, &t), Weather::Night, "a named override outranks a random map");
         t.weather_override = Weather::Clear.index() as i32;
-        assert_eq!(in_force(Weather::Snow, &t), Weather::Clear, "the override can clear a map's sky");
+        assert_eq!(in_force(Weather::Snow, 7, &t), Weather::Clear, "the override can clear a map's sky");
+        t.weather_override = Weather::Random.index() as i32;
+        assert_eq!(in_force(Weather::Fog, 7, &t), random_sky(7), "a random override rolls over every map");
+        let mut table = Tuning::DEFAULT;
+        assert!(table.set("weather_override", Weather::Random.index() as f64).is_ok(), "the knob's range reaches random");
+        assert!(table.set("weather_override", Weather::ALL.len() as f64).is_err(), "and ends there");
+    }
+
+    #[test]
+    fn a_random_sky_is_the_seeds_and_every_sky_comes_up() {
+        let t = Tuning::DEFAULT;
+        let mut counts = [0u32; Weather::SKIES.len()];
+        for seed in 0..9000u64 {
+            let sky = in_force(Weather::Random, seed, &t);
+            assert_ne!(sky, Weather::Random, "random always resolves to a sky");
+            assert_eq!(sky, random_sky(seed), "the same seed, the same sky");
+            counts[sky.index()] += 1;
+        }
+        // 1000 of each on average; a sky under 850 or over 1150 is a
+        // biased pick, not chance (about five standard deviations).
+        for (sky, n) in Weather::SKIES.iter().zip(counts) {
+            assert!((850..=1150).contains(&n), "{} came up {n} times in 9000 seeds", sky.name());
+        }
+        // Neighbouring seeds - a sweep of base + i, like the probe's - are
+        // not all one sky.
+        let run: Vec<Weather> = (0..8u64).map(random_sky).collect();
+        assert!(run.windows(2).any(|w| w[0] != w[1]), "{run:?}");
+        // A map's own sky is not touched by the seed.
+        assert!((0..50u64).all(|seed| in_force(Weather::Dusk, seed, &t) == Weather::Dusk));
+    }
+
+    #[test]
+    fn a_random_map_draws_the_same_sky_for_the_same_seed() {
+        use crate::{DEFAULT_SCREEN_HEIGHT, DEFAULT_SCREEN_WIDTH};
+        let round = |seed: u64| {
+            let mut game = Game::default();
+            game.map = crate::map::open_map("default").unwrap();
+            game.map.weather = Weather::Random;
+            game.seed_override = Some(seed);
+            game.enemy_count_override = Some(0);
+            game.init(DEFAULT_SCREEN_WIDTH as f32, DEFAULT_SCREEN_HEIGHT as f32);
+            game
+        };
+        let a = round(0xB0B5);
+        assert_eq!(a.weather(), random_sky(0xB0B5));
+        assert_eq!(round(0xB0B5).weather(), a.weather(), "a replay is drawn under the sky it was fought under");
+        let skies: std::collections::BTreeSet<Weather> = (1..=40u64).map(|seed| round(seed).weather()).collect();
+        assert!(skies.len() >= 5, "forty seeds bring several skies: {skies:?}");
     }
 
     #[test]
@@ -832,7 +905,7 @@ cells."14,5" = { kind = "wall", material = "wood" }
         for _ in 0..120 {
             game.update(Input::default(), crate::PHYSICS_FIXED_DT, w, h);
         }
-        for weather in Weather::ALL {
+        for weather in Weather::SKIES {
             let look = Look::of(weather, &t);
             for light in lights(&game, &[], &look, &t) {
                 assert!(light.at.x.is_finite() && light.at.y.is_finite() && light.radius > 0.0, "{light:?}");

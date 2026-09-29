@@ -310,6 +310,7 @@ weather-fog = fog
 weather-sandstorm = sand
 weather-snow = snow
 weather-heat_haze = haze
+weather-random = random
 spawn-band = band
 spawn-waves = waves
 tier-light = light

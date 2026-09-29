@@ -231,9 +231,10 @@ fn is_default_theme(t: &Theme) -> bool {
 /// server never read it, so a map plays the same under every sky and a
 /// seeded replay is untouched by it. Absent means `Clear`, which is not
 /// written back, so every older file parses and re-saves unchanged. What
-/// each one looks like is `weather::Look::of`; the `weather_override`
-/// knob (`--weather`, the web page's `?weather=`) puts one sky over every
-/// map without editing any of them.
+/// each one looks like is `weather::Look::of`; `Random` is a sky picked by
+/// the round's seed (`weather::random_sky`); the `weather_override` knob
+/// (`--weather`, the web page's `?weather=`) puts one sky over every map
+/// without editing any of them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Weather {
@@ -248,12 +249,16 @@ pub enum Weather {
     Sandstorm,
     Snow,
     HeatHaze,
+    /// One of `SKIES`, picked afresh by every round's seed: the same seed
+    /// always brings the same sky, and every replica of a room draws the
+    /// room's (`weather::in_force`).
+    Random,
 }
 
 impl Weather {
-    /// Every weather, in the order the builder's WEATHER row cycles them;
-    /// a weather's index here is its `weather_override` value.
-    pub const ALL: [Weather; 9] = [
+    /// Every sky a round can be drawn under - everything but `Random`, in
+    /// `ALL`'s order. What `Random` picks from.
+    pub const SKIES: [Weather; 9] = [
         Weather::Clear,
         Weather::Night,
         Weather::Dusk,
@@ -263,6 +268,21 @@ impl Weather {
         Weather::Sandstorm,
         Weather::Snow,
         Weather::HeatHaze,
+    ];
+
+    /// Every weather, in the order the builder's WEATHER row cycles them;
+    /// a weather's index here is its `weather_override` value.
+    pub const ALL: [Weather; 10] = [
+        Weather::Clear,
+        Weather::Night,
+        Weather::Dusk,
+        Weather::Rain,
+        Weather::Storm,
+        Weather::Fog,
+        Weather::Sandstorm,
+        Weather::Snow,
+        Weather::HeatHaze,
+        Weather::Random,
     ];
 
     /// The TOML spelling, also the dev server's, the command line's and
@@ -278,6 +298,7 @@ impl Weather {
             Weather::Sandstorm => "sandstorm",
             Weather::Snow => "snow",
             Weather::HeatHaze => "heat_haze",
+            Weather::Random => "random",
         }
     }
 
@@ -754,6 +775,14 @@ mod toml_tests {
             let text = format!("version = 1\nweather = \"{}\"\n", w.name());
             assert_eq!(MapFile::from_toml_str(&text).unwrap().weather, w, "{}", w.name());
         }
+        // `SKIES` is `ALL` without `Random`, in the same order, so a sky's
+        // override index is the same in both.
+        assert_eq!(Weather::ALL.iter().filter(|w| **w != Weather::Random).copied().collect::<Vec<_>>(), Weather::SKIES);
+        let mut random = MapFile::new();
+        random.weather = Weather::Random;
+        let text = random.to_toml_string().unwrap();
+        assert!(text.contains("weather = \"random\""), "{text}");
+        assert_eq!(MapFile::from_toml_str(&text).unwrap().weather, Weather::Random, "a random sky stays random on disk");
     }
 
     #[test]

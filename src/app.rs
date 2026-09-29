@@ -457,8 +457,9 @@ pub struct Args {
     lang: Option<String>,
 
     /// Put one sky over every map this run (docs/weather.md): clear,
-    /// night, dusk, rain, storm, fog, sandstorm, snow or heat_haze. It is
-    /// the `weather_override` knob, staged like `--zoom`, so a map's own
+    /// night, dusk, rain, storm, fog, sandstorm, snow or heat_haze, or
+    /// random - a sky picked by each round's seed, so `--seed` pins it. It
+    /// is the `weather_override` knob, staged like `--zoom`, so a map's own
     /// WEATHER key is left as it is and the tuning panel shows the pick.
     /// The web build reads `?weather=` off its page instead.
     #[arg(long = "weather", value_name = "SKY", value_parser = parse_weather)]
