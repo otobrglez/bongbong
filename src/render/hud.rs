@@ -555,9 +555,10 @@ pub fn draw_leave_dialog(d: &mut impl RaylibDraw, field: Rect) {
 
 /// Draw the end screen under its outcome (docs/levels.md): every level
 /// complete after the last one's win, the round's time and wrecks, the
-/// wrecks by seat from two seats, then a level's buttons - or free play's
-/// `countdown` in their place. Field space, over the dim, at the rows
-/// `hud::result_layout` gives, which is what the hit tests read too.
+/// wrecks by seat from two seats, then a level's countdown and buttons -
+/// or free play's `countdown` in their place. Field space, over the dim,
+/// at the rows `hud::result_layout` gives, which is what the hit tests
+/// read too.
 pub fn draw_result(d: &mut impl RaylibDraw, field: Rect, view: &ResultView, countdown: &str) {
     fn centred(d: &mut impl RaylibDraw, field: Rect, line: &str, y: f32, size: i32, color: Color) {
         let w = width(line, size);
@@ -565,7 +566,7 @@ pub fn draw_result(d: &mut impl RaylibDraw, field: Rect, view: &ResultView, coun
     }
     let t = text();
     let rows = result_layout(field, view);
-    if let (Some(y), Some(ResultButtons { next: Some(NextLevel::FirstAgain { levels }) })) = (rows.all_clear_y, view.buttons) {
+    if let (Some(y), Some(ResultButtons { next: Some(NextLevel::FirstAgain { levels }), .. })) = (rows.all_clear_y, view.buttons) {
         centred(d, field, &t.fmt(keys::RESULT_ALL_CLEAR, &[("count", levels.into())]), y, RESULT_LINE_SIZE, BUILD_COLOR);
     }
     let time = t.fmt(keys::RESULT_TIME, &[("time", clock_text(view.stats.seconds).into())]);
@@ -591,6 +592,12 @@ pub fn draw_result(d: &mut impl RaylibDraw, field: Rect, view: &ResultView, coun
     let lit = Some(Color::new(BUILD_COLOR.r, BUILD_COLOR.g, BUILD_COLOR.b, 40));
     if let Some(rects) = rows.buttons {
         draw_dialog_button(d, rects.levels, &t.get(keys::RESULT_LEVELS), TEXT, None);
+    }
+    // A level's countdown over its buttons, to the way the screen takes
+    // by itself: the next level after a win, the same one after a loss.
+    if let (Some(y), Some(ResultButtons { next, countdown: Some(seconds) })) = (rows.countdown_y, view.buttons) {
+        let key = if next.is_some() { keys::RESULT_NEXT_IN } else { keys::RESULT_AGAIN_IN };
+        centred(d, field, &t.fmt(key, &[("seconds", seconds.into())]), y, RESULT_LINE_SIZE, Color::RAYWHITE);
     }
     match (rows.buttons, view.buttons.and_then(|b| b.next)) {
         // The way on is the one to press; PLAY AGAIN stands beside it.

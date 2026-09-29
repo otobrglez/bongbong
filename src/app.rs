@@ -1618,6 +1618,9 @@ pub fn run(args: Args) {
         if let Some(level) = session.take_progress() {
             save_progress(&level);
         }
+        // A level's end screen that has counted down takes its way: the
+        // next level after a win, the same one again after a loss.
+        session.follow_countdown();
         // The round on screen: the room's replica in an online round,
         // the session's own otherwise.
         let game = session.shown();

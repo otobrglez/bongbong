@@ -107,6 +107,8 @@ keys! {
     RESULT_NEXT = "result-next";
     RESULT_FIRST = "result-first";
     RESULT_LEVELS = "result-levels";
+    RESULT_NEXT_IN = "result-next-in";
+    RESULT_AGAIN_IN = "result-again-in";
     LEVELS_TITLE = "levels-title";
     LEVELS_SUB = "levels-sub";
     LEVELS_BACK = "levels-back";
@@ -837,6 +839,8 @@ mod text_tests {
             (keys::RESULT_NEXT, HUD_TEXT_SIZE, RESULT_BUTTON_W as i32 - 16, vec![]),
             (keys::RESULT_FIRST, HUD_TEXT_SIZE, RESULT_BUTTON_W as i32 - 16, vec![]),
             (keys::RESULT_LEVELS, HUD_TEXT_SIZE, RESULT_LEVELS_W as i32 - 16, vec![]),
+            (keys::RESULT_NEXT_IN, RESULT_LINE_SIZE, RESULT_TEXT_PX, vec![("seconds", 30.into())]),
+            (keys::RESULT_AGAIN_IN, RESULT_LINE_SIZE, RESULT_TEXT_PX, vec![("seconds", 30.into())]),
             // The level select: the lobby's title and line sizes across
             // its content, BACK in its button; the bar's level button
             // holds its word and a two-digit number.

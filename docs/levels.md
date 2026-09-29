@@ -3,7 +3,8 @@
 Status: **implemented 2026-09-29**. docs/maps-to-levels.md turned a map
 into a level (a mission and a spawn plan). This document strings the levels
 together: `levels.toml` lists them in order, a win opens the next one, and
-the end screen waits for the player instead of restarting the round.
+the end screen counts down to where the level goes next - the next level
+after a win, the same one after a loss - instead of restarting the round.
 
 ## Decisions (2026-09-29)
 
@@ -13,7 +14,7 @@ the end screen waits for the player instead of restarting the round.
 | Order | Roughly easy to hard: Lotus Lagoon (5 tanks) first, Grand Campaign (7 waves) last. Edit `levels.toml` to change it. |
 | Progression | Only a win opens the next level. A loss offers the same level again. Winning the last level shows "all levels complete" and leads back to level 1. |
 | Start and save | A session opens on the furthest level reached. On the web that is the page's `localStorage` (`bongbong.level`); on a desktop or a phone, a file. Progress is kept by map name, so reordering the list keeps it. |
-| End screen | Waits for a button: `LEVELS` and `PLAY AGAIN` always, `NEXT LEVEL` after a win (`BACK TO LEVEL 1` after the last). Enter takes the way on after a win and plays again after a loss; R plays again, as it always did; Esc opens the level select. |
+| End screen | Counts down like free play's (`restart_delay`, 3 s): `NEXT LEVEL IN 3, 2, 1` after a win, `PLAY AGAIN IN 3, 2, 1` after a loss, then takes that way by itself. The last level's win counts nothing down: `ALL 14 LEVELS COMPLETE!` waits for `BACK TO LEVEL 1`, going round being the player's call. The buttons - `LEVELS` and `PLAY AGAIN` always, `NEXT LEVEL` after a win - take a way at once; Enter takes the way on after a win and plays again after a loss; R plays again, as it always did; Esc opens the level select, which, like a dialog or the builder, stops the countdown. |
 | Stats | Time (the round clock, which stands still behind the banner and while paused) and enemies destroyed out of all the round brings, split by seat in a couch round. |
 | Banner | `LEVEL 3 / 14` over the mission banner, the level's title under it at half the banner's size (36 px under 72). |
 | Builder edits | A level edited in the builder is played as edited for the rest of the session, every time it comes round. On a desktop the builder's Save writes it to `maps/<map>.toml`, which later sessions read first. |
@@ -29,8 +30,20 @@ with anything: a level loaded into the builder and played is still that
 level, `-m maps/carnival.toml` is the Carnival level, and a map under any
 other name is free play. Every place the round's map changes (`play`,
 `replace_map`, `start_level`, `set_campaign`) sets `Game::hold_end_screen`
-from it: a level's end screen waits for its buttons, free play's counts
-down and restarts inside `Game::update` as before.
+from it: a level's end screen counts down to zero and holds there, free
+play's counts down and restarts inside `Game::update` as before.
+
+**The countdown** is the round's own `restart_timer` over
+`restart_delay`, the one free play has always shown; `Game::update` ticks
+it on a held end screen too, only never below zero and never into `init`,
+since where a level goes next is the session's to decide. After every
+frame's steps `app.rs` calls `Session::follow_countdown`, which takes the
+way the screen counted down to once the timer stands at zero: `next_level`
+after a win, `play_again` after a loss. `ResultButtons::countdown` is the
+number the screen shows, whole seconds and never 0; it is `None` after the
+last level's win, which waits for a button. A screen behind the level
+select, a dialog or the builder never moves on by itself: nothing updates
+the round, so nothing counts it down.
 
 **Progress** is `levels::Campaign`: the list, `reached` (the index of the
 furthest level reached - only a win moves it, only forward) and the
@@ -110,8 +123,8 @@ as `level-<map>` in its `lang/*.ftl` (`text_tests` allows those ids beyond
 English's and measures every title against the smallest field). The
 chrome is `level-number`, `result-time`, `result-wrecks`,
 `result-all-clear`, `result-again`, `result-next`, `result-first`,
-`result-levels`, `levels-title`, `levels-sub`, `levels-back` and
-`bar-level`, each with its budget in `text_tests::budgets`; every title is
+`result-levels`, `result-next-in`, `result-again-in`, `levels-title`,
+`levels-sub`, `levels-back` and `bar-level`, each with its budget in `text_tests::budgets`; every title is
 also held to its tile, whole, on two lines.
 
 ## Tests
@@ -119,14 +132,16 @@ also held to its tile, whole, on two lines.
 - `levels::level_tests` - every level is a shipped map; a broken list is
   refused by name; `--level` by number or name; progress moves once, only
   forward, and round-trips through a file; an edit is the level from then on.
-- `mode::session_tests` - a won level waits and opens the next, the last
-  leads back to the first, a loss offers only `PLAY AGAIN`, an edit is
-  played every time the level comes round, a map that is no level is free
-  play.
+- `mode::session_tests` - a won level counts down to the next and takes
+  it by itself, the last waits for its button back to the first, a lost one
+  counts down to the same level again but not behind the level select,
+  Enter and the buttons do not wait, an edit is played every time the level
+  comes round, a map that is no level is free play.
 - `simulation::mechanics_tests` - the numbers and the seat credit, a wave
-  round's total, a held end screen waits and R still restarts it.
+  round's total, a held end screen counts down, waits at zero, and R still
+  restarts it.
 - `hud::hud_tests` - the end screen fits the smallest field in every form,
-  its three buttons in one centred row; `touch` - a claimed touch neither
+  its countdown over its three buttons in one centred row; `touch` - a claimed touch neither
   fires nor steers; `devserver` - the end screen takes `click` and `key`.
 - `level_select::level_select_tests` - the shipped levels fit one page,
   every tile and `BACK` are finger-sized inside the panel on both field

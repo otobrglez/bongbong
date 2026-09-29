@@ -101,6 +101,12 @@ result-first = BACK TO LEVEL 1
 # Beside those, in a 160 px button: the level select.
 result-levels = LEVELS
 
+# Over the buttons, 28 px, about 700 px: the end screen counting down to
+# the way it takes by itself - the next level after a win, the same one
+# again after a loss. $seconds counts 3, 2, 1.
+result-next-in = NEXT LEVEL IN { $seconds }
+result-again-in = PLAY AGAIN IN { $seconds }
+
 # The level select, over the dimmed field: its title (22 px) and the line
 # under it (12 px), both in about 660 px, and its one button (18 px text in
 # 140 px) that goes back to the round or the end screen it opened over.

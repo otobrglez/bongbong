@@ -661,12 +661,15 @@ pub struct Game {
     /// Seconds since the round started; drives animation. Read by `render`.
     pub(crate) time: f32,
     pub(crate) outcome: Outcome,
-    /// Seconds until the automatic restart once the round has ended.
+    /// Seconds until the automatic restart once the round has ended - or,
+    /// on a held end screen, until the caller takes over.
     pub(crate) restart_timer: f32,
-    /// The end screen stays up until the caller starts the next round
-    /// (`init`, or the R key's restart) instead of restarting after
-    /// `restart_delay`: a level's result screen waits for its buttons
-    /// (docs/levels.md). A setting, kept across restarts.
+    /// The end screen's countdown runs out into a hold instead of a
+    /// restart: `restart_timer` counts `restart_delay` down to zero and
+    /// stays there until the caller starts the next round (`init`, or the
+    /// R key's restart). A level's end screen is held, because where it
+    /// goes - the next level or the same one again - is the session's to
+    /// decide (docs/levels.md). A setting, kept across restarts.
     pub hold_end_screen: bool,
     /// The round clock when the round ended (`end_round`), for
     /// `round_stats`; `None` while it runs.
@@ -1541,7 +1544,9 @@ impl Game {
             self.tick_grass(f.dt);
             self.explosions(&mut f, false);
             self.cleanup_done();
-            if !self.hold_end_screen {
+            if self.hold_end_screen {
+                self.restart_timer = (self.restart_timer - dt).max(0.0);
+            } else {
                 self.restart_timer -= dt;
                 if self.restart_timer <= 0.0 {
                     self.finish_frame(f);
@@ -5519,11 +5524,12 @@ mod mechanics_tests {
         assert_eq!(game.round_stats().enemies, 2 + 3 + 4);
     }
 
-    /// A level's end screen waits for its buttons: held, the round stays
-    /// over long past `restart_delay` until the caller starts the next
-    /// one; not held, it restarts on its own as it always has.
+    /// A held end screen counts down like any other and then waits at
+    /// zero: the round stays over long past `restart_delay` until the
+    /// caller starts the next one; not held, it restarts on its own as it
+    /// always has.
     #[test]
-    fn a_held_end_screen_waits_for_the_caller() {
+    fn a_held_end_screen_counts_down_and_waits_for_the_caller() {
         for hold in [false, true] {
             let mut game = two_seat_destroy_round(1);
             game.hold_end_screen = hold;
@@ -5531,12 +5537,18 @@ mod mechanics_tests {
             game.debug_kill(slot).expect("the enemy exists");
             step(&mut game, Input::default());
             assert_eq!(game.outcome(), Outcome::Won);
+            let full = game.restart_countdown();
+            step(&mut game, Input::default());
+            assert!(game.restart_countdown() < full, "hold {hold}: the countdown runs");
             let frames = (tuning().restart_delay * 60.0).ceil() as usize + 60;
             for _ in 0..frames {
                 step(&mut game, Input::default());
             }
             let expected = if hold { Outcome::Won } else { Outcome::Playing };
             assert_eq!(game.outcome(), expected, "hold {hold}");
+            if hold {
+                assert_eq!(game.restart_countdown(), 0.0, "held at zero, never below");
+            }
             // The R key is the caller too: it starts the next round, and
             // the setting outlives it.
             let mut restart = Input::default();
