@@ -32,8 +32,8 @@ pub fn draw_blast(d: &mut impl RaylibDraw, texture: &Texture2D, b: &BlastFx) {
     d.draw_texture_pro(texture, src, dest, Vector2::new(size / 2.0, size / 2.0), rotation, Color::WHITE);
 }
 
-/// The light bloom under a fresh fireball - two flat discs that read as a
-/// flash when drawn additively (call inside `draw_blend_mode(BLEND_ADDITIVE)`).
+/// The light bloom under a fresh fireball - two soft radial glows that read
+/// as a flash when drawn additively (call inside `draw_blend_mode(BLEND_ADDITIVE)`).
 /// Expands as it fades so it doesn't just pop off. A fuel drum's is whiter.
 pub fn draw_blast_glow(d: &mut impl RaylibDraw, b: &BlastFx) {
     let seconds = tuning().blast_glow_seconds;
@@ -48,8 +48,8 @@ pub fn draw_blast_glow(d: &mut impl RaylibDraw, b: &BlastFx) {
         BlastKind::Oil => Color::new(255, 150, 60, a),
         BlastKind::Fuel => Color::new(255, 220, 170, a),
     };
-    pixel_disc(d, at, r, outer);
-    pixel_disc(d, at, r * 0.45, Color::new(255, 230, 170, a));
+    d.draw_circle_gradient(at.x as i32, at.y as i32, r * 1.25, outer, Color::new(outer.r, outer.g, outer.b, 0));
+    d.draw_circle_gradient(at.x as i32, at.y as i32, r * 0.6, Color::new(255, 230, 170, a), Color::new(255, 230, 170, 0));
 }
 
 /// A filled disc built out of whole `GLOW_BLOCK` blocks, one scanline of
@@ -111,7 +111,8 @@ pub fn draw_burning_hull_glow(d: &mut impl RaylibDraw, center: Position, time: f
     let phase = (seed_at(center, 29) % 100) as f32 / 100.0 * std::f32::consts::TAU;
     let flicker = 0.7 + 0.3 * (time * 37.0 + phase).sin();
     let dying = (left / tuning().flame_afterburn_seconds.max(0.1)).clamp(0.2, 1.0);
-    pixel_disc(d, center, 12.0 + 8.0 * dying, Color::new(255, 130, 40, (110.0 * flicker * dying) as u8));
+    let c = Color::new(255, 130, 40, (120.0 * flicker * dying) as u8);
+    d.draw_circle_gradient(center.x as i32, center.y as i32, 16.0 + 10.0 * dying, c, Color::new(255, 130, 40, 0));
 }
 
 /// The pulsing glow on a barrel whose fuse is lit (additive, like the

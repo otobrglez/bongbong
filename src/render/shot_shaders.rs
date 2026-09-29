@@ -1,7 +1,7 @@
-//! The two shots drawn by fragment shader rather than from blocks or
-//! sprites: the plasma bolt's orb (`static/plasma_orb.fs`) and the
-//! flamethrower's jet of burning fuel (`static/flame_jet.fs`), each on
-//! one textured quad per shot. Both sources are compiled into the binary
+//! What is drawn by fragment shader rather than from blocks or sprites:
+//! the plasma bolt's orb (`static/plasma_orb.fs`), the flamethrower's jet
+//! of burning fuel (`static/flame_jet.fs`) and every hit's burst
+//! (`static/impact_burst.fs`), each on one textured quad. Both sources are compiled into the binary
 //! (the GLSL ES 100 twins in `static/web/` on the embedded builds), so no
 //! platform needs the files on disk.
 //!
@@ -11,6 +11,7 @@
 
 use sola_raylib::prelude::*;
 
+use crate::fx::{Impact, ImpactKind};
 use crate::math::{Color, Vec2};
 use crate::plasma::{Plasma, PlasmaVariant};
 use crate::tuning::tuning;
@@ -43,6 +44,15 @@ struct FlameLocs {
     reach: i32,
 }
 
+struct ImpactLocs {
+    t: i32,
+    style: i32,
+    dir: i32,
+    seed: i32,
+    bright: i32,
+    body: i32,
+}
+
 /// The compiled shaders, their uniform locations and the 1x1 white texture
 /// every quad is drawn with (so the fragment shader's texture coordinates
 /// run 0..1 across the quad).
@@ -51,6 +61,8 @@ pub struct ShotShaders {
     orb_locs: OrbLocs,
     flame: Shader,
     flame_locs: FlameLocs,
+    impact: Shader,
+    impact_locs: ImpactLocs,
     quad: Texture2D,
 }
 
@@ -92,13 +104,18 @@ impl ShotShaders {
     /// game then flies the baked plasma sprite and draws the flamethrower
     /// from its particles alone.
     pub fn load(rl: &mut RaylibHandle, thread: &RaylibThread) -> Result<Self, String> {
-        let (orb_src, flame_src) = if crate::EMBEDDED {
-            (include_str!("../../static/web/plasma_orb.fs"), include_str!("../../static/web/flame_jet.fs"))
+        let (orb_src, flame_src, impact_src) = if crate::EMBEDDED {
+            (
+                include_str!("../../static/web/plasma_orb.fs"),
+                include_str!("../../static/web/flame_jet.fs"),
+                include_str!("../../static/web/impact_burst.fs"),
+            )
         } else {
-            (include_str!("../../static/plasma_orb.fs"), include_str!("../../static/flame_jet.fs"))
+            (include_str!("../../static/plasma_orb.fs"), include_str!("../../static/flame_jet.fs"), include_str!("../../static/impact_burst.fs"))
         };
         let orb = compile(rl, thread, "plasma_orb.fs", orb_src)?;
         let flame = compile(rl, thread, "flame_jet.fs", flame_src)?;
+        let impact = compile(rl, thread, "impact_burst.fs", impact_src)?;
         let white = Image::gen_image_color(1, 1, Color::WHITE);
         let quad = rl.load_texture_from_image(thread, &white).map_err(|e| format!("shot quad: {e}"))?;
         let orb_locs = OrbLocs {
@@ -122,7 +139,15 @@ impl ShotShaders {
             seed: flame.get_shader_location("seed"),
             reach: flame.get_shader_location("reach"),
         };
-        Ok(ShotShaders { orb, orb_locs, flame, flame_locs, quad })
+        let impact_locs = ImpactLocs {
+            t: impact.get_shader_location("t"),
+            style: impact.get_shader_location("style"),
+            dir: impact.get_shader_location("dir"),
+            seed: impact.get_shader_location("seed"),
+            bright: impact.get_shader_location("cA"),
+            body: impact.get_shader_location("cB"),
+        };
+        Ok(ShotShaders { orb, orb_locs, flame, flame_locs, impact, impact_locs, quad })
     }
 
     /// Draw a flying plasma bolt as its orb: the ball, its glow, its
@@ -185,6 +210,44 @@ impl ShotShaders {
         let quad = &self.quad;
         d.draw_shader_mode(s, |mut sd| {
             sd.draw_texture_pro(quad, Rectangle::new(0.0, 0.0, 1.0, 1.0), dest, Vector2::new(half, 0.0), angle, Color::WHITE);
+        });
+    }
+}
+
+impl ShotShaders {
+    /// Draw one hit's burst, centred where the shot landed, on a square
+    /// quad as wide as its look reaches (`static/impact_burst.fs`).
+    pub fn draw_impact<D: RaylibDraw + RaylibShaderModeExt>(&mut self, d: &mut D, impact: &Impact) {
+        let (style, half, bright, body) = match impact.kind {
+            ImpactKind::Shell => (0.0f32, 46.0f32, Color::WHITE, Color::WHITE),
+            ImpactKind::Bullet => (1.0, 26.0, Color::WHITE, Color::WHITE),
+            ImpactKind::Plasma(v) => {
+                let [_, body, bright, _] = v.orb_colors();
+                let style = if v == PlasmaVariant::Purple { 3.0 } else { 2.0 };
+                (style, 44.0, bright, body)
+            }
+            ImpactKind::Laser(blue) => {
+                let (bright, body) = if blue {
+                    (Color::new(150, 200, 255, 255), Color::new(40, 110, 255, 255))
+                } else {
+                    (Color::new(255, 170, 150, 255), Color::new(255, 50, 40, 255))
+                };
+                (4.0, 30.0, bright, body)
+            }
+        };
+        let half = half * tuning().hit_fx_scale;
+        let l = &self.impact_locs;
+        let s = &mut self.impact;
+        s.set_shader_value(l.t, impact.progress());
+        s.set_shader_value(l.style, style);
+        s.set_shader_value(l.dir, Vector2::new(impact.dir.x, impact.dir.y));
+        s.set_shader_value(l.seed, impact.seed);
+        s.set_shader_value(l.bright, rgb(bright));
+        s.set_shader_value(l.body, rgb(body));
+        let dest = Rectangle::new(impact.pos.x - half, impact.pos.y - half, half * 2.0, half * 2.0);
+        let quad = &self.quad;
+        d.draw_shader_mode(s, |mut sd| {
+            sd.draw_texture_pro(quad, Rectangle::new(0.0, 0.0, 1.0, 1.0), dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         });
     }
 }

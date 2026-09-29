@@ -1458,6 +1458,13 @@ pub fn run(args: Args) {
         // `step`'s own frames, or nothing while frozen - and a frozen or
         // dialog frame leaves the clock at zero, so the round resumes on a
         // fresh step rather than catching up on the time it stood still.
+        // How far the particle layer ages this frame: the frame's real
+        // time, except in a dev-server lockstep, where it is the simulated
+        // time the frame's `step` ran - so a frozen round's sparks and hits
+        // freeze with it and a recording stepped a frame at a time plays
+        // them at their real pace.
+        #[cfg_attr(not(all(feature = "dev-tools", not(target_os = "emscripten"))), allow(unused_mut))]
+        let mut fx_dt = dt;
         if session.playing() {
             #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
             let frozen = dev.as_ref().is_some_and(|dev| dev.lockstep());
@@ -1472,7 +1479,11 @@ pub fn run(args: Args) {
             #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
             let advanced = match &mut dev {
                 Some(dev) => {
+                    let before = session.game.frame();
                     dev.advance(&mut session.game, input, steps, width, height, &mut |game| fx.observe_events(game));
+                    if frozen {
+                        fx_dt = session.game.frame().saturating_sub(before) as f32 * PHYSICS_FIXED_DT;
+                    }
                     true
                 }
                 None => false,
@@ -1500,8 +1511,8 @@ pub fn run(args: Args) {
         // world the round is at (its events it read after each step),
         // then ages what is already in flight. Deliberately not inside
         // `Game` - see fx.rs.
-        fx.observe(game, dt);
-        fx.tick(dt);
+        fx.observe(game, fx_dt);
+        fx.tick(fx_dt);
         game.render(
             rl,
             thread,

@@ -3,8 +3,7 @@
 use sola_raylib::prelude::*;
 
 use crate::math::{Color, Rectangle};
-use crate::render::blast::pixel_disc;
-use crate::render::shot_fx::{fade, heading, pixel_streak};
+use crate::render::shot_fx::{fade, glow, heading, streak};
 use crate::shell::{Shell, ShellState};
 use crate::tuning::tuning;
 use crate::{Position, SHELL_SCALE, SHELL_TEXTURE_SIZE};
@@ -72,7 +71,7 @@ pub fn draw_shell_light(d: &mut impl RaylibDraw, shell: &Shell) {
     let dir = heading(shell.rotation);
     let length = tuning().shell_tracer_length;
     let tail = Position::new(shell.position.x - dir.x * 4.0, shell.position.y - dir.y * 4.0);
-    pixel_streak(d, tail, dir, length, 3, fade(Color::new(255, 90, 20, 210), strength), Color::new(180, 20, 0, 0));
-    pixel_streak(d, tail, dir, length * 0.8, 1, fade(Color::new(255, 255, 220, 255), strength), fade(Color::new(255, 150, 30, 140), strength));
-    pixel_disc(d, shell.position, 10.0, fade(Color::new(255, 120, 30, 70), strength));
+    streak(d, tail, dir, length, 5.0, fade(Color::new(255, 110, 30, 220), strength), Color::new(200, 30, 10, 0));
+    streak(d, tail, dir, length * 0.8, 2.0, fade(Color::new(255, 255, 225, 255), strength), fade(Color::new(255, 160, 40, 150), strength));
+    glow(d, shell.position, 11.0, fade(Color::new(255, 130, 40, 120), strength));
 }

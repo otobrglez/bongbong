@@ -4,8 +4,7 @@ use sola_raylib::prelude::*;
 
 use crate::laser::{LaserBeam, LaserVariant};
 use crate::math::{Color, Vec2};
-use crate::render::blast::pixel_disc;
-use crate::render::shot_fx::fade;
+use crate::render::shot_fx::{fade, glow as soft};
 use crate::tuning::tuning;
 use crate::Position;
 
@@ -66,7 +65,7 @@ pub fn draw_laser_bloom(d: &mut impl RaylibDraw, beam: &LaserBeam) {
     while along < length {
         let t = along / length;
         let at = Position::new(beam.start.x + span.x * t, beam.start.y + span.y * t);
-        pixel_disc(d, at, width * 0.9, fade(core, 0.7 * k));
+        soft(d, at, width * 1.4, fade(core, 0.8 * k));
         along += 40.0;
     }
 }
@@ -81,9 +80,9 @@ pub fn draw_laser_flares(d: &mut impl RaylibDraw, beam: &LaserBeam) {
     }
     let (glow, core) = beam.variant.colors();
     let width = tuning().laser_beam_width;
-    pixel_disc(d, beam.start, width * 2.5, fade(glow, 0.8 * k));
-    pixel_disc(d, beam.start, width * 1.2, fade(core, k));
-    pixel_disc(d, beam.end, width * 4.0, fade(glow, 0.7 * k));
-    pixel_disc(d, beam.end, width * 2.0, fade(core, k));
-    pixel_disc(d, beam.end, width * 0.9, fade(Color::WHITE, k));
+    soft(d, beam.start, width * 3.0, fade(glow, 0.8 * k));
+    soft(d, beam.start, width * 1.4, fade(core, k));
+    soft(d, beam.end, width * 5.0, fade(glow, 0.7 * k));
+    soft(d, beam.end, width * 2.2, fade(core, k));
+    d.draw_circle_v(beam.end, width * 0.6, fade(Color::WHITE, k));
 }

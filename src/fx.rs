@@ -48,6 +48,50 @@ pub enum ParticleKind {
     Trail,
 }
 
+/// Which weapon a hit came from - each has its own burst.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum ImpactKind {
+    Shell,
+    Bullet,
+    Plasma(PlasmaVariant),
+    /// A laser's burn; `true` for the blue beam.
+    Laser(bool),
+}
+
+impl ImpactKind {
+    /// How long this kind of hit plays, from the `shot_fx` knobs.
+    pub fn seconds(self) -> f32 {
+        let t = tuning();
+        match self {
+            ImpactKind::Shell => t.shell_hit_seconds,
+            ImpactKind::Bullet => t.bullet_hit_seconds,
+            ImpactKind::Plasma(_) => t.plasma_hit_seconds,
+            ImpactKind::Laser(_) => t.laser_hit_seconds,
+        }
+    }
+}
+
+/// One hit playing out where a shot landed: kept here, on the particle
+/// layer's own clock, rather than read off the projectile, so it runs
+/// smoothly for as long as it likes - past the projectile's own short
+/// impact frames, and on a replica whose projectiles' timers never run.
+pub struct Impact {
+    pub(crate) pos: Position,
+    /// The way the shot was travelling (a unit vector).
+    pub(crate) dir: Vec2,
+    pub(crate) kind: ImpactKind,
+    pub(crate) age: f32,
+    /// Per-hit variety for the burst's hashed parts.
+    pub(crate) seed: f32,
+}
+
+impl Impact {
+    /// 0 at the hit to 1 as it ends.
+    pub fn progress(&self) -> f32 {
+        (self.age / self.kind.seconds().max(0.01)).clamp(0.0, 1.0)
+    }
+}
+
 pub struct Particle {
     pub(crate) pos: Position,
     /// Only the drawing reads it outside this module: a fast spark is
@@ -89,11 +133,32 @@ pub struct Fx {
     /// last laid a trail puff: the trail is laid by distance flown, so it
     /// stays a continuous line at any speed and frame rate.
     trail_last: HashMap<u32, Position>,
+    /// Hits playing out, oldest first (`Impact`).
+    impacts: Vec<Impact>,
+    /// Ids of the shots already seen in their impact frames, so each hit
+    /// is started once.
+    impacts_seen: HashSet<u32>,
 }
 
 impl Fx {
     pub fn live(&self) -> usize {
         self.particles.len()
+    }
+
+    /// Every hit still playing, oldest first, for the renderer.
+    #[cfg(feature = "render")]
+    pub(crate) fn impacts(&self) -> &[Impact] {
+        &self.impacts
+    }
+
+    fn start_impact(&mut self, pos: Position, velocity: Vec2, kind: ImpactKind) {
+        let len = velocity.length();
+        let dir = if len > 0.01 { velocity * (1.0 / len) } else { Vec2::new(0.0, -1.0) };
+        if self.impacts.len() >= MAX_IMPACTS {
+            self.impacts.remove(0);
+        }
+        let seed = rand::rng().random_range(0.0..100.0);
+        self.impacts.push(Impact { pos, dir, kind, age: 0.0, seed });
     }
 
     /// Every live particle, oldest first, for `render::fx::draw`.
@@ -110,6 +175,8 @@ impl Fx {
         self.accum.clear();
         self.wading.clear();
         self.trail_last.clear();
+        self.impacts.clear();
+        self.impacts_seen.clear();
     }
 
     fn push(&mut self, p: Particle) {
@@ -481,6 +548,7 @@ impl Fx {
                         if len > 0.5 {
                             let tint = if variant == "blue" { LASER_BLUE_T } else { LASER_RED_T };
                             let back = Vec2::new(dx / len, dy / len);
+                            self.start_impact(Position::new(x1, y1), back * -1.0, ImpactKind::Laser(variant == "blue"));
                             self.cone_burst(Position::new(x1, y1), back, 1.2, ParticleKind::Spark, self.count(tuning().shot_hit_sparks), 170.0, &[tint, WHITE_T]);
                         }
                     }
@@ -515,6 +583,40 @@ impl Fx {
         }
     }
 
+    /// Start a hit for every shell, bullet and plasma bolt that has just
+    /// reached its impact frames. Watched from the world rather than the
+    /// event log, so a replica - which sees shots, not `Hit` events for
+    /// each - starts the same bursts; keyed by projectile id so a hit
+    /// starts once however many frames its impact state is seen.
+    fn watch_impacts(&mut self, game: &Game) {
+        let mut hits: Vec<(u32, Position, Vec2, ImpactKind)> = Vec::new();
+        let mut live: HashSet<u32> = HashSet::new();
+        for s in game.world.query::<&Shell>().iter() {
+            live.insert(s.id);
+            if matches!(s.state, ShellState::Hit0 | ShellState::Hit1 | ShellState::Hit2) {
+                hits.push((s.id, s.position, s.velocity, ImpactKind::Shell));
+            }
+        }
+        for b in game.world.query::<&Bullet>().iter() {
+            live.insert(b.id);
+            if b.state == crate::bullet::BulletState::Hit {
+                hits.push((b.id, b.position, b.velocity, ImpactKind::Bullet));
+            }
+        }
+        for p in game.world.query::<&Plasma>().iter() {
+            live.insert(p.id);
+            if p.impact_progress().is_some() {
+                hits.push((p.id, p.position, p.velocity, ImpactKind::Plasma(p.variant)));
+            }
+        }
+        for (id, pos, vel, kind) in hits {
+            if self.impacts_seen.insert(id) {
+                self.start_impact(pos, vel, kind);
+            }
+        }
+        self.impacts_seen.retain(|id| live.contains(id));
+    }
+
     /// Continuous emitters. These are *states*, not events - a tile is
     /// burning for a second and a half, not at one instant - so they are
     /// sampled from the world every render frame and rate-limited through
@@ -528,6 +630,7 @@ impl Fx {
     }
 
     fn sample_world(&mut self, game: &Game, dt: f32) {
+        self.watch_impacts(game);
         // Spray off a wading hull (docs/water.md): a splash the frame it
         // wades in, then droplets at a rate that follows its speed.
         let spray = tuning().water_spray_rate;
@@ -748,6 +851,10 @@ impl Fx {
     }
 
     pub fn tick(&mut self, dt: f32) {
+        self.impacts.retain_mut(|i| {
+            i.age += dt;
+            i.age < i.kind.seconds()
+        });
         let t = tuning();
         let (gravity, drag, bounce) = (t.debris_gravity, t.debris_air_drag, t.debris_bounce);
         let (rise, growth) = (t.smoke_rise_speed, t.smoke_growth);
@@ -840,6 +947,10 @@ fn shot_heading_near(game: &Game, at: Position) -> Option<Vec2> {
 /// and colour steps through a short ramp instead of fading an alpha
 /// channel. A pixel-art flame is drawn, not blended.
 pub(crate) const FX_GRID: f32 = 2.0;
+
+/// Hits kept playing at once; a minigun burst into a wall is the case
+/// that reaches it, and the oldest go first.
+const MAX_IMPACTS: usize = 48;
 
 // Particle tints. Deliberately literals rather than a palette import:
 // these are light, not surface, and several are drawn additively where a

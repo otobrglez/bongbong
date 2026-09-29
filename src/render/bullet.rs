@@ -4,10 +4,9 @@ use sola_raylib::prelude::*;
 
 use crate::bullet::{Bullet, BulletState};
 use crate::math::{Color, Rectangle};
-use crate::render::blast::pixel_disc;
-use crate::render::shot_fx::{fade, heading, pixel_streak};
+use crate::render::shot_fx::{fade, glow, heading, streak};
 use crate::tuning::tuning;
-use crate::{Position, MINIGUN_BULLET_SCALE, MINIGUN_BULLET_TEXTURE_SIZE};
+use crate::{MINIGUN_BULLET_SCALE, MINIGUN_BULLET_TEXTURE_SIZE};
 
 /// Column of this state in minigun_bullets.png.
 fn state_col(state: BulletState) -> i32 {
@@ -65,7 +64,7 @@ pub fn draw_bullet_light(d: &mut impl RaylibDraw, bullet: &Bullet) {
     }
     let dir = heading(bullet.rotation);
     let length = tuning().bullet_tracer_length;
-    pixel_streak(d, bullet.position, dir, length, 2, fade(Color::new(255, 150, 40, 120), strength), Color::new(200, 50, 10, 0));
-    pixel_streak(d, bullet.position, dir, length * 0.8, 1, fade(Color::new(255, 255, 190, 255), strength), fade(Color::new(255, 140, 30, 90), strength));
-    pixel_disc(d, Position::new(bullet.position.x, bullet.position.y), 4.0, fade(Color::new(255, 220, 120, 150), strength));
+    streak(d, bullet.position, dir, length, 3.0, fade(Color::new(255, 150, 40, 170), strength), Color::new(200, 50, 10, 0));
+    streak(d, bullet.position, dir, length * 0.8, 1.5, fade(Color::new(255, 255, 200, 255), strength), fade(Color::new(255, 140, 30, 110), strength));
+    glow(d, bullet.position, 5.0, fade(Color::new(255, 220, 120, 200), strength));
 }

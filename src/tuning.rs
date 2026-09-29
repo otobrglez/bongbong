@@ -2043,6 +2043,16 @@ tunables! {
         /// Sparks spat from the barrel with every shot (`fx.rs`, scaled
         /// by `fx_density`), plus a wisp of gun smoke.
         muzzle_sparks: i32 = 4 in 0 ..= 40;
+        /// How long each hit plays (seconds; `render/shot_shaders.rs`,
+        /// `static/impact_burst.fs`): a shell's fireball, flash, shock ring,
+        /// debris and smoke; a bullet's spark star and ricochets; a plasma
+        /// bolt's energy ring; a laser's molten splash.
+        shell_hit_seconds: f32 = 0.6 in 0.05 ..= 3.0;
+        bullet_hit_seconds: f32 = 0.22 in 0.05 ..= 2.0;
+        plasma_hit_seconds: f32 = 0.5 in 0.05 ..= 3.0;
+        laser_hit_seconds: f32 = 0.3 in 0.05 ..= 2.0;
+        /// Size of every hit's burst, as a multiple of its designed size.
+        hit_fx_scale: f32 = 1.0 in 0.2 ..= 3.0;
         /// Glints per second a flying plasma bolt sheds in its own colour,
         /// and embers per second a flying shell sheds (`fx.rs`, scaled by
         /// `fx_density`).

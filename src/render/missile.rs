@@ -3,8 +3,7 @@
 use sola_raylib::prelude::*;
 
 use crate::math::{Color, Rectangle, Vec2};
-use crate::render::blast::pixel_disc;
-use crate::render::shot_fx::{fade, pixel_streak};
+use crate::render::shot_fx::{fade, glow, streak};
 use crate::missile::Missile;
 use crate::tuning::tuning;
 use crate::{MISSILE_SCALE, MISSILE_TEXTURE_SIZE};
@@ -59,7 +58,7 @@ pub fn draw_missile_exhaust(d: &mut impl RaylibDraw, missile: &Missile, time: f3
     let flicker = 0.75 + 0.25 * (time * 53.0 + phase).sin();
     let scale = missile.draw_scale();
     let flame = 10.0 * scale * flicker;
-    pixel_streak(d, tail, dir, flame, 2, fade(Color::new(255, 250, 220, 255), strength), fade(Color::new(255, 90, 20, 60), strength));
-    pixel_disc(d, tail, 7.0 * scale * flicker, fade(Color::new(255, 150, 50, 150), strength));
-    pixel_disc(d, tail, 3.0 * scale, fade(Color::new(255, 245, 210, 220), strength));
+    streak(d, tail, dir, flame, 4.0 * scale, fade(Color::new(255, 250, 220, 255), strength), fade(Color::new(255, 90, 20, 60), strength));
+    glow(d, tail, 9.0 * scale * flicker, fade(Color::new(255, 150, 50, 170), strength));
+    d.draw_circle_v(tail, 2.0 * scale, fade(Color::new(255, 245, 210, 230), strength));
 }
