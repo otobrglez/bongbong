@@ -8,6 +8,8 @@
 // itself, which is why the bar starts as an indeterminate sweep rather
 // than at zero.
 
+import { t } from "./strings";
+
 const PROGRESS_RE = /([\d.]+)\s*\/\s*([\d.]+)/;
 
 export interface LoadingPanel {
@@ -36,7 +38,7 @@ export function loadingPanel(): LoadingPanel {
     }
     // Emscripten's own wording is developer-facing; keep the panel's
     // note to the one thing a player cares about.
-    note.textContent = text ? "Fetching the game" : "Starting";
+    note.textContent = text ? t("fetching") : t("starting");
   }
 
   function done(): void {

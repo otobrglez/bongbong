@@ -1,7 +1,7 @@
 # PRD: bongbong in more than one language
 
 Status: agreed with the owner 2026-09-29 (the decisions are in section 8)
-and built the same day on this branch - phases 1 and 2; section 8b lists
+and built the same day on this branch - phases 1 to 3; section 8b lists
 where the build departs from the text. Three smaller questions in
 section 8 stay open with a recommendation each.
 
@@ -574,8 +574,14 @@ does that the text above does not say, or says differently:
   `LEAVE` and the `KICK` button, `RAZRED OD`/`RAZRED DO` for the tier
   rows); `UNDO`/`REDO` and `PING`/`MS` are left as they are. The editor's
   `FILE` reads `MENI` and its `MAP` button `IGRA`.
-- **The site's own strings** (phase 3) are not touched; the page
-  publishes `window.bbLang` and that is all it does for now.
+- **The site's own strings** (phase 3) are `site/src/scripts/strings.ts`:
+  the dozen words around the canvas in English and Slovenian, picked by
+  the game's own rule (`?lang=`, then `navigator.languages`) and written
+  into `data-i18n` elements before the runtime starts, with `<html lang>`
+  and the title set to match. The tuning panel stays English: it is the
+  developer's. The subscribe page is untouched.
+- **iOS declares its languages** (`CFBundleLocalizations`), so Settings
+  offers a per-app language that `SDL_GetPreferredLocales` reads first.
 
 ## 9. Parked: a font for other scripts
 
