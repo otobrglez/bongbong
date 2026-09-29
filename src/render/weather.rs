@@ -69,6 +69,7 @@ struct GroundLocs {
     rain: i32,
     splash_rate: i32,
     snow: i32,
+    frozen: i32,
     cell_mask: i32,
 }
 
@@ -92,6 +93,11 @@ struct SkyLocs {
     clear_radius: i32,
     seats: i32,
     seat_count: i32,
+    gust_on: i32,
+    gust_since: i32,
+    gust_dir: i32,
+    gust_front: i32,
+    gust_len: i32,
     light_map: i32,
 }
 
@@ -151,6 +157,11 @@ pub struct WeatherFrame {
     cells: (i32, i32),
     seats: [Vector2; MAX_SEATS],
     seat_count: usize,
+    /// The sandstorm gust crossing the field: seconds since its front left
+    /// and the way it blows (`weather::gust_on_field`).
+    gust: Option<(f32, Vector2)>,
+    /// The rules froze the round's water (`WaterLayout::is_frozen`).
+    frozen: bool,
     tuning: Arc<Tuning>,
 }
 
@@ -214,6 +225,7 @@ impl WeatherFx {
             rain: ground.get_shader_location("rain"),
             splash_rate: ground.get_shader_location("splashRate"),
             snow: ground.get_shader_location("snow"),
+            frozen: ground.get_shader_location("frozen"),
             cell_mask: ground.get_shader_location("cellMask"),
         };
         let sky_locs = SkyLocs {
@@ -238,6 +250,11 @@ impl WeatherFx {
             // array uniform (see `RippleFx::load`).
             seats: sky.get_shader_location("seats[0]"),
             seat_count: sky.get_shader_location("seatCount"),
+            gust_on: sky.get_shader_location("gustOn"),
+            gust_since: sky.get_shader_location("gustSince"),
+            gust_dir: sky.get_shader_location("gustDir"),
+            gust_front: sky.get_shader_location("gustFront"),
+            gust_len: sky.get_shader_location("gustLen"),
             light_map: sky.get_shader_location("lightMap"),
         };
         Ok(WeatherFx { shaders: PassShaders { light, light_locs, ground, ground_locs, sky, sky_locs }, targets: None, mask: None, warned: false })
@@ -288,6 +305,13 @@ impl WeatherFx {
                 seat_count += 1;
             }
         }
+        // The gust the rules push the hulls with, drawn where it blows: its
+        // age travels rather than its start, so the wrapped clock never
+        // splits a front in two.
+        let gust = (t.weather_rules && game.weather() == crate::map::Weather::Sandstorm)
+            .then(|| crate::weather::gust_on_field(game.time, w, h, &t))
+            .flatten()
+            .map(|g| (game.time - g.start, Vector2::new(g.dir.x, g.dir.y)));
         Some(WeatherFrame {
             plan,
             look,
@@ -298,6 +322,8 @@ impl WeatherFx {
             cells,
             seats,
             seat_count,
+            gust,
+            frozen: game.water().is_frozen(),
             tuning: t,
         })
     }
@@ -361,7 +387,7 @@ fn mask_bytes(game: &Game) -> (i32, i32, Vec<u8>) {
             bytes[i] = match game.water.depth_at(cell_to_world(c, r)) {
                 Depth::Dry => 0,
                 Depth::Shallow => 128,
-                Depth::Deep => 255,
+                Depth::Deep | Depth::Ice => 255,
             };
             bytes[i + 3] = 255;
         }
@@ -473,6 +499,7 @@ impl Passes<'_> {
         s.set_shader_value(l.rain, frame.look.rain);
         s.set_shader_value(l.splash_rate, t.rain_splash_rate);
         s.set_shader_value(l.snow, (frame.look.snow * t.snow_cover).clamp(0.0, 1.0));
+        s.set_shader_value(l.frozen, if frame.frozen { 1.0f32 } else { 0.0 });
         let (raw, mask_loc, mask_tex) = (*s.as_ref(), l.cell_mask, *mask.as_ref());
         let source = self.ground;
         d.draw_shader_mode(s, |mut sd| {
@@ -534,6 +561,12 @@ impl Passes<'_> {
         s.set_shader_value(l.clear_radius, t.weather_clear_radius_px);
         s.set_shader_value_v(l.seats, &frame.seats);
         s.set_shader_value(l.seat_count, frame.seat_count as f32);
+        let (since, dir) = frame.gust.unwrap_or((0.0, Vector2::new(1.0, 0.0)));
+        s.set_shader_value(l.gust_on, if frame.gust.is_some() { 1.0f32 } else { 0.0 });
+        s.set_shader_value(l.gust_since, since);
+        s.set_shader_value(l.gust_dir, dir);
+        s.set_shader_value(l.gust_front, t.sand_gust_front_speed.max(1.0));
+        s.set_shader_value(l.gust_len, t.sand_gust_seconds.max(0.05));
         let (raw, light_loc, light_tex) = (*s.as_ref(), l.light_map, *self.light.as_ref());
         d.draw_shader_mode(s, |mut sd| {
             // SAFETY: as in `draw_ground`.

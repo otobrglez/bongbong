@@ -202,8 +202,8 @@ impl Game {
                 if tank.is_wreck() || tank.burn_timer <= 0.0 {
                     continue;
                 }
-                // Wading puts the fire out (docs/water.md).
-                if self.water.depth_at(tank.position) != crate::ground::Depth::Dry {
+                // Wading puts the fire out (docs/water.md); ice does not.
+                if self.water.depth_at(tank.position).is_wet() {
                     tank.burn_timer = 0.0;
                     continue;
                 }

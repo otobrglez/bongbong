@@ -358,15 +358,15 @@ impl Ai {
     /// displaced, never a physics velocity - see `stuck_timer`.
     /// `alert` is this frame's shared "last known player position" (see
     /// `simulation.rs`'s `Game::alert_position`) - `Some` while any enemy on
-    /// the field currently has the player within `ENEMY_VIEW_RANGE` (or did
-    /// within the last `ENEMY_ALERT_HOLD_SECONDS`), so an enemy that can't
+    /// the field currently has the player within sight (`Game::enemy_sight`),
+    /// or did within the last `ENEMY_ALERT_HOLD_SECONDS`, so an enemy that can't
     /// personally see the player can still converge on where the group last
     /// saw them instead of wandering randomly - see `act_patrol`.
     /// `engage_target` is this tank's assigned point on the shared
     /// engagement ring around the player (see `simulation.rs::Game::update`'s
     /// `engage_targets`, and `ENGAGE_RING_RADIUS`'s doc comment) - `Some`
-    /// whenever two or more enemies are simultaneously within
-    /// `ENEMY_VIEW_RANGE`, so `act_chase`/`act_attack` can steer at a point
+    /// whenever two or more enemies are simultaneously within sight, so
+    /// `act_chase`/`act_attack` can steer at a point
     /// that's spread out from the other engaged enemies instead of the
     /// player's exact position, which is what used to send a whole group
     /// at the same spot and pile them up. `None` when this tank is the only
@@ -406,6 +406,9 @@ impl Ai {
     /// shot fired that way would hit within breach reach
     /// (`Terrain::obstacle_ahead`), so a tank wedged against a brick can
     /// decide to shoot it down - see `Brain::wants_breach`.
+    /// `sight` is how far this tank sees (px): `enemy_view_range` under the
+    /// round's sky (`Game::enemy_sight`, docs/weather.md) - the range it
+    /// chases from, and a cap on the range it attacks and snipes from.
     #[allow(clippy::too_many_arguments)] // perception is passed by value, not bundled
     pub fn think(
         &mut self,
@@ -427,6 +430,7 @@ impl Ai {
         player_line_of_sight: bool,
         target_concealed: bool,
         walls_ahead: [Option<WallAhead>; 4],
+        sight: f32,
     ) -> Intent {
         self.fire_timer = (self.fire_timer - dt).max(0.0);
         self.retarget_timer = (self.retarget_timer - dt).max(0.0);
@@ -512,6 +516,7 @@ impl Ai {
             player_line_of_sight,
             target_concealed,
             walls_ahead,
+            sight,
         };
         let mut last_action = None;
         build().tick_traced(&mut bb, &mut last_action);
@@ -1254,7 +1259,7 @@ struct Brain<'a> {
     intent: Intent,
     /// Last known player position shared across every enemy this round,
     /// while any one of them currently has the player within
-    /// ENEMY_VIEW_RANGE - see `think`'s `alert` parameter and
+    /// its sight - see `think`'s `alert` parameter and
     /// `act_patrol`. `None` when no enemy has spotted the player recently.
     alert: Option<Position>,
     /// This tank's assigned spot on the shared engagement ring around the
@@ -1281,9 +1286,18 @@ struct Brain<'a> {
     /// The tile directly ahead in each direction - see `think`'s
     /// `walls_ahead` parameter.
     walls_ahead: [Option<WallAhead>; 4],
+    /// How far this tank sees - see `think`'s `sight` parameter.
+    sight: f32,
 }
 
 impl Brain<'_> {
+    /// `enemy_attack_range`, never past what this tank sees: in a fog
+    /// thick enough to hide a target inside it, the attack waits until the
+    /// target shows.
+    fn attack_range(&self) -> f32 {
+        tuning().enemy_attack_range.min(self.sight)
+    }
+
     fn dist_to_player(&self) -> f32 {
         self.me.position.distance_to(self.player.position)
     }
@@ -1350,7 +1364,7 @@ impl Brain<'_> {
         if !self.hunting_frog() || !self.player_alive() || !self.player_line_of_sight || self.ai.snipe_cooldown > 0.0 {
             return false;
         }
-        if self.dist_to_player() > tuning().enemy_attack_range {
+        if self.dist_to_player() > self.attack_range() {
             return false;
         }
         let (_, off_axis, in_front) = self.aim_alignment_at(self.player.position);
@@ -1732,7 +1746,7 @@ fn build<'a>() -> Node<Brain<'a>> {
         sequence(vec![
             condition(|b: &mut Brain| {
                 b.target_alive()
-                    && b.dist_to_target() <= tuning().enemy_attack_range
+                    && b.dist_to_target() <= b.attack_range()
                     // Concealment has to break this tier as well as the
                     // chase below it, or a lost player is still walked at:
                     // `act_attack`'s unaligned branch repositions toward the
@@ -1760,7 +1774,7 @@ fn build<'a>() -> Node<Brain<'a>> {
                         // straight to a player it cannot see. A tank that
                         // took a hit keeps coming regardless - it knows
                         // something is there.
-                        || (b.dist_to_target() <= tuning().enemy_view_range && !b.target_concealed)
+                        || (b.dist_to_target() <= b.sight && !b.target_concealed)
                         || b.ai.hit_alert_timer > 0.0)
             }),
             action("chase", act_chase),
@@ -2145,6 +2159,7 @@ mod role_tests {
             true,
             false,
             [None; 4],
+            tuning().enemy_view_range,
         )
     }
 
@@ -2280,6 +2295,7 @@ mod stuck_tests {
             false,
             false,
             [None; 4],
+            tuning().enemy_view_range,
         )
     }
 

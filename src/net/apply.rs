@@ -176,6 +176,11 @@ pub fn welcome(w: &Welcome) -> Result<Game, String> {
     game.player2_row_override = chassis(1);
     // The banner's time left travels in the snapshot.
     game.show_intro = false;
+    // The room's sky, which is its map's and its seed's alone: the
+    // window's `weather_override` knob never reaches a round it does not
+    // simulate, so the replica and the sandbox draw and drive under the
+    // sky the room fights under.
+    game.weather_from_map = true;
     let (width, height) = game.map.field_size();
     game.init(width, height);
     game.strip_ai();
@@ -1251,6 +1256,32 @@ mod tests {
         let rematch = authoritative(&map, next, 2);
         snapshot(&mut replica, &enc::snapshot(&rematch, [0; MAX_SEATS]));
         assert_eq!(replica.weather(), rematch.weather(), "a rematch's sky is its new seed's");
+    }
+
+    /// The sky is part of a room's rules (docs/weather.md "The rules"): a
+    /// replica - and the prediction sandbox, built from the same welcome -
+    /// fights under the room's sky, its water frozen where the room's is
+    /// and its enemies' sight the room's, with nothing on the wire but the
+    /// map's key.
+    #[test]
+    fn a_replica_plays_by_the_rooms_sky() {
+        use crate::map::Weather;
+        // A map with a river and a lake, the key put first: a key after
+        // a `[table]` header would land in that table.
+        const RIVER_MAP: &str = include_str!("../../maps/river.toml");
+        let room_under = |sky: Weather| authoritative(&format!("weather = \"{}\"\n{RIVER_MAP}", sky.name()), 0x5EED, 2);
+        for sky in Weather::ALL {
+            let room = room_under(sky);
+            let replica = welcome_through_the_codec(&room);
+            assert!(replica.weather_from_map, "the window's override knob never reaches a room's round");
+            assert_eq!(replica.weather(), room.weather(), "{sky:?}");
+            assert_eq!(replica.water().is_frozen(), room.water().is_frozen(), "{sky:?}");
+            assert_eq!(replica.water().deep_cells().count(), room.water().deep_cells().count(), "{sky:?}");
+            assert_eq!(replica.enemy_sight(), room.enemy_sight(), "{sky:?}");
+        }
+        let snowy = welcome_through_the_codec(&room_under(Weather::Snow));
+        assert!(snowy.water().is_frozen(), "a snowy room's lake is ice on the replica too");
+        assert!(room_under(Weather::Clear).water().deep_cells().count() > 0, "and open water under any other sky");
     }
 
     /// The end screen's countdown belongs to the server: a replica takes

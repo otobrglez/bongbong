@@ -1,17 +1,22 @@
-//! The sky over the battlefield (docs/weather.md), its headless half: what
-//! each `map::Weather` is made of (`Look`), which of the renderer's stages
-//! a frame needs (`Plan`), when lightning strikes (`lightning`), and every
+//! The sky over the battlefield (docs/weather.md), its headless half: the
+//! sky a round is fought under (`in_force`, `random_sky`), what it does to
+//! the rules (`sight_factor`, `grip_factor`, `freezes`, `gusts`/`gust_at` -
+//! the one part of this module the simulation reads), what each
+//! `map::Weather` looks like (`Look`), which of the renderer's stages a
+//! frame needs (`Plan`), when lightning strikes (`lightning`), and every
 //! light the round throws into the dark (`lights`), with the walls' shadows
 //! cast by a raycast over the tile grid (`Occluders`). `render/weather.rs`
 //! is the raylib half: the light map, the ground and the sky passes.
 //!
-//! Weather is presentation. Nothing here writes to a `Game`, nothing draws
-//! the round's RNG and nothing under `simulation/` reads this module, so a
-//! seeded replay, the probe fixtures and a room's authoritative round are
-//! the same under every sky. Everything that moves is a function of the
-//! round clock and hashed positions, so a replica, a paused frame and a
-//! re-render all draw the same picture, and a dev-server lockstep freezes
-//! the rain with the round.
+//! Nothing here writes to a `Game` or draws the round's RNG: the sky is
+//! the map's key (or the override knob's), a `random` one a hash of the
+//! round's seed, settled once by `Game::init`, and every rule and every
+//! picture is a function of it, the knobs, the round clock and hashed
+//! positions. So a seeded replay is the same replay
+//! under its sky, a clear sky plays exactly as a round with no weather,
+//! a room's replicas draw and predict under the room's sky, a paused frame
+//! and a re-render draw the same picture, and a dev-server lockstep
+//! freezes the rain with the round.
 
 use crate::blast::{seed_for, BlastKind};
 use crate::bullet::{Bullet, BulletState};
@@ -170,22 +175,30 @@ pub struct Plan {
 }
 
 impl Game {
-    /// The sky over this round: the `weather_override` knob when it names
-    /// one, else the map's own key, a `random` one picked by the round's
-    /// seed.
+    /// The sky this round is fought and drawn under, settled by `init`
+    /// (`in_force`): never `Random`.
     pub fn weather(&self) -> Weather {
-        in_force(self.map.weather, self.round_seed(), &crate::tuning::tuning())
+        self.weather
     }
 }
 
-/// The sky drawn over a round of `map` seeded `seed`: the `weather_override`
-/// knob's weather when it names one, else the map's, and in place of
-/// `Random` the seed's `random_sky`. Never `Random` itself.
-pub fn in_force(map: Weather, seed: u64, t: &Tuning) -> Weather {
-    match usize::try_from(t.weather_override).ok().and_then(|i| Weather::ALL.get(i).copied()).unwrap_or(map) {
+/// The sky a round of `map` seeded `seed` is fought under: the
+/// `weather_override` knob's weather when it names one - unless
+/// `map_only`, a room's round, which is its map's alone - else the map's,
+/// and in place of `Random` the seed's `random_sky`. Never `Random`
+/// itself. `Game::init` asks it once per round.
+pub fn in_force(map: Weather, seed: u64, map_only: bool, t: &Tuning) -> Weather {
+    let knob = if map_only { None } else { knob(t) };
+    match knob.unwrap_or(map) {
         Weather::Random => random_sky(seed),
         sky => sky,
     }
+}
+
+/// The weather the `weather_override` knob names, `Random` included;
+/// `None` while it follows each map (-1).
+pub fn knob(t: &Tuning) -> Option<Weather> {
+    usize::try_from(t.weather_override).ok().and_then(|i| Weather::ALL.get(i).copied())
 }
 
 /// The sky a `random` weather is in the round seeded `seed`: one of
@@ -198,6 +211,123 @@ pub fn in_force(map: Weather, seed: u64, t: &Tuning) -> Weather {
 pub fn random_sky(seed: u64) -> Weather {
     let h = mix64(seed.wrapping_add(0x5EA7_4E12).wrapping_mul(0x9E37_79B9_7F4A_7C15));
     Weather::SKIES[(h % Weather::SKIES.len() as u64) as usize]
+}
+
+/// How far an enemy sees under `sky`, as a multiple of
+/// `enemy_view_range` (docs/weather.md "The rules"): shorter at night, in
+/// a storm and in fog, 1 under every other sky and with `weather_rules`
+/// off. `Game::enemy_sight` is the range in force.
+pub fn sight_factor(sky: Weather, t: &Tuning) -> f32 {
+    if !t.weather_rules {
+        return 1.0;
+    }
+    match sky {
+        Weather::Night | Weather::Storm => t.night_sight_factor,
+        Weather::Fog => t.fog_sight_factor,
+        _ => 1.0,
+    }
+}
+
+/// The fraction of its grip a hull keeps on the wet ground of a rainy
+/// sky (rain, storm); 1 on a dry one.
+pub fn grip_factor(sky: Weather, t: &Tuning) -> f32 {
+    if t.weather_rules && matches!(sky, Weather::Rain | Weather::Storm) { t.rain_grip_factor } else { 1.0 }
+}
+
+/// Whether a round under `sky` has its water frozen over: a snowy sky's,
+/// read once by `Game::init` (`ground::WaterLayout::freeze`).
+pub fn freezes(sky: Weather, t: &Tuning) -> bool {
+    t.weather_rules && sky == Weather::Snow
+}
+
+/// One of a sandstorm's gusts (`gusts`): the round time its front leaves
+/// the field's corner nearest the wind, and the way it blows (a unit
+/// vector, east swung by up to `sand_gust_spread_deg`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Gust {
+    pub start: f32,
+    pub dir: Vec2,
+}
+
+impl Gust {
+    /// How hard this gust blows at `pos` at round time `time`, 0 to 1. Its
+    /// front crosses the field along `dir` at `sand_gust_front_speed`;
+    /// behind it the wind rises fast and dies away over
+    /// `sand_gust_seconds`. The sky shader draws the same band.
+    pub fn strength_at(&self, pos: Position, time: f32, t: &Tuning) -> f32 {
+        let along = pos.x * self.dir.x + pos.y * self.dir.y;
+        let age = (time - self.start - along / t.sand_gust_front_speed.max(1.0)) / t.sand_gust_seconds.max(0.05);
+        if !(0.0..1.0).contains(&age) {
+            return 0.0;
+        }
+        smoothstep(0.0, 0.2, age) * (1.0 - smoothstep(0.35, 1.0, age))
+    }
+}
+
+/// The gusts that may be blowing at round time `time`: one in most
+/// `sand_gust_gap_seconds` windows, somewhere in its first half, none in
+/// the round's first window; the windows either side of this one are
+/// included because a front takes a while to cross. A pure function of
+/// the clock like `lightning`, so the room, every replica and every
+/// sandbox blow alike.
+pub fn gusts(time: f32, t: &Tuning) -> impl Iterator<Item = Gust> {
+    let gap = t.sand_gust_gap_seconds.max(1.0);
+    let window = (time / gap).floor() as i64;
+    let spread = t.sand_gust_spread_deg.to_radians();
+    (window - 1..=window + 1).filter_map(move |w| {
+        if w < 1 || unit_hash(w, 0x6b) < 0.2 {
+            return None;
+        }
+        let start = (w as f32 + 0.1 + 0.4 * unit_hash(w, 0x6c)) * gap;
+        let swing = (unit_hash(w, 0x6d) * 2.0 - 1.0) * spread;
+        Some(Gust { start, dir: Vec2::new(swing.cos(), swing.sin()) })
+    })
+}
+
+/// The wind at `pos` at round time `time` under `sky` (px/s): a
+/// sandstorm's gust while one passes there, none otherwise. What
+/// `Footing` carries a hull by.
+pub fn gust_at(sky: Weather, pos: Position, time: f32, t: &Tuning) -> Vec2 {
+    let mut wind = Vec2::new(0.0, 0.0);
+    if !t.weather_rules || sky != Weather::Sandstorm || t.sand_gust_speed <= 0.0 {
+        return wind;
+    }
+    for gust in gusts(time, t) {
+        let k = gust.strength_at(pos, time, t) * t.sand_gust_speed;
+        wind = Vec2::new(wind.x + gust.dir.x * k, wind.y + gust.dir.y * k);
+    }
+    wind
+}
+
+/// The gust whose band is over a field of `width` x `height` at round
+/// time `time`, if any - what the sky shader draws.
+pub fn gust_on_field(time: f32, width: f32, height: f32, t: &Tuning) -> Option<Gust> {
+    let front = t.sand_gust_front_speed.max(1.0);
+    let seconds = t.sand_gust_seconds.max(0.05);
+    gusts(time, t)
+        .filter(|g| {
+            let corners = [(0.0, 0.0), (width, 0.0), (0.0, height), (width, height)].map(|(x, y)| x * g.dir.x + y * g.dir.y);
+            let near = corners.iter().copied().fold(f32::INFINITY, f32::min);
+            let far = corners.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            time - g.start - far / front < seconds && time - g.start - near / front > 0.0
+        })
+        .last()
+}
+
+fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+    let k = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    k * k * (3.0 - 2.0 * k)
+}
+
+impl Game {
+    /// How far this round's enemies see (px): `enemy_view_range` under
+    /// the sky's `sight_factor`. Every sighting test an enemy makes reads
+    /// it - the shared alert, the chase and attack tiers, the engagement
+    /// ring, a hunter's snipe.
+    pub fn enemy_sight(&self) -> f32 {
+        let t = crate::tuning::tuning();
+        t.enemy_view_range * sight_factor(self.weather, &t)
+    }
 }
 
 /// The `weather` query parameter of a page URL, if it names a weather -
@@ -763,14 +893,18 @@ mod tests {
     #[test]
     fn the_override_knob_outranks_the_map_and_minus_one_follows_it() {
         let mut t = Tuning::DEFAULT;
-        assert_eq!(in_force(Weather::Fog, 7, &t), Weather::Fog);
+        assert_eq!(in_force(Weather::Fog, 7, false, &t), Weather::Fog);
         t.weather_override = Weather::Night.index() as i32;
-        assert_eq!(in_force(Weather::Fog, 7, &t), Weather::Night);
-        assert_eq!(in_force(Weather::Random, 7, &t), Weather::Night, "a named override outranks a random map");
+        assert_eq!(in_force(Weather::Fog, 7, false, &t), Weather::Night);
+        assert_eq!(in_force(Weather::Random, 7, false, &t), Weather::Night, "a named override outranks a random map");
         t.weather_override = Weather::Clear.index() as i32;
-        assert_eq!(in_force(Weather::Snow, 7, &t), Weather::Clear, "the override can clear a map's sky");
+        assert_eq!(in_force(Weather::Snow, 7, false, &t), Weather::Clear, "the override can clear a map's sky");
         t.weather_override = Weather::Random.index() as i32;
-        assert_eq!(in_force(Weather::Fog, 7, &t), random_sky(7), "a random override rolls over every map");
+        assert_eq!(in_force(Weather::Fog, 7, false, &t), random_sky(7), "a random override rolls over every map");
+        // A room's round is its map's: the knob is the window's own.
+        t.weather_override = Weather::Night.index() as i32;
+        assert_eq!(in_force(Weather::Fog, 7, true, &t), Weather::Fog);
+        assert_eq!(in_force(Weather::Random, 7, true, &t), random_sky(7));
         let mut table = Tuning::DEFAULT;
         assert!(table.set("weather_override", Weather::Random.index() as f64).is_ok(), "the knob's range reaches random");
         assert!(table.set("weather_override", Weather::ALL.len() as f64).is_err(), "and ends there");
@@ -781,7 +915,7 @@ mod tests {
         let t = Tuning::DEFAULT;
         let mut counts = [0u32; Weather::SKIES.len()];
         for seed in 0..9000u64 {
-            let sky = in_force(Weather::Random, seed, &t);
+            let sky = in_force(Weather::Random, seed, false, &t);
             assert_ne!(sky, Weather::Random, "random always resolves to a sky");
             assert_eq!(sky, random_sky(seed), "the same seed, the same sky");
             counts[sky.index()] += 1;
@@ -796,7 +930,7 @@ mod tests {
         let run: Vec<Weather> = (0..8u64).map(random_sky).collect();
         assert!(run.windows(2).any(|w| w[0] != w[1]), "{run:?}");
         // A map's own sky is not touched by the seed.
-        assert!((0..50u64).all(|seed| in_force(Weather::Dusk, seed, &t) == Weather::Dusk));
+        assert!((0..50u64).all(|seed| in_force(Weather::Dusk, seed, false, &t) == Weather::Dusk));
     }
 
     #[test]
@@ -816,6 +950,47 @@ mod tests {
         assert_eq!(round(0xB0B5).weather(), a.weather(), "a replay is drawn under the sky it was fought under");
         let skies: std::collections::BTreeSet<Weather> = (1..=40u64).map(|seed| round(seed).weather()).collect();
         assert!(skies.len() >= 5, "forty seeds bring several skies: {skies:?}");
+    }
+
+    #[test]
+    fn gusts_come_now_and_then_and_blow_where_their_band_is() {
+        let t = Tuning::DEFAULT;
+        let gap = t.sand_gust_gap_seconds;
+        // One window's worth of gusts, each counted once by its start.
+        let mut starts: Vec<f32> = (0..400).flat_map(|w| gusts(w as f32 * gap + 0.5 * gap, &t).map(|g| g.start)).collect();
+        starts.sort_by(f32::total_cmp);
+        starts.dedup();
+        assert!(starts.iter().all(|s| *s >= gap), "the round's first window is calm: {:?}", &starts[..3]);
+        let per_window = starts.len() as f32 / 400.0;
+        assert!((0.7..0.9).contains(&per_window), "most windows gust: {per_window:.2} per window");
+        for gust in gusts(20.0 * gap, &t) {
+            let swing = gust.dir.y.atan2(gust.dir.x).abs().to_degrees();
+            assert!(swing <= t.sand_gust_spread_deg + 1e-3, "{gust:?}");
+            assert!((gust.dir.x * gust.dir.x + gust.dir.y * gust.dir.y - 1.0).abs() < 1e-5);
+        }
+        // Follow one gust across a point: it rises, peaks at full strength
+        // and dies away, and only while its band is over the field.
+        let gust = gusts(starts[0] + 0.01, &t).find(|g| g.start == starts[0]).expect("the first gust");
+        let at = Position::new(400.0, 200.0);
+        let mut peak = 0.0f32;
+        for i in 0..600 {
+            let time = gust.start + i as f32 * 0.01;
+            let k = gust.strength_at(at, time, &t);
+            assert!((0.0..=1.0).contains(&k));
+            peak = peak.max(k);
+            let wind = gust_at(Weather::Sandstorm, at, time, &t);
+            if k > 0.0 {
+                assert!(wind.x > 0.0, "downwind is east: {wind:?} at {time}");
+                assert!(gust_on_field(time, 1088.0, 544.0, &t).is_some(), "a band over the field at {time}");
+            }
+        }
+        assert!(peak > 0.99, "a gust blows at full strength for a moment: {peak}");
+        assert!(gust_on_field(starts[0] - 3.0, 1088.0, 544.0, &t).is_none(), "calm before it");
+        // No other sky blows.
+        for sky in Weather::SKIES.into_iter().filter(|s| *s != Weather::Sandstorm) {
+            let wind = gust_at(sky, at, gust.start + 1.0, &t);
+            assert!(wind.x == 0.0 && wind.y == 0.0, "{sky:?}");
+        }
     }
 
     #[test]

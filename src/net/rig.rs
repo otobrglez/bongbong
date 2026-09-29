@@ -430,6 +430,14 @@ impl Room {
         game.player_row_override = self.options.tank_row;
         // A room server's round has no mission banner to freeze behind.
         game.show_intro = false;
+        // A room's sky is its map's (`Game::weather_from_map`), and the
+        // replica reads it off the map the welcome carries - so the
+        // window's `weather_override` becomes this room's map key, and
+        // `--rig --weather snow` is a snowy room on both ends.
+        if let Some(sky) = crate::weather::knob(&crate::tuning::tuning()) {
+            game.map.weather = sky;
+        }
+        game.weather_from_map = true;
         let (width, height) = game.map.field_size();
         game.init(width, height);
         self.game = Some(game);

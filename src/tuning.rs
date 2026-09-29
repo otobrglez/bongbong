@@ -2188,13 +2188,59 @@ tunables! {
         /// Put one sky over every map, by its place in `map::Weather::ALL`:
         /// 0 clear, 1 night, 2 dusk, 3 rain, 4 storm, 5 fog, 6 sandstorm,
         /// 7 snow, 8 heat haze, 9 random (a sky picked by each round's
-        /// seed). -1 draws each map's own `weather` key. `--weather` and
-        /// the web page's `?weather=` set it at startup.
-        weather_override: i32 = (-1) in -1 ..= 9;
+        /// seed). -1 plays each map's own `weather` key. `--weather` and
+        /// the web page's `?weather=` set it at startup. A sky is settled
+        /// when a round starts - the rules read it - so a change shows on
+        /// the next one; a room's round is its map's, whatever this says.
+        weather_override: i32 = (-1) in -1 ..= 9 @ Restart;
         /// One multiplier on every weather (docs/weather.md): the light
         /// eases toward daylight and every layer thins with it. 0 draws
         /// every sky clear, 1 as designed.
         weather_strength: f32 = 1.0 in 0.0 ..= 1.0;
+        /// Let the sky change the rules (docs/weather.md "The rules"):
+        /// shorter enemy sight at night, in a storm and in fog, less grip
+        /// in the rain, the water frozen over in the snow, gusts in a
+        /// sandstorm. Off, every sky is only drawn. The ice is laid when a
+        /// round starts, so it follows this on the next one.
+        weather_rules: bool = true in 0 ..= 1;
+        /// How far an enemy sees at night and in a storm, as a fraction of
+        /// `enemy_view_range`: the range it notices a player at, chases
+        /// from and calls the others in from. An enemy never attacks past
+        /// what it sees, so under `enemy_attack_range / enemy_view_range`
+        /// this shortens its attack too. A hit still alerts it from
+        /// anywhere.
+        night_sight_factor: f32 = 0.6 in 0.1 ..= 1.0;
+        /// The same in fog.
+        fog_sight_factor: f32 = 0.45 in 0.1 ..= 1.0;
+        /// The fraction of `tank_turn_grip_force` a hull keeps on wet
+        /// ground in the rain and in a storm: it drifts further through a
+        /// turn and a shove carries it further sideways. In a ford it
+        /// multiplies `water_grip_factor`.
+        rain_grip_factor: f32 = 0.5 in 0.05 ..= 1.0;
+        /// On the ice a snowy sky freezes every lake and ford into: the
+        /// fraction of `tank_turn_grip_force` a hull keeps (it slides
+        /// through a turn), of `tank_accel_force` it gets (its tracks spin
+        /// before it goes) and of `tank_decel_curve_rate` it brakes with
+        /// (it coasts a long way). Top speed is kept.
+        ice_grip_factor: f32 = 0.15 in 0.0 ..= 1.0;
+        ice_traction_factor: f32 = 0.4 in 0.05 ..= 1.0;
+        ice_brake_factor: f32 = 0.1 in 0.01 ..= 1.0;
+        /// A sandstorm's gusts: now and then a wall of sand sweeps the
+        /// field from the west and carries every hull it passes downwind -
+        /// the water current's rule, the hull driving relative to the
+        /// wind, so a stopped tank drifts and one driving upwind is held
+        /// back. The wind's peak speed (px/s).
+        sand_gust_speed: f32 = 48.0 in 0.0 ..= 300.0;
+        /// The windows gusts come in (seconds): most windows have one,
+        /// somewhere in their first half, and the round's first has none.
+        sand_gust_gap_seconds: f32 = 9.0 in 2.0 ..= 60.0;
+        /// How long a gust blows at any one point (seconds): it rises fast
+        /// and dies away slowly.
+        sand_gust_seconds: f32 = 1.5 in 0.2 ..= 10.0;
+        /// How fast a gust's front crosses the field (px/s), and how far
+        /// its heading swings off due east, either way (degrees).
+        sand_gust_front_speed: f32 = 520.0 in 50.0 ..= 3000.0;
+        sand_gust_spread_deg: f32 = 25.0 in 0.0 ..= 80.0;
         /// How bright full night is: the moonlight the whole field is lit
         /// by before any lamp, fire or shot adds to it (the blue tint is
         /// the look's own). A storm's gloom is a little over twice this.
@@ -2206,8 +2252,8 @@ tunables! {
         /// edge reads as drawn rather than as a contour line.
         light_dither: bool = true in 0 ..= 1;
         /// Whether walls stop light: headlights, fires, portals and blasts
-        /// cast shadows behind brick, iron and wood (glass lets it
-        /// through; props and trees are too low or too open to).
+        /// cast shadows behind brick, iron, wood and the towers (glass
+        /// lets it through; props and trees are too low or too open to).
         light_shadows: bool = true in 0 ..= 1;
         /// How far (px) a light carries into the wall that stops it, so the
         /// wall's near face is lit rather than a black edge.

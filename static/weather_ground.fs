@@ -13,7 +13,8 @@ in vec4 fragColor;
 out vec4 finalColor;
 
 uniform sampler2D texture0;   // the bare ground
-uniform sampler2D cellMask;   // per map cell: r water (0 dry, 0.5 ford, 1 deep), g road
+uniform sampler2D cellMask;   // per map cell: r water (0 dry, 0.5 ford, 1 deep or ice), g road
+uniform float frozen;         // 1 when the rules froze the water: the ice is solid
 uniform vec2 fieldSize;       // the field, px
 uniform vec2 cells;           // the mask's size, in cells
 uniform float time;           // round seconds
@@ -135,7 +136,9 @@ void main() {
             float crack = 1.0 - smoothstep(0.0, 0.025, abs(vnoise(pb * 0.045 + 7.0) - 0.5));
             ice = mix(ice, vec3(0.58, 0.72, 0.84), crack * 0.6);
             ice = mix(ice, vec3(0.94, 0.98, 1.0), step(0.985, hash(floor(p / vec2(6.0, 2.0)))) * 0.6);
-            col = mix(col, ice, min(0.9, s * 1.1));
+            // Frozen by the rules, the ice is whole: nothing of the water
+            // moving under it shows, since a hull drives on it.
+            col = mix(col, ice, frozen > 0.5 ? 1.0 : min(0.9, s * 1.1));
         } else {
             // Snow lies where the noise is low enough for this much of it,
             // in three steps with dithered edges; the ground's own pattern shows

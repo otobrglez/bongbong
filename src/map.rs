@@ -272,15 +272,17 @@ fn is_default_theme(t: &Theme) -> bool {
 }
 
 /// The sky over the battlefield (TOML: a top-level `weather = "night"`,
-/// the MAP panel's WEATHER row; docs/weather.md). Purely presentational
-/// like `Theme`: the simulation, the nav grid, the linter and the room
-/// server never read it, so a map plays the same under every sky and a
-/// seeded replay is untouched by it. Absent means `Clear`, which is not
-/// written back, so every older file parses and re-saves unchanged. What
-/// each one looks like is `weather::Look::of`; `Random` is a sky picked by
-/// the round's seed (`weather::random_sky`); the `weather_override` knob
-/// (`--weather`, the web page's `?weather=`) puts one sky over every map
-/// without editing any of them.
+/// the MAP panel's WEATHER row; docs/weather.md): drawn, and part of the
+/// rules - shorter enemy sight at night and in fog, less grip in the
+/// rain, the water frozen in the snow, gusts in a sandstorm
+/// (`weather::sight_factor` and its neighbours). `Game::init` settles the
+/// round's sky once; a clear one plays exactly as a map without the key.
+/// Absent means `Clear`, which is not written back, so every older file
+/// parses and re-saves unchanged. What each one looks like is
+/// `weather::Look::of`; `Random` is a sky picked by the round's seed
+/// (`weather::random_sky`); the `weather_override` knob (`--weather`, the
+/// web page's `?weather=`) puts one sky over every local round without
+/// editing any map.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Weather {

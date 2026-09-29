@@ -334,7 +334,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "weather",
-        description: "The sky over the round on screen (docs/weather.md; presentation only - the simulation never reads it). Without `name` reports `in_force` (what is drawn - never `random`: a random weather is the sky the round's seed picks, the same for the same seed), `map` (the round's map's own `weather` key), `override` (the `weather_override` tuning knob's, null when it follows the map - `--weather` and the web page's `?weather=` set it) and every name. With `name` (clear, night, dusk, rain, storm, fog, sandstorm, snow, heat_haze, random) sets the round's map key at this frame boundary; it lasts through `restart`s on that map, and the override knob still outranks it. In an online round it changes only this window's replica. The builder's WEATHER row is `builder_settings {weather}`; `map_get`/`restart {map_toml}` carry the key as `weather = \"night\"`.",
+        description: "The sky over the round on screen (docs/weather.md): drawn, and part of the rules - shorter enemy sight at night, in a storm and in fog, less grip in the rain, the water frozen in the snow, gusts in a sandstorm. A sky is settled when a round starts. Without `name` reports `in_force` (the round's sky - never `random`: a random weather is the sky the round's seed picks, the same for the same seed), `map` (the round's map's own `weather` key), `override` (the `weather_override` tuning knob's, null when it follows the map - `--weather` and the web page's `?weather=` set it; it applies from the next round), `rules` (`on`, `enemy_sight_px`, `grip`, `frozen`, `gust_on_player` - player 1's wind in px/s -, `gust_front` - the sandstorm gust crossing the field, its `start` in round seconds and its `dir`) and every name. With `name` (clear, night, dusk, rain, storm, fog, sandstorm, snow, heat_haze, random) puts that key on the round's map and starts the round over on its own seed, frozen like `restart` leaves it; the key lasts through `restart`s on that map, and the override knob still outranks it. An online window only reports: a room's round is fought under its map's sky. The builder's WEATHER row is `builder_settings {weather}`; `map_get`/`restart {map_toml}` carry the key as `weather = \"night\"`.",
         schema: r#"{"type":"object","properties":{"name":{"type":"string","enum":["clear","night","dusk","rain","storm","fog","sandstorm","snow","heat_haze","random"],"description":"The sky to draw the round under; random is picked by the round's seed"}}}"#,
         read_only: false,
         destructive: false,
@@ -1249,7 +1249,6 @@ impl DevServer {
                 }
             }
             "overlays" => apply_overlays(game, &params).map(|()| overlays_json(game)),
-            "weather" => set_weather(game, &params).map(|()| weather_json(game)),
             "nav_grid" => Ok(json!({ "grid": game.nav_grid_ascii(width, height) })),
             "field" => {
                 let target = match params.get("target").and_then(Value::as_str).unwrap_or("player") {
@@ -1441,6 +1440,30 @@ impl DevServer {
         Ok(self.status(session, width, height))
     }
 
+    /// `weather`: the sky on screen, and with `name` that sky put on the
+    /// round's map and the round started over under it on its own seed -
+    /// a sky is settled when a round starts, since the rules read it
+    /// (docs/weather.md) - frozen in lockstep as `restart` leaves it. A
+    /// room's round is fought under the room's sky, so an online window
+    /// only reports.
+    fn weather(&mut self, session: &mut Session, params: &Value) -> Result<Value, String> {
+        if let Some(sky) = weather_name(params)? {
+            if session.mode() == Driver::Online {
+                return Err("weather: this window holds a seat in a room, whose round is fought under the room's map's sky - \
+                            only reporting works here"
+                    .into());
+            }
+            let game = &mut session.game;
+            game.map.weather = sky;
+            let pinned = game.seed_override.replace(game.round_seed());
+            let (width, height) = game.map.field_size();
+            game.init(width, height);
+            game.seed_override = pinned;
+            self.round_started(session);
+        }
+        Ok(weather_json(session.shown()))
+    }
+
     /// A round began outside `advance` - `restart`, `play`, or a click or
     /// Tab that pressed PLAY: bank its `round_started` event, start the
     /// history ring over and hold it still in lockstep, so no wall-clock
@@ -1476,6 +1499,7 @@ impl DevServer {
                 Ok(self.status(session, width, height))
             }
             "restart" => self.restart(session, params),
+            "weather" => self.weather(session, params),
             "lint" => lint_json(session, params.get("source").and_then(Value::as_str)),
             "mode" => Ok(mode_json(session)),
             "lang" => {
@@ -2365,26 +2389,44 @@ fn map_json(map: &MapFile) -> Value {
 /// The `weather` tool's reply: what is drawn, the map's own key, the
 /// override knob's pick, and every name (docs/weather.md).
 fn weather_json(game: &Game) -> Value {
-    let pick = usize::try_from(crate::tuning::tuning().weather_override).ok().and_then(|i| crate::map::Weather::ALL.get(i).copied());
+    let t = crate::tuning::tuning();
+    let pick = crate::weather::knob(&t);
+    let sky = game.weather();
+    // What the sky does to the round now (docs/weather.md "The rules"):
+    // how far the enemies see, the grip wet ground leaves, whether the
+    // water is ice, and the gust on player 1 and the one crossing the
+    // field.
+    let p1 = game.player().map(|e| crate::simulation::with_tank(&game.world, e, |tank| tank.position));
+    let gust_p1 = p1.map(|at| crate::weather::gust_at(sky, at, game.time, &t)).map(|v| [v.x, v.y]);
+    let (width, height) = game.map.field_size();
+    let front = (t.weather_rules && sky == crate::map::Weather::Sandstorm)
+        .then(|| crate::weather::gust_on_field(game.time, width, height, &t))
+        .flatten()
+        .map(|g| json!({ "start": g.start, "dir": [g.dir.x, g.dir.y] }));
     json!({
-        "in_force": game.weather().name(),
+        "in_force": sky.name(),
         "map": game.map.weather.name(),
         "override": pick.map(crate::map::Weather::name),
         "names": crate::map::Weather::ALL.iter().map(|w| w.name()).collect::<Vec<_>>(),
+        "rules": {
+            "on": t.weather_rules,
+            "enemy_sight_px": game.enemy_sight(),
+            "grip": crate::weather::grip_factor(sky, &t),
+            "frozen": game.water().is_frozen(),
+            "gust_on_player": gust_p1,
+            "gust_front": front,
+        },
     })
 }
 
-/// `weather {name}`: the round's map key, set at this frame boundary.
-fn set_weather(game: &mut Game, params: &Value) -> Result<(), String> {
+/// The `weather` tool's `name`, if it gave one.
+fn weather_name(params: &Value) -> Result<Option<crate::map::Weather>, String> {
     match params.get("name") {
-        None | Some(Value::Null) => Ok(()),
-        Some(Value::String(name)) => {
-            game.map.weather = crate::map::Weather::parse(name).ok_or_else(|| {
-                let names: Vec<&str> = crate::map::Weather::ALL.iter().map(|w| w.name()).collect();
-                format!("unknown weather {name:?}; one of {}", names.join(", "))
-            })?;
-            Ok(())
-        }
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(name)) => crate::map::Weather::parse(name).map(Some).ok_or_else(|| {
+            let names: Vec<&str> = crate::map::Weather::ALL.iter().map(|w| w.name()).collect();
+            format!("unknown weather {name:?}; one of {}", names.join(", "))
+        }),
         Some(other) => Err(format!("name must be a weather's name, got {other}")),
     }
 }
@@ -2867,9 +2909,23 @@ mod tests {
         assert_eq!(w["in_force"], "clear", "{w}");
         assert_eq!(w["override"], Value::Null, "{w}");
         assert_eq!(w["names"].as_array().unwrap().len(), crate::map::Weather::ALL.len(), "{w}");
+        assert_eq!(w["rules"]["enemy_sight_px"], json!(crate::tuning::tuning().enemy_view_range), "{w}");
+        assert_eq!(w["rules"]["grip"], json!(1.0), "{w}");
+        // Setting a sky starts the round over under it on its own seed:
+        // the rules read it from the start.
+        for _ in 0..5 {
+            game.game.update(Input::default(), crate::PHYSICS_FIXED_DT, W, H);
+        }
+        let seed = game.game.round_seed();
         let w = ask(&mut server, &mut game, "weather", json!({ "name": "storm" })).unwrap();
         assert_eq!(w["map"], "storm", "{w}");
+        assert_eq!(w["in_force"], "storm", "{w}");
         assert_eq!(game.game.map.weather, crate::map::Weather::Storm);
+        assert_eq!(game.game.frame(), 0, "the round started over");
+        assert_eq!(game.game.round_seed(), seed, "on the seed it had");
+        assert_eq!(game.game.seed_override, Some(6), "and the seed setting is left as it was");
+        assert_eq!(w["rules"]["enemy_sight_px"], json!(crate::tuning::tuning().enemy_view_range * crate::tuning::tuning().night_sight_factor), "{w}");
+        assert_eq!(w["rules"]["grip"], json!(crate::tuning::tuning().rain_grip_factor), "{w}");
         let err = ask(&mut server, &mut game, "weather", json!({ "name": "hail" })).unwrap_err();
         assert!(err.contains("heat_haze"), "{err}");
         assert_eq!(game.game.map.weather, crate::map::Weather::Storm, "a refused name changes nothing");

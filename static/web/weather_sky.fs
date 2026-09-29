@@ -15,8 +15,9 @@ precision mediump float;
 // The weather's sky pass (docs/weather.md, render/weather.rs): the air over
 // the finished field - over the tanks, the shots and the fireballs - drawn
 // on the 2 px block grid: heat haze bending whole rows, drifting fog banks
-// and blowing sand in steps with dithered edges, rain streaks slanting down, snow in
-// three depths, the white of a lightning strike. Fog, sand, rain and snow
+// and blowing sand in steps with dithered edges - a gust's wall of it sweeping
+// the field -, rain streaks slanting down, snow in three depths, the white of
+// a lightning strike. Fog, sand, rain and snow
 // are lit by the light map, so at night a headlight's beam shows in the
 // fog and the rain glitters where a fire burns.
 
@@ -44,6 +45,11 @@ uniform float flash;          // lightning, 0..1
 uniform float clearRadius;    // fog and sand thin out this near a seat; 0 = nowhere
 uniform vec2 seats[8];        // every seat's tank, field px
 uniform float seatCount;
+uniform float gustOn;         // 1 while a sandstorm's gust crosses the field
+uniform float gustSince;      // seconds since its front left the field's upwind corner
+uniform vec2 gustDir;         // the way it blows (unit)
+uniform float gustFront;      // px/s its front crosses at
+uniform float gustLen;        // seconds it blows at any one point
 
 float hash(vec2 p) {
     vec3 p3 = fract(mod(p.xyx, 289.0) * 0.1031);
@@ -91,6 +97,20 @@ float band(float x, float levels, vec2 blk, bool hard) {
 
 float lum(vec3 c) {
     return dot(c, vec3(0.299, 0.587, 0.114));
+}
+
+// How hard the gust blows at p, 0 to 1: `weather::Gust::strength_at`'s
+// band, so the wall of sand is drawn exactly where the hulls feel it - a
+// fast rise behind the front, a slow dying away.
+float gustAt(vec2 p) {
+    if (gustOn < 0.5) {
+        return 0.0;
+    }
+    float age = (gustSince - dot(p, gustDir) / gustFront) / gustLen;
+    if (age < 0.0 || age >= 1.0) {
+        return 0.0;
+    }
+    return smoothstep(0.0, 0.2, age) * (1.0 - smoothstep(0.35, 1.0, age));
 }
 
 // 1 far from every seat's tank, easing down to a quarter beside one.
@@ -193,16 +213,20 @@ void main() {
     }
 
     if (sand > 0.0) {
+        // A gust is a wall of thicker sand sweeping the field, and it
+        // fills the clear ring round every tank as it passes.
+        float g = gustAt(pb);
         vec2 q = vec2(pb.x * 0.004 - time * 0.5 * sandWind, pb.y * 0.013);
         float n = fbm(q);
         float n2 = vnoise(q * 3.0 + vec2(-time * 1.4 * sandWind, 0.0));
-        float a = (0.3 + 0.5 * smoothstep(0.3, 0.75, n) + 0.15 * n2) * sand * sightMask(p);
-        a = band(min(a, 0.86), 5.0, blk, false);
+        float a = (0.3 + 0.5 * smoothstep(0.3, 0.75, n) + 0.15 * n2) * sand * mix(sightMask(p), 1.0, g);
+        a += g * (0.26 + 0.18 * n2) * min(sand * 1.4, 1.0);
+        a = band(min(a, 0.9), 5.0, blk, false);
         float shade = clamp(bright * 1.1, 0.25, 1.2);
         vec3 sc = vec3(0.84, 0.66, 0.42) * (0.9 + 0.2 * n2) * shade;
         col = mix(col, sc, a);
         for (int i = 0; i < 2; i++) {
-            col = grains(col, pb, float(i), sand * 0.6, vec3(0.93, 0.8, 0.58) * shade);
+            col = grains(col, pb, float(i), sand * (0.6 + 0.9 * g), vec3(0.93, 0.8, 0.58) * shade);
         }
     }
 

@@ -3,11 +3,14 @@
 A map's `weather` key puts a sky over it: `clear` (the default, and what
 every older file gets), `night`, `dusk`, `rain`, `storm`, `fog`,
 `sandstorm`, `snow` or `heat_haze` - or `random`, a sky picked by each
-round's seed. Purely presentational, like
-[the theme](desert-theme.md): the simulation, the nav grid, the linter and
-the room server never read it, so a map plays the same under every sky and
-a seeded replay, a probe fixture and a room's authoritative round are
-untouched by it.
+round's seed. A sky is drawn and it changes the rules (below): enemies see
+less at night and in fog, hulls lose grip in the rain, snow freezes the
+water into ice a tank drives across, and a sandstorm's gusts carry every
+hull downwind. `Game::init` settles the round's sky once, from the map's
+key and the round seed, and every rule is a pure function of it, the
+knobs and the round clock - no RNG - so a seeded replay replays under its
+sky, and a clear sky plays exactly as a round with no weather at all (the
+probe and the determinism pins hold it to that).
 
 ![every sky, drawn by the game](weather.png)
 
@@ -31,22 +34,32 @@ untouched by it.
   one together). An unpinned round draws a fresh seed, so a fresh sky.
   `Game::weather()` is never `Random`; the key stays `random` on disk, in
   the builder and in `map_get`.
-- **Over every map**: the `weather_override` knob (`weather` tuning group)
-  takes a weather's index in `Weather::ALL`, `-1` following the map and 9
-  a random sky for every round. `--weather night` (or `--weather random`)
-  stages it at startup the way `--zoom` stages `view_max_scale`, the web
-  build reads `?weather=night` off its page (`weather::weather_from_url`,
-  through `window.bbInvite`), and on a PR preview it is a row in the
-  tuning panel. The builder's row shows `(cli)` while it is set.
-- **Dev server**: `weather` reports what is drawn (`in_force`, a random
-  map's sky by name), the map's own key, the override's pick and every
-  name, and with `name` sets the round's map key at the frame boundary;
-  `status.weather`, `map.weather`, `builder_settings {weather}` (null =
-  clear) and `map_get`/`restart {map_toml}` carry it too.
-- **Online**: the key rides the map TOML every `Welcome` carries, so every
-  replica draws the room's sky with nothing new on the wire - a random
-  one too, since the seed rides the same message. `PROTOCOL_VERSION` is
-  unchanged. The override knob is the window's own.
+- **Over every local round**: the `weather_override` knob (`weather`
+  tuning group) takes a weather's index in `Weather::ALL`, `-1` following
+  the map and 9 a random sky for every round. It is a `Restart` row: a sky
+  is settled when a round starts, so a change shows from the next one.
+  `--weather night` (or `--weather random`) stages it at startup the way
+  `--zoom` stages `view_max_scale`, the web build reads `?weather=night`
+  off its page (`weather::weather_from_url`, through `window.bbInvite`),
+  and on a PR preview it is a row in the tuning panel. The builder's row
+  shows `(cli)` while it is set.
+- **Dev server**: `weather` reports the round's sky (`in_force`, a random
+  map's sky by name), the map's own key, the override's pick, every name
+  and the `rules` in force (`on`, `enemy_sight_px`, `grip`, `frozen`,
+  `gust_on_player` - player 1's wind, px/s - and `gust_front`, the gust
+  crossing the field); with `name` it puts that key on the round's map and
+  starts the round over on its own seed, frozen in lockstep like
+  `restart`. `status.weather`, `map.weather`, `builder_settings {weather}`
+  (null = clear) and `map_get`/`restart {map_toml}` carry the key too.
+- **Online**: a room's round is fought under its map's sky alone
+  (`Game::weather_from_map`): the key rides the map TOML every `Welcome`
+  carries and the seed rides the same message, so every replica and every
+  prediction sandbox is built under the room's sky - its ice where the
+  room's is, its enemies' sight the room's - with nothing new on the wire
+  and `PROTOCOL_VERSION` unchanged. The window's override knob never
+  reaches a room's round; the rig, standing in for a room, bakes it into
+  the room's map key instead, so `--rig --weather snow` is a snowy room on
+  both ends. The dev server's `weather` only reports in an online window.
 
 ## The skies
 
@@ -71,6 +84,67 @@ thins every layer together, 0 drawing every sky clear.
 `Look::plan` says which of the renderer's stages a look needs; a look
 whose light is daylight, with no lamps and no layer, is `None` and costs
 nothing.
+
+## The rules
+
+Every rule is gated by `weather_rules` (on by default; off, a sky is only
+drawn) and each one's size is a knob of its own. Under a clear sky every
+factor is exactly 1 and no gust blows, so the round is bit for bit the one
+it was.
+
+| Sky | What changes |
+| --- | --- |
+| night, storm | enemies see `night_sight_factor` (0.6) of `enemy_view_range` |
+| fog | enemies see `fog_sight_factor` (0.45) of it |
+| rain, storm | every hull keeps `rain_grip_factor` (0.5) of its grip |
+| snow | every lake and ford is ice |
+| sandstorm | gusts sweep the field and carry every hull downwind |
+
+![a gust's front in a sandstorm, and a river frozen over in the snow](weather-rules.png)
+
+- **Sight** (`weather::sight_factor`, `Game::enemy_sight`): the range an
+  enemy notices a player at, the shared alert it raises, the chase tier,
+  the engagement ring's range and a hunter's snipe all read it, and the
+  attack tier never reaches past it (`Ai::think`'s `sight`; under
+  `enemy_attack_range / enemy_view_range` it shortens the attack too). A
+  hit still alerts an enemy from anywhere, and grass hides a tank as it
+  always did. Towers aim by their weapons' reach, well inside any sky's
+  sight, so no sky changes them.
+- **Grip** (`weather::grip_factor`): wet ground scales `Footing::grip`,
+  so a hull drifts further through a turn and a shove carries it further
+  sideways (measured: a hard turn at speed carries 73 px instead of 42).
+  In a ford it multiplies `water_grip_factor`.
+- **Ice** (`weather::freezes`): `Game::init` freezes the round's water
+  (`ground::WaterLayout::freeze`, every water cell `Depth::Ice`) before
+  anything is placed, so a lake has no colliders, the nav grid routes
+  over it, enemies, frogs and bonuses can spawn on it, no current runs
+  and nothing is refused a pose there. A hull on ice keeps its top speed
+  but its grip (`ice_grip_factor`), its drive (`ice_traction_factor`) and
+  its brake (`ice_brake_factor`) fall away: a released hull coasts about
+  100 px where dry ground stops it in 9. Ice takes tread marks and wets
+  none, throws no spray, does not put a burning hull out and is no frog's
+  refuge; like water it takes no heat, fire or scorch. The ground pass
+  draws it solid.
+- **Gusts** (`weather::gusts`, `gust_at`): in most `sand_gust_gap_seconds`
+  windows after the first a gust's front leaves the field's upwind corner
+  and crosses it at `sand_gust_front_speed`, heading east swung by up to
+  `sand_gust_spread_deg`; behind the front the wind rises fast to
+  `sand_gust_speed` and dies away over `sand_gust_seconds`. It is added to
+  `Footing::flow`, the water current's rule: a hull drives relative to the
+  wind, so a stopped one drifts downwind (about a cell a gust), one
+  driving into it is held back and one driving across it slides. A pure
+  function of the round clock like `lightning`, so the room, its replicas
+  and every prediction sandbox blow alike; the pose validator
+  (`Game::accept_seat_pose`) allows the drift the ground and the wind put
+  on a hull. The sky pass draws the same band as a wall of thicker sand
+  sweeping the field.
+
+What the probe measures under each rule (a minute a round, the player
+kept alive, against the same rounds under a clear sky): no invariant,
+pile-up or grind anywhere; night and fog within the noise; rain and gusts
+put enemies against the border lane more often (border-stuck about 1.5
+to 2 times); snow on a map with a moat lets enemies over the ice to the
+island, and they cluster there more.
 
 ## How a weathered frame is drawn
 
@@ -162,9 +236,16 @@ and 0 leaves the storm without one.
 
 ## Knobs
 
-The `weather` tuning group, every row `Live`:
+The `weather` tuning group, every row `Live` but `weather_override`
+(`Restart`):
 
 - `weather_override`, `weather_strength`, `weather_vignette`.
+- Rules: `weather_rules`, `night_sight_factor`, `fog_sight_factor`,
+  `rain_grip_factor`, `ice_grip_factor`, `ice_traction_factor`,
+  `ice_brake_factor`, `sand_gust_speed`, `sand_gust_gap_seconds`,
+  `sand_gust_seconds`, `sand_gust_front_speed`, `sand_gust_spread_deg`.
+  The ice is laid when a round starts, so `weather_rules` reaches it on
+  the next one.
 - Light: `night_ambient`, `light_bands`, `light_dither`, `light_shadows`,
   `light_wall_bleed_px`.
 - Lamps: `headlight_length_px`, `headlight_half_angle_deg`,
@@ -202,12 +283,21 @@ shot shaders' fallback.
   page URL names a weather, lightning is a pure function of the clock and
   strikes now and then, walls stop rays and glass does not, a cone fades
   across its edge, a hull's beam is cut short by the wall in front of it,
-  and every light on a shipped map is finite and inside its radius.
+  every light on a shipped map is finite and inside its radius, gusts come
+  in most windows but the first and blow only where their band is, and
+  with `weather_rules` off no sky changes a number.
+- `simulation::weather_tests`: night and fog shorten how far an enemy
+  sees (a sighting between the reaches, both ways), the rain loosens every
+  hull's grip, snow freezes a lake into ice a hull drives across and the
+  router goes over, ice slides where the ground would stop a hull and
+  takes tracks, a sandstorm's gusts carry an idle hull downwind.
 - `map::toml_tests::weather_round_trips_and_defaults_to_clear`, the
   builder's settings test, the dev server's
   `weather_sets_the_rounds_sky_and_every_reader_reports_it` (random
   included: a `restart {seed}` brings the seed's sky back),
-  `net::apply::tests::a_random_sky_is_the_rooms_on_every_replica`, and
+  `net::apply::tests::a_random_sky_is_the_rooms_on_every_replica` and
+  `a_replica_plays_by_the_rooms_sky` (every sky, the ice and the sight
+  the room's), and
   `text_tests` (every weather name fits its settings row in every
   language).
 - The picture itself is checked the way every effect is: `just run-dev`,
@@ -215,9 +305,12 @@ shot shaders' fallback.
 
 ## Not in yet
 
-- **Gameplay**: a shorter `enemy_view_range` at night or in fog, grip lost
-  in rain, frozen water a hull can cross, gusts in a sandstorm. Each is a
-  knob of its own and a conscious `just probe-fixtures` re-baseline.
+- **Choosing the sky of a room**: the lobby's start face has steppers for
+  the map and the mission but none for the weather, so a room plays its
+  map's own key; a stepper wants a `Create` field, which is a protocol
+  bump.
+- **An AI that knows the weather**: enemies drive on ice and in gusts as
+  they drive anywhere, and only the rules slow them down.
 - **Thumbnails**: `mapshot` draws on the CPU canvas, which has no shaders,
   so a thumbnail shows its map under a clear sky.
 - **A day passing**: dusk falling into night over a wave round.

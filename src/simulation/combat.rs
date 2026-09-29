@@ -431,7 +431,7 @@ pub(super) fn frog_hop_target(
                     && candidate.x <= width - margin
                     && candidate.y >= margin
                     && candidate.y <= height - margin;
-                let wet = terrain.depth_at(candidate) != crate::ground::Depth::Dry;
+                let wet = terrain.depth_at(candidate).is_wet();
                 if in_bounds && (wet || !wet_only) && terrain.frog_fits(candidate) {
                     return Some(candidate);
                 }
