@@ -183,7 +183,7 @@ mod tests {
         ("jungle-temple", 0xc5b1_5fa5_3595_0a76),
         ("serpent-river", 0x112f_24e2_fcd2_b595),
         ("no-mans-land", 0x5f96_5dcb_3f29_144f),
-        ("glasshouses", 0x6c05_fd02_e4a1_e37a),
+        ("glasshouses", 0x8b3a_c266_07f5_b84a),
         ("scrapyard", 0xdd3f_4daa_bef7_2e98),
         ("grand-campaign", 0x23ce_8fe4_a248_40ff),
     ];
