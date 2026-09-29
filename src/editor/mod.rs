@@ -317,20 +317,23 @@ enum Popup {
 }
 
 /// The FILE menu's rows. `SAVE` and `SAVE AS` exist only where a file can
-/// be written (`map::saving_available`); the web build's menu is `LOAD`.
+/// be written (`map::saving_available`); the web build's menu is `LOAD`
+/// and `CLEAR MAP`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FileRow {
     Load,
     Save,
     SaveAs,
+    /// Empty the canvas of every placed object (`MapEditor::clear`).
+    Clear,
 }
 
 impl FileRow {
     fn all() -> &'static [FileRow] {
         if map::saving_available() {
-            &[FileRow::Load, FileRow::Save, FileRow::SaveAs]
+            &[FileRow::Load, FileRow::Save, FileRow::SaveAs, FileRow::Clear]
         } else {
-            &[FileRow::Load]
+            &[FileRow::Load, FileRow::Clear]
         }
     }
 }
@@ -549,6 +552,23 @@ impl MapEditor {
         let name = self.map.name.take();
         self.map = self.baseline.clone();
         self.map.name = name;
+        self.history.push(EditStep::Map { before: Box::new(before), after: Box::new(self.map.clone()) });
+        self.rebuild_ground();
+    }
+
+    /// Empty the canvas of every placed object - walls, props, trees,
+    /// ground, actors, gates and pickups - as one undo step, keeping the
+    /// map's settings, size, theme and name: the FILE menu's `CLEAR MAP`,
+    /// a map started from scratch without an empty file on disk. Not a new
+    /// baseline, so the map reads as edited until saved; an already empty
+    /// canvas records nothing.
+    pub fn clear(&mut self) {
+        self.finish_stroke();
+        if self.map.cells.is_empty() {
+            return;
+        }
+        let before = self.map.clone();
+        self.map.cells.clear();
         self.history.push(EditStep::Map { before: Box::new(before), after: Box::new(self.map.clone()) });
         self.rebuild_ground();
     }
@@ -1055,6 +1075,7 @@ impl MapEditor {
                         Some(FileRow::Save) | Some(FileRow::SaveAs) => {
                             self.popup = Some(Popup::Save { name: self.map.name.clone().unwrap_or_default() })
                         }
+                        Some(FileRow::Clear) => self.clear(),
                         None => {}
                     }
                 }
@@ -1501,6 +1522,41 @@ mod editor_tests {
         assert!(ed.singleton_placed(Tool::Frog) == false);
     }
 
+    /// CLEAR MAP empties the cells and nothing else, as one undo step that
+    /// leaves the baseline alone; an empty canvas records nothing.
+    #[test]
+    fn clear_empties_the_canvas_as_one_undo_step_and_keeps_the_settings() {
+        let mut base = MapFile::new();
+        base.set_cell(1, 1, brick());
+        base.set_cell(3, 4, CellObject::Frog);
+        base.tanks = Some(4);
+        base.mission.kind = Mission::Hunt;
+        base.name = Some("arena".into());
+        let mut ed = MapEditor::new(base.clone());
+        ed.select_tool(Tool::Road);
+        ed.stroke(&[(2, 2)], false);
+        let settings = ed.settings();
+
+        ed.clear();
+        assert!(ed.map().cells.is_empty());
+        assert_eq!(ed.settings(), settings, "settings survive a clear");
+        assert_eq!(ed.name(), "arena");
+        assert!(ed.dirty(), "a clear is not a new baseline");
+        assert_eq!(ed.diff().removed, 2, "the baseline's two cells are gone");
+        assert_eq!(ed.history().undo_depth(), 2, "the stroke and the clear");
+        assert!(!ed.singleton_placed(Tool::Frog));
+
+        ed.undo();
+        assert_eq!(ed.map().cell(1, 1), Some(&brick()));
+        assert_eq!(ed.map().cell(2, 2), Some(&CellObject::Road));
+        assert_eq!(ed.map().cell(3, 4), Some(&CellObject::Frog));
+        ed.redo();
+        assert!(ed.map().cells.is_empty());
+
+        ed.clear();
+        assert_eq!(ed.history().undo_depth(), 2, "an empty canvas records nothing");
+    }
+
     #[test]
     fn settings_load_and_reset_are_undo_steps_and_drive_dirty() {
         let mut base = MapFile::new();
@@ -1830,6 +1886,24 @@ mod file_tests {
 
     fn center(r: Rectangle) -> Vec2 {
         Vec2::new(r.x + r.width / 2.0, r.y + r.height / 2.0)
+    }
+
+    /// FILE > CLEAR MAP is the menu's last row on every build.
+    #[test]
+    fn file_menu_clear_map_row_clears_the_canvas_and_closes_the_menu() {
+        let layout = Layout::for_field(W, H);
+        let mut base = MapFile::new();
+        base.set_cell(1, 1, CellObject::Gate);
+        let mut ed = MapEditor::new(base);
+        press(&mut ed, &layout, center(MapEditor::file_rect(&layout)));
+        assert_eq!(ed.open_menu(), Some("file"));
+        let rows = FileRow::all();
+        assert_eq!(rows.last(), Some(&FileRow::Clear));
+        press(&mut ed, &layout, center(MapEditor::file_row_rect(&layout, rows.len() - 1)));
+        assert_eq!(ed.open_menu(), None);
+        assert!(ed.map().cells.is_empty());
+        assert!(ed.dirty());
+        assert_eq!(ed.history().undo_depth(), 1);
     }
 
     /// FILE opens its menu; LOAD... opens the list; picking a row loads

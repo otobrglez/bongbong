@@ -383,8 +383,8 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "builder_map",
-        description: "Without parameters: the builder's map as TOML (`toml`), its name, `dirty` and `diff` - cells added/removed/changed and the settings fields that differ from the baseline (the map as loaded). With `name` (a Load-list name from `builder_files`), `map` (a path under maps/) or `map_toml` (inline TOML, the `map_get` format): loads that map into the canvas as one undo step and makes it the new baseline - the FILE > LOAD path; the round keeps its map until `play`. `map_get` keeps answering with the map the current round was built from, which differs from this once the builder is dirty.",
-        schema: r#"{"type":"object","properties":{"name":{"type":"string","description":"A name from builder_files"},"map_toml":{"type":"string","description":"Map TOML text to load into the builder"},"map":{"type":"string","description":"Path to a map .toml, relative to the game's working directory"}}}"#,
+        description: "Without parameters: the builder's map as TOML (`toml`), its name, `dirty` and `diff` - cells added/removed/changed and the settings fields that differ from the baseline (the map as loaded). With `name` (a Load-list name from `builder_files`), `map` (a path under maps/) or `map_toml` (inline TOML, the `map_get` format): loads that map into the canvas as one undo step and makes it the new baseline - the FILE > LOAD path; the round keeps its map until `play`. With `clear`: FILE > CLEAR MAP - empties the canvas of every placed object as one undo step, keeping the settings, size, theme and name; not a new baseline, so `dirty` is set. `map_get` keeps answering with the map the current round was built from, which differs from this once the builder is dirty.",
+        schema: r#"{"type":"object","properties":{"name":{"type":"string","description":"A name from builder_files"},"map_toml":{"type":"string","description":"Map TOML text to load into the builder"},"map":{"type":"string","description":"Path to a map .toml, relative to the game's working directory"},"clear":{"type":"boolean","default":false,"description":"Empty the canvas of every placed object (FILE > CLEAR MAP)"}}}"#,
         read_only: false,
         destructive: false,
     },
@@ -1555,9 +1555,18 @@ impl DevServer {
                     Some(Value::String(n)) => Ok(Some(n.clone())),
                     Some(other) => Err(format!("name must be a string, got {other}")),
                 };
+                let clear = params.get("clear").and_then(Value::as_bool).unwrap_or(false);
+                let loads_one = params.get("map").is_some() || params.get("map_toml").is_some();
                 by_name.and_then(|name| match name {
+                    _ if clear => {
+                        if name.is_some() || loads_one {
+                            return Err("clear takes no map: give one of name, map, map_toml or clear".to_string());
+                        }
+                        session.builder.clear();
+                        builder_map_json(&session.builder)
+                    }
                     Some(name) => {
-                        if params.get("map").is_some() || params.get("map_toml").is_some() {
+                        if loads_one {
                             return Err("give one of name, map or map_toml".to_string());
                         }
                         session.builder.load_named(&name)?;
@@ -3485,6 +3494,35 @@ cells."1,1" = { kind = "wall" }"#;
         let m = ask(&mut server, &tx, &mut s, "mode", json!({})).unwrap();
         assert_eq!(m["dirty"], true);
         assert_eq!(m["tool"], "road");
+    }
+
+    /// `builder_map {clear}` is FILE > CLEAR MAP: the cells go, the
+    /// settings stay, the baseline stays, and it takes no map.
+    #[test]
+    fn builder_map_clear_empties_the_canvas_and_takes_no_map() {
+        let (mut server, tx) = DevServer::headless();
+        let mut s = game(33);
+        enter_build(&mut server, &tx, &mut s);
+        let before = ask(&mut server, &tx, &mut s, "builder_map", json!({})).unwrap();
+        assert_eq!(before["dirty"], false);
+        assert!(!s.builder.map().cells.is_empty(), "the default map has cells");
+        let settings = s.builder.settings();
+        let r = ask(&mut server, &tx, &mut s, "builder_map", json!({ "clear": true })).unwrap();
+        assert!(s.builder.map().cells.is_empty(), "{r}");
+        assert_eq!(r["dirty"], true, "{r}");
+        assert_eq!(r["diff"]["added"], 0, "{r}");
+        assert_eq!(r["diff"]["removed"], s.builder.baseline().cells.len(), "{r}");
+        assert_eq!(s.builder.settings(), settings, "settings survive a clear");
+        assert_eq!(s.builder.history().undo_depth(), 1);
+        let err = ask(&mut server, &tx, &mut s, "builder_map", json!({ "clear": true, "name": "default" })).unwrap_err();
+        assert!(err.contains("clear"), "{err}");
+        let err = ask(&mut server, &tx, &mut s, "builder_map", json!({ "clear": true, "map_toml": "version = 1" })).unwrap_err();
+        assert!(err.contains("clear"), "{err}");
+        assert!(s.builder.map().cells.is_empty(), "a refused call changes nothing");
+        // `clear: false` is the plain read.
+        let r = ask(&mut server, &tx, &mut s, "builder_map", json!({ "clear": false })).unwrap();
+        assert_eq!(r["dirty"], true, "{r}");
+        assert_eq!(s.builder.history().undo_depth(), 1);
     }
 
     #[test]
