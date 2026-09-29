@@ -57,7 +57,10 @@ pub const LOBBY_TOUCH_MIN: f32 = 44.0;
 /// beside the QR on the smallest field.
 pub const LOBBY_SEAT_ROWS: usize = 4;
 pub const LOBBY_SEAT_H: f32 = 48.0;
-pub const LOBBY_KICK_W: f32 = 72.0;
+/// Wide enough for the longest word a shipped language spells it with
+/// (Slovenian's `ODSTRANI`); `text_tests` measures every language against
+/// it, less its padding.
+pub const LOBBY_KICK_W: f32 = 100.0;
 
 /// The square the QR is drawn in, top-right of the panel: 148 px holds a
 /// version 3 code (37 modules with its quiet zone) at four pixels a

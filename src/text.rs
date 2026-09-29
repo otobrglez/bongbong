@@ -725,6 +725,8 @@ mod text_tests {
         let lobby_button = |k: Key| (k, HUD_TEXT_SIZE, LOBBY_BUTTON_W as i32 - 12, vec![]);
         let wide = |k: Key| (k, HUD_TEXT_SIZE, LOBBY_WIDE_W as i32 - 12, vec![]);
         let content = (LOBBY_W - 2.0 * LOBBY_MARGIN) as i32;
+        let field = crate::Rect::new(0.0, 32.0, crate::DEFAULT_SCREEN_WIDTH as f32, crate::DEFAULT_SCREEN_HEIGHT as f32);
+        let seat_state_px = (crate::lobby::seats_rect(field).width - LOBBY_KICK_W) as i32 - 280 - 4;
         vec![
             (keys::HUD_SPEED, HUD_LABEL_SIZE, HUD_GAUGE_LABEL_MAX_PX, vec![]),
             (keys::HUD_SHIELD, HUD_LABEL_SIZE, HUD_GAUGE_LABEL_MAX_PX, vec![]),
@@ -758,10 +760,12 @@ mod text_tests {
             (keys::LOBBY_SUB_GUEST, HUD_LABEL_SIZE, content, vec![]),
             (keys::LOBBY_MAP, HUD_TEXT_SIZE, 152, vec![]),
             (keys::LOBBY_MISSION, HUD_TEXT_SIZE, 152, vec![]),
-            (keys::SEAT_AWAY, HUD_LABEL_SIZE, 140, vec![]),
-            (keys::SEAT_HOST, HUD_LABEL_SIZE, 140, vec![]),
-            (keys::SEAT_READY, HUD_LABEL_SIZE, 140, vec![]),
-            (keys::SEAT_WAITING, HUD_LABEL_SIZE, 140, vec![]),
+            // A seat's state runs from its 280 px column to the kick button
+            // at the row's right end.
+            (keys::SEAT_AWAY, HUD_LABEL_SIZE, seat_state_px, vec![]),
+            (keys::SEAT_HOST, HUD_LABEL_SIZE, seat_state_px, vec![]),
+            (keys::SEAT_READY, HUD_LABEL_SIZE, seat_state_px, vec![]),
+            (keys::SEAT_WAITING, HUD_LABEL_SIZE, seat_state_px, vec![]),
             (keys::SEAT_EMPTY, HUD_LABEL_SIZE, 200, vec![]),
             wide(keys::LOBBY_HOST),
             wide(keys::LOBBY_JOIN),
