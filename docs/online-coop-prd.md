@@ -1198,7 +1198,10 @@ The pieces, each with its owner module:
   hidden tab that sent none is not closed for it), and the room pings every
   socket at the WebSocket level every two seconds and closes one that has
   sent nothing, that pong included, for ten (`hub::KeepAlive`), so the
-  seat's grace starts and an empty round pauses. *Built*; netlab's
+  seat's grace starts and an empty round pauses. The client's clock
+  starts again after its own absence (a suspended app), a socket still
+  unopened after fifteen seconds is given up on, and the native dial times
+  its connect and handshakes. *Built*; netlab's
   `--blackhole-after` reproduces the fault and `tests/silent_link.rs` pins
   both clients noticing it.
 - **Measuring a browser**: a dev-tools web build (every PR preview) exports

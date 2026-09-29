@@ -44,6 +44,20 @@ pub const FIRE_HOLD_TICKS: u8 = 2;
 /// is not closed for the silence it caused.
 pub const ROOM_SILENT_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// A gap between two of the client's own polls longer than this is the
+/// client having been away - a phone app suspended in the background, a
+/// debugger, a frame that took seconds - and the silence it ran up is its
+/// own: the clock toward `ROOM_SILENT_AFTER` starts again at the next ping,
+/// so a connection that is still alive is not closed on the first frame
+/// back, before its messages have had a moment to arrive.
+pub const CLIENT_AWAY_AFTER: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// How long a connection may stay unopened before the room is taken as
+/// unreachable (`RoomClient::poll`). The keep-alive only starts once the
+/// socket is open, and a dial whose path dies mid-handshake would
+/// otherwise leave the lobby reaching for the room forever.
+pub const ROOM_REACH_WITHIN: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// Who this client is to a room.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Identity {
@@ -219,6 +233,12 @@ pub struct RoomClient<T: Transport> {
     /// message arriving after it clears it (`ROOM_SILENT_AFTER`).
     unanswered_since: Option<std::time::Instant>,
     silent_after: std::time::Duration,
+    /// When `poll` last ran (`CLIENT_AWAY_AFTER`).
+    last_poll: Option<std::time::Instant>,
+    /// When this client started dialling, and how long the socket may take
+    /// to open (`ROOM_REACH_WITHIN`).
+    dialled_at: std::time::Instant,
+    reach_within: std::time::Duration,
 }
 
 impl<T: Transport> RoomClient<T> {
@@ -252,6 +272,9 @@ impl<T: Transport> RoomClient<T> {
             scratch: Vec::new(),
             unanswered_since: None,
             silent_after: ROOM_SILENT_AFTER,
+            last_poll: None,
+            dialled_at: std::time::Instant::now(),
+            reach_within: ROOM_REACH_WITHIN,
         }
     }
 
@@ -262,6 +285,11 @@ impl<T: Transport> RoomClient<T> {
         if matches!(self.phase, Phase::Closed(_)) {
             return;
         }
+        let now = std::time::Instant::now();
+        if self.last_poll.is_some_and(|last| now.saturating_duration_since(last) > CLIENT_AWAY_AFTER) {
+            self.unanswered_since = None;
+        }
+        self.last_poll = Some(now);
         let mut scratch = std::mem::take(&mut self.scratch);
         scratch.clear();
         self.transport.drain_stamped(&mut scratch);
@@ -286,11 +314,25 @@ impl<T: Transport> RoomClient<T> {
         }
         // Asked, and nothing since: the connection died without closing.
         if self.unanswered_since.is_some_and(|since| since.elapsed() >= self.silent_after) {
-            self.transport.close();
-            let closed = Closed::fault("the room stopped answering");
-            self.phase = Phase::Closed(closed.clone());
-            out.push(ClientEvent::Closed(closed));
+            self.give_up("the room stopped answering", out);
+        } else if self.phase == Phase::Connecting && self.dialled_at.elapsed() >= self.reach_within {
+            self.give_up("the room could not be reached", out);
         }
+    }
+
+    /// Close the connection from this end for `reason`, which the lobby
+    /// and the status line show.
+    fn give_up(&mut self, reason: &str, out: &mut Vec<ClientEvent>) {
+        self.transport.close();
+        let closed = Closed::fault(reason);
+        self.phase = Phase::Closed(closed.clone());
+        out.push(ClientEvent::Closed(closed));
+    }
+
+    /// How long the socket may take to open (`ROOM_REACH_WITHIN` unless
+    /// set), for a test that cannot wait it out.
+    pub fn set_reach_within(&mut self, reach_within: std::time::Duration) {
+        self.reach_within = reach_within;
     }
 
     /// How long a ping may go unanswered before the room is taken as gone
@@ -807,6 +849,106 @@ mod tests {
         assert!(frame(&mut room, &mut client).is_empty(), "reported once");
         client.ping(3);
         assert!(room.listen().is_empty(), "the socket is closed: nothing more goes out");
+    }
+
+    /// A socket that never opens: a dial whose path died mid-handshake.
+    struct NeverOpens {
+        closed: bool,
+    }
+
+    impl Transport for NeverOpens {
+        fn state(&self) -> ConnState {
+            if self.closed { ConnState::Closed(Closed::by_us()) } else { ConnState::Connecting }
+        }
+
+        fn send(&mut self, _bytes: &[u8]) {}
+
+        fn drain(&mut self, _out: &mut Vec<Msg>) {}
+
+        fn close(&mut self) {
+            self.closed = true;
+        }
+    }
+
+    /// **A room that cannot be reached is said so**: a socket still not
+    /// open past the limit is closed from this end with the reason, once,
+    /// rather than leaving the lobby reaching for the room forever.
+    #[test]
+    fn a_socket_that_never_opens_is_given_up_on() {
+        use std::time::Duration;
+        let mut client = RoomClient::host(NeverOpens { closed: false }, Identity::new("host", "tok"), RoomSetup::default());
+        client.set_reach_within(Duration::from_millis(30));
+        let mut out = Vec::new();
+        client.poll(&mut out);
+        assert!(out.is_empty(), "not yet");
+        std::thread::sleep(Duration::from_millis(40));
+        client.poll(&mut out);
+        assert_eq!(out, vec![ClientEvent::Closed(Closed::fault("the room could not be reached"))]);
+        out.clear();
+        client.poll(&mut out);
+        assert!(out.is_empty(), "reported once");
+    }
+
+    /// **The clock runs from the oldest unanswered ping**, not the newest:
+    /// a round pings every 250 ms, and a clock moved on by each would never
+    /// grow past one ping's worth on a dead link.
+    #[test]
+    fn pings_on_a_cadence_do_not_hold_the_close_off() {
+        use std::time::{Duration, Instant};
+        let (mut room, mut client) = room_and_client();
+        client.set_silent_after(Duration::from_millis(40));
+        frame(&mut room, &mut client);
+        let started = Instant::now();
+        let mut closed = None;
+        for n in 0..30u32 {
+            client.ping(n);
+            let events = frame(&mut room, &mut client);
+            if events.iter().any(|e| matches!(e, ClientEvent::Closed(_))) {
+                closed = Some(started.elapsed());
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let closed = closed.expect("pinging every 10 ms against a 40 ms limit, nothing answering, never closed");
+        assert!(closed < Duration::from_millis(200), "closed only after {closed:?}");
+    }
+
+    /// Only a message that arrived after the ping answers it: one already
+    /// waiting when the ping went out says nothing about the link since.
+    #[test]
+    fn a_message_older_than_the_ping_does_not_answer_it() {
+        use std::time::Duration;
+        let (mut room, mut client) = room_and_client();
+        client.set_silent_after(Duration::from_millis(40));
+        frame(&mut room, &mut client);
+        room.lobby(Lobby::Error { message: "said before the ping".into() });
+        std::thread::sleep(Duration::from_millis(5));
+        client.ping(1);
+        std::thread::sleep(Duration::from_millis(60));
+        let events = frame(&mut room, &mut client);
+        assert!(events.contains(&ClientEvent::Closed(Closed::fault("the room stopped answering"))), "{events:?}");
+    }
+
+    /// **A client that was away is not closed for its own absence.** A
+    /// ping goes out, then the client stops polling for longer than
+    /// `CLIENT_AWAY_AFTER` - suspended, hidden - and the first poll back
+    /// comes before anything has arrived: the clock starts again rather
+    /// than closing a connection that may still be alive.
+    #[test]
+    fn a_client_back_from_being_away_is_not_closed_on_its_first_poll() {
+        use std::time::Duration;
+        let (mut room, mut client) = room_and_client();
+        client.set_silent_after(Duration::from_millis(40));
+        frame(&mut room, &mut client);
+        client.ping(1);
+        std::thread::sleep(CLIENT_AWAY_AFTER + Duration::from_millis(100));
+        assert!(frame(&mut room, &mut client).is_empty(), "closed on the first poll back");
+        assert!(!matches!(client.phase(), Phase::Closed(_)));
+        // Asked again once back, and still nothing: now it is the room.
+        client.ping(2);
+        std::thread::sleep(Duration::from_millis(60));
+        let events = frame(&mut room, &mut client);
+        assert_eq!(events, vec![ClientEvent::Closed(Closed::fault("the room stopped answering"))]);
     }
 
     #[test]

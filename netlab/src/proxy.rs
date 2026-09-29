@@ -201,6 +201,11 @@ fn relay(
         let mut buf = vec![0u8; 64 * 1024];
         loop {
             let n = match from.read(&mut buf).await {
+                // A dead path carries no FIN or reset either: inside the
+                // blackhole a hang-up is swallowed like any chunk and the
+                // writer never shuts the other socket, so each end has to
+                // find the death by its own keep-alive.
+                Ok(0) | Err(_) if schedule.swallows(clock.now_ms()) => std::future::pending::<usize>().await,
                 Ok(0) | Err(_) => break,
                 Ok(n) => n,
             };

@@ -39,6 +39,17 @@ use crate::net::transport::{Closed, ConnState, Transport};
 /// millisecond of the frame that made it rather than up to five.
 const READ_TIMEOUT: Duration = Duration::from_millis(1);
 
+/// How long each step of opening the socket - the TCP connect, then every
+/// read and write of the TLS and WebSocket handshakes - may take before
+/// the room is taken as unreachable (`dial`).
+#[cfg(not(test))]
+const DIAL_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The dial's limit in this module's own tests, which cannot wait ten
+/// seconds for a handshake that never comes.
+#[cfg(test)]
+const DIAL_TIMEOUT: Duration = Duration::from_millis(300);
+
 /// What the frame asks the socket thread to do.
 enum Cmd {
     Send(Vec<u8>),
@@ -218,14 +229,46 @@ fn run(url: String, cmds: Receiver<Cmd>, wire: Sender<Wire>) {
 
 /// Open the socket and put a read timeout on it, so the thread's loop
 /// comes back to the outgoing queue even on a silent connection.
+///
+/// **The dial itself is timed** (`DIAL_TIMEOUT`): the TCP connect, and the
+/// TLS and WebSocket handshakes behind it, each give up after that long.
+/// A path that dies between the connect and the room's answer would
+/// otherwise block this thread for good - no ping has gone out yet for the
+/// keep-alive to miss, and a `Close` from the frame is never read.
 fn dial(url: &str) -> Result<tungstenite::WebSocket<MaybeTlsStream<std::net::TcpStream>>, String> {
+    use std::net::{TcpStream, ToSocketAddrs};
+    use tungstenite::client::IntoClientRequest;
     // rustls comes in through tungstenite with no default features, so
     // nothing has chosen a crypto provider yet; `ring` is the one this
     // crate builds with. Installing it twice is not an error worth
     // reporting - the second caller simply finds the first's.
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let (socket, _response) =
-        tungstenite::connect(url).map_err(|e| format!("cannot reach {url}: {e}"))?;
+    let request = url.into_client_request().map_err(|e| format!("cannot reach {url}: {e}"))?;
+    let uri = request.uri();
+    let host = uri.host().ok_or_else(|| format!("cannot reach {url}: no host"))?.to_string();
+    let port = uri.port_u16().unwrap_or(if uri.scheme_str() == Some("wss") { 443 } else { 80 });
+    let addrs = (host.as_str(), port).to_socket_addrs().map_err(|e| format!("cannot reach {url}: {e}"))?;
+    let mut last = format!("cannot reach {url}: no address for {host}");
+    let mut stream = None;
+    for addr in addrs {
+        match TcpStream::connect_timeout(&addr, DIAL_TIMEOUT) {
+            Ok(tcp) => {
+                stream = Some(tcp);
+                break;
+            }
+            // tungstenite's own words for no address taking the
+            // connection, which a caller retrying a server still starting
+            // recognises (netlab's `DIAL_REFUSED`), and the system's why.
+            Err(e) => last = format!("cannot reach {url}: Unable to connect to {url} ({e})"),
+        }
+    }
+    let stream = stream.ok_or(last)?;
+    stream.set_read_timeout(Some(DIAL_TIMEOUT)).map_err(|e| format!("cannot set the socket's read timeout: {e}"))?;
+    stream.set_write_timeout(Some(DIAL_TIMEOUT)).map_err(|e| format!("cannot set the socket's write timeout: {e}"))?;
+    let (socket, _response) = tungstenite::client_tls_with_config(request, stream, None, None).map_err(|e| match e {
+        tungstenite::HandshakeError::Interrupted(_) => format!("cannot reach {url}: the room did not answer in time"),
+        tungstenite::HandshakeError::Failure(e) => format!("cannot reach {url}: {e}"),
+    })?;
     let tcp = match socket.get_ref() {
         MaybeTlsStream::Plain(tcp) => tcp,
         MaybeTlsStream::Rustls(tls) => &tls.sock,
@@ -286,6 +329,35 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         panic!("the transport never settled");
+    }
+
+    /// A room that takes the connection and then never answers the
+    /// handshake - a path that died between the two - closes the transport
+    /// with a reason once the dial's limit passes, rather than blocking
+    /// the socket thread for good.
+    #[test]
+    fn a_handshake_nobody_answers_closes_with_a_reason() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a listener");
+        let addr = listener.local_addr().expect("its address");
+        let holder = thread::spawn(move || {
+            let (socket, _) = listener.accept().expect("the dial's connection");
+            thread::sleep(Duration::from_secs(3));
+            drop(socket);
+        });
+        let mut t = NativeTransport::connect(&format!("ws://{addr}/ws"));
+        let mut out = Vec::new();
+        let started = Instant::now();
+        loop {
+            t.drain(&mut out);
+            if let ConnState::Closed(c) = t.state() {
+                assert!(c.reason.contains("did not answer in time"), "{}", c.reason);
+                assert!(started.elapsed() < Duration::from_secs(2), "took {:?}", started.elapsed());
+                break;
+            }
+            assert!(started.elapsed() < Duration::from_secs(2), "the dial never gave up");
+            thread::sleep(Duration::from_millis(10));
+        }
+        holder.join().expect("the holder");
     }
 
     #[test]
