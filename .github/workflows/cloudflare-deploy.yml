@@ -30,7 +30,7 @@ jobs:
       contents: read
       deployments: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Build web (wasm + Astro site)
         uses: ./.github/actions/build-web

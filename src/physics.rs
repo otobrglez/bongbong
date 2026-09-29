@@ -346,7 +346,7 @@ impl Physics {
             } else {
                 stats.touching_tank = true;
             }
-            for manifold in &pair.manifolds {
+            for manifold in pair.manifolds() {
                 for point in &manifold.points {
                     if point.data.impulse <= stats.max_impulse {
                         continue;
@@ -364,7 +364,7 @@ impl Physics {
                         .world
                         .colliders
                         .get(owner)
-                        .map(|c| { let p = c.position() * local; Position::new(p.x, p.y) });
+                        .map(|c| { let p = c.position().transform_point(local); Position::new(p.x, p.y) });
                 }
             }
         }

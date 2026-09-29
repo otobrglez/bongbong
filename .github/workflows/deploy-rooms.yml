@@ -40,7 +40,7 @@ jobs:
     outputs:
       tag: ${{ steps.get-tag.outputs.tag }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # `git describe` needs the tags, which a shallow clone omits.
           fetch-depth: 0
@@ -91,7 +91,7 @@ jobs:
       name: production
       url: https://rooms.bongbong.io
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Connect to Tailscale
         uses: tailscale/github-action@v4

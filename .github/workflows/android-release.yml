@@ -51,7 +51,7 @@ on:
 
 env:
   # Pinned to devenv.nix's languages.rust.version.
-  RUST_VERSION: 1.97.1
+  RUST_VERSION: 1.98.1
   CARGO_TERM_COLOR: always
   # The tag a workflow_run carries is the branch the Release run was on,
   # which for a tag push is the tag itself.
@@ -74,7 +74,7 @@ jobs:
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.CHECKOUT_REF }}
 
@@ -84,10 +84,10 @@ jobs:
           toolchain: ${{ env.RUST_VERSION }}
           targets: aarch64-linux-android
 
-      - uses: extractions/setup-just@v3
+      - uses: extractions/setup-just@v4
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -137,7 +137,7 @@ jobs:
         run: rm -f "$RUNNER_TEMP/release.jks"
 
       - name: Keep the APK as a workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bongbong-aarch64-linux-android
           path: |

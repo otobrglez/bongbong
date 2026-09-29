@@ -13,8 +13,8 @@
     "astro": "astro"
   },
   "dependencies": {
-    "astro": "7.3.2",
-    "sass": "^1.103.1"
+    "astro": "7.3.5",
+    "sass": "^1.105.0"
   },
   "allowScripts": {
     "esbuild": true

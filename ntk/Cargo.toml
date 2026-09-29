@@ -9,7 +9,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-raylib = { package = "sola-raylib", version = "6.3.0" }
+raylib = { package = "sola-raylib", version = "6.3.1" }
 # Demo 06 runs the real engine: the game crate as a library.
 bongbong = { path = ".." }
 

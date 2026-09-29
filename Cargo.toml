@@ -12,13 +12,13 @@ hecs = "0.11"
 # compact serde binary for every message but the lobby's JSON. `use-std`
 # for the `Vec` encoders and `std::error::Error` on its error type.
 postcard = { version = "1", features = ["use-std"] }
-rand = "0.10.2"
-rapier2d = "0.35.3"
+rand = "0.10.3"
+rapier2d = "0.36.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1"
 # The drawing crate, behind the `render` feature (below): the simulation,
 # the probe and the tests never name it.
-sola-raylib = { version = "6.3.0", optional = true }
+sola-raylib = { version = "6.3.1", optional = true }
 toml = "1"
 
 # The client's native WebSocket (src/net/native.rs,
@@ -31,7 +31,7 @@ toml = "1"
 # provider at all; `ring` is the one that builds for macOS, Linux,
 # Windows, iOS and Android without cmake.
 [target.'cfg(not(target_os = "emscripten"))'.dependencies]
-tungstenite = { version = "0.29", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"], optional = true }
+tungstenite = { version = "0.30", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"], optional = true }
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"], optional = true }
 
 # iOS (docs/ios-native-port-prd.md, CLAUDE.md's iOS section): raylib (SDL
@@ -41,7 +41,7 @@ rustls = { version = "0.23", default-features = false, features = ["std", "tls12
 # and OpenGL frameworks; `sdl` drops its GLFW gamepad declaration. Edition
 # 2024 (resolver 3) scopes these features to iOS targets only.
 [target.'cfg(target_os = "ios")'.dependencies]
-sola-raylib = { version = "6.3.0", features = ["nobuild", "sdl"], optional = true }
+sola-raylib = { version = "6.3.1", features = ["nobuild", "sdl"], optional = true }
 
 # Android (docs/android-port-prd.md, CLAUDE.md's Android section): raylib's
 # own Android platform, prebuilt by tools/setup_android.sh and linked by
@@ -50,7 +50,7 @@ sola-raylib = { version = "6.3.0", features = ["nobuild", "sdl"], optional = tru
 # link args raylib needs; no `sdl` here, raylib drives the NativeActivity
 # itself.
 [target.'cfg(target_os = "android")'.dependencies]
-sola-raylib = { version = "6.3.0", features = ["nobuild"], optional = true }
+sola-raylib = { version = "6.3.1", features = ["nobuild"], optional = true }
 
 # The Android shared library lives in its own crate (android/) so the
 # desktop builds never link a cdylib; the root package stays the default
