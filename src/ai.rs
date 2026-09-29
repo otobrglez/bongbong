@@ -11,6 +11,7 @@ use crate::pickup::PickupKind;
 use crate::tank::{ActiveWeapon, Dir, Tank};
 use crate::{
     MAX_DAMAGE,
+    OBSTACLE_GRID_SIZE,
     Position,
 };
 
@@ -88,6 +89,16 @@ pub struct WallAhead {
 struct Breach {
     dir: Dir,
     timer: f32,
+}
+
+/// A tower that hurt this tank (`Ai::notify_tower_hit`): where it stands,
+/// the seconds the tank holds it against the tower, and whether this frame
+/// sees it (`Ai::set_grudge_sight`, from `enemy_phase`).
+#[derive(Clone, Copy)]
+struct Grudge {
+    at: Position,
+    timer: f32,
+    in_sight: bool,
 }
 
 /// A guard's beat (see `Role::Guard`): the annulus `keep_off..=radius`
@@ -245,6 +256,9 @@ pub struct Ai {
     wall_ahead_timer: f32,
     /// The breach in progress, if any - see `Brain::wants_breach`.
     breach: Option<Breach>,
+    /// The tower this tank fires back at, if one hurt it lately - see
+    /// `Brain::grudge_shot`.
+    grudge: Option<Grudge>,
     /// Stuck escapes fired this round (see `stuck_timer`) - a counter
     /// rather than a flag so tooling can see an escape that fired and
     /// reset within one frame.
@@ -319,6 +333,7 @@ impl Default for Ai {
             last_intent: Intent::default(),
             wall_ahead_timer: 0.0,
             breach: None,
+            grudge: None,
             escapes: 0,
             target_player: 0,
         }
@@ -419,6 +434,12 @@ impl Ai {
         self.dir_hold += dt;
         self.dodge_timer = (self.dodge_timer - dt).max(0.0);
         self.snipe_cooldown = (self.snipe_cooldown - dt).max(0.0);
+        if let Some(grudge) = &mut self.grudge {
+            grudge.timer -= dt;
+            if grudge.timer <= 0.0 {
+                self.grudge = None;
+            }
+        }
         if self.dodge_timer <= 0.0 {
             self.dodge_dir = None;
         }
@@ -592,6 +613,28 @@ impl Ai {
     /// of the timer stacking up.
     pub fn notify_hit(&mut self) {
         self.hit_alert_timer = tuning().enemy_hit_alert_seconds;
+    }
+
+    /// The hit came from the tower standing at `at`: hold it against that
+    /// tower for `enemy_tower_grudge_seconds`, and fire back whenever it is
+    /// lined up and in sight (docs/defence-towers-prd.md section 9).
+    pub(crate) fn notify_tower_hit(&mut self, at: Position) {
+        self.notify_hit();
+        self.grudge = Some(Grudge { at, timer: tuning().enemy_tower_grudge_seconds, in_sight: false });
+    }
+
+    /// Where the tower this tank holds a grudge against stands, if any.
+    pub(crate) fn grudge_target(&self) -> Option<Position> {
+        self.grudge.map(|g| g.at)
+    }
+
+    /// This frame's view of the grudge tower: `Some(sight)` while it
+    /// stands, `None` once it is gone, which drops the grudge.
+    pub(crate) fn set_grudge_sight(&mut self, sight: Option<bool>) {
+        match (sight, &mut self.grudge) {
+            (Some(in_sight), Some(grudge)) => grudge.in_sight = in_sight,
+            _ => self.grudge = None,
+        }
     }
 
     /// The tank was just moved through a portal (`Game::portal_phase`).
@@ -1456,6 +1499,23 @@ impl Brain<'_> {
     /// `enemy_aim_settle` and the fire timer allows, shoot at the point
     /// `range` px ahead - the aligned half of `act_attack`, shared with the
     /// hunter's snipe. Holds fire (mostly) when a teammate is in the way.
+    /// A shot back at the tower this tank holds a grudge against: the
+    /// fire direction and range while the tower is in sight, within its
+    /// own reach of the tank and lined up on an axis - the tower is a whole
+    /// cell, so the alignment allows half of one on top of
+    /// `enemy_fire_align_px`.
+    fn grudge_shot(&self) -> Option<(Dir, f32)> {
+        let grudge = self.ai.grudge?;
+        if !grudge.in_sight {
+            return None;
+        }
+        let t = tuning();
+        let (dir, off_axis, in_front) = self.aim_alignment_at(grudge.at);
+        let range = self.me.position.distance_to(grudge.at);
+        let reach = t.enemy_attack_range.max(t.gun_tower_range).max(t.bio_range);
+        (in_front && off_axis <= t.enemy_fire_align_px + OBSTACLE_GRID_SIZE * 0.5 && range <= reach).then_some((dir, range))
+    }
+
     fn hold_and_fire(&mut self, fire_dir: Dir, range: f32) {
         self.ai.aim_settle += self.dt;
         self.intent.face = Some(fire_dir);
@@ -1596,6 +1656,7 @@ pub(crate) fn axis_offsets(from: Position, to: Position, dir: Dir) -> (f32, f32)
 ///   1. Dead? do nothing.
 ///   2. Flee when badly hurt.
 ///   3. Retreat to recharge when ammo is low.
+///   3.4. A tower that hurt it lined up in sight: fire back.
 ///   3.5. A hunter lined up on the player in range: snipe (hold, fire).
 ///   3.6. A guard whose player is outside the leash: hold the beat.
 ///   4. Attack when the target is in range (aim, settle, fire; else close in).
@@ -1641,6 +1702,18 @@ fn build<'a>() -> Node<Brain<'a>> {
                     && b.ai.wants_retreat(b.me.shells_ammo)
             }),
             action("retreat", act_retreat),
+        ]),
+        // 3.4. A tower hurt this tank and stands lined up in sight: shoot
+        // it back (`Ai::notify_tower_hit`). Never a detour - the routing
+        // steers around a tower's reach, so this is a shot taken where one
+        // offers itself. Below retreat: a tank low on shells keeps them.
+        sequence(vec![
+            condition(|b: &mut Brain| b.grudge_shot().is_some()),
+            action("grudge", |b: &mut Brain| {
+                let Some((dir, range)) = b.grudge_shot() else { return Status::Failure };
+                b.hold_and_fire(dir, range);
+                Status::Success
+            }),
         ]),
         // 3.5. A hunter that happens to be lined up on the player within
         // attack range shoots the player this tick instead of the frog - an

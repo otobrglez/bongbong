@@ -44,6 +44,7 @@ enum TankRole {
 enum Standing<'a> {
     Tank(&'a Tank, TankRole),
     Frog(Entity),
+    Tower(crate::tower::TowerView),
 }
 
 /// A tank and everything drawn on it, in the order the layers stack.
@@ -67,6 +68,7 @@ fn draw_one_tank(c: &mut impl Canvas, tank: &Tank, role: TankRole, time: f32, sh
         draw_missile_pod_shadow(c, tank);
     }
     draw_tank(c, tank);
+    crate::tank::draw_tank_slime(c, tank, time);
     draw_minigun_mount(c, tank);
     draw_missile_pod(c, tank);
     if role != TankRole::RollIn {
@@ -129,6 +131,12 @@ impl Game {
                 draw_portal(c, at, self.time, Color::WHITE);
             }
         }
+        // What dead towers left, then the ooze over it: a burst vat's spill
+        // covers its own ruin (docs/defence-towers-prd.md section 12).
+        for ruin in &self.tower_ruins {
+            crate::tower::draw_ruin(c, ruin);
+        }
+        crate::tower::draw_ooze(c, &self.ooze, self.time);
     }
 
     /// The tiles: every wall and prop with its shadow and edge cap. Trees
@@ -142,7 +150,15 @@ impl Game {
             .filter(|o| o.material == Material::Fence)
             .map(|o| o.cell())
             .collect();
-        for obstacle in self.world.query::<&Obstacle>().iter().filter(|o| !o.material.is_tree()) {
+        // Towers stand in `paint_standing`; their shadows fall here, under
+        // the tiles and everything that drives past.
+        let towers = self.tower_views();
+        if self.shadows_enabled {
+            for view in &towers {
+                crate::tower::draw_tower_shadow(c, view.kind, view.side, view.position);
+            }
+        }
+        for obstacle in self.world.query::<&Obstacle>().iter().filter(|o| !o.material.is_tree() && !o.material.is_tower()) {
             let axis = fence_axis(obstacle, &fences);
             if self.shadows_enabled {
                 draw_obstacle_shadow(c, obstacle, axis);
@@ -205,6 +221,11 @@ impl Game {
             let y = crate::simulation::with_frog(&self.world, frog_entity, |frog| frog.position.y);
             standing.push((y, Standing::Frog(frog_entity)));
         }
+        // A tower rises north of its base, so a tank that drives behind
+        // one is drawn behind it.
+        for view in self.tower_views() {
+            standing.push((view.position.y, Standing::Tower(view)));
+        }
         standing.sort_by(|a, b| a.0.total_cmp(&b.0));
 
         let mut next_tuft = 0usize;
@@ -225,6 +246,15 @@ impl Game {
                         draw_frog_ring(c, frog, self.time);
                         draw_frog(c, frog, self.time);
                     });
+                }
+                Standing::Tower(view) => {
+                    // The tesla's lens lights with its charge; the mortar's
+                    // mouth glows as the next glob comes up.
+                    let glow = match view.kind {
+                        crate::tower::TowerKind::Bio => view.charge * view.charge,
+                        _ => view.charge,
+                    };
+                    crate::tower::draw_tower(c, view.kind, view.side, view.position, view.stage, view.heading, glow);
                 }
             }
         }

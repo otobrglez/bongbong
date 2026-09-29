@@ -454,6 +454,19 @@ pub fn spawn_from_map(
                 obstacle_positions.push(pos);
                 world.spawn((Obstacle::new(material, variant, pos, flammable, body),));
             }
+            // A tower is a tile that draws no roll: its `variant` is the
+            // side it fights for, and the weapon beside it is built from
+            // the tile by `Game::build_towers`.
+            CellObject::Tesla { .. } | CellObject::GunTower { .. } | CellObject::BioSlush { .. } => {
+                let material = obj.material().expect("tower cells spawn a material");
+                let (_, side) = obj.tower().expect("tower cells name a tower");
+                let body = physics.spawn_static(
+                    pos,
+                    tile_half_extent(material, &solid_cells, col, row, obstacle_half_extent),
+                );
+                obstacle_positions.push(pos);
+                world.spawn((Obstacle::new(material, crate::tower::side_variant(side), pos, false, body),));
+            }
             CellObject::Road => road_cells.push(pos),
             CellObject::Water => water_cells.push(pos),
             CellObject::TallGrass => grass_cells.push(pos),

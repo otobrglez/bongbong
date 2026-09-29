@@ -90,6 +90,17 @@ pub enum PickupKind {
     /// for.
     #[serde(rename = "frog_health")]
     FrogHealth,
+    /// The tower pack (docs/defence-towers-prd.md section 9): restores
+    /// every standing defence tower on the collector's side to full health
+    /// and puts it out. Nothing on the tank itself.
+    ///
+    /// The frog pack's rule, for towers: **a tank collects a tower pack
+    /// unless every standing tower on its side is already at full health
+    /// and not burning.** A side with no standing tower takes it and wastes
+    /// it. A map slot of its own, plus a bonus drop beside a Health slot
+    /// while a player tower is hurt (`tower_pack_near_health_chance`).
+    #[serde(rename = "tower_pack")]
+    TowerPack,
 }
 
 pub struct Pickup {

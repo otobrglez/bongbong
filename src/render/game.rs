@@ -105,6 +105,9 @@ pub struct Textures<'a> {
     pub grass: &'a Texture2D,
     /// static/trees_sheet.png - the two tree species (docs/TREES_SPEC.md).
     pub trees: &'a Texture2D,
+    /// static/towers_sheet.png - the defence towers (docs/TOWERS_SPEC.md).
+    pub towers: &'a Texture2D,
+    pub pickup_tower_pack: &'a Texture2D,
     /// static/portal_sheet.png - the turning spiral (portal.rs).
     pub portal: &'a Texture2D,
 }
@@ -122,6 +125,7 @@ impl Sheets for Textures<'_> {
             Sheet::Walls => self.obstacles,
             Sheet::Props => self.props,
             Sheet::Trees => self.trees,
+            Sheet::Towers => self.towers,
             Sheet::Grass(_) => self.grass,
             Sheet::Damage => self.damage,
             Sheet::MinigunMount => self.minigun_mount,
@@ -140,6 +144,7 @@ impl Sheets for Textures<'_> {
                 PickupKind::Shield => self.pickup_shield,
                 PickupKind::Flamethrower => self.pickup_flamethrower,
                 PickupKind::FrogHealth => self.pickup_frog_health,
+                PickupKind::TowerPack => self.pickup_tower_pack,
             },
             Sheet::Frog { variant, clip } => self.frog_variants[variant as usize % self.frog_variants.len()].clip(clip),
         }
@@ -212,6 +217,9 @@ impl Game {
         for flash in &self.impact_flashes {
             let k = 1.0 - (flash.time / tuning().impact_flash_duration.max(0.01)).clamp(0.0, 1.0);
             ground_light(d, flash.center, 38.0 - 10.0 * k, warm, 0.3 * k);
+        }
+        if !self.towers.is_empty() || !self.ooze.is_empty() || !self.tesla_bolts.is_empty() {
+            self.draw_towers_ground_light(d);
         }
     }
 }
@@ -357,6 +365,14 @@ impl Game {
 
             self.paint_standing(&mut GpuCanvas::new(&mut d, textures), PaintOptions { locate_cue: true });
 
+            // The towers' light (a charging coil, a mortar's ooze, a
+            // tower on fire) and the globs in the air over everything that
+            // stands (docs/defence-towers-prd.md section 12).
+            for glob in &self.globs {
+                crate::tower::draw_glob(&mut GpuCanvas::new(&mut d, textures), glob);
+            }
+            d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| self.draw_towers_light(&mut bd));
+
             // The locate cue's P1..P8 labels, over the grass, the crowd and
             // the trees - the point is to be found under all of it.
             if !self.hide_players {
@@ -427,6 +443,9 @@ impl Game {
 
             for beam in &self.laser_beams {
                 draw_laser_beam(&mut d, beam);
+            }
+            for bolt in &self.tesla_bolts {
+                crate::render::tower::draw_tesla_bolt(&mut d, bolt);
             }
             // Every hit still playing: shell fireballs, bullet sparks,
             // plasma rings, laser burns.

@@ -31,6 +31,7 @@ use crate::obstacle::Obstacle;
 use crate::pathfind::Grid;
 use crate::simulation::Game;
 use crate::tank::Tank;
+use crate::tower::TowerKind;
 use crate::{
     FROG_COLLIDER_HALF_EXTENT,
     OBSTACLE_HULL_FRACTION,
@@ -60,6 +61,10 @@ const APPROACH_SLACK: f32 = 96.0;
 /// (likely an authoring mistake - real playable area cut off from the
 /// playfield). Straight from the design doc's §3.2.1.
 const DISCONNECTED_WARNING_CELLS: usize = 4;
+
+/// Towers on one side past which `too-many-towers` notes it - advice, not
+/// a cap (docs/defence-towers-prd.md section 17).
+const TOWERS_PER_SIDE_INFO: usize = 6;
 
 /// How severe a finding is - `Error` findings fail the supported-map gate
 /// (see `map_lint_tests::supported_maps_no_new_errors`, which ratchets
@@ -149,6 +154,15 @@ pub enum LintKind {
     /// the trigger radius (it sits in terrain), or none of those cells is
     /// in the playfield (nothing can reach it, nothing can arrive).
     PortalBlocked,
+    /// An enemy tower whose reach covers a seat's start: the round opens
+    /// under fire (docs/defence-towers-prd.md section 11). A tower on a
+    /// gate's lane needs no lint of its own - it is solid, so the lane
+    /// reads as `GateBlocked`.
+    TowerAtStart,
+    /// A tower whose reach covers no playfield cell: it can never fire.
+    TowerNoReach,
+    /// More than `TOWERS_PER_SIDE_INFO` towers on one side.
+    TooManyTowers,
 }
 
 impl LintKind {
@@ -175,6 +189,9 @@ impl LintKind {
             LintKind::PlayersTooClose => "players-too-close",
             LintKind::PortalAlone => "portal-alone",
             LintKind::PortalBlocked => "portal-blocked",
+            LintKind::TowerAtStart => "tower-at-start",
+            LintKind::TowerNoReach => "tower-no-reach",
+            LintKind::TooManyTowers => "too-many-towers",
         }
     }
 }
@@ -425,6 +442,7 @@ pub fn lint(game: &Game, width: f32, height: f32) -> Vec<LintFinding> {
     check_gates(game, &grid, width, height, &mut findings);
     check_wave_gates(game, &grid, width, height, &player_positions, &mut findings);
     check_portals(game, &cells, &mut findings);
+    check_towers(game, &cells, &player_positions, &mut findings);
     check_disconnected_regions(&cells, &mut findings);
     check_boxed_in(&grid, &cells, &mut findings);
     // Only the band plan places enemies in the border band at init; a
@@ -797,6 +815,56 @@ fn point_reachable(cells: &Cells, pos: Position, reach: f32) -> bool {
 /// - in an active network - none in the playfield, can never be entered
 /// or arrived at (`PortalBlocked`). Judged on the same footprint rule
 /// `Grid::with_portals` routes by.
+/// The towers (docs/defence-towers-prd.md section 11): an enemy tower
+/// whose reach covers a seat's start, a tower that can reach no playfield
+/// cell (for the bio slush, none beyond its minimum range), and a side
+/// with more than `TOWERS_PER_SIDE_INFO`.
+fn check_towers(game: &Game, cells: &Cells, player_positions: &[Position], findings: &mut Vec<LintFinding>) {
+    let towers = game.tower_views();
+    for view in &towers {
+        let (col, row) = map::world_to_cell(view.position);
+        let range = view.kind.range();
+        let min_range = if view.kind == TowerKind::Bio { tuning().bio_min_range } else { 0.0 };
+        if view.side == Side::Enemy {
+            for (seat, &at) in player_positions.iter().enumerate() {
+                let d = at.distance_to(view.position);
+                if d <= range && d >= min_range {
+                    findings.push(LintFinding {
+                        severity: LintSeverity::Warning,
+                        kind: LintKind::TowerAtStart,
+                        message: format!(
+                            "enemy {} at map cell ({col},{row}) reaches player {}'s start {d:.0}px away (reach {range:.0}px): the round opens under fire",
+                            view.kind.name(),
+                            seat + 1
+                        ),
+                    });
+                }
+            }
+        }
+        let reaches = (0..cells.rows).flat_map(|r| (0..cells.cols).map(move |c| (c, r))).any(|(c, r)| {
+            let d = cells.center(c, r).distance_to(view.position);
+            cells.in_playfield(c, r) && d <= range && d >= min_range
+        });
+        if !reaches {
+            findings.push(LintFinding {
+                severity: LintSeverity::Info,
+                kind: LintKind::TowerNoReach,
+                message: format!("{} at map cell ({col},{row}) reaches no playfield cell: it can never fire", view.kind.name()),
+            });
+        }
+    }
+    for side in [Side::Player, Side::Enemy] {
+        let n = towers.iter().filter(|v| v.side == side).count();
+        if n > TOWERS_PER_SIDE_INFO {
+            findings.push(LintFinding {
+                severity: LintSeverity::Info,
+                kind: LintKind::TooManyTowers,
+                message: format!("{n} {} towers (more than {TOWERS_PER_SIDE_INFO}): heavy on the tick and on the player", side.name()),
+            });
+        }
+    }
+}
+
 fn check_portals(game: &Game, cells: &Cells, findings: &mut Vec<LintFinding>) {
     let anchors = game.map.portal_cells();
     if anchors.len() == 1 {
@@ -1117,7 +1185,7 @@ mod map_lint_tests {
     /// Maps the game actually ships/loads by default - gated by
     /// `supported_maps_no_new_errors` against `KNOWN_ERROR_BUDGET` below.
     /// Grow this list as maps graduate from scratch to shipped.
-    const SUPPORTED_MAPS: &[&str] = &["maps/default.toml", "maps/default-desert.toml"];
+    const SUPPORTED_MAPS: &[&str] = &["maps/default.toml", "maps/default-desert.toml", "maps/towers.toml"];
 
     /// Real, recorded map debt in the supported maps: `Error` *kinds* the
     /// linter is right about but that predate it (found the day it landed
@@ -1139,7 +1207,8 @@ mod map_lint_tests {
     /// predicate - so every enemy spawn on this map degrades to
     /// `sample_clear_position`'s attempt-cap fallback (a very plausible
     /// source of this map's recorded stale-start/stall anomaly baseline).
-    const KNOWN_ERROR_KINDS: &[(&str, &[LintKind])] = &[("maps/default.toml", &[]), ("maps/default-desert.toml", &[])];
+    const KNOWN_ERROR_KINDS: &[(&str, &[LintKind])] =
+        &[("maps/default.toml", &[]), ("maps/default-desert.toml", &[]), ("maps/towers.toml", &[])];
 
     /// Headless seeded round on `map`, linted - the §3.1 setup. The fixed
     /// seed matters for maps that leave frog/start placement to `init`'s
@@ -2006,6 +2075,46 @@ mod map_lint_tests {
         assert!(!has(&f, LintKind::PortalAlone) && !has(&f, LintKind::PortalBlocked));
         assert!(!has(&f, LintKind::DisconnectedRegion), "the far room is joined through the portals");
         assert!(!has(&f, LintKind::UnreachableFrog));
+
+        // Every tower kind on both sides, each able to reach the field, and
+        // nothing firing on the start.
+        let f = lint_path("maps/test/towers.toml").expect("fixture loads");
+        dump("towers", &f);
+        assert!(errors(&f).is_empty(), "the towers fixture is fully legal");
+        assert!(!has(&f, LintKind::TowerNoReach) && !has(&f, LintKind::TowerAtStart));
+    }
+
+    /// The towers: an enemy tesla over the start is `tower-at-start`, a
+    /// tower sealed in the vault reaches nothing, a seventh tower on one
+    /// side is noted - and a map with none of that says nothing.
+    #[test]
+    fn tower_lints_fire_on_what_they_describe() {
+        use crate::frog::Side;
+        use crate::tower::TowerKind;
+        let tower = |map: &mut MapFile, col: i32, row: i32, side: Side| {
+            map.set_cell(col, row, CellObject::for_tower(TowerKind::Tesla, side));
+        };
+        let mut map = base_map();
+        tower(&mut map, 27, 9, Side::Enemy);
+        let f = lint_map(map);
+        dump("tower-at-start", &f);
+        assert!(has(&f, LintKind::TowerAtStart), "an enemy tesla two cells from the start");
+
+        let mut map = base_map();
+        sealed_vault(&mut map);
+        tower(&mut map, 17, 11, Side::Player);
+        let f = lint_map(map);
+        assert!(has(&f, LintKind::TowerNoReach), "a tesla in the vault reaches nothing");
+        assert!(!has(&f, LintKind::TooManyTowers));
+
+        let mut map = base_map();
+        for col in 0..7 {
+            tower(&mut map, 30 + col, 3, Side::Player);
+        }
+        let f = lint_map(map);
+        assert!(has(&f, LintKind::TooManyTowers), "seven on one side");
+        assert!(!has(&f, LintKind::TowerAtStart), "the player's own towers are no threat to its start");
+        assert!(!has(&f, LintKind::TowerNoReach));
     }
 
     /// maps/missions/ fixtures are clean starting points for one mission/

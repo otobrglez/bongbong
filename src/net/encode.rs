@@ -204,7 +204,7 @@ fn shot(id: u32, kind: ShotKind, position: Position, rotation: f32, state: i32, 
 pub fn owner_seat(owner: crate::shell::Owner) -> u8 {
     match owner {
         crate::shell::Owner::Player(seat) => seat,
-        crate::shell::Owner::Enemy(_) => crate::net::wire::NO_SEAT,
+        crate::shell::Owner::Enemy(_) | crate::shell::Owner::Tower { .. } => crate::net::wire::NO_SEAT,
     }
 }
 

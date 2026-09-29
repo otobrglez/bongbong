@@ -56,6 +56,10 @@ pub enum ImpactKind {
     Plasma(PlasmaVariant),
     /// A laser's burn; `true` for the blue beam.
     Laser(bool),
+    /// A tesla coil's bolt landing.
+    Tesla,
+    /// A bio slush glob bursting on the ground.
+    Ooze,
 }
 
 impl ImpactKind {
@@ -67,6 +71,8 @@ impl ImpactKind {
             ImpactKind::Bullet => t.bullet_hit_seconds,
             ImpactKind::Plasma(_) => t.plasma_hit_seconds,
             ImpactKind::Laser(_) => t.laser_hit_seconds,
+            ImpactKind::Tesla => t.tesla_hit_seconds,
+            ImpactKind::Ooze => t.ooze_hit_seconds,
         }
     }
 }
@@ -367,6 +373,13 @@ impl Fx {
                 self.burst(at, ParticleKind::Dust, self.count(tuning().tile_burst_particles + 8), 45.0, &[LEAF_L, LEAF_M, LEAF_D]);
                 self.burst(at, ParticleKind::Chip, self.count(5), 95.0, &[WOOD_M, WOOD_D]);
             }
+            // A tower comes apart as armour plate, sparks and smoke; its
+            // own death (discharge, cook-off, spill) adds the rest.
+            Material::Tesla | Material::GunTower | Material::BioSlush => {
+                self.burst(at, ParticleKind::Chip, self.count(tuning().tile_burst_particles + 6), 120.0, &[STONE_LT, STONE_MD, STONE_DK]);
+                self.burst(at, ParticleKind::Spark, self.count(10), 160.0, &[FIRE_T, EMBER_T, WHITE_T]);
+                self.burst(at, ParticleKind::Smoke, self.count(6), 30.0, &[SMOKE_T]);
+            }
         }
     }
 
@@ -540,6 +553,45 @@ impl Fx {
                         self.burst(at, ParticleKind::Spark, self.count(tuning().shot_hit_sparks / 2), 150.0, &[WHITE_T, FIRE_T]);
                         self.burst(at, ParticleKind::Dust, self.count(2), 35.0, &[DUST_T]);
                     }
+                    // A tesla bolt landing: a crackle of violet sparks off
+                    // the hull it struck and a spit off the terminal.
+                    Event::TeslaStrike { x0, y0, x1, y1, chained } => {
+                        self.start_impact(Position::new(x1, y1), Vec2::new(x1 - x0, y1 - y0), ImpactKind::Tesla);
+                        let n = if chained { 6 } else { 10 };
+                        self.burst(Position::new(x1, y1), ParticleKind::Spark, self.count(n), 150.0, &[TESLA_T, TESLA_DEEP_T, WHITE_T]);
+                        self.burst(Position::new(x0, y0), ParticleKind::Spark, self.count(3), 70.0, &[TESLA_T, WHITE_T]);
+                    }
+                    // A mortar's lob: a spit of ooze out of the mouth. A gun
+                    // tower's burst is `muzzle_sparks`', off its flashes.
+                    Event::TowerFired { kind: "bio_slush", x, y, heading } => {
+                        let r = heading.to_radians();
+                        let dir = Vec2::new(r.sin(), -r.cos());
+                        self.cone_burst(Position::new(x, y), dir, 0.5, ParticleKind::Spray, self.count(5), 90.0, &OOZE_TINTS);
+                    }
+                    Event::GlobSplashed { x, y } => {
+                        self.start_impact(Position::new(x, y), Vec2::zero(), ImpactKind::Ooze);
+                        self.burst(Position::new(x, y), ParticleKind::Spray, self.count(14), 110.0, &OOZE_TINTS);
+                        self.splash_if_wet(game, Position::new(x, y), 8);
+                    }
+                    Event::Slimed { slot } => {
+                        if let Some(&(_, at)) = game.slimed().iter().find(|s| s.0 == slot) {
+                            self.burst(at, ParticleKind::Spray, self.count(6), 60.0, &OOZE_TINTS);
+                        }
+                    }
+                    // Ooze coming off in the water: a splash with a lime
+                    // fleck or two in it.
+                    Event::SlimeWashed { slot } => {
+                        if let Some(&(_, at, _)) = game.wading().iter().find(|w| w.0 == slot) {
+                            self.burst(at, ParticleKind::Spray, self.count(10), 80.0, &[WATER_L, WATER_M, WHITE_T]);
+                            self.burst(at, ParticleKind::Spray, self.count(4), 60.0, &OOZE_TINTS);
+                        }
+                    }
+                    // A tower pack at work: the rainbow the pack is painted
+                    // in, lifting off the tower it mended.
+                    Event::TowerRepaired { x, y, .. } => {
+                        self.burst(Position::new(x, y), ParticleKind::Spark, self.count(18), 110.0, &RAINBOW_TINTS);
+                        self.burst(Position::new(x, y), ParticleKind::Ember, self.count(6), 36.0, &RAINBOW_TINTS);
+                    }
                     // A laser's burn: sparks in the beam's colour splashing
                     // back off whatever stopped it.
                     Event::LaserBeam { x0, y0, x1, y1, variant, .. } => {
@@ -669,6 +721,40 @@ impl Fx {
             }
             if self.due(key ^ 0x2b7e, smoke_rate * dying * tuning().fx_density, dt) {
                 self.burst(pos, ParticleKind::Smoke, 1, 12.0, &[SMOKE_T]);
+            }
+        }
+        // Towers: a damaged one leaks smoke (and sparks, at its last
+        // stage), a burning one throws what a burning plank does, a ruin
+        // smoulders for `tower_ruin_smoke_seconds`, dying down as it goes.
+        for view in game.tower_views() {
+            let key = crate::blast::seed_at(view.position, 8);
+            let top = Position::new(view.position.x, view.position.y - 6.0);
+            let smoke = match view.stage {
+                0 | 1 => 0.0,
+                2 => 0.4,
+                _ => 1.0,
+            } + if view.burning { 1.0 } else { 0.0 };
+            if smoke > 0.0 && self.due(key, smoke_rate * smoke * tuning().fx_density, dt) {
+                self.burst(top, ParticleKind::Smoke, 1, 12.0, &[SMOKE_T]);
+            }
+            let sparks = if view.stage >= 3 { 0.5 } else { 0.0 } + if view.burning { 1.0 } else { 0.0 };
+            if sparks > 0.0 && self.due(key ^ 0x7a7a, ember_rate * sparks * tuning().fx_density, dt) {
+                let tints: &[Color] = if view.burning { &[EMBER_T, FIRE_T] } else { &[WHITE_T, FIRE_T] };
+                self.burst(top, if view.burning { ParticleKind::Ember } else { ParticleKind::Spark }, 1, 30.0, tints);
+            }
+        }
+        let ruin_seconds = tuning().tower_ruin_smoke_seconds.max(0.01);
+        for ruin in game.tower_ruins().iter().filter(|r| r.smouldering()) {
+            let key = crate::blast::seed_at(ruin.position, 9);
+            let dying = (1.0 - ruin.age / ruin_seconds).clamp(0.2, 1.0);
+            if self.due(key, smoke_rate * dying * tuning().fx_density, dt) {
+                self.burst(ruin.position, ParticleKind::Smoke, 1, 12.0, &[SMOKE_T]);
+            }
+        }
+        // A coated hull drips ooze.
+        for (slot, pos) in game.slimed() {
+            if self.due(0x0DE0_0000 ^ slot as u32, 4.0 * tuning().fx_density, dt) {
+                self.burst(pos, ParticleKind::Spray, 1, 30.0, &OOZE_TINTS);
             }
         }
         // A drum with its fuse lit spits sparks from the bung: the tell
@@ -1000,6 +1086,21 @@ const HEAL_T: Color = Color::new(0x78, 0xDC, 0x5A, 255);
 /// the HUD gauge read as the same mechanic. Off the Puny Palette on purpose,
 /// like the shield ring itself.
 const SHIELD_T: Color = Color::new(0xAA, 0x78, 0xFF, 255);
+/// The tesla bolt's violets (`render::tower`'s strands), off the palette
+/// like the shield's.
+const TESLA_T: Color = Color::new(0xCA, 0xA6, 0xFF, 255);
+const TESLA_DEEP_T: Color = Color::new(0x9A, 0x66, 0xFF, 255);
+/// The bio slush's ooze, the sheet's acid lime (`tower::OOZE_*`).
+const OOZE_TINTS: [Color; 3] = [crate::tower::OOZE_HI, crate::tower::OOZE_LT, crate::tower::OOZE_MD];
+/// The tower pack's rainbow, the colours its icon sweeps through.
+const RAINBOW_TINTS: [Color; 6] = [
+    Color::new(0xFF, 0x50, 0x46, 255),
+    Color::new(0xFF, 0xA0, 0x3C, 255),
+    Color::new(0xFF, 0xE6, 0x5A, 255),
+    HEAL_T,
+    PORTAL_T,
+    SHIELD_T,
+];
 /// A portal's blues - the P1 team ramp, deliberately off-palette like the
 /// portal sheet itself (docs/PALETTE.md).
 const PORTAL_T: Color = Color::new(0x4D, 0x9B, 0xE6, 255);

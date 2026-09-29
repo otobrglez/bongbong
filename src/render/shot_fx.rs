@@ -52,7 +52,7 @@ fn tri(_d: &mut impl RaylibDraw, a: (Vec2, Color), b: (Vec2, Color), c: (Vec2, C
 
 /// A tapering quad from `a` (`wa` px wide, `ca`) to `b` (`wb` wide, `cb`),
 /// the colour blending smoothly along it.
-fn taper(d: &mut impl RaylibDraw, a: Vec2, wa: f32, ca: Color, b: Vec2, wb: f32, cb: Color) {
+pub(crate) fn taper(d: &mut impl RaylibDraw, a: Vec2, wa: f32, ca: Color, b: Vec2, wb: f32, cb: Color) {
     let (dx, dy) = (b.x - a.x, b.y - a.y);
     let len = (dx * dx + dy * dy).sqrt();
     if len < 0.01 {
@@ -90,7 +90,7 @@ pub fn streak(d: &mut impl RaylibDraw, head: Position, dir: Vec2, length: f32, w
 
 /// Four tapered rays out of `center` along `dir` and its three quarter
 /// turns, `reach` px long, fading out to their tips.
-fn star(d: &mut impl RaylibDraw, center: Position, dir: Vec2, reach: f32, width: f32, color: Color) {
+pub(crate) fn star(d: &mut impl RaylibDraw, center: Position, dir: Vec2, reach: f32, width: f32, color: Color) {
     for (x, y) in [(dir.x, dir.y), (-dir.y, dir.x), (-dir.x, -dir.y), (dir.y, -dir.x)] {
         let tip = Position::new(center.x + x * reach, center.y + y * reach);
         taper(d, center, width, color, tip, 0.0, fade(color, 0.0));
