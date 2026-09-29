@@ -652,15 +652,15 @@ tunables! {
         /// A Purple charge batch scales `plasma_damage_factor` by this on
         /// top.
         plasma_purple_damage_factor: f32 = 1.10 in 0.1 ..= 5.0;
-        /// Pulsating in-flight glow (`render::plasma::draw_plasma`): pulses per
-        /// second, and the glow radius at the low/high point of the pulse as
-        /// a multiple of the sprite radius.
+        /// The in-flight orb's breathing (`render/shot_shaders.rs`): pulses
+        /// per second, and the strength of its glow and rim at the low and
+        /// high point of each pulse.
         plasma_pulse_hz: f32 = 6.0 in 0.1 ..= 30.0;
         plasma_pulse_min_scale: f32 = 0.85 in 0.1 ..= 3.0;
         plasma_pulse_max_scale: f32 = 1.35 in 0.1 ..= 3.0;
         /// The Flying state's baked 4-frame breathing cycle plays this many
-        /// full cycles per second, independent of `plasma_pulse_hz` - two
-        /// independent cycles read richer than one rate driving both.
+        /// full cycles per second, where the baked sprite is what flies (no
+        /// shaders, or `shot_glow_strength` 0).
         plasma_flying_cycle_fps: f32 = 10.0 in 0.5 ..= 60.0;
     }
 
@@ -2006,6 +2006,59 @@ tunables! {
         /// Half-extent (px) of the impact flash's quad; at 720px tall the
         /// punch reaches ~125px, so 70 visibly clipped it.
         impact_flash_quad_radius: f32 = 130.0 in 10.0 ..= 500.0;
+    }
+
+    group shot_fx {
+        /// One multiplier on the light every shot throws (`render/shot_fx.rs`,
+        /// all additive and built from 2 px blocks): the halos and tracers
+        /// in flight, the muzzle and impact flares with their star rays and
+        /// glare, the laser's bloom, the missile's exhaust. 0 draws the
+        /// plain sprites alone.
+        shot_glow_strength: f32 = 1.0 in 0.0 ..= 2.0;
+        /// Length (px) of the hot tracer streak a flying shell draws behind it.
+        shell_tracer_length: f32 = 40.0 in 0.0 ..= 160.0;
+        /// Length (px) of a minigun bullet's tracer streak.
+        bullet_tracer_length: f32 = 26.0 in 0.0 ..= 160.0;
+        /// Length (px) of the fading afterimage chain a plasma bolt leaves.
+        plasma_trail_length: f32 = 52.0 in 0.0 ..= 160.0;
+        /// Radius (px) of the plasma orb drawn in flight
+        /// (`render/shot_shaders.rs`); its glow reaches about 2.3 times as far.
+        plasma_orb_radius: f32 = 11.0 in 4.0 ..= 32.0;
+        /// Turns per second of the plasma orb's surface, before each bolt's
+        /// own speed factor (0.7 to 1.5, either way round).
+        plasma_orb_spin_hz: f32 = 1.6 in 0.0 ..= 10.0;
+        /// Radius (px) of the muzzle flare at its first frame; it shrinks
+        /// over `muzzle_flash_duration`. The star rays reach twice as far.
+        muzzle_glow_radius: f32 = 14.0 in 0.0 ..= 80.0;
+        /// Radius (px) of the impact flare at its first frame; it swells
+        /// and fades over `impact_flash_duration`.
+        impact_glow_radius: f32 = 16.0 in 0.0 ..= 80.0;
+        /// Half-length (px) of the horizontal lens glare across a fresh
+        /// muzzle or impact flare. 0 turns the glare off.
+        shot_glare_length: f32 = 34.0 in 0.0 ..= 200.0;
+        /// How fast (Hz) a laser beam's bloom and end flares flicker.
+        laser_flicker_hz: f32 = 28.0 in 0.0 ..= 120.0;
+        /// Sparks thrown off a hull, frog or border wall a shot hits
+        /// (`fx.rs`, scaled by `fx_density`); tiles keep their own
+        /// material bursts.
+        shot_hit_sparks: i32 = 9 in 0 ..= 60;
+        /// Sparks spat from the barrel with every shot (`fx.rs`, scaled
+        /// by `fx_density`), plus a wisp of gun smoke.
+        muzzle_sparks: i32 = 4 in 0 ..= 40;
+        /// How long each hit plays (seconds; `render/shot_shaders.rs`,
+        /// `static/impact_burst.fs`): a shell's fireball, flash, shock ring,
+        /// debris and smoke; a bullet's spark star and ricochets; a plasma
+        /// bolt's energy ring; a laser's molten splash.
+        shell_hit_seconds: f32 = 0.6 in 0.05 ..= 3.0;
+        bullet_hit_seconds: f32 = 0.22 in 0.05 ..= 2.0;
+        plasma_hit_seconds: f32 = 0.5 in 0.05 ..= 3.0;
+        laser_hit_seconds: f32 = 0.3 in 0.05 ..= 2.0;
+        /// Size of every hit's burst, as a multiple of its designed size.
+        hit_fx_scale: f32 = 1.0 in 0.2 ..= 3.0;
+        /// Glints per second a flying plasma bolt sheds in its own colour,
+        /// and embers per second a flying shell sheds (`fx.rs`, scaled by
+        /// `fx_density`).
+        shot_trail_glint_rate: f32 = 26.0 in 0.0 ..= 200.0;
     }
 }
 

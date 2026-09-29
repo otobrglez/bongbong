@@ -1,12 +1,12 @@
-//! Drawing a plasma bolt - its runtime glow halo and the baked sprite -
-//! and its shadow (`plasma.rs` owns the entity and the frame arithmetic).
+//! Drawing a plasma bolt from its baked sprite, and its shadow; the orb
+//! it flies as is `render/shot_shaders.rs` (`plasma.rs` owns the entity and the frame arithmetic).
 
 use sola_raylib::prelude::*;
 
 use crate::math::{Color, Rectangle};
 use crate::plasma::{Plasma, PlasmaState, PlasmaVariant};
 use crate::tuning::tuning;
-use crate::{PLASMA_SCALE, PLASMA_TEXTURE_SIZE};
+use crate::{Position, PLASMA_SCALE, PLASMA_TEXTURE_SIZE};
 
 impl PlasmaVariant {
     /// Which row of plasma.png this variant draws from - a genuine second
@@ -20,20 +20,6 @@ impl PlasmaVariant {
         match self {
             PlasmaVariant::Teal => 0,
             PlasmaVariant::Purple => 1,
-        }
-    }
-
-    /// (outer, inner) glow-halo colours at full alpha, for `draw_plasma`'s
-    /// two runtime-drawn circles - drawn fresh each frame (not sampled from
-    /// the sprite), matched to this variant's own baked row
-    /// (`tools/spritegen/gen_plasma.py`'s `TEAL`/`PURPLE` palettes) so the
-    /// halo and the sprite read as the same colour.
-    fn glow_colors(self) -> (Color, Color) {
-        match self {
-            PlasmaVariant::Teal => (Color::new(40, 220, 200, 255), Color::new(200, 255, 245, 255)),
-            PlasmaVariant::Purple => {
-                (Color::new(155, 77, 224, 255), Color::new(230, 205, 255, 255))
-            }
         }
     }
 }
@@ -59,8 +45,7 @@ fn source_rec(col: i32, variant: PlasmaVariant) -> Rectangle {
 /// Which of `Flying`'s 4 baked breathing-cycle columns (3, 4, 5, 6) to draw
 /// right now, from `plasma.timer` (see its doc comment) - cycles forward at
 /// PLASMA_FLYING_CYCLE_FPS, wrapping every 4 frames. A plain forward cycle
-/// (0,1,2,3,0,1,2,...), not a phase-matched sine like the runtime glow's own
-/// `glow_pulse` - `gen_plasma.py`'s 4 frames are themselves authored as a
+/// (0,1,2,3,0,1,2,...) - `gen_plasma.py`'s 4 frames are themselves authored as a
 /// dim->bright->dim breathing loop (see docs/PLASMA_SPEC.md), so a steady
 /// cycle through them already reads as pulsing without needing to sample a
 /// continuous curve.
@@ -68,42 +53,35 @@ fn flying_col(timer: f32) -> i32 {
     3 + (timer * tuning().plasma_flying_cycle_fps) as i32 % 4
 }
 
-/// The in-flight glow halo's current radius/alpha, derived from `timer`
-/// (see its doc comment) - a sine wave over PLASMA_PULSE_HZ cycles/second,
-/// remapped from the base sprite's own half-size into
-/// PLASMA_PULSE_MIN_SCALE..MAX_SCALE. Shared by `draw_plasma`'s two glow
-/// passes so they always pulse in lockstep. Deliberately a different cycle
-/// rate/shape than the baked `flying_col` animation - see
-/// PLASMA_FLYING_CYCLE_FPS's doc comment.
-fn glow_pulse(plasma: &Plasma) -> (f32, f32) {
-    let base_radius = PLASMA_TEXTURE_SIZE * PLASMA_SCALE * 0.5;
-    let phase = (plasma.timer * tuning().plasma_pulse_hz * std::f32::consts::TAU).sin() * 0.5 + 0.5;
-    let scale = tuning().plasma_pulse_min_scale + (tuning().plasma_pulse_max_scale - tuning().plasma_pulse_min_scale) * phase;
-    (base_radius * scale, phase)
+impl PlasmaVariant {
+    /// The shader orb's four colours - deep, body, bright, hot - in the
+    /// same family as this variant's baked row.
+    pub(crate) fn orb_colors(self) -> [Color; 4] {
+        match self {
+            PlasmaVariant::Teal => [
+                Color::new(10, 78, 98, 255),
+                Color::new(24, 164, 176, 255),
+                Color::new(110, 236, 222, 255),
+                Color::new(236, 255, 250, 255),
+            ],
+            PlasmaVariant::Purple => [
+                Color::new(58, 22, 104, 255),
+                Color::new(128, 60, 204, 255),
+                Color::new(196, 144, 255, 255),
+                Color::new(248, 234, 255, 255),
+            ],
+        }
+    }
 }
 
-/// Draw a plasma bolt: while flying, a pulsating glow halo (two concentric
-/// translucent discs, sized/faded by `glow_pulse`, coloured by
-/// `PlasmaVariant::glow_colors`) drawn first so the sprite composites on top
-/// of it, then the sprite itself from its current frame (`flying_col` while
-/// `Flying`, `PlasmaState::col` otherwise) at `plasma.variant`'s own sheet
-/// row - centered and rotated to face travel, same as
-/// `draw_shell`/`draw_bullet`. The glow is purely a runtime draw effect
-/// (like `laser::draw_laser_beam`'s fade), layered on top of the sprite's
-/// own baked breathing animation rather than replacing it.
+/// Draw a plasma bolt from its baked sprite: the current frame
+/// (`flying_col` while `Flying`, `PlasmaState::col` otherwise) from
+/// `plasma.variant`'s own row of plasma.png, centred and rotated to face
+/// travel like `draw_shell`/`draw_bullet`. In flight the game draws the
+/// shader orb instead (`render::shot_shaders::ShotShaders::draw_orb`)
+/// wherever the shaders loaded; this is the muzzle and impact frames, and
+/// the whole flight where they did not.
 pub fn draw_plasma(d: &mut impl RaylibDraw, texture: &Texture2D, plasma: &Plasma) {
-    if plasma.state == PlasmaState::Flying {
-        let (radius, phase) = glow_pulse(plasma);
-        let (glow_outer, glow_inner) = plasma.variant.glow_colors();
-        let outer_alpha = (90.0 + 90.0 * phase) as u8;
-        d.draw_circle_v(plasma.position, radius, Color::new(glow_outer.r, glow_outer.g, glow_outer.b, outer_alpha));
-        d.draw_circle_v(
-            plasma.position,
-            radius * 0.5,
-            Color::new(glow_inner.r, glow_inner.g, glow_inner.b, (outer_alpha as f32 * 0.9) as u8),
-        );
-    }
-
     let col = if plasma.state == PlasmaState::Flying {
         flying_col(plasma.timer)
     } else {
@@ -123,7 +101,18 @@ pub fn draw_plasma(d: &mut impl RaylibDraw, texture: &Texture2D, plasma: &Plasma
 /// drawn as a flat black silhouette regardless of colour, same as every
 /// other shadow pass in the game. Caller (`Game::render`) only calls this
 /// while `plasma.state == PlasmaState::Flying`.
-pub fn draw_plasma_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, plasma: &Plasma) {
+/// `orb` says the shader orb is what flies, whose shadow is its own round
+/// silhouette rather than the sprite's.
+pub fn draw_plasma_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, plasma: &Plasma, orb: bool) {
+    if orb {
+        let at = Position::new(
+            plasma.position.x + tuning().shadow_dir_x * plasma.shadow_offset,
+            plasma.position.y + tuning().shadow_dir_y * plasma.shadow_offset,
+        );
+        let a = (255.0 * tuning().plasma_shadow_opacity) as u8;
+        d.draw_circle_v(at, tuning().plasma_orb_radius * 0.95, Color::new(0, 0, 0, a));
+        return;
+    }
     let src = source_rec(flying_col(plasma.timer), plasma.variant);
     let size = PLASMA_TEXTURE_SIZE * PLASMA_SCALE;
     let dest = Rectangle::new(

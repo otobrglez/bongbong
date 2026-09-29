@@ -32,8 +32,8 @@ pub fn draw_blast(d: &mut impl RaylibDraw, texture: &Texture2D, b: &BlastFx) {
     d.draw_texture_pro(texture, src, dest, Vector2::new(size / 2.0, size / 2.0), rotation, Color::WHITE);
 }
 
-/// The light bloom under a fresh fireball - two flat discs that read as a
-/// flash when drawn additively (call inside `draw_blend_mode(BLEND_ADDITIVE)`).
+/// The light bloom under a fresh fireball - two soft radial glows that read
+/// as a flash when drawn additively (call inside `draw_blend_mode(BLEND_ADDITIVE)`).
 /// Expands as it fades so it doesn't just pop off. A fuel drum's is whiter.
 pub fn draw_blast_glow(d: &mut impl RaylibDraw, b: &BlastFx) {
     let seconds = tuning().blast_glow_seconds;
@@ -48,8 +48,8 @@ pub fn draw_blast_glow(d: &mut impl RaylibDraw, b: &BlastFx) {
         BlastKind::Oil => Color::new(255, 150, 60, a),
         BlastKind::Fuel => Color::new(255, 220, 170, a),
     };
-    pixel_disc(d, at, r, outer);
-    pixel_disc(d, at, r * 0.45, Color::new(255, 230, 170, a));
+    d.draw_circle_gradient(at.x as i32, at.y as i32, r * 1.25, outer, Color::new(outer.r, outer.g, outer.b, 0));
+    d.draw_circle_gradient(at.x as i32, at.y as i32, r * 0.6, Color::new(255, 230, 170, a), Color::new(255, 230, 170, 0));
 }
 
 /// A filled disc built out of whole `GLOW_BLOCK` blocks, one scanline of
@@ -92,15 +92,17 @@ pub fn pixel_disc(d: &mut impl RaylibDraw, center: Position, radius: f32, color:
 /// one source pixel of every sprite in the game covers.
 const GLOW_BLOCK: f32 = 2.0;
 
-/// The flamethrower's nozzle glow while it fires (additive): a hot disc
-/// at the muzzle and a fainter, larger one part way down the stream,
-/// both flickering off the round clock. The stream itself is particles
-/// (`fx.rs`); this is the light they throw on the ground.
+/// The flamethrower's nozzle glow while it fires (additive): a hot soft
+/// pool at the muzzle and a fainter, larger one part way down the stream,
+/// both flickering off the round clock - the light the stream (the jet
+/// shader and the motes in `fx.rs`) throws on the ground.
 pub fn draw_flame_glow(d: &mut impl RaylibDraw, origin: Position, dir: Vec2, reach: f32, time: f32) {
     let flicker = 0.75 + 0.25 * (time * 47.0).sin();
-    pixel_disc(d, origin, 10.0, Color::new(255, 200, 90, (150.0 * flicker) as u8));
+    let hot = Color::new(255, 200, 90, (150.0 * flicker) as u8);
+    d.draw_circle_gradient(origin.x as i32, origin.y as i32, 12.0, hot, Color::new(255, 200, 90, 0));
     let mid = Position::new(origin.x + dir.x * reach * 0.4, origin.y + dir.y * reach * 0.4);
-    pixel_disc(d, mid, (reach * 0.22).max(6.0), Color::new(255, 120, 40, (70.0 * flicker) as u8));
+    let warm = Color::new(255, 120, 40, (45.0 * flicker) as u8);
+    d.draw_circle_gradient(mid.x as i32, mid.y as i32, (reach * 0.22).max(8.0), warm, Color::new(255, 120, 40, 0));
 }
 
 /// The glow on a hull the flamethrower set alight (additive): a flickering
@@ -109,7 +111,8 @@ pub fn draw_burning_hull_glow(d: &mut impl RaylibDraw, center: Position, time: f
     let phase = (seed_at(center, 29) % 100) as f32 / 100.0 * std::f32::consts::TAU;
     let flicker = 0.7 + 0.3 * (time * 37.0 + phase).sin();
     let dying = (left / tuning().flame_afterburn_seconds.max(0.1)).clamp(0.2, 1.0);
-    pixel_disc(d, center, 12.0 + 8.0 * dying, Color::new(255, 130, 40, (110.0 * flicker * dying) as u8));
+    let c = Color::new(255, 130, 40, (120.0 * flicker * dying) as u8);
+    d.draw_circle_gradient(center.x as i32, center.y as i32, 16.0 + 10.0 * dying, c, Color::new(255, 130, 40, 0));
 }
 
 /// The pulsing glow on a barrel whose fuse is lit (additive, like the
@@ -120,15 +123,15 @@ pub fn draw_fuse_glow(d: &mut impl RaylibDraw, center: Position, time: f32) {
     pixel_disc(d, center, 22.0, Color::new(255, 120, 40, a));
 }
 
-/// The glow of a burning ground cell (an oil pool or a lit trail):
-/// additive like the fuse, flickering at its own hashed phase, dying down
+/// The glow of a burning ground cell (an oil pool or a lit trail): a soft
+/// additive pool of light, flickering at its own hashed phase, dying down
 /// over the last part of `left`.
 pub fn draw_fire_glow(d: &mut impl RaylibDraw, center: Position, time: f32, left: f32) {
     let phase = (seed_at(center, 23) % 100) as f32 / 100.0 * std::f32::consts::TAU;
     let flicker = 0.7 + 0.3 * (time * 31.0 + phase).sin();
     let dying = (left / 0.6).clamp(0.0, 1.0);
-    let a = (255.0 * 0.35 * flicker * dying) as u8;
-    pixel_disc(d, center, 20.0, Color::new(255, 130, 40, a));
+    let a = (255.0 * 0.3 * flicker * dying) as u8;
+    d.draw_circle_gradient(center.x as i32, center.y as i32, 26.0, Color::new(255, 130, 40, a), Color::new(255, 130, 40, 0));
 }
 
 /// A burning ground cell's flames (`Game::fires`): the three-frame loop
@@ -144,12 +147,14 @@ pub fn draw_ground_fire(d: &mut impl RaylibDraw, texture: &Texture2D, center: Po
     let frame = (((time / cadence) as i64 + (seed % FIRE_LOOP_FRAMES as u32) as i64).rem_euclid(FIRE_LOOP_FRAMES as i64)) as i32;
     let flip = if seed & 2 != 0 { -1.0 } else { 1.0 };
     let src = Rectangle::new((FIRE_LOOP_COL + frame) as f32 * cell, SCORCH_ROW as f32 * cell, cell * flip, cell);
-    let size = cell * 2.0;
+    // One and a half cells across: the tongues reach past their own cell
+    // without neighbouring fires fusing into a solid wall.
+    let size = cell * 1.5;
     let dying = (left / 0.6).clamp(0.0, 1.0);
     let catching = ((total - left) / 0.25).clamp(0.0, 1.0);
     let a = (255.0 * dying.min(catching)) as u8;
     // The flames sit in the lower half of the cell art, so the sprite is
     // centred a little above the ground cell and the tongues rise past it.
-    let dest = Rectangle::new(center.x, center.y - 8.0, size, size);
+    let dest = Rectangle::new(center.x, center.y - 6.0, size, size);
     d.draw_texture_pro(texture, src, dest, Vector2::new(size / 2.0, size / 2.0), 0.0, Color::new(255, 255, 255, a));
 }

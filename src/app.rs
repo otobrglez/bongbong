@@ -984,6 +984,16 @@ pub fn run(args: Args) {
         .expect("failed loading eraser texture");
 
     let (mut shock_fx, mut muzzle_fx, mut impact_fx) = load_ripples(&mut rl, &thread, screen_width, screen_height);
+    // The plasma orb and flame jet shaders. A driver that cannot compile
+    // them still plays: the bolt flies as its baked sprite and the stream
+    // is its particles.
+    let mut shot_shaders = match crate::render::shot_shaders::ShotShaders::load(&mut rl, &thread) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            eprintln!("[render] shot shaders unavailable, drawing the plain shots: {e}");
+            None
+        }
+    };
     // The short-lived particle layer lives here rather than on `Game`:
     // it is presentation only, so nothing in the simulation can see it and
     // it is free to use `rand::rng()` (see fx.rs). The web build starts at
@@ -1577,6 +1587,13 @@ pub fn run(args: Args) {
         // `step`'s own frames, or nothing while frozen - and a frozen or
         // dialog frame leaves the clock at zero, so the round resumes on a
         // fresh step rather than catching up on the time it stood still.
+        // How far the particle layer ages this frame: the frame's real
+        // time, except in a dev-server lockstep, where it is the simulated
+        // time the frame's `step` ran - so a frozen round's sparks and hits
+        // freeze with it and a recording stepped a frame at a time plays
+        // them at their real pace.
+        #[cfg_attr(not(all(feature = "dev-tools", not(target_os = "emscripten"))), allow(unused_mut))]
+        let mut fx_dt = dt;
         if session.playing() {
             #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
             let frozen = dev.as_ref().is_some_and(|dev| dev.lockstep());
@@ -1591,7 +1608,11 @@ pub fn run(args: Args) {
             #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
             let advanced = match &mut dev {
                 Some(dev) => {
+                    let before = session.game.frame();
                     dev.advance(&mut session.game, input, steps, width, height, &mut |game| fx.observe_events(game));
+                    if frozen {
+                        fx_dt = session.game.frame().saturating_sub(before) as f32 * PHYSICS_FIXED_DT;
+                    }
                     true
                 }
                 None => false,
@@ -1628,8 +1649,8 @@ pub fn run(args: Args) {
         // world the round is at (its events it read after each step),
         // then ages what is already in flight. Deliberately not inside
         // `Game` - see fx.rs.
-        fx.observe(game, dt);
-        fx.tick(dt);
+        fx.observe(game, fx_dt);
+        fx.tick(fx_dt);
         game.render(
             rl,
             thread,
@@ -1641,6 +1662,7 @@ pub fn run(args: Args) {
                 shock: &mut shock_fx,
                 muzzle: &mut muzzle_fx,
                 impact: &mut impact_fx,
+                shots: shot_shaders.as_mut(),
                 fx: &fx,
                 // No stick over the lobby: the field behind it is frozen
                 // and every press there belongs to the screen.
