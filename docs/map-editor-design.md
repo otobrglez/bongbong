@@ -338,10 +338,10 @@ buttons:
   changes are lost") rather than a modal, if this turns out to bite anyone
   in practice.
 
-No in-editor "new/clear map" button is needed separately from Load, but
-worth adding trivially (clears the canvas without loading a file) since
-it's a few lines once Load exists — starting a map from scratch shouldn't
-require an empty file on disk first.
+`FILE > CLEAR MAP` clears the canvas without loading a file, so starting
+a map from scratch needs no empty file on disk first: every placed object
+goes, the settings, size, theme and name stay, one undo step, not a new
+baseline (docs/game-editor-fusion.md section 7).
 
 ## Map file format
 

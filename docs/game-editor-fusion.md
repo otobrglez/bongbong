@@ -165,7 +165,7 @@ inside the bar.
 | Categories | 240 | 5 x 100 | `WALL`, `PROP`, `GROUND`, `ACTOR`, `PICKUP`. Each button shows its category's *current* tool as its 32 px icon, full-bleed, with the tool's name in 10 px to the right and a caret. Click or tap the icon: select that tool. Click or tap the caret or name: open the list. Mouse wheel over the button: cycle inside the category. The active category is outlined in the accent, like the live weapon slot in play. |
 | Erase | 748 | 40 | The eraser tool: a plain brush that clears cells. Outlined while active. |
 | Undo / Redo | 796 / 840 | 40 each | Dimmed when the stack is empty. |
-| File | 888 | 64 | `FILE ▾`: `LOAD...` on every build; `SAVE` and `SAVE AS...` on native, where a map can be written. |
+| File | 888 | 64 | `FILE ▾`: `LOAD...` and `CLEAR MAP` on every build; `SAVE` and `SAVE AS...` on native, where a map can be written. |
 | Map | 960 | 64 | `MAP ▾`: opens the settings panel (section 9). |
 | Cursor | 1032 | 160 | `col,row` and what is in the cell: the hovered cell with a mouse, the last tapped cell on touch. Dim text. |
 | Play | 1200 | 72 | `PLAY`, in the same slot `BUILD` occupies in play mode. |
@@ -213,7 +213,14 @@ is the first in each list, and the active brush at entry is `WALL / brick`.
   otherwise it behaves as `SAVE AS...`, which prompts for one (letters,
   digits, `-`, `_`). Saved is the new baseline, so the ` *` clears. Both
   rows exist only where `map::saving_available` is true: native. The web
-  menu is `LOAD...` alone; its edits live in memory for the session.
+  menu is `LOAD...` and `CLEAR MAP`; its edits live in memory for the
+  session.
+- `CLEAR MAP` empties the canvas of every placed object - walls, props,
+  trees, ground, actors, gates, pickups - and keeps the map's settings,
+  size, theme and name: a map started from scratch without an empty file
+  on disk first. One undo step, not a new baseline, so the ` *` shows until
+  the empty canvas is saved; no confirmation, undo covers a mistake. An
+  already empty canvas records nothing.
 
 ## 8. Placing, erasing, undo
 
