@@ -30,6 +30,8 @@ pub mod portal;
 pub mod missile;
 pub mod shell;
 pub mod shockwave;
+pub mod shot_fx;
+pub mod shot_shaders;
 pub mod tank;
 pub mod thumbnail;
 pub mod view;

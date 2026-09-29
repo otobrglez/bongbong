@@ -20,7 +20,10 @@ use std::collections::{HashMap, HashSet};
 use rand::RngExt;
 use crate::math::{Color, Vec2};
 
+use crate::bullet::Bullet;
 use crate::obstacle::{Drum, Material};
+use crate::plasma::{Plasma, PlasmaState, PlasmaVariant};
+use crate::shell::{Shell, ShellState};
 use crate::simulation::{Event, Game, HitTarget};
 use crate::tuning::tuning;
 use crate::Position;
@@ -45,9 +48,56 @@ pub enum ParticleKind {
     Trail,
 }
 
+/// Which weapon a hit came from - each has its own burst.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum ImpactKind {
+    Shell,
+    Bullet,
+    Plasma(PlasmaVariant),
+    /// A laser's burn; `true` for the blue beam.
+    Laser(bool),
+}
+
+impl ImpactKind {
+    /// How long this kind of hit plays, from the `shot_fx` knobs.
+    pub fn seconds(self) -> f32 {
+        let t = tuning();
+        match self {
+            ImpactKind::Shell => t.shell_hit_seconds,
+            ImpactKind::Bullet => t.bullet_hit_seconds,
+            ImpactKind::Plasma(_) => t.plasma_hit_seconds,
+            ImpactKind::Laser(_) => t.laser_hit_seconds,
+        }
+    }
+}
+
+/// One hit playing out where a shot landed: kept here, on the particle
+/// layer's own clock, rather than read off the projectile, so it runs
+/// smoothly for as long as it likes - past the projectile's own short
+/// impact frames, and on a replica whose projectiles' timers never run.
+pub struct Impact {
+    pub(crate) pos: Position,
+    /// The way the shot was travelling (a unit vector).
+    pub(crate) dir: Vec2,
+    pub(crate) kind: ImpactKind,
+    pub(crate) age: f32,
+    /// Per-hit variety for the burst's hashed parts.
+    pub(crate) seed: f32,
+}
+
+impl Impact {
+    /// 0 at the hit to 1 as it ends.
+    pub fn progress(&self) -> f32 {
+        (self.age / self.kind.seconds().max(0.01)).clamp(0.0, 1.0)
+    }
+}
+
 pub struct Particle {
     pub(crate) pos: Position,
-    vel: Vec2,
+    /// Only the drawing reads it outside this module: a fast spark is
+    /// drawn with a block of motion blur behind it.
+    #[cfg_attr(not(feature = "render"), allow(dead_code))]
+    pub(crate) vel: Vec2,
     /// Fake height above the ground plane. The game is top-down with no
     /// camera, so this is only a draw-time y-offset - the same trick
     /// `decal::Decal`'s arc uses.
@@ -83,11 +133,32 @@ pub struct Fx {
     /// last laid a trail puff: the trail is laid by distance flown, so it
     /// stays a continuous line at any speed and frame rate.
     trail_last: HashMap<u32, Position>,
+    /// Hits playing out, oldest first (`Impact`).
+    impacts: Vec<Impact>,
+    /// Ids of the shots already seen in their impact frames, so each hit
+    /// is started once.
+    impacts_seen: HashSet<u32>,
 }
 
 impl Fx {
     pub fn live(&self) -> usize {
         self.particles.len()
+    }
+
+    /// Every hit still playing, oldest first, for the renderer.
+    #[cfg(feature = "render")]
+    pub(crate) fn impacts(&self) -> &[Impact] {
+        &self.impacts
+    }
+
+    fn start_impact(&mut self, pos: Position, velocity: Vec2, kind: ImpactKind) {
+        let len = velocity.length();
+        let dir = if len > 0.01 { velocity * (1.0 / len) } else { Vec2::new(0.0, -1.0) };
+        if self.impacts.len() >= MAX_IMPACTS {
+            self.impacts.remove(0);
+        }
+        let seed = rand::rng().random_range(0.0..100.0);
+        self.impacts.push(Impact { pos, dir, kind, age: 0.0, seed });
     }
 
     /// Every live particle, oldest first, for `render::fx::draw`.
@@ -104,6 +175,8 @@ impl Fx {
         self.accum.clear();
         self.wading.clear();
         self.trail_last.clear();
+        self.impacts.clear();
+        self.impacts_seen.clear();
     }
 
     fn push(&mut self, p: Particle) {
@@ -128,24 +201,26 @@ impl Fx {
 
     // ---- emitters ------------------------------------------------------
 
-    /// One mote of the flamethrower's stream: thrown from the nozzle down
-    /// the cone at a speed that carries it to the cone's reach within its
-    /// life, fanned across the half angle, in the fire ramp - white-hot
-    /// near the nozzle, ember-red further out. `along` is where on the
-    /// stream it starts (0 at the nozzle, 1 at the reach): motes seeded
-    /// along the length keep the cone full from the first frame, instead
-    /// of a stream that visibly "arrives".
+    /// One mote of the flamethrower's stream: a droplet of burning fuel
+    /// thrown from the nozzle down the stream at a speed that carries it to
+    /// the reach within its life, in the fire ramp - white-hot near the
+    /// nozzle, ember-red further out. The stream is a jet of liquid, so the
+    /// motes hug its line and fan out only as it blooms: the spread grows
+    /// with the square of how far along they start. `along` is where on
+    /// the stream it starts (0 at the nozzle, 1 at the reach): motes seeded
+    /// along the length keep the stream full from the first frame, instead
+    /// of one that visibly "arrives".
     fn flame_mote(&mut self, jet: &crate::simulation::FlameJet, along: f32) {
         let mut rng = rand::rng();
-        let half = tuning().flame_half_angle_deg.to_radians();
+        let half = tuning().flame_half_angle_deg.to_radians() * (0.15 + 0.55 * along * along);
         let a = jet.dir.y.atan2(jet.dir.x) + rng.random_range(-half..half);
         // Reach the end of the cone in about a third of a second.
         let speed = (jet.reach / 0.3) * rng.random_range(0.6..1.1);
         let start = jet.reach * along;
-        // Seeded across the cone's width at its start point, not only on
-        // the centre line, so the body of the stream is filled rather
-        // than a dotted line that fans out late.
-        let half_w = start * half.tan();
+        // Seeded across part of the stream's width at its start point,
+        // not only on the centre line, so the body is filled rather than a
+        // dotted line.
+        let half_w = start * half.tan() * 0.5;
         let side = rng.random_range(-half_w..=half_w.max(0.01));
         let pos = Position::new(
             jet.origin.x + jet.dir.x * start - jet.dir.y * side,
@@ -196,6 +271,47 @@ impl Fx {
                 kind,
             });
         }
+    }
+
+    /// Like `burst`, but thrown forward: every particle leaves along `dir`
+    /// (a unit vector) turned by up to `half` radians either way - a muzzle
+    /// spitting sparks down the barrel's line, a laser's burn splashing
+    /// back toward the gun.
+    #[allow(clippy::too_many_arguments)]
+    fn cone_burst(&mut self, at: Position, dir: Vec2, half: f32, kind: ParticleKind, n: i32, speed: f32, tints: &[Color]) {
+        if tuning().fx_max_particles <= 0 || n <= 0 {
+            return;
+        }
+        self.burst(at, kind, n, speed, tints);
+        let mut rng = rand::rng();
+        let base = dir.y.atan2(dir.x);
+        // `push` appends and evicts from the front, so the burst is always
+        // the last `n` particles.
+        let from = self.particles.len().saturating_sub(n as usize);
+        for p in &mut self.particles[from..] {
+            let s = p.vel.length();
+            let a = base + rng.random_range(-half..=half);
+            p.vel = Vec2::new(a.cos() * s, a.sin() * s);
+        }
+    }
+
+    /// A glint off a flying shot: one block of light in the shot's own
+    /// colour, loosed backwards and sideways off its path so a bolt sheds a
+    /// glittering wake.
+    fn glint(&mut self, at: Position, back: Vec2, kind: ParticleKind, tint: Color) {
+        let mut rng = rand::rng();
+        let side = Vec2::new(-back.y, back.x) * rng.random_range(-30.0..30.0);
+        self.push(Particle {
+            pos: at,
+            vel: back * rng.random_range(20.0..60.0) + side,
+            z: 0.0,
+            vz: 0.0,
+            age: 0.0,
+            life: tuning().spark_lifetime * rng.random_range(0.8..1.6),
+            size: FX_GRID,
+            tint,
+            kind,
+        });
     }
 
     /// One puff of a missile's smoke trail at `at`, drifting a touch so
@@ -410,10 +526,95 @@ impl Fx {
                         self.burst(Position::new(x, y), ParticleKind::Spark, self.count(16), 150.0, &[SHIELD_T, WHITE_T]);
                         self.burst(Position::new(x, y), ParticleKind::Smoke, self.count(5), 34.0, &[SMOKE_T]);
                     }
+                    // A shot landing on a hull, a frog or the border: a
+                    // shower of hot sparks, a couple of dark flecks of
+                    // armour and a wisp of smoke. Tiles are `tile_chip`'s.
+                    Event::Hit { target: HitTarget::Player { .. } | HitTarget::Enemy { .. } | HitTarget::Frog { .. }, x, y, .. } => {
+                        let at = Position::new(x, y);
+                        self.burst(at, ParticleKind::Spark, self.count(tuning().shot_hit_sparks), 190.0, &[WHITE_T, FIRE_T, EMBER_T]);
+                        self.burst(at, ParticleKind::Chip, self.count(2), 90.0, &[STONE_DK, STONE_MD]);
+                        self.burst(at, ParticleKind::Smoke, self.count(1), 18.0, &[SMOKE_T]);
+                    }
+                    Event::Hit { target: HitTarget::Wall, x, y, .. } => {
+                        let at = Position::new(x, y);
+                        self.burst(at, ParticleKind::Spark, self.count(tuning().shot_hit_sparks / 2), 150.0, &[WHITE_T, FIRE_T]);
+                        self.burst(at, ParticleKind::Dust, self.count(2), 35.0, &[DUST_T]);
+                    }
+                    // A laser's burn: sparks in the beam's colour splashing
+                    // back off whatever stopped it.
+                    Event::LaserBeam { x0, y0, x1, y1, variant, .. } => {
+                        let (dx, dy) = (x0 - x1, y0 - y1);
+                        let len = (dx * dx + dy * dy).sqrt();
+                        if len > 0.5 {
+                            let tint = if variant == "blue" { LASER_BLUE_T } else { LASER_RED_T };
+                            let back = Vec2::new(dx / len, dy / len);
+                            self.start_impact(Position::new(x1, y1), back * -1.0, ImpactKind::Laser(variant == "blue"));
+                            self.cone_burst(Position::new(x1, y1), back, 1.2, ParticleKind::Spark, self.count(tuning().shot_hit_sparks), 170.0, &[tint, WHITE_T]);
+                        }
+                    }
                     _ => {}
                 }
             }
+            self.muzzle_sparks(game);
         }
+    }
+
+    /// Every muzzle flash the frame just lit: sparks spat down the line of
+    /// the shot that left it, and a wisp of gun smoke. The flash itself
+    /// carries no heading, so the shot is looked up - the nearest round
+    /// still at the barrel - and a flash with none near (a missile launch)
+    /// throws its sparks all round. A flamethrower nozzle lights one every
+    /// held frame and has its own stream, so it is left out.
+    fn muzzle_sparks(&mut self, game: &Game) {
+        let n = self.count(tuning().muzzle_sparks);
+        if n <= 0 {
+            return;
+        }
+        let fresh: Vec<Position> = game.muzzle_flashes.iter().filter(|f| f.time == 0.0).map(|f| f.center).collect();
+        for at in fresh {
+            if game.flames().iter().any(|jet| jet.origin.distance_to(at) < 6.0) {
+                continue;
+            }
+            match shot_heading_near(game, at) {
+                Some(dir) => self.cone_burst(at, dir, 0.45, ParticleKind::Spark, n, 220.0, &[WHITE_T, FIRE_T]),
+                None => self.burst(at, ParticleKind::Spark, n, 120.0, &[WHITE_T, FIRE_T]),
+            }
+            self.burst(at, ParticleKind::Smoke, self.count(1), 14.0, &[SMOKE_T]);
+        }
+    }
+
+    /// Start a hit for every shell, bullet and plasma bolt that has just
+    /// reached its impact frames. Watched from the world rather than the
+    /// event log, so a replica - which sees shots, not `Hit` events for
+    /// each - starts the same bursts; keyed by projectile id so a hit
+    /// starts once however many frames its impact state is seen.
+    fn watch_impacts(&mut self, game: &Game) {
+        let mut hits: Vec<(u32, Position, Vec2, ImpactKind)> = Vec::new();
+        let mut live: HashSet<u32> = HashSet::new();
+        for s in game.world.query::<&Shell>().iter() {
+            live.insert(s.id);
+            if matches!(s.state, ShellState::Hit0 | ShellState::Hit1 | ShellState::Hit2) {
+                hits.push((s.id, s.position, s.velocity, ImpactKind::Shell));
+            }
+        }
+        for b in game.world.query::<&Bullet>().iter() {
+            live.insert(b.id);
+            if b.state == crate::bullet::BulletState::Hit {
+                hits.push((b.id, b.position, b.velocity, ImpactKind::Bullet));
+            }
+        }
+        for p in game.world.query::<&Plasma>().iter() {
+            live.insert(p.id);
+            if p.impact_progress().is_some() {
+                hits.push((p.id, p.position, p.velocity, ImpactKind::Plasma(p.variant)));
+            }
+        }
+        for (id, pos, vel, kind) in hits {
+            if self.impacts_seen.insert(id) {
+                self.start_impact(pos, vel, kind);
+            }
+        }
+        self.impacts_seen.retain(|id| live.contains(id));
     }
 
     /// Continuous emitters. These are *states*, not events - a tile is
@@ -429,6 +630,7 @@ impl Fx {
     }
 
     fn sample_world(&mut self, game: &Game, dt: f32) {
+        self.watch_impacts(game);
         // Spray off a wading hull (docs/water.md): a splash the frame it
         // wades in, then droplets at a rate that follows its speed.
         let spray = tuning().water_spray_rate;
@@ -495,10 +697,41 @@ impl Fx {
                     self.flame_mote(jet, along);
                     n += 1;
                 }
+                // Sparks spat off the tip, arcing on past the reach.
+                if self.due(key ^ 0x3c3c, stream_rate * 0.06, dt) {
+                    let tip = Position::new(jet.origin.x + jet.dir.x * jet.reach * 0.8, jet.origin.y + jet.dir.y * jet.reach * 0.8);
+                    self.cone_burst(tip, jet.dir, 0.6, ParticleKind::Spark, 1, 160.0, &[WHITE_T, FIRE_T]);
+                }
                 // Smoke off the far end, where the fire has burnt out.
                 if self.due(key ^ 0x5a5a, stream_rate * 0.12, dt) {
                     let end = Position::new(jet.origin.x + jet.dir.x * jet.reach, jet.origin.y + jet.dir.y * jet.reach);
                     self.burst(end, ParticleKind::Smoke, 1, 16.0, &[SMOKE_T]);
+                }
+            }
+        }
+        // Flying shots shed light: a plasma bolt glitters in its own
+        // colour, a shell throws the odd ember off its tracer.
+        let glint = tuning().shot_trail_glint_rate * tuning().fx_density;
+        if glint > 0.0 {
+            let mut lit: Vec<(u32, Position, Vec2, ParticleKind, Color)> = Vec::new();
+            for plasma in game.world.query::<&Plasma>().iter() {
+                if plasma.state == PlasmaState::Flying {
+                    let tint = match plasma.variant {
+                        PlasmaVariant::Teal => PLASMA_TEAL_T,
+                        PlasmaVariant::Purple => PLASMA_PURPLE_T,
+                    };
+                    lit.push((0x9A5A_0000 ^ plasma.id, plasma.position, back_of(plasma.velocity), ParticleKind::Spark, tint));
+                }
+            }
+            for shell in game.world.query::<&Shell>().iter() {
+                if shell.state == ShellState::Flying {
+                    lit.push((0x5E11_0000 ^ shell.id, shell.position, back_of(shell.velocity), ParticleKind::Ember, FIRE_T));
+                }
+            }
+            for (key, at, back, kind, tint) in lit {
+                let rate = if kind == ParticleKind::Ember { glint * 0.5 } else { glint };
+                if self.due(key, rate, dt) {
+                    self.glint(at, back, kind, tint);
                 }
             }
         }
@@ -618,6 +851,10 @@ impl Fx {
     }
 
     pub fn tick(&mut self, dt: f32) {
+        self.impacts.retain_mut(|i| {
+            i.age += dt;
+            i.age < i.kind.seconds()
+        });
         let t = tuning();
         let (gravity, drag, bounce) = (t.debris_gravity, t.debris_air_drag, t.debris_bounce);
         let (rise, growth) = (t.smoke_rise_speed, t.smoke_growth);
@@ -672,6 +909,36 @@ impl Fx {
     }
 }
 
+/// The unit vector pointing back along `velocity`, or up for a shot at
+/// rest.
+fn back_of(velocity: Vec2) -> Vec2 {
+    let len = velocity.length();
+    if len > 0.01 { velocity * (-1.0 / len) } else { Vec2::new(0.0, 1.0) }
+}
+
+/// The heading of the shell, bullet or plasma bolt nearest `at` within
+/// 28 px - the round a muzzle flash at `at` just let out.
+fn shot_heading_near(game: &Game, at: Position) -> Option<Vec2> {
+    let mut best: Option<(f32, Vec2)> = None;
+    let mut consider = |pos: Position, vel: Vec2| {
+        let d = pos.distance_to(at);
+        let len = vel.length();
+        if d < 28.0 && len > 0.01 && best.is_none_or(|(b, _)| d < b) {
+            best = Some((d, vel * (1.0 / len)));
+        }
+    };
+    for s in game.world.query::<&Shell>().iter() {
+        consider(s.position, s.velocity);
+    }
+    for b in game.world.query::<&Bullet>().iter() {
+        consider(b.position, b.velocity);
+    }
+    for p in game.world.query::<&Plasma>().iter() {
+        consider(p.position, p.velocity);
+    }
+    best.map(|(_, dir)| dir)
+}
+
 /// Every sprite in the game lands on a 2-screen-pixel block (tanks draw a
 /// 32px tile at scale 2, walls bake the same chunkiness into the art - see
 /// CLAUDE.md), so particles have to as well or they read as a different,
@@ -680,6 +947,10 @@ impl Fx {
 /// and colour steps through a short ramp instead of fading an alpha
 /// channel. A pixel-art flame is drawn, not blended.
 pub(crate) const FX_GRID: f32 = 2.0;
+
+/// Hits kept playing at once; a minigun burst into a wall is the case
+/// that reaches it, and the oldest go first.
+const MAX_IMPACTS: usize = 48;
 
 // Particle tints. Deliberately literals rather than a palette import:
 // these are light, not surface, and several are drawn additively where a
@@ -696,6 +967,12 @@ const GLASS_L: Color = Color::new(0x27, 0xD8, 0xC5, 255);
 const GLASS_M: Color = Color::new(0x04, 0xA0, 0xB4, 255);
 const DUST_T: Color = Color::new(0xD8, 0xBF, 0x8E, 255);
 const SMOKE_T: Color = Color::new(0x55, 0x52, 0x4E, 255);
+/// The light colours of the shots themselves, matched to their drawn
+/// glows (`render/laser.rs`, `render/plasma.rs`).
+const LASER_RED_T: Color = Color::new(0xFF, 0x50, 0x46, 255);
+const LASER_BLUE_T: Color = Color::new(0x50, 0x9A, 0xFF, 255);
+const PLASMA_TEAL_T: Color = Color::new(0x28, 0xDC, 0xC8, 255);
+const PLASMA_PURPLE_T: Color = Color::new(0xB0, 0x6A, 0xF0, 255);
 pub(crate) const EMBER_T: Color = Color::new(0xE4, 0x42, 0x19, 255);
 pub(crate) const FIRE_T: Color = Color::new(0xEE, 0xA3, 0x43, 255);
 pub(crate) const WHITE_T: Color = Color::new(0xFF, 0xFF, 0xFF, 255);
