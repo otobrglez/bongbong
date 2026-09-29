@@ -25,15 +25,9 @@ pub enum Mission {
 }
 
 impl Mission {
-    /// The big white text the round opens with.
-    pub fn banner(self) -> &'static str {
-        match self {
-            Mission::Protect => "PROTECT THE FROG!",
-            Mission::Hunt => "HUNT THE FROG!",
-            Mission::Destroy => "DESTROY!",
-        }
-    }
-
+    /// The data spelling: the map file's, the CLI's, the dev server's.
+    /// The word a player reads is `text::mission_title`'s, and the banner
+    /// the round opens with `text::mission_banner`'s.
     pub fn name(self) -> &'static str {
         match self {
             Mission::Protect => "protect",

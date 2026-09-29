@@ -498,21 +498,24 @@
             <canvas id="canvas" tabindex="-1"></canvas>
             <div class="overlay-controls">
                 <button class="fullscreen-toggle" id="fullscreen-toggle" type="button"
-                        title="Play full screen">&#9974; Full screen
+                        title="Play full screen" data-i18n="fullscreen" data-i18n-title="fullscreenTitle">&#9974; Full screen
                 </button>
-                <a class="subscribe-link" href="/subscribe">Subscribe for updates.</a>
+                <a class="subscribe-link" href="/subscribe" data-i18n="subscribe">Subscribe for updates.</a>
             </div>
             <div class="loading" id="loading" role="status" aria-live="polite">
-                <p class="loading-title">Loading&hellip;</p>
+                <p class="loading-title" data-i18n="loading">Loading&hellip;</p>
                 <div class="loading-track">
                     <div class="loading-bar" id="loading-bar"></div>
                 </div>
-                <p class="loading-note" id="loading-note">Fetching the game</p>
+                <p class="loading-note" id="loading-note" data-i18n="fetching">Fetching the game</p>
             </div>
         </div>
         <div class="instructions">
-            <p>Arrows to drive, <kbd>Space</kbd> to fire, <kbd>r</kbd> to restart.</p>
-            <p>Two players: Arrows + <kbd>Space</kbd> for player 1, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> +
+            <!-- The words are src/scripts/strings.ts's, in the language the
+                 game will speak; the English here is what a page with no
+                 script shows. -->
+            <p data-i18n="keysOne">Arrows to drive, <kbd>Space</kbd> to fire, <kbd>r</kbd> to restart.</p>
+            <p data-i18n="keysTwo">Two players: Arrows + <kbd>Space</kbd> for player 1, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> +
                 <kbd>Left Shift</kbd> for player 2.</p>
         </div>
         <details class="tuning" id="tuning" hidden>
@@ -543,7 +546,7 @@
     </div>
     <div class="footer">
         <div>
-            <p>Feedback and suggestions are welcome via <a href="https://github.com/otobrglez">@otobrglez</a>. </p>
+            <p data-i18n="feedback">Feedback and suggestions are welcome via <a href="https://github.com/otobrglez">@otobrglez</a>. </p>
         </div>
     </div>
 </div>

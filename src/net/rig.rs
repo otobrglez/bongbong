@@ -301,7 +301,7 @@ impl Lockstep {
                         apply::snapshot(replica, &snapshot);
                     }
                 }
-                ClientEvent::Refused(message) => self.note = Some(message),
+                ClientEvent::Refused(refusal) => self.note = Some(refusal.to_string()),
                 ClientEvent::Closed(closed) => self.note = Some(closed.reason),
                 ClientEvent::Ended { outcome } => self.ended = Some(outcome),
                 ClientEvent::Started => self.ended = None,

@@ -5,6 +5,8 @@
 // `defer`, which the browser executes after this (module) script, in
 // document order.
 
+import { preparing } from "./strings";
+
 import type { LoadingPanel } from "./loading-panel";
 
 type CType = "number" | "string" | "boolean" | "array" | null;
@@ -42,7 +44,7 @@ export function installModule(
     setStatus: (t) => loading.say(t),
     monitorRunDependencies(left) {
       module.totalDependencies = Math.max(module.totalDependencies || 0, left);
-      loading.say(left ? `Preparing (${module.totalDependencies - left}/${module.totalDependencies})` : "");
+      loading.say(left ? preparing(module.totalDependencies - left, module.totalDependencies) : "");
     },
     onRuntimeInitialized() {
       onReady(module);

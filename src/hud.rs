@@ -39,6 +39,11 @@ use crate::{Rect, MAX_DAMAGE};
 pub const HUD_TEXT_SIZE: i32 = 18;
 /// The small labels over the timed-buff bars (`SPEED`/`SHIELD`/`FROG`).
 pub const HUD_LABEL_SIZE: i32 = 10;
+/// The room a gauge's label (`SPEED`/`SHIELD`/`FROG`) has, in pixels at
+/// `HUD_LABEL_SIZE`: the 40 px gauge slot less a gap to the next label.
+/// `render::hud`'s slot width is pinned to it, and `text_tests` measures
+/// every language's labels against it.
+pub const HUD_GAUGE_LABEL_MAX_PX: i32 = 38;
 /// The version line near the field's bottom-right corner, in the size of
 /// the bar's small labels (`SPEED`/`SHIELD`/`FROG`).
 pub const HUD_VERSION_TEXT_SIZE: i32 = HUD_LABEL_SIZE;
@@ -274,7 +279,9 @@ impl HudModel {
             HudLayout::Compact => other_seats(seats, local_index).into_iter().map(|i| SeatHud::gather(game, i)).collect(),
             _ => Vec::new(),
         };
-        let mut title = game.mission.name().to_ascii_uppercase();
+        // The mission as one word, in the language on screen; the data
+        // name (`Mission::name`) is never shown.
+        let mut title = crate::text::text().get(crate::text::mission_title(game.mission));
         let wave = game.wave_status();
         if let Some(w) = &wave {
             title.push_str(&format!(" {}/{}", w.index, w.total));
@@ -477,10 +484,10 @@ pub struct PlayChrome {
     /// The lobby over a dimmed field (`lobby.rs`), in place of the round
     /// this window is not playing.
     pub lobby: Option<crate::lobby::LobbyView>,
-    /// The words before the end screen's countdown. `None` is the local
-    /// round's "Restarting in", which is what a local round does; an
+    /// The message the end screen counts down with. `None` is the local
+    /// round's `ROUND_RESTARTING`, which is what a local round does; an
     /// online round's counts down to the room's lobby instead.
-    pub countdown_label: Option<&'static str>,
+    pub countdown_label: Option<crate::text::Key>,
 }
 
 /// The online status line's text size and how far in from the field's
@@ -618,7 +625,8 @@ mod hud_tests {
         let panel = Rect::new(0.0, 0.0, crate::DEFAULT_SCREEN_WIDTH as f32, crate::HUD_BAR_HEIGHT as f32);
         let leave = leave_button_rect(panel);
         assert_eq!(leave, mode_button_rect(panel));
-        assert!(leave.width >= "LEAVE".len() as f32 * 11.0, "the label fits its slot");
+        let label = crate::text::Catalogue::new("en").get(crate::text::keys::BUTTON_LEAVE);
+        assert!(leave.width >= crate::text::width(&label, HUD_TEXT_SIZE) as f32, "the label fits its slot");
         assert!(leave.height >= 32.0, "a finger has the whole bar to aim at");
         assert!(leave.x + leave.width <= panel.w);
     }
@@ -633,7 +641,8 @@ mod hud_tests {
         let players = players_button_rect(panel);
         let mode = mode_button_rect(panel);
         assert_eq!(online.height, panel.h);
-        assert!(online.width >= "ONLINE".len() as f32 * 11.0, "the label fits its slot");
+        let label = crate::text::Catalogue::new("en").get(crate::text::keys::BUTTON_ONLINE);
+        assert!(online.width >= crate::text::width(&label, HUD_TEXT_SIZE) as f32, "the label fits its slot");
         assert!(online.x + online.width + PLAYERS_BUTTON_GAP <= players.x);
         assert!(players.x + players.width + PLAYERS_BUTTON_GAP <= mode.x);
         assert!(mode.x + mode.width <= panel.w);

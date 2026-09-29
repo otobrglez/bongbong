@@ -9,6 +9,11 @@ import { installInputShims } from "./input";
 import { installRoom } from "./room";
 import { initTuningPanel } from "./tuning-panel";
 import { installFullscreenToggle } from "./fullscreen";
+import { applyStrings } from "./strings";
+
+// The page's own words first, in the language the game will pick from the
+// same URL and browser list, so nothing around the canvas flashes English.
+applyStrings();
 
 const canvas = document.getElementById("canvas") as HTMLCanvasElement | null;
 const loading = loadingPanel();

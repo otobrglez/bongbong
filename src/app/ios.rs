@@ -36,6 +36,8 @@ unsafe extern "C" {
     fn SDL_SetHint(name: *const c_char, value: *const c_char) -> bool;
     fn SDL_GetWindowSafeArea(window: *mut c_void, rect: *mut SdlRect) -> bool;
     fn SDL_GetWindowSizeInPixels(window: *mut c_void, w: *mut c_int, h: *mut c_int) -> bool;
+    fn SDL_GetPreferredLocales(count: *mut c_int) -> *mut *mut SdlLocale;
+    fn SDL_free(mem: *mut c_void);
     /// glad's entries for glBindFramebuffer/glBindRenderbuffer inside
     /// libraylib.a: raylib was built with glad loading GL ES through
     /// SDL_GL_GetProcAddress, so every rlgl GL call goes through a
@@ -122,6 +124,47 @@ extern "C" fn app_main(_argc: c_int, _argv: *mut *mut c_char) -> c_int {
     }
     super::run(super::Args::parse_from(["bongbong"]));
     0
+}
+
+/// One of SDL's preferred locales: a language and, maybe, a country, both
+/// C strings SDL owns for as long as the array does.
+#[repr(C)]
+struct SdlLocale {
+    language: *const c_char,
+    country: *const c_char,
+}
+
+/// The languages this device prefers, most preferred first, as BCP 47
+/// tags (`sl-SI`, `en`), for `text::choose`. SDL reads iOS's own list;
+/// an SDL that answers nothing leaves the game in English.
+pub fn platform_languages() -> Vec<String> {
+    let mut count: c_int = 0;
+    // SAFETY: SDL allocates one block holding the pointer array and its
+    // strings, valid until `SDL_free`; every entry is read before that.
+    unsafe {
+        let list = SDL_GetPreferredLocales(&mut count);
+        if list.is_null() {
+            return Vec::new();
+        }
+        let mut tags = Vec::new();
+        for i in 0..count.max(0) as usize {
+            let locale = *list.add(i);
+            if locale.is_null() || (*locale).language.is_null() {
+                continue;
+            }
+            let mut tag = std::ffi::CStr::from_ptr((*locale).language).to_string_lossy().into_owned();
+            if !(*locale).country.is_null() {
+                let country = std::ffi::CStr::from_ptr((*locale).country).to_string_lossy();
+                if !country.is_empty() {
+                    tag.push('-');
+                    tag.push_str(&country);
+                }
+            }
+            tags.push(tag);
+        }
+        SDL_free(list as *mut c_void);
+        tags
+    }
 }
 
 /// SDL hints that have to be set before the window exists. The home

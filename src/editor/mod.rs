@@ -280,14 +280,15 @@ pub enum Category {
 impl Category {
     pub const ALL: [Category; 5] = [Category::Wall, Category::Prop, Category::Ground, Category::Actor, Category::Pickup];
 
-    pub fn label(self) -> &'static str {
-        match self {
-            Category::Wall => "WALL",
-            Category::Prop => "PROP",
-            Category::Ground => "GROUND",
-            Category::Actor => "ACTOR",
-            Category::Pickup => "PICKUP",
-        }
+    /// The group's name in the language on screen.
+    pub fn label(self) -> String {
+        crate::text::text().get(match self {
+            Category::Wall => crate::text::keys::CATEGORY_WALL,
+            Category::Prop => crate::text::keys::CATEGORY_PROP,
+            Category::Ground => crate::text::keys::CATEGORY_GROUND,
+            Category::Actor => crate::text::keys::CATEGORY_ACTOR,
+            Category::Pickup => crate::text::keys::CATEGORY_PICKUP,
+        })
     }
 
     pub fn index(self) -> usize {
@@ -444,9 +445,10 @@ impl MapEditor {
         &self.baseline
     }
 
-    /// The map's display name: its file stem, `default`, or `untitled`.
-    pub fn name(&self) -> &str {
-        self.map.name.as_deref().unwrap_or("untitled")
+    /// The map's display name: its file stem, `default`, or the word for
+    /// an unnamed one in the language on screen.
+    pub fn name(&self) -> String {
+        self.map.name.clone().unwrap_or_else(|| crate::text::text().get(crate::text::keys::EDITOR_UNTITLED))
     }
 
     /// Edited since it was seeded or last loaded.
@@ -683,22 +685,23 @@ impl MapEditor {
     /// `map::saving_available` is false on the web. Returns the status
     /// line to show.
     pub fn save(&mut self, name: Option<&str>) -> Result<String, String> {
+        let t = crate::text::text();
         if !map::saving_available() {
-            return Err("saving is not available in this build: edits stay in memory for the session".to_string());
+            return Err(t.get(crate::text::keys::EDITOR_SAVING_UNAVAILABLE));
         }
         let name = match name.map(str::trim).filter(|n| !n.is_empty()) {
             Some(n) => n.to_string(),
-            None => self.map.name.clone().ok_or("the map has no name yet: use SAVE AS")?,
+            None => self.map.name.clone().ok_or_else(|| t.get(crate::text::keys::EDITOR_NO_NAME))?,
         };
         if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
-            return Err(format!("map name {name:?} may only use letters, digits, - and _"));
+            return Err(t.fmt(crate::text::keys::EDITOR_BAD_NAME, &[("name", name.as_str().into())]));
         }
         self.finish_stroke();
         let path = map::maps_dir().join(format!("{name}.toml"));
         self.map.save(&path)?;
         self.map.name = Some(name.clone());
         self.baseline = self.map.clone();
-        let line = format!("saved {name}.toml");
+        let line = t.fmt(crate::text::keys::EDITOR_SAVED, &[("name", name.as_str().into())]);
         self.status = Some(line.clone());
         Ok(line)
     }
@@ -708,7 +711,7 @@ impl MapEditor {
     pub fn load_named(&mut self, name: &str) -> Result<(), String> {
         let map = map::open_map(name)?;
         self.load(map);
-        self.status = Some(format!("loaded {name}"));
+        self.status = Some(crate::text::text().fmt(crate::text::keys::EDITOR_LOADED, &[("name", name.into())]));
         Ok(())
     }
 

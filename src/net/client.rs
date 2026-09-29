@@ -22,7 +22,7 @@ use crate::net::codec::Msg;
 use crate::net::delta::apply_delta;
 use crate::net::rooms::RoomCode;
 use crate::net::transport::{Closed, ConnState, Transport};
-use crate::net::wire::{IntentMsg, Lobby, RosterSeat, RoundOutcome, Snapshot, Welcome};
+use crate::net::wire::{IntentMsg, Lobby, RosterSeat, RoundOutcome, Snapshot, Welcome, Refusal};
 
 /// How many consecutive ticks a press is sent for
 /// (docs/online-coop-prd.md §4.1). The server samples one intent per
@@ -200,9 +200,9 @@ pub enum ClientEvent {
     /// Somebody said something.
     Said { seat: u8, text: String },
     /// The room refused what was asked (a code that names no room, a
-    /// full room, a kick of oneself). The socket stays open unless a
-    /// `Closed` follows.
-    Refused(String),
+    /// full room, a kick of oneself), as a code the caller puts into
+    /// words. The socket stays open unless a `Closed` follows.
+    Refused(Refusal),
     /// The connection ended.
     Closed(Closed),
     /// The answer to a clock probe (`RoomClient::ping`), and the instant
@@ -535,7 +535,7 @@ impl<T: Transport> RoomClient<T> {
                 out.push(ClientEvent::Ended { outcome });
             }
             Msg::Lobby(Lobby::Said { seat, text }) => out.push(ClientEvent::Said { seat, text }),
-            Msg::Lobby(Lobby::Error { message }) => out.push(ClientEvent::Refused(message)),
+            Msg::Lobby(Lobby::Error { refusal }) => out.push(ClientEvent::Refused(refusal)),
             Msg::Welcome(welcome) => {
                 self.seat = Some(welcome.seat);
                 self.merge_roster(&welcome);
@@ -815,9 +815,9 @@ mod tests {
         let mut room = Room { link: room_end, heard: Vec::new() };
         let mut client = RoomClient::join(client_end, Identity::new("x", "tok-x"), "AKKKK");
         frame(&mut room, &mut client);
-        room.lobby(Lobby::Error { message: "no room AKKKK".into() });
+        room.lobby(Lobby::Error { refusal: Refusal::NoSuchRoom { code: "AKKKK".into() } });
         let events = frame(&mut room, &mut client);
-        assert_eq!(events, [ClientEvent::Refused("no room AKKKK".into())]);
+        assert_eq!(events, [ClientEvent::Refused(Refusal::NoSuchRoom { code: "AKKKK".into() })]);
         assert_eq!(client.phase(), &Phase::Greeting, "still connected, still nobody's seat");
         assert_eq!(client.seat(), None);
     }
@@ -921,7 +921,7 @@ mod tests {
         let (mut room, mut client) = room_and_client();
         client.set_silent_after(Duration::from_millis(40));
         frame(&mut room, &mut client);
-        room.lobby(Lobby::Error { message: "said before the ping".into() });
+        room.lobby(Lobby::Error { refusal: Refusal::NotYours });
         std::thread::sleep(Duration::from_millis(5));
         client.ping(1);
         std::thread::sleep(Duration::from_millis(60));
@@ -955,10 +955,10 @@ mod tests {
     fn a_closed_socket_ends_the_client_once_and_after_the_last_words() {
         let (mut room, mut client) = room_and_client();
         frame(&mut room, &mut client);
-        room.lobby(Lobby::Error { message: "the room is draining".into() });
+        room.lobby(Lobby::Error { refusal: Refusal::ServerDraining });
         room.link.close();
         let events = frame(&mut room, &mut client);
-        assert_eq!(events[0], ClientEvent::Refused("the room is draining".into()));
+        assert_eq!(events[0], ClientEvent::Refused(Refusal::ServerDraining));
         assert!(matches!(events[1], ClientEvent::Closed(_)), "the reason arrives before the end");
         assert_eq!(events.len(), 2);
         assert!(matches!(client.phase(), Phase::Closed(_)));

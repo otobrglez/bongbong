@@ -11,6 +11,14 @@
 <dict>
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
+    <!-- The languages the game speaks (src/text.rs, lang/*.ftl): tells iOS
+         to offer a per-app language under Settings > BongBong > Language,
+         which SDL_GetPreferredLocales then reads first. -->
+    <key>CFBundleLocalizations</key>
+    <array>
+        <string>en</string>
+        <string>sl</string>
+    </array>
     <key>CFBundleExecutable</key>
     <string>__EXECUTABLE__</string>
     <key>CFBundleIdentifier</key>

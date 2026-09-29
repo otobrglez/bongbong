@@ -19,6 +19,8 @@
 // box fills the *layout* viewport, the largest one, the browser's bars
 // collapsed, and while a bar shows it covers a strip of that box.
 
+import { t } from "./strings";
+
 export function installFullscreenToggle(): void {
   const game = document.querySelector<HTMLElement>(".game");
   const canvas = document.getElementById("canvas");
@@ -31,7 +33,7 @@ export function installFullscreenToggle(): void {
   const real = () => !!(document.fullscreenElement || document.webkitFullscreenElement);
   const active = () => real() || game.classList.contains("immersive");
   const label = () => {
-    button.innerHTML = active() ? "&#9974; Exit full screen" : "&#9974; Full screen";
+    button.innerHTML = active() ? t("exitFullscreen") : t("fullscreen");
   };
   const fallback = () => {
     game.classList.add("immersive");
