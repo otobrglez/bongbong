@@ -64,7 +64,9 @@ const SLOT_MAP: f32 = 716.0;
 /// FILE and MAP share a width.
 const MAP_BUTTON_W: f32 = 64.0;
 /// How many rows the Load list shows at once (eight fit the 480 px
-/// standard field); the wheel scrolls the rest.
+/// standard field). When there are more maps than that, the last row is a
+/// pager a tap turns (a touch screen has no wheel) and the wheel scrolls
+/// row by row.
 const LOAD_VISIBLE_ROWS: usize = 8;
 const LOAD_PANEL_W: f32 = 360.0;
 /// The icons in the bar and the dropdown rows, the sheets' own 32 px.
@@ -925,6 +927,12 @@ impl MapEditor {
         )
     }
 
+    /// How many maps one page of the Load list shows: every row, or all
+    /// but the last when that row is the pager.
+    fn load_page_rows(entries: usize) -> usize {
+        if entries > LOAD_VISIBLE_ROWS { LOAD_VISIBLE_ROWS - 1 } else { LOAD_VISIBLE_ROWS }
+    }
+
     /// The `index`-th visible row of the Load list.
     fn load_row_rect(panel: Rectangle, index: usize) -> Rectangle {
         Rectangle::new(panel.x, panel.y + index as f32 * EDITOR_DROPDOWN_ROW_H, panel.width, EDITOR_DROPDOWN_ROW_H)
@@ -1108,8 +1116,9 @@ impl MapEditor {
                 }
             }
             Popup::Load { entries, mut scroll } => {
+                let rows = Self::load_page_rows(entries.len());
+                let max = entries.len().saturating_sub(rows);
                 if input.wheel != 0.0 {
-                    let max = entries.len().saturating_sub(LOAD_VISIBLE_ROWS);
                     scroll = if input.wheel < 0.0 { (scroll + 1).min(max) } else { scroll.saturating_sub(1) };
                 }
                 let Some(pointer) = input.pointer.filter(|_| pressed) else {
@@ -1121,10 +1130,17 @@ impl MapEditor {
                     return;
                 }
                 if input.pressed {
+                    // The pager: its left half pages back, its right half on.
+                    let pager = Self::load_row_rect(panel, rows);
+                    if rows < entries.len() && pager.contains(pointer) {
+                        scroll = if pointer.x < pager.x + pager.width / 2.0 { scroll.saturating_sub(rows) } else { (scroll + rows).min(max) };
+                        self.popup = Some(Popup::Load { entries, scroll });
+                        return;
+                    }
                     let picked = entries
                         .iter()
                         .skip(scroll)
-                        .take(LOAD_VISIBLE_ROWS)
+                        .take(rows)
                         .enumerate()
                         .find(|&(i, _)| Self::load_row_rect(panel, i).contains(pointer))
                         .map(|(_, e)| e.name.clone());
@@ -1933,6 +1949,59 @@ mod file_tests {
         assert_eq!(ed.history().undo_depth(), 1);
     }
 
+    /// Where an open Load list is scrolled to.
+    fn load_scroll(ed: &MapEditor) -> Option<usize> {
+        match &ed.popup {
+            Some(Popup::Load { scroll, .. }) => Some(*scroll),
+            _ => None,
+        }
+    }
+
+    /// A touch screen has no wheel: an overflowing Load list turns its last
+    /// row into a pager - a tap on the right half shows the next page, on
+    /// the left half the one before, never past either end - and a row
+    /// picked on a later page loads that page's map.
+    #[test]
+    fn the_load_list_pages_by_touch() {
+        let layout = Layout::for_field(W, H);
+        let mut ed = MapEditor::new(MapFile::new());
+        press(&mut ed, &layout, center(MapEditor::file_rect(&layout)));
+        press(&mut ed, &layout, center(MapEditor::file_row_rect(&layout, 0)));
+        assert_eq!(ed.open_menu(), Some("load"));
+        let entries = map::available_maps();
+        let rows = MapEditor::load_page_rows(entries.len());
+        assert!(map::SHIPPED_MAPS.len() > LOAD_VISIBLE_ROWS && entries.len() > rows, "the shipped maps alone overflow one page");
+        let panel = MapEditor::load_panel_rect(&layout, entries.len());
+        let pager = MapEditor::load_row_rect(panel, rows);
+        assert!(pager.y + pager.height <= panel.y + panel.height + 0.5, "the pager is the panel's last row");
+        let back = Vec2::new(pager.x + 20.0, pager.y + pager.height / 2.0);
+        let next = Vec2::new(pager.x + pager.width - 20.0, pager.y + pager.height / 2.0);
+        press(&mut ed, &layout, back);
+        assert_eq!(load_scroll(&ed), Some(0), "the first page does not page back");
+        press(&mut ed, &layout, next);
+        assert_eq!(load_scroll(&ed), Some(rows));
+        let last = entries.len() - rows;
+        for _ in 0..entries.len() {
+            press(&mut ed, &layout, next);
+        }
+        assert_eq!(load_scroll(&ed), Some(last), "the last page stops at the end");
+        press(&mut ed, &layout, back);
+        assert_eq!(load_scroll(&ed), Some(last.saturating_sub(rows)));
+        // Page back to the start, then on until a shipped map late in the
+        // alphabet is on screen, and pick it.
+        for _ in 0..entries.len() {
+            press(&mut ed, &layout, back);
+        }
+        let target = entries.iter().position(|e| e.name == "waves-basic").expect("waves-basic is always listed");
+        while load_scroll(&ed).is_some_and(|s| target >= s + rows) {
+            press(&mut ed, &layout, next);
+        }
+        let scroll = load_scroll(&ed).expect("the list is still open");
+        press(&mut ed, &layout, center(MapEditor::load_row_rect(panel, target - scroll)));
+        assert_eq!(ed.open_menu(), None);
+        assert_eq!(ed.name(), "waves-basic");
+    }
+
     /// FILE opens its menu; LOAD... opens the list; picking a row loads
     /// that map as the new baseline; a press outside closes the list
     /// without painting.
@@ -1947,7 +2016,8 @@ mod file_tests {
         let entries = map::available_maps();
         let row = entries.iter().position(|e| e.name == "default").expect("default is always listed");
         let panel = MapEditor::load_panel_rect(&layout, entries.len());
-        if row < LOAD_VISIBLE_ROWS {
+        let rows = MapEditor::load_page_rows(entries.len());
+        if row < rows {
             press(&mut ed, &layout, center(MapEditor::load_row_rect(panel, row)));
             assert_eq!(ed.open_menu(), None);
             assert_eq!(ed.name(), "default");
@@ -1957,10 +2027,10 @@ mod file_tests {
         } else {
             // Scroll down until the row is visible, then pick it.
             let wheel = BuilderInput { pointer: Some(center(panel)), wheel: -1.0, ..Default::default() };
-            for _ in 0..(row + 1 - LOAD_VISIBLE_ROWS) {
+            for _ in 0..(row + 1 - rows) {
                 ed.update(&wheel, &layout);
             }
-            press(&mut ed, &layout, center(MapEditor::load_row_rect(panel, LOAD_VISIBLE_ROWS - 1)));
+            press(&mut ed, &layout, center(MapEditor::load_row_rect(panel, rows - 1)));
             assert_eq!(ed.name(), "default");
         }
         // A press outside an open list closes it and paints nothing.

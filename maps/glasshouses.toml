@@ -1,0 +1,220 @@
+# glasshouses - Victorian glasshouses, a lily pond and a formal parterre
+# Hand-authored: re-saving from the map editor would drop these comments.
+# Level tables as dotted keys on purpose - a `[spawn]` header would
+# swallow every `cells.` line after it.
+#
+# Protect on the band plan, five tanks. Two glasshouses of timber-framed glass
+# flank the gardens, each with a door toward the middle and a bed of palms
+# inside; the frog sits by the lily pond at the centre, where the gravel walks
+# meet, and a parterre of box hedges and flower beds fills the south.
+#
+# Glass shatters and timber burns, so the glasshouses are cover only until
+# somebody decides otherwise. Plasma and a shield in the glasshouses, a laser
+# and a minigun under their eaves, health and ammo in the orchard, frog health
+# by the pond, a speed-up on the long walk.
+
+version = 1
+size = [34, 17]
+tanks = 5
+tank = "warden"
+tank2 = "glacier"
+mission.kind = "protect"
+spawn.kind = "band"
+
+cells."17,0" = { kind = "road" }
+cells."13,1" = { kind = "tree" }
+cells."17,1" = { kind = "road" }
+cells."21,1" = { kind = "tree" }
+cells."2,2" = { kind = "wall", material = "wood" }
+cells."3,2" = { kind = "wall", material = "glass" }
+cells."4,2" = { kind = "wall", material = "glass" }
+cells."5,2" = { kind = "wall", material = "glass" }
+cells."6,2" = { kind = "wall", material = "wood" }
+cells."7,2" = { kind = "wall", material = "glass" }
+cells."8,2" = { kind = "wall", material = "glass" }
+cells."9,2" = { kind = "wall", material = "glass" }
+cells."10,2" = { kind = "wall", material = "wood" }
+cells."13,2" = { kind = "pickup", pickup = "health" }
+cells."17,2" = { kind = "road" }
+cells."21,2" = { kind = "pickup", pickup = "ammo" }
+cells."24,2" = { kind = "wall", material = "wood" }
+cells."25,2" = { kind = "wall", material = "glass" }
+cells."26,2" = { kind = "wall", material = "glass" }
+cells."27,2" = { kind = "wall", material = "glass" }
+cells."28,2" = { kind = "wall", material = "wood" }
+cells."29,2" = { kind = "wall", material = "glass" }
+cells."30,2" = { kind = "wall", material = "glass" }
+cells."31,2" = { kind = "wall", material = "glass" }
+cells."32,2" = { kind = "wall", material = "wood" }
+cells."2,3" = { kind = "wall", material = "glass" }
+cells."3,3" = { kind = "tall_grass" }
+cells."4,3" = { kind = "tall_grass" }
+cells."5,3" = { kind = "tall_grass" }
+cells."6,3" = { kind = "tree" }
+cells."7,3" = { kind = "tall_grass" }
+cells."8,3" = { kind = "tall_grass" }
+cells."9,3" = { kind = "tall_grass" }
+cells."10,3" = { kind = "wall", material = "glass" }
+cells."17,3" = { kind = "road" }
+cells."24,3" = { kind = "wall", material = "glass" }
+cells."25,3" = { kind = "tall_grass" }
+cells."26,3" = { kind = "tall_grass" }
+cells."27,3" = { kind = "tall_grass" }
+cells."28,3" = { kind = "tree" }
+cells."29,3" = { kind = "tall_grass" }
+cells."30,3" = { kind = "tall_grass" }
+cells."31,3" = { kind = "tall_grass" }
+cells."32,3" = { kind = "wall", material = "glass" }
+cells."2,4" = { kind = "wall", material = "wood" }
+cells."10,4" = { kind = "wall", material = "wood" }
+cells."13,4" = { kind = "tree" }
+cells."17,4" = { kind = "road" }
+cells."21,4" = { kind = "tree" }
+cells."24,4" = { kind = "wall", material = "wood" }
+cells."32,4" = { kind = "wall", material = "wood" }
+cells."2,5" = { kind = "wall", material = "glass" }
+cells."5,5" = { kind = "pickup", pickup = "plasma" }
+cells."10,5" = { kind = "wall", material = "glass" }
+cells."17,5" = { kind = "road" }
+cells."24,5" = { kind = "wall", material = "glass" }
+cells."29,5" = { kind = "pickup", pickup = "shield" }
+cells."32,5" = { kind = "wall", material = "glass" }
+cells."2,6" = { kind = "wall", material = "glass" }
+cells."3,6" = { kind = "tall_grass" }
+cells."9,6" = { kind = "tall_grass" }
+cells."10,6" = { kind = "wall", material = "glass" }
+cells."24,6" = { kind = "wall", material = "glass" }
+cells."25,6" = { kind = "tall_grass" }
+cells."31,6" = { kind = "tall_grass" }
+cells."32,6" = { kind = "wall", material = "glass" }
+cells."2,7" = { kind = "wall", material = "wood" }
+cells."3,7" = { kind = "wall", material = "glass" }
+cells."4,7" = { kind = "wall", material = "glass" }
+cells."5,7" = { kind = "wall", material = "glass" }
+cells."6,7" = { kind = "wall", material = "wood" }
+cells."10,7" = { kind = "wall", material = "wood" }
+cells."15,7" = { kind = "water" }
+cells."16,7" = { kind = "water" }
+cells."17,7" = { kind = "water" }
+cells."18,7" = { kind = "water" }
+cells."19,7" = { kind = "water" }
+cells."20,7" = { kind = "water" }
+cells."24,7" = { kind = "wall", material = "wood" }
+cells."28,7" = { kind = "wall", material = "wood" }
+cells."29,7" = { kind = "wall", material = "glass" }
+cells."30,7" = { kind = "wall", material = "glass" }
+cells."31,7" = { kind = "wall", material = "glass" }
+cells."32,7" = { kind = "wall", material = "wood" }
+cells."12,8" = { kind = "start" }
+cells."14,8" = { kind = "water" }
+cells."15,8" = { kind = "water" }
+cells."16,8" = { kind = "water" }
+cells."17,8" = { kind = "water" }
+cells."18,8" = { kind = "water" }
+cells."19,8" = { kind = "water" }
+cells."20,8" = { kind = "water" }
+cells."21,8" = { kind = "water" }
+cells."22,8" = { kind = "start2" }
+cells."6,9" = { kind = "pickup", pickup = "laser" }
+cells."11,9" = { kind = "tree" }
+cells."14,9" = { kind = "water" }
+cells."15,9" = { kind = "water" }
+cells."16,9" = { kind = "water" }
+cells."17,9" = { kind = "water" }
+cells."18,9" = { kind = "water" }
+cells."19,9" = { kind = "water" }
+cells."20,9" = { kind = "water" }
+cells."21,9" = { kind = "water" }
+cells."23,9" = { kind = "tree" }
+cells."28,9" = { kind = "pickup", pickup = "minigun" }
+cells."2,10" = { kind = "pine" }
+cells."5,10" = { kind = "pine" }
+cells."15,10" = { kind = "water" }
+cells."16,10" = { kind = "water" }
+cells."17,10" = { kind = "water" }
+cells."18,10" = { kind = "water" }
+cells."19,10" = { kind = "water" }
+cells."20,10" = { kind = "water" }
+cells."29,10" = { kind = "pine" }
+cells."32,10" = { kind = "pine" }
+cells."0,12" = { kind = "road" }
+cells."1,12" = { kind = "road" }
+cells."2,12" = { kind = "road" }
+cells."3,12" = { kind = "road" }
+cells."4,12" = { kind = "road" }
+cells."5,12" = { kind = "road" }
+cells."6,12" = { kind = "road" }
+cells."7,12" = { kind = "road" }
+cells."8,12" = { kind = "pickup", pickup = "speedup" }
+cells."9,12" = { kind = "road" }
+cells."10,12" = { kind = "road" }
+cells."11,12" = { kind = "road" }
+cells."12,12" = { kind = "road" }
+cells."13,12" = { kind = "road" }
+cells."14,12" = { kind = "road" }
+cells."15,12" = { kind = "road" }
+cells."16,12" = { kind = "road" }
+cells."17,12" = { kind = "frog" }
+cells."18,12" = { kind = "road" }
+cells."19,12" = { kind = "road" }
+cells."20,12" = { kind = "road" }
+cells."21,12" = { kind = "road" }
+cells."22,12" = { kind = "road" }
+cells."23,12" = { kind = "road" }
+cells."24,12" = { kind = "road" }
+cells."25,12" = { kind = "road" }
+cells."26,12" = { kind = "road" }
+cells."27,12" = { kind = "road" }
+cells."28,12" = { kind = "road" }
+cells."29,12" = { kind = "road" }
+cells."30,12" = { kind = "road" }
+cells."31,12" = { kind = "road" }
+cells."32,12" = { kind = "road" }
+cells."33,12" = { kind = "road" }
+cells."34,12" = { kind = "road" }
+cells."17,13" = { kind = "road" }
+cells."20,13" = { kind = "pickup", pickup = "frog_health" }
+cells."4,14" = { kind = "pine" }
+cells."5,14" = { kind = "pine" }
+cells."6,14" = { kind = "pine" }
+cells."10,14" = { kind = "pine" }
+cells."11,14" = { kind = "pine" }
+cells."12,14" = { kind = "pine" }
+cells."15,14" = { kind = "wall", material = "wood" }
+cells."17,14" = { kind = "wall", material = "wood" }
+cells."21,14" = { kind = "pine" }
+cells."22,14" = { kind = "pine" }
+cells."23,14" = { kind = "pine" }
+cells."27,14" = { kind = "pine" }
+cells."28,14" = { kind = "pine" }
+cells."29,14" = { kind = "pine" }
+cells."4,15" = { kind = "tall_grass" }
+cells."5,15" = { kind = "tall_grass" }
+cells."6,15" = { kind = "tall_grass" }
+cells."10,15" = { kind = "tall_grass" }
+cells."11,15" = { kind = "tall_grass" }
+cells."12,15" = { kind = "tall_grass" }
+cells."16,15" = { kind = "wall", material = "glass" }
+cells."17,15" = { kind = "road" }
+cells."21,15" = { kind = "tall_grass" }
+cells."22,15" = { kind = "tall_grass" }
+cells."23,15" = { kind = "tall_grass" }
+cells."27,15" = { kind = "tall_grass" }
+cells."28,15" = { kind = "tall_grass" }
+cells."29,15" = { kind = "tall_grass" }
+cells."1,16" = { kind = "pickup", pickup = "health" }
+cells."4,16" = { kind = "tall_grass" }
+cells."5,16" = { kind = "tall_grass" }
+cells."6,16" = { kind = "tall_grass" }
+cells."10,16" = { kind = "tall_grass" }
+cells."11,16" = { kind = "tall_grass" }
+cells."12,16" = { kind = "tall_grass" }
+cells."17,16" = { kind = "road" }
+cells."21,16" = { kind = "tall_grass" }
+cells."22,16" = { kind = "tall_grass" }
+cells."23,16" = { kind = "tall_grass" }
+cells."27,16" = { kind = "tall_grass" }
+cells."28,16" = { kind = "tall_grass" }
+cells."29,16" = { kind = "tall_grass" }
+cells."33,16" = { kind = "pickup", pickup = "ammo" }
+cells."17,17" = { kind = "road" }

@@ -166,13 +166,27 @@ mod tests {
     /// shows - re-baseline consciously after a deliberate art, map or
     /// tuning change, never to go green.
     #[cfg(feature = "render")]
-    const PINNED: [(&str, u64); 6] = [
+    const PINNED: [(&str, u64); 20] = [
         ("default", 0x0144_1552_709b_6595),
         ("default-desert", 0x84de_37cf_aa6e_1aae),
         ("hunt-basic", 0xe569_2a10_47fe_b1a8),
         ("waves-basic", 0x6e02_7f87_d416_2e96),
         ("portals", 0xe2b6_ae87_295e_ec97),
         ("towers", 0x9c96_8b5f_cb1a_f124),
+        ("lotus-lagoon", 0xf7e8_0a42_9b4c_68f9),
+        ("hedge-maze", 0x8d71_f31d_8362_8db5),
+        ("oasis-bazaar", 0xfd12_b24d_dbde_f1a2),
+        ("castle-moat", 0xa053_325c_20bf_c026),
+        ("archipelago", 0xe30b_016d_4a6b_f7ea),
+        ("black-gold", 0x0873_abe9_271a_9315),
+        ("harbor-lights", 0x24c5_978d_f69f_9cec),
+        ("carnival", 0xb66d_7cfa_8b6e_f806),
+        ("jungle-temple", 0xc5b1_5fa5_3595_0a76),
+        ("serpent-river", 0x112f_24e2_fcd2_b595),
+        ("no-mans-land", 0x5f96_5dcb_3f29_144f),
+        ("glasshouses", 0x6c05_fd02_e4a1_e37a),
+        ("scrapyard", 0xdd3f_4daa_bef7_2e98),
+        ("grand-campaign", 0x23ce_8fe4_a248_40ff),
     ];
 
     /// Decoding the sheets is raylib's job, so this and the next test run
@@ -182,6 +196,9 @@ mod tests {
     fn shipped_maps_render_on_the_cpu() {
         quiet_raylib();
         let sheets = load_cpu_sheets().expect("sheets under static/");
+        for (name, _) in SHIPPED_MAPS {
+            assert!(PINNED.iter().any(|(n, _)| n == name), "{name} is shipped but its render is not pinned");
+        }
         let mut report = Vec::new();
         for (name, pinned) in PINNED {
             let map = shipped(name);
