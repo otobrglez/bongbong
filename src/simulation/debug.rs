@@ -996,6 +996,7 @@ impl Game {
                 Owner::Player(_) => 'Q',
                 Owner::Enemy(slot) if slot < 10 => char::from(b'0' + slot as u8),
                 Owner::Enemy(_) => 'E',
+                Owner::Tower { .. } => 'T',
             };
             mark(pos, ch);
         }

@@ -1003,6 +1003,7 @@ pub mod tank;
 pub mod text;
 pub mod thumbnail;
 pub mod touch;
+pub mod tower;
 pub mod track;
 pub mod trig;
 pub mod tuning;

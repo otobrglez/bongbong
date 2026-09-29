@@ -325,6 +325,13 @@ tool-speedup = speed-up
 tool-shield = shield
 tool-flamethrower = flamethrower
 tool-frog_health = frog pack
+tool-tower_pack = tower pack
+tool-tesla = tesla coil
+tool-tesla_enemy = enemy tesla
+tool-gun_tower = gun tower
+tool-gun_tower_enemy = enemy gun
+tool-bio_slush = bio slush
+tool-bio_slush_enemy = enemy slush
 tool-eraser = eraser
 
 # The short spelling for the bar's 10 px line and the cursor readout,
@@ -339,6 +346,13 @@ tool-short-oil_trail = oil
 tool-short-enemy_frog = e.frog
 tool-short-flamethrower = flame
 tool-short-frog_health = frog+
+tool-short-tower_pack = tower+
+tool-short-tesla = tesla
+tool-short-tesla_enemy = e.tsl
+tool-short-gun_tower = gun
+tool-short-gun_tower_enemy = e.gun
+tool-short-bio_slush = bio
+tool-short-bio_slush_enemy = e.bio
 
 ## Data names shown as words. The key is the data spelling (the map
 ## format's, the CLI's), which never changes.

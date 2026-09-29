@@ -10,7 +10,7 @@ precision mediump float;
 // (render/shot_shaders.rs, the impacts `fx.rs` keeps). `t` runs 0..1 over
 // the hit's life; `p` below is the quad in units of its half width, and
 // `dir` is the way the shot was travelling, so debris and spray can fly
-// back toward the shooter the way a real hit splashes. Five looks:
+// back toward the shooter the way a real hit splashes. Six looks:
 //   0 shell  - a white flash, a noisy fireball that cools through yellow,
 //              orange and red into smoke, a thin shock ring, and hot
 //              debris streaks thrown back and to the sides;
@@ -21,8 +21,12 @@ precision mediump float;
 //   3 plasma, arcane (purple) - the same ring, but a vortex collapsing
 //              inward through it and stars left twinkling;
 //   4 laser  - a molten splash: a white-hot core, droplets thrown back
-//              along the beam, a heat bloom in the beam's colour.
-// cA/cB are the shot's own colours for the energy looks.
+//              along the beam, a heat bloom in the beam's colour;
+//   5 ooze   - a bio slush glob bursting flat: a lumpy blob that spreads
+//              and settles with a wet rim and a lit sheen, droplets thrown
+//              all round, a thin splash ring. No white-hot core - it is a
+//              liquid, not a fire.
+// cA/cB are the shot's own colours for the energy looks and the ooze.
 
 varying vec2 fragTexCoord;
 varying vec4 fragColor;
@@ -180,7 +184,7 @@ void main() {
         }
         over(acc, cA, band * (1.0 - t * 0.7));
         over(acc, mix(cA, vec3(1.0), 0.6), (1.0 - smoothstep(0.0, 0.18, t)) * smoothstep(0.3, 0.0, d));
-    } else {
+    } else if (style < 4.5) {
         // --- laser ---
         float glow = smoothstep(0.9, 0.0, d) * (1.0 - t) * 0.55;
         over(acc, cB, glow);
@@ -188,6 +192,27 @@ void main() {
         over(acc, mix(cA, vec3(1.0, 0.9, 0.6), 0.5), drops);
         float core = smoothstep(0.32 * (1.0 - t) + 0.04, 0.0, d);
         over(acc, vec3(1.0, 1.0, 0.95), core);
+    } else {
+        // --- ooze ---
+        // The blob: a lumpy edge that spreads fast then settles, fading
+        // over the last third as the puddle underneath takes over.
+        float sr = 0.22 + 0.4 * easeOut(t * 1.4);
+        float sn = fbm(vec3(cos(ang) * 2.0, sin(ang) * 2.0, seed));
+        float edge = sr * (0.7 + 0.55 * sn);
+        float fade = 1.0 - smoothstep(0.6, 1.0, t);
+        float blob = smoothstep(edge, edge * 0.8, d) * fade;
+        over(acc, cB, blob * 0.85);
+        // A wet rim just inside the edge and a sheen toward the light.
+        float rim = (1.0 - smoothstep(0.0, 0.05, abs(d - edge * 0.86))) * fade;
+        over(acc, cA, rim * 0.7);
+        float sheen = smoothstep(edge * 0.75, 0.0, length(p + vec2(0.12, 0.12) * sr)) * fade;
+        over(acc, mix(cA, vec3(1.0), 0.3), sheen * 0.5);
+        // Droplets thrown all round, and a thin ring of splash.
+        float drops = streaks(p, 12, 3.14159, 0.0, 0.95, 0.12, 0.05);
+        over(acc, cA, drops);
+        float rr = 0.1 + 0.8 * easeOut(t * 2.0);
+        float ring = (1.0 - smoothstep(0.0, 0.03, abs(d - rr))) * (1.0 - clamp(t * 2.0, 0.0, 1.0));
+        over(acc, mix(cA, vec3(1.0), 0.5), ring * 0.5);
     }
 
     gl_FragColor = vec4(acc.rgb, acc.a * fragColor.a);

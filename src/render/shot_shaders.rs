@@ -234,6 +234,10 @@ impl ShotShaders {
                 };
                 (4.0, 30.0, bright, body)
             }
+            // The tesla's strike is the electric plasma ring in the bolt's
+            // violets (`render::tower`), its lightning included.
+            ImpactKind::Tesla => (2.0, 36.0, Color::new(0xe0, 0xcc, 0xff, 255), Color::new(0x9a, 0x66, 0xff, 255)),
+            ImpactKind::Ooze => (5.0, 40.0, crate::tower::OOZE_HI, crate::tower::OOZE_MD),
         };
         let half = half * tuning().hit_fx_scale;
         let l = &self.impact_locs;

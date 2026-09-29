@@ -35,4 +35,5 @@ pub mod shot_fx;
 pub mod shot_shaders;
 pub mod tank;
 pub mod thumbnail;
+pub mod tower;
 pub mod view;
