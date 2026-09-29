@@ -86,7 +86,7 @@ const CLICK_DRAG_STEP_PX: f32 = 8.0;
 /// the builder has frozen.
 pub const GAME_ONLY_TOOLS: &[&str] = &[
     "snapshot", "events", "step", "input", "pause", "resume", "history", "nav_grid", "field", "terrain", "teleport",
-    "set_tank", "kill", "spawn_enemy", "players",
+    "set_tank", "kill", "spawn_enemy", "players", "weather",
 ];
 
 /// The tools that drive the *local* round or the builder, refused while
@@ -207,7 +207,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "map_get",
-        description: "The current map as TOML text (plus name, cell count, default tank count) - edit it and hand it back through `restart {map_toml}`. Format: `version = 1`, optional `tanks = N` (default enemy count), optional `tank = \"titan\"` / `tank2 = \"scout\"` (the players' chassis), optional `theme = \"grass\"|\"desert\"` (the look - ground tileset and tall-grass sheet, grass when absent), and one `cells.\"col,row\"` entry per occupied 32 px grid cell (col/row from 0 at the top-left; the field is the map's optional `size = [cols, rows]`, 34 x 17 = 1088x544 when absent): `{ kind = \"wall\", material = \"brick\"|\"iron\"|\"wood\"|\"glass\" }`, `{ kind = \"sandbag\" }` / `{ kind = \"barrel\" }` / `{ kind = \"fence\" }` (destructible props: shots sometimes pass over sandbags, barrels explode and chain, fences snap; tanks ram all three), `{ kind = \"barrel\", drum = \"oil\"|\"fuel\" }` (a pinned drum kind: oil leaves a burning pool, fuel goes off harder and launches when another blast sets it off; without `drum` the kind is rolled), `{ kind = \"oil\" }` (an oil trail cell: not solid, a fuse on the ground - a blast or a burning neighbour lights it and the fire runs along it, setting off any drum it reaches), `{ kind = \"tree\" }` / `{ kind = \"pine\" }` (destructible trees, solid like a prop but drawn larger than their cell; they often catch fire when killed and a tank can flatten one by driving into it), `{ kind = \"tall_grass\" }` (not solid - cover a tank hides in, enemies cannot shoot what is standing in it), `{ kind = \"road\" }`, `{ kind = \"water\" }` (a river where it is one cell wide, a lake where it is wider; a lake's open middle is deep - hulls cannot enter, shots fly over - and every other water cell is a ford that slows a hull and, in a north-south stream, carries it downstream; fire never lights on water, frogs hop toward it), `{ kind = \"frog\" }` (one), `{ kind = \"start\" }` (player 1, one), `{ kind = \"start2\" }` (player 2, one, optional - placed beside player 1 when absent, as every seat past the second always is), `{ kind = \"pickup\", pickup = \"health\"|\"ammo\"|\"laser\"|\"minigun\"|\"plasma\"|\"missiles\"|\"speedup\"|\"shield\"|\"flamethrower\"|\"frog_health\" }` (missiles are a four-tube pod firing two salvos of four seeker missiles per pull that climb, lock onto the nearest opposing tank and dive on it over any wall; the flamethrower is player-only: enemies drive over its fuel tank; the frog health pack fully heals the collector's own frog and is left on the ground by a tank whose frog is already at full health). Iron is indestructible, the rest can be shot away. Border walls and enemy spawns are added by the game on top.",
+        description: "The current map as TOML text (plus name, cell count, default tank count) - edit it and hand it back through `restart {map_toml}`. Format: `version = 1`, optional `tanks = N` (default enemy count), optional `tank = \"titan\"` / `tank2 = \"scout\"` (the players' chassis), optional `theme = \"grass\"|\"desert\"` (the look - ground tileset and tall-grass sheet, grass when absent), optional `weather = \"night\"` (the sky, presentation only: clear, night, dusk, rain, storm, fog, sandstorm, snow or heat_haze; clear when absent), and one `cells.\"col,row\"` entry per occupied 32 px grid cell (col/row from 0 at the top-left; the field is the map's optional `size = [cols, rows]`, 34 x 17 = 1088x544 when absent): `{ kind = \"wall\", material = \"brick\"|\"iron\"|\"wood\"|\"glass\" }`, `{ kind = \"sandbag\" }` / `{ kind = \"barrel\" }` / `{ kind = \"fence\" }` (destructible props: shots sometimes pass over sandbags, barrels explode and chain, fences snap; tanks ram all three), `{ kind = \"barrel\", drum = \"oil\"|\"fuel\" }` (a pinned drum kind: oil leaves a burning pool, fuel goes off harder and launches when another blast sets it off; without `drum` the kind is rolled), `{ kind = \"oil\" }` (an oil trail cell: not solid, a fuse on the ground - a blast or a burning neighbour lights it and the fire runs along it, setting off any drum it reaches), `{ kind = \"tree\" }` / `{ kind = \"pine\" }` (destructible trees, solid like a prop but drawn larger than their cell; they often catch fire when killed and a tank can flatten one by driving into it), `{ kind = \"tall_grass\" }` (not solid - cover a tank hides in, enemies cannot shoot what is standing in it), `{ kind = \"road\" }`, `{ kind = \"water\" }` (a river where it is one cell wide, a lake where it is wider; a lake's open middle is deep - hulls cannot enter, shots fly over - and every other water cell is a ford that slows a hull and, in a north-south stream, carries it downstream; fire never lights on water, frogs hop toward it), `{ kind = \"frog\" }` (one), `{ kind = \"start\" }` (player 1, one), `{ kind = \"start2\" }` (player 2, one, optional - placed beside player 1 when absent, as every seat past the second always is), `{ kind = \"pickup\", pickup = \"health\"|\"ammo\"|\"laser\"|\"minigun\"|\"plasma\"|\"missiles\"|\"speedup\"|\"shield\"|\"flamethrower\"|\"frog_health\" }` (missiles are a four-tube pod firing two salvos of four seeker missiles per pull that climb, lock onto the nearest opposing tank and dive on it over any wall; the flamethrower is player-only: enemies drive over its fuel tank; the frog health pack fully heals the collector's own frog and is left on the ground by a tank whose frog is already at full health). Iron is indestructible, the rest can be shot away. Border walls and enemy spawns are added by the game on top.",
         schema: NO_PARAMS,
         read_only: true,
         destructive: false,
@@ -333,6 +333,13 @@ pub const TOOLS: &[ToolSpec] = &[
         destructive: false,
     },
     ToolSpec {
+        name: "weather",
+        description: "The sky over the round on screen (docs/weather.md; presentation only - the simulation never reads it). Without `name` reports `in_force` (what is drawn), `map` (the round's map's own `weather` key), `override` (the `weather_override` tuning knob's, null when it follows the map - `--weather` and the web page's `?weather=` set it) and every name. With `name` (clear, night, dusk, rain, storm, fog, sandstorm, snow, heat_haze) sets the round's map key at this frame boundary; it lasts through `restart`s on that map, and the override knob still outranks it. In an online round it changes only this window's replica. The builder's WEATHER row is `builder_settings {weather}`; `map_get`/`restart {map_toml}` carry the key as `weather = \"night\"`.",
+        schema: r#"{"type":"object","properties":{"name":{"type":"string","enum":["clear","night","dusk","rain","storm","fog","sandstorm","snow","heat_haze"],"description":"The sky to draw the round under"}}}"#,
+        read_only: false,
+        destructive: false,
+    },
+    ToolSpec {
         name: "build",
         description: "Press BUILD in play mode: opens the 'Leave this round?' dialog while a round is in progress (the round is frozen until it is answered) and switches to the builder at once on the end screen. `answer: leave` confirms an open dialog and enters build mode; `answer: stay` closes it and keeps playing. A no-op in build mode. Replies like `mode`.",
         schema: r#"{"type":"object","properties":{"answer":{"type":"string","enum":["leave","stay"],"description":"Answer the open leave dialog instead of pressing the button"}}}"#,
@@ -383,8 +390,8 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "builder_settings",
-        description: "The builder's MAP settings - the map file's own level keys: tanks (enemy count 0-31), tank (player 1's chassis name), tank2 (player 2's, two-player rounds), mission (protect|hunt|destroy), spawn (band|waves), waves (1-20), wave_size (1-31), wave_growth (0-10), tier_start/tier_end (light|medium|heavy|super), theme (grass|desert - the look: ground tileset and tall-grass sheet; the canvas redraws in it at once). A field left out is untouched; a field set to null goes back to auto (unset: the game's own roll or the `waves` tuning group; mission/spawn back to protect/band). Each changed field is one undo step, in the order listed. `reset: true` then reverts cells and settings to the baseline (one undoable step). Replies with the current values (null = auto) and `cli_overrides`: which of them a command-line flag (-e, --tank, --mission, ...) or an earlier `restart` parameter overrides at PLAY, so the map's value is not what the round will use.",
-        schema: r#"{"type":"object","properties":{"tanks":{"type":["integer","null"],"minimum":0,"maximum":31},"tank":{"type":["string","null"],"description":"A chassis name, e.g. titan"},"tank2":{"type":["string","null"],"description":"Player 2's chassis name"},"mission":{"type":["string","null"],"enum":["protect","hunt","destroy",null]},"spawn":{"type":["string","null"],"enum":["band","waves",null]},"waves":{"type":["integer","null"],"minimum":1,"maximum":20},"wave_size":{"type":["integer","null"],"minimum":1,"maximum":31},"wave_growth":{"type":["integer","null"],"minimum":0,"maximum":10},"tier_start":{"type":["string","null"],"enum":["light","medium","heavy","super",null]},"tier_end":{"type":["string","null"],"enum":["light","medium","heavy","super",null]},"theme":{"type":["string","null"],"enum":["grass","desert",null],"description":"null = grass, the default"},"reset":{"type":"boolean","default":false,"description":"Revert cells and settings to the baseline"}}}"#,
+        description: "The builder's MAP settings - the map file's own level keys: tanks (enemy count 0-31), tank (player 1's chassis name), tank2 (player 2's, two-player rounds), mission (protect|hunt|destroy), spawn (band|waves), waves (1-20), wave_size (1-31), wave_growth (0-10), tier_start/tier_end (light|medium|heavy|super), theme (grass|desert - the look: ground tileset and tall-grass sheet; the canvas redraws in it at once), weather (clear|night|dusk|rain|storm|fog|sandstorm|snow|heat_haze - the sky the round is drawn under, docs/weather.md; the canvas itself stays clear to edit on). A field left out is untouched; a field set to null goes back to auto (unset: the game's own roll or the `waves` tuning group; mission/spawn back to protect/band). Each changed field is one undo step, in the order listed. `reset: true` then reverts cells and settings to the baseline (one undoable step). Replies with the current values (null = auto) and `cli_overrides`: which of them a command-line flag (-e, --tank, --mission, ...) or an earlier `restart` parameter overrides at PLAY, so the map's value is not what the round will use.",
+        schema: r#"{"type":"object","properties":{"tanks":{"type":["integer","null"],"minimum":0,"maximum":31},"tank":{"type":["string","null"],"description":"A chassis name, e.g. titan"},"tank2":{"type":["string","null"],"description":"Player 2's chassis name"},"mission":{"type":["string","null"],"enum":["protect","hunt","destroy",null]},"spawn":{"type":["string","null"],"enum":["band","waves",null]},"waves":{"type":["integer","null"],"minimum":1,"maximum":20},"wave_size":{"type":["integer","null"],"minimum":1,"maximum":31},"wave_growth":{"type":["integer","null"],"minimum":0,"maximum":10},"tier_start":{"type":["string","null"],"enum":["light","medium","heavy","super",null]},"tier_end":{"type":["string","null"],"enum":["light","medium","heavy","super",null]},"theme":{"type":["string","null"],"enum":["grass","desert",null],"description":"null = grass, the default"},"weather":{"type":["string","null"],"enum":["clear","night","dusk","rain","storm","fog","sandstorm","snow","heat_haze",null],"description":"null = clear, the default"},"reset":{"type":"boolean","default":false,"description":"Revert cells and settings to the baseline"}}}"#,
         read_only: false,
         destructive: false,
     },
@@ -1123,6 +1130,7 @@ impl DevServer {
             "overlays": overlays_json(game),
             "players": game.players.count(),
             "map": map_json(&game.map),
+            "weather": weather_json(game),
             "mode": session.mode().name(),
             "language": crate::text::language(),
             "dialog_open": session.dialog,
@@ -1241,6 +1249,7 @@ impl DevServer {
                 }
             }
             "overlays" => apply_overlays(game, &params).map(|()| overlays_json(game)),
+            "weather" => set_weather(game, &params).map(|()| weather_json(game)),
             "nav_grid" => Ok(json!({ "grid": game.nav_grid_ascii(width, height) })),
             "field" => {
                 let target = match params.get("target").and_then(Value::as_str).unwrap_or("player") {
@@ -2100,6 +2109,7 @@ fn builder_settings(session: &mut Session, params: &Value) -> Result<Value, Stri
     const SPAWNS: &[&str] = &["band", "waves"];
     const TIERS: &[&str] = &["light", "medium", "heavy", "super"];
     const THEMES: &[&str] = &["grass", "desert"];
+    let weathers: Vec<&str> = crate::map::Weather::ALL.iter().map(|w| w.name()).collect();
     let tanks: Vec<&str> = TankKind::ALL.iter().map(|k| k.name()).collect();
 
     let b = &mut session.builder;
@@ -2162,6 +2172,14 @@ fn builder_settings(session: &mut Session, params: &Value) -> Result<Value, Stri
             .transpose()?
             .unwrap_or_default();
         b.apply_settings(s);
+        s = b.settings();
+    }
+    if let Some(v) = str_field(params, "weather")? {
+        s.weather = v
+            .map(|n| parse_or("weather", &n, crate::map::Weather::parse, &weathers))
+            .transpose()?
+            .unwrap_or_default();
+        b.apply_settings(s);
     }
     if params.get("reset").and_then(Value::as_bool).unwrap_or(false) {
         b.reset();
@@ -2187,6 +2205,7 @@ fn settings_json(session: &Session) -> Value {
         "tier_start": s.tier_start.map(Tier::name),
         "tier_end": s.tier_end.map(Tier::name),
         "theme": s.theme.name(),
+        "weather": s.weather.name(),
         "cli_overrides": {
             "tanks": g.enemy_count_override.is_some(),
             "tank": g.player_row_override.is_some(),
@@ -2198,6 +2217,7 @@ fn settings_json(session: &Session) -> Value {
             "wave_growth": g.level_overrides.wave_growth.is_some(),
             "tier_start": g.level_overrides.tier_start.is_some(),
             "tier_end": g.level_overrides.tier_end.is_some(),
+            "weather": crate::tuning::tuning().weather_override >= 0,
         },
     })
 }
@@ -2338,7 +2358,35 @@ fn map_json(map: &MapFile) -> Value {
         "cells": map.cells.len(),
         "tanks": map.tanks,
         "theme": map.theme.name(),
+        "weather": map.weather.name(),
     })
+}
+
+/// The `weather` tool's reply: what is drawn, the map's own key, the
+/// override knob's pick, and every name (docs/weather.md).
+fn weather_json(game: &Game) -> Value {
+    let pick = usize::try_from(crate::tuning::tuning().weather_override).ok().and_then(|i| crate::map::Weather::ALL.get(i).copied());
+    json!({
+        "in_force": game.weather().name(),
+        "map": game.map.weather.name(),
+        "override": pick.map(crate::map::Weather::name),
+        "names": crate::map::Weather::ALL.iter().map(|w| w.name()).collect::<Vec<_>>(),
+    })
+}
+
+/// `weather {name}`: the round's map key, set at this frame boundary.
+fn set_weather(game: &mut Game, params: &Value) -> Result<(), String> {
+    match params.get("name") {
+        None | Some(Value::Null) => Ok(()),
+        Some(Value::String(name)) => {
+            game.map.weather = crate::map::Weather::parse(name).ok_or_else(|| {
+                let names: Vec<&str> = crate::map::Weather::ALL.iter().map(|w| w.name()).collect();
+                format!("unknown weather {name:?}; one of {}", names.join(", "))
+            })?;
+            Ok(())
+        }
+        Some(other) => Err(format!("name must be a weather's name, got {other}")),
+    }
 }
 
 /// `kinds`/`exclude` from `params`: string arrays, both optional.
@@ -2801,6 +2849,42 @@ mod tests {
         let err = rx.recv().unwrap().unwrap_err();
         assert!(err.contains("inspect"), "{err}");
         assert_eq!(game.debug_overlays, Overlays::NONE);
+    }
+
+    /// `weather` reports and sets the round's sky; `status` and `map_get`
+    /// carry it, an unknown name is refused naming the real ones, and the
+    /// builder's row is `builder_settings {weather}`, refused by name there.
+    #[test]
+    fn weather_sets_the_rounds_sky_and_every_reader_reports_it() {
+        let (mut server, tx) = DevServer::headless();
+        let mut game = game(6);
+        let ask = |server: &mut DevServer, game: &mut Session, method: &str, params: Value| {
+            let rx = call(&tx, method, params);
+            server.before_frame(game, W, H);
+            rx.recv().unwrap()
+        };
+        let w = ask(&mut server, &mut game, "weather", json!({})).unwrap();
+        assert_eq!(w["in_force"], "clear", "{w}");
+        assert_eq!(w["override"], Value::Null, "{w}");
+        assert_eq!(w["names"].as_array().unwrap().len(), crate::map::Weather::ALL.len(), "{w}");
+        let w = ask(&mut server, &mut game, "weather", json!({ "name": "storm" })).unwrap();
+        assert_eq!(w["map"], "storm", "{w}");
+        assert_eq!(game.game.map.weather, crate::map::Weather::Storm);
+        let err = ask(&mut server, &mut game, "weather", json!({ "name": "hail" })).unwrap_err();
+        assert!(err.contains("heat_haze"), "{err}");
+        assert_eq!(game.game.map.weather, crate::map::Weather::Storm, "a refused name changes nothing");
+        let status = ask(&mut server, &mut game, "status", json!({})).unwrap();
+        assert_eq!(status["weather"]["in_force"], "storm", "{status}");
+        assert_eq!(status["map"]["weather"], "storm", "{status}");
+        let map = ask(&mut server, &mut game, "map_get", json!({})).unwrap();
+        assert!(map["toml"].as_str().unwrap().contains("weather = \"storm\""), "{map}");
+        let settings = ask(&mut server, &mut game, "builder_settings", json!({ "weather": "fog" })).unwrap();
+        assert_eq!(settings["weather"], "fog", "{settings}");
+        assert_eq!(game.builder.map().weather, crate::map::Weather::Fog);
+        ask(&mut server, &mut game, "build", json!({})).unwrap();
+        ask(&mut server, &mut game, "build", json!({ "answer": "leave" })).unwrap();
+        let err = ask(&mut server, &mut game, "weather", json!({ "name": "rain" })).unwrap_err();
+        assert!(err.contains("play"), "{err}");
     }
 
     /// The windowed loop pays real time out in whole steps and hands the

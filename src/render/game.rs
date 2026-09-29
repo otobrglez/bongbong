@@ -42,6 +42,8 @@ use crate::missile::Missile;
 use crate::render::missile::{draw_missile, draw_missile_exhaust, draw_missile_shadow};
 use crate::render::shell::{draw_shell, draw_shell_light, draw_shell_shadow};
 use crate::render::shot_fx::{at_nozzle, draw_impact_flare, draw_muzzle_flare, ground_light};
+use crate::render::shot_shaders::ShotShaders;
+use crate::render::weather::{Passes, WeatherFrame};
 use crate::render::shockwave::{screen_to_ripple_uv, RippleFx};
 use crate::render::tank::draw_player_label;
 use crate::shell::{Shell, ShellState};
@@ -155,6 +157,9 @@ pub struct Effects<'a> {
     /// `None` flies the baked plasma sprite and draws the flamethrower from
     /// its particles alone.
     pub shots: Option<&'a mut crate::render::shot_shaders::ShotShaders>,
+    /// The weather's light map and passes (`render/weather.rs`,
+    /// docs/weather.md); `None` draws every sky clear.
+    pub weather: Option<&'a mut crate::render::weather::WeatherFx>,
     /// The short-lived particle layer. Owned by `main.rs`, not by `Game`
     /// (see `fx.rs`), and read-only here - `render` never mutates it, the
     /// same contract it has with `Game`.
@@ -170,8 +175,14 @@ impl Game {
     /// block, under every sprite): a soft pool in the shot's colour under
     /// each shell, bullet, plasma orb and missile, along the flamethrower's
     /// stream, where a laser burns, and a flash of it at every muzzle and
-    /// impact - so the floor itself says where the fire is.
-    fn draw_ground_light(&self, d: &mut impl RaylibDraw) {
+    /// impact - so the floor itself says where the fire is. `k` scales the
+    /// lot: 1 by day, less where the weather's light map lights the ground
+    /// around the shots instead (`WeatherFrame::day_light_pools`).
+    fn draw_ground_light(&self, d: &mut impl RaylibDraw, k: f32) {
+        if k <= 0.0 {
+            return;
+        }
+        let ground_light = |d: &mut _, at: Position, radius: f32, color: Color, strength: f32| ground_light(d, at, radius, color, strength * k);
         let warm = Color::new(255, 140, 50, 255);
         for shell in self.world.query::<&Shell>().iter() {
             if shell.state == ShellState::Flying {
@@ -304,228 +315,57 @@ impl Game {
 
         // Pass 1: draw the world (tracks, tanks, shells) into an offscreen
         // render texture, so a shockwave can distort the finished frame as a
-        // whole-screen shader pass in pass 2.
-        rl.draw_texture_mode(thread, scene_target, |mut d| {
-            d.clear_background(Color::WHITE);
-
-            // The field itself is painted through the `Canvas` trait in the
-            // three stages `mapshot` also runs on a CPU canvas (`paint_floor`,
-            // `paint_tiles`, `paint_standing`); between them come the layers
-            // only a live round has - fire, glows, the locate label,
-            // projectiles, blasts, airborne debris, particles - drawn with
-            // raylib directly. A `GpuCanvas` borrows `d` for one statement,
-            // so each stage makes its own.
-            self.paint_floor(&mut GpuCanvas::new(&mut d, textures));
-
-            // Burning ground cells: the flames over the ground, under the
-            // tiles beside them (a burning doorway's walls still stand
-            // over the fire) and under whatever drives through them.
-            for (at, left, total) in self.burning_cells() {
-                draw_ground_fire(&mut d, textures.barrel_explosion, at, self.time, left, total);
-            }
-
-            self.paint_tiles(&mut GpuCanvas::new(&mut d, textures));
-
-            // A barrel whose fuse is lit pulses (additive, so it reads as
-            // light on the drum rather than a disc over it).
-            d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
-                // An active portal glows from below its spiral.
-                if self.portals_active() {
-                    for &at in &self.portals {
-                        draw_portal_glow(&mut bd, at, self.time);
-                    }
-                }
-                for obstacle in self.world.query::<&Obstacle>().iter() {
-                    if obstacle.fuse.is_some() {
-                        draw_fuse_glow(&mut bd, obstacle.position, self.time);
-                    }
-                }
-                for (at, left, _total) in self.burning_cells() {
-                    draw_fire_glow(&mut bd, at, self.time, left);
-                }
-                // The flamethrower's nozzle while it fires: a hot disc at
-                // the muzzle and a fainter one a third of the way out.
-                for jet in self.flames() {
-                    draw_flame_glow(&mut bd, jet.origin, jet.dir, jet.reach, self.time);
-                }
-                // A hull with afterburn on it glows under its embers, so
-                // the state reads between particles too.
-                for (at, left) in self.burning_tanks() {
-                    draw_burning_hull_glow(&mut bd, at, self.time, left);
-                }
-            });
-
-            self.paint_standing(&mut GpuCanvas::new(&mut d, textures), PaintOptions { locate_cue: true });
-
-            // The locate cue's P1..P8 labels, over the grass, the crowd and
-            // the trees - the point is to be found under all of it.
-            if !self.hide_players {
-                for entity in self.players().into_iter().flatten() {
-                    crate::simulation::with_tank(&self.world, entity, |tank| draw_player_label(&mut d, tank, self.time));
-                }
-            }
-
-            // The light the shots throw, under their sprites so each round
-            // sits in its own glow: tracers, halos, the plasma's comet
-            // tail, the laser's bloom (`render/shot_fx.rs`). One additive
-            // block for all of it - a blend switch breaks the batch.
-            let lit = tuning().shot_glow_strength > 0.0;
-            if lit {
-                d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
-                    // Light on the floor first: every shot, burn and flash
-                    // lights the ground around it in its own colour.
-                    self.draw_ground_light(&mut bd);
-                    for shell in self.world.query::<&Shell>().iter() {
-                        draw_shell_light(&mut bd, shell);
-                    }
-                    for bullet in self.world.query::<&Bullet>().iter() {
-                        draw_bullet_light(&mut bd, bullet);
-                    }
-                    for beam in &self.laser_beams {
-                        draw_laser_bloom(&mut bd, beam);
-                    }
+        // whole-screen shader pass in pass 2. Under a sky (docs/weather.md,
+        // render/weather.rs) it runs in stages that ping-pong between
+        // `scene_target` and the weather's own target and always end in
+        // `scene_target`: the field under the light, multiplied by the
+        // light map, then what shines by itself, then the air over it all.
+        let weather = match effects.weather.as_deref_mut() {
+            Some(fx) => fx.begin(rl, thread, self, effects.fx, textures),
+            None => None,
+        };
+        match weather {
+            None => {
+                rl.draw_texture_mode(thread, scene_target, |mut d| {
+                    d.clear_background(Color::WHITE);
+                    self.paint_field_lit(&mut d, textures, None);
+                    self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, 1.0);
                 });
             }
-
-            // Where the shaders loaded, a hit is the burst drawn from the
-            // particle layer's impacts, and the baked impact frames are
-            // left out.
-            let bursts = lit && effects.shots.is_some();
-            for shell in self.world.query::<&Shell>().iter() {
-                if self.shadows_enabled && shell.state == ShellState::Flying {
-                    draw_shell_shadow(&mut d, textures.shells, shell);
-                }
-                let hit = matches!(shell.state, ShellState::Hit0 | ShellState::Hit1 | ShellState::Hit2);
-                if !(bursts && hit) {
-                    draw_shell(&mut d, textures.shells, shell);
-                }
-            }
-
-            // A flying bolt is the shader orb where the shaders loaded; its
-            // muzzle and impact frames stay the baked sprite.
-            let orb = lit && effects.shots.is_some();
-            for plasma in self.world.query::<&Plasma>().iter() {
-                let flying = plasma.state == PlasmaState::Flying;
-                if self.shadows_enabled && flying {
-                    draw_plasma_shadow(&mut d, textures.plasma, plasma, orb);
-                }
-                match effects.shots.as_deref_mut() {
-                    Some(shots) if orb && flying => shots.draw_orb(&mut d, plasma, self.time),
-                    Some(_) if bursts && plasma.impact_progress().is_some() => {}
-                    _ => draw_plasma(&mut d, textures.plasma, plasma),
-                }
-            }
-
-            for bullet in self.world.query::<&Bullet>().iter() {
-                if self.shadows_enabled && bullet.state == BulletState::Flying {
-                    draw_bullet_shadow(&mut d, textures.minigun_bullets, bullet);
-                }
-                if !(bursts && bullet.state == BulletState::Hit) {
-                    draw_bullet(&mut d, textures.minigun_bullets, bullet);
-                }
-            }
-
-            for beam in &self.laser_beams {
-                draw_laser_beam(&mut d, beam);
-            }
-            // Every hit still playing: shell fireballs, bullet sparks,
-            // plasma rings, laser burns.
-            if let Some(shots) = effects.shots.as_deref_mut().filter(|_| bursts) {
-                for impact in effects.fx.impacts() {
-                    shots.draw_impact(&mut d, impact);
-                }
-            }
-
-            // The flamethrower's jet of burning fuel, over the tanks and
-            // under its own flying motes.
-            if let Some(shots) = effects.shots.as_deref_mut().filter(|_| lit) {
-                for (i, jet) in self.flames().iter().enumerate() {
-                    shots.draw_flame(&mut d, jet.origin, jet.dir, jet.reach, self.time, i as f32 * 7.31);
-                }
-            }
-
-            // Over the shots: the flares where they leave the barrel and
-            // where they land, and the burn at each end of a laser. A flamethrower nozzle pushes a muzzle flash every held
-            // frame and has its own glow, so it gets no flare.
-            if lit {
-                let nozzles: Vec<Position> = self.flames().iter().map(|jet| jet.origin).collect();
-                d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
-                    for beam in &self.laser_beams {
-                        draw_laser_flares(&mut bd, beam);
-                    }
-                    for flash in self.muzzle_flashes.iter().filter(|f| !at_nozzle(f.center, &nozzles)) {
-                        draw_muzzle_flare(&mut bd, flash);
-                    }
-                    // The block flare stands in for the hit bursts where
-                    // the shaders did not load.
-                    if !bursts {
-                        for flash in &self.impact_flashes {
-                            draw_impact_flare(&mut bd, flash);
+            Some(frame) => {
+                let (lit_target, mut passes) = effects.weather.as_deref_mut().and_then(|fx| fx.stages()).expect("`begin` readied the targets");
+                let plan = frame.plan;
+                let day_pools = frame.day_light_pools();
+                // Each stage draws into the other buffer from the one before
+                // it, so the last lands in `scene_target`: under light and
+                // sky the first stage starts there, under one of them it
+                // starts in the weather's target.
+                let first_in_scene = plan.lit == plan.sky;
+                {
+                    let first: &mut RenderTexture2D = if first_in_scene { &mut *scene_target } else { &mut *lit_target };
+                    rl.draw_texture_mode(thread, first, |mut d| {
+                        d.clear_background(Color::WHITE);
+                        self.paint_field_lit(&mut d, textures, plan.ground.then_some((&mut passes, &frame)));
+                        if !plan.lit {
+                            self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools);
                         }
-                    }
-                });
-            }
-
-            // Barrel blasts last, so the fireball covers tanks and shots:
-            // the additive bloom first, then the sprite frames oldest
-            // first (a chained blast's flash lands on top of the earlier
-            // fireball and reads as a second detonation).
-            d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
-                for blast in &self.blast_fx {
-                    draw_blast_glow(&mut bd, blast);
+                    });
                 }
-            });
-            for blast in &self.blast_fx {
-                match &blast.cloud {
-                    Some(cloud) => crate::mushroom::draw(&mut GpuCanvas::new(&mut d, textures), cloud, blast.center, blast.time),
-                    None => draw_blast(&mut d, textures.barrel_explosion, blast),
+                if plan.lit {
+                    let (under, to): (&RenderTexture2D, &mut RenderTexture2D) =
+                        if first_in_scene { (&*scene_target, &mut *lit_target) } else { (&*lit_target, &mut *scene_target) };
+                    rl.draw_texture_mode(thread, to, |mut d| {
+                        passes.draw_lit(&mut d, under, &frame);
+                        self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools);
+                    });
+                }
+                if plan.sky {
+                    // Whichever stage came before left the field in the
+                    // weather's target.
+                    rl.draw_texture_mode(thread, scene_target, |mut d| passes.draw_sky(&mut d, lit_target, &frame));
                 }
             }
-
-            // Parts still in the air, last of all: a chunk of hull thrown
-            // off a wreck passes over tanks and shells, not under them.
-            // Their shadows go down first so no piece is drawn over
-            // another's shadow.
-            if self.shadows_enabled {
-                for decal in self.decals.iter().filter(|dc| !dc.landed()) {
-                    draw_decal_shadow(&mut d, decal);
-                }
-            }
-            {
-                let mut c = GpuCanvas::new(&mut d, textures);
-                for decal in self.decals.iter().filter(|dc| !dc.landed()) {
-                    draw_decal(&mut c, decal);
-                }
-                // Launched fuel drums, tumbling over the lot on their way to
-                // where they go off.
-                for drum in &self.flying_drums {
-                    draw_flying_drum(&mut c, drum, self.shadows_enabled);
-                }
-            }
-
-            // Seeker missiles are the highest thing in the air: over the
-            // debris, shadows first so none lands on another missile.
-            if self.shadows_enabled {
-                for missile in self.world.query::<&Missile>().iter() {
-                    draw_missile_shadow(&mut d, textures.missile, missile);
-                }
-            }
-            if lit && self.world.query::<&Missile>().iter().next().is_some() {
-                d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
-                    for missile in self.world.query::<&Missile>().iter() {
-                        draw_missile_exhaust(&mut bd, missile, self.time);
-                    }
-                });
-            }
-            for missile in self.world.query::<&Missile>().iter() {
-                draw_missile(&mut d, textures.missile, missile);
-            }
-
-            // Sparks, chips, dust and smoke over the top of everything in
-            // the scene, but still inside pass 1 so an in-flight shockwave
-            // warps them and the camera shake carries them along.
-            crate::render::fx::draw(effects.fx, &mut d);
-        });
+        }
 
         // If a shockwave is playing, push its current center/time to the shader
         // before the blit below samples through it.
@@ -894,6 +734,249 @@ impl Game {
             }
         });
         crate::render::view::present(rl, thread, composite, view, backdrop);
+    }
+}
+
+impl Game {
+    /// The field as it stands under the light - under daylight, or under
+    /// the weather's light map, which the light pass multiplies it by: the
+    /// floor, the fires on it, the tiles and their glows, and everything
+    /// standing on it. `ground` is the weather's ground pass, drawn in
+    /// place of the bare ground tileset.
+    fn paint_field_lit<D: RaylibDraw>(&self, d: &mut D, textures: &Textures, ground: Option<(&mut Passes, &WeatherFrame)>) {
+        // The field itself is painted through the `Canvas` trait in the
+        // three stages `mapshot` also runs on a CPU canvas (`paint_floor`,
+        // `paint_tiles`, `paint_standing`); between them come the layers
+        // only a live round has - fire, glows, the locate label,
+        // projectiles, blasts, airborne debris, particles - drawn with
+        // raylib directly. A `GpuCanvas` borrows `d` for one statement,
+        // so each stage makes its own. Under weather the ground pass
+        // draws the ground with the sky's mark on it, and the marks lie
+        // over that: tracks in the snow.
+        match ground {
+            Some((passes, frame)) => {
+                passes.draw_ground(d, frame);
+                self.paint_floor_marks(&mut GpuCanvas::new(d, textures));
+            }
+            None => self.paint_floor(&mut GpuCanvas::new(d, textures)),
+        }
+
+        // Burning ground cells: the flames over the ground, under the
+        // tiles beside them (a burning doorway's walls still stand
+        // over the fire) and under whatever drives through them.
+        for (at, left, total) in self.burning_cells() {
+            draw_ground_fire(d, textures.barrel_explosion, at, self.time, left, total);
+        }
+
+        self.paint_tiles(&mut GpuCanvas::new(d, textures));
+
+        // A barrel whose fuse is lit pulses (additive, so it reads as
+        // light on the drum rather than a disc over it).
+        d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+            // An active portal glows from below its spiral.
+            if self.portals_active() {
+                for &at in &self.portals {
+                    draw_portal_glow(&mut bd, at, self.time);
+                }
+            }
+            for obstacle in self.world.query::<&Obstacle>().iter() {
+                if obstacle.fuse.is_some() {
+                    draw_fuse_glow(&mut bd, obstacle.position, self.time);
+                }
+            }
+            for (at, left, _total) in self.burning_cells() {
+                draw_fire_glow(&mut bd, at, self.time, left);
+            }
+            // The flamethrower's nozzle while it fires: a hot disc at
+            // the muzzle and a fainter one a third of the way out.
+            for jet in self.flames() {
+                draw_flame_glow(&mut bd, jet.origin, jet.dir, jet.reach, self.time);
+            }
+            // A hull with afterburn on it glows under its embers, so
+            // the state reads between particles too.
+            for (at, left) in self.burning_tanks() {
+                draw_burning_hull_glow(&mut bd, at, self.time, left);
+            }
+        });
+
+        self.paint_standing(&mut GpuCanvas::new(d, textures), PaintOptions { locate_cue: true });
+    }
+
+    /// What shines by its own light, over the lit field and so as bright
+    /// at night as at noon: the locate labels, the light the shots throw,
+    /// the shots, hits, flames and flares, the blasts, whatever is in the
+    /// air and the particles. `day_pools` scales the daylight's glow pools
+    /// on the ground (`draw_ground_light`), which the light map stands in
+    /// for under a dark sky.
+    fn paint_field_glowing<D: RaylibDraw>(&self, d: &mut D, textures: &Textures, mut shots: Option<&mut ShotShaders>, fx: &crate::fx::Fx, day_pools: f32) {
+        // The locate cue's P1..P8 labels, over the grass, the crowd and
+        // the trees - the point is to be found under all of it.
+        if !self.hide_players {
+            for entity in self.players().into_iter().flatten() {
+                crate::simulation::with_tank(&self.world, entity, |tank| draw_player_label(d, tank, self.time));
+            }
+        }
+
+        // The light the shots throw, under their sprites so each round
+        // sits in its own glow: tracers, halos, the plasma's comet
+        // tail, the laser's bloom (`render/shot_fx.rs`). One additive
+        // block for all of it - a blend switch breaks the batch.
+        let glow = tuning().shot_glow_strength > 0.0;
+        if glow {
+            d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+                // Light on the floor first: every shot, burn and flash
+                // lights the ground around it in its own colour.
+                self.draw_ground_light(&mut bd, day_pools);
+                for shell in self.world.query::<&Shell>().iter() {
+                    draw_shell_light(&mut bd, shell);
+                }
+                for bullet in self.world.query::<&Bullet>().iter() {
+                    draw_bullet_light(&mut bd, bullet);
+                }
+                for beam in &self.laser_beams {
+                    draw_laser_bloom(&mut bd, beam);
+                }
+            });
+        }
+
+        // Where the shaders loaded, a hit is the burst drawn from the
+        // particle layer's impacts, and the baked impact frames are
+        // left out.
+        let bursts = glow && shots.is_some();
+        for shell in self.world.query::<&Shell>().iter() {
+            if self.shadows_enabled && shell.state == ShellState::Flying {
+                draw_shell_shadow(d, textures.shells, shell);
+            }
+            let hit = matches!(shell.state, ShellState::Hit0 | ShellState::Hit1 | ShellState::Hit2);
+            if !(bursts && hit) {
+                draw_shell(d, textures.shells, shell);
+            }
+        }
+
+        // A flying bolt is the shader orb where the shaders loaded; its
+        // muzzle and impact frames stay the baked sprite.
+        let orb = glow && shots.is_some();
+        for plasma in self.world.query::<&Plasma>().iter() {
+            let flying = plasma.state == PlasmaState::Flying;
+            if self.shadows_enabled && flying {
+                draw_plasma_shadow(d, textures.plasma, plasma, orb);
+            }
+            match shots.as_deref_mut() {
+                Some(shots) if orb && flying => shots.draw_orb(d, plasma, self.time),
+                Some(_) if bursts && plasma.impact_progress().is_some() => {}
+                _ => draw_plasma(d, textures.plasma, plasma),
+            }
+        }
+
+        for bullet in self.world.query::<&Bullet>().iter() {
+            if self.shadows_enabled && bullet.state == BulletState::Flying {
+                draw_bullet_shadow(d, textures.minigun_bullets, bullet);
+            }
+            if !(bursts && bullet.state == BulletState::Hit) {
+                draw_bullet(d, textures.minigun_bullets, bullet);
+            }
+        }
+
+        for beam in &self.laser_beams {
+            draw_laser_beam(d, beam);
+        }
+        // Every hit still playing: shell fireballs, bullet sparks,
+        // plasma rings, laser burns.
+        if let Some(shots) = shots.as_deref_mut().filter(|_| bursts) {
+            for impact in fx.impacts() {
+                shots.draw_impact(d, impact);
+            }
+        }
+
+        // The flamethrower's jet of burning fuel, over the tanks and
+        // under its own flying motes.
+        if let Some(shots) = shots.as_deref_mut().filter(|_| glow) {
+            for (i, jet) in self.flames().iter().enumerate() {
+                shots.draw_flame(d, jet.origin, jet.dir, jet.reach, self.time, i as f32 * 7.31);
+            }
+        }
+
+        // Over the shots: the flares where they leave the barrel and
+        // where they land, and the burn at each end of a laser. A flamethrower nozzle pushes a muzzle flash every held
+        // frame and has its own glow, so it gets no flare.
+        if glow {
+            let nozzles: Vec<Position> = self.flames().iter().map(|jet| jet.origin).collect();
+            d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+                for beam in &self.laser_beams {
+                    draw_laser_flares(&mut bd, beam);
+                }
+                for flash in self.muzzle_flashes.iter().filter(|f| !at_nozzle(f.center, &nozzles)) {
+                    draw_muzzle_flare(&mut bd, flash);
+                }
+                // The block flare stands in for the hit bursts where
+                // the shaders did not load.
+                if !bursts {
+                    for flash in &self.impact_flashes {
+                        draw_impact_flare(&mut bd, flash);
+                    }
+                }
+            });
+        }
+
+        // Barrel blasts last, so the fireball covers tanks and shots:
+        // the additive bloom first, then the sprite frames oldest
+        // first (a chained blast's flash lands on top of the earlier
+        // fireball and reads as a second detonation).
+        d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+            for blast in &self.blast_fx {
+                draw_blast_glow(&mut bd, blast);
+            }
+        });
+        for blast in &self.blast_fx {
+            match &blast.cloud {
+                Some(cloud) => crate::mushroom::draw(&mut GpuCanvas::new(d, textures), cloud, blast.center, blast.time),
+                None => draw_blast(d, textures.barrel_explosion, blast),
+            }
+        }
+
+        // Parts still in the air, last of all: a chunk of hull thrown
+        // off a wreck passes over tanks and shells, not under them.
+        // Their shadows go down first so no piece is drawn over
+        // another's shadow.
+        if self.shadows_enabled {
+            for decal in self.decals.iter().filter(|dc| !dc.landed()) {
+                draw_decal_shadow(d, decal);
+            }
+        }
+        {
+            let mut c = GpuCanvas::new(d, textures);
+            for decal in self.decals.iter().filter(|dc| !dc.landed()) {
+                draw_decal(&mut c, decal);
+            }
+            // Launched fuel drums, tumbling over the lot on their way to
+            // where they go off.
+            for drum in &self.flying_drums {
+                draw_flying_drum(&mut c, drum, self.shadows_enabled);
+            }
+        }
+
+        // Seeker missiles are the highest thing in the air: over the
+        // debris, shadows first so none lands on another missile.
+        if self.shadows_enabled {
+            for missile in self.world.query::<&Missile>().iter() {
+                draw_missile_shadow(d, textures.missile, missile);
+            }
+        }
+        if glow && self.world.query::<&Missile>().iter().next().is_some() {
+            d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+                for missile in self.world.query::<&Missile>().iter() {
+                    draw_missile_exhaust(&mut bd, missile, self.time);
+                }
+            });
+        }
+        for missile in self.world.query::<&Missile>().iter() {
+            draw_missile(d, textures.missile, missile);
+        }
+
+        // Sparks, chips, dust and smoke over the top of everything in
+        // the scene, but still inside pass 1 so an in-flight shockwave
+        // warps them and the camera shake carries them along.
+        crate::render::fx::draw(fx, d);
     }
 }
 

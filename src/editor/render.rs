@@ -747,6 +747,7 @@ impl SettingsRow {
             SettingsRow::TierStart => keys::SETTINGS_TIER_START,
             SettingsRow::TierEnd => keys::SETTINGS_TIER_END,
             SettingsRow::Theme => keys::SETTINGS_THEME,
+            SettingsRow::Weather => keys::SETTINGS_WEATHER,
             SettingsRow::Reset => keys::SETTINGS_RESET,
         })
     }
@@ -777,6 +778,7 @@ impl SettingsRow {
             SettingsRow::TierStart => auto_or(s.tier_start.map(|tier| t.named("tier", tier.name()))),
             SettingsRow::TierEnd => auto_or(s.tier_end.map(|tier| t.named("tier", tier.name()))),
             SettingsRow::Theme => t.named("theme", s.theme.name()),
+            SettingsRow::Weather => t.named("weather", s.weather.name()),
             SettingsRow::Reset => String::new(),
         }
     }
@@ -796,6 +798,9 @@ impl SettingsRow {
             SettingsRow::TierEnd => o.tier_end,
             // No CLI flag names a theme: the map is the only source.
             SettingsRow::Theme => false,
+            // `--weather` (and the web page's `?weather=`) is the
+            // `weather_override` knob, which outranks every map's sky.
+            SettingsRow::Weather => crate::tuning::tuning().weather_override >= 0,
             SettingsRow::Reset => false,
         }
     }

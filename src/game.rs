@@ -89,14 +89,28 @@ impl Game {
     /// flat white sheet under `plain_canvas`), tread marks, burn marks,
     /// landed rubble and unlit oil pools - everything lying flat under
     /// whatever stands. First of the three `Canvas` stages `render` and
-    /// `mapshot` share; `paint_field` runs all three.
+    /// `mapshot` share; `paint_field` runs all three. It is `paint_ground`
+    /// then `paint_floor_marks`, the seam the weather's ground pass
+    /// (`render/weather.rs`) draws its snow and puddles in.
     pub fn paint_floor(&self, c: &mut impl Canvas) {
-        // Ground first - the floor everything else sits on. See
-        // ground.rs / docs/GROUND_SPEC.md. `plain_canvas` keeps the
-        // white clear instead.
+        self.paint_ground(c);
+        self.paint_floor_marks(c);
+    }
+
+    /// The ground tileset alone - the floor everything else sits on (see
+    /// ground.rs / docs/GROUND_SPEC.md). `plain_canvas` keeps the white
+    /// clear instead.
+    pub fn paint_ground(&self, c: &mut impl Canvas) {
+        if !self.plain_canvas {
+            crate::ground::draw(c, &self.ground, self.map.theme, self.time);
+        }
+    }
+
+    /// Everything lying flat on the ground: its edge shade, then the marks
+    /// on it.
+    pub fn paint_floor_marks(&self, c: &mut impl Canvas) {
         if !self.plain_canvas {
             let (width, height) = self.map.field_size();
-            crate::ground::draw(c, &self.ground, self.map.theme, self.time);
             crate::ground::draw_edge_shade(c, width.round() as i32, height.round() as i32);
         }
 

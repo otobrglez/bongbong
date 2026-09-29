@@ -284,7 +284,7 @@ fn main() {
             &mut composite_play,
             &view,
             bongbong::math::Color::WHITE,
-            &mut Effects { shock: &mut shock, muzzle: &mut muzzle, impact: &mut impact, shots: None, fx: &fx, touch: None },
+            &mut Effects { shock: &mut shock, muzzle: &mut muzzle, impact: &mut impact, shots: None, weather: None, fx: &fx, touch: None },
             &textures,
             &layout_play,
             &PlayChrome::default(),
