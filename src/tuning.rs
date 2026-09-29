@@ -343,7 +343,9 @@ tunables! {
         /// reads the band as the tank refusing to turn.
         touch_axis_switch_deg: f32 = 50.0 in 45.0 ..= 75.0;
         /// When the round ends (player destroyed, or all enemies destroyed)
-        /// the result is shown for this long, then the game restarts.
+        /// the result is shown for this long, then the game restarts - or,
+        /// on a level, goes on to the next level after a win and plays the
+        /// same one again after a loss.
         restart_delay: f32 = 3.0 in 0.0 ..= 30.0;
     }
 

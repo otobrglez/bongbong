@@ -140,6 +140,7 @@ impl Game {
                     let entered = !self.flame_contacts.contains(&entity);
                     tank.take_damage(d, MAX_DAMAGE);
                     tank.mark_hit();
+                    tank.credit(jet.owner);
                     tank.burn_timer = t.flame_afterburn_seconds;
                     (tank.is_wreck(), tank.position, tank.owner(), entered)
                 };

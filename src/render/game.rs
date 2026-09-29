@@ -23,6 +23,7 @@ use crate::hud::{
 };
 use crate::math::{Color, Rectangle};
 use crate::obstacle::{draw_flying_drum, Obstacle};
+use crate::render::level_select::draw_level_select;
 use crate::render::lobby::{draw_lobby, draw_online_button};
 use crate::pickup::PickupKind;
 use crate::plasma::{Plasma, PlasmaState};
@@ -33,7 +34,7 @@ use crate::render::decal::draw_decal_shadow;
 use crate::render::frog::FrogVariantTextures;
 use crate::render::hud::{
     draw_bar, draw_leave_button, draw_leave_dialog, draw_mode_button, draw_players_button, draw_players_dialog,
-    draw_restart_button,
+    draw_restart_button, draw_result,
 };
 use crate::render::laser::{draw_laser_beam, draw_laser_bloom, draw_laser_flares};
 use crate::render::plasma::{draw_plasma, draw_plasma_shadow};
@@ -280,14 +281,15 @@ impl Game {
             Outcome::Lost => Some((t.get(keys::ROUND_LOST), Color::MAROON)),
         };
         // Opening mission banner: solid while the round is frozen behind
-        // it, then fading over INTRO_FADE_SECONDS once play starts.
+        // it, then fading over INTRO_FADE_SECONDS once play starts - and
+        // gone once the round is decided, whose screen it would ghost.
         let intro = {
             let alpha = if self.intro_timer > 0.0 {
                 1.0
             } else {
                 (self.intro_fade / crate::simulation::INTRO_FADE_SECONDS).clamp(0.0, 1.0)
             };
-            (alpha > 0.0).then(|| {
+            (alpha > 0.0 && self.outcome == Outcome::Playing).then(|| {
                 let text = t.get(crate::text::mission_banner(self.mission));
                 let size = 72;
                 let w = rl.measure_text(&text, size);
@@ -656,27 +658,45 @@ impl Game {
                     HUD_VERSION_COLOR,
                 );
 
-                // End-of-round banner over a dimming overlay.
+                // End-of-round banner over a dimming overlay. A local round
+                // stacks its numbers and a level's buttons under it
+                // (`hud::result_layout`); an online one counts down to the
+                // room's lobby.
                 if let Some((title, color, title_size, title_w, sub, sub_size, sub_w)) = &banner {
                     d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(0, 0, 0, 120));
                     let cx = screen_width / 2;
                     let cy = screen_height / 2;
-                    d.draw_text(
-                        title,
-                        cx - title_w / 2,
-                        cy - title_size,
-                        *title_size,
-                        *color,
-                    );
-                    d.draw_text(sub, cx - sub_w / 2, cy + 20, *sub_size, Color::RAYWHITE);
+                    match &chrome.result {
+                        Some(view) => {
+                            let rows = crate::hud::result_layout(layout.field, view);
+                            d.draw_text(title, cx - title_w / 2, rows.title_y as i32, *title_size, *color);
+                            draw_result(&mut d, layout.field, view, sub);
+                        }
+                        None => {
+                            d.draw_text(title, cx - title_w / 2, cy - title_size, *title_size, *color);
+                            d.draw_text(sub, cx - sub_w / 2, cy + 20, *sub_size, Color::RAYWHITE);
+                        }
+                    }
                 }
 
                 // Mission banner: big white text over a dim overlay that both
-                // fade together once the round unfreezes.
+                // fade together once the round unfreezes. A level adds its
+                // number above and its title below, at half the size.
                 if let Some((text, size, w, alpha)) = &intro {
                     let a = |max: f32| (max * alpha) as u8;
                     d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(0, 0, 0, a(120.0)));
                     d.draw_text(text, screen_width / 2 - w / 2, screen_height / 2 - size / 2, *size, Color::new(255, 255, 255, a(255.0)));
+                    if let Some(level) = &chrome.level {
+                        use crate::hud::{LEVEL_NUMBER_SIZE, LEVEL_TITLE_SIZE};
+                        let number = t.fmt(keys::LEVEL_NUMBER, &[("n", level.number.into()), ("count", level.count.into())]);
+                        let number_w = crate::text::width(&number, LEVEL_NUMBER_SIZE);
+                        let number_y = screen_height / 2 - size / 2 - 14 - LEVEL_NUMBER_SIZE;
+                        let amber = Color::new(BUILD_COLOR.r, BUILD_COLOR.g, BUILD_COLOR.b, a(255.0));
+                        d.draw_text(&number, screen_width / 2 - number_w / 2, number_y, LEVEL_NUMBER_SIZE, amber);
+                        let title_w = crate::text::width(&level.title, LEVEL_TITLE_SIZE);
+                        let title_y = screen_height / 2 + size / 2 + 14;
+                        d.draw_text(&level.title, screen_width / 2 - title_w / 2, title_y, LEVEL_TITLE_SIZE, Color::new(255, 255, 255, a(255.0)));
+                    }
                 }
                 if let Some((text, size, w)) = &wave_banner {
                     d.draw_text(text, screen_width / 2 - w / 2, screen_height / 2 - size / 2, *size, Color::RAYWHITE);
@@ -715,11 +735,16 @@ impl Game {
                 if let Some(lobby) = &chrome.lobby {
                     draw_lobby(&mut d, layout.field, lobby, textures);
                 }
+                // The level select (level_select.rs), with its own dim,
+                // over a round that stands still behind it.
+                if let Some(levels) = &chrome.levels {
+                    draw_level_select(&mut d, layout.field, levels);
+                }
             });
 
             // The HUD bar, in window space, over anything the field pass
             // might have put on its edge.
-            draw_bar(&mut d, layout.panel, &hud, textures);
+            draw_bar(&mut d, layout.panel, &hud, textures, chrome.level_button.map(|n| (n, chrome.levels.is_some())));
             if chrome.players_button {
                 draw_players_button(&mut d, layout.panel, self.players, chrome.players_dialog);
             }

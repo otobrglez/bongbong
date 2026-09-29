@@ -447,6 +447,11 @@ pub struct Tank {
     /// (`flame_afterburn_seconds`); `flame_afterburn_dps` a second while
     /// positive. Set, never added to, so re-contact resets it.
     pub burn_timer: f32,
+    /// The seat whose shot, beam, flame, missile or ram last damaged this
+    /// tank: who its wreck is credited to on the end screen
+    /// (`Game::round_stats`). `None` until a seat touches it, and always on
+    /// a seat's own tank.
+    pub last_hit_by: Option<u8>,
     /// Seconds of wet tread marks left after wading (docs/water.md):
     /// refreshed every frame the hull is in water, counted down by
     /// `tick_timers`, read by `lay_tracks`.
@@ -623,6 +628,7 @@ impl Default for Tank {
             flame_fuel: 0.0,
             flame_held: false,
             burn_timer: 0.0,
+            last_hit_by: None,
             slime_timer: 0.0,
             wet_timer: 0.0,
             laser_variant: LaserVariant::Red,
@@ -1247,6 +1253,17 @@ impl Tank {
     /// ring shows/refreshes for another `health_ring_hit_seconds`.
     pub fn mark_hit(&mut self) {
         self.hit_flash_timer = tuning().health_ring_hit_seconds;
+    }
+
+    /// `by` has just damaged this tank: a seat's hit on an enemy makes
+    /// that seat the one its wreck is credited to (`last_hit_by`). An
+    /// enemy's hit, or any hit on a seat, credits nobody.
+    pub fn credit(&mut self, by: Owner) {
+        if let Owner::Player(seat) = by
+            && !self.owner.is_player()
+        {
+            self.last_hit_by = Some(seat);
+        }
     }
 
     /// Decide this tank's rotation and commanded velocity for one frame.
@@ -2343,5 +2360,28 @@ mod chassis_tests {
             let back: TankKind = serde_json::from_str(&json).expect("round-trips");
             assert_eq!(back, kind);
         }
+    }
+}
+
+#[cfg(test)]
+mod credit_tests {
+    use super::*;
+
+    /// A seat's hit on an enemy is that seat's to be credited with; an
+    /// enemy's hit credits nobody, and neither does any hit on a seat.
+    #[test]
+    fn only_a_seats_hit_on_an_enemy_is_credited() {
+        let mut enemy = Tank { owner: Owner::Enemy(3), ..Tank::default() };
+        enemy.credit(Owner::Enemy(4));
+        assert_eq!(enemy.last_hit_by, None);
+        enemy.credit(Owner::Player(1));
+        assert_eq!(enemy.last_hit_by, Some(1));
+        enemy.credit(Owner::Player(0));
+        assert_eq!(enemy.last_hit_by, Some(0), "the last seat to hit it");
+        enemy.credit(Owner::Enemy(4));
+        assert_eq!(enemy.last_hit_by, Some(0), "an enemy's hit leaves the credit where it was");
+        let mut seat = Tank { owner: Owner::Player(1), ..Tank::default() };
+        seat.credit(Owner::Player(0));
+        assert_eq!(seat.last_hit_by, None);
     }
 }

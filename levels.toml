@@ -1,0 +1,70 @@
+# The levels, in the order they are played (docs/levels.md). Winning a
+# level opens the next one; losing plays the same one again; winning the
+# last comes back round to the first.
+#
+# `map` names a map by its file stem under maps/, and it has to be one of
+# `map::SHIPPED_MAPS`: the web build and the phones carry only those. A
+# desktop build reads maps/<map>.toml first, so a level saved from the
+# builder is the one played next time. `title` is shown under the mission
+# banner when the level opens, written as it is drawn; its translations
+# are the `level-<map>` messages in lang/*.ftl.
+#
+# Progress is remembered by map name, so reordering this list keeps the
+# furthest level a player has reached. The file is compiled in, and a
+# test holds every entry to a shipped map.
+
+[[level]]
+map = "lotus-lagoon"
+title = "Lotus Lagoon"
+
+[[level]]
+map = "glasshouses"
+title = "Glasshouse Gardens"
+
+[[level]]
+map = "oasis-bazaar"
+title = "Oasis Bazaar"
+
+[[level]]
+map = "carnival"
+title = "Carnival"
+
+[[level]]
+map = "jungle-temple"
+title = "Jungle Temple"
+
+[[level]]
+map = "hedge-maze"
+title = "Hedge Maze"
+
+[[level]]
+map = "archipelago"
+title = "Archipelago"
+
+[[level]]
+map = "harbor-lights"
+title = "Harbor Lights"
+
+[[level]]
+map = "serpent-river"
+title = "Serpent River"
+
+[[level]]
+map = "no-mans-land"
+title = "No Man's Land"
+
+[[level]]
+map = "scrapyard"
+title = "Scrapyard"
+
+[[level]]
+map = "black-gold"
+title = "Black Gold"
+
+[[level]]
+map = "castle-moat"
+title = "Castle Moat"
+
+[[level]]
+map = "grand-campaign"
+title = "Grand Campaign"

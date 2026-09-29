@@ -677,9 +677,12 @@ pub fn maps_dir() -> PathBuf {
 }
 
 /// The maps compiled into the binary, by name: the default battlefields,
-/// the two mission fixtures and the portal map. They are what the web build can offer its
-/// Load list, since nothing outside `static/` ships in the wasm, and they
-/// stand in on native for a checkout without a `maps/` directory.
+/// the two mission fixtures, the portal map, then the hand-authored levels
+/// (each file's header says how it plays). They are what the web build can
+/// offer its Load list, since nothing outside `static/` ships in the wasm,
+/// what the online lobby's map stepper walks, in this order, and what the
+/// room server can open; they stand in on native for a checkout without a
+/// `maps/` directory.
 pub const SHIPPED_MAPS: &[(&str, &str)] = &[
     ("default", include_str!("../maps/default.toml")),
     ("default-desert", include_str!("../maps/default-desert.toml")),
@@ -687,6 +690,20 @@ pub const SHIPPED_MAPS: &[(&str, &str)] = &[
     ("waves-basic", include_str!("../maps/missions/waves-basic.toml")),
     ("portals", include_str!("../maps/portals.toml")),
     ("towers", include_str!("../maps/towers.toml")),
+    ("lotus-lagoon", include_str!("../maps/lotus-lagoon.toml")),
+    ("hedge-maze", include_str!("../maps/hedge-maze.toml")),
+    ("oasis-bazaar", include_str!("../maps/oasis-bazaar.toml")),
+    ("castle-moat", include_str!("../maps/castle-moat.toml")),
+    ("archipelago", include_str!("../maps/archipelago.toml")),
+    ("black-gold", include_str!("../maps/black-gold.toml")),
+    ("harbor-lights", include_str!("../maps/harbor-lights.toml")),
+    ("carnival", include_str!("../maps/carnival.toml")),
+    ("jungle-temple", include_str!("../maps/jungle-temple.toml")),
+    ("serpent-river", include_str!("../maps/serpent-river.toml")),
+    ("no-mans-land", include_str!("../maps/no-mans-land.toml")),
+    ("glasshouses", include_str!("../maps/glasshouses.toml")),
+    ("scrapyard", include_str!("../maps/scrapyard.toml")),
+    ("grand-campaign", include_str!("../maps/grand-campaign.toml")),
 ];
 
 /// Whether this build can write a map to disk: native yes; web and iOS no

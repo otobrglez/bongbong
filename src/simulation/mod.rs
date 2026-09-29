@@ -298,6 +298,24 @@ pub enum Outcome {
     Lost,
 }
 
+/// What a round's end screen reports (docs/levels.md): how long it was
+/// played and how many enemies went down, and to whom.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+pub struct RoundStats {
+    /// Seconds of play: the round clock (`Game::time`, which stands still
+    /// behind the mission banner and while paused) when the round ended,
+    /// or now while it runs.
+    pub seconds: f32,
+    /// Enemy tanks wrecked this round, by anyone or anything.
+    pub destroyed: u32,
+    /// Every enemy the round brings: the band, or all of its waves.
+    pub enemies: u32,
+    /// Of `destroyed`, the ones each seat dealt the last damage to
+    /// (`Tank::last_hit_by`). A wreck no seat touched - a drum, a fire, a
+    /// frog's bite - counts for the team alone.
+    pub by_seat: [u32; MAX_SEATS],
+}
+
 /// One thing that happened during a frame, for tooling (the dev server's
 /// event feed, headless tests): appended by the phase that caused it and
 /// readable through `Game::events` until the next `update` clears it.
@@ -667,8 +685,23 @@ pub struct Game {
     /// Seconds since the round started; drives animation. Read by `render`.
     pub(crate) time: f32,
     pub(crate) outcome: Outcome,
-    /// Seconds until the automatic restart once the round has ended.
+    /// Seconds until the automatic restart once the round has ended - or,
+    /// on a held end screen, until the caller takes over.
     pub(crate) restart_timer: f32,
+    /// The end screen's countdown runs out into a hold instead of a
+    /// restart: `restart_timer` counts `restart_delay` down to zero and
+    /// stays there until the caller starts the next round (`init`, or the
+    /// R key's restart). A level's end screen is held, because where it
+    /// goes - the next level or the same one again - is the session's to
+    /// decide (docs/levels.md). A setting, kept across restarts.
+    pub hold_end_screen: bool,
+    /// The round clock when the round ended (`end_round`), for
+    /// `round_stats`; `None` while it runs.
+    ended_at: Option<f32>,
+    /// Enemy wrecks this round, and the ones credited to each seat
+    /// (`credit_wreck`).
+    enemies_destroyed: u32,
+    wrecks_by_seat: [u32; MAX_SEATS],
     /// Shared enemy "last known player position", refreshed every frame any
     /// enemy has the player within ENEMY_VIEW_RANGE and cleared once
     /// `alert_timer` runs out - see `ai::Ai::think`'s `alert` parameter.
@@ -1036,6 +1069,9 @@ impl Game {
         self.time = 0.0;
         self.outcome = Outcome::Playing;
         self.restart_timer = 0.0;
+        self.ended_at = None;
+        self.enemies_destroyed = 0;
+        self.wrecks_by_seat = [0; MAX_SEATS];
         // The R-key restart is allowed while paused; a new round must not
         // start frozen.
         self.paused = false;
@@ -1578,11 +1614,15 @@ impl Game {
             self.tick_grass(f.dt);
             self.explosions(&mut f, false);
             self.cleanup_done();
-            self.restart_timer -= dt;
-            if self.restart_timer <= 0.0 {
-                self.finish_frame(f);
-                self.init(width, height);
-                return;
+            if self.hold_end_screen {
+                self.restart_timer = (self.restart_timer - dt).max(0.0);
+            } else {
+                self.restart_timer -= dt;
+                if self.restart_timer <= 0.0 {
+                    self.finish_frame(f);
+                    self.init(width, height);
+                    return;
+                }
             }
         }
         self.hit_history.record(&self.world, self.frame);
@@ -3559,6 +3599,7 @@ impl Game {
             while i < f.kills.len() {
                 let (center, victim) = f.kills[i];
                 i += 1;
+                self.credit_wreck(victim);
                 f.events.push(Event::Wreck { slot: victim.slot(), x: center.x, y: center.y });
                 self.wreck_fx(f, center);
                 self.apply_explosion(f, center, victim);
@@ -3568,6 +3609,20 @@ impl Game {
                 j += 1;
                 self.apply_blast(f, blast, live);
             }
+        }
+    }
+
+    /// Count a wreck for `round_stats`: an enemy's goes to the round's
+    /// total, and to the seat that last damaged it, if any did. A tank is
+    /// wrecked once (see `explosions`), so it is counted once.
+    fn credit_wreck(&mut self, victim: Owner) {
+        if victim.is_player() {
+            return;
+        }
+        self.enemies_destroyed += 1;
+        let by = self.world.query::<&Tank>().iter().find(|t| t.owner() == victim).and_then(|t| t.last_hit_by);
+        if let Some(count) = by.and_then(|seat| self.wrecks_by_seat.get_mut(seat as usize)) {
+            *count += 1;
         }
     }
 
@@ -3688,6 +3743,7 @@ impl Game {
 
     fn end_round(&mut self, f: &mut Frame, outcome: Outcome) {
         self.outcome = outcome;
+        self.ended_at = Some(self.time);
         self.restart_timer = tuning().restart_delay;
         f.events.push(Event::RoundEnded { outcome });
     }
@@ -3893,6 +3949,21 @@ impl Game {
 
     pub fn outcome(&self) -> Outcome {
         self.outcome
+    }
+
+    /// The round's time and wreck count so far - the end screen's
+    /// numbers once `outcome` is decided.
+    pub fn round_stats(&self) -> RoundStats {
+        let enemies = match self.spawn_plan {
+            SpawnPlan::Band { .. } => self.band_enemy_count as u32,
+            SpawnPlan::Waves { waves, .. } => (0..waves).map(|i| self.spawn_plan.wave_size(i)).sum(),
+        };
+        RoundStats {
+            seconds: self.ended_at.unwrap_or(self.time),
+            destroyed: self.enemies_destroyed,
+            enemies,
+            by_seat: self.wrecks_by_seat,
+        }
     }
 
     /// `update` calls so far this round (see the `frame` field).
@@ -5527,6 +5598,121 @@ mod mechanics_tests {
         game.debug_kill(slot).unwrap();
         step(&mut game, Input::default());
         assert_eq!(game.outcome(), Outcome::Won);
+    }
+
+    /// A destroy round of `enemies` on the open map, two seats.
+    fn two_seat_destroy_round(enemies: usize) -> Game {
+        let mut game = Game::default();
+        game.enemy_count_override = Some(enemies);
+        game.seed_override = Some(7);
+        game.players = PlayerCount::TWO;
+        game.level_overrides.mission = Some(Mission::Destroy);
+        game.map = MapFile::from_toml_str(OPEN_MAP).expect("test map parses");
+        game.init(W, H);
+        game
+    }
+
+    fn enemy_slots(game: &Game) -> Vec<usize> {
+        let mut slots: Vec<usize> = game.world.query::<&Tank>().with::<&Ai>().iter().map(|t| t.owner_slot()).collect();
+        slots.sort_unstable();
+        slots
+    }
+
+    /// The end screen's numbers: a seat's shell that finishes an enemy is
+    /// that seat's wreck, a wreck no seat touched counts for the team
+    /// alone, and the round clock stops when the round ends.
+    #[test]
+    fn round_stats_count_the_wrecks_and_credit_the_seat_that_shot() {
+        let mut game = two_seat_destroy_round(2);
+        let slots = enemy_slots(&game);
+        assert_eq!(game.round_stats(), RoundStats { seconds: 0.0, destroyed: 0, enemies: 2, by_seat: [0; MAX_SEATS] });
+
+        // Player 2's shell, point blank into an enemy one hit finishes.
+        let target = slots[0];
+        let at = Position::new(400.0, 300.0);
+        game.debug_teleport(target, at, Some(0.0)).expect("the enemy exists");
+        for tank in game.world.query::<&mut Tank>().with::<&Ai>().iter() {
+            if tank.owner_slot() == target {
+                tank.damage = MAX_DAMAGE - 0.5;
+                tank.shield_hp = 0.0;
+            }
+        }
+        let shooter = Tank { position: Position::new(at.x, at.y - 80.0), rotation: 180.0, ..Tank::default() };
+        game.world.spawn((Shell::spawn(&shooter, Owner::Player(1), 0.0, 0.0),));
+        let wrecked = |game: &Game| game.world.query::<&Tank>().iter().any(|t| t.owner_slot() == target && t.is_wreck());
+        for _ in 0..60 {
+            step(&mut game, Input::default());
+            if wrecked(&game) {
+                break;
+            }
+        }
+        assert!(wrecked(&game), "the shell finished the enemy");
+        let stats = game.round_stats();
+        assert_eq!((stats.destroyed, stats.by_seat[0], stats.by_seat[1]), (1, 0, 1), "player 2's wreck");
+        assert_eq!(game.outcome(), Outcome::Playing);
+
+        // The other goes down to nobody's shot.
+        game.debug_kill(slots[1]).expect("the enemy exists");
+        step(&mut game, Input::default());
+        assert_eq!(game.outcome(), Outcome::Won);
+        let stats = game.round_stats();
+        assert_eq!((stats.destroyed, stats.enemies, stats.by_seat[0], stats.by_seat[1]), (2, 2, 0, 1));
+        assert!(stats.seconds > 0.0);
+        for _ in 0..30 {
+            step(&mut game, Input::default());
+        }
+        assert_eq!(game.round_stats().seconds, stats.seconds, "the clock stopped with the round");
+    }
+
+    /// A wave round's enemies are every wave's tanks, counted before a
+    /// single one has rolled in.
+    #[test]
+    fn a_wave_rounds_enemy_total_is_every_wave() {
+        let mut game = Game::default();
+        game.seed_override = Some(7);
+        game.level_overrides.spawn = Some(crate::level::SpawnKind::Waves);
+        game.level_overrides.waves = Some(3);
+        game.level_overrides.wave_size = Some(2);
+        game.level_overrides.wave_growth = Some(1);
+        game.map = MapFile::from_toml_str(OPEN_MAP).expect("test map parses");
+        game.init(W, H);
+        assert_eq!(game.round_stats().enemies, 2 + 3 + 4);
+    }
+
+    /// A held end screen counts down like any other and then waits at
+    /// zero: the round stays over long past `restart_delay` until the
+    /// caller starts the next one; not held, it restarts on its own as it
+    /// always has.
+    #[test]
+    fn a_held_end_screen_counts_down_and_waits_for_the_caller() {
+        for hold in [false, true] {
+            let mut game = two_seat_destroy_round(1);
+            game.hold_end_screen = hold;
+            let slot = enemy_slots(&game)[0];
+            game.debug_kill(slot).expect("the enemy exists");
+            step(&mut game, Input::default());
+            assert_eq!(game.outcome(), Outcome::Won);
+            let full = game.restart_countdown();
+            step(&mut game, Input::default());
+            assert!(game.restart_countdown() < full, "hold {hold}: the countdown runs");
+            let frames = (tuning().restart_delay * 60.0).ceil() as usize + 60;
+            for _ in 0..frames {
+                step(&mut game, Input::default());
+            }
+            let expected = if hold { Outcome::Won } else { Outcome::Playing };
+            assert_eq!(game.outcome(), expected, "hold {hold}");
+            if hold {
+                assert_eq!(game.restart_countdown(), 0.0, "held at zero, never below");
+            }
+            // The R key is the caller too: it starts the next round, and
+            // the setting outlives it.
+            let mut restart = Input::default();
+            restart.restart_pressed = true;
+            step(&mut game, restart);
+            assert_eq!(game.outcome(), Outcome::Playing);
+            assert_eq!(game.round_stats().destroyed, 0, "a new round counts from nothing");
+            assert_eq!(game.hold_end_screen, hold);
+        }
     }
 
     /// `tanks = 0` is a sandbox: no enemy ever spawns and the round does
