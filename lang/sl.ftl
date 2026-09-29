@@ -240,7 +240,7 @@ tier-medium = srednji
 tier-heavy = težki
 tier-super = super
 
-tank-scout = scout
+tank-scout = skavt
 tank-assault = assault
 tank-breaker = breaker
 tank-longbow = longbow
