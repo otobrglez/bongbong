@@ -1,4 +1,4 @@
-# glasshouse-gardens - Victorian glasshouses, a lily pond and a formal parterre
+# glasshouses - Victorian glasshouses, a lily pond and a formal parterre
 # Hand-authored: re-saving from the map editor would drop these comments.
 # Level tables as dotted keys on purpose - a `[spawn]` header would
 # swallow every `cells.` line after it.

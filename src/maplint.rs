@@ -1117,7 +1117,24 @@ mod map_lint_tests {
     /// Maps the game actually ships/loads by default - gated by
     /// `supported_maps_no_new_errors` against `KNOWN_ERROR_BUDGET` below.
     /// Grow this list as maps graduate from scratch to shipped.
-    const SUPPORTED_MAPS: &[&str] = &["maps/default.toml", "maps/default-desert.toml"];
+    const SUPPORTED_MAPS: &[&str] = &[
+        "maps/default.toml",
+        "maps/default-desert.toml",
+        "maps/lotus-lagoon.toml",
+        "maps/hedge-maze.toml",
+        "maps/oasis-bazaar.toml",
+        "maps/castle-moat.toml",
+        "maps/archipelago.toml",
+        "maps/black-gold.toml",
+        "maps/harbor-lights.toml",
+        "maps/carnival.toml",
+        "maps/jungle-temple.toml",
+        "maps/serpent-river.toml",
+        "maps/no-mans-land.toml",
+        "maps/glasshouses.toml",
+        "maps/scrapyard.toml",
+        "maps/grand-campaign.toml",
+    ];
 
     /// Real, recorded map debt in the supported maps: `Error` *kinds* the
     /// linter is right about but that predate it (found the day it landed

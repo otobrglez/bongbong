@@ -390,7 +390,8 @@ impl MapEditor {
             d.draw_text(&text().get(keys::EDITOR_NO_MAPS), panel.x as i32 + 16, panel.y as i32 + 15, HUD_TEXT_SIZE, DIM);
             return;
         }
-        for (i, entry) in entries.iter().skip(scroll).take(LOAD_VISIBLE_ROWS).enumerate() {
+        let rows = Self::load_page_rows(entries.len());
+        for (i, entry) in entries.iter().skip(scroll).take(rows).enumerate() {
             let row = Self::load_row_rect(panel, i);
             let text_y = (row.y + (row.height - HUD_TEXT_SIZE as f32) / 2.0) as i32;
             d.draw_text(&fit_text(&entry.name, LOAD_PANEL_W - 120.0, HUD_TEXT_SIZE), row.x as i32 + 16, text_y, HUD_TEXT_SIZE, TEXT);
@@ -398,12 +399,21 @@ impl MapEditor {
                 d.draw_text(&text().get(keys::EDITOR_SHIPPED), (row.x + row.width - 80.0) as i32, text_y, HUD_TEXT_SIZE, DIM);
             }
         }
-        if entries.len() > LOAD_VISIBLE_ROWS {
+        if entries.len() > rows {
+            // The pager: `<` at the left end, `>` at the right, each dim at
+            // its own end of the list, and the span on screen between them.
+            let pager = Self::load_row_rect(panel, rows);
+            let last = entries.len() - rows;
+            let arrow_y = (pager.y + (pager.height - HUD_TEXT_SIZE as f32) / 2.0) as i32;
+            d.draw_text("<", pager.x as i32 + 16, arrow_y, HUD_TEXT_SIZE, if scroll > 0 { TEXT } else { DIM });
+            let right = pager.x + pager.width - 16.0 - text_width(">", HUD_TEXT_SIZE);
+            d.draw_text(">", right as i32, arrow_y, HUD_TEXT_SIZE, if scroll < last { TEXT } else { DIM });
             let hint = text().fmt(
                 keys::EDITOR_PAGE,
-                &[("from", (scroll + 1).into()), ("to", (scroll + LOAD_VISIBLE_ROWS).min(entries.len()).into()), ("n", entries.len().into())],
+                &[("from", (scroll + 1).into()), ("to", (scroll + rows).min(entries.len()).into()), ("n", entries.len().into())],
             );
-            d.draw_text(&hint, panel.x as i32 + 16, (panel.y + panel.height - 14.0) as i32, HUD_LABEL_SIZE, DIM);
+            let hint_x = pager.x + (pager.width - text_width(&hint, HUD_LABEL_SIZE)) / 2.0;
+            d.draw_text(&hint, hint_x as i32, (pager.y + (pager.height - HUD_LABEL_SIZE as f32) / 2.0) as i32, HUD_LABEL_SIZE, DIM);
         }
     }
 
