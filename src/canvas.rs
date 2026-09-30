@@ -204,6 +204,37 @@ pub trait Canvas {
     /// the true annulus and ignores it.
     #[allow(clippy::too_many_arguments)]
     fn ring(&mut self, center: Position, inner: f32, outer: f32, start_deg: f32, end_deg: f32, segments: i32, color: Color);
+    /// A baked [`BlockImage`] laid over the field from its top-left
+    /// corner, each texel a `block` x `block` square, alpha-blended. The
+    /// GPU draws the texture its owner uploaded for the image's `stamp`
+    /// in one call (`render::canvas::BlockTexture`) and nothing when that
+    /// upload is missing or stale.
+    fn blocks(&mut self, image: &BlockImage);
+}
+
+/// A small RGBA image drawn over the field at a whole-block scale: a floor
+/// layer baked once (`ground::GroundGrid::shade`) rather than computed per
+/// frame. Row-major, `width` x `height` texels, each covering `block` x
+/// `block` field pixels from (0, 0). `stamp` names one bake, so a GPU copy
+/// can tell whether it is the one to draw.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BlockImage {
+    pub width: usize,
+    pub height: usize,
+    pub block: i32,
+    pub texels: Vec<Color>,
+    pub stamp: u64,
+}
+
+impl BlockImage {
+    /// The texel covering field pixel (x, y), if the image covers it.
+    pub fn at_pixel(&self, x: i32, y: i32) -> Option<Color> {
+        if x < 0 || y < 0 || self.block <= 0 {
+            return None;
+        }
+        let (bx, by) = ((x / self.block) as usize, (y / self.block) as usize);
+        (bx < self.width && by < self.height).then(|| self.texels[by * self.width + bx])
+    }
 }
 
 /// A decoded sprite sheet: RGBA pixels, row-major.
@@ -411,6 +442,21 @@ impl Canvas for CpuCanvas {
         for py in y0..y1 {
             for px in x0..x1 {
                 self.blend(px, py, color);
+            }
+        }
+    }
+
+    fn blocks(&mut self, image: &BlockImage) {
+        let b = image.block;
+        if b <= 0 {
+            return;
+        }
+        for by in 0..image.height {
+            for bx in 0..image.width {
+                let texel = image.texels[by * image.width + bx];
+                if texel.a > 0 {
+                    self.fill_rect(bx as i32 * b, by as i32 * b, b, b, texel);
+                }
             }
         }
     }

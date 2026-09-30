@@ -113,11 +113,18 @@ pub struct Textures<'a> {
     pub pickup_tower_pack: &'a Texture2D,
     /// static/portal_sheet.png - the turning spiral (portal.rs).
     pub portal: &'a Texture2D,
+    /// The round's floor shade as `app.rs` uploaded it before the frame
+    /// (`render::canvas::BlockTexture`), with the stamp it was baked under.
+    pub shade: Option<(u64, &'a Texture2D)>,
 }
 
 /// The game's `Sheet` lookup: what a `GpuCanvas` over these textures blits
 /// from. Every sheet the field can name is here.
 impl Sheets for Textures<'_> {
+    fn blocks_texture(&self, stamp: u64) -> Option<&Texture2D> {
+        self.shade.filter(|(held, _)| *held == stamp).map(|(_, texture)| texture)
+    }
+
     fn texture(&self, sheet: Sheet) -> &Texture2D {
         match sheet {
             // `app.rs` picks `ground`/`grass` from the round's map theme

@@ -1,5 +1,5 @@
 //! The field as a picture, painted over `canvas::Canvas`: the three stages
-//! any canvas can run - `paint_floor` (ground, edge shade, tracks,
+//! any canvas can run - `paint_floor` (ground, floor shade, tracks,
 //! scorches, landed rubble, oil, portals), `paint_tiles` (walls and props
 //! with their shadows and caps), `paint_standing` (pickups, the y-sorted
 //! tanks/frogs/grass walk, trees) - and `paint_field`, all three. Reads
@@ -87,7 +87,7 @@ pub struct PaintOptions {
 }
 
 impl Game {
-    /// The floor of the field: the ground tileset and its edge shade (a
+    /// The floor of the field: the ground tileset and its baked shade (a
     /// flat white sheet under `plain_canvas`), tread marks, burn marks,
     /// landed rubble and unlit oil pools - everything lying flat under
     /// whatever stands. First of the three `Canvas` stages `render` and
@@ -108,12 +108,11 @@ impl Game {
         }
     }
 
-    /// Everything lying flat on the ground: its edge shade, then the marks
-    /// on it.
+    /// Everything lying flat on the ground: its baked shade (the walls'
+    /// and the edge's, `ground::bake_shade`), then the marks on it.
     pub fn paint_floor_marks(&self, c: &mut impl Canvas) {
         if !self.plain_canvas {
-            let (width, height) = self.map.field_size();
-            crate::ground::draw_edge_shade(c, width.round() as i32, height.round() as i32);
+            crate::ground::draw_shade(c, &self.ground);
         }
 
         // Tread marks go down first so tanks and everything else draw on top.

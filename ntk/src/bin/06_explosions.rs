@@ -194,6 +194,9 @@ fn main() {
             pickup_shield: &pickup_shield,
             pickup_flamethrower: &pickup_flamethrower,
             pickup_frog_health: &pickup_frog_health,
+            // The demo paints a plain white canvas, which draws no ground
+            // and so no floor shade.
+            shade: None,
         };
 
         match session.mode() {
@@ -257,6 +260,7 @@ fn main() {
                             pickup_frog_health: &pickup_frog_health,
                             eraser: &eraser,
                             tanks: &tanks,
+                            shade: None,
                         },
                     );
                     return;

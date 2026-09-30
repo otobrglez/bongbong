@@ -15,7 +15,13 @@
 //! is a *retinted* copy (`tools/retint_ground.py`), and under the desert
 //! theme the "grass" is pale dust, the "sand" a smoother hardpan and the
 //! dirt a packed-earth road. The tile ids and tints here are the same
-//! under every theme; `draw` only names which file to blit from.
+//! under every theme; `draw` only names which file to blit from, and the
+//! floor shade which dark the field's edge deepens toward.
+//!
+//! The floor shade (`bake_shade`, drawn by `draw_shade`) is the one layer
+//! here that is not tiles: the walls' contact shade and a round's edge
+//! shade, stepped and dithered on the 2 px block grid into one image baked
+//! the first time the floor is drawn - see docs/GROUND_SPEC.md §4.
 //!
 //! Purely decorative: no physics body, no gameplay effect. `build` runs
 //! once per round (from `simulation::Game::init`, after every obstacle for
@@ -45,9 +51,12 @@
 
 use crate::math::{Color, Rectangle, Vec2};
 
-use crate::canvas::{Canvas, Sheet};
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::canvas::{BlockImage, Canvas, Sheet};
 use crate::map::Theme;
-use crate::tuning::tuning;
+use crate::tuning::{tuning, Tuning};
 use crate::{GROUND_WORLD_TILE, OBSTACLE_GRID_SIZE, Position};
 
 /// Columns in punyworld-overworld-tileset.png (432px / 16px).
@@ -276,6 +285,20 @@ pub fn water_icon_source_rec() -> Rectangle {
     source_rec(WATER_SHORE[0b1111])
 }
 
+/// What `build` makes of a map besides its cells: the theme (whether sand
+/// drifts over the open floor, and the colour the field's edge deepens
+/// toward) and whether that edge shade is baked at all - a round's field
+/// has it, the builder's canvas does not.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Look {
+    pub theme: Theme,
+    pub edge_shade: bool,
+}
+
+/// Names every floor shade `build` bakes, so a GPU copy of one is never
+/// taken for another's (`render::canvas::BlockTexture`).
+static NEXT_SHADE_STAMP: AtomicU64 = AtomicU64::new(1);
+
 /// This round's resolved ground layer: a flat, row-major grid of source
 /// tile ids (into `punyworld-overworld-tileset.png`), one per
 /// `GROUND_WORLD_TILE` cell. Built once by `build`, drawn every frame by
@@ -290,22 +313,37 @@ pub struct GroundGrid {
     tiles: Vec<[i32; WATER_FRAME_COUNT]>,
     /// Per cell, what the flow overlay does there (`Current`).
     current: Vec<Current>,
-    /// Per-cell tint, resolved once in `build` alongside the tile id.
-    ///
-    /// Baked rather than computed per frame on purpose: `draw` already
-    /// issues one call per cell over the whole screen and is the single
-    /// largest draw cost in the game, so shading has to be free at draw
-    /// time. It also never changes during a round - obstacles are only
-    /// ever removed, and a hole in a wall letting a little more light onto
-    /// the floor is not worth rebuilding the grid for.
+    /// Per-cell tint the tile is blitted with: white, until `darken_cell`
+    /// burns a cell to the crater tone. Free at draw time, since `draw`
+    /// passes one tint per cell anyway.
     tints: Vec<Color>,
+    /// What the floor shade (`shade`) is baked from: the field's size in
+    /// px, the wall cells as grid coordinates and the look.
+    width: f32,
+    height: f32,
+    walls: Vec<(i32, i32)>,
+    look: Look,
+    /// The baked floor shade, made the first time the floor is drawn - a
+    /// room server builds a round's ground and never draws it, so it never
+    /// pays for it.
+    shade: OnceLock<BlockImage>,
+    /// This build's name for its shade (`NEXT_SHADE_STAMP`).
+    stamp: u64,
 }
 
 impl GroundGrid {
+    /// The floor shade: walls' contact shade and, on a round's field, the
+    /// rounded edge shade, stepped and dithered on the 2 px block grid
+    /// (`bake_shade`). Baked on first use with the live tuning and kept for
+    /// the round - walls are only ever removed, and a hole in a wall
+    /// letting a little more light onto the floor is not worth a re-bake.
+    pub fn shade(&self) -> &BlockImage {
+        self.shade.get_or_init(|| bake_shade(self.width, self.height, &self.walls, self.look, &tuning(), self.stamp))
+    }
+
     /// Darken the cell under `pos` by `factor` for the rest of the round:
     /// the crater tone a burnt-out pool leaves. The one thing that changes
-    /// a tint after `build`, and it only ever darkens - so the AO bake's
-    /// "never changes" reasoning holds for everything else.
+    /// a tint after `build`, and it only ever darkens.
     pub fn darken_cell(&mut self, pos: Position, factor: f32) {
         // A 32px obstacle cell spans three of the 16px ground tiles on
         // each axis (the middle one whole, the two beside it by half), so
@@ -633,7 +671,7 @@ impl WaterLayout {
 }
 
 /// Roll this round's ground layout: grass everywhere, sand drifted over it
-/// in soft patches when `drifts` is set (`map::Theme::drifts` -
+/// in soft patches when the look's theme drifts (`map::Theme::drifts` -
 /// `ground_drift_cover` of the open floor, none touching a road or water
 /// cell), road painted at exactly `road_cells` (world positions -
 /// typically every static obstacle tile's own position plus the player
@@ -669,6 +707,10 @@ impl WaterLayout {
 ///
 /// Water flows down the map: `draw` drifts marks southward over every
 /// open lake cell and every stream cell joined north or south.
+///
+/// **Shade** is not resolved here: `wall_cells` and the `look` are kept
+/// for the floor shade the grid bakes the first time it is drawn
+/// (`GroundGrid::shade`, `bake_shade`).
 pub fn build(
     width: f32,
     height: f32,
@@ -676,7 +718,7 @@ pub fn build(
     road_cells: &[Position],
     water_cells: &[Position],
     wall_cells: &[Position],
-    drifts: bool,
+    look: Look,
 ) -> GroundGrid {
     let layout = Layout::new(width, height, road_cells, water_cells);
     let (cols, rows) = (layout.cols, layout.rows);
@@ -690,7 +732,7 @@ pub fn build(
     // it. The patches live in the open instead, which is also where they
     // read.
     let t = tuning();
-    let cover = if drifts { t.ground_drift_cover.clamp(0.0, 1.0) } else { 0.0 };
+    let cover = if look.theme.drifts() { t.ground_drift_cover.clamp(0.0, 1.0) } else { 0.0 };
     let period = t.ground_drift_scale.max(1.0);
     let drift_vertex = |vx: i32, vy: i32| -> bool {
         if cover <= 0.0 {
@@ -730,89 +772,192 @@ pub fn build(
         }
     }
 
-    // --- shade: darken toward walls and toward the screen edge ---
-    //
-    // Walls sit *on* the ground, so the cells around them read as being in
-    // their shadow; without it a wall looks pasted on rather than standing
-    // on the floor.
-    //
-    // A per-cell tint is only defensible because these steps land *on the
-    // wall grid*, where a boundary reads as the edge of a shadow. The
-    // screen-edge vignette was tried the same way and had to be pulled: a
-    // flat tint per 32px cell over flat-coloured grass stair-steps no
-    // matter how smooth the underlying field is, and out in the open there
-    // is no wall for the steps to align with, so it read as banding. It is
-    // a smooth per-pixel gradient in `draw_edge_shade` instead.
-    let mut walls = vec![false; cols * rows];
-    for pos in wall_cells {
-        let gx = (pos.x / GROUND_WORLD_TILE).round() as i32;
-        let gy = (pos.y / GROUND_WORLD_TILE).round() as i32;
-        if gx >= 0 && gy >= 0 && (gx as usize) < cols && (gy as usize) < rows {
-            walls[gy as usize * cols + gx as usize] = true;
-        }
+    let walls = wall_cells
+        .iter()
+        .map(|pos| ((pos.x / OBSTACLE_GRID_SIZE).round() as i32, (pos.y / OBSTACLE_GRID_SIZE).round() as i32))
+        .collect();
+    GroundGrid {
+        cols,
+        rows,
+        tiles,
+        current,
+        tints: vec![Color::WHITE; cols * rows],
+        width,
+        height,
+        walls,
+        look,
+        shade: OnceLock::new(),
+        stamp: NEXT_SHADE_STAMP.fetch_add(1, Ordering::Relaxed),
     }
-    let near = t.ground_wall_shade;
-    let reach = t.ground_wall_shade_cells.max(0) as i32;
-    let mut tints = vec![Color::WHITE; cols * rows];
-    for y in 0..rows as i32 {
-        for x in 0..cols as i32 {
-            // Euclidean, not Chebyshev: a box distance gives square
-            // iso-contours, and since the tint is per 32px cell those show
-            // up as visible rectangular bands rather than as a shadow.
-            let mut nearest = f32::MAX;
-            for dy in -reach..=reach {
-                for dx in -reach..=reach {
-                    let (nx, ny) = (x + dx, y + dy);
-                    if nx < 0 || ny < 0 || nx as usize >= cols || ny as usize >= rows {
-                        continue;
-                    }
-                    if walls[ny as usize * cols + nx as usize] {
-                        let d = ((dx * dx + dy * dy) as f32).sqrt();
-                        nearest = nearest.min(d);
+}
+
+/// Field pixels per texel of the floor shade: the game's 2 px block, the
+/// grain the runtime glows and the weather's light pass step on.
+pub const SHADE_BLOCK: i32 = 2;
+
+/// How many steps the walls' shade and the edge shade each take from clear
+/// to their darkest. Few and dithered, the way a pixel-art floor shades,
+/// rather than a smooth ramp.
+const WALL_SHADE_STEPS: u8 = 3;
+const EDGE_SHADE_STEPS: u8 = 4;
+
+/// The 4 x 4 ordered-dither thresholds (in sixteenths) the shade steps
+/// against, anchored at the field's top-left block so the pattern stays
+/// put.
+const BAYER4: [u8; 16] = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+
+/// The cool dark walls shade the ground toward: red and green drop more
+/// than blue, so on grass and on desert dust alike a wall's shade reads as
+/// shadow rather than as dirt.
+const WALL_SHADE_COLOR: Color = Color::new(16, 44, 52, 255);
+
+/// What the field's edge deepens toward, by theme: the canopy's own green
+/// on grass, a dusk umber on the desert - a darker version of the ground,
+/// never black.
+fn edge_shade_color(theme: Theme) -> Color {
+    match theme {
+        Theme::Grass => Color::new(10, 55, 40, 255),
+        Theme::Desert => Color::new(45, 38, 40, 255),
+    }
+}
+
+fn smoothstep(u: f32) -> f32 {
+    let u = u.clamp(0.0, 1.0);
+    u * u * (3.0 - 2.0 * u)
+}
+
+/// Bake the floor shade for a field `width` x `height` px with walls at
+/// the grid cells `walls` (docs/GROUND_SPEC.md §4). Two layers, each a
+/// value from 0 to 1 per 2 px block, stepped with the `BAYER4` dither and
+/// laid as one overlay:
+///
+/// - **The walls' contact shade.** Measured from each wall's box moved
+///   `ground_wall_shade_lean_px` along the drop shadows' direction
+///   (`shadow_dir_x`/`_y`), so it pools on the side the walls' own shadows
+///   fall and thins on the lit side, and fading out over
+///   `ground_wall_shade_cells` cells on a smoothstep. Per block and
+///   euclidean, so it follows a wall's outline with no 32 px squares.
+/// - **The edge shade**, on a round's field only (`Look::edge_shade`):
+///   the distance outside a rounded rectangle inset `ground_edge_shade_px`
+///   from the edges, its corners rounded by `ground_edge_shade_round` times
+///   that, so the shade follows the frame and deepens into the corners;
+///   `ground_edge_shade_corner` of its darkest step is reserved for them.
+///
+/// The steps take `ground_wall_shade` and `ground_edge_shade` as the
+/// opacity of their darkest step, toward `WALL_SHADE_COLOR` and the
+/// theme's `edge_shade_color`. Only IEEE arithmetic and square roots, so
+/// a CPU thumbnail of it is the same on every platform. Takes the table
+/// rather than reading the global so a test can pass a local one.
+pub fn bake_shade(width: f32, height: f32, walls: &[(i32, i32)], look: Look, t: &Tuning, stamp: u64) -> BlockImage {
+    let block = SHADE_BLOCK as f32;
+    let bw = (width / block).ceil().max(0.0) as usize;
+    let bh = (height / block).ceil().max(0.0) as usize;
+    let centre = |b: usize| (b as f32 + 0.5) * block;
+
+    // --- the walls: a contact shade leaning the way the shadows fall ---
+    let mut wall = vec![0.0f32; bw * bh];
+    let reach = t.ground_wall_shade_cells.max(0.0) * OBSTACLE_GRID_SIZE;
+    if reach > 0.0 && t.ground_wall_shade > 0.0 {
+        let len = (t.shadow_dir_x * t.shadow_dir_x + t.shadow_dir_y * t.shadow_dir_y).sqrt();
+        let (lx, ly) = if len > 1e-6 {
+            (t.shadow_dir_x / len * t.ground_wall_shade_lean_px, t.shadow_dir_y / len * t.ground_wall_shade_lean_px)
+        } else {
+            (0.0, 0.0)
+        };
+        let half = OBSTACLE_GRID_SIZE / 2.0;
+        // The blocks a box centred on `c` can shade, along one axis.
+        let span = |c: f32, n: usize| {
+            let lo = ((c - half - reach) / block).floor().max(0.0) as usize;
+            let hi = ((c + half + reach) / block).ceil().max(0.0) as usize;
+            (lo.min(n), hi.min(n))
+        };
+        for &(col, row) in walls {
+            let cx = col as f32 * OBSTACLE_GRID_SIZE + lx;
+            let cy = row as f32 * OBSTACLE_GRID_SIZE + ly;
+            let (x0, x1) = span(cx, bw);
+            let (y0, y1) = span(cy, bh);
+            for by in y0..y1 {
+                for bx in x0..x1 {
+                    let ox = ((centre(bx) - cx).abs() - half).max(0.0);
+                    let oy = ((centre(by) - cy).abs() - half).max(0.0);
+                    let d = (ox * ox + oy * oy).sqrt();
+                    if d < reach {
+                        let v = smoothstep(1.0 - d / reach);
+                        let i = by * bw + bx;
+                        if v > wall[i] {
+                            wall[i] = v;
+                        }
                     }
                 }
             }
-            // 1.0 right beside a wall, easing to 0 at `reach`. Smoothstep
-            // rather than linear so the falloff has no hard outer edge.
-            let wall_k = if nearest == f32::MAX || reach == 0 {
-                0.0
-            } else {
-                let u = (1.0 - nearest / (reach as f32 + 1.0)).clamp(0.0, 1.0);
-                u * u * (3.0 - 2.0 * u)
-            };
-            let shade = (1.0 - wall_k * near).clamp(0.0, 1.0);
-            let v = (255.0 * shade) as u8;
-            tints[y as usize * cols + x as usize] = Color::new(v, v, v, 255);
         }
     }
 
-    GroundGrid { cols, rows, tiles, current, tints }
+    // --- the edge: outside a rounded rectangle inset from the frame ---
+    let edge_reach = t.ground_edge_shade_px;
+    let edge_on = look.edge_shade && t.ground_edge_shade > 0.0 && edge_reach > 0.0;
+    let (hx, hy) = ((width / 2.0 - edge_reach).max(0.0), (height / 2.0 - edge_reach).max(0.0));
+    let round = (edge_reach * t.ground_edge_shade_round.max(0.0)).min(hx).min(hy);
+    // Signed distance outside that rectangle (negative inside it).
+    let outside = |px: f32, py: f32| {
+        let qx = (px - width / 2.0).abs() - (hx - round);
+        let qy = (py - height / 2.0).abs() - (hy - round);
+        let (mx, my) = (qx.max(0.0), qy.max(0.0));
+        (mx * mx + my * my).sqrt() + qx.max(qy).min(0.0) - round
+    };
+    // How far out the field's corner is, in reaches: where the shade peaks.
+    let corner_at = if edge_on { (outside(0.0, 0.0) / edge_reach).max(1.0 + 1e-3) } else { 2.0 };
+    let corner_share = t.ground_edge_shade_corner.clamp(0.0, 1.0);
+    let edge = |px: f32, py: f32| {
+        let s = outside(px, py) / edge_reach;
+        if s <= 0.0 {
+            0.0
+        } else {
+            smoothstep(s) * (1.0 - corner_share) + corner_share * ((s - 1.0) / (corner_at - 1.0)).clamp(0.0, 1.0)
+        }
+    };
+
+    // --- one colour per pair of steps, then the dither ---
+    let clear = Color::new(0, 0, 0, 0);
+    let (wall_color, edge_color) = (WALL_SHADE_COLOR, edge_shade_color(look.theme));
+    let (wall_max, edge_max) = (t.ground_wall_shade.clamp(0.0, 1.0), t.ground_edge_shade.clamp(0.0, 1.0));
+    let mut palette = [[clear; EDGE_SHADE_STEPS as usize + 1]; WALL_SHADE_STEPS as usize + 1];
+    for (lw, row) in palette.iter_mut().enumerate() {
+        for (le, texel) in row.iter_mut().enumerate() {
+            let aw = wall_max * lw as f32 / WALL_SHADE_STEPS as f32;
+            let ae = edge_max * le as f32 / EDGE_SHADE_STEPS as f32;
+            // The wall's shade laid over the edge's.
+            let a = aw + ae * (1.0 - aw);
+            if a > 0.0 {
+                let mix = |w: u8, e: u8| ((w as f32 * aw + e as f32 * ae * (1.0 - aw)) / a).round().clamp(0.0, 255.0) as u8;
+                *texel = Color::new(
+                    mix(wall_color.r, edge_color.r),
+                    mix(wall_color.g, edge_color.g),
+                    mix(wall_color.b, edge_color.b),
+                    (a * 255.0).round().clamp(0.0, 255.0) as u8,
+                );
+            }
+        }
+    }
+    let step = |v: f32, steps: u8, threshold: f32| ((v * steps as f32 + threshold).floor().max(0.0) as u8).min(steps);
+    let mut texels = vec![clear; bw * bh];
+    for by in 0..bh {
+        for bx in 0..bw {
+            let threshold = (BAYER4[(by & 3) * 4 + (bx & 3)] as f32 + 0.5) / 16.0;
+            let i = by * bw + bx;
+            let lw = step(wall[i], WALL_SHADE_STEPS, threshold);
+            let le = if edge_on { step(edge(centre(bx), centre(by)), EDGE_SHADE_STEPS, threshold) } else { 0 };
+            texels[i] = palette[lw as usize][le as usize];
+        }
+    }
+    BlockImage { width: bw, height: bh, block: SHADE_BLOCK, texels, stamp }
 }
 
-/// Darken the ground toward the screen edges, pulling the eye to the middle
-/// of the battlefield and buying back a little of the value range a screen
-/// full of grass spends.
-///
-/// Four gradient bands rather than a per-cell tint: the tint is flat across
-/// a whole 32px cell, so over open grass a gradient built that way
-/// stair-steps visibly. These interpolate per pixel. Drawn straight after
-/// the ground so it shades the floor only - tanks and walls stand in front
-/// of it, not under it.
-pub fn draw_edge_shade(c: &mut impl Canvas, width: i32, height: i32) {
-    let strength = tuning().ground_edge_shade;
-    if strength <= 0.0 {
-        return;
-    }
-    let a = (255.0 * strength).clamp(0.0, 255.0) as u8;
-    let dark = Color::new(0, 0, 0, a);
-    let clear = Color::new(0, 0, 0, 0);
-    let band = (tuning().ground_edge_shade_px).max(1.0) as i32;
-    // `_v` runs top->bottom and `_h` runs left->right, so the far edges
-    // pass the colours the other way round.
-    c.gradient_v(0, 0, width, band, dark, clear);
-    c.gradient_v(0, height - band, width, band, clear, dark);
-    c.gradient_h(0, 0, band, height, dark, clear);
-    c.gradient_h(width - band, 0, band, height, clear, dark);
+/// Lay the floor shade over the ground: drawn straight after it (and the
+/// weather's ground pass), so it shades the floor only - tanks and walls
+/// stand in front of it, not under it. One call on the GPU.
+pub fn draw_shade(c: &mut impl Canvas, grid: &GroundGrid) {
+    c.blocks(grid.shade());
 }
 
 fn source_rec(tile_id: i32) -> Rectangle {
@@ -929,7 +1074,7 @@ mod tests {
     }
 
     fn with_water(cells: &[(i32, i32)]) -> GroundGrid {
-        build(W, H, 7, &[], &world(cells), &[], false)
+        build(W, H, 7, &[], &world(cells), &[], Look::default())
     }
 
     fn tile(grid: &GroundGrid, x: i32, y: i32) -> i32 {
@@ -1020,7 +1165,7 @@ mod tests {
     fn road_wins_over_water_and_the_two_never_join() {
         let water = world(&[(4, 4), (5, 4), (6, 4)]);
         let road = world(&[(5, 4), (7, 4)]);
-        let grid = build(W, H, 7, &road, &water, &[], false);
+        let grid = build(W, H, 7, &road, &water, &[], Look::default());
         assert_eq!(tile(&grid, 5, 4), ROAD_EDGE[0b0000], "a road cell on water is an isolated road");
         assert_eq!(tile(&grid, 4, 4), WATER_CHANNEL[0b0000], "water beside road is not joined to it");
         assert_eq!(tile(&grid, 6, 4), WATER_CHANNEL[0b0000]);
@@ -1094,6 +1239,100 @@ mod tests {
         let bridged = WaterLayout::build(W, H, &world(&[(6, 5)]), &world(&cells));
         assert_eq!(bridged.depth_at(at(6, 5)), Depth::Dry);
         assert!(WaterLayout::build(W, H, &world(&[(1, 1)]), &[]).is_empty());
+    }
+
+    fn shade(width: f32, height: f32, walls: &[(i32, i32)], edge_shade: bool, t: &Tuning) -> BlockImage {
+        bake_shade(width, height, walls, Look { theme: Theme::Grass, edge_shade }, t, 1)
+    }
+
+    /// Mean opacity over the blocks within `r` blocks of field pixel
+    /// (x, y): single texels are the dither's, the mean is the shade's.
+    fn mean_alpha(img: &BlockImage, x: f32, y: f32, r: i32) -> f32 {
+        let (cx, cy) = (x as i32 / img.block, y as i32 / img.block);
+        let mut sum = 0.0;
+        let mut n = 0.0;
+        for by in cy - r..=cy + r {
+            for bx in cx - r..=cx + r {
+                if let Some(c) = img.at_pixel(bx * img.block, by * img.block) {
+                    sum += c.a as f32;
+                    n += 1.0;
+                }
+            }
+        }
+        sum / n
+    }
+
+    #[test]
+    fn the_shade_covers_the_field_in_2px_blocks() {
+        let img = shade(W, H, &[(5, 5)], true, &Tuning::DEFAULT);
+        assert_eq!((img.width, img.height, img.block), (160, 160, SHADE_BLOCK));
+        assert_eq!(img.texels.len(), 160 * 160);
+        let odd = shade(1087.0, 543.0, &[], true, &Tuning::DEFAULT);
+        assert_eq!((odd.width, odd.height), (544, 272), "a field an odd pixel wide is still covered");
+    }
+
+    #[test]
+    fn a_wall_shades_the_ground_beside_it_and_pools_on_its_shadow_side() {
+        // One wall centred on (160, 160); its faces are 16 px out.
+        let img = shade(W, H, &[(5, 5)], false, &Tuning::DEFAULT);
+        let shadow_side = mean_alpha(&img, 160.0 + 24.0, 160.0 + 24.0, 2);
+        let lit_side = mean_alpha(&img, 160.0 - 24.0, 160.0 - 24.0, 2);
+        assert!(lit_side > 0.0, "the lit side is shaded too, just less");
+        assert!(shadow_side > lit_side + 10.0, "the shade pools where the shadows fall: {shadow_side} vs {lit_side}");
+        let reach = Tuning::DEFAULT.ground_wall_shade_cells * OBSTACLE_GRID_SIZE;
+        assert_eq!(mean_alpha(&img, 160.0 - 16.0 - reach - 8.0, 160.0, 1), 0.0, "out of reach is clear");
+    }
+
+    #[test]
+    fn the_edge_shade_frames_the_field_and_deepens_into_the_corners() {
+        let img = shade(1088.0, 544.0, &[], true, &Tuning::DEFAULT);
+        let centre = mean_alpha(&img, 544.0, 272.0, 4);
+        let edge = mean_alpha(&img, 544.0, 6.0, 2);
+        let corner = mean_alpha(&img, 6.0, 6.0, 2);
+        assert_eq!(centre, 0.0, "the middle of the field is untouched");
+        assert!(edge > 0.0, "the middle of an edge is shaded");
+        assert!(corner > edge, "a corner is darker than the middle of an edge: {corner} vs {edge}");
+        // Rounded, not boxed: a point as far in from both edges as the
+        // middle of an edge is from one is lighter than a band would make it.
+        let diagonal = mean_alpha(&img, 60.0, 60.0, 2);
+        let band = mean_alpha(&img, 544.0, 60.0, 2);
+        assert!(diagonal > band, "the corner's shade reaches further in than an edge's");
+    }
+
+    #[test]
+    fn the_builder_canvas_has_no_edge_shade() {
+        let img = shade(1088.0, 544.0, &[], false, &Tuning::DEFAULT);
+        assert!(img.texels.iter().all(|c| c.a == 0));
+    }
+
+    #[test]
+    fn zero_strength_turns_each_layer_off() {
+        let t = Tuning { ground_wall_shade: 0.0, ground_edge_shade: 0.0, ..Tuning::DEFAULT };
+        let img = shade(W, H, &[(5, 5)], true, &t);
+        assert!(img.texels.iter().all(|c| c.a == 0));
+    }
+
+    #[test]
+    fn the_shade_is_a_function_of_its_inputs_in_a_few_tones() {
+        let walls = [(3, 4), (4, 4), (7, 2)];
+        let a = shade(W, H, &walls, true, &Tuning::DEFAULT);
+        let b = shade(W, H, &walls, true, &Tuning::DEFAULT);
+        assert_eq!(a.texels, b.texels);
+        let mut tones: Vec<(u8, u8, u8, u8)> = a.texels.iter().map(|c| (c.r, c.g, c.b, c.a)).collect();
+        tones.sort_unstable();
+        tones.dedup();
+        let most = (WALL_SHADE_STEPS as usize + 1) * (EDGE_SHADE_STEPS as usize + 1);
+        assert!(tones.len() <= most, "{} tones, at most {most}", tones.len());
+        let desert = bake_shade(W, H, &walls, Look { theme: Theme::Desert, edge_shade: true }, &Tuning::DEFAULT, 1);
+        assert_ne!(a.texels, desert.texels, "the edge deepens toward each theme's own dark");
+    }
+
+    #[test]
+    fn every_build_names_its_own_shade() {
+        let a = with_water(&[(2, 2)]);
+        let b = with_water(&[(2, 2)]);
+        assert_ne!(a.shade().stamp, b.shade().stamp);
+        assert_eq!(a.shade().stamp, a.shade().stamp, "baked once, then kept");
     }
 
     #[test]

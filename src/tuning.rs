@@ -1862,9 +1862,31 @@ tunables! {
         /// pixel rather than on the walls sheet's 2px block grid. Stacking
         /// the two made grass twice as chunky as the world around it.
         grass_scale: f32 = 2.0 in 0.5 ..= 4.0;
-        /// Ambient sway: how far a tip travels, and how fast.
-        grass_sway_px: f32 = 2.0 in 0.0 ..= 20.0;
+        /// Each tuft's own flutter on top of the wind (`grass::bend`): how
+        /// far a tip travels, and how fast. Hashed per tuft, so it is what
+        /// keeps a field bending in a gust from moving as one sheet.
+        grass_sway_px: f32 = 0.6 in 0.0 ..= 20.0;
         grass_sway_speed: f32 = 1.6 in 0.0 ..= 20.0;
+        /// The steady lean of every tuft along the wind, in px at the tip
+        /// (`grass::wind_at`). A tuft bends about its root, so only the
+        /// wind's sideways component shows.
+        grass_wind_px: f32 = 1.2 in 0.0 ..= 10.0;
+        /// How much further a gust bends the grass, px at the tip. Gusts are
+        /// fronts that roll across the field, so neighbouring tufts bend
+        /// together and a gust is seen crossing the meadow.
+        grass_gust_px: f32 = 3.6 in 0.0 ..= 20.0;
+        /// Which way the gust fronts travel, degrees clockwise from the +x
+        /// axis on the y-down screen. 0 blows left to right; 180 flips the
+        /// lean too.
+        grass_gust_heading_deg: f32 = 22.0 in -180.0 ..= 180.0;
+        /// How fast the fronts travel across the field, px per second.
+        grass_gust_speed: f32 = 130.0 in 0.0 ..= 1000.0;
+        /// Px between one wave of bending grass and the next.
+        grass_gust_wavelength: f32 = 360.0 in 16.0 ..= 4000.0;
+        /// Px between the peaks of the slower envelope the waves ride on:
+        /// the size of one gust. Longer than the wavelength, so a gust is a
+        /// few waves strong and then the field settles to its steady lean.
+        grass_gust_group: f32 = 1600.0 in 16.0 ..= 10000.0;
         /// The wake: how close a tank has to be to shove grass aside, and
         /// how hard at the centre. Grass *ahead* of a moving tank is pushed
         /// harder than grass behind it, so a hull drives a bow wave rather
@@ -1894,20 +1916,32 @@ tunables! {
         /// emitter). Zero turns the rustle off.
         grass_rustle_rate: f32 = 14.0 in 0.0 ..= 120.0;
 
-        // --- the ground layer's baked shading (ground.rs) ---
-        /// How much darker a cell right beside a wall is, 0-1. Walls stand
+        // --- the ground layer's baked floor shade (ground::bake_shade) ---
+        /// The walls' contact shade: the opacity of its darkest step, 0-1,
+        /// toward a cool dark (`ground::WALL_SHADE_COLOR`). Walls stand
         /// *on* the floor, and without this they read as pasted onto it.
-        ground_wall_shade: f32 = 0.11 in 0.0 ..= 1.0 @ Restart;
-        /// How far that shadow reaches, in cells. Cost is quadratic in this
-        /// (a box search per cell) but it runs once per round, not per
-        /// frame.
-        ground_wall_shade_cells: i32 = 2 in 0 ..= 8 @ Restart;
-        /// Vignette darkness at the very screen edge, 0-1. Drawn as four
-        /// per-pixel gradient bands (`ground::draw_edge_shade`), not as a
-        /// cell tint - see that function for why.
-        ground_edge_shade: f32 = 0.22 in 0.0 ..= 1.0;
-        /// How far that vignette reaches inward, in screen px.
-        ground_edge_shade_px: f32 = 90.0 in 0.0 ..= 600.0;
+        /// Stepped and dithered on the 2 px grid, per block, so it follows
+        /// a wall's outline rather than the 32 px cell grid.
+        ground_wall_shade: f32 = 0.17 in 0.0 ..= 1.0 @ Restart;
+        /// How far that shade reaches from a wall, in cells.
+        ground_wall_shade_cells: f32 = 1.4 in 0.0 ..= 8.0 @ Restart;
+        /// How far the walls' shade leans along the drop shadows' direction
+        /// (`shadow_dir_x`/`_y`), px: it pools on the side the walls' own
+        /// shadows fall and thins on the lit side.
+        ground_wall_shade_lean_px: f32 = 10.0 in 0.0 ..= 48.0 @ Restart;
+        /// The edge shade: the opacity of its darkest step, 0-1, toward the
+        /// theme's darkest ground (canopy green, dusk umber) rather than
+        /// black. A round's field only - the builder's canvas has none.
+        ground_edge_shade: f32 = 0.30 in 0.0 ..= 1.0 @ Restart;
+        /// How far the edge shade reaches in from the middle of an edge,
+        /// in screen px.
+        ground_edge_shade_px: f32 = 110.0 in 0.0 ..= 600.0 @ Restart;
+        /// How round the edge shade's corners are, as a multiple of its
+        /// reach: 0 is a square frame, 1 rounds each corner by the reach.
+        ground_edge_shade_round: f32 = 1.0 in 0.0 ..= 4.0 @ Restart;
+        /// The share of the edge shade's darkest step only the corners
+        /// reach, 0-1: the middle of an edge stops short of it.
+        ground_edge_shade_corner: f32 = 0.25 in 0.0 ..= 1.0 @ Restart;
         /// How much of the open floor the soft sand patches cover, 0-1:
         /// the pack's sand tiles (hardpan under the desert retint) laid
         /// where a hashed value noise at the cell corners crosses this

@@ -134,32 +134,52 @@ a fortress glyph's interior is a solid multi-cell block (mask 1111/32,
 
 ## 4. Shading
 
-The ground carries two shading cues, both added 2026-09. They are separate
-mechanisms on purpose, and the reason is worth keeping.
+The floor carries one baked shade layer, `ground::bake_shade`, drawn by
+`ground::draw_shade` at the head of `Game::paint_floor_marks` - after the
+ground tiles and the weather's ground pass, before tread marks and
+everything that stands, so it shades the floor only. It replaced a per-cell
+wall tint (flat across each 32 px cell, so it drew squares inside every
+walled space) and four straight black gradient bands at the screen edge.
 
-**Wall ambient occlusion — a per-cell tint, baked in `build`.** Cells within
-`ground_wall_shade_cells` of a wall darken by up to `ground_wall_shade`, on a
-smoothstepped *euclidean* falloff (a Chebyshev/box distance gives square
-iso-contours, which show up as rectangular banding). Stored in
-`GroundGrid::tints` and applied by `draw` in place of `Color::WHITE`, so it
-costs no extra draw calls. Baked rather than per-frame because `draw` already
-issues one call per cell over the whole screen, and the field never changes
-during a round — obstacles are only ever removed.
+**Two layers, one image.** Each is a value from 0 to 1 per 2 px block, the
+grain the runtime glows and the weather's light pass step on:
 
-**Screen-edge vignette — four per-pixel gradient bands, `draw_edge_shade`.**
-Drawn immediately after `draw`, so it shades the floor only; tanks and walls
-stand in front of it. `ground_edge_shade` sets the darkness at the very edge
-and `ground_edge_shade_px` how far it reaches inward.
+- **The walls' contact shade.** The euclidean distance from each wall's box,
+  moved `ground_wall_shade_lean_px` along the drop shadows' direction
+  (`shadow_dir_x`/`_y`), fading out over `ground_wall_shade_cells` cells on
+  a smoothstep. It pools on the side the walls' own shadows fall and thins
+  on the lit side, and being per block it follows a wall's outline.
+- **The edge shade**, on a round's field only (`Look::edge_shade`; the
+  builder's canvas has none, since the author works right up to the frame).
+  The distance outside a rounded rectangle inset `ground_edge_shade_px` from
+  the edges, its corners rounded by `ground_edge_shade_round` times that
+  reach, so the shade follows the frame and deepens into the corners;
+  `ground_edge_shade_corner` of its darkest step is reserved for them.
 
-> **Why the vignette is not a cell tint.** It was, first. A tint is flat
-> across a whole 32×32 cell, so on flat-coloured grass any gradient built
-> that way stair-steps at every cell boundary regardless of how smooth the
-> underlying field is. Near a wall that is fine — the steps land *on the wall
-> grid* and read as the edge of a shadow — but out in the open there is
-> nothing for them to align with and it reads as banding. Gradient bands
-> interpolate per pixel and have no such problem. If you ever want a radial
-> vignette rather than four bands, it needs a texture or a shader, not a
-> finer grid.
+**Stepped and dithered, not smooth.** The walls' shade takes three steps
+and the edge four, each thresholded against a 4 x 4 ordered (Bayer) dither
+anchored at the field's top-left block, so a ramp reads as the banded,
+dithered shading of a pixel-art floor rather than a smooth gradient over it.
+The steps' opacity rises to `ground_wall_shade` and `ground_edge_shade`,
+toward colours rather than black: the walls toward a cool dark
+(`WALL_SHADE_COLOR`, red and green falling faster than blue, so shade reads
+as shadow on grass and on desert dust alike), the edge toward the theme's
+own darkest ground - canopy green on grass, a dusk umber on the desert.
+
+**Baked once, lazily, and drawn in one call.** `build` keeps the wall cells
+and the `Look`; `GroundGrid::shade` bakes the `canvas::BlockImage` the first
+time the floor is drawn and keeps it for the round, so a room server, which
+builds every round's ground and never draws it, never pays for it. Each
+build takes a fresh stamp. The CPU canvas lays the image block by block
+(`Canvas::blocks`); on the GPU its owner - `app.rs` for the round and for
+the builder, `render_gpu` for a GPU thumbnail - uploads it once per stamp
+(`render::canvas::BlockTexture`) and the draw is a single scaled blit with
+point filtering. Walls are only ever removed during a round, and a hole in
+a wall letting a little more light onto the floor is not worth a re-bake.
+Burns still darken whole cells through the tile tint (`darken_cell`).
+
+Everything in the bake is IEEE arithmetic and square roots, so a CPU
+thumbnail of it comes out the same on every platform (`thumbnail::PINNED`).
 
 ---
 

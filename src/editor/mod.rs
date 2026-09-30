@@ -467,6 +467,12 @@ impl MapEditor {
         &self.map
     }
 
+    /// The canvas's ground layer, rebuilt after every edit - what `app.rs`
+    /// uploads the floor shade of before the builder draws.
+    pub fn ground(&self) -> &GroundGrid {
+        &self.ground
+    }
+
     pub fn baseline(&self) -> &MapFile {
         &self.baseline
     }
@@ -715,7 +721,10 @@ impl MapEditor {
         let road_cells = cells_of(|obj| matches!(obj, CellObject::Wall { .. } | CellObject::Road));
         let water_cells = cells_of(|obj| matches!(obj, CellObject::Water));
         let wall_cells = cells_of(|obj| matches!(obj, CellObject::Wall { .. }));
-        self.ground = ground::build(width, height, self.ground_seed, &road_cells, &water_cells, &wall_cells, self.map.theme.drifts());
+        // The canvas shows the walls' shade but not the round's edge shade:
+        // the author works right up to the frame.
+        let look = ground::Look { theme: self.map.theme, edge_shade: false };
+        self.ground = ground::build(width, height, self.ground_seed, &road_cells, &water_cells, &wall_cells, look);
     }
 
     // ----- the chrome -----

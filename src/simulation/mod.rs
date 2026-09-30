@@ -874,7 +874,7 @@ pub struct Game {
     /// by `apply_debug_detonations` at the top of the next playing frame so
     /// the blast runs through `damage_obstacle` like a direct hit would.
     pub(crate) debug_detonations: Vec<Position>,
-    /// `render` skips the ground tileset and its edge vignette and leaves
+    /// `render` skips the ground tileset and its floor shade and leaves
     /// the field flat white; everything on the ground (decals, scorches,
     /// fires) still draws. For demos that want the effects on a blank sheet.
     pub plain_canvas: bool,
@@ -1469,8 +1469,9 @@ impl Game {
         // Wall cells go in twice on purpose: folded into the road set they
         // paint dirt underfoot, and passed separately they cast the baked
         // shading that makes a wall look like it is standing on the floor
-        // rather than pasted onto it.
-        self.ground = crate::ground::build(width, height, rng.random(), &road_cells, &map_water_cells, &wall_positions, self.map.theme.drifts());
+        // rather than pasted onto it. A round's field also shades its edge.
+        let look = crate::ground::Look { theme: self.map.theme, edge_shade: true };
+        self.ground = crate::ground::build(width, height, rng.random(), &road_cells, &map_water_cells, &wall_positions, look);
 
         self.rng = Some(rng);
         // Not cleared here: a restart mid-`update` (R key, round end) still

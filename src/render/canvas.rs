@@ -6,7 +6,7 @@ use sola_raylib::prelude::*;
 
 use std::collections::BTreeMap;
 
-use crate::canvas::{Canvas, CpuCanvas, Pixels, Sheet};
+use crate::canvas::{BlockImage, Canvas, CpuCanvas, Pixels, Sheet};
 use crate::math::{Color, Rectangle, Vec2};
 use crate::Position;
 
@@ -14,6 +14,47 @@ use crate::Position;
 /// `game::Textures` for the game, `editor::EditorTextures` for the builder.
 pub trait Sheets {
     fn texture(&self, sheet: Sheet) -> &Texture2D;
+
+    /// The uploaded copy of the [`BlockImage`] baked under `stamp`, if this
+    /// lookup holds it ([`BlockTexture::sync`]). None draws nothing.
+    fn blocks_texture(&self, _stamp: u64) -> Option<&Texture2D> {
+        None
+    }
+}
+
+/// The GPU copy of one [`BlockImage`] - the floor shade a `GroundGrid`
+/// bakes - uploaded the first time its stamp is seen and kept until
+/// another replaces it. Its owner (`app.rs`, the GPU thumbnail) calls
+/// [`sync`](Self::sync) before the frame and hands the result to the
+/// frame's `Sheets`, so the draw itself never uploads.
+#[derive(Default)]
+pub struct BlockTexture {
+    held: Option<(u64, usize, usize, Texture2D)>,
+}
+
+impl BlockTexture {
+    /// Make the held texture `image`'s, uploading only when the stamp
+    /// changed (a new round, a builder edit) and reusing the texture when
+    /// the size did not. Returns the stamp and texture for a `Sheets`.
+    pub fn sync(&mut self, rl: &mut RaylibHandle, thread: &RaylibThread, image: &BlockImage) -> Option<(u64, &Texture2D)> {
+        if image.width == 0 || image.height == 0 || image.texels.len() != image.width * image.height {
+            return None;
+        }
+        let current = matches!(&self.held, Some((stamp, ..)) if *stamp == image.stamp);
+        if !current {
+            let bytes: Vec<u8> = image.texels.iter().flat_map(|c| [c.r, c.g, c.b, c.a]).collect();
+            let reuse = matches!(&self.held, Some((_, w, h, _)) if *w == image.width && *h == image.height);
+            if !reuse {
+                let blank = Image::gen_image_color(image.width as i32, image.height as i32, Color::new(0, 0, 0, 0));
+                let texture = rl.load_texture_from_image(thread, &blank).ok()?;
+                self.held = Some((0, image.width, image.height, texture));
+            }
+            let (stamp, _, _, texture) = self.held.as_mut()?;
+            texture.update_texture(&bytes).ok()?;
+            *stamp = image.stamp;
+        }
+        self.held.as_ref().map(|(stamp, _, _, texture)| (*stamp, texture))
+    }
 }
 
 /// A [`Canvas`] over a raylib draw handle: every call forwards to the
@@ -52,6 +93,13 @@ impl<D: RaylibDraw, S: Sheets> Canvas for GpuCanvas<'_, D, S> {
 
     fn ring(&mut self, center: Position, inner: f32, outer: f32, start_deg: f32, end_deg: f32, segments: i32, color: Color) {
         self.d.draw_ring(center, inner, outer, start_deg, end_deg, segments, color);
+    }
+
+    fn blocks(&mut self, image: &BlockImage) {
+        let Some(texture) = self.sheets.blocks_texture(image.stamp) else { return };
+        let (w, h) = (image.width as f32, image.height as f32);
+        let b = image.block as f32;
+        self.d.draw_texture_pro(texture, Rectangle::new(0.0, 0.0, w, h), Rectangle::new(0.0, 0.0, w * b, h * b), Vec2::new(0.0, 0.0), 0.0, Color::WHITE);
     }
 }
 impl Pixels {

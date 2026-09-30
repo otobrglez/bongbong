@@ -1043,6 +1043,11 @@ pub fn run(args: Args) {
     // a lower density - wasm is the tighter budget and a dense wave is
     // where that shows.
     let mut fx = crate::fx::Fx::default();
+    // The GPU copies of the floor shade the round and the builder bake
+    // (`ground::GroundGrid::shade`): uploaded once per bake, a new round or
+    // a builder edit, and drawn in one call.
+    let mut round_shade = crate::render::canvas::BlockTexture::default();
+    let mut builder_shade = crate::render::canvas::BlockTexture::default();
     // iOS dev-tools builds report frame time to the console every few
     // seconds: the phone has no keyboard for the overlay cycle and its dev
     // server is not reachable from the Mac, so the console is the one
@@ -1534,6 +1539,7 @@ pub fn run(args: Args) {
             touch.update(&touch_points, &layout, steer_right, dt);
             clock.reset();
             carried = Input::default();
+            let shade = builder_shade.sync(rl, thread, session.builder.ground().shade());
             session.builder.render(
                 rl,
                 thread,
@@ -1566,6 +1572,7 @@ pub fn run(args: Args) {
                     eraser: &eraser_texture,
                     portal: &portal_texture,
                     tanks: &tanks_texture,
+                    shade,
                 },
             );
             // The presented frame is the builder; a pending `screenshot`
@@ -1703,6 +1710,7 @@ pub fn run(args: Args) {
         // `Game` - see fx.rs.
         fx.observe(game, fx_dt);
         fx.tick(fx_dt);
+        let shade = round_shade.sync(rl, thread, game.ground.shade());
         game.render(
             rl,
             thread,
@@ -1751,6 +1759,7 @@ pub fn run(args: Args) {
                 towers: &towers_texture,
                 pickup_tower_pack: &pickup_tower_pack_texture,
                 portal: &portal_texture,
+                shade,
             },
             &layout,
             &session.play_chrome(),
