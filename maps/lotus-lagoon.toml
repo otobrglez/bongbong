@@ -15,9 +15,13 @@
 # south-west and meadows of tall grass to hide in. Health and ammo on both
 # flanks, frog health beside the pavilion, shield and plasma up the brooks, a
 # speed-up on the outflow.
+#
+# The sky is random: each round's seed picks one (docs/weather.md), so the
+# first level shows a different weather most times it is played.
 
 version = 1
 size = [34, 17]
+weather = "random"
 tanks = 5
 tank = "glacier"
 tank2 = "scout"
