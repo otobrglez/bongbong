@@ -37,6 +37,15 @@ const DROPDOWN_TEXT_X: i32 = 48;
 const SETTINGS_VALUE_X: i32 = 180;
 const SETTINGS_LABEL_SIZE: i32 = 16;
 
+/// Where a TANK row shows the chassis it has picked: the sheet's own
+/// 32 px, centred on the row and right-aligned in the label column, one
+/// inset clear of the `<` button. The TANK labels' budget in
+/// `text::budgets` stops short of it.
+fn settings_icon_rect(row: Rectangle) -> Rectangle {
+    let size = crate::TANK_TEXTURE_SIZE;
+    Rectangle::new(row.x + SETTINGS_DEC_X - SETTINGS_INSET - size, row.y + (row.height - size) / 2.0, size, size)
+}
+
 /// The width the default font gives `text` at `size`: `text::width`,
 /// which is `MeasureText`'s answer with no handle.
 fn text_width(text: &str, size: i32) -> f32 {
@@ -342,7 +351,7 @@ impl MapEditor {
         match &self.popup {
             None => {}
             Some(Popup::Dropdown(category)) => self.draw_dropdown(&mut d, layout, textures, *category),
-            Some(Popup::Settings) => self.draw_settings(&mut d, layout),
+            Some(Popup::Settings) => self.draw_settings(&mut d, layout, textures),
             Some(Popup::File) => Self::draw_file_menu(&mut d, layout),
             Some(Popup::Load { entries, scroll }) => Self::draw_load_list(&mut d, layout, entries, *scroll),
             Some(Popup::Save { name }) => {
@@ -487,8 +496,8 @@ impl MapEditor {
 
     /// The MAP settings panel (docs/game-editor-fusion.md section 9): a
     /// stepper per map key and the RESET MAP button.
-    fn draw_settings(&self, d: &mut impl RaylibDraw, layout: &Layout) {
-        draw_panel(d, Self::settings_rect(layout));
+    fn draw_settings(&self, d: &mut impl RaylibDraw, layout: &Layout, textures: &EditorTextures) {
+        draw_hanging_panel(d, Self::settings_rect(layout));
         let settings = self.settings();
         let waves_off = settings.spawn == SpawnKind::Band;
         for (i, row) in SETTINGS_ROWS.iter().enumerate() {
@@ -508,6 +517,12 @@ impl MapEditor {
             let label_color = if dim { Color::new(70, 70, 76, 255) } else { DIM };
             let value_color = if dim { DIM } else { TEXT };
             d.draw_text(&row.label(), rect.x as i32 + SETTINGS_INSET as i32, text_y, SETTINGS_LABEL_SIZE, label_color);
+            if let Some((kind, player)) = row.chassis(&settings) {
+                let icon = settings_icon_rect(rect);
+                for src in crate::tank::chassis_icon_source_recs(kind, player) {
+                    d.draw_texture_pro(textures.tanks, src, icon, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+                }
+            }
             for (button, glyph) in [(Self::settings_dec_rect(rect), "<"), (Self::settings_inc_rect(rect), ">")] {
                 let inset = Rectangle::new(button.x + 2.0, button.y + 4.0, button.width - 4.0, button.height - 8.0);
                 d.draw_rectangle_rounded_lines_ex(inset, 0.2, EDITOR_PANEL_SEGMENTS, 1.0, Color::new(255, 255, 255, 60));
@@ -597,41 +612,56 @@ fn pickup_texture<'a>(textures: &EditorTextures<'a>, pickup: PickupKind) -> &'a 
 }
 
 /// Draw a rounded, bordered, drop-shadowed panel background - shared by
-/// every panel the builder draws (dropdowns, the settings panel, the
-/// Save prompt), per
-/// docs/map-editor-design.md's "Panel chrome" section.
+/// the builder's panels (the dropdowns, the FILE menu and its Load list,
+/// the Save prompt), per docs/map-editor-design.md's "Panel chrome"
+/// section; the MAP panel is `draw_hanging_panel`'s.
 pub fn draw_panel(d: &mut impl RaylibDraw, rect: Rectangle) {
-    let shadow = Rectangle::new(
-        rect.x + EDITOR_PANEL_SHADOW_OFFSET,
-        rect.y + EDITOR_PANEL_SHADOW_OFFSET,
-        rect.width,
-        rect.height,
-    );
-    d.draw_rectangle_rounded(
-        shadow,
-        EDITOR_PANEL_ROUNDNESS,
-        EDITOR_PANEL_SEGMENTS,
-        Color::new(0, 0, 0, (255.0 * EDITOR_PANEL_SHADOW_OPACITY) as u8),
-    );
-    d.draw_rectangle_rounded(
-        rect,
-        EDITOR_PANEL_ROUNDNESS,
-        EDITOR_PANEL_SEGMENTS,
-        Color::new(
-            EDITOR_PANEL_FILL.0,
-            EDITOR_PANEL_FILL.1,
-            EDITOR_PANEL_FILL.2,
-            (255.0 * EDITOR_PANEL_FILL_OPACITY) as u8,
-        ),
-    );
-    d.draw_rectangle_rounded_lines_ex(
-        rect,
-        EDITOR_PANEL_ROUNDNESS,
-        EDITOR_PANEL_SEGMENTS,
-        EDITOR_PANEL_BORDER_THICKNESS,
-        Color::new(0, 0, 0, (255.0 * EDITOR_PANEL_BORDER_OPACITY) as u8),
-    );
+    d.draw_rectangle_rounded(panel_shadow(rect), EDITOR_PANEL_ROUNDNESS, EDITOR_PANEL_SEGMENTS, PANEL_SHADOW);
+    d.draw_rectangle_rounded(rect, EDITOR_PANEL_ROUNDNESS, EDITOR_PANEL_SEGMENTS, PANEL_FILL);
+    d.draw_rectangle_rounded_lines_ex(rect, EDITOR_PANEL_ROUNDNESS, EDITOR_PANEL_SEGMENTS, EDITOR_PANEL_BORDER_THICKNESS, PANEL_BORDER);
 }
+
+/// A panel hanging from the bar - the MAP settings panel: `draw_panel`'s
+/// shadow, fill and border with the top corners square, so the panel
+/// meets the bar's straight edge, and the bottom ones rounded as raylib
+/// rounds them (the radius `EDITOR_PANEL_ROUNDNESS` of half the shorter
+/// side, the border outside the panel).
+pub fn draw_hanging_panel(d: &mut impl RaylibDraw, rect: Rectangle) {
+    let r = rect.width.min(rect.height) * EDITOR_PANEL_ROUNDNESS / 2.0;
+    fill_hanging(d, panel_shadow(rect), r, PANEL_SHADOW);
+    fill_hanging(d, rect, r, PANEL_FILL);
+    // The border: a run across the top and down both sides to the
+    // corners, a quarter ring round each, the bottom edge between them.
+    let (x, y, w, h, t) = (rect.x, rect.y, rect.width, rect.height, EDITOR_PANEL_BORDER_THICKNESS);
+    d.draw_rectangle_rec(Rectangle::new(x - t, y - t, w + 2.0 * t, t), PANEL_BORDER);
+    d.draw_rectangle_rec(Rectangle::new(x - t, y, t, h - r), PANEL_BORDER);
+    d.draw_rectangle_rec(Rectangle::new(x + w, y, t, h - r), PANEL_BORDER);
+    d.draw_rectangle_rec(Rectangle::new(x + r, y + h, w - 2.0 * r, t), PANEL_BORDER);
+    d.draw_ring(Vector2::new(x + r, y + h - r), r, r + t, 90.0, 180.0, EDITOR_PANEL_SEGMENTS, PANEL_BORDER);
+    d.draw_ring(Vector2::new(x + w - r, y + h - r), r, r + t, 0.0, 90.0, EDITOR_PANEL_SEGMENTS, PANEL_BORDER);
+}
+
+/// The hanging panel's shape in one colour, laid in pieces that never
+/// overlap, since every panel colour is translucent: all of it above the
+/// bottom corners, the strip between them and a quarter disc in each.
+fn fill_hanging(d: &mut impl RaylibDraw, rect: Rectangle, r: f32, color: Color) {
+    let (x, y, w, h) = (rect.x, rect.y, rect.width, rect.height);
+    d.draw_rectangle_rec(Rectangle::new(x, y, w, h - r), color);
+    d.draw_rectangle_rec(Rectangle::new(x + r, y + h - r, w - 2.0 * r, r), color);
+    d.draw_circle_sector(Vector2::new(x + r, y + h - r), r, 90.0, 180.0, EDITOR_PANEL_SEGMENTS, color);
+    d.draw_circle_sector(Vector2::new(x + w - r, y + h - r), r, 0.0, 90.0, EDITOR_PANEL_SEGMENTS, color);
+}
+
+/// A panel's drop shadow: the panel moved down and right.
+fn panel_shadow(rect: Rectangle) -> Rectangle {
+    Rectangle::new(rect.x + EDITOR_PANEL_SHADOW_OFFSET, rect.y + EDITOR_PANEL_SHADOW_OFFSET, rect.width, rect.height)
+}
+
+// Every panel's colours, from lib.rs's `EDITOR_PANEL_*` knobs.
+const PANEL_SHADOW: Color = Color::new(0, 0, 0, (255.0 * EDITOR_PANEL_SHADOW_OPACITY) as u8);
+const PANEL_FILL: Color =
+    Color::new(EDITOR_PANEL_FILL.0, EDITOR_PANEL_FILL.1, EDITOR_PANEL_FILL.2, (255.0 * EDITOR_PANEL_FILL_OPACITY) as u8);
+const PANEL_BORDER: Color = Color::new(0, 0, 0, (255.0 * EDITOR_PANEL_BORDER_OPACITY) as u8);
 
 /// A tool's icon inside `rect` (4 px inset).
 pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme: Theme, tool: Tool, rect: Rectangle) {
@@ -797,6 +827,16 @@ impl SettingsRow {
         })
     }
 
+    /// The chassis a TANK row has picked and the seat whose colours it
+    /// is drawn in; `None` on `auto` and on every other row.
+    fn chassis(self, s: &MapSettings) -> Option<(TankKind, u8)> {
+        match self {
+            SettingsRow::Tank => s.tank.map(|kind| (kind, 0)),
+            SettingsRow::Tank2 => s.tank2.map(|kind| (kind, 1)),
+            _ => None,
+        }
+    }
+
     /// One of the five rows that only matter to a Waves spawn plan.
     fn is_wave_row(self) -> bool {
         matches!(
@@ -877,6 +917,18 @@ mod bar_tests {
         // The caret sits clear of the icon and inside the button's box.
         assert!(CATEGORY_CARET_X as f32 >= ICON_PX, "the caret overlaps the icon");
         assert!(CATEGORY_CARET_X + CARET_W <= (CATEGORY_W - BUTTON_GAP) as i32, "caret leaves the button");
+    }
+
+    /// A TANK row's chassis icon sits inside its row, between the TANK
+    /// labels' budget (`text::budgets`: 80 px from the inset) and the `<`
+    /// button.
+    #[test]
+    fn the_chassis_icon_sits_between_the_label_and_the_stepper() {
+        let row = Rectangle::new(0.0, 0.0, EDITOR_SETTINGS_W, EDITOR_DROPDOWN_ROW_H);
+        let icon = settings_icon_rect(row);
+        assert!(icon.x >= SETTINGS_INSET + 80.0 + 4.0, "the icon runs into the TANK labels");
+        assert!(icon.x + icon.width + SETTINGS_INSET <= MapEditor::settings_dec_rect(row).x, "the icon runs into the < button");
+        assert!(icon.y >= row.y && icon.y + icon.height <= row.y + row.height, "the icon leaves its row");
     }
 
     /// The cursor readout spells a cell the way the dev server does.
