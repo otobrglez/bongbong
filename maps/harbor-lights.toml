@@ -381,7 +381,7 @@ cells."26,18" = { kind = "water" }
 cells."27,18" = { kind = "wall", material = "wood" }
 cells."28,18" = { kind = "wall", material = "glass" }
 cells."29,18" = { kind = "wall", material = "wood" }
-cells."30,18" = { kind = "water" }
+cells."30,18" = { kind = "wall", material = "wood" }
 cells."31,18" = { kind = "water" }
 cells."36,18" = { kind = "sandbag" }
 cells."0,19" = { kind = "water" }

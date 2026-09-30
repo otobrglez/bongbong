@@ -15,6 +15,11 @@ from the pristine original every time this runs - one file per
           patches (`Material::Sand`, `Theme::drifts`). Wood, roofs, water
           and greys are untouched.
 
+Before retinting, `tools/water_tiles.py` composes the water tiles the
+pack lacks (saddles and corner mouths) into transparent cells of the
+image in memory, so both themes carry them in their own tones and
+`_original/` stays pristine.
+
 Every theme is written by default; BONGBONG_THEME=grass|desert writes one.
 The same variable drives tools/spritegen/gen_grass.py, whose sheets pair
 with these per theme.
@@ -55,6 +60,8 @@ import colorsys
 import os
 
 from PIL import Image
+
+import water_tiles
 
 SRC = "static/punyworld/_original/punyworld-overworld-tileset.png"
 
@@ -159,6 +166,9 @@ def retint(rgb, theme):
 
 def write(name, theme):
     img = Image.open(SRC).convert("RGBA")
+    # The water tiles the pack lacks, composed from its own before the
+    # retint so they take each theme's tones (tools/water_tiles.py).
+    water_tiles.compose(img)
     px = img.load()
     cache = {}
     for y in range(img.height):
