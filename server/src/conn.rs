@@ -12,7 +12,7 @@ use axum::body::Bytes;
 use axum::extract::ws::{Message, WebSocket};
 use bongbong::map::{MapFile, open_map};
 use bongbong::net::codec::{self, Msg};
-use bongbong::net::wire::{Lobby, Refusal};
+use bongbong::net::wire::{ClientInfo, Lobby, Refusal};
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::{Notify, mpsc, oneshot};
 use tokio::time::Instant;
@@ -20,7 +20,8 @@ use tracing::{debug, info, warn};
 
 use crate::hub::{Hub, RoomHandle};
 use crate::mailbox::Mailbox;
-use crate::room::{Command, ConnLink, RoomParams};
+use crate::metrics::{ClientLabel, Metrics};
+use crate::room::{self, Command, ConnLink, RoomParams};
 
 /// Messages the writer holds for a client before the room starts
 /// skipping its snapshots: at 20 Hz, under a second of lag.
@@ -105,6 +106,34 @@ struct Attached {
     mailbox: Arc<Mailbox>,
 }
 
+/// The build this connection said it was, counted in `bongbong_clients`
+/// from its first `Create` or `Join` until the connection ends.
+#[derive(Default)]
+struct Seen {
+    counted: Option<(Arc<Metrics>, ClientLabel)>,
+}
+
+impl Seen {
+    /// The label of what the client said; the first time, the connection
+    /// starts counting as open under it.
+    fn greet(&mut self, hub: &Hub, client: Option<&ClientInfo>) -> ClientLabel {
+        let label = ClientLabel::of(client);
+        if self.counted.is_none() {
+            let key = hub.metrics.client_opened(&label);
+            self.counted = Some((hub.metrics.clone(), key));
+        }
+        label
+    }
+}
+
+impl Drop for Seen {
+    fn drop(&mut self) {
+        if let Some((metrics, key)) = &self.counted {
+            metrics.client_closed(key);
+        }
+    }
+}
+
 /// Run one connection to its end.
 pub async fn run(socket: WebSocket, hub: Arc<Hub>) {
     let conn_id = hub.next_conn_id();
@@ -134,6 +163,7 @@ pub async fn run(socket: WebSocket, hub: Arc<Hub>) {
         let _ = sink.close().await;
     });
     let mut attached: Option<Attached> = None;
+    let mut seen = Seen::default();
     // Anything the client sends - a pong to the writer's ping included -
     // says the connection lives (`hub::KeepAlive`).
     let mut heard = Instant::now();
@@ -146,7 +176,7 @@ pub async fn run(socket: WebSocket, hub: Arc<Hub>) {
             frame = stream.next() => match frame {
                 Some(Ok(Message::Binary(bytes))) => {
                     heard = Instant::now();
-                    handle(&bytes, conn_id, &hub, &outbox, &mut attached).await;
+                    handle(&bytes, conn_id, &hub, &outbox, &mut attached, &mut seen).await;
                 }
                 Some(Ok(Message::Text(text))) => {
                     // A bare JSON lobby message, for a hand-driven client
@@ -154,7 +184,7 @@ pub async fn run(socket: WebSocket, hub: Arc<Hub>) {
                     heard = Instant::now();
                     let mut bytes = vec![codec::kind::LOBBY];
                     bytes.extend_from_slice(text.as_bytes());
-                    handle(&bytes, conn_id, &hub, &outbox, &mut attached).await;
+                    handle(&bytes, conn_id, &hub, &outbox, &mut attached, &mut seen).await;
                 }
                 Some(Ok(Message::Ping(_) | Message::Pong(_))) => heard = Instant::now(),
                 Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
@@ -176,7 +206,14 @@ pub async fn run(socket: WebSocket, hub: Arc<Hub>) {
     debug!(conn = conn_id, "closed");
 }
 
-async fn handle(bytes: &[u8], conn_id: u64, hub: &Arc<Hub>, outbox: &Outbox, attached: &mut Option<Attached>) {
+async fn handle(
+    bytes: &[u8],
+    conn_id: u64,
+    hub: &Arc<Hub>,
+    outbox: &Outbox,
+    attached: &mut Option<Attached>,
+    seen: &mut Seen,
+) {
     let msg = match codec::decode(bytes) {
         Ok(msg) => msg,
         Err(e) => {
@@ -190,14 +227,16 @@ async fn handle(bytes: &[u8], conn_id: u64, hub: &Arc<Hub>, outbox: &Outbox, att
                 a.mailbox.post(intent, Instant::now().into_std());
             }
         }
-        Msg::Lobby(Lobby::Create { nick, device_token, map, map_toml, mission, seed }) => {
+        Msg::Lobby(Lobby::Create { nick, device_token, map: map_name, map_toml, mission, seed, client }) => {
             if attached.is_some() {
                 outbox.lobby(Lobby::Error { refusal: Refusal::AlreadyInRoom });
                 return;
             }
+            let label = seen.greet(hub, client.as_ref());
+            let map_label = room::map_label(map_toml.is_some(), &map_name);
             let map = match map_toml {
                 Some(toml) => MapFile::from_toml_str(&toml),
-                None => open_map(&map),
+                None => open_map(&map_name),
             };
             let map = match map {
                 Ok(map) => map,
@@ -206,7 +245,7 @@ async fn handle(bytes: &[u8], conn_id: u64, hub: &Arc<Hub>, outbox: &Outbox, att
                     return;
                 }
             };
-            let params = RoomParams { map, mission, seed };
+            let params = RoomParams { map, map_label, mission, seed };
             let room = match hub.create_room(params) {
                 Ok(room) => room,
                 Err(refusal) => {
@@ -216,15 +255,16 @@ async fn handle(bytes: &[u8], conn_id: u64, hub: &Arc<Hub>, outbox: &Outbox, att
                 }
             };
             outbox.lobby(Lobby::RoomCreated { code: room.code.clone() });
-            join(room, nick, device_token, conn_id, outbox, attached).await;
+            join(room, nick, device_token, conn_id, outbox, attached, hub, &label).await;
         }
-        Msg::Lobby(Lobby::Join { nick, device_token, code }) => {
+        Msg::Lobby(Lobby::Join { nick, device_token, code, client }) => {
             if attached.is_some() {
                 outbox.lobby(Lobby::Error { refusal: Refusal::AlreadyInRoom });
                 return;
             }
+            let label = seen.greet(hub, client.as_ref());
             match hub.find(&code) {
-                Ok(room) => join(room, nick, device_token, conn_id, outbox, attached).await,
+                Ok(room) => join(room, nick, device_token, conn_id, outbox, attached, hub, &label).await,
                 Err(refusal) => {
                     info!(conn = conn_id, code, %refusal, "join refused");
                     outbox.lobby(Lobby::Error { refusal });
@@ -256,7 +296,9 @@ async fn handle(bytes: &[u8], conn_id: u64, hub: &Arc<Hub>, outbox: &Outbox, att
     }
 }
 
-/// Ask `room` for a seat and, given one, attach the connection to it.
+/// Ask `room` for a seat and, given one, attach the connection to it and
+/// count the seat under the client's build.
+#[allow(clippy::too_many_arguments)]
 async fn join(
     room: RoomHandle,
     nick: String,
@@ -264,6 +306,8 @@ async fn join(
     conn_id: u64,
     outbox: &Outbox,
     attached: &mut Option<Attached>,
+    hub: &Hub,
+    client: &ClientLabel,
 ) {
     let (reply, answer) = oneshot::channel();
     let link = ConnLink { id: conn_id, outbox: outbox.clone() };
@@ -273,6 +317,7 @@ async fn join(
     }
     match answer.await {
         Ok(Ok(joined)) => {
+            hub.metrics.client_seated(client);
             *attached = Some(Attached { room, mailbox: joined.mailbox });
         }
         Ok(Err(refusal)) => {

@@ -21,7 +21,8 @@
 //! - `conn`: one WebSocket connection - decode, route, write.
 //! - `hub`: every room this server holds, and the drain.
 //! - `metrics`: the Prometheus text on `/metrics`.
-//! - `http`: the axum router and `Server`.
+//! - `http`: the axum routers and `Server` - the public listener and the
+//!   metrics listener beside it.
 //! - `devserver` (feature `dev-tools`): the loopback JSON socket
 //!   `bbmcp rooms` drives - never on the axum router.
 

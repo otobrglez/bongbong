@@ -113,6 +113,11 @@ pub mod wire;
 /// needs no bump.
 pub const PROTOCOL_VERSION: u16 = 10;
 
+/// This build's version, the `bongbong` crate's: what a client reports
+/// about itself in `wire::ClientInfo` and the room server labels its
+/// metrics with.
+pub const BUILD_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// The most seats a room holds (docs/online-coop-prd.md §7, decision 4):
 /// the length of `Snapshot::acked`, and the same number `Input::seats`
 /// carries, so the one in `lib.rs` is the source.

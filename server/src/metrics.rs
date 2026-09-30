@@ -1,9 +1,11 @@
 //! What `/metrics` reports (docs/online-coop-prd.md §4.9, §4.16): rooms
-//! by phase, seats, tick time and tick lateness percentiles from rings of
-//! recent ticks, snapshot bytes per second, reconnects. Counters are
-//! atomics the room and connection tasks bump; the three windows sit
-//! behind short mutexes.
+//! by phase and the cap on them, rooms in play and rounds by map and
+//! mission, seats, the clients by build, tick time and tick lateness
+//! percentiles from rings of recent ticks, snapshot bytes per second,
+//! reconnects. Counters are atomics the room and connection tasks bump;
+//! the windows and the labelled families sit behind short mutexes.
 
+use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -18,6 +20,11 @@ pub const TICK_RING: usize = 1024;
 /// wake-up noise and far enough behind to be felt downstream as a
 /// snapshot arriving out of step.
 pub const LATE_TICK: Duration = Duration::from_millis(5);
+
+/// The most distinct client builds the client families label; a build
+/// past it counts under `other`. A label value is whatever a client
+/// sends, so without a cap a client could mint a series per connection.
+pub const CLIENT_LABELS_MAX: usize = 32;
 
 /// The window `snapshot_bytes_per_second` averages over.
 const BYTES_WINDOW: Duration = Duration::from_secs(1);
@@ -70,16 +77,74 @@ impl BytesWindow {
 }
 
 /// Room counts by phase, gathered by the hub for one rendering.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RoomCounts {
     pub waiting: usize,
     pub playing: usize,
     pub paused: usize,
     pub ended: usize,
+    /// The most rooms this server holds at once (`--max-rooms`).
+    pub max_rooms: usize,
     /// Seats with somebody on the socket.
     pub seats_connected: usize,
     /// Seats owned but nobody on the socket.
     pub seats_away: usize,
+    /// Rooms playing, by (map label, mission name).
+    pub playing_by: BTreeMap<(String, &'static str), usize>,
+}
+
+/// A client build as the metrics label it (`ClientLabel::of`): every value
+/// bounded, so a client choosing what it sends cannot choose what the
+/// series are.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ClientLabel {
+    pub version: String,
+    pub protocol: String,
+    pub platform: String,
+}
+
+impl ClientLabel {
+    /// The label for what a client said about itself; `unknown` for a
+    /// build too old to say, `invalid` for a version that is not a short
+    /// dotted version string, `other` for a platform off the list.
+    pub fn of(client: Option<&bongbong::net::wire::ClientInfo>) -> ClientLabel {
+        let Some(c) = client else {
+            return ClientLabel { version: "unknown".into(), protocol: "unknown".into(), platform: "unknown".into() };
+        };
+        let version_ok = !c.version.is_empty()
+            && c.version.len() <= 24
+            && c.version.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '+'));
+        let platform = match c.platform.as_str() {
+            p @ ("web" | "ios" | "android" | "macos" | "windows" | "linux") => p,
+            _ => "other",
+        };
+        ClientLabel {
+            version: if version_ok { c.version.clone() } else { "invalid".into() },
+            protocol: c.protocol.to_string(),
+            platform: platform.into(),
+        }
+    }
+
+    fn other() -> ClientLabel {
+        ClientLabel { version: "other".into(), protocol: "other".into(), platform: "other".into() }
+    }
+}
+
+/// The client families: open connections and seats taken, by build.
+#[derive(Default)]
+struct Clients {
+    open: BTreeMap<ClientLabel, i64>,
+    seats_total: BTreeMap<ClientLabel, u64>,
+}
+
+impl Clients {
+    /// The key `label` counts under: itself once seen or while there is
+    /// room for another, `other` past `CLIENT_LABELS_MAX`.
+    fn key(&self, label: &ClientLabel) -> ClientLabel {
+        let known = self.open.contains_key(label) || self.seats_total.contains_key(label);
+        let distinct = self.open.keys().chain(self.seats_total.keys()).collect::<std::collections::BTreeSet<_>>().len();
+        if known || distinct < CLIENT_LABELS_MAX { label.clone() } else { ClientLabel::other() }
+    }
 }
 
 pub struct Metrics {
@@ -88,6 +153,11 @@ pub struct Metrics {
     /// (`net::authority::TickClock`).
     lateness: Mutex<TickRing>,
     bytes: Mutex<BytesWindow>,
+    /// Rounds started, by (map label, mission).
+    rounds_started: Mutex<BTreeMap<(String, &'static str), u64>>,
+    /// Rounds ended, by (map label, mission, outcome).
+    rounds_ended: Mutex<BTreeMap<(String, &'static str, &'static str), u64>>,
+    clients: Mutex<Clients>,
     pub snapshot_bytes_total: AtomicU64,
     pub snapshots_skipped_total: AtomicU64,
     pub tick_overruns_total: AtomicU64,
@@ -116,6 +186,9 @@ impl Default for Metrics {
             ticks: Mutex::new(TickRing { micros: Vec::with_capacity(TICK_RING), next: 0 }),
             lateness: Mutex::new(TickRing { micros: Vec::with_capacity(TICK_RING), next: 0 }),
             bytes: Mutex::new(BytesWindow { started: Instant::now(), bytes: 0, rate: 0.0 }),
+            rounds_started: Mutex::new(BTreeMap::new()),
+            rounds_ended: Mutex::new(BTreeMap::new()),
+            clients: Mutex::new(Clients::default()),
             snapshot_bytes_total: AtomicU64::new(0),
             snapshots_skipped_total: AtomicU64::new(0),
             tick_overruns_total: AtomicU64::new(0),
@@ -161,6 +234,40 @@ impl Metrics {
         self.bytes.lock().expect("bytes window poisoned").add(bytes as u64, Instant::now());
     }
 
+    /// A room on `map` started a round of `mission`.
+    pub fn round_started(&self, map: &str, mission: &'static str) {
+        *self.rounds_started.lock().expect("rounds poisoned").entry((map.to_string(), mission)).or_default() += 1;
+    }
+
+    /// A room on `map` ended a round of `mission` with `outcome` (`won`,
+    /// `lost`, or `unfinished` for one the room stopped before either).
+    pub fn round_ended(&self, map: &str, mission: &'static str, outcome: &'static str) {
+        *self.rounds_ended.lock().expect("rounds poisoned").entry((map.to_string(), mission, outcome)).or_default() += 1;
+    }
+
+    /// A connection asked for a room, from the build `label` names; it
+    /// counts as open until `client_closed` with the label this returns.
+    pub fn client_opened(&self, label: &ClientLabel) -> ClientLabel {
+        let mut clients = self.clients.lock().expect("clients poisoned");
+        let key = clients.key(label);
+        *clients.open.entry(key.clone()).or_default() += 1;
+        key
+    }
+
+    /// The connection `client_opened` counted is gone.
+    pub fn client_closed(&self, key: &ClientLabel) {
+        if let Some(n) = self.clients.lock().expect("clients poisoned").open.get_mut(key) {
+            *n -= 1;
+        }
+    }
+
+    /// A client of `label`'s build took a seat.
+    pub fn client_seated(&self, label: &ClientLabel) {
+        let mut clients = self.clients.lock().expect("clients poisoned");
+        let key = clients.key(label);
+        *clients.seats_total.entry(key).or_default() += 1;
+    }
+
     /// (p50, p99) of the recorded ticks, microseconds.
     pub fn tick_percentiles(&self) -> (u32, u32) {
         self.ticks.lock().expect("tick ring poisoned").percentiles()
@@ -201,6 +308,11 @@ impl Metrics {
         let (late50, late99) = self.lateness_percentiles();
         let rate = self.bytes.lock().expect("bytes window poisoned").rate;
         let mut out = String::new();
+        let playing: Vec<(String, f64)> = rooms
+            .playing_by
+            .iter()
+            .map(|((map, mission), n)| (format!("{{map=\"{map}\",mission=\"{mission}\"}}"), *n as f64))
+            .collect();
         let mut gauge = |name: &str, help: &str, rows: &[(&str, f64)]| {
             let _ = writeln!(out, "# HELP {name} {help}\n# TYPE {name} gauge");
             for (labels, value) in rows {
@@ -216,6 +328,16 @@ impl Metrics {
                 ("{phase=\"paused\"}", rooms.paused as f64),
                 ("{phase=\"ended\"}", rooms.ended as f64),
             ],
+        );
+        gauge(
+            "bongbong_rooms_playing",
+            "Rooms playing a round, by map (a shipped map's name, or custom) and mission.",
+            &playing.iter().map(|(l, v)| (l.as_str(), *v)).collect::<Vec<_>>(),
+        );
+        gauge(
+            "bongbong_rooms_max",
+            "The most rooms this server holds at once (--max-rooms).",
+            &[("", rooms.max_rooms as f64)],
         );
         gauge(
             "bongbong_seats",
@@ -243,12 +365,50 @@ impl Metrics {
             "Build and protocol.",
             &[(
                 &format!(
-                    "{{version=\"{}\",protocol=\"{}\"}}",
+                    "{{version=\"{}\",game_version=\"{}\",protocol=\"{}\"}}",
                     env!("CARGO_PKG_VERSION"),
+                    bongbong::net::BUILD_VERSION,
                     bongbong::net::PROTOCOL_VERSION
                 ),
                 1.0,
             )],
+        );
+        {
+            let clients = self.clients.lock().expect("clients poisoned");
+            let rows: Vec<(String, f64)> = clients.open.iter().map(|(k, n)| (client_labels(k), *n as f64)).collect();
+            gauge(
+                "bongbong_clients",
+                "Open connections that asked for a room, by the client's build (version, protocol, platform).",
+                &rows.iter().map(|(l, v)| (l.as_str(), *v)).collect::<Vec<_>>(),
+            );
+            labelled_counter(
+                &mut out,
+                "bongbong_client_seats_total",
+                "Seats taken, by the client's build (version, protocol, platform).",
+                clients.seats_total.iter().map(|(k, n)| (client_labels(k), *n)),
+            );
+        }
+        labelled_counter(
+            &mut out,
+            "bongbong_rounds_started_total",
+            "Rounds started, by map (a shipped map's name, or custom) and mission.",
+            self.rounds_started
+                .lock()
+                .expect("rounds poisoned")
+                .iter()
+                .map(|((map, mission), n)| (format!("{{map=\"{map}\",mission=\"{mission}\"}}"), *n)),
+        );
+        labelled_counter(
+            &mut out,
+            "bongbong_rounds_ended_total",
+            "Rounds ended, by map, mission and outcome (won, lost, unfinished).",
+            self.rounds_ended
+                .lock()
+                .expect("rounds poisoned")
+                .iter()
+                .map(|((map, mission, outcome), n)| {
+                    (format!("{{map=\"{map}\",mission=\"{mission}\",outcome=\"{outcome}\"}}"), *n)
+                }),
         );
         let counters: [(&str, &str, &AtomicU64); 10] = [
             ("bongbong_ticks_total", "Game::update calls.", &self.ticks_total),
@@ -274,6 +434,19 @@ impl Metrics {
             let _ = writeln!(out, "# HELP {name} {help}\n# TYPE {name} counter\n{name} {}", value.load(Ordering::Relaxed));
         }
         out
+    }
+}
+
+/// `{version="..",protocol="..",platform=".."}` for a client label.
+fn client_labels(k: &ClientLabel) -> String {
+    format!("{{version=\"{}\",protocol=\"{}\",platform=\"{}\"}}", k.version, k.protocol, k.platform)
+}
+
+/// A counter family with one row per label set.
+fn labelled_counter(out: &mut String, name: &str, help: &str, rows: impl Iterator<Item = (String, u64)>) {
+    let _ = writeln!(out, "# HELP {name} {help}\n# TYPE {name} counter");
+    for (labels, value) in rows {
+        let _ = writeln!(out, "{name}{labels} {value}");
     }
 }
 
@@ -320,9 +493,10 @@ mod tests {
         m.record_tick_start(Duration::from_micros(700), 0);
         m.record_snapshot_bytes(200);
         m.reconnects_total.fetch_add(2, Ordering::Relaxed);
-        let text = m.render(RoomCounts { playing: 1, seats_connected: 2, ..Default::default() }, true);
+        let text = m.render(RoomCounts { playing: 1, max_rooms: 25, seats_connected: 2, ..Default::default() }, true);
         for needle in [
             "bongbong_rooms{phase=\"playing\"} 1",
+            "bongbong_rooms_max 25",
             "bongbong_seats{state=\"connected\"} 2",
             "bongbong_tick_microseconds{quantile=\"0.5\"} 1500",
             "bongbong_tick_microseconds{quantile=\"0.99\"} 1500",
@@ -337,6 +511,56 @@ mod tests {
         ] {
             assert!(text.contains(needle), "missing {needle:?} in:\n{text}");
         }
-        assert!(text.lines().filter(|l| l.starts_with("# TYPE")).count() >= 13);
+        assert!(text.lines().filter(|l| l.starts_with("# TYPE")).count() >= 14);
+    }
+
+    /// Rooms in play and rounds are labelled by map and mission, and the
+    /// clients by the build they said they were.
+    #[test]
+    fn rounds_and_clients_are_labelled() {
+        use bongbong::net::wire::ClientInfo;
+        let m = Metrics::new();
+        m.round_started("lotus-lagoon", "protect");
+        m.round_started("lotus-lagoon", "protect");
+        m.round_ended("lotus-lagoon", "protect", "won");
+        let web = ClientLabel::of(Some(&ClientInfo { version: "0.2.4".into(), protocol: 10, platform: "web".into() }));
+        let key = m.client_opened(&web);
+        m.client_seated(&web);
+        m.client_opened(&ClientLabel::of(None));
+        let mut rooms = RoomCounts::default();
+        rooms.playing_by.insert(("custom".into(), "hunt"), 2);
+        let text = m.render(rooms, false);
+        for needle in [
+            "bongbong_rooms_playing{map=\"custom\",mission=\"hunt\"} 2",
+            "bongbong_rounds_started_total{map=\"lotus-lagoon\",mission=\"protect\"} 2",
+            "bongbong_rounds_ended_total{map=\"lotus-lagoon\",mission=\"protect\",outcome=\"won\"} 1",
+            "bongbong_clients{version=\"0.2.4\",protocol=\"10\",platform=\"web\"} 1",
+            "bongbong_clients{version=\"unknown\",protocol=\"unknown\",platform=\"unknown\"} 1",
+            "bongbong_client_seats_total{version=\"0.2.4\",protocol=\"10\",platform=\"web\"} 1",
+            &format!("game_version=\"{}\"", bongbong::net::BUILD_VERSION),
+        ] {
+            assert!(text.contains(needle), "missing {needle:?} in:\n{text}");
+        }
+        m.client_closed(&key);
+        assert!(m.render(RoomCounts::default(), false).contains("bongbong_clients{version=\"0.2.4\",protocol=\"10\",platform=\"web\"} 0"));
+    }
+
+    /// What a client sends cannot mint series: a strange version reads
+    /// `invalid`, a strange platform `other`, and past `CLIENT_LABELS_MAX`
+    /// builds every new one counts as `other`.
+    #[test]
+    fn client_labels_are_bounded() {
+        use bongbong::net::wire::ClientInfo;
+        let odd = ClientLabel::of(Some(&ClientInfo { version: "1.0\"} x{".into(), protocol: 10, platform: "toaster".into() }));
+        assert_eq!((odd.version.as_str(), odd.platform.as_str()), ("invalid", "other"));
+        let m = Metrics::new();
+        for i in 0..CLIENT_LABELS_MAX + 5 {
+            let label = ClientLabel::of(Some(&ClientInfo { version: format!("0.0.{i}"), protocol: 10, platform: "web".into() }));
+            m.client_opened(&label);
+        }
+        let text = m.render(RoomCounts::default(), false);
+        let series = text.lines().filter(|l| l.starts_with("bongbong_clients{")).count();
+        assert_eq!(series, CLIENT_LABELS_MAX + 1, "the cap plus other:\n{text}");
+        assert!(text.contains("bongbong_clients{version=\"other\",protocol=\"other\",platform=\"other\"} 5"), "{text}");
     }
 }

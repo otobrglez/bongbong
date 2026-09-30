@@ -241,7 +241,7 @@ pub fn run(cfg: &RunConfig) -> Result<Report, String> {
             let link = cfg.link;
             let seed = cfg.seed;
             let (addr, log) = runtime.block_on(async move {
-                let config = bongbong_server::Config { listen: "127.0.0.1:0".parse().expect("an address"), insecure: true, max_rooms: 4 };
+                let config = bongbong_server::Config { listen: "127.0.0.1:0".parse().expect("an address"), admin_listen: None, insecure: true, max_rooms: 4 };
                 let server = bongbong_server::Server::bind(config).await.map_err(|e| format!("bind the room server: {e}"))?;
                 let upstream = server.addr;
                 tokio::spawn(server.run(std::future::pending()));

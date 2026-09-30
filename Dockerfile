@@ -36,8 +36,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 # The distroless family is what boo-run's images sit on too.
 FROM gcr.io/distroless/cc-debian12
 
-# /ws, /health and /metrics all sit behind this one port.
-EXPOSE 4848/tcp
+# /ws alone on 4848; /health, /ready and /metrics on the admin port 4850
+# (the deployment routes only the first through its Ingress).
+EXPOSE 4848/tcp 4850/tcp
 
 COPY --from=build /bongbong-server /bongbong-server
 
@@ -45,4 +46,4 @@ COPY --from=build /bongbong-server /bongbong-server
 # flag only declares that nothing terminates TLS in front, and here the
 # ingress does. `--max-rooms` is the manifest's to override.
 ENTRYPOINT ["/bongbong-server"]
-CMD ["--listen", "0.0.0.0:4848"]
+CMD ["--listen", "0.0.0.0:4848", "--admin-listen", "0.0.0.0:4850"]

@@ -156,8 +156,9 @@ watch-dev:
     cargo watch -x "run --features dev-tools"
 
 # The online co-op room server on loopback (docs/online-coop-prd.md §4.13,
-# CLAUDE.md's room server section): plain ws:// on 127.0.0.1:4848, with
-# `/health` and `/metrics` beside `/ws`. One instance holds every room.
+# CLAUDE.md's room server section): plain ws:// on 127.0.0.1:4848, and
+# `/health`, `/ready` and `/metrics` on the admin port 127.0.0.1:4850.
+# One instance holds every room.
 # Headless - no raylib in its graph. Extra args pass through
 # (`just run-server --max-rooms 10`).
 run-server *ARGS:
@@ -217,8 +218,8 @@ rooms-image *ARGS:
 # `--insecure` is added because nothing terminates TLS in front of it here.
 # Run the image the cluster would run, on loopback.
 rooms-image-run PORT='4848':
-    docker run --rm -p {{PORT}}:4848 {{rooms_image}}:latest \
-      --listen 0.0.0.0:4848 --insecure
+    docker run --rm -p {{PORT}}:4848 -p 127.0.0.1:4850:4850 {{rooms_image}}:latest \
+      --listen 0.0.0.0:4848 --admin-listen 0.0.0.0:4850 --insecure
 
 # deploy-rooms.yml does exactly this; this is the hand path for a one-off.
 # Build the image, push it, and point the kustomization at the new tag.

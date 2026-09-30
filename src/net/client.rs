@@ -22,7 +22,7 @@ use crate::net::codec::Msg;
 use crate::net::delta::apply_delta;
 use crate::net::rooms::RoomCode;
 use crate::net::transport::{Closed, ConnState, Transport};
-use crate::net::wire::{IntentMsg, Lobby, RosterSeat, RoundOutcome, Snapshot, Welcome, Refusal};
+use crate::net::wire::{ClientInfo, IntentMsg, Lobby, RosterSeat, RoundOutcome, Snapshot, Welcome, Refusal};
 
 /// How many consecutive ticks a press is sent for
 /// (docs/online-coop-prd.md §4.1). The server samples one intent per
@@ -493,10 +493,11 @@ impl<T: Transport> RoomClient<T> {
                 map_toml: setup.map_toml.clone(),
                 mission: setup.mission,
                 seed: setup.seed,
+                client: Some(ClientInfo::this_build()),
             },
             Greeting::Join(code) => {
                 self.code = Some(code.clone());
-                Lobby::Join { nick, device_token, code: code.clone() }
+                Lobby::Join { nick, device_token, code: code.clone(), client: Some(ClientInfo::this_build()) }
             }
         };
         self.transport.send_msg(&Msg::Lobby(msg));
@@ -705,8 +706,9 @@ mod tests {
                 map_toml: None,
                 mission: Mission::Protect,
                 seed: Some(0xB0B5),
+                client: Some(ClientInfo::this_build()),
             })],
-            "the create carries the identity and the setup"
+            "the create carries the identity, the setup and the build"
         );
 
         // A second poll must not greet twice.
@@ -759,6 +761,7 @@ mod tests {
                 nick: "second".into(),
                 device_token: "tok-second".into(),
                 code: "ak7qx".into(),
+                client: Some(ClientInfo::this_build()),
             })],
             "the code travels as the caller spelled it; the room canonicalises"
         );

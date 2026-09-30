@@ -23,7 +23,7 @@ fn a_remote_server_that_starts_late_is_dialled_until_it_answers() {
         std::thread::sleep(Duration::from_millis(800));
         handle.block_on(async move {
             let listen = format!("127.0.0.1:{port}").parse().expect("an address");
-            let config = bongbong_server::Config { listen, insecure: true, max_rooms: 4 };
+            let config = bongbong_server::Config { listen, admin_listen: None, insecure: true, max_rooms: 4 };
             let server = bongbong_server::Server::bind(config).await.expect("the room server binds");
             tokio::spawn(server.run(std::future::pending()));
         });

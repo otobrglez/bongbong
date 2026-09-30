@@ -29,7 +29,7 @@ spec:
     metadata: { labels: { app: rooms } }
     spec:
       # The drain (server/src/main.rs, hub::DRAIN_MAX): on SIGTERM the
-      # server refuses new rooms and rematches, reports 503 on /health,
+      # server refuses new rooms and rematches, reports 503 on /ready,
       # keeps ticking the rounds it has, and exits when the last ends or
       # after 30 minutes. This has to outlast DRAIN_MAX or the kubelet
       # SIGKILLs a live round.
@@ -43,9 +43,14 @@ spec:
       containers:
         - name: rooms
           image: registry.folk-decibel.ts.net/bongbong/bongbong-server
-          args: [ "--listen", "0.0.0.0:4848", "--max-rooms", "25" ]
+          args: [ "--listen", "0.0.0.0:4848", "--admin-listen", "0.0.0.0:4850", "--max-rooms", "25" ]
+          # Two ports: `http` carries /ws alone and is the one the Ingress
+          # routes; `admin` carries /health, /ready and /metrics and is
+          # reached only from inside the cluster - the kubelet's probes
+          # and the ServiceMonitor - because no Ingress rule names it.
           ports:
             - { containerPort: 4848, name: http }
+            - { containerPort: 4850, name: admin }
 
           envFrom:
             - configMapRef:
@@ -55,27 +60,29 @@ spec:
           # database and calls no third-party API. Version 1 keeps nothing
           # on disk (§4.9), so there is no volume either.
 
-          # Readiness is /health, which answers 503 the moment the drain
+          # Readiness is /ready, which answers 503 the moment the drain
           # starts - that is precisely what should take the pod out of the
           # Service's endpoints so no new room lands on a server that is
-          # leaving.
+          # leaving. A drain never ends in readiness again, so two misses
+          # five seconds apart are enough.
           readinessProbe:
-            httpGet: { path: /health, port: http }
-            initialDelaySeconds: 3
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 3
-          # Liveness is deliberately NOT /health. /health reports 503 for
-          # as long as the drain runs, so an HTTP liveness probe would
-          # restart the pod a few seconds into every deploy and kill every
-          # round the drain exists to protect. A TCP check answers the
-          # only question liveness should ask here - is the listener still
-          # accepting? - and stays true throughout a drain.
+            httpGet: { path: /ready, port: admin }
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+          # Liveness is /health, which answers for as long as the server
+          # does - through the whole drain, which a restart would cut short
+          # and every round with it - and reads the room list on the way,
+          # so a hub that has seized up stops answering. A TCP check would
+          # not see that: the kernel completes the handshake whatever the
+          # process is doing. It is not /ready, which is 503 for as long
+          # as the drain runs.
           livenessProbe:
-            tcpSocket: { port: http }
-            initialDelaySeconds: 10
-            periodSeconds: 20
-            timeoutSeconds: 5
+            httpGet: { path: /health, port: admin }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
             failureThreshold: 3
 
           # Sized from docs/online-coop-prd.md §5: about 2 % of a core per
@@ -106,6 +113,11 @@ spec:
   selector: { app: rooms }
   ports:
     - { name: http, port: 80, targetPort: http }
+    # /health, /ready and /metrics. The kubelet probes the container port
+    # directly; this Service port is Prometheus's, through the
+    # ServiceMonitor below. The Ingress routes port 80 only, so this one
+    # never leaves the cluster.
+    - { name: admin, port: 4850, targetPort: admin }
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -142,9 +154,10 @@ spec:
     - host: rooms.bongbong.io
       http:
         paths:
-          # /ws carries every message; /health and /metrics are the
-          # operator's. There is no other route - no HTTP POST anywhere
-          # in the protocol (§4.7).
+          # /ws carries every message and is the only route on this port:
+          # no HTTP POST anywhere in the protocol (§4.7), and /health,
+          # /ready and /metrics are on the admin port, which no Ingress
+          # routes.
           - path: /
             pathType: Prefix
             backend:
@@ -160,11 +173,10 @@ metadata:
   labels: { release: prom }
 spec:
   endpoints:
-    # /metrics shares the one port with /ws and /health, so this scrapes
-    # the http port rather than a metrics port of its own.
+    # /metrics is on the admin port, which no Ingress routes.
     - interval: 10s
       path: /metrics
-      port: http
+      port: admin
   namespaceSelector:
     matchNames:
       - bongbong-prod
