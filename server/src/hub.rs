@@ -180,7 +180,7 @@ impl Hub {
 
     /// The counts `/metrics` reports.
     pub fn counts(&self) -> RoomCounts {
-        let mut counts = RoomCounts::default();
+        let mut counts = RoomCounts { max_rooms: self.max_rooms, ..RoomCounts::default() };
         for handle in self.rooms.lock().expect("rooms poisoned").values() {
             match handle.stats.phase() {
                 Phase::Waiting => counts.waiting += 1,

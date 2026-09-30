@@ -1,5 +1,5 @@
 //! What `/metrics` reports (docs/online-coop-prd.md §4.9, §4.16): rooms
-//! by phase, seats, tick time and tick lateness percentiles from rings of
+//! by phase and the cap on them, seats, tick time and tick lateness percentiles from rings of
 //! recent ticks, snapshot bytes per second, reconnects. Counters are
 //! atomics the room and connection tasks bump; the three windows sit
 //! behind short mutexes.
@@ -76,6 +76,8 @@ pub struct RoomCounts {
     pub playing: usize,
     pub paused: usize,
     pub ended: usize,
+    /// The most rooms this server holds at once (`--max-rooms`).
+    pub max_rooms: usize,
     /// Seats with somebody on the socket.
     pub seats_connected: usize,
     /// Seats owned but nobody on the socket.
@@ -218,6 +220,11 @@ impl Metrics {
             ],
         );
         gauge(
+            "bongbong_rooms_max",
+            "The most rooms this server holds at once (--max-rooms).",
+            &[("", rooms.max_rooms as f64)],
+        );
+        gauge(
             "bongbong_seats",
             "Seats on this server by connection state.",
             &[("{state=\"connected\"}", rooms.seats_connected as f64), ("{state=\"away\"}", rooms.seats_away as f64)],
@@ -320,9 +327,10 @@ mod tests {
         m.record_tick_start(Duration::from_micros(700), 0);
         m.record_snapshot_bytes(200);
         m.reconnects_total.fetch_add(2, Ordering::Relaxed);
-        let text = m.render(RoomCounts { playing: 1, seats_connected: 2, ..Default::default() }, true);
+        let text = m.render(RoomCounts { playing: 1, max_rooms: 25, seats_connected: 2, ..Default::default() }, true);
         for needle in [
             "bongbong_rooms{phase=\"playing\"} 1",
+            "bongbong_rooms_max 25",
             "bongbong_seats{state=\"connected\"} 2",
             "bongbong_tick_microseconds{quantile=\"0.5\"} 1500",
             "bongbong_tick_microseconds{quantile=\"0.99\"} 1500",
@@ -337,6 +345,6 @@ mod tests {
         ] {
             assert!(text.contains(needle), "missing {needle:?} in:\n{text}");
         }
-        assert!(text.lines().filter(|l| l.starts_with("# TYPE")).count() >= 13);
+        assert!(text.lines().filter(|l| l.starts_with("# TYPE")).count() >= 14);
     }
 }

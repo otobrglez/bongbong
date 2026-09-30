@@ -202,6 +202,39 @@ Then play it: point a client at the deployed server with
 
 The two numbers worth an alert, both from `/metrics`:
 `bongbong_tick_microseconds{quantile="0.99"}` nearing 16000, and
-`bongbong_rooms` summing toward `--max-rooms`. Either is the signal to
-build the several-instance design §4.8 defers, before players meet the
-ceiling.
+`bongbong_rooms` summing toward `bongbong_rooms_max` (`--max-rooms`).
+Either is the signal to build the several-instance design §4.8 defers,
+before players meet the ceiling.
+
+## Monitoring
+
+The cluster runs kube-prometheus-stack in `observability`: Prometheus picks
+up any ServiceMonitor labelled `release: prom` in any namespace, and Grafana
+(`https://grafana.folk-decibel.ts.net`, tailnet only) loads any ConfigMap
+labelled `grafana_dashboard: "1"` in any namespace.
+
+- **Scraping**: production's ServiceMonitor is in `deployment-rooms.yaml`,
+  and every PR preview carries its own in `rooms-preview.yaml`, so a
+  preview is scraped from the moment CI applies it and stops when its
+  namespace is deleted. Both scrape `/metrics` every 10 s and land under
+  `job="rooms"`, told apart by `namespace`.
+- **The dashboard**, "bongbong room servers" (uid `bongbong-rooms`), is
+  `base/grafana/bongbong-rooms.json`, turned into the ConfigMap
+  `grafana-dashboard-rooms` by the kustomization, so every production deploy
+  ships it. Its top table lists every server - production and each open
+  preview - and the Server selector picks the one the rest of the dashboard
+  shows. It is read-only in the UI: change the JSON and deploy.
+
+To load an edited dashboard without a deploy:
+
+```
+kubectl create configmap grafana-dashboard-rooms -n bongbong-prod \
+  --from-file=bongbong-rooms.json=k8s/base/grafana/bongbong-rooms.json \
+  --dry-run=client -o yaml \
+  | kubectl label --local -f - grafana_dashboard=1 -o yaml \
+  | kubectl apply -f -
+```
+
+Two things the cluster's stack does not do yet: Alertmanager's only
+receiver is `null`, so an alert rule would reach nobody; and Prometheus
+keeps its ten days on an `emptyDir`, so they are gone if the pod moves.

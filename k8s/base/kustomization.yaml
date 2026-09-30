@@ -2,6 +2,21 @@ resources:
 - namespace.yaml
 - deployment-rooms.yaml
 
+# The Grafana dashboard for every room server (k8s/README.md, "Monitoring").
+# The cluster's Grafana loads any ConfigMap labelled grafana_dashboard=1 in
+# any namespace and re-reads it within 30 s, so the JSON beside this file is
+# the dashboard's source: it is read-only in the UI, and a change is an edit
+# here and a deploy.
+configMapGenerator:
+- name: grafana-dashboard-rooms
+  namespace: bongbong-prod
+  files:
+  - grafana/bongbong-rooms.json
+  options:
+    disableNameSuffixHash: true
+    labels:
+      grafana_dashboard: "1"
+
 images:
 - name: registry.folk-decibel.ts.net/bongbong/bongbong-server
   newTag: v0.1.0-39-gdcb8f2b

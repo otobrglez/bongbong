@@ -87,6 +87,30 @@ spec:
   ports:
     - { name: http, port: 80, targetPort: http }
 ---
+# Scraped like production (the ServiceMonitor in k8s/base), so the
+# "bongbong room servers" Grafana dashboard lists this preview beside
+# bongbong-prod. `release: prom` is the label the cluster's Prometheus
+# selects monitors by; it watches every namespace, so nothing outside this
+# file has to change for a new PR, and deleting the namespace stops the
+# scrape.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: rooms
+  namespace: bongbong-pr-__PR__
+  labels: { release: prom }
+spec:
+  endpoints:
+    - interval: 10s
+      path: /metrics
+      port: http
+  namespaceSelector:
+    matchNames:
+      - bongbong-pr-__PR__
+  selector:
+    matchLabels:
+      app: rooms
+---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
