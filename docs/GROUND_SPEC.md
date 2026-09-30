@@ -354,14 +354,32 @@ the author painted, so the format needs no river/lake distinction:
   like `SAND_CORNER`): a grid vertex is wet where all four cells around it
   are water, so a painted block becomes a pool whose rounded shore runs half
   a cell inside its outline, and a block two wide is a channel one cell
-  wide with a shore on each side. A vertex is also wet where three of its
-  four cells are water and one of them is a lake cell — that is a stream
-  meeting a shore, and it opens the shore into a mouth around the stream
-  instead of leaving a lip of grass between them. The two diagonal masks
-  (0101/1010) are not in the wangset and this rule never produces them
-  (a lake cell's block centre is one of its corners, and wetting the
-  opposite corner wets one of the other two); the table holds flat water
-  there so a mistake would show as water, never as grass inside a lake.
+  wide with a shore on each side. That is the only way a vertex is wet from
+  the paint alone: a wet vertex with a non-water cell beside it would stand
+  at the corner of a tile drawn without water there, a square bite of grass
+  out of the lake.
+- **Diagonals are smoothed.** A staircase of 2x2 blocks leaves the cell
+  where two blocks meet wet at two opposite corners only (a *saddle*,
+  0101/1010), pinching the water to a point. Each dry corner of a saddle is
+  wetted where its three water cells are lake cells and the fourth is
+  grass; that grass cell is then drawn from `WATER_SHORE` too (a lake
+  corner in it, dry ground to the rules), and the run flows as one body.
+  Repeated until nothing changes. A wall beside the saddle keeps its dirt,
+  so the pack-less diagonal tile can still come up: 602/603, composed (below).
+- **Mouths.** A lake cell with a stream on one of its sides takes a mouth
+  tile (`WATER_MOUTH`): the shore with a gap the stream runs through. A
+  stream only ever touches a lake cell on a side whose two corners are dry,
+  which leaves 16 cases. The four straight shores have mouths in the pack,
+  outside both wangsets (275 N, 329 S, 301 W, 303 E, animated like the
+  rest); the twelve single-corner ones (a stream meeting the end or side of
+  a two-wide channel, half a cell off its middle) are composed. A mouth on
+  the north or south carries the stream's current (`Current::Channel`, and
+  `WaterLayout` pushes there too).
+- **Water runs off the map.** A water question about a cell past the grid
+  is answered by the nearest cell on it, and the extra column and row the
+  centred grid carries copy the water of the map cell beside them, so a sea
+  or river painted to the edge carries on out of the picture. Nothing past
+  the map is deep or pushes: the rules stop at the map.
 - **Road wins** over water on the same cell (a wall stands on dirt), and
   road and water never join each other's autotile.
 - **Never under a drift**: a vertex beside a water cell does not drift, for
@@ -382,10 +400,10 @@ slots read as in §8:
 
 | mask (TL TR BR BL) | tile | mask | tile | mask | tile | mask | tile |
 |---|---|---|---|---|---|---|---|
-| 0001 | 279 | 0101 | 305 (never) | 1001 | 306 | 1101 | 308 |
-| 0010 | 277 | 0110 | 304 | 1010 | 305 (never) | 1110 | 307 |
+| 0001 | 279 | 0101 | 602 (composed) | 1001 | 306 | 1101 | 308 |
+| 0010 | 277 | 0110 | 304 | 1010 | 603 (composed) | 1110 | 307 |
 | 0011 | 278 | 0111 | 280 | 1011 | 281 | 1111 | 305 |
-| 0100 | 331 | 1000 | 333 | 1100 | 332 | 0000 | 305 (never) |
+| 0100 | 331 | 1000 | 333 | 1100 | 332 | 0000 | never asked for |
 
 **Animation.** Every one of those tiles but 305 carries a four-frame
 `<animation>` in the `.tsx` (100 ms each); the frames are scattered over
@@ -397,12 +415,30 @@ repeat one id, so `draw` indexes every cell the same way).
 flat tone with no animation in the pack (its would-be frames are
 byte-identical), which is what the next paragraph is for.
 
+**Composed tiles** (`ground::WATER_EXTRA`, `tools/water_tiles.py`). The
+two saddles and the twelve corner mouths are not in the pack, so
+`tools/retint_ground.py` composes them from its own tiles into transparent
+cells of the pristine original before it retints (both themes get them in
+their own tones; `_original/` is never written): tile `k` of the script's
+`TILES` is id `602 + k`, its frame `f` sits `f` rows below. A saddle is the
+two single-corner shores united; a corner mouth is the single-corner shore
+plus the half of the straight stream tile that enters it, cut where it
+meets the shore's water. The banks are kept where they still face land and
+the water is re-shaded so the shoreline highlight runs only along the shore
+that is left; each frame is composed from the sources' matching frames on
+the same geometry. The method reproduces the pack's own 275 from 278 plus a
+north stream to within 5 of 256 pixels. `ground::tests::
+no_tile_edge_puts_water_against_land` (default features: it decodes the
+sheets) walks every tile edge of a few hundred seeded random fields in both
+themes and all four frames and fails on water meeting land.
+
 **The current flows down the map.** The pack's frames shimmer in place, so
 the direction comes from `ground::draw_current`: short marks in the pack's
 own ripple highlight (`#1DCCCB`, a colour the sheet already has and one the
 retint leaves alone) drift southward at `water_flow_speed` px/s,
 `water_flow_lanes` per column, over every open lake cell (mask 1111) and
-along every stream cell joined north or south — inside the stream art's
+along every stream cell joined north or south (and the mouth such a stream
+runs through) — inside the stream art's
 own water columns (`WATER_CHANNEL_BAND`, source columns 3..13), which open
 water contains too, so a lane keeps its column from a lake into the stream
 that drains it. Shores, bends and sideways streams get no marks (there is

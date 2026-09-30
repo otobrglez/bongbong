@@ -31,11 +31,13 @@
 //! lookup and a blit per cell, no per-frame autotile work.
 //!
 //! The autotile tables below (`GRASS_FILL`, `SAND_CORNER`, `ROAD_EDGE`,
-//! `WATER_CHANNEL`, `WATER_SHORE`, `WATER_FRAMES`) are
+//! `WATER_CHANNEL`, `WATER_SHORE`, `WATER_MOUTH`, `WATER_FRAMES`) are
 //! extracted from the source pack's own Tiled wangset data
 //! (`static/punyworld/punyworld-overworld-tiles.tsx`), not invented here -
 //! see docs/GROUND_SPEC.md for exactly how each entry was derived and for
-//! the wangset's own documentation of the tile grid.
+//! the wangset's own documentation of the tile grid. The water tiles the
+//! pack lacks (`WATER_EXTRA`) are composed from its own by
+//! `tools/water_tiles.py`.
 //!
 //! Grid phase: a cell `(gx, gy)` is drawn *centered* on world position
 //! `(gx * GROUND_WORLD_TILE, gy * GROUND_WORLD_TILE)`, not top-left-aligned
@@ -82,7 +84,8 @@ enum Current {
     /// A lake interior (`WATER_SHORE[0b1111]`): open water the whole cell
     /// wide, the marks drift down anywhere across it.
     Open,
-    /// A stream cell joined north or south: the marks drift down its
+    /// A stream cell joined north or south, or a lake cell a stream enters
+    /// from the north or the south (a mouth): the marks drift down its
     /// centre band (`WATER_CHANNEL_BAND`), the columns the pack's stream
     /// art actually fills.
     Channel,
@@ -180,28 +183,26 @@ const WATER_CHANNEL: [i32; 16] = [
 
 /// Water as a **lake**: the pack's "river" Wang **corner** autotile, shaped
 /// like `SAND_CORNER` (bit3=TL bit2=TR bit1=BR bit0=BL, 1 = water at that
-/// corner) and laid the same way, at the grid vertices - `build` marks a
+/// corner) and laid the same way, at the grid vertices - `Layout` marks a
 /// vertex wet where the cells around it are water, so a painted block
-/// becomes a pool with a rounded shore half a cell inside its outline. The
-/// wangset has no tiles for the two diagonal cases (wet corners joined
-/// only corner to corner), and `build`'s vertex rule never produces them:
-/// a lake cell has its 2x2 block's centre at one corner, and the rule
-/// that would wet the opposite corner also wets one of the other two.
-/// 0000 never comes up either (that centre vertex is always wet). Both
-/// hold the pack's flat water rather than a hole, so a mistake in the
-/// rule would show as water, never as grass inside a lake.
+/// becomes a pool with a rounded shore half a cell inside its outline.
+/// The wangset has no tiles for the two diagonal cases (wet corners
+/// joined only corner to corner), which a diagonal run of water produces:
+/// 602 and 603 are composed from the pack's single-corner shores by
+/// `tools/water_tiles.py` (`WATER_EXTRA`). 0000 is plain grass, never
+/// asked for (a cell with no wet corner does not use this table).
 const WATER_SHORE: [i32; 16] = [
-    305, // 0000 unreachable for a lake cell
+    305, // 0000 never asked for
     279, // 0001 BL
     277, // 0010 BR
     278, // 0011 BR+BL (top shore)
     331, // 0100 TR
-    305, // 0101 TR+BL diagonal - unreachable, not in the wangset
+    602, // 0101 TR+BL diagonal (composed)
     304, // 0110 TR+BR (left shore)
     280, // 0111 all but TL
     333, // 1000 TL
     306, // 1001 TL+BL (right shore)
-    305, // 1010 TL+BR diagonal - unreachable, not in the wangset
+    603, // 1010 TL+BR diagonal (composed)
     281, // 1011 all but TR
     332, // 1100 TL+TR (bottom shore)
     308, // 1101 all but BR
@@ -209,18 +210,67 @@ const WATER_SHORE: [i32; 16] = [
     305, // 1111 open water
 ];
 
+/// A lake cell with a one-cell stream entering on one or more of its dry
+/// sides: `(corners, sides, tile)`, corners as `WATER_SHORE`, sides as
+/// `WATER_CHANNEL` (bit3=N bit2=E bit1=S bit0=W). A stream only ever
+/// touches a lake cell on a side whose two corners are both dry (a wet
+/// corner there would make the stream cell part of a 2x2 block, so a
+/// lake cell), which leaves exactly these sixteen cases. The four
+/// straight shores have mouths in the pack - tiles outside both wangsets,
+/// the straight shore with a gap where the stream comes in - and the
+/// twelve single-corner ones are composed by `tools/water_tiles.py`.
+const WATER_MOUTH: [(usize, usize, i32); 16] = [
+    (0b0011, 0b1000, 275), // top shore, stream from the north
+    (0b1100, 0b0010, 329), // bottom shore, from the south
+    (0b0110, 0b0001, 301), // left shore, from the west
+    (0b1001, 0b0100, 303), // right shore, from the east
+    (0b1000, 0b0100, 604), // TL wet, from the east
+    (0b1000, 0b0010, 605), // TL wet, from the south
+    (0b1000, 0b0110, 606), // TL wet, from the east and the south
+    (0b0100, 0b0010, 607), // TR wet, from the south
+    (0b0100, 0b0001, 608), // TR wet, from the west
+    (0b0100, 0b0011, 609), // TR wet, from the south and the west
+    (0b0010, 0b1000, 610), // BR wet, from the north
+    (0b0010, 0b0001, 611), // BR wet, from the west
+    (0b0010, 0b1001, 612), // BR wet, from the north and the west
+    (0b0001, 0b1000, 613), // BL wet, from the north
+    (0b0001, 0b0100, 614), // BL wet, from the east
+    (0b0001, 0b1100, 615), // BL wet, from the north and the east
+];
+
+/// The tile for a lake cell (or a grass cell under a wet corner): its
+/// corners, and the sides a stream enters it on.
+fn lake_tile(corners: usize, sides: usize) -> i32 {
+    if sides == 0 {
+        return WATER_SHORE[corners];
+    }
+    let mouth = WATER_MOUTH.iter().find(|(c, s, _)| *c == corners && *s == sides).map(|(_, _, tile)| *tile);
+    // Unreachable (see `WATER_MOUTH`); a map never fails to draw over it -
+    // the plain shore is the nearest picture.
+    debug_assert!(mouth.is_some(), "no water tile for corners {corners:04b} with a stream on {sides:04b}");
+    mouth.unwrap_or(WATER_SHORE[corners])
+}
+
+/// The tiles `tools/water_tiles.py` composes into transparent cells of
+/// the sheet: `WATER_EXTRA_COUNT` tiles from `WATER_EXTRA`, frame `f` of
+/// each one row (`TILESET_COLS`) below frame 0 - the order is the
+/// script's `TILES`.
+const WATER_EXTRA: i32 = 602;
+const WATER_EXTRA_COUNT: i32 = 14;
+
 /// Frames per animated water tile.
 pub const WATER_FRAME_COUNT: usize = 4;
 
-/// The pack's animation for every tile the two water tables can pick: the
+/// The pack's animation for every tile the water tables can pick: the
 /// `<animation>` element of each `<tile>` in the `.tsx`, four frames of
 /// 100 ms each. The frames are scattered over the sheet (the stream tiles
 /// step by 108, the shore tiles by 81 or 54), so this is a table, not an
 /// offset. 305, the flat water, has no animation in the pack (its three
-/// would-be frames are byte-identical copies of it), so it repeats. A tile
-/// missing here is a bug in the tables above, and `frames_of` panics on it
-/// so the test catches it.
-const WATER_FRAMES: [(i32, [i32; WATER_FRAME_COUNT]); 29] = [
+/// would-be frames are byte-identical copies of it), so it repeats. The
+/// composed tiles (`WATER_EXTRA`) are not listed: their frames are a row
+/// apart. A tile missing here is a bug in the tables above, and
+/// `frames_of` panics on it so the test catches it.
+const WATER_FRAMES: [(i32, [i32; WATER_FRAME_COUNT]); 33] = [
     (270, [270, 378, 486, 594]),
     (271, [271, 379, 487, 595]),
     (272, [272, 380, 488, 596]),
@@ -250,10 +300,17 @@ const WATER_FRAMES: [(i32, [i32; WATER_FRAME_COUNT]); 29] = [
     (331, [331, 412, 493, 574]),
     (332, [332, 413, 494, 575]),
     (333, [333, 414, 495, 576]),
+    (275, [275, 356, 437, 518]),
+    (301, [301, 382, 463, 544]),
+    (303, [303, 384, 465, 546]),
+    (329, [329, 410, 491, 572]),
 ];
 
 /// The four frames of a water tile (a tile that does not animate repeats).
 fn frames_of(tile: i32) -> [i32; WATER_FRAME_COUNT] {
+    if (WATER_EXTRA..WATER_EXTRA + WATER_EXTRA_COUNT).contains(&tile) {
+        return std::array::from_fn(|f| tile + f as i32 * TILESET_COLS);
+    }
     WATER_FRAMES
         .iter()
         .find(|(t, _)| *t == tile)
@@ -432,12 +489,25 @@ fn drift_noise(seed: u64, vx: i32, vy: i32, period: f32) -> f32 {
 /// (`WaterLayout`) come from, so the lake a tank cannot enter is exactly
 /// the open water it sees. Grid phase as in the module doc: cell `(x, y)`
 /// is centred on world `(x, y) * GROUND_WORLD_TILE`.
+///
+/// **Water runs off the map**: a water question about a cell past the
+/// grid is answered by the nearest cell on it, and the grid's own cells
+/// past the map (the extra column and row the centred phase needs) copy
+/// the water of the map cell beside them, so a sea or river painted to the
+/// edge carries on out of the picture instead of ending on a shore along
+/// it.
 struct Layout {
     cols: usize,
     rows: usize,
+    /// The map's own cells: `cols - 1` by `rows - 1`.
+    map_cols: usize,
+    map_rows: usize,
     material: Vec<Material>,
     /// Per cell: a water cell inside some 2x2 block of water.
     lake: Vec<bool>,
+    /// Per grid vertex, `(cols + 1) * (rows + 1)`: vertex `(vx, vy)` is the
+    /// top-left corner of cell `(vx, vy)`. See `wet_vertices`.
+    wet: Vec<bool>,
 }
 
 impl Layout {
@@ -447,8 +517,9 @@ impl Layout {
         // the last cell's own right/bottom half-tile can fall short of
         // `width`/`height` otherwise, leaving an uncovered strip at the
         // edge.
-        let cols = (width / GROUND_WORLD_TILE).ceil().max(1.0) as usize + 1;
-        let rows = (height / GROUND_WORLD_TILE).ceil().max(1.0) as usize + 1;
+        let map_cols = (width / GROUND_WORLD_TILE).ceil().max(1.0) as usize;
+        let map_rows = (height / GROUND_WORLD_TILE).ceil().max(1.0) as usize;
+        let (cols, rows) = (map_cols + 1, map_rows + 1);
         let mut material = vec![Material::Grass; cols * rows];
         // Water first, road after: a wall painted over a lake stands on
         // dirt. An entry outside the grid is ignored.
@@ -461,7 +532,19 @@ impl Layout {
                 }
             }
         }
-        let mut layout = Layout { cols, rows, material, lake: Vec::new() };
+        // The cells past the map carry the water of the map cell beside
+        // them (the corner one the corner's).
+        for y in 0..rows {
+            for x in 0..cols {
+                if x >= map_cols || y >= map_rows {
+                    let inside = y.min(map_rows - 1) * cols + x.min(map_cols - 1);
+                    if material[inside] == Material::Water {
+                        material[y * cols + x] = Material::Water;
+                    }
+                }
+            }
+        }
+        let mut layout = Layout { cols, rows, map_cols, map_rows, material, lake: Vec::new(), wet: Vec::new() };
         // A lake cell is one inside some 2x2 block of water: the four
         // blocks a cell can belong to have their top-left at the cell or
         // one step up and/or left of it.
@@ -474,6 +557,7 @@ impl Layout {
                         .any(|&(ox, oy)| (0..2).all(|dy| (0..2).all(|dx| layout.is_water(x + ox + dx, y + oy + dy))))
             })
             .collect();
+        layout.wet = layout.wet_vertices();
         layout
     }
 
@@ -485,34 +569,102 @@ impl Layout {
         }
     }
 
-    /// Off-grid is grass, same as "not painted".
+    /// The grid cell nearest `(x, y)`: where a water question about a cell
+    /// past the grid is answered.
+    fn clamped(&self, x: i32, y: i32) -> usize {
+        let cx = x.clamp(0, self.cols as i32 - 1) as usize;
+        let cy = y.clamp(0, self.rows as i32 - 1) as usize;
+        cy * self.cols + cx
+    }
+
+    /// Off-grid is grass, same as "not painted" - for the road and the
+    /// grass. Water carries on past the grid (`is_water`).
     fn at(&self, x: i32, y: i32) -> Material {
         self.idx(x, y).map_or(Material::Grass, |i| self.material[i])
     }
 
     fn is_water(&self, x: i32, y: i32) -> bool {
-        self.at(x, y) == Material::Water
+        self.material[self.clamped(x, y)] == Material::Water
     }
 
     fn lake_at(&self, x: i32, y: i32) -> bool {
-        self.idx(x, y).is_some_and(|i| self.lake[i])
+        self.lake[self.clamped(x, y)]
     }
 
-    /// Vertex `(vx, vy)` is the top-left corner of cell `(vx, vy)`, shared
-    /// with the three cells up and left of it. Wet where all four cells
-    /// around it are water, or where three are and one of them is a lake
-    /// cell (a stream meeting a shore opens it into a mouth).
-    fn wet_vertex(&self, vx: i32, vy: i32) -> bool {
-        let around = [(vx - 1, vy - 1), (vx, vy - 1), (vx - 1, vy), (vx, vy)];
-        let water = around.iter().filter(|&&(cx, cy)| self.is_water(cx, cy)).count();
-        water == 4 || (water == 3 && around.iter().any(|&(cx, cy)| self.lake_at(cx, cy)))
+    /// A water cell outside every 2x2 block: a one-cell-wide line.
+    fn stream_at(&self, x: i32, y: i32) -> bool {
+        self.is_water(x, y) && !self.lake_at(x, y)
     }
 
-    /// `WATER_SHORE`'s index for a lake cell: bit3=TL bit2=TR bit1=BR
-    /// bit0=BL, 1 = wet.
-    fn shore_mask(&self, x: i32, y: i32) -> usize {
-        let corner = |vx: i32, vy: i32| self.wet_vertex(vx, vy) as usize;
+    fn around(vx: i32, vy: i32) -> [(i32, i32); 4] {
+        [(vx - 1, vy - 1), (vx, vy - 1), (vx - 1, vy), (vx, vy)]
+    }
+
+    /// Which vertices are wet - the corners the lake tiles are laid on.
+    ///
+    /// A vertex is wet where all four cells around it are water, the one
+    /// case the pack's corner tiles are drawn for: any other wet vertex
+    /// would stand at the corner of a cell that is not drawn as water, and
+    /// show as a square bite of grass out of the lake.
+    ///
+    /// Then one smoothing rule, for diagonals: a cell wet at two opposite
+    /// corners only (a **saddle**, what a staircase of 2x2 blocks makes)
+    /// would pinch the water to a point there, so each of its dry corners
+    /// is wetted where the three water cells around it are all lake cells
+    /// and the fourth is grass. The grass cell then shows water in that
+    /// corner (`build` draws every cell under a wet vertex from the lake
+    /// tiles) and a diagonal river flows as one body. The fourth cell must
+    /// be grass: a stream's bank keeps the mouth tiles' shape, and a road
+    /// keeps its dirt. Wetting can make another saddle, so it runs until
+    /// nothing changes.
+    fn wet_vertices(&self) -> Vec<bool> {
+        let (vcols, vrows) = (self.cols + 1, self.rows + 1);
+        let mut wet = vec![false; vcols * vrows];
+        for vy in 0..vrows as i32 {
+            for vx in 0..vcols as i32 {
+                wet[vy as usize * vcols + vx as usize] = Self::around(vx, vy).iter().all(|&(cx, cy)| self.is_water(cx, cy));
+            }
+        }
+        let fillable = |vx: i32, vy: i32| {
+            let around = Self::around(vx, vy);
+            let water = around.iter().filter(|&&(cx, cy)| self.is_water(cx, cy)).count();
+            water == 3
+                && around.iter().all(|&(cx, cy)| if self.is_water(cx, cy) { self.lake_at(cx, cy) } else { self.at(cx, cy) == Material::Grass })
+        };
+        loop {
+            let mut changed = false;
+            for y in 0..self.rows as i32 {
+                for x in 0..self.cols as i32 {
+                    let mask = Self::corners_of(&wet, vcols, x, y);
+                    if mask != 0b0101 && mask != 0b1010 {
+                        continue;
+                    }
+                    for (vx, vy) in [(x, y), (x + 1, y), (x + 1, y + 1), (x, y + 1)] {
+                        let v = vy as usize * vcols + vx as usize;
+                        if !wet[v] && fillable(vx, vy) {
+                            wet[v] = true;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            if !changed {
+                return wet;
+            }
+        }
+    }
+
+    fn corners_of(wet: &[bool], vcols: usize, x: i32, y: i32) -> usize {
+        let corner = |vx: i32, vy: i32| wet[vy as usize * vcols + vx as usize] as usize;
         (corner(x, y) << 3) | (corner(x + 1, y) << 2) | (corner(x + 1, y + 1) << 1) | corner(x, y + 1)
+    }
+
+    /// `WATER_SHORE`'s index for a cell in the grid: bit3=TL bit2=TR
+    /// bit1=BR bit0=BL, 1 = wet. Non-zero for every lake cell (the middle
+    /// of its 2x2 block is one of its corners) and for a grass cell a
+    /// diagonal was smoothed over; zero everywhere else.
+    fn corners(&self, x: i32, y: i32) -> usize {
+        Self::corners_of(&self.wet, self.cols + 1, x, y)
     }
 
     fn edge_mask(&self, x: i32, y: i32, joined: impl Fn(i32, i32) -> bool) -> usize {
@@ -527,6 +679,11 @@ impl Layout {
     /// neighbour of either kind.
     fn channel_mask(&self, x: i32, y: i32) -> usize {
         self.edge_mask(x, y, |cx, cy| self.is_water(cx, cy))
+    }
+
+    /// The sides a stream enters a lake cell on (`WATER_MOUTH`), N E S W.
+    fn stream_sides(&self, x: i32, y: i32) -> usize {
+        self.edge_mask(x, y, |cx, cy| self.stream_at(cx, cy))
     }
 
     /// `ROAD_EDGE`'s index: N E S W, 1 = a road neighbour.
@@ -571,8 +728,9 @@ pub struct WaterLayout {
     cols: usize,
     rows: usize,
     depth: Vec<Depth>,
-    /// Per cell: a stream cell joined north or south, where the current
-    /// pushes a hull down the map (`Current::Channel` in the picture).
+    /// Per cell: a stream cell joined north or south, or the mouth such a
+    /// stream runs through into a lake, where the current pushes a hull
+    /// down the map (`Current::Channel` in the picture).
     current: Vec<bool>,
 }
 
@@ -585,11 +743,17 @@ impl WaterLayout {
         for y in 0..rows as i32 {
             for x in 0..cols as i32 {
                 let i = y as usize * cols + x as usize;
-                if !layout.is_water(x, y) {
+                // The water past the map is picture only: nothing drives
+                // there.
+                if !layout.is_water(x, y) || x as usize >= layout.map_cols || y as usize >= layout.map_rows {
                     continue;
                 }
                 if layout.lake_at(x, y) {
-                    depth[i] = if layout.shore_mask(x, y) == 0b1111 { Depth::Deep } else { Depth::Shallow };
+                    let corners = layout.corners(x, y);
+                    depth[i] = if corners == 0b1111 { Depth::Deep } else { Depth::Shallow };
+                    // A mouth carries its stream's current, as it does in
+                    // the picture.
+                    current[i] = corners != 0b1111 && layout.stream_sides(x, y) & 0b1010 != 0;
                 } else {
                     depth[i] = Depth::Shallow;
                     current[i] = layout.channel_mask(x, y) & 0b1010 != 0;
@@ -697,13 +861,19 @@ impl WaterLayout {
 ///   vertex is wet where all four cells around it are water, so a painted
 ///   block is a pool whose rounded shore runs half a cell inside its
 ///   outline, and a block two cells wide is a channel one cell wide with
-///   a shore on each side. A vertex is also wet where three of its cells
-///   are water and one of them is a lake cell: that is a stream meeting
-///   a shore, and it opens the shore into a mouth around the stream
-///   instead of leaving a lip of grass between the two.
+///   a shore on each side. A diagonal staircase of blocks is smoothed
+///   into one body (`Layout::wet_vertices`), the grass cell in each step
+///   taking the lake's corner tile. Where a stream meets a shore, the
+///   shore takes a mouth tile (`WATER_MOUTH`) with a gap the stream runs
+///   through.
 /// - Any other water cell is a **stream** cell - a line one cell wide,
 ///   painted the way a road is - and resolves through `WATER_CHANNEL`,
 ///   the edge autotile, joined to every water neighbour of either kind.
+///
+/// Every edge between two cells meets water to water and land to land,
+/// whatever the shape: `tests::no_tile_edge_puts_water_against_land`
+/// checks it pixel by pixel. Water painted to the map's edge runs off it
+/// (`Layout`).
 ///
 /// Water flows down the map: `draw` drifts marks southward over every
 /// open lake cell and every stream cell joined north or south.
@@ -750,24 +920,38 @@ pub fn build(
     for y in 0..rows as i32 {
         for x in 0..cols as i32 {
             let i = y as usize * cols + x as usize;
-            let (tile, flow) = match layout.at(x, y) {
+            // A grass cell under a wet corner - where a diagonal was
+            // smoothed over - takes its lake tile like a water cell: the
+            // water there is the lake's, the ground stays dry.
+            let wet_corners = layout.corners(x, y);
+            let (tile, flow, animated) = match layout.at(x, y) {
+                Material::Grass if wet_corners != 0 => (lake_tile(wet_corners, 0), Current::Still, true),
                 Material::Grass => {
                     let corner = |vx: i32, vy: i32| drift_vertex(vx, vy) as usize;
                     let mask = (corner(x, y) << 3) | (corner(x + 1, y) << 2) | (corner(x + 1, y + 1) << 1) | corner(x, y + 1);
-                    (if mask == 0 { grass_variant(seed, x, y) } else { SAND_CORNER[mask] }, Current::Still)
+                    (if mask == 0 { grass_variant(seed, x, y) } else { SAND_CORNER[mask] }, Current::Still, false)
                 }
-                Material::Road => (ROAD_EDGE[layout.road_mask(x, y)], Current::Still),
+                Material::Road => (ROAD_EDGE[layout.road_mask(x, y)], Current::Still, false),
                 Material::Water if layout.lake_at(x, y) => {
-                    let tile = WATER_SHORE[layout.shore_mask(x, y)];
-                    (tile, if tile == WATER_SHORE[0b1111] { Current::Open } else { Current::Still })
+                    let sides = layout.stream_sides(x, y);
+                    // A mouth on the north or south carries the stream's
+                    // current through its gap, in the same band.
+                    let flow = if wet_corners == 0b1111 {
+                        Current::Open
+                    } else if sides & 0b1010 != 0 {
+                        Current::Channel
+                    } else {
+                        Current::Still
+                    };
+                    (lake_tile(wet_corners, sides), flow, true)
                 }
                 Material::Water => {
                     let mask = layout.channel_mask(x, y);
                     let along = mask & 0b1010 != 0;
-                    (WATER_CHANNEL[mask], if along { Current::Channel } else { Current::Still })
+                    (WATER_CHANNEL[mask], if along { Current::Channel } else { Current::Still }, true)
                 }
             };
-            tiles[i] = if layout.at(x, y) == Material::Water { frames_of(tile) } else { [tile; WATER_FRAME_COUNT] };
+            tiles[i] = if animated { frames_of(tile) } else { [tile; WATER_FRAME_COUNT] };
             current[i] = flow;
         }
     }
@@ -1163,18 +1347,40 @@ mod tests {
     }
 
     #[test]
-    fn a_stream_meeting_a_lake_opens_the_shore_into_a_mouth() {
+    fn a_stream_meeting_a_lake_runs_through_a_mouth_in_the_shore() {
         let mut cells: Vec<(i32, i32)> = (4..=6).flat_map(|x| (4..=6).map(move |y| (x, y))).collect();
         cells.extend([(5, 2), (5, 3)]);
         let grid = with_water(&cells);
         assert_eq!(tile(&grid, 5, 3), WATER_CHANNEL[0b1010], "the stream runs straight into the lake");
         assert_eq!(current(&grid, 5, 3), Current::Channel);
-        assert_eq!(tile(&grid, 5, 4), WATER_SHORE[0b1111], "the shore under the stream is open water");
-        assert_eq!(current(&grid, 5, 4), Current::Open);
-        assert_eq!(tile(&grid, 4, 4), WATER_SHORE[0b0110], "the corner beside it turns into a bay wall");
-        assert_eq!(tile(&grid, 6, 4), WATER_SHORE[0b1001]);
-        assert_eq!(tile(&grid, 4, 3), tile(&grid, 4, 3));
+        assert_eq!(tile(&grid, 5, 4), 275, "the shore under the stream is the pack's north mouth");
+        assert_eq!(current(&grid, 5, 4), Current::Channel, "the current carries on through the mouth");
+        assert_eq!(tile(&grid, 4, 4), WATER_SHORE[0b0010], "the corners beside it stay corners");
+        assert_eq!(tile(&grid, 6, 4), WATER_SHORE[0b0001]);
         assert!(GRASS_FILL.contains(&tile(&grid, 4, 3)), "the stream's banks stay grass");
+        assert!(GRASS_FILL.contains(&tile(&grid, 6, 3)));
+        // Every straight shore has its mouth.
+        let mut cells: Vec<(i32, i32)> = (3..=7).flat_map(|x| (3..=7).map(move |y| (x, y))).collect();
+        cells.extend([(5, 1), (5, 2), (5, 8), (5, 9), (1, 5), (2, 5), (8, 5), (9, 5)]);
+        let grid = with_water(&cells);
+        assert_eq!(tile(&grid, 5, 3), 275);
+        assert_eq!(tile(&grid, 5, 7), 329);
+        assert_eq!(tile(&grid, 3, 5), 301);
+        assert_eq!(tile(&grid, 7, 5), 303);
+        assert_eq!(current(&grid, 3, 5), Current::Still, "a mouth on the side carries no current");
+    }
+
+    #[test]
+    fn a_stream_meeting_a_channel_at_its_corner_has_a_mouth_there() {
+        // A two-wide channel running down, a stream entering its top-left
+        // cell from the north (half a cell off the channel's middle) and
+        // one entering its bottom-right cell from the east.
+        let mut cells: Vec<(i32, i32)> = (3..=6).flat_map(|y| [(4, y), (5, y)]).collect();
+        cells.extend([(4, 1), (4, 2), (6, 6), (7, 6)]);
+        let grid = with_water(&cells);
+        assert_eq!(tile(&grid, 4, 3), lake_tile(0b0010, 0b1000), "BR wet, the stream from the north");
+        assert_eq!(tile(&grid, 5, 6), lake_tile(0b1000, 0b0100), "TL wet, the stream from the east");
+        assert!((WATER_EXTRA..WATER_EXTRA + WATER_EXTRA_COUNT).contains(&tile(&grid, 4, 3)), "a composed tile");
     }
 
     #[test]
@@ -1199,7 +1405,8 @@ mod tests {
 
     #[test]
     fn every_water_tile_has_its_frames_and_nothing_else_animates() {
-        for tile in WATER_CHANNEL.iter().chain(WATER_SHORE.iter()) {
+        let mouths = WATER_MOUTH.iter().map(|(_, _, tile)| tile);
+        for tile in WATER_CHANNEL.iter().chain(WATER_SHORE.iter()).chain(mouths) {
             let frames = frames_of(*tile);
             assert_eq!(frames[0], *tile, "frame 0 is the tile itself");
             assert!(frames.iter().all(|f| *f >= 0 && *f < TILESET_COLS * 65), "frames stay on the sheet");
@@ -1233,9 +1440,12 @@ mod tests {
         for (x, y) in [(4, 4), (8, 7), (4, 5), (4, 7), (7, 7)] {
             assert_eq!(water.depth_at(at(x, y)), Depth::Shallow, "shore {x},{y}");
         }
-        // The mouths: the shore cell each stream runs into is open water too.
-        assert_eq!(water.depth_at(at(6, 4)), Depth::Deep);
-        assert_eq!(water.depth_at(at(4, 6)), Depth::Deep);
+        // The mouths: the shore cell each stream runs into is a ford, and
+        // the one a stream enters from the north carries its current.
+        assert_eq!(water.depth_at(at(6, 4)), Depth::Shallow);
+        assert!(water.pushes_south(at(6, 4)));
+        assert_eq!(water.depth_at(at(4, 6)), Depth::Shallow);
+        assert!(!water.pushes_south(at(4, 6)));
         // Streams are fords; the vertical one carries the current, the sideways one does not.
         assert_eq!(water.depth_at(at(6, 2)), Depth::Shallow);
         assert!(water.pushes_south(at(6, 2)));
@@ -1249,12 +1459,10 @@ mod tests {
         // The deep cells are exactly the open-water cells, as centres.
         let mut deep: Vec<(i32, i32)> = water.deep_grid_cells().collect();
         deep.sort();
-        let mut expect: Vec<(i32, i32)> = (5..=7).flat_map(|x| (5..=6).map(move |y| (x, y))).collect();
-        expect.extend([(6, 4), (4, 6)]);
-        expect.sort();
+        let expect: Vec<(i32, i32)> = (5..=7).flat_map(|x| (5..=6).map(move |y| (x, y))).collect();
         assert_eq!(deep, expect);
-        assert_eq!(water.deep_cells().count(), 8);
-        assert_eq!(water.shallow_cells().count(), cells.len() - 8);
+        assert_eq!(water.deep_cells().count(), 6);
+        assert_eq!(water.shallow_cells().count(), cells.len() - 6);
         // A single line is never deep: a river is a ford end to end.
         let river = WaterLayout::build(W, H, &[], &world(&[(3, 1), (3, 2), (3, 3), (4, 3)]));
         assert_eq!(river.deep_cells().count(), 0);
@@ -1403,5 +1611,174 @@ mod tests {
         assert_eq!(lane_hash(3, 0), lane_hash(3, 0));
         assert_ne!(lane_hash(3, 0), lane_hash(4, 0), "lanes differ by column");
         assert_ne!(lane_hash(3, 0), lane_hash(3, 1), "and by lane");
+    }
+
+    #[test]
+    fn a_diagonal_run_of_blocks_flows_as_one_body() {
+        // Two 2x2 blocks sharing one cell on the diagonal: the shared cell
+        // would be wet at two opposite corners only.
+        let cells = [(2, 2), (3, 2), (2, 3), (3, 3), (4, 3), (3, 4), (4, 4)];
+        let grid = with_water(&cells);
+        assert_eq!(tile(&grid, 3, 3), WATER_SHORE[0b1111], "the middle opens up");
+        assert_eq!(tile(&grid, 4, 2), WATER_SHORE[0b0001], "the grass in the step takes the lake's corner");
+        assert_eq!(tile(&grid, 2, 4), WATER_SHORE[0b0100]);
+        assert_eq!(grid.tiles[grid.idx(4, 2).unwrap()], frames_of(WATER_SHORE[0b0001]), "and shimmers with it");
+        // The step's grass is still dry ground.
+        let water = WaterLayout::build(W, H, &[], &world(&cells));
+        let at = |x: i32, y: i32| Position::new(x as f32 * GROUND_WORLD_TILE, y as f32 * GROUND_WORLD_TILE);
+        assert_eq!(water.depth_at(at(4, 2)), Depth::Dry);
+        // A wall in the step keeps its dirt: only the other side opens.
+        let walled = build(W, H, 7, &world(&[(4, 2)]), &world(&cells), &[], Look::default());
+        assert_eq!(tile(&walled, 3, 3), WATER_SHORE[0b1011]);
+        assert_eq!(tile(&walled, 4, 2), ROAD_EDGE[0b0000]);
+    }
+
+    #[test]
+    fn islands_notches_and_walls_keep_the_shape_painted() {
+        // A 7x7 lake with a one-cell island and a notch in one corner.
+        let cells: Vec<(i32, i32)> = (2..=8).flat_map(|x| (2..=8).map(move |y| (x, y))).filter(|&c| c != (5, 5) && c != (8, 2)).collect();
+        let grid = with_water(&cells);
+        assert!(GRASS_FILL.contains(&tile(&grid, 5, 5)), "the island is grass");
+        assert_eq!(tile(&grid, 5, 4), WATER_SHORE[0b1100], "with a shore on each side");
+        assert_eq!(tile(&grid, 4, 4), WATER_SHORE[0b1101], "and inner corners round it");
+        assert!(GRASS_FILL.contains(&tile(&grid, 8, 2)), "the notch is grass");
+        assert_eq!(tile(&grid, 7, 3), WATER_SHORE[0b1011], "met by an inner corner");
+        // A wall standing in open water is ringed by a shore, not a hard edge.
+        let open: Vec<(i32, i32)> = (2..=6).flat_map(|x| (2..=6).map(move |y| (x, y))).collect();
+        let walled = build(W, H, 7, &world(&[(4, 4)]), &world(&open), &[], Look::default());
+        assert_eq!(tile(&walled, 4, 3), WATER_SHORE[0b1100]);
+        assert_eq!(tile(&walled, 5, 5), WATER_SHORE[0b0111]);
+    }
+
+    #[test]
+    fn water_painted_to_the_edge_runs_off_the_map() {
+        // W x H is a 10 x 10 map: a stream down column 5 from the top edge
+        // and a lake across the bottom-right corner.
+        let mut cells: Vec<(i32, i32)> = (0..=3).map(|y| (5, y)).collect();
+        cells.extend((7..=9).flat_map(|x| (7..=9).map(move |y| (x, y))));
+        let grid = with_water(&cells);
+        assert_eq!(tile(&grid, 5, 0), WATER_CHANNEL[0b1010], "the stream comes in from above");
+        assert_eq!(tile(&grid, 9, 9), WATER_SHORE[0b1111], "the lake carries on past the corner");
+        assert_eq!(tile(&grid, 8, 9), WATER_SHORE[0b1111]);
+        assert_eq!(tile(&grid, 9, 7), WATER_SHORE[0b0011], "its top shore runs on past the edge");
+        assert_eq!(tile(&grid, 10, 9), WATER_SHORE[0b1111], "and so does the strip past the map");
+        let water = WaterLayout::build(W, H, &[], &world(&cells));
+        let at = |x: i32, y: i32| Position::new(x as f32 * GROUND_WORLD_TILE, y as f32 * GROUND_WORLD_TILE);
+        assert_eq!(water.depth_at(at(9, 9)), Depth::Deep, "the rules follow the picture");
+        assert!(water.pushes_south(at(5, 0)));
+        assert!(water.deep_grid_cells().all(|(x, y)| x < 10 && y < 10), "nothing past the map is deep");
+        // A field 5.5 rows high: water on its last row runs off it too.
+        let strip: Vec<(i32, i32)> = (3..=6).flat_map(|x| [(x, 4), (x, 5)]).collect();
+        let half = WaterLayout::build(W, 5.5 * GROUND_WORLD_TILE, &[], &world(&strip));
+        assert_eq!(half.depth_at(at(4, 5)), Depth::Deep);
+    }
+
+    /// A seeded field of blobs, a meandering line and a few walls on a
+    /// `FIELD_W` x `FIELD_H` map: water cells and road cells.
+    const FIELD_W: f32 = 16.0 * GROUND_WORLD_TILE;
+    const FIELD_H: f32 = 12.0 * GROUND_WORLD_TILE;
+
+    fn random_field(seed: u64) -> (Vec<Position>, Vec<Position>) {
+        use rand::{RngExt, SeedableRng};
+        let mut rng = rand::rngs::SmallRng::seed_from_u64(seed);
+        let (cols, rows) = (16i32, 12i32);
+        let blobs: Vec<(f32, f32, f32)> = (0..rng.random_range(1..=5))
+            .map(|_| (rng.random_range(0.0..cols as f32), rng.random_range(0.0..rows as f32), rng.random_range(1.5..4.0)))
+            .collect();
+        let level = rng.random_range(0.35..0.9);
+        let mut water = Vec::new();
+        for y in 0..rows {
+            for x in 0..cols {
+                let v: f32 = blobs.iter().map(|&(bx, by, r)| (-((x as f32 - bx).powi(2) + (y as f32 - by).powi(2)) / (r * r)).exp()).sum();
+                if v + rng.random_range(-0.25..0.25) > level {
+                    water.push((x, y));
+                }
+            }
+        }
+        let (mut x, mut y) = (rng.random_range(0..cols), 0);
+        for _ in 0..rng.random_range(0..40) {
+            water.push((x, y));
+            let (dx, dy) = [(0, 1), (0, 1), (1, 0), (-1, 0), (1, 1), (-1, 1)][rng.random_range(0..6)];
+            x = (x + dx).clamp(0, cols - 1);
+            y = (y + dy).min(rows - 1);
+        }
+        let road: Vec<(i32, i32)> = (0..rng.random_range(0..4)).map(|_| (rng.random_range(0..cols), rng.random_range(0..rows))).collect();
+        (world(&water), world(&road))
+    }
+
+    #[test]
+    fn every_shape_has_a_tile_and_the_rules_follow_the_picture() {
+        for seed in 0..400 {
+            let (water, road) = random_field(seed);
+            // `build` asserts (in a debug build) that every cell has a tile.
+            let grid = build(FIELD_W, FIELD_H, 7, &road, &water, &[], Look::default());
+            let layout = Layout::new(FIELD_W, FIELD_H, &road, &water);
+            let rules = WaterLayout::build(FIELD_W, FIELD_H, &road, &water);
+            for y in 0..layout.rows as i32 {
+                for x in 0..layout.cols as i32 {
+                    if layout.stream_at(x, y) && layout.at(x, y) == Material::Water {
+                        assert_eq!(layout.corners(x, y), 0, "seed {seed}: a stream at {x},{y} under a wet corner");
+                    }
+                    if layout.at(x, y) == Material::Road {
+                        assert_eq!(layout.corners(x, y), 0, "seed {seed}: a road at {x},{y} under a wet corner");
+                    }
+                    let open = tile(&grid, x, y) == WATER_SHORE[0b1111] && layout.at(x, y) == Material::Water;
+                    let inside = (x as usize) < layout.map_cols && (y as usize) < layout.map_rows;
+                    let pos = Position::new(x as f32 * GROUND_WORLD_TILE, y as f32 * GROUND_WORLD_TILE);
+                    assert_eq!(rules.depth_at(pos) == Depth::Deep, open && inside, "seed {seed}: {x},{y}");
+                }
+            }
+        }
+    }
+
+    /// Water against land at a tile edge, as the pixels have it: the
+    /// pack's water is the one blue on the sheet.
+    #[cfg(feature = "render")]
+    fn wet(c: Color) -> bool {
+        c.a > 0 && c.b as i32 > c.r as i32 + 40 && c.b > 90
+    }
+
+    /// The seam every rule here exists to prevent: along the edge between
+    /// two neighbouring cells, one tile shows water where the other shows
+    /// land. Checked pixel by pixel on the live sheets, both themes, every
+    /// animation frame, over the shapes the tests above name and a few
+    /// hundred random fields. A shoreline's anti-aliasing can disagree by
+    /// a pixel or two; a missing tile disagrees by half the edge or more.
+    #[cfg(feature = "render")]
+    #[test]
+    fn no_tile_edge_puts_water_against_land() {
+        use crate::canvas::Pixels;
+        let size = crate::GROUND_TEXTURE_SIZE as usize;
+        let mut fields: Vec<(Vec<Position>, Vec<Position>)> = (0..300).map(random_field).collect();
+        let lake: Vec<(i32, i32)> = (2..=8).flat_map(|x| (2..=8).map(move |y| (x, y))).filter(|&c| c != (5, 5) && c != (8, 2)).collect();
+        fields.push((world(&lake), world(&[(4, 4)])));
+        let stair: Vec<(i32, i32)> = (0..8).flat_map(|i| [(i, i), (i + 1, i), (i, i + 1)]).collect();
+        fields.push((world(&stair), vec![]));
+        for theme in [Theme::Grass, Theme::Desert] {
+            let sheet = Pixels::load(&Sheet::Ground(theme).path()).expect("the ground sheet decodes");
+            let px = |tile: i32, x: usize, y: usize| {
+                let (col, row) = ((tile % TILESET_COLS) as usize, (tile / TILESET_COLS) as usize);
+                sheet.data[(row * size + y) * sheet.width + col * size + x]
+            };
+            for (n, (water, road)) in fields.iter().enumerate() {
+                let grid = build(FIELD_W, FIELD_H, 7, road, water, &[], Look::default());
+                for frame in 0..WATER_FRAME_COUNT {
+                    let at = |x: usize, y: usize| grid.tiles[y * grid.cols + x][frame];
+                    for y in 0..grid.rows {
+                        for x in 0..grid.cols {
+                            let (a, b, c) = (at(x, y), (x + 1 < grid.cols).then(|| at(x + 1, y)), (y + 1 < grid.rows).then(|| at(x, y + 1)));
+                            if let Some(b) = b {
+                                let off = (0..size).filter(|&i| wet(px(a, size - 1, i)) != wet(px(b, 0, i))).count();
+                                assert!(off < 3, "{theme:?} field {n} frame {frame}: {x},{y} | {},{y} ({a} | {b}) disagree on {off} px", x + 1);
+                            }
+                            if let Some(c) = c {
+                                let off = (0..size).filter(|&i| wet(px(a, i, size - 1)) != wet(px(c, i, 0))).count();
+                                assert!(off < 3, "{theme:?} field {n} frame {frame}: {x},{y} over {x},{} ({a} / {c}) disagree on {off} px", y + 1);
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

@@ -374,6 +374,31 @@ pub enum EditorAction {
     Play,
 }
 
+/// The cells from `from` (excluded) to `to` (included), each sharing an
+/// edge with the one before: the cells a straight segment between the two
+/// centres crosses, taking the axis whose next crossing comes first and
+/// the vertical step on a tie.
+fn edge_joined_line(from: (i32, i32), to: (i32, i32)) -> Vec<(i32, i32)> {
+    let (dx, dy) = ((to.0 - from.0).abs(), (to.1 - from.1).abs());
+    let (sx, sy) = ((to.0 - from.0).signum(), (to.1 - from.1).signum());
+    let (mut x, mut y) = from;
+    let (mut ix, mut iy) = (0, 0);
+    let mut cells = Vec::with_capacity((dx + dy) as usize);
+    while ix < dx || iy < dy {
+        // The next vertical crossing is at (1 + 2 ix) / 2 dx of the way,
+        // the next horizontal one at (1 + 2 iy) / 2 dy.
+        if (1 + 2 * ix) * dy < (1 + 2 * iy) * dx {
+            x += sx;
+            ix += 1;
+        } else {
+            y += sy;
+            iy += 1;
+        }
+        cells.push((x, y));
+    }
+    cells
+}
+
 /// A press-drag-release in progress on the field.
 struct Stroke {
     /// Decided on the first cell (docs/game-editor-fusion.md section 8)
@@ -654,6 +679,18 @@ impl MapEditor {
         }
         stroke.last_cell = cell;
         self.paint(cell);
+    }
+
+    /// The pointer moved from the last cell to `cell`, possibly further
+    /// than one cell in a frame: paint every cell on the way, stepping one
+    /// axis at a time, so a quick or diagonal drag lays a line joined edge
+    /// to edge - a river that touches only at corners draws as a string of
+    /// pools. The tools' `stroke` takes its cells as given.
+    fn drag_to(&mut self, cell: (i32, i32)) {
+        let Some(from) = self.stroke.as_ref().map(|s| s.last_cell) else { return };
+        for step in edge_joined_line(from, cell) {
+            self.stroke_to(step);
+        }
     }
 
     fn finish_stroke(&mut self) {
@@ -1057,7 +1094,7 @@ impl MapEditor {
                 self.finish_stroke();
                 self.begin_stroke(cell, input.right_held && !input.held);
             } else if self.stroke.is_some() {
-                self.stroke_to(cell);
+                self.drag_to(cell);
             }
         }
         EditorAction::None
@@ -1520,6 +1557,36 @@ mod editor_tests {
         assert_eq!(ed.map().start2_cell(), None);
         assert!(!ed.singleton_placed(Tool::Start2));
         assert_eq!(Tool::parse("start2"), Some(Tool::Start2));
+    }
+
+    #[test]
+    fn a_drag_between_frames_joins_its_cells_edge_to_edge() {
+        assert_eq!(edge_joined_line((2, 2), (2, 2)), vec![]);
+        assert_eq!(edge_joined_line((2, 2), (5, 2)), vec![(3, 2), (4, 2), (5, 2)]);
+        assert_eq!(edge_joined_line((2, 2), (2, 0)), vec![(2, 1), (2, 0)]);
+        assert_eq!(edge_joined_line((0, 0), (2, 2)), vec![(0, 1), (1, 1), (1, 2), (2, 2)]);
+        assert_eq!(edge_joined_line((0, 0), (-3, 1)), vec![(-1, 0), (-1, 1), (-2, 1), (-3, 1)]);
+        for to in [(7, 3), (-4, 9), (0, -6), (5, 5)] {
+            let line = edge_joined_line((1, 1), to);
+            assert_eq!(line.len() as i32, (to.0 - 1).abs() + (to.1 - 1).abs());
+            assert_eq!(line.last(), Some(&to));
+            let mut prev = (1, 1);
+            for &c in &line {
+                assert_eq!((c.0 - prev.0).abs() + (c.1 - prev.1).abs(), 1, "{c:?} shares an edge with {prev:?}");
+                prev = c;
+            }
+        }
+        // The pointer path paints the gap; the tools' stroke does not.
+        let mut ed = MapEditor::new(MapFile::new());
+        ed.select_tool(Tool::Water);
+        ed.begin_stroke((3, 3), false);
+        ed.drag_to((5, 5));
+        ed.finish_stroke();
+        for c in [(3, 3), (3, 4), (4, 4), (4, 5), (5, 5)] {
+            assert_eq!(ed.map().cell(c.0, c.1), Some(&CellObject::Water), "{c:?}");
+        }
+        ed.stroke(&[(10, 3), (12, 3)], false);
+        assert_eq!(ed.map().cell(11, 3), None);
     }
 
     #[test]

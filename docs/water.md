@@ -14,11 +14,13 @@ rules see three depths (`ground::Depth`):
 | Depth | Where | What it is |
 |---|---|---|
 | `Dry` | anything not painted water, and a road cell painted over water | plain ground |
-| `Shallow` | a stream cell, a lake's shore cells, a river mouth's banks | a **ford** |
+| `Shallow` | a stream cell, a lake's shore cells, the mouth a stream runs through into a lake | a **ford** |
 | `Deep` | a lake cell whose four corners are all wet (`WATER_SHORE[0b1111]`) | **open water** |
 
 So the deep water is exactly the flat open water on screen, and the shore
-you can see is exactly the ford you can drive. `WaterLayout` is built at the
+you can see is exactly the ford you can drive. A wall standing in a lake
+is ringed by that shore too. Water painted to the map's edge runs off it
+in the picture; the rules stop at the map. `WaterLayout` is built at the
 top of `Game::init` from the map's cells alone (no RNG, no world), before
 anything is placed, and lives on `Game::water`; `hits::Terrain` carries a
 copy for the frog. A map without water leaves every rule a no-op, and no
@@ -55,7 +57,8 @@ rule draws RNG, so every existing seed replays unchanged.
   climbs back out slowly.
 - **Grip.** `tank_turn_grip_force` is scaled by `water_grip_factor` (0.5),
   so a turn in a ford sloshes wide and momentum carries the hull.
-- **The current.** A stream cell joined north or south moves at
+- **The current.** A stream cell joined north or south, and the mouth
+  such a stream runs through into a lake, moves at
   `water_current_speed` (28 px/s) down the map, and the whole locomotion
   model runs *in the water's frame*: `current` is taken relative to the
   flow, so a hull that stops drifts south at the water's speed, one driving

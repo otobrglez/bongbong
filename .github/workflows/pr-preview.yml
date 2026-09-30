@@ -2,28 +2,16 @@ name: PR Preview
 
 # Deploys every open PR as its own ephemeral Cloudflare Worker
 # (`bongbong-pr-<N>`, static assets from site/dist) so the game can be played
-# at https://pr-<N>.preview.bongbong.io before merging. The worker is deployed
-# from a generated per-PR config (wrangler.preview.toml, derived from
-# wrangler.toml — see the "Write preview wrangler config" step) that attaches
-# that hostname as a Workers Custom Domain: Cloudflare creates the DNS record
-# and issues the TLS cert automatically, and both are removed again when the
-# worker is deleted. The cert is per-hostname (pr-N.preview.* sits one level
-# below the universal *.bongbong.io cert), so the first visit right after a
-# deploy can take a minute or two before TLS is live — the comment includes
-# the instantly-available workers.dev URL as a fallback.
+# on its workers.dev subdomain before merging. The worker is deployed from
+# wrangler.toml under a per-PR `--name`; wrangler.toml names no routes, so
+# the preview gets the workers.dev URL and nothing else.
 # The preview URL is posted/updated as a sticky PR comment; when the PR
 # closes (merged or not) the worker is deleted. Production (the "bongbong"
 # worker serving bongbong.io) is never touched — previews only ever own
-# pr-<N>.preview.bongbong.io.
+# `bongbong-pr-<N>`.
 #
 # Requires the same repo secrets as cloudflare-deploy.yml:
-#   CLOUDFLARE_API_TOKEN — account-level Workers Scripts:Edit plus zone-scoped
-#     Workers Routes:Edit for the custom-domain attach. The live account token
-#     ("bongbong-token") already carries both — account Workers perms + a
-#     "Workers Routes Write on all zones" policy (verified in the dashboard,
-#     2026-08-27) — matching Cloudflare's own "Edit Cloudflare Workers"
-#     template. DNS records/certs for custom domains are Cloudflare-managed
-#     via the Workers API, so no DNS:Edit or SSL:Edit is needed.
+#   CLOUDFLARE_API_TOKEN — account-level Workers Scripts:Edit
 #   CLOUDFLARE_ACCOUNT_ID
 #
 # Fork PRs: `pull_request` runs from forks get no secrets, so previews only
@@ -55,36 +43,12 @@ jobs:
       - uses: actions/checkout@v7
 
       # Previews are the QA surface: build with the dev-tools feature so the
-      # runtime tuning panel (docs/runtime-tuning-design.md) is available at
-      # pr-<N>.preview.bongbong.io. Production (cloudflare-deploy.yml)
-      # never passes this.
+      # runtime tuning panel (docs/runtime-tuning-design.md) is available on
+      # the preview. Production (cloudflare-deploy.yml) never passes this.
       - name: Build web (wasm + Astro site, dev-tools)
         uses: ./.github/actions/build-web
         with:
           cargo-features: --features dev-tools
-
-      # A per-PR config rather than `--name` overrides, because the custom
-      # domain can only be expressed in config (routes with custom_domain),
-      # not as a CLI flag. compatibility_date is read out of wrangler.toml so
-      # it has a single source; workers_dev stays on as the instant fallback
-      # URL while the custom domain's cert provisions. Gitignored — CI-only.
-      - name: Write preview wrangler config
-        env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          compat=$(grep -E '^compatibility_date' wrangler.toml)
-          cat > wrangler.preview.toml <<EOF
-          name = "bongbong-pr-${PR_NUMBER}"
-          ${compat}
-          workers_dev = true
-          routes = [
-            { pattern = "pr-${PR_NUMBER}.preview.bongbong.io", custom_domain = true }
-          ]
-
-          [assets]
-          directory = "site/dist"
-          EOF
-          cat wrangler.preview.toml
 
       - name: Deploy preview worker
         id: deploy
@@ -92,7 +56,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: deploy --config wrangler.preview.toml
+          command: deploy --name bongbong-pr-${{ github.event.pull_request.number }}
 
       - name: Comment preview URL on PR
         uses: actions/github-script@v9
@@ -103,12 +67,15 @@ jobs:
         with:
           script: |
             const marker = '<!-- bongbong-pr-preview -->';
-            const url = `https://pr-${process.env.PR_NUMBER}.preview.bongbong.io`;
-            const fallback = process.env.DEPLOYMENT_URL;
+            const url = process.env.DEPLOYMENT_URL;
             const sha = process.env.HEAD_SHA.slice(0, 7);
-            const lines = [marker, `🎮 **Play this PR:** ${url}`];
-            if (fallback && !fallback.includes('preview.bongbong.io')) {
-              lines.push('', `If TLS is still provisioning there (first minute or two after a deploy), use ${fallback}.`);
+            const rooms = `wss://rooms.bongbong.io/pr-${process.env.PR_NUMBER}`;
+            const lines = [marker];
+            if (url) {
+              lines.push(`🎮 **Play this PR:** ${url}`);
+              lines.push('', `Against this PR's room server: ${url}/?rooms=${rooms}`);
+            } else {
+              lines.push('🎮 This PR is deployed as the `bongbong-pr-' + process.env.PR_NUMBER + '` worker; its URL is in the deploy step\'s log.');
             }
             lines.push('', `Updated for ${sha}. The preview worker is deleted automatically when this PR closes.`);
             const body = lines.join('\n');
@@ -132,14 +99,10 @@ jobs:
     steps:
       # No checkout: the merge ref may already be gone for a closed PR, and
       # deletion only needs the worker name, not wrangler.toml. wrangler runs
-      # non-interactively in CI, so `delete` needs no confirmation. Deleting
-      # the worker also detaches its pr-<N>.preview.bongbong.io custom domain
-      # (DNS record + cert are Cloudflare-managed and removed with it). A
-      # missing worker (PR closed before any successful deploy, or secrets
+      # non-interactively in CI, so `delete` needs no confirmation.
+      # A missing worker (PR closed before any successful deploy, or secrets
       # absent on a fork PR) is treated as already-clean, not a failure; any
-      # other wrangler error — including a refusal over the attached custom
-      # domain, should wrangler ever require force for that — still fails the
-      # job visibly.
+      # other wrangler error still fails the job visibly.
       - name: Delete preview worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

@@ -434,7 +434,7 @@ round after `play`; `click` on the field in Build and confirm no order is
 made; `click` outside an open dropdown and confirm the cell under it was
 not painted.
 
-On a phone: a PR preview (`pr-<N>.preview.bongbong.io`), BUILD -> leave ->
+On a phone: a PR preview (`bongbong-pr-<N>` on workers.dev), BUILD -> leave ->
 pick a tool from a dropdown -> paint and toggle-erase a few cells -> undo
 -> MAP ▾ change tanks -> PLAY, with no mis-taps at phone width.
 
