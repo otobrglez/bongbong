@@ -112,28 +112,28 @@ impl Bullet {
         }
     }
 
-    /// Create a bullet at the tank's muzzle, travelling in the direction the
-    /// tank faces. Same muzzle math as `Shell::spawn`, minus a
-    /// `lateral_offset` param - every bullet fires dead-center regardless of
-    /// the mount overlay's three drawn barrels, since that overlay is purely
-    /// cosmetic (cycling actual spawn points among three barrels would add
-    /// real complexity for no gameplay payoff). `aim_offset` bundles this
-    /// bullet's shared burst misfire skew plus its own fresh spread jitter -
-    /// see `simulation::fire_bullet`, which computes that sum before calling
+    /// Create a bullet at the minigun module's muzzle, beside the main gun
+    /// (`tank_art::MINIGUN_MUZZLE`), boresighted: it flies along the line
+    /// from that muzzle to the gun line's point `minigun_boresight_px`
+    /// ahead of the pivot, so a burst lands where the gun points in the
+    /// band a tank engages in. One muzzle for every bullet, whatever the
+    /// module's barrels draw. `aim_offset` bundles this bullet's shared
+    /// burst misfire skew plus its own fresh spread jitter - see
+    /// `simulation::fire_bullet`, which computes that sum before calling
     /// this.
     pub fn spawn(tank: &Tank, owner: Owner, aim_offset: f32) -> Bullet {
-        let rot = (tank.rotation + aim_offset).to_radians();
+        let position = tank.turret_point(crate::tank_art::MINIGUN_MUZZLE[tank.row as usize]);
+        let facing = tank.rotation.to_radians();
+        let sight = tuning().minigun_boresight_px;
+        let (sx, sy) = (tank.position.x + facing.sin() * sight, tank.position.y - facing.cos() * sight);
+        let rotation = (sx - position.x).atan2(-(sy - position.y)).to_degrees() + aim_offset;
+        let rot = rotation.to_radians();
         let dir = Vec2::new(rot.sin(), -rot.cos());
-        let muzzle = tuning().tank_muzzle_forward_offset[tank.row as usize] * tank.scale;
-        let position = Position::new(
-            tank.position.x + dir.x * muzzle,
-            tank.position.y + dir.y * muzzle,
-        );
         Bullet {
             state: BulletState::Muzzle,
             position,
             velocity: Vec2::new(dir.x * tuning().minigun_bullet_speed, dir.y * tuning().minigun_bullet_speed),
-            rotation: tank.rotation + aim_offset,
+            rotation,
             timer: 0.0,
             done: false,
             owner,

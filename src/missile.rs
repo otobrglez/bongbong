@@ -29,7 +29,7 @@ use crate::tuning::tuning;
 use crate::math::Vec2;
 
 use crate::shell::Owner;
-use crate::{MISSILE_FRAMES, MISSILE_SCALE, MISSILE_TEXTURE_SIZE, Position};
+use crate::{MISSILE_FRAMES, MISSILE_SCALE, MISSILE_TEXTURE_SIZE, MISSILE_TUBE_OFFSETS, Position};
 
 /// Where a missile is in its flight - see this module's doc comment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,8 +100,9 @@ pub struct Missile {
     /// Set the step the missile reaches `aim` on its dive; the frame's
     /// `resolve_missiles` bursts it and removes it.
     pub arrived: bool,
-    /// Which tube it left (0 = leftmost): the fan offset, and a salt for
-    /// the cosmetic flame flicker so a volley does not flicker in step.
+    /// Which tube it left, in firing order (`MISSILE_TUBE_OFFSETS`): its
+    /// place in the fan and across the landing, and a salt for the
+    /// cosmetic flame flicker so a volley does not flicker in step.
     pub tube: u8,
 }
 
@@ -145,7 +146,9 @@ impl Missile {
 
     /// The offset this missile's tube comes down at beside `toward`, a
     /// point it is locking onto: across the line from the missile to it,
-    /// the pod's middle between the second and third tubes.
+    /// `missile_impact_spread_px` apart in the order the tubes fan
+    /// (`MISSILE_TUBE_OFFSETS`), so every missile lands on the side it
+    /// fanned out to and the volley's middle is on the point.
     pub fn impact_offset(&self, toward: Position) -> Vec2 {
         let to = toward - self.position;
         let len = to.length();
@@ -153,7 +156,9 @@ impl Missile {
             return Vec2::new(0.0, 0.0);
         }
         let across = Vec2::new(-to.y / len, to.x / len);
-        across * ((self.tube as f32 - 1.5) * tuning().missile_impact_spread_px)
+        let own = MISSILE_TUBE_OFFSETS[(self.tube as usize).min(MISSILE_TUBE_OFFSETS.len() - 1)];
+        let place = MISSILE_TUBE_OFFSETS.iter().filter(|&&o| o < own).count() as f32;
+        across * ((place - 1.5) * tuning().missile_impact_spread_px)
     }
 
     /// Still following a target, so its position should refresh `aim`.

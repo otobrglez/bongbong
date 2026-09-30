@@ -583,6 +583,12 @@ tunables! {
         /// Bullet flight speed (px/s) - faster than a shell: a zippy tracer,
         /// not a lobbed shell.
         minigun_bullet_speed: f32 = 595.65 in 50.0 ..= 5000.0;
+        /// Where the minigun's line crosses the gun line, in px ahead of the
+        /// pivot (`Bullet::spawn`): the module sits beside the main gun, so
+        /// its bullets are boresighted onto the gun line here - nearer, a
+        /// burst lands a little to the module's side of it, further, a
+        /// little to the other. Around the enemies' engagement ring.
+        minigun_boresight_px: f32 = 256.0 in 64.0 ..= 1024.0;
         /// Bullet hit-box half-extent (px) - smaller than a shell's, a
         /// lighter caliber.
         minigun_bullet_hit_half_extent: f32 = 2.0 in 0.5 ..= 32.0;
@@ -596,11 +602,11 @@ tunables! {
         /// rattle the tank, not shove it once hard.
         minigun_bullet_recoil_speed: f32 = 3.0 in 0.0 ..= 200.0;
         minigun_bullet_recoil_max_speed: f32 = 10.0 in 0.0 ..= 400.0;
-        /// How long each of minigun_mount.png's 3 "hot barrel" frames is
-        /// shown before advancing, while a burst is active (a discrete frame
-        /// swap, not a rotation - see `tank::draw_minigun_mount`). Tuned
-        /// close to `minigun_bullet_delay_seconds` so roughly one barrel
-        /// swap happens per bullet.
+        /// How long each of the minigun module's 3 "hot barrel" cells is
+        /// shown before advancing, while a burst is active (a discrete cell
+        /// swap, not a rotation - see `tank::draw_tank`). Tuned close to
+        /// `minigun_bullet_delay_seconds` so roughly one barrel swap
+        /// happens per bullet.
         minigun_cycle_seconds: f32 = 0.05 in 0.01 ..= 1.0;
     }
 
@@ -748,9 +754,6 @@ tunables! {
         missile_trail_spacing: f32 = 4.0 in 0.0 ..= 64.0;
         missile_trail_seconds: f32 = 1.0 in 0.05 ..= 10.0;
         missile_trail_opacity: f32 = 0.75 in 0.0 ..= 1.0;
-        /// Draw scale of the pod on the turret, against the tank's own
-        /// scale; the tube mouths the missiles leave from scale with it.
-        missile_pod_scale: f32 = 0.8 in 0.3 ..= 2.0;
         missile_shadow_opacity: f32 = 0.3 in 0.0 ..= 1.0;
     }
 
@@ -2016,6 +2019,10 @@ tunables! {
         /// World px of travel between hull tread-animation frame advances
         /// (independent of the ground-decal spacing below).
         tank_hull_track_frame_distance: f32 = 8.0 in 1.0 ..= 64.0;
+        /// Seconds a turret holds each recoil cell after its main gun fires
+        /// (`Tank::kick`): the barrel kicked back, then a twin's second
+        /// barrel or a single one on its way home. Presentation only.
+        tank_recoil_seconds: f32 = 0.08 in 0.0 ..= 0.5;
         /// Drop shadows: shared screen-space offset direction (down-right, a
         /// top-down-arcade convention) - only the distance differs per
         /// entity type. See docs/sprite-shadows-design.md.

@@ -301,12 +301,14 @@ impl Press {
     }
 }
 
-/// A laser beam the client drew on its press: where it left the muzzle,
-/// which way, with which beam. The round finds where it stops in the
-/// drawn world (`Game::present_world`) and draws it.
+/// A laser beam the client drew on its press: where it is judged from on
+/// the gun line, the lens it is drawn from, which way, with which beam.
+/// The round finds where the gun line stops in the drawn world
+/// (`Game::present_world`) and draws the beam from the lens to there.
 #[derive(Clone, Copy, Debug)]
 pub struct BeamPress {
     pub start: Position,
+    pub lens: Position,
     pub dir: crate::math::Vec2,
     pub variant: crate::laser::LaserVariant,
 }
@@ -405,9 +407,9 @@ pub struct Predictor {
     /// impact flashes.
     impacts: Vec<Position>,
     /// Where each press drawn since the last frame left the muzzle - its
-    /// first shot, the first barrel of a twin - for the round's muzzle
-    /// ripple.
-    muzzles: Vec<Position>,
+    /// first shot, the first barrel of a twin - and what it fired, for the
+    /// round's muzzle ripple and the turret's kick.
+    muzzles: Vec<(Position, ProvisionalKind)>,
     /// The room's shots of this seat first seen unpaired, and when (local
     /// seconds of `clock`): held back from the picture for a moment in
     /// case their press is about to claim them, drawn if nothing does.
@@ -607,11 +609,11 @@ impl Predictor {
                 if ammo - self.beams_owed.len() as i32 <= 0 {
                     return;
                 }
-                if let Some((start, dir, variant)) = self.sandbox.seat_beam(self.seat) {
+                if let Some((start, lens, dir, variant)) = self.sandbox.seat_beam(self.seat) {
                     self.cooldown = t.player_fire_interval;
                     self.beams_owed.push_back(tick);
                     if drawn {
-                        self.beams.push(BeamPress { start, dir, variant });
+                        self.beams.push(BeamPress { start, lens, dir, variant });
                         self.drawn_beams.push_back((tick, 0.0));
                         self.report.shots_drawn += 1;
                     }
@@ -645,7 +647,7 @@ impl Predictor {
         // does on a replica - once a press.
         self.launch_due(&mut press);
         if let Some(first) = press.live.first() {
-            self.muzzles.push(first.shot.position);
+            self.muzzles.push((first.shot.position, press.kind));
         }
         self.presses.push_back(press);
         if drawn {
@@ -998,9 +1000,9 @@ impl Predictor {
         std::mem::take(&mut self.impacts)
     }
 
-    /// Where the presses drawn since the last call left the muzzle, for the
-    /// round's muzzle ripples.
-    pub fn take_muzzles(&mut self) -> Vec<Position> {
+    /// Where the presses drawn since the last call left the muzzle and what
+    /// they fired, for the round's muzzle ripples and turret kicks.
+    pub fn take_muzzles(&mut self) -> Vec<(Position, ProvisionalKind)> {
         std::mem::take(&mut self.muzzles)
     }
 

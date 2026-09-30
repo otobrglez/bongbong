@@ -11,27 +11,27 @@ use crate::plasma::PlasmaVariant;
 use crate::shell::Owner;
 use crate::{
     MAX_DAMAGE,
-    MINIGUN_MOUNT_SCALE,
-    MINIGUN_MOUNT_TEXTURE_SIZE,
-    MISSILE_POD_FRAMES,
-    MISSILE_POD_TEXTURE_SIZE,
     MISSILE_TUBE_OFFSETS,
     Position,
     TANK_BROKEN_TURRET_COL,
+    TANK_DAMAGE_TIERS,
+    TANK_FRAME_SIZE,
     TANK_HULL_BBOX_BY_ROW,
-    TANK_HULL_COL,
-    TANK_HULL_DISABLED_COL,
-    TANK_HULL_DISABLED_DAMAGE,
     TANK_HULL_FRACTION,
-    TANK_HULL_LIGHT_COL,
-    TANK_HULL_LIGHT_DAMAGE,
-    TANK_HULL_TRACK_COLS,
+    TANK_MODULE_FLAME_COL,
+    TANK_MODULE_LASER_COL,
+    TANK_MODULE_MINIGUN_COL,
+    TANK_MODULE_MISSILES_COL,
+    TANK_MODULE_PLASMA_COL,
     TANK_MOVE_BBOX_FRACTION,
     TANK_PIVOT_REAR_FRACTION,
     TANK_ROWS_PER_TEAM,
-    TANK_TEXTURE_SIZE,
+    TANK_SPRITE_SIZE,
+    TANK_TEAM_BLOCKS,
+    TANK_TRACK_FRAMES,
     TANK_TURRET_BBOX_BY_ROW,
     TANK_TURRET_COL,
+    TANK_TURRET_POSES,
     TANK_WRECK_COLS,
 };
 
@@ -238,8 +238,8 @@ pub struct MinigunBurst {
 }
 
 /// A seeker-missile volley in progress: `missiles_remaining` more to leave
-/// the pod, `timer` until the next one, `next_tube` the tube it leaves from -
-/// see `Tank::missile_volley`. The `MinigunBurst` shape, one missile per
+/// the launcher, `timer` until the next one, `next_tube` the tube it leaves
+/// from - see `Tank::missile_volley`. The `MinigunBurst` shape, one missile per
 /// tube; the tubes are fired in order and wrap back to the first for the
 /// next salvo (`missile_salvos`).
 #[derive(Clone, Copy)]
@@ -311,9 +311,9 @@ pub struct Tank {
     /// the other queued shots so a volley always completes unless the tank
     /// is wrecked. `None` the rest of the time.
     pub missile_volley: Option<MissileVolley>,
-    /// How many of the pod's tubes read empty right now (0..=4, the
-    /// `missile_pod.png` column): counts up as a volley leaves, back down
-    /// as the reload runs (`tick_missile_pod`). Presentation only.
+    /// How many of the launcher's tubes read empty right now (0..=4, the
+    /// missile module's cell): counts up as a volley leaves, back down as
+    /// the reload runs (`tick_missile_pod`). Presentation only.
     pub missile_tubes_empty: u8,
     /// Which layout of damage marks this hull wears (0..DAMAGE_VARIANTS,
     /// `damage_stage.rs`). Rolled once at spawn (see Game::init) and fixed
@@ -354,30 +354,40 @@ pub struct Tank {
     /// The ground ring's own velocity (px/s) - the inertia that makes it
     /// lag and catch up rather than track the hull instantly.
     pub ring_velocity: Vec2,
-    /// Seconds accumulated toward the minigun barrel-cluster overlay's next
-    /// "hot barrel" frame swap (see `draw_minigun_mount`), advanced while
-    /// `minigun_burst` is active (see `tick_minigun_spin`) and held in place
-    /// - not reset to 0 - the rest of the time, so the mount doesn't
-    /// visually snap back to frame 0 between bursts. Wrapped to
-    /// `MINIGUN_CYCLE_SECONDS * 3.0` (one full lap of the 3 frames) rather
-    /// than growing unbounded.
+    /// Seconds accumulated toward the minigun module's next "hot barrel"
+    /// cell (see `module_cols`), advanced while `minigun_burst` is active
+    /// (see `tick_minigun_spin`) and held in place - not reset to 0 - the
+    /// rest of the time, so the module doesn't visually snap back to frame 0
+    /// between bursts. Wrapped to `minigun_cycle_seconds * 3.0` (one full
+    /// lap of the 3 frames) rather than growing unbounded.
     ///
-    /// This deliberately drives a discrete frame swap, not a continuous
-    /// rotation: `minigun_mount.png`'s barrels point along the ground plane
-    /// toward the target, so their real rotation axis is edge-on to this
-    /// game's top-down camera, not face-on to it - spinning the whole
-    /// sprite in the screen plane would read as a helicopter rotor seen
-    /// from above, not a side-mounted minigun. Cycling which barrel reads
-    /// as freshly-fired fakes the same "rounds cycling through" idea
-    /// correctly for this camera angle instead. See
-    /// `tools/spritegen/gen_minigun_mount.py`'s module doc comment.
+    /// This deliberately drives a discrete cell swap, not a continuous
+    /// rotation: the barrels point along the ground plane toward the
+    /// target, so their real rotation axis is edge-on to this game's
+    /// top-down camera - spinning the sprite in the screen plane would read
+    /// as a helicopter rotor seen from above. Cycling which barrel reads as
+    /// freshly fired fakes the rounds cycling through, correctly for this
+    /// camera angle.
     pub minigun_cycle_timer: f32,
-    /// Index into TANK_HULL_TRACK_COLS (0..4) picking which tread-animation
-    /// hull frame is currently drawn - see `hull_col`/
-    /// TANK_HULL_TRACK_FRAME_DISTANCE. Only consulted while the tank is alive
-    /// and below TANK_HULL_LIGHT_DAMAGE; damaged/wrecked hulls hold a fixed
-    /// frame instead.
+    /// The hull's track frame (0..TANK_TRACK_FRAMES), advanced by distance
+    /// driven (`simulation::lay_tracks`) at every live damage tier - see
+    /// `hull_col`.
     pub hull_frame: i32,
+    /// The turret's recoil cell (0..TANK_TURRET_POSES): 0 at rest, 1 the
+    /// first (or only) barrel kicked back, 2 the second barrel back or a
+    /// single one returning. Set by `kick` where a shell or plasma bolt
+    /// leaves the main gun, stepped by `tick_recoil`. Presentation only.
+    pub recoil_pose: u8,
+    /// Seconds the current recoil cell has left (`tank_recoil_seconds`).
+    pub recoil_timer: f32,
+    /// A twin gun's second barrel kicks this many seconds after the first -
+    /// when its second shell leaves (`tank_twin_shot_delay_seconds`).
+    pub recoil_second_in: Option<f32>,
+    /// The last kick was a plasma bolt: the plasma module shows its coils
+    /// firing through the recoil.
+    pub recoil_plasma: bool,
+    /// Seconds the laser module shows its lens firing (`kick_laser`).
+    pub laser_flash_timer: f32,
     /// World px of travel accumulated toward the next `hull_frame` advance -
     /// see `simulation::lay_tracks`. Deliberately separate from
     /// `track_accum` below: that one paces the ground-decal tread marks in
@@ -391,7 +401,8 @@ pub struct Tank {
     /// re-rolled each frame, so a field of wrecks shows genuine variety
     /// instead of flickering between variants.
     pub wreck_col: Option<i32>,
-    /// How much to scale the 32x32 sprite when drawn.
+    /// World pixels per design pixel: the 32 px frame (`size`) and the
+    /// 40 px sprite cell (`sprite_size`) are both drawn this many times up.
     pub scale: f32,
     /// Per-tank multiplier on the live base speed (`tuning().tank_speed`
     /// for the player, `tuning().enemy_speed` for an enemy - see
@@ -619,6 +630,11 @@ impl Default for Tank {
             ring_velocity: Vec2::new(0.0, 0.0),
             minigun_cycle_timer: 0.0,
             hull_frame: 0,
+            recoil_pose: 0,
+            recoil_timer: 0.0,
+            recoil_second_in: None,
+            recoil_plasma: false,
+            laser_flash_timer: 0.0,
             hull_anim_accum: 0.0,
             wreck_col: None,
             scale: 2.0, // 3.0,
@@ -666,9 +682,17 @@ impl Default for Tank {
 }
 
 impl Tank {
-    /// Side length of this tank on screen (square sprite).
+    /// This tank's gameplay size: the 32 px frame its boxes are measured
+    /// in, at `scale` - what avoidance, spawn clearance and the ground
+    /// rings are sized from. The sprite is bigger (`sprite_size`).
     pub fn size(&self) -> f32 {
-        TANK_TEXTURE_SIZE * self.scale
+        TANK_FRAME_SIZE * self.scale
+    }
+
+    /// The side of the sprite's square cell on screen: the 40 px cell at
+    /// `scale`, room for barrels, antennas and modules round the frame.
+    pub fn sprite_size(&self) -> f32 {
+        TANK_SPRITE_SIZE * self.scale
     }
 
     /// True once the tank has taken maximum damage (a burning wreck).
@@ -837,8 +861,8 @@ impl Tank {
     }
 
     /// The row of the sprite sheet this tank draws from: its chassis row
-    /// inside the block for its team - the enemy block first, then player
-    /// 1's and player 2's recoloured copies (`TANK_ROWS_PER_TEAM`).
+    /// inside the block for its team - the enemy block first, then the four
+    /// players' recolours (`TANK_ROWS_PER_TEAM`, `sheet_block`).
     pub fn sheet_row(&self) -> i32 {
         self.row + sheet_block(self.player_index()) * TANK_ROWS_PER_TEAM
     }
@@ -888,34 +912,109 @@ impl Tank {
         Color::new(255, 255, 255, (255.0 * self.alpha()).round() as u8)
     }
 
-    /// Which atlas column to draw this tank's hull from - a four-tier
-    /// escalation matching the sheet's own damage ladder: the rolled wreck
-    /// variant once it's a wreck (`wreck_col`, falling back to the first
-    /// wreck variant on the off chance this is read before that roll
-    /// happens), the disabled art once it's taken heavy but non-fatal damage
-    /// (TANK_HULL_DISABLED_DAMAGE), the cosmetic "light" art once it's taken
-    /// moderate damage (TANK_HULL_LIGHT_DAMAGE) - still fully mobile, so this
-    /// tier is static art rather than consulting `hull_frame` - otherwise
-    /// whichever tread-animation frame `hull_frame` currently points at.
+    /// The damage tier the art shows: 0 pristine, one step at each of
+    /// `TANK_DAMAGE_TIERS` - scuffed, damaged, critical. A wreck has its
+    /// own cells (`hull_col`).
+    pub fn damage_tier(&self) -> i32 {
+        TANK_DAMAGE_TIERS.iter().filter(|&&at| self.damage >= at).count() as i32
+    }
+
+    /// Which sheet column the hull draws from: the rolled wreck once it is
+    /// one (`wreck_col`, the first variant on the off chance it is read
+    /// before the roll), otherwise its damage tier's run of track frames,
+    /// the frame `hull_frame` points at - the tracks roll at every tier.
     pub fn hull_col(&self) -> i32 {
         if self.is_wreck() {
             self.wreck_col.unwrap_or(TANK_WRECK_COLS[0])
-        } else if self.damage >= TANK_HULL_DISABLED_DAMAGE {
-            TANK_HULL_DISABLED_COL
-        } else if self.damage >= TANK_HULL_LIGHT_DAMAGE {
-            TANK_HULL_LIGHT_COL
         } else {
-            TANK_HULL_TRACK_COLS[self.hull_frame as usize]
+            self.damage_tier() * TANK_TRACK_FRAMES + self.hull_frame.clamp(0, TANK_TRACK_FRAMES - 1)
         }
     }
 
-    /// Which atlas column to draw this tank's turret from: the severed/
-    /// broken turret once it's a wreck, otherwise the intact turret.
+    /// Which sheet column the turret draws from: the broken turret on a
+    /// wreck, otherwise its damage tier's run of recoil poses, the one
+    /// `recoil_pose` holds.
     pub fn turret_col(&self) -> i32 {
         if self.is_wreck() {
             TANK_BROKEN_TURRET_COL
         } else {
-            TANK_TURRET_COL
+            TANK_TURRET_COL + self.damage_tier() * TANK_TURRET_POSES + (self.recoil_pose as i32).min(TANK_TURRET_POSES - 1)
+        }
+    }
+
+    /// A blown wreck (the first variant): its turret ring is a crater and
+    /// the turret lies beside the hull, thrown clear.
+    pub fn turret_thrown(&self) -> bool {
+        self.is_wreck() && self.wreck_col == Some(TANK_WRECK_COLS[0])
+    }
+
+    /// A point on the turret, `local` design pixels from the pivot in the
+    /// turret's frame (`tank_art`: x to the right, y toward the tail), put
+    /// in the world at the tank's facing - where a module's shot leaves.
+    pub fn turret_point(&self, local: (f32, f32)) -> Position {
+        let (sin, cos) = self.rotation.to_radians().sin_cos();
+        let (x, y) = (local.0 * self.scale, local.1 * self.scale);
+        Position::new(self.position.x + x * cos - y * sin, self.position.y + x * sin + y * cos)
+    }
+
+    /// The main gun's muzzle on the gun line, `tank_muzzle_forward_offset`
+    /// ahead of the pivot along `dir` (the facing a shot takes): where a
+    /// laser beam and the flamethrower's cone are judged from, whichever
+    /// module draws them.
+    pub fn gun_line_muzzle(&self, dir: Vec2) -> Position {
+        let ahead = tuning().tank_muzzle_forward_offset[self.row as usize] * self.scale;
+        Position::new(self.position.x + dir.x * ahead, self.position.y + dir.y * ahead)
+    }
+
+    /// Whether this chassis's main gun is a twin (`tank_barrel_lateral_offset`).
+    pub fn twin_gun(&self) -> bool {
+        tuning().tank_barrel_lateral_offset[self.row as usize] > 0.0
+    }
+
+    /// The main gun fired: kick the recoil cells. A twin gun kicks its
+    /// first barrel now and its second when the second shell leaves
+    /// (`tank_twin_shot_delay_seconds` later); a single barrel kicks and
+    /// then returns. `plasma` lights the plasma module's coils through it.
+    pub fn kick(&mut self, plasma: bool) {
+        let t = tuning();
+        self.recoil_pose = 1;
+        self.recoil_timer = t.tank_recoil_seconds;
+        self.recoil_plasma = plasma;
+        self.recoil_second_in = self.twin_gun().then_some(t.tank_twin_shot_delay_seconds);
+    }
+
+    /// The laser fired: its lens shows the beam for two recoil beats.
+    pub fn kick_laser(&mut self) {
+        self.laser_flash_timer = tuning().tank_recoil_seconds * 2.0;
+    }
+
+    /// Step the recoil cells `kick` set, and the laser's flash.
+    pub fn tick_recoil(&mut self, dt: f32) {
+        self.laser_flash_timer = (self.laser_flash_timer - dt).max(0.0);
+        if let Some(left) = self.recoil_second_in {
+            let left = left - dt;
+            if left <= 0.0 {
+                self.recoil_second_in = None;
+                self.recoil_pose = 2;
+                self.recoil_timer = tuning().tank_recoil_seconds;
+                return;
+            }
+            self.recoil_second_in = Some(left);
+        }
+        if self.recoil_pose == 0 {
+            return;
+        }
+        self.recoil_timer -= dt;
+        if self.recoil_timer > 0.0 || self.recoil_second_in.is_some() {
+            return;
+        }
+        if self.recoil_pose == 1 && !self.twin_gun() {
+            // A single barrel on its way back.
+            self.recoil_pose = 2;
+            self.recoil_timer = tuning().tank_recoil_seconds;
+        } else {
+            self.recoil_pose = 0;
+            self.recoil_plasma = false;
         }
     }
 
@@ -992,9 +1091,9 @@ impl Tank {
         }
     }
 
-    /// Keep `missile_tubes_empty` in step with the pod: a volley in flight
-    /// shows the tubes it has emptied; after it, the tubes refill one by
-    /// one as `fire_cooldown` runs down the reload. Called with the other
+    /// Keep `missile_tubes_empty` in step with the launcher: a volley in
+    /// flight shows the tubes it has emptied; after it, the tubes refill one
+    /// by one as `fire_cooldown` runs down the reload. Called with the other
     /// per-tank timers, after `fire_cooldown` has ticked.
     pub fn tick_missile_pod(&mut self) {
         if self.missile_volley.is_some() || self.missile_tubes_empty == 0 {
@@ -1006,9 +1105,10 @@ impl Tank {
         self.missile_tubes_empty = self.missile_tubes_empty.min(empty);
     }
 
-    /// Which of `minigun_mount.png`'s 3 "hot barrel" frames to draw right
-    /// now - see `minigun_cycle_timer`'s doc comment for why this is a
-    /// discrete frame index, not a rotation angle.
+    /// Which of the minigun module's 3 "hot barrel" cells
+    /// (`tank_modules.png`) to draw right now - see `minigun_cycle_timer`'s
+    /// doc comment for why this is a discrete frame index, not a rotation
+    /// angle.
     fn minigun_cycle_frame(&self) -> i32 {
         ((self.minigun_cycle_timer / tuning().minigun_cycle_seconds) as i32).clamp(0, 2)
     }
@@ -1132,7 +1232,7 @@ impl Tank {
         // Local "facing up" frame, origin at the tile center (16,16) -
         // same convention TANK_HULL_BBOX_BY_ROW's own values are measured
         // in.
-        let half = TANK_TEXTURE_SIZE * 0.5;
+        let half = TANK_FRAME_SIZE * 0.5;
         let local_cx = (x0 + x1 + 1.0) * 0.5 - half;
         let local_cy = (y0 + y1 + 1.0) * 0.5 - half;
         let local_hw = (x1 - x0 + 1.0) * 0.5;
@@ -1337,75 +1437,213 @@ fn draw_pivot(size: f32) -> Vec2 {
     Vec2::new(size / 2.0, size / 2.0 + size * TANK_PIVOT_REAR_FRACTION)
 }
 
-/// Which block of the sheet a tank draws from: 0 for an enemy, 1 and 2 for
-/// the two players' recoloured copies. The sheet holds three blocks, so a
-/// seat past the second borrows player 1's and is told apart by its ring
-/// colour and its `P3`..`P8` label instead (docs/online-coop-prd.md §4.11).
+/// Which block of the sheet a tank draws from: 0 for an enemy, 1 to 4 for
+/// the first four seats' recolours (blue, pink, silver-white, orange). A
+/// seat past the fourth borrows player 1's block and is told apart by its
+/// ring colour and its `P5`..`P8` label (docs/online-coop-prd.md §4.11).
 fn sheet_block(player: Option<u8>) -> i32 {
     match player {
         None => 0,
-        Some(1) => 2,
+        Some(seat) if (seat as i32) < TANK_TEAM_BLOCKS - 1 => seat as i32 + 1,
         Some(_) => 1,
     }
 }
 
-/// Source rectangle for a fixed representative tank sprite - the Scout
-/// chassis's idle hull frame (col 0) in `player`'s team colour - used by
-/// the map editor's start-point palette icons and placed-cell markers,
-/// which need one fixed tank sprite rather than any particular round's
-/// rolled chassis, in the colour that tank will actually be.
-pub fn icon_source_rec(player: u8) -> Rectangle {
-    source_rec(sheet_block(Some(player)) * TANK_ROWS_PER_TEAM, 0)
+/// Source rectangles for a fixed representative tank - the Scout chassis's
+/// pristine hull (col 0) and its turret at rest, in `player`'s team colour,
+/// drawn in that order - used by the map editor's start-point palette icons
+/// and placed-cell markers, which need one fixed tank rather than any
+/// particular round's rolled chassis, in the colour that tank will actually
+/// be. Each is the middle `TANK_FRAME_SIZE` square of its cell, so a marker
+/// draws the art one to one on a map cell.
+pub fn icon_source_recs(player: u8) -> [Rectangle; 2] {
+    let row = sheet_block(Some(player)) * TANK_ROWS_PER_TEAM;
+    let inset = (TANK_SPRITE_SIZE - TANK_FRAME_SIZE) / 2.0;
+    [0, TANK_TURRET_COL].map(|col| {
+        let cell = source_rec(row, col);
+        Rectangle::new(cell.x + inset, cell.y + inset, TANK_FRAME_SIZE, TANK_FRAME_SIZE)
+    })
 }
 
-/// Source rectangles for `kind`'s idle hull and its turret in `player`'s
-/// team colour, drawn one over the other into the same box (both are
-/// authored around the cell's centre) - the builder's MAP panel showing
-/// the chassis a map pins for a seat.
+/// Source rectangles for `kind`'s pristine hull and its turret at rest in
+/// `player`'s team colour, drawn one over the other into the same 32 px
+/// box - the builder's MAP panel showing the chassis a map pins for a seat.
+/// Each is a `TANK_FRAME_SIZE` window of its cell, two pixels above the
+/// middle one, which holds every chassis whole: the longest barrels reach
+/// two pixels past the frame the pivot centres.
 pub fn chassis_icon_source_recs(kind: TankKind, player: u8) -> [Rectangle; 2] {
     let row = kind.row() + sheet_block(Some(player)) * TANK_ROWS_PER_TEAM;
-    [source_rec(row, TANK_HULL_COL), source_rec(row, TANK_TURRET_COL)]
+    let inset = (TANK_SPRITE_SIZE - TANK_FRAME_SIZE) / 2.0;
+    [0, TANK_TURRET_COL].map(|col| {
+        let cell = source_rec(row, col);
+        Rectangle::new(cell.x + inset, cell.y + inset - CHASSIS_ICON_RAISE, TANK_FRAME_SIZE, TANK_FRAME_SIZE)
+    })
 }
 
-/// Source rectangle for the tank at (row, col) inside the atlas.
+/// How far `chassis_icon_source_recs` raises its window over the middle
+/// frame, in sheet pixels.
+const CHASSIS_ICON_RAISE: f32 = 2.0;
+
+/// Source rectangle for the cell at (row, col) of the tank sheet (and of
+/// its light layer, which has the same layout).
 fn source_rec(row: i32, col: i32) -> Rectangle {
-    Rectangle::new(
-        col as f32 * TANK_TEXTURE_SIZE,
-        row as f32 * TANK_TEXTURE_SIZE,
-        TANK_TEXTURE_SIZE,
-        TANK_TEXTURE_SIZE,
-    )
+    Rectangle::new(col as f32 * TANK_SPRITE_SIZE, row as f32 * TANK_SPRITE_SIZE, TANK_SPRITE_SIZE, TANK_SPRITE_SIZE)
 }
 
-/// Draw a single tank sprite from the atlas at its center position, scaled
-/// and rotated. Hull and turret are two separate layers in the atlas (see
-/// `hull_col`/`turret_col` for which column each picks, depending on
-/// animation/damage state) drawn hull-first-then-turret at the same
-/// dest/origin but each at its own eased angle (`visual_rotation` for the
-/// hull, `turret_visual_rotation` for the turret) - the turret still just
-/// chases the tank's commanded `rotation`, not an independent aim target, but
-/// it does so faster than the hull so it visibly leads a turn.
-pub fn draw_tank(c: &mut impl Canvas, tank: &Tank) {
-    draw_tank_hull(c, tank, tank.tint());
-    draw_tank_turret(c, tank, tank.tint());
+/// Source rectangle for a weapon module's cell: a row per chassis.
+fn module_rec(chassis_row: i32, col: i32) -> Rectangle {
+    source_rec(chassis_row, col)
+}
+
+/// Where the turret layer is drawn and at what angle: on the ring at the
+/// turret's eased aim, or - on a blown wreck - thrown clear, lying beside
+/// the hull on its back.
+fn turret_placement(tank: &Tank) -> (Position, f32) {
+    if tank.turret_thrown() {
+        let r = tank.visual_rotation.to_radians();
+        let (dx, dy) = (12.0 * tank.scale, 9.0 * tank.scale);
+        let off = Vec2::new(dx * r.cos() - dy * r.sin(), dx * r.sin() + dy * r.cos());
+        (tank.position + off, tank.visual_rotation + 150.0)
+    } else {
+        (tank.position, tank.turret_visual_rotation)
+    }
+}
+
+/// One layer of a tank's sprite: (sheet, source, centre, rotation).
+type Layer = (Sheet, Rectangle, Position, f32);
+
+/// The hull layer of a tank's sprite. `glow` picks the light layer's
+/// sheet; `time` paces, on the light layer, a damaged tank's sparks and
+/// warning lamp (which the track frame alone would freeze on a tank
+/// standing still).
+fn hull_layer(tank: &Tank, time: f32, glow: bool) -> Layer {
+    let sheet = if glow { Sheet::TankGlow } else { Sheet::Tanks };
+    let mut col = tank.hull_col();
+    if glow && !tank.is_wreck() && tank.damage_tier() >= 2 {
+        let frame = ((time * 8.0 + tank.anim_phase()) as i32).rem_euclid(TANK_TRACK_FRAMES);
+        col = tank.damage_tier() * TANK_TRACK_FRAMES + frame;
+    }
+    (sheet, source_rec(tank.sheet_row(), col), tank.position, tank.visual_rotation)
+}
+
+/// The layers over the hull, in draw order: the turret, then the weapon
+/// modules it carries (`time` paces the flamethrower's pilot). `glow`
+/// picks the light layer's sheets.
+fn turret_layers(tank: &Tank, time: f32, glow: bool) -> Vec<Layer> {
+    let (tanks, modules) = if glow { (Sheet::TankGlow, Sheet::TankModulesGlow) } else { (Sheet::Tanks, Sheet::TankModules) };
+    let (at, rot) = turret_placement(tank);
+    let mut out = vec![(tanks, source_rec(tank.sheet_row(), tank.turret_col()), at, rot)];
+    for col in module_cols(tank, time).into_iter().flatten() {
+        out.push((modules, module_rec(tank.row, col), tank.position, tank.turret_visual_rotation));
+    }
+    out
+}
+
+/// Every layer of a tank's sprite in draw order - hull, turret, the weapon
+/// modules it carries.
+fn layers(tank: &Tank, time: f32, glow: bool) -> Vec<Layer> {
+    let mut out = vec![hull_layer(tank, time, glow)];
+    out.extend(turret_layers(tank, time, glow));
+    out
+}
+
+/// Blit `layers` at their 40 px cells round the shared pivot, in `tint`.
+fn blit_layers(c: &mut impl Canvas, tank: &Tank, layers: &[Layer], tint: Color) {
+    let size = tank.sprite_size();
+    let origin = draw_pivot(size);
+    for &(sheet, src, at, rot) in layers {
+        c.blit(sheet, src, Rectangle::new(at.x, at.y, size, size), origin, rot, tint);
+    }
+}
+
+/// Which weapon-module cells a tank shows: one per special weapon it holds,
+/// each in the state the game already tracks - the minigun's hot barrel
+/// while a burst fires (`minigun_cycle_frame`), the launcher's empty tubes
+/// (`missile_tubes_empty`), plasma and laser idle / armed (the live weapon)
+/// / firing, the flamethrower's pilot flickering or its jet while held. A
+/// module is hardware, not a firing-mode indicator: it shows whenever the
+/// weapon is carried, and a wreck carries none.
+fn module_cols(tank: &Tank, time: f32) -> [Option<i32>; 5] {
+    if tank.is_wreck() {
+        return [None; 5];
+    }
+    let live = tank.active_weapon();
+    let minigun = (tank.minigun_ammo > 0 || tank.minigun_burst.is_some()).then(|| {
+        TANK_MODULE_MINIGUN_COL + if tank.minigun_burst.is_some() { 1 + tank.minigun_cycle_frame() } else { 0 }
+    });
+    let missiles = (tank.missile_ammo > 0 || tank.missile_volley.is_some())
+        .then(|| TANK_MODULE_MISSILES_COL + (tank.missile_tubes_empty as i32).clamp(0, MISSILE_TUBE_OFFSETS.len() as i32));
+    let plasma = (tank.plasma_ammo > 0 || (tank.recoil_plasma && tank.recoil_pose > 0)).then(|| {
+        TANK_MODULE_PLASMA_COL
+            + if tank.recoil_plasma && tank.recoil_pose > 0 {
+                2
+            } else if live == ActiveWeapon::Plasma {
+                1
+            } else {
+                0
+            }
+    });
+    let laser = (tank.laser_charges > 0 || tank.laser_flash_timer > 0.0).then(|| {
+        TANK_MODULE_LASER_COL
+            + if tank.laser_flash_timer > 0.0 {
+                2
+            } else if live == ActiveWeapon::Laser {
+                1
+            } else {
+                0
+            }
+    });
+    let flame = (tank.flame_fuel > 0.0).then(|| {
+        TANK_MODULE_FLAME_COL
+            + if tank.flame_held {
+                2 + ((time * 14.0) as i32).rem_euclid(2)
+            } else {
+                ((time * 6.0 + tank.anim_phase()) as i32).rem_euclid(2)
+            }
+    });
+    [minigun, missiles, plasma, laser, flame]
+}
+
+/// Draw a tank: hull, turret and the weapon modules it carries, each at its
+/// own eased angle (`visual_rotation` for the hull, `turret_visual_rotation`
+/// for the turret and its modules) - the turret chases the commanded
+/// `rotation` faster than the hull, so it visibly leads a turn. Every layer
+/// is a 40 px cell (`sprite_size`) drawn round the shared pivot.
+pub fn draw_tank(c: &mut impl Canvas, tank: &Tank, time: f32) {
+    draw_tank_hull(c, tank, time, tank.tint());
+    draw_tank_turret(c, tank, time, tank.tint());
 }
 
 /// The hull layer of `draw_tank` alone, in `tint` - split out so the
 /// damage marks (`damage_stage::draw_damage`) sit between hull and turret
 /// and a hit's flash can draw both halves again in light.
-pub fn draw_tank_hull(c: &mut impl Canvas, tank: &Tank, tint: Color) {
-    let size = tank.size();
-    // dest is placed at the tank's position; origin is the rear-shifted
-    // pivot (see `draw_pivot`), not the sprite's exact middle.
-    let dest = Rectangle::new(tank.position.x, tank.position.y, size, size);
-    c.blit(Sheet::Tanks, source_rec(tank.sheet_row(), tank.hull_col()), dest, draw_pivot(size), tank.visual_rotation, tint);
+pub fn draw_tank_hull(c: &mut impl Canvas, tank: &Tank, time: f32, tint: Color) {
+    blit_layers(c, tank, &[hull_layer(tank, time, false)], tint);
 }
 
-/// The turret layer of `draw_tank` alone, in `tint`.
-pub fn draw_tank_turret(c: &mut impl Canvas, tank: &Tank, tint: Color) {
-    let size = tank.size();
-    let dest = Rectangle::new(tank.position.x, tank.position.y, size, size);
-    c.blit(Sheet::Tanks, source_rec(tank.sheet_row(), tank.turret_col()), dest, draw_pivot(size), tank.turret_visual_rotation, tint);
+/// The turret layer of `draw_tank` and the weapon modules on it, in `tint`.
+pub fn draw_tank_turret(c: &mut impl Canvas, tank: &Tank, time: f32, tint: Color) {
+    blit_layers(c, tank, &turret_layers(tank, time, false), tint);
+}
+
+/// The tank's light layer - lamps, accent strips, the sensor eye, sparks,
+/// embers, the modules' lenses and hot barrels (`scifi_tanks_glow.png`,
+/// `tank_modules_glow.png`) - at `strength` 0..1, the dark sky's own light
+/// level. Drawn additively over the field the sky has multiplied down, so
+/// every lamp shines at night; the paint already carries the same pixels
+/// at their daylight colours, which is why a clear day draws none of this.
+/// A burning wreck's embers breathe.
+pub fn draw_tank_glow(c: &mut impl Canvas, tank: &Tank, time: f32, strength: f32) {
+    if strength <= 0.0 {
+        return;
+    }
+    let mut k = strength.clamp(0.0, 1.0) * tank.alpha();
+    if tank.is_wreck() {
+        let p = tank.anim_phase() * 7.0;
+        k *= 0.72 + 0.28 * (time * 11.0 + p).sin() * (time * 4.3 + p * 1.7).sin();
+    }
+    let tint = Color::new(255, 255, 255, (255.0 * k).round().clamp(0.0, 255.0) as u8);
+    blit_layers(c, tank, &layers(tank, time, true), tint);
 }
 
 /// A tank coated in ooze from a bio slush tower
@@ -1417,7 +1655,7 @@ pub fn draw_tank_slime(c: &mut impl Canvas, tank: &Tank, time: f32) {
         return;
     }
     let fade = (tank.slime_timer / 0.5).clamp(0.0, 1.0);
-    let size = tank.size();
+    let size = tank.sprite_size();
     let dest = Rectangle::new(tank.position.x, tank.position.y, size, size);
     let origin = draw_pivot(size);
     let wash = |col: Color, a: f32| Color::new(col.r, col.g, col.b, (a * fade) as u8);
@@ -1449,35 +1687,34 @@ const RED_DK: Color = Color::new(0x81, 0x2F, 0x27, 255);
 const RED_DARKEST: Color = Color::new(0x4A, 0x22, 0x21, 255);
 pub(crate) const BLACK: Color = Color::new(0x25, 0x25, 0x25, 255);
 /// One identity colour per seat (docs/player-indicator-improvements.md,
-/// docs/PALETTE.md): seat 0 sky blue, seat 1 hot pink - the base step of
-/// the team ramp the sheet's two player blocks are painted in - then six
-/// more for the seats a room adds. All eight are Resurrect 64 steps from
-/// the blue, cyan, violet and magenta families, the hue regions nothing on
-/// the field occupies, each family in a bright register (seats 0-3) and a
-/// deep one (seats 4-7); they stay off the Puny Palette for the same
-/// reason the first two do, and off the gold and red the health ramp
-/// shares, so a healthy seat never reads as a hurt one. The hull, the
-/// ground ring, the HUD readouts and button, the editor's start markers
-/// and the round-start locate cue all draw from this one table, so every
-/// surface reads as one identity.
+/// docs/PALETTE.md): the base step of the team ramp each of the sheet's
+/// four player blocks is painted in - seat 0 sky blue, seat 1 hot pink,
+/// seat 2 silver-white, seat 3 orange - then four more for the seats a room
+/// adds, which borrow player 1's block. They stay off the Puny Palette: an
+/// identity has to be loud against the terrain. Orange sits closest to the
+/// enemies' warm hulls and to the gold and red the health ramp steps
+/// through, so seat 3 leans on its bright light step and its `P4` label. The hull, the ground ring, the HUD readouts and button, the
+/// editor's start markers and the round-start locate cue all draw from this
+/// one table, so every surface reads as one identity.
 pub const TEAM_COLORS: [Color; crate::MAX_SEATS] = [
     Color::new(0x4D, 0x9B, 0xE6, 255), // P1 sky blue
     Color::new(0xF0, 0x4F, 0x78, 255), // P2 hot pink
-    Color::new(0xA8, 0x84, 0xF3, 255), // P3 violet
-    Color::new(0x30, 0xE1, 0xB9, 255), // P4 aqua
+    Color::new(0xD3, 0xDA, 0xE3, 255), // P3 silver-white
+    Color::new(0xFB, 0x6B, 0x1D, 255), // P4 orange
     Color::new(0x4D, 0x65, 0xB4, 255), // P5 royal blue
     Color::new(0xC3, 0x24, 0x54, 255), // P6 crimson
     Color::new(0x90, 0x5E, 0xA9, 255), // P7 grape
     Color::new(0x0B, 0x8A, 0x8F, 255), // P8 deep teal
 ];
-/// The light step of each team ramp: the sheet's accent for the two seats
-/// it draws, and every seat's ring colour at full health, so a healthy
-/// ring reads brighter than the hull.
+/// The light step of each team ramp: the sheet's accent for the four seats
+/// it draws, the colour their marker lights glow in at night, and every
+/// seat's ring colour at full health, so a healthy ring reads brighter than
+/// the hull.
 const TEAM_LIGHT: [Color; crate::MAX_SEATS] = [
     Color::new(0x8F, 0xD3, 0xFF, 255),
     Color::new(0xED, 0x80, 0x99, 255),
-    Color::new(0xD6, 0xBF, 0xFB, 255),
-    Color::new(0x8F, 0xF8, 0xE2, 255),
+    Color::new(0xF4, 0xF8, 0xFF, 255),
+    Color::new(0xFF, 0xA8, 0x3A, 255),
     Color::new(0x7C, 0x92, 0xD8, 255),
     Color::new(0xE8, 0x63, 0x7F, 255),
     Color::new(0xC3, 0x98, 0xD6, 255),
@@ -1860,152 +2097,20 @@ pub fn player_locate_active(elapsed: f32) -> bool {
     elapsed < tuning().player_locate_seconds
 }
 
-/// Draw this tank's drop shadow: the same two layers (each at its own eased
-/// angle, matching `draw_tank`), offset toward a fixed screen-space direction
-/// and tinted flat black - see docs/sprite-shadows-design.md. Must be called
-/// *before* `draw_tank` so the real sprite draws on top of its own shadow. No
-/// wreck/dead special-casing needed - a burnt-out hulk is still a solid
-/// object sitting on the ground.
-pub fn draw_tank_shadow(c: &mut impl Canvas, tank: &Tank) {
-    let hull_src = source_rec(tank.sheet_row(), tank.hull_col());
-    let turret_src = source_rec(tank.sheet_row(), tank.turret_col());
-    let size = tank.size();
-
-    let dest = Rectangle::new(
-        tank.position.x + tuning().shadow_dir_x * tuning().tank_shadow_offset,
-        tank.position.y + tuning().shadow_dir_y * tuning().tank_shadow_offset,
-        size,
-        size,
-    );
+/// Draw this tank's drop shadow: every layer `draw_tank` draws (each at its
+/// own eased angle), offset toward a fixed screen-space direction and
+/// tinted flat black - see docs/sprite-shadows-design.md. Must be called
+/// *before* `draw_tank` so the real sprite draws on top of its own shadow.
+/// A burnt-out hulk is still a solid object sitting on the ground, so a
+/// wreck casts one too.
+pub fn draw_tank_shadow(c: &mut impl Canvas, tank: &Tank, time: f32) {
+    let size = tank.sprite_size();
     let origin = draw_pivot(size);
+    let (dx, dy) = (tuning().shadow_dir_x * tuning().tank_shadow_offset, tuning().shadow_dir_y * tuning().tank_shadow_offset);
     let shadow = Color::new(0, 0, 0, (255.0 * tuning().tank_shadow_opacity * tank.alpha()) as u8);
-
-    c.blit(Sheet::Tanks, hull_src, dest, origin, tank.visual_rotation, shadow);
-    c.blit(
-        Sheet::Tanks,
-        turret_src,
-        dest,
-        origin,
-        tank.turret_visual_rotation,
-        shadow,
-    );
-}
-
-/// Draw the minigun barrel-cluster overlay on top of this tank's turret, if
-/// it currently has the weapon (`minigun_ammo > 0`) and isn't a wreck - the
-/// existing broken-turret art (`turret_col`) already communicates
-/// "destroyed" on its own, so this simply stops drawing once `is_wreck()`
-/// rather than authoring a separate broken-minigun asset. Visible whenever
-/// the tank *possesses* the weapon, regardless of whether laser currently
-/// outranks it in `active_weapon()` - the mount is a physical object on the
-/// turret, not a firing-mode indicator. Independent of hull damage tier
-/// (`hull_col`'s light/disabled/wreck ladder): hull and turret art are
-/// already fully decoupled layers, and this overlay only checks
-/// turret-adjacent state (`is_wreck`), so a hull that's gone
-/// light/disabled never hides it.
-///
-/// Drawn at the exact same `dest`/`origin` as `draw_tank`'s hull/turret
-/// layers (same shared pivot, see `draw_pivot`) - the overlay's own art
-/// (`tools/spritegen/gen_minigun_mount.py`) is authored around that
-/// identical cell-center-ish pivot, with its barrels extending forward from
-/// it by a fixed on-canvas distance exactly like `gen_tanks.py` already
-/// draws every turret's own barrel rects from that same pivot outward - so
-/// it drops into place with no offset math, exactly like the turret layer
-/// itself. Positioning it instead via the muzzle-offset formula
-/// (`TANK_MUZZLE_FORWARD_OFFSET_BY_ROW`, which uses the tank's instant,
-/// snapped `rotation`) would visibly detach the cluster from the turret
-/// mid-turn, since this overlay rotates at the eased
-/// `turret_visual_rotation` instead - that formula stays reserved for what
-/// it's proven for: positioning where `Bullet`s actually spawn.
-///
-/// Rotated by `turret_visual_rotation` ONLY (to track the turret's own
-/// eased aim) - unlike the turret itself, this does NOT add any further
-/// spin: `minigun_mount.png` is a 3-column sheet, one "hot barrel" per
-/// column (see `minigun_cycle_frame`/`minigun_cycle_timer`), cycled instead
-/// of rotated. A top-down camera looks edge-on at a barrel cluster's real
-/// rotation axis (the barrels point along the ground plane, toward the
-/// target), so spinning this sprite in the screen plane would read as a
-/// helicopter rotor seen from above - the wrong axis entirely for this
-/// camera angle. See `tools/spritegen/gen_minigun_mount.py`'s module doc
-/// comment for the full reasoning. Scaled by the flat `MINIGUN_MOUNT_SCALE`
-/// (not indexed by chassis row) layered on the tank's own `scale` - the
-/// mount is deliberately the same size on every chassis, a fixed piece of
-/// hardware rather than something that scales with the tank it's bolted to.
-pub fn draw_minigun_mount(c: &mut impl Canvas, tank: &Tank) {
-    if tank.minigun_ammo <= 0 || tank.is_wreck() {
-        return;
+    for (sheet, src, at, rot) in layers(tank, time, false) {
+        c.blit(sheet, src, Rectangle::new(at.x + dx, at.y + dy, size, size), origin, rot, shadow);
     }
-    let src = Rectangle::new(
-        tank.minigun_cycle_frame() as f32 * MINIGUN_MOUNT_TEXTURE_SIZE,
-        0.0,
-        MINIGUN_MOUNT_TEXTURE_SIZE,
-        MINIGUN_MOUNT_TEXTURE_SIZE,
-    );
-    let size = MINIGUN_MOUNT_TEXTURE_SIZE * tank.scale * MINIGUN_MOUNT_SCALE;
-    let dest = Rectangle::new(tank.position.x, tank.position.y, size, size);
-    let origin = draw_pivot(size);
-    c.blit(Sheet::MinigunMount, src, dest, origin, tank.turret_visual_rotation, Color::WHITE);
-}
-
-/// Shadow pass for `draw_minigun_mount` - same tint/offset convention as
-/// `draw_tank_shadow` (`TANK_SHADOW_OFFSET`/`TANK_SHADOW_OPACITY`, not a
-/// separate constant): it's rigidly bolted to the turret, so it should read
-/// at the exact same height/offset as the turret's own shadow. Call before
-/// `draw_minigun_mount` (and after `draw_tank_shadow`), same ordering rule
-/// as every other shadow pass.
-pub fn draw_minigun_mount_shadow(c: &mut impl Canvas, tank: &Tank) {
-    if tank.minigun_ammo <= 0 || tank.is_wreck() {
-        return;
-    }
-    let src = Rectangle::new(
-        tank.minigun_cycle_frame() as f32 * MINIGUN_MOUNT_TEXTURE_SIZE,
-        0.0,
-        MINIGUN_MOUNT_TEXTURE_SIZE,
-        MINIGUN_MOUNT_TEXTURE_SIZE,
-    );
-    let size = MINIGUN_MOUNT_TEXTURE_SIZE * tank.scale * MINIGUN_MOUNT_SCALE;
-    let dest = Rectangle::new(
-        tank.position.x + tuning().shadow_dir_x * tuning().tank_shadow_offset,
-        tank.position.y + tuning().shadow_dir_y * tuning().tank_shadow_offset,
-        size,
-        size,
-    );
-    let origin = draw_pivot(size);
-    let shadow = Color::new(0, 0, 0, (255.0 * tuning().tank_shadow_opacity * tank.alpha()) as u8);
-    c.blit(Sheet::MinigunMount, src, dest, origin, tank.turret_visual_rotation, shadow);
-}
-
-/// Draw the seeker-missile pod on the turret while the tank holds missile
-/// ammo - the `draw_minigun_mount` rules (same pivot, turret rotation,
-/// hidden on a wreck, shown whether or not it is the live weapon), at
-/// `missile_pod_scale` of the tank's scale, with the column picked by how
-/// many tubes are empty (`missile_tubes_empty`).
-pub fn draw_missile_pod(c: &mut impl Canvas, tank: &Tank) {
-    if tank.missile_ammo <= 0 || tank.is_wreck() {
-        return;
-    }
-    blit_missile_pod(c, tank, tank.position, Color::WHITE);
-}
-
-/// Shadow pass for `draw_missile_pod`, at the turret's own shadow offset.
-pub fn draw_missile_pod_shadow(c: &mut impl Canvas, tank: &Tank) {
-    if tank.missile_ammo <= 0 || tank.is_wreck() {
-        return;
-    }
-    let at = Position::new(
-        tank.position.x + tuning().shadow_dir_x * tuning().tank_shadow_offset,
-        tank.position.y + tuning().shadow_dir_y * tuning().tank_shadow_offset,
-    );
-    let shadow = Color::new(0, 0, 0, (255.0 * tuning().tank_shadow_opacity * tank.alpha()) as u8);
-    blit_missile_pod(c, tank, at, shadow);
-}
-
-fn blit_missile_pod(c: &mut impl Canvas, tank: &Tank, at: Position, tint: Color) {
-    let col = (tank.missile_tubes_empty as i32).clamp(0, MISSILE_POD_FRAMES - 1);
-    let src = Rectangle::new(col as f32 * MISSILE_POD_TEXTURE_SIZE, 0.0, MISSILE_POD_TEXTURE_SIZE, MISSILE_POD_TEXTURE_SIZE);
-    let size = MISSILE_POD_TEXTURE_SIZE * tank.scale * tuning().missile_pod_scale;
-    let dest = Rectangle::new(at.x, at.y, size, size);
-    c.blit(Sheet::MissilePod, src, dest, draw_pivot(size), tank.turret_visual_rotation, tint);
 }
 
 // The FIFO weapon-inventory rule (`weapon_queue`/`active_weapon`/
@@ -2356,15 +2461,92 @@ mod chassis_tests {
         assert_eq!(tank(Owner::Enemy(3), 5).sheet_row(), 5);
         assert_eq!(tank(Owner::Player(0), 5).sheet_row(), 5 + TANK_ROWS_PER_TEAM);
         assert_eq!(tank(Owner::Player(1), 5).sheet_row(), 5 + 2 * TANK_ROWS_PER_TEAM);
+        assert_eq!(tank(Owner::Player(2), 5).sheet_row(), 5 + 3 * TANK_ROWS_PER_TEAM);
+        assert_eq!(tank(Owner::Player(3), 5).sheet_row(), 5 + 4 * TANK_ROWS_PER_TEAM);
+        // A seat past the fourth borrows player 1's block.
+        assert_eq!(tank(Owner::Player(4), 5).sheet_row(), 5 + TANK_ROWS_PER_TEAM);
         assert_eq!(tank(Owner::Player(1), 11).row, 11);
-        assert_eq!(icon_source_rec(0).y, (TANK_ROWS_PER_TEAM as f32) * TANK_TEXTURE_SIZE);
-        assert_eq!(icon_source_rec(1).y, (2 * TANK_ROWS_PER_TEAM) as f32 * TANK_TEXTURE_SIZE);
+        // The builder's markers: the middle frame of the scout's hull and
+        // turret cells, in the seat's block.
+        let inset = (TANK_SPRITE_SIZE - TANK_FRAME_SIZE) / 2.0;
+        let [hull, turret] = icon_source_recs(1);
+        assert_eq!(hull.y, (2 * TANK_ROWS_PER_TEAM) as f32 * TANK_SPRITE_SIZE + inset);
+        assert_eq!((hull.x, hull.width, hull.height), (inset, TANK_FRAME_SIZE, TANK_FRAME_SIZE));
+        assert_eq!((turret.x, turret.y), (TANK_TURRET_COL as f32 * TANK_SPRITE_SIZE + inset, hull.y));
+        // The MAP panel's chassis: the same window of the chassis's own
+        // cells, raised to hold the longest barrels.
         let [hull, turret] = chassis_icon_source_recs(TankKind::Titan, 1);
         let row = TankKind::Titan.row() + 2 * TANK_ROWS_PER_TEAM;
-        assert_eq!((hull.y, turret.y), (row as f32 * TANK_TEXTURE_SIZE, row as f32 * TANK_TEXTURE_SIZE));
-        assert_eq!(hull.x, TANK_HULL_COL as f32 * TANK_TEXTURE_SIZE);
-        assert_eq!(turret.x, TANK_TURRET_COL as f32 * TANK_TEXTURE_SIZE);
-        assert_eq!(chassis_icon_source_recs(TankKind::Scout, 0)[0], icon_source_rec(0), "the start tool's icon is the scout's hull");
+        assert_eq!((hull.y, turret.y), (row as f32 * TANK_SPRITE_SIZE + inset - CHASSIS_ICON_RAISE, hull.y));
+        assert_eq!((hull.x, turret.x), (inset, TANK_TURRET_COL as f32 * TANK_SPRITE_SIZE + inset));
+        assert_eq!((hull.width, turret.height), (TANK_FRAME_SIZE, TANK_FRAME_SIZE));
+    }
+
+    /// The hull steps through the damage tiers at the thresholds and keeps
+    /// its track frame at every live tier; a wreck is its rolled cell.
+    #[test]
+    fn hull_and_turret_cells_follow_damage_frame_and_recoil() {
+        let mut tank = Tank { hull_frame: 3, ..Tank::default() };
+        assert_eq!(tank.hull_col(), 3);
+        tank.damage = TANK_DAMAGE_TIERS[0];
+        assert_eq!(tank.hull_col(), TANK_TRACK_FRAMES + 3);
+        tank.damage = TANK_DAMAGE_TIERS[2];
+        assert_eq!(tank.hull_col(), 3 * TANK_TRACK_FRAMES + 3);
+        assert_eq!(tank.turret_col(), TANK_TURRET_COL + 3 * TANK_TURRET_POSES);
+        tank.recoil_pose = 2;
+        assert_eq!(tank.turret_col(), TANK_TURRET_COL + 3 * TANK_TURRET_POSES + 2);
+        tank.damage = MAX_DAMAGE;
+        tank.wreck_col = Some(TANK_WRECK_COLS[2]);
+        assert_eq!(tank.hull_col(), TANK_WRECK_COLS[2]);
+        assert_eq!(tank.turret_col(), TANK_BROKEN_TURRET_COL);
+        assert!(!tank.turret_thrown());
+        tank.wreck_col = Some(TANK_WRECK_COLS[0]);
+        assert!(tank.turret_thrown());
+    }
+
+    /// A single barrel kicks and returns; a twin kicks its first barrel,
+    /// then its second as the second shell leaves, then rests.
+    #[test]
+    fn recoil_walks_its_poses_and_rests() {
+        let t = crate::tuning::tuning();
+        let step = t.tank_recoil_seconds * 0.6;
+        let mut single = Tank { row: TankKind::Scout.row(), ..Tank::default() };
+        single.kick(false);
+        assert_eq!(single.recoil_pose, 1);
+        let mut poses = vec![single.recoil_pose];
+        for _ in 0..8 {
+            single.tick_recoil(step);
+            poses.push(single.recoil_pose);
+        }
+        assert!(poses.contains(&2), "a single barrel returns through pose 2: {poses:?}");
+        assert_eq!(*poses.last().unwrap(), 0, "and rests: {poses:?}");
+        let mut twin = Tank { row: TankKind::Assault.row(), ..Tank::default() };
+        twin.kick(false);
+        let mut poses = vec![twin.recoil_pose];
+        for _ in 0..8 {
+            twin.tick_recoil(step);
+            poses.push(twin.recoil_pose);
+        }
+        assert!(poses.windows(2).any(|w| w == [1, 2]), "the second barrel follows the first: {poses:?}");
+        assert_eq!(*poses.last().unwrap(), 0, "and rests: {poses:?}");
+    }
+
+    /// The art's main-gun muzzles (tank_art, generated from the design)
+    /// sit within a design pixel of where the game spawns shells, and at
+    /// the twin offsets it fires them from.
+    #[test]
+    fn art_muzzles_match_the_spawn_points() {
+        let t = crate::tuning::tuning();
+        for kind in TankKind::ALL {
+            let row = kind.row() as usize;
+            let muzzles = crate::tank_art::GUN_MUZZLES[row];
+            let lat = t.tank_barrel_lateral_offset[row];
+            assert_eq!(muzzles.len(), if lat > 0.0 { 2 } else { 1 }, "{kind:?}: barrel count");
+            for &(x, y) in muzzles {
+                assert!((-y - t.tank_muzzle_forward_offset[row]).abs() <= 1.0, "{kind:?}: muzzle {y} vs {}", t.tank_muzzle_forward_offset[row]);
+                assert!((x.abs() - lat).abs() < 0.01, "{kind:?}: lateral {x} vs {lat}");
+            }
+        }
     }
 
     /// A map's `tank = "titan"` key and `--tank titan` spell a chassis the

@@ -101,9 +101,9 @@ pub enum Show {
     /// replica's picture.
     All,
     /// `All`, less what `seat`'s client drew itself on the press
-    /// (docs/online-coop-prd.md section 4.16): the muzzle ripple of its
-    /// shots, which `net::round` puts on as a provisional shot leaves, and
-    /// the laser beams it drew from the predicted muzzle and claimed by
+    /// (docs/online-coop-prd.md section 4.16): the muzzle ripple and the
+    /// turret's kick of its shots, which `net::round` puts on as a
+    /// provisional shot leaves, and the laser beams it drew from the predicted muzzle and claimed by
     /// their `Fired` (`net::predict::Predictor::confirm_beam`) - bit `k` of
     /// `beams` for the seat's `k`th laser `Fired` in the snapshot. A beam
     /// whose `Fired` the client did not claim is one it never drew, and is
@@ -256,7 +256,9 @@ fn apply(game: &mut Game, s: &Snapshot, show: Show) {
 /// was heading), `CookOff` a pop; every hit that flashed on the server
 /// flashes here, a laser flashes at its muzzle, a shield break and a
 /// portal ripple, and a tile that died drops its rubble. `Fired` puts a
-/// ripple at the drawn muzzle of the tank that fired.
+/// ripple at the drawn muzzle of the tank that fired and kicks its turret
+/// back (`kick_turret`) - except for a seat whose shots the client drew
+/// itself, which rippled and kicked on the press (`net::round`).
 ///
 /// A zero-damage hit on a tank or a frog is a flame's contact, which
 /// never flashes - unless it lies where a beam in the same snapshot
@@ -307,6 +309,7 @@ fn apply_spectacle(game: &mut Game, s: &Snapshot, mode: Show, own_beams: &BTreeS
                 show.muzzle_flashes.push(Shockwave::new(at(x0, y0)));
             }
             WireEvent::Fired { slot, weapon, .. } if !mode.client_drew(slot as usize) => {
+                kick_turret(game, slot as usize, weapon);
                 if let Some(muzzle) = drawn_muzzle(game, slot as usize, weapon) {
                     show.muzzle_flashes.push(Shockwave::new(muzzle));
                 }
@@ -341,6 +344,24 @@ fn landing_dir(game: &Game, center: Position) -> Vec2 {
         .iter()
         .min_by(|a, b| a.position.distance_to(center).total_cmp(&b.position.distance_to(center)))
         .map_or(Vec2::new(0.0, 0.0), |m| m.dir)
+}
+
+/// The turret of the tank that fired kicks back through its recoil cells
+/// (`Tank::kick`) - a shell or a plasma bolt from the main gun - or its
+/// laser lens flashes. Presentation only, like the ripple.
+fn kick_turret(game: &mut Game, slot: usize, weapon: WeaponKind) {
+    for tank in game.world.query::<&mut Tank>().iter() {
+        if tank.owner_slot() != slot {
+            continue;
+        }
+        match weapon {
+            WeaponKind::Shell => tank.kick(false),
+            WeaponKind::Plasma => tank.kick(true),
+            WeaponKind::Laser => tank.kick_laser(),
+            WeaponKind::Minigun | WeaponKind::Missiles | WeaponKind::Flamethrower => {}
+        }
+        break;
+    }
 }
 
 /// Where a shot of `weapon` leaves `slot`'s tank as it is drawn: the spawn
@@ -1753,15 +1774,36 @@ mod tests {
         assert!(popped > 0, "the wreck cooked off");
     }
 
+    /// A shell leaving a seat's gun kicks that tank's turret through its
+    /// recoil cells on the replica as in the room (`Tank::kick`); a client
+    /// that drew its own shots kicked on the press, so the room's `Fired`
+    /// leaves its turret alone.
+    #[test]
+    fn a_fired_shell_kicks_the_turret_on_the_replica() {
+        let mut game = quiet_round(DEFAULT_MAP, 0xB0B5, 0);
+        let mut replica = welcome_through_the_codec(&game);
+        let mut drew_own = welcome_through_the_codec(&game);
+        let (width, height) = game.map.field_size();
+        game.update(Input::single(Intent { fire: true, ..Intent::default() }), PHYSICS_FIXED_DT, width, height);
+        assert!(game.events().iter().any(|e| matches!(e, crate::simulation::Event::Fired { slot: 0, .. })), "the seat fired");
+        let snap = enc::snapshot(&game, [0; MAX_SEATS]);
+        snapshot(&mut replica, &snap);
+        snapshot_with(&mut drew_own, &snap, Show::OwnShotsDrawn { seat: 0, beams: 0 });
+        let pose = |g: &Game| g.world.get::<&Tank>(g.seat(0).expect("seat 0")).expect("a tank").recoil_pose;
+        assert_eq!(pose(&game), 1, "the room's turret kicked");
+        assert_eq!(pose(&replica), 1, "and the replica's");
+        assert_eq!(pose(&drew_own), 0, "not the one whose client kicked it on the press");
+    }
+
     /// A seeker volley on the replica: a puff at each tube as its missile
     /// first shows, and each burst the server's own show - the small
     /// fireball leaning the way the missile came down, its ripple, flash
     /// and scorch - off `MissileBlast`, leaning by the heading the
     /// replica's copy of the missile last had, a tick before the dive
-    /// ended. Where it lands and which way it leans are compared; the size
-    /// jitter hashes from the pixel
-    /// the centre truncates to, which the wire's quarter pixel can move
-    /// (see `a_kill_puts_on_the_same_show_on_the_replica`).
+    /// ended. Where it lands (to the wire's quarter pixel) and which way it
+    /// leans are compared; the size jitter hashes from the pixel the centre
+    /// truncates to, which the wire's quarter pixel can move (see
+    /// `a_kill_puts_on_the_same_show_on_the_replica`).
     #[test]
     fn a_missile_burst_puts_on_the_same_show_on_the_replica() {
         let mut game = quiet_round(DEFAULT_MAP, 0xB0B5, 2);
@@ -1774,12 +1816,9 @@ mod tests {
                 .blast_fx
                 .iter()
                 .filter(|b| b.time == 0.0)
-                .map(|b| {
-                    let px = |v: f32| v.round() as i32;
-                    (px(b.center.x), px(b.center.y), px(b.offset.x), px(b.offset.y))
-                })
+                .map(|b| (b.center.x, b.center.y, b.offset.x.round() as i32, b.offset.y.round() as i32))
                 .collect();
-            v.sort();
+            v.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
             v
         };
         let (mut puffs, mut bursts) = (0, 0);
@@ -1798,7 +1837,8 @@ mod tests {
                 let (client, server) = (fresh_blasts(&replica), fresh_blasts(&game));
                 assert_eq!(client.len(), server.len(), "frame {frame}: a fireball per burst");
                 for (c, s) in client.iter().zip(&server) {
-                    assert_eq!((c.0, c.1), (s.0, s.1), "frame {frame}: where it burst");
+                    let quarter = 0.125 + 1e-3;
+                    assert!((c.0 - s.0).abs() <= quarter && (c.1 - s.1).abs() <= quarter, "frame {frame}: where it burst {c:?} for {s:?}");
                     // One 2 px step of lean at most: the heading the replica
                     // leans by is the wire's, a tick before the dive ended.
                     assert!((c.2 - s.2).abs() <= 2 && (c.3 - s.3).abs() <= 2, "frame {frame}: the lean {c:?} for {s:?}");

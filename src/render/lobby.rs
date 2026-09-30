@@ -171,8 +171,8 @@ fn draw_seat<D: RaylibDraw>(d: &mut D, r: Rectangle, seat: Option<&SeatRow>) {
     };
     d.draw_rectangle_rounded(inner, 0.2, 8, if seat.you { ROW_YOU } else { ROW_FILL });
     let text_y = (r.y + (r.height - HUD_TEXT_SIZE as f32) / 2.0) as i32;
-    // Seats past the two team blocks share their colours, as their
-    // hulls do until `gen_tanks.py` draws more (docs/online-coop-prd.md §4.11).
+    // The seat's number in its own ring colour (`TEAM_COLORS`), the one its
+    // tank carries on the field.
     let slot_color = TEAM_COLORS[seat.seat as usize % TEAM_COLORS.len()];
     d.draw_text(&seat.slot, (r.x + 10.0) as i32, text_y, HUD_TEXT_SIZE, slot_color);
     d.draw_text(&seat.nick, (r.x + 46.0) as i32, text_y, HUD_TEXT_SIZE, if seat.you { TEXT } else { Color::new(210, 210, 216, 255) });

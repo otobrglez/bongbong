@@ -1,7 +1,7 @@
 //! The damage a tank wears (docs/effects.md), drawn in the effects
 //! language (`pyro.rs`) over the tank sheet's own damaged hulls
-//! (`Tank::hull_col`: the light and disabled art, the wrecks) rather than
-//! stuck on from a sheet of its own.
+//! (`Tank::hull_col`: the damage tiers, the wrecks) rather than stuck on
+//! from a sheet of its own.
 //!
 //! - **Marks**: as the hull loses health its armour gathers soot, bare
 //!   metal where the paint was scraped off and dents with a lit lip, each
@@ -11,7 +11,7 @@
 //! - **The wound**: past `WOUND_AT` a hole opens on the engine deck behind
 //!   the turret, an ember glowing in it; the particle layer puts smoke up
 //!   off it (`fx.rs`), thicker and darker the worse the hull gets.
-//! - **Fire**: past `TANK_HULL_DISABLED_DAMAGE`, or with afterburn on it,
+//! - **Fire**: past `BURNS_AT` (the critical tier), or with afterburn on it,
 //!   the deck burns - tongues of flame (`pyro::tongues`) standing on the
 //!   wound, leaning with the wind; a wreck burns hard over its whole hulk,
 //!   dying down over the end of `wreck_burn_seconds`.
@@ -25,10 +25,14 @@ use crate::math::Vec2;
 use crate::pyro::{self, Blocks, Shape, BLOCK, CHAR, FIRE, SMOKE};
 use crate::tank::Tank;
 use crate::tuning::tuning;
-use crate::{Position, MAX_DAMAGE, TANK_HULL_DISABLED_DAMAGE};
+use crate::{Position, MAX_DAMAGE, TANK_DAMAGE_TIERS};
 
 /// How many marks a hull can gather.
 const MARKS: u32 = 9;
+
+/// The damage a live deck catches fire at: the critical tier, the last of
+/// `TANK_DAMAGE_TIERS`, where the art's breaches glow.
+pub const BURNS_AT: f32 = TANK_DAMAGE_TIERS[TANK_DAMAGE_TIERS.len() - 1];
 
 /// The share of `MAX_DAMAGE` the wound on the deck opens at.
 pub const WOUND_AT: f32 = 0.45;
@@ -127,8 +131,8 @@ pub fn draw_damage(b: &mut impl Blocks, tank: &Tank, time: f32) {
 
 /// How hard the tank burns, 0 (not at all) to 1: a wreck until its fire
 /// dies down over the last fifth of `wreck_burn_seconds`; a live hull past
-/// `TANK_HULL_DISABLED_DAMAGE`, harder toward the end; afterburn from a
-/// flamethrower until it runs out.
+/// `BURNS_AT`, harder toward the end; afterburn from a flamethrower until
+/// it runs out.
 pub fn fire(tank: &Tank) -> f32 {
     if tank.is_wreck() {
         let burn = tuning().wreck_burn_seconds;
@@ -138,8 +142,8 @@ pub fn fire(tank: &Tank) -> f32 {
         let left = 1.0 - tank.wreck_timer / burn;
         return (left / 0.2).clamp(0.0, 1.0);
     }
-    let hull = if tank.damage >= TANK_HULL_DISABLED_DAMAGE {
-        0.55 + 0.45 * ((tank.damage - TANK_HULL_DISABLED_DAMAGE) / (MAX_DAMAGE - TANK_HULL_DISABLED_DAMAGE).max(1.0)).clamp(0.0, 1.0)
+    let hull = if tank.damage >= BURNS_AT {
+        0.55 + 0.45 * ((tank.damage - BURNS_AT) / (MAX_DAMAGE - BURNS_AT).max(1.0)).clamp(0.0, 1.0)
     } else {
         0.0
     };
@@ -237,8 +241,8 @@ mod tests {
 
     #[test]
     fn a_hull_burns_from_the_disabled_stage_and_a_wreck_burns_out() {
-        assert_eq!(fire(&tank(TANK_HULL_DISABLED_DAMAGE - 1.0)), 0.0);
-        assert!(fire(&tank(TANK_HULL_DISABLED_DAMAGE)) > 0.0);
+        assert_eq!(fire(&tank(BURNS_AT - 1.0)), 0.0);
+        assert!(fire(&tank(BURNS_AT)) > 0.0);
         assert!(!flames(&tank(90.0), 0.0, 0.0).is_empty());
         let mut wreck = tank(MAX_DAMAGE);
         assert_eq!(fire(&wreck), 1.0);

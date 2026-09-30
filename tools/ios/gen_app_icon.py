@@ -1,7 +1,8 @@
 """The App Store icon: tools/ios/Assets.xcassets/AppIcon.appiconset/icon-1024.png.
 
 A player-one tank from static/scifi_tanks_sheet.png (hull column 0 with the
-turret, column 1, drawn over it) on the Puny World grass fill, both blown up
+turret at rest, column 20, drawn over it - docs/SPRITESHEET_SPEC.md) on the
+Puny World grass fill, both blown up
 by whole multiples so every sprite pixel stays a crisp square. The App Store
 refuses an icon with an alpha channel, so the result is RGB.
 
@@ -19,7 +20,8 @@ from PIL import Image
 
 ROOT = os.path.join(os.path.dirname(__file__), "..", "..")
 SIZE = 1024
-TANK_CELL = 32
+TANK_CELL = 40
+TURRET_COL = 20
 TANK_FILL = 0.8  # the tallest the cropped sprite may stand, of the icon
 PLAYER_ONE_BLOCK = 12  # first row of the player-one team block
 GROUND_TILE = 16
@@ -45,7 +47,7 @@ def grass(tileset):
 def tank(sheet, row):
     y = (PLAYER_ONE_BLOCK + row) * TANK_CELL
     hull = sheet.crop((0, y, TANK_CELL, y + TANK_CELL))
-    turret = sheet.crop((TANK_CELL, y, 2 * TANK_CELL, y + TANK_CELL))
+    turret = sheet.crop((TURRET_COL * TANK_CELL, y, (TURRET_COL + 1) * TANK_CELL, y + TANK_CELL))
     hull.alpha_composite(turret)
     hull = hull.crop(hull.getbbox())
     scale = int(SIZE * TANK_FILL) // max(hull.size)

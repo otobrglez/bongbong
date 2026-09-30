@@ -301,21 +301,19 @@ impl Fx {
     /// of one that visibly "arrives".
     fn flame_mote(&mut self, jet: &crate::simulation::FlameJet, along: f32) {
         let mut rng = rand::rng();
+        let (from, dir, reach) = jet.drawn();
         let half = tuning().flame_half_angle_deg.to_radians() * (0.15 + 0.55 * along * along);
-        let a = jet.dir.y.atan2(jet.dir.x) + rng.random_range(-half..half);
+        let a = dir.y.atan2(dir.x) + rng.random_range(-half..half);
         // Reach the end of the cone in about a third of a second.
-        let speed = (jet.reach / 0.3) * rng.random_range(0.6..1.1);
-        let start = jet.reach * along;
+        let speed = (reach / 0.3) * rng.random_range(0.6..1.1);
+        let start = reach * along;
         // Seeded across part of the stream's width at its start point,
         // not only on the centre line, so the body is filled rather than a
         // dotted line.
         let half_w = start * half.tan() * 0.5;
         let side = rng.random_range(-half_w..=half_w.max(0.01));
-        let pos = Position::new(
-            jet.origin.x + jet.dir.x * start - jet.dir.y * side,
-            jet.origin.y + jet.dir.y * start + jet.dir.x * side,
-        );
-        let life = ((jet.reach - start) / speed).max(0.05) * rng.random_range(0.8..1.2);
+        let pos = Position::new(from.x + dir.x * start - dir.y * side, from.y + dir.y * start + dir.x * side);
+        let life = ((reach - start) / speed).max(0.05) * rng.random_range(0.8..1.2);
         let tint = if along < 0.15 { WHITE_T } else if along < 0.55 { FIRE_T } else { EMBER_T };
         self.push(Particle {
             pos,
@@ -724,7 +722,7 @@ impl Fx {
         }
         let fresh: Vec<Position> = game.muzzle_flashes.iter().filter(|f| f.time == 0.0).map(|f| f.center).collect();
         for at in fresh {
-            if game.flames().iter().any(|jet| jet.origin.distance_to(at) < 6.0) {
+            if game.flames().iter().any(|jet| jet.nozzle.distance_to(at) < 6.0) {
                 continue;
             }
             match shot_heading_near(game, at) {
@@ -885,14 +883,15 @@ impl Fx {
                     self.flame_mote(jet, along);
                     n += 1;
                 }
+                let (from, dir, reach) = jet.drawn();
                 // Sparks spat off the tip, arcing on past the reach.
                 if self.due(key ^ 0x3c3c, stream_rate * 0.06, dt) {
-                    let tip = Position::new(jet.origin.x + jet.dir.x * jet.reach * 0.8, jet.origin.y + jet.dir.y * jet.reach * 0.8);
-                    self.cone_burst(tip, jet.dir, 0.6, ParticleKind::Spark, 1, 160.0, &[WHITE_T, FIRE_T]);
+                    let tip = Position::new(from.x + dir.x * reach * 0.8, from.y + dir.y * reach * 0.8);
+                    self.cone_burst(tip, dir, 0.6, ParticleKind::Spark, 1, 160.0, &[WHITE_T, FIRE_T]);
                 }
                 // Smoke off the far end, where the fire has burnt out.
                 if self.due(key ^ 0x5a5a, stream_rate * 0.12, dt) {
-                    let end = Position::new(jet.origin.x + jet.dir.x * jet.reach, jet.origin.y + jet.dir.y * jet.reach);
+                    let end = Position::new(from.x + dir.x * reach, from.y + dir.y * reach);
                     self.burst(end, ParticleKind::Smoke, 1, 16.0, &[SMOKE_T]);
                 }
             }

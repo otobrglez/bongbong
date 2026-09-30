@@ -3,69 +3,69 @@ use math::Vec2;
 /// A 2D position in field pixels (y down); `math::Vec2` is the vector type.
 pub type Position = math::Vec2;
 
-// scifi_tanks_sheet.png is a 416x384 atlas: 13 columns x 12 rows of 32x32
-// tiles (see docs/SPRITESHEET_SPEC.md for the full authored spec). Each row
-// is one complete, independently-styled tank ("scout", "assault", ... plus
-// the super-heavy `titan`/`leviathan` at rows 10/11 - TANK_VARIANTS/
-// TANK_SPRITE_ORDER in simulation.rs pick which row a given tank uses).
+// scifi_tanks_sheet.png: 33 columns x 60 rows of 40 x 40 cells, generated
+// by tools/spritegen/tankdesign/export.py from the Vanguard design line
+// (docs/SPRITESHEET_SPEC.md). Five team blocks of the twelve chassis - the
+// enemy, then players 1 to 4 - each chassis a row in `TankKind` order.
 // Columns:
-//   0      hull, idle / tread-animation frame 0
-//   1      turret (independently drawn, see `tank::draw_tank`)
-//   2,3,4  hull, tread-animation frames 1-3 (see TANK_HULL_TRACK_COLS)
-//   5      broken turret (severed barrel) - shown once a tank is a wreck
-//   6      hull, "light" damage tier - cosmetic, still fully mobile
-//   7      hull, "disabled" tier - heavy but non-fatal damage
-//   8-11   hull, four interchangeable wreck variants (see TANK_WRECK_COLS) -
-//          peers, not a severity sequence: pick one at random per kill
-//   12     ground track-mark decal, per-chassis - not used; the game keeps
-//          its existing generic ground-decal system (track.rs) instead
-// Both hull and turret are authored around the exact same pivot - the cell
-// center (16,16) - where the hull has a recessed turret-mount ring and the
-// turret is drawn around that same ring center, not its own bounding box.
-// Drawing both layers at that literal center (see TANK_PIVOT_REAR_FRACTION
-// below) is what keeps the turret visually seated on the ring at every
-// angle. Both layers still chase the same commanded heading (no independent
-// aim target) but ease toward it at their own rates - see
-// `Tank::visual_rotation`/`turret_visual_rotation` and
-// TANK_VISUAL_TURN_SPEED_DEG/TANK_TURRET_VISUAL_TURN_SPEED_DEG below - so the
-// turret visibly leads the hull into a turn instead of the two rotating in
-// lockstep.
-pub const TANK_TEXTURE_SIZE: f32 = 32.0;
-/// The tank sheet is three blocks of the same twelve-chassis roster
-/// stacked vertically (docs/SPRITESHEET_SPEC.md): the enemy art, then the
-/// same hulls recoloured for player 1 and for player 2
-/// (docs/player-indicator-improvements.md). `Tank::row` is always the
-/// chassis (0..12, what every per-chassis table is indexed by) and
-/// `Tank::sheet_row` adds this many rows per block for the tank's team.
+//   0-15   hull: damage tier t (0-3, `TANK_DAMAGE_TIERS`), track frame f
+//          (0-3) at 4 t + f - the tracks roll at every live tier
+//   16-19  four wrecked hulls, peers rolled once per kill (`Tank::wreck_col`):
+//          blown (the turret thrown clear), gutted, husk, cook-off
+//   20-31  turret: tier t, pose p at 20 + 3 t + p - 0 at rest, 1 the first
+//          (or only) barrel kicked back, 2 the second barrel back or a single
+//          one returning (`Tank::recoil_pose`)
+//   32     broken turret (barrel severed), on every wreck but the blown one
+// scifi_tanks_glow.png has the same layout: the light layer - lamps, accent
+// strips, sensor eyes, sparks, embers - drawn additively over the field a
+// dark sky has multiplied down (`tank::draw_tank_glow`).
+// Hull and turret share one pivot, the cell centre, where the hull's turret
+// ring sits and the turret is drawn round that ring, not round its own
+// bounding box - so drawing both at the tank's position keeps the turret
+// seated at every angle. Both layers chase the same commanded heading but
+// ease toward it at their own rates (`Tank::visual_rotation`/
+// `turret_visual_rotation`), so the turret visibly leads the hull into a turn.
+pub const TANK_SPRITE_SIZE: f32 = 40.0;
+/// The 32 px frame every per-chassis box below is measured in (its origin
+/// is the frame's top left, the pivot at 16, 16) and what `Tank::size`
+/// scales: the gameplay size of a tank. The sprite's bigger cell
+/// (`TANK_SPRITE_SIZE`) changes none of it - the extra room is for barrels,
+/// antennas and weapon modules.
+pub const TANK_FRAME_SIZE: f32 = 32.0;
+/// The sheet is `TANK_TEAM_BLOCKS` blocks of the same twelve-chassis roster
+/// stacked vertically: the enemy art, then the four players' recolours -
+/// sky blue, hot pink, silver-white and orange
+/// (docs/player-indicator-improvements.md).
+/// `Tank::row` is always the chassis (0..12, what every per-chassis table
+/// is indexed by) and `Tank::sheet_row` adds this many rows per block.
 pub const TANK_ROWS_PER_TEAM: i32 = 12;
-pub const TANK_HULL_COL: i32 = 0;
-pub const TANK_TURRET_COL: i32 = 1;
-// Hull tread-animation loop, in atlas-column order - see
-// `Tank::hull_frame`/TANK_HULL_TRACK_FRAME_DISTANCE and
-// `simulation::lay_tracks`. Always played forward regardless of movement
-// direction: this game's 4-direction snap-to-facing movement has no
-// continuous "current heading" for a press to be a reversal *relative to*,
-// unlike the spec's forward/reverse cycle (meant for engines with continuous
-// turning), so there's no meaningful "reverse" state to distinguish here.
-pub const TANK_HULL_TRACK_COLS: [i32; 4] = [0, 2, 3, 4];
-pub const TANK_BROKEN_TURRET_COL: i32 = 5;
-pub const TANK_HULL_LIGHT_COL: i32 = 6;
-pub const TANK_HULL_DISABLED_COL: i32 = 7;
-// Four interchangeable wrecked-hull variants - see `Tank::wreck_col`, rolled
-// once per tank the frame it first becomes a wreck (`simulation::Game::update`)
-// and kept for the rest of its lifetime, rather than picked by severity, so a
-// field of wrecks doesn't look copy-pasted.
-pub const TANK_WRECK_COLS: [i32; 4] = [8, 9, 10, 11];
-// Damage level (see Tank::damage) at which a still-alive tank's hull swaps to
-// the "light" damage art (TANK_HULL_LIGHT_COL, cosmetic - still fully
-// mobile), matching damage_stage.rs's existing "gray" tier. The heavier
-// "disabled" tier (TANK_HULL_DISABLED_COL) matches damage_stage.rs's
-// existing "large fire" tier, so the hull swaps and the smoke/fire overlay
-// escalate together. The wrecked hull/broken turret swap instead keys off
-// Tank::is_wreck() (damage >= MAX_DAMAGE), matching the spec's own state
-// machine.
-pub const TANK_HULL_LIGHT_DAMAGE: f32 = 30.0;
-pub const TANK_HULL_DISABLED_DAMAGE: f32 = 75.0;
+pub const TANK_TEAM_BLOCKS: i32 = 5;
+/// Hull track frames, always played forward (`Tank::hull_frame`,
+/// `simulation::lay_tracks`): 4-direction snap-to-facing movement has no
+/// continuous heading for a reversal to be relative to.
+pub const TANK_TRACK_FRAMES: i32 = 4;
+/// Damage at which the hull and turret step up a tier - scuffed, damaged,
+/// critical. The wreck (`Tank::is_wreck`) is the tier past the last.
+pub const TANK_DAMAGE_TIERS: [f32; 3] = [25.0, 50.0, 75.0];
+// The four wrecked hulls, rolled once per tank the frame it becomes a wreck
+// (`simulation::roll_wreck_col`) and kept, rather than picked by severity,
+// so a field of wrecks doesn't look copy-pasted. The first is the blown
+// one, whose turret lies beside the hull instead of on it.
+pub const TANK_WRECK_COLS: [i32; 4] = [16, 17, 18, 19];
+pub const TANK_TURRET_COL: i32 = 20;
+pub const TANK_TURRET_POSES: i32 = 3;
+pub const TANK_BROKEN_TURRET_COL: i32 = 32;
+// tank_modules.png (+ tank_modules_glow.png): 19 columns x 12 rows of 40 px
+// cells, a row per chassis, each weapon module drawn where that chassis's
+// turret carries it (same pivot and rotation as the turret), in its states:
+// minigun 0 idle / 1-3 a hot barrel, missiles 0-4 tubes empty, plasma and
+// laser 0 idle / 1 armed / 2 firing, flamethrower 0-1 the pilot flickering /
+// 2-3 the jet. `tank::module_cols` picks the cells.
+pub const TANK_MODULE_MINIGUN_COL: i32 = 0;
+pub const TANK_MODULE_MISSILES_COL: i32 = 4;
+pub const TANK_MODULE_PLASMA_COL: i32 = 9;
+pub const TANK_MODULE_LASER_COL: i32 = 12;
+pub const TANK_MODULE_FLAME_COL: i32 = 15;
 // World px of travel between hull tread-animation frame advances (see
 // `simulation::lay_tracks`, which already tracks per-frame distance moved for
 // the separate ground-decal system in track.rs - this reuses that same
@@ -822,32 +822,6 @@ pub const PICKUP_SCALE: f32 = 1.0;
 pub const MINIGUN_BULLET_TEXTURE_SIZE: f32 = 32.0;
 pub const MINIGUN_BULLET_SCALE: f32 = 2.0; // matches SHELL_SCALE - same on-screen chunkiness
 
-// --- Minigun mount (visual only): tank.rs's draw_minigun_mount, the
-// barrel-cluster overlay layered on the turret while minigun_ammo > 0 -
-// tools/spritegen/gen_minigun_mount.py ---
-pub const MINIGUN_MOUNT_TEXTURE_SIZE: f32 = 32.0;
-// How long each of minigun_mount.png's 3 "hot barrel" frames is shown
-// before advancing to the next, while a burst is active - see
-// Tank::tick_minigun_spin/minigun_cycle_frame. Deliberately a discrete
-// frame swap, not a continuous rotation: this game is top-down, and a real
-// minigun's barrels point along the ground plane toward the target, so
-// their rotation axis is edge-on to the camera, not face-on to it -
-// spinning the sprite in the screen plane would read as a helicopter rotor
-// seen from above (wrong axis for this camera angle), not a side-mounted
-// minigun. Cycling which barrel reads as freshly-fired fakes "rounds
-// cycling through firing position" correctly for this view instead. Tuned
-// close to MINIGUN_BULLET_DELAY_SECONDS (0.04) so roughly one barrel-swap
-// happens per bullet fired.
-// Dest-rect scale for the one shared mount texture, layered on top of
-// Tank::scale - deliberately the same on every chassis (not indexed by
-// row): the minigun is a fixed piece of hardware, so it reads as one
-// consistent size regardless of which tank it's bolted to, the same way
-// its ammo count/damage don't scale with chassis either. Since Tank::scale
-// itself is already a flat 2.0 for every chassis (the tank-to-tank size
-// difference lives in the sprite art, not in `scale`), this constant alone
-// is what to tune if the mount should read bigger/smaller overall.
-pub const MINIGUN_MOUNT_SCALE: f32 = 1.0;
-
 // --- Seeker missiles (missile.rs), tools/spritegen/gen_missiles.py ---
 // static/missile.png: MISSILE_FRAMES cells of MISSILE_TEXTURE_SIZE in one
 // row, the missile pointing up (rotation 0) with its exhaust flame below,
@@ -859,22 +833,13 @@ pub const MINIGUN_MOUNT_SCALE: f32 = 1.0;
 pub const MISSILE_TEXTURE_SIZE: f32 = 32.0;
 pub const MISSILE_SCALE: f32 = 0.8;
 pub const MISSILE_FRAMES: i32 = 4;
-// static/missile_pod.png: the four-tube launcher on the turret while a tank
-// holds missile ammo (tank.rs's draw_missile_pod), laid out and pivoted
-// exactly like minigun_mount.png. Column k shows k tubes empty
-// (MISSILE_POD_FRAMES = 0..=4), so the pod visibly empties through a volley
-// and refills through the reload (Tank::missile_tubes_empty).
-pub const MISSILE_POD_TEXTURE_SIZE: f32 = 32.0;
-pub const MISSILE_POD_FRAMES: i32 = 5;
-// The four tube mouths' lateral offsets from the turret pivot in pod design
-// px (the pod is drawn at Tank::scale, so screen px are twice these),
-// leftmost first - where each missile of a volley leaves from. Two pairs
-// either side of a centre spine, matching the tube columns gen_missiles.py
-// draws (pixels 9-10, 12-13, 18-19, 21-22 around the pivot at 16).
-pub const MISSILE_TUBE_OFFSETS: [f32; 4] = [-6.0, -3.0, 3.0, 6.0];
-// How far ahead of the pivot the tube mouths are, in pod design px (the
-// pod's front edge, row 5).
-pub const MISSILE_TUBE_FORWARD: f32 = 11.0;
+// A volley's four missiles, one per tube of the launcher module
+// (`tank_art::MISSILE_TUBES` places the mouths, front pair first): each
+// tube's place in the volley, in firing order - the front pair a step
+// either side of the gun line, the rear pair two. A missile leaves turned
+// `missile_fan_deg * offset / 3` off the gun line and comes down on the
+// same side (`Missile::impact_offset`).
+pub const MISSILE_TUBE_OFFSETS: [f32; 4] = [-3.0, 3.0, -6.0, 6.0];
 
 pub const PLASMA_TEXTURE_SIZE: f32 = 32.0;
 // Bigger than SHELL_SCALE (2.0) - a plasma bolt reads as visibly larger and
@@ -991,6 +956,7 @@ pub mod shell;
 pub mod shockwave;
 pub mod simulation;
 pub mod tank;
+pub mod tank_art;
 pub mod text;
 pub mod thumbnail;
 pub mod touch;

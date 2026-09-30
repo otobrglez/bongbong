@@ -19,7 +19,6 @@ use crate::shell::{Owner, Shell, ShellState};
 use crate::shockwave::Shockwave;
 use crate::tank::{ActiveWeapon, MinigunBurst, MissileVolley, PendingPlasmaShot, PendingShot, Tank};
 use crate::{
-    MISSILE_TUBE_FORWARD,
     MISSILE_TUBE_OFFSETS,
     Position,
 };
@@ -42,23 +41,34 @@ pub(super) fn laser_beam_half_width() -> f32 {
 /// A laser shot queued during the tank loops and resolved once they are
 /// done (no other mutable tank query may run while they iterate).
 pub(super) struct PendingLaserShot {
+    /// Where the beam is judged from: the gun line's muzzle
+    /// (`Tank::gun_line_muzzle`).
     pub start: Position,
     /// Far end of the un-clipped beam; the hit test finds where along
     /// `start..end` it actually stops.
     pub end: Position,
+    /// Where the beam is drawn from: the laser module's lens beside the gun
+    /// (`tank_art::LASER_MUZZLE`), to where the gun line stopped.
+    pub lens: Position,
     pub shooter_row: i32,
     pub owner: Owner,
     pub variant: LaserVariant,
 }
 
-/// Damage range of one laser shot: LASER_DAMAGE_MIN..MAX scaled by the
-/// shooter's chassis class and the beam variant.
 /// One frame of the flamethrower's stream (docs/flamethrower-prd.md):
 /// the muzzle, the unit facing and the nominal reach. `Game::resolve_flames`
 /// caps the reach at the first solid tile and applies the cone.
+///
+/// The cone is judged from the gun line's muzzle (`origin`); the jet is
+/// drawn from the flamethrower module's nozzle beside the gun (`nozzle`)
+/// to the end of that reach - `drawn`, which everything that paints or
+/// lights the jet reads.
 #[derive(Clone, Copy, Debug)]
 pub struct FlameJet {
     pub origin: Position,
+    /// Where the jet is drawn from: the flamethrower module's nozzle
+    /// (`tank_art::FLAME_MUZZLE`).
+    pub nozzle: Position,
     pub dir: Vec2,
     pub range: f32,
     /// Effective reach after `resolve_flames` capped it at the first
@@ -68,32 +78,49 @@ pub struct FlameJet {
     pub shooter: Entity,
 }
 
+impl FlameJet {
+    /// The jet as it is drawn: from the nozzle to the end of the cone's
+    /// reach on the gun line, as (start, unit direction, length).
+    pub fn drawn(&self) -> (Position, Vec2, f32) {
+        let end = self.origin + self.dir * self.reach;
+        let span = end - self.nozzle;
+        let length = span.length();
+        if length <= f32::EPSILON {
+            return (self.nozzle, self.dir, 0.0);
+        }
+        (self.nozzle, span / length, length)
+    }
+}
+
 pub(super) fn flame_jet(tank: &Tank, owner: Owner, shooter: Entity) -> FlameJet {
     let rot = tank.rotation.to_radians();
     let dir = Vec2::new(rot.sin(), -rot.cos());
-    let muzzle = tuning().tank_muzzle_forward_offset[tank.row as usize] * tank.scale;
-    let origin = Position::new(tank.position.x + dir.x * muzzle, tank.position.y + dir.y * muzzle);
+    let origin = tank.gun_line_muzzle(dir);
+    let nozzle = tank.turret_point(crate::tank_art::FLAME_MUZZLE[tank.row as usize]);
     let range = tuning().flame_range;
-    FlameJet { origin, dir, range, reach: range, owner, shooter }
+    FlameJet { origin, nozzle, dir, range, reach: range, owner, shooter }
 }
 
+/// Damage range of one laser shot: LASER_DAMAGE_MIN..MAX scaled by the
+/// shooter's chassis class and the beam variant.
 pub(super) fn laser_damage_range(shot: &PendingLaserShot) -> (f32, f32) {
     let factor = tuning().tank_damage_factor[shot.shooter_row as usize] * shot.variant.damage_factor();
     (tuning().laser_damage_min * factor, tuning().laser_damage_max * factor)
 }
 
-/// Build a laser shot from `tank`'s muzzle along its facing. `aim_offset`
+/// Build a laser shot along `tank`'s facing: judged along the gun line from
+/// its muzzle and drawn from the laser module's lens beside it. `aim_offset`
 /// (degrees) is the same point-blank misfire skew a shell takes; 0.0 for a
-/// clean shot. One centerline beam per trigger pull regardless of chassis.
+/// clean shot. One beam per trigger pull regardless of chassis.
 fn laser_shot(tank: &Tank, owner: Owner, aim_offset: f32, variant: LaserVariant) -> PendingLaserShot {
     let rot = (tank.rotation + aim_offset).to_radians();
     let dir = Vec2::new(rot.sin(), -rot.cos());
-    let muzzle = tuning().tank_muzzle_forward_offset[tank.row as usize] * tank.scale;
-    let start = Position::new(tank.position.x + dir.x * muzzle, tank.position.y + dir.y * muzzle);
+    let start = tank.gun_line_muzzle(dir);
     let end = Position::new(start.x + dir.x * LASER_MAX_RANGE, start.y + dir.y * LASER_MAX_RANGE);
     PendingLaserShot {
         start,
         end,
+        lens: tank.turret_point(crate::tank_art::LASER_MUZZLE[tank.row as usize]),
         shooter_row: tank.row,
         owner,
         variant,
@@ -145,11 +172,12 @@ fn fire_plasma(physics: &mut Physics, f: &mut Frame, tank: &Tank, owner: Owner, 
     f.pending_plasmas.push(plasma);
 }
 
-/// Fire one minigun bullet dead-center from `tank`'s muzzle with a fresh
-/// MINIGUN_BULLET_SPREAD_DEG jitter on top of `aim_offset`. No muzzle-flash
-/// ripple per bullet (a whole burst would stack into mush) - the caller
-/// pushes one for the burst's first bullet; recoil is per bullet at the
-/// minigun's much smaller kick. Returns the bullet's spawn position.
+/// Fire one minigun bullet from `tank`'s minigun module (`Bullet::spawn`)
+/// with a fresh `minigun_bullet_spread_deg` jitter on top of `aim_offset`.
+/// No muzzle-flash ripple per bullet (a whole burst would stack into
+/// mush) - the caller pushes one for the burst's first bullet; recoil is
+/// per bullet at the minigun's much smaller kick. Returns the bullet's
+/// spawn position.
 fn fire_bullet(physics: &mut Physics, f: &mut Frame, tank: &Tank, owner: Owner, aim_offset: f32) -> Position {
     let spread = f.rng.random_range(-tuning().minigun_bullet_spread_deg..tuning().minigun_bullet_spread_deg);
     let mut bullet = Bullet::spawn(tank, owner, aim_offset + spread);
@@ -160,9 +188,10 @@ fn fire_bullet(physics: &mut Physics, f: &mut Frame, tank: &Tank, owner: Owner, 
     position
 }
 
-/// Launch one seeker missile from tube `tube` of `tank`'s pod: from the
-/// tube's mouth, along the turret's facing fanned `missile_fan_deg` per tube
-/// out from the centre, with the launcher's aim point
+/// Launch one seeker missile from tube `tube` of `tank`'s launcher module:
+/// from the tube's mouth (`tank_art::MISSILE_TUBES`), along the turret's
+/// facing fanned `missile_fan_deg` per tube out from the centre, with the
+/// launcher's aim point
 /// (`missile_fallback_range` ahead, clamped to the field) as where it comes
 /// down if the seek finds nothing. A puff at the tube, a small kick. No RNG.
 fn fire_missile(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, owner: Owner, aim_offset: f32, tube: u8) {
@@ -171,9 +200,7 @@ fn fire_missile(physics: &mut Physics, f: &mut Frame, tank: &mut Tank, owner: Ow
     let i = (tube as usize).min(offsets.len() - 1);
     let rot = (tank.rotation + aim_offset).to_radians();
     let dir = Vec2::new(rot.sin(), -rot.cos());
-    let right = Vec2::new(rot.cos(), rot.sin());
-    let pod = tank.scale * t.missile_pod_scale;
-    let mouth = tank.position + dir * (MISSILE_TUBE_FORWARD * pod) + right * (offsets[i] * pod);
+    let mouth = tank.turret_point(crate::tank_art::MISSILE_TUBES[tank.row as usize][i]);
     // Fan by where the tube sits: the middle pair a little, the outer pair
     // twice as much, each to its own side.
     let fan = t.missile_fan_deg * offsets[i] / 3.0;
@@ -328,6 +355,7 @@ pub(super) fn dispatch_fire_from(
             tank.fire_cooldown = tuning().player_fire_interval;
             f.pending_lasers.push(laser_shot(tank, owner, aim_offset, tank.laser_variant));
             f.events.push(Event::Fired { slot: tank.owner_slot(), weapon: ActiveWeapon::Laser.name() });
+            tank.kick_laser();
         }
         ActiveWeapon::Minigun => {
             if tank.minigun_ammo > 0 {
@@ -374,6 +402,7 @@ pub(super) fn dispatch_fire_from(
                 tank.plasma_ammo -= ammo_cost;
                 tank.fire_cooldown = tuning().player_fire_interval;
                 fire_plasma(physics, f, tank, owner, aim_offset, -lateral);
+                tank.kick(true);
                 if lateral > 0.0 {
                     tank.pending_plasma_shot = Some(PendingPlasmaShot {
                         timer: tuning().tank_twin_shot_delay_seconds,
@@ -389,6 +418,7 @@ pub(super) fn dispatch_fire_from(
                 tank.shells_ammo -= ammo_cost;
                 tank.fire_cooldown = tuning().player_fire_interval;
                 fire_shell(physics, f, tank, owner, aim_offset, -lateral);
+                tank.kick(false);
                 if lateral > 0.0 {
                     tank.pending_shot = Some(PendingShot {
                         timer: tuning().tank_twin_shot_delay_seconds,

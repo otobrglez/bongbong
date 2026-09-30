@@ -37,12 +37,12 @@ const DROPDOWN_TEXT_X: i32 = 48;
 const SETTINGS_VALUE_X: i32 = 180;
 const SETTINGS_LABEL_SIZE: i32 = 16;
 
-/// Where a TANK row shows the chassis it has picked: the sheet's own
-/// 32 px, centred on the row and right-aligned in the label column, one
-/// inset clear of the `<` button. The TANK labels' budget in
-/// `text::budgets` stops short of it.
+/// Where a TANK row shows the chassis it has picked: a tank frame's 32 px
+/// (`TANK_FRAME_SIZE`, one sheet pixel each), centred on the row and
+/// right-aligned in the label column, one inset clear of the `<` button.
+/// The TANK labels' budget in `text::budgets` stops short of it.
 fn settings_icon_rect(row: Rectangle) -> Rectangle {
-    let size = crate::TANK_TEXTURE_SIZE;
+    let size = crate::TANK_FRAME_SIZE;
     Rectangle::new(row.x + SETTINGS_DEC_X - SETTINGS_INSET - size, row.y + (row.height - size) / 2.0, size, size)
 }
 
@@ -151,7 +151,12 @@ impl Sheets for EditorTextures<'_> {
             Sheet::Pickup(PickupKind::Flamethrower) => self.pickup_flamethrower,
             Sheet::Pickup(PickupKind::FrogHealth) => self.pickup_frog_health,
             Sheet::Pickup(PickupKind::TowerPack) => self.pickup_tower_pack,
-            Sheet::MinigunMount | Sheet::MissilePod | Sheet::Tracks | Sheet::BarrelExplosion | Sheet::Frog { .. } => {
+            Sheet::TankGlow
+            | Sheet::TankModules
+            | Sheet::TankModulesGlow
+            | Sheet::Tracks
+            | Sheet::BarrelExplosion
+            | Sheet::Frog { .. } => {
                 panic!("the builder has no {sheet:?} sheet")
             }
         }
@@ -289,13 +294,15 @@ impl MapEditor {
                     }
                     CellObject::Start => {
                         draw_player_ring(&mut d, pos, size / 2.0, 0);
-                        let src = crate::tank::icon_source_rec(0);
-                        d.draw_texture_pro(textures.tanks, src, dest, origin, 0.0, Color::WHITE);
+                        for src in crate::tank::icon_source_recs(0) {
+                            d.draw_texture_pro(textures.tanks, src, dest, origin, 0.0, Color::WHITE);
+                        }
                     }
                     CellObject::Start2 => {
                         draw_player_ring(&mut d, pos, size / 2.0, 1);
-                        let src = crate::tank::icon_source_rec(1);
-                        d.draw_texture_pro(textures.tanks, src, dest, origin, 0.0, Color::WHITE);
+                        for src in crate::tank::icon_source_recs(1) {
+                            d.draw_texture_pro(textures.tanks, src, dest, origin, 0.0, Color::WHITE);
+                        }
                     }
                     CellObject::EnemyFrog => {
                         draw_enemy_ring(&mut d, pos, size / 2.0);
@@ -694,14 +701,16 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme:
         Tool::Start => {
             let center = Position::new(dest.x + dest.width / 2.0, dest.y + dest.height / 2.0);
             draw_player_ring(d, center, dest.width / 2.0, 0);
-            let src = crate::tank::icon_source_rec(0);
-            d.draw_texture_pro(textures.tanks, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+            for src in crate::tank::icon_source_recs(0) {
+                d.draw_texture_pro(textures.tanks, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+            }
         }
         Tool::Start2 => {
             let center = Position::new(dest.x + dest.width / 2.0, dest.y + dest.height / 2.0);
             draw_player_ring(d, center, dest.width / 2.0, 1);
-            let src = crate::tank::icon_source_rec(1);
-            d.draw_texture_pro(textures.tanks, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+            for src in crate::tank::icon_source_recs(1) {
+                d.draw_texture_pro(textures.tanks, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+            }
         }
         Tool::EnemyFrog => {
             let center = Position::new(dest.x + dest.width / 2.0, dest.y + dest.height / 2.0);
