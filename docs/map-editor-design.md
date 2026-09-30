@@ -215,8 +215,10 @@ in `editor.rs` used by every panel in the editor rather than one-off
 drawing code per toolbar.
 
 *Status: `draw_panel` survives and now draws the category dropdowns, the
-MAP settings panel and the dev Save prompt (docs/game-editor-fusion.md
-section 7); the top-right toolbar it was written for is gone.*
+FILE menu and its Load list and the dev Save prompt (docs/game-editor-fusion.md
+section 7); the top-right toolbar it was written for is gone. The MAP
+settings panel hangs from the bar and is `draw_hanging_panel`'s: the same
+shadow, fill and border with square top corners against the bar.*
 
 ### Eraser icon
 

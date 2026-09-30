@@ -19,6 +19,7 @@ use crate::{
     Position,
     TANK_BROKEN_TURRET_COL,
     TANK_HULL_BBOX_BY_ROW,
+    TANK_HULL_COL,
     TANK_HULL_DISABLED_COL,
     TANK_HULL_DISABLED_DAMAGE,
     TANK_HULL_FRACTION,
@@ -1357,6 +1358,15 @@ pub fn icon_source_rec(player: u8) -> Rectangle {
     source_rec(sheet_block(Some(player)) * TANK_ROWS_PER_TEAM, 0)
 }
 
+/// Source rectangles for `kind`'s idle hull and its turret in `player`'s
+/// team colour, drawn one over the other into the same box (both are
+/// authored around the cell's centre) - the builder's MAP panel showing
+/// the chassis a map pins for a seat.
+pub fn chassis_icon_source_recs(kind: TankKind, player: u8) -> [Rectangle; 2] {
+    let row = kind.row() + sheet_block(Some(player)) * TANK_ROWS_PER_TEAM;
+    [source_rec(row, TANK_HULL_COL), source_rec(row, TANK_TURRET_COL)]
+}
+
 /// Source rectangle for the tank at (row, col) inside the atlas.
 fn source_rec(row: i32, col: i32) -> Rectangle {
     Rectangle::new(
@@ -2348,6 +2358,12 @@ mod chassis_tests {
         assert_eq!(tank(Owner::Player(1), 11).row, 11);
         assert_eq!(icon_source_rec(0).y, (TANK_ROWS_PER_TEAM as f32) * TANK_TEXTURE_SIZE);
         assert_eq!(icon_source_rec(1).y, (2 * TANK_ROWS_PER_TEAM) as f32 * TANK_TEXTURE_SIZE);
+        let [hull, turret] = chassis_icon_source_recs(TankKind::Titan, 1);
+        let row = TankKind::Titan.row() + 2 * TANK_ROWS_PER_TEAM;
+        assert_eq!((hull.y, turret.y), (row as f32 * TANK_TEXTURE_SIZE, row as f32 * TANK_TEXTURE_SIZE));
+        assert_eq!(hull.x, TANK_HULL_COL as f32 * TANK_TEXTURE_SIZE);
+        assert_eq!(turret.x, TANK_TURRET_COL as f32 * TANK_TEXTURE_SIZE);
+        assert_eq!(chassis_icon_source_recs(TankKind::Scout, 0)[0], icon_source_rec(0), "the start tool's icon is the scout's hull");
     }
 
     /// A map's `tank = "titan"` key and `--tank titan` spell a chassis the
