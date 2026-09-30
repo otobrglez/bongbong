@@ -62,6 +62,13 @@ pub enum Material {
     /// A conifer - spikier and darker, so the two read apart by silhouette
     /// before colour.
     Pine,
+    /// The three defence towers (docs/defence-towers-prd.md): a tile like
+    /// any other for collision, the nav grid, hits and damage, with its
+    /// weapon kept beside it in `Game::towers`. Drawn from
+    /// towers_sheet.png by `tower.rs`, never by `draw_obstacle`.
+    Tesla,
+    GunTower,
+    BioSlush,
 }
 
 /// The four wall materials, in walls_sheet.png row order - `spawn_from_map`
@@ -76,11 +83,11 @@ pub use crate::canvas::Sheet;
 
 impl Sheet {
     /// Source cell size in this atlas. Walls and props share the obstacle
-    /// grid's own 32px; trees are drawn from 48px cells so a canopy can
-    /// overhang the cell its trunk stands in (see `TREE_TEXTURE_SIZE`).
+    /// grid's own 32px; trees and towers are drawn from 48px cells so they
+    /// can overhang the cell they stand in (see `TREE_TEXTURE_SIZE`).
     pub fn cell(self) -> f32 {
         match self {
-            Sheet::Trees => TREE_TEXTURE_SIZE,
+            Sheet::Trees | Sheet::Towers => TREE_TEXTURE_SIZE,
             _ => OBSTACLE_TEXTURE_SIZE,
         }
     }
@@ -91,6 +98,7 @@ impl Material {
         match self {
             Material::Sandbag | Material::Barrel | Material::Fence => Sheet::Props,
             Material::Tree | Material::Pine => Sheet::Trees,
+            Material::Tesla | Material::GunTower | Material::BioSlush => Sheet::Towers,
             _ => Sheet::Walls,
         }
     }
@@ -108,6 +116,8 @@ impl Material {
             Material::Fence => 5,
             Material::Tree => TREE_ROW_BROADLEAF,
             Material::Pine => TREE_ROW_CONIFER,
+            // A tower's rows depend on its side as well (`tower::base_row`).
+            Material::Tesla | Material::GunTower | Material::BioSlush => 0,
         }
     }
 
@@ -121,6 +131,7 @@ impl Material {
             Material::Sandbag => 3,
             Material::Barrel | Material::Fence => 2,
             Material::Tree | Material::Pine => TREE_VARIANTS,
+            Material::Tesla | Material::GunTower | Material::BioSlush => 1,
             _ => 4,
         }
     }
@@ -140,6 +151,9 @@ impl Material {
             Material::Fence => 2.0,
             Material::Tree => tuning().tree_max_health,
             Material::Pine => tuning().pine_max_health,
+            Material::Tesla => tuning().tesla_max_health,
+            Material::GunTower => tuning().gun_tower_max_health,
+            Material::BioSlush => tuning().bio_max_health,
         }
     }
 
@@ -161,6 +175,8 @@ impl Material {
             Material::Barrel => 3,
             Material::Fence => 2,
             Material::Tree | Material::Pine => 3,
+            // Intact, scuffed, damaged, critical; the ruin is a decal.
+            Material::Tesla | Material::GunTower | Material::BioSlush => 4,
         }
     }
 
@@ -168,8 +184,9 @@ impl Material {
     /// when it dies, if any (`decal::Decal`, `RUBBLE_ROW_*`). `charred`
     /// picks a burnt-out variant over the intact one where there is one.
     ///
-    /// `None` only for Iron, which never dies. Everything on the walls and
-    /// props sheets leaves its rubble on the *walls* sheet (see
+    /// `None` for Iron, which never dies, and for the towers, whose ruin
+    /// is their own 48 px cell (`tower::TowerRuin`). Everything on the
+    /// walls and props sheets leaves its rubble on the *walls* sheet (see
     /// `RUBBLE_ROW_SANDBAG`); trees are the exception, because leaf litter
     /// is green and the walls sheet is under the no-green guard.
     pub fn rubble_row(self, charred: bool) -> Option<(Sheet, i32)> {
@@ -187,7 +204,7 @@ impl Material {
                 Sheet::Trees,
                 if charred { RUBBLE_ROW_TREE_CHARRED } else { RUBBLE_ROW_TREE },
             )),
-            Material::Iron => None,
+            Material::Iron | Material::Tesla | Material::GunTower | Material::BioSlush => None,
         }
     }
 
@@ -206,6 +223,12 @@ impl Material {
     /// runs, so the only ones with an edge cap and a `MATERIALS` slot.
     pub fn is_wall(self) -> bool {
         self.sheet() == Sheet::Walls
+    }
+
+    /// A defence tower: it fights (`Game::towers`), burns by its own rule
+    /// and leaves a ruin rather than rubble.
+    pub fn is_tower(self) -> bool {
+        self.sheet() == Sheet::Towers
     }
 
     /// Odds an instance of this material is the kind that catches fire when
@@ -233,6 +256,14 @@ impl Material {
         !matches!(self, Material::Sandbag | Material::Fence)
     }
 
+    /// Whether this tile throws a shadow in the weather's light map
+    /// (`weather::Occluders`): the full-height walls and the towers. Glass
+    /// lets light through; props are too low and trees too open to cast a
+    /// hard edge, and a tree's canopy is drawn over the tanks anyway.
+    pub fn blocks_light(self) -> bool {
+        (self.is_wall() && self != Material::Glass) || self.is_tower()
+    }
+
     /// Odds a projectile sails over this tile instead of hitting it, rolled
     /// per projectile per tile (`Game::resolve_projectiles`). Zero means
     /// "never", and no RNG is drawn for it.
@@ -249,6 +280,9 @@ impl Material {
     pub fn deflect_chance(self) -> f64 {
         match self {
             Material::Barrel => tuning().barrel_deflect_chance,
+            Material::Tesla => tuning().tesla_deflect_chance,
+            Material::GunTower => tuning().gun_tower_deflect_chance,
+            Material::BioSlush => tuning().bio_deflect_chance,
             _ => 0.0,
         }
     }

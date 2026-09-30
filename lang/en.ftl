@@ -73,6 +73,51 @@ mission-destroy-banner = DESTROY!
 wave-banner = WAVE { $n }
 wave-final = FINAL WAVE
 
+## Levels (src/levels.rs, docs/levels.md)
+#
+# A level's title is written in levels.toml, in English; another language
+# translates it as `level-<map>` (level-lotus-lagoon = ...), drawn at
+# 36 px under the mission banner in about 700 px (some 30 letters).
+
+# Over the mission banner as a level opens, 28 px: "LEVEL 3 / 14".
+level-number = LEVEL { $n } / { $count }
+
+# The end screen's numbers under YOU WIN / YOU LOSE, 28 px, the two side
+# by side in about 340 px each (some 17 letters): how long the round took
+# ($time is m:ss) and how many enemies it wrecked of all it brought.
+result-time = TIME { $time }
+result-wrecks = DESTROYED { $n } / { $total }
+
+# Over those once the last level is won, 28 px, about 700 px.
+result-all-clear = ALL { $count } LEVELS COMPLETE!
+
+# A level's end-screen buttons, 18 px text in a 224 px button (about 18
+# letters): the same level again, the next one after a win, and the first
+# one again after the last.
+result-again = PLAY AGAIN
+result-next = NEXT LEVEL
+result-first = BACK TO LEVEL 1
+
+# Beside those, in a 160 px button: the level select.
+result-levels = LEVELS
+
+# The same two buttons while the end screen counts down to taking them by
+# itself - NEXT LEVEL after a win, PLAY AGAIN after a loss - in the same
+# 224 px (about 17 letters with a two-digit $seconds, which counts 3, 2, 1).
+result-next-in = NEXT LEVEL IN { $seconds }
+result-again-in = PLAY AGAIN IN { $seconds }
+
+# The level select, over the dimmed field: its title (22 px) and the line
+# under it (12 px), both in about 660 px, and its one button (18 px text in
+# 140 px) that goes back to the round or the end screen it opened over.
+levels-title = LEVELS
+levels-sub = Pick a level to play. Winning one opens the next.
+levels-back = BACK
+
+# The bar's level button, in the mission word's place on a level: this
+# word small (10 px) with the level's number after it, in about 44 px.
+bar-level = LEVEL
+
 # The locate label over a player's tank and the lobby's seat column: the
 # seat's number. Keep it short - it sits over a 48 px hull.
 seat-label = P{ $n }
@@ -225,6 +270,7 @@ settings-growth = GROWTH
 settings-tier-start = TIER START
 settings-tier-end = TIER END
 settings-theme = THEME
+settings-weather = WEATHER
 settings-reset = RESET MAP
 # A settings value the map leaves to the game.
 settings-auto = auto
@@ -280,6 +326,13 @@ tool-speedup = speed-up
 tool-shield = shield
 tool-flamethrower = flamethrower
 tool-frog_health = frog pack
+tool-tower_pack = tower pack
+tool-tesla = tesla coil
+tool-tesla_enemy = enemy tesla
+tool-gun_tower = gun tower
+tool-gun_tower_enemy = enemy gun
+tool-bio_slush = bio slush
+tool-bio_slush_enemy = enemy slush
 tool-eraser = eraser
 
 # The short spelling for the bar's 10 px line and the cursor readout,
@@ -294,12 +347,29 @@ tool-short-oil_trail = oil
 tool-short-enemy_frog = e.frog
 tool-short-flamethrower = flame
 tool-short-frog_health = frog+
+tool-short-tower_pack = tower+
+tool-short-tesla = tesla
+tool-short-tesla_enemy = e.tsl
+tool-short-gun_tower = gun
+tool-short-gun_tower_enemy = e.gun
+tool-short-bio_slush = bio
+tool-short-bio_slush_enemy = e.bio
 
 ## Data names shown as words. The key is the data spelling (the map
 ## format's, the CLI's), which never changes.
 
 theme-grass = grass
 theme-desert = desert
+weather-clear = clear
+weather-night = night
+weather-dusk = dusk
+weather-rain = rain
+weather-storm = storm
+weather-fog = fog
+weather-sandstorm = sand
+weather-snow = snow
+weather-heat_haze = haze
+weather-random = random
 spawn-band = band
 spawn-waves = waves
 tier-light = light

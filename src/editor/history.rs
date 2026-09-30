@@ -6,7 +6,7 @@
 //! and the tests below run headlessly.
 
 use crate::level::{Mission, SpawnKind, Tier};
-use crate::map::{CellObject, MapFile, Theme};
+use crate::map::{CellObject, MapFile, Theme, Weather};
 use crate::tank::TankKind;
 
 /// How many steps the stack keeps. Past this the oldest step is dropped;
@@ -30,6 +30,8 @@ pub struct MapSettings {
     pub tier_end: Option<Tier>,
     /// The look (`MapFile::theme`).
     pub theme: Theme,
+    /// The sky (`MapFile::weather`).
+    pub weather: Weather,
 }
 
 impl MapSettings {
@@ -46,6 +48,7 @@ impl MapSettings {
             tier_start: map.spawn.tier_start,
             tier_end: map.spawn.tier_end,
             theme: map.theme,
+            weather: map.weather,
         }
     }
 
@@ -61,6 +64,7 @@ impl MapSettings {
         map.spawn.tier_start = self.tier_start;
         map.spawn.tier_end = self.tier_end;
         map.theme = self.theme;
+        map.weather = self.weather;
     }
 
     /// The names of the fields that differ between two settings, in field
@@ -96,6 +100,12 @@ impl MapSettings {
         }
         if self.tier_end != other.tier_end {
             out.push("tier_end");
+        }
+        if self.theme != other.theme {
+            out.push("theme");
+        }
+        if self.weather != other.weather {
+            out.push("weather");
         }
         out
     }

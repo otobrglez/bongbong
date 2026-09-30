@@ -29,13 +29,14 @@ else
 fi
 
 cd "$EMSDK_DIR"
-# Pinned to 5.0.6. emsdk 5.0.7 ships a wasm-opt whose `--asyncify` pass
-# fails on wasm built with `-fwasm-exceptions`, which rustc 1.93+ (we're on
-# 1.97.1, see devenv.nix) emits unconditionally. bongbong doesn't currently
-# link with -sASYNCIFY=1 (see .cargo/config.toml), but staying on the
-# version sola-raylib's own docs verify against avoids finding the next
-# incompatibility the hard way. Override with EMSDK_VERSION=... if needed.
-EMSDK_VERSION="${EMSDK_VERSION:-5.0.6}"
+# Pinned to 6.0.10, verified with Rust 1.98.1 (see devenv.nix) by building
+# and playing the web build. sola-raylib's own docs pin 5.0.6 because emsdk
+# 5.0.7's wasm-opt `--asyncify` pass fails on wasm built with
+# `-fwasm-exceptions`, which rustc 1.93+ emits; bongbong links no
+# -sASYNCIFY (see .cargo/config.toml), so that bug does not reach it. A
+# bump is a build plus a play of the page, not a blind edit. Override with
+# EMSDK_VERSION=... if needed.
+EMSDK_VERSION="${EMSDK_VERSION:-6.0.10}"
 ./emsdk install "$EMSDK_VERSION"
 ./emsdk activate "$EMSDK_VERSION"
 

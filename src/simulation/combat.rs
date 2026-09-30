@@ -32,6 +32,9 @@ pub(super) struct BlastParams {
     pub radius: f32,
     pub damage: (f32, f32),
     pub knockback: f32,
+    /// Who set the blast off, for the kill credit (`Tank::credit`): a
+    /// missile's shooter. `None` for a wreck's or a drum's.
+    pub by: Option<Owner>,
 }
 
 impl BlastParams {
@@ -40,6 +43,7 @@ impl BlastParams {
             radius: tuning().explosion_radius,
             damage: (tuning().explosion_damage_min, tuning().explosion_damage_max),
             knockback: tuning().explosion_knockback_speed,
+            by: None,
         }
     }
 
@@ -49,6 +53,7 @@ impl BlastParams {
             radius: tuning().barrel_blast_radius,
             damage: (tuning().barrel_blast_damage_min, tuning().barrel_blast_damage_max),
             knockback: tuning().barrel_blast_knockback_speed,
+            by: None,
         }
     }
 
@@ -58,6 +63,7 @@ impl BlastParams {
             radius: tuning().fuel_blast_radius,
             damage: (tuning().fuel_blast_damage_min, tuning().fuel_blast_damage_max),
             knockback: tuning().fuel_blast_knockback_speed,
+            by: None,
         }
     }
 
@@ -133,10 +139,12 @@ impl Game {
                         // so ask it whether that was the shattering blow.
                         let landed = tank.take_damage(d, MAX_DAMAGE);
                         tank.mark_hit();
+                        tank.credit(shooter);
                         let killed = tank.is_wreck();
                         let hit_target = match tank.owner() {
                             Owner::Player(player) => HitTarget::Player { player },
                             Owner::Enemy(slot) => HitTarget::Enemy { slot },
+                            Owner::Tower { .. } => unreachable!("no tank is owned by a tower"),
                         };
                         f.events.push(Event::Hit { target: hit_target, damage: landed, killed, x: at.x, y: at.y });
                         if killed {
@@ -153,9 +161,13 @@ impl Game {
                 };
                 if survived {
                     // A player carries no `Ai`, so this is a no-op for one.
+                    let tower = self.tower_by_owner(shooter);
                     let mut q = self.world.query_one::<&mut Ai>(entity);
                     if let Ok(ai) = q.get() {
-                        ai.notify_hit();
+                        match tower {
+                            Some(at) => ai.notify_tower_hit(at),
+                            None => ai.notify_hit(),
+                        }
                     }
                 }
             }
@@ -297,6 +309,8 @@ pub(super) fn ram(
     b.take_damage(dmg, MAX_DAMAGE);
     a.mark_hit();
     b.mark_hit();
+    a.credit(b.owner());
+    b.credit(a.owner());
     a.ram_cooldown = tuning().ram_damage_cooldown;
     b.ram_cooldown = tuning().ram_damage_cooldown;
     if a.is_wreck() {
@@ -367,6 +381,9 @@ pub(super) fn explosion_hit(
         let dmg = params.roll_damage(rng) * falloff;
         tank.take_damage(dmg, MAX_DAMAGE);
         tank.mark_hit();
+        if let Some(by) = params.by {
+            tank.credit(by);
+        }
         if tank.is_wreck() {
             kills.push((tank.position, tank.owner()));
             return None;
@@ -426,7 +443,7 @@ pub(super) fn frog_hop_target(
                     && candidate.x <= width - margin
                     && candidate.y >= margin
                     && candidate.y <= height - margin;
-                let wet = terrain.depth_at(candidate) != crate::ground::Depth::Dry;
+                let wet = terrain.depth_at(candidate).is_wet();
                 if in_bounds && (wet || !wet_only) && terrain.frog_fits(candidate) {
                     return Some(candidate);
                 }

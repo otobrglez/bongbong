@@ -20,7 +20,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::level::{MissionConfig, SpawnConfig};
+use crate::frog::Side;
 use crate::obstacle::{Drum, Material};
+use crate::tower::TowerKind;
 use crate::pickup::PickupKind;
 use crate::tank::TankKind;
 use crate::{OBSTACLE_GRID_SIZE, Position};
@@ -108,6 +110,23 @@ pub enum CellObject {
     /// portals has an inert network - nothing teleports and the round
     /// draws none of them.
     Portal,
+    /// The defence towers (docs/defence-towers-prd.md): a solid tile that
+    /// fights for `side` - the player's when the key is absent, so a file
+    /// without it reads the way the builder's plain tool writes it.
+    Tesla {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        side: Option<Side>,
+    },
+    #[serde(rename = "gun_tower")]
+    GunTower {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        side: Option<Side>,
+    },
+    #[serde(rename = "bio_slush")]
+    BioSlush {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        side: Option<Side>,
+    },
 }
 
 impl CellObject {
@@ -120,7 +139,34 @@ impl CellObject {
             CellObject::Fence => Some(Material::Fence),
             CellObject::Tree => Some(Material::Tree),
             CellObject::Pine => Some(Material::Pine),
+            CellObject::Tesla { .. } => Some(Material::Tesla),
+            CellObject::GunTower { .. } => Some(Material::GunTower),
+            CellObject::BioSlush { .. } => Some(Material::BioSlush),
             _ => None,
+        }
+    }
+
+    /// The tower a cell places and the side it fights for, if it is a
+    /// tower: the player's unless the cell says `side = "enemy"`.
+    pub fn tower(&self) -> Option<(TowerKind, Side)> {
+        let (kind, side) = match *self {
+            CellObject::Tesla { side } => (TowerKind::Tesla, side),
+            CellObject::GunTower { side } => (TowerKind::Gun, side),
+            CellObject::BioSlush { side } => (TowerKind::Bio, side),
+            _ => return None,
+        };
+        Some((kind, side.unwrap_or(Side::Player)))
+    }
+
+    /// The cell that places a `kind` tower fighting for `side`. The
+    /// player's side is written without the key, the way a hand-authored
+    /// file leaves it out.
+    pub fn for_tower(kind: TowerKind, side: Side) -> CellObject {
+        let side = (side == Side::Enemy).then_some(Side::Enemy);
+        match kind {
+            TowerKind::Tesla => CellObject::Tesla { side },
+            TowerKind::Gun => CellObject::GunTower { side },
+            TowerKind::Bio => CellObject::BioSlush { side },
         }
     }
 
@@ -225,6 +271,100 @@ fn is_default_theme(t: &Theme) -> bool {
     *t == Theme::Grass
 }
 
+/// The sky over the battlefield (TOML: a top-level `weather = "night"`,
+/// the MAP panel's WEATHER row; docs/weather.md): drawn, and part of the
+/// rules - shorter enemy sight at night and in fog, less grip in the
+/// rain, the water frozen in the snow, gusts in a sandstorm
+/// (`weather::sight_factor` and its neighbours). `Game::init` settles the
+/// round's sky once; a clear one plays exactly as a map without the key.
+/// Absent means `Clear`, which is not written back, so every older file
+/// parses and re-saves unchanged. What each one looks like is
+/// `weather::Look::of`; `Random` is a sky picked by the round's seed
+/// (`weather::random_sky`); the `weather_override` knob (`--weather`, the
+/// web page's `?weather=`) puts one sky over every local round without
+/// editing any map.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Weather {
+    #[default]
+    Clear,
+    Night,
+    Dusk,
+    Rain,
+    /// A thunderstorm: heavy rain at night, with lightning.
+    Storm,
+    Fog,
+    Sandstorm,
+    Snow,
+    HeatHaze,
+    /// One of `SKIES`, picked afresh by every round's seed: the same seed
+    /// always brings the same sky, and every replica of a room draws the
+    /// room's (`weather::in_force`).
+    Random,
+}
+
+impl Weather {
+    /// Every sky a round can be drawn under - everything but `Random`, in
+    /// `ALL`'s order. What `Random` picks from.
+    pub const SKIES: [Weather; 9] = [
+        Weather::Clear,
+        Weather::Night,
+        Weather::Dusk,
+        Weather::Rain,
+        Weather::Storm,
+        Weather::Fog,
+        Weather::Sandstorm,
+        Weather::Snow,
+        Weather::HeatHaze,
+    ];
+
+    /// Every weather, in the order the builder's WEATHER row cycles them;
+    /// a weather's index here is its `weather_override` value.
+    pub const ALL: [Weather; 10] = [
+        Weather::Clear,
+        Weather::Night,
+        Weather::Dusk,
+        Weather::Rain,
+        Weather::Storm,
+        Weather::Fog,
+        Weather::Sandstorm,
+        Weather::Snow,
+        Weather::HeatHaze,
+        Weather::Random,
+    ];
+
+    /// The TOML spelling, also the dev server's, the command line's and
+    /// the builder's.
+    pub fn name(self) -> &'static str {
+        match self {
+            Weather::Clear => "clear",
+            Weather::Night => "night",
+            Weather::Dusk => "dusk",
+            Weather::Rain => "rain",
+            Weather::Storm => "storm",
+            Weather::Fog => "fog",
+            Weather::Sandstorm => "sandstorm",
+            Weather::Snow => "snow",
+            Weather::HeatHaze => "heat_haze",
+            Weather::Random => "random",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Weather> {
+        Weather::ALL.iter().copied().find(|w| w.name() == s)
+    }
+
+    /// This weather's position in `ALL`, the `weather_override` value that
+    /// forces it.
+    pub fn index(self) -> usize {
+        Weather::ALL.iter().position(|w| *w == self).expect("every weather is in ALL")
+    }
+}
+
+fn is_default_weather(w: &Weather) -> bool {
+    *w == Weather::Clear
+}
+
 /// A saved battlefield layout. Keys are `"<col>,<row>"` grid-cell strings
 /// (TOML tables require string keys) - only occupied cells are stored, so a
 /// mostly-empty map stays a small file.
@@ -261,6 +401,10 @@ pub struct MapFile {
     /// back, so older files re-save unchanged.
     #[serde(default, skip_serializing_if = "is_default_theme")]
     pub theme: Theme,
+    /// The sky (TOML: a top-level `weather = "night"`, the MAP panel's
+    /// WEATHER row). Absent means clear, and clear is not written back.
+    #[serde(default, skip_serializing_if = "is_default_weather")]
+    pub weather: Weather,
     /// The `[mission]` table - what ends the round (docs/maps-to-levels.md).
     /// Absent means Protect.
     #[serde(default)]
@@ -321,6 +465,7 @@ impl MapFile {
             tank: None,
             tank2: None,
             theme: Theme::default(),
+            weather: Weather::default(),
             mission: MissionConfig::default(),
             spawn: SpawnConfig::default(),
             size: None,
@@ -532,15 +677,33 @@ pub fn maps_dir() -> PathBuf {
 }
 
 /// The maps compiled into the binary, by name: the default battlefields,
-/// the two mission fixtures and the portal map. They are what the web build can offer its
-/// Load list, since nothing outside `static/` ships in the wasm, and they
-/// stand in on native for a checkout without a `maps/` directory.
+/// the two mission fixtures, the portal map, then the hand-authored levels
+/// (each file's header says how it plays). They are what the web build can
+/// offer its Load list, since nothing outside `static/` ships in the wasm,
+/// what the online lobby's map stepper walks, in this order, and what the
+/// room server can open; they stand in on native for a checkout without a
+/// `maps/` directory.
 pub const SHIPPED_MAPS: &[(&str, &str)] = &[
     ("default", include_str!("../maps/default.toml")),
     ("default-desert", include_str!("../maps/default-desert.toml")),
     ("hunt-basic", include_str!("../maps/missions/hunt-basic.toml")),
     ("waves-basic", include_str!("../maps/missions/waves-basic.toml")),
     ("portals", include_str!("../maps/portals.toml")),
+    ("towers", include_str!("../maps/towers.toml")),
+    ("lotus-lagoon", include_str!("../maps/lotus-lagoon.toml")),
+    ("hedge-maze", include_str!("../maps/hedge-maze.toml")),
+    ("oasis-bazaar", include_str!("../maps/oasis-bazaar.toml")),
+    ("castle-moat", include_str!("../maps/castle-moat.toml")),
+    ("archipelago", include_str!("../maps/archipelago.toml")),
+    ("black-gold", include_str!("../maps/black-gold.toml")),
+    ("harbor-lights", include_str!("../maps/harbor-lights.toml")),
+    ("carnival", include_str!("../maps/carnival.toml")),
+    ("jungle-temple", include_str!("../maps/jungle-temple.toml")),
+    ("serpent-river", include_str!("../maps/serpent-river.toml")),
+    ("no-mans-land", include_str!("../maps/no-mans-land.toml")),
+    ("glasshouses", include_str!("../maps/glasshouses.toml")),
+    ("scrapyard", include_str!("../maps/scrapyard.toml")),
+    ("grand-campaign", include_str!("../maps/grand-campaign.toml")),
 ];
 
 /// Whether this build can write a map to disk: native yes; web and iOS no
@@ -658,6 +821,34 @@ mod toml_tests {
         }
         let desert = open_map("default-desert").unwrap();
         assert_eq!(desert.theme, Theme::Desert);
+    }
+
+    #[test]
+    fn weather_round_trips_and_defaults_to_clear() {
+        let map = MapFile::from_toml_str("version = 1\n").unwrap();
+        assert_eq!(map.weather, Weather::Clear);
+        assert!(!map.to_toml_string().unwrap().contains("weather"), "the default is not written back");
+        let map = MapFile::from_toml_str("version = 1\nweather = \"heat_haze\"\ncells.\"1,1\" = { kind = \"road\" }\n").unwrap();
+        assert_eq!(map.weather, Weather::HeatHaze);
+        let text = map.to_toml_string().unwrap();
+        assert!(text.contains("weather = \"heat_haze\""), "{text}");
+        assert_eq!(MapFile::from_toml_str(&text).unwrap().weather, Weather::HeatHaze);
+        assert!(MapFile::from_toml_str("version = 1\nweather = \"hail\"\n").is_err(), "an unknown weather is a parse error");
+        for (i, w) in Weather::ALL.into_iter().enumerate() {
+            assert_eq!(Weather::parse(w.name()), Some(w));
+            assert_eq!(w.index(), i);
+            // The serde spelling is the name the builder and the tools use.
+            let text = format!("version = 1\nweather = \"{}\"\n", w.name());
+            assert_eq!(MapFile::from_toml_str(&text).unwrap().weather, w, "{}", w.name());
+        }
+        // `SKIES` is `ALL` without `Random`, in the same order, so a sky's
+        // override index is the same in both.
+        assert_eq!(Weather::ALL.iter().filter(|w| **w != Weather::Random).copied().collect::<Vec<_>>(), Weather::SKIES);
+        let mut random = MapFile::new();
+        random.weather = Weather::Random;
+        let text = random.to_toml_string().unwrap();
+        assert!(text.contains("weather = \"random\""), "{text}");
+        assert_eq!(MapFile::from_toml_str(&text).unwrap().weather, Weather::Random, "a random sky stays random on disk");
     }
 
     #[test]

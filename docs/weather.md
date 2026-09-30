@@ -1,0 +1,317 @@
+# Weather — the sky over the battlefield
+
+A map's `weather` key puts a sky over it: `clear` (the default, and what
+every older file gets), `night`, `dusk`, `rain`, `storm`, `fog`,
+`sandstorm`, `snow` or `heat_haze` - or `random`, a sky picked by each
+round's seed. A sky is drawn and it changes the rules (below): enemies see
+less at night and in fog, hulls lose grip in the rain, snow freezes the
+water into ice a tank drives across, and a sandstorm's gusts carry every
+hull downwind. `Game::init` settles the round's sky once, from the map's
+key and the round seed, and every rule is a pure function of it, the
+knobs and the round clock - no RNG - so a seeded replay replays under its
+sky, and a clear sky plays exactly as a round with no weather at all (the
+probe and the determinism pins hold it to that).
+
+![every sky, drawn by the game](weather.png)
+
+## The attribute
+
+- **Map file**: a top-level `weather = "night"` (`map::Weather`, TOML
+  `snake_case`). Absent means `clear`, and clear is not written back, so an
+  editor re-save of an older map is byte-identical. An unknown name is a
+  parse error, not a fallback.
+- **Builder**: the MAP panel's WEATHER row cycles `Weather::ALL`, one undo
+  step per press like every other settings field. The canvas stays clear,
+  since a map is edited in daylight; PLAY starts the round under the sky.
+- **Random**: `random` is one of `Weather::SKIES` (every sky, clear
+  included, as likely as the others) picked afresh for every round by
+  `weather::random_sky`, a hash of the round's seed. It is not a draw from
+  the round's RNG, so the stream is untouched and every seeded replay and
+  probe fixture is the same under it, and it is not the wall clock: the
+  same seed always brings the same sky - `--seed`, the dev server's
+  `restart {seed}` and a room's `Welcome`, whose seed every replica is
+  initialised on (a rematch's `RoundStarted` moves them all to the next
+  one together). An unpinned round draws a fresh seed, so a fresh sky.
+  `Game::weather()` is never `Random`; the key stays `random` on disk, in
+  the builder and in `map_get`.
+- **Over every local round**: the `weather_override` knob (`weather`
+  tuning group) takes a weather's index in `Weather::ALL`, `-1` following
+  the map and 9 a random sky for every round. It is a `Restart` row: a sky
+  is settled when a round starts, so a change shows from the next one.
+  `--weather night` (or `--weather random`) stages it at startup the way
+  `--zoom` stages `view_max_scale`, the web build reads `?weather=night`
+  off its page (`weather::weather_from_url`, through `window.bbInvite`),
+  and on a PR preview it is a row in the tuning panel. The builder's row
+  shows `(cli)` while it is set.
+- **Dev server**: `weather` reports the round's sky (`in_force`, a random
+  map's sky by name), the map's own key, the override's pick, every name
+  and the `rules` in force (`on`, `enemy_sight_px`, `grip`, `frozen`,
+  `gust_on_player` - player 1's wind, px/s - and `gust_front`, the gust
+  crossing the field); with `name` it puts that key on the round's map and
+  starts the round over on its own seed, frozen in lockstep like
+  `restart`. `status.weather`, `map.weather`, `builder_settings {weather}`
+  (null = clear) and `map_get`/`restart {map_toml}` carry the key too.
+- **Online**: a room's round is fought under its map's sky alone
+  (`Game::weather_from_map`): the key rides the map TOML every `Welcome`
+  carries and the seed rides the same message, so every replica and every
+  prediction sandbox is built under the room's sky - its ice where the
+  room's is, its enemies' sight the room's - with nothing new on the wire
+  and `PROTOCOL_VERSION` unchanged. The window's override knob never
+  reaches a room's round; the rig, standing in for a room, bakes it into
+  the room's map key instead, so `--rig --weather snow` is a snowy room on
+  both ends. The dev server's `weather` only reports in an online window.
+
+## The skies
+
+Each weather is a `weather::Look`: the ambient light the field is
+multiplied by, how strongly the round's lights show, and the amount of
+each layer. `Look::of` resolves it from the table below and the `weather`
+group's knobs; `weather_strength` eases the light toward daylight and
+thins every layer together, 0 drawing every sky clear.
+
+| Sky | Ambient light | Lights | Layers |
+| --- | --- | --- | --- |
+| clear | daylight | none | none - pass 1 runs exactly as it always has |
+| night | moonlight: `night_ambient` (0.2) times a blue tint | full | vignette |
+| dusk | warm (0.80, 0.62, 0.54) with the low sun rising toward the west edge | 0.6 | vignette |
+| rain | grey (0.76, 0.80, 0.90) | 0.4 | rain 0.7 |
+| storm | gloom, about twice the night's | full | rain 1.0, lightning |
+| fog | pale (0.93, 0.95, 0.99) | 0.25 | fog 0.85 |
+| sandstorm | orange (1.0, 0.87, 0.70) | 0.35 | sand 0.9 |
+| snow | cold white (0.98, 1.0, 1.06) | 0.15 | snow 0.85 |
+| heat_haze | hot (1.08, 1.0, 0.86) | none | haze 1.0 |
+
+`Look::plan` says which of the renderer's stages a look needs; a look
+whose light is daylight, with no lamps and no layer, is `None` and costs
+nothing.
+
+## The rules
+
+Every rule is gated by `weather_rules` (on by default; off, a sky is only
+drawn) and each one's size is a knob of its own. Under a clear sky every
+factor is exactly 1 and no gust blows, so the round is bit for bit the one
+it was.
+
+| Sky | What changes |
+| --- | --- |
+| night, storm | enemies see `night_sight_factor` (0.6) of `enemy_view_range` |
+| fog | enemies see `fog_sight_factor` (0.45) of it |
+| rain, storm | every hull keeps `rain_grip_factor` (0.5) of its grip |
+| snow | every lake and ford is ice |
+| sandstorm | gusts sweep the field and carry every hull downwind |
+
+![a gust's front in a sandstorm, and a river frozen over in the snow](weather-rules.png)
+
+- **Sight** (`weather::sight_factor`, `Game::enemy_sight`): the range an
+  enemy notices a player at, the shared alert it raises, the chase tier,
+  the engagement ring's range and a hunter's snipe all read it, and the
+  attack tier never reaches past it (`Ai::think`'s `sight`; under
+  `enemy_attack_range / enemy_view_range` it shortens the attack too). A
+  hit still alerts an enemy from anywhere, and grass hides a tank as it
+  always did. Towers aim by their weapons' reach, well inside any sky's
+  sight, so no sky changes them.
+- **Grip** (`weather::grip_factor`): wet ground scales `Footing::grip`,
+  so a hull drifts further through a turn and a shove carries it further
+  sideways (measured: a hard turn at speed carries 73 px instead of 42).
+  In a ford it multiplies `water_grip_factor`.
+- **Ice** (`weather::freezes`): `Game::init` freezes the round's water
+  (`ground::WaterLayout::freeze`, every water cell `Depth::Ice`) before
+  anything is placed, so a lake has no colliders, the nav grid routes
+  over it, enemies, frogs and bonuses can spawn on it, no current runs
+  and nothing is refused a pose there. A hull on ice keeps its top speed
+  but its grip (`ice_grip_factor`), its drive (`ice_traction_factor`) and
+  its brake (`ice_brake_factor`) fall away: a released hull coasts about
+  100 px where dry ground stops it in 9. Ice takes tread marks and wets
+  none, throws no spray, does not put a burning hull out and is no frog's
+  refuge; like water it takes no heat, fire or scorch. The ground pass
+  draws it solid.
+- **Gusts** (`weather::gusts`, `gust_at`): in most `sand_gust_gap_seconds`
+  windows after the first a gust's front leaves the field's upwind corner
+  and crosses it at `sand_gust_front_speed`, heading east swung by up to
+  `sand_gust_spread_deg`; behind the front the wind rises fast to
+  `sand_gust_speed` and dies away over `sand_gust_seconds`. It is added to
+  `Footing::flow`, the water current's rule: a hull drives relative to the
+  wind, so a stopped one drifts downwind (about a cell a gust), one
+  driving into it is held back and one driving across it slides. A pure
+  function of the round clock like `lightning`, so the room, its replicas
+  and every prediction sandbox blow alike; the pose validator
+  (`Game::accept_seat_pose`) allows the drift the ground and the wind put
+  on a hull. The sky pass draws the same band as a wall of thicker sand
+  sweeping the field.
+
+What the probe measures under each rule (a minute a round, the player
+kept alive, against the same rounds under a clear sky): no invariant,
+pile-up or grind anywhere; night and fog within the noise; rain and gusts
+put enemies against the border lane more often (border-stuck about 1.5
+to 2 times); snow on a map with a moat lets enemies over the ice to the
+island, and they cluster there more.
+
+## How a weathered frame is drawn
+
+`render/weather.rs` runs around pass 1 of `Game::render`:
+
+1. **The light map** (a field-sized target): cleared to the ambient, then
+   every light of `weather::lights` added in. Stored halved, so a pixel
+   can be lit to twice daylight.
+2. **The ground pass** (`static/weather_ground.fs`): the bare ground
+   tileset (`Game::paint_ground`, into its own target) drawn onto the
+   field with the sky's mark on it - snow cover in three steps, ice over
+   the water, wet earth, puddles on the road cells, splashes and rings on
+   the water. Water is the cell mask's word and the pixel's own blue
+   together, so a shore's grass in a water cell is ground. Everything else
+   on the floor - tread marks, scorches, rubble, oil, portals
+   (`Game::paint_floor_marks`) - lies over it, so a tank leaves dark
+   tracks in the snow, and the walls and hulls drawn later stay dry.
+3. **The field under the light**: the tiles, their glows and everything
+   standing (`paint_field_lit`).
+4. **The light pass** (`static/weather_light.fs`): that field multiplied
+   by the light map on the 2 px block grid, the colour fading toward a
+   blue-grey where it is dark and the edges darkened by the look's
+   vignette. Then what shines by its own light is drawn over it
+   (`paint_field_glowing`): the locate labels, the shots and their light,
+   the hits, flames and flares, the blasts, whatever is in the air and
+   the particles - as bright at night as at noon. The daylight's glow
+   pools under the shots are scaled down by the look's `lights`, since
+   the light map already lights the ground around every shot.
+5. **The sky pass** (`static/weather_sky.fs`): the air over everything -
+   heat haze shifting rows by whole 2 px blocks, fog banks and blowing
+   sand (both thinned within `weather_clear_radius_px` of every seat),
+   rain in three depths, snow in three depths, and the white of a
+   lightning strike. Fog, sand, rain and snow are lit by the light map, so
+   at night a headlight's beam shows in the fog and the rain glitters
+   where a fire burns.
+
+The stages ping-pong between `scene_target` and the weather's own target
+and always end in `scene_target`: under light and sky the field starts in
+`scene_target`, is lit into the weather's target and comes back through
+the sky; under one of the two it starts in the weather's target. Pass 2,
+the ripple re-blits and the dev server's screenshots read `scene_target`
+as they always have.
+
+Every banding - the light, the fog, the sand, the snow cover - is stepped
+with its edges dithered by a 2x2 Bayer pattern across the middle third of
+each step (`band` in the shaders), so a gradient reads as drawn bands with
+pixel-art edges rather than as a halftone. `light_bands` 0 draws smooth
+light; `light_dither` off steps it hard.
+
+## Lights
+
+`weather::lights` gathers every light the round throws, each already cast
+against the walls:
+
+- **Tanks**: a headlight cone ahead of every live hull
+  (`headlight_length_px`, an enemy's four fifths as long, warm white for a
+  seat and amber for an enemy), a lamp at the nose, and a glow in the
+  seat's team colour (`hull_glow_radius_px`) so no tank is lost in the
+  dark. A wreck burns until it is a dead hulk; a hull with afterburn glows.
+- **The round's fires**: burning ground cells, burning tiles, lit fuses,
+  fuel drums in the air.
+- **Portals**, pulsing blue.
+- **Blasts**, a big flash fading with the fireball's glow; a mushroom
+  cloud's reaches half as far again.
+- **Shots**: shells, bullets, plasma bolts, missiles, flame jets, laser
+  beams along their length, muzzle and impact flashes, and every hit the
+  particle layer is playing.
+- **The frogs and the pickups**, faintly, in their own colours
+  (`pickup_glow_strength`), so a lamp can find them.
+
+**Shadows** come from `weather::Occluders`: the map's cells, marked where a
+tile's `Material::blocks_light` (brick, iron, wood and the towers; glass lets light
+through, props are too low and trees too open to throw a hard edge). A
+light is drawn as a fan of rays, each walked across the grid until it
+enters a blocking cell (an Amanatides-Woo walk, one step per cell) and
+carried `light_wall_bleed_px` into it so the wall's near face is lit. The
+cell a light stands in never stops it, so a burning wall lights its
+neighbours. `light_shadows` off draws every ray to full reach. The fan is
+drawn with a vertex colour per ring down each ray (`RINGS`), bright at the
+source and falling off with distance, straight into raylib's batch.
+
+**Lightning** (`weather::lightning`) is a pure function of the round
+clock: a strike in most `lightning_gap_seconds` windows, a sharp flash and
+a second flicker, lifting the light map's ambient toward daylight while it
+lasts. A replica strikes when the room's round would, and a frozen round
+holds its flash. A strike is a whole-screen flash, so `screen_fx_intensity`
+(the knob that calms the kill flash and the camera shake) scales it too,
+and 0 leaves the storm without one.
+
+## Knobs
+
+The `weather` tuning group, every row `Live` but `weather_override`
+(`Restart`):
+
+- `weather_override`, `weather_strength`, `weather_vignette`.
+- Rules: `weather_rules`, `night_sight_factor`, `fog_sight_factor`,
+  `rain_grip_factor`, `ice_grip_factor`, `ice_traction_factor`,
+  `ice_brake_factor`, `sand_gust_speed`, `sand_gust_gap_seconds`,
+  `sand_gust_seconds`, `sand_gust_front_speed`, `sand_gust_spread_deg`.
+  The ice is laid when a round starts, so `weather_rules` reaches it on
+  the next one.
+- Light: `night_ambient`, `light_bands`, `light_dither`, `light_shadows`,
+  `light_wall_bleed_px`.
+- Lamps: `headlight_length_px`, `headlight_half_angle_deg`,
+  `headlight_strength`, `hull_glow_radius_px`, `hull_glow_strength`,
+  `shot_light_strength`, `fire_light_radius_px`, `fire_light_strength`,
+  `blast_light_radius_px`, `pickup_glow_strength`.
+- Layers: `rain_density`, `rain_speed_px`, `rain_slant`,
+  `rain_splash_rate`, `lightning_gap_seconds`, `lightning_strength`,
+  `fog_density`, `fog_drift_speed`, `weather_clear_radius_px`,
+  `sand_density`, `sand_wind_speed`, `snow_density`, `snow_cover`,
+  `haze_amplitude_px`, `haze_speed`.
+
+## What it costs
+
+- Three field-sized RGBA8 targets (about 7 MB at 1088 x 544), made on the
+  first weathered frame and re-made when the field changes size, and the
+  cell mask, one texel per map cell, uploaded when it changes.
+- Per frame: the light list and its raycasts on the CPU (a few thousand
+  grid steps), the light fans (tens of thousands of vertices on a busy
+  night), and up to four full-field shader blits.
+- A clear sky makes no target and runs no blit.
+
+The shaders' clock wraps every half hour (`CLOCK_WRAP_SECONDS`) and their
+noise hashes wrapped lattice points, so a long round never outgrows a
+float; the GLSL ES 100 twins ask for high precision where the GPU has it.
+A driver that cannot compile the passes draws every sky clear, like the
+shot shaders' fallback.
+
+## Tests
+
+- `weather::tests`: every sky but clear has a plan and strength 0 has
+  none, the knobs scale their layer, the override outranks the map, a
+  random sky is the seed's, never `Random`, and every sky comes up about
+  as often (9000 seeds), a random map's replay is drawn under its sky, the
+  page URL names a weather, lightning is a pure function of the clock and
+  strikes now and then, walls stop rays and glass does not, a cone fades
+  across its edge, a hull's beam is cut short by the wall in front of it,
+  every light on a shipped map is finite and inside its radius, gusts come
+  in most windows but the first and blow only where their band is, and
+  with `weather_rules` off no sky changes a number.
+- `simulation::weather_tests`: night and fog shorten how far an enemy
+  sees (a sighting between the reaches, both ways), the rain loosens every
+  hull's grip, snow freezes a lake into ice a hull drives across and the
+  router goes over, ice slides where the ground would stop a hull and
+  takes tracks, a sandstorm's gusts carry an idle hull downwind.
+- `map::toml_tests::weather_round_trips_and_defaults_to_clear`, the
+  builder's settings test, the dev server's
+  `weather_sets_the_rounds_sky_and_every_reader_reports_it` (random
+  included: a `restart {seed}` brings the seed's sky back),
+  `net::apply::tests::a_random_sky_is_the_rooms_on_every_replica` and
+  `a_replica_plays_by_the_rooms_sky` (every sky, the ice and the sight
+  the room's), and
+  `text_tests` (every weather name fits its settings row in every
+  language).
+- The picture itself is checked the way every effect is: `just run-dev`,
+  `tuning_set {patch: {weather_override: N}}`, `step`, `screenshot`.
+
+## Not in yet
+
+- **Choosing the sky of a room**: the lobby's start face has steppers for
+  the map and the mission but none for the weather, so a room plays its
+  map's own key; a stepper wants a `Create` field, which is a protocol
+  bump.
+- **An AI that knows the weather**: enemies drive on ice and in gusts as
+  they drive anywhere, and only the rules slow them down.
+- **Thumbnails**: `mapshot` draws on the CPU canvas, which has no shaders,
+  so a thumbnail shows its map under a clear sky.
+- **A day passing**: dusk falling into night over a wave round.
+- **Sound**: there is no audio yet; rain and thunder want it.

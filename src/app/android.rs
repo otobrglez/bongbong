@@ -5,7 +5,8 @@
 //! stderr, which Android discards, so the first thing this does is route
 //! stderr into logcat under the tag `bongbong`.
 use clap::Parser as _;
-use std::ffi::{c_char, c_int, c_void, CString};
+use std::ffi::{c_char, c_int, c_void, CStr, CString};
+use std::path::PathBuf;
 
 #[link(name = "log")]
 unsafe extern "C" {
@@ -53,6 +54,39 @@ pub fn platform_languages() -> Vec<String> {
         })
         .filter(|tag| !tag.is_empty())
         .collect()
+}
+
+unsafe extern "C" {
+    /// raylib's handle on the native activity's glue (rcore_android.c).
+    fn GetAndroidApp() -> *mut c_void;
+}
+
+/// The app's private files directory - the activity's
+/// `internalDataPath`, where raylib's own file writes land - which is
+/// where the level progress is kept (docs/levels.md). Read through the
+/// NDK's stable C layouts: `struct android_app`'s `activity` is its
+/// fourth pointer, `ANativeActivity`'s `internalDataPath` its fifth.
+pub fn data_dir() -> Option<PathBuf> {
+    // SAFETY: raylib's `android_main` set the glue up before it called
+    // the game, and it and its activity live for the process; each
+    // pointer is checked before it is followed, and the path is a
+    // NUL-terminated string the activity owns.
+    unsafe {
+        let app = GetAndroidApp() as *const *const c_void;
+        if app.is_null() {
+            return None;
+        }
+        let activity = *app.add(3) as *const *const c_char;
+        if activity.is_null() {
+            return None;
+        }
+        let path = *activity.add(4);
+        if path.is_null() {
+            return None;
+        }
+        let path = CStr::from_ptr(path).to_str().ok()?;
+        (!path.is_empty()).then(|| PathBuf::from(path))
+    }
 }
 
 /// One line to logcat, tag `bongbong`.

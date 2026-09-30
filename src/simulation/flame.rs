@@ -140,6 +140,7 @@ impl Game {
                     let entered = !self.flame_contacts.contains(&entity);
                     tank.take_damage(d, MAX_DAMAGE);
                     tank.mark_hit();
+                    tank.credit(jet.owner);
                     tank.burn_timer = t.flame_afterburn_seconds;
                     (tank.is_wreck(), tank.position, tank.owner(), entered)
                 };
@@ -148,6 +149,7 @@ impl Game {
                     let target = match owner {
                         crate::shell::Owner::Player(player) => HitTarget::Player { player },
                         crate::shell::Owner::Enemy(slot) => HitTarget::Enemy { slot },
+                        crate::shell::Owner::Tower { .. } => unreachable!("no tank is owned by a tower"),
                     };
                     f.events.push(Event::Hit { target, damage: 0.0, killed, x: pos.x, y: pos.y });
                 }
@@ -201,8 +203,8 @@ impl Game {
                 if tank.is_wreck() || tank.burn_timer <= 0.0 {
                     continue;
                 }
-                // Wading puts the fire out (docs/water.md).
-                if self.water.depth_at(tank.position) != crate::ground::Depth::Dry {
+                // Wading puts the fire out (docs/water.md); ice does not.
+                if self.water.depth_at(tank.position).is_wet() {
                     tank.burn_timer = 0.0;
                     continue;
                 }

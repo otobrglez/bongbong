@@ -509,6 +509,18 @@ pub enum Depth {
     /// Open lake water (`WATER_SHORE[0b1111]`): a hull cannot enter.
     /// Shots fly over it.
     Deep,
+    /// Water frozen over under a snowy sky (`WaterLayout::freeze`), ford
+    /// and lake alike: open ground a hull drives on and slides across,
+    /// with no current, that still takes no fire, heat or scorch.
+    Ice,
+}
+
+impl Depth {
+    /// Liquid water: a ford or a lake, not ice. What wets a track, sprays,
+    /// puts a fire on a hull out and draws a frog's hop.
+    pub fn is_wet(self) -> bool {
+        matches!(self, Depth::Shallow | Depth::Deep)
+    }
 }
 
 /// The rules' view of a map's water, built from the map's cells alone
@@ -552,6 +564,23 @@ impl WaterLayout {
     /// True when the map has no water at all - every rule short-circuits.
     pub fn is_empty(&self) -> bool {
         self.depth.iter().all(|d| *d == Depth::Dry)
+    }
+
+    /// Freeze every water cell over (a snowy round, docs/weather.md): no
+    /// deep cell is left for a collider or the nav grid to block, no ford
+    /// for the router to weigh, and no current runs.
+    pub fn freeze(&mut self) {
+        for d in &mut self.depth {
+            if *d != Depth::Dry {
+                *d = Depth::Ice;
+            }
+        }
+        self.current.iter_mut().for_each(|c| *c = false);
+    }
+
+    /// True once `freeze` has iced the water over.
+    pub fn is_frozen(&self) -> bool {
+        self.depth.contains(&Depth::Ice)
     }
 
     fn idx(&self, pos: Position) -> Option<usize> {

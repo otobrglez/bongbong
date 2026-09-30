@@ -29,6 +29,7 @@ mod hits;
 mod missiles;
 pub mod present;
 mod props;
+mod towers;
 pub use props::{FlyingDrum, GroundFire};
 pub(crate) use props::tile_rubble;
 pub mod replica;
@@ -40,7 +41,11 @@ mod lagcomp_tests;
 mod props_tests;
 #[cfg(test)]
 mod seat_tests;
+#[cfg(test)]
+mod tower_tests;
 mod waves;
+#[cfg(test)]
+mod weather_tests;
 mod weapons;
 
 pub use waves::{RollIn, WaveStatus};
@@ -293,6 +298,24 @@ pub enum Outcome {
     Lost,
 }
 
+/// What a round's end screen reports (docs/levels.md): how long it was
+/// played and how many enemies went down, and to whom.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+pub struct RoundStats {
+    /// Seconds of play: the round clock (`Game::time`, which stands still
+    /// behind the mission banner and while paused) when the round ended,
+    /// or now while it runs.
+    pub seconds: f32,
+    /// Enemy tanks wrecked this round, by anyone or anything.
+    pub destroyed: u32,
+    /// Every enemy the round brings: the band, or all of its waves.
+    pub enemies: u32,
+    /// Of `destroyed`, the ones each seat dealt the last damage to
+    /// (`Tank::last_hit_by`). A wreck no seat touched - a drum, a fire, a
+    /// frog's bite - counts for the team alone.
+    pub by_seat: [u32; MAX_SEATS],
+}
+
 /// One thing that happened during a frame, for tooling (the dev server's
 /// event feed, headless tests): appended by the phase that caused it and
 /// readable through `Game::events` until the next `update` clears it.
@@ -397,6 +420,25 @@ pub enum Event {
     /// cosmetic - it deals no damage - but recorded so tooling and the
     /// presentation layer can see it.
     CookOff { x: f32, y: f32 },
+    /// A tesla coil's bolt, from its terminal at (`x0`, `y0`) to the tank
+    /// it struck at (`x1`, `y1`); `chained` for a jump on from the first
+    /// target (docs/defence-towers-prd.md section 4). The strike itself is
+    /// the `Hit` that follows.
+    TeslaStrike { x0: f32, y0: f32, x1: f32, y1: f32, chained: bool },
+    /// A tower fired from its muzzle at (`x`, `y`) along `heading`: a gun
+    /// tower's burst began, or a bio slush lobbed a glob (`kind`:
+    /// `gun_tower`, `bio_slush`).
+    TowerFired { kind: &'static str, x: f32, y: f32, heading: f32 },
+    /// A glob of ooze landed at (`x`, `y`) and splashed.
+    GlobSplashed { x: f32, y: f32 },
+    /// Tank `slot` was coated in ooze, by a splash or a puddle. A coat on
+    /// a tank already coated refreshes it without an event.
+    Slimed { slot: usize },
+    /// Tank `slot` drove into water and washed its ooze off.
+    SlimeWashed { slot: usize },
+    /// A tower pack restored the `side` tower at (`x`, `y`) to full health
+    /// and put it out.
+    TowerRepaired { side: Side, x: f32, y: f32 },
     /// Rapier quarantined `bodies` bodies and `colliders` colliders on one
     /// fixed step because their state went non-finite (see
     /// `Physics::quarantined`). A solver blow-up, never normal play - the
@@ -643,8 +685,23 @@ pub struct Game {
     /// Seconds since the round started; drives animation. Read by `render`.
     pub(crate) time: f32,
     pub(crate) outcome: Outcome,
-    /// Seconds until the automatic restart once the round has ended.
+    /// Seconds until the automatic restart once the round has ended - or,
+    /// on a held end screen, until the caller takes over.
     pub(crate) restart_timer: f32,
+    /// The end screen's countdown runs out into a hold instead of a
+    /// restart: `restart_timer` counts `restart_delay` down to zero and
+    /// stays there until the caller starts the next round (`init`, or the
+    /// R key's restart). A level's end screen is held, because where it
+    /// goes - the next level or the same one again - is the session's to
+    /// decide (docs/levels.md). A setting, kept across restarts.
+    pub hold_end_screen: bool,
+    /// The round clock when the round ended (`end_round`), for
+    /// `round_stats`; `None` while it runs.
+    ended_at: Option<f32>,
+    /// Enemy wrecks this round, and the ones credited to each seat
+    /// (`credit_wreck`).
+    enemies_destroyed: u32,
+    wrecks_by_seat: [u32; MAX_SEATS],
     /// Shared enemy "last known player position", refreshed every frame any
     /// enemy has the player within ENEMY_VIEW_RANGE and cleared once
     /// `alert_timer` runs out - see `ai::Ai::think`'s `alert` parameter.
@@ -727,6 +784,19 @@ pub struct Game {
     /// Tanks and frogs a stream touched last frame, sorted - the first
     /// frame of contact during a hold is what `Event::Hit` records.
     pub(crate) flame_contacts: Vec<Entity>,
+    /// The defence towers' weapons (docs/defence-towers-prd.md), keyed by
+    /// the cell their `Obstacle` stands on. A `BTreeMap` because the tower
+    /// phase walks it and draws RNG, so its order is part of a replay.
+    pub(crate) towers: BTreeMap<(i32, i32), crate::tower::Tower>,
+    /// Globs of ooze in the air, oldest first (`towers::resolve_globs`).
+    pub(crate) globs: Vec<crate::tower::Glob>,
+    /// Ooze on the ground, per cell: slimes whatever drives over it until
+    /// it dries or a fire takes it. Ordered like `heat`.
+    pub(crate) ooze: BTreeMap<(i32, i32), crate::tower::OozePuddle>,
+    /// Tesla bolts still in their short display window.
+    pub(crate) tesla_bolts: Vec<crate::tower::TeslaBolt>,
+    /// What dead towers left on the ground, oldest first.
+    pub(crate) tower_ruins: Vec<crate::tower::TowerRuin>,
     /// Frozen simulation plus a "PAUSED" overlay. Cleared by `init`.
     pub(crate) paused: bool,
     /// Drop shadows on/off (toggle key, and `--no-shadows` at startup).
@@ -756,6 +826,17 @@ pub struct Game {
     pub seed_override: Option<u64>,
     /// The seed this round actually ran with (see `round_seed()`).
     round_seed: u64,
+    /// The sky this round is fought and drawn under (docs/weather.md),
+    /// fixed by `init` from the map's `weather` key, the round seed (a
+    /// `random` sky's pick) and, unless `weather_from_map`, the
+    /// `weather_override` knob - `Game::weather()`. Never `Random`.
+    pub(crate) weather: crate::map::Weather,
+    /// `init` reads the map's `weather` key alone, not the window's
+    /// `weather_override` knob: set on a room's replica and sandbox and on
+    /// the rig's authority, because a room's round is fought under its
+    /// map's sky and every client has to draw and drive under that one.
+    /// Kept across restarts.
+    pub weather_from_map: bool,
     /// The round's single RNG stream - see the module doc. `None` only
     /// before the first `init`. `update` takes it into the frame context
     /// and puts it back at its end.
@@ -977,12 +1058,20 @@ impl Game {
         let seed = self.seed_override.unwrap_or_else(|| rand::rng().random());
         self.round_seed = seed;
         let mut rng = SmallRng::seed_from_u64(seed);
+        // The sky is the round's from here on: the rules read it (a
+        // frozen lake below, sight, grip and gusts every frame) as the
+        // renderer does, so it is settled once rather than asked of the
+        // knobs frame by frame. A hash of the seed, no RNG.
+        self.weather = crate::weather::in_force(self.map.weather, seed, self.weather_from_map, &tuning());
 
         self.world = hecs::World::new();
         self.tracks.clear();
         self.time = 0.0;
         self.outcome = Outcome::Playing;
         self.restart_timer = 0.0;
+        self.ended_at = None;
+        self.enemies_destroyed = 0;
+        self.wrecks_by_seat = [0; MAX_SEATS];
         // The R-key restart is allowed while paused; a new round must not
         // start frozen.
         self.paused = false;
@@ -1014,6 +1103,11 @@ impl Game {
         self.flame_jets.clear();
         self.heat.clear();
         self.flame_contacts.clear();
+        self.towers.clear();
+        self.globs.clear();
+        self.ooze.clear();
+        self.tesla_bolts.clear();
+        self.tower_ruins.clear();
         self.frame = 0;
         self.hit_history.clear();
         self.seat_view = [None; MAX_SEATS];
@@ -1055,6 +1149,12 @@ impl Game {
                 &painted(|o| matches!(o, CellObject::Water)),
             )
         };
+        // Under a snowy sky every lake and ford is ice (docs/weather.md):
+        // no deep cell is left for a collider, a spawn roll or the nav
+        // grid to keep a hull off, and no current runs.
+        if crate::weather::freezes(self.weather, &tuning()) {
+            self.water.freeze();
+        }
         let deep_cells: HashSet<(i32, i32)> = self.water.deep_grid_cells().collect();
         for (gx, gy) in self.water.deep_grid_cells() {
             let half = battlefield::tile_hull_half_extent(&deep_cells, gx, gy, OBSTACLE_GRID_SIZE * 0.5);
@@ -1100,6 +1200,8 @@ impl Game {
         // The layout is final now, so every wall tile can work out which of
         // its faces are exposed. Only ever recomputed again on destruction.
         self.refresh_edge_masks();
+        // The towers' weapons, one per tower tile. No RNG.
+        self.build_towers(width, height);
         // Tall grass: whole cells from the map, each scattering a handful
         // of tufts. Hashed from position, so this draws no round RNG.
         self.grass_cells = map_spawn.grass_cells.clone();
@@ -1356,7 +1458,7 @@ impl Game {
                 // The frog was created at full health a few lines up, so
                 // no frog pack is ever rolled here and round setup draws
                 // the RNG it always drew.
-                maybe_spawn_health_slot_bonuses(&mut self.world, &self.map, pos, width, height, false, &mut rng);
+                maybe_spawn_health_slot_bonuses(&mut self.world, &self.map, pos, width, height, BonusGates::default(), &mut rng);
             }
         }
 
@@ -1466,6 +1568,7 @@ impl Game {
             self.rollin_phase(&mut f);
             self.enemy_phase(&mut f, &grid);
             self.wave_phase(&mut f);
+            self.tower_phase(&mut f);
             self.spawn_pending(&mut f);
             self.guide_missiles(&mut f);
             self.resolve_lasers(&mut f);
@@ -1478,9 +1581,11 @@ impl Game {
             self.resolve_projectiles::<Bullet>(&mut f, true);
             self.resolve_projectiles::<Plasma>(&mut f, true);
             self.resolve_missiles(&mut f, true);
+            self.resolve_globs(&mut f, true);
             self.tick_cookoffs(&mut f);
             self.tick_burns(&mut f);
             self.tick_fires(&mut f, true);
+            self.tick_ooze(&mut f);
             self.tick_fuses(&mut f);
             self.tick_launches(&mut f);
             self.tick_grass(f.dt);
@@ -1500,6 +1605,7 @@ impl Game {
             self.resolve_projectiles::<Bullet>(&mut f, false);
             self.resolve_projectiles::<Plasma>(&mut f, false);
             self.resolve_missiles(&mut f, false);
+            self.resolve_globs(&mut f, false);
             self.tick_cookoffs(&mut f);
             self.tick_burns(&mut f);
             self.tick_fires(&mut f, false);
@@ -1508,11 +1614,15 @@ impl Game {
             self.tick_grass(f.dt);
             self.explosions(&mut f, false);
             self.cleanup_done();
-            self.restart_timer -= dt;
-            if self.restart_timer <= 0.0 {
-                self.finish_frame(f);
-                self.init(width, height);
-                return;
+            if self.hold_end_screen {
+                self.restart_timer = (self.restart_timer - dt).max(0.0);
+            } else {
+                self.restart_timer -= dt;
+                if self.restart_timer <= 0.0 {
+                    self.finish_frame(f);
+                    self.init(width, height);
+                    return;
+                }
             }
         }
         self.hit_history.record(&self.world, self.frame);
@@ -1589,6 +1699,7 @@ impl Game {
             scorch.age += dt;
         }
         self.laser_beams.retain_mut(|beam| !beam.tick(dt));
+        self.tick_tower_effects(dt);
     }
 
     /// Per-entity timers: every tank's cooldowns/recharge/wreck burn,
@@ -1672,10 +1783,10 @@ impl Game {
             tank.ease_ring_position(dt);
             tank.tick_minigun_spin(dt);
             let depth = self.water.depth_at(tank.position);
-            if depth == crate::ground::Depth::Dry {
-                tank.wet_timer = (tank.wet_timer - dt).max(0.0);
-            } else {
+            if depth.is_wet() {
                 tank.wet_timer = wet_seconds;
+            } else {
+                tank.wet_timer = (tank.wet_timer - dt).max(0.0);
             }
             if let Some(before) = tank.track_from.replace(tank.position) {
                 lay_tracks(&mut self.tracks, tank, before, depth);
@@ -1738,12 +1849,14 @@ impl Game {
         let Some(entity) = self.seats.get(seat).copied().flatten() else { return };
         // Disjoint borrows: `drive_tank` wants the solver and the hull at
         // once, and they are two fields of the same struct.
-        let Game { world, physics, water, .. } = self;
+        let Game { world, physics, water, weather, time, .. } = self;
         let Ok(mut tank) = world.get::<&mut Tank>(entity) else { return };
         if tank.body.is_none() || tank.is_wreck() {
             return;
         }
-        let footing = Footing::at(water, tank.position);
+        // The sandbox's clock stands at the last snapshot's tick, so a
+        // gust reaches the predicted hull when the drawn sand front does.
+        let footing = Footing::at(water, *weather, tank.position, *time);
         drive_tank(physics, &mut tank, intent, dt, footing);
         physics.step();
         // The solver moved the body; the tank's own position is what
@@ -1812,7 +1925,11 @@ impl Game {
                 return Err("still entering");
             }
             let ticks = (reach_ticks as f32).max(POSE_REACH_TICKS);
-            (tank.position, tank.effective_speed() * PHYSICS_FIXED_DT * ticks + POSE_REACH_SLACK_PX)
+            // The ground's own drift - a current, a gust - carries a hull
+            // past its top speed, and the rules put it there.
+            let flow = Footing::at(&self.water, self.weather, tank.position, self.time).flow;
+            let drift = (flow.x * flow.x + flow.y * flow.y).sqrt();
+            (tank.position, (tank.effective_speed() + drift) * PHYSICS_FIXED_DT * ticks + POSE_REACH_SLACK_PX)
         };
         let (dx, dy) = (pose.position.x - from.x, pose.position.y - from.y);
         if (dx * dx + dy * dy).sqrt() > reach {
@@ -2184,6 +2301,12 @@ impl Game {
         let player_frog_full = self.frog.is_some_and(|e| with_frog(&self.world, e, Frog::at_full_health));
         let enemy_frog_full = self.enemy_frog.is_some_and(|e| with_frog(&self.world, e, Frog::at_full_health));
         let own_frog_full = |e: Entity| if self.is_player(e) { player_frog_full } else { enemy_frog_full };
+        // The tower pack's rule, the frog pack's shape: left alone while
+        // every standing tower of the collector's side is whole and not
+        // burning (docs/defence-towers-prd.md section 9).
+        let player_towers_want = self.tower_pack_wanted(Side::Player);
+        let enemy_towers_want = self.tower_pack_wanted(Side::Enemy);
+        let towers_want = |e: Entity| if self.is_player(e) { player_towers_want } else { enemy_towers_want };
         let collected: Vec<(Entity, Entity, PickupKind)> = self
             .world
             .query::<(Entity, &Pickup)>()
@@ -2204,6 +2327,7 @@ impl Game {
                     // player's call to make.
                     .filter(|&&(e, _, _)| with_tank(&self.world, e, |t| t.wants_pickup(pickup.kind)))
                     .filter(|&&(e, _, _)| pickup.kind != PickupKind::FrogHealth || !own_frog_full(e))
+                    .filter(|&&(e, _, _)| pickup.kind != PickupKind::TowerPack || towers_want(e))
                     .find(|&&(_, center, half)| pickup.in_reach(center, half, pad))
                     .map(|&(tank_entity, _, _)| (pickup_entity, tank_entity, pickup.kind))
             })
@@ -2262,9 +2386,16 @@ impl Game {
                     // the frog can't be touched while this `&mut Tank`
                     // borrow is live - see just below.
                     PickupKind::FrogHealth => {}
+                    // Nothing on the tank either: it repairs its side's
+                    // towers, just below.
+                    PickupKind::TowerPack => {}
                 }
                 tank.owner_slot()
             };
+            if kind == PickupKind::TowerPack {
+                let side = if self.is_player(tank_entity) { Side::Player } else { Side::Enemy };
+                self.repair_towers(f, side);
+            }
             if kind == PickupKind::FrogHealth {
                 let frog = if self.is_player(tank_entity) { self.frog } else { self.enemy_frog };
                 if let Some(frog) = frog {
@@ -2285,14 +2416,14 @@ impl Game {
         if slot_backed_count(&self.world, &self.map_pickup_slots) < self.map_pickup_slots.len() {
             self.pickup_respawn_timer -= f.dt;
             if self.pickup_respawn_timer <= 0.0 {
-                let frog_hurt = self.frog_wants_a_pack();
+                let hurt = BonusGates { frog: self.frog_wants_a_pack(), towers: self.player_tower_hurt() };
                 let respawned = respawn_from_slots(
                     &mut self.world,
                     &self.map,
                     &self.map_pickup_slots,
                     f.width,
                     f.height,
-                    frog_hurt,
+                    hurt,
                     &mut f.rng,
                 );
                 if let Some((pos, kind)) = respawned {
@@ -2451,7 +2582,7 @@ impl Game {
         // A seat whose client owns the hull was put where it is by
         // `accept_seat_pose` before this tick; the stick only fires.
         if self.seat_owned[index] != self.frame {
-            let footing = Footing::at(&self.water, tank.position);
+            let footing = Footing::at(&self.water, self.weather, tank.position, self.time);
             drive_tank(&mut self.physics, tank, intent, f.dt, footing);
         }
         tick_queued_shots(&mut self.physics, f, tank, owner);
@@ -2557,7 +2688,8 @@ impl Game {
         // stays hidden is genuinely *lost* once `enemy_alert_hold_seconds`
         // runs out, rather than merely un-shootable.
         let alert_before = self.alert_position.filter(|_| self.alert_timer > 0.0);
-        let view_range = tuning().enemy_view_range;
+        // How far an enemy sees is the sky's say too (docs/weather.md).
+        let view_range = self.enemy_sight();
         let mut seen: Option<(f32, Position)> = None;
         for p in players.iter().filter(|p| !p.concealed && !p.wreck && !p.entering) {
             for m in &movers[players.len()..] {
@@ -2613,7 +2745,7 @@ impl Game {
         let mut engaged_frog: Vec<(Entity, Position)> = Vec::new();
         for (entity, tank, ai) in self.world.query::<(Entity, &Tank, &Ai)>().iter() {
             let (target, hunting) = target_of(ai);
-            let status = if guard_holds(ai) { EngageStatus::OutOfRange } else { engage_status(tank, ai, target) };
+            let status = if guard_holds(ai) { EngageStatus::OutOfRange } else { engage_status(tank, ai, target, view_range) };
             report.tanks.push(EngageTank::new(entity, tank.owner_slot(), status));
             if status == EngageStatus::Engaged {
                 if hunting.is_some() {
@@ -2717,6 +2849,9 @@ impl Game {
         let breach_pad = tuning().shell_hit_half_extent;
         let breach_reach_extra = tuning().enemy_breach_reach_px;
 
+        // Towers an enemy may hold a grudge against (`Ai::notify_tower_hit`).
+        let standing_towers = if self.towers.is_empty() { Vec::new() } else { self.standing_towers() };
+
         // --- collect pass: perception, `think`, aim and fire, exactly as
         // before. Only the impulse is deferred. ---
         let mut pending: Vec<Pending> = Vec::new();
@@ -2729,6 +2864,13 @@ impl Game {
                     .map(|(material, burning)| WallAhead { material, burning })
             });
             let engage_target = self.last_engage.target(entity);
+            if let Some(at) = ai.grudge_target() {
+                let sight = standing_towers
+                    .iter()
+                    .find(|&&(p, _)| p == at)
+                    .map(|&(_, tile)| f.terrain.line_of_sight_from(tile, tank.position, at));
+                ai.set_grudge_sight(sight);
+            }
             let (mut target, mut hunting) = target_of(ai);
             // A hunter that cannot route to the frog and holds no slot on
             // its ring (every slot rejected: off the map, unreachable from
@@ -2810,6 +2952,7 @@ impl Game {
                     player_line_of_sight,
                     player_hidden,
                     walls_ahead,
+                    view_range,
                 )
             });
             if let Some(before) = before {
@@ -2882,7 +3025,7 @@ impl Game {
         for p in &pending {
             let intent = self.commander.apply(p.slot, p.intent);
             with_tank_mut(&self.world, p.entity, |tank| {
-                let footing = Footing::at(&self.water, tank.position);
+                let footing = Footing::at(&self.water, self.weather, tank.position, self.time);
                 drive_tank_with(&mut self.physics, tank, intent, f.dt, p.current, p.facing_before, footing);
             });
         }
@@ -3456,6 +3599,7 @@ impl Game {
             while i < f.kills.len() {
                 let (center, victim) = f.kills[i];
                 i += 1;
+                self.credit_wreck(victim);
                 f.events.push(Event::Wreck { slot: victim.slot(), x: center.x, y: center.y });
                 self.wreck_fx(f, center);
                 self.apply_explosion(f, center, victim);
@@ -3465,6 +3609,20 @@ impl Game {
                 j += 1;
                 self.apply_blast(f, blast, live);
             }
+        }
+    }
+
+    /// Count a wreck for `round_stats`: an enemy's goes to the round's
+    /// total, and to the seat that last damaged it, if any did. A tank is
+    /// wrecked once (see `explosions`), so it is counted once.
+    fn credit_wreck(&mut self, victim: Owner) {
+        if victim.is_player() {
+            return;
+        }
+        self.enemies_destroyed += 1;
+        let by = self.world.query::<&Tank>().iter().find(|t| t.owner() == victim).and_then(|t| t.last_hit_by);
+        if let Some(count) = by.and_then(|seat| self.wrecks_by_seat.get_mut(seat as usize)) {
+            *count += 1;
         }
     }
 
@@ -3585,6 +3743,7 @@ impl Game {
 
     fn end_round(&mut self, f: &mut Frame, outcome: Outcome) {
         self.outcome = outcome;
+        self.ended_at = Some(self.time);
         self.restart_timer = tuning().restart_delay;
         f.events.push(Event::RoundEnded { outcome });
     }
@@ -3750,6 +3909,14 @@ impl Game {
                 self.world.query::<(&Tank, &Ai)>().iter().filter(|(tank, _)| !tank.is_wreck()).map(|(tank, _)| tank.position).collect();
             grid.surcharge(standing.into_iter(), t.route_crowd_cost as u32);
         }
+        // The player's towers and the ooze on the ground (docs/defence-
+        // towers-prd.md section 9): cells an enemy would rather go round.
+        if !self.towers.is_empty() {
+            grid.surcharge(self.player_tower_reach(width, height).into_iter(), t.route_tower_cost as u32);
+        }
+        if !self.ooze.is_empty() {
+            grid.surcharge(self.ooze_route_cells().into_iter(), t.bio_puddle_path_cost as u32);
+        }
         grid.label();
         for &(pos, _) in &players {
             grid.add_field(pos);
@@ -3782,6 +3949,21 @@ impl Game {
 
     pub fn outcome(&self) -> Outcome {
         self.outcome
+    }
+
+    /// The round's time and wreck count so far - the end screen's
+    /// numbers once `outcome` is decided.
+    pub fn round_stats(&self) -> RoundStats {
+        let enemies = match self.spawn_plan {
+            SpawnPlan::Band { .. } => self.band_enemy_count as u32,
+            SpawnPlan::Waves { waves, .. } => (0..waves).map(|i| self.spawn_plan.wave_size(i)).sum(),
+        };
+        RoundStats {
+            seconds: self.ended_at.unwrap_or(self.time),
+            destroyed: self.enemies_destroyed,
+            enemies,
+            by_seat: self.wrecks_by_seat,
+        }
     }
 
     /// `update` calls so far this round (see the `frame` field).
@@ -3861,7 +4043,7 @@ impl Game {
             .world
             .query::<&Tank>()
             .iter()
-            .filter(|t| !t.is_wreck() && self.water.depth_at(t.position) != crate::ground::Depth::Dry)
+            .filter(|t| !t.is_wreck() && self.water.depth_at(t.position).is_wet())
             .map(|t| {
                 let speed = t.body.map_or(0.0, |b| {
                     let v = self.physics.velocity(b);
@@ -4082,8 +4264,9 @@ struct Pending {
     facing_before: f32,
 }
 
-/// What the ground under a hull does to its drive this frame
-/// (docs/water.md): dry ground leaves everything at 1 and the water still.
+/// What the ground and the sky do to a hull's drive this frame
+/// (docs/water.md, docs/weather.md "The rules"): dry ground under a clear
+/// sky leaves everything at 1 and the air and the water still.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) struct Footing {
     /// Fraction of the commanded top speed and of `tank_accel_force` the
@@ -4091,25 +4274,50 @@ pub(crate) struct Footing {
     pace: f32,
     /// Fraction of `tank_turn_grip_force` the hull keeps.
     grip: f32,
-    /// The water's own velocity: the frame the hull drives relative to,
-    /// so a hull that stops in a current drifts with it.
+    /// Fraction of `tank_accel_force` its tracks get on top of `pace`:
+    /// less than 1 where they spin (ice).
+    traction: f32,
+    /// Fraction of `tank_decel_curve_rate` it brakes with: less than 1
+    /// where it coasts (ice).
+    brake: f32,
+    /// The frame the hull drives relative to - the water's current, a
+    /// sandstorm's gust - so a hull that stops in it drifts with it.
     flow: Position,
     /// In water at all - drops a speed boost and wets the tracks.
     wading: bool,
 }
 
 impl Footing {
-    pub(crate) const DRY: Footing = Footing { pace: 1.0, grip: 1.0, flow: Position::new(0.0, 0.0), wading: false };
+    pub(crate) const DRY: Footing =
+        Footing { pace: 1.0, grip: 1.0, traction: 1.0, brake: 1.0, flow: Position::new(0.0, 0.0), wading: false };
 
-    pub(crate) fn at(water: &crate::ground::WaterLayout, pos: Position) -> Footing {
-        match water.depth_at(pos) {
+    /// The footing at `pos` at round time `time` under the round's `sky`:
+    /// the water's (a ford slows and loosens, ice slides) and then the
+    /// sky's on top (wet ground loosens every hull, a gust carries it).
+    pub(crate) fn at(water: &crate::ground::WaterLayout, sky: crate::map::Weather, pos: Position, time: f32) -> Footing {
+        let t = tuning();
+        let mut footing = match water.depth_at(pos) {
             crate::ground::Depth::Dry => Footing::DRY,
-            _ => {
-                let t = tuning();
+            crate::ground::Depth::Ice => Footing {
+                grip: t.ice_grip_factor,
+                traction: t.ice_traction_factor,
+                brake: t.ice_brake_factor,
+                ..Footing::DRY
+            },
+            crate::ground::Depth::Shallow | crate::ground::Depth::Deep => {
                 let flow = if water.pushes_south(pos) { t.water_current_speed } else { 0.0 };
-                Footing { pace: t.water_speed_factor, grip: t.water_grip_factor, flow: Position::new(0.0, flow), wading: true }
+                Footing { pace: t.water_speed_factor, grip: t.water_grip_factor, flow: Position::new(0.0, flow), wading: true, ..Footing::DRY }
             }
+        };
+        let wet = crate::weather::grip_factor(sky, &t);
+        if wet != 1.0 {
+            footing.grip *= wet;
         }
+        let wind = crate::weather::gust_at(sky, pos, time, &t);
+        if wind.x != 0.0 || wind.y != 0.0 {
+            footing.flow = Position::new(footing.flow.x + wind.x, footing.flow.y + wind.y);
+        }
+        footing
     }
 }
 
@@ -4179,7 +4387,10 @@ fn drive_tank_with(
     // Nothing but `simulation::command` ever sets it; the player and every
     // `Ai` leave it at 0, so `scale` is 1.0 and this is a no-op multiply.
     let along_x = tank.facing_along_x();
-    let scale = intent.speed_scale() * footing.pace;
+    // Ooze slows a hull like a ford does (docs/defence-towers-prd.md
+    // section 6): the top speed and the drive together.
+    let pace = footing.pace * tank.slime_pace();
+    let scale = intent.speed_scale() * pace;
     tank.throttle = intent.speed_scale();
     let (current_on, target_on, current_off) = if along_x {
         (current.x, target.x * scale, current.y)
@@ -4190,13 +4401,13 @@ fn drive_tank_with(
     let want_on = target_on - current_on;
     let speeding_up = want_on * current_on >= 0.0;
     let delta_on = if speeding_up {
-        let max_on = tuning().tank_accel_force * footing.pace * tank.speed_factor() / tank.mass() * dt;
+        let max_on = tuning().tank_accel_force * pace * footing.traction * tank.speed_factor() / tank.mass() * dt;
         want_on.clamp(-max_on, max_on)
     } else {
         // Close a rate-controlled fraction of the remaining gap each frame
         // (frame-rate independent); snap the last sliver below
         // TANK_DECEL_SNAP_PX rather than trailing the asymptote forever.
-        let rate = tuning().tank_decel_curve_rate * tank.speed_factor() / tank.mass();
+        let rate = tuning().tank_decel_curve_rate * tank.speed_factor() / tank.mass() * footing.brake;
         let remaining_gap = want_on * (-rate * dt).exp();
         if remaining_gap.abs() < tuning().tank_decel_snap_px { want_on } else { want_on - remaining_gap }
     };
@@ -4314,16 +4525,25 @@ fn slot_backed_count(world: &hecs::World, slots: &[(Position, PickupKind)]) -> u
         .count()
 }
 
+/// The conditional bonuses a Health slot may roll, each checked before
+/// any RNG is drawn for it: the frog pack while the frog is hurt, the
+/// tower pack while a player tower is.
+#[derive(Clone, Copy, Default)]
+struct BonusGates {
+    frog: bool,
+    towers: bool,
+}
+
 /// Top up one pickup at a uniformly random slot not currently occupied,
 /// with the health slot's bonus rolls if that slot is a health pack
-/// (`frog_hurt` is the frog pack's gate). A no-op if every slot is full.
+/// (`hurt` gates the conditional ones). A no-op if every slot is full.
 fn respawn_from_slots(
     world: &mut hecs::World,
     map: &MapFile,
     slots: &[(Position, PickupKind)],
     width: f32,
     height: f32,
-    frog_hurt: bool,
+    hurt: BonusGates,
     rng: &mut SmallRng,
 ) -> Option<(Position, PickupKind)> {
     let occupied: Vec<Position> = world.query::<&Pickup>().iter().map(|p| p.position).collect();
@@ -4338,14 +4558,14 @@ fn respawn_from_slots(
     let (pos, kind) = free[rng.random_range(0..free.len())];
     spawn_pickup_at(world, pos, kind);
     if kind == PickupKind::Health {
-        maybe_spawn_health_slot_bonuses(world, map, pos, width, height, frog_hurt, rng);
+        maybe_spawn_health_slot_bonuses(world, map, pos, width, height, hurt, rng);
     }
     Some((pos, kind))
 }
 
 /// The un-slotted bonuses that ride along with a Health slot just
-/// (re)spawned at `slot`: the rainbow shield always, and a frog health pack
-/// only while `frog_hurt`.
+/// (re)spawned at `slot`: the rainbow shield always, a frog health pack
+/// only while `hurt.frog`, a tower pack only while `hurt.towers`.
 ///
 /// The frog pack's gate is checked *before* its roll, never after, and that
 /// ordering is load-bearing (docs/frog-health-pack-prd.md section 6): a
@@ -4360,13 +4580,17 @@ fn maybe_spawn_health_slot_bonuses(
     slot: Position,
     width: f32,
     height: f32,
-    frog_hurt: bool,
+    hurt: BonusGates,
     rng: &mut SmallRng,
 ) {
     maybe_spawn_bonus(world, map, slot, PickupKind::Shield, tuning().shield_near_health_chance, width, height, rng);
-    if frog_hurt {
+    if hurt.frog {
         let chance = tuning().frog_pack_near_health_chance;
         maybe_spawn_bonus(world, map, slot, PickupKind::FrogHealth, chance, width, height, rng);
+    }
+    if hurt.towers {
+        let chance = tuning().tower_pack_near_health_chance;
+        maybe_spawn_bonus(world, map, slot, PickupKind::TowerPack, chance, width, height, rng);
     }
 }
 
@@ -4636,7 +4860,8 @@ fn lay_tracks(tracks: &mut Vec<Track>, tank: &mut Tank, before: Position, depth:
         tank.hull_anim_accum -= tuning().tank_hull_track_frame_distance;
         tank.hull_frame = (tank.hull_frame + 1) % TANK_HULL_TRACK_COLS.len() as i32;
     }
-    if depth != crate::ground::Depth::Dry {
+    // Tracks stop in water; ice takes them like the ground does.
+    if depth.is_wet() {
         tank.track_accum = 0.0;
         return;
     }
@@ -4674,15 +4899,16 @@ fn lay_tracks(tracks: &mut Vec<Track>, tank: &mut Tank, before: Position, depth:
 
 /// Whether an enemy competes for an engagement slot this frame, and if
 /// not, why - the exclusions win over the range test. `target` is what
-/// the enemy fights (the player, or a hunter's frog).
-fn engage_status(tank: &Tank, ai: &Ai, target: Position) -> EngageStatus {
+/// the enemy fights (the player, or a hunter's frog); `sight` is how far
+/// it sees (`Game::enemy_sight`).
+fn engage_status(tank: &Tank, ai: &Ai, target: Position, sight: f32) -> EngageStatus {
     if tank.is_wreck() {
         EngageStatus::Wreck
     } else if tank.damage >= tuning().enemy_flee_damage {
         EngageStatus::Fleeing
     } else if tank.active_weapon() == ActiveWeapon::Shell && ai.is_retreating() {
         EngageStatus::Retreating
-    } else if tank.position.distance_to(target) <= tuning().enemy_view_range || ai.is_hit_alerted() {
+    } else if tank.position.distance_to(target) <= sight || ai.is_hit_alerted() {
         EngageStatus::Engaged
     } else {
         EngageStatus::OutOfRange
@@ -5372,6 +5598,121 @@ mod mechanics_tests {
         game.debug_kill(slot).unwrap();
         step(&mut game, Input::default());
         assert_eq!(game.outcome(), Outcome::Won);
+    }
+
+    /// A destroy round of `enemies` on the open map, two seats.
+    fn two_seat_destroy_round(enemies: usize) -> Game {
+        let mut game = Game::default();
+        game.enemy_count_override = Some(enemies);
+        game.seed_override = Some(7);
+        game.players = PlayerCount::TWO;
+        game.level_overrides.mission = Some(Mission::Destroy);
+        game.map = MapFile::from_toml_str(OPEN_MAP).expect("test map parses");
+        game.init(W, H);
+        game
+    }
+
+    fn enemy_slots(game: &Game) -> Vec<usize> {
+        let mut slots: Vec<usize> = game.world.query::<&Tank>().with::<&Ai>().iter().map(|t| t.owner_slot()).collect();
+        slots.sort_unstable();
+        slots
+    }
+
+    /// The end screen's numbers: a seat's shell that finishes an enemy is
+    /// that seat's wreck, a wreck no seat touched counts for the team
+    /// alone, and the round clock stops when the round ends.
+    #[test]
+    fn round_stats_count_the_wrecks_and_credit_the_seat_that_shot() {
+        let mut game = two_seat_destroy_round(2);
+        let slots = enemy_slots(&game);
+        assert_eq!(game.round_stats(), RoundStats { seconds: 0.0, destroyed: 0, enemies: 2, by_seat: [0; MAX_SEATS] });
+
+        // Player 2's shell, point blank into an enemy one hit finishes.
+        let target = slots[0];
+        let at = Position::new(400.0, 300.0);
+        game.debug_teleport(target, at, Some(0.0)).expect("the enemy exists");
+        for tank in game.world.query::<&mut Tank>().with::<&Ai>().iter() {
+            if tank.owner_slot() == target {
+                tank.damage = MAX_DAMAGE - 0.5;
+                tank.shield_hp = 0.0;
+            }
+        }
+        let shooter = Tank { position: Position::new(at.x, at.y - 80.0), rotation: 180.0, ..Tank::default() };
+        game.world.spawn((Shell::spawn(&shooter, Owner::Player(1), 0.0, 0.0),));
+        let wrecked = |game: &Game| game.world.query::<&Tank>().iter().any(|t| t.owner_slot() == target && t.is_wreck());
+        for _ in 0..60 {
+            step(&mut game, Input::default());
+            if wrecked(&game) {
+                break;
+            }
+        }
+        assert!(wrecked(&game), "the shell finished the enemy");
+        let stats = game.round_stats();
+        assert_eq!((stats.destroyed, stats.by_seat[0], stats.by_seat[1]), (1, 0, 1), "player 2's wreck");
+        assert_eq!(game.outcome(), Outcome::Playing);
+
+        // The other goes down to nobody's shot.
+        game.debug_kill(slots[1]).expect("the enemy exists");
+        step(&mut game, Input::default());
+        assert_eq!(game.outcome(), Outcome::Won);
+        let stats = game.round_stats();
+        assert_eq!((stats.destroyed, stats.enemies, stats.by_seat[0], stats.by_seat[1]), (2, 2, 0, 1));
+        assert!(stats.seconds > 0.0);
+        for _ in 0..30 {
+            step(&mut game, Input::default());
+        }
+        assert_eq!(game.round_stats().seconds, stats.seconds, "the clock stopped with the round");
+    }
+
+    /// A wave round's enemies are every wave's tanks, counted before a
+    /// single one has rolled in.
+    #[test]
+    fn a_wave_rounds_enemy_total_is_every_wave() {
+        let mut game = Game::default();
+        game.seed_override = Some(7);
+        game.level_overrides.spawn = Some(crate::level::SpawnKind::Waves);
+        game.level_overrides.waves = Some(3);
+        game.level_overrides.wave_size = Some(2);
+        game.level_overrides.wave_growth = Some(1);
+        game.map = MapFile::from_toml_str(OPEN_MAP).expect("test map parses");
+        game.init(W, H);
+        assert_eq!(game.round_stats().enemies, 2 + 3 + 4);
+    }
+
+    /// A held end screen counts down like any other and then waits at
+    /// zero: the round stays over long past `restart_delay` until the
+    /// caller starts the next one; not held, it restarts on its own as it
+    /// always has.
+    #[test]
+    fn a_held_end_screen_counts_down_and_waits_for_the_caller() {
+        for hold in [false, true] {
+            let mut game = two_seat_destroy_round(1);
+            game.hold_end_screen = hold;
+            let slot = enemy_slots(&game)[0];
+            game.debug_kill(slot).expect("the enemy exists");
+            step(&mut game, Input::default());
+            assert_eq!(game.outcome(), Outcome::Won);
+            let full = game.restart_countdown();
+            step(&mut game, Input::default());
+            assert!(game.restart_countdown() < full, "hold {hold}: the countdown runs");
+            let frames = (tuning().restart_delay * 60.0).ceil() as usize + 60;
+            for _ in 0..frames {
+                step(&mut game, Input::default());
+            }
+            let expected = if hold { Outcome::Won } else { Outcome::Playing };
+            assert_eq!(game.outcome(), expected, "hold {hold}");
+            if hold {
+                assert_eq!(game.restart_countdown(), 0.0, "held at zero, never below");
+            }
+            // The R key is the caller too: it starts the next round, and
+            // the setting outlives it.
+            let mut restart = Input::default();
+            restart.restart_pressed = true;
+            step(&mut game, restart);
+            assert_eq!(game.outcome(), Outcome::Playing);
+            assert_eq!(game.round_stats().destroyed, 0, "a new round counts from nothing");
+            assert_eq!(game.hold_end_screen, hold);
+        }
     }
 
     /// `tanks = 0` is a sandbox: no enemy ever spawns and the round does
@@ -6553,7 +6894,7 @@ cells."30,20" = { kind = "frog" }
         let slot = map::cell_to_world(11, 10);
         let (mut with_gate, mut shield_only) = (SmallRng::seed_from_u64(99), SmallRng::seed_from_u64(99));
         let (mut wa, mut wb) = (hecs::World::new(), hecs::World::new());
-        maybe_spawn_health_slot_bonuses(&mut wa, &map, slot, W, H, false, &mut with_gate);
+        maybe_spawn_health_slot_bonuses(&mut wa, &map, slot, W, H, BonusGates::default(), &mut with_gate);
         let chance = tuning().shield_near_health_chance;
         maybe_spawn_bonus(&mut wb, &map, slot, PickupKind::Shield, chance, W, H, &mut shield_only);
         assert_eq!(

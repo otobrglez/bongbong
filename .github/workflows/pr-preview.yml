@@ -52,7 +52,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # Previews are the QA surface: build with the dev-tools feature so the
       # runtime tuning panel (docs/runtime-tuning-design.md) is available at
@@ -95,7 +95,7 @@ jobs:
           command: deploy --config wrangler.preview.toml
 
       - name: Comment preview URL on PR
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment-url }}
@@ -159,7 +159,7 @@ jobs:
           fi
 
       - name: Mark preview comment as removed
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const marker = '<!-- bongbong-pr-preview -->';

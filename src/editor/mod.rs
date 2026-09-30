@@ -30,9 +30,11 @@ use crate::math::{Color, Rectangle, Vec2};
 use crate::ground::{self, GroundGrid};
 use crate::hud::mode_button_rect;
 use crate::level::{Mission, SpawnKind, Tier};
-use crate::map::{self, CellObject, MapEntry, MapFile, Theme};
+use crate::map::{self, CellObject, MapEntry, MapFile, Theme, Weather};
 use crate::obstacle::{Drum, Material};
 use crate::pickup::PickupKind;
+use crate::frog::Side;
+use crate::tower::TowerKind;
 use crate::tank::TankKind;
 use crate::{EDITOR_BAR_HIT_SLACK, EDITOR_DROPDOWN_ROW_H, EDITOR_DROPDOWN_W, EDITOR_SETTINGS_W, EDITOR_STEPPER_SIZE, Layout, PATHFIND_CELL_SIZE, Position, Rect};
 pub use history::{CellChange, EditStep, MapDiff, MapSettings, UndoStack};
@@ -62,7 +64,9 @@ const SLOT_MAP: f32 = 716.0;
 /// FILE and MAP share a width.
 const MAP_BUTTON_W: f32 = 64.0;
 /// How many rows the Load list shows at once (eight fit the 480 px
-/// standard field); the wheel scrolls the rest.
+/// standard field). When there are more maps than that, the last row is a
+/// pager a tap turns (a touch screen has no wheel) and the wheel scrolls
+/// row by row.
 const LOAD_VISIBLE_ROWS: usize = 8;
 const LOAD_PANEL_W: f32 = 360.0;
 /// The icons in the bar and the dropdown rows, the sheets' own 32 px.
@@ -142,12 +146,18 @@ pub enum Tool {
     /// works with two or more (the linter's `portal-alone` names a lone
     /// one, and the canvas ghosts it).
     Portal,
+    /// A defence tower fighting for a side (docs/defence-towers-prd.md).
+    /// One tool per kind and side rather than a side switch: the cursor's
+    /// readout names a cell by the tool that paints exactly its object.
+    Tower(TowerKind, Side),
     Eraser,
 }
 
 /// Every brush, in bar order: the categories one after another, the
-/// eraser last.
-pub const TOOLS: [Tool; 32] = [
+/// eraser last. The trees sit with the ground's vegetation, which leaves
+/// PROP room for the six tower tools inside the eleven rows a dropdown
+/// fits.
+pub const TOOLS: [Tool; 39] = [
     Tool::Wall(Material::Brick),
     Tool::Wall(Material::Iron),
     Tool::Wall(Material::Wood),
@@ -157,11 +167,17 @@ pub const TOOLS: [Tool; 32] = [
     Tool::Drum(Drum::Oil),
     Tool::Drum(Drum::Fuel),
     Tool::Prop(Material::Fence),
-    Tool::Prop(Material::Tree),
-    Tool::Prop(Material::Pine),
+    Tool::Tower(TowerKind::Tesla, Side::Player),
+    Tool::Tower(TowerKind::Tesla, Side::Enemy),
+    Tool::Tower(TowerKind::Gun, Side::Player),
+    Tool::Tower(TowerKind::Gun, Side::Enemy),
+    Tool::Tower(TowerKind::Bio, Side::Player),
+    Tool::Tower(TowerKind::Bio, Side::Enemy),
     Tool::Road,
     Tool::Water,
     Tool::TallGrass,
+    Tool::Prop(Material::Tree),
+    Tool::Prop(Material::Pine),
     Tool::OilTrail,
     Tool::Gate,
     Tool::Portal,
@@ -179,6 +195,7 @@ pub const TOOLS: [Tool; 32] = [
     Tool::Pickup(PickupKind::Shield),
     Tool::Pickup(PickupKind::Flamethrower),
     Tool::Pickup(PickupKind::FrogHealth),
+    Tool::Pickup(PickupKind::TowerPack),
     Tool::Eraser,
 ];
 
@@ -219,6 +236,13 @@ impl Tool {
             Tool::Pickup(PickupKind::Shield) => "shield",
             Tool::Pickup(PickupKind::Flamethrower) => "flamethrower",
             Tool::Pickup(PickupKind::FrogHealth) => "frog_health",
+            Tool::Pickup(PickupKind::TowerPack) => "tower_pack",
+            Tool::Tower(TowerKind::Tesla, Side::Player) => "tesla",
+            Tool::Tower(TowerKind::Tesla, Side::Enemy) => "tesla_enemy",
+            Tool::Tower(TowerKind::Gun, Side::Player) => "gun_tower",
+            Tool::Tower(TowerKind::Gun, Side::Enemy) => "gun_tower_enemy",
+            Tool::Tower(TowerKind::Bio, Side::Player) => "bio_slush",
+            Tool::Tower(TowerKind::Bio, Side::Enemy) => "bio_slush_enemy",
             Tool::Eraser => "eraser",
         }
     }
@@ -231,7 +255,8 @@ impl Tool {
     pub fn category(self) -> Option<Category> {
         match self {
             Tool::Wall(_) => Some(Category::Wall),
-            Tool::Prop(_) | Tool::Drum(_) => Some(Category::Prop),
+            Tool::Prop(Material::Tree | Material::Pine) => Some(Category::Ground),
+            Tool::Prop(_) | Tool::Drum(_) | Tool::Tower(..) => Some(Category::Prop),
             Tool::Road | Tool::Water | Tool::TallGrass | Tool::OilTrail | Tool::Gate | Tool::Portal => Some(Category::Ground),
             Tool::Start | Tool::Start2 | Tool::Frog | Tool::EnemyFrog => Some(Category::Actor),
             Tool::Pickup(_) => Some(Category::Pickup),
@@ -256,6 +281,7 @@ impl Tool {
             Tool::Portal => Some(CellObject::Portal),
             Tool::Pickup(pickup) => Some(CellObject::Pickup { pickup }),
             Tool::TallGrass => Some(CellObject::TallGrass),
+            Tool::Tower(kind, side) => Some(CellObject::for_tower(kind, side)),
             Tool::Eraser => None,
         }
     }
@@ -541,6 +567,20 @@ impl MapEditor {
         self.map = map;
         self.baseline = self.map.clone();
         self.history.push(EditStep::Map { before: Box::new(before), after: Box::new(self.map.clone()) });
+        self.rebuild_ground();
+    }
+
+    /// Open `map` as a new document: the canvas, the baseline and an
+    /// empty undo history - the level a round has moved on to
+    /// (`mode::Session::start_level`), which undo must not walk back out
+    /// of into the level before.
+    pub fn open(&mut self, map: MapFile) {
+        self.finish_stroke();
+        self.popup = None;
+        self.status = None;
+        self.map = map;
+        self.baseline = self.map.clone();
+        self.history.clear();
         self.rebuild_ground();
     }
 
@@ -830,8 +870,8 @@ impl MapEditor {
         Rectangle::new(list.x, list.y + index as f32 * EDITOR_DROPDOWN_ROW_H, list.width, EDITOR_DROPDOWN_ROW_H)
     }
 
-    /// Rows per column of the settings panel: two columns, because eleven
-    /// 48 px rows are taller than the 480 px standard field.
+    /// Rows per column of the settings panel: two columns, because a
+    /// dozen 48 px rows are taller than the 544 px standard field.
     const SETTINGS_ROWS_PER_COLUMN: usize = SETTINGS_ROWS.len().div_ceil(2);
 
     /// The MAP settings panel: below the MAP button, over the field, two
@@ -899,6 +939,12 @@ impl MapEditor {
             LOAD_PANEL_W,
             h,
         )
+    }
+
+    /// How many maps one page of the Load list shows: every row, or all
+    /// but the last when that row is the pager.
+    fn load_page_rows(entries: usize) -> usize {
+        if entries > LOAD_VISIBLE_ROWS { LOAD_VISIBLE_ROWS - 1 } else { LOAD_VISIBLE_ROWS }
     }
 
     /// The `index`-th visible row of the Load list.
@@ -1084,8 +1130,9 @@ impl MapEditor {
                 }
             }
             Popup::Load { entries, mut scroll } => {
+                let rows = Self::load_page_rows(entries.len());
+                let max = entries.len().saturating_sub(rows);
                 if input.wheel != 0.0 {
-                    let max = entries.len().saturating_sub(LOAD_VISIBLE_ROWS);
                     scroll = if input.wheel < 0.0 { (scroll + 1).min(max) } else { scroll.saturating_sub(1) };
                 }
                 let Some(pointer) = input.pointer.filter(|_| pressed) else {
@@ -1097,10 +1144,17 @@ impl MapEditor {
                     return;
                 }
                 if input.pressed {
+                    // The pager: its left half pages back, its right half on.
+                    let pager = Self::load_row_rect(panel, rows);
+                    if rows < entries.len() && pager.contains(pointer) {
+                        scroll = if pointer.x < pager.x + pager.width / 2.0 { scroll.saturating_sub(rows) } else { (scroll + rows).min(max) };
+                        self.popup = Some(Popup::Load { entries, scroll });
+                        return;
+                    }
                     let picked = entries
                         .iter()
                         .skip(scroll)
-                        .take(LOAD_VISIBLE_ROWS)
+                        .take(rows)
                         .enumerate()
                         .find(|&(i, _)| Self::load_row_rect(panel, i).contains(pointer))
                         .map(|(_, e)| e.name.clone());
@@ -1179,6 +1233,7 @@ impl MapEditor {
             SettingsRow::TierStart => s.tier_start = step_option_choice(s.tier_start, &Tier::ALL, forward),
             SettingsRow::TierEnd => s.tier_end = step_option_choice(s.tier_end, &Tier::ALL, forward),
             SettingsRow::Theme => s.theme = step_choice(s.theme, &Theme::ALL, forward),
+            SettingsRow::Weather => s.weather = step_choice(s.weather, &Weather::ALL, forward),
             SettingsRow::Reset => return,
         }
         self.apply_settings(s);
@@ -1231,10 +1286,13 @@ enum SettingsRow {
     TierEnd,
     /// The look (`MapFile::theme`): the canvas redraws in it at once.
     Theme,
+    /// The sky (`MapFile::weather`, docs/weather.md). The canvas stays
+    /// clear to edit on; the round draws the sky.
+    Weather,
     Reset,
 }
 
-const SETTINGS_ROWS: [SettingsRow; 12] = [
+const SETTINGS_ROWS: [SettingsRow; 13] = [
     SettingsRow::Tanks,
     SettingsRow::Tank,
     SettingsRow::Tank2,
@@ -1246,6 +1304,7 @@ const SETTINGS_ROWS: [SettingsRow; 12] = [
     SettingsRow::TierStart,
     SettingsRow::TierEnd,
     SettingsRow::Theme,
+    SettingsRow::Weather,
     SettingsRow::Reset,
 ];
 
@@ -1809,6 +1868,17 @@ mod editor_tests {
         assert_eq!(ed.map().theme, Theme::Desert);
         click(&mut ed, &layout, inc(SettingsRow::Theme));
         assert_eq!(ed.settings().theme, Theme::Grass, "wraps");
+        // WEATHER cycles every sky, backwards from clear to the last.
+        click(&mut ed, &layout, inc(SettingsRow::Weather));
+        assert_eq!(ed.map().weather, Weather::Night);
+        click(&mut ed, &layout, dec(SettingsRow::Weather));
+        click(&mut ed, &layout, dec(SettingsRow::Weather));
+        assert_eq!(ed.settings().weather, Weather::ALL[Weather::ALL.len() - 1], "wraps");
+        let _ = ed.undo();
+        assert_eq!(ed.settings().weather, Weather::Clear, "a weather press is one undo step");
+        let _ = ed.redo();
+        click(&mut ed, &layout, inc(SettingsRow::Weather));
+        assert_eq!(ed.settings().weather, Weather::Clear);
         click(&mut ed, &layout, inc(SettingsRow::Mission));
         assert_eq!(ed.settings().mission, Mission::Hunt);
         click(&mut ed, &layout, inc(SettingsRow::Spawn));
@@ -1909,6 +1979,59 @@ mod file_tests {
         assert_eq!(ed.history().undo_depth(), 1);
     }
 
+    /// Where an open Load list is scrolled to.
+    fn load_scroll(ed: &MapEditor) -> Option<usize> {
+        match &ed.popup {
+            Some(Popup::Load { scroll, .. }) => Some(*scroll),
+            _ => None,
+        }
+    }
+
+    /// A touch screen has no wheel: an overflowing Load list turns its last
+    /// row into a pager - a tap on the right half shows the next page, on
+    /// the left half the one before, never past either end - and a row
+    /// picked on a later page loads that page's map.
+    #[test]
+    fn the_load_list_pages_by_touch() {
+        let layout = Layout::for_field(W, H);
+        let mut ed = MapEditor::new(MapFile::new());
+        press(&mut ed, &layout, center(MapEditor::file_rect(&layout)));
+        press(&mut ed, &layout, center(MapEditor::file_row_rect(&layout, 0)));
+        assert_eq!(ed.open_menu(), Some("load"));
+        let entries = map::available_maps();
+        let rows = MapEditor::load_page_rows(entries.len());
+        assert!(map::SHIPPED_MAPS.len() > LOAD_VISIBLE_ROWS && entries.len() > rows, "the shipped maps alone overflow one page");
+        let panel = MapEditor::load_panel_rect(&layout, entries.len());
+        let pager = MapEditor::load_row_rect(panel, rows);
+        assert!(pager.y + pager.height <= panel.y + panel.height + 0.5, "the pager is the panel's last row");
+        let back = Vec2::new(pager.x + 20.0, pager.y + pager.height / 2.0);
+        let next = Vec2::new(pager.x + pager.width - 20.0, pager.y + pager.height / 2.0);
+        press(&mut ed, &layout, back);
+        assert_eq!(load_scroll(&ed), Some(0), "the first page does not page back");
+        press(&mut ed, &layout, next);
+        assert_eq!(load_scroll(&ed), Some(rows));
+        let last = entries.len() - rows;
+        for _ in 0..entries.len() {
+            press(&mut ed, &layout, next);
+        }
+        assert_eq!(load_scroll(&ed), Some(last), "the last page stops at the end");
+        press(&mut ed, &layout, back);
+        assert_eq!(load_scroll(&ed), Some(last.saturating_sub(rows)));
+        // Page back to the start, then on until a shipped map late in the
+        // alphabet is on screen, and pick it.
+        for _ in 0..entries.len() {
+            press(&mut ed, &layout, back);
+        }
+        let target = entries.iter().position(|e| e.name == "waves-basic").expect("waves-basic is always listed");
+        while load_scroll(&ed).is_some_and(|s| target >= s + rows) {
+            press(&mut ed, &layout, next);
+        }
+        let scroll = load_scroll(&ed).expect("the list is still open");
+        press(&mut ed, &layout, center(MapEditor::load_row_rect(panel, target - scroll)));
+        assert_eq!(ed.open_menu(), None);
+        assert_eq!(ed.name(), "waves-basic");
+    }
+
     /// FILE opens its menu; LOAD... opens the list; picking a row loads
     /// that map as the new baseline; a press outside closes the list
     /// without painting.
@@ -1923,7 +2046,8 @@ mod file_tests {
         let entries = map::available_maps();
         let row = entries.iter().position(|e| e.name == "default").expect("default is always listed");
         let panel = MapEditor::load_panel_rect(&layout, entries.len());
-        if row < LOAD_VISIBLE_ROWS {
+        let rows = MapEditor::load_page_rows(entries.len());
+        if row < rows {
             press(&mut ed, &layout, center(MapEditor::load_row_rect(panel, row)));
             assert_eq!(ed.open_menu(), None);
             assert_eq!(ed.name(), "default");
@@ -1933,10 +2057,10 @@ mod file_tests {
         } else {
             // Scroll down until the row is visible, then pick it.
             let wheel = BuilderInput { pointer: Some(center(panel)), wheel: -1.0, ..Default::default() };
-            for _ in 0..(row + 1 - LOAD_VISIBLE_ROWS) {
+            for _ in 0..(row + 1 - rows) {
                 ed.update(&wheel, &layout);
             }
-            press(&mut ed, &layout, center(MapEditor::load_row_rect(panel, LOAD_VISIBLE_ROWS - 1)));
+            press(&mut ed, &layout, center(MapEditor::load_row_rect(panel, rows - 1)));
             assert_eq!(ed.name(), "default");
         }
         // A press outside an open list closes it and paints nothing.

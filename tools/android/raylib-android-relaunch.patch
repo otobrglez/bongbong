@@ -1,0 +1,17 @@
+raylib master 7ee0b086 (raysan5/raylib#6040), backported onto the 6.0 tree
+sola-raylib-sys vendors: when the activity is destroyed while the app is
+paused, PollInputEvents kept looping after setting shouldClose, and while
+paused ALooper_pollAll waits forever (-1), so main() never returned and the
+next launch hung on the old native thread. Drop this file once the vendored
+raylib carries the fix.
+
+--- a/src/platforms/rcore_android.c
++++ b/src/platforms/rcore_android.c
+@@ -801,6 +801,7 @@ void PollInputEvents(void)
+         if (platform.app->destroyRequested != 0)
+         {
+             CORE.Window.shouldClose = true;
++            break;
+         }
+     }
+ }

@@ -343,7 +343,9 @@ tunables! {
         /// reads the band as the tank refusing to turn.
         touch_axis_switch_deg: f32 = 50.0 in 45.0 ..= 75.0;
         /// When the round ends (player destroyed, or all enemies destroyed)
-        /// the result is shown for this long, then the game restarts.
+        /// the result is shown for this long, then the game restarts - or,
+        /// on a level, goes on to the next level after a win and plays the
+        /// same one again after a loss.
         restart_delay: f32 = 3.0 in 0.0 ..= 30.0;
     }
 
@@ -650,15 +652,15 @@ tunables! {
         /// A Purple charge batch scales `plasma_damage_factor` by this on
         /// top.
         plasma_purple_damage_factor: f32 = 1.10 in 0.1 ..= 5.0;
-        /// Pulsating in-flight glow (`render::plasma::draw_plasma`): pulses per
-        /// second, and the glow radius at the low/high point of the pulse as
-        /// a multiple of the sprite radius.
+        /// The in-flight orb's breathing (`render/shot_shaders.rs`): pulses
+        /// per second, and the strength of its glow and rim at the low and
+        /// high point of each pulse.
         plasma_pulse_hz: f32 = 6.0 in 0.1 ..= 30.0;
         plasma_pulse_min_scale: f32 = 0.85 in 0.1 ..= 3.0;
         plasma_pulse_max_scale: f32 = 1.35 in 0.1 ..= 3.0;
         /// The Flying state's baked 4-frame breathing cycle plays this many
-        /// full cycles per second, independent of `plasma_pulse_hz` - two
-        /// independent cycles read richer than one rate driving both.
+        /// full cycles per second, where the baked sprite is what flies (no
+        /// shaders, or `shot_glow_strength` 0).
         plasma_flying_cycle_fps: f32 = 10.0 in 0.5 ..= 60.0;
     }
 
@@ -786,6 +788,127 @@ tunables! {
         /// A muzzle heat shimmer is pushed every this many frames while the
         /// trigger is held, so the ripple list is not flooded.
         flame_shimmer_every_frames: i32 = 11 in 1 ..= 60;
+    }
+
+    group towers {
+        /// Tesla coil toughness (docs/defence-towers-prd.md). Baked in at
+        /// spawn.
+        tesla_max_health: f32 = 120.0 in 1.0 ..= 1000.0 @ Spawn;
+        /// How close (px, centre to hull box) an opposing tank has to come
+        /// before the coil starts charging at it.
+        tesla_range: f32 = 112.0 in 32.0 ..= 600.0;
+        /// Seconds from an empty coil to a strike with a target in reach:
+        /// the telegraph a player backs out on.
+        tesla_charge_seconds: f32 = 1.3 in 0.1 ..= 10.0;
+        /// Charge lost per second while nothing is in reach.
+        tesla_drain_per_second: f32 = 1.0 in 0.0 ..= 10.0;
+        /// Pause after a strike before the coil charges again.
+        tesla_cooldown_seconds: f32 = 0.35 in 0.0 ..= 10.0;
+        /// Strike damage, rolled per strike.
+        tesla_damage_min: f32 = 18.0 in 0.0 ..= 100.0;
+        tesla_damage_max: f32 = 26.0 in 0.0 ..= 100.0;
+        /// Extra tanks a strike jumps to after the first; 0 turns the
+        /// chain off.
+        tesla_chain_jumps: i32 = 1 in 0 ..= 4;
+        /// How far a jump reaches from the tank it leaves (px).
+        tesla_chain_radius: f32 = 64.0 in 0.0 ..= 300.0;
+        /// Damage of each jump, as a fraction of the strike's roll.
+        tesla_chain_factor: f32 = 0.5 in 0.0 ..= 1.0;
+        /// How long a bolt stays on screen.
+        tesla_bolt_display_seconds: f32 = 0.24 in 0.05 ..= 1.0;
+        /// Odds a shell or bullet glances off a coil.
+        tesla_deflect_chance: f64 = 0.15 in 0.0 ..= 1.0;
+        /// The discharge when a coil dies: radius and damage at the centre
+        /// (linear falloff), to every tank of either side.
+        tesla_death_blast_radius: f32 = 64.0 in 0.0 ..= 300.0;
+        tesla_death_blast_damage: f32 = 10.0 in 0.0 ..= 100.0;
+        /// Gun tower toughness. Baked in at spawn.
+        gun_tower_max_health: f32 = 150.0 in 1.0 ..= 1000.0 @ Spawn;
+        /// How far the gun tower shoots (px, centre to centre).
+        gun_tower_range: f32 = 256.0 in 32.0 ..= 1200.0;
+        /// Turret turn rate, degrees a second.
+        gun_tower_turn_deg_per_second: f32 = 220.0 in 10.0 ..= 2000.0;
+        /// How far the gun aims ahead of a moving target: 0 aims where the
+        /// tank is, 1 where it will be when the bullet gets there.
+        gun_tower_lead: f32 = 0.5 in 0.0 ..= 1.0;
+        /// Aim error (degrees) the gun opens fire within.
+        gun_tower_fire_cone_deg: f32 = 6.0 in 0.0 ..= 45.0;
+        /// Bullets per burst, the gap between them and the pause after.
+        gun_tower_burst_size: i32 = 5 in 1 ..= 30;
+        gun_tower_bullet_delay_seconds: f32 = 0.06 in 0.01 ..= 1.0;
+        gun_tower_burst_gap_seconds: f32 = 0.9 in 0.0 ..= 10.0;
+        /// Spread either side of the aim, degrees, rolled per bullet.
+        gun_tower_spread_deg: f32 = 3.0 in 0.0 ..= 45.0;
+        /// Bullet damage, rolled per hit.
+        gun_tower_damage_min: f32 = 3.0 in 0.0 ..= 100.0;
+        gun_tower_damage_max: f32 = 5.0 in 0.0 ..= 100.0;
+        /// The gun holds fire while a tank of its own side is this close
+        /// (px) to the line to its target.
+        gun_tower_friendly_block_px: f32 = 20.0 in 0.0 ..= 100.0;
+        /// Odds a shell or bullet glances off the gun tower's armour.
+        gun_tower_deflect_chance: f64 = 0.25 in 0.0 ..= 1.0;
+        /// Bio slush toughness. Baked in at spawn.
+        bio_max_health: f32 = 130.0 in 1.0 ..= 1000.0 @ Spawn;
+        /// Where the bio slush can land a glob: no closer than the first,
+        /// no further than the second (px, centre to centre).
+        bio_min_range: f32 = 56.0 in 0.0 ..= 600.0;
+        bio_range: f32 = 192.0 in 32.0 ..= 1200.0;
+        /// Nozzle turn rate, degrees a second.
+        bio_turn_deg_per_second: f32 = 160.0 in 10.0 ..= 2000.0;
+        /// Aim error (degrees) it lobs within.
+        bio_fire_cone_deg: f32 = 12.0 in 0.0 ..= 45.0;
+        /// Seconds between globs.
+        bio_lob_interval_seconds: f32 = 2.2 in 0.2 ..= 20.0;
+        /// A glob's time in the air and the drawn height at the top of its
+        /// arc (px). It has no hit test in flight.
+        bio_glob_flight_seconds: f32 = 0.8 in 0.1 ..= 5.0;
+        bio_glob_apex_px: f32 = 28.0 in 0.0 ..= 200.0;
+        /// How far the glob aims ahead of a moving target over its flight.
+        bio_lead: f32 = 0.7 in 0.0 ..= 1.0;
+        /// Hashed miss around the aim point (px); no RNG.
+        bio_scatter_px: f32 = 10.0 in 0.0 ..= 64.0;
+        /// Splash reach (px) for coating tanks and laying puddles.
+        bio_splash_radius: f32 = 36.0 in 0.0 ..= 160.0;
+        /// Damage of the splash itself (fixed, no roll).
+        bio_splash_damage: f32 = 4.0 in 0.0 ..= 100.0;
+        /// How long a coat of ooze lasts on a tank, what it corrodes a
+        /// second, and the fraction of its pace the tank keeps. A new coat
+        /// resets the timer, never adds to it.
+        bio_slime_seconds: f32 = 4.0 in 0.0 ..= 30.0;
+        bio_slime_dps: f32 = 3.0 in 0.0 ..= 50.0;
+        bio_slime_speed_factor: f32 = 0.6 in 0.1 ..= 1.0;
+        /// How long a puddle lasts, and what each step through one costs
+        /// the router (it never blocks).
+        bio_puddle_seconds: f32 = 6.0 in 0.0 ..= 60.0;
+        bio_puddle_path_cost: usize = 3 in 0 ..= 64;
+        /// How long the spill a destroyed bio slush leaves lasts.
+        bio_spill_seconds: f32 = 12.0 in 0.0 ..= 120.0;
+        /// Odds a shell or bullet glances off the bio slush.
+        bio_deflect_chance: f64 = 0.1 in 0.0 ..= 1.0;
+        /// Target hysteresis for the gun and the bio slush: a turret only
+        /// switches to a new target this much (px) nearer than its current
+        /// one.
+        tower_switch_margin_px: f32 = 48.0 in 0.0 ..= 400.0;
+        /// Health fraction below which a tower catches fire.
+        tower_burn_below: f32 = 0.25 in 0.0 ..= 1.0;
+        /// Damage a burning tower takes a second, until repaired or dead.
+        tower_burn_dps: f32 = 2.0 in 0.0 ..= 50.0;
+        /// Fraction of its rate a burning tower still fires at.
+        tower_burning_fire_factor: f32 = 0.5 in 0.0 ..= 1.0;
+        /// How long a ruin smoulders.
+        tower_ruin_smoke_seconds: f32 = 8.0 in 0.0 ..= 60.0;
+        /// Odds a tower pack drops beside a Health slot when it spawns,
+        /// while a player tower is hurt. Gated before any RNG draw.
+        tower_pack_near_health_chance: f32 = 0.25 in 0.0 ..= 1.0;
+        /// Route surcharge on every cell a live player tower reaches, so
+        /// enemies come round its reach when there is another way; 0 turns
+        /// it off. Kept low on purpose: a gun tower's reach is a disc eight
+        /// cells across, and a steep price on all of it sends every enemy
+        /// down the same cheapest seam, where they pile up.
+        route_tower_cost: usize = 2 in 0 ..= 64;
+        /// Seconds an enemy a tower hit goes after that tower while no
+        /// player is within its attack range.
+        enemy_tower_grudge_seconds: f32 = 4.0 in 0.0 ..= 30.0;
     }
 
     group pickups {
@@ -1959,8 +2082,9 @@ tunables! {
 
     group fx {
         /// One multiplier on every effect that touches the whole screen -
-        /// the kill flash, the shockwave ripple's bend and the camera
-        /// shake - so a calmer or reduced-flash mode is one slider. 0
+        /// the kill flash, the shockwave ripple's bend, the camera shake
+        /// and a storm's lightning - so a calmer or reduced-flash mode is
+        /// one slider. 0
         /// leaves only the local fireball, glow, impact quad and
         /// particles, which deliberately stay out of it.
         screen_fx_intensity: f32 = 1.0 in 0.0 ..= 2.0;
@@ -2004,6 +2128,194 @@ tunables! {
         /// Half-extent (px) of the impact flash's quad; at 720px tall the
         /// punch reaches ~125px, so 70 visibly clipped it.
         impact_flash_quad_radius: f32 = 130.0 in 10.0 ..= 500.0;
+    }
+
+    group shot_fx {
+        /// One multiplier on the light every shot throws (`render/shot_fx.rs`,
+        /// all additive and built from 2 px blocks): the halos and tracers
+        /// in flight, the muzzle and impact flares with their star rays and
+        /// glare, the laser's bloom, the missile's exhaust. 0 draws the
+        /// plain sprites alone.
+        shot_glow_strength: f32 = 1.0 in 0.0 ..= 2.0;
+        /// Length (px) of the hot tracer streak a flying shell draws behind it.
+        shell_tracer_length: f32 = 40.0 in 0.0 ..= 160.0;
+        /// Length (px) of a minigun bullet's tracer streak.
+        bullet_tracer_length: f32 = 26.0 in 0.0 ..= 160.0;
+        /// Length (px) of the fading afterimage chain a plasma bolt leaves.
+        plasma_trail_length: f32 = 52.0 in 0.0 ..= 160.0;
+        /// Radius (px) of the plasma orb drawn in flight
+        /// (`render/shot_shaders.rs`); its glow reaches about 2.3 times as far.
+        plasma_orb_radius: f32 = 11.0 in 4.0 ..= 32.0;
+        /// Turns per second of the plasma orb's surface, before each bolt's
+        /// own speed factor (0.7 to 1.5, either way round).
+        plasma_orb_spin_hz: f32 = 1.6 in 0.0 ..= 10.0;
+        /// Radius (px) of the muzzle flare at its first frame; it shrinks
+        /// over `muzzle_flash_duration`. The star rays reach twice as far.
+        muzzle_glow_radius: f32 = 14.0 in 0.0 ..= 80.0;
+        /// Radius (px) of the impact flare at its first frame; it swells
+        /// and fades over `impact_flash_duration`.
+        impact_glow_radius: f32 = 16.0 in 0.0 ..= 80.0;
+        /// Half-length (px) of the horizontal lens glare across a fresh
+        /// muzzle or impact flare. 0 turns the glare off.
+        shot_glare_length: f32 = 34.0 in 0.0 ..= 200.0;
+        /// How fast (Hz) a laser beam's bloom and end flares flicker.
+        laser_flicker_hz: f32 = 28.0 in 0.0 ..= 120.0;
+        /// Sparks thrown off a hull, frog or border wall a shot hits
+        /// (`fx.rs`, scaled by `fx_density`); tiles keep their own
+        /// material bursts.
+        shot_hit_sparks: i32 = 9 in 0 ..= 60;
+        /// Sparks spat from the barrel with every shot (`fx.rs`, scaled
+        /// by `fx_density`), plus a wisp of gun smoke.
+        muzzle_sparks: i32 = 4 in 0 ..= 40;
+        /// How long each hit plays (seconds; `render/shot_shaders.rs`,
+        /// `static/impact_burst.fs`): a shell's fireball, flash, shock ring,
+        /// debris and smoke; a bullet's spark star and ricochets; a plasma
+        /// bolt's energy ring; a laser's molten splash; a tesla strike's
+        /// crackling violet ring; a bio slush glob's splash of ooze.
+        shell_hit_seconds: f32 = 0.6 in 0.05 ..= 3.0;
+        bullet_hit_seconds: f32 = 0.22 in 0.05 ..= 2.0;
+        plasma_hit_seconds: f32 = 0.5 in 0.05 ..= 3.0;
+        laser_hit_seconds: f32 = 0.3 in 0.05 ..= 2.0;
+        tesla_hit_seconds: f32 = 0.4 in 0.05 ..= 2.0;
+        ooze_hit_seconds: f32 = 0.6 in 0.05 ..= 3.0;
+        /// Size of every hit's burst, as a multiple of its designed size.
+        hit_fx_scale: f32 = 1.0 in 0.2 ..= 3.0;
+        /// Glints per second a flying plasma bolt sheds in its own colour,
+        /// and embers per second a flying shell sheds (`fx.rs`, scaled by
+        /// `fx_density`).
+        shot_trail_glint_rate: f32 = 26.0 in 0.0 ..= 200.0;
+    }
+
+    group weather {
+        /// Put one sky over every map, by its place in `map::Weather::ALL`:
+        /// 0 clear, 1 night, 2 dusk, 3 rain, 4 storm, 5 fog, 6 sandstorm,
+        /// 7 snow, 8 heat haze, 9 random (a sky picked by each round's
+        /// seed). -1 plays each map's own `weather` key. `--weather` and
+        /// the web page's `?weather=` set it at startup. A sky is settled
+        /// when a round starts - the rules read it - so a change shows on
+        /// the next one; a room's round is its map's, whatever this says.
+        weather_override: i32 = (-1) in -1 ..= 9 @ Restart;
+        /// One multiplier on every weather (docs/weather.md): the light
+        /// eases toward daylight and every layer thins with it. 0 draws
+        /// every sky clear, 1 as designed.
+        weather_strength: f32 = 1.0 in 0.0 ..= 1.0;
+        /// Let the sky change the rules (docs/weather.md "The rules"):
+        /// shorter enemy sight at night, in a storm and in fog, less grip
+        /// in the rain, the water frozen over in the snow, gusts in a
+        /// sandstorm. Off, every sky is only drawn. The ice is laid when a
+        /// round starts, so it follows this on the next one.
+        weather_rules: bool = true in 0 ..= 1;
+        /// How far an enemy sees at night and in a storm, as a fraction of
+        /// `enemy_view_range`: the range it notices a player at, chases
+        /// from and calls the others in from. An enemy never attacks past
+        /// what it sees, so under `enemy_attack_range / enemy_view_range`
+        /// this shortens its attack too. A hit still alerts it from
+        /// anywhere.
+        night_sight_factor: f32 = 0.6 in 0.1 ..= 1.0;
+        /// The same in fog.
+        fog_sight_factor: f32 = 0.45 in 0.1 ..= 1.0;
+        /// The fraction of `tank_turn_grip_force` a hull keeps on wet
+        /// ground in the rain and in a storm: it drifts further through a
+        /// turn and a shove carries it further sideways. In a ford it
+        /// multiplies `water_grip_factor`.
+        rain_grip_factor: f32 = 0.5 in 0.05 ..= 1.0;
+        /// On the ice a snowy sky freezes every lake and ford into: the
+        /// fraction of `tank_turn_grip_force` a hull keeps (it slides
+        /// through a turn), of `tank_accel_force` it gets (its tracks spin
+        /// before it goes) and of `tank_decel_curve_rate` it brakes with
+        /// (it coasts a long way). Top speed is kept.
+        ice_grip_factor: f32 = 0.15 in 0.0 ..= 1.0;
+        ice_traction_factor: f32 = 0.4 in 0.05 ..= 1.0;
+        ice_brake_factor: f32 = 0.1 in 0.01 ..= 1.0;
+        /// A sandstorm's gusts: now and then a wall of sand sweeps the
+        /// field from the west and carries every hull it passes downwind -
+        /// the water current's rule, the hull driving relative to the
+        /// wind, so a stopped tank drifts and one driving upwind is held
+        /// back. The wind's peak speed (px/s).
+        sand_gust_speed: f32 = 48.0 in 0.0 ..= 300.0;
+        /// The windows gusts come in (seconds): most windows have one,
+        /// somewhere in their first half, and the round's first has none.
+        sand_gust_gap_seconds: f32 = 9.0 in 2.0 ..= 60.0;
+        /// How long a gust blows at any one point (seconds): it rises fast
+        /// and dies away slowly.
+        sand_gust_seconds: f32 = 1.5 in 0.2 ..= 10.0;
+        /// How fast a gust's front crosses the field (px/s), and how far
+        /// its heading swings off due east, either way (degrees).
+        sand_gust_front_speed: f32 = 520.0 in 50.0 ..= 3000.0;
+        sand_gust_spread_deg: f32 = 25.0 in 0.0 ..= 80.0;
+        /// How bright full night is: the moonlight the whole field is lit
+        /// by before any lamp, fire or shot adds to it (the blue tint is
+        /// the look's own). A storm's gloom is a little over twice this.
+        night_ambient: f32 = 0.2 in 0.0 ..= 1.0;
+        /// Steps per unit of light the light map is drawn in, on the 2 px
+        /// block grid like every other glow; 0 draws smooth light.
+        light_bands: i32 = 5 in 0 ..= 16;
+        /// Dither between the light's steps with a 2x2 pattern, so a band
+        /// edge reads as drawn rather than as a contour line.
+        light_dither: bool = true in 0 ..= 1;
+        /// Whether walls stop light: headlights, fires, portals and blasts
+        /// cast shadows behind brick, iron, wood and the towers (glass
+        /// lets it through; props and trees are too low or too open to).
+        light_shadows: bool = true in 0 ..= 1;
+        /// How far (px) a light carries into the wall that stops it, so the
+        /// wall's near face is lit rather than a black edge.
+        light_wall_bleed_px: f32 = 10.0 in 0.0 ..= 32.0;
+        /// Headlights: how far ahead a hull's beam reaches (px; an enemy's
+        /// reaches four fifths as far), half the cone's angle (degrees) and
+        /// how bright it is.
+        headlight_length_px: f32 = 190.0 in 0.0 ..= 600.0;
+        headlight_half_angle_deg: f32 = 24.0 in 4.0 ..= 80.0;
+        headlight_strength: f32 = 1.0 in 0.0 ..= 3.0;
+        /// The glow every hull carries in its seat's colour (enemies a dim
+        /// amber), so no tank is ever lost in the dark: radius (px) and
+        /// strength.
+        hull_glow_radius_px: f32 = 46.0 in 0.0 ..= 160.0;
+        hull_glow_strength: f32 = 0.5 in 0.0 ..= 2.0;
+        /// How much light shots, muzzle and impact flashes and hits throw
+        /// into the dark.
+        shot_light_strength: f32 = 1.0 in 0.0 ..= 3.0;
+        /// Fire light - burning ground, burning tiles and wrecks, lit fuses:
+        /// radius (px) and strength.
+        fire_light_radius_px: f32 = 120.0 in 0.0 ..= 400.0;
+        fire_light_strength: f32 = 1.0 in 0.0 ..= 3.0;
+        /// The light a blast throws at its first frame (px, at a blast's
+        /// scale 1); a mushroom cloud's reaches half as far again.
+        blast_light_radius_px: f32 = 210.0 in 0.0 ..= 600.0;
+        /// Pickups and frogs glow faintly, so a lamp can find them.
+        pickup_glow_strength: f32 = 0.4 in 0.0 ..= 2.0;
+        /// Rain: amount (a multiplier on the look's), fall speed (px/s),
+        /// slant (x px per px fallen; negative leans the other way) and
+        /// how often drops splash on the ground and ring the water.
+        rain_density: f32 = 1.0 in 0.0 ..= 2.0;
+        rain_speed_px: f32 = 640.0 in 50.0 ..= 2000.0;
+        rain_slant: f32 = 0.24 in -1.0 ..= 1.0;
+        rain_splash_rate: f32 = 1.0 in 0.0 ..= 3.0;
+        /// Average seconds between lightning strikes in a storm, and how
+        /// bright a strike lights the field.
+        lightning_gap_seconds: f32 = 7.0 in 1.0 ..= 60.0;
+        lightning_strength: f32 = 1.0 in 0.0 ..= 2.0;
+        /// Fog: amount (a multiplier on the look's) and how fast its banks
+        /// drift.
+        fog_density: f32 = 1.0 in 0.0 ..= 2.0;
+        fog_drift_speed: f32 = 1.0 in 0.0 ..= 5.0;
+        /// Fog and blowing sand thin out within this radius (px) of every
+        /// seat's tank, so a player always sees their own ground. 0 draws
+        /// the air the same everywhere.
+        weather_clear_radius_px: f32 = 120.0 in 0.0 ..= 400.0;
+        /// Sandstorm: amount (a multiplier on the look's) and wind speed.
+        sand_density: f32 = 1.0 in 0.0 ..= 2.0;
+        sand_wind_speed: f32 = 1.0 in 0.0 ..= 4.0;
+        /// Snow: how much falls (a multiplier on the look's) and how much
+        /// of the ground it covers, 0 to 1.
+        snow_density: f32 = 1.0 in 0.0 ..= 2.0;
+        snow_cover: f32 = 1.0 in 0.0 ..= 1.0;
+        /// Heat haze: how far (px) rows of the field shimmer - in whole
+        /// 2 px steps, so the art never smears - and how fast.
+        haze_amplitude_px: f32 = 2.0 in 0.0 ..= 8.0;
+        haze_speed: f32 = 1.0 in 0.0 ..= 4.0;
+        /// How much a heavy sky darkens the field toward its edges (a
+        /// multiplier on the look's own vignette).
+        weather_vignette: f32 = 1.0 in 0.0 ..= 2.0;
     }
 }
 

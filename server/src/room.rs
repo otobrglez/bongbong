@@ -1448,7 +1448,7 @@ mod dev {
                 }));
                 self.life.connect(now);
             }
-            self.start(0)?;
+            self.start(0).map_err(|r| r.to_string())?;
             self.refresh_stats();
             Ok(json!({ "seats": seats, "tick": self.dev_tick(), "seed": self.round_seed }))
         }

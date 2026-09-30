@@ -101,6 +101,9 @@ pub struct EditorTextures<'a> {
     pub portal: &'a Texture2D,
     pub tanks: &'a Texture2D,
     pub trees: &'a Texture2D,
+    /// static/towers_sheet.png - the defence towers' bases and tops.
+    pub towers: &'a Texture2D,
+    pub pickup_tower_pack: &'a Texture2D,
 }
 
 /// The builder's `Sheet` lookup, for the `ground::draw` it shares with the
@@ -116,6 +119,7 @@ impl Sheets for EditorTextures<'_> {
             Sheet::Walls => self.obstacles,
             Sheet::Props => self.props,
             Sheet::Trees => self.trees,
+            Sheet::Towers => self.towers,
             Sheet::Grass(_) => self.grass,
             Sheet::Portal => self.portal,
             Sheet::Tanks => self.tanks,
@@ -130,6 +134,7 @@ impl Sheets for EditorTextures<'_> {
             Sheet::Pickup(PickupKind::Shield) => self.pickup_shield,
             Sheet::Pickup(PickupKind::Flamethrower) => self.pickup_flamethrower,
             Sheet::Pickup(PickupKind::FrogHealth) => self.pickup_frog_health,
+            Sheet::Pickup(PickupKind::TowerPack) => self.pickup_tower_pack,
             Sheet::Damage | Sheet::MinigunMount | Sheet::MissilePod | Sheet::Tracks | Sheet::BarrelExplosion | Sheet::Frog { .. } => {
                 panic!("the builder has no {sheet:?} sheet")
             }
@@ -235,6 +240,20 @@ impl MapEditor {
                         let dest = Rectangle::new(pos.x, pos.y, big, big);
                         let origin = Vector2::new(big / 2.0, big / 2.0);
                         d.draw_texture_pro(sheet_texture(textures, sheet), src, dest, origin, 0.0, Color::WHITE);
+                    }
+                    CellObject::Tesla { .. } | CellObject::GunTower { .. } | CellObject::BioSlush { .. } => {
+                        // At the sprite's own 48px like a tree, base then
+                        // top pointing up, with its reach ringed faintly so
+                        // a map maker sees what it covers.
+                        let (kind, side) = obj.tower().expect("tower cells name a tower");
+                        let big = crate::TREE_TEXTURE_SIZE;
+                        let dest = Rectangle::new(pos.x, pos.y, big, big);
+                        let origin = Vector2::new(big / 2.0, big / 2.0);
+                        let reach = if side == crate::frog::Side::Enemy { Color::new(230, 60, 60, 70) } else { Color::new(77, 155, 230, 70) };
+                        d.draw_circle_lines(pos.x as i32, pos.y as i32, kind.range(), reach);
+                        for src in [crate::tower::icon_source_rec(kind, side), crate::tower::icon_top_rec(kind, side)] {
+                            d.draw_texture_pro(textures.towers, src, dest, origin, 0.0, Color::WHITE);
+                        }
                     }
                     CellObject::Road | CellObject::Water => {} // already painted into `self.ground`
                     CellObject::TallGrass => {
@@ -390,7 +409,8 @@ impl MapEditor {
             d.draw_text(&text().get(keys::EDITOR_NO_MAPS), panel.x as i32 + 16, panel.y as i32 + 15, HUD_TEXT_SIZE, DIM);
             return;
         }
-        for (i, entry) in entries.iter().skip(scroll).take(LOAD_VISIBLE_ROWS).enumerate() {
+        let rows = Self::load_page_rows(entries.len());
+        for (i, entry) in entries.iter().skip(scroll).take(rows).enumerate() {
             let row = Self::load_row_rect(panel, i);
             let text_y = (row.y + (row.height - HUD_TEXT_SIZE as f32) / 2.0) as i32;
             d.draw_text(&fit_text(&entry.name, LOAD_PANEL_W - 120.0, HUD_TEXT_SIZE), row.x as i32 + 16, text_y, HUD_TEXT_SIZE, TEXT);
@@ -398,12 +418,21 @@ impl MapEditor {
                 d.draw_text(&text().get(keys::EDITOR_SHIPPED), (row.x + row.width - 80.0) as i32, text_y, HUD_TEXT_SIZE, DIM);
             }
         }
-        if entries.len() > LOAD_VISIBLE_ROWS {
+        if entries.len() > rows {
+            // The pager: `<` at the left end, `>` at the right, each dim at
+            // its own end of the list, and the span on screen between them.
+            let pager = Self::load_row_rect(panel, rows);
+            let last = entries.len() - rows;
+            let arrow_y = (pager.y + (pager.height - HUD_TEXT_SIZE as f32) / 2.0) as i32;
+            d.draw_text("<", pager.x as i32 + 16, arrow_y, HUD_TEXT_SIZE, if scroll > 0 { TEXT } else { DIM });
+            let right = pager.x + pager.width - 16.0 - text_width(">", HUD_TEXT_SIZE);
+            d.draw_text(">", right as i32, arrow_y, HUD_TEXT_SIZE, if scroll < last { TEXT } else { DIM });
             let hint = text().fmt(
                 keys::EDITOR_PAGE,
-                &[("from", (scroll + 1).into()), ("to", (scroll + LOAD_VISIBLE_ROWS).min(entries.len()).into()), ("n", entries.len().into())],
+                &[("from", (scroll + 1).into()), ("to", (scroll + rows).min(entries.len()).into()), ("n", entries.len().into())],
             );
-            d.draw_text(&hint, panel.x as i32 + 16, (panel.y + panel.height - 14.0) as i32, HUD_LABEL_SIZE, DIM);
+            let hint_x = pager.x + (pager.width - text_width(&hint, HUD_LABEL_SIZE)) / 2.0;
+            d.draw_text(&hint, hint_x as i32, (pager.y + (pager.height - HUD_LABEL_SIZE as f32) / 2.0) as i32, HUD_LABEL_SIZE, DIM);
         }
     }
 
@@ -555,6 +584,7 @@ fn pickup_texture<'a>(textures: &EditorTextures<'a>, pickup: PickupKind) -> &'a 
         PickupKind::Shield => textures.pickup_shield,
         PickupKind::Flamethrower => textures.pickup_flamethrower,
         PickupKind::FrogHealth => textures.pickup_frog_health,
+        PickupKind::TowerPack => textures.pickup_tower_pack,
     }
 }
 
@@ -663,6 +693,12 @@ pub fn draw_tool_icon(d: &mut impl RaylibDraw, textures: &EditorTextures, theme:
             let src = Rectangle::new(0.0, 0.0, crate::PICKUP_TEXTURE_SIZE, crate::PICKUP_TEXTURE_SIZE);
             d.draw_texture_pro(texture, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         }
+        Tool::Tower(kind, side) => {
+            // Base and top as a round draws them, the top pointing up.
+            for src in [crate::tower::icon_source_rec(kind, side), crate::tower::icon_top_rec(kind, side)] {
+                d.draw_texture_pro(textures.towers, src, dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+            }
+        }
         Tool::Eraser => {
             d.draw_texture_pro(
                 textures.eraser,
@@ -682,6 +718,7 @@ fn sheet_texture<'a>(textures: &EditorTextures<'a>, sheet: obstacle::Sheet) -> &
         obstacle::Sheet::Walls => textures.obstacles,
         obstacle::Sheet::Props => textures.props,
         obstacle::Sheet::Trees => textures.trees,
+        obstacle::Sheet::Towers => textures.towers,
         other => panic!("a map cell never draws from {other:?}"),
     }
 }
@@ -747,6 +784,7 @@ impl SettingsRow {
             SettingsRow::TierStart => keys::SETTINGS_TIER_START,
             SettingsRow::TierEnd => keys::SETTINGS_TIER_END,
             SettingsRow::Theme => keys::SETTINGS_THEME,
+            SettingsRow::Weather => keys::SETTINGS_WEATHER,
             SettingsRow::Reset => keys::SETTINGS_RESET,
         })
     }
@@ -777,6 +815,7 @@ impl SettingsRow {
             SettingsRow::TierStart => auto_or(s.tier_start.map(|tier| t.named("tier", tier.name()))),
             SettingsRow::TierEnd => auto_or(s.tier_end.map(|tier| t.named("tier", tier.name()))),
             SettingsRow::Theme => t.named("theme", s.theme.name()),
+            SettingsRow::Weather => t.named("weather", s.weather.name()),
             SettingsRow::Reset => String::new(),
         }
     }
@@ -796,6 +835,9 @@ impl SettingsRow {
             SettingsRow::TierEnd => o.tier_end,
             // No CLI flag names a theme: the map is the only source.
             SettingsRow::Theme => false,
+            // `--weather` (and the web page's `?weather=`) is the
+            // `weather_override` knob, which outranks every map's sky.
+            SettingsRow::Weather => crate::tuning::tuning().weather_override >= 0,
             SettingsRow::Reset => false,
         }
     }

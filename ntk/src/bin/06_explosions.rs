@@ -68,6 +68,8 @@ fn main() {
     let minigun_bullets = load(&mut rl, "static/minigun_bullets.png");
     let grass = load(&mut rl, "static/nature_sheet.png");
     let trees = load(&mut rl, "static/trees_sheet.png");
+    let towers = load(&mut rl, "static/towers_sheet.png");
+    let pickup_tower_pack = load(&mut rl, "static/pickups/tower_pack.png");
     let portal = load(&mut rl, "static/portal_sheet.png");
     let minigun_mount = load(&mut rl, "static/minigun_mount.png");
     let missile_pod = load(&mut rl, "static/missile_pod.png");
@@ -170,6 +172,8 @@ fn main() {
             missile: &missile,
             grass: &grass,
             trees: &trees,
+            towers: &towers,
+            pickup_tower_pack: &pickup_tower_pack,
             portal: &portal,
             minigun_mount: &minigun_mount,
             missile_pod: &missile_pod,
@@ -237,6 +241,8 @@ fn main() {
                             ground: &ground,
                             grass: &grass,
                             trees: &trees,
+                            towers: &towers,
+                            pickup_tower_pack: &pickup_tower_pack,
                             portal: &portal,
                             frog_idle: &frog_idle,
                             pickup_health: &pickup_health,
@@ -284,7 +290,7 @@ fn main() {
             &mut composite_play,
             &view,
             bongbong::math::Color::WHITE,
-            &mut Effects { shock: &mut shock, muzzle: &mut muzzle, impact: &mut impact, fx: &fx, touch: None },
+            &mut Effects { shock: &mut shock, muzzle: &mut muzzle, impact: &mut impact, shots: None, weather: None, fx: &fx, touch: None },
             &textures,
             &layout_play,
             &PlayChrome::default(),

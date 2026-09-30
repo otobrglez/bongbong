@@ -56,7 +56,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Connect to Tailscale
         uses: tailscale/github-action@v4
@@ -140,7 +140,7 @@ jobs:
           curl -fsS "https://rooms.bongbong.io/pr-$PR/metrics" | grep bongbong_info
 
       - name: Comment the preview URLs
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const pr = context.payload.pull_request.number;
@@ -243,7 +243,7 @@ jobs:
           done
 
       - name: Mark the preview comment as removed
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const pr = context.payload.pull_request.number;

@@ -34,7 +34,7 @@ in {
   languages.rust = {
     enable = true;
     channel = "stable";
-    version = "1.97.1";
+    version = "1.98.1";
     lsp.enable = true;
     # wasm32-unknown-emscripten: the web build target. Emscripten itself is
     # not a nix package here - see tools/setup_emscripten.sh (pinned emsdk

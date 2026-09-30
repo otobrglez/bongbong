@@ -11,9 +11,11 @@ use crate::ai::Intent;
 use crate::editor::{BuilderInput, CliOverrides, EditorTextures};
 use crate::render::game::{Effects, Textures};
 use crate::hud::{
-    leave_button_rect, leave_dialog_rects, mode_button_rect, online_button_rect, players_button_rect,
+    leave_button_rect, leave_dialog_rects, level_button_rect, mode_button_rect, online_button_rect, players_button_rect,
     players_dialog_rects, restart_button_rect, BAR_FILL,
 };
+use crate::level_select::SelectInput;
+use crate::levels::{Campaign, Levels};
 use crate::lobby::LobbyInput;
 use crate::mode::{Driver, Session};
 // Online play reaches a room over a socket or the rig over a thread,
@@ -97,9 +99,9 @@ fn left_shift_down(rl: &RaylibHandle) -> bool {
 /// The URL the page was opened on, as the page published it
 /// (`site/src/scripts/room.ts`). The web build's command line, in full:
 /// a browser has no argv, so the room a link names, the rooms server a
-/// dev link overrides and the `?lang=` a tester adds all travel in here
-/// (`net::rooms::Invite`, docs/online-coop-prd.md §4.10;
-/// `text::lang_from_url`).
+/// dev link overrides and the `?lang=` and `?weather=` a tester adds all
+/// travel in here (`net::rooms::Invite`, docs/online-coop-prd.md §4.10;
+/// `text::lang_from_url`, `weather::weather_from_url`).
 #[cfg(target_os = "emscripten")]
 const PAGE_INVITE: &std::ffi::CStr = c"(function(){try{return String(window.bbInvite||'')}catch(e){return ''}})()";
 
@@ -156,6 +158,18 @@ fn explicit_language(args: &Args) -> Option<String> {
     args.lang.clone()
 }
 
+/// The sky asked for outright: `--weather` on a desktop, the page's
+/// `?weather=` on the web.
+fn explicit_weather(args: &Args) -> Option<crate::map::Weather> {
+    #[cfg(target_os = "emscripten")]
+    {
+        let _ = args;
+        return crate::weather::weather_from_url(&page_string(PAGE_INVITE));
+    }
+    #[cfg(not(target_os = "emscripten"))]
+    args.weather
+}
+
 /// The languages this platform prefers, most preferred first, as the
 /// platform spells them: the page's `navigator.languages` on the web,
 /// SDL's list on iOS, the system properties on Android, `sys-locale`'s
@@ -188,6 +202,72 @@ fn platform_languages() -> Vec<String> {
 #[cfg(all(feature = "online", not(target_os = "emscripten")))]
 fn device_token(nick: &str) -> String {
     format!("bongbong-{nick}")
+}
+
+/// The level progress the page kept in `localStorage`: the map name of
+/// the furthest level reached (docs/levels.md).
+#[cfg(target_os = "emscripten")]
+const PAGE_PROGRESS: &std::ffi::CStr =
+    c"(function(){try{return String(localStorage.getItem('bongbong.level')||'')}catch(e){return ''}})()";
+
+/// Where a desktop or a phone keeps its level progress: the platform's
+/// data directory (`levels::progress_path`), or on Android the activity's
+/// own files directory.
+#[cfg(not(target_os = "emscripten"))]
+fn progress_path() -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "android")]
+    {
+        android::data_dir().map(|dir| dir.join("progress.toml"))
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        crate::levels::progress_path()
+    }
+}
+
+/// The furthest level this player reached in an earlier session, as its
+/// map's name: the page's `localStorage` on the web, a file elsewhere.
+/// `None` for a first session, or a store that cannot be read.
+fn load_progress() -> Option<String> {
+    #[cfg(target_os = "emscripten")]
+    {
+        let level = page_string(PAGE_PROGRESS).trim().to_string();
+        (!level.is_empty()).then_some(level)
+    }
+    #[cfg(not(target_os = "emscripten"))]
+    {
+        progress_path().and_then(|path| crate::levels::read_progress(&path))
+    }
+}
+
+/// Keep `level` as the furthest level reached, where `load_progress`
+/// will find it. A store that cannot be written is logged and skipped:
+/// the session plays on, it only forgets.
+fn save_progress(level: &str) {
+    #[cfg(target_os = "emscripten")]
+    {
+        unsafe extern "C" {
+            fn emscripten_run_script(script: *const std::os::raw::c_char);
+        }
+        // A level's name is a map name - letters, digits, `-` and `_`
+        // (`Levels::parse`) - so it goes into the script as it is.
+        if !level.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+            return;
+        }
+        let script = format!("(function(){{try{{localStorage.setItem('bongbong.level','{level}')}}catch(e){{}}}})()");
+        let Ok(script) = std::ffi::CString::new(script) else { return };
+        // SAFETY: a NUL-terminated script, evaluated synchronously; it
+        // catches its own exceptions, so nothing unwinds into the runtime.
+        unsafe { emscripten_run_script(script.as_ptr()) };
+    }
+    #[cfg(not(target_os = "emscripten"))]
+    match progress_path() {
+        Some(path) => match crate::levels::write_progress(&path, level) {
+            Ok(()) => eprintln!("[levels] reached {level} ({})", path.display()),
+            Err(e) => eprintln!("[levels] {e}"),
+        },
+        None => eprintln!("[levels] reached {level}, with nowhere to keep it"),
+    }
 }
 
 /// The play clock: real frame time paid out in whole simulation steps of
@@ -332,14 +412,21 @@ pub struct Args {
     #[arg(long = "no-shadows")]
     no_shadows: bool,
 
-    /// Load a saved battlefield (see docs/map-editor-design.md) instead of
-    /// today's fully-random layout - border walls, the player fortress, and
-    /// enemy spawns stay procedural on top of the map's terrain. Loaded (and
-    /// validated) eagerly at CLI-parse time, so a missing/malformed map file
-    /// fails fast with a clear error instead of silently falling back to
-    /// random. With `--editor` the builder opens on this map.
+    /// Play this map instead of the levels (see docs/map-editor-design.md
+    /// and docs/levels.md) - border walls and enemy spawns stay procedural
+    /// on top of the map's terrain. Free play, which restarts on its own,
+    /// unless the file is one of the levels' maps by name. Loaded (and
+    /// validated) eagerly at CLI-parse time, so a missing/malformed map
+    /// file fails fast with a clear error. With `--editor` the builder
+    /// opens on this map.
     #[arg(short = 'm', long = "map", value_parser = parse_map)]
     map: Option<crate::map::MapFile>,
+
+    /// Start on this level of levels.toml - its number, counted from 1,
+    /// or its map's name - instead of the furthest one reached
+    /// (docs/levels.md). Progress still moves only on a win.
+    #[arg(long = "level", conflicts_with = "map")]
+    level: Option<String>,
 
     /// Start in Build mode - the map builder - instead of playing
     /// (docs/game-editor-fusion.md). The round is set up as usual, so
@@ -443,6 +530,15 @@ pub struct Args {
     /// `?lang=` off its page instead.
     #[arg(long = "lang", value_name = "TAG")]
     lang: Option<String>,
+
+    /// Put one sky over every map this run (docs/weather.md): clear,
+    /// night, dusk, rain, storm, fog, sandstorm, snow or heat_haze, or
+    /// random - a sky picked by each round's seed, so `--seed` pins it. It
+    /// is the `weather_override` knob, staged like `--zoom`, so a map's own
+    /// WEATHER key is left as it is and the tuning panel shows the pick.
+    /// The web build reads `?weather=` off its page instead.
+    #[arg(long = "weather", value_name = "SKY", value_parser = parse_weather)]
+    weather: Option<crate::map::Weather>,
 }
 
 /// The online round the command line asks for, with the rig's handle if
@@ -520,6 +616,13 @@ fn level_overrides(args: &Args) -> crate::level::LevelOverrides {
         tier_start: args.tier_start,
         tier_end: args.tier_end,
     }
+}
+
+fn parse_weather(s: &str) -> Result<crate::map::Weather, String> {
+    crate::map::Weather::parse(s).ok_or_else(|| {
+        let names: Vec<&str> = crate::map::Weather::ALL.iter().map(|w| w.name()).collect();
+        format!("unknown weather '{s}': one of {}", names.join(", "))
+    })
 }
 
 fn parse_map(s: &str) -> Result<crate::map::MapFile, String> {
@@ -688,7 +791,26 @@ pub fn run(args: Args) {
     // the player makes it - the bitmap is fitted into it by `view::View`.
     // The simulation, the physics, the maps and the probe only ever see
     // the field.
-    let map = args.map.clone().unwrap_or_else(default_map);
+    // The levels (docs/levels.md): a session opens on the furthest one
+    // this player has reached, or on `--level`; `-m` is free play on the
+    // map it names.
+    let campaign = Campaign::new(Levels::shipped(), load_progress().as_deref());
+    let map = match &args.map {
+        Some(map) => map.clone(),
+        None => {
+            let start = match args.level.as_deref() {
+                Some(spec) => campaign.levels.find(spec).unwrap_or_else(|| {
+                    eprintln!("[levels] no level {spec:?}: a number from 1 to {} or a level's map name", campaign.levels.len());
+                    std::process::exit(2);
+                }),
+                None => campaign.reached(),
+            };
+            campaign.map(start).unwrap_or_else(|e| {
+                eprintln!("[levels] level {}: {e}; playing the default map", start + 1);
+                default_map()
+            })
+        }
+    };
     let (screen_width, screen_height) = {
         let (w, h) = map.field_size();
         (w.round() as i32, h.round() as i32)
@@ -804,6 +926,12 @@ pub fn run(args: Args) {
     let trees_texture = rl
         .load_texture(&thread, "static/trees_sheet.png")
         .expect("failed loading trees texture");
+    let towers_texture = rl
+        .load_texture(&thread, "static/towers_sheet.png")
+        .expect("failed loading towers texture");
+    let pickup_tower_pack_texture = rl
+        .load_texture(&thread, "static/pickups/tower_pack.png")
+        .expect("failed loading tower pack texture");
     let portal_texture = rl
         .load_texture(&thread, "static/portal_sheet.png")
         .expect("failed loading portal texture");
@@ -890,6 +1018,25 @@ pub fn run(args: Args) {
         .expect("failed loading eraser texture");
 
     let (mut shock_fx, mut muzzle_fx, mut impact_fx) = load_ripples(&mut rl, &thread, screen_width, screen_height);
+    // The plasma orb and flame jet shaders. A driver that cannot compile
+    // them still plays: the bolt flies as its baked sprite and the stream
+    // is its particles.
+    let mut shot_shaders = match crate::render::shot_shaders::ShotShaders::load(&mut rl, &thread) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            eprintln!("[render] shot shaders unavailable, drawing the plain shots: {e}");
+            None
+        }
+    };
+    // The weather's passes (docs/weather.md). A driver that cannot compile
+    // them draws every sky clear; the round plays the same either way.
+    let mut weather_fx = match crate::render::weather::WeatherFx::load(&mut rl, &thread) {
+        Ok(w) => Some(w),
+        Err(e) => {
+            eprintln!("[render] weather shaders unavailable, every sky is clear: {e}");
+            None
+        }
+    };
     // The short-lived particle layer lives here rather than on `Game`:
     // it is presentation only, so nothing in the simulation can see it and
     // it is free to use `rand::rng()` (see fx.rs). The web build starts at
@@ -928,6 +1075,13 @@ pub fn run(args: Args) {
         let _ = tuning::submit_json(&format!(r#"{{"view_max_scale": {}}}"#, zoom.clamp(0.0, 8.0)));
         tuning::apply_pending();
     }
+    // `--weather` (the page's `?weather=`) is the `weather_override` knob,
+    // staged the same way; a `--tuning` file below can still set it.
+    if let Some(weather) = explicit_weather(&args) {
+        let _ = tuning::submit_json(&format!(r#"{{"weather_override": {}}}"#, weather.index()));
+        tuning::apply_pending();
+        eprintln!("[weather] {} over every map", weather.name());
+    }
     if let Some(path) = &args.tuning {
         match tuning::submit_file(path) {
             Ok(n) => eprintln!("[tuning] loaded {n} knob(s) from {}", path.display()),
@@ -955,6 +1109,7 @@ pub fn run(args: Args) {
     // The two modes (docs/game-editor-fusion.md): the round and the map
     // builder, whichever is live. `--editor` starts on the builder.
     let mut session = Session::new(game);
+    session.set_campaign(campaign);
     session.builder.cli_overrides = CliOverrides {
         tanks: args.enemies.is_some(),
         tank: args.tank.is_some(),
@@ -1219,7 +1374,25 @@ pub fn run(args: Args) {
                 // on any of them is never a tank order. Nothing here
                 // touches the simulation - a frozen round is one whose
                 // `update` is not called (see `Session::playing`).
-                if session.players_dialog {
+                if session.level_select.is_some() {
+                    // The level select takes every press and key while it
+                    // is up, and a press on it is nobody's shot - neither
+                    // the round's it closes back onto nor the next level's.
+                    if pressed {
+                        touch.claim(&touch_points);
+                    }
+                    let input = SelectInput {
+                        pointer: Some(layout.to_field(pointer)),
+                        pressed,
+                        left: rl.is_key_pressed(KeyboardKey::KEY_LEFT),
+                        right: rl.is_key_pressed(KeyboardKey::KEY_RIGHT),
+                        up: rl.is_key_pressed(KeyboardKey::KEY_UP),
+                        down: rl.is_key_pressed(KeyboardKey::KEY_DOWN),
+                        enter: rl.is_key_pressed(KeyboardKey::KEY_ENTER),
+                        escape: rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) || tab,
+                    };
+                    session.update_level_select(&input, layout.field);
+                } else if session.players_dialog {
                     let rects = players_dialog_rects(layout.field);
                     let field_p = layout.to_field(pointer);
                     if pressed {
@@ -1248,6 +1421,8 @@ pub fn run(args: Args) {
                     let rects = leave_dialog_rects(layout.field);
                     let field_p = layout.to_field(pointer);
                     if pressed {
+                        // The dialog's own press is nobody's shot.
+                        touch.claim(&touch_points);
                         if rects.leave.contains(field_p) {
                             session.answer_dialog(true);
                         } else if rects.stay.contains(field_p)
@@ -1261,6 +1436,20 @@ pub fn run(args: Args) {
                     } else if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) || tab {
                         session.answer_dialog(false);
                     }
+                } else if pressed && session.press_result(layout.to_field(pointer)) {
+                    // A level's end screen (docs/levels.md): PLAY AGAIN or
+                    // the way on. The tap that pressed it must not also be
+                    // the fire press that skips the next banner.
+                    touch.claim(&touch_points);
+                } else if rl.is_key_pressed(KeyboardKey::KEY_ENTER) && session.enter_result() {
+                    // Enter takes the way on after a win, PLAY AGAIN after
+                    // a loss; R is the simulation's own restart.
+                } else if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) && session.press_levels() {
+                    // Esc opens the level select over the round, wherever
+                    // it stands (docs/levels.md).
+                } else if pressed && session.level_button().is_some() && level_button_rect(layout.panel).contains(pointer) {
+                    // The bar's level button, in the mission word's place.
+                    session.press_levels();
                 } else if tab || (pressed && mode_button_rect(layout.panel).contains(pointer)) {
                     session.press_build();
                 } else if crate::TWO_PLAYERS_AVAILABLE
@@ -1358,6 +1547,8 @@ pub fn run(args: Args) {
                     ground: &ground_textures[theme_index(session.builder.map().theme)],
                     grass: &grass_textures[theme_index(session.builder.map().theme)],
                     trees: &trees_texture,
+                    towers: &towers_texture,
+                    pickup_tower_pack: &pickup_tower_pack_texture,
                     // Palette icon: the first colour variant's idle frame -
                     // a fixed representative sprite, since the builder
                     // places a frog *cell*, not a rolled colour.
@@ -1448,6 +1639,13 @@ pub fn run(args: Args) {
         // `step`'s own frames, or nothing while frozen - and a frozen or
         // dialog frame leaves the clock at zero, so the round resumes on a
         // fresh step rather than catching up on the time it stood still.
+        // How far the particle layer ages this frame: the frame's real
+        // time, except in a dev-server lockstep, where it is the simulated
+        // time the frame's `step` ran - so a frozen round's sparks and hits
+        // freeze with it and a recording stepped a frame at a time plays
+        // them at their real pace.
+        #[cfg_attr(not(all(feature = "dev-tools", not(target_os = "emscripten"))), allow(unused_mut))]
+        let mut fx_dt = dt;
         if session.playing() {
             #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
             let frozen = dev.as_ref().is_some_and(|dev| dev.lockstep());
@@ -1462,7 +1660,11 @@ pub fn run(args: Args) {
             #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
             let advanced = match &mut dev {
                 Some(dev) => {
+                    let before = session.game.frame();
                     dev.advance(&mut session.game, input, steps, width, height, &mut |game| fx.observe_events(game));
+                    if frozen {
+                        fx_dt = session.game.frame().saturating_sub(before) as f32 * PHYSICS_FIXED_DT;
+                    }
                     true
                 }
                 None => false,
@@ -1483,6 +1685,15 @@ pub fn run(args: Args) {
             clock.reset();
             carried = Input::default();
         }
+        // A won level is progress, kept the frame it is won - a player who
+        // closes the window on the end screen has still reached the next.
+        session.note_outcome();
+        if let Some(level) = session.take_progress() {
+            save_progress(&level);
+        }
+        // A level's end screen that has counted down takes its way: the
+        // next level after a win, the same one again after a loss.
+        session.follow_countdown();
         // The round on screen: the room's replica in an online round,
         // the session's own otherwise.
         let game = session.shown();
@@ -1490,8 +1701,8 @@ pub fn run(args: Args) {
         // world the round is at (its events it read after each step),
         // then ages what is already in flight. Deliberately not inside
         // `Game` - see fx.rs.
-        fx.observe(game, dt);
-        fx.tick(dt);
+        fx.observe(game, fx_dt);
+        fx.tick(fx_dt);
         game.render(
             rl,
             thread,
@@ -1503,6 +1714,8 @@ pub fn run(args: Args) {
                 shock: &mut shock_fx,
                 muzzle: &mut muzzle_fx,
                 impact: &mut impact_fx,
+                shots: shot_shaders.as_mut(),
+                weather: weather_fx.as_mut(),
                 fx: &fx,
                 // No stick over the lobby: the field behind it is frozen
                 // and every press there belongs to the screen.
@@ -1535,6 +1748,8 @@ pub fn run(args: Args) {
                 missile_pod: &missile_pod_texture,
                 grass: &grass_textures[theme_index(game.map.theme)],
                 trees: &trees_texture,
+                towers: &towers_texture,
+                pickup_tower_pack: &pickup_tower_pack_texture,
                 portal: &portal_texture,
             },
             &layout,

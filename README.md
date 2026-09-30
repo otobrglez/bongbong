@@ -23,10 +23,19 @@ Everything runs from inside the devenv (Nix) shell. `just --list` has the rest.
 
 ```bash
 # Options work the same on every desktop run
-cargo run -- -e 12 --map=maps/default.toml   # 12 enemies on a map
+cargo run                                    # the levels, from the furthest one reached (levels.toml)
+cargo run -- --level 5                       # start on level 5 (or by map name: --level carnival)
+cargo run -- -e 12 --map=maps/default.toml   # free play: 12 enemies on one map
 cargo run -- --tank titan                    # pick the player's chassis
 cargo run -- --editor                        # start in the map builder (BUILD/PLAY switch anytime)
 ```
+
+The game is a run of levels, listed in order in `levels.toml`: win one and
+the next opens, lose and play it again - the end screen counts down to
+either by itself (docs/levels.md). The furthest level
+reached is remembered between sessions, and any level up to it can be played
+again from the level select - the `LEVEL` button at the left end of the bar,
+`LEVELS` on the end screen, or Esc.
 
 The phone lanes are documented in `CLAUDE.md` (the "iOS simulator build" and
 "Android build" sections) and in `docs/ios-native-port-prd.md` /

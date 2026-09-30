@@ -242,6 +242,9 @@ impl Game {
             f.events.push(Event::Blast { x: pos.x, y: pos.y, chained, drum });
             f.pending_blasts.push(PendingBlast { center: pos, drum, shape });
         }
+        if let Some(kind) = crate::tower::TowerKind::from_material(material) {
+            self.tower_died(f, kind, crate::tower::side_of_variant(variant), pos);
+        }
     }
 
     /// A barrel's detonation: everyone inside the drum's blast radius
