@@ -214,6 +214,7 @@ keys! {
     SETTINGS_TIER_START = "settings-tier-start";
     SETTINGS_TIER_END = "settings-tier-end";
     SETTINGS_THEME = "settings-theme";
+    SETTINGS_WEATHER = "settings-weather";
     SETTINGS_RESET = "settings-reset";
     SETTINGS_AUTO = "settings-auto";
     SETTINGS_CLI = "settings-cli";
@@ -640,6 +641,9 @@ mod text_tests {
         for theme in [crate::map::Theme::Grass, crate::map::Theme::Desert] {
             ids.push(format!("theme-{}", theme.name()));
         }
+        for weather in crate::map::Weather::ALL {
+            ids.push(format!("weather-{}", weather.name()));
+        }
         for spawn in [crate::level::SpawnKind::Band, crate::level::SpawnKind::Waves] {
             ids.push(format!("spawn-{}", spawn.name()));
         }
@@ -827,6 +831,7 @@ mod text_tests {
             (keys::SETTINGS_TIER_START, 16, 116, vec![]),
             (keys::SETTINGS_TIER_END, 16, 116, vec![]),
             (keys::SETTINGS_THEME, 16, 116, vec![]),
+            (keys::SETTINGS_WEATHER, 16, 116, vec![]),
             (keys::SETTINGS_RESET, 16, 116, vec![]),
             // The level's lines and the end screen: across the smallest
             // field the game ships (maps/crossplay/, 768 px) less a margin,
@@ -895,6 +900,17 @@ mod text_tests {
                 let short = catalogue.message(&format!("tool-short-{}", tool.name()), &[]).unwrap_or(long);
                 if width(&short, HUD_LABEL_SIZE) > 48 {
                     over.push(format!("{tag}: short tool name {short:?} overflows the bar's line"));
+                }
+            }
+            // A settings row's value runs from 180 px into the row to its
+            // `>` button at 288 (`editor/render.rs`'s `SETTINGS_VALUE_X`,
+            // `settings_inc_rect`), with the `(cli)` mark after it when a
+            // flag outranks the map - the weather's can.
+            for weather in crate::map::Weather::ALL {
+                let name = catalogue.named("weather", weather.name());
+                let mark = catalogue.get(keys::SETTINGS_CLI);
+                if width(&name, HUD_TEXT_SIZE) + 4 + width(&mark, HUD_LABEL_SIZE) > 288 - 180 - 4 {
+                    over.push(format!("{tag}: weather {} = {name:?} overflows its settings row", weather.name()));
                 }
             }
         }

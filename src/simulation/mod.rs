@@ -44,6 +44,8 @@ mod seat_tests;
 #[cfg(test)]
 mod tower_tests;
 mod waves;
+#[cfg(test)]
+mod weather_tests;
 mod weapons;
 
 pub use waves::{RollIn, WaveStatus};
@@ -824,6 +826,17 @@ pub struct Game {
     pub seed_override: Option<u64>,
     /// The seed this round actually ran with (see `round_seed()`).
     round_seed: u64,
+    /// The sky this round is fought and drawn under (docs/weather.md),
+    /// fixed by `init` from the map's `weather` key, the round seed (a
+    /// `random` sky's pick) and, unless `weather_from_map`, the
+    /// `weather_override` knob - `Game::weather()`. Never `Random`.
+    pub(crate) weather: crate::map::Weather,
+    /// `init` reads the map's `weather` key alone, not the window's
+    /// `weather_override` knob: set on a room's replica and sandbox and on
+    /// the rig's authority, because a room's round is fought under its
+    /// map's sky and every client has to draw and drive under that one.
+    /// Kept across restarts.
+    pub weather_from_map: bool,
     /// The round's single RNG stream - see the module doc. `None` only
     /// before the first `init`. `update` takes it into the frame context
     /// and puts it back at its end.
@@ -1045,6 +1058,11 @@ impl Game {
         let seed = self.seed_override.unwrap_or_else(|| rand::rng().random());
         self.round_seed = seed;
         let mut rng = SmallRng::seed_from_u64(seed);
+        // The sky is the round's from here on: the rules read it (a
+        // frozen lake below, sight, grip and gusts every frame) as the
+        // renderer does, so it is settled once rather than asked of the
+        // knobs frame by frame. A hash of the seed, no RNG.
+        self.weather = crate::weather::in_force(self.map.weather, seed, self.weather_from_map, &tuning());
 
         self.world = hecs::World::new();
         self.tracks.clear();
@@ -1131,6 +1149,12 @@ impl Game {
                 &painted(|o| matches!(o, CellObject::Water)),
             )
         };
+        // Under a snowy sky every lake and ford is ice (docs/weather.md):
+        // no deep cell is left for a collider, a spawn roll or the nav
+        // grid to keep a hull off, and no current runs.
+        if crate::weather::freezes(self.weather, &tuning()) {
+            self.water.freeze();
+        }
         let deep_cells: HashSet<(i32, i32)> = self.water.deep_grid_cells().collect();
         for (gx, gy) in self.water.deep_grid_cells() {
             let half = battlefield::tile_hull_half_extent(&deep_cells, gx, gy, OBSTACLE_GRID_SIZE * 0.5);
@@ -1759,10 +1783,10 @@ impl Game {
             tank.ease_ring_position(dt);
             tank.tick_minigun_spin(dt);
             let depth = self.water.depth_at(tank.position);
-            if depth == crate::ground::Depth::Dry {
-                tank.wet_timer = (tank.wet_timer - dt).max(0.0);
-            } else {
+            if depth.is_wet() {
                 tank.wet_timer = wet_seconds;
+            } else {
+                tank.wet_timer = (tank.wet_timer - dt).max(0.0);
             }
             if let Some(before) = tank.track_from.replace(tank.position) {
                 lay_tracks(&mut self.tracks, tank, before, depth);
@@ -1825,12 +1849,14 @@ impl Game {
         let Some(entity) = self.seats.get(seat).copied().flatten() else { return };
         // Disjoint borrows: `drive_tank` wants the solver and the hull at
         // once, and they are two fields of the same struct.
-        let Game { world, physics, water, .. } = self;
+        let Game { world, physics, water, weather, time, .. } = self;
         let Ok(mut tank) = world.get::<&mut Tank>(entity) else { return };
         if tank.body.is_none() || tank.is_wreck() {
             return;
         }
-        let footing = Footing::at(water, tank.position);
+        // The sandbox's clock stands at the last snapshot's tick, so a
+        // gust reaches the predicted hull when the drawn sand front does.
+        let footing = Footing::at(water, *weather, tank.position, *time);
         drive_tank(physics, &mut tank, intent, dt, footing);
         physics.step();
         // The solver moved the body; the tank's own position is what
@@ -1899,7 +1925,11 @@ impl Game {
                 return Err("still entering");
             }
             let ticks = (reach_ticks as f32).max(POSE_REACH_TICKS);
-            (tank.position, tank.effective_speed() * PHYSICS_FIXED_DT * ticks + POSE_REACH_SLACK_PX)
+            // The ground's own drift - a current, a gust - carries a hull
+            // past its top speed, and the rules put it there.
+            let flow = Footing::at(&self.water, self.weather, tank.position, self.time).flow;
+            let drift = (flow.x * flow.x + flow.y * flow.y).sqrt();
+            (tank.position, (tank.effective_speed() + drift) * PHYSICS_FIXED_DT * ticks + POSE_REACH_SLACK_PX)
         };
         let (dx, dy) = (pose.position.x - from.x, pose.position.y - from.y);
         if (dx * dx + dy * dy).sqrt() > reach {
@@ -2552,7 +2582,7 @@ impl Game {
         // A seat whose client owns the hull was put where it is by
         // `accept_seat_pose` before this tick; the stick only fires.
         if self.seat_owned[index] != self.frame {
-            let footing = Footing::at(&self.water, tank.position);
+            let footing = Footing::at(&self.water, self.weather, tank.position, self.time);
             drive_tank(&mut self.physics, tank, intent, f.dt, footing);
         }
         tick_queued_shots(&mut self.physics, f, tank, owner);
@@ -2658,7 +2688,8 @@ impl Game {
         // stays hidden is genuinely *lost* once `enemy_alert_hold_seconds`
         // runs out, rather than merely un-shootable.
         let alert_before = self.alert_position.filter(|_| self.alert_timer > 0.0);
-        let view_range = tuning().enemy_view_range;
+        // How far an enemy sees is the sky's say too (docs/weather.md).
+        let view_range = self.enemy_sight();
         let mut seen: Option<(f32, Position)> = None;
         for p in players.iter().filter(|p| !p.concealed && !p.wreck && !p.entering) {
             for m in &movers[players.len()..] {
@@ -2714,7 +2745,7 @@ impl Game {
         let mut engaged_frog: Vec<(Entity, Position)> = Vec::new();
         for (entity, tank, ai) in self.world.query::<(Entity, &Tank, &Ai)>().iter() {
             let (target, hunting) = target_of(ai);
-            let status = if guard_holds(ai) { EngageStatus::OutOfRange } else { engage_status(tank, ai, target) };
+            let status = if guard_holds(ai) { EngageStatus::OutOfRange } else { engage_status(tank, ai, target, view_range) };
             report.tanks.push(EngageTank::new(entity, tank.owner_slot(), status));
             if status == EngageStatus::Engaged {
                 if hunting.is_some() {
@@ -2921,6 +2952,7 @@ impl Game {
                     player_line_of_sight,
                     player_hidden,
                     walls_ahead,
+                    view_range,
                 )
             });
             if let Some(before) = before {
@@ -2993,7 +3025,7 @@ impl Game {
         for p in &pending {
             let intent = self.commander.apply(p.slot, p.intent);
             with_tank_mut(&self.world, p.entity, |tank| {
-                let footing = Footing::at(&self.water, tank.position);
+                let footing = Footing::at(&self.water, self.weather, tank.position, self.time);
                 drive_tank_with(&mut self.physics, tank, intent, f.dt, p.current, p.facing_before, footing);
             });
         }
@@ -4011,7 +4043,7 @@ impl Game {
             .world
             .query::<&Tank>()
             .iter()
-            .filter(|t| !t.is_wreck() && self.water.depth_at(t.position) != crate::ground::Depth::Dry)
+            .filter(|t| !t.is_wreck() && self.water.depth_at(t.position).is_wet())
             .map(|t| {
                 let speed = t.body.map_or(0.0, |b| {
                     let v = self.physics.velocity(b);
@@ -4232,8 +4264,9 @@ struct Pending {
     facing_before: f32,
 }
 
-/// What the ground under a hull does to its drive this frame
-/// (docs/water.md): dry ground leaves everything at 1 and the water still.
+/// What the ground and the sky do to a hull's drive this frame
+/// (docs/water.md, docs/weather.md "The rules"): dry ground under a clear
+/// sky leaves everything at 1 and the air and the water still.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) struct Footing {
     /// Fraction of the commanded top speed and of `tank_accel_force` the
@@ -4241,25 +4274,50 @@ pub(crate) struct Footing {
     pace: f32,
     /// Fraction of `tank_turn_grip_force` the hull keeps.
     grip: f32,
-    /// The water's own velocity: the frame the hull drives relative to,
-    /// so a hull that stops in a current drifts with it.
+    /// Fraction of `tank_accel_force` its tracks get on top of `pace`:
+    /// less than 1 where they spin (ice).
+    traction: f32,
+    /// Fraction of `tank_decel_curve_rate` it brakes with: less than 1
+    /// where it coasts (ice).
+    brake: f32,
+    /// The frame the hull drives relative to - the water's current, a
+    /// sandstorm's gust - so a hull that stops in it drifts with it.
     flow: Position,
     /// In water at all - drops a speed boost and wets the tracks.
     wading: bool,
 }
 
 impl Footing {
-    pub(crate) const DRY: Footing = Footing { pace: 1.0, grip: 1.0, flow: Position::new(0.0, 0.0), wading: false };
+    pub(crate) const DRY: Footing =
+        Footing { pace: 1.0, grip: 1.0, traction: 1.0, brake: 1.0, flow: Position::new(0.0, 0.0), wading: false };
 
-    pub(crate) fn at(water: &crate::ground::WaterLayout, pos: Position) -> Footing {
-        match water.depth_at(pos) {
+    /// The footing at `pos` at round time `time` under the round's `sky`:
+    /// the water's (a ford slows and loosens, ice slides) and then the
+    /// sky's on top (wet ground loosens every hull, a gust carries it).
+    pub(crate) fn at(water: &crate::ground::WaterLayout, sky: crate::map::Weather, pos: Position, time: f32) -> Footing {
+        let t = tuning();
+        let mut footing = match water.depth_at(pos) {
             crate::ground::Depth::Dry => Footing::DRY,
-            _ => {
-                let t = tuning();
+            crate::ground::Depth::Ice => Footing {
+                grip: t.ice_grip_factor,
+                traction: t.ice_traction_factor,
+                brake: t.ice_brake_factor,
+                ..Footing::DRY
+            },
+            crate::ground::Depth::Shallow | crate::ground::Depth::Deep => {
                 let flow = if water.pushes_south(pos) { t.water_current_speed } else { 0.0 };
-                Footing { pace: t.water_speed_factor, grip: t.water_grip_factor, flow: Position::new(0.0, flow), wading: true }
+                Footing { pace: t.water_speed_factor, grip: t.water_grip_factor, flow: Position::new(0.0, flow), wading: true, ..Footing::DRY }
             }
+        };
+        let wet = crate::weather::grip_factor(sky, &t);
+        if wet != 1.0 {
+            footing.grip *= wet;
         }
+        let wind = crate::weather::gust_at(sky, pos, time, &t);
+        if wind.x != 0.0 || wind.y != 0.0 {
+            footing.flow = Position::new(footing.flow.x + wind.x, footing.flow.y + wind.y);
+        }
+        footing
     }
 }
 
@@ -4343,13 +4401,13 @@ fn drive_tank_with(
     let want_on = target_on - current_on;
     let speeding_up = want_on * current_on >= 0.0;
     let delta_on = if speeding_up {
-        let max_on = tuning().tank_accel_force * pace * tank.speed_factor() / tank.mass() * dt;
+        let max_on = tuning().tank_accel_force * pace * footing.traction * tank.speed_factor() / tank.mass() * dt;
         want_on.clamp(-max_on, max_on)
     } else {
         // Close a rate-controlled fraction of the remaining gap each frame
         // (frame-rate independent); snap the last sliver below
         // TANK_DECEL_SNAP_PX rather than trailing the asymptote forever.
-        let rate = tuning().tank_decel_curve_rate * tank.speed_factor() / tank.mass();
+        let rate = tuning().tank_decel_curve_rate * tank.speed_factor() / tank.mass() * footing.brake;
         let remaining_gap = want_on * (-rate * dt).exp();
         if remaining_gap.abs() < tuning().tank_decel_snap_px { want_on } else { want_on - remaining_gap }
     };
@@ -4802,7 +4860,8 @@ fn lay_tracks(tracks: &mut Vec<Track>, tank: &mut Tank, before: Position, depth:
         tank.hull_anim_accum -= tuning().tank_hull_track_frame_distance;
         tank.hull_frame = (tank.hull_frame + 1) % TANK_HULL_TRACK_COLS.len() as i32;
     }
-    if depth != crate::ground::Depth::Dry {
+    // Tracks stop in water; ice takes them like the ground does.
+    if depth.is_wet() {
         tank.track_accum = 0.0;
         return;
     }
@@ -4840,15 +4899,16 @@ fn lay_tracks(tracks: &mut Vec<Track>, tank: &mut Tank, before: Position, depth:
 
 /// Whether an enemy competes for an engagement slot this frame, and if
 /// not, why - the exclusions win over the range test. `target` is what
-/// the enemy fights (the player, or a hunter's frog).
-fn engage_status(tank: &Tank, ai: &Ai, target: Position) -> EngageStatus {
+/// the enemy fights (the player, or a hunter's frog); `sight` is how far
+/// it sees (`Game::enemy_sight`).
+fn engage_status(tank: &Tank, ai: &Ai, target: Position, sight: f32) -> EngageStatus {
     if tank.is_wreck() {
         EngageStatus::Wreck
     } else if tank.damage >= tuning().enemy_flee_damage {
         EngageStatus::Fleeing
     } else if tank.active_weapon() == ActiveWeapon::Shell && ai.is_retreating() {
         EngageStatus::Retreating
-    } else if tank.position.distance_to(target) <= tuning().enemy_view_range || ai.is_hit_alerted() {
+    } else if tank.position.distance_to(target) <= sight || ai.is_hit_alerted() {
         EngageStatus::Engaged
     } else {
         EngageStatus::OutOfRange

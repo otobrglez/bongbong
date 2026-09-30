@@ -30,7 +30,7 @@ use crate::math::{Color, Rectangle, Vec2};
 use crate::ground::{self, GroundGrid};
 use crate::hud::mode_button_rect;
 use crate::level::{Mission, SpawnKind, Tier};
-use crate::map::{self, CellObject, MapEntry, MapFile, Theme};
+use crate::map::{self, CellObject, MapEntry, MapFile, Theme, Weather};
 use crate::obstacle::{Drum, Material};
 use crate::pickup::PickupKind;
 use crate::frog::Side;
@@ -870,8 +870,8 @@ impl MapEditor {
         Rectangle::new(list.x, list.y + index as f32 * EDITOR_DROPDOWN_ROW_H, list.width, EDITOR_DROPDOWN_ROW_H)
     }
 
-    /// Rows per column of the settings panel: two columns, because eleven
-    /// 48 px rows are taller than the 480 px standard field.
+    /// Rows per column of the settings panel: two columns, because a
+    /// dozen 48 px rows are taller than the 544 px standard field.
     const SETTINGS_ROWS_PER_COLUMN: usize = SETTINGS_ROWS.len().div_ceil(2);
 
     /// The MAP settings panel: below the MAP button, over the field, two
@@ -1233,6 +1233,7 @@ impl MapEditor {
             SettingsRow::TierStart => s.tier_start = step_option_choice(s.tier_start, &Tier::ALL, forward),
             SettingsRow::TierEnd => s.tier_end = step_option_choice(s.tier_end, &Tier::ALL, forward),
             SettingsRow::Theme => s.theme = step_choice(s.theme, &Theme::ALL, forward),
+            SettingsRow::Weather => s.weather = step_choice(s.weather, &Weather::ALL, forward),
             SettingsRow::Reset => return,
         }
         self.apply_settings(s);
@@ -1285,10 +1286,13 @@ enum SettingsRow {
     TierEnd,
     /// The look (`MapFile::theme`): the canvas redraws in it at once.
     Theme,
+    /// The sky (`MapFile::weather`, docs/weather.md). The canvas stays
+    /// clear to edit on; the round draws the sky.
+    Weather,
     Reset,
 }
 
-const SETTINGS_ROWS: [SettingsRow; 12] = [
+const SETTINGS_ROWS: [SettingsRow; 13] = [
     SettingsRow::Tanks,
     SettingsRow::Tank,
     SettingsRow::Tank2,
@@ -1300,6 +1304,7 @@ const SETTINGS_ROWS: [SettingsRow; 12] = [
     SettingsRow::TierStart,
     SettingsRow::TierEnd,
     SettingsRow::Theme,
+    SettingsRow::Weather,
     SettingsRow::Reset,
 ];
 
@@ -1863,6 +1868,17 @@ mod editor_tests {
         assert_eq!(ed.map().theme, Theme::Desert);
         click(&mut ed, &layout, inc(SettingsRow::Theme));
         assert_eq!(ed.settings().theme, Theme::Grass, "wraps");
+        // WEATHER cycles every sky, backwards from clear to the last.
+        click(&mut ed, &layout, inc(SettingsRow::Weather));
+        assert_eq!(ed.map().weather, Weather::Night);
+        click(&mut ed, &layout, dec(SettingsRow::Weather));
+        click(&mut ed, &layout, dec(SettingsRow::Weather));
+        assert_eq!(ed.settings().weather, Weather::ALL[Weather::ALL.len() - 1], "wraps");
+        let _ = ed.undo();
+        assert_eq!(ed.settings().weather, Weather::Clear, "a weather press is one undo step");
+        let _ = ed.redo();
+        click(&mut ed, &layout, inc(SettingsRow::Weather));
+        assert_eq!(ed.settings().weather, Weather::Clear);
         click(&mut ed, &layout, inc(SettingsRow::Mission));
         assert_eq!(ed.settings().mission, Mission::Hunt);
         click(&mut ed, &layout, inc(SettingsRow::Spawn));

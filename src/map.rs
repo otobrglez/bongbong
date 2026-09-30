@@ -271,6 +271,100 @@ fn is_default_theme(t: &Theme) -> bool {
     *t == Theme::Grass
 }
 
+/// The sky over the battlefield (TOML: a top-level `weather = "night"`,
+/// the MAP panel's WEATHER row; docs/weather.md): drawn, and part of the
+/// rules - shorter enemy sight at night and in fog, less grip in the
+/// rain, the water frozen in the snow, gusts in a sandstorm
+/// (`weather::sight_factor` and its neighbours). `Game::init` settles the
+/// round's sky once; a clear one plays exactly as a map without the key.
+/// Absent means `Clear`, which is not written back, so every older file
+/// parses and re-saves unchanged. What each one looks like is
+/// `weather::Look::of`; `Random` is a sky picked by the round's seed
+/// (`weather::random_sky`); the `weather_override` knob (`--weather`, the
+/// web page's `?weather=`) puts one sky over every local round without
+/// editing any map.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Weather {
+    #[default]
+    Clear,
+    Night,
+    Dusk,
+    Rain,
+    /// A thunderstorm: heavy rain at night, with lightning.
+    Storm,
+    Fog,
+    Sandstorm,
+    Snow,
+    HeatHaze,
+    /// One of `SKIES`, picked afresh by every round's seed: the same seed
+    /// always brings the same sky, and every replica of a room draws the
+    /// room's (`weather::in_force`).
+    Random,
+}
+
+impl Weather {
+    /// Every sky a round can be drawn under - everything but `Random`, in
+    /// `ALL`'s order. What `Random` picks from.
+    pub const SKIES: [Weather; 9] = [
+        Weather::Clear,
+        Weather::Night,
+        Weather::Dusk,
+        Weather::Rain,
+        Weather::Storm,
+        Weather::Fog,
+        Weather::Sandstorm,
+        Weather::Snow,
+        Weather::HeatHaze,
+    ];
+
+    /// Every weather, in the order the builder's WEATHER row cycles them;
+    /// a weather's index here is its `weather_override` value.
+    pub const ALL: [Weather; 10] = [
+        Weather::Clear,
+        Weather::Night,
+        Weather::Dusk,
+        Weather::Rain,
+        Weather::Storm,
+        Weather::Fog,
+        Weather::Sandstorm,
+        Weather::Snow,
+        Weather::HeatHaze,
+        Weather::Random,
+    ];
+
+    /// The TOML spelling, also the dev server's, the command line's and
+    /// the builder's.
+    pub fn name(self) -> &'static str {
+        match self {
+            Weather::Clear => "clear",
+            Weather::Night => "night",
+            Weather::Dusk => "dusk",
+            Weather::Rain => "rain",
+            Weather::Storm => "storm",
+            Weather::Fog => "fog",
+            Weather::Sandstorm => "sandstorm",
+            Weather::Snow => "snow",
+            Weather::HeatHaze => "heat_haze",
+            Weather::Random => "random",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Weather> {
+        Weather::ALL.iter().copied().find(|w| w.name() == s)
+    }
+
+    /// This weather's position in `ALL`, the `weather_override` value that
+    /// forces it.
+    pub fn index(self) -> usize {
+        Weather::ALL.iter().position(|w| *w == self).expect("every weather is in ALL")
+    }
+}
+
+fn is_default_weather(w: &Weather) -> bool {
+    *w == Weather::Clear
+}
+
 /// A saved battlefield layout. Keys are `"<col>,<row>"` grid-cell strings
 /// (TOML tables require string keys) - only occupied cells are stored, so a
 /// mostly-empty map stays a small file.
@@ -307,6 +401,10 @@ pub struct MapFile {
     /// back, so older files re-save unchanged.
     #[serde(default, skip_serializing_if = "is_default_theme")]
     pub theme: Theme,
+    /// The sky (TOML: a top-level `weather = "night"`, the MAP panel's
+    /// WEATHER row). Absent means clear, and clear is not written back.
+    #[serde(default, skip_serializing_if = "is_default_weather")]
+    pub weather: Weather,
     /// The `[mission]` table - what ends the round (docs/maps-to-levels.md).
     /// Absent means Protect.
     #[serde(default)]
@@ -367,6 +465,7 @@ impl MapFile {
             tank: None,
             tank2: None,
             theme: Theme::default(),
+            weather: Weather::default(),
             mission: MissionConfig::default(),
             spawn: SpawnConfig::default(),
             size: None,
@@ -722,6 +821,34 @@ mod toml_tests {
         }
         let desert = open_map("default-desert").unwrap();
         assert_eq!(desert.theme, Theme::Desert);
+    }
+
+    #[test]
+    fn weather_round_trips_and_defaults_to_clear() {
+        let map = MapFile::from_toml_str("version = 1\n").unwrap();
+        assert_eq!(map.weather, Weather::Clear);
+        assert!(!map.to_toml_string().unwrap().contains("weather"), "the default is not written back");
+        let map = MapFile::from_toml_str("version = 1\nweather = \"heat_haze\"\ncells.\"1,1\" = { kind = \"road\" }\n").unwrap();
+        assert_eq!(map.weather, Weather::HeatHaze);
+        let text = map.to_toml_string().unwrap();
+        assert!(text.contains("weather = \"heat_haze\""), "{text}");
+        assert_eq!(MapFile::from_toml_str(&text).unwrap().weather, Weather::HeatHaze);
+        assert!(MapFile::from_toml_str("version = 1\nweather = \"hail\"\n").is_err(), "an unknown weather is a parse error");
+        for (i, w) in Weather::ALL.into_iter().enumerate() {
+            assert_eq!(Weather::parse(w.name()), Some(w));
+            assert_eq!(w.index(), i);
+            // The serde spelling is the name the builder and the tools use.
+            let text = format!("version = 1\nweather = \"{}\"\n", w.name());
+            assert_eq!(MapFile::from_toml_str(&text).unwrap().weather, w, "{}", w.name());
+        }
+        // `SKIES` is `ALL` without `Random`, in the same order, so a sky's
+        // override index is the same in both.
+        assert_eq!(Weather::ALL.iter().filter(|w| **w != Weather::Random).copied().collect::<Vec<_>>(), Weather::SKIES);
+        let mut random = MapFile::new();
+        random.weather = Weather::Random;
+        let text = random.to_toml_string().unwrap();
+        assert!(text.contains("weather = \"random\""), "{text}");
+        assert_eq!(MapFile::from_toml_str(&text).unwrap().weather, Weather::Random, "a random sky stays random on disk");
     }
 
     #[test]

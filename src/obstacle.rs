@@ -256,6 +256,14 @@ impl Material {
         !matches!(self, Material::Sandbag | Material::Fence)
     }
 
+    /// Whether this tile throws a shadow in the weather's light map
+    /// (`weather::Occluders`): the full-height walls and the towers. Glass
+    /// lets light through; props are too low and trees too open to cast a
+    /// hard edge, and a tree's canopy is drawn over the tanks anyway.
+    pub fn blocks_light(self) -> bool {
+        (self.is_wall() && self != Material::Glass) || self.is_tower()
+    }
+
     /// Odds a projectile sails over this tile instead of hitting it, rolled
     /// per projectile per tile (`Game::resolve_projectiles`). Zero means
     /// "never", and no RNG is drawn for it.

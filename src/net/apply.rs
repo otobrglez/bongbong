@@ -176,6 +176,11 @@ pub fn welcome(w: &Welcome) -> Result<Game, String> {
     game.player2_row_override = chassis(1);
     // The banner's time left travels in the snapshot.
     game.show_intro = false;
+    // The room's sky, which is its map's and its seed's alone: the
+    // window's `weather_override` knob never reaches a round it does not
+    // simulate, so the replica and the sandbox draw and drive under the
+    // sky the room fights under.
+    game.weather_from_map = true;
     let (width, height) = game.map.field_size();
     game.init(width, height);
     game.strip_ai();
@@ -1222,6 +1227,61 @@ mod tests {
         let other = authoritative(DEFAULT_MAP, 0xD1FF, 4);
         snapshot(&mut replica, &enc::snapshot(&other, [0; MAX_SEATS]));
         assert_eq!(replica.round_seed(), other.round_seed(), "another seed is a restart");
+    }
+
+    /// A map whose sky is `random` is drawn under one sky in the room and
+    /// on every replica: the pick is the round seed's
+    /// (`weather::random_sky`), and a replica stands on the room's seed -
+    /// built on it by the `Welcome`, moved to the next by a rematch's
+    /// `RoundStarted`. Nothing about the sky travels but the map's key.
+    #[test]
+    fn a_random_sky_is_the_rooms_on_every_replica() {
+        use crate::map::Weather;
+        use crate::weather::random_sky;
+        let map = format!("weather = \"random\"\n{DEFAULT_MAP}");
+        let mut skies = std::collections::BTreeSet::new();
+        for seed in [0x5EED, 0xB0B5, 0xD1FF, 7, 8, 9] {
+            let room = authoritative(&map, seed, 2);
+            let replica = welcome_through_the_codec(&room);
+            assert_eq!(replica.map.weather, Weather::Random, "the key rides the welcome's map");
+            assert_ne!(room.weather(), Weather::Random);
+            assert_eq!(replica.weather(), room.weather(), "seed {seed:#x}");
+            skies.insert(room.weather());
+        }
+        assert!(skies.len() > 1, "six seeds brought one sky: {skies:?}");
+
+        let (first, next) = (0x5EED, 0xD1FF);
+        assert_ne!(random_sky(first), random_sky(next), "the rematch below has to change the sky to prove anything");
+        let mut replica = welcome_through_the_codec(&authoritative(&map, first, 2));
+        let rematch = authoritative(&map, next, 2);
+        snapshot(&mut replica, &enc::snapshot(&rematch, [0; MAX_SEATS]));
+        assert_eq!(replica.weather(), rematch.weather(), "a rematch's sky is its new seed's");
+    }
+
+    /// The sky is part of a room's rules (docs/weather.md "The rules"): a
+    /// replica - and the prediction sandbox, built from the same welcome -
+    /// fights under the room's sky, its water frozen where the room's is
+    /// and its enemies' sight the room's, with nothing on the wire but the
+    /// map's key.
+    #[test]
+    fn a_replica_plays_by_the_rooms_sky() {
+        use crate::map::Weather;
+        // A map with a river and a lake, the key put first: a key after
+        // a `[table]` header would land in that table.
+        const RIVER_MAP: &str = include_str!("../../maps/river.toml");
+        let room_under = |sky: Weather| authoritative(&format!("weather = \"{}\"\n{RIVER_MAP}", sky.name()), 0x5EED, 2);
+        for sky in Weather::ALL {
+            let room = room_under(sky);
+            let replica = welcome_through_the_codec(&room);
+            assert!(replica.weather_from_map, "the window's override knob never reaches a room's round");
+            assert_eq!(replica.weather(), room.weather(), "{sky:?}");
+            assert_eq!(replica.water().is_frozen(), room.water().is_frozen(), "{sky:?}");
+            assert_eq!(replica.water().deep_cells().count(), room.water().deep_cells().count(), "{sky:?}");
+            assert_eq!(replica.enemy_sight(), room.enemy_sight(), "{sky:?}");
+        }
+        let snowy = welcome_through_the_codec(&room_under(Weather::Snow));
+        assert!(snowy.water().is_frozen(), "a snowy room's lake is ice on the replica too");
+        assert!(room_under(Weather::Clear).water().deep_cells().count() > 0, "and open water under any other sky");
     }
 
     /// The end screen's countdown belongs to the server: a replica takes

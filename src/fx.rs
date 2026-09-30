@@ -676,7 +676,7 @@ impl Fx {
     /// A blast or a death on water throws water instead of leaving a
     /// scorch (docs/water.md).
     fn splash_if_wet(&mut self, game: &Game, at: Position, n: i32) {
-        if game.water().depth_at(at) != crate::ground::Depth::Dry {
+        if game.water().depth_at(at).is_wet() {
             self.burst(at, ParticleKind::Spray, self.count(n), 130.0, &[WATER_L, WATER_M, WHITE_T]);
         }
     }

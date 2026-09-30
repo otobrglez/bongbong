@@ -270,6 +270,7 @@ settings-growth = GROWTH
 settings-tier-start = TIER START
 settings-tier-end = TIER END
 settings-theme = THEME
+settings-weather = WEATHER
 settings-reset = RESET MAP
 # A settings value the map leaves to the game.
 settings-auto = auto
@@ -359,6 +360,16 @@ tool-short-bio_slush_enemy = e.bio
 
 theme-grass = grass
 theme-desert = desert
+weather-clear = clear
+weather-night = night
+weather-dusk = dusk
+weather-rain = rain
+weather-storm = storm
+weather-fog = fog
+weather-sandstorm = sand
+weather-snow = snow
+weather-heat_haze = haze
+weather-random = random
 spawn-band = band
 spawn-waves = waves
 tier-light = light

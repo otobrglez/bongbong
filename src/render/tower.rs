@@ -191,8 +191,11 @@ impl Game {
     /// `draw_ground_light`'s block): violet under a charging coil and
     /// along a bolt, lime round a mortar, under a glob in the air, off
     /// every puddle - brightest while fresh, with a slow breathing - and
-    /// round a coated hull; orange round a burning tower.
-    pub(crate) fn draw_towers_ground_light(&self, d: &mut impl RaylibDraw) {
+    /// round a coated hull; orange round a burning tower. `pools` scales
+    /// every one of them, as it scales the shots' (a weathered frame's
+    /// light map lights the ground itself; docs/weather.md).
+    pub(crate) fn draw_towers_ground_light(&self, d: &mut impl RaylibDraw, pools: f32) {
+        let ground_light = |d: &mut _, at: Position, radius: f32, color: Color, strength: f32| ground_light(d, at, radius, color, strength * pools);
         for view in self.tower_views() {
             match view.kind {
                 TowerKind::Tesla if view.charge > 0.05 => {

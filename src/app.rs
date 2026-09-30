@@ -99,9 +99,9 @@ fn left_shift_down(rl: &RaylibHandle) -> bool {
 /// The URL the page was opened on, as the page published it
 /// (`site/src/scripts/room.ts`). The web build's command line, in full:
 /// a browser has no argv, so the room a link names, the rooms server a
-/// dev link overrides and the `?lang=` a tester adds all travel in here
-/// (`net::rooms::Invite`, docs/online-coop-prd.md §4.10;
-/// `text::lang_from_url`).
+/// dev link overrides and the `?lang=` and `?weather=` a tester adds all
+/// travel in here (`net::rooms::Invite`, docs/online-coop-prd.md §4.10;
+/// `text::lang_from_url`, `weather::weather_from_url`).
 #[cfg(target_os = "emscripten")]
 const PAGE_INVITE: &std::ffi::CStr = c"(function(){try{return String(window.bbInvite||'')}catch(e){return ''}})()";
 
@@ -156,6 +156,18 @@ fn explicit_language(args: &Args) -> Option<String> {
     }
     #[cfg(not(target_os = "emscripten"))]
     args.lang.clone()
+}
+
+/// The sky asked for outright: `--weather` on a desktop, the page's
+/// `?weather=` on the web.
+fn explicit_weather(args: &Args) -> Option<crate::map::Weather> {
+    #[cfg(target_os = "emscripten")]
+    {
+        let _ = args;
+        return crate::weather::weather_from_url(&page_string(PAGE_INVITE));
+    }
+    #[cfg(not(target_os = "emscripten"))]
+    args.weather
 }
 
 /// The languages this platform prefers, most preferred first, as the
@@ -518,6 +530,15 @@ pub struct Args {
     /// `?lang=` off its page instead.
     #[arg(long = "lang", value_name = "TAG")]
     lang: Option<String>,
+
+    /// Put one sky over every map this run (docs/weather.md): clear,
+    /// night, dusk, rain, storm, fog, sandstorm, snow or heat_haze, or
+    /// random - a sky picked by each round's seed, so `--seed` pins it. It
+    /// is the `weather_override` knob, staged like `--zoom`, so a map's own
+    /// WEATHER key is left as it is and the tuning panel shows the pick.
+    /// The web build reads `?weather=` off its page instead.
+    #[arg(long = "weather", value_name = "SKY", value_parser = parse_weather)]
+    weather: Option<crate::map::Weather>,
 }
 
 /// The online round the command line asks for, with the rig's handle if
@@ -595,6 +616,13 @@ fn level_overrides(args: &Args) -> crate::level::LevelOverrides {
         tier_start: args.tier_start,
         tier_end: args.tier_end,
     }
+}
+
+fn parse_weather(s: &str) -> Result<crate::map::Weather, String> {
+    crate::map::Weather::parse(s).ok_or_else(|| {
+        let names: Vec<&str> = crate::map::Weather::ALL.iter().map(|w| w.name()).collect();
+        format!("unknown weather '{s}': one of {}", names.join(", "))
+    })
 }
 
 fn parse_map(s: &str) -> Result<crate::map::MapFile, String> {
@@ -1000,6 +1028,15 @@ pub fn run(args: Args) {
             None
         }
     };
+    // The weather's passes (docs/weather.md). A driver that cannot compile
+    // them draws every sky clear; the round plays the same either way.
+    let mut weather_fx = match crate::render::weather::WeatherFx::load(&mut rl, &thread) {
+        Ok(w) => Some(w),
+        Err(e) => {
+            eprintln!("[render] weather shaders unavailable, every sky is clear: {e}");
+            None
+        }
+    };
     // The short-lived particle layer lives here rather than on `Game`:
     // it is presentation only, so nothing in the simulation can see it and
     // it is free to use `rand::rng()` (see fx.rs). The web build starts at
@@ -1037,6 +1074,13 @@ pub fn run(args: Args) {
     if let Some(zoom) = args.zoom {
         let _ = tuning::submit_json(&format!(r#"{{"view_max_scale": {}}}"#, zoom.clamp(0.0, 8.0)));
         tuning::apply_pending();
+    }
+    // `--weather` (the page's `?weather=`) is the `weather_override` knob,
+    // staged the same way; a `--tuning` file below can still set it.
+    if let Some(weather) = explicit_weather(&args) {
+        let _ = tuning::submit_json(&format!(r#"{{"weather_override": {}}}"#, weather.index()));
+        tuning::apply_pending();
+        eprintln!("[weather] {} over every map", weather.name());
     }
     if let Some(path) = &args.tuning {
         match tuning::submit_file(path) {
@@ -1671,6 +1715,7 @@ pub fn run(args: Args) {
                 muzzle: &mut muzzle_fx,
                 impact: &mut impact_fx,
                 shots: shot_shaders.as_mut(),
+                weather: weather_fx.as_mut(),
                 fx: &fx,
                 // No stick over the lobby: the field behind it is frozen
                 // and every press there belongs to the screen.

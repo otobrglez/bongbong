@@ -1008,3 +1008,4 @@ pub mod track;
 pub mod trig;
 pub mod tuning;
 pub mod view;
+pub mod weather;

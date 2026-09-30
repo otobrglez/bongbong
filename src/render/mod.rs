@@ -37,3 +37,4 @@ pub mod tank;
 pub mod thumbnail;
 pub mod tower;
 pub mod view;
+pub mod weather;

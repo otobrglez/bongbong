@@ -2082,8 +2082,9 @@ tunables! {
 
     group fx {
         /// One multiplier on every effect that touches the whole screen -
-        /// the kill flash, the shockwave ripple's bend and the camera
-        /// shake - so a calmer or reduced-flash mode is one slider. 0
+        /// the kill flash, the shockwave ripple's bend, the camera shake
+        /// and a storm's lightning - so a calmer or reduced-flash mode is
+        /// one slider. 0
         /// leaves only the local fireball, glow, impact quad and
         /// particles, which deliberately stay out of it.
         screen_fx_intensity: f32 = 1.0 in 0.0 ..= 2.0;
@@ -2183,6 +2184,138 @@ tunables! {
         /// and embers per second a flying shell sheds (`fx.rs`, scaled by
         /// `fx_density`).
         shot_trail_glint_rate: f32 = 26.0 in 0.0 ..= 200.0;
+    }
+
+    group weather {
+        /// Put one sky over every map, by its place in `map::Weather::ALL`:
+        /// 0 clear, 1 night, 2 dusk, 3 rain, 4 storm, 5 fog, 6 sandstorm,
+        /// 7 snow, 8 heat haze, 9 random (a sky picked by each round's
+        /// seed). -1 plays each map's own `weather` key. `--weather` and
+        /// the web page's `?weather=` set it at startup. A sky is settled
+        /// when a round starts - the rules read it - so a change shows on
+        /// the next one; a room's round is its map's, whatever this says.
+        weather_override: i32 = (-1) in -1 ..= 9 @ Restart;
+        /// One multiplier on every weather (docs/weather.md): the light
+        /// eases toward daylight and every layer thins with it. 0 draws
+        /// every sky clear, 1 as designed.
+        weather_strength: f32 = 1.0 in 0.0 ..= 1.0;
+        /// Let the sky change the rules (docs/weather.md "The rules"):
+        /// shorter enemy sight at night, in a storm and in fog, less grip
+        /// in the rain, the water frozen over in the snow, gusts in a
+        /// sandstorm. Off, every sky is only drawn. The ice is laid when a
+        /// round starts, so it follows this on the next one.
+        weather_rules: bool = true in 0 ..= 1;
+        /// How far an enemy sees at night and in a storm, as a fraction of
+        /// `enemy_view_range`: the range it notices a player at, chases
+        /// from and calls the others in from. An enemy never attacks past
+        /// what it sees, so under `enemy_attack_range / enemy_view_range`
+        /// this shortens its attack too. A hit still alerts it from
+        /// anywhere.
+        night_sight_factor: f32 = 0.6 in 0.1 ..= 1.0;
+        /// The same in fog.
+        fog_sight_factor: f32 = 0.45 in 0.1 ..= 1.0;
+        /// The fraction of `tank_turn_grip_force` a hull keeps on wet
+        /// ground in the rain and in a storm: it drifts further through a
+        /// turn and a shove carries it further sideways. In a ford it
+        /// multiplies `water_grip_factor`.
+        rain_grip_factor: f32 = 0.5 in 0.05 ..= 1.0;
+        /// On the ice a snowy sky freezes every lake and ford into: the
+        /// fraction of `tank_turn_grip_force` a hull keeps (it slides
+        /// through a turn), of `tank_accel_force` it gets (its tracks spin
+        /// before it goes) and of `tank_decel_curve_rate` it brakes with
+        /// (it coasts a long way). Top speed is kept.
+        ice_grip_factor: f32 = 0.15 in 0.0 ..= 1.0;
+        ice_traction_factor: f32 = 0.4 in 0.05 ..= 1.0;
+        ice_brake_factor: f32 = 0.1 in 0.01 ..= 1.0;
+        /// A sandstorm's gusts: now and then a wall of sand sweeps the
+        /// field from the west and carries every hull it passes downwind -
+        /// the water current's rule, the hull driving relative to the
+        /// wind, so a stopped tank drifts and one driving upwind is held
+        /// back. The wind's peak speed (px/s).
+        sand_gust_speed: f32 = 48.0 in 0.0 ..= 300.0;
+        /// The windows gusts come in (seconds): most windows have one,
+        /// somewhere in their first half, and the round's first has none.
+        sand_gust_gap_seconds: f32 = 9.0 in 2.0 ..= 60.0;
+        /// How long a gust blows at any one point (seconds): it rises fast
+        /// and dies away slowly.
+        sand_gust_seconds: f32 = 1.5 in 0.2 ..= 10.0;
+        /// How fast a gust's front crosses the field (px/s), and how far
+        /// its heading swings off due east, either way (degrees).
+        sand_gust_front_speed: f32 = 520.0 in 50.0 ..= 3000.0;
+        sand_gust_spread_deg: f32 = 25.0 in 0.0 ..= 80.0;
+        /// How bright full night is: the moonlight the whole field is lit
+        /// by before any lamp, fire or shot adds to it (the blue tint is
+        /// the look's own). A storm's gloom is a little over twice this.
+        night_ambient: f32 = 0.2 in 0.0 ..= 1.0;
+        /// Steps per unit of light the light map is drawn in, on the 2 px
+        /// block grid like every other glow; 0 draws smooth light.
+        light_bands: i32 = 5 in 0 ..= 16;
+        /// Dither between the light's steps with a 2x2 pattern, so a band
+        /// edge reads as drawn rather than as a contour line.
+        light_dither: bool = true in 0 ..= 1;
+        /// Whether walls stop light: headlights, fires, portals and blasts
+        /// cast shadows behind brick, iron, wood and the towers (glass
+        /// lets it through; props and trees are too low or too open to).
+        light_shadows: bool = true in 0 ..= 1;
+        /// How far (px) a light carries into the wall that stops it, so the
+        /// wall's near face is lit rather than a black edge.
+        light_wall_bleed_px: f32 = 10.0 in 0.0 ..= 32.0;
+        /// Headlights: how far ahead a hull's beam reaches (px; an enemy's
+        /// reaches four fifths as far), half the cone's angle (degrees) and
+        /// how bright it is.
+        headlight_length_px: f32 = 190.0 in 0.0 ..= 600.0;
+        headlight_half_angle_deg: f32 = 24.0 in 4.0 ..= 80.0;
+        headlight_strength: f32 = 1.0 in 0.0 ..= 3.0;
+        /// The glow every hull carries in its seat's colour (enemies a dim
+        /// amber), so no tank is ever lost in the dark: radius (px) and
+        /// strength.
+        hull_glow_radius_px: f32 = 46.0 in 0.0 ..= 160.0;
+        hull_glow_strength: f32 = 0.5 in 0.0 ..= 2.0;
+        /// How much light shots, muzzle and impact flashes and hits throw
+        /// into the dark.
+        shot_light_strength: f32 = 1.0 in 0.0 ..= 3.0;
+        /// Fire light - burning ground, burning tiles and wrecks, lit fuses:
+        /// radius (px) and strength.
+        fire_light_radius_px: f32 = 120.0 in 0.0 ..= 400.0;
+        fire_light_strength: f32 = 1.0 in 0.0 ..= 3.0;
+        /// The light a blast throws at its first frame (px, at a blast's
+        /// scale 1); a mushroom cloud's reaches half as far again.
+        blast_light_radius_px: f32 = 210.0 in 0.0 ..= 600.0;
+        /// Pickups and frogs glow faintly, so a lamp can find them.
+        pickup_glow_strength: f32 = 0.4 in 0.0 ..= 2.0;
+        /// Rain: amount (a multiplier on the look's), fall speed (px/s),
+        /// slant (x px per px fallen; negative leans the other way) and
+        /// how often drops splash on the ground and ring the water.
+        rain_density: f32 = 1.0 in 0.0 ..= 2.0;
+        rain_speed_px: f32 = 640.0 in 50.0 ..= 2000.0;
+        rain_slant: f32 = 0.24 in -1.0 ..= 1.0;
+        rain_splash_rate: f32 = 1.0 in 0.0 ..= 3.0;
+        /// Average seconds between lightning strikes in a storm, and how
+        /// bright a strike lights the field.
+        lightning_gap_seconds: f32 = 7.0 in 1.0 ..= 60.0;
+        lightning_strength: f32 = 1.0 in 0.0 ..= 2.0;
+        /// Fog: amount (a multiplier on the look's) and how fast its banks
+        /// drift.
+        fog_density: f32 = 1.0 in 0.0 ..= 2.0;
+        fog_drift_speed: f32 = 1.0 in 0.0 ..= 5.0;
+        /// Fog and blowing sand thin out within this radius (px) of every
+        /// seat's tank, so a player always sees their own ground. 0 draws
+        /// the air the same everywhere.
+        weather_clear_radius_px: f32 = 120.0 in 0.0 ..= 400.0;
+        /// Sandstorm: amount (a multiplier on the look's) and wind speed.
+        sand_density: f32 = 1.0 in 0.0 ..= 2.0;
+        sand_wind_speed: f32 = 1.0 in 0.0 ..= 4.0;
+        /// Snow: how much falls (a multiplier on the look's) and how much
+        /// of the ground it covers, 0 to 1.
+        snow_density: f32 = 1.0 in 0.0 ..= 2.0;
+        snow_cover: f32 = 1.0 in 0.0 ..= 1.0;
+        /// Heat haze: how far (px) rows of the field shimmer - in whole
+        /// 2 px steps, so the art never smears - and how fast.
+        haze_amplitude_px: f32 = 2.0 in 0.0 ..= 8.0;
+        haze_speed: f32 = 1.0 in 0.0 ..= 4.0;
+        /// How much a heavy sky darkens the field toward its edges (a
+        /// multiplier on the look's own vignette).
+        weather_vignette: f32 = 1.0 in 0.0 ..= 2.0;
     }
 }
 
