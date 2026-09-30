@@ -5,6 +5,7 @@
 //! Nothing here touches a `Game`; the hub only creates, finds and forgets
 //! rooms.
 
+use bongbong::level::Mission;
 use bongbong::net::wire::Refusal;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
@@ -33,15 +34,28 @@ pub struct RoomHandle {
 }
 
 /// A room's counters as the room task keeps them, read by `/metrics`.
-#[derive(Default)]
 pub struct RoomStats {
     /// `Phase as u8`.
     pub phase: AtomicU8,
     pub seats_connected: AtomicUsize,
     pub seats_away: AtomicUsize,
+    /// The map's metrics label (`RoomParams::map_label`), fixed for the
+    /// room's life like the mission.
+    pub map: String,
+    pub mission: Mission,
 }
 
 impl RoomStats {
+    pub fn new(map: String, mission: Mission) -> RoomStats {
+        RoomStats {
+            phase: AtomicU8::new(0),
+            seats_connected: AtomicUsize::new(0),
+            seats_away: AtomicUsize::new(0),
+            map,
+            mission,
+        }
+    }
+
     pub fn set_phase(&self, phase: Phase) {
         self.phase.store(phase as u8, Ordering::Relaxed);
     }
@@ -142,7 +156,7 @@ impl Hub {
             }
         };
         let (tx, rx) = mpsc::channel(ROOM_COMMANDS);
-        let stats = Arc::new(RoomStats::default());
+        let stats = Arc::new(RoomStats::new(params.map_label.clone(), params.mission));
         let handle = RoomHandle { code: code.clone(), commands: tx, stats: stats.clone() };
         rooms.insert(code.clone(), handle.clone());
         drop(rooms);
@@ -184,7 +198,11 @@ impl Hub {
         for handle in self.rooms.lock().expect("rooms poisoned").values() {
             match handle.stats.phase() {
                 Phase::Waiting => counts.waiting += 1,
-                Phase::Playing => counts.playing += 1,
+                Phase::Playing => {
+                    counts.playing += 1;
+                    let key = (handle.stats.map.clone(), handle.stats.mission.name());
+                    *counts.playing_by.entry(key).or_default() += 1;
+                }
                 Phase::Paused => counts.paused += 1,
                 Phase::Ended => counts.ended += 1,
             }

@@ -49,23 +49,28 @@ spec:
           image: __IMAGE__
           # Three rooms is plenty to try a PR with; it also caps what one
           # preview can cost while every open PR has one of these.
-          args: [ "--listen", "0.0.0.0:4848", "--max-rooms", "3" ]
+          args: [ "--listen", "0.0.0.0:4848", "--admin-listen", "0.0.0.0:4850", "--max-rooms", "3" ]
+          # `admin` (/health, /ready, /metrics) is the kubelet's and
+          # Prometheus's; the Ingress below routes `http` (/ws) only, as
+          # production's does.
           ports:
             - { containerPort: 4848, name: http }
+            - { containerPort: 4850, name: admin }
           env:
             - { name: RUST_LOG, value: "info" }
+          # The same two probes as production (k8s/base): /ready goes 503
+          # for the drain, /health answers through it.
           readinessProbe:
-            httpGet: { path: /health, port: http }
-            initialDelaySeconds: 3
-            periodSeconds: 10
-            failureThreshold: 3
-          # TCP, not /health - the same reason as production: /health goes
-          # 503 for the whole drain and an HTTP probe would restart the pod
-          # through it.
+            httpGet: { path: /ready, port: admin }
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
           livenessProbe:
-            tcpSocket: { port: http }
-            initialDelaySeconds: 10
-            periodSeconds: 20
+            httpGet: { path: /health, port: admin }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
             failureThreshold: 3
           # A tenth of a core, because every open PR holds one of these on
           # a node that also runs six production namespaces. Still no CPU
@@ -86,6 +91,7 @@ spec:
   selector: { app: rooms }
   ports:
     - { name: http, port: 80, targetPort: http }
+    - { name: admin, port: 4850, targetPort: admin }
 ---
 # Scraped like production (the ServiceMonitor in k8s/base), so the
 # "bongbong room servers" Grafana dashboard lists this preview beside
@@ -103,7 +109,7 @@ spec:
   endpoints:
     - interval: 10s
       path: /metrics
-      port: http
+      port: admin
   namespaceSelector:
     matchNames:
       - bongbong-pr-__PR__

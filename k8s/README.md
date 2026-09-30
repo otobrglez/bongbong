@@ -190,8 +190,15 @@ a first rollout** - without it the pod sits in `ImagePullBackOff` with
 ## Checking it
 
 ```
-curl https://rooms.bongbong.io/health          # ok, or 503 while draining
-curl https://rooms.bongbong.io/metrics | grep bongbong_
+# The public host serves /ws alone; the admin routes answer 404 there.
+curl -o /dev/null -w '%{http_code}\n' https://rooms.bongbong.io/health   # 404: not exposed
+
+# /health, /ready and /metrics are on the admin port (4850), which no
+# Ingress routes:
+kubectl -n bongbong-prod port-forward svc/rooms 4850:admin &
+curl -s localhost:4850/health                 # ok, N rooms - drain or not
+curl -s localhost:4850/ready                  # ok, or 503 while draining
+curl -s localhost:4850/metrics | grep bongbong_
 kubectl -n bongbong-prod get pods,svc,ingress
 kubectl -n bongbong-prod rollout status deployment/rooms
 ```
@@ -218,6 +225,19 @@ labelled `grafana_dashboard: "1"` in any namespace.
   preview is scraped from the moment CI applies it and stops when its
   namespace is deleted. Both scrape `/metrics` every 10 s and land under
   `job="rooms"`, told apart by `namespace`.
+- **Only `/ws` is public.** `/health` (liveness), `/ready` (readiness)
+  and `/metrics` are on the admin listener (`--admin-listen`, port 4850,
+  the Service's `admin` port), and the Ingress routes only the `http`
+  port, so nothing outside the cluster reaches them. Both deploy
+  workflows check it: their smoke step is a WebSocket handshake on `/ws`
+  that has to answer 101, and a 404 from the public host for each admin
+  route.
+- **What it says** beyond the tick and the rooms: rooms in play and rounds
+  started and ended by map (a shipped map's name, or `custom`) and
+  mission, and the clients by build - version, protocol and platform, as
+  each client reports itself in its `Create`/`Join`. Every label value is
+  bounded (maps by `SHIPPED_MAPS`, builds by `metrics::CLIENT_LABELS_MAX`),
+  so a client cannot mint series.
 - **The dashboard**, "bongbong room servers" (uid `bongbong-rooms`), is
   `base/grafana/bongbong-rooms.json`, turned into the ConfigMap
   `grafana-dashboard-rooms` by the kustomization, so every production deploy

@@ -16,7 +16,7 @@ use bongbong::net::rooms::{RoomCode, RoomsHost, socket_url};
 use bongbong::net::codec::{self, Msg};
 use bongbong::net::delta::apply_delta;
 use bongbong::net::events::WireEvent;
-use bongbong::net::wire::{IntentMsg, Lobby, RoundOutcome, Snapshot};
+use bongbong::net::wire::{ClientInfo, IntentMsg, Lobby, RoundOutcome, Snapshot};
 use bongbong::net::{MAX_SEATS, PROTOCOL_VERSION};
 use bongbong::simulation::Game;
 use bongbong::tank::Dir;
@@ -33,18 +33,31 @@ type Client = WebSocketStream<MaybeTlsStream<TcpStream>>;
 const WAIT: Duration = Duration::from_secs(5);
 
 async fn start_server() -> (SocketAddr, std::sync::Arc<bongbong_server::hub::Hub>) {
-    let config = Config { listen: "127.0.0.1:0".parse().unwrap(), insecure: true, max_rooms: 8 };
+    let (addr, _, hub) = start_server_with_admin().await;
+    (addr, hub)
+}
+
+/// A server and the address of its metrics listener, which is not the
+/// players' one.
+async fn start_server_with_admin() -> (SocketAddr, SocketAddr, std::sync::Arc<bongbong_server::hub::Hub>) {
+    let config = Config {
+        listen: "127.0.0.1:0".parse().unwrap(),
+        admin_listen: Some("127.0.0.1:0".parse().unwrap()),
+        insecure: true,
+        max_rooms: 8,
+    };
     let server = Server::bind(config).await.expect("bind an ephemeral port");
     let addr = server.addr;
+    let metrics = server.admin_addr.expect("a metrics listener was asked for");
     let hub = server.hub.clone();
     tokio::spawn(server.run(std::future::pending()));
-    (addr, hub)
+    (addr, metrics, hub)
 }
 
 /// A server whose connections run on a short keep-alive, for a test to
 /// see a silent client go without waiting ten seconds.
 async fn start_server_with_keep_alive(keep_alive: bongbong_server::hub::KeepAlive) -> SocketAddr {
-    let config = Config { listen: "127.0.0.1:0".parse().unwrap(), insecure: true, max_rooms: 8 };
+    let config = Config { listen: "127.0.0.1:0".parse().unwrap(), admin_listen: None, insecure: true, max_rooms: 8 };
     let server = Server::bind(config).await.expect("bind an ephemeral port").keep_alive(keep_alive);
     let addr = server.addr;
     tokio::spawn(server.run(std::future::pending()));
@@ -140,11 +153,13 @@ fn create(seed: u64) -> Msg {
         map_toml: None,
         mission: Mission::Protect,
         seed: Some(seed),
+        client: Some(ClientInfo { version: "9.9.9".into(), protocol: PROTOCOL_VERSION, platform: "web".into() }),
     })
 }
 
+/// A join from a build too old to say what it is.
 fn join(nick: &str, token: &str, code: &str) -> Msg {
-    Msg::Lobby(Lobby::Join { nick: nick.into(), device_token: token.into(), code: code.into() })
+    Msg::Lobby(Lobby::Join { nick: nick.into(), device_token: token.into(), code: code.into(), client: None })
 }
 
 /// What one client saw of the snapshot stream.
@@ -231,7 +246,7 @@ async fn follow(ws: &mut Client, baseline: Snapshot, replica: Option<Game>, span
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
-    let (addr, hub) = start_server().await;
+    let (addr, admin_addr, hub) = start_server_with_admin().await;
 
     // The host creates the room.
     let mut host = connect(addr).await;
@@ -427,22 +442,40 @@ async fn two_clients_play_a_round_and_a_seat_survives_a_reconnect() {
     .await;
     assert_eq!(roster[1].nick, "second", "the seat keeps its name");
 
-    // The HTTP side: health, metrics, and the drain.
-    let (status, body) = http_get(addr, "/health").await;
+    // The HTTP side. The players' port serves the socket and nothing
+    // else; health, readiness and metrics are on the admin port.
+    for path in ["/health", "/ready", "/metrics"] {
+        let (status, _) = http_get(addr, path).await;
+        assert_eq!(status, 404, "the players' port serves {path}");
+    }
+    let (status, body) = http_get(admin_addr, "/health").await;
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = http_get(admin_addr, "/ready").await;
     assert_eq!((status, body.as_str()), (200, "ok\n"));
-    let (status, metrics) = http_get(addr, "/metrics").await;
+    let (status, metrics) = http_get(admin_addr, "/metrics").await;
     assert_eq!(status, 200);
     assert!(metrics.contains("bongbong_rooms{phase=\"playing\"} 1"), "{metrics}");
     assert!(metrics.contains("bongbong_seats{state=\"connected\"} 2"), "{metrics}");
     assert!(metrics.contains("bongbong_reconnects_total 1"), "{metrics}");
+    // What is being played, and by which builds: the host said it was a
+    // 9.9.9 web client, the guest's build is too old to say.
+    assert!(metrics.contains("bongbong_rooms_playing{map=\"default\",mission=\"protect\"} 1"), "{metrics}");
+    assert!(metrics.contains("bongbong_rounds_started_total{map=\"default\",mission=\"protect\"} 1"), "{metrics}");
+    let web = format!("{{version=\"9.9.9\",protocol=\"{PROTOCOL_VERSION}\",platform=\"web\"}}");
+    assert!(metrics.contains(&format!("bongbong_clients{web} 1")), "{metrics}");
+    assert!(metrics.contains(&format!("bongbong_client_seats_total{web} 1")), "{metrics}");
+    assert!(metrics.contains("bongbong_client_seats_total{version=\"unknown\",protocol=\"unknown\",platform=\"unknown\"}"), "{metrics}");
     hub.begin_drain();
-    let (status, _) = http_get(addr, "/health").await;
-    assert_eq!(status, 503);
+    let (status, _) = http_get(admin_addr, "/ready").await;
+    assert_eq!(status, 503, "a draining server is not ready");
+    let (status, _) = http_get(admin_addr, "/health").await;
+    assert_eq!(status, 200, "a draining server is alive: liveness must not end the drain");
     let mut late = connect(addr).await;
     send(&mut late, &create(1)).await;
     let refused = expect_lobby_error(&mut late).await;
     assert!(refused.contains("draining"), "{refused}");
-    let (_, metrics) = http_get(addr, "/metrics").await;
+    let (status, metrics) = http_get(admin_addr, "/metrics").await;
+    assert_eq!(status, 200, "the metrics listener answers through the drain");
     assert!(metrics.contains("bongbong_draining 1"), "{metrics}");
 }
 
@@ -751,7 +784,7 @@ const END_SCREEN_SNAPSHOTS: usize = 50;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_round_that_ends_plays_its_end_screen_out_and_comes_back_to_the_lobby() {
-    let (addr, hub) = start_server().await;
+    let (addr, admin_addr, hub) = start_server_with_admin().await;
 
     // Two seats in a room on the map the first of them wins in a second.
     // No seed is pinned, so the room draws one - and another for the rematch.
@@ -765,6 +798,7 @@ async fn a_round_that_ends_plays_its_end_screen_out_and_comes_back_to_the_lobby(
             map_toml: Some(HUNT_MAP.into()),
             mission: Mission::Hunt,
             seed: None,
+            client: None,
         }),
     )
     .await;
@@ -813,7 +847,7 @@ async fn a_round_that_ends_plays_its_end_screen_out_and_comes_back_to_the_lobby(
     // And it stopped there: no second round, no world back at tick 0.
     assert_eq!(played.restarts, 0, "the room started a round nobody asked for");
     assert!(played.snapshots.windows(2).all(|w| w[1].0 > w[0].0), "a tick went backwards: the round started over");
-    let (_, metrics) = http_get(addr, "/metrics").await;
+    let (_, metrics) = http_get(admin_addr, "/metrics").await;
     assert!(metrics.contains("bongbong_rooms{phase=\"ended\"} 1"), "{metrics}");
 
     // The roster that follows the announcement is the one the room screen
@@ -837,7 +871,7 @@ async fn a_round_that_ends_plays_its_end_screen_out_and_comes_back_to_the_lobby(
         "the rematch's frame-0 snapshot carries its round start: {:?}",
         again.snapshot.events
     );
-    let (_, metrics) = http_get(addr, "/metrics").await;
+    let (_, metrics) = http_get(admin_addr, "/metrics").await;
     assert!(metrics.contains("bongbong_rooms{phase=\"playing\"} 1"), "{metrics}");
     let _ = hub;
 }

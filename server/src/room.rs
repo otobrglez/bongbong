@@ -370,10 +370,23 @@ pub struct ConnLink {
 /// What a room is created with.
 pub struct RoomParams {
     pub map: MapFile,
+    /// What the metrics call the map (`map_label`).
+    pub map_label: String,
     pub mission: Mission,
     /// A pinned seed; absent, the room draws one at start (and another
     /// for a rematch).
     pub seed: Option<u64>,
+}
+
+/// The metrics label of a room's map: a shipped map's name, `custom` for
+/// a builder map or any name the build does not ship - the label is
+/// bounded by `SHIPPED_MAPS` whatever a client asks for.
+pub fn map_label(builder_map: bool, name: &str) -> String {
+    if !builder_map && bongbong::map::SHIPPED_MAPS.iter().any(|(n, _)| *n == name) {
+        name.to_string()
+    } else {
+        "custom".to_string()
+    }
 }
 
 #[cfg(feature = "dev-tools")]
@@ -388,6 +401,7 @@ impl RoomParams {
         mission: Option<&str>,
         seed: Option<u64>,
     ) -> Result<RoomParams, String> {
+        let label = map_label(map_toml.is_some(), map);
         let map = match map_toml {
             Some(toml) => bongbong::map::MapFile::from_toml_str(toml),
             None => bongbong::map::open_map(map),
@@ -400,7 +414,7 @@ impl RoomParams {
             Some("destroy") => Mission::Destroy,
             Some(other) => return Err(format!("mission: {other:?} is not protect|hunt|destroy")),
         };
-        Ok(RoomParams { map, mission, seed })
+        Ok(RoomParams { map, map_label: label, mission, seed })
     }
 }
 
@@ -884,6 +898,7 @@ impl Room {
         }
         self.life.start(Instant::now());
         info!(code = self.code, seed = format!("{:#x}", self.round_seed), players, tuning = self.tuning_json, "round started");
+        self.hub.metrics.round_started(&self.stats.map, self.stats.mission.name());
         self.lobby_to_all(Lobby::Started);
         // Everyone's baseline is the welcome's snapshot (the same frame
         // for every seat), so the first delta applies straight onto it.
@@ -903,6 +918,12 @@ impl Room {
         let outcome = self.game.as_ref().map_or(Outcome::Playing, |g| g.outcome());
         self.life.end(Instant::now());
         info!(code = self.code, frame, ?outcome, why, "round ended");
+        let outcome_label = match outcome {
+            Outcome::Won => "won",
+            Outcome::Lost => "lost",
+            Outcome::Playing => "unfinished",
+        };
+        self.hub.metrics.round_ended(&self.stats.map, self.stats.mission.name(), outcome_label);
         // The snapshots stop with the tick, so how the round went travels
         // as a lobby message instead, and the roster behind it is the one
         // the room screen comes back on - every seat unready again, ready
@@ -1842,7 +1863,8 @@ cells."11,4" = { kind = "start2" }
         let params = RoomParams::for_dev("", Some(map), None, Some(7)).expect("the room's setup");
         let (_commands, rx) = mpsc::channel(1);
         let hub = Hub::new(8, Arc::new(Metrics::new()));
-        let mut room = Room::new(hub, "TESTS".into(), params, rx, Arc::new(RoomStats::default()));
+        let stats = Arc::new(RoomStats::new(params.map_label.clone(), params.mission));
+        let mut room = Room::new(hub, "TESTS".into(), params, rx, stats);
         room.dev("room_open", &json!({ "seats": 2 })).expect("two bots seated");
         let placed = |room: &Room| {
             room.prev.events.iter().filter(|e| matches!(e, WireEvent::Placed { seat: 0, .. })).cloned().collect::<Vec<_>>()

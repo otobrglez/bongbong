@@ -1549,7 +1549,7 @@
     {
       "id": 16,
       "type": "row",
-      "title": "$namespace - the 60 Hz tick",
+      "title": "$namespace - what is being played",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -1562,6 +1562,729 @@
     },
     {
       "id": 17,
+      "type": "bargauge",
+      "title": "Rooms in play now, by map",
+      "description": "Rooms playing a round right now, by map and mission. custom is a map a player built rather than a shipped one.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 29,
+        "w": 8,
+        "h": 9
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (map, mission) (bongbong_rooms_playing{namespace=\"$namespace\", job=\"rooms\"})",
+          "legendFormat": "{{map}} · {{mission}}",
+          "refId": "A",
+          "range": false,
+          "instant": true,
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "noValue": "None yet",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#3987e5"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3987e5",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "text",
+        "namePlacement": "left",
+        "sizing": "manual",
+        "minVizHeight": 16,
+        "maxVizHeight": 22,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "legend": {
+          "showLegend": false
+        }
+      },
+      "transformations": [
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "Value",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "type": "bargauge",
+      "title": "Rounds started, by map",
+      "description": "Rounds started over the dashboard's time range, by map.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 29,
+        "w": 8,
+        "h": 9
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (map) (increase(bongbong_rounds_started_total{namespace=\"$namespace\", job=\"rooms\"}[$__range]))",
+          "legendFormat": "{{map}}",
+          "refId": "A",
+          "range": false,
+          "instant": true,
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "noValue": "None yet",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#3987e5"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3987e5",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "text",
+        "namePlacement": "left",
+        "sizing": "manual",
+        "minVizHeight": 16,
+        "maxVizHeight": 22,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "legend": {
+          "showLegend": false
+        }
+      },
+      "transformations": [
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "Value",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "type": "bargauge",
+      "title": "Rounds started, by mission",
+      "description": "Rounds started over the dashboard's time range, by mission.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 29,
+        "w": 8,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (mission) (increase(bongbong_rounds_started_total{namespace=\"$namespace\", job=\"rooms\"}[$__range]))",
+          "legendFormat": "{{mission}}",
+          "refId": "A",
+          "range": false,
+          "instant": true,
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "noValue": "None yet",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#3987e5"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3987e5",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "text",
+        "namePlacement": "left",
+        "sizing": "manual",
+        "minVizHeight": 16,
+        "maxVizHeight": 22,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "legend": {
+          "showLegend": false
+        }
+      },
+      "transformations": [
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "Value",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "bargauge",
+      "title": "Rounds won, by mission",
+      "description": "The share of the rounds that ended over the dashboard's time range that the players won, by mission. Rounds a room stopped before either side won are left out.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 33,
+        "w": 8,
+        "h": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (mission) (increase(bongbong_rounds_ended_total{outcome=\"won\", namespace=\"$namespace\", job=\"rooms\"}[$__range])) / sum by (mission) (increase(bongbong_rounds_ended_total{outcome=~\"won|lost\", namespace=\"$namespace\", job=\"rooms\"}[$__range]))",
+          "legendFormat": "{{mission}}",
+          "refId": "A",
+          "range": false,
+          "instant": true,
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 0,
+          "min": 0,
+          "noValue": "None yet",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#3987e5"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3987e5",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "text",
+        "namePlacement": "left",
+        "sizing": "manual",
+        "minVizHeight": 16,
+        "maxVizHeight": 22,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "legend": {
+          "showLegend": false
+        }
+      },
+      "transformations": [
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "Value",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Rounds started per hour",
+      "description": "Rounds started each hour on this server, every map and mission together.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 38,
+        "w": 24,
+        "h": 6
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(bongbong_rounds_started_total{namespace=\"$namespace\", job=\"rooms\"}[1h]))",
+          "legendFormat": "rounds",
+          "refId": "A",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisBorderShow": false,
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "axisSoftMax": 1,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "barAlignment": 0,
+            "lineInterpolation": "linear",
+            "thresholdsStyle": {
+              "mode": "off"
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#3987e5"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              }
+            ]
+          },
+          "decimals": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "rounds"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 22,
+      "type": "row",
+      "title": "$namespace - clients",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 44
+      },
+      "panels": [],
+      "description": ""
+    },
+    {
+      "id": 23,
+      "type": "table",
+      "title": "Client builds",
+      "description": "Every client build that asked this server for a room: its version, the protocol it speaks and its platform, how many are connected now and how many seats they took over the dashboard's time range. unknown is a build too old to say. Past 32 builds, the rest count as other.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 45,
+        "w": 16,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (version, protocol, platform) (bongbong_clients{namespace=\"$namespace\", job=\"rooms\"})",
+          "legendFormat": "__auto",
+          "refId": "A",
+          "range": false,
+          "format": "table",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (version, protocol, platform) (increase(bongbong_client_seats_total{namespace=\"$namespace\", job=\"rooms\"}[$__range]))",
+          "legendFormat": "__auto",
+          "refId": "B",
+          "range": false,
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "version": 0,
+              "protocol": 1,
+              "platform": 2,
+              "Value #A": 3,
+              "Value #B": 4
+            },
+            "renameByName": {
+              "version": "Version",
+              "protocol": "Protocol",
+              "platform": "Platform",
+              "Value #A": "Connected now",
+              "Value #B": "Seats taken"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "Seats taken",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "minWidth": 70
+          },
+          "noValue": "0",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      }
+    },
+    {
+      "id": 24,
+      "type": "stat",
+      "title": "On another protocol",
+      "description": "Connected clients that speak a protocol other than this server's (bongbong_info). Such a client is welcomed and then leaves, so any here are players who cannot play until they update.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 45,
+        "w": 8,
+        "h": 3
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(bongbong_clients{protocol!~\"unknown|other\", namespace=\"$namespace\", job=\"rooms\"} unless on (protocol) max by (protocol) (bongbong_info{namespace=\"$namespace\", job=\"rooms\"})) or vector(0)",
+          "legendFormat": "__auto",
+          "refId": "A",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": [],
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "wideLayout": true,
+        "showPercentChange": false
+      }
+    },
+    {
+      "id": 25,
+      "type": "bargauge",
+      "title": "Players by platform",
+      "description": "Connections that asked for a room, open right now, by the platform their client runs on.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 48,
+        "w": 8,
+        "h": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (platform) (bongbong_clients{namespace=\"$namespace\", job=\"rooms\"})",
+          "legendFormat": "{{platform}}",
+          "refId": "A",
+          "range": false,
+          "instant": true,
+          "format": "time_series"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "noValue": "None yet",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#3987e5"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#3987e5",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "text",
+        "namePlacement": "left",
+        "sizing": "manual",
+        "minVizHeight": 16,
+        "maxVizHeight": 22,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "legend": {
+          "showLegend": false
+        }
+      },
+      "transformations": [
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "Value",
+                "desc": true
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": 26,
+      "type": "row",
+      "title": "$namespace - the 60 Hz tick",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 53
+      },
+      "panels": [],
+      "description": ""
+    },
+    {
+      "id": 27,
       "type": "timeseries",
       "title": "Tick time",
       "description": "Game::update wall time, p50 and p99 over the last ~1024 ticks across every room. The red line is one tick (16.7 ms): an update past it is an overrun, and every room on the server stutters together.",
@@ -1571,7 +2294,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 29,
+        "y": 54,
         "w": 12,
         "h": 8
       },
@@ -1692,7 +2415,7 @@
       }
     },
     {
-      "id": 18,
+      "id": 28,
       "type": "timeseries",
       "title": "Tick lateness",
       "description": "How late each tick started against the room's schedule (net::authority::TickClock), p50 and p99. The red line is 5 ms, past which a tick counts as late. Exported by servers newer than protocol 6.",
@@ -1702,7 +2425,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 29,
+        "y": 54,
         "w": 12,
         "h": 8
       },
@@ -1824,7 +2547,7 @@
       }
     },
     {
-      "id": 19,
+      "id": 29,
       "type": "timeseries",
       "title": "Tick rate",
       "description": "Game::update calls per second across the server, against 60 per room playing. A gap between the two is time the rooms lost.",
@@ -1834,7 +2557,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 37,
+        "y": 62,
         "w": 12,
         "h": 8
       },
@@ -1968,7 +2691,7 @@
       }
     },
     {
-      "id": 20,
+      "id": 30,
       "type": "timeseries",
       "title": "Tick trouble per minute",
       "description": "overruns: an update longer than a tick. late: a tick that started more than 5 ms after it was due. dropped: ticks a room gave up on after a stall longer than its catch-up. Late and dropped are exported by servers newer than protocol 6.",
@@ -1978,7 +2701,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 37,
+        "y": 62,
         "w": 12,
         "h": 8
       },
@@ -2116,7 +2839,7 @@
       }
     },
     {
-      "id": 21,
+      "id": 31,
       "type": "row",
       "title": "$namespace - network and input",
       "collapsed": false,
@@ -2124,13 +2847,13 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 45
+        "y": 70
       },
       "panels": [],
       "description": ""
     },
     {
-      "id": 22,
+      "id": 32,
       "type": "timeseries",
       "title": "Snapshot bandwidth",
       "description": "Snapshot bytes handed to the seats' writers, per second - the game's own outgoing traffic, before WebSocket framing and TLS.",
@@ -2140,7 +2863,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 46,
+        "y": 71,
         "w": 8,
         "h": 8
       },
@@ -2228,7 +2951,7 @@
       }
     },
     {
-      "id": 23,
+      "id": 33,
       "type": "timeseries",
       "title": "Snapshot bytes per player",
       "description": "Snapshot bandwidth divided by the players connected: what one client downloads per second. Empty while nobody is connected.",
@@ -2238,7 +2961,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 46,
+        "y": 71,
         "w": 8,
         "h": 8
       },
@@ -2326,7 +3049,7 @@
       }
     },
     {
-      "id": 24,
+      "id": 34,
       "type": "timeseries",
       "title": "Snapshots skipped per minute",
       "description": "Snapshots a slow client did not get because its outbox was full. A steady climb is a player on a link that cannot keep up.",
@@ -2336,7 +3059,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 46,
+        "y": 71,
         "w": 8,
         "h": 8
       },
@@ -2424,7 +3147,7 @@
       }
     },
     {
-      "id": 25,
+      "id": 35,
       "type": "timeseries",
       "title": "Input starvations per minute",
       "description": "Ticks that found a seat's intent buffer empty and repeated its last intent. For a client-owned hull each one is a packet late enough that the room dead-reckoned the tank.",
@@ -2434,7 +3157,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 54,
+        "y": 79,
         "w": 12,
         "h": 8
       },
@@ -2522,7 +3245,7 @@
       }
     },
     {
-      "id": 26,
+      "id": 36,
       "type": "timeseries",
       "title": "Starved ticks per connected player",
       "description": "Input starvations as a share of every seat's ticks (60 a second per connected player): the fraction of the time the room was guessing a player's input.",
@@ -2532,7 +3255,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 54,
+        "y": 79,
         "w": 12,
         "h": 8
       },
@@ -2620,7 +3343,7 @@
       }
     },
     {
-      "id": 27,
+      "id": 37,
       "type": "row",
       "title": "$namespace - pod",
       "collapsed": false,
@@ -2628,13 +3351,13 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 62
+        "y": 87
       },
       "panels": [],
       "description": ""
     },
     {
-      "id": 28,
+      "id": 38,
       "type": "timeseries",
       "title": "CPU (log scale)",
       "description": "Millicores the room server uses (1000 mCPU = one core), against its request, on a log axis so an idle server and the request both read. There is deliberately no CPU limit: a CFS quota would throttle the 60 Hz tick at the period boundary.",
@@ -2644,7 +3367,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 63,
+        "y": 88,
         "w": 8,
         "h": 8
       },
@@ -2779,7 +3502,7 @@
       }
     },
     {
-      "id": 29,
+      "id": 39,
       "type": "timeseries",
       "title": "Memory (log scale)",
       "description": "Working set against the request and the limit, on a log axis so a few MiB and the limit both read. Past the limit the container is OOM-killed and every room on it is lost.",
@@ -2789,7 +3512,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 63,
+        "y": 88,
         "w": 8,
         "h": 8
       },
@@ -2970,7 +3693,7 @@
       }
     },
     {
-      "id": 30,
+      "id": 40,
       "type": "timeseries",
       "title": "Pod network",
       "description": "Bytes per second through the pod's interface: WebSocket traffic including framing, plus the scrapes.",
@@ -2980,7 +3703,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 63,
+        "y": 88,
         "w": 8,
         "h": 8
       },

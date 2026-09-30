@@ -145,12 +145,33 @@ jobs:
 
       - name: Smoke the deployed server
         run: |
-          # /health is the readiness gate the rollout just waited on, so
-          # this only proves the ingress and TLS in front of it work.
-          curl -fsS --retry 5 --retry-delay 5 --retry-connrefused \
-            https://rooms.bongbong.io/health
-          echo
-          curl -fsS https://rooms.bongbong.io/metrics | grep bongbong_info
+          # The one public route is /ws: a WebSocket handshake answered with
+          # 101 proves Cloudflare, TLS, nginx, the Service and the server
+          # together; the rollout has already waited on /ready. curl waits
+          # on the open socket after the 101 until --max-time, so the
+          # status is read and its exit ignored.
+          ws=000
+          for attempt in 1 2 3 4 5 6; do
+            ws=$(curl -s -o /dev/null -w '%{http_code}' --http1.1 --max-time 5 \
+              -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+              -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+              "https://rooms.bongbong.io/ws" || true)
+            [ "$ws" = 101 ] && break
+            sleep 5
+          done
+          if [ "$ws" != 101 ]; then
+            echo "::error::the WebSocket handshake on https://rooms.bongbong.io/ws answered $ws, not 101"
+            exit 1
+          fi
+          # The admin routes are on a port no Ingress routes: from outside every
+          # one of them has to be a 404, or it is exposed.
+          for path in health ready metrics; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "https://rooms.bongbong.io/$path")
+            if [ "$code" != 404 ]; then
+              echo "::error::/$path answered $code through the ingress; it must not be exposed"
+              exit 1
+            fi
+          done
 
       - name: Send Pushover notification
         if: always()

@@ -1,8 +1,11 @@
 //! `bongbong-server`: the online co-op room server (docs/online-coop-prd.md
 //! §4.7, §4.13). `--listen 127.0.0.1:4848 --insecure` is the local run
 //! (`just run-server`); the container runs the same binary on `0.0.0.0`.
+//! The players' port serves `/ws` alone; `/health`, `/ready` and
+//! `/metrics` are on the admin port (`--admin-listen`, 127.0.0.1:4850),
+//! which a deployment opens to the cluster and never to the ingress.
 //! **One instance holds every room**, so there is nothing to configure
-//! about where a room lives. SIGTERM drains: no new rooms, `/health` 503,
+//! about where a room lives. SIGTERM drains: no new rooms, `/ready` 503,
 //! every room without a round in play closes at once, the rounds in play
 //! finish, exit when the last ends or after `DRAIN_MAX`; Ctrl-C exits at
 //! once.
@@ -23,6 +26,11 @@ struct Args {
     /// Address to listen on.
     #[arg(long, default_value = "127.0.0.1:4848")]
     listen: SocketAddr,
+    /// Address the admin routes (`/health`, `/ready`, `/metrics`) are
+    /// served on, apart from `--listen`: the players' port answers none
+    /// of them.
+    #[arg(long, default_value = "127.0.0.1:4850")]
+    admin_listen: SocketAddr,
     /// Plain ws:// with no TLS terminator in front is expected here (a
     /// local run). Deployed, the ingress holds the certificate and this
     /// stays off; either way it is only recorded in the start-up line.
@@ -43,7 +51,15 @@ fn config(args: Args) -> Result<Config, String> {
     if args.max_rooms == 0 {
         return Err("--max-rooms must be at least 1".into());
     }
-    Ok(Config { listen: args.listen, insecure: args.insecure, max_rooms: args.max_rooms })
+    if args.admin_listen == args.listen {
+        return Err("--admin-listen must differ from --listen".into());
+    }
+    Ok(Config {
+        listen: args.listen,
+        admin_listen: Some(args.admin_listen),
+        insecure: args.insecure,
+        max_rooms: args.max_rooms,
+    })
 }
 
 #[tokio::main]
@@ -66,17 +82,19 @@ async fn main() -> ExitCode {
     let server = match Server::bind(config.clone()).await {
         Ok(s) => s,
         Err(e) => {
-            error!("cannot listen on {}: {e}", config.listen);
+            error!("cannot listen on {} and {:?}: {e}", config.listen, config.admin_listen);
             return ExitCode::from(1);
         }
     };
     info!(
         addr = %server.addr,
+        admin_addr = ?server.admin_addr,
         insecure = config.insecure,
         max_rooms = config.max_rooms,
         protocol = bongbong::net::PROTOCOL_VERSION,
-        "listening; ws://{}/ws, /health, /metrics",
-        server.addr
+        "listening; ws://{}/ws; /health, /ready and /metrics on {:?}",
+        server.addr,
+        server.admin_addr
     );
     // The dev tools, on loopback and only in a build that has them.
     #[cfg(feature = "dev-tools")]
@@ -90,7 +108,7 @@ async fn main() -> ExitCode {
         tokio::select! {
             _ = terminate() => {
                 hub.begin_drain();
-                info!(rooms = hub.room_count(), "SIGTERM: draining, no new rooms; /health reports 503");
+                info!(rooms = hub.room_count(), "SIGTERM: draining, no new rooms; /ready reports 503");
                 tokio::select! {
                     _ = hub.drained() => info!("drained: every room ended"),
                     _ = tokio::time::sleep(DRAIN_MAX) => info!(rooms = hub.room_count(), "drain limit reached, exiting"),

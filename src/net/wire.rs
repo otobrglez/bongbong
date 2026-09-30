@@ -782,6 +782,51 @@ pub struct RosterSeat {
     pub connected: bool,
 }
 
+/// What a client says about its own build when it asks for a seat
+/// (`Lobby::Create`/`Join`), for the room server's metrics and logs. It
+/// changes nothing a room does: a client on another protocol still learns
+/// it from the `Welcome` and leaves.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientInfo {
+    /// `net::BUILD_VERSION` of the client.
+    pub version: String,
+    /// `net::PROTOCOL_VERSION` the client speaks.
+    pub protocol: u16,
+    /// Where it runs: `web`, `ios`, `android`, `macos`, `windows`, `linux`
+    /// or `other`.
+    pub platform: String,
+}
+
+impl ClientInfo {
+    /// This build, as it reports itself.
+    pub fn this_build() -> ClientInfo {
+        ClientInfo {
+            version: super::BUILD_VERSION.to_string(),
+            protocol: super::PROTOCOL_VERSION,
+            platform: platform().to_string(),
+        }
+    }
+}
+
+/// The platform this build was compiled for, in `ClientInfo`'s spelling.
+fn platform() -> &'static str {
+    if cfg!(target_os = "emscripten") {
+        "web"
+    } else if cfg!(target_os = "ios") {
+        "ios"
+    } else if cfg!(target_os = "android") {
+        "android"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        "other"
+    }
+}
+
 /// The lobby's vocabulary, JSON on the same socket as the binary messages:
 /// `{"type": "join", "nick": ..}`. Creating a room is a lobby message too,
 /// so a client needs no HTTP. The first block is what a client says, the
@@ -792,7 +837,8 @@ pub struct RosterSeat {
 pub enum Lobby {
     /// Open a room: `map` names a shipped map, or `map_toml` carries a
     /// builder map instead. `seed` pins the round's seed (a replay or a
-    /// test); absent, the room draws one.
+    /// test); absent, the room draws one. `client` is the asking build
+    /// (absent from a build older than it).
     Create {
         nick: String,
         device_token: String,
@@ -802,10 +848,18 @@ pub enum Lobby {
         mission: Mission,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         seed: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        client: Option<ClientInfo>,
     },
     /// Take a seat in the room `code` names; the same `device_token`
     /// reclaims the seat after a disconnect.
-    Join { nick: String, device_token: String, code: String },
+    Join {
+        nick: String,
+        device_token: String,
+        code: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        client: Option<ClientInfo>,
+    },
     Ready,
     Start,
     Leave,
@@ -1085,7 +1139,7 @@ mod tests {
 
     #[test]
     fn lobby_is_tagged_json() {
-        let msg = Lobby::Join { nick: "oto".into(), device_token: "tok".into(), code: "AK7QX".into() };
+        let msg = Lobby::Join { nick: "oto".into(), device_token: "tok".into(), code: "AK7QX".into(), client: None };
         let json = serde_json::to_string(&msg).unwrap();
         assert_eq!(json, r#"{"type":"join","nick":"oto","device_token":"tok","code":"AK7QX"}"#);
         assert_eq!(serde_json::from_str::<Lobby>(&json).unwrap(), msg);
@@ -1097,6 +1151,7 @@ mod tests {
             map_toml: None,
             mission: Mission::Protect,
             seed: None,
+            client: None,
         };
         let json = serde_json::to_string(&create).unwrap();
         assert!(!json.contains("map_toml"), "an absent builder map is left out: {json}");
@@ -1104,6 +1159,25 @@ mod tests {
         assert_eq!(serde_json::from_str::<Lobby>(&json).unwrap(), create);
         let without_seed = r#"{"type":"create","nick":"oto","device_token":"tok","map":"default","mission":"protect"}"#;
         assert_eq!(serde_json::from_str::<Lobby>(without_seed).unwrap(), create);
+    }
+
+    /// A client says what build it is, and a message without it - an
+    /// older client's - still reads.
+    #[test]
+    fn a_join_carries_the_client_build() {
+        let msg = Lobby::Join {
+            nick: "oto".into(),
+            device_token: "tok".into(),
+            code: "AK7QX".into(),
+            client: Some(ClientInfo { version: "0.2.4".into(), protocol: 10, platform: "web".into() }),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""client":{"version":"0.2.4","protocol":10,"platform":"web"}"#), "{json}");
+        assert_eq!(serde_json::from_str::<Lobby>(&json).unwrap(), msg);
+        let older = r#"{"type":"join","nick":"oto","device_token":"tok","code":"AK7QX"}"#;
+        assert!(matches!(serde_json::from_str::<Lobby>(older).unwrap(), Lobby::Join { client: None, .. }));
+        let this = ClientInfo::this_build();
+        assert_eq!((this.version.as_str(), this.protocol), (crate::net::BUILD_VERSION, crate::net::PROTOCOL_VERSION));
     }
 
     #[test]
