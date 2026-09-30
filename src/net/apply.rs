@@ -603,6 +603,15 @@ fn write_tank(game: &mut Game, entity: Entity, t: &TankState) {
         tank.flame_held = on(tank_flags::FLAME);
         let weapon: ActiveWeapon = t.weapon.into();
         tank.weapon_queue = if weapon == ActiveWeapon::Shell { Vec::new() } else { vec![weapon] };
+        // The wire names the live weapon alone, so that is the one a
+        // replica carries: the other stocks are cleared, or a weapon the
+        // tank has spent would stay on its turret (`tank::module_cols`) at
+        // the last count this replica heard.
+        tank.laser_charges = 0;
+        tank.plasma_ammo = 0;
+        tank.minigun_ammo = 0;
+        tank.missile_ammo = 0;
+        tank.flame_fuel = 0.0;
         let ammo = t.ammo as i32;
         match weapon {
             ActiveWeapon::Shell => tank.shells_ammo = ammo,
@@ -1772,6 +1781,30 @@ mod tests {
             assert_eq!(fresh(&replica), fresh(&game));
         }
         assert!(popped > 0, "the wreck cooked off");
+    }
+
+    /// A replica carries the weapon the wire names and nothing else, so a
+    /// module leaves the turret the snapshot its weapon is spent
+    /// (`tank::module_cols`) rather than staying at its last count.
+    #[test]
+    fn a_spent_weapon_leaves_the_replica() {
+        let mut game = quiet_round(DEFAULT_MAP, 0xB0B5, 0);
+        let mut replica = welcome_through_the_codec(&game);
+        let arms = |g: &Game| {
+            let tank = g.world.get::<&Tank>(g.seat(0).expect("seat 0")).expect("a tank");
+            (tank.active_weapon(), tank.minigun_ammo, tank.laser_charges)
+        };
+        let patch = |minigun: i32, laser: i32| crate::simulation::debug::TankPatch {
+            minigun_ammo: Some(minigun),
+            laser_charges: Some(laser),
+            ..Default::default()
+        };
+        game.debug_set_tank(0, &patch(12, 3)).expect("the seat's tank");
+        step_and_apply(&mut game, &mut replica);
+        assert_eq!(arms(&replica), (ActiveWeapon::Minigun, 12, 0), "the live weapon, nothing else");
+        game.debug_set_tank(0, &patch(0, 3)).expect("the seat's tank");
+        step_and_apply(&mut game, &mut replica);
+        assert_eq!(arms(&replica), (ActiveWeapon::Laser, 0, 3), "the spent minigun is gone");
     }
 
     /// A shell leaving a seat's gun kicks that tank's turret through its
