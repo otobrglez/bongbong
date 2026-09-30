@@ -6,7 +6,7 @@ Loud/high-contrast on purpose, matching the other pickup icons' aesthetic
 generated terrain/vehicle sheet draws from - a pickup needs to read at a
 glance against any terrain behind it. Drawn from scratch, same raw-PNG-
 bytes convention as tools/gen_laser_pickup.py/gen_minigun_pickup.py (no
-Pillow dependency, same as tools/gen_damage.py).
+Pillow dependency).
 
 Icon: a glowing cyan/teal orb (not a beam like laser.png, not muzzle sparks
 like minigun.png - the plasma cannon's identity is the bolt itself, an orb,

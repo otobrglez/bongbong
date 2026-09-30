@@ -116,7 +116,7 @@ impl Facing {
 }
 
 /// How `facing` is drawn: the sign to multiply the source rectangle's width
-/// by - raylib's mirror idiom, as in `render::blast::draw_blast` - and the screen-px
+/// by - raylib's mirror idiom, as in `blast::draw_scorch` - and the screen-px
 /// offset that keeps the mirrored body over the same patch of ground.
 ///
 /// The offset is not cosmetic slack: the body sits 2.5 design px left of the

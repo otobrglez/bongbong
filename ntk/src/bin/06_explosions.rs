@@ -74,7 +74,6 @@ fn main() {
     let minigun_mount = load(&mut rl, "static/minigun_mount.png");
     let missile_pod = load(&mut rl, "static/missile_pod.png");
     let missile = load(&mut rl, "static/missile.png");
-    let damage = load(&mut rl, "static/damage.png");
     let tracks = load(&mut rl, "static/tracks.png");
     let obstacles = load(&mut rl, "static/walls_sheet.png");
     let props = load(&mut rl, "static/props_sheet.png");
@@ -177,7 +176,6 @@ fn main() {
             portal: &portal,
             minigun_mount: &minigun_mount,
             missile_pod: &missile_pod,
-            damage: &damage,
             tracks: &tracks,
             obstacles: &obstacles,
             props: &props,

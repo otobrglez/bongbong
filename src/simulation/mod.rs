@@ -1803,16 +1803,6 @@ impl Game {
         }
     }
 
-    /// Stage a decal a replica made for itself, held to the same
-    /// `DECAL_MAX` ceiling `finish_frame` holds a round to.
-    pub(crate) fn push_decal(&mut self, decal: Decal) {
-        self.decals.push(decal);
-        if self.decals.len() > DECAL_MAX {
-            let excess = self.decals.len() - DECAL_MAX;
-            self.decals.drain(..excess);
-        }
-    }
-
     /// The cosmetic half of a frame, for a `Game` nothing ever `update`s:
     /// a client replica (docs/online-coop-prd.md section 4.5) applies the
     /// server's snapshots and calls this on every rendered frame between
@@ -2185,6 +2175,11 @@ impl Game {
         self.tick_burn_frames(dt);
         self.fade_fires(dt);
         self.fade_wrecks(dt);
+        // A wreck's fire burns down on the replica's own clock: the wire
+        // carries that a tank is a wreck, not how long it has burnt.
+        for tank in self.world.query_mut::<&mut Tank>() {
+            tank.tick_wreck(dt);
+        }
         // A drum that lands blasts where the server says it did, so the
         // landed ones are dropped here and the `Blast` event carries the
         // rest.
@@ -3511,6 +3506,10 @@ impl Game {
             show.scorches.push(Scorch::new(center));
         }
         self.scorch_tracks(center);
+        // The kill's pressure wave lays the grass round the hull flat, as a
+        // blast's does (`blast_show`); it stands back up on the grass's own
+        // clock.
+        crate::grass::flatten(&mut self.grass, center, tuning().wreck_part_throw_px * tuning().blast_grass_flatten);
 
         let throw = tuning().wreck_part_throw_px;
         for i in 0..tuning().wreck_parts.max(0) as u32 {

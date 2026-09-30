@@ -1,9 +1,9 @@
 //! What is drawn by fragment shader rather than from blocks or sprites:
-//! the plasma bolt's orb (`static/plasma_orb.fs`), the flamethrower's jet
-//! of burning fuel (`static/flame_jet.fs`) and every hit's burst
-//! (`static/impact_burst.fs`), each on one textured quad. Both sources are compiled into the binary
-//! (the GLSL ES 100 twins in `static/web/` on the embedded builds), so no
-//! platform needs the files on disk.
+//! the plasma bolt's orb (`static/plasma_orb.fs`) and the flamethrower's
+//! jet of burning fuel (`static/flame_jet.fs`), each on one textured quad.
+//! The sources are compiled into the binary (the GLSL ES 100 twins in
+//! `static/web/` on the embedded builds), so no platform needs the files
+//! on disk. Every hit's burst is composed in blocks instead (`burst.rs`).
 //!
 //! Every uniform is set per draw from the shot and the round clock alone -
 //! nothing is kept between frames - so a replica, a paused frame and a
@@ -11,7 +11,6 @@
 
 use sola_raylib::prelude::*;
 
-use crate::fx::{Impact, ImpactKind};
 use crate::math::{Color, Vec2};
 use crate::plasma::{Plasma, PlasmaVariant};
 use crate::tuning::tuning;
@@ -22,8 +21,9 @@ use crate::Position;
 const ORB_REACH: f32 = 2.3;
 
 struct OrbLocs {
-    quad_size: i32,
-    center: i32,
+    orb_pos: i32,
+    radius_px: i32,
+    field_height: i32,
     time: i32,
     spin: i32,
     tilt: i32,
@@ -42,15 +42,10 @@ struct FlameLocs {
     time: i32,
     seed: i32,
     reach: i32,
-}
-
-struct ImpactLocs {
-    t: i32,
-    style: i32,
+    origin: i32,
     dir: i32,
-    seed: i32,
-    bright: i32,
-    body: i32,
+    half_width: i32,
+    field_height: i32,
 }
 
 /// The compiled shaders, their uniform locations and the 1x1 white texture
@@ -61,8 +56,6 @@ pub struct ShotShaders {
     orb_locs: OrbLocs,
     flame: Shader,
     flame_locs: FlameLocs,
-    impact: Shader,
-    impact_locs: ImpactLocs,
     quad: Texture2D,
 }
 
@@ -104,23 +97,19 @@ impl ShotShaders {
     /// game then flies the baked plasma sprite and draws the flamethrower
     /// from its particles alone.
     pub fn load(rl: &mut RaylibHandle, thread: &RaylibThread) -> Result<Self, String> {
-        let (orb_src, flame_src, impact_src) = if crate::EMBEDDED {
-            (
-                include_str!("../../static/web/plasma_orb.fs"),
-                include_str!("../../static/web/flame_jet.fs"),
-                include_str!("../../static/web/impact_burst.fs"),
-            )
+        let (orb_src, flame_src) = if crate::EMBEDDED {
+            (include_str!("../../static/web/plasma_orb.fs"), include_str!("../../static/web/flame_jet.fs"))
         } else {
-            (include_str!("../../static/plasma_orb.fs"), include_str!("../../static/flame_jet.fs"), include_str!("../../static/impact_burst.fs"))
+            (include_str!("../../static/plasma_orb.fs"), include_str!("../../static/flame_jet.fs"))
         };
         let orb = compile(rl, thread, "plasma_orb.fs", orb_src)?;
         let flame = compile(rl, thread, "flame_jet.fs", flame_src)?;
-        let impact = compile(rl, thread, "impact_burst.fs", impact_src)?;
         let white = Image::gen_image_color(1, 1, Color::WHITE);
         let quad = rl.load_texture_from_image(thread, &white).map_err(|e| format!("shot quad: {e}"))?;
         let orb_locs = OrbLocs {
-            quad_size: orb.get_shader_location("quadSize"),
-            center: orb.get_shader_location("center"),
+            orb_pos: orb.get_shader_location("orbPos"),
+            radius_px: orb.get_shader_location("radiusPx"),
+            field_height: orb.get_shader_location("fieldHeight"),
             time: orb.get_shader_location("time"),
             spin: orb.get_shader_location("spin"),
             tilt: orb.get_shader_location("tilt"),
@@ -138,23 +127,21 @@ impl ShotShaders {
             time: flame.get_shader_location("time"),
             seed: flame.get_shader_location("seed"),
             reach: flame.get_shader_location("reach"),
+            origin: flame.get_shader_location("origin"),
+            dir: flame.get_shader_location("dir"),
+            half_width: flame.get_shader_location("halfWidth"),
+            field_height: flame.get_shader_location("fieldHeight"),
         };
-        let impact_locs = ImpactLocs {
-            t: impact.get_shader_location("t"),
-            style: impact.get_shader_location("style"),
-            dir: impact.get_shader_location("dir"),
-            seed: impact.get_shader_location("seed"),
-            bright: impact.get_shader_location("cA"),
-            body: impact.get_shader_location("cB"),
-        };
-        Ok(ShotShaders { orb, orb_locs, flame, flame_locs, impact, impact_locs, quad })
+        Ok(ShotShaders { orb, orb_locs, flame, flame_locs, quad })
     }
 
     /// Draw a flying plasma bolt as its orb: the ball, its glow, its
     /// style's outer effect (teal's lightning, purple's spiral arms and
     /// stars) and its comet tail, on one quad turned to face travel with
-    /// the orb `ORB_REACH` radii from its front edge.
-    pub fn draw_orb<D: RaylibDraw + RaylibShaderModeExt>(&mut self, d: &mut D, plasma: &Plasma, time: f32) {
+    /// the orb `ORB_REACH` radii from its front edge, into a target
+    /// `field_height` px tall (the shader works the bolt out per 2 px block
+    /// of it).
+    pub fn draw_orb<D: RaylibDraw + RaylibShaderModeExt>(&mut self, d: &mut D, plasma: &Plasma, time: f32, field_height: f32) {
         let t = tuning();
         let look = OrbLook::of(plasma.id);
         let pulse = 0.5 + 0.5 * (time * t.plasma_pulse_hz * std::f32::consts::TAU + look.phase).sin();
@@ -170,8 +157,9 @@ impl ShotShaders {
         };
         let l = &self.orb_locs;
         let s = &mut self.orb;
-        s.set_shader_value(l.quad_size, Vector2::new(w, h));
-        s.set_shader_value(l.center, Vector2::new(0.5, ORB_REACH / h));
+        s.set_shader_value(l.orb_pos, Vector2::new(plasma.position.x, plasma.position.y));
+        s.set_shader_value(l.radius_px, r);
+        s.set_shader_value(l.field_height, field_height);
         s.set_shader_value(l.time, time);
         s.set_shader_value(l.spin, spin);
         s.set_shader_value(l.tilt, look.tilt);
@@ -194,8 +182,11 @@ impl ShotShaders {
 
     /// Draw the flamethrower's jet from `origin` along `dir` (a unit
     /// vector) for `reach` px, on a quad as wide as the cone at its far
-    /// end. `seed` keeps two streams from rolling in step.
-    pub fn draw_flame<D: RaylibDraw + RaylibShaderModeExt>(&mut self, d: &mut D, origin: Position, dir: Vec2, reach: f32, time: f32, seed: f32) {
+    /// end, into a target `field_height` px tall (the field: the shader
+    /// works the stream out per 2 px block of it). `seed` keeps two
+    /// streams from rolling in step.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_flame<D: RaylibDraw + RaylibShaderModeExt>(&mut self, d: &mut D, origin: Position, dir: Vec2, reach: f32, time: f32, seed: f32, field_height: f32) {
         if reach <= 4.0 {
             return;
         }
@@ -205,53 +196,15 @@ impl ShotShaders {
         s.set_shader_value(l.time, time);
         s.set_shader_value(l.seed, seed);
         s.set_shader_value(l.reach, reach);
+        s.set_shader_value(l.origin, [origin.x, origin.y]);
+        s.set_shader_value(l.dir, [dir.x, dir.y]);
+        s.set_shader_value(l.half_width, half);
+        s.set_shader_value(l.field_height, field_height);
         let angle = dir.y.atan2(dir.x).to_degrees() - 90.0;
         let dest = Rectangle::new(origin.x, origin.y, half * 2.0, reach);
         let quad = &self.quad;
         d.draw_shader_mode(s, |mut sd| {
             sd.draw_texture_pro(quad, Rectangle::new(0.0, 0.0, 1.0, 1.0), dest, Vector2::new(half, 0.0), angle, Color::WHITE);
-        });
-    }
-}
-
-impl ShotShaders {
-    /// Draw one hit's burst, centred where the shot landed, on a square
-    /// quad as wide as its look reaches (`static/impact_burst.fs`).
-    pub fn draw_impact<D: RaylibDraw + RaylibShaderModeExt>(&mut self, d: &mut D, impact: &Impact) {
-        let (style, half, bright, body) = match impact.kind {
-            ImpactKind::Shell => (0.0f32, 46.0f32, Color::WHITE, Color::WHITE),
-            ImpactKind::Bullet => (1.0, 26.0, Color::WHITE, Color::WHITE),
-            ImpactKind::Plasma(v) => {
-                let [_, body, bright, _] = v.orb_colors();
-                let style = if v == PlasmaVariant::Purple { 3.0 } else { 2.0 };
-                (style, 44.0, bright, body)
-            }
-            ImpactKind::Laser(blue) => {
-                let (bright, body) = if blue {
-                    (Color::new(150, 200, 255, 255), Color::new(40, 110, 255, 255))
-                } else {
-                    (Color::new(255, 170, 150, 255), Color::new(255, 50, 40, 255))
-                };
-                (4.0, 30.0, bright, body)
-            }
-            // The tesla's strike is the electric plasma ring in the bolt's
-            // violets (`render::tower`), its lightning included.
-            ImpactKind::Tesla => (2.0, 36.0, Color::new(0xe0, 0xcc, 0xff, 255), Color::new(0x9a, 0x66, 0xff, 255)),
-            ImpactKind::Ooze => (5.0, 40.0, crate::tower::OOZE_HI, crate::tower::OOZE_MD),
-        };
-        let half = half * tuning().hit_fx_scale;
-        let l = &self.impact_locs;
-        let s = &mut self.impact;
-        s.set_shader_value(l.t, impact.progress());
-        s.set_shader_value(l.style, style);
-        s.set_shader_value(l.dir, Vector2::new(impact.dir.x, impact.dir.y));
-        s.set_shader_value(l.seed, impact.seed);
-        s.set_shader_value(l.bright, rgb(bright));
-        s.set_shader_value(l.body, rgb(body));
-        let dest = Rectangle::new(impact.pos.x - half, impact.pos.y - half, half * 2.0, half * 2.0);
-        let quad = &self.quad;
-        d.draw_shader_mode(s, |mut sd| {
-            sd.draw_texture_pro(quad, Rectangle::new(0.0, 0.0, 1.0, 1.0), dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
         });
     }
 }
@@ -274,5 +227,34 @@ mod tests {
         assert!(seeds.len() > 48, "ids should spread over many patterns, got {}", seeds.len());
         assert!(looks.iter().any(|l| l.spin_factor < 0.0) && looks.iter().any(|l| l.spin_factor > 0.0), "both spin directions");
         assert_eq!(OrbLook::of(7), OrbLook::of(7), "a bolt keeps its look");
+    }
+
+    /// The GLSL ES 100 twins in `static/web/` are ported by hand: each
+    /// declares every uniform its desktop shader does, so the web build
+    /// never draws with a zero where a value should be, and writes
+    /// `gl_FragColor`.
+    #[test]
+    fn the_web_twins_declare_the_desktop_uniforms() {
+        fn uniforms(source: &str) -> Vec<String> {
+            let mut out: Vec<String> = source
+                .lines()
+                .filter_map(|line| line.trim().strip_prefix("uniform "))
+                .map(|rest| rest.split(';').next().unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" "))
+                .collect();
+            out.sort();
+            out
+        }
+        let pairs = [
+            (include_str!("../../static/plasma_orb.fs"), include_str!("../../static/web/plasma_orb.fs")),
+            (include_str!("../../static/flame_jet.fs"), include_str!("../../static/web/flame_jet.fs")),
+            (include_str!("../../static/impact.fs"), include_str!("../../static/web/impact.fs")),
+            (include_str!("../../static/muzzle_flash.fs"), include_str!("../../static/web/muzzle_flash.fs")),
+            (include_str!("../../static/shockwave.fs"), include_str!("../../static/web/shockwave.fs")),
+        ];
+        for (desktop, web) in pairs {
+            assert!(desktop.starts_with("#version 330") && web.starts_with("#version 100"));
+            assert_eq!(uniforms(desktop), uniforms(web));
+            assert!(web.contains("gl_FragColor") && !web.contains("finalColor ="), "the twin writes gl_FragColor");
+        }
     }
 }

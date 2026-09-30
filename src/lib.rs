@@ -300,16 +300,10 @@ pub const TANK_SHELL_VARIANT_BY_ROW: [i32; 12] = [
 ];
 pub const SHELL_SCALE: f32 = 2.0;
 
-// damage.png is a 448x160 overlay sheet: fourteen 32x32 frames per row
-// (indexed by column), drawn on top of a tank to show escalating damage. The
-// frames are grouped into animated stages (see DamageStage):
-//   0 dusty | 1 gray | 2-3 small-smoke | 4-5 more-smoke | 6-7 small-fire
-//   8-9 large-fire | 10-12 wrecked (burning) | 13 dead (burnt-out hulk)
-pub const DAMAGE_TEXTURE_SIZE: f32 = 32.0;
-// Number of row-variants in damage.png (see SHELL_VARIANTS for the same
-// pattern). Each tank rolls one at spawn (Tank::damage_variant) and keeps it
-// for its whole life, so a tank's whole damage sequence reads as one
-// consistent "flavour" instead of jumping between palettes frame to frame.
+// How many layouts of damage marks a hull can wear (`damage_stage.rs`).
+// Each tank rolls one at spawn (Tank::damage_variant) and keeps it for its
+// whole life, so its scars gather in the same places however the fight
+// goes, and two tanks of one chassis wear different ones.
 pub const DAMAGE_VARIANTS: i32 = 5;
 
 // Number of enemy tanks is randomized within this range each round.
@@ -578,34 +572,28 @@ pub const PROPS_ROWS: i32 = 10;
 pub const PROPS_BARREL_LIT_COL: i32 = 3;
 pub const PROPS_OIL_ROW: i32 = 9;
 pub const PROPS_OIL_VARIANTS: i32 = 4;
-// Ground-fire loop on barrel_explosion.png row 1: three frames after the
-// scorch cells, drawn at scale 2 over a burning cell (a pool or a trail).
-pub const FIRE_LOOP_COL: i32 = 6;
-pub const FIRE_LOOP_FRAMES: i32 = 3;
-// barrel_explosion.png: 768x320, five rows of 64x64 cells. Row 0 is the
-// one-shot blast animation (12 frames, col * BARREL_EXPLOSION_TEXTURE_SIZE,
-// like the frog filmstrips), drawn at `blast_anim_scale`; row 1 holds
-// SCORCH_VARIANTS ground-decal cells a blast leaves behind plus the
-// directional streak at SCORCH_STREAK_COL; rows 2-4 are three more
-// fireball shapes (a tall column, a flat splash, a double core) the blast
-// picks between by its position hash (`blast::BlastFx::row`). See
-// docs/PROPS_SPEC.md and blast.rs. A dying tank's mushroom cloud is not on
-// the sheet: `mushroom.rs` composes it at draw time.
+// barrel_explosion.png: 768x320, five rows of 64x64 cells, of which only
+// row 1 is drawn: SCORCH_VARIANTS burn marks a blast or a burnt-out fire
+// leaves on the ground, plus the directional streak at SCORCH_STREAK_COL.
+// Every fireball is composed at draw time instead (`fireball.rs`, and
+// `mushroom.rs` for a dying tank's cloud), so the sheet's other rows are
+// not sampled. See docs/PROPS_SPEC.md and blast.rs.
 pub const BARREL_EXPLOSION_TEXTURE_SIZE: f32 = 64.0;
-pub const BARREL_EXPLOSION_FRAMES: i32 = 12;
 pub const SCORCH_ROW: i32 = 1;
 pub const SCORCH_VARIANTS: i32 = 5;
 pub const SCORCH_STREAK_COL: i32 = 5;
-/// The fireball rows, in the order `BlastFx::row` hashes over them: the
-/// original mushroom, then the tall, flat and double shapes.
+/// The fireball's forms, in the order `BlastFx::row` hashes over them: a
+/// round ball, then the tall column, the flat splash and the double core
+/// (`fireball.rs`). The numbers only name the forms.
 pub const BLAST_SHAPE_ROWS: [i32; 4] = [0, 2, 3, 4];
 pub const BLAST_ROW_MUSHROOM: i32 = 0;
 pub const BLAST_ROW_TALL: i32 = 2;
 pub const BLAST_ROW_FLAT: i32 = 3;
 pub const BLAST_ROW_DOUBLE: i32 = 4;
 // Oldest scorch marks are dropped past this many, so a long round with many
-// barrels doesn't accumulate an unbounded decal list.
-pub const SCORCH_MAX: usize = 64;
+// barrels doesn't accumulate an unbounded decal list. A burnt-out oil
+// trail leaves one per cell, so there is room for a long one.
+pub const SCORCH_MAX: usize = 128;
 
 // Same ring-buffer cap for the rubble a destroyed tile leaves behind
 // (`decal::Decal`). Higher than SCORCH_MAX because every wall death makes
@@ -961,6 +949,7 @@ pub mod battlefield;
 pub mod blast;
 pub mod bt;
 pub mod bullet;
+pub mod burst;
 pub mod canvas;
 #[cfg(feature = "dev-tools")]
 pub mod capi;
@@ -970,6 +959,7 @@ pub mod decal;
 pub mod devserver;
 pub mod editor;
 pub mod frog;
+pub mod fireball;
 pub mod fx;
 pub mod grass;
 pub mod game;
@@ -993,6 +983,7 @@ pub mod physics;
 pub mod portal;
 pub mod pickup;
 pub mod plasma;
+pub mod pyro;
 pub mod qr;
 #[cfg(feature = "render")]
 pub mod render;

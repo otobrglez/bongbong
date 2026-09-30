@@ -8,7 +8,7 @@ needs to read at a glance against any terrain behind it, same reasoning
 SOURCE.md gives for leaving health/ammo un-recolored. Unlike those two
 (copied in from a third-party pack), this one is drawn here from scratch -
 there's no laser icon in that pack to copy - as raw PNG bytes (no Pillow
-dependency), the same convention tools/gen_damage.py already uses.
+dependency).
 
 Icon: a bright magenta muzzle spark (with a few radiating ticks) firing a
 short beam that tapers to a point at the tile's right edge. Deliberately

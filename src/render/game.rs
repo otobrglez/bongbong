@@ -27,7 +27,9 @@ use crate::render::level_select::draw_level_select;
 use crate::render::lobby::{draw_lobby, draw_online_button};
 use crate::pickup::PickupKind;
 use crate::plasma::{Plasma, PlasmaState};
-use crate::render::blast::{draw_blast, draw_blast_glow, draw_burning_hull_glow, draw_fire_glow, draw_flame_glow, draw_fuse_glow, draw_ground_fire};
+use crate::render::blast::{draw_fire_glow, draw_flame_glow, draw_fuse_glow};
+use crate::pyro;
+use crate::render::pyro::Rl;
 use crate::render::bullet::{draw_bullet, draw_bullet_light, draw_bullet_shadow};
 use crate::render::canvas::{GpuCanvas, Sheets};
 use crate::render::decal::draw_decal_shadow;
@@ -42,7 +44,7 @@ use crate::render::portal::draw_portal_glow;
 use crate::missile::Missile;
 use crate::render::missile::{draw_missile, draw_missile_exhaust, draw_missile_shadow};
 use crate::render::shell::{draw_shell, draw_shell_light, draw_shell_shadow};
-use crate::render::shot_fx::{at_nozzle, draw_impact_flare, draw_muzzle_flare, ground_light};
+use crate::render::shot_fx::{at_nozzle, ground_light};
 use crate::render::shot_shaders::ShotShaders;
 use crate::render::weather::{Passes, WeatherFrame};
 use crate::render::shockwave::{screen_to_ripple_uv, RippleFx};
@@ -72,7 +74,6 @@ pub struct Textures<'a> {
     pub shells: &'a Texture2D,
     pub plasma: &'a Texture2D,
     pub minigun_bullets: &'a Texture2D,
-    pub damage: &'a Texture2D,
     pub tracks: &'a Texture2D,
     pub obstacles: &'a Texture2D,
     /// The props sheet (sandbags, barrels, fences) - see `obstacle::Sheet`.
@@ -137,7 +138,6 @@ impl Sheets for Textures<'_> {
             Sheet::Trees => self.trees,
             Sheet::Towers => self.towers,
             Sheet::Grass(_) => self.grass,
-            Sheet::Damage => self.damage,
             Sheet::MinigunMount => self.minigun_mount,
             Sheet::MissilePod => self.missile_pod,
             Sheet::Tracks => self.tracks,
@@ -778,6 +778,48 @@ impl Game {
 }
 
 impl Game {
+    /// Every hit's flash (`fx::Flash`), inside an additive blend: the hull
+    /// or the tile it landed on drawn again over itself, which doubles its
+    /// light - the white-hot frames of a hit. A tile is found under the
+    /// point the shot struck.
+    fn draw_flashes(&self, c: &mut impl crate::canvas::Canvas, flashes: &[crate::fx::Flash]) {
+        use crate::fx::Flashed;
+        for flash in flashes {
+            let k = flash.strength();
+            if k <= 0.0 {
+                continue;
+            }
+            let tint = Color::new(255, 255, 255, (255.0 * k) as u8);
+            match flash.what {
+                Flashed::Tank(slot) => {
+                    for tank in self.world.query::<&crate::tank::Tank>().iter().filter(|t| t.owner_slot() == slot) {
+                        crate::tank::draw_tank_hull(c, tank, tint);
+                        crate::tank::draw_tank_turret(c, tank, tint);
+                    }
+                }
+                Flashed::Tile(at) => {
+                    let mut q = self.world.query::<&Obstacle>();
+                    let struck = q
+                        .iter()
+                        .filter(|o| (o.position.x - at.x).abs() <= o.size() * 0.5 + 3.0 && (o.position.y - at.y).abs() <= o.size() * 0.5 + 3.0)
+                        .min_by(|a, b| a.position.distance_to(at).total_cmp(&b.position.distance_to(at)));
+                    let Some(o) = struck else { continue };
+                    if o.material.is_tree() {
+                        crate::obstacle::draw_tree_tinted(c, o, 0.0, self.time, tint);
+                    } else if o.material.is_tower() {
+                        if let Some(v) = self.tower_views().into_iter().find(|v| v.position.distance_to(o.position) < 1.0) {
+                            crate::tower::draw_tower_tinted(c, v.kind, v.side, v.position, v.stage, v.heading, tint);
+                        }
+                    } else {
+                        let fences: std::collections::HashSet<(i32, i32)> =
+                            self.world.query::<&Obstacle>().iter().filter(|f| f.material == crate::obstacle::Material::Fence).map(|f| f.cell()).collect();
+                        crate::obstacle::draw_obstacle_tinted(c, o, crate::obstacle::fence_axis(o, &fences), self.time, tint);
+                    }
+                }
+            }
+        }
+    }
+
     /// The field as it stands under the light - under daylight, or under
     /// the weather's light map, which the light pass multiplies it by: the
     /// floor, the fires on it, the tiles and their glows, and everything
@@ -801,11 +843,25 @@ impl Game {
             None => self.paint_floor(&mut GpuCanvas::new(d, textures)),
         }
 
-        // Burning ground cells: the flames over the ground, under the
-        // tiles beside them (a burning doorway's walls still stand
-        // over the fire) and under whatever drives through them.
-        for (at, left, total) in self.burning_cells() {
-            draw_ground_fire(d, textures.barrel_explosion, at, self.time, left, total);
+        // Burning ground cells: tongues of flame standing on each
+        // (`pyro::tongues`), leaning with the wind, over the ground, under
+        // the tiles beside them (a burning doorway's walls still stand
+        // over the fire) and under whatever drives through them. Upper
+        // cells first, so a lower cell's flames stand in front.
+        let mut cells = self.burning_cells();
+        if !cells.is_empty() {
+            cells.sort_by(|a, b| a.0.y.total_cmp(&b.0.y).then(a.0.x.total_cmp(&b.0.x)));
+            let t = tuning();
+            let mut flames = Vec::new();
+            for (at, left, total) in cells {
+                let dying = (left / 0.6).clamp(0.0, 1.0);
+                let catching = ((total - left) / 0.25).clamp(0.0, 1.0);
+                let seed = crate::blast::seed_at(at, 23);
+                let lean = pyro::smoke_lean(&t, at, self.time);
+                let foot = Position::new(at.x, at.y + 9.0);
+                pyro::tongues(&mut flames, foot, t.ground_fire_spread_px, t.ground_fire_height_px, t.ground_fire_tongues.max(0) as u32, seed, self.time, lean, dying.min(catching));
+            }
+            pyro::draw(&mut GpuCanvas::new(d, textures), &flames);
         }
 
         self.paint_tiles(&mut GpuCanvas::new(d, textures));
@@ -832,10 +888,17 @@ impl Game {
             for jet in self.flames() {
                 draw_flame_glow(&mut bd, jet.origin, jet.dir, jet.reach, self.time);
             }
-            // A hull with afterburn on it glows under its embers, so
-            // the state reads between particles too.
-            for (at, left) in self.burning_tanks() {
-                draw_burning_hull_glow(&mut bd, at, self.time, left);
+            // The light every burning deck, wreck and tile throws on the
+            // ground round it; the flames themselves stand in
+            // `paint_standing` and `paint_tiles`.
+            let t = tuning();
+            let bands = t.glow_bands.max(0) as u32;
+            for tank in self.world.query::<&crate::tank::Tank>().iter() {
+                let lean = pyro::smoke_lean(&t, tank.position, self.time);
+                pyro::draw_glows(&mut Rl(&mut bd), &crate::damage_stage::flames(tank, self.time, lean), bands);
+            }
+            for obstacle in self.world.query::<&Obstacle>().iter().filter(|o| o.burning) {
+                pyro::draw_glows(&mut Rl(&mut bd), &crate::game::tile_flames(obstacle, self.time), bands);
             }
         });
 
@@ -849,6 +912,11 @@ impl Game {
     /// on the ground (`draw_ground_light`), which the light map stands in
     /// for under a dark sky.
     fn paint_field_glowing<D: RaylibDraw>(&self, d: &mut D, textures: &Textures, mut shots: Option<&mut ShotShaders>, fx: &crate::fx::Fx, day_pools: f32) {
+        // A hit lights up what it landed on: the hull or the tile drawn
+        // again in light for a few frames, stepping down.
+        if !fx.flashes().is_empty() {
+            d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| self.draw_flashes(&mut GpuCanvas::new(&mut bd, textures), fx.flashes()));
+        }
         // The towers' light (a charging coil, a mortar's ooze, a
         // tower on fire) and the globs in the air over everything that
         // stands (docs/defence-towers-prd.md section 12).
@@ -887,16 +955,15 @@ impl Game {
             });
         }
 
-        // Where the shaders loaded, a hit is the burst drawn from the
-        // particle layer's impacts, and the baked impact frames are
-        // left out.
-        let bursts = glow && shots.is_some();
+        // A hit is the burst the particle layer's impact composes
+        // (`burst.rs`), so the baked impact frames are left out.
         for shell in self.world.query::<&Shell>().iter() {
             if self.shadows_enabled && shell.state == ShellState::Flying {
                 draw_shell_shadow(d, textures.shells, shell);
             }
-            let hit = matches!(shell.state, ShellState::Hit0 | ShellState::Hit1 | ShellState::Hit2);
-            if !(bursts && hit) {
+            // Only the round in flight: its muzzle frames are the muzzle
+            // flash's (`burst::muzzle`) and its impact frames the hit's.
+            if shell.state == ShellState::Flying {
                 draw_shell(d, textures.shells, shell);
             }
         }
@@ -910,8 +977,8 @@ impl Game {
                 draw_plasma_shadow(d, textures.plasma, plasma, orb);
             }
             match shots.as_deref_mut() {
-                Some(shots) if orb && flying => shots.draw_orb(d, plasma, self.time),
-                Some(_) if bursts && plasma.impact_progress().is_some() => {}
+                Some(shots) if orb && flying => shots.draw_orb(d, plasma, self.time, self.map.field_size().1),
+                _ if !flying => {}
                 _ => draw_plasma(d, textures.plasma, plasma),
             }
         }
@@ -920,7 +987,7 @@ impl Game {
             if self.shadows_enabled && bullet.state == BulletState::Flying {
                 draw_bullet_shadow(d, textures.minigun_bullets, bullet);
             }
-            if !(bursts && bullet.state == BulletState::Hit) {
+            if bullet.state != BulletState::Hit {
                 draw_bullet(d, textures.minigun_bullets, bullet);
             }
         }
@@ -931,11 +998,30 @@ impl Game {
         for bolt in &self.tesla_bolts {
             crate::render::tower::draw_tesla_bolt(d, bolt);
         }
-        // Every hit still playing: shell fireballs, bullet sparks,
-        // plasma rings, laser burns.
-        if let Some(shots) = shots.as_deref_mut().filter(|_| bursts) {
-            for impact in fx.impacts() {
-                shots.draw_impact(d, impact);
+        // Every hit still playing, composed in blocks (`burst.rs`):
+        // shell fireballs, bullet and ricochet sparks, plasma and tesla
+        // rings, laser burns, splashes of ooze; their light after, in one
+        // additive block.
+        if !fx.impacts().is_empty() {
+            let t = tuning();
+            let hits: Vec<Vec<pyro::Shape>> = fx
+                .impacts()
+                .iter()
+                .map(|i| crate::burst::compose(i.kind, i.pos, i.dir, i.age, i.seed, pyro::smoke_lean(&t, i.pos, self.time)))
+                .collect();
+            {
+                let mut c = GpuCanvas::new(d, textures);
+                for shapes in &hits {
+                    pyro::draw(&mut c, shapes);
+                }
+            }
+            if glow {
+                let bands = t.glow_bands.max(0) as u32;
+                d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+                    for shapes in &hits {
+                        pyro::draw_glows(&mut Rl(&mut bd), shapes, bands);
+                    }
+                });
             }
         }
 
@@ -943,46 +1029,74 @@ impl Game {
         // under its own flying motes.
         if let Some(shots) = shots.as_deref_mut().filter(|_| glow) {
             for (i, jet) in self.flames().iter().enumerate() {
-                shots.draw_flame(d, jet.origin, jet.dir, jet.reach, self.time, i as f32 * 7.31);
+                shots.draw_flame(d, jet.origin, jet.dir, jet.reach, self.time, i as f32 * 7.31, self.map.field_size().1);
             }
         }
 
-        // Over the shots: the flares where they leave the barrel and
-        // where they land, and the burn at each end of a laser. A flamethrower nozzle pushes a muzzle flash every held
-        // frame and has its own glow, so it gets no flare.
+        // Over the shots: the flash where each leaves the barrel
+        // (`burst::muzzle`, thrown down the line of the round it let
+        // out) and the burn at each end of a laser. A flamethrower
+        // nozzle pushes a muzzle flash every held frame and has its own
+        // glow, so it gets no flash.
         if glow {
             let nozzles: Vec<Position> = self.flames().iter().map(|jet| jet.origin).collect();
+            let flashes: Vec<Vec<pyro::Shape>> = self
+                .muzzle_flashes
+                .iter()
+                .filter(|f| !at_nozzle(f.center, &nozzles))
+                .map(|f| {
+                    let near = crate::fx::shot_near(self, f.center);
+                    crate::burst::muzzle(f.center, near.map(|n| n.0), f.time, crate::blast::seed_for(f.center), near.and_then(|n| n.1))
+                })
+                .collect();
+            {
+                let mut c = GpuCanvas::new(d, textures);
+                for shapes in &flashes {
+                    pyro::draw(&mut c, shapes);
+                }
+            }
+            let bands = tuning().glow_bands.max(0) as u32;
             d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
                 for beam in &self.laser_beams {
                     draw_laser_flares(&mut bd, beam);
                 }
-                for flash in self.muzzle_flashes.iter().filter(|f| !at_nozzle(f.center, &nozzles)) {
-                    draw_muzzle_flare(&mut bd, flash);
-                }
-                // The block flare stands in for the hit bursts where
-                // the shaders did not load.
-                if !bursts {
-                    for flash in &self.impact_flashes {
-                        draw_impact_flare(&mut bd, flash);
-                    }
+                for shapes in &flashes {
+                    pyro::draw_glows(&mut Rl(&mut bd), shapes, bands);
                 }
             });
         }
 
-        // Barrel blasts last, so the fireball covers tanks and shots:
-        // the additive bloom first, then the sprite frames oldest
-        // first (a chained blast's flash lands on top of the earlier
-        // fireball and reads as a second detonation).
-        d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
-            for blast in &self.blast_fx {
-                draw_blast_glow(&mut bd, blast);
+        // Blasts last, so the fire covers tanks and shots. Each is
+        // composed once (`fireball.rs`, or `mushroom.rs` for a cloud),
+        // its smoke leaning with the wind where it went off; the puffs
+        // oldest first - a chained blast's flash lands on top of the
+        // earlier fireball and reads as a second detonation - then all
+        // their light in one additive block.
+        if !self.blast_fx.is_empty() {
+            let t = tuning();
+            let blasts: Vec<Vec<pyro::Shape>> = self
+                .blast_fx
+                .iter()
+                .map(|b| {
+                    let lean = pyro::smoke_lean(&t, b.center, self.time);
+                    match &b.cloud {
+                        Some(cloud) => cloud.compose(b.center, b.time, lean),
+                        None => crate::fireball::compose(b, lean),
+                    }
+                })
+                .collect();
+            {
+                let mut c = GpuCanvas::new(d, textures);
+                for shapes in &blasts {
+                    pyro::draw(&mut c, shapes);
+                }
             }
-        });
-        for blast in &self.blast_fx {
-            match &blast.cloud {
-                Some(cloud) => crate::mushroom::draw(&mut GpuCanvas::new(d, textures), cloud, blast.center, blast.time),
-                None => draw_blast(d, textures.barrel_explosion, blast),
-            }
+            let bands = t.glow_bands.max(0) as u32;
+            d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+                for shapes in &blasts {
+                    pyro::draw_glows(&mut Rl(&mut bd), shapes, bands);
+                }
+            });
         }
 
         // Parts still in the air, last of all: a chunk of hull thrown

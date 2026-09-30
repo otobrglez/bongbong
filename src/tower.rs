@@ -352,6 +352,15 @@ pub fn draw_tower(c: &mut impl Canvas, kind: TowerKind, side: Side, at: Position
     }
 }
 
+/// The tower's base and top again in `tint`, without the glow: a hit's
+/// flash draws it over itself in light.
+pub fn draw_tower_tinted(c: &mut impl Canvas, kind: TowerKind, side: Side, at: Position, stage: i32, heading: f32, tint: Color) {
+    let row = sheet_row(kind, side);
+    blit_cell(c, cell_rec(row, stage.clamp(0, TOWER_STAGE_COLS - 1)), at, 0.0, tint);
+    let top = if stage >= 2 { TOWER_TOP_DAMAGED_COL } else { TOWER_TOP_COL };
+    blit_cell(c, cell_rec(row, top), at, if kind.turns() { heading } else { 0.0 }, tint);
+}
+
 /// A dead tower's ruin on the ground.
 pub fn draw_ruin(c: &mut impl Canvas, ruin: &TowerRuin) {
     blit_cell(c, cell_rec(sheet_row(ruin.kind, ruin.side), TOWER_RUIN_COL), ruin.position, 0.0, Color::WHITE);

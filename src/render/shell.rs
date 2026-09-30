@@ -2,6 +2,8 @@
 
 use sola_raylib::prelude::*;
 
+use crate::pyro::FIRE;
+
 use crate::math::{Color, Rectangle};
 use crate::render::shot_fx::{fade, glow, heading, streak};
 use crate::shell::{Shell, ShellState};
@@ -59,9 +61,10 @@ pub fn draw_shell_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, shell: &S
     d.draw_texture_pro(texture, src, dest, origin, shell.rotation, shadow);
 }
 
-/// The light a flying shell throws (additive, drawn before the sprites):
-/// an orange tracer tail with a white-hot line down its middle, and a warm
-/// halo around the round itself, so a shot in the air reads at a glance.
+/// The light a flying shell throws (additive, drawn before the sprites), in
+/// blocks and fire-ramp steps: a red tracer tail two blocks wide with a
+/// white-hot line down its middle cooling to gold, and a stepped halo
+/// around the round itself, so a shot in the air reads at a glance.
 /// Nothing before `Flying` - the barrel frames are their own blast.
 pub fn draw_shell_light(d: &mut impl RaylibDraw, shell: &Shell) {
     let strength = tuning().shot_glow_strength;
@@ -71,7 +74,8 @@ pub fn draw_shell_light(d: &mut impl RaylibDraw, shell: &Shell) {
     let dir = heading(shell.rotation);
     let length = tuning().shell_tracer_length;
     let tail = Position::new(shell.position.x - dir.x * 4.0, shell.position.y - dir.y * 4.0);
-    streak(d, tail, dir, length, 5.0, fade(Color::new(255, 110, 30, 220), strength), Color::new(200, 30, 10, 0));
-    streak(d, tail, dir, length * 0.8, 2.0, fade(Color::new(255, 255, 225, 255), strength), fade(Color::new(255, 160, 40, 150), strength));
-    glow(d, shell.position, 11.0, fade(Color::new(255, 130, 40, 120), strength));
+    let (outer, ember) = (crate::pyro::alpha(FIRE[3], 0.86), crate::pyro::alpha(FIRE[2], 0.0));
+    streak(d, tail, dir, length, 4.0, fade(outer, strength), ember);
+    streak(d, tail, dir, length * 0.8, 2.0, fade(FIRE[7], strength), fade(crate::pyro::alpha(FIRE[5], 0.6), strength));
+    glow(d, shell.position, 11.0, fade(crate::pyro::alpha(FIRE[5], 0.47), strength));
 }

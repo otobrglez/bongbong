@@ -10,7 +10,6 @@
 
 use crate::blast::draw_scorch;
 use crate::canvas::Canvas;
-use crate::damage_stage::draw_damage;
 use crate::decal::draw_decal;
 use crate::frog::{draw_frog, draw_frog_ring};
 use crate::math::Color;
@@ -19,7 +18,7 @@ use crate::pickup::{draw_pickup, Pickup};
 use crate::portal::draw_portal;
 use crate::simulation::Game;
 use crate::tank::{
-    draw_enemy_ring, draw_minigun_mount, draw_minigun_mount_shadow, draw_missile_pod, draw_missile_pod_shadow, draw_player_locate, draw_player_ring, draw_tank, draw_tank_shadow, draw_tank_shield, Tank,
+    draw_enemy_ring, draw_minigun_mount, draw_minigun_mount_shadow, draw_missile_pod, draw_missile_pod_shadow, draw_player_locate, draw_player_ring, draw_tank_hull, draw_tank_shadow, draw_tank_shield, draw_tank_turret, Tank,
 };
 use crate::track::draw_track;
 use hecs::Entity;
@@ -67,13 +66,55 @@ fn draw_one_tank(c: &mut impl Canvas, tank: &Tank, role: TankRole, time: f32, sh
         draw_minigun_mount_shadow(c, tank);
         draw_missile_pod_shadow(c, tank);
     }
-    draw_tank(c, tank);
+    // The marks the armour has gathered sit on the hull, under the
+    // turret that swings over them (`damage_stage.rs`).
+    draw_tank_hull(c, tank, tank.tint());
+    if role != TankRole::RollIn {
+        crate::damage_stage::draw_damage(c, tank, time);
+    }
+    draw_tank_turret(c, tank, tank.tint());
     crate::tank::draw_tank_slime(c, tank, time);
     draw_minigun_mount(c, tank);
     draw_missile_pod(c, tank);
+    // A burning deck or wreck: the flames over everything on the tank,
+    // leaning with the wind. Their light is the glowing pass's.
     if role != TankRole::RollIn {
-        draw_damage(c, tank, time);
+        let lean = crate::pyro::smoke_lean(&crate::tuning::tuning(), tank.position, time);
+        crate::pyro::draw(c, &crate::damage_stage::flames(tank, time, lean));
     }
+}
+
+/// The flames on a burning tile (`Obstacle::burning`: timber and trees
+/// charring out), in the effects language (`pyro::tongues`): catching over
+/// its first moments and dying down over the end of `wood_burn_seconds`,
+/// leaning with the wind; a tree burns in its crown. The last shape is
+/// their light, which the glowing pass draws.
+pub fn tile_flames(obstacle: &Obstacle, time: f32) -> Vec<crate::pyro::Shape> {
+    let t = crate::tuning::tuning();
+    let mut out = Vec::new();
+    if !obstacle.burning {
+        return out;
+    }
+    let catching = (obstacle.burn_elapsed / 0.3).clamp(0.0, 1.0);
+    let left = t.wood_burn_seconds - obstacle.burn_elapsed;
+    let dying = (left / (t.wood_burn_seconds * 0.3).max(0.01)).clamp(0.0, 1.0);
+    let strength = catching.min(dying).max(0.35);
+    let at = obstacle.position;
+    let lean = crate::pyro::smoke_lean(&t, at, time);
+    let seed = crate::blast::seed_at(at, 29);
+    // Tall enough to rise clear of the tile, over its own glowing char.
+    let (foot, spread, height, count) = if obstacle.material.is_tree() {
+        (crate::Position::new(at.x, at.y - 4.0), 24.0, 30.0, 3)
+    } else {
+        (crate::Position::new(at.x, at.y + 6.0), 22.0, 32.0, 3)
+    };
+    crate::pyro::tongues(&mut out, foot, spread, height, count, seed, time, lean, strength);
+    out.push(crate::pyro::Shape::Glow {
+        pos: crate::Position::new(foot.x, foot.y - height * 0.4),
+        radius: 34.0 * (0.5 + 0.5 * strength),
+        color: crate::pyro::alpha(crate::pyro::FIRE[5], 0.22 * strength),
+    });
+    out
 }
 
 /// What `Game::paint_standing` draws besides the field itself.
@@ -180,6 +221,12 @@ impl Game {
             // Lighting along whichever faces face open ground, so a run
             // of tiles reads as one structure rather than as a grid.
             draw_obstacle_cap(c, obstacle);
+        }
+        // Burning timber: flames standing on each plank, over the tiles
+        // round it so a burning door in a wall is not cut off by the wall
+        // beside it.
+        for obstacle in self.world.query::<&Obstacle>().iter().filter(|o| o.burning && !o.material.is_tree()) {
+            crate::pyro::draw(c, &tile_flames(obstacle, self.time));
         }
     }
 
@@ -289,6 +336,9 @@ impl Game {
                 draw_tree_shadow(c, tree, lean, self.time);
             }
             draw_tree(c, tree, lean, self.time);
+            if tree.burning {
+                crate::pyro::draw(c, &tile_flames(tree, self.time));
+            }
         }
     }
 

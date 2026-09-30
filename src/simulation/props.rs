@@ -590,7 +590,7 @@ impl Game {
             }
         }
 
-        // Burnt out: the ground stays darker, a trail cell is used up.
+        // Burnt out: a scar on the ground, a trail cell used up.
         let mut done = Vec::new();
         self.fires.retain(|fire| {
             if fire.left > 0.0 {
@@ -600,9 +600,8 @@ impl Game {
             false
         });
         for fire in done {
-            if let Some(decal) = self.fire_burnt_out(&fire) {
-                f.decals.push(decal);
-            }
+            let scar = self.fire_burnt_out(&fire);
+            f.scorches.push(scar);
         }
     }
 
@@ -618,18 +617,14 @@ impl Game {
         }
     }
 
-    /// What a ground fire leaves when it goes out: the ground darker for
-    /// the rest of the round, the oil cell spent, and a charred plank of
-    /// rubble for the caller to stage. **Runs exactly once per cell** -
-    /// `darken_cell` multiplies the tint, so a second call darkens twice.
-    /// The round calls it from `tick_fires`; a replica calls it for the
-    /// cell a snapshot has stopped listing, which is the only way a fire
-    /// ever leaves the list (`net::apply`).
-    pub(crate) fn fire_burnt_out(&mut self, fire: &GroundFire) -> Option<Decal> {
-        let pos = fire.position();
-        self.ground.darken_cell(pos, tuning().ground_burn_darken);
+    /// What a ground fire leaves when it goes out: the oil cell spent, and
+    /// a burn scar (`Scorch::burn`) for the caller to stage. **Runs exactly
+    /// once per cell**. The round calls it from `tick_fires`; a replica
+    /// calls it for the cell a snapshot has stopped listing, which is the
+    /// only way a fire ever leaves the list (`net::apply`).
+    pub(crate) fn fire_burnt_out(&mut self, fire: &GroundFire) -> Scorch {
         self.oil_cells.remove(&fire.cell);
-        Decal::new(Material::Wood, pos, true)
+        Scorch::burn(fire.position())
     }
 
     /// Advance every burning wood tile's fire and report the ones that

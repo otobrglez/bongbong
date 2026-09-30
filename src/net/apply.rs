@@ -917,13 +917,12 @@ fn apply_fires(game: &mut Game, s: &Snapshot, cols: u16) {
         }
     }
     // A cell only ever leaves the list by burning out, so the snapshot
-    // dropping it is the event: darker ground, the oil spent and a charred
-    // plank, once each (docs/online-coop-prd.md section 4.5).
+    // dropping it is the event: the oil spent and a burn scar, once each
+    // (docs/online-coop-prd.md section 4.5).
     let out: Vec<GroundFire> = game.fires.iter().filter(|f| !burning.contains(&f.cell)).copied().collect();
     for fire in out {
-        if let Some(decal) = game.fire_burnt_out(&fire) {
-            game.push_decal(decal);
-        }
+        let scar = game.fire_burnt_out(&fire);
+        game.show(crate::simulation::Spectacle { scorches: vec![scar], ..Default::default() });
     }
     game.fires = fires;
 }
@@ -1458,10 +1457,10 @@ mod tests {
         assert_eq!(wreck_alpha(&replica, slot), Some(0.0), "faded out, and still on the field");
     }
 
-    /// A ground fire that goes out darkens the replica's ground, spends
-    /// its oil cell and drops its charred plank - driven by the snapshot
-    /// that stops listing the cell, since burning out is the only way a
-    /// fire ever leaves the list.
+    /// A ground fire that goes out leaves its burn scar on the replica's
+    /// ground and spends its oil cell - driven by the snapshot that stops
+    /// listing the cell, since burning out is the only way a fire ever
+    /// leaves the list.
     #[test]
     fn a_replicas_fire_burns_out_when_the_snapshot_drops_it() {
         let mut game = authoritative(PROPS_MAP, 0xC0FFEE, 2);
@@ -1473,7 +1472,7 @@ mod tests {
         assert!(!lit.is_empty(), "the drum leaves a burning pool");
         let mut replica = welcome_through_the_codec(&game);
         assert_eq!(replica.fires.len(), game.fires.len(), "the replica has the same pool");
-        let decals = replica.decals.len();
+        let scars = replica.scorches.len();
 
         let mut burnt = false;
         for frame in 31..=1800 {
@@ -1491,7 +1490,7 @@ mod tests {
         }
         assert!(burnt, "the pool never burned out");
         assert!(replica.fires.iter().all(|f| !lit.contains(&f.cell)), "the cells are out on the replica too");
-        assert!(replica.decals.len() > decals, "a burnt-out cell leaves a charred plank");
+        assert!(replica.scorches.len() > scars, "a burnt-out cell leaves a burn scar");
         assert_eq!(replica.oil_cells, game.oil_cells, "and the oil it burned is spent on both sides");
     }
 

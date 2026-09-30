@@ -151,7 +151,7 @@ impl Sheets for EditorTextures<'_> {
             Sheet::Pickup(PickupKind::Flamethrower) => self.pickup_flamethrower,
             Sheet::Pickup(PickupKind::FrogHealth) => self.pickup_frog_health,
             Sheet::Pickup(PickupKind::TowerPack) => self.pickup_tower_pack,
-            Sheet::Damage | Sheet::MinigunMount | Sheet::MissilePod | Sheet::Tracks | Sheet::BarrelExplosion | Sheet::Frog { .. } => {
+            Sheet::MinigunMount | Sheet::MissilePod | Sheet::Tracks | Sheet::BarrelExplosion | Sheet::Frog { .. } => {
                 panic!("the builder has no {sheet:?} sheet")
             }
         }

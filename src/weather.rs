@@ -826,6 +826,10 @@ pub fn lights(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning) -> Vec<L
             }
             ImpactKind::Tesla => Light::point(impact.pos, 90.0, scale(TESLA_LIGHT, s * 1.5 * life)),
             ImpactKind::Ooze => Light::point(impact.pos, 44.0, scale(OOZE_LIGHT, s * 0.6 * life)).unshadowed(),
+            ImpactKind::Ricochet => Light::point(impact.pos, 30.0, scale([1.0, 0.85, 0.5], s * 0.6 * life)).unshadowed(),
+            ImpactKind::Deflect => Light::point(impact.pos, 30.0, scale([0.67, 0.47, 1.0], s * 0.6 * life)).unshadowed(),
+            // Dust throws no light.
+            ImpactKind::Dust(_) | ImpactKind::Collapse(_) | ImpactKind::Ash => continue,
         });
     }
 

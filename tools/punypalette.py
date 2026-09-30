@@ -162,6 +162,13 @@ BLUE_PALE = (0x93, 0xEC, 0xE2)      # mid(BLUE_BRIGHT, WHITE)
 # is not, so a clump reads against the field it grows out of. The desert
 # theme's sagebrush uses it as the leaf speckle over a grey body.
 GREEN_SHADE = (0x3D, 0x6E, 0x3F)    # mid(GREEN_DARKEST, GREEN_DK)
+# The white-hot heart of a fire. GOLD_BRIGHT #EEA343 to WHITE is the one
+# jump the fire ramp has nothing between, so a flame cooling from white
+# would flick straight to gold; this is the pale warm step between them.
+# Only the effects layer draws it, at run time (`src/pyro.rs`'s `FIRE`,
+# docs/effects.md) - no sheet is drawn in it, so it stays out of
+# PUNY_EXTRA and no generator's `snap` can land on it.
+FIRE_PALE = (0xFF, 0xE2, 0xA0)      # between GOLD_BRIGHT and WHITE
 
 PUNY_EXTRA = [
     STONE_HI, STONE_MID, STONE_MDK, STONE_SHADE,

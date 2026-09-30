@@ -60,6 +60,18 @@ pub enum ImpactKind {
     Tesla,
     /// A bio slush glob bursting on the ground.
     Ooze,
+    /// A shot glancing off iron or a barrel and flying on.
+    Ricochet,
+    /// A shot turned away by a rainbow shield.
+    Deflect,
+    /// Dust knocked off a tile a shot hit and did not break, in the
+    /// material's colours (`pyro::dust_of`).
+    Dust(Material),
+    /// A tile coming down: a cloud of its dust rolling out from where it
+    /// stood.
+    Collapse(Material),
+    /// A tile that burnt out falling in: a cloud of ash.
+    Ash,
 }
 
 impl ImpactKind {
@@ -73,6 +85,9 @@ impl ImpactKind {
             ImpactKind::Laser(_) => t.laser_hit_seconds,
             ImpactKind::Tesla => t.tesla_hit_seconds,
             ImpactKind::Ooze => t.ooze_hit_seconds,
+            ImpactKind::Ricochet | ImpactKind::Deflect => t.bullet_hit_seconds * 0.7,
+            ImpactKind::Dust(_) => t.tile_dust_seconds,
+            ImpactKind::Collapse(_) | ImpactKind::Ash => t.tile_collapse_seconds,
         }
     }
 }
@@ -83,18 +98,55 @@ impl ImpactKind {
 /// impact frames, and on a replica whose projectiles' timers never run.
 pub struct Impact {
     pub(crate) pos: Position,
-    /// The way the shot was travelling (a unit vector).
+    /// The way the shot was travelling (a unit vector). Only the drawing
+    /// reads it (`burst::compose`).
+    #[cfg_attr(not(feature = "render"), allow(dead_code))]
     pub(crate) dir: Vec2,
     pub(crate) kind: ImpactKind,
     pub(crate) age: f32,
-    /// Per-hit variety for the burst's hashed parts.
-    pub(crate) seed: f32,
+    /// Per-hit variety for the burst's hashed parts: a hash of where it
+    /// landed and of how many hits came before it. Only the drawing reads
+    /// it.
+    #[cfg_attr(not(feature = "render"), allow(dead_code))]
+    pub(crate) seed: u32,
 }
 
 impl Impact {
     /// 0 at the hit to 1 as it ends.
     pub fn progress(&self) -> f32 {
         (self.age / self.kind.seconds().max(0.01)).clamp(0.0, 1.0)
+    }
+}
+
+/// What a hit lit up: a hull, by its owner slot, or the tile a shot struck
+/// without breaking, by where it struck.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Flashed {
+    Tank(usize),
+    Tile(Position),
+}
+
+/// A hit's flash: the hull or tile it landed on drawn again in light for a
+/// few frames (`render/game.rs`), stepping down as it goes.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Flash {
+    pub(crate) what: Flashed,
+    pub(crate) age: f32,
+}
+
+impl Flash {
+    /// How bright it is now, in three steps: full, two thirds, one third,
+    /// then gone at `hit_flash_seconds`.
+    pub fn strength(&self) -> f32 {
+        let life = tuning().hit_flash_seconds;
+        if life <= 0.0 || self.age >= life {
+            return 0.0;
+        }
+        match (self.age / life * 3.0) as i32 {
+            0 => 1.0,
+            1 => 0.66,
+            _ => 0.33,
+        }
     }
 }
 
@@ -144,6 +196,17 @@ pub struct Fx {
     /// Ids of the shots already seen in their impact frames, so each hit
     /// is started once.
     impacts_seen: HashSet<u32>,
+    /// The round clock at the last `observe`: the wind the smoke drifts
+    /// on (`pyro::smoke_lean`) is a function of it.
+    clock: f32,
+    /// Hits started so far: salts each hit's seed, so a burst of minigun
+    /// rounds into one spot does not repeat one picture.
+    impacts_started: u32,
+    /// The hulls and tiles a hit has just lit up.
+    flashes: Vec<Flash>,
+    /// The cells of the tiles burning at the last `observe`: a tile that
+    /// dies in one of them burnt out, and falls in as ash.
+    burning: HashSet<(i32, i32)>,
 }
 
 impl Fx {
@@ -157,13 +220,31 @@ impl Fx {
         &self.impacts
     }
 
+    /// Every hull and tile still flashing from a hit, for the renderer.
+    pub fn flashes(&self) -> &[Flash] {
+        &self.flashes
+    }
+
+    /// Light up what a hit landed on; a second hit on it starts its flash
+    /// over rather than stacking another.
+    fn flash(&mut self, what: Flashed) {
+        if tuning().hit_flash_seconds <= 0.0 {
+            return;
+        }
+        match self.flashes.iter_mut().find(|f| f.what == what) {
+            Some(f) => f.age = 0.0,
+            None => self.flashes.push(Flash { what, age: 0.0 }),
+        }
+    }
+
     fn start_impact(&mut self, pos: Position, velocity: Vec2, kind: ImpactKind) {
         let len = velocity.length();
         let dir = if len > 0.01 { velocity * (1.0 / len) } else { Vec2::new(0.0, -1.0) };
         if self.impacts.len() >= MAX_IMPACTS {
             self.impacts.remove(0);
         }
-        let seed = rand::rng().random_range(0.0..100.0);
+        self.impacts_started = self.impacts_started.wrapping_add(1);
+        let seed = crate::blast::seed_at(pos, 31).wrapping_add(self.impacts_started.wrapping_mul(0x9E37_79B9));
         self.impacts.push(Impact { pos, dir, kind, age: 0.0, seed });
     }
 
@@ -183,6 +264,8 @@ impl Fx {
         self.trail_last.clear();
         self.impacts.clear();
         self.impacts_seen.clear();
+        self.flashes.clear();
+        self.burning.clear();
     }
 
     fn push(&mut self, p: Particle) {
@@ -344,6 +427,11 @@ impl Fx {
     /// same families the rubble rows are drawn from, so the burst and the
     /// debris it leaves read as the same substance.
     fn tile_death(&mut self, material: Material, at: Position) {
+        if self.burning.contains(&crate::map::world_to_cell(at)) {
+            self.start_impact(at, Vec2::zero(), ImpactKind::Ash);
+        } else if crate::pyro::dust_of(material).is_some() {
+            self.start_impact(at, Vec2::zero(), ImpactKind::Collapse(material));
+        }
         let n = self.count(tuning().tile_burst_particles);
         match material {
             Material::Brick | Material::Iron => {
@@ -386,7 +474,10 @@ impl Fx {
     /// A shot that chipped a tile without killing it: a small spray of the
     /// material, scaled well under `tile_death`'s burst so a wall being
     /// worn down still reads as less than a wall coming apart.
-    fn tile_chip(&mut self, material: Material, at: Position) {
+    fn tile_chip(&mut self, material: Material, at: Position, dir: Option<Vec2>) {
+        if crate::pyro::dust_of(material).is_some() {
+            self.start_impact(at, dir.unwrap_or(Vec2::zero()), ImpactKind::Dust(material));
+        }
         let n = self.count(tuning().tile_chip_particles);
         match material {
             Material::Glass => {
@@ -427,7 +518,7 @@ impl Fx {
         match drum {
             Drum::Oil => {
                 self.burst(at, ParticleKind::Spark, self.count((18.0 * scale) as i32), 210.0, &[FIRE_T, EMBER_T]);
-                self.burst(at, ParticleKind::Smoke, self.count((7.0 * scale) as i32), 35.0, &[SMOKE_T]);
+                self.burst(at, ParticleKind::Smoke, self.count((7.0 * scale) as i32), 35.0, &[SOOT_T]);
             }
             // Fuel: whiter, faster, and hardly any smoke - it burns clean.
             Drum::Fuel => {
@@ -467,7 +558,9 @@ impl Fx {
                     // ever throws anything on the shot that finishes it,
                     // and every shot before that lands silently.
                     Event::Hit { target: HitTarget::Obstacle { material }, killed: false, x, y, .. } => {
-                        self.tile_chip(material, Position::new(x, y))
+                        let at = Position::new(x, y);
+                        self.flash(Flashed::Tile(at));
+                        self.tile_chip(material, at, shot_heading_near(game, at));
                     }
                     Event::Wreck { x, y, .. } => {
                         self.wreck(Position::new(x, y));
@@ -522,12 +615,14 @@ impl Fx {
                     // flash the hit loop already pushes is doing most of the
                     // work.
                     Event::Deflected { x, y, .. } => {
+                        self.start_impact(Position::new(x, y), Vec2::zero(), ImpactKind::Deflect);
                         self.burst(Position::new(x, y), ParticleKind::Spark, self.count(4), 90.0, &[SHIELD_T, WHITE_T]);
                     }
                     // A shot glancing off iron or a barrel: a few hot
                     // sparks at the point of contact, as slight as the
                     // shield's, since the impact flash already marks it.
                     Event::Ricochet { x, y, .. } => {
+                        self.start_impact(Position::new(x, y), Vec2::zero(), ImpactKind::Ricochet);
                         self.burst(Position::new(x, y), ParticleKind::Spark, self.count(3), 80.0, &[WHITE_T, FIRE_T]);
                     }
                     // The shield itself giving way: a full ring of sparks
@@ -542,8 +637,13 @@ impl Fx {
                     // A shot landing on a hull, a frog or the border: a
                     // shower of hot sparks, a couple of dark flecks of
                     // armour and a wisp of smoke. Tiles are `tile_chip`'s.
-                    Event::Hit { target: HitTarget::Player { .. } | HitTarget::Enemy { .. } | HitTarget::Frog { .. }, x, y, .. } => {
+                    Event::Hit { target: target @ (HitTarget::Player { .. } | HitTarget::Enemy { .. } | HitTarget::Frog { .. }), x, y, .. } => {
                         let at = Position::new(x, y);
+                        match target {
+                            HitTarget::Player { player } => self.flash(Flashed::Tank(player as usize)),
+                            HitTarget::Enemy { slot } => self.flash(Flashed::Tank(slot)),
+                            _ => {}
+                        }
                         self.burst(at, ParticleKind::Spark, self.count(tuning().shot_hit_sparks), 190.0, &[WHITE_T, FIRE_T, EMBER_T]);
                         self.burst(at, ParticleKind::Chip, self.count(2), 90.0, &[STONE_DK, STONE_MD]);
                         self.burst(at, ParticleKind::Smoke, self.count(1), 18.0, &[SMOKE_T]);
@@ -682,6 +782,7 @@ impl Fx {
     }
 
     fn sample_world(&mut self, game: &Game, dt: f32) {
+        self.clock = game.time;
         self.watch_impacts(game);
         // Spray off a wading hull (docs/water.md): a splash the frame it
         // wades in, then droplets at a rate that follows its speed.
@@ -702,6 +803,7 @@ impl Fx {
         self.wading = wading_now;
 
         let (ember_rate, smoke_rate) = (tuning().wood_ember_rate, tuning().wood_smoke_rate);
+        self.burning = game.burning_tiles().iter().map(|&(pos, _)| crate::map::world_to_cell(pos)).collect();
         for (pos, _elapsed) in game.burning_tiles() {
             let key = crate::blast::seed_at(pos, 1);
             if self.due(key, ember_rate * tuning().fx_density, dt) {
@@ -720,7 +822,7 @@ impl Fx {
                 self.burst(pos, ParticleKind::Ember, 1, 24.0, &[EMBER_T, FIRE_T]);
             }
             if self.due(key ^ 0x2b7e, smoke_rate * dying * tuning().fx_density, dt) {
-                self.burst(pos, ParticleKind::Smoke, 1, 12.0, &[SMOKE_T]);
+                self.burst(pos, ParticleKind::Smoke, 1, 12.0, &[SOOT_T]);
             }
         }
         // Towers: a damaged one leaks smoke (and sparks, at its last
@@ -865,7 +967,32 @@ impl Fx {
                 self.burst(pos, ParticleKind::Ember, 1, 26.0, &[FIRE_T, EMBER_T]);
             }
             if self.due(key ^ 0x51ed, wsmoke_rate * tuning().fx_density, dt) {
-                self.burst(pos, ParticleKind::Smoke, 1, 14.0, &[SMOKE_T]);
+                self.burst(pos, ParticleKind::Smoke, 1, 14.0, &[SOOT_T]);
+            }
+        }
+        // A hull losing its fight smokes from the wound on its deck
+        // (`damage_stage::wound`): a wisp once it is badly hit, a column
+        // as it gets worse, black smoke and embers once the deck burns.
+        let hull_rate = tuning().hull_smoke_rate * tuning().fx_density;
+        if hull_rate > 0.0 {
+            let mut hulls: Vec<(usize, Position, f32, bool)> = Vec::new();
+            for tank in game.world.query::<&crate::tank::Tank>().iter() {
+                let wear = tank.damage / crate::MAX_DAMAGE;
+                if tank.is_wreck() || wear < HULL_SMOKE_FROM {
+                    continue;
+                }
+                hulls.push((tank.owner_slot(), crate::damage_stage::wound(tank), wear, crate::damage_stage::fire(tank) > 0.0));
+            }
+            for (slot, at, wear, burning) in hulls {
+                let key = 0xDA3A_0000 ^ slot as u32;
+                let thick = ((wear - HULL_SMOKE_FROM) / (1.0 - HULL_SMOKE_FROM)).clamp(0.0, 1.0);
+                if self.due(key, hull_rate * (0.15 + 0.85 * thick), dt) {
+                    let tint = if burning { SOOT_T } else { SMOKE_T };
+                    self.burst(at, ParticleKind::Smoke, 1, 8.0, &[tint]);
+                }
+                if burning && self.due(key ^ 0x3e3e, flame_rate * 0.3 * tuning().fx_density, dt) {
+                    self.burst(at, ParticleKind::Ember, 1, 22.0, &[FIRE_T, EMBER_T]);
+                }
             }
         }
         // Flecks kicked up by a hull crossing tall grass - leaf on the
@@ -941,9 +1068,15 @@ impl Fx {
             i.age += dt;
             i.age < i.kind.seconds()
         });
+        let flash = tuning().hit_flash_seconds;
+        self.flashes.retain_mut(|f| {
+            f.age += dt;
+            f.age < flash
+        });
         let t = tuning();
         let (gravity, drag, bounce) = (t.debris_gravity, t.debris_air_drag, t.debris_bounce);
         let (rise, growth) = (t.smoke_rise_speed, t.smoke_growth);
+        let clock = self.clock;
         self.particles.retain_mut(|p| {
             p.age += dt;
             if p.age >= p.life {
@@ -960,12 +1093,21 @@ impl Fx {
                         p.vel.y *= 0.55;
                     }
                 }
+                // Smoke and embers climb and drift down-wind as they go,
+                // as far as the grass under them leans.
                 ParticleKind::Smoke | ParticleKind::Ember => {
                     p.z += rise * dt;
                     p.size += growth * dt;
+                    p.pos.x += crate::pyro::smoke_lean(&t, p.pos, clock) * rise * dt;
                 }
-                // Swells to about three blocks over its life.
-                ParticleKind::Trail => p.size += FX_GRID * 2.0 * dt / p.life.max(0.05),
+                // Swells to about three blocks over its life, and drifts
+                // with the wind where it hangs.
+                ParticleKind::Trail => {
+                    p.size += FX_GRID * 2.0 * dt / p.life.max(0.05);
+                    p.pos.x += crate::pyro::smoke_lean(&t, p.pos, clock) * 10.0 * dt;
+                }
+                // Dust hugs the ground and blows along it.
+                ParticleKind::Dust => p.pos.x += crate::pyro::smoke_lean(&t, p.pos, clock) * 16.0 * dt,
                 ParticleKind::Spray => {
                     p.vz += gravity * dt;
                     p.z -= p.vz * dt;
@@ -1004,25 +1146,32 @@ fn back_of(velocity: Vec2) -> Vec2 {
 
 /// The heading of the shell, bullet or plasma bolt nearest `at` within
 /// 28 px - the round a muzzle flash at `at` just let out.
-fn shot_heading_near(game: &Game, at: Position) -> Option<Vec2> {
-    let mut best: Option<(f32, Vec2)> = None;
-    let mut consider = |pos: Position, vel: Vec2| {
+pub(crate) fn shot_heading_near(game: &Game, at: Position) -> Option<Vec2> {
+    shot_near(game, at).map(|(dir, _)| dir)
+}
+
+/// The round nearest `at` within 28 px - the one a muzzle flash at `at`
+/// just let out - as its heading and, for a plasma bolt, its variant (so
+/// its flash burns in its own colour).
+pub(crate) fn shot_near(game: &Game, at: Position) -> Option<(Vec2, Option<PlasmaVariant>)> {
+    let mut best: Option<(f32, Vec2, Option<PlasmaVariant>)> = None;
+    let mut consider = |pos: Position, vel: Vec2, plasma: Option<PlasmaVariant>| {
         let d = pos.distance_to(at);
         let len = vel.length();
-        if d < 28.0 && len > 0.01 && best.is_none_or(|(b, _)| d < b) {
-            best = Some((d, vel * (1.0 / len)));
+        if d < 28.0 && len > 0.01 && best.is_none_or(|(b, _, _)| d < b) {
+            best = Some((d, vel * (1.0 / len), plasma));
         }
     };
     for s in game.world.query::<&Shell>().iter() {
-        consider(s.position, s.velocity);
+        consider(s.position, s.velocity, None);
     }
     for b in game.world.query::<&Bullet>().iter() {
-        consider(b.position, b.velocity);
+        consider(b.position, b.velocity, None);
     }
     for p in game.world.query::<&Plasma>().iter() {
-        consider(p.position, p.velocity);
+        consider(p.position, p.velocity, Some(p.variant));
     }
-    best.map(|(_, dir)| dir)
+    best.map(|(_, dir, plasma)| (dir, plasma))
 }
 
 /// Every sprite in the game lands on a 2-screen-pixel block (tanks draw a
@@ -1051,8 +1200,14 @@ const SAND_L: Color = Color::new(0xC9, 0xB2, 0x66, 255);
 const SAND_M: Color = Color::new(0xB7, 0xA2, 0x48, 255);
 const GLASS_L: Color = Color::new(0x27, 0xD8, 0xC5, 255);
 const GLASS_M: Color = Color::new(0x04, 0xA0, 0xB4, 255);
-const DUST_T: Color = Color::new(0xD8, 0xBF, 0x8E, 255);
-const SMOKE_T: Color = Color::new(0x55, 0x52, 0x4E, 255);
+const DUST_T: Color = crate::pyro::DUST[3];
+const SMOKE_T: Color = crate::pyro::SMOKE[2];
+/// Black smoke off burning oil, a burning deck, a wreck: the smoke ramp a
+/// step darker (`render/fx.rs` reads the tint).
+pub(crate) const SOOT_T: Color = crate::pyro::SMOKE[1];
+
+/// The share of `MAX_DAMAGE` a hull starts smoking at.
+const HULL_SMOKE_FROM: f32 = 0.3;
 /// The light colours of the shots themselves, matched to their drawn
 /// glows (`render/laser.rs`, `render/plasma.rs`).
 const LASER_RED_T: Color = Color::new(0xFF, 0x50, 0x46, 255);

@@ -1,13 +1,13 @@
 //! The raylib half of `tower.rs` (docs/defence-towers-prd.md section 12),
-//! drawn the way every shot is (`render/shot_fx.rs`): smooth, additive and
-//! stateless. The tesla coil's bolt - three violet filaments with forks
-//! crackling off them, a bloom round the lot and a flare at each end, the
-//! author's L3 pick - and the light the towers throw: a charging coil's
-//! lens, the ooze in a mortar's mouth, a glob in the air trailing its
-//! drips, the faint glow of the ooze on the ground and on a coated hull, a
-//! burning tower. The bolt's hit and a glob's splash are bursts from
-//! `static/impact_burst.fs` (`ImpactKind::Tesla`, `ImpactKind::Ooze`),
-//! started by `fx.rs`.
+//! drawn the way every shot is (`render/shot_fx.rs`): in 2 px blocks,
+//! additive and stateless. The tesla coil's bolt - three violet filaments
+//! with forks crackling off them, a bloom round the lot and a flare at
+//! each end - and the light the towers throw: a charging coil's lens, the
+//! ooze in a mortar's mouth, a glob in the air trailing its drips, the
+//! faint glow of the ooze on the ground and on a coated hull, a burning
+//! tower. The bolt's hit and a glob's splash are bursts composed in
+//! `burst.rs` (`ImpactKind::Tesla`, `ImpactKind::Ooze`), started by
+//! `fx.rs`.
 
 use sola_raylib::prelude::*;
 
@@ -56,8 +56,8 @@ fn jagged(a: Position, b: Position, seed: u32, jag: f32) -> Vec<Position> {
     pts
 }
 
-/// A smooth band along `pts`, `w0` px wide at the first point and `w1` at
-/// the last, in `color`.
+/// A band of blocks along `pts`, `w0` px wide at the first point and `w1`
+/// at the last, in `color`.
 fn band(d: &mut impl RaylibDraw, pts: &[Position], w0: f32, w1: f32, color: Color) {
     let n = pts.len().saturating_sub(1).max(1) as f32;
     for (i, pair) in pts.windows(2).enumerate() {
@@ -123,7 +123,7 @@ pub fn draw_tesla_bolt(d: &mut impl RaylibDraw, bolt: &TeslaBolt) {
             let diag = std::f32::consts::FRAC_1_SQRT_2;
             star(&mut bd, bolt.end, Vec2::new(diag, diag), 18.0 * k, 2.5, fade(STRAND_PALE, a));
         }
-        bd.draw_circle_v(bolt.end, 2.5 * alpha, fade(Color::WHITE, alpha));
+        crate::pyro::block_disc(&mut crate::render::pyro::Rl(&mut bd), bolt.end, 2.5 * alpha, fade(Color::WHITE, alpha));
     });
 }
 

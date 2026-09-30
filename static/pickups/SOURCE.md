@@ -2,7 +2,7 @@
 
 `laser.png` is **not** from the same pack (it has no laser variant) - it's
 generated from scratch by `tools/gen_laser_pickup.py` (raw PNG bytes, no
-Pillow, same convention as `tools/gen_damage.py`), deliberately in the same
+Pillow), deliberately in the same
 loud/high-contrast spirit as the two below rather than recolored onto
 punypalette. Regenerate with `python3 tools/gen_laser_pickup.py`.
 

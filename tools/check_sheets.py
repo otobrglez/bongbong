@@ -19,7 +19,7 @@ Two checks, both of which have caught real defects:
    pixel there reads as terrain showing through - the olive look the
    de-green pass exists to prevent. This is scoped deliberately: a green
    tank chassis is a real colour choice, so `scifi_tanks_sheet.png` is not
-   checked, and `damage.png` carries a green tint of its own.
+   checked.
 
    `nature_sheet.png`, `nature_sheet_desert.png` and `trees_sheet.png` are the deliberate exceptions,
    and they are what the rule always meant: **manufactured objects are
@@ -68,7 +68,6 @@ ON_PALETTE = [
     'minigun_mount.png',
     'missile.png',
     'missile_pod.png',
-    'damage.png',
     'tracks.png',
     'portal_sheet.png',
     'towers_sheet.png',

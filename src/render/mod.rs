@@ -28,6 +28,7 @@ pub mod level_select;
 pub mod lobby;
 pub mod plasma;
 pub mod portal;
+pub mod pyro;
 pub mod missile;
 pub mod shell;
 pub mod shockwave;

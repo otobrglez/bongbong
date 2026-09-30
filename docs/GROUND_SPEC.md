@@ -176,7 +176,8 @@ the builder, `render_gpu` for a GPU thumbnail - uploads it once per stamp
 (`render::canvas::BlockTexture`) and the draw is a single scaled blit with
 point filtering. Walls are only ever removed during a round, and a hole in
 a wall letting a little more light onto the floor is not worth a re-bake.
-Burns still darken whole cells through the tile tint (`darken_cell`).
+Burns are not part of the floor: a burnt-out fire leaves a scorch mark
+(`Scorch::burn`, docs/effects.md) among the marks drawn over it.
 
 **One stamp for every wall.** A wall cell is 16 blocks, a multiple of the
 dither's 4, so every wall meets the dither at the same phase and casts the

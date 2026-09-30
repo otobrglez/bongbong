@@ -1,20 +1,19 @@
-//! The barrel blast's presentation: the one-shot fireball sprite animation,
-//! the additive light bloom under it, the pulsing glow on a barrel whose
-//! fuse is lit, and the scorch decal a blast leaves on the ground. Pure
-//! drawing over `static/barrel_explosion.png` (docs/PROPS_SPEC.md); the
-//! simulation (`simulation::props`) only pushes the `BlastFx`/`Scorch`
-//! records, and never draws RNG for them - every seed is a hash of the
-//! blast position, so a purely cosmetic field can't shift a seeded replay.
-//! The records and the scorch (painted over `Canvas`) are here; the
-//! fireball, the ground fire and the glows draw with raylib in
-//! `render::blast`.
+//! The blast's records - `BlastFx`, one explosion playing, and `Scorch`,
+//! the mark it leaves - and the scorch decal, painted over `Canvas` from
+//! `static/barrel_explosion.png` (docs/PROPS_SPEC.md). The explosion itself
+//! is composed at draw time in the effects language: `fireball.rs` for
+//! every blast, `mushroom.rs` for the share of kills that go up as a
+//! cloud (docs/effects.md). The simulation (`simulation::props`) only
+//! pushes the records, and never draws RNG for them - every seed is a hash
+//! of the blast position, so a purely cosmetic field can't shift a seeded
+//! replay.
 //!
-//! No two blasts look alike on purpose: the sheet holds four fireball
-//! shapes, each blast picks one plus a mirror, a quarter-turn, a playback
-//! rate and a size from its hash, and the simulation shapes it further by
-//! what set it off (`BlastShape`) - a shot leans the fire downrange, a ram
-//! goes up as a column, a chained drum leans away from the blast that lit
-//! it and grows with how long it smouldered.
+//! No two blasts look alike on purpose: each blast picks one of four
+//! shapes (`BLAST_SHAPE_ROWS`), a pace and a size from its hash, and the
+//! simulation shapes it further by what set it off (`BlastShape`) - a shot
+//! throws the fire downrange, a ram goes up as a column, a chained drum
+//! leans away from the blast that lit it and grows with how long it
+//! smouldered.
 
 use crate::canvas::{Canvas, Sheet};
 use crate::mushroom::Cloud;
@@ -22,7 +21,6 @@ use crate::tuning::tuning;
 use crate::math::{Color, Rectangle, Vec2};
 
 use crate::{
-    BARREL_EXPLOSION_FRAMES,
     BARREL_EXPLOSION_TEXTURE_SIZE,
     BLAST_ROW_DOUBLE,
     BLAST_ROW_FLAT,
@@ -115,30 +113,32 @@ pub enum BlastKind {
     Fuel,
 }
 
-/// One in-flight barrel detonation sprite, oldest first in `Game::blast_fx`.
+/// One explosion playing, oldest first in `Game::blast_fx`.
 pub struct BlastFx {
     pub center: Position,
     /// Seconds since it went off.
     pub time: f32,
     pub seed: u32,
-    /// Multiplier on `blast_anim_scale` and the glow radius - 1.0 for a
+    /// Multiplier on `blast_fireball_px` and the glow radius - 1.0 for a
     /// barrel or a dying tank, smaller for a cook-off secondary.
     pub scale: f32,
     /// A cook-off pop rather than a kill or a barrel: local only, so it
     /// gets no screen-level effect (see `Game::tick_cookoffs`).
     pub secondary: bool,
-    /// Sheet row of the fireball shape (`BLAST_SHAPE_ROWS`).
+    /// The fireball's shape (`BLAST_SHAPE_ROWS`: round, a column, a flat
+    /// burst thrown downrange, a double core; `fireball::compose`).
     pub row: i32,
-    /// Quarter-turns applied to the fire frames (the smoke frames keep
-    /// their rise, so they only take the mirror).
+    /// Quarter-turns of the fireball's hashed pattern: which way its puffs
+    /// and flash rays are laid out.
     pub turn: i32,
-    /// Multiplier on `blast_anim_fps`, hashed per blast.
+    /// How fast this blast plays, hashed per blast: its life is
+    /// `fireball::seconds` divided by it.
     pub fps_scale: f32,
     /// Draw offset from `center` (px): the lean a cause gives the fire.
     pub offset: Lean,
     pub kind: BlastKind,
     /// A dying tank's mushroom cloud, composed at draw time
-    /// (`mushroom.rs`), in place of the sheet's fireball.
+    /// (`mushroom.rs`), in place of the fireball.
     pub cloud: Option<Cloud>,
 }
 
@@ -222,24 +222,13 @@ impl BlastFx {
         }
     }
 
-    /// Playback rate for this blast: the knob times its hashed jitter,
-    /// and a fuel drum's fire is a little quicker.
-    pub fn fps(&self) -> f32 {
-        let base = tuning().blast_anim_fps * self.fps_scale;
-        (if self.kind == BlastKind::Fuel { base * 1.15 } else { base }).max(1.0)
-    }
-
-    /// The frame to show now, clamped so a live change to `blast_anim_fps`
-    /// can never index past the sheet.
-    pub fn frame(&self) -> i32 {
-        ((self.time * self.fps()) as i32).clamp(0, BARREL_EXPLOSION_FRAMES - 1)
-    }
-
+    /// Has its last smoke gone? The mushroom cloud's own life, or the
+    /// fireball's (`fireball::seconds`).
     pub fn done(&self) -> bool {
         if let Some(cloud) = &self.cloud {
             return cloud.done(self.time);
         }
-        self.time >= BARREL_EXPLOSION_FRAMES as f32 / self.fps()
+        crate::fireball::done(self)
     }
 
 }
@@ -265,6 +254,14 @@ impl Scorch {
 
     pub fn with(center: Position, scale: f32, streak: Option<Lean>) -> Self {
         Scorch { center, seed: seed_for(center), age: 0.0, scale, streak }
+    }
+
+    /// The scar a ground fire leaves where it burnt out: a smaller mark,
+    /// its variant and turn hashed apart from a blast's at the same spot,
+    /// so a burnt trail reads as one scorched streak rather than a row of
+    /// the same blot.
+    pub fn burn(center: Position) -> Self {
+        Scorch { center, seed: seed_at(center, 57), age: 0.0, scale: 0.6, streak: None }
     }
 }
 
