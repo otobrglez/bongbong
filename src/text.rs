@@ -820,9 +820,13 @@ mod text_tests {
             (keys::FILE_SAVE, HUD_TEXT_SIZE, 168, vec![]),
             (keys::FILE_SAVE_AS, HUD_TEXT_SIZE, 168, vec![]),
             (keys::FILE_CLEAR, HUD_TEXT_SIZE, 168, vec![]),
+            // A settings row's label runs from its 4 px inset to the `<`
+            // button at 124, and the TANK rows' stops at their chassis
+            // icon, 32 px wide and one inset clear of the button
+            // (`editor/render.rs`'s `settings_icon_rect`).
             (keys::SETTINGS_TANKS, 16, 116, vec![]),
-            (keys::SETTINGS_TANK, 16, 116, vec![]),
-            (keys::SETTINGS_TANK2, 16, 116, vec![]),
+            (keys::SETTINGS_TANK, 16, 80, vec![]),
+            (keys::SETTINGS_TANK2, 16, 80, vec![]),
             (keys::SETTINGS_MISSION, 16, 116, vec![]),
             (keys::SETTINGS_SPAWN, 16, 116, vec![]),
             (keys::SETTINGS_WAVES, 16, 116, vec![]),

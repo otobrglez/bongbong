@@ -254,12 +254,14 @@ is the first in each list, and the active brush at entry is `WALL / brick`.
 
 A panel below the button, 340 px wide, rows 48 px tall, each a label with
 a stepper (`<`/`>` or `-`/`+` buttons of 48x48 px and the value between).
-Values are the `MapFile` fields, so nothing new is stored.
+Values are the `MapFile` fields, so nothing new is stored. The panel hangs
+from the bar: its top corners are square where it meets the bar's edge and
+the bottom ones rounded (`editor/render.rs`'s `draw_hanging_panel`).
 
 | Row | Field | Range / values |
 | --- | --- | --- |
 | TANKS | `tanks` | 0..=31 (`wave_max_alive`); stepping below 0 shows `auto` = the knob roll (`None`) |
-| TANK | `tank` | `auto` (`None`) then the 12 `TankKind` names in row order |
+| TANK / TANK 2 | `tank` / `tank2` | `auto` (`None`) then the 12 `TankKind` names in row order; a picked chassis is drawn beside the `<` button, hull and turret in that seat's team colours (nothing on `auto`) |
 | MISSION | `mission.kind` | protect, hunt, destroy |
 | SPAWN | `spawn.kind` | band, waves |
 | WAVES | `spawn.waves` | 1..=20, `auto` = the `waves` tuning group |
