@@ -201,5 +201,5 @@ every scaling and input change above is needed by it and by any wrapper.
    gated on `get_touch_point_count() > 0` so a desktop never sees it.
 4. **PWA metadata** in `site/`: manifest, icons, meta tags, safe-area CSS.
 5. **Playtest on an actual iPhone and iPad** through a PR preview
-   (`pr-<N>.preview.bongbong.io` already exists for exactly this), then
+   (`bongbong-pr-<N>` on workers.dev already exists for exactly this), then
    decide about a wrapper.

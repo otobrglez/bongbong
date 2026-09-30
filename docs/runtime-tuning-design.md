@@ -370,7 +370,7 @@ with zero site changes):
   `just build-web-dev` (`--features dev-tools`), and
   `.github/actions/build-web` gets a `features` input; `pr-preview.yml`
   passes `dev-tools`, `cloudflare-deploy.yml` doesn't. Every
-  `pr-<N>.preview.bongbong.io` then has the panel, production never does.
+  PR preview (`bongbong-pr-<N>` on workers.dev) then has the panel, production never does.
 
 *[impl]* As designed, plus a filter box (185 rows is a lot to scroll) and an
 Import textarea instead of a `prompt()` dialog. Verified in Chrome against
