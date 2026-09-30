@@ -806,6 +806,21 @@ const EDGE_SHADE_STEPS: u8 = 4;
 /// put.
 const BAYER4: [u8; 16] = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
 
+/// Shade blocks per wall cell. A multiple of the dither's 4, so every wall
+/// meets the dither at the same phase and casts the same shade.
+const CELL_BLOCKS: i64 = OBSTACLE_GRID_SIZE as i64 / SHADE_BLOCK as i64;
+const _: () = assert!(CELL_BLOCKS * SHADE_BLOCK as i64 == OBSTACLE_GRID_SIZE as i64 && CELL_BLOCKS % 4 == 0);
+
+/// The dither threshold of block `(bx, by)`, 0-1.
+fn dither(bx: i64, by: i64) -> f32 {
+    (BAYER4[(by.rem_euclid(4) * 4 + bx.rem_euclid(4)) as usize] as f32 + 0.5) / 16.0
+}
+
+/// A shade value 0-1 stepped against a dither threshold: 0 to `steps`.
+fn shade_step(v: f32, steps: u8, threshold: f32) -> u8 {
+    ((v * steps as f32 + threshold).floor().max(0.0) as u8).min(steps)
+}
+
 /// The cool dark walls shade the ground toward: red and green drop more
 /// than blue, so on grass and on desert dust alike a wall's shade reads as
 /// shadow rather than as dirt.
@@ -855,7 +870,12 @@ pub fn bake_shade(width: f32, height: f32, walls: &[(i32, i32)], look: Look, t: 
     let centre = |b: usize| (b as f32 + 0.5) * block;
 
     // --- the walls: a contact shade leaning the way the shadows fall ---
-    let mut wall = vec![0.0f32; bw * bh];
+    // Every wall casts the same shade moved by whole cells (`CELL_BLOCKS`),
+    // so it is stepped once, as a stamp of levels around a wall's cell, and
+    // laid at each wall with a max - a step is monotone, so the deepest of
+    // the steps is the step of the deepest shade. The builder re-bakes on
+    // every edit, and this keeps a wall's cost to a max over the stamp.
+    let mut wall = vec![0u8; bw * bh];
     let reach = t.ground_wall_shade_cells.max(0.0) * OBSTACLE_GRID_SIZE;
     if reach > 0.0 && t.ground_wall_shade > 0.0 {
         let len = (t.shadow_dir_x * t.shadow_dir_x + t.shadow_dir_y * t.shadow_dir_y).sqrt();
@@ -865,29 +885,37 @@ pub fn bake_shade(width: f32, height: f32, walls: &[(i32, i32)], look: Look, t: 
             (0.0, 0.0)
         };
         let half = OBSTACLE_GRID_SIZE / 2.0;
-        // The blocks a box centred on `c` can shade, along one axis.
-        let span = |c: f32, n: usize| {
-            let lo = ((c - half - reach) / block).floor().max(0.0) as usize;
-            let hi = ((c + half + reach) / block).ceil().max(0.0) as usize;
-            (lo.min(n), hi.min(n))
-        };
+        // The blocks the leaned box can shade along one axis, as offsets
+        // `lo..hi` from block `col * CELL_BLOCKS`, the one starting at the
+        // wall cell's centre.
+        let span = |lean: f32| (((lean - half - reach) / block).floor() as i64 - 1, ((lean + half + reach) / block).ceil() as i64 + 1);
+        let ((kx0, kx1), (ky0, ky1)) = (span(lx), span(ly));
+        let sw = (kx1 - kx0) as usize;
+        let mut stamp = vec![0u8; sw * (ky1 - ky0) as usize];
+        for (ky, row) in (ky0..ky1).zip(stamp.chunks_exact_mut(sw)) {
+            for (kx, level) in (kx0..kx1).zip(row.iter_mut()) {
+                // The block's centre measured from the wall cell's centre.
+                let ox = (((kx as f32 + 0.5) * block - lx).abs() - half).max(0.0);
+                let oy = (((ky as f32 + 0.5) * block - ly).abs() - half).max(0.0);
+                let d = (ox * ox + oy * oy).sqrt();
+                if d < reach {
+                    *level = shade_step(smoothstep(1.0 - d / reach), WALL_SHADE_STEPS, dither(kx, ky));
+                }
+            }
+        }
         for &(col, row) in walls {
-            let cx = col as f32 * OBSTACLE_GRID_SIZE + lx;
-            let cy = row as f32 * OBSTACLE_GRID_SIZE + ly;
-            let (x0, x1) = span(cx, bw);
-            let (y0, y1) = span(cy, bh);
-            for by in y0..y1 {
-                for bx in x0..x1 {
-                    let ox = ((centre(bx) - cx).abs() - half).max(0.0);
-                    let oy = ((centre(by) - cy).abs() - half).max(0.0);
-                    let d = (ox * ox + oy * oy).sqrt();
-                    if d < reach {
-                        let v = smoothstep(1.0 - d / reach);
-                        let i = by * bw + bx;
-                        if v > wall[i] {
-                            wall[i] = v;
-                        }
-                    }
+            let (x0, y0) = (col as i64 * CELL_BLOCKS + kx0, row as i64 * CELL_BLOCKS + ky0);
+            let (from, to) = (x0.max(0), (x0 + sw as i64).min(bw as i64));
+            if from >= to {
+                continue;
+            }
+            for (by, src) in (y0..).zip(stamp.chunks_exact(sw)) {
+                if by < 0 || by >= bh as i64 {
+                    continue;
+                }
+                let dst = &mut wall[by as usize * bw..][from as usize..to as usize];
+                for (d, s) in dst.iter_mut().zip(&src[(from - x0) as usize..]) {
+                    *d = (*d).max(*s);
                 }
             }
         }
@@ -939,15 +967,12 @@ pub fn bake_shade(width: f32, height: f32, walls: &[(i32, i32)], look: Look, t: 
             }
         }
     }
-    let step = |v: f32, steps: u8, threshold: f32| ((v * steps as f32 + threshold).floor().max(0.0) as u8).min(steps);
     let mut texels = vec![clear; bw * bh];
     for by in 0..bh {
         for bx in 0..bw {
-            let threshold = (BAYER4[(by & 3) * 4 + (bx & 3)] as f32 + 0.5) / 16.0;
             let i = by * bw + bx;
-            let lw = step(wall[i], WALL_SHADE_STEPS, threshold);
-            let le = if edge_on { step(edge(centre(bx), centre(by)), EDGE_SHADE_STEPS, threshold) } else { 0 };
-            texels[i] = palette[lw as usize][le as usize];
+            let le = if edge_on { shade_step(edge(centre(bx), centre(by)), EDGE_SHADE_STEPS, dither(bx as i64, by as i64)) } else { 0 };
+            texels[i] = palette[wall[i] as usize][le as usize];
         }
     }
     BlockImage { width: bw, height: bh, block: SHADE_BLOCK, texels, stamp }
@@ -1281,6 +1306,39 @@ mod tests {
         assert!(shadow_side > lit_side + 10.0, "the shade pools where the shadows fall: {shadow_side} vs {lit_side}");
         let reach = Tuning::DEFAULT.ground_wall_shade_cells * OBSTACLE_GRID_SIZE;
         assert_eq!(mean_alpha(&img, 160.0 - 16.0 - reach - 8.0, 160.0, 1), 0.0, "out of reach is clear");
+    }
+
+    #[test]
+    fn every_wall_lays_the_shade_measured_block_by_block() {
+        // The stamp against the shade measured from every wall at every
+        // block, with walls side by side, on the field's edge and past it on
+        // every side.
+        let t = Tuning::DEFAULT;
+        let walls = [(0, 0), (3, 2), (4, 2), (9, 6), (10, 7), (-1, 3), (11, -1), (5, 8)];
+        let img = bake_shade(320.0, 224.0, &walls, Look::default(), &t, 1);
+        let reach = t.ground_wall_shade_cells * OBSTACLE_GRID_SIZE;
+        let len = (t.shadow_dir_x * t.shadow_dir_x + t.shadow_dir_y * t.shadow_dir_y).sqrt();
+        let (lx, ly) = (t.shadow_dir_x / len * t.ground_wall_shade_lean_px, t.shadow_dir_y / len * t.ground_wall_shade_lean_px);
+        let (half, block) = (OBSTACLE_GRID_SIZE / 2.0, SHADE_BLOCK as f32);
+        let mut shaded = 0;
+        for by in 0..img.height as i64 {
+            for bx in 0..img.width as i64 {
+                let level = walls
+                    .iter()
+                    .map(|&(col, row)| {
+                        let ox = ((((bx - col as i64 * CELL_BLOCKS) as f32 + 0.5) * block - lx).abs() - half).max(0.0);
+                        let oy = ((((by - row as i64 * CELL_BLOCKS) as f32 + 0.5) * block - ly).abs() - half).max(0.0);
+                        let d = (ox * ox + oy * oy).sqrt();
+                        if d < reach { shade_step(smoothstep(1.0 - d / reach), WALL_SHADE_STEPS, dither(bx, by)) } else { 0 }
+                    })
+                    .max()
+                    .unwrap_or(0);
+                let alpha = (t.ground_wall_shade * level as f32 / WALL_SHADE_STEPS as f32 * 255.0).round() as u8;
+                assert_eq!(img.texels[by as usize * img.width + bx as usize].a, alpha, "block ({bx}, {by})");
+                shaded += (level > 0) as usize;
+            }
+        }
+        assert!(shaded > 1000, "the walls shade something: {shaded} blocks");
     }
 
     #[test]

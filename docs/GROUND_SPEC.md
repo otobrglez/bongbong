@@ -178,6 +178,18 @@ point filtering. Walls are only ever removed during a round, and a hole in
 a wall letting a little more light onto the floor is not worth a re-bake.
 Burns still darken whole cells through the tile tint (`darken_cell`).
 
+**One stamp for every wall.** A wall cell is 16 blocks, a multiple of the
+dither's 4, so every wall meets the dither at the same phase and casts the
+same stepped shade moved by whole cells. The bake steps it once, as a stamp
+of levels around one cell, and lays it at each wall with a max; a step is
+monotone, so the deepest of the steps is the step of the deepest shade, and
+the result is the per-block measurement exactly (pinned by
+`every_wall_lays_the_shade_measured_block_by_block`). That matters in the
+builder, which rebuilds its ground on every cell a stroke crosses: there a
+bake costs a few tenths of a millisecond on a native build, where measuring
+every block from every wall costs up to 4 ms on the busiest shipped map. A
+round's bake is 1.4-2.6 ms, most of it the edge shade, once per round.
+
 Everything in the bake is IEEE arithmetic and square roots, so a CPU
 thumbnail of it comes out the same on every platform (`thumbnail::PINNED`).
 
