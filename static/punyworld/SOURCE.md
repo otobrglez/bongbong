@@ -29,3 +29,9 @@ by bongbong's own generators.
   hardpan drifts); see `docs/GROUND_SPEC.md` §1 and `docs/desert-theme.md`.
   `_original/` is the untouched third-party art; keep it pristine and rerun
   the script to regenerate the live copies.
+- **Composed water tiles**: ids 602-615 and the three rows below them
+  (their animation frames) are not in the pack. `tools/water_tiles.py`
+  composes them from the pack's own shore and stream tiles (the diagonal
+  shores and the stream mouths the wangsets lack), in memory, as the first
+  step of `tools/retint_ground.py` - so they exist only in the live copies,
+  never in `_original/`. See `docs/GROUND_SPEC.md` §9.
