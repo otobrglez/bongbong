@@ -61,8 +61,6 @@ pub enum Sheet {
     /// The tall-grass sheet of a theme (`Theme::grass_texture_path`,
     /// grass.rs), one file per theme like `Ground`.
     Grass(Theme),
-    /// static/damage.png - the hull damage overlays (damage_stage.rs).
-    Damage,
     /// static/minigun_mount.png - the barrel cluster on a turret.
     MinigunMount,
     /// static/missile_pod.png - the seeker-missile pod on a turret.
@@ -80,14 +78,13 @@ pub enum Sheet {
     Frog { variant: u8, clip: FrogAnim },
 }
 
-/// The eleven sheets that are one file each regardless of theme.
-pub const SINGLE_SHEETS: [Sheet; 11] = [
+/// The ten sheets that are one file each regardless of theme.
+pub const SINGLE_SHEETS: [Sheet; 10] = [
     Sheet::Tanks,
     Sheet::Walls,
     Sheet::Props,
     Sheet::Trees,
     Sheet::Towers,
-    Sheet::Damage,
     Sheet::MinigunMount,
     Sheet::MissilePod,
     Sheet::Tracks,
@@ -126,7 +123,6 @@ impl Sheet {
             Sheet::Trees => "static/trees_sheet.png".into(),
             Sheet::Towers => "static/towers_sheet.png".into(),
             Sheet::Grass(theme) => theme.grass_texture_path().into(),
-            Sheet::Damage => "static/damage.png".into(),
             Sheet::MinigunMount => "static/minigun_mount.png".into(),
             Sheet::MissilePod => "static/missile_pod.png".into(),
             Sheet::Tracks => "static/tracks.png".into(),

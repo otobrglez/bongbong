@@ -12,7 +12,7 @@ art, provenance in `static/toxic_frog/SOURCE.md`.
 
 Each file is a plain horizontal filmstrip of 48×48 cells, no padding/margin
 between frames — `col * 48` finds any frame directly, same shape as
-`shells.png`/`damage.png`.
+`shells.png`.
 
 | File | Frames | FPS | Loop? |
 |---|---|---|---|
@@ -54,7 +54,7 @@ way, more subtly.
 `frog::Facing` (`Right`/`Left`) is therefore a *draw-time mirror*, and
 `frog::mirror` is the only place it is applied: it returns the sign to
 multiply the source rectangle's width by - raylib's mirror idiom, shared
-with `blast::draw_blast`, `decal::draw_decal` and `grass::draw_tuft` - plus
+with `blast::draw_scorch`, `decal::draw_decal` and `grass::draw_tuft` - plus
 a destination offset.
 
 That offset is not slack. The body's alpha bbox is **x 11..31, centre 21.0**

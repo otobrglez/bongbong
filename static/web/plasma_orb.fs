@@ -22,12 +22,20 @@ precision mediump float;
 //              core, spiral arms turning outside it, glints like stars.
 // `seed` gives every bolt its own pattern; the CPU side also hands each a
 // spin speed and axis of its own, so no two look alike.
+//
+// Drawn in the effects language (docs/effects.md): the bolt is worked out
+// once per 2 px block of the field - found from the fragment's place on
+// the field, not the quad's corners, so it sits on the field's grid
+// whichever way it flies - every block takes the nearest step of the
+// bolt's own ramp, and its glow and tail fade in quarters with their band
+// edges dithered through the same 4x4 Bayer pattern as every other light.
 
 varying vec2 fragTexCoord;
 varying vec4 fragColor;
 
-uniform vec2 quadSize;   // quad width and height, in orb radii
-uniform vec2 center;     // the orb's centre, in quad uv
+uniform vec2 orbPos;     // the orb's centre, field px
+uniform float radiusPx;  // the orb's radius, px
+uniform float fieldHeight; // the field's height, px: the render target's y is flipped
 uniform float time;      // round clock, seconds
 uniform float spin;      // how far the surface has turned, radians
 uniform float tilt;      // the spin axis's lean off vertical, radians
@@ -74,8 +82,39 @@ vec2 rot2(vec2 v, float a) {
     return vec2(c * v.x - s * v.y, s * v.x + c * v.y);
 }
 
+// The 2x2 Bayer threshold, and the 4x4 one built from it: the pattern
+// `pyro::bayer` dissolves with on the CPU, anchored to the field.
+float bayer2(vec2 b) {
+    vec2 m = mod(b, 2.0);
+    return mod(2.0 * m.x + 3.0 * m.y, 4.0);
+}
+
+float bayer4(vec2 b) {
+    return (4.0 * bayer2(b) + bayer2(floor(b / 2.0)) + 0.5) / 16.0;
+}
+
+// The step of the bolt's ramp - deep, body, bright, hot, white - nearest
+// to `c`: never a blend of two.
+vec3 onRamp(vec3 c) {
+    vec3 best = cDeep;
+    float bd = dot(c - cDeep, c - cDeep);
+    float d = dot(c - cBody, c - cBody);
+    if (d < bd) { bd = d; best = cBody; }
+    d = dot(c - cBright, c - cBright);
+    if (d < bd) { bd = d; best = cBright; }
+    d = dot(c - cHot, c - cHot);
+    if (d < bd) { bd = d; best = cHot; }
+    d = dot(c - vec3(1.0), c - vec3(1.0));
+    if (d < bd) { best = vec3(1.0); }
+    return best;
+}
+
 void main() {
-    vec2 p = (fragTexCoord - center) * quadSize;
+    // The block this fragment is in, in field px, and its centre in the
+    // quad's own space, in orb radii.
+    vec2 field = vec2(gl_FragCoord.x, fieldHeight - gl_FragCoord.y);
+    vec2 blk = floor(field / 2.0);
+    vec2 p = rot2((blk + 0.5) * 2.0 - orbPos, -rotation) / max(radiusPx, 1.0);
     float d = length(p);
     vec3 seedv = vec3(seed, seed * 1.37, seed * 0.71);
 
@@ -168,5 +207,12 @@ void main() {
         outA = mix(outA, 1.0, edge);
     }
 
-    gl_FragColor = vec4(min(outRgb, vec3(1.0)), outA) * vec4(1.0, 1.0, 1.0, fragColor.a);
+    // Coverage in quarters, the band edges dithered; colour in the ramp's
+    // flat steps, the band edges dithered too.
+    float threshold = bayer4(blk);
+    float a = floor(clamp(outA, 0.0, 1.0) * 4.0 + threshold) / 4.0;
+    if (a <= 0.0) {
+        discard;
+    }
+    gl_FragColor = vec4(onRamp(min(outRgb, vec3(1.0)) + (threshold - 0.5) * 0.12), a * fragColor.a);
 }

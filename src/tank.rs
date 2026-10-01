@@ -315,10 +315,10 @@ pub struct Tank {
     /// `missile_pod.png` column): counts up as a volley leaves, back down
     /// as the reload runs (`tick_missile_pod`). Presentation only.
     pub missile_tubes_empty: u8,
-    /// Row in damage.png this tank's damage overlay is drawn from
-    /// (0..DAMAGE_VARIANTS). Rolled once at spawn (see Game::init) and fixed
-    /// for the tank's whole life, so its damage sequence reads as one
-    /// consistent flavour rather than switching palettes between stages.
+    /// Which layout of damage marks this hull wears (0..DAMAGE_VARIANTS,
+    /// `damage_stage.rs`). Rolled once at spawn (see Game::init) and fixed
+    /// for the tank's whole life, so its scars gather in the same places
+    /// however the fight goes.
     pub damage_variant: i32,
     /// Center position on screen (pixels). A read-back mirror of `body`'s
     /// physics transform, synced once per frame after the physics world
@@ -1386,25 +1386,26 @@ fn source_rec(row: i32, col: i32) -> Rectangle {
 /// chases the tank's commanded `rotation`, not an independent aim target, but
 /// it does so faster than the hull so it visibly leads a turn.
 pub fn draw_tank(c: &mut impl Canvas, tank: &Tank) {
-    let hull_src = source_rec(tank.sheet_row(), tank.hull_col());
-    let turret_src = source_rec(tank.sheet_row(), tank.turret_col());
-    let size = tank.size();
+    draw_tank_hull(c, tank, tank.tint());
+    draw_tank_turret(c, tank, tank.tint());
+}
 
+/// The hull layer of `draw_tank` alone, in `tint` - split out so the
+/// damage marks (`damage_stage::draw_damage`) sit between hull and turret
+/// and a hit's flash can draw both halves again in light.
+pub fn draw_tank_hull(c: &mut impl Canvas, tank: &Tank, tint: Color) {
+    let size = tank.size();
     // dest is placed at the tank's position; origin is the rear-shifted
     // pivot (see `draw_pivot`), not the sprite's exact middle.
     let dest = Rectangle::new(tank.position.x, tank.position.y, size, size);
-    let origin = draw_pivot(size);
+    c.blit(Sheet::Tanks, source_rec(tank.sheet_row(), tank.hull_col()), dest, draw_pivot(size), tank.visual_rotation, tint);
+}
 
-    let tint = tank.tint();
-    c.blit(Sheet::Tanks, hull_src, dest, origin, tank.visual_rotation, tint);
-    c.blit(
-        Sheet::Tanks,
-        turret_src,
-        dest,
-        origin,
-        tank.turret_visual_rotation,
-        tint,
-    );
+/// The turret layer of `draw_tank` alone, in `tint`.
+pub fn draw_tank_turret(c: &mut impl Canvas, tank: &Tank, tint: Color) {
+    let size = tank.size();
+    let dest = Rectangle::new(tank.position.x, tank.position.y, size, size);
+    c.blit(Sheet::Tanks, source_rec(tank.sheet_row(), tank.turret_col()), dest, draw_pivot(size), tank.turret_visual_rotation, tint);
 }
 
 /// A tank coated in ooze from a bio slush tower

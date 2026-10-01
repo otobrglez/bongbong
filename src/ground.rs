@@ -14,8 +14,8 @@
 //! sand, dirt paths - not after what they look like on screen: the live PNG
 //! is a *retinted* copy (`tools/retint_ground.py`), and under the desert
 //! theme the "grass" is pale dust, the "sand" a smoother hardpan and the
-//! dirt a packed-earth road. The tile ids and tints here are the same
-//! under every theme; `draw` only names which file to blit from, and the
+//! dirt a packed-earth road. The tile ids here are the same under every
+//! theme; `draw` only names which file to blit from, and the
 //! floor shade which dark the field's edge deepens toward.
 //!
 //! The floor shade (`bake_shade`, drawn by `draw_shade`) is the one layer
@@ -370,10 +370,6 @@ pub struct GroundGrid {
     tiles: Vec<[i32; WATER_FRAME_COUNT]>,
     /// Per cell, what the flow overlay does there (`Current`).
     current: Vec<Current>,
-    /// Per-cell tint the tile is blitted with: white, until `darken_cell`
-    /// burns a cell to the crater tone. Free at draw time, since `draw`
-    /// passes one tint per cell anyway.
-    tints: Vec<Color>,
     /// What the floor shade (`shade`) is baked from: the field's size in
     /// px, the wall cells as grid coordinates and the look.
     width: f32,
@@ -396,30 +392,6 @@ impl GroundGrid {
     /// letting a little more light onto the floor is not worth a re-bake.
     pub fn shade(&self) -> &BlockImage {
         self.shade.get_or_init(|| bake_shade(self.width, self.height, &self.walls, self.look, &tuning(), self.stamp))
-    }
-
-    /// Darken the cell under `pos` by `factor` for the rest of the round:
-    /// the crater tone a burnt-out pool leaves. The one thing that changes
-    /// a tint after `build`, and it only ever darkens.
-    pub fn darken_cell(&mut self, pos: Position, factor: f32) {
-        // A 32px obstacle cell spans three of the 16px ground tiles on
-        // each axis (the middle one whole, the two beside it by half), so
-        // the crater is the 3x3 block around the cell's centre - a little
-        // wider than the cell, which is what a burn edge looks like.
-        let half = OBSTACLE_GRID_SIZE / 2.0;
-        let k = factor.clamp(0.0, 1.0);
-        let x0 = ((pos.x - half) / GROUND_WORLD_TILE).round() as i32;
-        let x1 = ((pos.x + half) / GROUND_WORLD_TILE).round() as i32;
-        let y0 = ((pos.y - half) / GROUND_WORLD_TILE).round() as i32;
-        let y1 = ((pos.y + half) / GROUND_WORLD_TILE).round() as i32;
-        for y in y0..=y1 {
-            for x in x0..=x1 {
-                if let Some(i) = self.idx(x, y) {
-                    let c = self.tints[i];
-                    self.tints[i] = Color::new((c.r as f32 * k) as u8, (c.g as f32 * k) as u8, (c.b as f32 * k) as u8, c.a);
-                }
-            }
-        }
     }
 
     fn idx(&self, x: i32, y: i32) -> Option<usize> {
@@ -965,7 +937,6 @@ pub fn build(
         rows,
         tiles,
         current,
-        tints: vec![Color::WHITE; cols * rows],
         width,
         height,
         walls,
@@ -1188,7 +1159,7 @@ fn source_rec(tile_id: i32) -> Rectangle {
 /// any clock that only moves while the picture should) steps the water
 /// through its frames and drifts the flow marks (`draw_current`).
 /// `theme` only names the tileset file (`Sheet::Ground`): the tile ids
-/// and tints are the same under every theme.
+/// are the same under every theme.
 pub fn draw(c: &mut impl Canvas, grid: &GroundGrid, theme: Theme, time: f32) {
     let size = GROUND_WORLD_TILE;
     let origin = Vec2::new(size / 2.0, size / 2.0);
@@ -1201,7 +1172,7 @@ pub fn draw(c: &mut impl Canvas, grid: &GroundGrid, theme: Theme, time: f32) {
             };
             let src = source_rec(grid.tiles[i][frame]);
             let dest = Rectangle::new(x as f32 * GROUND_WORLD_TILE, y as f32 * GROUND_WORLD_TILE, size, size);
-            c.blit(Sheet::Ground(theme), src, dest, origin, 0.0, grid.tints[i]);
+            c.blit(Sheet::Ground(theme), src, dest, origin, 0.0, Color::WHITE);
         }
     }
     draw_current(c, grid, time, t.water_flow_speed, t.water_flow_lanes.max(0) as u32);

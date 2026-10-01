@@ -4,6 +4,8 @@ use sola_raylib::prelude::*;
 
 use crate::laser::{LaserBeam, LaserVariant};
 use crate::math::{Color, Vec2};
+use crate::pyro;
+use crate::render::pyro::Rl;
 use crate::render::shot_fx::{fade, glow as soft};
 use crate::tuning::tuning;
 use crate::Position;
@@ -19,9 +21,9 @@ impl LaserVariant {
     }
 }
 
-/// Draw one laser beam as a bright line from muzzle to impact point, fading
-/// out over its remaining `timer`. Two overlapping passes - a wider dim
-/// glow, a thinner bright core, colored by `beam.variant` (see
+/// Draw one laser beam as a bright line of blocks from muzzle to impact
+/// point, fading out over its remaining `timer`. Two overlapping passes - a
+/// wider dim glow, a one-block bright core, colored by `beam.variant` (see
 /// `LaserVariant::colors`) - rather than a sprite, since an instant beam has
 /// no frames to animate through.
 pub fn draw_laser_beam(d: &mut impl RaylibDraw, beam: &LaserBeam) {
@@ -29,8 +31,9 @@ pub fn draw_laser_beam(d: &mut impl RaylibDraw, beam: &LaserBeam) {
     let (glow, core) = beam.variant.colors();
     let glow = Color::new(glow.r, glow.g, glow.b, (glow.a as f32 * alpha) as u8);
     let core = Color::new(core.r, core.g, core.b, (core.a as f32 * alpha) as u8);
-    d.draw_line_ex(beam.start, beam.end, tuning().laser_beam_width, glow);
-    d.draw_line_ex(beam.start, beam.end, tuning().laser_beam_width * 0.4, core);
+    let blocks = (tuning().laser_beam_width / pyro::BLOCK).round().max(1.0) as i32;
+    pyro::block_line(&mut Rl(d), beam.start, beam.end, blocks, |_| glow);
+    pyro::block_line(&mut Rl(d), beam.start, beam.end, 1, |_| core);
 }
 
 /// How bright the beam's light is this frame, 0..=1: its fade-out times
@@ -52,8 +55,9 @@ pub fn draw_laser_bloom(d: &mut impl RaylibDraw, beam: &LaserBeam) {
     }
     let (glow, core) = beam.variant.colors();
     let width = tuning().laser_beam_width;
-    d.draw_line_ex(beam.start, beam.end, width * 3.5, fade(glow, 0.45 * k));
-    d.draw_line_ex(beam.start, beam.end, width * 1.8, fade(glow, 0.7 * k));
+    let blocks = |w: f32| (w / pyro::BLOCK).round().max(1.0) as i32;
+    pyro::block_line(&mut Rl(d), beam.start, beam.end, blocks(width * 3.5), |_| fade(glow, 0.45 * k));
+    pyro::block_line(&mut Rl(d), beam.start, beam.end, blocks(width * 1.8), |_| fade(glow, 0.7 * k));
     let span = Vec2::new(beam.end.x - beam.start.x, beam.end.y - beam.start.y);
     let length = span.length();
     if length < 1.0 {
@@ -84,5 +88,5 @@ pub fn draw_laser_flares(d: &mut impl RaylibDraw, beam: &LaserBeam) {
     soft(d, beam.start, width * 1.4, fade(core, k));
     soft(d, beam.end, width * 5.0, fade(glow, 0.7 * k));
     soft(d, beam.end, width * 2.2, fade(core, k));
-    d.draw_circle_v(beam.end, width * 0.6, fade(Color::WHITE, k));
+    pyro::block_disc(&mut Rl(d), beam.end, width * 0.6, fade(Color::WHITE, k));
 }

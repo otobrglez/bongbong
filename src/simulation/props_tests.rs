@@ -1334,7 +1334,7 @@ fn every_blast_shape_and_jitter_comes_from_the_position_hash() {
     assert!(picks.len() >= 8, "40 drums in a row use at least 8 row/turn combinations: {picks:?}");
     let rates: std::collections::HashSet<i32> =
         (0..40).map(|c| (BlastFx::shaped(cell_to_world(c, 5), BlastKind::Oil, BlastShape::Plain).fps_scale * 100.0) as i32).collect();
-    assert!(rates.len() >= 6, "and step through their frames at different rates: {rates:?}");
+    assert!(rates.len() >= 6, "and play at different paces: {rates:?}");
     for c in 0..40 {
         let fx = BlastFx::shaped(cell_to_world(c, 5), BlastKind::Oil, BlastShape::Plain);
         assert!(crate::BLAST_SHAPE_ROWS.contains(&fx.row));
@@ -1346,7 +1346,7 @@ fn every_blast_shape_and_jitter_comes_from_the_position_hash() {
     let oil = BlastFx::shaped(cell_to_world(3, 3), BlastKind::Oil, BlastShape::Plain);
     let fuel = BlastFx::shaped(cell_to_world(3, 3), BlastKind::Fuel, BlastShape::Plain);
     assert_eq!(fuel.row, crate::BLAST_ROW_TALL);
-    assert!(fuel.scale > oil.scale && fuel.fps() > oil.fps());
+    assert!(fuel.scale > oil.scale && crate::fireball::seconds(&fuel) < crate::fireball::seconds(&oil), "bigger and quicker");
 }
 
 #[test]

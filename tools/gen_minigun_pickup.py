@@ -5,8 +5,7 @@ Loud/high-contrast on purpose, matching the other pickup icons' aesthetic
 (see static/pickups/SOURCE.md) rather than the muted punypalette every
 generated terrain/vehicle sheet draws from - a pickup needs to read at a
 glance against any terrain behind it. Drawn from scratch, same raw-PNG-
-bytes convention as tools/gen_laser_pickup.py (no Pillow dependency, same
-as tools/gen_damage.py).
+bytes convention as tools/gen_laser_pickup.py (no Pillow dependency).
 
 Icon: three small muzzle sparks stacked vertically with short staggered
 trailing streaks - encoding "burst of rounds" the way gen_laser_pickup.py's

@@ -1,68 +1,44 @@
 //! The mushroom cloud a dying tank goes up in (docs/mushroom-cloud.md),
-//! composed at draw time rather than played from a sheet. The look aims at
-//! test-range footage rather than a cartoon: a white-cyan flash with a lens
-//! streak, electric arcs crackling off the hull, a thin ionised shock ring
-//! racing out along the ground, then a fireball that climbs a narrow stem
-//! into a wide cap rolling over itself, briefly wrapped in a condensation
-//! shell and collar, cooling from a glowing core to heavy smoke while
-//! debris streaks away.
+//! composed at draw time rather than played from a sheet, in the effects
+//! language every explosion shares (`pyro.rs`, docs/effects.md). The look
+//! aims at test-range footage rather than a cartoon: a white-hot flash with
+//! a few short rays, a ring of dust racing out along the ground, then a
+//! fireball that climbs a narrow stem into a wide cap rolling over itself,
+//! briefly wrapped in a condensation shell and collar, cooling from a
+//! glowing core to heavy smoke that leans with the wind while debris
+//! streaks away.
 //!
-//! Every puff is shaded rather than outlined - a dark body, a lit side up
-//! and to the left, and while it still burns a fire core that shrinks as
-//! it cools - all discs of whole 2 px blocks, so it sits on the same grid
-//! as the sprites. Time is continuous, so it animates every frame.
+//! Every puff is shaded rather than outlined - a dark body, a shadow step
+//! down and right, a lit side up and to the left, and while it still burns
+//! a fire core that shrinks as it cools - all discs of whole 2 px blocks on
+//! the field's grid, in the fire and smoke ramps; its light is stepped
+//! glows. Time is continuous, so it animates every frame.
 //!
-//! No two clouds match: `Cloud::new` hashes the height, cap size, lean,
-//! roll speed, puff counts and pace from the blast's seed, and every puff
-//! hashes its own place, size and cooling. Nothing draws RNG; `compose`
-//! is a pure function of the cloud and its age, so it is tested headless
+//! No two clouds match: `Cloud::new` hashes the height, cap size, roll
+//! speed, puff counts and pace from the blast's seed, and every puff hashes
+//! its own place, size and cooling. The lean is the wind's, read where the
+//! tank died (`pyro::smoke_lean`). Nothing draws RNG; `compose` is a pure
+//! function of the cloud, its age and the wind, so it is tested headless
 //! and `draw` only paints what it returns.
 
 use crate::Position;
 use crate::blast::hash_unit;
-use crate::canvas::Canvas;
 use crate::math::Color;
+use crate::pyro::{self, Blocks, Puff, Shape, BLOCK, DUST, SMOKE};
 use crate::tuning::tuning;
 use std::f32::consts::{PI, TAU};
 
-/// Fire from white hot to embers - the palette's own steps
-/// (docs/PALETTE.md: WHITE, GOLD_BRIGHT, RED_BRIGHT, RED_MD, RED_DEEP,
-/// RED_DK).
-const FIRE: [Color; 6] = [
-    Color::new(0xFF, 0xFF, 0xFF, 255),
-    Color::new(0xEE, 0xA3, 0x43, 255),
-    Color::new(0xFF, 0x42, 0x1A, 255),
-    Color::new(0xE4, 0x42, 0x19, 255),
-    Color::new(0x9C, 0x35, 0x27, 255),
-    Color::new(0x81, 0x2F, 0x27, 255),
-];
-
-/// Smoke from soot to pale ash (BLACK, STONE_DARKEST, STONE_SHADE,
-/// STONE_DK, STONE_MD, STONE_LT).
-const SMOKE: [Color; 6] = [
-    Color::new(0x25, 0x25, 0x25, 255),
-    Color::new(0x37, 0x37, 0x37, 255),
-    Color::new(0x5A, 0x5A, 0x5A, 255),
-    Color::new(0x7E, 0x7E, 0x7E, 255),
-    Color::new(0x9E, 0x9E, 0x96, 255),
-    Color::new(0xC1, 0xC1, 0xC1, 255),
-];
-
-/// Ionised light - the flash, the shock ring, the arcs: white, pale cyan,
-/// electric blue. Deliberately off the palette, like the plasma sheet:
-/// the one part of the cloud that is neither fire nor smoke.
-const ION: [Color; 3] = [
-    Color::new(0xFF, 0xFF, 0xFF, 255),
-    Color::new(0xC8, 0xF0, 0xFF, 255),
-    Color::new(0x6C, 0xC8, 0xFF, 255),
-];
+/// Fire from white hot to embers, brightest first: the effects ramp's
+/// white, pale gold, gold, gold-orange, red, deep red and darkest red
+/// (`pyro::FIRE`, top down).
+const FIRE: [Color; 7] = [pyro::FIRE[7], pyro::FIRE[6], pyro::FIRE[5], pyro::FIRE[4], pyro::FIRE[3], pyro::FIRE[2], pyro::FIRE[1]];
 
 /// Condensation: the pale shell and collar the shock leaves in the air.
-const VAPOUR: Color = Color::new(0xE6, 0xEE, 0xF2, 255);
+const VAPOUR: Color = SMOKE[6];
 
-/// The block everything is built from: the 2 screen px one sprite pixel
-/// covers.
-const BLOCK: f32 = 2.0;
+/// The dust the shock lifts off the ground as it races out: the pale sand
+/// front and its darker echo.
+const SHOCK_DUST: [Color; 2] = [DUST[4], DUST[2]];
 
 /// One cloud's hashed shape. Built once when the tank dies; the live
 /// knobs are read then, so a tuning change affects the next kill.
@@ -75,7 +51,8 @@ pub struct Cloud {
     height: f32,
     /// The cap's radius (px) once it has spread.
     cap: f32,
-    /// Sideways drift per px of height, signed.
+    /// This cloud's own sideways drift per px of height, signed: a small
+    /// hashed nudge on top of the wind's.
     wind: f32,
     /// How fast (rad/s) the cap rolls over itself.
     roll: f32,
@@ -92,44 +69,10 @@ pub struct Cloud {
     cap_puffs: u32,
     dome_puffs: u32,
     skirt_puffs: u32,
-    arcs: u32,
     debris: u32,
 }
 
-/// One shaded disc: `body`, then `lit` - a smaller disc up and left in a
-/// lighter step - then `core`, the fire still burning inside, as a colour
-/// and a fraction of the radius, a little below centre.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Puff {
-    pub pos: Position,
-    pub radius: f32,
-    pub body: Color,
-    pub lit: Option<Color>,
-    pub core: Option<(Color, f32)>,
-}
-
-/// What `compose` hands `draw`, in painting order.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Shape {
-    Puff(Puff),
-    /// A single block (`size` 2) or a 2 x 2 of them (`size` 4): ring
-    /// points, arcs, debris streaks, the lens streak.
-    Mark { pos: Position, size: i32, color: Color },
-    /// A translucent disc: bloom over whatever still burns.
-    Glow { pos: Position, radius: f32, color: Color },
-}
-
-fn ease_out(x: f32) -> f32 {
-    let x = x.clamp(0.0, 1.0);
-    1.0 - (1.0 - x) * (1.0 - x) * (1.0 - x)
-}
-
-/// `c` at opacity `a` (0..1), stepped to eighths like the particle layer's
-/// alpha, so fades read as pixel-art steps rather than a smooth ramp.
-fn fade(c: Color, a: f32) -> Color {
-    let a = ((a.clamp(0.0, 1.0) * 8.0).round() / 8.0 * 255.0) as u8;
-    Color::new(c.r, c.g, c.b, a)
-}
+use pyro::{alpha as fade, ease_out};
 
 /// How much of a puff is left once it starts to dissolve at `start`
 /// (a fraction of the cloud's life): 1 until then, 0 a short while after.
@@ -137,26 +80,16 @@ fn dissolve(p: f32, start: f32) -> f32 {
     1.0 - ((p - start) / 0.14).clamp(0.0, 1.0)
 }
 
-/// Heat above this and a puff is still part of the fireball; below it the
-/// puff is smoke with a fire core dying inside it.
-const FIREBALL: f32 = 0.55;
-
-/// The shading of a puff. `heat` 1 is white hot, 0 burnt out; `ash` 0 is
-/// soot, 1 pale; `sunlit` gives a smoke puff its lit side; `underlit`
-/// is a smoke puff on the cap's underside, kept dark under the warm glow
-/// the cap's belly throws (drawn separately, see `compose`).
-fn shade(heat: f32, ash: f32, sunlit: bool, underlit: bool) -> (Color, Option<Color>, Option<(Color, f32)>) {
-    if heat > FIREBALL {
-        let q = (heat - FIREBALL) / (1.0 - FIREBALL);
-        let body = if q > 0.66 { FIRE[1] } else if q > 0.33 { FIRE[2] } else { FIRE[3] };
-        let core = if q > 0.5 { FIRE[0] } else { FIRE[1] };
-        return (body, None, Some((core, 0.45 + 0.3 * q)));
+/// A shaded puff by `heat` (1 white hot, 0 burnt out) and `ash` (0 soot,
+/// 1 pale) - the effects language's shading (`pyro::shade`) - with one
+/// case of its own: `underlit` is a smoke puff on the cap's underside,
+/// kept dark under the warm glow the cap's belly throws.
+fn puff(pos: Position, radius: f32, heat: f32, ash: f32, sunlit: bool, underlit: bool) -> Puff {
+    let (body, shadow, lit, core) = pyro::shade(heat, ash, sunlit && !underlit);
+    if underlit && heat <= pyro::FIREBALL {
+        return Puff { pos, radius, body: SMOKE[1], shadow: Some(SMOKE[0]), lit: None, core, cover: 1.0 };
     }
-    let s = 1 + ((ash.clamp(0.0, 1.0) * 3.0) as usize).min(2);
-    let body = if underlit { SMOKE[1] } else { SMOKE[s] };
-    let lit = (sunlit && !underlit).then_some(SMOKE[s + 1]);
-    let core = (heat > 0.0).then(|| (if heat > 0.3 { FIRE[3] } else { FIRE[4] }, 0.2 + 0.5 * heat / FIREBALL));
-    (body, lit, core)
+    Puff { pos, radius, body, shadow, lit, core, cover: 1.0 }
 }
 
 impl Cloud {
@@ -170,7 +103,7 @@ impl Cloud {
             seconds: t.mushroom_seconds * (0.85 + 0.3 * u(1)),
             height: t.mushroom_height_px * scale * (0.8 + 0.45 * u(2)),
             cap,
-            wind: (u(4) - 0.5) * 0.4,
+            wind: (u(4) - 0.5) * 0.1,
             roll: 1.2 + 1.6 * u(5),
             squash: 0.3 + 0.14 * u(10),
             stem_width: cap * (0.14 + 0.07 * u(11)),
@@ -180,7 +113,6 @@ impl Cloud {
             cap_puffs: 22 + (u(6) * 12.0) as u32,
             dome_puffs: 2 + (u(15) * 3.0) as u32,
             skirt_puffs: 16 + (u(8) * 10.0) as u32,
-            arcs: 3 + (u(17) * 3.0) as u32,
             debris: 10 + (u(9) * 10.0) as u32,
         }
     }
@@ -194,8 +126,9 @@ impl Cloud {
     }
 
     /// Everything to paint `time` seconds after the kill at `base`, back
-    /// to front.
-    pub fn compose(&self, base: Position, time: f32) -> Vec<Shape> {
+    /// to front, the smoke leaning `wind` px sideways per px it climbs
+    /// (`pyro::smoke_lean`).
+    pub fn compose(&self, base: Position, time: f32, wind: f32) -> Vec<Shape> {
         let d = self.seconds;
         let t = time.clamp(0.0, d);
         let p = t / d;
@@ -203,7 +136,7 @@ impl Cloud {
 
         // The head: climbs fast, then keeps drifting up; spreads as it goes.
         let h = self.height * (ease_out(t / (0.36 * d)) + 0.1 * p);
-        let lean = self.wind * (0.6 + 0.8 * p);
+        let lean = (self.wind + wind) * (0.6 + 0.8 * p);
         let head = Position::new(base.x + lean * h, base.y - h);
         let cap = self.cap * (0.3 + 0.7 * ease_out(t / (0.42 * d))) * (1.0 + 0.2 * p);
         let ring = cap * 0.74;
@@ -212,15 +145,15 @@ impl Cloud {
         let mut out = Vec::new();
         let mut glows = Vec::new();
 
-        // The shock ring, on the ground under everything: a thin bright
-        // front with a fainter echo behind it.
+        // The shock ring, on the ground under everything: a thin front of
+        // pale dust with a darker echo behind it.
         let shock = 0.5;
         if t < shock {
             let k = t / shock;
             let a = (1.0 - k).powf(1.5);
             let reach = self.cap * 3.4 * ease_out(k);
-            self.ellipse(&mut out, base, reach, self.squash, 0.0, TAU, 1, fade(ION[1], a));
-            self.ellipse(&mut out, base, reach * 0.82, self.squash, 0.0, TAU, 2, fade(ION[2], a * 0.45));
+            self.ellipse(&mut out, base, reach, self.squash, 0.0, TAU, 1, fade(SHOCK_DUST[0], a));
+            self.ellipse(&mut out, base, reach * 0.82, self.squash, 0.0, TAU, 2, fade(SHOCK_DUST[1], a * 0.6));
         }
 
         // Dust the shock lifts off the ground, rolling out behind the ring.
@@ -235,9 +168,10 @@ impl Cloud {
                     continue;
                 }
                 let pos = Position::new(base.x + a.cos() * reach, base.y + 4.0 + a.sin() * reach * self.squash);
-                let (body, lit, _) = shade(0.0, 0.5 + 0.4 * p, true, false);
-                let puff = Shape::Puff(Puff { pos, radius: r, body, lit, core: None });
-                if a.sin() < 0.0 { out.push(puff) } else { skirt_front.push(puff) }
+                let mut p = puff(pos, r, 0.0, 0.5 + 0.4 * p, true, false);
+                p.core = None;
+                let p = Shape::Puff(p);
+                if a.sin() < 0.0 { out.push(p) } else { skirt_front.push(p) }
             }
         }
 
@@ -278,11 +212,10 @@ impl Cloud {
             let hot = fire_life * (1.2 + 0.9 * (1.0 - frac));
             let heat = (1.0 - t / hot).max(0.0);
             let ash = 0.1 + ((t - hot) / (0.6 * d)).clamp(0.0, 1.0) * 0.5;
-            let (body, lit, core) = shade(heat, ash, false, false);
             if heat > 0.3 {
-                glows.push(Shape::Glow { pos, radius: r * 2.0, color: fade(FIRE[1], 0.18 * heat) });
+                glows.push(Shape::Glow { pos, radius: r * 2.0, color: fade(FIRE[2], 0.18 * heat) });
             }
-            out.push(Shape::Puff(Puff { pos, radius: r, body, lit, core }));
+            out.push(Shape::Puff(puff(pos, r, heat, ash, false, false)));
         }
 
         if collar_env > 0.0 {
@@ -312,18 +245,17 @@ impl Cloud {
             let heat = (1.0 - t / hot).max(0.0);
             let ash = 0.15 + 0.85 * ((t - hot) / (0.6 * d)).clamp(0.0, 1.0) * (0.5 + 0.5 * (roll.sin() * 0.5 + 0.5));
             let underlit = under && t < hot * 1.35;
-            let (body, lit, core) = shade(heat, ash, roll.sin() > 0.2, underlit);
             if heat > 0.3 {
-                glows.push(Shape::Glow { pos, radius: r * 1.8, color: fade(FIRE[1], 0.15 * heat) });
+                glows.push(Shape::Glow { pos, radius: r * 1.8, color: fade(FIRE[2], 0.15 * heat) });
             }
-            let puff = Puff { pos, radius: r, body, lit, core };
-            if depth >= 0.0 { cap_front.push((depth, puff)) } else { cap_back.push((depth, puff)) }
+            let p = puff(pos, r, heat, ash, roll.sin() > 0.2, underlit);
+            if depth >= 0.0 { cap_front.push((depth, p)) } else { cap_back.push((depth, p)) }
         }
         // Back to front, so the near side of the ring covers the far side.
         let by_depth = |a: &(f32, Puff), b: &(f32, Puff)| a.0.total_cmp(&b.0);
         cap_back.sort_by(by_depth);
         cap_front.sort_by(by_depth);
-        out.extend(cap_back.into_iter().map(|(_, puff)| Shape::Puff(puff)));
+        out.extend(cap_back.into_iter().map(|(_, p)| Shape::Puff(p)));
 
         // The belly still glowing from the fire under it: a translucent
         // warm band along the cap's underside, fading once the fire is out.
@@ -331,7 +263,7 @@ impl Cloud {
         if belly > 0.0 && t > 0.2 * fire_life {
             for i in 0..3 {
                 let x = head.x + (i as f32 - 1.0) * ring * 0.55;
-                glows.push(Shape::Glow { pos: Position::new(x, head.y + tube * 0.6), radius: cap * 0.42, color: fade(FIRE[4], 0.3 * belly) });
+                glows.push(Shape::Glow { pos: Position::new(x, head.y + tube * 0.6), radius: cap * 0.42, color: fade(FIRE[4], 0.24 * belly) });
             }
         }
 
@@ -349,10 +281,9 @@ impl Cloud {
             let hot = fire_life * (0.45 + 0.4 * self.u(s + 4));
             let heat = (1.0 - t / hot).max(0.0);
             let ash = 0.3 + 0.7 * ((t - hot) / (0.5 * d)).clamp(0.0, 1.0);
-            let (body, lit, core) = shade(heat, ash, true, false);
-            out.push(Shape::Puff(Puff { pos, radius: r, body, lit, core }));
+            out.push(Shape::Puff(puff(pos, r, heat, ash, true, false)));
         }
-        out.extend(cap_front.into_iter().map(|(_, puff)| Shape::Puff(puff)));
+        out.extend(cap_front.into_iter().map(|(_, p)| Shape::Puff(p)));
         out.extend(skirt_front);
 
         // The condensation shell: a pale arc over the cap that the shock
@@ -379,48 +310,27 @@ impl Cloud {
             let color = if self.u(s + 3) < 0.4 {
                 fade(SMOKE[0], 1.0 - k * k)
             } else {
-                fade(if k < 0.3 { FIRE[1] } else if k < 0.6 { FIRE[2] } else { FIRE[4] }, 1.0 - k * k)
+                fade(if k < 0.3 { FIRE[1] } else if k < 0.6 { FIRE[3] } else { FIRE[5] }, 1.0 - k * k)
             };
             self.segment(&mut out, at((t - 0.05).max(0.0)), at(t), color);
         }
 
-        // Arcs crackling off the hull for the first moments, redrawn in a
-        // new shape every tick so they flicker.
-        let arc_time = 0.6;
-        if t < arc_time {
-            let tick = (t * 24.0) as u32;
-            let a_fade = 1.0 - t / arc_time;
-            for arc in 0..self.arcs {
-                let key = 2000 + arc * 97 + tick * 7;
-                if self.u(key) > 0.7 {
-                    continue;
-                }
-                let mut dir = self.u(1500 + arc * 11 + tick / 3) * TAU;
-                let mut from = Position::new(base.x + (self.u(key + 1) - 0.5) * 12.0, base.y + (self.u(key + 2) - 0.5) * 8.0);
-                for seg in 0..(5 + (self.u(key + 3) * 4.0) as u32) {
-                    dir += (self.u(key + 10 + seg) - 0.5) * 1.4;
-                    let len = 5.0 + 5.0 * self.u(key + 30 + seg);
-                    let to = Position::new(from.x + dir.cos() * len, from.y + dir.sin() * len * 0.8);
-                    let color = if seg < 3 { ION[0] } else { ION[2] };
-                    self.segment(&mut out, from, to, fade(color, a_fade));
-                    from = to;
-                }
-                glows.push(Shape::Glow { pos: base, radius: 18.0, color: fade(ION[2], 0.12 * a_fade) });
-            }
-        }
-
-        // The flash: a white-hot disc with a cyan halo and a horizontal
-        // lens streak, gone in a few frames.
+        // The flash: a white-hot core swelling for a frame and a few short
+        // rays, gone in a few frames, over a wide warm light.
         let flash = 0.14;
         if t < flash {
             let k = 1.0 - t / flash;
-            glows.push(Shape::Glow { pos: base, radius: 20.0 + 36.0 * k, color: fade(ION[1], 0.3 * k) });
-            glows.push(Shape::Glow { pos: base, radius: 14.0 + 22.0 * k, color: fade(ION[0], 0.6 * k) });
-            let long = 30.0 + 110.0 * k;
-            for (y, half, color) in [(0.0, long, fade(ION[1], 0.8 * k)), (0.0, long * 0.45, ION[0]), (2.0, long * 0.5, fade(ION[2], 0.5 * k))] {
-                self.segment(&mut glows, Position::new(base.x - half, base.y + y), Position::new(base.x + half, base.y + y), color);
+            glows.push(Shape::Glow { pos: base, radius: 26.0 + 40.0 * k, color: fade(FIRE[1], 0.55 * k) });
+            if t < flash * 0.6 {
+                let rays = 6 + (self.u(40) * 3.0) as u32;
+                for ray in 0..rays {
+                    let a = TAU * (ray as f32 + 0.5 * self.u(41 + ray)) / rays as f32;
+                    let len = (26.0 + 30.0 * self.u(50 + ray)) * (0.5 + 0.5 * k);
+                    let tip = Position::new(base.x + a.cos() * len, base.y + a.sin() * len * 0.8);
+                    out.push(Shape::Line { from: base, to: tip, width: 2.0, head: FIRE[0], tail: fade(FIRE[2], 0.0) });
+                }
             }
-            out.push(Shape::Puff(Puff { pos: base, radius: 4.0 + 12.0 * k, body: ION[0], lit: None, core: None }));
+            out.push(Shape::Puff(Puff { pos: base, radius: 4.0 + 12.0 * k, body: FIRE[1], shadow: None, lit: None, core: Some((FIRE[0], 0.7)), cover: 1.0 }));
         }
 
         out.extend(glows);
@@ -472,55 +382,15 @@ impl Cloud {
     }
 }
 
-/// Paint the cloud of a kill at `base`, `time` seconds in. Through a
-/// `Canvas`, so the headless tests and previews paint what the game does.
-pub fn draw(c: &mut impl Canvas, cloud: &Cloud, base: Position, time: f32) {
-    for shape in cloud.compose(base, time) {
-        match shape {
-            Shape::Puff(puff) => {
-                let r = puff.radius;
-                block_disc(c, puff.pos, r, puff.body);
-                if let Some(lit) = puff.lit {
-                    block_disc(c, Position::new(puff.pos.x - r * 0.18, puff.pos.y - r * 0.24), r * 0.68, lit);
-                }
-                if let Some((core, frac)) = puff.core {
-                    block_disc(c, Position::new(puff.pos.x, puff.pos.y + r * 0.12), r * frac, core);
-                }
-            }
-            Shape::Mark { pos, size, color } => {
-                let x = (pos.x / BLOCK).floor() * BLOCK;
-                let y = (pos.y / BLOCK).floor() * BLOCK;
-                c.fill_rect(x as i32, y as i32, size, size, color);
-            }
-            Shape::Glow { pos, radius, color } => block_disc(c, pos, radius, color),
-        }
-    }
-}
-
-/// `blast::pixel_disc` on a `Canvas`: a filled disc of whole blocks, one
-/// scanline of blocks at a time, centre snapped to the grid.
-fn block_disc(c: &mut impl Canvas, center: Position, radius: f32, color: Color) {
-    if radius < BLOCK {
-        return;
-    }
-    let cx = (center.x / BLOCK).round() * BLOCK;
-    let cy = (center.y / BLOCK).round() * BLOCK;
-    let rows = (radius / BLOCK).floor() as i32;
-    for row in -rows..=rows {
-        let dy = row as f32 * BLOCK;
-        let half = (radius * radius - dy * dy).max(0.0).sqrt();
-        let cols = (half / BLOCK).floor() as i32;
-        if cols <= 0 {
-            continue;
-        }
-        c.fill_rect(
-            (cx - cols as f32 * BLOCK - BLOCK / 2.0) as i32,
-            (cy + dy - BLOCK / 2.0) as i32,
-            (cols * 2 + 1) * BLOCK as i32,
-            BLOCK as i32,
-            color,
-        );
-    }
+/// Paint the cloud of a kill at `base`, `time` seconds in, leaning with
+/// `wind` (`compose`): the puffs and marks, then its light, which a live
+/// round draws inside an additive blend and a CPU preview simply lays
+/// over. Through `pyro::Blocks`, so the headless tests and previews paint
+/// what the game does.
+pub fn draw(c: &mut impl Blocks, cloud: &Cloud, base: Position, time: f32, wind: f32) {
+    let shapes = cloud.compose(base, time, wind);
+    pyro::draw(c, &shapes);
+    pyro::draw_glows(c, &shapes, tuning().glow_bands.max(0) as u32);
 }
 
 #[cfg(test)]
@@ -532,7 +402,7 @@ mod tests {
     }
 
     fn puffs(c: &Cloud, time: f32) -> Vec<Puff> {
-        c.compose(Position::new(200.0, 200.0), time)
+        c.compose(Position::new(200.0, 200.0), time, 0.0)
             .into_iter()
             .filter_map(|s| if let Shape::Puff(p) = s { Some(p) } else { None })
             .collect()
@@ -545,7 +415,7 @@ mod tests {
     #[test]
     fn the_cloud_flashes_climbs_burns_out_and_is_gone_at_the_end() {
         let c = cloud(0xB0B5);
-        assert!(puffs(&c, 0.0).iter().any(|p| p.body == ION[0]), "the flash is up on the first frame");
+        assert!(puffs(&c, 0.0).iter().any(|p| p.core.is_some_and(|(core, _)| core == FIRE[0])), "the white-hot flash is up on the first frame");
         assert!(top(&c, c.seconds * 0.5) < top(&c, 0.2) - 30.0, "the cap climbs well above the hull");
         let burning = |time: f32| puffs(&c, time).iter().filter(|p| p.core.is_some()).count();
         assert!(burning(0.3) > burning(c.seconds * 0.8), "the fire burns out into smoke");
@@ -557,15 +427,14 @@ mod tests {
         let c = cloud(3);
         let base = Position::new(200.0, 200.0);
         let reach = |time: f32| {
-            c.compose(base, time)
+            c.compose(base, time, 0.0)
                 .iter()
                 .filter_map(|s| match s {
-                    Shape::Mark { pos, color, .. } if color.r == ION[1].r && color.b == ION[1].b => Some((pos.x - base.x).abs()),
+                    Shape::Mark { pos, color, .. } if color.r == SHOCK_DUST[0].r && color.b == SHOCK_DUST[0].b => Some((pos.x - base.x).abs()),
                     _ => None,
                 })
                 .fold(0.0, f32::max)
         };
-        // After the flash, whose lens streak shares the ring's colour.
         assert!(reach(0.4) > reach(0.16) + 20.0, "the ring spreads");
         assert_eq!(reach(0.6), 0.0, "and is gone within a beat");
     }
@@ -573,7 +442,7 @@ mod tests {
     #[test]
     fn no_two_clouds_look_alike_and_one_cloud_always_looks_the_same() {
         let base = Position::new(300.0, 150.0);
-        assert_eq!(cloud(1).compose(base, 0.8), cloud(1).compose(base, 0.8));
+        assert_eq!(cloud(1).compose(base, 0.8, 0.0), cloud(1).compose(base, 0.8, 0.0));
         let shapes: std::collections::HashSet<(u32, u32, u32)> = (0..40)
             .map(|s| {
                 let c = cloud(crate::blast::seed_for(Position::new(s as f32 * 37.0, 90.0)));
@@ -587,7 +456,7 @@ mod tests {
     fn the_cap_rolls_so_consecutive_frames_differ() {
         let c = cloud(7);
         let base = Position::new(100.0, 100.0);
-        assert_ne!(c.compose(base, 1.0), c.compose(base, 1.0 + 1.0 / 60.0));
+        assert_ne!(c.compose(base, 1.0, 0.0), c.compose(base, 1.0 + 1.0 / 60.0, 0.0));
     }
 
     /// `cargo test --lib mushroom::tests::preview -- --ignored` writes
@@ -608,7 +477,7 @@ mod tests {
                 let t = cl.seconds * k as f32 / (cols - 1) as f32 * 0.97;
                 let base = Position::new((k * cell_w + cell_w / 2) as f32, (r * cell_h + cell_h - 40) as f32);
                 c.fill_rect(base.x as i32 - 14, base.y as i32 - 10, 28, 20, hull);
-                draw(&mut c, &cl, base, t);
+                draw(&mut c, &cl, base, t, 0.0);
             }
         }
         c.write_png(std::path::Path::new("target/mushroom_preview.png"), 2).unwrap();
@@ -626,7 +495,7 @@ mod tests {
                 let base = Position::new(80.0 + i as f32 * 160.0, 175.0);
                 c.fill_rect(base.x as i32 - 14, base.y as i32 - 10, 28, 20, hull);
                 if !cl.done(t) {
-                    draw(&mut c, cl, base, t);
+                    draw(&mut c, cl, base, t, 0.0);
                 }
             }
             c.write_png(&dir.join(format!("{f:03}.png")), 2).unwrap();

@@ -944,9 +944,6 @@ pub fn run(args: Args) {
     let missile_texture = rl
         .load_texture(&thread, "static/missile.png")
         .expect("failed loading missile texture");
-    let damage_texture = rl
-        .load_texture(&thread, "static/damage.png")
-        .expect("failed loading damage texture");
     let tracks_texture = rl
         .load_texture(&thread, "static/tracks.png")
         .expect("failed loading tracks texture");
@@ -1735,7 +1732,6 @@ pub fn run(args: Args) {
                 plasma: &plasma_texture,
                 minigun_bullets: &minigun_bullets_texture,
                 missile: &missile_texture,
-                damage: &damage_texture,
                 tracks: &tracks_texture,
                 obstacles: &obstacles_texture,
                 props: &props_texture,

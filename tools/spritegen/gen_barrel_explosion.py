@@ -1,5 +1,7 @@
 """Generate static/barrel_explosion.png - the oil barrel's blast animation
-and the scorch marks it leaves (docs/PROPS_SPEC.md, blast.rs).
+and the scorch marks it leaves (docs/PROPS_SPEC.md, blast.rs). The game
+draws only row 1, the scorches: every fireball is composed at draw time
+(`fireball.rs`, docs/effects.md), so the blast rows are reference art.
 
 Layout: 768x320, five rows of 64x64 cells.
     row 0  cols 0-11  the one-shot blast: flash, fireball, mushroom, smoke
@@ -14,7 +16,7 @@ Layout: 768x320, five rows of 64x64 cells.
 Row 0 is drawn by exactly the code it always was, so it is byte-identical
 to the single-row sheet; the new rows share its primitives through a
 shape table (sx, sy, rise, smoke, twin) and pick the same frame stages.
-Drawn at native 64px and shown at scale 2 (blast_anim_scale), so one drawn
+Drawn at native 64px and shown at scale 2 (scorch_scale), so one drawn
 pixel is a 2x2 block on screen - the same density as the tanks. Frame 0
 carries the flash on purpose: it replaces the barrel sprite the frame it
 vanishes, so it must never be blank; the last frame is a few specks, not

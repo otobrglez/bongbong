@@ -701,12 +701,17 @@ pub fn draw_flying_drum(
 /// Obstacles never rotate (unlike tanks/shells), so this skips the
 /// rotation param `draw_tank` needs; `axis` only matters for fences.
 pub fn draw_obstacle(c: &mut impl Canvas, obstacle: &Obstacle, axis: FenceAxis, time: f32) {
+    draw_obstacle_tinted(c, obstacle, axis, time, Color::WHITE);
+}
+
+/// `draw_obstacle` in `tint`: a hit's flash draws the tile again in light.
+pub fn draw_obstacle_tinted(c: &mut impl Canvas, obstacle: &Obstacle, axis: FenceAxis, time: f32, tint: Color) {
     let sheet = obstacle.material.sheet();
     let src = source_rec(sheet, obstacle.row(axis), obstacle.col());
     let size = obstacle.sprite_size();
     let dest = Rectangle::new(obstacle.position.x + obstacle.fuse_rock(time), obstacle.position.y, size, size);
     let origin = Vec2::new(size / 2.0, size / 2.0);
-    c.blit(sheet, src, dest, origin, 0.0, Color::WHITE);
+    c.blit(sheet, src, dest, origin, 0.0, tint);
 }
 
 /// Which of a cell's 16 neighbour combinations to draw a cap for.
@@ -900,10 +905,15 @@ pub fn tree_col(obstacle: &Obstacle, time: f32) -> i32 {
 /// column layout (`tree_col`) and because it is the one thing on the
 /// battlefield that can bend.
 pub fn draw_tree(c: &mut impl Canvas, obstacle: &Obstacle, lean: f32, time: f32) {
+    draw_tree_tinted(c, obstacle, lean, time, Color::WHITE);
+}
+
+/// `draw_tree` in `tint`: a hit's flash draws the crown again in light.
+pub fn draw_tree_tinted(c: &mut impl Canvas, obstacle: &Obstacle, lean: f32, time: f32, tint: Color) {
     let sheet = obstacle.material.sheet();
     let src = source_rec(sheet, obstacle.row(FenceAxis::Horizontal), tree_col(obstacle, time));
     let size = obstacle.sprite_size();
-    tree_blit(c, sheet, src, obstacle.position, size, lean, Color::WHITE);
+    tree_blit(c, sheet, src, obstacle.position, size, lean, tint);
 }
 
 /// The same lean applied to the drop shadow, so a bending crown does not

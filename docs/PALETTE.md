@@ -15,9 +15,12 @@ snap(rgba)     # nearest(), alpha passed through unchanged
 ```
 
 Every `tools/gen_*.py` / `tools/spritegen/gen_*.py` generator imports this
-module. `tools/gen_damage.py` (no Pillow dependency) imports it too — the
-module itself has no image-library dependency, just tuples and a distance
-function, so it works standalone.
+module; the raw-PNG pickup generators need no Pillow and the module itself
+has no image-library dependency either, just tuples and a distance
+function, so it works standalone. The effects drawn at run time
+(docs/effects.md) take their fire, smoke, dust and char ramps from it too,
+plus `FIRE_PALE`, the one warm step between gold and white the fire ramp
+needs, which no sheet is drawn in.
 
 **This supersedes [Resurrect 64](https://lospec.com/palette-list/resurrect-64)**
 (`tools/resurrect64.py`, kept only as historical reference — nothing imports
@@ -162,9 +165,7 @@ base tone) or "derived" (anything computed by darkening/lightening/blending):
   from the Puny Palette to preserve or improve on each sheet's role/contrast
   intent (e.g. `docs/SPRITESHEET_SPEC.md` §4's tank roster table, or keeping
   all four brick/iron/wood variants on one shared tone per material per
-  `docs/WALLS_SPEC.md`). `tools/gen_damage.py`'s five smoke/char palettes are
-  the one exception — snapped mechanically via `nearest()` since they're
-  plain tonal variants with no per-row "identity" to preserve.
+  `docs/WALLS_SPEC.md`).
 - **Derived colours are snapped after the math.** `mul()` (in `gen_tanks.py`
   and `gen_walls.py`) scales an RGB tuple by a float factor for
   shading/ramps, then calls `snap()` on the result — otherwise a palette
