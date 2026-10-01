@@ -26,7 +26,7 @@ use bongbong_server::{Config, Server};
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async_with_config};
 
 type Client = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -65,7 +65,10 @@ async fn start_server_with_keep_alive(keep_alive: bongbong_server::hub::KeepAliv
 }
 
 async fn connect(addr: SocketAddr) -> Client {
-    let (ws, _) = connect_async(format!("ws://{addr}/ws")).await.expect("connect");
+    // Nagle's algorithm off, as on every socket the game opens: a burst of
+    // small frames leaves as it is written rather than waiting on the
+    // first one's ack, which would hand the room half a burst a tick.
+    let (ws, _) = connect_async_with_config(format!("ws://{addr}/ws"), None, true).await.expect("connect");
     ws
 }
 
