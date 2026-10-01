@@ -57,7 +57,11 @@
 //!   the lane. A replica carries no `Ai`, so the settle is read from what
 //!   is drawn - the hull turned down the lane - rather than from the AI's
 //!   timer. Only this seat's screen shows it: another seat's `Awareness`
-//!   measures the lane against that seat's own tank.
+//!   measures the lane against that seat's own tank. An enemy fires at a
+//!   seat only from inside the seat's sight box (`ai::in_sight_box`), and
+//!   the box is always on screen, so an enemy an arrow points at fires on
+//!   nothing yet: its warning is the heads-up that it is lined up down the
+//!   lane and closing in to fire.
 //! - *Concealment.* An enemy in tall grass gets no arrow unless it fired
 //!   within `indicator_reveal_fire_seconds` or stands within
 //!   `indicator_reveal_px` of the seat (`concealed`); nor, at night or in
@@ -622,12 +626,15 @@ pub fn concealed(in_grass: bool, since_fired: Option<f32>, distance: f32, t: &Tu
     in_grass && !since_fired.is_some_and(|s| s <= t.indicator_reveal_fire_seconds) && distance > t.indicator_reveal_px
 }
 
-/// Whether an enemy at `enemy` facing `facing` is lined up to fire on a
-/// seat at `seat` by the AI's own rule (`ai::act_attack`): the seat ahead
-/// on the axis it faces, within `enemy_fire_align_px` of that line and
-/// within its attack range - `enemy_attack_range`, never past `sight`,
-/// what the sky lets it see (`Game::enemy_sight`). The line of sight is
-/// the caller's to ask.
+/// Whether an enemy at `enemy` facing `facing` is lined up on a seat at
+/// `seat` by the AI's aim (`ai::act_attack`): the seat ahead on the axis
+/// it faces, within `enemy_fire_align_px` of that line and within its
+/// attack range - `enemy_attack_range`, never past `sight`, what the sky
+/// lets it see (`Game::enemy_sight`). The seat's sight box is left out on
+/// purpose: the AI fires only from inside it, but the box is always on
+/// screen, so every enemy an arrow points at stands outside it, and the
+/// warning is the heads-up that one is lined up and closing in. The line
+/// of sight is the caller's to ask.
 pub fn lined_up(enemy: Position, facing: Dir, seat: Position, sight: f32, t: &Tuning) -> bool {
     let dir = Dir::toward(enemy, seat);
     let (off_axis, forward) = axis_offsets(enemy, seat, dir);
