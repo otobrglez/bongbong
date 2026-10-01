@@ -29,6 +29,14 @@
 //! uniform is set per frame from the round, the camera and the tuning
 //! table; nothing is kept between frames but the targets and the cell
 //! mask.
+//!
+//! Where the driver would not compile the passes - or the
+//! `weather_without_shaders` knob asks - the sky is drawn without them
+//! (`WeatherFrame::plain`, docs/weather.md "Without shaders"): the light
+//! map is drawn as ever, since it needs no shader, and multiplied onto the
+//! field with a blend mode (`multiply_light`), and the snow on the ground
+//! and the air are `weather::plain`'s blocks (`draw_blocks`), all straight
+//! into `scene_target`.
 
 use sola_raylib::prelude::*;
 use std::sync::Arc;
@@ -42,6 +50,7 @@ use crate::render::game::Textures;
 use crate::simulation::Game;
 use crate::tuning::{tuning, Tuning};
 use crate::view::Camera;
+use crate::weather::plain::{self, Air, Block};
 use crate::weather::{lightning, lights_in, Light, Look, Plan, Rgb, Shape};
 use crate::{MAX_SEATS, OBSTACLE_GRID_SIZE};
 
@@ -141,10 +150,12 @@ struct Mask {
 }
 
 /// The weather's GPU state for the whole session. `app.rs` owns it and
-/// hands it to `Game::render` through `Effects::weather`; `None` there (a
-/// driver that could not compile the passes) draws every sky clear.
+/// hands it to `Game::render` through `Effects::weather`; `None` there
+/// draws every sky clear.
 pub struct WeatherFx {
-    shaders: PassShaders,
+    /// `None` where the driver would not compile them: every sky is then
+    /// drawn without them.
+    shaders: Option<PassShaders>,
     targets: Option<Targets>,
     mask: Option<Mask>,
     /// Set by the first target or mask that could not be made: said once
@@ -175,6 +186,9 @@ pub struct WeatherFrame {
     gust: Option<(f32, Vector2)>,
     /// The rules froze the round's water (`WaterLayout::is_frozen`).
     frozen: bool,
+    /// Drawn without the shaders (`weather::plain`): the light map
+    /// multiplied in by a blend mode, the snow and the air as blocks.
+    pub plain: bool,
     tuning: Arc<Tuning>,
 }
 
@@ -185,6 +199,26 @@ impl WeatherFrame {
     /// whose lights barely show.
     pub fn day_light_pools(&self) -> f32 {
         if self.plan.lit { (1.0 - self.look.lights).clamp(0.0, 1.0) } else { 1.0 }
+    }
+
+    /// The world rectangle the frame's targets hold, a texel per world
+    /// pixel.
+    fn view(&self) -> Rectangle {
+        Rectangle::new(self.camera.origin.x, self.camera.origin.y, self.size.0 as f32, self.size.1 as f32)
+    }
+
+    /// The snow lying on the ground over the view, as plain blocks
+    /// (`weather::plain::snow_cover`); none under a sky without snow.
+    pub fn plain_snow_cover(&self, out: &mut Vec<Block>) {
+        plain::snow_cover(&self.look, self.view(), &self.tuning, out);
+    }
+
+    /// The air over the view, as plain blocks (`weather::plain::air`).
+    pub fn plain_air(&self, out: &mut Vec<Block>) {
+        let seats: Vec<Vec2> = self.seats[..self.seat_count].iter().map(|v| Vec2::new(v.x, v.y)).collect();
+        let gust = self.gust.map(|(since, dir)| (since, Vec2::new(dir.x, dir.y)));
+        let air = Air { look: &self.look, time: self.time, ambient: self.ambient, seats: &seats, gust };
+        plain::air(&air, self.view(), &self.tuning, out);
     }
 }
 
@@ -213,9 +247,26 @@ fn whole(size: (i32, i32)) -> Rectangle {
 
 impl WeatherFx {
     /// Compile the three passes (the GLSL ES 100 twins in `static/web/` on
-    /// the embedded builds; every source is in the binary). A failure is
-    /// returned rather than fatal: the game then draws every sky clear.
-    pub fn load(rl: &mut RaylibHandle, thread: &RaylibThread) -> Result<Self, String> {
+    /// the embedded builds; every source is in the binary). A driver that
+    /// will not compile them is said once on stderr and noted for the dev
+    /// server (`weather::plain::note_shaders_missing`), and every sky is
+    /// then drawn without them.
+    pub fn load(rl: &mut RaylibHandle, thread: &RaylibThread) -> Self {
+        let shaders = match PassShaders::compile(rl, thread) {
+            Ok(shaders) => Some(shaders),
+            Err(e) => {
+                eprintln!("[render] weather shaders unavailable, drawing every sky without them: {e}");
+                plain::note_shaders_missing();
+                None
+            }
+        };
+        WeatherFx { shaders, targets: None, mask: None, warned: false }
+    }
+}
+
+impl PassShaders {
+    /// The three passes compiled and their uniforms looked up.
+    fn compile(rl: &mut RaylibHandle, thread: &RaylibThread) -> Result<Self, String> {
         let (light_src, ground_src, sky_src) = if crate::EMBEDDED {
             (
                 include_str!("../../static/web/weather_light.fs"),
@@ -281,9 +332,11 @@ impl WeatherFx {
             gust_len: sky.get_shader_location("gustLen"),
             light_map: sky.get_shader_location("lightMap"),
         };
-        Ok(WeatherFx { shaders: PassShaders { light, light_locs, ground, ground_locs, sky, sky_locs }, targets: None, mask: None, warned: false })
+        Ok(PassShaders { light, light_locs, ground, ground_locs, sky, sky_locs })
     }
+}
 
+impl WeatherFx {
     /// Resolve this frame's weather for `game` and draw what has to exist
     /// before pass 1: the light map (the round's lights and the particle
     /// layer's hits) and the bare ground for the ground pass, both over
@@ -296,7 +349,11 @@ impl WeatherFx {
         let plan = look.plan()?;
         let (w, h) = game.map.field_size();
         let size = camera.target_size();
-        let cells = match self.ensure_targets(rl, thread, size).and_then(|()| if plan.ground { self.ensure_mask(rl, thread, game) } else { Ok((1, 1)) }) {
+        // Without the shaders the ground pass is the snow's blocks, which
+        // need neither the bare ground's target nor the cell mask.
+        let plain = self.shaders.is_none() || t.weather_without_shaders;
+        let ground = plan.ground && !plain;
+        let cells = match self.ensure_targets(rl, thread, size).and_then(|()| if ground { self.ensure_mask(rl, thread, game) } else { Ok((1, 1)) }) {
             Ok(cells) => cells,
             Err(e) => {
                 if !self.warned {
@@ -315,7 +372,7 @@ impl WeatherFx {
             let all = lights_in(game, fx.impacts(), &look, &t, camera.part());
             draw_light_map(rl, thread, &mut targets.light, ambient, &all, camera);
         }
-        if plan.ground {
+        if ground {
             rl.draw_texture_mode(thread, &mut targets.ground, |mut d| {
                 d.clear_background(Color::WHITE);
                 d.draw_mode2D(camera.in_target(), |mut d, _| game.paint_ground(&mut GpuCanvas::culled(&mut d, textures, camera.cull())));
@@ -350,18 +407,26 @@ impl WeatherFx {
             seat_count,
             gust,
             frozen: game.water().is_frozen(),
+            plain,
             tuning: t,
         })
     }
 
     /// The target the passes ping-pong through and the passes themselves,
     /// borrowed apart so one can be drawn into while the others are read.
-    /// `None` before the first `begin` that ran.
+    /// `None` before the first `begin` that ran, and without the shaders.
     pub fn stages(&mut self) -> Option<(&mut RenderTexture2D, Passes<'_>)> {
         let targets = self.targets.as_mut()?;
+        let shaders = self.shaders.as_mut()?;
         let Targets { light, ground, lit, .. } = targets;
         let mask = self.mask.as_ref().map(|m| &m.texture);
-        Some((lit, Passes { shaders: &mut self.shaders, light, ground, mask }))
+        Some((lit, Passes { shaders, light, ground, mask }))
+    }
+
+    /// The light map `begin` drew, for a frame drawn without the shaders
+    /// (`multiply_light`). `None` before the first `begin` that ran.
+    pub fn light_map(&self) -> Option<&RenderTexture2D> {
+        self.targets.as_ref().map(|t| &t.light)
     }
 
     fn ensure_targets(&mut self, rl: &mut RaylibHandle, thread: &RaylibThread, size: (i32, i32)) -> Result<(), String> {
@@ -500,6 +565,52 @@ unsafe fn push_triangle(a: (Vec2, Color), b: (Vec2, Color), c: (Vec2, Color)) {
             sola_raylib::ffi::rlVertex2f(p.x, p.y);
         }
     }
+}
+
+/// The field in the target multiplied by `light`, the frame's light map,
+/// over the whole target in its own pixels: what a frame drawn without the
+/// shaders runs where the light pass would. The blend takes twice the
+/// light map's stored value times the field, so the halved map lights the
+/// field to daylight at 1 and to twice it at 2, as the pass does - without
+/// its bands, its moonlit grey or its vignette.
+pub fn multiply_light<D: RaylibDraw>(d: &mut D, light: &RenderTexture2D, frame: &WeatherFrame) {
+    use sola_raylib::ffi::{RL_DST_COLOR, RL_FUNC_ADD, RL_SRC_COLOR};
+    d.set_blend_factors(RL_DST_COLOR as i32, RL_SRC_COLOR as i32, RL_FUNC_ADD as i32);
+    d.draw_blend_mode(BlendMode::BLEND_CUSTOM, |mut bd| {
+        bd.draw_texture_rec(light, whole(frame.size), Vector2::new(0.0, 0.0), Color::WHITE);
+    });
+}
+
+/// `weather::plain`'s blocks, alpha-blended, in world pixels: call inside
+/// the world's camera. The target's alpha is left alone - the plain alpha
+/// blend would leave it under 1 wherever a block lies, and pass 2's blit
+/// would darken the fog toward the black behind it.
+pub fn draw_blocks<D: RaylibDraw>(d: &mut D, blocks: &[Block]) {
+    use sola_raylib::ffi::{RL_FUNC_ADD, RL_ONE, RL_ONE_MINUS_SRC_ALPHA, RL_SRC_ALPHA, RL_ZERO};
+    if blocks.is_empty() {
+        return;
+    }
+    d.set_blend_factors_separate(RL_SRC_ALPHA as i32, RL_ONE_MINUS_SRC_ALPHA as i32, RL_ZERO as i32, RL_ONE as i32, RL_FUNC_ADD as i32, RL_FUNC_ADD as i32);
+    d.draw_blend_mode(BlendMode::BLEND_CUSTOM_SEPARATE, |mut bd| {
+        for block in blocks {
+            bd.draw_rectangle_rec(block.rect, block.color);
+        }
+    });
+}
+
+/// A lightning strike's white over the whole target, in its own pixels:
+/// the sky pass's, for a frame drawn without the shaders. Nothing between
+/// strikes.
+pub fn draw_flash<D: RaylibDraw>(d: &mut D, frame: &WeatherFrame) {
+    let k = frame.flash * 0.85 * 0.12;
+    if k <= 0.0 {
+        return;
+    }
+    let c = |v: f32| (v * k * 255.0).round().clamp(0.0, 255.0) as u8;
+    let white = Color::new(c(0.75), c(0.82), c(1.0), 255);
+    d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+        bd.draw_rectangle(0, 0, frame.size.0, frame.size.1, white);
+    });
 }
 
 /// The three passes, with the targets they read. Borrowed out of

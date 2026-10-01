@@ -1029,14 +1029,9 @@ pub fn run(args: Args) {
         }
     };
     // The weather's passes (docs/weather.md). A driver that cannot compile
-    // them draws every sky clear; the round plays the same either way.
-    let mut weather_fx = match crate::render::weather::WeatherFx::load(&mut rl, &thread) {
-        Ok(w) => Some(w),
-        Err(e) => {
-            eprintln!("[render] weather shaders unavailable, every sky is clear: {e}");
-            None
-        }
-    };
+    // them draws every sky without them (`weather::plain`), so the night
+    // stays dark there too; the round plays the same either way.
+    let mut weather_fx = crate::render::weather::WeatherFx::load(&mut rl, &thread);
     // The short-lived particle layer lives here rather than on `Game`:
     // it is presentation only, so nothing in the simulation can see it and
     // it is free to use `rand::rng()` (see fx.rs). The web build starts at
@@ -1736,7 +1731,7 @@ pub fn run(args: Args) {
                 muzzle: &mut muzzle_fx,
                 impact: &mut impact_fx,
                 shots: shot_shaders.as_mut(),
-                weather: weather_fx.as_mut(),
+                weather: Some(&mut weather_fx),
                 fx: &fx,
                 // No stick over the lobby: the field behind it is frozen
                 // and every press there belongs to the screen.

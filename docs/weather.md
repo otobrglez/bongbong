@@ -47,7 +47,9 @@ probe and the determinism pins hold it to that).
   map's sky by name), the map's own key, the override's pick, every name
   and the `rules` in force (`on`, `enemy_sight_px`, `grip`, `frozen`,
   `gust_on_player` - player 1's wind, px/s - and `gust_front`, the gust
-  crossing the field); with `name` it puts that key on the round's map and
+  crossing the field) and `without_shaders` (the window draws its skies
+  plainly, "Without shaders" below); with `name` it puts that key on the
+  round's map and
   starts the round over on its own seed, frozen in lockstep like
   `restart`. `status.weather`, `map.weather`, `builder_settings {weather}`
   (null = clear) and `map_get`/`restart {map_toml}` carry the key too.
@@ -194,6 +196,44 @@ each step (`band` in the shaders), so a gradient reads as drawn bands with
 pixel-art edges rather than as a halftone. `light_bands` 0 draws smooth
 light; `light_dither` off steps it hard.
 
+## Without shaders
+
+The sky is part of the round - the enemies see less at night and in fog -
+so a window whose GPU will not compile the three passes must not show a
+clear field either: its player would see through the night the enemies
+are fighting in. `WeatherFx::load` keeps going without them, says so once
+on stderr, and every sky is then drawn plainly, straight into
+`scene_target` (`render/game.rs`'s plain branch, `weather::plain`):
+
+1. **The snow on the ground**, under a snowy sky: the bare ground tileset,
+   then `plain::snow_cover`'s blocks - the ground pass's patches from the
+   same noise, in three hard steps, one flake colour - then the marks, the
+   tiles and everything standing, so tracks still show dark in the snow.
+2. **The light**: the light map is drawn as ever - it is a fan of
+   coloured triangles, which needs no shader - and multiplied onto the
+   field by a blend mode (`multiply_light`: twice the stored map times the
+   field, the halved map's own scale), so the night is as dark and every
+   headlight, fire and wall shadow is where the pass puts it. Then what
+   shines by itself, as in the pass.
+3. **The air**: `plain::air`'s blocks - fog banks in four hard steps and
+   blowing sand in five, both from the sky pass's noise and both thinned
+   round every seat (a gust's wall fills the clearing as it does there),
+   the sand's grains, rain in three depths as one-block streaks slanting
+   down the wind, snow in three depths - then lightning's white as one
+   additive rectangle. The blocks are drawn with the target's alpha left
+   alone, since pass 2 blits it over black.
+
+Fog, sand and snow cover are worked out per 8 px tile (`TILE_PX`) rather
+than per 2 px block, stepped hard rather than dithered, and a run of
+equal tiles along a row is one rectangle - a few hundred to a few
+thousand a frame. The light's bands, the moonlit grey, the dusk sun, the
+vignette, the heat haze, fog and rain lit by a lamp, and the ground's wet
+sheen, puddles and ice are the passes' alone; frozen water lies under the
+snow cover rather than as ice. The `weather_without_shaders` knob draws
+every sky this way where the shaders do work, and the dev server's
+`weather` reply and `status.weather` carry `without_shaders`, true for
+either reason.
+
 ## Lights
 
 `weather::lights` gathers every light the round throws, each already cast
@@ -239,7 +279,8 @@ and 0 leaves the storm without one.
 The `weather` tuning group, every row `Live` but `weather_override`
 (`Restart`):
 
-- `weather_override`, `weather_strength`, `weather_vignette`.
+- `weather_override`, `weather_strength`, `weather_vignette`,
+  `weather_without_shaders`.
 - Rules: `weather_rules`, `night_sight_factor`, `fog_sight_factor`,
   `rain_grip_factor`, `ice_grip_factor`, `ice_traction_factor`,
   `ice_brake_factor`, `sand_gust_speed`, `sand_gust_gap_seconds`,
@@ -271,8 +312,8 @@ The `weather` tuning group, every row `Live` but `weather_override`
 The shaders' clock wraps every half hour (`CLOCK_WRAP_SECONDS`) and their
 noise hashes wrapped lattice points, so a long round never outgrows a
 float; the GLSL ES 100 twins ask for high precision where the GPU has it.
-A driver that cannot compile the passes draws every sky clear, like the
-shot shaders' fallback.
+A driver that cannot compile the passes draws the sky without them
+(above): the light map and one blended blit, and the blocks.
 
 ## Tests
 
@@ -286,6 +327,12 @@ shot shaders' fallback.
   every light on a shipped map is finite and inside its radius, gusts come
   in most windows but the first and blow only where their band is, and
   with `weather_rules` off no sky changes a number.
+- `weather::plain::tests`: a sky with no air composes no blocks and every
+  other one some, every block is on the 2 px grid and touches the view,
+  the same frame composes the same blocks and the clock moves them, the
+  fog steps in fours and thins round every seat, a gust thickens the sand
+  it crosses, a run of equal tiles is one block, and the noise stays in
+  its range.
 - `simulation::weather_tests`: night and fog shorten how far an enemy
   sees (a sighting between the reaches, both ways), the rain loosens every
   hull's grip, snow freezes a lake into ice a hull drives across and the

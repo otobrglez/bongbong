@@ -374,6 +374,44 @@ impl Game {
                     });
                 });
             }
+            Some(frame) if frame.plain => {
+                // The sky without its shaders (`weather::plain`), every
+                // stage straight into `scene_target`: the field (on snow
+                // lying over the bare ground, under the marks), the light
+                // map multiplied in by a blend mode, what shines by
+                // itself, then the air as plain blocks.
+                let plan = frame.plan;
+                let day_pools = frame.day_light_pools();
+                let light = effects.weather.as_deref().and_then(|fx| fx.light_map()).expect("`begin` readied the targets");
+                let mut blocks = Vec::new();
+                rl.draw_texture_mode(thread, scene_target, |mut d| {
+                    d.clear_background(Color::WHITE);
+                    d.draw_mode2D(in_target, |mut d, _| {
+                        frame.plain_snow_cover(&mut blocks);
+                        let snowed = !blocks.is_empty();
+                        if snowed {
+                            self.paint_ground(&mut GpuCanvas::culled(&mut d, textures, cull));
+                            crate::render::weather::draw_blocks(&mut d, &blocks);
+                        }
+                        self.paint_field_lit(&mut d, textures, snowed, cull);
+                        if !plan.lit {
+                            self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera);
+                        }
+                    });
+                    if plan.lit {
+                        crate::render::weather::multiply_light(&mut d, light, &frame);
+                        d.draw_mode2D(in_target, |mut d, _| {
+                            self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera);
+                        });
+                    }
+                    if plan.sky {
+                        blocks.clear();
+                        frame.plain_air(&mut blocks);
+                        d.draw_mode2D(in_target, |mut d, _| crate::render::weather::draw_blocks(&mut d, &blocks));
+                        crate::render::weather::draw_flash(&mut d, &frame);
+                    }
+                });
+            }
             Some(frame) => {
                 let (lit_target, mut passes) = effects.weather.as_deref_mut().and_then(|fx| fx.stages()).expect("`begin` readied the targets");
                 let plan = frame.plan;

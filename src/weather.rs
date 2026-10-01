@@ -8,6 +8,8 @@
 //! of the field a camera shows), with the walls' shadows
 //! cast by a raycast over the tile grid (`Occluders`). `render/weather.rs`
 //! is the raylib half: the light map, the ground and the sky passes.
+//! `plain` is the sky composed as plain blocks, for a window whose GPU
+//! would not compile those passes.
 //!
 //! Nothing here writes to a `Game` or draws the round's RNG: the sky is
 //! the map's key (or the override knob's), a `random` one a hash of the
@@ -36,6 +38,8 @@ use crate::tank::Tank;
 use crate::tower::TowerKind;
 use crate::tuning::Tuning;
 use crate::{OBSTACLE_GRID_SIZE, Position};
+
+pub mod plain;
 
 /// A colour as the light map adds it up: linear channels, 1.0 the
 /// brightness of daylight, allowed above it.

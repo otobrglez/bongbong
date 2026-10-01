@@ -2494,6 +2494,12 @@ tunables! {
         /// How much a heavy sky darkens the field toward its edges (a
         /// multiplier on the look's own vignette).
         weather_vignette: f32 = 1.0 in 0.0 ..= 2.0;
+        /// Draw every sky the way a device whose GPU would not compile the
+        /// weather's shaders draws it (docs/weather.md "Without shaders"):
+        /// the light map multiplied in by a blend mode, the snow on the
+        /// ground and the fog, sand, rain and snow in the air as plain
+        /// blocks. For looking at that picture where the shaders work.
+        weather_without_shaders: bool = false in 0 ..= 1;
     }
 }
 

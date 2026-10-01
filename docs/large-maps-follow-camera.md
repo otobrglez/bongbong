@@ -1,6 +1,7 @@
 # Larger maps: a follow camera, edge arrows and the whole screen
 
-Status: research, nothing implemented. Written 2026-10 against v0.2.5.
+Status: research, partly built (section 14 says what has landed).
+Written 2026-10 against v0.2.5.
 It answers one question: how could maps much larger than one screen
 play on phones, tablets, desktops and the web, with a camera that follows
 the local tank and indicators for whatever is off screen, while cross-play
@@ -551,7 +552,7 @@ starts the round as today.
 | Shaders | `plasma_orb.fs`, `flame_jet.fs` (and their `static/web/` twins) take a camera origin uniform instead of assuming the target is the field; the shockwave works in world pixels, not field UV; the weather light pass's sun gradient in world space and its vignette in screen space; the sky pass's seat clearings through the camera. |
 | Culling | `ground::draw`, `draw_current`, every `paint_*` stage, weather lights and occluders, and the effect lists skip what is outside the view plus a margin (the largest light or blast radius). |
 | Effect caps | `SCORCH_MAX` and `DECAL_MAX` are world state and cap the whole map; a field map needs larger caps or per-region caps. Particles and shocks are client-side and can prefer what is on screen. |
-| Weather fallback | A device whose weather shaders fail draws every sky clear, so its player sees through night and fog. Fall back to darkness without shaders (a multiply rectangle at the ambient light, additive discs at the lights) and report it in `status`. Check that the halved `fx_density` on phones does not thin smoke that hides tanks. |
+| Weather fallback | Built: a device whose weather shaders fail drew every sky clear, so its player saw through night and fog. It now draws the sky without them (`weather::plain`, docs/weather.md "Without shaders"): the light map, which needs no shader, multiplied onto the field by a blend mode - the night as dark, with every headlight and shadow - and the snow on the ground and the fog, sand, rain and snow in the air as plain blocks from the shaders' own noise; `status.weather.without_shaders` reports it and the `weather_without_shaders` knob shows it anywhere. The halved `fx_density` on phones thins only cosmetic smoke: no rule hides a tank behind smoke (concealment is the tall grass's cell test). |
 | UI | Banners, dialogs, lobby, level select, end screen and the stick move to screen space at a UI scale in points; `touch_*` knobs move from bitmap pixels to points. |
 | Simulation | `Terrain::build` borrows the water layout instead of cloning it; flow fields limited to a radius around each seat or updated every few ticks on field maps; A* scratch arrays reused. |
 | Wire | Positions fit maps up to about 255 cells a side and cell keys up to 65 535 cells; `LASER_MAX_RANGE` becomes the map diagonal; the `Welcome`'s map TOML grows with the map. |
@@ -701,6 +702,12 @@ probe.
    staggered far enemies, spawns and gates by path distance, re-entry
    near the team, a pacing director, effect caps, a first field level,
    the study map in the probe sweeps, and the Android `appCategory` fix.
+
+Landed so far: step 1 whole (`view::Camera`); from step 2 the view rules
+(`framing.rs`) and the map's `view` key; from step 4 the awareness model
+(`indicators.rs`); from step 5 the sight box, the AI's fire gate, the
+probe's `offbox-fire` check and the weather fallback (`weather::plain`);
+from step 7 the Android `appCategory`.
 
 ## 15. Decisions
 

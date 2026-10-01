@@ -343,7 +343,7 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "weather",
-        description: "The sky over the round on screen (docs/weather.md): drawn, and part of the rules - shorter enemy sight at night, in a storm and in fog, less grip in the rain, the water frozen in the snow, gusts in a sandstorm. A sky is settled when a round starts. Without `name` reports `in_force` (the round's sky - never `random`: a random weather is the sky the round's seed picks, the same for the same seed), `map` (the round's map's own `weather` key), `override` (the `weather_override` tuning knob's, null when it follows the map - `--weather` and the web page's `?weather=` set it; it applies from the next round), `rules` (`on`, `enemy_sight_px`, `grip`, `frozen`, `gust_on_player` - player 1's wind in px/s -, `gust_front` - the sandstorm gust crossing the field, its `start` in round seconds and its `dir`) and every name. With `name` (clear, night, dusk, rain, storm, fog, sandstorm, snow, heat_haze, random) puts that key on the round's map and starts the round over on its own seed, frozen like `restart` leaves it; the key lasts through `restart`s on that map, and the override knob still outranks it. An online window only reports: a room's round is fought under its map's sky. The builder's WEATHER row is `builder_settings {weather}`; `map_get`/`restart {map_toml}` carry the key as `weather = \"night\"`.",
+        description: "The sky over the round on screen (docs/weather.md): drawn, and part of the rules - shorter enemy sight at night, in a storm and in fog, less grip in the rain, the water frozen in the snow, gusts in a sandstorm. A sky is settled when a round starts. Without `name` reports `in_force` (the round's sky - never `random`: a random weather is the sky the round's seed picks, the same for the same seed), `map` (the round's map's own `weather` key), `override` (the `weather_override` tuning knob's, null when it follows the map - `--weather` and the web page's `?weather=` set it; it applies from the next round), `rules` (`on`, `enemy_sight_px`, `grip`, `frozen`, `gust_on_player` - player 1's wind in px/s -, `gust_front` - the sandstorm gust crossing the field, its `start` in round seconds and its `dir`), `without_shaders` (the window draws its skies without the weather's shaders - they would not compile here, or the `weather_without_shaders` knob asks: the light map blended in, the snow, fog, sand, rain and falling snow as plain blocks) and every name. With `name` (clear, night, dusk, rain, storm, fog, sandstorm, snow, heat_haze, random) puts that key on the round's map and starts the round over on its own seed, frozen like `restart` leaves it; the key lasts through `restart`s on that map, and the override knob still outranks it. An online window only reports: a room's round is fought under its map's sky. The builder's WEATHER row is `builder_settings {weather}`; `map_get`/`restart {map_toml}` carry the key as `weather = \"night\"`.",
         schema: r#"{"type":"object","properties":{"name":{"type":"string","enum":["clear","night","dusk","rain","storm","fog","sandstorm","snow","heat_haze","random"],"description":"The sky to draw the round under; random is picked by the round's seed"}}}"#,
         read_only: false,
         destructive: false,
@@ -2563,6 +2563,7 @@ fn weather_json(game: &Game) -> Value {
         "in_force": sky.name(),
         "map": game.map.weather.name(),
         "override": pick.map(crate::map::Weather::name),
+        "without_shaders": crate::weather::plain::without_shaders(&t),
         "names": crate::map::Weather::ALL.iter().map(|w| w.name()).collect::<Vec<_>>(),
         "rules": {
             "on": t.weather_rules,
@@ -3109,6 +3110,8 @@ mod tests {
         assert_eq!(w["names"].as_array().unwrap().len(), crate::map::Weather::ALL.len(), "{w}");
         assert_eq!(w["rules"]["enemy_sight_px"], json!(crate::tuning::tuning().enemy_view_range), "{w}");
         assert_eq!(w["rules"]["grip"], json!(1.0), "{w}");
+        // No window compiled anything here, and the knob is off.
+        assert_eq!(w["without_shaders"], false, "{w}");
         // Setting a sky starts the round over under it on its own seed:
         // the rules read it from the start.
         for _ in 0..5 {
