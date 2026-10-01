@@ -723,6 +723,17 @@ impl Session {
         }
     }
 
+    /// Whether this frame's field is drawn through the follow camera: a
+    /// round, a lobby or an online round on a field map
+    /// (`MapFile::follows`). The builder always shows its map whole.
+    pub fn follows(&self) -> bool {
+        match self.driver {
+            Driver::Build => false,
+            Driver::Online => self.shown().map.follows(),
+            Driver::Play | Driver::Lobby => self.game.map.follows(),
+        }
+    }
+
     /// What `Game::render` should draw around the field this frame. An
     /// online round shows none of the local buttons - the round is the
     /// room's to restart and the builder is not part of it - and carries

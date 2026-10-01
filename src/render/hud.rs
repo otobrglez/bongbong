@@ -15,7 +15,7 @@ use crate::text::{keys, text, width, Key};
 use crate::render::game::Textures;
 use crate::simulation::PlayerCount;
 use crate::tank::{team_color, ActiveWeapon, TEAM_COLORS};
-use crate::{Rect, MAX_SEATS, PICKUP_TEXTURE_SIZE, SHELL_TEXTURE_SIZE};
+use crate::{Rect, HUD_BAR_HEIGHT, MAX_SEATS, PICKUP_TEXTURE_SIZE, SHELL_TEXTURE_SIZE};
 
 const HEART: Color = Color::new(230, 60, 70, 255);
 const SPEED_COLOR: Color = Color::new(255, 210, 60, 255);
@@ -317,6 +317,177 @@ pub fn draw_bar(d: &mut impl RaylibDraw, panel: Rect, model: &HudModel, textures
         for (i, seat) in model.others.iter().take(MAX_SEATS - 1).enumerate() {
             draw_seat_chip(d, px + seat_chip_x(strip, i), py, ph, seat);
         }
+    }
+}
+
+/// The corner clusters' backing: the bar's own colour, see-through
+/// enough that the ground under a cluster still reads as ground.
+const CORNER_FILL: Color = Color::new(BAR_FILL.r, BAR_FILL.g, BAR_FILL.b, 200);
+const CORNER_EDGE: Color = Color::new(0, 0, 0, 120);
+/// Inset of a cluster's content from its backing.
+const CORNER_PAD: i32 = 4;
+
+/// How far below the field's top edge the corner HUD reaches: the left
+/// cluster's two rows and a block's gap. What is written along that edge
+/// of the field (the online status line, the dev label) starts below it.
+pub const CORNER_HUD_CLEAR: i32 = 2 * HUD_BAR_HEIGHT + 6;
+
+/// The left cluster's slots, from the panel's left edge: row one is the
+/// round (the title or the level button, the wave, the enemy count), row
+/// two the seat's vitals (HP, shells, the five weapons, the gauges). Fixed
+/// like the bar's, so a changing number never nudges its neighbours.
+const CORNER_ENEMIES: i32 = 166;
+const CORNER_ENEMY_COUNT: i32 = 182;
+const CORNER_ROW1_END: i32 = 242;
+const CORNER_HEART: i32 = 6;
+const CORNER_HP: i32 = 22;
+const CORNER_SHELL: i32 = 62;
+const CORNER_SHELLS: i32 = 94;
+const CORNER_WEAPONS: i32 = 124;
+const CORNER_WEAPON_SLOT_W: i32 = 54;
+const CORNER_WEAPON_ICON: i32 = 28;
+const CORNER_BARS: i32 = CORNER_WEAPONS + WEAPON_SLOTS as i32 * CORNER_WEAPON_SLOT_W + 4;
+const CORNER_ROW2_END: i32 = CORNER_BARS + 3 * BAR_SLOT_W;
+
+/// The HUD of a field map (docs/large-maps-follow-camera.md §8): two
+/// clusters over the top corners of the field instead of a bar above it,
+/// the middle of the screen - where the world is - left open. The left
+/// cluster is the round and this seat (a couch pair stacks the second
+/// player's vitals under the first's); the right one backs the buttons
+/// the caller draws, from `buttons_left` to the panel's right end, with a
+/// room's seat chips to their left. `panel` lies over the field's top
+/// edge; everything is placed from it.
+pub fn draw_corners(
+    d: &mut impl RaylibDraw,
+    panel: Rect,
+    model: &HudModel,
+    textures: &Textures,
+    level: Option<(usize, bool)>,
+    buttons_left: f32,
+) {
+    let px = panel.x.round() as i32;
+    let py = panel.y.round() as i32;
+    let ph = panel.h.round() as i32;
+    let rows = if model.second.is_some() { 3 } else { 2 };
+    let left_w = CORNER_ROW1_END.max(CORNER_ROW2_END) + CORNER_PAD;
+    corner_backing(d, px, py, left_w, rows * ph + CORNER_PAD);
+
+    // Row one: the round.
+    let text_y = py + (ph - HUD_TEXT_SIZE) / 2;
+    match level {
+        Some((number, open)) => {
+            draw_level_button(d, panel, number, open);
+            if let Some((index, total)) = model.wave {
+                let r = level_button_rect(panel);
+                d.draw_text(&format!("{index}/{total}"), (r.x + r.width) as i32 + LEVEL_WAVE_GAP, text_y, HUD_TEXT_SIZE, TEXT);
+            }
+        }
+        None => d.draw_text(&model.title, px + SLOT_TITLE, text_y, HUD_TEXT_SIZE, TEXT),
+    }
+    draw_tank_glyph(d, px + CORNER_ENEMIES, py + (ph - TANK_GLYPH_H) / 2, DIM);
+    let alive = format!("{}", model.enemies_alive);
+    d.draw_text(&alive, px + CORNER_ENEMY_COUNT, text_y, HUD_TEXT_SIZE, TEXT);
+    if model.enemies_pending > 0 {
+        let x = px + CORNER_ENEMY_COUNT + (alive.len() as i32).min(2) * 12 + 6;
+        d.draw_text(&format!("+{}", model.enemies_pending), x, text_y, HUD_TEXT_SIZE, DIM);
+    }
+
+    // Row two (and three on a couch pair): each seat's vitals, the
+    // second pair's numbers in that player's colour.
+    draw_corner_vitals(d, px, py + ph, ph, &model.local, model.second.as_ref().map(|_| 0), model.frog, textures);
+    if let Some(p2) = &model.second {
+        draw_corner_vitals(d, px, py + 2 * ph, ph, p2, Some(1), model.frog, textures);
+    }
+
+    // The right cluster: the seat strip of a room, then the buttons.
+    let strip_w = model.others.len().min(MAX_SEATS - 1) as i32 * SEAT_CHIP_STRIDE;
+    let right_edge = (panel.x + panel.w).round() as i32;
+    let buttons = buttons_left.round() as i32;
+    let strip_x = buttons - 8 - strip_w;
+    let backing_x = if strip_w > 0 { strip_x - CORNER_PAD - 2 } else { buttons - CORNER_PAD };
+    if backing_x < right_edge {
+        corner_backing(d, backing_x, py, right_edge - backing_x, ph + CORNER_PAD);
+    }
+    for (i, seat) in model.others.iter().take(MAX_SEATS - 1).enumerate() {
+        draw_seat_chip(d, strip_x + i as i32 * SEAT_CHIP_STRIDE, py, ph, seat);
+    }
+}
+
+/// One cluster's backing, its bottom corners rounded off by a block so it
+/// reads as a plate over the field rather than a bar cut short.
+fn corner_backing(d: &mut impl RaylibDraw, x: i32, y: i32, w: i32, h: i32) {
+    d.draw_rectangle(x, y, w, h - 2, CORNER_FILL);
+    d.draw_rectangle(x + 2, y + h - 2, w - 4, 2, CORNER_FILL);
+    d.draw_rectangle(x, y + h - 2, 2, 2, CORNER_EDGE);
+    d.draw_rectangle(x + w - 2, y + h - 2, 2, 2, CORNER_EDGE);
+}
+
+/// One seat's row of vitals at `y`: the heart and HP, the shell and its
+/// count, the five weapons with their counts and the active one outlined,
+/// then the SPEED, SHIELD and FROG gauges. `team` tints the plain numbers
+/// in that player's colour on a couch pair; `None` keeps them white.
+#[allow(clippy::too_many_arguments)]
+fn draw_corner_vitals(
+    d: &mut impl RaylibDraw,
+    px: i32,
+    y: i32,
+    h: i32,
+    seat: &crate::hud::PlayerHud,
+    team: Option<usize>,
+    frog: Option<f32>,
+    textures: &Textures,
+) {
+    let tint = |c: Color| match team {
+        Some(t) => team_tinted(c, t),
+        None => c,
+    };
+    let text_y = y + (h - HUD_TEXT_SIZE) / 2;
+    let small_y = y + (h - HUD_SMALL_TEXT_SIZE) / 2;
+    draw_heart(d, px + CORNER_HEART, y + (h - 12) / 2);
+    d.draw_text(&format!("{}", seat.hp), px + CORNER_HP, text_y, HUD_TEXT_SIZE, tint(seat.hp_color));
+
+    let shell_src = Rectangle::new(3.0 * SHELL_TEXTURE_SIZE, 0.0, SHELL_TEXTURE_SIZE, SHELL_TEXTURE_SIZE);
+    let shell_dest = Rectangle::new((px + CORNER_SHELL) as f32, y as f32, SHELL_TEXTURE_SIZE, SHELL_TEXTURE_SIZE);
+    d.draw_texture_pro(textures.shells, shell_src, shell_dest, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+    d.draw_text(&format!("{}", seat.shells), px + CORNER_SHELLS, small_y, HUD_SMALL_TEXT_SIZE, tint(seat.shells_color));
+    if seat.shells_active {
+        active_outline(d, px + CORNER_SHELL, y, CORNER_WEAPONS - CORNER_SHELL - 6, h, TEXT);
+    }
+
+    for (i, slot) in seat.weapons.iter().enumerate() {
+        let x = px + CORNER_WEAPONS + i as i32 * CORNER_WEAPON_SLOT_W;
+        let texture = match slot.weapon {
+            ActiveWeapon::Laser => textures.pickup_laser,
+            ActiveWeapon::Plasma => textures.pickup_plasma,
+            ActiveWeapon::Minigun => textures.pickup_minigun,
+            ActiveWeapon::Missiles => textures.pickup_missiles,
+            ActiveWeapon::Flamethrower => textures.pickup_flamethrower,
+            ActiveWeapon::Shell => textures.shells,
+        };
+        let src = Rectangle::new(0.0, 0.0, PICKUP_TEXTURE_SIZE, PICKUP_TEXTURE_SIZE);
+        let icon = CORNER_WEAPON_ICON as f32;
+        let dest = Rectangle::new(x as f32, (y + (h - CORNER_WEAPON_ICON) / 2) as f32, icon, icon);
+        let stocked = slot.count > 0;
+        let alpha = if stocked { Color::WHITE } else { Color::new(255, 255, 255, 70) };
+        d.draw_texture_pro(texture, src, dest, Vector2::new(0.0, 0.0), 0.0, alpha);
+        let (count, color) = if stocked { (format!("{}", slot.count), weapon_color(slot.weapon)) } else { ("--".to_string(), DIM) };
+        d.draw_text(&count, x + CORNER_WEAPON_ICON + 3, small_y, HUD_SMALL_TEXT_SIZE, color);
+        if slot.active {
+            active_outline(d, x, y, CORNER_WEAPON_SLOT_W - 6, h, weapon_color(slot.weapon));
+        }
+    }
+
+    let t = text();
+    let bars: [(String, f32, Color, bool); 3] = [
+        (t.get(keys::HUD_SPEED), seat.speed, SPEED_COLOR, true),
+        (t.get(keys::HUD_SHIELD), seat.shield, SHIELD_COLOR, true),
+        (t.get(keys::HUD_FROG), frog.unwrap_or(0.0), FROG_COLOR, frog.is_some()),
+    ];
+    for (i, (label, frac, color, present)) in bars.iter().enumerate() {
+        let x = px + CORNER_BARS + i as i32 * BAR_SLOT_W;
+        let label_color = if *present { DIM } else { SPENT };
+        d.draw_text(label, x, y + 5, HUD_LABEL_SIZE, label_color);
+        draw_gauge(d, x, y + h - 4 - BAR_H, BAR_W, BAR_H, if *present { *frac } else { 0.0 }, *color, label_color);
     }
 }
 
@@ -631,6 +802,30 @@ mod bar_tests {
 
     fn default_panel() -> Rect {
         Rect::new(0.0, 0.0, crate::DEFAULT_SCREEN_WIDTH as f32, crate::HUD_BAR_HEIGHT as f32)
+    }
+
+    /// The corner clusters never meet on the narrowest view a field map
+    /// gets (a 4:3 screen): the left one ends before the buttons of a
+    /// local round, and before a full room's seat chips and LEAVE.
+    #[test]
+    fn the_corner_clusters_fit_the_narrowest_view() {
+        let narrow = crate::camera::viewport_with((1024.0, 768.0), 1.0, &crate::tuning::Tuning::DEFAULT);
+        let layout = crate::Layout::overlay(narrow.size.0, narrow.size.1);
+        let left_end = CORNER_ROW1_END.max(CORNER_ROW2_END) + CORNER_PAD;
+        let local = crate::hud::PlayChrome {
+            build_button: true,
+            players_button: true,
+            online_button: true,
+            ..crate::hud::PlayChrome::default()
+        };
+        let buttons = local.buttons_left(layout.panel);
+        assert!((left_end as f32) < buttons - CORNER_PAD as f32, "{left_end} runs into the buttons at {buttons} on {:?}", narrow.size);
+        let room = crate::hud::PlayChrome { leave_button: true, ..crate::hud::PlayChrome::default() };
+        let strip = room.buttons_left(layout.panel) as i32 - 8 - (MAX_SEATS as i32 - 1) * SEAT_CHIP_STRIDE;
+        assert!(left_end < strip - CORNER_PAD, "{left_end} runs into the seat chips at {strip}");
+        assert!(CORNER_WEAPONS >= CORNER_SHELLS + 3 * CHAR_W_SMALL, "the shell count fits before the weapons");
+        assert!(CORNER_WEAPON_ICON + 3 + 3 * CHAR_W_SMALL <= CORNER_WEAPON_SLOT_W, "a weapon count fits its slot");
+        assert!(CORNER_HP + 3 * CHAR_W <= CORNER_SHELL + 4, "HP fits before the shell");
     }
 
     /// The slots must stay inside the default bar and never overlap, in

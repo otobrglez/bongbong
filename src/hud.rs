@@ -669,6 +669,26 @@ pub struct PlayChrome {
     pub levels: Option<crate::level_select::LevelSelectView>,
 }
 
+impl PlayChrome {
+    /// The left edge of the buttons drawn at the panel's right end - the
+    /// leftmost of those this chrome carries -, or the panel's right edge
+    /// when it carries none. The corner HUD's right cluster grows left
+    /// from it.
+    pub fn buttons_left(&self, panel: Rect) -> f32 {
+        let mut left = panel.x + panel.w;
+        if self.build_button || self.leave_button {
+            left = left.min(mode_button_rect(panel).x);
+        }
+        if self.players_button || self.restart_button {
+            left = left.min(players_button_rect(panel).x);
+        }
+        if self.online_button {
+            left = left.min(online_button_rect(panel).x);
+        }
+        left
+    }
+}
+
 /// The online status line's text size and how far in from the field's
 /// top-left corner it sits: the corner the debug overlay label uses, and
 /// free in a release build.

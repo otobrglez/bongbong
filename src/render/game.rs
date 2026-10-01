@@ -35,8 +35,8 @@ use crate::render::canvas::{GpuCanvas, Sheets};
 use crate::render::decal::draw_decal_shadow;
 use crate::render::frog::FrogVariantTextures;
 use crate::render::hud::{
-    draw_bar, draw_leave_button, draw_leave_dialog, draw_mode_button, draw_players_button, draw_players_dialog,
-    draw_restart_button, draw_result,
+    draw_bar, draw_corners, draw_leave_button, draw_leave_dialog, draw_mode_button, draw_players_button,
+    draw_players_dialog, draw_restart_button, draw_result, CORNER_HUD_CLEAR,
 };
 use crate::render::laser::{draw_laser_beam, draw_laser_bloom, draw_laser_flares};
 use crate::render::plasma::{draw_plasma, draw_plasma_shadow};
@@ -60,7 +60,7 @@ use crate::tank::Tank;
 use crate::tank::{ActiveWeapon, Dir};
 use crate::tuning::tuning;
 use crate::view::View;
-use crate::{Layout, Position, SHOCK_MAX};
+use crate::{Layout, Position, Rect, SHOCK_MAX};
 #[cfg(feature = "dev-tools")]
 use crate::math::Vec2;
 #[cfg(feature = "dev-tools")]
@@ -250,10 +250,17 @@ impl Game {
     /// bitmap, `layout.window_size()` in size, the field at `layout.field`
     /// and the bar in `layout.panel` - and finally the bitmap onto the
     /// window through `view` (`view::present`), scaled and centred so the
-    /// whole battlefield is on screen whatever the window is. Everything
-    /// field-relative in the second pass goes through a `Camera2D` whose
-    /// offset is the field origin, so the simulation's pixel positions
-    /// stay usable as they are.
+    /// whole battlefield is on screen whatever the window is.
+    ///
+    /// `camera` is the follow camera's rectangle of the battlefield
+    /// (`camera::FollowCamera`) on a field map, `None` for an arena, which
+    /// is drawn whole. Either way pass 1 draws the whole battlefield into
+    /// `scene_target`; pass 2 blits the camera's part of it into
+    /// `layout.field`. Everything placed in the world in pass 2 - the
+    /// ripple quads, the debug overlays - goes through a world `Camera2D`
+    /// that maps battlefield pixels onto that rectangle, so the
+    /// simulation's positions stay usable as they are; the banners, the
+    /// dims and the dialogs go through a UI one over `layout.field`.
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &self,
@@ -267,9 +274,17 @@ impl Game {
         textures: &Textures,
         layout: &Layout,
         chrome: &PlayChrome,
+        camera: Option<Rect>,
     ) {
+        // The part of the screen the field is drawn in: the whole
+        // battlefield for an arena, the camera's viewport on a field map.
         let screen_width = layout.field.w.round() as i32;
         let screen_height = layout.field.h.round() as i32;
+        // The battlefield itself - `scene_target`'s size - which the
+        // ripples' coordinates and the flipped source rects are taken in.
+        let field_w = scene_target.texture.width as f32;
+        let field_h = scene_target.texture.height as f32;
+        let camera = camera.unwrap_or(Rect::new(0.0, 0.0, field_w, field_h));
         // Must be read off the handle out here: the draw closures below
         // borrow it, and the dev label needs the number.
         #[cfg(feature = "dev-tools")]
@@ -395,7 +410,7 @@ impl Game {
             let mut times = [0.0f32; SHOCK_MAX];
             let mut gains = [0.0f32; SHOCK_MAX];
             for (i, shock) in self.shocks.iter().take(SHOCK_MAX).enumerate() {
-                centers[i] = screen_to_ripple_uv(shock.center, screen_width as f32, screen_height as f32);
+                centers[i] = screen_to_ripple_uv(shock.center, field_w, field_h);
                 times[i] = shock.time;
                 gains[i] = shock.strength;
             }
@@ -404,13 +419,21 @@ impl Game {
             effects.shock.shader.set_shader_value_v(effects.shock.gains_loc, &gains);
         }
 
-        // The render texture is stored upside-down relative to the screen; a
-        // negative source height flips it back on the way out.
+        // The camera's part of the battlefield, cut to the battlefield
+        // where the camera reaches past an edge (a field map narrower than
+        // the view on one axis): that band stays the clear colour. The
+        // render texture is stored upside-down relative to the screen; a
+        // negative source height flips it back on the way out, and the
+        // rows are counted from the bottom.
+        let cut_x0 = camera.x.max(0.0);
+        let cut_y0 = camera.y.max(0.0);
+        let cut_x1 = (camera.x + camera.w).min(field_w);
+        let cut_y1 = (camera.y + camera.h).min(field_h);
         let source = Rectangle {
-            x: 0.0,
-            y: 0.0,
-            width: screen_width as f32,
-            height: -(screen_height as f32),
+            x: cut_x0,
+            y: field_h - cut_y1,
+            width: (cut_x1 - cut_x0).max(0.0),
+            height: -(cut_y1 - cut_y0).max(0.0),
         };
 
         // Camera shake: a short decaying wobble on the same kill-shockwave
@@ -464,13 +487,28 @@ impl Game {
         blit_offset.y = (blit_offset.y / 2.0).round() * 2.0;
 
         let origin = layout.field_origin();
-        let blit_at = Vector2::new(blit_offset.x + origin.x, blit_offset.y + origin.y);
+        let blit_at = Vector2::new(
+            blit_offset.x + origin.x + (cut_x0 - camera.x),
+            blit_offset.y + origin.y + (cut_y0 - camera.y),
+        );
+        // Battlefield pixels onto the screen: whatever sits in the world.
+        let world_camera = Camera2D {
+            offset: origin.into(),
+            target: Vector2::new(camera.x, camera.y),
+            rotation: 0.0,
+            zoom: 1.0,
+        };
+        // The field's own rectangle on screen: what covers or centres on
+        // the field rather than a place in the world.
         let field_camera = Camera2D {
             offset: origin.into(),
             target: Vector2::new(0.0, 0.0),
             rotation: 0.0,
             zoom: 1.0,
         };
+        // On a field map the HUD lies over the field's top-left corner, so
+        // what is written along that edge moves below it.
+        let top_inset = if layout.corners { CORNER_HUD_CLEAR } else { 0 };
 
         rl.draw_texture_mode(thread, composite, |mut d| {
             d.clear_background(Color::BLACK);
@@ -483,18 +521,15 @@ impl Game {
                 d.draw_texture_rec(&*scene_target, source, blit_at, Color::WHITE);
             }
 
-            // Everything from here to the bar is field-relative: the flash
-            // quads, the overlays, the banners and the dims all centre on
-            // and cover the field, never the bar.
-            d.draw_mode2D(field_camera, |mut d, _| {
+            // The flash quads and the overlays are placed in the world.
+            d.draw_mode2D(world_camera, |mut d, _| {
                 // Layer each muzzle flash's tiny heat-haze ripple on top, one small
                 // quad at a time: source and dest are the same on-screen patch (just
                 // re-sampling that bit of the already-composited scene through the
                 // ripple shader), so this reads as a localized wobble rather than
                 // redistorting the whole frame.
                 for flash in &self.muzzle_flashes {
-                    let uv =
-                        screen_to_ripple_uv(flash.center, screen_width as f32, screen_height as f32);
+                    let uv = screen_to_ripple_uv(flash.center, field_w, field_h);
                     effects
                         .muzzle
                         .shader
@@ -507,7 +542,7 @@ impl Game {
                     let r = tuning().muzzle_flash_quad_radius;
                     let flash_source = Rectangle {
                         x: flash.center.x - r,
-                        y: (screen_height as f32 - flash.center.y) - r,
+                        y: (field_h - flash.center.y) - r,
                         width: r * 2.0,
                         height: -(r * 2.0),
                     };
@@ -533,8 +568,7 @@ impl Game {
 
                 // Same treatment for every in-flight shell-impact flash.
                 for flash in &self.impact_flashes {
-                    let uv =
-                        screen_to_ripple_uv(flash.center, screen_width as f32, screen_height as f32);
+                    let uv = screen_to_ripple_uv(flash.center, field_w, field_h);
                     effects
                         .impact
                         .shader
@@ -547,7 +581,7 @@ impl Game {
                     let r = tuning().impact_flash_quad_radius;
                     let flash_source = Rectangle {
                         x: flash.center.x - r,
-                        y: (screen_height as f32 - flash.center.y) - r,
+                        y: (field_h - flash.center.y) - r,
                         width: r * 2.0,
                         height: -(r * 2.0),
                     };
@@ -571,6 +605,32 @@ impl Game {
                     });
                 }
 
+                // Debug overlays (dev builds only): the two tank layers -
+                // hitbox/collider outlines and the stats card, each on its
+                // own flag - for every tank, then the dev server's other
+                // layers. Drawn here (post-composite) rather than into
+                // scene_target, so they're never warped by an in-flight
+                // shockwave and always render crisp.
+                #[cfg(feature = "dev-tools")]
+                {
+                    let ov = self.debug_overlays;
+                    if ov.hitboxes || ov.stats {
+                        for (tank, ai) in self.world.query::<(&Tank, &Ai)>().iter() {
+                            draw_tank_layers(&mut d, ov, tank, Some(ai));
+                        }
+                        for entity in self.players().into_iter().flatten() {
+                            crate::simulation::with_tank(&self.world, entity, |tank| {
+                                draw_tank_layers(&mut d, ov, tank, None);
+                            });
+                        }
+                    }
+                    self.draw_debug_overlays(&mut d, field_w, field_h);
+                }
+            });
+
+            // Everything from here to the bar covers or centres on the
+            // field's rectangle on screen, never the bar.
+            d.draw_mode2D(field_camera, |mut d, _| {
                 // A kill or a barrel blast opens with a brief whole-screen
                 // flash (`Game::screen_flash`, started and spaced out by
                 // `Game::flash_screen`). After the ripple quads, which re-blit
@@ -585,28 +645,9 @@ impl Game {
                     }
                 }
 
-                // Debug overlays (dev builds only): the two tank layers -
-                // hitbox/collider outlines and the stats card, each on its
-                // own flag - for every tank, then the dev server's other
-                // layers. Drawn here (screen space, post-composite) rather
-                // than into scene_target, so they're never warped by an
-                // in-flight shockwave and always render crisp - tank.position
-                // is already screen pixels (no camera transform), so the two
-                // spaces line up 1:1 with no extra math.
                 #[cfg(feature = "dev-tools")]
                 {
                     let ov = self.debug_overlays;
-                    if ov.hitboxes || ov.stats {
-                        for (tank, ai) in self.world.query::<(&Tank, &Ai)>().iter() {
-                            draw_tank_layers(&mut d, ov, tank, Some(ai));
-                        }
-                        for entity in self.players().into_iter().flatten() {
-                            crate::simulation::with_tank(&self.world, entity, |tank| {
-                                draw_tank_layers(&mut d, ov, tank, None);
-                            });
-                        }
-                    }
-                    self.draw_debug_overlays(&mut d, screen_width as f32, screen_height as f32);
                     // Which preset is live, in the field's top-left corner (the
                     // player's readouts are in the bar, so this corner is free),
                     // so the I key's cycling is visible without counting layers.
@@ -621,7 +662,7 @@ impl Game {
                             effects.fx.live(),
                         );
                         const LABEL_FONT_SIZE: i32 = 14;
-                        let label_y = HUD_MARGIN;
+                        let label_y = HUD_MARGIN + top_inset;
                         // Same 8px/char width estimate as `draw_tank_stats`'s
                         // panel - no font handle inside the draw closure.
                         let label_w = label.len() as i32 * 8 + 8;
@@ -648,12 +689,12 @@ impl Game {
                 if let Some((line, width)) = status {
                     d.draw_rectangle(
                         HUD_STATUS_INSET - 4,
-                        HUD_STATUS_INSET - 3,
+                        HUD_STATUS_INSET + top_inset - 3,
                         width + 8,
                         HUD_STATUS_TEXT_SIZE + 6,
                         Color::new(0, 0, 0, 150),
                     );
-                    d.draw_text(line, HUD_STATUS_INSET, HUD_STATUS_INSET, HUD_STATUS_TEXT_SIZE, HUD_STATUS_COLOR);
+                    d.draw_text(line, HUD_STATUS_INSET, HUD_STATUS_INSET + top_inset, HUD_STATUS_TEXT_SIZE, HUD_STATUS_COLOR);
                 }
 
                 // The build stamp along the field's bottom edge, left of
@@ -750,9 +791,15 @@ impl Game {
                 }
             });
 
-            // The HUD bar, in window space, over anything the field pass
-            // might have put on its edge.
-            draw_bar(&mut d, layout.panel, &hud, textures, chrome.level_button.map(|n| (n, chrome.levels.is_some())));
+            // The HUD, in window space, over anything the field pass might
+            // have put on its edge: the bar above an arena, the corner
+            // clusters over a field map.
+            let level = chrome.level_button.map(|n| (n, chrome.levels.is_some()));
+            if layout.corners {
+                draw_corners(&mut d, layout.panel, &hud, textures, level, chrome.buttons_left(layout.panel));
+            } else {
+                draw_bar(&mut d, layout.panel, &hud, textures, level);
+            }
             if chrome.players_button {
                 draw_players_button(&mut d, layout.panel, self.players, chrome.players_dialog);
             }

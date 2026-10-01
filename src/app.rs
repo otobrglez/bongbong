@@ -1063,14 +1063,20 @@ pub fn run(args: Args) {
     let mut scene_target = rl
         .load_render_texture(&thread, screen_width as u32, screen_height as u32)
         .expect("failed creating scene render texture");
-    // The composited bitmap - the field plus the bar - that `view::present`
-    // fits into the window. Both targets are re-created when the field
-    // changes size (a dev-server `restart` on a map of another size, or
-    // the builder loading one).
+    // The composited bitmap - the field plus the bar, or the follow
+    // camera's viewport under its corner HUD - that `view::present` puts
+    // on the window. The scene target is re-created when the field changes
+    // size (a dev-server `restart` on a map of another size, or the
+    // builder loading one), the composite when the bitmap does.
     let mut composite = rl
         .load_render_texture(&thread, bitmap.0 as u32, bitmap.1 as u32)
         .expect("failed creating composite render texture");
     let mut target_field = (screen_width as f32, screen_height as f32);
+    let mut target_bitmap = bitmap;
+    // Where the follow camera stands, between frames, and the round it
+    // stands in: a round that starts over is a cut, never a pan.
+    let mut follow = crate::camera::FollowCamera::default();
+    let mut follow_round: Option<(u64, bool)> = None;
     let mut touch = crate::touch::TouchScheme::default();
     let touch_from_mouse = args.touch_from_mouse;
 
@@ -1278,20 +1284,35 @@ pub fn run(args: Args) {
         // just swapped it); the bitmap is the field plus the bar, and the
         // view fits that bitmap into whatever the window is right now.
         let (width, height) = session.field_size();
-        let layout = Layout::for_field(width, height);
+        let window = (rl.get_screen_width() as f32, rl.get_screen_height() as f32);
+        // A field map is drawn through the follow camera: the bitmap is
+        // the camera's viewport, as much world as every screen shows, with
+        // the HUD over its corners (docs/large-maps-follow-camera.md).
+        let viewport = session.follows().then(|| {
+            let dpr = if window.0 > 0.0 { rl.get_render_width() as f32 / window.0 } else { 1.0 };
+            crate::camera::viewport(window, dpr)
+        });
+        let layout = match viewport {
+            Some(v) => Layout::overlay(v.size.0, v.size.1),
+            None => Layout::for_field(width, height),
+        };
         if (width, height) != target_field {
-            let bitmap = layout.window_size();
             scene_target = rl
                 .load_render_texture(thread, width as u32, height as u32)
                 .expect("failed re-creating scene render texture");
-            composite = rl
-                .load_render_texture(thread, bitmap.0 as u32, bitmap.1 as u32)
-                .expect("failed re-creating composite render texture");
             let (s, m, i) = load_ripples(rl, thread, width as i32, height as i32);
             shock_fx = s;
             muzzle_fx = m;
             impact_fx = i;
             target_field = (width, height);
+            follow.reset();
+        }
+        let bitmap = layout.window_size();
+        if bitmap != target_bitmap {
+            composite = rl
+                .load_render_texture(thread, bitmap.0 as u32, bitmap.1 as u32)
+                .expect("failed re-creating composite render texture");
+            target_bitmap = bitmap;
         }
         // The cap is a desktop matter: an embedded build (web, iOS) draws
         // the bitmap into a canvas or screen that is never larger than it.
@@ -1301,14 +1322,16 @@ pub fn run(args: Args) {
             let t = tuning();
             (t.view_max_scale > 0.0).then(|| ScaleCap { max_scale: t.view_max_scale, snap_half: t.view_scale_snap != 0 })
         };
-        let view = View::fit_capped(
-            {
-                let (w, h) = layout.window_size();
-                (w as f32, h as f32)
-            },
-            (rl.get_screen_width() as f32, rl.get_screen_height() as f32),
-            cap,
-        );
+        let view = match viewport {
+            Some(v) => View::with_scale((bitmap.0 as f32, bitmap.1 as f32), window, v.scale),
+            None => View::fit_capped((bitmap.0 as f32, bitmap.1 as f32), window, cap),
+        };
+        // The dev server's `click` reads the bitmap the way this frame
+        // laid it out.
+        #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+        if let Some(dev) = &mut dev {
+            dev.set_layout(layout);
+        }
         if !crate::EMBEDDED && rl.is_key_pressed(KeyboardKey::KEY_F11) {
             rl.toggle_borderless_windowed();
         }
@@ -1711,6 +1734,17 @@ pub fn run(args: Args) {
         fx.observe(game, fx_dt);
         fx.tick(fx_dt);
         let shade = round_shade.sync(rl, thread, game.ground.shade());
+        let chrome = session.play_chrome();
+        // The follow camera on a field map: a new round (its frame count
+        // went back, or the window swapped rounds) is a cut.
+        let camera = viewport.map(|v| {
+            let round = (game.frame(), session.mode() == Driver::Online);
+            if follow_round.is_some_and(|(frame, online)| online != round.1 || round.0 < frame) {
+                follow.reset();
+            }
+            follow_round = Some(round);
+            follow.frame(crate::camera::subject(game, chrome.seat), fx_dt, (width, height), v.size)
+        });
         game.render(
             rl,
             thread,
@@ -1762,7 +1796,8 @@ pub fn run(args: Args) {
                 shade,
             },
             &layout,
-            &session.play_chrome(),
+            &chrome,
+            camera,
         );
         // A pending screenshot reads the frame just presented.
         #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]

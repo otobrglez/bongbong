@@ -361,6 +361,20 @@ impl Weather {
     }
 }
 
+/// The largest field shown whole by default, in cells: the arena class
+/// (docs/large-maps-follow-camera.md §1). Anything bigger in either axis
+/// is a field map and follows the tank.
+pub const ARENA_COLS: f32 = 36.0;
+pub const ARENA_ROWS: f32 = 18.0;
+
+/// A map's `view` key: show the whole field, or follow the tank.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MapView {
+    Whole,
+    Follow,
+}
+
 fn is_default_weather(w: &Weather) -> bool {
     *w == Weather::Clear
 }
@@ -422,6 +436,12 @@ pub struct MapFile {
     /// `DEFAULT_SCREEN_HEIGHT`, so older files parse unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<(f32, f32)>,
+    /// How the field is put on screen (TOML: a top-level `view = "whole"`
+    /// or `view = "follow"`; docs/large-maps-follow-camera.md). Absent,
+    /// the size decides (`MapFile::follows`): an arena is shown whole, a
+    /// larger field gets the follow camera.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<MapView>,
     /// Where this map came from, for display only: the file stem when
     /// `load` read it, `"default"` for the embedded map, `None` for text
     /// handed over directly (the dev server's inline `map_toml`). Never
@@ -469,7 +489,24 @@ impl MapFile {
             mission: MissionConfig::default(),
             spawn: SpawnConfig::default(),
             size: None,
+            view: None,
             name: None,
+        }
+    }
+
+    /// Whether a round on this map is drawn through the follow camera
+    /// (`camera.rs`) rather than shown whole. The map's `view` key decides
+    /// when it has one; otherwise a field larger than an arena
+    /// (`ARENA_COLS` x `ARENA_ROWS`) follows, so the class belongs to the
+    /// map and every seat in a room sees the same kind of round.
+    pub fn follows(&self) -> bool {
+        match self.view {
+            Some(MapView::Whole) => false,
+            Some(MapView::Follow) => true,
+            None => {
+                let (w, h) = self.field_size();
+                w > ARENA_COLS * OBSTACLE_GRID_SIZE + 0.5 || h > ARENA_ROWS * OBSTACLE_GRID_SIZE + 0.5
+            }
         }
     }
 
@@ -770,6 +807,36 @@ pub fn list_maps() -> Vec<String> {
         .collect();
     names.sort();
     names
+}
+
+#[cfg(test)]
+mod view_class_tests {
+    use super::*;
+
+    /// The class is the map's size unless its `view` key says otherwise:
+    /// the standard field is shown whole, the study map follows, and the
+    /// key round-trips through the TOML.
+    #[test]
+    fn a_map_follows_by_size_or_by_its_view_key() {
+        let shipped = |name: &str| {
+            let text = SHIPPED_MAPS.iter().find(|(n, _)| *n == name).expect("a shipped map").1;
+            MapFile::from_toml_str(text).expect("parses")
+        };
+        assert!(!shipped("default").follows());
+        let frontier = MapFile::from_toml_str(include_str!("../maps/study/frontier.toml")).expect("parses");
+        assert!(frontier.follows());
+        let mut arena = MapFile::new();
+        arena.size = Some((ARENA_COLS, ARENA_ROWS));
+        assert!(!arena.follows(), "36 x 18 is still an arena");
+        arena.size = Some((ARENA_COLS + 1.0, ARENA_ROWS));
+        assert!(arena.follows());
+        arena.view = Some(MapView::Whole);
+        assert!(!arena.follows());
+        let back = MapFile::from_toml_str(&arena.to_toml_string().expect("writes")).expect("reads");
+        assert_eq!(back.view, Some(MapView::Whole));
+        let small = MapFile::from_toml_str("version = 1\nview = \"follow\"").expect("parses");
+        assert!(small.follows());
+    }
 }
 
 #[cfg(test)]

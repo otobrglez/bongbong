@@ -62,6 +62,14 @@ impl View {
         }
     }
 
+    /// The bitmap centred in the window at a scale chosen elsewhere: the
+    /// follow camera's (`camera::viewport`), whose bitmap is sized to cover
+    /// the window at exactly that scale, so it is cropped by under a field
+    /// pixel rather than letterboxed.
+    pub fn with_scale(bitmap: (f32, f32), window: (f32, f32), scale: f32) -> Self {
+        Self::at_scale((bitmap.0.max(1.0), bitmap.1.max(1.0)), (window.0.max(1.0), window.1.max(1.0)), scale.max(0.01))
+    }
+
     /// The bitmap centred in the window at `scale`.
     fn at_scale(bitmap: (f32, f32), window: (f32, f32), scale: f32) -> Self {
         let (bw, bh) = bitmap;

@@ -764,6 +764,11 @@ pub struct DevServer {
     /// The replica tick whose events and track rows are already banked,
     /// in an online round; `None` in every other mode.
     shown_frame: Option<u64>,
+    /// How the window laid out the bitmap on the last frame (`set_layout`):
+    /// a field map's viewport under the corner HUD, or the field under the
+    /// bar. `None` until a window says, which is every headless server,
+    /// where the bar's layout of the field is the answer.
+    layout: Option<Layout>,
 }
 
 impl DevServer {
@@ -809,7 +814,14 @@ impl DevServer {
             history: VecDeque::with_capacity(HISTORY_FRAMES),
             turns: BTreeMap::new(),
             shown_frame: None,
+            layout: None,
         }
+    }
+
+    /// The bitmap's layout on the frame the window just drew, which is the
+    /// one a `click`'s coordinates were read off.
+    pub fn set_layout(&mut self, layout: Layout) {
+        self.layout = Some(layout);
     }
 
     /// The port actually bound (differs from the request only for 0).
@@ -1134,6 +1146,13 @@ impl DevServer {
             "weather": weather_json(game),
             "mode": session.mode().name(),
             "language": crate::text::language(),
+            // How the field is on screen: `follow` on a field map (the
+            // window draws a viewport of it under the corner HUD, `viewport`
+            // in field pixels), `whole` otherwise.
+            "view": match self.layout.filter(|l| l.corners) {
+                Some(l) => json!({ "mode": "follow", "viewport": [l.field.w, l.field.h] }),
+                None => json!({ "mode": if session.follows() { "follow" } else { "whole" } }),
+            },
             "dialog_open": session.dialog,
             "players_dialog_open": session.players_dialog,
             "levels_open": session.level_select.is_some(),
@@ -1505,7 +1524,7 @@ impl DevServer {
         width: f32,
         height: f32,
     ) -> Option<Result<Value, String>> {
-        let layout = Layout::for_field(width, height);
+        let layout = self.layout.unwrap_or_else(|| Layout::for_field(width, height));
         let result = match method {
             "status" => Ok(self.status(session, width, height)),
             "pause" => {

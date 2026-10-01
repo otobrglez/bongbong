@@ -430,6 +430,10 @@ impl Rect {
 pub struct Layout {
     pub field: Rect,
     pub panel: Rect,
+    /// The HUD sits over the field's top corners (`overlay`) rather than in
+    /// a bar above it: the follow camera's layout, where the field is the
+    /// visible part of a larger battlefield and fills the window.
+    pub corners: bool,
 }
 
 impl Layout {
@@ -440,6 +444,21 @@ impl Layout {
         Layout {
             field: Rect::new(0.0, bar, width, height),
             panel: Rect::new(0.0, 0.0, width, bar),
+            corners: false,
+        }
+    }
+
+    /// The follow camera's layout (docs/large-maps-follow-camera.md §8):
+    /// a viewport of `width` x `height` field pixels is the whole bitmap,
+    /// and the HUD's panel lies over its top edge, where the clusters are
+    /// drawn in its corners and the buttons keep their places at its
+    /// right end. Every rect derived from `panel` and `field` - the
+    /// buttons, the dialogs, the lobby, the touch halves - follows.
+    pub fn overlay(width: f32, height: f32) -> Self {
+        Layout {
+            field: Rect::new(0.0, 0.0, width, height),
+            panel: Rect::new(0.0, 0.0, width, HUD_BAR_HEIGHT as f32),
+            corners: true,
         }
     }
 
@@ -452,7 +471,9 @@ impl Layout {
 
     /// The window size that holds this layout, for `init_window`.
     pub fn window_size(&self) -> (i32, i32) {
-        (self.field.w.max(self.panel.w).round() as i32, (self.field.h + self.panel.h).round() as i32)
+        let right = (self.field.x + self.field.w).max(self.panel.x + self.panel.w);
+        let bottom = (self.field.y + self.field.h).max(self.panel.y + self.panel.h);
+        (right.round() as i32, bottom.round() as i32)
     }
 
     /// Where the field's (0, 0) lands in the window.
@@ -916,6 +937,7 @@ pub mod blast;
 pub mod bt;
 pub mod bullet;
 pub mod burst;
+pub mod camera;
 pub mod canvas;
 #[cfg(feature = "dev-tools")]
 pub mod capi;

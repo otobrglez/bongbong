@@ -1725,6 +1725,44 @@ tunables! {
         view_scale_snap: i32 = 0 in 0 ..= 1;
     }
 
+    group camera {
+        /// How much world a field map shows on every screen, in cells
+        /// (camera.rs, docs/large-maps-follow-camera.md §3): the same area
+        /// whatever the device, the screen's shape deciding only the
+        /// outline. 578 is the standard 34 x 17 field. Arenas (maps no
+        /// bigger than 36 x 18) are shown whole and never read it. Live.
+        camera_view_area_cells: f32 = 578.0 in 200.0 ..= 2000.0;
+        /// How long the camera takes to catch the tank, in seconds: the
+        /// smooth time of a critically damped spring, so it never
+        /// overshoots or sways. Live.
+        camera_follow_seconds: f32 = 0.16 in 0.0 ..= 1.0;
+        /// Half the side of the box, in cells, the tank moves in before
+        /// the camera follows: small corrections and wall slides then
+        /// leave the screen still. Live.
+        camera_dead_zone_cells: f32 = 0.4 in 0.0 ..= 4.0;
+        /// The furthest the camera leads the tank in the direction it
+        /// faces, in cells - never further than the room outside the
+        /// sight box, so on a landscape phone it leads mostly sideways.
+        /// Live.
+        camera_look_ahead_cells: f32 = 4.0 in 0.0 ..= 12.0;
+        /// How long the lead takes to swing round after a turn, in
+        /// seconds, so a U-turn does not whip the view. Live.
+        camera_look_ease_seconds: f32 = 0.55 in 0.05 ..= 3.0;
+        /// The sight box's half-width, in cells: what every screen keeps
+        /// visible to either side of the tank whatever the look-ahead does
+        /// (docs/large-maps-follow-camera.md §5). Live.
+        camera_sight_x_cells: f32 = 11.5 in 4.0 ..= 30.0;
+        /// The sight box's half-height, in cells: what every screen keeps
+        /// visible above and below the tank. Live.
+        camera_sight_y_cells: f32 = 7.5 in 3.0 ..= 20.0;
+        /// Snap the zoom to whole art blocks (each 2 px block a whole
+        /// number of device pixels, so nothing shimmers while the view
+        /// scrolls) on displays under this many device pixels per point.
+        /// Denser panels - the 3x phones - keep the exact zoom: a block of
+        /// four or five of their pixels cannot be told apart. Live.
+        camera_snap_below_dpr: f32 = 2.5 in 0.0 ..= 8.0;
+    }
+
     group online {
         /// How far behind the server an online round is drawn, in
         /// milliseconds, at least (docs/online-coop-prd.md §4.5, §4.16,

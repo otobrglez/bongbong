@@ -644,6 +644,15 @@ last-seen markers.
 
 ## 14. Plan
 
+**Status:** the follow camera (step 2) and the corner clusters of step 3
+are in, on the crop path: pass 1 still draws the whole battlefield and
+pass 2 blits the camera's part of it, so step 1's viewport-sized targets
+and culling are still to come. The level button stays first in the left
+cluster rather than moving to the right one, so every hit test keeps its
+rect. Not yet: the sub-block present, spectating, the couch split, the
+motion switch, vitals on the tank, the fade under play, points-based UI
+sizing.
+
 Each step ships alone. Step 1 changes no picture; step 2 changes only
 field maps, which include the seven levels bigger than 36 x 18; step 3
 changes every HUD; step 5 changes the AI everywhere and re-baselines the
