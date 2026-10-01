@@ -300,10 +300,11 @@ pub const TANK_SHELL_VARIANT_BY_ROW: [i32; 12] = [
 ];
 pub const SHELL_SCALE: f32 = 2.0;
 
-// How many layouts of damage marks a hull can wear (`damage_stage.rs`).
-// Each tank rolls one at spawn (Tank::damage_variant) and keeps it for its
-// whole life, so its scars gather in the same places however the fight
-// goes, and two tanks of one chassis wear different ones.
+// How many spots on its engine deck a hull can smoke and burn from
+// (`damage_stage::engine_deck`). Each tank rolls one at spawn
+// (Tank::damage_variant) and keeps it for its whole life, so it burns in
+// the same place however the fight goes, and two tanks of one chassis
+// burn in different ones.
 pub const DAMAGE_VARIANTS: i32 = 5;
 
 // Number of enemy tanks is randomized within this range each round.

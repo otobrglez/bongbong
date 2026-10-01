@@ -376,8 +376,7 @@ impl Frog {
     }
 
     /// Which animation + frame to show right now, given the global clock
-    /// `t` (only used for the looping Idle - same idea as
-    /// `damage_stage::DamageStage::frame_at`). Priority order: a death
+    /// `t` (only used for the looping Idle). Priority order: a death
     /// always wins; otherwise a fresh hop (it visually *is* the reaction to
     /// being shot, superseding the plain Hurt flicker) beats a fresh bite,
     /// which beats a fresh hit that didn't trigger a hop, which beats

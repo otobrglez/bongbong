@@ -969,22 +969,19 @@ impl Fx {
                 self.burst(pos, ParticleKind::Smoke, 1, 14.0, &[SOOT_T]);
             }
         }
-        // A hull losing its fight smokes from the wound on its deck
-        // (`damage_stage::wound`): a wisp once it is badly hit, a column
-        // as it gets worse, black smoke and embers once the deck burns.
+        // A damaged hull smokes from its engine deck
+        // (`damage_stage::smoke`): a wisp at the damaged tier, a column as
+        // it gets worse, black smoke and embers once the deck burns.
         let hull_rate = tuning().hull_smoke_rate * tuning().fx_density;
         if hull_rate > 0.0 {
             let mut hulls: Vec<(usize, Position, f32, bool)> = Vec::new();
             for tank in game.world.query::<&crate::tank::Tank>().iter() {
-                let wear = tank.damage / crate::MAX_DAMAGE;
-                if tank.is_wreck() || wear < HULL_SMOKE_FROM {
-                    continue;
+                if let Some(thick) = crate::damage_stage::smoke(tank) {
+                    hulls.push((tank.owner_slot(), crate::damage_stage::engine_deck(tank), thick, crate::damage_stage::fire(tank) > 0.0));
                 }
-                hulls.push((tank.owner_slot(), crate::damage_stage::wound(tank), wear, crate::damage_stage::fire(tank) > 0.0));
             }
-            for (slot, at, wear, burning) in hulls {
+            for (slot, at, thick, burning) in hulls {
                 let key = 0xDA3A_0000 ^ slot as u32;
-                let thick = ((wear - HULL_SMOKE_FROM) / (1.0 - HULL_SMOKE_FROM)).clamp(0.0, 1.0);
                 if self.due(key, hull_rate * (0.15 + 0.85 * thick), dt) {
                     let tint = if burning { SOOT_T } else { SMOKE_T };
                     self.burst(at, ParticleKind::Smoke, 1, 8.0, &[tint]);
@@ -1205,8 +1202,6 @@ const SMOKE_T: Color = crate::pyro::SMOKE[2];
 /// step darker (`render/fx.rs` reads the tint).
 pub(crate) const SOOT_T: Color = crate::pyro::SMOKE[1];
 
-/// The share of `MAX_DAMAGE` a hull starts smoking at.
-const HULL_SMOKE_FROM: f32 = 0.3;
 /// The light colours of the shots themselves, matched to their drawn
 /// glows (`render/laser.rs`, `render/plasma.rs`).
 const LASER_RED_T: Color = Color::new(0xFF, 0x50, 0x46, 255);

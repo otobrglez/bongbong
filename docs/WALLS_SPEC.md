@@ -341,7 +341,7 @@ Notes:
 
 ## 8. Palette
 
-The whole sheet draws from the same Puny Palette as every other sprite sheet in the game — tanks, shells, damage overlay, and the tread-mark decal — via the shared `tools/punypalette.py` module, itself sampled directly from the third-party Puny World ground-layer tileset (see `docs/PALETTE.md`). Every opaque/semi-transparent pixel in `walls_sheet.png` is one of the fixed set; there is no off-palette anti-aliasing or gradient anywhere in the sheet (verified by sampling every pixel against the set).
+The whole sheet draws from the same Puny Palette as every other sprite sheet in the game — tanks, shells and the tread-mark decal — via the shared `tools/punypalette.py` module, itself sampled directly from the third-party Puny World ground-layer tileset (see `docs/PALETTE.md`). Every opaque/semi-transparent pixel in `walls_sheet.png` is one of the fixed set; there is no off-palette anti-aliasing or gradient anywhere in the sheet (verified by sampling every pixel against the set).
 
 Material base tones, one fixed pick per material (see §3–6 above for the reasoning behind each pick):
 

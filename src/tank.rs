@@ -315,10 +315,10 @@ pub struct Tank {
     /// missile module's cell): counts up as a volley leaves, back down as
     /// the reload runs (`tick_missile_pod`). Presentation only.
     pub missile_tubes_empty: u8,
-    /// Which layout of damage marks this hull wears (0..DAMAGE_VARIANTS,
-    /// `damage_stage.rs`). Rolled once at spawn (see Game::init) and fixed
-    /// for the tank's whole life, so its scars gather in the same places
-    /// however the fight goes.
+    /// Where on its engine deck this hull smokes and burns
+    /// (0..DAMAGE_VARIANTS, `damage_stage::engine_deck`). Rolled once at
+    /// spawn (see Game::init) and fixed for the tank's whole life, so it
+    /// burns in the same place however the fight goes.
     pub damage_variant: i32,
     /// Center position on screen (pixels). A read-back mirror of `body`'s
     /// physics transform, synced once per frame after the physics world
@@ -1614,9 +1614,8 @@ pub fn draw_tank(c: &mut impl Canvas, tank: &Tank, time: f32) {
     draw_tank_turret(c, tank, time, tank.tint());
 }
 
-/// The hull layer of `draw_tank` alone, in `tint` - split out so the
-/// damage marks (`damage_stage::draw_damage`) sit between hull and turret
-/// and a hit's flash can draw both halves again in light.
+/// The hull layer of `draw_tank` alone, in `tint` - a hit's flash draws
+/// both halves again in light (`render/game.rs`).
 pub fn draw_tank_hull(c: &mut impl Canvas, tank: &Tank, time: f32, tint: Color) {
     blit_layers(c, tank, &[hull_layer(tank, time, false)], tint);
 }

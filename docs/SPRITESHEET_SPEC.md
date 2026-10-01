@@ -109,11 +109,11 @@ The four wrecks are peers, rolled once when the tank dies (`roll_wreck_col`):
 | 18 | **husk** — cold and burnt out, no glow | broken, on the ring |
 | 19 | **cook-off** — the deck torn open by an ammunition fire, one track run gone | broken, on the ring |
 
-The effects language adds what moves (`damage_stage.rs`, docs/effects.md):
-marks gathering on the hull as it loses health, drawn between hull and
-turret (`draw_tank_hull`, then the marks, then `draw_tank_turret`), a
-wound smouldering on the deck, and fire on the deck from the critical tier
-(`damage_stage::BURNS_AT`) and over a wreck, with its smoke.
+The effects language adds only what moves (`damage_stage.rs`,
+docs/effects.md), drawn on top of whichever tier the tank is at: smoke off
+the engine deck from the damaged tier (`damage_stage::SMOKES_AT`), fire on
+the deck from the critical tier (`damage_stage::BURNS_AT`), and a wreck
+burning down, with its smoke.
 
 ## 5. Recoil
 
