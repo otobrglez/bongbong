@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::framing::MapClass;
 use crate::level::{MissionConfig, SpawnConfig};
 use crate::frog::Side;
 use crate::obstacle::{Drum, Material};
@@ -365,6 +366,46 @@ fn is_default_weather(w: &Weather) -> bool {
     *w == Weather::Clear
 }
 
+/// How the map asks to be shown (TOML: a top-level `view = "whole"` or
+/// `view = "follow"`; docs/large-maps-follow-camera.md §1): whole on every
+/// screen like an arena, or followed by a camera like a field map, over
+/// what its size says (`framing::MapClass::by_size`). Absent means by
+/// size, which is not written back, so every older file parses and
+/// re-saves unchanged. `MapFile::class` is the answer with the key applied.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MapView {
+    /// Shown whole, however big the map is.
+    Whole,
+    /// Followed by a camera, however small the map is.
+    Follow,
+}
+
+impl MapView {
+    /// Both choices, whole first.
+    pub const ALL: [MapView; 2] = [MapView::Whole, MapView::Follow];
+
+    /// The TOML spelling.
+    pub fn name(self) -> &'static str {
+        match self {
+            MapView::Whole => "whole",
+            MapView::Follow => "follow",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<MapView> {
+        MapView::ALL.iter().copied().find(|v| v.name() == s)
+    }
+
+    /// The class this choice puts a map in.
+    pub fn class(self) -> MapClass {
+        match self {
+            MapView::Whole => MapClass::Arena,
+            MapView::Follow => MapClass::Field,
+        }
+    }
+}
+
 /// A saved battlefield layout. Keys are `"<col>,<row>"` grid-cell strings
 /// (TOML tables require string keys) - only occupied cells are stored, so a
 /// mostly-empty map stays a small file.
@@ -405,6 +446,11 @@ pub struct MapFile {
     /// WEATHER row). Absent means clear, and clear is not written back.
     #[serde(default, skip_serializing_if = "is_default_weather")]
     pub weather: Weather,
+    /// How the map is shown (TOML: a top-level `view = "whole"|"follow"`).
+    /// `None`, the key absent, leaves it to the map's size (`class`) and is
+    /// not written back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<MapView>,
     /// The `[mission]` table - what ends the round (docs/maps-to-levels.md).
     /// Absent means Protect.
     #[serde(default)]
@@ -466,6 +512,7 @@ impl MapFile {
             tank2: None,
             theme: Theme::default(),
             weather: Weather::default(),
+            view: None,
             mission: MissionConfig::default(),
             spawn: SpawnConfig::default(),
             size: None,
@@ -479,6 +526,20 @@ impl MapFile {
         match self.size {
             Some((cols, rows)) if cols > 0.0 && rows > 0.0 => (cols * OBSTACLE_GRID_SIZE, rows * OBSTACLE_GRID_SIZE),
             _ => (crate::DEFAULT_SCREEN_WIDTH as f32, crate::DEFAULT_SCREEN_HEIGHT as f32),
+        }
+    }
+
+    /// Whether the map is shown whole or followed by a camera
+    /// (docs/large-maps-follow-camera.md §1, §15): its `view` key when it
+    /// has one, else its size - an arena up to 36 x 18 cells, a field map
+    /// past that (`framing::MapClass::by_size`).
+    pub fn class(&self) -> MapClass {
+        match self.view {
+            Some(view) => view.class(),
+            None => {
+                let (width, height) = self.field_size();
+                MapClass::by_size(width / OBSTACLE_GRID_SIZE, height / OBSTACLE_GRID_SIZE)
+            }
         }
     }
 
@@ -849,6 +910,60 @@ mod toml_tests {
         let text = random.to_toml_string().unwrap();
         assert!(text.contains("weather = \"random\""), "{text}");
         assert_eq!(MapFile::from_toml_str(&text).unwrap().weather, Weather::Random, "a random sky stays random on disk");
+    }
+
+    #[test]
+    fn view_round_trips_and_defaults_to_the_maps_size() {
+        let map = MapFile::from_toml_str("version = 1\n").unwrap();
+        assert_eq!(map.view, None);
+        assert!(!map.to_toml_string().unwrap().contains("view"), "by size is not written back");
+        for v in MapView::ALL {
+            let text = format!("version = 1\nview = \"{}\"\ncells.\"1,1\" = {{ kind = \"road\" }}\n", v.name());
+            let map = MapFile::from_toml_str(&text).unwrap();
+            assert_eq!(map.view, Some(v), "{}", v.name());
+            let back = map.to_toml_string().unwrap();
+            assert!(back.contains(&format!("view = \"{}\"", v.name())), "{back}");
+            assert_eq!(MapFile::from_toml_str(&back).unwrap().view, Some(v));
+            assert_eq!(MapView::parse(v.name()), Some(v));
+        }
+        assert!(MapFile::from_toml_str("version = 1\nview = \"zoom\"\n").is_err(), "an unknown view is a parse error");
+        assert_eq!(MapView::parse("auto"), None, "by size has no spelling: it is the key left out");
+    }
+
+    #[test]
+    fn a_maps_view_key_overrides_its_size() {
+        let class = |lines: &str| MapFile::from_toml_str(&format!("version = 1\n{lines}")).unwrap().class();
+        assert_eq!(class(""), MapClass::Arena, "no size is the standard 34 x 17");
+        assert_eq!(class("size = [36, 18]\n"), MapClass::Arena);
+        assert_eq!(class("size = [36, 18.5]\n"), MapClass::Field);
+        assert_eq!(class("size = [40, 20]\n"), MapClass::Field);
+        assert_eq!(class("size = [48, 24]\nview = \"whole\"\n"), MapClass::Arena);
+        assert_eq!(class("size = [34, 17]\nview = \"follow\"\n"), MapClass::Field);
+        assert_eq!(class("view = \"follow\"\n"), MapClass::Field);
+        assert_eq!(class("size = [36, 18]\nview = \"whole\"\n"), MapClass::Arena);
+        let mut map = MapFile::new();
+        assert_eq!(map.class(), MapClass::Arena);
+        map.size = Some((96.0, 54.0));
+        assert_eq!(map.class(), MapClass::Field);
+        map.view = Some(MapView::Whole);
+        assert_eq!(map.class(), MapClass::Arena);
+    }
+
+    #[test]
+    fn the_shipped_field_maps_are_the_ones_bigger_than_an_arena() {
+        // The seven levels past 36 x 18 and the two 40 x 22.5 mission maps
+        // are field maps; the seven other levels and the rest are arenas.
+        let field: Vec<&str> = SHIPPED_MAPS
+            .iter()
+            .filter(|(_, text)| MapFile::from_toml_str(text).unwrap().class() == MapClass::Field)
+            .map(|(name, _)| *name)
+            .collect();
+        assert_eq!(
+            field,
+            ["hunt-basic", "waves-basic", "hedge-maze", "castle-moat", "archipelago", "black-gold", "harbor-lights", "serpent-river", "grand-campaign"]
+        );
+        let study = MapFile::load(Path::new("maps/study/frontier.toml")).unwrap();
+        assert_eq!((study.size, study.class()), (Some((96.0, 54.0)), MapClass::Field));
     }
 
     #[test]

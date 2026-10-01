@@ -403,6 +403,12 @@ pickup = "ammo"
   means `grass`, and grass is not written back. The MAP panel's THEME row
   edits it, and `builder_settings {theme}` on the dev server. See
   `docs/desert-theme.md`.
+- `view` is an optional top-level `"whole" | "follow"` (`map::MapView`):
+  how the map is shown. Absent, the map's size decides - up to 36 x 18
+  cells it is an arena, shown whole on every screen, and past that a
+  field map, which a camera follows (`framing::MapClass`,
+  `MapFile::class`, docs/large-maps-follow-camera.md) - and the key
+  overrides the size either way. Absent is not written back.
 
 ### Level tables
 
