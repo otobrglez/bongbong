@@ -12,7 +12,8 @@ every rule, HUD layout and indicator below, plus a working builder, on a
 96 x 54 study map, `maps/study/frontier.toml`, drawn by the game's own
 renderer) was published with this research. The patterns shipped games
 follow for the same problems are catalogued in docs/large-maps-patterns.md
-and summarised in section 13.
+and summarised in section 13. The questions it left open are decided;
+section 15 lists the decisions.
 
 Contents
 
@@ -30,7 +31,7 @@ Contents
 12. Large-map content and AI pacing
 13. Patterns from shipped games
 14. Plan
-15. Open questions
+15. Decisions
 16. Sources
 
 ## 1. Summary of the recommendation
@@ -65,11 +66,11 @@ Contents
   (Apple's guidance puts menus there, and the thumbs are at the bottom).
   Health is already a ring under the tank; ammo joins it. The bar stays
   as the builder's toolbar.
-- **Edge arrows for threats and teammates, a lane warning, a minimap for
-  objectives.** Arrows sit where the line from the tank to the target
-  meets an inset rectangle that avoids the HUD and the thumbs, scale and
-  fade with distance, cluster with a count, and pulse when an enemy is
-  lined up on your row or column.
+- **Edge arrows for threats and teammates, a lane warning, and a
+  minimap for objectives on tablets and desktops.** Arrows sit where the
+  line from the tank to the target meets an inset rectangle that avoids
+  the HUD and the thumbs, scale and fade with distance, cluster with a
+  count, and pulse when an enemy is lined up on your row or column.
 - **The builder gets its own camera.** One finger paints, two fingers pan
   and pinch-zoom, a two-finger tap undoes, a minimap navigates, and on a
   touch screen a tap at a zoom where a cell is under about 6 mm zooms in
@@ -268,7 +269,7 @@ the standard 34 x 17 map / grand-campaign 48 x 24 / the 96 x 54 study map:
 | 27" 1440p | 22.4 mm | 22.4 mm | 12.2 mm |
 
 Device data: Apple and Android developer documentation, manufacturer
-specifications and viewport aggregators (section 15). Landscape safe
+specifications and viewport aggregators (section 16). Landscape safe
 areas: 59 pt each side and 21 pt at the bottom on the iPhone 16, 62 pt on
 the 16 Pro and Pro Max class, 20 pt at the bottom on iPads with the status
 bar hidden, nothing on the iPhone SE. Android punch-hole insets and every
@@ -426,8 +427,8 @@ change alone.
 - **The minimap** is for objectives and clusters: the field at a glance,
   the view rectangle, teammates, the frog, enemies that are not
   concealed. On by default on tablets and desktops under the top-right
-  cluster; on phones off, or a tap-to-peek full-map overlay. In the
-  builder it is the navigator.
+  cluster, and off on phones, where the edge arrows carry the field. In
+  the builder it is the navigator on every device.
 - **No interest management.** Arrows need every enemy's position, the
   snapshots already carry them, and at 8 seats and 31 live enemies the
   bytes do not justify it (surviv.io's server reportedly sends only what
@@ -461,7 +462,7 @@ at the bottom corners, where the floating stick already lives.
   the active weapon outlined.
 - **Top-right:** the level and wave with the enemy count, then the
   buttons (levels, BUILD, ONLINE or LEAVE), then the seat chips of a room,
-  then the minimap.
+  then the minimap (not on phones).
 - **On the tank:** the health ring the player tank already draws
   (`RingStyle::Gauge`), plus ammo pips on its lower arc, so the number
   that matters most never needs a glance away.
@@ -686,7 +687,8 @@ probe.
    fade under play; arenas draw their margins; the bar stays for the
    builder.
 4. **Off-screen awareness.** Edge arrows by priority, the targeted lane
-   warning, the hit arc, last-seen markers, gate flashes, the minimap.
+   warning, the hit arc, last-seen markers, gate flashes, the minimap on
+   tablets and desktops.
 5. **Fair fire.** The sight box as a room rule; the AI fires only from
    inside it; spawns and gates follow it; a weather fallback that keeps
    the dark; `just probe-fixtures` re-baselined with probe checks that no
@@ -701,14 +703,9 @@ probe.
    near the team, a pacing director, effect caps, a first field level,
    the study map in the probe sweeps, and the Android `appCategory` fix.
 
-## 15. Open questions
+## 15. Decisions
 
-- **Vertical engagement.** Is an enemy closing to 240 px before it fires
-  vertically the right balance, or should the sight box be taller and
-  phones accept a slightly smaller tank?
-- **Minimap on phones.** Off, compact, or a tap-to-peek overlay?
-
-Decided:
+The questions this research left open, as decided:
 
 - **The area.** 578 cells, the standard 34 x 17 field's area, on every
   screen in a room: phone tanks of 7.5 to 9.3 mm, 35 mm on a 24" 1080p
@@ -724,6 +721,14 @@ Decided:
   draw it at 5.8 to 6.5 mm. A monitor playing locally shows them whole
   anyway (section 3), and a map's `view` key can still choose for
   itself.
+- **Vertical engagement.** The sight box stays +-11.5 x +-7.5 cells
+  (section 5): an enemy straight above or below closes to 240 px before
+  it fires, so nobody is shot from beyond the edge of their screen, and
+  phone tanks stay 7.5 to 9.3 mm. Sideways nothing changes.
+- **Minimap on phones.** Off. A phone's view relies on the edge arrows,
+  which already point at threats, teammates and the frog; tablets and
+  desktops keep the minimap, and the builder's navigator stays on every
+  device.
 - **Stick side.** It stays a build-time choice (the `touch-steer-right`
   feature) for now, although Brawl Stars and Call of Duty: Mobile make
   it a setting. The corner clusters leave both bottom corners to the
