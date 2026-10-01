@@ -8,15 +8,17 @@ watch:
 # docs/gameplay-verification-design.md and CLAUDE.md's probe bullets.
 # Pinned to a Protect band round: the shipped map's own level tables may
 # say otherwise (the probe refuses --enemies under a waves plan).
+# offbox-fire is the sight-box rule (docs/large-maps-follow-camera.md
+# section 5): no enemy fires at a seat from outside the seat's box, ever.
 probe-sweep:
-    cargo run --bin probe -- --scenario afk --mission protect --spawn band --enemies 4 --frames 1800 --rounds 30 --heatmap
+    cargo run --bin probe -- --scenario afk --mission protect --spawn band --enemies 4 --frames 1800 --rounds 30 --heatmap --budget offbox-fire=0
 
 # Waves spawn plan health check: the maps/missions/ waves fixture, Destroy
 # mission (no frog, so an AFK player only loses to gunfire), 30 seeded
 # rounds. Rolling-in tanks are exempt from the anomaly checks until they
 # arrive. See docs/maps-to-levels.md.
 probe-waves:
-    cargo run --bin probe -- --map maps/missions/waves-basic.toml --scenario afk --frames 3600 --rounds 30 --seed 2000 --heatmap
+    cargo run --bin probe -- --map maps/missions/waves-basic.toml --scenario afk --frames 3600 --rounds 30 --seed 2000 --heatmap --budget offbox-fire=0
 
 # Sweep every maps/test/ adversarial fixture at a pinned seed and hold it
 # to the recorded baseline: each ceiling is the observed maximum across all
@@ -25,17 +27,16 @@ probe-waves:
 # change shifts the numbers: rerun, read the new totals, and re-baseline
 # consciously - never bump a ceiling just to go green. Zero-ceilings
 # (stale-start, stall, wall-grind, bump-rate, low-progress, never-arrived,
-# invariant, tank-grind, pile-up) are kinds no fixture currently produces at
-# all.
-# tank-grind and pile-up joined that list 2026-09-14 with the enemy command
-# & control instrumentation (docs/enemy-command-and-control-prd.md). They are
-# the first two kinds that measure a tank against *another tank* rather than
-# against the map, and both read 0 across the corpus and the default map at
-# the time they were added - so they are regression insurance, not a
-# currently-failing gate. The number that work actually has to move is the
-# ram tally the sweep now prints beside the totals, which is not budgeted:
-# a ram is not a failure, and once C2 can order one, budgeting it would
-# budget the feature.
+# invariant, tank-grind, offbox-fire) are kinds no fixture currently
+# produces at all.
+# tank-grind and pile-up joined the budgets 2026-09-14 with the enemy
+# command & control instrumentation (docs/enemy-command-and-control-prd.md).
+# They are the first two kinds that measure a tank against *another tank*
+# rather than against the map, and were added as regression insurance, not
+# a currently-failing gate (pile-up's real reading came later, below). The
+# number that work actually has to move is the ram tally the sweep now
+# prints beside the totals, which is not budgeted: a ram is not a failure,
+# and once C2 can order one, budgeting it would budget the feature.
 # Re-measured 2026-09-04, twice. First after the Protect mission's hunter
 # roll (`enemy_hunter_share_protect`, one RNG draw per enemy in
 # `Game::init`) shifted every stream: with the share zeroed the previous
@@ -52,8 +53,22 @@ probe-waves:
 # tanks: one wedging at the map corner for ~1.5 s while routing around
 # the maze's edge, one holding an aligned firing line on the player 26 px
 # from the bottom wall). See docs/gameplay-verification-design.md.
+# Re-measured 2026-10-01 for the sight-box rule (docs/large-maps-follow-
+# camera.md section 5): an enemy fires at a seat only from inside the
+# seat's +-11.5 x +-7.5 cell box, and offbox-fire=0 holds every fixture to
+# it (before the rule choke, pockets, props and towers fired 10, 20, 42 and
+# 10 shots from outside it). The same change made the sweep totals sum
+# every kind: they used to drop tank-grind and pile-up, so those two zero
+# ceilings had never been read off a sweep. pile-up=2 is maze's, with or
+# without the rule (round 1, 0x3e9: two flags in the maze's middle); choke
+# reads 1 (round 8, 0x3f0: three tanks on the player's row at the gap's
+# mouth, the funnel this fixture provokes, on a timeline the rule moved -
+# its north tank now fires from 224 px rather than 283). Every other
+# fixture's totals are unchanged but props (border-stuck 0 -> 1, churn
+# 4 -> 5) and towers (spin 0 -> 1, clustering 1 -> 0), all inside their
+# ceilings.
 probe-fixtures:
-    for m in maps/test/*.toml; do cargo run --bin probe -- --map $m --frames 1800 --rounds 10 --seed 1000 --budget stale-start=0 --budget stall=0 --budget border-stuck=1 --budget jitter=6 --budget spin=1 --budget churn=10 --budget clustering=9 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=0 || exit 1; done
+    for m in maps/test/*.toml; do cargo run --bin probe -- --map $m --frames 1800 --rounds 10 --seed 1000 --budget stale-start=0 --budget stall=0 --budget border-stuck=1 --budget jitter=6 --budget spin=1 --budget churn=10 --budget clustering=9 --budget wall-grind=0 --budget bump-rate=0 --budget low-progress=0 --budget never-arrived=0 --budget invariant=0 --budget tank-grind=0 --budget pile-up=2 --budget offbox-fire=0 || exit 1; done
 
 run:
     cargo run
