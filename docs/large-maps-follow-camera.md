@@ -45,12 +45,14 @@ Contents
   class is room-wide, so every seat in a round sees the same kind of
   round. A map key (`view = "whole" | "follow"`) overrides the size
   default for any map.
-- **The same world area on every screen.** A field map shows about 578
-  cells (the standard 34 x 17 field's area) on every device; the
-  screen's shape decides only the outline, clamped to aspects between
-  4:3 and 2.4:1. Nothing is letterboxed from a 4:3 iPad to a 21:9
+- **The same world area on every screen in a room.** A field map shows
+  about 578 cells (the standard 34 x 17 field's area) on every device in
+  a room; the screen's shape decides only the outline, clamped to aspects
+  between 4:3 and 2.4:1. Nothing is letterboxed from a 4:3 iPad to a 21:9
   monitor, every player gets the same amount of information and the same
-  reaction time, and a phone keeps a tank of 7.5 to 9.3 mm.
+  reaction time, and a phone keeps a tank of 7.5 to 9.3 mm. Played
+  locally, a big monitor zooms out to about 40 x 22.5 cells, since no
+  other screen shares its round.
 - **A sight box every device shows, and enemies only fire from inside
   it.** Enemies shoot only along rows and columns (section 5), and a
   landscape phone cannot show the 340 px fire range above and below the
@@ -180,9 +182,24 @@ that read as too big; in a scrolling view large sprites are the norm for
 pixel-art action games (Enter the Gungeon renders 480 x 270 and scales
 that up to the monitor), and the angular size is what changes: about 1.5
 degrees for a phone tank at 30 cm against over 3 degrees for a monitor
-tank at 60 cm. If that is too big in a playtest, the remedy is a larger
-area for everyone (the area is one number) or a solo-only "wide view" on
-large screens; a room keeps one area for all its seats.
+tank at 60 cm. Local play answers it with a wider view on big screens
+(below); a room keeps one area for all its seats.
+
+**Local play on a big screen.** A round with no room, alone or two on one
+screen, has nobody to be fair to, so a big screen zooms out. From the
+shared view the whole-block zoom steps outward while the tank stays at
+least 25 mm wide and the view at most 900 cells (40 x 22.5). A 24" or
+27" monitor then shows 40 x 22.5 cells with a 26.5 to 30 mm tank, and a
+21:9 or 32:9 monitor 43 x 18 cells with a 37 mm tank; laptops, tablets
+and phones, whose tanks are under 25 mm already, keep the shared view.
+The millimetres come from the monitor's reported size natively
+(`GetMonitorPhysicalWidth`) and from the CSS reference pixel (0.26 mm) on
+the web, where raylib reports none. Both numbers are knobs for a
+playtest. The costs are accepted: a level is a little easier alone on a
+monitor than on a phone, and the same monitor looks zoomed in when it
+joins a room. A field map no larger than the wide view (Hedge Maze's
+40 x 20, Harbor Lights' 40 x 22.5) shows whole there, because the camera
+centres any axis the map does not fill.
 
 **The aspect clamp.** Between 4:3 and 2.4:1 every screen fills edge to
 edge. A 32:9 monitor is clamped to 2.4:1 and gets side bars, which is
@@ -229,6 +246,11 @@ px/s) takes from the nearest screen edge.
 | 27" 4K at 150% | 2560 x 1440 @1.5 | 30.0 x 16.9 | 39.9 mm | 8.00 | 15.0 / 8.4 | 0.52 s |
 | 34" ultrawide 21:9 | 3440 x 1440 @1 | 35.8 x 15.0 | 44.3 mm | 6.00 | 17.9 / 7.5 | 0.46 s |
 | 49" 32:9 (clamped) | 5120 x 1440 @1 | 36.0 x 15.0 | 44.7 mm | 6.00 | 18.0 / 7.5 | 0.46 s |
+
+Played locally, the five monitors zoom out (section 3): the 24" 1080p,
+27" 1440p and 27" 4K at 150% show 40 x 22.5 cells with a 26.5, 29.8 and
+29.9 mm tank, the 34" and 49" ultrawides 43 x 18 cells with a 37 mm tank.
+Every other device in the table keeps its row.
 
 For comparison, today's whole-map rule on the same devices, tank size for
 the standard 34 x 17 map / grand-campaign 48 x 24 / the 96 x 54 study map:
@@ -348,13 +370,14 @@ local round use the same code, and the dev server reports it.
   marks the gate the seat will come through.
 - **An establishing shot** at round start: the whole map for about a
   second (the frog, the gates), then a cut or a fast zoom to the tank.
-- **Couch play** (desktop only, two seats on one screen): one shared view
-  while both tanks' sight boxes fit in it, then a dynamic (Voronoi) split
-  along the line between them, each half following its seat under the
-  same area rule, with a 2 px divider. No zoom-to-fit: zooming breaks the
-  block grid, and a shared screen that holds players at its edge pins a
-  tank there under fire (the complaint about Gauntlet's and Smash's
-  cameras). The LEGO games and Godot's split-screen demo do the split.
+- **Couch play** (desktop only, two seats on one screen): one shared
+  view while both tanks' sight boxes fit in it, then a dynamic (Voronoi)
+  split along the line between them, each half following its seat at the
+  local view's zoom (section 3), with a 2 px divider. No zoom-to-fit:
+  zooming breaks the block grid, and a shared screen that holds players
+  at its edge pins a tank there under fire (the complaint about
+  Gauntlet's and Smash's cameras). The LEGO games and Godot's
+  split-screen demo do the split.
 
 ## 7. What is off screen
 
@@ -490,7 +513,8 @@ starts the round as today.
   arrows are per client. What must agree across clients is a room rule:
   the map's class, the view area, the sight box. They travel in the
   room's tuning patch next to `wave_size_scale`, so a replica and its
-  sandbox resolve them as the room does.
+  sandbox resolve them as the room does. A round with no room uses the
+  local view (section 3).
 - **The AI, the spawns and the gates use the sight box**, never a client's
   window.
 - **Online indicators need nothing new on the wire**: the snapshot already
@@ -652,11 +676,11 @@ probe.
    shipped today, is the identity: window-sized targets, culling, the
    shader uniforms, the UI in screen space. Screenshots of every shipped
    map must not change.
-2. **The follow camera for field maps.** The map class and the `view` key,
-   the same-area rule with the aspect clamp and the whole-block snap, the
-   sub-block present, look-ahead inside the sight box, cuts, spectating,
-   the couch split, one motion switch seeded by the OS; `status` reports
-   it.
+2. **The follow camera for field maps.** The map class and the `view`
+   key, the same-area rule with the aspect clamp and the whole-block
+   snap, the local wide view on big screens, the sub-block present,
+   look-ahead inside the sight box, cuts, spectating, the couch split,
+   one motion switch seeded by the OS; `status` reports it.
 3. **The HUD in the corners.** Corner clusters, vitals on the tank, a UI
    scale and minimum sizes in points, input-aware hints, seat numbers, a
    fade under play; arenas draw their margins; the bar stays for the
@@ -679,13 +703,10 @@ probe.
 
 ## 15. Open questions
 
-- **The area.** 578 cells keeps phones at 7.5 to 9.3 mm and gives a 1080p
-  monitor a 35 mm tank. Decide with a phone and a monitor side by side on
-  a field map; the lab's slider shows what each value does everywhere.
-- **Solo wide view.** Should a desktop playing alone be allowed a larger
-  area, given that rooms would not?
-- **Arena threshold.** 36 x 18, or every map up to 40 x 22.5 shown whole
-  on desktops? A per-map `view` key settles individual cases.
+- **Arena threshold.** 36 x 18, or every map up to 40 x 22.5 shown whole?
+  A monitor playing locally already shows the 40 x 20 and 40 x 22.5
+  levels whole (section 3), so this decides phones, tablets and rooms. A
+  per-map `view` key settles individual cases.
 - **Vertical engagement.** Is an enemy closing to 240 px before it fires
   vertically the right balance, or should the sight box be taller and
   phones accept a slightly smaller tank?
@@ -693,6 +714,12 @@ probe.
 
 Decided:
 
+- **The area.** 578 cells, the standard 34 x 17 field's area, on every
+  screen in a room: phone tanks of 7.5 to 9.3 mm, 35 mm on a 24" 1080p
+  monitor.
+- **Local play on a big screen** zooms out on its own (section 3):
+  40 x 22.5 cells on a 24" or 27" monitor. There is no setting, and
+  online rooms always use the shared area.
 - **Stick side.** It stays a build-time choice (the `touch-steer-right`
   feature) for now, although Brawl Stars and Call of Duty: Mobile make
   it a setting. The corner clusters leave both bottom corners to the
