@@ -33,7 +33,7 @@ use bongbong::render::shockwave::{RippleFx, RippleTuning};
 use bongbong::simulation::debug::TankPatch;
 use bongbong::simulation::{Game, Input};
 use bongbong::tuning::tuning;
-use bongbong::view::View;
+use bongbong::view::{Camera, View};
 use bongbong::{Layout, Position, Rect, HUD_BAR_HEIGHT};
 use raylib::core::game_loop;
 use raylib::prelude::*;
@@ -293,6 +293,7 @@ fn main() {
             &mut scene,
             &mut composite_play,
             &view,
+            &Camera::whole((width, height)),
             bongbong::math::Color::WHITE,
             &mut Effects { shock: &mut shock, muzzle: &mut muzzle, impact: &mut impact, shots: None, weather: None, fx: &fx, touch: None },
             &textures,

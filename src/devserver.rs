@@ -46,6 +46,7 @@ use crate::tank::{Dir, TankKind};
 use crate::tuning;
 use crate::level::{Mission, SpawnKind, Tier};
 use crate::level_select::SelectInput;
+use crate::view::Camera;
 use crate::{Layout, PHYSICS_FIXED_DT, Position, parse_seed};
 
 /// Port the game listens on unless `--dev-port`/`BONGBONG_DEV_PORT` says
@@ -152,7 +153,7 @@ const SLOT_PARAMS: &str = r#"{"type":"object","properties":{"slot":{"type":"inte
 pub const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "status",
-        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `mode` (play|build|online) with the dialogs and the builder's state, and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), `rtt` (the measured round trip - median, p95, floor - and server-minus-local from ping/pong probes), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation, lateness p50/p95, stalls, the playout rate, corrections and their p95 in px, stale events dropped) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots the picture stopped against a drawn tank or frog -, `crossings_hit` - their paired room copy bursting within 40 px (`HIT_MATCH_PX`) of that stop - and `crossings_missed` - their copy flying on past it (`MISS_MARGIN_PX`) or bursting anywhere else) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
+        description: "Where the running game is: seed, frame, time, outcome, mission and the resolved spawn plan (`wave` while waves run), paused/lockstep, tank counts, overlay flags, the loaded map, `camera` (the view the window draws: `whole`, or the one the `camera` tool pinned, with its world `rect` and `scale`), `mode` (play|build|online) with the dialogs and the builder's state, and `turns` (heading turns/reversals/spins summed over the live tanks this round - a non-zero `spins` is a tank rotating in place; see `history`). `round` says which round all of this describes: `local`, or `online` with the room code, the seat, `buffer_ms` (how far ahead of the picture the newest snapshot is), `rtt` (the measured round trip - median, p95, floor - and server-minus-local from ping/pong probes), the server's tick, the phase, `interpolation` (the delay in force and its target, the link's jitter, the measured cadence, frames drawn on extrapolation, lateness p50/p95, stalls, the playout rate, corrections and their p95 in px, stale events dropped) and `prediction` (the stage-2 counters: corrections ignored/nudged/snapped, the error histogram `error_buckets` at 0.25/0.5/2/8/48 px and past, `max_error_px`, shots drawn/refused/on screen, inputs `in_flight`, the local fire gate, the lead's `lead_up`/`lead_down` adjustments with the smoothed mailbox `lead_depth`, and decision 9's instrument: `crossings` - provisional shots the picture stopped against a drawn tank or frog -, `crossings_hit` - their paired room copy bursting within 40 px (`HIT_MATCH_PX`) of that stop - and `crossings_missed` - their copy flying on past it (`MISS_MARGIN_PX`) or bursting anywhere else) - in an online round every reading tool describes the room's replica and the tools that would write to it refuse, because only the server simulates it. Cheap; call first.",
         schema: NO_PARAMS,
         read_only: true,
         destructive: false,
@@ -245,6 +246,13 @@ pub const TOOLS: &[ToolSpec] = &[
         name: "overlays",
         description: "Set persistent debug overlays drawn on top of the game (visible to the human too), one flag at a time: nav_grid (blocked pathfinding cells), ai (each enemy's waypoint, heading, last behaviour-tree action), projectiles (hit boxes + velocity), engage (engagement-ring targets), pickups (collect radius), hitboxes (each tank's hull and turret damage boxes and its rounded movement collider), stats (each tank's readout card: ammo, weapon, hp, speed, velocity, collider size, an enemy's retreat/fire state). Omitted flags keep their value, an unknown flag is an error; replies with the current flags. The I key in the game window cycles presets instead (off -> inspect = hitboxes + stats -> all); `input {cycle_overlays: true}` presses it.",
         schema: r#"{"type":"object","properties":{"nav_grid":{"type":"boolean"},"ai":{"type":"boolean"},"projectiles":{"type":"boolean"},"engage":{"type":"boolean"},"pickups":{"type":"boolean"},"hitboxes":{"type":"boolean"},"stats":{"type":"boolean"}}}"#,
+        read_only: false,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "camera",
+        description: "Pin the part of the world the window draws, for screenshots (docs/large-maps-follow-camera.md): `x`/`y` a world point in field pixels at the view's centre and `zoom` 1 or more - the view shows the field's size divided by the zoom, kept inside the field and snapped to whole 2 px blocks, and fills the field area under the HUD bar, which is drawn as ever. A field left out keeps the pin's own (the field's centre, zoom 1, for a first pin). `reset: true` shows the whole field again; no parameters only report. The pin holds across restarts and map changes, clamped to each field, and changes only the picture - the round, the AI and the builder's canvas never see it. Replies like `status.camera`: `view` (whole|pinned), the visible world `rect`, `scale` (bitmap px per world px), the scene `target` size in texels and a pin's `center` and `zoom`.",
+        schema: r#"{"type":"object","properties":{"x":{"type":"number","description":"World x at the view's centre"},"y":{"type":"number","description":"World y at the view's centre"},"zoom":{"type":"number","minimum":1,"description":"How many times the field is magnified"},"reset":{"type":"boolean","default":false,"description":"Show the whole field again"}}}"#,
         read_only: false,
         destructive: false,
     },
@@ -764,6 +772,17 @@ pub struct DevServer {
     /// The replica tick whose events and track rows are already banked,
     /// in an online round; `None` in every other mode.
     shown_frame: Option<u64>,
+    /// The view the `camera` tool pinned; `None` shows the whole field.
+    camera: Option<CameraPin>,
+}
+
+/// A view the `camera` tool pinned: the world point at its centre and how
+/// many times the field is magnified (`view::Camera::zoomed`, which keeps
+/// it inside whichever field is on screen).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CameraPin {
+    center: Vec2,
+    zoom: f32,
 }
 
 impl DevServer {
@@ -809,7 +828,63 @@ impl DevServer {
             history: VecDeque::with_capacity(HISTORY_FRAMES),
             turns: BTreeMap::new(),
             shown_frame: None,
+            camera: None,
         }
+    }
+
+    /// The part of the world the window draws this frame over a field of
+    /// `field`: the view the `camera` tool pinned, else the whole field.
+    pub fn camera(&self, field: (f32, f32)) -> Camera {
+        match self.camera {
+            Some(pin) => Camera::zoomed(field, pin.center, pin.zoom),
+            None => Camera::whole(field),
+        }
+    }
+
+    /// `camera`: pin a view, let it go, or say where it is. A pin's field
+    /// left out keeps the one it had (the field's centre at zoom 1 for a
+    /// first pin).
+    fn pin_camera(&mut self, params: &Value, field: (f32, f32)) -> Result<Value, String> {
+        if params.get("reset").and_then(Value::as_bool).unwrap_or(false) {
+            self.camera = None;
+            return Ok(self.camera_json(field));
+        }
+        let number = |key: &str| -> Result<Option<f32>, String> {
+            match params.get(key) {
+                None | Some(Value::Null) => Ok(None),
+                Some(v) => match v.as_f64() {
+                    Some(n) if n.is_finite() => Ok(Some(n as f32)),
+                    _ => Err(format!("{key} must be a number, got {v}")),
+                },
+            }
+        };
+        let (x, y, zoom) = (number("x")?, number("y")?, number("zoom")?);
+        if x.is_some() || y.is_some() || zoom.is_some() {
+            let pin = self.camera.unwrap_or(CameraPin { center: Vec2::new(field.0 / 2.0, field.1 / 2.0), zoom: 1.0 });
+            let zoom = zoom.unwrap_or(pin.zoom);
+            if zoom < 1.0 {
+                return Err(format!("zoom must be 1 or more (1 is the whole field), got {zoom}"));
+            }
+            self.camera = Some(CameraPin { center: Vec2::new(x.unwrap_or(pin.center.x), y.unwrap_or(pin.center.y)), zoom });
+        }
+        Ok(self.camera_json(field))
+    }
+
+    /// `status.camera` and the `camera` tool's reply: whether a view is
+    /// pinned, the world rectangle on screen, its scale and the scene
+    /// target's size.
+    fn camera_json(&self, field: (f32, f32)) -> Value {
+        let camera = self.camera(field);
+        let rect = camera.rect();
+        let (w, h) = camera.target_size();
+        json!({
+            "view": if self.camera.is_some() { "pinned" } else { "whole" },
+            "rect": { "x": rect.x, "y": rect.y, "w": rect.width, "h": rect.height },
+            "scale": camera.scale,
+            "target": [w, h],
+            "center": self.camera.map(|pin| json!({ "x": pin.center.x, "y": pin.center.y })),
+            "zoom": self.camera.map(|pin| pin.zoom),
+        })
     }
 
     /// The port actually bound (differs from the request only for 0).
@@ -1132,6 +1207,7 @@ impl DevServer {
             "players": game.players.count(),
             "map": map_json(&game.map),
             "weather": weather_json(game),
+            "camera": self.camera_json((width, height)),
             "mode": session.mode().name(),
             "language": crate::text::language(),
             "dialog_open": session.dialog,
@@ -1519,6 +1595,7 @@ impl DevServer {
             }
             "restart" => self.restart(session, params),
             "weather" => self.weather(session, params),
+            "camera" => self.pin_camera(params, (width, height)),
             "lint" => lint_json(session, params.get("source").and_then(Value::as_str)),
             "mode" => Ok(mode_json(session)),
             "lang" => {
@@ -2740,6 +2817,48 @@ mod tests {
         assert_eq!(status["lockstep"], false);
         assert_eq!(status["players"], 1);
         assert_eq!(status["players_dialog_open"], false);
+    }
+
+    /// The camera tool pins the view the window draws and `status` reports
+    /// it; a field left out keeps the pin's, a corner is clamped into the
+    /// field, a zoom under one or a word for a number is refused, and
+    /// `reset` shows the whole field again. The round never sees any of it.
+    #[test]
+    fn the_camera_tool_pins_a_view_and_lets_it_go() {
+        let (mut server, tx) = DevServer::headless();
+        let mut s = game(7);
+        let field = (W, H);
+        let before = s.game.frame();
+        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert_eq!(status["camera"]["view"], "whole", "{status}");
+        assert_eq!(status["camera"]["scale"], 1.0);
+        assert_eq!(status["camera"]["target"], json!([1280, 720]));
+
+        let pinned = ask(&mut server, &tx, &mut s, "camera", json!({ "x": 640.0, "y": 360.0, "zoom": 2.0 })).unwrap();
+        assert_eq!(pinned["view"], "pinned", "{pinned}");
+        assert_eq!(pinned["rect"], json!({ "x": 320.0, "y": 180.0, "w": 640.0, "h": 360.0 }));
+        assert_eq!(pinned["scale"], 2.0);
+        assert_eq!(server.camera(field), Camera::zoomed(field, Vec2::new(640.0, 360.0), 2.0));
+        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert_eq!(status["camera"], pinned);
+
+        ask(&mut server, &tx, &mut s, "camera", json!({ "zoom": 4.0 })).unwrap();
+        assert_eq!(server.camera(field), Camera::zoomed(field, Vec2::new(640.0, 360.0), 4.0), "the centre stays");
+        let corner = ask(&mut server, &tx, &mut s, "camera", json!({ "x": 0.0, "y": 0.0 })).unwrap();
+        assert_eq!((corner["rect"]["x"].as_f64(), corner["rect"]["y"].as_f64()), (Some(0.0), Some(0.0)), "{corner}");
+        assert_eq!(corner["zoom"], 4.0, "the zoom stays");
+        let report = ask(&mut server, &tx, &mut s, "camera", json!({})).unwrap();
+        assert_eq!(report, corner, "no parameters only report");
+
+        assert!(ask(&mut server, &tx, &mut s, "camera", json!({ "zoom": 0.5 })).unwrap_err().contains("zoom"));
+        assert!(ask(&mut server, &tx, &mut s, "camera", json!({ "x": "left" })).unwrap_err().contains("x must be a number"));
+        assert_eq!(server.camera(field), Camera::zoomed(field, Vec2::new(0.0, 0.0), 4.0), "a refused call changes nothing");
+
+        let whole = ask(&mut server, &tx, &mut s, "camera", json!({ "reset": true })).unwrap();
+        assert_eq!(whole["view"], "whole");
+        assert_eq!(whole["zoom"], Value::Null);
+        assert_eq!(server.camera(field), Camera::whole(field));
+        assert_eq!(s.game.frame(), before, "the round never moved");
     }
 
     /// The players tool and the button/keys behind it: the dialog freezes

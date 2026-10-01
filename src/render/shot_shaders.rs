@@ -14,6 +14,7 @@ use sola_raylib::prelude::*;
 use crate::math::{Color, Vec2};
 use crate::plasma::{Plasma, PlasmaVariant};
 use crate::tuning::tuning;
+use crate::view::Camera;
 use crate::Position;
 
 /// How far the orb's glow reaches ahead of and beside its centre, in orb
@@ -23,7 +24,8 @@ const ORB_REACH: f32 = 2.3;
 struct OrbLocs {
     orb_pos: i32,
     radius_px: i32,
-    field_height: i32,
+    view_origin: i32,
+    view_height: i32,
     time: i32,
     spin: i32,
     tilt: i32,
@@ -45,7 +47,8 @@ struct FlameLocs {
     origin: i32,
     dir: i32,
     half_width: i32,
-    field_height: i32,
+    view_origin: i32,
+    view_height: i32,
 }
 
 /// The compiled shaders, their uniform locations and the 1x1 white texture
@@ -84,6 +87,14 @@ impl OrbLook {
     }
 }
 
+/// Where the render target lies in the world: its top-left corner's
+/// world point and its height in texels, one per world pixel (its y runs
+/// up, `gl_FragCoord`'s way).
+fn set_view(s: &mut Shader, origin_loc: i32, height_loc: i32, camera: &Camera) {
+    s.set_shader_value(origin_loc, Vector2::new(camera.origin.x, camera.origin.y));
+    s.set_shader_value(height_loc, camera.target_size().1 as f32);
+}
+
 fn rgb(c: Color) -> [f32; 3] {
     [c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0]
 }
@@ -109,7 +120,8 @@ impl ShotShaders {
         let orb_locs = OrbLocs {
             orb_pos: orb.get_shader_location("orbPos"),
             radius_px: orb.get_shader_location("radiusPx"),
-            field_height: orb.get_shader_location("fieldHeight"),
+            view_origin: orb.get_shader_location("viewOrigin"),
+            view_height: orb.get_shader_location("viewHeight"),
             time: orb.get_shader_location("time"),
             spin: orb.get_shader_location("spin"),
             tilt: orb.get_shader_location("tilt"),
@@ -130,7 +142,8 @@ impl ShotShaders {
             origin: flame.get_shader_location("origin"),
             dir: flame.get_shader_location("dir"),
             half_width: flame.get_shader_location("halfWidth"),
-            field_height: flame.get_shader_location("fieldHeight"),
+            view_origin: flame.get_shader_location("viewOrigin"),
+            view_height: flame.get_shader_location("viewHeight"),
         };
         Ok(ShotShaders { orb, orb_locs, flame, flame_locs, quad })
     }
@@ -138,10 +151,10 @@ impl ShotShaders {
     /// Draw a flying plasma bolt as its orb: the ball, its glow, its
     /// style's outer effect (teal's lightning, purple's spiral arms and
     /// stars) and its comet tail, on one quad turned to face travel with
-    /// the orb `ORB_REACH` radii from its front edge, into a target
-    /// `field_height` px tall (the shader works the bolt out per 2 px block
-    /// of it).
-    pub fn draw_orb<D: RaylibDraw + RaylibShaderModeExt>(&mut self, d: &mut D, plasma: &Plasma, time: f32, field_height: f32) {
+    /// the orb `ORB_REACH` radii from its front edge, into a scene target
+    /// over `camera`'s view (the shader works the bolt out per 2 px block
+    /// of the world, found from the fragment's place on the target).
+    pub fn draw_orb<D: RaylibDraw + RaylibShaderModeExt>(&mut self, d: &mut D, plasma: &Plasma, time: f32, camera: &Camera) {
         let t = tuning();
         let look = OrbLook::of(plasma.id);
         let pulse = 0.5 + 0.5 * (time * t.plasma_pulse_hz * std::f32::consts::TAU + look.phase).sin();
@@ -159,7 +172,7 @@ impl ShotShaders {
         let s = &mut self.orb;
         s.set_shader_value(l.orb_pos, Vector2::new(plasma.position.x, plasma.position.y));
         s.set_shader_value(l.radius_px, r);
-        s.set_shader_value(l.field_height, field_height);
+        set_view(s, l.view_origin, l.view_height, camera);
         s.set_shader_value(l.time, time);
         s.set_shader_value(l.spin, spin);
         s.set_shader_value(l.tilt, look.tilt);
@@ -182,11 +195,11 @@ impl ShotShaders {
 
     /// Draw the flamethrower's jet from `origin` along `dir` (a unit
     /// vector) for `reach` px, on a quad as wide as the cone at its far
-    /// end, into a target `field_height` px tall (the field: the shader
-    /// works the stream out per 2 px block of it). `seed` keeps two
-    /// streams from rolling in step.
+    /// end, into a scene target over `camera`'s view (the shader works the
+    /// stream out per 2 px block of the world). `seed` keeps two streams
+    /// from rolling in step.
     #[allow(clippy::too_many_arguments)]
-    pub fn draw_flame<D: RaylibDraw + RaylibShaderModeExt>(&mut self, d: &mut D, origin: Position, dir: Vec2, reach: f32, time: f32, seed: f32, field_height: f32) {
+    pub fn draw_flame<D: RaylibDraw + RaylibShaderModeExt>(&mut self, d: &mut D, origin: Position, dir: Vec2, reach: f32, time: f32, seed: f32, camera: &Camera) {
         if reach <= 4.0 {
             return;
         }
@@ -199,7 +212,7 @@ impl ShotShaders {
         s.set_shader_value(l.origin, [origin.x, origin.y]);
         s.set_shader_value(l.dir, [dir.x, dir.y]);
         s.set_shader_value(l.half_width, half);
-        s.set_shader_value(l.field_height, field_height);
+        set_view(s, l.view_origin, l.view_height, camera);
         let angle = dir.y.atan2(dir.x).to_degrees() - 90.0;
         let dest = Rectangle::new(origin.x, origin.y, half * 2.0, reach);
         let quad = &self.quad;

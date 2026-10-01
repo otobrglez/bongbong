@@ -1,10 +1,28 @@
 //! Putting the composited bitmap on the window (`view.rs` owns the
-//! mapping itself).
+//! mapping itself), and the raylib cameras a `view::Camera` draws the
+//! world through.
 
 use sola_raylib::prelude::*;
 
-use crate::math::{Color, Rectangle};
-use crate::view::View;
+use crate::math::{Color, Rectangle, Vec2};
+use crate::view::{Camera, View};
+
+impl Camera {
+    /// The camera pass 1 draws the world through, into a scene target of
+    /// `target_size`: the view's corner at the target's, one texel per
+    /// world pixel. The identity for the whole field.
+    pub fn in_target(&self) -> Camera2D {
+        Camera2D { offset: Vector2::new(0.0, 0.0), target: self.origin.into(), rotation: 0.0, zoom: 1.0 }
+    }
+
+    /// The camera pass 2 draws what lies in the world - the ripples' quads,
+    /// the debug overlays - through, onto the field area of the bitmap at
+    /// `field_origin`: the view's corner at the field's, `scale` bitmap
+    /// pixels to the world pixel. The field camera for the whole field.
+    pub fn on_field(&self, field_origin: Vec2) -> Camera2D {
+        Camera2D { offset: field_origin.into(), target: self.origin.into(), rotation: 0.0, zoom: self.scale }
+    }
+}
 
 /// Put the composited frame on screen: the margins in `backdrop` (the
 /// HUD bar's own colour, so the bar and the margins read as one panel), a

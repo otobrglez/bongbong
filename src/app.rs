@@ -32,7 +32,7 @@ use crate::simulation::{Game, Input, PlayerCount};
 use crate::tuning;
 use crate::tank::{Dir, TankKind};
 use crate::touch::TouchPoint;
-use crate::view::{ScaleCap, View};
+use crate::view::{Camera, ScaleCap, View};
 use crate::{
     Layout,
     PHYSICS_FIXED_DT,
@@ -1060,13 +1060,16 @@ pub fn run(args: Args) {
         let _ = tuning::submit_json(r#"{"fx_density": 0.5}"#);
     }
 
+    // Pass 1's target: the part of the world the frame shows (`Camera`), a
+    // texel per world pixel - the whole field for every round. Re-created
+    // when that changes size (a dev-server `restart` on a map of another
+    // size, the builder loading one, a `camera` pin).
+    let mut scene_size = Camera::whole((screen_width as f32, screen_height as f32)).target_size();
     let mut scene_target = rl
-        .load_render_texture(&thread, screen_width as u32, screen_height as u32)
+        .load_render_texture(&thread, scene_size.0 as u32, scene_size.1 as u32)
         .expect("failed creating scene render texture");
     // The composited bitmap - the field plus the bar - that `view::present`
-    // fits into the window. Both targets are re-created when the field
-    // changes size (a dev-server `restart` on a map of another size, or
-    // the builder loading one).
+    // fits into the window, re-created when the field changes size.
     let mut composite = rl
         .load_render_texture(&thread, bitmap.0 as u32, bitmap.1 as u32)
         .expect("failed creating composite render texture");
@@ -1281,9 +1284,6 @@ pub fn run(args: Args) {
         let layout = Layout::for_field(width, height);
         if (width, height) != target_field {
             let bitmap = layout.window_size();
-            scene_target = rl
-                .load_render_texture(thread, width as u32, height as u32)
-                .expect("failed re-creating scene render texture");
             composite = rl
                 .load_render_texture(thread, bitmap.0 as u32, bitmap.1 as u32)
                 .expect("failed re-creating composite render texture");
@@ -1292,6 +1292,18 @@ pub fn run(args: Args) {
             muzzle_fx = m;
             impact_fx = i;
             target_field = (width, height);
+        }
+        // The part of the world this frame shows: the whole field, or the
+        // view a dev-server `camera` pins for its screenshots.
+        #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+        let camera = dev.as_ref().map_or(Camera::whole((width, height)), |dev| dev.camera((width, height)));
+        #[cfg(not(all(feature = "dev-tools", not(target_os = "emscripten"))))]
+        let camera = Camera::whole((width, height));
+        if camera.target_size() != scene_size {
+            scene_size = camera.target_size();
+            scene_target = rl
+                .load_render_texture(thread, scene_size.0 as u32, scene_size.1 as u32)
+                .expect("failed re-creating scene render texture");
         }
         // The cap is a desktop matter: an embedded build (web, iOS) draws
         // the bitmap into a canvas or screen that is never larger than it.
@@ -1717,6 +1729,7 @@ pub fn run(args: Args) {
             &mut scene_target,
             &mut composite,
             &view,
+            &camera,
             BAR_FILL,
             &mut Effects {
                 shock: &mut shock_fx,

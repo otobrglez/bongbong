@@ -10,22 +10,25 @@
 use sola_raylib::prelude::*;
 
 use crate::fx::{Fx, Particle, ParticleKind, EMBER_T, FIRE_T, SOOT_T, WHITE_T};
-use crate::math::{Color, Vec2};
+use crate::math::{Color, Rectangle, Vec2};
+use crate::view::culled;
 use crate::pyro::{self, Puff, BLOCK, FIRE, SMOKE};
 use crate::render::pyro::Rl;
 use crate::tuning::tuning;
 
-/// Draw every particle. Non-additive kinds first in one run, then all
-/// the additive ones inside a single blend-mode block: a blend switch
-/// breaks raylib's batch, so interleaving them would cost one batch
-/// per particle instead of two for the whole layer.
-pub fn draw(fx: &Fx, d: &mut impl RaylibDraw) {
-    for p in fx.particles().iter().filter(|p| !p.kind.additive()) {
+/// Draw every particle `cull` keeps (`view::Camera::cull`; `None` keeps
+/// them all). Non-additive kinds first in one run, then all the additive
+/// ones inside a single blend-mode block: a blend switch breaks raylib's
+/// batch, so interleaving them would cost one batch per particle instead
+/// of two for the whole layer.
+pub fn draw(fx: &Fx, d: &mut impl RaylibDraw, cull: Option<Rectangle>) {
+    let shown = |p: &&Particle| !culled(cull, p.pos);
+    for p in fx.particles().iter().filter(|p| !p.kind.additive()).filter(shown) {
         draw_particle(d, p);
     }
-    if fx.particles().iter().any(|p| p.kind.additive()) {
+    if fx.particles().iter().filter(shown).any(|p| p.kind.additive()) {
         d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
-            for p in fx.particles().iter().filter(|p| p.kind.additive()) {
+            for p in fx.particles().iter().filter(|p| p.kind.additive()).filter(shown) {
                 draw_particle(&mut bd, p);
             }
         });
@@ -69,8 +72,8 @@ fn tinted(tint: Color, t: f32) -> Color {
 
 fn draw_particle(d: &mut impl RaylibDraw, p: &Particle) {
     let t = (p.age / p.life).clamp(0.0, 1.0);
-    // `z` is a straight y-offset - the game is top-down with no camera, so
-    // height is just "further up the screen".
+    // `z` is a straight y-offset - the game looks straight down with no
+    // perspective, so height is just "further up the screen".
     let at = Vec2::new(p.pos.x, p.pos.y - p.z);
     let mut b = Rl(d);
     match p.kind {

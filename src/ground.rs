@@ -1165,8 +1165,9 @@ pub fn draw(c: &mut impl Canvas, grid: &GroundGrid, theme: Theme, time: f32) {
     let origin = Vec2::new(size / 2.0, size / 2.0);
     let t = tuning();
     let frame = ((time / t.water_frame_seconds.max(0.01)).floor() as i64).rem_euclid(WATER_FRAME_COUNT as i64) as usize;
-    for y in 0..grid.rows {
-        for x in 0..grid.cols {
+    let (cols, rows) = cell_span(grid, c.cull());
+    for y in rows {
+        for x in cols.clone() {
             let Some(i) = grid.idx(x as i32, y as i32) else {
                 continue;
             };
@@ -1176,6 +1177,23 @@ pub fn draw(c: &mut impl Canvas, grid: &GroundGrid, theme: Theme, time: f32) {
         }
     }
     draw_current(c, grid, time, t.water_flow_speed, t.water_flow_lanes.max(0) as u32);
+}
+
+/// The columns and rows of `grid`'s cells a culling rectangle
+/// (`Canvas::cull`) can see, every cell for none. A cell is centred on
+/// `(x, y) * GROUND_WORLD_TILE` and spans half a tile either side; the
+/// span rounds outward, so it may keep a cell it strictly need not.
+fn cell_span(grid: &GroundGrid, cull: Option<Rectangle>) -> (std::ops::Range<usize>, std::ops::Range<usize>) {
+    let Some(r) = cull else {
+        return (0..grid.cols, 0..grid.rows);
+    };
+    let tile = GROUND_WORLD_TILE;
+    let span = |from: f32, len: f32, n: usize| {
+        let first = ((from - tile) / tile).floor().max(0.0) as usize;
+        let past = ((from + len + tile) / tile).ceil().max(0.0) as usize;
+        first.min(n)..past.min(n)
+    };
+    (span(r.x, r.width, grid.cols), span(r.y, r.height, grid.rows))
 }
 
 /// A deterministic per-lane hash: the marks are cosmetic, so they are
@@ -1210,8 +1228,9 @@ fn draw_current(c: &mut impl Canvas, grid: &GroundGrid, time: f32, speed: f32, l
     let period = tile * WATER_FLOW_PERIOD_CELLS as f32;
     let (band_lo, band_hi) = WATER_CHANNEL_BAND;
     let lane_slots = ((band_hi - band_lo) / 2.0) as u64 - 1;
-    for y in 0..grid.rows as i32 {
-        for x in 0..grid.cols as i32 {
+    let (cols, rows) = cell_span(grid, c.cull());
+    for y in rows.map(|y| y as i32) {
+        for x in cols.clone().map(|x| x as i32) {
             let Some(i) = grid.idx(x, y) else {
                 continue;
             };
@@ -1263,6 +1282,22 @@ mod tests {
 
     fn current(grid: &GroundGrid, x: i32, y: i32) -> Current {
         grid.current[grid.idx(x, y).expect("in grid")]
+    }
+
+    #[test]
+    fn a_cull_rectangle_keeps_the_cells_it_can_see() {
+        let grid = with_water(&[]);
+        assert_eq!(cell_span(&grid, None), (0..grid.cols, 0..grid.rows), "no rectangle, every cell");
+        // Cells 4 to 6 across and 2 to 3 down touch this rectangle; the
+        // span rounds outward by one on the near side.
+        let r = Rectangle::new(4.0 * GROUND_WORLD_TILE, 2.0 * GROUND_WORLD_TILE, 64.0, 32.0);
+        assert_eq!(cell_span(&grid, Some(r)), (3..7, 1..4));
+        let off = Rectangle::new(-500.0, -500.0, 100.0, 100.0);
+        let (cols, rows) = cell_span(&grid, Some(off));
+        assert!(cols.is_empty() && rows.is_empty(), "nothing off the field: {cols:?} {rows:?}");
+        let past = Rectangle::new(9000.0, 9000.0, 100.0, 100.0);
+        let (cols, rows) = cell_span(&grid, Some(past));
+        assert!(cols.is_empty() && rows.is_empty(), "nothing past it: {cols:?} {rows:?}");
     }
 
     #[test]

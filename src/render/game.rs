@@ -1,13 +1,17 @@
-//! `Game::render`: the whole frame with raylib. Pass 1 paints the field
-//! into `scene_target` through the three `Canvas` stages of `game.rs`
-//! (`paint_floor`, `paint_tiles`, `paint_standing`) with the live-round
-//! layers between them - fire, glows, the locate label, projectiles,
-//! blasts, airborne debris, particles - drawn on the handle directly; pass
-//! 2 blits it at the field origin inside a `Camera2D` (shake, ripples,
-//! flashes, banners), then the bar in window space, then the bitmap onto
-//! the window through `view::present`. Reads `Game`, never mutates it.
-//! `Textures` and `Effects` bundle what a frame draws from; the debug
-//! overlays (`dev-tools`) draw in screen space after pass 2.
+//! `Game::render`: the whole frame with raylib, through a `view::Camera`.
+//! Pass 1 paints the part of the world the camera shows into
+//! `scene_target`, one texel per world pixel, through the three `Canvas`
+//! stages of `game.rs` (`paint_floor`, `paint_tiles`, `paint_standing`)
+//! with the live-round layers between them - fire, glows, the locate
+//! label, projectiles, blasts, airborne debris, particles - drawn on the
+//! handle directly, all in world pixels inside the camera's `in_target`;
+//! pass 2 blits it onto the field area of the bitmap at the camera's scale
+//! (shake, ripples), draws what lies in the world over it through the
+//! camera's `on_field` (the ripples' quads, the debug overlays), then the
+//! flash, banners and dialogs in the field area's own pixels, the bar in
+//! window space, and the bitmap onto the window through `view::present`.
+//! Reads `Game`, never mutates it. `Textures` and `Effects` bundle what a
+//! frame draws from.
 
 use sola_raylib::prelude::*;
 
@@ -46,8 +50,7 @@ use crate::render::missile::{draw_missile, draw_missile_exhaust, draw_missile_sh
 use crate::render::shell::{draw_shell, draw_shell_light, draw_shell_shadow};
 use crate::render::shot_fx::{at_nozzle, ground_light};
 use crate::render::shot_shaders::ShotShaders;
-use crate::render::weather::{Passes, WeatherFrame};
-use crate::render::shockwave::{screen_to_ripple_uv, RippleFx};
+use crate::render::shockwave::{field_to_ripple_uv, RippleFx};
 use crate::render::tank::draw_player_label;
 use crate::shell::{Shell, ShellState};
 use crate::simulation::{Game, Outcome};
@@ -59,7 +62,7 @@ use crate::tank::Tank;
 #[cfg(feature = "dev-tools")]
 use crate::tank::{ActiveWeapon, Dir};
 use crate::tuning::tuning;
-use crate::view::View;
+use crate::view::{culled, Camera, View};
 use crate::{Layout, Position, SHOCK_MAX};
 #[cfg(feature = "dev-tools")]
 use crate::math::Vec2;
@@ -190,12 +193,19 @@ impl Game {
     /// stream, where a laser burns, and a flash of it at every muzzle and
     /// impact - so the floor itself says where the fire is. `k` scales the
     /// lot: 1 by day, less where the weather's light map lights the ground
-    /// around the shots instead (`WeatherFrame::day_light_pools`).
-    fn draw_ground_light(&self, d: &mut impl RaylibDraw, k: f32) {
+    /// around the shots instead (`WeatherFrame::day_light_pools`). A pool
+    /// that cannot reach the world worth drawing (`Camera::cull`) is left
+    /// out.
+    fn draw_ground_light(&self, d: &mut impl RaylibDraw, k: f32, cull: Option<Rectangle>) {
         if k <= 0.0 {
             return;
         }
-        let ground_light = |d: &mut _, at: Position, radius: f32, color: Color, strength: f32| ground_light(d, at, radius, color, strength * k);
+        let ground_light = |d: &mut _, at: Position, radius: f32, color: Color, strength: f32| {
+            let reach = cull.map(|r| Rectangle::new(r.x - radius, r.y - radius, r.width + 2.0 * radius, r.height + 2.0 * radius));
+            if !culled(reach, at) {
+                ground_light(d, at, radius, color, strength * k);
+            }
+        };
         let warm = Color::new(255, 140, 50, 255);
         for shell in self.world.query::<&Shell>().iter() {
             if shell.state == ShellState::Flying {
@@ -245,15 +255,17 @@ impl Game {
 }
 
 impl Game {
-    /// Draw the whole scene for this frame: the battlefield into
-    /// `scene_target`, then that plus the HUD bar into `composite` - the
-    /// bitmap, `layout.window_size()` in size, the field at `layout.field`
+    /// Draw the whole scene for this frame: the part of the world `camera`
+    /// shows into `scene_target` (`Camera::target_size`, a texel per world
+    /// pixel), then that plus the HUD bar into `composite` - the bitmap,
+    /// `layout.window_size()` in size, the field area at `layout.field`
     /// and the bar in `layout.panel` - and finally the bitmap onto the
     /// window through `view` (`view::present`), scaled and centred so the
-    /// whole battlefield is on screen whatever the window is. Everything
-    /// field-relative in the second pass goes through a `Camera2D` whose
-    /// offset is the field origin, so the simulation's pixel positions
-    /// stay usable as they are.
+    /// whole bitmap is on screen whatever the window is. The world is
+    /// drawn in world pixels through raylib cameras built from `camera`
+    /// (`render::view`), so the simulation's positions are used as they
+    /// are; the banners, dims and dialogs over the field go through a
+    /// `Camera2D` whose offset is the field area's origin.
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &self,
@@ -262,14 +274,22 @@ impl Game {
         scene_target: &mut RenderTexture2D,
         composite: &mut RenderTexture2D,
         view: &View,
+        camera: &Camera,
         backdrop: Color,
         effects: &mut Effects,
         textures: &Textures,
         layout: &Layout,
         chrome: &PlayChrome,
     ) {
+        // The field area of the bitmap, which the UI over the field fills.
         let screen_width = layout.field.w.round() as i32;
         let screen_height = layout.field.h.round() as i32;
+        // The scene target: the camera's view at a texel per world pixel,
+        // the world rectangle worth drawing into it, and the cameras pass 1
+        // and pass 2 draw the world through.
+        let (target_width, target_height) = camera.target_size();
+        let cull = camera.cull();
+        let in_target = camera.in_target();
         // Must be read off the handle out here: the draw closures below
         // borrow it, and the dev label needs the number.
         #[cfg(feature = "dev-tools")]
@@ -338,16 +358,20 @@ impl Game {
         // `scene_target` and the weather's own target and always end in
         // `scene_target`: the field under the light, multiplied by the
         // light map, then what shines by itself, then the air over it all.
+        // A pass that covers a whole target - the weather's - is drawn in
+        // the target's own pixels; the world is drawn through `in_target`.
         let weather = match effects.weather.as_deref_mut() {
-            Some(fx) => fx.begin(rl, thread, self, effects.fx, textures),
+            Some(fx) => fx.begin(rl, thread, self, effects.fx, textures, camera),
             None => None,
         };
         match weather {
             None => {
                 rl.draw_texture_mode(thread, scene_target, |mut d| {
                     d.clear_background(Color::WHITE);
-                    self.paint_field_lit(&mut d, textures, None);
-                    self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, 1.0);
+                    d.draw_mode2D(in_target, |mut d, _| {
+                        self.paint_field_lit(&mut d, textures, false, cull);
+                        self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, 1.0, camera);
+                    });
                 });
             }
             Some(frame) => {
@@ -363,10 +387,17 @@ impl Game {
                     let first: &mut RenderTexture2D = if first_in_scene { &mut *scene_target } else { &mut *lit_target };
                     rl.draw_texture_mode(thread, first, |mut d| {
                         d.clear_background(Color::WHITE);
-                        self.paint_field_lit(&mut d, textures, plan.ground.then_some((&mut passes, &frame)));
-                        if !plan.lit {
-                            self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools);
+                        // The ground pass draws the bare ground with the
+                        // sky's mark on it in place of the ground tileset.
+                        if plan.ground {
+                            passes.draw_ground(&mut d, &frame);
                         }
+                        d.draw_mode2D(in_target, |mut d, _| {
+                            self.paint_field_lit(&mut d, textures, plan.ground, cull);
+                            if !plan.lit {
+                                self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera);
+                            }
+                        });
                     });
                 }
                 if plan.lit {
@@ -374,7 +405,9 @@ impl Game {
                         if first_in_scene { (&*scene_target, &mut *lit_target) } else { (&*lit_target, &mut *scene_target) };
                     rl.draw_texture_mode(thread, to, |mut d| {
                         passes.draw_lit(&mut d, under, &frame);
-                        self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools);
+                        d.draw_mode2D(in_target, |mut d, _| {
+                            self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera);
+                        });
                     });
                 }
                 if plan.sky {
@@ -385,6 +418,12 @@ impl Game {
             }
         }
 
+        // The ripples are measured on the field, and the scene target holds
+        // the camera's part of it (`Camera::field_uv`).
+        let (field_w, field_h) = camera.field;
+        for ripple in [&mut *effects.shock, &mut *effects.muzzle, &mut *effects.impact] {
+            ripple.set_view(camera);
+        }
         // If a shockwave is playing, push its current center/time to the shader
         // before the blit below samples through it.
         // Every live ripple goes up as one set of arrays and resolves in a
@@ -395,7 +434,7 @@ impl Game {
             let mut times = [0.0f32; SHOCK_MAX];
             let mut gains = [0.0f32; SHOCK_MAX];
             for (i, shock) in self.shocks.iter().take(SHOCK_MAX).enumerate() {
-                centers[i] = screen_to_ripple_uv(shock.center, screen_width as f32, screen_height as f32);
+                centers[i] = field_to_ripple_uv(shock.center, field_w, field_h);
                 times[i] = shock.time;
                 gains[i] = shock.strength;
             }
@@ -409,16 +448,15 @@ impl Game {
         let source = Rectangle {
             x: 0.0,
             y: 0.0,
-            width: screen_width as f32,
-            height: -(screen_height as f32),
+            width: target_width as f32,
+            height: -(target_height as f32),
         };
 
         // Camera shake: a short decaying wobble on the same kill-shockwave
         // trigger as `self.shock` itself (see CAMERA_SHAKE_DURATION's doc
-        // comment), applied purely as an offset on this blit's destination
-        // rather than a real camera - the game has no camera transform (see
-        // `Shockwave::center`'s doc comment), so shifting where the already-
-        // composited scene lands on screen is the cheapest way to get the
+        // comment), applied purely as an offset on this blit's destination,
+        // in world pixels at the camera's scale - shifting where the
+        // already-composited scene lands is the cheapest way to get the
         // effect. Two out-of-phase sine waves stand in for randomness so x/y
         // don't shake in lockstep - this is a pure draw pass (see this
         // module's own doc comment), not the place to reach for an rng.
@@ -464,37 +502,41 @@ impl Game {
         blit_offset.y = (blit_offset.y / 2.0).round() * 2.0;
 
         let origin = layout.field_origin();
-        let blit_at = Vector2::new(blit_offset.x + origin.x, blit_offset.y + origin.y);
+        let dest = camera.dest();
+        let blit = Rectangle::new(origin.x + blit_offset.x * camera.scale, origin.y + blit_offset.y * camera.scale, dest.width, dest.height);
+        // What lies in the world, drawn over the scene onto the field area;
+        // and the field area itself, for what stands over the field.
+        let on_field = camera.on_field(origin);
         let field_camera = Camera2D {
             offset: origin.into(),
             target: Vector2::new(0.0, 0.0),
             rotation: 0.0,
             zoom: 1.0,
         };
+        // A point of the world as the scene target's texel, y up the way a
+        // render texture reads.
+        let texel = |at: Position| Vector2::new(at.x - camera.origin.x, target_height as f32 - (at.y - camera.origin.y));
 
         rl.draw_texture_mode(thread, composite, |mut d| {
             d.clear_background(Color::BLACK);
 
             if !self.shocks.is_empty() {
                 d.draw_shader_mode(&mut effects.shock.shader, |mut sd| {
-                    sd.draw_texture_rec(&*scene_target, source, blit_at, Color::WHITE);
+                    sd.draw_texture_pro(&*scene_target, source, blit, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
                 });
             } else {
-                d.draw_texture_rec(&*scene_target, source, blit_at, Color::WHITE);
+                d.draw_texture_pro(&*scene_target, source, blit, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
             }
 
-            // Everything from here to the bar is field-relative: the flash
-            // quads, the overlays, the banners and the dims all centre on
-            // and cover the field, never the bar.
-            d.draw_mode2D(field_camera, |mut d, _| {
+            // The ripples' quads lie in the world: drawn through `on_field`.
+            d.draw_mode2D(on_field, |mut d, _| {
                 // Layer each muzzle flash's tiny heat-haze ripple on top, one small
                 // quad at a time: source and dest are the same on-screen patch (just
                 // re-sampling that bit of the already-composited scene through the
                 // ripple shader), so this reads as a localized wobble rather than
                 // redistorting the whole frame.
-                for flash in &self.muzzle_flashes {
-                    let uv =
-                        screen_to_ripple_uv(flash.center, screen_width as f32, screen_height as f32);
+                for flash in self.muzzle_flashes.iter().filter(|f| !culled(cull, f.center)) {
+                    let uv = field_to_ripple_uv(flash.center, field_w, field_h);
                     effects
                         .muzzle
                         .shader
@@ -505,9 +547,10 @@ impl Game {
                         .set_shader_value(effects.muzzle.time_loc, flash.time);
 
                     let r = tuning().muzzle_flash_quad_radius;
+                    let at = texel(flash.center);
                     let flash_source = Rectangle {
-                        x: flash.center.x - r,
-                        y: (screen_height as f32 - flash.center.y) - r,
+                        x: at.x - r,
+                        y: at.y - r,
                         width: r * 2.0,
                         height: -(r * 2.0),
                     };
@@ -532,9 +575,8 @@ impl Game {
                 }
 
                 // Same treatment for every in-flight shell-impact flash.
-                for flash in &self.impact_flashes {
-                    let uv =
-                        screen_to_ripple_uv(flash.center, screen_width as f32, screen_height as f32);
+                for flash in self.impact_flashes.iter().filter(|f| !culled(cull, f.center)) {
+                    let uv = field_to_ripple_uv(flash.center, field_w, field_h);
                     effects
                         .impact
                         .shader
@@ -545,9 +587,10 @@ impl Game {
                         .set_shader_value(effects.impact.time_loc, flash.time);
 
                     let r = tuning().impact_flash_quad_radius;
+                    let at = texel(flash.center);
                     let flash_source = Rectangle {
-                        x: flash.center.x - r,
-                        y: (screen_height as f32 - flash.center.y) - r,
+                        x: at.x - r,
+                        y: at.y - r,
                         width: r * 2.0,
                         height: -(r * 2.0),
                     };
@@ -570,12 +613,14 @@ impl Game {
                         );
                     });
                 }
+            });
 
-                // A kill or a barrel blast opens with a brief whole-screen
-                // flash (`Game::screen_flash`, started and spaced out by
-                // `Game::flash_screen`). After the ripple quads, which re-blit
-                // patches of the un-flashed scene and would otherwise punch
-                // darker squares through it.
+            // A kill or a barrel blast opens with a brief whole-screen
+            // flash (`Game::screen_flash`, started and spaced out by
+            // `Game::flash_screen`), over the whole field area. After the
+            // ripple quads, which re-blit patches of the un-flashed scene and
+            // would otherwise punch darker squares through it.
+            d.draw_mode2D(field_camera, |mut d, _| {
                 if let Some(age) = self.screen_flash {
                     let seconds = tuning().blast_screen_flash_seconds;
                     if seconds > 0.0 && age < seconds {
@@ -584,29 +629,38 @@ impl Game {
                         d.draw_rectangle(0, 0, screen_width, screen_height, Color::new(255, 240, 200, a));
                     }
                 }
+            });
 
-                // Debug overlays (dev builds only): the two tank layers -
-                // hitbox/collider outlines and the stats card, each on its
-                // own flag - for every tank, then the dev server's other
-                // layers. Drawn here (screen space, post-composite) rather
-                // than into scene_target, so they're never warped by an
-                // in-flight shockwave and always render crisp - tank.position
-                // is already screen pixels (no camera transform), so the two
-                // spaces line up 1:1 with no extra math.
+            // Debug overlays (dev builds only): the two tank layers -
+            // hitbox/collider outlines and the stats card, each on its own
+            // flag - for every tank, then the dev server's other layers.
+            // Drawn here, post-composite, rather than into scene_target, so
+            // they're never warped by an in-flight shockwave and always
+            // render crisp; they lie in the world, so `on_field` puts them
+            // over what they describe.
+            #[cfg(feature = "dev-tools")]
+            d.draw_mode2D(on_field, |mut d, _| {
+                let ov = self.debug_overlays;
+                if ov.hitboxes || ov.stats {
+                    for (tank, ai) in self.world.query::<(&Tank, &Ai)>().iter() {
+                        draw_tank_layers(&mut d, ov, tank, Some(ai));
+                    }
+                    for entity in self.players().into_iter().flatten() {
+                        crate::simulation::with_tank(&self.world, entity, |tank| {
+                            draw_tank_layers(&mut d, ov, tank, None);
+                        });
+                    }
+                }
+                self.draw_debug_overlays(&mut d, screen_width as f32, screen_height as f32);
+            });
+
+            // Everything from here to the bar stands over the field: the
+            // labels, the banners and the dims all centre on and cover the
+            // field area, never the bar.
+            d.draw_mode2D(field_camera, |mut d, _| {
                 #[cfg(feature = "dev-tools")]
                 {
                     let ov = self.debug_overlays;
-                    if ov.hitboxes || ov.stats {
-                        for (tank, ai) in self.world.query::<(&Tank, &Ai)>().iter() {
-                            draw_tank_layers(&mut d, ov, tank, Some(ai));
-                        }
-                        for entity in self.players().into_iter().flatten() {
-                            crate::simulation::with_tank(&self.world, entity, |tank| {
-                                draw_tank_layers(&mut d, ov, tank, None);
-                            });
-                        }
-                    }
-                    self.draw_debug_overlays(&mut d, screen_width as f32, screen_height as f32);
                     // Which preset is live, in the field's top-left corner (the
                     // player's readouts are in the bar, so this corner is free),
                     // so the I key's cycling is visible without counting layers.
@@ -824,9 +878,10 @@ impl Game {
     /// The field as it stands under the light - under daylight, or under
     /// the weather's light map, which the light pass multiplies it by: the
     /// floor, the fires on it, the tiles and their glows, and everything
-    /// standing on it. `ground` is the weather's ground pass, drawn in
-    /// place of the bare ground tileset.
-    fn paint_field_lit<D: RaylibDraw>(&self, d: &mut D, textures: &Textures, ground: Option<(&mut Passes, &WeatherFrame)>) {
+    /// standing on it, in world pixels. `ground_drawn` says the weather's
+    /// ground pass already covered the target in place of the bare ground
+    /// tileset; `cull` is the world worth drawing (`Camera::cull`).
+    fn paint_field_lit<D: RaylibDraw>(&self, d: &mut D, textures: &Textures, ground_drawn: bool, cull: Option<Rectangle>) {
         // The field itself is painted through the `Canvas` trait in the
         // three stages `mapshot` also runs on a CPU canvas (`paint_floor`,
         // `paint_tiles`, `paint_standing`); between them come the layers
@@ -836,12 +891,10 @@ impl Game {
         // so each stage makes its own. Under weather the ground pass
         // draws the ground with the sky's mark on it, and the marks lie
         // over that: tracks in the snow.
-        match ground {
-            Some((passes, frame)) => {
-                passes.draw_ground(d, frame);
-                self.paint_floor_marks(&mut GpuCanvas::new(d, textures));
-            }
-            None => self.paint_floor(&mut GpuCanvas::new(d, textures)),
+        if ground_drawn {
+            self.paint_floor_marks(&mut GpuCanvas::culled(d, textures, cull));
+        } else {
+            self.paint_floor(&mut GpuCanvas::culled(d, textures, cull));
         }
 
         // Burning ground cells: tongues of flame standing on each
@@ -850,6 +903,7 @@ impl Game {
         // over the fire) and under whatever drives through them. Upper
         // cells first, so a lower cell's flames stand in front.
         let mut cells = self.burning_cells();
+        cells.retain(|(at, ..)| !culled(cull, *at));
         if !cells.is_empty() {
             cells.sort_by(|a, b| a.0.y.total_cmp(&b.0.y).then(a.0.x.total_cmp(&b.0.x)));
             let t = tuning();
@@ -865,24 +919,26 @@ impl Game {
             pyro::draw(&mut GpuCanvas::new(d, textures), &flames);
         }
 
-        self.paint_tiles(&mut GpuCanvas::new(d, textures));
+        self.paint_tiles(&mut GpuCanvas::culled(d, textures, cull));
 
         // A barrel whose fuse is lit pulses (additive, so it reads as
         // light on the drum rather than a disc over it).
         d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
             // An active portal glows from below its spiral.
             if self.portals_active() {
-                for &at in &self.portals {
+                for &at in self.portals.iter().filter(|at| !culled(cull, **at)) {
                     draw_portal_glow(&mut bd, at, self.time);
                 }
             }
             for obstacle in self.world.query::<&Obstacle>().iter() {
-                if obstacle.fuse.is_some() {
+                if obstacle.fuse.is_some() && !culled(cull, obstacle.position) {
                     draw_fuse_glow(&mut bd, obstacle.position, self.time);
                 }
             }
             for (at, left, _total) in self.burning_cells() {
-                draw_fire_glow(&mut bd, at, self.time, left);
+                if !culled(cull, at) {
+                    draw_fire_glow(&mut bd, at, self.time, left);
+                }
             }
             // The flamethrower's nozzle while it fires: a hot disc at
             // the muzzle and a fainter one a third of the way out.
@@ -895,25 +951,28 @@ impl Game {
             // `paint_standing` and `paint_tiles`.
             let t = tuning();
             let bands = t.glow_bands.max(0) as u32;
-            for tank in self.world.query::<&crate::tank::Tank>().iter() {
+            for tank in self.world.query::<&crate::tank::Tank>().iter().filter(|tank| !culled(cull, tank.position)) {
                 let lean = pyro::smoke_lean(&t, tank.position, self.time);
                 pyro::draw_glows(&mut Rl(&mut bd), &crate::damage_stage::flames(tank, self.time, lean), bands);
             }
-            for obstacle in self.world.query::<&Obstacle>().iter().filter(|o| o.burning) {
+            for obstacle in self.world.query::<&Obstacle>().iter().filter(|o| o.burning && !culled(cull, o.position)) {
                 pyro::draw_glows(&mut Rl(&mut bd), &crate::game::tile_flames(obstacle, self.time), bands);
             }
         });
 
-        self.paint_standing(&mut GpuCanvas::new(d, textures), PaintOptions { locate_cue: true });
+        self.paint_standing(&mut GpuCanvas::culled(d, textures, cull), PaintOptions { locate_cue: true });
     }
 
     /// What shines by its own light, over the lit field and so as bright
     /// at night as at noon: the locate labels, the light the shots throw,
     /// the shots, hits, flames and flares, the blasts, whatever is in the
-    /// air and the particles. `day_pools` scales the daylight's glow pools
-    /// on the ground (`draw_ground_light`), which the light map stands in
-    /// for under a dark sky.
-    fn paint_field_glowing<D: RaylibDraw>(&self, d: &mut D, textures: &Textures, mut shots: Option<&mut ShotShaders>, fx: &crate::fx::Fx, day_pools: f32) {
+    /// air and the particles, in world pixels. `day_pools` scales the
+    /// daylight's glow pools on the ground (`draw_ground_light`), which the
+    /// light map stands in for under a dark sky; `camera` is the view the
+    /// target holds, which the shot shaders place themselves in and whose
+    /// culling rectangle the many small things are tested against.
+    fn paint_field_glowing<D: RaylibDraw>(&self, d: &mut D, textures: &Textures, mut shots: Option<&mut ShotShaders>, fx: &crate::fx::Fx, day_pools: f32, camera: &Camera) {
+        let cull = camera.cull();
         // A hit lights up what it landed on: the hull or the tile drawn
         // again in light for a few frames, stepping down.
         if !fx.flashes().is_empty() {
@@ -936,7 +995,7 @@ impl Game {
             d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
                 let mut c = GpuCanvas::new(&mut bd, textures);
                 for tank in self.world.query::<&Tank>().iter() {
-                    if self.hide_players && tank.is_player() {
+                    if (self.hide_players && tank.is_player()) || culled(cull, tank.position) {
                         continue;
                     }
                     crate::tank::draw_tank_glow(&mut c, tank, self.time, tank_glow);
@@ -961,11 +1020,11 @@ impl Game {
             d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
                 // Light on the floor first: every shot, burn and flash
                 // lights the ground around it in its own colour.
-                self.draw_ground_light(&mut bd, day_pools);
-                for shell in self.world.query::<&Shell>().iter() {
+                self.draw_ground_light(&mut bd, day_pools, cull);
+                for shell in self.world.query::<&Shell>().iter().filter(|s| !culled(cull, s.position)) {
                     draw_shell_light(&mut bd, shell);
                 }
-                for bullet in self.world.query::<&Bullet>().iter() {
+                for bullet in self.world.query::<&Bullet>().iter().filter(|b| !culled(cull, b.position)) {
                     draw_bullet_light(&mut bd, bullet);
                 }
                 for beam in &self.laser_beams {
@@ -976,7 +1035,7 @@ impl Game {
 
         // A hit is the burst the particle layer's impact composes
         // (`burst.rs`), so the baked impact frames are left out.
-        for shell in self.world.query::<&Shell>().iter() {
+        for shell in self.world.query::<&Shell>().iter().filter(|s| !culled(cull, s.position)) {
             if self.shadows_enabled && shell.state == ShellState::Flying {
                 draw_shell_shadow(d, textures.shells, shell);
             }
@@ -990,19 +1049,19 @@ impl Game {
         // A flying bolt is the shader orb where the shaders loaded; its
         // muzzle and impact frames stay the baked sprite.
         let orb = glow && shots.is_some();
-        for plasma in self.world.query::<&Plasma>().iter() {
+        for plasma in self.world.query::<&Plasma>().iter().filter(|p| !culled(cull, p.position)) {
             let flying = plasma.state == PlasmaState::Flying;
             if self.shadows_enabled && flying {
                 draw_plasma_shadow(d, textures.plasma, plasma, orb);
             }
             match shots.as_deref_mut() {
-                Some(shots) if orb && flying => shots.draw_orb(d, plasma, self.time, self.map.field_size().1),
+                Some(shots) if orb && flying => shots.draw_orb(d, plasma, self.time, camera),
                 _ if !flying => {}
                 _ => draw_plasma(d, textures.plasma, plasma),
             }
         }
 
-        for bullet in self.world.query::<&Bullet>().iter() {
+        for bullet in self.world.query::<&Bullet>().iter().filter(|b| !culled(cull, b.position)) {
             if self.shadows_enabled && bullet.state == BulletState::Flying {
                 draw_bullet_shadow(d, textures.minigun_bullets, bullet);
             }
@@ -1026,6 +1085,7 @@ impl Game {
             let hits: Vec<Vec<pyro::Shape>> = fx
                 .impacts()
                 .iter()
+                .filter(|i| !culled(cull, i.pos))
                 .map(|i| crate::burst::compose(i.kind, i.pos, i.dir, i.age, i.seed, pyro::smoke_lean(&t, i.pos, self.time)))
                 .collect();
             {
@@ -1049,7 +1109,7 @@ impl Game {
         if let Some(shots) = shots.as_deref_mut().filter(|_| glow) {
             for (i, jet) in self.flames().iter().enumerate() {
                 let (from, dir, reach) = jet.drawn();
-                shots.draw_flame(d, from, dir, reach, self.time, i as f32 * 7.31, self.map.field_size().1);
+                shots.draw_flame(d, from, dir, reach, self.time, i as f32 * 7.31, camera);
             }
         }
 
@@ -1063,7 +1123,7 @@ impl Game {
             let flashes: Vec<Vec<pyro::Shape>> = self
                 .muzzle_flashes
                 .iter()
-                .filter(|f| !at_nozzle(f.center, &nozzles))
+                .filter(|f| !at_nozzle(f.center, &nozzles) && !culled(cull, f.center))
                 .map(|f| {
                     let near = crate::fx::shot_near(self, f.center);
                     crate::burst::muzzle(f.center, near.map(|n| n.0), f.time, crate::blast::seed_for(f.center), near.and_then(|n| n.1))
@@ -1123,14 +1183,15 @@ impl Game {
         // off a wreck passes over tanks and shells, not under them.
         // Their shadows go down first so no piece is drawn over
         // another's shadow.
+        let flying = || self.decals.iter().filter(|dc| !dc.landed() && !culled(cull, dc.draw_pos()));
         if self.shadows_enabled {
-            for decal in self.decals.iter().filter(|dc| !dc.landed()) {
+            for decal in flying() {
                 draw_decal_shadow(d, decal);
             }
         }
         {
             let mut c = GpuCanvas::new(d, textures);
-            for decal in self.decals.iter().filter(|dc| !dc.landed()) {
+            for decal in flying() {
                 draw_decal(&mut c, decal);
             }
             // Launched fuel drums, tumbling over the lot on their way to
@@ -1161,7 +1222,7 @@ impl Game {
         // Sparks, chips, dust and smoke over the top of everything in
         // the scene, but still inside pass 1 so an in-flight shockwave
         // warps them and the camera shake carries them along.
-        crate::render::fx::draw(fx, d);
+        crate::render::fx::draw(fx, d, cull);
     }
 }
 
@@ -1369,9 +1430,9 @@ fn draw_tank_stats(d: &mut impl RaylibDraw, tank: &Tank, ai: Option<&Ai>, geo: &
 impl Game {
     /// The debug overlay layers beyond the two tank layers
     /// (`Game::debug_overlays`, docs/dev-server-design.md; dev builds only),
-    /// screen space and post-composite like them: blocked nav cells, each
-    /// enemy's AI memory, projectile hit boxes, engagement targets, pickup
-    /// collect radii. Each layer costs nothing while off.
+    /// in world pixels and post-composite like them: blocked nav cells,
+    /// each enemy's AI memory, projectile hit boxes, engagement targets,
+    /// pickup collect radii. Each layer costs nothing while off.
     fn draw_debug_overlays(&self, d: &mut impl RaylibDraw, width: f32, height: f32) {
         let ov = self.debug_overlays;
         if ov.nav_grid {

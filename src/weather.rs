@@ -4,7 +4,8 @@
 //! the one part of this module the simulation reads), what each
 //! `map::Weather` looks like (`Look`), which of the renderer's stages a
 //! frame needs (`Plan`), when lightning strikes (`lightning`), and every
-//! light the round throws into the dark (`lights`), with the walls' shadows
+//! light the round throws into the dark (`lights`, or `lights_in` the part
+//! of the field a camera shows), with the walls' shadows
 //! cast by a raycast over the tile grid (`Occluders`). `render/weather.rs`
 //! is the raylib half: the light map, the ground and the sky passes.
 //!
@@ -24,7 +25,7 @@ use crate::frog::Side;
 use crate::fx::{Impact, ImpactKind};
 use crate::laser::LaserVariant;
 use crate::map::Weather;
-use crate::math::{Color, Vec2};
+use crate::math::{Color, Rectangle, Vec2};
 use crate::missile::Missile;
 use crate::obstacle::Obstacle;
 use crate::pickup::{Pickup, PickupKind};
@@ -506,6 +507,14 @@ impl Light {
         self
     }
 
+    /// Whether any of its light can fall inside `rect`: its source is no
+    /// further than its radius from the rectangle.
+    pub fn reaches(&self, rect: Rectangle) -> bool {
+        let dx = (rect.x - self.at.x).max(self.at.x - (rect.x + rect.width)).max(0.0);
+        let dy = (rect.y - self.at.y).max(self.at.y - (rect.y + rect.height)).max(0.0);
+        dx * dx + dy * dy <= self.radius * self.radius
+    }
+
     /// How many rays the light is drawn with: enough that the gap between
     /// two ray ends is a few pixels at full reach.
     pub fn ray_count(&self) -> usize {
@@ -636,6 +645,13 @@ fn heading(rotation: f32) -> Vec2 {
 /// is playing (`impacts`: `fx.rs` is the window's, not the round's). Empty
 /// under a sky whose lights do not show.
 pub fn lights(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning) -> Vec<Light> {
+    lights_in(game, impacts, look, t, None)
+}
+
+/// `lights`, less every light that cannot reach `view` - the part of the
+/// field a camera shows (`view::Camera::part`) - before any is cast
+/// against the walls. `None` keeps them all.
+pub fn lights_in(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning, view: Option<Rectangle>) -> Vec<Light> {
     let k = look.lights;
     if k <= 0.0 {
         return Vec::new();
@@ -874,7 +890,10 @@ pub fn lights(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning) -> Vec<L
     }
 
     let occluders = t.light_shadows.then(|| Occluders::of(game));
-    out.into_iter().map(|light| light.cast(occluders.as_ref(), t.light_wall_bleed_px)).collect()
+    out.into_iter()
+        .filter(|light| view.is_none_or(|v| light.reaches(v)))
+        .map(|light| light.cast(occluders.as_ref(), t.light_wall_bleed_px))
+        .collect()
 }
 
 #[cfg(test)]
@@ -1102,6 +1121,35 @@ cells."14,5" = { kind = "wall", material = "wood" }
         let point = Light::point(Position::new(0.0, 0.0), 100.0, [1.0; 3]);
         let n = point.ray_count();
         assert!((0..n).all(|i| point.ray(i, n).1 == 1.0));
+    }
+
+    #[test]
+    fn a_light_reaches_a_rectangle_no_further_than_its_radius() {
+        let light = Light::point(Position::new(0.0, 0.0), 100.0, [1.0; 3]);
+        assert!(light.reaches(Rectangle::new(-10.0, -10.0, 20.0, 20.0)), "round its source");
+        assert!(light.reaches(Rectangle::new(99.0, -10.0, 20.0, 20.0)), "just inside its radius");
+        assert!(!light.reaches(Rectangle::new(101.0, -10.0, 20.0, 20.0)), "just past it");
+        assert!(light.reaches(Rectangle::new(70.0, 70.0, 20.0, 20.0)), "a corner 99 px off");
+        assert!(!light.reaches(Rectangle::new(71.0, 71.0, 20.0, 20.0)), "a corner 100.4 px off");
+        assert!(!light.reaches(Rectangle::new(-150.0, -50.0, 20.0, 20.0)), "130 px to the left");
+    }
+
+    #[test]
+    fn a_view_keeps_only_the_lights_that_reach_it() {
+        let game = round("version = 1\ncells.\"2,2\" = { kind = \"frog\" }\ncells.\"10,8\" = { kind = \"start\" }\n");
+        let t = Tuning::DEFAULT;
+        let look = Look::of(Weather::Night, &t);
+        let all = lights(&game, &[], &look, &t);
+        assert!(!all.is_empty());
+        assert_eq!(lights_in(&game, &[], &look, &t, None).len(), all.len(), "no view keeps every light");
+        // Far from the hull at cell (10, 8) and the frog at (2, 2).
+        let far = Rectangle::new(900.0, 400.0, 100.0, 100.0);
+        assert!(lights_in(&game, &[], &look, &t, Some(far)).is_empty());
+        // Over the hull: its headlight and everything else round it.
+        let near = Rectangle::new(300.0, 200.0, 64.0, 64.0);
+        let kept = lights_in(&game, &[], &look, &t, Some(near));
+        assert!(kept.iter().any(|l| matches!(l.shape, Shape::Cone { .. })), "the headlight");
+        assert!(kept.iter().all(|l| l.reaches(near)));
     }
 
     #[test]

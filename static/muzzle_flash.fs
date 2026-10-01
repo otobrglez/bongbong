@@ -6,7 +6,14 @@ out vec4 finalColor;
 uniform sampler2D texture0;   // the rendered scene
 uniform vec2 center;          // hit point, in 0..1 UV coords
 uniform float time;           // seconds since the flash started
-uniform vec2 resolution;      // screen size, to keep the puff round
+uniform vec2 resolution;      // the field's size, to keep the puff round
+
+// The part of the field the scene target holds (`Camera::field_uv`): its
+// texture coordinate t is field UV viewUv + t * viewUvSize - (0, 0) and
+// (1, 1) for the whole field. A ripple is measured on the field, whatever
+// part of it is on screen.
+uniform vec2 viewUv;
+uniform vec2 viewUvSize;
 
 uniform float speed;          // front growth, UV units/sec
 uniform float width;          // thickness of the pushed band, UV units
@@ -14,7 +21,7 @@ uniform float strength;       // how hard the puff shoves the image, UV units
 uniform float duration;       // seconds the effect plays before fully fading
 
 void main() {
-    vec2 toPixel = fragTexCoord - center;
+    vec2 toPixel = viewUv + fragTexCoord * viewUvSize - center;
 
     // aspect-correct so the puff is round, not an ellipse
     vec2 corrected = toPixel;
@@ -37,7 +44,7 @@ void main() {
 
     vec2 uv = fragTexCoord;
     if (dist > 0.0001) {
-        uv -= normalize(toPixel) * amount;
+        uv -= normalize(toPixel) * amount / viewUvSize;
     }
     finalColor = texture(texture0, uv);
 }

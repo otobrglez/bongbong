@@ -212,6 +212,19 @@ pub trait Canvas {
     /// in one call (`render::canvas::BlockTexture`) and nothing when that
     /// upload is missing or stale.
     fn blocks(&mut self, image: &BlockImage);
+
+    /// The world rectangle worth drawing on this canvas
+    /// (`view::Camera::cull`): a loop over many things may skip one
+    /// anchored outside it. `None` - every canvas but a camera's on part of
+    /// the field - draws everything.
+    fn cull(&self) -> Option<Rectangle> {
+        None
+    }
+
+    /// Whether a draw anchored at `at` can be left out (`view::culled`).
+    fn culls(&self, at: Position) -> bool {
+        crate::view::culled(self.cull(), at)
+    }
 }
 
 /// A small RGBA image drawn over the field at a whole-block scale: a floor

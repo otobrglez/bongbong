@@ -2,7 +2,8 @@
 //! headless half): the light map and the three passes a weathered frame
 //! runs around pass 1 of `Game::render`.
 //!
-//! - **The light map** (`light` target, field-sized): cleared to the look's
+//! - **The light map** (`light` target, the size of the scene target - the
+//!   camera's view at a texel per world pixel): cleared to the look's
 //!   ambient, then every light of `weather::lights` added in, each a fan of
 //!   triangles out to where its rays stop, bright at the source and falling
 //!   off with distance - so walls cast shadows. Stored halved, so a pixel
@@ -21,9 +22,13 @@
 //! The passes ping-pong between `scene_target` and this module's `lit`
 //! target and always end in `scene_target`, so pass 2, the ripple
 //! re-blits and the dev server's screenshots read the weathered field
-//! with no change of their own. Every uniform is set per frame from the
-//! round and the tuning table; nothing is kept between frames but the
-//! targets and the cell mask.
+//! with no change of their own. Every target is the camera's view
+//! (`view::Camera`) and every pass works in world pixels, so the snow, the
+//! rain and the light's bands stay on the world's block grid and the sun's
+//! gradient spans the field, while the vignette frames the view. Every
+//! uniform is set per frame from the round, the camera and the tuning
+//! table; nothing is kept between frames but the targets and the cell
+//! mask.
 
 use sola_raylib::prelude::*;
 use std::sync::Arc;
@@ -36,7 +41,8 @@ use crate::render::canvas::GpuCanvas;
 use crate::render::game::Textures;
 use crate::simulation::Game;
 use crate::tuning::{tuning, Tuning};
-use crate::weather::{lightning, lights, Light, Look, Plan, Rgb, Shape};
+use crate::view::Camera;
+use crate::weather::{lightning, lights_in, Light, Look, Plan, Rgb, Shape};
 use crate::{MAX_SEATS, OBSTACLE_GRID_SIZE};
 
 /// The shaders' clock wraps after this many seconds. Their noise hashes
@@ -53,6 +59,8 @@ const RINGS: [f32; 5] = [0.0, 0.16, 0.38, 0.66, 1.0];
 
 struct LightLocs {
     field_size: i32,
+    view_origin: i32,
+    view_size: i32,
     sun: i32,
     ambient: i32,
     bands: i32,
@@ -63,7 +71,8 @@ struct LightLocs {
 }
 
 struct GroundLocs {
-    field_size: i32,
+    view_origin: i32,
+    view_size: i32,
     cells: i32,
     time: i32,
     rain: i32,
@@ -74,7 +83,8 @@ struct GroundLocs {
 }
 
 struct SkyLocs {
-    field_size: i32,
+    view_origin: i32,
+    view_size: i32,
     time: i32,
     lit: i32,
     ambient: i32,
@@ -111,7 +121,8 @@ struct PassShaders {
     sky_locs: SkyLocs,
 }
 
-/// The field-sized render targets, re-created when the field changes size.
+/// The render targets, each the scene target's size, re-created when the
+/// camera's view changes size.
 struct Targets {
     size: (i32, i32),
     light: RenderTexture2D,
@@ -153,6 +164,8 @@ pub struct WeatherFrame {
     time: f32,
     /// Lightning, 0 to 1.
     flash: f32,
+    /// The view the frame is drawn through; `size` is its targets' size.
+    camera: Camera,
     size: (i32, i32),
     cells: (i32, i32),
     seats: [Vector2; MAX_SEATS],
@@ -185,6 +198,13 @@ fn stored(rgb: Rgb, alpha: u8) -> Color {
     Color::new(c(rgb[0]), c(rgb[1]), c(rgb[2]), alpha)
 }
 
+/// Where a pass's target lies in the world: the world point at its
+/// top-left corner and its size, a texel per world pixel.
+fn set_view(s: &mut Shader, origin_loc: i32, size_loc: i32, frame: &WeatherFrame) {
+    s.set_shader_value(origin_loc, Vector2::new(frame.camera.origin.x, frame.camera.origin.y));
+    s.set_shader_value(size_loc, Vector2::new(frame.size.0 as f32, frame.size.1 as f32));
+}
+
 /// A render texture read the right way up: the whole of it, flipped (raylib
 /// stores a target bottom-up).
 fn whole(size: (i32, i32)) -> Rectangle {
@@ -210,6 +230,8 @@ impl WeatherFx {
         let sky = compile(rl, thread, "weather_sky.fs", sky_src)?;
         let light_locs = LightLocs {
             field_size: light.get_shader_location("fieldSize"),
+            view_origin: light.get_shader_location("viewOrigin"),
+            view_size: light.get_shader_location("viewSize"),
             sun: light.get_shader_location("sun"),
             ambient: light.get_shader_location("ambient"),
             bands: light.get_shader_location("bands"),
@@ -219,7 +241,8 @@ impl WeatherFx {
             light_map: light.get_shader_location("lightMap"),
         };
         let ground_locs = GroundLocs {
-            field_size: ground.get_shader_location("fieldSize"),
+            view_origin: ground.get_shader_location("viewOrigin"),
+            view_size: ground.get_shader_location("viewSize"),
             cells: ground.get_shader_location("cells"),
             time: ground.get_shader_location("time"),
             rain: ground.get_shader_location("rain"),
@@ -229,7 +252,8 @@ impl WeatherFx {
             cell_mask: ground.get_shader_location("cellMask"),
         };
         let sky_locs = SkyLocs {
-            field_size: sky.get_shader_location("fieldSize"),
+            view_origin: sky.get_shader_location("viewOrigin"),
+            view_size: sky.get_shader_location("viewSize"),
             time: sky.get_shader_location("time"),
             lit: sky.get_shader_location("lit"),
             ambient: sky.get_shader_location("ambient"),
@@ -262,15 +286,16 @@ impl WeatherFx {
 
     /// Resolve this frame's weather for `game` and draw what has to exist
     /// before pass 1: the light map (the round's lights and the particle
-    /// layer's hits) and the bare ground for the ground pass. `None` is a
-    /// clear frame - the sky in force draws nothing, or its targets could
-    /// not be made - and pass 1 runs as it would with no weather at all.
-    pub fn begin(&mut self, rl: &mut RaylibHandle, thread: &RaylibThread, game: &Game, fx: &Fx, textures: &Textures) -> Option<WeatherFrame> {
+    /// layer's hits) and the bare ground for the ground pass, both over
+    /// `camera`'s view. `None` is a clear frame - the sky in force draws
+    /// nothing, or its targets could not be made - and pass 1 runs as it
+    /// would with no weather at all.
+    pub fn begin(&mut self, rl: &mut RaylibHandle, thread: &RaylibThread, game: &Game, fx: &Fx, textures: &Textures, camera: &Camera) -> Option<WeatherFrame> {
         let t = tuning();
         let look = Look::of(game.weather(), &t);
         let plan = look.plan()?;
         let (w, h) = game.map.field_size();
-        let size = (w.round().max(1.0) as i32, h.round().max(1.0) as i32);
+        let size = camera.target_size();
         let cells = match self.ensure_targets(rl, thread, size).and_then(|()| if plan.ground { self.ensure_mask(rl, thread, game) } else { Ok((1, 1)) }) {
             Ok(cells) => cells,
             Err(e) => {
@@ -287,13 +312,13 @@ impl WeatherFx {
         let ambient = look.ambient.map(|a| a + (1.05 - a).max(0.0) * (flash * 0.9).min(1.0));
         let targets = self.targets.as_mut().expect("ensure_targets made them");
         if plan.lit {
-            let all = lights(game, fx.impacts(), &look, &t);
-            draw_light_map(rl, thread, &mut targets.light, ambient, &all);
+            let all = lights_in(game, fx.impacts(), &look, &t, camera.part());
+            draw_light_map(rl, thread, &mut targets.light, ambient, &all, camera);
         }
         if plan.ground {
             rl.draw_texture_mode(thread, &mut targets.ground, |mut d| {
                 d.clear_background(Color::WHITE);
-                game.paint_ground(&mut GpuCanvas::new(&mut d, textures));
+                d.draw_mode2D(camera.in_target(), |mut d, _| game.paint_ground(&mut GpuCanvas::culled(&mut d, textures, camera.cull())));
             });
         }
         let mut seats = [Vector2::new(0.0, 0.0); MAX_SEATS];
@@ -318,6 +343,7 @@ impl WeatherFx {
             ambient,
             time: game.time.rem_euclid(CLOCK_WRAP_SECONDS),
             flash,
+            camera: *camera,
             size,
             cells,
             seats,
@@ -400,14 +426,17 @@ fn mask_bytes(game: &Game) -> (i32, i32, Vec<u8>) {
     (cols, rows, bytes)
 }
 
-/// Draw the light map: `ambient` everywhere and every light added over it.
-fn draw_light_map(rl: &mut RaylibHandle, thread: &RaylibThread, target: &mut RenderTexture2D, ambient: Rgb, lights: &[Light]) {
+/// Draw the light map over `camera`'s view: `ambient` everywhere and every
+/// light added over it, in world pixels.
+fn draw_light_map(rl: &mut RaylibHandle, thread: &RaylibThread, target: &mut RenderTexture2D, ambient: Rgb, lights: &[Light], camera: &Camera) {
     rl.draw_texture_mode(thread, target, |mut d| {
         d.clear_background(stored(ambient, 255));
-        d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
-            for light in lights {
-                draw_light(&mut bd, light);
-            }
+        d.draw_mode2D(camera.in_target(), |mut d, _| {
+            d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+                for light in lights {
+                    draw_light(&mut bd, light);
+                }
+            });
         });
     });
 }
@@ -484,8 +513,9 @@ pub struct Passes<'a> {
 
 impl Passes<'_> {
     /// The bare ground with the sky's mark on it (`weather_ground.fs`),
-    /// over the whole field: what pass 1 draws in place of the ground
-    /// tileset.
+    /// over the whole target: what pass 1 draws in place of the ground
+    /// tileset. Drawn in the target's own pixels, outside the world's
+    /// camera.
     pub fn draw_ground<D: RaylibDraw>(&mut self, d: &mut D, frame: &WeatherFrame) {
         let Some(mask) = self.mask else {
             return;
@@ -493,7 +523,7 @@ impl Passes<'_> {
         let t = &frame.tuning;
         let l = &self.shaders.ground_locs;
         let s = &mut self.shaders.ground;
-        s.set_shader_value(l.field_size, Vector2::new(frame.size.0 as f32, frame.size.1 as f32));
+        set_view(s, l.view_origin, l.view_size, frame);
         s.set_shader_value(l.cells, Vector2::new(frame.cells.0 as f32, frame.cells.1 as f32));
         s.set_shader_value(l.time, frame.time);
         s.set_shader_value(l.rain, frame.look.rain);
@@ -512,7 +542,8 @@ impl Passes<'_> {
     }
 
     /// `source` - the field as it stands under daylight - multiplied by
-    /// the light map (`weather_light.fs`), over the whole target.
+    /// the light map (`weather_light.fs`), over the whole target, in the
+    /// target's own pixels.
     pub fn draw_lit<D: RaylibDraw>(&mut self, d: &mut D, source: &RenderTexture2D, frame: &WeatherFrame) {
         let t = &frame.tuning;
         let l = &self.shaders.light_locs;
@@ -521,7 +552,8 @@ impl Passes<'_> {
             let lum = 0.299 * frame.ambient[0] + 0.587 * frame.ambient[1] + 0.114 * frame.ambient[2];
             (1.0 - lum).clamp(0.0, 1.0)
         };
-        s.set_shader_value(l.field_size, Vector2::new(frame.size.0 as f32, frame.size.1 as f32));
+        s.set_shader_value(l.field_size, Vector2::new(frame.camera.field.0, frame.camera.field.1));
+        set_view(s, l.view_origin, l.view_size, frame);
         s.set_shader_value(l.ambient, frame.ambient);
         s.set_shader_value(l.bands, t.light_bands.max(0) as f32);
         s.set_shader_value(l.dither, if t.light_dither { 1.0f32 } else { 0.0 });
@@ -537,12 +569,13 @@ impl Passes<'_> {
     }
 
     /// `source` - the finished field - with the air over it
-    /// (`weather_sky.fs`), over the whole target.
+    /// (`weather_sky.fs`), over the whole target, in the target's own
+    /// pixels.
     pub fn draw_sky<D: RaylibDraw>(&mut self, d: &mut D, source: &RenderTexture2D, frame: &WeatherFrame) {
         let t = &frame.tuning;
         let l = &self.shaders.sky_locs;
         let s = &mut self.shaders.sky;
-        s.set_shader_value(l.field_size, Vector2::new(frame.size.0 as f32, frame.size.1 as f32));
+        set_view(s, l.view_origin, l.view_size, frame);
         s.set_shader_value(l.time, frame.time);
         s.set_shader_value(l.lit, if frame.plan.lit { 1.0f32 } else { 0.0 });
         s.set_shader_value(l.ambient, frame.ambient);

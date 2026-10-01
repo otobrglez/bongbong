@@ -10,7 +10,14 @@ varying vec2 fragTexCoord;
 uniform sampler2D texture0;   // the rendered scene
 uniform vec2 center;          // hit point, in 0..1 UV coords
 uniform float time;           // seconds since the impact started
-uniform vec2 resolution;      // screen size, to keep the pulse round
+uniform vec2 resolution;      // the field's size, to keep the pulse round
+
+// The part of the field the scene target holds (`Camera::field_uv`): its
+// texture coordinate t is field UV viewUv + t * viewUvSize - (0, 0) and
+// (1, 1) for the whole field. A ripple is measured on the field, whatever
+// part of it is on screen.
+uniform vec2 viewUv;
+uniform vec2 viewUvSize;
 
 uniform float speed;          // pulse growth, UV units/sec
 uniform float width;          // thickness of the distorted band, UV units
@@ -22,7 +29,7 @@ uniform float duration;       // seconds the effect plays before fully fading
 // rolling kill ring and the muzzle's soft heat-shimmer. The flash itself is
 // the hit's burst, drawn in blocks (burst.rs); this only bends the picture.
 void main() {
-    vec2 toPixel = fragTexCoord - center;
+    vec2 toPixel = viewUv + fragTexCoord * viewUvSize - center;
 
     // aspect-correct so the pulse is a circle, not an ellipse
     vec2 corrected = toPixel;
@@ -44,7 +51,7 @@ void main() {
 
     vec2 uv = fragTexCoord;
     if (dist > 0.0001) {
-        uv -= normalize(toPixel) * amount;
+        uv -= normalize(toPixel) * amount / viewUvSize;
     }
     vec4 color = texture2D(texture0, uv);
 

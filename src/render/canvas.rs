@@ -62,11 +62,19 @@ impl BlockTexture {
 pub struct GpuCanvas<'a, D, S> {
     d: &'a mut D,
     sheets: &'a S,
+    cull: Option<Rectangle>,
 }
 
 impl<'a, D: RaylibDraw, S: Sheets> GpuCanvas<'a, D, S> {
+    /// A canvas that draws everything it is asked to.
     pub fn new(d: &'a mut D, sheets: &'a S) -> Self {
-        GpuCanvas { d, sheets }
+        Self::culled(d, sheets, None)
+    }
+
+    /// A canvas over a camera's view: `cull` is the world rectangle worth
+    /// drawing (`view::Camera::cull`), `None` for everything.
+    pub fn culled(d: &'a mut D, sheets: &'a S, cull: Option<Rectangle>) -> Self {
+        GpuCanvas { d, sheets, cull }
     }
 }
 
@@ -100,6 +108,10 @@ impl<D: RaylibDraw, S: Sheets> Canvas for GpuCanvas<'_, D, S> {
         let (w, h) = (image.width as f32, image.height as f32);
         let b = image.block as f32;
         self.d.draw_texture_pro(texture, Rectangle::new(0.0, 0.0, w, h), Rectangle::new(0.0, 0.0, w * b, h * b), Vec2::new(0.0, 0.0), 0.0, Color::WHITE);
+    }
+
+    fn cull(&self) -> Option<Rectangle> {
+        self.cull
     }
 }
 impl Pixels {

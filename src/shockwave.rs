@@ -10,8 +10,7 @@ use crate::Position;
 /// most one at a time) and the small, split-second muzzle-flash heat haze
 /// (`Game::muzzle_flashes`, one per shot fired). See `Game::render`.
 pub struct Shockwave {
-    /// Hit point in world/screen pixels (the game has no camera transform, so
-    /// world space and screen space are the same thing).
+    /// Hit point in world pixels.
     pub center: Position,
     /// Seconds since the ripple was triggered.
     pub time: f32,

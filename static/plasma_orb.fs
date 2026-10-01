@@ -28,9 +28,10 @@ in vec2 fragTexCoord;
 in vec4 fragColor;
 out vec4 finalColor;
 
-uniform vec2 orbPos;     // the orb's centre, field px
+uniform vec2 orbPos;     // the orb's centre, world px
 uniform float radiusPx;  // the orb's radius, px
-uniform float fieldHeight; // the field's height, px: the render target's y is flipped
+uniform vec2 viewOrigin; // the world px at the render target's top-left corner
+uniform float viewHeight; // the render target's height, px (a texel per world px): its y is flipped
 uniform float time;      // round clock, seconds
 uniform float spin;      // how far the surface has turned, radians
 uniform float tilt;      // the spin axis's lean off vertical, radians
@@ -105,10 +106,10 @@ vec3 onRamp(vec3 c) {
 }
 
 void main() {
-    // The block this fragment is in, in field px, and its centre in the
+    // The block this fragment is in, in world px, and its centre in the
     // quad's own space, in orb radii.
-    vec2 field = vec2(gl_FragCoord.x, fieldHeight - gl_FragCoord.y);
-    vec2 blk = floor(field / 2.0);
+    vec2 world = viewOrigin + vec2(gl_FragCoord.x, viewHeight - gl_FragCoord.y);
+    vec2 blk = floor(world / 2.0);
     vec2 p = rot2((blk + 0.5) * 2.0 - orbPos, -rotation) / max(radiusPx, 1.0);
     float d = length(p);
     vec3 seedv = vec3(seed, seed * 1.37, seed * 0.71);
