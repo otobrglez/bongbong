@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use crate::canvas::{Pixels, Sheet};
 use crate::math::Color;
-use crate::render::canvas::{GpuCanvas, Sheets};
+use crate::render::canvas::{BlockTexture, GpuCanvas, Sheets};
 use crate::simulation::Game;
 use crate::thumbnail::{field_pixels, PAINT};
 
@@ -42,15 +42,34 @@ impl Sheets for GpuSheets {
     }
 }
 
+/// The loaded sheets plus one map's floor shade, uploaded for this render.
+struct WithShade<'a> {
+    sheets: &'a GpuSheets,
+    shade: Option<(u64, &'a Texture2D)>,
+}
+
+impl Sheets for WithShade<'_> {
+    fn texture(&self, sheet: Sheet) -> &Texture2D {
+        self.sheets.texture(sheet)
+    }
+
+    fn blocks_texture(&self, stamp: u64) -> Option<&Texture2D> {
+        self.shade.filter(|(held, _)| *held == stamp).map(|(_, texture)| texture)
+    }
+}
+
 /// Paint `game`'s field into a render texture through the same `Canvas`
 /// stages the game's own pass 1 runs, and read it back as an `Image`
 /// (top row first, like the CPU canvas).
 pub fn render_gpu(rl: &mut RaylibHandle, thread: &RaylibThread, sheets: &GpuSheets, game: &Game) -> Result<Image, String> {
     let (w, h) = field_pixels(game);
     let mut scene = rl.load_render_texture(thread, w as u32, h as u32).map_err(|e| e.to_string())?;
+    let mut upload = BlockTexture::default();
+    let shade = upload.sync(rl, thread, game.ground.shade());
+    let sheets = WithShade { sheets, shade };
     rl.draw_texture_mode(thread, &mut scene, |mut d| {
         d.clear_background(Color::WHITE);
-        game.paint_field(&mut GpuCanvas::new(&mut d, sheets), PAINT);
+        game.paint_field(&mut GpuCanvas::new(&mut d, &sheets), PAINT);
     });
     let mut image = scene.load_image().map_err(|e| e.to_string())?;
     image.flip_vertical();

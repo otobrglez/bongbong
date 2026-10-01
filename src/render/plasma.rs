@@ -110,7 +110,7 @@ pub fn draw_plasma_shadow(d: &mut impl RaylibDraw, texture: &Texture2D, plasma: 
             plasma.position.y + tuning().shadow_dir_y * plasma.shadow_offset,
         );
         let a = (255.0 * tuning().plasma_shadow_opacity) as u8;
-        d.draw_circle_v(at, tuning().plasma_orb_radius * 0.95, Color::new(0, 0, 0, a));
+        crate::pyro::block_disc(&mut crate::render::pyro::Rl(d), at, tuning().plasma_orb_radius * 0.95, Color::new(0, 0, 0, a));
         return;
     }
     let src = source_rec(flying_col(plasma.timer), plasma.variant);

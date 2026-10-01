@@ -24,5 +24,5 @@ pub fn draw_decal_shadow(d: &mut impl RaylibDraw, decal: &Decal) {
     let lift = (h / tuning().debris_arc_height.max(1e-3)).clamp(0.0, 1.0);
     let r = OBSTACLE_TEXTURE_SIZE * 0.22 * (1.0 - 0.45 * lift);
     let a = (255.0 * tuning().obstacle_shadow_opacity * (1.0 - 0.4 * lift)) as u8;
-    d.draw_circle_v(ground, r, Color::new(0, 0, 0, a));
+    crate::pyro::block_disc(&mut crate::render::pyro::Rl(d), ground, r, Color::new(0, 0, 0, a));
 }

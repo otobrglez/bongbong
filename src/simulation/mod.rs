@@ -874,7 +874,7 @@ pub struct Game {
     /// by `apply_debug_detonations` at the top of the next playing frame so
     /// the blast runs through `damage_obstacle` like a direct hit would.
     pub(crate) debug_detonations: Vec<Position>,
-    /// `render` skips the ground tileset and its edge vignette and leaves
+    /// `render` skips the ground tileset and its floor shade and leaves
     /// the field flat white; everything on the ground (decals, scorches,
     /// fires) still draws. For demos that want the effects on a blank sheet.
     pub plain_canvas: bool,
@@ -1469,8 +1469,9 @@ impl Game {
         // Wall cells go in twice on purpose: folded into the road set they
         // paint dirt underfoot, and passed separately they cast the baked
         // shading that makes a wall look like it is standing on the floor
-        // rather than pasted onto it.
-        self.ground = crate::ground::build(width, height, rng.random(), &road_cells, &map_water_cells, &wall_positions, self.map.theme.drifts());
+        // rather than pasted onto it. A round's field also shades its edge.
+        let look = crate::ground::Look { theme: self.map.theme, edge_shade: true };
+        self.ground = crate::ground::build(width, height, rng.random(), &road_cells, &map_water_cells, &wall_positions, look);
 
         self.rng = Some(rng);
         // Not cleared here: a restart mid-`update` (R key, round end) still
@@ -1799,16 +1800,6 @@ impl Game {
     fn tick_burn_frames(&mut self, dt: f32) {
         for obstacle in self.world.query::<&mut Obstacle>().iter() {
             obstacle.tick_burn_frame(dt);
-        }
-    }
-
-    /// Stage a decal a replica made for itself, held to the same
-    /// `DECAL_MAX` ceiling `finish_frame` holds a round to.
-    pub(crate) fn push_decal(&mut self, decal: Decal) {
-        self.decals.push(decal);
-        if self.decals.len() > DECAL_MAX {
-            let excess = self.decals.len() - DECAL_MAX;
-            self.decals.drain(..excess);
         }
     }
 
@@ -2184,6 +2175,11 @@ impl Game {
         self.tick_burn_frames(dt);
         self.fade_fires(dt);
         self.fade_wrecks(dt);
+        // A wreck's fire burns down on the replica's own clock: the wire
+        // carries that a tank is a wreck, not how long it has burnt.
+        for tank in self.world.query_mut::<&mut Tank>() {
+            tank.tick_wreck(dt);
+        }
         // A drum that lands blasts where the server says it did, so the
         // landed ones are dropped here and the `Blast` event carries the
         // rest.
@@ -3510,6 +3506,10 @@ impl Game {
             show.scorches.push(Scorch::new(center));
         }
         self.scorch_tracks(center);
+        // The kill's pressure wave lays the grass round the hull flat, as a
+        // blast's does (`blast_show`); it stands back up on the grass's own
+        // clock.
+        crate::grass::flatten(&mut self.grass, center, tuning().wreck_part_throw_px * tuning().blast_grass_flatten);
 
         let throw = tuning().wreck_part_throw_px;
         for i in 0..tuning().wreck_parts.max(0) as u32 {

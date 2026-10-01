@@ -18,9 +18,9 @@ uniform float strength;       // how hard the pulse bends the image, UV units
 uniform float duration;       // seconds the effect plays before fully fading
 
 // A shell impact: a single sharp outward punch (not the death shockwave's
-// push/pull wobble) plus a bright, fast-decaying spark flash at the hit
-// point, so a hit reads as a quick "thwack" distinct from the rolling kill
-// ring and the muzzle's soft heat-shimmer.
+// push/pull wobble), so a hit reads as a quick "thwack" distinct from the
+// rolling kill ring and the muzzle's soft heat-shimmer. The flash itself is
+// the hit's burst, drawn in blocks (burst.rs); this only bends the picture.
 void main() {
     vec2 toPixel = fragTexCoord - center;
 
@@ -47,17 +47,6 @@ void main() {
         uv -= normalize(toPixel) * amount;
     }
     vec4 color = texture2D(texture0, uv);
-
-    // Bright warm spark at the impact point, decaying faster than the pulse
-    // itself so it reads as an instantaneous flash rather than a glow. Mixed
-    // toward the spark color (not added) so it stays visible against a
-    // bright background too - additive alone all but disappears against the
-    // near-white RAYWHITE battlefield floor (a shell that misses every tank
-    // and hits the boundary wall lands on open ground, not a dark tank
-    // sprite), since white plus more brightness just clips back to white.
-    float flashRadius = width * 3.0;
-    float flash = smoothstep(flashRadius, 0.0, dist) * fade * fade;
-    color.rgb = mix(color.rgb, vec3(1.0, 0.55, 0.15), flash);
 
     gl_FragColor = color;
 }

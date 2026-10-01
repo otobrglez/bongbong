@@ -113,6 +113,9 @@ pub struct EditorTextures<'a> {
     /// static/towers_sheet.png - the defence towers' bases and tops.
     pub towers: &'a Texture2D,
     pub pickup_tower_pack: &'a Texture2D,
+    /// The canvas's floor shade as `app.rs` uploaded it before the frame,
+    /// with the stamp it was baked under.
+    pub shade: Option<(u64, &'a Texture2D)>,
 }
 
 /// The builder's `Sheet` lookup, for the `ground::draw` it shares with the
@@ -120,6 +123,10 @@ pub struct EditorTextures<'a> {
 /// round draws from (damage, tracks, blasts, the frog's other clips) is a
 /// programming error here.
 impl Sheets for EditorTextures<'_> {
+    fn blocks_texture(&self, stamp: u64) -> Option<&Texture2D> {
+        self.shade.filter(|(held, _)| *held == stamp).map(|(_, texture)| texture)
+    }
+
     fn texture(&self, sheet: Sheet) -> &Texture2D {
         match sheet {
             // Picked per frame by `app.rs` from the canvas's theme, the
@@ -144,7 +151,7 @@ impl Sheets for EditorTextures<'_> {
             Sheet::Pickup(PickupKind::Flamethrower) => self.pickup_flamethrower,
             Sheet::Pickup(PickupKind::FrogHealth) => self.pickup_frog_health,
             Sheet::Pickup(PickupKind::TowerPack) => self.pickup_tower_pack,
-            Sheet::Damage | Sheet::MinigunMount | Sheet::MissilePod | Sheet::Tracks | Sheet::BarrelExplosion | Sheet::Frog { .. } => {
+            Sheet::MinigunMount | Sheet::MissilePod | Sheet::Tracks | Sheet::BarrelExplosion | Sheet::Frog { .. } => {
                 panic!("the builder has no {sheet:?} sheet")
             }
         }
@@ -201,6 +208,7 @@ impl MapEditor {
                 d.draw_rectangle(0, 0, width as i32, height as i32, Color::WHITE);
             } else {
                 ground::draw(&mut GpuCanvas::new(&mut d, textures), &self.ground, self.map.theme, time);
+                ground::draw_shade(&mut GpuCanvas::new(&mut d, textures), &self.ground);
             }
 
             // Portals first, under every other cell: three cells of art on

@@ -60,5 +60,5 @@ pub fn draw_missile_exhaust(d: &mut impl RaylibDraw, missile: &Missile, time: f3
     let flame = 10.0 * scale * flicker;
     streak(d, tail, dir, flame, 4.0 * scale, fade(Color::new(255, 250, 220, 255), strength), fade(Color::new(255, 90, 20, 60), strength));
     glow(d, tail, 9.0 * scale * flicker, fade(Color::new(255, 150, 50, 170), strength));
-    d.draw_circle_v(tail, 2.0 * scale, fade(Color::new(255, 245, 210, 230), strength));
+    crate::pyro::block_disc(&mut crate::render::pyro::Rl(d), tail, 2.0 * scale, fade(Color::new(255, 245, 210, 230), strength));
 }

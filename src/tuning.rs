@@ -1390,12 +1390,13 @@ tunables! {
         /// driving into it, as a multiple of the ordinary knockback: the
         /// hull is sitting on the drum, so it should visibly lurch.
         barrel_ram_kick_factor: f32 = 2.2 in 1.0 ..= 6.0;
-        /// Per-blast playback jitter on `blast_anim_fps`, as a fraction
-        /// either way, hashed from the blast position: two adjacent
-        /// blasts then never step through the same frames in lockstep,
-        /// which is the biggest "cloned" tell a cascade has.
+        /// Per-blast pace jitter on the fireball (`blast_fireball_seconds`),
+        /// as a fraction either way, hashed from the blast position: two
+        /// adjacent blasts then never burn and cool in lockstep, which is
+        /// the biggest "cloned" tell a cascade has.
         barrel_fps_jitter: f32 = 0.15 in 0.0 ..= 0.5;
-        /// Per-blast size jitter on `blast_anim_scale`, same idea.
+        /// Per-blast size jitter on the fireball (`blast_fireball_px`), same
+        /// idea.
         barrel_scale_jitter: f32 = 0.1 in 0.0 ..= 0.5;
         /// Most delayed secondary pops a barrel blast queues (the same
         /// cook-offs a wreck gets); the count is hashed per blast from
@@ -1440,9 +1441,6 @@ tunables! {
         /// Fuse a drum sitting in a burning cell gets, as a multiple of
         /// `barrel_fuse_seconds` (before the drum's own kind factor).
         fire_fuse_factor: f32 = 2.0 in 0.1 ..= 10.0;
-        /// How much darker the ground under a burnt-out pool cell stays
-        /// for the round (a multiplier on the cell's tint).
-        ground_burn_darken: f32 = 0.8 in 0.3 ..= 1.0;
         /// The grey fuel drum's blast: bigger, sharper and shorter than
         /// the oil drum's, with no pool.
         fuel_blast_radius: f32 = 128.0 in 0.0 ..= 600.0;
@@ -1529,11 +1527,21 @@ tunables! {
         /// RNG at all, so a treeless map replays unchanged. Burn timing is
         /// shared with wood (`wood_burn_seconds`): it is one fire.
         tree_flammable_chance: f64 = 0.55 in 0.0 ..= 1.0 @ Spawn;
-        /// Playback rate of the barrel blast sprite animation (12 frames).
-        blast_anim_fps: f32 = 18.0 in 4.0 ..= 60.0;
-        /// On-screen scale of the 64px blast frames (2.0 = 128px wide).
-        blast_anim_scale: f32 = 1.75 in 0.5 ..= 4.0;
-        /// How long the additive light bloom under a blast lasts.
+        /// Radius (px) of a blast's fireball at its peak (`fireball.rs`),
+        /// before the blast's own scale - a fuel drum's is larger, a
+        /// missile's and a cook-off's smaller.
+        blast_fireball_px: f32 = 34.0 in 4.0 ..= 160.0;
+        /// How long a blast's fire and smoke play (seconds) before the
+        /// blast's own pace: the fire burns out over about the first third
+        /// and the smoke climbs and thins away over the rest.
+        blast_fireball_seconds: f32 = 1.7 in 0.2 ..= 8.0;
+        /// The flames a burning ground cell stands in (`pyro::tongues`):
+        /// how many tongues, how tall (px) the tallest, and how far (px)
+        /// across the cell they spread.
+        ground_fire_tongues: i32 = 3 in 0 ..= 8;
+        ground_fire_height_px: f32 = 28.0 in 2.0 ..= 80.0;
+        ground_fire_spread_px: f32 = 24.0 in 0.0 ..= 64.0;
+        /// How long the light bloom a blast opens with lasts.
         blast_glow_seconds: f32 = 0.25 in 0.0 ..= 2.0;
         /// Radius (px) of that bloom at its largest.
         blast_glow_radius: f32 = 64.0 in 0.0 ..= 400.0;
@@ -1617,6 +1625,12 @@ tunables! {
         /// Upward drift of smoke and embers, and how fast a smoke puff
         /// grows as it rises.
         smoke_rise_speed: f32 = 26.0 in 0.0 ..= 200.0;
+        /// How far smoke, embers, dust and the smoke of every explosion
+        /// drift down-wind for each px they rise, in a typical gust: the
+        /// wind that bends the tall grass (`pyro::smoke_lean`,
+        /// `grass::wind_at`), so a column leans and swings with the tufts
+        /// under it. 0 rises straight up.
+        smoke_wind_drift: f32 = 0.34 in 0.0 ..= 2.0;
         /// How fast a smoke puff grows, px/s. Rendered in whole 2px
         /// blocks, so this reads as a few discrete steps up rather than a
         /// smooth swell.
@@ -1637,6 +1651,10 @@ tunables! {
         /// second, for as long as `wreck_burn_seconds` lasts.
         wreck_flame_rate: f32 = 12.0 in 0.0 ..= 200.0;
         wreck_smoke_rate: f32 = 10.0 in 0.0 ..= 100.0;
+        /// Smoke puffs a second off the wound of a hull on its last legs
+        /// (`damage_stage::wound`); a hull only just past the smoking
+        /// point gives off a sixth of it.
+        hull_smoke_rate: f32 = 6.0 in 0.0 ..= 60.0;
         /// Contact feedback. `max_impulse` is the solver's own measure of
         /// how hard a contact is, so these are thresholds on that rather
         /// than on speed: below the first, a contact is a nudge and stays
@@ -1862,9 +1880,31 @@ tunables! {
         /// pixel rather than on the walls sheet's 2px block grid. Stacking
         /// the two made grass twice as chunky as the world around it.
         grass_scale: f32 = 2.0 in 0.5 ..= 4.0;
-        /// Ambient sway: how far a tip travels, and how fast.
-        grass_sway_px: f32 = 2.0 in 0.0 ..= 20.0;
+        /// Each tuft's own flutter on top of the wind (`grass::bend`): how
+        /// far a tip travels, and how fast. Hashed per tuft, so it is what
+        /// keeps a field bending in a gust from moving as one sheet.
+        grass_sway_px: f32 = 0.6 in 0.0 ..= 20.0;
         grass_sway_speed: f32 = 1.6 in 0.0 ..= 20.0;
+        /// The steady lean of every tuft along the wind, in px at the tip
+        /// (`grass::wind_at`). A tuft bends about its root, so only the
+        /// wind's sideways component shows.
+        grass_wind_px: f32 = 1.2 in 0.0 ..= 10.0;
+        /// How much further a gust bends the grass, px at the tip. Gusts are
+        /// fronts that roll across the field, so neighbouring tufts bend
+        /// together and a gust is seen crossing the meadow.
+        grass_gust_px: f32 = 3.6 in 0.0 ..= 20.0;
+        /// Which way the gust fronts travel, degrees clockwise from the +x
+        /// axis on the y-down screen. 0 blows left to right; 180 flips the
+        /// lean too.
+        grass_gust_heading_deg: f32 = 22.0 in -180.0 ..= 180.0;
+        /// How fast the fronts travel across the field, px per second.
+        grass_gust_speed: f32 = 130.0 in 0.0 ..= 1000.0;
+        /// Px between one wave of bending grass and the next.
+        grass_gust_wavelength: f32 = 360.0 in 16.0 ..= 4000.0;
+        /// Px between the peaks of the slower envelope the waves ride on:
+        /// the size of one gust. Longer than the wavelength, so a gust is a
+        /// few waves strong and then the field settles to its steady lean.
+        grass_gust_group: f32 = 1600.0 in 16.0 ..= 10000.0;
         /// The wake: how close a tank has to be to shove grass aside, and
         /// how hard at the centre. Grass *ahead* of a moving tank is pushed
         /// harder than grass behind it, so a hull drives a bow wave rather
@@ -1894,20 +1934,32 @@ tunables! {
         /// emitter). Zero turns the rustle off.
         grass_rustle_rate: f32 = 14.0 in 0.0 ..= 120.0;
 
-        // --- the ground layer's baked shading (ground.rs) ---
-        /// How much darker a cell right beside a wall is, 0-1. Walls stand
+        // --- the ground layer's baked floor shade (ground::bake_shade) ---
+        /// The walls' contact shade: the opacity of its darkest step, 0-1,
+        /// toward a cool dark (`ground::WALL_SHADE_COLOR`). Walls stand
         /// *on* the floor, and without this they read as pasted onto it.
-        ground_wall_shade: f32 = 0.11 in 0.0 ..= 1.0 @ Restart;
-        /// How far that shadow reaches, in cells. Cost is quadratic in this
-        /// (a box search per cell) but it runs once per round, not per
-        /// frame.
-        ground_wall_shade_cells: i32 = 2 in 0 ..= 8 @ Restart;
-        /// Vignette darkness at the very screen edge, 0-1. Drawn as four
-        /// per-pixel gradient bands (`ground::draw_edge_shade`), not as a
-        /// cell tint - see that function for why.
-        ground_edge_shade: f32 = 0.22 in 0.0 ..= 1.0;
-        /// How far that vignette reaches inward, in screen px.
-        ground_edge_shade_px: f32 = 90.0 in 0.0 ..= 600.0;
+        /// Stepped and dithered on the 2 px grid, per block, so it follows
+        /// a wall's outline rather than the 32 px cell grid.
+        ground_wall_shade: f32 = 0.17 in 0.0 ..= 1.0 @ Restart;
+        /// How far that shade reaches from a wall, in cells.
+        ground_wall_shade_cells: f32 = 1.4 in 0.0 ..= 8.0 @ Restart;
+        /// How far the walls' shade leans along the drop shadows' direction
+        /// (`shadow_dir_x`/`_y`), px: it pools on the side the walls' own
+        /// shadows fall and thins on the lit side.
+        ground_wall_shade_lean_px: f32 = 10.0 in 0.0 ..= 48.0 @ Restart;
+        /// The edge shade: the opacity of its darkest step, 0-1, toward the
+        /// theme's darkest ground (canopy green, dusk umber) rather than
+        /// black. A round's field only - the builder's canvas has none.
+        ground_edge_shade: f32 = 0.30 in 0.0 ..= 1.0 @ Restart;
+        /// How far the edge shade reaches in from the middle of an edge,
+        /// in screen px.
+        ground_edge_shade_px: f32 = 110.0 in 0.0 ..= 600.0 @ Restart;
+        /// How round the edge shade's corners are, as a multiple of its
+        /// reach: 0 is a square frame, 1 rounds each corner by the reach.
+        ground_edge_shade_round: f32 = 1.0 in 0.0 ..= 4.0 @ Restart;
+        /// The share of the edge shade's darkest step only the corners
+        /// reach, 0-1: the middle of an edge stops short of it.
+        ground_edge_shade_corner: f32 = 0.25 in 0.0 ..= 1.0 @ Restart;
         /// How much of the open floor the soft sand patches cover, 0-1:
         /// the pack's sand tiles (hardpan under the desert retint) laid
         /// where a hashed value noise at the cell corners crosses this
@@ -2133,10 +2185,15 @@ tunables! {
     group shot_fx {
         /// One multiplier on the light every shot throws (`render/shot_fx.rs`,
         /// all additive and built from 2 px blocks): the halos and tracers
-        /// in flight, the muzzle and impact flares with their star rays and
-        /// glare, the laser's bloom, the missile's exhaust. 0 draws the
-        /// plain sprites alone.
+        /// in flight, the laser's bloom and flares, the missile's exhaust.
+        /// 0 draws the plain sprites alone, with no muzzle flash.
         shot_glow_strength: f32 = 1.0 in 0.0 ..= 2.0;
+        /// How many flat steps every glow is drawn in - shots, blasts,
+        /// fires, fuses, towers, the pools of light on the ground - each
+        /// step's edge dithered on the 2 px grid, as the weather's light
+        /// pass steps the night (`pyro::glow`, docs/effects.md). 0 draws
+        /// the smooth gradients instead.
+        glow_bands: i32 = 4 in 0 ..= 12;
         /// Length (px) of the hot tracer streak a flying shell draws behind it.
         shell_tracer_length: f32 = 40.0 in 0.0 ..= 160.0;
         /// Length (px) of a minigun bullet's tracer streak.
@@ -2149,15 +2206,10 @@ tunables! {
         /// Turns per second of the plasma orb's surface, before each bolt's
         /// own speed factor (0.7 to 1.5, either way round).
         plasma_orb_spin_hz: f32 = 1.6 in 0.0 ..= 10.0;
-        /// Radius (px) of the muzzle flare at its first frame; it shrinks
-        /// over `muzzle_flash_duration`. The star rays reach twice as far.
+        /// Size (px) of the light a muzzle flash throws at its first
+        /// frame (`burst::muzzle`), which also sizes its tongue of fire;
+        /// it steps down over `muzzle_flash_duration`.
         muzzle_glow_radius: f32 = 14.0 in 0.0 ..= 80.0;
-        /// Radius (px) of the impact flare at its first frame; it swells
-        /// and fades over `impact_flash_duration`.
-        impact_glow_radius: f32 = 16.0 in 0.0 ..= 80.0;
-        /// Half-length (px) of the horizontal lens glare across a fresh
-        /// muzzle or impact flare. 0 turns the glare off.
-        shot_glare_length: f32 = 34.0 in 0.0 ..= 200.0;
         /// How fast (Hz) a laser beam's bloom and end flares flicker.
         laser_flicker_hz: f32 = 28.0 in 0.0 ..= 120.0;
         /// Sparks thrown off a hull, frog or border wall a shot hits
@@ -2167,11 +2219,10 @@ tunables! {
         /// Sparks spat from the barrel with every shot (`fx.rs`, scaled
         /// by `fx_density`), plus a wisp of gun smoke.
         muzzle_sparks: i32 = 4 in 0 ..= 40;
-        /// How long each hit plays (seconds; `render/shot_shaders.rs`,
-        /// `static/impact_burst.fs`): a shell's fireball, flash, shock ring,
-        /// debris and smoke; a bullet's spark star and ricochets; a plasma
-        /// bolt's energy ring; a laser's molten splash; a tesla strike's
-        /// crackling violet ring; a bio slush glob's splash of ooze.
+        /// How long each hit plays (seconds; `burst.rs`): a shell's flash,
+        /// fireball and smoke; a bullet's spark star; a plasma bolt's
+        /// energy ring; a laser's molten splash; a tesla strike's crackling
+        /// violet ring; a bio slush glob's splash of ooze.
         shell_hit_seconds: f32 = 0.6 in 0.05 ..= 3.0;
         bullet_hit_seconds: f32 = 0.22 in 0.05 ..= 2.0;
         plasma_hit_seconds: f32 = 0.5 in 0.05 ..= 3.0;
@@ -2180,6 +2231,16 @@ tunables! {
         ooze_hit_seconds: f32 = 0.6 in 0.05 ..= 3.0;
         /// Size of every hit's burst, as a multiple of its designed size.
         hit_fx_scale: f32 = 1.0 in 0.2 ..= 3.0;
+        /// Seconds the puff of dust a shot knocks off a tile it did not
+        /// break takes to settle - stone, sand, sawdust or leaves in the
+        /// tile's own colours (`burst.rs`).
+        tile_dust_seconds: f32 = 0.7 in 0.05 ..= 3.0;
+        /// Seconds the cloud a tile comes down in takes to roll out and
+        /// settle.
+        tile_collapse_seconds: f32 = 1.1 in 0.05 ..= 5.0;
+        /// Seconds a hull or tile flashes in light when a shot lands on it,
+        /// stepping down in three. 0 turns the flash off.
+        hit_flash_seconds: f32 = 0.12 in 0.0 ..= 1.0;
         /// Glints per second a flying plasma bolt sheds in its own colour,
         /// and embers per second a flying shell sheds (`fx.rs`, scaled by
         /// `fx_density`).

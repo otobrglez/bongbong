@@ -17,12 +17,16 @@
 //! than into a solid block. One sprite per cell would either occlude
 //! everything or nothing.
 //!
-//! **How it moves.** Each tuft leans on a sine of the round clock plus its
-//! own hashed phase, so a field ripples instead of swaying in lockstep.
-//! That is a draw-time offset computed on the CPU - there is no shader,
-//! because every shader here needs a hand-ported GLSL ES 100 twin for the
-//! web build (see `main.rs`'s `shader_path`) and a sine does not justify
-//! that.
+//! **How it moves.** Wind crosses the field (`wind_at`): every tuft leans a
+//! little along it, and gust fronts roll over the meadow as a travelling
+//! wave on a slower envelope, so neighbouring tufts bend together and a
+//! gust is seen moving across the field rather than every tuft swaying in
+//! place. On top of that each tuft flutters on a sine of its own hashed
+//! phase, which keeps a field in a gust from moving as one sheet. All of
+//! it is a draw-time offset computed on the CPU from the tuft's position
+//! and the clock - there is no shader, because every shader here needs a
+//! hand-ported GLSL ES 100 twin for the web build (see `main.rs`'s
+//! `shader_path`) and a few sines do not justify that.
 //!
 //! **How a tank goes through it.** `tick` carries two more values per tuft,
 //! both pure functions of where the tanks are - no RNG, so a seeded replay
@@ -50,7 +54,7 @@ use crate::math::{Color, Rectangle, Vec2};
 
 use crate::canvas::{Canvas, Sheet};
 use crate::map::Theme;
-use crate::tuning::tuning;
+use crate::tuning::{tuning, Tuning};
 use crate::{GRASS_SPECIES, GRASS_TEXTURE_SIZE, GRASS_VARIANTS, OBSTACLE_GRID_SIZE, Position};
 
 /// One drawn tuft. Several of these make up a single grass cell.
@@ -192,17 +196,38 @@ pub fn flatten(tufts: &mut [GrassTuft], center: Position, radius: f32) {
     }
 }
 
-/// How far this tuft's tip leans right now, in world px: ambient wind plus
-/// whatever `tick` last recorded. Matted grass barely waves, so the wind is
-/// scaled down by the crush.
-fn bend(tuft: &GrassTuft, time: f32) -> f32 {
-    let t = tuning();
-    // Per-tuft phase, so a field ripples rather than swaying as one sheet.
-    let phase = (tuft.seed % 628) as f32 * 0.01;
+/// The wind's lean at `base` at `time`, in px of travel at a tuft's tip:
+/// a steady lean along the wind (`grass_wind_px`) plus gusts
+/// (`grass_gust_px`) - a wave of bending grass riding a slower envelope,
+/// both travelling along `grass_gust_heading_deg` at `grass_gust_speed`.
+/// Every tuft on one front leans the same way at the same moment, which is
+/// what makes a gust read as wind crossing the field. Only the wind's
+/// sideways component shows, since a tuft bends about its root.
+///
+/// Pure in its inputs and drawing no RNG. Takes the table rather than
+/// reading the global so a test can pass a local one.
+pub fn wind_at(t: &Tuning, base: Position, time: f32) -> f32 {
     // `trig`, not libm: the CPU thumbnail of a grassy map is pinned by
     // hash and has to come out the same on every platform.
-    let wind = crate::trig::sin(time * t.grass_sway_speed + phase) * t.grass_sway_px;
-    wind * (1.0 - tuft.crush) + tuft.push
+    let (dir_y, dir_x) = crate::trig::sin_cos(t.grass_gust_heading_deg.to_radians());
+    // How far along the wind this point sits, less how far the fronts have
+    // travelled: a front is a line of equal `along`, moving with the wind.
+    let along = base.x * dir_x + base.y * dir_y - time * t.grass_gust_speed;
+    let tau = std::f32::consts::TAU;
+    let wave = crate::trig::sin(tau * along / t.grass_gust_wavelength.max(1.0));
+    let gust = 0.5 + 0.5 * crate::trig::sin(tau * along / t.grass_gust_group.max(1.0));
+    (t.grass_wind_px + t.grass_gust_px * gust * (0.55 + 0.45 * wave)) * dir_x
+}
+
+/// How far this tuft's tip leans right now, in world px: the wind, the
+/// tuft's own flutter, and whatever `tick` last recorded. Matted grass
+/// barely moves in the wind, so both are scaled down by the crush.
+fn bend(tuft: &GrassTuft, time: f32) -> f32 {
+    let t = tuning();
+    // Per-tuft phase, so a field in a gust does not move as one sheet.
+    let phase = (tuft.seed % 628) as f32 * 0.01;
+    let flutter = crate::trig::sin(time * t.grass_sway_speed + phase) * t.grass_sway_px;
+    (wind_at(&t, tuft.base, time) + flutter) * (1.0 - tuft.crush) + tuft.push
 }
 
 /// Draw one tuft, leaning and squashed by however flat it is lying, from
@@ -234,4 +259,64 @@ pub fn draw_tuft(c: &mut impl Canvas, tuft: &GrassTuft, theme: Theme, time: f32)
     let dest = Rectangle::new(tuft.base.x, tuft.base.y, size, height);
     let origin = Vec2::new(size / 2.0, height);
     c.blit(Sheet::Grass(theme), src, dest, origin, rotation, Color::WHITE);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn heading(t: &Tuning) -> (f32, f32) {
+        let (y, x) = crate::trig::sin_cos(t.grass_gust_heading_deg.to_radians());
+        (x, y)
+    }
+
+    #[test]
+    fn a_gust_front_travels_with_the_wind() {
+        let t = Tuning::DEFAULT;
+        let (dx, dy) = heading(&t);
+        for &(x, y, time) in &[(40.0, 60.0, 0.0), (700.0, 300.0, 3.5), (1000.0, 20.0, 41.0)] {
+            let here = wind_at(&t, Position::new(x, y), time);
+            // Where the same front is half a second later.
+            let step = t.grass_gust_speed * 0.5;
+            let there = wind_at(&t, Position::new(x + dx * step, y + dy * step), time + 0.5);
+            assert!((here - there).abs() < 1e-2, "front at ({x}, {y}) t={time}: {here} vs {there}");
+        }
+    }
+
+    #[test]
+    fn tufts_on_one_front_lean_together() {
+        let t = Tuning::DEFAULT;
+        let (dx, dy) = heading(&t);
+        // Along the front: perpendicular to the way it travels.
+        let (px, py) = (-dy, dx);
+        let a = wind_at(&t, Position::new(300.0, 200.0), 2.0);
+        let b = wind_at(&t, Position::new(300.0 + px * 250.0, 200.0 + py * 250.0), 2.0);
+        assert!((a - b).abs() < 1e-2, "{a} vs {b}");
+    }
+
+    #[test]
+    fn the_grass_leans_the_way_the_wind_blows() {
+        let east = Tuning::DEFAULT;
+        let west = Tuning { grass_gust_heading_deg: east.grass_gust_heading_deg + 180.0, ..Tuning::DEFAULT };
+        for i in 0..40 {
+            let p = Position::new(37.0 * i as f32, 13.0 * i as f32);
+            let time = 0.37 * i as f32;
+            assert!(wind_at(&east, p, time) > 0.0, "an east wind leans right at {p:?}");
+            assert!(wind_at(&west, p, time) < 0.0, "a west wind leans left at {p:?}");
+        }
+        let still = Tuning { grass_wind_px: 0.0, grass_gust_px: 0.0, ..Tuning::DEFAULT };
+        assert_eq!(wind_at(&still, Position::new(100.0, 100.0), 7.0), 0.0);
+    }
+
+    #[test]
+    fn gusts_come_and_go() {
+        let t = Tuning::DEFAULT;
+        let p = Position::new(500.0, 250.0);
+        let leans: Vec<f32> = (0..400).map(|i| wind_at(&t, p, i as f32 * 0.05)).collect();
+        let lo = leans.iter().cloned().fold(f32::MAX, f32::min);
+        let hi = leans.iter().cloned().fold(f32::MIN, f32::max);
+        let (dx, _) = heading(&t);
+        assert!(lo < (t.grass_wind_px + 0.5) * dx, "the field settles between gusts: {lo}");
+        assert!(hi > (t.grass_wind_px + 0.8 * t.grass_gust_px) * dx, "a gust bends it well past the steady lean: {hi}");
+    }
 }

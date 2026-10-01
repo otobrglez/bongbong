@@ -18,7 +18,7 @@ nix-shell -p "python3.withPackages (ps: [ps.pillow])" \
 | File | Size | Grid | Drawn at |
 |---|---|---|---|
 | `props_sheet.png` | 128x320 | 4 cols x 10 rows of 32x32 | `OBSTACLE_SCALE` (1:1, like walls) |
-| `barrel_explosion.png` | 768x320 | 12 cols x 5 rows of 64x64 | `blast_anim_scale` / `scorch_scale` (2.0 default) |
+| `barrel_explosion.png` | 768x320 | 12 cols x 5 rows of 64x64 | `scorch_scale` (2.0 default); only row 1 is drawn |
 
 RGBA, no padding, nearest-neighbour sampling. Slice `x = col*cell, y =
 row*cell`. Every non-transparent pixel is on the Puny Palette
@@ -83,36 +83,21 @@ baked into the art.
 
 ## 3. Sheet map — `barrel_explosion.png`
 
-Rows 0, 2, 3 and 4, cols 0–11: the one-shot blast in four shapes
-(`BLAST_SHAPE_ROWS`), played at `blast_anim_fps` times a per-blast hashed
-jitter (`barrel_fps_jitter`), clamped to the last frame, removed when done
-(`blast::BlastFx`). Row 0 is the mushroom described below; row 2 is the
-*tall* blast (a narrow column that rises fast), row 3 the *flat* one (a
-wide, low splash with little smoke) and row 4 the *double* (two cores, the
-second a frame behind). Which row a blast uses is hashed from its position
-unless its cause picks one: a shot takes the flat or the double and leans
-the sprite downrange, a ram or a fire takes the column, a fuel drum always
-takes the column and draws bigger (`blast::BlastShape`). The fire frames
-(0–3) are also quarter-turned per blast; the smoke frames keep their rise
-and only take the mirror. All three new rows are drawn by the row-0 code
-stretched through a shape table (sx, sy, rise, smoke, twin) in
-`gen_barrel_explosion.py`, so the row-0 art is byte-identical to before.
-
-| Frame | Content |
-|---|---|
-| 0 | white core, gold ring, eight white rays — the flash; replaces the barrel sprite the frame it vanishes, so it is never blank |
-| 1 | fireball r20 (`RED_MD` → `GOLD_BRIGHT` → `WHITE`), rays, debris chunks |
-| 2–3 | peak lumpy fireball r26–29 (`RED_DEEP` → `RED_MD` → `RED_BRIGHT` → `GOLD_BRIGHT` → `WHITE`), debris leaving, embers; first smoke on the upper rim |
-| 4 | mushroom: grey smoke cap rising, fire pocket low |
-| 5–6 | smoke dominant, three then three smaller fire pockets, embers |
-| 7–9 | the cloud splits into four lumps drifting out and up, alpha 170 → 95 |
-| 10–11 | wisps and specks, alpha 55 → 25 (never fully empty, so `done()` needs no special case) |
-
-From frame 4 the cloud's centre drifts up one pixel a frame — smoke rising
-"away" from the camera on the tilted top-down view. Every blast is mirrored
-by its `seed` (a hash of its position) so two chained blasts don't look
-cloned; drawn oldest first, a chained blast's flash lands on the earlier
-fireball and reads as a second detonation.
+The game draws one row of this sheet, the scorches (row 1). The blast
+itself - the flash, the fireball, the smoke, the dust - is composed at
+draw time in the effects language (`fireball.rs`, docs/effects.md), in
+the four forms the sheet's other rows were drawn in: round, a tall column
+that rises fast, a flat, low splash with little smoke and a double core
+(`BLAST_SHAPE_ROWS`, picked by `blast::BlastFx::row`). Which form a blast
+takes is hashed from its position unless its cause picks one: a shot takes
+the flat or the double and throws the fire downrange, a ram or a fire
+takes the column, a fuel drum always takes the column, burns hotter and
+cleaner and draws bigger (`blast::BlastShape`). Every blast's pace and
+size are jittered by its position hash (`barrel_fps_jitter`,
+`barrel_scale_jitter`) so two chained blasts never burn in lockstep; drawn
+oldest first, a chained blast's flash lands on the earlier fireball and
+reads as a second detonation. Rows 0 and 2-4 of the sheet are that
+design's reference art, not sampled.
 
 Row 1, cols 0–4: five scorch decals (`SCORCH_VARIANTS`) — three lumpy
 black blots with a darker ring of lumps, ten radial streaks, a lighter
@@ -122,13 +107,11 @@ Picked, mirrored and quarter-turned by the seed, drawn under obstacles at
 drum), fading in over `scorch_fade_in_seconds`, kept for the round (oldest
 dropped past `SCORCH_MAX`). Col 5 (`SCORCH_STREAK_COL`) is the directional
 streak a *shot's* blast draws over its blot, pointing right on the sheet
-and quarter-turned toward the shot's travel. Cols 6–8 (`FIRE_LOOP_COL`,
-`FIRE_LOOP_FRAMES`) are the three-frame ground-fire loop a burning cell
-draws (`blast::draw_ground_fire`): a low bed of fire in the lower half of
-the cell with tongues rising out of it, shown at scale 2 centred a little
-above the 32 px ground cell so the flames rise past it, cycling at the
-wood burn cadence with a hashed phase and fading over the last part of the
-burn. Cols 9–11 of row 1 are blank.
+and quarter-turned toward the shot's travel. A ground fire that burns
+out leaves one of the blots too, smaller (`Scorch::burn`), so a burnt
+trail reads as one scorched streak. The flames on a burning cell are
+drawn, not sampled: tongues of fire leaning with the wind
+(`pyro::tongues`, `ground_fire_*`). Cols 6–11 of row 1 are not drawn.
 
 ## 4. Integration (Rust)
 
@@ -139,13 +122,13 @@ Material::row_base()         // Sandbag 0, Barrel 3, Fence 5 (rows within props_
 Material::variants()         // 3, 2, 2
 Material::visible_stages()   // 3, 3, 2
 Obstacle::row(axis)          // fences: base + variant*2 + axis
-Obstacle::col()              // burning → fire loop; fuse armed → PROPS_BARREL_LIT_COL; else the stage
+Obstacle::col()              // burning → burn loop; fuse armed → PROPS_BARREL_LIT_COL; else the stage
 draw_obstacle(d, &ObstacleTextures { walls, props }, obstacle, fence_axis(obstacle, &fence_cells))
 
 // blast.rs
-BlastFx::shaped(center, kind, shape)  // row/turn/fps/scale hashed, then shaped by the cause
-BlastFx::frame()             // (time * fps()) clamped to 0..BARREL_EXPLOSION_FRAMES-1
-draw_blast / draw_blast_glow / draw_fuse_glow / draw_fire_glow / draw_ground_fire / draw_scorch
+BlastFx::shaped(center, kind, shape)  // form/turn/pace/scale hashed, then shaped by the cause
+fireball::compose(fx, lean)  // the flash, fire, smoke and dust as pyro::Shapes (docs/effects.md)
+draw_scorch / Scorch::burn   // the scorch row; render/blast.rs: draw_fuse_glow / draw_fire_glow
 // obstacle.rs
 Obstacle::drum() / Obstacle::fuse_rock(time) / draw_oil_cell / draw_flying_drum
 ```
@@ -153,10 +136,10 @@ Obstacle::drum() / Obstacle::fuse_rock(time) / draw_oil_cell / draw_flying_drum
 Layout constants live in `lib.rs` next to the obstacle block
 (`PROPS_COLUMNS`, `PROPS_ROWS`, `PROPS_BARREL_LIT_COL`, `PROPS_OIL_ROW`,
 `PROPS_OIL_VARIANTS`, `BARREL_EXPLOSION_TEXTURE_SIZE`,
-`BARREL_EXPLOSION_FRAMES`, `BLAST_SHAPE_ROWS`, `SCORCH_ROW`,
-`SCORCH_VARIANTS`, `SCORCH_STREAK_COL`, `FIRE_LOOP_COL`, `SCORCH_MAX`);
-the feel numbers (fps, scales, jitter, glow, flash, scorch opacity, the
-pool, the launch, the fuel blast) are `group props` rows in `tuning.rs`.
+`BLAST_SHAPE_ROWS`, `SCORCH_ROW`, `SCORCH_VARIANTS`, `SCORCH_STREAK_COL`,
+`SCORCH_MAX`); the feel numbers (the fireball's size and pace, jitter,
+glow, flash, scorch opacity, the pool, the launch, the fuel blast) are
+`group props` rows in `tuning.rs`.
 
 ## 5. Palette
 
