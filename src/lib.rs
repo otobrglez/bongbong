@@ -926,6 +926,7 @@ pub mod devserver;
 pub mod editor;
 pub mod frog;
 pub mod fireball;
+pub mod framing;
 pub mod fx;
 pub mod grass;
 pub mod game;

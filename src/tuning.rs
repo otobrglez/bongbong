@@ -1723,6 +1723,50 @@ tunables! {
         /// shimmer slightly at a fractional scale, which a static floor
         /// mostly hides.
         view_scale_snap: i32 = 0 in 0 ..= 1;
+        /// How much world a field map shows on a screen, in 32 px cells
+        /// (`framing`, docs/large-maps-follow-camera.md §3). 578 is the
+        /// standard 34 x 17 field's area, the most a landscape phone shows
+        /// at a readable tank. Every screen in a room shows this much world
+        /// whatever its shape - the same amount of information and the
+        /// same time to see a shell coming on a phone, a tablet and a
+        /// monitor - and the screen picks only the outline. Arenas (36 x 18
+        /// cells and smaller) are shown whole and never read it.
+        view_area_cells: f32 = 578.0 in 64.0 ..= 4096.0;
+        /// The narrowest outline a field map's view takes, as width over
+        /// height: 4:3, a hair under so that a 4:3 screen is inside the
+        /// range rather than a rounding error outside it. A narrower screen
+        /// shows the 4:3 outline across its width and bars above and below.
+        view_aspect_min: f32 = 1.3333 in 1.0 ..= 2.0;
+        /// The widest outline a field map's view takes, as width over
+        /// height: 2.4:1. A wider screen (a 32:9 monitor) shows the 2.4:1
+        /// outline across its height and bars at the sides, where its HUD
+        /// can sit; every shape between the two fills its screen.
+        view_aspect_max: f32 = 2.4 in 1.5 ..= 4.0;
+        /// A screen under this many pixels per inch snaps a field map's
+        /// zoom to whole 2 px blocks - a multiple of 0.5 device pixels per
+        /// world pixel, so the pixel art stays crisp - taking the nearer
+        /// step by ratio, and the outward one wherever the nearer would
+        /// hide the sight box. Tablets, laptops, monitors and the 720p
+        /// phones snap. A finer screen (the flagship phones, over 400 ppi)
+        /// keeps the exact zoom: its steps are about 20 % apart, either
+        /// neighbour would push the sight box off screen or shrink the tank
+        /// under 44 pt, and its pixels are too small for the blur to show.
+        /// 0 keeps the exact zoom everywhere.
+        view_fine_ppi: f32 = 360.0 in 0.0 ..= 1000.0;
+        /// A local round - no room, alone or two on one screen - zooms a
+        /// field map out a whole block at a time while a tank stays at
+        /// least this wide, in millimetres, and the view holds at most
+        /// `view_local_max_cells`: nobody shares the round, so a big
+        /// screen may show more. A 24" or 27" monitor then shows 40 x 22.5
+        /// cells with a 26.5 to 30 mm tank instead of the shared view's 30
+        /// to 32 cells across at 35 to 40 mm. Phones, tablets and laptops
+        /// draw a tank under 25 mm already and keep the shared view, a
+        /// screen of unknown size keeps it too, and a room never zooms out.
+        view_local_min_tank_mm: f32 = 25.0 in 0.0 ..= 100.0;
+        /// The most world a local round's zoomed-out view shows, in cells:
+        /// 900 is 40 x 22.5 on a 16:9 monitor. At or under
+        /// `view_area_cells` no screen zooms out.
+        view_local_max_cells: f32 = 900.0 in 64.0 ..= 4096.0;
     }
 
     group online {
