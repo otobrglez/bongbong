@@ -1713,6 +1713,7 @@ impl Game {
         let portals: &[Position] = if self.portals.len() >= 2 { &self.portals } else { &[] };
         let trigger_radius = tuning().portal_trigger_radius;
         for tank in self.world.query::<&mut Tank>().iter() {
+            tank.hit_by_seat = None;
             tank.tick_recharge(dt);
             tank.fire_cooldown = (tank.fire_cooldown - dt).max(0.0);
             tank.ram_cooldown = (tank.ram_cooldown - dt).max(0.0);
@@ -2762,10 +2763,20 @@ impl Game {
         // One worst-case tank clear of the wall, plus a little.
         let margin = battlefield::max_tank_clearance_half_extent() + 8.0;
         let line_of_sight = |a: Position, b: Position| f.terrain.line_of_sight(a, b);
+        // A seat's ring keeps its firing slots inside the seat's sight box.
+        let sight_box = Some(tuning().sight_box_half_px());
         if engaged[0].len() >= 2 {
             self.engage[0].assign(
                 &engaged[0],
-                &EngageCtx { target_pos: players[0].pos, width: f.width, height: f.height, margin, reachable: &reachable, line_of_sight: &line_of_sight },
+                &EngageCtx {
+                    target_pos: players[0].pos,
+                    width: f.width,
+                    height: f.height,
+                    margin,
+                    sight_box,
+                    reachable: &reachable,
+                    line_of_sight: &line_of_sight,
+                },
                 &mut report,
             );
         }
@@ -2782,7 +2793,15 @@ impl Game {
             };
             self.engage[seat].assign(
                 &engaged[seat],
-                &EngageCtx { target_pos: players[seat].pos, width: f.width, height: f.height, margin, reachable: &reachable, line_of_sight: &line_of_sight },
+                &EngageCtx {
+                    target_pos: players[seat].pos,
+                    width: f.width,
+                    height: f.height,
+                    margin,
+                    sight_box,
+                    reachable: &reachable,
+                    line_of_sight: &line_of_sight,
+                },
                 &mut seat_report,
             );
             for t in seat_report.tanks {
@@ -2814,7 +2833,15 @@ impl Game {
             };
             self.engage_frog.assign(
                 &engaged_frog,
-                &EngageCtx { target_pos: frog_pos, width: f.width, height: f.height, margin, reachable: &reachable, line_of_sight: &line_of_sight },
+                &EngageCtx {
+                    target_pos: frog_pos,
+                    width: f.width,
+                    height: f.height,
+                    margin,
+                    sight_box: None,
+                    reachable: &reachable,
+                    line_of_sight: &line_of_sight,
+                },
                 &mut frog_report,
             );
             for t in frog_report.tanks {
@@ -4141,9 +4168,9 @@ impl Game {
 
     pub fn tank_snapshots(&self) -> Vec<TankSnapshot> {
         self.world
-            .query::<(Entity, &Tank)>()
+            .query::<(Entity, &Tank, Option<&Ai>)>()
             .iter()
-            .map(|(entity, tank)| {
+            .map(|(entity, tank, ai)| {
                 // A tank still rolling in has no body: its kinematic
                 // velocity stands in and it touches nothing.
                 let contact = tank.body.map(|b| self.physics.contact_stats(b)).unwrap_or_default();
@@ -4179,6 +4206,8 @@ impl Game {
                     touching_tank: contact.touching_tank,
                     contact_impulse: contact.max_impulse,
                     is_wreck: tank.is_wreck(),
+                    shot_at_seat: ai.and_then(Ai::shot_at_seat),
+                    hit_by_seat: tank.hit_by_seat,
                 }
             })
             .collect()
@@ -4242,6 +4271,16 @@ pub struct TankSnapshot {
     /// Strongest solver contact impulse on the hull this step.
     pub contact_impulse: f32,
     pub is_wreck: bool,
+    /// The seat this enemy's last decision to fire was aimed at
+    /// (`Ai::shot_at_seat`): the attack on the seat it fights, or a
+    /// hunter's snipe. `None` for a seat's own tank, and for an enemy
+    /// that fired at a frog, a tower or a tile or did not fire. Paired
+    /// with that frame's `Event::Fired`, it is what the probe's
+    /// `offbox-fire` check reads.
+    pub shot_at_seat: Option<u8>,
+    /// The seat that damaged this tank this frame, if one did
+    /// (`Tank::hit_by_seat`).
+    pub hit_by_seat: Option<u8>,
 }
 
 /// Turn an intent into hull rotation plus a mass-aware impulse nudging the
@@ -6007,6 +6046,160 @@ cells."22,14" = { kind = "wall", material = "brick" }
         }
         assert!(fired && hit_player, "fired: {fired}, hit the player: {hit_player}");
         assert!(player_snapshot(&game).damage > 0.0);
+    }
+
+    /// The sight-box tests' field (docs/large-maps-follow-camera.md section
+    /// 5): the player near the top middle of an empty map and one enemy, no
+    /// frog - nothing but that enemy ever fires, and nothing stands between
+    /// the two.
+    const SIGHT_BOX_MAP: &str = r#"
+version = 1
+tanks = 1
+cells."20,4" = { kind = "start" }
+"#;
+
+    /// The AFK player on `SIGHT_BOX_MAP` and its one enemy, a plain
+    /// `Role::Player` attacker, put down at `offset` from the player and
+    /// facing it. Returns the round and where the player stands.
+    fn duel(offset: Vec2) -> (Game, Position) {
+        let mut game = Game::default();
+        game.enemy_count_override = Some(1);
+        game.seed_override = Some(7);
+        game.player_row_override = Some(0);
+        game.level_overrides.mission = Some(Mission::Destroy);
+        game.map = MapFile::from_toml_str(SIGHT_BOX_MAP).expect("test map parses");
+        game.init(W, H);
+        set_enemy_role(&mut game, Role::Player);
+        let player = player_pos(&game);
+        let at = player + offset;
+        game.debug_teleport(1, at, Some(Dir::toward(at, player).rotation())).expect("enemy in slot 1");
+        (game, player)
+    }
+
+    /// Step until the enemy in slot 1 pulls its trigger, at most `seconds`:
+    /// where it stood as that frame began - the position its decision was
+    /// made from - and where it stood at the start.
+    fn first_shot(game: &mut Game, seconds: f32) -> (Option<Position>, Position) {
+        let start = position_of(game, 1);
+        for _ in 0..(seconds * 60.0) as u32 {
+            let at = position_of(game, 1);
+            step(game, Input::default());
+            if game.events().iter().any(|e| matches!(e, Event::Fired { slot: 1, .. })) {
+                return (Some(at), start);
+            }
+        }
+        (None, start)
+    }
+
+    /// An enemy lined up on a seat's column, in attack range but further
+    /// out than the seat's sight box reaches, does not fire from there: it
+    /// closes in and fires from inside the box.
+    #[test]
+    fn an_enemy_lined_up_on_a_column_outside_the_sight_box_closes_in_before_it_fires() {
+        let (_, half_h) = tuning().sight_box_half_px();
+        assert!(300.0 > half_h && 300.0 < tuning().enemy_attack_range, "the defaults this is about");
+        let (mut game, player) = duel(Vec2::new(0.0, 300.0));
+        let (fired_from, _) = first_shot(&mut game, 4.0);
+        let at = fired_from.expect("it never fired");
+        assert!((at.y - player.y).abs() <= half_h, "fired from {:.0} px below the seat, outside its box", at.y - player.y);
+        assert!(crate::ai::in_sight_box(player, at));
+    }
+
+    /// Inside the box the same column is a firing line: the enemy holds
+    /// where it stands and fires, and says whom it fired at.
+    #[test]
+    fn an_enemy_lined_up_on_a_column_inside_the_sight_box_fires_from_where_it_stands() {
+        let (_, half_h) = tuning().sight_box_half_px();
+        assert!(230.0 < half_h, "the defaults this is about");
+        let (mut game, _) = duel(Vec2::new(0.0, 230.0));
+        let (fired_from, start) = first_shot(&mut game, 3.0);
+        let at = fired_from.expect("it never fired");
+        assert!(at.distance_to(start) < 4.0, "it held where it stood, not {:.1} px away", at.distance_to(start));
+        let enemy = game.tank_snapshots().into_iter().find(|t| t.slot == 1).expect("enemy");
+        assert_eq!(enemy.shot_at_seat, Some(0), "the shot was aimed at the seat");
+    }
+
+    /// Sideways the box reaches past the attack range, so a row is a
+    /// firing line all the way out, as it always was.
+    #[test]
+    fn an_enemy_lined_up_on_a_row_fires_from_its_attack_range() {
+        let (half_w, _) = tuning().sight_box_half_px();
+        assert!(330.0 < tuning().enemy_attack_range && tuning().enemy_attack_range < half_w, "the defaults this is about");
+        let (mut game, _) = duel(Vec2::new(330.0, 0.0));
+        let (fired_from, start) = first_shot(&mut game, 3.0);
+        let at = fired_from.expect("it never fired");
+        assert!(at.distance_to(start) < 4.0, "it held where it stood, not {:.1} px away", at.distance_to(start));
+    }
+
+    /// The engagement ring's south firing slot stands inside the seat's
+    /// sight box, half a cell in from its edge, and the tank holding it
+    /// fires from inside the box.
+    #[test]
+    fn the_rings_south_slot_stands_inside_the_sight_box() {
+        let mut game = game_on(OPEN_MAP, 2, Some(0));
+        set_role_of(&mut game, 1, Role::Player);
+        set_role_of(&mut game, 2, Role::Player);
+        let player = player_pos(&game);
+        // Two engaged tanks build the ring: one straight below, one east.
+        game.debug_teleport(1, player + Vec2::new(0.0, 300.0), Some(Dir::Up.rotation())).expect("slot 1");
+        game.debug_teleport(2, player + Vec2::new(300.0, 0.0), Some(Dir::Left.rotation())).expect("slot 2");
+        step(&mut game, Input::default());
+        let below = game.tank_entity_by_slot(1).expect("slot 1");
+        let slot = game.last_engage.slot_of(below).expect("the tank below holds a ring slot");
+        assert_eq!((slot.axis_name(), slot.rank), ("down", 0));
+        let target = game.last_engage.target(below).expect("its slot's point");
+        let (_, half_h) = tuning().sight_box_half_px();
+        assert_eq!(target.y - player.y, half_h - OBSTACLE_GRID_SIZE * 0.5, "half a cell inside the box's edge");
+        assert!(crate::ai::in_sight_box(player, target));
+        let (fired_from, _) = first_shot(&mut game, 4.0);
+        let at = fired_from.expect("the tank on the south slot never fired");
+        assert!(crate::ai::in_sight_box(player, at), "fired from {:.0} px below the seat", at.y - player.y);
+    }
+
+    /// An enemy's seeker missile locks onto a seat only while the tank that
+    /// launched it stands inside the seat's sight box - its seek reaches
+    /// much further - and otherwise comes down on the launcher's aim point.
+    #[test]
+    fn an_enemy_missile_locks_onto_a_seat_only_from_inside_its_sight_box() {
+        let lock = |offset: Vec2| {
+            let (mut game, player) = duel(offset);
+            let launcher = player + offset;
+            assert!(offset.length() < tuning().missile_seek_range, "the seat is within the seek");
+            let mut missile = crate::missile::Missile::spawn(launcher, Vec2::new(0.0, -1.0), Owner::Enemy(1), 0, launcher);
+            missile.stage = crate::missile::MissileStage::Seek;
+            game.world.spawn((missile,));
+            step(&mut game, Input::default());
+            game.events()
+                .iter()
+                .find_map(|e| if let Event::MissileLocked { slot: 1, target, .. } = e { Some(*target) } else { None })
+                .expect("the missile looked for a target")
+        };
+        assert_eq!(lock(Vec2::new(0.0, 300.0)), None, "launched from below the seat's box");
+        assert_eq!(lock(Vec2::new(0.0, 200.0)), Some(0), "launched from inside it");
+        assert_eq!(lock(Vec2::new(330.0, 0.0)), Some(0), "launched from beside the seat, inside the box");
+    }
+
+    /// `TankSnapshot::hit_by_seat` names the seat whose shot landed on an
+    /// enemy on the frame it landed, and nobody on the next.
+    #[test]
+    fn a_snapshot_names_the_seat_that_hit_an_enemy_this_frame() {
+        let (mut game, player) = duel(Vec2::new(0.0, 150.0));
+        game.debug_teleport(0, player, Some(Dir::Down.rotation())).expect("the seat");
+        let fire = Input::single(Intent { fire: true, ..Intent::default() });
+        step(&mut game, fire);
+        let mut hit = false;
+        for _ in 0..60 {
+            step(&mut game, Input::default());
+            let enemy = game.tank_snapshots().into_iter().find(|t| t.slot == 1).expect("enemy");
+            if game.events().iter().any(|e| matches!(e, Event::Hit { target: HitTarget::Enemy { slot: 1 }, .. })) {
+                assert_eq!(enemy.hit_by_seat, Some(0), "the shell was the seat's");
+                hit = true;
+            } else if hit {
+                assert_eq!(enemy.hit_by_seat, None, "the next frame nobody hit it");
+                return;
+            }
+        }
+        panic!("the seat's shell never landed (hit: {hit})");
     }
 
     #[test]

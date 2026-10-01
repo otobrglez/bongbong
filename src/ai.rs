@@ -249,6 +249,12 @@ pub struct Ai {
     /// only, nothing in `think` reads them back.
     last_action: Option<&'static str>,
     last_intent: Intent,
+    /// The seat the last `think`'s trigger pull was aimed at: set when it
+    /// fires at the seat it fights (the attack tier, a hunter's snipe),
+    /// `None` when it fired at a frog, a tower or a tile or did not fire.
+    /// Inspection only, like `last_action` - the probe's `offbox-fire`
+    /// check reads it (`TankSnapshot::shot_at_seat`).
+    shot_at_seat: Option<u8>,
     /// Seconds running that the tank has commanded movement straight into
     /// a destructible tile (`walls_ahead` in its `last_move_dir`) - the
     /// trigger for a breach. Velocity-independent on purpose: a tank
@@ -306,6 +312,8 @@ pub struct AiSnapshot {
     pub escapes: u32,
     /// `Ai::target_player`.
     pub target_player: u8,
+    /// The seat the last tick's trigger pull was aimed at (`Ai::shot_at_seat`).
+    pub shot_at_seat: Option<u8>,
 }
 
 impl Default for Ai {
@@ -331,6 +339,7 @@ impl Default for Ai {
             wander_pocketed: false,
             last_action: None,
             last_intent: Intent::default(),
+            shot_at_seat: None,
             wall_ahead_timer: 0.0,
             breach: None,
             grudge: None,
@@ -438,6 +447,7 @@ impl Ai {
         self.dir_hold += dt;
         self.dodge_timer = (self.dodge_timer - dt).max(0.0);
         self.snipe_cooldown = (self.snipe_cooldown - dt).max(0.0);
+        self.shot_at_seat = None;
         if let Some(grudge) = &mut self.grudge {
             grudge.timer -= dt;
             if grudge.timer <= 0.0 {
@@ -597,12 +607,18 @@ impl Ai {
             breach_timer: self.breach.map(|b| b.timer),
             escapes: self.escapes,
             target_player: self.target_player,
+            shot_at_seat: self.shot_at_seat,
         }
     }
 
     /// Which human player this tank is fighting - see the field.
     pub fn target_player(&self) -> u8 {
         self.target_player
+    }
+
+    /// The seat the last tick's trigger pull was aimed at - see the field.
+    pub fn shot_at_seat(&self) -> Option<u8> {
+        self.shot_at_seat
     }
 
     /// Point this tank at the other player (`enemy_phase`'s retarget pass).
@@ -1356,19 +1372,32 @@ impl Brain<'_> {
     }
 
     /// Whether a hunter can take the opportunistic shot at the player this
-    /// tick: the player is alive, within attack range, in clear sight and
+    /// tick: the player is alive, within attack range, in clear sight,
     /// already lined up on one of this tank's firing axes - so no
-    /// repositioning away from the frog is ever spent on it - and the last
-    /// snipe's `hunter_snipe_cooldown_seconds` have passed.
+    /// repositioning away from the frog is ever spent on it - with this
+    /// tank inside the player's sight box (`may_fire_at_seat`), and the
+    /// last snipe's `hunter_snipe_cooldown_seconds` have passed.
     fn can_snipe_player(&self) -> bool {
         if !self.hunting_frog() || !self.player_alive() || !self.player_line_of_sight || self.ai.snipe_cooldown > 0.0 {
             return false;
         }
-        if self.dist_to_player() > self.attack_range() {
+        if self.dist_to_player() > self.attack_range() || !self.may_fire_at_seat() {
             return false;
         }
         let (_, off_axis, in_front) = self.aim_alignment_at(self.player.position);
         off_axis <= tuning().enemy_fire_align_px && in_front
+    }
+
+    /// Whether this tank stands where it may fire at the seat it fights
+    /// (`player`): inside that seat's sight box (`in_sight_box`), the
+    /// rule every enemy shot at a seat obeys, so nobody is shot from
+    /// beyond the edge of their own screen
+    /// (docs/large-maps-follow-camera.md section 5). Sideways the box
+    /// reaches past `enemy_attack_range`, so a shot lined up on a row is
+    /// never held back by it; up and down it is shorter, and a tank lined
+    /// up on a column closes in before it fires.
+    fn may_fire_at_seat(&self) -> bool {
+        in_sight_box(self.player.position, self.me.position)
     }
 
     /// This tank's own position to the nearest currently-live pickup of
@@ -1509,10 +1538,6 @@ impl Brain<'_> {
         (dir, off_axis, forward > 0.0)
     }
 
-    /// Hold position facing `fire_dir` and, once the aim has settled for
-    /// `enemy_aim_settle` and the fire timer allows, shoot at the point
-    /// `range` px ahead - the aligned half of `act_attack`, shared with the
-    /// hunter's snipe. Holds fire (mostly) when a teammate is in the way.
     /// A shot back at the tower this tank holds a grudge against: the
     /// fire direction and range while the tower is in sight, within its
     /// own reach of the tank and lined up on an axis - the tower is a whole
@@ -1530,7 +1555,15 @@ impl Brain<'_> {
         (in_front && off_axis <= t.enemy_fire_align_px + OBSTACLE_GRID_SIZE * 0.5 && range <= reach).then_some((dir, range))
     }
 
-    fn hold_and_fire(&mut self, fire_dir: Dir, range: f32) {
+    /// Hold position facing `fire_dir` and, once the aim has settled for
+    /// `enemy_aim_settle` and the fire timer allows, shoot at the point
+    /// `range` px ahead - the aligned half of `act_attack`, shared with the
+    /// hunter's snipe and the grudge shot. Holds fire (mostly) when a
+    /// teammate is in the way. `at_seat` is the seat the shot is aimed at,
+    /// `None` for a frog or a tower; the caller has already held the tank
+    /// to that seat's sight box (`may_fire_at_seat`), and a shot taken
+    /// records it in `Ai::shot_at_seat`.
+    fn hold_and_fire(&mut self, fire_dir: Dir, range: f32, at_seat: Option<u8>) {
         self.ai.aim_settle += self.dt;
         self.intent.face = Some(fire_dir);
         // Keep the committed heading in sync so leaving Attack doesn't snap.
@@ -1549,6 +1582,7 @@ impl Brain<'_> {
             if !hold_fire {
                 self.intent.fire = true;
                 self.intent.fire_aim_offset = self.roll_misfire(range);
+                self.ai.shot_at_seat = at_seat;
             }
         }
     }
@@ -1666,14 +1700,29 @@ pub(crate) fn axis_offsets(from: Position, to: Position, dir: Dir) -> (f32, f32)
     }
 }
 
+/// Whether `at` stands inside the sight box of the seat whose tank is at
+/// `seat`: no further than the box's half extents
+/// (`Tuning::sight_box_half_px`) from it on either axis, centre to centre,
+/// the edge included. The one test every enemy fire decision at a seat
+/// takes - a tank's attack and snipe (`Brain::may_fire_at_seat`), a seeker
+/// missile's lock (`Game::guide_missiles`), an enemy tower's pick
+/// (`simulation::towers`) - and the one the probe's `offbox-fire` check
+/// holds them to (docs/large-maps-follow-camera.md section 5).
+pub fn in_sight_box(seat: Position, at: Position) -> bool {
+    let (half_w, half_h) = tuning().sight_box_half_px();
+    (at.x - seat.x).abs() <= half_w && (at.y - seat.y).abs() <= half_h
+}
+
 /// Build the enemy behavior tree. Priority (Selector) order, highest first:
 ///   1. Dead? do nothing.
 ///   2. Flee when badly hurt.
 ///   3. Retreat to recharge when ammo is low.
 ///   3.4. A tower that hurt it lined up in sight: fire back.
-///   3.5. A hunter lined up on the player in range: snipe (hold, fire).
+///   3.5. A hunter lined up on the player in range and inside the
+///      player's sight box: snipe (hold, fire).
 ///   3.6. A guard whose player is outside the leash: hold the beat.
-///   4. Attack when the target is in range (aim, settle, fire; else close in).
+///   4. Attack when the target is in range (aim, settle, fire - a seat
+///      only from inside its sight box; else close in).
 ///   5. Chase when the target is visible.
 ///   6. Patrol otherwise.
 ///
@@ -1725,13 +1774,14 @@ fn build<'a>() -> Node<Brain<'a>> {
             condition(|b: &mut Brain| b.grudge_shot().is_some()),
             action("grudge", |b: &mut Brain| {
                 let Some((dir, range)) = b.grudge_shot() else { return Status::Failure };
-                b.hold_and_fire(dir, range);
+                b.hold_and_fire(dir, range, None);
                 Status::Success
             }),
         ]),
         // 3.5. A hunter that happens to be lined up on the player within
-        // attack range shoots the player this tick instead of the frog - an
-        // opportunity taken, never a detour (see `Brain::can_snipe_player`).
+        // attack range, inside the player's sight box, shoots the player
+        // this tick instead of the frog - an opportunity taken, never a
+        // detour (see `Brain::can_snipe_player`).
         sequence(vec![
             condition(|b: &mut Brain| b.can_snipe_player()),
             action("snipe", act_snipe),
@@ -1974,18 +2024,31 @@ fn act_seek_shield(b: &mut Brain) -> Status {
 
 /// Hold near the target and shoot when lined up on a cardinal axis. The tank
 /// only fires after staying aligned for ENEMY_AIM_SETTLE, and stops to aim.
+/// A seat is only fired at from inside its sight box
+/// (`Brain::may_fire_at_seat`): lined up on a seat's column further out
+/// than the box reaches, the tank keeps closing in.
 fn act_attack(b: &mut Brain) -> Status {
     let (fire_dir, off_axis, in_front) = b.aim_alignment();
+    let at_seat = !b.hunting_frog();
     // A geometrically on-axis spot the AI can't actually shoot from (a wall
     // in the way) is treated the same as not being aligned at all, so the
     // tank repositions instead of settling in and holding a shot it can
     // never take - see `think`'s `line_of_sight` parameter doc comment.
-    let aligned = off_axis <= tuning().enemy_fire_align_px && in_front && b.line_of_sight;
+    // So is a spot outside the seat's sight box: the reposition below
+    // steers at the tank's engagement slot - a firing slot stands inside
+    // the box, a reserve beyond attack range where nothing fires - or at
+    // the seat itself, so a tank closes into the box to fire rather than
+    // holding outside it on a shot the rule never lets it take.
+    let aligned = off_axis <= tuning().enemy_fire_align_px
+        && in_front
+        && b.line_of_sight
+        && (!at_seat || b.may_fire_at_seat());
 
     if aligned {
         // Line up: face the fire direction and hold position while settling.
         let range = b.dist_to_target();
-        b.hold_and_fire(fire_dir, range);
+        let seat = at_seat.then_some(b.ai.target_player);
+        b.hold_and_fire(fire_dir, range, seat);
     } else {
         // Not lined up: reposition toward this tank's engagement-ring slot
         // (with commitment) rather than the target's exact position, so a
@@ -2002,7 +2065,8 @@ fn act_attack(b: &mut Brain) -> Status {
 fn act_snipe(b: &mut Brain) -> Status {
     let (fire_dir, _, _) = b.aim_alignment_at(b.player.position);
     let range = b.dist_to_player();
-    b.hold_and_fire(fire_dir, range);
+    let seat = b.ai.target_player;
+    b.hold_and_fire(fire_dir, range, Some(seat));
     if b.intent.fire {
         b.ai.snipe_cooldown = tuning().hunter_snipe_cooldown_seconds;
     }
@@ -2223,6 +2287,25 @@ mod role_tests {
         let player = Position::new(700.0, 450.0);
         tick(&mut ai, me, player, frog, Some(frog));
         assert_eq!(ai.snapshot().last_action, Some("chase"));
+    }
+
+    /// A snipe is a shot at a seat, so it is taken only from inside the
+    /// player's sight box: lined up and in attack range but further out on
+    /// the player's column than the box reaches, the hunter goes on after
+    /// the frog.
+    #[test]
+    fn a_hunter_snipes_only_from_inside_the_players_sight_box() {
+        let (_, half_h) = tuning().sight_box_half_px();
+        let me = Position::new(600.0, 300.0);
+        let frog = Position::new(1100.0, 300.0);
+        let action_with_player_below = |below: f32| {
+            let mut ai = Ai::with_role(Role::Hunter);
+            tick(&mut ai, me, Position::new(me.x, me.y + below), frog, Some(frog));
+            ai.snapshot().last_action
+        };
+        assert!(half_h + 30.0 < tuning().enemy_attack_range, "the defaults this is about");
+        assert_eq!(action_with_player_below(half_h + 30.0), Some("chase"), "outside the box: back to the frog");
+        assert_eq!(action_with_player_below(half_h - 30.0), Some("snipe"));
     }
 
     #[test]

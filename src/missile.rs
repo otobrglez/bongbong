@@ -6,9 +6,10 @@
 //! 1. **Climb** - up out of its tube along the launcher's heading, fanned
 //!    a few degrees per tube, rising to `missile_apex_height`.
 //! 2. **Seek** - a short hang at the apex while `Game::guide_missiles`
-//!    locks it onto the nearest opposing tank within `missile_seek_range`,
-//!    or, with none in range, onto the ground point the launcher was aimed
-//!    at.
+//!    locks it onto the nearest opposing tank within `missile_seek_range`
+//!    (an enemy's onto a seat only while its launcher stands inside that
+//!    seat's sight box), or, with none in range, onto the ground point the
+//!    launcher was aimed at.
 //! 3. **Chase** - it accelerates after the target with a limited (and
 //!    growing) turn rate, following it while it moves, and comes down over
 //!    the last `missile_dive_distance`. Inside `missile_commit_distance` it

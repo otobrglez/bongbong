@@ -1,15 +1,16 @@
 //! The seeker missiles' world-facing half (`missile.rs` is the flight):
 //! locking a missile at the top of its climb onto the nearest opposing
-//! tank, keeping its aim on that tank while it chases, and bursting it in
-//! a small blast where it comes down. No RNG outside the blast's damage
-//! rolls, which are drawn only for what is inside the radius - a round
-//! with no missiles in the air draws exactly what it did before.
+//! tank (an enemy's onto a seat only from inside its sight box), keeping
+//! its aim on that tank while it chases, and bursting it in a small blast
+//! where it comes down. No RNG outside the blast's damage rolls, which are
+//! drawn only for what is inside the radius - a round with no missiles in
+//! the air draws exactly what it did before.
 
 use crate::tuning::tuning;
 use hecs::Entity;
 use crate::math::Vec2;
 
-use crate::ai::Ai;
+use crate::ai::{Ai, in_sight_box};
 use crate::blast::{BlastFx, BlastKind, BlastShape, Lean, Scorch};
 use crate::frog::{Frog, Side};
 use crate::missile::Missile;
@@ -47,12 +48,18 @@ impl Game {
     /// keeps the launcher's aim point - either way offset by its tube
     /// (`Missile::impact_offset`) so a salvo lands spread out; a missile
     /// following a tank takes the tank's position plus that offset as its
-    /// aim, and one whose tank has died dives on where it last aimed. No
-    /// RNG.
+    /// aim, and one whose tank has died dives on where it last aimed. An
+    /// enemy's missile locks onto a seat only while its launcher stands
+    /// inside that seat's sight box (`ai::in_sight_box`) - the rule every
+    /// enemy fires at a seat by, and the one a volley would otherwise slip
+    /// past, since its seek reaches much further than the box - and a
+    /// launcher gone from the field locks onto none. No RNG.
     pub(super) fn guide_missiles(&mut self, f: &mut Frame) {
         // Everything a missile can lock: live tanks with a body (a wave tank
-        // still rolling in has neither a body nor an `Ai`).
+        // still rolling in has neither a body nor an `Ai`). And where every
+        // enemy launcher stands, wrecks included.
         let mut targets: Vec<(Entity, usize, Owner, Position)> = Vec::new();
+        let mut launchers: Vec<(usize, Position)> = Vec::new();
         for player in self.players().into_iter().flatten() {
             super::with_tank(&self.world, player, |t| {
                 if !t.is_wreck() {
@@ -64,14 +71,26 @@ impl Game {
             if !tank.is_wreck() {
                 targets.push((entity, tank.owner_slot(), tank.owner(), tank.position));
             }
+            launchers.push((tank.owner_slot(), tank.position));
         }
         targets.sort_by_key(|&(_, slot, _, _)| slot);
         let range = tuning().missile_seek_range;
         for missile in self.world.query::<&mut Missile>().iter() {
             if missile.wants_lock() {
+                // Where an enemy's launcher stands (`None` once it is gone);
+                // a seat's missile is bound by no box.
+                let launcher = match missile.owner {
+                    Owner::Enemy(slot) => Some(launchers.iter().find(|&&(s, _)| s == slot).map(|&(_, at)| at)),
+                    _ => None,
+                };
+                let may_lock = |owner: Owner, pos: Position| match launcher {
+                    Some(at) if owner.is_player() => at.is_some_and(|at| in_sight_box(pos, at)),
+                    _ => true,
+                };
                 let nearest = targets
                     .iter()
                     .filter(|(_, _, owner, _)| !owner.same_side(missile.owner))
+                    .filter(|&&(_, _, owner, pos)| may_lock(owner, pos))
                     .map(|&(e, slot, _, pos)| (e, slot, pos, pos.distance_to(missile.position)))
                     .filter(|&(_, _, _, d)| d <= range)
                     // `targets` is in slot order and `min_by` keeps the

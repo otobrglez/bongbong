@@ -33,11 +33,11 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use bongbong::Position;
-use bongbong::ai::Intent;
+use bongbong::ai::{Intent, in_sight_box};
 use bongbong::map::MapFile;
 use bongbong::level::SpawnKind;
 use bongbong::simulation::debug::{JITTER_WINDOW_FRAMES, SPIN_FULL_CIRCLE_DEG, SPIN_NET_MAX, SPIN_WINDOW_FRAMES, signed_quarter_turn};
-use bongbong::simulation::{Event, Game, Input, Outcome, TankSnapshot};
+use bongbong::simulation::{Event, Game, HitTarget, Input, Outcome, TankSnapshot};
 use bongbong::tank::{Dir, TankKind};
 use bongbong::{
     DEFAULT_SCREEN_HEIGHT,
@@ -558,15 +558,16 @@ struct AnomalyTotals {
     invariant: u32,
     tank_grind: u32,
     pile_up: u32,
+    offbox_fire: u32,
 }
 
 /// Canonical anomaly-kind tags in reporting order - exactly the strings
 /// `report` prints in ANOMALY lines. The single source of truth wiring a
 /// kind into `--budget` validation, the `--json-out` `anomalies` object
-/// (tags with `-` swapped for `_`), and the `--heatmap` per-kind ordering:
-/// a new kind added here and in `AnomalyTotals::count` reaches all three
-/// automatically.
-const ANOMALY_KINDS: [&str; 14] = [
+/// (tags with `-` swapped for `_`), the `--heatmap` per-kind ordering and
+/// the sweep totals (`AnomalyTotals::add`): a new kind added here and in
+/// `AnomalyTotals::count`/`count_mut` reaches all four automatically.
+const ANOMALY_KINDS: [&str; 15] = [
     "stale-start",
     "stall",
     "border-stuck",
@@ -581,6 +582,7 @@ const ANOMALY_KINDS: [&str; 14] = [
     "invariant",
     "tank-grind",
     "pile-up",
+    "offbox-fire",
 ];
 
 /// `kind=count` for every kind in `ANOMALY_KINDS`, in reporting order - the
@@ -603,23 +605,95 @@ impl AnomalyTotals {
     /// read `--budget`/`--json-out` need, kept next to the field list so
     /// the two can't drift.
     fn count(&self, kind: &str) -> u32 {
+        let mut copy = *self;
+        *copy.count_mut(kind)
+    }
+
+    /// The field behind one `ANOMALY_KINDS` tag.
+    fn count_mut(&mut self, kind: &str) -> &mut u32 {
         match kind {
-            "stale-start" => self.stale_start,
-            "stall" => self.stall,
-            "border-stuck" => self.border_stuck,
-            "jitter" => self.jitter,
-            "spin" => self.spin,
-            "churn" => self.churn,
-            "clustering" => self.clustering,
-            "wall-grind" => self.wall_grind,
-            "bump-rate" => self.bump_rate,
-            "low-progress" => self.low_progress,
-            "never-arrived" => self.never_arrived,
-            "invariant" => self.invariant,
-            "tank-grind" => self.tank_grind,
-            "pile-up" => self.pile_up,
+            "stale-start" => &mut self.stale_start,
+            "stall" => &mut self.stall,
+            "border-stuck" => &mut self.border_stuck,
+            "jitter" => &mut self.jitter,
+            "spin" => &mut self.spin,
+            "churn" => &mut self.churn,
+            "clustering" => &mut self.clustering,
+            "wall-grind" => &mut self.wall_grind,
+            "bump-rate" => &mut self.bump_rate,
+            "low-progress" => &mut self.low_progress,
+            "never-arrived" => &mut self.never_arrived,
+            "invariant" => &mut self.invariant,
+            "tank-grind" => &mut self.tank_grind,
+            "pile-up" => &mut self.pile_up,
+            "offbox-fire" => &mut self.offbox_fire,
             _ => unreachable!("unknown anomaly kind '{kind}' - not in ANOMALY_KINDS"),
         }
+    }
+
+    /// Fold one round's totals into a sweep's, every kind in
+    /// `ANOMALY_KINDS`.
+    fn add(&mut self, other: &AnomalyTotals) {
+        for kind in ANOMALY_KINDS {
+            *self.count_mut(kind) += other.count(kind);
+        }
+    }
+}
+
+/// One round's fire, read off `Game::events()` and the tank snapshots by
+/// `check_fire` (docs/large-maps-follow-camera.md section 5): counters,
+/// not anomalies - the anomaly is `offbox-fire`. The sight box is the
+/// rule's own (`bongbong::ai::in_sight_box`), measured centre to centre.
+#[derive(Default, Clone, Copy)]
+struct FireTally {
+    /// Enemy trigger pulls (`Event::Fired` from an enemy slot).
+    enemy_shots: u32,
+    /// The ones aimed at a seat (`TankSnapshot::shot_at_seat`)...
+    shots_at_seats: u32,
+    /// ...and of those, the ones taken from outside that seat's sight box
+    /// - every one an `offbox-fire` (which flags each tank once a round).
+    shots_at_seats_offbox: u32,
+    /// Enemy seeker missiles that locked onto a seat
+    /// (`Event::MissileLocked`), and the ones whose launcher stood
+    /// outside that seat's box.
+    missile_locks_on_seats: u32,
+    missile_locks_offbox: u32,
+    /// Shots, beams and flames that landed on a seat (`Event::Hit`), from
+    /// anyone.
+    hits_on_seats: u32,
+    /// A seat's hits on enemies (`TankSnapshot::hit_by_seat`)...
+    seat_hits: u32,
+    /// ...on an enemy standing outside that seat's sight box when it
+    /// landed - the reverse unfairness: that enemy cannot answer until it
+    /// closes in.
+    seat_hits_offbox: u32,
+}
+
+impl FireTally {
+    fn add(&mut self, other: &FireTally) {
+        self.enemy_shots += other.enemy_shots;
+        self.shots_at_seats += other.shots_at_seats;
+        self.shots_at_seats_offbox += other.shots_at_seats_offbox;
+        self.missile_locks_on_seats += other.missile_locks_on_seats;
+        self.missile_locks_offbox += other.missile_locks_offbox;
+        self.hits_on_seats += other.hits_on_seats;
+        self.seat_hits += other.seat_hits;
+        self.seat_hits_offbox += other.seat_hits_offbox;
+    }
+
+    /// `(name, value)` in reporting order - the summary line and the
+    /// `--json-out` `fire` object read the same list.
+    fn fields(&self) -> [(&'static str, u32); 8] {
+        [
+            ("enemy_shots", self.enemy_shots),
+            ("shots_at_seats", self.shots_at_seats),
+            ("shots_at_seats_offbox", self.shots_at_seats_offbox),
+            ("missile_locks_on_seats", self.missile_locks_on_seats),
+            ("missile_locks_offbox", self.missile_locks_offbox),
+            ("hits_on_seats", self.hits_on_seats),
+            ("seat_hits", self.seat_hits),
+            ("seat_hits_offbox", self.seat_hits_offbox),
+        ]
     }
 }
 
@@ -737,9 +811,11 @@ impl TankTrack {
     /// (`act_attack`'s fire/cooldown rhythm); it currently holds an
     /// aligned, in-range firing solution on the live player
     /// (`act_attack`'s aim-settle hold - within ENEMY_FIRE_ALIGN_PX of a
-    /// cardinal axis and inside ENEMY_ATTACK_RANGE); or it's parked
-    /// outside ENEMY_RETREAT_RANGE with shells still below
-    /// ENEMY_AMMO_RESUME (`act_retreat`'s wait-out-the-recharge hold).
+    /// cardinal axis, inside ENEMY_ATTACK_RANGE and inside the player's
+    /// sight box, outside which the AI closes in rather than holds, so a
+    /// tank standing still there is a stall); or it's parked outside
+    /// ENEMY_RETREAT_RANGE with shells still below ENEMY_AMMO_RESUME
+    /// (`act_retreat`'s wait-out-the-recharge hold).
     fn deliberate_hold(&self, frame: u32, tank: &TankSnapshot, player: &TankSnapshot) -> bool {
         if self
             .last_fire_frame
@@ -753,7 +829,9 @@ impl TankTrack {
         let dx = (player.position.x - tank.position.x).abs();
         let dy = (player.position.y - tank.position.y).abs();
         let dist = tank.position.distance_to(player.position);
-        let aligned_in_range = dx.min(dy) <= tuning().enemy_fire_align_px && dist <= tuning().enemy_attack_range;
+        let aligned_in_range = dx.min(dy) <= tuning().enemy_fire_align_px
+            && dist <= tuning().enemy_attack_range
+            && in_sight_box(player.position, tank.position);
         let retreat_wait = dist >= tuning().enemy_retreat_range() && tank.shells_ammo < tuning().enemy_ammo_resume;
         aligned_in_range || retreat_wait
     }
@@ -1435,6 +1513,117 @@ fn check_anomalies(
     }
 }
 
+/// Where every tank stood when a frame's decisions were made - the
+/// previous frame's positions, which is what `enemy_phase`,
+/// `guide_missiles` and the towers read (nothing moves a hull between the
+/// top of `update` and those phases but a portal or a roll-in) - and
+/// whether it was still rolling in. Refreshed by `check_fire`.
+type Stood = BTreeMap<usize, (Position, bool)>;
+
+fn stood_now(game: &Game) -> Stood {
+    game.tank_snapshots().iter().map(|t| (t.slot, (t.position, t.entering))).collect()
+}
+
+/// The display name of seat `seat` (see `tank_label`).
+fn seat_label(seat: usize, first_enemy: usize) -> String {
+    if first_enemy == 1 { "PLAYER".to_string() } else { format!("PLAYER{}", seat + 1) }
+}
+
+/// This frame's fire against the sight-box rule
+/// (docs/large-maps-follow-camera.md section 5): every enemy trigger pull
+/// aimed at a seat (`Event::Fired` with `TankSnapshot::shot_at_seat`) and
+/// every enemy missile that locked onto a seat (`Event::MissileLocked`)
+/// is measured from where the shooter and the seat stood when it was
+/// decided (`stood`), and one taken from outside the seat's box is an
+/// `offbox-fire` - reported once per enemy per round (`flagged`), every
+/// one counted in `fire`. The tally also counts hits on seats and seat
+/// hits on enemies, and the ones on an enemy outside the hitting seat's
+/// box (where they stand after the frame, which is when the hit landed).
+/// A tank that came through a portal this frame, or is rolling in, is
+/// not measured: where it stood is not where it was decided from. Runs on
+/// every frame, the one the round ends on included - its shots were
+/// decided while it was still being played.
+#[allow(clippy::too_many_arguments)]
+fn check_fire(
+    game: &Game,
+    stood: &mut Stood,
+    round: u32,
+    frame: u32,
+    fire: &mut FireTally,
+    flagged: &mut BTreeSet<usize>,
+    totals: &mut AnomalyTotals,
+    heat: &mut Vec<(String, Position)>,
+) {
+    let first_enemy = game.first_enemy_slot();
+    let seed = game.round_seed();
+    let snapshots = game.tank_snapshots();
+    let events = game.events();
+    let jumped: BTreeSet<usize> =
+        events.iter().filter_map(|e| if let Event::Teleported { slot, .. } = e { Some(*slot) } else { None }).collect();
+    let decided_at =
+        |slot: usize| stood.get(&slot).filter(|&&(_, entering)| !entering && !jumped.contains(&slot)).map(|&(p, _)| p);
+    let (half_w, half_h) = tuning().sight_box_half_px();
+    // Whether `shooter` stood outside `seat`'s box when it decided to fire
+    // at it; the first time a round catches a tank at it is its anomaly.
+    let mut offbox = |shooter: usize, seat: usize, what: &str| -> bool {
+        let (Some(at), Some(seat_pos)) = (decided_at(shooter), decided_at(seat)) else { return false };
+        if in_sight_box(seat_pos, at) {
+            return false;
+        }
+        if flagged.insert(shooter) {
+            report(
+                heat,
+                round,
+                seed,
+                frame,
+                &enemy_label(shooter, first_enemy),
+                "offbox-fire",
+                &format!(
+                    "{what} {} from outside its sight box (dx={:.0} dy={:.0}, box +-{half_w:.0} x +-{half_h:.0})",
+                    seat_label(seat, first_enemy),
+                    at.x - seat_pos.x,
+                    at.y - seat_pos.y,
+                ),
+                at,
+            );
+            totals.offbox_fire += 1;
+        }
+        true
+    };
+    for event in events {
+        match *event {
+            Event::Fired { slot, .. } if slot >= first_enemy => {
+                fire.enemy_shots += 1;
+                let Some(seat) = snapshots.iter().find(|t| t.slot == slot).and_then(|t| t.shot_at_seat) else {
+                    continue;
+                };
+                fire.shots_at_seats += 1;
+                if offbox(slot, seat as usize, "fired at") {
+                    fire.shots_at_seats_offbox += 1;
+                }
+            }
+            Event::MissileLocked { slot, target: Some(target), .. } if slot >= first_enemy && target < first_enemy => {
+                fire.missile_locks_on_seats += 1;
+                if offbox(slot, target, "missile locked onto") {
+                    fire.missile_locks_offbox += 1;
+                }
+            }
+            Event::Hit { target: HitTarget::Player { .. }, .. } => fire.hits_on_seats += 1,
+            _ => {}
+        }
+    }
+    for tank in &snapshots {
+        let Some(seat) = tank.hit_by_seat else { continue };
+        fire.seat_hits += 1;
+        if let Some(by) = snapshots.iter().find(|t| t.slot == seat as usize)
+            && !in_sight_box(by.position, tank.position)
+        {
+            fire.seat_hits_offbox += 1;
+        }
+    }
+    *stood = snapshots.iter().map(|t| (t.slot, (t.position, t.entering))).collect();
+}
+
 /// Per-enemy end-of-round metrics for one `--json-out` record, read off
 /// the same `TankTrack` state the anomaly checks maintained all round.
 struct TankReport {
@@ -1486,6 +1675,8 @@ struct RoundResult {
     /// one, budgeting it would budget the feature
     /// (docs/enemy-command-and-control-prd.md section 10).
     rams: RamTally,
+    /// This round's shots and hits against the sight-box rule (`check_fire`).
+    fire: FireTally,
     frames_run: u32,
     outcome: Outcome,
     tanks: Vec<TankReport>,
@@ -1552,6 +1743,11 @@ fn run_round(
     let mut invariant_flagged: BTreeSet<usize> = BTreeSet::new();
     let mut totals = AnomalyTotals::default();
     let mut rams = RamTally::default();
+    // `check_fire`'s state: where every tank stood as the frame began, the
+    // enemies already flagged `offbox-fire`, and the round's tally.
+    let mut stood = stood_now(&game);
+    let mut offbox_flagged: BTreeSet<usize> = BTreeSet::new();
+    let mut fire = FireTally::default();
     let first_enemy = game.first_enemy_slot();
 
     if trace {
@@ -1563,9 +1759,9 @@ fn run_round(
     for frame in 1..=args.frames {
         let input = input_for_frame(args, frame);
         game.update(input, DT, field_width(), field_height());
-        // The one place the probe reads the event log: ram damage is
-        // invisible to `tank_snapshots`, which reports health but never who
-        // took it off. Costs nothing - recording an event draws no RNG.
+        // Ram damage is invisible to `tank_snapshots`, which reports health
+        // but never who took it off, so it is read off the event log.
+        // Costs nothing - recording an event draws no RNG.
         for event in game.events() {
             if let Event::Ram { slot, other_slot, damage } = event {
                 if *slot >= first_enemy && *other_slot >= first_enemy {
@@ -1576,6 +1772,7 @@ fn run_round(
                 rams.rolled_damage += damage;
             }
         }
+        check_fire(&game, &mut stood, round, frame, &mut fire, &mut offbox_flagged, &mut totals, heat);
         check_anomalies(&mut tracks, &mut invariant_flagged, &game, round, frame, &mut totals, heat);
 
         if trace && frame % args.log_every == 0 {
@@ -1674,6 +1871,7 @@ fn run_round(
     RoundResult {
         totals,
         rams,
+        fire,
         frames_run,
         outcome: game.outcome(),
         tanks: reports,
@@ -1750,8 +1948,9 @@ fn json_round_line(args: &Args, round: u32, seed: u64, result: &RoundResult, tun
         })
         .collect::<Vec<_>>()
         .join(",");
+    let fire = result.fire.fields().iter().map(|(name, v)| format!("\"{name}\":{v}")).collect::<Vec<_>>().join(",");
     format!(
-        "{{\"v\":1,\"round\":{round},\"seed\":\"0x{seed:016x}\",\"tuning\":{tuning_diff},\"map\":\"{}\",\"mission\":\"{}\",\"spawn\":\"{}\",\"scenario\":\"{}\",\"players\":{},\"enemies\":{},\"frames_run\":{},\"outcome\":\"{}\",\"anomalies\":{{{anomalies}}},\"rams\":{{\"pair\":{},\"into_player\":{},\"rolled_damage\":{:.1}}},\"tanks\":[{tanks}]}}",
+        "{{\"v\":1,\"round\":{round},\"seed\":\"0x{seed:016x}\",\"tuning\":{tuning_diff},\"map\":\"{}\",\"mission\":\"{}\",\"spawn\":\"{}\",\"scenario\":\"{}\",\"players\":{},\"enemies\":{},\"frames_run\":{},\"outcome\":\"{}\",\"anomalies\":{{{anomalies}}},\"rams\":{{\"pair\":{},\"into_player\":{},\"rolled_damage\":{:.1}}},\"fire\":{{{fire}}},\"tanks\":[{tanks}]}}",
         json_escape(map_display(args)),
         result.mission.name(),
         result.spawn.name(),
@@ -1906,6 +2105,7 @@ fn main() -> ExitCode {
 
     let mut grand_total = AnomalyTotals::default();
     let mut grand_rams = RamTally::default();
+    let mut grand_fire = FireTally::default();
     // Every flagged round's (round, seed), for the end-of-sweep replay
     // recap - the per-round lines above it scroll away on a big sweep.
     let mut flagged: Vec<(u32, u64)> = Vec::new();
@@ -1923,30 +2123,16 @@ fn main() -> ExitCode {
         grand_rams.pair += result.rams.pair;
         grand_rams.into_player += result.rams.into_player;
         grand_rams.rolled_damage += result.rams.rolled_damage;
-        if sweep {
-            if totals.total() > 0 {
-                flagged.push((round, seed));
-                println!(
-                    "round={round} seed=0x{seed:016x} anomalies={} ({})",
-                    totals.total(),
-                    totals_line(&totals),
-                );
-            }
-            grand_total.stale_start += totals.stale_start;
-            grand_total.stall += totals.stall;
-            grand_total.border_stuck += totals.border_stuck;
-            grand_total.jitter += totals.jitter;
-            grand_total.spin += totals.spin;
-            grand_total.churn += totals.churn;
-            grand_total.clustering += totals.clustering;
-            grand_total.wall_grind += totals.wall_grind;
-            grand_total.bump_rate += totals.bump_rate;
-            grand_total.low_progress += totals.low_progress;
-            grand_total.never_arrived += totals.never_arrived;
-            grand_total.invariant += totals.invariant;
-        } else {
-            grand_total = totals;
+        grand_fire.add(&result.fire);
+        if sweep && totals.total() > 0 {
+            flagged.push((round, seed));
+            println!(
+                "round={round} seed=0x{seed:016x} anomalies={} ({})",
+                totals.total(),
+                totals_line(&totals),
+            );
         }
+        grand_total.add(&totals);
     }
 
     if sweep {
@@ -1976,6 +2162,15 @@ fn main() -> ExitCode {
     } else if grand_total.total() == 0 {
         println!("probe: no anomalies detected");
     }
+    // Fire against the sight-box rule (docs/large-maps-follow-camera.md
+    // section 5): counters beside the `offbox-fire` anomaly, which is the
+    // one budgeted. `seat-hits-offbox` is the reverse unfairness - seat
+    // hits on enemies outside that seat's box, which cannot answer until
+    // they close in - and is a reading, not a failure.
+    println!(
+        "probe: fire: {}",
+        grand_fire.fields().iter().map(|(name, v)| format!("{}={v}", name.replace('_', "-"))).collect::<Vec<_>>().join(" ")
+    );
 
     if args.heatmap {
         print_heatmaps(&args, &heat);

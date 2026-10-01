@@ -241,6 +241,27 @@ fn a_gun_tower_turns_at_its_rate_and_fires_inside_its_cone() {
     assert!(fired_at.is_some(), "fires once it is on the aim");
 }
 
+// An enemy tower fights a seat only from inside the seat's sight box
+// (docs/large-maps-follow-camera.md section 5). The gun tower is the one
+// whose reach goes past the box: straight up or down its range is longer
+// than the box's half height.
+#[test]
+fn an_enemy_gun_tower_fires_at_a_seat_only_from_inside_its_sight_box() {
+    let t = tuning();
+    let (_, half_h) = t.sight_box_half_px();
+    assert!(t.gun_tower_range > half_h + 8.0, "the defaults this is about: the gun reaches past the box");
+    let map = map_with("cells.\"20,4\" = { kind = \"gun_tower\", side = \"enemy\" }\n");
+    let tower_at = cell_to_world(20, 4);
+    let bursts_with_the_seat_below = |dy: f32| {
+        let mut game = game_on(&map, PlayerCount::ONE, 4);
+        game.debug_teleport(0, Position::new(tower_at.x, tower_at.y + dy), Some(0.0)).expect("the seat");
+        let events = idle(&mut game, 90);
+        tower_fired(&events, TowerKind::Gun)
+    };
+    assert_eq!(bursts_with_the_seat_below(half_h + 8.0), 0, "in reach, but outside the seat's box");
+    assert!(bursts_with_the_seat_below(half_h - 8.0) > 0, "inside the box it opens fire");
+}
+
 #[test]
 fn a_gun_tower_holds_fire_on_a_friend_and_shoots_through_one() {
     let map = map_with("cells.\"20,8\" = { kind = \"gun_tower\", side = \"enemy\" }\n");

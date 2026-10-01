@@ -1065,6 +1065,24 @@ tunables! {
         enemy_attack_range: f32 = 340.0 in 50.0 ..= 2000.0;
         /// Fire when the player is within this many px of the firing axis.
         enemy_fire_align_px: f32 = 24.0 in 1.0 ..= 200.0;
+        /// The sight box around every seat, in cells from the seat's
+        /// centre: this many sideways (`sight_box_half_cols`) and up and
+        /// down (`sight_box_half_rows`), +-368 x +-240 px
+        /// (`Tuning::sight_box_half_px`; docs/large-maps-follow-camera.md
+        /// section 5). An enemy fires at a seat only while its centre stands
+        /// inside that seat's box - a tank's attack and a hunter's snipe,
+        /// a seeker missile choosing a seat to lock onto, an enemy tower
+        /// choosing a seat to shoot - and every screen shows at least the
+        /// box around its own seat, so nobody is shot from beyond the edge
+        /// of their screen. Sideways it is wider than `enemy_attack_range`
+        /// and changes nothing; up and down an enemy closes to 240 px
+        /// before it fires, and the engagement ring's north and south
+        /// firing slots stand inside it. A rule of the round, never of a
+        /// window: the room and every client read the same table (a
+        /// room's tuning patch rides its `Welcome`), so no device's screen
+        /// decides who may shoot whom.
+        sight_box_half_cols: f32 = 11.5 in 1.0 ..= 64.0;
+        sight_box_half_rows: f32 = 7.5 in 1.0 ..= 64.0;
         /// Minimum seconds between AI shots at the baseline magazine level.
         enemy_fire_interval: f32 = 1.2 in 0.05 ..= 10.0;
         /// The fuller an enemy's magazine, the faster it re-fires: at
@@ -2498,6 +2516,13 @@ impl Tuning {
         self.enemy_attack_range * self.enemy_retreat_range_factor
     }
 
+    /// The sight box's half extents in world px, (sideways, up and down):
+    /// `sight_box_half_cols` and `sight_box_half_rows` cells of
+    /// `OBSTACLE_GRID_SIZE` - +-368 x +-240 at the defaults.
+    pub fn sight_box_half_px(&self) -> (f32, f32) {
+        (self.sight_box_half_cols * crate::OBSTACLE_GRID_SIZE, self.sight_box_half_rows * crate::OBSTACLE_GRID_SIZE)
+    }
+
     /// Fire cooldown held for a whole minigun burst: every queued bullet's
     /// delay plus the trailing gap.
     pub fn minigun_burst_cooldown_seconds(&self) -> f32 {
@@ -2914,8 +2939,11 @@ mod tests {
         assert_eq!(t.engage_ring_radius(), 340.0 * 0.8);
         assert_eq!(t.engage_reserve_radius(), 400.0);
         assert_eq!(t.enemy_retreat_range(), 340.0 * 1.3);
+        assert_eq!(t.sight_box_half_px(), (368.0, 240.0));
         t.enemy_attack_range = 500.0;
         assert_eq!(t.engage_ring_radius(), 400.0);
+        t.sight_box_half_rows = 8.0;
+        assert_eq!(t.sight_box_half_px(), (368.0, 256.0));
         assert_eq!(t.minigun_burst_cooldown_seconds(), 5.0 * 0.04 + 0.1);
     }
 

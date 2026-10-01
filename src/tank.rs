@@ -464,6 +464,13 @@ pub struct Tank {
     /// (`Game::round_stats`). `None` until a seat touches it, and always on
     /// a seat's own tank.
     pub last_hit_by: Option<u8>,
+    /// The seat that damaged this tank in the frame just simulated, if one
+    /// did: set by `credit` beside `last_hit_by` and cleared at the top of
+    /// every frame (`Game::tick_timers`). Nothing in the round reads it;
+    /// it is the instantaneous fact `TankSnapshot::hit_by_seat` reports,
+    /// which the probe counts seat hits on enemies outside the seat's
+    /// sight box by.
+    pub hit_by_seat: Option<u8>,
     /// Seconds of wet tread marks left after wading (docs/water.md):
     /// refreshed every frame the hull is in water, counted down by
     /// `tick_timers`, read by `lay_tracks`.
@@ -646,6 +653,7 @@ impl Default for Tank {
             flame_held: false,
             burn_timer: 0.0,
             last_hit_by: None,
+            hit_by_seat: None,
             slime_timer: 0.0,
             wet_timer: 0.0,
             laser_variant: LaserVariant::Red,
@@ -1357,13 +1365,15 @@ impl Tank {
     }
 
     /// `by` has just damaged this tank: a seat's hit on an enemy makes
-    /// that seat the one its wreck is credited to (`last_hit_by`). An
-    /// enemy's hit, or any hit on a seat, credits nobody.
+    /// that seat the one its wreck is credited to (`last_hit_by`) and the
+    /// one that hit it this frame (`hit_by_seat`). An enemy's hit, or any
+    /// hit on a seat, credits nobody.
     pub fn credit(&mut self, by: Owner) {
         if let Owner::Player(seat) = by
             && !self.owner.is_player()
         {
             self.last_hit_by = Some(seat);
+            self.hit_by_seat = Some(seat);
         }
     }
 
