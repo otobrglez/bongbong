@@ -703,10 +703,6 @@ probe.
 
 ## 15. Open questions
 
-- **Arena threshold.** 36 x 18, or every map up to 40 x 22.5 shown whole?
-  A monitor playing locally already shows the 40 x 20 and 40 x 22.5
-  levels whole (section 3), so this decides phones, tablets and rooms. A
-  per-map `view` key settles individual cases.
 - **Vertical engagement.** Is an enemy closing to 240 px before it fires
   vertically the right balance, or should the sight box be taller and
   phones accept a slightly smaller tank?
@@ -720,6 +716,14 @@ Decided:
 - **Local play on a big screen** zooms out on its own (section 3):
   40 x 22.5 cells on a 24" or 27" monitor. There is no setting, and
   online rooms always use the shared area.
+- **Arena threshold.** Maps up to 36 x 18 are shown whole; the five
+  40-wide levels (Hedge Maze, Archipelago, Black Gold, Harbor Lights,
+  Castle Moat) get the follow camera on phones, tablets, laptops and in
+  rooms. A phone keeps an 8 mm tank and still shows about nine tenths of
+  their width and four fifths of their height; shown whole they would
+  draw it at 5.8 to 6.5 mm. A monitor playing locally shows them whole
+  anyway (section 3), and a map's `view` key can still choose for
+  itself.
 - **Stick side.** It stays a build-time choice (the `touch-steer-right`
   feature) for now, although Brawl Stars and Call of Duty: Mobile make
   it a setting. The corner clusters leave both bottom corners to the
