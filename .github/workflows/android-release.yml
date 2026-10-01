@@ -19,6 +19,19 @@ name: Android Release
 # debug-signed from a fork, which gets no secrets by design - never "fix"
 # that with pull_request_target.
 #
+# **A pull request labelled `android`** builds an APK of itself to install
+# on a phone: on the label being added and on every push while it is on,
+# from the merge ref the PR's web and room server previews build, so the
+# three speak the same protocol. The APK is kept as an unzipped workflow
+# artifact (`bongbong-pr-<N>.apk`) and a sticky comment on the PR links it -
+# a download that needs a GitHub login, so open it in a browser signed in to
+# GitHub on the phone. It is release-signed with Cargo.toml's versionCode, so
+# it installs over the released app and the next release installs over it.
+# Closing the PR deletes its APKs (the `pr-cleanup` job). Same-repo PRs only;
+# a fork's labelled PR still gets the check above. The `paths` filter cannot
+# say "these files, or the label", so `pr-gate` decides which PR events
+# build.
+#
 # Signing: Android ties an app to its signing key for life - a phone
 # refuses an update signed with a different key - so the release key is
 # minted once (see CLAUDE.md's Android section) and lives only in the
@@ -31,12 +44,7 @@ on:
     workflows: [Release]
     types: [completed]
   pull_request:
-    paths:
-      - .github/workflows/android-release.yml
-      - android/**
-      - tools/android/**
-      - tools/setup_android.sh
-      - src/app/android.rs
+    types: [opened, synchronize, reopened, labeled, closed]
   workflow_dispatch:
     inputs:
       tag:
@@ -59,18 +67,77 @@ env:
   CHECKOUT_REF: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.ref }}
 
 jobs:
-  apk:
-    # Release also runs on pull requests (dist's plan-only mode); only a
-    # successful run of a pushed version tag has a release to attach to.
+  # Whether a pull request event builds an APK (`build`: the PR touches the
+  # Android build, or carries the `android` label), and whether that APK is
+  # handed to the PR to install (`publish`: the label, on a same-repo PR).
+  # A label being added builds only when it is `android`.
+  pr-gate:
     if: >-
-      github.event_name != 'workflow_run' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
-       startsWith(github.event.workflow_run.head_branch, 'v'))
+      github.event_name == 'pull_request' &&
+      github.event.action != 'closed' &&
+      github.event.pull_request.state == 'open'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      build: ${{ steps.gate.outputs.build }}
+      publish: ${{ steps.gate.outputs.publish }}
+    steps:
+      - id: gate
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const ANDROID_PATHS = [
+              /^\.github\/workflows\/android-release\.yml$/,
+              /^android\//,
+              /^tools\/android\//,
+              /^tools\/setup_android\.sh$/,
+              /^src\/app\/android\.rs$/,
+            ];
+            const pr = context.payload.pull_request;
+            const labelled = pr.labels.some(l => l.name === 'android');
+            const ownRepo = pr.head.repo?.full_name === `${context.repo.owner}/${context.repo.repo}`;
+            let build;
+            if (context.payload.action === 'labeled') {
+              build = context.payload.label.name === 'android';
+            } else if (labelled) {
+              build = true;
+            } else {
+              const files = await github.paginate(github.rest.pulls.listFiles,
+                { ...context.repo, pull_number: pr.number, per_page: 100 });
+              build = files.some(f => [f.filename, f.previous_filename]
+                .some(name => name && ANDROID_PATHS.some(p => p.test(name))));
+            }
+            const publish = build && labelled && ownRepo;
+            core.info(`build: ${build}, publish: ${publish}`);
+            core.setOutput('build', String(build));
+            core.setOutput('publish', String(publish));
+
+  apk:
+    needs: [pr-gate]
+    # Release also runs on pull requests (dist's plan-only mode); only a
+    # successful run of a pushed version tag has a release to attach to. A
+    # pull request builds when pr-gate says so; `!cancelled()` lets the other
+    # events run past the gate they skip.
+    if: >-
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'pull_request' && needs.pr-gate.outputs.build == 'true') ||
+       (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        startsWith(github.event.workflow_run.head_branch, 'v'))) &&
+      !cancelled()
     runs-on: ubuntu-22.04
     timeout-minutes: 45
     permissions:
       contents: write
+      pull-requests: write
+    # A PR's builds share a group, a new push cancelling the one it
+    # supersedes (and pr-cleanup cancelling it on close); every other run is
+    # a group of its own.
+    concurrency:
+      group: ${{ github.event_name == 'pull_request' && format('android-pr-{0}', github.event.pull_request.number) || format('android-{0}', github.run_id) }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
     steps:
@@ -137,12 +204,68 @@ jobs:
         run: rm -f "$RUNNER_TEMP/release.jks"
 
       - name: Keep the APK as a workflow artifact
+        if: needs.pr-gate.outputs.publish != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: bongbong-aarch64-linux-android
           path: |
             bongbong-aarch64-linux-android.apk
             bongbong-aarch64-linux-android.apk.sha256
+
+      # Unzipped, so the link in the PR comment downloads an installable
+      # .apk rather than a zip a phone cannot open; the file name is the
+      # artifact's name, which is what pr-cleanup deletes by.
+      - name: Keep the PR's APK to install
+        id: pr-apk
+        if: needs.pr-gate.outputs.publish == 'true'
+        run: |
+          APK="bongbong-pr-${{ github.event.pull_request.number }}.apk"
+          cp bongbong-aarch64-linux-android.apk "$APK"
+          echo "file=$APK" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(cut -d' ' -f1 bongbong-aarch64-linux-android.apk.sha256)" >> "$GITHUB_OUTPUT"
+          echo "version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the PR's APK
+        id: pr-artifact
+        if: needs.pr-gate.outputs.publish == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.pr-apk.outputs.file }}
+          archive: false
+          retention-days: 30
+
+      - name: Comment the APK on the PR
+        if: needs.pr-gate.outputs.publish == 'true'
+        uses: actions/github-script@v9
+        env:
+          URL: ${{ steps.pr-artifact.outputs.artifact-url }}
+          FILE: ${{ steps.pr-apk.outputs.file }}
+          SHA256: ${{ steps.pr-apk.outputs.sha256 }}
+          VERSION: ${{ steps.pr-apk.outputs.version }}
+        with:
+          script: |
+            const pr = context.payload.pull_request.number;
+            const sha = context.payload.pull_request.head.sha.slice(0, 7);
+            const marker = '<!-- bongbong-pr-android -->';
+            const body = [
+              marker,
+              `🤖 **Android APK ${process.env.VERSION}** built from ${sha}: [${process.env.FILE}](${process.env.URL})`,
+              '',
+              'Open the link on the phone in a browser signed in to GitHub, then install it (allow the browser to install unknown apps the first time).',
+              'Release-signed, so it installs over the released app and the next release installs over it.',
+              '',
+              `<sub>SHA-256 \`${process.env.SHA256}\`. Deleted when this PR closes. Remove the \`android\` label to stop building on every push.</sub>`,
+            ].join('\n');
+            const { owner, repo } = context.repo;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner, repo, issue_number: pr, per_page: 100,
+            });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number: pr, body });
+            }
 
       - name: Attach to the GitHub Release
         if: ${{ github.event_name == 'workflow_run' || inputs.upload }}
@@ -157,3 +280,45 @@ jobs:
           # give it its row.
           GH_REPO="${{ github.repository }}" tools/android/release_table.sh "$RELEASE_TAG" bongbong-aarch64-linux-android.apk
           echo "uploaded to https://github.com/${{ github.repository }}/releases/tag/$RELEASE_TAG"
+
+  # A closed PR's APKs are deleted: every artifact named
+  # `bongbong-pr-<N>.apk`, from any of its runs. Runs on every same-repo
+  # close, label or not, so a label removed before the close still leaves
+  # nothing behind, and shares the PR's build group, so closing cancels a
+  # build still in flight.
+  pr-cleanup:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      pull-requests: write
+    concurrency:
+      group: android-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - name: Delete this PR's APKs
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const pr = context.payload.pull_request.number;
+            const name = `bongbong-pr-${pr}.apk`;
+            const { owner, repo } = context.repo;
+            const artifacts = await github.paginate(github.rest.actions.listArtifactsForRepo,
+              { owner, repo, name, per_page: 100 });
+            for (const a of artifacts) {
+              await github.rest.actions.deleteArtifact({ owner, repo, artifact_id: a.id });
+              core.info(`deleted ${a.name} (artifact ${a.id}, run ${a.workflow_run?.id})`);
+            }
+            await core.summary.addRaw(`Deleted ${artifacts.length} APK artifact(s) named ${name}.`).write();
+
+            const marker = '<!-- bongbong-pr-android -->';
+            const { data: comments } = await github.rest.issues.listComments({
+              owner, repo, issue_number: pr, per_page: 100,
+            });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (!existing) return; // never published - nothing to mark
+            const body = [marker, '🧹 This PR is closed; its Android APKs have been deleted.'].join('\n');
+            await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
