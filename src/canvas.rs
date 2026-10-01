@@ -49,6 +49,14 @@ pub enum Sheet {
     Ground(Theme),
     /// static/scifi_tanks_sheet.png (docs/SPRITESHEET_SPEC.md).
     Tanks,
+    /// static/scifi_tanks_glow.png - the tank sheet's light layer, the same
+    /// layout (`tank::draw_tank_glow`).
+    TankGlow,
+    /// static/tank_modules.png - the weapon modules on the turrets, a row
+    /// per chassis (`tank::draw_tank`).
+    TankModules,
+    /// static/tank_modules_glow.png - the modules' light layer.
+    TankModulesGlow,
     /// static/walls_sheet.png (docs/WALLS_SPEC.md); rubble rows too.
     Walls,
     /// static/props_sheet.png (docs/PROPS_SPEC.md); oil cells too.
@@ -61,10 +69,6 @@ pub enum Sheet {
     /// The tall-grass sheet of a theme (`Theme::grass_texture_path`,
     /// grass.rs), one file per theme like `Ground`.
     Grass(Theme),
-    /// static/minigun_mount.png - the barrel cluster on a turret.
-    MinigunMount,
-    /// static/missile_pod.png - the seeker-missile pod on a turret.
-    MissilePod,
     /// static/tracks.png - one tread mark.
     Tracks,
     /// static/barrel_explosion.png - the blast frames and scorches (blast.rs).
@@ -78,15 +82,16 @@ pub enum Sheet {
     Frog { variant: u8, clip: FrogAnim },
 }
 
-/// The ten sheets that are one file each regardless of theme.
-pub const SINGLE_SHEETS: [Sheet; 10] = [
+/// The eleven sheets that are one file each regardless of theme.
+pub const SINGLE_SHEETS: [Sheet; 11] = [
     Sheet::Tanks,
+    Sheet::TankGlow,
+    Sheet::TankModules,
+    Sheet::TankModulesGlow,
     Sheet::Walls,
     Sheet::Props,
     Sheet::Trees,
     Sheet::Towers,
-    Sheet::MinigunMount,
-    Sheet::MissilePod,
     Sheet::Tracks,
     Sheet::BarrelExplosion,
     Sheet::Portal,
@@ -118,13 +123,14 @@ impl Sheet {
         match self {
             Sheet::Ground(theme) => theme.ground_texture_path().into(),
             Sheet::Tanks => "static/scifi_tanks_sheet.png".into(),
+            Sheet::TankGlow => "static/scifi_tanks_glow.png".into(),
+            Sheet::TankModules => "static/tank_modules.png".into(),
+            Sheet::TankModulesGlow => "static/tank_modules_glow.png".into(),
             Sheet::Walls => "static/walls_sheet.png".into(),
             Sheet::Props => "static/props_sheet.png".into(),
             Sheet::Trees => "static/trees_sheet.png".into(),
             Sheet::Towers => "static/towers_sheet.png".into(),
             Sheet::Grass(theme) => theme.grass_texture_path().into(),
-            Sheet::MinigunMount => "static/minigun_mount.png".into(),
-            Sheet::MissilePod => "static/missile_pod.png".into(),
             Sheet::Tracks => "static/tracks.png".into(),
             Sheet::BarrelExplosion => "static/barrel_explosion.png".into(),
             Sheet::Portal => "static/portal_sheet.png".into(),

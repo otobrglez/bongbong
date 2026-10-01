@@ -1,6 +1,15 @@
 from PIL import Image
 import os, random, sys
 
+# The shipped tank art comes from tools/spritegen/tankdesign/export.py
+# (docs/SPRITESHEET_SPEC.md). This script draws the 32 px, three-block sheet
+# layout and is kept for the helpers other generators' comments point at;
+# run as-is it would overwrite static/scifi_tanks_sheet.png with that
+# layout, so it refuses unless asked for explicitly.
+if os.environ.get('GEN_TANKS_OLD_LAYOUT') != '1':
+    sys.exit('gen_tanks.py draws the old 32 px sheet layout - the tank art is '
+             'tools/spritegen/tankdesign/export.py (GEN_TANKS_OLD_LAYOUT=1 runs it anyway)')
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from punypalette import BLACK, STONE_DK, STONE_MD, STONE_LT, TEAM_P1, TEAM_P2, snap
 

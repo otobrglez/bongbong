@@ -2,9 +2,10 @@
 
 An adaptive icon (the only kind a minSdk 29 app needs): a background layer
 of the Puny World grass fill and a foreground layer with a player-one tank
-from static/scifi_tanks_sheet.png (hull column 0 with the turret, column 1,
-drawn over it) - the same picture as the iOS icon (tools/ios/gen_app_icon.py),
-split in two so the launcher can mask and parallax it. Both layers are 108 dp
+from static/scifi_tanks_sheet.png (hull column 0 with the turret at rest,
+column 20, drawn over it - docs/SPRITESHEET_SPEC.md) - the same picture as
+the iOS icon (tools/ios/gen_app_icon.py), split in two so the launcher can
+mask and parallax it. Both layers are 108 dp
 and the launcher shows the middle 72 dp at most, so the tank stands inside
 that circle. tools/android/res/mipmap-anydpi-v26/ic_launcher.xml names the
 layers; tools/android/package.sh compiles the whole res/ tree into the APK.
@@ -27,7 +28,8 @@ RES = os.path.join(ROOT, "tools/android/res")
 # Adaptive icon layers are 108 dp; one entry per density bucket.
 DENSITIES = {"mdpi": 108, "hdpi": 162, "xhdpi": 216, "xxhdpi": 324, "xxxhdpi": 432}
 MASTER = DENSITIES["xxxhdpi"]
-TANK_CELL = 32
+TANK_CELL = 40
+TURRET_COL = 20
 TANK_FILL = 0.5  # the tallest the cropped sprite may stand, of the layer (safe zone is 0.667)
 PLAYER_ONE_BLOCK = 12  # first row of the player-one team block
 GROUND_TILE = 16
@@ -53,7 +55,7 @@ def grass(tileset):
 def tank(sheet, row):
     y = (PLAYER_ONE_BLOCK + row) * TANK_CELL
     hull = sheet.crop((0, y, TANK_CELL, y + TANK_CELL))
-    turret = sheet.crop((TANK_CELL, y, 2 * TANK_CELL, y + TANK_CELL))
+    turret = sheet.crop((TURRET_COL * TANK_CELL, y, (TURRET_COL + 1) * TANK_CELL, y + TANK_CELL))
     hull.alpha_composite(turret)
     hull = hull.crop(hull.getbbox())
     scale = int(MASTER * TANK_FILL) // max(hull.size)

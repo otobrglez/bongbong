@@ -605,6 +605,23 @@ fn laser_color(variant: LaserVariant) -> Rgb {
     }
 }
 
+/// A point on the hull, `local` design pixels from the pivot in the art's
+/// frame (`tank_art`), in the world at the hull's drawn facing.
+fn hull_point(tank: &Tank, local: (f32, f32)) -> Position {
+    rotated_point(tank, tank.visual_rotation, local)
+}
+
+/// A point on the turret, at the turret's drawn facing.
+fn turret_point(tank: &Tank, local: (f32, f32)) -> Position {
+    rotated_point(tank, tank.turret_visual_rotation, local)
+}
+
+fn rotated_point(tank: &Tank, rotation: f32, local: (f32, f32)) -> Position {
+    let (sin, cos) = rotation.to_radians().sin_cos();
+    let (x, y) = (local.0 * tank.scale, local.1 * tank.scale);
+    Position::new(tank.position.x + x * cos - y * sin, tank.position.y + x * sin + y * cos)
+}
+
 /// The unit vector a sprite facing `rotation` degrees points along (0 up,
 /// 90 right).
 fn heading(rotation: f32) -> Vec2 {
@@ -641,13 +658,35 @@ pub fn lights(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning) -> Vec<L
             }
             continue;
         }
+        // A cone from each of the hull's headlamps (`tank_art::HEADLIGHTS`),
+        // each at the beam's strength over the root of the lamps lit, so a
+        // pair or a four throws about one beam's light; damage puts them
+        // out as it puts out the lamps in the art - half from the damaged
+        // tier, all at critical. A turret searchlight's cone follows the aim.
         let dir = heading(tank.visual_rotation);
-        let nose = tank.position + dir * (tank.hull_size() * 0.4);
         let beam = headlight_color(player);
         let length = t.headlight_length_px * if player { 1.0 } else { 0.8 };
-        if length > 1.0 && t.headlight_strength > 0.0 {
-            out.push(Light::cone(nose, dir, t.headlight_half_angle_deg.to_radians(), length, scale(beam, k * t.headlight_strength)));
-            out.push(Light::point(nose, 12.0, scale(beam, k * t.headlight_strength * 0.8)).unshadowed());
+        let tier = tank.damage_tier();
+        let lamps = crate::tank_art::HEADLIGHTS[tank.row as usize];
+        let lit = match tier {
+            0 | 1 => lamps.len(),
+            2 => lamps.len().div_ceil(2),
+            _ => 0,
+        };
+        if length > 1.0 && t.headlight_strength > 0.0 && lit > 0 {
+            let each = k * t.headlight_strength / (lit as f32).sqrt();
+            for &(x, y) in &lamps[..lit] {
+                let at = hull_point(tank, (x, y));
+                out.push(Light::cone(at, dir, t.headlight_half_angle_deg.to_radians(), length, scale(beam, each)));
+                out.push(Light::point(at, 8.0, scale(beam, each * 0.8)).unshadowed());
+            }
+        }
+        if tier < 3 && t.headlight_strength > 0.0 {
+            for &(x, y, off) in crate::tank_art::SPOTLIGHTS[tank.row as usize] {
+                let at = turret_point(tank, (x, y));
+                let cone = heading(tank.turret_visual_rotation + off);
+                out.push(Light::cone(at, cone, (t.headlight_half_angle_deg * 0.55).to_radians(), length * 0.8, scale([1.0, 0.93, 0.8], k * t.headlight_strength * 0.75)));
+            }
         }
         if t.hull_glow_radius_px > 1.0 && t.hull_glow_strength > 0.0 {
             let glow = match tank.player_index() {
@@ -782,9 +821,10 @@ pub fn lights(game: &Game, impacts: &[Impact], look: &Look, t: &Tuning) -> Vec<L
         out.push(Light::point(missile.position, 48.0, scale([1.0, 0.6, 0.3], s * 0.85 * (1.0 - 0.5 * missile.lift()))).unshadowed());
     }
     for jet in game.flames() {
+        let (from, dir, reach) = jet.drawn();
         for along in [0.25, 0.55, 0.85] {
-            let at = jet.origin + jet.dir * (jet.reach * along);
-            out.push(fire(at, jet.reach * 0.45 + 24.0, 0.9).unshadowed());
+            let at = from + dir * (reach * along);
+            out.push(fire(at, reach * 0.45 + 24.0, 0.9).unshadowed());
         }
     }
     for beam in &game.laser_beams {

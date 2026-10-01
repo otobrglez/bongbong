@@ -1,361 +1,222 @@
-# Sci-Fi Tank Sprite Sheet — Integration Spec
+# Tank sprite sheets — integration spec
 
-This document describes `scifi_tanks_sheet.png` for engine integration. It is written to be self-contained: an implementer should not need to inspect the image to slice and use it correctly.
+The tanks are four generated sheets and one generated Rust file, all written
+by `tools/spritegen/tankdesign/export.py` from the **Vanguard** design line
+(`tools/spritegen/tankdesign/lines/vanguard.py`). Never edit them by hand:
+change the design and export again (§9).
 
----
-
-## 1. File overview
-
-| Property | Value |
-|---|---|
-| Filename | `scifi_tanks_sheet.png` |
-| Dimensions | 416 × 1152 px |
-| Grid | 13 columns × 36 rows: three 12-row **team blocks** (rows 0–11 enemy, 12–23 player 1, 24–35 player 2) of the same roster |
-| Cell size | 32 × 32 px (uniform, no padding, no margin, no gutters) |
-| Format | PNG, RGBA, straight (non-premultiplied) alpha |
-| Background | Fully transparent (alpha = 0) |
-| Art style | Top-down pixel art, hard 1 px near-black outline `#252525` (Puny Palette's darkest tone, sampled from the Puny World tileset's own shadow pixels — that pack has no true black either) |
-
-**Orientation:** All sprites face **up / north (−Y in screen space)**. Barrels point toward the top of the cell. If your engine treats 0° as "east/right", apply a **−90° offset** when converting an aim angle to sprite rotation.
-
-**Rendering:** Use **nearest-neighbour / point filtering**. Disable mipmaps, anti-aliasing, and texture compression. Bilinear filtering will blur the outline and bleed neighbouring cells.
-
-**Atlas padding:** Cells are directly adjacent with no bleed margin. If repacking, add 1–2 px extrusion, or restrict rendering to integer zoom levels.
-
----
-
-## 2. Slicing
-
-```
-x = col * 32
-y = row * 32
-w = 32
-h = 32
-```
-
-- `col` ranges 0–12 (see §3)
-- `row` ranges 0–11 (see §4)
-
----
-
-## 3. Column layout
-
-| Col | Contents | Notes |
+| File | Size | What it holds |
 |---|---|---|
-| 0 | Hull — track frame 0 | Default/idle chassis. **No turret attached.** |
-| 1 | Turret | Rotating turret with barrel(s) |
-| 2 | Hull — track frame 1 | Movement animation |
-| 3 | Hull — track frame 2 | Movement animation |
-| 4 | Hull — track frame 3 | Movement animation |
-| 5 | Broken turret | Destroyed turret, barrel severed |
-| 6 | Hull — **lightly damaged** | Cosmetic damage, still operational |
-| 7 | Hull — **disabled** | Immobilized, structurally intact |
-| 8 | Hull — **wreck A** | Turret ring blown out |
-| 9 | Hull — **wreck B** | One track run torn away |
-| 10 | Hull — **wreck C** | Burnt-out husk |
-| 11 | Hull — **wreck D** | Catastrophic / ammo cook-off |
-| 12 | Track marks | Ground decal (semi-transparent) |
+| `static/scifi_tanks_sheet.png` | 1320 × 2400 | the paint: 33 columns × 60 rows of 40 × 40 cells |
+| `static/scifi_tanks_glow.png` | 1320 × 2400 | the light layer, the same layout |
+| `static/tank_modules.png` | 760 × 480 | the weapon modules: 19 columns × 12 rows |
+| `static/tank_modules_glow.png` | 760 × 480 | their light layer |
+| `src/tank_art.rs` | — | the anchors the engine reads: lamps, muzzles, tube mouths (§7) |
 
-Columns 0, 2, 3, 4 are the **same hull** with only the tread pattern shifted. Column 0 is both the idle pose and animation frame 0.
-
-Columns 8–11 are four **interchangeable** destroyed variants of equal severity. Pick one at random per destroyed unit to avoid visual repetition across a battlefield — they are not a sequence.
+Exact palette PNGs - every colour the art uses in the palette, alpha in
+`tRNS` - which decode to straight-alpha RGBA (`export.py`'s `save_sheet`;
+a third of the RGBA files' size). Transparent background, hard one-pixel
+outline in the Puny Palette's darkest tone. Nearest-neighbour filtering
+only.
 
 ---
 
-## 4. Row roster
+## 1. Orientation, pivot and scale
 
-12 tanks. Rows 0–9 are standard chassis; rows 10–11 are **super-heavy** chassis, roughly 21% larger in linear dimension than the standard baseline (about 34% larger than the current standard tanks).
+- Every sprite faces **up** (−Y); rotation 0 is up, as everywhere in the game.
+- **One pivot for everything**: the centre of the 40 px cell, `(20, 20)` -
+  the turret ring's centre. Hull, turret and every module are drawn at the
+  tank's position about that point, each at its own angle (the hull at
+  `Tank::visual_rotation`, the turret and its modules at
+  `turret_visual_rotation`), so the turret stays seated at every angle with
+  no offset math.
+- A design pixel is drawn `Tank::scale` (2) world pixels wide, so a cell is
+  80 px on screen (`TANK_SPRITE_SIZE`, `Tank::sprite_size`). The gameplay
+  frame is still the middle 32 px (`TANK_FRAME_SIZE`, `Tank::size`): the art
+  keeps the hull footprints of `TANK_HULL_BBOX_BY_ROW`/
+  `TANK_TURRET_BBOX_BY_ROW`, so hit boxes, colliders and corridor fit are
+  unchanged, and the extra 4 px each side is room for a recoiling barrel, a
+  thrown turret and a wreck's debris.
 
-**Team blocks.** The twelve rows below are the *enemy* block. The sheet repeats them twice more, in the same order, as the two players' tanks (docs/player-indicator-improvements.md): rows 12–23 are every chassis with its body ramp and accent replaced by player 1's sky-blue ramp (`#484A77` / `#4D65B4` / `#4D9BE6` / `#8FD3FF`, dark to light), rows 24–35 by player 2's hot-pink ramp (`#831C5D` / `#C32454` / `#F04F78` / `#ED8099`). Outline, gunmetal barrels, char, embers and the track-marks decal are identical across blocks, and the damage seeds are per chassis, so a player's wreck has the same holes as the enemy version. The engine indexes the block from the tank's owner (`TANK_ROWS_PER_TEAM` in `lib.rs`, `Tank::sheet_row`); every per-chassis table stays 12 wide. The team ramps are Resurrect 64 steps, deliberately *off* the Puny Palette (`tools/punypalette.py`'s `PUNY_TEAM`, admitted by `tools/check_sheets.py` on rows 12–35 of this sheet only), because every Puny hue family is already an enemy hull.
+## 2. Rows: five team blocks of the roster
 
-Body/accent are curated picks from the Puny Palette (see `tools/punypalette.py`, `docs/PALETTE.md`) — colours sampled directly from the third-party Puny World ground-layer tileset, not an abstract pixel-art palette. Every pixel in the sheet, including every shading step `gen_tanks.py` derives from these two colours, snaps onto that same set. This is the second recolor pass for this roster: an earlier one used [Resurrect 64](https://lospec.com/palette-list/resurrect-64) (see `tools/spritegen/_backup/pre-punypalette-*/gen_tanks.py`) and looked great in isolation, but once the ground layer shipped (`docs/GROUND_SPEC.md`) those candy-vivid R64 colours read as neon plastic next to Puny World's much softer terrain — see `docs/PALETTE.md`'s "why the palette changed a second time" for the full reasoning. Puny World's own art has no purple/violet anywhere in it; `wraith` was reassigned from a purple accent to a hue family the source art actually has.
+Rows `block * 12 + chassis`, the chassis in `TankKind` order:
 
-A third, **de-green** pass (2026-08) rebalanced the roster's hue distribution: the first Puny pass gave 5 of 12 bodies a green/teal-green family *and* sampled the shared greeble-grey ramp from Puny World's green-grey building walls, so the whole roster read green-on-green over the grass. Now the bodies follow the tileset's actual building distribution (orange wood dominant, then red/teal roofs, sand paths, neutral rock-grey), exactly one grass-green body remains (`longbow`), and the greeble greys are true neutrals — see `docs/PALETTE.md`'s de-green section.
-
-**Every body colour is picked from the palette's bright/mid steps, never its darkest ones** (`*_DARKEST`/`*_DEEPER` in `tools/punypalette.py`) — a first cut of this pass gave the back half of the roster, especially the two super-heavy chassis, the darkest available step of their family on the reasoning "heavier/stealthier = darker." That read as muddy and drab, the same mistake the R64 muted-pass paragraph above already covers, just rediscovered on a different palette: the body is most of a tank's on-screen area, so a dark body reads as a dark *tank* no matter how bright the rest of the scene is.
-
-| Row | Name | Chassis | Guns | Turret | Accent | Body | Role hint |
-|---|---|---|---|---|---|---|---|
-| 0 | `scout` | narrow | 1 thin | round | Roof-tile red-orange `#E44219` | Desert sand `#C9B266` | Fast recon |
-| 1 | `assault` | standard | 2 | box | Teal `#00A67F` | Honey wood `#DE9943` | General purpose |
-| 2 | `breaker` | wide | 1 heavy | hex | Warm gold `#DC9C4A` | Roof-tile red `#9C3527` | Heavy brawler |
-| 3 | `longbow` | long | 1 long | round | Bright red `#FF421A` | Forest green `#5F914B` | Artillery / sniper |
-| 4 | `flak` | compact | 2 short | hex | Pale gold `#CAC594` | Water blue `#04A0B4` | Anti-air / close range |
-| 5 | `wraith` | narrow | 1 | wedge | Near-white `#F0F0F0` | Ghost grey `#9E9E96` | Stealth |
-| 6 | `warden` | standard | 1 heavy | hex | Bright teal `#00D097` | Amber wood `#B57A28` | Support / defense |
-| 7 | `ravager` | wide | 2 | round | Roof-tile red-orange `#E44219` | Amber wood `#CA8A3B` | Heavy assault |
-| 8 | `glacier` | compact | 1 | box | Near-white `#F0F0F0` | Bright water-teal `#1EB3AE` | Balanced |
-| 9 | `obelisk` | long | 2 long | wedge | Gold `#EEA343` | Dark roof-tile red `#812F27` | Siege |
-| 10 | `titan` | **super-heavy** | 2 heavy (4 px) | hex | White `#FFFFFF` | Vivid red-orange `#FF421A` | Super-heavy assault |
-| 11 | `leviathan` | **super-long** | 1 massive (4 px) | round | Bright water-teal `#27D8C5` | Bright teal `#00D097` | Super-heavy siege |
-
-Names are reference labels only; no text is baked into the art.
-
----
-
-## 5. Pivot / anchor — the critical part
-
-**Every sprite in this sheet uses the same pivot: the exact center of the 32×32 cell, at pixel `(16, 16)` — normalized `(0.5, 0.5)`.**
-
-| Engine | Setting |
-|---|---|
-| Unity | Sprite Editor → Pivot = **Center** (or Custom `0.5, 0.5`) |
-| Godot | `Sprite2D` default centered `offset` (`centered = true`) |
-| GameMaker | Sprite origin = **Middle Centre** (16, 16) |
-| Phaser | `setOrigin(0.5, 0.5)` (default) |
-| Raw / LibGDX | Rotate about `(16, 16)` in local sprite space |
-
-### Why this works
-
-- Every **hull** is centered on the grid and carries a recessed **turret mount ring** at that exact point.
-- Every **turret** is drawn around its **turret ring center** — the physical mounting point — not around its bounding box or barrel.
-
-Draw the turret at the **same world position** as the hull, both pivots centered, and rotate the turret freely. It stays seated at every angle with no offset math.
-
-**Do not derive the pivot from the bounding box.** Bounding boxes differ between cells (a broken turret is shorter than an intact one; a wrecked hull has chunks missing). The pivot is always the cell center regardless.
-
-### Composition order
-
-```
-1. ground decals (col 12)   — below everything
-2. hull (col 0/2/3/4, or a damage column)
-3. turret (col 1, or col 5 if destroyed)
-3.5. turret-mounted weapon accessory (optional) — own separate texture, not
-     baked into this sheet
-4. muzzle flash / FX        — not included
-```
-
-A turret-mounted weapon accessory (step 3.5) is its own texture, drawn as a
-third layer on top of the turret at the exact same shared pivot (`(16,
-16)`, `draw_pivot` in `tank.rs`) and rotated at the turret's own eased
-angle — the same "rotate a full layer freely around the shared pivot"
-mechanism this sheet's own hull/turret split already relies on, just
-applied one layer further out. The first instance is the minigun
-barrel-cluster overlay (`static/minigun_mount.png`,
-`tools/spritegen/gen_minigun_mount.py`, drawn by `tank::draw_minigun_mount`)
-— a small 3-frame sheet (one "hot barrel" per frame, cycled by
-`Tank::minigun_cycle_frame` while firing), **not** an extra rotation added
-on top of the turret's own angle. This game is top-down, and a real
-minigun's barrels point along the ground plane toward the target, so their
-rotation axis is edge-on to the camera, not face-on to it — spinning an
-accessory's sprite further in the screen plane on top of the turret's own
-rotation would read as looking straight down the barrels (a helicopter
-rotor from above), the wrong axis for this camera angle. A future weapon
-overlay that doesn't have this rotating-cylinder shape could still rotate
-freely the way the turret itself does; one that does should follow the
-frame-cycling precedent here instead. See
-`tools/spritegen/gen_minigun_mount.py`'s module doc comment for the full
-reasoning.
-
----
-
-## 6. Track animation
-
-Columns 0 → 2 → 3 → 4 form a **seamless 4-frame loop**; the tread pattern scrolls 1 px per frame on a 4 px period.
-
-```
-Forward:   0, 2, 3, 4, 0, 2, 3, 4, ...
-Reverse:   0, 4, 3, 2, 0, 4, 3, 2, ...
-Stationary: hold column 0
-```
-
-- Suggested rate: 8–12 FPS at normal speed.
-- **Preferred:** advance by distance travelled rather than a fixed timer, so tracks appear to grip the ground.
-- All four frames are verified pixel-distinct for every row.
-- **The turret is unaffected.** Only the hull cell changes.
-- Damage columns (6–11) have **no** animation frames — hold a single frame.
-
----
-
-## 7. Damage states
-
-Six hull states plus one turret state, forming a severity ladder.
-
-| Col | State | Appearance | Suggested meaning |
+| Block | Rows | Team | Colours |
 |---|---|---|---|
-| 6 | **Light** | Scuffed paint, small impact marks, one thruster dark. Accents still lit, tracks intact. | ~60–99% HP — still fully mobile |
-| 7 | **Disabled** | Scorched plating, one track gouged, thrusters dead with one ember. | ~1–35% HP, or immobilized |
-| 8 | **Wreck A** | Turret ring blown out, both track runs shredded, embers in the breach. | Destroyed |
-| 9 | **Wreck B** | Entire left track run torn away, long gash down that flank. Distinctly lopsided. | Destroyed |
-| 10 | **Wreck C** | Cold burnt-out husk. Heaviest char, eroded silhouette, **no embers**. | Destroyed (older wreck) |
-| 11 | **Wreck D** | Catastrophic cook-off: large penetrations, blown-wide ring, hot ember cluster. | Destroyed (fresh) |
-| 5 | **Broken turret** | Barrel severed to a torn stump, dead optic, charred. Same pivot as the intact turret. | Pairs with any wreck |
+| 0 | 0–11 | enemy | each chassis's own body and accent (§6) |
+| 1 | 12–23 | player 1 | sky blue |
+| 2 | 24–35 | player 2 | hot pink |
+| 3 | 36–47 | player 3 | silver-white |
+| 4 | 48–59 | player 4 | vivid orange |
 
-Notes:
+`Tank::sheet_row` picks the block from the owner (`sheet_block`,
+`TANK_TEAM_BLOCKS`); a seat past the fourth draws player 1's block and is
+told apart by its ring colour (`tank::TEAM_COLORS`) and its `P5`..`P8`
+label. In a player block the body and accent ramps are the team's ramp
+(`kit.TEAM_RAMPS`, Resurrect 64 steps extended at both ends) and the marker
+and sensor lights glow in the team's lamp colour (`kit.TEAM_LIGHT`); steel,
+glass, treads, char and embers are the same in every block, and the damage
+is seeded per chassis, so a player's wreck has the same holes as the enemy's.
 
-- Columns 8–11 are **peers, not a sequence.** Choose randomly per destroyed unit so a field of wrecks doesn't look copy-pasted.
-- Wreck C has no embers by design — useful for wrecks that have been on the field a while, or as the end state of a burn-down.
-- The broken turret (col 5) is a drop-in replacement for col 1: same position, same pivot.
-- A common pairing is a wreck hull with either the broken turret or no turret at all (turret "blown off" — optionally spawn it as separate debris).
-- Damaged and wrecked hulls should stop emitting track-mark decals.
+## 3. Columns of the tank sheets
 
----
-
-## 8. Track marks (column 12)
-
-A ground decal of the tread impressions the tank leaves behind. **Each tank has its own**, matched to that chassis's track width, spacing, and cleat pattern.
-
-### Properties
-
-- **Semi-transparent.** The only partial-alpha cells in the sheet (roughly 25–150 of 255) in dark earth `#1E1916`. Composite over terrain; do not treat as an opaque sprite.
-- **No outline** — these are impressions, not objects.
-- **Seamlessly tileable.** The pattern spans the full 32 px height on a 4 px period, so stacked decals form an unbroken trail with no seam and no frame matching.
-- **Track-aligned.** Mark strips sit at the same local X as that tank's treads.
-
-### Intensity by chassis
-
-| Chassis | Rows | Relative intensity |
+| Cols | Layer | Contents |
 |---|---|---|
-| narrow | 0, 5 | lightest |
-| compact | 4, 8 | light |
-| standard | 1, 6 | medium |
-| long | 3, 9 | heavy |
-| wide | 2, 7 | heavier |
-| **super-long** | 11 | very heavy |
-| **super-heavy** | 10 | heaviest |
+| 0–3 | hull | tier 0 (pristine), track frames 0–3 |
+| 4–7 | hull | tier 1 (damaged), track frames 0–3 |
+| 8–11 | hull | tier 2 (heavily damaged), track frames 0–3 |
+| 12–15 | hull | tier 3 (critical), track frames 0–3 |
+| 16–19 | hull | wrecks: blown, gutted, husk, cook-off |
+| 20–22 | turret | tier 0: at rest, first barrel recoiled, second barrel recoiled / return |
+| 23–25 | turret | tier 1, the same three poses |
+| 26–28 | turret | tier 2 |
+| 29–31 | turret | tier 3 |
+| 32 | turret | broken (on every wreck but the blown one) |
 
-### Usage
+`Tank::hull_col` is `tier * TANK_TRACK_FRAMES + frame` for a live tank and
+`wreck_col` for a wreck; `Tank::turret_col` is `TANK_TURRET_COL + tier *
+TANK_TURRET_POSES + pose`, or `TANK_BROKEN_TURRET_COL` on a wreck.
 
-Spawn one decal per **32 world-pixels travelled** (one cell length) so consecutive decals abut exactly. Use the **hull's** rotation.
+## 4. Damage tiers and wrecks
 
+`TANK_DAMAGE_TIERS` = `[25, 50, 75]`: the tier is how many of those a tank's
+damage has reached (`Tank::damage_tier`). The kit plans the damage once per
+design and each tier applies more of the plan, so a scratch taken at 25 is
+still there at 75 and a tank reads as the same tank getting worse
+(`damage.py`):
+
+- **Tier 1, scuffed** — scratches to bare metal, a scorch, a dent, one lamp
+  cracked, loose stowage gone.
+- **Tier 2, damaged** — an armour plate blown off to the frame and its
+  cables, a penetration hole, antennas snapped, half the lamps out, a spark
+  at the wound.
+- **Tier 3, critical** — more plates gone and fire (or ion glow) inside, a
+  broken track run, every light dead but one blinking warning lamp, the
+  silhouette chipped.
+
+The tracks keep turning at every live tier (a hurt tank still drives), and
+`lay_tracks` keeps pressing marks until the hull is a wreck. On the light
+layer a tier-2 or tier-3 hull cycles its frames on the clock rather than on
+distance, so its sparks and warning lamp blink on a tank standing still.
+
+The four wrecks are peers, rolled once when the tank dies (`roll_wreck_col`):
+
+| Col | Wreck | Turret |
+|---|---|---|
+| 16 | **blown** — the turret ring blown out, embers | the broken turret thrown clear, lying beside the hull (`Tank::turret_thrown`, `turret_placement`) |
+| 17 | **gutted** — armour stripped, burning inside | broken, on the ring |
+| 18 | **husk** — cold and burnt out, no glow | broken, on the ring |
+| 19 | **cook-off** — the deck torn open by an ammunition fire, one track run gone | broken, on the ring |
+
+The effects language adds what moves (`damage_stage.rs`, docs/effects.md):
+marks gathering on the hull as it loses health, drawn between hull and
+turret (`draw_tank_hull`, then the marks, then `draw_tank_turret`), a
+wound smouldering on the deck, and fire on the deck from the critical tier
+(`damage_stage::BURNS_AT`) and over a wreck, with its smoke.
+
+## 5. Recoil
+
+Firing the main gun kicks the turret through its poses: `Tank::kick` shows
+pose 1 (the first barrel back) for `tank_recoil_seconds`, then pose 2 - the
+second barrel of a twin, fired `tank_twin_shot_delay_seconds` later, or the
+barrel on its way back on a single gun - then rest (`Tank::tick_recoil`). A
+plasma shot kicks the same way and flashes the plasma module; a laser shot
+only flashes the laser module (`kick_laser`). Presentation only: a replica
+kicks on the `Fired` event (`net::apply`).
+
+## 6. The chassis
+
+| Row | Chassis | Codename | Role | Signature |
+|---|---|---|---|---|
+| 0 | `scout` | Lynx | fast recon | arrowhead nose, round turret with a big optic, radar dish |
+| 1 | `assault` | Bulwark | general purpose | twin guns in a slab-sided box turret, teal glacis strip |
+| 2 | `breaker` | Maul | heavy brawler | ram prow with two steel ram blocks, hex turret, one heavy gun |
+| 3 | `longbow` | Yew | artillery / sniper | long hull, rangefinder ears, bore evacuator, stern spades |
+| 4 | `flak` | Hornet | anti-air / close range | twin autocannons with flash hiders, drum feeds, radar panel |
+| 5 | `wraith` | Shade | stealth | faceted plates, full-length skirts, a low kite turret with one visor slit |
+| 6 | `warden` | Aegis | support / defence | shield emitters glowing on the corners and turret flanks |
+| 7 | `ravager` | Warhog | heavy assault | spiked ram, sponsons with MGs, twin stacks, twin guns |
+| 8 | `glacier` | Floe | balanced | the plainest of the line: compact skirted hull, box turret, one long gun |
+| 9 | `obelisk` | Trebuchet | siege | twin long guns from a wedge turret, revolver autoloader, stabiliser feet |
+| 10 | `titan` | Colossus | super-heavy assault | four track runs, massive hex turret, twin 4 px guns, a searchlight |
+| 11 | `leviathan` | Behemoth | super-heavy siege | one massive braked gun, road wheels, twin engine decks |
+
+Every chassis keeps its colour identity (`kit.CHASSIS`: body and accent
+ramps on the Puny Palette), carries two or four headlamps, tail lights, a
+turret sensor and a marker light in its accent (the team colour on players).
+
+## 7. Weapon modules
+
+`tank_modules.png` is one row per chassis (the enemy's colours; every team
+shares them, since the modules are gunmetal and glass) - each module drawn
+at that chassis's own hardpoint on the turret, in the turret's frame about
+the shared pivot:
+
+| Cols | Module | States |
+|---|---|---|
+| 0–3 | minigun | idle, then the three hot-barrel cells a burst cycles (`minigun_cycle_frame`) |
+| 4–8 | missile launcher | 0–4 tubes empty (`missile_tubes_empty`) |
+| 9–11 | plasma | idle, armed (the live weapon), firing |
+| 12–14 | laser | idle, armed, firing (the lens flash) |
+| 15–18 | flamethrower | pilot flame (two frames), firing (two frames) |
+
+A module is hardware, not a firing-mode indicator: `module_cols` draws one
+for every special weapon the tank carries, in the order above, over the
+turret; a wreck carries none. The shadow pass draws every layer (hull,
+turret, modules) offset in flat black (`draw_tank_shadow`).
+
+`src/tank_art.rs` holds where on the art things happen, in design pixels
+from the pivot (x right, y toward the tail):
+
+- `HEADLIGHTS` (hull frame) and `SPOTLIGHTS` (turret frame) - where the
+  weather's light pass throws its cones from (`weather::lights`): every lamp
+  at tiers 0–1, half of them at tier 2, none at tier 3; a spotlight follows
+  the aim.
+- `GUN_MUZZLES` - the main gun's tips at rest; held within a pixel of
+  `tank_muzzle_forward_offset` by a test, since shells and plasma leave from
+  the tunables.
+- `MINIGUN_MUZZLE` - where bullets leave, boresighted onto the gun line
+  `minigun_boresight_px` ahead (`Bullet::spawn`).
+- `MISSILE_TUBES` - the four tube mouths in firing order, front pair first
+  (`MISSILE_TUBE_OFFSETS` is each tube's place in the fan and the landing).
+- `LASER_MUZZLE`, `FLAME_MUZZLE` - where the beam and the jet are **drawn**
+  from. Both are judged along the gun line from `Tank::gun_line_muzzle`, so
+  a side-mounted module never moves what they hit; the beam is drawn from
+  the lens to where the gun line stopped, the jet from the nozzle to the
+  end of its reach (`FlameJet::drawn`).
+
+## 8. The light layer
+
+`scifi_tanks_glow.png` and `tank_modules_glow.png` carry only the pixels
+that shine: lamps, markers, sensors, engine and reactor glows, a module's
+lens or hot barrel, sparks and embers - in the same cells as the paint,
+which already has them at their daylight colours. `draw_tank_glow` adds them
+over the field after the sky has multiplied it down, at `1 - day pools`
+(`render/game.rs`), so they are invisible under a clear sky and every lamp
+shines at night. A burning wreck's embers breathe.
+
+## 9. Regenerating
+
+```sh
+cd tools/spritegen/tankdesign
+nix-shell -p "python3.withPackages (ps: [ps.pillow])" --run "python3 export.py"
+cd ../../.. && just check-sheets
 ```
-distance_since_last_mark += distance_moved
-while distance_since_last_mark >= 32:
-    distance_since_last_mark -= 32
-    spawn_decal(cell_rect(12, row), position, hull_angle, pivot = (0.5, 0.5))
-```
 
-- Render **below** all units.
-- Same `(16, 16)` / `(0.5, 0.5)` pivot as everything else.
-- Fade by modulating sprite alpha; no fade is baked into the art.
-- Cap live decals (a ring buffer of a few hundred is typical).
-- For tight corners, spawn every 16 px instead and accept slight overlap.
-- Stop spawning for disabled/wrecked hulls.
+`export.py` renders all five team blocks of every chassis (`BLOCKS`), the
+modules and their anchors, and writes the four sheets and
+`src/tank_art.rs`. The kit is the rest of the directory: `kit.py` (the
+palette, materials, shading, parts and the builder), `damage.py` (the damage
+tiers and wrecks from each part's tags), `render.py` (previews, hero sheets
+and the review page's build), `lines/` (the four design lines of the study;
+Vanguard ships) - see its `README.md`. After an export, re-pin the thumbnail
+hashes (`thumbnail::tests`) consciously.
 
----
+**Palette** (`tools/check_sheets.py`): the enemy block and the modules use
+`PUNY_PALETTE_ALL` plus the kit's two deep water/teal steps
+(`kit.TANK_EXTRA`); a player block may add its own team's ramp and lamp
+colour and nothing of another team's.
 
-## 9. Collision & gameplay sizing
-
-Measured opaque bounding boxes (inclusive coordinates within the 32×32 cell):
-
-| Row | Name | Hull bbox (x0,y0,x1,y1) | Hull size | Turret bbox | Turret size |
-|---|---|---|---|---|---|
-| 0 | scout | 9, 7, 22, 25 | 14 × 19 | 11, 2, 20, 20 | 10 × 19 |
-| 1 | assault | 8, 5, 23, 26 | 16 × 22 | 10, 3, 21, 21 | 12 × 19 |
-| 2 | breaker | 7, 4, 24, 27 | 18 × 24 | 10, 4, 21, 21 | 12 × 18 |
-| 3 | longbow | 8, 3, 23, 28 | 16 × 26 | 11, 0, 20, 20 | 10 × 21 |
-| 4 | flak | 8, 7, 23, 24 | 16 × 18 | 10, 6, 21, 21 | 12 × 16 |
-| 5 | wraith | 9, 7, 22, 25 | 14 × 19 | 10, 3, 21, 20 | 12 × 18 |
-| 6 | warden | 8, 5, 23, 26 | 16 × 22 | 10, 2, 21, 21 | 12 × 20 |
-| 7 | ravager | 7, 4, 24, 27 | 18 × 24 | 10, 2, 21, 21 | 12 × 20 |
-| 8 | glacier | 8, 8, 23, 24 | 16 × 17 | 11, 2, 20, 21 | 10 × 20 |
-| 9 | obelisk | 8, 3, 23, 28 | 16 × 26 | 10, 0, 21, 21 | 12 × 22 |
-| 10 | **titan** | 4, 3, 27, 28 | **24 × 26** | 7, 0, 24, 23 | 18 × 24 |
-| 11 | **leviathan** | 5, 2, 26, 29 | **22 × 28** | 8, 0, 23, 23 | 16 × 24 |
-
-Notes:
-
-- Turret bboxes **include the barrel**, hence their height. The rotating turret body is roughly a circle of radius 4–5 px (standard) or 6.5–7 px (super) centered at (16, 16); the rest is barrel.
-- Use the **hull** bbox for movement and hit colliders. Exclude the barrel from collision.
-- Super-heavy hulls are substantially larger — size their colliders, health, and pathing footprint accordingly. `titan` at 24 × 26 nearly fills the cell.
-- Damage-state bboxes vary slightly (wrecks lose edge chunks). If collider size must stay constant across states, derive it from the intact hull (column 0).
-
----
-
-## 10. Individual files (alternative to slicing)
-
-```
-scifi_<name>_hull.png                  (= column 0)
-scifi_<name>_turret.png                (= column 1)
-scifi_<name>_turret_broken.png         (= column 5)
-scifi_<name>_hull_damaged_light.png    (= column 6)
-scifi_<name>_hull_damaged_disabled.png (= column 7)
-scifi_<name>_hull_wreck_a.png          (= column 8)
-scifi_<name>_hull_wreck_b.png          (= column 9)
-scifi_<name>_hull_wreck_c.png          (= column 10)
-scifi_<name>_hull_wreck_d.png          (= column 11)
-scifi_<name>_trackmarks.png            (= column 12)
-```
-
-`<name>` ∈ `scout`, `assault`, `breaker`, `longbow`, `flak`, `wraith`, `warden`, `ravager`, `glacier`, `obelisk`, `titan`, `leviathan`.
-
-**Track animation frames (columns 2–4) exist only in the sheet.** Slice them from the sheet if using individual files elsewhere.
-
----
-
-## 11. Integration pseudocode
-
-```
-CELL = 32
-
-function cell_rect(col, row):
-    return Rect(col * CELL, row * CELL, CELL, CELL)
-
-HULL_FRAMES  = [0, 2, 3, 4]      # track animation loop
-WRECK_COLS   = [8, 9, 10, 11]    # interchangeable destroyed variants
-
-class Tank:
-    row               # 0..11
-    position
-    hull_angle        # movement direction
-    turret_angle      # aim direction, independent
-    track_frame = 0
-    state = INTACT    # INTACT | LIGHT | DISABLED | DESTROYED
-    wreck_col = null  # chosen once when destroyed
-
-    function on_destroyed():
-        wreck_col = random_choice(WRECK_COLS)   # pick once, then keep it
-
-    function update(dt, distance_moved):
-        if state in (INTACT, LIGHT) and distance_moved > 0:
-            track_accumulator += distance_moved
-            while track_accumulator >= PIXELS_PER_FRAME:
-                track_accumulator -= PIXELS_PER_FRAME
-                track_frame = (track_frame + 1) % 4
-
-            mark_accumulator += distance_moved
-            while mark_accumulator >= CELL:
-                mark_accumulator -= CELL
-                spawn_ground_decal(cell_rect(12, row),
-                                   position, hull_angle, pivot = (0.5, 0.5))
-
-    function hull_column():
-        if state == DESTROYED: return wreck_col
-        if state == DISABLED:  return 7
-        if state == LIGHT:     return HULL_FRAMES[track_frame]  # light dmg still animates
-        return HULL_FRAMES[track_frame]
-
-    function draw():
-        # ground decals drawn by the decal layer, BELOW all units
-
-        draw_sprite(cell_rect(hull_column(), row),
-                    position, hull_angle, pivot = (0.5, 0.5))
-
-        if state == DESTROYED:
-            draw_sprite(cell_rect(5, row), position, turret_angle, pivot = (0.5, 0.5))
-        else:
-            draw_sprite(cell_rect(1, row), position, turret_angle, pivot = (0.5, 0.5))
-```
-
-Note: column 6 (light damage) is a **static** sprite with no animation frames. If you want a lightly-damaged tank to still show moving tracks, either accept static tracks while damaged, or overlay damage as a separate decal on top of the animated hull. The pseudocode above keeps animating and reserves column 6 for stationary/showcase use — pick whichever fits your game.
-
-### Turret aiming
-
-```
-desired = atan2(target.y - position.y, target.x - position.x) + 90°   # +90: art faces up
-turret_angle = rotate_toward(turret_angle, desired, TURN_SPEED * dt)
-```
-
-Clamping the traverse rate (rather than snapping) gives the heavy turret feel. Super-heavy tanks should use a slower `TURN_SPEED`.
-
----
-
-## 12. Constraints and known limitations
-
-- **No directional pre-renders.** Sprites are single-frame, intended for runtime rotation.
-- **Rotation artifacts.** At 32 px, rotating non-circular turrets (hex, box, wedge — rows 1, 2, 4, 5, 6, 8, 9, 10) shows mild pixel jitter at intermediate angles. Pre-render 8 or 16 fixed angles if objectionable.
-- **No firing, recoil, or muzzle-flash art.**
-- **No explosion or transition animation** between states.
-- **No track animation for damage states** (columns 6–11 are static).
-- **Super-heavy hulls nearly fill their cell.** `titan` is 24 × 26 of the available 32 × 32 — there is little margin, so avoid scaling them up relative to other rows without re-exporting at a larger cell size.
-- Sprites are procedurally generated: geometrically consistent, but more regular than hand-drawn art.
+**Track marks** are not in these sheets: tread marks come from
+`static/tracks.png` (`track.rs`).

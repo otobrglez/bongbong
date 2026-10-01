@@ -985,16 +985,17 @@ impl<T: Transport> OnlineRound<T> {
 
     /// One frame of this seat's provisional shots against the drawn world:
     /// a press since the last frame ripples the muzzle its first shot left
-    /// (the ripple a replica puts on a `Fired`, drawn here on the press
-    /// instead of a round trip later); each shot flies by its own state
+    /// and kicks the turret (what a replica does on a `Fired`, drawn here on
+    /// the press instead of a round trip later); each shot flies by its own state
     /// machine and stops at the first tile, edge, tank or frog it meets,
     /// its impact drawn there at once; beams pressed since the last frame
     /// are drawn to where they stop.
     fn fly_own_shots(&mut self, dt: f32, world: &crate::simulation::present::PresentWorld, seat: u8, shells: &[IncomingShell]) {
         use crate::simulation::present::{Contact, shot_half_extent};
         let (Some(predictor), Some(game)) = (self.predictor.as_mut(), self.replica.as_mut()) else { return };
-        for at in predictor.take_muzzles() {
+        for (at, kind) in predictor.take_muzzles() {
             game.draw_muzzle(at);
+            game.kick_seat(seat, kind);
         }
         // An own shell meets an opposing one where the room's
         // `shell_vs_shell` would have them meet: both are drawn on the
@@ -1022,7 +1023,8 @@ impl<T: Transport> OnlineRound<T> {
             let end = world
                 .shot_contact(Some(seat), beam.start, far, tuning().shell_hit_half_extent)
                 .map_or(far, |(at, _)| at);
-            game.draw_beam(beam.start, end, beam.variant);
+            game.draw_beam(beam.lens, end, beam.variant);
+            game.flash_seat_laser(seat);
         }
         for at in predictor.take_impacts() {
             game.draw_impact(at);

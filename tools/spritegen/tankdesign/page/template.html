@@ -1,0 +1,428 @@
+<title>Bongbong Motor Pool</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&family=Chakra+Petch:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a dark hangar review board. The lineup matrix (today + four design
+   lines per chassis) sits beside a sticky inspector; below it, long-form
+   sections for the field test, the lines, damage, weapons, lights and picks. */
+:root {
+  --bg: #111316;
+  --panel: #181b20;
+  --panel-2: #20242a;
+  --panel-3: #282d34;
+  --line: #30353e;
+  --fg: #ece8df;
+  --muted: #a4a9b1;
+  --faint: #6f757e;
+  --amber: #eea343;
+  --amber-ink: #1b1408;
+  --pick: #00d097;
+  --danger: #ff5a36;
+  --vanguard: #de9943;
+  --skimmer: #27d8c5;
+  --foundry: #e44219;
+  --prototype: #00d097;
+  --today: #9e9e96;
+  --display: "Chakra Petch", "Barlow Condensed", system-ui, sans-serif;
+  --label: "Barlow Condensed", "Barlow", system-ui, sans-serif;
+  --body: "Barlow", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+html { background: var(--bg); }
+body { background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 15px; line-height: 1.5; padding-inline: 16px; padding-block: 0 64px; }
+.wrap { max-width: 1440px; margin: 0 auto; }
+a { color: var(--amber); }
+h1, h2, h3 { font-family: var(--display); font-weight: 600; letter-spacing: 0.02em; text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(30px, 4.4vw, 52px); line-height: 1.02; text-transform: uppercase; }
+h2 { font-size: clamp(22px, 2.6vw, 30px); text-transform: uppercase; }
+h3 { font-size: 18px; }
+p { margin: 0; max-width: 68ch; }
+.muted { color: var(--muted); }
+.faint { color: var(--faint); }
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.eyebrow { font-family: var(--label); text-transform: uppercase; letter-spacing: 0.12em; font-size: 13px; color: var(--amber); font-weight: 600; }
+button { font: inherit; color: inherit; }
+input, textarea { box-sizing: border-box; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+
+/* Header */
+header.top { padding-block: 36px 20px; display: grid; gap: 14px; }
+header.top .lede { color: var(--muted); font-size: 17px; max-width: 72ch; }
+.legend-lines { display: flex; flex-wrap: wrap; gap: 10px 22px; margin-top: 4px; }
+.legend-lines .ll { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.swatch { width: 10px; height: 10px; flex: none; display: inline-block; transform: translateY(1px); }
+.ll b { font-family: var(--label); text-transform: uppercase; letter-spacing: 0.08em; font-size: 15px; }
+.ll span { color: var(--muted); font-size: 14px; }
+
+/* Toolbar */
+.toolbar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(6px); border-bottom: 1px solid var(--line); margin-inline: -16px; padding: 10px 16px; }
+.toolbar .row { max-width: 1440px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; }
+.ctl { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; max-width: 100%; min-width: 0; }
+.ctl > .lab { font-family: var(--label); text-transform: uppercase; letter-spacing: 0.1em; font-size: 12px; color: var(--faint); }
+.seg { display: inline-flex; flex-wrap: wrap; max-width: 100%; border: 1px solid var(--line); background: var(--panel); }
+.seg button { background: transparent; border: 0; padding: 5px 10px; font-family: var(--label); font-size: 14px; letter-spacing: 0.05em; text-transform: uppercase; cursor: pointer; color: var(--muted); border-right: 1px solid var(--line); }
+.seg button:last-child { border-right: 0; }
+.seg button[aria-pressed="true"] { background: var(--amber); color: var(--amber-ink); }
+.seg button:hover:not([aria-pressed="true"]) { color: var(--fg); background: var(--panel-2); }
+.navlinks { margin-left: auto; display: flex; flex-wrap: wrap; gap: 4px 14px; font-family: var(--label); text-transform: uppercase; letter-spacing: 0.08em; font-size: 14px; }
+.navlinks a { color: var(--muted); text-decoration: none; }
+.navlinks a:hover { color: var(--fg); }
+
+section { padding-block: 44px 8px; scroll-margin-top: 64px; }
+.sec-head { display: grid; gap: 8px; margin-bottom: 18px; }
+
+/* Lineup */
+.lineup { display: grid; grid-template-columns: minmax(0, max-content) minmax(360px, 1fr); gap: 22px; align-items: start; }
+.matrix-wrap { overflow-x: auto; border: 1px solid var(--line); background: var(--panel); width: fit-content; max-width: 100%; }
+.matrix { display: grid; grid-template-columns: 132px repeat(5, minmax(112px, 1fr)); min-width: 740px; }
+.mh { padding: 10px 10px 8px; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); display: grid; gap: 4px; align-content: start; position: sticky; top: 0; background: var(--panel); z-index: 2; }
+.mh:last-child { border-right: 0; }
+.mh .name { font-family: var(--display); font-size: 16px; text-transform: uppercase; letter-spacing: 0.04em; display: flex; gap: 7px; align-items: center; }
+.mh .tag { color: var(--muted); font-size: 12.5px; line-height: 1.35; }
+.mh button.lineall { justify-self: start; background: transparent; border: 1px solid var(--line); color: var(--muted); font-family: var(--label); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; padding: 2px 7px; cursor: pointer; }
+.mh button.lineall:hover { color: var(--fg); border-color: var(--faint); }
+.rl { padding: 10px; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); display: grid; gap: 3px; align-content: center; min-width: 0; }
+.rl .cn { font-family: var(--display); font-size: 17px; text-transform: uppercase; letter-spacing: 0.03em; }
+.rl .role { font-size: 13px; color: var(--muted); line-height: 1.3; }
+.rl .dims { font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
+.cell { position: relative; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); cursor: pointer; display: grid; grid-template-rows: auto auto; min-width: 0; background: var(--panel); }
+.cell:nth-child(6n) { border-right: 0; }
+.cell canvas { display: block; width: 100%; image-rendering: pixelated; }
+.cell .foot { display: flex; align-items: center; gap: 6px; padding: 5px 7px 6px; min-width: 0; }
+.cell .code { font-family: var(--label); font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+.cell.sel { outline: 2px solid var(--amber); outline-offset: -2px; z-index: 1; }
+.cell:hover .code { color: var(--fg); }
+.pickbtn { flex: none; width: 22px; height: 22px; border: 1px solid var(--line); background: var(--panel-2); cursor: pointer; display: grid; place-items: center; padding: 0; }
+.pickbtn svg { width: 12px; height: 12px; opacity: 0.35; }
+.pickbtn:hover svg { opacity: 0.8; }
+.pickbtn[aria-pressed="true"] { background: var(--pick); border-color: var(--pick); }
+.pickbtn[aria-pressed="true"] svg { opacity: 1; }
+.cell .picked { position: absolute; top: 6px; left: 6px; font-family: var(--label); font-size: 11px; letter-spacing: 0.1em; background: var(--pick); color: #06231b; padding: 1px 6px; font-weight: 700; display: none; }
+.cell.is-picked .picked { display: block; }
+
+/* Inspector */
+.inspector { position: sticky; top: 62px; border: 1px solid var(--line); background: var(--panel); display: grid; gap: 0; max-height: calc(100vh - 76px); overflow: auto; }
+.ins-head { padding: 14px 16px 10px; display: grid; gap: 4px; border-bottom: 1px solid var(--line); }
+.ins-head .t { font-family: var(--display); font-size: 21px; text-transform: uppercase; letter-spacing: 0.03em; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.ins-head .t .code { color: var(--amber); }
+.ins-head .blurb { color: var(--muted); font-size: 14px; }
+.stage { position: relative; background: #0b0d0f; }
+.stage canvas { display: block; width: 100%; image-rendering: pixelated; cursor: crosshair; touch-action: none; }
+.stage .hint { position: absolute; left: 10px; bottom: 8px; font-family: var(--label); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: rgba(236, 232, 223, 0.55); pointer-events: none; }
+.ins-body { padding: 12px 16px 16px; display: grid; gap: 12px; }
+.ins-row { display: grid; gap: 6px; }
+.ins-row > .lab { font-family: var(--label); text-transform: uppercase; letter-spacing: 0.1em; font-size: 12px; color: var(--faint); }
+.chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.chip { background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); font-family: var(--label); font-size: 13.5px; letter-spacing: 0.04em; text-transform: uppercase; padding: 3px 9px; cursor: pointer; }
+.chip:hover { color: var(--fg); }
+.chip[aria-pressed="true"] { background: var(--panel-3); color: var(--fg); border-color: var(--amber); box-shadow: inset 0 -2px 0 var(--amber); }
+.chip.wreck[aria-pressed="true"] { border-color: var(--danger); box-shadow: inset 0 -2px 0 var(--danger); }
+.btn { background: var(--amber); color: var(--amber-ink); border: 0; font-family: var(--label); font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; font-size: 14px; padding: 7px 14px; cursor: pointer; }
+.btn.ghost { background: transparent; color: var(--fg); border: 1px solid var(--line); font-weight: 600; }
+.btn.pick[aria-pressed="true"] { background: var(--pick); color: #06231b; }
+.facts { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-size: 13.5px; }
+.facts dt { color: var(--faint); font-family: var(--label); text-transform: uppercase; letter-spacing: 0.08em; font-size: 12px; padding-top: 2px; }
+.facts dd { margin: 0; color: var(--muted); min-width: 0; }
+
+/* Generic strips and cards */
+.strip { display: flex; flex-wrap: wrap; gap: 10px; }
+.card { border: 1px solid var(--line); background: var(--panel); display: grid; min-width: 0; }
+.card canvas { display: block; width: 100%; image-rendering: pixelated; }
+.card .cap { padding: 8px 10px 10px; display: grid; gap: 2px; }
+.card .cap b { font-family: var(--label); text-transform: uppercase; letter-spacing: 0.08em; font-size: 14px; font-weight: 600; }
+.card .cap span { color: var(--muted); font-size: 13px; line-height: 1.35; }
+.grid-cards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.grid-wide { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+#weapons-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+#density-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 900px; }
+@media (max-width: 900px) { #weapons-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { #weapons-grid, #density-grid { grid-template-columns: minmax(0, 1fr); } }
+.line-block { border: 1px solid var(--line); background: var(--panel); margin-bottom: 16px; }
+.line-block .lb-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.line-block .lb-head h3 { font-size: 22px; text-transform: uppercase; }
+.line-block .lb-head p { color: var(--muted); font-size: 14px; flex: 1 1 320px; }
+.line-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
+.line-row .lc { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); cursor: pointer; min-width: 0; }
+.line-row .lc canvas { display: block; width: 100%; image-rendering: pixelated; }
+.line-row .lc .lcap { font-family: var(--label); font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); padding: 3px 7px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Field test */
+.field-ctl { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin-bottom: 10px; }
+.field-frame { overflow-x: auto; border: 1px solid var(--line); background: #0b0d0f; width: fit-content; max-width: 100%; }
+.field-frame canvas { display: block; image-rendering: pixelated; }
+
+/* Damage table */
+.ladder { display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 10px; }
+.ladder .card .cap .rng { font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
+.rowlabel { font-family: var(--label); text-transform: uppercase; letter-spacing: 0.1em; font-size: 12px; color: var(--faint); margin: 14px 0 6px; }
+
+/* Light legend */
+.legend { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px 18px; margin-top: 14px; }
+.legend div { display: flex; gap: 10px; align-items: baseline; font-size: 14px; color: var(--muted); }
+.legend b { color: var(--fg); font-family: var(--label); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+
+/* Review */
+.subhead { font-family: var(--label); text-transform: uppercase; letter-spacing: 0.1em; font-size: 15px; color: var(--muted); font-weight: 600; margin: 22px 0 10px; }
+.rebuilt { display: grid; gap: 14px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.rb { border: 1px solid var(--line); background: var(--panel); display: grid; min-width: 0; }
+.rb-head { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.rb-head b { font-family: var(--display); font-size: 18px; text-transform: uppercase; letter-spacing: 0.03em; font-weight: 600; }
+.rb-head span { color: var(--muted); font-size: 13.5px; }
+.rb-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.rb-pair > div { min-width: 0; border-right: 1px solid var(--line); }
+.rb-pair > div:last-child { border-right: 0; }
+.rb-pair canvas { display: block; image-rendering: pixelated; }
+.rb-cap { font-family: var(--label); text-transform: uppercase; letter-spacing: 0.08em; font-size: 12.5px; color: var(--faint); padding: 6px 10px; }
+.rb-cap.new { color: var(--pick); }
+.rb-foot { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 10px 12px; border-top: 1px solid var(--line); }
+.rb-foot p { font-size: 13.5px; color: var(--muted); flex: 1 1 240px; }
+.colour-pick { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center; margin: 12px 0; }
+.colours-wrap { overflow-x: auto; border: 1px solid var(--line); background: var(--panel); width: fit-content; max-width: 100%; }
+.colours { display: grid; }
+.colours .ch { font-family: var(--display); font-size: 15px; text-transform: uppercase; padding: 0 12px; display: flex; align-items: center; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); min-width: 110px; }
+.colours .hd { font-family: var(--label); text-transform: uppercase; letter-spacing: 0.08em; font-size: 13px; padding: 8px 8px; border-bottom: 1px solid var(--line); display: flex; gap: 6px; align-items: center; justify-content: center; }
+.colours .hd .tagp { background: var(--pick); color: #06231b; font-weight: 700; padding: 0 5px; font-size: 11.5px; }
+.colours canvas { display: block; image-rendering: pixelated; border-bottom: 1px solid var(--line); }
+@media (max-width: 900px) { .rebuilt { grid-template-columns: minmax(0, 1fr); } }
+
+/* Picks */
+.picks-wrap { overflow-x: auto; border: 1px solid var(--line); }
+table.picks { border-collapse: collapse; width: 100%; min-width: 760px; background: var(--panel); }
+table.picks th, table.picks td { border-bottom: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: middle; }
+table.picks th { font-family: var(--label); text-transform: uppercase; letter-spacing: 0.08em; font-size: 12.5px; color: var(--faint); font-weight: 600; }
+table.picks td.cn { font-family: var(--display); text-transform: uppercase; font-size: 15px; white-space: nowrap; }
+.opt { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.opt button { background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); font-family: var(--label); text-transform: uppercase; font-size: 13px; letter-spacing: 0.04em; padding: 3px 8px; cursor: pointer; }
+.opt button[aria-pressed="true"] { background: var(--pick); color: #06231b; border-color: var(--pick); font-weight: 700; }
+.opt button.star[aria-pressed="true"] { background: transparent; color: var(--amber); border-color: var(--amber); }
+table.picks input[type=text] { width: 100%; min-width: 180px; background: var(--bg); border: 1px solid var(--line); color: var(--fg); padding: 5px 8px; font: 14px var(--body); }
+.picks-bar { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin: 12px 0; }
+.status { font-size: 13.5px; color: var(--muted); }
+textarea#gen-note { width: 100%; min-height: 90px; background: var(--panel); border: 1px solid var(--line); color: var(--fg); padding: 10px; font: 14px/1.5 var(--body); resize: vertical; }
+.note { border-left: 3px solid var(--amber); padding: 8px 12px; background: var(--panel); color: var(--muted); font-size: 14px; max-width: 80ch; }
+.twocol { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+ul.plain { margin: 0; padding-left: 18px; color: var(--muted); display: grid; gap: 4px; max-width: 70ch; }
+ul.plain b { color: var(--fg); font-weight: 600; }
+
+@media (max-width: 1180px) {
+  .lineup { grid-template-columns: minmax(0, 1fr); }
+  .inspector { position: static; max-height: none; }
+  .twocol { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  body { font-size: 14.5px; }
+  .toolbar { position: static; }
+  .navlinks { display: none; }
+  .toolbar .row { gap: 8px 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { scroll-behavior: auto !important; }
+}
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="eyebrow">Bongbong · tank redesign study · 48 designs</div>
+    <h1>Bongbong Motor Pool</h1>
+    <p class="lede">Every tank rebuilt four ways: one design line per column, each chassis keeping its footprint, its guns and its colours. Everything below is the real sprite work drawn the way the game draws it, on the game's own ground: tracks rolling, turrets turning, headlights at night, weapon modules, four damage tiers and four kinds of wreck. Round 2 starts with your notes applied: the rebuilt breaker and glacier, and every tank in five player colours.</p>
+    <div class="legend-lines" id="legend-lines"></div>
+  </header>
+</div>
+
+<div class="toolbar" role="toolbar" aria-label="View settings">
+  <div class="row">
+    <div class="ctl"><span class="lab">Team</span><div class="seg" data-ctl="team"><button data-v="enemy" aria-pressed="true">Enemy</button><button data-v="p1" aria-pressed="false">P1</button><button data-v="p2" aria-pressed="false">P2</button><button data-v="green" aria-pressed="false">Green</button><button data-v="white" aria-pressed="false">White</button><button data-v="orange" aria-pressed="false">Orange</button></div></div>
+    <div class="ctl"><span class="lab">Light</span><div class="seg" data-ctl="light"><button data-v="day" aria-pressed="true">Day</button><button data-v="dusk" aria-pressed="false">Dusk</button><button data-v="night" aria-pressed="false">Night</button></div></div>
+    <div class="ctl"><span class="lab">Ground</span><div class="seg" data-ctl="ground"><button data-v="grass" aria-pressed="true">Grass</button><button data-v="desert" aria-pressed="false">Desert</button></div></div>
+    <div class="ctl"><span class="lab">Scale</span><div class="seg" data-ctl="scale"><button data-v="2" aria-pressed="false" title="The game at 1:1">Game</button><button data-v="3" aria-pressed="true" title="The game full screen on a laptop">1.5×</button><button data-v="4" aria-pressed="false">2×</button></div></div>
+    <div class="ctl"><span class="lab">Motion</span><div class="seg" data-ctl="motion"><button data-v="on" aria-pressed="true">Live</button><button data-v="off" aria-pressed="false">Still</button></div></div>
+    <nav class="navlinks" aria-label="Sections"><a href="#review">Review</a><a href="#lineup">Lineup</a><a href="#field">Field test</a><a href="#lines">Lines</a><a href="#damage">Damage</a><a href="#weapons">Weapons</a><a href="#lights">Lights</a><a href="#density">Density</a><a href="#anatomy">Anatomy</a><a href="#shipping">Shipping</a><a href="#picks">Picks</a></nav>
+  </div>
+</div>
+
+<div class="wrap">
+  <section id="review">
+    <div class="sec-head">
+      <div class="eyebrow">Round 2 · your notes, applied</div>
+      <h2>Your roster, rebuilt and in every player colour</h2>
+      <p class="muted">You picked Vanguard for the whole roster. The breaker and the glacier are redrawn from your notes, and every tank now comes in the two player colours it has today plus three candidates for players 3 and 4. Check the rebuilds, choose the two new colours, and we implement.</p>
+    </div>
+    <h3 class="subhead">Rebuilt from your notes</h3>
+    <div class="rebuilt" id="rebuilt-grid"></div>
+    <h3 class="subhead">Player colours</h3>
+    <p class="muted">Player 1 stays blue and player 2 pink. Choose two of green, white and orange for players 3 and 4; every tank below is drawn in all of them, with the enemy paint first for reference. Night shows each colour's own glow.</p>
+    <div class="colour-pick">
+      <div class="ctl"><span class="lab">Player 3</span><div class="seg" id="pick-p3"></div></div>
+      <div class="ctl"><span class="lab">Player 4</span><div class="seg" id="pick-p4"></div></div>
+      <span class="status" id="colour-status"></span>
+    </div>
+    <div class="colours-wrap"><div class="colours" id="colours-grid"></div></div>
+  </section>
+
+  <section id="lineup">
+    <div class="sec-head">
+      <div class="eyebrow">01 · The lineup</div>
+      <h2>Twelve chassis, five columns</h2>
+      <p class="muted">Today's sprite first, then the four lines. Click a tank to inspect it; the check mark picks it for that chassis. The team switch recolours the player versions, and night turns the lights on.</p>
+    </div>
+    <div class="lineup">
+      <div class="matrix-wrap"><div class="matrix" id="matrix"></div></div>
+      <aside class="inspector" id="inspector" aria-label="Inspector">
+        <div class="ins-head">
+          <div class="t"><span id="ins-name">Assault</span><span class="code" id="ins-code"></span></div>
+          <div class="blurb" id="ins-blurb"></div>
+        </div>
+        <div class="stage"><canvas id="ins-canvas" aria-label="The selected tank, large"></canvas><div class="hint" id="ins-hint">Point to aim · click to fire</div></div>
+        <div class="ins-body">
+          <div class="ins-row"><span class="lab">Condition</span>
+            <div class="chips" id="ins-tier"></div>
+            <div class="chips" id="ins-wreck"></div>
+          </div>
+          <div class="ins-row"><span class="lab">Weapon modules</span><div class="chips" id="ins-mods"></div></div>
+          <div class="ins-row"><span class="lab">View</span>
+            <div class="chips" id="ins-view"></div>
+          </div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap">
+            <button class="btn" id="ins-fire">Fire</button>
+            <button class="btn ghost pick" id="ins-pick" aria-pressed="false">Pick for this chassis</button>
+          </div>
+          <dl class="facts" id="ins-facts"></dl>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <section id="field">
+    <div class="sec-head">
+      <div class="eyebrow">02 · Field test</div>
+      <h2>On the default map, at game scale</h2>
+      <p class="muted">Four players (blue, pink and your two picks for players 3 and 4) and an enemy force patrolling the shipped default map, among wrecks from three kinds of kill. Switch the cast to compare lines in the same scene. Night uses the game's own ambient and headlight numbers.</p>
+    </div>
+    <div class="field-ctl">
+      <div class="ctl"><span class="lab">Cast</span><div class="seg" id="field-cast"></div></div>
+      <div class="ctl"><span class="lab">Zoom</span><div class="seg" id="field-zoom"><button data-v="1" aria-pressed="true">1×</button><button data-v="1.5" aria-pressed="false">1.5×</button><button data-v="2" aria-pressed="false">2×</button></div></div>
+      <button class="btn ghost" id="field-reset">Reshuffle</button>
+    </div>
+    <div class="field-frame"><canvas id="field-canvas" aria-label="Field test on the default map"></canvas></div>
+  </section>
+
+  <section id="lines">
+    <div class="sec-head">
+      <div class="eyebrow">03 · The four lines</div>
+      <h2>One language per line</h2>
+      <p class="muted">Each line redraws the whole roster in one language, so one can carry the game on its own, or you can mix them per chassis. Every silhouette should read on its own inside a line.</p>
+    </div>
+    <div id="lines-list"></div>
+  </section>
+
+  <section id="damage">
+    <div class="sec-head">
+      <div class="eyebrow">04 · Damage and wrecks</div>
+      <h2>Four live tiers, four ways to die</h2>
+      <p class="muted">Damage is planned once per tank and grows tier by tier, so a scratch taken at a quarter health is still there at the end. Burning swaps a plate's paint for char but keeps its shading, so a wreck still reads as the tank it was. Shown for the tank in the inspector.</p>
+    </div>
+    <div class="rowlabel" id="dmg-new-label">New</div>
+    <div class="ladder" id="dmg-new"></div>
+    <div class="rowlabel">Today</div>
+    <div class="ladder" id="dmg-today"></div>
+    <div class="twocol" style="margin-top:22px">
+      <ul class="plain">
+        <li><b>Pristine</b> (0–24 % damage): as built.</li>
+        <li><b>Scuffed</b> (25–49 %): scratches to bare metal, a scorch, a dent, one lamp cracked, loose stowage gone.</li>
+        <li><b>Damaged</b> (50–74 %): an armour plate blown off to show the frame and a cable, a penetration hole, antennas snapped, half the lamps out, sparks at the wound.</li>
+        <li><b>Critical</b> (75–99 %): more plates gone and fire (or plasma) inside, a broken track run, every light dead but a blinking red warning lamp, the silhouette chipped.</li>
+      </ul>
+      <ul class="plain">
+        <li><b>Blown</b>: the turret ring torn out and the turret thrown clear, embers in the hole.</li>
+        <li><b>Gutted</b>: armour stripped, still burning inside.</li>
+        <li><b>Husk</b>: cold and burnt out, the end state of every wreck.</li>
+        <li><b>Cook-off</b>: the deck torn open by the ammunition, a whole track run gone.</li>
+        <li class="faint">Today the game has two live tiers (30 and 75 damage) and four wrecks; the new ladder adds a tier and keeps the tracks rolling at every live tier.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="weapons">
+    <div class="sec-head">
+      <div class="eyebrow">05 · Weapon systems</div>
+      <h2>Five modules, each on its own hardpoint</h2>
+      <p class="muted">The game's five weapon pickups become hardware bolted to the turret. Each module has its own mount point, so a tank carrying two of them shows both rather than stacking them, and each one animates through the states the game already tracks. Shown on the tank in the inspector, firing on a loop.</p>
+    </div>
+    <div class="grid-wide" id="weapons-grid"></div>
+  </section>
+
+  <section id="lights">
+    <div class="sec-head">
+      <div class="eyebrow">06 · Lights</div>
+      <h2>Every tank has a light signature</h2>
+      <p class="muted">At night the game multiplies the field down to moonlight and adds every light back. The new sprites carry an emissive layer on top: lamps, marker strips, sensor eyes, grav pads, reactors. Enemies glow warm with a red eye; a player's markers and sensor take the team colour, so you can find yourself in the dark.</p>
+    </div>
+    <div class="card"><canvas id="lights-canvas" aria-label="The five versions of the inspected chassis at night"></canvas></div>
+    <div class="legend" id="lights-legend"></div>
+  </section>
+
+  <section id="density">
+    <div class="sec-head">
+      <div class="eyebrow">07 · Density study</div>
+      <h2>The 2-pixel grid, and what 1 pixel would buy</h2>
+      <p class="muted" id="density-lede">You chose to keep the game's 2-pixel grid. For comparison, here is one tank drawn both ways at the same size on screen.</p>
+    </div>
+    <div class="grid-wide" id="density-grid"></div>
+  </section>
+
+  <section id="anatomy">
+    <div class="sec-head">
+      <div class="eyebrow">08 · Anatomy</div>
+      <h2>The sheet behind one tank</h2>
+      <p class="muted" id="anatomy-lede">Every cell the game would load for the tank in the inspector, in its current team colours: the paint, then the light layer drawn on top at night. Forty design pixels a cell, drawn at twice that in the game, like today's thirty-two.</p>
+    </div>
+    <div class="field-frame"><canvas id="anatomy-canvas" aria-label="The selected design's sprite sheet"></canvas></div>
+  </section>
+
+  <section id="shipping">
+    <div class="sec-head">
+      <div class="eyebrow">09 · Shipping it</div>
+      <h2>What the engine needs for these sprites</h2>
+      <p class="muted">None of this changes how a tank plays: hit boxes, guns and speeds stay as they are. It is what implementing the picks involves, so you can weigh a line's cost as well as its look.</p>
+    </div>
+    <div class="twocol">
+      <ul class="plain">
+        <li><b>Sheets.</b> 40-pixel cells instead of 32, generated by <span class="mono">tools/spritegen/tankdesign</span>: per team, 16 hull cells (4 tiers × 4 track frames), 4 wrecks, 12 turret cells (4 tiers × rest and two recoil poses) and the broken turret, each with a light cell, plus 19 module cells. The extra 8 pixels are room for barrels, antennas and modules; the hull boxes stay as they are.</li>
+        <li><b>Damage.</b> Three thresholds (25, 50, 75 %) instead of two, and the tracks keep rolling at every live tier; the hull column is tier × 4 + frame.</li>
+        <li><b>Recoil.</b> The turret shows its recoil cell for a tenth of a second after each barrel fires.</li>
+        <li><b>Light layer.</b> Drawn additively in the glowing half of the field, after the night multiply, the way shots already are.</li>
+      </ul>
+      <ul class="plain">
+        <li><b>Lights.</b> Headlight cones start at each design's own lamps; a turret searchlight follows the aim; marker and sensor lights take the team colour.</li>
+        <li><b>Modules.</b> One layer each at its own hardpoint; bullets, beams and flame leave from the module's muzzle rather than the pivot line.</li>
+        <li><b>Hover and pods.</b> Skimmers get a longer shadow and a faint wash for a ground mark; Prototype pods leave four thin strips. Tracked lines keep today's marks.</li>
+        <li><b>Palette.</b> Two interpolated darks join the tank sheets for the blue and teal hulls, and the two team ramps gain one step at each end; the sheet checker learns both.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="picks">
+    <div class="sec-head">
+      <div class="eyebrow">10 · Your picks</div>
+      <h2>Choose one per chassis</h2>
+      <p class="muted">Pick a line per tank (or keep today's), star any runner-up you'd like to keep in mind, and leave a note where something should change. Picks save as you make them, and Claude reads them back from here when the implementation starts.</p>
+    </div>
+    <div class="picks-bar">
+      <span class="status mono" id="picks-count">0 of 12 picked</span>
+      <button class="btn ghost" id="copy-picks">Copy picks</button>
+      <span class="status" id="save-status">Connecting…</span>
+    </div>
+    <div class="picks-wrap"><table class="picks" id="picks-table"></table></div>
+    <div style="margin-top:14px; display:grid; gap:6px">
+      <label for="gen-note" class="rowlabel" style="margin:0">Notes for the whole set</label>
+      <textarea id="gen-note" placeholder="Anything that applies to every tank: what to keep, what to push further, what to drop."></textarea>
+    </div>
+  </section>
+</div>
+
+<script type="application/json" id="bb-data">__DATA_JSON__</script>
+<script>
+__APP_JS__
+</script>

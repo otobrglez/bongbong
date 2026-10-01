@@ -935,12 +935,15 @@ pub fn run(args: Args) {
     let portal_texture = rl
         .load_texture(&thread, "static/portal_sheet.png")
         .expect("failed loading portal texture");
-    let minigun_mount_texture = rl
-        .load_texture(&thread, "static/minigun_mount.png")
-        .expect("failed loading minigun mount texture");
-    let missile_pod_texture = rl
-        .load_texture(&thread, "static/missile_pod.png")
-        .expect("failed loading missile pod texture");
+    let tank_glow_texture = rl
+        .load_texture(&thread, "static/scifi_tanks_glow.png")
+        .expect("failed loading tank glow texture");
+    let tank_modules_texture = rl
+        .load_texture(&thread, "static/tank_modules.png")
+        .expect("failed loading tank modules texture");
+    let tank_modules_glow_texture = rl
+        .load_texture(&thread, "static/tank_modules_glow.png")
+        .expect("failed loading tank modules glow texture");
     let missile_texture = rl
         .load_texture(&thread, "static/missile.png")
         .expect("failed loading missile texture");
@@ -1728,6 +1731,9 @@ pub fn run(args: Args) {
             },
             &Textures {
                 tanks: &tanks_texture,
+                tank_glow: &tank_glow_texture,
+                tank_modules: &tank_modules_texture,
+                tank_modules_glow: &tank_modules_glow_texture,
                 shells: &shells_texture,
                 plasma: &plasma_texture,
                 minigun_bullets: &minigun_bullets_texture,
@@ -1748,8 +1754,6 @@ pub fn run(args: Args) {
                 pickup_shield: &pickup_shield_texture,
                 pickup_flamethrower: &pickup_flamethrower_texture,
                 pickup_frog_health: &pickup_frog_health_texture,
-                minigun_mount: &minigun_mount_texture,
-                missile_pod: &missile_pod_texture,
                 grass: &grass_textures[theme_index(game.map.theme)],
                 trees: &trees_texture,
                 towers: &towers_texture,

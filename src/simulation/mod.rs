@@ -154,7 +154,7 @@ use crate::{
     OBSTACLE_SCALE,
     OBSTACLE_TEXTURE_SIZE,
     DECAL_MAX,
-    TANK_TEXTURE_SIZE,
+    TANK_FRAME_SIZE,
     SHOCK_MAX,
     RUBBLE_ROW_TANK,
     SCORCH_MAX,
@@ -163,9 +163,8 @@ use crate::{
     PHYSICS_FIXED_DT,
     PHYSICS_MAX_CATCHUP_SECONDS,
     Position,
-    TANK_HULL_DISABLED_DAMAGE,
-    TANK_HULL_TRACK_COLS,
     TANK_SHELL_VARIANT_BY_ROW,
+    TANK_TRACK_FRAMES,
     TANK_WRECK_COLS,
 };
 
@@ -332,10 +331,10 @@ pub enum Event {
     /// portal, a gate - and the client snaps to it
     /// (docs/online-coop-prd.md §4.14).
     Placed { seat: usize, x: f32, y: f32, rotation: f32 },
-    /// A laser beam was drawn from the muzzle at (`x0`, `y0`) to where it
-    /// stopped at (`x1`, `y1`): an instant hit leaves nothing in the world
-    /// for a snapshot to carry, so the beam itself is the event a replica
-    /// draws it from (`LaserVariant::name`).
+    /// A laser beam was drawn from the laser module's lens at (`x0`, `y0`)
+    /// to where the gun line stopped it at (`x1`, `y1`): an instant hit
+    /// leaves nothing in the world for a snapshot to carry, so the beam
+    /// itself is the event a replica draws it from (`LaserVariant::name`).
     LaserBeam { x0: f32, y0: f32, x1: f32, y1: f32, variant: &'static str, seat: u8 },
     /// A velocity change the room put on a client-owned hull (knockback, a
     /// blast, a ram, a missile launch's recoil); the owner applies it to
@@ -1728,6 +1727,7 @@ impl Game {
             tank.tick_wreck(dt);
             tank.tick_minigun_spin(dt);
             tank.tick_missile_pod();
+            tank.tick_recoil(dt);
             if roll_wreck_col(tank, rng) {
                 // The frame a tank becomes a wreck: stop it behaving like
                 // an air-hockey puck. See `Physics::settle_wreck`.
@@ -1783,6 +1783,7 @@ impl Game {
             tank.ease_turret_visual_rotation(dt);
             tank.ease_ring_position(dt);
             tank.tick_minigun_spin(dt);
+            tank.tick_recoil(dt);
             let depth = self.water.depth_at(tank.position);
             if depth.is_wet() {
                 tank.wet_timer = wet_seconds;
@@ -3075,7 +3076,8 @@ impl Game {
     }
 
     /// Lasers have no travel time: each queued beam is swept over its whole
-    /// length right now, drawn up to where it stopped, and applied.
+    /// length right now along the gun line, drawn from the laser's lens up
+    /// to where it stopped, and applied.
     ///
     /// A seat's beam is swept against the enemies and frogs its client was
     /// drawing (`seat_rewind`, `rewound_boxes`), like its shells.
@@ -3098,11 +3100,11 @@ impl Game {
                 Some((target, t)) => (shot.start + (shot.end - shot.start) * t, Some(target)),
                 None => (shot.end, None),
             };
-            f.muzzle_flashes.push(Shockwave::new(shot.start));
-            self.laser_beams.push(LaserBeam::new(shot.start, hit_pos, shot.variant));
+            f.muzzle_flashes.push(Shockwave::new(shot.lens));
+            self.laser_beams.push(LaserBeam::new(shot.lens, hit_pos, shot.variant));
             f.events.push(Event::LaserBeam {
-                x0: shot.start.x,
-                y0: shot.start.y,
+                x0: shot.lens.x,
+                y0: shot.lens.y,
                 x1: hit_pos.x,
                 y1: hit_pos.y,
                 variant: shot.variant.name(),
@@ -3248,7 +3250,7 @@ impl Game {
         // Two tanks can only touch if their centres are within a hull
         // diagonal of each other; anything further apart cannot be in
         // contact and is not worth a narrow-phase query.
-        let reach = TANK_TEXTURE_SIZE * 2.0;
+        let reach = TANK_FRAME_SIZE * 2.0;
         for i in 0..enemies.len() {
             for j in (i + 1)..enemies.len() {
                 let (a, _, a_pos) = enemies[i];
@@ -3529,7 +3531,7 @@ impl Game {
     /// after `wreck_track_marks`, so the cost is bounded by the number of
     /// marks burnt and not by how long the round has been running.
     fn scorch_tracks(&mut self, center: Position) {
-        let reach = crate::TANK_TEXTURE_SIZE;
+        let reach = crate::TANK_FRAME_SIZE;
         let mut left = tuning().wreck_track_marks.max(0);
         for track in self.tracks.iter_mut().rev() {
             if left == 0 {
@@ -4842,12 +4844,13 @@ fn roll_wreck_col(tank: &mut Tank, rng: &mut SmallRng) -> bool {
 /// stationary `before` reads as idle and resets the animation. Marks
 /// follow the raw travel heading (not the snapped hull rotation), so a
 /// real turn traces its real curve and a sideways shove leaves sideways
-/// marks. Stops once the hull is disabled or wrecked. Water takes no
-/// mark (`depth`, the water under the hull): the treads still turn, but
-/// nothing is pressed into a river bed, and the marks laid while
-/// `Tank::wet_timer` runs after wading out are wet ones.
+/// marks. Runs at every live damage tier - a hurt tank still drives on its
+/// tracks - and stops once the hull is a wreck. Water takes no mark
+/// (`depth`, the water under the hull): the treads still turn, but nothing
+/// is pressed into a river bed, and the marks laid while `Tank::wet_timer`
+/// runs after wading out are wet ones.
 fn lay_tracks(tracks: &mut Vec<Track>, tank: &mut Tank, before: Position, depth: crate::ground::Depth) {
-    if tank.is_wreck() || tank.damage >= TANK_HULL_DISABLED_DAMAGE {
+    if tank.is_wreck() {
         return;
     }
     let moved = tank.position.distance_to(before);
@@ -4858,7 +4861,7 @@ fn lay_tracks(tracks: &mut Vec<Track>, tank: &mut Tank, before: Position, depth:
     tank.hull_anim_accum += moved;
     while tank.hull_anim_accum >= tuning().tank_hull_track_frame_distance {
         tank.hull_anim_accum -= tuning().tank_hull_track_frame_distance;
-        tank.hull_frame = (tank.hull_frame + 1) % TANK_HULL_TRACK_COLS.len() as i32;
+        tank.hull_frame = (tank.hull_frame + 1) % TANK_TRACK_FRAMES;
     }
     // Tracks stop in water; ice takes them like the ground does.
     if depth.is_wet() {
@@ -5189,18 +5192,18 @@ mod determinism_tests {
             }
             hash
         };
-        // **Re-baselined for the pickup reach rule, deliberately.** A
-        // pickup collects the moment a hull's box touches it
-        // (`Pickup::in_reach`) rather than once the hull's centre is within
-        // a 32 px disc, so an enemy that wants one takes it a few frames
-        // earlier and, for a laser or plasma pickup, rolls its variant on
-        // an earlier draw - which moves everything after it. Nothing about
-        // the walk order this gate exists to protect changed: the per-seat
-        // block still runs once per seat after player 1, so a second seat
-        // does not disturb the first's stream. Never bump these to go
-        // green - work out which change moved them first.
+        // **Re-baselined for the weapon modules, deliberately.** A minigun's
+        // bullets leave the module beside the main gun, boresighted onto
+        // the gun line (`Bullet::spawn`), and a missile volley leaves the
+        // launcher's tubes (`tank_art::MISSILE_TUBES`), so an enemy's burst
+        // or volley lands a few pixels from where it did and its damage
+        // rolls fall on other frames - which moves everything after them.
+        // Nothing about the walk order this gate exists to protect changed:
+        // the per-seat block still runs once per seat after player 1, so a
+        // second seat does not disturb the first's stream. Never bump these
+        // to go green - work out which change moved them first.
         let (one, two) = (run(1), run(2));
-        assert_eq!((one, two), (18_184_345_707_689_245_641, 6_153_265_604_910_160_067), "(one seat, two seats)");
+        assert_eq!((one, two), (14_017_236_720_797_471_165, 9_822_452_777_306_098_975), "(one seat, two seats)");
     }
 
     /// A portal round replays too: the destination draw sits on the round

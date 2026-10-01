@@ -112,7 +112,6 @@ pub const MINIGUN_AMMO_PER_PICKUP: i32 = 40;
 ## 7. Not changed
 
 - `ShellState`, `Shell`, `shells.png` — entirely untouched by this sheet.
-- The turret-mounted minigun overlay (`static/minigun_mount.png`,
-  `tools/spritegen/gen_minigun_mount.py`) is a separate, single-tile
-  texture, not part of this sheet — see `docs/SPRITESHEET_SPEC.md`'s
-  composition-order section.
+- The minigun on the turret is a weapon module of the tank art
+  (`static/tank_modules.png`, docs/SPRITESHEET_SPEC.md §7), not part of this
+  sheet; bullets leave its muzzle (`tank_art::MINIGUN_MUZZLE`).

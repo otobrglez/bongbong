@@ -323,7 +323,7 @@ impl Game {
         let every = t.flame_shimmer_every_frames.max(1) as u64;
         if self.frame % every == 0 {
             for jet in &kept {
-                f.muzzle_flashes.push(Shockwave::new(jet.origin));
+                f.muzzle_flashes.push(Shockwave::new(jet.nozzle));
             }
         }
         self.flame_jets = kept;

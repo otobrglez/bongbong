@@ -71,8 +71,9 @@ fn main() {
     let towers = load(&mut rl, "static/towers_sheet.png");
     let pickup_tower_pack = load(&mut rl, "static/pickups/tower_pack.png");
     let portal = load(&mut rl, "static/portal_sheet.png");
-    let minigun_mount = load(&mut rl, "static/minigun_mount.png");
-    let missile_pod = load(&mut rl, "static/missile_pod.png");
+    let tank_glow = load(&mut rl, "static/scifi_tanks_glow.png");
+    let tank_modules = load(&mut rl, "static/tank_modules.png");
+    let tank_modules_glow = load(&mut rl, "static/tank_modules_glow.png");
     let missile = load(&mut rl, "static/missile.png");
     let tracks = load(&mut rl, "static/tracks.png");
     let obstacles = load(&mut rl, "static/walls_sheet.png");
@@ -165,6 +166,9 @@ fn main() {
 
         let textures = Textures {
             tanks: &tanks,
+            tank_glow: &tank_glow,
+            tank_modules: &tank_modules,
+            tank_modules_glow: &tank_modules_glow,
             shells: &shells,
             plasma: &plasma,
             minigun_bullets: &minigun_bullets,
@@ -174,8 +178,6 @@ fn main() {
             towers: &towers,
             pickup_tower_pack: &pickup_tower_pack,
             portal: &portal,
-            minigun_mount: &minigun_mount,
-            missile_pod: &missile_pod,
             tracks: &tracks,
             obstacles: &obstacles,
             props: &props,

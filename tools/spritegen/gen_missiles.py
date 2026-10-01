@@ -1,4 +1,4 @@
-"""Generate the seeker-missile sheets (missile.rs, tank::draw_missile_pod):
+"""Generate the seeker-missile sheet (missile.rs):
 
 - static/missile.png - MISSILE_FRAMES (4) cells of 32x32 in one row: one
   missile pointing up (rotation 0), its exhaust flame below it, the frames
@@ -7,21 +7,11 @@
   a little bigger than a shell. The sprite's centre (16, 16) is the draw
   origin; the flame sits behind it, where `Missile::tail` puts the smoke.
 
-- static/missile_pod.png - MISSILE_POD_FRAMES (5) cells of 32x32: the
-  four-tube launcher bolted on a turret, laid out and pivoted like
-  minigun_mount.png (authored at 1 px per design pixel around the (16, 16)
-  turret pivot, drawn at the tank's 2x scale). Two pairs of tubes either
-  side of a centre spine; column k shows the leftmost k tubes empty (the
-  order a volley leaves in), so the pod visibly empties through a volley and
-  refills through the reload. A loaded tube shows its missile's red nose at
-  the mouth, an empty one a dark bore.
-
-  The tube columns (9-10, 12-13, 18-19, 21-22) and the mouth row (5) are
-  what lib.rs's MISSILE_TUBE_OFFSETS / MISSILE_TUBE_FORWARD point at -
-  change them together.
+The launcher a volley leaves from is a weapon module of the tank art
+(tools/spritegen/tankdesign, docs/SPRITESHEET_SPEC.md).
 
 Every colour is an exact punypalette entry (no snap needed, no green), so
-`just check-sheets` holds both on the palette.
+`just check-sheets` holds it on the palette.
 
 Regenerate in place with:
   nix-shell -p "python3.withPackages (ps: [ps.pillow])" \\
@@ -98,60 +88,6 @@ def missile_frame(i):
     return img
 
 
-# ---------------------------------------------------------------------------
-# The pod, at 1 px per design pixel on a 32 x 32 cell, pivot (16, 16).
-# ---------------------------------------------------------------------------
-S = 32
-TUBES = [(9, 10), (12, 13), (18, 19), (21, 22)]
-FRONT, BACK = 5, 20
-
-
-def pod_frame(empty):
-    img = Image.new('RGBA', (S, S), (0, 0, 0, 0))
-    p = img.putpixel
-    # Mount hub under the spine, like the minigun's.
-    for y in range(S):
-        for x in range(S):
-            if (x - 15.5) ** 2 + (y - 15.5) ** 2 <= 3.5 ** 2:
-                p((x, y), c(STONE_DK))
-    # Centre spine joining the two boxes.
-    for y in range(9, BACK):
-        for x in (15, 16):
-            p((x, y), c(STONE_DK))
-    # The two boxes: casing, then the tubes' tops running along them.
-    for x0, x1 in ((8, 14), (17, 23)):
-        for y in range(FRONT, BACK + 1):
-            for x in range(x0, x1 + 1):
-                p((x, y), c(STONE_MD))
-        for y in range(FRONT, BACK + 1):
-            p((x0, y), c(STONE_LT))
-            p((x1, y), c(STONE_DK))
-        for x in range(x0, x1 + 1):
-            p((x, BACK), c(STONE_DK))
-    for i, (a, b) in enumerate(TUBES):
-        for y in range(FRONT + 2, BACK):
-            p((a, y), c(STONE_LT))
-            p((b, y), c(STONE_DK))
-        # Mouth: the missile's nose while loaded, a dark bore once fired.
-        if i < empty:
-            for y in (FRONT, FRONT + 1):
-                p((a, y), c(STONE_DARKEST))
-                p((b, y), c(BLACK))
-        else:
-            p((a, FRONT), c(RED_BRIGHT))
-            p((b, FRONT), c(RED_BRIGHT))
-            p((a, FRONT + 1), c(RED_MD))
-            p((b, FRONT + 1), c(RED_DEEP))
-            p((a, FRONT + 2), c(RED_DK))
-            p((b, FRONT + 2), c(RED_DK))
-    # Grooves between the tubes of a pair.
-    for x in (11, 20):
-        for y in range(FRONT, BACK):
-            p((x, y), c(STONE_DK))
-    outline(img, S)
-    return img
-
-
 def outline(img, size):
     src = img.copy()
     for y in range(size):
@@ -171,12 +107,7 @@ def main():
         cell = missile_frame(i).resize((32, 32), Image.NEAREST)
         sheet.paste(cell, (32 * i, 0))
     sheet.save(os.path.join(OUT, 'missile.png'))
-
-    pod = Image.new('RGBA', (S * 5, S), (0, 0, 0, 0))
-    for k in range(5):
-        pod.paste(pod_frame(k), (S * k, 0))
-    pod.save(os.path.join(OUT, 'missile_pod.png'))
-    print(f'wrote {OUT}/missile.png and {OUT}/missile_pod.png')
+    print(f'wrote {OUT}/missile.png')
 
 
 if __name__ == '__main__':

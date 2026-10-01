@@ -18,7 +18,7 @@ Two checks, both of which have caught real defects:
    blast/rubble sheet are drawn *on top of* the ground layer, so a green
    pixel there reads as terrain showing through - the olive look the
    de-green pass exists to prevent. This is scoped deliberately: a green
-   tank chassis is a real colour choice, so `scifi_tanks_sheet.png` is not
+   tank chassis is a real colour choice, so the tank sheets are not
    checked.
 
    `nature_sheet.png`, `nature_sheet_desert.png` and `trees_sheet.png` are the deliberate exceptions,
@@ -29,10 +29,21 @@ Two checks, both of which have caught real defects:
 in the terrain), so it is not listed here.
 
 The team family (`punypalette.PUNY_TEAM`, the two player identity ramps) is
-off-palette on purpose and admitted in exactly two places: the tank sheet's
-player rows, and the whole of `portal_sheet.png` (`TEAM_SHEETS`), which is
-drawn in the P1 blue ramp so a hole in the ground reads as not-terrain. The
-portal sits on the grass, so it is also held to the no-green rule.
+off-palette on purpose and admitted in exactly one place of its own: the
+whole of `portal_sheet.png` (`TEAM_SHEETS`), which is drawn in the P1 blue
+ramp so a hole in the ground reads as not-terrain. The portal sits on the
+grass, so it is also held to the no-green rule.
+
+The tank art (`tools/spritegen/tankdesign`, docs/SPRITESHEET_SPEC.md) is
+held block by block (`TANK_SHEETS`): the paint and its light layer are five
+blocks of the roster on 40 px cells - the enemy, then players 1 to 4 - and
+every block may use the extended set plus the kit's two deep water/teal
+steps (`kit.TANK_EXTRA`); a player block may use its own team's ramp and
+lamp colour (`kit.TEAM_RAMPS`, `kit.TEAM_LIGHT`) and nothing of another
+team's, so a generator slip that tints an enemy row, or paints player 3 in
+player 1's blue, fails here rather than shipping. The weapon modules
+(`tank_modules.png` and its light layer) are one row per chassis in the
+enemy's colours.
 
 `towers_sheet.png` is a manufactured object on the grass, so it is held to
 the extended set and the no-green rule, with two admissions of its own
@@ -52,6 +63,10 @@ from PIL import Image
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import punypalette as pp
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'spritegen', 'tankdesign'))
+import export as tank_export  # noqa: E402
+import kit as tank_kit  # noqa: E402
+
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static')
 
 # Generated sheets whose every opaque pixel must be on the palette.
@@ -63,11 +78,12 @@ ON_PALETTE = [
     'props_sheet.png',
     'barrel_explosion.png',
     'scifi_tanks_sheet.png',
+    'scifi_tanks_glow.png',
+    'tank_modules.png',
+    'tank_modules_glow.png',
     'shells.png',
     'minigun_bullets.png',
-    'minigun_mount.png',
     'missile.png',
-    'missile_pod.png',
     'tracks.png',
     'portal_sheet.png',
     'towers_sheet.png',
@@ -75,8 +91,7 @@ ON_PALETTE = [
 
 # The subset that is drawn over the ground layer and so must carry no green.
 NO_GREEN = [
-    'walls_sheet.png', 'props_sheet.png', 'barrel_explosion.png', 'portal_sheet.png', 'missile.png', 'missile_pod.png',
-    'towers_sheet.png',
+    'walls_sheet.png', 'props_sheet.png', 'barrel_explosion.png', 'portal_sheet.png', 'missile.png', 'towers_sheet.png',
 ]
 
 PALETTE = {tuple(c) for c in pp.PUNY_PALETTE}
@@ -84,13 +99,21 @@ PALETTE_ALL = {tuple(c) for c in pp.PUNY_PALETTE_ALL}
 TEAM = {tuple(c) for c in pp.PUNY_TEAM}
 GREENS = {tuple(getattr(pp, n)) for n in dir(pp) if n.startswith('GREEN_')}
 
-# The tank sheet is three blocks of the same roster (enemy, player 1,
-# player 2 - docs/SPRITESHEET_SPEC.md); the player blocks alone may use the
-# off-palette team family, and the enemy block must not, so a generator
-# slip that tints an enemy row fails here rather than shipping.
-TANK_SHEET = 'scifi_tanks_sheet.png'
+# The tank art: the paint and its light layer in team blocks of the roster,
+# the modules in the enemy's colours (see the module docstring).
+TANK_SHEETS = {'scifi_tanks_sheet.png', 'scifi_tanks_glow.png'}
+TANK_MODULE_SHEETS = {'tank_modules.png', 'tank_modules_glow.png'}
 TANK_ROWS_PER_TEAM = 12
-TANK_CELL = 32
+TANK_CELL = 40
+TANK_BASE = PALETTE_ALL | {tuple(c) for c in tank_kit.TANK_EXTRA}
+
+
+def tank_allowed(y):
+    """The colours a tank sheet's pixel row `y` may use: its block's."""
+    block = tank_export.BLOCKS[min(y // (TANK_ROWS_PER_TEAM * TANK_CELL), len(tank_export.BLOCKS) - 1)]
+    if block == 'enemy':
+        return TANK_BASE
+    return TANK_BASE | {tuple(c) for c in tank_kit.TEAM_RAMPS[block]} | {tuple(tank_kit.TEAM_LIGHT[block])}
 
 # Sheets drawn in the team family throughout: the portal is the P1 blue ramp
 # over BLACK and WHITE, every row of it.
@@ -112,12 +135,12 @@ def scan(name):
         allowed = PALETTE | TEAM
     if name == TOWER_SHEET:
         allowed = PALETTE_ALL | TOWER_EXTRA
+    if name in TANK_MODULE_SHEETS:
+        allowed = TANK_BASE
     img = Image.open(os.path.join(STATIC, name)).convert('RGBA')
     off = green = 0
     for y in range(img.height):
-        row_allowed = allowed
-        if name == TANK_SHEET and y >= TANK_ROWS_PER_TEAM * TANK_CELL:
-            row_allowed = PALETTE | TEAM
+        row_allowed = tank_allowed(y) if name in TANK_SHEETS else allowed
         for x in range(img.width):
             r, g, b, a = img.getpixel((x, y))
             if not a:
@@ -133,7 +156,8 @@ def main():
     failures = []
     for name in ON_PALETTE:
         off, green = scan(name)
-        checks = [f'off-palette={off}' + (' (extended set)' if name in EXTENDED else '')]
+        extended = name in EXTENDED or name in TANK_SHEETS or name in TANK_MODULE_SHEETS
+        checks = [f'off-palette={off}' + (' (extended set)' if extended else '')]
         if off:
             failures.append(f'{name}: {off} off-palette pixels')
         if name in NO_GREEN:

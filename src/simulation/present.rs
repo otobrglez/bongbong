@@ -116,17 +116,18 @@ impl Game {
         self.physics.apply_impulse(handle, Position::new(-velocity.x * impulse, -velocity.y * impulse));
     }
 
-    /// Where one seat's laser would leave its muzzle right now, which way,
-    /// and with which beam: `weapons::laser_shot`'s geometry with no misfire
-    /// skew. For a client drawing its own beam on the press
-    /// (`net::predict`), off the sandbox's pose.
-    pub fn seat_beam(&self, seat: usize) -> Option<(Position, Vec2, LaserVariant)> {
+    /// Where one seat's laser would be judged from right now (the gun
+    /// line's muzzle), where it would be drawn from (the laser module's
+    /// lens), which way, and with which beam: `weapons::laser_shot`'s
+    /// geometry with no misfire skew. For a client drawing its own beam on
+    /// the press (`net::predict`), off the sandbox's pose.
+    pub fn seat_beam(&self, seat: usize) -> Option<(Position, Position, Vec2, LaserVariant)> {
         let entity = self.seats.get(seat).copied().flatten()?;
         let tank = self.world.get::<&Tank>(entity).ok()?;
         let rot = tank.rotation.to_radians();
         let dir = Vec2::new(rot.sin(), -rot.cos());
-        let muzzle = tuning().tank_muzzle_forward_offset[tank.row as usize] * tank.scale;
-        Some((Position::new(tank.position.x + dir.x * muzzle, tank.position.y + dir.y * muzzle), dir, tank.laser_variant))
+        let lens = tank.turret_point(crate::tank_art::LASER_MUZZLE[tank.row as usize]);
+        Some((tank.gun_line_muzzle(dir), lens, dir, tank.laser_variant))
     }
 }
 
@@ -291,6 +292,28 @@ impl Game {
     /// drew leaving it.
     pub fn draw_muzzle(&mut self, at: Position) {
         self.muzzle_flashes.push(crate::shockwave::Shockwave::new(at));
+    }
+
+    /// Kick `seat`'s turret on this replica (presentation only): the recoil
+    /// a shell or plasma bolt this client drew leaving its main gun puts on
+    /// it (`Tank::kick`), on the press rather than a round trip later.
+    pub fn kick_seat(&mut self, seat: u8, kind: ProvisionalKind) {
+        let Some(entity) = self.seats.get(seat as usize).copied().flatten() else { return };
+        let Ok(mut tank) = self.world.get::<&mut Tank>(entity) else { return };
+        match kind {
+            ProvisionalKind::Shell => tank.kick(false),
+            ProvisionalKind::Plasma => tank.kick(true),
+            ProvisionalKind::Bullet => {}
+        }
+    }
+
+    /// Flash `seat`'s laser lens on this replica (presentation only), for
+    /// a beam this client drew (`Tank::kick_laser`).
+    pub fn flash_seat_laser(&mut self, seat: u8) {
+        let Some(entity) = self.seats.get(seat as usize).copied().flatten() else { return };
+        if let Ok(mut tank) = self.world.get::<&mut Tank>(entity) {
+            tank.kick_laser();
+        }
     }
 }
 

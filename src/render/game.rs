@@ -55,8 +55,9 @@ use crate::simulation::{Game, Outcome};
 use crate::ai::Ai;
 #[cfg(feature = "dev-tools")]
 use crate::simulation::Overlays;
+use crate::tank::Tank;
 #[cfg(feature = "dev-tools")]
-use crate::tank::{ActiveWeapon, Dir, Tank};
+use crate::tank::{ActiveWeapon, Dir};
 use crate::tuning::tuning;
 use crate::view::View;
 use crate::{Layout, Position, SHOCK_MAX};
@@ -71,6 +72,11 @@ use crate::{HUD_MARGIN, MAX_DAMAGE};
 /// of four so the signature doesn't grow with every new texture.
 pub struct Textures<'a> {
     pub tanks: &'a Texture2D,
+    /// The tank sheet's light layer (`tank::draw_tank_glow`).
+    pub tank_glow: &'a Texture2D,
+    /// The weapon modules on the turrets, and their light layer.
+    pub tank_modules: &'a Texture2D,
+    pub tank_modules_glow: &'a Texture2D,
     pub shells: &'a Texture2D,
     pub plasma: &'a Texture2D,
     pub minigun_bullets: &'a Texture2D,
@@ -94,15 +100,8 @@ pub struct Textures<'a> {
     pub pickup_shield: &'a Texture2D,
     pub pickup_flamethrower: &'a Texture2D,
     pub pickup_frog_health: &'a Texture2D,
-    /// The minigun barrel-cluster overlay drawn on a tank's turret while it
-    /// holds minigun ammo - see `tank::draw_minigun_mount`. One shared
-    /// texture for every chassis (unlike `tanks` above), not a sheet.
-    pub minigun_mount: &'a Texture2D,
     /// static/missile.png - a seeker missile in flight (missile.rs).
     pub missile: &'a Texture2D,
-    /// The seeker-missile pod on a turret while the tank holds missiles -
-    /// see `tank::draw_missile_pod`. One texture for every chassis.
-    pub missile_pod: &'a Texture2D,
     /// The tall-grass sheet of the round's map theme
     /// (`map::Theme::grass_texture_path`, grass.rs); `ground` above is the
     /// theme's ground tileset the same way. `app.rs` picks both per frame.
@@ -133,13 +132,14 @@ impl Sheets for Textures<'_> {
             // name here, so the payload needs no second lookup.
             Sheet::Ground(_) => self.ground,
             Sheet::Tanks => self.tanks,
+            Sheet::TankGlow => self.tank_glow,
+            Sheet::TankModules => self.tank_modules,
+            Sheet::TankModulesGlow => self.tank_modules_glow,
             Sheet::Walls => self.obstacles,
             Sheet::Props => self.props,
             Sheet::Trees => self.trees,
             Sheet::Towers => self.towers,
             Sheet::Grass(_) => self.grass,
-            Sheet::MinigunMount => self.minigun_mount,
-            Sheet::MissilePod => self.missile_pod,
             Sheet::Tracks => self.tracks,
             Sheet::BarrelExplosion => self.barrel_explosion,
             Sheet::Portal => self.portal,
@@ -220,9 +220,10 @@ impl Game {
         }
         for jet in self.flames() {
             let flicker = 0.8 + 0.2 * (self.time * 29.0).sin();
+            let (from, dir, reach) = jet.drawn();
             for (along, r) in [(0.35, 0.3), (0.75, 0.45)] {
-                let at = Position::new(jet.origin.x + jet.dir.x * jet.reach * along, jet.origin.y + jet.dir.y * jet.reach * along);
-                ground_light(d, at, jet.reach * r, warm, 0.3 * flicker);
+                let at = Position::new(from.x + dir.x * reach * along, from.y + dir.y * reach * along);
+                ground_light(d, at, reach * r, warm, 0.3 * flicker);
             }
         }
         for beam in &self.laser_beams {
@@ -793,8 +794,8 @@ impl Game {
             match flash.what {
                 Flashed::Tank(slot) => {
                     for tank in self.world.query::<&crate::tank::Tank>().iter().filter(|t| t.owner_slot() == slot) {
-                        crate::tank::draw_tank_hull(c, tank, tint);
-                        crate::tank::draw_tank_turret(c, tank, tint);
+                        crate::tank::draw_tank_hull(c, tank, self.time, tint);
+                        crate::tank::draw_tank_turret(c, tank, self.time, tint);
                     }
                 }
                 Flashed::Tile(at) => {
@@ -886,7 +887,8 @@ impl Game {
             // The flamethrower's nozzle while it fires: a hot disc at
             // the muzzle and a fainter one a third of the way out.
             for jet in self.flames() {
-                draw_flame_glow(&mut bd, jet.origin, jet.dir, jet.reach, self.time);
+                let (from, dir, reach) = jet.drawn();
+                draw_flame_glow(&mut bd, from, dir, reach, self.time);
             }
             // The light every burning deck, wreck and tile throws on the
             // ground round it; the flames themselves stand in
@@ -924,6 +926,23 @@ impl Game {
             crate::tower::draw_glob(&mut GpuCanvas::new(d, textures), glob);
         }
         d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| self.draw_towers_light(&mut bd));
+
+        // The tanks' own lights - lamps, strips, sensor eyes, the modules'
+        // lenses, a wreck's embers - under a dark sky, which multiplied
+        // their paint down with everything else (`tank::draw_tank_glow`).
+        // `day_pools` is 1 in daylight and falls as the sky's lights rise.
+        let tank_glow = 1.0 - day_pools;
+        if tank_glow > 0.0 {
+            d.draw_blend_mode(BlendMode::BLEND_ADDITIVE, |mut bd| {
+                let mut c = GpuCanvas::new(&mut bd, textures);
+                for tank in self.world.query::<&Tank>().iter() {
+                    if self.hide_players && tank.is_player() {
+                        continue;
+                    }
+                    crate::tank::draw_tank_glow(&mut c, tank, self.time, tank_glow);
+                }
+            });
+        }
 
         // The locate cue's P1..P8 labels, over the grass, the crowd and
         // the trees - the point is to be found under all of it.
@@ -1029,7 +1048,8 @@ impl Game {
         // under its own flying motes.
         if let Some(shots) = shots.as_deref_mut().filter(|_| glow) {
             for (i, jet) in self.flames().iter().enumerate() {
-                shots.draw_flame(d, jet.origin, jet.dir, jet.reach, self.time, i as f32 * 7.31, self.map.field_size().1);
+                let (from, dir, reach) = jet.drawn();
+                shots.draw_flame(d, from, dir, reach, self.time, i as f32 * 7.31, self.map.field_size().1);
             }
         }
 
@@ -1039,7 +1059,7 @@ impl Game {
         // nozzle pushes a muzzle flash every held frame and has its own
         // glow, so it gets no flash.
         if glow {
-            let nozzles: Vec<Position> = self.flames().iter().map(|jet| jet.origin).collect();
+            let nozzles: Vec<Position> = self.flames().iter().map(|jet| jet.nozzle).collect();
             let flashes: Vec<Vec<pyro::Shape>> = self
                 .muzzle_flashes
                 .iter()

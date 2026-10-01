@@ -11,7 +11,7 @@ use serde::Serialize;
 
 use bongbong::simulation::present::segment_box;
 use bongbong::tank::Dir;
-use bongbong::{TANK_HULL_BBOX_BY_ROW, TANK_TEXTURE_SIZE, TANK_TURRET_BBOX_BY_ROW};
+use bongbong::{TANK_FRAME_SIZE, TANK_HULL_BBOX_BY_ROW, TANK_TURRET_BBOX_BY_ROW};
 
 use crate::sample::{EventSample, FrameSample, TankSample, final_stage, flying_stage};
 use crate::script::{RECTANGLE, RECTANGLE_SECONDS, SHOOT_TAP_SECONDS, Scenario};
@@ -887,7 +887,7 @@ pub fn hit_boxes(row: i32, dir: u8) -> [(f32, f32, f32, f32); 2] {
     let (hw, hh) = (w * 0.5 * TANK_SCALE, h * 0.5 * TANK_SCALE);
     let hull = if along_x { (0.0, 0.0, hh, hw) } else { (0.0, 0.0, hw, hh) };
     let (x0, y0, x1, y1) = TANK_TURRET_BBOX_BY_ROW[row];
-    let half = TANK_TEXTURE_SIZE * 0.5;
+    let half = TANK_FRAME_SIZE * 0.5;
     let (cx, cy) = ((x0 + x1 + 1.0) * 0.5 - half, (y0 + y1 + 1.0) * 0.5 - half);
     let (tw, th) = ((x1 - x0 + 1.0) * 0.5, (y1 - y0 + 1.0) * 0.5);
     let (ox, oy, tw, th) = match dir {

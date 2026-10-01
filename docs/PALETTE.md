@@ -242,12 +242,19 @@ true blue, violet and magenta - chosen on a side-by-side of the real
 sheet recoloured in the browser. They are deliberately off the Puny set,
 the same exemption the pickup icons and `plasma.png` have: an identity
 has to be loud against the terrain, not sit in it. `PUNY_TEAM` is not part
-of `PUNY_PALETTE` or `PUNY_EXTRA` (so `snap()` never lands on it), and
-`gen_tanks.py` walks the team ramp *by role* while a player block is
-drawn instead of calling `snap()`, which would throw a darkened pink onto
-roof-tile red. `check_sheets.py` admits the family on rows 12-35 of the
-tank sheet and on the whole of `portal_sheet.png` (`TEAM_SHEETS`); a team
-colour in the enemy block, or anywhere else, is a failure.
+of `PUNY_PALETTE` or `PUNY_EXTRA` (so `snap()` never lands on it).
+
+The tank art (`tools/spritegen/tankdesign`, docs/SPRITESHEET_SPEC.md)
+carries four player blocks: sky blue and hot pink, then silver-white and
+vivid orange for players 3 and 4, each a Resurrect 64 ramp extended by its
+neighbours at both ends (`kit.TEAM_RAMPS`) plus a lamp colour its marker
+lights glow in (`kit.TEAM_LIGHT`). The kit paints a player block by *role*
+- body and accent become the team ramp's steps - rather than calling
+`snap()`, which would throw a darkened pink onto roof-tile red.
+`check_sheets.py` holds each block of the tank sheets to its own team's
+ramp and nothing of another team's, and admits `PUNY_TEAM` on the whole of
+`portal_sheet.png` (`TEAM_SHEETS`); a team colour in the enemy block, or
+anywhere else, is a failure.
 
 ### The portal sheet
 
