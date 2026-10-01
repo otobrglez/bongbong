@@ -524,10 +524,9 @@ starts the round as today.
   targeting API 36 have `screenOrientation`, `resizeableActivity` and
   aspect-ratio limits ignored on displays 600 dp and wider, unless
   `android:appCategory` marks them as a game. bongbong targets 36 with
-  `sensorLandscape` and no `appCategory` (`tools/android/`), so tablets and
-  foldables can run it in portrait and in resizable windows today. Add
-  `android:appCategory="game"`; the any-aspect camera is the long-term
-  answer for windows.
+  `sensorLandscape` and declares `android:appCategory="game"`
+  (`tools/android/AndroidManifest.xml`), which keeps the lock; the
+  any-aspect camera is the long-term answer for windows.
 - **iPadOS 26 deprecates `UIRequiresFullScreen`** (bongbong sets it) and
   scales a windowed app's scene when the user resizes it. A camera that
   fills any aspect handles windowed iPads, Stage Manager and freeform
