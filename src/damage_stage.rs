@@ -1,138 +1,72 @@
-//! The damage a tank wears (docs/effects.md), drawn in the effects
-//! language (`pyro.rs`) over the tank sheet's own damaged hulls
-//! (`Tank::hull_col`: the damage tiers, the wrecks) rather than stuck on
-//! from a sheet of its own.
+//! What a damaged tank gives off (docs/effects.md). The tank sheet carries
+//! the wear itself - its damage tiers (`Tank::damage_tier`,
+//! `TANK_DAMAGE_TIERS`: scuffed, damaged, critical) and its wrecks
+//! (docs/SPRITESHEET_SPEC.md) - and this adds what moves, in the effects
+//! language (`pyro.rs`), one step per tier:
 //!
-//! - **Marks**: as the hull loses health its armour gathers soot, bare
-//!   metal where the paint was scraped off and dents with a lit lip, each
-//!   mark showing up at its own share of the damage. They sit on the hull
-//!   and turn with it, under the turret (`game.rs` draws them between the
-//!   two), so a mark never floats over a turret that swings across it.
-//! - **The wound**: past `WOUND_AT` a hole opens on the engine deck behind
-//!   the turret, an ember glowing in it; the particle layer puts smoke up
-//!   off it (`fx.rs`), thicker and darker the worse the hull gets.
-//! - **Fire**: past `BURNS_AT` (the critical tier), or with afterburn on it,
-//!   the deck burns - tongues of flame (`pyro::tongues`) standing on the
-//!   wound, leaning with the wind; a wreck burns hard over its whole hulk,
-//!   dying down over the end of `wreck_burn_seconds`.
+//! - **Scuffed**: the art alone.
+//! - **Damaged** (`SMOKES_AT`): smoke rises off the engine deck behind the
+//!   turret (`smoke`, `engine_deck`; the particle layer puts it up,
+//!   `fx.rs`), thicker the worse the hull gets.
+//! - **Critical** (`BURNS_AT`), or with afterburn on it: the deck burns -
+//!   tongues of flame (`pyro::tongues`) standing on it, leaning with the
+//!   wind - and the smoke turns black. A wreck burns hard over its whole
+//!   hulk, dying down over the end of `wreck_burn_seconds`.
 //!
-//! Every mark's place, kind and the damage it shows up at hash from the
-//! tank's slot and its rolled `damage_variant`, so the same tank always
-//! wears the same scars, a replica draws them where the room's round does
-//! and nothing draws RNG.
+//! Where on the deck a tank smokes and burns hashes from its slot and its
+//! rolled `damage_variant`, so the same tank always burns in the same
+//! place, a replica draws it where the room's round does and nothing draws
+//! RNG.
 
 use crate::math::Vec2;
-use crate::pyro::{self, Blocks, Shape, BLOCK, CHAR, FIRE, SMOKE};
+use crate::pyro::{self, Shape, FIRE};
 use crate::tank::Tank;
 use crate::tuning::tuning;
 use crate::{Position, MAX_DAMAGE, TANK_DAMAGE_TIERS};
 
-/// How many marks a hull can gather.
-const MARKS: u32 = 9;
+/// The damage a hull starts smoking at: the damaged tier, where the
+/// art's first wound sparks.
+pub const SMOKES_AT: f32 = TANK_DAMAGE_TIERS[1];
 
 /// The damage a live deck catches fire at: the critical tier, the last of
 /// `TANK_DAMAGE_TIERS`, where the art's breaches glow.
 pub const BURNS_AT: f32 = TANK_DAMAGE_TIERS[TANK_DAMAGE_TIERS.len() - 1];
 
-/// The share of `MAX_DAMAGE` the wound on the deck opens at.
-pub const WOUND_AT: f32 = 0.45;
-
-/// This tank's hashed layout: its slot and its rolled variant.
+/// This tank's hashed spot: its slot and its rolled variant.
 fn seed(tank: &Tank) -> u32 {
     crate::blast::seed_at(Position::new(tank.owner_slot() as f32 * 32.0, tank.damage_variant as f32 * 32.0), 71)
 }
 
-/// The hull's own axes on the field, from its drawn facing: to its right
-/// and to its front.
-fn axes(tank: &Tank) -> (Vec2, Vec2) {
-    let (s, c) = tank.visual_rotation.to_radians().sin_cos();
-    (Vec2::new(c, s), Vec2::new(s, -c))
-}
-
 /// The point `x` px to the hull's right and `y` px toward its front of
-/// its middle.
+/// its middle, by its drawn facing.
 fn on_hull(tank: &Tank, x: f32, y: f32) -> Position {
-    let (right, front) = axes(tank);
+    let (s, c) = tank.visual_rotation.to_radians().sin_cos();
+    let (right, front) = (Vec2::new(c, s), Vec2::new(s, -c));
     Position::new(tank.position.x + right.x * x + front.x * y, tank.position.y + right.y * x + front.y * y)
 }
 
-/// How much of the hull is gone, 0 pristine to 1 a wreck.
-fn wear(tank: &Tank) -> f32 {
-    (tank.damage / MAX_DAMAGE).clamp(0.0, 1.0)
-}
-
-/// Where the damage gathers: a spot on the engine deck behind the turret,
-/// hashed across the deck per tank. The wound, the deck fire and the
-/// smoke all start here.
-pub fn wound(tank: &Tank) -> Position {
+/// Where a damaged tank smokes and burns: a spot on the engine deck behind
+/// the turret, hashed across the deck per tank.
+pub fn engine_deck(tank: &Tank) -> Position {
     let s = seed(tank);
     let (hw, hh) = tank.hull_half_extents(false);
     on_hull(tank, (pyro::unit(s, 1) - 0.5) * hw * 0.8, -hh * (0.42 + 0.2 * pyro::unit(s, 2)))
 }
 
-/// Whether the wound is open: the hull has lost `WOUND_AT` of its health
-/// and is not yet a wreck (whose art is all wound).
-pub fn wounded(tank: &Tank) -> bool {
-    !tank.is_wreck() && wear(tank) >= WOUND_AT
-}
-
-/// The marks and the wound, over the hull and under the turret: nothing
-/// on a pristine tank or a wreck.
-pub fn draw_damage(b: &mut impl Blocks, tank: &Tank, time: f32) {
-    let k = wear(tank);
-    if k <= 0.0 || tank.is_wreck() {
-        return;
+/// How thick the smoke off a live hull is, 0 (a wisp, at the damaged
+/// tier) to 1 (a column, a hull on its last point); `None` for a hull not
+/// yet damaged enough to smoke, and for a wreck, whose smoke is its fire's.
+pub fn smoke(tank: &Tank) -> Option<f32> {
+    if tank.is_wreck() || tank.damage < SMOKES_AT {
+        return None;
     }
-    let s = seed(tank);
-    let u = |salt: u32| pyro::unit(s, salt);
-    let (hw, hh) = tank.hull_half_extents(false);
-    let (_, front) = axes(tank);
-    let a = tank.alpha();
-    for i in 0..MARKS {
-        // Spread over the damage so marks come one or two to a hit.
-        let shows_at = 0.06 + 0.84 * (i as f32 + u(10 + i)) / MARKS as f32;
-        if k < shows_at {
-            continue;
-        }
-        let at = on_hull(tank, (u(20 + i) - 0.5) * 2.0 * hw * 0.72, (u(30 + i) - 0.5) * 2.0 * hh * 0.78);
-        match i % 3 {
-            // Soot: a dark patch, dense in the middle and dissolving out.
-            0 => {
-                let r = 3.0 + 2.5 * u(40 + i);
-                pyro::dither_disc(b, at, r, pyro::alpha(CHAR[1], 0.7 * a), 0.55);
-                pyro::dither_disc(b, at, r * 0.55, pyro::alpha(CHAR[0], 0.85 * a), 0.9);
-            }
-            // A scrape to bare metal, two or three blocks along the hull
-            // or across it.
-            1 => {
-                let len = BLOCK * (1.0 + (u(40 + i) * 2.0).floor());
-                let way = if u(50 + i) < 0.6 { front } else { Vec2::new(-front.y, front.x) };
-                let to = Position::new(at.x + way.x * len, at.y + way.y * len);
-                pyro::block_line(b, at, to, 1, |_| pyro::alpha(SMOKE[5], 0.9 * a));
-            }
-            // A dent: a dark pit with its upper lip catching the light.
-            _ => {
-                pyro::mark(b, at, 2, pyro::alpha(CHAR[0], 0.9 * a));
-                pyro::mark(b, Position::new(at.x - BLOCK, at.y - BLOCK), 2, pyro::alpha(SMOKE[6], 0.7 * a));
-            }
-        }
-    }
-    if wounded(tank) {
-        let w = wound(tank);
-        // A scorched ring round a hole, an ember glowing in it that
-        // flickers through three steps of the fire ramp.
-        pyro::dither_disc(b, w, 5.0, pyro::alpha(CHAR[1], 0.75 * a), 0.6);
-        pyro::mark(b, w, 4, pyro::alpha(CHAR[0], a));
-        let beat = ((time * 9.0 + u(3) * 9.0) as i32).rem_euclid(4);
-        let ember = [FIRE[3], FIRE[5], FIRE[3], FIRE[2]][beat as usize];
-        pyro::mark(b, w, 2, pyro::alpha(ember, a));
-    }
+    Some(((tank.damage - SMOKES_AT) / (MAX_DAMAGE - SMOKES_AT).max(1.0)).clamp(0.0, 1.0))
 }
 
 /// How hard the tank burns, 0 (not at all) to 1: a wreck until its fire
-/// dies down over the last fifth of `wreck_burn_seconds`; a live hull past
-/// `BURNS_AT`, harder toward the end; afterburn from a flamethrower until
-/// it runs out.
+/// dies down over the last fifth of `wreck_burn_seconds`; a live hull from
+/// the critical tier, harder toward the end; afterburn from a flamethrower
+/// until it runs out.
 pub fn fire(tank: &Tank) -> f32 {
     if tank.is_wreck() {
         let burn = tuning().wreck_burn_seconds;
@@ -151,20 +85,20 @@ pub fn fire(tank: &Tank) -> f32 {
     hull.max(after)
 }
 
-/// Where a burning tank's fire stands: the wound on a live hull, the
+/// Where a burning tank's fire stands: the engine deck of a live hull, the
 /// middle of a wreck.
 pub fn fire_at(tank: &Tank) -> Position {
     if tank.is_wreck() {
         tank.position
     } else {
-        wound(tank)
+        engine_deck(tank)
     }
 }
 
 /// The flames on a burning tank, back to front, `lean` px sideways per px
-/// of height (`pyro::smoke_lean`): a couple of tongues on the deck, three
-/// big ones over a wreck, and the light they throw (drawn in the additive
-/// pass). Empty for a tank that is not burning.
+/// of height (`pyro::smoke_lean`): a few tongues on the deck, bigger ones
+/// over a wreck, and the light they throw (drawn in the additive pass).
+/// Empty for a tank that is not burning.
 pub fn flames(tank: &Tank, time: f32, lean: f32) -> Vec<Shape> {
     let strength = fire(tank) * tank.alpha();
     let mut out = Vec::new();
@@ -188,6 +122,7 @@ pub fn flames(tank: &Tank, time: f32, lean: f32) -> Vec<Shape> {
 mod tests {
     use super::*;
     use crate::math::Color;
+    use crate::pyro::Blocks;
 
     #[derive(Default)]
     struct Rects(Vec<(i32, i32, i32, i32, Color)>);
@@ -202,45 +137,39 @@ mod tests {
         Tank { damage, position: Position::new(200.0, 200.0), ..Tank::default() }
     }
 
-    fn marks(t: &Tank) -> Vec<(i32, i32, i32, i32, Color)> {
-        let mut r = Rects::default();
-        draw_damage(&mut r, t, 0.0);
-        r.0
+    #[test]
+    fn a_hull_smokes_from_the_damaged_tier_and_thickens() {
+        assert_eq!(smoke(&tank(TANK_DAMAGE_TIERS[0])), None, "a scuffed hull wears the art alone");
+        assert_eq!(smoke(&tank(SMOKES_AT - 1.0)), None);
+        assert_eq!(smoke(&tank(SMOKES_AT)), Some(0.0), "a wisp at the damaged tier");
+        assert!(smoke(&tank(90.0)) > smoke(&tank(60.0)));
+        assert_eq!(smoke(&tank(MAX_DAMAGE)), None, "a wreck's smoke is its fire's");
     }
 
     #[test]
-    fn a_pristine_hull_wears_nothing_and_marks_gather_with_damage() {
-        assert!(marks(&tank(0.0)).is_empty());
-        let light = marks(&tank(25.0)).len();
-        let heavy = marks(&tank(70.0)).len();
-        assert!(light > 0, "a hull a quarter gone shows it");
-        assert!(heavy > light, "more damage, more marks: {light} then {heavy}");
-    }
-
-    #[test]
-    fn the_marks_turn_with_the_hull() {
+    fn the_engine_deck_turns_with_the_hull() {
         let mut up = tank(60.0);
         let mut right = tank(60.0);
         up.visual_rotation = 0.0;
         right.visual_rotation = 90.0;
-        let w_up = wound(&up) - up.position;
-        let w_right = wound(&right) - right.position;
+        let d_up = engine_deck(&up) - up.position;
+        let d_right = engine_deck(&right) - right.position;
         // A quarter turn clockwise takes (x, y) to (-y, x).
-        assert!((w_right.x + w_up.y).abs() < 0.01 && (w_right.y - w_up.x).abs() < 0.01, "{w_up:?} turned is {w_right:?}");
+        assert!((d_right.x + d_up.y).abs() < 0.01 && (d_right.y - d_up.x).abs() < 0.01, "{d_up:?} turned is {d_right:?}");
         // Behind the turret: toward the rear of a hull facing up.
-        assert!(w_up.y > 0.0);
+        assert!(d_up.y > 0.0);
     }
 
     #[test]
-    fn the_same_tank_always_wears_the_same_scars() {
-        assert_eq!(marks(&tank(80.0)), marks(&tank(80.0)));
+    fn the_same_tank_always_burns_in_the_same_place() {
+        assert_eq!(engine_deck(&tank(80.0)), engine_deck(&tank(80.0)));
         let mut other = tank(80.0);
         other.damage_variant = 3;
-        assert_ne!(marks(&tank(80.0)), marks(&other), "another variant, another layout");
+        assert_ne!(engine_deck(&tank(80.0)), engine_deck(&other), "another variant, another spot");
     }
 
     #[test]
-    fn a_hull_burns_from_the_disabled_stage_and_a_wreck_burns_out() {
+    fn a_hull_burns_from_the_critical_tier_and_a_wreck_burns_out() {
         assert_eq!(fire(&tank(BURNS_AT - 1.0)), 0.0);
         assert!(fire(&tank(BURNS_AT)) > 0.0);
         assert!(!flames(&tank(90.0), 0.0, 0.0).is_empty());
@@ -255,12 +184,18 @@ mod tests {
     }
 
     #[test]
-    fn every_mark_is_a_ramp_step() {
-        let ramp: Vec<Color> = [&CHAR[..], &SMOKE[..], &FIRE[..]].concat();
-        for d in [20.0, 50.0, 95.0] {
-            for (.., c) in marks(&tank(d)) {
-                assert!(ramp.iter().any(|r| r.r == c.r && r.g == c.g && r.b == c.b), "{c:?}");
-            }
-        }
+    fn the_flames_stand_on_the_deck_and_lean_with_the_wind() {
+        let burning = tank(95.0);
+        let paint = |lean| {
+            let mut r = Rects::default();
+            pyro::draw(&mut r, &flames(&burning, 0.4, lean));
+            r.0
+        };
+        let (still, leaning) = (paint(0.0), paint(0.6));
+        assert!(!still.is_empty());
+        let mean_x = |rs: &[(i32, i32, i32, i32, Color)]| rs.iter().map(|r| r.0 as f32).sum::<f32>() / rs.len() as f32;
+        assert!((mean_x(&still) - engine_deck(&burning).x).abs() < 8.0, "the fire stands on the deck");
+        assert!(mean_x(&leaning) > mean_x(&still) + 2.0, "and leans down-wind");
+        assert!(still.iter().all(|r| r.0 % 2 == 0 && r.1 % 2 == 0), "on the block grid");
     }
 }

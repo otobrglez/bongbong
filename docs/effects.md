@@ -87,26 +87,24 @@ blows up - they throw none.
 | Dust off a tile a shot hit; a tile coming down | `burst.rs` (`ImpactKind::Dust`, `Collapse`, `Ash`) | in the material's dust; a tile that burnt out falls in as ash |
 | A hit's flash | `fx::Flash`, drawn by `render/game.rs` | the hull, tile or tower drawn again over itself in an additive blend, stepping down in three over `hit_flash_seconds` |
 | Flames on the ground, a burning tile, a burning tank | `pyro::tongues` | teardrop tongues in three nested layers, flickering through four heights and leaning with the wind |
-| A tank's damage | `damage_stage.rs` | marks that gather on the hull under the turret, a wound on the deck, fire past `TANK_HULL_DISABLED_DAMAGE`, a burning wreck |
+| A tank's damage | the tank sheet, then `damage_stage.rs` | the sheet's damage tiers and wrecks carry the wear; the code adds smoke from the damaged tier, deck fire from the critical one and a wreck burning down |
 | A burnt-out ground fire | `Scorch::burn` | a soft burn scar, not a darkened square |
 | Particles | `fx.rs`, drawn by `render/fx.rs` | sparks and embers cool down the fire ramp; smoke, dust and a missile's trail are shaded puffs; chips are small squares |
 | The light shots throw | `render/shot_fx.rs` | stepped glows and streaks of blocks |
 | The flamethrower's jet, the plasma orb | `static/flame_jet.fs`, `static/plasma_orb.fs` | worked out per 2 px block, coloured in their ramps' flat steps, edges dithered |
 
-A tank's damage, in order of how bad it is:
+A tank's damage, a step per tier of the tank sheet (`TANK_DAMAGE_TIERS`,
+docs/SPRITESHEET_SPEC.md). The sheet carries the wear - scuffs, plates
+gone, the wrecks - so the code draws only what moves, from one hashed spot
+on the engine deck behind the turret (`damage_stage::engine_deck`, one of
+`DAMAGE_VARIANTS` per tank):
 
-- **Marks** (`damage_stage::draw_damage`): soot, bare metal where paint was
-  scraped off, dents with a lit lip, each showing from its own share of the
-  damage, in one of `DAMAGE_VARIANTS` hashed layouts per tank. They sit on
-  the hull and turn with it, drawn between the hull and the turret, so a
-  mark never floats over a turret swinging across it. The tank sheet's own
-  light and disabled hulls (`Tank::hull_col`) sit under them.
-- **The wound** (`WOUND_AT`): a hole on the engine deck behind the turret,
-  an ember flickering in it; `fx.rs` puts smoke up off it from
-  `HULL_SMOKE_FROM` on, thicker as the hull gets worse
-  (`hull_smoke_rate`).
-- **Fire** (`damage_stage::fire`): past `TANK_HULL_DISABLED_DAMAGE`, or
-  with afterburn on it, the deck burns and the smoke turns black; a wreck
+- **Scuffed** (25): the art alone.
+- **Damaged** (50, `SMOKES_AT`): smoke rises off the deck
+  (`damage_stage::smoke`, put up by `fx.rs`), a wisp at first and a column
+  as the hull gets worse (`hull_smoke_rate`).
+- **Critical** (75, `BURNS_AT`), or with afterburn on it: the deck burns
+  (`damage_stage::fire`, `flames`) and the smoke turns black. A wreck
   burns hard over its whole hulk and dies down over the last fifth of
   `wreck_burn_seconds`, and its kill lays the grass round it flat.
 
@@ -135,7 +133,7 @@ additive block (a blend switch breaks raylib's batch).
 | `*_hit_seconds`, `hit_fx_scale` | how long each hit plays and its size |
 | `tile_dust_seconds`, `tile_collapse_seconds` | a tile's dust when hit and when it comes down |
 | `hit_flash_seconds` | a hit's flash; 0 turns it off |
-| `hull_smoke_rate` | smoke off a hull on its last legs |
+| `hull_smoke_rate` | smoke off a damaged hull's deck |
 | `muzzle_flash_duration`, `muzzle_glow_radius` | a muzzle flash's life and size |
 | `shot_glow_strength` | the light shots throw; 0 draws the plain sprites |
 

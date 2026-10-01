@@ -18,7 +18,7 @@ use crate::pickup::{draw_pickup, Pickup};
 use crate::portal::draw_portal;
 use crate::simulation::Game;
 use crate::tank::{
-    draw_enemy_ring, draw_player_locate, draw_player_ring, draw_tank_hull, draw_tank_shadow, draw_tank_shield, draw_tank_turret, Tank,
+    draw_enemy_ring, draw_player_locate, draw_player_ring, draw_tank, draw_tank_shadow, draw_tank_shield, Tank,
 };
 use crate::track::draw_track;
 use hecs::Entity;
@@ -64,17 +64,11 @@ fn draw_one_tank(c: &mut impl Canvas, tank: &Tank, role: TankRole, time: f32, sh
     if shadows {
         draw_tank_shadow(c, tank, time);
     }
-    // The marks the armour has gathered sit on the hull, under the
-    // turret and its weapon modules that swing over them
-    // (`damage_stage.rs`).
-    draw_tank_hull(c, tank, time, tank.tint());
-    if role != TankRole::RollIn {
-        crate::damage_stage::draw_damage(c, tank, time);
-    }
-    draw_tank_turret(c, tank, time, tank.tint());
+    // The sheet's damage tiers carry the wear; a burning deck or wreck
+    // adds its flames over everything on the tank, leaning with the wind
+    // (`damage_stage.rs`). Their light is the glowing pass's.
+    draw_tank(c, tank, time);
     crate::tank::draw_tank_slime(c, tank, time);
-    // A burning deck or wreck: the flames over everything on the tank,
-    // leaning with the wind. Their light is the glowing pass's.
     if role != TankRole::RollIn {
         let lean = crate::pyro::smoke_lean(&crate::tuning::tuning(), tank.position, time);
         crate::pyro::draw(c, &crate::damage_stage::flames(tank, time, lean));

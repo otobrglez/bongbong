@@ -1654,9 +1654,9 @@ tunables! {
         /// second, for as long as `wreck_burn_seconds` lasts.
         wreck_flame_rate: f32 = 12.0 in 0.0 ..= 200.0;
         wreck_smoke_rate: f32 = 10.0 in 0.0 ..= 100.0;
-        /// Smoke puffs a second off the wound of a hull on its last legs
-        /// (`damage_stage::wound`); a hull only just past the smoking
-        /// point gives off a sixth of it.
+        /// Smoke puffs a second off the engine deck of a hull on its last
+        /// legs (`damage_stage::smoke`); a hull only just into the damaged
+        /// tier gives off a sixth of it.
         hull_smoke_rate: f32 = 6.0 in 0.0 ..= 60.0;
         /// Contact feedback. `max_impulse` is the solver's own measure of
         /// how hard a contact is, so these are thresholds on that rather
