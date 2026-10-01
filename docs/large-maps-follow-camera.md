@@ -566,8 +566,8 @@ starts the round as today.
 
 docs/large-maps-patterns.md catalogues 72 patterns from shipped games,
 each with its sources, how far each source was verified, and what
-bongbong should take: 40 to adopt, 21 to adapt, 4 bongbong already
-follows, 7 to skip. The ones that confirm the recommendation above:
+bongbong should take: 40 to adopt, 20 to adapt, 4 bongbong already
+follows, 8 to skip. The ones that confirm the recommendation above:
 
 - **Same area has shipped.** Teeworlds keeps its view area constant
   whatever the window's shape, with per-axis caps; Wild Rift answered
@@ -618,10 +618,9 @@ What the catalogue changed or added:
    6.8 pt on an iPhone 15 and the 44 px lobby buttons at 27 to 32 pt,
    under Apple's 11 pt text and 44 pt target floors. Add a UI scale
    separate from the world zoom (Stardew Valley, Terraria), hints that
-   follow the input last used, a fade while play is under a cluster, seat
-   numbers on every chip and arrow (eight colours cannot all stay
-   distinct), and revisit the build-time stick side, which shipped games
-   make a setting.
+   follow the input last used, a fade while play is under a cluster, and
+   seat numbers on every chip and arrow (eight colours cannot all stay
+   distinct). The stick side stays a build-time choice (section 15).
 7. **Arenas draw their margins.** Google Play's Level Up guidelines and
    Apple's WWDC24 advice both ask games not to letterbox; arenas fill
    their margins with out-of-bounds ground beyond the boundary walls
@@ -691,9 +690,15 @@ probe.
   vertically the right balance, or should the sight box be taller and
   phones accept a slightly smaller tank?
 - **Minimap on phones.** Off, compact, or a tap-to-peek overlay?
-- **Stick side.** The steering side is a build-time choice on purpose;
-  shipped games (Brawl Stars, Call of Duty: Mobile) make it a setting.
-  Keep it a build, or add the setting and mirror the HUD with it?
+
+Decided:
+
+- **Stick side.** It stays a build-time choice (the `touch-steer-right`
+  feature) for now, although Brawl Stars and Call of Duty: Mobile make
+  it a setting. The corner clusters leave both bottom corners to the
+  thumbs, so both builds use the same HUD. `TouchScheme::update` already
+  takes the side as an argument, so a setting later would change only
+  where `app.rs` reads it from.
 
 ## 16. Sources
 
