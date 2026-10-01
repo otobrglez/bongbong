@@ -1684,6 +1684,29 @@ struct RoundResult {
     /// reported, so a JSONL record names the rules it played under.
     mission: bongbong::level::Mission,
     spawn: bongbong::level::SpawnKind,
+    /// When the fight first reached a seat, in round seconds (`Contact`).
+    contact: Contact,
+    /// Wall-clock seconds spent inside `Game::update` this round, over
+    /// `frames_run` ticks - the simulation's own cost, the probe's checks
+    /// left out.
+    update_seconds: f64,
+}
+
+/// When the fight first reached a seat in one round, in round seconds:
+/// `None` where it never did. The pacing reading for field maps
+/// (docs/large-maps-follow-camera.md section 12) - how long the walk to
+/// the fight took - printed beside the anomalies, never budgeted.
+#[derive(Default, Clone, Copy)]
+struct Contact {
+    /// The first enemy within `enemy_attack_range` of the nearest live
+    /// seat (the earliest `TankTrack::time_to_engage`).
+    engage: Option<f32>,
+    /// The first enemy trigger pull aimed at a seat
+    /// (`FireTally::shots_at_seats`).
+    shot: Option<f32>,
+    /// The first shot, beam or flame to land on a seat
+    /// (`FireTally::hits_on_seats`).
+    hit: Option<f32>,
 }
 
 /// Runs one round to completion (or the frame limit). `trace` controls
@@ -1756,9 +1779,13 @@ fn run_round(
     check_anomalies(&mut tracks, &mut invariant_flagged, &game, round, 0, &mut totals, heat);
 
     let mut frames_run = args.frames;
+    let mut contact = Contact::default();
+    let mut update_seconds = 0.0f64;
     for frame in 1..=args.frames {
         let input = input_for_frame(args, frame);
+        let started = std::time::Instant::now();
         game.update(input, DT, field_width(), field_height());
+        update_seconds += started.elapsed().as_secs_f64();
         // Ram damage is invisible to `tank_snapshots`, which reports health
         // but never who took it off, so it is read off the event log.
         // Costs nothing - recording an event draws no RNG.
@@ -1774,6 +1801,13 @@ fn run_round(
         }
         check_fire(&game, &mut stood, round, frame, &mut fire, &mut offbox_flagged, &mut totals, heat);
         check_anomalies(&mut tracks, &mut invariant_flagged, &game, round, frame, &mut totals, heat);
+        let now = frame as f32 * DT;
+        if contact.shot.is_none() && fire.shots_at_seats > 0 {
+            contact.shot = Some(now);
+        }
+        if contact.hit.is_none() && fire.hits_on_seats > 0 {
+            contact.hit = Some(now);
+        }
 
         if trace && frame % args.log_every == 0 {
             log_frame(&game, frame);
@@ -1868,6 +1902,16 @@ fn run_round(
         }
     }
 
+    contact.engage = tracks.values().filter_map(|t| t.time_to_engage).min_by(f32::total_cmp);
+    if trace {
+        println!(
+            "probe: first contact: engage={} shot-at-seat={} hit-on-seat={}",
+            seconds_or_never(contact.engage),
+            seconds_or_never(contact.shot),
+            seconds_or_never(contact.hit),
+        );
+    }
+
     RoundResult {
         totals,
         rams,
@@ -1877,6 +1921,33 @@ fn run_round(
         tanks: reports,
         mission: game.mission,
         spawn: game.spawn_plan.kind(),
+        contact,
+        update_seconds,
+    }
+}
+
+/// `12.3s`, or `never`.
+fn seconds_or_never(t: Option<f32>) -> String {
+    t.map_or("never".to_string(), |t| format!("{t:.1}s"))
+}
+
+/// The mean and the median of `values`, `None` when there are none.
+fn mean_median(values: &[f32]) -> Option<(f32, f32)> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(f32::total_cmp);
+    let mid = sorted.len() / 2;
+    let median = if sorted.len() % 2 == 0 { (sorted[mid - 1] + sorted[mid]) * 0.5 } else { sorted[mid] };
+    Some((sorted.iter().sum::<f32>() / sorted.len() as f32, median))
+}
+
+/// `mean=12.3s median=11.0s (n=27)`, or `n=0` where nothing was measured.
+fn mean_median_line(values: &[f32], unit: &str) -> String {
+    match mean_median(values) {
+        Some((mean, median)) => format!("mean={mean:.1}{unit} median={median:.1}{unit} (n={})", values.len()),
+        None => "n=0".to_string(),
     }
 }
 
@@ -1949,8 +2020,15 @@ fn json_round_line(args: &Args, round: u32, seed: u64, result: &RoundResult, tun
         .collect::<Vec<_>>()
         .join(",");
     let fire = result.fire.fields().iter().map(|(name, v)| format!("\"{name}\":{v}")).collect::<Vec<_>>().join(",");
+    let contact = format!(
+        "\"engage\":{},\"shot_at_seat\":{},\"hit_on_seat\":{}",
+        opt_f32(result.contact.engage),
+        opt_f32(result.contact.shot),
+        opt_f32(result.contact.hit),
+    );
+    let ms_per_tick = result.update_seconds * 1000.0 / result.frames_run.max(1) as f64;
     format!(
-        "{{\"v\":1,\"round\":{round},\"seed\":\"0x{seed:016x}\",\"tuning\":{tuning_diff},\"map\":\"{}\",\"mission\":\"{}\",\"spawn\":\"{}\",\"scenario\":\"{}\",\"players\":{},\"enemies\":{},\"frames_run\":{},\"outcome\":\"{}\",\"anomalies\":{{{anomalies}}},\"rams\":{{\"pair\":{},\"into_player\":{},\"rolled_damage\":{:.1}}},\"fire\":{{{fire}}},\"tanks\":[{tanks}]}}",
+        "{{\"v\":1,\"round\":{round},\"seed\":\"0x{seed:016x}\",\"tuning\":{tuning_diff},\"map\":\"{}\",\"mission\":\"{}\",\"spawn\":\"{}\",\"scenario\":\"{}\",\"players\":{},\"enemies\":{},\"frames_run\":{},\"outcome\":\"{}\",\"ms_per_tick\":{ms_per_tick:.4},\"first_contact\":{{{contact}}},\"anomalies\":{{{anomalies}}},\"rams\":{{\"pair\":{},\"into_player\":{},\"rolled_damage\":{:.1}}},\"fire\":{{{fire}}},\"tanks\":[{tanks}]}}",
         json_escape(map_display(args)),
         result.mission.name(),
         result.spawn.name(),
@@ -2111,6 +2189,13 @@ fn main() -> ExitCode {
     let mut flagged: Vec<(u32, u64)> = Vec::new();
     // Every reported anomaly's (kind, position), for --heatmap.
     let mut heat: Vec<(String, Position)> = Vec::new();
+    // How the rounds ended, how long a lost one lasted, when the fight
+    // first reached a seat, and what `Game::update` cost - the pacing and
+    // the budget side of a sweep, beside its anomalies.
+    let (mut won, mut lost, mut unfinished) = (0u32, 0u32, 0u32);
+    let mut lost_seconds: Vec<f32> = Vec::new();
+    let (mut engage, mut shot, mut hit): (Vec<f32>, Vec<f32>, Vec<f32>) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut update_seconds, mut ticks) = (0.0f64, 0u64);
 
     for round in 0..args.rounds {
         let seed = base_seed.wrapping_add(round as u64);
@@ -2124,6 +2209,19 @@ fn main() -> ExitCode {
         grand_rams.into_player += result.rams.into_player;
         grand_rams.rolled_damage += result.rams.rolled_damage;
         grand_fire.add(&result.fire);
+        match result.outcome {
+            Outcome::Won => won += 1,
+            Outcome::Lost => {
+                lost += 1;
+                lost_seconds.push(result.frames_run as f32 * DT);
+            }
+            Outcome::Playing => unfinished += 1,
+        }
+        engage.extend(result.contact.engage);
+        shot.extend(result.contact.shot);
+        hit.extend(result.contact.hit);
+        update_seconds += result.update_seconds;
+        ticks += result.frames_run as u64;
         if sweep && totals.total() > 0 {
             flagged.push((round, seed));
             println!(
@@ -2170,6 +2268,31 @@ fn main() -> ExitCode {
     println!(
         "probe: fire: {}",
         grand_fire.fields().iter().map(|(name, v)| format!("{}={v}", name.replace('_', "-"))).collect::<Vec<_>>().join(" ")
+    );
+    // Pacing (docs/large-maps-follow-camera.md section 12): how the rounds
+    // ended, how long a lost one lasted, and how long the walk to the
+    // fight took - the first enemy in attack range of a seat, its first
+    // shot at one, the first hit on one. Readings, never budgeted. A
+    // sweep prints them over every round; a single round prints its own
+    // above.
+    if sweep {
+        println!(
+            "probe: outcomes: won={won} lost={lost} unfinished={unfinished} lost-after {}",
+            mean_median_line(&lost_seconds, "s"),
+        );
+        println!(
+            "probe: first contact: engage {} | shot-at-seat {} | hit-on-seat {}",
+            mean_median_line(&engage, "s"),
+            mean_median_line(&shot, "s"),
+            mean_median_line(&hit, "s"),
+        );
+    }
+    // What the simulation cost, wall clock inside `Game::update` alone:
+    // a release build's number is the one to quote.
+    println!(
+        "probe: timing: {:.3} ms/tick over {ticks} ticks{}",
+        update_seconds * 1000.0 / ticks.max(1) as f64,
+        if cfg!(debug_assertions) { " (debug build)" } else { "" },
     );
 
     if args.heatmap {
