@@ -364,6 +364,15 @@ impl PresentWorld {
         Some(Position::new(p0.x + (p1.x - p0.x) * t, p0.y + (p1.y - p0.y) * t))
     }
 
+    /// Whether an enemy at `from` sees `to`: the line of sight an enemy
+    /// needs before it settles its aim (`Terrain::line_of_sight` - every
+    /// tile but the knee-high sandbags and see-through fences, and the
+    /// frogs, block it). The off-screen arrows' lane warning asks it
+    /// (`indicators.rs`).
+    pub fn line_of_sight(&self, from: Position, to: Position) -> bool {
+        self.terrain.line_of_sight(from, to)
+    }
+
     /// One seat's hull box as drawn this frame, if it has a live tank.
     pub fn seat_hull(&self, seat: u8) -> Option<(Position, Position)> {
         self.tanks.iter().find(|t| t.seat == Some(seat)).map(|t| t.hull)

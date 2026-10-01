@@ -2183,6 +2183,54 @@ tunables! {
         hud_critical_threshold: f32 = 0.104 in 0.0 ..= 1.0;
     }
 
+    group indicators {
+        /// How far inside the screen's safe area the off-screen arrows sit
+        /// (points): the rectangle the line from the tank to what an arrow
+        /// points at stops on (`indicators.rs`,
+        /// docs/large-maps-follow-camera.md section 7).
+        indicator_inset_pt: f32 = 10.0 in 0.0 ..= 64.0;
+        /// An arrow's size at full scale (points). An arrow slid clear of
+        /// a HUD cluster, a thumb's rest or the minimap stops half this
+        /// short of it.
+        indicator_arrow_pt: f32 = 16.0 in 4.0 ..= 64.0;
+        /// Distance is drawn as size and opacity, counted in screens (the
+        /// view's extent along the arrow): full size and opacity up to
+        /// this many screens away ...
+        indicator_near_screens: f32 = 1.0 in 0.0 ..= 10.0;
+        /// ... shrinking to `indicator_far_scale` of the size and
+        /// `indicator_far_alpha` of the opacity at this many, and no
+        /// further beyond.
+        indicator_far_screens: f32 = 4.0 in 0.5 ..= 20.0;
+        indicator_far_scale: f32 = 0.6 in 0.1 ..= 1.0;
+        indicator_far_alpha: f32 = 0.55 in 0.0 ..= 1.0;
+        /// Enemy arrows that land closer together than this (points) merge
+        /// into one that carries a count. Teammates, frogs and gates never
+        /// merge.
+        indicator_cluster_pt: f32 = 22.0 in 0.0 ..= 120.0;
+        /// The most arrows a screen shows at once, filled by priority: lane
+        /// threats, teammates, frogs, flashing gates, then the nearest
+        /// enemies, the enemies left over folded into one count per screen
+        /// edge. Teammates and frogs always show, whatever this says.
+        indicator_max_arrows: usize = 8 in 1 ..= 32;
+        /// An enemy in tall grass gets no arrow unless it fired within
+        /// this many seconds ...
+        indicator_reveal_fire_seconds: f32 = 1.5 in 0.0 ..= 10.0;
+        /// ... or stands within this many pixels of the seat (two cells).
+        indicator_reveal_px: f32 = 64.0 in 0.0 ..= 512.0;
+        /// Seconds the hollow marker an enemy leaves where it slipped out
+        /// of sight lasts, fading. It never moves.
+        indicator_last_seen_seconds: f32 = 4.0 in 0.0 ..= 30.0;
+        /// Seconds the arrow of an enemy lined up on the seat flashes after
+        /// it fires down the lane.
+        indicator_fire_flash_seconds: f32 = 0.3 in 0.0 ..= 2.0;
+        /// Seconds the arc on the seat's own tank points back the way the
+        /// last hit came.
+        indicator_hit_arc_seconds: f32 = 0.8 in 0.0 ..= 5.0;
+        /// Seconds a wave gate flashes after a tank starts rolling in
+        /// through it, and again after one comes through.
+        indicator_gate_flash_seconds: f32 = 3.0 in 0.0 ..= 20.0;
+    }
+
     group fx {
         /// One multiplier on every effect that touches the whole screen -
         /// the kill flash, the shockwave ripple's bend, the camera shake

@@ -932,6 +932,7 @@ pub mod grass;
 pub mod game;
 pub mod ground;
 pub mod hud;
+pub mod indicators;
 pub mod laser;
 pub mod level;
 pub mod level_select;
