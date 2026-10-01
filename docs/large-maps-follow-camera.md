@@ -10,7 +10,9 @@ battlefield is on screen at all times") and keeps it for arena-sized maps
 only. An interactive companion page (the Camera Lab: device previews of
 every rule, HUD layout and indicator below, plus a working builder, on a
 96 x 54 study map, `maps/study/frontier.toml`, drawn by the game's own
-renderer) was published with this research.
+renderer) was published with this research. The patterns shipped games
+follow for the same problems are catalogued in docs/large-maps-patterns.md
+and summarised in section 13.
 
 Contents
 
@@ -26,9 +28,10 @@ Contents
 10. Cross-play and platform notes
 11. Engine work
 12. Large-map content and AI pacing
-13. Plan
-14. Open questions
-15. Sources
+13. Patterns from shipped games
+14. Plan
+15. Open questions
+16. Sources
 
 ## 1. Summary of the recommendation
 
@@ -74,6 +77,11 @@ Contents
   in whole 2 px blocks with the remainder applied when the frame is
   presented, which is what raylib's own `core_smooth_pixelperfect`
   example does.
+- **Shipped games back this up.** Teeworlds ships the same-area rule,
+  Diablo II: Resurrected removed wide screens for the problem the sight
+  box solves, and Battlefield 4's scope glint is the lane warning;
+  section 13 summarises 72 patterns from shipped games and what they
+  changed here.
 
 ## 2. Where the game stands
 
@@ -151,7 +159,7 @@ ever sees an extra cell.
 
 | Rule | Zoom from | Who ships it | For bongbong |
 |---|---|---|---|
-| **Same area** (recommended) | the screen's shape and a fixed world area, `w * h = A`, `w / h = clamp(aspect, 4/3, 2.4)` | no shipped game found; a Unity forum recipe (unverified) | equal information and reaction time on every device; the outline follows the screen; desktops draw big tanks |
+| **Same area** (recommended) | the screen's shape and a fixed world area, `w * h = A`, `w / h = clamp(aspect, 4/3, 2.4)` | Teeworlds (a constant view area with per-axis caps, read in its source); Wild Rift's fix for 4:3 tablets, "split the difference" (summary) | equal information and reaction time on every device; the outline follows the screen; desktops draw big tanks |
 | Same box, cropped ("cover") | `max(W / boxW, H / boxH)` against one reference box | agar.io, diep.io and surviv.io (`max(H/1080, W/1920)`) | nobody sees past the box; a 4:3 tablet loses a third of its width |
 | Letterbox one box ("keep") | `min(W / boxW, H / boxH)`, bars beyond | StarCraft II (16:9, bars on wider), Overwatch (21:9 capped at 103 degrees: "it would be unfair to 16:10 and 16:9 players"), Brawl Stars and Vampire Survivors (pillarbox wide screens) | fair, but spends the screen this work is meant to use |
 | Same height (Hor+) | `H / rows` | League of Legends and Dota 2 on ultrawide | height is the scarce axis in landscape, so it keeps that equal, but phones and ultrawides see much further sideways |
@@ -340,11 +348,13 @@ local round use the same code, and the dev server reports it.
   marks the gate the seat will come through.
 - **An establishing shot** at round start: the whole map for about a
   second (the frog, the gates), then a cut or a fast zoom to the tank.
-- **Couch play** (desktop only, two seats on one screen): frame both
-  tanks and zoom out to at most 1.5 times the room area; past that, split
-  the screen vertically, each half following its seat under the same
-  area rule. Gauntlet, Enter the Gungeon and Nuclear Throne all frame
-  both players on one screen.
+- **Couch play** (desktop only, two seats on one screen): one shared view
+  while both tanks' sight boxes fit in it, then a dynamic (Voronoi) split
+  along the line between them, each half following its seat under the
+  same area rule, with a 2 px divider. No zoom-to-fit: zooming breaks the
+  block grid, and a shared screen that holds players at its edge pins a
+  tank there under fire (the complaint about Gauntlet's and Smash's
+  cameras). The LEGO games and Godot's split-screen demo do the split.
 
 ## 7. What is off screen
 
@@ -365,13 +375,20 @@ change alone.
   each side and 18 mm up), slide it along the edge until it is clear.
 - **Distance** by size and opacity: full at one screen away, 60% size and
   55% opacity at four. The frog's arrow carries its distance in cells.
-- **Clustering.** Enemies whose arrows land within about 22 pt merge into
-  one arrow with a count; at most eight arrows; teammates and objectives
-  are never merged away.
+- **Clustering and priority.** Enemies whose arrows land within about
+  22 pt merge into one arrow with a count; at most eight arrows, filled by
+  priority: lane threats, teammates, the frog, then the nearest enemies,
+  the rest folded into one count per edge. Teammates and objectives are
+  never merged away.
 - **The lane warning.** An enemy that is lined up on your row or column
-  inside the fire range pulses red at the edge; the frame it fires, its
-  arrow flashes white. That is 0.25 s of settle plus the flight time in
-  which to step out of the lane.
+  inside the fire range pulses red at the edge, on the screen of the seat
+  it is lined up on only, from the moment its aim starts to settle; the
+  frame it fires, its arrow flashes white. That is 0.25 s of settle plus
+  the flight time in which to step out of the lane. Battlefield 4's scope
+  glint, visible only near the sniper's line of aim, is the same idea.
+- **Where the hit came from.** A red arc on your own tank points at
+  whoever just hit you, for most of a second: bongbong has no audio,
+  the channel most shooters use for off-screen danger.
 - **Teammates** in their ring colour with their `P2`..`P8` label; a
   wrecked teammate waiting at a gate shows there.
 - **The frog** (Protect) in green with its distance; the enemy frog
@@ -379,8 +396,10 @@ change alone.
 - **Wave gates** flash amber for a few seconds when a tank rolls in, using
   the `WaveStarted` and `TankEntered` events nothing renders today.
 - **Concealment holds.** An enemy in tall grass gets no arrow unless it
-  fired in the last 1.5 s, the same rule its sprite follows. At night or
-  in fog, arrows follow the sky's sight factor for the same reason.
+  fired in the last 1.5 s or is within about two cells, the same rule its
+  sprite follows; when it slips into the grass it leaves a hollow
+  last-seen marker that never moves. At night or in fog, arrows follow
+  the sky's sight factor for the same reason.
 - **The minimap** is for objectives and clusters: the field at a glance,
   the view rectangle, teammates, the frog, enemies that are not
   concealed. On by default on tablets and desktops under the top-right
@@ -488,6 +507,10 @@ starts the round as today.
   scales a windowed app's scene when the user resizes it. A camera that
   fills any aspect handles windowed iPads, Stage Manager and freeform
   Android windows without a special case.
+- **Google Play's Level Up guidelines** ask landscape games to fill 4:3,
+  16:10 and 21:9 screens without letterboxing and to keep UI clear of
+  cutouts and system bars. Field maps already fill; arenas should draw
+  their margins as out-of-bounds ground rather than flat bars.
 - **Mobile Safari** has no element fullscreen on iPhone and keeps its
   toolbar on a page that never scrolls; `viewport-fit=cover` with
   `env(safe-area-inset-*)` is already in the page. The camera removes the
@@ -504,6 +527,7 @@ starts the round as today.
 | Shaders | `plasma_orb.fs`, `flame_jet.fs` (and their `static/web/` twins) take a camera origin uniform instead of assuming the target is the field; the shockwave works in world pixels, not field UV; the weather light pass's sun gradient in world space and its vignette in screen space; the sky pass's seat clearings through the camera. |
 | Culling | `ground::draw`, `draw_current`, every `paint_*` stage, weather lights and occluders, and the effect lists skip what is outside the view plus a margin (the largest light or blast radius). |
 | Effect caps | `SCORCH_MAX` and `DECAL_MAX` are world state and cap the whole map; a field map needs larger caps or per-region caps. Particles and shocks are client-side and can prefer what is on screen. |
+| Weather fallback | A device whose weather shaders fail draws every sky clear, so its player sees through night and fog. Fall back to darkness without shaders (a multiply rectangle at the ambient light, additive discs at the lights) and report it in `status`. Check that the halved `fx_density` on phones does not thin smoke that hides tanks. |
 | UI | Banners, dialogs, lobby, level select, end screen and the stick move to screen space at a UI scale in points; `touch_*` knobs move from bitmap pixels to points. |
 | Simulation | `Terrain::build` borrows the water layout instead of cloning it; flow fields limited to a radius around each seat or updated every few ticks on field maps; A* scratch arrays reused. |
 | Wire | Positions fit maps up to about 255 cells a side and cell keys up to 65 535 cells; `LASER_MAX_RANGE` becomes the map diagonal; the `Welcome`'s map TOML grows with the map. |
@@ -516,7 +540,12 @@ starts the round as today.
   alerts the whole pack, and patrolling enemies head to the alert from
   anywhere. On a field map that drains every patrol on the map toward one
   fight; the alert needs a radius (a few screens) or a chain (enemies
-  alert neighbours within sight).
+  alert neighbours within sight), and guards need a home and a leash.
+- **Far enemies should sleep.** An enemy with no seat or frog within a
+  few screens of path distance can stop thinking and routing until a
+  hit, an alert or a seat wakes it, and the rest can think every k-th
+  tick, staggered by owner slot. Both are pure functions of positions,
+  so replays hold; the probe re-baselines.
 - **Band spawns are fractions of the shorter side** (0.272 to 0.4), which
   on a 54-row map is a ring 470 to 690 px in from the edges. Field maps
   need spawns relative to the seats: outside every seat's sight box,
@@ -533,7 +562,87 @@ starts the round as today.
   minimap and the objective arrows are for; a Protect field map should
   keep the frog within a couple of screens of the start.
 
-## 13. Plan
+## 13. Patterns from shipped games
+
+docs/large-maps-patterns.md catalogues 72 patterns from shipped games,
+each with its sources, how far each source was verified, and what
+bongbong should take: 40 to adopt, 21 to adapt, 4 bongbong already
+follows, 7 to skip. The ones that confirm the recommendation above:
+
+- **Same area has shipped.** Teeworlds keeps its view area constant
+  whatever the window's shape, with per-axis caps; Wild Rift answered
+  tablet players who saw less than phones by splitting the difference,
+  more vertical view and less horizontal. Overwatch caps 21:9 for that
+  reason in its director's words; StarCraft II and Brawl Stars cap or
+  pillarbox wide screens too, for reasons their players report.
+- **The sight box has a precedent, in reverse.** Diablo II: Resurrected
+  removed ultrawide support because its monsters react only inside the
+  original view, so wide screens hit monsters that never answered; shoot
+  'em up design has long held that off-screen enemies should not fire.
+- **The lane warning is a scope glint.** Battlefield 4 shows a glint only
+  near the sniper's line of aim, and Battlefield's lock warning beeps
+  while a lock builds and goes solid when it lands.
+- **Hidden tanks that fire are revealed, briefly.** Call of Duty's red
+  minimap dots, League of Legends' two-second reveal from brush, Brawl
+  Stars' bushes that hide only beyond two tiles.
+- **The HUD layout is the genre's.** Honor of Kings, Pokémon Unite and
+  PUBG Mobile put information in the top corners and leave the bottom
+  ones to the thumbs, as Apple's guidance asks; Brawl Stars draws health
+  and ammo on the brawler.
+- **The pixel camera is a known technique.** Godot's pixel camera and
+  raylib's own example snap the camera and slide the finished picture by
+  the remainder; Celeste closes a fixed fraction of the gap per second.
+- **Spawning out of sight and within reach** is how Vampire Survivors,
+  Terraria and Left 4 Dead keep fights near the players.
+
+What the catalogue changed or added:
+
+1. **Couch play splits rather than zooms** (section 6).
+2. **A failed weather shader must not clear the sky** (section 11):
+   today it draws night as day, the "low settings see more" problem
+   Counter-Strike 2, PUBG and Rust had to patch.
+3. **Arrows by priority, warnings by target, a hit arc, last-seen
+   markers and a proximity reveal** (section 7).
+4. **A probe for the reverse unfairness:** count seat hits on enemies
+   outside that seat's sight box, which cannot fire back until they close
+   in.
+5. **Bounded AI on large maps** (section 12): chained alerts with leashes
+   (World of Warcraft, Diablo II, Helldivers 2), a simulation bubble and
+   staggered thinking (Minecraft, Cataclysm: DDA, Unreal's significance
+   manager), spawns and gates by path distance outside every sight box
+   with stragglers re-rolled, re-entry through the gate nearest the
+   living seats (Battlefield, Halo: Reach), a pacing director with relax
+   phases (Left 4 Dead), and field maps authored as lanes so the walk
+   from a gate to the fight stays near 15 s.
+6. **HUD sizes in points.** Today the bar's 10 px labels render at about
+   6.8 pt on an iPhone 15 and the 44 px lobby buttons at 27 to 32 pt,
+   under Apple's 11 pt text and 44 pt target floors. Add a UI scale
+   separate from the world zoom (Stardew Valley, Terraria), hints that
+   follow the input last used, a fade while play is under a cluster, seat
+   numbers on every chip and arrow (eight colours cannot all stay
+   distinct), and revisit the build-time stick side, which shipped games
+   make a setting.
+7. **Arenas draw their margins.** Google Play's Level Up guidelines and
+   Apple's WWDC24 advice both ask games not to letterbox; arenas fill
+   their margins with out-of-bounds ground beyond the boundary walls
+   instead of flat bars.
+8. **The builder grows large-map tools:** play from here (Unreal,
+   Ultimate Doom Builder, Super Mario Maker 2), a lint panel that jumps to
+   each finding with quick fixes (Ultimate Doom Builder), a clear check
+   before a custom map can be hosted (Super Mario Maker 2, Trackmania),
+   rectangle select and stamps, fills and a scatter brush (Tiled), a
+   resize anchor (Tiled, Wesnoth), touch slop before a stroke commits,
+   and thumbnails rendered on save (OpenRA).
+9. **One motion switch,** seeded by the OS's reduce-motion setting:
+   shake at off, 50 % or 100 %, attenuated by distance from the viewer
+   (OpenRA); the establishing shot on a level's first play only, and
+   skippable.
+
+The Camera Lab demonstrates several of these: the establishing shot,
+play from here, a loupe over the painted cell, the hit arc and the
+last-seen markers.
+
+## 14. Plan
 
 Each step ships alone. Step 1 changes no picture; step 2 changes only
 field maps, which include the seven levels bigger than 36 x 18; step 3
@@ -546,24 +655,30 @@ probe.
    map must not change.
 2. **The follow camera for field maps.** The map class and the `view` key,
    the same-area rule with the aspect clamp and the whole-block snap, the
-   sub-block present, look-ahead inside the sight box, cuts, spectating;
-   `status` reports it.
+   sub-block present, look-ahead inside the sight box, cuts, spectating,
+   the couch split, one motion switch seeded by the OS; `status` reports
+   it.
 3. **The HUD in the corners.** Corner clusters, vitals on the tank, a UI
-   scale in points; the bar stays for the builder.
-4. **Off-screen awareness.** Edge arrows, the lane warning, gate flashes,
-   the minimap.
+   scale and minimum sizes in points, input-aware hints, seat numbers, a
+   fade under play; arenas draw their margins; the bar stays for the
+   builder.
+4. **Off-screen awareness.** Edge arrows by priority, the targeted lane
+   warning, the hit arc, last-seen markers, gate flashes, the minimap.
 5. **Fair fire.** The sight box as a room rule; the AI fires only from
-   inside it; spawns and gates follow it; `just probe-fixtures`
-   re-baselined with a probe check that no shot comes from outside the
-   box.
-6. **The builder.** Its camera, gestures, minimap navigator, the paint
-   threshold, the map size setting, incremental ground rebuilds,
-   thumbnails.
-7. **Large-map content.** Regional alerts, seat-relative spawns, gate
-   choice, effect caps, a first field level, the study map in the probe
-   sweeps, and the Android `appCategory` fix.
+   inside it; spawns and gates follow it; a weather fallback that keeps
+   the dark; `just probe-fixtures` re-baselined with probe checks that no
+   shot comes from outside the box and counting hits on enemies outside
+   it.
+6. **The builder.** Its camera, gestures with touch slop, the loupe, the
+   minimap navigator, the paint threshold, play from here, the lint panel,
+   the clear check, select and stamps, fills and scatter, the map size
+   setting with an anchor, incremental ground rebuilds, thumbnails.
+7. **Large-map content.** Chained alerts with leashes, sleeping and
+   staggered far enemies, spawns and gates by path distance, re-entry
+   near the team, a pacing director, effect caps, a first field level,
+   the study map in the probe sweeps, and the Android `appCategory` fix.
 
-## 14. Open questions
+## 15. Open questions
 
 - **The area.** 578 cells keeps phones at 7.5 to 9.3 mm and gives a 1080p
   monitor a 35 mm tank. Decide with a phone and a monitor side by side on
@@ -576,13 +691,16 @@ probe.
   vertically the right balance, or should the sight box be taller and
   phones accept a slightly smaller tank?
 - **Minimap on phones.** Off, compact, or a tap-to-peek overlay?
-- **Couch split.** Vertical split past 1.5 times the area, or a fixed
-  leash that keeps both tanks on one screen?
+- **Stick side.** The steering side is a build-time choice on purpose;
+  shipped games (Brawl Stars, Call of Duty: Mobile) make it a setting.
+  Keep it a build, or add the setting and mirror the HUD with it?
 
-## 15. Sources
+## 16. Sources
 
 Verification: [read] opened and read; [summary] from a search summary of
 the page, not opened; [forum] community source; unverified where stated.
+The sources for section 13 are listed per pattern in
+docs/large-maps-patterns.md.
 
 Code (this repository): `src/view.rs`, `src/app.rs`, `src/render/game.rs`,
 `src/render/weather.rs`, `src/render/shockwave.rs`, `src/ground.rs`,
