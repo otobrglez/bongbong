@@ -956,7 +956,11 @@ impl Session {
         } else if chrome.leave_dialog {
             let r = leave_dialog_rects(ui.area);
             out.extend([("leave".to_string(), r.leave), ("stay".to_string(), r.stay)]);
-        } else if let Some(r) = chrome.result.as_ref().and_then(|view| result_layout(ui.area, view).buttons) {
+        } else if self.driver == Driver::Play
+            && let Some(r) = chrome.result.as_ref().and_then(|view| result_layout(ui.area, view).buttons)
+        {
+            // Only play draws the end screen: the builder over a decided
+            // round shows none of its buttons.
             out.extend([("levels".to_string(), r.levels), ("again".to_string(), r.again)]);
             out.extend(r.next.map(|next| ("next".to_string(), next)));
         }
@@ -1762,6 +1766,20 @@ mod session_tests {
     /// themselves out (`hud::UiFrame`).
     fn area() -> Rect {
         crate::hud::UiFrame::plain((1088.0, 576.0)).area
+    }
+
+    /// The end screen's buttons are play's: the builder over a decided
+    /// round draws none of them, so it reports none either.
+    #[test]
+    fn the_end_screens_buttons_are_reported_only_in_play() {
+        let mut s = level_session(two_levels(), 0);
+        finish(&mut s, false);
+        let ui = crate::hud::UiFrame::plain((1088.0, 576.0));
+        let names = |s: &Session| s.screen_buttons(&ui).into_iter().map(|(name, _)| name).collect::<Vec<_>>();
+        assert!(names(&s).iter().any(|n| n == "again"), "{:?}", names(&s));
+        s.press_build();
+        assert_eq!(s.mode(), Driver::Build, "a decided round asks nothing on the way out");
+        assert!(!names(&s).iter().any(|n| n == "again" || n == "levels" || n == "next"), "{:?}", names(&s));
     }
 
     fn result_rects(s: &Session) -> Option<crate::hud::ResultRects> {
