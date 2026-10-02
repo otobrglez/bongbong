@@ -474,6 +474,26 @@ struct Args {
     /// are all in the two cells beside the choke mouth" (§6.3).
     #[arg(long)]
     heatmap: bool,
+
+    /// Give every seat a screen of `WxH` field pixels (`Game::set_seat_screen`,
+    /// docs/large-maps-follow-camera.md §5), the way a window on a field map
+    /// does: fair fire then bounds enemy fire at each seat by it, and the
+    /// round's summary counts the enemy shots fired from within attack
+    /// range of a seat but outside every seat's fire box. Without it every
+    /// seat has no screen and the rule is off, as in every round before.
+    #[arg(long, value_parser = parse_screen)]
+    screen: Option<(f32, f32)>,
+}
+
+/// `--screen`'s `WxH`, positive field pixels.
+fn parse_screen(s: &str) -> Result<(f32, f32), String> {
+    let (w, h) = s.split_once('x').ok_or_else(|| format!("expected WxH, got {s:?}"))?;
+    let w: f32 = w.trim().parse().map_err(|_| format!("bad width in {s:?}"))?;
+    let h: f32 = h.trim().parse().map_err(|_| format!("bad height in {s:?}"))?;
+    if w <= 0.0 || h <= 0.0 {
+        return Err(format!("{s:?} must be positive"));
+    }
+    Ok((w, h))
 }
 
 /// Every seat's input for `frame`: seat 0 on `--scenario`, the rest on
@@ -1477,6 +1497,14 @@ struct RamTally {
     /// it, and `Event::Ram` carries one roll for two parties. Read it as how
     /// hard the pack is shoving itself, not as harm done.
     rolled_damage: f32,
+    /// Enemy shots fired from within attack range of a seat (`--screen`):
+    /// all of them, and those fired from outside every seat's fire box -
+    /// what fair fire exists to stop.
+    shots_near: u32,
+    shots_off_screen: u32,
+    /// The off-screen ones fired while the shooter's action was a shot at
+    /// a player (`attack`, `snipe`) rather than at a wall or a frog.
+    shots_off_screen_attacking: u32,
 }
 
 struct RoundResult {
@@ -1493,6 +1521,44 @@ struct RoundResult {
     /// reported, so a JSONL record names the rules it played under.
     mission: bongbong::level::Mission,
     spawn: bongbong::level::SpawnKind,
+}
+
+/// Tally this frame's enemy shots for `--screen`: each one fired within
+/// `enemy_attack_range` of a live seat, and whether it came from outside
+/// every seat's fire box (`simulation::sight::in_fire_box`, read whatever
+/// `fair_fire` says, so the rule's off position is measurable too).
+fn count_off_screen_shots(
+    game: &Game,
+    screen: (f32, f32),
+    first_enemy: usize,
+    actions: &mut BTreeMap<usize, &'static str>,
+    rams: &mut RamTally,
+) {
+    let t = bongbong::tuning::tuning();
+    for event in game.events() {
+        if let Event::AiAction { slot, to: Some(to), .. } = event {
+            actions.insert(*slot, to);
+        }
+    }
+    let snaps = game.tank_snapshots();
+    let seats: Vec<Position> = snaps.iter().filter(|s| s.is_player && !s.entering && s.damage < bongbong::MAX_DAMAGE).map(|s| s.position).collect();
+    for event in game.events() {
+        let Event::Fired { slot, .. } = event else { continue };
+        if *slot < first_enemy {
+            continue;
+        }
+        let Some(me) = snaps.iter().find(|s| s.slot == *slot).map(|s| s.position) else { continue };
+        if !seats.iter().any(|seat| seat.distance_to(me) <= t.enemy_attack_range) {
+            continue;
+        }
+        rams.shots_near += 1;
+        if !seats.iter().any(|&seat| bongbong::simulation::sight::in_fire_box(Some(screen), seat, me, &t)) {
+            rams.shots_off_screen += 1;
+            if matches!(actions.get(slot), Some(&"attack" | &"snipe")) {
+                rams.shots_off_screen_attacking += 1;
+            }
+        }
+    }
 }
 
 /// Runs one round to completion (or the frame limit). `trace` controls
@@ -1532,6 +1598,15 @@ fn run_round(
     };
     let _ = FIELD.set(game.map.field_size());
     game.init(field_width(), field_height());
+    for seat in 0..args.players as usize {
+        game.set_seat_screen(seat, args.screen);
+    }
+    // Which action each enemy is on, for `--screen`'s tally: the AI trace
+    // is events only, so the round plays the same with it on.
+    let mut actions: BTreeMap<usize, &'static str> = BTreeMap::new();
+    if args.screen.is_some() {
+        game.trace_ai = true;
+    }
     if trace {
         // Which chassis actually won the `--tank` / `player_tank` knob /
         // map `tank` / random race - the header line can only echo the
@@ -1575,6 +1650,9 @@ fn run_round(
                 }
                 rams.rolled_damage += damage;
             }
+        }
+        if let Some(screen) = args.screen {
+            count_off_screen_shots(&game, screen, first_enemy, &mut actions, &mut rams);
         }
         check_anomalies(&mut tracks, &mut invariant_flagged, &game, round, frame, &mut totals, heat);
 
@@ -1922,6 +2000,9 @@ fn main() -> ExitCode {
         let totals = result.totals;
         grand_rams.pair += result.rams.pair;
         grand_rams.into_player += result.rams.into_player;
+        grand_rams.shots_near += result.rams.shots_near;
+        grand_rams.shots_off_screen += result.rams.shots_off_screen;
+        grand_rams.shots_off_screen_attacking += result.rams.shots_off_screen_attacking;
         grand_rams.rolled_damage += result.rams.rolled_damage;
         if sweep {
             if totals.total() > 0 {
@@ -1965,6 +2046,12 @@ fn main() -> ExitCode {
             "probe: rams: enemy-pair={} into-player={} rolled-damage={:.0}",
             grand_rams.pair, grand_rams.into_player, grand_rams.rolled_damage,
         );
+        if args.screen.is_some() {
+            println!(
+                "probe: enemy shots in range of a seat={} from off every screen={} (attacking or sniping={})",
+                grand_rams.shots_near, grand_rams.shots_off_screen, grand_rams.shots_off_screen_attacking,
+            );
+        }
         if !flagged.is_empty() {
             let recap = flagged
                 .iter()

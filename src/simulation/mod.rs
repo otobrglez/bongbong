@@ -26,6 +26,7 @@ pub mod debug;
 mod engage;
 mod flame;
 mod hits;
+pub mod sight;
 mod missiles;
 pub mod present;
 mod props;
@@ -626,6 +627,13 @@ pub struct Game {
     /// (`set_seat_view`, docs/online-coop-prd.md §4.16). `None` for a seat
     /// with no client view (a local round, a bot).
     seat_view: [Option<(u32, u8)>; MAX_SEATS],
+    /// How much of the field each seat's screen shows, in field pixels:
+    /// the window's on a field map, the seat's packets in a room
+    /// (`set_seat_screen`). What fair fire bounds an enemy's fire at that
+    /// seat by (`sight`). `None` - a map drawn whole, the probe, a bot -
+    /// puts no bound on it. A setting of the window, not of the round, so
+    /// `init` keeps it.
+    seat_screen: [Option<(f32, f32)>; MAX_SEATS],
     /// The update a seat's client owns its hull for (`accept_seat_pose`),
     /// by the frame number that update will run as; `drive_player` puts
     /// nothing on it that frame, since the pose already did. One update
@@ -1956,6 +1964,30 @@ impl Game {
     /// The tick of the world a seat's client was drawing when it made the
     /// input this tick applies (`IntentMsg::view_tick`/`view_frac`); set
     /// by the room before the update, read by lag compensation.
+    /// Tell the round how much of the field `seat`'s screen shows (field
+    /// pixels), or that it shows the whole map (`None`): what fair fire
+    /// bounds enemy fire at that seat by (`sight`). Written at the frame
+    /// boundary - by `app.rs` from the window, by a room from the seat's
+    /// packets - never during an update.
+    pub fn set_seat_screen(&mut self, seat: usize, screen: Option<(f32, f32)>) {
+        if let Some(s) = self.seat_screen.get_mut(seat) {
+            *s = screen.filter(|&(w, h)| w > 0.0 && h > 0.0);
+        }
+    }
+
+    /// The screen `seat` reported (`set_seat_screen`).
+    pub fn seat_screen(&self, seat: usize) -> Option<(f32, f32)> {
+        self.seat_screen.get(seat).copied().flatten()
+    }
+
+    /// Whether an enemy at `shooter` may fire at the seat standing at
+    /// `seat_pos`: inside that seat's fire box (`sight::in_fire_box`), or
+    /// always with `fair_fire` off or no screen reported.
+    pub fn fair_shot(&self, seat: usize, seat_pos: Position, shooter: Position) -> bool {
+        let t = tuning();
+        t.fair_fire == 0 || sight::in_fire_box(self.seat_screen(seat), seat_pos, shooter, &t)
+    }
+
     pub fn set_seat_view(&mut self, seat: usize, view_tick: u32, view_frac: u8) {
         if let Some(view) = self.seat_view.get_mut(seat) {
             *view = (view_tick > 0).then_some((view_tick, view_frac));
@@ -2706,6 +2738,16 @@ impl Game {
             }
         }
         let alert = self.alert_position.filter(|_| self.alert_timer > 0.0);
+        // The alert reaches the enemies within `enemy_alert_radius_cells`
+        // of the sighting; the rest keep to their own business.
+        let alert_for = |at: Position| alert.filter(|&p| sight::alert_reaches(p, at, &tuning()));
+        // Fair fire (`sight`): where each seat can be fired at from - its
+        // fire box round its tank, or anywhere for a seat with no screen.
+        let fair_on = tuning().fair_fire != 0;
+        let screens: Vec<Option<(f32, f32)>> = (0..players.len()).map(|i| self.seat_screen(i)).collect();
+        let fair = |seat: usize, shooter: Position| {
+            !fair_on || sight::in_fire_box(screens[seat], players[seat].pos, shooter, &tuning())
+        };
         if self.trace_ai && alert_before.is_some() != alert.is_some() {
             let p = alert.or(alert_before).unwrap_or(players[0].pos);
             f.events.push(Event::Alert { on: alert.is_some(), x: p.x, y: p.y });
@@ -2761,11 +2803,14 @@ impl Game {
         let reachable = |a: Position, b: Position| grid.connected(a, b);
         // One worst-case tank clear of the wall, plus a little.
         let margin = battlefield::max_tank_clearance_half_extent() + 8.0;
+        // A slot is worth holding only where its tank may fire from: in
+        // sight of the seat and inside its fire box.
         let line_of_sight = |a: Position, b: Position| f.terrain.line_of_sight(a, b);
+        let seat_sight = |seat: usize| move |a: Position, b: Position| fair(seat, a) && line_of_sight(a, b);
         if engaged[0].len() >= 2 {
             self.engage[0].assign(
                 &engaged[0],
-                &EngageCtx { target_pos: players[0].pos, width: f.width, height: f.height, margin, reachable: &reachable, line_of_sight: &line_of_sight },
+                &EngageCtx { target_pos: players[0].pos, width: f.width, height: f.height, margin, reachable: &reachable, line_of_sight: &seat_sight(0) },
                 &mut report,
             );
         }
@@ -2782,7 +2827,7 @@ impl Game {
             };
             self.engage[seat].assign(
                 &engaged[seat],
-                &EngageCtx { target_pos: players[seat].pos, width: f.width, height: f.height, margin, reachable: &reachable, line_of_sight: &line_of_sight },
+                &EngageCtx { target_pos: players[seat].pos, width: f.width, height: f.height, margin, reachable: &reachable, line_of_sight: &seat_sight(seat) },
                 &mut seat_report,
             );
             for t in seat_report.tanks {
@@ -2907,9 +2952,15 @@ impl Game {
             // and failed to be - revealing at 96px handed enemies
             // point-blank shots that never miss, and measured *worse* for
             // the player than standing in the open.
-            let fighting = &players[(ai.target_player() as usize).min(players.len() - 1)];
+            let fighting_seat = (ai.target_player() as usize).min(players.len() - 1);
+            let fighting = &players[fighting_seat];
             let player_hidden = fighting.concealed && !ai.is_hit_alerted();
-            let player_line_of_sight = !player_hidden && f.terrain.line_of_sight(tank.position, fighting.pos);
+            // Off the seat's screen counts as out of sight for shooting:
+            // the attack tier then closes in instead of holding a shot
+            // the player could not see coming (`sight`).
+            let player_line_of_sight = !player_hidden
+                && fair(fighting_seat, tank.position)
+                && f.terrain.line_of_sight(tank.position, fighting.pos);
             // A hunter's fire gate is line of *fire* to the frog: only iron
             // or another frog blocks it, so a walled-in frog gets shot at
             // through its destructible walls until they are gone. Note it
@@ -2942,7 +2993,7 @@ impl Game {
                     my_index,
                     &grid,
                     &mut f.rng,
-                    alert,
+                    alert_for(tank.position),
                     engage_target,
                     &pickups,
                     line_of_sight,
@@ -6007,6 +6058,48 @@ cells."22,14" = { kind = "wall", material = "brick" }
         }
         assert!(fired && hit_player, "fired: {fired}, hit the player: {hit_player}");
         assert!(player_snapshot(&game).damage > 0.0);
+    }
+
+    /// Fair fire: an enemy aligned on a player but off that player's
+    /// screen does not shoot; it closes in and shoots from inside the fire
+    /// box. With no screen reported the same enemy shoots from where it
+    /// stands.
+    #[test]
+    fn an_enemy_off_the_players_screen_closes_in_before_it_fires() {
+        let t = tuning();
+        // A phone-sized screen: a short fire box vertically.
+        let screen = (768.0, 384.0);
+        let (hx, hy) = sight::fire_box_half(screen, &t);
+        let start_gap = (hy + 80.0).min(t.enemy_attack_range * 0.95);
+        assert!(start_gap > hy, "the test needs an aligned spot outside the box: box {hy}, range {}", t.enemy_attack_range);
+        let run = |screen: Option<(f32, f32)>| {
+            let mut game = game_on(OPEN_MAP, 1, Some(0));
+            set_enemy_role(&mut game, Role::Player);
+            game.set_seat_screen(0, screen);
+            let player = player_snapshot(&game).position;
+            game.debug_teleport(1, Position::new(player.x, player.y - start_gap), Some(180.0)).expect("enemy in slot 1");
+            let mut shots = Vec::new();
+            for _ in 0..600 {
+                step(&mut game, Input::default());
+                let fired = game.events().iter().any(|e| matches!(e, Event::Fired { slot: 1, .. }));
+                if fired {
+                    let me = game.tank_snapshots().into_iter().find(|s| s.slot == 1).expect("enemy").position;
+                    let seat = player_snapshot(&game).position;
+                    shots.push(((me.x - seat.x).abs(), (me.y - seat.y).abs()));
+                }
+                if shots.len() >= 3 {
+                    break;
+                }
+            }
+            shots
+        };
+        let fair = run(Some(screen));
+        assert!(!fair.is_empty(), "the enemy closed in and fired");
+        for (dx, dy) in &fair {
+            assert!(*dx <= hx + 4.0 && *dy <= hy + 4.0, "fired from ({dx}, {dy}) outside the box ({hx}, {hy})");
+        }
+        let open = run(None);
+        assert!(open.first().is_some_and(|&(_, dy)| dy > hy), "with no screen it fires from where it stands: {open:?}");
     }
 
     #[test]

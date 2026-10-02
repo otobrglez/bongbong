@@ -236,6 +236,11 @@ pub struct OnlineRound<T: Transport> {
     /// it in 256ths: what every packet carries as `IntentMsg::view_tick`
     /// for lag compensation (§4.16).
     view: (u32, u8),
+    /// How much of the field this window's screen shows, in field pixels
+    /// (`set_screen`): what every packet carries as `IntentMsg::screen_w`
+    /// and `screen_h`, and the room bounds enemy fire at this seat by
+    /// (`simulation::sight`). `None` for a map drawn whole.
+    screen: Option<(f32, f32)>,
     /// When each foreign shot was first seen in flight, local ms: its
     /// catch-up into the present runs from there (`CATCH_UP_MS`).
     flying_since: std::collections::BTreeMap<u16, i64>,
@@ -297,6 +302,7 @@ impl<T: Transport> OnlineRound<T> {
             client_hull: tuning().online_client_hull,
             rtt: RttClock::default(),
             view: (0, 0),
+            screen: None,
             flying_since: std::collections::BTreeMap::new(),
             struck: std::collections::BTreeMap::new(),
             incoming_drawn: std::collections::BTreeMap::new(),
@@ -576,6 +582,12 @@ impl<T: Transport> OnlineRound<T> {
     /// this seat, and how deep the snapshot buffer is. Everything before
     /// the round - the code, the QR, the seats, the buttons - is the
     /// lobby screen's (`lobby.rs`), which this line never repeats.
+    /// Say how much of the field this window's screen shows, from the
+    /// next packet on (`screen`).
+    pub fn set_screen(&mut self, screen: Option<(f32, f32)>) {
+        self.screen = screen;
+    }
+
     pub fn status(&self) -> String {
         use crate::text::{keys, text};
         let t = text();
@@ -784,7 +796,7 @@ impl<T: Transport> OnlineRound<T> {
         // the server's press edge will see - stamped with exactly the
         // tick the server will name back in `acked`.
         let Some(msg) = self.client.prepare_intent(&out) else { return };
-        let mut msg = msg.with_view(self.view.0, self.view.1);
+        let mut msg = msg.with_view(self.view.0, self.view.1).with_screen(self.screen);
         self.pending_fire = false;
         let shots = self.predict_shots();
         if let Some(predictor) = self.predictor.as_mut() {

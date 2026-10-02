@@ -492,6 +492,7 @@ impl Room {
         let intent = read.map(|m| m.intent()).unwrap_or_default();
         if let (Some(game), Some(m)) = (self.game.as_mut(), read) {
             game.set_seat_view(0, m.view_tick, m.view_frac);
+            game.set_seat_screen(0, m.screen());
         }
         let acked = self.acked();
         // The seat's `Fired` names the intent its press came on, which an

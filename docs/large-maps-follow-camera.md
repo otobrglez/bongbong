@@ -659,8 +659,12 @@ spectating, the couch split, the motion switch, the fade under play,
 points-based UI sizing, the minimap. A phone breaks the same-area rule
 on purpose: it zooms in until a tank is about 40 points across
 (`camera_min_tank_points`), since a 5 mm tank proved too small to fight;
-fair fire then has to bound enemy fire by each seat's own view rather
-than the fixed sight box. Of the off-screen markers, the frog's is in.
+fair fire bounds enemy fire by each seat's own view rather than the
+fixed sight box (`simulation::sight`: a fire box round the tank, the
+screen less the camera's lead and dead zone; enemy tanks and towers
+fire at a seat only from inside it, an online seat's packets carry its
+screen), and the shared alert reaches 42 cells from the sighting. Of
+the off-screen markers, the frog's is in.
 
 Each step ships alone. Step 1 changes no picture; step 2 changes only
 field maps, which include the seven levels bigger than 36 x 18; step 3

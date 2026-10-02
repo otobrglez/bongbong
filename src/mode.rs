@@ -723,6 +723,20 @@ impl Session {
         }
     }
 
+    /// How much of the field this window's screen shows, in field pixels,
+    /// on a field map (`camera::viewport`), `None` while the map is drawn
+    /// whole: every seat of the local round is bounded by it for fair fire
+    /// (`simulation::sight` - a couch shares one screen), and an online
+    /// seat's packets carry it to the room.
+    pub fn set_screen(&mut self, screen: Option<(f32, f32)>) {
+        for seat in 0..crate::MAX_SEATS {
+            self.game.set_seat_screen(seat, screen);
+        }
+        if let Some(round) = &mut self.online {
+            round.set_screen(screen);
+        }
+    }
+
     /// Whether this frame's field is drawn through the follow camera: a
     /// round, a lobby or an online round on a field map
     /// (`MapFile::follows`). The builder always shows its map whole.

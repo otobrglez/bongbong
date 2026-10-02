@@ -189,6 +189,15 @@ impl Game {
         true
     }
 
+    /// Fair fire (`sight`): a player is a tower's to fire at only from
+    /// inside that player's fire box; an enemy always is.
+    fn fair_target(&self, c: &Candidate, shooter: Position) -> bool {
+        match c.owner {
+            Owner::Player(seat) => self.fair_shot(seat as usize, c.pos, shooter),
+            _ => true,
+        }
+    }
+
     /// The nearest opposing tank between `min` and `max` px that the tower
     /// can see - unconcealed too when `needs_sight` - keeping its current
     /// target until another is `tower_switch_margin_px` nearer.
@@ -199,6 +208,7 @@ impl Game {
                 && d >= min
                 && d <= max
                 && !(needs_sight && c.concealed)
+                && self.fair_target(c, tower.position)
                 && f.terrain.line_of_sight_from(tower.entity, tower.position, c.pos)
         };
         let dist = |c: &Candidate| c.pos.distance_to(tower.position);
@@ -231,6 +241,7 @@ impl Game {
             .filter(|c| {
                 tower.opposes(c.owner)
                     && box_distance(tower.position, c.hull) <= t.tesla_range
+                    && self.fair_target(c, tower.position)
                     && f.terrain.line_of_sight_from(tower.entity, tower.position, c.pos)
             })
             .min_by(|a, b| {
@@ -282,6 +293,7 @@ impl Game {
                     tower.opposes(c.owner)
                         && !hit.contains(&c.entity)
                         && c.pos.distance_to(to) <= t.tesla_chain_radius
+                        && self.fair_target(c, tower.position)
                         && f.terrain.line_of_sight(to, c.pos)
                         && !with_tank(&self.world, c.entity, Tank::is_wreck)
                 })

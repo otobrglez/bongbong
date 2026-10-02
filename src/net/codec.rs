@@ -190,9 +190,10 @@ mod tests {
     fn intent_is_two_bytes_of_body_at_low_ticks() {
         let bytes = encode(&Msg::Intent(IntentMsg { tick: 5, move_dir: 4, face: 2, fire: false, ..IntentMsg::default() }));
         // tick, move_dir, face, fire, then the pose an unowned packet
-        // leaves at zero - owned, x, y, dir, vx, vy - and the view tick
-        // and fraction before the first snapshot.
-        assert_eq!(bytes, vec![kind::INTENT, 5, 4, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        // leaves at zero - owned, x, y, dir, vx, vy - the view tick and
+        // fraction before the first snapshot, and the screen a map drawn
+        // whole leaves at zero.
+        assert_eq!(bytes, vec![kind::INTENT, 5, 4, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     }
 
     #[test]

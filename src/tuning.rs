@@ -1083,10 +1083,23 @@ tunables! {
         /// same small reachable pocket. Each candidate costs one grid
         /// pathfind check.
         wander_spread_candidates: u32 = 6 in 1 ..= 32;
-        /// Shared aggression: once any enemy sees the player, every enemy
-        /// converges on that last known position for this many seconds after
-        /// the last sighting (refreshed while it holds).
+        /// Shared aggression: once any enemy sees the player, the enemies
+        /// within `enemy_alert_radius_cells` converge on that last known
+        /// position for this many seconds after the last sighting
+        /// (refreshed while it holds).
         enemy_alert_hold_seconds: f32 = 6.0 in 0.0 ..= 60.0;
+        /// How far from the sighting the shared alert reaches, in cells:
+        /// an enemy further off keeps to its own business, so one fight on
+        /// a field map does not drain every patrol on it
+        /// (docs/large-maps-follow-camera.md §12). 42 covers every arena
+        /// (36 x 18, 40.2 cells corner to corner), so a one-screen map
+        /// plays as it did. 0 is the whole map. Live.
+        enemy_alert_radius_cells: f32 = 42.0 in 0.0 ..= 400.0;
+        /// Fair fire (`simulation::sight`): an enemy tank or tower fires at
+        /// a player only from inside that player's fire box, the part of
+        /// their screen that stays on it wherever the camera leads. Off,
+        /// enemies fire from wherever they see. Live.
+        fair_fire: i32 = 1 in 0 ..= 1;
         /// Retaliation: a hit enemy treats the player as in view for this
         /// long (`Ai::notify_hit`), per tank - shooting one makes *it* fight
         /// back, not the whole field.

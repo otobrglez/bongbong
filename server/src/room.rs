@@ -1181,6 +1181,9 @@ impl Room {
         // of the client's driving the read covers (`pose_reach_ticks`).
         let mut poses: Vec<(usize, Option<SeatPose>, u32)> = Vec::new();
         let mut views: Vec<(usize, (u32, u8))> = Vec::new();
+        // How much of the field each seat's screen shows, for fair fire
+        // (`simulation::sight`): a starved read keeps the last.
+        let mut screens: Vec<(usize, Option<(f32, f32)>)> = Vec::new();
         for (i, seat) in self.seats.iter().enumerate().take(MAX_SEATS) {
             if let Some(s) = seat
                 && s.connected()
@@ -1190,6 +1193,9 @@ impl Room {
                 input.seats[i] = read.map(|m| m.intent()).unwrap_or_default();
                 poses.push((i, read.and_then(|m| m.pose()), s.mailbox.pose_reach_ticks()));
                 views.push((i, read.map_or((0, 0), |m| (m.view_tick, m.view_frac))));
+                if let Some(m) = read {
+                    screens.push((i, m.screen()));
+                }
                 // A starved tick is a packet that did not arrive in time:
                 // a server-driven seat's client is not stamping far
                 // enough ahead for the link (§4.12), an owned seat's hull
@@ -1208,6 +1214,9 @@ impl Room {
         // compensation of its shots (docs/online-coop-prd.md §4.16).
         for &(i, (tick, frac)) in &views {
             game.set_seat_view(i, tick, frac);
+        }
+        for &(i, screen) in &screens {
+            game.set_seat_screen(i, screen);
         }
         // A client that owns its hull is put where it says before the
         // tick runs, and the seat is released to the room's own driving

@@ -304,6 +304,11 @@ pub struct IntentMsg {
     /// docs/online-coop-prd.md §4.16). Zero before the first snapshot.
     pub view_tick: u32,
     pub view_frac: u8,
+    /// How much of the field the client's screen shows, in whole field
+    /// pixels: what the room bounds enemy fire at this seat by (fair fire,
+    /// `simulation::sight`). 0 for a map the client draws whole.
+    pub screen_w: u16,
+    pub screen_h: u16,
 }
 
 impl IntentMsg {
@@ -323,6 +328,8 @@ impl IntentMsg {
             vy: 0,
             view_tick: 0,
             view_frac: 0,
+            screen_w: 0,
+            screen_h: 0,
         }
     }
 
@@ -332,6 +339,20 @@ impl IntentMsg {
         self.view_tick = view_tick;
         self.view_frac = view_frac;
         self
+    }
+
+    /// The same packet saying how much of the field the client's screen
+    /// shows (`None`: the whole map).
+    pub fn with_screen(mut self, screen: Option<(f32, f32)>) -> IntentMsg {
+        let px = |v: f32| v.round().clamp(0.0, u16::MAX as f32) as u16;
+        (self.screen_w, self.screen_h) = screen.map_or((0, 0), |(w, h)| (px(w), px(h)));
+        self
+    }
+
+    /// The screen this packet reports (`with_screen`), `None` for a map
+    /// drawn whole.
+    pub fn screen(&self) -> Option<(f32, f32)> {
+        (self.screen_w > 0 && self.screen_h > 0).then_some((self.screen_w as f32, self.screen_h as f32))
     }
 
     /// The same packet carrying where the client's own hull is, which

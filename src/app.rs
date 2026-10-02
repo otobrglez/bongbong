@@ -1355,6 +1355,9 @@ pub fn run(args: Args) {
             Some(v) => View::with_scale((bitmap.0 as f32, bitmap.1 as f32), window, v.scale),
             None => View::fit_capped((bitmap.0 as f32, bitmap.1 as f32), window, cap),
         };
+        // The screen bounds enemy fire on a field map (fair fire); it is
+        // written before this frame's update, at the frame boundary.
+        session.set_screen(viewport.map(|v| v.size));
         // The dev server's `click` reads the bitmap the way this frame
         // laid it out.
         #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]

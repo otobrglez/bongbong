@@ -17,11 +17,8 @@
 use crate::math::Vec2;
 use crate::simulation::{with_frog, with_tank, Game};
 use crate::tuning::{tuning, Tuning};
+use crate::simulation::sight::lead_room;
 use crate::{Rect, OBSTACLE_GRID_SIZE, TANK_SPRITE_SIZE};
-
-/// How much of its half-width a view that cannot hold the sight box (a
-/// zoomed phone) may lead the tank by.
-const LEAD_SHARE_ZOOMED: f32 = 0.3;
 
 /// The narrowest and widest a field map's view gets. Between them every
 /// screen fills edge to edge; past them (a 32:9 monitor) the view keeps
@@ -187,13 +184,10 @@ impl FollowCamera {
             self.base.y = self.base.y.clamp(s.pos.y - dz, s.pos.y + dz);
             // The lead spends only the room outside the sight box, so the
             // box stays on screen behind the tank as well as ahead of it.
-            // A view zoomed in past the sight box (a phone) still leads,
-            // by a share of itself.
-            let spare = |half: f32, sight: f32| {
-                if half >= sight + cell / 4.0 { half - sight - cell / 4.0 } else { half * LEAD_SHARE_ZOOMED }
-            };
-            let spare_x = spare(view.0 / 2.0, t.camera_sight_x_cells * cell);
-            let spare_y = spare(view.1 / 2.0, t.camera_sight_y_cells * cell);
+            // The lead's room is the fire rule's too (`sight::lead_room`),
+            // so enemy fire is never bounded by more than the view shows.
+            let spare_x = lead_room(view.0 / 2.0, t.camera_sight_x_cells * cell);
+            let spare_y = lead_room(view.1 / 2.0, t.camera_sight_y_cells * cell);
             let reach = t.camera_look_ahead_cells * cell * if s.moving { 1.0 } else { 0.35 };
             let want = match s.facing {
                 Some(f) => Vec2::new(f.x * reach.min(spare_x), f.y * reach.min(spare_y)),
