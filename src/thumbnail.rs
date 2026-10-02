@@ -28,7 +28,7 @@ pub const DEFAULT_SEED: u64 = 0xB0B5;
 
 /// What the thumbnail leaves out of `paint_standing`: the locate ripple is
 /// a two-second cue, not the map.
-pub const PAINT: PaintOptions = PaintOptions { locate_cue: false };
+pub const PAINT: PaintOptions = PaintOptions { locate_cue: false, vitals: false };
 
 /// How a map is staged for its thumbnail.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

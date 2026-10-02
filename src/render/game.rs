@@ -361,7 +361,7 @@ impl Game {
             None => {
                 rl.draw_texture_mode(thread, scene_target, |mut d| {
                     d.clear_background(Color::WHITE);
-                    self.paint_field_lit(&mut d, textures, None);
+                    self.paint_field_lit(&mut d, textures, None, layout.corners);
                     self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, 1.0);
                 });
             }
@@ -378,7 +378,7 @@ impl Game {
                     let first: &mut RenderTexture2D = if first_in_scene { &mut *scene_target } else { &mut *lit_target };
                     rl.draw_texture_mode(thread, first, |mut d| {
                         d.clear_background(Color::WHITE);
-                        self.paint_field_lit(&mut d, textures, plan.ground.then_some((&mut passes, &frame)));
+                        self.paint_field_lit(&mut d, textures, plan.ground.then_some((&mut passes, &frame)), layout.corners);
                         if !plan.lit {
                             self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools);
                         }
@@ -873,7 +873,7 @@ impl Game {
     /// floor, the fires on it, the tiles and their glows, and everything
     /// standing on it. `ground` is the weather's ground pass, drawn in
     /// place of the bare ground tileset.
-    fn paint_field_lit<D: RaylibDraw>(&self, d: &mut D, textures: &Textures, ground: Option<(&mut Passes, &WeatherFrame)>) {
+    fn paint_field_lit<D: RaylibDraw>(&self, d: &mut D, textures: &Textures, ground: Option<(&mut Passes, &WeatherFrame)>, vitals: bool) {
         // The field itself is painted through the `Canvas` trait in the
         // three stages `mapshot` also runs on a CPU canvas (`paint_floor`,
         // `paint_tiles`, `paint_standing`); between them come the layers
@@ -951,7 +951,7 @@ impl Game {
             }
         });
 
-        self.paint_standing(&mut GpuCanvas::new(d, textures), PaintOptions { locate_cue: true });
+        self.paint_standing(&mut GpuCanvas::new(d, textures), PaintOptions { locate_cue: true, vitals });
     }
 
     /// What shines by its own light, over the lit field and so as bright

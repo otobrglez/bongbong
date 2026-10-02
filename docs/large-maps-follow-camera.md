@@ -649,9 +649,14 @@ are in, on the crop path: pass 1 still draws the whole battlefield and
 pass 2 blits the camera's part of it, so step 1's viewport-sized targets
 and culling are still to come. The level button stays first in the left
 cluster rather than moving to the right one, so every hit test keeps its
-rect. Not yet: the sub-block present, spectating, the couch split, the
-motion switch, vitals on the tank, the fade under play, points-based UI
-sizing.
+rect. Vitals on the tank are in as ammo pips round the bottom of each
+player's tank, beside the corners rather than instead of them, and the
+follow lag defaults to 0 (the view is locked to the tank, with its dead
+zone and look-ahead). The minimap is decided as a player setting: off by
+default, on by itself on maps over four screens, M or a map button to
+switch it, the choice remembered. Not yet: the sub-block present,
+spectating, the couch split, the motion switch, the fade under play,
+points-based UI sizing, the minimap.
 
 Each step ships alone. Step 1 changes no picture; step 2 changes only
 field maps, which include the seven levels bigger than 36 x 18; step 3

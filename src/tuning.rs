@@ -1734,8 +1734,10 @@ tunables! {
         camera_view_area_cells: f32 = 578.0 in 200.0 ..= 2000.0;
         /// How long the camera takes to catch the tank, in seconds: the
         /// smooth time of a critically damped spring, so it never
-        /// overshoots or sways. Live.
-        camera_follow_seconds: f32 = 0.16 in 0.0 ..= 1.0;
+        /// overshoots or sways. 0 locks the view to the tank (with its
+        /// dead zone and look-ahead): in a fast game any lag reads as the
+        /// screen trailing the controls. Live.
+        camera_follow_seconds: f32 = 0.0 in 0.0 ..= 1.0;
         /// Half the side of the box, in cells, the tank moves in before
         /// the camera follows: small corrections and wall slides then
         /// leave the screen still. Live.

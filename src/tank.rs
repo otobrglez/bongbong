@@ -1054,6 +1054,28 @@ impl Tank {
         }
     }
 
+    /// The weapon the trigger fires and how full it is, 0..=1: against
+    /// `max_shells` for the cannon, against one pickup's worth for a
+    /// special (more than one pickup reads full). What the ammo pips under
+    /// a player's ring show (`draw_ammo_pips`).
+    pub fn active_load(&self) -> (ActiveWeapon, f32) {
+        let t = tuning();
+        let weapon = self.active_weapon();
+        let full = match weapon {
+            ActiveWeapon::Shell => t.max_shells as f32,
+            ActiveWeapon::Laser => t.laser_charges_per_pickup as f32,
+            ActiveWeapon::Plasma => t.plasma_ammo_per_pickup as f32,
+            ActiveWeapon::Minigun => t.minigun_ammo_per_pickup as f32,
+            ActiveWeapon::Missiles => t.missile_ammo_per_pickup as f32,
+            ActiveWeapon::Flamethrower => t.flame_fuel_per_pickup,
+        };
+        let have = match weapon {
+            ActiveWeapon::Flamethrower => self.flame_fuel.max(0.0),
+            _ => self.weapon_ammo(weapon) as f32,
+        };
+        (weapon, if full > 0.0 { (have / full).clamp(0.0, 1.0) } else { 0.0 })
+    }
+
     /// The flamethrower's slot readout: fuel in whole seconds, rounded
     /// up, 0 when dry.
     pub fn flame_fuel_seconds(&self) -> i32 {
@@ -2062,6 +2084,44 @@ pub fn draw_player_ring(c: &mut impl Canvas, tank: &Tank, time: f32) {
     draw_ground_ring(c, tank, time, style, player_health_ring_visibility(tank));
 }
 
+/// How many ammo pips run along the bottom of a player's ring, and the
+/// arc they span, centred on 6 o'clock.
+pub const AMMO_PIPS: usize = 10;
+const AMMO_PIP_ARC_DEG: f32 = 110.0;
+
+/// The active weapon's ammo round the bottom of a player's tank, the
+/// on-tank half of a field map's HUD (docs/large-maps-follow-camera.md
+/// §8): `AMMO_PIPS` blocks of 4 px on the 2 px grid on an arc just outside
+/// the sprite, each over a block of shadow, lit from the left for `load`
+/// (`Tank::active_load`, any ammo at all lights one) in the weapon's HUD
+/// colour and the rest a dark slot, so a glance at the tank says what
+/// fires and how much is left. Drawn over the tank, so the hull never
+/// hides them. Nothing on a wreck.
+pub fn draw_ammo_pips(c: &mut impl Canvas, tank: &Tank, load: f32, color: Color) {
+    if tank.is_wreck() {
+        return;
+    }
+    let radius = tank.sprite_size() * 0.5 + 6.0;
+    let lit = if load > 0.0 { ((load * AMMO_PIPS as f32).ceil() as usize).max(1) } else { 0 };
+    let slot = Color::new(0, 0, 0, 130);
+    let shadow = Color::new(0, 0, 0, 110);
+    let step = AMMO_PIP_ARC_DEG / (AMMO_PIPS - 1) as f32;
+    for i in 0..AMMO_PIPS {
+        // Degrees clockwise from 12 o'clock, left of 6 o'clock first.
+        let deg = 180.0 + AMMO_PIP_ARC_DEG / 2.0 - i as f32 * step;
+        let (sin, cos) = crate::trig::sin_cos(deg.to_radians());
+        let x = tank.ring_position.x + radius * sin;
+        let y = tank.ring_position.y - radius * cos;
+        let (bx, by) = ((x / 2.0).floor() as i32 * 2 - 2, (y / 2.0).floor() as i32 * 2 - 2);
+        if i < lit {
+            c.fill_rect(bx + 2, by + 2, 4, 4, shadow);
+            c.fill_rect(bx, by, 4, 4, color);
+        } else {
+            c.fill_rect(bx, by, 4, 4, slot);
+        }
+    }
+}
+
 /// Draw an enemy's health ring: the same gauge in the enemy frog's all-red
 /// ramp, its missing part a dark band at `health_ring_gap_opacity`, so a
 /// just-hit enemy at full health reads hostile rather than borrowing a
@@ -2269,6 +2329,35 @@ mod shield_ring_tests {
 #[cfg(test)]
 mod health_ring_tests {
     use super::*;
+
+    /// The pips read the active weapon against a full load and light from
+    /// the left, any ammo at all lighting one; a wreck shows none.
+    #[test]
+    fn ammo_pips_follow_the_active_load() {
+        let t = tuning();
+        let mut tank = Tank { owner: Owner::Player(0), ring_position: Position::new(100.0, 100.0), ..Tank::default() };
+        tank.shells_ammo = t.max_shells / 2;
+        let (weapon, load) = tank.active_load();
+        assert_eq!(weapon, ActiveWeapon::Shell);
+        assert!((load - 0.5).abs() < 0.06, "{load}");
+        let lit = |tank: &Tank, load: f32| {
+            let color = Color::new(255, 0, 255, 255);
+            let mut c = crate::canvas::CpuCanvas::blank(200, 200);
+            draw_ammo_pips(&mut c, tank, load, color);
+            let px = c.pixels().iter().filter(|p| **p == color).count();
+            assert_eq!(px % 16, 0, "whole 4 px pips");
+            px / 16
+        };
+        assert_eq!(lit(&tank, 0.5), AMMO_PIPS / 2);
+        assert_eq!(lit(&tank, 0.01), 1, "any ammo lights one pip");
+        assert_eq!(lit(&tank, 0.0), 0);
+        assert_eq!(lit(&tank, 1.0), AMMO_PIPS);
+        tank.damage = crate::MAX_DAMAGE;
+        assert!(tank.is_wreck());
+        let mut c = crate::canvas::CpuCanvas::blank(200, 200);
+        draw_ammo_pips(&mut c, &tank, 1.0, Color::new(255, 0, 255, 255));
+        assert!(c.pixels() == crate::canvas::CpuCanvas::blank(200, 200).pixels(), "nothing on a wreck");
+    }
 
     fn enemy(damage: f32, hit_flash_timer: f32) -> Tank {
         Tank { owner: Owner::Enemy(1), damage, hit_flash_timer, ..Tank::default() }

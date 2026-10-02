@@ -18,7 +18,7 @@ use crate::pickup::{draw_pickup, Pickup};
 use crate::portal::draw_portal;
 use crate::simulation::Game;
 use crate::tank::{
-    draw_enemy_ring, draw_player_locate, draw_player_ring, draw_tank, draw_tank_shadow, draw_tank_shield, Tank,
+    draw_ammo_pips, draw_enemy_ring, draw_player_locate, draw_player_ring, draw_tank, draw_tank_shadow, draw_tank_shield, Tank,
 };
 use crate::track::draw_track;
 use hecs::Entity;
@@ -47,12 +47,12 @@ enum Standing<'a> {
 }
 
 /// A tank and everything drawn on it, in the order the layers stack.
-fn draw_one_tank(c: &mut impl Canvas, tank: &Tank, role: TankRole, time: f32, shadows: bool, locate_cue: bool) {
+fn draw_one_tank(c: &mut impl Canvas, tank: &Tank, role: TankRole, time: f32, shadows: bool, opts: PaintOptions) {
     match role {
         TankRole::Player => {
             // The locate ripple under the marker so the steady ring stays
             // legible over the swelling one.
-            if locate_cue {
+            if opts.locate_cue {
                 draw_player_locate(c, tank, time, time);
             }
             draw_player_ring(c, tank, time);
@@ -72,6 +72,11 @@ fn draw_one_tank(c: &mut impl Canvas, tank: &Tank, role: TankRole, time: f32, sh
     if role != TankRole::RollIn {
         let lean = crate::pyro::smoke_lean(&crate::tuning::tuning(), tank.position, time);
         crate::pyro::draw(c, &crate::damage_stage::flames(tank, time, lean));
+    }
+    // Last, so nothing on the tank covers what it has left to fire.
+    if opts.vitals && role == TankRole::Player {
+        let (weapon, load) = tank.active_load();
+        draw_ammo_pips(c, tank, load, crate::hud::weapon_color(weapon));
     }
 }
 
@@ -116,6 +121,11 @@ pub struct PaintOptions {
     /// (`mapshot`) leaves it out - a two-second cue is not the map. The
     /// cue's other half, the `P1`/`P2` label, is text and stays in `render`.
     pub locate_cue: bool,
+    /// The active weapon's ammo as pips under each player's health ring
+    /// (`tank::draw_ammo_pips`): the on-tank half of a field map's HUD,
+    /// whose corners leave the numbers far from the tank. Arenas, under
+    /// the full bar, and thumbnails leave them out.
+    pub vitals: bool,
 }
 
 impl Game {
@@ -291,7 +301,7 @@ impl Game {
         for (key, item) in &standing {
             next_tuft = grass_up_to(c, *key, next_tuft);
             match item {
-                Standing::Tank(tank, role) => draw_one_tank(c, tank, *role, self.time, self.shadows_enabled, opts.locate_cue),
+                Standing::Tank(tank, role) => draw_one_tank(c, tank, *role, self.time, self.shadows_enabled, opts),
                 Standing::Frog(entity) => {
                     crate::simulation::with_frog(&self.world, *entity, |frog| {
                         draw_frog_ring(c, frog, self.time);
