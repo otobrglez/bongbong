@@ -51,7 +51,7 @@ use crate::render::missile::{draw_missile, draw_missile_exhaust, draw_missile_sh
 use crate::render::shell::{draw_shell, draw_shell_light, draw_shell_shadow};
 use crate::render::shot_fx::{at_nozzle, ground_light};
 use crate::render::shot_shaders::ShotShaders;
-use crate::render::shockwave::{field_to_ripple_uv, RippleFx};
+use crate::render::shockwave::RippleFx;
 use crate::render::tank::draw_player_label;
 use crate::shell::{Shell, ShellState};
 use crate::simulation::{Game, Outcome};
@@ -621,9 +621,9 @@ impl Game {
             }
         }
 
-        // The ripples are measured on the field, and the scene target holds
-        // the camera's part of it (`Camera::field_uv`).
-        let (field_w, field_h) = camera.field;
+        // The ripples are measured in the standard field's units from the
+        // corner of the camera's part of the world the scene target holds
+        // (`Camera::ripple_view`).
         for ripple in [&mut *effects.shock, &mut *effects.muzzle, &mut *effects.impact] {
             ripple.set_view(camera);
         }
@@ -637,7 +637,7 @@ impl Game {
             let mut times = [0.0f32; SHOCK_MAX];
             let mut gains = [0.0f32; SHOCK_MAX];
             for (i, shock) in self.shocks.iter().take(SHOCK_MAX).enumerate() {
-                centers[i] = field_to_ripple_uv(shock.center, field_w, field_h);
+                centers[i] = effects.shock.uv_of(shock.center);
                 times[i] = shock.time;
                 gains[i] = shock.strength;
             }
@@ -789,7 +789,7 @@ impl Game {
             // ripple shader), so this reads as a localized wobble rather than
             // redistorting the whole frame.
             for flash in self.muzzle_flashes.iter().filter(|f| !culled(cull, f.center)) {
-                let uv = field_to_ripple_uv(flash.center, field_w, field_h);
+                let uv = effects.muzzle.uv_of(flash.center);
                 effects
                     .muzzle
                     .shader
@@ -829,7 +829,7 @@ impl Game {
 
             // Same treatment for every in-flight shell-impact flash.
             for flash in self.impact_flashes.iter().filter(|f| !culled(cull, f.center)) {
-                let uv = field_to_ripple_uv(flash.center, field_w, field_h);
+                let uv = effects.impact.uv_of(flash.center);
                 effects
                     .impact
                     .shader

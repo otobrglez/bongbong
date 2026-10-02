@@ -10,7 +10,7 @@ precision mediump float;
 varying vec2 fragTexCoord;
 
 uniform sampler2D texture0;   // the rendered scene
-uniform vec2 center;          // hit point, in 0..1 UV coords (unused here)
+uniform vec2 center;          // hit point, in the ripple frame (unused here)
 uniform float time;           // seconds since the shockwave started (unused here)
 
 // Up to SHOCK_MAX (lib.rs) ripples at once. The loop bound is a literal
@@ -19,18 +19,20 @@ uniform float time;           // seconds since the shockwave started (unused her
 uniform vec2 centers[4];
 uniform float times[4];
 uniform float gains[4];       // per-ripple strength; 0 = slot unused
-uniform vec2 resolution;      // the field's size, to keep the ring round
+uniform vec2 resolution;      // the ripple frame (the standard field), to keep the ring round
 
-// The part of the field the scene target holds (`Camera::field_uv`): its
-// texture coordinate t is field UV viewUv + t * viewUvSize - (0, 0) and
-// (1, 1) for the whole field. A ripple is measured on the field, whatever
-// part of it is on screen.
+// The scene target in the ripple frame (`Camera::ripple_view`, the
+// standard field's units): its texture coordinate t is the ripple point
+// viewUv + t * viewUvSize, viewUv standing at the target's bottom-left
+// corner, where every centre is measured from too - so a ripple is the
+// same size in world pixels on every map, and the numbers stay small on a
+// large one.
 uniform vec2 viewUv;
 uniform vec2 viewUvSize;
 
-uniform float speed;          // ring growth, UV units/sec
-uniform float width;          // thickness of the distorted band, UV units
-uniform float strength;       // how hard the ring bends the image, UV units
+uniform float speed;          // ring growth, ripple units/sec
+uniform float width;          // thickness of the distorted band, ripple units
+uniform float strength;       // how hard the ring bends the image, ripple units
 uniform float duration;       // seconds the effect plays before fully fading
 
 void main() {
@@ -40,10 +42,10 @@ void main() {
     // full-screen samples. `gains[i] == 0.0` is an unused slot; a
     // zero-length loop bound is not portable in GLSL ES 100, so the loop
     // always runs SHOCK_MAX times and an empty slot simply adds nothing.
-    vec2 fieldUv = viewUv + fragTexCoord * viewUvSize;
+    vec2 rippleUv = viewUv + fragTexCoord * viewUvSize;
     vec2 offset = vec2(0.0);
     for (int i = 0; i < 4; i++) {
-        vec2 toPixel = fieldUv - centers[i];
+        vec2 toPixel = rippleUv - centers[i];
 
         // aspect-correct so the ring is a circle, not an ellipse
         vec2 corrected = toPixel;
@@ -67,6 +69,6 @@ void main() {
         }
     }
 
-    // The offset is field UV; the target spans viewUvSize of it.
+    // The offset is in ripple units; the target spans viewUvSize of them.
     gl_FragColor = texture2D(texture0, fragTexCoord + offset / viewUvSize);
 }

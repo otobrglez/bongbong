@@ -7,6 +7,26 @@ use crate::math::{Rectangle, Vec2};
 use crate::tuning::Tuning;
 use crate::Position;
 
+/// The frame every ripple - the kill shockwave, a muzzle flash, a shell
+/// impact - is measured in: the standard field, `DEFAULT_SCREEN_WIDTH` x
+/// `DEFAULT_SCREEN_HEIGHT`. Their speed, width and strength rows are in its
+/// units (x in its widths and y in its heights, made round by its aspect,
+/// so a distance is in its heights), which makes a ring the same size in
+/// world pixels on every map - an arena drawn whole and a field map the
+/// camera follows at a texel per world pixel alike - and keeps the flashes
+/// inside the quads they are drawn in.
+pub const RIPPLE_FRAME: (f32, f32) = (crate::DEFAULT_SCREEN_WIDTH as f32, crate::DEFAULT_SCREEN_HEIGHT as f32);
+
+/// A world position in the ripple shaders' frame, for a view whose scene
+/// target starts at the world point `corner` (`Camera::ripple_view`): x
+/// across from it and y up from it - a render texture reads bottom-up -
+/// in `RIPPLE_FRAME` units. Measured from the view rather than the field,
+/// so the numbers a shader works with stay small on any map, as a GLSL ES
+/// `mediump` needs them.
+pub fn ripple_uv(corner: Vec2, pos: Position) -> Vec2 {
+    Vec2::new((pos.x - corner.x) / RIPPLE_FRAME.0, (corner.y - pos.y) / RIPPLE_FRAME.1)
+}
+
 /// A ripple effect in flight: a radial-distortion ring expanding from
 /// `center`, `time` seconds after it started. Shared shape for both ripple
 /// effects in the game: the full-screen kill shockwave (`Game::shock`, at

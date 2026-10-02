@@ -2561,11 +2561,13 @@ tunables! {
         /// Kill shockwave (shockwave.fs): seconds the effect plays before
         /// clearing.
         shockwave_duration: f32 = 0.7 in 0.05 ..= 5.0;
-        /// Ring growth speed, UV units/sec.
+        /// Ring growth speed, in the standard field's heights a second
+        /// (`shockwave::RIPPLE_FRAME`, 544 px each) - the same in world
+        /// pixels on every map.
         shockwave_speed: f32 = 0.56 in 0.0 ..= 5.0;
-        /// Thickness of the distorted band, UV units.
+        /// Thickness of the distorted band, in standard field heights.
         shockwave_width: f32 = 0.08 in 0.0 ..= 1.0;
-        /// How hard the ring bends the image, UV units.
+        /// How hard the ring bends the image, in standard field heights.
         shockwave_strength: f32 = 0.045 in 0.0 ..= 0.5;
         /// Camera shake on the same kill trigger: duration (much shorter
         /// than the shockwave so it reads as one punchy hit), px offset at
@@ -2589,28 +2591,39 @@ tunables! {
         /// fading between: at 1, a blast a screen and a half from the
         /// view's middle is gone, as a blast on the far shore of a field
         /// map is. An arena's view is the whole field, which every ripple
-        /// is in, so an arena shakes as it always did. 0 stops the shake at
-        /// the margin.
+        /// is in, so an arena's shake is every ripple's whole. 0 stops the
+        /// shake at the margin.
         camera_shake_fade_screens: f32 = 1.0 in 0.0 ..= 20.0;
         /// Muzzle-flash heat haze (muzzle_flash.fs): a one-sided outward
         /// puff at the barrel. Hits full strength at the leading edge, so
         /// tuned lower than the shockwave for similar visual intensity.
         muzzle_flash_duration: f32 = 0.12 in 0.01 ..= 2.0;
+        /// Front growth, in standard field heights a second
+        /// (`shockwave::RIPPLE_FRAME`).
         muzzle_flash_speed: f32 = 0.9 in 0.0 ..= 5.0;
+        /// Thickness of the pushed band, in standard field heights.
         muzzle_flash_width: f32 = 0.032 in 0.0 ..= 0.5;
+        /// How hard the puff shoves the image, in standard field heights.
         muzzle_flash_strength: f32 = 0.015 in 0.0 ..= 0.5;
-        /// Half-extent (px) of the quad the muzzle flash is drawn into -
-        /// must contain the ring's full reach (speed * duration, in screen
-        /// px) plus its band width or it visibly clips.
+        /// Half-extent (world px) of the quad the muzzle flash is drawn
+        /// into - it must hold the puff's whole reach, speed x duration
+        /// plus the band in standard field heights of 544 px (about 76 px
+        /// at the defaults), or the puff visibly clips.
         muzzle_flash_quad_radius: f32 = 90.0 in 10.0 ..= 500.0;
         /// Shell-impact flash (impact.fs): a one-sided punch plus a warm
         /// spark at the hit point - a sharp "thwack".
         impact_flash_duration: f32 = 0.14 in 0.01 ..= 2.0;
+        /// Pulse growth, in standard field heights a second
+        /// (`shockwave::RIPPLE_FRAME`).
         impact_flash_speed: f32 = 1.1 in 0.0 ..= 5.0;
+        /// Thickness of the distorted band, in standard field heights.
         impact_flash_width: f32 = 0.02 in 0.0 ..= 0.5;
+        /// How hard the pulse bends the image, in standard field heights.
         impact_flash_strength: f32 = 0.018 in 0.0 ..= 0.5;
-        /// Half-extent (px) of the impact flash's quad; at 720px tall the
-        /// punch reaches ~125px, so 70 visibly clipped it.
+        /// Half-extent (world px) of the impact flash's quad - it must hold
+        /// the punch's whole reach, speed x duration plus the band in
+        /// standard field heights of 544 px (about 95 px at the defaults),
+        /// or the punch visibly clips.
         impact_flash_quad_radius: f32 = 130.0 in 10.0 ..= 500.0;
     }
 

@@ -299,16 +299,16 @@ impl Camera {
         Rectangle::new(-self.offset.x * self.scale, -self.offset.y * self.scale, w as f32 * self.scale, h as f32 * self.scale)
     }
 
-    /// The scene target's texture coordinates in the ripple shaders' frame
-    /// (`static/shockwave.fs`): a ripple's ring is measured in field UV - x
-    /// across the field, y up from its bottom edge, 0 to 1 - and texture
-    /// coordinate `t` of the target is field UV `origin + t * size`, which
-    /// is `(0, 0)` and `(1, 1)` for the whole field.
-    pub fn field_uv(&self) -> (Vec2, Vec2) {
+    /// The scene target in the ripple shaders' frame (`static/shockwave.fs`,
+    /// `shockwave::RIPPLE_FRAME`): the world point its texture coordinate
+    /// `(0, 0)` stands on - its bottom-left corner, a render texture reading
+    /// bottom-up - and its size in ripple units, so texture coordinate `t`
+    /// is the ripple point `t * size` from that corner, which is where every
+    /// ripple's centre is measured from too (`shockwave::ripple_uv`).
+    pub fn ripple_view(&self) -> (Vec2, Vec2) {
         let (w, h) = self.target_size();
-        let (fw, fh) = (self.field.0.max(1.0), self.field.1.max(1.0));
-        let origin = Vec2::new(self.origin.x / fw, 1.0 - (self.origin.y + h as f32) / fh);
-        (origin, Vec2::new(w as f32 / fw, h as f32 / fh))
+        let (rw, rh) = crate::shockwave::RIPPLE_FRAME;
+        (Vec2::new(self.origin.x, self.origin.y + h as f32), Vec2::new(w as f32 / rw, h as f32 / rh))
     }
 }
 
@@ -523,7 +523,8 @@ mod view_tests {
             assert_eq!(c.dest(), Rectangle::new(0.0, 0.0, field.0, field.1));
             assert_eq!(c.part(), None);
             assert_eq!(c.cull(), None, "the whole field culls nothing");
-            assert_eq!(c.field_uv(), (Vec2::new(0.0, 0.0), Vec2::new(1.0, 1.0)), "{field:?}");
+            let (rw, rh) = crate::shockwave::RIPPLE_FRAME;
+            assert_eq!(c.ripple_view(), (Vec2::new(0.0, field.1), Vec2::new(field.0 / rw, field.1 / rh)), "{field:?}");
             let p = Vec2::new(123.5, 77.25);
             assert_eq!(c.to_world(p), p);
             assert_eq!(c.to_view(p), p);
@@ -678,17 +679,40 @@ mod view_tests {
     }
 
     #[test]
-    fn field_uv_puts_the_targets_corners_on_the_views() {
-        let field = (1088.0, 544.0);
-        let c = Camera::zoomed(field, Vec2::new(700.0, 200.0), 2.0);
-        let (o, s) = c.field_uv();
-        let at = |t: Vec2| Vec2::new(o.x + t.x * s.x, o.y + t.y * s.y);
-        let near = |a: Vec2, b: Vec2| (a.x - b.x).abs() < 1e-6 && (a.y - b.y).abs() < 1e-6;
-        // A render texture reads bottom-up: coordinate (0, 1) is the
-        // view's top-left corner and (1, 0) its bottom-right.
-        let top_left = Vec2::new(c.origin.x / field.0, 1.0 - c.origin.y / field.1);
-        let bottom_right = Vec2::new((c.origin.x + c.size.0) / field.0, 1.0 - (c.origin.y + c.size.1) / field.1);
-        assert!(near(at(Vec2::new(0.0, 1.0)), top_left), "{:?} vs {top_left:?}", at(Vec2::new(0.0, 1.0)));
-        assert!(near(at(Vec2::new(1.0, 0.0)), bottom_right), "{:?} vs {bottom_right:?}", at(Vec2::new(1.0, 0.0)));
+    fn ripple_view_puts_the_targets_corners_on_the_views() {
+        let near = |a: Vec2, b: Vec2| (a.x - b.x).abs() < 1e-5 && (a.y - b.y).abs() < 1e-5;
+        for field in [(1088.0, 544.0), (2560.0, 1440.0), (8000.0, 8000.0)] {
+            let c = Camera::zoomed(field, Vec2::new(field.0 * 0.6, field.1 * 0.4), 2.0);
+            let (corner, s) = c.ripple_view();
+            let at = |t: Vec2| Vec2::new(t.x * s.x, t.y * s.y);
+            // A render texture reads bottom-up: coordinate (0, 1) is the
+            // view's top-left corner and (1, 0) its bottom-right, each the
+            // ripple point of that world point.
+            let top_left = crate::shockwave::ripple_uv(corner, c.origin);
+            let bottom_right = crate::shockwave::ripple_uv(corner, Vec2::new(c.origin.x + c.size.0, c.origin.y + c.size.1));
+            assert!(near(at(Vec2::new(0.0, 1.0)), top_left), "{:?} vs {top_left:?}", at(Vec2::new(0.0, 1.0)));
+            assert!(near(at(Vec2::new(1.0, 0.0)), bottom_right), "{:?} vs {bottom_right:?}", at(Vec2::new(1.0, 0.0)));
+            // The numbers stay the view's, however large the field.
+            assert!(s.x <= 1.0 && s.y <= 1.0, "{field:?}: {s:?}");
+        }
+    }
+
+    /// A ring is measured in the standard field's heights on every map: the
+    /// same world distance is the same ripple distance on an arena and on a
+    /// field map, wherever the view stands.
+    #[test]
+    fn a_ripple_is_the_same_size_in_world_pixels_on_every_map() {
+        let dist = |a: Vec2, b: Vec2| {
+            let (rw, rh) = crate::shockwave::RIPPLE_FRAME;
+            // The shaders' aspect correction: x scaled by the frame's.
+            (((a.x - b.x) * rw / rh).powi(2) + (a.y - b.y).powi(2)).sqrt()
+        };
+        let (from, to) = (Vec2::new(500.0, 300.0), Vec2::new(560.0, 380.0));
+        for (field, view_at) in [((1088.0, 544.0), Vec2::new(0.0, 0.0)), ((2560.0, 1440.0), Vec2::new(300.0, 120.0)), ((8000.0, 8000.0), Vec2::new(0.0, 0.0))] {
+            let c = Camera::zoomed(field, Vec2::new(view_at.x + 544.0, view_at.y + 272.0), 1.0);
+            let (corner, _) = c.ripple_view();
+            let d = dist(crate::shockwave::ripple_uv(corner, from), crate::shockwave::ripple_uv(corner, to));
+            assert!((d * crate::shockwave::RIPPLE_FRAME.1 - 100.0).abs() < 1e-3, "{field:?}: {d}");
+        }
     }
 }

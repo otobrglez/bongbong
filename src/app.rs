@@ -1055,15 +1055,13 @@ impl TuningWatch {
     }
 }
 
-/// The three ripple post-effects at one field size (their UV maths is in
-/// field pixels, so a field of another size needs them reloaded).
-fn load_ripples(rl: &mut RaylibHandle, thread: &sola_raylib::prelude::RaylibThread, width: i32, height: i32) -> (RippleFx, RippleFx, RippleFx) {
+/// The three ripple post-effects, compiled once: they measure every ring in
+/// the standard field (`shockwave::RIPPLE_FRAME`) whatever the map.
+fn load_ripples(rl: &mut RaylibHandle, thread: &sola_raylib::prelude::RaylibThread) -> (RippleFx, RippleFx, RippleFx) {
     let shock = RippleFx::load(
         rl,
         thread,
         &shader_path("shockwave.fs"),
-        width,
-        height,
         RippleTuning {
             speed: tuning().shockwave_speed,
             width: tuning().shockwave_width,
@@ -1075,8 +1073,6 @@ fn load_ripples(rl: &mut RaylibHandle, thread: &sola_raylib::prelude::RaylibThre
         rl,
         thread,
         &shader_path("muzzle_flash.fs"),
-        width,
-        height,
         RippleTuning {
             speed: tuning().muzzle_flash_speed,
             width: tuning().muzzle_flash_width,
@@ -1088,8 +1084,6 @@ fn load_ripples(rl: &mut RaylibHandle, thread: &sola_raylib::prelude::RaylibThre
         rl,
         thread,
         &shader_path("impact.fs"),
-        width,
-        height,
         RippleTuning {
             speed: tuning().impact_flash_speed,
             width: tuning().impact_flash_width,
@@ -1368,7 +1362,7 @@ pub fn run(args: Args) {
         .load_texture(&thread, "static/ui/eraser.png")
         .expect("failed loading eraser texture");
 
-    let (mut shock_fx, mut muzzle_fx, mut impact_fx) = load_ripples(&mut rl, &thread, screen_width, screen_height);
+    let (mut shock_fx, mut muzzle_fx, mut impact_fx) = load_ripples(&mut rl, &thread);
     // The plasma orb and flame jet shaders. A driver that cannot compile
     // them still plays: the bolt flies as its baked sprite and the stream
     // is its particles.
@@ -1440,7 +1434,6 @@ pub fn run(args: Args) {
     let mut composite = rl
         .load_render_texture(&thread, bitmap.0 as u32, bitmap.1 as u32)
         .expect("failed creating composite render texture");
-    let mut target_field = (screen_width as f32, screen_height as f32);
     // The follow camera's state (follow.rs), and what it last followed in -
     // a room's round or the local one, and the map - so a change of either
     // cuts.
@@ -1677,13 +1670,6 @@ pub fn run(args: Args) {
         // The field is the live mode's map's (a `restart` above may have
         // just swapped it).
         let (width, height) = session.field_size();
-        if (width, height) != target_field {
-            let (s, m, i) = load_ripples(rl, thread, width as i32, height as i32);
-            shock_fx = s;
-            muzzle_fx = m;
-            impact_fx = i;
-            target_field = (width, height);
-        }
         // How the frame lands on the window (`Presentation`), and the
         // render targets that takes. A view the dev server's `camera` tool
         // pinned outranks the map.

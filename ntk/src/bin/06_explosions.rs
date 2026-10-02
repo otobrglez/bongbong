@@ -96,7 +96,7 @@ fn main() {
 
     // The three full-screen ripple shaders the renderer resolves in pass 2.
     let ripple = |rl: &mut RaylibHandle, file: &str, speed: f32, width_: f32, strength: f32, duration: f32| {
-        RippleFx::load(rl, &thread, &format!("static/{file}"), w, h, RippleTuning { speed, width: width_, strength, duration })
+        RippleFx::load(rl, &thread, &format!("static/{file}"), RippleTuning { speed, width: width_, strength, duration })
     };
     let (mut shock, mut muzzle, mut impact) = {
         let t = tuning();
