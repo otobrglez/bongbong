@@ -118,6 +118,17 @@ pub(crate) const LINT_FINDING_W: f32 = LINT_PANEL_W - LINT_TEXT_INSET - LINT_MAR
 const LINT_JUMP_CONTEXT_CELLS: (f32, f32) = (14.0, 9.0);
 /// The gap a jump keeps between what it frames and the open CHECK panel.
 const LINT_FREE_GAP: f32 = 16.0;
+/// The loupe's side, in points on the glass - about 23 mm on a phone,
+/// twice and more what a fingertip covers - before it is cut down to
+/// whole blocks of the world at the loupe's scale.
+const LOUPE_PT: f32 = 144.0;
+/// How far the loupe stands off the point under the finger, in points:
+/// clear of the fingertip.
+const LOUPE_LIFT_PT: f32 = 44.0;
+/// The loupe's magnification over the canvas, before it is put on the
+/// nearest whole-block scale: the cell the stroke paints and part of each
+/// of its neighbours, larger than the finger leaves them.
+const LOUPE_ZOOM: f32 = 1.5;
 /// How many rows the Load list shows at once (eight fit the 480 px
 /// standard field). When there are more maps than that, the last row is a
 /// pager a tap turns (a touch screen has no wheel) and the wheel scrolls
@@ -442,6 +453,46 @@ impl LintReport {
     pub fn count(&self, severity: LintSeverity) -> usize {
         self.findings.iter().filter(|f| f.severity == severity).count()
     }
+}
+
+/// The loupe (docs/large-maps-patterns.md, "Touch editing without clashes,
+/// and a loupe"): a magnified view of the cells under a painting finger,
+/// standing clear of it, which the finger itself hides on the canvas.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Loupe {
+    /// Where it stands, in bitmap pixels: a square above the finger
+    /// (`loupe_rect`), its corner on a whole device pixel.
+    pub rect: Rectangle,
+    /// The world it shows: whole 2 px blocks a side, centred on the cell
+    /// the stroke paints, its corner on the block grid.
+    pub world: Rectangle,
+    /// Device pixels per world pixel inside it: the canvas's times
+    /// `LOUPE_ZOOM`, on the nearest whole-block scale, so every block is
+    /// whole device pixels.
+    pub device_scale: f32,
+    /// The cell the stroke paints, outlined in it.
+    pub cell: (i32, i32),
+    /// Whether the stroke erases (the outline's colour).
+    pub erase: bool,
+}
+
+/// Where a loupe of `side` stands for a finger at `finger` in `area`, all
+/// in bitmap pixels: above the finger, `lift` clear of it; wholly left of
+/// it where the finger is too near the area's right edge for it to stand
+/// centred above (the hand is below and to the right); beside it, level
+/// with it, where there is no room above; and kept inside the area.
+pub fn loupe_rect(finger: Vec2, side: f32, lift: f32, area: Rectangle) -> Rectangle {
+    let right = area.x + area.width;
+    let left_of = finger.x - lift - side;
+    let mut x = if finger.x + side / 2.0 > right { left_of } else { finger.x - side / 2.0 };
+    let mut y = finger.y - lift - side;
+    if y < area.y {
+        y = finger.y - side / 2.0;
+        x = if left_of >= area.x { left_of } else { finger.x + lift };
+    }
+    let x = x.clamp(area.x, (right - side).max(area.x));
+    let y = y.clamp(area.y, (area.y + area.height - side).max(area.y));
+    Rectangle::new(x, y, side, side)
 }
 
 /// The FILE menu's rows. `SAVE` and `SAVE AS` exist only where a file can
@@ -1973,6 +2024,60 @@ impl MapEditor {
     /// Under it a tap zooms in and a drag pans.
     fn touch_paints(&self, vp: &Viewport, rules: &CanvasRules) -> bool {
         vp.cell_mm(self.camera.scale(vp)) >= rules.paint_min_cell_mm
+    }
+
+    /// The loupe over `layout`'s canvas this frame: while one finger
+    /// paints a stroke (`gesture::Gestures::painting` - a mouse never
+    /// does) where a cell is drawn under `builder_loupe_cell_mm` on the
+    /// glass. It shows the cell the stroke paints and what is round it,
+    /// `LOUPE_ZOOM` times larger on the nearest whole-block scale, in a
+    /// square of about `LOUPE_PT` a side standing clear of the finger
+    /// (`loupe_rect`) - of the canvas point the stroke paints under, which
+    /// held past the canvas's edge is the nearest point of it, as edge
+    /// scroll paints. Its side is whole 2 px blocks of the world and its
+    /// corner a whole device pixel, so no block in it is cut or uneven.
+    pub fn loupe(&self, layout: &Layout) -> Option<Loupe> {
+        let stroke = self.stroke.as_ref().filter(|_| self.gestures.painting())?;
+        let finger = self.stroke_pointer?;
+        let vp = self.viewport_in(layout);
+        let scale = self.camera.scale(&vp);
+        if !(vp.cell_mm(scale) < CanvasRules::current().loupe_cell_mm) {
+            return None;
+        }
+        let f = layout.field;
+        let area = Rectangle::new(f.x, f.y, f.w, f.h);
+        let on_canvas = Vec2::new(finger.x.clamp(f.x, f.x + f.w - 1.0), finger.y.clamp(f.y, f.y + f.h - 1.0));
+        let device_per_px = vp.screen.device_per_px.max(1e-3);
+        let device_scale = camera::nearest_whole_block((vp.device_scale(scale) * LOUPE_ZOOM).max(camera::MIN_WHOLE_BLOCK_SCALE));
+        let block = crate::pyro::BLOCK;
+        let blocks = (vp.px(LOUPE_PT) * device_per_px / (device_scale * block)).floor().max(1.0);
+        let world_side = blocks * block;
+        let side = world_side * device_scale / device_per_px;
+        let rect = loupe_rect(on_canvas, side, vp.px(LOUPE_LIFT_PT), area);
+        let snap = |v: f32, lo: f32, hi: f32| {
+            let lo = (lo * device_per_px).ceil();
+            let hi = ((hi * device_per_px).floor()).max(lo);
+            (v * device_per_px).round().clamp(lo, hi) / device_per_px
+        };
+        let rect = Rectangle::new(
+            snap(rect.x, area.x, area.x + area.width - side),
+            snap(rect.y, area.y, area.y + area.height - side),
+            side,
+            side,
+        );
+        // The world round the stroke's cell, its corner on the block grid.
+        let middle = map::cell_to_world(stroke.last_cell.0, stroke.last_cell.1);
+        let corner = Vec2::new(
+            ((middle.x - world_side / 2.0) / block).round() * block,
+            ((middle.y - world_side / 2.0) / block).round() * block,
+        );
+        Some(Loupe {
+            rect,
+            world: Rectangle::new(corner.x, corner.y, world_side, world_side),
+            device_scale,
+            cell: stroke.last_cell,
+            erase: stroke.erase,
+        })
     }
 
     /// Do what a gesture means: a tap paints its cell (or zooms in on it
@@ -3599,6 +3704,101 @@ mod editor_tests {
             ed.update(&input, layout);
             down = now;
         }
+    }
+
+    /// Frames of fingers as `fingers` runs them, the last frame's fingers
+    /// left down.
+    fn hold_fingers(ed: &mut MapEditor, layout: &Layout, frames: &[Vec<(i32, f32, f32)>]) {
+        let mut down = false;
+        for f in frames {
+            let touches: Vec<crate::touch::TouchPoint> = f.iter().map(|&(id, x, y)| crate::touch::TouchPoint { id, pos: Vec2::new(x, y) }).collect();
+            let now = !touches.is_empty();
+            let input = BuilderInput { pointer: touches.first().map(|t| t.pos), pressed: now && !down, held: now, touches, dt: 1.0 / 60.0, ..Default::default() };
+            ed.update(&input, layout);
+            down = now;
+        }
+    }
+
+    /// A one-finger stroke from `from` across to `to`, held there.
+    fn hold_stroke(ed: &mut MapEditor, layout: &Layout, from: Vec2, to: Vec2) {
+        let frames: Vec<Vec<(i32, f32, f32)>> =
+            (0..=10).map(|i| vec![(1, from.x + (to.x - from.x) * i as f32 / 10.0, from.y + (to.y - from.y) * i as f32 / 10.0)]).collect();
+        hold_fingers(ed, layout, &frames);
+    }
+
+    /// The loupe's place: above the finger, clear of it; wholly left of it
+    /// where it cannot stand centred above it for the right edge; beside it,
+    /// level with it, where there is no room above; never off the area.
+    #[test]
+    fn the_loupe_stands_above_the_finger_and_on_the_canvas() {
+        let area = Rectangle::new(0.0, 32.0, 1200.0, 600.0);
+        let (side, lift) = (150.0, 50.0);
+        let inside = |r: Rectangle| r.x >= area.x && r.y >= area.y && r.x + r.width <= area.x + area.width && r.y + r.height <= area.y + area.height;
+        let r = loupe_rect(Vec2::new(500.0, 400.0), side, lift, area);
+        assert_eq!(r, Rectangle::new(425.0, 200.0, side, side), "centred above, clear by the lift");
+        let r = loupe_rect(Vec2::new(1150.0, 400.0), side, lift, area);
+        assert!(r.x + r.width <= 1150.0 - lift + 1e-3 && r.y + r.height <= 400.0 - lift + 1e-3 && inside(r), "left of it by the right edge: {r:?}");
+        let r = loupe_rect(Vec2::new(500.0, 100.0), side, lift, area);
+        assert!(r.x + r.width <= 500.0 - lift + 1e-3 && inside(r), "beside it by the top: {r:?}");
+        let r = loupe_rect(Vec2::new(60.0, 60.0), side, lift, area);
+        assert!(r.x >= 60.0 + lift - 1e-3 && inside(r), "right of it in the top-left corner: {r:?}");
+        for finger in [Vec2::new(0.0, 32.0), Vec2::new(1199.0, 631.0), Vec2::new(600.0, 631.0), Vec2::new(1199.0, 32.0)] {
+            assert!(inside(loupe_rect(finger, side, lift, area)), "{finger:?}");
+        }
+    }
+
+    /// The loupe over a painting finger where cells are small on the glass:
+    /// above the finger, on the canvas, showing the cell the stroke paints
+    /// magnified on whole blocks; none for a mouse, none where a cell is
+    /// a finger's size and more, none once the finger lifts.
+    #[test]
+    fn the_loupe_shows_the_cell_a_finger_paints_where_cells_are_small() {
+        let rules = CanvasRules::of(&crate::tuning::Tuning::DEFAULT);
+        let (mut ed, layout, _) = big_editor((852.0, 393.0), 3.0, false);
+        let vp = ed.viewport();
+        let mid = canvas_middle(&layout);
+        ed.camera.zoom_at(vp.scale_for_cell_mm(8.0), layout.to_field(mid), &vp, &rules);
+        assert!(rules.paint_min_cell_mm < 8.0 && 8.0 < rules.loupe_cell_mm, "a finger paints and the loupe shows");
+        let to = Vec2::new(mid.x + 120.0, mid.y + 40.0);
+        hold_stroke(&mut ed, &layout, mid, to);
+        let loupe = ed.loupe(&layout).expect("a loupe over a painting finger");
+        let r = loupe.rect;
+        let lift = vp.px(LOUPE_LIFT_PT);
+        let device = vp.screen.device_per_px;
+        assert!(r.y + r.height <= to.y - lift + 1.0 / device + 1e-3, "above the finger: {r:?}");
+        assert!((r.x + r.width / 2.0 - to.x).abs() <= 0.5 / device + 1e-3, "centred over it: {r:?}");
+        let f = layout.field;
+        assert!(r.x >= f.x && r.y >= f.y && r.x + r.width <= f.x + f.w && r.y + r.height <= f.y + f.h, "on the canvas");
+        let whole = |v: f32| (v * device - (v * device).round()).abs() < 1e-3;
+        assert!(whole(r.x) && whole(r.y), "its corner on a whole device pixel: {r:?}");
+        assert_eq!(Some(loupe.cell), ed.cell_at(to, &layout), "the cell under the finger");
+        let c = map::cell_to_world(loupe.cell.0, loupe.cell.1);
+        let w = loupe.world;
+        assert!(c.x - 16.0 >= w.x && c.y - 16.0 >= w.y && c.x + 16.0 <= w.x + w.width && c.y + 16.0 <= w.y + w.height, "the whole cell in it: {w:?}");
+        assert_eq!((w.x % 2.0, w.y % 2.0, w.width % 2.0, w.height % 2.0), (0.0, 0.0, 0.0, 0.0), "whole blocks on the block grid");
+        assert!(((loupe.device_scale * 2.0).fract()).abs() < 1e-4, "whole blocks: {}", loupe.device_scale);
+        assert!((r.width * device - w.width * loupe.device_scale).abs() < 1e-2, "every block whole device pixels: {r:?} {w:?}");
+        assert!(loupe.device_scale > vp.device_scale(ed.camera().scale(&vp)), "magnified");
+        assert!(!loupe.erase);
+        // Lifted: gone.
+        hold_fingers(&mut ed, &layout, &[Vec::new()]);
+        assert_eq!(ed.loupe(&layout), None);
+        // A mouse stroke: none.
+        ed.update(&BuilderInput { pointer: Some(mid), pressed: true, held: true, ..Default::default() }, &layout);
+        ed.update(&BuilderInput { pointer: Some(to), held: true, ..Default::default() }, &layout);
+        assert_eq!(ed.loupe(&layout), None, "the mouse shows the cell it paints itself");
+        ed.update(&BuilderInput { pointer: Some(to), ..Default::default() }, &layout);
+        // A cell bigger than a fingertip and some: none.
+        ed.camera.zoom_at(vp.scale_for_cell_mm(rules.loupe_cell_mm + 2.0), layout.to_field(mid), &vp, &rules);
+        hold_stroke(&mut ed, &layout, mid, to);
+        assert_eq!(ed.loupe(&layout), None);
+        hold_fingers(&mut ed, &layout, &[Vec::new()]);
+        // By the canvas's right edge the loupe stands left of the finger.
+        ed.camera.zoom_at(vp.scale_for_cell_mm(8.0), layout.to_field(mid), &vp, &rules);
+        let edge = Vec2::new(f.x + f.w - 20.0, mid.y + 40.0);
+        hold_stroke(&mut ed, &layout, Vec2::new(edge.x - 100.0, edge.y), edge);
+        let r = ed.loupe(&layout).expect("a loupe at the edge").rect;
+        assert!(r.x + r.width <= edge.x - lift + 1.0 / device + 1e-3, "left of the finger: {r:?} for {edge:?}");
     }
 
     /// The standard arena on a screen where its cells are 7.6 mm on the

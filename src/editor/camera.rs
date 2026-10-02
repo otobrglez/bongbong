@@ -69,6 +69,8 @@ pub struct CanvasRules {
     pub paint_min_cell_mm: f32,
     /// `builder_tap_zoom_cell_mm`: the cell a zooming tap goes to.
     pub tap_zoom_cell_mm: f32,
+    /// `builder_loupe_cell_mm`: under this a painting finger gets a loupe.
+    pub loupe_cell_mm: f32,
     /// `builder_edge_scroll_pt`: the margin a stroke scrolls the view in.
     pub edge_scroll_pt: f32,
     /// `builder_edge_scroll_pt_per_s`: how fast, at the very edge.
@@ -92,6 +94,7 @@ impl CanvasRules {
             tap_seconds: t.builder_tap_seconds,
             paint_min_cell_mm: t.builder_paint_min_cell_mm,
             tap_zoom_cell_mm: t.builder_tap_zoom_cell_mm,
+            loupe_cell_mm: t.builder_loupe_cell_mm,
             edge_scroll_pt: t.builder_edge_scroll_pt,
             edge_scroll_pt_per_s: t.builder_edge_scroll_pt_per_s,
             key_pan_pt_per_s: t.builder_key_pan_pt_per_s,

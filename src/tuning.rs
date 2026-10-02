@@ -1936,6 +1936,18 @@ tunables! {
         /// The cell a zooming tap brings the canvas to, in millimetres on
         /// the glass, about the tapped point.
         builder_tap_zoom_cell_mm: f32 = 9.0 in 3.0 ..= 30.0;
+        /// The loupe (docs/large-maps-patterns.md, "Touch editing without
+        /// clashes, and a loupe"): while one finger paints a stroke where
+        /// a cell is drawn smaller than this on the glass, in millimetres
+        /// - a fingertip's width and some, so the finger hides the cell it
+        /// is on - a magnified view of the cells under the finger stands
+        /// above it, the cell the stroke paints outlined. Above the paint
+        /// threshold (`builder_paint_min_cell_mm`), under which a finger
+        /// paints nothing, and above the zoom a tap brings
+        /// (`builder_tap_zoom_cell_mm`, which a coarse screen rounds up a
+        /// little onto whole blocks), so a stroke after a zooming tap
+        /// still has it. Touch only; 0 never shows it.
+        builder_loupe_cell_mm: f32 = 12.0 in 0.0 ..= 30.0;
         /// Edge scroll: a stroke whose pointer comes within this many
         /// points of the canvas's edge scrolls the view toward that edge
         /// while it is held, so a long wall needs no pan in the middle.

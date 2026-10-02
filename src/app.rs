@@ -1936,6 +1936,13 @@ pub fn run(args: Args) {
                         coarse: screen(rl).ppi < tuning().view_fine_ppi,
                     }),
                 };
+                // Fingers a dev server's `builder_touch {hold: true}` left
+                // down stay down across frames while the screen has none.
+                #[cfg(all(feature = "dev-tools", not(target_os = "emscripten")))]
+                let input = match dev.as_ref().map(|dev| dev.held_touches()).filter(|held| !held.is_empty() && input.touches.is_empty()) {
+                    Some(held) => BuilderInput { pointer: held.first().map(|t| t.pos), pressed: false, held: true, touches: held.to_vec(), ..input },
+                    None => input,
+                };
                 if tab {
                     session.toggle();
                 } else {

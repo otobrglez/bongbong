@@ -429,8 +429,8 @@ pub const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "builder_touch",
-        description: "Drive the builder with raw touch frames, the way a touch screen does - the multi-finger input `--touch-from-mouse` cannot make (src/editor/gesture.rs, docs/large-maps-follow-camera.md section 9): one finger paints once it moves past the touch slop (`builder_touch_slop_pt`; a resting finger paints nothing) and a quick one-finger tap paints a cell; two fingers pan and pinch-zoom about their middle, a second finger landing on a stroke takes it back, and a coarse screen's zoom settles on whole blocks when they part; a two-finger tap undoes and a three-finger tap redoes (`builder_tap_seconds`). Where a cell is under `builder_paint_min_cell_mm` on the glass (`status.builder.camera.cell_mm`) a one-finger tap zooms in to `builder_tap_zoom_cell_mm` instead and a drag pans. `frames` is a list of frames, each the touch points down that frame as {id, x, y} in bitmap pixels (the 32 px bar included, as for `click`); a frame with no points lifts every finger, and the tool lifts every finger at its end. Each frame is `dt` seconds (default 1/60). Build mode only. Replies like `mode`, with `camera` (as `status.builder.camera`).",
-        schema: r#"{"type":"object","properties":{"frames":{"type":"array","items":{"type":"array","items":{"type":"object","properties":{"id":{"type":"integer"},"x":{"type":"number"},"y":{"type":"number"}},"required":["id","x","y"]}},"description":"Frames of touch points, first to last"},"dt":{"type":"number","minimum":0,"description":"Seconds per frame (default 1/60)"}},"required":["frames"]}"#,
+        description: "Drive the builder with raw touch frames, the way a touch screen does - the multi-finger input `--touch-from-mouse` cannot make (src/editor/gesture.rs, docs/large-maps-follow-camera.md section 9): one finger paints once it moves past the touch slop (`builder_touch_slop_pt`; a resting finger paints nothing) and a quick one-finger tap paints a cell; two fingers pan and pinch-zoom about their middle, a second finger landing on a stroke takes it back, and a coarse screen's zoom settles on whole blocks when they part; a two-finger tap undoes and a three-finger tap redoes (`builder_tap_seconds`). Where a cell is under `builder_paint_min_cell_mm` on the glass (`status.builder.camera.cell_mm`) a one-finger tap zooms in to `builder_tap_zoom_cell_mm` instead and a drag pans. `frames` is a list of frames, each the touch points down that frame as {id, x, y} in bitmap pixels (the 32 px bar included, as for `click`); a frame with no points lifts every finger, and the tool lifts every finger at its end - unless `hold` is true, which leaves the last frame's fingers down: the window's frames keep them there (a stroke goes on painting under a still finger, the loupe stands over it - `status.builder.loupe`) until the next `builder_touch` carries on from them or lifts them. Each frame is `dt` seconds (default 1/60). Build mode only. Replies like `mode`, with `camera` (as `status.builder.camera`) and `held` (how many fingers are left down).",
+        schema: r#"{"type":"object","properties":{"frames":{"type":"array","items":{"type":"array","items":{"type":"object","properties":{"id":{"type":"integer"},"x":{"type":"number"},"y":{"type":"number"}},"required":["id","x","y"]}},"description":"Frames of touch points, first to last"},"dt":{"type":"number","minimum":0,"description":"Seconds per frame (default 1/60)"},"hold":{"type":"boolean","description":"Leave the last frame's fingers down at the end, for a screenshot mid-gesture (default false)"}},"required":["frames"]}"#,
         read_only: false,
         destructive: false,
     },
@@ -800,6 +800,11 @@ pub struct DevServer {
     /// chrome is measured in. `None` in a server with no window, which
     /// lays the chrome out in the bitmap's own size (`UiFrame::plain`).
     drawn_ui: Option<UiFrame>,
+    /// The fingers a `builder_touch {hold: true}` left down, in bitmap
+    /// pixels: the window's builder frames take them in place of its own
+    /// empty touch screen (`held_touches`) until the next `builder_touch`
+    /// lifts them, so a screenshot catches a gesture mid-way.
+    held_touches: Vec<crate::touch::TouchPoint>,
 }
 
 /// A view the `camera` tool pinned: the world point at its centre and how
@@ -857,7 +862,15 @@ impl DevServer {
             camera: None,
             drawn: None,
             drawn_ui: None,
+            held_touches: Vec::new(),
         }
+    }
+
+    /// The fingers a `builder_touch {hold: true}` keeps down, which the
+    /// window's builder frames take in place of its own touch screen's
+    /// while it reports none; empty when none are held.
+    pub fn held_touches(&self) -> &[crate::touch::TouchPoint] {
+        &self.held_touches
     }
 
     /// The view the `camera` tool pinned, over a field of `field`; `None`
@@ -951,6 +964,34 @@ impl DevServer {
         };
         let buttons: Map<String, Value> = session.builder.named_buttons(&layout).into_iter().map(|(name, r)| (name, rect(r))).collect();
         Value::Object(buttons)
+    }
+
+    /// `status.builder.loupe`: the loupe over a painting finger
+    /// (`MapEditor::loupe`) - where it stands in window coordinates and,
+    /// as `bitmap`, in the builder's bitmap pixels; the world it shows; its
+    /// device pixels per world pixel; the cell the stroke paints. `null`
+    /// while there is none - no finger painting, a mouse, a cell over
+    /// `builder_loupe_cell_mm` - and outside build mode. A `builder_touch`
+    /// lifts its fingers at its end unless it `hold`s them, which is how a
+    /// shell reads it mid-stroke.
+    fn loupe_json(&self, session: &Session, width: f32, height: f32) -> Value {
+        if session.mode() != Driver::Build {
+            return Value::Null;
+        }
+        let (layout, view, _) = self.click_frame(session, width, height);
+        let Some(loupe) = session.builder.loupe(&layout) else { return Value::Null };
+        let r = loupe.rect;
+        let a = view.to_window(Vec2::new(r.x, r.y));
+        let b = view.to_window(Vec2::new(r.x + r.width, r.y + r.height));
+        let w = loupe.world;
+        json!({
+            "x": a.x, "y": a.y, "w": b.x - a.x, "h": b.y - a.y,
+            "bitmap": { "x": r.x, "y": r.y, "w": r.width, "h": r.height },
+            "world": { "x": w.x, "y": w.y, "w": w.width, "h": w.height },
+            "device_scale": loupe.device_scale,
+            "cell": [loupe.cell.0, loupe.cell.1],
+            "erase": loupe.erase,
+        })
     }
 
     /// The corners the window lays out for the live mode in `ui`
@@ -1067,6 +1108,10 @@ impl DevServer {
         self.observe_replica(session);
         while let Ok(req) = self.rx.try_recv() {
             self.dispatch(session, req, width, height);
+        }
+        // Held fingers are the builder's alone: another mode lets them go.
+        if session.mode() != Driver::Build {
+            self.held_touches.clear();
         }
     }
 
@@ -1389,6 +1434,7 @@ impl DevServer {
                 "navigator": self.navigator_json(session, width, height),
                 "buttons": self.builder_buttons_json(session, width, height),
                 "check": builder_check_json(&session.builder),
+                "loupe": self.loupe_json(session, width, height),
             },
             "events_kept": self.events.len(),
             "next_event_seq": self.next_seq,
@@ -1918,23 +1964,30 @@ impl DevServer {
                     Err("builder_touch needs build mode - call `build` first".to_string())
                 } else {
                     let (layout, _, _) = self.click_frame(session, width, height);
+                    let hold = params.get("hold").and_then(Value::as_bool).unwrap_or(false);
                     touch_frames(params).map(|(frames, dt)| {
-                        let mut down = false;
-                        for touches in frames.into_iter().chain(std::iter::once(Vec::new())) {
+                        // Fingers a held call left down are still down.
+                        let mut down = !self.held_touches.is_empty();
+                        let mut last = Vec::new();
+                        let lift = (!hold).then(Vec::new);
+                        for touches in frames.into_iter().chain(lift) {
                             let now = !touches.is_empty();
                             let input = BuilderInput {
                                 pointer: touches.first().map(|t| t.pos),
                                 pressed: now && !down,
                                 held: now,
-                                touches,
+                                touches: touches.clone(),
                                 dt,
                                 ..BuilderInput::default()
                             };
                             session.update_builder(&input, &layout);
                             down = now;
+                            last = touches;
                         }
+                        self.held_touches = if hold { last } else { Vec::new() };
                         let mut reply = mode_json(session);
                         reply["camera"] = builder_camera_json(&session.builder);
+                        reply["held"] = json!(self.held_touches.len());
                         reply
                     })
                 }
@@ -4757,6 +4810,47 @@ cells."1,1" = { kind = "wall" }"#;
         assert!(zoomed["camera"]["zoom"].as_f64().unwrap() > 2.0, "{zoomed}");
         assert!(ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": [[{ "id": 1 }]] })).unwrap_err().contains("{id, x, y}"));
         assert!(ask(&mut server, &tx, &mut s, "builder_touch", json!({})).unwrap_err().contains("frames"));
+    }
+
+    /// `builder_touch {hold: true}` leaves a painting finger down, so the
+    /// loupe stands over it in `status.builder.loupe` - over the cell the
+    /// stroke paints -, the window's frames keep it there, the next call
+    /// lifts it and the stroke is one undo step, and leaving build mode
+    /// lets held fingers go.
+    #[test]
+    fn builder_touch_holds_a_finger_for_the_loupe() {
+        let (mut server, tx) = DevServer::headless();
+        let mut s = game(45);
+        ask(&mut server, &tx, &mut s, "restart", json!({ "map_toml": INLINE_MAP, "seed": 1 })).unwrap();
+        enter_build(&mut server, &tx, &mut s);
+        // Cells of 7.6 mm on the glass: a finger paints, and the loupe shows.
+        let screen = crate::editor::CanvasScreen { device_per_px: 3.0, points_per_px: 1.5, coarse: false };
+        let layout = Layout::for_field(1088.0, 544.0);
+        s.update_builder(&BuilderInput { screen: Some(screen), ..BuilderInput::default() }, &layout);
+        ask(&mut server, &tx, &mut s, "builder_tool", json!({ "tool": "brick" })).unwrap();
+        let base = s.builder.history().undo_depth() as u64;
+        let none = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert_eq!(none["builder"]["loupe"], Value::Null, "no finger, no loupe");
+        let stroke: Vec<Value> = (0..=10).map(|i| json!([{ "id": 1, "x": 300.0 + 10.0 * i as f32, "y": 300.0 }])).collect();
+        let held = ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": stroke, "hold": true })).unwrap();
+        assert_eq!(held["held"], 1, "{held}");
+        assert_eq!(server.held_touches().len(), 1);
+        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        let loupe = &status["builder"]["loupe"];
+        let under = crate::map::world_to_cell(crate::math::Vec2::new(400.0, 300.0 - 32.0));
+        assert_eq!(loupe["cell"], json!([under.0, under.1]), "over the cell under the finger: {loupe}");
+        assert!(loupe["bitmap"]["y"].as_f64().unwrap() + loupe["bitmap"]["h"].as_f64().unwrap() < 300.0, "above the finger: {loupe}");
+        let lifted = ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": [[]] })).unwrap();
+        assert_eq!(lifted["held"], 0, "{lifted}");
+        assert_eq!(lifted["undo_depth"], base + 1, "the stroke is one step: {lifted}");
+        let status = ask(&mut server, &tx, &mut s, "status", json!({})).unwrap();
+        assert_eq!(status["builder"]["loupe"], Value::Null, "lifted, gone");
+        // Held fingers are build mode's alone.
+        let stroke: Vec<Value> = (0..=10).map(|i| json!([{ "id": 2, "x": 300.0 + 10.0 * i as f32, "y": 400.0 }])).collect();
+        ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": stroke, "hold": true })).unwrap();
+        assert_eq!(server.held_touches().len(), 1);
+        ask(&mut server, &tx, &mut s, "play", json!({})).unwrap();
+        assert!(server.held_touches().is_empty(), "play lets them go");
     }
 
     /// The builder's navigator is one hit test that `click` and

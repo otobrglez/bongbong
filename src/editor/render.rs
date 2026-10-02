@@ -129,26 +129,33 @@ pub struct EditorTextures<'a> {
 
 /// The builder's own scene target: the canvas drawn at a texel per world
 /// pixel (`camera::scene_plan`) whenever the view is not the whole field
-/// at its own size. `app.rs` holds one for the session; it is made the
-/// first time it is needed, grown when a bigger view needs more, and made
-/// again smaller when it holds four times what the view needs.
+/// at its own size, and the loupe's (`MapEditor::loupe`), the world it
+/// shows drawn on its own the same way. `app.rs` holds one for the
+/// session; each target is made the first time it is needed, grown when
+/// a bigger picture needs more, and made again smaller when it holds four
+/// times what the picture needs.
 #[derive(Default)]
 pub struct BuilderScene {
     held: Option<(RenderTexture2D, (i32, i32))>,
+    loupe: Option<(RenderTexture2D, (i32, i32))>,
 }
 
-impl BuilderScene {
-    /// The target, holding at least `need` texels.
-    fn target(&mut self, rl: &mut RaylibHandle, thread: &RaylibThread, need: (i32, i32)) -> Option<&mut RenderTexture2D> {
-        let need = (need.0.max(1), need.1.max(1));
-        let fits = |size: (i32, i32)| size.0 >= need.0 && size.1 >= need.1 && size.0 * size.1 <= 4 * need.0 * need.1;
-        if !self.held.as_ref().is_some_and(|(_, size)| fits(*size)) {
-            self.held = None;
-            let texture = rl.load_render_texture(thread, need.0 as u32, need.1 as u32).ok()?;
-            self.held = Some((texture, need));
-        }
-        self.held.as_mut().map(|(texture, _)| texture)
+/// The target in `slot`, holding at least `need` texels: made, grown or
+/// made again smaller as `BuilderScene` says.
+fn hold<'a>(
+    slot: &'a mut Option<(RenderTexture2D, (i32, i32))>,
+    rl: &mut RaylibHandle,
+    thread: &RaylibThread,
+    need: (i32, i32),
+) -> Option<&'a mut RenderTexture2D> {
+    let need = (need.0.max(1), need.1.max(1));
+    let fits = |size: (i32, i32)| size.0 >= need.0 && size.1 >= need.1 && size.0 * size.1 <= 4 * need.0 * need.1;
+    if !slot.as_ref().is_some_and(|(_, size)| fits(*size)) {
+        *slot = None;
+        let texture = rl.load_render_texture(thread, need.0 as u32, need.1 as u32).ok()?;
+        *slot = Some((texture, need));
     }
+    slot.as_mut().map(|(texture, _)| texture)
 }
 
 /// The builder's `Sheet` lookup, for the `ground::draw` it shares with the
@@ -233,7 +240,7 @@ impl MapEditor {
         let camera = self.view_camera(layout);
         let field = self.map.field_size();
         if camera == crate::view::Camera::whole(field) && (layout.field.w, layout.field.h) == field {
-            self.render_whole(rl, thread, composite, view, backdrop, layout, textures, cursor, time);
+            self.render_whole(rl, thread, composite, scene, view, backdrop, layout, textures, cursor, time);
             return;
         }
         let plan = scene_plan(&camera);
@@ -242,7 +249,7 @@ impl MapEditor {
         let mut fit = self.camera;
         fit.fit();
         let most = scene_plan(&fit.view(&self.viewport_in(layout))).size;
-        let Some(target) = scene.target(rl, thread, (plan.size.0.max(most.0), plan.size.1.max(most.1))) else {
+        let Some(target) = hold(&mut scene.held, rl, thread, (plan.size.0.max(most.0), plan.size.1.max(most.1))) else {
             return;
         };
         let cull = camera.cull();
@@ -266,16 +273,55 @@ impl MapEditor {
         let source = Rectangle::new(s.x, height - s.y - s.height, s.width, -s.height);
         let area = window_mapping(&camera, view, layout).area;
         let base = Camera2D { offset: view.offset.into(), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: view.scale };
+        let magnified = self
+            .loupe(layout)
+            .and_then(|loupe| Some((loupe, self.draw_loupe_world(rl, thread, &mut scene.loupe, &loupe, textures, time)?)));
+        let Some((target, _)) = scene.held.as_ref() else { return };
         rl.draw(thread, |mut d| {
             d.clear_background(Color::BLACK);
             crate::render::view::letterbox(&mut d, view, backdrop);
-            d.draw_texture_pro(&*target, source, area, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+            d.draw_texture_pro(target, source, area, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
             d.draw_mode2D(base, |mut d, _| {
                 self.draw_status_line(&mut d, cursor, EDITOR_TOOLBAR_MARGIN, layout.field.y + layout.field.h - 22.0);
                 self.draw_navigator(&mut d, layout, textures, &camera);
                 self.draw_chrome(&mut d, layout, textures, cursor);
+                if let Some((loupe, picture)) = &magnified {
+                    draw_loupe(&mut d, loupe, picture);
+                }
             });
         });
+    }
+
+    /// The world `loupe` shows, drawn into its own target at a texel a
+    /// world pixel - the canvas without the cursor's highlight, the world
+    /// past the field in the canvas fill - so nothing drawn over the canvas
+    /// (the status line, the navigator, the bar) and nothing past what the
+    /// scene target holds ever shows in it.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_loupe_world<'a>(
+        &self,
+        rl: &mut RaylibHandle,
+        thread: &RaylibThread,
+        slot: &'a mut Option<(RenderTexture2D, (i32, i32))>,
+        loupe: &Loupe,
+        textures: &EditorTextures,
+        time: f32,
+    ) -> Option<&'a RenderTexture2D> {
+        let w = loupe.world;
+        let target = hold(slot, rl, thread, (w.width.ceil() as i32, w.height.ceil() as i32))?;
+        let held = Rectangle::new(w.x, w.y, target.texture.width as f32, target.texture.height as f32);
+        let in_target = Camera2D { offset: Vector2::new(0.0, 0.0), target: Vector2::new(w.x, w.y), rotation: 0.0, zoom: 1.0 };
+        let m = crate::view::CULL_MARGIN_PX;
+        let cull = Rectangle::new(w.x - m, w.y - m, w.width + 2.0 * m, w.height + 2.0 * m);
+        let field = self.map.field_size();
+        rl.draw_texture_mode(thread, target, |mut d| {
+            d.clear_background(CANVAS_FILL);
+            d.draw_mode2D(in_target, |mut d, _| {
+                self.draw_canvas(&mut d, textures, time, None, Some(cull));
+                cover_past_field(&mut d, field, held);
+            });
+        });
+        Some(&*target)
     }
 
     /// The navigator (`navigator_rect`), under the bar and the popups: the
@@ -301,6 +347,7 @@ impl MapEditor {
         rl: &mut RaylibHandle,
         thread: &RaylibThread,
         composite: &mut RenderTexture2D,
+        scene: &mut BuilderScene,
         view: &crate::view::View,
         backdrop: Color,
         layout: &Layout,
@@ -323,7 +370,19 @@ impl MapEditor {
             });
             self.draw_chrome(&mut d, layout, textures, cursor);
         });
-        crate::render::view::present(rl, thread, composite, view, backdrop);
+        let magnified = self
+            .loupe(layout)
+            .and_then(|loupe| Some((loupe, self.draw_loupe_world(rl, thread, &mut scene.loupe, &loupe, textures, time)?)));
+        let Some((loupe, picture)) = magnified else {
+            crate::render::view::present(rl, thread, composite, view, backdrop);
+            return;
+        };
+        // The loupe over the presented bitmap, in bitmap pixels.
+        let base = Camera2D { offset: view.offset.into(), target: Vector2::new(0.0, 0.0), rotation: 0.0, zoom: view.scale };
+        rl.draw(thread, |mut d| {
+            crate::render::view::present_into(&mut d, composite, view, backdrop, None);
+            d.draw_mode2D(base, |mut d, _| draw_loupe(&mut d, &loupe, picture));
+        });
     }
 
     /// The bar and the open popup, in bitmap pixels.
@@ -788,6 +847,36 @@ impl MapEditor {
             d.draw_rectangle_lines_ex(r, 2.0, color);
         }
     }
+}
+
+/// The frame round the loupe's square, opaque so the world's colours stop
+/// at its edge.
+const LOUPE_FRAME: Color = Color::new(12, 12, 16, 255);
+
+/// The loupe (`MapEditor::loupe`) in bitmap pixels: `picture` holds its
+/// world from its corner at a texel a world pixel (`draw_loupe_world`),
+/// put on its square at the loupe's own whole-block scale, sampled
+/// nearest (a render texture's filter), on a plate of its own; the cell
+/// the stroke paints is outlined in the stroke's colour, clipped to the
+/// square.
+fn draw_loupe(d: &mut impl RaylibDraw, loupe: &Loupe, picture: &RenderTexture2D) {
+    crate::render::hud::draw_plate(d, Corners::plate(loupe.rect), crate::render::hud::PLATE_EDGE, 1.0);
+    let w = loupe.world;
+    let height = picture.texture.height as f32;
+    // A render texture reads back bottom-up.
+    let texels = Rectangle::new(0.0, height - w.height, w.width, -w.height);
+    d.draw_texture_pro(picture, texels, loupe.rect, Vector2::new(0.0, 0.0), 0.0, Color::WHITE);
+    let k = loupe.rect.width / w.width;
+    let cell = LintCell::Map(loupe.cell.0, loupe.cell.1).rect();
+    let (left, top) = (loupe.rect.x + (cell.x - w.x) * k, loupe.rect.y + (cell.y - w.y) * k);
+    let (right, bottom) = (left + cell.width * k, top + cell.height * k);
+    let r = loupe.rect;
+    let (left, top, right, bottom) = (left.max(r.x), top.max(r.y), right.min(r.x + r.width), bottom.min(r.y + r.height));
+    if right > left && bottom > top {
+        let color = if loupe.erase { LINT_ERROR } else { BUILD_ACCENT };
+        d.draw_rectangle_lines_ex(Rectangle::new(left, top, right - left, bottom - top), 2.0, color);
+    }
+    d.draw_rectangle_lines_ex(loupe.rect, 2.0, LOUPE_FRAME);
 }
 
 /// The CHECK panel's text: its header and its findings' words in 16 px,
