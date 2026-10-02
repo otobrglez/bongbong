@@ -25,8 +25,15 @@
 //! pan it. Every pointer goes through that camera before a cell is
 //! hit-tested (`cell_at`), and the canvas is drawn through the same one,
 //! so a press paints the cell drawn under it at every zoom.
+//!
+//! **A touch screen is read finger by finger** (`gesture.rs`): one finger
+//! paints once past the touch slop, two pan and pinch-zoom, a two-finger
+//! tap undoes and a three-finger tap redoes. Where a cell is under
+//! `builder_paint_min_cell_mm` on the glass - a finger cannot hit one - a
+//! tap zooms in instead of painting and a drag pans (the paint threshold).
 
 pub mod camera;
+pub mod gesture;
 pub mod history;
 #[cfg(feature = "render")]
 pub mod render;
@@ -127,7 +134,11 @@ pub struct BuilderInput {
     pub redo: bool,
     /// Characters typed this frame, for the dev Save prompt.
     pub typed: String,
-    /// Seconds since the last frame: what a held key pans by.
+    /// Every touch point down this frame, in bitmap pixels - the raw
+    /// fingers (`gesture.rs`), not raylib's gestures. Empty with a mouse.
+    pub touches: Vec<crate::touch::TouchPoint>,
+    /// Seconds since the last frame: what a held key pans by and a tap is
+    /// timed with.
     pub dt: f32,
     /// The screen the canvas is drawn on, when the window knows it
     /// (`app.rs`); `None` keeps the one the builder saw last.
@@ -496,6 +507,8 @@ pub struct MapEditor {
     /// A world rectangle to show, worked out against the next canvas
     /// area `update` is given (`look_at`).
     pending_look: Option<Rectangle>,
+    /// The fingers on the canvas.
+    gestures: gesture::Gestures,
     pub cli_overrides: CliOverrides,
     /// `render` draws a flat white field instead of the ground tileset -
     /// the builder-side twin of `Game::plain_canvas`.
@@ -534,6 +547,7 @@ impl MapEditor {
             pan_from: None,
             wheel_accum: 0.0,
             pending_look: None,
+            gestures: gesture::Gestures::default(),
             cli_overrides: CliOverrides::default(),
         };
         editor.rebuild_ground();
@@ -852,6 +866,22 @@ impl MapEditor {
 
     fn finish_stroke(&mut self) {
         self.finish_stroke_changes();
+    }
+
+    /// Take the open stroke back, cell by cell, as if it had never been:
+    /// no undo step - a second finger landing on a stroke means a pinch,
+    /// not paint.
+    fn cancel_stroke(&mut self) {
+        let Some(stroke) = self.stroke.take() else { return };
+        for c in stroke.changes.iter().rev() {
+            match c.before {
+                Some(obj) => self.map.set_cell(c.col, c.row, obj),
+                None => self.map.clear_cell(c.col, c.row),
+            }
+        }
+        if !stroke.changes.is_empty() {
+            self.rebuild_ground();
+        }
     }
 
     fn finish_stroke_changes(&mut self) -> Vec<CellChange> {
@@ -1215,6 +1245,13 @@ impl MapEditor {
             }
             self.camera_keys(input, &rules);
         }
+        // The fingers on the canvas, every frame and before a popup takes
+        // the press: a finger that pressed the bar or a popup is never the
+        // canvas's, and with fingers down the canvas is theirs.
+        let touch = !input.touches.is_empty() || self.gestures.active();
+        if touch {
+            self.touch_gestures(input, layout, &rules);
+        }
         if self.popup.is_some() {
             self.pan_from = None;
             self.update_popup(input, layout);
@@ -1226,14 +1263,16 @@ impl MapEditor {
         {
             self.wheel(pointer, input.wheel, layout, &rules);
         }
-        if self.pan_drag(input, layout, &rules) {
+        if !touch && self.pan_drag(input, layout, &rules) {
             return EditorAction::None;
         }
 
         let primary = input.held || input.right_held;
         if !primary {
             // A release ends the stroke - one undo step per press.
-            self.finish_stroke();
+            if !touch {
+                self.finish_stroke();
+            }
             return EditorAction::None;
         }
         let Some(pointer) = input.pointer else {
@@ -1247,6 +1286,9 @@ impl MapEditor {
                 self.finish_stroke();
                 return self.press_bar_button(button);
             }
+        }
+        if touch {
+            return EditorAction::None;
         }
 
         // The canvas: a press begins a stroke, a held button continues it
@@ -1315,6 +1357,80 @@ impl MapEditor {
         } else {
             let scale = self.camera.scale(&vp) * rules.zoom_step.max(1.01).powf(wheel);
             self.camera.zoom_at(scale, at, &vp, rules);
+        }
+    }
+
+    /// One frame of fingers: the canvas's go through the gestures
+    /// (`gesture.rs`) and what they mean is done. Only a finger that lands
+    /// on the canvas while no popup is open is the canvas's.
+    fn touch_gestures(&mut self, input: &BuilderInput, layout: &Layout, rules: &CanvasRules) {
+        let vp = self.viewport_in(layout);
+        let canvas: Vec<i32> = if self.popup.is_some() {
+            Vec::new()
+        } else {
+            input.touches.iter().filter(|t| self.on_canvas(t.pos, layout)).map(|t| t.id).collect()
+        };
+        let paints = self.touch_paints(&vp, rules);
+        let g = gesture::GestureRules { slop: vp.px(rules.slop_pt), tap_seconds: rules.tap_seconds };
+        let events = self.gestures.update(&input.touches, |t| canvas.contains(&t.id), paints, input.dt, &g);
+        for event in events {
+            self.apply_gesture(event, layout, rules);
+        }
+    }
+
+    /// The paint threshold: whether a finger can hit one cell at this
+    /// zoom - a cell at least `builder_paint_min_cell_mm` on the glass.
+    /// Under it a tap zooms in and a drag pans.
+    fn touch_paints(&self, vp: &Viewport, rules: &CanvasRules) -> bool {
+        vp.cell_mm(self.camera.scale(vp)) >= rules.paint_min_cell_mm
+    }
+
+    /// Do what a gesture means: a tap paints its cell (or zooms in on it
+    /// under the paint threshold), a stroke paints the cells it crosses
+    /// - begun at the first cell on the field it reaches - and a move,
+    /// a settle, an undo or a redo is the camera's or the history's.
+    fn apply_gesture(&mut self, event: gesture::GestureEvent, layout: &Layout, rules: &CanvasRules) {
+        use gesture::GestureEvent;
+        let vp = self.viewport_in(layout);
+        match event {
+            GestureEvent::Tap(at) => {
+                self.pointer = Some(at);
+                if self.touch_paints(&vp, rules) {
+                    if let Some(cell) = self.cell_at(at, layout) {
+                        self.finish_stroke();
+                        self.begin_stroke(cell, false);
+                        self.finish_stroke();
+                    }
+                } else if self.on_canvas(at, layout) {
+                    self.camera.zoom_for_tap(layout.to_field(at), &vp, rules);
+                }
+            }
+            GestureEvent::StrokeBegin(from) => {
+                self.finish_stroke();
+                if let Some(cell) = self.cell_at(from, layout) {
+                    self.begin_stroke(cell, false);
+                }
+            }
+            GestureEvent::StrokeTo(to) => {
+                self.pointer = Some(to);
+                if let Some(cell) = self.cell_at(to, layout) {
+                    if self.stroke.is_some() {
+                        self.drag_to(cell);
+                    } else {
+                        self.begin_stroke(cell, false);
+                    }
+                }
+            }
+            GestureEvent::StrokeEnd => self.finish_stroke(),
+            GestureEvent::StrokeCancel => self.cancel_stroke(),
+            GestureEvent::Move { from, to, factor } => self.camera.move_point(layout.to_field(from), layout.to_field(to), factor, &vp, rules),
+            GestureEvent::Settle(at) => self.camera.settle(layout.to_field(at), &vp, rules),
+            GestureEvent::Undo => {
+                self.undo();
+            }
+            GestureEvent::Redo => {
+                self.redo();
+            }
         }
     }
 
@@ -2407,6 +2523,178 @@ mod editor_tests {
                 }
             }
         }
+    }
+
+    /// Run frames of fingers - `(id, x, y)` in bitmap pixels - through the
+    /// builder the way `app.rs` and the dev server's `builder_touch` feed
+    /// them, ending with every finger lifted.
+    fn fingers(ed: &mut MapEditor, layout: &Layout, frames: &[Vec<(i32, f32, f32)>]) {
+        let mut down = false;
+        for f in frames.iter().cloned().chain(std::iter::once(Vec::new())) {
+            let touches: Vec<crate::touch::TouchPoint> = f.iter().map(|&(id, x, y)| crate::touch::TouchPoint { id, pos: Vec2::new(x, y) }).collect();
+            let now = !touches.is_empty();
+            let input = BuilderInput { pointer: touches.first().map(|t| t.pos), pressed: now && !down, held: now, touches, dt: 1.0 / 60.0, ..Default::default() };
+            ed.update(&input, layout);
+            down = now;
+        }
+    }
+
+    /// The standard arena on a screen where its cells are 7.6 mm on the
+    /// glass: one finger paints there.
+    fn touch_arena() -> (MapEditor, Layout) {
+        let layout = Layout::for_field(W, H);
+        let mut ed = MapEditor::new(MapFile::new());
+        let screen = CanvasScreen { device_per_px: 3.0, points_per_px: 1.5, coarse: false };
+        ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &layout);
+        (ed, layout)
+    }
+
+    /// The bitmap point at the middle of a cell.
+    fn on_cell(ed: &MapEditor, layout: &Layout, col: i32, row: i32) -> (f32, f32) {
+        let w = map::cell_to_world(col, row);
+        let v = ed.view_camera(layout).to_view(w);
+        (v.x + layout.field.x, v.y + layout.field.y)
+    }
+
+    /// A finger resting on the canvas, even wobbling inside the slop,
+    /// paints nothing; a quick tap paints its cell, one undo step.
+    #[test]
+    fn a_resting_finger_paints_nothing_and_a_tap_paints_its_cell() {
+        let (mut ed, layout) = touch_arena();
+        let (x, y) = on_cell(&ed, &layout, 10, 5);
+        let rest: Vec<Vec<(i32, f32, f32)>> = (0..60).map(|i| vec![(7, x + (i % 4) as f32, y)]).collect();
+        fingers(&mut ed, &layout, &rest);
+        assert!(ed.map().cells.is_empty(), "a resting finger painted");
+        assert_eq!(ed.history().undo_depth(), 0);
+        fingers(&mut ed, &layout, &[vec![(8, x, y)], vec![(8, x + 2.0, y + 1.0)]]);
+        assert_eq!(ed.map().cell(10, 5), Some(&brick()));
+        assert_eq!(ed.history().undo_depth(), 1);
+        // The toggle-erase rule holds for a tap too.
+        fingers(&mut ed, &layout, &[vec![(9, x, y)]]);
+        assert_eq!(ed.map().cell(10, 5), None);
+    }
+
+    /// Past the slop one finger strokes from where it landed, every cell
+    /// it crosses, as one undo step.
+    #[test]
+    fn one_finger_past_the_slop_strokes_from_where_it_landed() {
+        let (mut ed, layout) = touch_arena();
+        let (x0, y) = on_cell(&ed, &layout, 4, 8);
+        let (x1, _) = on_cell(&ed, &layout, 9, 8);
+        let frames: Vec<Vec<(i32, f32, f32)>> = (0..=10).map(|i| vec![(1, x0 + (x1 - x0) * i as f32 / 10.0, y)]).collect();
+        fingers(&mut ed, &layout, &frames);
+        for col in 4..=9 {
+            assert_eq!(ed.map().cell(col, 8), Some(&brick()), "col {col}");
+        }
+        assert_eq!(ed.map().cells.len(), 6);
+        assert_eq!(ed.history().undo_depth(), 1);
+    }
+
+    /// Two fingers pinch about their middle - the world under it stays -
+    /// and move together to pan; neither paints. On a coarse screen the
+    /// zoom settles on whole blocks when they lift.
+    #[test]
+    fn two_fingers_pinch_at_their_middle_and_pan() {
+        let (mut ed, layout, _) = big_editor((1180.0, 820.0), 2.0, true);
+        let mid = canvas_middle(&layout);
+        let under = ed.world_at(mid, &layout).unwrap();
+        let spread = |d: f32| vec![(1, mid.x - d, mid.y), (2, mid.x + d, mid.y)];
+        let frames: Vec<Vec<(i32, f32, f32)>> = (0..=20).map(|i| spread(40.0 + 8.0 * i as f32)).collect();
+        fingers(&mut ed, &layout, &frames);
+        assert!(!ed.camera().is_fit(), "spread fingers zoom in");
+        let vp = ed.viewport();
+        let device = vp.device_scale(ed.camera().scale(&vp));
+        assert!(((device * 2.0) - (device * 2.0).round()).abs() < 1e-3, "settled on whole blocks: {device}");
+        let now = ed.world_at(mid, &layout).unwrap();
+        assert!((now.x - under.x).abs() < 4.0 && (now.y - under.y).abs() < 4.0, "the middle stayed put: {under:?} -> {now:?}");
+        // Together, sideways: a pan.
+        let before = ed.camera().center(&vp);
+        let frames: Vec<Vec<(i32, f32, f32)>> =
+            (0..=10).map(|i| vec![(3, mid.x - 50.0 + 6.0 * i as f32, mid.y), (4, mid.x + 50.0 + 6.0 * i as f32, mid.y)]).collect();
+        fingers(&mut ed, &layout, &frames);
+        let after = ed.camera().center(&vp);
+        assert!(after.x < before.x - 1.0, "dragging right shows what is to the left: {before:?} -> {after:?}");
+        assert!(ed.map().cells.is_empty());
+    }
+
+    /// A two-finger tap undoes and a three-finger tap redoes, the fingers
+    /// lifting in any order.
+    #[test]
+    fn a_two_finger_tap_undoes_and_a_three_finger_tap_redoes() {
+        let (mut ed, layout) = touch_arena();
+        ed.stroke(&[(3, 3), (4, 3)], false);
+        ed.stroke(&[(6, 6)], false);
+        assert_eq!(ed.history().undo_depth(), 2);
+        let (x, y) = on_cell(&ed, &layout, 15, 10);
+        fingers(&mut ed, &layout, &[vec![(1, x, y)], vec![(1, x, y), (2, x + 80.0, y)], vec![(2, x + 80.0, y)]]);
+        assert_eq!(ed.history().undo_depth(), 1, "two fingers undid");
+        assert_eq!(ed.map().cell(6, 6), None);
+        fingers(&mut ed, &layout, &[vec![(1, x, y), (2, x + 80.0, y)], vec![(1, x, y), (2, x + 80.0, y), (3, x + 40.0, y + 60.0)], vec![(3, x + 40.0, y + 60.0)]]);
+        assert_eq!(ed.history().undo_depth(), 2, "three fingers redid");
+        assert_eq!(ed.map().cell(6, 6), Some(&brick()));
+        assert_eq!(ed.map().cells.len(), 3, "the taps painted nothing");
+    }
+
+    /// A second finger landing on a stroke takes the stroke back - no
+    /// cell, no undo step - and the finger left behind paints nothing.
+    #[test]
+    fn a_second_finger_on_a_stroke_takes_it_back() {
+        let (mut ed, layout) = touch_arena();
+        let (x0, y) = on_cell(&ed, &layout, 4, 8);
+        let (x1, _) = on_cell(&ed, &layout, 8, 8);
+        fingers(
+            &mut ed,
+            &layout,
+            &[vec![(1, x0, y)], vec![(1, x1, y)], vec![(1, x1, y), (2, x1 + 100.0, y)], vec![(1, x1 - 30.0, y), (2, x1 + 70.0, y)], vec![(2, x1 + 70.0, y)], vec![(2, x1 + 150.0, y + 64.0)]],
+        );
+        assert!(ed.map().cells.is_empty(), "{:?}", ed.map().cells);
+        assert_eq!(ed.history().undo_depth(), 0);
+    }
+
+    /// Where a cell is under the paint threshold on the glass a tap zooms
+    /// in on its point to a cell of `builder_tap_zoom_cell_mm`, and a drag
+    /// pans; neither paints. A mouse paints at any size.
+    #[test]
+    fn under_the_paint_threshold_a_tap_zooms_in_and_a_drag_pans() {
+        let rules = CanvasRules::of(&crate::tuning::Tuning::DEFAULT);
+        let (mut ed, layout, _) = big_editor((852.0, 393.0), 3.0, false);
+        let vp = ed.viewport();
+        assert!(vp.cell_mm(ed.camera().scale(&vp)) < rules.paint_min_cell_mm, "the study map at FIT on a phone is too small to paint");
+        let at = Vec2::new(layout.field.x + 400.0, layout.field.y + 200.0);
+        let under = ed.world_at(at, &layout).unwrap();
+        fingers(&mut ed, &layout, &[vec![(1, at.x, at.y)]]);
+        assert!(ed.map().cells.is_empty());
+        let mm = vp.cell_mm(ed.camera().scale(&vp));
+        assert!((mm - rules.tap_zoom_cell_mm).abs() < 0.01, "a fine screen goes to the tap zoom exactly: {mm}");
+        let now = ed.world_at(at, &layout).unwrap();
+        assert!((now.x - under.x).abs() < 2.0 && (now.y - under.y).abs() < 2.0, "about the tapped point");
+        // At 9 mm a finger paints; back under the threshold a drag pans.
+        ed.camera.zoom_at(vp.scale_for_cell_mm(4.0), layout.to_field(at), &vp, &rules);
+        let before = ed.camera().center(&vp);
+        let frames: Vec<Vec<(i32, f32, f32)>> = (0..=10).map(|i| vec![(2, at.x - 8.0 * i as f32, at.y)]).collect();
+        fingers(&mut ed, &layout, &frames);
+        assert!(ed.camera().center(&vp).x > before.x + 1.0, "dragging left shows more to the right");
+        assert!(ed.map().cells.is_empty());
+        // The mouse is not held to it.
+        ed.update(&BuilderInput { pointer: Some(at), pressed: true, held: true, ..Default::default() }, &layout);
+        ed.update(&BuilderInput { pointer: Some(at), ..Default::default() }, &layout);
+        assert_eq!(ed.map().cells.len(), 1);
+    }
+
+    /// A finger that lands on the bar presses its button and is no part
+    /// of a gesture: dragged onto the canvas it paints nothing.
+    #[test]
+    fn a_finger_on_the_bar_presses_it_and_never_paints() {
+        let (mut ed, layout) = touch_arena();
+        let map = center(MapEditor::map_rect(&layout));
+        let (x, y) = on_cell(&ed, &layout, 10, 8);
+        fingers(&mut ed, &layout, &[vec![(1, map.x, map.y)], vec![(1, x, y)], vec![(1, x + 60.0, y)]]);
+        assert_eq!(ed.open_menu(), Some("map"));
+        assert!(ed.map().cells.is_empty());
+        // With the popup open a finger on the canvas only closes it.
+        fingers(&mut ed, &layout, &[vec![(2, x, y)], vec![(2, x + 60.0, y)]]);
+        assert_eq!(ed.open_menu(), None);
+        assert!(ed.map().cells.is_empty(), "the dismissing finger painted");
     }
 
     /// What a drag across the 96 x 54 study map costs, a cell a frame: the

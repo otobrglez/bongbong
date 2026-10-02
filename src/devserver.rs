@@ -106,7 +106,7 @@ pub const GAME_ONLY_TOOLS: &[&str] = &[
 pub const ONLINE_REFUSED_TOOLS: &[&str] = &[
     "step", "input", "pause", "resume", "restart", "teleport", "set_tank", "kill", "spawn_enemy", "players", "play",
     "build", "builder_tool", "builder_paint", "builder_undo", "builder_redo", "builder_settings",
-    "builder_map", "builder_save",
+    "builder_map", "builder_save", "builder_touch",
 ];
 
 /// Tiles one `terrain` reply lists at most (the standard 34 x 17 field
@@ -424,6 +424,13 @@ pub const TOOLS: &[ToolSpec] = &[
         name: "builder_camera",
         description: "The builder's own camera over its canvas (docs/large-maps-follow-camera.md section 9), the way to frame a screenshot of the builder: `x`/`y` a world point in field pixels to put in the middle of the canvas and `zoom` how many times FIT (1 is FIT, the whole map); a field left out keeps the camera's own. `fit: true` goes back to the whole canvas, as the bar's FIT button does. The zoom is kept between FIT and a cell of `builder_zoom_max_cell_pt` points and the view inside the field, centred on an axis the map does not fill. Independent of the round's `camera` pin. No parameters only reports. Replies like `status.builder.camera`: `fit`, the world `rect` the canvas shows, `scale` (bitmap px per world px), `zoom` (times FIT), `fit_scale`, `device_scale` (device px per world px - whole blocks on the glass when it is a multiple of 0.5), `cell_mm` (a cell's width on a touch screen's glass, what the paint threshold reads) and the canvas `area` (bitmap px, under the bar).",
         schema: r#"{"type":"object","properties":{"x":{"type":"number","description":"World x (field px) for the middle of the canvas"},"y":{"type":"number","description":"World y (field px) for the middle of the canvas"},"zoom":{"type":"number","minimum":1,"description":"Times FIT; 1 is the whole map"},"fit":{"type":"boolean","default":false,"description":"Back to the whole canvas"}}}"#,
+        read_only: false,
+        destructive: false,
+    },
+    ToolSpec {
+        name: "builder_touch",
+        description: "Drive the builder with raw touch frames, the way a touch screen does - the multi-finger input `--touch-from-mouse` cannot make (src/editor/gesture.rs, docs/large-maps-follow-camera.md section 9): one finger paints once it moves past the touch slop (`builder_touch_slop_pt`; a resting finger paints nothing) and a quick one-finger tap paints a cell; two fingers pan and pinch-zoom about their middle, a second finger landing on a stroke takes it back, and a coarse screen's zoom settles on whole blocks when they part; a two-finger tap undoes and a three-finger tap redoes (`builder_tap_seconds`). Where a cell is under `builder_paint_min_cell_mm` on the glass (`status.builder.camera.cell_mm`) a one-finger tap zooms in to `builder_tap_zoom_cell_mm` instead and a drag pans. `frames` is a list of frames, each the touch points down that frame as {id, x, y} in bitmap pixels (the 32 px bar included, as for `click`); a frame with no points lifts every finger, and the tool lifts every finger at its end. Each frame is `dt` seconds (default 1/60). Build mode only. Replies like `mode`, with `camera` (as `status.builder.camera`).",
+        schema: r#"{"type":"object","properties":{"frames":{"type":"array","items":{"type":"array","items":{"type":"object","properties":{"id":{"type":"integer"},"x":{"type":"number"},"y":{"type":"number"}},"required":["id","x","y"]}},"description":"Frames of touch points, first to last"},"dt":{"type":"number","minimum":0,"description":"Seconds per frame (default 1/60)"}},"required":["frames"]}"#,
         read_only: false,
         destructive: false,
     },
@@ -1900,6 +1907,31 @@ impl DevServer {
                 }
                 Ok(builder_camera_json(&session.builder))
             }
+            "builder_touch" => {
+                if session.mode() != Driver::Build {
+                    Err("builder_touch needs build mode - call `build` first".to_string())
+                } else {
+                    touch_frames(params).map(|(frames, dt)| {
+                        let mut down = false;
+                        for touches in frames.into_iter().chain(std::iter::once(Vec::new())) {
+                            let now = !touches.is_empty();
+                            let input = BuilderInput {
+                                pointer: touches.first().map(|t| t.pos),
+                                pressed: now && !down,
+                                held: now,
+                                touches,
+                                dt,
+                                ..BuilderInput::default()
+                            };
+                            session.update_builder(&input, &layout);
+                            down = now;
+                        }
+                        let mut reply = mode_json(session);
+                        reply["camera"] = builder_camera_json(&session.builder);
+                        reply
+                    })
+                }
+            }
             "builder_files" => Ok(json!({
                 "maps": crate::map::available_maps(),
                 "can_save": crate::map::saving_available(),
@@ -2473,6 +2505,35 @@ fn tool_json(b: &MapEditor) -> Value {
         })
         .collect();
     json!({ "tool": b.tool().name(), "category": b.active_category().map(category_name), "categories": categories })
+}
+
+/// `builder_touch`'s frames - each a list of `{id, x, y}` touch points in
+/// bitmap pixels - and its seconds per frame.
+fn touch_frames(params: &Value) -> Result<(Vec<Vec<crate::touch::TouchPoint>>, f32), String> {
+    let dt = match params.get("dt") {
+        None | Some(Value::Null) => PHYSICS_FIXED_DT,
+        Some(v) => match v.as_f64() {
+            Some(s) if s.is_finite() && s >= 0.0 => s as f32,
+            _ => return Err(format!("dt must be seconds, 0 or more, got {v}")),
+        },
+    };
+    let Some(frames) = params.get("frames").and_then(Value::as_array) else {
+        return Err("builder_touch needs `frames`: a list of frames, each a list of {id, x, y}".to_string());
+    };
+    let point = |p: &Value| -> Result<crate::touch::TouchPoint, String> {
+        let (Some(id), Some(x), Some(y)) = (p.get("id").and_then(Value::as_i64), p.get("x").and_then(Value::as_f64), p.get("y").and_then(Value::as_f64)) else {
+            return Err(format!("a touch point is {{id, x, y}} (an integer id and two numbers), got {p}"));
+        };
+        Ok(crate::touch::TouchPoint { id: id as i32, pos: Vec2::new(x as f32, y as f32) })
+    };
+    let frames = frames
+        .iter()
+        .map(|f| match f.as_array() {
+            Some(points) => points.iter().map(point).collect::<Result<Vec<_>, _>>(),
+            None => Err(format!("a frame is a list of touch points, got {f}")),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((frames, dt))
 }
 
 /// `status.builder.camera` and `builder_camera`'s reply: the builder's
@@ -4496,6 +4557,43 @@ cells."1,1" = { kind = "wall" }"#;
         // A zoom that cannot be: FIT is the floor, the largest cell the roof.
         let far = ask(&mut server, &tx, &mut s, "builder_camera", json!({ "zoom": 1000.0 })).unwrap();
         assert!(far["zoom"].as_f64().unwrap() < 1000.0 && far["cell_mm"].as_f64().unwrap() > 0.0, "{far}");
+    }
+
+    /// `builder_touch` plays frames of fingers through the builder: a
+    /// quick tap paints, a two-finger tap undoes it, spread fingers zoom,
+    /// and the tool refuses outside build mode or on a malformed frame.
+    #[test]
+    fn builder_touch_drives_the_builder_with_fingers() {
+        let (mut server, tx) = DevServer::headless();
+        let mut s = game(43);
+        ask(&mut server, &tx, &mut s, "restart", json!({ "map_toml": INLINE_MAP, "seed": 1 })).unwrap();
+        let refused = ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": [] })).unwrap_err();
+        assert!(refused.contains("build mode"), "{refused}");
+        enter_build(&mut server, &tx, &mut s);
+        // A screen where a cell is a finger's size (the window hands the
+        // builder its screen every frame; a test hands it once).
+        let screen = crate::editor::CanvasScreen { device_per_px: 3.0, points_per_px: 1.5, coarse: false };
+        let layout = Layout::for_field(1088.0, 544.0);
+        s.update_builder(&BuilderInput { screen: Some(screen), ..BuilderInput::default() }, &layout);
+        ask(&mut server, &tx, &mut s, "builder_tool", json!({ "tool": "iron" })).unwrap();
+        let base = s.builder.history().undo_depth() as u64;
+        let (x, y) = (12.0 * 32.0, 32.0 + 7.0 * 32.0);
+        let tap = ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": [[{ "id": 1, "x": x, "y": y }]] })).unwrap();
+        assert_eq!(tap["undo_depth"], base + 1, "{tap}");
+        let iron = crate::map::CellObject::Wall { material: crate::obstacle::Material::Iron };
+        assert_eq!(s.builder.map().cell(12, 7), Some(&iron));
+        let two = json!([[{ "id": 1, "x": 300.0, "y": 300.0 }], [{ "id": 1, "x": 300.0, "y": 300.0 }, { "id": 2, "x": 380.0, "y": 300.0 }]]);
+        let undone = ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": two })).unwrap();
+        assert_eq!(undone["undo_depth"], base, "a two-finger tap undoes: {undone}");
+        assert_eq!(s.builder.map().cell(12, 7), None);
+        let pinch: Vec<Value> = (0..=12)
+            .map(|i| json!([{ "id": 3, "x": 500.0 - 10.0 * i as f32, "y": 300.0 }, { "id": 4, "x": 580.0 + 10.0 * i as f32, "y": 300.0 }]))
+            .collect();
+        let zoomed = ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": pinch })).unwrap();
+        assert_eq!(zoomed["camera"]["fit"], false, "{zoomed}");
+        assert!(zoomed["camera"]["zoom"].as_f64().unwrap() > 2.0, "{zoomed}");
+        assert!(ask(&mut server, &tx, &mut s, "builder_touch", json!({ "frames": [[{ "id": 1 }]] })).unwrap_err().contains("{id, x, y}"));
+        assert!(ask(&mut server, &tx, &mut s, "builder_touch", json!({})).unwrap_err().contains("frames"));
     }
 
     #[test]

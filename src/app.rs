@@ -1760,6 +1760,11 @@ pub fn run(args: Args) {
                     undo: ctrl && rl.is_key_pressed(KeyboardKey::KEY_Z),
                     redo: ctrl && rl.is_key_pressed(KeyboardKey::KEY_Y),
                     typed,
+                    // The fingers themselves, ids and all - the builder's
+                    // gestures read every one (`editor::gesture`), and
+                    // `--touch-from-mouse` stands a held left button in
+                    // for one.
+                    touches: touch_points.clone(),
                     dt,
                     // The screen the canvas is measured on: its zoom steps
                     // in device pixels, its touch sizes in points.
