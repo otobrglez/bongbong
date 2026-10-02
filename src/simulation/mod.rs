@@ -831,6 +831,14 @@ pub struct Game {
     /// `--seed`: pins the round seed, so every restart replays the
     /// identical round - the repro loop for a round the probe flagged.
     pub seed_override: Option<u64>,
+    /// The builder's PLAY HERE (`mode::Session::play_here`): the map cell
+    /// seat 1 starts on in place of the map's `start`, the map itself left
+    /// as it is. Set before `init` and kept across restarts, so a round
+    /// tried from here starts here again; PLAY, a level and a map put in
+    /// the round's place clear it. With it set, seat 2 takes the fallback
+    /// beside seat 1 rather than the map's `start2`. `None` - every round
+    /// but the builder's test from a spot - is the map's own start.
+    pub start_override: Option<(i32, i32)>,
     /// The seed this round actually ran with (see `round_seed()`).
     round_seed: u64,
     /// The sky this round is fought and drawn under (docs/weather.md),
@@ -1173,9 +1181,10 @@ impl Game {
         let row = resolve_player_row(self.player_row_override, tuning().player_tank, self.map.tank, || {
             rng.random_range(0..TANK_VARIANTS)
         });
-        // The map's start cell, else the nearest non-wall cell to the
-        // center so a wall at the center doesn't spawn the player inside it.
-        let start_cell = self.map.start_cell().unwrap_or_else(|| {
+        // The builder's PLAY HERE cell, else the map's start cell, else the
+        // nearest non-wall cell to the center so a wall at the center
+        // doesn't spawn the player inside it.
+        let start_cell = self.start_override.or_else(|| self.map.start_cell()).unwrap_or_else(|| {
             let (center_col, center_row) = map::world_to_cell(Position::new(width / 2.0, height / 2.0));
             self.map.nearest_free_cell(center_col, center_row)
         });
@@ -1278,12 +1287,13 @@ impl Game {
             let row = resolve_player_row(pin, -1, map_row, || rng.random_range(0..TANK_VARIANTS));
             // Seat 1 takes the map's `start2` cell (nudged off a solid
             // tile); every seat without an authored start - and seat 1 with
-            // a `start2` inside player 1's clearance - takes the nearest
-            // usable nav cell to player 1 that keeps a clear tank's width
-            // from every seat already down, moved ashore if that lands it
-            // in a lake.
+            // a `start2` inside player 1's clearance, or in a round started
+            // from the builder's spot, whose `start2` is by the map's start
+            // and not by player 1 - takes the nearest usable nav cell to
+            // player 1 that keeps a clear tank's width from every seat
+            // already down, moved ashore if that lands it in a lake.
             let placed: Vec<Position> = std::iter::once(center).chain(others.iter().copied()).collect();
-            let position = (seat == 1)
+            let position = (seat == 1 && self.start_override.is_none())
                 .then(|| self.map.start2_cell())
                 .flatten()
                 .map(|(col, row)| {
@@ -3969,6 +3979,24 @@ impl Game {
         // round costs more.
         grid.weigh(self.water.shallow_cells(), tuning().water_ford_path_cost.max(1) as u32);
         grid
+    }
+
+    /// The map cell nearest `near` a tank can be put down on in this
+    /// round's terrain (`battlefield::drop_cell` over `grid`, this round's
+    /// `nav_grid`): a worst-case tank's box clear of every tile and deep
+    /// cell, out of deep water, off every active portal's trigger - a hull
+    /// put down on one would be sent through at once - and passing `ok`.
+    /// The builder's PLAY HERE spot and the linter's quick fixes ask it.
+    /// Reads the round, draws no RNG.
+    pub fn drop_cell(&self, grid: &Grid, near: Position, ok: impl Fn((i32, i32), Position) -> bool) -> Option<(i32, i32)> {
+        let (width, height) = self.map.field_size();
+        let mut obstacles: Vec<Position> = self.world.query::<&Obstacle>().iter().map(|o| o.position).collect();
+        obstacles.extend(self.water.deep_cells());
+        let trigger = tuning().portal_trigger_radius;
+        let portals = self.active_portals();
+        battlefield::drop_cell(width, height, grid, &obstacles, near, |cell, p| {
+            self.water.depth_at(p) != crate::ground::Depth::Deep && portals.iter().all(|&q| q.distance_to(p) > trigger) && ok(cell, p)
+        })
     }
 
     /// The map's portal anchors, active or not (docs/teleporting.md).

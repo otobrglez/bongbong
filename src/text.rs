@@ -194,6 +194,7 @@ keys! {
     EDITOR_FILE = "editor-file";
     EDITOR_MAP = "editor-map";
     EDITOR_FIT = "editor-fit";
+    EDITOR_PLAY_HERE = "editor-play-here";
     EDITOR_TOOL = "editor-tool";
     CATEGORY_WALL = "category-wall";
     CATEGORY_PROP = "category-prop";
@@ -839,6 +840,8 @@ mod text_tests {
             (keys::EDITOR_UNDO, HUD_LABEL_SIZE, 36, vec![]),
             (keys::EDITOR_REDO, HUD_LABEL_SIZE, 36, vec![]),
             (keys::EDITOR_FIT, HUD_LABEL_SIZE, 36, vec![]),
+            // PLAY HERE in its wider small button, 10 px in 64.
+            (keys::EDITOR_PLAY_HERE, HUD_LABEL_SIZE, 60, vec![]),
             (keys::FILE_LOAD, HUD_TEXT_SIZE, 168, vec![]),
             (keys::FILE_SAVE, HUD_TEXT_SIZE, 168, vec![]),
             (keys::FILE_SAVE_AS, HUD_TEXT_SIZE, 168, vec![]),

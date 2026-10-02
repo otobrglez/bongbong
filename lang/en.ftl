@@ -244,6 +244,9 @@ editor-file = FILE
 editor-map = MAP
 # The camera back to the whole canvas.
 editor-fit = FIT
+# A round from the middle of the view rather than the map's start, 10 px
+# in a 68 px button just before PLAY (about 9 letters).
+editor-play-here = PLAY HERE
 # The status line's fallback before a category is active.
 editor-tool = TOOL
 

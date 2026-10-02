@@ -64,6 +64,22 @@ impl Driver {
     }
 }
 
+/// Where PLAY HERE puts seat 1 in `game`, a round just set up on the
+/// builder's map from the map's own start: the cell nearest `near` - the
+/// middle of the builder's view - that a tank can be put down on
+/// (`Game::drop_cell`: spawn-legal clearance, out of deep water, off a
+/// portal) in the part of the nav grid the map's own start is in, so the
+/// test is driven where the round is played and never from a pocket the
+/// router cannot leave (Unreal's Play From Here trap). `None` where there
+/// is no such cell.
+pub fn play_here_cell(game: &Game, near: crate::math::Vec2) -> Option<(i32, i32)> {
+    let start = game.seat_pose(0)?.position;
+    let (width, height) = game.map.field_size();
+    let grid = game.nav_grid(width, height);
+    let parts = grid.components();
+    game.drop_cell(&grid, near, |_, p| parts.connected(&grid, start, p))
+}
+
 /// The whole windowed session: a round and the map it came from, in
 /// whichever mode is live.
 pub struct Session {
@@ -196,6 +212,7 @@ impl Session {
         let map = self.campaign.as_ref().ok_or("this session has no levels")?.map(i)?;
         self.builder.open(map.clone());
         self.game.map = map;
+        self.game.start_override = None;
         self.sync_level();
         self.dialog = false;
         self.players_dialog = false;
@@ -235,9 +252,10 @@ impl Session {
 
     /// Count a won level as progress. Called after every frame's steps:
     /// only the first call after a win moves anything, and
-    /// `take_progress` hands the move to the store.
+    /// `take_progress` hands the move to the store. A round started from
+    /// the builder's spot (`play_here`) is a test and wins nothing.
     pub fn note_outcome(&mut self) {
-        if self.game.outcome() != Outcome::Won {
+        if self.game.outcome() != Outcome::Won || self.game.start_override.is_some() {
             return;
         }
         if let (Some(i), Some(campaign)) = (self.level(), self.campaign.as_mut()) {
@@ -479,8 +497,9 @@ impl Session {
     }
 
     /// `PLAY` from the builder: the edited map becomes the round's map and
-    /// a fresh round starts (a `--seed` stays pinned, the mission banner
-    /// shows as on any restart). A no-op in play mode.
+    /// a fresh round starts from the map's own start (a `--seed` stays
+    /// pinned, the mission banner shows as on any restart). A no-op in
+    /// play mode.
     pub fn play(&mut self) -> Driver {
         if self.driver == Driver::Build {
             // A menu left open would still be there on the next BUILD.
@@ -491,11 +510,41 @@ impl Session {
                 campaign.remember_edit(&self.game.map);
             }
             self.sync_level();
+            self.game.start_override = None;
             let (width, height) = self.game.map.field_size();
             self.game.init(width, height);
             self.driver = Driver::Play;
             self.dialog = false;
             self.players_dialog = false;
+        }
+        self.driver
+    }
+
+    /// `PLAY HERE` from the builder (docs/large-maps-patterns.md, "Play
+    /// from here"): `play`, with seat 1 put down on the cell nearest the
+    /// middle of the builder's view a tank can start on in the part of the
+    /// map its own start drives in (`play_here_cell`), where the round's
+    /// camera opens. The map and its history are untouched: the spot is
+    /// the round's (`Game::start_override`), kept by its restarts and gone
+    /// with the next `PLAY`. Seat 2 on a couch starts beside seat 1. A
+    /// round like this is a test, not a clear or a level won. With no such
+    /// cell anywhere, it is a plain `PLAY`. A no-op in play mode.
+    pub fn play_here(&mut self) -> Driver {
+        if self.driver != Driver::Build {
+            return self.driver;
+        }
+        let vp = self.builder.viewport();
+        let near = self.builder.camera().center(&vp);
+        self.play();
+        if let Some(cell) = play_here_cell(&self.game, near) {
+            // The same round as the one just set up, its start moved: the
+            // seed it drew is pinned for the one `init` and given back.
+            let pinned = self.game.seed_override;
+            self.game.seed_override = Some(self.game.round_seed());
+            self.game.start_override = Some(cell);
+            let (width, height) = self.game.map.field_size();
+            self.game.init(width, height);
+            self.game.seed_override = pinned;
         }
         self.driver
     }
@@ -723,17 +772,25 @@ impl Session {
     /// to start, and the builder's canvas and baseline.
     pub fn replace_map(&mut self, map: MapFile) {
         self.game.map = map.clone();
+        self.game.start_override = None;
         self.builder.load(map);
         self.sync_level();
     }
 
-    /// One frame of the builder, in build mode: `PLAY` starts the round.
+    /// One frame of the builder, in build mode: `PLAY` starts the round,
+    /// `PLAY HERE` starts it from the middle of the builder's view.
     pub fn update_builder(&mut self, input: &BuilderInput, layout: &Layout) {
         if self.driver != Driver::Build {
             return;
         }
-        if let EditorAction::Play = self.builder.update(input, layout) {
-            self.play();
+        match self.builder.update(input, layout) {
+            EditorAction::None => {}
+            EditorAction::Play => {
+                self.play();
+            }
+            EditorAction::PlayHere => {
+                self.play_here();
+            }
         }
     }
 
@@ -1278,6 +1335,155 @@ mod session_tests {
         say(&mut room, Msg::Welcome(welcome()));
         assert_eq!(s.update_lobby(&LobbyInput::default(), field, DT), Driver::Online);
         assert!(s.play_chrome().status.is_some(), "the round's own line is back over the field");
+    }
+
+    /// A session in the builder on `map`, one enemy a round, the canvas
+    /// at FIT.
+    fn build_session(map: MapFile) -> Session {
+        let mut game = Game::default();
+        game.enemy_count_override = Some(1);
+        game.seed_override = Some(7);
+        game.map = map;
+        let (w, h) = game.map.field_size();
+        game.init(w, h);
+        let mut s = Session::new(game);
+        s.driver = Driver::Build;
+        s
+    }
+
+    /// The standard field, its start at the far left.
+    fn open_field() -> MapFile {
+        let mut map = MapFile::new();
+        map.set_cell(3, 8, CellObject::Start);
+        map
+    }
+
+    fn iron(map: &mut MapFile, col: i32, row: i32) {
+        map.set_cell(col, row, CellObject::Wall { material: Material::Iron });
+    }
+
+    /// Every cell PLAY HERE could have taken in `game`, by the rule it is
+    /// documented with, checked the long way: legal against every tile
+    /// and deep cell, reachable from the start, dry, off a portal.
+    fn could_start_on(game: &Game, cell: (i32, i32)) -> bool {
+        let (w, h) = game.map.field_size();
+        let grid = game.nav_grid(w, h);
+        let p = crate::map::cell_to_world(cell.0, cell.1);
+        let mut obstacles: Vec<crate::Position> = game.world.query::<&Obstacle>().iter().map(|o| o.position).collect();
+        obstacles.extend(game.water().deep_cells());
+        let start = game.seat_pose(0).expect("player 1").position;
+        crate::battlefield::enemy_spawn_legal(p, w, h, 0.0, f32::INFINITY, p, 0.0, &grid, &obstacles)
+            && grid.components().connected(&grid, start, p)
+            && game.water().depth_at(p) != crate::ground::Depth::Deep
+    }
+
+    /// PLAY HERE puts player 1 on the legal cell nearest the middle of the
+    /// builder's view - no legal cell is nearer - and leaves the map and
+    /// its history alone; the round's restarts keep the spot and PLAY
+    /// goes back to the map's start.
+    #[test]
+    fn play_here_starts_on_the_legal_cell_nearest_the_view() {
+        let mut map = open_field();
+        // A wall right where the view's middle is: the cell under it and
+        // the ring a tank's box needs round it are out.
+        for (c, r) in [(16, 8), (17, 8), (18, 8), (17, 9)] {
+            iron(&mut map, c, r);
+        }
+        let mut s = build_session(map.clone());
+        let vp = s.builder.viewport();
+        let near = s.builder.camera().center(&vp);
+        let depth = s.builder.history().undo_depth();
+        assert_eq!(s.play_here(), Driver::Play);
+        let cell = s.game.start_override.expect("a spot");
+        assert_eq!(s.game.seat_pose(0).unwrap().position, crate::map::cell_to_world(cell.0, cell.1), "player 1 stands on it");
+        assert!(could_start_on(&s.game, cell), "{cell:?} is a legal start");
+        let d = crate::map::cell_to_world(cell.0, cell.1).distance_to(near);
+        assert!(d < 4.0 * 32.0, "near the middle of the view: {cell:?} is {d} px from {near:?}");
+        for row in 0..=17 {
+            for col in 0..=34 {
+                let nearer = crate::map::cell_to_world(col, row).distance_to(near) < d - 1e-3;
+                assert!(!(nearer && could_start_on(&s.game, (col, row))), "({col},{row}) is nearer and legal");
+            }
+        }
+        assert_eq!(s.builder.map(), &map, "the map is untouched");
+        assert_eq!(s.game.map, map);
+        assert_eq!(s.builder.history().undo_depth(), depth, "and so is its history");
+        // R starts the round over on the same spot; PLAY on the start.
+        s.game.update(crate::simulation::Input { restart_pressed: true, ..Default::default() }, crate::PHYSICS_FIXED_DT, W, H);
+        assert_eq!(s.game.seat_pose(0).unwrap().position, crate::map::cell_to_world(cell.0, cell.1));
+        s.press_build();
+        s.answer_dialog(true);
+        s.play();
+        assert_eq!(s.game.start_override, None);
+        assert_eq!(s.game.seat_pose(0).unwrap().position, crate::map::cell_to_world(3, 8), "PLAY starts on the map's start");
+    }
+
+    /// Deep water and a pen the start never reaches are no place to start:
+    /// with a lake over the middle of the view and an iron pen beside it,
+    /// the spot is on the dry ground the start drives on.
+    #[test]
+    fn play_here_refuses_deep_water_and_a_penned_spot() {
+        let mut map = open_field();
+        // A lake over the middle of the field...
+        for col in 13..=21 {
+            for row in 5..=12 {
+                map.set_cell(col, row, CellObject::Water);
+            }
+        }
+        // ... and an iron pen just right of it, its inside open but cut
+        // off from the start.
+        for row in 3..=14 {
+            iron(&mut map, 23, row);
+            iron(&mut map, 31, row);
+        }
+        for col in 23..=31 {
+            iron(&mut map, col, 3);
+            iron(&mut map, col, 14);
+        }
+        let mut s = build_session(map);
+        // Look at the middle of the pen: its inside is the nearest ground.
+        let vp = s.builder.viewport();
+        s.builder.frame_camera(crate::math::Vec2::new(27.0 * 32.0, 8.5 * 32.0), 3.0);
+        let near = s.builder.camera().center(&vp);
+        assert!((near.x - 27.0 * 32.0).abs() < 1.0, "{near:?}");
+        let cell = play_here_cell(&s.game, near).expect("a spot");
+        let p = crate::map::cell_to_world(cell.0, cell.1);
+        assert!(!(cell.0 > 23 && cell.0 < 31 && cell.1 > 3 && cell.1 < 14), "not inside the pen: {cell:?}");
+        assert!(s.game.water().depth_at(p) != crate::ground::Depth::Deep, "not in the lake: {cell:?}");
+        assert!(could_start_on(&s.game, cell), "{cell:?}");
+        // And looking at the lake's middle: the shore, never the deep.
+        s.builder.frame_camera(crate::math::Vec2::new(17.0 * 32.0, 8.5 * 32.0), 3.0);
+        let near = s.builder.camera().center(&vp);
+        let cell = play_here_cell(&s.game, near).expect("a spot");
+        assert!(could_start_on(&s.game, cell), "{cell:?}");
+        assert!(s.game.water().depth_at(crate::map::cell_to_world(cell.0, cell.1)) != crate::ground::Depth::Deep);
+        s.play_here();
+        assert_eq!(s.game.start_override, Some(cell));
+    }
+
+    /// On a couch, player 2 starts beside player 1's spot, not on the
+    /// map's `start2` by the map's start; and a win from the spot is no
+    /// level won.
+    #[test]
+    fn play_here_seats_player_two_beside_player_one_and_wins_no_level() {
+        let mut map = open_field();
+        map.set_cell(3, 11, CellObject::Start2);
+        let mut s = build_session(map);
+        s.game.players = PlayerCount::TWO;
+        s.play_here();
+        let one = s.game.seat_pose(0).unwrap().position;
+        let two = s.game.seat_pose(1).unwrap().position;
+        // Beside: the nearest open cell a clear tank's width (two of its
+        // size) off player 1.
+        assert!(one.distance_to(two) < 6.0 * 32.0, "beside player 1: {one:?} and {two:?}");
+        assert!(two.distance_to(crate::map::cell_to_world(3, 11)) > 4.0 * 32.0, "not on the map's start2: {two:?}");
+
+        let mut s = level_session(two_levels(), 0);
+        s.driver = Driver::Build;
+        s.play_here();
+        assert!(s.game.start_override.is_some());
+        finish(&mut s, true);
+        assert_eq!(s.take_progress(), None, "a test from a spot wins no level");
     }
 
     #[test]

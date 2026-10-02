@@ -934,6 +934,25 @@ impl DevServer {
         }
     }
 
+    /// `status.builder.buttons`: the builder's own buttons a tool clicks
+    /// by name (`MapEditor::named_buttons`) through the frame the window
+    /// last drew the builder in: window coordinates, what `click` takes,
+    /// and as `bitmap` the builder's bitmap pixels, what `builder_touch`
+    /// takes. Empty outside build mode.
+    fn builder_buttons_json(&self, session: &Session, width: f32, height: f32) -> Value {
+        if session.mode() != Driver::Build {
+            return json!({});
+        }
+        let (layout, view, _) = self.click_frame(session, width, height);
+        let rect = |r: crate::math::Rectangle| {
+            let a = view.to_window(Vec2::new(r.x, r.y));
+            let b = view.to_window(Vec2::new(r.x + r.width, r.y + r.height));
+            json!({ "x": a.x, "y": a.y, "w": b.x - a.x, "h": b.y - a.y, "bitmap": { "x": r.x, "y": r.y, "w": r.width, "h": r.height } })
+        };
+        let buttons: Map<String, Value> = session.builder.named_buttons(&layout).into_iter().map(|(name, r)| (name, rect(r))).collect();
+        Value::Object(buttons)
+    }
+
     /// The corners the window lays out for the live mode in `ui`
     /// (`hud::corners`), `None` where it draws none.
     fn corners(session: &Session, ui: &UiFrame) -> Option<Corners> {
@@ -1359,12 +1378,16 @@ impl DevServer {
             "levels_open": session.level_select.is_some(),
             "levels_focus": session.level_select.as_ref().map(|select| select.focus() + 1),
             "level": level_json(session),
+            // The builder's PLAY HERE spot the local round started from,
+            // `null` for a round from the map's own start.
+            "play_here": session.game.start_override.map(|(c, r)| [c, r]),
             "stats": game.round_stats(),
             "builder": {
                 "dirty": session.builder.dirty(),
                 "tool": session.builder.tool().name(),
                 "camera": builder_camera_json(&session.builder),
                 "navigator": self.navigator_json(session, width, height),
+                "buttons": self.builder_buttons_json(session, width, height),
             },
             "events_kept": self.events.len(),
             "next_event_seq": self.next_seq,

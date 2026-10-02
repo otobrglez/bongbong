@@ -114,6 +114,58 @@ pub fn enemy_spawn_legal(
             .all(|w| (pos.x - w.x).abs() >= separation || (pos.y - w.y).abs() >= separation)
 }
 
+/// The map cell nearest `near` where a tank can be put down - the
+/// builder's PLAY HERE spot and the place a lint fix moves a penned-in
+/// start to: a cell of the field whose point passes `enemy_spawn_legal`'s
+/// terrain terms (a `Grid::usable` cell of `grid`, a worst-case tank's box
+/// clear of every position in `obstacles` - every solid tile and deep
+/// cell; the band and the distance from a player are an enemy's alone),
+/// and then `ok`, the caller's (reachability, an empty cell, ...).
+/// Nearest by distance from `near`, ties on row then column, so the
+/// answer never depends on an iteration order. `None` when no cell of the
+/// field passes.
+pub fn drop_cell(
+    width: f32,
+    height: f32,
+    grid: &Grid,
+    obstacles: &[Position],
+    near: Position,
+    ok: impl Fn((i32, i32), Position) -> bool,
+) -> Option<(i32, i32)> {
+    // A tank's box reaches an obstacle's only within `separation` of it,
+    // under two cells: the obstacles bucketed by cell, a candidate
+    // measures against the ones within two cells of it alone - the same
+    // answer as against all of them, at the cost of a handful.
+    let mut buckets: HashMap<(i32, i32), Vec<Position>> = HashMap::new();
+    for &p in obstacles {
+        buckets.entry(crate::map::world_to_cell(p)).or_default().push(p);
+    }
+    let cols = (width / OBSTACLE_GRID_SIZE).floor() as i32;
+    let rows = (height / OBSTACLE_GRID_SIZE).floor() as i32;
+    let mut cells: Vec<(f32, i32, i32)> = (0..=rows)
+        .flat_map(|row| (0..=cols).map(move |col| (col, row)))
+        .map(|(col, row)| (cell_to_world(col, row).distance_to(near), row, col))
+        .filter(|&(d, _, _)| d.is_finite())
+        .collect();
+    cells.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    let mut close = Vec::new();
+    cells.into_iter().map(|(_, row, col)| (col, row)).find(|&(col, row)| {
+        let p = cell_to_world(col, row);
+        if !grid.usable(p) {
+            return false;
+        }
+        close.clear();
+        for dr in -2..=2 {
+            for dc in -2..=2 {
+                if let Some(bucket) = buckets.get(&(col + dc, row + dr)) {
+                    close.extend_from_slice(bucket);
+                }
+            }
+        }
+        enemy_spawn_legal(p, width, height, 0.0, f32::INFINITY, p, 0.0, grid, &close) && ok((col, row), p)
+    })
+}
+
 /// Collision half-extents for one obstacle tile at grid cell `(gx, gy)`,
 /// given the full set of grid cells occupied by tiles in the same map
 /// (`cells`) - closes the gap `OBSTACLE_HULL_FRACTION`

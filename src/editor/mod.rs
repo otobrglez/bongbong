@@ -85,6 +85,11 @@ const MAP_BUTTON_W: f32 = 64.0;
 /// FIT, after MAP: the camera back to the whole canvas. A small button
 /// like UNDO's.
 const SLOT_FIT: f32 = 788.0;
+/// PLAY HERE, just before PLAY at the bar's right end: a round from the
+/// middle of the view rather than the map's start. A small button, wide
+/// enough for its two words.
+const SLOT_HERE: f32 = 936.0;
+const HERE_W: f32 = 68.0;
 /// How many rows the Load list shows at once (eight fit the 480 px
 /// standard field). When there are more maps than that, the last row is a
 /// pager a tap turns (a touch screen has no wheel) and the wheel scrolls
@@ -419,6 +424,9 @@ pub enum EditorAction {
     None,
     /// PLAY was pressed: start a fresh round on the builder's map.
     Play,
+    /// PLAY HERE was pressed: the same, seat 1 starting at the middle of
+    /// the builder's view (`mode::Session::play_here`).
+    PlayHere,
 }
 
 /// The cells from `from` (excluded) to `to` (included), each sharing an
@@ -1265,6 +1273,24 @@ impl MapEditor {
         Self::bar_button(layout.panel, SLOT_FIT, SMALL_BUTTON_W)
     }
 
+    /// The PLAY HERE button, at its slot from the panel's left like every
+    /// button but PLAY, which keeps the right end.
+    pub(crate) fn here_rect(layout: &Layout) -> Rectangle {
+        Self::bar_button(layout.panel, SLOT_HERE, HERE_W)
+    }
+
+    /// The bar's buttons a tool presses by name, in bitmap pixels - the
+    /// rects the hit tests read (the dev server's `status.builder.buttons`).
+    pub fn named_buttons(&self, layout: &Layout) -> Vec<(String, Rectangle)> {
+        vec![
+            ("play".to_string(), mode_button_rect(layout.panel)),
+            ("play_here".to_string(), Self::here_rect(layout)),
+            ("fit".to_string(), Self::fit_rect(layout)),
+            ("map".to_string(), Self::map_rect(layout)),
+            ("file".to_string(), Self::file_rect(layout)),
+        ]
+    }
+
     /// The bar button under a window position, if any. Every button's
     /// hit rect reaches `EDITOR_BAR_HIT_SLACK` above and below its drawn
     /// box, so a slightly low tap on a phone still lands.
@@ -1301,6 +1327,9 @@ impl MapEditor {
         }
         if on(Self::fit_rect(layout)) {
             return Some(BarButton::Fit);
+        }
+        if on(Self::here_rect(layout)) {
+            return Some(BarButton::PlayHere);
         }
         None
     }
@@ -1733,6 +1762,7 @@ impl MapEditor {
     fn press_bar_button(&mut self, button: BarButton) -> EditorAction {
         match button {
             BarButton::Play => return EditorAction::Play,
+            BarButton::PlayHere => return EditorAction::PlayHere,
             BarButton::File => self.popup = Some(Popup::File),
             BarButton::CategoryIcon(category) => self.select_tool(self.current_tool(category)),
             BarButton::CategoryMenu(category) => self.popup = Some(Popup::Dropdown(category)),
@@ -1957,6 +1987,8 @@ enum BarButton {
     /// The camera back to the whole canvas.
     Fit,
     Play,
+    /// PLAY from the middle of the view.
+    PlayHere,
 }
 
 /// The MAP panel's rows, top to bottom.
@@ -2519,6 +2551,32 @@ mod editor_tests {
         let press = BuilderInput { pointer: Some(on_play), pressed: true, held: true, ..Default::default() };
         assert_eq!(ed.update(&press, &layout), EditorAction::Play);
         assert_eq!(ed.map().cells.len(), 0);
+    }
+
+    /// PLAY HERE is its own button on the bar, before PLAY: a press is the
+    /// action, never a paint, with a finger as with the mouse.
+    #[test]
+    fn play_here_is_a_bar_button_before_play() {
+        let layout = Layout::for_field(W, H);
+        let mut ed = MapEditor::new(MapFile::new());
+        let here = MapEditor::here_rect(&layout);
+        assert!(here.x + here.width <= mode_button_rect(layout.panel).x);
+        let at = Vec2::new(here.x + here.width / 2.0, here.y + here.height / 2.0);
+        let press = BuilderInput { pointer: Some(at), pressed: true, held: true, ..Default::default() };
+        assert_eq!(ed.update(&press, &layout), EditorAction::PlayHere);
+        ed.update(&BuilderInput { pointer: Some(at), ..Default::default() }, &layout);
+        let finger = BuilderInput {
+            pointer: Some(at),
+            pressed: true,
+            held: true,
+            touches: vec![crate::touch::TouchPoint { id: 1, pos: at }],
+            dt: 1.0 / 60.0,
+            ..Default::default()
+        };
+        assert_eq!(ed.update(&finger, &layout), EditorAction::PlayHere);
+        ed.update(&BuilderInput { dt: 1.0 / 60.0, ..Default::default() }, &layout);
+        assert!(ed.map().cells.is_empty());
+        assert_eq!(ed.history().undo_depth(), 0);
     }
 
     /// A press-and-release at a window position, the way a click or a

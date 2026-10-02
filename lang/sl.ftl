@@ -177,6 +177,7 @@ editor-build = GRADI
 editor-file = MENI
 editor-map = IGRA
 editor-fit = VSE
+editor-play-here = IGRAJ TU
 editor-tool = ORODJE
 
 category-wall = ZID

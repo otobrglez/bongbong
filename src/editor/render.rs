@@ -554,6 +554,8 @@ impl MapEditor {
         draw_small_button(d, Self::fit_rect(layout), &text().get(keys::EDITOR_FIT), fit_color);
 
         let _ = cursor; // the readout is the field's status line, see `render`
+        // PLAY HERE beside PLAY, in PLAY's amber.
+        draw_small_button(d, Self::here_rect(layout), &text().get(keys::EDITOR_PLAY_HERE), BUILD_ACCENT);
         crate::render::hud::draw_mode_button(d, panel, &text().get(keys::BUTTON_PLAY), BUILD_ACCENT);
     }
 
@@ -1121,9 +1123,10 @@ mod bar_tests {
         assert!(SLOT_REDO + SMALL_BUTTON_W <= SLOT_FILE);
         assert!(SLOT_FILE + MAP_BUTTON_W <= SLOT_MAP);
         assert!(SLOT_MAP + MAP_BUTTON_W <= SLOT_FIT);
+        assert!(SLOT_FIT + SMALL_BUTTON_W <= SLOT_HERE, "FIT runs into PLAY HERE");
         let layout = Layout::for_field(W, H);
         let play = mode_button_rect(layout.panel);
-        assert!(SLOT_FIT + SMALL_BUTTON_W <= play.x, "FIT runs into PLAY");
+        assert!(SLOT_HERE + HERE_W <= play.x, "PLAY HERE runs into PLAY");
         // The caret sits clear of the icon and inside the button's box.
         assert!(CATEGORY_CARET_X as f32 >= ICON_PX, "the caret overlaps the icon");
         assert!(CATEGORY_CARET_X + CARET_W <= (CATEGORY_W - BUTTON_GAP) as i32, "caret leaves the button");
