@@ -823,6 +823,10 @@ pub struct MapEditor {
     /// tool that moves the camera between frames measures against.
     screen: CanvasScreen,
     area: (f32, f32),
+    /// Whether `update` has been given a frame yet: until it has, the
+    /// canvas area is the canvas's own field - FIT at a texel a pixel, the
+    /// frame `BuilderFrame::headless` lays out - whatever map it holds.
+    framed: bool,
     /// Where the pointer was on the last frame of a pan drag (the middle
     /// button, or Space with the primary): the drag moves the canvas by
     /// the difference.
@@ -955,6 +959,7 @@ impl MapEditor {
             camera: BuilderCamera::default(),
             screen: CanvasScreen::default(),
             area,
+            framed: false,
             pan_from: None,
             wheel_accum: 0.0,
             pending_look: None,
@@ -1335,6 +1340,9 @@ impl MapEditor {
         self.lint_marked = None;
         self.index.take();
         self.dirty.set(None);
+        if !self.framed {
+            self.area = self.map.field_size();
+        }
     }
 
     /// `map_changed` for an edit of the cells `changes` touched alone: the
@@ -2892,6 +2900,7 @@ impl MapEditor {
             self.screen = screen;
         }
         self.area = (layout.field.w, layout.field.h);
+        self.framed = true;
         if let Some(rect) = self.pending_look.take() {
             self.apply_look(rect);
         }
@@ -4813,6 +4822,22 @@ mod editor_tests {
         let screen = CanvasScreen { device_per_px: frame.view.scale * device, points_per_px: frame.view.scale, coarse };
         ed.update(&BuilderInput { screen: Some(screen), ..Default::default() }, &frame);
         (ed, frame)
+    }
+
+    /// Until the builder is given a frame its canvas area is the canvas's
+    /// own field, whatever map it holds - a map loaded then is measured at
+    /// FIT a texel a pixel, as `BuilderFrame::headless` lays it out - and
+    /// once a frame has set it, a load keeps the window's area.
+    #[test]
+    fn an_unframed_canvas_is_measured_against_the_map_it_holds() {
+        let mut big = MapFile::default();
+        big.size = Some((48.0, 24.0));
+        let mut ed = MapEditor::new(MapFile::default());
+        ed.load(big.clone());
+        assert_eq!((ed.viewport().area, ed.viewport().fit_scale()), ((1536.0, 768.0), 1.0));
+        let (mut ed, frame) = big_editor((1920.0, 1080.0), 1.0, true);
+        ed.load(big);
+        assert_eq!(ed.viewport().area, (frame.layout.field.w, frame.layout.field.h), "the window's area stays");
     }
 
     /// The wheel zooms at the cursor - the world under it stays - and the
