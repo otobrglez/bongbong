@@ -346,7 +346,7 @@ local round use the same code, and the dev server reports it.
   `Tank::rotation`, which snaps on a direction change (not the eased
   `visual_rotation`), with a short hold before a reversal flips the
   look-ahead (Keren's dual forward focus).
-- **Smooth with a critically damped spring** (`SmoothDamp`, about 0.16 s),
+- **Smooth with a critically damped spring** (`SmoothDamp`, 0.06 s),
   frame-rate independent. A spring trails a target moving at constant
   speed by about `v * halflife / ln 2` (30 px at 210 px/s and 0.1 s);
   feeding the tank's velocity forward as the spring's goal velocity

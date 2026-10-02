@@ -1942,7 +1942,7 @@ tunables! {
         /// spring of this smoothing time (Unity's `SmoothDamp`), the seat's
         /// velocity fed forward so a steady drive does not trail. 0 sticks
         /// the view to its goal.
-        camera_spring_seconds: f32 = 0.16 in 0.0 ..= 2.0;
+        camera_spring_seconds: f32 = 0.06 in 0.0 ..= 2.0;
         /// Seconds a screen stays on its seat's wreck before it follows the
         /// nearest live teammate - in a wave round the seat comes back
         /// through a gate with the next wave, and the view cuts back to it

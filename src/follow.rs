@@ -1067,7 +1067,7 @@ mod follow_tests {
     fn the_rules_come_from_the_camera_group() {
         let r = rules();
         assert_eq!(r.dead_zone_px, 12.8, "about 0.4 cell");
-        assert_eq!((r.lead_at_rest, r.lead_ease_seconds, r.spring_seconds), (0.35, 0.5, 0.16));
+        assert_eq!((r.lead_at_rest, r.lead_ease_seconds, r.spring_seconds), (0.35, 0.5, 0.06));
         for name in [
             "camera_dead_zone_px",
             "camera_lead_at_rest",
@@ -1706,7 +1706,9 @@ mod follow_tests {
             }
             let shot = f.update(&pair(a, b), DT, &s, &r);
             assert_eq!((shot.kind, shot.seat, shot.split, shot.cut), (ShotKind::Seat, Some(kept), None, false), "seat {down} down");
-            assert!((shot.center - at).length() < 8.0, "the view goes on from the half seat {kept} had: {at:?} -> {:?}", shot.center);
+            // The spring glides the view on from there: under a cell in the
+            // first frame, never a cut to where the one view will stand.
+            assert!((shot.center - at).length() < 32.0, "the view goes on from the half seat {kept} had: {at:?} -> {:?}", shot.center);
         }
     }
 
