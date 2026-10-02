@@ -54,6 +54,20 @@ thread_local! {
     /// What the page's own controls take of the canvas, as `follow_canvas`
     /// last read it.
     static OVERLAY: Cell<PageOverlay> = const { Cell::new(PageOverlay { top: 0.0, rect: None }) };
+    /// Whether the page is on a touch screen (`set_touch_screen`).
+    static TOUCH: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Note whether the page is on a touch screen, as it published it at
+/// startup (`window.bbTouch`, site/src/scripts/overlay.ts).
+pub fn set_touch_screen(touch: bool) {
+    TOUCH.with(|t| t.set(touch));
+}
+
+/// Whether the page is on a touch screen - a phone's or a tablet's
+/// browser, which `app::screen` frames as the app on that device.
+pub fn touch_screen() -> bool {
+    TOUCH.with(Cell::get)
 }
 
 /// The page's controls over the canvas, as the page published them

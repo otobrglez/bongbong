@@ -174,9 +174,13 @@ fn ui_rect_on_bitmap(ui: &UiFrame, view: &View, r: crate::math::Rectangle) -> cr
 ///   and otherwise a desktop's 96 points to the inch, its size unknown.
 ///   GLFW gives a monitor's mode in points on macOS and in pixels
 ///   elsewhere.
-/// - The web has no physical size to read: the CSS reference pixel, 96
-///   points to the inch. Its window is the canvas's buffer in device
-///   pixels, which `web::units_per_point` turns back into CSS pixels.
+/// - The web has no physical size to read. Its window is the canvas's
+///   buffer in device pixels, which `web::units_per_point` turns back into
+///   CSS pixels; on a desktop a CSS pixel is the reference pixel, 96 points
+///   to the inch, while a touch screen's page (`web::touch_screen`) is a
+///   phone or a tablet, framed as the app on that device is - fine, its
+///   size unknown -, so a room's seats in a browser and in the app see the
+///   same world.
 /// - A phone or a tablet is fine (above `view_fine_ppi`), so the zoom stays
 ///   exact, its size unknown. Android's window is in device pixels, which
 ///   the scale DPI turns back into points.
@@ -187,7 +191,11 @@ fn screen(rl: &RaylibHandle) -> Screen {
     #[cfg(target_os = "emscripten")]
     {
         let units = web::units_per_point(rl);
-        Screen::new(width / units, height / units, units, 96.0 * units).with_mm_per_point(25.4 / 96.0)
+        if web::touch_screen() {
+            Screen::new(width / units, height / units, units, f32::INFINITY)
+        } else {
+            Screen::new(width / units, height / units, units, 96.0 * units).with_mm_per_point(25.4 / 96.0)
+        }
     }
     #[cfg(target_os = "android")]
     {
@@ -410,6 +418,12 @@ const PAGE_LANG: &std::ffi::CStr = c"(function(){try{return String(window.bbLang
 /// query): `reduce`, `no-preference`, or nothing.
 #[cfg(target_os = "emscripten")]
 const PAGE_MOTION: &std::ffi::CStr = c"(function(){try{return String(window.bbMotion||'')}catch(e){return ''}})()";
+
+/// Whether the page is on a touch screen, as it published it
+/// (`site/src/scripts/overlay.ts`, the query its controls move by): `1`,
+/// or nothing.
+#[cfg(target_os = "emscripten")]
+const PAGE_TOUCH: &std::ffi::CStr = c"(function(){try{return String(window.bbTouch||'')}catch(e){return ''}})()";
 
 /// This browser's reconnect key, minted and kept by the page - one per
 /// tab, so two tabs in one browser are two seats rather than one seat
@@ -1115,6 +1129,10 @@ pub fn run(args: Args) {
     // The platform's word on motion (`motion.rs`), read once like the
     // language: the `reduce_motion` row follows it unless set.
     crate::motion::set_platform(platform_motion());
+    // A page on a touch screen is framed as the app on that device
+    // (`screen`), read once like the motion switch.
+    #[cfg(target_os = "emscripten")]
+    web::set_touch_screen(page_string(PAGE_TOUCH).trim() == "1");
     eprintln!(
         "[motion] the platform asks for {}",
         match crate::motion::platform() {

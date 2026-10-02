@@ -18,10 +18,15 @@ const GAP_PX = 3;
 
 export function installOverlay(): void {
   window.bbOverlay = "";
+  const touch = window.matchMedia ? window.matchMedia(TOUCH) : null;
+  // Whether this is a touch screen, read once by the game at startup
+  // (src/app.rs `screen`): a phone's or a tablet's browser frames the view
+  // as the app on that device does, rather than at a desktop's 96 CSS
+  // pixels to the inch.
+  window.bbTouch = touch && touch.matches ? "1" : "";
   const canvas = document.getElementById("canvas");
   const controls = document.querySelector<HTMLElement>(".overlay-controls");
   if (!canvas || !controls) return;
-  const touch = window.matchMedia ? window.matchMedia(TOUCH) : null;
 
   const publish = () => {
     const c = canvas.getBoundingClientRect();

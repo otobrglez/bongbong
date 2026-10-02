@@ -30,6 +30,10 @@ declare global {
      *  width height` in CSS pixels, read once a frame by `app/web.rs`.
      *  See `overlay.ts`. */
     bbOverlay: string;
+    /** "1" on a touch screen - `(hover: none) and (pointer: coarse)` -,
+     *  else empty: read once at startup by `app.rs`, which frames a phone's
+     *  or a tablet's browser as the app on that device. See `overlay.ts`. */
+    bbTouch: string;
   }
 
   // Old WebKit's prefixed Fullscreen API (see fullscreen.ts).
