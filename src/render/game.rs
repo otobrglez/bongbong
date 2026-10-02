@@ -312,6 +312,14 @@ impl Game {
         let frame_ms = rl.get_frame_time() * 1000.0;
         let hud = HudModel::gather(self, chrome.seat);
         let t = crate::text::text();
+        // The seats whose shells ride under their rings: this window's
+        // own - the room's seat online, the couch's one or two locally -
+        // and only where the HUD is drawn at all.
+        let ammo_seats: Vec<u8> = match (chrome.hud, chrome.seat) {
+            (false, _) => Vec::new(),
+            (true, Some(seat)) => vec![seat],
+            (true, None) => (0..self.players.count().min(2) as u8).collect(),
+        };
 
         // Precompute the centered end-of-round banner (text width must be
         // measured on the RaylibHandle, outside the draw closure).
@@ -377,7 +385,7 @@ impl Game {
                     d.clear_background(Color::WHITE);
                     d.draw_mode2D(in_target, |mut d, _| {
                         self.paint_field_lit(&mut d, textures, false, cull);
-                        self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, 1.0, camera);
+                        self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, 1.0, camera, &ammo_seats);
                     });
                 });
             }
@@ -402,13 +410,13 @@ impl Game {
                         }
                         self.paint_field_lit(&mut d, textures, snowed, cull);
                         if !plan.lit {
-                            self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera);
+                            self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera, &ammo_seats);
                         }
                     });
                     if plan.lit {
                         crate::render::weather::multiply_light(&mut d, light, &frame);
                         d.draw_mode2D(in_target, |mut d, _| {
-                            self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera);
+                            self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera, &ammo_seats);
                         });
                     }
                     if plan.sky {
@@ -440,7 +448,7 @@ impl Game {
                         d.draw_mode2D(in_target, |mut d, _| {
                             self.paint_field_lit(&mut d, textures, plan.ground, cull);
                             if !plan.lit {
-                                self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera);
+                                self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera, &ammo_seats);
                             }
                         });
                     });
@@ -451,7 +459,7 @@ impl Game {
                     rl.draw_texture_mode(thread, to, |mut d| {
                         passes.draw_lit(&mut d, under, &frame);
                         d.draw_mode2D(in_target, |mut d, _| {
-                            self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera);
+                            self.paint_field_glowing(&mut d, textures, effects.shots.as_deref_mut(), effects.fx, day_pools, camera, &ammo_seats);
                         });
                     });
                 }
@@ -1122,14 +1130,25 @@ impl Game {
     }
 
     /// What shines by its own light, over the lit field and so as bright
-    /// at night as at noon: the locate labels, the light the shots throw,
-    /// the shots, hits, flames and flares, the blasts, whatever is in the
-    /// air and the particles, in world pixels. `day_pools` scales the
-    /// daylight's glow pools on the ground (`draw_ground_light`), which the
-    /// light map stands in for under a dark sky; `camera` is the view the
-    /// target holds, which the shot shaders place themselves in and whose
-    /// culling rectangle the many small things are tested against.
-    fn paint_field_glowing<D: RaylibDraw>(&self, d: &mut D, textures: &Textures, mut shots: Option<&mut ShotShaders>, fx: &crate::fx::Fx, day_pools: f32, camera: &Camera) {
+    /// at night as at noon: the locate labels and the ammo gauges under
+    /// the `ammo_seats`' rings, the light the shots throw, the shots, hits,
+    /// flames and flares, the blasts, whatever is in the air and the
+    /// particles, in world pixels. `day_pools` scales the daylight's glow
+    /// pools on the ground (`draw_ground_light`), which the light map
+    /// stands in for under a dark sky; `camera` is the view the target
+    /// holds, which the shot shaders place themselves in and whose culling
+    /// rectangle the many small things are tested against.
+    #[allow(clippy::too_many_arguments)]
+    fn paint_field_glowing<D: RaylibDraw>(
+        &self,
+        d: &mut D,
+        textures: &Textures,
+        mut shots: Option<&mut ShotShaders>,
+        fx: &crate::fx::Fx,
+        day_pools: f32,
+        camera: &Camera,
+        ammo_seats: &[u8],
+    ) {
         let cull = camera.cull();
         // A hit lights up what it landed on: the hull or the tile drawn
         // again in light for a few frames, stepping down.
@@ -1166,6 +1185,19 @@ impl Game {
         if !self.hide_players {
             for entity in self.players().into_iter().flatten() {
                 crate::simulation::with_tank(&self.world, entity, |tank| draw_player_label(d, tank, self.time));
+            }
+            // The shells this screen's seats have left, as pips along the
+            // lower arc of their rings: the number that matters most,
+            // where the eye already is.
+            let max = tuning().max_shells;
+            for &seat in ammo_seats {
+                let Some(entity) = self.seat(seat as usize) else { continue };
+                crate::simulation::with_tank(&self.world, entity, |tank| {
+                    if !culled(cull, tank.position) {
+                        let color = crate::hud::hud_number_color(tank.shells_ammo as f32, max as f32);
+                        crate::tank::draw_ammo_pips(&mut GpuCanvas::new(d, textures), tank, tank.shells_ammo, max, color);
+                    }
+                });
             }
         }
 
