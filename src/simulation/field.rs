@@ -205,20 +205,48 @@ pub(super) fn spawn_cells(grid: &Grid, seats: &[Position], walls: &[Position]) -
 /// region instead of starting in a heap. `None`, drawing nothing, when no
 /// cell passes.
 pub(super) fn pick_spawn(cells: &[SpawnCell], rng: &mut SmallRng, placed: &[Position], ok: impl Fn(Position) -> bool) -> Option<Position> {
-    let free: Vec<SpawnCell> = cells.iter().copied().filter(|c| ok(c.at)).collect();
-    if free.is_empty() {
-        return None;
+    SpawnPool::new(cells, ok).pick(rng, placed)
+}
+
+/// The cells a band's enemies are drawn from one after another
+/// (`Game::init`), kept as `pick_spawn` would filter them for each: the
+/// cells a fixed test allows, less, as each enemy goes down, the ones too
+/// near it (`place`). The same cells in the same order as filtering them
+/// all again for every enemy, so every draw lands where it would - at a
+/// cost that grows with the cells, not with the cells times the band.
+pub(super) struct SpawnPool {
+    free: Vec<SpawnCell>,
+}
+
+impl SpawnPool {
+    /// The cells of `cells` that `ok` allows, in order.
+    pub(super) fn new(cells: &[SpawnCell], ok: impl Fn(Position) -> bool) -> SpawnPool {
+        SpawnPool { free: cells.iter().copied().filter(|c| ok(c.at)).collect() }
     }
-    let mut best: Option<(SpawnCell, f32)> = None;
-    for _ in 0..tuning().field_spawn_spread_candidates.max(1) {
-        let cell = free[rng.random_range(0..free.len())];
-        let spread = placed.iter().map(|&q| cell.at.distance_to(q)).fold(f32::INFINITY, f32::min);
-        let better = |(b, s): (SpawnCell, f32)| (cell.about_the_walk, spread) > (b.about_the_walk, s);
-        if best.is_none_or(better) {
-            best = Some((cell, spread));
+
+    /// `pick_spawn`'s draw over the pool, `placed` the tanks already down.
+    pub(super) fn pick(&self, rng: &mut SmallRng, placed: &[Position]) -> Option<Position> {
+        let free = &self.free;
+        if free.is_empty() {
+            return None;
         }
+        let mut best: Option<(SpawnCell, f32)> = None;
+        for _ in 0..tuning().field_spawn_spread_candidates.max(1) {
+            let cell = free[rng.random_range(0..free.len())];
+            let spread = placed.iter().map(|&q| cell.at.distance_to(q)).fold(f32::INFINITY, f32::min);
+            let better = |(b, s): (SpawnCell, f32)| (cell.about_the_walk, spread) > (b.about_the_walk, s);
+            if best.is_none_or(better) {
+                best = Some((cell, spread));
+            }
+        }
+        best.map(|(cell, _)| cell.at)
     }
-    best.map(|(cell, _)| cell.at)
+
+    /// A tank went down at `at`: the cells nearer it than `apart` leave
+    /// the pool.
+    pub(super) fn place(&mut self, at: Position, apart: f32) {
+        self.free.retain(|c| c.at.distance_to(at) >= apart);
+    }
 }
 
 /// A field map's preference among the lanes a wave may roll in through:

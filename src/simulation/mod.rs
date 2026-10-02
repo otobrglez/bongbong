@@ -1391,12 +1391,11 @@ impl Game {
         };
 
         let mut enemy_positions: Vec<Position> = Vec::with_capacity(enemy_count);
+        // The field cells clear of the seats, less each enemy's
+        // neighbourhood as it goes down (`field::SpawnPool`).
+        let mut field_pool = field::SpawnPool::new(&field_cells, |pos| pos.distance_to(center) >= clear && clear_of_others(pos));
         while enemy_positions.len() < enemy_count {
-            let field_pick = field::pick_spawn(&field_cells, &mut rng, &enemy_positions, |pos| {
-                pos.distance_to(center) >= clear
-                    && clear_of_others(pos)
-                    && enemy_positions.iter().all(|&p| pos.distance_to(p) >= enemy_clear)
-            });
+            let field_pick = field_pool.pick(&mut rng, &enemy_positions);
             let legal = |pos: Position| {
                 battlefield::enemy_spawn_legal(
                     pos,
@@ -1437,6 +1436,7 @@ impl Game {
             let role = roll_role(self.mission, &mut rng);
             enemy.body = Some(self.physics.spawn_tank(pos, enemy.move_half_extents(false), enemy.mass()));
             enemy_positions.push(pos);
+            field_pool.place(pos, enemy_clear);
             self.world.spawn((enemy, Ai::with_role(role)));
         }
 
