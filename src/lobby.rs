@@ -943,13 +943,13 @@ mod lobby_tests {
         assert_eq!(action, LobbyAction::Host { map: SHIPPED_MAPS[SHIPPED_MAPS.len() - 1].0.into(), mission: Mission::Hunt });
     }
 
-    /// The map stepper draws a map as its slug, uppercased, 24 px in from
+    /// The map stepper draws a map as its slug, uppercased, 24 pt in from
     /// the `<` button (`render::lobby::draw_start`), so every shipped map's
-    /// has to end before the `>` button: 204 px of room at
+    /// has to end before the `>` button: 204 pt of room at
     /// `HUD_TEXT_SIZE`.
     #[test]
     fn every_shipped_slug_fits_the_map_stepper() {
-        let (prev, next) = (button_rect(FIELD, Button::MapPrev), button_rect(FIELD, Button::MapNext));
+        let (prev, next) = (button_rect(AREA, Button::MapPrev), button_rect(AREA, Button::MapNext));
         let room = next.x - (prev.x + prev.width + 24.0);
         assert_eq!(room, 204.0);
         for (name, _) in SHIPPED_MAPS {
