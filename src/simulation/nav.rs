@@ -139,12 +139,10 @@ impl Game {
     /// Tiles are taken at the *seam-closed* extent
     /// (`battlefield::tile_half_extent`, the same one `hits::Terrain` and
     /// the physics colliders use), reduced to the larger axis because
-    /// `Grid::build` carries one scalar per obstacle. The plain
-    /// `hull_size() * 0.5` this used to pass is 12px against a run's real
-    /// 16px, i.e. the planner modelling walls as *smaller* than the solver
-    /// does - the exact direction of error `maplint::check_planner_physics`
-    /// exists to catch, which only stayed silent because the old 48px cell
-    /// pitch happened to skip the band where it would have fired.
+    /// `Grid::build` carries one scalar per obstacle. A tile's plain
+    /// `hull_size() * 0.5` is 12 px against a run's real 16 px: walls
+    /// modelled *smaller* than the solver sees them, the direction of
+    /// error `maplint::check_planner_physics` exists to catch.
     pub(crate) fn nav_grid(&self, width: f32, height: f32) -> Grid {
         let mut grid = Self::nav_open(width, height);
         for (center, half_extent) in self.nav_tile_shapes().into_iter().chain(self.nav_moving_shapes()) {

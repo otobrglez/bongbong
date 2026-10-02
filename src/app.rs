@@ -2343,8 +2343,8 @@ pub fn run(args: Args) {
         // What the screen cannot see: a replica's events read once a frame
         // (a local round's were read after every step), and the arrows
         // drawn only while the camera shows less than the whole field, so
-        // an arena's picture is what it always was. A touch screen keeps
-        // them out from under the thumbs.
+        // an arena draws none. A touch screen keeps them out from under the
+        // thumbs.
         let seats = local_seats(&session);
         if session.mode() == Driver::Online {
             awareness.observe_events(game, &seats);

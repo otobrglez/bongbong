@@ -1079,9 +1079,12 @@ tunables! {
         /// and changes nothing; up and down an enemy closes to 240 px
         /// before it fires, and the engagement ring's north and south
         /// firing slots stand inside it. A rule of the round, never of a
-        /// window: the room and every client read the same table (a
-        /// room's tuning patch rides its `Welcome`), so no device's screen
-        /// decides who may shoot whom.
+        /// window: the round that simulates the enemies applies it - the
+        /// room, online - and every screen frames its own seat's box from
+        /// the table it plays with, which is the build's unless a tester's
+        /// panel or `--tuning` file changes it on that screen alone (a
+        /// room's patch, `Welcome::tuning_json`, carries only the rows that
+        /// size its waves).
         sight_box_half_cols: f32 = 11.5 in 1.0 ..= 64.0;
         sight_box_half_rows: f32 = 7.5 in 1.0 ..= 64.0;
         /// Minimum seconds between AI shots at the baseline magazine level.

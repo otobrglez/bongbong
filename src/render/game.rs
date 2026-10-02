@@ -663,8 +663,8 @@ impl Game {
         // purely as an offset on this blit's destination, in world pixels at
         // the camera's scale - shifting where the already-composited scene
         // lands is the cheapest way to get the effect. A view of part of
-        // the field is shaken only by what happens near it; the whole field
-        // by everything, as an arena always was. Muzzle/impact flash quads
+        // the field is shaken only by what happens near it; the whole field,
+        // an arena's, by everything. Muzzle/impact flash quads
         // and the HUD deliberately aren't shifted: they're either their own
         // small on-screen quad or meant to stay put. The field origin is
         // added on top: the scene lands on the field's place in the bitmap.

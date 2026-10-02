@@ -83,7 +83,7 @@ impl Shockwave {
 /// ripple then shakes it by `shake_reach` - fully near the view, not at all
 /// from a few screens away - so a blast across a field map does not shake
 /// a screen that cannot see it. `None` is the whole field, which every
-/// ripple is in: an arena's shake, exactly as it always was.
+/// ripple is in: an arena's shake, every ripple's whole.
 pub fn camera_shake(shocks: &[Shockwave], view: Option<Rectangle>, t: &Tuning) -> Vec2 {
     let mut offset = Vec2::new(0.0, 0.0);
     // `screen_fx_intensity` scales every whole-screen effect together;
@@ -194,8 +194,8 @@ mod shake_tests {
     #[test]
     fn an_arena_shakes_exactly_as_before() {
         // The whole field is no view to attenuate by: every ripple shakes
-        // the screen as it always did, bit for bit - and a view that is
-        // the whole field gives the same, since every ripple is in it.
+        // the screen in full, the plain sum bit for bit - and a view that
+        // is the whole field gives the same, since every ripple is in it.
         let t = Tuning::DEFAULT;
         let field = Rectangle::new(0.0, 0.0, 1088.0, 544.0);
         let mut moved = 0;

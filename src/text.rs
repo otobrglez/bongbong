@@ -945,8 +945,8 @@ mod text_tests {
         // The build bar's small buttons - UNDO, REDO, FIT, CHECK, PLAY
         // HERE - inside their drawn boxes (an outline is drawn outside
         // its box), at the size each bar draws them
-        // (`editor::chrome::small_text`): a mouse's at 11 pt in the boxes
-        // a desktop's bar has always had, a touch screen's at 12 in its
+        // (`editor::chrome::small_text`): a mouse's at 11 pt in a desktop
+        // bar's boxes, a touch screen's at 12 in its
         // wider ones; and the five categories' names beside their row of
         // the palette a narrow bar folds them into.
         for touch in [false, true] {
